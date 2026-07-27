@@ -5,7 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_compile_definitions(BUILD_RELEASE VULKAN)
+# VK_NO_PROTOTYPES enables volk Vulkan meta-loader in parallel-rdp
+add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES)
 
 add_compile_options(
     -include "${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp/vulkan_android_compat.h"
