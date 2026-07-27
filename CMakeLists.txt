@@ -7,13 +7,19 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_compile_definitions(BUILD_RELEASE)
 
-# Suppress harmless warnings
-add_compile_options(-Wno-shift-op-parentheses -Wno-parentheses -Wno-narrowing -Wno-macro-redefined -Wno-deprecated-anon-enum-enum-conversion)
+add_compile_options(
+    -Wno-shift-op-parentheses 
+    -Wno-parentheses 
+    -Wno-narrowing 
+    -Wno-macro-redefined 
+    -Wno-deprecated-anon-enum-enum-conversion
+    -Wno-switch
+)
 
 include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/nall
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ares
-    ${CMAKE_CURRENT_SOURCE_DIR}/nall
     ${CMAKE_CURRENT_SOURCE_DIR}/mia
     ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
