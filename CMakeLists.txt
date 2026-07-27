@@ -19,11 +19,21 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/GL
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/KHR
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/TZXFile
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/librashader
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/jansson/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/lzma-25.01/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/lzma-25.01/include/real
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/miniz-3.1.1
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/zstd-1.5.7
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/include/dr_libs
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/include/libchdr
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/librashader/include/librashader
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/qon
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit/regex_src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit/sljit_src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit/test_src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm/examples/vgmrender
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm/src
 )
 
 set(LIBCO_SOURCE "libco/aarch64.c")
