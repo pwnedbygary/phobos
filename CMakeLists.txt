@@ -17,6 +17,7 @@ add_compile_options(
 )
 
 include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/nall/nall
     ${CMAKE_CURRENT_SOURCE_DIR}/nall
     ${CMAKE_CURRENT_SOURCE_DIR}/ares
     ${CMAKE_CURRENT_SOURCE_DIR}
