@@ -1,0 +1,7 @@
+#pragma once
+
+#define JSON_INLINE inline
+#define JSON_INTEGER_IS_LONG_LONG 1
+#define JSON_HAVE_LOCALECONV 1
+#define JSON_HAVE_ATOMIC_BUILTINS 1
+#define JSON_HAVE_SYNC_BUILTINS 1
