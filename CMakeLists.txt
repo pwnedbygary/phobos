@@ -8,7 +8,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES)
 
 add_compile_options(
-    -include "${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp/vulkan_android_compat.h"
     -Wno-shift-op-parentheses 
     -Wno-parentheses 
     -Wno-narrowing 
