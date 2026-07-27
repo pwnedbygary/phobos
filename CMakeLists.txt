@@ -18,7 +18,6 @@ add_compile_options(
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/nall
-    ${CMAKE_CURRENT_SOURCE_DIR}/ares
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan
