@@ -22,6 +22,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/ares
     ${CMAKE_CURRENT_SOURCE_DIR}/mia
     ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/GL
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/KHR

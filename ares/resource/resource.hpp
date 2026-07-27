@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <nall/nall.hpp>
+#include <nall/image.hpp>
 
 namespace ares::Resource {
     inline static const nall::vector<uint8_t> Logo{};
@@ -9,6 +10,7 @@ namespace ares::Resource {
         template<typename T> operator nall::vector<T>() const { return {}; }
         operator nall::vector<uint8_t>() const { return {}; }
         operator nall::string() const { return {}; }
+        operator nall::image() const { return {}; }
     };
 
     namespace Sprite {
