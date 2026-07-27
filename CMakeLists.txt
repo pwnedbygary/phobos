@@ -4,22 +4,19 @@ project(PhobosAndroid)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(NOT CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
-    message(WARNING "This project is heavily optimized for arm64-v8a. Proceed with caution.")
-endif()
-
 add_compile_definitions(BUILD_RELEASE)
+
+# Suppress harmless warnings that heavily clutter the Android Studio output
+add_compile_options(-Wno-shift-op-parentheses -Wno-parentheses -Wno-narrowing -Wno-macro-redefined)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/ares
     ${CMAKE_CURRENT_SOURCE_DIR}/nall
     ${CMAKE_CURRENT_SOURCE_DIR}/mia
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit
     ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp
 )
-
-file(GLOB_RECURSE NALL_SOURCES "nall/*.cpp")
-file(GLOB_RECURSE MIA_SOURCES "mia/*.cpp")
-file(GLOB_RECURSE ARES_SOURCES "ares/*.cpp")
 
 set(LIBCO_SOURCE "libco/aarch64.c")
 
@@ -28,10 +25,31 @@ set(ANDROID_SOURCES
     android/app/src/main/cpp/PhobosJNI.cpp
 )
 
+# Precisely targeted Unity builds
+set(ARES_UNIFIED_SOURCES
+    mia/mia.cpp
+    ares/a26/a26.cpp
+    ares/cv/cv.cpp
+    ares/fc/fc.cpp
+    ares/gb/gb.cpp
+    ares/gba/gba.cpp
+    ares/md/md.cpp
+    ares/ms/ms.cpp
+    ares/msx/msx.cpp
+    ares/myvision/myvision.cpp
+    ares/n64/n64.cpp
+    ares/ng/ng.cpp
+    ares/ngp/ngp.cpp
+    ares/pce/pce.cpp
+    ares/ps1/ps1.cpp
+    ares/sfc/sfc.cpp
+    ares/sg/sg.cpp
+    ares/spec/spec.cpp
+    ares/ws/ws.cpp
+)
+
 add_library(phobos_android SHARED 
-    ${NALL_SOURCES}
-    ${MIA_SOURCES}
-    ${ARES_SOURCES}
+    ${ARES_UNIFIED_SOURCES}
     ${LIBCO_SOURCE}
     ${ANDROID_SOURCES}
 )
