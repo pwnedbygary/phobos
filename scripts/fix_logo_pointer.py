@@ -1,4 +1,17 @@
-#pragma once
+import os
+import shutil
+
+# Ensure script runs relative to repo root
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+os.chdir(REPO_ROOT)
+
+print(f"📁 Working in repository root: {REPO_ROOT}")
+
+# Update ares/resource/resource.hpp to use pointer for Logo (allows forward-declared incomplete types)
+ares_res_hpp = os.path.join("ares", "resource", "resource.hpp")
+with open(ares_res_hpp, "w", encoding="utf-8") as f:
+    f.write("""#pragma once
 #include <cstdint>
 
 // Forward-declare nall types
@@ -42,3 +55,15 @@ namespace ares::Resource {
         }
     }
 }
+""")
+print("✏️ Updated ares/resource/resource.hpp to use pointer for Logo.")
+
+# Clear CMake cache
+cxx_dir = os.path.join("android", "app", ".cxx")
+if os.path.exists(cxx_dir):
+    shutil.rmtree(cxx_dir)
+    print("🧹 Cleared CMake .cxx cache.")
+
+os.system("git add .")
+os.system('git commit -m "fix: Use pointer for Logo in resource.hpp to support incomplete type nall::vector"')
+print("\n✅ Pointer patch complete!")
