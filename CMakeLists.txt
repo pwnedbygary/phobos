@@ -7,16 +7,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_definitions(BUILD_RELEASE)
 
 # Suppress harmless warnings
-add_compile_options(-Wno-shift-op-parentheses -Wno-parentheses -Wno-narrowing -Wno-macro-redefined)
+add_compile_options(-Wno-shift-op-parentheses -Wno-parentheses -Wno-narrowing -Wno-macro-redefined -Wno-deprecated-anon-enum-enum-conversion)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ares
     ${CMAKE_CURRENT_SOURCE_DIR}/nall
     ${CMAKE_CURRENT_SOURCE_DIR}/mia
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit
     ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/GL
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/KHR
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/TZXFile
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/librashader
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/qon
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm
 )
 
 set(LIBCO_SOURCE "libco/aarch64.c")
