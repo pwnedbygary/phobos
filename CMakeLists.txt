@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_compile_definitions(BUILD_RELEASE)
+add_compile_definitions(BUILD_RELEASE VULKAN)
 
 add_compile_options(
     -Wno-shift-op-parentheses 
@@ -78,4 +78,4 @@ add_library(phobos_android SHARED
     ${ANDROID_SOURCES}
 )
 
-target_link_libraries(phobos_android android aaudio log)
+target_link_libraries(phobos_android android aaudio log vulkan)
