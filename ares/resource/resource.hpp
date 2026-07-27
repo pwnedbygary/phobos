@@ -1,15 +1,19 @@
 #pragma once
 #include <cstdint>
-#include <nall/nall.hpp>
+
+namespace nall {
+    template<typename T> struct vector;
+    struct string;
+    struct image;
+}
 
 namespace ares::Resource {
-    inline static const nall::vector<uint8_t> Logo{};
+    inline static const nall::vector<uint8_t>* Logo = nullptr;
 
     struct DummyImage {
-        template<typename T> operator nall::vector<T>() const { return {}; }
-        operator nall::vector<uint8_t>() const { return {}; }
-        operator nall::string() const { return {}; }
-        operator nall::image() const { return {}; }
+        template<typename T> operator nall::vector<T>() const;
+        operator nall::string() const;
+        operator nall::image() const;
     };
 
     namespace Sprite {

@@ -77,16 +77,13 @@ inline auto operator""_sx(long double n) -> uint32_t { return (uint32_t)n; }
 """)
 print("✏️ Created hiro/hiro.hpp stubs.")
 
-# 4. Write vulkan_android_compat.h (without early vulkan.h include)
-vulkan_compat = os.path.join(cpp_dir, "vulkan_android_compat.h")
-with open(vulkan_compat, "w", encoding="utf-8") as f:
-    f.write("""#pragma once
-#include <cstdint>
+# 4. Patch context.hpp for Vulkan 1.3 extension structs
+context_hpp_path = os.path.join("ares", "n64", "vulkan", "parallel-rdp", "vulkan", "context.hpp")
+if os.path.exists(context_hpp_path):
+    with open(context_hpp_path, "r", encoding="utf-8") as f:
+        c_txt = f.read()
 
-typedef uint32_t VkFlags;
-typedef uint32_t VkBool32;
-typedef enum VkStructureType VkStructureType;
-
+    compat_block = """
 #ifndef VK_KHR_video_maintenance1
 struct VkPhysicalDeviceVideoMaintenance1FeaturesKHR {
     VkStructureType sType;
@@ -110,24 +107,35 @@ struct VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV {
     VkBool32 descriptorPoolOverallocation;
 };
 #endif
-""")
-print("✏️ Created vulkan_android_compat.h.")
+"""
+    if "VkPhysicalDeviceVideoMaintenance1FeaturesKHR" not in c_txt:
+        if '#include "vulkan_headers.hpp"' in c_txt:
+            c_txt = c_txt.replace('#include "vulkan_headers.hpp"', '#include "vulkan_headers.hpp"\n' + compat_block)
+        else:
+            c_txt = compat_block + c_txt
+        with open(context_hpp_path, "w", encoding="utf-8") as f:
+            f.write(c_txt)
+    print("✏️ Patched context.hpp for Vulkan 1.3 extension structs.")
 
-# 5. Write ares/resource/resource.hpp
+# 5. Write ares/resource/resource.hpp (using forward declarations)
 ares_res_hpp = os.path.join("ares", "resource", "resource.hpp")
 with open(ares_res_hpp, "w", encoding="utf-8") as f:
     f.write("""#pragma once
 #include <cstdint>
-#include <nall/nall.hpp>
+
+namespace nall {
+    template<typename T> struct vector;
+    struct string;
+    struct image;
+}
 
 namespace ares::Resource {
-    inline static const nall::vector<uint8_t> Logo{};
+    inline static const nall::vector<uint8_t>* Logo = nullptr;
 
     struct DummyImage {
-        template<typename T> operator nall::vector<T>() const { return {}; }
-        operator nall::vector<uint8_t>() const { return {}; }
-        operator nall::string() const { return {}; }
-        operator nall::image() const { return {}; }
+        template<typename T> operator nall::vector<T>() const;
+        operator nall::string() const;
+        operator nall::image() const;
     };
 
     namespace Sprite {
@@ -162,18 +170,19 @@ mia_res_dir = os.path.join("mia", "resource")
 os.makedirs(mia_res_dir, exist_ok=True)
 with open(os.path.join(mia_res_dir, "resource.hpp"), "w", encoding="utf-8") as f:
     f.write("""#pragma once
-#include <nall/nall.hpp>
-#include <span>
+
+namespace nall {
+    template<typename T> struct vector;
+    struct string;
+}
 
 namespace mia::Resource {
-    inline static const nall::vector<uint8_t> Database{};
-
     struct DummyResource {
-        template<typename T> operator nall::vector<T>() const { return {}; }
-        operator nall::vector<uint8_t>() const { return {}; }
-        operator nall::string() const { return {}; }
-        operator std::span<const uint8_t>() const { return {}; }
+        template<typename T> operator nall::vector<T>() const;
+        operator nall::string() const;
     };
+
+    inline static const DummyResource Database{};
 
     namespace GameBoy {
         inline static const DummyResource BootDMG1{};
@@ -210,7 +219,7 @@ namespace mia::Resource {
 """)
 print("✏️ Created mia/resource/resource.hpp.")
 
-# 7. Collect extra include paths (excluding vulkan-headers)
+# 7. Collect extra include paths (excluding desktop vulkan-headers)
 extra_includes = set()
 extra_includes.add("thirdparty")
 
@@ -248,8 +257,7 @@ if os.path.exists(ymfm_cpp):
 
 sources_str = "\n    ".join(sources)
 
-# 9. Generate CMakeLists.txt WITHOUT ${CMAKE_CURRENT_SOURCE_DIR}/ares or /mia in include_directories!
-# This resolves header ambiguity between nall/resource and ares/resource
+# 9. Generate CMakeLists.txt WITHOUT ${CMAKE_CURRENT_SOURCE_DIR}/ares in include_directories!
 include_dirs = [
     "${CMAKE_CURRENT_SOURCE_DIR}/nall",
     "${CMAKE_CURRENT_SOURCE_DIR}",
@@ -271,7 +279,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES)
 
 add_compile_options(
-    -include "${{CMAKE_CURRENT_SOURCE_DIR}}/android/app/src/main/cpp/vulkan_android_compat.h"
     -Wno-shift-op-parentheses 
     -Wno-parentheses 
     -Wno-narrowing 
@@ -325,8 +332,8 @@ if os.path.exists(local_props_path):
         f.writelines(clean_props)
 
 subprocess.run(["git", "add", "."], capture_output=True)
-subprocess.run(["git", "commit", "-m", "fix: Grand unified fix resolving include path cross-contamination"], capture_output=True)
+subprocess.run(["git", "commit", "-m", "fix: Master resolution script"], capture_output=True)
 
 print("\n=======================================================")
-print("✅ GRAND UNIFIED BUILD FIX COMPLETED!")
+print("✅ GRAND FIX COMPLETED!")
 print("=======================================================")
