@@ -1,4 +1,6 @@
 #pragma once
+namespace nall { struct serializer; }
+
 
 //include the most common nall headers with one statement
 //does not include the most obscure components with high cost and low usage
