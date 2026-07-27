@@ -6,10 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_compile_definitions(BUILD_RELEASE)
 
-# Suppress harmless warnings that heavily clutter the Android Studio output
+# Suppress harmless warnings
 add_compile_options(-Wno-shift-op-parentheses -Wno-parentheses -Wno-narrowing -Wno-macro-redefined)
 
 include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ares
     ${CMAKE_CURRENT_SOURCE_DIR}/nall
     ${CMAKE_CURRENT_SOURCE_DIR}/mia
@@ -25,7 +26,6 @@ set(ANDROID_SOURCES
     android/app/src/main/cpp/PhobosJNI.cpp
 )
 
-# Precisely targeted Unity builds
 set(ARES_UNIFIED_SOURCES
     mia/mia.cpp
     ares/a26/a26.cpp
