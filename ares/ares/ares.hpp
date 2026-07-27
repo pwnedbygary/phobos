@@ -94,3 +94,6 @@ namespace ares {
 #include <ares/memory/fixed-allocator.hpp>
 #include <ares/memory/readable.hpp>
 #include <ares/memory/writable.hpp>
+
+using nall::serializer;
+using serializer = nall::serializer;
