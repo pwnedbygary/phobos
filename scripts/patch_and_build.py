@@ -6,6 +6,12 @@ import subprocess
 import shutil
 import urllib.request
 
+def write_file(filepath, content):
+    dirname = os.path.dirname(filepath)
+    if dirname: os.makedirs(dirname, exist_ok=True)
+    with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
+    print(f"Written {filepath}")
+
 def patch_file(filepath, patch_func):
     if not os.path.exists(filepath): return
     with open(filepath, 'r', encoding='utf-8') as f: content = f.read()
@@ -14,15 +20,9 @@ def patch_file(filepath, patch_func):
         with open(filepath, 'w', encoding='utf-8') as f: f.write(new_content)
         print(f"Patched {filepath}")
 
-def write_file(filepath, content):
-    dirname = os.path.dirname(filepath)
-    if dirname: os.makedirs(dirname, exist_ok=True)
-    with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
-    print(f"Written {filepath}")
-
 def download_file(url, dest):
     if not os.path.exists(dest):
-        print(f"Downloading missing dependency: {dest}...")
+        print(f"Downloading {dest}...")
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         urllib.request.urlretrieve(url, dest)
 
@@ -34,7 +34,7 @@ def git_commit_and_push():
         if not status.stdout.strip():
             print("No changes to commit.")
             return
-        commit_msg = "Automated build fixes: forceful regex fix for squashed preprocessor directives"
+        commit_msg = "Automated build fixes: Restore pristine architecture, drop inline cpp files, fix CMake"
         print(f"Committing changes: '{commit_msg}'")
         subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
         print("Pushing to remote repository...")
@@ -50,65 +50,31 @@ def main():
     os.chdir(repo_root)
     print(f"Operating in repository root: {repo_root}")
 
-    # 0. RESTORE CORE FILES TO PRISTINE UPSTREAM STATE
+    # 1. CLEAN SLATE: Restore the repo to undo all previous bad patches!
+    print("Restoring pristine C++ files from origin/master...")
     try:
-        subprocess.run(['git', 'checkout', 'origin/master', '--', 'ares/ares/'], check=True, stderr=subprocess.DEVNULL)
+        subprocess.run(['git', 'checkout', 'origin/master', '--', 'ares/', 'nall/', 'mia/'], check=True, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError:
         try:
-            subprocess.run(['git', 'checkout', 'HEAD', '--', 'ares/ares/'], check=True, stderr=subprocess.DEVNULL)
+            subprocess.run(['git', 'checkout', 'HEAD', '--', 'ares/', 'nall/', 'mia/'], check=True, stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
             pass
 
-    if os.path.exists('ares/ares/ares-core.cpp'): os.remove('ares/ares/ares-core.cpp')
-
-    # 1. AndroidManifest.xml
+    # 2. AndroidManifest.xml
     patch_file('android/app/src/main/AndroidManifest.xml', lambda c: re.sub(r'\s*package="[^"]+"', '', c))
 
-    # 2. ADD #pragma once TO ALL HEADERS TO KILL REDEFINITION ERRORS
-    for hpp in glob.glob('ares/ares/**/*.hpp', recursive=True):
-        with open(hpp, 'r', encoding='utf-8') as f: content = f.read()
-        if '#pragma once' not in content:
-            with open(hpp, 'w', encoding='utf-8') as f: f.write('#pragma once\n' + content)
-
-    # 3. WRAP .CPP FILES IN NAMESPACES IF MISSING
-    def wrap_cpp(filepath, ns):
-        if not os.path.exists(filepath): return
-        with open(filepath, 'r', encoding='utf-8') as f: content = f.read()
-        if f"namespace {ns}" not in content and "namespace ares" not in content:
-            with open(filepath, 'w', encoding='utf-8') as f: f.write(f"namespace {ns} {{\n{content}\n}}\n")
-
-    wrap_cpp('ares/ares/scheduler/scheduler.cpp', 'ares')
-    wrap_cpp('ares/ares/memory/fixed-allocator.cpp', 'ares::Memory')
-
-    # 4. PATCH ares.hpp
+    # 3. Safely patch ares.hpp at the VERY TOP (Injects missing nall/serializer required by cores)
     def patch_ares_hpp(content):
-        # Force-fix ANY squashed #include directives that were saved to the git history
-        content = re.sub(r'namespace\s+([a-zA-Z0-9_:]+)\s*\{\s*#include\s*(<[^>]+>)\s*\}', r'namespace \1 {\n#include \2\n}', content)
-
         if "using serializer = nall::serializer;" not in content:
-            if "#pragma once" in content:
-                content = content.replace("#pragma once", "#pragma once\n#include <nall/serializer.hpp>\n")
-            else:
-                content = "#include <nall/serializer.hpp>\n" + content
-            match = re.search(r'namespace\s+ares\s*\{', content)
-            if match:
-                insert_idx = match.end()
-                content = content[:insert_idx] + "\n  using namespace nall;\n  using serializer = nall::serializer;\n" + content[insert_idx:]
-            else:
-                content += "\nnamespace ares {\n  using namespace nall;\n  using serializer = nall::serializer;\n}\n"
-        
-        # Safely append if completely missing
-        if "<ares/scheduler/scheduler.hpp>" not in content: 
-            content += "\nnamespace ares {\n#include <ares/scheduler/scheduler.hpp>\n}\n"
-        if "<ares/memory/fixed-allocator.hpp>" not in content: 
-            content += "\nnamespace ares::Memory {\n#include <ares/memory/fixed-allocator.hpp>\n}\n"
+            patch = "#include <nall/serializer.hpp>\nnamespace ares {\n  using namespace nall;\n  using serializer = nall::serializer;\n}\n"
+            return patch + content
         return content
     patch_file('ares/ares/ares.hpp', patch_ares_hpp)
 
-    # 5. nall/nall/resource/resource.hpp
+    # 4. nall/nall/resource/resource.hpp
     write_file('nall/nall/resource/resource.hpp', "#pragma once\n")
 
-    # 6. hiro/hiro.hpp
+    # 5. hiro/hiro.hpp
     hiro_hpp = """#pragma once
 #include <functional>
 #include <vector>
@@ -144,7 +110,7 @@ inline int operator""_sy(unsigned long long v) { return v; }
 """
     write_file('android/app/src/main/cpp/hiro/hiro.hpp', hiro_hpp)
 
-    # 7. ares/n64/vulkan/parallel-rdp/vulkan/context.hpp
+    # 6. ares/n64/vulkan/parallel-rdp/vulkan/context.hpp
     def patch_vulkan_context(content):
         structs = """
 typedef struct VkPhysicalDeviceVideoMaintenance1FeaturesKHR {
@@ -163,7 +129,7 @@ typedef struct VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV {
         return content
     patch_file('ares/n64/vulkan/parallel-rdp/vulkan/context.hpp', patch_vulkan_context)
 
-    # 8. PhobosRunner.cpp
+    # 7. PhobosRunner.cpp
     def patch_phobos_runner(content):
         if "AndroidPlatform androidPlatform;" not in content:
             match = re.search(r'namespace\s+ares\s*\{', content)
@@ -179,7 +145,7 @@ typedef struct VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV {
         return content
     patch_file('android/app/src/main/cpp/PhobosRunner.cpp', patch_phobos_runner)
 
-    # 9. ares/resource/resource.hpp
+    # 8. ares/resource/resource.hpp
     ares_resource_hpp = """#pragma once
 #include <nall/nall.hpp>
 namespace nall { template<typename T> struct vector; struct string; struct image; }
@@ -201,7 +167,7 @@ namespace ares::Resource {
 """
     write_file('ares/resource/resource.hpp', ares_resource_hpp)
 
-    # 10. mia/resource/resource.hpp
+    # 9. mia/resource/resource.hpp
     mia_resource_hpp = """#pragma once
 #include <span>
 #include <cstdint>
@@ -240,20 +206,22 @@ namespace mia {
 """
     write_file('mia/resource/resource.hpp', mia_resource_hpp)
 
-    # 11. Download missing third-party dependencies
+    # 10. Download missing third-party dependencies
     download_file('https://raw.githubusercontent.com/Cyan4973/xxHash/v0.8.2/xxhash.c', 'thirdparty/xxhash.c')
     download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.h', 'thirdparty/volk/volk.h')
     download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.c', 'thirdparty/volk/volk.c')
     download_file('https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/master/include/vk_mem_alloc.h', 'thirdparty/vma/vk_mem_alloc.h')
     
+    # Official Khronos Vulkan C++ Headers (Fixes the embedded repo warning)
     vulkan_headers_path = 'thirdparty/Vulkan-Headers'
     if not os.path.exists(os.path.join(vulkan_headers_path, 'include', 'vulkan', 'vulkan.hpp')):
         print("Cloning Official Khronos Vulkan C++ Headers...")
         shutil.rmtree(vulkan_headers_path, ignore_errors=True)
         subprocess.run(['git', 'clone', 'https://github.com/KhronosGroup/Vulkan-Headers.git', vulkan_headers_path, '--depth', '1'])
+        # Strip the .git directory so it uploads to your repository normally
         shutil.rmtree(os.path.join(vulkan_headers_path, '.git'), ignore_errors=True)
 
-    # 12. Generate GLFW Android Stubs
+    # 11. Generate GLFW Android Stubs
     glfw_h = """#pragma once
 #include <stdint.h>
 #include <vulkan/vulkan.h>
@@ -285,17 +253,18 @@ extern "C" {
     write_file('thirdparty/GLFW/glfw_stub.cpp', glfw_cpp)
     write_file('thirdparty/sljit/sljit.h', '#pragma once\n#include "sljit_src/sljitLir.h"\n')
 
-    # 13. CMakeLists.txt
+    # 12. CMakeLists.txt (NO CORE FILES HERE!)
     thirdparty_dirs = ['thirdparty', 'thirdparty/volk', 'thirdparty/vma', 'thirdparty/sljit'] 
     for d in glob.glob('thirdparty/*'):
-        d_forward = d.replace('\\', '/')
-        if d_forward not in thirdparty_dirs: thirdparty_dirs.append(d_forward)
-        if 'sljit' in d_forward:
-            sljit_src = os.path.join(d, 'sljit_src').replace('\\', '/')
-            if os.path.isdir(sljit_src) and sljit_src not in thirdparty_dirs: thirdparty_dirs.append(sljit_src)
-        if 'ymfm' in d_forward:
-            ymfm_src = os.path.join(d, 'src').replace('\\', '/')
-            if os.path.isdir(ymfm_src) and ymfm_src not in thirdparty_dirs: thirdparty_dirs.append(ymfm_src)
+        if os.path.isdir(d) and 'vulkan-headers' not in d:
+            d_forward = d.replace('\\', '/')
+            if d_forward not in thirdparty_dirs: thirdparty_dirs.append(d_forward)
+            if 'sljit' in d_forward:
+                sljit_src = os.path.join(d, 'sljit_src').replace('\\', '/')
+                if os.path.isdir(sljit_src) and sljit_src not in thirdparty_dirs: thirdparty_dirs.append(sljit_src)
+            if 'ymfm' in d_forward:
+                ymfm_src = os.path.join(d, 'src').replace('\\', '/')
+                if os.path.isdir(ymfm_src) and ymfm_src not in thirdparty_dirs: thirdparty_dirs.append(ymfm_src)
 
     if os.path.exists('thirdparty/Vulkan-Headers/include'):
         thirdparty_dirs.append('thirdparty/Vulkan-Headers/include')
@@ -309,6 +278,7 @@ extern "C" {
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/util
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp"""
 
+    # NOTICE: ares/ares/node.cpp, debug.cpp, scheduler.cpp are intentionally REMOVED!
     ares_sources = [
         'ares/component/processor/arm7tdmi/arm7tdmi.cpp', 'ares/component/processor/m68000/m68000.cpp',
         'ares/component/processor/mos6502/mos6502.cpp', 'ares/component/processor/hg51b/hg51b.cpp',
@@ -373,7 +343,8 @@ add_library(phobos_android SHARED
     ${{OTHER_SOURCES}}
 )
 
-set_property(SOURCE ${{ARES_SOURCES}} PROPERTY COMPILE_OPTIONS "-include" "ares/ares.hpp")
+# Apply -include ares/ares.hpp safely mimicking the GNU Makefile
+set_property(SOURCE ${{ARES_SOURCES}} PROPERTY COMPILE_OPTIONS "-include" "${{CMAKE_CURRENT_SOURCE_DIR}}/ares/ares/ares.hpp")
 
 find_library(log-lib log)
 find_library(android-lib android)
@@ -386,12 +357,15 @@ target_link_libraries(phobos_android ${{log-lib}} ${{android-lib}} ${{aaudio-lib
 """
     write_file('CMakeLists.txt', cmake_content)
 
+    # Housekeeping: Clear .cxx and build caches
     for cache_dir in ['android/app/.cxx', 'android/app/build']:
         if os.path.exists(cache_dir):
             shutil.rmtree(cache_dir)
             print(f"Cleared {cache_dir} cache")
 
     git_commit_and_push()
+
+    print("\nSUCCESS! Ready to build. Please run 'Make Project' in Android Studio.")
 
 if __name__ == '__main__':
     main()
