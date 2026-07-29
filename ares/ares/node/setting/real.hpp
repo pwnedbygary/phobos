@@ -1,3 +1,4 @@
+#pragma once
 struct Real : Setting {
   DeclareClass(Real, "setting.real")
 

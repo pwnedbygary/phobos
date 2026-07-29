@@ -1,3 +1,4 @@
+#pragma once
 struct Tape : Peripheral {
   DeclareClass(Tape, "tape") using Peripheral::Peripheral;
 

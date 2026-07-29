@@ -1,3 +1,4 @@
+#pragma once
 struct Boolean : Setting {
   DeclareClass(Boolean, "setting.boolean")
 

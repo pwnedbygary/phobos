@@ -1,3 +1,4 @@
+#pragma once
 struct Properties : Debugger {
   DeclareClass(Properties, "debugger.properties")
 

@@ -1,3 +1,4 @@
+#pragma once
 struct Setting : Object {
   DeclareClass(Setting, "setting")
   using Object::Object;

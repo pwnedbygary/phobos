@@ -1,3 +1,4 @@
+#pragma once
 using  b1 = nall::Boolean;
 
 using  i1 = nall::Integer< 1>; using  s1 = nall::IntegerPrimitive< 1>;

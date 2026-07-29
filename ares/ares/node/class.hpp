@@ -1,3 +1,4 @@
+#pragma once
 //horrible implementation of run-time introspection:
 //allow converting a unique class string to a derived Node type.
 

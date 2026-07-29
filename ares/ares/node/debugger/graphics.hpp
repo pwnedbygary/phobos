@@ -1,3 +1,4 @@
+#pragma once
 struct Graphics : Debugger {
   DeclareClass(Graphics, "debugger.graphics")
 

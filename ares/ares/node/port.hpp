@@ -1,3 +1,4 @@
+#pragma once
 struct Port : Object {
   DeclareClass(Port, "port")
   using Object::Object;

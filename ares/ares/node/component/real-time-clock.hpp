@@ -1,3 +1,4 @@
+#pragma once
 struct RealTimeClock : Component {
   DeclareClass(RealTimeClock, "component.real-time-clock")
   using Component::Component;

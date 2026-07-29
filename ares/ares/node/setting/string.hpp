@@ -1,3 +1,4 @@
+#pragma once
 struct String : Setting {
   DeclareClass(String, "setting.string")
 

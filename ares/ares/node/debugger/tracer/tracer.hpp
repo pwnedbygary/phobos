@@ -1,3 +1,4 @@
+#pragma once
 struct Tracer : Debugger {
   DeclareClass(Tracer, "debugger.tracer")
 

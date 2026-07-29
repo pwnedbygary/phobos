@@ -1,3 +1,4 @@
+#pragma once
 struct Sprite : Video {
   DeclareClass(Sprite, "video.sprite")
   using Video::Video;

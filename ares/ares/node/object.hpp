@@ -1,3 +1,4 @@
+#pragma once
 //identifier() is static, allowing template<typename T> to access via T::identifier()
 //identity() is virtual, allowing T* to access via T->identity()
 

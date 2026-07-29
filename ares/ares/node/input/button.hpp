@@ -1,3 +1,4 @@
+#pragma once
 struct Button : Input {
   DeclareClass(Button, "input.button")
   using Input::Input;

@@ -1,3 +1,4 @@
+#pragma once
 struct Axis : Input {
   DeclareClass(Axis, "input.axis")
   using Input::Input;

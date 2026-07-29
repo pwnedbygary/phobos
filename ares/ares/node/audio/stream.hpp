@@ -1,3 +1,4 @@
+#pragma once
 struct Stream : Audio {
   DeclareClass(Stream, "audio.stream")
   using Audio::Audio;

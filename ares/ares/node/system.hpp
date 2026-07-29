@@ -1,3 +1,4 @@
+#pragma once
 struct System : Object {
   DeclareClass(System, "system")
   using Object::Object;

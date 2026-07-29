@@ -1,3 +1,4 @@
+#pragma once
 struct Notification : Tracer {
   DeclareClass(Notification, "debugger.tracer.notification")
 

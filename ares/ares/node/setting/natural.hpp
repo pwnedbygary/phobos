@@ -1,3 +1,4 @@
+#pragma once
 struct Natural : Setting {
   DeclareClass(Natural, "setting.natural")
 

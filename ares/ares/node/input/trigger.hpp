@@ -1,3 +1,4 @@
+#pragma once
 struct Trigger : Input {
   DeclareClass(Trigger, "input.trigger")
   using Input::Input;

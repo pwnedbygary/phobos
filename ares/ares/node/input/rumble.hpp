@@ -1,3 +1,4 @@
+#pragma once
 struct Rumble : Input {
   DeclareClass(Rumble, "input.rumble")
   using Input::Input;

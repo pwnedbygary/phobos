@@ -1,3 +1,4 @@
+#pragma once
 struct Integer : Setting {
   DeclareClass(Integer, "setting.integer")
 

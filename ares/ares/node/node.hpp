@@ -1,3 +1,4 @@
+#pragma once
 namespace ares::Core {
   struct Object;
   struct System;
