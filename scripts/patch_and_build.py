@@ -34,7 +34,7 @@ def git_commit_and_push():
         if not status.stdout.strip():
             print("No changes to commit.")
             return
-        commit_msg = "Automated build fixes: fix C++ preprocessor newline syntax"
+        commit_msg = "Automated build fixes: forceful regex fix for squashed preprocessor directives"
         print(f"Committing changes: '{commit_msg}'")
         subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
         print("Pushing to remote repository...")
@@ -82,6 +82,9 @@ def main():
 
     # 4. PATCH ares.hpp
     def patch_ares_hpp(content):
+        # Force-fix ANY squashed #include directives that were saved to the git history
+        content = re.sub(r'namespace\s+([a-zA-Z0-9_:]+)\s*\{\s*#include\s*(<[^>]+>)\s*\}', r'namespace \1 {\n#include \2\n}', content)
+
         if "using serializer = nall::serializer;" not in content:
             if "#pragma once" in content:
                 content = content.replace("#pragma once", "#pragma once\n#include <nall/serializer.hpp>\n")
@@ -94,10 +97,10 @@ def main():
             else:
                 content += "\nnamespace ares {\n  using namespace nall;\n  using serializer = nall::serializer;\n}\n"
         
-        # PREPROCESSOR DIRECTIVES MUST BE ON A NEW LINE!
-        if "scheduler.hpp" not in content: 
+        # Safely append if completely missing
+        if "<ares/scheduler/scheduler.hpp>" not in content: 
             content += "\nnamespace ares {\n#include <ares/scheduler/scheduler.hpp>\n}\n"
-        if "fixed-allocator.hpp" not in content: 
+        if "<ares/memory/fixed-allocator.hpp>" not in content: 
             content += "\nnamespace ares::Memory {\n#include <ares/memory/fixed-allocator.hpp>\n}\n"
         return content
     patch_file('ares/ares/ares.hpp', patch_ares_hpp)
@@ -287,7 +290,6 @@ extern "C" {
     for d in glob.glob('thirdparty/*'):
         d_forward = d.replace('\\', '/')
         if d_forward not in thirdparty_dirs: thirdparty_dirs.append(d_forward)
-        
         if 'sljit' in d_forward:
             sljit_src = os.path.join(d, 'sljit_src').replace('\\', '/')
             if os.path.isdir(sljit_src) and sljit_src not in thirdparty_dirs: thirdparty_dirs.append(sljit_src)
@@ -390,8 +392,6 @@ target_link_libraries(phobos_android ${{log-lib}} ${{android-lib}} ${{aaudio-lib
             print(f"Cleared {cache_dir} cache")
 
     git_commit_and_push()
-
-    print("\nSUCCESS! Ready to build. Please run 'Make Project' in Android Studio.")
 
 if __name__ == '__main__':
     main()

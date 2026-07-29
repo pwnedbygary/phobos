@@ -98,4 +98,6 @@ namespace ares {
 using nall::serializer;
 using serializer = nall::serializer;
 
-namespace ares { #include <ares/scheduler/scheduler.hpp> }
+namespace ares {
+#include <ares/scheduler/scheduler.hpp>
+}
