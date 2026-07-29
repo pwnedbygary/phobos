@@ -1,3 +1,4 @@
+namespace ares {
 inline auto Scheduler::reset() -> void {
   _threads.clear();
 }
@@ -134,4 +135,6 @@ inline auto Scheduler::getSynchronize() -> bool {
 
 inline auto Scheduler::setSynchronize(bool synchronize) -> void {
   _synchronize = synchronize;
+}
+
 }

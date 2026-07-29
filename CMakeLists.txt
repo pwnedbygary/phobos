@@ -11,6 +11,9 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/libco
     ${CMAKE_CURRENT_SOURCE_DIR}/ares
     ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/vulkan
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/volk
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/vma
@@ -96,6 +99,44 @@ set(OTHER_SOURCES
     thirdparty/TZXFile/TZXBlockTextDescription.cpp
     thirdparty/TZXFile/TZXBlockTurboSpeedData.cpp
     thirdparty/TZXFile/TZXFile.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/command_ring.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/rdp_device.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/rdp_dump_write.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/rdp_renderer.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/video_interface.cpp
+    ares/n64/vulkan/parallel-rdp/util/aligned_alloc.cpp
+    ares/n64/vulkan/parallel-rdp/util/arena_allocator.cpp
+    ares/n64/vulkan/parallel-rdp/util/environment.cpp
+    ares/n64/vulkan/parallel-rdp/util/logging.cpp
+    ares/n64/vulkan/parallel-rdp/util/thread_id.cpp
+    ares/n64/vulkan/parallel-rdp/util/thread_name.cpp
+    ares/n64/vulkan/parallel-rdp/util/timeline_trace_file.cpp
+    ares/n64/vulkan/parallel-rdp/util/timer.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/buffer.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/buffer_pool.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/command_buffer.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/command_pool.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/context.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/cookie.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/descriptor_set.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/device.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/device_fossilize.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/event_manager.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/fence.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/fence_manager.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/image.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/indirect_layout.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/memory_allocator.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/pipeline_event.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/query_pool.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/render_pass.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/renderdoc_capture.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/sampler.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/semaphore.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/semaphore_manager.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/shader.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/wsi.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/texture/texture_format.cpp
 )
 
 add_library(phobos_android SHARED
@@ -103,7 +144,6 @@ add_library(phobos_android SHARED
     ${OTHER_SOURCES}
 )
 
-# Apply -include ares/ares.hpp safely mimicking the GNU Makefile
 set_property(SOURCE ${ARES_SOURCES} PROPERTY COMPILE_OPTIONS "-include" "ares/ares.hpp")
 
 find_library(log-lib log)

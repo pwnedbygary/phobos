@@ -21,9 +21,10 @@ def write_file(filepath, content):
     print(f"Written {filepath}")
 
 def download_file(url, dest):
-    print(f"Downloading {dest} from GitHub...")
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    urllib.request.urlretrieve(url, dest)
+    if not os.path.exists(dest):
+        print(f"Downloading missing dependency: {dest}...")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        urllib.request.urlretrieve(url, dest)
 
 def git_commit_and_push():
     print("\n--- Git Automation ---")
@@ -33,7 +34,7 @@ def git_commit_and_push():
         if not status.stdout.strip():
             print("No changes to commit.")
             return
-        commit_msg = "Automated build fixes: forcefully un-poison ares headers, apply clean CMake"
+        commit_msg = "Automated build fixes: add parallel-rdp includes and sources to CMake"
         print(f"Committing changes: '{commit_msg}'")
         subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
         print("Pushing to remote repository...")
@@ -49,30 +50,60 @@ def main():
     os.chdir(repo_root)
     print(f"Operating in repository root: {repo_root}")
 
-    # 0. THE UN-POISONING: Download the pristine original files to wipe out my bad patches
-    print("\n--- RESTORING PRISTINE FILES FROM GITHUB ---")
-    files_to_restore = [
-        'ares/ares/ares.hpp',
-        'ares/ares/scheduler/scheduler.cpp',
-        'ares/ares/scheduler/scheduler.hpp',
-        'ares/ares/memory/fixed-allocator.cpp',
-        'ares/ares/node/node.cpp',
-        'ares/ares/debug/debug.cpp'
-    ]
-    for f in files_to_restore:
-        download_file(f"https://raw.githubusercontent.com/pwnedbygary/phobos/master/{f}", f)
+    # 0. RESTORE CORE FILES TO PRISTINE UPSTREAM STATE
+    try:
+        subprocess.run(['git', 'checkout', 'origin/master', '--', 'ares/ares/'], check=True, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        try:
+            subprocess.run(['git', 'checkout', 'HEAD', '--', 'ares/ares/'], check=True, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            pass
 
     if os.path.exists('ares/ares/ares-core.cpp'):
         os.remove('ares/ares/ares-core.cpp')
-        print("Deleted bad ares-core.cpp unity build.")
 
-    # 1. AndroidManifest.xml
+    # 1. Fix AndroidManifest.xml namespace warning
     patch_file('android/app/src/main/AndroidManifest.xml', lambda c: re.sub(r'\s*package="[^"]+"', '', c))
 
-    # 2. nall/nall/resource/resource.hpp
+    # 2. ADD #pragma once TO ALL HEADERS TO KILL REDEFINITION ERRORS
+    for hpp in glob.glob('ares/ares/**/*.hpp', recursive=True):
+        with open(hpp, 'r', encoding='utf-8') as f: content = f.read()
+        if '#pragma once' not in content:
+            with open(hpp, 'w', encoding='utf-8') as f: f.write('#pragma once\n' + content)
+
+    # 3. WRAP .CPP FILES IN NAMESPACES IF MISSING (Because they are inlined into global scope)
+    def wrap_cpp(filepath, ns):
+        if not os.path.exists(filepath): return
+        with open(filepath, 'r', encoding='utf-8') as f: content = f.read()
+        if f"namespace {ns}" not in content and "namespace ares" not in content:
+            with open(filepath, 'w', encoding='utf-8') as f: f.write(f"namespace {ns} {{\n{content}\n}}\n")
+
+    wrap_cpp('ares/ares/scheduler/scheduler.cpp', 'ares')
+    wrap_cpp('ares/ares/memory/fixed-allocator.cpp', 'ares::Memory')
+
+    # 4. PATCH ares.hpp (Safely inject nall/serializer requirements)
+    def patch_ares_hpp(content):
+        if "using serializer = nall::serializer;" not in content:
+            if "#pragma once" in content:
+                content = content.replace("#pragma once", "#pragma once\n#include <nall/serializer.hpp>\n")
+            else:
+                content = "#include <nall/serializer.hpp>\n" + content
+            match = re.search(r'namespace\s+ares\s*\{', content)
+            if match:
+                insert_idx = match.end()
+                content = content[:insert_idx] + "\n  using namespace nall;\n  using serializer = nall::serializer;\n" + content[insert_idx:]
+            else:
+                content += "\nnamespace ares {\n  using namespace nall;\n  using serializer = nall::serializer;\n}\n"
+        
+        if "scheduler.hpp" not in content: content += "\nnamespace ares { #include <ares/scheduler/scheduler.hpp> }\n"
+        if "fixed-allocator.hpp" not in content: content += "\nnamespace ares::Memory { #include <ares/memory/fixed-allocator.hpp> }\n"
+        return content
+    patch_file('ares/ares/ares.hpp', patch_ares_hpp)
+
+    # 5. nall/nall/resource/resource.hpp
     write_file('nall/nall/resource/resource.hpp', "#pragma once\n")
 
-    # 3. hiro/hiro.hpp
+    # 6. hiro/hiro.hpp
     hiro_hpp = """#pragma once
 #include <functional>
 #include <vector>
@@ -108,7 +139,7 @@ inline int operator""_sy(unsigned long long v) { return v; }
 """
     write_file('android/app/src/main/cpp/hiro/hiro.hpp', hiro_hpp)
 
-    # 4. ares/n64/vulkan/parallel-rdp/vulkan/context.hpp
+    # 7. ares/n64/vulkan/parallel-rdp/vulkan/context.hpp
     def patch_vulkan_context(content):
         structs = """
 typedef struct VkPhysicalDeviceVideoMaintenance1FeaturesKHR {
@@ -127,13 +158,14 @@ typedef struct VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV {
         return content
     patch_file('ares/n64/vulkan/parallel-rdp/vulkan/context.hpp', patch_vulkan_context)
 
-    # 5. PhobosRunner.cpp
+    # 8. PhobosRunner.cpp
     def patch_phobos_runner(content):
         if "AndroidPlatform androidPlatform;" not in content:
             match = re.search(r'namespace\s+ares\s*\{', content)
             insertion = "\n  Debug _debug;\n  struct AndroidPlatform : Platform {};\n  static AndroidPlatform androidPlatform;\n  Platform* platform = &androidPlatform;\n"
             if match:
-                content = content[:match.end()] + insertion + content[match.end():]
+                insert_idx = match.end()
+                content = content[:insert_idx] + insertion + content[insert_idx:]
             else:
                 content += "\nnamespace ares {" + insertion + "}\n"
         content = re.sub(r'screen\.pixels\(\)\.data\(\)', r'screen->pixels().data()', content)
@@ -142,7 +174,7 @@ typedef struct VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV {
         return content
     patch_file('android/app/src/main/cpp/PhobosRunner.cpp', patch_phobos_runner)
 
-    # 6. ares/resource/resource.hpp
+    # 9. ares/resource/resource.hpp
     ares_resource_hpp = """#pragma once
 #include <nall/nall.hpp>
 namespace nall { template<typename T> struct vector; struct string; struct image; }
@@ -164,7 +196,7 @@ namespace ares::Resource {
 """
     write_file('ares/resource/resource.hpp', ares_resource_hpp)
 
-    # 7. mia/resource/resource.hpp
+    # 10. mia/resource/resource.hpp
     mia_resource_hpp = """#pragma once
 #include <span>
 #include <cstdint>
@@ -203,13 +235,13 @@ namespace mia {
 """
     write_file('mia/resource/resource.hpp', mia_resource_hpp)
 
-    # 8. Download missing third-party dependencies
+    # 11. Download missing third-party dependencies
     download_file('https://raw.githubusercontent.com/Cyan4973/xxHash/v0.8.2/xxhash.c', 'thirdparty/xxhash.c')
     download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.h', 'thirdparty/volk/volk.h')
     download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.c', 'thirdparty/volk/volk.c')
     download_file('https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/master/include/vk_mem_alloc.h', 'thirdparty/vma/vk_mem_alloc.h')
 
-    # 9. Generate GLFW Android Stubs
+    # 12. Generate GLFW Android Stubs
     glfw_h = """#pragma once
 #include <stdint.h>
 #include <vulkan/vulkan.h>
@@ -241,7 +273,7 @@ extern "C" {
     write_file('thirdparty/GLFW/glfw_stub.cpp', glfw_cpp)
     write_file('thirdparty/sljit/sljit.h', '#pragma once\n#include "sljit_src/sljitLir.h"\n')
 
-    # 10. CMakeLists.txt
+    # 13. CMakeLists.txt (Now natively including parallel-rdp paths)
     thirdparty_dirs = ['thirdparty', 'thirdparty/volk', 'thirdparty/vma', 'thirdparty/sljit'] 
     for d in glob.glob('thirdparty/*'):
         if os.path.isdir(d) and 'vulkan-headers' not in d:
@@ -255,6 +287,12 @@ extern "C" {
                 if os.path.isdir(ymfm_src) and ymfm_src not in thirdparty_dirs: thirdparty_dirs.append(ymfm_src)
 
     thirdparty_includes = "\n".join([f"    ${{CMAKE_CURRENT_SOURCE_DIR}}/{d}" for d in thirdparty_dirs])
+
+    parallel_rdp_includes = ""
+    if os.path.exists('ares/n64/vulkan/parallel-rdp'):
+        parallel_rdp_includes = """    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/vulkan
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp"""
 
     ares_sources = [
         'ares/component/processor/arm7tdmi/arm7tdmi.cpp', 'ares/component/processor/m68000/m68000.cpp',
@@ -279,6 +317,14 @@ extern "C" {
         if 'example' not in f.lower(): other_sources.append(f.replace('\\', '/'))
     for f in glob.glob('thirdparty/TZXFile/*.cpp'):
         if 'example' not in f.lower(): other_sources.append(f.replace('\\', '/'))
+        
+    # Inject parallel-rdp sources
+    if os.path.exists('ares/n64/vulkan/parallel-rdp'):
+        for ext in ('*.cpp', '*.c'):
+            for f in glob.glob(f'ares/n64/vulkan/parallel-rdp/**/{ext}', recursive=True):
+                f_fwd = f.replace('\\', '/')
+                if 'example' not in f_fwd.lower() and 'test' not in f_fwd.lower() and 'volk' not in f_fwd.lower():
+                    other_sources.append(f_fwd)
 
     valid_ares = [s for s in ares_sources if os.path.exists(s)]
     valid_other = [s for s in other_sources if os.path.exists(s)]
@@ -296,6 +342,7 @@ include_directories(
     ${{CMAKE_CURRENT_SOURCE_DIR}}/libco
     ${{CMAKE_CURRENT_SOURCE_DIR}}/ares
     ${{CMAKE_CURRENT_SOURCE_DIR}}/android/app/src/main/cpp
+{parallel_rdp_includes}
 {thirdparty_includes}
 )
 
@@ -312,7 +359,6 @@ add_library(phobos_android SHARED
     ${{OTHER_SOURCES}}
 )
 
-# Apply -include ares/ares.hpp safely mimicking the GNU Makefile
 set_property(SOURCE ${{ARES_SOURCES}} PROPERTY COMPILE_OPTIONS "-include" "ares/ares.hpp")
 
 find_library(log-lib log)
