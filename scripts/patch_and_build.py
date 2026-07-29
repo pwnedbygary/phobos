@@ -34,7 +34,7 @@ def git_commit_and_push():
         if not status.stdout.strip():
             print("No changes to commit.")
             return
-        commit_msg = "Automated build fixes: add parallel-rdp includes and sources to CMake"
+        commit_msg = "Automated build fixes: Add Khronos Vulkan C++ headers and fix parallel-rdp include paths"
         print(f"Committing changes: '{commit_msg}'")
         subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
         print("Pushing to remote repository...")
@@ -59,10 +59,9 @@ def main():
         except subprocess.CalledProcessError:
             pass
 
-    if os.path.exists('ares/ares/ares-core.cpp'):
-        os.remove('ares/ares/ares-core.cpp')
+    if os.path.exists('ares/ares/ares-core.cpp'): os.remove('ares/ares/ares-core.cpp')
 
-    # 1. Fix AndroidManifest.xml namespace warning
+    # 1. AndroidManifest.xml
     patch_file('android/app/src/main/AndroidManifest.xml', lambda c: re.sub(r'\s*package="[^"]+"', '', c))
 
     # 2. ADD #pragma once TO ALL HEADERS TO KILL REDEFINITION ERRORS
@@ -71,7 +70,7 @@ def main():
         if '#pragma once' not in content:
             with open(hpp, 'w', encoding='utf-8') as f: f.write('#pragma once\n' + content)
 
-    # 3. WRAP .CPP FILES IN NAMESPACES IF MISSING (Because they are inlined into global scope)
+    # 3. WRAP .CPP FILES IN NAMESPACES IF MISSING
     def wrap_cpp(filepath, ns):
         if not os.path.exists(filepath): return
         with open(filepath, 'r', encoding='utf-8') as f: content = f.read()
@@ -81,7 +80,7 @@ def main():
     wrap_cpp('ares/ares/scheduler/scheduler.cpp', 'ares')
     wrap_cpp('ares/ares/memory/fixed-allocator.cpp', 'ares::Memory')
 
-    # 4. PATCH ares.hpp (Safely inject nall/serializer requirements)
+    # 4. PATCH ares.hpp
     def patch_ares_hpp(content):
         if "using serializer = nall::serializer;" not in content:
             if "#pragma once" in content:
@@ -235,11 +234,18 @@ namespace mia {
 """
     write_file('mia/resource/resource.hpp', mia_resource_hpp)
 
-    # 11. Download missing third-party dependencies
+    # 11. Download missing third-party dependencies (INCLUDING VULKAN C++ HEADERS)
     download_file('https://raw.githubusercontent.com/Cyan4973/xxHash/v0.8.2/xxhash.c', 'thirdparty/xxhash.c')
     download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.h', 'thirdparty/volk/volk.h')
     download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.c', 'thirdparty/volk/volk.c')
     download_file('https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/master/include/vk_mem_alloc.h', 'thirdparty/vma/vk_mem_alloc.h')
+    
+    # Official Khronos Vulkan C++ Headers (Because NDK doesn't have them)
+    vulkan_headers_path = 'thirdparty/Vulkan-Headers'
+    if not os.path.exists(os.path.join(vulkan_headers_path, 'include', 'vulkan', 'vulkan.hpp')):
+        print("Cloning Official Khronos Vulkan C++ Headers...")
+        shutil.rmtree(vulkan_headers_path, ignore_errors=True)
+        subprocess.run(['git', 'clone', 'https://github.com/KhronosGroup/Vulkan-Headers.git', vulkan_headers_path, '--depth', '1'])
 
     # 12. Generate GLFW Android Stubs
     glfw_h = """#pragma once
@@ -273,18 +279,21 @@ extern "C" {
     write_file('thirdparty/GLFW/glfw_stub.cpp', glfw_cpp)
     write_file('thirdparty/sljit/sljit.h', '#pragma once\n#include "sljit_src/sljitLir.h"\n')
 
-    # 13. CMakeLists.txt (Now natively including parallel-rdp paths)
+    # 13. CMakeLists.txt (Now natively including parallel-rdp and Khronos Vulkan paths)
     thirdparty_dirs = ['thirdparty', 'thirdparty/volk', 'thirdparty/vma', 'thirdparty/sljit'] 
     for d in glob.glob('thirdparty/*'):
-        if os.path.isdir(d) and 'vulkan-headers' not in d:
-            d_forward = d.replace('\\', '/')
-            if d_forward not in thirdparty_dirs: thirdparty_dirs.append(d_forward)
-            if 'sljit' in d_forward:
-                sljit_src = os.path.join(d, 'sljit_src').replace('\\', '/')
-                if os.path.isdir(sljit_src) and sljit_src not in thirdparty_dirs: thirdparty_dirs.append(sljit_src)
-            if 'ymfm' in d_forward:
-                ymfm_src = os.path.join(d, 'src').replace('\\', '/')
-                if os.path.isdir(ymfm_src) and ymfm_src not in thirdparty_dirs: thirdparty_dirs.append(ymfm_src)
+        d_forward = d.replace('\\', '/')
+        if d_forward not in thirdparty_dirs: thirdparty_dirs.append(d_forward)
+        
+        if 'sljit' in d_forward:
+            sljit_src = os.path.join(d, 'sljit_src').replace('\\', '/')
+            if os.path.isdir(sljit_src) and sljit_src not in thirdparty_dirs: thirdparty_dirs.append(sljit_src)
+        if 'ymfm' in d_forward:
+            ymfm_src = os.path.join(d, 'src').replace('\\', '/')
+            if os.path.isdir(ymfm_src) and ymfm_src not in thirdparty_dirs: thirdparty_dirs.append(ymfm_src)
+
+    if os.path.exists('thirdparty/Vulkan-Headers/include'):
+        thirdparty_dirs.append('thirdparty/Vulkan-Headers/include')
 
     thirdparty_includes = "\n".join([f"    ${{CMAKE_CURRENT_SOURCE_DIR}}/{d}" for d in thirdparty_dirs])
 
@@ -292,6 +301,7 @@ extern "C" {
     if os.path.exists('ares/n64/vulkan/parallel-rdp'):
         parallel_rdp_includes = """    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/vulkan
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/util
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp"""
 
     ares_sources = [
@@ -318,7 +328,6 @@ extern "C" {
     for f in glob.glob('thirdparty/TZXFile/*.cpp'):
         if 'example' not in f.lower(): other_sources.append(f.replace('\\', '/'))
         
-    # Inject parallel-rdp sources
     if os.path.exists('ares/n64/vulkan/parallel-rdp'):
         for ext in ('*.cpp', '*.c'):
             for f in glob.glob(f'ares/n64/vulkan/parallel-rdp/**/{ext}', recursive=True):
@@ -380,14 +389,7 @@ target_link_libraries(phobos_android ${{log-lib}} ${{android-lib}} ${{aaudio-lib
 
     git_commit_and_push()
 
-    # Trigger Gradle build
-    os.chdir('android')
-    gradlew_cmd = './gradlew' if os.name != 'nt' else 'gradlew.bat'
-    if os.path.exists('gradlew') or os.path.exists('gradlew.bat'):
-        print("Triggering Gradle build...")
-        subprocess.run([gradlew_cmd, 'assembleDebug'])
-    else:
-        print("\nSUCCESS! Ready to build. Please run 'Make Project' in Android Studio.")
+    print("\nSUCCESS! Ready to build. Please run 'Make Project' in Android Studio.")
 
 if __name__ == '__main__':
     main()

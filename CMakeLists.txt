@@ -13,11 +13,13 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/vulkan
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/util
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/volk
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/vma
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/CMakeLists.txt
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/GL
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/KHR
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/TZXFile
@@ -25,10 +27,19 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/librashader
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/qon
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit.h
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit/sljit_src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljitAllocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljitConfigPost.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljitConfigPre.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sse2neon.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/xxhash.h
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/xxhash.c
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/GLFW
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Vulkan-Headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Vulkan-Headers/include
 )
 
 set(ARES_SOURCES
