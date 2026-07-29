@@ -6,12 +6,6 @@ import subprocess
 import shutil
 import urllib.request
 
-def write_file(filepath, content):
-    dirname = os.path.dirname(filepath)
-    if dirname: os.makedirs(dirname, exist_ok=True)
-    with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
-    print(f"Written {filepath}")
-
 def patch_file(filepath, patch_func):
     if not os.path.exists(filepath): return
     with open(filepath, 'r', encoding='utf-8') as f: content = f.read()
@@ -20,9 +14,15 @@ def patch_file(filepath, patch_func):
         with open(filepath, 'w', encoding='utf-8') as f: f.write(new_content)
         print(f"Patched {filepath}")
 
+def write_file(filepath, content):
+    dirname = os.path.dirname(filepath)
+    if dirname: os.makedirs(dirname, exist_ok=True)
+    with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
+    print(f"Written {filepath}")
+
 def download_file(url, dest):
     if not os.path.exists(dest):
-        print(f"Downloading {dest}...")
+        print(f"Downloading missing dependency: {dest}...")
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         urllib.request.urlretrieve(url, dest)
 
@@ -34,7 +34,7 @@ def git_commit_and_push():
         if not status.stdout.strip():
             print("No changes to commit.")
             return
-        commit_msg = "Automated build fixes: Restore pristine architecture, drop inline cpp files, fix CMake"
+        commit_msg = "Automated build fixes: forcefully un-poison ares headers from dfb976b50"
         print(f"Committing changes: '{commit_msg}'")
         subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
         print("Pushing to remote repository...")
@@ -50,31 +50,46 @@ def main():
     os.chdir(repo_root)
     print(f"Operating in repository root: {repo_root}")
 
-    # 1. CLEAN SLATE: Restore the repo to undo all previous bad patches!
-    print("Restoring pristine C++ files from origin/master...")
+    # 0. THE UN-POISONING: Fetch the pristine files from before I ruined them
+    print("\n--- RESTORING PRISTINE FILES ---")
     try:
-        subprocess.run(['git', 'checkout', 'origin/master', '--', 'ares/', 'nall/', 'mia/'], check=True, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError:
-        try:
-            subprocess.run(['git', 'checkout', 'HEAD', '--', 'ares/', 'nall/', 'mia/'], check=True, stderr=subprocess.DEVNULL)
-        except subprocess.CalledProcessError:
-            pass
+        # Fetch the known-good commit you reset to earlier
+        subprocess.run(['git', 'fetch', 'origin', 'dfb976b50'], check=True, stderr=subprocess.DEVNULL)
+        # Extract ONLY the ares/ folder to overwrite the poisoned files
+        subprocess.run(['git', 'checkout', 'dfb976b50', '--', 'ares/'], check=True, stderr=subprocess.DEVNULL)
+        print("Successfully restored pristine 'ares/' directory from dfb976b50!")
+    except Exception as e:
+        print(f"Warning: Could not fetch dfb976b50: {e}")
 
-    # 2. AndroidManifest.xml
+    # Clean up the bad unity build if it's lingering
+    if os.path.exists('ares/ares/ares-core.cpp'):
+        os.remove('ares/ares/ares-core.cpp')
+        print("Deleted ares-core.cpp")
+
+    # 1. AndroidManifest.xml
     patch_file('android/app/src/main/AndroidManifest.xml', lambda c: re.sub(r'\s*package="[^"]+"', '', c))
 
-    # 3. Safely patch ares.hpp at the VERY TOP (Injects missing nall/serializer required by cores)
+    # 2. PATCH ares.hpp (Safely inject nall/serializer requirements ONLY)
     def patch_ares_hpp(content):
+        # We ONLY add the serializer. No scheduler includes, no namespaces!
         if "using serializer = nall::serializer;" not in content:
-            patch = "#include <nall/serializer.hpp>\nnamespace ares {\n  using namespace nall;\n  using serializer = nall::serializer;\n}\n"
-            return patch + content
+            if "#pragma once" in content:
+                content = content.replace("#pragma once", "#pragma once\n#include <nall/serializer.hpp>\n")
+            else:
+                content = "#include <nall/serializer.hpp>\n" + content
+            match = re.search(r'namespace\s+ares\s*\{', content)
+            if match:
+                insert_idx = match.end()
+                content = content[:insert_idx] + "\n  using namespace nall;\n  using serializer = nall::serializer;\n" + content[insert_idx:]
+            else:
+                content += "\nnamespace ares {\n  using namespace nall;\n  using serializer = nall::serializer;\n}\n"
         return content
     patch_file('ares/ares/ares.hpp', patch_ares_hpp)
 
-    # 4. nall/nall/resource/resource.hpp
+    # 3. nall/nall/resource/resource.hpp
     write_file('nall/nall/resource/resource.hpp', "#pragma once\n")
 
-    # 5. hiro/hiro.hpp
+    # 4. hiro/hiro.hpp
     hiro_hpp = """#pragma once
 #include <functional>
 #include <vector>
@@ -110,7 +125,7 @@ inline int operator""_sy(unsigned long long v) { return v; }
 """
     write_file('android/app/src/main/cpp/hiro/hiro.hpp', hiro_hpp)
 
-    # 6. ares/n64/vulkan/parallel-rdp/vulkan/context.hpp
+    # 5. ares/n64/vulkan/parallel-rdp/vulkan/context.hpp
     def patch_vulkan_context(content):
         structs = """
 typedef struct VkPhysicalDeviceVideoMaintenance1FeaturesKHR {
@@ -129,7 +144,7 @@ typedef struct VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV {
         return content
     patch_file('ares/n64/vulkan/parallel-rdp/vulkan/context.hpp', patch_vulkan_context)
 
-    # 7. PhobosRunner.cpp
+    # 6. PhobosRunner.cpp
     def patch_phobos_runner(content):
         if "AndroidPlatform androidPlatform;" not in content:
             match = re.search(r'namespace\s+ares\s*\{', content)
@@ -145,7 +160,7 @@ typedef struct VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV {
         return content
     patch_file('android/app/src/main/cpp/PhobosRunner.cpp', patch_phobos_runner)
 
-    # 8. ares/resource/resource.hpp
+    # 7. ares/resource/resource.hpp
     ares_resource_hpp = """#pragma once
 #include <nall/nall.hpp>
 namespace nall { template<typename T> struct vector; struct string; struct image; }
@@ -167,7 +182,7 @@ namespace ares::Resource {
 """
     write_file('ares/resource/resource.hpp', ares_resource_hpp)
 
-    # 9. mia/resource/resource.hpp
+    # 8. mia/resource/resource.hpp
     mia_resource_hpp = """#pragma once
 #include <span>
 #include <cstdint>
@@ -206,7 +221,7 @@ namespace mia {
 """
     write_file('mia/resource/resource.hpp', mia_resource_hpp)
 
-    # 10. Download missing third-party dependencies
+    # 9. Download missing third-party dependencies
     download_file('https://raw.githubusercontent.com/Cyan4973/xxHash/v0.8.2/xxhash.c', 'thirdparty/xxhash.c')
     download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.h', 'thirdparty/volk/volk.h')
     download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.c', 'thirdparty/volk/volk.c')
@@ -218,10 +233,10 @@ namespace mia {
         print("Cloning Official Khronos Vulkan C++ Headers...")
         shutil.rmtree(vulkan_headers_path, ignore_errors=True)
         subprocess.run(['git', 'clone', 'https://github.com/KhronosGroup/Vulkan-Headers.git', vulkan_headers_path, '--depth', '1'])
-        # Strip the .git directory so it uploads to your repository normally
+        # Strip the .git directory so it uploads to your repository normally without warnings
         shutil.rmtree(os.path.join(vulkan_headers_path, '.git'), ignore_errors=True)
 
-    # 11. Generate GLFW Android Stubs
+    # 10. Generate GLFW Android Stubs
     glfw_h = """#pragma once
 #include <stdint.h>
 #include <vulkan/vulkan.h>
@@ -253,18 +268,18 @@ extern "C" {
     write_file('thirdparty/GLFW/glfw_stub.cpp', glfw_cpp)
     write_file('thirdparty/sljit/sljit.h', '#pragma once\n#include "sljit_src/sljitLir.h"\n')
 
-    # 12. CMakeLists.txt (NO CORE FILES HERE!)
+    # 11. CMakeLists.txt
     thirdparty_dirs = ['thirdparty', 'thirdparty/volk', 'thirdparty/vma', 'thirdparty/sljit'] 
     for d in glob.glob('thirdparty/*'):
-        if os.path.isdir(d) and 'vulkan-headers' not in d:
-            d_forward = d.replace('\\', '/')
-            if d_forward not in thirdparty_dirs: thirdparty_dirs.append(d_forward)
-            if 'sljit' in d_forward:
-                sljit_src = os.path.join(d, 'sljit_src').replace('\\', '/')
-                if os.path.isdir(sljit_src) and sljit_src not in thirdparty_dirs: thirdparty_dirs.append(sljit_src)
-            if 'ymfm' in d_forward:
-                ymfm_src = os.path.join(d, 'src').replace('\\', '/')
-                if os.path.isdir(ymfm_src) and ymfm_src not in thirdparty_dirs: thirdparty_dirs.append(ymfm_src)
+        d_forward = d.replace('\\', '/')
+        if d_forward not in thirdparty_dirs: thirdparty_dirs.append(d_forward)
+        
+        if 'sljit' in d_forward:
+            sljit_src = os.path.join(d, 'sljit_src').replace('\\', '/')
+            if os.path.isdir(sljit_src) and sljit_src not in thirdparty_dirs: thirdparty_dirs.append(sljit_src)
+        if 'ymfm' in d_forward:
+            ymfm_src = os.path.join(d, 'src').replace('\\', '/')
+            if os.path.isdir(ymfm_src) and ymfm_src not in thirdparty_dirs: thirdparty_dirs.append(ymfm_src)
 
     if os.path.exists('thirdparty/Vulkan-Headers/include'):
         thirdparty_dirs.append('thirdparty/Vulkan-Headers/include')
@@ -278,7 +293,6 @@ extern "C" {
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/util
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp"""
 
-    # NOTICE: ares/ares/node.cpp, debug.cpp, scheduler.cpp are intentionally REMOVED!
     ares_sources = [
         'ares/component/processor/arm7tdmi/arm7tdmi.cpp', 'ares/component/processor/m68000/m68000.cpp',
         'ares/component/processor/mos6502/mos6502.cpp', 'ares/component/processor/hg51b/hg51b.cpp',
@@ -343,7 +357,6 @@ add_library(phobos_android SHARED
     ${{OTHER_SOURCES}}
 )
 
-# Apply -include ares/ares.hpp safely mimicking the GNU Makefile
 set_property(SOURCE ${{ARES_SOURCES}} PROPERTY COMPILE_OPTIONS "-include" "${{CMAKE_CURRENT_SOURCE_DIR}}/ares/ares/ares.hpp")
 
 find_library(log-lib log)
@@ -357,7 +370,6 @@ target_link_libraries(phobos_android ${{log-lib}} ${{android-lib}} ${{aaudio-lib
 """
     write_file('CMakeLists.txt', cmake_content)
 
-    # Housekeeping: Clear .cxx and build caches
     for cache_dir in ['android/app/.cxx', 'android/app/build']:
         if os.path.exists(cache_dir):
             shutil.rmtree(cache_dir)

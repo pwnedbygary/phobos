@@ -19,6 +19,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/volk
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/vma
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/CMakeLists.txt
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/GL
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/KHR
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/TZXFile
@@ -26,9 +27,16 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/librashader
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/qon
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit.h
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit/sljit_src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljitAllocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljitConfigPost.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljitConfigPre.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sse2neon.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/xxhash.h
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/xxhash.c
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/GLFW
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Vulkan-Headers
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Vulkan-Headers/include
@@ -147,7 +155,6 @@ add_library(phobos_android SHARED
     ${OTHER_SOURCES}
 )
 
-# Apply -include ares/ares.hpp safely mimicking the GNU Makefile
 set_property(SOURCE ${ARES_SOURCES} PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ares/ares/ares.hpp")
 
 find_library(log-lib log)
