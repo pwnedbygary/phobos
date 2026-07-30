@@ -1,4 +1,3 @@
-#include <cv/cv.hpp>
 #include <algorithm>
 
 namespace ares::ColecoVision {

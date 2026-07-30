@@ -1,4 +1,3 @@
-#include <md/md.hpp>
 #include <algorithm>
 
 namespace ares::MegaDrive {

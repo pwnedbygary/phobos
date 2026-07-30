@@ -7,9 +7,7 @@
 #include <component/audio/ay38910/ay38910.hpp>
 
 namespace ares::ZXSpectrum {
-  #include <ares/inline.hpp>
-
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
   struct Model {

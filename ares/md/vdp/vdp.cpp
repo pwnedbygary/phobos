@@ -1,8 +1,6 @@
 #if 0 //defined(PROFILE_PERFORMANCE)
 #include "../vdp-performance/vdp.cpp"
 #else
-#include <md/md.hpp>
-
 namespace ares::MegaDrive {
 
 //flips 4-bit nibble ordering in 8-pixel row

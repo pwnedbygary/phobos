@@ -1,5 +1,3 @@
-#include <gba/gba.hpp>
-
 namespace ares::GameBoyAdvance {
 
 APU apu;

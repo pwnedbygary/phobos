@@ -1,4 +1,3 @@
-#include <spec/spec.hpp>
 #include <algorithm>
 
 namespace ares::ZXSpectrum {

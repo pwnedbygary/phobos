@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "sg.hpp"
+
 //started: 2019-02-19
 
 #include <sg/cpu/cpu.cpp>

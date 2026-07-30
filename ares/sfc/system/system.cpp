@@ -1,4 +1,3 @@
-#include <sfc/sfc.hpp>
 #include <algorithm>
 
 namespace ares::SuperFamicom {

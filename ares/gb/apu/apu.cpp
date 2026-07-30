@@ -1,5 +1,3 @@
-#include <gb/gb.hpp>
-
 namespace ares::GameBoy {
 
 #include "io.cpp"

@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "gba.hpp"
+
 //started: 2012-03-19
 
 #include <gba/memory/memory.cpp>

@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "fc.hpp"
+
 //started: 2011-09-05
 
 #include <fc/system/system.cpp>

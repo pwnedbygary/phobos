@@ -1,5 +1,3 @@
-#include <ws/ws.hpp>
-
 namespace ares::WonderSwan {
 
 APU apu;

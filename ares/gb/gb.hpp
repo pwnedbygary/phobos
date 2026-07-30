@@ -7,8 +7,7 @@
 #include <component/eeprom/m93lcx6/m93lcx6.hpp>
 
 namespace ares::GameBoy {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
   struct Model {

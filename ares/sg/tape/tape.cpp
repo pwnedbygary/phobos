@@ -1,5 +1,3 @@
-#include <sg/sg.hpp>
-
 namespace ares::SG1000 {
 
 #include "deck.cpp"

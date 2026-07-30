@@ -1,5 +1,3 @@
-#include <sfc/sfc.hpp>
-
 namespace ares::SuperFamicom {
 
 PPUBase ppu;

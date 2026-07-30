@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "ng.hpp"
+
 //started: 2021-05-18
 
 #include <ng/system/system.cpp>

@@ -1,4 +1,3 @@
-#include <gb/gb.hpp>
 #include <nall/bcd.hpp>
 namespace ares::GameBoy {
 

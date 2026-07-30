@@ -9,8 +9,7 @@
 #include <component/audio/ym2413/ym2413.hpp>
 
 namespace ares::MasterSystem {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
   struct Model {

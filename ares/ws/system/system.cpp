@@ -1,4 +1,3 @@
-#include <ws/ws.hpp>
 #include <algorithm>
 
 namespace ares::WonderSwan {

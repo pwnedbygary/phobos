@@ -1,5 +1,3 @@
-#include <pce/pce.hpp>
-
 namespace ares::PCEngine {
 
 Cartridge& cartridge = cartridgeSlot.cartridge;

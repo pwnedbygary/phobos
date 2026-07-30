@@ -1,5 +1,3 @@
-#include <md/md.hpp>
-
 namespace ares::MegaDrive {
 
 M32X m32x;

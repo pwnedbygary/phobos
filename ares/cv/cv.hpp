@@ -9,8 +9,7 @@
 #include <component/audio/sn76489/sn76489.hpp>
 
 namespace ares::ColecoVision {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
   struct Model {

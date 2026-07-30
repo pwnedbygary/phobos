@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "n64.hpp"
+
 //started: 2020-04-28
 
 #include <n64/memory/memory.cpp>

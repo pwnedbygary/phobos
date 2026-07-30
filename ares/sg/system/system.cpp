@@ -1,4 +1,3 @@
-#include <sg/sg.hpp>
 #include <algorithm>
 
 namespace ares::SG1000 {

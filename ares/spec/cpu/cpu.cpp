@@ -1,5 +1,3 @@
-#include <spec/spec.hpp>
-
 namespace ares::ZXSpectrum {
 
 CPU cpu;

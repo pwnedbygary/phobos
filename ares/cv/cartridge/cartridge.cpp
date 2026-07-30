@@ -1,5 +1,3 @@
-#include <cv/cv.hpp>
-
 namespace ares::ColecoVision {
 
 Cartridge& cartridge = cartridgeSlot.cartridge;

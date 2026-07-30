@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "ps1.hpp"
+
 //started: 2020-06-17
 
 #include <ps1/memory/memory.cpp>

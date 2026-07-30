@@ -1,5 +1,3 @@
-#include <ps1/ps1.hpp>
-
 namespace ares::PlayStation {
 
 auto amplify(s32 sample, s32 volume) -> s32 {

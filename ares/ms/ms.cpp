@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "ms.hpp"
+
 //started: 2016-08-17
 
 #include <ms/cpu/cpu.cpp>

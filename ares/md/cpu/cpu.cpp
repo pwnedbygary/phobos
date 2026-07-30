@@ -1,5 +1,3 @@
-#include <md/md.hpp>
-
 namespace ares::MegaDrive {
 
 CPU cpu;

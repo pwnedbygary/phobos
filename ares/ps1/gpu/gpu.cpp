@@ -1,5 +1,3 @@
-#include <ps1/ps1.hpp>
-
 namespace ares::PlayStation {
 
 //cpu.clock = 44,100 * 768 = 33,868,000hz

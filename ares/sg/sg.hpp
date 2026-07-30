@@ -10,8 +10,7 @@
 #include <component/io/i8255/i8255.hpp>
 
 namespace ares::SG1000 {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
   struct Model {

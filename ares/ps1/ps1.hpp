@@ -8,8 +8,7 @@
 #include <component/processor/m68hc05/m68hc05.hpp>
 
 namespace ares::PlayStation {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
   auto option(string name, string value) -> bool;
 

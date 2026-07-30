@@ -6,8 +6,7 @@
 #include <component/processor/mos6502/mos6502.hpp>
 
 namespace ares::Atari2600 {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
   struct Region {

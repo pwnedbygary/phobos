@@ -1,4 +1,3 @@
-#include <gba/gba.hpp>
 #include <algorithm>
 
 namespace ares::GameBoyAdvance {

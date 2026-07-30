@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "msx.hpp"
+
 //started: 2018-12-28
 
 #include <msx/system/system.cpp>

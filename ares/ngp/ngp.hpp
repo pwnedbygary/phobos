@@ -9,8 +9,7 @@
 #include <component/audio/t6w28/t6w28.hpp>
 
 namespace ares::NeoGeoPocket {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
   struct Model {

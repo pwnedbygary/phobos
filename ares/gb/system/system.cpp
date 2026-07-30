@@ -1,4 +1,3 @@
-#include <gb/gb.hpp>
 #include <algorithm>
 
 namespace ares::GameBoy {

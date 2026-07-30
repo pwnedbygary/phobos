@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "ngp.hpp"
+
 //started: 2019-01-03
 
 #include <ngp/system/system.cpp>

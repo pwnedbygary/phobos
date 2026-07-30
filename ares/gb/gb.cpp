@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "gb.hpp"
+
 //started: 2010-12-27
 
 #include <gb/system/system.cpp>

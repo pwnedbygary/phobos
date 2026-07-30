@@ -1,4 +1,3 @@
-#include <n64/n64.hpp>
 #include <nall/gdb/server.hpp>
 
 namespace ares::Nintendo64 {

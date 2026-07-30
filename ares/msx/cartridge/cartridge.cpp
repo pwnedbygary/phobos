@@ -1,5 +1,3 @@
-#include <msx/msx.hpp>
-
 namespace ares::MSX {
 
 Cartridge& cartridge = cartridgeSlot.cartridge;

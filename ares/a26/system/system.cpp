@@ -1,4 +1,3 @@
-#include <a26/a26.hpp>
 #include <algorithm>
 
 namespace ares::Atari2600 {

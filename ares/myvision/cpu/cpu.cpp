@@ -1,5 +1,3 @@
-#include <myvision/myvision.hpp>
-
 namespace ares::MyVision {
 
 CPU cpu;

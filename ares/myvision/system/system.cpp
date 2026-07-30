@@ -1,4 +1,3 @@
-#include <myvision/myvision.hpp>
 #include <algorithm>
 
 namespace ares::MyVision {

@@ -1,4 +1,3 @@
-#include <ws/ws.hpp>
 #include <nall/bcd.hpp>
 
 namespace ares::WonderSwan {

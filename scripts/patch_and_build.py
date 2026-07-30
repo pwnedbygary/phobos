@@ -1,383 +1,141 @@
-#!/usr/bin/env python3
 import os
-import glob
 import re
-import subprocess
-import shutil
-import urllib.request
+import sys
+from pathlib import Path
 
-def patch_file(filepath, patch_func):
-    if not os.path.exists(filepath): return
-    with open(filepath, 'r', encoding='utf-8') as f: content = f.read()
-    new_content = patch_func(content)
-    if new_content != content:
-        with open(filepath, 'w', encoding='utf-8') as f: f.write(new_content)
-        print(f"Patched {filepath}")
+def restore_unity_builds(project_root):
+    # Phase 1: Strips erroneous includes from component .cpp files.
+    ares_dir = project_root / 'ares'
+    if not ares_dir.exists():
+        print(f"[!] Error: 'ares' directory not found at {ares_dir}")
+        return False
 
-def write_file(filepath, content):
-    dirname = os.path.dirname(filepath)
-    if dirname: os.makedirs(dirname, exist_ok=True)
-    with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
-    print(f"Written {filepath}")
-
-def download_file(url, dest):
-    if not os.path.exists(dest):
-        print(f"Downloading missing dependency: {dest}...")
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        urllib.request.urlretrieve(url, dest)
-
-def git_commit_and_push():
-    print("\n--- Git Automation ---")
-    try:
-        subprocess.run(['git', 'add', '.'], check=True)
-        status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
-        if not status.stdout.strip():
-            print("No changes to commit.")
-            return
-        commit_msg = "Automated build fixes: forcefully un-poison ares headers from dfb976b50"
-        print(f"Committing changes: '{commit_msg}'")
-        subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
-        print("Pushing to remote repository...")
-        subprocess.run(['git', 'push'], check=True)
-        print("Successfully pushed to remote!")
-    except subprocess.CalledProcessError as e:
-        print(f"Git operation failed: {e}")
-    print("----------------------\n")
-
-def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(script_dir)
-    os.chdir(repo_root)
-    print(f"Operating in repository root: {repo_root}")
-
-    # 0. THE UN-POISONING: Fetch the pristine files from before I ruined them
-    print("\n--- RESTORING PRISTINE FILES ---")
-    try:
-        # Fetch the known-good commit you reset to earlier
-        subprocess.run(['git', 'fetch', 'origin', 'dfb976b50'], check=True, stderr=subprocess.DEVNULL)
-        # Extract ONLY the ares/ folder to overwrite the poisoned files
-        subprocess.run(['git', 'checkout', 'dfb976b50', '--', 'ares/'], check=True, stderr=subprocess.DEVNULL)
-        print("Successfully restored pristine 'ares/' directory from dfb976b50!")
-    except Exception as e:
-        print(f"Warning: Could not fetch dfb976b50: {e}")
-
-    # Clean up the bad unity build if it's lingering
-    if os.path.exists('ares/ares/ares-core.cpp'):
-        os.remove('ares/ares/ares-core.cpp')
-        print("Deleted ares-core.cpp")
-
-    # 1. AndroidManifest.xml
-    patch_file('android/app/src/main/AndroidManifest.xml', lambda c: re.sub(r'\s*package="[^"]+"', '', c))
-
-    # 2. PATCH ares.hpp (Safely inject nall/serializer requirements ONLY)
-    def patch_ares_hpp(content):
-        # We ONLY add the serializer. No scheduler includes, no namespaces!
-        if "using serializer = nall::serializer;" not in content:
-            if "#pragma once" in content:
-                content = content.replace("#pragma once", "#pragma once\n#include <nall/serializer.hpp>\n")
-            else:
-                content = "#include <nall/serializer.hpp>\n" + content
-            match = re.search(r'namespace\s+ares\s*\{', content)
-            if match:
-                insert_idx = match.end()
-                content = content[:insert_idx] + "\n  using namespace nall;\n  using serializer = nall::serializer;\n" + content[insert_idx:]
-            else:
-                content += "\nnamespace ares {\n  using namespace nall;\n  using serializer = nall::serializer;\n}\n"
-        return content
-    patch_file('ares/ares/ares.hpp', patch_ares_hpp)
-
-    # 3. nall/nall/resource/resource.hpp
-    write_file('nall/nall/resource/resource.hpp', "#pragma once\n")
-
-    # 4. hiro/hiro.hpp
-    hiro_hpp = """#pragma once
-#include <functional>
-#include <vector>
-#include <string>
-namespace hiro {
-  struct Widget { void setVisible(bool) {} void setEnabled(bool) {} };
-  struct Window : Widget {
-    void setTitle(const std::string&) {} void setSize(const std::vector<int>&) {}
-    void setAlignment(const std::string&) {} void setVisible(bool) {}
-    void onDismiss(std::function<void()>) {}
-  };
-  struct Font {}; struct Color {}; struct Size { Size(int, int) {} };
-  struct Alignment { Alignment(int, int) {} }; struct Image {};
-  namespace Icon { namespace Emblem { inline Image Folder() { return {}; } } }
-  struct ListViewItem {}; struct ListView : Widget { void append(ListViewItem*) {} };
-  struct Canvas : Widget { void setSize(const std::vector<int>&) {} void update() {} };
-  struct Button : Widget { void setText(const std::string&) {} void onActivate(std::function<void()>) {} };
-  struct Label : Widget { void setText(const std::string&) {} };
-  struct BrowserDialog {
-    BrowserDialog& setTitle(const std::string&) { return *this; } BrowserDialog& setPath(const std::string&) { return *this; }
-    BrowserDialog& setFilters(const std::vector<std::string>&) { return *this; }
-    std::string openFile() { return ""; } std::string openFolder() { return ""; }
-  };
-  struct MessageDialog {
-    MessageDialog& setTitle(const std::string&) { return *this; } MessageDialog& setText(const std::string&) { return *this; }
-    void error() {} void warning() {} void information() {}
-  };
-  namespace Mouse { namespace Button { enum { Left }; } }
-  inline int sx(int v) { return v; } inline int sy(int v) { return v; }
-}
-inline int operator""_sx(unsigned long long v) { return v; }
-inline int operator""_sy(unsigned long long v) { return v; }
-"""
-    write_file('android/app/src/main/cpp/hiro/hiro.hpp', hiro_hpp)
-
-    # 5. ares/n64/vulkan/parallel-rdp/vulkan/context.hpp
-    def patch_vulkan_context(content):
-        structs = """
-typedef struct VkPhysicalDeviceVideoMaintenance1FeaturesKHR {
-    VkStructureType sType; void* pNext; VkBool32 videoMaintenance1;
-} VkPhysicalDeviceVideoMaintenance1FeaturesKHR;
-typedef struct VkPhysicalDeviceDeviceGeneratedCommandsComputeFeaturesNV {
-    VkStructureType sType; void* pNext; VkBool32 deviceGeneratedCompute;
-    VkBool32 deviceGeneratedComputePipelines; VkBool32 deviceGeneratedComputeCaptureReplay;
-} VkPhysicalDeviceDeviceGeneratedCommandsComputeFeaturesNV;
-typedef struct VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV {
-    VkStructureType sType; void* pNext; VkBool32 descriptorPoolOverallocation;
-} VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV;
-"""
-        if "VkPhysicalDeviceVideoMaintenance1FeaturesKHR" not in content:
-            content = re.sub(r'(#include\s*["<]vulkan_headers\.hpp[">])', r'\1\n' + structs, content)
-        return content
-    patch_file('ares/n64/vulkan/parallel-rdp/vulkan/context.hpp', patch_vulkan_context)
-
-    # 6. PhobosRunner.cpp
-    def patch_phobos_runner(content):
-        if "AndroidPlatform androidPlatform;" not in content:
-            match = re.search(r'namespace\s+ares\s*\{', content)
-            insertion = "\n  Debug _debug;\n  struct AndroidPlatform : Platform {};\n  static AndroidPlatform androidPlatform;\n  Platform* platform = &androidPlatform;\n"
-            if match:
-                insert_idx = match.end()
-                content = content[:insert_idx] + insertion + content[insert_idx:]
-            else:
-                content += "\nnamespace ares {" + insertion + "}\n"
-        content = re.sub(r'screen\.pixels\(\)\.data\(\)', r'screen->pixels().data()', content)
-        content = re.sub(r'stream\.read\(', r'stream->read(', content)
-        content = re.sub(r'node\.cast<', r'node->cast<', content)
-        return content
-    patch_file('android/app/src/main/cpp/PhobosRunner.cpp', patch_phobos_runner)
-
-    # 7. ares/resource/resource.hpp
-    ares_resource_hpp = """#pragma once
-#include <nall/nall.hpp>
-namespace nall { template<typename T> struct vector; struct string; struct image; }
-namespace ares::Resource {
-  inline static const nall::vector<uint8_t>* Logo = nullptr;
-  struct DummyImage {
-    template<typename T> operator nall::vector<T>() const { return {}; }
-    operator nall::string() const { return {}; } operator nall::image() const { return {}; }
-  };
-  namespace Sprite {
-    namespace WonderSwan {
-      inline DummyImage Orientation0, Orientation1, PoweredOn, Sleeping;
-      inline DummyImage VolumeA0, VolumeA1, VolumeA2, VolumeA3;
-      inline DummyImage VolumeB0, VolumeB1, VolumeB2, VolumeB3;
-    }
-    namespace SuperFamicom { inline DummyImage CrosshairRed, CrosshairGreen, CrosshairBlue; }
-  }
-}
-"""
-    write_file('ares/resource/resource.hpp', ares_resource_hpp)
-
-    # 8. mia/resource/resource.hpp
-    mia_resource_hpp = """#pragma once
-#include <span>
-#include <cstdint>
-namespace mia {
-  struct DummyResource {
-    operator std::span<const uint8_t>() const { return {}; }
-    operator const void*() const { return nullptr; }
-  };
-  namespace Resource {
-    namespace GameBoy { inline DummyResource BootDMG1; }
-    namespace GameBoyColor { inline DummyResource BootCGB0; }
-    namespace GameBoyAdvance { inline DummyResource Boot; }
-    namespace SuperFamicom {
-      inline DummyResource Cx4, DSP1, DSP1B, DSP2, DSP3, DSP4;
-      inline DummyResource ST010, ST011, ST018, SGB1, SGB2, SGB2Boot, IPLROM;
-    }
-    namespace MasterSystem { inline DummyResource Boot; }
-    namespace MegaDrive { inline DummyResource TMSS, SVP; }
-    namespace MegaCD { inline DummyResource Boot; }
-    namespace Mega32X { inline DummyResource Vector, SH2BootM, SH2BootS; }
-    namespace Nintendo64 { inline DummyResource PIFNTSC, PIFPAL, PIFSM5; }
-    namespace PlayStation { inline DummyResource Boot; }
-    namespace WonderSwan { inline DummyResource Boot; }
-    namespace WonderSwanColor { inline DummyResource Boot; }
-    namespace PocketChallengeV2 { inline DummyResource Boot; }
-    namespace ZXSpectrum { inline DummyResource Boot, BIOS; }
-    namespace ZXSpectrum128 { inline DummyResource Boot, BIOS, Sub; }
-    namespace MSX { inline DummyResource Boot; }
-    namespace MSX2 { inline DummyResource Boot; }
-    namespace NeoGeo { inline DummyResource Boot; }
-    namespace NeoGeoPocket { inline DummyResource Boot; }
-    namespace NeoGeoPocketColor { inline DummyResource Boot; }
-    namespace PCEngineCD { inline DummyResource Boot; }
-  }
-}
-"""
-    write_file('mia/resource/resource.hpp', mia_resource_hpp)
-
-    # 9. Download missing third-party dependencies
-    download_file('https://raw.githubusercontent.com/Cyan4973/xxHash/v0.8.2/xxhash.c', 'thirdparty/xxhash.c')
-    download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.h', 'thirdparty/volk/volk.h')
-    download_file('https://raw.githubusercontent.com/zeux/volk/master/volk.c', 'thirdparty/volk/volk.c')
-    download_file('https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/master/include/vk_mem_alloc.h', 'thirdparty/vma/vk_mem_alloc.h')
+    inline_hpp_re = re.compile(r'^\s*#include\s*[<"].*inline\.hpp[>"]\s*\n?', re.MULTILINE)
     
-    # Official Khronos Vulkan C++ Headers (Fixes the embedded repo warning)
-    vulkan_headers_path = 'thirdparty/Vulkan-Headers'
-    if not os.path.exists(os.path.join(vulkan_headers_path, 'include', 'vulkan', 'vulkan.hpp')):
-        print("Cloning Official Khronos Vulkan C++ Headers...")
-        shutil.rmtree(vulkan_headers_path, ignore_errors=True)
-        subprocess.run(['git', 'clone', 'https://github.com/KhronosGroup/Vulkan-Headers.git', vulkan_headers_path, '--depth', '1'])
-        # Strip the .git directory so it uploads to your repository normally without warnings
-        shutil.rmtree(os.path.join(vulkan_headers_path, '.git'), ignore_errors=True)
+    cores = [p.name for p in ares_dir.iterdir() if p.is_dir() and p.name != 'ares' 
+             and (p / f"{p.name}.cpp").exists() and (p / f"{p.name}.hpp").exists()]
 
-    # 10. Generate GLFW Android Stubs
-    glfw_h = """#pragma once
-#include <stdint.h>
-#include <vulkan/vulkan.h>
-#ifdef __cplusplus
-extern "C" {
-#endif
-typedef struct GLFWwindow GLFWwindow; typedef struct GLFWmonitor GLFWmonitor;
-#define GLFW_TRUE 1
-#define GLFW_FALSE 0
-const char** glfwGetRequiredInstanceExtensions(uint32_t* count);
-int glfwGetPhysicalDevicePresentationSupport(VkInstance instance, VkPhysicalDevice device, uint32_t queuefamily);
-VkResult glfwCreateWindowSurface(VkInstance instance, GLFWwindow* window, const VkAllocationCallbacks* allocator, VkSurfaceKHR* surface);
-void glfwGetWindowSize(GLFWwindow* window, int* width, int* height);
-void glfwGetFramebufferSize(GLFWwindow* window, int* width, int* height);
-#ifdef __cplusplus
-}
-#endif
-"""
-    glfw_cpp = """#include "glfw3.h"
-extern "C" {
-    const char** glfwGetRequiredInstanceExtensions(uint32_t* count) { *count = 0; return nullptr; }
-    int glfwGetPhysicalDevicePresentationSupport(VkInstance instance, VkPhysicalDevice device, uint32_t queuefamily) { return 1; }
-    VkResult glfwCreateWindowSurface(VkInstance instance, GLFWwindow* window, const VkAllocationCallbacks* allocator, VkSurfaceKHR* surface) { return VK_SUCCESS; }
-    void glfwGetWindowSize(GLFWwindow* window, int* width, int* height) { if(width) *width = 1920; if(height) *height = 1080; }
-    void glfwGetFramebufferSize(GLFWwindow* window, int* width, int* height) { if(width) *width = 1920; if(height) *height = 1080; }
-}
-"""
-    write_file('thirdparty/GLFW/glfw3.h', glfw_h)
-    write_file('thirdparty/GLFW/glfw_stub.cpp', glfw_cpp)
-    write_file('thirdparty/sljit/sljit.h', '#pragma once\n#include "sljit_src/sljitLir.h"\n')
-
-    # 11. CMakeLists.txt
-    thirdparty_dirs = ['thirdparty', 'thirdparty/volk', 'thirdparty/vma', 'thirdparty/sljit'] 
-    for d in glob.glob('thirdparty/*'):
-        d_forward = d.replace('\\', '/')
-        if d_forward not in thirdparty_dirs: thirdparty_dirs.append(d_forward)
+    patched_files = 0
+    for core in cores:
+        core_dir = ares_dir / core
+        core_hpp = core_dir / f"{core}.hpp"
+        core_cpp = core_dir / f"{core}.cpp"
         
-        if 'sljit' in d_forward:
-            sljit_src = os.path.join(d, 'sljit_src').replace('\\', '/')
-            if os.path.isdir(sljit_src) and sljit_src not in thirdparty_dirs: thirdparty_dirs.append(sljit_src)
-        if 'ymfm' in d_forward:
-            ymfm_src = os.path.join(d, 'src').replace('\\', '/')
-            if os.path.isdir(ymfm_src) and ymfm_src not in thirdparty_dirs: thirdparty_dirs.append(ymfm_src)
+        if core_hpp.exists():
+            original_text = core_hpp.read_text(encoding='utf-8')
+            new_text = inline_hpp_re.sub('', original_text)
+            if new_text != original_text:
+                core_hpp.write_text(new_text, encoding='utf-8')
+                patched_files += 1
 
-    if os.path.exists('thirdparty/Vulkan-Headers/include'):
-        thirdparty_dirs.append('thirdparty/Vulkan-Headers/include')
+        core_hpp_re = re.compile(rf'^\s*#include\s*[<"].*{core}\.hpp[>"]\s*\n?', re.MULTILINE)
+        ares_hpp_re = re.compile(r'^\s*#include\s*[<"].*ares\.hpp[>"]\s*\n?', re.MULTILINE)
 
-    thirdparty_includes = "\n".join([f"    ${{CMAKE_CURRENT_SOURCE_DIR}}/{d}" for d in thirdparty_dirs])
+        for cpp_file in core_dir.rglob("*.cpp"):
+            if cpp_file == core_cpp:
+                continue 
+            original_text = cpp_file.read_text(encoding='utf-8')
+            new_text = core_hpp_re.sub('', original_text)
+            new_text = ares_hpp_re.sub('', new_text)
+            new_text = inline_hpp_re.sub('', new_text)
+            if new_text != original_text:
+                cpp_file.write_text(new_text, encoding='utf-8')
+                patched_files += 1
 
-    parallel_rdp_includes = ""
-    if os.path.exists('ares/n64/vulkan/parallel-rdp'):
-        parallel_rdp_includes = """    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/vulkan
-    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/util
-    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp"""
+    if patched_files > 0:
+        print(f"[*] Phase 1: Cleaned up {patched_files} component file(s).")
+    else:
+        print("[*] Phase 1: Component files are already clean.")
+    return True
 
-    ares_sources = [
-        'ares/component/processor/arm7tdmi/arm7tdmi.cpp', 'ares/component/processor/m68000/m68000.cpp',
-        'ares/component/processor/mos6502/mos6502.cpp', 'ares/component/processor/hg51b/hg51b.cpp',
-        'ares/component/processor/sh2/sh2.cpp', 'ares/component/processor/z80/z80.cpp',
-        'ares/component/processor/spc700/spc700.cpp', 'ares/component/processor/v30mz/v30mz.cpp',
-        'ares/component/processor/sm83/sm83.cpp',
-        'ares/a26/a26.cpp', 'ares/cv/cv.cpp', 'ares/fc/fc.cpp', 'ares/gb/gb.cpp', 'ares/gba/gba.cpp',
-        'ares/md/md.cpp', 'ares/ms/ms.cpp', 'ares/msx/msx.cpp', 'ares/myvision/myvision.cpp',
-        'ares/n64/n64.cpp', 'ares/ng/ng.cpp', 'ares/ngp/ngp.cpp', 'ares/pce/pce.cpp', 'ares/ps1/ps1.cpp',
-        'ares/sfc/sfc.cpp', 'ares/sg/sg.cpp', 'ares/spec/spec.cpp', 'ares/ws/ws.cpp'
-    ]
+def restore_master_cpp_files(project_root):
+    # Phase 2: Ensures master core files (like a26.cpp) correctly include their global headers.
+    ares_dir = project_root / 'ares'
+    cores = [p.name for p in ares_dir.iterdir() if p.is_dir() and p.name != 'ares' 
+             and (p / f"{p.name}.cpp").exists() and (p / f"{p.name}.hpp").exists()]
 
-    other_sources = [
-        'nall/nall/nall.cpp', 'mia/mia.cpp',
-        'libco/aarch64.c', 'thirdparty/volk/volk.c', 'thirdparty/GLFW/glfw_stub.cpp',
-        'android/app/src/main/cpp/PhobosRunner.cpp', 'android/app/src/main/cpp/PhobosJNI.cpp'
-    ]
+    patched_files = 0
+    for core in cores:
+        core_cpp = ares_dir / core / f"{core}.cpp"
+        if core_cpp.exists():
+            original_text = core_cpp.read_text(encoding='utf-8')
+            has_ares_hpp = re.search(r'^\s*#include\s*[<"]ares/ares\.hpp[>"]', original_text, re.MULTILINE)
+            has_core_hpp = re.search(rf'^\s*#include\s*[<"]{core}\.hpp[>"]', original_text, re.MULTILINE)
+            
+            prepend = ""
+            if not has_ares_hpp:
+                prepend += "#include <ares/ares.hpp>\n"
+            if not has_core_hpp:
+                prepend += f'#include "{core}.hpp"\n'
+                
+            if prepend:
+                new_text = prepend + "\n" + original_text
+                core_cpp.write_text(new_text, encoding='utf-8')
+                patched_files += 1
 
-    if os.path.exists('thirdparty/sljitAllocator.cpp'): other_sources.append('thirdparty/sljitAllocator.cpp')
-    for f in glob.glob('thirdparty/ymfm/src/*.cpp'):
-        if 'example' not in f.lower(): other_sources.append(f.replace('\\', '/'))
-    for f in glob.glob('thirdparty/TZXFile/*.cpp'):
-        if 'example' not in f.lower(): other_sources.append(f.replace('\\', '/'))
+    if patched_files > 0:
+        print(f"[*] Phase 2: Restored missing master headers in {patched_files} file(s).")
+    else:
+        print("[*] Phase 2: Master .cpp files are already clean.")
+    return True
+
+def fix_global_ares_hpp(project_root):
+    # Phase 3: Repairs the global ares.hpp file
+    ares_hpp_path = project_root / 'ares' / 'ares' / 'ares.hpp'
+    if not ares_hpp_path.exists():
+        print("[!] Warning: ares/ares/ares.hpp not found!")
+        return False
         
-    if os.path.exists('ares/n64/vulkan/parallel-rdp'):
-        for ext in ('*.cpp', '*.c'):
-            for f in glob.glob(f'ares/n64/vulkan/parallel-rdp/**/{ext}', recursive=True):
-                f_fwd = f.replace('\\', '/')
-                if 'example' not in f_fwd.lower() and 'test' not in f_fwd.lower() and 'volk' not in f_fwd.lower():
-                    other_sources.append(f_fwd)
+    text = ares_hpp_path.read_text(encoding='utf-8')
+    original_text = text
+    
+    # 1. Clean up previous botched injections
+    text = re.sub(r'^\s*// Re-injected by Phobos patcher\s*\n', '', text, flags=re.MULTILINE)
+    
+    # 2. Strip these headers from anywhere in the file so we don't have duplicates
+    core_headers = [
+        "ares/memory/memory.hpp",
+        "ares/node/node.hpp",
+        "ares/scheduler/thread.hpp",
+        "ares/scheduler/scheduler.hpp"
+    ]
+    for header in core_headers + ["ares/inline.hpp"]:
+        safe_header = header.replace(".", r"\.")
+        text = re.sub(rf'^\s*#include\s*[<"]{safe_header}[>"]\s*\n?', '', text, flags=re.MULTILINE)
 
-    valid_ares = [s for s in ares_sources if os.path.exists(s)]
-    valid_other = [s for s in other_sources if os.path.exists(s)]
-
-    cmake_content = f"""cmake_minimum_required(VERSION 3.22)
-project(phobos)
-
-add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY)
-add_compile_options(-w)
-
-include_directories(
-    ${{CMAKE_CURRENT_SOURCE_DIR}}
-    ${{CMAKE_CURRENT_SOURCE_DIR}}/nall/nall
-    ${{CMAKE_CURRENT_SOURCE_DIR}}/nall
-    ${{CMAKE_CURRENT_SOURCE_DIR}}/libco
-    ${{CMAKE_CURRENT_SOURCE_DIR}}/ares
-    ${{CMAKE_CURRENT_SOURCE_DIR}}/android/app/src/main/cpp
-{parallel_rdp_includes}
-{thirdparty_includes}
-)
-
-set(ARES_SOURCES
-{chr(10).join(['    ' + s for s in valid_ares])}
-)
-
-set(OTHER_SOURCES
-{chr(10).join(['    ' + s for s in valid_other])}
-)
-
-add_library(phobos_android SHARED
-    ${{ARES_SOURCES}}
-    ${{OTHER_SOURCES}}
-)
-
-set_property(SOURCE ${{ARES_SOURCES}} PROPERTY COMPILE_OPTIONS "-include" "${{CMAKE_CURRENT_SOURCE_DIR}}/ares/ares/ares.hpp")
-
-find_library(log-lib log)
-find_library(android-lib android)
-find_library(aaudio-lib aaudio)
-find_library(vulkan-lib vulkan)
-find_library(z-lib z)
-find_library(dl-lib dl)
-
-target_link_libraries(phobos_android ${{log-lib}} ${{android-lib}} ${{aaudio-lib}} ${{vulkan-lib}} ${{z-lib}} ${{dl-lib}})
-"""
-    write_file('CMakeLists.txt', cmake_content)
-
-    for cache_dir in ['android/app/.cxx', 'android/app/build']:
-        if os.path.exists(cache_dir):
-            shutil.rmtree(cache_dir)
-            print(f"Cleared {cache_dir} cache")
-
-    git_commit_and_push()
-
-    print("\nSUCCESS! Ready to build. Please run 'Make Project' in Android Studio.")
+    # 3. Inject core headers BEFORE platform.hpp (inside the namespace block)
+    platform_re = re.compile(r'^(\s*#include\s*[<"].*platform\.hpp[>"])', re.MULTILINE)
+    
+    injection = ""
+    for header in core_headers:
+        injection += f"  #include <{header}>\n"
+        
+    if platform_re.search(text):
+        text = platform_re.sub(injection + r'\1', text)
+    else:
+        # Fallback if platform.hpp isn't found
+        last_brace = text.rfind('}')
+        if last_brace != -1:
+            text = text[:last_brace] + injection + text[last_brace:]
+            
+    # 4. Ensure inline.hpp is at the very end of the file (OUTSIDE the namespace)
+    text = text.strip() + "\n\n#include <ares/inline.hpp>\n"
+    
+    if text != original_text:
+        ares_hpp_path.write_text(text, encoding='utf-8')
+        print(f"[*] Phase 3: Repaired missing framework includes in ares.hpp (placed before platform.hpp)")
+    else:
+        print(f"[*] Phase 3: Global ares.hpp is already intact.")
+        
+    return True
 
 if __name__ == '__main__':
-    main()
+    script_dir = Path(__file__).parent.resolve()
+    project_root = script_dir.parent if (script_dir.parent / "ares").exists() else script_dir
+    
+    print("[*] Starting Phobos/Ares codebase patching...")
+    restore_unity_builds(project_root)
+    restore_master_cpp_files(project_root)
+    fix_global_ares_hpp(project_root)
+    
+    print("\n[+] Patching complete! You can now run the build manually in Android Studio.")

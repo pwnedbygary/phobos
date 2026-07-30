@@ -1,5 +1,3 @@
-#include <gba/gba.hpp>
-
 //The only PPU state the CPU needs on every cycle is raised IRQs and DMAs,
 //which occur independently of the render process.
 //Display exists to put these events on a separate thread,

@@ -23,8 +23,7 @@
 #include <vector>
 
 namespace ares::MegaDrive {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
   auto option(string name, string value) -> bool;
 
@@ -54,5 +53,4 @@ namespace ares::MegaDrive {
   #include <md/mcd/mcd.hpp>
   #include <md/system/system.hpp>
   #include <md/cartridge/cartridge.hpp>
-  #include <md/bus/inline.hpp>
 }

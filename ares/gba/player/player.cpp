@@ -1,5 +1,3 @@
-#include <gba/gba.hpp>
-
 namespace ares::GameBoyAdvance {
 
 //Game Boy Player emulation

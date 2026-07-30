@@ -1,5 +1,3 @@
-#include <ngp/ngp.hpp>
-
 namespace ares::NeoGeoPocket {
 
 KGE kge;

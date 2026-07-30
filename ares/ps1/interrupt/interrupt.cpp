@@ -1,5 +1,3 @@
-#include <ps1/ps1.hpp>
-
 namespace ares::PlayStation {
 
 Interrupt interrupt;

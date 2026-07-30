@@ -1,4 +1,3 @@
-#include <ngp/ngp.hpp>
 #include <algorithm>
 
 namespace ares::NeoGeoPocket {

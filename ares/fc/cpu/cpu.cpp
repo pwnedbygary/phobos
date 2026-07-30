@@ -1,5 +1,3 @@
-#include <fc/fc.hpp>
-
 namespace ares::Famicom {
 
 CPU cpu;

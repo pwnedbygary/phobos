@@ -1,4 +1,3 @@
-#include <sfc/sfc.hpp>
 #include <ares/resource/resource.hpp>
 
 namespace ares::SuperFamicom {

@@ -9,8 +9,7 @@
 #include "ymfm_opn.h"
 
 namespace ares::NeoGeo {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
 
   struct Model {

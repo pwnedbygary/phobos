@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "a26.hpp"
+
 
 #include <a26/cartridge/cartridge.cpp>
 #include <a26/controller/controller.cpp>

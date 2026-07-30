@@ -1,5 +1,3 @@
-#include <ng/ng.hpp>
-
 namespace ares::NeoGeo {
 
 Cartridge& cartridge = cartridgeSlot.cartridge;

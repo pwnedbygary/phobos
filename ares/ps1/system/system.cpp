@@ -1,4 +1,3 @@
-#include <ps1/ps1.hpp>
 #include <algorithm>
 
 namespace ares::PlayStation {

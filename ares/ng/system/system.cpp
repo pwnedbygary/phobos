@@ -1,4 +1,3 @@
-#include <ng/ng.hpp>
 #include <algorithm>
 
 namespace ares::NeoGeo {

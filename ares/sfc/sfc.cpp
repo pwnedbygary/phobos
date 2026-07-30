@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "sfc.hpp"
+
 //started: 2004-10-14
 
 #include <sfc/system/system.cpp>

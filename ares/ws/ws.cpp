@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "ws.hpp"
+
 //started: 2016-01-26
 
 #include <ws/system/system.cpp>

@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "spec.hpp"
+
 
 #include <spec/keyboard/keyboard.cpp>
 #include <spec/expansion/expansion.cpp>

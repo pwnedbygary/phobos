@@ -6,6 +6,10 @@
 #include <vector>
 #include <ranges>
 #include <algorithm>
+  #include <ares/memory/memory.hpp>
+  #include <ares/node/node.hpp>
+  #include <ares/scheduler/thread.hpp>
+  #include <ares/scheduler/scheduler.hpp>
 
 #include <nall/platform.hpp>
 #include <nall/adaptive-array.hpp>
@@ -89,7 +93,10 @@ namespace ares {
 #include <ares/types.hpp>
 #include <ares/random.hpp>
 #include <ares/debug/debug.hpp>
-#include <ares/node/node.hpp>
+  #include <ares/memory/memory.hpp>
+  #include <ares/node/node.hpp>
+  #include <ares/scheduler/thread.hpp>
+  #include <ares/scheduler/scheduler.hpp>
 #include <ares/platform.hpp>
 #include <ares/memory/fixed-allocator.hpp>
 #include <ares/memory/readable.hpp>
@@ -99,5 +106,6 @@ using nall::serializer;
 using serializer = nall::serializer;
 
 namespace ares {
-#include <ares/scheduler/scheduler.hpp>
 }
+
+#include <ares/inline.hpp>

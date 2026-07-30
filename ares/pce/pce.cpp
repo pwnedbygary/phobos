@@ -1,3 +1,6 @@
+#include <ares/ares.hpp>
+#include "pce.hpp"
+
 //started: 2017-01-11
 
 #include <pce/cpu/cpu.cpp>

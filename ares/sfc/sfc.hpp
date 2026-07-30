@@ -17,8 +17,7 @@
 #endif
 
 namespace ares::SuperFamicom {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
   auto option(string name, string value) -> bool;
 
@@ -42,7 +41,4 @@ namespace ares::SuperFamicom {
   #include <sfc/coprocessor/coprocessor.hpp>
   #include <sfc/slot/slot.hpp>
   #include <sfc/cartridge/cartridge.hpp>
-
-  #include <sfc/memory/inline.hpp>
-  #include <sfc/ppu/counter/inline.hpp>
 }

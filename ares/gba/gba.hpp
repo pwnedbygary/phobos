@@ -9,8 +9,7 @@
 #include <component/rtc/s3511a/s3511a.hpp>
 
 namespace ares::GameBoyAdvance {
-  #include <ares/inline.hpp>
-  auto enumerate() -> std::vector<string>;
+auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
   auto option(string name, string value) -> bool;
 
