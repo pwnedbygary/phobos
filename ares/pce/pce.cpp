@@ -9,3 +9,4 @@
 #include <pce/system/system.cpp>
 #include <pce/cartridge/cartridge.cpp>
 #include <pce/controller/controller.cpp>
+#include <pce/vdp/vdp.cpp>

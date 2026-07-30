@@ -17,7 +17,6 @@ auto load(Node::System& node, string name) -> bool {
 }
 
 Random random;
-Scheduler scheduler;
 System system;
 #include "controls.cpp"
 #include "serialization.cpp"

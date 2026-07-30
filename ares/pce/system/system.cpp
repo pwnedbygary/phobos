@@ -25,7 +25,6 @@ auto option(string name, string value) -> bool {
   return true;
 }
 
-Scheduler scheduler;
 System system;
 #include "serialization.cpp"
 

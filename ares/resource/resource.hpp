@@ -9,8 +9,10 @@ namespace ares::Resource {
   };
   namespace Sprite {
     namespace WonderSwan {
+      inline DummyImage Auxiliary0, Auxiliary1, Auxiliary2;
+      inline DummyImage Headphones, Initialized, LowBattery;
       inline DummyImage Orientation0, Orientation1, PoweredOn, Sleeping;
-      inline DummyImage VolumeA0, VolumeA1, VolumeA2, VolumeA3;
+      inline DummyImage VolumeA0, VolumeA1, VolumeA2;
       inline DummyImage VolumeB0, VolumeB1, VolumeB2, VolumeB3;
     }
     namespace SuperFamicom { inline DummyImage CrosshairRed, CrosshairGreen, CrosshairBlue; }

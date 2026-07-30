@@ -1,17 +1,12 @@
 #pragma once
 
+#include <nall/platform.hpp>
 #include <libco/libco.h>
 #include <sljit.h>
 
 #include <vector>
 #include <ranges>
 #include <algorithm>
-  #include <ares/memory/memory.hpp>
-  #include <ares/node/node.hpp>
-  #include <ares/scheduler/thread.hpp>
-  #include <ares/scheduler/scheduler.hpp>
-
-#include <nall/platform.hpp>
 #include <nall/adaptive-array.hpp>
 #include <nall/any.hpp>
 #include <nall/array.hpp>
@@ -95,9 +90,9 @@ namespace ares {
 #include <ares/debug/debug.hpp>
   #include <ares/memory/memory.hpp>
   #include <ares/node/node.hpp>
+#include <ares/platform.hpp>
   #include <ares/scheduler/thread.hpp>
   #include <ares/scheduler/scheduler.hpp>
-#include <ares/platform.hpp>
 #include <ares/memory/fixed-allocator.hpp>
 #include <ares/memory/readable.hpp>
 #include <ares/memory/writable.hpp>

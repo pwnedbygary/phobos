@@ -7,6 +7,9 @@
 #include <sfc/controller/controller.cpp>
 #include <sfc/cartridge/cartridge.cpp>
 #include <sfc/memory/memory.cpp>
+namespace ares::SuperFamicom {
+  #include <sfc/ppu/counter/inline.hpp>
+}
 #include <sfc/cpu/cpu.cpp>
 #include <sfc/smp/smp.cpp>
 #include <sfc/dsp/dsp.cpp>

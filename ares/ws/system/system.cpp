@@ -25,7 +25,6 @@ auto option(string name, string value) -> bool {
   return true;
 }
 
-Scheduler scheduler;
 System system;
 #define Model ares::WonderSwan::Model
 #define SoC ares::WonderSwan::SoC

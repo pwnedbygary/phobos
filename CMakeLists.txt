@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(phobos)
 
-add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY)
+add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY SLJIT_CONFIG_ARM_64=1)
 add_compile_options(-w)
 
 include_directories(
@@ -74,12 +74,45 @@ set(ARES_SOURCES
 
 set(OTHER_SOURCES
     nall/nall/nall.cpp
+    nall/nall/gdb/server.cpp
     mia/mia.cpp
     libco/aarch64.c
     thirdparty/volk/volk.c
     thirdparty/GLFW/glfw_stub.cpp
     android/app/src/main/cpp/PhobosRunner.cpp
     android/app/src/main/cpp/PhobosJNI.cpp
+    ares/ares/android_globals.cpp
+    ares/pce/vdp-performance/vdp.cpp
+    ares/ares/debug/debug.cpp
+    ares/ares/node/node.cpp
+    ares/ares/memory/fixed-allocator.cpp
+    ares/component/audio/ay38910/ay38910.cpp
+    ares/component/audio/msm5205/msm5205.cpp
+    ares/component/audio/sn76489/sn76489.cpp
+    ares/component/audio/t6w28/t6w28.cpp
+    ares/component/audio/ym2149/ym2149.cpp
+    ares/component/audio/ym2413/ym2413.cpp
+    ares/component/audio/ym2612/ym2612.cpp
+    ares/component/eeprom/m24c/m24c.cpp
+    ares/component/eeprom/m93lcx6/m93lcx6.cpp
+    ares/component/flash/sst39sf0x0/sst39sf0x0.cpp
+    ares/component/io/i8255/i8255.cpp
+    ares/component/processor/gsu/gsu.cpp
+    ares/component/processor/huc6280/huc6280.cpp
+    ares/component/processor/i8080/i8080.cpp
+    ares/component/processor/m68hc05/m68hc05.cpp
+    ares/component/processor/sm5k/sm5k.cpp
+    ares/component/processor/ssp1601/ssp1601.cpp
+    ares/component/processor/tlcs900h/tlcs900h.cpp
+    ares/component/processor/upd96050/upd96050.cpp
+    ares/component/processor/wdc65816/wdc65816.cpp
+    ares/component/rtc/s3511a/s3511a.cpp
+    ares/component/video/tms9918/tms9918.cpp
+    ares/component/video/v9938/v9938.cpp
+    ares/pce/vdp-performance/vdp.cpp
+    ares/n64/vulkan/vulkan.cpp
+    thirdparty/sljit/sljit_src/sljitLir.c
+    thirdparty/qon/qon.cpp
     thirdparty/sljitAllocator.cpp
     thirdparty/ymfm/src/ymfm_adpcm.cpp
     thirdparty/ymfm/src/ymfm_misc.cpp
@@ -131,7 +164,6 @@ set(OTHER_SOURCES
     ares/n64/vulkan/parallel-rdp/vulkan/cookie.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/descriptor_set.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/device.cpp
-    ares/n64/vulkan/parallel-rdp/vulkan/device_fossilize.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/event_manager.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/fence.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/fence_manager.cpp
@@ -141,7 +173,6 @@ set(OTHER_SOURCES
     ares/n64/vulkan/parallel-rdp/vulkan/pipeline_event.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/query_pool.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/render_pass.cpp
-    ares/n64/vulkan/parallel-rdp/vulkan/renderdoc_capture.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/sampler.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/semaphore.cpp
     ares/n64/vulkan/parallel-rdp/vulkan/semaphore_manager.cpp
@@ -155,7 +186,41 @@ add_library(phobos_android SHARED
     ${OTHER_SOURCES}
 )
 
-set_property(SOURCE ${ARES_SOURCES} PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ares/ares/ares.hpp")
+set(ARES_ALL_SOURCES
+    ${ARES_SOURCES}
+    ares/ares/android_globals.cpp
+    ares/ares/debug/debug.cpp
+    ares/ares/node/node.cpp
+    ares/ares/memory/fixed-allocator.cpp
+    ares/component/audio/ay38910/ay38910.cpp
+    ares/component/audio/msm5205/msm5205.cpp
+    ares/component/audio/sn76489/sn76489.cpp
+    ares/component/audio/t6w28/t6w28.cpp
+    ares/component/audio/ym2149/ym2149.cpp
+    ares/component/audio/ym2413/ym2413.cpp
+    ares/component/audio/ym2612/ym2612.cpp
+    ares/component/eeprom/m24c/m24c.cpp
+    ares/component/eeprom/m93lcx6/m93lcx6.cpp
+    ares/component/flash/sst39sf0x0/sst39sf0x0.cpp
+    ares/component/io/i8255/i8255.cpp
+    ares/component/processor/gsu/gsu.cpp
+    ares/component/processor/huc6280/huc6280.cpp
+    ares/component/processor/i8080/i8080.cpp
+    ares/component/processor/m68hc05/m68hc05.cpp
+    ares/component/processor/sm5k/sm5k.cpp
+    ares/component/processor/ssp1601/ssp1601.cpp
+    ares/component/processor/tlcs900h/tlcs900h.cpp
+    ares/component/processor/upd96050/upd96050.cpp
+    ares/component/processor/wdc65816/wdc65816.cpp
+    ares/component/rtc/s3511a/s3511a.cpp
+    ares/component/video/tms9918/tms9918.cpp
+    ares/component/video/v9938/v9938.cpp
+    ares/pce/vdp-performance/vdp.cpp
+    ares/n64/vulkan/vulkan.cpp
+    nall/nall/gdb/server.cpp
+)
+
+set_property(SOURCE ${ARES_ALL_SOURCES} PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ares/ares/ares.hpp")
 
 find_library(log-lib log)
 find_library(android-lib android)

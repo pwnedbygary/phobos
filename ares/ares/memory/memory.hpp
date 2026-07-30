@@ -1,5 +1,7 @@
 #pragma once
 
+#include <nall/stdint.hpp>
+
 namespace ares::Memory {
 
 inline auto mirror(u32 address, u32 size) -> u32 {

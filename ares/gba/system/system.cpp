@@ -22,7 +22,6 @@ auto option(string name, string value) -> bool {
   return true;
 }
 
-Scheduler scheduler;
 BIOS bios;
 System system;
 #include "bios.cpp"

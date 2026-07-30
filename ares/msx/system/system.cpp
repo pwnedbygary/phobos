@@ -17,7 +17,6 @@ auto load(Node::System& node, string name) -> bool {
   return system.load(node, name);
 }
 
-Scheduler scheduler;
 ROM rom;
 System system;
 #include "serialization.cpp"

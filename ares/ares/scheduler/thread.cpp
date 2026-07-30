@@ -1,3 +1,5 @@
+namespace ares {
+
 inline auto Thread::EntryPoints() -> std::vector<EntryPoint>& {
   static std::vector<EntryPoint> entryPoints;
   return entryPoints;
@@ -117,4 +119,6 @@ inline auto Thread::serialize(serializer& s) -> void {
       s(resume);
     }
   }
+}
+
 }

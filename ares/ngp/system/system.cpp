@@ -15,7 +15,6 @@ auto load(Node::System& node, string name) -> bool {
   return system.load(node, name);
 }
 
-Scheduler scheduler;
 System system;
 #include "controls.cpp"
 #include "debugger.cpp"

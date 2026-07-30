@@ -1,4 +1,7 @@
 #pragma once
+
+namespace ares {
+
 struct Thread;
 
 struct Scheduler {
@@ -46,3 +49,5 @@ private:
 };
 
 extern Scheduler scheduler;
+
+}

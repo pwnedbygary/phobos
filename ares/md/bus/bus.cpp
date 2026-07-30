@@ -15,4 +15,6 @@ auto Bus::power(bool reset) -> void {
   state = {};
 }
 
+#include "inline.hpp"
+
 }

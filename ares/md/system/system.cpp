@@ -46,7 +46,6 @@ auto option(string name, string value) -> bool {
 }
 
 Random random;
-Scheduler scheduler;
 System system;
 #include "controls.cpp"
 #include "serialization.cpp"

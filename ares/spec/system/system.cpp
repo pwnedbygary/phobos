@@ -2,7 +2,6 @@
 
 namespace ares::ZXSpectrum {
 
-Scheduler scheduler;
 ROM rom;
 System system;
 #include "serialization.cpp"

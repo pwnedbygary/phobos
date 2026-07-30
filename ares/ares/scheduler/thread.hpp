@@ -1,4 +1,7 @@
 #pragma once
+
+namespace ares {
+
 struct Scheduler;
 
 struct Thread {
@@ -49,3 +52,5 @@ protected:
 
   friend struct Scheduler;
 };
+
+}

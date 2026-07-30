@@ -21,7 +21,6 @@ auto load(Node::System& node, string name) -> bool {
   return system.load(node, name);
 }
 
-Scheduler scheduler;
 BIOS bios;
 System system;
 #include "bios.cpp"

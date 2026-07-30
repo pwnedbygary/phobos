@@ -105,4 +105,6 @@ auto Bus::unmap(const string& addr) -> void {
   }
 }
 
+#include "inline.hpp"
+
 }
