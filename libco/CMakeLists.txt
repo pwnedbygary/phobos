@@ -2,7 +2,9 @@ add_library(libco STATIC libco.c)
 
 string(TOLOWER ${CMAKE_SYSTEM_PROCESSOR} LOWERCASE_CMAKE_SYSTEM_PROCESSOR)
 
-if(LOWERCASE_CMAKE_SYSTEM_PROCESSOR MATCHES "(i[3-6]86|x86)")
+if(ANDROID)
+  target_sources(libco PRIVATE sjlj.c)
+elseif(LOWERCASE_CMAKE_SYSTEM_PROCESSOR MATCHES "(i[3-6]86|x86)")
   target_sources(libco PRIVATE x86.c)
 elseif(LOWERCASE_CMAKE_SYSTEM_PROCESSOR MATCHES "(x64|x86_64|amd64|e2k)")
   target_sources(libco PRIVATE amd64.c)

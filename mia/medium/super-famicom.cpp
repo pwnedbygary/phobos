@@ -90,10 +90,19 @@ auto SuperFamicom::load(string location) -> LoadResult {
   
   this->sha256   = Hash::SHA256(rom).digest();
   this->location = location;
-  auto foundDatabase = Medium::loadDatabase();
-  if(!foundDatabase) return { databaseNotFound, "Super Famicom.bml" };
+  __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "ROM SHA256: %s", (const char*)sha256);
+
+  Medium::loadDatabase();
+  // For bundled systems, try searching related databases by name directly
+  // since Medium::create returns shared_ptr<Pak> and Pak doesn't have loadDatabase
+
   this->manifest = Medium::manifestDatabase(sha256);
-  
+  if (manifest) {
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "Found manifest in database!");
+  } else {
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "Manifest NOT found in database, using analyze()");
+  }
+
   if(!manifest) {
     auto tmp = nall::split(location, ".");
     auto ext = string{".", tmp.back()};
@@ -108,7 +117,10 @@ auto SuperFamicom::load(string location) -> LoadResult {
   document = BML::unserialize(manifest);
   append_missing_firmware(document); // if auto-detect failed, use chips from the manifest
   
-  if(!manifest) manifest = analyze(rom);
+  if(!manifest) {
+      manifest = analyze(rom);
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "Generated Manifest via analyze():\n%s", (const char*)manifest);
+  }
   document = BML::unserialize(manifest);
   if(!document) return couldNotParseManifest;
 

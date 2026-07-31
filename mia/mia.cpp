@@ -1,6 +1,7 @@
 #include "mia.hpp"
 
 #include <TZXFile.h>
+#include <android/log.h>
 
 namespace mia {
 
@@ -12,8 +13,27 @@ auto locate(const string &name) -> string {
   // First check each path for the presence of the file we are looking for in the following order
   // allowing users to override the default resources if they wish to do so.
 
+  // 0. The homeLocation override
+  string location;
+  if (homeLocation) {
+    location = {homeLocation(), name};
+    const char* p = (const char*)location;
+    __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "Checking path: '%s' (len: %d)", p, (int)strlen(p));
+    // Log hex bytes of the path to catch hidden characters
+    char hexBuf[1024];
+    char* h = hexBuf;
+    for(int i=0; i<strlen(p) && i<256; i++) h += sprintf(h, "%02X ", (unsigned char)p[i]);
+    __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "Path Hex: %s", hexBuf);
+
+    if (inode::exists(location)) {
+        __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "FOUND!");
+        return location;
+    }
+  }
+
   // 1. The application directory
-  string location = {Path::program(), name};
+  location = {Path::program(), name};
+  __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "Checking program path: %s", (const char*)location);
   if (inode::exists(location)) return location;
 
   // 2. The user data directory

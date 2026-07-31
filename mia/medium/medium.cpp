@@ -122,11 +122,31 @@ auto Medium::database() -> Database {
 auto Medium::manifestDatabase(string sha256) -> string {
   loadDatabase();
 
-  //search the database for a given sha256 game entry
+  // First pass: try current medium's database
   for(auto& database : Media::databases) {
     if(database.name == name()) {
       for(auto node : database.list) {
         if(node["sha256"].string() == sha256) {
+          return BML::serialize(node);
+        }
+      }
+    }
+  }
+
+  // Second pass: for bundled systems, search across ALL loaded databases
+  const char* bundles[] = {"Super Famicom", "Super Nintendo", "SNES", "Sufami Turbo", "BS Memory"};
+  bool isBundle = false;
+  for(auto b : bundles) if(name() == b) isBundle = true;
+
+  if (isBundle) {
+    for(auto& database : Media::databases) {
+      bool isTargetBundle = false;
+      for(auto b : bundles) if(database.name == b) isTargetBundle = true;
+      if (!isTargetBundle) continue;
+
+      for(auto node : database.list) {
+        if(node["sha256"].string() == sha256) {
+          __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "Found ROM in bundled database: %s", (const char*)database.name);
           return BML::serialize(node);
         }
       }
