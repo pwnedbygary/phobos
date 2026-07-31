@@ -86,10 +86,10 @@ auto construct() -> void {
   if(initialized) return;
   initialized = true;
 
+  media.push_back("Arcade");
   media.push_back("Atari 2600");
   media.push_back("BS Memory");
   media.push_back("ColecoVision");
-  media.push_back("MyVision");
   media.push_back("Famicom");
   media.push_back("Famicom Disk System");
   media.push_back("Game Boy");
@@ -115,10 +115,12 @@ auto construct() -> void {
   media.push_back("Pocket Challenge V2");
   media.push_back("Saturn");
   media.push_back("SC-3000");
+  media.push_back("SC-3000 Tape");
   media.push_back("SG-1000");
   media.push_back("Sufami Turbo");
   media.push_back("Super Famicom");
   media.push_back("SuperGrafx");
+  media.push_back("Tape");
   media.push_back("WonderSwan");
   media.push_back("WonderSwan Color");
   media.push_back("ZX Spectrum");
@@ -132,12 +134,13 @@ auto construct() -> void {
 
   auto addMatch = [&](const string& medium) {
     auto pak = mia::Medium::create(medium);
+    if(!pak) return;
     auto exts = pak->extensions();
 
     if(std::ranges::find(exts, extension) == exts.end()) return;
 
     if(pak->load(filename) != successful) return;              // Skip media that cannot load this file
-    if(pak->pak->attribute("audio").boolean()) return;       // Skip audio-only media
+    if(!pak->pak || pak->pak->attribute("audio").boolean()) return;       // Skip audio-only media
 
     auto name = pak->name();
     if(std::ranges::find(matches, name) == matches.end()) {
@@ -154,6 +157,7 @@ auto construct() -> void {
 
         for(auto& medium : media) {
           auto pak = mia::Medium::create(medium);
+          if(!pak) continue;  // Skip empty media types like "Arcade"
           auto exts = pak->extensions();
 
           if(std::ranges::find(exts, zippedExtension) != exts.end()) {
@@ -168,6 +172,8 @@ auto construct() -> void {
   }
 
   for(auto& medium : media) {
+    auto pak = mia::Medium::create(medium);
+    if(!pak) continue;  // Skip empty media types like "Arcade"
     addMatch(medium);
   }
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(phobos)
 
-add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY SLJIT_CONFIG_ARM_64=1)
+add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY SLJIT_CONFIG_ARM_64=1 ARES_ENABLE_ZIP ARES_ENABLE_CHD)
 add_compile_options(-w)
 
 include_directories(
@@ -24,7 +24,10 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/KHR
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/TZXFile
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/jansson
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/miniz-3.1.1
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/zstd-1.5.7
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/lzma-25.01/src/real
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/librashader
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/qon
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit.h
@@ -60,12 +63,12 @@ set(ARES_SOURCES
     ares/md/md.cpp
     ares/ms/ms.cpp
     ares/msx/msx.cpp
-    ares/myvision/myvision.cpp
     ares/n64/n64.cpp
     ares/ng/ng.cpp
     ares/ngp/ngp.cpp
     ares/pce/pce.cpp
     ares/ps1/ps1.cpp
+    ares/saturn/system/system.cpp
     ares/sfc/sfc.cpp
     ares/sg/sg.cpp
     ares/spec/spec.cpp
@@ -83,6 +86,23 @@ set(OTHER_SOURCES
     android/app/src/main/cpp/PhobosJNI.cpp
     ares/ares/android_globals.cpp
     ares/pce/vdp-performance/vdp.cpp
+    thirdparty/libchdr/src/libchdr_bitstream.c
+    thirdparty/libchdr/src/libchdr_cdrom.c
+    thirdparty/libchdr/src/libchdr_chd.c
+    thirdparty/libchdr/src/libchdr_flac.c
+    thirdparty/libchdr/src/libchdr_huffman.c
+    thirdparty/libchdr/src/libchdr_codec_cdfl.c
+    thirdparty/libchdr/src/libchdr_codec_cdlz.c
+    thirdparty/libchdr/src/libchdr_codec_cdzl.c
+    thirdparty/libchdr/src/libchdr_codec_cdzs.c
+    thirdparty/libchdr/src/libchdr_codec_flac.c
+    thirdparty/libchdr/src/libchdr_codec_huff.c
+    thirdparty/libchdr/src/libchdr_codec_lzma.c
+    thirdparty/libchdr/src/libchdr_codec_zlib.c
+    thirdparty/libchdr/src/libchdr_codec_zstd.c
+    thirdparty/libchdr/deps/lzma-25.01/src/real/LzmaDec.c
+    thirdparty/libchdr/deps/miniz-3.1.1/miniz.c
+    thirdparty/libchdr/deps/zstd-1.5.7/zstddeclib.c
     ares/ares/debug/debug.cpp
     ares/ares/node/node.cpp
     ares/ares/memory/fixed-allocator.cpp

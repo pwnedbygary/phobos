@@ -4,7 +4,6 @@ namespace Media {
   #include "arcade.cpp"
   #include "atari-2600.cpp"
   #include "colecovision.cpp"
-  #include "myvision.cpp"
   #include "famicom.cpp"
   #include "famicom-disk-system.cpp"
   #include "game-boy.cpp"
@@ -49,7 +48,6 @@ auto Medium::create(string name) -> std::shared_ptr<Pak> {
   if(name == "Arcade") return std::make_shared<Media::Arcade>();
   if(name == "Atari 2600") return std::make_shared<Media::Atari2600>();
   if(name == "ColecoVision") return std::make_shared<Media::ColecoVision>();
-  if(name == "MyVision") return std::make_shared<Media::MyVision>();
   if(name == "Famicom") return std::make_shared<Media::Famicom>();
   if(name == "Famicom Disk System") return std::make_shared<Media::FamicomDiskSystem>();
   if(name == "Game Boy") return std::make_shared<Media::GameBoy>();

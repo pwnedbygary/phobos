@@ -2,7 +2,6 @@ namespace Systems {
   #include "arcade.cpp"
   #include "atari-2600.cpp"
   #include "colecovision.cpp"
-  #include "myvision.cpp"
   #include "famicom.cpp"
   #include "game-boy.cpp"
   #include "game-boy-color.cpp"
@@ -41,7 +40,6 @@ auto System::create(string name) -> std::shared_ptr<Pak> {
   if(name == "Arcade") return std::make_shared<Systems::Arcade>();
   if(name == "Atari 2600") return std::make_shared<Systems::Atari2600>();
   if(name == "ColecoVision") return std::make_shared<Systems::ColecoVision>();
-  if(name == "MyVision") return std::make_shared<Systems::MyVision>();
   if(name == "Famicom") return std::make_shared<Systems::Famicom>();
   if(name == "Game Boy") return std::make_shared<Systems::GameBoy>();
   if(name == "Game Boy Color") return std::make_shared<Systems::GameBoyColor>();

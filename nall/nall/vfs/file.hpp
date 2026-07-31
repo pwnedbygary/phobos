@@ -21,7 +21,7 @@ struct file : node {
     return offset() >= size();
   }
 
-  auto read(std::span<u8> span) -> void {
+  virtual auto read(std::span<u8> span) -> void {
     for(auto& byte : span) byte = read();
   }
 
