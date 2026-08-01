@@ -36,6 +36,10 @@ auto locate(const string &name) -> string {
   __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "Checking program path: %s", (const char*)location);
   if (inode::exists(location)) return location;
 
+  // Android: Fallback to internal app storage
+  location = {"/data/user/0/com.phobos.emulator/files/ares/", name};
+  if (inode::exists(location)) return location;
+
   // 2. The user data directory
   location = {Path::userData(), "ares/", name};
   if (inode::exists(location)) return location;
