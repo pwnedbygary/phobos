@@ -179,13 +179,23 @@ auto SuperFamicom::load(string location) -> LoadResult {
   }
 
   std::span<const u8> view{rom};
-  for(auto node : document.find("game/board/memory(type=ROM)")) {
+  auto romNodes = document.find("game/board/memory(type=ROM)");
+  __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "Found %zu ROM nodes in manifest. ROM buffer size: %zu", romNodes.size(), rom.size());
+  for(auto node : romNodes) {
     string name;
     if(auto architecture = node["architecture"].string()) name.append(architecture.downcase(), ".");
     name.append(node["content"].string().downcase(), ".rom");
     u32 size = node["size"].natural();
-    if(view.size() < size) break;  //missing firmware
-    pak->append(name, {view.data(), size});
+    __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "  Appending ROM: %s, requested size: 0x%X, available: 0x%X", (const char*)name, size, (u32)view.size());
+    if(view.size() < size) {
+      __android_log_print(ANDROID_LOG_ERROR, "PhobosMIA", "  ERROR: Not enough data for %s! Requested 0x%X but only 0x%X left", (const char*)name, size, (u32)view.size());
+      break;  //missing firmware
+    }
+    // FIX: Allocate and copy data to ensure it persists in the VFS
+    pak->append(name, size);
+    if (auto fp = pak->write(name)) {
+        fp->write({view.data(), size});
+    }
     view = view.subspan(size);
   }
 
@@ -242,7 +252,9 @@ auto SuperFamicom::analyze(std::vector<u8>& rom) -> string {
     print("[mia] Loading rom failed. Minimum expected rom size is 32768 (0x8000) bytes. Rom size: ", rom.size(), " (0x", hex(rom.size()), ") bytes.\n");
     return {};
   }
-  
+
+  __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "analyze: ROM size before header scoring: %zu", rom.size());
+
   u32 LoROM   = scoreHeader(  0x7fb0);
   u32 HiROM   = scoreHeader(  0xffb0);
   u32 ExLoROM = scoreHeader(0x407fb0);
