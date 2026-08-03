@@ -140,8 +140,6 @@ auto VI::refresh() -> void {
     u32 width = 0, height = 0;
     vulkan.mapScanoutRead(rgba, width, height);
     if(rgba) {
-      static int refreshCount = 0;
-      if (++refreshCount % 60 == 0) __android_log_print(ANDROID_LOG_DEBUG, "PhobosVI", "VI::refresh: got %dx%d pixels from Vulkan", width, height);
       screen->setViewport(0, 0, width, height);
       for(u32 y : range(height)) {
         auto source = rgba + width * y * sizeof(u32);
@@ -150,10 +148,6 @@ auto VI::refresh() -> void {
           target[x] = source[x * 4 + 0] << 16 | source[x * 4 + 1] << 8 | source[x * 4 + 2] << 0;
         }
       }
-    } else {
-      __android_log_print(ANDROID_LOG_WARN, "PhobosVI", "VI::refresh: mapScanoutRead returned NULL rgba");
-      screen->setViewport(0, 0, 1, 1);
-      screen->pixels(1).data()[0] = 0;
     }
     vulkan.unmapScanoutRead();
     vulkan.endScanout();

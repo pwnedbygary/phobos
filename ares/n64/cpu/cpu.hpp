@@ -1223,7 +1223,7 @@ struct CPU : Thread {
     auto emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecuteResult;
     auto emitCOP2(u32 instruction) -> EmitExecuteResult;
 
-    bool enabled = false;
+    bool enabled = true;
     bool callInstructionPrologue = false;
     bool emitSlowPathSection = false;
     bool emitPipelineSetupDone = false;

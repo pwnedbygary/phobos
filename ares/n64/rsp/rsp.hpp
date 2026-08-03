@@ -680,7 +680,7 @@ struct RSP : Thread, Memory::RCP<RSP> {
       return s <= e ? smask & emask : smask | emask;
     }
 
-    bool enabled = false;
+    bool enabled = true;
     Pipeline pipeline;
     bump_allocator allocator;
     array<Block*[2048]> context;
