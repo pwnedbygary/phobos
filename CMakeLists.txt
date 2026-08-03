@@ -28,7 +28,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/miniz-3.1.1
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/zstd-1.5.7
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/lzma-25.01/src/real
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/librashader
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/librashader/include
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/qon
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit.h
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit/sljit_src
@@ -246,7 +246,9 @@ find_library(log-lib log)
 find_library(android-lib android)
 find_library(aaudio-lib aaudio)
 find_library(vulkan-lib vulkan)
+find_library(egl-lib EGL)
+find_library(gles-lib GLESv3)
 find_library(z-lib z)
 find_library(dl-lib dl)
 
-target_link_libraries(phobos_android ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${z-lib} ${dl-lib})
+target_link_libraries(phobos_android ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib})

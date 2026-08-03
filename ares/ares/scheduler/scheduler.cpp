@@ -1,6 +1,11 @@
 namespace ares {
 inline auto Scheduler::reset() -> void {
   _threads.clear();
+  _host = nullptr;
+  _resume = nullptr;
+  _primary = nullptr;
+  _mode = Mode::Run;
+  _event = Event::Step;
 }
 
 inline auto Scheduler::threads() const -> u32 {

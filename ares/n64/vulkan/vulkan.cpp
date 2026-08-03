@@ -43,7 +43,8 @@ struct Vulkan::Implementation {
   u32 endCount = 0;
 };
 
-auto Vulkan::load(Node::Object) -> bool {
+auto Vulkan::load(Node::Object object) -> bool {
+  __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Vulkan::load called, enable = %d", vulkan.enable);
   if (vulkan.enable) {
     Util::set_thread_logging_interface(&loggingInterface);
     delete implementation;
@@ -56,20 +57,25 @@ auto Vulkan::load(Node::Object) -> bool {
     if (!implementation) {
       platform->status("Vulkan init failed: No RDP rendering support");
       vulkan.enable = false;
-      rdram.hidden.data = nullptr;
+      rdram.hidden.data = (u8*)malloc(4_MiB); // Fallback allocation to prevent crash
+      memset(rdram.hidden.data, 0, 4_MiB);
     } else {
       platform->status("Vulkan Enabled: using paraLLEl-RDP");
       rdram.hidden.data = (u8*)implementation->processor->begin_read_hidden_rdram();
     }
   } else {
     platform->status("Vulkan Disabled: No RDP rendering support");
-    rdram.hidden.data = nullptr;
+    rdram.hidden.data = (u8*)malloc(4_MiB); // Fallback allocation to prevent crash
+    memset(rdram.hidden.data, 0, 4_MiB);
   }
 
   return true;
 }
 
 auto Vulkan::unload() -> void {
+  if (rdram.hidden.data && (!implementation || rdram.hidden.data != (u8*)implementation->processor->begin_read_hidden_rdram())) {
+    free(rdram.hidden.data);
+  }
   rdram.hidden.data = nullptr;
   if (implementation) delete implementation;
   implementation = nullptr;
@@ -186,6 +192,8 @@ auto Vulkan::scanoutAsync(bool field) -> bool {
   if(implementation->scanout.fence) {
     implementation->scanout.fence->wait();
   }
+  static int scanoutCountLog = 0;
+  if (++scanoutCountLog % 60 == 0) __android_log_print(ANDROID_LOG_DEBUG, "PhobosVulkan", "Vulkan::scanoutAsync triggered");
   implementation->processor->scanout_async_buffer(implementation->scanout, options);
   implementation->scanoutCount++;
   return true;
@@ -225,8 +233,16 @@ auto Vulkan::crashed() -> const char* {
 }
 
 Vulkan::Implementation::Implementation(u8* data, u32 size) {
-  if(!::Vulkan::Context::init_loader(nullptr)) return;
-  if(!context.init_instance_and_device(nullptr, 0, nullptr, 0, 0)) return;
+  __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Vulkan::Implementation constructor, forcing loader reload");
+  if(!::Vulkan::Context::init_loader(nullptr, true)) {
+    __android_log_print(ANDROID_LOG_ERROR, "PhobosVulkan", "Vulkan loader init failed");
+    return;
+  }
+  __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Vulkan loader init success, initializing instance");
+  if(!context.init_instance_and_device(nullptr, 0, nullptr, 0, 0)) {
+    __android_log_print(ANDROID_LOG_ERROR, "PhobosVulkan", "Vulkan instance init failed");
+    return;
+  }
   device.set_context(context);
   device.init_frame_contexts(3);
 

@@ -213,11 +213,52 @@ bool Context::init_loader(PFN_vkGetInstanceProcAddr addr, bool force_reload)
 	{
 #ifndef _WIN32
 		static void *module;
+		if (force_reload && module)
+		{
+			dlclose(module);
+			module = nullptr;
+		}
+
 		if (!module)
 		{
 			auto vulkan_path = Util::get_environment_string("GRANITE_VULKAN_LIBRARY", "");
-			if (!vulkan_path.empty())
-				module = dlopen(vulkan_path.c_str(), RTLD_LOCAL | RTLD_LAZY);
+			if (!vulkan_path.empty()) {
+				__android_log_print(ANDROID_LOG_INFO, "Granite", "Attempting to load custom Vulkan library: %s", vulkan_path.c_str());
+
+				dlerror();
+
+				// Try to load dependencies from the most likely locations on various Android versions
+				const char* search_paths[] = {
+					"/system/lib64/",
+					"/vendor/lib64/",
+					"/apex/com.android.runtime/lib64/",
+					"/apex/com.android.vndk.v30/lib64/",
+					""
+				};
+				const char* libs[] = {"libhardware.so", "libcutils.so", "libutils.so"};
+
+				for (const char* lib : libs) {
+					void* h = nullptr;
+					for (const char* path : search_paths) {
+						char full_path[1024];
+						snprintf(full_path, sizeof(full_path), "%s%s", path, lib);
+						h = dlopen(full_path[0] ? full_path : lib, RTLD_GLOBAL | RTLD_NOW);
+						if (h) {
+							__android_log_print(ANDROID_LOG_INFO, "Granite", "Pre-loaded %s from %s", lib, full_path[0] ? full_path : "default");
+							break;
+						}
+					}
+				}
+
+				module = dlopen(vulkan_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+				if (!module) {
+					const char* err = dlerror();
+					__android_log_print(ANDROID_LOG_ERROR, "Granite", "Failed to dlopen custom Vulkan library %s: %s", vulkan_path.c_str(), err ? err : "unknown error");
+				} else {
+					__android_log_print(ANDROID_LOG_INFO, "Granite", "Successfully dlopened custom Vulkan library %s at %p", vulkan_path.c_str(), module);
+				}
+			}
+
 #ifdef __APPLE__
 			if (!module)
 				module = dlopen("libvulkan.1.dylib", RTLD_LOCAL | RTLD_LAZY);
