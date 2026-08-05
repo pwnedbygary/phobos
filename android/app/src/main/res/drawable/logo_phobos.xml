@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+    <!-- Stylized irregular Martian moon Phobos -->
+    <path
+        android:fillColor="#E6C229"
+        android:pathData="M160,100 C160,133.1 133.1,160 100,160 C66.9,160 40,133.1 40,100 C40,66.9 66.9,40 100,40 C115,40 128,45 138,55 C125,50 110,48 95,48 C65,48 48,72 48,100 C48,128 65,152 95,152 C115,152 135,145 150,130 C155,120 160,110 160,100 Z" />
+    <!-- 3 Craters -->
+    <path
+        android:fillColor="#BFA520"
+        android:pathData="M70,80 A5,5 0 1,1 60,80 A5,5 0 1,1 70,80 Z M90,120 A8,8 0 1,1 74,120 A8,8 0 1,1 90,120 Z M120,90 A4,4 0 1,1 112,90 A4,4 0 1,1 120,90 Z" />
+</vector>
