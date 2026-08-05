@@ -225,31 +225,10 @@ bool Context::init_loader(PFN_vkGetInstanceProcAddr addr, bool force_reload)
 			if (!vulkan_path.empty()) {
 				__android_log_print(ANDROID_LOG_INFO, "Granite", "Attempting to load custom Vulkan library: %s", vulkan_path.c_str());
 
-				dlerror();
-
-				// Try to load dependencies from the most likely locations on various Android versions
-				const char* search_paths[] = {
-					"/system/lib64/",
-					"/vendor/lib64/",
-					"/apex/com.android.runtime/lib64/",
-					"/apex/com.android.vndk.v30/lib64/",
-					""
-				};
-				const char* libs[] = {"libhardware.so", "libcutils.so", "libutils.so"};
-
-				for (const char* lib : libs) {
-					void* h = nullptr;
-					for (const char* path : search_paths) {
-						char full_path[1024];
-						snprintf(full_path, sizeof(full_path), "%s%s", path, lib);
-						h = dlopen(full_path[0] ? full_path : lib, RTLD_GLOBAL | RTLD_NOW);
-						if (h) {
-							__android_log_print(ANDROID_LOG_INFO, "Granite", "Pre-loaded %s from %s", lib, full_path[0] ? full_path : "default");
-							break;
-						}
-					}
-				}
-
+				// On Android, we should NOT try to manually load private system libraries like libcutils.so.
+				// If the custom driver needs them, it must be building against the public NDK
+				// or we need a proper namespace hook (AdrenoTools).
+				// For now, just try to load the driver and let the system resolve dependencies.
 				module = dlopen(vulkan_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
 				if (!module) {
 					const char* err = dlerror();
@@ -259,17 +238,9 @@ bool Context::init_loader(PFN_vkGetInstanceProcAddr addr, bool force_reload)
 				}
 			}
 
-#ifdef __APPLE__
-			if (!module)
-				module = dlopen("libvulkan.1.dylib", RTLD_LOCAL | RTLD_LAZY);
-			if (!module)
-				module = dlopen("libMoltenVK.dylib", RTLD_LOCAL | RTLD_LAZY);
-#else
-			if (!module)
-				module = dlopen("libvulkan.so.1", RTLD_LOCAL | RTLD_LAZY);
 			if (!module)
 				module = dlopen("libvulkan.so", RTLD_LOCAL | RTLD_LAZY);
-#endif
+
 			if (!module)
 				return false;
 		}

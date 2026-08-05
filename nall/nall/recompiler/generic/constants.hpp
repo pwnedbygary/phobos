@@ -67,6 +67,7 @@
   struct mem : public op_base {
     mem(sreg base, sljit_sw offset) : op_base(SLJIT_MEM1(base.fst), offset) {}
     mem(reg base, sljit_sw offset) : op_base(SLJIT_MEM1(base.fst), offset) {}
+    mem(sljit_s32 mem1_op, sljit_sw offset) : op_base(mem1_op, offset) {}
   };
 
   struct mem0 : public op_base {

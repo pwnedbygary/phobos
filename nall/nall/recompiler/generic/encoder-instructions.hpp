@@ -420,10 +420,21 @@
   }
 
   auto mov128(mem dst, mem src) -> void {
+#if defined(ARCHITECTURE_ARM64)
+    // Avoid sljit_emit_simd_mov which crashes on some ARM64 cores (Snapdragon 8 Gen 3)
+    // Fall back to 2x64-bit moves.
+    mov64(reg(0), src);
+    mov64(dst, reg(0));
+    // Generic recompiler uses fst (op) and snd (offset/value).
+    // For MEM1, preserve src.fst / dst.fst and increment offset by 8.
+    mov64(reg(0), mem(src.fst, src.snd + 8));
+    mov64(mem(dst.fst, dst.snd + 8), reg(0));
+#else
     static constexpr sljit_s32 kSimdTmp = SLJIT_FR(6);
     static constexpr sljit_s32 kSimdType = SLJIT_SIMD_REG_128 | SLJIT_SIMD_ELEM_8 | SLJIT_SIMD_MEM_UNALIGNED;
     sljit_emit_simd_mov(compiler, SLJIT_SIMD_LOAD | kSimdType, kSimdTmp, src.fst, src.snd);
     sljit_emit_simd_mov(compiler, SLJIT_SIMD_STORE | kSimdType, kSimdTmp, dst.fst, dst.snd);
+#endif
   }
 
   template<typename T, typename U, typename V>

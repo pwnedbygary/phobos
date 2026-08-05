@@ -14,11 +14,15 @@ auto Cartridge::allocate(Node::Port parent) -> Node::Peripheral {
 }
 
 auto Cartridge::connect() -> void {
-  if(!node->setPak(pak = platform->pak(node))) return;
+  if(!node->setPak(pak = platform->pak(node))) {
+      __android_log_print(ANDROID_LOG_ERROR, "AresGB", "Cartridge::connect: platform->pak(node) returned null!");
+      return;
+  }
 
   information = {};
   information.title = pak->attribute("title");
   information.board = pak->attribute("board");
+  __android_log_print(ANDROID_LOG_INFO, "AresGB", "Cartridge::connect: Title='%s', Board='%s'", (const char*)information.title, (const char*)information.board);
 
   board.reset();
   if(information.board == "HuC1"  ) board = std::make_unique<Board::HuC1>(*this);

@@ -4,7 +4,11 @@ struct Linear : Interface {
   Memory::Writable<n8> ram;
 
   auto load() -> void override {
-    Interface::load(rom, "program.rom");
+    if (Interface::load(rom, "program.rom")) {
+        __android_log_print(ANDROID_LOG_INFO, "AresGB", "Linear::load: Loaded program.rom, size=%zu", rom.size());
+    } else {
+        __android_log_print(ANDROID_LOG_ERROR, "AresGB", "Linear::load: FAILED to load program.rom!");
+    }
     Interface::load(ram, "save.ram");
   }
 

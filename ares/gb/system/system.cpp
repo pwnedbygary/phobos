@@ -133,6 +133,7 @@ auto System::power(bool reset) -> void {
 
   if(auto fp = pak->read(!GameBoy::Model::SuperGameBoy() ? "boot.rom" : "sm83.boot.rom")) {
     bootROM.load(fp);
+    __android_log_print(ANDROID_LOG_INFO, "AresGB", "Boot ROM loaded successfully: %zu bytes", fp->size());
 
     if(fastBoot->latch()) {
       if(name == "boot.dmg-1.rom") {

@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
 project(phobos)
 
-add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY SLJIT_CONFIG_ARM_64=1 ARES_ENABLE_ZIP ARES_ENABLE_CHD)
-add_compile_options(-w)
+add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY SLJIT_CONFIG_ARM_64=1 SLJIT_HAVE_CONFIG_PRE=1 SLJIT_HAVE_CONFIG_POST=1 SLJIT_DEBUG=0 ARES_ENABLE_ZIP ARES_ENABLE_CHD)
+add_compile_options(-w -march=armv8-a+simd -O3)
+
+add_subdirectory(thirdparty/libadrenotools)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -16,6 +18,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/util
     ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libadrenotools/include
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/volk
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/vma
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit
@@ -251,4 +254,4 @@ find_library(gles-lib GLESv3)
 find_library(z-lib z)
 find_library(dl-lib dl)
 
-target_link_libraries(phobos_android ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib})
+target_link_libraries(phobos_android ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} adrenotools)

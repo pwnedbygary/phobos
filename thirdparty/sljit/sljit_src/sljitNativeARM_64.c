@@ -2031,7 +2031,7 @@ static sljit_s32 sljit_emit_fop1_conv_f64_from_w(struct sljit_compiler *compiler
 	FAIL_IF(push_inst(compiler, ins | VD(dst_r) | RN(src)));
 
 	if (dst & SLJIT_MEM)
-		return emit_fop_mem(compiler, ((ins & (1 << 22)) ? WORD_SIZE : INT_SIZE) | STORE, TMP_FREG1, dst, dstw);
+		return emit_fop_mem(compiler, ((ins & (1 << 22)) ? INT_SIZE : WORD_SIZE) | STORE, TMP_FREG1, dst, dstw);
 	return SLJIT_SUCCESS;
 }
 

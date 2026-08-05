@@ -39,6 +39,8 @@ auto DualShock::reset() -> void {
   state = State::Idle;
   _active = false;
   outputData.clear();
+  analogMode = 1;
+  configMode = 0;
 }
 
 auto DualShock::acknowledge() -> bool {
@@ -71,26 +73,26 @@ auto DualShock::bus(u8 data) -> u8 {
   }
 
   //config Mode Enable/Disable
-  if(command == 0x43 && commandStep == 1) {
+  if(command == 0x43 && commandStep == 0) {
     configMode = input;
     newRumbleMode = 1;
   }
 
-  //set led state
-  if(command == 0x44 && commandStep == 1) {
-    //TODO: set LED state to commandStep[1] if commandStep[2] is set
+  //set led state / analog mode
+  if(command == 0x44 && commandStep == 0) {
+    analogMode = input;
     for(auto n : range(6)) rumbleConfig[n] = 0xff;
   }
 
   //variable response A
-  if(command == 0x46 && commandStep == 1) {
+  if(command == 0x46 && commandStep == 0) {
     if(input == 0x00)      { outputData.insert(outputData.end(), {0x01,0x02,0x00,0x00}); }
     else if(input == 0x01) { outputData.insert(outputData.end(), {0x01,0x01,0x01,0x14}); }
     else                   { outputData.insert(outputData.end(), {0x00,0x00,0x00,0x00}); }
   }
 
   //variable response B
-  if(command == 0x4c && commandStep == 1) {
+  if(command == 0x4c && commandStep == 0) {
     u8 value = 0x00;
     if(input == 0x00) value = 0x04;
     if(input == 0x01) value = 0x07;
@@ -259,6 +261,9 @@ auto DualShock::readPad() -> std::vector<u8> {
   arx = axis->counteractPrecisionError(arx);
   ary = axis->counteractPrecisionError(ary);
 
+  // Standard DualShock packet order:
+  // Byte 5: Right Stick X, Byte 6: Right Stick Y
+  // Byte 7: Left Stick X, Byte 8: Left Stick Y
   result.push_back(u8(arx + 128.0));
   result.push_back(u8(ary + 128.0));
 
@@ -289,8 +294,19 @@ auto DualShock::readPad() -> std::vector<u8> {
   alx = axis->counteractPrecisionError(alx);
   aly = axis->counteractPrecisionError(aly);
 
-  result.push_back(u8(alx + 128.0));
-  result.push_back(u8(aly + 128.0));
+  u8 bRX = u8(arx + 128.0);
+  u8 bRY = u8(ary + 128.0);
+  u8 bLX = u8(alx + 128.0);
+  u8 bLY = u8(aly + 128.0);
+
+  static u64 readTraceCount = 0;
+  if(readTraceCount++ % 60 == 0) {
+    debug(unusual, "[DualShockTrace] analogMode=", (int)analogMode, " configMode=", (int)configMode,
+          " RX=", (int)bRX, " RY=", (int)bRY, " LX=", (int)bLX, " LY=", (int)bLY);
+  }
+
+  result.push_back(bLX);
+  result.push_back(bLY);
 
   return result;
 }

@@ -233,8 +233,8 @@ auto Vulkan::crashed() -> const char* {
 }
 
 Vulkan::Implementation::Implementation(u8* data, u32 size) {
-  __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Vulkan::Implementation constructor, forcing loader reload");
-  if(!::Vulkan::Context::init_loader(nullptr, true)) {
+  __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Vulkan::Implementation constructor");
+  if(!::Vulkan::Context::init_loader(nullptr, false)) {
     __android_log_print(ANDROID_LOG_ERROR, "PhobosVulkan", "Vulkan loader init failed");
     return;
   }

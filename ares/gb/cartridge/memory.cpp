@@ -26,6 +26,7 @@ auto Cartridge::read(u32 cycle, n16 address, n8 data) -> n8 {
 
 auto Cartridge::write(u32 cycle, n16 address, n8 data) -> void {
   if(!transferPak && bootromEnable && address == 0xff50 && cycle == 2) {
+    __android_log_print(ANDROID_LOG_INFO, "AresGB", "Cartridge: DISABLING Boot ROM (write to 0xff50)");
     bootromEnable = false;  //does the written value matter?
     return;
   }

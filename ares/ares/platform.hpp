@@ -20,6 +20,7 @@ struct Platform {
   virtual auto event(Event) -> void {}
   virtual auto log(Node::Debugger::Tracer::Tracer, string_view message) -> void {}
   virtual auto status(string_view message) -> void {}
+  virtual auto time() -> s64 { return 0; }
   virtual auto video(Node::Video::Screen, const u32* data, u32 pitch, u32 width, u32 height) -> void {}
   virtual auto refreshRateHint(double refreshRate) -> void {}
   virtual auto audio(Node::Audio::Stream) -> void {}

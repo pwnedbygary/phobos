@@ -1,4 +1,5 @@
 #include <ares/ares.hpp>
+#include <android/log.h>
 #include "gb.hpp"
 
 //started: 2010-12-27
