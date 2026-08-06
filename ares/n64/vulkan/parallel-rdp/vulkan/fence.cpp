@@ -59,8 +59,9 @@ void FenceHolder::wait()
 		info.semaphoreCount = 1;
 		info.pSemaphores = &timeline_semaphore;
 		info.pValues = &timeline_value;
-		if (table.vkWaitSemaphores(device->get_device(), &info, UINT64_MAX) != VK_SUCCESS)
-			LOGE("Failed to wait for timeline semaphore!\n");
+		VkResult res = table.vkWaitSemaphores(device->get_device(), &info, UINT64_MAX);
+		if (res != VK_SUCCESS)
+			LOGE("Failed to wait for timeline semaphore! Result: %d\n", (int)res);
 		else
 			observed_wait = true;
 	}

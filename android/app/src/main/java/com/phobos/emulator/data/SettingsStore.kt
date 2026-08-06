@@ -23,6 +23,12 @@ enum class RegionPreference(val label: String) {
     PAL_NTSC_J_NTSC_U("PAL -> NTSC-J -> NTSC-U")
 }
 
+enum class AspectRatioMode(val label: String) {
+    STRETCHED("Stretched"),
+    CORE_PROVIDED("Core Provided"),
+    INTEGER_SCALED("Integer Scaled")
+}
+
 data class EmulatorSettings(
     val themeMode: ThemeMode = ThemeMode.AUTO,
     val regionPreference: RegionPreference = RegionPreference.NTSC_U_NTSC_J_PAL,
@@ -51,6 +57,7 @@ data class EmulatorSettings(
     val screenshotsPath: String = "",
     val arcadeRomsPath: String = "",
     val shaderPath: String = "",
+    val aspectRatioMode: AspectRatioMode = AspectRatioMode.CORE_PROVIDED,
     // Map<AresBit, StringBinding> where StringBinding is "k:KEYCODE" or "a:AXIS:POS(1/0)"
     val inputMappings: Map<Int, String> = emptyMap(),
     val hiddenSystems: Set<String> = emptySet(),
@@ -89,6 +96,7 @@ class SettingsStore(private val context: Context) {
         val SCREENSHOTS_PATH = stringPreferencesKey("path_screenshots")
         val ARCADE_ROMS_PATH = stringPreferencesKey("path_arcade_roms")
         val SHADER_PATH = stringPreferencesKey("path_shader")
+        val ASPECT_RATIO_MODE = stringPreferencesKey("aspect_ratio_mode")
         val HIDDEN_SYSTEMS = stringSetPreferencesKey("hidden_systems")
         val HAS_DEFAULTS_INITIALIZED = booleanPreferencesKey("has_defaults_initialized")
         val HOTKEYS_PREFIX = "hotkey_combo_"
@@ -180,6 +188,7 @@ class SettingsStore(private val context: Context) {
             screenshotsPath = safeGetString(SCREENSHOTS_PATH, ""),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
             shaderPath = safeGetString(SHADER_PATH, ""),
+            aspectRatioMode = try { AspectRatioMode.valueOf(safeGetString(ASPECT_RATIO_MODE, AspectRatioMode.CORE_PROVIDED.name)) } catch(e: Exception) { AspectRatioMode.CORE_PROVIDED },
             hiddenSystems = preferences[HIDDEN_SYSTEMS] ?: emptySet(),
             hotkeys = finalHotkeys,
             inputMappings = mappings,
@@ -251,6 +260,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setN64ExpansionPak(enabled: Boolean) = context.dataStore.edit { it[N64_EXPANSION_PAK] = enabled }
     suspend fun setGlobalPath(key: Preferences.Key<String>, path: String) = context.dataStore.edit { it[key] = path }
     suspend fun setShaderPath(path: String) = context.dataStore.edit { it[SHADER_PATH] = path }
+    suspend fun setAspectRatioMode(mode: AspectRatioMode) = context.dataStore.edit { it[ASPECT_RATIO_MODE] = mode.name }
 
     suspend fun addSystemRomPath(system: String, path: String) = context.dataStore.edit { p ->
         val key = stringSetPreferencesKey("rom_paths_$system")

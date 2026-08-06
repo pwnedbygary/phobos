@@ -13,6 +13,7 @@ import com.phobos.emulator.LogEntry
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.PerformanceStats
 import com.phobos.emulator.PhobosCore
+import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.data.SettingsStore
@@ -135,6 +136,10 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setShaderPath(path: String) = viewModelScope.launch {
         settingsStore.setShaderPath(path)
         PhobosCore.setShader(path)
+    }
+
+    fun setAspectRatioMode(mode: AspectRatioMode) = viewModelScope.launch {
+        settingsStore.setAspectRatioMode(mode)
     }
 
     fun unloadSystem() {
@@ -631,9 +636,9 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setCustomDriverPath(currentSettings.customDriverPath)
             PhobosCore.setPs1AnalogMode(currentSettings.ps1AnalogMode)
             PhobosCore.setN64ExpansionPak(currentSettings.n64ExpansionPak)
-            _isPaused.value = false
             _isLoaded.value = false
-            PhobosCore.setPause(false)
+            _isPaused.value = true
+            PhobosCore.setPause(true)
 
             // Set writable temp directory for MIA
             val miaTempPath = File(context.cacheDir, "mia_temp").absolutePath

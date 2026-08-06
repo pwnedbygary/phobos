@@ -121,6 +121,9 @@ namespace ares {
     std::atomic<s32> buttons{0};
   } inputState;
 
+  static u64 nativeInputLogCounter = 0;
+  static u64 nativeVulkanLogCounter = 0;
+
   struct VirtualGamepad {
     enum : u32 {
         Up       = 1 << 0,
@@ -197,6 +200,7 @@ namespace ares {
         {
             std::lock_guard<std::recursive_mutex> lock(systemMutex);
             if (root) {
+                // TRACE HANG: Log if root->run takes too long
                 root->run();
             }
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -363,40 +367,37 @@ namespace ares {
               else if (nodeName == "R3") b = VirtualGamepad::R3;
           }
 
-          // UNIVERSAL STICK BLOCK: If physical analog stick is displaced, block digital D-Pad to core
-          if (b == VirtualGamepad::Up || b == VirtualGamepad::Down || b == VirtualGamepad::Left || b == VirtualGamepad::Right) {
-              float threshold = 0.08f;
-              if (abs(lx) > threshold || abs(ly) > threshold || abs(rx) > threshold || abs(ry) > threshold) {
-                  button->setValue(false);
-                  return;
-              }
-          }
-
           // Always set the value (resetting if not mapped) to ensure state consistency
           button->setValue(b != 0 && (buttons & b) != 0);
       } else if (auto axis = input->cast<Node::Input::Axis>()) {
           s16 value = 0;
           string nodeName = axis->name();
+          bool matched = true;
 
-          if (nodeName == "LX" || nodeName == "L-Stick X" || nodeName == "Left X" || nodeName == "X-Axis") {
+          if (nodeName == "LX" || nodeName == "L-Stick X" || nodeName == "Left X" || nodeName == "X-Axis" || nodeName == "X" || nodeName == "Player 1 X-Axis" || nodeName == "X-axis") {
               value = (s16)(lx * 32767.0f);
-          } else if (nodeName == "LY" || nodeName == "L-Stick Y" || nodeName == "Left Y" || nodeName == "Y-Axis") {
+          } else if (nodeName == "LY" || nodeName == "L-Stick Y" || nodeName == "Left Y" || nodeName == "Y-Axis" || nodeName == "Y" || nodeName == "Player 1 Y-Axis" || nodeName == "Y-axis") {
               value = (s16)(ly * 32767.0f);
-          } else if (nodeName == "RX" || nodeName == "R-Stick X" || nodeName == "Right X" || nodeName == "Z-Axis") {
+          } else if (nodeName == "RX" || nodeName == "R-Stick X" || nodeName == "Right X" || nodeName == "Z-Axis" || nodeName == "Player 2 X-Axis" || nodeName == "Z-axis") {
               value = (s16)(rx * 32767.0f);
-          } else if (nodeName == "RY" || nodeName == "R-Stick Y" || nodeName == "Right Y" || nodeName == "RZ-Axis") {
+          } else if (nodeName == "RY" || nodeName == "R-Stick Y" || nodeName == "Right Y" || nodeName == "RZ-Axis" || nodeName == "Player 2 Y-Axis" || nodeName == "RZ-axis") {
               value = (s16)(ry * 32767.0f);
+          } else {
+              matched = false;
           }
 
-          if (abs(value) > 1000) {
-              LOGI("PhobosRunnerInput: Axis Set '%s' = %d", (const char*)nodeName, value);
+          if (matched) {
+              axis->setValue(value);
           }
-          axis->setValue(value);
       }
     }
 
     auto video(Node::Video::Screen screen, const u32* data, u32 pitch, u32 width, u32 height) -> void override {
-      if (width == 0 || height == 0) return;
+      if (width == 0 || height == 0 || isPausedAtomic) return;
+
+      if (nativeVulkanLogCounter++ % 600 == 0) {
+          LOGD("PhobosVulkanTrace: video() trigger. Surface=%p, Paused=%d", nativeWindow, (bool)isPausedAtomic);
+      }
 
       static u64 frameLogCount = 0;
       if (frameLogCount++ % 600 == 0) {
@@ -422,8 +423,8 @@ namespace ares {
       }
       #endif
 
-      // Determine if we should use 2x scaling for sharpness
-      bool scale2x = (width <= 320) && !rotate; // Don't scale2x if rotating for now
+      // Determine if we should use 2x scaling for sharpness (disable for N64 Vulkan which handles its own res)
+      bool scale2x = (width <= 320) && !rotate && !isN64Vulkan;
       u32 targetW = rotate ? height : (scale2x ? width * 2 : width);
       u32 targetH = rotate ? width : (scale2x ? height * 2 : height);
 
@@ -472,26 +473,15 @@ namespace ares {
                     lastFrameBuffer[y * width + x] = ap;
                 }
             }
-        } else if (isN64Vulkan && vData && vW == width && vH == height) {
-            // Direct copy from Vulkan RGBA to Android ABGR
-            for (s32 y = 0; y < (s32)height; y++) {
-                const u32* srcLine = (const u32*)(vData + y * width * 4);
+        } else if (isN64Vulkan && vData) {
+            // Direct copy from Vulkan RGBA to Android ABGR (handles width/height safely)
+            u32 copyW = std::min(width, vW);
+            u32 copyH = std::min(height, vH);
+            for (s32 y = 0; y < (s32)copyH; y++) {
+                const u32* srcLine = (const u32*)(vData + y * vW * 4);
                 u32* destLine = dest + y * dst_stride;
-                u32* saveLine = lastFrameBuffer.data() + y * width;
-                s32 x = 0;
-                #if defined(__aarch64__) || defined(__arm__)
-                uint32x4_t alpha = vdupq_n_u32(0xFF000000);
-                for (; x <= (s32)width - 4; x += 4) {
-                    uint32x4_t p = vld1q_u32(srcLine + x);
-                    uint32x4_t result = vorrq_u32(alpha, p);
-                    vst1q_u32(destLine + x, result);
-                    vst1q_u32(saveLine + x, result);
-                }
-                #endif
-                for (; x < (s32)width; x++) {
-                    u32 ap = 0xFF000000 | srcLine[x];
-                    destLine[x] = ap;
-                    saveLine[x] = ap;
+                for (s32 x = 0; x < (s32)copyW; x++) {
+                    destLine[x] = 0xFF000000 | srcLine[x];
                 }
             }
             ::ares::Nintendo64::vulkan.unmapScanoutRead();
@@ -534,6 +524,8 @@ namespace ares {
     }
 
     auto audio(Node::Audio::Stream stream) -> void override {
+      if (isPausedAtomic) return;
+
       if (!audioStream) {
         AAudioStreamBuilder* builder;
         AAudio_createStreamBuilder(&builder);
@@ -565,13 +557,15 @@ namespace ares {
 
         // Blocking write to provide audio-sync for the emulation loop
         if (!localBuffer.empty()) {
-            if (muteAudioAtomic) {
-                // If muted, fill the buffer with silence but still write to maintain audio-sync timing
+            if (muteAudioAtomic || isPausedAtomic) {
+                // If muted or paused, fill the buffer with silence but still write to maintain audio-sync timing
+                // unless we want to stop the loop entirely.
                 std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
             }
 
-            // Audio-Sync: Use a large timeout to force the emulation loop to wait for hardware
-            s64 timeout = fastForwardAtomic ? 0 : 50000000; // 50ms timeout
+            // Audio-Sync: Use a moderate timeout to throttle the core to ~60fps
+            // but short enough that it doesn't cause a major hang if audio stalls.
+            s64 timeout = fastForwardAtomic ? 0 : 20000000; // 20ms
             AAudioStream_write(audioStream, localBuffer.data(), (s32)localBuffer.size() / 2, timeout);
             localBuffer.clear();
         }
@@ -750,12 +744,13 @@ namespace ares {
 
   static auto connectDevices(Node::Object node) -> void {
     if (!node) return;
+    LOGI("VFS: connectDevices for system '%s'", (const char*)node->name());
     auto ports = node->find<Node::Port>();
     s32 portIndex = 1;
 
     for (auto& port : ports) {
       LOGI("VFS: connectDevices - name='%s', type='%s', family='%s'", (const char*)port->name(), (const char*)port->type(), (const char*)port->family());
-      if (port->type() == "Cartridge" || port->type() == "Compact Disc") {
+      if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive") {
         if (port->allocate()) {
             LOGI("VFS: Allocated %s port", (const char*)port->type());
             port->connect();
@@ -768,7 +763,7 @@ namespace ares {
         if (port->family() == "Nintendo 64") defaultDevice = (node && node->name() == "Arcade") ? "Aleck64" : "Gamepad";
         if (port->family() == "MSX") defaultDevice = "Controller";
         if (port->family() == "Mega Drive") defaultDevice = "Control Pad";
-        if (node->name() == "PlayStation") {
+        if (node->name().contains("PlayStation")) {
             if (portIndex == 1) {
                 defaultDevice = ps1AnalogMode ? "DualShock" : "Digital Gamepad";
             } else {
@@ -964,12 +959,13 @@ namespace ares {
     LOGI("Ares: Loading core for %s", (const char*)identifiedSystem);
     if (identifiedSystem == "Nintendo 64" || identifiedSystem == "Nintendo 64DD") {
       ::ares::Nintendo64::vulkan.enable = true; // DEFAULT TO VULKAN
-      bool is64DD = (identifiedSystem == "Nintendo 64DD" || extension == "ndd" || extension == "d64");
+      // Always enable 64DD port for N64 to allow disc expansion and hot-plugging via menu
+      bool is64DD = true;
       ::ares::Nintendo64::system.expansionPak = n64ExpansionPak;
 
       const char* regionString = getRegion(
-          is64DD ? "[Nintendo] Nintendo 64DD (NTSC-U)" : "[Nintendo] Nintendo 64 (NTSC)",
-          is64DD ? "[Nintendo] Nintendo 64DD (NTSC-J)" : "[Nintendo] Nintendo 64 (NTSC-J)",
+          "[Nintendo] Nintendo 64DD (NTSC-U)",
+          "[Nintendo] Nintendo 64DD (NTSC-J)",
           "[Nintendo] Nintendo 64 (PAL)"
       );
 
@@ -1086,8 +1082,12 @@ namespace ares {
   }
 
   auto runFrame() -> void {
+    if (isPausedAtomic) return;
     lock_guard<std::recursive_mutex> lock(systemMutex);
-    if (root && !isPaused) {
+    if (root) {
+        if (nativeInputLogCounter++ % 3600 == 0) {
+             LOGI("PhobosStatus: Emulation Running. LS(%.2f, %.2f) Buttons=%08x", (double)inputState.lx.load(), (double)inputState.ly.load(), (u32)inputState.buttons.load());
+        }
         root->run();
         if (::ares::Nintendo64::vulkan.implementation) {
             if (const char* err = ::ares::Nintendo64::vulkan.crashed()) {
@@ -1151,7 +1151,17 @@ namespace ares {
   auto setLogLevel(s32 level) -> void { currentLogLevel = (LogLevel)level; }
   auto setRegion(s32 regionIndex) -> void { regionPreference = regionIndex; }
   auto setN64Renderer(s32 mode) -> void { n64RendererMode = mode; LOGI("N64 renderer set to %s", mode == 0 ? "Vulkan" : "Software"); }
-  auto setN64Recompiler(bool enabled) -> void { n64Recompiler = enabled; LOGI("N64 recompiler set to %s", enabled ? "enabled" : "disabled"); }
+  auto setN64Recompiler(bool enabled) -> void {
+    n64Recompiler = enabled;
+    LOGI("N64 recompiler set to %s", enabled ? "enabled" : "disabled");
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    if (root && root->name() == "Nintendo 64") {
+        #if defined(CORE_N64)
+        ::ares::Nintendo64::cpu.recompiler.enabled = enabled;
+        ::ares::Nintendo64::rsp.recompiler.enabled = enabled;
+        #endif
+    }
+  }
   auto setSkipBootRom(bool enabled) -> void { skipBootRom = enabled; LOGI("Skip Boot ROM set to %s", enabled ? "enabled" : "disabled"); }
   auto setN64ExpansionPak(bool enabled) -> void {
     if (n64ExpansionPak == enabled) return;
@@ -1258,8 +1268,12 @@ namespace ares {
 
   auto setSurface(JNIEnv* env, jobject surface) -> void {
     lock_guard<std::mutex> lock(windowMutex);
+    LOGI("PhobosSurface: setSurface called. Old=%p, New=%p", nativeWindow, surface);
     if (nativeWindow) ANativeWindow_release(nativeWindow);
     nativeWindow = surface ? ANativeWindow_fromSurface(env, surface) : nullptr;
+    if (nativeWindow) {
+        LOGI("PhobosSurface: New ANativeWindow acquired: %p", nativeWindow);
+    }
     windowChanged = true;
   }
   auto getNewLogs() -> std::vector<LogEntry> {

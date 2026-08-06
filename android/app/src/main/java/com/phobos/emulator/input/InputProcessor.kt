@@ -22,10 +22,14 @@ class InputProcessor(private val mappings: Map<Int, String>) {
     var ry = 0f
     var buttons = 0
     
-    // Use normalized deadzone to match EmulatorScreen.kt logic
-    private val deadzone = 0.1f
+    private val deadzone = 0.05f
     private val saturationRadius = 32767f
     private val dpadMask = (1 shl 0) or (1 shl 1) or (1 shl 2) or (1 shl 3)
+
+    private val axisMappings = mappings.filter { it.value.startsWith("a:") }.mapValues {
+        val parts = it.value.split(":")
+        Pair(parts[1].toInt(), parts[2] == "1")
+    }
 
     /**
      * Processes a MotionEvent from a joystick source.
@@ -33,10 +37,9 @@ class InputProcessor(private val mappings: Map<Int, String>) {
      *
      * @param event The raw MotionEvent
      * @param currentButtons The current button bitmask from hardware
-     * @param isPs1AnalogMode Flag to indicate if we should prioritize analog stick input
      * @return The updated button bitmask
      */
-    fun processMotionEvent(event: MotionEvent, currentButtons: Int, isPs1AnalogMode: Boolean): Int {
+    fun processMotionEvent(event: MotionEvent, currentButtons: Int): Int {
         var newButtons = currentButtons
         
         if (event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK &&
@@ -47,40 +50,37 @@ class InputProcessor(private val mappings: Map<Int, String>) {
             var newRx = 0f
             var newRy = 0f
 
-            mappings.forEach { (bit, binding) ->
-                if (binding.startsWith("a:")) {
-                    val parts = binding.split(":")
-                    val axis = parts[1].toInt()
-                    val pos = parts[2] == "1"
-                    val rawValue = event.getAxisValue(axis)
-                    
-                    val isStickBit = bit >= (1 shl 17) && bit <= (1 shl 24)
-                    val isDpadBit = bit >= (1 shl 0) && bit <= (1 shl 3)
+            axisMappings.forEach { (bit, pair) ->
+                val axis = pair.first
+                val pos = pair.second
+                val rawValue = event.getAxisValue(axis)
+                
+                val isStickBit = bit >= (1 shl 17) && bit <= (1 shl 24)
+                val isDpadBit = bit >= (1 shl 0) && bit <= (1 shl 3)
 
-                    if (isStickBit) {
-                        // Apply deadzone and radius mapping
-                        val filteredValue = if (abs(rawValue) < deadzone) 0f else rawValue
-                        
-                        // Map to specific axes
-                        when(bit) {
-                            1 shl 17 -> if (!pos && filteredValue < 0f) newLy += filteredValue
-                            1 shl 18 -> if (pos && filteredValue > 0f) newLy += filteredValue
-                            1 shl 19 -> if (!pos && filteredValue < 0f) newLx += filteredValue
-                            1 shl 20 -> if (pos && filteredValue > 0f) newLx += filteredValue
-                            1 shl 21 -> if (!pos && filteredValue < 0f) newRy += filteredValue
-                            1 shl 22 -> if (pos && filteredValue > 0f) newRy += filteredValue
-                            1 shl 23 -> if (!pos && filteredValue < 0f) newRx += filteredValue
-                            1 shl 24 -> if (pos && filteredValue > 0f) newRx += filteredValue
-                        }
-                    } else {
-                        // Non-stick digital bits
-                        val isMainStickAxis = axis == MotionEvent.AXIS_X || axis == MotionEvent.AXIS_Y ||
-                                           axis == MotionEvent.AXIS_Z || axis == MotionEvent.AXIS_RZ
-                        
-                        if (!(isDpadBit && isMainStickAxis)) {
-                            val pressed = if (pos) rawValue > 0.4f else rawValue < -0.4f
-                            newButtons = if (pressed) newButtons or bit else newButtons and bit.inv()
-                        }
+                if (isStickBit) {
+                    // Apply Ares deadzone and radius mapping
+                    val filteredValue = if (abs(rawValue) < deadzone) 0f else rawValue
+                    
+                    // Map to specific axes
+                    when(bit) {
+                        1 shl 17 -> if (!pos && filteredValue < 0f) newLy += filteredValue
+                        1 shl 18 -> if (pos && filteredValue > 0f) newLy += filteredValue
+                        1 shl 19 -> if (!pos && filteredValue < 0f) newLx += filteredValue
+                        1 shl 20 -> if (pos && filteredValue > 0f) newLx += filteredValue
+                        1 shl 21 -> if (!pos && filteredValue < 0f) newRy += filteredValue
+                        1 shl 22 -> if (pos && filteredValue > 0f) newRy += filteredValue
+                        1 shl 23 -> if (!pos && filteredValue < 0f) newRx += filteredValue
+                        1 shl 24 -> if (pos && filteredValue > 0f) newRx += filteredValue
+                    }
+                } else {
+                    // Non-stick digital bits
+                    val isMainStickAxis = axis == MotionEvent.AXIS_X || axis == MotionEvent.AXIS_Y ||
+                                       axis == MotionEvent.AXIS_Z || axis == MotionEvent.AXIS_RZ
+                    
+                    if (!(isDpadBit && isMainStickAxis)) {
+                        val pressed = if (pos) rawValue > 0.4f else rawValue < -0.4f
+                        newButtons = if (pressed) newButtons or bit else newButtons and bit.inv()
                     }
                 }
             }
