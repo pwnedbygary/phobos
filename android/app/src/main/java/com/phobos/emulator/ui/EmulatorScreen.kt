@@ -193,6 +193,13 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 false
             }
             .onKeyEvent { keyEvent ->
+                val keyCode = keyEvent.nativeKeyEvent.keyCode
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || 
+                    keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || 
+                    keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+                    return@onKeyEvent false
+                }
+
                 // When game is loaded and running, consume BACK key events
                 // so the BackHandler doesn't fire when B is pressed on a gamepad.
                 // If paused, let BACK through to show the quit dialog.

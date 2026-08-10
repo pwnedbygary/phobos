@@ -1136,7 +1136,10 @@ else if (port->type() == "Keyboard") {
     LOGI("MIA: Created medium for %s", (const char*)identifiedSystem);
 
     bool isDisc = extension == "chd" || extension == "iso" || extension == "cue" || extension == "mdf" || extension == "img";
-    if (!forceZipLoad && !isDisc && extension == "zip") {
+    // Neo Geo ROMs are multi-file zips (e.g. mslug.zip). Don't extract them
+    // or we lose the internal file structure MIA needs for the database lookup.
+    bool isNeoGeo = (string)identifiedSystem == "Neo Geo" || (string)identifiedSystem == "Neo Geo CD";
+    if (!forceZipLoad && !isDisc && extension == "zip" && !isNeoGeo) {
         LOGI("MIA: Attempting ZIP extraction for %s", (const char*)loadPath);
         std::vector<u8> romBuffer = currentMedium->read(loadPath);
         if (!romBuffer.empty()) {

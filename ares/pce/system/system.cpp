@@ -46,7 +46,7 @@ auto System::run() -> void {
 
 auto System::load(Node::System& root, string name) -> bool {
   if(node) unload();
-  vdp.setAccurate(true);  // use accurate renderer
+  vdp.setAccurate(true);
 
   information = {};
   if(name.find("PC Engine")) {
