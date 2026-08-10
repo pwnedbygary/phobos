@@ -10,7 +10,7 @@ object PhobosCore {
     external fun stringFromJNI(): String
     external fun enumerateSystems(): List<String>
     external fun getSystemExtensions(systemName: String): List<String>
-    external fun loadRom(systemName: String, uriString: String): Boolean
+    external fun loadRom(systemName: String, uriString: String, romName: String): Boolean
     external fun loadSecondaryRom(systemName: String, uriString: String): Boolean
     external fun unloadSystem()
     external fun setEmulationRunning(running: Boolean)

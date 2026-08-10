@@ -59,16 +59,18 @@ Java_com_phobos_emulator_PhobosCore_enumerateSystems(JNIEnv* env, jobject) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_phobos_emulator_PhobosCore_loadRom(JNIEnv* env, jobject, jstring systemName, jstring uriString) {
+Java_com_phobos_emulator_PhobosCore_loadRom(JNIEnv* env, jobject, jstring systemName, jstring uriString, jstring romName) {
     const char* nativeSystemName = env->GetStringUTFChars(systemName, 0);
     const char* nativeUriString = env->GetStringUTFChars(uriString, 0);
+    const char* nativeRomName = romName ? env->GetStringUTFChars(romName, 0) : "";
 
-    __android_log_print(ANDROID_LOG_INFO, "PhobosJNI", "loadRom: system=%s, uri=%s", nativeSystemName, nativeUriString);
+    __android_log_print(ANDROID_LOG_INFO, "PhobosJNI", "loadRom: system=%s, uri=%s, rom=%s", nativeSystemName, nativeUriString, nativeRomName);
 
-    bool success = ares::initialize(nativeSystemName, nativeUriString);
+    bool success = ares::initialize(nativeSystemName, nativeUriString, nativeRomName);
 
     env->ReleaseStringUTFChars(systemName, nativeSystemName);
     env->ReleaseStringUTFChars(uriString, nativeUriString);
+    if (nativeRomName[0]) env->ReleaseStringUTFChars(romName, nativeRomName);
 
     return success ? JNI_TRUE : JNI_FALSE;
 }

@@ -104,7 +104,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         if (showControls && !isPaused) { delay(3000); showControls = false }
     }
 
-    BackHandler { viewModel.setPause(true); showQuitDialog = true }
+    BackHandler { if (!isLoaded || isPaused) { viewModel.setPause(true); showQuitDialog = true } }
 
     DisposableEffect(Unit) {
         onDispose {

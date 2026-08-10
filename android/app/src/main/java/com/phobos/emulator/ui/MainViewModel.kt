@@ -446,6 +446,10 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "neocdz.zip" to "fw_ng_cd",
         "ngp.zip" to "fw_ngp",
         "ngpc.zip" to "fw_ngpc",
+        "ngp.bin" to "fw_ngp",
+        "ngpc.bin" to "fw_ngpc",
+        "Neo Geo Pocket - BIOS (World).bin" to "fw_ngp",
+        "Neo Geo Pocket Color - BIOS (World).bin" to "fw_ngpc",
         "64dd_ipl.bin" to "fw_n64dd_jp",
         "pif.ntsc.rom" to "fw_n64_pif_ntsc",
         "pif.pal.rom" to "fw_n64_pif_pal",
@@ -542,8 +546,10 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "fcb98b8a" to "fw_msx2_main",    // MSX2 MAIN JP
         "57798735" to "fw_msx2_sub",      // MSX2 SUB JP
         // Neo Geo Pocket
-        "11726b6d" to "fw_ngp",          // NGP BIOS
-        "cdc1a5c2" to "fw_ngpc"          // NGPC BIOS
+        "11726b6d" to "fw_ngp",          // NGP BIOS (RetroArch standard)
+        "6232df8d" to "fw_ngp",          // NGP BIOS (World, 64KB)
+        "cdc1a5c2" to "fw_ngpc",         // NGPC BIOS (RetroArch standard)
+        "6eeb6f40" to "fw_ngpc"          // NGPC BIOS (World, 64KB)
     )
 
     fun scanFirmware(context: Context) {
@@ -782,7 +788,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             try {
                 context.contentResolver.openFileDescriptor(rom.uri, "r")?.use { pfd ->
                     PhobosCore.setRomFd(pfd.detachFd())
-                    val success = PhobosCore.loadRom(systemName, rom.uri.toString())
+                    val success = PhobosCore.loadRom(systemName, rom.uri.toString(), rom.name)
                     if (success) {
                         _isLoaded.value = true
                     } else {

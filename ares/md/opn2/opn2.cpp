@@ -8,6 +8,9 @@ auto OPN2::load(Node::Object parent) -> void {
 
   stream = node->append<Node::Audio::Stream>("YM2612");
   stream->setChannels(2);
+  // True YM2612 native rate: ares' internal resampler converts this
+  // to AAudio's 48kHz with correct pitch/timbre. Greedy drain in
+  // PhobosRunner handles the ~10% oversupply without stalling.
   stream->setFrequency(system.frequency() / 7.0 / 144.0);
   stream->addHighPassFilter(  20.0, 1);
   stream->addLowPassFilter (2840.0, 1);

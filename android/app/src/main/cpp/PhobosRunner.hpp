@@ -30,7 +30,7 @@ namespace ares {
     s32 activeCore;
   };
 
-  auto initialize(const char* systemName, const char* uri) -> bool;
+  auto initialize(const char* systemName, const char* uri, const char* romName) -> bool;
   auto unloadSystem() -> void;
   auto setPause(bool paused) -> void;
   auto setEmulationRunning(bool running) -> void;

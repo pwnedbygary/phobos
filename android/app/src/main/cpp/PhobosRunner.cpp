@@ -323,6 +323,16 @@ namespace ares {
         avgFrameTime = avgFrameTime * 0.9 + (f64)lastFrameTime * 0.1;
         frameCount++;
 
+        // 60 FPS frame cap for cores without natural audio backpressure
+        // (Atari 2600, ColecoVision, etc.). Audio-synced cores and mega CD
+        // are unaffected — their root->run() or greedy audio drain pace them.
+        if (!fastForwardAtomic) {
+          auto frameElapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+          if (frameElapsed < 16667) {
+            std::this_thread::sleep_for(std::chrono::microseconds(16667 - frameElapsed));
+          }
+        }
+
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatsUpdateTime).count();
         if (elapsed >= 1000) {
@@ -613,13 +623,14 @@ namespace ares {
         AAudioStreamBuilder_setChannelCount(builder, 2);
         AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
         AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-
         AAudioStreamBuilder_openStream(builder, &audioStream);
         AAudioStreamBuilder_delete(builder);
-
         if (audioStream) {
-            s32 framesPerBurst = AAudioStream_getFramesPerBurst(audioStream);
-            AAudioStream_setBufferSizeInFrames(audioStream, framesPerBurst * 4); // 4 bursts for stability
+            // 24 bursts (~4608 frames): holds ~2.1 frames of triple-stream
+            // output (Mega CD: YM2612+CD-DA+PCM = ~2166/frame). AAudio drains
+            // 800/frame independently; the deep buffer absorbs the difference.
+            AAudioStream_setBufferSizeInFrames(audioStream,
+                AAudioStream_getFramesPerBurst(audioStream) * 24);
             AAudioStream_requestStart(audioStream);
         }
       }
@@ -635,18 +646,24 @@ namespace ares {
           localBuffer.push_back((f32)samples[1]);
         }
 
-        // Blocking write to provide audio-sync for the emulation loop
         if (!localBuffer.empty()) {
-            if (muteAudioAtomic || isPausedAtomic) {
-                // If muted or paused, fill the buffer with silence but still write to maintain audio-sync timing
-                // unless we want to stop the loop entirely.
+            if (muteAudioAtomic) {
                 std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
             }
-
-            // Audio-Sync: Use a moderate timeout to throttle the core to ~60fps
-            // but short enough that it doesn't cause a major hang if audio stalls.
-            s64 timeout = fastForwardAtomic ? 0 : 20000000; // 20ms
-            AAudioStream_write(audioStream, localBuffer.data(), (s32)localBuffer.size() / 2, timeout);
+            // Greedy drain: write as many full bursts as fit, drop excess.
+            // Triple-stream oversupply (~2k samples/frame) can't live in
+            // any buffer depth — the excess gets dropped silently across
+            // frames rather than accumulating and eventually stalling.
+            s32 total = (s32)localBuffer.size() / 2;
+            s32 written = 0;
+            while (written < total) {
+                s32 chunk = total - written;
+                s64 timeout = 0; // non-blocking: buffer manages itself
+                s32 result = AAudioStream_write(audioStream,
+                    localBuffer.data() + written * 2, chunk, timeout);
+                if (result > 0) written += result;
+                else break; // buffer full or error — drop remainder
+            }
             localBuffer.clear();
         }
       }
@@ -742,7 +759,10 @@ namespace ares {
               if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
           }
           if (!attached) attached = attachFile("bios.rom");
-      } else if (nodeName == "Mega CD") {
+      } else if (nodeName == "Mega Drive") {
+          // Mega CD: ares uses "Mega Drive" as root node even for CD mode.
+          // The MCD::load() sub-system reads "bios.rom" from this pak — if
+          // omitted the sub-68000 runs from zeroed RAM (black screen, audio only).
           bool attached = false;
           auto it_us = firmwareMap.find("fw_mcd_us");
           if (it_us != firmwareMap.end()) attached = attachFile((const char*)it_us->second, "bios.rom");
@@ -754,22 +774,37 @@ namespace ares {
               auto it_eu = firmwareMap.find("fw_mcd_eu");
               if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
           }
-          if (!attached) attached = attachFile("bios.rom");
+          if (!attached) attachFile("bios.rom");
       } else if (nodeName == "Neo Geo AES" || nodeName == "Neo Geo MVS") {
-          bool attached = false;
-          auto it_aes = firmwareMap.find("fw_ng_aes");
-          if (it_aes != firmwareMap.end()) attached = attachFile((const char*)it_aes->second, "bios.rom");
-          if (!attached) {
-              auto it_mvs = firmwareMap.find("fw_ng_mvs");
-              if (it_mvs != firmwareMap.end()) attached = attachFile((const char*)it_mvs->second, "bios.rom");
-          }
-          if (!attached) {
-              // fw_ng_bios is how scanFirmware maps "neogeo.zip" — some users
-              // drop neogeo.zip straight into firmware without renaming.
-              auto it_bios = firmwareMap.find("fw_ng_bios");
-              if (it_bios != firmwareMap.end()) attached = attachFile((const char*)it_bios->second, "bios.rom");
-          }
-          if (!attached) attached = attachFile("bios.rom");
+          // BIOS comes from neogeo.zip (MAME format). Extract sp-s2.sp1
+          // (universal AES/MVS BIOS) and attach as bios.rom for 68000.
+          auto extractNgBios = [&](string path) -> std::vector<u8> {
+            if (path.iendsWith(".zip")) {
+              Decode::ZIP zip;
+              if (zip.open(path)) {
+                for (auto& zf : zip.file) {
+                  if (zf.name.iequals("sp-s2.sp1")) return zip.extract(zf);
+                }
+              }
+            }
+            return nall::file::read(path);
+          };
+          auto attachNgBios = [&](string key) -> bool {
+            auto it = firmwareMap.find(key);
+            if (it == firmwareMap.end()) return false;
+            auto data = extractNgBios(it->second);
+            if (data.size() == 0) return false;
+            if (auto fp = vfs::memory::open(data)) {
+              dir->append("bios.rom", fp);
+              LOGI("VFS: Extracted Neo Geo bios.rom (%zu bytes) for %s", data.size(), (const char*)nodeName);
+              return true;
+            }
+            return false;
+          };
+          bool attached = attachNgBios("fw_ng_aes");
+          if (!attached) attached = attachNgBios("fw_ng_mvs");
+          if (!attached) attached = attachNgBios("fw_ng_bios");
+          if (!attached) attachFile("bios.rom");
           attachFile("static.rom"); // Font ROM
       } else if (nodeName == "Neo Geo CD" || nodeName == "Neo Geo CDZ") {
           bool attached = false;
@@ -787,6 +822,13 @@ namespace ares {
           if (!attached) attached = attachFile("pif.ntsc.rom");
           if (!attached) attached = attachFile("pif.pal.rom");
           if (!attached) LOGE("VFS: FAILED to attach PIF for Nintendo 64!");
+      } else if (nodeName == "Neo Geo Pocket" || nodeName == "Neo Geo Pocket Color") {
+          // NGP/NGPC needs bios.rom for TLCS900H CPU boot vector + KGE init.
+          // Without it CPU reads 0x00 (NOP-loop) → white/black screen forever.
+          bool attached = false;
+          auto it = firmwareMap.find(nodeName == "Neo Geo Pocket Color" ? "fw_ngpc" : "fw_ngp");
+          if (it != firmwareMap.end()) attached = attachFile((const char*)it->second, "bios.rom");
+          if (!attached) attachFile("bios.rom");
       } else if (nodeName == "Game Boy Advance") {
           auto it_gba = firmwareMap.find("fw_gba");
           if (it_gba != firmwareMap.end()) attachFile((const char*)it_gba->second, "bios.rom");
@@ -872,6 +914,44 @@ namespace ares {
             string fullPath = {saveDir, fileName};
             file::write(fullPath, {buf.data(), size});
             LOGI("Saves: exported %s (%zu bytes) for %s", (const char*)fileName, size, (const char*)sysName);
+          }
+          // MIA-level sidecar saves (.sav, .flash for NGP/NGPC/WonderSwan):
+          // stored on disk alongside the ROM, not in the VFS pak. Copy them
+          // to the persistent saves directory so they survive mia_temp cleanup.
+          for (auto& saveName : {"program.sav", "program.flash"}) {
+            string sidecarPath = string{tempFilePath, "/", saveName};
+            auto data = file::read(sidecarPath);
+            if (data.size() == 0) continue;
+            bool allZero = true;
+            for (auto b : data) { if (b != 0) { allZero = false; break; } }
+            if (allZero) continue;
+            string fullPath = {saveDir, saveName};
+            file::write(fullPath, data);
+            LOGI("Saves: exported MIA sidecar %s (%zu bytes) for %s", saveName, data.size(), (const char*)sysName);
+          }
+        }
+        // Export NGP/NGPC CPU RAM + BIOS (settings region)
+        // root->save() flushes CPU::save() which updates the 12KB ram array.
+        // Read it directly — the VFS roundtrip is unreliable.
+        if (savesPath && (root->name() == "Neo Geo Pocket" || root->name() == "Neo Geo Pocket Color")) {
+          root->save();
+          string saveDir = {savesPath, "/", root->name(), "/"};
+          directory::create(saveDir);
+          // CPU RAM (12KB)
+          auto& ram = ares::NeoGeoPocket::cpu.ram;
+          if (ram.size() == 12_KiB) {
+            std::vector<u8> buf(12_KiB);
+            memcpy(buf.data(), ram.data(), 12_KiB);
+            file::write({saveDir, "cpu.ram"}, buf);
+            LOGI("Saves: exported cpu.ram (12KB) for %s", (const char*)root->name());
+          }
+          // BIOS (64KB) — language/date settings live in top 2KB EEPROM region
+          auto& bios = ares::NeoGeoPocket::system.bios;
+          if (bios.size() == 64_KiB) {
+            std::vector<u8> buf(64_KiB);
+            memcpy(buf.data(), bios.data(), 64_KiB);
+            file::write({saveDir, "bios.rom"}, buf);
+            LOGI("Saves: exported bios.rom (64KB) for %s", (const char*)root->name());
           }
         }
         root->unload();
@@ -1006,9 +1086,10 @@ else if (port->type() == "Keyboard") {
     }
   }
 
-  auto initialize(const char* systemNamePtr, const char* uriPtr) -> bool {
+  auto initialize(const char* systemNamePtr, const char* uriPtr, const char* romNamePtr) -> bool {
     string systemName = systemNamePtr;
     string uri = uriPtr;
+    string romName = romNamePtr ? romNamePtr : "";
     unloadSystem();
     std::unique_lock<std::recursive_mutex> lock(systemMutex);
 
@@ -1066,7 +1147,17 @@ else if (port->type() == "Keyboard") {
     }
 
     if (!tempFilePath) return false;
-    string tempPath = string{tempFilePath, "/phobos_rom_temp.", extension};
+    // For MAME/arcade systems, MIA needs the ROM filename for database
+    // lookup (manifestDatabaseArcade). Use the library's RomFile.name
+    // which is a clean filename — the URI is encoded and unusable here.
+    string tempFname = "phobos_rom_temp";
+    if (systemName.contains("Neo Geo")) {
+      if (romName.size() > 0) {
+        tempFname = romName;
+        if (auto dot = tempFname.find(".")) tempFname = tempFname.slice(0, *dot);
+      }
+    }
+    string tempPath = string{tempFilePath, "/", tempFname, ".", extension};
 
     FILE* f = fopen((const char*)tempPath, "wb");
     if (!f) return false;
@@ -1103,7 +1194,8 @@ else if (port->type() == "Keyboard") {
     else if (lookup.find("Super Famicom") || lookup.find("SNES")) identifiedSystem = "Super Famicom";
     else if (lookup.find("Famicom") || lookup.find("NES")) identifiedSystem = "Famicom";
     else if (lookup.find("PlayStation") || lookup.find("PS1")) identifiedSystem = "PlayStation";
-    else if (lookup.find("Neo Geo Pocket") || lookup.find("NGP") || lookup.find("NGPC")) identifiedSystem = "Neo Geo Pocket";
+    else if (lookup.find("Neo Geo Pocket Color") || lookup.find("NGPC") || lookup.find("NGC")) identifiedSystem = "Neo Geo Pocket Color";
+    else if (lookup.find("Neo Geo Pocket") || lookup.find("NGP") || lookup.find("NGP ")) identifiedSystem = "Neo Geo Pocket";
     else if (lookup.find("Neo Geo")) {
         identifiedSystem = "Neo Geo";
         forceZipLoad = true;
@@ -1237,7 +1329,12 @@ else if (port->type() == "Keyboard") {
     } else if (identifiedSystem == "WonderSwan") {
        success = ::ares::WonderSwan::load(root, "[Bandai] WonderSwan");
     } else if (identifiedSystem == "Neo Geo Pocket" || identifiedSystem == "Neo Geo Pocket Color") {
-       success = ::ares::NeoGeoPocket::load(root, (identifiedSystem == "Neo Geo Pocket Color") ? "[SNK] Neo Geo Pocket Color" : "[SNK] Neo Geo Pocket");
+       // MIA always returns "Neo Geo Pocket" but the library may specify
+       // "Neo Geo Pocket Color" — use the system name from the library
+       // to disambiguate, since the TLCS900H CPU boots differently per model.
+       string aresName = "[SNK] Neo Geo Pocket";
+       if (systemName.downcase().find("color") || identifiedSystem == "Neo Geo Pocket Color") aresName = "[SNK] Neo Geo Pocket Color";
+       success = ::ares::NeoGeoPocket::load(root, aresName);
     } else if (identifiedSystem == "Neo Geo") {
        success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo MVS");
        if(!success) success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo AES");
@@ -1296,6 +1393,28 @@ else if (port->type() == "Keyboard") {
             fp->write({existing.data(), (u32)existing.size()});
             LOGI("Saves: imported %s (%zu bytes) for %s", (const char*)fileName, existing.size(), (const char*)identifiedSystem);
           }
+        }
+        // MIA-level sidecar saves (.sav, .flash, cpu.ram): restore them to
+        // mia_temp so MIA's Pak::load() / ares' CPU::load() pick them up.
+        for (auto& saveName : {"program.sav", "program.flash"}) {
+          string fullPath = {saveDir, saveName};
+          auto existing = file::read(fullPath);
+          if (existing.size() == 0) continue;
+          string sidecarPath = string{tempFilePath, "/", saveName};
+          file::write(sidecarPath, existing);
+          LOGI("Saves: imported sidecar %s (%zu bytes) for %s", saveName, existing.size(), (const char*)identifiedSystem);
+        }
+      }
+
+      // Inject saved cpu.ram + bios.rom BEFORE power-on so CPU::power()
+      // sees ram[0x2c7a]!=0 → warm-boot path → skip language/date prompts.
+      if (identifiedSystem == "Neo Geo Pocket" || identifiedSystem == "Neo Geo Pocket Color") {
+        if (savesPath) {
+          string d = string{savesPath, "/", identifiedSystem, "/"};
+          auto r = nall::file::read({d, "cpu.ram"});
+          if (r.size() == 12_KiB) { memcpy(ares::NeoGeoPocket::cpu.ram.data(), r.data(), 12_KiB); ares::NeoGeoPocket::cpu.ram.write(0x2c7a, 1); }
+          r = nall::file::read({d, "bios.rom"});
+          if (r.size() == 64_KiB) { memcpy((void*)ares::NeoGeoPocket::system.bios.data(), r.data(), 64_KiB); }
         }
       }
 
