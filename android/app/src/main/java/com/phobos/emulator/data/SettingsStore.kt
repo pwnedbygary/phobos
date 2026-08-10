@@ -44,7 +44,7 @@ data class EmulatorSettings(
     val showPerformanceMonitor: Boolean = false,
     val logVerbosity: LogLevel = LogLevel.INFO,
     val fastForwardSpeed: Float = 2.0f,
-    val n64Renderer: Int = 0,
+    val n64Upscale: Int = 1,
     val n64Recompiler: Boolean = true,
     val skipBootRom: Boolean = false,
     val customDriverPath: String = "",
@@ -83,7 +83,7 @@ class SettingsStore(private val context: Context) {
         val SHOW_PERFORMANCE_MONITOR = booleanPreferencesKey("show_performance_monitor")
         val LOG_VERBOSITY = stringPreferencesKey("log_verbosity")
         val FAST_FORWARD_SPEED = floatPreferencesKey("fast_forward_speed")
-        val N64_RENDERER = intPreferencesKey("n64_renderer")
+        val N64_UPSCALE = intPreferencesKey("n64_upscale")
         val N64_RECOMPILER = booleanPreferencesKey("n64_recompiler")
         val SKIP_BOOT_ROM = booleanPreferencesKey("skip_boot_rom")
         val CUSTOM_DRIVER_PATH = stringPreferencesKey("custom_driver_path")
@@ -127,7 +127,9 @@ class SettingsStore(private val context: Context) {
             } else if (name.startsWith(HOTKEYS_PREFIX) && value is String) {
                 val action = name.removePrefix(HOTKEYS_PREFIX)
                 val combo = value.split(",").mapNotNull { it.trim().toIntOrNull() }
-                if (combo.isNotEmpty()) hotkeys[action] = combo
+                // Record the explicit state EVEN when empty: an empty combo means
+                // "user unbind this hotkey" and must override the default below.
+                hotkeys[action] = combo
             }
         }
 
@@ -142,7 +144,13 @@ class SettingsStore(private val context: Context) {
             "screenshot" to listOf(109, 107)
         )
         val finalHotkeys = defaultHotkeys.toMutableMap()
-        finalHotkeys.putAll(hotkeys)
+        // Explicit user bindings (or explicit unbind = empty combo) take
+        // precedence over defaults. An empty combo REMOVES the default so the
+        // hotkey is genuinely unbound.
+        hotkeys.forEach { (action, combo) ->
+            if (combo.isEmpty()) finalHotkeys.remove(action)
+            else finalHotkeys[action] = combo
+        }
 
         val rawMap = preferences.asMap()
         
@@ -175,7 +183,7 @@ class SettingsStore(private val context: Context) {
             showPerformanceMonitor = safeGet(SHOW_PERFORMANCE_MONITOR, false),
             logVerbosity = try { LogLevel.valueOf(safeGetString(LOG_VERBOSITY, LogLevel.INFO.name)) } catch(e: Exception) { LogLevel.INFO },
             fastForwardSpeed = safeGet(FAST_FORWARD_SPEED, 2.0f),
-            n64Renderer = safeGet(N64_RENDERER, 0),
+            n64Upscale = safeGet(N64_UPSCALE, 1),
             n64Recompiler = safeGet(N64_RECOMPILER, true),
             skipBootRom = safeGet(SKIP_BOOT_ROM, false),
             customDriverPath = safeGetString(CUSTOM_DRIVER_PATH, ""),
@@ -251,7 +259,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setShowPerformanceMonitor(enabled: Boolean) = context.dataStore.edit { it[SHOW_PERFORMANCE_MONITOR] = enabled }
     suspend fun setLogVerbosity(level: LogLevel) = context.dataStore.edit { it[LOG_VERBOSITY] = level.name }
     suspend fun setFastForwardSpeed(speed: Float) = context.dataStore.edit { it[FAST_FORWARD_SPEED] = speed }
-    suspend fun setN64Renderer(mode: Int) = context.dataStore.edit { it[N64_RENDERER] = mode }
+    suspend fun setN64Upscale(factor: Int) = context.dataStore.edit { it[N64_UPSCALE] = factor }
     suspend fun setN64Recompiler(enabled: Boolean) = context.dataStore.edit { it[N64_RECOMPILER] = enabled }
     suspend fun setSkipBootRom(enabled: Boolean) = context.dataStore.edit { it[SKIP_BOOT_ROM] = enabled }
     suspend fun setCustomDriverPath(path: String) = context.dataStore.edit { it[CUSTOM_DRIVER_PATH] = path }

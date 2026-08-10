@@ -112,6 +112,26 @@ fun SettingsScreen(
                     checked = settings.fullScreenMode,
                     onCheckedChange = { viewModel.setFullScreenMode(it) }
                 )
+                var upscaleExpanded by remember { mutableStateOf(false) }
+                val currentUpscaleText = when(settings.n64Upscale) {
+                    2 -> "2x HD (480p/960i)"
+                    4 -> "4x UHD (4K)"
+                    else -> "1x Native (SD)"
+                }
+                ListItem(
+                    headlineContent = { Text("N64 Resolution / Upscaling") },
+                    supportingContent = { Text("Parallel-RDP internal rendering resolution") },
+                    trailingContent = {
+                        Box {
+                            TextButton(onClick = { upscaleExpanded = true }) { Text(currentUpscaleText) }
+                            DropdownMenu(expanded = upscaleExpanded, onDismissRequest = { upscaleExpanded = false }) {
+                                DropdownMenuItem(text = { Text("1x Native (SD)") }, onClick = { viewModel.setN64Upscale(1); upscaleExpanded = false })
+                                DropdownMenuItem(text = { Text("2x HD (480p/960i)") }, onClick = { viewModel.setN64Upscale(2); upscaleExpanded = false })
+                                DropdownMenuItem(text = { Text("4x UHD (4K)") }, onClick = { viewModel.setN64Upscale(4); upscaleExpanded = false })
+                            }
+                        }
+                    }
+                )
                 SettingsClickableItem(
                     title = "Shaders",
                     description = "Apply Slang shader presets (CRT, LCD, etc)",

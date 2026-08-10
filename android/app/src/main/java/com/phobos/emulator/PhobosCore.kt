@@ -17,10 +17,11 @@ object PhobosCore {
     external fun setPause(paused: Boolean)
     external fun setFastForward(enabled: Boolean)
     external fun setFastForwardSpeed(speed: Float)
-    external fun setN64Renderer(mode: Int)
+    external fun setN64Upscale(factor: Int)
     external fun setN64Recompiler(enabled: Boolean)
     external fun setCustomDriverPath(path: String)
     external fun setPs1AnalogMode(enabled: Boolean)
+    external fun togglePs1AnalogMode(): Boolean
     external fun setN64ExpansionPak(enabled: Boolean)
     external fun resetSystem()
     external fun frameAdvance()
@@ -39,12 +40,12 @@ object PhobosCore {
     external fun setLoadDiskImageToRam(enabled: Boolean)
     external fun setOrientationMode(vertical: Boolean)
     external fun setHomePath(path: String)
+    external fun setSavesPath(path: String)
     external fun setNativeLibraryDir(path: String)
     external fun setFirmwarePath(path: String)
     external fun mapFirmwareFile(name: String, path: String)
     external fun setSurface(surface: Any?)
     external fun isFirstFrameRendered(): Boolean
-    external fun runFrame()
     external fun getNewLogs(): List<LogEntry>
     external fun setInput(lx: Float, ly: Float, rx: Float, ry: Float, buttons: Int)
     external fun getPerformanceStats(): PerformanceStats

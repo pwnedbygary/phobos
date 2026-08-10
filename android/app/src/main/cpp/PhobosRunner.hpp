@@ -41,6 +41,8 @@ namespace ares {
   auto loadState(const char* path) -> bool;
   auto takeScreenshot(const char* path) -> bool;
   auto setFastBoot(bool enabled) -> void;
+  auto setAutoSaveMemory(bool enabled) -> void;
+  auto setAutoLoadMemory(bool enabled) -> void;
   auto setSkipBootRom(bool enabled) -> void;
   auto resetSystem() -> void;
   auto frameAdvance() -> void;
@@ -48,9 +50,11 @@ namespace ares {
   auto setShader(const char* path) -> bool;
   auto setRegion(s32 regionIndex) -> void;
   auto setN64Renderer(s32 mode) -> void;
+  auto setN64Upscale(s32 factor) -> void;
   auto setN64Recompiler(bool enabled) -> void;
   auto setN64ExpansionPak(bool enabled) -> void;
   auto setPs1AnalogMode(bool enabled) -> void;
+  auto togglePs1AnalogMode() -> bool;
   auto setStickToDpad(bool enabled) -> void;
   auto setLogLevel(s32 level) -> void;
   auto setRomFd(s32 fd) -> void;
@@ -59,6 +63,7 @@ namespace ares {
   auto setLoadDiskImageToRam(bool enabled) -> void;
   auto setOrientationMode(bool vertical) -> void;
   auto setHomePath(const char* path) -> void;
+  auto setSavesPath(const char* path) -> void;
   auto setNativeLibraryDir(const char* path) -> void;
   auto setFirmwarePath(const char* path) -> void;
   auto mapFirmwareFile(const char* name, const char* path) -> void;

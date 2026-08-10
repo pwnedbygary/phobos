@@ -69,23 +69,33 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setOverscan(enabled: Boolean) = viewModelScope.launch { settingsStore.setOverscan(enabled) }
     fun setRunAhead(enabled: Boolean) = viewModelScope.launch { settingsStore.setRunAhead(enabled) }
     fun setAutoSaveMemory(enabled: Boolean) = viewModelScope.launch { settingsStore.setAutoSaveMemory(enabled) }
-    fun setN64Renderer(mode: Int) = viewModelScope.launch {
-        settingsStore.setN64Renderer(mode)
-        PhobosCore.setN64Renderer(mode)
+    fun setN64Upscale(factor: Int) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64Upscale(factor)
+        PhobosCore.setN64Upscale(factor)
     }
     fun setCustomDriverPath(path: String) = viewModelScope.launch {
         settingsStore.setCustomDriverPath(path)
         PhobosCore.setCustomDriverPath(path)
     }
-    fun setPs1AnalogMode(enabled: Boolean) = viewModelScope.launch {
+    fun setPs1AnalogMode(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setPs1AnalogMode(enabled)
         PhobosCore.setPs1AnalogMode(enabled)
+    }
+
+    // Runtime DualShock analog toggle (like the physical Analog button).
+    // Returns the NEW analog state (true=analog on), or null if no DualShock.
+    fun togglePs1AnalogMode(): Boolean? {
+        val newState = PhobosCore.togglePs1AnalogMode()
+        viewModelScope.launch(Dispatchers.IO) {
+            settingsStore.setPs1AnalogMode(newState)
+        }
+        return newState
     }
     fun setOrientationMode(vertical: Boolean) = viewModelScope.launch {
         settingsStore.setOrientationMode(vertical)
         PhobosCore.setOrientationMode(vertical)
     }
-    fun setN64ExpansionPak(enabled: Boolean) = viewModelScope.launch {
+    fun setN64ExpansionPak(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64ExpansionPak(enabled)
         PhobosCore.setN64ExpansionPak(enabled)
     }
@@ -143,9 +153,12 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     }
 
     fun unloadSystem() {
-        PhobosCore.unloadSystem()
-        _isLoaded.value = false
-        _isPaused.value = false
+        viewModelScope.launch(Dispatchers.IO) {
+            PhobosCore.setEmulationRunning(false)
+            PhobosCore.unloadSystem()
+            _isLoaded.value = false
+            _isPaused.value = false
+        }
     }
 
     fun setSystemVisibility(system: String, visible: Boolean) = viewModelScope.launch {
@@ -314,7 +327,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         }
     }
 
-    fun setN64Recompiler(enabled: Boolean) = viewModelScope.launch {
+    fun setN64Recompiler(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64Recompiler(enabled)
         PhobosCore.setN64Recompiler(enabled)
     }
@@ -447,14 +460,47 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "bios_cd_e.bin" to "fw_mcd_eu",
         "syscard1.pce" to "fw_pce_cd_1_jp",
         "syscard3.pce" to "fw_pce_cd_3_jp",
+        "syscard3u.pce" to "fw_pce_cd_3_us",
         "syscard3us.pce" to "fw_pce_cd_3_us",
         "gexpress.pce" to "fw_pce_cd_ge_jp",
         "disksys.rom" to "fw_fds",
-        "coleco.rom" to "fw_cv",
+        "coleco.rom" to "fw_coleco",
+        "colecovision.rom" to "fw_coleco",
         "gba_bios.bin" to "fw_gba",
         "dmg_boot.bin" to "fw_gb_boot",
         "cgb_boot.bin" to "fw_gbc_boot",
-        "sgb_boot.bin" to "fw_sgb_boot"
+        "sgb_boot.bin" to "fw_sgb_boot",
+        // Alternate filenames
+        "gb_bios.bin" to "fw_gb_boot",
+        "gbc_bios.bin" to "fw_gbc_boot",
+        "bios_u.sms" to "fw_ms_us",
+        "bios_j.sms" to "fw_ms_jp",
+        "bios_e.sms" to "fw_ms_eu",
+        "msx.rom" to "fw_msx",
+        "msx2.rom" to "fw_msx2_main",
+        "msx2ext.rom" to "fw_msx2_sub",
+        "gg_bios.bin" to "fw_gg",
+        "game_gear_bios.bin" to "fw_gg",
+        // Common PSX BIOS filenames
+        "scph1000.bin" to "fw_psx_jp",
+        "scph1001.bin" to "fw_psx_us",
+        "scph7001.bin" to "fw_psx_us",
+        "scph7003.bin" to "fw_psx_eu",
+        "scph7502.bin" to "fw_psx_eu",
+        // Saturn alternate BIOS names
+        "mpr-17933.bin" to "fw_saturn_jp",
+        "mpr-18811.bin" to "fw_saturn_eu",
+        "sega_101.bin" to "fw_saturn_us",
+        // FDS alternate
+        "fds.rom" to "fw_fds"
+    )
+
+    // Firmware key aliases: when one key matches via scan, also populate its aliases.
+    // E.g. neogeo.zip → fw_ng_bios should also show under fw_ng_aes and fw_ng_mvs.
+    private val biosAliases = mapOf(
+        "fw_ng_bios" to listOf("fw_ng_aes", "fw_ng_mvs"),
+        "fw_ng_aes"  to listOf("fw_ng_bios", "fw_ng_mvs"),
+        "fw_ng_mvs"  to listOf("fw_ng_bios", "fw_ng_aes"),
     )
 
     private val biosCrcMap = mapOf(
@@ -469,7 +515,35 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "59b859e7" to "fw_n64_pif_pal",   // N64 PIF PAL
         "32fce34a" to "fw_gb_boot",      // DMG Boot ROM
         "ebf565e8" to "fw_gbc_boot",     // CGB Boot ROM
-        "e03ee2d7" to "fw_sgb_boot"      // SGB Boot ROM
+        "e03ee2d7" to "fw_sgb_boot",      // SGB Boot ROM
+        // ColecoVision
+        "3c0c41ef" to "fw_coleco",  // ColecoVision BIOS (std 8KB)
+        "6605af34" to "fw_coleco",  // ColecoVision BIOS variant
+        "ff0ecca5" to "fw_coleco",  // BIOS.col
+        "c8338226" to "fw_coleco",  // colecoa.rom
+        "32584700" to "fw_coleco",  // Coleco_Bios.bin
+        "df1c9a84" to "fw_coleco",  // czz50.rom
+        // Common PSX BIOS CRC variants
+        "924e3926" to "fw_psx_us",      // SCPH-1001
+        "55847d8c" to "fw_psx_jp",      // SCPH-1000
+        "a56e4c9e" to "fw_psx_eu",      // SCPH-7003
+        "f7b04630" to "fw_psx_us",      // SCPH-7001
+        // Saturn BIOS region auto-detect via CRC
+        "f273555d" to "fw_saturn_jp",    // Saturn v1.00 JP
+        "df94c5b7" to "fw_saturn_eu",    // Saturn v1.00 EU
+        // Master System BIOS
+        "48cd46be" to "fw_ms_us",        // SMS BIOS US
+        "80eb3c3c" to "fw_ms_jp",        // SMS BIOS JP
+        "d0569c83" to "fw_ms_eu",        // SMS BIOS EU
+        // Game Gear BIOS
+        "eecf3fa1" to "fw_gg",           // Game Gear BIOS
+        // MSX BIOS
+        "ee229390" to "fw_msx",          // MSX BIOS JP
+        "fcb98b8a" to "fw_msx2_main",    // MSX2 MAIN JP
+        "57798735" to "fw_msx2_sub",      // MSX2 SUB JP
+        // Neo Geo Pocket
+        "11726b6d" to "fw_ngp",          // NGP BIOS
+        "cdc1a5c2" to "fw_ngpc"          // NGPC BIOS
     )
 
     fun scanFirmware(context: Context) {
@@ -479,15 +553,28 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val rootUri = Uri.parse(firmwareUriString)
-                val rootDir = DocumentFile.fromTreeUri(context, rootUri) ?: return@launch
-                
-                rootDir.listFiles().forEach { file ->
+                val rootDir = DocumentFile.fromTreeUri(context, rootUri)
+                if (rootDir == null) {
+                    Log.e("Phobos", "Firmware scan: DocumentFile.fromTreeUri returned null for $firmwareUriString — SAF permission lost?")
+                    return@launch
+                }
+                val allFiles = rootDir.listFiles()
+                Log.i("Phobos", "Firmware scan: found ${allFiles.size} files in firmware folder")
+                var matchedCount = 0
+                allFiles.forEach { file ->
                     val name = file.name?.lowercase() ?: ""
+                    Log.d("Phobos", "Firmware scan: checking '$name'")
                     
                     // 1. Check by filename
                     val keyByName = biosMap[name]
                     if (keyByName != null) {
+                        Log.i("Phobos", "Firmware scan: MATCHED '$name' -> $keyByName")
                         settingsStore.setSystemFirmwarePath(keyByName, file.uri.toString())
+                        // Also populate aliases (e.g. neogeo.zip shows under AES and MVS too)
+                        biosAliases[keyByName]?.forEach { alias ->
+                            settingsStore.setSystemFirmwarePath(alias, file.uri.toString())
+                        }
+                        matchedCount++
                         return@forEach
                     }
 
@@ -503,14 +590,16 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                             val crcString = String.format("%08x", crc.value)
                             val keyByCrc = biosCrcMap[crcString]
                             if (keyByCrc != null) {
+                                Log.i("Phobos", "Firmware scan: CRC MATCHED '$name' (CRC=$crcString) -> $keyByCrc")
                                 settingsStore.setSystemFirmwarePath(keyByCrc, file.uri.toString())
+                                matchedCount++
                             }
                         }
                     } catch (e: Exception) {
                         Log.e("Phobos", "Error calculating CRC for ${file.name}: ${e.message}")
                     }
                 }
-                Log.d("Phobos", "Firmware scan complete")
+                Log.i("Phobos", "Firmware scan complete: $matchedCount firmware file(s) matched")
             } catch (e: Exception) {
                 Log.e("Phobos", "Error scanning firmware: ${e.message}")
             }
@@ -605,23 +694,33 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             // Sync current settings to native before loading
             val currentSettings = settings.value
             
-            // For Arcade/Neo Geo, try to copy neogeo.zip from ROM folder to mia_temp
-            if (systemName == "Arcade" || systemName.contains("Neo Geo")) {
-                rom.parentUri?.let { pUri ->
-                    val parentDir = DocumentFile.fromTreeUri(context, pUri)
-                    parentDir?.findFile("neogeo.zip")?.let { biosFile ->
-                        try {
-                            val miaTempPath = File(context.cacheDir, "mia_temp")
-                            if (!miaTempPath.exists()) miaTempPath.mkdirs()
-                            val destFile = File(miaTempPath, "neogeo.zip")
-                            context.contentResolver.openInputStream(biosFile.uri)?.use { input ->
-                                destFile.outputStream().use { output ->
-                                    input.copyTo(output)
+            // For Neo Geo, try to copy neogeo.zip from ROM folder OR firmware folder to mia_temp
+            if (systemName.contains("Neo Geo")) {
+                val miaTempPath = File(context.cacheDir, "mia_temp")
+                if (!miaTempPath.exists()) miaTempPath.mkdirs()
+                val destFile = File(miaTempPath, "neogeo.zip")
+
+                // Check firmware mapping first (if user scanned a BIOS)
+                val firmwareBios = currentSettings.systemFirmwarePaths["fw_ng_bios"]
+                if (firmwareBios != null) {
+                    try {
+                        val srcFile = File(firmwareBios)
+                        if (srcFile.exists()) {
+                            srcFile.copyTo(destFile, overwrite = true)
+                            Log.i("Phobos", "Auto-copied mapped neogeo.zip BIOS to mia_temp")
+                        }
+                    } catch (e: Exception) { Log.e("Phobos", "Failed to copy mapped neogeo.zip: ${e.message}") }
+                } else {
+                    // Fallback to searching ROM directory
+                    rom.parentUri?.let { pUri ->
+                        val parentDir = DocumentFile.fromTreeUri(context, pUri)
+                        parentDir?.findFile("neogeo.zip")?.let { biosFile ->
+                            try {
+                                context.contentResolver.openInputStream(biosFile.uri)?.use { input ->
+                                    destFile.outputStream().use { output -> input.copyTo(output) }
                                 }
-                            }
-                            Log.i("Phobos", "Auto-copied neogeo.zip for Arcade core")
-                        } catch (e: Exception) {
-                            Log.e("Phobos", "Failed to auto-copy neogeo.zip: ${e.message}")
+                                Log.i("Phobos", "Auto-copied neogeo.zip from ROM folder to mia_temp")
+                            } catch (e: Exception) { Log.e("Phobos", "Failed to copy neogeo.zip: ${e.message}") }
                         }
                     }
                 }
@@ -631,14 +730,15 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setFastBoot(currentSettings.fastBoot)
             PhobosCore.setSkipBootRom(currentSettings.skipBootRom)
             PhobosCore.setN64Recompiler(currentSettings.n64Recompiler)
+            PhobosCore.setN64Upscale(currentSettings.n64Upscale)
             PhobosCore.setRegion(currentSettings.regionPreference.ordinal)
             PhobosCore.setFastForwardSpeed(currentSettings.fastForwardSpeed)
             PhobosCore.setCustomDriverPath(currentSettings.customDriverPath)
             PhobosCore.setPs1AnalogMode(currentSettings.ps1AnalogMode)
             PhobosCore.setN64ExpansionPak(currentSettings.n64ExpansionPak)
+            _isPaused.value = false
             _isLoaded.value = false
-            _isPaused.value = true
-            PhobosCore.setPause(true)
+            PhobosCore.setPause(false)
 
             // Set writable temp directory for MIA
             val miaTempPath = File(context.cacheDir, "mia_temp").absolutePath
@@ -725,6 +825,11 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         
         // Also tell native where the home is
         PhobosCore.setHomePath(root.absolutePath)
+
+        // Set up persistent save directory
+        val savesDir = File(context.filesDir, "saves")
+        if (!savesDir.exists()) savesDir.mkdirs()
+        PhobosCore.setSavesPath(savesDir.absolutePath)
     }
 
     private fun extractFolder(assetPath: String, destDir: File) {

@@ -1,5 +1,24 @@
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
 auto Peripheral::receive() -> u8 {
   u8 data = 0xff;
+  // Ape Escape sends `01 42` then reads the full 8-byte response from SIO RX
+  // WITHOUT clocking per-byte input. Serve the pad's queued response bytes
+  // directly once the ack-delivered byte is exhausted, so the response reaches
+  // the game instead of being stranded in the pad's queue (which would also
+  // misalign the next poll's select byte).
+  if(!io.receiveSize) {
+    if(io.slotNumber == 0) {
+      auto queued = controllerPort1.popResponse();
+      if(queued >= 0) return (u8)queued;
+    }
+    if(io.slotNumber == 1) {
+      auto queued = controllerPort2.popResponse();
+      if(queued >= 0) return (u8)queued;
+    }
+  }
   if(io.receiveSize) {
     data = io.receiveData;
     io.receiveData = 0xff;
@@ -25,7 +44,15 @@ auto Peripheral::transmit(u8 data) -> void {
   io.transferCounter = ((io.baudrateReloadValue * factors[io.baudrateReloadFactor])) * 8;
 
   if(io.slotNumber == 0) {
-    if(!memoryCardPort1.active()) {
+    // Feed the controller whenever the memcard is NOT mid-transfer. On real
+    // hardware the controller and memcard share the SIO bus and each wakes on
+    // its own select byte (0x01 vs 0x81). ares' original gate
+    // `if(!memoryCardPort1.active())` starves the controller whenever the
+    // memcard is stuck active (e.g. after a boot-time memcard read), which
+    // silently kills ALL controller input. The memcard only gets bytes while
+    // the controller is not in an active transfer, so a 0x81 memory-card
+    // transaction still works.
+    if(!memoryCardPort1.active() || controllerPort1.active()) {
       io.receiveData = controllerPort1.bus(data);
       if(controllerPort1.acknowledge()) io.ackCounter = 338; // approx 9.98us
     }
@@ -37,7 +64,7 @@ auto Peripheral::transmit(u8 data) -> void {
   }
 
   if(io.slotNumber == 1) {
-    if(!memoryCardPort2.active()) {
+    if(!memoryCardPort2.active() || controllerPort2.active()) {
       io.receiveData = controllerPort2.bus(data);
       if(controllerPort2.acknowledge()) io.ackCounter = 338; // approx 9.98us
     }

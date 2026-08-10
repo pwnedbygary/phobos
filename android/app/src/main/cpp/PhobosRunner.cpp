@@ -85,8 +85,8 @@ namespace ares {
   std::atomic<bool> fastForwardAtomic{false};
   std::atomic<f32>  ffSpeedLimitAtomic{2.0f};
   std::atomic<bool> resetRequestedAtomic{false};
-  std::thread emulationThread;
-  bool isPaused = false;
+  pthread_t emuThread = 0;
+  std::atomic<bool> emuThreadRunning{false};
 
   static s32 romFd = -1;
   static s32 secondaryRomFd = -1;
@@ -113,8 +113,13 @@ namespace ares {
   static std::deque<LogEntry> logBuffer;
   static std::mutex logMutex;
   static std::recursive_mutex systemMutex;
+  // Guards ONLY core execution (root->run / root->power / serialize). Kept
+  // separate from systemMutex so a long-running frame (N64 shader-compile
+  // stalls, interpreter frames) can never block the main thread's settings
+  // setters / load / unload — the ANR root cause when closing N64 or
+  // switching systems. systemMutex now guards only config/load/unload ops.
+  static std::recursive_mutex runMutex;
   static Node::Object cachedPlayer1;
-  static LogLevel currentLogLevel = LogLevel::Info;
 
   struct InputState {
     std::atomic<f32> lx{0.0f}, ly{0.0f}, rx{0.0f}, ry{0.0f};
@@ -122,7 +127,6 @@ namespace ares {
   } inputState;
 
   static u64 nativeInputLogCounter = 0;
-  static u64 nativeVulkanLogCounter = 0;
 
   struct VirtualGamepad {
     enum : u32 {
@@ -154,10 +158,106 @@ namespace ares {
     };
   };
 
+  // Bind-once input caches, mirroring ares desktop's InputMapping::bind(): node
+  // names are resolved to VirtualGamepad bits / axis slots ONCE per node and
+  // cached, so per-read cost is a map lookup instead of repeated string
+  // matching on the emulation thread. Caches are cleared on system unload and
+  // whenever the WonderSwan orientation mode changes (it remaps button names).
+  static std::map<const void*, u32> inputButtonCache;
+  static std::map<const void*, u32> inputAxisCache;  // axis slot + 1; 0 = unmapped
+  static s32 inputCacheOrientation = -1;
+
+  static auto resolveButtonBit(const string& nodeName, const string& systemName, bool vertical) -> u32 {
+      u32 b = 0;
+
+      // Standard D-Pad
+      if (nodeName == "Up" || nodeName == "↑") b = VirtualGamepad::Up;
+      else if (nodeName == "Down" || nodeName == "↓") b = VirtualGamepad::Down;
+      else if (nodeName == "Left" || nodeName == "←") b = VirtualGamepad::Left;
+      else if (nodeName == "Right" || nodeName == "→") b = VirtualGamepad::Right;
+
+      // Face Buttons
+      else if (nodeName == "A" || nodeName == "Cross" || nodeName == "I" || nodeName == "1" || nodeName == "○") b = VirtualGamepad::A;
+      else if (nodeName == "B" || nodeName == "Circle" || nodeName == "II" || nodeName == "2" || nodeName == "×") b = VirtualGamepad::B;
+      else if (nodeName == "Fire") b = VirtualGamepad::A;  // Atari 2600 single fire button
+      else if (nodeName == "C") b = VirtualGamepad::R1; // Genesis 6-button / 3-button C -> R1
+      else if (nodeName == "D") b = VirtualGamepad::R2; // Neo Geo D -> R2
+      else if (nodeName == "X" || nodeName == "Square" || nodeName == "III" || nodeName == "□") b = VirtualGamepad::X;
+      else if (nodeName == "Y" || nodeName == "Triangle" || nodeName == "IV" || nodeName == "△") b = VirtualGamepad::Y;
+      else if (nodeName == "Z") b = VirtualGamepad::R2; // Genesis 6-button Z -> R2
+
+      // Shoulders / Triggers
+      else if (nodeName == "L" || nodeName == "L1" || nodeName == "L-Bumper") b = VirtualGamepad::L1;
+      else if (nodeName == "R" || nodeName == "R1" || nodeName == "R-Bumper") b = VirtualGamepad::R1;
+      else if (nodeName == "L2" || nodeName == "L-Trigger") b = VirtualGamepad::L2;
+      else if (nodeName == "R2" || nodeName == "R-Trigger") b = VirtualGamepad::R2;
+
+      // Stick Clicks
+      else if (nodeName == "L3" || nodeName == "L-Stick-Click") b = VirtualGamepad::L3;
+      else if (nodeName == "R3" || nodeName == "R-Stick-Click") b = VirtualGamepad::R3;
+
+      // System Buttons
+      else if (nodeName == "Select" || nodeName == "Mode") b = VirtualGamepad::Select;
+      else if (nodeName == "Start" || nodeName == "Run") b = VirtualGamepad::Start;
+      else if (nodeName == "Home") b = VirtualGamepad::Home;
+
+      // WonderSwan Specific Names (Horizontal Layout as Default)
+      else if (nodeName == "X1") b = vertical ? VirtualGamepad::X : VirtualGamepad::Up;      // Vertical: X, Horizontal: D-Up
+      else if (nodeName == "X2") b = vertical ? VirtualGamepad::Y : VirtualGamepad::Right;   // Vertical: Y, Horizontal: D-Right
+      else if (nodeName == "X3") b = vertical ? VirtualGamepad::B : VirtualGamepad::Down;    // Vertical: B, Horizontal: D-Down
+      else if (nodeName == "X4") b = vertical ? VirtualGamepad::A : VirtualGamepad::Left;    // Vertical: A, Horizontal: D-Left
+      else if (nodeName == "Y1") b = vertical ? VirtualGamepad::Left : VirtualGamepad::L1;   // Vertical: D-Left, Horizontal: L1
+      else if (nodeName == "Y2") b = vertical ? VirtualGamepad::Up : VirtualGamepad::R1;     // Vertical: D-Up, Horizontal: R1
+      else if (nodeName == "Y3") b = vertical ? VirtualGamepad::Right : VirtualGamepad::X;   // Vertical: D-Right, Horizontal: X
+      else if (nodeName == "Y4") b = vertical ? VirtualGamepad::Down : VirtualGamepad::Y;    // Vertical: D-Down, Horizontal: Y
+
+      else if (nodeName == "A")  b = vertical ? VirtualGamepad::L1 : VirtualGamepad::B;      // Vertical: L1, Horizontal: B
+      else if (nodeName == "B")  b = vertical ? VirtualGamepad::R1 : VirtualGamepad::A;      // Vertical: R1, Horizontal: A
+
+      // Stick-as-Buttons (for Digital mapping to Sticks)
+      else if (nodeName == "L-Up") b = VirtualGamepad::LS_Up;
+      else if (nodeName == "L-Down") b = VirtualGamepad::LS_Down;
+      else if (nodeName == "L-Left") b = VirtualGamepad::LS_Left;
+      else if (nodeName == "L-Right") b = VirtualGamepad::LS_Right;
+      else if (nodeName == "R-Up") b = VirtualGamepad::RS_Up;
+      else if (nodeName == "R-Down") b = VirtualGamepad::RS_Down;
+      else if (nodeName == "R-Left") b = VirtualGamepad::RS_Left;
+      else if (nodeName == "R-Right") b = VirtualGamepad::RS_Right;
+
+      // Special System Overrides
+      if (systemName == "Nintendo 64") {
+          if (nodeName == "Z") b = VirtualGamepad::L2;
+          else if (nodeName == "C-Up")    b = VirtualGamepad::RS_Up;
+          else if (nodeName == "C-Down")  b = VirtualGamepad::RS_Down;
+          else if (nodeName == "C-Left")  b = VirtualGamepad::RS_Left;
+          else if (nodeName == "C-Right") b = VirtualGamepad::RS_Right;
+      } else if (systemName == "PlayStation") {
+          // DualShock uses L1, R1, L2, R2, L3, R3 explicitly
+          if      (nodeName == "L1") b = VirtualGamepad::L1;
+          else if (nodeName == "R1") b = VirtualGamepad::R1;
+          else if (nodeName == "L2") b = VirtualGamepad::L2;
+          else if (nodeName == "R2") b = VirtualGamepad::R2;
+          else if (nodeName == "L3") b = VirtualGamepad::L3;
+          else if (nodeName == "R3") b = VirtualGamepad::R3;
+      }
+
+      return b;
+  }
+
+  static auto resolveAxisSlot(const string& lowerName) -> s32 {
+      if (lowerName == "lx" || lowerName == "l-stick x" || lowerName == "left x" || lowerName == "x-axis" || lowerName == "x" || lowerName == "player 1 x-axis") return 0;
+      if (lowerName == "ly" || lowerName == "l-stick y" || lowerName == "left y" || lowerName == "y-axis" || lowerName == "y" || lowerName == "player 1 y-axis") return 1;
+      if (lowerName == "rx" || lowerName == "r-stick x" || lowerName == "right x" || lowerName == "z-axis" || lowerName == "player 2 x-axis" || lowerName == "z") return 2;
+      if (lowerName == "ry" || lowerName == "r-stick y" || lowerName == "right y" || lowerName == "rz-axis" || lowerName == "player 2 y-axis" || lowerName == "rz") return 3;
+      return -1;
+  }
+
   static bool muteAudioAtomic = false;
   static bool fastBootAtomic = false;
+  static bool autoSaveMemoryAtomic = false;  // "Auto-Save Memory" — disabled by default
+  static bool autoLoadMemoryAtomic = false;   // "Auto-Load Memory" — disabled by default
   static s32 regionPreference = 0;
-  static s32 n64RendererMode = 0;
+  static s32 n64UpscaleFactor = 1;
   static bool n64Recompiler = true;
   static bool ps1AnalogMode = true;
   static bool n64ExpansionPak = true;
@@ -167,8 +267,7 @@ namespace ares {
   static string nativeLibraryDir;
   static string tempFilePath;
   static string homePath;
-  static string firmwarePath;
-  static string shaderPath;
+  static string savesPath;
   static std::map<string, string> firmwareMap;
 
   auto addLog(LogLevel level, string message) -> void {
@@ -178,6 +277,9 @@ namespace ares {
   }
 
   auto emulationLoop() -> void {
+    #if defined(ANDROID)
+    setpriority(PRIO_PROCESS, 0, -10);
+    #endif
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     s32 num_cores = sysconf(_SC_NPROCESSORS_CONF);
@@ -188,7 +290,7 @@ namespace ares {
 
     while (emulationRunning) {
       if (resetRequestedAtomic.exchange(false)) {
-        std::lock_guard<std::recursive_mutex> lock(systemMutex);
+        std::lock_guard<std::recursive_mutex> lock(runMutex);
         if (root) {
             root->power();
             addLog(LogLevel::Info, "System reset (async)");
@@ -198,17 +300,14 @@ namespace ares {
       if (!isPausedAtomic) {
         auto start = std::chrono::steady_clock::now();
         {
-            std::lock_guard<std::recursive_mutex> lock(systemMutex);
+            std::lock_guard<std::recursive_mutex> lock(runMutex);
             if (root) {
-                // TRACE HANG: Log if root->run takes too long
                 root->run();
             }
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         auto end = std::chrono::steady_clock::now();
 
-        // Speed limiting is now handled by blocking audio sync in platform::audio
-        // unless fast-forwarding is enabled.
         if (fastForwardAtomic) {
             f64 speed = (f64)ffSpeedLimitAtomic;
             if (speed > 0.0) {
@@ -238,22 +337,33 @@ namespace ares {
     }
   }
 
-  auto setEmulationRunning(bool running) -> void {
-    if (emulationRunning == running) return;
+  // Persistent emulation thread — created once, never killed.
+  // GBC was confirmed working with this model. PCE hangs are handled
+  // by try_lock() in unloadSystem() which abandons stuck threads.
+  static std::mutex threadMutex;
+  static std::condition_variable threadCV;
+  static bool threadShouldRun = false;
 
-    if (running) {
-      if (emulationThread.joinable()) {
-          emulationRunning = false;
-          emulationThread.join();
+  static auto ensureThread() -> void {
+    if (emuThread) return;
+    emuThreadRunning = true;
+    pthread_create(&emuThread, nullptr, [](void*) -> void* {
+      while (emuThreadRunning) {
+        { std::unique_lock<std::mutex> lk(threadMutex); threadCV.wait(lk, []{ return threadShouldRun || !emuThreadRunning; }); threadShouldRun = false; }
+        if (!emuThreadRunning) break;
+        emulationLoop();
       }
-      emulationRunning = true;
-      emulationThread = std::thread(emulationLoop);
-    } else {
-      emulationRunning = false;
-      if (emulationThread.joinable()) {
-        emulationThread.join();
-      }
-    }
+      emuThreadRunning = false;
+      return nullptr;
+    }, nullptr);
+  }
+
+  auto setEmulationRunning(bool running) -> void {
+    std::lock_guard<std::mutex> lock(threadMutex);
+    if (emulationRunning == running) return;
+    ensureThread();
+    emulationRunning = running;
+    if (running) { threadShouldRun = true; threadCV.notify_one(); }
   }
 
   struct AndroidPlatform : Platform {
@@ -288,7 +398,6 @@ namespace ares {
 
     auto input(Node::Input::Input input) -> void override {
       if (!root) return;
-      string nodeName = input->name();
       string systemName = root->name();
 
       u32 buttons = (u32)inputState.buttons.load();
@@ -297,96 +406,62 @@ namespace ares {
       f32 rx = inputState.rx.load();
       f32 ry = inputState.ry.load();
 
+      // Invalidate bind-once caches if the WonderSwan orientation mode changed
+      // (it remaps several button names). Cheap bool compare per call.
+      if (inputCacheOrientation != (s32)orientationVertical) {
+          inputButtonCache.clear();
+          inputAxisCache.clear();
+          inputCacheOrientation = (s32)orientationVertical;
+      }
+
       if (auto button = input->cast<Node::Input::Button>()) {
           u32 b = 0;
-
-          // Standard D-Pad
-          if (nodeName == "Up" || nodeName == "↑") b = VirtualGamepad::Up;
-          else if (nodeName == "Down" || nodeName == "↓") b = VirtualGamepad::Down;
-          else if (nodeName == "Left" || nodeName == "←") b = VirtualGamepad::Left;
-          else if (nodeName == "Right" || nodeName == "→") b = VirtualGamepad::Right;
-
-          // Face Buttons
-          else if (nodeName == "A" || nodeName == "Cross" || nodeName == "I" || nodeName == "1" || nodeName == "○") b = VirtualGamepad::A;
-          else if (nodeName == "B" || nodeName == "Circle" || nodeName == "II" || nodeName == "2" || nodeName == "×") b = VirtualGamepad::B;
-          else if (nodeName == "X" || nodeName == "Square" || nodeName == "III" || nodeName == "□") b = VirtualGamepad::X;
-          else if (nodeName == "Y" || nodeName == "Triangle" || nodeName == "IV" || nodeName == "△") b = VirtualGamepad::Y;
-
-          // Shoulders / Triggers
-          else if (nodeName == "L" || nodeName == "L1" || nodeName == "L-Bumper") b = VirtualGamepad::L1;
-          else if (nodeName == "R" || nodeName == "R1" || nodeName == "R-Bumper") b = VirtualGamepad::R1;
-          else if (nodeName == "L2" || nodeName == "L-Trigger") b = VirtualGamepad::L2;
-          else if (nodeName == "R2" || nodeName == "R-Trigger") b = VirtualGamepad::R2;
-
-          // Stick Clicks
-          else if (nodeName == "L3" || nodeName == "L-Stick-Click") b = VirtualGamepad::L3;
-          else if (nodeName == "R3" || nodeName == "R-Stick-Click") b = VirtualGamepad::R3;
-
-          // System Buttons
-          else if (nodeName == "Select" || nodeName == "Mode") b = VirtualGamepad::Select;
-          else if (nodeName == "Start" || nodeName == "Run") b = VirtualGamepad::Start;
-          else if (nodeName == "Home") b = VirtualGamepad::Home;
-
-          // WonderSwan Specific Names (Horizontal Layout as Default)
-          else if (nodeName == "X1") b = orientationVertical ? VirtualGamepad::X : VirtualGamepad::Up;      // Vertical: X, Horizontal: D-Up
-          else if (nodeName == "X2") b = orientationVertical ? VirtualGamepad::Y : VirtualGamepad::Right;   // Vertical: Y, Horizontal: D-Right
-          else if (nodeName == "X3") b = orientationVertical ? VirtualGamepad::B : VirtualGamepad::Down;    // Vertical: B, Horizontal: D-Down
-          else if (nodeName == "X4") b = orientationVertical ? VirtualGamepad::A : VirtualGamepad::Left;    // Vertical: A, Horizontal: D-Left
-          else if (nodeName == "Y1") b = orientationVertical ? VirtualGamepad::Left : VirtualGamepad::L1;   // Vertical: D-Left, Horizontal: L1
-          else if (nodeName == "Y2") b = orientationVertical ? VirtualGamepad::Up : VirtualGamepad::R1;     // Vertical: D-Up, Horizontal: R1
-          else if (nodeName == "Y3") b = orientationVertical ? VirtualGamepad::Right : VirtualGamepad::X;   // Vertical: D-Right, Horizontal: X
-          else if (nodeName == "Y4") b = orientationVertical ? VirtualGamepad::Down : VirtualGamepad::Y;    // Vertical: D-Down, Horizontal: Y
-
-          else if (nodeName == "A")  b = orientationVertical ? VirtualGamepad::L1 : VirtualGamepad::B;      // Vertical: L1, Horizontal: B
-          else if (nodeName == "B")  b = orientationVertical ? VirtualGamepad::R1 : VirtualGamepad::A;      // Vertical: R1, Horizontal: A
-
-          // Stick-as-Buttons (for Digital mapping to Sticks)
-          else if (nodeName == "L-Up") b = VirtualGamepad::LS_Up;
-          else if (nodeName == "L-Down") b = VirtualGamepad::LS_Down;
-          else if (nodeName == "L-Left") b = VirtualGamepad::LS_Left;
-          else if (nodeName == "L-Right") b = VirtualGamepad::LS_Right;
-          else if (nodeName == "R-Up") b = VirtualGamepad::RS_Up;
-          else if (nodeName == "R-Down") b = VirtualGamepad::RS_Down;
-          else if (nodeName == "R-Left") b = VirtualGamepad::RS_Left;
-          else if (nodeName == "R-Right") b = VirtualGamepad::RS_Right;
-
-          // Special System Overrides
-          if (systemName == "Nintendo 64") {
-              if (nodeName == "Z") b = VirtualGamepad::L2;
-              else if (nodeName == "C-Up")    { button->setValue((buttons & VirtualGamepad::RS_Up) != 0); return; }
-              else if (nodeName == "C-Down")  { button->setValue((buttons & VirtualGamepad::RS_Down) != 0); return; }
-              else if (nodeName == "C-Left")  { button->setValue((buttons & VirtualGamepad::RS_Left) != 0); return; }
-              else if (nodeName == "C-Right") { button->setValue((buttons & VirtualGamepad::RS_Right) != 0); return; }
-          } else if (systemName == "PlayStation") {
-              // DualShock uses L1, R1, L2, R2, L3, R3 explicitly
-              if      (nodeName == "L1") b = VirtualGamepad::L1;
-              else if (nodeName == "R1") b = VirtualGamepad::R1;
-              else if (nodeName == "L2") b = VirtualGamepad::L2;
-              else if (nodeName == "R2") b = VirtualGamepad::R2;
-              else if (nodeName == "L3") b = VirtualGamepad::L3;
-              else if (nodeName == "R3") b = VirtualGamepad::R3;
+          auto it = inputButtonCache.find(button.get());
+          if (it == inputButtonCache.end()) {
+              // Bind once, then cache (mirrors ares InputMapping::bind()): names
+              // resolve on the first read; per-read is a map lookup + bit test.
+              b = resolveButtonBit(button->name(), systemName, orientationVertical);
+              inputButtonCache[button.get()] = b;
+          } else {
+              b = it->second;
           }
 
           // Always set the value (resetting if not mapped) to ensure state consistency
           button->setValue(b != 0 && (buttons & b) != 0);
       } else if (auto axis = input->cast<Node::Input::Axis>()) {
-          s16 value = 0;
-          string nodeName = axis->name();
-          bool matched = true;
-
-          if (nodeName == "LX" || nodeName == "L-Stick X" || nodeName == "Left X" || nodeName == "X-Axis" || nodeName == "X" || nodeName == "Player 1 X-Axis" || nodeName == "X-axis") {
-              value = (s16)(lx * 32767.0f);
-          } else if (nodeName == "LY" || nodeName == "L-Stick Y" || nodeName == "Left Y" || nodeName == "Y-Axis" || nodeName == "Y" || nodeName == "Player 1 Y-Axis" || nodeName == "Y-axis") {
-              value = (s16)(ly * 32767.0f);
-          } else if (nodeName == "RX" || nodeName == "R-Stick X" || nodeName == "Right X" || nodeName == "Z-Axis" || nodeName == "Player 2 X-Axis" || nodeName == "Z-axis") {
-              value = (s16)(rx * 32767.0f);
-          } else if (nodeName == "RY" || nodeName == "R-Stick Y" || nodeName == "Right Y" || nodeName == "RZ-Axis" || nodeName == "Player 2 Y-Axis" || nodeName == "RZ-axis") {
-              value = (s16)(ry * 32767.0f);
+          s32 slot = -1;
+          auto it = inputAxisCache.find(axis.get());
+          if (it == inputAxisCache.end()) {
+              string nodeName = axis->name();
+              string lowerName = nodeName.downcase();
+              slot = resolveAxisSlot(lowerName);
+              inputAxisCache[axis.get()] = (u32)(slot + 1);  // 0 = unmapped
           } else {
-              matched = false;
+              slot = (s32)it->second - 1;
           }
 
-          if (matched) {
+          s16 value = 0;
+          if (slot >= 0) {
+              switch (slot) {
+                  case 0: value = (s16)(lx * 32767.0f); break;
+                  case 1: value = (s16)(ly * 32767.0f); break;
+                  case 2: value = (s16)(rx * 32767.0f); break;
+                  case 3: value = (s16)(ry * 32767.0f); break;
+              }
+          }
+
+          // Diagnostic heartbeat only (ares logs nothing per read): every 600th
+          // axis read ≈ every 5-10 s at typical PS1 pad poll rates. The old
+          // "|| abs(value) > 1000" clause logged EVERY deflected-stick read on
+          // the emulation thread — thousands of synchronous logd writes/sec
+          // while the stick moved, which stalled emulation and caused lag.
+          static u64 axisLogCount = 0;
+          if (axisLogCount++ % 600 == 0) {
+              LOGI("PhobosNativeInput: System='%s' Axis='%s' Matched=%d Value=%d (lx=%.2f, ly=%.2f)",
+                   (const char*)systemName, (const char*)axis->name(), slot >= 0, (int)value, (double)lx, (double)ly);
+          }
+
+          if (slot >= 0) {
               axis->setValue(value);
           }
       }
@@ -394,10 +469,6 @@ namespace ares {
 
     auto video(Node::Video::Screen screen, const u32* data, u32 pitch, u32 width, u32 height) -> void override {
       if (width == 0 || height == 0 || isPausedAtomic) return;
-
-      if (nativeVulkanLogCounter++ % 600 == 0) {
-          LOGD("PhobosVulkanTrace: video() trigger. Surface=%p, Paused=%d", nativeWindow, (bool)isPausedAtomic);
-      }
 
       static u64 frameLogCount = 0;
       if (frameLogCount++ % 600 == 0) {
@@ -474,13 +545,22 @@ namespace ares {
                 }
             }
         } else if (isN64Vulkan && vData) {
-            // Direct copy from Vulkan RGBA to Android ABGR (handles width/height safely)
+            // Direct SIMD NEON vectorized copy from Vulkan RGBA to Android ABGR
             u32 copyW = std::min(width, vW);
             u32 copyH = std::min(height, vH);
             for (s32 y = 0; y < (s32)copyH; y++) {
                 const u32* srcLine = (const u32*)(vData + y * vW * 4);
                 u32* destLine = dest + y * dst_stride;
-                for (s32 x = 0; x < (s32)copyW; x++) {
+                s32 x = 0;
+                #if defined(__aarch64__) || defined(__arm__)
+                uint32x4_t alpha = vdupq_n_u32(0xFF000000);
+                for (; x <= (s32)copyW - 4; x += 4) {
+                    uint32x4_t p = vld1q_u32(srcLine + x);
+                    uint32x4_t result = vorrq_u32(alpha, p);
+                    vst1q_u32(destLine + x, result);
+                }
+                #endif
+                for (; x < (s32)copyW; x++) {
                     destLine[x] = 0xFF000000 | srcLine[x];
                 }
             }
@@ -629,6 +709,11 @@ namespace ares {
       if (nodeName == "Super Famicom") {
           attachFile("boards.bml");
           attachFile("ipl.rom");
+      } else if (nodeName == "ColecoVision") {
+          bool attached = false;
+          auto it_cv = firmwareMap.find("fw_coleco");
+          if (it_cv != firmwareMap.end()) attached = attachFile((const char*)it_cv->second, "bios.rom");
+          if (!attached) attachFile("bios.rom");
       } else if (nodeName == "Famicom") {
           attachFile("boards.bml");
       } else if (nodeName == "PlayStation") {
@@ -678,8 +763,19 @@ namespace ares {
               auto it_mvs = firmwareMap.find("fw_ng_mvs");
               if (it_mvs != firmwareMap.end()) attached = attachFile((const char*)it_mvs->second, "bios.rom");
           }
+          if (!attached) {
+              // fw_ng_bios is how scanFirmware maps "neogeo.zip" — some users
+              // drop neogeo.zip straight into firmware without renaming.
+              auto it_bios = firmwareMap.find("fw_ng_bios");
+              if (it_bios != firmwareMap.end()) attached = attachFile((const char*)it_bios->second, "bios.rom");
+          }
           if (!attached) attached = attachFile("bios.rom");
           attachFile("static.rom"); // Font ROM
+      } else if (nodeName == "Neo Geo CD" || nodeName == "Neo Geo CDZ") {
+          bool attached = false;
+          auto it_ngcd = firmwareMap.find("fw_ng_cd");
+          if (it_ngcd != firmwareMap.end()) attached = attachFile((const char*)it_ngcd->second, "bios.rom");
+          if (!attached) attached = attachFile("bios.rom");
       } else if (nodeName == "Nintendo 64") {
           bool attached = false;
           auto it_ntsc = firmwareMap.find("fw_n64_pif_ntsc");
@@ -710,7 +806,7 @@ namespace ares {
       } else if (nodeName == "MSX" || nodeName == "MSX2") {
           attachFile("bios.rom");
           if (nodeName == "MSX2") attachFile("sub.rom");
-      } else if (nodeName == "PC Engine" || nodeName == "SuperGrafx") {
+      } else if (nodeName == "PC Engine" || nodeName == "SuperGrafx" || nodeName == "PC Engine Duo" || nodeName == "PC Engine CD") {
           bool attached = false;
           auto it_pce = firmwareMap.find("fw_pce_cd_3_jp");
           if (it_pce != firmwareMap.end()) attached = attachFile((const char*)it_pce->second, "bios.rom");
@@ -730,13 +826,61 @@ namespace ares {
 
   auto unloadSystem() -> void {
     isPausedAtomic = true;
+    fastForwardAtomic = false;
     setEmulationRunning(false);
+
+    // If the emulation thread is stuck inside root->run() (e.g. PCE scheduler
+    // deadlock), runMutex is held and the thread will never reach the while
+    // check. Abandon the system cleanly instead of hanging on root->unload().
+    // Save exports are lost (but PCE has no save data yet anyway).
+    if (!runMutex.try_lock()) {
+      LOGI("unloadSystem: emulation thread stuck, abandoning system");
+      std::lock_guard<std::recursive_mutex> lock(systemMutex);
+      root.reset();
+      cachedPlayer1 = {};
+      inputButtonCache.clear();
+      inputAxisCache.clear();
+      inputCacheOrientation = -1;
+      currentMedium.reset();
+      secondaryMedium.reset();
+      LOGI("System abandoned (thread stuck)");
+      return;
+    }
+    // Thread exited cleanly — safe to unload normally.
+    runMutex.unlock();
+
     std::lock_guard<std::recursive_mutex> lock(systemMutex);
     if (root) {
+        if (savesPath && currentMedium && currentMedium->pak) {
+          string sysName = root->name();
+          string saveDir = {savesPath, "/", sysName, "/"};
+          directory::create(saveDir);
+          for (auto& saveNode : currentMedium->pak->files()) {
+            string fileName = saveNode->name();
+            if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
+                !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
+                !fileName.endsWith(".sav") && !fileName.endsWith(".fla")) continue;
+            auto fp = saveNode;
+            fp->seek(0);
+            auto size = fp->size();
+            if (size == 0) continue;
+            std::vector<u8> buf(size);
+            fp->read({buf.data(), size});
+            bool allZero = true;
+            for (auto b : buf) { if (b != 0) { allZero = false; break; } }
+            if (allZero) continue;
+            string fullPath = {saveDir, fileName};
+            file::write(fullPath, {buf.data(), size});
+            LOGI("Saves: exported %s (%zu bytes) for %s", (const char*)fileName, size, (const char*)sysName);
+          }
+        }
         root->unload();
         root.reset();
     }
-    cachedPlayer1 = {}; // Reset Player 1 cache
+    cachedPlayer1 = {};
+    inputButtonCache.clear();
+    inputAxisCache.clear();
+    inputCacheOrientation = -1;
     currentMedium.reset();
     secondaryMedium.reset();
     LOGI("System unloaded");
@@ -750,6 +894,24 @@ namespace ares {
 
     for (auto& port : ports) {
       LOGI("VFS: connectDevices - name='%s', type='%s', family='%s'", (const char*)port->name(), (const char*)port->type(), (const char*)port->family());
+      // MSX Tape/Tray: skip entirely (ares manages them, our touch crashes).
+      if (port->type() == "Tape" || port->type() == "Tray" || port->type() == "Tape Deck") {
+          continue;
+      }
+      // Disc Tray: connect for all disc-based systems. Only skip for
+      // PC Engine / SuperGrafx HuCard games (name != "CD" / "Duo").
+      if (port->name() == "Disc Tray") {
+          string sysName = node ? node->name() : "";
+          // HuCard-only PCE: skip tray connect to prevent feeding ROM as CD.
+          bool isHuCard = (sysName == "PC Engine" || sysName == "SuperGrafx");
+          if (isHuCard) { portIndex++; continue; }
+          if (port->allocate()) {
+              LOGI("VFS: Connecting Disc Tray for '%s'", (const char*)sysName);
+              port->connect();
+          }
+          portIndex++;
+          continue;
+      }
       if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive") {
         if (port->allocate()) {
             LOGI("VFS: Allocated %s port", (const char*)port->type());
@@ -758,34 +920,84 @@ namespace ares {
         } else {
             LOGE("VFS: FAILED to allocate %s port", (const char*)port->type());
         }
-      } else if (port->type() == "Controller" || port->type() == "Control Pad") {
+      } else if (port->type() == "Memory Card") {
+        // PS1 memory-card ports must get a Memory Card, NOT a controller. The
+        // controller branch below matches ports by name contains("Port"), which
+        // would otherwise hijack "Memory Card Port 1/2" and connect Digital
+        // Gamepads there — corrupting the SIO bus routing (memcards only wake on
+        // 0x81, gamepads wake on 0x01, so a stray gamepad can answer controller
+        // polls) and silently breaking memcard saves.
+        string defaultDevice = "Memory Card";
+        auto currentConnected = port->connected();
+        if (currentConnected && currentConnected->name() == defaultDevice) {
+            LOGI("VFS: Port %s already connected to %s", (const char*)port->name(), (const char*)defaultDevice);
+            portIndex++;
+            continue;
+        }
+        if (port->connected()) port->disconnect();
+        if (auto pNode = port->allocate(defaultDevice)) {
+            LOGI("VFS: Allocated %s on %s", (const char*)defaultDevice, (const char*)port->name());
+            port->connect();
+            LOGI("VFS: Connected %s on %s", (const char*)defaultDevice, (const char*)port->name());
+        } else {
+            LOGE("VFS: FAILED to allocate %s on %s (Family: '%s', Sys: '%s')", (const char*)defaultDevice, (const char*)port->name(), (const char*)port->family(), (const char*)(node ? node->name() : ""));
+        }
+        portIndex++;
+      } else if (port->type() == "Controller" || port->type() == "Control Pad" || port->name().contains("Controller") || port->name().contains("Port")) {
         string defaultDevice = "Gamepad";
-        if (port->family() == "Nintendo 64") defaultDevice = (node && node->name() == "Arcade") ? "Aleck64" : "Gamepad";
-        if (port->family() == "MSX") defaultDevice = "Controller";
-        if (port->family() == "Mega Drive") defaultDevice = "Control Pad";
-        if (node->name().contains("PlayStation")) {
-            if (portIndex == 1) {
-                defaultDevice = ps1AnalogMode ? "DualShock" : "Digital Gamepad";
-            } else {
-                defaultDevice = "Digital Gamepad";
+        string family = port->family();
+        string sysName = node ? node->name() : "";
+
+        if (family.find("Nintendo 64") || sysName.find("Nintendo 64")) defaultDevice = (sysName == "Arcade") ? "Aleck64" : "Gamepad";
+        else if (family.find("Super Famicom") || sysName.find("Super Famicom") || sysName.find("SNES")) defaultDevice = "Gamepad";
+        else if (family.find("Mega Drive") || sysName.find("Mega Drive") || sysName.find("Genesis") || sysName.find("Mega CD") || sysName.find("Sega CD")) {
+            if (port->name().find("Extension")) defaultDevice = ""; // Extension port doesn't take gamepad
+            else defaultDevice = "Fighting Pad";
+        }
+        else if (family.find("MSX") || sysName.find("MSX")) defaultDevice = "Gamepad";
+        else if (sysName.find("PlayStation")) {
+            // Always allocate a DualShock on Port 1: the runtime analog toggle
+            // Respect ps1AnalogMode: DualShock when analog is on, Digital
+            // Gamepad when off. The hotkey toggle flips ps1AnalogMode and
+            // calls connectDevices(root) which re-allocates the port.
+            // Use port name (not portIndex) — Disc Tray bumps the counter.
+            {
+                bool isPort1 = (port->name() == "Controller Port 1");
+                defaultDevice = isPort1 ? (ps1AnalogMode ? "DualShock" : "Digital Gamepad") : "Digital Gamepad";
             }
+        }
+        else if (family.find("Neo Geo") || sysName.find("Neo Geo")) defaultDevice = "Arcade Stick";
+        else if (family.find("PC Engine") || sysName.find("PC Engine") || sysName.find("SuperGrafx")) defaultDevice = "Gamepad";
+        else if (family.find("Atari 2600") || sysName.find("Atari 2600")) defaultDevice = "Gamepad";
+        else if (family.find("ColecoVision") || sysName.find("ColecoVision")) defaultDevice = "Gamepad";
+
+        if (!defaultDevice) { portIndex++; continue; }
+
+        // Check if port is already connected to the desired device
+        auto currentConnected = port->connected();
+        if (currentConnected && currentConnected->name() == defaultDevice) {
+            LOGI("VFS: Port %s already connected to %s", (const char*)port->name(), (const char*)defaultDevice);
+            portIndex++;
+            continue;
         }
 
         if (port->connected()) port->disconnect();
 
-        if (port->allocate(defaultDevice)) {
+        if (auto pNode = port->allocate(defaultDevice)) {
             LOGI("VFS: Allocated %s controller on %s", (const char*)defaultDevice, (const char*)port->name());
+            port->connect();
+            LOGI("VFS: Connected %s on %s", (const char*)defaultDevice, (const char*)port->name());
 
             if (portIndex == 1) {
-                auto peripherals = port->find<Node::Peripheral>();
-                if (peripherals.size() > 0) {
-                    cachedPlayer1 = peripherals[0];
-                    LOGI("VFS: Cached Player 1 Peripheral: %s", (const char*)cachedPlayer1->name());
-                }
+                cachedPlayer1 = pNode;
+                LOGI("VFS: Cached Player 1 Peripheral: %s", (const char*)cachedPlayer1->name());
             }
+        } else {
+            LOGE("VFS: FAILED to allocate %s on %s (Family: '%s', Sys: '%s')", (const char*)defaultDevice, (const char*)port->name(), (const char*)family, (const char*)sysName);
         }
         portIndex++;
-      } else if (port->type() == "Keyboard") {
+      }
+else if (port->type() == "Keyboard") {
         string defaultLayout = "Japanese";
         if (port->allocate(defaultLayout)) {
             LOGI("VFS: Allocated %s keyboard on %s", (const char*)defaultLayout, (const char*)port->name());
@@ -799,6 +1011,9 @@ namespace ares {
     string uri = uriPtr;
     unloadSystem();
     std::unique_lock<std::recursive_mutex> lock(systemMutex);
+
+    isPausedAtomic = false;
+    firstFrameRendered = false;
 
     scheduler.reset();
 
@@ -867,7 +1082,7 @@ namespace ares {
 
     string loadPath = tempPath;
     string identifiedSystem = systemName;
-    if (systemName == "Arcade" || systemName == "Auto" || systemName.find("Nintendo 64")) {
+    if (systemName == "Auto" || systemName == "Nintendo 64") {
       auto matches = mia::identify(loadPath);
       if (!matches.empty()) {
           LOGI("MIA: Identified system as %s", (const char*)matches[0]);
@@ -881,9 +1096,14 @@ namespace ares {
     if (lookup.find("Nintendo 64")) {
         if (lookup != "Nintendo 64DD") identifiedSystem = "Nintendo 64";
     }
+    else if (lookup.find("Atari 2600") || lookup.find("A26") || lookup.find("Atari2600") || lookup.find("Stella")) identifiedSystem = "Atari 2600";
+    else if (lookup.find("ColecoVision") || lookup.find("Coleco") || lookup.find("CV")) identifiedSystem = "ColecoVision";
+    else if (lookup.find("SG-1000") || lookup.find("SG1000") || lookup.find("SC-3000")) identifiedSystem = "SG-1000";
+    else if (lookup.find("ZX Spectrum") || lookup.find("ZXSpectrum") || lookup.find("ZX") || lookup.find("Spectrum 128")) identifiedSystem = "ZX Spectrum";
     else if (lookup.find("Super Famicom") || lookup.find("SNES")) identifiedSystem = "Super Famicom";
     else if (lookup.find("Famicom") || lookup.find("NES")) identifiedSystem = "Famicom";
     else if (lookup.find("PlayStation") || lookup.find("PS1")) identifiedSystem = "PlayStation";
+    else if (lookup.find("Neo Geo Pocket") || lookup.find("NGP") || lookup.find("NGPC")) identifiedSystem = "Neo Geo Pocket";
     else if (lookup.find("Neo Geo")) {
         identifiedSystem = "Neo Geo";
         forceZipLoad = true;
@@ -959,13 +1179,15 @@ namespace ares {
     LOGI("Ares: Loading core for %s", (const char*)identifiedSystem);
     if (identifiedSystem == "Nintendo 64" || identifiedSystem == "Nintendo 64DD") {
       ::ares::Nintendo64::vulkan.enable = true; // DEFAULT TO VULKAN
-      // Always enable 64DD port for N64 to allow disc expansion and hot-plugging via menu
-      bool is64DD = true;
+      if (n64UpscaleFactor < 1) n64UpscaleFactor = 1;
+      ::ares::Nintendo64::vulkan.internalUpscale = (u32)n64UpscaleFactor;
+      ::ares::Nintendo64::vulkan.outputUpscale = (u32)n64UpscaleFactor;
+      bool is64DD = (identifiedSystem == "Nintendo 64DD" || extension == "ndd" || extension == "d64" || secondaryMedium != nullptr);
       ::ares::Nintendo64::system.expansionPak = n64ExpansionPak;
 
       const char* regionString = getRegion(
-          "[Nintendo] Nintendo 64DD (NTSC-U)",
-          "[Nintendo] Nintendo 64DD (NTSC-J)",
+          is64DD ? "[Nintendo] Nintendo 64DD (NTSC-U)" : "[Nintendo] Nintendo 64 (NTSC)",
+          is64DD ? "[Nintendo] Nintendo 64DD (NTSC-J)" : "[Nintendo] Nintendo 64 (NTSC-J)",
           "[Nintendo] Nintendo 64 (PAL)"
       );
 
@@ -1011,9 +1233,21 @@ namespace ares {
        success = ::ares::WonderSwan::load(root, "[Bandai] WonderSwan Color");
     } else if (identifiedSystem == "WonderSwan") {
        success = ::ares::WonderSwan::load(root, "[Bandai] WonderSwan");
+    } else if (identifiedSystem == "Neo Geo Pocket" || identifiedSystem == "Neo Geo Pocket Color") {
+       success = ::ares::NeoGeoPocket::load(root, (identifiedSystem == "Neo Geo Pocket Color") ? "[SNK] Neo Geo Pocket Color" : "[SNK] Neo Geo Pocket");
+    } else if (identifiedSystem == "Neo Geo") {
+       success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo MVS");
+       if(!success) success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo AES");
+    } else if (identifiedSystem == "Atari 2600") {
+       success = ::ares::Atari2600::load(root, getRegion("[Atari] Atari 2600 (NTSC)", "[Atari] Atari 2600 (NTSC)", "[Atari] Atari 2600 (PAL)"));
+    } else if (identifiedSystem == "ColecoVision") {
+       success = ::ares::ColecoVision::load(root, getRegion("[Coleco] ColecoVision (NTSC)", "[Coleco] ColecoVision (NTSC)", "[Coleco] ColecoVision (PAL)"));
+    } else if (identifiedSystem == "SG-1000") {
+       success = ::ares::SG1000::load(root, getRegion("[Sega] SG-1000 (NTSC)", "[Sega] SG-1000 (NTSC)", "[Sega] SG-1000 (PAL)"));
+    } else if (identifiedSystem == "ZX Spectrum") {
+       success = ::ares::ZXSpectrum::load(root, "[Sinclair] ZX Spectrum");
     } else {
-        LOGI("Ares: Falling back to Aleck 64 for Arcade");
-        success = ::ares::Nintendo64::load(root, "[SETA] Aleck 64");
+        LOGE("Ares: Unidentified system (no load case)");
     }
 
     if (success && root) {
@@ -1041,6 +1275,27 @@ namespace ares {
       }
 
       connectDevices(root);
+
+      // Import game save data (SRAM, EEPROM, memcards) — always restores.
+      // The Auto-Load Memory toggle controls the "Auto" save-state slot only.
+      if (savesPath && currentMedium && currentMedium->pak) {
+        string saveDir = {savesPath, "/", identifiedSystem, "/"};
+        directory::create(saveDir);
+        for (auto& saveNode : currentMedium->pak->files()) {
+          string fileName = saveNode->name();
+          if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
+              !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
+              !fileName.endsWith(".sav") && !fileName.endsWith(".fla")) continue;
+          string fullPath = {saveDir, fileName};
+          auto existing = file::read(fullPath);
+          if (existing.size() == 0) continue;
+          if (auto fp = currentMedium->pak->write(fileName)) {
+            fp->write({existing.data(), (u32)existing.size()});
+            LOGI("Saves: imported %s (%zu bytes) for %s", (const char*)fileName, existing.size(), (const char*)identifiedSystem);
+          }
+        }
+      }
+
       root->power();
 
       if (skipBootRom) {
@@ -1081,35 +1336,22 @@ namespace ares {
     return false;
   }
 
-  auto runFrame() -> void {
-    if (isPausedAtomic) return;
-    lock_guard<std::recursive_mutex> lock(systemMutex);
-    if (root) {
-        if (nativeInputLogCounter++ % 3600 == 0) {
-             LOGI("PhobosStatus: Emulation Running. LS(%.2f, %.2f) Buttons=%08x", (double)inputState.lx.load(), (double)inputState.ly.load(), (u32)inputState.buttons.load());
-        }
-        root->run();
-        if (::ares::Nintendo64::vulkan.implementation) {
-            if (const char* err = ::ares::Nintendo64::vulkan.crashed()) {
-                LOGE("N64 RDP CRASH: %s", err);
-            }
-        }
-    }
-  }
   auto setFastBoot(bool enabled) -> void { fastBootAtomic = enabled; LOGI("Fast boot %s", enabled ? "enabled" : "disabled"); }
-  auto setPause(bool paused) -> void { isPausedAtomic = paused; isPaused = paused; LOGI("Emulation %s", paused ? "paused" : "resumed"); }
+  auto setAutoSaveMemory(bool enabled) -> void { autoSaveMemoryAtomic = enabled; LOGI("Auto-save memory %s", enabled ? "enabled" : "disabled"); }
+  auto setAutoLoadMemory(bool enabled) -> void { autoLoadMemoryAtomic = enabled; LOGI("Auto-load memory %s", enabled ? "enabled" : "disabled"); }
+  auto setPause(bool paused) -> void { isPausedAtomic = paused; LOGI("Emulation %s", paused ? "paused" : "resumed"); }
   auto setFastForward(bool enabled) -> void { fastForwardAtomic = enabled; LOGI("Fast forward %s", enabled ? "enabled" : "disabled"); }
   auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
   auto resetSystem() -> void {
     resetRequestedAtomic.store(true);
     LOGI("System reset requested");
   }
-  auto frameAdvance() -> void { lock_guard<recursive_mutex> lock(systemMutex); if (root) root->run(); }
+  auto frameAdvance() -> void { lock_guard<recursive_mutex> lock(runMutex); if (root) root->run(); }
   auto setMuteAudio(bool muted) -> void { muteAudioAtomic = muted; }
   auto setShader(const char* path) -> bool { return true; }
   auto saveState(const char* path) -> bool {
     bool wasPaused = isPausedAtomic.exchange(true);
-    lock_guard<recursive_mutex> lock(systemMutex);
+    lock_guard<recursive_mutex> lock(runMutex);
     if (!root) { isPausedAtomic.store(wasPaused); return false; }
     auto s = root->serialize(true);
     bool result = nall::file::write(path, {s.data(), s.size()});
@@ -1119,7 +1361,7 @@ namespace ares {
   }
   auto loadState(const char* path) -> bool {
     bool wasPaused = isPausedAtomic.exchange(true);
-    lock_guard<recursive_mutex> lock(systemMutex);
+    lock_guard<recursive_mutex> lock(runMutex);
     if (!root) { isPausedAtomic.store(wasPaused); return false; }
 
     auto totalStart = std::chrono::steady_clock::now();
@@ -1148,9 +1390,20 @@ namespace ares {
     isPausedAtomic.store(wasPaused);
     return result;
   }
-  auto setLogLevel(s32 level) -> void { currentLogLevel = (LogLevel)level; }
+  auto setLogLevel(s32 level) -> void { /* retained for JNI API compatibility; log verbosity no longer filters frontend logs */ }
   auto setRegion(s32 regionIndex) -> void { regionPreference = regionIndex; }
-  auto setN64Renderer(s32 mode) -> void { n64RendererMode = mode; LOGI("N64 renderer set to %s", mode == 0 ? "Vulkan" : "Software"); }
+  auto setN64Upscale(s32 factor) -> void {
+    if (factor < 1) factor = 1;
+    n64UpscaleFactor = factor;
+    LOGI("N64 upscale factor set to %dx", factor);
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    if (root && root->name() == "Nintendo 64") {
+        #if defined(CORE_N64)
+        ::ares::Nintendo64::vulkan.internalUpscale = (u32)factor;
+        ::ares::Nintendo64::vulkan.outputUpscale = (u32)factor;
+        #endif
+    }
+  }
   auto setN64Recompiler(bool enabled) -> void {
     n64Recompiler = enabled;
     LOGI("N64 recompiler set to %s", enabled ? "enabled" : "disabled");
@@ -1183,6 +1436,16 @@ namespace ares {
         connectDevices(root);
     }
   }
+  // Runtime analog toggle: flips ps1AnalogMode and re-allocates controller
+  // port 1 to swap between DualShock and Digital Gamepad.
+  auto togglePs1AnalogMode() -> bool {
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    if (!root || root->name() != "PlayStation") return false;
+    ps1AnalogMode = !ps1AnalogMode;
+    LOGI("PS1 analog toggle -> %d", (int)ps1AnalogMode);
+    connectDevices(root);
+    return true;
+  }
   auto setStickToDpad(bool enabled) -> void {
     // Deprecated
   }
@@ -1206,7 +1469,7 @@ namespace ares {
   }
 
   auto setNativeLibraryDir(const char* path) -> void { nativeLibraryDir = path ? (string)path : ""; LOGI("Native library dir set: %s", (const char*)nativeLibraryDir); }
-  auto setFirmwarePath(const char* path) -> void { firmwarePath = path ? (string)path : ""; }
+  auto setFirmwarePath(const char* path) -> void { LOGI("Firmware path set: %s", path ? path : ""); }
   auto mapFirmwareFile(const char* name, const char* path) -> void { firmwareMap[name] = path ? (string)path : ""; LOGI("Firmware mapped: %s -> %s", name, (const char*)path); }
   auto setHomePath(const char* path) -> void {
     homePath = path ? (string)path : "";
@@ -1216,6 +1479,10 @@ namespace ares {
       if (!p.endsWith("/")) p.append("/");
       return p;
     });
+  }
+  auto setSavesPath(const char* path) -> void {
+    savesPath = path ? (string)path : "";
+    LOGI("Saves path set: %s", (const char*)savesPath);
   }
 
   auto loadSecondaryRom(const char* systemNamePtr, const char* uriPtr) -> bool {

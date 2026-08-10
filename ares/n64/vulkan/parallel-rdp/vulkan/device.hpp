@@ -281,6 +281,8 @@ public:
 	void submit(CommandBufferHandle &cmd, Fence *fence = nullptr,
 	            unsigned semaphore_count = 0, Semaphore *semaphore = nullptr);
 
+	bool is_device_lost = false;
+
 	void submit_empty(CommandBuffer::Type type,
 	                  Fence *fence = nullptr,
 	                  SemaphoreHolder *semaphore = nullptr);

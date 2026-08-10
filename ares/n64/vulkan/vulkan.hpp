@@ -1,4 +1,5 @@
 #include "rdp_device.hpp"
+#include <mutex>
 
 namespace ares::Nintendo64 {
 
@@ -17,6 +18,17 @@ struct Vulkan {
 
   struct Implementation;
   Implementation* implementation = nullptr;
+
+  // Serializes access to `implementation` (and its scanout buffer) between the
+  // emulation thread (load/unload/render/scanoutAsync/...) and the video screen
+  // thread (VI::refresh, platform->video).
+  //
+  // mapScanoutRead() acquires this lock and holds it until unmapScanoutRead(),
+  // so the implementation (and its mapped scanout buffer) cannot be destroyed
+  // by a concurrent reset (System::power -> vulkan.unload/load) while the
+  // screen thread is copying pixels out of it.
+  std::mutex mutex;
+  std::unique_lock<std::mutex> scanoutLock;
 
   bool enable = true;
   bool disableVideoInterfaceProcessing = false;

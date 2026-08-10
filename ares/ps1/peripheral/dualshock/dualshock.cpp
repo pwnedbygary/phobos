@@ -2,6 +2,10 @@
 // However, we start up in Analog Mode due to there not being
 // enough buttons to properly map the "Analog" button on the controller
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
 DualShock::DualShock(Node::Port parent) {
   node = parent->append<Node::Peripheral>("DualShock");
 
@@ -45,6 +49,27 @@ auto DualShock::reset() -> void {
 
 auto DualShock::acknowledge() -> bool {
   return state != State::Idle;
+}
+
+auto DualShock::toggleAnalogMode() -> bool {
+  setAnalogMode(!analogMode);
+  return true;
+}
+
+// Serve the next queued response byte without requiring a host byte first.
+// Ape Escape sends only `01 42` per poll and reads the full 8-byte response
+// from SIO RX via Peripheral::receive(); popping here hands the queued bytes
+// straight to the game (the bus() select-path never drains them).
+auto DualShock::popResponse() -> s32 {
+  if(outputData.empty()) return -1;
+  u8 out = outputData.front();
+  outputData.erase(outputData.begin());
+  commandStep++;
+  if(outputData.empty()) {
+    commandStep = 0;
+    state = State::Idle;
+  }
+  return out;
 }
 
 auto DualShock::active() -> bool {
@@ -104,7 +129,11 @@ auto DualShock::bus(u8 data) -> u8 {
   }
 
   //if there is data in the output queue, return that
-  if(outputData.size() > 0) {
+  // Ape Escape sends `01 42` and does NOT clock out the response bytes (it
+  // reads them from SIO RX instead). The next `01` select must NOT pop a stale
+  // response byte (that shifts every poll by one); it starts a fresh transfer
+  // below (Idle clears the leftover queue).
+  if(outputData.size() > 0 && input != 0x01) {
     output = outputData.front();
     outputData.erase(outputData.begin());
     commandStep++;
@@ -119,6 +148,10 @@ auto DualShock::bus(u8 data) -> u8 {
 
   case State::Idle: {
     command = 0;
+    // Fresh select: discard any leftover response from a poll the game didn't
+    // fully clock out, so the byte stream stays aligned.
+    outputData.clear();
+    commandStep = 0;
     if(input != 0x01) {
       _active = false;
       break;
@@ -139,9 +172,9 @@ auto DualShock::bus(u8 data) -> u8 {
 
     //Global commands: these work during any operation mode
     switch(input) {
-      case 0x42: { 
+      case 0x42: {
         auto v = readPad();
-        outputData.insert(outputData.end(), v.begin(), v.end()); 
+        outputData.insert(outputData.end(), v.begin(), v.end());
       } break;
       case 0x43: {
         if(configMode) { outputData.insert(outputData.end(), {0x00,0x00,0x00,0x00,0x00,0x00}); }
@@ -223,87 +256,46 @@ auto DualShock::readPad() -> std::vector<u8> {
 
   if(!analogMode && !configMode) return result;
 
-  auto cardinalMax = 127.5;
-  auto diagonalMax = 127.5;
-  auto innerDeadzone = 6.0; //missing information on deadzone for DualShock potentiometers; use arbitrary number roughly 4.7% of cardinalMax instead (common software default in gaming industry seems to be 5.0%) 
-  auto saturationRadius = (innerDeadzone + diagonalMax + sqrt(pow(innerDeadzone + diagonalMax, 2.0) - 2.0 * sqrt(2.0) * diagonalMax * innerDeadzone)) / sqrt(2.0); //from linear response curve function within axis->processDeadzoneAndResponseCurve, substitute saturationRadius * sqrt(2) / 2 for right-hand lengthAbsolute and set diagonalMax as the result then solve for saturationRadius
-  auto offset = -0.5;
+  // LINEAR response mapping (Phobos): replace ares' aggressive response curve
+  // (which saturates ~30% of stick travel and makes small deflections nearly
+  // dead — the "character twitches instead of walking" symptom) with a clean
+  // linear map: full stick deflection -> full 0..255 byte range. This matches
+  // the smooth, immediate analog feel of the N64 core. A tiny deadzone (~3%)
+  // absorbs stick noise at rest only.
+  const double half = 127.5;
+  const double deadzone = 4.0;  // raw units out of ±32767 (~0.012%)
+
+  auto linearize = [&](s64 raw) -> u8 {
+    if(raw > -deadzone && raw < deadzone) return (u8)128;  // centered
+    double v = (double)raw / 32767.0;                      // -1..1
+    if(v < -1.0) v = -1.0;
+    if(v > 1.0) v = 1.0;
+    return (u8)(v * half + half);                          // 0..255
+  };
 
   platform->input(rx);
   platform->input(ry);
-
-  //scale {-32767 ... +32767} to {-saturationRadius + offset ... +saturationRadius + offset}
-  auto arx = axis->setOperatingRange(rx->value(), saturationRadius, offset);
-  auto ary = axis->setOperatingRange(ry->value(), saturationRadius, offset);
-
-  //create inner axial dead-zone in range {-innerDeadzone ... +innerDeadzone} and scale from it up to saturationRadius
-  arx = axis->processDeadzoneAndResponseCurve(arx, innerDeadzone, saturationRadius, offset);
-  ary = axis->processDeadzoneAndResponseCurve(ary, innerDeadzone, saturationRadius, offset);
-
-  auto scaledLengthRightStick = hypot(arx - offset, ary - offset);
-  if(scaledLengthRightStick > saturationRadius) {
-    arx = axis->revisePosition(arx, scaledLengthRightStick, saturationRadius, offset);
-    ary = axis->revisePosition(ary, scaledLengthRightStick, saturationRadius, offset);
-  }
-
-  //let cardinalMax and diagonalMax define boundaries and restrict to a square gate
-  double arxBounded = 0.0;
-  double aryBounded = 0.0;
-  axis->applyGateBoundaries(innerDeadzone, cardinalMax, diagonalMax, arx, ary, offset, arxBounded, aryBounded);
-  arx = arxBounded;
-  ary = aryBounded;
-
-  //keep cardinal input within positive and negative bounds of cardinalMax
-  arx = axis->clampAxisToNearestBoundary(arx, offset, cardinalMax);
-  ary = axis->clampAxisToNearestBoundary(ary, offset, cardinalMax);
-
-  //add epsilon to counteract floating point precision error
-  arx = axis->counteractPrecisionError(arx);
-  ary = axis->counteractPrecisionError(ary);
-
-  // Standard DualShock packet order:
-  // Byte 5: Right Stick X, Byte 6: Right Stick Y
-  // Byte 7: Left Stick X, Byte 8: Left Stick Y
-  result.push_back(u8(arx + 128.0));
-  result.push_back(u8(ary + 128.0));
+  u8 bRX = linearize(rx->value());
+  u8 bRY = linearize(ry->value());
+  result.push_back(bRX);
+  result.push_back(bRY);
 
   platform->input(lx);
   platform->input(ly);
+  u8 bLX = linearize(lx->value());
+  u8 bLY = linearize(ly->value());
 
-  auto alx = axis->setOperatingRange(lx->value(), saturationRadius, offset);
-  auto aly = axis->setOperatingRange(ly->value(), saturationRadius, offset);
-
-  alx = axis->processDeadzoneAndResponseCurve(alx, innerDeadzone, saturationRadius, offset);
-  aly = axis->processDeadzoneAndResponseCurve(aly, innerDeadzone, saturationRadius, offset);
-
-  auto scaledLengthLeftStick = hypot(alx - offset, aly - offset);
-  if(scaledLengthLeftStick > saturationRadius) {
-    alx = axis->revisePosition(alx, scaledLengthLeftStick, saturationRadius, offset);
-    aly = axis->revisePosition(aly, scaledLengthLeftStick, saturationRadius, offset);
-  }
-
-  double alxBounded = 0.0;
-  double alyBounded = 0.0;
-  axis->applyGateBoundaries(innerDeadzone, cardinalMax, diagonalMax, alx , aly, offset, alxBounded, alyBounded);
-  alx = alxBounded;
-  aly = alyBounded;
-
-  alx = axis->clampAxisToNearestBoundary(alx, offset, cardinalMax);
-  aly = axis->clampAxisToNearestBoundary(aly, offset, cardinalMax);
-
-  alx = axis->counteractPrecisionError(alx);
-  aly = axis->counteractPrecisionError(aly);
-
-  u8 bRX = u8(arx + 128.0);
-  u8 bRY = u8(ary + 128.0);
-  u8 bLX = u8(alx + 128.0);
-  u8 bLY = u8(aly + 128.0);
-
+  // TEMP DIAG: report the full packet the game receives (buttons + sticks).
+  #if defined(__ANDROID__)
   static u64 readTraceCount = 0;
-  if(readTraceCount++ % 60 == 0) {
-    debug(unusual, "[DualShockTrace] analogMode=", (int)analogMode, " configMode=", (int)configMode,
-          " RX=", (int)bRX, " RY=", (int)bRY, " LX=", (int)bLX, " LY=", (int)bLY);
+  if(readTraceCount++ % 30 == 0) {
+    __android_log_print(ANDROID_LOG_INFO, "PhobosDualShock",
+      "analogMode=%d configMode=%d B1=%02x B2=%02x RX=%u RY=%u LX=%u LY=%u",
+      (int)analogMode, (int)configMode,
+      (unsigned)result[0], (unsigned)result[1],
+      (unsigned)bRX, (unsigned)bRY, (unsigned)bLX, (unsigned)bLY);
   }
+  #endif
 
   result.push_back(bLX);
   result.push_back(bLY);

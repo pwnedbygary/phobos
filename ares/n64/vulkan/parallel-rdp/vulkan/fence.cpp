@@ -59,15 +59,16 @@ void FenceHolder::wait()
 		info.semaphoreCount = 1;
 		info.pSemaphores = &timeline_semaphore;
 		info.pValues = &timeline_value;
-		VkResult res = table.vkWaitSemaphores(device->get_device(), &info, UINT64_MAX);
-		if (res != VK_SUCCESS)
+		// Use 500ms timeout instead of UINT64_MAX to prevent Adreno GPU driver TDR resets
+		VkResult res = table.vkWaitSemaphores(device->get_device(), &info, 500000000ULL);
+		if (res != VK_SUCCESS && res != VK_TIMEOUT)
 			LOGE("Failed to wait for timeline semaphore! Result: %d\n", (int)res);
 		else
 			observed_wait = true;
 	}
 	else
 	{
-		if (table.vkWaitForFences(device->get_device(), 1, &fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+		if (table.vkWaitForFences(device->get_device(), 1, &fence, VK_TRUE, 500000000ULL) != VK_SUCCESS)
 			LOGE("Failed to wait for fence!\n");
 		else
 			observed_wait = true;

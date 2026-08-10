@@ -70,6 +70,7 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             FirmwareInfo("Neo Geo AES", "BIOS", "World", "fw_ng_aes"),
             FirmwareInfo("Neo Geo CD", "BIOS", "World", "fw_ng_cd"),
             FirmwareInfo("Neo Geo MVS", "BIOS", "World", "fw_ng_mvs"),
+            FirmwareInfo("Neo Geo", "Universal BIOS", "World", "fw_ng_bios"),
             FirmwareInfo("Neo Geo Pocket", "BIOS", "World", "fw_ngp"),
             FirmwareInfo("Neo Geo Pocket Color", "BIOS", "World", "fw_ngpc"),
             FirmwareInfo("Nintendo 64", "PIF", "US", "fw_n64_pif_ntsc"),

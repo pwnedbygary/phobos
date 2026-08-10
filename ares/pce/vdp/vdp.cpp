@@ -1,3 +1,4 @@
+
 namespace ares::PCEngine {
 
 VDPBase vdp;

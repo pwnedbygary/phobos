@@ -25,7 +25,8 @@ struct PCD : Thread {
     } memory;
   } debugger;
 
-  static auto Present() -> bool { return true; }
+  // Present() must be at file scope (after extern PCD pcd).
+  static auto Present() -> bool;
 
   auto title() const -> string { return information.title; }
   auto bramEnable() const -> bool { return io.bramEnable; }
@@ -497,3 +498,5 @@ struct PCD : Thread {
 };
 
 extern PCD pcd;
+
+inline auto PCD::Present() -> bool { return pcd.fd.operator bool(); }

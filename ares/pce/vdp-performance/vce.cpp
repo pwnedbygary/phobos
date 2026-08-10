@@ -63,6 +63,7 @@ auto VCE::power() -> void {
   cram.address = 0;
 
   io = {};
+  io.clock = 4;  // default 5.37 MHz dot clock (slowest); CPU sets CR register later
 }
 
 auto VCE::CRAM::read(n9 address) -> n9 {

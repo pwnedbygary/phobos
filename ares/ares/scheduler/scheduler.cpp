@@ -1,6 +1,7 @@
 namespace ares {
 inline auto Scheduler::reset() -> void {
   _threads.clear();
+  Thread::EntryPoints().clear();
   _host = nullptr;
   _resume = nullptr;
   _primary = nullptr;

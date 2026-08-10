@@ -42,8 +42,12 @@ auto CPU::power() -> void {
 
   PC = 0x0000;  //reset vector address
 
-  slot[0] = {3, 0, {0, 0, 0, 0}};
-  slot[1] = {2, 1, {0, 0, 0, 0}};
+  // MSX boot state: slot 0 (BIOS ROM) expanded across pages 0-1 and 3
+  // so the Z80 fetches the reset vector from ROM at 0x0000. The BIOS
+  // init code will reconfigure to running layout (page 0→RAM).
+  // Without this, rAM zeros cause an infinite NOP-loop — black screen.
+  slot[0] = {0, 0, {0, 0, 0, 0}};
+  slot[1] = {0, 1, {0, 0, 0, 0}};
   slot[2] = {1, 2, {0, 0, 0, 0}};
   slot[3] = {0, 3, {0, 0, 0, 0}};
 

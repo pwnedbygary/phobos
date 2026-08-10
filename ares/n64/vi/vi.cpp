@@ -149,8 +149,12 @@ auto VI::refresh() -> void {
         }
       }
     }
-    vulkan.unmapScanoutRead();
+    // endScanout() must run before unmapScanoutRead() so it stays inside the
+    // lock window held by mapScanoutRead()/unmapScanoutRead(); otherwise the
+    // Vulkan implementation could be destroyed by a concurrent reset while
+    // endScanout() dereferences it.
     vulkan.endScanout();
+    vulkan.unmapScanoutRead();
 
     if(Model::Aleck64()) aleck64.vdp.render(screen); //aleck64 supports overlay graphics
     return;

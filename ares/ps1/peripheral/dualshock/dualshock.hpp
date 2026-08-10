@@ -29,6 +29,15 @@ struct DualShock : PeripheralDevice {
   auto bus(u8 data) -> u8 override;
   auto invalid(u8 data) -> u8;
   auto active() -> bool override;
+  auto toggleAnalogMode() -> bool override;
+  auto popResponse() -> s32 override;
+  auto setAnalogMode(bool enabled) -> void {
+    analogMode = enabled;
+    state = State::Idle;
+    _active = false;
+    outputData.clear();
+    commandStep = 0;
+  }
 
   std::vector<u8> readPad();
 

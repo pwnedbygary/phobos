@@ -1399,8 +1399,12 @@ void Device::submit_empty_inner(QueueIndices physical_type, InternalFence *fence
 	auto end_ts = write_calibrated_timestamp_nolock();
 	register_time_interval_nolock("CPU", std::move(start_ts), std::move(end_ts), "submit");
 
-	if (result != VK_SUCCESS)
+	if (result != VK_SUCCESS) {
 		LOGE("vkQueueSubmit2 failed (code: %d).\n", int(result));
+		if (result == VK_ERROR_DEVICE_LOST) {
+			is_device_lost = true;
+		}
+	}
 
 	if (!ext.vk12_features.timelineSemaphore)
 		data.need_fence = true;

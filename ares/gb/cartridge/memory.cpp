@@ -9,7 +9,7 @@ auto Cartridge::read(u32 cycle, n16 address, n8 data) -> n8 {
     }
 
     if(address >= 0x0200 && address <= 0x08ff && cycle == 2 && Model::GameBoyColor()) {
-      return system.bootROM.read(address - 0x100);
+      return system.bootROM.read(address);
     }
   }
 

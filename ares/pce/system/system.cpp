@@ -21,7 +21,7 @@ auto load(Node::System& node, string name) -> bool {
 }
 
 auto option(string name, string value) -> bool {
-  if(name == "Pixel Accuracy") vdp.setAccurate(true); // Forced: scanline renderer is too buggy
+  if(name == "Pixel Accuracy") vdp.setAccurate(value == "true");
   return true;
 }
 
@@ -46,7 +46,7 @@ auto System::run() -> void {
 
 auto System::load(Node::System& root, string name) -> bool {
   if(node) unload();
-  vdp.setAccurate(true);
+  vdp.setAccurate(true);  // use accurate renderer
 
   information = {};
   if(name.find("PC Engine")) {

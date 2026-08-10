@@ -40,7 +40,6 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"WonderSwan Color", {"wsc"}},
     {"MSX", {"msx", "rom", "wav", "tzx", "tsx", "cas"}},
     {"MSX2", {"msx2", "rom", "wav", "tzx", "tsx", "cas"}},
-    {"Arcade", {"zip"}},
 };
 
 extern "C" JNIEXPORT jobject JNICALL
@@ -172,8 +171,8 @@ Java_com_phobos_emulator_PhobosCore_setRegion(JNIEnv* env, jobject, jint regionI
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_phobos_emulator_PhobosCore_setN64Renderer(JNIEnv* env, jobject, jint mode) {
-    ares::setN64Renderer((s32)mode);
+Java_com_phobos_emulator_PhobosCore_setN64Upscale(JNIEnv* env, jobject, jint factor) {
+    ares::setN64Upscale((s32)factor);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -196,6 +195,11 @@ Java_com_phobos_emulator_PhobosCore_setCustomDriverPath(JNIEnv* env, jobject, js
 extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setPs1AnalogMode(JNIEnv* env, jobject, jboolean enabled) {
     ares::setPs1AnalogMode(enabled);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_phobos_emulator_PhobosCore_togglePs1AnalogMode(JNIEnv* env, jobject) {
+    return ares::togglePs1AnalogMode() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -226,11 +230,6 @@ Java_com_phobos_emulator_PhobosCore_setSurface(JNIEnv* env, jobject, jobject sur
 extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setEmulationRunning(JNIEnv* env, jobject, jboolean running) {
     ares::setEmulationRunning(running);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_phobos_emulator_PhobosCore_runFrame(JNIEnv* env, jobject) {
-    // No-op if using native thread
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -306,6 +305,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setHomePath(JNIEnv* env, jobject, jstring path) {
     const char* nativePath = env->GetStringUTFChars(path, 0);
     ares::setHomePath(nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setSavesPath(JNIEnv* env, jobject, jstring path) {
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    ares::setSavesPath(nativePath);
     env->ReleaseStringUTFChars(path, nativePath);
 }
 

@@ -83,15 +83,17 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                             val isDpadTarget = mappingTarget!! in (1 shl 0)..(1 shl 3)
                             val isMainStickAxis = i == MotionEvent.AXIS_X || i == MotionEvent.AXIS_Y ||
                                                   i == MotionEvent.AXIS_Z || i == MotionEvent.AXIS_RZ
-                            val isHatAxis = i == 15 || i == 16
 
                             // PRIORITY GUARD:
-                            // If we are mapping D-Pad (Up, Down, Left, Right), 
-                            // ignore main stick axes (0, 1, 11, 14) and Hat axes (15, 16)
-                            // so D-Pad is mapped only to key presses or actual hat buttons.
-                            if (isDpadTarget && (isMainStickAxis || isHatAxis)) {
+                            // D-Pad targets may be bound to key presses (k:19-22) or hat
+                            // axes (a:15/a:16) — most controllers (incl. handheld built-in
+                            // controls) report the D-pad on ABS_HAT0X/Y, and the keys and
+                            // hats arrive TOGETHER. Only the main analog stick axes (0, 1,
+                            // 11, 14) are excluded from D-Pad targets so the stick can't
+                            // be mistaken for the D-pad.
+                            if (isDpadTarget && isMainStickAxis) {
                                 if (settings.logVerbosity.ordinal <= LogLevel.DEBUG.ordinal) {
-                                    Log.d("PhobosInputDebug", "IGNORE AXIS for D-Pad target: Axis=$i")
+                                    Log.d("PhobosInputDebug", "IGNORE stick axis for D-Pad target: Axis=$i")
                                 }
                                 continue
                             }

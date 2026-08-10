@@ -13,6 +13,7 @@ struct PeripheralPort {
   auto acknowledge() -> bool;
   auto active() -> bool;
   auto bus(u8 data) -> u8;
+  auto popResponse() -> s32 { if(device) return device->popResponse(); return -1; }
 
   auto serialize(serializer&) -> void;
 

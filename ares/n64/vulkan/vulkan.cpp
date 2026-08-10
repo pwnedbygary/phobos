@@ -44,6 +44,7 @@ struct Vulkan::Implementation {
 };
 
 auto Vulkan::load(Node::Object object) -> bool {
+  std::lock_guard<std::mutex> lock(mutex);
   __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Vulkan::load called, enable = %d", vulkan.enable);
   if (vulkan.enable) {
     Util::set_thread_logging_interface(&loggingInterface);
@@ -73,6 +74,7 @@ auto Vulkan::load(Node::Object object) -> bool {
 }
 
 auto Vulkan::unload() -> void {
+  std::lock_guard<std::mutex> lock(mutex);
   if (rdram.hidden.data && (!implementation || rdram.hidden.data != (u8*)implementation->processor->begin_read_hidden_rdram())) {
     free(rdram.hidden.data);
   }
@@ -82,6 +84,7 @@ auto Vulkan::unload() -> void {
 }
 
 auto Vulkan::render() -> bool {
+  std::lock_guard<std::mutex> lock(mutex);
   if(!implementation) return false;
 
   static constexpr u32 commandLength[64] = {
@@ -150,24 +153,20 @@ auto Vulkan::render() -> bool {
 }
 
 auto Vulkan::frame() -> void {
+  std::lock_guard<std::mutex> lock(mutex);
   if(!implementation) return;
   implementation->processor->begin_frame_context();
 }
 
 auto Vulkan::writeWord(u32 address, u32 data) -> void {
+  std::lock_guard<std::mutex> lock(mutex);
   if(!implementation) return;
   implementation->processor->set_vi_register(::RDP::VIRegister(address), data);
 }
 
 auto Vulkan::scanoutAsync(bool field) -> bool {
+  std::lock_guard<std::mutex> lock(mutex);
   if(!implementation) return false;
-
-  { //wait until we're done reading in thread before we clobber the readback buffer
-    std::unique_lock<std::mutex> lock{implementation->lock};
-    implementation->condition.wait(lock, [this]() {
-      return implementation->scanoutCount == implementation->endCount;
-    });
-  }
 
   implementation->processor->set_vi_register(::RDP::VIRegister::VCurrentLine, field);
 
@@ -200,6 +199,9 @@ auto Vulkan::scanoutAsync(bool field) -> bool {
 }
 
 auto Vulkan::mapScanoutRead(const u8*& rgba, u32& width, u32& height) -> void {
+  // Acquire and hold the lock until unmapScanoutRead() so the implementation
+  // (and its scanout buffer) cannot be destroyed while we are reading it.
+  if(!scanoutLock.owns_lock()) scanoutLock = std::unique_lock<std::mutex>(mutex);
   if(!implementation || !implementation->scanout.fence || !implementation->scanout.width || !implementation->scanout.height) {
     rgba = nullptr;
     width = 0;
@@ -216,6 +218,8 @@ auto Vulkan::unmapScanoutRead() -> void {
   if(implementation && implementation->scanout.buffer) {
     implementation->device.unmap_host_buffer(*implementation->scanout.buffer, ::Vulkan::MEMORY_ACCESS_READ_BIT);
   }
+  // Release the lock acquired by mapScanoutRead().
+  if(scanoutLock.owns_lock()) scanoutLock.unlock();
 }
 
 auto Vulkan::endScanout() -> void {
@@ -228,6 +232,7 @@ auto Vulkan::endScanout() -> void {
 }
 
 auto Vulkan::crashed() -> const char* {
+  std::lock_guard<std::mutex> lock(mutex);
   if(implementation) return implementation->crash_error;
   return nullptr;
 }

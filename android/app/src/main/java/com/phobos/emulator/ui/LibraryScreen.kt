@@ -29,13 +29,13 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         Image(
-            painter = painterResource(id = R.drawable.logo_phobos),
+            painter = painterResource(id = R.drawable.phobos_logo),
             contentDescription = null,
             modifier = Modifier
                 .size(400.dp)
                 .align(Alignment.BottomEnd)
                 .offset(x = 100.dp, y = 100.dp)
-                .alpha(0.05f),
+                .alpha(0.10f),
             contentScale = ContentScale.Fit
         )
 
@@ -43,7 +43,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Image(
-                        painter = painterResource(id = R.drawable.logo_phobos),
+                        painter = painterResource(id = R.drawable.phobos_logo),
                         contentDescription = "Phobos Logo",
                         modifier = Modifier.size(120.dp),
                         alpha = 0.3f
@@ -151,6 +151,6 @@ private fun getSystemIcon(system: String): Any {
     return if (assetName != null) {
         "file:///android_asset/platforms/$assetName.svg"
     } else {
-        R.drawable.logo_phobos
+        R.drawable.phobos_logo
     }
 }

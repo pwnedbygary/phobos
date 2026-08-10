@@ -7,6 +7,12 @@ struct PeripheralDevice {
   virtual auto acknowledge() -> bool { return 0; }
   virtual auto active() -> bool { return 0; }
   virtual auto bus(u8 data) -> u8 { return 0xff; }
+  // Optional runtime feature toggle (e.g. DualShock analog mode). Returns true
+  // if the device supports toggling and the state changed.
+  virtual auto toggleAnalogMode() -> bool { return false; }
+  // Serve a queued response byte without requiring a host byte first (some
+  // games read the full pad response from SIO RX). Returns -1 if none queued.
+  virtual auto popResponse() -> s32 { return -1; }
 };
 
 struct Peripheral : Memory::Interface {

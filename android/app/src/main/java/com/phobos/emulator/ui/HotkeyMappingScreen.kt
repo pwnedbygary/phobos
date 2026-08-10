@@ -50,7 +50,8 @@ fun HotkeyMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         "Quit Emulator" to "quit",
         "Capture Screenshot" to "screenshot",
         "Mute Audio" to "mute",
-        "Frame Advance" to "frame_advance"
+        "Frame Advance" to "frame_advance",
+        "Toggle PS1 Analog" to "analog_toggle"
     )
 
     // Finalize combo after 1 second of no activity
