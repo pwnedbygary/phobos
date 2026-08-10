@@ -3,6 +3,8 @@
 namespace ares::Nintendo64 {
 
 Vulkan vulkan;
+std::vector<uint8_t> Vulkan::pipelineCacheData;
+string Vulkan::pipelineCachePath;
 
 struct LoggingInterface : Util::LoggingInterface {
   auto log(const char* tag, const char* fmt, va_list va) -> bool {
@@ -14,7 +16,7 @@ struct LoggingInterface : Util::LoggingInterface {
 } loggingInterface;
 
 struct Vulkan::Implementation {
-  Implementation(u8* data, u32 size);
+  Implementation(u8* data, u32 size, const uint8_t* cacheData = nullptr, u32 cacheSize = 0);
   ~Implementation();
 
   ::Vulkan::Context context;
@@ -49,7 +51,19 @@ auto Vulkan::load(Node::Object object) -> bool {
   if (vulkan.enable) {
     Util::set_thread_logging_interface(&loggingInterface);
     delete implementation;
-    implementation = new Vulkan::Implementation(rdram.ram.data, rdram.ram.size);
+
+    // Load pipeline cache from disk (survives app restarts).
+    if (pipelineCacheData.empty() && pipelineCachePath.size() > 0) {
+      auto disk = nall::file::read(pipelineCachePath);
+      if (disk.size() > 0) {
+        pipelineCacheData.assign(disk.data(), disk.data() + disk.size());
+      }
+    }
+    // Inject saved pipeline cache BEFORE Implementation ctor so
+    // device.init_frame_contexts() sees it during pipeline creation.
+    std::vector<uint8_t> cacheCopy;
+    cacheCopy.swap(pipelineCacheData);
+    implementation = new Vulkan::Implementation(rdram.ram.data, rdram.ram.size, cacheCopy.data(), (u32)cacheCopy.size());
     if(!implementation->processor) {
       delete implementation;
       implementation = nullptr;
@@ -75,6 +89,28 @@ auto Vulkan::load(Node::Object object) -> bool {
 
 auto Vulkan::unload() -> void {
   std::lock_guard<std::mutex> lock(mutex);
+  // Save pipeline cache before tearing down the device
+  if (implementation && implementation->device.get_device() != VK_NULL_HANDLE) {
+    size_t cacheSize = implementation->device.get_pipeline_cache_size();
+    if (cacheSize > 0) {
+      pipelineCacheData.resize(cacheSize);
+      if (implementation->device.get_pipeline_cache_data(pipelineCacheData.data(), cacheSize)) {
+        __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Pipeline cache saved (%zu bytes)", cacheSize);
+        // Persist to disk for next app launch (alongside driver UUID
+        // so we can detect driver changes and invalidate stale caches).
+        if (pipelineCachePath.size() > 0) {
+          nall::file::write(pipelineCachePath, pipelineCacheData);
+          // Write UUID to sidecar so next load detects driver changes
+          string uuidPath = {pipelineCachePath, ".uuid"};
+          VkPhysicalDeviceProperties props;
+          vkGetPhysicalDeviceProperties(implementation->device.get_physical_device(), &props);
+          nall::file::write(uuidPath, {(u8*)props.pipelineCacheUUID, sizeof(props.pipelineCacheUUID)});
+        }
+      } else {
+        pipelineCacheData.clear();
+      }
+    }
+  }
   if (rdram.hidden.data && (!implementation || rdram.hidden.data != (u8*)implementation->processor->begin_read_hidden_rdram())) {
     free(rdram.hidden.data);
   }
@@ -237,7 +273,7 @@ auto Vulkan::crashed() -> const char* {
   return nullptr;
 }
 
-Vulkan::Implementation::Implementation(u8* data, u32 size) {
+Vulkan::Implementation::Implementation(u8* data, u32 size, const uint8_t* cacheData, u32 cacheSize) {
   __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Vulkan::Implementation constructor");
   if(!::Vulkan::Context::init_loader(nullptr, false)) {
     __android_log_print(ANDROID_LOG_ERROR, "PhobosVulkan", "Vulkan loader init failed");
@@ -249,7 +285,38 @@ Vulkan::Implementation::Implementation(u8* data, u32 size) {
     return;
   }
   device.set_context(context);
-  device.init_frame_contexts(3);
+
+  // Validate saved cache against the GPU's pipelineCacheUUID.
+  // If the driver or device changed (custom GPU driver swap, OS update),
+  // reject the stale cache so it doesn't poison pipeline creation.
+  if (cacheData && cacheSize > 0 && pipelineCachePath.size() > 0) {
+    string uuidPath = {pipelineCachePath, ".uuid"};
+    auto savedUUID = nall::file::read(uuidPath);
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(device.get_physical_device(), &props);
+    if (savedUUID.size() != sizeof(props.pipelineCacheUUID) ||
+        memcmp(savedUUID.data(), props.pipelineCacheUUID, sizeof(props.pipelineCacheUUID)) != 0) {
+      __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Pipeline cache: driver UUID changed, discarding stale cache");
+      nall::file::remove(pipelineCachePath);
+      nall::file::remove(uuidPath);
+      cacheData = nullptr; cacheSize = 0;
+      pipelineCacheData.clear();
+    }
+  }
+
+  // Always initialize the pipeline cache. On first load, pass null to
+  // create an empty cache that compiled shaders write into. On subsequent
+  // loads, pass saved data so the driver reuses cached binaries.
+  device.init_pipeline_cache(cacheData, cacheSize);
+  if (cacheData && cacheSize > 0) {
+    __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Pipeline cache loaded (%u bytes)", cacheSize);
+  } else {
+    __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Pipeline cache initialized (empty)");
+  }
+  // 4 frame contexts: 3 in-flight + 1 spare. Reduces GPU pipeline stalls
+  // on slower hardware (e.g. stock Adreno) when frames complete out-of-order
+  // due to driver-internal async compute scheduling.
+  device.init_frame_contexts(4);
 
   ::RDP::CommandProcessorFlags flags = ::RDP::COMMAND_PROCESSOR_FLAG_HOST_VISIBLE_HIDDEN_RDRAM_BIT;
   switch(vulkan.internalUpscale) {

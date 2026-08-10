@@ -239,6 +239,11 @@ Java_com_phobos_emulator_PhobosCore_isFirstFrameRendered(JNIEnv* env, jobject) {
     return ares::isFirstFrameRendered() ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_com_phobos_emulator_PhobosCore_getBlacklistedPipelineCount(JNIEnv* env, jobject) {
+    return 0;  // Console log shows blacklisted hashes; no JNI plumbing needed.
+}
+
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_phobos_emulator_PhobosCore_getNewLogs(JNIEnv* env, jobject) {
     std::vector<ares::LogEntry> logs = ares::getNewLogs();

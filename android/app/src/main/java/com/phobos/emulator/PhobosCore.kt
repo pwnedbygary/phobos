@@ -46,6 +46,7 @@ object PhobosCore {
     external fun mapFirmwareFile(name: String, path: String)
     external fun setSurface(surface: Any?)
     external fun isFirstFrameRendered(): Boolean
+    external fun getBlacklistedPipelineCount(): Int
     external fun getNewLogs(): List<LogEntry>
     external fun setInput(lx: Float, ly: Float, rx: Float, ry: Float, buttons: Int)
     external fun getPerformanceStats(): PerformanceStats

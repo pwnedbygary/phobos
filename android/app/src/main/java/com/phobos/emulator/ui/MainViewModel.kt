@@ -700,24 +700,23 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             // Sync current settings to native before loading
             val currentSettings = settings.value
             
-            // For Neo Geo, try to copy neogeo.zip from ROM folder OR firmware folder to mia_temp
+            // For Neo Geo, copy neogeo.zip to mia_temp via ContentResolver
+            // (firmware paths are content URIs, not real filesystem paths)
             if (systemName.contains("Neo Geo")) {
                 val miaTempPath = File(context.cacheDir, "mia_temp")
                 if (!miaTempPath.exists()) miaTempPath.mkdirs()
                 val destFile = File(miaTempPath, "neogeo.zip")
-
-                // Check firmware mapping first (if user scanned a BIOS)
-                val firmwareBios = currentSettings.systemFirmwarePaths["fw_ng_bios"]
-                if (firmwareBios != null) {
+                var copied = false
+                val firmwareUri = currentSettings.systemFirmwarePaths["fw_ng_bios"]
+                if (firmwareUri != null) {
                     try {
-                        val srcFile = File(firmwareBios)
-                        if (srcFile.exists()) {
-                            srcFile.copyTo(destFile, overwrite = true)
-                            Log.i("Phobos", "Auto-copied mapped neogeo.zip BIOS to mia_temp")
+                        context.contentResolver.openInputStream(Uri.parse(firmwareUri))?.use { input ->
+                            destFile.outputStream().use { output -> input.copyTo(output) }
                         }
-                    } catch (e: Exception) { Log.e("Phobos", "Failed to copy mapped neogeo.zip: ${e.message}") }
-                } else {
-                    // Fallback to searching ROM directory
+                        copied = destFile.exists()
+                    } catch (_: Exception) {}
+                }
+                if (!copied) {
                     rom.parentUri?.let { pUri ->
                         val parentDir = DocumentFile.fromTreeUri(context, pUri)
                         parentDir?.findFile("neogeo.zip")?.let { biosFile ->
@@ -725,11 +724,13 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                                 context.contentResolver.openInputStream(biosFile.uri)?.use { input ->
                                     destFile.outputStream().use { output -> input.copyTo(output) }
                                 }
-                                Log.i("Phobos", "Auto-copied neogeo.zip from ROM folder to mia_temp")
-                            } catch (e: Exception) { Log.e("Phobos", "Failed to copy neogeo.zip: ${e.message}") }
+                                copied = destFile.exists()
+                                if (copied) Log.i("Phobos", "Copied neogeo.zip from ROM folder")
+                            } catch (_: Exception) {}
                         }
                     }
                 }
+                if (copied) Log.i("Phobos", "neogeo.zip ready in mia_temp")
             }
             Log.d("Phobos", "Syncing settings to native: Driver='${currentSettings.customDriverPath}', Recompiler=${currentSettings.n64Recompiler}")
             

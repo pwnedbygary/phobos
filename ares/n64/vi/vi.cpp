@@ -79,7 +79,10 @@ auto VI::main() -> void {
       int halfline = io.vcounter << 1 | io.field;
       if(halfline >= io.halfLinesPerField+1) {
         io.vcounter = 0;
-        io.field += !io.halfLinesPerField.bit(0);
+        // Fix: properly toggle field for interlaced (even halfLinesPerField)
+        // and progressive (odd halfLinesPerField). Previously bit(0) check
+        // was inverted: odd→field locked 0→30fps+freeze (Conker).
+        io.field += io.halfLinesPerField.bit(0);
         if(++io.leapCounter == 5) io.leapCounter = 0;
       }
 
@@ -105,12 +108,15 @@ auto VI::main() -> void {
             mi.raise(MI::IRQ::VI);
         }
         if(!io.coincidence.bit(0)) {
-          int halfline = io.vcounter << 1 | io.field;
-          if(!io.field && halfline == io.coincidence)
+          // Fix: check coincidence against vcounter (field-agnostic) rather
+          // than halfline (field-aware). When coincidence==0, halfline
+          // on field 0 is always even, so halfline==coincidence is unreachable
+          // → VI interrupt never fires → Conker's BFD freezes at menu.
+          if(!io.field && io.vcounter == io.coincidence)
             mi.raise(MI::IRQ::VI);
-          if(io.field && halfline+1 == io.coincidence)
+          if(io.field && io.vcounter+1 == io.coincidence)
             mi.raise(MI::IRQ::VI);
-          if(!io.field && halfline == io.halfLinesPerField && io.coincidence == 0)
+          if(!io.field && io.vcounter == io.halfLinesPerField && io.coincidence == 0)
             mi.raise(MI::IRQ::VI);
         }
       }

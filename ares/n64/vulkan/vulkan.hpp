@@ -19,6 +19,13 @@ struct Vulkan {
   struct Implementation;
   Implementation* implementation = nullptr;
 
+  // Pipeline cache persists across Vulkan unload/load cycles. On unload(),
+  // device.get_pipeline_cache_data() captures all compiled shader variants.
+  // On next load(), the cache is injected via device.init_pipeline_cache()
+  // so the driver can reuse cached binaries — eliminating compilation stutter.
+  static std::vector<uint8_t> pipelineCacheData;
+  static string pipelineCachePath;
+
   // Serializes access to `implementation` (and its scanout buffer) between the
   // emulation thread (load/unload/render/scanoutAsync/...) and the video screen
   // thread (VI::refresh, platform->video).

@@ -1132,6 +1132,15 @@ Pipeline CommandBuffer::build_compute_pipeline(Device *device, const DeferredPip
 	}
 
 	VkPipeline compute_pipeline = VK_NULL_HANDLE;
+
+	// Blacklist: if this hash permanently failed before (e.g. stock Adreno
+	// can't compile certain SPIR-V shaders that Turnip handles fine),
+	// don't retry — it will fail again and the infinite retry loop drops
+	// FPS from 59→28 with cascading log spam.
+	static std::unordered_set<Util::Hash> failedComputeHashes;
+	if (failedComputeHashes.count(compile.hash))
+		return {};
+
 #ifdef GRANITE_VULKAN_FOSSILIZE
 	device->register_compute_pipeline(compile.hash, info);
 #endif
@@ -1148,8 +1157,10 @@ Pipeline CommandBuffer::build_compute_pipeline(Device *device, const DeferredPip
 
 	if (vr != VK_SUCCESS || compute_pipeline == VK_NULL_HANDLE)
 	{
-		if (vr < 0)
-			LOGE("Failed to create compute pipeline!\n");
+		if (vr < 0) {
+			failedComputeHashes.insert(compile.hash);
+			LOGE("Failed to create compute pipeline (hash %016llx, blacklisted)!\n", static_cast<unsigned long long>(compile.hash));
+		}
 		return {};
 	}
 
@@ -1532,6 +1543,11 @@ Pipeline CommandBuffer::build_graphics_pipeline(Device *device, const DeferredPi
 	}
 
 	VkPipeline pipeline = VK_NULL_HANDLE;
+
+	static std::unordered_set<Util::Hash> failedGraphicsHashes;
+	if (failedGraphicsHashes.count(compile.hash))
+		return {};
+
 #ifdef GRANITE_VULKAN_FOSSILIZE
 	device->register_graphics_pipeline(compile.hash, pipe);
 #endif
@@ -1548,8 +1564,10 @@ Pipeline CommandBuffer::build_graphics_pipeline(Device *device, const DeferredPi
 
 	if (res != VK_SUCCESS || pipeline == VK_NULL_HANDLE)
 	{
-		if (res < 0)
-			LOGE("Failed to create graphics pipeline!\n");
+		if (res < 0) {
+			failedGraphicsHashes.insert(compile.hash);
+			LOGE("Failed to create graphics pipeline (hash %016llx, blacklisted)!\n", static_cast<unsigned long long>(compile.hash));
+		}
 		return {};
 	}
 

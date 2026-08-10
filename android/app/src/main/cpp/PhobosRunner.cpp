@@ -776,36 +776,55 @@ namespace ares {
           }
           if (!attached) attachFile("bios.rom");
       } else if (nodeName == "Neo Geo AES" || nodeName == "Neo Geo MVS") {
-          // BIOS comes from neogeo.zip (MAME format). Extract sp-s2.sp1
-          // (universal AES/MVS BIOS) and attach as bios.rom for 68000.
-          auto extractNgBios = [&](string path) -> std::vector<u8> {
-            if (path.iendsWith(".zip")) {
-              Decode::ZIP zip;
-              if (zip.open(path)) {
-                for (auto& zf : zip.file) {
-                  if (zf.name.iequals("sp-s2.sp1")) return zip.extract(zf);
+          // neogeo.zip is copied to mia_temp. Extract BIOS + fix-layer ROM.
+          string zipPath = string{tempFilePath, "/neogeo.zip"};
+          bool haveBios = false, haveStatic = false;
+          if (file::exists(zipPath)) {
+            Decode::ZIP zip;
+            if (zip.open(zipPath)) {
+              for (auto& zf : zip.file) {
+                string n = zf.name.downcase();
+                // UniBIOS first (most forgiving, handles MVS/AES auto-detect),
+                // then MVS BIOS variants (sp-e, sp-j2, sp-u2, sp1-u2),
+                // then sp-s2.sp1 (universal AES) as last resort.
+                if (!haveBios && n.beginsWith("uni-bios")) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 131072) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("bios.rom", fp); haveBios = true;
+                      LOGI("VFS: Neo Geo BIOS: UniBIOS (%s)", (const char*)zf.name);
+                    }
+                  }
+                }
+                if (!haveBios && (n.equals("sp-e.sp1") || n.equals("sp-j2.sp1") || n.equals("sp-u2.sp1") || n.equals("sp1-u2") || n.equals("sp1-u3.bin") || n.equals("sp1-u4.bin"))) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 131072) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("bios.rom", fp); haveBios = true;
+                      LOGI("VFS: Neo Geo BIOS: MVS (%s)", (const char*)zf.name);
+                    }
+                  }
+                }
+                if (!haveBios && n.equals("sp-s2.sp1")) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 131072) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("bios.rom", fp); haveBios = true;
+                      LOGI("VFS: Neo Geo BIOS: AES universal (sp-s2.sp1)");
+                    }
+                  }
+                }
+                // sfix.sfix = 131KB BIOS fix-layer font. Only needed for
+                // AES (home console). MVS arcade boards get fix ROM from
+                // the cartridge itself — attaching a BIOS font can conflict.
+                if (!haveStatic && n.iequals("sfix.sfix")) {
+                  // Skip for now — MVS doesn't need system-pak static.rom.
                 }
               }
             }
-            return nall::file::read(path);
-          };
-          auto attachNgBios = [&](string key) -> bool {
-            auto it = firmwareMap.find(key);
-            if (it == firmwareMap.end()) return false;
-            auto data = extractNgBios(it->second);
-            if (data.size() == 0) return false;
-            if (auto fp = vfs::memory::open(data)) {
-              dir->append("bios.rom", fp);
-              LOGI("VFS: Extracted Neo Geo bios.rom (%zu bytes) for %s", data.size(), (const char*)nodeName);
-              return true;
-            }
-            return false;
-          };
-          bool attached = attachNgBios("fw_ng_aes");
-          if (!attached) attached = attachNgBios("fw_ng_mvs");
-          if (!attached) attached = attachNgBios("fw_ng_bios");
-          if (!attached) attachFile("bios.rom");
-          attachFile("static.rom"); // Font ROM
+          }
+          if (!haveBios) attachFile("bios.rom");
+          if (!haveStatic) attachFile("static.rom");
       } else if (nodeName == "Neo Geo CD" || nodeName == "Neo Geo CDZ") {
           bool attached = false;
           auto it_ngcd = firmwareMap.find("fw_ng_cd");
@@ -1274,6 +1293,11 @@ else if (port->type() == "Keyboard") {
     LOGI("Ares: Loading core for %s", (const char*)identifiedSystem);
     if (identifiedSystem == "Nintendo 64" || identifiedSystem == "Nintendo 64DD") {
       ::ares::Nintendo64::vulkan.enable = true; // DEFAULT TO VULKAN
+      // Set pipeline cache path for Vulkan shader persistence
+      if (savesPath && strlen(savesPath) > 0) {
+        ::ares::Nintendo64::vulkan.pipelineCachePath = string{savesPath, "/n64_vulkan_pipeline_cache.bin"};
+        LOGI("N64: Pipeline cache path: %s", (const char*)::ares::Nintendo64::vulkan.pipelineCachePath);
+      }
       if (n64UpscaleFactor < 1) n64UpscaleFactor = 1;
       ::ares::Nintendo64::vulkan.internalUpscale = (u32)n64UpscaleFactor;
       ::ares::Nintendo64::vulkan.outputUpscale = (u32)n64UpscaleFactor;
@@ -1692,6 +1716,4 @@ else if (port->type() == "Keyboard") {
     }
     return nall::Encode::PNG::RGBA8(path, converted.data(), (s32)currentWidth * 4, (s32)currentWidth, (s32)currentHeight);
   }
-
-
 }
