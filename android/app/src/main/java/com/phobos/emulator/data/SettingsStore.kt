@@ -42,6 +42,9 @@ data class EmulatorSettings(
     val fullScreenMode: Boolean = false,
     val showTouchControls: Boolean = true,
     val showPerformanceMonitor: Boolean = false,
+    val perfOverlayScale: Float = 1.0f,
+    val perfOverlayPosX: Float = 1.0f,  // 0=left, 1=right
+    val perfOverlayPosY: Float = 0.0f,  // 0=top, 1=bottom
     val logVerbosity: LogLevel = LogLevel.INFO,
     val fastForwardSpeed: Float = 2.0f,
     val n64Upscale: Int = 1,
@@ -50,6 +53,9 @@ data class EmulatorSettings(
     val customDriverPath: String = "",
     val ps1AnalogMode: Boolean = true,
     val n64ExpansionPak: Boolean = true,
+    val n64DisableVIProcessing: Boolean = false,
+    val n64WeaveDeinterlacing: Boolean = false,
+    val n64SupersampleScanout: Boolean = false,
     val orientationVertical: Boolean = false,
     val firmwarePath: String = "",
     val savesPath: String = "",
@@ -81,6 +87,9 @@ class SettingsStore(private val context: Context) {
         val FULL_SCREEN_MODE = booleanPreferencesKey("full_screen_mode")
         val SHOW_TOUCH_CONTROLS = booleanPreferencesKey("show_touch_controls")
         val SHOW_PERFORMANCE_MONITOR = booleanPreferencesKey("show_performance_monitor")
+        val PERF_OVERLAY_SCALE = floatPreferencesKey("perf_overlay_scale")
+        val PERF_OVERLAY_POS_X = floatPreferencesKey("perf_overlay_pos_x")
+        val PERF_OVERLAY_POS_Y = floatPreferencesKey("perf_overlay_pos_y")
         val LOG_VERBOSITY = stringPreferencesKey("log_verbosity")
         val FAST_FORWARD_SPEED = floatPreferencesKey("fast_forward_speed")
         val N64_UPSCALE = intPreferencesKey("n64_upscale")
@@ -89,6 +98,9 @@ class SettingsStore(private val context: Context) {
         val CUSTOM_DRIVER_PATH = stringPreferencesKey("custom_driver_path")
         val PS1_ANALOG_MODE = booleanPreferencesKey("ps1_analog_mode")
         val N64_EXPANSION_PAK = booleanPreferencesKey("n64_expansion_pak")
+        val N64_DISABLE_VI_PROCESSING = booleanPreferencesKey("n64_disable_vi_processing")
+        val N64_WEAVE_DEINTERLACING = booleanPreferencesKey("n64_weave_deinterlacing")
+        val N64_SUPERSAMPLE_SCANOUT = booleanPreferencesKey("n64_supersample_scanout")
         val ORIENTATION_VERTICAL = booleanPreferencesKey("orientation_vertical")
         val FIRMWARE_PATH = stringPreferencesKey("path_firmware")
         val SAVES_PATH = stringPreferencesKey("path_saves")
@@ -181,6 +193,9 @@ class SettingsStore(private val context: Context) {
             fullScreenMode = safeGet(FULL_SCREEN_MODE, false),
             showTouchControls = safeGet(SHOW_TOUCH_CONTROLS, true),
             showPerformanceMonitor = safeGet(SHOW_PERFORMANCE_MONITOR, false),
+            perfOverlayScale = safeGet(PERF_OVERLAY_SCALE, 1.0f),
+            perfOverlayPosX = safeGet(PERF_OVERLAY_POS_X, 1.0f),
+            perfOverlayPosY = safeGet(PERF_OVERLAY_POS_Y, 0.0f),
             logVerbosity = try { LogLevel.valueOf(safeGetString(LOG_VERBOSITY, LogLevel.INFO.name)) } catch(e: Exception) { LogLevel.INFO },
             fastForwardSpeed = safeGet(FAST_FORWARD_SPEED, 2.0f),
             n64Upscale = safeGet(N64_UPSCALE, 1),
@@ -189,6 +204,9 @@ class SettingsStore(private val context: Context) {
             customDriverPath = safeGetString(CUSTOM_DRIVER_PATH, ""),
             ps1AnalogMode = safeGet(PS1_ANALOG_MODE, true),
             n64ExpansionPak = safeGet(N64_EXPANSION_PAK, true),
+            n64DisableVIProcessing = safeGet(N64_DISABLE_VI_PROCESSING, false),
+            n64WeaveDeinterlacing = safeGet(N64_WEAVE_DEINTERLACING, false),
+            n64SupersampleScanout = safeGet(N64_SUPERSAMPLE_SCANOUT, false),
             orientationVertical = safeGet(ORIENTATION_VERTICAL, false),
             firmwarePath = safeGetString(FIRMWARE_PATH, ""),
             savesPath = safeGetString(SAVES_PATH, ""),
@@ -257,6 +275,9 @@ class SettingsStore(private val context: Context) {
     suspend fun setFullScreenMode(enabled: Boolean) = context.dataStore.edit { it[FULL_SCREEN_MODE] = enabled }
     suspend fun setShowTouchControls(enabled: Boolean) = context.dataStore.edit { it[SHOW_TOUCH_CONTROLS] = enabled }
     suspend fun setShowPerformanceMonitor(enabled: Boolean) = context.dataStore.edit { it[SHOW_PERFORMANCE_MONITOR] = enabled }
+    suspend fun setPerfOverlayScale(scale: Float) = context.dataStore.edit { it[PERF_OVERLAY_SCALE] = scale }
+    suspend fun setPerfOverlayPosX(x: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_X] = x }
+    suspend fun setPerfOverlayPosY(y: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_Y] = y }
     suspend fun setLogVerbosity(level: LogLevel) = context.dataStore.edit { it[LOG_VERBOSITY] = level.name }
     suspend fun setFastForwardSpeed(speed: Float) = context.dataStore.edit { it[FAST_FORWARD_SPEED] = speed }
     suspend fun setN64Upscale(factor: Int) = context.dataStore.edit { it[N64_UPSCALE] = factor }
@@ -266,6 +287,9 @@ class SettingsStore(private val context: Context) {
     suspend fun setPs1AnalogMode(enabled: Boolean) = context.dataStore.edit { it[PS1_ANALOG_MODE] = enabled }
     suspend fun setOrientationMode(vertical: Boolean) = context.dataStore.edit { it[ORIENTATION_VERTICAL] = vertical }
     suspend fun setN64ExpansionPak(enabled: Boolean) = context.dataStore.edit { it[N64_EXPANSION_PAK] = enabled }
+    suspend fun setN64DisableVIProcessing(enabled: Boolean) = context.dataStore.edit { it[N64_DISABLE_VI_PROCESSING] = enabled }
+    suspend fun setN64WeaveDeinterlacing(enabled: Boolean) = context.dataStore.edit { it[N64_WEAVE_DEINTERLACING] = enabled }
+    suspend fun setN64SupersampleScanout(enabled: Boolean) = context.dataStore.edit { it[N64_SUPERSAMPLE_SCANOUT] = enabled }
     suspend fun setGlobalPath(key: Preferences.Key<String>, path: String) = context.dataStore.edit { it[key] = path }
     suspend fun setShaderPath(path: String) = context.dataStore.edit { it[SHADER_PATH] = path }
     suspend fun setAspectRatioMode(mode: AspectRatioMode) = context.dataStore.edit { it[ASPECT_RATIO_MODE] = mode.name }

@@ -239,6 +239,12 @@ auto VI::power(bool reset) -> void {
 
   #if defined(VULKAN)
   gpuOutputValid = false;
+  // Drop the stale scanout fence from the frame that was in flight when
+  // the reset fired. If we keep it, the first scanoutAsync/mapScanoutRead
+  // after reset waits on a fence Turnip may never signal → black screen
+  // at ~2 fps (500ms timeout loop). Clearing it here lets the new frame
+  // submit fresh scanout work on the current (kept) device.
+  vulkan.resetScanoutFence();
   #endif
 }
 

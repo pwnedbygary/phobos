@@ -27,6 +27,7 @@
 #include <thread>
 #include <condition_variable>
 #include <utility>
+#include <chrono>
 #include "thread_id.hpp"
 
 #ifdef PARALLEL_RDP_SHADER_DIR
@@ -35,6 +36,7 @@
 
 namespace RDP
 {
+
 template <typename T, typename Executor>
 class WorkerThread
 {
@@ -70,6 +72,17 @@ public:
 	{
 		std::unique_lock<std::mutex> holder{to_main_mutex};
 		to_main_cond.wait(holder, std::forward<Cond>(cond));
+	}
+
+	// Bounded variant of wait(): returns true if the condition became true
+	// within the timeout, false on timeout. Prevents the caller from wedging
+	// forever when the worker thread is stuck on a GPU fence that never
+	// signals (Turnip after a soft reset).
+	template <typename Cond>
+	bool wait_timeout(Cond &&cond, unsigned timeout_ms)
+	{
+		std::unique_lock<std::mutex> holder{to_main_mutex};
+		return to_main_cond.wait_for(holder, std::chrono::milliseconds(timeout_ms), std::forward<Cond>(cond));
 	}
 
 	void push(T &&t)

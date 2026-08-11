@@ -1,4 +1,5 @@
 #include <memory>
+
 Screen::Screen(string name, u32 width, u32 height) : Video(name) {
   _canvasWidth  = width;
   _canvasHeight = height;
@@ -201,7 +202,17 @@ auto Screen::colors(u32 colors, std::function<n64 (n32)> color) -> void {
 
 auto Screen::frame() -> void {
   if(runAhead()) return;
-  while(_frame) spinloop();
+  // Bounded handoff spin: a video thread wedged in a GPU fence wait or a
+  // window lock must not hang the emulation thread inside run() forever
+  // (that blocks unload/reset and forces the "abandon system" path, which
+  // leaks a poisoned Vulkan device and makes later N64 loads flaky). After
+  // ~100ms, proceed with the frame handoff; the video thread picks up the
+  // latest buffer when it recovers and the stale frame is dropped.
+  auto handoffDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+  while(_frame) {
+    spinloop();
+    if(std::chrono::steady_clock::now() >= handoffDeadline) break;
+  }
 
   lock_guard<recursive_mutex> lock(_mutex);
   _inputA.swap(_inputB);

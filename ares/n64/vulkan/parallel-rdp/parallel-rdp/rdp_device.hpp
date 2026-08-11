@@ -124,6 +124,9 @@ public:
 
 	bool device_is_supported() const;
 
+	// Skip GPU idle() fence wait during teardown (Turnip timeline issue).
+	void set_skip_idle_on_destroy(bool v) { skip_idle_on_destroy = v; }
+
 	// Synchronization.
 	void flush();
 	uint64_t signal_timeline();
@@ -268,6 +271,12 @@ private:
 	bool single_threaded_processing = false;
 	bool is_supported = false;
 	bool is_host_coherent = true;
+
+	// Set by Vulkan::unload() during System::power() (reset).
+	// When true, ~CommandProcessor() skips idle() which would
+	// otherwise wait for GPU timeline semaphores that Turnip
+	// cannot signal during device teardown.
+	bool skip_idle_on_destroy = false;
 	bool timestamp = false;
 
 	friend class Renderer;

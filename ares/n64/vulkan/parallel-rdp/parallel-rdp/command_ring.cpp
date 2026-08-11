@@ -63,17 +63,43 @@ CommandRing::~CommandRing()
 void CommandRing::drain()
 {
 	std::unique_lock<std::mutex> holder{lock};
-	cond.wait(holder, [this]() {
-		return write_count == completed_count;
-	});
+	// BOUNDED drain: if the ring thread is wedged (e.g. waiting on a GPU
+	// fence that Turnip never signals after a soft reset), the unconditional
+	// wait below would hang the emulation thread inside run() forever —
+	// black screen, no output. Wait up to 2s, log, then proceed; the ring
+	// will catch up on a later frame.
+	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+	while (write_count != completed_count)
+	{
+		if (cond.wait_for(holder, std::chrono::milliseconds(100)) == std::cv_status::timeout &&
+		    std::chrono::steady_clock::now() >= deadline)
+		{
+			LOGE("CommandRing::drain: timed out after 2s waiting for ring to drain "
+			     "(write=%llu completed=%llu). Proceeding (frame may be stale).\n",
+			     (unsigned long long)write_count, (unsigned long long)completed_count);
+			break;
+		}
+	}
 }
 
 void CommandRing::enqueue_command(unsigned num_words, const uint32_t *words)
 {
 	std::unique_lock<std::mutex> holder{lock};
-	cond.wait(holder, [this, num_words]() {
-		return write_count + num_words + 1 <= read_count + ring.size();
-	});
+	// BOUNDED ring-space wait (see drain()): never wedge the caller forever
+	// if the ring thread has stalled. After 2s, drop the command and return
+	// so the emulation thread can keep running.
+	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+	while (write_count + num_words + 1 > read_count + ring.size())
+	{
+		if (cond.wait_for(holder, std::chrono::milliseconds(100)) == std::cv_status::timeout &&
+		    std::chrono::steady_clock::now() >= deadline)
+		{
+			LOGE("CommandRing::enqueue_command: timed out waiting for ring space "
+			     "(write=%llu read=%llu size=%zu). Dropping command.\n",
+			     (unsigned long long)write_count, (unsigned long long)read_count, ring.size());
+			return;
+		}
+	}
 
 	size_t mask = ring.size() - 1;
 	ring[write_count++ & mask] = num_words;

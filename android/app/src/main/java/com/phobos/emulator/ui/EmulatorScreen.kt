@@ -66,7 +66,10 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     var showQuitDialog by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
 
+    val showDriverSuggestion by viewModel.showDriverSuggestion.collectAsState()
+
     val focusRequester = remember { FocusRequester() }
+    val context = LocalContext.current
     val view = LocalView.current
     val window = (view.context as? Activity)?.window
 
@@ -93,6 +96,10 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         if (isLoaded) {
             viewModel.setPause(false)
             PhobosCore.setEmulationRunning(true)
+            // After loading, request focus so hardware key events
+            // (hotkeys, gamepad) reach onPreviewKeyEvent immediately
+            // rather than waiting for a tap.
+            focusRequester.requestFocus()
         }
     }
 
@@ -124,6 +131,23 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             },
             dismissButton = {
                 TextButton(onClick = { showQuitDialog = false; viewModel.setPause(false) }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // ── Driver suggestion dialog ─────────────────────────────────────────────
+    if (showDriverSuggestion) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissDriverSuggestion() },
+            title = { Text("GPU Driver Issue Detected") },
+            text = {
+                Text("The built-in GPU driver is unable to compile shaders needed by this game. " +
+                     "You may see visual glitches, missing graphics, or reduced performance.\n\n" +
+                     "For best results, install a Turnip Mesa driver via:\n" +
+                     "Settings → GPU Driver Manager")
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.dismissDriverSuggestion() }) { Text("OK") }
             }
         )
     }
@@ -274,25 +298,25 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             )
         }
 
-        // ── Performance monitor ──────────────────────────────────────────────
+        // ── Performance monitor (draggable/resizable) ───────────────────────
         if (isLoaded && !isPaused && settingsState.showPerformanceMonitor) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 100.dp, end = 16.dp)
-                    .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                    .padding(4.dp)
-            ) {
-                Column {
-                    Text("FPS: %.1f".format(perfStats.fps),
-                        color = if (perfStats.fps > 55) Color.Green else Color.Yellow,
-                        style = MaterialTheme.typography.labelSmall)
-                    Text("Frame: %.2fms".format(perfStats.frameTime),
-                        color = Color.White, style = MaterialTheme.typography.labelSmall)
-                    Text("Core: ${perfStats.activeCore}",
-                        color = if (perfStats.activeCore >= 4) Color.Cyan else Color.LightGray,
-                        style = MaterialTheme.typography.labelSmall)
-                }
+            key(showControls) {
+                val screenWidth = context.resources.displayMetrics.widthPixels
+                val screenHeight = context.resources.displayMetrics.heightPixels
+                PerformanceOverlay(
+                    perfStats = perfStats,
+                    savedScale = settingsState.perfOverlayScale,
+                    savedPosX = settingsState.perfOverlayPosX,
+                    savedPosY = settingsState.perfOverlayPosY,
+                    screenWidth = screenWidth,
+                    screenHeight = screenHeight,
+                    onScaleChanged = { viewModel.setPerfOverlayScale(it) },
+                    onPositionChanged = { x, y ->
+                        viewModel.setPerfOverlayPosX(x)
+                        viewModel.setPerfOverlayPosY(y)
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
 
@@ -400,7 +424,9 @@ fun EmulationMenu(
                                         Box {
                                             TextButton(onClick = { upscaleExpanded = true }) { Text("${settings.n64Upscale}x") }
                                             DropdownMenu(expanded = upscaleExpanded, onDismissRequest = { upscaleExpanded = false }) {
-                                                listOf(1, 2, 4, 8).forEach { factor ->
+                                                // 1/2/4x only — 8x on a 640x240 N64 framebuffer creates ~5120x3840
+    // internal targets that exhaust device memory (kswapd thrash + ANR).
+    listOf(1, 2, 4).forEach { factor ->
                                                     DropdownMenuItem(
                                                         text = { Text("${factor}x") },
                                                         onClick = { viewModel.setN64Upscale(factor); upscaleExpanded = false }
@@ -412,6 +438,9 @@ fun EmulationMenu(
                                 )
                                 SettingsSwitchItem("Expansion Pak", "Increase RDRAM to 8MB.", settings.n64ExpansionPak) { viewModel.setN64ExpansionPak(it) }
                                 SettingsSwitchItem("CPU Recompiler", "Use JIT recompiler.", settings.n64Recompiler) { viewModel.setN64Recompiler(it) }
+                                SettingsSwitchItem("Disable VI Process", "Bypass VI post-processing. May fix GPU shader errors.", settings.n64DisableVIProcessing) { viewModel.setN64DisableVIProcessing(it) }
+                                SettingsSwitchItem("Supersample Scanout", "Downscale internal upscale for native output.", settings.n64SupersampleScanout) { viewModel.setN64SupersampleScanout(it) }
+                                SettingsSwitchItem("Weave Deinterlace", "Blend deinterlace (needs Supersample OFF).", settings.n64WeaveDeinterlacing) { viewModel.setN64WeaveDeinterlacing(it) }
                             }
                         }
                     }

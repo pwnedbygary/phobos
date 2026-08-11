@@ -23,6 +23,9 @@ object PhobosCore {
     external fun setPs1AnalogMode(enabled: Boolean)
     external fun togglePs1AnalogMode(): Boolean
     external fun setN64ExpansionPak(enabled: Boolean)
+    external fun setN64DisableVIProcessing(enabled: Boolean)
+    external fun setN64WeaveDeinterlacing(enabled: Boolean)
+    external fun setN64SupersampleScanout(enabled: Boolean)
     external fun resetSystem()
     external fun frameAdvance()
     external fun setMuteAudio(muted: Boolean)
@@ -92,7 +95,9 @@ data class LogEntry(
 data class PerformanceStats(
     val fps: Double,
     val frameTime: Double,
-    val activeCore: Int
+    val activeCore: Int,
+    val pipelineFailures: Int = 0,
+    val isAdrenoDriver: Boolean = false
 )
 
 data class PhobosSetting(

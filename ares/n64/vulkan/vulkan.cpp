@@ -1,18 +1,53 @@
 #include <n64/n64.hpp>
+#include <chrono>
 
 namespace ares::Nintendo64 {
 
 Vulkan vulkan;
 std::vector<uint8_t> Vulkan::pipelineCacheData;
 string Vulkan::pipelineCachePath;
+std::atomic<int> Vulkan::pipelineFailureCount{0};
+string Vulkan::gpuDeviceName;
+std::atomic<bool> Vulkan::skipCachePersist{false};
+std::atomic<bool> Vulkan::discardPipelineCache{false};
 
 struct LoggingInterface : Util::LoggingInterface {
   auto log(const char* tag, const char* fmt, va_list va) -> bool {
     char buffer[8192];
     vsnprintf(buffer, sizeof(buffer), fmt, va);
-  //print(terminal::color::yellow(tag), buffer);
+
+    // Count unique pipeline creation failures for the Turnip suggestion
+    // dialog in the Android UI.
+    if (strstr(buffer, "Failed to create") && strstr(buffer, "blacklisted")) {
+      Vulkan::pipelineFailureCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // Rate-limit the repetitive "flush render state / dispatch will be dropped"
+    // spam that floods logcat when the GPU driver can't compile compute shaders.
+    // These fire at ~120/sec and cause measurable performance overhead.
+    if (strstr(buffer, "flush render state") || strstr(buffer, "dispatch will be dropped")) {
+      auto now = std::chrono::steady_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFlushError).count();
+      if (elapsed < 5000) return true; // suppress for 5 seconds
+      lastFlushError = now;
+    }
+
+    // Suppress "Thread does not exist in thread manager or is not the main
+    // thread." entirely. parallel-RDP's get_current_thread_index() logs this
+    // whenever ANY thread not registered with its internal thread manager
+    // touches the RDP — here that is the ares emulation thread and the ares
+    // screen thread, every frame. It falls back to index 0 safely, so the
+    // message is expected noise with no diagnostic value, and at ~120/sec it
+    // is pure logcat flooding + wasted logd calls. (We must NOT "fix" it by
+    // registering those threads as index 0: that would make parallel-RDP
+    // treat distinct threads as one and skip required synchronization.)
+    if (strstr(buffer, "Thread does not exist in thread manager")) return true;
+
+    __android_log_print(ANDROID_LOG_ERROR, "Granite", "%s", buffer);
     return true;
   }
+
+  std::chrono::steady_clock::time_point lastFlushError;
 } loggingInterface;
 
 struct Vulkan::Implementation {
@@ -46,14 +81,26 @@ struct Vulkan::Implementation {
 };
 
 auto Vulkan::load(Node::Object object) -> bool {
-  std::lock_guard<std::mutex> lock(mutex);
+  std::lock_guard<std::recursive_mutex> lock(mutex);
   __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Vulkan::load called, enable = %d", vulkan.enable);
   if (vulkan.enable) {
     Util::set_thread_logging_interface(&loggingInterface);
-    delete implementation;
 
-    // Load pipeline cache from disk (survives app restarts).
-    if (pipelineCacheData.empty() && pipelineCachePath.size() > 0) {
+    // If we're discarding the cache, the GPU is likely in a bad state.
+    // Skip idle wait on the old implementation to avoid hanging the main thread.
+    if (discardPipelineCache && implementation && implementation->processor) {
+      implementation->processor->set_skip_idle_on_destroy(true);
+    }
+    delete implementation;
+    implementation = nullptr;
+
+    // During reset (System::power), discard both in-memory and on-disk
+    // pipeline cache. Reusing stale cache across VkDevice instances
+    // causes Turnip to produce broken GPU fences.
+    if (discardPipelineCache) {
+      pipelineCacheData.clear();
+      discardPipelineCache = false;
+    } else if (pipelineCacheData.empty() && pipelineCachePath.size() > 0) {
       auto disk = nall::file::read(pipelineCachePath);
       if (disk.size() > 0) {
         pipelineCacheData.assign(disk.data(), disk.data() + disk.size());
@@ -88,9 +135,34 @@ auto Vulkan::load(Node::Object object) -> bool {
 }
 
 auto Vulkan::unload() -> void {
-  std::lock_guard<std::mutex> lock(mutex);
-  // Save pipeline cache before tearing down the device
-  if (implementation && implementation->device.get_device() != VK_NULL_HANDLE) {
+  std::lock_guard<std::recursive_mutex> lock(mutex);
+
+  // Before tearing down the VkDevice, try to drain any in-flight GPU work
+  // with a BOUNDED wait. Destroying a device that still has pending
+  // submissions (the skip_idle path) leaves orphaned timelines behind, and
+  // the next device created in this process can then fail to signal its
+  // fences — this is the "N64 reset never comes back" / "sometimes works,
+  // sometimes doesn't" failure on Turnip. The scanout fence is the last
+  // submission and is ordered after all RDP command-ring work, so its
+  // signal means the GPU has caught up: the CommandProcessor destructor's
+  // normal idle() teardown then completes cleanly and the next device
+  // starts fresh. Only if it times out (GPU genuinely wedged) do we arm
+  // skip_idle_on_destroy so teardown never blocks on a fence that will
+  // not signal, and we skip the pipeline-cache readback (which would
+  // implicitly wait for that same stuck work).
+  bool gpuHealthy = true;
+  if (implementation && implementation->processor && implementation->scanout.fence) {
+    if (!implementation->scanout.fence->wait_timeout(2'000'000'000ull)) {
+      gpuHealthy = false;
+      __android_log_print(ANDROID_LOG_WARN, "PhobosVulkan",
+          "Vulkan: scanout fence timed out during unload (GPU stall). Forcing skip-idle teardown.");
+    }
+  }
+  if (!gpuHealthy && implementation && implementation->processor) {
+    implementation->processor->set_skip_idle_on_destroy(true);
+  }
+
+  if (!discardPipelineCache && gpuHealthy && implementation && implementation->device.get_device() != VK_NULL_HANDLE) {
     size_t cacheSize = implementation->device.get_pipeline_cache_size();
     if (cacheSize > 0) {
       pipelineCacheData.resize(cacheSize);
@@ -98,7 +170,7 @@ auto Vulkan::unload() -> void {
         __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "Pipeline cache saved (%zu bytes)", cacheSize);
         // Persist to disk for next app launch (alongside driver UUID
         // so we can detect driver changes and invalidate stale caches).
-        if (pipelineCachePath.size() > 0) {
+        if (pipelineCachePath.size() > 0 && !skipCachePersist) {
           nall::file::write(pipelineCachePath, pipelineCacheData);
           // Write UUID to sidecar so next load detects driver changes
           string uuidPath = {pipelineCachePath, ".uuid"};
@@ -110,17 +182,21 @@ auto Vulkan::unload() -> void {
         pipelineCacheData.clear();
       }
     }
+  } else {
+    pipelineCacheData.clear();
   }
   if (rdram.hidden.data && (!implementation || rdram.hidden.data != (u8*)implementation->processor->begin_read_hidden_rdram())) {
     free(rdram.hidden.data);
   }
   rdram.hidden.data = nullptr;
-  if (implementation) delete implementation;
-  implementation = nullptr;
+  if (implementation) {
+    delete implementation;
+    implementation = nullptr;
+  }
 }
 
 auto Vulkan::render() -> bool {
-  std::lock_guard<std::mutex> lock(mutex);
+  std::lock_guard<std::recursive_mutex> lock(mutex);
   if(!implementation) return false;
 
   static constexpr u32 commandLength[64] = {
@@ -189,19 +265,19 @@ auto Vulkan::render() -> bool {
 }
 
 auto Vulkan::frame() -> void {
-  std::lock_guard<std::mutex> lock(mutex);
+  std::lock_guard<std::recursive_mutex> lock(mutex);
   if(!implementation) return;
   implementation->processor->begin_frame_context();
 }
 
 auto Vulkan::writeWord(u32 address, u32 data) -> void {
-  std::lock_guard<std::mutex> lock(mutex);
+  std::lock_guard<std::recursive_mutex> lock(mutex);
   if(!implementation) return;
   implementation->processor->set_vi_register(::RDP::VIRegister(address), data);
 }
 
 auto Vulkan::scanoutAsync(bool field) -> bool {
-  std::lock_guard<std::mutex> lock(mutex);
+  std::lock_guard<std::recursive_mutex> lock(mutex);
   if(!implementation) return false;
 
   implementation->processor->set_vi_register(::RDP::VIRegister::VCurrentLine, field);
@@ -225,7 +301,16 @@ auto Vulkan::scanoutAsync(bool field) -> bool {
 
 
   if(implementation->scanout.fence) {
-    implementation->scanout.fence->wait();
+    // Bounded wait: after a reset, the fence may be from the frame that was
+    // in flight when the reset fired, and Turnip can fail to signal it. A
+    // hard wait() here would hang the emulation thread forever (black
+    // screen, ~500ms fence timeout loop = ~2 fps). If it doesn't signal in
+    // 100ms, drop the stale frame and let scanout_async_buffer submit a
+    // fresh one on the current device.
+    if (!implementation->scanout.fence->wait_timeout(100'000'000ull)) {
+      __android_log_print(ANDROID_LOG_WARN, "PhobosVulkan",
+          "Vulkan::scanoutAsync: previous scanout fence timed out; dropping stale frame");
+    }
   }
   static int scanoutCountLog = 0;
   if (++scanoutCountLog % 60 == 0) __android_log_print(ANDROID_LOG_DEBUG, "PhobosVulkan", "Vulkan::scanoutAsync triggered");
@@ -237,16 +322,21 @@ auto Vulkan::scanoutAsync(bool field) -> bool {
 auto Vulkan::mapScanoutRead(const u8*& rgba, u32& width, u32& height) -> void {
   // Acquire and hold the lock until unmapScanoutRead() so the implementation
   // (and its scanout buffer) cannot be destroyed while we are reading it.
-  if(!scanoutLock.owns_lock()) scanoutLock = std::unique_lock<std::mutex>(mutex);
+  if(!scanoutLock.owns_lock()) scanoutLock = std::unique_lock<std::recursive_mutex>(mutex);
   if(!implementation || !implementation->scanout.fence || !implementation->scanout.width || !implementation->scanout.height) {
     rgba = nullptr;
     width = 0;
     height = 0;
   } else {
-    implementation->scanout.fence->wait();
-    rgba = (const u8*)implementation->device.map_host_buffer(*implementation->scanout.buffer, ::Vulkan::MEMORY_ACCESS_READ_BIT);
-    width = implementation->scanout.width;
-    height = implementation->scanout.height;
+    // Bounded wait for the same reason as scanoutAsync: after a reset the
+    // fence may never signal on Turnip. If it times out, present a blank
+    // frame instead of wedging the screen thread (which holds vulkan.mutex
+    // via scanoutLock and would block every subsequent Vulkan load).
+    if (implementation->scanout.fence->wait_timeout(100'000'000ull)) {
+      rgba = (const u8*)implementation->device.map_host_buffer(*implementation->scanout.buffer, ::Vulkan::MEMORY_ACCESS_READ_BIT);
+      width = implementation->scanout.width;
+      height = implementation->scanout.height;
+    }
   }
 }
 
@@ -268,9 +358,27 @@ auto Vulkan::endScanout() -> void {
 }
 
 auto Vulkan::crashed() -> const char* {
-  std::lock_guard<std::mutex> lock(mutex);
+  std::lock_guard<std::recursive_mutex> lock(mutex);
   if(implementation) return implementation->crash_error;
   return nullptr;
+}
+
+auto Vulkan::setSkipIdleOnDestroy(bool skip) -> void {
+  std::lock_guard<std::recursive_mutex> lock(mutex);
+  if (implementation && implementation->processor) {
+    implementation->processor->set_skip_idle_on_destroy(skip);
+  }
+}
+
+auto Vulkan::resetScanoutFence() -> void {
+  std::lock_guard<std::recursive_mutex> lock(mutex);
+  if (implementation) {
+    // Reset the intrusive fence pointer WITHOUT waiting. The old fence
+    // (from the pre-reset in-flight frame) may never signal on Turnip;
+    // scanout_async_buffer will replace it with a fresh submission next
+    // frame.
+    implementation->scanout.fence.reset();
+  }
 }
 
 Vulkan::Implementation::Implementation(u8* data, u32 size, const uint8_t* cacheData, u32 cacheSize) {
@@ -302,6 +410,15 @@ Vulkan::Implementation::Implementation(u8* data, u32 size, const uint8_t* cacheD
       cacheData = nullptr; cacheSize = 0;
       pipelineCacheData.clear();
     }
+  }
+
+  // Store GPU device name for the UI (used to suppress Turnip suggestion
+  // when a community driver is already active).
+  {
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(device.get_physical_device(), &props);
+    Vulkan::gpuDeviceName = props.deviceName;
+    __android_log_print(ANDROID_LOG_INFO, "PhobosVulkan", "GPU: %s", props.deviceName);
   }
 
   // Always initialize the pipeline cache. On first load, pass null to

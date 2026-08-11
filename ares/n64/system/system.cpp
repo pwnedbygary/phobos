@@ -31,7 +31,7 @@ auto option(string name, string value) -> bool {
   if(name == "Disable Video Interface Processing") vulkan.disableVideoInterfaceProcessing = value.boolean();
   if(name == "Weave Deinterlacing") vulkan.weaveDeinterlacing = value.boolean();
   if(vulkan.internalUpscale == 1) vulkan.supersampleScanout = false;
-  vulkan.outputUpscale = vulkan.supersampleScanout ? 1 : vulkan.internalUpscale;
+  vulkan.outputUpscale = vulkan.supersampleScanout.load() ? 1 : vulkan.internalUpscale.load();
   #endif
   if(name == "Homebrew Mode") system.homebrewMode = value.boolean();
   if(name == "Deterministic Entropy") system.deterministicEntropy = value.boolean();
@@ -449,8 +449,37 @@ auto System::power(bool reset) -> void {
   mi.power(reset);
   vi.power(reset);
   #if defined(VULKAN)
-  vulkan.unload();
-  _vulkanNeedsLoad = true;
+  // Soft reset keeps the existing VkDevice alive (the branch below).
+  // Tearing the device down and creating a fresh one in the same process
+  // is unreliable on Turnip/Mesa: even when the teardown completes, the
+  // new device's fences can fail to signal, hanging the first frame after
+  // reset with no output. Keeping the device is upstream ares behavior and
+  // also preserves the pipeline cache (no post-reset shader recompiles).
+  //
+  // The teardown path (else branch) is only taken for cold boots and real
+  // unloads. It holds vulkan.mutex across the unload→load cycle so the
+  // Screen thread is gated out of mapScanoutRead() while the old
+  // implementation is torn down, and discardPipelineCache arms
+  // set_skip_idle_on_destroy on the old CommandProcessor so its
+  // destructor never blocks on GPU idle.
+  if (reset && vulkan.implementation && !Vulkan::discardPipelineCache.load()) {
+    _vulkanNeedsLoad = false;
+  } else {
+    std::lock_guard<std::recursive_mutex> lock(vulkan.mutex);
+    Vulkan::skipCachePersist = true;
+    // Do NOT force discardPipelineCache here. Unconditionally discarding on
+    // every cold boot (and every system switch) clears the in-memory cache in
+    // vulkan.load() BEFORE it can read the persisted file — which is why the
+    // pipeline cache was never reloaded after quit (always "initialized
+    // (empty)"). Discard is only intended for tearing down a wedged device;
+    // that case arms skip_idle_on_destroy in vulkan.unload() via the bounded
+    // fence check. For a normal unload the old device's cache is saved first
+    // (or read from disk) and handed to the new device.
+    vulkan.unload();
+    Vulkan::skipCachePersist = false;
+    vulkan.load(node);
+    _vulkanNeedsLoad = false;
+  }
   #endif
   ai.power(reset);
   pi.power(reset);

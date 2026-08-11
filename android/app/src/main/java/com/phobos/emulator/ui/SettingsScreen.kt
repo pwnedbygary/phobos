@@ -112,6 +112,16 @@ fun SettingsScreen(
                     checked = settings.fullScreenMode,
                     onCheckedChange = { viewModel.setFullScreenMode(it) }
                 )
+                SettingsClickableItem(
+                    title = "Shaders",
+                    description = "Apply Slang shader presets (CRT, LCD, etc)",
+                    onClick = onNavigateToShaders
+                )
+            }
+        }
+
+        item {
+            SettingsCategory("Experimental (N64 Vulkan)") {
                 var upscaleExpanded by remember { mutableStateOf(false) }
                 val currentUpscaleText = when(settings.n64Upscale) {
                     2 -> "2x HD (480p/960i)"
@@ -132,10 +142,23 @@ fun SettingsScreen(
                         }
                     }
                 )
-                SettingsClickableItem(
-                    title = "Shaders",
-                    description = "Apply Slang shader presets (CRT, LCD, etc)",
-                    onClick = onNavigateToShaders
+                SettingsSwitchItem(
+                    title = "Disable VI Processing",
+                    description = "Bypass VI post-processing. May fix shader compile errors on some GPUs.",
+                    checked = settings.n64DisableVIProcessing,
+                    onCheckedChange = { viewModel.setN64DisableVIProcessing(it) }
+                )
+                SettingsSwitchItem(
+                    title = "Supersample Scanout",
+                    description = "Downscale output from internal upscale for native-res display. Changes deinterlacing pipeline.",
+                    checked = settings.n64SupersampleScanout,
+                    onCheckedChange = { viewModel.setN64SupersampleScanout(it) }
+                )
+                SettingsSwitchItem(
+                    title = "Weave Deinterlacing",
+                    description = "Blend previous frame instead of upscale deinterlacing. Requires Supersample Scanout OFF.",
+                    checked = settings.n64WeaveDeinterlacing,
+                    onCheckedChange = { viewModel.setN64WeaveDeinterlacing(it) }
                 )
             }
         }

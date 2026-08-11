@@ -28,6 +28,8 @@ namespace ares {
     f64 fps;
     f64 frameTime; // ms
     s32 activeCore;
+    s32 pipelineFailures;
+    bool isAdrenoDriver;
   };
 
   auto initialize(const char* systemName, const char* uri, const char* romName) -> bool;
@@ -53,6 +55,9 @@ namespace ares {
   auto setN64Upscale(s32 factor) -> void;
   auto setN64Recompiler(bool enabled) -> void;
   auto setN64ExpansionPak(bool enabled) -> void;
+  auto setN64DisableVIProcessing(bool enabled) -> void;
+  auto setN64WeaveDeinterlacing(bool enabled) -> void;
+  auto setN64SupersampleScanout(bool enabled) -> void;
   auto setPs1AnalogMode(bool enabled) -> void;
   auto togglePs1AnalogMode() -> bool;
   auto setStickToDpad(bool enabled) -> void;

@@ -13,6 +13,7 @@
 #include <dlfcn.h>
 #include <mutex>
 #include <thread>
+#include <condition_variable>
 #include <atomic>
 #include <deque>
 #include <vector>
@@ -84,6 +85,12 @@ namespace ares {
   std::atomic<bool> emulationRunning{false};
   std::atomic<bool> fastForwardAtomic{false};
   std::atomic<f32>  ffSpeedLimitAtomic{2.0f};
+  // Per-core refresh rate reported by ares via Screen::refreshRateHint().
+  // Most cores are 60 Hz but WonderSwan/NGP run at ~75 Hz and PAL cores at
+  // 50 Hz — the old hardcoded 60 FPS cap throttled those cores and caused
+  // audio/video desync. Written from the ares video thread, read by the
+  // emulation loop for the frame cap / fast-forward target.
+  std::atomic<double> refreshRateAtomic{60.0};
   std::atomic<bool> resetRequestedAtomic{false};
   pthread_t emuThread = 0;
   std::atomic<bool> emuThreadRunning{false};
@@ -95,6 +102,71 @@ namespace ares {
   static std::atomic<bool> firstFrameRendered{false};
   static ANativeWindow* nativeWindow = nullptr;
   static AAudioStream* audioStream = nullptr;
+
+  // ── Dedicated audio thread + ring buffer ────────────────────────────────
+  // The emulation thread NEVER blocks on AAudioStream_write, and never does
+  // O(n) work on a growing queue. Samples go into a FIXED-CAPACITY ring
+  // buffer (O(1) push/pop, no memmove) capped at ~125ms; the dedicated audio
+  // thread drains it into AAudio with a bounded blocking write. This removes
+  // the synchronous-write churn (underrun→restart) that throttled run() to
+  // 50-57 FPS, and the small cap keeps latency low (GBA UI "dings" were
+  // delayed ~0.5s by an earlier 1s-cap vector queue). Oldest samples are
+  // dropped (overwritten) when the emulator out-produces the DAC, so a
+  // fast-forward burst can't leave a backlog that keeps playing after you
+  // drop back to 60.
+  static std::mutex audioMutex;
+  static std::condition_variable audioCV;
+  static constexpr size_t audioRingCapacity = 48000 * 2 / 8;  // ~125ms stereo floats
+  static std::vector<f32> audioRing;        // fixed capacity, used as a ring
+  static size_t audioRingHead = 0;          // oldest sample index
+  static size_t audioRingSize = 0;          // samples currently buffered
+  static std::thread audioThread;
+  static std::atomic<bool> audioThreadRunning{false};
+  static std::atomic<bool> audioThreadStop{false};
+
+  static auto audioThreadMain() -> void {
+    while (!audioThreadStop.load()) {
+      std::vector<f32> chunk;
+      {
+        std::unique_lock<std::mutex> lock(audioMutex);
+        audioCV.wait_for(lock, std::chrono::milliseconds(20),
+            []{ return audioRingSize > 0 || audioThreadStop.load(); });
+        if (audioThreadStop.load() && audioRingSize == 0) break;
+        if (audioRingSize == 0) continue;
+        // Drain up to ~2048 floats (1024 stereo frames) per iteration.
+        size_t take = std::min<size_t>(audioRingSize, 2048);
+        chunk.resize(take);
+        for (size_t i = 0; i < take; i++)
+          chunk[i] = audioRing[(audioRingHead + i) % audioRingCapacity];
+        audioRingHead = (audioRingHead + take) % audioRingCapacity;
+        audioRingSize -= take;
+        // Wake the emulation thread's audio-pacing wait so it can resume
+        // running frames as soon as the DAC has drained enough.
+        audioCV.notify_one();
+      }
+      if (chunk.empty()) continue;
+
+      AAudioStream* stream = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(audioMutex);
+        stream = audioStream;
+      }
+      // Paused/closed: drop queued audio so stale samples never pop on resume.
+      if (!stream || isPausedAtomic.load()) continue;
+
+      s32 total = (s32)chunk.size() / 2;
+      s32 written = 0;
+      // Blocking write is fine here (dedicated thread); 20ms cap per call so
+      // a wedged stream can't hang the thread forever.
+      while (written < total) {
+        s32 result = AAudioStream_write(stream, chunk.data() + written * 2,
+            total - written, 20'000'000);
+        if (result > 0) written += result;
+        else break; // stream stopped or error: drop the remainder
+      }
+    }
+  }
+
   static std::mutex windowMutex;
   static bool windowChanged = false;
   static u32 currentWidth = 0;
@@ -113,12 +185,11 @@ namespace ares {
   static std::deque<LogEntry> logBuffer;
   static std::mutex logMutex;
   static std::recursive_mutex systemMutex;
-  // Guards ONLY core execution (root->run / root->power / serialize). Kept
-  // separate from systemMutex so a long-running frame (N64 shader-compile
-  // stalls, interpreter frames) can never block the main thread's settings
-  // setters / load / unload — the ANR root cause when closing N64 or
-  // switching systems. systemMutex now guards only config/load/unload ops.
-  static std::recursive_mutex runMutex;
+  // Guards ONLY core execution (root->run / root->power / serialize).
+  // Raw pointer — when the emulation thread is abandoned while holding this
+  // mutex, we release() the pointer (leaking the mutex) and allocate a
+  // fresh one. Destroying a locked std::recursive_mutex is UB.
+  static std::recursive_mutex* runMutex = new std::recursive_mutex();
   static Node::Object cachedPlayer1;
 
   struct InputState {
@@ -257,11 +328,14 @@ namespace ares {
   static bool autoSaveMemoryAtomic = false;  // "Auto-Save Memory" — disabled by default
   static bool autoLoadMemoryAtomic = false;   // "Auto-Load Memory" — disabled by default
   static s32 regionPreference = 0;
-  static s32 n64UpscaleFactor = 1;
-  static bool n64Recompiler = true;
+  static std::atomic<s32>  n64UpscaleFactor{1};
+  static std::atomic<bool> n64Recompiler{true};
+  static std::atomic<bool> n64ExpansionPak{true};
+  static std::atomic<bool> n64DisableVIProcessing{false};
+  static std::atomic<bool> n64WeaveDeinterlacing{false};
+  static std::atomic<bool> n64SupersampleScanout{false};
+  static std::atomic<bool> skipBootRom{false};
   static bool ps1AnalogMode = true;
-  static bool n64ExpansionPak = true;
-  static bool skipBootRom = false;
   static bool orientationVertical = false;
   static string customDriverPath;
   static string nativeLibraryDir;
@@ -276,7 +350,9 @@ namespace ares {
     if (logBuffer.size() > 5000) logBuffer.pop_front();
   }
 
-  auto emulationLoop() -> void {
+  static std::atomic<u32> emuThreadGeneration{0};
+
+  auto emulationLoop(u32 generation) -> void {
     #if defined(ANDROID)
     setpriority(PRIO_PROCESS, 0, -10);
     #endif
@@ -288,30 +364,49 @@ namespace ares {
     }
     sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
 
-    while (emulationRunning) {
+    // Absolute frame deadline for pacing (see below). Persists across the
+    // loop so sleep overshoot never compounds frame-to-frame.
+    auto frameDeadline = std::chrono::steady_clock::now();
+
+    while (emulationRunning && emuThreadGeneration == generation) {
+      // Take a local shared_ptr copy so the zombie thread holds a
+      // reference to the N64 System even after the main thread
+      // replaces the global 'root'. Prevents use-after-free in the
+      // abandon path.
+      auto localRoot = root;
+
       if (resetRequestedAtomic.exchange(false)) {
-        std::lock_guard<std::recursive_mutex> lock(runMutex);
-        if (root) {
-            root->power();
+        std::lock_guard<std::recursive_mutex> lock(*runMutex);
+        if (localRoot) {
+            // power(true) = soft reset. Node::System::power() defaults to
+            // reset=false, which would take the N64 cold-boot path and
+            // destroy/recreate the Vulkan device (poisoning it on Turnip).
+            localRoot->power(true);
             addLog(LogLevel::Info, "System reset (async)");
+            LOGI("System reset complete (async)");
         }
       }
 
       if (!isPausedAtomic) {
         auto start = std::chrono::steady_clock::now();
         {
-            std::lock_guard<std::recursive_mutex> lock(runMutex);
-            if (root) {
-                root->run();
+            std::lock_guard<std::recursive_mutex> lock(*runMutex);
+            if (localRoot) {
+                localRoot->run();
             }
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         auto end = std::chrono::steady_clock::now();
 
+        // Per-core pacing: the cap target is derived from the core's native
+        // refresh rate (60/75/50 Hz) instead of a hardcoded 60 FPS, so
+        // WonderSwan (~75 Hz) and PAL cores are no longer throttled.
+        double refreshRate = refreshRateAtomic.load();
+
         if (fastForwardAtomic) {
             f64 speed = (f64)ffSpeedLimitAtomic;
             if (speed > 0.0) {
-                f64 targetFrameTime = (1000000.0 / 60.0) / speed;
+                f64 targetFrameTime = (1000000.0 / refreshRate) / speed;
                 auto actualFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
                 if (actualFrameTime < targetFrameTime) {
                     std::this_thread::sleep_for(std::chrono::microseconds((s64)(targetFrameTime - (f64)actualFrameTime)));
@@ -323,13 +418,38 @@ namespace ares {
         avgFrameTime = avgFrameTime * 0.9 + (f64)lastFrameTime * 0.1;
         frameCount++;
 
-        // 60 FPS frame cap for cores without natural audio backpressure
-        // (Atari 2600, ColecoVision, etc.). Audio-synced cores and mega CD
-        // are unaffected — their root->run() or greedy audio drain pace them.
+        // Pacing (non-fast-forward): sync to audio with a video-rate
+        // fallback.
+        //
+        // The old approach slept for the exact remaining budget each frame
+        // (sleep_for). On Android that overshoots 1-5ms per call and the
+        // overshoot compounds, dragging a 60fps target to ~52. Worse, the
+        // sleep drains the CPU/GPU pipeline every frame, so the next run()
+        // exposes the full GPU fence latency of the previous frame: a scene
+        // that fast-forward (no sleep, pipeline full) runs at 12ms/frame
+        // takes 19ms here.
+        //
+        // Instead: hold an ABSOLUTE frame deadline (sleep_until) so
+        // overshoot never compounds, and let the audio ring be the
+        // pacemaker when audio is present: wait_until either the ring
+        // drains below the target latency (the DAC's real-time clock -
+        // hardware-accurate) or the video deadline (for silent moments).
+        // Waiting on the AUDIO buffer instead of the GPU keeps the GPU
+        // pipeline full, hiding fence latency and preventing underruns.
         if (!fastForwardAtomic) {
-          auto frameElapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-          if (frameElapsed < 16667) {
-            std::this_thread::sleep_for(std::chrono::microseconds(16667 - frameElapsed));
+          double frameTarget = 1000000.0 / refreshRate;
+          frameDeadline += std::chrono::microseconds((s64)frameTarget);
+          // ~50ms of stereo floats: the latency we keep buffered to ride
+          // out short GPU hitches without underrunning.
+          constexpr size_t audioTargetFloats = 48000 * 2 * 50 / 1000;
+          std::unique_lock<std::mutex> lock(audioMutex);
+          audioCV.wait_until(lock, frameDeadline, [&] {
+            return audioRingSize <= audioTargetFloats || audioThreadStop.load();
+          });
+          // If we fell behind (heavy frames), snap the deadline forward in
+          // whole frame periods so we never burst to catch up.
+          while (std::chrono::steady_clock::now() > frameDeadline) {
+            frameDeadline += std::chrono::microseconds((s64)frameTarget);
           }
         }
 
@@ -345,35 +465,32 @@ namespace ares {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
     }
+    LOGI("Emulation thread generation %u exiting", generation);
   }
 
-  // Persistent emulation thread — created once, never killed.
-  // GBC was confirmed working with this model. PCE hangs are handled
-  // by try_lock() in unloadSystem() which abandons stuck threads.
-  static std::mutex threadMutex;
-  static std::condition_variable threadCV;
-  static bool threadShouldRun = false;
-
   static auto ensureThread() -> void {
-    if (emuThread) return;
-    emuThreadRunning = true;
-    pthread_create(&emuThread, nullptr, [](void*) -> void* {
-      while (emuThreadRunning) {
-        { std::unique_lock<std::mutex> lk(threadMutex); threadCV.wait(lk, []{ return threadShouldRun || !emuThreadRunning; }); threadShouldRun = false; }
-        if (!emuThreadRunning) break;
-        emulationLoop();
-      }
+    if (emuThread && emuThreadRunning) return;
+    // Reset abandoned thread state so a fresh emulation thread is created.
+    if (emuThread) {
+      LOGW("ensureThread: replacing abandoned emulation thread");
+      emuThread = 0;
       emuThreadRunning = false;
-      return nullptr;
-    }, nullptr);
+      runMutex = new std::recursive_mutex();
+    }
+    emuThreadRunning = true;
+    u32 gen = ++emuThreadGeneration;
+    pthread_create(&emuThread, nullptr, [](void* arg) -> void* {
+        u32 myGen = (u32)(uintptr_t)arg;
+        emulationLoop(myGen);
+        emuThreadRunning = false;
+        return nullptr;
+    }, (void*)(uintptr_t)gen);
   }
 
   auto setEmulationRunning(bool running) -> void {
-    std::lock_guard<std::mutex> lock(threadMutex);
     if (emulationRunning == running) return;
-    ensureThread();
     emulationRunning = running;
-    if (running) { threadShouldRun = true; threadCV.notify_one(); }
+    if (running) ensureThread();
   }
 
   struct AndroidPlatform : Platform {
@@ -404,6 +521,17 @@ namespace ares {
 
     auto time() -> s64 override {
       return (s64)std::time(nullptr);
+    }
+
+    auto refreshRateHint(double refreshRate) -> void override {
+      // Called by ares Screen nodes (some cores call it every frame). Ignore
+      // garbage values and only log when the rate actually changes so we
+      // don't spam logcat for dynamic-rate cores (WonderSwan, Atari 2600).
+      if (refreshRate < 20.0 || refreshRate > 240.0) return;
+      double prev = refreshRateAtomic.exchange(refreshRate);
+      if (std::abs(prev - refreshRate) > 0.5) {
+        LOGI("Refresh rate hint: %.2f Hz", refreshRate);
+      }
     }
 
     auto input(Node::Input::Input input) -> void override {
@@ -554,24 +682,32 @@ namespace ares {
                     lastFrameBuffer[y * width + x] = ap;
                 }
             }
-        } else if (isN64Vulkan && vData) {
-            // Direct SIMD NEON vectorized copy from Vulkan RGBA to Android ABGR
-            u32 copyW = std::min(width, vW);
-            u32 copyH = std::min(height, vH);
-            for (s32 y = 0; y < (s32)copyH; y++) {
-                const u32* srcLine = (const u32*)(vData + y * vW * 4);
-                u32* destLine = dest + y * dst_stride;
-                s32 x = 0;
-                #if defined(__aarch64__) || defined(__arm__)
-                uint32x4_t alpha = vdupq_n_u32(0xFF000000);
-                for (; x <= (s32)copyW - 4; x += 4) {
-                    uint32x4_t p = vld1q_u32(srcLine + x);
-                    uint32x4_t result = vorrq_u32(alpha, p);
-                    vst1q_u32(destLine + x, result);
-                }
-                #endif
-                for (; x < (s32)copyW; x++) {
-                    destLine[x] = 0xFF000000 | srcLine[x];
+        } else if (isN64Vulkan) {
+            // Direct SIMD NEON vectorized copy from Vulkan RGBA to Android ABGR.
+            // vData can be null when the scanout fence timed out in
+            // mapScanoutRead() — but mapScanoutRead() still acquired
+            // vulkan.mutex (scanoutLock). unmapScanoutRead() MUST run in ALL
+            // cases, otherwise the screen thread leaks vulkan.mutex forever and
+            // the emulation thread blocks in scanoutAsync → run() never
+            // returns → black screen after reset. This was the N64 reset hang.
+            if (vData) {
+                u32 copyW = std::min(width, vW);
+                u32 copyH = std::min(height, vH);
+                for (s32 y = 0; y < (s32)copyH; y++) {
+                    const u32* srcLine = (const u32*)(vData + y * vW * 4);
+                    u32* destLine = dest + y * dst_stride;
+                    s32 x = 0;
+                    #if defined(__aarch64__) || defined(__arm__)
+                    uint32x4_t alpha = vdupq_n_u32(0xFF000000);
+                    for (; x <= (s32)copyW - 4; x += 4) {
+                        uint32x4_t p = vld1q_u32(srcLine + x);
+                        uint32x4_t result = vorrq_u32(alpha, p);
+                        vst1q_u32(destLine + x, result);
+                    }
+                    #endif
+                    for (; x < (s32)copyW; x++) {
+                        destLine[x] = 0xFF000000 | srcLine[x];
+                    }
                 }
             }
             ::ares::Nintendo64::vulkan.unmapScanoutRead();
@@ -616,28 +752,48 @@ namespace ares {
     auto audio(Node::Audio::Stream stream) -> void override {
       if (isPausedAtomic) return;
 
-      if (!audioStream) {
-        AAudioStreamBuilder* builder;
-        AAudio_createStreamBuilder(&builder);
-        AAudioStreamBuilder_setSampleRate(builder, 48000);
-        AAudioStreamBuilder_setChannelCount(builder, 2);
-        AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
-        AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-        AAudioStreamBuilder_openStream(builder, &audioStream);
-        AAudioStreamBuilder_delete(builder);
-        if (audioStream) {
-            // 24 bursts (~4608 frames): holds ~2.1 frames of triple-stream
-            // output (Mega CD: YM2612+CD-DA+PCM = ~2166/frame). AAudio drains
-            // 800/frame independently; the deep buffer absorbs the difference.
-            AAudioStream_setBufferSizeInFrames(audioStream,
-                AAudioStream_getFramesPerBurst(audioStream) * 24);
+      {
+        std::lock_guard<std::mutex> lock(audioMutex);
+        if (!audioStream) {
+          AAudioStreamBuilder* builder;
+          AAudio_createStreamBuilder(&builder);
+          AAudioStreamBuilder_setSampleRate(builder, 48000);
+          AAudioStreamBuilder_setChannelCount(builder, 2);
+          AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
+          AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+          AAudioStreamBuilder_openStream(builder, &audioStream);
+          AAudioStreamBuilder_delete(builder);
+          if (audioStream) {
+            // 32 bursts (~6144 frames at 48k = ~128ms): holds several frames
+            // of output and rides out short stalls without underrunning.
+            s32 burst = AAudioStream_getFramesPerBurst(audioStream);
+            s32 bufferFrames = burst * 32;
+            AAudioStream_setBufferSizeInFrames(audioStream, bufferFrames);
+            // Prime with silence so the first emulated frames have headroom.
+            std::vector<f32> silence((size_t)bufferFrames * 2, 0.0f);
+            s64 written = 0;
+            while (written < bufferFrames) {
+                s32 n = AAudioStream_write(audioStream, silence.data() + written * 2,
+                    (s32)(bufferFrames - written), 0);
+                if (n <= 0) break;
+                written += n;
+            }
             AAudioStream_requestStart(audioStream);
+          }
+          if (!audioThreadRunning.load()) {
+            audioThreadStop.store(false);
+            audioThread = std::thread(audioThreadMain);
+            audioThreadRunning.store(true);
+          }
         }
       }
 
+      // Push samples into the audio ring buffer (O(1), fixed ~125ms cap).
+      // Never blocks; oldest samples are overwritten when the emulator
+      // out-produces the DAC so a fast-forward burst can't leave a backlog.
       if (audioStream) {
-        static std::vector<f32> localBuffer;
-        localBuffer.reserve(2048);
+        thread_local std::vector<f32> localBuffer;
+        localBuffer.clear();
 
         f64 samples[2];
         while (stream->pending()) {
@@ -650,21 +806,14 @@ namespace ares {
             if (muteAudioAtomic) {
                 std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
             }
-            // Greedy drain: write as many full bursts as fit, drop excess.
-            // Triple-stream oversupply (~2k samples/frame) can't live in
-            // any buffer depth — the excess gets dropped silently across
-            // frames rather than accumulating and eventually stalling.
-            s32 total = (s32)localBuffer.size() / 2;
-            s32 written = 0;
-            while (written < total) {
-                s32 chunk = total - written;
-                s64 timeout = 0; // non-blocking: buffer manages itself
-                s32 result = AAudioStream_write(audioStream,
-                    localBuffer.data() + written * 2, chunk, timeout);
-                if (result > 0) written += result;
-                else break; // buffer full or error — drop remainder
+            std::lock_guard<std::mutex> lock(audioMutex);
+            if (audioRing.empty()) audioRing.resize(audioRingCapacity);
+            for (f32 s : localBuffer) {
+              audioRing[(audioRingHead + audioRingSize) % audioRingCapacity] = s;
+              if (audioRingSize < audioRingCapacity) audioRingSize++;
+              else audioRingHead = (audioRingHead + 1) % audioRingCapacity; // overwrite oldest
             }
-            localBuffer.clear();
+            audioCV.notify_one();
         }
       }
     }
@@ -888,27 +1037,89 @@ namespace ares {
   auto unloadSystem() -> void {
     isPausedAtomic = true;
     fastForwardAtomic = false;
+
+    // Stop the audio thread FIRST (it may be mid-write to audioStream),
+    // then stop/close the stream. Leaving the stream draining while the menu
+    // shows causes continuous underruns → pops on every exit and load.
+    if (audioThreadRunning.load()) {
+      {
+        std::lock_guard<std::mutex> lock(audioMutex);
+        audioThreadStop.store(true);
+      }
+      audioCV.notify_one();
+      if (audioThread.joinable()) audioThread.join();
+      audioThreadRunning.store(false);
+    }
+    {
+      std::lock_guard<std::mutex> lock(audioMutex);
+      if (audioStream) {
+        AAudioStream_requestStop(audioStream);
+        AAudioStream_close(audioStream);
+        audioStream = nullptr;
+      }
+    }
+
+    // Tell the emulation thread to stop and wait for it to release runMutex.
+    // We hold the lock briefly just to verify the thread has released it;
+    // then we unlock and proceed with the full unload under systemMutex.
     setEmulationRunning(false);
 
-    // If the emulation thread is stuck inside root->run() (e.g. PCE scheduler
-    // deadlock), runMutex is held and the thread will never reach the while
-    // check. Abandon the system cleanly instead of hanging on root->unload().
-    // Save exports are lost (but PCE has no save data yet anyway).
-    if (!runMutex.try_lock()) {
+    bool acquired = false;
+    if (!emuThreadRunning) {
+      // No thread running — safe to grab the mutex immediately.
+      runMutex->lock();
+      acquired = true;
+    } else {
+      // Wait up to 2 seconds for the thread to finish its current frame.
+      for (int i = 0; i < 200; i++) {
+        if (runMutex->try_lock()) { acquired = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+
+    if (!acquired) {
+      // Thread is stuck inside root->run(). The zombie holds a
+      // localRoot reference.
       LOGI("unloadSystem: emulation thread stuck, abandoning system");
+
+      // IMPORTANT: do NOT set Vulkan::discardPipelineCache here. The zombie
+      // never destroys the system while it is stuck, so the flag never serves
+      // its intended purpose (arming skip-idle teardown) — it only poisons
+      // the NEXT N64 load by clearing the in-memory cache before the disk
+      // cache is read, forcing a full shader-recompile storm (sync GPU
+      // stalls of 10-500ms per pipeline, killing FPS and making fast-forward
+      // useless until the cache re-warms). A stuck non-N64 core (e.g. PC
+      // Engine) taking this path destroyed the user's warm N64 cache exactly
+      // this way. Real wedge handling belongs in Vulkan::unload()'s bounded
+      // scanout-fence check, which arms skip_idle_on_destroy only when the
+      // GPU is actually unresponsive.
+      // Similarly, skipCachePersist must not be set here: it would prevent
+      // the next normal unload from persisting newly-compiled pipelines.
+
       std::lock_guard<std::recursive_mutex> lock(systemMutex);
-      root.reset();
+
+      // Orphan the current system and its runner mutex. We leak the
+      // mutex pointers because the zombie thread may still hold locks.
+      // We clear 'root' so no new calls use the old system.
+      // The shared_ptr ref in the zombie thread's 'localRoot' keeps it
+      // alive until (if ever) it exits its loop iteration.
+      root = {};
+      runMutex = new std::recursive_mutex();
+      emuThreadGeneration.fetch_add(1);
+
       cachedPlayer1 = {};
       inputButtonCache.clear();
       inputAxisCache.clear();
       inputCacheOrientation = -1;
       currentMedium.reset();
       secondaryMedium.reset();
+      emuThread = 0;
+      emuThreadRunning = false;
       LOGI("System abandoned (thread stuck)");
       return;
     }
-    // Thread exited cleanly — safe to unload normally.
-    runMutex.unlock();
+    // Thread exited cleanly — we hold runMutex. Release it and unload normally.
+    runMutex->unlock();
 
     std::lock_guard<std::recursive_mutex> lock(systemMutex);
     if (root) {
@@ -1110,6 +1321,7 @@ else if (port->type() == "Keyboard") {
     string uri = uriPtr;
     string romName = romNamePtr ? romNamePtr : "";
     unloadSystem();
+
     std::unique_lock<std::recursive_mutex> lock(systemMutex);
 
     isPausedAtomic = false;
@@ -1299,10 +1511,16 @@ else if (port->type() == "Keyboard") {
         LOGI("N64: Pipeline cache path: %s", (const char*)::ares::Nintendo64::vulkan.pipelineCachePath);
       }
       if (n64UpscaleFactor < 1) n64UpscaleFactor = 1;
-      ::ares::Nintendo64::vulkan.internalUpscale = (u32)n64UpscaleFactor;
-      ::ares::Nintendo64::vulkan.outputUpscale = (u32)n64UpscaleFactor;
+    if (n64UpscaleFactor > 4) n64UpscaleFactor = 4; // memory safety: see setN64Upscale()
+      ::ares::Nintendo64::vulkan.internalUpscale = (u32)n64UpscaleFactor.load();
+      ::ares::Nintendo64::vulkan.outputUpscale = n64SupersampleScanout.load() ? 1 : (u32)n64UpscaleFactor.load();
+      ::ares::Nintendo64::vulkan.disableVideoInterfaceProcessing = n64DisableVIProcessing.load();
+      ::ares::Nintendo64::vulkan.weaveDeinterlacing = n64WeaveDeinterlacing.load();
+      ::ares::Nintendo64::vulkan.supersampleScanout = n64SupersampleScanout.load();
+      ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
+      ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
       bool is64DD = (identifiedSystem == "Nintendo 64DD" || extension == "ndd" || extension == "d64" || secondaryMedium != nullptr);
-      ::ares::Nintendo64::system.expansionPak = n64ExpansionPak;
+      ::ares::Nintendo64::system.expansionPak = n64ExpansionPak.load();
 
       const char* regionString = getRegion(
           is64DD ? "[Nintendo] Nintendo 64DD (NTSC-U)" : "[Nintendo] Nintendo 64 (NTSC)",
@@ -1485,19 +1703,66 @@ else if (port->type() == "Keyboard") {
   auto setFastBoot(bool enabled) -> void { fastBootAtomic = enabled; LOGI("Fast boot %s", enabled ? "enabled" : "disabled"); }
   auto setAutoSaveMemory(bool enabled) -> void { autoSaveMemoryAtomic = enabled; LOGI("Auto-save memory %s", enabled ? "enabled" : "disabled"); }
   auto setAutoLoadMemory(bool enabled) -> void { autoLoadMemoryAtomic = enabled; LOGI("Auto-load memory %s", enabled ? "enabled" : "disabled"); }
-  auto setPause(bool paused) -> void { isPausedAtomic = paused; LOGI("Emulation %s", paused ? "paused" : "resumed"); }
+  auto setPause(bool paused) -> void {
+    isPausedAtomic = paused;
+    // Stop the audio stream while paused so it doesn't keep draining with no
+    // new samples (underrun pops in the pause menu); restart it on resume.
+    // The audio thread checks isPausedAtomic and drops queued samples while
+    // paused, so stale audio never plays on resume.
+    // Only requestStart if not already starting/started — calling it on an
+    // already-starting stream returns -895 and can desync the clock.
+    std::lock_guard<std::mutex> lock(audioMutex);
+    if (audioStream) {
+      if (paused) {
+        AAudioStream_requestStop(audioStream);
+      } else {
+        aaudio_stream_state_t state = AAudioStream_getState(audioStream);
+        if (state != AAUDIO_STREAM_STATE_STARTING && state != AAUDIO_STREAM_STATE_STARTED) {
+          AAudioStream_requestStart(audioStream);
+        }
+      }
+    }
+    LOGI("Emulation %s", paused ? "paused" : "resumed");
+  }
   auto setFastForward(bool enabled) -> void { fastForwardAtomic = enabled; LOGI("Fast forward %s", enabled ? "enabled" : "disabled"); }
   auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
   auto resetSystem() -> void {
     resetRequestedAtomic.store(true);
+    #if defined(CORE_N64)
+    // Soft reset: keep the Vulkan device alive. Destroying the device and
+    // creating a fresh one in the same process is fundamentally broken on
+    // Turnip/Mesa — even when teardown "succeeds" (bounded fence waits),
+    // the newly created device's fences can fail to signal, so the first
+    // frame after reset hangs forever with no output. Upstream ares soft
+    // resets N64 with the device alive (System::power(true) keeps it when
+    // discardPipelineCache is false), which is both correct and fast — the
+    // pipeline cache survives, so no post-reset shader-recompile storm.
+    // The VI/deinterlace/supersample atomics below are read live by
+    // scanoutAsync every frame, so the new values simply take effect
+    // immediately.
+    //
+    // Defensive: clear any stale teardown flags so a reset never inherits
+    // a device-teardown decision from an earlier path. (The abandon path
+    // no longer sets these — it destroyed the warm pipeline cache — but
+    // clearing them here guarantees reset always takes the keep-device
+    // branch.)
+    ::ares::Nintendo64::Vulkan::discardPipelineCache = false;
+    ::ares::Nintendo64::Vulkan::skipCachePersist = false;
+    ::ares::Nintendo64::vulkan.disableVideoInterfaceProcessing = n64DisableVIProcessing.load();
+    ::ares::Nintendo64::vulkan.weaveDeinterlacing = n64WeaveDeinterlacing.load();
+    ::ares::Nintendo64::vulkan.supersampleScanout = n64SupersampleScanout.load();
+    ::ares::Nintendo64::vulkan.outputUpscale = n64SupersampleScanout.load() ? 1 : (u32)n64UpscaleFactor.load();
+    ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
+    ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
+    #endif
     LOGI("System reset requested");
   }
-  auto frameAdvance() -> void { lock_guard<recursive_mutex> lock(runMutex); if (root) root->run(); }
+  auto frameAdvance() -> void { lock_guard<recursive_mutex> lock(*runMutex); if (root) root->run(); }
   auto setMuteAudio(bool muted) -> void { muteAudioAtomic = muted; }
   auto setShader(const char* path) -> bool { return true; }
   auto saveState(const char* path) -> bool {
     bool wasPaused = isPausedAtomic.exchange(true);
-    lock_guard<recursive_mutex> lock(runMutex);
+    lock_guard<recursive_mutex> lock(*runMutex);
     if (!root) { isPausedAtomic.store(wasPaused); return false; }
     auto s = root->serialize(true);
     bool result = nall::file::write(path, {s.data(), s.size()});
@@ -1507,7 +1772,7 @@ else if (port->type() == "Keyboard") {
   }
   auto loadState(const char* path) -> bool {
     bool wasPaused = isPausedAtomic.exchange(true);
-    lock_guard<recursive_mutex> lock(runMutex);
+    lock_guard<recursive_mutex> lock(*runMutex);
     if (!root) { isPausedAtomic.store(wasPaused); return false; }
 
     auto totalStart = std::chrono::steady_clock::now();
@@ -1540,28 +1805,39 @@ else if (port->type() == "Keyboard") {
   auto setRegion(s32 regionIndex) -> void { regionPreference = regionIndex; }
   auto setN64Upscale(s32 factor) -> void {
     if (factor < 1) factor = 1;
+    // Hard cap at 4x: 8x on a 640x240 framebuffer creates ~5120x3840
+    // internal targets (~150MB per buffer, multiple in flight) which
+    // exhausts device memory — kswapd thrashes, dequeueBuffer fails,
+    // ANR (observed in the field). Clamping here (the JNI entry point)
+    // protects both the pause menu and the settings menu.
+    if (factor > 4) factor = 4;
     n64UpscaleFactor = factor;
-    LOGI("N64 upscale factor set to %dx", factor);
-    lock_guard<std::recursive_mutex> lock(systemMutex);
-    if (root && root->name() == "Nintendo 64") {
-        #if defined(CORE_N64)
-        ::ares::Nintendo64::vulkan.internalUpscale = (u32)factor;
-        ::ares::Nintendo64::vulkan.outputUpscale = (u32)factor;
-        #endif
-    }
+    LOGI("N64 upscale factor set to %dx (applies on next reset)", factor);
   }
   auto setN64Recompiler(bool enabled) -> void {
     n64Recompiler = enabled;
-    LOGI("N64 recompiler set to %s", enabled ? "enabled" : "disabled");
-    lock_guard<std::recursive_mutex> lock(systemMutex);
-    if (root && root->name() == "Nintendo 64") {
-        #if defined(CORE_N64)
-        ::ares::Nintendo64::cpu.recompiler.enabled = enabled;
-        ::ares::Nintendo64::rsp.recompiler.enabled = enabled;
-        #endif
-    }
+    LOGI("N64 recompiler set to %s (applies on next reset)", enabled ? "enabled" : "disabled");
   }
   auto setSkipBootRom(bool enabled) -> void { skipBootRom = enabled; LOGI("Skip Boot ROM set to %s", enabled ? "enabled" : "disabled"); }
+  // VI/deinterlace/supersample settings cannot be applied live — they
+  // alter the RDP scanout pipeline which is actively rendering frames.
+  // Mutating them mid-frame causes GPU fence deadlocks (the emulation
+  // thread blocks indefinitely in scanoutAsync waiting for a fence that
+  // the GPU can no longer signal with the changed VI config).
+  // Instead, just persist the preference; it takes effect on the next
+  // System Reset or fresh load.
+  auto setN64DisableVIProcessing(bool enabled) -> void {
+    n64DisableVIProcessing = enabled;
+    LOGI("N64 disable VI processing set to %d (applies on next reset)", enabled);
+  }
+  auto setN64WeaveDeinterlacing(bool enabled) -> void {
+    n64WeaveDeinterlacing = enabled;
+    LOGI("N64 weave deinterlacing set to %d (applies on next reset)", enabled);
+  }
+  auto setN64SupersampleScanout(bool enabled) -> void {
+    n64SupersampleScanout = enabled;
+    LOGI("N64 supersample scanout set to %d (applies on next reset)", enabled);
+  }
   auto setN64ExpansionPak(bool enabled) -> void {
     if (n64ExpansionPak == enabled) return;
     n64ExpansionPak = enabled;
@@ -1703,6 +1979,13 @@ else if (port->type() == "Keyboard") {
     stats.fps = currentFps.load();
     stats.frameTime = avgFrameTime.load() / 1000.0;
     stats.activeCore = (s32)sched_getcpu();
+    #if defined(CORE_N64)
+    stats.pipelineFailures = ::ares::Nintendo64::Vulkan::pipelineFailureCount.load(std::memory_order_relaxed);
+    stats.isAdrenoDriver = (bool)::ares::Nintendo64::Vulkan::gpuDeviceName.find("Adreno");
+    #else
+    stats.pipelineFailures = 0;
+    stats.isAdrenoDriver = false;
+    #endif
     return stats;
   }
   auto takeScreenshot(const char* path) -> bool {

@@ -6,8 +6,15 @@ struct Accuracy {
     static constexpr bool Interpreter = 0 | Reference | !recompiler::generic::supported;
     static constexpr bool Recompiler = !Interpreter;
 
-    //Maximum number of cycles to run the CPU without synchronization
-    static constexpr s64 JitInterleaving = 4096 * 2;
+    //Maximum number of cycles to run the CPU without synchronization.
+    //Raised 4x vs upstream (4096*2) for the Android port: the deep AAudio
+    //buffer absorbs coarser AI stepping, VI still refreshes every frame
+    //(cpu.main exits on vi.refreshed), and the compare/queue timers still
+    //bound the budget below this — so the only effect is quartering the
+    //synchronize() call rate (each sync steps all peripherals + profiles).
+    //Combined with the auto frame-skip, CPU-bound frames get noticeably
+    //cheaper on a phone-class big core.
+    static constexpr s64 JitInterleaving = 4096 * 8;
 
     //exceptions when the CPU accesses unaligned memory addresses
     static constexpr bool AddressErrors = 1 | Reference;

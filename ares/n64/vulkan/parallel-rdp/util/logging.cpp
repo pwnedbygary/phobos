@@ -21,6 +21,7 @@
  */
 
 #include "logging.hpp"
+#include <atomic>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -29,23 +30,24 @@
 
 namespace Util
 {
-static thread_local LoggingInterface *logging_iface;
+static std::atomic<LoggingInterface *> logging_iface{nullptr};
 
 bool interface_log(const char *tag, const char *fmt, ...)
 {
-	if (!logging_iface)
+	auto *iface = logging_iface.load(std::memory_order_relaxed);
+	if (!iface)
 		return false;
 
 	va_list va;
 	va_start(va, fmt);
-	bool ret = logging_iface->log(tag, fmt, va);
+	bool ret = iface->log(tag, fmt, va);
 	va_end(va);
 	return ret;
 }
 
 void set_thread_logging_interface(LoggingInterface *iface)
 {
-	logging_iface = iface;
+	logging_iface.store(iface, std::memory_order_relaxed);
 }
 
 #ifdef _WIN32

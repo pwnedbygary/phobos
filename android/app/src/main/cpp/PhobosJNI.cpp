@@ -215,6 +215,21 @@ Java_com_phobos_emulator_PhobosCore_setN64ExpansionPak(JNIEnv* env, jobject, jbo
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64DisableVIProcessing(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setN64DisableVIProcessing(enabled);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64WeaveDeinterlacing(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setN64WeaveDeinterlacing(enabled);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64SupersampleScanout(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setN64SupersampleScanout(enabled);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setRomFd(JNIEnv* env, jobject, jint fd) {
     ares::setRomFd((s32)fd);
 }
@@ -241,7 +256,9 @@ Java_com_phobos_emulator_PhobosCore_isFirstFrameRendered(JNIEnv* env, jobject) {
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_phobos_emulator_PhobosCore_getBlacklistedPipelineCount(JNIEnv* env, jobject) {
-    return 0;  // Console log shows blacklisted hashes; no JNI plumbing needed.
+    // Pipeline failure count is reported as part of getPerformanceStats(),
+    // which has access to the N64 headers via PhobosRunner.cpp.
+    return 0;
 }
 
 extern "C" JNIEXPORT jobject JNICALL
@@ -355,7 +372,7 @@ Java_com_phobos_emulator_PhobosCore_getPerformanceStats(JNIEnv* env, jobject) {
     ares::PerformanceStats stats = ares::getPerformanceStats();
 
     jclass cls = env->FindClass("com/phobos/emulator/PerformanceStats");
-    jmethodID constructor = env->GetMethodID(cls, "<init>", "(DDI)V");
+    jmethodID constructor = env->GetMethodID(cls, "<init>", "(DDIIZ)V");
 
-    return env->NewObject(cls, constructor, (f64)stats.fps, (f64)stats.frameTime, (s32)stats.activeCore);
+    return env->NewObject(cls, constructor, (f64)stats.fps, (f64)stats.frameTime, (s32)stats.activeCore, (s32)stats.pipelineFailures, (jboolean)stats.isAdrenoDriver);
 }

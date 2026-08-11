@@ -163,7 +163,7 @@ CommandProcessor::CommandProcessor(Vulkan::Device &device_, void *rdram_ptr,
 
 CommandProcessor::~CommandProcessor()
 {
-	idle();
+	if (!skip_idle_on_destroy) idle();
 }
 
 void CommandProcessor::begin_frame_context()
@@ -1069,9 +1069,18 @@ void CommandProcessor::wait_for_timeline(uint64_t index)
 	Vulkan::QueryPoolHandle start_ts, end_ts;
 	if (measure_stall_time)
 		start_ts = device.write_calibrated_timestamp();
-	timeline_worker.wait([this, index]() -> bool {
+	// BOUNDED wait: the timeline worker may be stuck on a GPU fence that
+	// Turnip never signals after a soft reset. An unconditional wait here
+	// wedges the emulation thread inside run() with no output. Wait up to
+	// 2s, log, then proceed — the next frame re-synchronizes.
+	if (!timeline_worker.wait_timeout([this, index]() -> bool {
 		return thread_timeline_value >= index;
-	});
+	}, 2000))
+	{
+		LOGE("CommandProcessor::wait_for_timeline: timed out waiting for timeline "
+		     "%llu (current=%llu). Proceeding.\n",
+		     (unsigned long long)index, (unsigned long long)thread_timeline_value);
+	}
 	if (measure_stall_time)
 	{
 		end_ts = device.write_calibrated_timestamp();

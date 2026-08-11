@@ -99,6 +99,18 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         settingsStore.setN64ExpansionPak(enabled)
         PhobosCore.setN64ExpansionPak(enabled)
     }
+    fun setN64DisableVIProcessing(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64DisableVIProcessing(enabled)
+        PhobosCore.setN64DisableVIProcessing(enabled)
+    }
+    fun setN64WeaveDeinterlacing(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64WeaveDeinterlacing(enabled)
+        PhobosCore.setN64WeaveDeinterlacing(enabled)
+    }
+    fun setN64SupersampleScanout(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64SupersampleScanout(enabled)
+        PhobosCore.setN64SupersampleScanout(enabled)
+    }
     fun setFastForwardSpeed(speed: Float) = viewModelScope.launch {
         settingsStore.setFastForwardSpeed(speed)
         PhobosCore.setFastForwardSpeed(speed)
@@ -106,6 +118,9 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setFullScreenMode(enabled: Boolean) = viewModelScope.launch { settingsStore.setFullScreenMode(enabled) }
     fun setShowTouchControls(enabled: Boolean) = viewModelScope.launch { settingsStore.setShowTouchControls(enabled) }
     fun setShowPerformanceMonitor(enabled: Boolean) = viewModelScope.launch { settingsStore.setShowPerformanceMonitor(enabled) }
+    fun setPerfOverlayScale(scale: Float) = viewModelScope.launch { settingsStore.setPerfOverlayScale(scale) }
+    fun setPerfOverlayPosX(x: Float) = viewModelScope.launch { settingsStore.setPerfOverlayPosX(x) }
+    fun setPerfOverlayPosY(y: Float) = viewModelScope.launch { settingsStore.setPerfOverlayPosY(y) }
     fun setLogVerbosity(level: LogLevel) = viewModelScope.launch {
         settingsStore.setLogVerbosity(level)
         PhobosCore.setLogLevel(level.ordinal)
@@ -313,6 +328,12 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     private val _currentSlot = MutableStateFlow(0)
     val currentSlot: StateFlow<Int> = _currentSlot
 
+    // Triggered once when GPU pipeline failures are detected (broken built-in driver).
+    // User can dismiss; won't re-show until next game load.
+    private val _showDriverSuggestion = MutableStateFlow(false)
+    val showDriverSuggestion: StateFlow<Boolean> = _showDriverSuggestion
+    private var driverSuggestionShown = false
+
     fun incrementSlot() {
         _currentSlot.value = (_currentSlot.value + 1) % 10
     }
@@ -389,6 +410,12 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                     if (_isLoaded.value && !_isPaused.value) {
                         val stats = PhobosCore.getPerformanceStats()
                         _perfStats.value = stats
+                        // Show driver suggestion once if pipeline failures are detected
+                        // AND the user is on the built-in Adreno driver (not Turnip Mesa).
+                        if (stats.pipelineFailures > 0 && stats.isAdrenoDriver && !driverSuggestionShown) {
+                            driverSuggestionShown = true
+                            _showDriverSuggestion.value = true
+                        }
                     }
                     
                     delay(500)
@@ -399,6 +426,14 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     fun clearLogs() {
         _logs.value = emptyList()
+    }
+
+    fun dismissDriverSuggestion() {
+        _showDriverSuggestion.value = false
+    }
+
+    fun resetDriverSuggestion() {
+        driverSuggestionShown = false
     }
 
     fun installCustomDriver(context: Context, uri: Uri) {
@@ -697,6 +732,11 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         viewModelScope.launch(Dispatchers.IO) {
             Log.d("Phobos", "loadRom starting: system='$systemName', name='${rom.name}'")
 
+            // Reset driver suggestion for new game load.
+            // Only N64 Vulkan games trigger this, but reset here to be safe.
+            _showDriverSuggestion.value = false
+            driverSuggestionShown = false
+
             // Sync current settings to native before loading
             val currentSettings = settings.value
             
@@ -743,6 +783,9 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setCustomDriverPath(currentSettings.customDriverPath)
             PhobosCore.setPs1AnalogMode(currentSettings.ps1AnalogMode)
             PhobosCore.setN64ExpansionPak(currentSettings.n64ExpansionPak)
+            PhobosCore.setN64DisableVIProcessing(currentSettings.n64DisableVIProcessing)
+            PhobosCore.setN64WeaveDeinterlacing(currentSettings.n64WeaveDeinterlacing)
+            PhobosCore.setN64SupersampleScanout(currentSettings.n64SupersampleScanout)
             _isPaused.value = false
             _isLoaded.value = false
             PhobosCore.setPause(false)
