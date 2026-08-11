@@ -1,4 +1,4 @@
-<img src="https://github.com/pwnedbygary/phobos/ares/ares/resource/logo@2x.png" width="350"/>
+<img src="https://github.com/pwnedbygary/phobos/blob/master/ares/ares/resource/logo%402x.png" width="350"/>
 
 **Phobos** is a port of the well regarded Ares, a multi-system emulator that began development on October 14th, 2004.
 It is a descendant of [higan](https://github.com/higan-emu/higan) and [bsnes](https://github.com/bsnes-emu/bsnes/), and focuses on accuracy and preservation.
