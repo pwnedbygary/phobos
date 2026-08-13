@@ -92,6 +92,11 @@ namespace ares {
   // emulation loop for the frame cap / fast-forward target.
   std::atomic<double> refreshRateAtomic{60.0};
   std::atomic<bool> resetRequestedAtomic{false};
+  // N64 debug instrumentation gate: when OFF (default) the per-second
+  // "N64 PC:" / "N64 STALL/HANG" diagnostics are skipped entirely so logs stay
+  // clean and no per-second core-state reads cost CPU. Toggle ON from Settings
+  // (N64 Experimental) or the pause menu when debugging freezes.
+  std::atomic<bool> n64DebugLoggingAtomic{false};
   pthread_t emuThread = 0;
   std::atomic<bool> emuThreadRunning{false};
 
@@ -232,11 +237,27 @@ namespace ares {
   // Bind-once input caches, mirroring ares desktop's InputMapping::bind(): node
   // names are resolved to VirtualGamepad bits / axis slots ONCE per node and
   // cached, so per-read cost is a map lookup instead of repeated string
-  // matching on the emulation thread. Caches are cleared on system unload and
-  // whenever the WonderSwan orientation mode changes (it remaps button names).
+  // matching on the emulation thread. Caches are keyed by RAW Node::Input*
+  // (button.get()/axis.get()): they MUST be invalidated whenever the node tree
+  // is rebuilt (connectDevices() re-allocates controller ports — PS1 analog
+  // toggle, N64DD disk mount, reload). Otherwise a freed address recycled by
+  // the allocator for a NEW node collides with a stale entry → the new control
+  // binds to the OLD control's bit/slot (e.g. left stick reads R-stick or
+  // nothing) — the "PS1 analog toggle degrades after 3rd toggle" bug.
+  // inputCacheMutex guards these maps: input() runs on the emulation thread
+  // while connectDevices() can clear them from the UI/JNI thread, so a clear
+  // racing a lookup on std::map is UB (corruption) without the lock.
   static std::map<const void*, u32> inputButtonCache;
   static std::map<const void*, u32> inputAxisCache;  // axis slot + 1; 0 = unmapped
   static s32 inputCacheOrientation = -1;
+  static std::mutex inputCacheMutex;
+
+  static auto invalidateInputCaches() -> void {
+    std::lock_guard<std::mutex> lock(inputCacheMutex);
+    inputButtonCache.clear();
+    inputAxisCache.clear();
+    inputCacheOrientation = -1;
+  }
 
   static auto resolveButtonBit(const string& nodeName, const string& systemName, bool vertical) -> u32 {
       u32 b = 0;
@@ -334,6 +355,15 @@ namespace ares {
   static std::atomic<bool> n64DisableVIProcessing{false};
   static std::atomic<bool> n64WeaveDeinterlacing{false};
   static std::atomic<bool> n64SupersampleScanout{false};
+  // VI Overclock percent (100 = native). Written to ::ares::Nintendo64::vi.
+  // overclockPercent at load/reset; makes the VI generate frames faster so
+  // the game's logic runs at a genuinely higher FPS (Mupen64Plus-FZ style).
+  static std::atomic<s32> n64ViOverclock{100};
+  // Count Per Operation (1-3, default 2) + R4300 Overclock factor (0-5,
+  // 2^f) — Mupen64Plus-FZ style CPU timing knobs, written to
+  // ::ares::Nintendo64::cpu.countPerOp / overclockFactor at load/reset.
+  static std::atomic<s32> n64CountPerOp{2};
+  static std::atomic<s32> n64CpuOverclock{0};
   static std::atomic<bool> skipBootRom{false};
   static bool ps1AnalogMode = true;
   static bool orientationVertical = false;
@@ -342,7 +372,30 @@ namespace ares {
   static string tempFilePath;
   static string homePath;
   static string savesPath;
+  static string vulkanCachePath;
   static std::map<string, string> firmwareMap;
+
+  // N64 Player 1 controller pak ("None" | "Rumble Pak" | "Controller Pak").
+  // Rumble state is polled from Kotlin; player1PakDir backs the Controller
+  // Pak's save.pak (created on demand in pak() when a Controller Pak attaches).
+  static string n64Pak = "None";
+  static std::atomic<bool> rumbleState{false};
+  static std::chrono::steady_clock::time_point lastRumbleOnTime{};
+  static std::shared_ptr<vfs::directory> player1PakDir;
+
+  // Forward declaration — defined with the N64 setters below, but called from
+  // unloadSystem() which appears earlier in this translation unit.
+  static auto exportControllerPak() -> void;
+
+  // N64 JIT hang-detector state (see emulationLoop).
+  static u32 hangZeroSeconds = 0;
+  // Stall-spin detector: if the guest PC is identical across consecutive 1s
+  // samples while frames are still being produced (frozen-but-60fps), the CPU
+  // is spinning in a wait loop that isn't resolving. Track it and dump the
+  // full hardware state once we're sure it's stuck.
+  static u64 stallLastPc = 0;
+  static u32 stallSameCount = 0;
+  static bool stallLogged = false;
 
   auto addLog(LogLevel level, string message) -> void {
     std::lock_guard<std::mutex> lock(logMutex);
@@ -418,38 +471,34 @@ namespace ares {
         avgFrameTime = avgFrameTime * 0.9 + (f64)lastFrameTime * 0.1;
         frameCount++;
 
-        // Pacing (non-fast-forward): sync to audio with a video-rate
-        // fallback.
+        // Pacing (non-fast-forward): hold an ABSOLUTE frame deadline so
+        // sleep overshoot never compounds frame-to-frame (the old
+        // sleep_for(remaining-budget) approach drifted 60fps to ~52 and
+        // drained the GPU pipeline each frame, exposing fence latency).
         //
-        // The old approach slept for the exact remaining budget each frame
-        // (sleep_for). On Android that overshoots 1-5ms per call and the
-        // overshoot compounds, dragging a 60fps target to ~52. Worse, the
-        // sleep drains the CPU/GPU pipeline every frame, so the next run()
-        // exposes the full GPU fence latency of the previous frame: a scene
-        // that fast-forward (no sleep, pipeline full) runs at 12ms/frame
-        // takes 19ms here.
-        //
-        // Instead: hold an ABSOLUTE frame deadline (sleep_until) so
-        // overshoot never compounds, and let the audio ring be the
-        // pacemaker when audio is present: wait_until either the ring
-        // drains below the target latency (the DAC's real-time clock -
-        // hardware-accurate) or the video deadline (for silent moments).
-        // Waiting on the AUDIO buffer instead of the GPU keeps the GPU
-        // pipeline full, hiding fence latency and preventing underruns.
+        // Pure deadline pacing (no audio-ring condition): earlier we tried
+        // also waiting for the audio ring to drain below a target, but that
+        // over-throttled audio-heavy cores (Mega CD/Genesis YM2612 triple-
+        // stream fills the ring faster than the DAC drains it → 34fps) and
+        // under-throttled light-audio cores (Atari 2600 ran 119fps because
+        // the ring was always below target → no wait). The absolute video
+        // deadline is the correct universal pace for every core.
         if (!fastForwardAtomic) {
           double frameTarget = 1000000.0 / refreshRate;
-          frameDeadline += std::chrono::microseconds((s64)frameTarget);
-          // ~50ms of stereo floats: the latency we keep buffered to ride
-          // out short GPU hitches without underrunning.
-          constexpr size_t audioTargetFloats = 48000 * 2 * 50 / 1000;
-          std::unique_lock<std::mutex> lock(audioMutex);
-          audioCV.wait_until(lock, frameDeadline, [&] {
-            return audioRingSize <= audioTargetFloats || audioThreadStop.load();
-          });
-          // If we fell behind (heavy frames), snap the deadline forward in
-          // whole frame periods so we never burst to catch up.
-          while (std::chrono::steady_clock::now() > frameDeadline) {
-            frameDeadline += std::chrono::microseconds((s64)frameTarget);
+          auto period = std::chrono::microseconds((s64)frameTarget);
+          frameDeadline += period;
+          std::this_thread::sleep_until(frameDeadline);
+          // Snap the deadline forward only if we're behind by a FULL frame
+          // or more (a genuinely heavy frame / hitch). Small sleep overshoot
+          // (waking slightly after the deadline — normal on Android) must
+          // NOT trigger a full-period advance: doing so advances the
+          // deadline 2x per wall-clock frame and locks the core at half
+          // speed (N64 ran 30fps, MD-family 34fps). Small overshoot is
+          // absorbed by the next iteration running back-to-back, keeping
+          // the average locked to the target rate.
+          auto now = std::chrono::steady_clock::now();
+          while (now > frameDeadline + period) {
+            frameDeadline += period;
           }
         }
 
@@ -460,6 +509,106 @@ namespace ares {
             LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms", (f64)currentFps, (f64)avgFrameTime / 1000.0);
             frameCount = 0;
             lastStatsUpdateTime = now;
+
+            // Per-second perf profile (N64 only, gated by debug logging so it
+            // costs nothing normally): tells us whether the core is CPU-bound
+            // (cpuCycles + icache/dcache tag churn) or RSP-bound (rsp cycles),
+            // so we know which lever to pull for a CPU-heavy game.
+            #if defined(CORE_N64)
+            if (n64DebugLoggingAtomic.load() && root && root->name() == "Nintendo 64") {
+              auto& prof = ::ares::Nintendo64::cpu.profile;
+              s64 rspCycles = ::ares::Nintendo64::rsp.dma.clock;  // cumulative-ish
+              LOGI("N64 Profile: cpuCycles=%lld exc=%lld icache(H=%lld M=%lld W=%lld) dcache(H=%lld M=%lld W=%lld) rspDmaClk=%lld",
+                (long long)prof.cpuCycles, (long long)prof.cpuCyclesExc,
+                (long long)prof.icacheHits, (long long)prof.icacheMisses, (long long)prof.icacheWritebacks,
+                (long long)prof.dcacheHits, (long long)prof.dcacheMisses, (long long)prof.dcacheWritebacks,
+                (long long)rspCycles);
+            }
+            #endif
+
+            // N64 hang/stall diagnostic (Conker's BFD pub/pause-menu freezes):
+            //  1) CPU truly halted (FPS ~0)  → "N64 HANG"
+            //  2) CPU SPINNING (FPS stays high, screen frozen, SAME PC every
+            //     second) → "N64 STALL" — the guest is in a wait loop that
+            //     isn't resolving. Dump the FULL hardware state: what is it
+            //     waiting on (RSP DMA? RDP busy? SI/PI DMA? an interrupt that
+            //     never fires? a scheduler event far in the future?).
+            #if defined(CORE_N64)
+            if (n64DebugLoggingAtomic.load() && root && root->name() == "Nintendo 64" && !isPausedAtomic.load()) {
+                u64 pc = ::ares::Nintendo64::cpu.ipu.pc;
+                auto& status = ::ares::Nintendo64::cpu.scc.status;
+                auto& cause = ::ares::Nintendo64::cpu.scc.cause;
+                // JIT compiles cached RDRAM only. If the spinning PC is NOT in
+                // RDRAM, the code is interpreter-run and the stall is a guest
+                // hardware wait whose resolution depends on how often the
+                // scheduler steps (JitInterleaving).
+                bool jittable = (pc >= 0x8000'0000ull && pc < 0x8040'0000ull);
+
+                auto dumpStall = [&](const char* tag) {
+                    auto& rspStatus = ::ares::Nintendo64::rsp.status;
+                    auto& rdpCmd    = ::ares::Nintendo64::rdp.command;
+                    auto& siIo      = ::ares::Nintendo64::si.io;
+                    auto& piIo      = ::ares::Nintendo64::pi.io;
+                    auto& aiIo      = ::ares::Nintendo64::ai.io;
+                    auto& viIo      = ::ares::Nintendo64::vi.io;
+                    LOGW("%s: PC=0x%08llx jittable=%d FPS=%.1f mask=%02x pend=%02x "
+                         "IE=%d EXL=%d ERL=%d exc=%d clock=%lld thr=%u "
+                         "rsp(halt=%d broken=%d dmaBusy=%d dmaFull=%d) "
+                         "rdp(pipe=%d buf=%d crash=%d frz=%d cur=%d end=%d) "
+                         "si(dmaBusy=%d ioBusy=%d pend=%d) pi(dmaBusy=%d ioBusy=%d "
+                         "latch=%d) ai(dmaCnt=%d dmaEn=%d) vi(vc=%d fld=%d) "
+                         "queue(next=%d)",
+                         tag, (unsigned long long)pc, (int)jittable, (double)currentFps,
+                         (int)status.interruptMask, (int)cause.interruptPending,
+                         (int)status.interruptEnable, (int)status.exceptionLevel,
+                         (int)status.errorLevel, (int)cause.exceptionCode,
+                         (long long)::ares::Nintendo64::cpu.clock,
+                         (unsigned)::ares::scheduler.threads(),
+                         (int)rspStatus.halted, (int)rspStatus.broken,
+                         (int)::ares::Nintendo64::rsp.dma.busy.any(), (int)::ares::Nintendo64::rsp.dma.full.any(),
+                         (int)rdpCmd.pipeBusy, (int)rdpCmd.bufferBusy,
+                         (int)rdpCmd.crashed, (int)rdpCmd.freeze,
+                         (int)rdpCmd.current, (int)rdpCmd.end,
+                         (int)siIo.dmaBusy, (int)siIo.ioBusy, (int)siIo.readPending,
+                         (int)piIo.dmaBusy, (int)piIo.ioBusy, (int)piIo.busLatch,
+                         (int)aiIo.dmaCount, (int)aiIo.dmaEnable,
+                         (int)viIo.vcounter, (int)viIo.field,
+                         (int)::ares::Nintendo64::queue.timeToNextEvent());
+                };
+
+                if (currentFps <= 0.5) {
+                    if (++hangZeroSeconds >= 2) {
+                        dumpStall("N64 HANG");
+                    }
+                } else {
+                    hangZeroSeconds = 0;
+                    if (pc == stallLastPc) {
+                        if (++stallSameCount >= 3) {
+                            // Confirmed stall: log the full state once, then
+                            // keep logging every second while it persists.
+                            if (!stallLogged) {
+                                stallLogged = true;
+                                dumpStall("N64 STALL");
+                            } else {
+                                dumpStall("N64 STALL(cont)");
+                            }
+                        }
+                    } else {
+                        stallSameCount = 0;
+                        stallLogged = false;
+                    }
+                    stallLastPc = pc;
+                    LOGI("N64 PC: 0x%08llx (FPS=%.1f) jittable=%d mask=%02x pend=%02x IE=%d exc=%d",
+                         (unsigned long long)pc, (double)currentFps, (int)jittable,
+                         (int)status.interruptMask, (int)cause.interruptPending,
+                         (int)status.interruptEnable, (int)cause.exceptionCode);
+                }
+            } else {
+                hangZeroSeconds = 0;
+                stallSameCount = 0;
+                stallLogged = false;
+            }
+            #endif
         }
       } else {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -547,6 +696,7 @@ namespace ares {
       // Invalidate bind-once caches if the WonderSwan orientation mode changed
       // (it remaps several button names). Cheap bool compare per call.
       if (inputCacheOrientation != (s32)orientationVertical) {
+          std::lock_guard<std::mutex> lock(inputCacheMutex);
           inputButtonCache.clear();
           inputAxisCache.clear();
           inputCacheOrientation = (s32)orientationVertical;
@@ -554,28 +704,34 @@ namespace ares {
 
       if (auto button = input->cast<Node::Input::Button>()) {
           u32 b = 0;
-          auto it = inputButtonCache.find(button.get());
-          if (it == inputButtonCache.end()) {
-              // Bind once, then cache (mirrors ares InputMapping::bind()): names
-              // resolve on the first read; per-read is a map lookup + bit test.
-              b = resolveButtonBit(button->name(), systemName, orientationVertical);
-              inputButtonCache[button.get()] = b;
-          } else {
-              b = it->second;
+          {
+              std::lock_guard<std::mutex> lock(inputCacheMutex);
+              auto it = inputButtonCache.find(button.get());
+              if (it == inputButtonCache.end()) {
+                  // Bind once, then cache (mirrors ares InputMapping::bind()): names
+                  // resolve on the first read; per-read is a map lookup + bit test.
+                  b = resolveButtonBit(button->name(), systemName, orientationVertical);
+                  inputButtonCache[button.get()] = b;
+              } else {
+                  b = it->second;
+              }
           }
 
           // Always set the value (resetting if not mapped) to ensure state consistency
           button->setValue(b != 0 && (buttons & b) != 0);
       } else if (auto axis = input->cast<Node::Input::Axis>()) {
           s32 slot = -1;
-          auto it = inputAxisCache.find(axis.get());
-          if (it == inputAxisCache.end()) {
-              string nodeName = axis->name();
-              string lowerName = nodeName.downcase();
-              slot = resolveAxisSlot(lowerName);
-              inputAxisCache[axis.get()] = (u32)(slot + 1);  // 0 = unmapped
-          } else {
-              slot = (s32)it->second - 1;
+          {
+              std::lock_guard<std::mutex> lock(inputCacheMutex);
+              auto it = inputAxisCache.find(axis.get());
+              if (it == inputAxisCache.end()) {
+                  string nodeName = axis->name();
+                  string lowerName = nodeName.downcase();
+                  slot = resolveAxisSlot(lowerName);
+                  inputAxisCache[axis.get()] = (u32)(slot + 1);  // 0 = unmapped
+              } else {
+                  slot = (s32)it->second - 1;
+              }
           }
 
           s16 value = 0;
@@ -594,13 +750,26 @@ namespace ares {
           // the emulation thread — thousands of synchronous logd writes/sec
           // while the stick moved, which stalled emulation and caused lag.
           static u64 axisLogCount = 0;
-          if (axisLogCount++ % 600 == 0) {
+          if (axisLogCount++ % 2000 == 0) {
               LOGI("PhobosNativeInput: System='%s' Axis='%s' Matched=%d Value=%d (lx=%.2f, ly=%.2f)",
                    (const char*)systemName, (const char*)axis->name(), slot >= 0, (int)value, (double)lx, (double)ly);
           }
 
           if (slot >= 0) {
               axis->setValue(value);
+          }
+      } else if (auto rumble = input->cast<Node::Input::Rumble>()) {
+          // N64 Rumble Pak + PS1 DualShock: binary motor state. Stored in an
+          // atomic for the Kotlin side to poll — no JNI attach needed on the
+          // emulation thread. Latched with a short hold: PS1 games often pulse
+          // the motors for only a few poll cycles (~1 frame), which a 30 Hz
+          // Kotlin poll would otherwise miss entirely; holding 150ms after the
+          // last enable guarantees the poll loop sees it.
+          if (rumble->enable()) {
+              rumbleState.store(true);
+              lastRumbleOnTime = std::chrono::steady_clock::now();
+          } else if (std::chrono::steady_clock::now() - lastRumbleOnTime > std::chrono::milliseconds(150)) {
+              rumbleState.store(false);
           }
       }
     }
@@ -609,7 +778,7 @@ namespace ares {
       if (width == 0 || height == 0 || isPausedAtomic) return;
 
       static u64 frameLogCount = 0;
-      if (frameLogCount++ % 600 == 0) {
+      if (frameLogCount++ % 2000 == 0) {
           LOGD("Video: %s, %ux%u, data[0]=%08x", (const char*)screen->name(), width, height, data ? data[0] : 0);
       }
 
@@ -839,6 +1008,34 @@ namespace ares {
         LOGW("VFS: No secondaryMedium pak available for %s", (const char*)nodeName);
       }
 
+      // N64 Controller Pak: platform->pak() is only invoked for a Gamepad node
+      // when a Controller Pak is attached (a Rumble Pak needs no storage). Seed
+      // the directory with save.pak from the persistent saves dir, marking it
+      // "loaded" so Gamepad::connect() imports the bank count + data. Cache the
+      // dir so unloadSystem()/setN64Pak() can export the RAM back to disk.
+      if (nodeName == "Gamepad" && root && root->name() == "Nintendo 64") {
+        player1PakDir = std::make_shared<vfs::directory>();
+        player1PakDir->setAttribute("name", nodeName);
+        if (savesPath) {
+          string savePath = string{savesPath, "/Nintendo 64/save.pak"};
+          auto data = nall::file::read(savePath);
+          if (data.size()) {
+            if (auto fp = vfs::memory::open(data)) {
+              fp->setName("save.pak");
+              fp->setAttribute("loaded", true);
+              player1PakDir->append("save.pak", fp);
+              LOGI("VFS: Attached save.pak (%zu bytes) to Gamepad pak", data.size());
+              return player1PakDir;
+            }
+          }
+        }
+        // No persisted save yet — pre-create a blank bank so
+        // Gamepad::connect()'s create path can reallocate + format it
+        // (that path only runs when save.pak already exists in the dir).
+        player1PakDir->append("save.pak", 32_KiB);
+        return player1PakDir;
+      }
+
       auto dir = std::make_shared<vfs::directory>();
       dir->setAttribute("name", nodeName);
       dir->setAttribute("title", "Phobos Game");
@@ -990,6 +1187,37 @@ namespace ares {
           if (!attached) attached = attachFile("pif.ntsc.rom");
           if (!attached) attached = attachFile("pif.pal.rom");
           if (!attached) LOGE("VFS: FAILED to attach PIF for Nintendo 64!");
+          #if defined(CORE_N64)
+          // The 64DD system node keeps the name "Nintendo 64" (information.dd
+          // is the flag that distinguishes it) — so this same branch serves
+          // both. When loaded as a 64DD variant, the drive needs its IPL ROM
+          // or it can't initialize (no CIC, no boot) → disk games black-screen.
+          // Try US, then JP, then DEV — the 64DD firmware scanner may map any
+          // of the three keys depending on which IPL the user supplied.
+          if (::ares::Nintendo64::_DD()) {
+              bool ddAttached = false;
+              auto it_us = firmwareMap.find("fw_n64dd_us");
+              if (it_us != firmwareMap.end()) ddAttached = attachFile((const char*)it_us->second, "64dd.ipl.rom");
+              if (!ddAttached) {
+                  auto it_jp = firmwareMap.find("fw_n64dd_jp");
+                  if (it_jp != firmwareMap.end()) ddAttached = attachFile((const char*)it_jp->second, "64dd.ipl.rom");
+              }
+              if (!ddAttached) {
+                  auto it_dev = firmwareMap.find("fw_n64dd_dev");
+                  if (it_dev != firmwareMap.end()) ddAttached = attachFile((const char*)it_dev->second, "64dd.ipl.rom");
+              }
+              if (!ddAttached) attachFile("64dd.ipl.rom");
+          }
+          #endif
+      } else if (nodeName == "Nintendo 64DD") {
+          // Defensive: in case a future ares names the DD root node distinctly.
+          bool attached = false;
+          auto it_ntsc = firmwareMap.find("fw_n64_pif_ntsc");
+          if (it_ntsc != firmwareMap.end()) attached = attachFile((const char*)it_ntsc->second, "pif.ntsc.rom");
+          if (!attached) attachFile("pif.ntsc.rom");
+          auto it_dd = firmwareMap.find("fw_n64dd_jp");
+          if (it_dd != firmwareMap.end()) attachFile((const char*)it_dd->second, "64dd.ipl.rom");
+          else attachFile("64dd.ipl.rom");
       } else if (nodeName == "Neo Geo Pocket" || nodeName == "Neo Geo Pocket Color") {
           // NGP/NGPC needs bios.rom for TLCS900H CPU boot vector + KGE init.
           // Without it CPU reads 0x00 (NOP-loop) → white/black screen forever.
@@ -1037,6 +1265,11 @@ namespace ares {
   auto unloadSystem() -> void {
     isPausedAtomic = true;
     fastForwardAtomic = false;
+    // A reset requested during a hung session must NOT carry into the next
+    // system: the abandoned thread never consumed it, and a fresh load would
+    // consume it as a soft-reset right after boot → CPU stuck at the boot ROM
+    // (0xffffffffbfc00000, 60fps, 0.00ms frame time, never enters the game).
+    resetRequestedAtomic.store(false);
 
     // Stop the audio thread FIRST (it may be mid-write to audioStream),
     // then stop/close the stream. Leaving the stream draining while the menu
@@ -1108,11 +1341,12 @@ namespace ares {
       emuThreadGeneration.fetch_add(1);
 
       cachedPlayer1 = {};
-      inputButtonCache.clear();
-      inputAxisCache.clear();
-      inputCacheOrientation = -1;
+      invalidateInputCaches();
       currentMedium.reset();
       secondaryMedium.reset();
+      player1PakDir.reset();
+      rumbleState.store(false);
+      lastRumbleOnTime = {};
       emuThread = 0;
       emuThreadRunning = false;
       LOGI("System abandoned (thread stuck)");
@@ -1131,7 +1365,8 @@ namespace ares {
             string fileName = saveNode->name();
             if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
                 !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
-                !fileName.endsWith(".sav") && !fileName.endsWith(".fla")) continue;
+                !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
+                !fileName.endsWith(".rtc")) continue;
             auto fp = saveNode;
             fp->seek(0);
             auto size = fp->size();
@@ -1186,11 +1421,16 @@ namespace ares {
         }
         root->unload();
         root.reset();
+
+        // Export the N64 Controller Pak: System::unload() → save() flushed
+        // Gamepad::save() (Controller Pak RAM) into player1PakDir.
+        exportControllerPak();
+        player1PakDir.reset();
+        rumbleState.store(false);
+        lastRumbleOnTime = {};
     }
     cachedPlayer1 = {};
-    inputButtonCache.clear();
-    inputAxisCache.clear();
-    inputCacheOrientation = -1;
+    invalidateInputCaches();
     currentMedium.reset();
     secondaryMedium.reset();
     LOGI("System unloaded");
@@ -1199,6 +1439,12 @@ namespace ares {
   static auto connectDevices(Node::Object node) -> void {
     if (!node) return;
     LOGI("VFS: connectDevices for system '%s'", (const char*)node->name());
+    // The node tree is about to be (re)built: port disconnects/allocates free
+    // and can recycle Node::Input object addresses. The input caches are keyed
+    // by raw pointer, so stale entries would mis-bind controls after a PS1
+    // analog toggle (DualShock <-> Digital Gamepad), N64DD disk mount, or
+    // reload. Clear them up front (thread-safe vs the emulation thread).
+    invalidateInputCaches();
     auto ports = node->find<Node::Port>();
     s32 portIndex = 1;
 
@@ -1222,7 +1468,10 @@ namespace ares {
           portIndex++;
           continue;
       }
-      if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive") {
+      if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive" || port->type() == "Floppy Disk") {
+        // The N64DD "Disk Drive" port has type "Floppy Disk"; connecting it
+        // mounts the .ndd disk medium (returned by pak() for the
+        // "Nintendo 64DD Disk" node).
         if (port->allocate()) {
             LOGI("VFS: Allocated %s port", (const char*)port->type());
             port->connect();
@@ -1301,6 +1550,20 @@ namespace ares {
             if (portIndex == 1) {
                 cachedPlayer1 = pNode;
                 LOGI("VFS: Cached Player 1 Peripheral: %s", (const char*)cachedPlayer1->name());
+
+                // Attach the configured controller pak (Rumble / Controller Pak)
+                // to Player 1's Gamepad. The Pak sub-port is hot-swappable, so a
+                // later setN64Pak() call can swap it without a reload.
+                if (root && root->name() == "Nintendo 64" && n64Pak != "None") {
+                    for (auto& pakPort : pNode->find<Node::Port>()) {
+                        if (pakPort->type() != "Pak") continue;
+                        if (auto slot = pakPort->allocate(n64Pak)) {
+                            pakPort->connect();
+                            LOGI("VFS: Attached %s to Player 1 (N64)", (const char*)n64Pak);
+                        }
+                        break;
+                    }
+                }
             }
         } else {
             LOGE("VFS: FAILED to allocate %s on %s (Family: '%s', Sys: '%s')", (const char*)defaultDevice, (const char*)port->name(), (const char*)family, (const char*)sysName);
@@ -1325,6 +1588,8 @@ else if (port->type() == "Keyboard") {
     std::unique_lock<std::recursive_mutex> lock(systemMutex);
 
     isPausedAtomic = false;
+    // Belt-and-suspenders: a stale reset must never fire on the fresh system.
+    resetRequestedAtomic.store(false);
     firstFrameRendered = false;
 
     scheduler.reset();
@@ -1505,9 +1770,13 @@ else if (port->type() == "Keyboard") {
     LOGI("Ares: Loading core for %s", (const char*)identifiedSystem);
     if (identifiedSystem == "Nintendo 64" || identifiedSystem == "Nintendo 64DD") {
       ::ares::Nintendo64::vulkan.enable = true; // DEFAULT TO VULKAN
-      // Set pipeline cache path for Vulkan shader persistence
-      if (savesPath && strlen(savesPath) > 0) {
-        ::ares::Nintendo64::vulkan.pipelineCachePath = string{savesPath, "/n64_vulkan_pipeline_cache.bin"};
+      // Set pipeline cache path for Vulkan shader persistence.
+      // Prefer the user-configured Vulkan cache directory (Task 40); fall back
+      // to the saves directory so the cache persists next to the save data.
+      string cacheDir = vulkanCachePath;
+      if (!cacheDir) cacheDir = savesPath;
+      if (cacheDir && strlen(cacheDir) > 0) {
+        ::ares::Nintendo64::vulkan.pipelineCachePath = string{cacheDir, "/n64_vulkan_pipeline_cache.bin"};
         LOGI("N64: Pipeline cache path: %s", (const char*)::ares::Nintendo64::vulkan.pipelineCachePath);
       }
       if (n64UpscaleFactor < 1) n64UpscaleFactor = 1;
@@ -1517,6 +1786,9 @@ else if (port->type() == "Keyboard") {
       ::ares::Nintendo64::vulkan.disableVideoInterfaceProcessing = n64DisableVIProcessing.load();
       ::ares::Nintendo64::vulkan.weaveDeinterlacing = n64WeaveDeinterlacing.load();
       ::ares::Nintendo64::vulkan.supersampleScanout = n64SupersampleScanout.load();
+      ::ares::Nintendo64::vi.overclockPercent = n64ViOverclock.load();
+      ::ares::Nintendo64::cpu.countPerOp = n64CountPerOp.load();
+      ::ares::Nintendo64::cpu.overclockFactor = n64CpuOverclock.load();
       ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
       ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
       bool is64DD = (identifiedSystem == "Nintendo 64DD" || extension == "ndd" || extension == "d64" || secondaryMedium != nullptr);
@@ -1616,10 +1888,11 @@ else if (port->type() == "Keyboard") {
           LOGI("N64: CPU Recompiler set to %s", n64Recompiler ? "ON" : "OFF");
       }
 
-      connectDevices(root);
-
-      // Import game save data (SRAM, EEPROM, memcards) — always restores.
+      // Import game save data (SRAM, EEPROM, Flash, RTC) — always restores.
       // The Auto-Load Memory toggle controls the "Auto" save-state slot only.
+      // Must run BEFORE connectDevices(): the core reads cartridge save files
+      // from the medium pak at port-connect time, so a post-connect import
+      // never reaches the cartridge (it would start fresh each load).
       if (savesPath && currentMedium && currentMedium->pak) {
         string saveDir = {savesPath, "/", identifiedSystem, "/"};
         directory::create(saveDir);
@@ -1627,11 +1900,15 @@ else if (port->type() == "Keyboard") {
           string fileName = saveNode->name();
           if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
               !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
-              !fileName.endsWith(".sav") && !fileName.endsWith(".fla")) continue;
+              !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
+              !fileName.endsWith(".rtc")) continue;
           string fullPath = {saveDir, fileName};
           auto existing = file::read(fullPath);
           if (existing.size() == 0) continue;
           if (auto fp = currentMedium->pak->write(fileName)) {
+            // vfs::memory::write silently drops bytes past the current size —
+            // resize to the imported size first (mirrors MIA's Pak::load).
+            if (fp->size() != existing.size()) fp->resize(existing.size());
             fp->write({existing.data(), (u32)existing.size()});
             LOGI("Saves: imported %s (%zu bytes) for %s", (const char*)fileName, existing.size(), (const char*)identifiedSystem);
           }
@@ -1647,6 +1924,8 @@ else if (port->type() == "Keyboard") {
           LOGI("Saves: imported sidecar %s (%zu bytes) for %s", saveName, existing.size(), (const char*)identifiedSystem);
         }
       }
+
+      connectDevices(root);
 
       // Inject saved cpu.ram + bios.rom BEFORE power-on so CPU::power()
       // sees ram[0x2c7a]!=0 → warm-boot path → skip language/date prompts.
@@ -1726,6 +2005,7 @@ else if (port->type() == "Keyboard") {
   }
   auto setFastForward(bool enabled) -> void { fastForwardAtomic = enabled; LOGI("Fast forward %s", enabled ? "enabled" : "disabled"); }
   auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
+  auto setN64DebugLogging(bool enabled) -> void { n64DebugLoggingAtomic = enabled; LOGI("N64 debug logging %s", enabled ? "enabled" : "disabled"); }
   auto resetSystem() -> void {
     resetRequestedAtomic.store(true);
     #if defined(CORE_N64)
@@ -1751,6 +2031,9 @@ else if (port->type() == "Keyboard") {
     ::ares::Nintendo64::vulkan.disableVideoInterfaceProcessing = n64DisableVIProcessing.load();
     ::ares::Nintendo64::vulkan.weaveDeinterlacing = n64WeaveDeinterlacing.load();
     ::ares::Nintendo64::vulkan.supersampleScanout = n64SupersampleScanout.load();
+    ::ares::Nintendo64::vi.overclockPercent = n64ViOverclock.load();
+    ::ares::Nintendo64::cpu.countPerOp = n64CountPerOp.load();
+    ::ares::Nintendo64::cpu.overclockFactor = n64CpuOverclock.load();
     ::ares::Nintendo64::vulkan.outputUpscale = n64SupersampleScanout.load() ? 1 : (u32)n64UpscaleFactor.load();
     ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
     ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
@@ -1838,6 +2121,24 @@ else if (port->type() == "Keyboard") {
     n64SupersampleScanout = enabled;
     LOGI("N64 supersample scanout set to %d (applies on next reset)", enabled);
   }
+  auto setN64ViOverclock(s32 percent) -> void {
+    if (percent < 100) percent = 100;
+    if (percent > 300) percent = 300;
+    n64ViOverclock = percent;
+    LOGI("N64 VI overclock set to %d%% (applies on next reset)", percent);
+  }
+  auto setN64CountPerOp(s32 value) -> void {
+    if (value < 1) value = 1;
+    if (value > 3) value = 3;
+    n64CountPerOp = value;
+    LOGI("N64 count per op set to %d (applies on next reset)", value);
+  }
+  auto setN64CpuOverclock(s32 factor) -> void {
+    if (factor < 0) factor = 0;
+    if (factor > 5) factor = 5;
+    n64CpuOverclock = factor;
+    LOGI("N64 CPU overclock factor set to %d (2^%d) (applies on next reset)", factor, factor);
+  }
   auto setN64ExpansionPak(bool enabled) -> void {
     if (n64ExpansionPak == enabled) return;
     n64ExpansionPak = enabled;
@@ -1848,6 +2149,54 @@ else if (port->type() == "Keyboard") {
             if (setting->name() == "Expansion Pak") setting->setValue(enabled);
         }
     }
+  }
+
+  // N64 Player 1 controller pak (Rumble Pak / Controller Pak). Hot-swappable:
+  // re-allocates the Gamepad's "Pak" sub-port. The Controller Pak's save.pak
+  // is flushed to disk on swap and on unload.
+  static auto exportControllerPak() -> void {
+    if (!player1PakDir || !savesPath) return;
+    if (auto fp = player1PakDir->read("save.pak")) {
+      fp->seek(0);
+      auto size = fp->size();
+      if (!size) return;
+      std::vector<u8> buf(size);
+      fp->read({buf.data(), size});
+      bool allZero = true;
+      for (auto b : buf) { if (b != 0) { allZero = false; break; } }
+      if (allZero) return;
+      string saveDir = {savesPath, "/Nintendo 64/"};
+      directory::create(saveDir);
+      file::write({saveDir, "save.pak"}, {buf.data(), size});
+      LOGI("Saves: exported save.pak (%zu bytes) for Nintendo 64", size);
+    }
+  }
+
+  auto setN64Pak(const char* pakName) -> void {
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    string desired = pakName ? pakName : "None";
+    if (n64Pak == desired) return;
+    n64Pak = desired;
+    LOGI("N64 controller pak set to %s", (const char*)desired);
+    if (root && root->name() == "Nintendo 64" && cachedPlayer1) {
+      for (auto& pakPort : cachedPlayer1->find<Node::Port>()) {
+        if (pakPort->type() != "Pak") continue;
+        // allocate() disconnects the old pak first; Gamepad::disconnect()
+        // flushes Controller Pak RAM into player1PakDir — export it, then
+        // connect the newly allocated slot.
+        pakPort->allocate(desired);
+        exportControllerPak();
+        if (desired != "None" && pakPort->connected()) {
+          pakPort->connect();
+          LOGI("VFS: Attached %s to Player 1 (N64)", (const char*)desired);
+        }
+        break;
+      }
+    }
+  }
+
+  auto getRumbleState() -> bool {
+    return rumbleState.load();
   }
   auto setPs1AnalogMode(bool enabled) -> void {
     if (ps1AnalogMode == enabled) return;
@@ -1860,13 +2209,17 @@ else if (port->type() == "Keyboard") {
   }
   // Runtime analog toggle: flips ps1AnalogMode and re-allocates controller
   // port 1 to swap between DualShock and Digital Gamepad.
+  // Returns the NEW ps1AnalogMode value (true = analog ON) so the Kotlin
+  // side can persist the correct state — it previously returned "true"
+  // (toggle succeeded) always, so DataStore was set to true on EVERY toggle
+  // and the pause-menu switch showed ON even when analog was actually OFF.
   auto togglePs1AnalogMode() -> bool {
     lock_guard<std::recursive_mutex> lock(systemMutex);
     if (!root || root->name() != "PlayStation") return false;
     ps1AnalogMode = !ps1AnalogMode;
     LOGI("PS1 analog toggle -> %d", (int)ps1AnalogMode);
     connectDevices(root);
-    return true;
+    return ps1AnalogMode;
   }
   auto setStickToDpad(bool enabled) -> void {
     // Deprecated
@@ -1906,6 +2259,10 @@ else if (port->type() == "Keyboard") {
     savesPath = path ? (string)path : "";
     LOGI("Saves path set: %s", (const char*)savesPath);
   }
+  auto setVulkanCachePath(const char* path) -> void {
+    vulkanCachePath = path ? (string)path : "";
+    LOGI("Vulkan cache path set: %s", (const char*)vulkanCachePath);
+  }
 
   auto loadSecondaryRom(const char* systemNamePtr, const char* uriPtr) -> bool {
     string systemName = systemNamePtr;
@@ -1935,17 +2292,76 @@ else if (port->type() == "Keyboard") {
     }
     fclose(f);
 
-    secondaryMedium = mia::Medium::create(systemName);
+    // The .ndd/.d64/.n64dd disk images are a separate MIA medium type that
+    // exposes program.disk for the 64DD drive; plain "Nintendo 64" would
+    // treat the file as a cartridge ROM.
+    string mediumName = systemName;
+    if (systemName == "Nintendo 64" && (extension == "ndd" || extension == "d64" || extension == "n64dd")) {
+        mediumName = "Nintendo 64DD";
+    }
+    secondaryMedium = mia::Medium::create(mediumName);
     if (!secondaryMedium) {
-        LOGE("MIA: Failed to create secondary medium for %s", (const char*)systemName);
+        LOGE("MIA: Failed to create secondary medium for %s", (const char*)mediumName);
         return false;
     }
 
     auto loadResult = secondaryMedium->load(tempPath);
     if (loadResult != successful) {
-        LOGE("MIA: Failed to load secondary medium for %s (Result: %d)", (const char*)systemName, (s32)loadResult.result);
+        LOGE("MIA: Failed to load secondary medium for %s (Result: %d)", (const char*)mediumName, (s32)loadResult.result);
         return false;
     }
+
+    #if defined(CORE_N64)
+    // N64DD: mounting a disk requires the system to be a 64DD variant — that
+    // is what creates the "Nintendo 64DD" node with its "Disk Drive" port.
+    // A plain "Nintendo 64" system has no drive, so the .ndd can't attach.
+    // Reload the system as 64DD (keeping the cartridge medium) so the cart +
+    // expansion disk boot together, mirroring desktop ares (load game, then
+    // pick disk). The emulation thread is paused here (menu), so resetting
+    // root while it sleeps in the pause branch is safe.
+    if (root && root->name() == "Nintendo 64" && mediumName == "Nintendo 64DD") {
+        LOGI("N64DD: reloading system as Nintendo 64DD to mount disk");
+        isPausedAtomic = true;
+        fastForwardAtomic = false;
+        root = {};
+        ::ares::Nintendo64::vulkan.enable = true;  // settings persist from cart load
+        const char* regionString = [&]() -> const char* {
+            // No PAL 64DD exists; every non-NTSC-U preference uses NTSC-J.
+            if (regionPreference == 2 || regionPreference == 3 ||
+                regionPreference == 4 || regionPreference == 5) {
+                return "[Nintendo] Nintendo 64DD (NTSC-J)";
+            }
+            return "[Nintendo] Nintendo 64DD (NTSC-U)";
+        }();
+        bool ok = ::ares::Nintendo64::load(root, regionString);
+        if (ok && root) {
+            ::ares::Nintendo64::option("Recompiler", n64Recompiler ? "true" : "false");
+            root->power();
+            connectDevices(root);  // now sees the Disk Drive port -> mounts .ndd
+            // Re-import the cartridge save (SRAM/EEPROM) for the fresh node.
+            if (savesPath && currentMedium && currentMedium->pak) {
+                string saveDir = {savesPath, "/Nintendo 64/"};
+                directory::create(saveDir);
+                for (auto& saveNode : currentMedium->pak->files()) {
+                    string fileName = saveNode->name();
+                    if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
+                        !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
+                        !fileName.endsWith(".flash")) continue;
+                    string path = {saveDir, fileName};
+                    auto data = nall::file::read(path);
+                    if (!data.empty()) {
+                        saveNode->write(data.data(), data.size());
+                        LOGI("Saves: imported save for %s", (const char*)fileName);
+                    }
+                }
+            }
+            LOGI("N64DD: system reloaded with disk drive");
+            return true;
+        }
+        LOGE("N64DD: failed to reload system as 64DD");
+        return false;
+    }
+    #endif
 
     if (root) {
         connectDevices(root); // Refresh ports to attach new medium

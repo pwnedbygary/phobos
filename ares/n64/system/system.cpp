@@ -449,20 +449,22 @@ auto System::power(bool reset) -> void {
   mi.power(reset);
   vi.power(reset);
   #if defined(VULKAN)
-  // Soft reset keeps the existing VkDevice alive (the branch below).
-  // Tearing the device down and creating a fresh one in the same process
-  // is unreliable on Turnip/Mesa: even when the teardown completes, the
-  // new device's fences can fail to signal, hanging the first frame after
-  // reset with no output. Keeping the device is upstream ares behavior and
-  // also preserves the pipeline cache (no post-reset shader recompiles).
+  // Keep the existing VkDevice alive whenever one exists (soft reset AND
+  // save-state load). Tearing the device down and creating a fresh one in
+  // the same process is unreliable on Turnip/Mesa: even when the teardown
+  // completes, the new device's fences can fail to signal, hanging the
+  // first frame with no output (observed on save-state loads — the state
+  // loads "success" then the screen freezes and the emulation thread must
+  // be abandoned). Keeping the device is upstream ares behavior and also
+  // preserves the pipeline cache (no post-load shader recompiles).
   //
-  // The teardown path (else branch) is only taken for cold boots and real
-  // unloads. It holds vulkan.mutex across the unload→load cycle so the
-  // Screen thread is gated out of mapScanoutRead() while the old
-  // implementation is torn down, and discardPipelineCache arms
-  // set_skip_idle_on_destroy on the old CommandProcessor so its
+  // The teardown path (else branch) is only taken for cold boots (no
+  // implementation yet) and real unloads. It holds vulkan.mutex across the
+  // unload→load cycle so the Screen thread is gated out of mapScanoutRead()
+  // while the old implementation is torn down, and discardPipelineCache
+  // arms set_skip_idle_on_destroy on the old CommandProcessor so its
   // destructor never blocks on GPU idle.
-  if (reset && vulkan.implementation && !Vulkan::discardPipelineCache.load()) {
+  if (vulkan.implementation && !Vulkan::discardPipelineCache.load()) {
     _vulkanNeedsLoad = false;
   } else {
     std::lock_guard<std::recursive_mutex> lock(vulkan.mutex);

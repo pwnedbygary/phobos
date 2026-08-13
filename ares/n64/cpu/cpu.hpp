@@ -800,6 +800,18 @@ struct CPU : Thread {
     } csr;
   } fpu;
 
+  //Mupen64Plus-FZ style CPU timing knobs (unserialized user settings):
+  //  countPerOp (1-3, default 2): scales how fast the CP0 Count register
+  //    advances per CPU cycle (2 = stock hardware rate). Lower = Count
+  //    advances slower per instruction → the compare/timer interrupt fires
+  //    after more instructions → game overclocked (may be unstable).
+  //  overclockFactor (0-5, default 0): overclocks the R4300 by 2^factor —
+  //    the peripherals consume CPU cycles 2^factor slower, so the CPU
+  //    executes 2^factor more instructions per VI/AI frame (game logic runs
+  //    faster at the same rendered frame rate).
+  std::atomic<s32> countPerOp{2};
+  std::atomic<s32> overclockFactor{0};
+
   //interpreter-fpu.cpp
   float_env fenv;
 

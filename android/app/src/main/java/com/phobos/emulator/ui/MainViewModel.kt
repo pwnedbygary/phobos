@@ -3,6 +3,10 @@ package com.phobos.emulator.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.provider.DocumentsContract
 import android.util.Log
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -111,6 +115,34 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         settingsStore.setN64SupersampleScanout(enabled)
         PhobosCore.setN64SupersampleScanout(enabled)
     }
+    fun setN64ViOverclock(percent: Int) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64ViOverclock(percent)
+        PhobosCore.setN64ViOverclock(percent)
+    }
+    fun setN64UseDefaultCountPerOp(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64UseDefaultCountPerOp(enabled)
+        // When "use default" is on, force the stock value (2) to native.
+        PhobosCore.setN64CountPerOp(if (enabled) 2 else settings.value.n64CountPerOp)
+    }
+    fun setN64CountPerOp(value: Int) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64CountPerOp(value)
+        settingsStore.setN64UseDefaultCountPerOp(false)
+        PhobosCore.setN64CountPerOp(value)
+    }
+    fun setN64UseDefaultCpuOverclock(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64UseDefaultCpuOverclock(enabled)
+        // When "use default" is on, force the stock value (0) to native.
+        PhobosCore.setN64CpuOverclock(if (enabled) 0 else settings.value.n64CpuOverclock)
+    }
+    fun setN64CpuOverclock(factor: Int) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64CpuOverclock(factor)
+        settingsStore.setN64UseDefaultCpuOverclock(false)
+        PhobosCore.setN64CpuOverclock(factor)
+    }
+    fun setN64Pak(pak: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64Pak(pak)
+        PhobosCore.setN64Pak(pak)
+    }
     fun setFastForwardSpeed(speed: Float) = viewModelScope.launch {
         settingsStore.setFastForwardSpeed(speed)
         PhobosCore.setFastForwardSpeed(speed)
@@ -118,12 +150,27 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setFullScreenMode(enabled: Boolean) = viewModelScope.launch { settingsStore.setFullScreenMode(enabled) }
     fun setShowTouchControls(enabled: Boolean) = viewModelScope.launch { settingsStore.setShowTouchControls(enabled) }
     fun setShowPerformanceMonitor(enabled: Boolean) = viewModelScope.launch { settingsStore.setShowPerformanceMonitor(enabled) }
+    fun setPerfShowFps(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowFps(enabled) }
+    fun setPerfShowFrameTime(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowFrameTime(enabled) }
+    fun setPerfShowRam(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowRam(enabled) }
+    fun setPerfShowCore(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowCore(enabled) }
+    fun setPerfShowShaderFails(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowShaderFails(enabled) }
     fun setPerfOverlayScale(scale: Float) = viewModelScope.launch { settingsStore.setPerfOverlayScale(scale) }
     fun setPerfOverlayPosX(x: Float) = viewModelScope.launch { settingsStore.setPerfOverlayPosX(x) }
     fun setPerfOverlayPosY(y: Float) = viewModelScope.launch { settingsStore.setPerfOverlayPosY(y) }
     fun setLogVerbosity(level: LogLevel) = viewModelScope.launch {
         settingsStore.setLogVerbosity(level)
         PhobosCore.setLogLevel(level.ordinal)
+    }
+
+    fun setN64DebugLogging(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        // Push to native FIRST (synchronously) so the emulation thread sees it
+        // immediately — the pause-menu toggle previously appeared dead because
+        // the DataStore edit could delay/race the JNI call, so native stayed
+        // off until a re-toggle. Native atomic is the source of truth for the
+        // stats block; persist is best-effort.
+        PhobosCore.setN64DebugLogging(enabled)
+        settingsStore.setN64DebugLogging(enabled)
     }
 
     fun setPause(paused: Boolean) {
@@ -158,6 +205,47 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setStatesPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.STATES_PATH, path) }
     fun setScreenshotsPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.SCREENSHOTS_PATH, path) }
 
+    /**
+     * Vulkan Cache Path (Task 40): persists the SAF URI and pushes the resolved
+     * real path to native. On change, copies any existing pipeline cache from the
+     * old location so the user doesn't lose their warm shader cache.
+     */
+    fun setVulkanCachePath(path: String) = viewModelScope.launch(Dispatchers.IO) {
+        val oldPath = settings.value.vulkanCachePath
+        settingsStore.setVulkanCachePath(path)
+        val newReal = resolveSafPath(path)
+        if (newReal != null) {
+            // Copy-on-change: carry the existing cache (+ driver-UUID sidecar) over.
+            if (oldPath.isNotEmpty() && oldPath != path) {
+                val oldReal = resolveSafPath(oldPath)
+                if (oldReal != null) {
+                    try {
+                        val oldCache = File(oldReal, "n64_vulkan_pipeline_cache.bin")
+                        val newCache = File(newReal, "n64_vulkan_pipeline_cache.bin")
+                        if (oldCache.exists()) {
+                            newCache.parentFile?.mkdirs()
+                            oldCache.copyTo(newCache, overwrite = true)
+                            val oldUuid = File(oldReal, "n64_vulkan_pipeline_cache.bin.uuid")
+                            if (oldUuid.exists()) {
+                                oldUuid.copyTo(File(newReal, "n64_vulkan_pipeline_cache.bin.uuid"), overwrite = true)
+                            }
+                            Log.i("Phobos", "Copied Vulkan pipeline cache to $newReal")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("Phobos", "Failed to copy Vulkan cache: ${e.message}")
+                    }
+                }
+            }
+            PhobosCore.setVulkanCachePath(newReal)
+            Log.i("Phobos", "Vulkan cache path set: $newReal")
+        } else {
+            // Unset/unresolvable: fall back to internal default dir.
+            val fallback = File(context.filesDir, "vulkan_cache")
+            fallback.mkdirs()
+            PhobosCore.setVulkanCachePath(fallback.absolutePath)
+        }
+    }
+
     fun setShaderPath(path: String) = viewModelScope.launch {
         settingsStore.setShaderPath(path)
         PhobosCore.setShader(path)
@@ -173,6 +261,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.unloadSystem()
             _isLoaded.value = false
             _isPaused.value = false
+            currentSystemName = ""
         }
     }
 
@@ -214,10 +303,13 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             val nativeSuccess = PhobosCore.saveState(tempFile.absolutePath)
             
             if (nativeSuccess) {
-                // 2. Copy from local path to the user's selected SAF path
-                try {
-                    val baseUriString = settings.value.statesPath
-                    if (baseUriString.isNotEmpty()) {
+                // 2. Copy from local path to the user's selected SAF path.
+                //    Task 41: fall back to internal storage when no SAF path is
+                //    configured so states aren't silently lost.
+                val baseUriString = settings.value.statesPath
+                val internalStatesDir = File(context.filesDir, "states/$sanitizedName")
+                if (baseUriString.isNotEmpty()) {
+                    try {
                         val baseUri = Uri.parse(baseUriString)
                         val rootDir = DocumentFile.fromTreeUri(context, baseUri)
                         val systemDir = rootDir?.findFile(sanitizedName) ?: rootDir?.createDirectory(sanitizedName)
@@ -235,11 +327,26 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                                 Toast.makeText(context, "Saved state to Slot $slot", Toast.LENGTH_SHORT).show()
                             }
                         }
+                    } catch (e: Exception) {
+                        Log.e("Phobos", "Failed to sync state to SAF: ${e.message}")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
+                        }
                     }
-                } catch (e: Exception) {
-                    Log.e("Phobos", "Failed to sync state to SAF: ${e.message}")
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
+                } else {
+                    // Internal fallback: filesDir/states/<system>/<file>
+                    try {
+                        if (!internalStatesDir.exists()) internalStatesDir.mkdirs()
+                        tempFile.copyTo(File(internalStatesDir, fileName), overwrite = true)
+                        Log.i("Phobos", "Saved state to internal: ${File(internalStatesDir, fileName).absolutePath}")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Saved state to Slot $slot", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Log.e("Phobos", "Failed to save state internally: ${e.message}")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             } else {
@@ -260,16 +367,19 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             Log.d("Phobos", "loadState start: $fileName")
 
             try {
+                // Task 41: prefer SAF when configured, else internal storage
+                // (filesDir/states/<system>/<file>).
                 val baseUriString = settings.value.statesPath
-                if (baseUriString.isNotEmpty()) {
+                val internalStateFile = File(context.filesDir, "states/$sanitizedName/$fileName")
+                val stateFile: java.io.File? = if (baseUriString.isNotEmpty()) {
                     val baseUri = Uri.parse(baseUriString)
                     val rootDir = DocumentFile.fromTreeUri(context, baseUri)
                     val systemDir = rootDir?.findFile(sanitizedName)
-                    val stateFile = systemDir?.findFile(fileName)
-
-                    if (stateFile != null && stateFile.exists()) {
+                    val safState = systemDir?.findFile(fileName)
+                    if (safState != null && safState.exists()) {
+                        // Copy SAF -> temp for native load
                         val copyStart = System.currentTimeMillis()
-                        context.contentResolver.openInputStream(stateFile.uri)?.use { input ->
+                        context.contentResolver.openInputStream(safState.uri)?.use { input ->
                             tempFile.outputStream().use { output ->
                                 // Use a larger buffer for faster SAF copying
                                 val buffer = ByteArray(64 * 1024)
@@ -281,24 +391,70 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         }
                         val copyEnd = System.currentTimeMillis()
                         Log.d("Phobos", "loadState: SAF Copy took ${copyEnd - copyStart}ms")
-                        
-                        val nativeStart = System.currentTimeMillis()
-                        val nativeSuccess = PhobosCore.loadState(tempFile.absolutePath)
-                        val nativeEnd = System.currentTimeMillis()
-                        Log.d("Phobos", "loadState: Native Unserialize took ${nativeEnd - nativeStart}ms")
+                        tempFile
+                    } else null
+                } else {
+                    // Internal fallback (if it exists)
+                    if (internalStateFile.exists()) internalStateFile else null
+                }
 
-                        if (nativeSuccess) {
-                            Log.i("Phobos", "Successfully loaded state from $fileName. Total time: ${System.currentTimeMillis() - startTime}ms")
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(context, "Loaded state from Slot $slot", Toast.LENGTH_SHORT).show()
-                            }
-                        } else {
-                            Log.e("Phobos", "Native loadState failed")
+                if (stateFile != null) {
+                    val nativeStart = System.currentTimeMillis()
+                    val nativeSuccess = PhobosCore.loadState(stateFile.absolutePath)
+                    val nativeEnd = System.currentTimeMillis()
+                    Log.d("Phobos", "loadState: Native Unserialize took ${nativeEnd - nativeStart}ms")
+
+                    if (nativeSuccess) {
+                        Log.i("Phobos", "Successfully loaded state from $fileName. Total time: ${System.currentTimeMillis() - startTime}ms")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Loaded state from Slot $slot", Toast.LENGTH_SHORT).show()
                         }
+                    } else {
+                        Log.e("Phobos", "Native loadState failed")
                     }
+                } else {
+                    Log.w("Phobos", "loadState: no state file found for $fileName")
                 }
             } catch (e: Exception) {
                 Log.e("Phobos", "Error during loadState: ${e.message}")
+            }
+        }
+    }
+
+    fun deleteState(systemName: String, romName: String, slot: Int = 0) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val fileName = "$romName.state$slot"
+            val sanitizedName = getSanitizedSystemName(systemName)
+            val baseUriString = settings.value.statesPath
+            var deleted = false
+            try {
+                if (baseUriString.isNotEmpty()) {
+                    val baseUri = Uri.parse(baseUriString)
+                    val rootDir = DocumentFile.fromTreeUri(context, baseUri)
+                    val systemDir = rootDir?.findFile(sanitizedName)
+                    val safState = systemDir?.findFile(fileName)
+                    if (safState != null && safState.exists()) {
+                        deleted = safState.delete()
+                        Log.i("Phobos", "Deleted state from SAF: $fileName (result=$deleted)")
+                    }
+                }
+                // Also remove the internal fallback copy if present.
+                val internalStateFile = File(context.filesDir, "states/$sanitizedName/$fileName")
+                if (internalStateFile.exists()) {
+                    deleted = internalStateFile.delete() || deleted
+                    Log.i("Phobos", "Deleted state internally: $fileName")
+                }
+            } catch (e: Exception) {
+                Log.e("Phobos", "Error during deleteState: ${e.message}")
+            }
+            if (deleted) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Deleted state from Slot $slot", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "No state in Slot $slot", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -322,6 +478,14 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     private val _isLoaded = MutableStateFlow(false)
     val isLoaded: StateFlow<Boolean> = _isLoaded
 
+    // Current emulated system name ("Nintendo 64", "PlayStation", ...) — used by
+    // the rumble loop and input routing to decide system-specific behavior.
+    @Volatile
+    private var currentSystemName: String = ""
+
+    /** Name of the currently loaded system, or empty when nothing is loaded. */
+    val loadedSystemName: String get() = currentSystemName
+
     private val _perfStats = MutableStateFlow(PerformanceStats(0.0, 0.0, 0))
     val perfStats: StateFlow<PerformanceStats> = _perfStats
 
@@ -336,10 +500,20 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     fun incrementSlot() {
         _currentSlot.value = (_currentSlot.value + 1) % 10
+        viewModelScope.launch {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Selected Save Slot ${_currentSlot.value}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     fun decrementSlot() {
         _currentSlot.value = if (_currentSlot.value == 0) 9 else _currentSlot.value - 1
+        viewModelScope.launch {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Selected Save Slot ${_currentSlot.value}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     fun resetSystem() {
@@ -360,11 +534,11 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     fun takeScreenshot(systemName: String, romName: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val baseDir = if (settings.value.screenshotsPath.isNotEmpty()) {
-                Uri.parse(settings.value.screenshotsPath).path ?: context.filesDir.absolutePath
-            } else {
-                context.filesDir.absolutePath
-            }
+            // Task 41: resolve the SAF path to a REAL filesystem path; fall back to
+            // internal storage when unset or unresolvable (SAF URIs aren't usable
+            // as native file paths).
+            val baseDir = resolveSafPath(settings.value.screenshotsPath)
+                ?: File(context.filesDir, "screenshots").absolutePath
             val dir = File(baseDir, systemName)
             if (!dir.exists()) dir.mkdirs()
             
@@ -387,6 +561,9 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setMuteAudio(settings.value.muteAudio)
             PhobosCore.setFastBoot(settings.value.fastBoot)
             PhobosCore.setFastForwardSpeed(settings.value.fastForwardSpeed)
+            PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
+            PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
+            PhobosCore.setN64CpuOverclock(if (settings.value.n64UseDefaultCpuOverclock) 0 else settings.value.n64CpuOverclock)
             PhobosCore.setNativeLibraryDir(context.applicationInfo.nativeLibraryDir)
             
             withContext(Dispatchers.IO) {
@@ -419,6 +596,44 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                     }
                     
                     delay(500)
+                }
+            }
+
+            // Rumble (N64 Rumble Pak + PS1 DualShock): poll the native motor state
+            // at ~30 Hz and drive the device vibrator. Binary motor — a continuous
+            // waveform while on, cancelled on the falling edge. Also cancelled
+            // whenever the rumble source isn't active (pause, quit, pak change).
+            launch(Dispatchers.Default) {
+                val vibrator = context.getSystemService(Vibrator::class.java)
+                var rumbleActive = false
+                while (true) {
+                    // Which systems can rumble:
+                    //  - Nintendo 64: only when a Rumble Pak is attached (n64Pak setting)
+                    //  - PlayStation: whenever a DualShock is connected (analog mode on;
+                    //    the ares core exposes its Rumble node and the native side already
+                    //    feeds it into rumbleState)
+                    val rumbleSupported = when (currentSystemName) {
+                        "Nintendo 64" -> settings.value.n64Pak == "Rumble Pak"
+                        "PlayStation" -> settings.value.ps1AnalogMode
+                        else -> false
+                    }
+                    val rumbleOn = _isLoaded.value && !_isPaused.value &&
+                        rumbleSupported &&
+                        PhobosCore.getRumbleState()
+                    if (rumbleOn && !rumbleActive) {
+                        rumbleActive = true
+                        try {
+                            // Pulse-burst pattern: 120ms on / 60ms off, repeating.
+                            // Re-triggering the motor at its resonant frequency makes
+                            // small vibration motors feel stronger than a continuous
+                            // 2s burst (which the driver may also dampen).
+                            vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 120, 60), 0))
+                        } catch (_: Exception) {}
+                    } else if (!rumbleOn && rumbleActive) {
+                        rumbleActive = false
+                        try { vibrator?.cancel() } catch (_: Exception) {}
+                    }
+                    delay(33)
                 }
             }
         }
@@ -486,6 +701,17 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "Neo Geo Pocket - BIOS (World).bin" to "fw_ngp",
         "Neo Geo Pocket Color - BIOS (World).bin" to "fw_ngpc",
         "64dd_ipl.bin" to "fw_n64dd_jp",
+        "n64dd_ipl.bin" to "fw_n64dd_jp",
+        "n64dd_ipl_jp.bin" to "fw_n64dd_jp",
+        "n64dd_ipl_us.bin" to "fw_n64dd_us",
+        "n64dd_ipl_dev.bin" to "fw_n64dd_dev",
+        "[bios] nintendo 64dd ipl (japan) (v1.0).zip" to "fw_n64dd_jp",
+        "[bios] nintendo 64dd ipl (japan) (v1.2).zip" to "fw_n64dd_jp",
+        "[bios] nintendo 64dd ipl (usa) (proto).zip" to "fw_n64dd_us",
+        "[bios] nintendo 64dd ipl (usa) (proto) (v1.0).zip" to "fw_n64dd_us",
+        "[bios] nintendo 64dd ipl (usa) (proto) (v1.1).zip" to "fw_n64dd_us",
+        "nintendo 64dd ipl (japan).bin" to "fw_n64dd_jp",
+        "nintendo 64dd ipl (usa) (proto).bin" to "fw_n64dd_us",
         "pif.ntsc.rom" to "fw_n64_pif_ntsc",
         "pif.pal.rom" to "fw_n64_pif_pal",
         "segacd_usa.bin" to "fw_mcd_us",
@@ -606,7 +832,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                     val name = file.name?.lowercase() ?: ""
                     Log.d("Phobos", "Firmware scan: checking '$name'")
                     
-                    // 1. Check by filename
+                    // 1. Check by filename (matches raw .bin/.rom and known .zip names)
                     val keyByName = biosMap[name]
                     if (keyByName != null) {
                         Log.i("Phobos", "Firmware scan: MATCHED '$name' -> $keyByName")
@@ -619,7 +845,62 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         return@forEach
                     }
 
-                    // 2. Check by CRC32
+                    // 2. ZIP archives: match by inner file name AND inner CRC32.
+                    // Many BIOS sets ship as No-Intro "[BIOS] ... .zip"; the outer
+                    // zip's CRC is meaningless, so we must inspect the contents.
+                    if (name.endsWith(".zip")) {
+                        var zipMatched = false
+                        try {
+                            context.contentResolver.openInputStream(file.uri)?.use { input ->
+                                java.util.zip.ZipInputStream(java.io.BufferedInputStream(input)).use { zis ->
+                                    var entry = zis.nextEntry
+                                    while (entry != null) {
+                                        if (!entry.isDirectory) {
+                                            val innerName = entry.name.substringAfterLast('/').lowercase()
+                                            // inner name match
+                                            val keyByInnerName = biosMap[innerName]
+                                            if (keyByInnerName != null) {
+                                                Log.i("Phobos", "Firmware scan: ZIP '$name' inner '$innerName' -> $keyByInnerName")
+                                                settingsStore.setSystemFirmwarePath(keyByInnerName, file.uri.toString())
+                                                biosAliases[keyByInnerName]?.forEach { alias ->
+                                                    settingsStore.setSystemFirmwarePath(alias, file.uri.toString())
+                                                }
+                                                matchedCount++
+                                                zipMatched = true
+                                                break
+                                            }
+                                            // inner CRC match
+                                            val crc = CRC32()
+                                            val buffer = ByteArray(8192)
+                                            var bytesRead: Int
+                                            while (zis.read(buffer).also { bytesRead = it } != -1) {
+                                                crc.update(buffer, 0, bytesRead)
+                                            }
+                                            val crcString = String.format("%08x", crc.value)
+                                            val keyByCrc = biosCrcMap[crcString]
+                                            if (keyByCrc != null) {
+                                                Log.i("Phobos", "Firmware scan: ZIP '$name' inner '$innerName' CRC=$crcString -> $keyByCrc")
+                                                settingsStore.setSystemFirmwarePath(keyByCrc, file.uri.toString())
+                                                biosAliases[keyByCrc]?.forEach { alias ->
+                                                    settingsStore.setSystemFirmwarePath(alias, file.uri.toString())
+                                                }
+                                                matchedCount++
+                                                zipMatched = true
+                                                break
+                                            }
+                                        }
+                                        zis.closeEntry()
+                                        entry = zis.nextEntry
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("Phobos", "Error reading ZIP firmware ${file.name}: ${e.message}")
+                        }
+                        if (zipMatched) return@forEach
+                    }
+
+                    // 3. Check by CRC32 (raw non-zip files)
                     try {
                         context.contentResolver.openInputStream(file.uri)?.use { input ->
                             val crc = CRC32()
@@ -786,6 +1067,25 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setN64DisableVIProcessing(currentSettings.n64DisableVIProcessing)
             PhobosCore.setN64WeaveDeinterlacing(currentSettings.n64WeaveDeinterlacing)
             PhobosCore.setN64SupersampleScanout(currentSettings.n64SupersampleScanout)
+            PhobosCore.setN64ViOverclock(currentSettings.n64ViOverclock)
+            PhobosCore.setN64CountPerOp(if (currentSettings.n64UseDefaultCountPerOp) 2 else currentSettings.n64CountPerOp)
+            PhobosCore.setN64CpuOverclock(if (currentSettings.n64UseDefaultCpuOverclock) 0 else currentSettings.n64CpuOverclock)
+            PhobosCore.setN64Pak(currentSettings.n64Pak)
+
+            // Resolve the user-configured Saves Path (SAF content:// URI) to a
+            // real filesystem path native code can write to; fall back to the
+            // internal saves dir when unset or unresolvable.
+            val savesDir = resolveSafPath(currentSettings.savesPath)
+                ?: File(context.filesDir, "saves").absolutePath
+            PhobosCore.setSavesPath(savesDir)
+            Log.i("Phobos", "Saves path resolved: $savesDir")
+
+            // Vulkan pipeline cache dir (Task 40): user-configured path, else
+            // internal default (files/vulkan_cache).
+            val cacheDir = resolveSafPath(currentSettings.vulkanCachePath)
+                ?: File(context.filesDir, "vulkan_cache").absolutePath
+            PhobosCore.setVulkanCachePath(cacheDir)
+            Log.i("Phobos", "Vulkan cache path resolved: $cacheDir")
             _isPaused.value = false
             _isLoaded.value = false
             PhobosCore.setPause(false)
@@ -811,9 +1111,31 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         // Use DocumentFile to handle permissions properly if it's from SAF
                         val docFile = DocumentFile.fromSingleUri(context, uri)
                         if (docFile != null && docFile.exists()) {
+                            val fileName = docFile.name?.lowercase() ?: ""
                             context.contentResolver.openInputStream(uri)?.use { input ->
-                                tempFile.outputStream().use { output ->
-                                    input.copyTo(output)
+                                if (fileName.endsWith(".zip")) {
+                                    // No-Intro BIOS sets ship as .zip. Extract the first
+                                    // non-directory entry to the temp file — the raw
+                                    // zip bytes would be garbage when loaded as an IPL.
+                                    java.util.zip.ZipInputStream(java.io.BufferedInputStream(input)).use { zis ->
+                                        var entry = zis.nextEntry
+                                        var extracted = false
+                                        while (entry != null && !extracted) {
+                                            if (!entry.isDirectory) {
+                                                tempFile.outputStream().use { output ->
+                                                    zis.copyTo(output)
+                                                }
+                                                extracted = true
+                                            }
+                                            zis.closeEntry()
+                                            entry = zis.nextEntry
+                                        }
+                                        if (!extracted) Log.w("Phobos", "ZIP firmware ${docFile.name} had no files")
+                                    }
+                                } else {
+                                    tempFile.outputStream().use { output ->
+                                        input.copyTo(output)
+                                    }
                                 }
                             }
                             PhobosCore.mapFirmwareFile(key, tempFile.absolutePath)
@@ -835,6 +1157,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                     val success = PhobosCore.loadRom(systemName, rom.uri.toString(), rom.name)
                     if (success) {
                         _isLoaded.value = true
+                        currentSystemName = systemName
                     } else {
                         Log.e("Phobos", "Native loadRom failed for $systemName")
                     }
@@ -876,10 +1199,45 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         // Also tell native where the home is
         PhobosCore.setHomePath(root.absolutePath)
 
-        // Set up persistent save directory
+        // Default native saves dir — the configured Saves Path (if any) is
+        // resolved and pushed at load time in loadRom().
         val savesDir = File(context.filesDir, "saves")
         if (!savesDir.exists()) savesDir.mkdirs()
         PhobosCore.setSavesPath(savesDir.absolutePath)
+    }
+
+    /**
+     * Resolves a SAF content:// tree/document URI (from OpenDocumentTree) to a
+     * real filesystem path native code can use, or returns null when it can't.
+     *
+     * Handles the external-storage provider's docId format:
+     *   "primary:ROMS"  -> /storage/emulated/0/ROMS
+     *   "1C1F-1234:Dir" -> /storage/1C1F-1234/Dir
+     * Non-content URIs (plain paths) pass through unchanged.
+     */
+    private fun resolveSafPath(uriString: String): String? {
+        if (uriString.isEmpty()) return null
+        val uri = Uri.parse(uriString)
+        if (uri.scheme != "content") return uriString
+        return try {
+            val docId = if (DocumentsContract.isTreeUri(uri)) {
+                DocumentsContract.getTreeDocumentId(uri)
+            } else {
+                DocumentsContract.getDocumentId(uri)
+            }
+            val colon = docId.indexOf(':')
+            if (colon < 0) return null
+            val volumeId = docId.substring(0, colon)
+            val relPath = docId.substring(colon + 1)
+            val base = if (volumeId == "primary") {
+                Environment.getExternalStorageDirectory().absolutePath
+            } else {
+                "/storage/$volumeId"
+            }
+            if (relPath.isEmpty()) base else "$base/$relPath"
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun extractFolder(assetPath: String, destDir: File) {

@@ -68,18 +68,55 @@ fun MainScaffold(viewModel: MainViewModel) {
                 }) 
             }
             composable("console") { ConsoleScreen(viewModel) }
-            composable("settings") { 
+            composable("settings") {
                 SettingsScreen(
                     viewModel = viewModel,
-                    onNavigateToVisibility = { navController.navigate("settings/visibility") },
-                    onNavigateToFirmware = { navController.navigate("settings/firmware") },
+                    onNavigateToAppearance = { navController.navigate("settings/appearance") },
+                    onNavigateToEmulation = { navController.navigate("settings/emulation") },
+                    onNavigateToVideo = { navController.navigate("settings/video") },
+                    onNavigateToN64Experimental = { navController.navigate("settings/n64-experimental") },
+                    onNavigateToAudio = { navController.navigate("settings/audio") },
+                    onNavigateToPerformance = { navController.navigate("settings/performance") },
                     onNavigateToInputs = { navController.navigate("settings/inputs") },
-                    onNavigateToHotkeys = { navController.navigate("settings/hotkeys") },
-                    onNavigateToShaders = { navController.navigate("settings/shaders") },
                     onNavigateToPaths = { navController.navigate("settings/paths") },
-                    onNavigateToDrivers = { navController.navigate("settings/drivers") },
+                    onNavigateToVisibility = { navController.navigate("settings/visibility") },
                     onNavigateToAbout = { navController.navigate("settings/about") }
-                ) 
+                )
+            }
+            composable("settings/appearance") {
+                AppearanceSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+            }
+            composable("settings/emulation") {
+                EmulationSettingsScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() },
+                    onNavigateToFirmware = { navController.navigate("settings/firmware") },
+                    onNavigateToDrivers = { navController.navigate("settings/drivers") }
+                )
+            }
+            composable("settings/video") {
+                VideoSettingsScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() },
+                    onNavigateToShaders = { navController.navigate("settings/shaders") }
+                )
+            }
+            composable("settings/n64-experimental") {
+                N64ExperimentalSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+            }
+            composable("settings/audio") {
+                AudioSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+            }
+            composable("settings/performance") {
+                PerformanceMonitorSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+            }
+            composable("settings/inputs") {
+                InputsSettingsScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() },
+                    onNavigateToInputs = { navController.navigate("settings/input-mapping") },
+                    onNavigateToHotkeys = { navController.navigate("settings/hotkeys") }
+                )
             }
             composable("settings/visibility") {
                 VisibilitySettingsScreen(viewModel, onBack = { navController.popBackStack() })
@@ -87,7 +124,7 @@ fun MainScaffold(viewModel: MainViewModel) {
             composable("settings/firmware") {
                 FirmwareSettingsScreen(viewModel, onBack = { navController.popBackStack() })
             }
-            composable("settings/inputs") {
+            composable("settings/input-mapping") {
                 InputMappingScreen(viewModel, onBack = { navController.popBackStack() })
             }
             composable("settings/hotkeys") {

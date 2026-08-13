@@ -39,6 +39,7 @@ fun PathSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     PathSelectorItem("Saves Path", settings.savesPath) { viewModel.setSavesPath(it) }
                     PathSelectorItem("States Path", settings.statesPath) { viewModel.setStatesPath(it) }
                     PathSelectorItem("Screenshots Path", settings.screenshotsPath) { viewModel.setScreenshotsPath(it) }
+                    PathSelectorItem("Vulkan Cache Path", settings.vulkanCachePath) { viewModel.setVulkanCachePath(it) }
                 }
             }
             

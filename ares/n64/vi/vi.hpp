@@ -73,6 +73,13 @@ struct VI : Thread, Memory::RCP<VI> {
 //unserialized:
   bool refreshed;
 
+  //VI Overclock (Mupen64Plus-FZ style): 100 = native 50/60Hz. >100 makes the
+  // VI generate frames faster so the game's frame logic (VI-interrupt driven)
+  // runs at a genuinely higher FPS — not host-side fast forward. Written by
+  // the platform before load/reset; read live by VI::main(). Unserialized:
+  // it's a user setting, not emulated state.
+  std::atomic<s32> overclockPercent{100};
+
   #if defined(VULKAN)
   bool gpuOutputValid = false;
   #endif

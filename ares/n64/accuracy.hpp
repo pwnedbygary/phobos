@@ -7,14 +7,13 @@ struct Accuracy {
     static constexpr bool Recompiler = !Interpreter;
 
     //Maximum number of cycles to run the CPU without synchronization.
-    //Raised 4x vs upstream (4096*2) for the Android port: the deep AAudio
-    //buffer absorbs coarser AI stepping, VI still refreshes every frame
-    //(cpu.main exits on vi.refreshed), and the compare/queue timers still
-    //bound the budget below this — so the only effect is quartering the
-    //synchronize() call rate (each sync steps all peripherals + profiles).
-    //Combined with the auto frame-skip, CPU-bound frames get noticeably
-    //cheaper on a phone-class big core.
-    static constexpr s64 JitInterleaving = 4096 * 8;
+    //FINAL VALUE (2026-08-12): 2048*2. Verified on-device:
+    //  - Conker's BFD pub menu: STALL-FREE at 2048*2 (clean 60fps, no N64 STALL)
+    //  - Mario Tennis: clearly faster than 1024*2 (gameplay 50-55 → 55-60fps)
+    //  - 4096*2 (upstream): NO ADDITIONAL MT benefit (A/B 2026-08-12 — identical
+    //    FPS/frame-time; the dips are SI-DMA game-loading waits, not CPU sync
+    //    overhead) AND reintroduces the Conker pub freeze → keep 2048*2.
+    static constexpr s64 JitInterleaving = 2048 * 2;
 
     //exceptions when the CPU accesses unaligned memory addresses
     static constexpr bool AddressErrors = 1 | Reference;

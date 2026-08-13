@@ -27,6 +27,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -263,7 +264,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                         isFocusable = false
                         setOnGenericMotionListener { _, event ->
                             val mappings = viewModel.settings.value.inputMappings
-                            GameInputState.handleMotionEvent(event, mappings)
+                            GameInputState.handleMotionEvent(event, mappings, systemName)
                         }
                         holder.addCallback(object : SurfaceHolder.Callback {
                             override fun surfaceCreated(h: SurfaceHolder) { PhobosCore.setSurface(h.surface) }
@@ -315,7 +316,12 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                         viewModel.setPerfOverlayPosX(x)
                         viewModel.setPerfOverlayPosY(y)
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    showFps = settingsState.perfShowFps,
+                    showFrameTime = settingsState.perfShowFrameTime,
+                    showRam = settingsState.perfShowRam,
+                    showCore = settingsState.perfShowCore,
+                    showShaderFails = settingsState.perfShowShaderFails
                 )
             }
         }
@@ -371,6 +377,10 @@ fun EmulationMenu(
     val diskLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.loadSecondaryRom(context, systemName, RomFile(uri.lastPathSegment ?: "Disk", uri))
     }
+    // In-pause sub-menu state: the N64 Experimental screen replaces the main
+    // pause list (with a back arrow) to keep the pause menu clean.
+    var experimentalOpen by remember { mutableStateOf(false) }
+    BackHandler(enabled = experimentalOpen) { experimentalOpen = false }
 
     Box(
         modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)).clickable(enabled = false) {},
@@ -381,6 +391,9 @@ fun EmulationMenu(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
+                if (experimentalOpen) {
+                    N64ExperimentalSection(viewModel, settings, onBack = { experimentalOpen = false })
+                } else {
                 Text("Emulation Paused", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 16.dp))
                 LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     // ── Save / Load ──────────────────────────────────────────
@@ -396,6 +409,11 @@ fun EmulationMenu(
                                     Button(onClick = { viewModel.saveState(systemName, romName, currentSlot); onResume() }) { Text("Save") }
                                     Spacer(Modifier.width(8.dp))
                                     Button(onClick = { viewModel.loadState(systemName, romName, currentSlot); onResume() }) { Text("Load") }
+                                    Spacer(Modifier.width(8.dp))
+                                    OutlinedButton(
+                                        onClick = { viewModel.deleteState(systemName, romName, currentSlot) },
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                    ) { Text("Delete") }
                                 }
                             }
                         }
@@ -417,30 +435,32 @@ fun EmulationMenu(
                     if (systemName.contains("Nintendo 64", ignoreCase = true)) {
                         item {
                             MenuSection("N64 Settings") {
-                                var upscaleExpanded by remember { mutableStateOf(false) }
+                                SettingsSwitchItem("Expansion Pak", "Increase RDRAM to 8MB.", settings.n64ExpansionPak) { viewModel.setN64ExpansionPak(it) }
+                                SettingsSwitchItem("CPU Recompiler", "Use JIT recompiler.", settings.n64Recompiler) { viewModel.setN64Recompiler(it) }
+                                var pakExpanded by remember { mutableStateOf(false) }
                                 ListItem(
-                                    headlineContent = { Text("Internal Upscale") },
+                                    headlineContent = { Text("Controller Pak") },
+                                    supportingContent = { Text("Peripheral for Player 1 (hot-swappable).") },
                                     trailingContent = {
                                         Box {
-                                            TextButton(onClick = { upscaleExpanded = true }) { Text("${settings.n64Upscale}x") }
-                                            DropdownMenu(expanded = upscaleExpanded, onDismissRequest = { upscaleExpanded = false }) {
-                                                // 1/2/4x only — 8x on a 640x240 N64 framebuffer creates ~5120x3840
-    // internal targets that exhaust device memory (kswapd thrash + ANR).
-    listOf(1, 2, 4).forEach { factor ->
+                                            TextButton(onClick = { pakExpanded = true }) { Text(settings.n64Pak) }
+                                            DropdownMenu(expanded = pakExpanded, onDismissRequest = { pakExpanded = false }) {
+                                                listOf("None", "Rumble Pak", "Controller Pak").forEach { pak ->
                                                     DropdownMenuItem(
-                                                        text = { Text("${factor}x") },
-                                                        onClick = { viewModel.setN64Upscale(factor); upscaleExpanded = false }
+                                                        text = { Text(pak) },
+                                                        onClick = { viewModel.setN64Pak(pak); pakExpanded = false }
                                                     )
                                                 }
                                             }
                                         }
                                     }
                                 )
-                                SettingsSwitchItem("Expansion Pak", "Increase RDRAM to 8MB.", settings.n64ExpansionPak) { viewModel.setN64ExpansionPak(it) }
-                                SettingsSwitchItem("CPU Recompiler", "Use JIT recompiler.", settings.n64Recompiler) { viewModel.setN64Recompiler(it) }
-                                SettingsSwitchItem("Disable VI Process", "Bypass VI post-processing. May fix GPU shader errors.", settings.n64DisableVIProcessing) { viewModel.setN64DisableVIProcessing(it) }
-                                SettingsSwitchItem("Supersample Scanout", "Downscale internal upscale for native output.", settings.n64SupersampleScanout) { viewModel.setN64SupersampleScanout(it) }
-                                SettingsSwitchItem("Weave Deinterlace", "Blend deinterlace (needs Supersample OFF).", settings.n64WeaveDeinterlacing) { viewModel.setN64WeaveDeinterlacing(it) }
+                                ListItem(
+                                    headlineContent = { Text("N64 Experimental") },
+                                    supportingContent = { Text("Overclocking, VI rendering, debug logging") },
+                                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                                    modifier = Modifier.clickable { experimentalOpen = true }
+                                )
                             }
                         }
                     }
@@ -494,6 +514,7 @@ fun EmulationMenu(
                         }
                     }
                 }
+                }
 
                 Spacer(Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -513,5 +534,120 @@ fun MenuSection(title: String, content: @Composable ColumnScope.() -> Unit) {
         Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(4.dp)); content()
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp), thickness = 0.5.dp)
+    }
+}
+
+// ─── N64 Experimental sub-menu (pause menu) ──────────────────────────────────
+// Shown in-place (replaces the pause list) with a back arrow, mirroring the
+// "Experimental (N64 Vulkan)" section in Settings. Keeps the main pause menu
+// clean while keeping every N64 tuning knob one tap away.
+
+@Composable
+fun ColumnScope.N64ExperimentalSection(
+    viewModel: MainViewModel,
+    settings: EmulatorSettings,
+    onBack: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+        Text("N64 Experimental", style = MaterialTheme.typography.headlineSmall)
+    }
+    LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            MenuSection("Rendering") {
+                var upscaleExpanded by remember { mutableStateOf(false) }
+                ListItem(
+                    headlineContent = { Text("Internal Upscale") },
+                    trailingContent = {
+                        Box {
+                            TextButton(onClick = { upscaleExpanded = true }) { Text("${settings.n64Upscale}x") }
+                            DropdownMenu(expanded = upscaleExpanded, onDismissRequest = { upscaleExpanded = false }) {
+                                listOf(1, 2, 4).forEach { factor ->
+                                    DropdownMenuItem(
+                                        text = { Text("${factor}x") },
+                                        onClick = { viewModel.setN64Upscale(factor); upscaleExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+                SettingsSwitchItem("Disable VI Process", "Bypass VI post-processing. May fix GPU shader errors.", settings.n64DisableVIProcessing) { viewModel.setN64DisableVIProcessing(it) }
+                SettingsSwitchItem("Supersample Scanout", "Downscale internal upscale for native output.", settings.n64SupersampleScanout) { viewModel.setN64SupersampleScanout(it) }
+                SettingsSwitchItem("Weave Deinterlace", "Blend deinterlace (needs Supersample OFF).", settings.n64WeaveDeinterlacing) { viewModel.setN64WeaveDeinterlacing(it) }
+            }
+        }
+        item {
+            MenuSection("Overclocking") {
+                var overclockExpanded by remember { mutableStateOf(false) }
+                ListItem(
+                    headlineContent = { Text("VI Overclock") },
+                    supportingContent = { Text("Run VI faster so games render above 50/60Hz (game logic speeds up too).") },
+                    trailingContent = {
+                        Box {
+                            TextButton(onClick = { overclockExpanded = true }) { Text("${settings.n64ViOverclock / 100.0f}x") }
+                            DropdownMenu(expanded = overclockExpanded, onDismissRequest = { overclockExpanded = false }) {
+                                listOf(100, 125, 150, 175, 200).forEach { pct ->
+                                    DropdownMenuItem(
+                                        text = { Text("${pct / 100.0f}x") },
+                                        onClick = { viewModel.setN64ViOverclock(pct); overclockExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+                SettingsSwitchItem("Use default count per op", "Modifying this can change game timing. Lower values can overclock the game but cause instability.", settings.n64UseDefaultCountPerOp) { viewModel.setN64UseDefaultCountPerOp(it) }
+                var countPerOpExpanded by remember { mutableStateOf(false) }
+                val countPerOpEnabled = !settings.n64UseDefaultCountPerOp
+                ListItem(
+                    modifier = Modifier.alpha(if (countPerOpEnabled) 1f else 0.4f),
+                    headlineContent = { Text("Count Per Operation") },
+                    supportingContent = { Text("Default 2. 1 = overclock (may be unstable), 3 = underclock.") },
+                    trailingContent = {
+                        Box {
+                            TextButton(enabled = countPerOpEnabled, onClick = { countPerOpExpanded = true }) { Text("${settings.n64CountPerOp}") }
+                            DropdownMenu(expanded = countPerOpExpanded, onDismissRequest = { countPerOpExpanded = false }) {
+                                listOf(1, 2, 3).forEach { v ->
+                                    DropdownMenuItem(
+                                        text = { Text("$v") },
+                                        onClick = { viewModel.setN64CountPerOp(v); countPerOpExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+                SettingsSwitchItem("Use default overclocking factor", "Modifying this overclocks the R4300 by a factor of 2 each increment. 0 is no overclock.", settings.n64UseDefaultCpuOverclock) { viewModel.setN64UseDefaultCpuOverclock(it) }
+                var cpuOverclockExpanded by remember { mutableStateOf(false) }
+                val cpuOverclockEnabled = !settings.n64UseDefaultCpuOverclock
+                ListItem(
+                    modifier = Modifier.alpha(if (cpuOverclockEnabled) 1f else 0.4f),
+                    headlineContent = { Text("Overclocking Factor") },
+                    supportingContent = { Text("Overclocks the R4300 by 2^factor (0 = none). Game logic faster at same frame rate.") },
+                    trailingContent = {
+                        Box {
+                            TextButton(enabled = cpuOverclockEnabled, onClick = { cpuOverclockExpanded = true }) { Text("${settings.n64CpuOverclock}") }
+                            DropdownMenu(expanded = cpuOverclockExpanded, onDismissRequest = { cpuOverclockExpanded = false }) {
+                                listOf(0, 1, 2, 3, 4, 5).forEach { v ->
+                                    DropdownMenuItem(
+                                        text = { Text("$v") },
+                                        onClick = { viewModel.setN64CpuOverclock(v); cpuOverclockExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+        }
+        item {
+            MenuSection("Diagnostics") {
+                SettingsSwitchItem("N64 Debug Logging", "Per-second N64 PC + stall dumps to logcat.", settings.n64DebugLogging) { viewModel.setN64DebugLogging(it) }
+            }
+        }
     }
 }

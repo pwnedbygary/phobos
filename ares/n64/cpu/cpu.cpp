@@ -69,18 +69,27 @@ auto CPU::synchronize() -> void {
   Thread::clock = 0;
   jitClockTarget = 0;
 
-   vi.clock -= clocks;
-   ai.clock -= clocks;
-  rsp.clock -= clocks;
-  rdp.clock -= clocks;
-  pif.clock -= clocks;
+  // R4300 overclock (Mupen64Plus-FZ "Overclocking Factor", 2^factor):
+  // peripherals consume CPU cycles 2^factor slower, so the CPU executes
+  // 2^factor more instructions per VI/AI frame — the game simulation runs
+  // faster at the same rendered frame rate. The Count register keeps its
+  // hardware ratio to the (overclocked) CPU clock below (full clocks), so
+  // the game's own timer cadence scales coherently with the faster CPU.
+  s64 peripheralClocks = clocks;
+  if (s32 f = overclockFactor.load(); f > 0) peripheralClocks >>= f;
+
+   vi.clock -= peripheralClocks;
+   ai.clock -= peripheralClocks;
+  rsp.clock -= peripheralClocks;
+  rdp.clock -= peripheralClocks;
+  pif.clock -= peripheralClocks;
   vi.main();
   ai.main();
   rsp.main();
   rdp.main();
   pif.main();
 
-  queue.step(clocks, [](u32 event) {
+  queue.step(peripheralClocks, [](u32 event) {
     switch(event) {
     case Queue::PI_DMA_Read:   return pi.dmaFinished();
     case Queue::PI_DMA_Write:  return pi.dmaFinished();
@@ -99,11 +108,18 @@ auto CPU::synchronize() -> void {
     }
   });
 
-  clocks >>= 1;
-  if(scc.count < scc.compare && scc.count + clocks >= scc.compare) {
+  // Count Per Operation (Mupen64Plus-FZ style): scales the CP0 Count
+  // register increment. Default 2 = stock hardware rate (Count advances
+  // every 2 CPU cycles, i.e. clocks/2). Lower (1) → Count advances slower
+  // per instruction → compare/timer interrupt fires after more instructions
+  // → game overclocked. Higher (3) → underclocked. Count is a CPU register,
+  // so it scales with the full (overclocked) CPU clock.
+  s64 countIncrement = clocks * countPerOp.load() / 4;
+  if(countIncrement < 0) countIncrement = 0;
+  if(scc.count < scc.compare && scc.count + countIncrement >= scc.compare) {
     setInterruptPending(Interrupt::Timer, 1);
   }
-  scc.count += clocks;
+  scc.count += countIncrement;
   profile.cpuCycles += clocks;
   if (scc.status.exceptionLevel) profile.cpuCyclesExc += clocks;
 }

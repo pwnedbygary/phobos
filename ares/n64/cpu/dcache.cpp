@@ -53,13 +53,19 @@ auto CPU::DataCache::read(u64 vaddr, u32 paddr) -> u64 {
   if(!line.hit(paddr)) {
     if(line.valid() && line.dirty) {
       line.writeBack();
+      #if !defined(NDEBUG)
       self.profile.dcacheWritebacks++;
+      #endif
     }
     line.fill(paddr);
+    #if !defined(NDEBUG)
     self.profile.dcacheMisses++;
+    #endif
   } else {
     cpu.step(1 * 2);
+    #if !defined(NDEBUG)
     self.profile.dcacheHits++;
+    #endif
   }
   return line.read<Size>(paddr);
 }
@@ -82,13 +88,19 @@ auto CPU::DataCache::write(u64 vaddr, u32 paddr, u64 data) -> void {
   if(!line.hit(paddr)) {
     if(line.valid() && line.dirty) {
       line.writeBack();
+      #if !defined(NDEBUG)
       self.profile.dcacheWritebacks++;
+      #endif
     }
     line.fill(paddr);
+    #if !defined(NDEBUG)
     self.profile.dcacheMisses++;
+    #endif
   } else {
     cpu.step(1 * 2);
+    #if !defined(NDEBUG)
     self.profile.dcacheHits++;
+    #endif
   }
   line.write<Size>(paddr, data);
 }

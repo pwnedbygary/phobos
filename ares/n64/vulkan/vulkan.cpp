@@ -63,7 +63,16 @@ struct Vulkan::Implementation {
     Implementation& self;
     Validation(Implementation& i) : self(i) {}
     void report_rdp_crash(::RDP::ValidationError err, const char *msg) override {
-      self.crash_error = msg;
+      // NON-FATAL: log and continue. parallel-RDP already skips the offending
+      // operation (e.g. a 4bpp tile upload) and returns. If we set crash_error
+      // here, ares' RDP::render() sees it and calls RDP::crash(), which sets
+      // command.crashed/pipeBusy/bufferBusy and permanently kills the RDP — the
+      // game then waits forever on the dead RDP → frozen screen at 60fps with
+      // identical frames (Conker's BFD pub menu, save-state restores, any 4bpp
+      // texture). On real hardware these are rare/fatal, but for a general
+      // emulator skip-and-continue is far better than a hard freeze.
+      __android_log_print(ANDROID_LOG_WARN, "PhobosVulkan",
+                          "RDP validation (%d) non-fatal: %s", (int)err, msg);
     }
   } validator{*this};
 
@@ -313,7 +322,7 @@ auto Vulkan::scanoutAsync(bool field) -> bool {
     }
   }
   static int scanoutCountLog = 0;
-  if (++scanoutCountLog % 60 == 0) __android_log_print(ANDROID_LOG_DEBUG, "PhobosVulkan", "Vulkan::scanoutAsync triggered");
+  if (++scanoutCountLog % 300 == 0) __android_log_print(ANDROID_LOG_DEBUG, "PhobosVulkan", "Vulkan::scanoutAsync triggered");
   implementation->processor->scanout_async_buffer(implementation->scanout, options);
   implementation->scanoutCount++;
   return true;

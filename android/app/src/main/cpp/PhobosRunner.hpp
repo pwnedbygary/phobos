@@ -39,6 +39,7 @@ namespace ares {
   auto runFrame() -> void;
   auto setFastForward(bool enabled) -> void;
   auto setFastForwardSpeed(f32 speed) -> void;
+  auto setN64DebugLogging(bool enabled) -> void;
   auto saveState(const char* path) -> bool;
   auto loadState(const char* path) -> bool;
   auto takeScreenshot(const char* path) -> bool;
@@ -58,6 +59,11 @@ namespace ares {
   auto setN64DisableVIProcessing(bool enabled) -> void;
   auto setN64WeaveDeinterlacing(bool enabled) -> void;
   auto setN64SupersampleScanout(bool enabled) -> void;
+  auto setN64ViOverclock(s32 percent) -> void;
+  auto setN64CountPerOp(s32 value) -> void;
+  auto setN64CpuOverclock(s32 factor) -> void;
+  auto setN64Pak(const char* pakName) -> void;
+  auto getRumbleState() -> bool;
   auto setPs1AnalogMode(bool enabled) -> void;
   auto togglePs1AnalogMode() -> bool;
   auto setStickToDpad(bool enabled) -> void;
@@ -69,6 +75,7 @@ namespace ares {
   auto setOrientationMode(bool vertical) -> void;
   auto setHomePath(const char* path) -> void;
   auto setSavesPath(const char* path) -> void;
+  auto setVulkanCachePath(const char* path) -> void;
   auto setNativeLibraryDir(const char* path) -> void;
   auto setFirmwarePath(const char* path) -> void;
   auto mapFirmwareFile(const char* name, const char* path) -> void;

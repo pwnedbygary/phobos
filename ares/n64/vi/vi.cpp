@@ -25,7 +25,11 @@ auto VI::load(Node::Object parent) -> void {
   #endif
   screen = node->append<Node::Video::Screen>("Screen", width, height);
   screen->setRefresh(std::bind_front(&VI::refresh, this));
-  screen->refreshRateHint(Region::PAL() ? 50 : 60); // TODO: More accurate refresh rate hint
+  // VI Overclock: scale the host refresh hint so the emulation loop paces at
+  // the overclocked frame rate (e.g. 120Hz at 2x), not the native 50/60Hz.
+  s32 oc = overclockPercent.load();
+  if (oc <= 0) oc = 100;
+  screen->refreshRateHint((Region::PAL() ? 50 : 60) * oc / 100); // TODO: More accurate refresh rate hint
   screen->colors((1 << 24) + (1 << 15), [&](n32 color) -> n64 {
     if(color < (1 << 24)) {
       u64 a = 65535;
@@ -123,7 +127,16 @@ auto VI::main() -> void {
 
       u32 lineDuration = io.quarterLineDuration+1;
       if(io.vcounter == 1)
-        lineDuration = io.hsyncLeap[io.leapPattern.bit(io.leapCounter)];      
+        lineDuration = io.hsyncLeap[io.leapPattern.bit(io.leapCounter)];
+      // VI Overclock: scale the line duration so the VI generates frames
+      // faster than native. The game's frame logic (tied to the VI interrupt
+      // / vcounter coincidence) then runs at the higher rate — genuine
+      // higher-FPS emulation, not host-side fast forward. Host pacing follows
+      // via refreshRateHint in VI::load/VI::power.
+      if (s32 oc = overclockPercent.load(); oc != 100) {
+        if (oc <= 0) oc = 100;
+        lineDuration = lineDuration * 100 / oc;
+      }
       step(lineDuration);
     } else {
       // Arbitrarily call screen->frame() every once in a while to keep the UI responsive.
@@ -236,6 +249,12 @@ auto VI::power(bool reset) -> void {
   io = {};
   refreshed = false;
   clockFraction = 0;
+
+  // VI Overclock: refresh the host pacing hint on (re)boot so a changed
+  // overclock takes effect at the next reset/load.
+  s32 oc = overclockPercent.load();
+  if (oc <= 0) oc = 100;
+  screen->refreshRateHint((Region::PAL() ? 50 : 60) * oc / 100);
 
   #if defined(VULKAN)
   gpuOutputValid = false;

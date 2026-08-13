@@ -148,10 +148,17 @@ auto GameBoyAdvance::analyze(std::vector<u8>& rom) -> string {
   }
 
   bool hasRTC = false;
-  string detectRTC = "SIIRTC_V";
+  // SII S3511A RTC driver detection (mGBA-style heuristic). Official RTC carts
+  // (Pokemon Ruby/Sapphire/Emerald) embed the driver marker as the contiguous
+  // string "SIIRTC_V..."; ROM hacks like Pokemon Unbound carry the same driver
+  // with the marker split across two literals ("SII\0RTC_V0018"), so also match
+  // the driver version prefix "RTC_V001".
+  std::vector<string> detectRTC = {"SIIRTC_V", "RTC_V001"};
   for(s32 n : range(rom.size() - 16)) {
-    if(!memory::compare(&rom[n], detectRTC.data(), detectRTC.size())) {
-      hasRTC = true;
+    for(auto& signature : detectRTC) {
+      if(!memory::compare(&rom[n], signature.data(), signature.size())) {
+        hasRTC = true;
+      }
     }
   }
 

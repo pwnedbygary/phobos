@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
         if (viewModel.isLoaded.value &&
             (event.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
             event.action == MotionEvent.ACTION_MOVE) {
-            return GameInputState.handleMotionEvent(event, viewModel.settings.value.inputMappings)
+            return GameInputState.handleMotionEvent(event, viewModel.settings.value.inputMappings, viewModel.loadedSystemName)
         }
         return false
     }

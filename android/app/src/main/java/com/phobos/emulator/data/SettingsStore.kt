@@ -42,6 +42,11 @@ data class EmulatorSettings(
     val fullScreenMode: Boolean = false,
     val showTouchControls: Boolean = true,
     val showPerformanceMonitor: Boolean = false,
+    val perfShowFps: Boolean = true,
+    val perfShowFrameTime: Boolean = true,
+    val perfShowRam: Boolean = true,
+    val perfShowCore: Boolean = true,
+    val perfShowShaderFails: Boolean = false,
     val perfOverlayScale: Float = 1.0f,
     val perfOverlayPosX: Float = 1.0f,  // 0=left, 1=right
     val perfOverlayPosY: Float = 0.0f,  // 0=top, 1=bottom
@@ -56,11 +61,19 @@ data class EmulatorSettings(
     val n64DisableVIProcessing: Boolean = false,
     val n64WeaveDeinterlacing: Boolean = false,
     val n64SupersampleScanout: Boolean = false,
+    val n64ViOverclock: Int = 100,
+    val n64UseDefaultCountPerOp: Boolean = true,
+    val n64CountPerOp: Int = 2,
+    val n64UseDefaultCpuOverclock: Boolean = true,
+    val n64CpuOverclock: Int = 0,
+    val n64Pak: String = "None",
+    val n64DebugLogging: Boolean = false,
     val orientationVertical: Boolean = false,
     val firmwarePath: String = "",
     val savesPath: String = "",
     val statesPath: String = "",
     val screenshotsPath: String = "",
+    val vulkanCachePath: String = "",
     val arcadeRomsPath: String = "",
     val shaderPath: String = "",
     val aspectRatioMode: AspectRatioMode = AspectRatioMode.CORE_PROVIDED,
@@ -87,6 +100,11 @@ class SettingsStore(private val context: Context) {
         val FULL_SCREEN_MODE = booleanPreferencesKey("full_screen_mode")
         val SHOW_TOUCH_CONTROLS = booleanPreferencesKey("show_touch_controls")
         val SHOW_PERFORMANCE_MONITOR = booleanPreferencesKey("show_performance_monitor")
+        val PERF_SHOW_FPS = booleanPreferencesKey("perf_show_fps")
+        val PERF_SHOW_FRAMETIME = booleanPreferencesKey("perf_show_frametime")
+        val PERF_SHOW_RAM = booleanPreferencesKey("perf_show_ram")
+        val PERF_SHOW_CORE = booleanPreferencesKey("perf_show_core")
+        val PERF_SHOW_SHADER_FAILS = booleanPreferencesKey("perf_show_shader_fails")
         val PERF_OVERLAY_SCALE = floatPreferencesKey("perf_overlay_scale")
         val PERF_OVERLAY_POS_X = floatPreferencesKey("perf_overlay_pos_x")
         val PERF_OVERLAY_POS_Y = floatPreferencesKey("perf_overlay_pos_y")
@@ -101,11 +119,19 @@ class SettingsStore(private val context: Context) {
         val N64_DISABLE_VI_PROCESSING = booleanPreferencesKey("n64_disable_vi_processing")
         val N64_WEAVE_DEINTERLACING = booleanPreferencesKey("n64_weave_deinterlacing")
         val N64_SUPERSAMPLE_SCANOUT = booleanPreferencesKey("n64_supersample_scanout")
+        val N64_VI_OVERCLOCK = intPreferencesKey("n64_vi_overclock")
+        val N64_USE_DEFAULT_COUNT_PER_OP = booleanPreferencesKey("n64_use_default_count_per_op")
+        val N64_COUNT_PER_OP = intPreferencesKey("n64_count_per_op")
+        val N64_USE_DEFAULT_CPU_OVERCLOCK = booleanPreferencesKey("n64_use_default_cpu_overclock")
+        val N64_CPU_OVERCLOCK = intPreferencesKey("n64_cpu_overclock")
+        val N64_PAK = stringPreferencesKey("n64_pak")
+        val N64_DEBUG_LOGGING = booleanPreferencesKey("n64_debug_logging")
         val ORIENTATION_VERTICAL = booleanPreferencesKey("orientation_vertical")
         val FIRMWARE_PATH = stringPreferencesKey("path_firmware")
         val SAVES_PATH = stringPreferencesKey("path_saves")
         val STATES_PATH = stringPreferencesKey("path_states")
         val SCREENSHOTS_PATH = stringPreferencesKey("path_screenshots")
+        val VULKAN_CACHE_PATH = stringPreferencesKey("path_vulkan_cache")
         val ARCADE_ROMS_PATH = stringPreferencesKey("path_arcade_roms")
         val SHADER_PATH = stringPreferencesKey("path_shader")
         val ASPECT_RATIO_MODE = stringPreferencesKey("aspect_ratio_mode")
@@ -193,6 +219,11 @@ class SettingsStore(private val context: Context) {
             fullScreenMode = safeGet(FULL_SCREEN_MODE, false),
             showTouchControls = safeGet(SHOW_TOUCH_CONTROLS, true),
             showPerformanceMonitor = safeGet(SHOW_PERFORMANCE_MONITOR, false),
+            perfShowFps = safeGet(PERF_SHOW_FPS, true),
+            perfShowFrameTime = safeGet(PERF_SHOW_FRAMETIME, true),
+            perfShowRam = safeGet(PERF_SHOW_RAM, true),
+            perfShowCore = safeGet(PERF_SHOW_CORE, true),
+            perfShowShaderFails = safeGet(PERF_SHOW_SHADER_FAILS, false),
             perfOverlayScale = safeGet(PERF_OVERLAY_SCALE, 1.0f),
             perfOverlayPosX = safeGet(PERF_OVERLAY_POS_X, 1.0f),
             perfOverlayPosY = safeGet(PERF_OVERLAY_POS_Y, 0.0f),
@@ -207,11 +238,19 @@ class SettingsStore(private val context: Context) {
             n64DisableVIProcessing = safeGet(N64_DISABLE_VI_PROCESSING, false),
             n64WeaveDeinterlacing = safeGet(N64_WEAVE_DEINTERLACING, false),
             n64SupersampleScanout = safeGet(N64_SUPERSAMPLE_SCANOUT, false),
+            n64ViOverclock = safeGet(N64_VI_OVERCLOCK, 100),
+            n64UseDefaultCountPerOp = safeGet(N64_USE_DEFAULT_COUNT_PER_OP, true),
+            n64CountPerOp = safeGet(N64_COUNT_PER_OP, 2),
+            n64UseDefaultCpuOverclock = safeGet(N64_USE_DEFAULT_CPU_OVERCLOCK, true),
+            n64CpuOverclock = safeGet(N64_CPU_OVERCLOCK, 0),
+            n64Pak = safeGetString(N64_PAK, "None"),
+            n64DebugLogging = safeGet(N64_DEBUG_LOGGING, false),
             orientationVertical = safeGet(ORIENTATION_VERTICAL, false),
             firmwarePath = safeGetString(FIRMWARE_PATH, ""),
             savesPath = safeGetString(SAVES_PATH, ""),
             statesPath = safeGetString(STATES_PATH, ""),
             screenshotsPath = safeGetString(SCREENSHOTS_PATH, ""),
+            vulkanCachePath = safeGetString(VULKAN_CACHE_PATH, ""),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
             shaderPath = safeGetString(SHADER_PATH, ""),
             aspectRatioMode = try { AspectRatioMode.valueOf(safeGetString(ASPECT_RATIO_MODE, AspectRatioMode.CORE_PROVIDED.name)) } catch(e: Exception) { AspectRatioMode.CORE_PROVIDED },
@@ -275,6 +314,11 @@ class SettingsStore(private val context: Context) {
     suspend fun setFullScreenMode(enabled: Boolean) = context.dataStore.edit { it[FULL_SCREEN_MODE] = enabled }
     suspend fun setShowTouchControls(enabled: Boolean) = context.dataStore.edit { it[SHOW_TOUCH_CONTROLS] = enabled }
     suspend fun setShowPerformanceMonitor(enabled: Boolean) = context.dataStore.edit { it[SHOW_PERFORMANCE_MONITOR] = enabled }
+    suspend fun setPerfShowFps(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_FPS] = enabled }
+    suspend fun setPerfShowFrameTime(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_FRAMETIME] = enabled }
+    suspend fun setPerfShowRam(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_RAM] = enabled }
+    suspend fun setPerfShowCore(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_CORE] = enabled }
+    suspend fun setPerfShowShaderFails(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_SHADER_FAILS] = enabled }
     suspend fun setPerfOverlayScale(scale: Float) = context.dataStore.edit { it[PERF_OVERLAY_SCALE] = scale }
     suspend fun setPerfOverlayPosX(x: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_X] = x }
     suspend fun setPerfOverlayPosY(y: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_Y] = y }
@@ -290,7 +334,15 @@ class SettingsStore(private val context: Context) {
     suspend fun setN64DisableVIProcessing(enabled: Boolean) = context.dataStore.edit { it[N64_DISABLE_VI_PROCESSING] = enabled }
     suspend fun setN64WeaveDeinterlacing(enabled: Boolean) = context.dataStore.edit { it[N64_WEAVE_DEINTERLACING] = enabled }
     suspend fun setN64SupersampleScanout(enabled: Boolean) = context.dataStore.edit { it[N64_SUPERSAMPLE_SCANOUT] = enabled }
+    suspend fun setN64ViOverclock(percent: Int) = context.dataStore.edit { it[N64_VI_OVERCLOCK] = percent }
+    suspend fun setN64UseDefaultCountPerOp(enabled: Boolean) = context.dataStore.edit { it[N64_USE_DEFAULT_COUNT_PER_OP] = enabled }
+    suspend fun setN64CountPerOp(value: Int) = context.dataStore.edit { it[N64_COUNT_PER_OP] = value }
+    suspend fun setN64UseDefaultCpuOverclock(enabled: Boolean) = context.dataStore.edit { it[N64_USE_DEFAULT_CPU_OVERCLOCK] = enabled }
+    suspend fun setN64CpuOverclock(factor: Int) = context.dataStore.edit { it[N64_CPU_OVERCLOCK] = factor }
+    suspend fun setN64Pak(pak: String) = context.dataStore.edit { it[N64_PAK] = pak }
+    suspend fun setN64DebugLogging(enabled: Boolean) = context.dataStore.edit { it[N64_DEBUG_LOGGING] = enabled }
     suspend fun setGlobalPath(key: Preferences.Key<String>, path: String) = context.dataStore.edit { it[key] = path }
+    suspend fun setVulkanCachePath(path: String) = context.dataStore.edit { it[VULKAN_CACHE_PATH] = path }
     suspend fun setShaderPath(path: String) = context.dataStore.edit { it[SHADER_PATH] = path }
     suspend fun setAspectRatioMode(mode: AspectRatioMode) = context.dataStore.edit { it[ASPECT_RATIO_MODE] = mode.name }
 

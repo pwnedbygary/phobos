@@ -111,6 +111,11 @@ Java_com_phobos_emulator_PhobosCore_setFastForwardSpeed(JNIEnv* env, jobject, jf
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64DebugLogging(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setN64DebugLogging(enabled);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_resetSystem(JNIEnv* env, jobject) {
     ares::resetSystem();
 }
@@ -230,6 +235,33 @@ Java_com_phobos_emulator_PhobosCore_setN64SupersampleScanout(JNIEnv* env, jobjec
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64ViOverclock(JNIEnv* env, jobject, jint percent) {
+    ares::setN64ViOverclock((s32)percent);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64CountPerOp(JNIEnv* env, jobject, jint value) {
+    ares::setN64CountPerOp((s32)value);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64CpuOverclock(JNIEnv* env, jobject, jint factor) {
+    ares::setN64CpuOverclock((s32)factor);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64Pak(JNIEnv* env, jobject, jstring pakName) {
+    const char* nativePakName = env->GetStringUTFChars(pakName, 0);
+    ares::setN64Pak(nativePakName);
+    env->ReleaseStringUTFChars(pakName, nativePakName);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_phobos_emulator_PhobosCore_getRumbleState(JNIEnv* env, jobject) {
+    return ares::getRumbleState() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setRomFd(JNIEnv* env, jobject, jint fd) {
     ares::setRomFd((s32)fd);
 }
@@ -336,6 +368,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setSavesPath(JNIEnv* env, jobject, jstring path) {
     const char* nativePath = env->GetStringUTFChars(path, 0);
     ares::setSavesPath(nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setVulkanCachePath(JNIEnv* env, jobject, jstring path) {
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    ares::setVulkanCachePath(nativePath);
     env->ReleaseStringUTFChars(path, nativePath);
 }
 
