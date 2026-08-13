@@ -1,20 +1,96 @@
 <img src="https://github.com/pwnedbygary/phobos/blob/master/ares/ares/resource/logo%402x.png" width="350"/>
 
-**Phobos** is a port of the well regarded Ares, a multi-system emulator that began development on October 14th, 2004.
-It is a descendant of [higan](https://github.com/higan-emu/higan) and [bsnes](https://github.com/bsnes-emu/bsnes/), and focuses on accuracy and preservation.
+**Phobos** is a multi-system emulator for **Android**, forked from [ares](https://github.com/ares-emulator/ares) (which began development on October 14th, 2004 as a descendant of [higan](https://github.com/higan-emu/higan) and [bsnes](https://github.com/bsnes-emu/bsnes/)). It focuses on accuracy and preservation, but with Android-specific engineering layered on top: a JIT recompiler family, a Vulkan/parallel-RDP renderer for N64, custom Turnip/Adreno driver loading, and a Jetpack Compose UI.
 
-It's worth noting that Ares takes some uncommon design approaches that essentially trade speed for code clarity. We avoid state machines and bitmasks (when possible). Most cores end up being half the amount of code, but slower. The code is clearer and less spaghettified, especially for systems with lots of processors. C bitfields being non-portable incurs a speedhit. Windows also has a speedhit over Linux due to its ABI needing more instructions to switch contexts.
+> ares deliberately trades some speed for code clarity (state machines and bitmasks are avoided where possible). Phobos keeps that philosophy for the cores but adds performance-oriented backends around them, so the clarity remains while the hot paths run fast.
 
-Official Releases
------------------
+---
 
-Phobos is currently **Android-only**. Release APKs (legacy + modern flavors)
-are built automatically by GitHub Actions on every commit and published on the
-[GitHub Releases](https://github.com/pwnedbygary/phobos/releases) page when a
-version tag is pushed. Debug builds are not published.
+## Phobos vs. ares — what changed, technically
 
-Building Phobos
--------------
+Phobos is not a UI reskin: it carries substantial core and platform engineering. The main differences:
+
+### 1. JIT recompilers (CPU + RSP)
+
+- **N64 CPU (VR4300):** ares desktop uses an interpreter-only CPU core. Phobos ships a **dynamic JIT recompiler** (`ares/n64/cpu/recompiler*.cpp`, based on the sljit backend) that compiles cached-RDRAM code blocks to native ARM64. It includes custom fixes such as **in-block self-modifying-code invalidation** (tracked via the data/instruction cache dirty-line mechanism) and is gated per-game by a "Recompiler" toggle.
+- **RSP:** the RSP has its own recompiler plus an SSE4.1/AVX vector path for the vector unit; on ARM64 the vector ops use the scalar/SSE-style emission paths (`ARCHITECTURE_SUPPORTS_SSE4_1` gates the `__m128i` `r128` union). The RSP recompiler also pins the DMEM base in a callee-saved register so DMEM access folds to register-relative addressing.
+- **Synchronization cadence:** the N64 core uses ares' synchronous model (`CPU::synchronize()` drives VI/AI/RSP/RDP directly, the ares co-routine Scheduler is unused by N64 — identical to upstream ares, which never migrated N64 to the scheduler). Phobos tunes `Accuracy::CPU::JitInterleaving` **per-device** (default `2048*2` on the Retroid Pocket 6) to balance sync overhead vs. the JIT's overshoot; upstream's `4096*2` stalls Conker's BFD on-device while `1024*2` costs frames in Mario Tennis.
+
+### 2. N64 rendering: Vulkan + parallel-RDP
+
+- ares' desktop N64 renderer is a software RDP. Phobos replaces it with a **Vulkan backend built on parallel-RDP** (`ares/n64/vulkan/`, vendored `parallel-rdp/`), with:
+  - A **command ring + timeline worker + pipeline-compile threads**, pinned to the device's performance cores.
+  - **Pipeline cache persistence** (user-configurable path, copy-on-change) so shader compilation doesn't repeat every launch.
+  - **Internal upscaling** (1x–4x), **VI post-processing** bypass toggle, **supersample scanout**, and **weave deinterlacing** options.
+  - **Non-fatal RDP validation:** a malformed command (e.g. a 4-bit VRAM pointer from a save-state load) is logged and skipped instead of crashing the RDP (upstream aborts). This fixed a hard freeze on some save-state restores.
+- The Vulkan `VkDevice` is kept alive across soft resets (the fragile destroy/recreate path is avoided), and bounded waits were added to `CommandRing::drain`, `wait_for_timeline`, and the scanout fence.
+
+### 3. GPU driver loading (libadrenotools / Turnip)
+
+- Phobos can load a **custom Mesa/Turnip Vulkan driver** (e.g. `libvulkan_freedreno.so`) via [libadrenotools](https://github.com/bylaws/libadrenotools) (`thirdparty/libadrenotools`), which the parallel-RDP pipeline can't always use the stock Adreno driver for. The driver is user-selectable per install and applies at app start.
+
+### 4. 64DD support
+
+- The N64 core's **64DD** path is wired end-to-end: firmware scanning maps `fw_n64dd_jp`/`fw_n64dd_us`, a secondary `.ndd` medium can be mounted (JNI `loadSecondaryRom` → native disk mount on the Floppy Disk port), and the pause menu has a "Load Disk" picker. Verified with F-Zero X Expansion Kit at 60fps.
+
+### 5. Input, paks, and controller features
+
+- **Rumble Pak / Controller Pak** (Player 1 N64): selectable from the pause menu, hot-swappable, with `save.pak` persistence and Android vibration (polled via JNI).
+- **PS1 DualShock** analog toggle (DualShock ↔ Digital Gamepad) at runtime; rumble routed to the Android vibrator with a 150ms latch so short pulses are felt.
+- **N64 C-buttons** are reachable from the right stick; stick-axis bindings latch through digital hysteresis matching ares' InputAnalog qualifiers.
+- A per-core input cache (`inputButtonCache`/`inputAxisCache`) is keyed by raw node pointers and invalidated whenever the controller node tree is rebuilt (toggle/disk-mount/reload) — fixing stale-binding regressions.
+
+### 6. Platform / save handling
+
+- **Saves Path, Vulkan Cache Path, States/Screenshots** are user-configurable via SAF; internal-storage fallbacks keep saves safe when no path is set.
+- Save import runs **before** the cartridge port connects (the cores read their save files from the medium pak at connect time) — a fix that restores GBA SRAM/EEPROM/Flash/RTC state on every load instead of starting blank.
+- **GBA RTC detection** was broadened: ares detects RTC by scanning for the literal `SIIRTC_V`; ROM hacks like Pokemon Unbound split the driver marker (`SII\0RTC_V0018\0`), so Phobos also matches the `RTC_V001` prefix (mGBA-style heuristic). Verified: Unbound passes its RTC check.
+
+### 7. N64 timing/QoL knobs (Mupen64Plus-FZ style)
+
+- **VI Overclock** (1x–2x): the VI runs at a genuinely higher frame rate; game logic executes faster.
+- **Count Per Operation** (1/2/3) and **R4300 Overclocking Factor** (0–5 = 2^f): CP0 Count scaling and peripheral-cycle division, each behind a "use default" checkbox.
+- **N64 Debug Logging** toggle: gates the per-second `N64 PC:`/`N64 STALL/HANG` diagnostics (off by default so logs stay clean and no per-frame core-state reads cost CPU).
+- Profile counters are compiled out of release builds (`#if !defined(NDEBUG)`).
+
+### 8. CI / distribution
+
+- GitHub Actions builds **release-only** APKs (legacy + modern flavors) on every commit; a version tag (`v1.2.3`) maps to `versionName`/`versionCode` and publishes a GitHub Release. Debug builds are never published.
+
+---
+
+## Systems
+
+| System | Status |
+|---|---|
+| Nintendo 64 | **Playable** — JIT CPU + RSP, Vulkan/parallel-RDP, upscaling, 64DD, Rumble/Controller Pak |
+| Game Boy Advance | **Playable** — incl. RTC (Unbound verified) and save-state restore |
+| Game Boy / Color | **Playable** |
+| Super Famicom / Famicom | **Playable** |
+| Mega Drive / Mega CD / Master System / Game Gear | **Playable** (Mega CD audio has a known rate mismatch) |
+| PlayStation | **Playable** — DualShock + analog toggle, memcards; Ape Escape rumble not confirmed (game/config); CD-XA cinematics unsupported (upstream has CD-XA disabled) |
+| Sega Saturn | **Playable** (basic) |
+| Neo Geo (MVS/AES) | **Loads, BIOS OK, black screen** — under investigation (ARM64/MIA database path) |
+| Neo Geo CD | Loads (basic) |
+| Neo Geo Pocket / Color | **Playable** — BIOS settings (language/date) persist |
+| PC Engine / CD / SuperGrafx | **PC Engine HuCard loads; PCE-CD/SuperGrafx black screen** — under investigation (scheduler/co-switch on ARM64) |
+| WonderSwan / Color | **Playable** |
+| MSX / MSX2 | **Playable** (incl. tape) |
+| Atari 2600, ColecoVision, SG-1000, SC-3000 | **Playable** |
+| ZX Spectrum | **Playable** |
+
+### Known issues / not yet functional
+
+- **Neo Geo MVS/AES** — boots to BIOS but no game screen (ARM64 endianness / MIA database path).
+- **PCE-CD & SuperGrafx** — black screen; PCE HuCard-only works.
+- **PS1 CD-XA cinematics** — disabled (upstream state, not a Phobos regression).
+- **Mega CD audio** — works but has a rate mismatch (YM2612 hum resolved).
+- **N64 64DD disk-save** — "Last Save Data was not written properly" / RTC date-time not set (known 64DD RTC persistence gaps).
+- **N64 load-state** — a stale-DMA exception-loop was seen on some titles after restore; RDP validation is now non-fatal so it degrades instead of freezing.
+
+---
+
+## Building Phobos
 
 Requires the Android SDK (platform 37, build-tools 36, NDK 28.x, CMake 3.22.1)
 and a JDK 17+. From the `android/` directory:
@@ -34,6 +110,7 @@ High-level Components
 * __nall__:       Near's alternative to the C++ standard library
 * __mia__:        internal ROM database and ROM/image loader
 * __libco__:      cooperative multithreading library
+* __thirdparty__: parallel-rdp, sljit, libadrenotools, volk
 
 Contributing
 ------------
