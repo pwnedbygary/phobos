@@ -15,6 +15,7 @@ name: Android Build
 on:
   push:
     branches: [ '*' ]
+    tags: [ '*' ]   # tag pushes also trigger so the release job can run
   pull_request:
   workflow_dispatch:
 
@@ -65,14 +66,38 @@ jobs:
             "ndk;28.2.13676358" \
             "cmake;3.22.1"
 
+      # Map the git ref to an app version. On a tag push (e.g. v1.2.3):
+      #   versionName = "1.2.3" (leading 'v' stripped, -rc/-beta suffixes kept)
+      #   versionCode = MAJOR*10000 + MINOR*100 + PATCH  (1.2.3 -> 10203)
+      # Non-tag builds (branch push / PR / manual) use the gradle defaults.
+      - name: Compute app version from ref
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            TAG="${TAG#v}"
+            VER="${TAG%%[-+]*}"          # strip -rc1 / +meta for the numeric code
+            IFS='.' read -r MAJOR MINOR PATCH <<< "${VER}"
+            VERSION_CODE=$(( ${MAJOR:-0} * 10000 + ${MINOR:-0} * 100 + ${PATCH:-0} ))
+            echo "versionName=${TAG}"    >> "$GITHUB_OUTPUT"
+            echo "versionCode=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
+            echo "tag=${TAG} -> versionName=${TAG}, versionCode=${VERSION_CODE}"
+          else
+            echo "versionName=1.0" >> "$GITHUB_OUTPUT"
+            echo "versionCode=1"   >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       # assembleRelease = assembleLegacyRelease + assembleModernRelease.
       # CMake builds the native lib (ares fork + libadrenotools) for arm64-v8a.
+      # -PversionName/-PversionCode override the gradle defaults on tag builds.
       - name: Build release APKs
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon \
+             -PversionName=${{ steps.version.outputs.versionName }} \
+             -PversionCode=${{ steps.version.outputs.versionCode }}
 
       - name: Upload release APKs
         uses: actions/upload-artifact@v4

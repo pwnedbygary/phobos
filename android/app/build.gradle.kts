@@ -11,8 +11,12 @@ android {
         applicationId = "com.phobos.emulator"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+
+        // Version comes from the GitHub Actions tag when present (see
+        // .github/workflows/android.yml: tag v1.2.3 -> versionName 1.2.3,
+        // versionCode 10203). Local builds / branch builds fall back to these.
+        versionCode = (findProperty("versionCode") as String? ?: "1").toInt()
+        versionName = findProperty("versionName") as String? ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
