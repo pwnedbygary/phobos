@@ -63,21 +63,26 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 | System | Status |
 |---|---|
-| Nintendo 64 | **Playable** — JIT CPU + RSP, Vulkan/parallel-RDP, upscaling, 64DD, Rumble/Controller Pak |
-| Game Boy Advance | **Playable** — incl. RTC (Unbound verified) and save-state restore |
-| Game Boy / Color | **Playable** |
-| Super Famicom / Famicom | **Playable** |
-| Mega Drive / Mega CD / Master System / Game Gear | **Playable** (Mega CD audio has a known rate mismatch) |
-| PlayStation | **Playable** — DualShock + analog toggle, memcards; Ape Escape rumble not confirmed (game/config); CD-XA cinematics unsupported (upstream has CD-XA disabled) |
-| Sega Saturn | **Playable** (basic) |
-| Neo Geo (MVS/AES) | **Loads, BIOS OK, black screen** — under investigation (ARM64/MIA database path) |
-| Neo Geo CD | Loads (basic) |
-| Neo Geo Pocket / Color | **Playable** — BIOS settings (language/date) persist |
-| PC Engine / CD / SuperGrafx | **PC Engine HuCard loads; PCE-CD/SuperGrafx black screen** — under investigation (scheduler/co-switch on ARM64) |
-| WonderSwan / Color | **Playable** |
-| MSX / MSX2 | **Playable** (incl. tape) |
-| Atari 2600, ColecoVision, SG-1000, SC-3000 | **Playable** |
-| ZX Spectrum | **Playable** |
+| **Verified working on-device** | |
+| Nintendo 64 | ✅ JIT CPU + RSP, Vulkan/parallel-RDP, upscaling, 64DD, Rumble/Controller Pak, save states + battery saves confirmed |
+| Game Boy Advance | ✅ RTC (Pokemon Unbound verified), battery saves + save states |
+| Game Boy / Color | ✅ |
+| Super Famicom / Famicom | ✅ |
+| Mega Drive / Game Gear | ✅ |
+| Master System | ✅ |
+| PlayStation | ✅ DualShock + analog toggle, memcards, save states; Ape Escape rumble unconfirmed (game/config); CD-XA cinematics unsupported (upstream disabled) |
+| Neo Geo Pocket / Color | ✅ BIOS settings (language/date) persist |
+| WonderSwan / Color | ✅ |
+| MSX / MSX2 | ✅ (incl. tape) |
+| Atari 2600, ColecoVision, SG-1000, SC-3000 | ✅ |
+| **Present but NOT yet on-device verified** | |
+| Sega Saturn | ⚠️ Core builds, never tested |
+| ZX Spectrum | ⚠️ Core builds, never tested |
+| Neo Geo CD | ⚠️ Loads (basic), not confirmed playable |
+| **Known broken / under investigation** | |
+| Neo Geo (MVS/AES) | ❌ Loads, BIOS OK, black screen — ARM64/MIA database path |
+| PC Engine / CD / SuperGrafx | ❌ HuCard loads; PCE-CD/SuperGrafx black screen — scheduler/co-switch on ARM64 |
+| Mega CD | 🟡 Audio rate mismatch (playable) |
 
 ### Known issues / not yet functional
 
