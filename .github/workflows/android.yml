@@ -102,6 +102,22 @@ jobs:
             -PversionName=${{ steps.version.outputs.versionName }} \
             -PversionCode=${{ steps.version.outputs.versionCode }}
 
+      # Rename to "Phobos-<version>-<Flavor>.apk" (e.g. Phobos-1.2.3-Modern.apk)
+      # so each release asset is a self-describing, separately-downloadable APK
+      # (no zip — each flavor is its own file on the Release page).
+      - name: Rename release APKs
+        working-directory: android
+        run: |
+          set -euo pipefail
+          VER=${{ steps.version.outputs.versionName }}
+          mv app/build/outputs/apk/legacy/release/app-legacy-release.apk \
+             app/build/outputs/apk/legacy/release/Phobos-${VER}-Legacy.apk
+          mv app/build/outputs/apk/modern/release/app-modern-release.apk \
+             app/build/outputs/apk/modern/release/Phobos-${VER}-Modern.apk
+          ls -1 app/build/outputs/apk/legacy/release/ app/build/outputs/apk/modern/release/
+
+      # Each flavor is uploaded as its own APK; the Release job attaches them
+      # as separate assets (no zip). Both names now carry the version.
       - name: Upload release APKs
         uses: actions/upload-artifact@v4
         with:
