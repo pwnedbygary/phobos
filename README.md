@@ -76,9 +76,9 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | MSX / MSX2 | ✅ (incl. tape) |
 | Atari 2600, ColecoVision, SG-1000, SC-3000 | ✅ |
 | **Present but NOT yet on-device verified** | |
-| Sega Saturn | ⚠️ Core builds, never tested |
-| ZX Spectrum | ⚠️ Core builds, never tested |
-| Neo Geo CD | ⚠️ Loads (basic), not confirmed playable |
+| ZX Spectrum | ⚠️ Core + MIA + loader complete, now wired into the app — needs on-device test |
+| Sega Saturn | ❌ **Stub only** — upstream ares never completed the core (empty System::run); not functional, would require porting a full Saturn core |
+| Neo Geo CD | ❌ **No core exists** — not in upstream ares or this fork; removed from the app |
 | **Known broken / under investigation** | |
 | Neo Geo (MVS/AES) | ❌ Loads, BIOS OK, black screen — ARM64/MIA database path |
 | PC Engine / CD / SuperGrafx | ❌ HuCard loads; PCE-CD/SuperGrafx black screen — scheduler/co-switch on ARM64 |
