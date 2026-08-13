@@ -94,11 +94,13 @@ jobs:
       # assembleRelease = assembleLegacyRelease + assembleModernRelease.
       # CMake builds the native lib (ares fork + libadrenotools) for arm64-v8a.
       # -PversionName/-PversionCode override the gradle defaults on tag builds.
+      # Block scalar (no \-continuation) so the shell sees each -P as a real arg.
       - name: Build release APKs
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon \
-             -PversionName=${{ steps.version.outputs.versionName }} \
-             -PversionCode=${{ steps.version.outputs.versionCode }}
+        run: |
+          ./gradlew assembleRelease --no-daemon --stacktrace \
+            -PversionName=${{ steps.version.outputs.versionName }} \
+            -PversionCode=${{ steps.version.outputs.versionCode }}
 
       - name: Upload release APKs
         uses: actions/upload-artifact@v4
