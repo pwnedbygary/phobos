@@ -56,12 +56,13 @@ jobs:
 
       # Pre-install the same components the local build uses (compileSdk 37,
       # build-tools 36, NDK 28.2, CMake 3.22.1). AGP auto-installs anything
-      # extra it needs on top.
+      # extra it needs on top. NOTE: the platform-37 package id is
+      # "platforms;android-37.0" (Android 17, API level 37.0) — not "android-37".
       - name: Install SDK components
         run: |
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager \
-            "platforms;android-37" \
+            "platforms;android-37.0" \
             "build-tools;36.0.0" \
             "ndk;28.2.13676358" \
             "cmake;3.22.1"
