@@ -42,7 +42,8 @@ hiro/resource/resource.hpp
 desktop-ui/resource/resource.cpp
 desktop-ui/resource/resource.hpp
 mia/resource/resource.cpp
-mia/resource/resource.hpp
+# mia/resource/resource.hpp is COMMITTED (Android build needs it; it's a
+# deterministic dummy-resource stub — real BIOS load from assets at runtime)
 
 # Exclude Qt generated MOC file
 hiro/qt/qt.moc
