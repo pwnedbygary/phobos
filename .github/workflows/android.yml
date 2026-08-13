@@ -1,0 +1,106 @@
+name: Android Build
+
+# Phobos is Android-only for now: build the release APKs (legacy + modern
+# flavors) on every commit/PR, upload them as build artifacts, and publish a
+# GitHub Release when a version tag is pushed.
+#
+# Only RELEASE builds are produced here — debug builds stay local/off-CI so
+# nobody gets the dev build from GitHub.
+#
+# The release build type signs with the debug keystore (see
+# android/app/build.gradle.kts), which AGP auto-generates on the runner, so the
+# APKs install for sideloading. If you later want proper release signing, add
+# the keystore as secrets and wire them in (see "Release signing" notes below).
+
+on:
+  push:
+    branches: [ '*' ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build release APKs (legacy + modern)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive   # thirdparty/libadrenotools (public)
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # The NDK is ~1.5 GB; cache the whole SDK dir so repeat builds don't
+      # re-download it. Keyed on the gradle build files + the component list.
+      - name: Cache Android SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ANDROID_SDK_ROOT }}
+          key: android-sdk-${{ runner.os }}-${{ hashFiles('android/app/build.gradle.kts', 'android/gradle/libs.versions.toml') }}-ndk28
+
+      # Pre-install the same components the local build uses (compileSdk 37,
+      # build-tools 36, NDK 28.2, CMake 3.22.1). AGP auto-installs anything
+      # extra it needs on top.
+      - name: Install SDK components
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager \
+            "platforms;android-37" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # assembleRelease = assembleLegacyRelease + assembleModernRelease.
+      # CMake builds the native lib (ares fork + libadrenotools) for arm64-v8a.
+      - name: Build release APKs
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Upload release APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: phobos-apks
+          path: |
+            android/app/build/outputs/apk/legacy/release/*.apk
+            android/app/build/outputs/apk/modern/release/*.apk
+          if-no-files-found: error
+
+  # Publish a GitHub Release only for version tags (e.g. v1.0). Attaches the
+  # two release APKs. Tag the repo with a version to cut a release.
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: phobos-apks
+          path: apks
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apks/**/*.apk
+          generate_release_notes: true

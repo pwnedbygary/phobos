@@ -8,16 +8,23 @@ It's worth noting that Ares takes some uncommon design approaches that essential
 Official Releases
 -----------------
 
-Official Ares releases are available from
-[the Ares website](https://ares-emu.net).
-
-Official Phobos releases will be made available here once the github actions
-workflows are ready and creating the release-signed APK's.
+Phobos is currently **Android-only**. Release APKs (legacy + modern flavors)
+are built automatically by GitHub Actions on every commit and published on the
+[GitHub Releases](https://github.com/pwnedbygary/phobos/releases) page when a
+version tag is pushed. Debug builds are not published.
 
 Building Phobos
 -------------
 
-* WIP
+Requires the Android SDK (platform 37, build-tools 36, NDK 28.x, CMake 3.22.1)
+and a JDK 17+. From the `android/` directory:
+
+```sh
+./gradlew assembleRelease        # release APKs: app-legacy-release.apk + app-modern-release.apk
+./gradlew assembleDebug          # debug APKs (also builds all four variants)
+```
+
+APKs land in `app/build/outputs/apk/<flavor>/<type>/`.
 
 High-level Components
 ---------------------

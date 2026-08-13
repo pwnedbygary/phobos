@@ -15,6 +15,7 @@
 !/tests
 !/thirdparty
 !/tools
+!/android
 !/GNUMakefile
 !/LICENSE
 !/README.md
