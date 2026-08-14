@@ -1720,6 +1720,16 @@ else if (port->type() == "Keyboard") {
             if (identifiedSystem == "Super Famicom") aresExt = "sfc";
             if (identifiedSystem == "Famicom") aresExt = "fc";
             if (identifiedSystem == "Nintendo 64") aresExt = "z64";
+            if (identifiedSystem == "ZX Spectrum") {
+                // The ZX medium dispatches on filename extension (.tap/.tzx/.wav),
+                // so sniff the extracted bytes to pick the right one. TZX has a
+                // "ZXTape!\x1a" signature; WAV starts with "RIFF"; TAP has no
+                // header (starts with a 2-byte big-endian block length).
+                if (romBuffer.size() >= 8 && memcmp(romBuffer.data(), "ZXTape!", 7) == 0) aresExt = "tzx";
+                else if (romBuffer.size() >= 4 && memcmp(romBuffer.data(), "RIFF", 4) == 0) aresExt = "wav";
+                else aresExt = "tap";
+                LOGI("MIA: ZX Spectrum zip content sniffed as .%s", (const char*)aresExt);
+            }
 
             string rawRomPath = string{tempFilePath, "/phobos_rom_raw.", aresExt};
             FILE* rf = fopen((const char*)rawRomPath, "wb");
