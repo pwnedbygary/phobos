@@ -74,15 +74,19 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | Neo Geo Pocket / Color | ✅ BIOS settings (language/date) persist |
 | WonderSwan / Color | ✅ |
 | MSX / MSX2 | ✅ (incl. tape) |
-| Atari 2600, ColecoVision, SG-1000, SC-3000 | ✅ |
+| Atari 2600, ColecoVision, SG-1000 | ✅ |
 | **Present but NOT yet on-device verified** | |
 | ZX Spectrum | ⚠️ Core + MIA + loader complete, now wired into the app — needs on-device test |
-| Sega Saturn | ❌ **Stub only** — upstream ares never completed the core (empty System::run); not functional, would require porting a full Saturn core |
-| Neo Geo CD | ❌ **No core exists** — not in upstream ares or this fork; removed from the app |
+| SC-3000 | ⚠️ Same core as SG-1000 (ares/sg, SC-3000 is a model variant) — not yet verified |
 | **Known broken / under investigation** | |
 | Neo Geo (MVS/AES) | ❌ Loads, BIOS OK, black screen — ARM64/MIA database path |
 | PC Engine / CD / SuperGrafx | ❌ HuCard loads; PCE-CD/SuperGrafx black screen — scheduler/co-switch on ARM64 |
 | Mega CD | 🟡 Audio rate mismatch (playable) |
+
+> Sega Saturn and Neo Geo CD are not listed: neither has a usable core (Saturn is
+> an ares stub with an empty System::run; Neo Geo CD does not exist in ares). The
+> core stubs remain in the tree for future work, but the systems are removed from
+> the app and not supported.
 
 ### Known issues / not yet functional
 

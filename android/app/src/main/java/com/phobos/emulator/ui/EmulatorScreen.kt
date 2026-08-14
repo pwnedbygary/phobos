@@ -419,8 +419,8 @@ fun EmulationMenu(
                         }
                     }
 
-                    // ── Disc Management (N64 / PS1 / Saturn) ─────────────────
-                    if (systemName.contains("Nintendo 64") || systemName.contains("PlayStation") || systemName.contains("Sega Saturn")) {
+                    // ── Disc Management (N64 / PS1) ─────────────────────────
+                    if (systemName.contains("Nintendo 64") || systemName.contains("PlayStation")) {
                         item {
                             MenuSection("Disc Management") {
                                 Button(onClick = { diskLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {

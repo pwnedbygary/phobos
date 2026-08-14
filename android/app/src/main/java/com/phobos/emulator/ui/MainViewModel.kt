@@ -687,13 +687,8 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "scph5500.bin" to "fw_psx_jp",
         "scph5502.bin" to "fw_psx_eu",
         "scph101.bin" to "fw_psx_us_v45",
-        "st-v.bin" to "fw_saturn_st_v",
-        "saturn_bios.bin" to "fw_saturn_us",
-        "mpr-17933.bin" to "fw_saturn_jp",
-        "mpr-18811.bin" to "fw_saturn_eu",
         "neogeo.zip" to "fw_ng_bios",
         "aes.zip" to "fw_ng_aes",
-        "neocdz.zip" to "fw_ng_cd",
         "ngp.zip" to "fw_ngp",
         "ngpc.zip" to "fw_ngpc",
         "ngp.bin" to "fw_ngp",
@@ -752,10 +747,6 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "scph7001.bin" to "fw_psx_us",
         "scph7003.bin" to "fw_psx_eu",
         "scph7502.bin" to "fw_psx_eu",
-        // Saturn alternate BIOS names
-        "mpr-17933.bin" to "fw_saturn_jp",
-        "mpr-18811.bin" to "fw_saturn_eu",
-        "sega_101.bin" to "fw_saturn_us",
         // FDS alternate
         "fds.rom" to "fw_fds"
     )
@@ -773,8 +764,6 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "ff3d245b" to "fw_psx_jp", // SCPH-5500
         "3273398d" to "fw_psx_eu", // SCPH-5502
         "74360e22" to "fw_n64dd_jp", // N64DD IPL (JP)
-        "af5828fd" to "fw_saturn_us", // Saturn v1.01 US
-        "1cd513f5" to "fw_saturn_jp", // Saturn v1.01 JP
         "5ec82be9" to "fw_n64_pif_sm5", // N64 PIF SM5
         "4353387a" to "fw_n64_pif_ntsc", // N64 PIF NTSC
         "59b859e7" to "fw_n64_pif_pal",   // N64 PIF PAL
@@ -793,9 +782,6 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "55847d8c" to "fw_psx_jp",      // SCPH-1000
         "a56e4c9e" to "fw_psx_eu",      // SCPH-7003
         "f7b04630" to "fw_psx_us",      // SCPH-7001
-        // Saturn BIOS region auto-detect via CRC
-        "f273555d" to "fw_saturn_jp",    // Saturn v1.00 JP
-        "df94c5b7" to "fw_saturn_eu",    // Saturn v1.00 EU
         // Master System BIOS
         "48cd46be" to "fw_ms_us",        // SMS BIOS US
         "80eb3c3c" to "fw_ms_jp",        // SMS BIOS JP

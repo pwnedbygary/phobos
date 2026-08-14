@@ -132,7 +132,6 @@ private fun getSystemIcon(system: String): Any {
         system.contains("MSX", ignoreCase = true) -> "msx"
         system.contains("PC Engine", ignoreCase = true) && system.contains("CD", ignoreCase = true) -> "pcecd"
         system.contains("PC Engine", ignoreCase = true) || system.contains("PCE", ignoreCase = true) || system.contains("TurboGrafx", ignoreCase = true) -> "pce"
-        system.contains("Saturn", ignoreCase = true) -> "saturn"
         system.contains("Sega 32X", ignoreCase = true) || system.contains("32X", ignoreCase = true) -> "sega32"
         system.contains("Mega CD", ignoreCase = true) -> "segacd"
         system.contains("Master System", ignoreCase = true) || system.contains("Mark III", ignoreCase = true) || system.contains("SG-1000", ignoreCase = true) -> "sms"

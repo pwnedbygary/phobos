@@ -28,7 +28,6 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"Game Gear", {"gg"}},
     {"Mega CD", {"cue", "chd", "iso"}},
     {"PlayStation", {"cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"}},
-    {"Sega Saturn", {"cue", "chd", "iso", "mdf"}},
     {"Neo Geo", {"ng", "neo"}},
     {"Neo Geo Pocket", {"ngp", "nap"}},
     {"Neo Geo Pocket Color", {"ngpc", "ngc", "nbc"}},

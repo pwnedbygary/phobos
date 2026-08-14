@@ -68,7 +68,6 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             FirmwareInfo("MSX2", "MAIN", "Japan", "fw_msx2_main"),
             FirmwareInfo("MSX2", "SUB", "Japan", "fw_msx2_sub"),
             FirmwareInfo("Neo Geo AES", "BIOS", "World", "fw_ng_aes"),
-            FirmwareInfo("Neo Geo CD", "BIOS", "World", "fw_ng_cd"),
             FirmwareInfo("Neo Geo MVS", "BIOS", "World", "fw_ng_mvs"),
             FirmwareInfo("Neo Geo", "Universal BIOS", "World", "fw_ng_bios"),
             FirmwareInfo("Neo Geo Pocket", "BIOS", "World", "fw_ngp"),
@@ -86,9 +85,6 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             FirmwareInfo("PlayStation", "BIOS", "US", "fw_psx_us"),
             FirmwareInfo("PlayStation", "BIOS", "Japan", "fw_psx_jp"),
             FirmwareInfo("PlayStation", "BIOS", "Europe", "fw_psx_eu"),
-            FirmwareInfo("Sega Saturn", "BIOS", "US", "fw_saturn_us"),
-            FirmwareInfo("Sega Saturn", "BIOS", "Japan", "fw_saturn_jp"),
-            FirmwareInfo("Sega Saturn", "BIOS", "Europe", "fw_saturn_eu"),
             FirmwareInfo("SuperGrafx CD", "Arcade Card", "Japan", "fw_supergrafx_ac_jp")
         )
     }

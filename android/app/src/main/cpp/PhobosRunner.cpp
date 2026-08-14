@@ -33,7 +33,6 @@
 #include <pce/pce.hpp>
 #undef NCCS
 #include <ps1/ps1.hpp>
-#include <saturn/saturn.hpp>
 #include <sfc/sfc.hpp>
 #include <sg/sg.hpp>
 #include <spec/spec.hpp>
@@ -1092,19 +1091,6 @@ namespace ares {
               if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
           }
           if (!attached) attached = attachFile("bios.rom");
-      } else if (nodeName == "Sega Saturn") {
-          bool attached = false;
-          auto it_us = firmwareMap.find("fw_saturn_us");
-          if (it_us != firmwareMap.end()) attached = attachFile((const char*)it_us->second, "bios.rom");
-          if (!attached) {
-              auto it_jp = firmwareMap.find("fw_saturn_jp");
-              if (it_jp != firmwareMap.end()) attached = attachFile((const char*)it_jp->second, "bios.rom");
-          }
-          if (!attached) {
-              auto it_eu = firmwareMap.find("fw_saturn_eu");
-              if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
-          }
-          if (!attached) attached = attachFile("bios.rom");
       } else if (nodeName == "Mega Drive") {
           // Mega CD: ares uses "Mega Drive" as root node even for CD mode.
           // The MCD::load() sub-system reads "bios.rom" from this pak — if
@@ -1171,11 +1157,6 @@ namespace ares {
           }
           if (!haveBios) attachFile("bios.rom");
           if (!haveStatic) attachFile("static.rom");
-      } else if (nodeName == "Neo Geo CD" || nodeName == "Neo Geo CDZ") {
-          bool attached = false;
-          auto it_ngcd = firmwareMap.find("fw_ng_cd");
-          if (it_ngcd != firmwareMap.end()) attached = attachFile((const char*)it_ngcd->second, "bios.rom");
-          if (!attached) attached = attachFile("bios.rom");
       } else if (nodeName == "Nintendo 64") {
           bool attached = false;
           auto it_ntsc = firmwareMap.find("fw_n64_pif_ntsc");
@@ -1726,7 +1707,7 @@ else if (port->type() == "Keyboard") {
     bool isDisc = extension == "chd" || extension == "iso" || extension == "cue" || extension == "mdf" || extension == "img";
     // Neo Geo ROMs are multi-file zips (e.g. mslug.zip). Don't extract them
     // or we lose the internal file structure MIA needs for the database lookup.
-    bool isNeoGeo = (string)identifiedSystem == "Neo Geo" || (string)identifiedSystem == "Neo Geo CD";
+    bool isNeoGeo = (string)identifiedSystem == "Neo Geo";
     if (!forceZipLoad && !isDisc && extension == "zip" && !isNeoGeo) {
         LOGI("MIA: Attempting ZIP extraction for %s", (const char*)loadPath);
         std::vector<u8> romBuffer = currentMedium->read(loadPath);
@@ -1820,8 +1801,6 @@ else if (port->type() == "Keyboard") {
     } else if (identifiedSystem == "Neo Geo") {
        success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo MVS");
        if(!success) success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo AES");
-    } else if (identifiedSystem == "Sega Saturn") {
-       success = ::ares::Saturn::load(root, getRegion("[Sega] Saturn (NTSC-U)", "[Sega] Saturn (NTSC-J)", "[Sega] Saturn (PAL)"));
     } else if (identifiedSystem == "Master System") {
        success = ::ares::MasterSystem::load(root, getRegion("[Sega] Master System (NTSC-U)", "[Sega] Master System (NTSC-J)", "[Sega] Master System (PAL)"));
     } else if (identifiedSystem == "Game Gear") {
