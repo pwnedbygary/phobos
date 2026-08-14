@@ -142,7 +142,7 @@ private fun getSystemIcon(system: String): Any {
         system.contains("SuperGrafx", ignoreCase = true) -> "supergrafx"
         system.contains("WonderSwan Color", ignoreCase = true) -> "wonderswan-color"
         system.contains("WonderSwan", ignoreCase = true) || system.contains("Pocket Challenge", ignoreCase = true) -> "wonderswan"
-        system.contains("ZX Spectrum", ignoreCase = true) -> "zx-spectrum"
+        system.contains("ZX Spectrum 128", ignoreCase = true) || system.contains("ZX Spectrum", ignoreCase = true) -> "zx-spectrum"
         system.contains("Arcade", ignoreCase = true) -> "arcade"
         else -> null
     }

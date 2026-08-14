@@ -748,7 +748,27 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "scph7003.bin" to "fw_psx_eu",
         "scph7502.bin" to "fw_psx_eu",
         // FDS alternate
-        "fds.rom" to "fw_fds"
+        "fds.rom" to "fw_fds",
+        // ZX Spectrum 48K system ROM (required to boot)
+        "48.rom" to "fw_zx48",
+        "zx48.rom" to "fw_zx48",
+        "zxspectrum.rom" to "fw_zx48",
+        "spectrum.rom" to "fw_zx48",
+        "zx spectrum 48k.rom" to "fw_zx48",
+        "zx spectrum (48k).rom" to "fw_zx48",
+        "[bios] zx spectrum (48k).rom" to "fw_zx48",
+        "sinclair zx spectrum.rom" to "fw_zx48",
+        // ZX Spectrum 128 BIOS + SUB (e.g. Fuse 128-0.rom / 128-1.rom)
+        "128-0.rom" to "fw_zx128",
+        "128_0.rom" to "fw_zx128",
+        "1280.rom" to "fw_zx128",
+        "zx128.rom" to "fw_zx128",
+        "zx spectrum 128.rom" to "fw_zx128",
+        "[bios] zx spectrum 128.rom" to "fw_zx128",
+        "128-1.rom" to "fw_zx128_sub",
+        "128_1.rom" to "fw_zx128_sub",
+        "1281.rom" to "fw_zx128_sub",
+        "zx128_sub.rom" to "fw_zx128_sub"
     )
 
     // Firmware key aliases: when one key matches via scan, also populate its aliases.

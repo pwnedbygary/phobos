@@ -66,6 +66,15 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 
     var showQuitDialog by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
+    // On-screen keyboard for keyboard-based systems (ZX Spectrum / 128).
+    // Toggled real-time via hotkey or the pause menu. The keyboard's internal
+    // state (scheme, turbo, shift latches) is hoisted HERE so it persists
+    // when the keyboard overlay is hidden/shown.
+    var showKeyboard by remember { mutableStateOf(false) }
+    var zxSymLatched by remember { mutableStateOf(false) }
+    var zxCapsLatched by remember { mutableStateOf(false) }
+    var zxTurboTape by remember { mutableStateOf(false) }
+    var zxControlScheme by remember { mutableStateOf(0) }
 
     val showDriverSuggestion by viewModel.showDriverSuggestion.collectAsState()
 
@@ -198,6 +207,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                                     ?.let { viewModel.loadRom(view.context, systemName, it) }
                                 "quit"           -> { showQuitDialog = true; viewModel.setPause(true) }
                                 "analog_toggle"  -> viewModel.togglePs1AnalogMode()
+                                "keyboard"       -> showKeyboard = !showKeyboard
                             }
                         }
                     } else if (action == "ff_hold" && !isDown && combo.contains(keyCode)) {
@@ -299,6 +309,17 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             )
         }
 
+        // ── On-screen keyboard (ZX Spectrum / 128) — real-time toggle ──────
+        if (isLoaded && showKeyboard && systemName.contains("ZX Spectrum", ignoreCase = true)) {
+            ZXKeyboardOverlay(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                symLatched = zxSymLatched, onSymLatched = { zxSymLatched = it },
+                capsLatched = zxCapsLatched, onCapsLatched = { zxCapsLatched = it },
+                turboTape = zxTurboTape, onTurboTape = { zxTurboTape = it },
+                controlScheme = zxControlScheme, onControlScheme = { zxControlScheme = it }
+            )
+        }
+
         // ── Performance monitor (draggable/resizable) ───────────────────────
         if (isLoaded && !isPaused && settingsState.showPerformanceMonitor) {
             key(showControls) {
@@ -356,6 +377,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             Box(modifier = Modifier.fillMaxSize()) {
                 EmulationMenu(
                     viewModel = viewModel, systemName = systemName, romName = romName,
+                    showKeyboard = showKeyboard,
+                    onKeyboardToggle = { showKeyboard = it },
                     onResume = { viewModel.togglePause() },
                     onQuit = { showQuitDialog = true }
                 )
@@ -369,6 +392,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 @Composable
 fun EmulationMenu(
     viewModel: MainViewModel, systemName: String, romName: String,
+    showKeyboard: Boolean, onKeyboardToggle: (Boolean) -> Unit,
     onResume: () -> Unit, onQuit: () -> Unit
 ) {
     val settings by viewModel.settings.collectAsState()
@@ -474,6 +498,19 @@ fun EmulationMenu(
                                 SettingsSwitchItem("Analog Mode", "Toggle DualShock analog mode.", ps1Analog) {
                                     viewModel.togglePs1AnalogMode()
                                 }
+                            }
+                        }
+                    }
+
+                    // ── On-Screen Keyboard (ZX Spectrum / 128) ─────────────
+                    if (systemName.contains("ZX Spectrum", ignoreCase = true)) {
+                        item {
+                            MenuSection("Keyboard") {
+                                SettingsSwitchItem(
+                                    "On-Screen Keyboard",
+                                    "Show the compact keyboard to type LOAD etc.",
+                                    showKeyboard
+                                ) { onKeyboardToggle(it) }
                             }
                         }
                     }

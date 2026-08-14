@@ -85,5 +85,9 @@ namespace ares {
   auto getNewLogs() -> std::vector<LogEntry>;
   auto isFirstFrameRendered() -> bool;
   auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void;
+  auto setKeyboardKey(const char* label, bool pressed) -> void;
+  auto playTape() -> bool;
+  auto setTapeSpeed(s32 speed) -> void;
+  auto setZxControlScheme(s32 scheme) -> void;
   auto getPerformanceStats() -> PerformanceStats;
 }

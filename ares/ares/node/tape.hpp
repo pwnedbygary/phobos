@@ -51,6 +51,13 @@ struct Tape : Peripheral {
   auto frequency() const -> u64 { return _frequency; }
   auto setFrequency(u64 frequency) -> void { _frequency = frequency; }
 
+  // Tape-speed multiplier (Phobos-only): >1 advances the tape faster so
+  // LOAD "" completes quicker. Audio pitch rises; EAR pattern is preserved.
+  // Gated behind PHOBOS_TAPE_SPEED so upstream ares merges cleanly.
+#if defined(PHOBOS_TAPE_SPEED)
+  std::atomic<u32> tapeSpeed{1};
+#endif
+
   auto serialize(string &output, string depth) -> void override {
     Peripheral::serialize(output, depth);
     output.append(depth, "  supportPlay: ", _supportPlay, "\n");

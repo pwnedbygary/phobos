@@ -179,7 +179,8 @@ class SettingsStore(private val context: Context) {
             "dec_slot" to listOf(98),
             "pause" to listOf(109, 96),
             "reset" to listOf(102, 103, 109, 108),
-            "screenshot" to listOf(109, 107)
+            "screenshot" to listOf(109, 107),
+            "keyboard" to listOf(102, 104)   // L1 + R2: toggle on-screen keyboard
         )
         val finalHotkeys = defaultHotkeys.toMutableMap()
         // Explicit user bindings (or explicit unbind = empty combo) take

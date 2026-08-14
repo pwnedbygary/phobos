@@ -27,7 +27,7 @@ auto Keyboard::connect() -> void {
 
   // Define the keyboard matrix
   string labels[8][5] = {
-    { "CAPS SHIFT", "Z", "X", "C," "V" },
+    { "CAPS SHIFT", "Z", "X", "C", "V" },
     { "A", "S", "D", "F", "G" },
     { "Q", "W", "E", "R", "T" },
     { "1", "2", "3", "4", "5" },

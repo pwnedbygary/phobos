@@ -75,8 +75,8 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | WonderSwan / Color | ✅ |
 | MSX / MSX2 | ✅ (incl. tape) |
 | Atari 2600, ColecoVision | ✅ |
+| ZX Spectrum | ✅ Tape loading, on-screen keyboard, gamepad schemes (QAOP/ZXZX/Kempston) — Manic Miner verified |
 | **Present but NOT yet on-device verified** | |
-| ZX Spectrum | ⚠️ Core + MIA + loader complete, now wired into the app — needs on-device test |
 | SG-1000 | ⚠️ Core present (ares/sg, Z80+TMS9918+SN76489), not yet on-device verified |
 | SC-3000 | ⚠️ Same core as SG-1000 (SC-3000 is a model variant in ares/sg) — not yet verified |
 | **Known broken / under investigation** | |

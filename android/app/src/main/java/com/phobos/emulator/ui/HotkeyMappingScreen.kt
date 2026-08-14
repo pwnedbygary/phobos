@@ -51,7 +51,8 @@ fun HotkeyMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         "Capture Screenshot" to "screenshot",
         "Mute Audio" to "mute",
         "Frame Advance" to "frame_advance",
-        "Toggle PS1 Analog" to "analog_toggle"
+        "Toggle PS1 Analog" to "analog_toggle",
+        "Toggle On-Screen Keyboard" to "keyboard"
     )
 
     // Finalize combo after 1 second of no activity

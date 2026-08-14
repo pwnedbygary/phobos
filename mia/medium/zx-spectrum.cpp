@@ -40,7 +40,12 @@ auto ZXSpectrum::loadTzx(string location) -> LoadResult {
   std::vector<u8> output;
   auto decodedData = tzx.GetAudioBufferPtr();
   for(int i = 0; i < tzx.GetAudioBufferLength();) {
-    u64 sample = (u64)((i32)decodedData[i++] + 128);
+    // TZX samples are SIGNED 8-bit (HI=115, LO=-115). char is UNSIGNED on
+    // ARM, so cast to signed char first — otherwise -115 reads as 141 and
+    // +128 makes BOTH levels >127 → the EAR signal is constant high and the
+    // loader never sees a pulse train (white screen, tape plays to 100%).
+    s8 signedSample = (s8)decodedData[i++];
+    u64 sample = (u64)((i32)signedSample + 128);
 
     for (int byte = 0; byte < sizeof(u64); byte++) {
       output.push_back((sample & (0xffull << (byte * 8))) >> (byte * 8));

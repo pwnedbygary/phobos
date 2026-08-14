@@ -1,3 +1,5 @@
+#include <android/log.h>
+
 namespace ares::ZXSpectrum {
 
 #include "deck.cpp"
@@ -67,11 +69,25 @@ auto Tape::main() -> void {
       return;
     }
 
-    u64 sample = data.read(position++);
+    // Tape-speed multiplier (Phobos-only, gated by PHOBOS_TAPE_SPEED):
+    // process `speed` samples per tick so LOAD "" finishes in 1/Nth the
+    // wall-clock time. The stream still emits every sample (audio pitch
+    // rises) but the tape position advances faster. Games don't care about
+    // the audio pitch — only the EAR bit pattern, which is preserved.
+#if defined(PHOBOS_TAPE_SPEED)
+    u32 speed = node->tapeSpeed.load();
+    if(speed < 1) speed = 1;
+#else
+    u32 speed = 1;
+#endif
+    u64 end = min(length, position + speed);
+    u64 lastSample = 0;
+    for(; position < end; position++) {
+      lastSample = data.read(position);
+      stream->frame((float)lastSample / (float)range);
+    }
     node->setPosition(position);
-
-    stream->frame((float)sample / (float)range);
-    output = sample > (range / 2);
+    output = lastSample > (range / 2);
     step(1);
     return;
   }

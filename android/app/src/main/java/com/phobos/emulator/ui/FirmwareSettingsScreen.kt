@@ -85,7 +85,10 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             FirmwareInfo("PlayStation", "BIOS", "US", "fw_psx_us"),
             FirmwareInfo("PlayStation", "BIOS", "Japan", "fw_psx_jp"),
             FirmwareInfo("PlayStation", "BIOS", "Europe", "fw_psx_eu"),
-            FirmwareInfo("SuperGrafx CD", "Arcade Card", "Japan", "fw_supergrafx_ac_jp")
+            FirmwareInfo("SuperGrafx CD", "Arcade Card", "Japan", "fw_supergrafx_ac_jp"),
+            FirmwareInfo("ZX Spectrum", "BIOS (48K)", "World", "fw_zx48"),
+            FirmwareInfo("ZX Spectrum 128", "BIOS (128-0)", "World", "fw_zx128"),
+            FirmwareInfo("ZX Spectrum 128", "SUB (128-1)", "World", "fw_zx128_sub")
         )
     }
 

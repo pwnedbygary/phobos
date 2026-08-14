@@ -32,6 +32,7 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"Neo Geo Pocket", {"ngp", "nap"}},
     {"Neo Geo Pocket Color", {"ngpc", "ngc", "nbc"}},
     {"ZX Spectrum", {"wav", "tzx", "tap"}},
+    {"ZX Spectrum 128", {"wav", "tzx", "tap"}},
     {"PC Engine", {"pce", "tg16"}},
     {"PC Engine CD", {"cue", "chd"}},
     {"SuperGrafx", {"sgx"}},
@@ -211,6 +212,30 @@ Java_com_phobos_emulator_PhobosCore_togglePs1AnalogMode(JNIEnv* env, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setStickToDpad(JNIEnv* env, jobject, jboolean enabled) {
     ares::setStickToDpad(enabled);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setKeyboardKey(JNIEnv* env, jobject, jstring label, jboolean pressed) {
+    const char* nativeLabel = label ? env->GetStringUTFChars(label, nullptr) : nullptr;
+    if (nativeLabel) {
+        ares::setKeyboardKey(nativeLabel, pressed == JNI_TRUE);
+        env->ReleaseStringUTFChars(label, nativeLabel);
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_phobos_emulator_PhobosCore_playTape(JNIEnv* env, jobject) {
+    return ares::playTape() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setTapeSpeed(JNIEnv* env, jobject, jint speed) {
+    ares::setTapeSpeed(speed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setZxControlScheme(JNIEnv* env, jobject, jint scheme) {
+    ares::setZxControlScheme(scheme);
 }
 
 extern "C" JNIEXPORT void JNICALL

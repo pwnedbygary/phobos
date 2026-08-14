@@ -18,6 +18,7 @@
 #include <deque>
 #include <vector>
 #include <map>
+#include <set>
 
 #include <a26/a26.hpp>
 #include <cv/cv.hpp>
@@ -256,6 +257,50 @@ namespace ares {
     inputButtonCache.clear();
     inputAxisCache.clear();
     inputCacheOrientation = -1;
+  }
+
+  // On-screen keyboard state (ZX Spectrum / 128). setKeyboardKey() toggles
+  // membership; AndroidPlatform::input() sources keyboard-button values from
+  // this set so the core's per-frame Keyboard::read() poll sees the press.
+  static std::mutex zxKeyboardMutex;
+  static std::set<string> zxKeysPressed;
+  // Gamepad-scheme-derived keyboard keys (QAOP/ZXZX), set each frame from
+  // setInput(); the keyboard input path checks both sets.
+  static std::set<string> zxSchemeKeysPressed;
+
+  // ZX gamepad control scheme: maps the gamepad (VirtualGamepad bits) onto
+  // keyboard keys for games that don't support Kempston.
+  // 0 = none (Kempston only), 1 = QAOP+Space, 2 = ZXZX+Space.
+  static std::atomic<s32> zxControlScheme{0};
+
+  // Map a VirtualGamepad bit to the ZX keyboard keys for the active scheme.
+  // Start -> ENTER is universal (all schemes) since ENTER is used everywhere
+  // on the ZX (menus, prompts, LOAD confirmation).
+  static auto zxSchemeKeys(u32 bit, s32 scheme) -> std::vector<string> {
+    std::vector<string> keys;
+    auto add = [&](const char* a, const char* b = nullptr) {
+      keys.push_back(a);
+      if (b) keys.push_back(b);
+    };
+    // Start button -> ENTER (all schemes).
+    if (bit == VirtualGamepad::Start) add("ENTER");
+    switch (scheme) {
+      case 1: // QAOP + Space
+        if (bit == VirtualGamepad::Left)  add("Q");
+        if (bit == VirtualGamepad::Right) add("P");
+        if (bit == VirtualGamepad::A)     add("SPACE BREAK");
+        break;
+      case 2: // ZXZX + Space
+        if (bit == VirtualGamepad::Left)  add("Z");
+        if (bit == VirtualGamepad::Right) add("X");
+        if (bit == VirtualGamepad::A)     add("SPACE BREAK");
+        break;
+    }
+    return keys;
+  }
+
+  static auto isZxKeyboardSystem(const string& systemName) -> bool {
+    return systemName == "ZX Spectrum" || systemName == "ZX Spectrum 128";
   }
 
   static auto resolveButtonBit(const string& nodeName, const string& systemName, bool vertical) -> u32 {
@@ -716,8 +761,17 @@ namespace ares {
               }
           }
 
-          // Always set the value (resetting if not mapped) to ensure state consistency
-          button->setValue(b != 0 && (buttons & b) != 0);
+          // Always set the value (resetting if not mapped) to ensure state consistency.
+          // ZX Spectrum / 128 are keyboard-backed: source the value from the on-screen
+          // keyboard set instead of zeroing it (otherwise the core's per-frame
+          // Keyboard::read() would immediately clear an on-screen key press).
+          if (isZxKeyboardSystem(systemName)) {
+              std::lock_guard<std::mutex> klock(zxKeyboardMutex);
+              // Pressed if the on-screen keyboard OR the gamepad scheme holds it.
+              button->setValue(zxKeysPressed.count(button->name()) > 0 || zxSchemeKeysPressed.count(button->name()) > 0);
+          } else {
+              button->setValue(b != 0 && (buttons & b) != 0);
+          }
       } else if (auto axis = input->cast<Node::Input::Axis>()) {
           s32 slot = -1;
           {
@@ -999,6 +1053,16 @@ namespace ares {
         LOGW("VFS: No currentMedium pak available for %s", (const char*)nodeName);
       }
 
+      // ZX Spectrum / SC-3000 tape: Tape::load() reads "program.tape"
+      // (decoded audio) from this pak — the MIA medium pak IS the tape.
+      if (nodeName.endsWith("Tape") && root && (root->name() == "ZX Spectrum" || root->name() == "SC-3000")) {
+        if (currentMedium && currentMedium->pak) {
+            LOGI("VFS: Returning currentMedium pak for %s (tape)", (const char*)nodeName);
+            return currentMedium->pak;
+        }
+        LOGW("VFS: No currentMedium pak available for %s", (const char*)nodeName);
+      }
+
       if (nodeName.endsWith("Disk") || nodeName.endsWith("Expansion")) {
         if (secondaryMedium && secondaryMedium->pak) {
             LOGI("VFS: Returning secondaryMedium pak for %s", (const char*)nodeName);
@@ -1234,6 +1298,30 @@ namespace ares {
               if (it_ge != firmwareMap.end()) attached = attachFile((const char*)it_ge->second, "bios.rom");
           }
           if (!attached) attached = attachFile("bios.rom");
+      } else if (nodeName == "ZX Spectrum" || nodeName == "ZX Spectrum 128") {
+          // The ZX Spectrum REQUIRES its system ROM to boot and run the tape
+          // loader. Without it the core allocates the ROM filled with 0xFF —
+          // the CPU executes RST-38h garbage → colored stripe screen, tape
+          // games never load.
+          // 48K: 16K bios.rom. 128K: 16K bios.rom + 16K sub.rom.
+          bool attached = false;
+          if (nodeName == "ZX Spectrum 128") {
+              auto it_zx = firmwareMap.find("fw_zx128");
+              if (it_zx != firmwareMap.end()) attached = attachFile((const char*)it_zx->second, "bios.rom");
+              if (!attached) {
+                  auto it_48 = firmwareMap.find("fw_zx48");
+                  if (it_48 != firmwareMap.end()) attached = attachFile((const char*)it_48->second, "bios.rom");
+              }
+              if (!attached) attachFile("bios.rom");
+              // sub.rom = 128K second half (e.g. Fuse 128-1.rom)
+              auto it_sub = firmwareMap.find("fw_zx128_sub");
+              if (it_sub != firmwareMap.end()) attachFile((const char*)it_sub->second, "sub.rom");
+              else attachFile("sub.rom");
+          } else {
+              auto it_zx = firmwareMap.find("fw_zx48");
+              if (it_zx != firmwareMap.end()) attached = attachFile((const char*)it_zx->second, "bios.rom");
+              if (!attached) attached = attachFile("bios.rom");
+          }
       }
 
       return dir;
@@ -1432,7 +1520,19 @@ namespace ares {
     for (auto& port : ports) {
       LOGI("VFS: connectDevices - name='%s', type='%s', family='%s'", (const char*)port->name(), (const char*)port->type(), (const char*)port->family());
       // MSX Tape/Tray: skip entirely (ares manages them, our touch crashes).
+      // ZX Spectrum + SC-3000: the tray MUST be connected — Tape::allocate()
+      // creates the node/stream/data that Tape::serialize() derefs during
+      // power(); skipping it crashes with a null-pointer SIGSEGV on load.
       if (port->type() == "Tape" || port->type() == "Tray" || port->type() == "Tape Deck") {
+          string fam = port->family();
+          if (fam != "ZX Spectrum" && fam != "SC-3000") continue;
+          if (port->allocate()) {
+              LOGI("VFS: Connecting %s tape tray", (const char*)fam);
+              port->connect();
+          } else {
+              LOGE("VFS: FAILED to allocate %s tape", (const char*)fam);
+          }
+          portIndex++;
           continue;
       }
       // Disc Tray: connect for all disc-based systems. Only skip for
@@ -1483,7 +1583,7 @@ namespace ares {
             LOGE("VFS: FAILED to allocate %s on %s (Family: '%s', Sys: '%s')", (const char*)defaultDevice, (const char*)port->name(), (const char*)port->family(), (const char*)(node ? node->name() : ""));
         }
         portIndex++;
-      } else if (port->type() == "Controller" || port->type() == "Control Pad" || port->name().contains("Controller") || port->name().contains("Port")) {
+      } else if (port->type() == "Controller" || port->type() == "Control Pad" || port->name().find("Controller") || port->name().find("Port")) {
         string defaultDevice = "Gamepad";
         string family = port->family();
         string sysName = node ? node->name() : "";
@@ -1510,6 +1610,13 @@ namespace ares {
         else if (family.find("PC Engine") || sysName.find("PC Engine") || sysName.find("SuperGrafx")) defaultDevice = "Gamepad";
         else if (family.find("Atari 2600") || sysName.find("Atari 2600")) defaultDevice = "Gamepad";
         else if (family.find("ColecoVision") || sysName.find("ColecoVision")) defaultDevice = "Gamepad";
+        else if (family.find("ZX Spectrum") || sysName.find("ZX Spectrum")) {
+            // ZX Spectrum: the Expansion port takes a Kempston joystick
+            // (enables gamepad play in joystick games like Manic Miner).
+            // No standard gamepad ports exist; only the Expansion port is used.
+            if (port->name().find("Expansion")) defaultDevice = "Kempston";
+            else defaultDevice = "";
+        }
 
         if (!defaultDevice) { portIndex++; continue; }
 
@@ -1552,9 +1659,18 @@ namespace ares {
         portIndex++;
       }
 else if (port->type() == "Keyboard") {
+        // ZX Spectrum keyboard only supports the "Original" matrix layout;
+        // MSX uses "Japanese". Pick by family so the ZX matrix buttons are
+        // created. MUST call connect() after allocate() — connect() is what
+        // builds the 8x5 button matrix; without it the on-screen keys find
+        // no buttons and do nothing.
         string defaultLayout = "Japanese";
+        string fam = port->family();
+        if (fam.find("ZX Spectrum")) defaultLayout = "Original";
         if (port->allocate(defaultLayout)) {
             LOGI("VFS: Allocated %s keyboard on %s", (const char*)defaultLayout, (const char*)port->name());
+            port->connect();
+            LOGI("VFS: Connected %s keyboard on %s", (const char*)defaultLayout, (const char*)port->name());
         }
       }
     }
@@ -1667,7 +1783,8 @@ else if (port->type() == "Keyboard") {
     else if (lookup.find("Atari 2600") || lookup.find("A26") || lookup.find("Atari2600") || lookup.find("Stella")) identifiedSystem = "Atari 2600";
     else if (lookup.find("ColecoVision") || lookup.find("Coleco") || lookup.find("CV")) identifiedSystem = "ColecoVision";
     else if (lookup.find("SG-1000") || lookup.find("SG1000") || lookup.find("SC-3000")) identifiedSystem = "SG-1000";
-    else if (lookup.find("ZX Spectrum") || lookup.find("ZXSpectrum") || lookup.find("ZX") || lookup.find("Spectrum 128")) identifiedSystem = "ZX Spectrum";
+    else if (lookup.find("ZX Spectrum 128") || lookup.find("ZXSpectrum128") || lookup.find("Spectrum 128")) identifiedSystem = "ZX Spectrum 128";
+    else if (lookup.find("ZX Spectrum") || lookup.find("ZXSpectrum") || lookup.find("ZX")) identifiedSystem = "ZX Spectrum";
     else if (lookup.find("Super Famicom") || lookup.find("SNES")) identifiedSystem = "Super Famicom";
     else if (lookup.find("Famicom") || lookup.find("NES")) identifiedSystem = "Famicom";
     else if (lookup.find("PlayStation") || lookup.find("PS1")) identifiedSystem = "PlayStation";
@@ -1697,6 +1814,11 @@ else if (port->type() == "Keyboard") {
         currentMedium = mia::Medium::create("Neo Geo MVS");
         if(!currentMedium) currentMedium = mia::Medium::create("Neo Geo AES");
     }
+    // ZX Spectrum 128 shares the ZX Spectrum tape medium (the .tap/.tzx/.wav
+    // loader is identical; the 48K vs 128K model is chosen at core load()).
+    if (!currentMedium && identifiedSystem == "ZX Spectrum 128") {
+        currentMedium = mia::Medium::create("ZX Spectrum");
+    }
 
     if (!currentMedium) {
         LOGE("MIA: Failed to create medium for %s", (const char*)identifiedSystem);
@@ -1720,7 +1842,7 @@ else if (port->type() == "Keyboard") {
             if (identifiedSystem == "Super Famicom") aresExt = "sfc";
             if (identifiedSystem == "Famicom") aresExt = "fc";
             if (identifiedSystem == "Nintendo 64") aresExt = "z64";
-            if (identifiedSystem == "ZX Spectrum") {
+            if (identifiedSystem == "ZX Spectrum" || identifiedSystem == "ZX Spectrum 128") {
                 // The ZX medium dispatches on filename extension (.tap/.tzx/.wav),
                 // so sniff the extracted bytes to pick the right one. TZX has a
                 // "ZXTape!\x1a" signature; WAV starts with "RIFF"; TAP has no
@@ -1849,6 +1971,8 @@ else if (port->type() == "Keyboard") {
        success = ::ares::SG1000::load(root, getRegion("[Sega] SG-1000 (NTSC)", "[Sega] SG-1000 (NTSC)", "[Sega] SG-1000 (PAL)"));
     } else if (identifiedSystem == "ZX Spectrum") {
        success = ::ares::ZXSpectrum::load(root, "[Sinclair] ZX Spectrum");
+    } else if (identifiedSystem == "ZX Spectrum 128") {
+       success = ::ares::ZXSpectrum::load(root, "[Sinclair] ZX Spectrum 128");
     } else {
         LOGE("Ares: Unidentified system (no load case)");
     }
@@ -2230,6 +2354,69 @@ else if (port->type() == "Keyboard") {
       inputState.rx = rx;
       inputState.ry = ry;
       inputState.buttons = buttons;
+
+      // ZX gamepad control scheme: translate the gamepad bitmask into
+      // keyboard keys for the active scheme (QAOP / ZXZX). Updated every
+      // setInput so the keyboard path sources scheme presses alongside the
+      // on-screen keyboard.
+      if (isZxKeyboardSystem(root ? root->name() : "")) {
+          s32 scheme = zxControlScheme.load();
+          std::set<string> schemeKeys;
+          if (scheme != 0) {
+              for (u32 bit = 1; bit; bit <<= 1) {
+                  if (!(buttons & bit)) continue;
+                  for (auto& key : zxSchemeKeys(bit, scheme)) schemeKeys.insert(key);
+              }
+          }
+          {
+              std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+              zxSchemeKeysPressed.swap(schemeKeys);
+          }
+      }
+  }
+
+  // ZX gamepad control scheme setter (0 = Kempston, 1 = QAOP, 2 = ZXZX).
+  auto setZxControlScheme(s32 scheme) -> void {
+      zxControlScheme = scheme;
+      LOGI("ZX control scheme set to %d", scheme);
+  }
+
+  // ZX Spectrum (and other keyboard-based cores): press/release a keyboard
+  // key by its matrix label (e.g. "J", "ENTER", "SPACE BREAK"). The pressed
+  // state lives in a set that AndroidPlatform::input() sources keyboard-button
+  // values from each frame (the core's Keyboard::read() polls platform->input).
+  auto setKeyboardKey(const char* label, bool pressed) -> void {
+    if (!root || !label || !isZxKeyboardSystem(root->name())) return;
+    string key = label;
+    std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+    if (pressed) zxKeysPressed.insert(key);
+    else zxKeysPressed.erase(key);
+  }
+
+  // Start playback of the ZX Spectrum tape (equivalent to ares desktop's
+  // "Play Tape" button). Without this, Tape::read() returns 0 (stopped) and
+  // LOAD "" never receives the tape signal.
+  auto playTape() -> bool {
+    if (!root || !isZxKeyboardSystem(root->name())) return false;
+    // Search the whole tree for the Tape node (the ZX tray nests it under
+    // TapeDeck -> Tray; a direct find is more robust than assuming the path).
+    auto tapes = root->find<Node::Tape>();
+    if (tapes.empty()) { LOGI("ZXTape: no tape node found in tree"); return false; }
+    auto tape = tapes[0];
+    if (tape->length() == 0) { LOGI("ZXTape: tape empty (length=0)"); return false; }
+    tape->setPosition(0);
+    tape->play();
+    LOGI("ZXTape: playing (len=%llu)", (unsigned long long)tape->length());
+    return true;
+  }
+
+  // ZX Spectrum tape-speed multiplier (1 = real-time, 4/8 = faster loading).
+  auto setTapeSpeed(s32 speed) -> void {
+    if (!root || !isZxKeyboardSystem(root->name())) return;
+    auto tapes = root->find<Node::Tape>();
+    if (tapes.empty()) return;
+    tapes[0]->tapeSpeed = (u32)max(1, speed);
+    LOGI("ZXTape: speed set to %u", tapes[0]->tapeSpeed.load());
   }
 
   auto setNativeLibraryDir(const char* path) -> void { nativeLibraryDir = path ? (string)path : ""; LOGI("Native library dir set: %s", (const char*)nativeLibraryDir); }

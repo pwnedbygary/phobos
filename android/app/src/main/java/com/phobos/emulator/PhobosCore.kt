@@ -59,6 +59,10 @@ object PhobosCore {
     external fun getBlacklistedPipelineCount(): Int
     external fun getNewLogs(): List<LogEntry>
     external fun setInput(lx: Float, ly: Float, rx: Float, ry: Float, buttons: Int)
+    external fun setKeyboardKey(label: String, pressed: Boolean)
+    external fun playTape(): Boolean
+    external fun setTapeSpeed(speed: Int)
+    external fun setZxControlScheme(scheme: Int)
     external fun getPerformanceStats(): PerformanceStats
 
     object Input {
