@@ -74,10 +74,11 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | Neo Geo Pocket / Color | ✅ BIOS settings (language/date) persist |
 | WonderSwan / Color | ✅ |
 | MSX / MSX2 | ✅ (incl. tape) |
-| Atari 2600, ColecoVision, SG-1000 | ✅ |
+| Atari 2600, ColecoVision | ✅ |
 | **Present but NOT yet on-device verified** | |
 | ZX Spectrum | ⚠️ Core + MIA + loader complete, now wired into the app — needs on-device test |
-| SC-3000 | ⚠️ Same core as SG-1000 (ares/sg, SC-3000 is a model variant) — not yet verified |
+| SG-1000 | ⚠️ Core present (ares/sg, Z80+TMS9918+SN76489), not yet on-device verified |
+| SC-3000 | ⚠️ Same core as SG-1000 (SC-3000 is a model variant in ares/sg) — not yet verified |
 | **Known broken / under investigation** | |
 | Neo Geo (MVS/AES) | ❌ Loads, BIOS OK, black screen — ARM64/MIA database path |
 | PC Engine / CD / SuperGrafx | ❌ HuCard loads; PCE-CD/SuperGrafx black screen — scheduler/co-switch on ARM64 |
