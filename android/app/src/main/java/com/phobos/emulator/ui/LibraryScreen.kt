@@ -135,7 +135,6 @@ private fun getSystemIcon(system: String): Any {
         system.contains("Sega 32X", ignoreCase = true) || system.contains("32X", ignoreCase = true) -> "sega32"
         system.contains("Mega CD", ignoreCase = true) -> "segacd"
         system.contains("Master System", ignoreCase = true) || system.contains("Mark III", ignoreCase = true) || system.contains("SG-1000", ignoreCase = true) -> "sms"
-        system.contains("SC-3000", ignoreCase = true) -> "sc-3000"
         system.contains("ColecoVision", ignoreCase = true) -> "colecovision"
         system.contains("Atari 2600", ignoreCase = true) -> "atari2600"
         system.contains("LaserActive", ignoreCase = true) -> "laseractive"

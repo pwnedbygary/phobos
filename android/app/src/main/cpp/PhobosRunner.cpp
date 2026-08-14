@@ -1053,9 +1053,9 @@ namespace ares {
         LOGW("VFS: No currentMedium pak available for %s", (const char*)nodeName);
       }
 
-      // ZX Spectrum / SC-3000 tape: Tape::load() reads "program.tape"
-      // (decoded audio) from this pak — the MIA medium pak IS the tape.
-      if (nodeName.endsWith("Tape") && root && (root->name() == "ZX Spectrum" || root->name() == "SC-3000")) {
+      // ZX Spectrum tape: Tape::load() reads "program.tape" (decoded audio)
+      // from this pak — the MIA medium pak IS the tape.
+      if (nodeName.endsWith("Tape") && root && root->name() == "ZX Spectrum") {
         if (currentMedium && currentMedium->pak) {
             LOGI("VFS: Returning currentMedium pak for %s (tape)", (const char*)nodeName);
             return currentMedium->pak;
@@ -1520,12 +1520,12 @@ namespace ares {
     for (auto& port : ports) {
       LOGI("VFS: connectDevices - name='%s', type='%s', family='%s'", (const char*)port->name(), (const char*)port->type(), (const char*)port->family());
       // MSX Tape/Tray: skip entirely (ares manages them, our touch crashes).
-      // ZX Spectrum + SC-3000: the tray MUST be connected — Tape::allocate()
-      // creates the node/stream/data that Tape::serialize() derefs during
-      // power(); skipping it crashes with a null-pointer SIGSEGV on load.
+      // ZX Spectrum: the tray MUST be connected — Tape::allocate() creates
+      // the node/stream/data that Tape::serialize() derefs during power();
+      // skipping it crashes with a null-pointer SIGSEGV on load.
       if (port->type() == "Tape" || port->type() == "Tray" || port->type() == "Tape Deck") {
           string fam = port->family();
-          if (fam != "ZX Spectrum" && fam != "SC-3000") continue;
+          if (fam != "ZX Spectrum") continue;
           if (port->allocate()) {
               LOGI("VFS: Connecting %s tape tray", (const char*)fam);
               port->connect();
@@ -1782,7 +1782,7 @@ else if (port->type() == "Keyboard") {
     }
     else if (lookup.find("Atari 2600") || lookup.find("A26") || lookup.find("Atari2600") || lookup.find("Stella")) identifiedSystem = "Atari 2600";
     else if (lookup.find("ColecoVision") || lookup.find("Coleco") || lookup.find("CV")) identifiedSystem = "ColecoVision";
-    else if (lookup.find("SG-1000") || lookup.find("SG1000") || lookup.find("SC-3000")) identifiedSystem = "SG-1000";
+    else if (lookup.find("SG-1000") || lookup.find("SG1000")) identifiedSystem = "SG-1000";
     else if (lookup.find("ZX Spectrum 128") || lookup.find("ZXSpectrum128") || lookup.find("Spectrum 128")) identifiedSystem = "ZX Spectrum 128";
     else if (lookup.find("ZX Spectrum") || lookup.find("ZXSpectrum") || lookup.find("ZX")) identifiedSystem = "ZX Spectrum";
     else if (lookup.find("Super Famicom") || lookup.find("SNES")) identifiedSystem = "Super Famicom";
