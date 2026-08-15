@@ -1249,6 +1249,14 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setN64CountPerOp(if (currentSettings.n64UseDefaultCountPerOp) 2 else currentSettings.n64CountPerOp)
             PhobosCore.setN64CpuOverclock(if (currentSettings.n64UseDefaultCpuOverclock) 0 else currentSettings.n64CpuOverclock)
             PhobosCore.setN64Pak(currentSettings.n64Pak)
+            // Push the persisted N64 debug-logging toggle on EVERY load so native
+            // matches DataStore at emulation start. The init block pushes the
+            // DataStore default (false) before the persisted value loads, and the
+            // EmulatorScreen LaunchedEffect only fires when its key changes —
+            // both leave native OFF while the UI shows ON until a manual
+            // off→on re-toggle. loadRom is the one place all other settings are
+            // guaranteed to sync, so sync this one here too.
+            PhobosCore.setN64DebugLogging(currentSettings.n64DebugLogging)
 
             // ZX per-core control scheme + rebinds + toggles (keyboard cores).
             if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true)) {

@@ -54,9 +54,13 @@ auto VI::load(Node::Object parent) -> void {
   screen->setRefresh(std::bind_front(&VI::refresh, this));
   // VI Overclock: scale the host refresh hint so the emulation loop paces at
   // the overclocked frame rate (e.g. 120Hz at 2x), not the native 50/60Hz.
+  // Accurate base rates: NTSC N64 runs at 59.94 Hz (525-line VI_V_SYNC_NTSC,
+  // color-carrier locked — NOT exactly 60), PAL at 50.0 Hz. Using 60 instead of
+  // 59.94 drifts the host pacing 0.1% slow vs the core → periodic dropped/
+  // duplicated frames + slow audio pitch drift on long sessions.
   s32 oc = overclockPercent.load();
   if (oc <= 0) oc = 100;
-  screen->refreshRateHint((Region::PAL() ? 50 : 60) * oc / 100); // TODO: More accurate refresh rate hint
+  screen->refreshRateHint((Region::PAL() ? 50.0 : 59.94) * oc / 100);
   screen->colors((1 << 24) + (1 << 15), [&](n32 color) -> n64 {
     if(color < (1 << 24)) {
       u64 a = 65535;
@@ -110,10 +114,15 @@ auto VI::main() -> void {
       int halfline = io.vcounter << 1 | io.field;
       if(halfline >= io.halfLinesPerField+1) {
         io.vcounter = 0;
-        // Fix: properly toggle field for interlaced (even halfLinesPerField)
-        // and progressive (odd halfLinesPerField). Previously bit(0) check
-        // was inverted: odd→field locked 0→30fps+freeze (Conker).
-        io.field += io.halfLinesPerField.bit(0);
+        // [Phobos] Rogue Squadron menu fix (2026-08-15): REVERTED the 2026-08-10
+        // inversion. Real HW: the field toggles for interlaced (EVEN
+        // halfLinesPerField, e.g. NTSC 262) and stays 0 for progressive (ODD,
+        // e.g. 263). The inversion locked field=0 for interlaced games (NTSC
+        // 262 is even → bit(0)=0 → field never alternates) → parallel-RDP's
+        // serrate scanout sampled only ONE field's lines every frame → Rogue
+        // Squadron menu rendered half the image (scanlines/squish/zoom/flicker).
+        // The Conker freeze in that commit was the coincidence change (kept).
+        io.field += !io.halfLinesPerField.bit(0);
         if(++io.leapCounter == 5) io.leapCounter = 0;
       }
 
@@ -128,11 +137,11 @@ auto VI::main() -> void {
           static u64 viDiagCount = 0;
           if (::ares::n64DebugLoggingEnabled() && viDiagCount++ % 60 == 0) {
             __android_log_print(ANDROID_LOG_INFO, "PhobosVI",
-              "scanoutValid=%d field=%d vc=%d dramAddr=0x%08x width=%u io.width=%u depth=%u hstart=%u vstart=%u xscale=%u xsub=%u",
-              (int)gpuOutputValid, (int)io.field, (int)io.vcounter,
-              (unsigned)io.dramAddress, (unsigned)io.width, (unsigned)io.width,
-              (unsigned)io.colorDepth, (unsigned)io.hstart, (unsigned)io.vstart,
-              (unsigned)io.xscale, (unsigned)io.xsubpixel);
+              "scanoutValid=%d field=%d hlpf=%u vc=%d dramAddr=0x%08x width=%u depth=%u serrate=%u hstart=%u vstart=%u xscale=%u",
+              (int)gpuOutputValid, (int)io.field, (unsigned)io.halfLinesPerField, (int)io.vcounter,
+              (unsigned)io.dramAddress, (unsigned)io.width,
+              (unsigned)io.colorDepth, (unsigned)io.serrate, (unsigned)io.hstart, (unsigned)io.vstart,
+              (unsigned)io.xscale);
           }
         }
         #endif
@@ -395,10 +404,11 @@ auto VI::power(bool reset) -> void {
   clockFraction = 0;
 
   // VI Overclock: refresh the host pacing hint on (re)boot so a changed
-  // overclock takes effect at the next reset/load.
+  // overclock takes effect at the next reset/load. NTSC = 59.94 (not 60) —
+  // matches the VI's real frame rate (see VI::load).
   s32 oc = overclockPercent.load();
   if (oc <= 0) oc = 100;
-  screen->refreshRateHint((Region::PAL() ? 50 : 60) * oc / 100);
+  screen->refreshRateHint((Region::PAL() ? 50.0 : 59.94) * oc / 100);
 
   #if defined(VULKAN)
   gpuOutputValid = false;

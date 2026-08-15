@@ -1019,6 +1019,14 @@ namespace ares {
             if (vData) {
                 u32 copyW = std::min(width, vW);
                 u32 copyH = std::min(height, vH);
+                // [Phobos diag] Is the scanout content reaching video()?
+                if (::ares::n64DebugLoggingEnabled() && vW && vH) {
+                    const u32* dbg0 = (const u32*)vData;
+                    const u32* dbgMid = (const u32*)(vData + (vH/2) * vW * 4);
+                    __android_log_print(ANDROID_LOG_INFO, "PhobosV",
+                        "video: vW=%u vH=%u copyW=%u copyH=%u buf0=%08x bufMid=%08x",
+                        vW, vH, copyW, copyH, dbg0[0], dbgMid[vW/2]);
+                }
                 for (s32 y = 0; y < (s32)copyH; y++) {
                     const u32* srcLine = (const u32*)(vData + y * vW * 4);
                     u32* destLine = dest + y * dst_stride;

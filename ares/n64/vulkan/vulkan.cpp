@@ -25,7 +25,9 @@ struct LoggingInterface : Util::LoggingInterface {
     // Rate-limit the repetitive "flush render state / dispatch will be dropped"
     // spam that floods logcat when the GPU driver can't compile compute shaders.
     // These fire at ~120/sec and cause measurable performance overhead.
-    if (strstr(buffer, "flush render state") || strstr(buffer, "dispatch will be dropped")) {
+    // TEMPORARILY DISABLED (2026-08-15) for the Rogue Squadron menu debug — we
+    // need to see if the menu's render is being silently dropped. Restore after.
+    if (false && (strstr(buffer, "flush render state") || strstr(buffer, "dispatch will be dropped"))) {
       auto now = std::chrono::steady_clock::now();
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFlushError).count();
       if (elapsed < 5000) return true; // suppress for 5 seconds

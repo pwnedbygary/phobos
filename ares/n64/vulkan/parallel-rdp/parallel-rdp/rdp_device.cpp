@@ -934,6 +934,34 @@ void CommandProcessor::enqueue_command(unsigned num_words, const uint32_t *words
 
 void CommandProcessor::enqueue_command_direct(unsigned, const uint32_t *words)
 {
+	// [Phobos diag] Count RDP draw commands (menu render investigation): is the
+	// menu issuing triangles/rectangles that execute but output black, or are
+	// the commands not arriving at all?
+	static uint32_t cmdCount = 0, triCount = 0, rectCount = 0, fillCount = 0;
+	static uint32_t loadTileCount = 0, loadBlockCount = 0, texRectCount = 0;
+	static uint32_t scissorField0 = 0, scissorField1 = 0;
+	static uint32_t rectMinY = 0xffffffff, rectMaxY = 0;
+	unsigned diagOp = (words[0] >> 24) & 63;
+	if (diagOp >= 0x08 && diagOp <= 0x0f) triCount++;
+	else if (diagOp == 0x24 || diagOp == 0x25) {
+		rectCount++; texRectCount++;
+		uint32_t yl = (words[0] >> 0) & 0xfff;
+		uint32_t yh = (words[1] >> 0) & 0xfff;
+		rectMinY = std::min(rectMinY, std::min(yl, yh));
+		rectMaxY = std::max(rectMaxY, std::max(yl, yh));
+	}
+	else if (diagOp == 0x36) fillCount++;
+	else if (diagOp == 0x33) loadTileCount++;
+	else if (diagOp == 0x34) loadBlockCount++;
+	else if (diagOp == 0x29) {
+		if (words[1] & (1 << 25)) scissorField1++; else scissorField0++;
+	}
+	if (++cmdCount % 3000 == 0) {
+		__android_log_print(ANDROID_LOG_INFO, "PhobosRDP",
+			"cmds: total=%u tri=%u texrect=%u fill=%u loadTile=%u loadBlock=%u scissorF0=%u scissorF1=%u rectY=[%u..%u]",
+			cmdCount, triCount, texRectCount, fillCount, loadTileCount, loadBlockCount,
+			scissorField0, scissorField1, rectMinY == 0xffffffff ? 0 : rectMinY, rectMaxY);
+	}
 #define OP(x) &CommandProcessor::op_##x
 	using CommandFunc = void (CommandProcessor::*)(const uint32_t *words);
 	static const CommandFunc funcs[64] = {
@@ -1146,6 +1174,18 @@ Vulkan::ImageHandle CommandProcessor::scanout(const ScanoutOptions &opts, VkImag
 			unsigned offset, length;
 			vi.scanout_memory_range(offset, length);
 			renderer.resolve_coherency_external(offset, length);
+			// [Phobos diag] After the coherency sync, probe the RDP framebuffer
+			// (0x790000) to see if the rendered pixels made it into RDRAM.
+			if (::ares::n64DebugLoggingEnabled()) {
+				unsigned fbw = ::ares::Nintendo64::rdpFramebufferWidth();
+				unsigned fba = ::ares::Nintendo64::rdpFramebufferAddress();
+				if (fbw && host_rdram) {
+					const uint16_t* rp = (const uint16_t*)((const uint8_t*)host_rdram + (fba >> 1));
+					__android_log_print(ANDROID_LOG_INFO, "PhobosRDP",
+						"coherency: off=0x%x len=0x%x fb=0x%06x w=%u r0=%04x r60=%04x r120=%04x",
+						offset, length, fba, fbw, rp[0], rp[fbw * 60], rp[fbw * 120]);
+				}
+			}
 		}
 	}
 	renderer.unlock_command_processing();

@@ -34,6 +34,13 @@
 // Gated by the Phobos "N64 Debug Logging" toggle (defined in PhobosRunner.cpp).
 namespace ares {
 auto n64DebugLoggingEnabled() -> bool;
+// The RDP's real framebuffer (from SET_COLOR_IMAGE via setRdpFramebuffer in
+// the ares core). Used by scanout_memory_range so the coherency sync covers
+// the actual framebuffer when the VI width LIES (Rogue Squadron menu).
+namespace Nintendo64 {
+auto rdpFramebufferWidth() -> unsigned;
+auto rdpFramebufferAddress() -> unsigned;
+}
 }
 
 #ifndef PARALLEL_RDP_SHADER_DIR
@@ -396,12 +403,22 @@ void VideoInterface::scanout_memory_range(unsigned &offset, unsigned &length) co
 		return;
 	}
 
-	int pixel_size = ((reg.status & VI_CONTROL_TYPE_MASK) | VI_CONTROL_TYPE_RGBA5551_BIT) == VI_CONTROL_TYPE_RGBA8888_BIT ? 4 : 2;
-	reg.vi_offset &= ~(pixel_size - 1);
-	reg.vi_offset += (x_off + y_off * reg.vi_width) * pixel_size;
+	// [Phobos] Rogue Squadron menu fix: the VI WIDTH can LIE about the real
+	// framebuffer (renders 512-wide, VI_WIDTH=1024). The coherency sync must
+	// cover the RDP's ACTUAL framebuffer (published via setRdpFramebuffer),
+	// not the VI's fake display geometry — otherwise resolve_coherency_external
+	// syncs a 1024-strided range at the VI origin that never includes the real
+	// 512-wide buffer, so the rendered pixels never reach RDRAM (menu appears
+	// empty/black). When the RDP fb width differs from the VI width, use it.
+	unsigned fbWidth = ::ares::Nintendo64::rdpFramebufferWidth() ? ::ares::Nintendo64::rdpFramebufferWidth() : (unsigned)reg.vi_width;
+	unsigned fbAddr  = ::ares::Nintendo64::rdpFramebufferAddress() ? ::ares::Nintendo64::rdpFramebufferAddress() : (unsigned)reg.vi_offset;
 
-	offset = reg.vi_offset;
-	length = (aa_height * reg.vi_width + aa_width) * pixel_size;
+	int pixel_size = ((reg.status & VI_CONTROL_TYPE_MASK) | VI_CONTROL_TYPE_RGBA5551_BIT) == VI_CONTROL_TYPE_RGBA8888_BIT ? 4 : 2;
+	fbAddr &= ~(pixel_size - 1);
+	fbAddr += (x_off + y_off * fbWidth) * pixel_size;
+
+	offset = fbAddr;
+	length = (aa_height * fbWidth + aa_width) * pixel_size;
 }
 
 bool VideoInterface::need_fetch_bug_emulation(const Registers &regs, unsigned scaling_factor)
@@ -479,11 +496,36 @@ Vulkan::ImageHandle VideoInterface::vram_fetch_stage(const Registers &regs, unsi
 		int32_t y_res;
 	} push = {};
 
-	// Upstream behavior: the extract reads the VI origin at the VI width.
-	// (Rogue Squadron's wide menu overrides were reverted 2026-08-15 — they
-	// caused flashing in other games; will re-approach with targeted changes.)
+	// [Phobos] Rogue Squadron wide-menu fix: when the VI WIDTH lies (e.g. the
+	// game renders 512-wide but sets VI_WIDTH=1024), the VRAM extract must
+	// stride by the RDP's ACTUAL framebuffer width/address, not the fake VI
+	// geometry — otherwise every row after the first reads wrong RDRAM and the
+	// menu comes out black. Gate this to wide mode (vi_width > 640) so normal
+	// games (which never lie) keep the upstream VI-origin/VI-width behavior.
 	unsigned useWidth = (unsigned)regs.vi_width;
 	unsigned useOffset = (unsigned)regs.vi_offset;
+	unsigned rdpWidth = ::ares::Nintendo64::rdpFramebufferWidth();
+	unsigned rdpAddr  = ::ares::Nintendo64::rdpFramebufferAddress();
+	if (regs.vi_width > VI_SCANOUT_WIDTH && rdpWidth && rdpWidth < (unsigned)regs.vi_width) {
+		useWidth = rdpWidth;
+		// The game alternates VI_ORIGIN per field (e.g. 0x790400/0x790800)
+		// thinking it renders interlaced, but the RDP renders PROGRESSIVE at
+		// the fb base (0x790000) with both fields already interleaved. In wide
+		// mode we must read the PROGRESSIVE buffer at a CONSTANT base offset
+		// every frame — following the game's per-field origin would read the
+		// wrong row band on one field → vertical doubling/zoom (bottom cut).
+		useOffset = rdpAddr;
+	}
+	// [Phobos diag] Log what the extract is about to read (Rogue Squadron
+	// menu — verify the wide-mode stride override is active + the VI vs RDP
+	// geometry).
+	if (::ares::n64DebugLoggingEnabled()) {
+		__android_log_print(ANDROID_LOG_INFO, "PhobosVI",
+			"extract: vi_w=%u vi_off=0x%06x rdp_w=%u rdp_off=0x%06x useW=%u useOff=0x%06x xres=%d yres=%d maxx=%d maxy=%d",
+			(unsigned)regs.vi_width, (unsigned)regs.vi_offset,
+			rdpWidth, rdpAddr, useWidth, useOffset,
+			extract_width, extract_height, regs.max_x, regs.max_y);
+	}
 
 	if ((regs.status & VI_CONTROL_TYPE_MASK) == VI_CONTROL_TYPE_RGBA8888_BIT)
 		push.fb_offset = useOffset >> 2;
@@ -1241,6 +1283,39 @@ Vulkan::ImageHandle VideoInterface::scanout(VkImageLayout target_layout, const S
 	{
 		prev_scanout_image.reset();
 		return scanout;
+	}
+
+	// [Phobos] Rogue Squadron wide-menu fix (progressive-force): the game
+	// renders PROGRESSIVE (RDP scissor interlace bit never set — full 448 rows
+	// in the 512-wide fb) but configures the VI as INTERLACED (serrate=1,
+	// alternating VI_ORIGIN per field). That fake interlace makes the VI scan
+	// out only HALF the lines per frame (one field) → the extract reads only
+	// the top ~224 rows and scale_stage stretches them 2x to fill the screen →
+	// the menu looks zoomed 2x with the bottom (Start Game/Options) cut off.
+	//
+	// Fix: in wide mode, force PROGRESSIVE scanout — clear serrate and double
+	// the vertical geometry (v_res/v_start/max_y) so the extract pulls the
+	// FULL progressive buffer and scale_stage renders a full 480-line target.
+	// Capped at NTSC 480 since the horizontal-info line array holds 288 fields
+	// (VI_MAX_OUTPUT_SCANLINES) — PAL 576 progressive would overrun it.
+	if (regs.vi_width > VI_SCANOUT_WIDTH)
+	{
+		unsigned rdpWidth = ::ares::Nintendo64::rdpFramebufferWidth();
+		if (rdpWidth && rdpWidth < (unsigned)regs.vi_width)
+		{
+			bool was_serrate = (regs.status & VI_CONTROL_SERRATE_BIT) != 0;
+			regs.status &= ~VI_CONTROL_SERRATE_BIT;
+			if (was_serrate)
+			{
+				regs.v_res *= 2;
+				regs.v_start *= 2;
+				regs.max_y = regs.max_y * 2 + 1;
+				if (regs.v_res > (int)VI_V_RES_NTSC)
+					regs.v_res = VI_V_RES_NTSC;
+				if (regs.v_start > (int)VI_V_RES_NTSC)
+					regs.v_start = VI_V_RES_NTSC;
+			}
+		}
 	}
 
 	if (!options.vi.serrate)
