@@ -1265,20 +1265,29 @@ Vulkan::ImageHandle VideoInterface::scanout(VkImageLayout target_layout, const S
 
 	// [Phobos] Rogue Squadron menu transition (2026-08-15): when the VI display
 	// width CHANGES (e.g. attract demo 400-wide → menu 1024-wide), the first
-	// scanout of the new mode reads RDRAM the RDP hasn't rendered yet → a
-	// white/rainbow garbage frame that can last SECONDS while the menu's big
-	// textures load on-device. Hold the previous valid frame for ~2s (120
-	// scanouts at 60fps) after a width change so the new mode's buffer has
-	// time to be rendered. Per-frame double buffering keeps vi_width constant,
-	// so it is never suppressed.
+	// [Phobos] Rogue Squadron menu transition (2026-08-15): when the VI display
+	// width CHANGES to a WIDE mode (e.g. attract demo 400-wide → menu
+	// 1024-wide), the first scanout of the new mode reads RDRAM the RDP hasn't
+	// rendered yet → a white/rainbow garbage frame that can last SECONDS while
+	// the menu's big textures load on-device. Hold the previous valid frame for
+	// MODE_CHANGE_HOLD_SCANOUTS after a width change so the new mode's buffer
+	// has time to be rendered.
+	//
+	// GATED to wide-mode targets (vi_width > VI_SCANOUT_WIDTH) so normal games
+	// that switch between standard widths (e.g. 640 menu ↔ 320 gameplay) are
+	// NEVER held — only Rogue Squadron-style wide-VI transitions are.
 	if (regs.vi_width != (int)last_vi_width)
 	{
+		bool new_is_wide = regs.vi_width > VI_SCANOUT_WIDTH;
 		if (::ares::n64DebugLoggingEnabled())
 			__android_log_print(ANDROID_LOG_INFO, "PhobosVI",
-				"mode-change: vi_w %u -> %u, holding prev frame %u scanouts",
-				last_vi_width, (unsigned)regs.vi_width, (unsigned)MODE_CHANGE_HOLD_SCANOUTS);
+				"mode-change: vi_w %u -> %u (wide=%d), holding prev frame %u scanouts",
+				last_vi_width, (unsigned)regs.vi_width, new_is_wide,
+				(unsigned)MODE_CHANGE_HOLD_SCANOUTS);
 		last_vi_width = (uint32_t)regs.vi_width;
-		mode_change_hold = MODE_CHANGE_HOLD_SCANOUTS;
+		// Only hold when the NEW width is a wide mode. Standard-width switches
+		// (menu↔gameplay in normal games) must not be delayed.
+		mode_change_hold = new_is_wide ? MODE_CHANGE_HOLD_SCANOUTS : 0;
 	}
 	else if (mode_change_hold > 0)
 	{
