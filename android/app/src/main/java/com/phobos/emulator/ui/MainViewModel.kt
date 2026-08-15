@@ -696,11 +696,21 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                     if (rumbleOn && !rumbleActive) {
                         rumbleActive = true
                         try {
-                            // Pulse-burst pattern: 120ms on / 60ms off, repeating.
-                            // Re-triggering the motor at its resonant frequency makes
-                            // small vibration motors feel stronger than a continuous
-                            // 2s burst (which the driver may also dampen).
-                            vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 120, 60), 0))
+                            // Decaying hit envelope: a strong initial pulse that
+                            // ramps quickly to zero. Games like Mario Tennis write
+                            // the rumble bit continuously during a rally (correct
+                            // emulation), but a sustained buzz is unpleasant. This
+                            // makes each rally period feel like a single "hit" —
+                            // strong impact, quick decay — instead of an endless
+                            // buzz. Waveform timesteps (ms) with per-step amplitude
+                            // (0-255): 100ms full, then decaying steps to 0.
+                            val timings = longArrayOf(
+                                0, 100, 80, 80, 80, 80, 80, 100, 100
+                            )
+                            val amps = intArrayOf(
+                                0, 255, 200, 150, 100, 60, 30, 10, 0
+                            )
+                            vibrator?.vibrate(VibrationEffect.createWaveform(timings, amps, -1))
                         } catch (_: Exception) {}
                     } else if (!rumbleOn && rumbleActive) {
                         rumbleActive = false

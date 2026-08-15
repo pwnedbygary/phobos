@@ -906,16 +906,16 @@ namespace ares {
       } else if (auto rumble = input->cast<Node::Input::Rumble>()) {
           // N64 Rumble Pak + PS1 DualShock: binary motor state. Stored in an
           // atomic for the Kotlin side to poll — no JNI attach needed on the
-          // emulation thread. Latched with a short hold: PS1 games often pulse
-          // the motors for only a few poll cycles (~1 frame), which a 30 Hz
-          // Kotlin poll would otherwise miss entirely; holding 150ms after the
-          // last enable guarantees the poll loop sees it.
-          if (rumble->enable()) {
-              rumbleState.store(true);
-              lastRumbleOnTime = std::chrono::steady_clock::now();
-          } else if (std::chrono::steady_clock::now() - lastRumbleOnTime > std::chrono::milliseconds(150)) {
-              rumbleState.store(false);
-          }
+          // emulation thread.
+          //
+          // Trust the game's bit exactly: the N64 controller is polled every
+          // frame, so a 0-hold means rumbleState mirrors the game's write each
+          // poll. This lets the Kotlin side see every hit's rising edge (the
+          // game writes 1 on a racket hit, 0 between) so the decaying-hit
+          // envelope re-triggers on EVERY hit, not just the first. If the game
+          // writes 1 continuously with no 0 gaps (no edge), this can't help —
+          // but MT's per-hit rumble implies it writes 0 between hits.
+          rumbleState.store(rumble->enable());
       }
     }
 
