@@ -63,6 +63,11 @@ object PhobosCore {
     external fun playTape(): Boolean
     external fun setTapeSpeed(speed: Int)
     external fun setZxControlScheme(scheme: Int)
+    external fun setZxStickToKeys(enabled: Boolean)
+    external fun setZxReversePitch(enabled: Boolean)
+    external fun setZxKeyBinding(label: String, bit: Int)
+    external fun setZxTapeMuted(muted: Boolean)
+    external fun getZxTapeProgress(): Int
     external fun getPerformanceStats(): PerformanceStats
 
     object Input {

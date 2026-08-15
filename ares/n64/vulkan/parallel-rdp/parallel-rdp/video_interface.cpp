@@ -27,6 +27,15 @@
 #include "bitops.hpp"
 #include <cmath>
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
+// Gated by the Phobos "N64 Debug Logging" toggle (defined in PhobosRunner.cpp).
+namespace ares {
+auto n64DebugLoggingEnabled() -> bool;
+}
+
 #ifndef PARALLEL_RDP_SHADER_DIR
 #include "shaders/slangmosh.hpp"
 #endif
@@ -470,12 +479,18 @@ Vulkan::ImageHandle VideoInterface::vram_fetch_stage(const Registers &regs, unsi
 		int32_t y_res;
 	} push = {};
 
-	if ((regs.status & VI_CONTROL_TYPE_MASK) == VI_CONTROL_TYPE_RGBA8888_BIT)
-		push.fb_offset = regs.vi_offset >> 2;
-	else
-		push.fb_offset = regs.vi_offset >> 1;
+	// Upstream behavior: the extract reads the VI origin at the VI width.
+	// (Rogue Squadron's wide menu overrides were reverted 2026-08-15 — they
+	// caused flashing in other games; will re-approach with targeted changes.)
+	unsigned useWidth = (unsigned)regs.vi_width;
+	unsigned useOffset = (unsigned)regs.vi_offset;
 
-	push.fb_width = regs.vi_width;
+	if ((regs.status & VI_CONTROL_TYPE_MASK) == VI_CONTROL_TYPE_RGBA8888_BIT)
+		push.fb_offset = useOffset >> 2;
+	else
+		push.fb_offset = useOffset >> 1;
+
+	push.fb_width = useWidth;
 	push.x_offset = divot ? -3 : -2;
 	push.y_offset = -2;
 	push.x_res = extract_width;

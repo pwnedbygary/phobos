@@ -50,6 +50,8 @@ data class EmulatorSettings(
     val perfOverlayScale: Float = 1.0f,
     val perfOverlayPosX: Float = 1.0f,  // 0=left, 1=right
     val perfOverlayPosY: Float = 0.0f,  // 0=top, 1=bottom
+    val zxKeyboardOpacity: Float = 1.0f,  // on-screen ZX keyboard alpha (0-1)
+    val zxTapeMuted: Boolean = true,     // mute the loud ZX tape-loading screech (default ON — only silences the tape stream, not game audio)
     val logVerbosity: LogLevel = LogLevel.INFO,
     val fastForwardSpeed: Float = 2.0f,
     val n64Upscale: Int = 1,
@@ -83,6 +85,12 @@ data class EmulatorSettings(
     val hotkeys: Map<String, List<Int>> = emptyMap(),
     val systemRomPaths: Map<String, Set<String>> = emptyMap(),
     val systemFirmwarePaths: Map<String, String> = emptyMap(),
+    // ZX per-core control scheme (0=Kempston,1=QAOP,2=ZXZX,3=ELITE,4=CUSTOM)
+    val zxControlScheme: Map<String, Int> = emptyMap(),
+    // ZX per-core key rebinds: system -> {keyboardLabel -> gamepadBit}
+    val zxKeyBindings: Map<String, Map<String, Int>> = emptyMap(),
+    val zxStickToKeys: Map<String, Boolean> = emptyMap(),
+    val zxReversePitch: Map<String, Boolean> = emptyMap(),
     val hasDefaultsInitialized: Boolean = false
 )
 
@@ -108,6 +116,8 @@ class SettingsStore(private val context: Context) {
         val PERF_OVERLAY_SCALE = floatPreferencesKey("perf_overlay_scale")
         val PERF_OVERLAY_POS_X = floatPreferencesKey("perf_overlay_pos_x")
         val PERF_OVERLAY_POS_Y = floatPreferencesKey("perf_overlay_pos_y")
+        val ZX_KEYBOARD_OPACITY = floatPreferencesKey("zx_keyboard_opacity")
+        val ZX_TAPE_MUTED = booleanPreferencesKey("zx_tape_muted")
         val LOG_VERBOSITY = stringPreferencesKey("log_verbosity")
         val FAST_FORWARD_SPEED = floatPreferencesKey("fast_forward_speed")
         val N64_UPSCALE = intPreferencesKey("n64_upscale")
@@ -138,6 +148,14 @@ class SettingsStore(private val context: Context) {
         val HIDDEN_SYSTEMS = stringSetPreferencesKey("hidden_systems")
         val HAS_DEFAULTS_INITIALIZED = booleanPreferencesKey("has_defaults_initialized")
         val HOTKEYS_PREFIX = "hotkey_combo_"
+        // ZX per-core preferences. Encoded as: zx_scheme_<system> = int;
+        // zx_bind_<system> = "label=bit,label=bit,..." (labels contain spaces
+        // so a single string per system is cleanest); zx_stick_<system> /
+        // zx_reverse_<system> = bool.
+        val ZX_SCHEME_PREFIX = "zx_scheme_"
+        val ZX_BIND_PREFIX = "zx_bind_"
+        val ZX_STICK_PREFIX = "zx_stick_"
+        val ZX_REVERSE_PREFIX = "zx_reverse_"
     }
 
     val settings: Flow<EmulatorSettings> = context.dataStore.data.map { preferences ->
@@ -145,6 +163,10 @@ class SettingsStore(private val context: Context) {
         val fwPaths = mutableMapOf<String, String>()
         val mappings = mutableMapOf<Int, String>()
         val hotkeys = mutableMapOf<String, List<Int>>()
+        val zxSchemes = mutableMapOf<String, Int>()
+        val zxBinds = mutableMapOf<String, Map<String, Int>>()
+        val zxSticks = mutableMapOf<String, Boolean>()
+        val zxReverses = mutableMapOf<String, Boolean>()
 
         preferences.asMap().forEach { (key, value) ->
             val name = key.name
@@ -168,6 +190,25 @@ class SettingsStore(private val context: Context) {
                 // Record the explicit state EVEN when empty: an empty combo means
                 // "user unbind this hotkey" and must override the default below.
                 hotkeys[action] = combo
+            } else if (name.startsWith(ZX_SCHEME_PREFIX) && value is Int) {
+                zxSchemes[name.removePrefix(ZX_SCHEME_PREFIX)] = value
+            } else if (name.startsWith(ZX_BIND_PREFIX) && value is String) {
+                // "label=bit,label=bit,..." — labels contain spaces (e.g. "SPACE BREAK")
+                val system = name.removePrefix(ZX_BIND_PREFIX)
+                val binds = mutableMapOf<String, Int>()
+                value.split(",").forEach { pair ->
+                    val eq = pair.indexOf('=')
+                    if (eq > 0) {
+                        val label = pair.substring(0, eq).trim()
+                        val bit = pair.substring(eq + 1).trim().toIntOrNull()
+                        if (label.isNotEmpty() && bit != null) binds[label] = bit
+                    }
+                }
+                zxBinds[system] = binds
+            } else if (name.startsWith(ZX_STICK_PREFIX) && value is Boolean) {
+                zxSticks[name.removePrefix(ZX_STICK_PREFIX)] = value
+            } else if (name.startsWith(ZX_REVERSE_PREFIX) && value is Boolean) {
+                zxReverses[name.removePrefix(ZX_REVERSE_PREFIX)] = value
             }
         }
 
@@ -228,6 +269,8 @@ class SettingsStore(private val context: Context) {
             perfOverlayScale = safeGet(PERF_OVERLAY_SCALE, 1.0f),
             perfOverlayPosX = safeGet(PERF_OVERLAY_POS_X, 1.0f),
             perfOverlayPosY = safeGet(PERF_OVERLAY_POS_Y, 0.0f),
+            zxKeyboardOpacity = safeGet(ZX_KEYBOARD_OPACITY, 1.0f),
+            zxTapeMuted = safeGet(ZX_TAPE_MUTED, true),  // default ON — only silences the tape stream, not game audio
             logVerbosity = try { LogLevel.valueOf(safeGetString(LOG_VERBOSITY, LogLevel.INFO.name)) } catch(e: Exception) { LogLevel.INFO },
             fastForwardSpeed = safeGet(FAST_FORWARD_SPEED, 2.0f),
             n64Upscale = safeGet(N64_UPSCALE, 1),
@@ -260,6 +303,10 @@ class SettingsStore(private val context: Context) {
             inputMappings = mappings,
             systemRomPaths = romPaths,
             systemFirmwarePaths = fwPaths,
+            zxControlScheme = zxSchemes,
+            zxKeyBindings = zxBinds,
+            zxStickToKeys = zxSticks,
+            zxReversePitch = zxReverses,
             hasDefaultsInitialized = safeGet(HAS_DEFAULTS_INITIALIZED, false)
         )
     }
@@ -323,6 +370,8 @@ class SettingsStore(private val context: Context) {
     suspend fun setPerfOverlayScale(scale: Float) = context.dataStore.edit { it[PERF_OVERLAY_SCALE] = scale }
     suspend fun setPerfOverlayPosX(x: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_X] = x }
     suspend fun setPerfOverlayPosY(y: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_Y] = y }
+    suspend fun setZxKeyboardOpacity(opacity: Float) = context.dataStore.edit { it[ZX_KEYBOARD_OPACITY] = opacity.coerceIn(0.2f, 1.0f) }
+    suspend fun setZxTapeMuted(muted: Boolean) = context.dataStore.edit { it[ZX_TAPE_MUTED] = muted }
     suspend fun setLogVerbosity(level: LogLevel) = context.dataStore.edit { it[LOG_VERBOSITY] = level.name }
     suspend fun setFastForwardSpeed(speed: Float) = context.dataStore.edit { it[FAST_FORWARD_SPEED] = speed }
     suspend fun setN64Upscale(factor: Int) = context.dataStore.edit { it[N64_UPSCALE] = factor }
@@ -361,6 +410,25 @@ class SettingsStore(private val context: Context) {
     suspend fun setSystemVisibility(system: String, visible: Boolean) = context.dataStore.edit { p ->
         val current = p[HIDDEN_SYSTEMS] ?: emptySet()
         p[HIDDEN_SYSTEMS] = if (visible) current - system else current + system
+    }
+    suspend fun setZxControlScheme(system: String, scheme: Int) = context.dataStore.edit { it[intPreferencesKey(ZX_SCHEME_PREFIX + system)] = scheme }
+    suspend fun setZxStickToKeys(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_STICK_PREFIX + system)] = enabled }
+    suspend fun setZxReversePitch(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_REVERSE_PREFIX + system)] = enabled }
+    suspend fun setZxKeyBinding(system: String, label: String, bit: Int) = context.dataStore.edit { p ->
+        // Merge into the per-system "label=bit,label=bit" string.
+        val key = stringPreferencesKey(ZX_BIND_PREFIX + system)
+        val current = p[key] ?: ""
+        val binds = mutableMapOf<String, Int>()
+        current.split(",").forEach { pair ->
+            val eq = pair.indexOf('=')
+            if (eq > 0) {
+                val l = pair.substring(0, eq).trim()
+                val b = pair.substring(eq + 1).trim().toIntOrNull()
+                if (l.isNotEmpty() && b != null) binds[l] = b
+            }
+        }
+        if (bit == 0) binds.remove(label) else binds[label] = bit
+        p[key] = binds.entries.joinToString(",") { (l, b) -> "$l=$b" }
     }
     suspend fun setHotkey(action: String, combo: List<Int>) = context.dataStore.edit { it[stringPreferencesKey(HOTKEYS_PREFIX + action)] = combo.joinToString(",") }
     suspend fun resetDefaultMapping() {

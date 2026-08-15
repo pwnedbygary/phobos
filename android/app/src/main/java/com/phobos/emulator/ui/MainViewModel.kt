@@ -103,6 +103,33 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         settingsStore.setN64ExpansionPak(enabled)
         PhobosCore.setN64ExpansionPak(enabled)
     }
+
+    // ZX per-core control scheme + rebinds (Layer 2.5 — the CUSTOM scheme).
+    fun setZxControlScheme(system: String, scheme: Int) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setZxControlScheme(system, scheme)
+        PhobosCore.setZxControlScheme(scheme)
+    }
+    fun setZxStickToKeys(system: String, enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setZxStickToKeys(system, enabled)
+        PhobosCore.setZxStickToKeys(enabled)
+    }
+    fun setZxReversePitch(system: String, enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setZxReversePitch(system, enabled)
+        PhobosCore.setZxReversePitch(enabled)
+    }
+    fun setZxKeyBinding(system: String, label: String, bit: Int) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setZxKeyBinding(system, label, bit)
+        PhobosCore.setZxKeyBinding(label, bit)
+    }
+
+    fun setZxKeyboardOpacity(opacity: Float) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setZxKeyboardOpacity(opacity)
+    }
+
+    fun setZxTapeMuted(muted: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setZxTapeMuted(muted)
+        PhobosCore.setZxTapeMuted(muted)
+    }
     fun setN64DisableVIProcessing(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64DisableVIProcessing(enabled)
         PhobosCore.setN64DisableVIProcessing(enabled)
@@ -163,14 +190,16 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         PhobosCore.setLogLevel(level.ordinal)
     }
 
-    fun setN64DebugLogging(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
-        // Push to native FIRST (synchronously) so the emulation thread sees it
-        // immediately — the pause-menu toggle previously appeared dead because
-        // the DataStore edit could delay/race the JNI call, so native stayed
-        // off until a re-toggle. Native atomic is the source of truth for the
-        // stats block; persist is best-effort.
+    fun setN64DebugLogging(enabled: Boolean) {
+        // Push to native SYNCHRONOUSLY (not on a dispatcher) so the emulation
+        // thread sees it immediately — the pause-menu toggle previously
+        // appeared dead because Dispatchers.IO could delay the JNI call until
+        // a re-toggle. Native atomic is the source of truth for the stats
+        // block; persist is best-effort.
         PhobosCore.setN64DebugLogging(enabled)
-        settingsStore.setN64DebugLogging(enabled)
+        viewModelScope.launch(Dispatchers.IO) {
+            settingsStore.setN64DebugLogging(enabled)
+        }
     }
 
     fun setPause(paused: Boolean) {
@@ -463,7 +492,14 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     val systems: List<String> get() = _systems.value
 
     val visibleSystems: StateFlow<List<String>> = combine(settings, _systems) { s, sys ->
-        sys.filter { it !in s.hiddenSystems }
+        // Merge the two ZX Spectrum entries into one (48K + 128K auto-select at
+        // load time by filename — see loadRom). Keep the native "ZX Spectrum 128"
+        // system available internally (it's what loads 128K BIOS), just don't
+        // show it as a separate Library entry.
+        val merged = sys.map {
+            if (it == "ZX Spectrum 128") "ZX Spectrum" else it
+        }.distinct()
+        merged.filter { it !in s.hiddenSystems }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _roms = MutableStateFlow<List<RomFile>>(emptyList())
@@ -477,6 +513,32 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     private val _isLoaded = MutableStateFlow(false)
     val isLoaded: StateFlow<Boolean> = _isLoaded
+
+    // Unsupported-system popup (set when a broken core's load is refused —
+    // ZX Spectrum 128, PC Engine, PC Engine CD, SuperGrafx, Neo Geo).
+    // Holds the system NAME to show in the dialog; null = no popup.
+    private val _unsupportedSystem = MutableStateFlow<String?>(null)
+    val unsupportedSystem: StateFlow<String?> = _unsupportedSystem
+
+    // ZX tape-load progress: -1 = no tape, else (playing?10000:0)+pct*100.
+    // Polled ~10 Hz while a ZX game is loaded for the loading progress bar.
+    private val _zxTapeProgress = MutableStateFlow(-1)
+    val zxTapeProgress: StateFlow<Int> = _zxTapeProgress
+
+    init {
+        // Poll tape progress for the ZX loading overlay.
+        viewModelScope.launch(Dispatchers.Default) {
+            while (true) {
+                val loaded = _isLoaded.value
+                val sys = currentSystemName
+                val next = if (loaded && (sys.contains("ZX Spectrum", ignoreCase = true))) {
+                    PhobosCore.getZxTapeProgress()
+                } else -1
+                if (next != _zxTapeProgress.value) _zxTapeProgress.value = next
+                delay(100)
+            }
+        }
+    }
 
     // Current emulated system name ("Nintendo 64", "PlayStation", ...) — used by
     // the rumble loop and input routing to decide system-specific behavior.
@@ -498,22 +560,28 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     val showDriverSuggestion: StateFlow<Boolean> = _showDriverSuggestion
     private var driverSuggestionShown = false
 
-    fun incrementSlot() {
-        _currentSlot.value = (_currentSlot.value + 1) % 10
-        viewModelScope.launch {
+    // Debounce the slot toast: rapid cycling (holding the hotkey) fires one
+    // incrementSlot per press, which would toast EVERY intermediate slot.
+    // Only the slot settled on after a short quiet period gets a toast.
+    private var slotToastJob: kotlinx.coroutines.Job? = null
+    private fun showSlotToast() {
+        slotToastJob?.cancel()
+        slotToastJob = viewModelScope.launch {
+            delay(350)
             withContext(Dispatchers.Main) {
                 Toast.makeText(context, "Selected Save Slot ${_currentSlot.value}", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
+    fun incrementSlot() {
+        _currentSlot.value = (_currentSlot.value + 1) % 10
+        showSlotToast()
+    }
+
     fun decrementSlot() {
         _currentSlot.value = if (_currentSlot.value == 0) 9 else _currentSlot.value - 1
-        viewModelScope.launch {
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, "Selected Save Slot ${_currentSlot.value}", Toast.LENGTH_SHORT).show()
-            }
-        }
+        showSlotToast()
     }
 
     fun resetSystem() {
@@ -588,8 +656,13 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         val stats = PhobosCore.getPerformanceStats()
                         _perfStats.value = stats
                         // Show driver suggestion once if pipeline failures are detected
-                        // AND the user is on the built-in Adreno driver (not Turnip Mesa).
-                        if (stats.pipelineFailures > 0 && stats.isAdrenoDriver && !driverSuggestionShown) {
+                        // AND the user is on the BUILT-IN Adreno driver (no custom
+                        // driver installed). Turnip's device name is "Turnip Adreno
+                        // (TM) 740" — it contains "Adreno", so isAdrenoDriver alone
+                        // can't distinguish; require customDriverPath to be empty so
+                        // the popup never fires when a custom driver is active.
+                        val noCustomDriver = settings.value.customDriverPath.isEmpty()
+                        if (stats.pipelineFailures > 0 && stats.isAdrenoDriver && noCustomDriver && !driverSuggestionShown) {
                             driverSuggestionShown = true
                             _showDriverSuggestion.value = true
                         }
@@ -657,27 +730,111 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                 val driverDir = File(context.filesDir, "gpu_drivers")
                 if (!driverDir.exists()) driverDir.mkdirs()
 
+                // Resolve the REAL filename from the SAF URI — uri.lastPathSegment
+                // for a content:// document returns the doc ID (e.g.
+                // "msf:1000172790"), NOT the filename. Query DISPLAY_NAME so raw
+                // .so files get a proper name with the right extension.
+                var name = "driver.so"
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (idx >= 0) cursor.getString(idx)?.let { name = it }
+                    }
+                }
+                val isZip = name.endsWith(".zip", ignoreCase = true) ||
+                            name.endsWith(".adpkg", ignoreCase = true) ||
+                            name.endsWith(".apk", ignoreCase = true)
+
                 context.contentResolver.openInputStream(uri)?.use { input ->
-                    ZipInputStream(input).use { zip ->
-                        var entry = zip.nextEntry
-                        while (entry != null) {
-                            if (!entry.isDirectory && entry.name.endsWith(".so")) {
-                                // Extract the .so file
-                                val outFile = File(driverDir, entry.name.substringAfterLast("/"))
-                                FileOutputStream(outFile).use { output ->
-                                    zip.copyTo(output)
+                    if (isZip) {
+                        ZipInputStream(input).use { zip ->
+                            var entry = zip.nextEntry
+                            while (entry != null) {
+                                if (!entry.isDirectory && entry.name.endsWith(".so")) {
+                                    val outFile = File(driverDir, entry.name.substringAfterLast("/"))
+                                    FileOutputStream(outFile).use { output ->
+                                        zip.copyTo(output)
+                                    }
+                                    Log.i("Phobos", "Extracted driver: ${outFile.absolutePath}")
+                                    setCustomDriverPath(outFile.absolutePath)
+                                    break // Usually only one .so per package
                                 }
-                                Log.i("Phobos", "Extracted driver: ${outFile.absolutePath}")
-                                setCustomDriverPath(outFile.absolutePath)
-                                break // Usually only one .so per package
+                                zip.closeEntry()
+                                entry = zip.nextEntry
                             }
-                            zip.closeEntry()
-                            entry = zip.nextEntry
                         }
+                    } else {
+                        // Raw .so (or any non-zip): copy it directly as the driver.
+                        // Ensure a .so extension (some SAF providers return the
+                        // doc ID as the display name — e.g. "msf:1000172790").
+                        val soName = if (name.endsWith(".so", ignoreCase = true)) name else "$name.so"
+                        val outFile = File(driverDir, soName)
+                        FileOutputStream(outFile).use { output ->
+                            input.copyTo(output)
+                        }
+                        Log.i("Phobos", "Installed driver: ${outFile.absolutePath}")
+                        setCustomDriverPath(outFile.absolutePath)
                     }
                 }
             } catch (e: Exception) {
                 Log.e("Phobos", "Failed to install custom driver: ${e.message}")
+            }
+        }
+    }
+
+    fun installCustomDriverFromFolder(context: Context, treeUri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val driverDir = File(context.filesDir, "gpu_drivers")
+                if (!driverDir.exists()) driverDir.mkdirs()
+
+                // Scan the picked folder for candidate driver files: .so (raw)
+                // or .zip/.adpkg (packaged). List them; if exactly one driver
+                // file is found, install it directly. (The SAF file picker's
+                // MIME/name filtering hid non-turnip files — a folder picker
+                // + scan bypasses that entirely.)
+                val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+                val candidates = mutableListOf<DocumentFile>()
+                if (docFile != null) {
+                    docFile.listFiles().forEach { f ->
+                        val n = f.name ?: ""
+                        if (!f.isDirectory && (n.endsWith(".so", true) || n.endsWith(".zip", true) || n.endsWith(".adpkg", true))) {
+                            candidates.add(f)
+                        }
+                    }
+                }
+                if (candidates.isEmpty()) {
+                    Log.e("Phobos", "No driver files found in folder")
+                    return@launch
+                }
+                val file = candidates[0]
+                val name = file.name ?: "driver"
+                val isZip = name.endsWith(".zip", true) || name.endsWith(".adpkg", true)
+                context.contentResolver.openInputStream(file.uri)?.use { input ->
+                    if (isZip) {
+                        ZipInputStream(input).use { zip ->
+                            var entry = zip.nextEntry
+                            while (entry != null) {
+                                if (!entry.isDirectory && entry.name.endsWith(".so")) {
+                                    val outFile = File(driverDir, entry.name.substringAfterLast("/"))
+                                    FileOutputStream(outFile).use { output -> zip.copyTo(output) }
+                                    Log.i("Phobos", "Extracted driver: ${outFile.absolutePath}")
+                                    setCustomDriverPath(outFile.absolutePath)
+                                    break
+                                }
+                                zip.closeEntry()
+                                entry = zip.nextEntry
+                            }
+                        }
+                    } else {
+                        val outFile = File(driverDir, name)
+                        FileOutputStream(outFile).use { output -> input.copyTo(output) }
+                        Log.i("Phobos", "Installed driver: ${outFile.absolutePath}")
+                        setCustomDriverPath(outFile.absolutePath)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("Phobos", "Failed to install driver from folder: ${e.message}")
             }
         }
     }
@@ -1017,7 +1174,12 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     fun loadRom(context: Context, systemName: String, rom: RomFile) {
         viewModelScope.launch(Dispatchers.IO) {
-            Log.d("Phobos", "loadRom starting: system='$systemName', name='${rom.name}'")
+            // For the merged "ZX Spectrum" entry, native detects 48K vs 128K by
+            // CONTENT (TAP header block scan) — see PhobosRunner initialize().
+            // effectiveSystem stays "ZX Spectrum"; native upgrades to
+            // "ZX Spectrum 128" internally when the tape is a 128K loader.
+            val effectiveSystem = systemName
+            Log.d("Phobos", "loadRom starting: system='$effectiveSystem', name='${rom.name}'")
 
             // Reset driver suggestion for new game load.
             // Only N64 Vulkan games trigger this, but reset here to be safe.
@@ -1077,6 +1239,16 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setN64CountPerOp(if (currentSettings.n64UseDefaultCountPerOp) 2 else currentSettings.n64CountPerOp)
             PhobosCore.setN64CpuOverclock(if (currentSettings.n64UseDefaultCpuOverclock) 0 else currentSettings.n64CpuOverclock)
             PhobosCore.setN64Pak(currentSettings.n64Pak)
+
+            // ZX per-core control scheme + rebinds + toggles (keyboard cores).
+            if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true)) {
+                PhobosCore.setZxControlScheme(currentSettings.zxControlScheme[effectiveSystem] ?: 0)
+                PhobosCore.setZxStickToKeys(currentSettings.zxStickToKeys[effectiveSystem] ?: false)
+                PhobosCore.setZxReversePitch(currentSettings.zxReversePitch[effectiveSystem] ?: false)
+                val binds = currentSettings.zxKeyBindings[effectiveSystem] ?: emptyMap()
+                binds.forEach { (label, bit) -> PhobosCore.setZxKeyBinding(label, bit) }
+                PhobosCore.setZxTapeMuted(currentSettings.zxTapeMuted)
+            }
 
             // Resolve the user-configured Saves Path (SAF content:// URI) to a
             // real filesystem path native code can write to; fall back to the
@@ -1160,12 +1332,21 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             try {
                 context.contentResolver.openFileDescriptor(rom.uri, "r")?.use { pfd ->
                     PhobosCore.setRomFd(pfd.detachFd())
-                    val success = PhobosCore.loadRom(systemName, rom.uri.toString(), rom.name)
+                    val success = PhobosCore.loadRom(effectiveSystem, rom.uri.toString(), rom.name)
                     if (success) {
                         _isLoaded.value = true
-                        currentSystemName = systemName
+                        currentSystemName = effectiveSystem
                     } else {
-                        Log.e("Phobos", "Native loadRom failed for $systemName")
+                        Log.e("Phobos", "Native loadRom failed for $effectiveSystem")
+                        // Broken core (ZX 128K / PCE / Neo Geo): native refuses
+                        // before spawning any threads. Surface a clear popup
+                        // instead of a hang/crash.
+                        if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true) ||
+                            effectiveSystem.contains("PC Engine", ignoreCase = true) ||
+                            effectiveSystem.contains("SuperGrafx", ignoreCase = true) ||
+                            effectiveSystem.contains("Neo Geo", ignoreCase = true)) {
+                            _unsupportedSystem.value = effectiveSystem
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -1173,6 +1354,8 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             }
         }
     }
+
+    fun dismissUnsupportedSystem() { _unsupportedSystem.value = null }
 
     fun loadSecondaryRom(context: Context, systemName: String, rom: RomFile) {
         viewModelScope.launch(Dispatchers.IO) {

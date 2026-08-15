@@ -27,6 +27,36 @@ object GameInputState {
     var hwButtons = 0
     var virtualButtons = 0
 
+    // Hotkey support: many controllers report the D-pad as HAT axes (motion
+    // events), not KEYCODE_DPAD_* keys, so the EmulatorScreen's key-only
+    // pressedKeys tracker never sees the D-pad. This shared set holds the
+    // currently-pressed virtual keycodes (D-pad from hats), so hotkey combos
+    // like Z + D-pad-Right can match. Versioned so EmulatorScreen can observe
+    // changes and re-run the combo check when the hat moves.
+    val hotkeyKeys = mutableSetOf<Int>()
+    var hotkeyKeysVersion = 0
+        private set
+    // Callback the EmulatorScreen sets to re-evaluate hotkey combos when the
+    // D-pad hat changes (a motion event doesn't otherwise re-run the check).
+    var onHotkeyKeysChanged: (() -> Unit)? = null
+
+    private const val HAT_PRESS_THRESHOLD = 0.5f
+
+    /** Update hotkeyKeys from the D-pad hat axes (AXIS_HAT_X/Y). */
+    private fun updateHotkeyDpad(event: MotionEvent) {
+        val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
+        val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+        // D-pad keycodes: UP=19 DOWN=20 LEFT=21 RIGHT=22
+        val left = hatX < -HAT_PRESS_THRESHOLD
+        val right = hatX > HAT_PRESS_THRESHOLD
+        val up = hatY < -HAT_PRESS_THRESHOLD
+        val down = hatY > HAT_PRESS_THRESHOLD
+        fun setDpad(key: Int, pressed: Boolean) { if (pressed) hotkeyKeys.add(key) else hotkeyKeys.remove(key) }
+        setDpad(21, left); setDpad(22, right); setDpad(19, up); setDpad(20, down)
+        hotkeyKeysVersion++
+        onHotkeyKeysChanged?.invoke()
+    }
+
     // Ares parity: analog stick values pass through RAW — no frontend deadzone.
     // ares desktop feeds the raw ±32767 HID values straight into the core,
     // which applies its own authoritative deadzone and response curve (e.g. PS1
@@ -110,6 +140,7 @@ object GameInputState {
     fun handleMotionEvent(event: MotionEvent, mappings: Map<Int, String>, systemName: String): Boolean {
         if ((event.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
         if (event.action != MotionEvent.ACTION_MOVE) return false
+        updateHotkeyDpad(event)  // D-pad hats → virtual keycodes for hotkeys
 
         val nLx = getAxisValueForStick(event, mappings, 1 shl 19, 1 shl 20, MotionEvent.AXIS_X)
         val nLy = getAxisValueForStick(event, mappings, 1 shl 17, 1 shl 18, MotionEvent.AXIS_Y)

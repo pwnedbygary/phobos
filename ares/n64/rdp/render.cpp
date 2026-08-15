@@ -705,4 +705,11 @@ auto RDP::setMaskImage() -> void {
 
 //0x3f
 auto RDP::setColorImage() -> void {
+  // Capture the RDP's actual framebuffer pitch/address for the VI's CPU
+  // scanout fallback. The VI's WIDTH register is the DISPLAY width and can
+  // differ from the RDP framebuffer width (e.g. Rogue Squadron renders 512-wide
+  // but the VI presents it scaled to 640 via XScale, with WIDTH=1024). Using
+  // vi.io.width as the scanline stride reads the WRONG rows (black).
+  rdpFramebufferWidth  = set.color.width;
+  rdpFramebufferAddress = set.color.dramAddress;
 }

@@ -1,10 +1,17 @@
 package com.phobos.emulator.ui
 
+import android.view.KeyEvent
+import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,6 +22,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -87,11 +95,51 @@ fun ZXKeyboardOverlay(
     turboTape: Boolean,
     onTurboTape: (Boolean) -> Unit,
     controlScheme: Int,
-    onControlScheme: (Int) -> Unit
+    onControlScheme: (Int) -> Unit,
+    systemName: String,
+    rebindTarget: String?,
+    onRebindTarget: (String?) -> Unit,
+    onBindKey: (String, Int) -> Unit = { _, _ -> },
+    boundKeys: Set<String> = emptySet(),
+    keyboardOpacity: Float = 1.0f
 ) {
+    // ── CUSTOM rebind capture ──────────────────────────────────────────────
+    // When a key is waiting for a gamepad control, listen for button presses
+    // (key events), then bind via the hoisted callback.
+    val view = LocalView.current
+    val currentSystemName by rememberUpdatedState(systemName)
+    val currentRebindTarget by rememberUpdatedState(rebindTarget)
+
+    DisposableEffect(rebindTarget != null) {
+        if (rebindTarget == null) return@DisposableEffect onDispose {}
+
+        val keyListener = View.OnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val bit = mapKeyCodeToBit(keyCode)
+                if (bit != 0) {
+                    currentRebindTarget?.let { target ->
+                        onBindKey(target, bit)
+                        onRebindTarget(null)
+                    }
+                    true
+                } else false
+            } else false
+        }
+        view.setOnKeyListener(keyListener)
+        onDispose { view.setOnKeyListener(null) }
+    }
+
+    // Rebinding is only available in CUSTOM mode (scheme 4). Long-press a key
+    // to start binding it to a gamepad control.
+    val rebindEnabled = controlScheme == 4
+    val longPressRebind: ((String) -> Unit)? = if (rebindEnabled) { label ->
+        onRebindTarget(label)
+    } else null
+
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .graphicsLayer { alpha = keyboardOpacity }
             .background(Chassis)
             .padding(bottom = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -169,20 +217,25 @@ fun ZXKeyboardOverlay(
                 active = turboTape,
                 onToggle = { onTurboTape(it) }
             )
-            // SCHEME cycler: Kempston -> QAOP -> ZXZX (tap to cycle).
+            // SCHEME cycler: Kempston -> QAOP -> ZXZX -> ELITE -> CUSTOM.
+            // CUSTOM (4) uses only the per-key rebind map; presets stay pristine.
             SchemeKey(
                 scheme = controlScheme,
                 weight = 2f,
                 onCycle = {
-                    val next = (controlScheme + 1) % 3
+                    val next = (controlScheme + 1) % 5
                     onControlScheme(next)
                     PhobosCore.setZxControlScheme(next)
                 }
             )
         }
 
-        KeyboardRow(ROW1, labelSize = 15.sp, padStart = 0.65f, padEnd = 0.65f, symLatched = symLatched)
-        KeyboardRow(ROW2, labelSize = 15.sp, padStart = 0.65f, padEnd = 0.65f, symLatched = symLatched)
+        KeyboardRow(ROW1, labelSize = 15.sp, padStart = 0.65f, padEnd = 0.65f, symLatched = symLatched,
+            rebindTarget = rebindTarget, isBound = { boundKeys.contains(it) },
+            onLongPressRebind = longPressRebind)
+        KeyboardRow(ROW2, labelSize = 15.sp, padStart = 0.65f, padEnd = 0.65f, symLatched = symLatched,
+            rebindTarget = rebindTarget, isBound = { boundKeys.contains(it) },
+            onLongPressRebind = longPressRebind)
         // Row 3: CAPS SHIFT + A-L + ENTER
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -195,12 +248,18 @@ fun ZXKeyboardOverlay(
                 symLatched = symLatched,
                 onSymToggle = {},
                 latched = capsLatched,
-                onLatchChange = { onCapsLatched(it) }
+                onLatchChange = { onCapsLatched(it) },
+                rebindTarget = rebindTarget, isBound = boundKeys.contains(CAPS),
+                onLongPressRebind = longPressRebind
             )
             ROW3.forEach {
-                Key(it, weight = 1f, labelSize = 15.sp, symLatched = symLatched, onSymToggle = {})
+                Key(it, weight = 1f, labelSize = 15.sp, symLatched = symLatched, onSymToggle = {},
+                    rebindTarget = rebindTarget, isBound = boundKeys.contains(it),
+                    onLongPressRebind = longPressRebind)
             }
-            Key(ENTER, weight = 1.6f, labelSize = 11.sp, symLatched = symLatched, onSymToggle = {})
+            Key(ENTER, weight = 1.6f, labelSize = 11.sp, symLatched = symLatched, onSymToggle = {},
+                rebindTarget = rebindTarget, isBound = boundKeys.contains(ENTER),
+                onLongPressRebind = longPressRebind)
         }
         // Row 4: SYMBOL SHIFT + Z-M + SPACE
         Row(
@@ -214,12 +273,18 @@ fun ZXKeyboardOverlay(
                 symLatched = symLatched,
                 onSymToggle = { onSymLatched(it) },
                 latched = symLatched,
-                onLatchChange = { onSymLatched(it) }
+                onLatchChange = { onSymLatched(it) },
+                rebindTarget = rebindTarget, isBound = boundKeys.contains(SHIFT),
+                onLongPressRebind = longPressRebind
             )
             ROW4.forEach {
-                Key(it, weight = 1f, labelSize = 15.sp, symLatched = symLatched, onSymToggle = {})
+                Key(it, weight = 1f, labelSize = 15.sp, symLatched = symLatched, onSymToggle = {},
+                    rebindTarget = rebindTarget, isBound = boundKeys.contains(it),
+                    onLongPressRebind = longPressRebind)
             }
-            Key(SPACE, weight = 2.6f, labelSize = 11.sp, symLatched = symLatched, onSymToggle = {})
+            Key(SPACE, weight = 2.6f, labelSize = 11.sp, symLatched = symLatched, onSymToggle = {},
+                rebindTarget = rebindTarget, isBound = boundKeys.contains(SPACE),
+                onLongPressRebind = longPressRebind)
             // BACK = CAPS SHIFT + 0 (authentic ZX DELETE). Chord both keys.
             ChordKey(listOf(CAPS, "0"), weight = 1.4f, label = "BACK", labelSize = 11.sp)
         }
@@ -331,6 +396,8 @@ private fun RowScope.SchemeKey(
     val label = when (scheme) {
         1 -> "QAOP"
         2 -> "ZXZX"
+        3 -> "ELITE"
+        4 -> "CUSTOM"
         else -> "KEMP"
     }
     val active = scheme != 0
@@ -438,7 +505,10 @@ private fun KeyboardRow(
     labelSize: TextUnit,
     padStart: Float,
     padEnd: Float,
-    symLatched: Boolean
+    symLatched: Boolean,
+    rebindTarget: String? = null,
+    isBound: (String) -> Boolean = { false },
+    onLongPressRebind: ((String) -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -447,7 +517,11 @@ private fun KeyboardRow(
     ) {
         // Edge pads replicate the real keyboard's offset key columns.
         Spacer(modifier = Modifier.weight(padStart))
-        keys.forEach { Key(it, weight = 1f, labelSize = labelSize, symLatched = symLatched, onSymToggle = {}) }
+        keys.forEach {
+            Key(it, weight = 1f, labelSize = labelSize, symLatched = symLatched,
+                onSymToggle = {}, rebindTarget = rebindTarget, isBound = isBound(it),
+                onLongPressRebind = onLongPressRebind)
+        }
         Spacer(modifier = Modifier.weight(padEnd))
     }
 }
@@ -460,23 +534,40 @@ private fun RowScope.Key(
     symLatched: Boolean,
     onSymToggle: (Boolean) -> Unit,
     latched: Boolean = false,
-    onLatchChange: (Boolean) -> Unit = {}
+    onLatchChange: (Boolean) -> Unit = {},
+    rebindTarget: String? = null,
+    isBound: Boolean = false,
+    onLongPressRebind: ((String) -> Unit)? = null
 ) {
     val haptic = LocalHapticFeedback.current
 
     var pressed by remember { mutableStateOf(false) }
     var flash by remember { mutableStateOf(false) }
+    // Pulsing while this key is the rebind target (waiting for a gamepad control).
+    var pulse by remember { mutableStateOf(false) }
+    // Track whether THIS key is the active rebind target.
+    val isRebindTarget = label == rebindTarget
 
     // rememberUpdatedState keeps the gesture handler reading the CURRENT
     // latched/symLatched values on every tap (pointerInput keys on `label`
     // only, so without this the closure captures the initial value and shift
     // keys never toggle OFF).
     val currentLatched by rememberUpdatedState(latched)
+    val currentIsRebindTarget by rememberUpdatedState(isRebindTarget)
 
     val isShift = label == CAPS || label == SHIFT
     val isSymbolKey = label in ZXSymbols
-    // A latched shift is "active" and shown highlighted.
-    val active = pressed || flash || latched
+    // A latched shift is "active" and shown highlighted. The rebind-target key
+    // pulses (active + border glow) while waiting for a gamepad control.
+    val active = pressed || flash || latched || currentIsRebindTarget
+
+    // Pulse animation for the key being rebound: drive `pulse` via an infinite
+    // transition when this key is the target.
+    val transition = rememberInfiniteTransition()
+    val pulseAlpha by transition.animateFloat(
+        initialValue = 1f, targetValue = 0.4f,
+        animationSpec = infiniteRepeatable(tween(400), RepeatMode.Reverse)
+    )
 
     // Show the symbol when SYM is latched; letters/caps otherwise.
     val display = when {
@@ -495,7 +586,10 @@ private fun RowScope.Key(
     )
 
     val shape = RoundedCornerShape(6.dp)
-    val bgModifier = if (active) {
+    // Rebind-target key: pulsing border glow + translucent fill.
+    val bgModifier = if (currentIsRebindTarget) {
+        Modifier.background(KeyPressed.copy(alpha = pulseAlpha), shape)
+    } else if (active) {
         Modifier.background(KeyPressed, shape)
     } else {
         Modifier.background(keyBrush, shape)
@@ -511,9 +605,22 @@ private fun RowScope.Key(
                 scaleY = if (pressed) 0.92f else 1f
             }
             .then(bgModifier)
-            .border(1.5.dp, if (latched) Color.White else KeyBorder, RoundedCornerShape(6.dp))
+            .border(
+                if (currentIsRebindTarget) 2.dp else 1.5.dp,
+                when {
+                    currentIsRebindTarget -> Color.Yellow
+                    latched -> Color.White
+                    else -> KeyBorder
+                },
+                shape
+            )
             .pointerInput(label) {
                 detectTapGestures(
+                    onLongPress = {
+                        // In CUSTOM mode, long-press starts rebinding this key.
+                        onLongPressRebind?.invoke(label)
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    },
                     onPress = {
                         if (isShift) {
                             // Latching shift: toggle held state.
@@ -552,5 +659,15 @@ private fun RowScope.Key(
             textAlign = TextAlign.Center,
             maxLines = 1
         )
+        // Bound-key indicator: a small dot in the corner (CUSTOM mode).
+        if (isBound) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(3.dp)
+                    .size(5.dp)
+                    .background(Color(0xFF4CAF50), RoundedCornerShape(3.dp))
+            )
+        }
     }
 }

@@ -24,6 +24,10 @@
 #include "rdp_common.hpp"
 #include <chrono>
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
 #ifdef __SSE2__
 #include <emmintrin.h>
 #endif
@@ -31,6 +35,21 @@
 #ifndef PARALLEL_RDP_SHADER_DIR
 #include "shaders/slangmosh.hpp"
 #endif
+
+// Gated by the Phobos "N64 Debug Logging" toggle (defined in PhobosRunner.cpp).
+namespace ares {
+auto n64DebugLoggingEnabled() -> bool;
+// Free function the parallel-RDP path calls to publish the real RDP framebuffer
+// width/address for the VI CPU scanout fallback (Rogue Squadron: RDP renders
+// 512-wide, VI presents 640-wide via XScale with WIDTH=1024 — the VI must
+// stride by the RDP width or it reads the wrong rows → black). Defined in the
+// ares N64 core (vi.cpp).
+namespace Nintendo64 {
+auto setRdpFramebuffer(unsigned width, unsigned address) -> void;
+auto rdpFramebufferWidth() -> unsigned;
+auto rdpFramebufferAddress() -> unsigned;
+}
+}
 
 using namespace Vulkan;
 
@@ -450,6 +469,23 @@ void CommandProcessor::op_set_color_image(const uint32_t *words)
 	}
 
 	renderer.set_color_framebuffer(addr, width, fbfmt);
+	// Publish the real RDP framebuffer width/address for the ares VI CPU scanout
+	// fallback (Rogue Squadron renders 512-wide but the VI presents 640-wide via
+	// XScale with WIDTH=1024 — the VI must stride by the RDP width). The ares
+	// software RDP::setColorImage() is NOT used in the Vulkan path; parallel-RDP
+	// handles SET_COLOR_IMAGE here.
+	::ares::Nintendo64::setRdpFramebuffer(width, addr);
+	// Diagnostic: log RDP framebuffer changes (Rogue Squadron menu investigation),
+	// gated by the Phobos N64 Debug Logging toggle. During the WIDE menu
+	// (width > 640 or addr near the VI origin) log EVERY call — the game may
+	// fire many SET_COLOR_IMAGEs per frame and the rate limit hid the real
+	// menu render target. Rate-limit normal modes to avoid log spam.
+	static uint64_t fbLogCount = 0;
+	bool wideMode = (width > 640) || (addr >= 0x700000);
+	if (::ares::n64DebugLoggingEnabled() && (wideMode || fbLogCount++ % 120 == 0 || fbLogCount < 10)) {
+		__android_log_print(ANDROID_LOG_INFO, "PhobosRDP",
+			"color_image: addr=0x%06x width=%u fmt=%u size=%u", addr, width, fmt, size);
+	}
 }
 
 void CommandProcessor::op_set_mask_image(const uint32_t *words)
@@ -1114,6 +1150,12 @@ Vulkan::ImageHandle CommandProcessor::scanout(const ScanoutOptions &opts, VkImag
 	}
 	renderer.unlock_command_processing();
 
+	// [Phobos] Rogue Squadron fix: pass the RDP's real framebuffer width/address
+	// into the VI scanout so the VRAM extract strides by the RDP width, not the
+	// VI display width (the game renders 512-wide but sets VI_WIDTH=1024 →
+	// without this, every row after the first reads wrong VRAM → black menu).
+	// fb_width/fb_offset come from the ares core (rdp.rdpFramebuffer*), NOT the
+	// renderer — reading Renderer::fb here would race with the RDP worker
 	auto scanout = vi.scanout(target_layout, opts, renderer.get_scaling_factor());
 	return scanout;
 }

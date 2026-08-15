@@ -207,8 +207,7 @@ private:
 	Registers decode_vi_registers(HorizontalInfoLines *lines) const;
 	void clear_per_scanline_state();
 
-	Vulkan::ImageHandle vram_fetch_stage(const Registers &registers,
-	                                     unsigned scaling_factor) const;
+	Vulkan::ImageHandle vram_fetch_stage(const Registers &registers, unsigned scaling_factor) const;
 	Vulkan::ImageHandle aa_fetch_stage(Vulkan::CommandBuffer &cmd,
 	                                   Vulkan::Image &vram_image,
 	                                   const Registers &registers,

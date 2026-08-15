@@ -168,6 +168,27 @@ auto Disc::Drive::clockSector() -> void {
     }
 
     if(sector.data[15] == 0x02) {
+#if defined(__ANDROID__)
+      static u64 cdxaFilterCount = 0;
+      static u64 cdxaFilterLog = 0;
+      static u64 cdxaRoutedCount = 0;
+      static u64 cdxaRoutedLog = 0;
+      if(mode.xaFilter) {
+        if(cdxaFilterCount++ - cdxaFilterLog >= 75) {
+          cdxaFilterLog = cdxaFilterCount;
+          __android_log_print(ANDROID_LOG_INFO, "PhobosCDXA",
+            "drive: mode2 subMode=%02x file=%02x chan=%02x filter.file=%02x filter.channel=%02x",
+            (int)sector.data[18], (int)sector.data[16], (int)sector.data[17],
+            (int)cdxa->filter.file, (int)cdxa->filter.channel);
+        }
+      }
+      if(mode.xaADPCM && (sector.data[18] & 0x44) == 0x44) {
+        if(cdxaRoutedCount++ - cdxaRoutedLog >= 75) {
+          cdxaRoutedLog = cdxaRoutedCount;
+          __android_log_print(ANDROID_LOG_INFO, "PhobosCDXA", "drive: XA sector routed to CDXA decoder");
+        }
+      }
+#endif
       if(mode.xaFilter) {
         if(sector.data[16] != cdxa->filter.file) return;
         if(sector.data[17] != cdxa->filter.channel) return;

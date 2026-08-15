@@ -11,13 +11,21 @@ import android.view.SurfaceView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -31,6 +39,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.*
@@ -52,6 +61,21 @@ import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.input.GameInputState
 import kotlinx.coroutines.delay
+
+// Interpolate along a 4-stop rainbow (red->yellow->green->blue) by t in [0,1].
+private fun lerpRainbow(stops: List<Color>, t: Float): Color {
+    val clamped = t.coerceIn(0f, 1f)
+    if (stops.size < 2) return stops.first()
+    val seg = clamped * (stops.size - 1)
+    val idx = seg.toInt().coerceIn(0, stops.size - 2)
+    val frac = seg - idx
+    return Color(
+        red = stops[idx].red + (stops[idx + 1].red - stops[idx].red) * frac,
+        green = stops[idx].green + (stops[idx + 1].green - stops[idx].green) * frac,
+        blue = stops[idx].blue + (stops[idx + 1].blue - stops[idx].blue) * frac,
+        alpha = 1f
+    )
+}
 
 // ─── EmulatorScreen ──────────────────────────────────────────────────────────
 
@@ -75,8 +99,20 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     var zxCapsLatched by remember { mutableStateOf(false) }
     var zxTurboTape by remember { mutableStateOf(false) }
     var zxControlScheme by remember { mutableStateOf(0) }
+    // ZX CUSTOM rebind target: the keyboard key label currently being bound to
+    // a gamepad control (null = not rebinding). Only active in CUSTOM mode.
+    var zxRebindTarget by remember { mutableStateOf<String?>(null) }
 
     val showDriverSuggestion by viewModel.showDriverSuggestion.collectAsState()
+    val unsupportedSystem by viewModel.unsupportedSystem.collectAsState()
+
+    // Push the persisted N64 debug-logging setting to native whenever it
+    // changes (including the initial DataStore load). The init block pushes
+    // the DEFAULT (false) before DataStore emits the persisted value, so
+    // without this, native stays off until a manual re-toggle.
+    LaunchedEffect(settingsState.n64DebugLogging) {
+        PhobosCore.setN64DebugLogging(settingsState.n64DebugLogging)
+    }
 
     val focusRequester = remember { FocusRequester() }
     val context = LocalContext.current
@@ -85,6 +121,28 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 
     var pressedKeys by remember { mutableStateOf(setOf<Int>()) }
     var ffToggled by remember { mutableStateOf(false) }
+
+    // Re-run the hotkey combo check when the D-pad hat changes (motion events
+    // don't otherwise trigger onPreviewKeyEvent, so Z + D-pad hotkeys would
+    // never fire even though the hat is tracked).
+    val triggerHotkeyCheck = rememberUpdatedState<() -> Unit> {
+        val allPressed = pressedKeys + GameInputState.hotkeyKeys
+        settingsState.hotkeys.forEach { (action, combo) ->
+            if (combo.isNotEmpty() && combo.size == allPressed.size && combo.all { allPressed.contains(it) }) {
+                when (action) {
+                    "inc_slot"       -> viewModel.incrementSlot()
+                    "dec_slot"       -> viewModel.decrementSlot()
+                    "save"           -> viewModel.saveState(systemName, romName, currentSlot)
+                    "load"           -> viewModel.loadState(systemName, romName, currentSlot)
+                    else -> {}
+                }
+            }
+        }
+    }
+    DisposableEffect(Unit) {
+        GameInputState.onHotkeyKeysChanged = { triggerHotkeyCheck.value() }
+        onDispose { GameInputState.onHotkeyKeysChanged = null }
+    }
 
     // ── Fullscreen ───────────────────────────────────────────────────────────
     DisposableEffect(settingsState.fullScreenMode) {
@@ -114,7 +172,10 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     }
 
     LaunchedEffect(isPaused) {
-        if (isPaused) GameInputState.releaseAllButtons()
+        if (isPaused) {
+            GameInputState.releaseAllButtons()
+            pressedKeys = emptySet()  // clear stale keys so hotkey combos re-arm
+        }
     }
 
     LaunchedEffect(showControls, isPaused) {
@@ -162,6 +223,31 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         )
     }
 
+    // ── Unsupported system dialog (broken cores) ──────────────────────────
+    unsupportedSystem?.let { sys ->
+        AlertDialog(
+            // On OK (or dismiss), navigate back to the library — the load was
+            // refused, so EmulatorScreen has nothing to show (it would sit on
+            // the "Initializing" spinner forever).
+            onDismissRequest = {
+                viewModel.dismissUnsupportedSystem()
+                onBack()
+            },
+            title = { Text("$sys Unsupported") },
+            text = {
+                Text("$sys games are currently unsupported in this build. " +
+                     "This is a known issue being worked on.\n\n" +
+                     "Please try a different system or game.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.dismissUnsupportedSystem()
+                    onBack()
+                }) { Text("OK") }
+            }
+        )
+    }
+
     // ── Main container ───────────────────────────────────────────────────────
     Box(
         modifier = Modifier
@@ -186,9 +272,14 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 
                 pressedKeys = if (isDown) pressedKeys + keyCode else pressedKeys - keyCode
 
+                // Hotkey match: the pressed keys (key events) PLUS the virtual
+                // D-pad keys from hat axes (GameInputState.hotkeyKeys). This
+                // lets combos like Z + D-pad-Right work even though the D-pad
+                // is reported as a hat (motion event), not a keycode.
+                val allPressed = pressedKeys + GameInputState.hotkeyKeys
                 var hotkeyTriggered = false
                 settingsState.hotkeys.forEach { (action, combo) ->
-                    if (combo.isNotEmpty() && combo.size == pressedKeys.size && combo.all { pressedKeys.contains(it) }) {
+                    if (combo.isNotEmpty() && combo.size == allPressed.size && combo.all { allPressed.contains(it) }) {
                         hotkeyTriggered = true
                         if (isDown) {
                             when (action) {
@@ -316,8 +407,117 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 symLatched = zxSymLatched, onSymLatched = { zxSymLatched = it },
                 capsLatched = zxCapsLatched, onCapsLatched = { zxCapsLatched = it },
                 turboTape = zxTurboTape, onTurboTape = { zxTurboTape = it },
-                controlScheme = zxControlScheme, onControlScheme = { zxControlScheme = it }
+                controlScheme = zxControlScheme, onControlScheme = { zxControlScheme = it },
+                systemName = systemName,
+                rebindTarget = zxRebindTarget, onRebindTarget = { zxRebindTarget = it },
+                onBindKey = { label, bit -> viewModel.setZxKeyBinding(systemName, label, bit) },
+                boundKeys = (settingsState.zxKeyBindings[systemName] ?: emptyMap()).keys,
+                keyboardOpacity = settingsState.zxKeyboardOpacity
             )
+        }
+
+        // ── ZX tape-loading progress bar ────────────────────────────────────
+        // Shows while the ZX tape is playing (LOAD ""), disappears on completion.
+        // Progress = 0..10000 (percent*100); -1 = not playing → hide.
+        if (isLoaded && systemName.contains("ZX Spectrum", ignoreCase = true)) {
+            val tapeProgress by viewModel.zxTapeProgress.collectAsState()
+            if (tapeProgress >= 0) {  // playing
+                val pct = tapeProgress / 100f
+                // ZX Spectrum rainbow stops (red -> yellow -> green -> blue)
+                val rainbowStops = listOf(
+                    Color(0xFFC3463A), // red
+                    Color(0xFFE2C332), // yellow
+                    Color(0xFF64A34A), // green
+                    Color(0xFF64ADD0), // blue
+                )
+                // Animated shimmer sweep across the filled segments.
+                val shimmer by rememberInfiniteTransition().animateFloat(
+                    initialValue = -1f, targetValue = 2f,
+                    animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Restart)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 10.dp)
+                        .fillMaxWidth(0.75f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // % label pill
+                    Text(
+                        "Loading tape… ${pct.toInt()}%",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White,
+                        modifier = Modifier
+                            .shadow(6.dp, RoundedCornerShape(8.dp))
+                            .background(Color(0xCC101010), RoundedCornerShape(8.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    // Segmented rainbow bar wrapped in a dark rounded outline frame
+                    // so it's clearly visible against any background.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(22.dp)
+                            .shadow(10.dp, RoundedCornerShape(11.dp))          // outer glow
+                            .background(Color(0xCC101010), RoundedCornerShape(11.dp))  // dark track bg
+                            .border(2.dp, Color(0xE6151515), RoundedCornerShape(11.dp)) // dark outline
+                            .padding(2.dp)  // inset so segments sit inside the frame
+                    ) {
+                        Canvas(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            val segGap = 1.5.dp.toPx()
+                            val segW = (size.width - segGap * 9) / 10f
+                            val h = size.height
+                            val filledSegs = (pct / 10f).toInt().coerceIn(0, 10)
+                            // Track (dark, slightly rounded per segment)
+                            for (i in 0 until 10) {
+                                val x = i * (segW + segGap)
+                                drawRoundRect(
+                                    color = Color(0x66101010),
+                                    topLeft = Offset(x, 0f),
+                                    size = Size(segW, h),
+                                    cornerRadius = CornerRadius(5.dp.toPx(), 5.dp.toPx())
+                                )
+                            }
+                            // Filled segments: rainbow gradient across filled width
+                            for (i in 0 until filledSegs) {
+                                val x = i * (segW + segGap)
+                                // Color per segment along the 4-stop rainbow
+                                val t = i.toFloat() / filledSegs
+                                val col = lerpRainbow(rainbowStops, t)
+                                drawRoundRect(
+                                    color = col,
+                                    topLeft = Offset(x, 0f),
+                                    size = Size(segW, h),
+                                    cornerRadius = CornerRadius(5.dp.toPx(), 5.dp.toPx())
+                                )
+                                // Top shine: a lighter band across the upper half
+                                drawRoundRect(
+                                    color = Color.White.copy(alpha = 0.28f),
+                                    topLeft = Offset(x, 1.dp.toPx()),
+                                    size = Size(segW, h * 0.35f),
+                                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                                )
+                            }
+                            // Shimmer sweep: a moving white streak over the fill
+                            if (filledSegs > 0) {
+                                val sweepX = (shimmer + 0.5f) * (segW + segGap) * filledSegs
+                                val streakW = (segW + segGap) * 2f
+                                drawRoundRect(
+                                    color = Color.White.copy(alpha = 0.25f),
+                                    topLeft = Offset(sweepX - streakW / 2, 0f),
+                                    size = Size(streakW, h),
+                                    cornerRadius = CornerRadius(5.dp.toPx(), 5.dp.toPx())
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ── Performance monitor (draggable/resizable) ───────────────────────
@@ -380,7 +580,12 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                     showKeyboard = showKeyboard,
                     onKeyboardToggle = { showKeyboard = it },
                     onResume = { viewModel.togglePause() },
-                    onQuit = { showQuitDialog = true }
+                    onQuit = { showQuitDialog = true },
+                    zxControlScheme = zxControlScheme,
+                    onZxControlScheme = { s ->
+                        zxControlScheme = s
+                        viewModel.setZxControlScheme(systemName, s)
+                    }
                 )
             }
         }
@@ -393,7 +598,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 fun EmulationMenu(
     viewModel: MainViewModel, systemName: String, romName: String,
     showKeyboard: Boolean, onKeyboardToggle: (Boolean) -> Unit,
-    onResume: () -> Unit, onQuit: () -> Unit
+    onResume: () -> Unit, onQuit: () -> Unit,
+    zxControlScheme: Int = 0, onZxControlScheme: (Int) -> Unit = {}
 ) {
     val settings by viewModel.settings.collectAsState()
     val currentSlot by viewModel.currentSlot.collectAsState()
@@ -511,6 +717,67 @@ fun EmulationMenu(
                                     "Show the compact keyboard to type LOAD etc.",
                                     showKeyboard
                                 ) { onKeyboardToggle(it) }
+                                // ZX control scheme selector (0=Kempston,1=QAOP,2=ZXZX,3=ELITE,4=CUSTOM).
+                                // CUSTOM enables long-press-to-rebind on the keyboard.
+                                var schemeExpanded by remember { mutableStateOf(false) }
+                                ListItem(
+                                    headlineContent = { Text("Control Scheme") },
+                                    supportingContent = { Text("Kempston / QAOP / ZXZX / ELITE / CUSTOM") },
+                                    trailingContent = {
+                                        Box {
+                                            TextButton(onClick = { schemeExpanded = true }) {
+                                                Text(when (zxControlScheme) {
+                                                    1 -> "QAOP"; 2 -> "ZXZX"; 3 -> "ELITE"; 4 -> "CUSTOM"; else -> "KEMP"
+                                                })
+                                            }
+                                            DropdownMenu(expanded = schemeExpanded, onDismissRequest = { schemeExpanded = false }) {
+                                                listOf("KEMP" to 0, "QAOP" to 1, "ZXZX" to 2, "ELITE" to 3, "CUSTOM" to 4).forEach { (label, s) ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(label) },
+                                                        onClick = {
+                                                            schemeExpanded = false
+                                                            onZxControlScheme(s)
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                                if (zxControlScheme == 4) {
+                                    Text(
+                                        "CUSTOM: long-press a key on the keyboard to bind it to a gamepad control.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                                    )
+                                }
+                                // Keyboard opacity slider — makes the large on-screen
+                                // keyboard less intrusive on small screens.
+                                var kbdOpacity by remember { mutableStateOf(settings.zxKeyboardOpacity) }
+                                LaunchedEffect(settings.zxKeyboardOpacity) { kbdOpacity = settings.zxKeyboardOpacity }
+                                Text(
+                                    "Keyboard Opacity: ${(kbdOpacity * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                                )
+                                Slider(
+                                    value = kbdOpacity,
+                                    onValueChange = {
+                                        kbdOpacity = it
+                                        viewModel.setZxKeyboardOpacity(it)
+                                    },
+                                    valueRange = 0.2f..1.0f,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                                // Mute the loud tape-loading screech (game still
+                                // receives the EAR bit — only the audio is silenced).
+                                SettingsSwitchItem(
+                                    "Mute Tape Audio",
+                                    "Silence the loud tape-loading screech.",
+                                    settings.zxTapeMuted
+                                ) { viewModel.setZxTapeMuted(it) }
                             }
                         }
                     }

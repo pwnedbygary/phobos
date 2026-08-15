@@ -1,4 +1,31 @@
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
+// Gated by the Phobos "N64 Debug Logging" toggle (defined in PhobosRunner.cpp).
+namespace ares {
+auto n64DebugLoggingEnabled() -> bool;
+}
+
 namespace ares::Nintendo64 {
+
+// Called from parallel-RDP's op_set_color_image to publish the real RDP
+// framebuffer width/address (see vi.hpp / rdp.hpp). The VI's CPU scanout
+// fallback uses these so it strides by the RDP width, not the VI display
+// width (fixes Rogue Squadron's 512-render→640-present black menu).
+auto setRdpFramebuffer(unsigned width, unsigned address) -> void {
+  rdp.rdpFramebufferWidth  = width;
+  rdp.rdpFramebufferAddress = address;
+}
+
+// Read accessors for the parallel-RDP scanout path (CommandProcessor::scanout).
+// These are written on the RDP command thread (op_set_color_image) and read on
+// the screen thread — but only ever set to the RDP's actual SET_COLOR_IMAGE
+// values, which change once per mode/buffer, so a torn read is impossible
+// (32-bit aligned writes are atomic on ARM64). Reading the Renderer's fb here
+// instead would race with set_color_framebuffer's queue flushes.
+auto rdpFramebufferWidth() -> unsigned { return rdp.rdpFramebufferWidth; }
+auto rdpFramebufferAddress() -> unsigned { return rdp.rdpFramebufferAddress; }
 
 VI vi;
 #include "io.cpp"
@@ -95,6 +122,18 @@ auto VI::main() -> void {
         if (vulkan.enable) {
           gpuOutputValid = vulkan.scanoutAsync(io.field);
           vulkan.frame();
+          // Bounded diagnostic: log VI state + scanout validity ~2x/sec so we
+          // can see whether Rogue Squadron's framebuffer is reachable. Remove
+          // once the black-screen investigation is done.
+          static u64 viDiagCount = 0;
+          if (::ares::n64DebugLoggingEnabled() && viDiagCount++ % 60 == 0) {
+            __android_log_print(ANDROID_LOG_INFO, "PhobosVI",
+              "scanoutValid=%d field=%d vc=%d dramAddr=0x%08x width=%u io.width=%u depth=%u hstart=%u vstart=%u xscale=%u xsub=%u",
+              (int)gpuOutputValid, (int)io.field, (int)io.vcounter,
+              (unsigned)io.dramAddress, (unsigned)io.width, (unsigned)io.width,
+              (unsigned)io.colorDepth, (unsigned)io.hstart, (unsigned)io.vstart,
+              (unsigned)io.xscale, (unsigned)io.xsubpixel);
+          }
         }
         #endif
         refreshed = true;
@@ -155,16 +194,68 @@ auto VI::main() -> void {
 auto VI::refresh() -> void {
   #if defined(VULKAN)
   if(vulkan.enable && gpuOutputValid) {
+    // Rogue Squadron menu: VI_WIDTH=1024 (the game lies; it renders 512-wide).
+    // parallel-RDP's VI scanout always produces a 640-wide buffer and does the
+    // full VI scaling (XStart/XAdd) in its fragment shader — exactly like
+    // desktop. The old "clamps to 640 → black" premise was based on the OOB
+    // copy-loop bug below (now fixed with the downscale), so wide modes are
+    // handled by the Vulkan path here; the CPU RDRAM fallback below is only
+    // reached when Vulkan is disabled.
+    io.cpuScanoutActive = 0;
     const u8* rgba = nullptr;
     u32 width = 0, height = 0;
     vulkan.mapScanoutRead(rgba, width, height);
     if(rgba) {
       screen->setViewport(0, 0, width, height);
+      // [Phobos] Diagnostic: map the CONTENT bounding box of the scanout buffer
+      // (where the non-black pixels are). Tells us if the menu content is
+      // positioned/scaled correctly in the 640-wide output.
+      static u64 viPixCount = 0;
+      if (::ares::n64DebugLoggingEnabled() && viPixCount++ % 60 == 0) {
+        u32 minX = width, maxX = 0, minY = height, maxY = 0, cnt = 0;
+        for(u32 y = 0; y < height; y += 8) {
+          for(u32 x = 0; x < width; x += 8) {
+            u32 p = rgba[(y * width + x) * 4];
+            if(p > 0x20) {
+              cnt++;
+              minX = min(minX, x); maxX = max(maxX, x);
+              minY = min(minY, y); maxY = max(maxY, y);
+            }
+          }
+        }
+        __android_log_print(ANDROID_LOG_INFO, "PhobosVI",
+          "pixbox: w=%u h=%u box=[%u..%u]x[%u..%u] cnt=%u",
+          width, height, minX, maxX, minY, maxY, cnt);
+      }
       for(u32 y : range(height)) {
         auto source = rgba + width * y * sizeof(u32);
         auto target = screen->pixels(1).data() + y * vulkan.outputUpscale * 640;
-        for(u32 x : range(width)) {
-          target[x] = source[x * 4 + 0] << 16 | source[x * 4 + 1] << 8 | source[x * 4 + 2] << 0;
+        // The ares Screen node is fixed at 640 wide. parallel-RDP scanout can
+        // produce WIDER frames (e.g. Rogue Squadron's menu uses a 1024-wide VI
+        // mode — width=1024). The old code copied `width` pixels into the
+        // 640-wide target with a 640 stride → out-of-bounds writes past each
+        // row + garbage/black output. Fix: horizontal downscale (box filter)
+        // from `width` → 640 so every source pixel lands correctly.
+        if(width <= 640) {
+          for(u32 x : range(width)) {
+            target[x] = source[x * 4 + 0] << 16 | source[x * 4 + 1] << 8 | source[x * 4 + 2] << 0;
+          }
+        } else {
+          // Box-filter downscale width→640 (average each source block).
+          const u32 dstW = 640;
+          for(u32 x : range(dstW)) {
+            u32 sx0 = (u64)x * width / dstW;
+            u32 sx1 = max(sx0 + 1, ((u64)(x + 1) * width / dstW));
+            u32 r = 0, g = 0, b = 0, n = 0;
+            for(u32 sx = sx0; sx < sx1; sx++) {
+              r += source[sx * 4 + 0];
+              g += source[sx * 4 + 1];
+              b += source[sx * 4 + 2];
+              n++;
+            }
+            if(n) { r /= n; g /= n; b /= n; }
+            target[x] = r << 16 | g << 8 | b;
+          }
         }
       }
     }
@@ -205,13 +296,66 @@ auto VI::refresh() -> void {
   if(dx0 >= hscan_start) dx0 += 8;
   if(dx1 <  hscan_stop)  dx1 -= 7;
 
-  u32 pitch = vi.io.width;
+  // The scanline stride must be the RDP's FRAMEBUFFER width, not the VI's
+  // display WIDTH register. Rogue Squadron renders 512-wide but sets the VI
+  // WIDTH=1024 (presented scaled to 640 via XScale) — striding by 1024 reads
+  // the wrong rows (black). Fall back to vi.io.width when the RDP hasn't set
+  // a color image yet.
+  u32 pitch = rdp.rdpFramebufferWidth ? (u32)rdp.rdpFramebufferWidth : (u32)vi.io.width;
+  u32 fbBase = rdp.rdpFramebufferAddress ? (u32)rdp.rdpFramebufferAddress : (u32)vi.io.dramAddress;
+  // Mark that the CPU fallback rendered this frame so video() presents the
+  // CPU screen buffer, not the (black) Vulkan scanout for wide modes.
+  io.cpuScanoutActive = 1;
+  // Diagnostic: log mode switches (Rogue Squadron menu UI investigation).
+  static u32 lastLogWidth = 0;
+  if (::ares::n64DebugLoggingEnabled() && vi.io.width != lastLogWidth) {
+    lastLogWidth = vi.io.width;
+    __android_log_print(ANDROID_LOG_INFO, "PhobosVI",
+      "mode: width=%u pitch=%u fbBase=0x%06x dispAddr=0x%06x xscale=%u yscale=%u ysub=%u serrate=%u",
+      (unsigned)vi.io.width, (unsigned)pitch, (unsigned)fbBase,
+      (unsigned)vi.io.dramAddress,
+      (unsigned)vi.io.xscale, (unsigned)vi.io.yscale, (unsigned)vi.io.ysubpixel,
+      (unsigned)vi.io.serrate);
+  }
   if(vi.io.colorDepth == 2) {
     //15bpp
+    // Diagnostic: read actual RDRAM pixels at the RDP framebuffer to see if
+    // the RDP rendered there (non-zero) vs the buffer being empty (black).
+    static u64 cpuDiagCount = 0;
+    if (::ares::n64DebugLoggingEnabled() && cpuDiagCount++ % 60 == 0) {
+      u16 p0 = rdram.ram.read<Half>(fbBase, RBusDevice::VI_DMA);
+      u16 p1 = rdram.ram.read<Half>(fbBase + pitch * 2, RBusDevice::VI_DMA);
+      u16 p2 = rdram.ram.read<Half>(fbBase + pitch * 2 * (240/2), RBusDevice::VI_DMA);
+      // Scan for the brightest pixel in the framebuffer — if any bright
+      // content exists, the RDP rendered the menu and the issue is the copy.
+      u16 maxPix = 0;
+      u32 maxAddr = 0;
+      // [Phobos] Map the content bounding box: where is the non-black content
+      // (Luke/menu) in the framebuffer? Tells us the real layout the VI must
+      // sample — width, height, and horizontal/vertical position.
+      u32 minX = 512, maxX = 0, minY = 480, maxY = 0;
+      u32 count = 0;
+      for(u32 sy = 0; sy < 480; sy += 8) {
+        for(u32 sx = 0; sx < 512; sx += 8) {
+          u16 d = rdram.ram.read<Half>(fbBase + (sy * pitch + sx) * 2, RBusDevice::VI_DMA);
+          if((d & 0x7fff) > 0x20) {  // non-black threshold
+            count++;
+            minX = min(minX, sx); maxX = max(maxX, sx);
+            minY = min(minY, sy); maxY = max(maxY, sy);
+            if((d & 0x7fff) > (maxPix & 0x7fff)) { maxPix = d; maxAddr = (sy * pitch + sx) * 2; }
+          }
+        }
+      }
+      __android_log_print(ANDROID_LOG_INFO, "PhobosVI",
+        "cpu15: addr=0x%06x pitch=%u box=[%u..%u]x[%u..%u] cnt=%u max=%04x@0x%06x",
+        (unsigned)fbBase, (unsigned)pitch,
+        (unsigned)minX, (unsigned)maxX, (unsigned)minY, (unsigned)maxY, (unsigned)count,
+        (unsigned)maxPix, (unsigned)maxAddr);
+    }
     u32 y0 = vi.io.ysubpixel + vi.io.yscale * (dy0 - vi.io.vstart);
     for(i32 dy = dy0; dy < dy1; dy++) {
       if(!io.serrate || (dy & 1) == !io.field) {
-        u32 address = vi.io.dramAddress + (y0 >> 11) * pitch * 2;
+        u32 address = fbBase + (y0 >> 11) * pitch * 2;
         auto line = screen->pixels(1).data() + (dy - vscan_start) * hscan_len;
         u32 x0 = vi.io.xsubpixel + vi.io.xscale * (dx0 - vi.io.hstart);
         for(i32 dx = dx0; dx < dx1; dx++) {

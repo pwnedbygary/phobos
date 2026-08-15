@@ -65,6 +65,11 @@ struct VI : Thread, Memory::RCP<VI> {
     n9  vcounter;
     n1  field;
     n3  leapCounter;
+    // Set when the VI's CPU RDRAM scanout fallback rendered this frame (wide
+    // modes where parallel-RDP clamps to 640 — e.g. Rogue Squadron's 1024
+    // menu). video() uses this to present the CPU-written screen buffer
+    // instead of the (black) Vulkan scanout.
+    n1  cpuScanoutActive;
   } io;
 
   u32 clockFraction;

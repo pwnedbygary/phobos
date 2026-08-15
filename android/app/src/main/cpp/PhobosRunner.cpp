@@ -19,6 +19,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <algorithm>
 
 #include <a26/a26.hpp>
 #include <cv/cv.hpp>
@@ -97,8 +98,17 @@ namespace ares {
   // clean and no per-second core-state reads cost CPU. Toggle ON from Settings
   // (N64 Experimental) or the pause menu when debugging freezes.
   std::atomic<bool> n64DebugLoggingAtomic{false};
+  // Accessor for the ares core files (vi.cpp, rdp_device.cpp) so the
+  // PhobosVI/PhobosRDP diagnostics are gated behind the same toggle.
+  auto n64DebugLoggingEnabled() -> bool { return n64DebugLoggingAtomic.load(); }
   pthread_t emuThread = 0;
   std::atomic<bool> emuThreadRunning{false};
+  // Identity of the CURRENT emulation thread. platform callbacks (audio) must
+  // reject calls from an ABANDONED zombie thread: unloadSystem()'s abandon
+  // path deliberately leaks a stuck emulation thread, and if it later unsticks
+  // it keeps emulating the OLD system — it must never touch the NEW system's
+  // shared audio pipeline (stream registry / ring buffer / AAudio stream).
+  static std::atomic<pthread_t> currentEmuThread{0};
 
   static s32 romFd = -1;
   static s32 secondaryRomFd = -1;
@@ -128,6 +138,26 @@ namespace ares {
   static std::thread audioThread;
   static std::atomic<bool> audioThreadRunning{false};
   static std::atomic<bool> audioThreadStop{false};
+
+  // ── Audio stream registry (lockstep mixing) ────────────────────────────
+  // Ares exposes one Node::Audio::Stream per sound source (Mega Drive:
+  // YM2612 + PSG + CD-DA + PCM; Master System: PSG + YM2413; MSX: PSG +
+  // SCC + tape; etc.). The emulation thread invokes platform->audio(stream)
+  // for whichever stream has pending output, so the host must MIX all
+  // streams sample-aligned — exactly what upstream desktop ares
+  // Program::audio does. Streams register lazily on first sight and are
+  // cleared in unloadSystem() (both the clean and abandon paths). The
+  // registry holds strong refs; audio() copies it under the mutex so a
+  // concurrent clear can't invalidate an in-flight mix.
+  static std::mutex audioStreamsMutex;
+  static std::vector<Node::Audio::Stream> audioStreams;
+  // Bumped whenever the registry changes (stream added / cleared). The
+  // emulation thread caches a snapshot keyed on this, so the hot audio()
+  // path (the ZX ULA fires it millions of times/sec) avoids a mutex lock +
+  // linear scan + heap copy on EVERY call. The emulation thread is the only
+  // audio() caller (zombie gate) and is recreated per load, so the cache is
+  // naturally scoped to one system's stream set.
+  static std::atomic<u64> audioStreamsVersion{0};
 
   static auto audioThreadMain() -> void {
     while (!audioThreadStop.load()) {
@@ -270,8 +300,22 @@ namespace ares {
 
   // ZX gamepad control scheme: maps the gamepad (VirtualGamepad bits) onto
   // keyboard keys for games that don't support Kempston.
-  // 0 = none (Kempston only), 1 = QAOP+Space, 2 = ZXZX+Space.
+  // 0 = none (Kempston only), 1 = QAOP+Space, 2 = ZXZX+Space, 3 = ELITE.
   static std::atomic<s32> zxControlScheme{0};
+  // ZX scheme-translation toggles (Layer 2 — orthogonal to per-core rebinding
+  // which lives at Layer 1: physical input → VirtualGamepad bits).
+  // zxStickToKeys: left-stick cardinal → same D-pad bits the scheme maps, so
+  // the stick drives the scheme keys for ANY ZX game.
+  // zxReversePitch: swap Up↔Down key mapping (aircraft-style: pull back =
+  // pitch up), applies to stick AND d-pad together.
+  static std::atomic<bool> zxStickToKeys{false};
+  static std::atomic<bool> zxReversePitch{false};
+  // Per-key rebind overrides: ZX keyboard label -> gamepad bit. When a key
+  // has an entry here, the ZX scheme path uses it INSTEAD of the built-in
+  // scheme mapping (ELITE/QAOP/ZXZX). Layer 2.5 — sits above the scheme
+  // defaults, below Layer-1 (physical->bit) rebinding. Guarded by
+  // zxKeyboardMutex like the pressed-key sets.
+  static std::map<string, u32> zxKeyBindings;
 
   // Map a VirtualGamepad bit to the ZX keyboard keys for the active scheme.
   // Start -> ENTER is universal (all schemes) since ENTER is used everywhere
@@ -295,12 +339,56 @@ namespace ares {
         if (bit == VirtualGamepad::Right) add("X");
         if (bit == VirtualGamepad::A)     add("SPACE BREAK");
         break;
+      case 3: // ELITE (Flight + Combat) — definitive Firebird 1985 manual layout
+        // Flying: S=Dive, X=Climb, N=Roll Left, M=Roll Right, SPACE=Increase
+        //   speed, SYMBOL SHIFT=Decrease speed, 1-4=Views.
+        // Combat: A=Fire laser, T=Target missile, F=Fire missile, U=Unarm
+        //   missile, E=ECM, W=Energy bomb, Q=Escape capsule.
+        // Nav: H=Hyperspace, J=Torus jump drive, G+H=Intergalactic jump,
+        //   C=Docking computer on/off, D=Distance to system.
+        // Aircraft convention (pull back = climb): Up=S (dive/push forward),
+        //   Down=X (climb/pull back). Reverse Pitch swaps them.
+        // Gamepad mapping (14 inputs, flight-first):
+        if (bit == VirtualGamepad::Up)    add(zxReversePitch.load() ? "X" : "S");
+        if (bit == VirtualGamepad::Down)  add(zxReversePitch.load() ? "S" : "X");
+        if (bit == VirtualGamepad::Left)  add("N");
+        if (bit == VirtualGamepad::Right) add("M");
+        if (bit == VirtualGamepad::A)     add("A");
+        if (bit == VirtualGamepad::B)     add("C");       // Docking computer on/off
+        if (bit == VirtualGamepad::X)     add("SPACE BREAK"); // Increase speed
+        if (bit == VirtualGamepad::Y)     add("SYMBOL SHIFT");
+        if (bit == VirtualGamepad::L1)    add("T");
+        if (bit == VirtualGamepad::R1)    add("U");
+        if (bit == VirtualGamepad::L2)    add("H");
+        if (bit == VirtualGamepad::R2)    add("J");
+        if (bit == VirtualGamepad::Select) add("1");
+        break;
     }
     return keys;
   }
 
   static auto isZxKeyboardSystem(const string& systemName) -> bool {
     return systemName == "ZX Spectrum" || systemName == "ZX Spectrum 128";
+  }
+
+  // True if the button name is one of the ZX keyboard matrix labels. The
+  // matrix has no "Up"/"Down"/"Left"/"Right"/"Fire" — those belong to the
+  // Kempston joystick (and other port devices), so they must read from the
+  // gamepad bitmask, NOT the keyboard-source (otherwise the ZX branch would
+  // zero them every frame → Kempston joystick dead).
+  static auto isZxKeyboardKey(const string& name) -> bool {
+    static const string keys[] = {
+      "CAPS SHIFT", "Z", "X", "C", "V",
+      "A", "S", "D", "F", "G",
+      "Q", "W", "E", "R", "T",
+      "1", "2", "3", "4", "5",
+      "0", "9", "8", "7", "6",
+      "P", "O", "I", "U", "Y",
+      "ENTER", "L", "K", "J", "H",
+      "SPACE BREAK", "SYMBOL SHIFT", "M", "N", "B",
+    };
+    for (auto& k : keys) if (name == k) return true;
+    return false;
   }
 
   static auto resolveButtonBit(const string& nodeName, const string& systemName, bool vertical) -> u32 {
@@ -678,6 +766,7 @@ namespace ares {
         emuThreadRunning = false;
         return nullptr;
     }, (void*)(uintptr_t)gen);
+    currentEmuThread.store(emuThread);
   }
 
   auto setEmulationRunning(bool running) -> void {
@@ -762,10 +851,13 @@ namespace ares {
           }
 
           // Always set the value (resetting if not mapped) to ensure state consistency.
-          // ZX Spectrum / 128 are keyboard-backed: source the value from the on-screen
-          // keyboard set instead of zeroing it (otherwise the core's per-frame
-          // Keyboard::read() would immediately clear an on-screen key press).
-          if (isZxKeyboardSystem(systemName)) {
+          // ZX Spectrum / 128 keyboard-matrix buttons are keyboard-backed: source the
+          // value from the on-screen keyboard set instead of zeroing it (otherwise the
+          // core's per-frame Keyboard::read() would immediately clear an on-screen key
+          // press). Kempston joystick buttons (Up/Down/Left/Right/Fire) are NOT matrix
+          // keys — they must read from the gamepad bitmask, or the ZX branch would zero
+          // them every frame → Kempston joystick dead.
+          if (isZxKeyboardSystem(systemName) && isZxKeyboardKey(button->name())) {
               std::lock_guard<std::mutex> klock(zxKeyboardMutex);
               // Pressed if the on-screen keyboard OR the gamepad scheme holds it.
               button->setValue(zxKeysPressed.count(button->name()) > 0 || zxSchemeKeysPressed.count(button->name()) > 0);
@@ -829,6 +921,11 @@ namespace ares {
 
     auto video(Node::Video::Screen screen, const u32* data, u32 pitch, u32 width, u32 height) -> void override {
       if (width == 0 || height == 0 || isPausedAtomic) return;
+      // NOTE: no currentEmuThread gate here — ares Video::Threaded=true means
+      // this runs on the ares Screen thread, NOT the emulation thread. Gating
+      // on currentEmuThread would reject every frame (black screen regression
+      // 2026-08-14). The Screen thread is per-system and dies with it, so it
+      // cannot become a zombie like the emu thread.
 
       static u64 frameLogCount = 0;
       if (frameLogCount++ % 2000 == 0) {
@@ -878,7 +975,12 @@ namespace ares {
         const u8* vData = nullptr;
         u32 vW = 0, vH = 0;
         #if defined(CORE_N64)
-        if (isN64Vulkan) {
+        if (isN64Vulkan && !::ares::Nintendo64::vi.io.cpuScanoutActive) {
+            // Normal N64 Vulkan scanout. When the VI's CPU fallback rendered
+            // (wide mode — Rogue Squadron's 1024 menu), cpuScanoutActive is
+            // set and we present the CPU-written screen buffer (`data`)
+            // instead of the Vulkan scanout (which parallel-RDP clamps to 640
+            // → black).
             ::ares::Nintendo64::vulkan.mapScanoutRead(vData, vW, vH);
         }
         #endif
@@ -904,7 +1006,7 @@ namespace ares {
                     lastFrameBuffer[y * width + x] = ap;
                 }
             }
-        } else if (isN64Vulkan) {
+        } else if (isN64Vulkan && !::ares::Nintendo64::vi.io.cpuScanoutActive) {
             // Direct SIMD NEON vectorized copy from Vulkan RGBA to Android ABGR.
             // vData can be null when the scanout fence timed out in
             // mapScanoutRead() — but mapScanoutRead() still acquired
@@ -912,6 +1014,8 @@ namespace ares {
             // cases, otherwise the screen thread leaks vulkan.mutex forever and
             // the emulation thread blocks in scanoutAsync → run() never
             // returns → black screen after reset. This was the N64 reset hang.
+            // When the VI's CPU fallback rendered (wide mode), we present the
+            // CPU `data` buffer via the else branch below instead.
             if (vData) {
                 u32 copyW = std::min(width, vW);
                 u32 copyH = std::min(height, vH);
@@ -973,9 +1077,14 @@ namespace ares {
 
     auto audio(Node::Audio::Stream stream) -> void override {
       if (isPausedAtomic) return;
+      // Reject audio from an abandoned zombie emulation thread (see
+      // currentEmuThread): after the abandon path leaks a stuck thread, it may
+      // later resume and keep emulating the OLD system. It must not register
+      // streams, mix, or push samples into the NEW system's pipeline.
+      if (pthread_self() != currentEmuThread.load()) return;
 
       {
-        std::lock_guard<std::mutex> lock(audioMutex);
+        std::unique_lock<std::mutex> lock(audioMutex);
         if (!audioStream) {
           AAudioStreamBuilder* builder;
           AAudio_createStreamBuilder(&builder);
@@ -1002,26 +1111,129 @@ namespace ares {
             }
             AAudioStream_requestStart(audioStream);
           }
-          if (!audioThreadRunning.load()) {
-            audioThreadStop.store(false);
-            audioThread = std::thread(audioThreadMain);
-            audioThreadRunning.store(true);
-          }
         }
       }
+      // Restart the audio thread if it was stopped (unloadSystem stops it).
+      // This MUST be outside the `if (!audioStream)` block: with stream-reuse
+      // across loads, audioStream stays non-null, so the open block (which
+      // used to spawn the thread) is skipped — without this, the audio thread
+      // never restarts → NO SOUND in any core after the first load (regression
+      // 2026-08-14).
+      if (!audioThreadRunning.load()) {
+        audioThreadStop.store(false);
+        audioThread = std::thread(audioThreadMain);
+        audioThreadRunning.store(true);
+      }
 
-      // Push samples into the audio ring buffer (O(1), fixed ~125ms cap).
-      // Never blocks; oldest samples are overwritten when the emulator
-      // out-produces the DAC so a fast-forward burst can't leave a backlog.
+      // Push MIXED samples into the audio ring buffer (O(1), fixed ~125ms
+      // cap). Never blocks; oldest samples are overwritten when the
+      // emulator out-produces the DAC so a fast-forward burst can't leave
+      // a backlog. Cores expose one stream per sound source; the emulation
+      // thread calls this for whichever stream just produced output, so we
+      // must MIX all streams sample-aligned — draining a single stream
+      // unmixed is what garbled Mega Drive/CD audio (each stream's pending
+      // block was appended sequentially instead of summed).
       if (audioStream) {
+        // Thread-local snapshot cache keyed on audioStreamsVersion. The
+        // emulation thread is the only audio() caller and is recreated per
+        // load, so the cache is naturally scoped to one system's stream set.
+        // This removes the per-call mutex lock + linear scan + heap copy that
+        // the ZX ULA (firing audio() millions of times/sec) was paying — the
+        // source of the remaining ~1 FPS of fat.
+        thread_local u64 cachedAudioVersion = 0;
+        thread_local std::vector<Node::Audio::Stream> cachedStreams;
+        u64 ver = audioStreamsVersion.load(std::memory_order_acquire);
+        if (ver != cachedAudioVersion) {
+          std::lock_guard<std::mutex> lock(audioStreamsMutex);
+          cachedStreams = audioStreams;
+          cachedAudioVersion = ver;
+        }
+
+        // Register this stream on first sight (rare — once per stream per
+        // load). Only touches the registry when the cached snapshot doesn't
+        // contain it, so the hot path stays lock-free.
+        bool known = false;
+        for (auto& s : cachedStreams) { if (s == stream) { known = true; break; } }
+        if (!known) {
+          std::lock_guard<std::mutex> lock(audioStreamsMutex);
+          bool stillUnknown = true;
+          for (auto& s : audioStreams) { if (s == stream) { stillUnknown = false; break; } }
+          if (stillUnknown) {
+            audioStreams.push_back(stream);
+            LOGI("Audio: registered stream '%s' (ch=%u, %.0fHz) — %zu total",
+                 (const char*)stream->name(), stream->channels(),
+                 stream->frequency(), audioStreams.size());
+            audioStreamsVersion.fetch_add(1, std::memory_order_release);
+          }
+          // Refresh the local snapshot so subsequent calls use it directly.
+          cachedStreams = audioStreams;
+          cachedAudioVersion = audioStreamsVersion.load(std::memory_order_acquire);
+        }
+
+        // Fast path: single stream — drain it directly into the ring (no
+        // lockstep, no clamp). This is the common case for single-stream cores
+        // (N64, GBA, PS1, GB/GBC...) and avoids all mixing overhead.
+        if (cachedStreams.size() == 1) {
+          thread_local std::vector<f32> localBuffer;
+          localBuffer.clear();
+          f64 samples[2];
+          while (stream->pending()) {
+            u32 channels = stream->read(samples);
+            if (channels == 1) {
+              localBuffer.push_back((f32)samples[0]);
+              localBuffer.push_back((f32)samples[0]);
+            } else {
+              localBuffer.push_back((f32)samples[0]);
+              localBuffer.push_back((f32)samples[1]);
+            }
+          }
+          if (!localBuffer.empty()) {
+            if (muteAudioAtomic) std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
+            std::lock_guard<std::mutex> lock(audioMutex);
+            if (audioRing.empty()) audioRing.resize(audioRingCapacity);
+            for (f32 s : localBuffer) {
+              audioRing[(audioRingHead + audioRingSize) % audioRingCapacity] = s;
+              if (audioRingSize < audioRingCapacity) audioRingSize++;
+              else audioRingHead = (audioRingHead + 1) % audioRingCapacity;
+            }
+            audioCV.notify_one();
+          }
+          return;
+        }
+
+        // Multi-stream: lockstep mix using the cached snapshot (no copy).
         thread_local std::vector<f32> localBuffer;
         localBuffer.clear();
 
-        f64 samples[2];
-        while (stream->pending()) {
-          stream->read(samples);
-          localBuffer.push_back((f32)samples[0]);
-          localBuffer.push_back((f32)samples[1]);
+        // Lockstep mixing (mirrors upstream desktop ares Program::audio):
+        // emit one output frame only when EVERY stream has a pending frame;
+        // read one frame from each and sum (mono is duplicated to both
+        // channels). All streams resample to 48kHz, so they stay aligned.
+        // Bounded at 8192 frames/call so a pathological backlog can never
+        // stall the emulation thread inside audio() for an unbounded time.
+        u32 drained = 0;
+        while (drained < 8192) {
+          bool allPending = true;
+          for (auto& s : cachedStreams) {
+            if (!s->pending()) { allPending = false; break; }
+          }
+          if (!allPending) break;
+
+          f64 sample[2] = {0.0, 0.0};
+          f64 buffer[2];
+          for (auto& s : cachedStreams) {
+            u32 channels = s->read(buffer);
+            if (channels == 1) {
+              sample[0] += buffer[0];
+              sample[1] += buffer[0];
+            } else {
+              sample[0] += buffer[0];
+              sample[1] += buffer[1];
+            }
+          }
+          localBuffer.push_back((f32)std::clamp(sample[0], -1.0, 1.0));
+          localBuffer.push_back((f32)std::clamp(sample[1], -1.0, 1.0));
+          drained++;
         }
 
         if (!localBuffer.empty()) {
@@ -1352,13 +1564,17 @@ namespace ares {
       if (audioThread.joinable()) audioThread.join();
       audioThreadRunning.store(false);
     }
+    // Keep the AAudio stream ALIVE across unload/load (do NOT close it here).
+    // Closing + immediately reopening (e.g. quit a hung ZX 128K → reload)
+    // corrupts AAudio's internal DefaultDispatch thread → SIGSEGV 0x80. The
+    // stream is reused on the next load; audio() sees it non-null and skips
+    // the open path. Only the audio THREAD is stopped (so no drain while the
+    // menu shows). The stream is closed in the abandon path / process teardown.
     {
       std::lock_guard<std::mutex> lock(audioMutex);
-      if (audioStream) {
-        AAudioStream_requestStop(audioStream);
-        AAudioStream_close(audioStream);
-        audioStream = nullptr;
-      }
+      // Clear the ring so stale samples don't pop on the next load.
+      audioRingHead = 0;
+      audioRingSize = 0;
     }
 
     // Tell the emulation thread to stop and wait for it to release runMutex.
@@ -1416,8 +1632,37 @@ namespace ares {
       player1PakDir.reset();
       rumbleState.store(false);
       lastRumbleOnTime = {};
+      {
+        std::lock_guard<std::mutex> lock(audioStreamsMutex);
+        audioStreams.clear();
+        audioStreamsVersion.fetch_add(1, std::memory_order_release);
+      }
+      // Abandon path: the zombie may still hold the AAudio stream. Close it so
+      // the next load starts fresh — the zombie's audio() calls are gated by
+      // currentEmuThread (now 0) and the stream pointer is nulled. After
+      // close(), AAudio's internal DefaultDispatch thread is still winding
+      // down asynchronously; wait for its state to reach a terminal state so
+      // the next load's open() can't race a live dispatch thread (the SIGSEGV
+      // 0x80 on a fresh load after a quit).
+      {
+        std::lock_guard<std::mutex> lock(audioMutex);
+        if (audioStream) {
+          AAudioStream* oldStream = audioStream;
+          AAudioStream_requestStop(oldStream);
+          AAudioStream_close(oldStream);
+          audioStream = nullptr;
+          // Bounded wait for AAudio teardown (dispatch thread exit).
+          constexpr int kMaxWaitMs = 300;
+          for (int i = 0; i < kMaxWaitMs; i += 10) {
+            aaudio_stream_state_t st = AAudioStream_getState(oldStream);
+            if (st == AAUDIO_STREAM_STATE_UNINITIALIZED || st == AAUDIO_STREAM_STATE_CLOSED) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+        }
+      }
       emuThread = 0;
       emuThreadRunning = false;
+      currentEmuThread.store(0);
       LOGI("System abandoned (thread stuck)");
       return;
     }
@@ -1490,6 +1735,15 @@ namespace ares {
         }
         root->unload();
         root.reset();
+
+        // No more audio() callbacks can arrive once the core is unloaded
+        // (unloadSystem() set isPausedAtomic=true first). Drop the stream
+        // registry so the next system starts with a clean mix.
+        {
+          std::lock_guard<std::mutex> lock(audioStreamsMutex);
+          audioStreams.clear();
+          audioStreamsVersion.fetch_add(1, std::memory_order_release);
+        }
 
         // Export the N64 Controller Pak: System::unload() → save() flushed
         // Gamepad::save() (Controller Pak RAM) into player1PakDir.
@@ -1851,6 +2105,53 @@ else if (port->type() == "Keyboard") {
                 else if (romBuffer.size() >= 4 && memcmp(romBuffer.data(), "RIFF", 4) == 0) aresExt = "wav";
                 else aresExt = "tap";
                 LOGI("MIA: ZX Spectrum zip content sniffed as .%s", (const char*)aresExt);
+
+                // 48K vs 128K model detection by CONTENT, not filename (the
+                // Library merged the two ZX entries, so a bare "ZX Spectrum"
+                // load must pick the right model). TAP blocks are
+                // [len_lo][len_hi][flag][data...]; a header block (flag==0x00)
+                // has data[0] = type: 0x00=program, 0x03=bytes/screen,
+                // 0x04=microdrive. 128K tapes typically carry a program header
+                // whose NAME (data[1..10]) contains "128", and/or a bytes
+                // (0x03) screen header + a separate 128K loader. We treat the
+                // tape as 128K if ANY header block's name contains "128" or
+                // the first data block is a 0x03 bytes header (screen$ loader
+                // pattern is 128K-era). Fall back to filename if content is
+                // inconclusive.
+                if (identifiedSystem == "ZX Spectrum") {
+                    bool is128 = false;
+                    if (aresExt == "tap" && romBuffer.size() >= 4) {
+                        size_t off = 0;
+                        // First block's length (TAP is little-endian 16-bit).
+                        if (romBuffer.size() >= 2) {
+                            size_t blockLen = romBuffer[0] | (romBuffer[1] << 8);
+                            size_t dataStart = 2;
+                            size_t dataEnd = dataStart + blockLen;
+                            if (blockLen >= 2 && dataEnd <= romBuffer.size()) {
+                                u8 flag = romBuffer[dataStart];
+                                if (flag == 0x00 && blockLen >= 11) {
+                                    u8 type = romBuffer[dataStart + 1];
+                                    char name[11] = {};
+                                    memcpy(name, romBuffer.data() + dataStart + 2, 10);
+                                    if (type == 0x03) is128 = true;  // bytes/screen header
+                                    if (strstr(name, "128")) is128 = true;
+                                }
+                            }
+                        }
+                    }
+                    if (!is128) {
+                        // Filename fallback (standard convention).
+                        string lower = romName;
+                        lower = lower.downcase();
+                        if (lower.find("128")) is128 = true;  // nall find: truthy = found
+                    }
+                    if (is128) {
+                        identifiedSystem = "ZX Spectrum 128";
+                        LOGI("ZX: tape detected as 128K (content/filename)");
+                    } else {
+                        LOGI("ZX: tape detected as 48K");
+                    }
+                }
             }
 
             string rawRomPath = string{tempFilePath, "/phobos_rom_raw.", aresExt};
@@ -1860,6 +2161,62 @@ else if (port->type() == "Keyboard") {
         } else {
             LOGW("MIA: ZIP extraction returned empty buffer");
         }
+    }
+
+    // Non-ZIP ZX files (raw .tap/.tzx/.wav): run the same 48K/128K content
+    // detection so raw 128K tapes are gated too (not just zipped ones). TAP
+    // header block: [len_lo][len_hi][flag][data...]; header (flag==0) has
+    // data[0]=type (0x03=bytes/screen → 128K-era) and data[1..10]=name
+    // ("128" in the loader name → 128K). Filename fallback for TZX/WAV.
+    if (identifiedSystem == "ZX Spectrum" && extension != "zip") {
+        bool is128 = false;
+        auto raw = nall::file::read(loadPath);
+        if (raw.size() >= 4 && loadPath.iendsWith(".tap")) {
+            size_t blockLen = raw[0] | (raw[1] << 8);
+            size_t dataStart = 2;
+            if (blockLen >= 2 && dataStart + blockLen <= raw.size()) {
+                u8 flag = raw[dataStart];
+                if (flag == 0x00 && blockLen >= 11) {
+                    u8 type = raw[dataStart + 1];
+                    char name[11] = {};
+                    memcpy(name, raw.data() + dataStart + 2, 10);
+                    if (type == 0x03) is128 = true;
+                    if (strstr(name, "128")) is128 = true;
+                }
+            }
+        }
+        if (!is128) {
+            string lower = romName;
+            lower = lower.downcase();
+            if (lower.find("128")) is128 = true;
+        }
+        if (is128) {
+            identifiedSystem = "ZX Spectrum 128";
+            LOGI("ZX: raw tape detected as 128K (content/filename)");
+        } else {
+            LOGI("ZX: raw tape detected as 48K");
+        }
+    }
+
+    // ── BROKEN-CORE GATE ───────────────────────────────────────────────────
+    // Systems that load but produce NO frames (black screen / 0 FPS) due to the
+    // ARM64/libco co-routine scheduler issue (Task 10c/10a joint investigation).
+    // Fail the load cleanly BEFORE any core/thread/audio setup — no emulation
+    // thread is spawned, so no hang / zombie / crash. Kotlin shows a popup
+    // ("<System> Unsupported") and returns to the library. Remove entries once
+    // the underlying core is fixed.
+    //   - ZX Spectrum 128: PSG co-routine desyncs the scheduler.
+    //   - PC Engine / PC Engine CD / SuperGrafx: PCE loads but scheduler
+    //     co_switch never returns (VDP hsync/vsync chain).
+    //   - Neo Geo (MVS/AES): loads, BIOS OK, black screen, 0 FPS.
+    if (identifiedSystem == "ZX Spectrum 128" ||
+        identifiedSystem == "PC Engine" ||
+        identifiedSystem == "PC Engine CD" ||
+        identifiedSystem == "SuperGrafx" ||
+        identifiedSystem == "Neo Geo") {
+        LOGE("%s: unsupported (scheduler hang) — refusing to load", (const char*)identifiedSystem);
+        currentMedium.reset();
+        return false;
     }
 
     auto loadResult = currentMedium->load(loadPath);
@@ -2356,16 +2713,49 @@ else if (port->type() == "Keyboard") {
       inputState.buttons = buttons;
 
       // ZX gamepad control scheme: translate the gamepad bitmask into
-      // keyboard keys for the active scheme (QAOP / ZXZX). Updated every
-      // setInput so the keyboard path sources scheme presses alongside the
-      // on-screen keyboard.
+      // keyboard keys for the active scheme (QAOP / ZXZX / ELITE). Updated
+      // every setInput so the keyboard path sources scheme presses alongside
+      // the on-screen keyboard. When zxStickToKeys is on, the left stick's
+      // cardinal directions are OR'd in as D-pad bits first, so the stick
+      // drives the SAME scheme keys as the D-pad (and reverse pitch applies
+      // to both). inputState.buttons keeps the ORIGINAL mask — stick-derived
+      // keys are scheme-only, never exposed to other systems.
       if (isZxKeyboardSystem(root ? root->name() : "")) {
           s32 scheme = zxControlScheme.load();
+          u32 effButtons = (u32)buttons;
+          if (zxStickToKeys.load()) {
+              // Left stick cardinal -> D-pad bits (Up=1<<0, Down=1<<1,
+              // Left=1<<2, Right=1<<3). Android AXIS_Y is negative when
+              // pushed up; threshold matches the ~50% hysteresis press.
+              if (ly < -0.5f) effButtons |= VirtualGamepad::Up;
+              if (ly >  0.5f) effButtons |= VirtualGamepad::Down;
+              if (lx < -0.5f) effButtons |= VirtualGamepad::Left;
+              if (lx >  0.5f) effButtons |= VirtualGamepad::Right;
+          }
           std::set<string> schemeKeys;
           if (scheme != 0) {
-              for (u32 bit = 1; bit; bit <<= 1) {
-                  if (!(buttons & bit)) continue;
-                  for (auto& key : zxSchemeKeys(bit, scheme)) schemeKeys.insert(key);
+              // Scheme 4 = CUSTOM: the per-key rebind map IS the scheme (plus
+              // Start->ENTER universal). Presets 1/2/3 ignore the map entirely
+              // so QAOP/ZXZX/ELITE stay pristine — rebinds only take effect in
+              // CUSTOM mode, keeping the state obvious from the scheme label.
+              if (scheme == 4) {
+                  std::map<string, u32> overrides;
+                  {
+                      std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+                      overrides = zxKeyBindings;
+                  }
+                  for (u32 bit = 1; bit; bit <<= 1) {
+                      if (!(effButtons & bit)) continue;
+                      if (bit == VirtualGamepad::Start) { schemeKeys.insert("ENTER"); continue; }
+                      for (auto& [key, bindBit] : overrides) {
+                          if (bindBit == bit) { schemeKeys.insert(key); break; }
+                      }
+                  }
+              } else {
+                  for (u32 bit = 1; bit; bit <<= 1) {
+                      if (!(effButtons & bit)) continue;
+                      for (auto& key : zxSchemeKeys(bit, scheme)) schemeKeys.insert(key);
+                  }
               }
           }
           {
@@ -2375,10 +2765,77 @@ else if (port->type() == "Keyboard") {
       }
   }
 
-  // ZX gamepad control scheme setter (0 = Kempston, 1 = QAOP, 2 = ZXZX).
+  // ZX scheme-translation toggles (Layer 2 — orthogonal to per-core rebinding).
+  auto setZxStickToKeys(bool enabled) -> void {
+      zxStickToKeys = enabled;
+      LOGI("ZX stick-to-keys set to %d", (int)enabled);
+  }
+
+  auto setZxReversePitch(bool enabled) -> void {
+      zxReversePitch = enabled;
+      LOGI("ZX reverse pitch set to %d", (int)enabled);
+  }
+
+  // Per-key rebind: bind ZX keyboard key `label` to gamepad bit `bit`
+  // (0 = clear). Takes effect immediately on the next setInput.
+  auto setZxKeyBinding(const char* label, s32 bit) -> void {
+      if (!label) return;
+      std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+      if (bit == 0) {
+          zxKeyBindings.erase(label);
+          LOGI("ZX key binding cleared: %s", label);
+      } else {
+          zxKeyBindings[label] = (u32)bit;
+          LOGI("ZX key binding set: %s -> bit %d", label, (int)bit);
+      }
+  }
+
+  // ZX gamepad control scheme setter
+  // (0 = Kempston, 1 = QAOP, 2 = ZXZX, 3 = ELITE, 4 = CUSTOM).
   auto setZxControlScheme(s32 scheme) -> void {
       zxControlScheme = scheme;
       LOGI("ZX control scheme set to %d", scheme);
+  }
+
+  // Mute the ZX tape's Audio stream (the raw EAR waveform — the loud screech
+  // while LOAD "" plays). The GAME still receives the EAR bit via
+  // TapeDeck::read() (independent of the audio stream), so loading is
+  // unaffected — only the speaker output is silenced. On unmute the stream
+  // resumes normally. Find the tape node's child Audio::Stream and setMuted().
+  // Sticky: remembers the desired state so it applies even when the tape node
+  // doesn't exist yet (loadRom pushes this BEFORE connectDevices creates the
+  // tape) — applyZxTapeMuted() re-applies it whenever a tape connects.
+  static std::atomic<bool> zxTapeMutedState{false};
+  auto applyZxTapeMuted() -> void {
+    if (!root || !isZxKeyboardSystem(root->name())) return;
+    auto tapes = root->find<Node::Tape>();
+    if (tapes.empty()) return;
+    auto tapeNode = tapes[0];
+    auto streams = tapeNode->find<Node::Audio::Stream>();
+    if (streams.empty()) return;
+    streams[0]->setMuted(zxTapeMutedState.load());
+  }
+  auto setZxTapeMuted(bool muted) -> void {
+    zxTapeMutedState = muted;
+    applyZxTapeMuted();
+    LOGI("ZXTape: audio %s", muted ? "muted" : "unmuted");
+  }
+
+  // Tape progress for the loading UI: returns 0..10000 (percent*100) while the
+  // tape is PLAYING, or -1 when not playing / no tape. The UI hides the bar
+  // whenever this is < 0, so a finished tape (playing()==false) correctly hides
+  // the bar instead of showing a stuck 0%.
+  auto getZxTapeProgress() -> s32 {
+    if (!root || !isZxKeyboardSystem(root->name())) return -1;
+    auto tapes = root->find<Node::Tape>();
+    if (tapes.empty()) return -1;
+    auto tape = tapes[0];
+    if (!tape->playing()) return -1;
+    u64 length = tape->length();
+    if (length == 0) return -1;
+    u64 position = tape->position();
+    u64 pct = position * 10000 / length;
+    return (s32)pct;
   }
 
   // ZX Spectrum (and other keyboard-based cores): press/release a keyboard
@@ -2538,6 +2995,34 @@ else if (port->type() == "Keyboard") {
         return false;
     }
     #endif
+
+    // PS1 multi-disc swap: the Disc Tray is hot-swappable (ares mounts on
+    // tray->connect()). Replace currentMedium with the newly-loaded disc and
+    // re-connect the tray — the core re-reads cd.rom + TOC from the new pak.
+    // No full reload — the console stays running and the game sees the new
+    // disc (multi-disc games poll for a change). This is the fix for the old
+    // "Change Disc" button, which only ran connectDevices() and never mounted
+    // the new disc.
+    if (root && systemName == "PlayStation") {
+        currentMedium = secondaryMedium;
+        auto discTray = root->find<Node::Port>("Disc Tray");
+        if (discTray) {
+            isPausedAtomic = true;
+            fastForwardAtomic = false;
+            // Disconnect (ejects the current disc), then re-allocate + connect
+            // so the core re-reads cd.rom + TOC from the new medium's pak.
+            // Disc::connect() expects cd (the peripheral) to exist, so allocate
+            // recreates it before connect.
+            discTray->disconnect();
+            discTray->allocate("PlayStation Disc");
+            discTray->connect();
+            isPausedAtomic = false;
+            LOGI("PS1: disc swapped to %s", (const char*)secondaryMedium->name());
+            return true;
+        }
+        LOGE("PS1: Disc Tray not found — cannot swap");
+        return false;
+    }
 
     if (root) {
         connectDevices(root); // Refresh ports to attach new medium

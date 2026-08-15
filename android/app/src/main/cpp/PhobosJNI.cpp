@@ -239,6 +239,35 @@ Java_com_phobos_emulator_PhobosCore_setZxControlScheme(JNIEnv* env, jobject, jin
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setZxStickToKeys(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setZxStickToKeys(enabled);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setZxReversePitch(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setZxReversePitch(enabled);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setZxKeyBinding(JNIEnv* env, jobject, jstring label, jint bit) {
+    const char* cstr = env->GetStringUTFChars(label, nullptr);
+    if (cstr) {
+        ares::setZxKeyBinding(cstr, bit);
+        env->ReleaseStringUTFChars(label, cstr);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setZxTapeMuted(JNIEnv* env, jobject, jboolean muted) {
+    ares::setZxTapeMuted(muted);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_phobos_emulator_PhobosCore_getZxTapeProgress(JNIEnv* env, jobject) {
+    return (jint)ares::getZxTapeProgress();
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64ExpansionPak(JNIEnv* env, jobject, jboolean enabled) {
     ares::setN64ExpansionPak(enabled);
 }

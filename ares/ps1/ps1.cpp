@@ -1,4 +1,7 @@
 #include <ares/ares.hpp>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 #include "ps1.hpp"
 
 //started: 2020-06-17

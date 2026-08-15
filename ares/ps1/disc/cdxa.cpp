@@ -5,6 +5,15 @@ auto Disc::CDXA::load(Node::Object parent) -> void {
 //stream->setResamplerFrequency(44100);
 }
 
+// CD-XA diagnostics (Phobos Android only): bounded per-second counters to
+// answer "is the FMV CD-XA chain alive?" without flooding the log.
+#if defined(__ANDROID__)
+static u64 cdxaSectorCount = 0;
+static u64 cdxaSampleCount = 0;
+static u64 cdxaLastLogSector = 0;
+static u64 cdxaLastLogSample = 0;
+#endif
+
 auto Disc::CDXA::unload(Node::Object parent) -> void {
 //parent->remove(stream);
 //stream.reset();
@@ -32,6 +41,17 @@ auto Disc::CDXA::clockSector() -> void {
   if(stereo == 1 && bitsPerSample == 4) decodeADPCM<1, 0>(halfSampleRate);
   if(stereo == 1 && bitsPerSample == 8) decodeADPCM<1, 1>(halfSampleRate);
 
+#if defined(__ANDROID__)
+  cdxaSectorCount++;
+  if(cdxaSectorCount - cdxaLastLogSector >= 75) {  //~1s at 75 sectors/s
+    cdxaLastLogSector = cdxaSectorCount;
+    __android_log_print(ANDROID_LOG_INFO, "PhobosCDXA",
+      "sector: subMode=%02x coding=%02x stereo=%d halfRate=%d bits=%d monaural=%d",
+      (int)subMode, (int)codingInfo, (int)stereo, (int)halfSampleRate,
+      (int)bitsPerSample, (int)monaural);
+  }
+#endif
+
   monaural = !stereo;
 }
 
@@ -54,6 +74,18 @@ auto Disc::CDXA::clockSample() -> void {
     sample.left  = sclamp<16>(left * self.audio.volume[0] >> 7) + sclamp<16>(right * self.audio.volume[2] >> 7);
     sample.right = sclamp<16>(left * self.audio.volume[1] >> 7) + sclamp<16>(right * self.audio.volume[3] >> 7);
   }
+
+#if defined(__ANDROID__)
+  cdxaSampleCount++;
+  if(cdxaSampleCount - cdxaLastLogSample >= 37800) {  //~1s at 37.8kHz
+    cdxaLastLogSample = cdxaSampleCount;
+    __android_log_print(ANDROID_LOG_INFO, "PhobosCDXA",
+      "sample: l=%d r=%d mono=%d mute=%d muteADPCM=%d cdaudio.enable=%d",
+      (int)sample.left, (int)sample.right, (int)monaural,
+      (int)self.audio.mute, (int)self.audio.muteADPCM,
+      (int)spu.cdaudio.enable);
+  }
+#endif
 
 //stream->sample(sample.left / 32768.0, sample.right / 32768.0);
 }

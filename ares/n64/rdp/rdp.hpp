@@ -355,6 +355,14 @@ struct RDP : Thread, Memory::RCP<RDP> {
   } io{*this};
 
   n1 mapIdentityWarned;
+
+  // RDP framebuffer state captured from SET_COLOR_IMAGE (used by the VI's CPU
+  // scanout fallback). The RDP framebuffer width can differ from the VI's
+  // WIDTH register (e.g. Rogue Squadron renders 512-wide, VI presents 640-wide
+  // via XScale with WIDTH=1024) — the VI must stride by the RDP width, not the
+  // display width, or it reads the wrong rows (black).
+  u32 rdpFramebufferWidth  = 0;
+  u32 rdpFramebufferAddress = 0;
 };
 
 extern RDP rdp;

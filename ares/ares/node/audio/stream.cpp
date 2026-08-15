@@ -19,13 +19,23 @@ auto Stream::setResamplerFrequency(f64 resamplerFrequency) -> void {
   if(_frequency >= _resamplerFrequency * 2) {
     //add a low-pass filter to prevent aliasing during resampling
     f64 cutoffFrequency = min(25000.0, _resamplerFrequency / 2.0 - 2000.0);
-    for(auto& channel : _channels) {
-      u32 passes = 3;
-      for(u32 pass : range(passes)) {
-        DSP::IIR::Biquad filter;
-        f64 q = DSP::IIR::Biquad::butterworth(passes * 2, pass);
-        filter.reset(DSP::IIR::Biquad::Type::LowPass, cutoffFrequency, _frequency, q);
-        channel.nyquist.push_back(filter);
+
+    // Skip the anti-alias biquad cascade for EXTREME input rates (e.g. the
+    // ZX Spectrum ULA at ~3.5MHz): at that ratio the 3-pass biquad filter is
+    // pure overhead (millions of biquad ops/sec on the emulation thread — the
+    // source of the ZX CPU churn / fan spin), and the cubic resampler already
+    // handles the ratio. Only add the filter for rates up to a sane multiple
+    // (e.g. 16x) where aliasing is actually audible.
+    constexpr f64 kMaxAntiAliasRatio = 16.0;
+    if(_frequency / _resamplerFrequency <= kMaxAntiAliasRatio) {
+      for(auto& channel : _channels) {
+        u32 passes = 3;
+        for(u32 pass : range(passes)) {
+          DSP::IIR::Biquad filter;
+          f64 q = DSP::IIR::Biquad::butterworth(passes * 2, pass);
+          filter.reset(DSP::IIR::Biquad::Type::LowPass, cutoffFrequency, _frequency, q);
+          channel.nyquist.push_back(filter);
+        }
       }
     }
   }

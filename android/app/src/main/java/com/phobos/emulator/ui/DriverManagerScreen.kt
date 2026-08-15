@@ -22,6 +22,9 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val context = LocalContext.current
 
+    // File picker: pick a single driver file (.so, .zip, .adpkg). We use
+    // OpenDocument with */* so all files show (the MIME filter hid some zips).
+    // installCustomDriver resolves the real filename via DISPLAY_NAME.
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             viewModel.installCustomDriver(context, uri)
@@ -40,7 +43,7 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { launcher.launch(arrayOf("application/zip", "application/x-zip-compressed")) }) {
+            FloatingActionButton(onClick = { launcher.launch(arrayOf("*/*")) }) {
                 Icon(Icons.Default.Add, contentDescription = "Install Driver")
             }
         }
