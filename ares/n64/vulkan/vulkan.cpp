@@ -1,6 +1,11 @@
 #include <n64/n64.hpp>
 #include <chrono>
 
+// Gated by the Phobos "N64 Debug Logging" toggle (defined in PhobosRunner.cpp).
+namespace ares {
+auto n64DebugLoggingEnabled() -> bool;
+}
+
 namespace ares::Nintendo64 {
 
 Vulkan vulkan;
@@ -323,8 +328,11 @@ auto Vulkan::scanoutAsync(bool field) -> bool {
           "Vulkan::scanoutAsync: previous scanout fence timed out; dropping stale frame");
     }
   }
+  // Gated behind the N64 Debug Logging toggle (consistent with all other
+  // Phobos diag) — 1 log per 300 scanouts when enabled.
   static int scanoutCountLog = 0;
-  if (++scanoutCountLog % 300 == 0) __android_log_print(ANDROID_LOG_DEBUG, "PhobosVulkan", "Vulkan::scanoutAsync triggered");
+  if (::ares::n64DebugLoggingEnabled() && ++scanoutCountLog % 300 == 0)
+    __android_log_print(ANDROID_LOG_DEBUG, "PhobosVulkan", "Vulkan::scanoutAsync triggered");
   implementation->processor->scanout_async_buffer(implementation->scanout, options);
   implementation->scanoutCount++;
   return true;

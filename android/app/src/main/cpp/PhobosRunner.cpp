@@ -683,13 +683,24 @@ namespace ares {
                     auto& piIo      = ::ares::Nintendo64::pi.io;
                     auto& aiIo      = ::ares::Nintendo64::ai.io;
                     auto& viIo      = ::ares::Nintendo64::vi.io;
+                    // [Phobos diag] Disassemble the instructions at the spin
+                    // PC so we can see WHAT the guest is polling (RSP status?
+                    // RDP status? a memory flag?). PC is a u64 (sign-extended
+                    // KSEG0); mask to 32-bit for the disassembler.
+                    auto pc32 = (u32)pc;
+                    string disasm;
+                    for (int i = 0; i < 4; i++) {
+                        u32 insn = (u32)::ares::Nintendo64::cpu.readDebug<::ares::Nintendo64::Word>(pc32 + i * 4);
+                        string text = ::ares::Nintendo64::cpu.disassembler.disassemble(pc32 + i * 4, insn);
+                        disasm.append("\n  ["); disasm.append(hex(pc32 + i * 4, 8L)); disasm.append("] "); disasm.append(text);
+                    }
                     LOGW("%s: PC=0x%08llx jittable=%d FPS=%.1f mask=%02x pend=%02x "
                          "IE=%d EXL=%d ERL=%d exc=%d clock=%lld thr=%u "
                          "rsp(halt=%d broken=%d dmaBusy=%d dmaFull=%d) "
                          "rdp(pipe=%d buf=%d crash=%d frz=%d cur=%d end=%d) "
                          "si(dmaBusy=%d ioBusy=%d pend=%d) pi(dmaBusy=%d ioBusy=%d "
                          "latch=%d) ai(dmaCnt=%d dmaEn=%d) vi(vc=%d fld=%d) "
-                         "queue(next=%d)",
+                         "queue(next=%d)%s",
                          tag, (unsigned long long)pc, (int)jittable, (double)currentFps,
                          (int)status.interruptMask, (int)cause.interruptPending,
                          (int)status.interruptEnable, (int)status.exceptionLevel,
@@ -705,7 +716,8 @@ namespace ares {
                          (int)piIo.dmaBusy, (int)piIo.ioBusy, (int)piIo.busLatch,
                          (int)aiIo.dmaCount, (int)aiIo.dmaEnable,
                          (int)viIo.vcounter, (int)viIo.field,
-                         (int)::ares::Nintendo64::queue.timeToNextEvent());
+                         (int)::ares::Nintendo64::queue.timeToNextEvent(),
+                         (const char*)disasm.data());
                 };
 
                 if (currentFps <= 0.5) {
