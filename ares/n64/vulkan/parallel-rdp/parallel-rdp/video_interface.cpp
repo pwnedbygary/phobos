@@ -1263,6 +1263,46 @@ Vulkan::ImageHandle VideoInterface::scanout(VkImageLayout target_layout, const S
 		return scanout;
 	}
 
+	// [Phobos] Rogue Squadron menu transition (2026-08-15): when the VI display
+	// width CHANGES (e.g. attract demo 400-wide → menu 1024-wide), the first
+	// scanout of the new mode reads RDRAM the RDP hasn't rendered yet → a
+	// white/rainbow garbage frame that can last SECONDS while the menu's big
+	// textures load on-device. Hold the previous valid frame for ~2s (120
+	// scanouts at 60fps) after a width change so the new mode's buffer has
+	// time to be rendered. Per-frame double buffering keeps vi_width constant,
+	// so it is never suppressed.
+	if (regs.vi_width != (int)last_vi_width)
+	{
+		if (::ares::n64DebugLoggingEnabled())
+			__android_log_print(ANDROID_LOG_INFO, "PhobosVI",
+				"mode-change: vi_w %u -> %u, holding prev frame %u scanouts",
+				last_vi_width, (unsigned)regs.vi_width, (unsigned)MODE_CHANGE_HOLD_SCANOUTS);
+		last_vi_width = (uint32_t)regs.vi_width;
+		mode_change_hold = MODE_CHANGE_HOLD_SCANOUTS;
+	}
+	else if (mode_change_hold > 0)
+	{
+		mode_change_hold--;
+	}
+
+	if (mode_change_hold > 0 && prev_scanout_image)
+	{
+		// Re-present the previous scanout image (mode switch: new framebuffer
+		// not ready yet). If it needs a layout transition to the target, do it.
+		scanout = prev_scanout_image;
+		if (prev_image_layout != target_layout)
+		{
+			auto cmd = device->request_command_buffer();
+			cmd->image_barrier(*scanout, prev_image_layout, target_layout,
+			                   layout_to_stage(prev_image_layout), 0,
+			                   layout_to_stage(target_layout), layout_to_access(target_layout));
+			prev_image_layout = target_layout;
+			device->submit(cmd);
+		}
+		frame_count++;
+		return scanout;
+	}
+
 	if (!options.vi.serrate)
 		regs.status &= ~VI_CONTROL_SERRATE_BIT;
 

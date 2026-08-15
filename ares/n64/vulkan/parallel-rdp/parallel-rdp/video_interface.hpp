@@ -162,6 +162,17 @@ private:
 	VkImageLayout prev_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	bool prev_image_is_external = false;
 
+	// [Phobos] Rogue Squadron menu-transition: hold the previous frame when the
+	// VI display width changes (mode switch) so the first scanout of the new
+	// mode — which reads RDRAM the RDP hasn't rendered yet — doesn't flash
+	// white/rainbow garbage. ~3.5s at 60fps covers the on-device menu texture
+	// load (tuned 2026-08-15: 2s still flashed, 5s was more than needed).
+	// Per-frame double buffering keeps vi_width constant, so it is never
+	// suppressed.
+	static constexpr uint32_t MODE_CHANGE_HOLD_SCANOUTS = 210; // ~3.5s @ 60fps
+	uint32_t last_vi_width = 0;
+	uint32_t mode_change_hold = 0;
+
 	size_t rdram_offset = 0;
 	size_t rdram_size = 0;
 	bool timestamp = false;
