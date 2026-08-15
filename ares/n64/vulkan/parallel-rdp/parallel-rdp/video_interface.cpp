@@ -496,36 +496,14 @@ Vulkan::ImageHandle VideoInterface::vram_fetch_stage(const Registers &regs, unsi
 		int32_t y_res;
 	} push = {};
 
-	// [Phobos] Rogue Squadron wide-menu fix: when the VI WIDTH lies (e.g. the
-	// game renders 512-wide but sets VI_WIDTH=1024), the VRAM extract must
-	// stride by the RDP's ACTUAL framebuffer width/address, not the fake VI
-	// geometry — otherwise every row after the first reads wrong RDRAM and the
-	// menu comes out black. Gate this to wide mode (vi_width > 640) so normal
-	// games (which never lie) keep the upstream VI-origin/VI-width behavior.
+	// [Phobos] Upstream behavior (matched 2026-08-15): the extract reads the
+	// VI origin at the VI width. Desktop ares renders Rogue Squadron's wide
+	// menu correctly with the raw VI values — the earlier black screen was
+	// the VI field-toggle bug (fixed in ares/n64/vi/vi.cpp), NOT the VI
+	// geometry. Wide-mode overrides here caused heavy interlace lines + a
+	// 2x vertical zoom; reverted to upstream.
 	unsigned useWidth = (unsigned)regs.vi_width;
 	unsigned useOffset = (unsigned)regs.vi_offset;
-	unsigned rdpWidth = ::ares::Nintendo64::rdpFramebufferWidth();
-	unsigned rdpAddr  = ::ares::Nintendo64::rdpFramebufferAddress();
-	if (regs.vi_width > VI_SCANOUT_WIDTH && rdpWidth && rdpWidth < (unsigned)regs.vi_width) {
-		useWidth = rdpWidth;
-		// The game alternates VI_ORIGIN per field (e.g. 0x790400/0x790800)
-		// thinking it renders interlaced, but the RDP renders PROGRESSIVE at
-		// the fb base (0x790000) with both fields already interleaved. In wide
-		// mode we must read the PROGRESSIVE buffer at a CONSTANT base offset
-		// every frame — following the game's per-field origin would read the
-		// wrong row band on one field → vertical doubling/zoom (bottom cut).
-		useOffset = rdpAddr;
-	}
-	// [Phobos diag] Log what the extract is about to read (Rogue Squadron
-	// menu — verify the wide-mode stride override is active + the VI vs RDP
-	// geometry).
-	if (::ares::n64DebugLoggingEnabled()) {
-		__android_log_print(ANDROID_LOG_INFO, "PhobosVI",
-			"extract: vi_w=%u vi_off=0x%06x rdp_w=%u rdp_off=0x%06x useW=%u useOff=0x%06x xres=%d yres=%d maxx=%d maxy=%d",
-			(unsigned)regs.vi_width, (unsigned)regs.vi_offset,
-			rdpWidth, rdpAddr, useWidth, useOffset,
-			extract_width, extract_height, regs.max_x, regs.max_y);
-	}
 
 	if ((regs.status & VI_CONTROL_TYPE_MASK) == VI_CONTROL_TYPE_RGBA8888_BIT)
 		push.fb_offset = useOffset >> 2;
@@ -1283,39 +1261,6 @@ Vulkan::ImageHandle VideoInterface::scanout(VkImageLayout target_layout, const S
 	{
 		prev_scanout_image.reset();
 		return scanout;
-	}
-
-	// [Phobos] Rogue Squadron wide-menu fix (progressive-force): the game
-	// renders PROGRESSIVE (RDP scissor interlace bit never set — full 448 rows
-	// in the 512-wide fb) but configures the VI as INTERLACED (serrate=1,
-	// alternating VI_ORIGIN per field). That fake interlace makes the VI scan
-	// out only HALF the lines per frame (one field) → the extract reads only
-	// the top ~224 rows and scale_stage stretches them 2x to fill the screen →
-	// the menu looks zoomed 2x with the bottom (Start Game/Options) cut off.
-	//
-	// Fix: in wide mode, force PROGRESSIVE scanout — clear serrate and double
-	// the vertical geometry (v_res/v_start/max_y) so the extract pulls the
-	// FULL progressive buffer and scale_stage renders a full 480-line target.
-	// Capped at NTSC 480 since the horizontal-info line array holds 288 fields
-	// (VI_MAX_OUTPUT_SCANLINES) — PAL 576 progressive would overrun it.
-	if (regs.vi_width > VI_SCANOUT_WIDTH)
-	{
-		unsigned rdpWidth = ::ares::Nintendo64::rdpFramebufferWidth();
-		if (rdpWidth && rdpWidth < (unsigned)regs.vi_width)
-		{
-			bool was_serrate = (regs.status & VI_CONTROL_SERRATE_BIT) != 0;
-			regs.status &= ~VI_CONTROL_SERRATE_BIT;
-			if (was_serrate)
-			{
-				regs.v_res *= 2;
-				regs.v_start *= 2;
-				regs.max_y = regs.max_y * 2 + 1;
-				if (regs.v_res > (int)VI_V_RES_NTSC)
-					regs.v_res = VI_V_RES_NTSC;
-				if (regs.v_start > (int)VI_V_RES_NTSC)
-					regs.v_start = VI_V_RES_NTSC;
-			}
-		}
 	}
 
 	if (!options.vi.serrate)

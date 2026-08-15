@@ -936,7 +936,11 @@ void CommandProcessor::enqueue_command_direct(unsigned, const uint32_t *words)
 {
 	// [Phobos diag] Count RDP draw commands (menu render investigation): is the
 	// menu issuing triangles/rectangles that execute but output black, or are
-	// the commands not arriving at all?
+	// the commands not arriving at all? Gated behind the N64 Debug Logging
+	// toggle — the counter was unconditional and spammed logcat every ~3000
+	// commands even with the toggle OFF.
+	if (::ares::n64DebugLoggingEnabled())
+	{
 	static uint32_t cmdCount = 0, triCount = 0, rectCount = 0, fillCount = 0;
 	static uint32_t loadTileCount = 0, loadBlockCount = 0, texRectCount = 0;
 	static uint32_t scissorField0 = 0, scissorField1 = 0;
@@ -961,6 +965,7 @@ void CommandProcessor::enqueue_command_direct(unsigned, const uint32_t *words)
 			"cmds: total=%u tri=%u texrect=%u fill=%u loadTile=%u loadBlock=%u scissorF0=%u scissorF1=%u rectY=[%u..%u]",
 			cmdCount, triCount, texRectCount, fillCount, loadTileCount, loadBlockCount,
 			scissorField0, scissorField1, rectMinY == 0xffffffff ? 0 : rectMinY, rectMaxY);
+	}
 	}
 #define OP(x) &CommandProcessor::op_##x
 	using CommandFunc = void (CommandProcessor::*)(const uint32_t *words);

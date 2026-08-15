@@ -344,6 +344,15 @@ auto VI::refresh() -> void {
       // sample — width, height, and horizontal/vertical position.
       u32 minX = 512, maxX = 0, minY = 480, maxY = 0;
       u32 count = 0;
+      // [Phobos] Per-field content check: does the OTHER field offset
+      // (vi_off + 512 halfwords = +0x400 bytes at 512-wide pitch) hold the
+      // odd lines? If BOTH 0x790400 and 0x790800 regions have content, the
+      // game writes two REAL interlace buffers. If only 0x790000-0x790400
+      // (progressive 448 rows) has content, the game's per-field origin
+      // alternation is FAKE and we must read the base.
+      u32 altBase = fbBase + pitch * 2;  // +1 scanline at 512 pitch
+      u16 alt0 = rdram.ram.read<Half>(altBase, RBusDevice::VI_DMA);
+      u16 altMid = rdram.ram.read<Half>(altBase + pitch * 2 * 200, RBusDevice::VI_DMA);
       for(u32 sy = 0; sy < 480; sy += 8) {
         for(u32 sx = 0; sx < 512; sx += 8) {
           u16 d = rdram.ram.read<Half>(fbBase + (sy * pitch + sx) * 2, RBusDevice::VI_DMA);
@@ -356,10 +365,10 @@ auto VI::refresh() -> void {
         }
       }
       __android_log_print(ANDROID_LOG_INFO, "PhobosVI",
-        "cpu15: addr=0x%06x pitch=%u box=[%u..%u]x[%u..%u] cnt=%u max=%04x@0x%06x",
+        "cpu15: addr=0x%06x pitch=%u box=[%u..%u]x[%u..%u] cnt=%u max=%04x@0x%06x alt0=%04x altMid=%04x",
         (unsigned)fbBase, (unsigned)pitch,
         (unsigned)minX, (unsigned)maxX, (unsigned)minY, (unsigned)maxY, (unsigned)count,
-        (unsigned)maxPix, (unsigned)maxAddr);
+        (unsigned)maxPix, (unsigned)maxAddr, (unsigned)alt0, (unsigned)altMid);
     }
     u32 y0 = vi.io.ysubpixel + vi.io.yscale * (dy0 - vi.io.vstart);
     for(i32 dy = dy0; dy < dy1; dy++) {
