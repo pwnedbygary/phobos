@@ -117,6 +117,10 @@ namespace ares {
   static std::atomic<bool> firstFrameRendered{false};
   static ANativeWindow* nativeWindow = nullptr;
   static AAudioStream* audioStream = nullptr;
+  // Base name (no extension) of the currently loaded ROM — used to key the
+  // per-game save files on disk (saves/<System>/<RomName>.save.ram etc.) so
+  // different games never overwrite each other's saves.
+  static string currentRomBase;
 
   // ── Dedicated audio thread + ring buffer ────────────────────────────────
   // The emulation thread NEVER blocks on AAudioStream_write, and never does
@@ -518,6 +522,9 @@ namespace ares {
   // Forward declaration — defined with the N64 setters below, but called from
   // unloadSystem() which appears earlier in this translation unit.
   static auto exportControllerPak() -> void;
+  // Flush cartridge/battery saves to disk (defined with the setters below,
+  // called from unloadSystem() and the pause path).
+  static auto flushSavesToDisk() -> void;
 
   // N64 JIT hang-detector state (see emulationLoop).
   static u32 hangZeroSeconds = 0;
@@ -1345,14 +1352,21 @@ namespace ares {
         player1PakDir = std::make_shared<vfs::directory>();
         player1PakDir->setAttribute("name", nodeName);
         if (savesPath) {
-          string savePath = string{savesPath, "/Nintendo 64/save.pak"};
+          // Per-ROM Controller Pak (same key as cartridge saves): each game
+          // gets its own save.pak so games don't clobber each other's
+          // controller-pak data (ares models the pak as a single 32KB bank,
+          // not multi-page like real hardware).
+          string romKey = currentRomBase;
+          romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+          if (romKey.size() == 0) romKey = "rom";
+          string savePath = string{savesPath, "/Nintendo 64/", romKey, "/save.pak"};
           auto data = nall::file::read(savePath);
           if (data.size()) {
             if (auto fp = vfs::memory::open(data)) {
               fp->setName("save.pak");
               fp->setAttribute("loaded", true);
               player1PakDir->append("save.pak", fp);
-              LOGI("VFS: Attached save.pak (%zu bytes) to Gamepad pak", data.size());
+              LOGI("VFS: Attached save.pak (%zu bytes) to Gamepad pak [%s]", data.size(), (const char*)romKey);
               return player1PakDir;
             }
           }
@@ -1724,44 +1738,10 @@ namespace ares {
 
     std::lock_guard<std::recursive_mutex> lock(systemMutex);
     if (root) {
-        if (savesPath && currentMedium && currentMedium->pak) {
-          string sysName = root->name();
-          string saveDir = {savesPath, "/", sysName, "/"};
-          directory::create(saveDir);
-          for (auto& saveNode : currentMedium->pak->files()) {
-            string fileName = saveNode->name();
-            if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
-                !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
-                !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
-                !fileName.endsWith(".rtc")) continue;
-            auto fp = saveNode;
-            fp->seek(0);
-            auto size = fp->size();
-            if (size == 0) continue;
-            std::vector<u8> buf(size);
-            fp->read({buf.data(), size});
-            bool allZero = true;
-            for (auto b : buf) { if (b != 0) { allZero = false; break; } }
-            if (allZero) continue;
-            string fullPath = {saveDir, fileName};
-            file::write(fullPath, {buf.data(), size});
-            LOGI("Saves: exported %s (%zu bytes) for %s", (const char*)fileName, size, (const char*)sysName);
-          }
-          // MIA-level sidecar saves (.sav, .flash for NGP/NGPC/WonderSwan):
-          // stored on disk alongside the ROM, not in the VFS pak. Copy them
-          // to the persistent saves directory so they survive mia_temp cleanup.
-          for (auto& saveName : {"program.sav", "program.flash"}) {
-            string sidecarPath = string{tempFilePath, "/", saveName};
-            auto data = file::read(sidecarPath);
-            if (data.size() == 0) continue;
-            bool allZero = true;
-            for (auto b : data) { if (b != 0) { allZero = false; break; } }
-            if (allZero) continue;
-            string fullPath = {saveDir, saveName};
-            file::write(fullPath, data);
-            LOGI("Saves: exported MIA sidecar %s (%zu bytes) for %s", saveName, data.size(), (const char*)sysName);
-          }
-        }
+        // Flush cartridge/battery saves to the persistent saves directory
+        // (same code path as the pause flush). Must run BEFORE root->unload()
+        // so the medium pak still holds the live save state.
+        flushSavesToDisk();
         // Export NGP/NGPC CPU RAM + BIOS (settings region)
         // root->save() flushes CPU::save() which updates the 12KB ram array.
         // Read it directly — the VFS roundtrip is unreliable.
@@ -1987,6 +1967,10 @@ else if (port->type() == "Keyboard") {
     string systemName = systemNamePtr;
     string uri = uriPtr;
     string romName = romNamePtr ? romNamePtr : "";
+    // Key the per-game save directory by the ROM base name (no extension).
+    currentRomBase = romName;
+    if (auto dot = currentRomBase.findPrevious(currentRomBase.size(), ".")) currentRomBase = currentRomBase.slice(0, *dot);
+    if (currentRomBase.size() == 0) currentRomBase = "rom";
     unloadSystem();
 
     std::unique_lock<std::recursive_mutex> lock(systemMutex);
@@ -2417,14 +2401,19 @@ else if (port->type() == "Keyboard") {
       // from the medium pak at port-connect time, so a post-connect import
       // never reaches the cartridge (it would start fresh each load).
       if (savesPath && currentMedium && currentMedium->pak) {
-        string saveDir = {savesPath, "/", identifiedSystem, "/"};
+        // Per-game save subdirectory (same key as flushSavesToDisk):
+        // saves/<System>/<RomBase>/
+        string romKey = currentRomBase;
+        romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+        if (romKey.size() == 0) romKey = "rom";
+        string saveDir = {savesPath, "/", identifiedSystem, "/", romKey, "/"};
         directory::create(saveDir);
         for (auto& saveNode : currentMedium->pak->files()) {
           string fileName = saveNode->name();
           if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
               !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
               !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
-              !fileName.endsWith(".rtc")) continue;
+              !fileName.endsWith(".flash") && !fileName.endsWith(".rtc")) continue;
           string fullPath = {saveDir, fileName};
           auto existing = file::read(fullPath);
           if (existing.size() == 0) continue;
@@ -2505,8 +2494,76 @@ else if (port->type() == "Keyboard") {
   auto setFastBoot(bool enabled) -> void { fastBootAtomic = enabled; LOGI("Fast boot %s", enabled ? "enabled" : "disabled"); }
   auto setAutoSaveMemory(bool enabled) -> void { autoSaveMemoryAtomic = enabled; LOGI("Auto-save memory %s", enabled ? "enabled" : "disabled"); }
   auto setAutoLoadMemory(bool enabled) -> void { autoLoadMemoryAtomic = enabled; LOGI("Auto-load memory %s", enabled ? "enabled" : "disabled"); }
+
+  // Flush cartridge/battery saves to the persistent saves directory. Called
+  // on pause (so backing out / app-switch doesn't lose progress) and on clean
+  // unload. Writes to savesPath/<system>/<RomBase>/ so different games never
+  // overwrite each other's saves. Only runs while the system is loaded and the
+  // emulation thread is NOT mid-frame (pause path holds the emulation; unload
+  // path holds systemMutex).
+  static auto flushSavesToDisk() -> void {
+    if (!savesPath || !root || !currentMedium || !currentMedium->pak) return;
+    // CRITICAL: flush the LIVE core state into the pak FIRST. The game's SRAM/
+    // EEPROM/Flash live in the ares core (e.g. N64 cartridge.ram), NOT in the
+    // pak — reading the pak directly returns whatever was last imported/written,
+    // so the flush would persist STALE data (e.g. a previous game's save.ram).
+    // root->save() → Cartridge::save() → ram.save(pak->write("save.ram")) puts
+    // the live state into the pak, then we copy it to the persistent dir.
+    root->save();
+    string sysName = root->name();
+    // Per-game subdirectory (keyed by ROM base name) so games don't clobber
+    // each other's saves: saves/<System>/<RomBase>/
+    string romKey = currentRomBase;
+    // Sanitize: the ROM name can contain chars that are legal on Linux but
+    // awkward on some filesystems — keep it simple, drop slashes/colons.
+    romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+    if (romKey.size() == 0) romKey = "rom";
+    string saveDir = {savesPath, "/", sysName, "/", romKey, "/"};
+    directory::create(saveDir);
+    bool wrote = false;
+    for (auto& saveNode : currentMedium->pak->files()) {
+      string fileName = saveNode->name();
+      if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
+          !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
+          !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
+          !fileName.endsWith(".flash") && !fileName.endsWith(".rtc")) continue;
+      auto fp = saveNode;
+      fp->seek(0);
+      auto size = fp->size();
+      if (size == 0) continue;
+      std::vector<u8> buf(size);
+      fp->read({buf.data(), size});
+      bool allZero = true;
+      for (auto b : buf) { if (b != 0) { allZero = false; break; } }
+      if (allZero) continue;
+      string fullPath = {saveDir, fileName};
+      file::write(fullPath, {buf.data(), size});
+      wrote = true;
+      LOGI("Saves: flushed %s (%zu bytes) for %s [%s]", (const char*)fileName, size, (const char*)sysName, (const char*)romKey);
+    }
+    // MIA-level sidecar saves (.sav, .flash for NGP/NGPC/WonderSwan): copy
+    // from mia_temp so they survive cleanup (same as unload).
+    for (auto& saveName : {"program.sav", "program.flash"}) {
+      string sidecarPath = string{tempFilePath, "/", saveName};
+      auto data = file::read(sidecarPath);
+      if (data.size() == 0) continue;
+      bool allZero = true;
+      for (auto b : data) { if (b != 0) { allZero = false; break; } }
+      if (allZero) continue;
+      string fullPath = {saveDir, saveName};
+      file::write(fullPath, data);
+      wrote = true;
+      LOGI("Saves: flushed MIA sidecar %s (%zu bytes) for %s [%s]", saveName, data.size(), (const char*)sysName, (const char*)romKey);
+    }
+    if (!wrote) LOGI("Saves: flush complete (nothing to write) for %s [%s]", (const char*)sysName, (const char*)romKey);
+  }
+
   auto setPause(bool paused) -> void {
     isPausedAtomic = paused;
+    // Flush saves when PAUSING (leaving gameplay): the user may back out or
+    // swipe the app away, which skips the clean-unload export. The emulation
+    // thread is idle at this point (pause gate), so this is race-free.
+    if (paused) flushSavesToDisk();
     // Stop the audio stream while paused so it doesn't keep draining with no
     // new samples (underrun pops in the pause menu); restart it on resume.
     // The audio thread checks isPausedAtomic and drops queued samples while
@@ -2688,10 +2745,14 @@ else if (port->type() == "Keyboard") {
       bool allZero = true;
       for (auto b : buf) { if (b != 0) { allZero = false; break; } }
       if (allZero) return;
-      string saveDir = {savesPath, "/Nintendo 64/"};
+      // Per-ROM Controller Pak (same key as cartridge saves).
+      string romKey = currentRomBase;
+      romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+      if (romKey.size() == 0) romKey = "rom";
+      string saveDir = {savesPath, "/Nintendo 64/", romKey, "/"};
       directory::create(saveDir);
       file::write({saveDir, "save.pak"}, {buf.data(), size});
-      LOGI("Saves: exported save.pak (%zu bytes) for Nintendo 64", size);
+      LOGI("Saves: exported save.pak (%zu bytes) for Nintendo 64 [%s]", size, (const char*)romKey);
     }
   }
 
@@ -3032,7 +3093,8 @@ else if (port->type() == "Keyboard") {
                     string fileName = saveNode->name();
                     if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
                         !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
-                        !fileName.endsWith(".flash")) continue;
+                        !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
+                        !fileName.endsWith(".flash") && !fileName.endsWith(".rtc")) continue;
                     string path = {saveDir, fileName};
                     auto data = nall::file::read(path);
                     if (!data.empty()) {
