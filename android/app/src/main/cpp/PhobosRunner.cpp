@@ -694,13 +694,43 @@ namespace ares {
                         string text = ::ares::Nintendo64::cpu.disassembler.disassemble(pc32 + i * 4, insn);
                         disasm.append("\n  ["); disasm.append(hex(pc32 + i * 4, 8L)); disasm.append("] "); disasm.append(text);
                     }
+                    // [Phobos diag] Also disassemble the exception vector
+                    // (0x80000180) dispatch + the fatal-trap region around the
+                    // spin PC so we can see the handler's check that leads to
+                    // the hang (Mischief Makers: beq-self at 0x800008b8).
+                    u32 vecBase = 0x80000180u;
+                    string vecDisasm;
+                    for (int i = 0; i < 12; i++) {
+                        u32 insn = (u32)::ares::Nintendo64::cpu.readDebug<::ares::Nintendo64::Word>(vecBase + i * 4);
+                        string text = ::ares::Nintendo64::cpu.disassembler.disassemble(vecBase + i * 4, insn);
+                        vecDisasm.append("\n  ["); vecDisasm.append(hex(vecBase + i * 4, 8L)); vecDisasm.append("] "); vecDisasm.append(text);
+                    }
+                    u32 trapStart = (pc32 & ~0x3fu) - 0x80;
+                    string trapDisasm;
+                    for (int i = 0; i < 24; i++) {
+                        u32 addr = trapStart + i * 4;
+                        u32 insn = (u32)::ares::Nintendo64::cpu.readDebug<::ares::Nintendo64::Word>(addr);
+                        string text = ::ares::Nintendo64::cpu.disassembler.disassemble(addr, insn);
+                        trapDisasm.append("\n  ["); trapDisasm.append(hex(addr, 8L)); trapDisasm.append("] "); trapDisasm.append(text);
+                    }
+                    // [Phobos diag] Disassemble the game's REAL IRQ handler
+                    // (the vector jumps to it: k0 = 0x800A5FC8) so we can see
+                    // what it reads that leads to the fatal trap.
+                    u32 handlerBase = 0x800a5fc8u;
+                    string handlerDisasm;
+                    for (int i = 0; i < 32; i++) {
+                        u32 addr = handlerBase + i * 4;
+                        u32 insn = (u32)::ares::Nintendo64::cpu.readDebug<::ares::Nintendo64::Word>(addr);
+                        string text = ::ares::Nintendo64::cpu.disassembler.disassemble(addr, insn);
+                        handlerDisasm.append("\n  ["); handlerDisasm.append(hex(addr, 8L)); handlerDisasm.append("] "); handlerDisasm.append(text);
+                    }
                     LOGW("%s: PC=0x%08llx jittable=%d FPS=%.1f mask=%02x pend=%02x "
                          "IE=%d EXL=%d ERL=%d exc=%d clock=%lld thr=%u "
                          "rsp(halt=%d broken=%d dmaBusy=%d dmaFull=%d) "
                          "rdp(pipe=%d buf=%d crash=%d frz=%d cur=%d end=%d) "
                          "si(dmaBusy=%d ioBusy=%d pend=%d) pi(dmaBusy=%d ioBusy=%d "
                          "latch=%d) ai(dmaCnt=%d dmaEn=%d) vi(vc=%d fld=%d) "
-                         "queue(next=%d)%s",
+                         "queue(next=%d) EPC=0x%08llx%s%s%s%s",
                          tag, (unsigned long long)pc, (int)jittable, (double)currentFps,
                          (int)status.interruptMask, (int)cause.interruptPending,
                          (int)status.interruptEnable, (int)status.exceptionLevel,
@@ -717,7 +747,10 @@ namespace ares {
                          (int)aiIo.dmaCount, (int)aiIo.dmaEnable,
                          (int)viIo.vcounter, (int)viIo.field,
                          (int)::ares::Nintendo64::queue.timeToNextEvent(),
-                         (const char*)disasm.data());
+                         (const char*)disasm.data(),
+                         (const char*)vecDisasm.data(),
+                         (const char*)trapDisasm.data(),
+                         (const char*)handlerDisasm.data());
                 };
 
                 if (currentFps <= 0.5) {

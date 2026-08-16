@@ -54,6 +54,14 @@ auto RSP::BNE(cr32& rs, cr32& rt, s16 imm) -> void {
 auto RSP::BREAK() -> void {
   status.halted = 1;
   status.broken = 1;
+  // [Phobos diag] Mischief Makers title-freeze: log the RSP PC + instruction
+  // at BREAK so we can see which microcode instruction (often an unimplemented
+  // VU opcode) made the RSP stop. Gated behind the debug toggle.
+  if (::ares::n64DebugLoggingEnabled()) {
+    __android_log_print(ANDROID_LOG_WARN, "PhobosRSP",
+      "RSP BREAK: pc=0x%08x insn=0x%08x iob=%d", (u32)ipu.pc,
+      (u32)imem.read<Word>(ipu.pc), (int)status.interruptOnBreak);
+  }
   if(status.interruptOnBreak) mi.raise(MI::IRQ::SP);
 }
 

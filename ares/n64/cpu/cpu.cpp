@@ -126,6 +126,15 @@ auto CPU::synchronize() -> void {
 
 auto CPU::setInterruptPending(u32 bit, bool value) -> void {
   scc.cause.interruptPending.bit(bit) = value;
+  // [Phobos diag] Mischief Makers: trace the RCP (bit 2) interrupt — is it
+  // being set by the RSP BREAK and then cleared, or never set? Logs on
+  // every RCP change (gated behind the debug toggle).
+  if (bit == Interrupt::RCP && ::ares::n64DebugLoggingEnabled()) {
+    __android_log_print(ANDROID_LOG_WARN, "PhobosCPU",
+      "setInterruptPending: RCP=%d cause.pend=%02x IE=%d EXL=%d",
+      (int)value, (int)(u32)scc.cause.interruptPending,
+      (int)scc.status.interruptEnable, (int)scc.status.exceptionLevel);
+  }
   interruptPoll();
 }
 

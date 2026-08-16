@@ -257,6 +257,26 @@ auto RSP::interpreterSCC() -> void {
 
 auto RSP::interpreterVU() -> void {
   #define E (OP >> 7 & 15)
+  // [Phobos diag] Mischief Makers: count executions of the "broken" VU
+  // opcodes that ares stubs as VZERO (VSUT/VADDB/VSUBB/VACCB/VSUCB/VSAD/
+  // VSAC/VSUM/VEXTT/VEXTQ/VEXTN/VINST/VINSQ/VINSN). If the game's audio
+  // microcode uses them, they produce wrong results -> the game's handler
+  // hits the fatal spin. Gated behind the debug toggle; logs every 2048.
+  if (::ares::n64DebugLoggingEnabled()) {
+    static uint32_t stubCount = 0, otherVU = 0;
+    u32 vuOp = OP & 0x3f;
+    bool isStub = (vuOp == 0x12) || (vuOp >= 0x16 && vuOp <= 0x1c) ||
+                  (vuOp == 0x1e) || (vuOp == 0x1f) ||
+                  (vuOp == 0x2e) || (vuOp == 0x2f) ||
+                  (vuOp >= 0x38 && vuOp <= 0x3e);
+    if (isStub) {
+      if (++stubCount == 1 || stubCount % 2048 == 0)
+        __android_log_print(ANDROID_LOG_WARN, "PhobosRSP",
+          "VU stub opcode: 0x%02x count=%u pc=0x%08x", vuOp, stubCount, (u32)ipu.pc);
+    } else {
+      otherVU++;
+    }
+  }
   switch(OP >> 21 & 0x1f) {
   vu(0x00, MFC2, RT, VS);
   op(0x01, INVALID);  //DMFC2

@@ -1,3 +1,8 @@
+// [Phobos] Gated by the N64 Debug Logging toggle (defined in PhobosRunner.cpp).
+namespace ares {
+auto n64DebugLoggingEnabled() -> bool;
+}
+
 namespace ares::Nintendo64 {
 
 RSP rsp;
