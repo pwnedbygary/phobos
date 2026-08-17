@@ -3369,7 +3369,11 @@ else if (port->type() == "Keyboard") {
     // the new disc.
     if (root && systemName == "PlayStation") {
         currentMedium = secondaryMedium;
-        auto discTray = root->find<Node::Port>("Disc Tray");
+        // NOTE: use scan(), NOT find() — find<T>(name) only searches DIRECT
+        // children, and the PS1 Disc Tray is nested at root → PlayStation →
+        // Disc Tray. find() returned null → "Disc Tray not found" on every
+        // swap (MGS disc change). scan() recurses the whole tree.
+        auto discTray = root->scan<Node::Port>("Disc Tray");
         if (discTray) {
             isPausedAtomic = true;
             fastForwardAtomic = false;

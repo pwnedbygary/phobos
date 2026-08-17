@@ -661,6 +661,24 @@ fun EmulationMenu(
                         }
                     }
 
+                    // ── Boot Options (per-core — ares supports Fast Boot only on
+                    //    GB/GBC, NGP/NGPC, PS1) ────────────────────────────────
+                    val supportsFastBoot = systemName == "Game Boy" ||
+                        systemName == "Game Boy Color" ||
+                        systemName.contains("Neo Geo Pocket") ||
+                        systemName == "PlayStation"
+                    if (supportsFastBoot) {
+                        item {
+                            MenuSection("Boot Options") {
+                                SettingsSwitchItem(
+                                    "Fast Boot",
+                                    "Skip BIOS and intro animations",
+                                    settings.fastBoot
+                                ) { viewModel.setFastBoot(it) }
+                            }
+                        }
+                    }
+
                     // ── Disc Management (N64 / PS1) ─────────────────────────
                     if (systemName.contains("Nintendo 64") || systemName.contains("PlayStation")) {
                         item {

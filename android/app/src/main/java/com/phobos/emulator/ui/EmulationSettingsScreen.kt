@@ -51,12 +51,9 @@ fun EmulationSettingsScreen(
                         description = "Install and select custom Adreno drivers",
                         onClick = onNavigateToDrivers
                     )
-                    SettingsSwitchItem(
-                        title = "Fast Boot",
-                        description = "Skip BIOS and intro animations",
-                        checked = settings.fastBoot,
-                        onCheckedChange = { viewModel.setFastBoot(it) }
-                    )
+                    // Fast Boot moved to the pause menu (per-core Boot Options) —
+                    // ares only supports it on GB/GBC, NGP/NGPC, PS1, so the
+                    // global toggle was a silent no-op on other cores.
                     SettingsSwitchItem(
                         title = "Run-Ahead",
                         description = "Removes one frame of input lag",
