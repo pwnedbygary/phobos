@@ -1905,6 +1905,15 @@ namespace ares {
     invalidateInputCaches();
     currentMedium.reset();
     secondaryMedium.reset();
+    // [Phobos] The emulation thread has exited cleanly (we acquired runMutex and
+    // joined/witnessed its exit). Drop the stale pthread handle so the next
+    // setEmulationRunning(true) -> ensureThread() doesn't log the misleading
+    // "replacing abandoned emulation thread" warning and realloc runMutex (a
+    // tiny per-load leak). The abandon path leaves this set on purpose (zombie).
+    emuThread = 0;
+    emuThreadRunning = false;
+    currentEmuThread.store(0);
+    currentEmuThreadCookie.reset();
     systemUnloading.store(false);
     LOGI("System unloaded");
   }

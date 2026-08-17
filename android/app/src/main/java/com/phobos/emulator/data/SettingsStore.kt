@@ -39,6 +39,7 @@ data class EmulatorSettings(
     val overscan: Boolean = true,
     val runAhead: Boolean = false,
     val autoSaveMemory: Boolean = true,
+    val autoLoadMemory: Boolean = false,
     val fullScreenMode: Boolean = false,
     val showTouchControls: Boolean = true,
     val showPerformanceMonitor: Boolean = false,
@@ -105,6 +106,7 @@ class SettingsStore(private val context: Context) {
         val OVERSCAN = booleanPreferencesKey("overscan")
         val RUN_AHEAD = booleanPreferencesKey("run_ahead")
         val AUTO_SAVE_MEMORY = booleanPreferencesKey("auto_save_memory")
+        val AUTO_LOAD_MEMORY = booleanPreferencesKey("auto_load_memory")
         val FULL_SCREEN_MODE = booleanPreferencesKey("full_screen_mode")
         val SHOW_TOUCH_CONTROLS = booleanPreferencesKey("show_touch_controls")
         val SHOW_PERFORMANCE_MONITOR = booleanPreferencesKey("show_performance_monitor")
@@ -258,6 +260,7 @@ class SettingsStore(private val context: Context) {
             overscan = safeGet(OVERSCAN, true),
             runAhead = safeGet(RUN_AHEAD, false),
             autoSaveMemory = safeGet(AUTO_SAVE_MEMORY, true),
+            autoLoadMemory = safeGet(AUTO_LOAD_MEMORY, false),
             fullScreenMode = safeGet(FULL_SCREEN_MODE, false),
             showTouchControls = safeGet(SHOW_TOUCH_CONTROLS, true),
             showPerformanceMonitor = safeGet(SHOW_PERFORMANCE_MONITOR, false),
@@ -359,6 +362,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setOverscan(enabled: Boolean) = context.dataStore.edit { it[OVERSCAN] = enabled }
     suspend fun setRunAhead(enabled: Boolean) = context.dataStore.edit { it[RUN_AHEAD] = enabled }
     suspend fun setAutoSaveMemory(enabled: Boolean) = context.dataStore.edit { it[AUTO_SAVE_MEMORY] = enabled }
+    suspend fun setAutoLoadMemory(enabled: Boolean) = context.dataStore.edit { it[AUTO_LOAD_MEMORY] = enabled }
     suspend fun setFullScreenMode(enabled: Boolean) = context.dataStore.edit { it[FULL_SCREEN_MODE] = enabled }
     suspend fun setShowTouchControls(enabled: Boolean) = context.dataStore.edit { it[SHOW_TOUCH_CONTROLS] = enabled }
     suspend fun setShowPerformanceMonitor(enabled: Boolean) = context.dataStore.edit { it[SHOW_PERFORMANCE_MONITOR] = enabled }

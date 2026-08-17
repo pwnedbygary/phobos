@@ -69,6 +69,12 @@ fun EmulationSettingsScreen(
                         checked = settings.autoSaveMemory,
                         onCheckedChange = { viewModel.setAutoSaveMemory(it) }
                     )
+                    SettingsSwitchItem(
+                        title = "Auto-Load Memory",
+                        description = "Restore the auto-saved state when a game is loaded",
+                        checked = settings.autoLoadMemory,
+                        onCheckedChange = { viewModel.setAutoLoadMemory(it) }
+                    )
                     FastForwardSpeedSelectorItem(settings.fastForwardSpeed) { viewModel.setFastForwardSpeed(it) }
                 }
             }

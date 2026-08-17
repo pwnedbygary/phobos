@@ -44,6 +44,10 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     val settings: StateFlow<EmulatorSettings> = settingsStore.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), EmulatorSettings())
 
+    // Task 17: slot index reserved for the "Auto" state (saved on unload,
+    // loaded on boot). Any negative slot maps to <rom>.state.auto.
+    companion object { const val AUTO_STATE_SLOT = -1 }
+
     private var wasEmulationRunningBeforePause = false
 
     override fun onPause(owner: LifecycleOwner) {
@@ -73,6 +77,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setOverscan(enabled: Boolean) = viewModelScope.launch { settingsStore.setOverscan(enabled) }
     fun setRunAhead(enabled: Boolean) = viewModelScope.launch { settingsStore.setRunAhead(enabled) }
     fun setAutoSaveMemory(enabled: Boolean) = viewModelScope.launch { settingsStore.setAutoSaveMemory(enabled) }
+    fun setAutoLoadMemory(enabled: Boolean) = viewModelScope.launch { settingsStore.setAutoLoadMemory(enabled) }
     fun setN64Upscale(factor: Int) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64Upscale(factor)
         PhobosCore.setN64Upscale(factor)
@@ -296,11 +301,21 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             // root and runs CPU::LW against the freed buffers -> SIGSEGV on
             // unload (the 64DD quit -> reload crash). Clearing the flag first
             // makes the new screen show "Initializing..." until the load lands.
+            // Auto-Save Memory (Task 17): snapshot the state BEFORE any
+            // teardown, while the core is still alive.
+            val sysName = currentSystemName
+            val romName = currentRomName
+            if (settings.value.autoSaveMemory && sysName.isNotEmpty() && romName.isNotEmpty()) {
+                try { performSaveState(sysName, romName, AUTO_STATE_SLOT) } catch (e: Exception) {
+                    Log.e("Phobos", "Auto-save failed: ${e.message}")
+                }
+            }
             _isLoaded.value = false
             _isPaused.value = false
             PhobosCore.setEmulationRunning(false)
             PhobosCore.unloadSystem()
             currentSystemName = ""
+            currentRomName = ""
         }
     }
 
@@ -334,129 +349,133 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     fun saveState(systemName: String, romName: String, slot: Int = 0) {
         viewModelScope.launch(Dispatchers.IO) {
-            val fileName = "$romName.state$slot"
-            val tempFile = File(context.cacheDir, "temp_state")
-            val sanitizedName = getSanitizedSystemName(systemName)
-            
-            // 1. Tell native to save to a local accessible path
-            val nativeSuccess = PhobosCore.saveState(tempFile.absolutePath)
-            
-            if (nativeSuccess) {
-                // 2. Copy from local path to the user's selected SAF path.
-                //    Task 41: fall back to internal storage when no SAF path is
-                //    configured so states aren't silently lost.
-                val baseUriString = settings.value.statesPath
-                val internalStatesDir = File(context.filesDir, "states/$sanitizedName")
-                if (baseUriString.isNotEmpty()) {
-                    try {
-                        val baseUri = Uri.parse(baseUriString)
-                        val rootDir = DocumentFile.fromTreeUri(context, baseUri)
-                        val systemDir = rootDir?.findFile(sanitizedName) ?: rootDir?.createDirectory(sanitizedName)
-                        
-                        val stateFile = systemDir?.findFile(fileName) ?: systemDir?.createFile("application/octet-stream", fileName)
-                        
-                        if (stateFile != null) {
-                            context.contentResolver.openOutputStream(stateFile.uri)?.use { output ->
-                                tempFile.inputStream().use { input ->
-                                    input.copyTo(output)
-                                }
-                            }
-                            Log.i("Phobos", "Synced state to SAF: ${stateFile.uri}")
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(context, "Saved state to Slot $slot", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e("Phobos", "Failed to sync state to SAF: ${e.message}")
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                } else {
-                    // Internal fallback: filesDir/states/<system>/<file>
-                    try {
-                        if (!internalStatesDir.exists()) internalStatesDir.mkdirs()
-                        tempFile.copyTo(File(internalStatesDir, fileName), overwrite = true)
-                        Log.i("Phobos", "Saved state to internal: ${File(internalStatesDir, fileName).absolutePath}")
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "Saved state to Slot $slot", Toast.LENGTH_SHORT).show()
-                        }
-                    } catch (e: Exception) {
-                        Log.e("Phobos", "Failed to save state internally: ${e.message}")
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-            } else {
-                Log.e("Phobos", "Native saveState failed")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
-                }
+            performSaveState(systemName, romName, slot)
+        }
+    }
+
+    // Shared save logic (also used by Auto-Save Memory, Task 17 — slot < 0 = "Auto").
+    // Must run on Dispatchers.IO; performs the native snapshot + copies the result
+    // to the configured SAF path (or internal fallback). Returns success.
+    private suspend fun performSaveState(systemName: String, romName: String, slot: Int): Boolean {
+        val fileName = if (slot < 0) "$romName.state.auto" else "$romName.state$slot"
+        val slotLabel = if (slot < 0) "Auto" else "Slot $slot"
+        val tempFile = File(context.cacheDir, "temp_state")
+        val sanitizedName = getSanitizedSystemName(systemName)
+
+        // 1. Tell native to save to a local accessible path
+        val nativeSuccess = PhobosCore.saveState(tempFile.absolutePath)
+        if (!nativeSuccess) {
+            Log.e("Phobos", "Native saveState failed")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
             }
+            return false
+        }
+
+        // 2. Copy from local path to the user's selected SAF path.
+        //    Task 41: fall back to internal storage when no SAF path is
+        //    configured so states aren't silently lost.
+        val baseUriString = settings.value.statesPath
+        val internalStatesDir = File(context.filesDir, "states/$sanitizedName")
+        return try {
+            if (baseUriString.isNotEmpty()) {
+                val baseUri = Uri.parse(baseUriString)
+                val rootDir = DocumentFile.fromTreeUri(context, baseUri)
+                val systemDir = rootDir?.findFile(sanitizedName) ?: rootDir?.createDirectory(sanitizedName)
+                val stateFile = systemDir?.findFile(fileName) ?: systemDir?.createFile("application/octet-stream", fileName)
+                if (stateFile != null) {
+                    context.contentResolver.openOutputStream(stateFile.uri)?.use { output ->
+                        tempFile.inputStream().use { input -> input.copyTo(output) }
+                    }
+                    Log.i("Phobos", "Synced state to SAF: ${stateFile.uri}")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
+                    }
+                    true
+                } else false
+            } else {
+                // Internal fallback: filesDir/states/<system>/<file>
+                if (!internalStatesDir.exists()) internalStatesDir.mkdirs()
+                tempFile.copyTo(File(internalStatesDir, fileName), overwrite = true)
+                Log.i("Phobos", "Saved state to internal: ${File(internalStatesDir, fileName).absolutePath}")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
+        } catch (e: Exception) {
+            Log.e("Phobos", "Failed to sync state to SAF: ${e.message}")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
+            }
+            false
         }
     }
 
     fun loadState(systemName: String, romName: String, slot: Int = 0) {
         viewModelScope.launch(Dispatchers.IO) {
-            val startTime = System.currentTimeMillis()
-            val fileName = "$romName.state$slot"
-            val tempFile = File(context.cacheDir, "temp_state")
-            val sanitizedName = getSanitizedSystemName(systemName)
-            Log.d("Phobos", "loadState start: $fileName")
+            performLoadState(systemName, romName, slot)
+        }
+    }
 
-            try {
-                // Task 41: prefer SAF when configured, else internal storage
-                // (filesDir/states/<system>/<file>).
-                val baseUriString = settings.value.statesPath
-                val internalStateFile = File(context.filesDir, "states/$sanitizedName/$fileName")
-                val stateFile: java.io.File? = if (baseUriString.isNotEmpty()) {
-                    val baseUri = Uri.parse(baseUriString)
-                    val rootDir = DocumentFile.fromTreeUri(context, baseUri)
-                    val systemDir = rootDir?.findFile(sanitizedName)
-                    val safState = systemDir?.findFile(fileName)
-                    if (safState != null && safState.exists()) {
-                        // Copy SAF -> temp for native load
-                        val copyStart = System.currentTimeMillis()
-                        context.contentResolver.openInputStream(safState.uri)?.use { input ->
-                            tempFile.outputStream().use { output ->
-                                // Use a larger buffer for faster SAF copying
-                                val buffer = ByteArray(64 * 1024)
-                                var bytesRead: Int
-                                while (input.read(buffer).also { bytesRead = it } != -1) {
-                                    output.write(buffer, 0, bytesRead)
-                                }
+    // Shared load logic (also used by Auto-Load Memory, Task 17 — slot < 0 = "Auto").
+    // Returns true if a state was found and loaded.
+    private suspend fun performLoadState(systemName: String, romName: String, slot: Int): Boolean {
+        val startTime = System.currentTimeMillis()
+        val fileName = if (slot < 0) "$romName.state.auto" else "$romName.state$slot"
+        val slotLabel = if (slot < 0) "Auto" else "Slot $slot"
+        val tempFile = File(context.cacheDir, "temp_state")
+        val sanitizedName = getSanitizedSystemName(systemName)
+        Log.d("Phobos", "loadState start: $fileName")
+
+        return try {
+            // Task 41: prefer SAF when configured, else internal storage
+            // (filesDir/states/<system>/<file>).
+            val baseUriString = settings.value.statesPath
+            val internalStateFile = File(context.filesDir, "states/$sanitizedName/$fileName")
+            val stateFile: java.io.File? = if (baseUriString.isNotEmpty()) {
+                val baseUri = Uri.parse(baseUriString)
+                val rootDir = DocumentFile.fromTreeUri(context, baseUri)
+                val systemDir = rootDir?.findFile(sanitizedName)
+                val safState = systemDir?.findFile(fileName)
+                if (safState != null && safState.exists()) {
+                    // Copy SAF -> temp for native load
+                    context.contentResolver.openInputStream(safState.uri)?.use { input ->
+                        tempFile.outputStream().use { output ->
+                            val buffer = ByteArray(64 * 1024)
+                            var bytesRead: Int
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
                             }
                         }
-                        val copyEnd = System.currentTimeMillis()
-                        Log.d("Phobos", "loadState: SAF Copy took ${copyEnd - copyStart}ms")
-                        tempFile
-                    } else null
-                } else {
-                    // Internal fallback (if it exists)
-                    if (internalStateFile.exists()) internalStateFile else null
-                }
-
-                if (stateFile != null) {
-                    val nativeStart = System.currentTimeMillis()
-                    val nativeSuccess = PhobosCore.loadState(stateFile.absolutePath)
-                    val nativeEnd = System.currentTimeMillis()
-                    Log.d("Phobos", "loadState: Native Unserialize took ${nativeEnd - nativeStart}ms")
-
-                    if (nativeSuccess) {
-                        Log.i("Phobos", "Successfully loaded state from $fileName. Total time: ${System.currentTimeMillis() - startTime}ms")
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "Loaded state from Slot $slot", Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        Log.e("Phobos", "Native loadState failed")
                     }
-                } else {
-                    Log.w("Phobos", "loadState: no state file found for $fileName")
-                }
-            } catch (e: Exception) {
-                Log.e("Phobos", "Error during loadState: ${e.message}")
+                    tempFile
+                } else null
+            } else {
+                // Internal fallback (if it exists)
+                if (internalStateFile.exists()) internalStateFile else null
             }
+
+            if (stateFile != null) {
+                val nativeSuccess = PhobosCore.loadState(stateFile.absolutePath)
+                Log.d("Phobos", "loadState: Native Unserialize took ${System.currentTimeMillis() - startTime}ms")
+                if (nativeSuccess) {
+                    Log.i("Phobos", "Successfully loaded state from $fileName. Total time: ${System.currentTimeMillis() - startTime}ms")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Loaded state from $slotLabel", Toast.LENGTH_SHORT).show()
+                    }
+                    true
+                } else {
+                    Log.e("Phobos", "Native loadState failed")
+                    false
+                }
+            } else {
+                Log.w("Phobos", "loadState: no state file found for $fileName")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("Phobos", "Error during loadState: ${e.message}")
+            false
         }
     }
 
@@ -557,6 +576,10 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     /** Name of the currently loaded system, or empty when nothing is loaded. */
     val loadedSystemName: String get() = currentSystemName
+
+    /** Base name (no extension) of the currently loaded ROM — key for auto-save/load. */
+    @Volatile
+    private var currentRomName: String = ""
 
     private val _perfStats = MutableStateFlow(PerformanceStats(0.0, 0.0, 0))
     val perfStats: StateFlow<PerformanceStats> = _perfStats
@@ -1364,6 +1387,20 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                     if (success) {
                         _isLoaded.value = true
                         currentSystemName = effectiveSystem
+                        currentRomName = rom.name
+                        // Auto-Load Memory (Task 17): restore the auto-saved state
+                        // right after the core is loaded but BEFORE the emulation
+                        // thread starts (the thread is spawned by EmulatorScreen's
+                        // LaunchedEffect(isLoaded) after this coroutine returns, so
+                        // no race with runMutex). Silently skip when no auto state
+                        // exists (performLoadState returns false + logs only).
+                        if (settings.value.autoLoadMemory) {
+                            try {
+                                performLoadState(effectiveSystem, rom.name, AUTO_STATE_SLOT)
+                            } catch (e: Exception) {
+                                Log.e("Phobos", "Auto-load failed: ${e.message}")
+                            }
+                        }
                     } else {
                         Log.e("Phobos", "Native loadRom failed for $effectiveSystem")
                         // Broken core (ZX 128K / PCE / Neo Geo): native refuses
