@@ -286,10 +286,20 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     fun unloadSystem() {
         viewModelScope.launch(Dispatchers.IO) {
-            PhobosCore.setEmulationRunning(false)
-            PhobosCore.unloadSystem()
+            // Clear the loaded/paused flags BEFORE the native teardown. The
+            // teardown is slow (64DD: flushSavesToDisk copies a ~70MB
+            // program.disk), and while it runs the OLD system's singleton
+            // hardware (rdram, cartridge.rom, dd.disk) is being freed. If a
+            // new EmulatorScreen composes during that window with a STALE
+            // _isLoaded=true, its LaunchedEffect(isLoaded) fires
+            // setEmulationRunning(true) -> a fresh emu thread grabs the OLD
+            // root and runs CPU::LW against the freed buffers -> SIGSEGV on
+            // unload (the 64DD quit -> reload crash). Clearing the flag first
+            // makes the new screen show "Initializing..." until the load lands.
             _isLoaded.value = false
             _isPaused.value = false
+            PhobosCore.setEmulationRunning(false)
+            PhobosCore.unloadSystem()
             currentSystemName = ""
         }
     }

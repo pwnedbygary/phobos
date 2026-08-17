@@ -13,10 +13,11 @@ auto DD::RTC::load() -> void {
     ram.read<Byte>(4), ram.read<Byte>(5), ram.read<Byte>(6), ram.read<Byte>(7),
     (unsigned long long)ram.read<Dual>(8),
     (unsigned long long)check, !~check ? 1 : 0, valid() ? 1 : 0);
-  if(!~check) {  //new save file
+  if(!~check || check == 0) {  //new save file (all-0xFF erased EEPROM OR all-zero placeholder)
     // [Phobos] Seed a fresh 64DD RTC with the current host time in BCD.
     // On real hardware the RTC comes pre-set from the factory; leaving it
-    // all-0xFF makes the game read invalid time data -> "Error 48 —
+    // all-0xFF (or the all-zero node Phobos creates for a missing time.rtc)
+    // makes the game read invalid time data -> "Error 48 —
     // Date/Time not set" on every boot (F-Zero X Expansion Kit).
     seedCurrentTime();
     return;

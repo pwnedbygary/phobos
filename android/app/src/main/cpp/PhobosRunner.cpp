@@ -104,6 +104,14 @@ namespace ares {
   auto n64DebugLoggingEnabled() -> bool { return n64DebugLoggingAtomic.load(); }
   pthread_t emuThread = 0;
   std::atomic<bool> emuThreadRunning{false};
+  // Set while unloadSystem() / the N64DD reload is tearing down a system
+  // (freeing the ares singleton hardware: rdram.ram, cartridge.rom, dd.disk).
+  // setEmulationRunning(true) refuses to spawn a fresh emu thread during this
+  // window: the new thread copies `localRoot = root` (the OLD, half-torn-down
+  // system) and runs CPU::LW against the freed buffers -> SIGSEGV on unload
+  // (the 64DD quit -> reload crash). The thread is spawned by initialize() /
+  // the N64DD reload itself AFTER the teardown completes.
+  static std::atomic<bool> systemUnloading{false};
   // Identity of the CURRENT emulation thread. platform callbacks (audio) must
   // reject calls from an ABANDONED zombie thread: unloadSystem()'s abandon
   // path deliberately leaks a stuck emulation thread, and if it later unsticks
@@ -852,6 +860,10 @@ namespace ares {
 
   auto setEmulationRunning(bool running) -> void {
     if (emulationRunning == running) return;
+    if (running && systemUnloading.load()) {
+      LOGW("setEmulationRunning(true) deferred: system teardown in progress");
+      return;
+    }
     emulationRunning = running;
     if (running) ensureThread();
   }
@@ -1706,6 +1718,11 @@ namespace ares {
   Platform* platform = &androidPlatform;
 
   auto unloadSystem() -> void {
+  // Block setEmulationRunning(true) until the teardown below completes: a
+  // fresh emu thread spawned mid-teardown would grab the OLD root (localRoot
+  // shared_ptr copy) and run CPU::LW against the freed singleton hardware
+  // (rdram/cartridge.rom/dd.disk) -> SIGSEGV (the 64DD quit->reload crash).
+  systemUnloading.store(true);
     isPausedAtomic = true;
     fastForwardAtomic = false;
     // A reset requested during a hung session must NOT carry into the next
@@ -1828,6 +1845,7 @@ namespace ares {
       // frees rdram/cartridge.rom/dd.disk under the running zombie → SIGSEGV
       // in CPU::LW (the "crash while unloading" bug).
       parkZombieThread();
+      systemUnloading.store(false);
       LOGI("System abandoned (thread stuck)");
       return;
     }
@@ -1887,6 +1905,7 @@ namespace ares {
     invalidateInputCaches();
     currentMedium.reset();
     secondaryMedium.reset();
+    systemUnloading.store(false);
     LOGI("System unloaded");
   }
 
@@ -2598,6 +2617,9 @@ else if (port->type() == "Keyboard") {
           }
       }
 
+      // The old system's teardown (unloadSystem at the top) is complete and
+      // the new root is fully loaded — re-allow thread spawns, then start.
+      systemUnloading.store(false);
       setEmulationRunning(true);
       LOGI("System loaded successfully: %s", (const char*)identifiedSystem);
       return true;
@@ -3202,6 +3224,10 @@ else if (port->type() == "Keyboard") {
     // root while it sleeps in the pause branch is safe.
     if (root && root->name() == "Nintendo 64" && mediumName == "Nintendo 64DD") {
         LOGI("N64DD: reloading system as Nintendo 64DD to mount disk");
+        // Block setEmulationRunning(true) while we tear down the old system
+        // below (a fresh thread would grab the OLD root and run CPU::LW against
+        // the freed singleton hardware). Cleared before the thread restart.
+        systemUnloading.store(true);
         // Stop the emulation thread BEFORE touching root, and WAIT for it to
         // fully exit. The emu thread may be stuck inside root->run() (not
         // sleeping in the pause branch) — nulling root then spawns a new
@@ -3243,6 +3269,7 @@ else if (port->type() == "Keyboard") {
             runMutex = new std::recursive_mutex();
             emuThreadGeneration.fetch_add(1);
             parkZombieThread();
+            systemUnloading.store(false);
             return false;
         }
         // Old thread is fully dead — safe to tear down root. Also join any
@@ -3311,11 +3338,14 @@ else if (port->type() == "Keyboard") {
             connectDevices(root);  // attaches Cartridge + mounts .ndd (Disk Drive)
             root->power();
             // Restart the emulation thread for the new 64DD system (we stopped
-            // it above so it wouldn't race the teardown).
+            // it above so it wouldn't race the teardown). The teardown is done,
+            // so re-allow thread spawns.
+            systemUnloading.store(false);
             setEmulationRunning(true);
             LOGI("N64DD: system reloaded with disk drive");
             return true;
         }
+        systemUnloading.store(false);
         LOGE("N64DD: failed to reload system as 64DD");
         return false;
     }
