@@ -45,6 +45,9 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 - **Saves Path, Vulkan Cache Path, States/Screenshots** are user-configurable via SAF; internal-storage fallbacks keep saves safe when no path is set.
 - Save import runs **before** the cartridge port connects (the cores read their save files from the medium pak at connect time) — a fix that restores GBA SRAM/EEPROM/Flash/RTC state on every load instead of starting blank.
 - **GBA RTC detection** was broadened: ares detects RTC by scanning for the literal `SIIRTC_V`; ROM hacks like Pokemon Unbound split the driver marker (`SII\0RTC_V0018\0`), so Phobos also matches the `RTC_V001` prefix (mGBA-style heuristic). Verified: Unbound passes its RTC check.
+- **GBA RTC clock is host-seeded:** a fresh S3511A RTC is initialized with the host date/time (not the 2000 epoch), and legacy saves whose RTC year is behind the host year are auto-reseeded on load. Verified: Pokemon Unbound's in-game clock matches the host.
+- **Auto-Save State / Auto-Load State:** an always-available "Auto" save-state slot (also reachable from the slot cycler after slot 9, and manually save/load/delete-able) is saved automatically on quit and restored on load when enabled. Both toggles live in Settings and the in-game pause menu, for all cores.
+- **PS1 multi-disc swap:** the pause menu's Change Disc hot-swaps the disc tray (disconnect → allocate → connect), re-reading the new disc's `cd.rom` + TOC without reloading the console — no more restart for disc 2.
 
 ### 7. N64 timing/QoL knobs (Mupen64Plus-FZ style)
 
@@ -65,22 +68,22 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 |---|---|
 | **Verified working on-device** | |
 | Nintendo 64 | ✅ JIT CPU + RSP, Vulkan/parallel-RDP, upscaling, 64DD, Rumble/Controller Pak, save states + battery saves confirmed |
-| Game Boy Advance | ✅ RTC (Pokemon Unbound verified), battery saves + save states |
+| Game Boy Advance | ✅ RTC clock matches host (Pokemon Unbound verified), battery saves + save states |
 | Game Boy / Color | ✅ |
 | Super Famicom / Famicom | ✅ |
 | Mega Drive / Game Gear | ✅ |
 | Master System | ✅ |
-| PlayStation | ✅ DualShock + analog toggle, memcards, save states; Ape Escape rumble unconfirmed (game/config); CD-XA cinematics unsupported (upstream disabled) |
+| PlayStation | ✅ DualShock + analog toggle, memcards, save states, multi-disc swap; Ape Escape rumble unconfirmed (game/config); CD-XA cinematics unsupported (upstream disabled) |
 | Neo Geo Pocket / Color | ✅ BIOS settings (language/date) persist |
 | WonderSwan / Color | ✅ |
 | MSX / MSX2 | ✅ (incl. tape) |
 | Atari 2600, ColecoVision | ✅ |
 | ZX Spectrum | ✅ Tape loading, on-screen keyboard, gamepad schemes (QAOP/ZXZX/Kempston) — Manic Miner verified |
 | SG-1000 | ✅ Verified 2026-08-14 |
+| Mega CD | ✅ Audio fixed (lockstep multi-stream mixer, user-verified) |
 | **Known broken / under investigation** | |
 | Neo Geo (MVS/AES) | ❌ Loads, BIOS OK, black screen — ARM64/MIA database path |
 | PC Engine / CD / SuperGrafx | ❌ HuCard loads; PCE-CD/SuperGrafx black screen — scheduler/co-switch on ARM64 |
-| Mega CD | 🟡 Audio rate mismatch (playable) |
 
 > Sega Saturn and Neo Geo CD are not listed: neither has a usable core (Saturn is
 > an ares stub with an empty System::run; Neo Geo CD does not exist in ares). The
@@ -91,9 +94,8 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 - **Neo Geo MVS/AES** — boots to BIOS but no game screen (ARM64 endianness / MIA database path).
 - **PCE-CD & SuperGrafx** — black screen; PCE HuCard-only works.
+- **ZX Spectrum 128K** — gated with a clean "Unsupported" popup (PSG co-routine / scheduler on ARM64, same class as PCE/Neo Geo); 48K works.
 - **PS1 CD-XA cinematics** — disabled (upstream state, not a Phobos regression).
-- **Mega CD audio** — works but has a rate mismatch (YM2612 hum resolved).
-- **N64 64DD disk-save** — "Last Save Data was not written properly" / RTC date-time not set (known 64DD RTC persistence gaps).
 - **N64 load-state** — a stale-DMA exception-loop was seen on some titles after restore; RDP validation is now non-fatal so it degrades instead of freezing.
 
 ---
@@ -113,8 +115,8 @@ APKs land in `app/build/outputs/apk/<flavor>/<type>/`.
 High-level Components
 ---------------------
 
-* __ares__:       emulator cores and component implementations
-* __android__:    main GUI implementation written in Kotlin and C++ featuring a JNI bridge to the Ares cores.
+* __ares__:       Phobos' emulator cores and component implementations (ares fork)
+* __android__:    main GUI implementation written in Kotlin and C++ featuring a JNI bridge to the Phobos cores.
 * __nall__:       Near's alternative to the C++ standard library
 * __mia__:        internal ROM database and ROM/image loader
 * __libco__:      cooperative multithreading library
