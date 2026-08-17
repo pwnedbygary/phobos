@@ -632,7 +632,7 @@ fun EmulationMenu(
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     IconButton(onClick = { viewModel.decrementSlot() }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Prev") }
-                                    Text("Slot $currentSlot", style = MaterialTheme.typography.bodyLarge)
+                                    Text(if (currentSlot < 0) "Slot Auto" else "Slot $currentSlot", style = MaterialTheme.typography.bodyLarge)
                                     IconButton(onClick = { viewModel.incrementSlot() }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next") }
                                 }
                                 Row {
@@ -646,6 +646,18 @@ fun EmulationMenu(
                                     ) { Text("Delete") }
                                 }
                             }
+                            // Auto-Save / Auto-Load STATE toggles (all cores) — distinct
+                            // from the always-on cartridge/flash save flushing.
+                            SettingsSwitchItem(
+                                "Auto-Save State",
+                                "Save a state snapshot automatically when you quit a game",
+                                settings.autoSaveState
+                            ) { viewModel.setAutoSaveState(it) }
+                            SettingsSwitchItem(
+                                "Auto-Load State",
+                                "Restore the auto-saved state when a game is loaded",
+                                settings.autoLoadState
+                            ) { viewModel.setAutoLoadState(it) }
                         }
                     }
 

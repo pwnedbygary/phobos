@@ -76,8 +76,8 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setInterframeBlending(enabled: Boolean) = viewModelScope.launch { settingsStore.setInterframeBlending(enabled) }
     fun setOverscan(enabled: Boolean) = viewModelScope.launch { settingsStore.setOverscan(enabled) }
     fun setRunAhead(enabled: Boolean) = viewModelScope.launch { settingsStore.setRunAhead(enabled) }
-    fun setAutoSaveMemory(enabled: Boolean) = viewModelScope.launch { settingsStore.setAutoSaveMemory(enabled) }
-    fun setAutoLoadMemory(enabled: Boolean) = viewModelScope.launch { settingsStore.setAutoLoadMemory(enabled) }
+    fun setAutoSaveState(enabled: Boolean) = viewModelScope.launch { settingsStore.setAutoSaveState(enabled) }
+    fun setAutoLoadState(enabled: Boolean) = viewModelScope.launch { settingsStore.setAutoLoadState(enabled) }
     fun setN64Upscale(factor: Int) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64Upscale(factor)
         PhobosCore.setN64Upscale(factor)
@@ -301,11 +301,11 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             // root and runs CPU::LW against the freed buffers -> SIGSEGV on
             // unload (the 64DD quit -> reload crash). Clearing the flag first
             // makes the new screen show "Initializing..." until the load lands.
-            // Auto-Save Memory (Task 17): snapshot the state BEFORE any
+            // Auto-Save State (Task 17): snapshot the state BEFORE any
             // teardown, while the core is still alive.
             val sysName = currentSystemName
             val romName = currentRomName
-            if (settings.value.autoSaveMemory && sysName.isNotEmpty() && romName.isNotEmpty()) {
+            if (settings.value.autoSaveState && sysName.isNotEmpty() && romName.isNotEmpty()) {
                 try { performSaveState(sysName, romName, AUTO_STATE_SLOT) } catch (e: Exception) {
                     Log.e("Phobos", "Auto-save failed: ${e.message}")
                 }
@@ -353,7 +353,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         }
     }
 
-    // Shared save logic (also used by Auto-Save Memory, Task 17 — slot < 0 = "Auto").
+    // Shared save logic (also used by Auto-Save State, Task 17 — slot < 0 = "Auto").
     // Must run on Dispatchers.IO; performs the native snapshot + copies the result
     // to the configured SAF path (or internal fallback). Returns success.
     private suspend fun performSaveState(systemName: String, romName: String, slot: Int): Boolean {
@@ -418,7 +418,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         }
     }
 
-    // Shared load logic (also used by Auto-Load Memory, Task 17 — slot < 0 = "Auto").
+    // Shared load logic (also used by Auto-Load State, Task 17 — slot < 0 = "Auto").
     // Returns true if a state was found and loaded.
     private suspend fun performLoadState(systemName: String, romName: String, slot: Int): Boolean {
         val startTime = System.currentTimeMillis()
@@ -481,7 +481,9 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     fun deleteState(systemName: String, romName: String, slot: Int = 0) {
         viewModelScope.launch(Dispatchers.IO) {
-            val fileName = "$romName.state$slot"
+            // Mirror performSaveState/performLoadState: slot < 0 = "Auto" slot.
+            val fileName = if (slot < 0) "$romName.state.auto" else "$romName.state$slot"
+            val slotLabel = if (slot < 0) "Auto" else "Slot $slot"
             val sanitizedName = getSanitizedSystemName(systemName)
             val baseUriString = settings.value.statesPath
             var deleted = false
@@ -507,11 +509,11 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             }
             if (deleted) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Deleted state from Slot $slot", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Deleted state from $slotLabel", Toast.LENGTH_SHORT).show()
                 }
             } else {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "No state in Slot $slot", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "No state in $slotLabel", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -602,18 +604,29 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         slotToastJob = viewModelScope.launch {
             delay(350)
             withContext(Dispatchers.Main) {
-                Toast.makeText(context, "Selected Save Slot ${_currentSlot.value}", Toast.LENGTH_SHORT).show()
+                val label = if (_currentSlot.value < 0) "Slot Auto" else "Slot ${_currentSlot.value}"
+                Toast.makeText(context, "Selected $label", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
+    // Slot cycler wraps 0-9 -> Auto (AUTO_STATE_SLOT = -1) -> 0, so the Auto
+    // slot is reachable after slot 9 (and before slot 0) like other emulators.
     fun incrementSlot() {
-        _currentSlot.value = (_currentSlot.value + 1) % 10
+        _currentSlot.value = when (val v = _currentSlot.value) {
+            9 -> AUTO_STATE_SLOT
+            AUTO_STATE_SLOT -> 0
+            else -> v + 1
+        }
         showSlotToast()
     }
 
     fun decrementSlot() {
-        _currentSlot.value = if (_currentSlot.value == 0) 9 else _currentSlot.value - 1
+        _currentSlot.value = when (val v = _currentSlot.value) {
+            AUTO_STATE_SLOT -> 9
+            0 -> AUTO_STATE_SLOT
+            else -> v - 1
+        }
         showSlotToast()
     }
 
@@ -1388,13 +1401,13 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         _isLoaded.value = true
                         currentSystemName = effectiveSystem
                         currentRomName = rom.name
-                        // Auto-Load Memory (Task 17): restore the auto-saved state
+                        // Auto-Load State (Task 17): restore the auto-saved state
                         // right after the core is loaded but BEFORE the emulation
                         // thread starts (the thread is spawned by EmulatorScreen's
                         // LaunchedEffect(isLoaded) after this coroutine returns, so
                         // no race with runMutex). Silently skip when no auto state
                         // exists (performLoadState returns false + logs only).
-                        if (settings.value.autoLoadMemory) {
+                        if (settings.value.autoLoadState) {
                             try {
                                 performLoadState(effectiveSystem, rom.name, AUTO_STATE_SLOT)
                             } catch (e: Exception) {

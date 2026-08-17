@@ -38,8 +38,8 @@ data class EmulatorSettings(
     val interframeBlending: Boolean = true,
     val overscan: Boolean = true,
     val runAhead: Boolean = false,
-    val autoSaveMemory: Boolean = true,
-    val autoLoadMemory: Boolean = false,
+    val autoSaveState: Boolean = true,
+    val autoLoadState: Boolean = false,
     val fullScreenMode: Boolean = false,
     val showTouchControls: Boolean = true,
     val showPerformanceMonitor: Boolean = false,
@@ -259,8 +259,10 @@ class SettingsStore(private val context: Context) {
             interframeBlending = safeGet(INTERFRAME_BLENDING, true),
             overscan = safeGet(OVERSCAN, true),
             runAhead = safeGet(RUN_AHEAD, false),
-            autoSaveMemory = safeGet(AUTO_SAVE_MEMORY, true),
-            autoLoadMemory = safeGet(AUTO_LOAD_MEMORY, false),
+            // Keys are legacy-named (auto_save_memory) for DataStore persistence
+            // compatibility — they toggle save STATES, not cart/flash saves.
+            autoSaveState = safeGet(AUTO_SAVE_MEMORY, true),
+            autoLoadState = safeGet(AUTO_LOAD_MEMORY, false),
             fullScreenMode = safeGet(FULL_SCREEN_MODE, false),
             showTouchControls = safeGet(SHOW_TOUCH_CONTROLS, true),
             showPerformanceMonitor = safeGet(SHOW_PERFORMANCE_MONITOR, false),
@@ -361,8 +363,8 @@ class SettingsStore(private val context: Context) {
     suspend fun setInterframeBlending(enabled: Boolean) = context.dataStore.edit { it[INTERFRAME_BLENDING] = enabled }
     suspend fun setOverscan(enabled: Boolean) = context.dataStore.edit { it[OVERSCAN] = enabled }
     suspend fun setRunAhead(enabled: Boolean) = context.dataStore.edit { it[RUN_AHEAD] = enabled }
-    suspend fun setAutoSaveMemory(enabled: Boolean) = context.dataStore.edit { it[AUTO_SAVE_MEMORY] = enabled }
-    suspend fun setAutoLoadMemory(enabled: Boolean) = context.dataStore.edit { it[AUTO_LOAD_MEMORY] = enabled }
+    suspend fun setAutoSaveState(enabled: Boolean) = context.dataStore.edit { it[AUTO_SAVE_MEMORY] = enabled }
+    suspend fun setAutoLoadState(enabled: Boolean) = context.dataStore.edit { it[AUTO_LOAD_MEMORY] = enabled }
     suspend fun setFullScreenMode(enabled: Boolean) = context.dataStore.edit { it[FULL_SCREEN_MODE] = enabled }
     suspend fun setShowTouchControls(enabled: Boolean) = context.dataStore.edit { it[SHOW_TOUCH_CONTROLS] = enabled }
     suspend fun setShowPerformanceMonitor(enabled: Boolean) = context.dataStore.edit { it[SHOW_PERFORMANCE_MONITOR] = enabled }

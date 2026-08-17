@@ -64,16 +64,16 @@ fun EmulationSettingsScreen(
                         onCheckedChange = { viewModel.setRunAhead(it) }
                     )
                     SettingsSwitchItem(
-                        title = "Auto-Save Memory",
-                        description = "Safeguard game saves from being lost",
-                        checked = settings.autoSaveMemory,
-                        onCheckedChange = { viewModel.setAutoSaveMemory(it) }
+                        title = "Auto-Save State",
+                        description = "Save a state snapshot automatically when you quit a game",
+                        checked = settings.autoSaveState,
+                        onCheckedChange = { viewModel.setAutoSaveState(it) }
                     )
                     SettingsSwitchItem(
-                        title = "Auto-Load Memory",
+                        title = "Auto-Load State",
                         description = "Restore the auto-saved state when a game is loaded",
-                        checked = settings.autoLoadMemory,
-                        onCheckedChange = { viewModel.setAutoLoadMemory(it) }
+                        checked = settings.autoLoadState,
+                        onCheckedChange = { viewModel.setAutoLoadState(it) }
                     )
                     FastForwardSpeedSelectorItem(settings.fastForwardSpeed) { viewModel.setFastForwardSpeed(it) }
                 }
