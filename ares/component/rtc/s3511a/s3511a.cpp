@@ -24,6 +24,18 @@ auto S3511A::load() -> void {
   if(timestamp < 60*60*24*365*5) {
     while(timestamp--) tickSecond();
   }
+
+  // [Phobos] Legacy saves created before host-seeding (fe5714eec) tick forward
+  // from the 2000 epoch (initRegs year=0) and never reach the host year, so the
+  // in-game clock stays stuck in the past. If the RTC year is BEHIND the host
+  // year, re-seed to the current host time (a future-dated clock is the game's
+  // deliberate choice — left alone). seedCurrentTime() also updates the stored
+  // timestamp so the re-seed sticks on the next boot.
+  time_t now = time(0);
+  struct tm* lt = localtime(&now);
+  if(lt && BCD::decode(year()) < BCD::decode(BCD::encode(u8(lt->tm_year % 100)))) {
+    seedCurrentTime();
+  }
 }
 
 // [Phobos] Seed a fresh GBA RTC with the current host wall-clock time in BCD.
@@ -45,7 +57,13 @@ auto S3511A::seedCurrentTime() -> void {
   hour()     = BCD::encode(u8(lt->tm_hour));        //hour (0-23, 24h mode)
   minute()   = BCD::encode(u8(lt->tm_min));         //minute (0-59)
   second()   = BCD::encode(u8(lt->tm_sec));         //second (0-59)
-  status()   = 0x82;   //match initRegs(false): 24-hour clock, interrupts off
+  // Status 0x40 = 24-hour clock, HALT CLEARED (running). initRegs() uses 0x82
+  // (HALT set) for a game-visible "chip reset", and Pokemon's SII driver
+  // treats a halted RTC as unset — it then WRITES 2000-01-01 00:00:00 into the
+  // DATETIME registers and clears HALT, wiping any seed (observed on-device:
+  // status 0x40 + 2000-era clock after boot). A running, valid clock is read,
+  // not overwritten, so the host time survives.
+  status()   = 0x40;
   alarmHour()   = 0x00;
   alarmMinute() = 0x80; //match initRegs(false)
   n64 timestamp = (n64)t;
