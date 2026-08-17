@@ -1,3 +1,4 @@
+#include <android/log.h>
 #include <ares/ares.hpp>
 #include "s3511a.hpp"
 
@@ -10,7 +11,7 @@ namespace ares {
 auto S3511A::load() -> void {
   n64 timestamp = 0;
   for(auto n : range(8)) timestamp.byte(n) = data[8 + n];
-  if(!timestamp || !(timestamp + 1)) return initRegs(false);  //new save file
+  if(!timestamp || !(timestamp + 1)) return seedCurrentTime();  //new save file
 
   if(status() & 0x15) {
     //these status bits are always 0; reset state on invalid status.
@@ -23,6 +24,35 @@ auto S3511A::load() -> void {
   if(timestamp < 60*60*24*365*5) {
     while(timestamp--) tickSecond();
   }
+}
+
+// [Phobos] Seed a fresh GBA RTC with the current host wall-clock time in BCD.
+// On real hardware the S3511A ships pre-set from the factory; ares' initRegs()
+// starts it at the 2000 epoch (year=0, 01/01 00:00:00), so time-based games
+// (Pokemon R/S/E/Unbound berries, clock) read 01/01/2000 and never match the
+// host. Only called for a brand-new save (no timestamp); existing saves keep
+// their clock (load() ticks it forward by the elapsed real time). The seed
+// timestamp is written to data[8..15] so the NEXT load()'s elapsed-time tick
+// works (a zero timestamp would re-enter the new-save branch and reset again).
+auto S3511A::seedCurrentTime() -> void {
+  time_t t = time(0);
+  struct tm* lt = localtime(&t);
+  if(!lt) return initRegs(false);
+  year()     = BCD::encode(u8(lt->tm_year % 100));  //year (0-99)
+  month()    = BCD::encode(u8(lt->tm_mon + 1));     //month (1-12)
+  day()      = BCD::encode(u8(lt->tm_mday));        //day (1-31)
+  weekday()  = lt->tm_wday;                          //0-6, binary (matches tickSecond)
+  hour()     = BCD::encode(u8(lt->tm_hour));        //hour (0-23, 24h mode)
+  minute()   = BCD::encode(u8(lt->tm_min));         //minute (0-59)
+  second()   = BCD::encode(u8(lt->tm_sec));         //second (0-59)
+  status()   = 0x82;   //match initRegs(false): 24-hour clock, interrupts off
+  alarmHour()   = 0x00;
+  alarmMinute() = 0x80; //match initRegs(false)
+  n64 timestamp = (n64)t;
+  for(auto n : range(8)) data[8 + n] = timestamp.byte(n);
+  __android_log_print(ANDROID_LOG_WARN, "PhobosRTC",
+    "S3511A seed: %02x %02x %02x %02x %02x %02x | ts=%08llx",
+    year(), month(), day(), hour(), minute(), second(), (unsigned long long)timestamp);
 }
 
 //save time when game is unloaded

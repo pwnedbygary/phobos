@@ -18,6 +18,7 @@ struct S3511A {
   auto load() -> void;
   auto save() -> void;
   auto power() -> void;
+  auto seedCurrentTime() -> void;
   auto tickSecond() -> void;
   auto checkAlarm() -> void;
   auto readSIO() -> n1;
