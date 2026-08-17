@@ -34,6 +34,7 @@ struct DD : PIDeviceMemory {
     auto load() -> void;
     auto reset() -> void;
     auto save() -> void;
+    auto seedCurrentTime() -> void;
     auto serialize(serializer& s) -> void;
     auto tick(u32 offset) -> void;
     auto tickClock() -> void;

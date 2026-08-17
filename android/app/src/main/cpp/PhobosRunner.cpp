@@ -12,6 +12,7 @@
 #include <sched.h>
 #include <dlfcn.h>
 #include <mutex>
+#include <memory>
 #include <thread>
 #include <condition_variable>
 #include <atomic>
@@ -544,6 +545,27 @@ namespace ares {
 
   static std::atomic<u32> emuThreadGeneration{0};
 
+  // ── Abandoned ("zombie") emulation threads ─────────────────────────────
+  // When unloadSystem() / the N64DD reload path cannot wait out a frame that
+  // is taking too long (>2s: Vulkan fence stalls, pipeline-compile storms),
+  // the emu thread is deliberately leaked (it holds a localRoot shared_ptr,
+  // so the node tree stays alive). BUT the N64 core keeps ALL emulated state
+  // (rdram.ram, cartridge.rom, dd.disk, ...) in namespace-global singletons,
+  // so the NEXT ::ares::Nintendo64::load() → System::unload() frees those
+  // buffers underneath the still-running zombie → SIGSEGV in the interpreter
+  // (CPU::LW / RSP DMA) — the "crash while unloading" bug. N64 run() always
+  // returns (all fence waits are bounded), so a "stuck" frame eventually
+  // completes and the zombie exits at its loop-top generation check. We keep
+  // the zombie's pthread_t + an exit flag and join it (bounded) BEFORE any
+  // N64 load that would re-initialize the singletons.
+  struct EmuThreadCookie {
+    u32 generation = 0;
+    std::shared_ptr<std::atomic<bool>> exited = std::make_shared<std::atomic<bool>>(false);
+  };
+  static std::shared_ptr<EmuThreadCookie> currentEmuThreadCookie;
+  static std::mutex zombieThreadsMutex;
+  static std::vector<std::pair<pthread_t, std::shared_ptr<std::atomic<bool>>>> zombieThreads;
+
   auto emulationLoop(u32 generation) -> void {
     #if defined(ANDROID)
     setpriority(PRIO_PROCESS, 0, -10);
@@ -812,12 +834,19 @@ namespace ares {
     }
     emuThreadRunning = true;
     u32 gen = ++emuThreadGeneration;
+    // The cookie carries the exit flag the zombie-parking machinery uses to
+    // detect when the thread has finished its in-flight frame. The heap copy
+    // is owned by the thread; the shared_ptr here keeps the flag alive.
+    auto cookie = std::make_shared<EmuThreadCookie>();
+    cookie->generation = gen;
+    currentEmuThreadCookie = cookie;
     pthread_create(&emuThread, nullptr, [](void* arg) -> void* {
-        u32 myGen = (u32)(uintptr_t)arg;
-        emulationLoop(myGen);
+        std::unique_ptr<EmuThreadCookie> cookie((EmuThreadCookie*)arg);
+        emulationLoop(cookie->generation);
+        cookie->exited->store(true, std::memory_order_release);
         emuThreadRunning = false;
         return nullptr;
-    }, (void*)(uintptr_t)gen);
+    }, new EmuThreadCookie(*cookie));
     currentEmuThread.store(emuThread);
   }
 
@@ -825,6 +854,61 @@ namespace ares {
     if (emulationRunning == running) return;
     emulationRunning = running;
     if (running) ensureThread();
+  }
+
+  // Wait for parked zombie threads to finish their in-flight frame and exit.
+  // MUST be called before ::ares::Nintendo64::load() (or anything that
+  // re-initializes the N64 singleton hardware) and before spawning a fresh
+  // emulation thread. N64 run() always returns (all fence waits are bounded),
+  // so a "stuck" frame eventually completes and the zombie exits at its
+  // loop-top check; this waits it out so it can't race the teardown.
+  static auto joinAbandonedThreads(int budgetMs = 10000) -> void {
+    std::lock_guard<std::mutex> lock(zombieThreadsMutex);
+    for (auto it = zombieThreads.begin(); it != zombieThreads.end(); ) {
+      pthread_t handle = it->first;
+      auto& exited = it->second;
+      if (exited->load(std::memory_order_acquire)) {
+        pthread_join(handle, nullptr);
+        LOGI("Zombie thread %lu joined (had already exited)", (unsigned long)handle);
+        it = zombieThreads.erase(it);
+        continue;
+      }
+      bool joined = false;
+      for (int waited = 0; waited < budgetMs; waited += 10) {
+        if (exited->load(std::memory_order_acquire)) {
+          pthread_join(handle, nullptr);
+          LOGI("Zombie thread %lu joined after ~%dms", (unsigned long)handle, waited);
+          joined = true;
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      if (joined) {
+        it = zombieThreads.erase(it);
+      } else {
+        LOGW("Zombie thread %lu still running after %dms — leaving parked", (unsigned long)handle, budgetMs);
+        ++it;
+      }
+    }
+  }
+
+  // Park the currently-running emulation thread as a zombie: it is stuck
+  // inside root->run() (a frame taking >2s) and we are about to drop the
+  // handle. The next N64 load joins it via joinAbandonedThreads() BEFORE
+  // touching the singleton hardware, closing the use-after-free window.
+  static auto parkZombieThread() -> void {
+    if (!emuThread) return;
+    {
+      std::lock_guard<std::mutex> lock(zombieThreadsMutex);
+      zombieThreads.push_back({emuThread,
+          currentEmuThreadCookie ? currentEmuThreadCookie->exited
+                                 : std::make_shared<std::atomic<bool>>(false)});
+      LOGW("Zombie thread %lu parked (joined before the next N64 load)", (unsigned long)emuThread);
+    }
+    emuThread = 0;
+    emuThreadRunning = false;
+    currentEmuThread.store(0);
+    currentEmuThreadCookie.reset();
   }
 
   struct AndroidPlatform : Platform {
@@ -1532,6 +1616,17 @@ namespace ares {
               }
               if (!ddAttached) attachFile("64dd.ipl.rom");
           }
+          // [Phobos] The 64DD RTC (time.rtc) must EXIST in the system pak so
+          // DD::RTC::save() can write to it. MIA's Nintendo64DD system creates
+          // it (0x10 bytes); the ares core writes the live RTC into it via
+          // root->save(). Without a file node here, the write silently no-ops
+          // and the RTC never persists ("Error 48 — Date/Time not set" on
+          // every boot after first save).
+          if (::ares::Nintendo64::_DD()) {
+            // The 64DD RTC (time.rtc) must EXIST in the system pak so
+            // DD::RTC::save() can write to it (pak is rebuilt per call).
+            dir->append("time.rtc", 0x10);
+          }
           #endif
       } else if (nodeName == "Nintendo 64DD") {
           // Defensive: in case a future ares names the DD root node distinctly.
@@ -1727,9 +1822,12 @@ namespace ares {
           }
         }
       }
-      emuThread = 0;
-      emuThreadRunning = false;
-      currentEmuThread.store(0);
+      // Park the stuck thread as a zombie so the next N64 load joins it
+      // BEFORE re-initializing the singleton hardware (see
+      // joinAbandonedThreads). Without this, the next load's System::unload()
+      // frees rdram/cartridge.rom/dd.disk under the running zombie → SIGSEGV
+      // in CPU::LW (the "crash while unloading" bug).
+      parkZombieThread();
       LOGI("System abandoned (thread stuck)");
       return;
     }
@@ -2276,6 +2374,11 @@ else if (port->type() == "Keyboard") {
 
     LOGI("Ares: Loading core for %s", (const char*)identifiedSystem);
     if (identifiedSystem == "Nintendo 64" || identifiedSystem == "Nintendo 64DD") {
+      // Join any parked zombie from a previous abandon BEFORE re-initializing
+      // the N64 singleton hardware: System::load → System::unload frees
+      // rdram.ram / cartridge.rom / dd.disk, and a still-running zombie reads
+      // those → SIGSEGV in CPU::LW (the "crash while unloading" bug).
+      joinAbandonedThreads();
       ::ares::Nintendo64::vulkan.enable = true; // DEFAULT TO VULKAN
       // Set pipeline cache path for Vulkan shader persistence.
       // Prefer the user-configured Vulkan cache directory (Task 40); fall back
@@ -2395,12 +2498,11 @@ else if (port->type() == "Keyboard") {
           LOGI("N64: CPU Recompiler set to %s", n64Recompiler ? "ON" : "OFF");
       }
 
-      // Import game save data (SRAM, EEPROM, Flash, RTC) — always restores.
-      // The Auto-Load Memory toggle controls the "Auto" save-state slot only.
-      // Must run BEFORE connectDevices(): the core reads cartridge save files
-      // from the medium pak at port-connect time, so a post-connect import
-      // never reaches the cartridge (it would start fresh each load).
-      if (savesPath && currentMedium && currentMedium->pak) {
+      // Import game save data (SRAM, EEPROM, Flash, RTC, 64DD disk) — always
+      // restores. Must run BEFORE connectDevices(): the core reads cartridge/
+      // disk save files from the medium pak at port-connect time, so a
+      // post-connect import never reaches the cartridge (fresh each load).
+      if (savesPath) {
         // Per-game save subdirectory (same key as flushSavesToDisk):
         // saves/<System>/<RomBase>/
         string romKey = currentRomBase;
@@ -2408,22 +2510,35 @@ else if (port->type() == "Keyboard") {
         if (romKey.size() == 0) romKey = "rom";
         string saveDir = {savesPath, "/", identifiedSystem, "/", romKey, "/"};
         directory::create(saveDir);
-        for (auto& saveNode : currentMedium->pak->files()) {
-          string fileName = saveNode->name();
-          if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
-              !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
-              !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
-              !fileName.endsWith(".flash") && !fileName.endsWith(".rtc")) continue;
-          string fullPath = {saveDir, fileName};
-          auto existing = file::read(fullPath);
-          if (existing.size() == 0) continue;
-          if (auto fp = currentMedium->pak->write(fileName)) {
-            // vfs::memory::write silently drops bytes past the current size —
-            // resize to the imported size first (mirrors MIA's Pak::load).
-            if (fp->size() != existing.size()) fp->resize(existing.size());
-            fp->write({existing.data(), (u32)existing.size()});
-            LOGI("Saves: imported %s (%zu bytes) for %s", (const char*)fileName, existing.size(), (const char*)identifiedSystem);
+        // Import matching save files from the persistent dir into a given pak.
+        auto importIntoPak = [&](auto& pak) -> void {
+          for (auto& saveNode : pak->files()) {
+            string fileName = saveNode->name();
+            if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
+                !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
+                !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
+                !fileName.endsWith(".flash") && !fileName.endsWith(".rtc") &&
+                !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error")) continue;
+            string fullPath = {saveDir, fileName};
+            auto existing = file::read(fullPath);
+            if (existing.size() == 0) continue;
+            if (auto fp = pak->write(fileName)) {
+              // vfs::memory::write silently drops bytes past the current size —
+              // resize to the imported size first (mirrors MIA's Pak::load).
+              if (fp->size() != existing.size()) fp->resize(existing.size());
+              fp->write({existing.data(), (u32)existing.size()});
+              LOGI("Saves: imported %s (%zu bytes) for %s", (const char*)fileName, existing.size(), (const char*)identifiedSystem);
+            }
           }
+        };
+        // Cartridge medium pak.
+        if (currentMedium && currentMedium->pak) importIntoPak(currentMedium->pak);
+        // 64DD disk medium pak (program.disk / program.disk.error).
+        if (secondaryMedium && secondaryMedium->pak) importIntoPak(secondaryMedium->pak);
+        // System pak (root->pak()): time.rtc for 64DD.
+        if (root) {
+          auto sysPak = root->pak();
+          if (sysPak) importIntoPak(sysPak);
         }
         // MIA-level sidecar saves (.sav, .flash, cpu.ram): restore them to
         // mia_temp so MIA's Pak::load() / ares' CPU::load() pick them up.
@@ -2502,13 +2617,13 @@ else if (port->type() == "Keyboard") {
   // emulation thread is NOT mid-frame (pause path holds the emulation; unload
   // path holds systemMutex).
   static auto flushSavesToDisk() -> void {
-    if (!savesPath || !root || !currentMedium || !currentMedium->pak) return;
-    // CRITICAL: flush the LIVE core state into the pak FIRST. The game's SRAM/
-    // EEPROM/Flash live in the ares core (e.g. N64 cartridge.ram), NOT in the
-    // pak — reading the pak directly returns whatever was last imported/written,
-    // so the flush would persist STALE data (e.g. a previous game's save.ram).
-    // root->save() → Cartridge::save() → ram.save(pak->write("save.ram")) puts
-    // the live state into the pak, then we copy it to the persistent dir.
+    if (!savesPath || !root) return;
+    // CRITICAL: flush the LIVE core state into the pak(s) FIRST. The game's
+    // SRAM/EEPROM/Flash live in the ares core (e.g. N64 cartridge.ram, 64DD
+    // disk), NOT in the pak — reading the pak directly returns whatever was
+    // last imported/written, so the flush would persist STALE data. root->save()
+    // → Cartridge::save() / DD::save() / RTC → live state into the pak(s), then
+    // we copy to the persistent dir.
     root->save();
     string sysName = root->name();
     // Per-game subdirectory (keyed by ROM base name) so games don't clobber
@@ -2521,25 +2636,44 @@ else if (port->type() == "Keyboard") {
     string saveDir = {savesPath, "/", sysName, "/", romKey, "/"};
     directory::create(saveDir);
     bool wrote = false;
-    for (auto& saveNode : currentMedium->pak->files()) {
+    // Copy a save node's bytes to disk if it matches the save filter and is
+    // non-empty/non-zero.
+    auto flushNode = [&](auto& saveNode) -> void {
       string fileName = saveNode->name();
       if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
           !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
           !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
-          !fileName.endsWith(".flash") && !fileName.endsWith(".rtc")) continue;
+          !fileName.endsWith(".flash") && !fileName.endsWith(".rtc") &&
+          !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error")) return;
       auto fp = saveNode;
       fp->seek(0);
       auto size = fp->size();
-      if (size == 0) continue;
+      if (size == 0) return;
       std::vector<u8> buf(size);
       fp->read({buf.data(), size});
       bool allZero = true;
       for (auto b : buf) { if (b != 0) { allZero = false; break; } }
-      if (allZero) continue;
+      if (allZero) return;
       string fullPath = {saveDir, fileName};
       file::write(fullPath, {buf.data(), size});
       wrote = true;
       LOGI("Saves: flushed %s (%zu bytes) for %s [%s]", (const char*)fileName, size, (const char*)sysName, (const char*)romKey);
+    };
+    // Cartridge medium pak.
+    if (currentMedium && currentMedium->pak) {
+      for (auto& saveNode : currentMedium->pak->files()) flushNode(saveNode);
+    }
+    // 64DD disk medium pak (program.disk / program.disk.error) — the disk save
+    // area and error table live in secondaryMedium, NOT the cartridge pak.
+    if (secondaryMedium && secondaryMedium->pak) {
+      for (auto& saveNode : secondaryMedium->pak->files()) flushNode(saveNode);
+    }
+    // System pak (root->pak()): holds time.rtc for 64DD (RTC save area) and
+    // pif.rom for every N64. The RTC is written here by DD::RTC::save() via
+    // root->save(), so we must flush it too or the 64DD RTC never persists
+    // ("Error 48 — Date/Time not set" on every boot after first save).
+    if (root && root->pak()) {
+      for (auto& saveNode : root->pak()->files()) flushNode(saveNode);
     }
     // MIA-level sidecar saves (.sav, .flash for NGP/NGPC/WonderSwan): copy
     // from mia_temp so they survive cleanup (same as unload).
@@ -3068,9 +3202,61 @@ else if (port->type() == "Keyboard") {
     // root while it sleeps in the pause branch is safe.
     if (root && root->name() == "Nintendo 64" && mediumName == "Nintendo 64DD") {
         LOGI("N64DD: reloading system as Nintendo 64DD to mount disk");
+        // Stop the emulation thread BEFORE touching root, and WAIT for it to
+        // fully exit. The emu thread may be stuck inside root->run() (not
+        // sleeping in the pause branch) — nulling root then spawns a new
+        // thread that races the old thread's teardown (CPU::LW / RSP DMA
+        // SIGSEGV on freed cartridge/RDRAM). We must not flip
+        // emulationRunning back on until the old thread has confirmed exit,
+        // or it resumes with its stale localRoot.
         isPausedAtomic = true;
         fastForwardAtomic = false;
+        setEmulationRunning(false);
+        bool joined = false;
+        if (emuThread && emuThreadRunning) {
+            // Wait for the old thread to exit (bounded: it may be stuck).
+            for (int i = 0; i < 200 && emuThreadRunning.load(); i++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            if (!emuThreadRunning.load()) {
+                pthread_join(emuThread, nullptr);
+                emuThread = 0;
+                joined = true;
+            }
+        } else {
+            emuThread = 0;
+            joined = true;
+        }
+        if (!joined) {
+            LOGW("N64DD: emulation thread stuck inside a frame (>2s); abandoning the old system and aborting the disk mount");
+            // The zombie is still executing on the N64 singleton hardware
+            // (rdram.ram / cartridge.rom / dd.disk). Do NOT proceed to
+            // ::ares::Nintendo64::load() here — System::load → System::unload
+            // would free those buffers underneath the running zombie → SIGSEGV
+            // in CPU::LW (the "crash while unloading" bug). Same abandon
+            // semantics as unloadSystem(): drop the global root (the zombie's
+            // localRoot keeps the node tree alive), leak the old runMutex (the
+            // zombie holds it), bump the generation so the zombie exits at its
+            // loop-top check once its frame completes, and PARK the handle so
+            // the next N64 load joins it before re-initializing the singletons.
+            root = {};
+            runMutex = new std::recursive_mutex();
+            emuThreadGeneration.fetch_add(1);
+            parkZombieThread();
+            return false;
+        }
+        // Old thread is fully dead — safe to tear down root. Also join any
+        // OLDER parked zombies before re-initializing the singleton hardware.
         root = {};
+        joinAbandonedThreads();
+        // The old system's audio streams are dead now — clear the registry so
+        // the fresh 64DD system's streams register cleanly (otherwise the new
+        // system mixes with stale dead streams → no sound after the reload).
+        {
+            std::lock_guard<std::mutex> lock(audioStreamsMutex);
+            audioStreams.clear();
+            audioStreamsVersion.fetch_add(1, std::memory_order_release);
+        }
         ::ares::Nintendo64::vulkan.enable = true;  // settings persist from cart load
         const char* regionString = [&]() -> const char* {
             // No PAL 64DD exists; every non-NTSC-U preference uses NTSC-J.
@@ -3083,26 +3269,50 @@ else if (port->type() == "Keyboard") {
         bool ok = ::ares::Nintendo64::load(root, regionString);
         if (ok && root) {
             ::ares::Nintendo64::option("Recompiler", n64Recompiler ? "true" : "false");
-            root->power();
-            connectDevices(root);  // now sees the Disk Drive port -> mounts .ndd
-            // Re-import the cartridge save (SRAM/EEPROM) for the fresh node.
-            if (savesPath && currentMedium && currentMedium->pak) {
-                string saveDir = {savesPath, "/Nintendo 64/"};
+            // Re-import the cartridge + disk + RTC saves for the fresh 64DD
+            // node. Per-ROM dir (same key as flushSavesToDisk). Must run
+            // BEFORE connectDevices so the core reads the restored saves at
+            // port connect time (and so the system pak's time.rtc is present
+            // when DD::load() reads it).
+            if (savesPath) {
+                string romKey = currentRomBase;
+                romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+                if (romKey.size() == 0) romKey = "rom";
+                string saveDir = {savesPath, "/Nintendo 64/", romKey, "/"};
                 directory::create(saveDir);
-                for (auto& saveNode : currentMedium->pak->files()) {
+                auto importPak = [&](auto& pak) -> void {
+                  for (auto& saveNode : pak->files()) {
                     string fileName = saveNode->name();
                     if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
                         !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
                         !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
-                        !fileName.endsWith(".flash") && !fileName.endsWith(".rtc")) continue;
+                        !fileName.endsWith(".flash") && !fileName.endsWith(".rtc") &&
+                        !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error")) continue;
                     string path = {saveDir, fileName};
                     auto data = nall::file::read(path);
                     if (!data.empty()) {
-                        saveNode->write(data.data(), data.size());
-                        LOGI("Saves: imported save for %s", (const char*)fileName);
+                      saveNode->write(data.data(), data.size());
+                      LOGI("Saves: imported save for %s", (const char*)fileName);
                     }
+                  }
+                };
+                if (currentMedium && currentMedium->pak) importPak(currentMedium->pak);
+                if (secondaryMedium && secondaryMedium->pak) importPak(secondaryMedium->pak);
+                if (root) {
+                  auto sysPak = root->pak();
+                  if (sysPak) importPak(sysPak);
                 }
             }
+            // [Phobos] Attach the cartridge + disk BEFORE powering on. Desktop
+            // ares loads the .z64 and .ndd TOGETHER, so the IPL/boot sees both
+            // from the start. Powering on first (old order) booted the 64DD IPL
+            // with NO cartridge attached → F-Zero X's "cannot play with this
+            // disk alone" check failed on reload.
+            connectDevices(root);  // attaches Cartridge + mounts .ndd (Disk Drive)
+            root->power();
+            // Restart the emulation thread for the new 64DD system (we stopped
+            // it above so it wouldn't race the teardown).
+            setEmulationRunning(true);
             LOGI("N64DD: system reloaded with disk drive");
             return true;
         }

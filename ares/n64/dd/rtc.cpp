@@ -7,7 +7,20 @@ auto DD::RTC::load() -> void {
   //byte 0 to 7 = raw rtc time (last updated, only 6 bytes are used)
   n64 check = 0;
   for(auto n : range(8)) check.byte(n) = ram.read<Byte>(n);
-  if(!~check) return;  //new save file
+  __android_log_print(ANDROID_LOG_WARN, "PhobosDD",
+    "RTC load: %02x%02x %02x%02x %02x%02x %02x%02x | ts=%08llx | check=%016llx new=%d valid=%d",
+    ram.read<Byte>(0), ram.read<Byte>(1), ram.read<Byte>(2), ram.read<Byte>(3),
+    ram.read<Byte>(4), ram.read<Byte>(5), ram.read<Byte>(6), ram.read<Byte>(7),
+    (unsigned long long)ram.read<Dual>(8),
+    (unsigned long long)check, !~check ? 1 : 0, valid() ? 1 : 0);
+  if(!~check) {  //new save file
+    // [Phobos] Seed a fresh 64DD RTC with the current host time in BCD.
+    // On real hardware the RTC comes pre-set from the factory; leaving it
+    // all-0xFF makes the game read invalid time data -> "Error 48 —
+    // Date/Time not set" on every boot (F-Zero X Expansion Kit).
+    seedCurrentTime();
+    return;
+  }
 
   //check for invalid time info, if invalid, set time info to something invalid and ignore the rest
   if (!valid()) {
@@ -25,6 +38,31 @@ auto DD::RTC::load() -> void {
   while(timestamp--) tickSecond();
 }
 
+// [Phobos] Write the current wall-clock time into the RTC as BCD
+// (byte 0=year, 1=month, 2=day, 3=hour, 4=minute, 5=second), plus the save
+// timestamp at ram[8..15] so the elapsed-time update in load() works on later
+// boots. Matches the byte layout used by tickSecond()/controller.cpp.
+auto DD::RTC::seedCurrentTime() -> void {
+  time_t t = time(0);
+  struct tm* lt = localtime(&t);
+  if(!lt) return;
+  ram.write<Byte>(0, BCD::encode(u8(lt->tm_year % 100)));  //year (0-99)
+  ram.write<Byte>(1, BCD::encode(u8(lt->tm_mon + 1)));     //month (1-12)
+  ram.write<Byte>(2, BCD::encode(u8(lt->tm_mday)));        //day (1-31)
+  ram.write<Byte>(3, BCD::encode(u8(lt->tm_hour)));        //hour (0-23)
+  ram.write<Byte>(4, BCD::encode(u8(lt->tm_min)));         //minute (0-59)
+  ram.write<Byte>(5, BCD::encode(u8(lt->tm_sec)));         //second (0-59)
+  ram.write<Byte>(6, 0);
+  ram.write<Byte>(7, 0);
+  n64 timestamp = (n64)t;
+  for(auto n : range(8)) ram.write<Byte>(8 + n, timestamp.byte(n));
+  __android_log_print(ANDROID_LOG_WARN, "PhobosDD",
+    "RTC seed: %02x%02x %02x%02x %02x%02x %02x%02x | ts=%08llx",
+    ram.read<Byte>(0), ram.read<Byte>(1), ram.read<Byte>(2), ram.read<Byte>(3),
+    ram.read<Byte>(4), ram.read<Byte>(5), ram.read<Byte>(6), ram.read<Byte>(7),
+    (unsigned long long)timestamp);
+}
+
 auto DD::RTC::reset() -> void {
   ram.reset();
 }
@@ -36,6 +74,11 @@ auto DD::RTC::save() -> void {
   if(auto fp = system.pak->write("time.rtc")) {
     ram.save(fp);
   }
+  __android_log_print(ANDROID_LOG_WARN, "PhobosDD",
+    "RTC save: %02x%02x %02x%02x %02x%02x %02x%02x | ts=%08llx",
+    ram.read<Byte>(0), ram.read<Byte>(1), ram.read<Byte>(2), ram.read<Byte>(3),
+    ram.read<Byte>(4), ram.read<Byte>(5), ram.read<Byte>(6), ram.read<Byte>(7),
+    (unsigned long long)timestamp);
 }
 
 auto DD::RTC::serialize(serializer& s) -> void {
