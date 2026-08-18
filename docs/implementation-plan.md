@@ -166,14 +166,11 @@
 
 - **#9 — Ape Escape cinematic skip** — CD-XA intro disabled (upstream state); needs logcat of intro + core change. _Status: 🟡 Diagnosed · Diff: 🟡 Medium (PS1 core)_
 - **#10c/10a — PCE/CD + Neo Geo MVS/AES joint investigation** — loads, BIOS OK, black screen; shared ARM64/libco fingerprint; NOW ALSO = ZX 128K (gated, same PSG co-routine issue). _Status: 🔴 Broken (gated) · Diff: 🔴 Hard (deep)_
-- **#17 — Auto-Save State / Auto-Load State ("Auto" save-state slot)** — IMPLEMENTED 2026-08-17 (`1769c1bdb` + `a7e34946c`): auto-save on unload + auto-load on boot; **VERIFIED on-device (GBA Pokemon) 2026-08-17**; renamed to "State" (avoids confusion with always-on cart/flash saves); Auto slot now selectable in the cycler (after 9 / before 0) + manual save/load/delete; toggles in BOTH Settings and the pause menu (all cores). _Status: ✅ Done · Diff: 🟢_
 - **#46 — Audio pops residual** (sub-60 physics; after perf floor restored). _Status: ⬜ After perf · Diff: 🟡 Medium_
 - **#49 — N64 save import/export** (RetroArch / Mupen64Plus FZ .sra/.eep/.fla/.mpk → Phobos). _Status: ⬜ Open · Diff: 🟡 Medium_
-- **#52 — PS1 multi-disc swap (BEFORE 1.0)** — FIXED + VERIFIED 2026-08-17 (`42c462549`): the PS1 branch used `find<Node::Port>("Disc Tray")` (direct-children only) but the port is nested at root→PlayStation→Disc Tray → always "Disc Tray not found". Fixed with `scan<Node::Port>("Disc Tray")` (recursive). **VERIFIED on-device 23:23 (MGS Disc 2 swap): log shows Detach→Attach PlayStation Disc → `PS1: disc swapped to PlayStation` — no error.** _Status: ✅ Done · Diff: 🟢_
 - **#59 — Proper write-through dcache bypass (correct design, per-game)** — parked; high-risk JIT memory path. _Status: 🟡 Parked · Diff: 🔴 Hard (JIT)_
 - **#60 — Per-game hash overrides table** — needed for Task 59 gating; also future per-game knobs. _Status: 🟡 Parked (design done) · Diff: 🔴 Hard_
 - **#61 — Proper release APK signing (Play-ready)** — real keystore (base64 secret in GH Actions), `signingConfigs.release` reading PHOBOS_KEYSTORE_* gated behind a project property. _Status: ⬜ Open · Diff: 🟢 Easy (config/CI only)_
-- **#62 — Dotprod/FP16/NEON optimization survey** — Modern flavor's `-march=armv8.2-a+fp16+dotprod` now correctly applied (commit `4c3933de4`) but Clang emits ZERO dotprod/FP16 instructions (verified). Surveyed hot loops (N64 VI CPU scanout fallback, video color conversion, audio mixer, parallel-RDP NEON, dcache/JIT): **Conclusion:** scrap dead CPU software-mode path if unused, apply hand-written NEON for remaining pixel/audio paths where appropriate, dotprod/fp16 are largely inert for this codebase without hand-written intrinsics. _Status: ✅ Survey Complete · Diff: 🟢 (survey)_
 - **Mischief Makers (N64) title freeze — PARKED (deep RSP accuracy)** — interrupt chain verified functional (RCP=1 → handler entry); NOT the VU stubs (zero hits). Game's IRQ handler at 0x800A5FC8 follows a corrupted dispatch → beq-self fatal trap at 0x800008b8, garbage EPC (0xb400...). Root cause = upstream ares RSP microcode inaccuracy for the game's custom audio microcode. Need VU instruction bisection (diag in tree, commit `22ee8057a`) or reference-RSP comparison. _Status: 🟡 Parked · Diff: 🔴 Hard (deep)_
 - **FEATURE-COMPLETENESS AUDIT (pre-1.0, investigated 2026-08-17) — Run-Ahead NOT wired; Fast Boot RESOLVED**: Run-Ahead toggle is DEAD (no JNI/native bridge; ares `setRunAhead`/_runAhead exists but nothing calls it — see note). Fast Boot moved per-core 2026-08-17 (`42c462549`): toggle now lives in the pause menu's Boot Options, shown only on GB/GBC/NGP/NGPC/PS1 (the cores ares supports it on); removed from global settings. Skip Boot ROM wired (GB/GBC/WS only). _Status: 🟡 Run-Ahead open · Diff: 🟢 (run-ahead bridge)
 - **QoL phase** (13a/13b/13c/14/15/15a/16/18/19/31/42/43/44/50/51/71). _Status: ⬜ After core stability_
@@ -691,6 +688,51 @@ Implementation (Kotlin):
 - **Pause-menu toggles (all cores):** Auto-Save State / Auto-Load State switches in the
   Save / Load States section, so they're reachable in-game without visiting Settings.
 
+#### Task 52 — PS1 multi-disc swap (FIXED & VERIFIED 2026-08-17 `42c462549`)
+
+The old "Change Disc" was a STUB reusing the 64DD path. Added a PS1 branch in
+`loadSecondaryRom()`: `currentMedium = secondaryMedium` → find PS1 `Disc Tray` port →
+`tray->disconnect()` → `tray->allocate("PlayStation Disc")` → `tray->connect()`
+(re-reads `cd.rom` + TOC). No full reload.
+
+**BUG (found on-device, MGS disc 2):** `root->find<Node::Port>("Disc Tray")` returned
+null → "PS1: Disc Tray not found — cannot swap". ares `Node::find<T>(name)` only
+searches DIRECT children; the port is nested at root→PlayStation→Disc Tray. The N64DD
+path worked because it uses `find<Node::Port>()` with no name (that overload recurses).
+**Fix: `root->scan<Node::Port>("Disc Tray")` (recursive).**
+
+**VERIFIED on-device 23:23 (MGS Disc 2 swap):** log shows `Detach: PlayStation Disc` →
+`Attach: PlayStation Disc` → `VFS: Returning currentMedium pak for PlayStation Disc` →
+`PS1: disc swapped to PlayStation` (no "Disc Tray not found", no crash; brief FPS dip
+as the new disc TOC loads, then recovers). User wasn't at a disc-change prompt in-game,
+but the hot-swap mechanics (detach/attach/re-read) are confirmed working. Related:
+Task 51 (ZX multi-tape swap) is the same hot-swap-tray mechanism.
+
+#### Task 62 — Dotprod/FP16/NEON optimization survey (DONE 2026-08-17, surveyed)
+
+**Context (2026-08-15):** commit `4c3933de4` removed the root CMake's hardcoded
+`-march=armv8-a+simd` that was overriding the per-flavor `cppFlags` (last-flag-wins in
+Clang). The modern flavor now correctly compiles with `-march=armv8.2-a+fp16+dotprod`
+(verified in ninja + disassembly), legacy with `armv8-a+simd`.
+
+**Survey Findings (2026-08-17):**
+1. **Clang emits ZERO dotprod/FP16 instructions automatically** — Clang only auto-emits
+   SDOT for very specific int8 GEMM dot-product loops and never auto-vectorizes FP16
+   without explicit intrinsics (`vaddh_f16`, etc.). The modern binary's 159KB diff is
+   codegen noise, not a perf win.
+2. **Dead CPU Software Mode:** N64 has a legacy CPU fallback path (`VI::refresh` CPU
+   scanout + 16.7M identity palette) which was a remnant of software rendering before
+   Vulkan/parallel-RDP. Since Vulkan is required on mobile and software mode is useless,
+   any remaining dead code paths can be safely ignored or pruned, but keeping the
+   fallback active for wide modes (Rogue Squadron 1024 menu) is helpful.
+3. **NEON Opportunities:** Hand-written NEON is already used in PhobosRunner for direct
+   Vulkan RGBA→ABGR copy. Audio mixer and resampler use standard scalar loops with float32
+   (correct for audio precision). Parallel-RDP already leverages SIMD/NEON where applicable.
+   Dotprod/fp16 are largely inert without targeted manual intrinsics, which are unnecessary
+   since Phobos hits full 60 FPS on Adreno 740.
+
+**Difficulty:** 🟢 Easy (survey). **Status:** ✅ Survey Complete.
+
 ### ⏸ PENDING / PARKED (PLANNED / PARKED)
 
 #### Task 13c — Multi-controller support (PLANNED 2026-08-11)
@@ -871,64 +913,14 @@ Emulation Settings (was a silent no-op on N64/MD/SFC/etc.) and moved to a per-co
 "Boot Options" pause-menu section shown only on GB/GBC, NGP/NGPC, PS1 (the cores ares
 actually supports Fast Boot on).
 
-#### Task 17 — Auto-Save / Auto-Load State ("Auto" save-state slot) (DONE 2026-08-17, verified)
-
-"Auto" save-state slot; save on quit, load on boot. **VERIFIED on-device (GBA
-Pokemon) 2026-08-17** — see the full write-up in the ✅ COMPLETE section.
-
 #### Task 46 — Audio pops residual (OPEN, after perf floor)
 
 Sub-60 physics underruns; after perf floor restored.
-
-#### Task 52 — PS1 multi-disc swap (FIXED & VERIFIED 2026-08-17 `42c462549`)
-
-The old "Change Disc" was a STUB reusing the 64DD path. Added a PS1 branch in
-`loadSecondaryRom()`: `currentMedium = secondaryMedium` → find PS1 `Disc Tray` port →
-`tray->disconnect()` → `tray->allocate("PlayStation Disc")` → `tray->connect()`
-(re-reads `cd.rom` + TOC). No full reload.
-
-**BUG (found on-device, MGS disc 2):** `root->find<Node::Port>("Disc Tray")` returned
-null → "PS1: Disc Tray not found — cannot swap". ares `Node::find<T>(name)` only
-searches DIRECT children; the port is nested at root→PlayStation→Disc Tray. The N64DD
-path worked because it uses `find<Node::Port>()` with no name (that overload recurses).
-**Fix: `root->scan<Node::Port>("Disc Tray")` (recursive).**
-
-**VERIFIED on-device 23:23 (MGS Disc 2 swap):** log shows `Detach: PlayStation Disc` →
-`Attach: PlayStation Disc` → `VFS: Returning currentMedium pak for PlayStation Disc` →
-`PS1: disc swapped to PlayStation` (no "Disc Tray not found", no crash; brief FPS dip
-as the new disc TOC loads, then recovers). User wasn't at a disc-change prompt in-game,
-but the hot-swap mechanics (detach/attach/re-read) are confirmed working. Related:
-Task 51 (ZX multi-tape swap) is the same hot-swap-tray mechanism.
 
 #### Task 61 — Proper release APK signing (Play-ready) (OPEN)
 
 Add real keystore (base64 secret in GH Actions), `signingConfigs.release` reading
 PHOBOS_KEYSTORE_* gated behind a project property; wire secrets. Easy (config/CI only).
-
-#### Task 62 — Dotprod/FP16/NEON optimization survey (DONE 2026-08-17, surveyed)
-
-**Context (2026-08-15):** commit `4c3933de4` removed the root CMake's hardcoded
-`-march=armv8-a+simd` that was overriding the per-flavor `cppFlags` (last-flag-wins in
-Clang). The modern flavor now correctly compiles with `-march=armv8.2-a+fp16+dotprod`
-(verified in ninja + disassembly), legacy with `armv8-a+simd`.
-
-**Survey Findings (2026-08-17):**
-1. **Clang emits ZERO dotprod/FP16 instructions automatically** — Clang only auto-emits
-   SDOT for very specific int8 GEMM dot-product loops and never auto-vectorizes FP16
-   without explicit intrinsics (`vaddh_f16`, etc.). The modern binary's 159KB diff is
-   codegen noise, not a perf win.
-2. **Dead CPU Software Mode:** N64 has a legacy CPU fallback path (`VI::refresh` CPU
-   scanout + 16.7M identity palette) which was a remnant of software rendering before
-   Vulkan/parallel-RDP. Since Vulkan is required on mobile and software mode is useless,
-   any remaining dead code paths can be safely ignored or pruned, but keeping the
-   fallback active for wide modes (Rogue Squadron 1024 menu) is helpful.
-3. **NEON Opportunities:** Hand-written NEON is already used in PhobosRunner for direct
-   Vulkan RGBA→ABGR copy. Audio mixer and resampler use standard scalar loops with float32
-   (correct for audio precision). Parallel-RDP already leverages SIMD/NEON where applicable.
-   Dotprod/fp16 are largely inert without targeted manual intrinsics, which are unnecessary
-   since Phobos hits full 60 FPS on Adreno 740.
-
-**Difficulty:** 🟢 Easy (survey). **Status:** ✅ Survey Complete.
 
 #### Task 63 — PS1 CPU (R3000) recompiler (OPEN — the big one)
 
