@@ -20,6 +20,21 @@ fun MainScaffold(viewModel: MainViewModel) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
+    // Navigation requests from outside the NavHost (debug intent loader,
+    // activity key fallback for the swap-screen hotkey).
+    LaunchedEffect(Unit) {
+        viewModel.navEvents.collect { route ->
+            if (route == "library" || route == "console" || route == "settings") {
+                navController.navigate(route) {
+                    popUpTo(navController.graph.startDestinationId)
+                    launchSingleTop = true
+                }
+            } else {
+                navController.navigate(route)
+            }
+        }
+    }
+
     Scaffold(
         bottomBar = {
             if (currentDestination?.route != "system/{name}" && currentDestination?.route != "emulator/{system}/{rom}") {

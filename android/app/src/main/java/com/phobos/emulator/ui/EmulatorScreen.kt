@@ -134,6 +134,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                     "dec_slot"       -> viewModel.decrementSlot()
                     "save"           -> viewModel.saveState(systemName, romName, currentSlot)
                     "load"           -> viewModel.loadState(systemName, romName, currentSlot)
+                    "library"        -> viewModel.swapToLibrary()
                     else -> {}
                 }
             }
@@ -185,9 +186,14 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     BackHandler { if (!isLoaded || isPaused) { viewModel.setPause(true); showQuitDialog = true } }
 
     DisposableEffect(Unit) {
+        viewModel.setEmulatorScreenVisible(true)
         onDispose {
+            viewModel.setEmulatorScreenVisible(false)
             GameInputState.reset()
-            viewModel.unloadSystem()
+            // The game stays loaded (paused) when leaving the screen — the
+            // swap-screen hotkey relies on it. Unload only happens via the
+            // explicit Quit flow (quit dialog), which calls unloadSystem()
+            // before navigating back.
         }
     }
 
@@ -198,7 +204,11 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             title = { Text("Quit Emulation") },
             text = { Text("Are you sure you want to stop emulating $romName?") },
             confirmButton = {
-                TextButton(onClick = { showQuitDialog = false; onBack() }) { Text("Quit") }
+                TextButton(onClick = {
+                    showQuitDialog = false
+                    viewModel.unloadSystem()
+                    onBack()
+                }) { Text("Quit") }
             },
             dismissButton = {
                 TextButton(onClick = { showQuitDialog = false; viewModel.setPause(false) }) { Text("Cancel") }
@@ -297,8 +307,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                                 "reload"         -> viewModel.roms.value.find { it.name == romName }
                                     ?.let { viewModel.loadRom(view.context, systemName, it) }
                                 "quit"           -> { showQuitDialog = true; viewModel.setPause(true) }
-                                "analog_toggle"  -> viewModel.togglePs1AnalogMode()
                                 "keyboard"       -> showKeyboard = !showKeyboard
+                                "library"        -> viewModel.swapToLibrary()
                             }
                         }
                     } else if (action == "ff_hold" && !isDown && combo.contains(keyCode)) {
@@ -581,6 +591,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                     onKeyboardToggle = { showKeyboard = it },
                     onResume = { viewModel.togglePause() },
                     onQuit = { showQuitDialog = true },
+                    onLibrary = { viewModel.swapToLibrary() },
                     zxControlScheme = zxControlScheme,
                     onZxControlScheme = { s ->
                         zxControlScheme = s
@@ -598,7 +609,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 fun EmulationMenu(
     viewModel: MainViewModel, systemName: String, romName: String,
     showKeyboard: Boolean, onKeyboardToggle: (Boolean) -> Unit,
-    onResume: () -> Unit, onQuit: () -> Unit,
+    onResume: () -> Unit, onQuit: () -> Unit, onLibrary: () -> Unit,
     zxControlScheme: Int = 0, onZxControlScheme: (Int) -> Unit = {}
 ) {
     val settings by viewModel.settings.collectAsState()
@@ -853,6 +864,7 @@ fun EmulationMenu(
                 Spacer(Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     OutlinedButton(onClick = onQuit, modifier = Modifier.weight(1f)) { Text("Quit Game") }
+                    OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f)) { Text("Library") }
                     Button(onClick = onResume, modifier = Modifier.weight(1f)) { Text("Resume") }
                 }
             }

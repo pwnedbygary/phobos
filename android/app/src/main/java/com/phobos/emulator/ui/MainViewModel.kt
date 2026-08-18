@@ -24,7 +24,9 @@ import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -544,6 +546,38 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
     private val _isLoaded = MutableStateFlow(false)
     val isLoaded: StateFlow<Boolean> = _isLoaded
+
+    // True while the EmulatorScreen composable is on screen. Lets the
+    // activity-level key fallback decide whether a "library" hotkey press
+    // means "swap to library" (emulator visible) or "swap back to the game"
+    // (library/settings visible, game loaded + paused).
+    private val _emulatorScreenVisible = MutableStateFlow(false)
+    val emulatorScreenVisible: StateFlow<Boolean> = _emulatorScreenVisible
+
+    fun setEmulatorScreenVisible(visible: Boolean) { _emulatorScreenVisible.value = visible }
+
+    // One-shot navigation requests from outside the NavHost (debug loader,
+    // activity key fallback). MainScaffold collects and navigates.
+    private val _navEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val navEvents: SharedFlow<String> = _navEvents
+
+    fun navigateTo(route: String) { _navEvents.tryEmit(route) }
+
+    /** Pause + leave to the library; the game stays loaded (swap-screen feature). */
+    fun swapToLibrary() {
+        setPause(true)
+        navigateTo("library")
+    }
+
+    /** Return to the running game from library/settings; resumes emulation. */
+    fun swapBackToGame() {
+        if (!isLoaded.value || emulatorScreenVisible.value) return
+        val sys = currentSystemName
+        val rom = currentRomName
+        if (sys.isEmpty() || rom.isEmpty()) return
+        navigateTo("emulator/${Uri.encode(sys)}/${Uri.encode(rom)}")
+        setPause(false)
+    }
 
     // Unsupported-system popup (set when a broken core's load is refused —
     // ZX Spectrum 128, PC Engine, PC Engine CD, SuperGrafx, Neo Geo).

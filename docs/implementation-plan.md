@@ -926,13 +926,33 @@ first opcode fetch's `step(4)` co-switched to the tape thread (clock=0) → Tape
 3.5469 MHz, PSG 221.7 kHz), audio ring healthy (1 xrun total); 48K Elite regression 50.6 FPS;
 cross-core reload (ZX→SFC) 60.2 FPS. Gate removed.
 
-**REMAINING — Neo Geo MVS/AES (gated):** no profile guards in `ares/ng` (CPU 12 MHz,
-LSPC 6 MHz, APU 4 MHz, OPNB 8 MHz — all unconditional mains). Suspects: MIA MAME-style
-zip path (`mia/medium/neo-geo.cpp` needs P/M/C/S/V1/V2 ROMs + `Neo Geo.bml` hit +
-`neogeo.zip` BIOS via `PhobosRunner.cpp` firmware mapping) or a run-path wedge. Needs
-measurement: instrument MIA load (zip open, DB lookup, per-ROM match, decrypt,
-System::load/power, first frame) → load `kof2003.zip` → fix MIA path or stack-dump wedge.
-BIOS copy (`fw_ng_bios` → `mia_temp/neogeo.zip`) already wired in `MainViewModel.loadRom`.
+**REMAINING — Neo Geo MVS/AES (gated, DIAGNOSIS IN PROGRESS 2026-08-18):**
+no profile guards in `ares/ng` (CPU 12 MHz, LSPC 6 MHz, APU 4 MHz, OPNB 8 MHz — all
+unconditional mains). Suspects: MIA MAME-style zip path (`mia/medium/neo-geo.cpp` needs
+P/M/C/S/V1/V2 ROMs + `Neo Geo.bml` hit + `neogeo.zip` BIOS via `PhobosRunner.cpp` firmware
+mapping) or a run-path wedge. BIOS copy (`fw_ng_bios` → `mia_temp/neogeo.zip`) already
+wired in `MainViewModel.loadRom`.
+
+**PROGRESS (2026-08-18, un-gated for diagnosis via `if (false && identifiedSystem == "Neo Geo")`):**
+- kof2003.zip LOADS: MIA identifies 'Neo Geo AES', core boots as "Neo Geo MVS" (MVS BIOS
+  sp-e.sp1 attached from the BIOS zip; "VFS: Failed to attach static.rom" = benign warning).
+- **RUNS 59.2-60.1 FPS sustained** (47+ stat samples) — the old black-screen 0-FPS wedge is GONE.
+- Streams registered: 'FM' (ch=2, 500 kHz) + 'SSG' (ch=1, 500 kHz).
+- **OPEN ISSUE: no audio** — ring stays `0/12000 (0%)`, only 2 xruns total. Multi-stream
+  lockstep (`PhobosRunner.cpp` audio() ~1384-1417: mix+emit only when EVERY stream has
+  pending samples, bounded 8192) may never satisfy allPending, or `muteAudioAtomic` path.
+  ZX comparison (healthy): ring 87-97% full, 1 xrun. Next: probe pending samples per stream
+  at the lockstep gate with video on screen (loader now navigates — headless runs couldn't
+  be watched).
+- Video presentation UNVERIFIED until the debug-loader navigation fix lands (was running
+  headless behind the library screen).
+
+**Next steps (swap-screen + loader-navigation feature first — see Feature Log below, then NG):**
+1. Verify kof2003 video + gameplay on the emulator screen via the fixed debug loader.
+2. Probe FM/SSG pending counts at the lockstep gate → fix mixing so ring fills (likely
+   emit-when-ANY-stream-pending with zero-fill for the laggards, matching the ZX path).
+3. Verify sound actually audible, then finalize the gate (remove it), verify MVS+AES both,
+   commit + push, update docs.
 
 **Investigation notes (debunked theory):** the shared "ARM64/libco" fingerprint was
 INFERENCE, not evidence — no stack dump was ever captured for these cores (the only
@@ -940,6 +960,54 @@ diagnostic is an N64-specific `dumpStall`). The scheduler + `libco/aarch64.c` ar
 upstream and work on this exact build for MD (4+ threads), MSX, WS, NGP, GB, SFC, FC, A26,
 CV, SG, PS1. The ZX 128K hang was a plain pak-attribute bug, NOT a scheduler fault — the
 scheduler suspension/spin behavior is stock ares.
+
+## Feature Log — Swap-Screen Hotkey (2026-08-18, VERIFIED on-device)
+
+**Goal:** hotkey to leave a running game to the library/console/settings — emulation
+PAUSES on leave, UNPAUSES on return; the game is unloaded ONLY on explicit quit.
+
+**Decisions (user-approved):** unload-on-quit only (PS1 2nd-disc swap via
+`loadSecondaryRom` feeds a new FD without unload — unaffected; N64DD disk change is a core
+IPL reset, no unload — unaffected). SurfaceView re-entry is safe (`surfaceCreated` →
+`PhobosCore.setSurface`, `surfaceDestroyed` → setPause(true)+setSurface(null)).
+
+**KEY INSIGHT (why the first attempt failed):** the content-view `OnKeyListener`
+fallback only fires when NO focused view consumes the key. On the library screen Compose
+absorbs them, so the return hotkey never reached it. `ComponentActivity` marks
+`dispatchKeyEvent` @RestrictTo — cannot be overridden from the app. Solution: replace
+`window.callback` with a `Window.Callback` wrapper (delegating, public API) that
+intercepts `dispatchKeyEvent` BEFORE any view dispatch (ViewRootImpl consults the window
+callback first). Verified round-trip swap away+back on-device.
+
+**Implementation (committed):**
+- `MainViewModel`: `navigateTo(route)` on `MutableSharedFlow` `navEvents`; `emulatorScreenVisible`
+  StateFlow + `setEmulatorScreenVisible`; `swapToLibrary()` (setPause(true)+navigate("library"));
+  `swapBackToGame()` (guard !loaded/visible → navigate emulator route from loadedSystemName/
+  currentRomName + setPause(false)).
+- `MainScaffold`: collects `navEvents`; library/console/settings → popUpTo(start)+launchSingleTop.
+- `EmulatorScreen`: `"library"` hotkey branch (both the held-combo map ~132 and the hat/dpad
+  trigger map ~281) → swapToLibrary; pause menu "Library" button (`EmulationMenu` gains
+  `onLibrary`); `onDispose` NO LONGER calls unloadSystem (kept GameInputState.reset +
+  emulatorScreenVisible=false); quit dialog Quit button → `unloadSystem()` then onBack.
+- `MainActivity`: `Window.Callback` wrapper for the swap hotkey (both directions, ANY screen);
+  `installKeyEventFallback` untouched for input translation; debug loader now ALSO navigates
+  to `emulator/{system}/{name}` after loadRom (mirrors SystemDetailScreen: load THEN navigate)
+  — fixes ALL previous adb loads running headless behind the library.
+- `SettingsStore` defaultHotkeys: mirrored EXACTLY from the developer's device config
+  (read via `run-as com.phobos.emulator cat files/datastore/settings.preferences_pb` +
+  protobuf wire decode). Z-button based: 101=Z for everything (Z+A pause, Z+B quit, Z+X
+  reload, Z+Y mute, Z+L1 load, Z+R1 save, Z+L2 keyboard, Z+R2 ff_toggle, Z+SELECT+START
+  reset, Z+DPAD slot +/-; library = Z+C [101,98]; analog_toggle = C alone [98]; ff_hold
+  unbound; screenshot Z+THUMBR). `HotkeyMappingScreen`: "Swap to Library" entry.
+
+**Testing caveat:** adb `input keyevent` sends DOWN+UP per call — CANNOT hold combos; the
+hotkey must be verified with the real controller (or a `sendevent` script on the gamepad
+input device).
+
+**Reference for future Neo Geo CD task:** ares fork branch `neogeo-cd` by Luke Usher
+(`https://github.com/ares-emulator/ares/tree/neogeo-cd`). NG CD hardware is closely linked
+to AES/MVS — once MVS/AES work, port ONLY the CD-ROM hardware + CD-audio files from that
+branch into `ares/ng/` (do not pull the whole branch).
 
 #### Feature-completeness audit: Run-Ahead + Fast Boot + Skip Boot ROM (INVESTIGATED 2026-08-17)
 

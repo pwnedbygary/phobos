@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.net.Uri
 import android.util.Log
 import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -75,6 +76,41 @@ class MainActivity : ComponentActivity() {
         // the emulator screen holds focus; this fallback catches them if focus is lost.
         installKeyEventFallback()
 
+        // Window-level interception for the swap-screen RETURN hotkey. When the
+        // emulator screen is NOT visible and a game is loaded+paused (we swapped
+        // away), a focused Compose node on the library/settings screens absorbs
+        // key events, so the content-view listener never sees them. ViewRootImpl
+        // consults Window.Callback BEFORE any view dispatch, so the wrapper below
+        // sees every key event regardless of focus. (ComponentActivity restricts
+        // overriding dispatchKeyEvent itself — hence the callback wrapper.)
+        val originalCallback = window.callback
+        window.callback = object : android.view.Window.Callback by originalCallback {
+            private val pressedKeys = mutableSetOf<Int>()
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                val visible = viewModel.emulatorScreenVisible.value
+                val loaded = viewModel.isLoaded.value
+                if (visible || (loaded && viewModel.isPaused.value)) {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        pressedKeys += event.keyCode
+                        val libraryCombo = viewModel.settings.value.hotkeys["library"] ?: emptyList()
+                        if (libraryCombo.isNotEmpty() &&
+                            libraryCombo.size == pressedKeys.size &&
+                            libraryCombo.all { pressedKeys.contains(it) }
+                        ) {
+                            if (visible) viewModel.swapToLibrary()
+                            else if (loaded) viewModel.swapBackToGame()
+                            return true
+                        }
+                    } else if (event.action == KeyEvent.ACTION_UP) {
+                        pressedKeys -= event.keyCode
+                    }
+                } else {
+                    pressedKeys.clear()
+                }
+                return originalCallback.dispatchKeyEvent(event)
+            }
+        }
+
         handleDebugLoadIntent(intent)
     }
 
@@ -111,6 +147,10 @@ class MainActivity : ComponentActivity() {
             }
             Log.d("Phobos", "debugLoad: loading system='$system', rom='$name'")
             viewModel.loadRom(applicationContext, system, RomFile(name, Uri.parse(uri)))
+            // Mirror the UI tap flow (SystemDetailScreen loads THEN navigates)
+            // so the game is visible on the emulator screen instead of running
+            // headless behind the library.
+            viewModel.navigateTo("emulator/${Uri.encode(system)}/${Uri.encode(name)}")
         }
     }
 
@@ -159,10 +199,38 @@ class MainActivity : ComponentActivity() {
      * bindings through [GameInputState].
      */
     private fun installKeyEventFallback() {
+        // Key tracking for the swap-screen hotkey while the emulator screen
+        // is NOT focused (library/settings visible). Mirrors the emulator's
+        // pressedKeys set; cleared on focus changes so stale combos don't fire.
+        val fallbackPressedKeys = mutableSetOf<Int>()
+        val onWindowFocusChanged = object : android.view.View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: android.view.View) {}
+            override fun onViewDetachedFromWindow(v: android.view.View) { fallbackPressedKeys.clear() }
+        }
+        findViewById<android.view.View>(android.R.id.content).addOnAttachStateChangeListener(onWindowFocusChanged)
+
         findViewById<android.view.View>(android.R.id.content).setOnKeyListener { _, keyCode, event ->
             // When the emulator screen's Compose Box has focus, its onKeyEvent
             // already translated and pushed this key. Skip to avoid double-push.
             if (emulatorKeyHandled) return@setOnKeyListener false
+
+            // Swap-screen hotkey: works from ANY screen. With the emulator
+            // screen visible → pause + leave to library; from library/settings
+            // with a game loaded (paused) → navigate back and resume.
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                fallbackPressedKeys += keyCode
+                val libraryCombo = viewModel.settings.value.hotkeys["library"] ?: emptyList()
+                if (libraryCombo.isNotEmpty()) {
+                    val allPressed = fallbackPressedKeys + GameInputState.hotkeyKeys
+                    if (libraryCombo.size == allPressed.size && libraryCombo.all { allPressed.contains(it) }) {
+                        if (viewModel.emulatorScreenVisible.value) viewModel.swapToLibrary()
+                        else if (viewModel.isLoaded.value) viewModel.swapBackToGame()
+                        return@setOnKeyListener true
+                    }
+                }
+            } else if (event.action == android.view.KeyEvent.ACTION_UP) {
+                fallbackPressedKeys -= keyCode
+            }
 
             if (viewModel.isLoaded.value && !viewModel.isPaused.value) {
                 // Swallow auto-repeat so held buttons don't rapidly toggle.

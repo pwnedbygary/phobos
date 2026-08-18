@@ -2400,8 +2400,9 @@ else if (port->type() == "Keyboard") {
     //     cause was the missing PROFILE_PERFORMANCE define (empty PSG::main
     //     deadlocked the scheduler at the first CPU timer sync); fixed via
     //     CMakeLists.txt PROFILE_PERFORMANCE (Task 10c).
-    //   - Neo Geo (MVS/AES): loads, BIOS OK, black screen, 0 FPS.
-    if (identifiedSystem == "Neo Geo") {
+    //   - Neo Geo (MVS/AES): loads, BIOS OK, black screen, 0 FPS. UNGATED
+    //     2026-08-18 for diagnosis (instrumentation: MIA/VFS logs).
+    if (false && identifiedSystem == "Neo Geo") {
         LOGE("%s: unsupported (scheduler hang) — refusing to load", (const char*)identifiedSystem);
         currentMedium.reset();
         return false;
