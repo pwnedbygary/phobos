@@ -29,11 +29,11 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 6. **Multi-Stream Audio Mixer (Task 23):** Lockstep mixer supporting multi-stream cores (MD/MCD, ZX, MSX, PCE-CD).
 7. **Auto Save-State Slot (Task 17):** Auto-save on quit / auto-load on boot, integrated in pause menu and cycler.
 8. **Rogue Squadron & Conker/MT:** Render stability via parallel-RDP scanout race fix and field-toggle correctives.
+9. **PS1 CD-DA Audio Pops (Task 46 — 2026-08-18):** Fixed via fade envelope on playback state transitions. Root cause: disc drive state changes (reading/playingCDDA) would snap samples from music→0, creating hard clicks. Solution: 150-sample linear fade (3.4ms @ 44.1kHz) applied in `cdda.cpp:clockSample()` when entering/exiting CD-DA playback. Eliminates pops without audio artifacts. Commit `1822c5757`.
 
 ## Open Priority Queue
 - **#9:** Ape Escape cinematic skip (CD-XA).
 - **#10c/10a:** PCE/CD + Neo Geo MVS/AES joint investigation (ARM64/libco coroutine black screen / gated).
-- **#46:** Audio pops residual.
 - **#49:** N64 save import/export UI (.sra/.eep/.fla/.mpk).
 - **#52:** PS1 multi-disc swap verify (MGS disc 2 swap fix applied via recursive `scan`).
 - **#61:** Proper release APK signing (keystore in GH Actions).
