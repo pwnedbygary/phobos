@@ -173,6 +173,12 @@ namespace ares {
   static std::atomic<u64> audioStreamsVersion{0};
 
   static auto audioThreadMain() -> void {
+    // [Phobos] Audio diagnostics (Task 46 investigation, 2026-08-18): log ring
+    // fill + AAudio xrun count once/sec while playing, so we can distinguish
+    // CLOCK-DRIFT UNDERRUNS (ring → 0, xrun increments) from CD-DA GAP POPS
+    // (ring healthy, xrun flat, pops coincide with CD track boundaries).
+    auto diagStart = std::chrono::steady_clock::now();
+    s64 lastXruns = 0;
     while (!audioThreadStop.load()) {
       std::vector<f32> chunk;
       {
@@ -211,6 +217,24 @@ namespace ares {
             total - written, 20'000'000);
         if (result > 0) written += result;
         else break; // stream stopped or error: drop the remainder
+      }
+
+      // [Phobos] Audio diagnostics (Task 46): 1x/sec log ring fill + xruns.
+      auto nowDiag = std::chrono::steady_clock::now();
+      auto diagElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(nowDiag - diagStart).count();
+      if (diagElapsed >= 1000) {
+        diagStart = nowDiag;
+        s64 xruns = 0;
+        if (stream) {
+          s64 count = AAudioStream_getXRunCount(stream);
+          if (count >= 0) xruns = count;
+        }
+        s64 newXruns = xruns - lastXruns;
+        lastXruns = xruns;
+        LOGI("AudioDiag: ring=%zu/%zu (%.0f%%) xruns+%lld (total %lld)",
+             audioRingSize, (size_t)audioRingCapacity,
+             (f64)audioRingSize * 100.0 / (f64)audioRingCapacity,
+             (long long)newXruns, (long long)xruns);
       }
     }
   }
