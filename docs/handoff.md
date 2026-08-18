@@ -3,6 +3,11 @@
 **Phobos** is an Android N64-first multi-system emulator (package `com.phobos.emulator`, module `:app`, native lib `libphobos_android.so`).
 Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-RDP Vulkan renderer, libadrenotools Turnip driver). UI is Jetpack Compose.
 
+## ALWAYS-READ REFERENCES (for details not covered here)
+- **Implementation plan (DEEP reference — task queue + full notes):** `/home/garyb/LLM-Projects/phobos/docs/implementation-plan.md` — also at `.cache/.../implementation_plan.artifact.md` (same content; the in-repo copy is authoritative). Priority queue = open only; ✅ Complete section = archived write-ups; IN FLIGHT = detailed status.
+- **README.md** (repo root) — full systems matrix, feature list, build requirements.
+- **Prior huge conversation (grep for context):** `/home/garyb/Desktop/agent-mode-conversation.json`.
+
 ## Repo Layout & Key Files
 - `/home/garyb/LLM-Projects/phobos/android` — Android app Gradle project.
   - `app/src/main/cpp/PhobosRunner.cpp` — Platform bridge: emulation thread, AndroidPlatform (input/video/audio/pak), save import/export, settings sync.
