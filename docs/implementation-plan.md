@@ -117,8 +117,8 @@
 > **CURRENT STATE (2026-08-15):** All cores VERIFIED WORKING except the gated broken ones.
 > ✅ N64 (gameplay + intros), GBA (RTC), GB/GBC, SFC/FC, MD/GG, Master System, PS1
 > (DualShock), NGP/NGPC, WonderSwan/Color, MSX/MSX2, Atari 2600, ColecoVision, ZX Spectrum
-> (48K), SG-1000. 🔴 GATED (clean "Unsupported" popup): ZX Spectrum 128K,
-> Neo Geo MVS/AES (Task 10c/10a remaining). ✅ PC Engine / PC Engine CD /
+> (48K + 128K), SG-1000. 🔴 GATED (clean "Unsupported" popup): Neo Geo MVS/AES
+> (Task 10c/10a remaining). ✅ PC Engine / PC Engine CD /
 > SuperGrafx UNGATED & FIXED 2026-08-18 (root cause: missing
 > PROFILE_PERFORMANCE define — empty PSG::main deadlocked the scheduler;
 > verified 60 FPS on-device, commit `2795e5813`).
@@ -164,12 +164,14 @@
 > Ordered by task number. Difficulty/status per item. Task 10c/10a PCE portion is
 > RESOLVED (2026-08-18, `2795e5813` — missing PROFILE_PERFORMANCE, NOT ARM64/libco;
 > scheduler + libco are stock upstream and work for 11 other cores on this build).
-> Remaining: ZX 128K (fork-custom core, needs measurement) + Neo Geo MVS/AES
-> (MIA database path suspect).
+> ZX 128K also RESOLVED (2026-08-18, `1bf97e3ac` — tape pak lookup matched
+> root->name() "ZX Spectrum" but the 128K root is "ZX Spectrum 128" → empty pak →
+> tape frequency 0 → cubic resampler ratio 0 → infinite loop in Cubic::write).
+> Remaining: Neo Geo MVS/AES (MIA database path suspect).
 
 ### Open tasks (full-width list — see Detailed Task Notes for full write-ups)
 
-- **#10c/10a — PCE family FIXED (2026-08-18, `2795e5813`); ZX 128K + Neo Geo MVS/AES remaining** — PCE root cause was the missing PROFILE_PERFORMANCE define (empty PSG::main → scheduler deadlock), NOT ARM64/libco. ZX 128K (fork-custom PSG/ULA) + Neo Geo (MIA database path) still gated, need on-device measurement. _Status: 🟡 2/3 cores gated · Diff: 🔴 Hard (deep)_
+- **#10c/10a — PCE FIXED (`2795e5813`); ZX 128K FIXED (`1bf97e3ac`); Neo Geo MVS/AES remaining** — PCE root cause was the missing PROFILE_PERFORMANCE define (empty PSG::main → scheduler deadlock); ZX 128K root cause was the tape pak attribute lookup mismatch (empty pak → resampler ratio 0 → infinite loop). Both verified on-device at full FPS. Neo Geo (MIA database path) still gated, needs measurement. _Status: 🟡 1/3 cores gated · Diff: 🔴 Hard (deep)_
 - **#49 — N64 save import/export** (RetroArch / Mupen64Plus FZ .sra/.eep/.fla/.mpk → Phobos). _Status: ⬜ Open · Diff: 🟡 Medium_
 - **#59 — Proper write-through dcache bypass (correct design, per-game)** — parked; high-risk JIT memory path. _Status: 🟡 Parked · Diff: 🔴 Hard (JIT)_
 - **#60 — Per-game hash overrides table** — needed for Task 59 gating; also future per-game knobs. _Status: 🟡 Parked (design done) · Diff: 🔴 Hard_
@@ -875,7 +877,7 @@ uses many; ares VU has known partial accuracy in rounding/overflow edge cases).
 
 ### 🔄 IN FLIGHT (OPEN / investigating / diagnosed / broken-gated / implemented-awaiting-verify)
 
-#### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K + Neo Geo MVS/AES REMAIN (gated)
+#### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES REMAINS (gated)
 
 **✅ PCE / PC Engine CD / SuperGrafx — FIXED & VERIFIED 2026-08-18 (commit `2795e5813`):**
 
@@ -902,17 +904,27 @@ Dracula X (CHD + System Card 3.0) 60 FPS @ ~2.5 ms. Regression smoke after the d
 Super Famicom 60.2, PlayStation (MGS disc 1 CHD) 60.2, Mega Drive (Sub-Terrania) 59.9 FPS.
 PCE accurate VDP holds the 60 FPS floor — no perf-VDP fallback needed.
 
-**REMAINING — ZX Spectrum 128K (gated):** the 128K ZX core hangs the same way (loads fine,
-zero frames, 0 FPS). 48K works; the only 128K-specific addition is the **PSG co-routine
-thread** (~221kHz, `ares/spec/psg/psg.cpp:36`) plus ULA constants (311 lines/456 cycles)
-and banking. PSG::main is unconditional and correct by inspection — NO smoking gun yet.
-The core is fork-custom (per-pixel ULA rewrite, added PSG — NOT upstream), so this is a
-measure-and-fix job: un-gate + instrument (CPU/ULA/PSG markers, scheduler enter/exit,
-heartbeat, watchdog stack dump) → reproduce (e.g. Enduro Racer 48-128K TAP) → fix.
-**QUIT-AFTER-HANG CRASH (prior):** quitting a hung 128K → reload crashed SIGSEGV 0x80 on
-AAudio DefaultDispatch (stream close/reopen race); attempts (200ms reopen grace,
-stream-keep-alive, abandon-path AAudio state-wait) did not fully work — the gate remains
-the mitigation until the hang itself is fixed.
+**✅ ZX Spectrum 128K — FIXED & VERIFIED 2026-08-18 (commit `1bf97e3ac`):**
+
+*Root cause (proven on-device, not inference):* the 128K ZX core names its system node
+"ZX Spectrum 128", but `PhobosRunner::pak()`'s tape branch matched
+`root->name() == "ZX Spectrum"` → for 128K loads `platform->pak(node)` returned an empty
+directory → `Tape::load()` (`ares/spec/tape/tape.cpp`) read
+`pak->attribute("frequency").natural()` = 0 → `stream->setFrequency(0)` → the cubic
+resampler reset with `_ratio = 0` (`nall/nall/dsp/resampler/cubic.hpp`
+`while(mu <= 1.0) { …; mu += _ratio; }`) → **infinite loop on the TAPE thread's first
+`stream->frame(0.0f)`** → scheduler wedged, zero frames (the 48K path worked because its
+root IS named "ZX Spectrum"). Instrumentation trail (temporary `ZX128Diag` probes,
+all removed post-fix): System::run enter → Thread::Enter matched CPU (idx=1) →
+first opcode fetch's `step(4)` co-switched to the tape thread (clock=0) → Tape::main #1 →
+`Cubic::write #1 in=0 out=48000 ratio=0` → dead. No `audio()` call ever fired.
+
+*Fix:* `root->name().beginsWith("ZX Spectrum")` in `pak()` (`PhobosRunner.cpp`).
+
+*Verification (on-device, adb-driven):* Enduro Racer (48-128K re-release) 50.8 FPS stable
+@ ~8.7 ms/frame (PAL 50 Hz target), all three streams registered (tape 44.1 kHz, ULA
+3.5469 MHz, PSG 221.7 kHz), audio ring healthy (1 xrun total); 48K Elite regression 50.6 FPS;
+cross-core reload (ZX→SFC) 60.2 FPS. Gate removed.
 
 **REMAINING — Neo Geo MVS/AES (gated):** no profile guards in `ares/ng` (CPU 12 MHz,
 LSPC 6 MHz, APU 4 MHz, OPNB 8 MHz — all unconditional mains). Suspects: MIA MAME-style
@@ -926,7 +938,8 @@ BIOS copy (`fw_ng_bios` → `mia_temp/neogeo.zip`) already wired in `MainViewMod
 INFERENCE, not evidence — no stack dump was ever captured for these cores (the only
 diagnostic is an N64-specific `dumpStall`). The scheduler + `libco/aarch64.c` are stock
 upstream and work on this exact build for MD (4+ threads), MSX, WS, NGP, GB, SFC, FC, A26,
-CV, SG, PS1.
+CV, SG, PS1. The ZX 128K hang was a plain pak-attribute bug, NOT a scheduler fault — the
+scheduler suspension/spin behavior is stock ares.
 
 #### Feature-completeness audit: Run-Ahead + Fast Boot + Skip Boot ROM (INVESTIGATED 2026-08-17)
 

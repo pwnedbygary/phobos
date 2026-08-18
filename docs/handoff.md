@@ -5,11 +5,11 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 
 ## 🚀 CURRENT STATUS (2026-08-18)
 
-**Latest work:** Task #10c PCE family FIXED & VERIFIED on-device (commit `2795e5813`). Root cause was a build-config bug, not ARM64/libco: the fork's `CMakeLists.txt` defined neither `PROFILE_ACCURACY` nor `PROFILE_PERFORMANCE`, so `ares/pce/psg/psg.cpp` compiled out `PSG::main()` entirely → first HuC6280 timer sync (~3072 clocks) deadlocked the scheduler (empty coroutine, `scheduler.enter()` never returns) → black screen, 0 FPS. Fix: `PROFILE_PERFORMANCE` added to the global defines; PCE/CD/SuperGrafx un-gated. Verified: Final Lap Twin 60 FPS, SuperGrafx mode 60 FPS, Rondo of Blood (CHD + System Card 3.0) 60 FPS; SFC/PS1/MD regression 59.9-60.2 FPS. PCE accurate VDP holds the floor — no perf-VDP fallback needed.
+**Latest work:** Task #10c ZX Spectrum 128K FIXED & VERIFIED on-device (commit `1bf97e3ac`). Root cause (proven on-device via temporary ZX128Diag instrumentation, since removed): the 128K core names its system node "ZX Spectrum 128", but `PhobosRunner::pak()`'s tape branch matched `root->name() == "ZX Spectrum"` → empty pak for 128K loads → `Tape::load()` read frequency 0 → cubic resampler ratio 0 → infinite loop in `Cubic::write` on the tape thread's first frame → scheduler wedged, zero frames. Fix: `root->name().beginsWith("ZX Spectrum")`. Verified: Enduro Racer (128K) 50.8 FPS stable (PAL 50Hz), audio ring healthy; Elite 48K regression 50.6 FPS; ZX→SFC reload 60.2 FPS. Prior work same day: Task #10c PCE family FIXED (commit `2795e5813`) — missing PROFILE_PERFORMANCE define compiled out `PSG::main()` → scheduler deadlock on first timer sync; Final Lap Twin 60 FPS, SuperGrafx 60 FPS, Rondo of Blood 60 FPS, SFC/PS1/MD regression 59.9-60.2 FPS.
 
-**All cores verified WORKING** except gated broken ones (ZX 128K + Neo Geo MVS/AES — NOT a shared bug; each needs its own measurement, see implementation plan Task 10c).
+**All cores verified WORKING** except gated broken ones (Neo Geo MVS/AES — needs its own measurement, see implementation plan Task 10c).
 
-**Next priority:** Task #10c remaining (ZX Spectrum 128K, then Neo Geo MVS/AES), then Task #49 (N64 save import/export UI).
+**Next priority:** Task #10c remaining (Neo Geo MVS/AES), then Task #49 (N64 save import/export UI).
 
 ## ALWAYS-READ REFERENCES (for details not covered here)
 - **Implementation plan (DEEP reference — task queue + full notes):** `/home/garyb/LLM-Projects/phobos/docs/implementation-plan.md` — also at `.cache/.../implementation_plan.artifact.md` (same content; the in-repo copy is authoritative). Priority queue = open only; ✅ Complete section = archived write-ups; IN FLIGHT = detailed status.
@@ -41,7 +41,7 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 10. **Ape Escape cinematics (Task 9 — 2026-08-18):** Fixed XA filter routing. Ape Escape's `TITLE.STR` interleaves `subMode=0x48` channel-0 MDEC video/data sectors with `subMode=0x64` channel-1 XA audio sectors. Phobos applied the configured file/channel filter to both, dropping the video sectors before the CD FIFO. Filtering now applies only to XA audio sectors (`subMode & 0x44`), allowing video data to reach MDEC. Verified on Retroid Pocket 6 with a clean build and cold USA-region launch; intro plays and reaches the menu normally.
 
 ## Open Priority Queue
-- **#10c/10a remaining:** ZX Spectrum 128K + Neo Geo MVS/AES (PCE family RESOLVED 2026-08-18 `2795e5813`; both need on-device measurement — details in implementation plan).
+- **#10c/10a remaining:** Neo Geo MVS/AES (PCE family RESOLVED `2795e5813`, ZX 128K RESOLVED `1bf97e3ac`; details in implementation plan).
 - **#49:** N64 save import/export UI (.sra/.eep/.fla/.mpk).
 - **#52:** PS1 multi-disc swap verify (MGS disc 2 swap fix applied via recursive `scan`).
 - **#61:** Proper release APK signing (keystore in GH Actions).
