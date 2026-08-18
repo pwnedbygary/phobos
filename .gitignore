@@ -16,6 +16,7 @@
 !/thirdparty
 !/tools
 !/android
+!/docs
 !/GNUMakefile
 !/LICENSE
 !/README.md
