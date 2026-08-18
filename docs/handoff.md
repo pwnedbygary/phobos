@@ -5,7 +5,7 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 
 ## 🚀 CURRENT STATUS (2026-08-18)
 
-**Latest work:** Task #9 (Ape Escape cinematics) FIXED & VERIFIED on-device. XA filtering was incorrectly dropping the channel-0 video/data sectors interleaved with channel-1 XA audio. The fix applies file/channel filtering only to XA audio sectors, allowing MDEC video data through the CD FIFO. Clean build and cold Ape Escape USA launch verified; opening cinematic plays normally.
+**Latest work:** Task #9 (Ape Escape cinematics) FIXED & VERIFIED on-device. XA filtering was incorrectly dropping the channel-0 video/data sectors interleaved with channel-1 XA audio. The fix applies file/channel filtering only to XA audio sectors, allowing MDEC video data through the CD FIFO. Clean build and cold Ape Escape USA launch verified; opening cinematic plays normally. Commit `021f13aa1` pushed.
 
 **All cores verified WORKING** except gated broken ones (ZX 128K, PCE/CD, Neo Geo MVS/AES — all share ARM64/libco black-screen issue).
 

@@ -226,7 +226,7 @@
 
 ### ✅ COMPLETE (DONE / FIXED / RESOLVED / VERIFIED / REVERTED-archived)
 
-#### Task 9 — Ape Escape cinematics (FIXED & VERIFIED 2026-08-18)
+#### Task 9 — Ape Escape cinematics (FIXED & VERIFIED 2026-08-18, commit `021f13aa1`)
 
 **Symptom:** Ape Escape USA booted and played its opening audio, but showed a white
 screen and skipped to the menu. DuckStation played the same CHD correctly.
