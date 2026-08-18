@@ -73,7 +73,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | Super Famicom / Famicom | ✅ |
 | Mega Drive / Game Gear | ✅ |
 | Master System | ✅ |
-| PlayStation | ✅ DualShock + analog toggle, memcards, save states, multi-disc swap; Ape Escape rumble unconfirmed (game/config); CD-XA cinematics unsupported (upstream disabled) |
+| PlayStation | ✅ DualShock + analog toggle, memcards, save states, multi-disc swap (MGS verified); Ape Escape rumble unconfirmed (game/config); CD-XA cinematics unsupported (upstream disabled) |
 | Neo Geo Pocket / Color | ✅ BIOS settings (language/date) persist |
 | WonderSwan / Color | ✅ |
 | MSX / MSX2 | ✅ (incl. tape) |

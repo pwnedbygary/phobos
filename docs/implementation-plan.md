@@ -169,7 +169,7 @@
 - **#17 — Auto-Save State / Auto-Load State ("Auto" save-state slot)** — IMPLEMENTED 2026-08-17 (`1769c1bdb` + `a7e34946c`): auto-save on unload + auto-load on boot; **VERIFIED on-device (GBA Pokemon) 2026-08-17**; renamed to "State" (avoids confusion with always-on cart/flash saves); Auto slot now selectable in the cycler (after 9 / before 0) + manual save/load/delete; toggles in BOTH Settings and the pause menu (all cores). _Status: ✅ Done · Diff: 🟢_
 - **#46 — Audio pops residual** (sub-60 physics; after perf floor restored). _Status: ⬜ After perf · Diff: 🟡 Medium_
 - **#49 — N64 save import/export** (RetroArch / Mupen64Plus FZ .sra/.eep/.fla/.mpk → Phobos). _Status: ⬜ Open · Diff: 🟡 Medium_
-- **#52 — PS1 multi-disc swap (BEFORE 1.0)** — FIXED 2026-08-17 (`42c462549`): the PS1 branch used `find<Node::Port>("Disc Tray")` (direct-children only) but the port is nested at root→PlayStation→Disc Tray → always "Disc Tray not found". Fixed with `scan<Node::Port>("Disc Tray")` (recursive). **Needs on-device verify (MGS is on device now — save at disc-1 end, Change Disc → disc 2)**. _Status: 🟡 Fixed, verify pending · Diff: 🟢 (was mislabeled medium)_
+- **#52 — PS1 multi-disc swap (BEFORE 1.0)** — FIXED + VERIFIED 2026-08-17 (`42c462549`): the PS1 branch used `find<Node::Port>("Disc Tray")` (direct-children only) but the port is nested at root→PlayStation→Disc Tray → always "Disc Tray not found". Fixed with `scan<Node::Port>("Disc Tray")` (recursive). **VERIFIED on-device 23:23 (MGS Disc 2 swap): log shows Detach→Attach PlayStation Disc → `PS1: disc swapped to PlayStation` — no error.** _Status: ✅ Done · Diff: 🟢_
 - **#59 — Proper write-through dcache bypass (correct design, per-game)** — parked; high-risk JIT memory path. _Status: 🟡 Parked · Diff: 🔴 Hard (JIT)_
 - **#60 — Per-game hash overrides table** — needed for Task 59 gating; also future per-game knobs. _Status: 🟡 Parked (design done) · Diff: 🔴 Hard_
 - **#61 — Proper release APK signing (Play-ready)** — real keystore (base64 secret in GH Actions), `signingConfigs.release` reading PHOBOS_KEYSTORE_* gated behind a project property. _Status: ⬜ Open · Diff: 🟢 Easy (config/CI only)_
@@ -880,7 +880,7 @@ Pokemon) 2026-08-17** — see the full write-up in the ✅ COMPLETE section.
 
 Sub-60 physics underruns; after perf floor restored.
 
-#### Task 52 — PS1 multi-disc swap (FIXED 2026-08-17 `42c462549`, awaiting verify)
+#### Task 52 — PS1 multi-disc swap (FIXED & VERIFIED 2026-08-17 `42c462549`)
 
 The old "Change Disc" was a STUB reusing the 64DD path. Added a PS1 branch in
 `loadSecondaryRom()`: `currentMedium = secondaryMedium` → find PS1 `Disc Tray` port →
@@ -893,8 +893,12 @@ searches DIRECT children; the port is nested at root→PlayStation→Disc Tray. 
 path worked because it uses `find<Node::Port>()` with no name (that overload recurses).
 **Fix: `root->scan<Node::Port>("Disc Tray")` (recursive).**
 
-**Needs on-device verify: MGS (on device) — save at disc-1 end, pause → Change Disc →
-disc 2.** Related: Task 51 (ZX multi-tape swap) is the same hot-swap-tray mechanism.
+**VERIFIED on-device 23:23 (MGS Disc 2 swap):** log shows `Detach: PlayStation Disc` →
+`Attach: PlayStation Disc` → `VFS: Returning currentMedium pak for PlayStation Disc` →
+`PS1: disc swapped to PlayStation` (no "Disc Tray not found", no crash; brief FPS dip
+as the new disc TOC loads, then recovers). User wasn't at a disc-change prompt in-game,
+but the hot-swap mechanics (detach/attach/re-read) are confirmed working. Related:
+Task 51 (ZX multi-tape swap) is the same hot-swap-tray mechanism.
 
 #### Task 61 — Proper release APK signing (Play-ready) (OPEN)
 
