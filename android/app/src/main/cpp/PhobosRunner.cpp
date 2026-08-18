@@ -1447,7 +1447,7 @@ namespace ares {
 
       // ZX Spectrum tape: Tape::load() reads "program.tape" (decoded audio)
       // from this pak — the MIA medium pak IS the tape.
-      if (nodeName.endsWith("Tape") && root && root->name() == "ZX Spectrum") {
+      if (nodeName.endsWith("Tape") && root && root->name().beginsWith("ZX Spectrum")) {
         if (currentMedium && currentMedium->pak) {
             LOGI("VFS: Returning currentMedium pak for %s (tape)", (const char*)nodeName);
             return currentMedium->pak;
@@ -2386,20 +2386,22 @@ else if (port->type() == "Keyboard") {
     }
 
     // ── BROKEN-CORE GATE ───────────────────────────────────────────────────
-    // Systems that load but produce NO frames (black screen / 0 FPS) due to the
-    // ARM64/libco co-routine scheduler issue (Task 10c/10a joint investigation).
-    // Fail the load cleanly BEFORE any core/thread/audio setup — no emulation
-    // thread is spawned, so no hang / zombie / crash. Kotlin shows a popup
+    // Systems that load but produce NO frames (black screen / 0 FPS). Fail the
+    // load cleanly BEFORE any core/thread/audio setup — no emulation thread is
+    // spawned, so no hang / zombie / crash. Kotlin shows a popup
     // ("<System> Unsupported") and returns to the library. Remove entries once
     // the underlying core is fixed.
-    //   - ZX Spectrum 128: PSG co-routine desyncs the scheduler.
-    //   - Neo Geo (MVS/AES): loads, BIOS OK, black screen, 0 FPS.
+    //   - ZX Spectrum 128: UNGATED 2026-08-18 — root cause was the tape pak
+    //     lookup: platform->pak() matched root->name() == "ZX Spectrum" but the
+    //     128K core names its root "ZX Spectrum 128" → empty pak → tape
+    //     frequency 0 → resampler ratio 0 → infinite loop in Cubic::write.
+    //     Fixed via root->name().beginsWith("ZX Spectrum") (Task 10c).
     //   - PC Engine / PC Engine CD / SuperGrafx: UNGATED 2026-08-18 — root
     //     cause was the missing PROFILE_PERFORMANCE define (empty PSG::main
     //     deadlocked the scheduler at the first CPU timer sync); fixed via
     //     CMakeLists.txt PROFILE_PERFORMANCE (Task 10c).
-    if (identifiedSystem == "ZX Spectrum 128" ||
-        identifiedSystem == "Neo Geo") {
+    //   - Neo Geo (MVS/AES): loads, BIOS OK, black screen, 0 FPS.
+    if (identifiedSystem == "Neo Geo") {
         LOGE("%s: unsupported (scheduler hang) — refusing to load", (const char*)identifiedSystem);
         currentMedium.reset();
         return false;
