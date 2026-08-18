@@ -5,11 +5,11 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 
 ## 🚀 CURRENT STATUS (2026-08-18)
 
-**Latest work:** Task #9 (Ape Escape cinematics) FIXED & VERIFIED on-device. XA filtering was incorrectly dropping the channel-0 video/data sectors interleaved with channel-1 XA audio. The fix applies file/channel filtering only to XA audio sectors, allowing MDEC video data through the CD FIFO. Clean build and cold Ape Escape USA launch verified; opening cinematic plays normally. Commit `021f13aa1` pushed.
+**Latest work:** Task #10c PCE family FIXED & VERIFIED on-device (commit `2795e5813`). Root cause was a build-config bug, not ARM64/libco: the fork's `CMakeLists.txt` defined neither `PROFILE_ACCURACY` nor `PROFILE_PERFORMANCE`, so `ares/pce/psg/psg.cpp` compiled out `PSG::main()` entirely → first HuC6280 timer sync (~3072 clocks) deadlocked the scheduler (empty coroutine, `scheduler.enter()` never returns) → black screen, 0 FPS. Fix: `PROFILE_PERFORMANCE` added to the global defines; PCE/CD/SuperGrafx un-gated. Verified: Final Lap Twin 60 FPS, SuperGrafx mode 60 FPS, Rondo of Blood (CHD + System Card 3.0) 60 FPS; SFC/PS1/MD regression 59.9-60.2 FPS. PCE accurate VDP holds the floor — no perf-VDP fallback needed.
 
-**All cores verified WORKING** except gated broken ones (ZX 128K, PCE/CD, Neo Geo MVS/AES — all share ARM64/libco black-screen issue).
+**All cores verified WORKING** except gated broken ones (ZX 128K + Neo Geo MVS/AES — NOT a shared bug; each needs its own measurement, see implementation plan Task 10c).
 
-**Next priority:** Task #49 (N64 save import/export UI).
+**Next priority:** Task #10c remaining (ZX Spectrum 128K, then Neo Geo MVS/AES), then Task #49 (N64 save import/export UI).
 
 ## ALWAYS-READ REFERENCES (for details not covered here)
 - **Implementation plan (DEEP reference — task queue + full notes):** `/home/garyb/LLM-Projects/phobos/docs/implementation-plan.md` — also at `.cache/.../implementation_plan.artifact.md` (same content; the in-repo copy is authoritative). Priority queue = open only; ✅ Complete section = archived write-ups; IN FLIGHT = detailed status.
@@ -41,7 +41,7 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 10. **Ape Escape cinematics (Task 9 — 2026-08-18):** Fixed XA filter routing. Ape Escape's `TITLE.STR` interleaves `subMode=0x48` channel-0 MDEC video/data sectors with `subMode=0x64` channel-1 XA audio sectors. Phobos applied the configured file/channel filter to both, dropping the video sectors before the CD FIFO. Filtering now applies only to XA audio sectors (`subMode & 0x44`), allowing video data to reach MDEC. Verified on Retroid Pocket 6 with a clean build and cold USA-region launch; intro plays and reaches the menu normally.
 
 ## Open Priority Queue
-- **#10c/10a:** PCE/CD + Neo Geo MVS/AES joint investigation (ARM64/libco coroutine black screen / gated).
+- **#10c/10a remaining:** ZX Spectrum 128K + Neo Geo MVS/AES (PCE family RESOLVED 2026-08-18 `2795e5813`; both need on-device measurement — details in implementation plan).
 - **#49:** N64 save import/export UI (.sra/.eep/.fla/.mpk).
 - **#52:** PS1 multi-disc swap verify (MGS disc 2 swap fix applied via recursive `scan`).
 - **#61:** Proper release APK signing (keystore in GH Actions).
@@ -74,6 +74,14 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 - Install: `adb install -r android/app/build/outputs/apk/modern/debug/app-modern-debug.apk`
 - Launch: `adb shell am start -n com.phobos.emulator/.MainActivity`
 - Logcat: `timeout 60 adb logcat | grep Phobos` (or use `-c` to clear first)
+- **Debug ROM loader (no UI automation needed):** MainActivity reads intent extras
+  `load_uri` / `load_name` / `load_system` (file:// URIs work; quote the whole `am start`
+  command so the device shell sees the double quotes — filenames contain parens).
+  ALWAYS add `--activity-single-top` for repeat loads (plain `am start` on the running
+  instance silently drops onNewIntent on this device). Example:
+  ```
+  adb shell 'am start --activity-single-top -n com.phobos.emulator/.MainActivity --es load_uri "file:///storage/EBFF-F6C0/ROMs/tg16/Final Lap Twin (USA).zip" --es load_name "Final Lap Twin (USA).zip" --es load_system "PC Engine"'
+  ```
 
 **Crash debugging:**
 - Quick check: `adb logcat | grep -E "SIGSEGV|crash|FATAL"`

@@ -117,8 +117,11 @@
 > **CURRENT STATE (2026-08-15):** All cores VERIFIED WORKING except the gated broken ones.
 > ✅ N64 (gameplay + intros), GBA (RTC), GB/GBC, SFC/FC, MD/GG, Master System, PS1
 > (DualShock), NGP/NGPC, WonderSwan/Color, MSX/MSX2, Atari 2600, ColecoVision, ZX Spectrum
-> (48K), SG-1000. 🔴 GATED (clean "Unsupported" popup): ZX Spectrum 128K, PC Engine,
-> PC Engine CD, SuperGrafx, Neo Geo MVS/AES (ARM64/libco co-routine issue, Task 10c/10a).
+> (48K), SG-1000. 🔴 GATED (clean "Unsupported" popup): ZX Spectrum 128K,
+> Neo Geo MVS/AES (Task 10c/10a remaining). ✅ PC Engine / PC Engine CD /
+> SuperGrafx UNGATED & FIXED 2026-08-18 (root cause: missing
+> PROFILE_PERFORMANCE define — empty PSG::main deadlocked the scheduler;
+> verified 60 FPS on-device, commit `2795e5813`).
 > Saturn + Neo Geo CD (no core, out of 1.0). SC-3000 removed.
 >
 > **Rogue Squadron (N64) main menu — FULLY RESOLVED 2026-08-15 (menu renders, no flash).**
@@ -158,13 +161,15 @@
 ## Priority Queue (OPEN items only — completed tasks archived in Detailed Task Notes)
 
 > [!IMPORTANT]
-> Ordered by task number. Difficulty/status per item. The two hard cores (PCE/Neo Geo)
-> share a suspicious ARM64/libco fingerprint (loads, BIOS OK, black screen, ~0/60fps) —
-> do a **30-min joint investigation first** (Task 10c/10a, now also covers ZX 128K).
+> Ordered by task number. Difficulty/status per item. Task 10c/10a PCE portion is
+> RESOLVED (2026-08-18, `2795e5813` — missing PROFILE_PERFORMANCE, NOT ARM64/libco;
+> scheduler + libco are stock upstream and work for 11 other cores on this build).
+> Remaining: ZX 128K (fork-custom core, needs measurement) + Neo Geo MVS/AES
+> (MIA database path suspect).
 
 ### Open tasks (full-width list — see Detailed Task Notes for full write-ups)
 
-- **#10c/10a — PCE/CD + Neo Geo MVS/AES joint investigation** — loads, BIOS OK, black screen; shared ARM64/libco fingerprint; NOW ALSO = ZX 128K (gated, same PSG co-routine issue). _Status: 🔴 Broken (gated) · Diff: 🔴 Hard (deep)_
+- **#10c/10a — PCE family FIXED (2026-08-18, `2795e5813`); ZX 128K + Neo Geo MVS/AES remaining** — PCE root cause was the missing PROFILE_PERFORMANCE define (empty PSG::main → scheduler deadlock), NOT ARM64/libco. ZX 128K (fork-custom PSG/ULA) + Neo Geo (MIA database path) still gated, need on-device measurement. _Status: 🟡 2/3 cores gated · Diff: 🔴 Hard (deep)_
 - **#49 — N64 save import/export** (RetroArch / Mupen64Plus FZ .sra/.eep/.fla/.mpk → Phobos). _Status: ⬜ Open · Diff: 🟡 Medium_
 - **#59 — Proper write-through dcache bypass (correct design, per-game)** — parked; high-risk JIT memory path. _Status: 🟡 Parked · Diff: 🔴 Hard (JIT)_
 - **#60 — Per-game hash overrides table** — needed for Task 59 gating; also future per-game knobs. _Status: 🟡 Parked (design done) · Diff: 🔴 Hard_
@@ -870,30 +875,58 @@ uses many; ares VU has known partial accuracy in rounding/overflow edge cases).
 
 ### 🔄 IN FLIGHT (OPEN / investigating / diagnosed / broken-gated / implemented-awaiting-verify)
 
-#### Task 10c — PCE/CD + Neo Geo MVS/AES joint investigation (BROKEN, gated)
+#### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K + Neo Geo MVS/AES REMAIN (gated)
 
-System loads correctly (VDP + CPU + PSG attach, PCD skipped for HuCard, VCE clock = 4).
-But `root->run()` → `scheduler.enter()` → `co_switch` never returns. No frames produced
-despite 3 scheduler threads. Upstream identical code works on desktop x86 → likely an
-**ARM64/libco-specific issue** with the accurate VDP renderer's complex
-hsync/vsync/co_switch chain.
+**✅ PCE / PC Engine CD / SuperGrafx — FIXED & VERIFIED 2026-08-18 (commit `2795e5813`):**
 
-**SHARED FINGERPRINT — ZX Spectrum 128 (added 2026-08-14):** the 128K ZX core hangs the
-SAME way: loads fine but produces ZERO frames (black screen, 0 FPS). Only 128K-specific
-addition vs working 48K is the **PSG co-routine thread** (~221kHz). Same class as
-PCE/CD's `scheduler.enter() → co_switch never returns`. If we crack the shared
-ARM64/libco coroutine bug, it likely fixes ZX 128 too.
-**QUIT-AFTER-HANG CRASH:** quitting a hung 128K → reload crashed SIGSEGV 0x80 on AAudio
-DefaultDispatch (stream close/reopen race). Attempted fixes that did NOT fully work:
-200ms reopen grace, stream-keep-alive across loads, abandon-path AAudio state-wait.
-**CURRENT MITIGATION: GATE** — native `initialize()` refuses 128K (content-detect for
-both zipped + raw) before any core/thread/audio setup → Kotlin popup "ZX Spectrum 128K
-Unsupported". No thread spawned → no crash. Remove the gate (search "ZX Spectrum 128 is
-CURRENTLY UNSUPPORTED") once fixed.
+*Root cause (proven by code inspection, not inference):* the fork's `CMakeLists.txt`
+`add_compile_definitions` defined NEITHER `PROFILE_ACCURACY` NOR `PROFILE_PERFORMANCE`
+(upstream ares always defines one; the upstream default is PERFORMANCE). In
+`ares/pce/psg/psg.cpp` the ENTIRE `PSG::main()` implementation AND the `load()` stream
+setup are wrapped in `#if defined(PROFILE_ACCURACY) / #elif defined(PROFILE_PERFORMANCE)`
+blocks → with no define, both compile out → `PSG::main()` is empty. Deadlock chain:
+`ares/pce/cpu/cpu.cpp` `CPU::step` calls `synchronize(psg)` when the HuC6280 timer fires
+(~3072 clocks after power-on) → `Thread::synchronize` (`ares/ares/scheduler/thread.cpp`)
+→ `co_switch(psg)` → the PSG coroutine spins forever in the empty main → `scheduler.enter()`
+never returns → black screen, 0 FPS, emulation thread wedged. Deterministic on ANY
+platform with this build config (not ARM64/libco-specific).
 
-**Neo Geo:** zip extraction bypassed (multi-file zips needed for MIA database); NGP load
-strings fixed (region-free `"[SNK] Neo Geo Pocket"`); BIOS auto-copy maps `fw_ng_bios`.
-Still failing — needs deeper MIA database path investigation.
+*Fix:* added `PROFILE_PERFORMANCE` to the global `add_compile_definitions` (upstream-faithful
+default; SFC timing takes its standard performance branch — `ares/sfc/cpu/timing.cpp`
+`#if !defined(PROFILE_PERFORMANCE)`). Un-gated PCE/CD/SuperGrafx in the broken-core gate
+(`PhobosRunner.cpp`).
+
+*Verification (on-device, Retroid Pocket 6, adb-driven loads):* Final Lap Twin (HuCard)
+60 FPS @ ~6.2 ms; SuperGrafx mode (same HuCard, dual-VDC path) 60 FPS @ ~7.2 ms; Akumajou
+Dracula X (CHD + System Card 3.0) 60 FPS @ ~2.5 ms. Regression smoke after the define:
+Super Famicom 60.2, PlayStation (MGS disc 1 CHD) 60.2, Mega Drive (Sub-Terrania) 59.9 FPS.
+PCE accurate VDP holds the 60 FPS floor — no perf-VDP fallback needed.
+
+**REMAINING — ZX Spectrum 128K (gated):** the 128K ZX core hangs the same way (loads fine,
+zero frames, 0 FPS). 48K works; the only 128K-specific addition is the **PSG co-routine
+thread** (~221kHz, `ares/spec/psg/psg.cpp:36`) plus ULA constants (311 lines/456 cycles)
+and banking. PSG::main is unconditional and correct by inspection — NO smoking gun yet.
+The core is fork-custom (per-pixel ULA rewrite, added PSG — NOT upstream), so this is a
+measure-and-fix job: un-gate + instrument (CPU/ULA/PSG markers, scheduler enter/exit,
+heartbeat, watchdog stack dump) → reproduce (e.g. Enduro Racer 48-128K TAP) → fix.
+**QUIT-AFTER-HANG CRASH (prior):** quitting a hung 128K → reload crashed SIGSEGV 0x80 on
+AAudio DefaultDispatch (stream close/reopen race); attempts (200ms reopen grace,
+stream-keep-alive, abandon-path AAudio state-wait) did not fully work — the gate remains
+the mitigation until the hang itself is fixed.
+
+**REMAINING — Neo Geo MVS/AES (gated):** no profile guards in `ares/ng` (CPU 12 MHz,
+LSPC 6 MHz, APU 4 MHz, OPNB 8 MHz — all unconditional mains). Suspects: MIA MAME-style
+zip path (`mia/medium/neo-geo.cpp` needs P/M/C/S/V1/V2 ROMs + `Neo Geo.bml` hit +
+`neogeo.zip` BIOS via `PhobosRunner.cpp` firmware mapping) or a run-path wedge. Needs
+measurement: instrument MIA load (zip open, DB lookup, per-ROM match, decrypt,
+System::load/power, first frame) → load `kof2003.zip` → fix MIA path or stack-dump wedge.
+BIOS copy (`fw_ng_bios` → `mia_temp/neogeo.zip`) already wired in `MainViewModel.loadRom`.
+
+**Investigation notes (debunked theory):** the shared "ARM64/libco" fingerprint was
+INFERENCE, not evidence — no stack dump was ever captured for these cores (the only
+diagnostic is an N64-specific `dumpStall`). The scheduler + `libco/aarch64.c` are stock
+upstream and work on this exact build for MD (4+ threads), MSX, WS, NGP, GB, SFC, FC, A26,
+CV, SG, PS1.
 
 #### Feature-completeness audit: Run-Ahead + Fast Boot + Skip Boot ROM (INVESTIGATED 2026-08-17)
 
