@@ -1,6 +1,8 @@
 package com.phobos.emulator
 
 import android.os.Bundle
+import android.net.Uri
+import android.util.Log
 import android.view.InputDevice
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
@@ -15,12 +17,23 @@ import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.ui.MainScaffold
 import com.phobos.emulator.ui.MainViewModel
+import com.phobos.emulator.ui.RomFile
 import com.phobos.emulator.ui.theme.PhobosTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var settingsStore: SettingsStore
     private lateinit var viewModel: MainViewModel
+
+    // Debug/test harness scope for the adb-driven ROM loader (intent extras).
+    private val debugScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     // True while the emulator screen's Compose Box holds focus. When set, key
     // events are handled by Compose's onKeyEvent (which pushes to GameInputState);
@@ -61,6 +74,44 @@ class MainActivity : ComponentActivity() {
         // Key events (D-Pad, face buttons) are handled by Compose's onKeyEvent while
         // the emulator screen holds focus; this fallback catches them if focus is lost.
         installKeyEventFallback()
+
+        handleDebugLoadIntent(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleDebugLoadIntent(intent)
+    }
+
+    override fun onDestroy() {
+        debugScope.cancel()
+        super.onDestroy()
+    }
+
+    /**
+     * Debug/test harness: load a ROM directly from adb without UI interaction.
+     *
+     * Usage:
+     *   adb shell am start -n com.phobos.emulator/.MainActivity \
+     *     --es load_uri "file:///storage/EBFF-F6C0/ROMs/tg16/Final Lap Twin (USA).zip" \
+     *     --es load_name "Final Lap Twin (USA).zip" \
+     *     --es load_system "PC Engine"
+     *
+     * Waits (bounded) for native asset extraction + settings/firmware paths to be
+     * ready before loading, so cold-start intent loads behave like UI loads.
+     */
+    private fun handleDebugLoadIntent(intent: android.content.Intent?) {
+        val uri = intent?.getStringExtra("load_uri") ?: return
+        val name = intent.getStringExtra("load_name") ?: return
+        val system = intent.getStringExtra("load_system") ?: return
+        debugScope.launch {
+            withTimeoutOrNull(8000) {
+                viewModel.systems.first { it.isNotEmpty() }
+                viewModel.settings.first { it.systemFirmwarePaths.isNotEmpty() }
+            }
+            Log.d("Phobos", "debugLoad: loading system='$system', rom='$name'")
+            viewModel.loadRom(applicationContext, system, RomFile(name, Uri.parse(uri)))
+        }
     }
 
     /**

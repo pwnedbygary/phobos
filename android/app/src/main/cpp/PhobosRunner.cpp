@@ -2393,13 +2393,12 @@ else if (port->type() == "Keyboard") {
     // ("<System> Unsupported") and returns to the library. Remove entries once
     // the underlying core is fixed.
     //   - ZX Spectrum 128: PSG co-routine desyncs the scheduler.
-    //   - PC Engine / PC Engine CD / SuperGrafx: PCE loads but scheduler
-    //     co_switch never returns (VDP hsync/vsync chain).
     //   - Neo Geo (MVS/AES): loads, BIOS OK, black screen, 0 FPS.
+    //   - PC Engine / PC Engine CD / SuperGrafx: UNGATED 2026-08-18 — root
+    //     cause was the missing PROFILE_PERFORMANCE define (empty PSG::main
+    //     deadlocked the scheduler at the first CPU timer sync); fixed via
+    //     CMakeLists.txt PROFILE_PERFORMANCE (Task 10c).
     if (identifiedSystem == "ZX Spectrum 128" ||
-        identifiedSystem == "PC Engine" ||
-        identifiedSystem == "PC Engine CD" ||
-        identifiedSystem == "SuperGrafx" ||
         identifiedSystem == "Neo Geo") {
         LOGE("%s: unsupported (scheduler hang) — refusing to load", (const char*)identifiedSystem);
         currentMedium.reset();
