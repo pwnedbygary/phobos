@@ -195,6 +195,12 @@ struct Disc : Memory::Interface {
       s16 left;
       s16 right;
     } sample;
+
+    // Fade envelope to eliminate pops on playback state transitions
+    f32 cddaGain = 1.0f;           // Current gain (0.0-1.0)
+    f32 cddaGainTarget = 1.0f;     // Target gain after transition
+    f32 cddaFadeRate = 0.0f;       // Samples per fade (pre-computed rate)
+    bool previousPlayingState = false; // Track state changes
   } cdda{*this};
 
   struct CDXA {

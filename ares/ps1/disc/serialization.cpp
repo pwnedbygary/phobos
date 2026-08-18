@@ -29,6 +29,10 @@ auto Disc::serialize(serializer& s) -> void {
   s((u32&)cdda.playMode);
   s(cdda.sample.left);
   s(cdda.sample.right);
+  s(cdda.cddaGain);
+  s(cdda.cddaGainTarget);
+  s(cdda.cddaFadeRate);
+  s(cdda.previousPlayingState);
 
   s(cdxa.filter.file);
   s(cdxa.filter.channel);
