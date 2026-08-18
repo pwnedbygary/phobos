@@ -5,11 +5,11 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 
 ## 🚀 CURRENT STATUS (2026-08-18)
 
-**Latest work:** Task #46 (PS1 CD-DA audio pops) FIXED & VERIFIED. Added linear fade envelope (150 samples @ 44.1kHz ≈ 3.4ms) to smooth discontinuities when CD-DA playback state transitions. Ring buffer remains healthy (81-100% full, zero new underruns); fix targets content-level discontinuities. Commits `1822c5757` + `df49dfc46` pushed.
+**Latest work:** Task #9 (Ape Escape cinematics) FIXED & VERIFIED on-device. XA filtering was incorrectly dropping the channel-0 video/data sectors interleaved with channel-1 XA audio. The fix applies file/channel filtering only to XA audio sectors, allowing MDEC video data through the CD FIFO. Clean build and cold Ape Escape USA launch verified; opening cinematic plays normally.
 
 **All cores verified WORKING** except gated broken ones (ZX 128K, PCE/CD, Neo Geo MVS/AES — all share ARM64/libco black-screen issue).
 
-**Next priority:** Task #9 (Ape Escape cinematic skip) or Task #49 (N64 save import/export UI).
+**Next priority:** Task #49 (N64 save import/export UI).
 
 ## ALWAYS-READ REFERENCES (for details not covered here)
 - **Implementation plan (DEEP reference — task queue + full notes):** `/home/garyb/LLM-Projects/phobos/docs/implementation-plan.md` — also at `.cache/.../implementation_plan.artifact.md` (same content; the in-repo copy is authoritative). Priority queue = open only; ✅ Complete section = archived write-ups; IN FLIGHT = detailed status.
@@ -38,9 +38,9 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 7. **Auto Save-State Slot (Task 17):** Auto-save on quit / auto-load on boot, integrated in pause menu and cycler.
 8. **Rogue Squadron & Conker/MT:** Render stability via parallel-RDP scanout race fix and field-toggle correctives.
 9. **PS1 CD-DA Audio Pops (Task 46 — 2026-08-18):** Fixed via fade envelope on playback state transitions. Root cause: disc drive state changes (reading/playingCDDA) would snap samples from music→0, creating hard clicks. Solution: 150-sample linear fade (3.4ms @ 44.1kHz) applied in `cdda.cpp:clockSample()` when entering/exiting CD-DA playback. Eliminates pops without audio artifacts. Commit `1822c5757`.
+10. **Ape Escape cinematics (Task 9 — 2026-08-18):** Fixed XA filter routing. Ape Escape's `TITLE.STR` interleaves `subMode=0x48` channel-0 MDEC video/data sectors with `subMode=0x64` channel-1 XA audio sectors. Phobos applied the configured file/channel filter to both, dropping the video sectors before the CD FIFO. Filtering now applies only to XA audio sectors (`subMode & 0x44`), allowing video data to reach MDEC. Verified on Retroid Pocket 6 with a clean build and cold USA-region launch; intro plays and reaches the menu normally.
 
 ## Open Priority Queue
-- **#9:** Ape Escape cinematic skip (CD-XA).
 - **#10c/10a:** PCE/CD + Neo Geo MVS/AES joint investigation (ARM64/libco coroutine black screen / gated).
 - **#49:** N64 save import/export UI (.sra/.eep/.fla/.mpk).
 - **#52:** PS1 multi-disc swap verify (MGS disc 2 swap fix applied via recursive `scan`).

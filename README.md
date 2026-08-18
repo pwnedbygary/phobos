@@ -73,7 +73,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | Super Famicom / Famicom | ✅ |
 | Mega Drive / Game Gear | ✅ |
 | Master System | ✅ |
-| PlayStation | ✅ DualShock + analog toggle, memcards, save states, multi-disc swap (MGS verified); Ape Escape rumble unconfirmed (game/config); CD-XA cinematics unsupported (upstream disabled) |
+| PlayStation | ✅ DualShock + analog toggle, memcards, save states, multi-disc swap (MGS verified), Ape Escape opening cinematic verified |
 | Neo Geo Pocket / Color | ✅ BIOS settings (language/date) persist |
 | WonderSwan / Color | ✅ |
 | MSX / MSX2 | ✅ (incl. tape) |
@@ -95,7 +95,6 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 - **Neo Geo MVS/AES** — boots to BIOS but no game screen (ARM64 endianness / MIA database path).
 - **PCE-CD & SuperGrafx** — black screen; PCE HuCard-only works.
 - **ZX Spectrum 128K** — gated with a clean "Unsupported" popup (PSG co-routine / scheduler on ARM64, same class as PCE/Neo Geo); 48K works.
-- **PS1 CD-XA cinematics** — disabled (upstream state, not a Phobos regression).
 - **N64 load-state** — a stale-DMA exception-loop was seen on some titles after restore; RDP validation is now non-fatal so it degrades instead of freezing.
 
 ---

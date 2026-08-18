@@ -171,4 +171,3 @@ auto MDEC::readInputFifo() -> maybe<u16> {
 auto MDEC::writeOutputFifo(u32 data) -> void {
   fifo.output.write(data);
 }
-

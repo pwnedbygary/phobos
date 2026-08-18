@@ -164,7 +164,6 @@
 
 ### Open tasks (full-width list — see Detailed Task Notes for full write-ups)
 
-- **#9 — Ape Escape cinematic skip** — CD-XA intro disabled (upstream state); needs logcat of intro + core change. _Status: 🟡 Diagnosed · Diff: 🟡 Medium (PS1 core)_
 - **#10c/10a — PCE/CD + Neo Geo MVS/AES joint investigation** — loads, BIOS OK, black screen; shared ARM64/libco fingerprint; NOW ALSO = ZX 128K (gated, same PSG co-routine issue). _Status: 🔴 Broken (gated) · Diff: 🔴 Hard (deep)_
 - **#49 — N64 save import/export** (RetroArch / Mupen64Plus FZ .sra/.eep/.fla/.mpk → Phobos). _Status: ⬜ Open · Diff: 🟡 Medium_
 - **#59 — Proper write-through dcache bypass (correct design, per-game)** — parked; high-risk JIT memory path. _Status: 🟡 Parked · Diff: 🔴 Hard (JIT)_
@@ -226,6 +225,29 @@
 ## Detailed Task Notes (grouped by status — ordered by task number within each group)
 
 ### ✅ COMPLETE (DONE / FIXED / RESOLVED / VERIFIED / REVERTED-archived)
+
+#### Task 9 — Ape Escape cinematics (FIXED & VERIFIED 2026-08-18)
+
+**Symptom:** Ape Escape USA booted and played its opening audio, but showed a white
+screen and skipped to the menu. DuckStation played the same CHD correctly.
+
+**Root cause:** Ape Escape's `TITLE.STR` interleaves Mode 2 data/realtime video
+sectors (`subMode=0x48`, file 1/channel 0) with XA-ADPCM audio sectors
+(`subMode=0x64`, file 1/channel 1). The game configures the CD XA filter for
+file 1/channel 1. Phobos applied that filter to every Mode 2 sector before
+classifying it, so the channel-0 MDEC video sectors were discarded before the
+CD FIFO. No MDEC command or MDEC DMA activity could occur.
+
+**Fix:** `ares/ps1/disc/drive.cpp` now applies the file/channel filter only when
+the sector is XA audio (`subMode & 0x44`), routes matching XA audio to the CD-XA
+decoder, and leaves non-audio Mode 2 sectors available to the CD FIFO.
+
+**Verification:** Built `./gradlew app:assembleDebug`, deployed and launched on
+Retroid Pocket 6 (`49016109`), reproduced the failure with bounded diagnostics,
+then verified the fix visually with the instrumented build and again with a
+clean non-instrumented build. The Ape Escape opening cinematic plays normally
+and proceeds to the menu; emulation remains at full speed. Temporary diagnostics
+were removed before the final build.
 
 #### N64 reset (vulkan.mutex leak on reset) — FIXED 2026-08-11 ✅
 
@@ -847,11 +869,6 @@ uses many; ares VU has known partial accuracy in rounding/overflow edge cases).
 **Difficulty:** 🔴 Hard (deep). **Status:** 🟡 Parked (diag in tree).
 
 ### 🔄 IN FLIGHT (OPEN / investigating / diagnosed / broken-gated / implemented-awaiting-verify)
-
-#### Task 9 — Ape Escape cinematic skip (DIAGNOSED)
-
-CD-XA intro disabled (upstream state); needs logcat of the intro + core change.
-CD-XA stream is commented out in upstream ares (verified NOT a Phobos regression).
 
 #### Task 10c — PCE/CD + Neo Geo MVS/AES joint investigation (BROKEN, gated)
 
