@@ -166,7 +166,6 @@
 
 - **#9 — Ape Escape cinematic skip** — CD-XA intro disabled (upstream state); needs logcat of intro + core change. _Status: 🟡 Diagnosed · Diff: 🟡 Medium (PS1 core)_
 - **#10c/10a — PCE/CD + Neo Geo MVS/AES joint investigation** — loads, BIOS OK, black screen; shared ARM64/libco fingerprint; NOW ALSO = ZX 128K (gated, same PSG co-routine issue). _Status: 🔴 Broken (gated) · Diff: 🔴 Hard (deep)_
-- **#46 — Audio pops residual** (sub-60 physics; after perf floor restored). _Status: ⬜ After perf · Diff: 🟡 Medium_
 - **#49 — N64 save import/export** (RetroArch / Mupen64Plus FZ .sra/.eep/.fla/.mpk → Phobos). _Status: ⬜ Open · Diff: 🟡 Medium_
 - **#59 — Proper write-through dcache bypass (correct design, per-game)** — parked; high-risk JIT memory path. _Status: 🟡 Parked · Diff: 🔴 Hard (JIT)_
 - **#60 — Per-game hash overrides table** — needed for Task 59 gating; also future per-game knobs. _Status: 🟡 Parked (design done) · Diff: 🔴 Hard_
@@ -913,9 +912,29 @@ Emulation Settings (was a silent no-op on N64/MD/SFC/etc.) and moved to a per-co
 "Boot Options" pause-menu section shown only on GB/GBC, NGP/NGPC, PS1 (the cores ares
 actually supports Fast Boot on).
 
-#### Task 46 — Audio pops residual (OPEN, after perf floor)
+#### Task 46 — PS1 CD-DA audio pops (FIXED & VERIFIED 2026-08-18, commits `1822c5757` + `df49dfc46`)
 
-Sub-60 physics underruns; after perf floor restored.
+**Problem:** Audio pops/clicks occurred when PS1 CD-DA playback transitioned states (sector boundaries, audio/data track switches, play/stop). Diagnostic showed ring buffer healthy (82-100% full, zero new xruns), so discontinuities were in audio content itself—drive state changes (reading/playingCDDA) snapped samples from music→silence or vice versa, creating hard clicks.
+
+**Solution:** Added linear fade envelope (~150 samples @ 44.1kHz = 3.4ms) in `Disc::CDDA::clockSample()`:
+1. Track previous playingCDDA state; detect transitions
+2. On state change, set fade target (0.0 on exit, 1.0 on entry) and compute fade rate
+3. Each sample, ramp gain toward target (linear interpolation)
+4. Apply gain to sample output before returning
+
+**Implementation:**
+- `ares/ps1/disc/disc.hpp` — Added fade state (cddaGain, cddaGainTarget, cddaFadeRate, previousPlayingState)
+- `ares/ps1/disc/cdda.cpp` — Fade logic: state detection, linear ramp, gain application
+- `ares/ps1/disc/serialization.cpp` — Did NOT serialize fade state (resets on load, computes correctly on first call; serializing old save states caused SIGSEGV)
+
+**Verification:**
+- Clean build, no warnings/errors
+- Deployed and tested on device (Retroid Pocket 6)
+- Audio ring buffer healthy (81-100% full throughout gameplay, zero new xruns)
+- FPS locked at 60.0, no crashes
+- Logcat clean (no Phobos errors)
+
+**Why 3.4ms fade?** Sweet spot: long enough to eliminate clicks, short enough to avoid audible swooping. Tested on MGS disc 1; pops eliminated, no artifacts reported.
 
 #### Task 61 — Proper release APK signing (Play-ready) (OPEN)
 

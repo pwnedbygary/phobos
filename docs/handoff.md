@@ -3,6 +3,14 @@
 **Phobos** is an Android N64-first multi-system emulator (package `com.phobos.emulator`, module `:app`, native lib `libphobos_android.so`).
 Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-RDP Vulkan renderer, libadrenotools Turnip driver). UI is Jetpack Compose.
 
+## 🚀 CURRENT STATUS (2026-08-18)
+
+**Latest work:** Task #46 (PS1 CD-DA audio pops) FIXED & VERIFIED. Added linear fade envelope (150 samples @ 44.1kHz ≈ 3.4ms) to smooth discontinuities when CD-DA playback state transitions. Ring buffer remains healthy (81-100% full, zero new underruns); fix targets content-level discontinuities. Commits `1822c5757` + `df49dfc46` pushed.
+
+**All cores verified WORKING** except gated broken ones (ZX 128K, PCE/CD, Neo Geo MVS/AES — all share ARM64/libco black-screen issue).
+
+**Next priority:** Task #9 (Ape Escape cinematic skip) or Task #49 (N64 save import/export UI).
+
 ## ALWAYS-READ REFERENCES (for details not covered here)
 - **Implementation plan (DEEP reference — task queue + full notes):** `/home/garyb/LLM-Projects/phobos/docs/implementation-plan.md` — also at `.cache/.../implementation_plan.artifact.md` (same content; the in-repo copy is authoritative). Priority queue = open only; ✅ Complete section = archived write-ups; IN FLIGHT = detailed status.
 - **README.md** (repo root) — full systems matrix, feature list, build requirements.
@@ -40,9 +48,34 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 - **Other:** Task 13c (Multi-controller), Task 42 (Perf Monitor settings), Task 51 (ZX multi-tape swap).
 
 ## Working Agreements & Policies
+
 - **Measure first, then fix** — never blind-patch the recompiler.
 - **Accuracy vs. Speed** — accuracy is preferred, but never below full 60 FPS (raise `JitInterleaving` / perf knobs if below floor).
 - **Commit + push on every good result** — checkpoint working states immediately (`git add -u`, descriptive commit, push).
 - **Auto-deploy after every build** — immediately deploy to device after `assembleDebug`.
 - **UI Toggles** — use `rememberUpdatedState` for state params inside `pointerInput` gesture handlers.
 - **Vulkan Mutex** — the abandon path must NEVER take `vulkan.mutex` (zombie deadlock).
+- **Documentation** — update BOTH handoff.md AND implementation-plan.md on every completed task before moving to next one.
+
+## Practical Build & Debug Tips
+
+**Gradle Performance (if VS Code CPU spiking to 100%):**
+- Add to `android/gradle.properties`:
+  ```properties
+  org.gradle.workers.max=2
+  org.gradle.jvmargs=-Xmx1024m
+  android.enableBuildCache=true
+  ```
+- Only compile one variant: `./gradlew app:assembleModernDebug` (not full `assembleDebug`)
+- GPU acceleration: Not practical for Gradle/C++ compilation (CPU-bound)
+
+**ADB from VS Code terminal:**
+- Device: `adb devices` — should show **49016109** (Retroid Pocket 6)
+- Install: `adb install -r android/app/build/outputs/apk/modern/debug/app-modern-debug.apk`
+- Launch: `adb shell am start -n com.phobos.emulator/.MainActivity`
+- Logcat: `timeout 60 adb logcat | grep Phobos` (or use `-c` to clear first)
+
+**Crash debugging:**
+- Quick check: `adb logcat | grep -E "SIGSEGV|crash|FATAL"`
+- Full trace: `debuggerd -b <PID>` (watchdog auto-dumps on PhobosRunner hang, ~6s timeout)
+- Verify: audio ring buffer health in logcat: `AudioDiag: ring=XXXX/12000 (XX%) xruns+0`
