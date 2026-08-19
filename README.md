@@ -81,8 +81,8 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | ZX Spectrum | ✅ Tape loading, on-screen keyboard, gamepad schemes (QAOP/ZXZX/Kempston) — Manic Miner verified |
 | SG-1000 | ✅ Verified 2026-08-14 |
 | Mega CD | ✅ Audio fixed (lockstep multi-stream mixer, user-verified) |
+| Neo Geo (MVS/AES) | ✅ Graphics + controls fixed (KOF2003 verified @59.2 FPS); **audio works** (KOF2003 confirmed; `ring buffer 0/12000` log is a suspected formatting artifact); per-title compat matrix → [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) |
 | **Known broken / under investigation** | |
-| Neo Geo (MVS/AES) | ❌ Loads, BIOS OK, black screen — ARM64/MIA database path |
 | PC Engine / CD / SuperGrafx | ❌ HuCard loads; PCE-CD/SuperGrafx black screen — scheduler/co-switch on ARM64 |
 
 > Sega Saturn and Neo Geo CD are not listed: neither has a usable core (Saturn is
@@ -92,10 +92,22 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 ### Known issues / not yet functional
 
-- **Neo Geo MVS/AES** — boots to BIOS but no game screen (ARM64 endianness / MIA database path).
+- **Neo Geo MVS/AES — audio log artifact** — games boot and render correctly and **have audio** (KOF2003 confirmed on-device). The `ring buffer 0/12000` log line is suspected to be a **string-formatting bug**, not a real audio fault — verify the log formatting. Full per-title status in [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md).
 - **PCE-CD & SuperGrafx** — black screen; PCE HuCard-only works.
 - **ZX Spectrum 128K** — gated with a clean "Unsupported" popup (PSG co-routine / scheduler on ARM64, same class as PCE/Neo Geo); 48K works.
 - **N64 load-state** — a stale-DMA exception-loop was seen on some titles after restore; RDP validation is now non-fatal so it degrades instead of freezing.
+
+---
+
+## Neo Geo (MVS/AES) emulation
+
+Phobos targets **perfect compatibility** for the Neo Geo MVS/AES library. Notes for users:
+
+- **Scope:** strictly **Neo Geo MVS/AES** — it is **not** a general arcade core. Neo Geo CD is a separate, future core (not in 1.0 scope).
+- **"FBNeo + MAME hybrid":** only Neo Geo ROM/driver data and decryption routines are borrowed from MAME and FBNeo (CMC/CMC42/CMC50/SMA/PCM2/PVC, kof2k2-family) to maximize Neo Geo coverage — other arcade boards are not emulated.
+- **Current status (2026-08-19):** graphics fixed (sprite zoom tables + vflip/zoom decode, mirroring MAME); P1/P2 input mirror fixed (P1 works; P2 needs a second controller on a handheld); **audio works** (KOF2003 confirmed on-device) — the `ring buffer 0/12000` log line is suspected to be a string-formatting bug, not a real fault.
+- **Per-title compatibility matrix:** [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) — 288 titles, categorized by protection (PVC/K2K2/CMC42/CMC50/PCM2/SMA/bootleg/standard) and ranked hardest-first, with Boot/Gfx/Audio/Ctrl status columns.
+- **Controls:** default mapping puts A/B on the face buttons and **C/D on R1/R2** (Genesis-heritage bit mapping in `resolveButtonBit`). Per-core + per-game controller rebinding (RetroArch-style 3-tier Global→Core→Game) is a planned task.
 
 ---
 
