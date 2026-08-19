@@ -36,7 +36,7 @@ single handheld).
 ## Matrix (288 titles)
 | Title | Set (ROM) | Protection | Boot | Gfx | Audio | Ctrl | Notes |
 |-------|-----------|------------|------|-----|-------|------|-------|
-| Matrimelee / Shin Gouketsuji Ichizoku Toukon (NGM-2660 ~ NGH-2660) | matrim | K2K2 | — | — | — | — |  |
+| Matrimelee / Shin Gouketsuji Ichizoku Toukon (NGM-2660 ~ NGH-2660) | matrim | K2K2 | ✓ | ✓ | ✓ (user-confirmed) | ✓ (P1) | K2K2 decrypt verified on-device @59.2 FPS; boot/gfx/audio/ctrl all good |
 | Metal Slug 5 (NGH-2680) | mslug5h | PVC | — | — | — | — |  |
 | Metal Slug 5 (NGM-2680) | mslug5 | PVC | — | — | — | — |  |
 | Samurai Shodown V / Samurai Spirits Zero (NGH-2700) | samsho5h | K2K2 | — | — | — | — |  |
@@ -50,7 +50,7 @@ single handheld).
 | The King of Fighters 2002 Plus (bootleg set 1) | kf2k2pls | K2K2 | — | — | — | — |  |
 | The King of Fighters 2002 Plus (bootleg set 2) | kf2k2pla | K2K2 | — | — | — | — |  |
 | The King of Fighters 2003 (NGH-2710) | kof2003h | PVC | ✓ | ✓ | ✓ (log artifact) | ✓ (P1) | Export set; same as kof2003 (audio also works) |
-| The King of Fighters 2003 (NGM-2710, Export) | kof2003 | PVC | ✓ | ✓ | ✓ (log artifact) | ✓ (P1) | Graphics + controls verified on-device @59.2 FPS; AUDIO WORKS (user-confirmed) - ring-buffer 0/12000 log is a suspected string-format bug, not a real fault |
+| The King of Fighters 2003 (NGM-2710, Export) | kof2003 | PVC | ✓ | ✓ | ✓ (log artifact) | ✓ (P1) | Graphics + controls verified on-device @59.2 FPS; AUDIO? user-confirmed audio works - ring-buffer 0/12000 log is a suspected string-format bug, not a real fault |
 | Bang Bead | bangbead | CMC42 | — | — | — | — |  |
 | Ganryu / Musashi Ganryuki | ganryu | CMC42 | — | — | — | — |  |
 | Jockey Grand Prix (set 1) | jockeygp | CMC50 | — | — | — | — |  |
@@ -324,3 +324,12 @@ single handheld).
 | World Heroes Perfect | whp | standard | — | — | — | — |  |
 | Zed Blade / Operation Ragnarok | zedblade | standard | — | — | — | — |  |
 | Zintrick / Oshidashi Zentrix (bootleg of CD version) | zintrckb | standard | — | — | — | — |  |
+## Testing notes (2026-08-19, on-device Retroid Pocket 6)
+
+### K2K2 tier
+- **matrim (Matrimelee)** — ✓ verified: boots, sprites/backgrounds/text correct, 59.2 FPS, audio works (user-confirmed), P1 controls work. K2K2 decrypt (decryptK2k2P + CMC50 graphics + PCM2 V-ROM) confirmed working.
+- **kof2003 (KOF2003)** — ✓ verified earlier: graphics + controls good @59.2 FPS; audio works (ring-buffer 0/12000 log is a formatting artifact, not a fault).
+- **Samurai Shodown V / V Special (samsh5sp / samsh5sph / samsh5spha)** — UNTESTED on-device. The only SamSho5 ROM present (`samsh5pf.zip`) is a **recently-released "Perfect" redump (2026)** NOT in the MIA database (revision 2025-02-03) → MIA load fails with **Result 5** (unknown set). The K2K2 decrypt path for SamSho5 (`k2k2_sams5s`, key 0x0d) is wired but unverified. To support newer/redump sets, the MIA database needs a new entry mirroring `samsh5sp` with the new ROM filenames/CRCs.
+
+### ROM identification caveat
+MIA identifies Neo Geo games by **set name** (the `load_name` stripped of `.zip`), not by scanning internal ROM CRCs. Non-DB names (or new 2026 redumps) fail with Result 5 even when content is a valid Neo Geo cart. Keep ROM sets named to match MIA DB entries (`matrim`, `kof2003`, `samsh5sp`, ...).
