@@ -18,8 +18,17 @@ auto Cartridge::connect() -> void {
 
   if(information.board == "rom_mslugx") board = std::make_unique<Board::MSlugX>(*this);
   if(information.board == "cmc50_jockeygp") board = std::make_unique<Board::JockeyGP>(*this);
+  if(information.board == "pvc_kf2k3" || information.board == "pvc_kf2k3h") board = std::make_unique<Board::PVC>(*this);
   if(!board) board = std::make_unique<Board::Rom>(*this);
   board->pak = pak;
+
+  //fix layer banking schemes used by later cartridges
+  if(information.board == "cmc50_kof2000n" || information.board == "pvc_kf2k3" || information.board == "pvc_kf2k3h" || information.board == "pvc_svc" || information.board == "k2k2_matrim") {
+    board->fixBankType = 2;  //KOF2000-style
+  } else if(information.board.beginsWith("cmc42_") || information.board == "cmc50_kof2001" || information.board == "pcm2_mslug4" || information.board == "pcm2_rotd" || information.board == "pcm2_pnyaa" || information.board == "pvc_mslug5" || information.board == "k2k2_samsh5" || information.board == "k2k2_sams5s") {
+    board->fixBankType = 1;  //Garou-style
+  }
+
   board->load();
 
   power();
@@ -74,6 +83,16 @@ auto Cartridge::readVA(n32 address) -> n8 {
 auto Cartridge::readVB(n32 address) -> n8 {
   if(board) return board->readVB(address);
   return 0xff;
+}
+
+auto Cartridge::fixBankType() const -> n2 {
+  if(board) return board->fixBankType;
+  return 0;
+}
+
+auto Cartridge::cromMask() const -> u32 {
+  if(board) return board->cromMask();
+  return 0;
 }
 
 }

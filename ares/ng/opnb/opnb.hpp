@@ -4,7 +4,6 @@ struct OPNB : Thread {
   OPNB() : ym2610(interface) {};
   Node::Object node;
   Node::Audio::Stream streamFM;
-  Node::Audio::Stream streamSSG;
 
   //opnb.cpp
   auto load(Node::Object) -> void;

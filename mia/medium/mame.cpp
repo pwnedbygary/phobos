@@ -33,6 +33,18 @@ auto Mame::loadRoms(string location, Markup::Node& info, string sectionName) -> 
       auto writeOffset = section["offset"].natural();
       auto size = section["size"].natural();
 
+      if(loadType == "load32_word_swap") {
+        if(output.size() < writeOffset + size * 2) output.resize(writeOffset + size * 2);
+        for(u32 index : range(size >> 1)) {
+          auto source = readOffset + index * 2;
+          auto target = writeOffset + index * 4;
+          output[target + 0] = input[source + 1];
+          output[target + 1] = input[source + 0];
+        }
+        readOffset += size;
+        continue;
+      }
+
       auto startIndex = 0;
       auto increment = 1;
       if(loadType == "load16_byte") {

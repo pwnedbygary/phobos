@@ -1,3 +1,4 @@
+#include <android/log.h>
 namespace ares::NeoGeo {
 
 LSPC lspc;
@@ -21,15 +22,10 @@ auto LSPC::load(Node::Object parent) -> void {
 
   debugger.load(node);
 
-  set<u8> bytes;
-  u64 vbits = bit::reverse<u64>(0x0123456789abcdefULL);
+  //vertical zoom table: the LSPC's real 256x256 zoom table (MAME "000-lo.lo").
+  //The default construction below is a placeholder; the system loader fills
+  //the real table from the BIOS set via loadZoomy().
   memory::fill<n8>(vscale, sizeof(vscale), 0xff);
-  for(u8 y : range(256)) {
-    n4 upper = vbits >> (y & 15 ^ 1) * 4;
-    n4 lower = vbits >> (y >> 4 ^ 1) * 4;
-    bytes.insert(upper << 4 | lower << 0);
-    u8 x = 0; for(auto& byte : bytes) vscale[y][x++] = byte;
-  }
 
   u64 hbits = 0x5b1d7f390a6e2c48ULL;
   memory::fill<n1>(hscale, sizeof(hscale), 0x00);
@@ -39,6 +35,12 @@ auto LSPC::load(Node::Object parent) -> void {
       hscale[y][value] = 1;
     }
   }
+}
+
+auto LSPC::loadZoomy(const u8* data, u32 size) -> void {
+  //MAME "000-lo.lo": 0x20000 bytes (only the first 0x10000 = [zoom][line] table is used)
+  if(!data || size < 0x10000) return;
+  nall::memory::copy<n8>(vscale, data, 0x10000);
 }
 
 auto LSPC::unload() -> void {

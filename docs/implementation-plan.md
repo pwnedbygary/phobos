@@ -171,14 +171,17 @@
 
 ### Open tasks (full-width list — see Detailed Task Notes for full write-ups)
 
+- **Neo Geo MVS/AES — FINISH CORE FIRST (gates everything below):** graphics FIXED (vscale/`loadZoomy` + vflip/zoom decode; KOF2003 verified 59.2 FPS); P1/P2 input mirror FIXED (player-aware binding in `PhobosRunner.cpp::controllerPlayerIndex` — verified on-device: P1 only). **Audio 0% still OPEN** (follow-up bug, tackle right after video). Then broad compat pass (Matrimelee/SamSho/etc.). PCEngineCD deferred (doc-only bug) until NG fully stable. _Status: 🟡 NG video+controls done, audio open · Diff: 🟡 Medium (audio)_
+- **PER-CORE + PER-GAME CONTROLLER REMAPPING — NEXT PRIORITY (immediately after NG stable):** Tasks **13a** (per-core custom layouts), **13b** (per-core rebinding), **13c** (multi-controller / per-player pad assignment), **13d** (per-game rebinding). All four done together (same code path). RetroArch-style 3-tier hierarchy: **Global** default → **Per-Core** override → **Per-Game** override (highest priority wins). Pulled up from QoL phase: Neo Geo C/D currently map to R1/R2 (`resolveButtonBit` Genesis-heritage bit mapping); per-core defaults + user rebinding (and per-game overrides for weird default schemes) is the proper fix. _Status: ⬜ Open · Diff: 🟡 Medium_
 - **#10c/10a — PCE FIXED (`2795e5813`); ZX 128K FIXED (`1bf97e3ac`); Neo Geo MVS/AES remaining** — PCE root cause was the missing PROFILE_PERFORMANCE define (empty PSG::main → scheduler deadlock); ZX 128K root cause was the tape pak attribute lookup mismatch (empty pak → resampler ratio 0 → infinite loop). Both verified on-device at full FPS. Neo Geo (MIA database path) still gated, needs measurement. _Status: 🟡 1/3 cores gated · Diff: 🔴 Hard (deep)_
+- **#72 — N64 RDP-ParaLLEl performance investigation vs mupen64plus-ae-turnip** — some games run WAY faster in pwnedbygary/mupen64plus-ae-turnip's RDP-ParaLLEl renderer than in our N64 core. Investigate the fork's paraLLEl-RDP integration (command-ring/timeline/pipeline threading, VI post-processing, any vendor/Adreno-specific fast paths, scheduler/affinity tweaks) and port anything applicable to make Phobos's N64 as fast as possible. Diff against upstream ares paraLLEL-RDP + our Task 45 perf pass. _Status: ⬜ Open · Diff: 🟡 Medium (research + selective port)_
 - **#49 — N64 save import/export** (RetroArch / Mupen64Plus FZ .sra/.eep/.fla/.mpk → Phobos). _Status: ⬜ Open · Diff: 🟡 Medium_
 - **#59 — Proper write-through dcache bypass (correct design, per-game)** — parked; high-risk JIT memory path. _Status: 🟡 Parked · Diff: 🔴 Hard (JIT)_
 - **#60 — Per-game hash overrides table** — needed for Task 59 gating; also future per-game knobs. _Status: 🟡 Parked (design done) · Diff: 🔴 Hard_
 - **#61 — Proper release APK signing (Play-ready)** — real keystore (base64 secret in GH Actions), `signingConfigs.release` reading PHOBOS_KEYSTORE_* gated behind a project property. _Status: ⬜ Open · Diff: 🟢 Easy (config/CI only)_
 - **Mischief Makers (N64) title freeze — PARKED (deep RSP accuracy)** — interrupt chain verified functional (RCP=1 → handler entry); NOT the VU stubs (zero hits). Game's IRQ handler at 0x800A5FC8 follows a corrupted dispatch → beq-self fatal trap at 0x800008b8, garbage EPC (0xb400...). Root cause = upstream ares RSP microcode inaccuracy for the game's custom audio microcode. Need VU instruction bisection (diag in tree, commit `22ee8057a`) or reference-RSP comparison. _Status: 🟡 Parked · Diff: 🔴 Hard (deep)_
 - **FEATURE-COMPLETENESS AUDIT (pre-1.0, investigated 2026-08-17) — Run-Ahead NOT wired; Fast Boot RESOLVED**: Run-Ahead toggle is DEAD (no JNI/native bridge; ares `setRunAhead`/_runAhead exists but nothing calls it — see note). Fast Boot moved per-core 2026-08-17 (`42c462549`): toggle now lives in the pause menu's Boot Options, shown only on GB/GBC/NGP/NGPC/PS1 (the cores ares supports it on); removed from global settings. Skip Boot ROM wired (GB/GBC/WS only). _Status: 🟡 Run-Ahead open · Diff: 🟢 (run-ahead bridge)
-- **QoL phase** (13a/13b/13c/14/15/15a/16/18/19/31/42/43/44/50/51/71). _Status: ⬜ After core stability_
+- **QoL phase** (14/15/15a/16/18/19/31/42/43/44/50/51/71 — **13a/13b/13c/13d pulled up to NEXT priority after Neo Geo**, see above). _Status: ⬜ After core stability_
 - **Perf sub-batch** (63-70: PS1 R3000 recompiler, PS1 GPU off-CPU, SNES 65816 recompiler, GBA ARM7 recompiler, Genesis performance VDP, N64 RSP NEON verify, perf-overlay CPU/GPU breakdown, ZX z80 recompiler). _Status: ⬜ After core stability · Diff: varies (63/64b 🔴)_
 
 > [!IMPORTANT]
@@ -196,6 +199,7 @@
 - **13a** — Per-core custom controller layouts
 - **13b** — Per-core controller rebinding
 - **13c** — Multi-controller support (per-player pad assignment + per-port input routing) — extension of 13a/13b
+- **13d** — Per-game controller rebinding (3-tier Global→Core→Game, RetroArch-style; done with 13a/13b/13c — same code path)
 - **14** — Responsive UI layout (phone/portrait)
 - **15** — QoL / polish / shader menu
 - **15a** — Quick-access pause menu items
@@ -1175,3 +1179,25 @@ Scale the game's clock (cycles + audio) when rendered FPS < refresh rate → smo
 lower-frame-rate playback instead of slow-motion. Default ON (NICE-TO-HAVE).
 **Renumbered from 52 (2026-08-16):** 52 is PS1 multi-disc swap; the QoL list previously
 collided. See the QoL-phase table.
+
+#### Task 72 — N64 RDP-ParaLLEl performance investigation vs mupen64plus-ae-turnip (OPEN)
+
+**Why:** user reports some N64 games run WAY faster in
+[pwnedbygary/mupen64plus-ae-turnip](https://github.com/pwnedbygary/mupen64plus-ae-turnip)'s
+RDP-ParaLLEl renderer than in Phobos's N64 core (which also uses ares' paraLLEL-RDP). Goal:
+see what can be grabbed from that fork to make Phobos's N64 as fast/fast as possible.
+
+**Investigate (fork vs our integration):**
+- paraLLEl-RDP command-ring / timeline / pipeline threading model + any worker-thread
+  scheduling, priority, or CPU-affinity differences vs our Task 45 pinning.
+- VI post-processing path (`disableVideoInterfaceProcessing` / serrate) and any
+  framebuffer/scanout shortcuts.
+- Vendor/Adreno-specific fast paths, blacklist tweaks, or driver-version handling.
+- Any scheduler / frame-pacing / vsync-interval differences in the app glue.
+- Upstream ares paraLLEL-RDP version the fork is based on vs ours (ours tracks ares; fork
+  may carry RDP fixes/optimizations not yet upstream).
+
+**Deliverable:** diff + selective port of applicable fast paths; measure with Task 69
+(CPU-vs-GPU) before/after on the specific games the user sees as slow.
+
+**Difficulty:** 🟡 Medium (research + selective port). **Impact:** HIGH (N64 perf ceiling).

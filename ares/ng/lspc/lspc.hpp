@@ -20,6 +20,7 @@ struct LSPC : Thread {
   //lspc.cpp
   auto load(Node::Object) -> void;
   auto unload() -> void;
+  auto loadZoomy(const u8* data, u32 size) -> void;
 
   auto step(u32 clocks) -> void;
   auto main() -> void;

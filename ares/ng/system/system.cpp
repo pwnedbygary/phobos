@@ -104,7 +104,10 @@ auto System::power(bool reset) -> void {
   if(auto fp = pak->read("bios.rom")) {
     bios.allocate(fp->size() >> 1);
     for(auto address : range(bios.size())) {
-      bios.program(address, fp->readm(2L));
+      // Neo Geo BIOS dumps are MAME 16-bit word-swapped ROMs (the 68K-visible
+      // word is the little-endian pair of file bytes). Upstream reads them
+      // big-endian (readm), which makes the 68K execute a byte-swapped BIOS.
+      bios.program(address, fp->readl(2L));
     }
   }
 
@@ -115,6 +118,12 @@ auto System::power(bool reset) -> void {
         srom.program(address, fp->readl(2L));
       }
     }
+  }
+
+  //LSPC vertical zoom table ("000-lo.lo" from the Neo Geo BIOS set). Without this the
+  //sprite row/tile selector (vscale) stays 0xFF and every sprite collapses to tile 15/row 15.
+  if(auto fp = pak->read("zoomy.rom")) {
+    lspc.loadZoomy(fp->data(), fp->size());
   }
 
   if(cartridge.node) cartridge.power();

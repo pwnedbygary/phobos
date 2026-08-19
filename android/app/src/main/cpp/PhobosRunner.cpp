@@ -428,6 +428,28 @@ namespace ares {
     return false;
   }
 
+  // Determine which controller port (0-based player index) a button belongs to.
+  // Walks up from the button node to find a "Controller Port N" ancestor. Returns
+  // 0 for player 1; >0 for additional players. Non-controller inputs (keyboard,
+  // etc.) have no such ancestor and return 0. Without this, resolveButtonBit maps
+  // purely by leaf name, so P2's "A" resolves to the SAME gamepad bit as P1's "A"
+  // -> a single pad drives both players (observed on Neo Geo KOF2003).
+  static auto controllerPlayerIndex(Node::Input::Input input) -> s32 {
+    Node::Object node = input;
+    for (int depth = 0; depth < 8 && node; depth++) {
+      string name = node->name();
+      if (name.beginsWith("Controller Port")) {
+        if (name.size() >= 1) {
+          char c = name[name.size() - 1];
+          if (c >= '1' && c <= '9') return c - '1';
+        }
+        return 0;
+      }
+      node = ares::Node::parent(node);
+    }
+    return 0;
+  }
+
   static auto resolveButtonBit(const string& nodeName, const string& systemName, bool vertical) -> u32 {
       u32 b = 0;
 
@@ -1015,7 +1037,16 @@ namespace ares {
               if (it == inputButtonCache.end()) {
                   // Bind once, then cache (mirrors ares InputMapping::bind()): names
                   // resolve on the first read; per-read is a map lookup + bit test.
-                  b = resolveButtonBit(button->name(), systemName, orientationVertical);
+                  // Only player 1 (controller port 0) maps to the single handheld
+                  // gamepad; players 2+ have no gamepad source here, so leave them
+                  // unmapped. Without this, resolveButtonBit maps purely by leaf
+                  // name and P2's "A" resolves to the SAME bit as P1's "A", so one
+                  // pad drives both players (observed on Neo Geo KOF2003).
+                  if (controllerPlayerIndex(button) == 0) {
+                      b = resolveButtonBit(button->name(), systemName, orientationVertical);
+                  } else {
+                      b = 0;
+                  }
                   inputButtonCache[button.get()] = b;
               } else {
                   b = it->second;
@@ -1398,6 +1429,7 @@ namespace ares {
             if (!s->pending()) { allPending = false; break; }
           }
           if (!allPending) break;
+          drained++;
 
           f64 sample[2] = {0.0, 0.0};
           f64 buffer[2];
@@ -1573,7 +1605,7 @@ namespace ares {
       } else if (nodeName == "Neo Geo AES" || nodeName == "Neo Geo MVS") {
           // neogeo.zip is copied to mia_temp. Extract BIOS + fix-layer ROM.
           string zipPath = string{tempFilePath, "/neogeo.zip"};
-          bool haveBios = false, haveStatic = false;
+          bool haveBios = false, haveStatic = false, haveZoomy = false;
           if (file::exists(zipPath)) {
             Decode::ZIP zip;
             if (zip.open(zipPath)) {
@@ -1614,6 +1646,16 @@ namespace ares {
                 // the cartridge itself — attaching a BIOS font can conflict.
                 if (!haveStatic && n.iequals("sfix.sfix")) {
                   // Skip for now — MVS doesn't need system-pak static.rom.
+                }
+                // 000-lo.lo = the LSPC vertical zoom table (MAME "spritegen:zoomy")
+                if (!haveZoomy && n.equals("000-lo.lo")) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 0x20000) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("zoomy.rom", fp); haveZoomy = true;
+                      LOGI("VFS: Neo Geo LSPC zoom table (000-lo.lo) attached");
+                    }
+                  }
                 }
               }
             }

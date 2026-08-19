@@ -55,4 +55,6 @@ auto System::serialize(serializer& s, bool synchronize) -> void {
   s(io.ledLatch1);
   s(io.ledLatch2);
   s(io.ledData);
+  s(io.rtcCounter);
+  s(io.rtcTimePulse);
 }

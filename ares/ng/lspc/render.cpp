@@ -32,20 +32,24 @@ auto LSPC::render(n9 y) -> void {
     if(sx >= 320 && sx + 15 <= 511) continue;
     if(ry >= sh * 16) continue;
 
-    switch(ry >> 8) {
-    case 0: ry = vscale[vshrink][n8( ry)] ^ 0x000; break;
-    case 1: ry = vscale[vshrink][n8(~ry)] ^ 0x1ff; break;
-    }
+    // LSPC vertical zoom: the 000-lo.lo table maps (vshrink, line) -> (tile index << 4 |
+    // row within tile). Bit 8 of ry is the inverted (bottom) line for a vertically-flipped sprite.
+    bool invert = ry.bit(8);
+    n8  entry = vscale[vshrink][ invert ? n8(~ry) : n8(ry) ];
+    n4  tile  = entry >> 4;
+    n4  row   = entry & 0xf;
+    if(invert) { tile ^= 0x1f; row ^= 0xf; }
 
-    n20 tileNumber = vram[sprite << 6 | ry >> 3 & ~1 | 0];
-    n16 attributes = vram[sprite << 6 | ry >> 3 & ~1 | 1];
+    n20 tileNumber = vram[sprite << 6 | tile << 1 | 0];
+    n16 attributes = vram[sprite << 6 | tile << 1 | 1];
     n4  hflip      = attributes.bit(0) ? 15 : 0;
     n1  vflip      = attributes.bit(1);
     n2  animate    = attributes.bit(2,3);
     n8  palette    = attributes.bit(8,15);
 
     tileNumber.bit(16,19) = attributes.bit(4,7);
-    if(vflip) ry ^= sh * 16 - 1;
+    tileNumber &= cartridge.cromMask() >> 7;  //wrap tile numbers like hardware (MAME masks the 26-bit gfx address)
+    if(vflip) row ^= 0xf;
     switch(animate * !animation.disable) {
     case 0: break;
     case 1: tileNumber.bit(0,1) = animation.frame.bit(0,1); break;
@@ -54,7 +58,7 @@ auto LSPC::render(n9 y) -> void {
     }
 
     n13 pramAddress = io.pramBank << 12 | palette << 4;
-    n27 tileAddress = (tileNumber << 5 | ry & 15) << 2;
+    n27 tileAddress = (tileNumber << 5 | row) << 2;
 
     n16 d0 = cartridge.readC(tileAddress + 0) << 8 | cartridge.readC(tileAddress + 64 + 0) << 0;
     n16 d1 = cartridge.readC(tileAddress + 2) << 8 | cartridge.readC(tileAddress + 64 + 2) << 0;
@@ -81,12 +85,38 @@ auto LSPC::render(n9 y) -> void {
     }
   }
 
+  auto fixBank = (u32)cartridge.fixBankType() * (u32)cpu.io.fixSelect;
+  u32 garouOffsets[32] = {};
+  if(fixBank == 1) {
+    u32 garouBank = 0;
+    u32 k = 0;
+    u32 gy = 0;
+    while(gy < 32) {
+      if(vram[0x7500 + k] == 0x0200 && (u32)(vram[0x7580 + k] & 0xff00) == 0xff00) {
+        garouBank = (u32)vram[0x7580 + k] & 3;
+        garouOffsets[gy++] = garouBank;
+      }
+      garouOffsets[gy++] = garouBank;
+      k += 2;
+    }
+  }
+
+  u32 row = y >> 3;
   for(u32 x : range(320)) {
-    n16 attributes  = vram[0x7000 + (x >> 3) * 0x20 + (y >> 3)];
-    n12 tileNumber  = attributes.bit( 0,11);
+    u32 col = x >> 3;
+    n16 attributes  = vram[0x7000 + col * 0x20 + row];
+    n14 tileNumber  = attributes.bit( 0,11);
     n4  palette     = attributes.bit(12,15);
     n13 pramAddress = io.pramBank << 12 | palette << 4;
-    n17 tileAddress = tileNumber << 5 | x << 2 & 24 ^ 16 | y & 7;
+    if(fixBank == 1) {
+      tileNumber += 0x1000 * (garouOffsets[(row - 2) & 31] ^ 3);
+    }
+    if(fixBank == 2) {
+      auto bankWord = (u32)vram[0x7500 + ((row - 1) & 31) + 32 * (col / 6)];
+      auto bank = ((bankWord >> ((5 - (col % 6)) * 2)) & 3) ^ 3;
+      tileNumber += 0x1000 * bank;
+    }
+    n19 tileAddress = tileNumber << 5 | x << 2 & 24 ^ 16 | y & 7;
     n8  tileData    = cartridge.readS(tileAddress);
     n4  color       = tileData >> (x & 1) * 4;
     if(color) {

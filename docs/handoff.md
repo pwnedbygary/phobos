@@ -48,11 +48,13 @@ ares has a dedicated Neo Geo CD fork branch by Luke Usher: `https://github.com/a
 10. **Ape Escape cinematics (Task 9 — 2026-08-18):** Fixed XA filter routing. Ape Escape's `TITLE.STR` interleaves `subMode=0x48` channel-0 MDEC video/data sectors with `subMode=0x64` channel-1 XA audio sectors. Phobos applied the configured file/channel filter to both, dropping the video sectors before the CD FIFO. Filtering now applies only to XA audio sectors (`subMode & 0x44`), allowing video data to reach MDEC. Verified on Retroid Pocket 6 with a clean build and cold USA-region launch; intro plays and reaches the menu normally.
 
 ## Open Priority Queue
-- **#10c/10a remaining:** Neo Geo MVS/AES (PCE family RESOLVED `2795e5813`, ZX 128K RESOLVED `1bf97e3ac`; details in implementation plan).
+- **Neo Geo MVS/AES — finish the core FIRST (gating everything below):** graphics FIXED (vscale/`loadZoomy` + vflip/zoom decode, KOF2003 verified at 59.2 FPS); P1/P2 input mirror FIXED (player-aware binding, `PhobosRunner.cpp`); **Audio 0% still OPEN** (follow-up bug, tackle right after video); then broad game-compat pass (Matrimelee/SamSho/etc.). PCEngineCD deferred (doc-only bug) until NG fully stable.
+- **PER-CORE + PER-GAME CONTROLLER REMAPPING — NEXT PRIORITY (right after NG stable):** Tasks **13a** (per-core custom controller layouts), **13b** (per-core rebinding), **13c** (multi-controller / per-player pad assignment), **13d** (per-game rebinding). All four done together (same code path). 3-tier hierarchy like RetroArch — **Global** default → **Per-Core** override → **Per-Game** override (top priority wins). Pulled up from the QoL phase: Neo Geo C/D currently land on R1/R2 (Genesis-heritage bit mapping in `resolveButtonBit`); per-core defaults + user rebinding (and per-game overrides for weird default control schemes) is the proper fix.
+- **#72:** N64 RDP-ParaLLEl perf investigation vs pwnedbygary/mupen64plus-ae-turnip (some games far faster there — port applicable fast paths).
 - **#49:** N64 save import/export UI (.sra/.eep/.fla/.mpk).
 - **#52:** PS1 multi-disc swap verify (MGS disc 2 swap fix applied via recursive `scan`).
 - **#61:** Proper release APK signing (keystore in GH Actions).
-- **Other:** Task 13c (Multi-controller), Task 42 (Perf Monitor settings), Task 51 (ZX multi-tape swap).
+- **Other:** Task 42 (Perf Monitor settings), Task 51 (ZX multi-tape swap).
 
 ## Working Agreements & Policies
 

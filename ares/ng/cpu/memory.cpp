@@ -36,8 +36,8 @@ auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
 
   //memory card
   if(address <= 0xbfffff) {
-    data.byte(0) = 0xff;
-    data.byte(1) = cardSlot.read(address >> 1);
+    data.byte(0) = cardSlot.read(address >> 1);
+    data.byte(1) = 0xff;
     return data;
   }
 
@@ -145,11 +145,11 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
   if((address & 0xfe0000) == 0x320000 && lower) {
     data.bit(0) = Model::NeoGeoMVS();  //coin 1 (MVS: active low, AES: always 0)
     data.bit(1) = Model::NeoGeoMVS();  //coin 2 (MVS: active low, AES: always 0)
-    data.bit(2) = 1;  //service button
+    data.bit(2) = 0;  //service button (released)
     data.bit(3) = Model::NeoGeoMVS();  //coin 3 (MVS: active low, AES: always 0)
     data.bit(4) = Model::NeoGeoMVS();  //coin 3 (MVS: active low, AES: always 0)
     data.bit(5) = 0;  //0 = 4-slot; 1 = 6-slot
-    data.bit(6) = 0;  //RTC time pulse
+    data.bit(6) = system.io.rtcTimePulse;  //RTC time pulse
     data.bit(7) = 0;  //RTC data bit
   }
 
@@ -162,28 +162,28 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
   if((address & 0xfe0000) == 0x380000 && upper) {
     data.bit( 8, 9) = controllerPort1.readControls();
     data.bit(10,11) = controllerPort2.readControls();
-    data.bit(12,13) = 0b11;  //0b00 = memory card inserted
+    data.bit(12,13) = 0b00;  //0b00 = memory card inserted
     data.bit(14)    = cardSlot.lock != 0;
     data.bit(15)    = Model::NeoGeoMVS();  //0 = AES; 1 = MVS
   }
 
   //REG_VRAMADDR
-  if((address & 0xfe0006) == 0x3c0000) {
+  if((address & 0x3e0006) == 0x3c0000) {
     data = lspc.vram[lspc.io.vramAddress];
   }
 
   //REG_VRAMRW
-  if((address & 0xfe0006) == 0x3c0002) {
+  if((address & 0x3e0006) == 0x3c0002) {
     data = lspc.vram[lspc.io.vramAddress];
   }
 
   //REG_VRAMMOD
-  if((address & 0xfe0006) == 0x3c0004) {
+  if((address & 0x3e0006) == 0x3c0004) {
     data = lspc.io.vramIncrement;
   }
 
   //REG_LSPCMODE
-  if((address & 0xfe0006) == 0x3c0006) {
+  if((address & 0x3e0006) == 0x3c0006) {
     data.bit(0, 2) = lspc.animation.frame;
     data.bit(3)    = 0;  //0 = 60hz; 1 = 50hz
     data.bit(4, 6) = 0;  //unused
@@ -368,26 +368,26 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   }
 
   //REG_VRAMADDR
-  if((address & 0xfe000e) == 0x3c0000) {
+  if((address & 0x3e000e) == 0x3c0000) {
     if(upper) lspc.io.vramAddress.byte(1) = data.byte(1);
     if(lower) lspc.io.vramAddress.byte(0) = data.byte(0);
   }
 
   //REG_VRAMRW
-  if((address & 0xfe000e) == 0x3c0002) {
+  if((address & 0x3e000e) == 0x3c0002) {
     if(upper) lspc.vram[lspc.io.vramAddress].byte(1) = data.byte(1);
     if(lower) lspc.vram[lspc.io.vramAddress].byte(0) = data.byte(0);
     lspc.io.vramAddress.bit(0,14) += lspc.io.vramIncrement;
   }
 
   //REG_VRAMMOD
-  if((address & 0xfe000e) == 0x3c0004) {
+  if((address & 0x3e000e) == 0x3c0004) {
     if(upper) lspc.io.vramIncrement.byte(1) = data.byte(1);
     if(lower) lspc.io.vramIncrement.byte(0) = data.byte(0);
   }
 
   //REG_LSPCMODE
-  if((address & 0xfe000e) == 0x3c0006) {
+  if((address & 0x3e000e) == 0x3c0006) {
     if(lower) {
       lspc.animation.disable     = data.bit(3);
       lspc.timer.interruptEnable = data.bit(4);
@@ -401,13 +401,13 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   }
 
   //REG_TIMERHIGH
-  if((address & 0xfe000e) == 0x3c0008) {
+  if((address & 0x3e000e) == 0x3c0008) {
     if(upper) lspc.timer.reload.byte(3) = data.byte(1);
     if(lower) lspc.timer.reload.byte(2) = data.byte(0);
   }
 
   //REG_TIMERLOW
-  if((address & 0xfe000e) == 0x3c000a) {
+  if((address & 0x3e000e) == 0x3c000a) {
     if(upper) lspc.timer.reload.byte(1) = data.byte(1);
     if(lower) lspc.timer.reload.byte(0) = data.byte(0);
     if(lspc.timer.reloadOnChange) {
@@ -416,7 +416,7 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   }
 
   //REG_IRQACK
-  if((address & 0xfe000e) == 0x3c000c) {
+  if((address & 0x3e000e) == 0x3c000c) {
     if(lower) {
       lspc.irq.powerAcknowledge  = data.bit(0);
       lspc.irq.timerAcknowledge  = data.bit(1);
@@ -425,7 +425,7 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   }
 
   //REG_TIMERSTOP
-  if((address & 0xfe000e) == 0x3c000e) {
+  if((address & 0x3e000e) == 0x3c000e) {
     if(lower) {
       lspc.timer.stopPAL = data.bit(0);
     }

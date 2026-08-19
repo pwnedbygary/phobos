@@ -3,6 +3,7 @@ namespace Board {
 #include "rom.cpp"
 #include "mslugx.cpp"
 #include "jockey-gp.cpp"
+#include "pvc.cpp"
 
 auto Interface::load(Memory::Readable<n8>& memory, string name) -> bool {
   if(auto fp = pak->read(name)) {

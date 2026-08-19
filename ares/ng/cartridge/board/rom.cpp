@@ -49,6 +49,10 @@ struct Rom : Interface {
     return crom[address];
   }
 
+  auto cromMask() -> u32 override {
+    return crom.mask();
+  }
+
   auto readS(n32 address) -> n8 override {
     return srom[address];
   }

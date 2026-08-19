@@ -51,6 +51,11 @@ auto CPU::idle(u32 clocks) -> void {
 
 auto CPU::wait(u32 clocks) -> void {
   Thread::step(clocks);
+  system.io.rtcCounter += clocks;
+  if(system.io.rtcCounter >= 6'000'000) {
+    system.io.rtcCounter -= 6'000'000;
+    system.io.rtcTimePulse ^= 1;
+  }
   Thread::synchronize();
 }
 

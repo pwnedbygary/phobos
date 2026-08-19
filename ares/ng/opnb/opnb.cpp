@@ -11,17 +11,11 @@ auto OPNB::load(Node::Object parent) -> void {
   streamFM->setFrequency(ym2610.sample_rate(8'000'000));
   streamFM->addHighPassFilter(  20.0, 1);
   streamFM->addLowPassFilter (2840.0, 1);
-
-  streamSSG = node->append<Node::Audio::Stream>("SSG");
-  streamSSG->setChannels(1);
-  streamSSG->setFrequency(ym2610.sample_rate(8'000'000));
 }
 
 auto OPNB::unload() -> void {
   node->remove(streamFM);
-  node->remove(streamSSG);
   streamFM.reset();
-  streamSSG.reset();
   node.reset();
 }
 
@@ -29,8 +23,8 @@ auto OPNB::main() -> void {
   ymfm::ym2610::output_data output;
   ym2610.generate(&output);
 
-  streamFM->frame(output.data[0] / 32768.0, output.data[1] / 32768.0);
-  streamSSG->frame(output.data[2] / 32768.0);
+  auto ssg = output.data[2] / 32768.0;
+  streamFM->frame(output.data[0] / 32768.0 + ssg, output.data[1] / 32768.0 + ssg);
 
   step(clocksPerSample);
 }

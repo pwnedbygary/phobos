@@ -38,7 +38,7 @@ auto CardSlot::save() -> void {
 }
 
 auto CardSlot::power(bool reset) -> void {
-  lock = 3;
+  lock = 0;
   select = 0;
   bank = 0;
   if(device) device->power(reset);

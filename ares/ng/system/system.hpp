@@ -44,6 +44,8 @@ struct System {
     n1 ledLatch1;
     n1 ledLatch2;
     n8 ledData;
+    n32 rtcCounter;
+    n1 rtcTimePulse;
   } io;
 
 private:
