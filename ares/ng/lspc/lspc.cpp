@@ -27,14 +27,32 @@ auto LSPC::load(Node::Object parent) -> void {
   //the real table from the BIOS set via loadZoomy().
   memory::fill<n8>(vscale, sizeof(vscale), 0xff);
 
-  u64 hbits = 0x5b1d7f390a6e2c48ULL;
+  // Horizontal zoom table (MVS) — MAME's authoritative zoom_x_tables.
+  // hscale[zoom][x] = 1 selects source pixel x for that horizontal shrink level.
+  // (The previous hbits-derived table diverged from hardware for zoom 9..14,
+  //  garbling horizontally-zoomed sprites such as scaled sports pitches.)
+  static const u8 zoomXData[16][16] = {
+    {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+    {0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0},
+    {0,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0},
+    {0,0,1,0,1,0,0,0,1,0,0,0,1,0,0,0},
+    {0,0,1,0,1,0,0,0,1,0,0,0,1,0,1,0},
+    {0,0,1,0,1,0,1,0,1,0,0,0,1,0,1,0},
+    {0,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
+    {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
+    {1,0,1,0,1,0,1,0,1,1,1,0,1,0,1,0},
+    {1,0,1,1,1,0,1,0,1,1,1,0,1,0,1,0},
+    {1,0,1,1,1,0,1,0,1,1,1,0,1,0,1,1},
+    {1,0,1,1,1,0,1,1,1,1,1,0,1,0,1,1},
+    {1,0,1,1,1,0,1,1,1,1,1,0,1,1,1,1},
+    {1,1,1,1,1,0,1,1,1,1,1,0,1,1,1,1},
+    {1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1},
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+  };
   memory::fill<n1>(hscale, sizeof(hscale), 0x00);
-  for(u8 y : range(16)) {
-    for(u8 x : reverse(range(y + 1))) {
-      n4 value = hbits >> x * 4;
-      hscale[y][value] = 1;
-    }
-  }
+  for(u8 y : range(16))
+    for(u8 x : range(16))
+      hscale[y][x] = zoomXData[y][x];
 }
 
 auto LSPC::loadZoomy(const u8* data, u32 size) -> void {

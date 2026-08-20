@@ -70,7 +70,12 @@ auto LSPC::render(n9 y) -> void {
     for(u32 x : range(16)) {
       if(hscale[hshrink][x]) {
         n9 rx = sx + px++;
-        if (rx >= 320) continue;
+        // MVS horizontal wrap-around: sprites positioned past the right edge
+        // (x >= 497) re-enter from the left.
+        if (rx >= 320) {
+          if (rx >= 512) rx -= 512;
+          else continue;
+        }
 
         n4 color;
         color.bit(0) = d0.bit(bx);

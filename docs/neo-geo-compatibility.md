@@ -304,7 +304,7 @@ single handheld).
 | The Last Blade 2 / Bakumatsu Roman - Dai Ni Maku Gekka no Kenshi (NGM-2430 ~ NGH-2430) | lastbld2 | standard | — | — | — | — |  |
 | The Last Soldier (Korean release of The Last Blade) | lastsold | standard | — | — | — | — |  |
 | The Super Spy (NGM-011 ~ NGH-011) | superspy | standard | — | — | — | — |  |
-| The Ultimate 11 - The SNK Football Championship / Tokuten Ou - Honoo no Libero | ssideki4 | standard | ✓ | ✓ | — | — | Boots to attract/instruction screen @59.2 FPS with correct colors (palette-bank fix verified 2026-08-20: `$3A000E`/`$3A001E` bank select no longer inverted); in-match field + audio + controls pending user confirmation |
+| The Ultimate 11 - The SNK Football Championship / Tokuten Ou - Honoo no Libero | ssideki4 | standard | ✓ | ✓ | — | ✓ (P1) | Boots + **plays with clean field rendering @~59.2 FPS (user-verified 2026-08-20)**. The in-match vertical/black sprite strips were caused by a WRONG LSPC horizontal-zoom (`hscale`) table in `ares/ng/lspc/lspc.cpp` (generated from `hbits = 0x5b1d7f390a6e2c48`, which diverged from hardware for zoom levels 9..14); fixed by replacing it with MAME's authoritative `zoom_x_tables`. Also added MVS horizontal wrap-around (x>=497) in `ares/ng/lspc/render.cpp`. Palette-bank register fix (`8746d3f56`) also landed. |
 | Thrash Rally (ALM-003 ~ ALH-003) | trally | standard | — | — | — | — |  |
 | Top Hunter - Roddy & Cathy (NGH-046) | tophuntrh | standard | — | — | — | — |  |
 | Top Hunter - Roddy & Cathy (NGM-046) | tophuntr | standard | — | — | — | — |  |
@@ -334,7 +334,7 @@ single handheld).
 
 ### Standard tier
 - **samsho (Samurai Shodown, NGM-045)** — ✓ verified 2026-08-20: boots to attract/character-select @59.2 FPS, correct colors/palettes, no artifacts; D-pad hat input fix verified on this title (P1). Audio pending user confirmation.
-- **ssideki4 (The Ultimate 11)** — ✓ boot/gfx verified 2026-08-20 after the palette-bank register fix (`$3A000E` = PALBANK0, `$3A001E` = PALBANK1 — previously inverted): attract/instruction screen correct @59.2 FPS, no artifacts (left dark panel is an intentional dimmed menu page, not a rendering bug). In-match field colors, audio, and controls pending user confirmation.
+- **ssideki4 (The Ultimate 11)** — ✓ boot + playable with **clean field rendering** 2026-08-20. Root cause of the in-match vertical/black sprite strips was the WRONG LSPC horizontal-zoom (`hscale`) table in `ares/ng/lspc/lspc.cpp` (`hbits = 0x5b1d7f390a6e2c48` diverged from MAME for zoom 9..14); replaced with MAME's authoritative `zoom_x_tables`. Also added MVS horizontal sprite wrap-around (x>=497) in `ares/ng/lspc/render.cpp`. Palette-bank register fix (`8746d3f56`) also landed. No gfx investigation outstanding.
 
 ### ROM identification caveat
 MIA identifies Neo Geo games by **set name** (the `load_name` stripped of `.zip`), not by scanning internal ROM CRCs. Non-DB names (or new 2026 redumps) fail with Result 5 even when content is a valid Neo Geo cart. Keep ROM sets named to match MIA DB entries (`matrim`, `kof2003`, `samsh5sp`, ...).
