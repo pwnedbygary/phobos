@@ -88,6 +88,8 @@ auto NeoGeo::load(string location) -> LoadResult {
     voiceAROM    = NeoGeo::read(location, "voice-a.rom");
     voiceBROM    = NeoGeo::read(location, "voice-b.rom");
   }
+  __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG load name=%s info=%d prog=%zu music=%zu char=%zu stat=%zu vA=%zu",
+    (const char*)Medium::name(location), (info ? 1 : 0), programROM.size(), musicROM.size(), characterROM.size(), staticROM.size(), voiceAROM.size());
   
   string invalidRomInfo = "Ensure your ROM is in a MAME-compatible .zip format.";
 

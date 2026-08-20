@@ -78,7 +78,12 @@ auto Mame::loadRomFile(string location, string filename, Markup::Node& info) -> 
   if(!archive.open(location)) return {};
 
   for(auto& file : archive.file) {
-    if(file.name.iequals(filename)) {
+    // some romsets (e.g. redumps) store files under a sub-directory; match by basename
+    string base = file.name;
+    s32 slash = -1;
+    for(s32 i = (s32)base.size() - 1; i >= 0; i--) if(base[i] == '/') { slash = i; break; }
+    if(slash >= 0) base = slice(base, slash + 1, (s32)base.size() - slash - 1);
+    if(base.iequals(filename)) {
       return archive.extract(file);
     }
   }

@@ -22009,6 +22009,119 @@ game
       crc:    d49773cd
       sha1:   cd8cf3b762d381c1f8f12919579c84a7ef7efb3f
 
+
+  name:  samsh5pf
+  title: Samurai Shodown V Special / Samurai Spirits Zero Special "Perfect" (NGM-2720)
+  board: neogeo
+  feature
+    name:  slot
+    value: k2k2_sams5s
+  maincpu
+    size: 8388608
+    rom
+      name:   272-p1.p1
+      type:   load16_word_swap
+      offset: 0
+      size:   4194304
+      crc:    fb7a6bba
+      sha1:   f68c527208d8a55ca44b0caaa8ab66b3a0ffdfe5
+    rom
+      name:   272-p2.sp2
+      type:   load16_word_swap
+      offset: 4194304
+      size:   4194304
+      crc:    63492ea6
+      sha1:   6ba946acb62c63ed61a42fe72b7fff3828883bcc
+  fixed
+    size: 131072
+    rom
+      type:   fill
+      value:  0
+      offset: 0
+      size:   131072
+      crc:    
+      sha1:   
+  audiocrypt
+    size: 524288
+    rom
+      name:   272-m1.m1
+      offset: 0
+      size:   524288
+      crc:    adeebf40
+      sha1:   8cbd63dda3fff4de38060405bf70cd9308c9e66e
+  ymsnd-adpcma
+    size: 16777216
+    rom
+      name:   272-v1.v1
+      offset: 0
+      size:   8388608
+      crc:    76a94127
+      sha1:   c3affd7ff1eb02345cfb755962ec173a8ec34acd
+    rom
+      name:   272-v2.v2
+      offset: 8388608
+      size:   8388608
+      crc:    4ba507f1
+      sha1:   728d139da3fe8a391fd8be4d24bb7fdd4bf9548a
+  sprites
+    size: 67108864
+    rom
+      name:   272-c1.c1
+      type:   load16_byte
+      offset: 0
+      size:   8388608
+      crc:    4f97661a
+      sha1:   87f1721bae5ef16bc23c06b05e64686c396413df
+    rom
+      name:   272-c2.c2
+      type:   load16_byte
+      offset: 1
+      size:   8388608
+      crc:    a3afda4f
+      sha1:   86b475fce0bc0aa04d34e31324e8c7c7c847df19
+    rom
+      name:   272-c3.c3
+      type:   load16_byte
+      offset: 16777216
+      size:   8388608
+      crc:    8c3c7502
+      sha1:   6639020a8860d2400308e110d7277cbaf6eccc2a
+    rom
+      name:   272-c4.c4
+      type:   load16_byte
+      offset: 16777217
+      size:   8388608
+      crc:    32d5e2e2
+      sha1:   2b5612017152afd7433aaf99951a084ef5ad6bf0
+    rom
+      name:   272-c5.c5
+      type:   load16_byte
+      offset: 33554432
+      size:   8388608
+      crc:    6ce085bc
+      sha1:   0432b04a2265c649bba1bbd934dfb425c5d80fb1
+    rom
+      name:   272-c6.c6
+      type:   load16_byte
+      offset: 33554433
+      size:   8388608
+      crc:    05c8dc8e
+      sha1:   da45c222893f25495a66bdb302f9b0b1de3c8ae0
+    rom
+      name:   272-c7.c7
+      type:   load16_byte
+      offset: 50331648
+      size:   8388608
+      crc:    1417b742
+      sha1:   dfe35eb4bcd022d2f2dc544ccbbb77078f08c0aa
+    rom
+      name:   272-c8.c8
+      type:   load16_byte
+      offset: 50331649
+      size:   8388608
+      crc:    d49773cd
+      sha1:   cd8cf3b762d381c1f8f12919579c84a7ef7efb3f
+
 game
   name:  samsh5sph
   title: Samurai Shodown V Special / Samurai Spirits Zero Special (NGH-2720, 2nd release, less censored)
