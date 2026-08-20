@@ -322,9 +322,9 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
     system.io.sramLock = 1;
   }
 
-  //REG_PALBANK1
+  //REG_PALBANK0
   if((address & 0xfe001e) == 0x3a000e && lower) {
-    lspc.io.pramBank = 1;
+    lspc.io.pramBank = 0;
   }
 
   //REG_SHADOW
@@ -362,9 +362,9 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
     system.io.sramLock = 0;
   }
 
-  //REG_PALBANK0
+  //REG_PALBANK1
   if((address & 0xfe001e) == 0x3a001e && lower) {
-    lspc.io.pramBank = 0;
+    lspc.io.pramBank = 1;
   }
 
   //REG_VRAMADDR
