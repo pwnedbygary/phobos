@@ -22010,6 +22010,7 @@ game
       sha1:   cd8cf3b762d381c1f8f12919579c84a7ef7efb3f
 
 
+game
   name:  samsh5pf
   title: Samurai Shodown V Special / Samurai Spirits Zero Special Perfect (NGM-2720)
   board: neogeo
@@ -22031,12 +22032,11 @@ game
       offset: 4194304
       size:   4194304
       crc:    63492ea6
-      sha1:   6ba946acb62c63ed61a42fe72b7fff3828883bcc
+      sha1:   6ba946acb62c63ed61a42fe72b3fff3828883bcc
   fixed
     size: 131072
     rom
-      type:   fill
-      value:  0
+      name:   273-s1.bin
       offset: 0
       size:   131072
       crc:    
