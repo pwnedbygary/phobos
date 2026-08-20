@@ -53,15 +53,33 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val keystoreFile = System.getenv("PHOBOS_KEYSTORE_FILE")?.let { file(it) }
+                ?: rootProject.file("keystore/release.keystore")
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = System.getenv("PHOBOS_KEYSTORE_PASSWORD") ?: "phobos-emulator"
+                keyAlias = System.getenv("PHOBOS_KEY_ALIAS") ?: "phobos"
+                keyPassword = System.getenv("PHOBOS_KEY_PASSWORD") ?: "phobos-emulator"
+            } else {
+                initWith(getByName("debug"))
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // Local debug builds use standard debug keystore (~/.android/debug.keystore)
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
 
-            // Sign release with the debug keystore so every variant is
-            // installable for A/B testing / sideloading without a manual
-            // apksigner step (matches the debug cert → updates in place).
-            signingConfig = signingConfigs.getByName("debug")
+            // Release builds use stable release keystore so every release
+            // artifact updates in-place across CI runs and releases.
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

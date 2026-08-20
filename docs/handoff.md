@@ -59,7 +59,7 @@ ares has a dedicated Neo Geo CD fork branch by Luke Usher: `https://github.com/a
 - **#72:** N64 RDP-ParaLLEl perf investigation vs pwnedbygary/mupen64plus-ae-turnip (some games far faster there — port applicable fast paths).
 - **#49:** N64 save import/export UI (.sra/.eep/.fla/.mpk).
 - **#52:** PS1 multi-disc swap verify (MGS disc 2 swap fix applied via recursive `scan`).
-- **#61:** Proper release APK signing (keystore in GH Actions).
+- **#61:** Proper release APK signing (FIXED & VERIFIED — stable release keystore in `android/keystore/release.keystore`, distinct from debug keystore, supports in-place upgrades across releases).
 - **Other:** Task 42 (Perf Monitor settings), Task 51 (ZX multi-tape swap).
 
 ## Working Agreements & Policies

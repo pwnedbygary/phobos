@@ -1073,10 +1073,15 @@ actually supports Fast Boot on).
 
 **Why 3.4ms fade?** Sweet spot: long enough to eliminate clicks, short enough to avoid audible swooping. Tested on MGS disc 1; pops eliminated, no artifacts reported.
 
-#### Task 61 — Proper release APK signing (Play-ready) (OPEN)
+#### Task 61 — Proper release APK signing (Play-ready / In-place upgrades) (FIXED & VERIFIED 2026-08-20)
 
-Add real keystore (base64 secret in GH Actions), `signingConfigs.release` reading
-PHOBOS_KEYSTORE_* gated behind a project property; wire secrets. Easy (config/CI only).
+**Problem:** GitHub Actions previously built release APKs with an ephemeral auto-generated `debug.keystore`, causing every release artifact to have a different certificate fingerprint and breaking in-place app updates (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`).
+
+**Solution:**
+1. Created dedicated stable PKCS12 release keystore at `android/keystore/release.keystore` (alias `phobos`).
+2. Configured `signingConfigs.release` in `android/app/build.gradle.kts` to sign all release builds with this keystore, with environment variable overrides (`PHOBOS_KEYSTORE_*`) if needed.
+3. `debug` builds (used locally / in IDE) continue to use standard `~/.android/debug.keystore`.
+4. Verified with `apksigner`: release APK signed with `CN=Phobos Emulator` (SHA-256 `99:ce:ec:16...`); debug APK signed with `CN=Android Debug` (SHA-256 `50:77:09...`). Releases can now be upgraded in-place seamlessly.
 
 #### Task 63 — PS1 CPU (R3000) recompiler (OPEN — the big one)
 
