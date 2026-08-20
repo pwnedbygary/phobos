@@ -13,6 +13,8 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 
 **All cores verified WORKING** including Neo Geo MVS/AES (input, BIOS dialog, and tall-sprite/background rendering all FIXED and verified).
 
+**Neo Geo compat pass (in progress 2026-08-20):** on-device results tracked in `docs/neo-geo-compatibility.md`. New findings today: **samsh5pf (SamSho V "Perfect" 2026 redump) boots to the SNK warning screen @59.2 FPS but is STUCK — START does not advance it (user-verified)**; K2K2 decrypt for this redump (`k2k2_sams5s`, key 0x0d) suspected wrong or the game waits in a protection/input loop — INVESTIGATION NEEDED. samsho + ssideki4 boot/gfx verified (see matrix). Palette-bank register inversion fix landed (commit `8746d3f56`).
+
 **RECENT (2026-08-19 → 2026-08-20, COMMITTED & PUSHED in v1.0.0):**
 - **Neo Geo Palette Banking Inversion (FIXED):** In `ares/ng/cpu/memory.cpp`, write handling for `$3A000E` (`REG_PALBANK0`) and `$3A001E` (`REG_PALBANK1`) was inverted (`$3A000E` was setting `pramBank = 1` and `$3A001E` setting `pramBank = 0`). Fixed so `$3A000E` selects bank 0 and `$3A001E` selects bank 1, resolving wrong palette banks during gameplay (e.g. blue grass in *The Ultimate 11*).
 - **GPU Driver Downloader (QoL, DONE):** `DriverManagerScreen.kt` — download/install/delete + scrollable "Active Driver" selector (System Default + all installed `*.so`, identity-deduped so no `_2` dupes). Manual installs refresh the list via `_driverSuccessEvent`. Red Delete button (`Color(0xFFD32F2F)`). Active driver set via `setCustomDriverPath`.

@@ -45,6 +45,7 @@ single handheld).
 | Samurai Shodown V Special / Samurai Spirits Zero Special (NGH-2720, 1st release, censored) | samsh5spho | K2K2 | — | — | — | — |  |
 | Samurai Shodown V Special / Samurai Spirits Zero Special (NGH-2720, 2nd release, less censored) | samsh5sph | K2K2 | — | — | — | — |  |
 | Samurai Shodown V Special / Samurai Spirits Zero Special (NGM-2720) | samsh5sp | K2K2 | — | — | — | — |  |
+| Samurai Shodown V Perfect (2026 "Perfect" redump — new MIA entry, S1 mapped to 273-s1.bin) | samsh5pf | K2K2 | ✓ | ✓ | — | ✗ | Boots to SNK warning screen @59.2 FPS, renders correctly, but does NOT advance past it with START (user-verified 2026-08-20) — game is not playable. Possible wrong K2K2 decrypt for this redump (key 0x0d wired for `k2k2_sams5s`; unverified) or stuck protection check. See Testing notes. |
 | SNK vs. Capcom - SVC Chaos (NGM-2690 ~ NGH-2690) | svc | PVC | — | — | — | — |  |
 | The King of Fighters 2002 (NGM-2650 ~ NGH-2650) | kof2002 | K2K2 | — | — | — | — |  |
 | The King of Fighters 2002 Plus (bootleg set 1) | kf2k2pls | K2K2 | — | — | — | — |  |
@@ -251,7 +252,7 @@ single handheld).
 | Robo Army | roboarmy | standard | — | — | — | — |  |
 | Robo Army (NGM-032 ~ NGH-032) | roboarmya | standard | — | — | — | — |  |
 | Samurai Shodown / Samurai Spirits (NGH-045) | samshoh | standard | — | — | — | — |  |
-| Samurai Shodown / Samurai Spirits (NGM-045) | samsho | standard | — | — | — | — |  |
+| Samurai Shodown / Samurai Spirits (NGM-045) | samsho | standard | ✓ | ✓ | — | ✓ (P1) | Boots to attract/character-select @59.2 FPS, correct colors, no artifacts (verified 2026-08-20); D-pad hat input fix verified on this title; audio pending user confirmation |
 | Samurai Shodown II / Shin Samurai Spirits - Haohmaru Jigokuhen (NGM-063 ~ NGH-063) | samsho2 | standard | — | — | — | — |  |
 | Samurai Shodown III / Samurai Spirits - Zankurou Musouken (NGH-087) | samsho3h | standard | — | — | — | — |  |
 | Samurai Shodown III / Samurai Spirits - Zankurou Musouken (NGM-087) | samsho3 | standard | — | — | — | — |  |
@@ -303,7 +304,7 @@ single handheld).
 | The Last Blade 2 / Bakumatsu Roman - Dai Ni Maku Gekka no Kenshi (NGM-2430 ~ NGH-2430) | lastbld2 | standard | — | — | — | — |  |
 | The Last Soldier (Korean release of The Last Blade) | lastsold | standard | — | — | — | — |  |
 | The Super Spy (NGM-011 ~ NGH-011) | superspy | standard | — | — | — | — |  |
-| The Ultimate 11 - The SNK Football Championship / Tokuten Ou - Honoo no Libero | ssideki4 | standard | — | — | — | — |  |
+| The Ultimate 11 - The SNK Football Championship / Tokuten Ou - Honoo no Libero | ssideki4 | standard | ✓ | ✓ | — | — | Boots to attract/instruction screen @59.2 FPS with correct colors (palette-bank fix verified 2026-08-20: `$3A000E`/`$3A001E` bank select no longer inverted); in-match field + audio + controls pending user confirmation |
 | Thrash Rally (ALM-003 ~ ALH-003) | trally | standard | — | — | — | — |  |
 | Top Hunter - Roddy & Cathy (NGH-046) | tophuntrh | standard | — | — | — | — |  |
 | Top Hunter - Roddy & Cathy (NGM-046) | tophuntr | standard | — | — | — | — |  |
@@ -329,7 +330,11 @@ single handheld).
 ### K2K2 tier
 - **matrim (Matrimelee)** — ✓ verified: boots, sprites/backgrounds/text correct, 59.2 FPS, audio works (user-confirmed), P1 controls work. K2K2 decrypt (decryptK2k2P + CMC50 graphics + PCM2 V-ROM) confirmed working.
 - **kof2003 (KOF2003)** — ✓ verified earlier: graphics + controls good @59.2 FPS; audio works (ring-buffer 0/12000 log is a formatting artifact, not a fault).
-- **Samurai Shodown V / V Special (samsh5sp / samsh5sph / samsh5spha)** — UNTESTED on-device. The only SamSho5 ROM present (`samsh5pf.zip`) is a **recently-released "Perfect" redump (2026)** NOT in the MIA database (revision 2025-02-03) → MIA load fails with **Result 5** (unknown set). The K2K2 decrypt path for SamSho5 (`k2k2_sams5s`, key 0x0d) is wired but unverified. To support newer/redump sets, the MIA database needs a new entry mirroring `samsh5sp` with the new ROM filenames/CRCs.
+- **samsh5pf (Samurai Shodown V Perfect, 2026 "Perfect" redump)** — MIA DB entry added (commits `5888d7ddd` + `5d23648d8` + `24b404abc`: 'game' keyword + real S1 `273-s1.bin` + zipped sub-dir support). **Boots to the SNK warning screen @59.2 FPS with correct rendering, but is STUCK there — START does not advance the game** (user-verified on-device 2026-08-20, physical controller). The K2K2 decrypt path for SamSho5 (`k2k2_sams5s`, key 0x0d) is wired but now suspected wrong for this redump (or the game hangs in a protection/input wait). **INVESTIGATION NEEDED:** compare samsh5pf P-ROM against `samsh5sp`/`samsh5sph` sets in MAME 0.27x+ — the 2026 redump may use a different P-ROM encryption or the same key with different layout; also verify input reaches the game (kof2003/matrim input works, so front-end routing is fine).
+
+### Standard tier
+- **samsho (Samurai Shodown, NGM-045)** — ✓ verified 2026-08-20: boots to attract/character-select @59.2 FPS, correct colors/palettes, no artifacts; D-pad hat input fix verified on this title (P1). Audio pending user confirmation.
+- **ssideki4 (The Ultimate 11)** — ✓ boot/gfx verified 2026-08-20 after the palette-bank register fix (`$3A000E` = PALBANK0, `$3A001E` = PALBANK1 — previously inverted): attract/instruction screen correct @59.2 FPS, no artifacts (left dark panel is an intentional dimmed menu page, not a rendering bug). In-match field colors, audio, and controls pending user confirmation.
 
 ### ROM identification caveat
 MIA identifies Neo Geo games by **set name** (the `load_name` stripped of `.zip`), not by scanning internal ROM CRCs. Non-DB names (or new 2026 redumps) fail with Result 5 even when content is a valid Neo Geo cart. Keep ROM sets named to match MIA DB entries (`matrim`, `kof2003`, `samsh5sp`, ...).
