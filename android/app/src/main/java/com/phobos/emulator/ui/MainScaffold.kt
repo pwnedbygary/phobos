@@ -1,6 +1,7 @@
 package com.phobos.emulator.ui
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -9,6 +10,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.*
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
@@ -19,6 +21,7 @@ fun MainScaffold(viewModel: MainViewModel) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
+    val context = LocalContext.current
 
     // Navigation requests from outside the NavHost (debug intent loader,
     // activity key fallback for the swap-screen hotkey).
@@ -32,6 +35,14 @@ fun MainScaffold(viewModel: MainViewModel) {
             } else {
                 navController.navigate(route)
             }
+        }
+    }
+
+    // Check for newer GPU driver releases on launch and surface as a toast.
+    LaunchedEffect(Unit) {
+        viewModel.checkForDriverUpdates()
+        viewModel.driverUpdateEvent.collect { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
     }
 

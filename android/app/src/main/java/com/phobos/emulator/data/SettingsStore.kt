@@ -59,6 +59,8 @@ data class EmulatorSettings(
     val n64Recompiler: Boolean = true,
     val skipBootRom: Boolean = false,
     val customDriverPath: String = "",
+    val driverUpdateNotifications: Boolean = true,
+    val driverUpdateCheckTime: Long = 0L,
     val ps1AnalogMode: Boolean = true,
     val n64ExpansionPak: Boolean = true,
     val n64DisableVIProcessing: Boolean = false,
@@ -126,6 +128,8 @@ class SettingsStore(private val context: Context) {
         val N64_RECOMPILER = booleanPreferencesKey("n64_recompiler")
         val SKIP_BOOT_ROM = booleanPreferencesKey("skip_boot_rom")
         val CUSTOM_DRIVER_PATH = stringPreferencesKey("custom_driver_path")
+        val DRIVER_UPDATE_NOTIFICATIONS = booleanPreferencesKey("driver_update_notifications")
+        val DRIVER_UPDATE_CHECK_TIME = longPreferencesKey("driver_update_check_time")
         val PS1_ANALOG_MODE = booleanPreferencesKey("ps1_analog_mode")
         val N64_EXPANSION_PAK = booleanPreferencesKey("n64_expansion_pak")
         val N64_DISABLE_VI_PROCESSING = booleanPreferencesKey("n64_disable_vi_processing")
@@ -291,6 +295,8 @@ class SettingsStore(private val context: Context) {
             n64Recompiler = safeGet(N64_RECOMPILER, true),
             skipBootRom = safeGet(SKIP_BOOT_ROM, false),
             customDriverPath = safeGetString(CUSTOM_DRIVER_PATH, ""),
+            driverUpdateNotifications = safeGet(DRIVER_UPDATE_NOTIFICATIONS, true),
+            driverUpdateCheckTime = safeGet(DRIVER_UPDATE_CHECK_TIME, 0L),
             ps1AnalogMode = safeGet(PS1_ANALOG_MODE, true),
             n64ExpansionPak = safeGet(N64_EXPANSION_PAK, true),
             n64DisableVIProcessing = safeGet(N64_DISABLE_VI_PROCESSING, false),
@@ -393,6 +399,8 @@ class SettingsStore(private val context: Context) {
     suspend fun setN64Recompiler(enabled: Boolean) = context.dataStore.edit { it[N64_RECOMPILER] = enabled }
     suspend fun setSkipBootRom(enabled: Boolean) = context.dataStore.edit { it[SKIP_BOOT_ROM] = enabled }
     suspend fun setCustomDriverPath(path: String) = context.dataStore.edit { it[CUSTOM_DRIVER_PATH] = path }
+    suspend fun setDriverUpdateNotifications(enabled: Boolean) = context.dataStore.edit { it[DRIVER_UPDATE_NOTIFICATIONS] = enabled }
+    suspend fun setDriverUpdateCheckTime(time: Long) = context.dataStore.edit { it[DRIVER_UPDATE_CHECK_TIME] = time }
     suspend fun setPs1AnalogMode(enabled: Boolean) = context.dataStore.edit { it[PS1_ANALOG_MODE] = enabled }
     suspend fun setOrientationMode(vertical: Boolean) = context.dataStore.edit { it[ORIENTATION_VERTICAL] = vertical }
     suspend fun setN64ExpansionPak(enabled: Boolean) = context.dataStore.edit { it[N64_EXPANSION_PAK] = enabled }

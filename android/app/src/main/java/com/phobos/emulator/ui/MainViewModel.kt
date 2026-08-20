@@ -36,15 +36,36 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.zip.CRC32
 import java.util.zip.ZipInputStream
 
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.phobos.emulator.util.DriverAsset
+import com.phobos.emulator.util.DriverDownloader
+import com.phobos.emulator.util.DriverSource
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+data class InstalledDriver(val name: String, val path: String, val source: String, val tag: String)
+private data class DriverSidecar(val owner: String, val repo: String, val tag: String)
 
 class MainViewModel(private val context: Context, private val settingsStore: SettingsStore) : ViewModel(), DefaultLifecycleObserver {
     val settings: StateFlow<EmulatorSettings> = settingsStore.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), EmulatorSettings())
+
+    // Driver download progress (downloaded, total); total = -1 when unknown.
+    private val _downloadProgress = MutableStateFlow(Pair(-1L, -1L))
+    val downloadProgress: StateFlow<Pair<Long, Long>> = _downloadProgress.asStateFlow()
+
+    // One-shot events surfaced to the UI as Toasts.
+    private val _driverUpdateEvent = MutableSharedFlow<String>()
+    val driverUpdateEvent = _driverUpdateEvent.asSharedFlow()
+    private val _driverErrorEvent = MutableSharedFlow<String>()
+    val driverErrorEvent = _driverErrorEvent.asSharedFlow()
+    private val _driverSuccessEvent = MutableSharedFlow<String>()
+    val driverSuccessEvent = _driverSuccessEvent.asSharedFlow()
 
     // Task 17: slot index reserved for the "Auto" state (saved on unload,
     // loaded on boot). Any negative slot maps to <rom>.state.auto.
@@ -592,6 +613,14 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     val biosRequired: StateFlow<String?> = _biosRequired
     fun dismissBiosRequired() { _biosRequired.value = null }
 
+    // When the Neo Geo BIOS was present but the ROM still failed to load, the
+    // failure is the ROM itself (e.g. it isn't actually a Neo Geo MVS/AES game,
+    // like a CPS-1 zip mis-categorised as Neo Geo) — NOT a missing BIOS. Surface
+    // a truthful message instead of the misleading "BIOS Required" popup.
+    private val _neoGeoRomLoadFailed = MutableStateFlow<String?>(null)
+    val neoGeoRomLoadFailed: StateFlow<String?> = _neoGeoRomLoadFailed
+    fun dismissNeoGeoRomLoadFailed() { _neoGeoRomLoadFailed.value = null }
+
     // ZX tape-load progress: -1 = no tape, else (playing?10000:0)+pct*100.
     // Polled ~10 Hz while a ZX game is loaded for the loading progress bar.
     private val _zxTapeProgress = MutableStateFlow(-1)
@@ -844,39 +873,80 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
 
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     if (isZip) {
-                        ZipInputStream(input).use { zip ->
-                            var entry = zip.nextEntry
-                            while (entry != null) {
-                                if (!entry.isDirectory && entry.name.endsWith(".so")) {
-                                    val outFile = File(driverDir, entry.name.substringAfterLast("/"))
-                                    FileOutputStream(outFile).use { output ->
-                                        zip.copyTo(output)
-                                    }
-                                    Log.i("Phobos", "Extracted driver: ${outFile.absolutePath}")
-                                    setCustomDriverPath(outFile.absolutePath)
-                                    break // Usually only one .so per package
-                                }
-                                zip.closeEntry()
-                                entry = zip.nextEntry
-                            }
+                        val path = extractSoFromZip(input, driverDir, name.substringBeforeLast("."), null)
+                        if (path != null) {
+                            setCustomDriverPath(path)
+                            Log.i("Phobos", "Installed driver: $path")
+                            _driverSuccessEvent.emit("Installed ${name.substringBeforeLast(".")}")
+                        } else {
+                            Log.e("Phobos", "No .so found in driver package")
+                            _driverErrorEvent.emit("No .so driver found in ${name}")
                         }
                     } else {
                         // Raw .so (or any non-zip): copy it directly as the driver.
                         // Ensure a .so extension (some SAF providers return the
                         // doc ID as the display name — e.g. "msf:1000172790").
                         val soName = if (name.endsWith(".so", ignoreCase = true)) name else "$name.so"
-                        val outFile = File(driverDir, soName)
+                        val outFile = resolveDriverTarget(driverDir, soName, null)
+                        runCatching { File(driverDir, "$soName.source").delete() }
                         FileOutputStream(outFile).use { output ->
                             input.copyTo(output)
                         }
                         Log.i("Phobos", "Installed driver: ${outFile.absolutePath}")
                         setCustomDriverPath(outFile.absolutePath)
+                        _driverSuccessEvent.emit("Installed ${outFile.name}")
                     }
                 }
             } catch (e: Exception) {
                 Log.e("Phobos", "Failed to install custom driver: ${e.message}")
+                _driverErrorEvent.emit("Install failed: ${e.message}")
             }
         }
+    }
+
+    /**
+     * Extracts the first .so entry from a driver package stream into [driverDir]
+     * and returns its absolute path, or null if the package has no .so. Shared by
+     * the manual-upload and GitHub-download install paths.
+     */
+    private fun extractSoFromZip(input: InputStream, driverDir: File, desiredName: String, identity: String?): String? {
+        ZipInputStream(input).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                if (!entry.isDirectory && entry.name.endsWith(".so")) {
+                    val outFile = resolveDriverTarget(driverDir, desiredName, identity)
+                    FileOutputStream(outFile).use { output -> zip.copyTo(output) }
+                    return outFile.absolutePath
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+        return null
+    }
+
+    private fun sanitizeDriverName(name: String): String {
+        val clean = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return if (clean.endsWith(".so", true)) clean else "$clean.so"
+    }
+
+    /**
+     * Resolves the installed-driver target file in [driverDir].
+     * - If [identity] (e.g. "owner/repo@tag") matches an already-installed
+     *   driver (read from its sidecar), that driver's file is returned so
+     *   re-installing the SAME driver overwrites it instead of duplicating.
+     * - The [desired] name itself encodes the driver identity (repo+tag for
+     *   downloads, filename for manual uploads), so distinct drivers always
+     *   get distinct files and the same driver overwrites — no duplicates.
+     */
+    private fun resolveDriverTarget(driverDir: File, desired: String, identity: String?): File {
+        if (identity != null) {
+            driverDir.listFiles { f -> f.isFile && f.name.endsWith(".so", true) }?.forEach { f ->
+                val info = readDriverSourceSidecar(f.absolutePath)
+                if (info != null && "${info.owner}/${info.repo}@${info.tag}" == identity) return f
+            }
+        }
+        return File(driverDir, sanitizeDriverName(desired))
     }
 
     fun installCustomDriverFromFolder(context: Context, treeUri: Uri) {
@@ -902,6 +972,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                 }
                 if (candidates.isEmpty()) {
                     Log.e("Phobos", "No driver files found in folder")
+                    _driverErrorEvent.emit("No driver files found in folder")
                     return@launch
                 }
                 val file = candidates[0]
@@ -913,10 +984,11 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                             var entry = zip.nextEntry
                             while (entry != null) {
                                 if (!entry.isDirectory && entry.name.endsWith(".so")) {
-                                    val outFile = File(driverDir, entry.name.substringAfterLast("/"))
+                                    val outFile = resolveDriverTarget(driverDir, entry.name.substringAfterLast("/"), null)
                                     FileOutputStream(outFile).use { output -> zip.copyTo(output) }
                                     Log.i("Phobos", "Extracted driver: ${outFile.absolutePath}")
                                     setCustomDriverPath(outFile.absolutePath)
+                                    _driverSuccessEvent.emit("Installed ${outFile.name}")
                                     break
                                 }
                                 zip.closeEntry()
@@ -924,16 +996,130 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                             }
                         }
                     } else {
-                        val outFile = File(driverDir, name)
+                        val outFile = resolveDriverTarget(driverDir, name, null)
+                        runCatching { File(driverDir, "$name.source").delete() }
                         FileOutputStream(outFile).use { output -> input.copyTo(output) }
                         Log.i("Phobos", "Installed driver: ${outFile.absolutePath}")
                         setCustomDriverPath(outFile.absolutePath)
+                        _driverSuccessEvent.emit("Installed ${outFile.name}")
                     }
                 }
             } catch (e: Exception) {
                 Log.e("Phobos", "Failed to install driver from folder: ${e.message}")
+                _driverErrorEvent.emit("Install failed: ${e.message}")
             }
         }
+    }
+
+    // ── GitHub driver downloader ──────────────────────────────────────────────
+
+    /** Fetches driver assets for a GitHub source (runs on IO). */
+    suspend fun fetchDriverReleases(source: DriverSource): List<DriverAsset> =
+        withContext(Dispatchers.IO) { DriverDownloader.fetchAssets(source) }
+
+    /**
+     * Downloads a driver asset, extracts its .so into gpu_drivers, activates it,
+     * and records the source repo + tag in a sidecar file for update checks.
+     */
+    fun downloadAndInstallDriver(context: Context, source: DriverSource, asset: DriverAsset) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _downloadProgress.value = 0L to -1L
+            try {
+                val driverDir = File(context.filesDir, "gpu_drivers")
+                if (!driverDir.exists()) driverDir.mkdirs()
+                val tempFile = File(context.cacheDir, "driver_dl_${System.currentTimeMillis()}.zip")
+                DriverDownloader.download(asset.url, tempFile) { d, t -> _downloadProgress.value = d to t }
+                tempFile.inputStream().use { input ->
+                    val path = extractSoFromZip(input, driverDir, "${source.repo}_${source.owner}_${asset.tag}", "${source.owner}/${source.repo}@${asset.tag}")
+                    if (path != null) {
+                        setCustomDriverPath(path)
+                        writeDriverSourceSidecar(path, source, asset.tag)
+                        Log.i("Phobos", "Downloaded & installed driver: $path (${source.owner}/${source.repo} @ ${asset.tag})")
+                        _driverSuccessEvent.emit("Installed ${asset.name}")
+                    } else {
+                        _driverErrorEvent.emit("No .so driver found in ${asset.name}")
+                    }
+                }
+                runCatching { tempFile.delete() }
+            } catch (e: Exception) {
+                Log.e("Phobos", "Failed to download/install driver: ${e.message}")
+                _driverErrorEvent.emit("Download failed: ${e.message}")
+            } finally {
+                _downloadProgress.value = -1L to -1L
+            }
+        }
+    }
+
+    /** Lists drivers currently installed in gpu_drivers (for the delete dialog). */
+    suspend fun getInstalledDrivers(): List<InstalledDriver> = withContext(Dispatchers.IO) {
+        val driverDir = File(context.filesDir, "gpu_drivers")
+        if (!driverDir.exists()) return@withContext emptyList()
+        (driverDir.listFiles { f -> f.isFile && f.name.endsWith(".so", true) } ?: emptyArray())
+            .map { file ->
+                val info = readDriverSourceSidecar(file.absolutePath)
+                InstalledDriver(
+                    name = file.name,
+                    path = file.absolutePath,
+                    source = info?.let { "${it.owner}/${it.repo}" } ?: "Unknown source",
+                    tag = info?.tag ?: ""
+                )
+            }
+    }
+
+    /** Deletes an installed driver by filename; clears the active path if it was active. */
+    fun deleteDriver(name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val driverDir = File(context.filesDir, "gpu_drivers")
+            val file = File(driverDir, name)
+            runCatching { File(driverDir, "$name.source").delete() }
+            runCatching { file.delete() }
+            if (settings.value.customDriverPath == file.absolutePath) {
+                setCustomDriverPath("")
+            }
+        }
+    }
+
+    fun setDriverUpdateNotifications(enabled: Boolean) =
+        viewModelScope.launch { settingsStore.setDriverUpdateNotifications(enabled) }
+
+    /**
+     * Checks the active driver's source repo for a newer release and emits a
+     * toast event when one is found. Throttled to once per 6h and gated by the
+     * driver-update-notifications setting. Safe to call on every app launch.
+     */
+    fun checkForDriverUpdates() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (!settings.value.driverUpdateNotifications) return@launch
+                val path = settings.value.customDriverPath
+                if (path.isEmpty()) return@launch
+                val now = System.currentTimeMillis()
+                if (now - settings.value.driverUpdateCheckTime < 6 * 3600_000L) return@launch
+                settingsStore.setDriverUpdateCheckTime(now)
+                val info = readDriverSourceSidecar(path) ?: return@launch
+                val source = DriverSource(info.owner, "", info.owner, info.repo)
+                val latest = DriverDownloader.fetchAssets(source).maxByOrNull { it.publishedAt } ?: return@launch
+                if (latest.tag != "unknown" && latest.tag != info.tag) {
+                    _driverUpdateEvent.emit("Driver update available: ${info.owner}/${info.repo} → ${latest.tag}")
+                }
+            } catch (e: Exception) {
+                Log.w("Phobos", "Driver update check failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun writeDriverSourceSidecar(soPath: String, source: DriverSource, tag: String) {
+        runCatching { File("$soPath.source").writeText("${source.owner}/${source.repo}\n$tag") }
+    }
+
+    private fun readDriverSourceSidecar(soPath: String): DriverSidecar? {
+        return runCatching {
+            val lines = File("$soPath.source").readLines()
+            if (lines.size >= 2) {
+                val (owner, repo) = lines[0].split("/", limit = 2)
+                DriverSidecar(owner, repo, lines[1])
+            } else null
+        }.getOrNull()
     }
 
     private val biosMap = mapOf(
@@ -1288,6 +1474,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             
             // For Neo Geo, copy neogeo.zip to mia_temp via ContentResolver
             // (firmware paths are content URIs, not real filesystem paths)
+            var ngBiosPresent = false
             if (systemName.contains("Neo Geo")) {
                 val miaTempPath = File(context.cacheDir, "mia_temp")
                 if (!miaTempPath.exists()) miaTempPath.mkdirs()
@@ -1317,6 +1504,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                     }
                 }
                 if (copied) Log.i("Phobos", "neogeo.zip ready in mia_temp")
+                ngBiosPresent = copied
             }
             Log.d("Phobos", "Syncing settings to native: Driver='${currentSettings.customDriverPath}', Recompiler=${currentSettings.n64Recompiler}")
             
@@ -1462,7 +1650,11 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         // mandatory BIOS is absent. Surface a clear popup
                         // instead of a hang/crash.
                         if (effectiveSystem.contains("Neo Geo", ignoreCase = true)) {
-                            _biosRequired.value = effectiveSystem
+                            // Only blame the BIOS when neogeo.zip was genuinely
+                            // absent. If it was copied but the ROM still failed,
+                            // the ROM itself is the problem (wrong/missing game).
+                            if (ngBiosPresent) _neoGeoRomLoadFailed.value = effectiveSystem
+                            else _biosRequired.value = effectiveSystem
                         } else if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true) ||
                             effectiveSystem.contains("PC Engine", ignoreCase = true) ||
                             effectiveSystem.contains("SuperGrafx", ignoreCase = true)) {
