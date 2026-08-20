@@ -155,6 +155,8 @@
 > **64DD RTC (Error 48) FIXED** (`799b8898a`: seed also fires for zero-filled time.rtc;
 > needs on-device confirm of `RTC seed:` log + no Error 48). 64DD disk save area
 > (program.disk) + `.flash` save filters verified present.
+>
+> **2026-08-20 session (UNCOMMITTED):** **Neo Geo is now a fully working core.** Games load/run ~60 FPS with audio, input, and full sprite/background graphics verified on-device (kof2003/samsho/samsh5pf/samsh1). Landed fixes: MIA `game` keyword (samsh5pf), samsho SIGSEGV graceful return, mame.cpp `neogeo.zip` subdir extraction (commits `24b404abc`/`76fa1b6b4`/`5888d7ddd`); truthful BIOS/ROM-failed dialog; **D-pad hat input fix** (`GameInputState.updateHotkeyDpad` now latches hat → `hwButtons` bits 0–3 — previously only fed `hotkeyKeys`); **Tall sprite / background rendering fix** (`ares/ng/lspc/render.cpp` `n5 tile` fix for `ry >= 256` in 32-tile tall sprites, fixing the black center horizontal band). **NEW QoL feature:** GPU Driver Downloader (`DriverManagerScreen.kt`: download/install/delete + scrollable Active-Driver selector, identity-deduped; manual installs refresh list). All UNCOMMITTED — commit before next task.
 
 ---
 
@@ -1201,3 +1203,30 @@ see what can be grabbed from that fork to make Phobos's N64 as fast/fast as poss
 (CPU-vs-GPU) before/after on the specific games the user sees as slow.
 
 **Difficulty:** 🟡 Medium (research + selective port). **Impact:** HIGH (N64 perf ceiling).
+
+---
+
+#### 2026-08-19 → 2026-08-20 — GPU Driver Downloader (QoL, DONE) + Neo Geo input/BIOS fixes (UNCOMMITTED)
+
+**GPU Driver Downloader (Feature — DONE, uncommitted):**
+- `DriverManagerScreen.kt`: `DriverActionsRow` (3 filled buttons — Download / Install / Delete; Delete is solid red `Color(0xFFD32F2F)` with white text) + an "Active Driver" card = "System Default (Adreno)" radio + a `Column(Modifier.verticalScroll().heightIn(max = 320.dp))` listing every installed `*.so` in `context.filesDir/gpu_drivers/`, each a `DriverChoiceRow` radio. Tapping a driver calls `setCustomDriverPath` (or `null` for System Default).
+- `DriverDownloader.kt`: downloads named `"${repo}_${owner}_${asset.tag}"` with an identity `"${owner}/${repo}@${tag}"` (manual uploads keep the filename). `resolveDriverTarget` overwrites the same driver, distinct drivers coexist — NO `_2` dupe suffix (user rejected dupes). `sanitizeDriverName` keeps `[A-Za-z0-9._-]`. A `<soname>.source` sidecar stores `owner/repo\ntag` for future refresh.
+- Manual installs (`installCustomDriver` / `installCustomDriverFromFolder`) now emit `_driverSuccessEvent`/`_driverErrorEvent` (in `MainViewModel`) so the selector list refreshes after a manual upload (previously the list only refreshed on download).
+
+**Neo Geo BIOS dialog — truthful (FIXED, uncommitted):**
+- `MainViewModel.loadRom` tracks `ngBiosPresent` (whether `neogeo.zip` was copied to `mia_temp`). On a Neo Geo `loadRom` failure it now shows `_neoGeoRomLoadFailed` ("ROM Failed to Load" — BIOS present but the ROM isn't a valid MVS/AES game) instead of `_biosRequired` ("BIOS Required" — BIOS absent). `EmulatorScreen` gained the "Neo Geo ROM Failed to Load" dialog.
+- Native `PhobosRunner.cpp` BIOS-attach branch (nodeName) now also matches a bare `"Neo Geo"` (defensive; real mediums are "Neo Geo MVS"/"Neo Geo AES").
+- **Key gotcha (memory `bugfix/neogeo-bios-dialog`):** 1941 is a CPS-1 Capcom game, NOT Neo Geo — absent from MIA's `Neo Geo.bml`. Loading it as Neo Geo always fails; the OLD popup wrongly blamed the BIOS. The new popup explains the ROM is likely not Neo Geo.
+
+**Neo Geo INPUT — D-pad hat fix (FIXED, needs on-device verify, uncommitted):**
+- **Root cause (memory `bugfix/neo-geo-input-gamepad`):** the Neo Geo `ControllerPort` (`ares/ng/controller/port.cpp`) only `allocate()`s an "Arcade Stick"; `connectDevices` already routes Neo Geo → `"Arcade Stick"` (`PhobosRunner.cpp:2088`), so a device IS connected and A/B/C/D read fine. The dead D-pad was a FRONT-END bug: many controllers report the D-pad as a HAT axis (`AXIS_HAT_X/Y`), and `GameInputState.updateHotkeyDpad` only folded the hat into `hotkeyKeys` (used for hotkey combos) — never into the gameplay button mask. So the D-pad produced no game input while A/B/C/D (keycodes) worked.
+- **Fix:** `updateHotkeyDpad` now ALSO latches the hat into `hwButtons` bits 0–3 (Up/Down/Left/Right = `VirtualGamepad` bits 0..3). Universal (every system), so it can't be lost by a remap. A harmless no-op `port.cpp` edit also accepts `"Gamepad"` as the Arcade Stick (defensive; never requested since connectDevices uses "Arcade Stick").
+- **Analog sticks:** for Neo Geo they are digital-only, so the analog axes legitimately drive nothing — expected, NOT a bug. The D-pad is what moves a Neo Geo character.
+
+**Neo Geo Background Graphical Glitch — tall sprites / 000-lo.lo line mapping (FIXED & VERIFIED on-device, uncommitted):**
+- **Symptom:** In Samurai Shodown (and other games using 32-tile tall background/fighter sprites), the top HUD/sky and bottom ground/characters were visible, but the entire middle half of the screen was a massive black void.
+- **Root cause:** In `ares/ng/lspc/render.cpp`, `tile` was declared as `n4` (4-bit integer, 0..15). The LSPC line ROM (`000-lo.lo`) maps scanline distance `ry` to `tile` (upper nibble) and `row` (lower nibble). For `ry < 256` (tiles 0..15), `invert=false` and `tile = entry >> 4` (0..15). For `ry >= 256` (tiles 16..31, the lower 256 pixels of 32-tile sprites), `invert=true` and hardware does `tile ^= 0x1f` (`31 - (entry >> 4)` = 16..31). Because `tile` was `n4`, the XOR was truncated to 4 bits (`tile ^= 0x0f`), wrapping back to tiles 0..15 in reverse! VRAM words 32..63 (tiles 16..31) were never accessed.
+- **Fix:** In `ares/ng/lspc/render.cpp`, changed `tile` from `n4` to `n5` (5-bit integer, 0..31). Added guard `if(auto mask = cartridge.cromMask()) tileNumber &= mask >> 7;`.
+- **Verification:** Captured screenshot on Retroid Pocket 6 via `adb screencap`. Pillow analysis showed 0 black rows across the center screen (was previously black void), full background scenery rendered cleanly.
+
+**Status:** Driver downloader built + installed + user-verified (download/install/delete/selector). Neo Geo BIOS dialog built + installed. Neo Geo D-pad hat fix built + installed. Neo Geo background graphics fix built + installed + verified on-device. **All UNCOMMITTED — commit before starting Task #49.**
