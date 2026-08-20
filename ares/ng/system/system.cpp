@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <android/log.h>
 
 namespace ares::NeoGeo {
 
@@ -54,7 +55,18 @@ auto System::load(Node::System& root, string name) -> bool {
   node->setSerialize([this](bool save) -> serializer { return serialize(save); });
   node->setUnserialize(std::bind_front(&System::unserialize, this));
   root = node;
-  if(!node->setPak(pak = platform->pak(node))) return false;
+  if(!node->setPak(pak = platform->pak(node))) { node.reset(); return false; }
+
+  // Neo Geo cannot boot without a BIOS. The VFS attaches it from neogeo.zip
+  // (sp-e.sp1 / UniBIOS) or <home>/System/Neo Geo MVS/bios.rom. If neither is
+  // present, system.bios stays unallocated and the 68K crashes (SIGSEGV, null
+  // Memory::Readable) the moment it reads the reset vectors from 0xc00000.
+  // Fail clearly here instead of booting into a crash.
+  if(!pak->read("bios.rom")) {
+    __android_log_print(ANDROID_LOG_ERROR, "NeoGeo", "load: MVS/AES BIOS required — provide neogeo.zip (sp-e.sp1/UniBIOS) or System/Neo Geo MVS/bios.rom");
+    node.reset();
+    return false;
+  }
 
   wram.allocate(64_KiB >> 1);
   if(NeoGeo::Model::NeoGeoMVS()) {

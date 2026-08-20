@@ -105,6 +105,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 
     val showDriverSuggestion by viewModel.showDriverSuggestion.collectAsState()
     val unsupportedSystem by viewModel.unsupportedSystem.collectAsState()
+    val biosRequired by viewModel.biosRequired.collectAsState()
 
     // Push the persisted N64 debug-logging setting to native whenever it
     // changes (including the initial DataStore load). The init block pushes
@@ -252,6 +253,29 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.dismissUnsupportedSystem()
+                    onBack()
+                }) { Text("OK") }
+            }
+        )
+    }
+
+    // ── Neo Geo BIOS required dialog ─────────────────────────────────────
+    biosRequired?.let { sys ->
+        AlertDialog(
+            onDismissRequest = {
+                viewModel.dismissBiosRequired()
+                onBack()
+            },
+            title = { Text("Neo Geo BIOS Required") },
+            text = {
+                Text("The Neo Geo core cannot boot without a BIOS.\n\n" +
+                     "Add neogeo.zip (containing sp-e.sp1 and 000-lo.lo) by " +
+                     "setting the Neo Geo BIOS in Settings, or place neogeo.zip " +
+                     "next to your ROMs, then try loading the game again.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.dismissBiosRequired()
                     onBack()
                 }) { Text("OK") }
             }

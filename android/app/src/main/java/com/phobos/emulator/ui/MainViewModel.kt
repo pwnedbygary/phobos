@@ -585,6 +585,13 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     private val _unsupportedSystem = MutableStateFlow<String?>(null)
     val unsupportedSystem: StateFlow<String?> = _unsupportedSystem
 
+    // Neo Geo fails to load only when its mandatory BIOS is missing (the core
+    // now returns false gracefully instead of SIGSEGVing). Surface a targeted
+    // message so the user knows to supply neogeo.zip rather than "load failed".
+    private val _biosRequired = MutableStateFlow<String?>(null)
+    val biosRequired: StateFlow<String?> = _biosRequired
+    fun dismissBiosRequired() { _biosRequired.value = null }
+
     // ZX tape-load progress: -1 = no tape, else (playing?10000:0)+pct*100.
     // Polled ~10 Hz while a ZX game is loaded for the loading progress bar.
     private val _zxTapeProgress = MutableStateFlow(-1)
@@ -1450,13 +1457,15 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         }
                     } else {
                         Log.e("Phobos", "Native loadRom failed for $effectiveSystem")
-                        // Broken core (ZX 128K / PCE / Neo Geo): native refuses
-                        // before spawning any threads. Surface a clear popup
+                        // Broken core (ZX 128K / PCE): native refuses before
+                        // spawning any threads. Neo Geo refuses only when its
+                        // mandatory BIOS is absent. Surface a clear popup
                         // instead of a hang/crash.
-                        if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true) ||
+                        if (effectiveSystem.contains("Neo Geo", ignoreCase = true)) {
+                            _biosRequired.value = effectiveSystem
+                        } else if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true) ||
                             effectiveSystem.contains("PC Engine", ignoreCase = true) ||
-                            effectiveSystem.contains("SuperGrafx", ignoreCase = true) ||
-                            effectiveSystem.contains("Neo Geo", ignoreCase = true)) {
+                            effectiveSystem.contains("SuperGrafx", ignoreCase = true)) {
                             _unsupportedSystem.value = effectiveSystem
                         }
                     }
