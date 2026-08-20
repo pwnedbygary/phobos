@@ -22139,17 +22139,16 @@ game
       crc:    c30a08dd
       sha1:   66864954017c841d7ca8490112c3aa7a71a4da70
     rom
-      name:   272-p2ca.sp2
+      name:   272-p2.sp2
       type:   load16_word_swap
       offset: 4194304
       size:   4194304
-      crc:    bd64a518
-      sha1:   aa259a168930f106377d680db444535411b3bce0
+      crc:    63492ea6
+      sha1:   6ba946acb62c63ed61a42fe72b7fff3828883bcc
   fixed
     size: 131072
     rom
-      type:   fill
-      value:  0
+      name:   273-s1.bin
       offset: 0
       size:   131072
       crc:    
