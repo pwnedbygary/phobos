@@ -81,19 +81,22 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | ZX Spectrum | ✅ Tape loading, on-screen keyboard, gamepad schemes (QAOP/ZXZX/Kempston) — Manic Miner verified |
 | SG-1000 | ✅ Verified 2026-08-14 |
 | Mega CD | ✅ Audio fixed (lockstep multi-stream mixer, user-verified) |
+| PC Engine (HuCard) | ✅ |
+| SuperGrafx | ✅ |
 | Neo Geo (MVS/AES) | ✅ Graphics + controls fixed (KOF2003 verified @59.2 FPS); **audio works** (KOF2003 confirmed; `ring buffer 0/12000` log is a suspected formatting artifact); per-title compat matrix → [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) |
 | **Known broken / under investigation** | |
-| PC Engine / CD / SuperGrafx | ❌ HuCard loads; PCE-CD/SuperGrafx black screen — scheduler/co-switch on ARM64 |
+| PC Engine CD | ❌ Does not boot (PCE HuCard + SuperGrafx work) |
 
 > Sega Saturn and Neo Geo CD are not listed: neither has a usable core (Saturn is
 > an ares stub with an empty System::run; Neo Geo CD does not exist in ares). The
 > core stubs remain in the tree for future work, but the systems are removed from
-> the app and not supported.
+> the app and not supported. (PC Engine CD is loaded by the PCE core but does not
+> boot on-device — tracked in Known issues.)
 
 ### Known issues / not yet functional
 
 - **Neo Geo MVS/AES — audio log artifact** — games boot and render correctly and **have audio** (KOF2003 confirmed on-device). The `ring buffer 0/12000` log line is suspected to be a **string-formatting bug**, not a real audio fault — verify the log formatting. Full per-title status in [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md).
-- **PCE-CD & SuperGrafx** — black screen; PCE HuCard-only works.
+- **PCE-CD** — does not boot; PCE HuCard + SuperGrafx work.
 - **ZX Spectrum 128K** — gated with a clean "Unsupported" popup (PSG co-routine / scheduler on ARM64, same class as PCE/Neo Geo); 48K works.
 - **N64 load-state** — a stale-DMA exception-loop was seen on some titles after restore; RDP validation is now non-fatal so it degrades instead of freezing.
 
