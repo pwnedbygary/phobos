@@ -36,7 +36,7 @@ auto LSPC::render(n9 y) -> void {
     // row within tile). Bit 8 of ry is the inverted (bottom) line for a vertically-flipped sprite.
     bool invert = ry.bit(8);
     n8  entry = vscale[vshrink][ invert ? n8(~ry) : n8(ry) ];
-    n4  tile  = entry >> 4;
+    n5  tile  = entry >> 4;
     n4  row   = entry & 0xf;
     if(invert) { tile ^= 0x1f; row ^= 0xf; }
 
@@ -48,7 +48,7 @@ auto LSPC::render(n9 y) -> void {
     n8  palette    = attributes.bit(8,15);
 
     tileNumber.bit(16,19) = attributes.bit(4,7);
-    tileNumber &= cartridge.cromMask() >> 7;  //wrap tile numbers like hardware (MAME masks the 26-bit gfx address)
+    if(auto mask = cartridge.cromMask()) tileNumber &= mask >> 7;  //wrap tile numbers like hardware (MAME masks the 26-bit gfx address)
     if(vflip) row ^= 0xf;
     switch(animate * !animation.disable) {
     case 0: break;

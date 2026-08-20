@@ -20,7 +20,9 @@ auto ControllerPort::unload() -> void {
 }
 
 auto ControllerPort::allocate(string name) -> Node::Peripheral {
-  if(name == "Arcade Stick") device = std::make_unique<ArcadeStick>(port);
+  // The Neo Geo "gamepad" is the four-button arcade stick; honor either name
+  // so host front-ends that allocate a generic "Gamepad" still get input.
+  if(name == "Arcade Stick" || name == "Gamepad") device = std::make_unique<ArcadeStick>(port);
   if(device) return device->node;
   return {};
 }

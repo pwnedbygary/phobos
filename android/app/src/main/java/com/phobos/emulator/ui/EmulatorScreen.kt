@@ -106,6 +106,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     val showDriverSuggestion by viewModel.showDriverSuggestion.collectAsState()
     val unsupportedSystem by viewModel.unsupportedSystem.collectAsState()
     val biosRequired by viewModel.biosRequired.collectAsState()
+    val neoGeoRomLoadFailed by viewModel.neoGeoRomLoadFailed.collectAsState()
 
     // Push the persisted N64 debug-logging setting to native whenever it
     // changes (including the initial DataStore load). The init block pushes
@@ -276,6 +277,30 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.dismissBiosRequired()
+                    onBack()
+                }) { Text("OK") }
+            }
+        )
+    }
+
+    // ── Neo Geo ROM failed to load (BIOS present) ───────────────────────────
+    neoGeoRomLoadFailed?.let { sys ->
+        AlertDialog(
+            onDismissRequest = {
+                viewModel.dismissNeoGeoRomLoadFailed()
+                onBack()
+            },
+            title = { Text("Neo Geo ROM Failed to Load") },
+            text = {
+                Text("The Neo Geo BIOS was found, but this ROM could not be " +
+                     "loaded. It is likely not a valid Neo Geo MVS/AES game " +
+                     "(for example, 1941 is a CPS-1 Capcom title, not Neo Geo).\n\n" +
+                     "Verify the ROM is a real Neo Geo cartridge (e.g. kof2003) " +
+                     "and that neogeo.zip is set in Settings, then try again.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.dismissNeoGeoRomLoadFailed()
                     onBack()
                 }) { Text("OK") }
             }

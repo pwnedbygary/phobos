@@ -53,6 +53,21 @@ object GameInputState {
         val down = hatY > HAT_PRESS_THRESHOLD
         fun setDpad(key: Int, pressed: Boolean) { if (pressed) hotkeyKeys.add(key) else hotkeyKeys.remove(key) }
         setDpad(21, left); setDpad(22, right); setDpad(19, up); setDpad(20, down)
+
+        // The hat IS the actual gameplay D-pad for every system (Digital
+        // Up/Down/Left/Right = VirtualGamepad bits 0..3). Many controllers report
+        // the D-pad ONLY as a hat axis and never as KEYCODE_DPAD_* keys, so it
+        // must be latched into the hardware button mask here — not just into
+        // hotkeyKeys (which only feeds hotkey combos). Mask out the previous
+        // hat D-pad bits and OR in the current state. Analogue sticks remain
+        // separate (axes 17..24) and are ignored by digital-only cores like Neo
+        // Geo, which is expected.
+        val dpadBits = (if (up) 1 shl 0 else 0) or
+                       (if (down) 1 shl 1 else 0) or
+                       (if (left) 1 shl 2 else 0) or
+                       (if (right) 1 shl 3 else 0)
+        hwButtons = (hwButtons and 0xF.inv()) or dpadBits
+
         hotkeyKeysVersion++
         onHotkeyKeysChanged?.invoke()
     }

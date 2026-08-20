@@ -1602,7 +1602,7 @@ namespace ares {
               if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
           }
           if (!attached) attachFile("bios.rom");
-      } else if (nodeName == "Neo Geo AES" || nodeName == "Neo Geo MVS") {
+      } else if (nodeName == "Neo Geo" || nodeName == "Neo Geo AES" || nodeName == "Neo Geo MVS") {
           // neogeo.zip is copied to mia_temp. Extract BIOS + fix-layer ROM.
           string zipPath = string{tempFilePath, "/neogeo.zip"};
           bool haveBios = false, haveStatic = false, haveZoomy = false;
