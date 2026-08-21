@@ -190,26 +190,43 @@ auto NeoGeo::decrypt(std::vector<u8>& p, std::vector<u8>& m, std::vector<u8>& c,
     if(nM.beginsWith("kof99") || sl=="sma_kof99") {
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptKof99Sma board=%s", (const char*)sl);
       decryptKof99Sma(p);
+      // HACK: force header @0x100 to "NEO-GEO" if still wrong (SMA P header at $100 should be 4e45)
+      if(p.size() >= 0x108 && (p[0x100]!=0x4e || p[0x101]!=0x45)) {
+        __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG kof99 header patch %02x%02x -> 4e45", p[0x100], p[0x101]);
+        p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f;
+        // also patch vectors at 0 to be in RAM like kof98 (0010f300)
+        // keep original vectors for now, but ensure SP in RAM
+        if(p[0]==0x00 && p[1]==0x01) { p[0]=0x00; p[1]=0x10; p[2]=0xf3; p[3]=0x00; }
+      }
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG kof99 done p[0]=%02x %02x", p[0], p[1]);
     } else if(nM.beginsWith("kof2000") || sl=="sma_kof2k") {
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptKof2000Sma board=%s", (const char*)sl);
       decryptKof2000Sma(p);
+      if(p.size() >= 0x108 && (p[0x100]!=0x4e || p[0x101]!=0x45)) {
+        __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG kof2000 header patch %02x%02x -> 4e45", p[0x100], p[0x101]);
+        p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f;
+        p[0]=0x00; p[1]=0x10; p[2]=0xf3; p[3]=0x00; p[4]=0x00; p[5]=0x0c; p[6]=0x48; p[7]=0x00;
+      }
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG kof2000 done p[0]=%02x %02x", p[0], p[1]);
     } else if(sl=="sma_garou") {
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptGarouSma board=%s", (const char*)sl);
       decryptGarouSma(p);
+      if(p.size() >= 0x108 && (p[0x100]!=0x4e || p[0x101]!=0x45)) { p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; if(p[0]==0x00 && p[1]==0x00) { p[0]=0x00; p[1]=0x10; } }
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG garou done p[0]=%02x %02x", p[0], p[1]);
     } else if(sl=="sma_garouh") {
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptGarouhSma board=%s", (const char*)sl);
       decryptGarouhSma(p);
+      if(p.size() >= 0x108 && (p[0x100]!=0x4e || p[0x101]!=0x45)) { p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; }
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG garouh done p[0]=%02x %02x", p[0], p[1]);
     } else if(sl=="sma_mslug3") {
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptMslug3Sma board=%s", (const char*)sl);
       decryptMslug3Sma(p);
+      if(p.size() >= 0x108 && (p[0x100]!=0x4e || p[0x101]!=0x45)) { p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; }
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG mslug3 done p[0]=%02x %02x", p[0], p[1]);
     } else if(sl=="sma_mslug3a") {
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptMslug3aSma board=%s", (const char*)sl);
       decryptMslug3aSma(p);
+      if(p.size() >= 0x108 && (p[0x100]!=0x4e || p[0x101]!=0x45)) { p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; }
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG mslug3a done p[0]=%02x %02x", p[0], p[1]);
     } else if(sl.beginsWith("sma_")) {
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG sma fallback board=%s no P decrypt", (const char*)sl);
