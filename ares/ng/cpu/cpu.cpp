@@ -43,6 +43,15 @@ auto CPU::main() -> void {
 
   debugger.instruction();
   instruction();
+
+  //MVS coin pulse: keep the SELECT-generated coin line asserted for a few
+  //frames so the BIOS coin counter samples a clean high->low->high transition.
+  if(system.io.coinPulseTimer > 0) {
+    system.io.coinPulseTimer--;
+    system.io.coinPulse = 1;
+  } else {
+    system.io.coinPulse = 0;
+  }
 }
 
 auto CPU::idle(u32 clocks) -> void {

@@ -37,7 +37,9 @@ struct Rom : Interface {
 
   auto writeP(n1 upper, n1 lower, n24 address, n16 data) -> void override {
     if(lower && address >= 0x200000 && address <= 0x2fffff)  {
-      romBank = data.bit(0, 2);
+      // 4-bit window to cover 9M SMA (kof99/kof2000 need bank 8 = 0x800000-0x8FFFFF)
+      // Standard titles only use 0-7; extra bit is harmless.
+      romBank = data.bit(0, 3);
     }
   }
 

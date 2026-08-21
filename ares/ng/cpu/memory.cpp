@@ -1,3 +1,33 @@
+//uPD4990A serial RTC (Neo Geo ties c0/c1/c2 high => serial mode).
+//Protocol mirrors MAME's upd4990a: a 4-bit command is shifted in MSB-first on
+//CLK while STB is high and latched on STB rising edge. MODE_TIME_READ(3) loads
+//the calendar into the 48-bit shift register; MODE_SHIFT(1) clocks it out LSB-first.
+static auto rtcClk() -> void {
+  auto& r = system.io.rtc;
+  u8 in = r.shiftReg[6] & 1;
+  r.shiftReg[6] >>= 1;
+  r.shiftReg[6] |= (r.din << 3);
+  if(r.command == 1) {  //MODE_SHIFT
+    const int max = 6;
+    for(int i = 0; i < max; i++) {
+      r.shiftReg[i] >>= 1;
+      if(i == max - 1) r.shiftReg[i] |= (in << 7);
+      else r.shiftReg[i] |= ((r.shiftReg[i + 1] << 7) & 0x80);
+    }
+    r.dataOut = r.shiftReg[0] & 1;
+  }
+}
+
+static auto rtcStb() -> void {
+  auto& r = system.io.rtc;
+  r.command = r.shiftReg[6] & 0x0f;
+  if(r.command == 3) {  //MODE_TIME_READ
+    for(int i = 0; i < 6; i++) r.shiftReg[i] = r.timeCounter[i];
+  } else if(r.command == 1) {  //MODE_SHIFT
+    r.dataOut = r.shiftReg[0] & 1;
+  }
+}
+
 auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
   //NEO-E0
   if(io.vectorSelect == 0) {
@@ -143,14 +173,17 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
 
   //REG_STATUS_A
   if((address & 0xfe0000) == 0x320000 && lower) {
-    data.bit(0) = Model::NeoGeoMVS();  //coin 1 (MVS: active low, AES: always 0)
-    data.bit(1) = Model::NeoGeoMVS();  //coin 2 (MVS: active low, AES: always 0)
+    //coin bits are active-low: 0 = inserted. system.io.coin asserts them when
+    //the player holds START (auto-credit) or SELECT (coin button).
+    bool coin = Model::NeoGeoMVS() && !system.io.coin;
+    data.bit(0) = coin;  //coin 1 (player 1 credit)
+    data.bit(1) = 1;     //coin 2 not inserted
     data.bit(2) = 0;  //service button (released)
-    data.bit(3) = Model::NeoGeoMVS();  //coin 3 (MVS: active low, AES: always 0)
-    data.bit(4) = Model::NeoGeoMVS();  //coin 3 (MVS: active low, AES: always 0)
+    data.bit(3) = 1;     //coin 3 not inserted
+    data.bit(4) = 1;     //coin 3 (dup) not inserted
     data.bit(5) = 0;  //0 = 4-slot; 1 = 6-slot
     data.bit(6) = system.io.rtcTimePulse;  //RTC time pulse
-    data.bit(7) = 0;  //RTC data bit
+    data.bit(7) = system.io.rtc.dataOut;    //RTC data out (serial)
   }
 
   //REG_P2CNT
@@ -240,11 +273,16 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
     system.io.ledData = data.bit(0,7);
   }
 
-  //REG_RTCCTRL
+  //REG_RTCCTRL (uPD4990A serial RTC control: DIN/CLK/STB)
   if((address & 0xfe00f0) == 0x380050 && lower) {
-    //rtc.din    = data.bit(0);
-    //rtc.clock  = data.bit(1);
-    //rtc.strobe = data.bit(2);
+    u8 din = data.bit(0);
+    u8 clk = data.bit(1);
+    u8 stb = data.bit(2);
+    if(clk && !system.io.rtc.clk) rtcClk();   //rising edge of CLK
+    if(stb && !system.io.rtc.stb) rtcStb();   //rising edge of STB latches command
+    system.io.rtc.din = din;
+    system.io.rtc.clk = clk;
+    system.io.rtc.stb = stb;
   }
 
   //REG_RESETCC1

@@ -15,8 +15,9 @@ struct ArcadeStick : Controller {
   auto readButtons() -> n8 override;
   auto readControls() -> n2 override;
 
-private:
+ private:
   b1 yHold;
+  b1 prevSelect = 0;  //edge detect so a held SELECT still emits one coin pulse
   b1 upLatch;
   b1 downLatch;
   b1 xHold;

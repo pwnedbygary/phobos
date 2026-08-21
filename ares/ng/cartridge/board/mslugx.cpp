@@ -69,7 +69,7 @@ struct MSlugX : Interface {
     }
 
     if(lower && address >= 0x2ffff0 && address <= 0x2fffff)  {
-      romBank = data.bit(0, 2);
+      romBank = data.bit(0, 3);
     }
   }
 

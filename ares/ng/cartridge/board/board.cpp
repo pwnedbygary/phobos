@@ -4,6 +4,8 @@ namespace Board {
 #include "mslugx.cpp"
 #include "jockey-gp.cpp"
 #include "pvc.cpp"
+#include "sma.cpp"
+#include "progsf1.cpp"
 
 auto Interface::load(Memory::Readable<n8>& memory, string name) -> bool {
   if(auto fp = pak->read(name)) {

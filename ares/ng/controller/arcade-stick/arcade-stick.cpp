@@ -22,6 +22,19 @@ auto ArcadeStick::readButtons() -> n8 {
   platform->input(b);
   platform->input(c);
   platform->input(d);
+  // Drive MVS coin assertion: holding START auto-inserts a credit (handheld
+  // convenience) and SELECT acts as the coin button. Read start/select here
+  // (readButtons runs before REG_STATUS_A in CPU::readIO) so the coin line is
+  // already asserted when the BIOS polls REG_STATUS_A in the same iteration.
+  platform->input(start);
+  platform->input(select);
+  //SELECT acts as the coin button: emit a oneshot pulse on its rising edge so
+  //the BIOS coin counter sees a clean high->low->high transition even if the
+  //button is held (a held level is never sampled as an edge and counts no coin).
+  bool sel = select->value();
+  if(sel && !prevSelect) system.io.coinPulseTimer = 600'000;  //~3 frames at 12MHz
+  prevSelect = sel;
+  system.io.coin = start->value() || system.io.coinPulse;
 
   if(!(up->value() && down->value())) {
     yHold = 0, upLatch = up->value(), downLatch = down->value();
@@ -50,6 +63,11 @@ auto ArcadeStick::readButtons() -> n8 {
 auto ArcadeStick::readControls() -> n2 {
   platform->input(select);
   platform->input(start);
+  //keep coin line / pulse assertion in sync regardless of which register the game polls
+  bool sel = select->value();
+  if(sel && !prevSelect) system.io.coinPulseTimer = 600'000;
+  prevSelect = sel;
+  system.io.coin = start->value() || system.io.coinPulse;
 
   n2 data;
   data.bit(0) = start->value();

@@ -46,6 +46,19 @@ struct System {
     n8 ledData;
     n32 rtcCounter;
     n1 rtcTimePulse;
+    n1 coin = 0;        //MVS coin line held low (inserted). Driven by START (auto-credit) or a SELECT coin pulse.
+    n1 coinPulse = 0;   //oneshot coin pulse (active for a few frames) triggered by a SELECT press edge.
+    n32 coinPulseTimer = 0;  //counts down the active pulse duration in CPU instructions.
+
+    //uPD4990A serial RTC (MVS). Neo Geo ties c0/c1/c2 high => serial mode.
+    struct RTC {
+      enum : u32 { MODE_REGISTER_HOLD = 0, MODE_SHIFT = 1, MODE_TIME_SET = 2, MODE_TIME_READ = 3 };
+      u8 shiftReg[7] = {0};      //shiftReg[0..5] = 48-bit data; shiftReg[6] = latched 4-bit command
+      u8 timeCounter[6] = {0x00, 0x00, 0x00, 0x01, 0x11, 0x24};  //sec,min,hour,day,(month<<4|weekday),year (BCD: 2024-01-01 Mon)
+      u8 command = 0;            //latched command
+      u1 din = 0, clk = 0, stb = 0;
+      u1 dataOut = 0;            //serial data out (REG_STATUS_A bit 7)
+    } rtc;
   } io;
 
 private:

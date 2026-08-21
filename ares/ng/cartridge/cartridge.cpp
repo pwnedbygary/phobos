@@ -19,14 +19,16 @@ auto Cartridge::connect() -> void {
   if(information.board == "rom_mslugx") board = std::make_unique<Board::MSlugX>(*this);
   if(information.board == "cmc50_jockeygp") board = std::make_unique<Board::JockeyGP>(*this);
   if(information.board == "pvc_kf2k3" || information.board == "pvc_kf2k3h") board = std::make_unique<Board::PVC>(*this);
+  if(information.board == "rom_kof98") board = std::make_unique<Board::ProgSF1>(*this);
+  if(information.board.beginsWith("sma_")) board = std::make_unique<Board::SMA>(*this);
   if(!board) board = std::make_unique<Board::Rom>(*this);
   board->pak = pak;
 
   //fix layer banking schemes used by later cartridges
-  if(information.board == "cmc50_kof2000n" || information.board == "pvc_kf2k3" || information.board == "pvc_kf2k3h" || information.board == "pvc_svc" || information.board == "k2k2_matrim") {
-    board->fixBankType = 2;  //KOF2000-style
-  } else if(information.board.beginsWith("cmc42_") || information.board == "cmc50_kof2001" || information.board == "pcm2_mslug4" || information.board == "pcm2_rotd" || information.board == "pcm2_pnyaa" || information.board == "pvc_mslug5" || information.board == "k2k2_samsh5" || information.board == "k2k2_sams5s") {
-    board->fixBankType = 1;  //Garou-style
+  if(information.board == "cmc50_kof2000n" || information.board == "pvc_kf2k3" || information.board == "pvc_kf2k3h" || information.board == "pvc_svc" || information.board == "k2k2_matrim" || information.board == "sma_kof2k") {
+    board->fixBankType = 2;  //KOF2000-style tile banking
+  } else if(information.board.beginsWith("cmc42_") || information.board == "cmc50_kof2001" || information.board == "pcm2_mslug4" || information.board == "pcm2_rotd" || information.board == "pcm2_pnyaa" || information.board == "pvc_mslug5" || information.board == "k2k2_samsh5" || information.board == "k2k2_sams5s" || information.board == "sma_kof99" || information.board == "sma_garou" || information.board == "sma_garouh" || information.board == "sma_mslug3" || information.board == "sma_mslug3a") {
+    board->fixBankType = 1;  //Garou-style line banking
   }
 
   board->load();

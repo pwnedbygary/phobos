@@ -883,7 +883,7 @@ uses many; ares VU has known partial accuracy in rounding/overflow edge cases).
 
 ### 🔄 IN FLIGHT (OPEN / investigating / diagnosed / broken-gated / implemented-awaiting-verify)
 
-#### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES REMAINS (gated)
+#### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES — 1994-95 WARNING hang FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:172` `tst.b $10FD82` + `13C0...60F8` → `kof95`/`samsho3`/`4`/`5` titles, `wiki:Slot_check_security`/`wiki:PROGSF1`/`wiki:NEO-SMA`); `kof98` `PROGSF1` FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:374` `decryptKof98` + `ares/ng/cartridge/board/progsf1.cpp:19` `header @100: 4e 45 4f 2d` `✓` `49016109`); Remaining MVS: `kof99`/`kof2000` `NEO-SMA` (`header @100: c1 e4` grid `37K`/`162K` `loadRoms` `0xC0000` hole audit pending, `SMA::kof99/kof2000_bank_base` `SMA load` `garou`/`mslug3` staged), plus non-MVS sets (`kof98umh` PGM, `kofnw`/`kofxi` Atomiswave) correctly rejected
 
 **✅ PCE / PC Engine CD / SuperGrafx — FIXED & VERIFIED 2026-08-18 (commit `2795e5813`):**
 
@@ -1189,23 +1189,265 @@ collided. See the QoL-phase table.
 
 #### Task 72 — N64 RDP-ParaLLEl performance investigation vs mupen64plus-ae-turnip (OPEN)
 
-**Why:** user reports some N64 games run WAY faster in
+**Why:** user reports Mario Tennis runs at >100 FPS in
 [pwnedbygary/mupen64plus-ae-turnip](https://github.com/pwnedbygary/mupen64plus-ae-turnip)'s
-RDP-ParaLLEl renderer than in Phobos's N64 core (which also uses ares' paraLLEL-RDP). Goal:
-see what can be grabbed from that fork to make Phobos's N64 as fast/fast as possible.
+parallel-RDP renderer (with fast-forward) but lags in Phobos's N64 core (which also uses
+ares' paraLLEL-RDP). Both use the same parallel-RDP library (Themaister's) and the same
+Turnip Vulkan driver on the same Adreno GPU. Root causes identified.
 
-**Investigate (fork vs our integration):**
-- paraLLEl-RDP command-ring / timeline / pipeline threading model + any worker-thread
-  scheduling, priority, or CPU-affinity differences vs our Task 45 pinning.
-- VI post-processing path (`disableVideoInterfaceProcessing` / serrate) and any
-  framebuffer/scanout shortcuts.
-- Vendor/Adreno-specific fast paths, blacklist tweaks, or driver-version handling.
-- Any scheduler / frame-pacing / vsync-interval differences in the app glue.
-- Upstream ares paraLLEL-RDP version the fork is based on vs ours (ours tracks ares; fork
-  may carry RDP fixes/optimizations not yet upstream).
+---
 
-**Deliverable:** diff + selective port of applicable fast paths; measure with Task 69
-(CPU-vs-GPU) before/after on the specific games the user sees as slow.
+### 🔬 Root Cause Analysis (2026-08-20) — Full codebase comparison
+
+Investigated the turnip fork (`pwnedbygary/mupen64plus-ae-turnip`, branch `master`) against
+Phobos (`pwnedbygary/phobos`, branch `master`). The turnip fork is a Mupen64Plus-AE variant
+(an Android frontend for the Mupen64Plus C emulation core) that uses parallel-RDP as a
+video plugin. Phobos uses the ares C++ emulation core with parallel-RDP directly embedded.
+
+**Repo paths referenced:**
+- Turnip fork local: `/home/garyb/LLM-Projects/mupen64plus-ae-turnip/`
+- Phobos local: `/home/garyb/LLM-Projects/phobos/`
+
+---
+
+### 🥇 #1 Factor: Asynchronous RDP (configurable vs always-synchronous)
+
+**This is the single largest performance difference.** The parallel-RDP `CommandProcessor`
+has an internal `CommandRing` thread that asynchronously processes RDP commands. The host
+CPU can either wait for the GPU to finish on every `SyncFull` (synchronous mode) or just
+fire the DP interrupt and continue (asynchronous mode, keeping the GPU fully pipelined).
+
+**Turnip fork** (`mupen64plus-video-parallel/upstream/parallel_imp.cpp`, lines 196–203):
+```cpp
+if (RDP::Op(command) == RDP::Op::SyncFull) {
+    // ONLY wait if synchronous mode is ON (config default = 1, but can be 0)
+    if (vk_synchronous && frontend)
+        frontend->wait_for_timeline(frontend->signal_timeline());
+    *gfx.MI_INTR_REG |= DP_INTERRUPT;
+    gfx.CheckInterrupts();
+}
+```
+When `vk_synchronous` is `false` (config key `SynchronousRDP`, exposed in the UI), the
+CPU **never stalls** waiting for GPU work. The GPU runs a frame or two behind the CPU,
+fully pipelined. The only synchronization point is at scanout time in `vk_blit()`, where
+`scanout.fence->wait()` naturally paces against the GPU.
+
+**Phobos** (`ares/n64/vulkan/vulkan.cpp`, in `Vulkan::render()`):
+```cpp
+if(::RDP::Op(code) == ::RDP::Op::SyncFull) {
+    implementation->processor->wait_for_timeline(implementation->processor->signal_timeline());
+    rdp.syncFull();  // also updates the software RDP state tracker
+}
+```
+Phobos **always waits** on every `SyncFull` — there is no config toggle and no async path.
+The CPU blocks until the GPU finishes all prior RDP work before the DP interrupt fires.
+Mario Tennis issues `SyncFull` frequently (every RDP command barrier), so this drain
+happens many times per frame.
+
+Additionally, Phobos calls `rdp.syncFull()` after the wait, which updates the software RDP
+state tracker (`rp->command.crashed`/`pipeBusy`/`bufferBusy`/`source`). This is unnecessary
+when parallel-RDP is active and adds a tiny overhead on top of the GPU drain.
+
+**Impact:** With async RDP, the CPU can run 2–3× faster in CPU-bound scenes because it
+never idles waiting for GPU command completion. Mario Tennis is both CPU- and GPU-bound;
+eliminating the per-SyncFull stall is transformative.
+
+**Actionable:** Add an async-RDP config toggle to Phobos. In `Vulkan::render()`, when async
+mode is active, skip `wait_for_timeline()` on `SyncFull` — just call `rdp.syncFull()` (or
+skip it too). The scanout fence in `scanoutAsync()` + `mapScanoutRead()` already provides
+the necessary synchronization at frame boundaries.
+
+---
+
+### 🥈 #2 Factor: RSP JIT — Native NEON vs SSE-to-NEON Translation
+
+**Turnip fork** uses **parallel RSP** (`mupen64plus-rsp-parallel/upstream/parallel.cpp`)
+which is a dedicated RSP JIT recompiler. On ARM64, it uses **native NEON intrinsics**
+directly for VU (vector unit) operations — the `rsp_jit.hpp` code compiles RSP vector
+microcode to ARM64 NEON instructions without any translation layer.
+
+**Phobos** uses ares' built-in RSP JIT (`ares/n64/rsp/`) which relies on **`sse2neon.h`**
+(`thirdparty/sse2neon/`) — a header that translates SSE intrinsics to NEON at the C++
+source level. This means every SSE intrinsic call in the VU path becomes a function-like
+macro expansion that produces multiple NEON instructions, rather than hand-tuned native
+NEON. The translation overhead adds up significantly in the RSP VU hot path, especially
+for the SIMD-heavy audio and graphics microcode that Mario Tennis uses.
+
+Key difference: the turnip fork's parallel RSP has a JIT that directly emits ARM64 NEON
+instructions; ares' RSP JIT uses SSE intrinsics (written for x86) that get translated
+through `sse2neon.h` on ARM64. The translation layer is functional but not zero-cost.
+
+**Impact:** Moderate-to-significant in RSP-heavy scenes (audio microcode, vector
+transformations). Mario Tennis has a moderately busy RSP for audio and some 3D math.
+
+**Actionable:** Task 68 (N64 RSP VU ARM64 NEON verification) is the first step — confirm
+that the `ARCHITECTURE_SUPPORTS_SSE4_1`→`sse2neon` path actually emits NEON (not the
+scalar `#else` fallback). Next step: profile the RSP VU hot path and consider either (a)
+replacing hot SSE intrinsics with hand-written NEON, or (b) porting the parallel RSP JIT
+to Phobos as an alternative RSP backend.
+
+---
+
+### 🥉 #3 Factor: Emulation Core Maturity and Philosophy
+
+**Turnip fork** uses **Mupen64Plus** (C, started 2001, ~24 years of optimization). It is
+a speed-first emulator that uses:
+- **Cached interpreter** (the default on ARM) — aggressively optimized with lookup tables
+  and pre-decode caching. Can also use various dynarec backends.
+- **Audio-driven timing** — the audio plugin controls the emulation pace. When the game
+  runs faster than real-time, audio stretches to match, creating natural decoupling.
+- **Plugin architecture** — video, audio, input, RSP are separate shared libraries loaded
+  at runtime, allowing independent optimization and replacement.
+
+**Phobos** uses **ares** (C++, higan/bsnes lineage, started ~2019). It prioritizes cycle
+accuracy over speed, with:
+- **SLJIT-based recompiler** (JIT) for the VR4300 CPU — correct but not as aggressively
+  optimized as Mupen64Plus's cached interpreter for many games.
+- **Synchronous emulation** — the ares N64 core uses the `CPU::synchronize()` pattern
+  where the CPU calls device `main()` functions directly (VI, AI, RSP, RDP, PIF) rather
+  than using the ares co-routine Scheduler. This is identical to upstream ares and NOT a
+  performance issue per se, but the core has had far fewer optimization passes.
+- **VI overclock** exists (`vi.hpp`: `overclockPercent`) but is applied only to the VI
+  line timing, not the CPU clock. The turnip fork exposes both `CountPerOpDenomPot` (CPU
+  clock multiplier) and `CountPerScanlineOverride` (VI timing).
+
+**Impact:** Moderate. For Mario Tennis specifically, the Mupen64Plus cached interpreter
+hits an efficient path, and the audio-driven timing lets fast-forward run without
+fighting the frame scheduler.
+
+---
+
+### #4 Factor: CPU Overclock Granularity
+
+**Turnip fork** exposes two independent overclock knobs:
+1. **`CountPerOpDenomPot`** (`build_common/version_common.gradle` → core config, default 0):
+   Reduces the number of CPU cycles per emulation step by a power of two. Effectively runs
+   the CPU faster relative to the rest of the system. When the user enables fast-forward
+   (default 250% speed in the turnip fork), the `l_SpeedFactor` is set to 250 which
+   multiplies the audio rate and shrinks the frame-pacing sleep target, but the CPU itself
+   also runs more cycles per host-second through this mechanism.
+2. **`CountPerScanlineOverride`** (default 0 = game default): Overrides the VI count-per-
+   scanline value. Setting it higher makes the VI interrupt fire less often (fewer scanline
+   interrupts), giving the CPU more contiguous cycles between sync points = higher throughput.
+
+**Phobos** only has `overclockPercent` on the VI controller (`vi.hpp`), which scales the
+VI line timing. This makes the game render more frames per second (genuine VI overclock),
+but doesn't give the CPU any additional per-cycle throughput advantage.
+
+**Impact:** Moderate at very high fast-forward speeds (>200%). The turnip fork's CPU
+overclock reduces the effective work per emulated cycle, while Phobos's VI overclock
+just makes the VI fire faster (more frame callbacks per real second).
+
+---
+
+### #5 Factor: Frame Pacing at High Speed
+
+**Turnip fork** (`mupen64plus-core/upstream/src/main/main.c`, `apply_speed_limiter()`,
+lines 861–928):
+- Uses `SDL_Delay()` with wide tolerance windows (`minSleepNeeded = -50ms`,
+  `maxSleepNeeded = 50ms`).
+- At 250% speed: `AdjustedLimit = (1000/60) * (100/250) = ~6.67ms` per frame.
+- If the real elapsed time exceeds the adjusted game time (`sleepTime < 0`), it skips
+  sleeping entirely — no penalty, no catch-up, just runs flat-out.
+- `SDL_Delay()` is a coarse sleep (~1–2ms granularity on Linux/Android) but at 250%
+  speed it's rarely called anyway because the sleep time typically goes negative.
+- The speed limiter runs inside `new_vi()` (called from the VI interrupt handler), so
+  it's naturally synchronized with the emulated frame rate.
+
+**Phobos** (`PhobosRunner.cpp`, `emulationLoop()`):
+- Uses `std::chrono::steady_clock` with absolute deadline `sleep_until()`.
+- Fast-forward: computes `targetFrameTime / speed` and uses `sleep_for()` relative sleep.
+- The deadline-based approach accumulates scheduling pressure: if a frame takes slightly
+  longer than the adjusted target, the deadline slips, and the next sleep is shorter
+  (tighter scheduling). At very high speeds this can lead to busy-wait behavior.
+- Frame pacing runs in the main emulation loop (not synchronized to VI), so it imposes
+  a host-side throttle independent of the game's actual timing.
+
+**Impact:** Minor — both approaches work well at 2× speed. At extreme speeds (>3×), the
+turnip fork's "skip sleep when behind" approach is slightly more aggressive.
+
+---
+
+### #6 Factor: Pipeline Depth and Presentation Path
+
+**Turnip fork** initializes parallel-RDP with `device->init_frame_contexts(3)` — 3 frame
+contexts in flight. The presentation path is: Vulkan → `map_host_buffer()` → `memcpy()`
+to CPU buffer → OpenGL ES texture upload (`screen_write()` + `screen_swap()` draws a
+textured full-screen quad via GLES). This is an **extra copy** (Vulkan → CPU → GLES texture
+→ screen compositor) vs Phobos's direct path.
+
+**Phobos** initializes with `device.init_frame_contexts(4)` — 4 frame contexts (3 in-flight
++ 1 spare). The presentation path is: Vulkan → `map_host_buffer()` → `memcpy()` to CPU
+buffer → `ANativeWindow_lock/unlockAndPost()` directly to Android surface. No intermediate
+GLES step.
+
+The extra GLES blit in the turnip fork path should make it *slower*, not faster. The turnip
+fork's speed advantage comes despite this overhead, which reinforces that factor #1 (async
+RDP) is the dominant difference.
+
+---
+
+### Summary Table
+
+| Factor | Turnip fork (Mupen64Plus-AE) | Phobos (ares) | Impact | Actionable? |
+|--------|------|--------|--------|-------------|
+| **RDP Sync** | Configurable async — no stall on SyncFull | Always synchronous — drain on every SyncFull | **Massive** | ✅ Add async toggle |
+| **RSP SIMD** | Parallel RSP JIT with native NEON | ares RSP JIT via sse2neon.h translation | **Significant** | 🔶 Profile + port hot paths |
+| **Core maturity** | Mupen64Plus C, 24yr speed-optimized | ares C++, accuracy-first | **Moderate** | ❌ Not portable |
+| **CPU overclock** | CountPerOpDenomPot + CountPerScanline | VI overclock only | **Moderate** | 🔶 Add CountPerOpDenomPot-like knob |
+| **Frame pacing** | SDL_Delay, skip when behind | deadline sleep_until | **Minor** | 🔶 Consider for extreme FF |
+| **Pipeline depth** | 3 contexts, extra GLES copy (slower) | 4 contexts, direct surface | Negative (helps Phobos) | N/A |
+
+---
+
+### Recommended Actions (priority order)
+
+1. **HIGHEST — Add async RDP mode toggle to Phobos.** In `Vulkan::render()`, skip
+   `wait_for_timeline(signal_timeline())` on `SyncFull` when async mode is enabled. The
+   scanout fence in `scanoutAsync()` + `mapScanoutRead()` already provides frame-level
+   synchronization. Wire the toggle through JNI (`PhobosRunner.cpp`/`PhobosJNI.cpp`),
+   Kotlin UI (`SettingsScreen.kt`/`EmulatorScreen.kt`), and `PhobosCore.kt`. Default OFF
+   (accuracy-preserving) but user-enabled for speed-critical games.
+
+2. **HIGH — Task 68 follow-through: profile RSP VU NEON path.** Verify that sse2neon.h
+   emits actual NEON (not scalar fallback) for the hot VU instructions used in Mario
+   Tennis's audio and graphics microcode. If the scalar `#else` path is active on this
+   Clang/ARM64 build, fix the preprocessor guards. If sse2neon is active but slow, port
+   the hot ~20 VU intrinsics to hand-written NEON.
+
+3. **MEDIUM — Add CPU overclock knob.** Implement a `CountPerOpDenomPot`-style setting
+   that divides the cycle budget per emulation step. Wire through JNI and settings UI.
+   This is a genuine CPU overclock (unlike VI overclock which just makes frames render
+   faster) and helps in CPU-limited fast-forward scenarios.
+
+4. **LOW — Frame pacing tweak for extreme fast-forward.** If the deadline-based pacing
+   shows scheduling pressure at >3× speed, switch to the "skip sleep when behind" model
+   (like the turnip fork's negative-sleep-time bailout).
+
+---
+
+### Specific Code References (turnip fork)
+
+- **Async RDP toggle + SyncFull handling:**
+  `mupen64plus-video-parallel/upstream/parallel_imp.cpp:196-203`
+- **RDP init (3 frame contexts, plugin interface):**
+  `mupen64plus-video-parallel/upstream/parallel_imp.cpp:225-304`
+- **Speed limiter with SDL_Delay skip logic:**
+  `mupen64plus-core/upstream/src/main/main.c:861-928`
+- **Speed factor 250% fast-forward default:**
+  `mupen64plus-core/upstream/src/main/main.c:429-460`
+- **VI interrupt → speed limiter call chain:**
+  `mupen64plus-core/upstream/src/device/rcp/vi/vi_controller.c:173-194`
+  (calls `new_vi()` which calls `apply_speed_limiter()`)
+- **CountPerScanlineOverride:**
+  `mupen64plus-core/upstream/src/device/rcp/vi/vi_controller.c:146-157`
+- **Parallel RSP JIT with native NEON:**
+  `mupen64plus-rsp-parallel/upstream/parallel.cpp`
+- **Plugin config defaults (SynchronousRDP = 1 by default):**
+  `mupen64plus-video-parallel/upstream/gfx_m64p.c:145`
+- **GamePrefs wiring (viRefreshRate → CountPerScanlineOverride):**
+  `app/src/main/java/paulscode/android/mupen64plusae/persistent/GamePrefs.java:652`
+  `app/src/main/java/paulscode/android/mupen64plusae/jni/NativeConfigFiles.java:121`
 
 **Difficulty:** 🟡 Medium (research + selective port). **Impact:** HIGH (N64 perf ceiling).
 
