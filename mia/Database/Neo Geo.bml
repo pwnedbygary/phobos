@@ -17395,14 +17395,14 @@ game
       name:   ka.neo-sma
       type:   load16_word_swap
       offset: 786432
-      size:   262144
+      size:   131072
       crc:    7766d09e
       sha1:   4e0a49d1ad669a62676cb30f527c6590cde80194
     rom
       name:   251-p1.p1
       type:   load16_word_swap
       offset: 1048576
-      size:   4194304
+      size:   1048576
       crc:    006e4532
       sha1:   47791ab4044ad55988b1d3412d95b65b91a163c8
     rom
