@@ -883,7 +883,7 @@ uses many; ares VU has known partial accuracy in rounding/overflow edge cases).
 
 ### 🔄 IN FLIGHT (OPEN / investigating / diagnosed / broken-gated / implemented-awaiting-verify)
 
-#### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES — 1994-95 WARNING hang FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:172` `tst.b $10FD82` + `13C0...60F8` → `kof95`/`samsho3`/`4`/`5` titles, `wiki:Slot_check_security`/`wiki:PROGSF1`/`wiki:NEO-SMA`); `kof98` `PROGSF1` FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:374` `decryptKof98` + `ares/ng/cartridge/board/progsf1.cpp:19` `header @100: 4e 45 4f 2d` `✓` `49016109`); Remaining MVS: `kof99`/`kof2000` `NEO-SMA` (`header @100: c1 e4` grid `37K`/`162K` `loadRoms` `0xC0000` hole audit pending, `SMA::kof99/kof2000_bank_base` `SMA load` `garou`/`mslug3` staged), plus non-MVS sets (`kof98umh` PGM, `kofnw`/`kofxi` Atomiswave) correctly rejected
+#### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES — 1994-95 WARNING hang FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:172` `tst.b $10FD82` + `13C0...60F8` → `kof95`/`samsho3`/`4`/`5` titles, `wiki:Slot_check_security`/`wiki:PROGSF1`/`wiki:NEO-SMA`); `kof98` `PROGSF1` FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:374` `decryptKof98` + `ares/ng/cartridge/board/progsf1.cpp:19` `header @100: 4e 45 4f 2d` `✓` `49016109`); **SMA grid (`kof99`/`kof2000`/`garou`/`mslug3`) FIXED 2026-08-22** — was a hardcoded 68K reset-vector override (`p[0..7]=0x10f300`) in all 6 SMA branches of `decrypt()`; only kof2000 matched, the others jumped to a wrong entry → BIOS slot-grid. Removed override (kept `NEO-GEO` header patch); P-ROM decrypt verified bit-identical to MAME `prot_sma.cpp`. The `loadRoms 0xC0000 hole` hypothesis was WRONG. + SELECT-coin and switch-game SIGSEGV FIXED 2026-08-22 (see detailed note below)., plus non-MVS sets (`kof98umh` PGM, `kofnw`/`kofxi` Atomiswave) correctly rejected
 
 **✅ PCE / PC Engine CD / SuperGrafx — FIXED & VERIFIED 2026-08-18 (commit `2795e5813`):**
 
@@ -1478,3 +1478,24 @@ RDP) is the dominant difference.
 - **Verification:** Captured screenshot on Retroid Pocket 6 via `adb screencap`. Pillow analysis showed 0 black rows across the center screen (was previously black void), full background scenery rendered cleanly.
 
 **Status:** Driver downloader built + installed + user-verified (download/install/delete/selector). Neo Geo BIOS dialog built + installed. Neo Geo D-pad hat fix built + installed. Neo Geo background graphics fix built + installed + verified on-device. **All UNCOMMITTED — commit before starting Task #49.**
+
+---
+
+#### 2026-08-22 → 2026-08-23 — Neo Geo: SMA decrypt endianness + BML word_swap FIXED & VERIFIED ON-DEVICE
+
+Built `./gradlew assembleModernDebug`, deployed to Retroid Pocket 6 (`49016109`). All device Neo Geo games (including SMA titles `kof99`, `kof2000`, `garou`, `mslug3`, non-SMA `kof98`, `kof94`, `kof2001`, `samsho`) verified to boot into attract/title mode @ 59.2 FPS.
+
+**Fix 1 — SMA diagnostic-grid (kof99 / kof2000 / garou / mslug3):**
+- **Symptom:** These titles booted to a BIOS slot-select / diagnostic cross-hatch grid instead of the title.
+- **Root cause (two-fold):**
+  1. `mia/medium/neo-geo.cpp` `decrypt()` hardcoded the 68K reset vector in all 6 SMA branches: `p[0..7] = {0x00,0x10,0xf3,0x00,0x00,0x0c,0x48,0x00}`. Removed and replaced with a guarded `forceHeader()` that only fills `"NEO-GEO"` if the decrypt omitted it.
+  2. **Endianness mismatch in SMA decryption:** `decryptKof99Sma`/`decryptGarouSma`/`decryptMslug3Sma`/`decryptKof2000Sma` cast `p.data()` to `u16*` (little-endian on ARM64/x86), but `prom` is big-endian (`readm(2L)`). Because BML used `load16_word_swap`, the little-endian cast double-swapped bytes, generating garbage 68K code.
+- **Fix:** Switched SMA decrypt functions to use `readBE`/`writeBE` (`p[off]<<8 | p[off+1]`) to operate on big-endian words matching `prom`. Kept `load16_word_swap` in `mia/Database/Neo Geo.bml` (and android assets copy) and corrected `ka.neo-sma` size to 262144.
+
+**Fix 2 — SELECT-as-coin & Coin reliability:**
+- Polled in `readButtons`/`readControls` and now also on `REG_STATUS_A` reads in `ares/ng/cpu/memory.cpp`.
+
+**Fix 3 — Switch-game SIGSEGV:**
+- Removed unguarded `c[0..15]` debug reads in `decrypt()`/`decryptCmc42()`/`decryptCmcGraphics()`.
+
+**Status:** SMA boot fix VERIFIED ON-DEVICE. In progress: investigate audio silence, coin input edge cases, ssideki4 gameplay graphics.

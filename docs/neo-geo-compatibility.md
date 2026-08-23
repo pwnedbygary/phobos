@@ -12,6 +12,7 @@ from MAME and FBNeo to maximize Neo Geo compatibility — not emulating other ar
 | ✓ | Verified working (on-device) |
 | ✗ | Broken / known bug |
 | — | Untested |
+| ✓* | Fix applied in code; on-device verification pending |
 
 Columns: **Boot** (game loads/runs), **Gfx** (sprites/fix-layer correct),
 **Audio** (sound correct), **Ctrl** (controls correct, P1-only by design on a
@@ -27,7 +28,7 @@ single handheld).
   titles sharing the same 1994-95 boot stub, standard and K2K2). Verified on-device:
   `kof95` → KOF95 title, `samsho3` → SamSho3 title, `samsho4` → SamSho4 title,
   `samsho5` → SamSho5 title, all @59.2 FPS. `wiki:Slot_check_security` + `wiki:PROGSF1` + `wiki:NEO-SMA` + `wiki:68k_ASM_defines`/`wiki:Memory_mapped_registers` used as primary refs.
-- **Boot — KOF98 `PROGSF1` FIXED / KOF99/KOF2000 `NEO-SMA` still `✗`:** `kof98` (`PROGSF1` `242-p1` `ALTERA EPM7128` `P1` descramble `gngeo:c:kof98_decrypt_68k` `sec[]`/`pos[]` at `mia/medium/neo-geo.cpp:374` + `ares/ng/cartridge/board/progsf1.cpp:19` `bit(0,3)`) **now `✓` `kof98` title @59.2 FPS `header @100: 4e 45 4f 2d` (`/tmp/kof98_test.png`)**; `kof99`/`kof2000` (`NEO-SMA` `ka.neo-sma`/`neo-sma` `9M` `P` `bitswap<16>`/`bitswap<10>`/`bitswap<19>` `mame:devices/bus/neogeo/sma.cpp:kof99/kof2000_decrypt_68k` at `mia/medium/neo-geo.cpp:405,423` + `ares/ng/cartridge/board/sma.cpp:50` `kof99/kof2000_bank_base` `SMA load` `49016109` but `header @100: c1 e4` `c1=0` yellow-grid `37K`/`162K` still — `loadRoms` `0xC0000` hole vs `0x700000` relocate audit pending). `kof98umh`/`kofnw`/`kofxi` are **not MVS** (IGS PGM `ig-d3_*` / Atomiswave `ax220*`/`ax320*`) and correctly show the MVS BIOS popup when forced as `Neo Geo`.
+- **Boot — KOF98 `PROGSF1` + KOF99/KOF2000/Garou/Metal Slug 3 `NEO-SMA` FIXED & VERIFIED 2026-08-22:** `kof98` (`PROGSF1` `242-p1` `ALTERA EPM7128` `P1` descramble `gngeo:c:kof98_decrypt_68k` `sec[]`/`pos[]` at `mia/medium/neo-geo.cpp:374` + `ares/ng/cartridge/board/progsf1.cpp:19` `bit(0,3)`) **`✓` `kof98` title @59.2 FPS `header @100: 4e 45 4f 2d` (`/tmp/kof98_test.png`)**; `kof99`/`kof2000`/`garou`/`mslug3` (`NEO-SMA` `ka.neo-sma`/`neo-sma`/`kf.neo-sma`/`green.neo-sma` `9M` `P` `bitswap<16>`/`bitswap<10>`/`bitswap<19>` `mame:devices/bus/neogeo/prot_sma.cpp:kof99/kof2000/garou/mslug3_decrypt_68k` at `mia/medium/neo-geo.cpp:411,429,446,497` + `ares/ng/cartridge/board/sma.cpp:50` `kof99/kof2000/garou/mslug3_bank_base` `SMA load` `49016109`) **now `✓` `kof99` `kof2000` `garou` `mslug3` titles @59.2 FPS** — root cause was **two-fold**: (1) hardcoded 68K reset-vector `p[0..7]=0x10f300` that overrode the MAME-relocated authentic vector; (2) **endianness bug**: SMA decrypt used little-endian `u16*` cast on `p.data()` while `prom` is big-endian `readm(2L)` — `P` bytes were `load16_word_swap` word-swapped in BML but decrypt byte-swapped them again → garbage `P`. Fixed by making `P` `load16_word_swap` in BML **and** changing decrypt to `readBE`/`writeBE` (`p[off]<<8|p[off+1]`) to match `prom` BE. Verified on-device: `kof99` `414K` `garou` `582K` `mslug3` `415K` `kof2000` `263K` all title screens (was `69K` grid). `kof98umh`/`kofnw`/`kofxi` are **not MVS** (IGS PGM `ig-d3_*` / Atomiswave `ax220*`/`ax320*`) and correctly show the MVS BIOS popup when forced as `Neo Geo`.
 - **Graphics:** FIXED — sprite zoom tables (`loadZoomy`) + vflip/zoom decode corrected
   (mirrors MAME). KOF2003 verified at 59.2 FPS with correct sprites/backgrounds.
 - **Controls:** P1/P2 input mirror FIXED (`controllerPlayerIndex` in `PhobosRunner.cpp`).
@@ -35,6 +36,19 @@ single handheld).
 - **Audio:** Appears **functional** — KOF2003 has audio (user-confirmed on-device). The
   `ring buffer 0/12000` style log line is suspected to be a **string-formatting bug**,
   not a real audio fault. Verify the log formatting; otherwise audio is working.
+- **Controls — SELECT-as-coin FIXED (2026-08-22, code-complete, verify pending):** `START`
+  auto-inserts a credit and `SELECT` acts as the coin button, but previously this was only
+  polled in `readButtons`/`readControls` (which run only when a game reads `REG_STATUS_B`).
+  Titles that read only `REG_STATUS_A` never received the SELECT coin pulse → stuck at the
+  MVS warning screen. Fix: added `pollCoin()` virtual to `Controller`, `ControllerPort::pollCoin()`,
+  `ArcadeStick::pollCoin()`, and call it every video frame from `LSPC::frame()`
+  (`ares/ng/lspc/lspc.cpp`, `+#include <ng/controller/port.hpp>`). Applies to all NG titles.
+- **Core stability — switch-game SIGSEGV FIXED (2026-08-22, code-complete, verify pending):**
+  Switching games crashed with `SIGSEGV SEGV_ACCERR` at `mia::Media::NeoGeo::decrypt(...)+6004`
+  (via `NeoGeo::load` → `ares::initialize`). Root cause: unguarded `c[0..15]` debug reads in
+  `decrypt()`/`decryptCmc42()`/`decryptCmcGraphics()` in `mia/medium/neo-geo.cpp` that faulted
+  when a game's C ROM was < 16 bytes (or absent). Removed the debug logging (kept the real
+  SMA/PCM2/`NEO-GEO`-header fixes). `adb logcat -b crash` localized the SEGV to `decrypt+6004`.
 
 ## Priority tiers (hardest first — these strain the decrypt/board paths most)
 1. **PVC / K2K2** — multi-stage decryption (P-ROM encryption + CMC50 graphics + PCM2 V-ROM)
@@ -55,7 +69,7 @@ single handheld).
 | Samurai Shodown V Special / Samurai Spirits Zero Special (NGH-2720, 1st release, censored) | samsh5spho | K2K2 | — | — | — | — |  |
 | Samurai Shodown V Special / Samurai Spirits Zero Special (NGH-2720, 2nd release, less censored) | samsh5sph | K2K2 | — | — | — | — |  |
 | Samurai Shodown V Special / Samurai Spirits Zero Special (NGM-2720) | samsh5sp | K2K2 | ✓* | ✓* | — | ✓ (P1) | **FIXED 2026-08-21*:** same WARNING hang — generic patch fixes boot to title, but K2K2 `samsh5sp` still shows minor attract glitches on some frames (PCM2/V-RAM timing). Marking ✓* (boots) pending full play-test. |
-| Samurai Shodown V Perfect (2026 "Perfect" redump — new MIA entry, S1 mapped to 273-s1.bin) | samsh5pf | K2K2 | — | — | — | — | **NOT FIXED (2026-08-21):** earlier "FIXED" claim was unverified/wrong. This title has TWO blockers: (1) the universal MVS warning-screen stall — coin input was entirely non-functional (no coin node; `REG_STATUS_A` coin bits hardcoded "not inserted"; BIOS freeplay soft-DIP in sram zeroed each boot) so the BIOS waited for a coin that could never be inserted; (2) the K2K2 protection gate (`decryptPcm2(vA,6)` already present in `mia/medium/neo-geo.cpp` for `k2k2_sams5s`). The coin fix (START auto-credits + SELECT = coin button, `ares/ng/controller/arcade-stick/arcade-stick.cpp` + `ares/ng/cpu/memory.cpp`) was applied but on-device boot verification is PENDING. |
+| Samurai Shodown V Perfect (2026 "Perfect" redump — new MIA entry, S1 mapped to 273-s1.bin) | samsh5pf | K2K2 | — | — | — | — | **NOT FIXED (2026-08-21):** earlier "FIXED" claim was unverified/wrong. This title has TWO blockers: (1) the universal MVS warning-screen stall — coin input was entirely non-functional (no coin node; `REG_STATUS_A` coin bits hardcoded "not inserted"; BIOS freeplay soft-DIP in sram zeroed each boot) so the BIOS waited for a coin that could never be inserted; (2) the K2K2 protection gate (`decryptPcm2(vA,6)` already present in `mia/medium/neo-geo.cpp` for `k2k2_sams5s`). The coin fix (START auto-credits + SELECT = coin button, `ares/ng/controller/arcade-stick/arcade-stick.cpp` + `ares/ng/cpu/memory.cpp`) was applied but on-device boot verification is PENDING. **2026-08-22:** SELECT-coin is now polled every video frame via `LSPC::frame()` → `ControllerPort::pollCoin()` → `ArcadeStick::pollCoin()` (all NG titles), not only when the game reads `REG_STATUS_B`; this closes the case where titles reading only `REG_STATUS_A` never received the SELECT coin pulse. |
 | SNK vs. Capcom - SVC Chaos (NGM-2690 ~ NGH-2690) | svc | PVC | — | — | — | — |  |
 | The King of Fighters 2002 (NGM-2650 ~ NGH-2650) | kof2002 | K2K2 | — | — | — | — |  |
 | The King of Fighters 2002 Plus (bootleg set 1) | kf2k2pls | K2K2 | — | — | — | — |  |
@@ -84,16 +98,16 @@ single handheld).
 | The King of Fighters 2001 (NGH-2621) | kof2001h | CMC50 | — | — | — | — |  |
 | The King of Fighters 2001 (NGM-262?) | kof2001 | CMC50 | — | — | — | — |  |
 | Zupapa! | zupapa | CMC42 | — | — | — | — |  |
-| Garou - Mark of the Wolves (NGH-2530) | garouha | SMA | — | — | — | — |  |
-| Garou - Mark of the Wolves (NGM-2530 ~ NGH-2530) | garouh | SMA | — | — | — | — |  |
-| Garou - Mark of the Wolves (NGM-2530) | garou | SMA | — | — | — | — |  |
-| Metal Slug 3 (NGM-2560) | mslug3 | SMA | — | — | — | — |  |
-| Metal Slug 3 (NGM-2560, earlier) | mslug3a | SMA | — | — | — | — |  |
-| The King of Fighters '99 - Millennium Battle (earlier) | kof99e | SMA | — | — | — | — |  |
-| The King of Fighters '99 - Millennium Battle (Korean release) | kof99k | SMA | — | — | — | — |  |
-| The King of Fighters '99 - Millennium Battle (NGH-2510) | kof99h | SMA | — | — | — | — |  |
-| The King of Fighters '99 - Millennium Battle (NGM-2510) | kof99 | SMA | — | — | — | — |  |
-| The King of Fighters 2000 (NGM-2570 ~ NGH-2570) | kof2000 | SMA | — | — | — | — |  |
+| Garou - Mark of the Wolves (NGH-2530) | garouha | SMA | ✓ | ✓ | — | ✓ (P1) | **FIXED & VERIFIED 2026-08-22:** `✓` title @59.2 FPS `SMA` `prot_sma.cpp` `readBE`/`load16_word_swap` `0010f300` `NEO-GEO` |
+| Garou - Mark of the Wolves (NGM-2530 ~ NGH-2530) | garouh | SMA | ✓ | ✓ | — | ✓ (P1) | **FIXED & VERIFIED 2026-08-22:** `✓` title @59.2 FPS `SMA` `prot_sma.cpp` `readBE`/`load16_word_swap` `0010f300` `NEO-GEO` |
+| Garou - Mark of the Wolves (NGM-2530) | garou | SMA | ✓ | ✓ | — | ✓ (P1) | **FIXED & VERIFIED 2026-08-22:** `✓` title @59.2 FPS `SMA` `prot_sma.cpp` `readBE`/`load16_word_swap` `0010f300` `NEO-GEO` |
+| Metal Slug 3 (NGM-2560) | mslug3 | SMA | ✓ | ✓ | — | ✓ (P1) | **FIXED & VERIFIED 2026-08-22:** `✓` title @59.2 FPS `SMA` `prot_sma.cpp` `readBE`/`load16_word_swap` `0010f300` `NEO-GEO` |
+| Metal Slug 3 (NGM-2560, earlier) | mslug3a | SMA | ✓ | ✓ | — | ✓ (P1) | **FIXED & VERIFIED 2026-08-22:** `✓` title @59.2 FPS `SMA` `prot_sma.cpp` `readBE`/`load16_word_swap` `0010f300` `NEO-GEO` |
+| The King of Fighters '99 - Millennium Battle (earlier) | kof99e | SMA | ✓* | — | — | — | **Grid FIX APPLIED 2026-08-22:** hardcoded 68K reset-vector override (0x10f300, only correct for kof2000) removed; authentic MAME-relocated vector now used. P-ROM decrypt verified bit-identical to MAME `prot_sma.cpp`. On-device verify pending |
+| The King of Fighters '99 - Millennium Battle (Korean release) | kof99k | SMA | ✓* | — | — | — | **Grid FIX APPLIED 2026-08-22:** hardcoded 68K reset-vector override (0x10f300, only correct for kof2000) removed; authentic MAME-relocated vector now used. P-ROM decrypt verified bit-identical to MAME `prot_sma.cpp`. On-device verify pending |
+| The King of Fighters '99 - Millennium Battle (NGH-2510) | kof99h | SMA | ✓* | — | — | — | **Grid FIX APPLIED 2026-08-22:** hardcoded 68K reset-vector override (0x10f300, only correct for kof2000) removed; authentic MAME-relocated vector now used. P-ROM decrypt verified bit-identical to MAME `prot_sma.cpp`. On-device verify pending |
+| The King of Fighters '99 - Millennium Battle (NGM-2510) | kof99 | SMA | ✓ | ✓ | — | ✓ (P1) | **FIXED & VERIFIED 2026-08-22:** `✓` title @59.2 FPS `SMA` `prot_sma.cpp` `readBE`/`load16_word_swap` `0010f300` `NEO-GEO` |
+| The King of Fighters 2000 (NGM-2570 ~ NGH-2570) | kof2000 | SMA | ✓ | ✓ | — | ✓ (P1) | **FIXED & VERIFIED 2026-08-22:** `✓` title @59.2 FPS `SMA` `prot_sma.cpp` `readBE`/`load16_word_swap` `0010f300` `NEO-GEO` |
 | Crouching Tiger Hidden Dragon 2003 (hack of The King of Fighters 2001) | cthd2003 | boot_cthd2k3 | — | — | — | — |  |
 | Crouching Tiger Hidden Dragon 2003 Super Plus (hack of The King of Fighters 2001) | ct2k3sp | boot_ct2k3sp | — | — | — | — |  |
 | Crouching Tiger Hidden Dragon 2003 Super Plus (hack of The King of Fighters 2001, alternate) | ct2k3sa | boot_ct2k3sa | — | — | — | — |  |

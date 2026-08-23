@@ -47,6 +47,7 @@ struct ProgSF1 : Interface {
   }
 
   auto readM(n32 address) -> n8 override { return mrom[address]; }
+  auto mromSize() -> u32 override { return mrom.size(); }
   auto readC(n32 address) -> n8 override { return crom[address]; }
   auto cromMask() -> u32 override { return crom.mask(); }
   auto readS(n32 address) -> n8 override { return srom[address]; }

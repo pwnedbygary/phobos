@@ -1503,6 +1503,21 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         }
                     }
                 }
+                if (!copied) {
+                    try {
+                        val romFile = if (rom.uri.scheme == "file") java.io.File(rom.uri.path ?: "") else null
+                        val parent = romFile?.parentFile
+                        val biosFile = parent?.let { java.io.File(it, "neogeo.zip") }?.takeIf { it.exists() }
+                            ?: parent?.parentFile?.let { java.io.File(it, "neogeo.zip") }?.takeIf { it.exists() }
+                        if (biosFile != null && biosFile.exists()) {
+                            biosFile.inputStream().use { input ->
+                                destFile.outputStream().use { output -> input.copyTo(output) }
+                            }
+                            copied = destFile.exists()
+                            if (copied) Log.i("Phobos", "Copied neogeo.zip from file path ${biosFile.path}")
+                        }
+                    } catch (_: Exception) {}
+                }
                 if (copied) Log.i("Phobos", "neogeo.zip ready in mia_temp")
                 ngBiosPresent = copied
             }

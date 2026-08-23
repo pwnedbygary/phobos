@@ -19,6 +19,7 @@ struct Cartridge {
   auto writeP(n1 upper, n1 lower, n24 address, n16 data) -> void;
 
   auto readM(n32 address) -> n8;
+  auto mromSize() const -> u32;
   auto readC(n32 address) -> n8;
   auto readS(n32 address) -> n8;
   auto readVA(n32 address) -> n8;

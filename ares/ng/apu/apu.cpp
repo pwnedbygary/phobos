@@ -45,7 +45,10 @@ auto APU::power(bool reset) -> void {
   communication = {};
   nmi = {};
   irq = {};
-  rom = {};
+  rom.bankA = 0x02;
+  rom.bankB = 0x06;
+  rom.bankC = 0x0e;
+  rom.bankD = 0x1e;
 }
 
 }

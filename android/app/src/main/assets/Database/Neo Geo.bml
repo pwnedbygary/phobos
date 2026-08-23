@@ -18391,21 +18391,18 @@ game
     size: 9437184
     rom
       name:   ke.neo-sma
-      type:   load16_word_swap
       offset: 786432
       size:   262144
       crc:    96c72233
       sha1:   29e19effd40fdf7e5144332396857f4ad0eff13e
     rom
       name:   253-p1.p1
-      type:   load16_word_swap
       offset: 1048576
       size:   4194304
       crc:    18ae5d7e
       sha1:   bdb58ec9137d8653979b47132f2d10e1cc6aaa24
     rom
       name:   253-p2.p2
-      type:   load16_word_swap
       offset: 5242880
       size:   4194304
       crc:    afffa779
@@ -19146,7 +19143,6 @@ game
     size: 9437184
     rom
       name:   white.neo-sma
-      type:   load16_word_swap
       offset: 786432
       size:   262144
       crc:    c60d29b2

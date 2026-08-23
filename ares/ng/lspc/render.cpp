@@ -40,12 +40,14 @@ auto LSPC::render(n9 y) -> void {
     n4  row   = entry & 0xf;
     if(invert) { tile ^= 0x1f; row ^= 0xf; }
 
-    n20 tileNumber = vram[sprite << 6 | tile << 1 | 0];
-    n16 attributes = vram[sprite << 6 | tile << 1 | 1];
-    n4  hflip      = attributes.bit(0) ? 15 : 0;
-    n1  vflip      = attributes.bit(1);
-    n2  animate    = attributes.bit(2,3);
-    n8  palette    = attributes.bit(8,15);
+    n16 attributes0 = vram[sprite << 6 | 0 << 1 | 1];
+    n1  vflip       = attributes0.bit(1);
+    n5  fetchTile   = (vflip && tile < sh) ? (n5)((sh - 1) - tile) : tile;
+    n20 tileNumber  = vram[sprite << 6 | fetchTile << 1 | 0];
+    n16 attributes  = vram[sprite << 6 | fetchTile << 1 | 1];
+    n4  hflip       = attributes.bit(0) ? 15 : 0;
+    n2  animate     = attributes.bit(2,3);
+    n8  palette     = attributes.bit(8,15);
 
     tileNumber.bit(16,19) = attributes.bit(4,7);
     if(auto mask = cartridge.cromMask()) tileNumber &= mask >> 7;  //wrap tile numbers like hardware (MAME masks the 26-bit gfx address)

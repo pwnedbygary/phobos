@@ -47,6 +47,10 @@ struct Rom : Interface {
     return mrom[address];
   }
 
+  auto mromSize() -> u32 override {
+    return mrom.size();
+  }
+
   auto readC(n32 address) -> n8 override {
     return crom[address];
   }

@@ -173,6 +173,11 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
 
   //REG_STATUS_A
   if((address & 0xfe0000) == 0x320000 && lower) {
+    //Ensure coin line is up-to-date even for titles that never read REG_STATUS_B / REG_P1CNT.
+    //Poll START/SELECT here (lightweight) so SELECT-as-coin works without a per-frame LSPC hook
+    //that would run on the video thread and contend with audio.
+    controllerPort1.pollCoin();
+    controllerPort2.pollCoin();
     //coin bits are active-low: 0 = inserted. system.io.coin asserts them when
     //the player holds START (auto-credit) or SELECT (coin button).
     bool coin = Model::NeoGeoMVS() && !system.io.coin;

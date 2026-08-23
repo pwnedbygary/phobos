@@ -33,6 +33,9 @@ struct SMA : Interface {
     else if(board == "sma_mslug3a") type = Type::MSLUG3A;
     else type = Type::UNKNOWN;
     __android_log_print(ANDROID_LOG_DEBUG, "PhobosSMA", "SMA load board=%s type=%d prom=%zu", (const char*)board, (int)type, prom.size());
+    if(prom.size() >= 4) {
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosSMA", "SMA prom vectors %04x %04x %04x %04x header %02x%02x%02x%02x%02x%02x%02x%02x", prom[0], prom[1], prom[2], prom[3], prom[0x80]>>8 &0xff, prom[0x80]&0xff, prom[0x81]>>8 &0xff, prom[0x81]&0xff, prom[0x82]>>8 &0xff, prom[0x82]&0xff, prom[0x83]>>8 &0xff, prom[0x83]&0xff);
+    }
   }
 
   auto unload() -> void override {
@@ -315,6 +318,7 @@ struct SMA : Interface {
   }
 
   auto readM(n32 address) -> n8 override { return mrom[address]; }
+  auto mromSize() -> u32 override { return mrom.size(); }
   auto readC(n32 address) -> n8 override { return crom[address]; }
   auto cromMask() -> u32 override { return crom.mask(); }
   auto readS(n32 address) -> n8 override { return srom[address]; }

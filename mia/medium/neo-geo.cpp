@@ -171,49 +171,58 @@ auto NeoGeo::analyze(std::vector<u8>& p, std::vector<u8>& m, std::vector<u8>& c,
 }
 
 auto NeoGeo::decrypt(std::vector<u8>& p, std::vector<u8>& m, std::vector<u8>& c, std::vector<u8>& s, std::vector<u8>& vA, std::vector<u8>& vB) -> void {
-  auto b = board();
-  __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decrypt board=%s name=%s p=%zu c=%zu s=%zu", (const char*)b, (const char*)Medium::name(location), p.size(), c.size(), s.size());
   // kof98 PROGSF1 P1 descramble (242-p1 2M scrambled → descrambled)
   // kof98h (PROGBK1) is already descrambled and will not match this size/name
   if(p.size()>=0x600000) {
     auto n=Medium::name(location);
     auto sl=board();
     if(n.beginsWith("kof98") || sl=="rom_kof98") {
-      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptKof98 p=%zu", p.size());
       decryptKof98(p);
-      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptKof98 done p[0]=%02x %02x %02x %02x", p[0], p[1], p[2], p[3]);
     }
   }
   // kof99/kof2000/garou/mslug3 NEO-SMA P ROM descramble (9M, MAME sma.cpp)
+  // Guarded NEO-GEO header patch. The SMA P ROM decrypts below are byte-for-byte
+  // identical to MAME (*_decrypt_68k, prot_sma.cpp): they relocate the true 68K
+  // reset vector (p[0..3]), stack pointer (p[4..7]) and the "NEO-GEO" magic
+  // (p[0x100..]) into 0x000000-0x0FFFFF. So do NOT clobber those with hardcoded
+  // guesses (that left kof99/kof2000 stuck on the diagnostic grid). Only fill the
+  // 8-byte magic when the decrypt omitted it.
+  auto forceHeader = [&p](u8 lastByte) {
+    if(p.size() < 0x108) return;
+    __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG sma vectors %02x%02x%02x%02x %02x%02x%02x%02x header %02x%02x%02x%02x%02x%02x%02x%02x", p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7], p[0x100],p[0x101],p[0x102],p[0x103],p[0x104],p[0x105],p[0x106],p[0x107]);
+    if(p[0x100]=='N' && p[0x101]=='E' && p[0x102]=='O' && p[0x103]=='-' && p[0x104]=='G' && p[0x105]=='E' && p[0x106]=='O') {
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG sma header already present, keep MAME-decrypted header (last=%02x)", (int)p[0x107]);
+      return;
+    }
+    p[0x100]='N'; p[0x101]='E'; p[0x102]='O'; p[0x103]='-'; p[0x104]='G'; p[0x105]='E'; p[0x106]='O'; p[0x107]=lastByte;
+    __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG sma header missing, forced NEO-GEO (last=%02x)", (int)lastByte);
+  };
   if(p.size()>=0x900000) {
     auto nM=Medium::name(location); auto sl=board();
     if(nM.beginsWith("kof99") || sl=="sma_kof99") {
-      __android_log_print(ANDROID_LOG_DEBUG, "NG decryptKof99Sma board=%s", (const char*)sl);
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptKof99Sma board=%s", (const char*)sl);
       decryptKof99Sma(p);
-      p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; p[0x107]=0x4b;
-      p[0]=0x00; p[1]=0x10; p[2]=0xf3; p[3]=0x00; p[4]=0x00; p[5]=0x0c; p[6]=0x48; p[7]=0x00;
+      forceHeader(0x4b);
     } else if(nM.beginsWith("kof2000") || sl=="sma_kof2k") {
-      __android_log_print(ANDROID_LOG_DEBUG, "NG decryptKof2000Sma board=%s", (const char*)sl);
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptKof2000Sma board=%s", (const char*)sl);
       decryptKof2000Sma(p);
-      p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; p[0x107]=0x4b;
-      p[0]=0x00; p[1]=0x10; p[2]=0xf3; p[3]=0x00; p[4]=0x00; p[5]=0x0c; p[6]=0x48; p[7]=0x00;
+      forceHeader(0x4b);
     } else if(sl=="sma_garou") {
-      __android_log_print(ANDROID_LOG_DEBUG, "NG decryptGarouSma board=%s", (const char*)sl);
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptGarouSma board=%s", (const char*)sl);
       decryptGarouSma(p);
-      p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; p[0x107]=0x50;
-      p[0]=0x00; p[1]=0x10; p[2]=0xf3; p[3]=0x00;
+      forceHeader(0x50);
     } else if(sl=="sma_garouh") {
-      __android_log_print(ANDROID_LOG_DEBUG, "NG decryptGarouhSma board=%s", (const char*)sl);
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptGarouhSma board=%s", (const char*)sl);
       decryptGarouhSma(p);
-      p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; p[0x107]=0x50;
+      forceHeader(0x50);
     } else if(sl=="sma_mslug3") {
-      __android_log_print(ANDROID_LOG_DEBUG, "NG decryptMslug3Sma board=%s", (const char*)sl);
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptMslug3Sma board=%s", (const char*)sl);
       decryptMslug3Sma(p);
-      p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; p[0x107]=0x11;
+      forceHeader(0x11);
     } else if(sl=="sma_mslug3a") {
-      __android_log_print(ANDROID_LOG_DEBUG, "NG decryptMslug3aSma board=%s", (const char*)sl);
+      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG decryptMslug3aSma board=%s", (const char*)sl);
       decryptMslug3aSma(p);
-      p[0x100]=0x4e; p[0x101]=0x45; p[0x102]=0x4f; p[0x103]=0x2d; p[0x104]=0x47; p[0x105]=0x45; p[0x106]=0x4f; p[0x107]=0x11;
+      forceHeader(0x11);
     } else if(sl.beginsWith("sma_")) {
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG sma fallback board=%s no P decrypt", (const char*)sl);
     }
@@ -222,14 +231,8 @@ auto NeoGeo::decrypt(std::vector<u8>& p, std::vector<u8>& m, std::vector<u8>& c,
   // See wiki:Slot_check_security — WRAM $10FD82 is zero after BIOS init on real MVS but
   // non-zero on a cold ares boot, so the check fell into the WARNING hang.
   {
-    int c1=0,c2=0;
-    for(size_t i=0;i+8<p.size();++i) if(p[i]==0x4A && p[i+1]==0x39 && p[i+2]==0x00 && p[i+3]==0x10 && p[i+4]==0xFD && p[i+5]==0x82 && i+7<p.size() && p[i+6]==0x67) { p[i+6]=0x60; c1++; }
-    for(size_t i=0;i+8<p.size();++i) if(p[i]==0x13 && p[i+1]==0xC0 && p[i+2]==0x00 && p[i+3]==0x30 && p[i+4]==0x00 && p[i+5]==0x01 && p[i+6]==0x60 && p[i+7]==0xF8) { p[i+6]=0x4E; p[i+7]=0x75; c2++; }
-    __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG WARNING patch board=%s c1=%d c2=%d", (const char*)b, c1, c2);
-    if(p.size() >= 0x120) {
-      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG header @100: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", p[0x100], p[0x101], p[0x102], p[0x103], p[0x104], p[0x105], p[0x106], p[0x107], p[0x108], p[0x109], p[0x10A], p[0x10B], p[0x10C], p[0x10D], p[0x10E], p[0x10F]);
-      __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG vectors 0: %02x%02x%02x%02x 4:%02x%02x%02x%02x", p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
-    }
+    for(size_t i=0;i+8<p.size();++i) if(p[i]==0x4A && p[i+1]==0x39 && p[i+2]==0x00 && p[i+3]==0x10 && p[i+4]==0xFD && p[i+5]==0x82 && i+7<p.size() && p[i+6]==0x67) { p[i+6]=0x60; }
+    for(size_t i=0;i+8<p.size();++i) if(p[i]==0x13 && p[i+1]==0xC0 && p[i+2]==0x00 && p[i+3]==0x30 && p[i+4]==0x00 && p[i+5]==0x01 && p[i+6]==0x60 && p[i+7]==0xF8) { p[i+6]=0x4E; p[i+7]=0x75; }
   }
   //cmc42
   if(board() == "cmc42_bangbead") return decryptCmc42(c, s, 0xf8);
@@ -258,8 +261,8 @@ auto NeoGeo::decrypt(std::vector<u8>& p, std::vector<u8>& m, std::vector<u8>& c,
   //kof2k2-type (KOF2002 / Matrim / SamSho5 / SamSho5SP: block-swapped P ROM + CMC50 graphics + PCM2 V ROM)
   if(board() == "k2k2_kof2k2" ) { decryptK2k2P(p, K2K2_SEC_KOF2002); decryptPcm2(vA, 0); return decryptCmc50(c, s, m, 0xec); }
   if(board() == "k2k2_matrim" ) { decryptK2k2P(p, K2K2_SEC_MATRIM ); decryptPcm2(vA, 1); return decryptCmc50(c, s, m, 0x6a); }
-  if(board() == "k2k2_samsh5" ) { decryptK2k2P(p, K2K2_SEC_SAMSHO5 ); return decryptCmc50(c, s, m, 0x0f); }
-  if(board() == "k2k2_sams5s" ) { decryptK2k2P(p, K2K2_SEC_SAMSH5SP); return decryptCmc50(c, s, m, 0x0d); }
+  if(board() == "k2k2_samsh5" ) { decryptK2k2P(p, K2K2_SEC_SAMSHO5 ); decryptPcm2(vA, 4); return decryptCmc50(c, s, m, 0x0f); }
+  if(board() == "k2k2_sams5s" ) { decryptK2k2P(p, K2K2_SEC_SAMSH5SP); decryptPcm2(vA, 6); return decryptCmc50(c, s, m, 0x0d); }
   if(board() == "k2k2_kf2k2p") { decryptK2k2P(p, K2K2_SEC_KOF2002 ); decryptPcm2(vA, 0); return decryptCmc50(c, s, m, 0xec); }
   if(board().beginsWith("k2k2_")) { decryptK2k2P(p, K2K2_SEC_KOF2002); decryptPcm2(vA, 0); return decryptCmc50(c, s, m, 0x00); }
   //pcm2-only boards (CMC50 graphics + PCM2 V ROM)
@@ -270,7 +273,7 @@ auto NeoGeo::decrypt(std::vector<u8>& p, std::vector<u8>& m, std::vector<u8>& c,
   // SMA boards (kof99, kof2000, garou, mslug3 etc.) — P ROM encrypted via SMA chip
   // P decrypt for kof99/kof2000 handled above; now handle CMC graphics for SMA
   // Keys from MAME prot_cmc.h: KOF99 0x00 (CMC42), GAROU 0x06, MSLUG3 0xad, KOF2000 0x00 (CMC50)
-  if(board() == "sma_kof99") { __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG sma_kof99 CMC42 0x00 c=%zu", c.size()); return decryptCmc42(c, s, 0x00); }
+  if(board() == "sma_kof99") { return decryptCmc42(c, s, 0x00); }
   if(board() == "sma_garou" || board() == "sma_garouh") { __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG sma_garou CMC42 0x06"); return decryptCmc42(c, s, 0x06); }
   if(board() == "sma_mslug3" || board() == "sma_mslug3a") { __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG sma_mslug3 CMC42 0xad"); return decryptCmc42(c, s, 0xad); }
   if(board() == "sma_kof2k") { __android_log_print(ANDROID_LOG_DEBUG, "PhobosMIA", "NG sma_kof2k CMC50 0x00 c=%zu m=%zu", c.size(), m.size()); return decryptCmc50(c, s, m, 0x00); }
@@ -417,11 +420,11 @@ auto NeoGeo::decryptKof99Sma(std::vector<u8>& p) -> void {
   auto bitswap19 = [](int v,int b18,int b17,int b16,int b15,int b14,int b13,int b12,int b11,int b10,int b9,int b8,int b7,int b6,int b5,int b4,int b3,int b2,int b1,int b0)->int {
     return ((v>>b18&1)<<18)|((v>>b17&1)<<17)|((v>>b16&1)<<16)|((v>>b15&1)<<15)|((v>>b14&1)<<14)|((v>>b13&1)<<13)|((v>>b12&1)<<12)|((v>>b11&1)<<11)|((v>>b10&1)<<10)|((v>>b9&1)<<9)|((v>>b8&1)<<8)|((v>>b7&1)<<7)|((v>>b6&1)<<6)|((v>>b5&1)<<5)|((v>>b4&1)<<4)|((v>>b3&1)<<3)|((v>>b2&1)<<2)|((v>>b1&1)<<1)|((v>>b0&1)<<0);
   };
-  u16* rom = (u16*)(p.data() + 0x100000);
-  for(int i=0;i<0x800000/2;i++) rom[i]=bitswap16(rom[i],13,7,3,0,9,4,5,6,1,12,8,14,10,11,2,15);
-  for(int i=0;i<0x600000/2;i+=0x800/2){ u16 buf[0x800/2]; memcpy(buf,&rom[i],0x800); for(int j=0;j<0x800/2;j++) rom[i+j]=buf[bitswap10(j,6,2,4,9,8,3,1,7,0,5)]; }
-  rom=(u16*)p.data();
-  for(int i=0;i<0x0c0000/2;i++) rom[i]=((u16*)p.data())[0x700000/2 + bitswap19(i,18,11,6,14,17,16,5,8,10,12,0,4,3,2,7,9,15,13,1)];
+  auto readBE = [&](int off)->u16 { return (u16)(p[off]<<8 | p[off+1]); };
+  auto writeBE = [&](int off, u16 v){ p[off]=v>>8; p[off+1]=v&0xff; };
+  for(int i=0;i<0x800000;i+=2){ int off=0x100000+i; u16 v=readBE(off); writeBE(off, bitswap16(v,13,7,3,0,9,4,5,6,1,12,8,14,10,11,2,15)); }
+  for(int i=0;i<0x600000;i+=0x800){ u16 buf[0x400]; for(int j=0;j<0x400;j++) buf[j]=readBE(0x100000+i+j*2); for(int j=0;j<0x400;j++) writeBE(0x100000+i+j*2, buf[bitswap10(j,6,2,4,9,8,3,1,7,0,5)]); }
+  for(int i=0;i<0x0c0000;i+=2){ int src = 0x700000 + bitswap19(i>>1,18,11,6,14,17,16,5,8,10,12,0,4,3,2,7,9,15,13,1)*2; u16 v=readBE(src); writeBE(i, v); }
 }
 auto NeoGeo::decryptKof2000Sma(std::vector<u8>& p) -> void {
   if(p.size() < 0x900000) return;
@@ -434,11 +437,11 @@ auto NeoGeo::decryptKof2000Sma(std::vector<u8>& p) -> void {
   auto bitswap19 = [](int v,int b18,int b17,int b16,int b15,int b14,int b13,int b12,int b11,int b10,int b9,int b8,int b7,int b6,int b5,int b4,int b3,int b2,int b1,int b0)->int {
     return ((v>>b18&1)<<18)|((v>>b17&1)<<17)|((v>>b16&1)<<16)|((v>>b15&1)<<15)|((v>>b14&1)<<14)|((v>>b13&1)<<13)|((v>>b12&1)<<12)|((v>>b11&1)<<11)|((v>>b10&1)<<10)|((v>>b9&1)<<9)|((v>>b8&1)<<8)|((v>>b7&1)<<7)|((v>>b6&1)<<6)|((v>>b5&1)<<5)|((v>>b4&1)<<4)|((v>>b3&1)<<3)|((v>>b2&1)<<2)|((v>>b1&1)<<1)|((v>>b0&1)<<0);
   };
-  u16* rom=(u16*)(p.data()+0x100000);
-  for(int i=0;i<0x800000/2;i++) rom[i]=bitswap16(rom[i],12,8,11,3,15,14,7,0,10,13,6,5,9,2,1,4);
-  for(int i=0;i<0x63a000/2;i+=0x800/2){ u16 buf[0x800/2]; memcpy(buf,&rom[i],0x800); for(int j=0;j<0x800/2;j++) rom[i+j]=buf[bitswap10(j,4,1,3,8,6,2,7,0,9,5)]; }
-  rom=(u16*)p.data();
-  for(int i=0;i<0x0c0000/2;i++) rom[i]=((u16*)p.data())[0x73a000/2 + bitswap19(i,18,8,4,15,13,3,14,16,2,6,17,7,12,10,0,5,11,1,9)];
+  auto readBE = [&](int off)->u16 { return (u16)(p[off]<<8 | p[off+1]); };
+  auto writeBE = [&](int off, u16 v){ p[off]=v>>8; p[off+1]=v&0xff; };
+  for(int i=0;i<0x800000;i+=2){ int off=0x100000+i; u16 v=readBE(off); writeBE(off, bitswap16(v,12,8,11,3,15,14,7,0,10,13,6,5,9,2,1,4)); }
+  for(int i=0;i<0x63a000;i+=0x800){ u16 buf[0x400]; for(int j=0;j<0x400;j++) buf[j]=readBE(0x100000+i+j*2); for(int j=0;j<0x400;j++) writeBE(0x100000+i+j*2, buf[bitswap10(j,4,1,3,8,6,2,7,0,9,5)]); }
+  for(int i=0;i<0x0c0000;i+=2){ int src = 0x73a000 + bitswap19(i>>1,18,8,4,15,13,3,14,16,2,6,17,7,12,10,0,5,11,1,9)*2; u16 v=readBE(src); writeBE(i, v); }
 }
 auto NeoGeo::decryptGarouSma(std::vector<u8>& p) -> void {
   if(p.size() < 0x900000) return;
@@ -451,12 +454,11 @@ auto NeoGeo::decryptGarouSma(std::vector<u8>& p) -> void {
   auto bitswap19 = [](int v,int b18,int b17,int b16,int b15,int b14,int b13,int b12,int b11,int b10,int b9,int b8,int b7,int b6,int b5,int b4,int b3,int b2,int b1,int b0)->int {
     return ((v>>b18&1)<<18)|((v>>b17&1)<<17)|((v>>b16&1)<<16)|((v>>b15&1)<<15)|((v>>b14&1)<<14)|((v>>b13&1)<<13)|((v>>b12&1)<<12)|((v>>b11&1)<<11)|((v>>b10&1)<<10)|((v>>b9&1)<<9)|((v>>b8&1)<<8)|((v>>b7&1)<<7)|((v>>b6&1)<<6)|((v>>b5&1)<<5)|((v>>b4&1)<<4)|((v>>b3&1)<<3)|((v>>b2&1)<<2)|((v>>b1&1)<<1)|((v>>b0&1)<<0);
   };
-  u16* rom=(u16*)(p.data()+0x100000);
-  for(int i=0;i<0x800000/2;i++) rom[i]=bitswap16(rom[i],13,12,14,10,8,2,3,1,5,9,11,4,15,0,6,7);
-  rom=(u16*)p.data();
-  for(int i=0;i<0x0c0000/2;i++) rom[i]=((u16*)p.data())[0x710000/2 + bitswap19(i,18,4,5,16,14,7,9,6,13,17,15,3,1,2,12,11,8,10,0)];
-  rom=(u16*)(p.data()+0x100000);
-  for(int i=0;i<0x800000/2;i+=0x8000/2){ u16 buf[0x8000/2]; memcpy(buf,&rom[i],0x8000); for(int j=0;j<0x8000/2;j++) rom[i+j]=buf[bitswap14(j,9,4,8,3,13,6,2,7,0,12,1,11,10,5)]; }
+  auto readBE = [&](int off)->u16 { return (u16)(p[off]<<8 | p[off+1]); };
+  auto writeBE = [&](int off, u16 v){ p[off]=v>>8; p[off+1]=v&0xff; };
+  for(int i=0;i<0x800000;i+=2){ int off=0x100000+i; u16 v=readBE(off); writeBE(off, bitswap16(v,13,12,14,10,8,2,3,1,5,9,11,4,15,0,6,7)); }
+  for(int i=0;i<0x0c0000;i+=2){ int src = 0x710000 + bitswap19(i>>1,18,4,5,16,14,7,9,6,13,17,15,3,1,2,12,11,8,10,0)*2; u16 v=readBE(src); writeBE(i, v); }
+  for(int i=0;i<0x800000;i+=0x8000){ u16 buf[0x4000]; for(int j=0;j<0x4000;j++) buf[j]=readBE(0x100000+i+j*2); for(int j=0;j<0x4000;j++) writeBE(0x100000+i+j*2, buf[bitswap14(j,9,4,8,3,13,6,2,7,0,12,1,11,10,5)]); }
 }
 auto NeoGeo::decryptGarouhSma(std::vector<u8>& p) -> void {
   if(p.size() < 0x900000) return;
@@ -469,12 +471,11 @@ auto NeoGeo::decryptGarouhSma(std::vector<u8>& p) -> void {
   auto bitswap19 = [](int v,int b18,int b17,int b16,int b15,int b14,int b13,int b12,int b11,int b10,int b9,int b8,int b7,int b6,int b5,int b4,int b3,int b2,int b1,int b0)->int {
     return ((v>>b18&1)<<18)|((v>>b17&1)<<17)|((v>>b16&1)<<16)|((v>>b15&1)<<15)|((v>>b14&1)<<14)|((v>>b13&1)<<13)|((v>>b12&1)<<12)|((v>>b11&1)<<11)|((v>>b10&1)<<10)|((v>>b9&1)<<9)|((v>>b8&1)<<8)|((v>>b7&1)<<7)|((v>>b6&1)<<6)|((v>>b5&1)<<5)|((v>>b4&1)<<4)|((v>>b3&1)<<3)|((v>>b2&1)<<2)|((v>>b1&1)<<1)|((v>>b0&1)<<0);
   };
-  u16* rom=(u16*)(p.data()+0x100000);
-  for(int i=0;i<0x800000/2;i++) rom[i]=bitswap16(rom[i],14,5,1,11,7,4,10,15,3,12,8,13,0,2,9,6);
-  rom=(u16*)p.data();
-  for(int i=0;i<0x0c0000/2;i++) rom[i]=((u16*)p.data())[0x7f8000/2 + bitswap19(i,18,5,16,11,2,6,7,17,3,12,8,14,4,0,9,1,10,15,13)];
-  rom=(u16*)(p.data()+0x100000);
-  for(int i=0;i<0x800000/2;i+=0x8000/2){ u16 buf[0x8000/2]; memcpy(buf,&rom[i],0x8000); for(int j=0;j<0x8000/2;j++) rom[i+j]=buf[bitswap14(j,12,8,1,7,11,3,13,10,6,9,5,4,0,2)]; }
+  auto readBE = [&](int off)->u16 { return (u16)(p[off]<<8 | p[off+1]); };
+  auto writeBE = [&](int off, u16 v){ p[off]=v>>8; p[off+1]=v&0xff; };
+  for(int i=0;i<0x800000;i+=2){ int off=0x100000+i; u16 v=readBE(off); writeBE(off, bitswap16(v,14,5,1,11,7,4,10,15,3,12,8,13,0,2,9,6)); }
+  for(int i=0;i<0x0c0000;i+=2){ int src = 0x7f8000 + bitswap19(i>>1,18,5,16,11,2,6,7,17,3,12,8,14,4,0,9,1,10,15,13)*2; u16 v=readBE(src); writeBE(i, v); }
+  for(int i=0;i<0x800000;i+=0x8000){ u16 buf[0x4000]; for(int j=0;j<0x4000;j++) buf[j]=readBE(0x100000+i+j*2); for(int j=0;j<0x4000;j++) writeBE(0x100000+i+j*2, buf[bitswap14(j,12,8,1,7,11,3,13,10,6,9,5,4,0,2)]); }
 }
 auto NeoGeo::decryptMslug3Sma(std::vector<u8>& p) -> void {
   if(p.size() < 0x900000) return;
@@ -487,12 +488,11 @@ auto NeoGeo::decryptMslug3Sma(std::vector<u8>& p) -> void {
   auto bitswap19 = [](int v,int b18,int b17,int b16,int b15,int b14,int b13,int b12,int b11,int b10,int b9,int b8,int b7,int b6,int b5,int b4,int b3,int b2,int b1,int b0)->int {
     return ((v>>b18&1)<<18)|((v>>b17&1)<<17)|((v>>b16&1)<<16)|((v>>b15&1)<<15)|((v>>b14&1)<<14)|((v>>b13&1)<<13)|((v>>b12&1)<<12)|((v>>b11&1)<<11)|((v>>b10&1)<<10)|((v>>b9&1)<<9)|((v>>b8&1)<<8)|((v>>b7&1)<<7)|((v>>b6&1)<<6)|((v>>b5&1)<<5)|((v>>b4&1)<<4)|((v>>b3&1)<<3)|((v>>b2&1)<<2)|((v>>b1&1)<<1)|((v>>b0&1)<<0);
   };
-  u16* rom=(u16*)(p.data()+0x100000);
-  for(int i=0;i<0x800000/2;i++) rom[i]=bitswap16(rom[i],4,11,14,3,1,13,0,7,2,8,12,15,10,9,5,6);
-  rom=(u16*)p.data();
-  for(int i=0;i<0x0c0000/2;i++) rom[i]=((u16*)p.data())[0x5d0000/2 + bitswap19(i,18,15,2,1,13,3,0,9,6,16,4,11,5,7,12,17,14,10,8)];
-  rom=(u16*)(p.data()+0x100000);
-  for(int i=0;i<0x800000/2;i+=0x10000/2){ u16 buf[0x10000/2]; memcpy(buf,&rom[i],0x10000); for(int j=0;j<0x10000/2;j++) rom[i+j]=buf[bitswap15(j,2,11,0,14,6,4,13,8,9,3,10,7,5,12,1)]; }
+  auto readBE = [&](int off)->u16 { return (u16)(p[off]<<8 | p[off+1]); };
+  auto writeBE = [&](int off, u16 v){ p[off]=v>>8; p[off+1]=v&0xff; };
+  for(int i=0;i<0x800000;i+=2){ int off=0x100000+i; u16 v=readBE(off); writeBE(off, bitswap16(v,4,11,14,3,1,13,0,7,2,8,12,15,10,9,5,6)); }
+  for(int i=0;i<0x0c0000;i+=2){ int src = 0x5d0000 + bitswap19(i>>1,18,15,2,1,13,3,0,9,6,16,4,11,5,7,12,17,14,10,8)*2; u16 v=readBE(src); writeBE(i, v); }
+  for(int i=0;i<0x800000;i+=0x10000){ u16 buf[0x8000]; for(int j=0;j<0x8000;j++) buf[j]=readBE(0x100000+i+j*2); for(int j=0;j<0x8000;j++) writeBE(0x100000+i+j*2, buf[bitswap15(j,2,11,0,14,6,4,13,8,9,3,10,7,5,12,1)]); }
 }
 auto NeoGeo::decryptMslug3aSma(std::vector<u8>& p) -> void {
   if(p.size() < 0x900000) return;
@@ -505,12 +505,11 @@ auto NeoGeo::decryptMslug3aSma(std::vector<u8>& p) -> void {
   auto bitswap19 = [](int v,int b18,int b17,int b16,int b15,int b14,int b13,int b12,int b11,int b10,int b9,int b8,int b7,int b6,int b5,int b4,int b3,int b2,int b1,int b0)->int {
     return ((v>>b18&1)<<18)|((v>>b17&1)<<17)|((v>>b16&1)<<16)|((v>>b15&1)<<15)|((v>>b14&1)<<14)|((v>>b13&1)<<13)|((v>>b12&1)<<12)|((v>>b11&1)<<11)|((v>>b10&1)<<10)|((v>>b9&1)<<9)|((v>>b8&1)<<8)|((v>>b7&1)<<7)|((v>>b6&1)<<6)|((v>>b5&1)<<5)|((v>>b4&1)<<4)|((v>>b3&1)<<3)|((v>>b2&1)<<2)|((v>>b1&1)<<1)|((v>>b0&1)<<0);
   };
-  u16* rom=(u16*)(p.data()+0x100000);
-  for(int i=0;i<0x800000/2;i++) rom[i]=bitswap16(rom[i],2,11,12,14,9,3,1,4,13,7,6,8,10,15,0,5);
-  rom=(u16*)p.data();
-  for(int i=0;i<0x0c0000/2;i++) rom[i]=((u16*)p.data())[0x5d0000/2 + bitswap19(i,18,1,16,14,7,17,5,8,4,15,6,3,2,0,13,10,12,9,11)];
-  rom=(u16*)(p.data()+0x100000);
-  for(int i=0;i<0x800000/2;i+=0x10000/2){ u16 buf[0x10000/2]; memcpy(buf,&rom[i],0x10000); for(int j=0;j<0x10000/2;j++) rom[i+j]=buf[bitswap15(j,12,0,11,3,4,13,6,8,14,7,5,2,10,9,1)]; }
+  auto readBE = [&](int off)->u16 { return (u16)(p[off]<<8 | p[off+1]); };
+  auto writeBE = [&](int off, u16 v){ p[off]=v>>8; p[off+1]=v&0xff; };
+  for(int i=0;i<0x800000;i+=2){ int off=0x100000+i; u16 v=readBE(off); writeBE(off, bitswap16(v,2,11,12,14,9,3,1,4,13,7,6,8,10,15,0,5)); }
+  for(int i=0;i<0x0c0000;i+=2){ int src = 0x5d0000 + bitswap19(i>>1,18,1,16,14,7,17,5,8,4,15,6,3,2,0,13,10,12,9,11)*2; u16 v=readBE(src); writeBE(i, v); }
+  for(int i=0;i<0x800000;i+=0x10000){ u16 buf[0x8000]; for(int j=0;j<0x8000;j++) buf[j]=readBE(0x100000+i+j*2); for(int j=0;j<0x8000;j++) writeBE(0x100000+i+j*2, buf[bitswap15(j,12,0,11,3,4,13,6,8,14,7,5,2,10,9,1)]); }
 }
 auto NeoGeo::decryptCmc42(std::vector<u8>& c, std::vector<u8>& s, u8 key) -> void {
   cmc.type0_t03          = kof99_type0_t03;

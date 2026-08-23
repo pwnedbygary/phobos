@@ -14,6 +14,7 @@ struct ArcadeStick : Controller {
 
   auto readButtons() -> n8 override;
   auto readControls() -> n2 override;
+  auto pollCoin() -> void override;
 
  private:
   b1 yHold;

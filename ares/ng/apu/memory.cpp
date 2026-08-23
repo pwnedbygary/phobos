@@ -1,9 +1,18 @@
 auto APU::read(n16 address) -> n8 {
   if(address <= 0x7fff) return cartridge.readM(address);
-  if(address <= 0xbfff) return cartridge.readM(rom.bankA << 14 | n14(address));
-  if(address <= 0xdfff) return cartridge.readM(rom.bankB << 13 | n13(address));
-  if(address <= 0xefff) return cartridge.readM(rom.bankC << 12 | n12(address));
-  if(address <= 0xf7ff) return cartridge.readM(rom.bankD << 11 | n11(address));
+  u32 size = cartridge.mromSize();
+  if(size <= 0x10000) {
+    if(address <= 0xbfff) return cartridge.readM((rom.bankA << 14 | n14(address)) & (size - 1));
+    if(address <= 0xdfff) return cartridge.readM((rom.bankB << 13 | n13(address)) & (size - 1));
+    if(address <= 0xefff) return cartridge.readM((rom.bankC << 12 | n12(address)) & (size - 1));
+    if(address <= 0xf7ff) return cartridge.readM((rom.bankD << 11 | n11(address)) & (size - 1));
+  } else {
+    u32 mask = (size - 0x10000 - 1) & 0x3ffff;
+    if(address <= 0xbfff) return cartridge.readM(0x10000 + (((rom.bankA << 14) + n14(address)) & mask));
+    if(address <= 0xdfff) return cartridge.readM(0x10000 + (((rom.bankB << 13) + n13(address)) & mask));
+    if(address <= 0xefff) return cartridge.readM(0x10000 + (((rom.bankC << 12) + n12(address)) & mask));
+    if(address <= 0xf7ff) return cartridge.readM(0x10000 + (((rom.bankD << 11) + n11(address)) & mask));
+  }
   if(address <= 0xffff) return ram[address & 0x7ff];
   unreachable;
 }

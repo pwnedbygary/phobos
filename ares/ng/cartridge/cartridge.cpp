@@ -67,6 +67,11 @@ auto Cartridge::readM(n32 address) -> n8 {
  return 0xff;
 }
 
+auto Cartridge::mromSize() const -> u32 {
+  if(board) return board->mromSize();
+  return 0;
+}
+
 auto Cartridge::readC(n32 address) -> n8 {
   if(board) return board->readC(address);
   return 0xff;

@@ -11,6 +11,7 @@ struct Interface {
   virtual auto readP(n1 upper, n1 lower, n24 address, n16 data) -> n16 { return data; }
   virtual auto writeP(n1 upper, n1 lower, n24 address, n16 data) -> void {}
   virtual auto readM(n32 address) -> n8 { return 0xff; }
+  virtual auto mromSize() -> u32 { return 0; }
   virtual auto readC(n32 address) -> n8 { return 0xff; }
   virtual auto readS(n32 address) -> n8 { return 0xff; }
   virtual auto readVA(n32 address) -> n8 { return 0xff; }
