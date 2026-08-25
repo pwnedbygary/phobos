@@ -1223,6 +1223,18 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         "fw_ng_mvs"  to listOf("fw_ng_bios", "fw_ng_aes"),
     )
 
+    // Keyword-based heuristic firmware matching.  Works for ANY filename
+    // convention — only checks whether the name contains recognizable keywords.
+    private fun keywordFirmwareMatch(name: String): String? {
+        // N64DD IPL: contains both "64dd" and "ipl"
+        if (name.contains("64dd") && name.contains("ipl")) {
+            if (name.contains("dev")) return "fw_n64dd_dev"
+            if (name.contains("usa") || name.contains("(us") || name.contains("proto")) return "fw_n64dd_us"
+            return "fw_n64dd_jp"
+        }
+        return null
+    }
+
     private val biosCrcMap = mapOf(
         "1105ca35" to "fw_psx_us", // SCPH-5501
         "ff3d245b" to "fw_psx_jp", // SCPH-5500
@@ -1348,6 +1360,19 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                             Log.e("Phobos", "Error reading ZIP firmware ${file.name}: ${e.message}")
                         }
                         if (zipMatched) return@forEach
+                    }
+
+                    // 2.5 Keyword heuristic: match by filename content, not exact name.
+                    //     Catches any naming convention (e.g. "N64DD IPLROM [Japan].n64").
+                    val keyByKeyword = keywordFirmwareMatch(name)
+                    if (keyByKeyword != null) {
+                        Log.i("Phobos", "Firmware scan: KEYWORD MATCHED '$name' -> $keyByKeyword")
+                        settingsStore.setSystemFirmwarePath(keyByKeyword, file.uri.toString())
+                        biosAliases[keyByKeyword]?.forEach { alias ->
+                            settingsStore.setSystemFirmwarePath(alias, file.uri.toString())
+                        }
+                        matchedCount++
+                        return@forEach
                     }
 
                     // 3. Check by CRC32 (raw non-zip files)
