@@ -32,6 +32,9 @@ struct Cdd {
   n1 type1Pending = 0;
   n1 type2Pending = 0;
   n1 type3Pending = 0;
+  n1 type1Ack = 0;
+  n1 type2Ack = 0;
+  n1 type3Ack = 0;
   n1 prohibitIrq = 0;
 
   //serial
@@ -39,10 +42,17 @@ struct Cdd {
   auto txWrite(n8 data) -> void;
   auto commsControl(n1 clockEdge, n1 send) -> void;
   auto reset() -> void;
+  auto serialReset() -> void;
 
   //75Hz drive tick: raises the CDD type2 interrupt (MAME nff0002 & 0x0050)
-  //and advances the sector pipeline (phase 3).
+  //and advances the sector pipeline.
   auto tick() -> void;
+
+  //sector pipeline
+  auto readLbaToBuffer() -> void;
+  auto advanceReadPos() -> void;
+  auto ctrlChecks() -> void;
+  auto raiseType1() -> void;
 
   //commands
   auto import() -> bool;

@@ -48,6 +48,12 @@ auto Cdc::dataRead() -> n8 {
 
 auto Cdc::dataWrite(n8 data) -> void {
   auto reg = reg0 & 0xf;
+  {
+    static FILE* f = nullptr;
+    static u32 n = 0;
+    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/cdcreg.txt", "w");
+    if(f && n++ < 2000) { fprintf(f, "WR reg %02x <- %02x (stat=%04x lba=%d)\n", (u32)reg, (u32)data, (u32)cdd.statusCdc, (s32)cdd.curLba); fflush(f); }
+  }
 
   static const n1 changers0[16] = {1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0};
   if(changers0[reg]) reg0 = (reg0 & 0xfff0) | ((reg + 1) & 0xf);

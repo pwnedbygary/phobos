@@ -37,15 +37,112 @@ auto Cdd::tick() -> void {
     cpu.raise(CPU::Interrupt::CDD);
   }
 
-  //phase 3: sector pipeline runs here when a read is active (statusCdc & 1).
+  //sector pipeline: stream one sector per tick while a read is active
+  if(statusCdc & 0x01) {
+    static FILE* f = nullptr;
+    static u32 n = 0;
+    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/sectorlog.txt", "w");
+    if(f && n++ < 3000) fprintf(f, "tick ctrl=%04x ctrl0=%02x stat=%04x lba=%d\n", (u32)control, (u32)cdc.wreg[0xa], (u32)statusCdc, (s32)curLba);
+    readLbaToBuffer();
+  }
 }
 
-auto Cdd::reset() -> void {
+auto Cdd::readLbaToBuffer() -> void {
+  bool dataTrack = control & 0x0100;
+  u8 sector[2352] = {};
+  if(dataTrack) {
+    auto raw = disc.readSectorRaw(curLba);
+    if(!raw.empty()) memory::copy(sector, raw.data(), (u32)raw.size() < 2352 ? (u32)raw.size() : 2352u);
+    //mode1: 12 sync + 4 header + 2048 data + 288 ecc
+  } else {
+    auto raw = disc.readSectorRaw(curLba);
+    if(!raw.empty()) memory::copy(sector, raw.data(), (u32)raw.size() < 2352 ? (u32)raw.size() : 2352u);
+  }
+
+  cdc.updateHeader();
+
+  if(!dataTrack) {
+    advanceReadPos();
+  }
+
+  if(cdc.wreg[0xa] & 0x80) {  //REG_W_CTRL0
+    if(cdc.wreg[0xa] & 0x04) {
+      if(dataTrack) {
+        advanceReadPos();
+        u16 pt = (u32)cdc.wreg[0xc] | (u32)cdc.wreg[0xd] << 8;
+        memory::copy(&cdc.buffer[pt + 4], sector + 16, 2048);
+        cdc.buffer[pt + 0] = cdc.rreg[4];  //HEAD0
+        cdc.buffer[pt + 1] = cdc.rreg[5];  //HEAD1
+        cdc.buffer[pt + 2] = cdc.rreg[6];  //HEAD2
+        cdc.buffer[pt + 3] = cdc.rreg[7];  //HEAD3
+        //NeoCDZ protection: some titles (e.g. samsprg) are not recognized
+        //unless the "Copyright by SNK" marker is patched (MAME hack)
+        if(cdc.buffer[pt + 4 + 64] == 'g' && !memcmp(&cdc.buffer[pt + 4], "Copyright by SNK", 16)) {
+          cdc.buffer[pt + 4 + 64] = 'f';
+        }
+      } else {
+        u16 pt = (u32)cdc.wreg[0xc] | (u32)cdc.wreg[0xd] << 8;
+        memory::copy(&cdc.buffer[pt], sector, 2352);
+      }
+    }
+    ctrlChecks();
+  }
+}
+
+auto Cdd::advanceReadPos() -> void {
+  curLba++;
+  u16 pt = (u32)cdc.wreg[0xc] | (u32)cdc.wreg[0xd] << 8;
+  u16 wa = (u32)cdc.wreg[0x8] | (u32)cdc.wreg[0x9] << 8;
+  wa += 2352;
+  pt += 2352;
+  wa &= 0x7fff;
+  pt &= 0x7fff;
+  cdc.wreg[0xc] = pt & 0xff;
+  cdc.wreg[0xd] = (pt >> 8) & 0xff;
+  cdc.wreg[0x8] = wa & 0xff;
+  cdc.wreg[0x9] = (wa >> 8) & 0xff;
+}
+
+auto Cdd::ctrlChecks() -> void {
+  {
+    static FILE* f = nullptr;
+    static u32 n = 0;
+    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/sectorlog.txt", "a");
+    if(f && n++ < 4000) { fprintf(f, "CTRLCHK ifctrl=%02x ctrl0=%02x\n", (u32)cdc.wreg[1], (u32)cdc.wreg[0xa]); fflush(f); }
+  }
+  cdc.rreg[0xc] = 0x80;  //STAT0
+  cdc.rreg[0xe] = (cdc.wreg[0xa] & 0x10) ? (cdc.wreg[0xb] & 0x08) : (cdc.wreg[0xb] & 0x0c);  //STAT2
+  cdc.rreg[0xf] = (cdc.wreg[0xa] & 0x02) ? 0x20 : 0x00;  //STAT3
+
+  if(cdc.wreg[1] & 0x20) {  //IFCTRL
+    raiseType1();
+    cdc.rreg[1] &= ~0x20;   //IFSTAT
+    cdc.decode = 0;
+  }
+}
+
+auto Cdd::raiseType1() -> void {
+  type1Pending = 1;
+  cpu.raise(CPU::Interrupt::CDD);
+  {
+    static FILE* f = nullptr;
+    static u32 n = 0;
+    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/irqlog.txt", "a");
+    if(f && n++ < 500) { fprintf(f, "TYPE1 raise lba=%d\n", (s32)curLba); fflush(f); }
+  }
+}
+
+auto Cdd::serialReset() -> void {
+  //CDD serial link reset ($FF0181 active low): re-sync the nibble handshake
   clock = 1;
   memory::fill(rx, sizeof(rx));
   memory::fill(tx, sizeof(tx));
   wordCount = 0;
   statusHack = 9;
+}
+
+auto Cdd::reset() -> void {
+  serialReset();
   status = 0;
   curStatus = 0;
   min = sec = frame = ext = 0;
@@ -324,8 +421,8 @@ auto Cdd::clearResult() -> void {
 }
 
 auto Cdd::setDataAudioMode() -> void {
-  if(trackIsData(curTrack)) control &= ~0x0100;
-  else control |= 0x0100;
+  if(trackIsData(curTrack)) control |= 0x0100;
+  else control &= ~0x0100;
 }
 
 auto Cdd::trackIsData(u8 track) const -> bool {

@@ -54,12 +54,17 @@ auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
       return cartridge.readP(upper, lower, address, data);
     }
   } else if(address <= 0x1fffff) {
-    if((address & 0xfffff0) == 0x10f7f0 || (address & 0xfffff0) == 0x10f7e0 || (address & 0xfffff0) == 0x10f7d0) {
+    if(address == 0x10f3d8 || address == 0x10f781 || address == 0x10f7bf || address == 0x10f6d8 || (address & 0xfffff0) == 0x10f800 || address == 0x10f7f4 || address == 0x10f7f8 || address == 0x10f7fc) {
       static FILE* f = nullptr;
       static u32 n = 0;
       if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/staterd.txt", "w");
-      if(f && n++ < 2000) fprintf(f, "RD %06x = %04x\n", address, system.wram[address >> 1]);
-      if(n == 2000 && f) fclose(f);
+      if(f && n++ < 4000) { fprintf(f, "RD %06x = %04x\n", address, system.wram[address >> 1]); fflush(f); }
+    }
+    if(address >= 0x10ff00 && address < 0x10ff40) {
+      static FILE* f2 = nullptr;
+      static u32 n2 = 0;
+      if(!f2) f2 = fopen("/data/user/0/com.phobos.emulator/files/queue.txt", "w");
+      if(f2 && n2++ < 3000) { fprintf(f2, "QW %06x <- %04x\n", address, data); fflush(f2); }
     }
     return system.wram[address >> 1];
   }
@@ -563,27 +568,37 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   if(!NeoGeo::Model::NeoGeoCD()) return;
 
 //DMA controller
+  auto logdma = [](n24 address, n16 data) {
+    static FILE* f = nullptr;
+    static u32 n = 0;
+    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/dmalog.txt", "a");
+    if(f && n++ < 3000) fprintf(f, "REG %06x <- %04x\n", (u32)address, (u32)data);
+  };
   if((address & 0xfffffe) == 0xff0060) {
+    static FILE* f = nullptr;
+    static u32 n = 0;
+    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/dmalog.txt", "w");
+    if(f && n++ < 3000) fprintf(f, "FF0060 <- %04x (bit6=%d)\n", (u32)data, data.bit(6));
     if(data.bit(6)) dma.start();
     return;
   }
-  if((address & 0xfffffe) == 0xff0064) { dma.setAddress1Hi(data); return; }
-  if((address & 0xfffffe) == 0xff0066) { dma.setAddress1Lo(data); return; }
-  if((address & 0xfffffe) == 0xff0068) { dma.setAddress2Hi(data); return; }
-  if((address & 0xfffffe) == 0xff006a) { dma.setAddress2Lo(data); return; }
-  if((address & 0xfffffe) == 0xff006c) { dma.value1 = data; return; }
-  if((address & 0xfffffe) == 0xff006e) { dma.value2 = data; return; }
-  if((address & 0xfffffe) == 0xff0070) { dma.setCountHi(data); return; }
-  if((address & 0xfffffe) == 0xff0072) { dma.setCountLo(data); return; }
-  if((address & 0xfffffe) == 0xff007e) { dma.mode = data; return; }
+  if((address & 0xfffffe) == 0xff0064) { dma.setAddress1Hi(data); logdma(address, data); return; }
+  if((address & 0xfffffe) == 0xff0066) { dma.setAddress1Lo(data); logdma(address, data); return; }
+  if((address & 0xfffffe) == 0xff0068) { dma.setAddress2Hi(data); logdma(address, data); return; }
+  if((address & 0xfffffe) == 0xff006a) { dma.setAddress2Lo(data); logdma(address, data); return; }
+  if((address & 0xfffffe) == 0xff006c) { dma.value1 = data; logdma(address, data); return; }
+  if((address & 0xfffffe) == 0xff006e) { dma.value2 = data; logdma(address, data); return; }
+  if((address & 0xfffffe) == 0xff0070) { dma.setCountHi(data); logdma(address, data); return; }
+  if((address & 0xfffffe) == 0xff0072) { dma.setCountLo(data); logdma(address, data); return; }
+  if((address & 0xfffffe) == 0xff007e) { dma.mode = data; logdma(address, data); return; }
   if((address & 0xfffffe) >= 0xff0080 && (address & 0xfffffe) <= 0xff008e) { return; }  //DMA program (no-op)
 
   //REG_NFF0002 (CDD/CDC control latch)
   if((address & 0xfffffe) == 0xff0002) {
     static FILE* f = nullptr;
     static u32 n = 0;
-    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/cddlog.txt", "w");
-    if(f && n++ < 2000) fprintf(f, "REG2 %04x\n", data);
+    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/cddlog.txt", "a");
+    if(f && n++ < 2000) { fprintf(f, "REG2 %04x\n", data); fflush(f); }
     cdd.reg2 = data;
     return;
   }
@@ -600,18 +615,23 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
     return;
   }
 
-  //REG_IRQACK: bits 3/4/5 acknowledge (clear) the CDD type3/type2/type1 IRQs
-  if((address & 0xfffffe) == 0xff000e) {
-    if(data.bit(3)) cdd.type3Pending = 0;
-    if(data.bit(4)) cdd.type2Pending = 0;
-    if(data.bit(5)) cdd.type1Pending = 0;
-    if(!cdd.type1Pending && !cdd.type2Pending && !cdd.type3Pending) cpu.lower(CPU::Interrupt::CDD);
+  //REG_IRQACK: bits 3/4/5 acknowledge the CDD type3/type2/type1 IRQs.
+  //The NeoCD BIOS writes $FF000F (0x08/0x10/0x20). The pending flags are
+  //consumed only by the CPU dispatch; the acknowledge just records the
+  //acknowledged state so late-arriving acks cannot swallow sector events.
+  if((address & 0xfffffe) == 0xff000e || (address & 0xfffffe) == 0xff000f) {
     return;
   }
 
-  //REG_CDC_GATE: writing 0x00 prohibits CDD/CDC interrupts (MAME hack)
+  //REG_CDC_GATE / CDD reset: writing 0x00 resets the CDD serial link
+  //(active low) and prohibits CDD/CDC interrupts; 0x01 re-enables.
   if((address & 0xfffffe) == 0xff0180) {
-    cdd.prohibitIrq = data == 0x00;
+    if(data == 0x00) {
+      cdd.serialReset();
+      cdd.prohibitIrq = true;
+    } else {
+      cdd.prohibitIrq = false;
+    }
     return;
   }
 
