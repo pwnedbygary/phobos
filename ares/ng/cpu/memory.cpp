@@ -54,6 +54,13 @@ auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
       return cartridge.readP(upper, lower, address, data);
     }
   } else if(address <= 0x1fffff) {
+    if((address & 0xfffff0) == 0x10f7f0 || (address & 0xfffff0) == 0x10f7e0 || (address & 0xfffff0) == 0x10f7d0) {
+      static FILE* f = nullptr;
+      static u32 n = 0;
+      if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/staterd.txt", "w");
+      if(f && n++ < 2000) fprintf(f, "RD %06x = %04x\n", address, system.wram[address >> 1]);
+      if(n == 2000 && f) fclose(f);
+    }
     return system.wram[address >> 1];
   }
 
@@ -282,6 +289,16 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
     //REG_NFF0016 (CDD/CDC latch)
     if((address & 0xfffffe) == 0xff0016) {
       data = cdd.latch16;
+      return data;
+    }
+    //CDC register address select
+    if((address & 0xfffffe) == 0xff0100) {
+      data = cdc.addressRead();
+      return data;
+    }
+    //CDC register data
+    if((address & 0xfffffe) == 0xff0102) {
+      data = cdc.dataRead();
       return data;
     }
     //CDD serial receive (4-bit nibble + clock status)
@@ -545,9 +562,56 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   //Neo Geo CD upload control registers
   if(!NeoGeo::Model::NeoGeoCD()) return;
 
+//DMA controller
+  if((address & 0xfffffe) == 0xff0060) {
+    if(data.bit(6)) dma.start();
+    return;
+  }
+  if((address & 0xfffffe) == 0xff0064) { dma.setAddress1Hi(data); return; }
+  if((address & 0xfffffe) == 0xff0066) { dma.setAddress1Lo(data); return; }
+  if((address & 0xfffffe) == 0xff0068) { dma.setAddress2Hi(data); return; }
+  if((address & 0xfffffe) == 0xff006a) { dma.setAddress2Lo(data); return; }
+  if((address & 0xfffffe) == 0xff006c) { dma.value1 = data; return; }
+  if((address & 0xfffffe) == 0xff006e) { dma.value2 = data; return; }
+  if((address & 0xfffffe) == 0xff0070) { dma.setCountHi(data); return; }
+  if((address & 0xfffffe) == 0xff0072) { dma.setCountLo(data); return; }
+  if((address & 0xfffffe) == 0xff007e) { dma.mode = data; return; }
+  if((address & 0xfffffe) >= 0xff0080 && (address & 0xfffffe) <= 0xff008e) { return; }  //DMA program (no-op)
+
   //REG_NFF0002 (CDD/CDC control latch)
   if((address & 0xfffffe) == 0xff0002) {
+    static FILE* f = nullptr;
+    static u32 n = 0;
+    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/cddlog.txt", "w");
+    if(f && n++ < 2000) fprintf(f, "REG2 %04x\n", data);
     cdd.reg2 = data;
+    return;
+  }
+
+  //CDC register address select
+  if((address & 0xfffffe) == 0xff0100) {
+    cdc.addressWrite(data.byte(0));
+    return;
+  }
+
+  //CDC register data
+  if((address & 0xfffffe) == 0xff0102) {
+    cdc.dataWrite(data.byte(0));
+    return;
+  }
+
+  //REG_IRQACK: bits 3/4/5 acknowledge (clear) the CDD type3/type2/type1 IRQs
+  if((address & 0xfffffe) == 0xff000e) {
+    if(data.bit(3)) cdd.type3Pending = 0;
+    if(data.bit(4)) cdd.type2Pending = 0;
+    if(data.bit(5)) cdd.type1Pending = 0;
+    if(!cdd.type1Pending && !cdd.type2Pending && !cdd.type3Pending) cpu.lower(CPU::Interrupt::CDD);
+    return;
+  }
+
+  //REG_CDC_GATE: writing 0x00 prohibits CDD/CDC interrupts (MAME hack)
+  if((address & 0xfffffe) == 0xff0180) {
+    cdd.prohibitIrq = data == 0x00;
     return;
   }
 
@@ -569,26 +633,26 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
     return;
   }
 
-  //REG_TRANSAREA
-  if((address & 0xfffe) == 0x0104) {
+  //REG_TRANSAREA (written at $FF0105)
+  if((address & 0xfffffe) == 0xff0104) {
     system.io.uploadZone = data;
     return;
   }
 
   //REG_Z80RST
-  if((address & 0xfffe) == 0x0182) {
+  if((address & 0xfffffe) == 0xff0182) {
     apu.restart();
     return;
   }
 
   //REG_SPRBANK
-  if((address & 0xfffe) == 0x01a0) {
+  if((address & 0xfffffe) == 0xff01a0) {
     system.io.spriteUploadBank = data.bit(0,1);
     return;
   }
 
   //REG_PCMBANK
-  if((address & 0xfffe) == 0x01a2) {
+  if((address & 0xfffffe) == 0xff01a2) {
     system.io.pcmUploadBank = data.bit(0);
     return;
   }

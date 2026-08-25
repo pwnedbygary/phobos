@@ -66,6 +66,7 @@ struct LSPC : Thread {
     n16 vramAddress;
     n16 vramIncrement;
     n1  pramBank;
+    u32 cddCounter;  //Neo Geo CD: 75Hz CDD tick accumulator (6MHz / 75)
   } io;
 
   n8 vscale[256][256];

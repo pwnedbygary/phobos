@@ -20,6 +20,7 @@ struct CPU : M68000, Thread {
     Reset,
     Vblank,
     Timer,
+    CDD,
   };
 
   //cpu.cpp

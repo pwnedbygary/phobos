@@ -29,6 +29,17 @@ auto Cdd::commsControl(n1 clockEdge, n1 send) -> void {
   clock = clockEdge;
 }
 
+auto Cdd::tick() -> void {
+  //CDD "access" interrupt: fires continuously at 75Hz once enabled by the
+  //BIOS writing nff0002 (REG_FF0002) with bits 4+6 set (MAME: nff0002 & 0x0050).
+  if(reg2 & 0x0050) {
+    type2Pending = 1;
+    cpu.raise(CPU::Interrupt::CDD);
+  }
+
+  //phase 3: sector pipeline runs here when a read is active (statusCdc & 1).
+}
+
 auto Cdd::reset() -> void {
   clock = 1;
   memory::fill(rx, sizeof(rx));
@@ -44,10 +55,18 @@ auto Cdd::reset() -> void {
   curTrack = 0;
   reg2 = 0;
   latch16 = 0;
+  type1Pending = 0;
+  type2Pending = 0;
+  type3Pending = 0;
+  prohibitIrq = 0;
 }
 
 auto Cdd::import() -> bool {
   if(!checkTxChecksum()) return false;
+  static FILE* f = nullptr;
+  static u32 n = 0;
+  if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/cddlog.txt", "a");
+  if(f && n++ < 2000) fprintf(f, "CMD %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", tx[0], tx[1], tx[2], tx[3], tx[4], tx[5], tx[6], tx[7], tx[8], tx[9]);
   switch(tx[0]) {
   case 0x0: getStatus();      break;  //status
   case 0x1: stop();           break;  //stop all
@@ -73,6 +92,10 @@ auto Cdd::export() -> void {
   rx[7] = frame & 0x00ff;
   rx[8] = ext & 0x00ff;
   doChecksum();
+  static FILE* f2 = nullptr;
+  static u32 n2 = 0;
+  if(!f2) f2 = fopen("/data/user/0/com.phobos.emulator/files/cddlog.txt", "a");
+  if(f2 && n2++ < 2000) fprintf(f2, "RPL %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", rx[0], rx[1], rx[2], rx[3], rx[4], rx[5], rx[6], rx[7], rx[8], rx[9]);
 }
 
 auto Cdd::doChecksum() -> void {

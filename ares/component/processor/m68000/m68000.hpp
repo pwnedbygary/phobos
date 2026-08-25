@@ -65,6 +65,10 @@ struct M68000 {
     Level5             = 29,  //0x74
     Level6             = 30,  //0x78
     Level7             = 31,  //0x7c
+    //Neo Geo CD CDD interrupts (level 2, distinct vectors for each type)
+    CDDType1           = 23,  //0x17
+    CDDType2           = 22,  //0x16
+    CDDType3           = 21,  //0x15
     Trap               = 32,  //0x80-0xbc (#0-#15)
   };};
 

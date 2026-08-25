@@ -26,13 +26,23 @@ struct Cdd {
   //misc latches
   n16 reg2 = 0;        //nff0002 (CDD/CDC control latch)
   n16 latch16 = 0;     //nff0016
-  n2  region = 0;      //JP
+  n2  region = 1;      //1 = US (English BIOS menus); 0 = Japan
+
+  //interrupt state (level 2, vectors 0x15/0x16/0x17)
+  n1 type1Pending = 0;
+  n1 type2Pending = 0;
+  n1 type3Pending = 0;
+  n1 prohibitIrq = 0;
 
   //serial
   auto rxRead() -> n8;
   auto txWrite(n8 data) -> void;
   auto commsControl(n1 clockEdge, n1 send) -> void;
   auto reset() -> void;
+
+  //75Hz drive tick: raises the CDD type2 interrupt (MAME nff0002 & 0x0050)
+  //and advances the sector pipeline (phase 3).
+  auto tick() -> void;
 
   //commands
   auto import() -> bool;

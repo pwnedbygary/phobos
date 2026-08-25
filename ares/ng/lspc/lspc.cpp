@@ -87,6 +87,12 @@ auto LSPC::step(u32 clocks) -> void {
 
 auto LSPC::main() -> void {
   step(1);
+  if(NeoGeo::Model::NeoGeoCD()) {
+    if(io.cddCounter += 1, io.cddCounter >= 6'000'000 / 75) {
+      io.cddCounter = 0;
+      cdd.tick();
+    }
+  }
   if(++io.hcounter == 384) {
     io.hcounter = 0;
     if(++io.vcounter == 264) {

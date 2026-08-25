@@ -132,7 +132,10 @@ auto System::save() -> void {
 auto System::power(bool reset) -> void {
   for(auto& setting : node->find<Node::Setting::Setting>()) setting->setLatch();
 
-  if(NeoGeo::Model::NeoGeoCD()) cdd.reset();
+  if(NeoGeo::Model::NeoGeoCD()) {
+    cdd.reset();
+    cdc.reset();
+  }
 
   if(auto fp = pak->read("bios.rom")) {
     bios.allocate(fp->size() >> 1);
