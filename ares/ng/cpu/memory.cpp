@@ -38,19 +38,23 @@ auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
 
   if(auto result = platform->cheat(address)) return *result;
 
-  //cartridge program ROM
-  if(address <= 0x0fffff) {
-    return cartridge.readP(upper, lower, address, data);
-  }
+  if(!NeoGeo::Model::NeoGeoCD()) {
+    //cartridge program ROM
+    if(address <= 0x0fffff) {
+      return cartridge.readP(upper, lower, address, data);
+    }
 
-  //work RAM
-  if(address <= 0x1fffff) {
+    //work RAM
+    if(address <= 0x1fffff) {
+      return system.wram[address >> 1];
+    }
+
+    //cartridge program ROM (banked)
+    if(address <= 0x2fffff) {
+      return cartridge.readP(upper, lower, address, data);
+    }
+  } else if(address <= 0x1fffff) {
     return system.wram[address >> 1];
-  }
-
-  //cartridge program ROM (banked)
-  if(address <= 0x2fffff) {
-    return cartridge.readP(upper, lower, address, data);
   }
 
   //I/O registers
@@ -78,8 +82,21 @@ auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
 
   //backup RAM (MVS only)
   if(address <= 0xdfffff) {
-    if(Model::NeoGeoMVS()) return system.sram[address >> 1];
+    if(NeoGeo::Model::NeoGeoMVS()) return system.sram[address >> 1];
     return data;
+  }
+
+  if(NeoGeo::Model::NeoGeoCD()) {
+    if(address <= 0xefffff) {
+      switch(system.io.uploadZone) {
+        case 0: return system.spriteRam[(address & 0xfffff) >> 1];
+        case 1: return system.pcmRam[(address & 0xfffff) >> 1];
+        case 4: return apu.ram[(address & 0x1ffff) + upper];
+        case 5: return system.fixRam[(address & 0x3ffff) >> 1];
+      }
+    } else if(address <= 0xffffff) {
+      return readIO(upper, lower, address, data);
+    }
   }
 
   //CD-ROM
@@ -91,21 +108,27 @@ auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
 }
 
 auto CPU::write(n1 upper, n1 lower, n24 address, n16 data) -> void {
-  //cartridge program ROM
-  if(address <= 0x0fffff) {
-    return cartridge.writeP(upper, lower, address, data);
-  }
+  if(!NeoGeo::Model::NeoGeoCD()) {
+    //cartridge program ROM
+    if(address <= 0x0fffff) {
+      return cartridge.writeP(upper, lower, address, data);
+    }
 
-  //work RAM
-  if(address <= 0x1fffff) {
+    //work RAM
+    if(address <= 0x1fffff) {
+      if(upper) system.wram[address >> 1].byte(1) = data.byte(1);
+      if(lower) system.wram[address >> 1].byte(0) = data.byte(0);
+      return;
+    }
+
+    //cartridge program ROM (banked)
+    if(address <= 0x2fffff) {
+      return cartridge.writeP(upper, lower, address, data);
+    }
+  } else if(address <= 0x1fffff) {
     if(upper) system.wram[address >> 1].byte(1) = data.byte(1);
     if(lower) system.wram[address >> 1].byte(0) = data.byte(0);
     return;
-  }
-
-  //cartridge program ROM (banked)
-  if(address <= 0x2fffff) {
-    return cartridge.writeP(upper, lower, address, data);
   }
 
   //I/O registers
@@ -133,8 +156,34 @@ auto CPU::write(n1 upper, n1 lower, n24 address, n16 data) -> void {
 
   //backup RAM (MVS only)
   if(address <= 0xdfffff) {
-    if(Model::NeoGeoMVS()) system.sram[address >> 1] = data;
+    if(NeoGeo::Model::NeoGeoMVS()) system.sram[address >> 1] = data;
     return;
+  }
+
+  if(NeoGeo::Model::NeoGeoCD()) {
+    if(address <= 0xefffff) {
+      switch(system.io.uploadZone) {
+        case 0: address &= 0xfffff;
+                address.bit(20, 21) = system.io.spriteUploadBank;
+                if(upper) system.spriteRam[address >> 1].byte(1) = data.byte(1);
+                if(lower) system.spriteRam[address >> 1].byte(0) = data.byte(0);
+                return;
+        case 1: address &= 0xfffff;
+                address.bit(19) = system.io.pcmUploadBank;
+                address >>= 1;
+                if(lower) system.pcmRam[address] = data.byte(0);
+                return;
+        case 4: address >>= 1;
+                if(lower) apu.ram[address & 0x1ffff] = data.byte(0);
+                return;
+        case 5: address >>= 1;
+                if(lower) system.fixRam[address & 0x3ffff] = data.byte(0);
+                return;
+      }
+      return;
+    } else if(address <= 0xffffff) {
+      return writeIO(upper, lower, address, data);
+    }
   }
 
   //CD-ROM
@@ -180,7 +229,7 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
     controllerPort2.pollCoin();
     //coin bits are active-low: 0 = inserted. system.io.coin asserts them when
     //the player holds START (auto-credit) or SELECT (coin button).
-    bool coin = Model::NeoGeoMVS() && !system.io.coin;
+    bool coin = NeoGeo::Model::NeoGeoMVS() && !system.io.coin;
     data.bit(0) = coin;  //coin 1 (player 1 credit)
     data.bit(1) = 1;     //coin 2 not inserted
     data.bit(2) = 0;  //service button (released)
@@ -202,7 +251,7 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
     data.bit(10,11) = controllerPort2.readControls();
     data.bit(12,13) = 0b00;  //0b00 = memory card inserted
     data.bit(14)    = cardSlot.lock != 0;
-    data.bit(15)    = Model::NeoGeoMVS();  //0 = AES; 1 = MVS
+    data.bit(15)    = NeoGeo::Model::NeoGeoMVS();  //0 = AES; 1 = MVS
   }
 
   //REG_VRAMADDR
@@ -257,11 +306,11 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   //REG_POUTPUT (mirror) (AES only)
   //REG_SLOT (MVS only)
   if((address & 0xfe00f0) == 0x380020 && lower) {
-    if(Model::NeoGeoAES()) {
+    if(NeoGeo::Model::NeoGeoAES()) {
       controllerPort1.writeOutputs(data.bit(0,2));
       controllerPort2.writeOutputs(data.bit(3,5));
     }
-    if(Model::NeoGeoMVS()) {
+    if(NeoGeo::Model::NeoGeoMVS()) {
       system.io.slotSelect = data.bit(0,2);
     }
   }
@@ -472,6 +521,33 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
     if(lower) {
       lspc.timer.stopPAL = data.bit(0);
     }
+  }
+
+  //Neo Geo CD upload control registers
+  if(!NeoGeo::Model::NeoGeoCD()) return;
+
+  //REG_TRANSAREA
+  if((address & 0xfffe) == 0x0104) {
+    system.io.uploadZone = data;
+    return;
+  }
+
+  //REG_Z80RST
+  if((address & 0xfffe) == 0x0182) {
+    apu.restart();
+    return;
+  }
+
+  //REG_SPRBANK
+  if((address & 0xfffe) == 0x01a0) {
+    system.io.spriteUploadBank = data.bit(0,1);
+    return;
+  }
+
+  //REG_PCMBANK
+  if((address & 0xfffe) == 0x01a2) {
+    system.io.pcmUploadBank = data.bit(0);
+    return;
   }
 
   return;

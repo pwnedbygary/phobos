@@ -1602,6 +1602,33 @@ namespace ares {
               if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
           }
           if (!attached) attachFile("bios.rom");
+      } else if (nodeName == "Neo Geo CD") {
+          // Neo Geo CD needs the CD BIOS (neocd.zip via fw_ng_cd) in the system
+          // pak, plus the shared LSPC zoom table (000-lo.lo) from neogeo.zip.
+          bool attached = false;
+          auto it_ngcd = firmwareMap.find("fw_ng_cd");
+          if (it_ngcd != firmwareMap.end()) attached = attachFile((const char*)it_ngcd->second, "bios.rom");
+          if (!attached) attached = attachFile("bios.rom");
+          string zipPath = string{tempFilePath, "/neogeo.zip"};
+          bool haveZoomy = false;
+          if (file::exists(zipPath)) {
+            Decode::ZIP zip;
+            if (zip.open(zipPath)) {
+              for (auto& zf : zip.file) {
+                string n = zf.name.downcase();
+                if (!haveZoomy && n.equals("000-lo.lo")) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 0x20000) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("zoomy.rom", fp); haveZoomy = true;
+                      LOGI("VFS: Neo Geo CD LSPC zoom table (000-lo.lo) attached");
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if (!haveZoomy) attachFile("zoomy.rom");
       } else if (nodeName == "Neo Geo" || nodeName == "Neo Geo AES" || nodeName == "Neo Geo MVS") {
           // neogeo.zip is copied to mia_temp. Extract BIOS + fix-layer ROM.
           string zipPath = string{tempFilePath, "/neogeo.zip"};
@@ -2273,6 +2300,10 @@ else if (port->type() == "Keyboard") {
     else if (lookup.find("PlayStation") || lookup.find("PS1")) identifiedSystem = "PlayStation";
     else if (lookup.find("Neo Geo Pocket Color") || lookup.find("NGPC") || lookup.find("NGC")) identifiedSystem = "Neo Geo Pocket Color";
     else if (lookup.find("Neo Geo Pocket") || lookup.find("NGP") || lookup.find("NGP ")) identifiedSystem = "Neo Geo Pocket";
+    else if (lookup.find("Neo Geo CD") || lookup.find("NeoGeoCD") || lookup.find("Neo-Geo-CD") || lookup.find("NGCD") || lookup.find("neogeocd")) {
+        identifiedSystem = "Neo Geo CD";
+        forceZipLoad = true;
+    }
     else if (lookup.find("Neo Geo")) {
         identifiedSystem = "Neo Geo";
         forceZipLoad = true;
@@ -2523,6 +2554,8 @@ else if (port->type() == "Keyboard") {
       success = ::ares::GameBoy::load(root, "[Nintendo] Game Boy Color");
     } else if (identifiedSystem == "Mega Drive") {
       success = ::ares::MegaDrive::load(root, getRegion("[Sega] Mega Drive (NTSC-U)", "[Sega] Mega Drive (NTSC-J)", "[Sega] Mega Drive (PAL)"));
+    } else if (identifiedSystem == "Neo Geo CD") {
+       success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo CD");
     } else if (identifiedSystem == "Neo Geo") {
        success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo MVS");
        if(!success) success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo AES");
@@ -2553,6 +2586,8 @@ else if (port->type() == "Keyboard") {
        string aresName = "[SNK] Neo Geo Pocket";
        if (systemName.downcase().find("color") || identifiedSystem == "Neo Geo Pocket Color") aresName = "[SNK] Neo Geo Pocket Color";
        success = ::ares::NeoGeoPocket::load(root, aresName);
+    } else if (identifiedSystem == "Neo Geo CD") {
+       success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo CD");
     } else if (identifiedSystem == "Neo Geo") {
        success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo MVS");
        if(!success) success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo AES");

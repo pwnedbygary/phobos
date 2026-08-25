@@ -39,6 +39,7 @@ target_sources(
     medium/neo-geo-pocket-color.cpp
     medium/neo-geo-pocket.cpp
     medium/neo-geo.cpp
+    medium/neo-geo-cd.cpp
     medium/nintendo-64.cpp
     medium/nintendo-64dd.cpp
     medium/pc-engine-cd.cpp
@@ -97,6 +98,7 @@ target_sources(
     system/msx2.cpp
     system/myvision.cpp
     system/neo-geo-aes.cpp
+    system/neo-geo-cd.cpp
     system/neo-geo-mvs.cpp
     system/neo-geo-pocket-color.cpp
     system/neo-geo-pocket.cpp

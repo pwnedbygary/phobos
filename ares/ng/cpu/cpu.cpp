@@ -32,11 +32,13 @@ auto CPU::main() -> void {
 
     if(2 > r.i && lower(Interrupt::Timer)) {
       debugger.interrupt("Timer");
+      if(NeoGeo::Model::NeoGeoCD()) return interrupt(Vector::Level1, 1);
       return interrupt(Vector::Level2, 2);
     }
 
     if(1 > r.i && lower(Interrupt::Vblank)) {
       debugger.interrupt("Vblank");
+      if(NeoGeo::Model::NeoGeoCD()) return interrupt(Vector::Level2, 2);
       return interrupt(Vector::Level1, 1);
     }
   }

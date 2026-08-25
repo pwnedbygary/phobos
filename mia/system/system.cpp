@@ -17,6 +17,7 @@ namespace Systems {
   #include "msx2.cpp"
   #include "neo-geo-aes.cpp"
   #include "neo-geo-mvs.cpp"
+  #include "neo-geo-cd.cpp"
   #include "neo-geo-pocket.cpp"
   #include "neo-geo-pocket-color.cpp"
   #include "nintendo-64.cpp"
@@ -55,6 +56,7 @@ auto System::create(string name) -> std::shared_ptr<Pak> {
   if(name == "MSX2") return std::make_shared<Systems::MSX2>();
   if(name == "Neo Geo AES") return std::make_shared<Systems::NeoGeoAES>();
   if(name == "Neo Geo MVS") return std::make_shared<Systems::NeoGeoMVS>();
+  if(name == "Neo Geo CD") return std::make_shared<Systems::NeoGeoCD>();
   if(name == "Neo Geo Pocket") return std::make_shared<Systems::NeoGeoPocket>();
   if(name == "Neo Geo Pocket Color") return std::make_shared<Systems::NeoGeoPocketColor>();
   if(name == "Nintendo 64") return std::make_shared<Systems::Nintendo64>();

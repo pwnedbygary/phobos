@@ -17,8 +17,9 @@ namespace Media {
   #include "mega-ld.cpp"
   #include "msx.cpp"
   #include "msx2.cpp"
-  #include "neo-geo.cpp"
-  #include "neo-geo-pocket.cpp"
+   #include "neo-geo.cpp"
+   #include "neo-geo-cd.cpp"
+   #include "neo-geo-pocket.cpp"
   #include "neo-geo-pocket-color.cpp"
   #include "nintendo-64.cpp"
   #include "nintendo-64dd.cpp"
@@ -62,6 +63,7 @@ auto Medium::create(string name) -> std::shared_ptr<Pak> {
   if(name == "MSX") return std::make_shared<Media::MSX>();
   if(name == "MSX2") return std::make_shared<Media::MSX2>();
   if(name == "Neo Geo") return std::make_shared<Media::NeoGeo>();
+  if(name == "Neo Geo CD") return std::make_shared<Media::NeoGeoCD>();
   if(name == "Neo Geo Pocket") return std::make_shared<Media::NeoGeoPocket>();
   if(name == "Neo Geo Pocket Color") return std::make_shared<Media::NeoGeoPocketColor>();
   if(name == "Nintendo 64") return std::make_shared<Media::Nintendo64>();

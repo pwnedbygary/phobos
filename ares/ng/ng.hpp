@@ -15,6 +15,7 @@ auto enumerate() -> std::vector<string>;
   struct Model {
     inline static auto NeoGeoAES() -> bool;
     inline static auto NeoGeoMVS() -> bool;
+    inline static auto NeoGeoCD() -> bool;
   };
 
   #include <ng/system/system.hpp>

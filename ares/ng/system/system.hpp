@@ -6,6 +6,11 @@ struct System {
   Memory::Writable<n16> wram;
   Memory::Writable<n16> sram;  //MVS only
 
+  //Neo Geo CD only
+  Memory::Writable<n16> spriteRam;  // 4MiB
+  Memory::Writable<n8> pcmRam;     // 1MiB
+  Memory::Writable<n8> fixRam;     // 128KiB
+
   struct Debugger {
     //debugger.cpp
     auto load(Node::Object) -> void;
@@ -19,7 +24,7 @@ struct System {
     } memory;
   } debugger;
 
-  enum class Model : u32 { NeoGeoAES, NeoGeoMVS };
+  enum class Model : u32 { NeoGeoAES, NeoGeoMVS, NeoGeoCD };
 
   auto name() const -> string { return information.name; }
   auto model() const -> Model { return information.model; }
@@ -27,6 +32,10 @@ struct System {
   //system.cpp
   auto game() -> string;
   auto run() -> void;
+  auto readC(n32) -> n8;
+  auto readS(n32) -> n8;
+  auto readVA(n32) -> n8;
+  auto readVB(n32) -> n8;
 
   auto load(Node::System& node, string name) -> bool;
   auto unload() -> void;
@@ -44,6 +53,11 @@ struct System {
     n1 ledLatch1;
     n1 ledLatch2;
     n8 ledData;
+
+    //Neo Geo CD upload control
+    n3 uploadZone;
+    n2 spriteUploadBank;
+    n1 pcmUploadBank;
     n32 rtcCounter;
     n1 rtcTimePulse;
     n1 coin = 0;        //MVS coin line held low (inserted). Driven by START (auto-credit) or a SELECT coin pulse.
@@ -75,3 +89,4 @@ extern System system;
 
 auto Model::NeoGeoAES() -> bool { return system.model() == System::Model::NeoGeoAES; }
 auto Model::NeoGeoMVS() -> bool { return system.model() == System::Model::NeoGeoMVS; }
+auto Model::NeoGeoCD() -> bool { return system.model() == System::Model::NeoGeoCD; }

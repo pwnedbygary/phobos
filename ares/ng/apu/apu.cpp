@@ -51,4 +51,15 @@ auto APU::power(bool reset) -> void {
   rom.bankD = 0x1e;
 }
 
+auto APU::restart() -> void {
+  Z80::reset();
+  communication = {};
+  nmi = {};
+  irq = {};
+  rom.bankA = 0x02;
+  rom.bankB = 0x06;
+  rom.bankC = 0x0e;
+  rom.bankD = 0x1e;
+}
+
 }
