@@ -277,6 +277,25 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
     data.bit(7,15) = lspc.io.vcounter + 248;
   }
 
+  //Neo Geo CD CDD / control registers
+  if(NeoGeo::Model::NeoGeoCD()) {
+    //REG_NFF0016 (CDD/CDC latch)
+    if((address & 0xfffffe) == 0xff0016) {
+      data = cdd.latch16;
+      return data;
+    }
+    //CDD serial receive (4-bit nibble + clock status)
+    if((address & 0xfffffe) == 0xff0160) {
+      data = cdd.rxRead();
+      return data;
+    }
+    //REG_CDD_REGION (DIP switch; 0 = Japan)
+    if((address & 0xfffffe) == 0xff011c) {
+      data = ~((0x10 | (cdd.region & 3)) << 8);
+      return data;
+    }
+  }
+
   return data;
 }
 
@@ -525,6 +544,30 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
 
   //Neo Geo CD upload control registers
   if(!NeoGeo::Model::NeoGeoCD()) return;
+
+  //REG_NFF0002 (CDD/CDC control latch)
+  if((address & 0xfffffe) == 0xff0002) {
+    cdd.reg2 = data;
+    return;
+  }
+
+  //REG_NFF0016 (CDD/CDC latch)
+  if((address & 0xfffffe) == 0xff0016) {
+    cdd.latch16 = data;
+    return;
+  }
+
+  //CDD serial transmit (4-bit nibble)
+  if((address & 0xfffffe) == 0xff0162) {
+    cdd.txWrite(data.byte(0));
+    return;
+  }
+
+  //CDD serial clock / send strobe
+  if((address & 0xfffffe) == 0xff0164) {
+    cdd.commsControl(data.bit(0), data.bit(1));
+    return;
+  }
 
   //REG_TRANSAREA
   if((address & 0xfffe) == 0x0104) {
