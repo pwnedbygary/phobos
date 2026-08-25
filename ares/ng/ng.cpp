@@ -4,6 +4,7 @@
 //started: 2021-05-18
 
 #include <ng/system/system.cpp>
+#include <ng/disc/disc.cpp>
 #include <ng/cpu/cpu.cpp>
 #include <ng/apu/apu.cpp>
 #include <ng/lspc/lspc.cpp>

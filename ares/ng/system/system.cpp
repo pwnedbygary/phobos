@@ -90,6 +90,7 @@ auto System::load(Node::System& root, string name) -> bool {
   apu.load(node);
   lspc.load(node);
   opnb.load(node);
+  if(NeoGeo::Model::NeoGeoCD()) disc.load(node);
   if(!NeoGeo::Model::NeoGeoCD()) cartridgeSlot.load(node);
   controllerPort1.load(node);
   controllerPort2.load(node);
@@ -106,6 +107,7 @@ auto System::unload() -> void {
   apu.unload();
   lspc.unload();
   opnb.unload();
+  if(NeoGeo::Model::NeoGeoCD()) disc.unload();
   if(!NeoGeo::Model::NeoGeoCD()) cartridgeSlot.unload();
   controllerPort1.unload();
   controllerPort2.unload();

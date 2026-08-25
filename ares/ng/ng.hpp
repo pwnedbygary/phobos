@@ -19,6 +19,7 @@ auto enumerate() -> std::vector<string>;
   };
 
   #include <ng/system/system.hpp>
+  #include <ng/disc/disc.hpp>
   #include <ng/cartridge/cartridge.hpp>
   #include <ng/controller/controller.hpp>
   #include <ng/card/card.hpp>
