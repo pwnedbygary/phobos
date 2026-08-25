@@ -69,6 +69,7 @@ struct Cdd {
   auto firstLast() -> void;
   auto getTrackAdr() -> void;
   auto getTrackType() -> void;
+  auto getDiscRecognition() -> void;
   auto read() -> void;
   auto seek() -> void;
   auto pause() -> void;

@@ -16,19 +16,8 @@ auto CPU::unload() -> void {
 }
 
 auto CPU::main() -> void {
-  if(NeoGeo::Model::NeoGeoCD()) {
-    static FILE* f = nullptr;
-    static u32 n = 0;
-    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/cputrace.txt", "w");
-    if(f && n++ < 400000) fprintf(f, "%06x %04x\n", (u32)r.pc, (u32)r.irc);
-    if(n == 400000 && f) { fflush(f); fclose(f); }
-  }
   if(io.interruptPending) {
     if(NeoGeo::Model::NeoGeoCD()) {
-      static FILE* f = nullptr;
-      static u32 n = 0;
-      if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/pendlog.txt", "w");
-      if(f && n++ < 3000) { fprintf(f, "PEND ipl=%d t1=%d t2=%d t3=%d pc=%06x\n", (u32)r.i, (u32)cdd.type1Pending, (u32)cdd.type2Pending, (u32)cdd.type3Pending, (u32)r.pc); fflush(f); }
     }
     if(lower(Interrupt::Reset)) {
       r.a[7] = read(1, 1, 0) << 16 | read(1, 1, 2) << 0;

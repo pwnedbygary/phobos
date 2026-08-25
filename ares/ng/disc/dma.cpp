@@ -22,12 +22,6 @@ auto Dma::readWord(n32 address) -> n16 {
 }
 
 auto Dma::start() -> void {
-  static FILE* f = nullptr;
-  static u32 n = 0;
-  if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/dmalog.txt", "w");
-  if(f && n++ < 1000) fprintf(f, "DMA mode=%04x a1=%08x a2=%08x count=%08x val=%04x dt=%02x if=%02x dac=%04x\n",
-    (u32)mode, (u32)address1, (u32)address2, (u32)count, (u32)value1,
-    (u32)cdc.wreg[6], (u32)cdc.wreg[1], (u32)((cdc.wreg[5]<<8)|cdc.wreg[4]));
   switch(mode) {
   case 0xcffd:
     //self-address write: write addr bytes 3..0 into consecutive words

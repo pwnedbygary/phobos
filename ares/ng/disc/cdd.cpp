@@ -39,10 +39,6 @@ auto Cdd::tick() -> void {
 
   //sector pipeline: stream one sector per tick while a read is active
   if(statusCdc & 0x01) {
-    static FILE* f = nullptr;
-    static u32 n = 0;
-    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/sectorlog.txt", "w");
-    if(f && n++ < 3000) fprintf(f, "tick ctrl=%04x ctrl0=%02x stat=%04x lba=%d\n", (u32)control, (u32)cdc.wreg[0xa], (u32)statusCdc, (s32)curLba);
     readLbaToBuffer();
   }
 }
@@ -104,12 +100,6 @@ auto Cdd::advanceReadPos() -> void {
 }
 
 auto Cdd::ctrlChecks() -> void {
-  {
-    static FILE* f = nullptr;
-    static u32 n = 0;
-    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/sectorlog.txt", "a");
-    if(f && n++ < 4000) { fprintf(f, "CTRLCHK ifctrl=%02x ctrl0=%02x\n", (u32)cdc.wreg[1], (u32)cdc.wreg[0xa]); fflush(f); }
-  }
   cdc.rreg[0xc] = 0x80;  //STAT0
   cdc.rreg[0xe] = (cdc.wreg[0xa] & 0x10) ? (cdc.wreg[0xb] & 0x08) : (cdc.wreg[0xb] & 0x0c);  //STAT2
   cdc.rreg[0xf] = (cdc.wreg[0xa] & 0x02) ? 0x20 : 0x00;  //STAT3
@@ -124,12 +114,6 @@ auto Cdd::ctrlChecks() -> void {
 auto Cdd::raiseType1() -> void {
   type1Pending = 1;
   cpu.raise(CPU::Interrupt::CDD);
-  {
-    static FILE* f = nullptr;
-    static u32 n = 0;
-    if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/irqlog.txt", "a");
-    if(f && n++ < 500) { fprintf(f, "TYPE1 raise lba=%d\n", (s32)curLba); fflush(f); }
-  }
 }
 
 auto Cdd::serialReset() -> void {
@@ -160,10 +144,6 @@ auto Cdd::reset() -> void {
 
 auto Cdd::import() -> bool {
   if(!checkTxChecksum()) return false;
-  static FILE* f = nullptr;
-  static u32 n = 0;
-  if(!f) f = fopen("/data/user/0/com.phobos.emulator/files/cddlog.txt", "a");
-  if(f && n++ < 2000) fprintf(f, "CMD %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", tx[0], tx[1], tx[2], tx[3], tx[4], tx[5], tx[6], tx[7], tx[8], tx[9]);
   switch(tx[0]) {
   case 0x0: getStatus();      break;  //status
   case 0x1: stop();           break;  //stop all
@@ -189,10 +169,6 @@ auto Cdd::export() -> void {
   rx[7] = frame & 0x00ff;
   rx[8] = ext & 0x00ff;
   doChecksum();
-  static FILE* f2 = nullptr;
-  static u32 n2 = 0;
-  if(!f2) f2 = fopen("/data/user/0/com.phobos.emulator/files/cddlog.txt", "a");
-  if(f2 && n2++ < 2000) fprintf(f2, "RPL %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", rx[0], rx[1], rx[2], rx[3], rx[4], rx[5], rx[6], rx[7], rx[8], rx[9]);
 }
 
 auto Cdd::doChecksum() -> void {
@@ -238,6 +214,7 @@ auto Cdd::handleTocCommands() -> void {
   case 0x4: firstLast();    break;  //first/last track
   case 0x5: getTrackAdr();  break;  //track address
   case 0x6: getTrackType(); break;  //track type (NeoCD)
+  case 0x7: getDiscRecognition(); break;  //CDZ disc recognition
   default:  getStatus();    break;
   }
 }
@@ -387,6 +364,17 @@ auto Cdd::init() -> void {
   status = curStatus;
   sec = 1;
   frame = 1;
+}
+
+auto Cdd::getDiscRecognition() -> void {
+  //CDZ copy-protection / disc recognition (libretro neocd: "subcommand 7").
+  //Possible values: 2, 5, E, F. Most games want 2 (Samurai Shodown RPG
+  //included); Twinkle Star Sprites wants F.
+  clearResult();
+  status &= 0xff;
+  if(!hasDisc()) return;
+  status |= curStatus;
+  min = toBcd(2);
 }
 
 auto Cdd::unknown() -> void {
