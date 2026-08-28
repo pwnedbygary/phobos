@@ -878,15 +878,13 @@ fun EmulationMenu(
                             MenuSection("CD Speed") {
                                 val speeds = listOf(
                                     1 to "1x (Real CD)",
-                                    2 to "2x",
-                                    3 to "3x",
-                                    4 to "4x"
+                                    2 to "2x"
                                 )
                                 var cdSpeedExpanded by remember { mutableStateOf(false) }
                                 val currentSpeed = settings.cdSpeed[systemName] ?: 1
                                 ListItem(
                                     headlineContent = { Text("Disc Read Speed") },
-                                    supportingContent = { Text("Capped at 4×: the BIOS access-machine cannot drain sectors faster than ~4× without a DISC I/O ERROR. 1×, 2×, 3× and 4× are all equivalent in practice.") },
+                                    supportingContent = { Text("Capped at 2×: the BIOS access-machine cannot drain sectors faster than 2× without a DISC I/O ERROR (ID=0000/0002). 1× and 2× are equivalent in practice.") },
                                     trailingContent = {
                                         Box {
                                             TextButton(onClick = { cdSpeedExpanded = true }) {

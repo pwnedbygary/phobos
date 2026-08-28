@@ -39,15 +39,18 @@ boot-init, which then does everything else naturally.
   BIOS's boot-init re-ran forever and the menu blipped WAIT every ~2s. Now the disc check runs once.
 - **FIX (text) upload-zone heap overrun fixed** — `case 5` mapped `(address>>1) & 0x3FFFF` into a
   128KiB `fixRam`; mask must be `0x1FFFF` (matches libretro neocd). Fixes garbled in-game text.
-- **Per-core CD read speed option** (pause menu → "CD Speed", capped at **1x..4x**).
+- **Per-core CD read speed option** (pause menu → "CD Speed", capped at **1x..2x**).
   `cdd.readSpeed` scales the CDD tick to `75×N` Hz — one sector + one decoder IRQ per tick is
-  preserved at any speed, so the protocol is identical, just N× faster. The 4x cap is
-  empirical: at >4x the BIOS's access machine cannot drain sectors fast enough (returns
-  MSF=0 → DISC I/O ERROR ID=0000), and the 68K's instruction pacing visibly slows on the
-  boot intro. Ring overflow (PT wrapping over undrained DAC data) remains guarded in
-  `tick()`. Distribution: SettingsStore `cd_speed_<system>` → `PhobosCore.setCdSpeed` →
+  preserved at any speed, so the protocol is identical, just N× faster. The 2x cap is
+  empirical: at >2x the BIOS's access machine cannot drain sectors fast enough (returns
+  MSF=0 / no-response → DISC I/O ERROR ID=0000/0002), and the 68K's instruction pacing
+  visibly slows on the boot intro. The "fast-forward" hotkey does NOT help here — it
+  relaxes the 120Hz display cap but does not advance the 68K's instruction clock; for
+  loader fast-forward on NGCD we'd need real 68K time-slicing (a future change).
+  Ring overflow (PT wrapping over undrained DAC data) remains guarded in `tick()`.
+  Distribution: SettingsStore `cd_speed_<system>` → `PhobosCore.setCdSpeed` →
   `ares::setCdSpeed` → `cdd.readSpeed`; re-pushed on load in `loadRom`. Any persisted value
-  >4 from an older build is capped at the JNI entry and logged.
+  >2 from an older build is capped at the JNI entry and logged.
 
 Open items (non-blocking): decide C→X/D→Y remap for the 4-face-button layout on the Retroid; flag the
 unrelated AGP 9.3.1→9.3.2 bump in `android/gradle/libs.versions.toml`.

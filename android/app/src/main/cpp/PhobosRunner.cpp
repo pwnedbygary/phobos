@@ -3182,20 +3182,27 @@ else if (port->type() == "Keyboard") {
   // Neo Geo CD read-speed multiplier (sectors per 75Hz tick).
   // 1 = real CD 1x ≈ 150KiB/s (what real CDZ hardware did).
   //
-  // The cap is 4x. The CDD runs on the 68K's clock in this model, so
-  // the BIOS's access-machine ($C0E99E) and DMA handlers must drain each
-  // sector in the 80,000 / N 68K clocks between ticks. At >4x, the
-  // 68K can't complete a state transition before the next sector IRQ
-  // arrives, the access machine returns MSF = 0 ("DISC I/O ERROR
-  // ID=0000"), the loader hangs, and the intro tears as 68K instruction
-  // pacing falls behind the 75*N Hz IRQ cadence. 4x is empirically
-  // indistinguishable from 1x..3x for boot and titles; the dropdown
-  // should not offer anything higher.
+  // The cap is 2x. The CDD runs on the 68K's clock in this model, so the
+  // BIOS's access-machine ($C0E99E) and DMA handlers must drain each sector
+  // in the 80,000 / N 68K clocks between ticks. At >2x, the BIOS can't
+  // finish a state transition before the next CDD tick preempts it, and
+  // the access machine reads back a CDC register that hasn't been written
+  // yet (DISC I/O ERROR ID=0002 on the loader screen, ID=0000 elsewhere).
+  // The 68K's instruction pacing also visibly slows on a real-time boot
+  // intro at high N. 1x..2x are equivalent in practice for the loader
+  // and for in-game disc reads.
+  //
+  // NOTE: this is a true per-second instruction cap of the BIOS, NOT a
+  // display-rate cap — the existing "fast-forward" hotkey (target frame
+  // time = 1e6/refreshRate/speed) only relaxes the 120Hz display cap, it
+  // does not advance the 68K faster. For NGCD boot/loader fast-forward
+  // you need real 68K time-slicing (a future change), not just the
+  // refresh-rate cap relaxation.
   auto setCdSpeed(s32 speed) -> void {
       if (speed < 1) speed = 1;
-      if (speed > 4) {
-          LOGI("Neo Geo CD speed %d capped to 4x (BIOS access-machine cannot drain faster)", (int)speed);
-          speed = 4;
+      if (speed > 2) {
+          LOGI("Neo Geo CD speed %d capped to 2x (BIOS access-machine cannot drain faster)", (int)speed);
+          speed = 2;
       }
       ::ares::NeoGeo::cdd.readSpeed = (u32)speed;
       LOGI("Neo Geo CD read speed set to %dx", (int)speed);
