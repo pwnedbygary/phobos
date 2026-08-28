@@ -236,6 +236,7 @@ auto System::dumpNgGfx(const string& dir) -> void {
   dump("ng_fix.raw", (const u8*)system.fixRam.data(),    128_KiB);
   dump("ng_vram.raw",(const u8*)lspc.vram.data(),        68_KiB);
   dump("ng_pram.raw",(const u8*)lspc.pram.data(),        16_KiB);
+  dump("ng_wram.raw",(const u8*)system.wram.data(),      2_MiB);
   __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "dumpNgGfx: wrote ng_gfx files to %s", dir.data());
 }
 
