@@ -948,6 +948,16 @@ pass = `type1` increments + DMA start fires non-busy + code reaches `0x100000` �
 >   Fix in progress: seed both byte lanes `$10FD90-$10FDAF` = 3 (joystick type) at `System::power()`; if that
 >   doesn't take, move into `Cdd::tick()`. Byte-lane gotcha: even byte addr N = byte 1 of word N>>1.
 > - All instrumentation (WR/WRX/TYPWR/P1RD/SB1RD/SELW, IPC/DET/BOOT/STR, PAD probe, RPL traces) is TEMP.
+> - **2026-08-28 follow-up — bit-0 one-shot edge guard for disc-check (committed `917c94eb2`)**
+>   and **CD-speed cap at 4×**: the CDD-tick multiplier looked safe in theory (one sector
+>   + one decoder IRQ per tick at any N), but at >4× the BIOS's access machine
+>   ($C0E99E) cannot complete a state transition before the next sector IRQ arrives →
+>   next header read returns MSF=0 → **DISC I/O ERROR ID=0000**. The 68K's instruction
+>   rate also visibly drops at high N (the CDD tick burns more CPU per 68K instruction),
+>   so the boot intro slows and tears. The Java dropdown now only offers 1×..4×, and
+>   `PhobosRunner.cpp::setCdSpeed` caps any persisted value >4 (logged) so older
+>   DataStore entries can't push the device into the broken state. The ring-buffer
+>   safety net in `tick()` remains as the rare-transient guard.
 
 #### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES — 1994-95 WARNING hang FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:172` `tst.b $10FD82` + `13C0...60F8` → `kof95`/`samsho3`/`4`/`5` titles, `wiki:Slot_check_security`/`wiki:PROGSF1`/`wiki:NEO-SMA`); `kof98` `PROGSF1` FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:374` `decryptKof98` + `ares/ng/cartridge/board/progsf1.cpp:19` `header @100: 4e 45 4f 2d` `✓` `49016109`); **SMA grid (`kof99`/`kof2000`/`garou`/`mslug3`) FIXED 2026-08-22** — was a hardcoded 68K reset-vector override (`p[0..7]=0x10f300`) in all 6 SMA branches of `decrypt()`; only kof2000 matched, the others jumped to a wrong entry → BIOS slot-grid. Removed override (kept `NEO-GEO` header patch); P-ROM decrypt verified bit-identical to MAME `prot_sma.cpp`. The `loadRoms 0xC0000 hole` hypothesis was WRONG. + SELECT-coin and switch-game SIGSEGV FIXED 2026-08-22 (see detailed note below)., plus non-MVS sets (`kof98umh` PGM, `kofnw`/`kofxi` Atomiswave) correctly rejected
 

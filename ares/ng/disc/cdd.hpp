@@ -34,7 +34,9 @@ struct Cdd {
   //(75 sectors/s ≈ 150KiB/s — what real CDZ hardware did). Higher values
   //make the drive "spin faster": the BIOS gets exactly one sector + one
   //decoder IRQ per tick, so the protocol is identical — just N× faster.
-  //Must stay ≥1; the Java side offers up to 96x ("Instant").
+  //Must stay ≥1; the Java side offers up to 4x (capped: the BIOS's access
+  //machine cannot drain faster than ~4x without a DISC I/O ERROR, and the
+  //68K's instruction pacing also visibly slows on a real-time boot intro).
   u32 readSpeed = 1;
 
   //interrupt state (level 2, vectors 0x15/0x16/0x17)

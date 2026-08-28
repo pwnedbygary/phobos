@@ -880,21 +880,13 @@ fun EmulationMenu(
                                     1 to "1x (Real CD)",
                                     2 to "2x",
                                     3 to "3x",
-                                    4 to "4x",
-                                    6 to "6x",
-                                    8 to "8x",
-                                    12 to "12x",
-                                    16 to "16x",
-                                    24 to "24x",
-                                    32 to "32x",
-                                    48 to "48x",
-                                    96 to "Instant"
+                                    4 to "4x"
                                 )
                                 var cdSpeedExpanded by remember { mutableStateOf(false) }
                                 val currentSpeed = settings.cdSpeed[systemName] ?: 1
                                 ListItem(
                                     headlineContent = { Text("Disc Read Speed") },
-                                    supportingContent = { Text("Sectors per 75Hz tick. 1x = real CD 1× ≈ 150KiB/s (authentic, slow); higher values load much faster.") },
+                                    supportingContent = { Text("Capped at 4×: the BIOS access-machine cannot drain sectors faster than ~4× without a DISC I/O ERROR. 1×, 2×, 3× and 4× are all equivalent in practice.") },
                                     trailingContent = {
                                         Box {
                                             TextButton(onClick = { cdSpeedExpanded = true }) {

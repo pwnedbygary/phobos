@@ -3180,11 +3180,23 @@ else if (port->type() == "Keyboard") {
   }
 
   // Neo Geo CD read-speed multiplier (sectors per 75Hz tick).
-  // 1 = real CD 1x ≈ 150KiB/s (what real CDZ hardware did); higher values
-  // load the disc faster, up to the ring-buffer cap (13 sectors/tick).
+  // 1 = real CD 1x ≈ 150KiB/s (what real CDZ hardware did).
+  //
+  // The cap is 4x. The CDD runs on the 68K's clock in this model, so
+  // the BIOS's access-machine ($C0E99E) and DMA handlers must drain each
+  // sector in the 80,000 / N 68K clocks between ticks. At >4x, the
+  // 68K can't complete a state transition before the next sector IRQ
+  // arrives, the access machine returns MSF = 0 ("DISC I/O ERROR
+  // ID=0000"), the loader hangs, and the intro tears as 68K instruction
+  // pacing falls behind the 75*N Hz IRQ cadence. 4x is empirically
+  // indistinguishable from 1x..3x for boot and titles; the dropdown
+  // should not offer anything higher.
   auto setCdSpeed(s32 speed) -> void {
       if (speed < 1) speed = 1;
-      if (speed > 4096) speed = 4096;
+      if (speed > 4) {
+          LOGI("Neo Geo CD speed %d capped to 4x (BIOS access-machine cannot drain faster)", (int)speed);
+          speed = 4;
+      }
       ::ares::NeoGeo::cdd.readSpeed = (u32)speed;
       LOGI("Neo Geo CD read speed set to %dx", (int)speed);
   }
