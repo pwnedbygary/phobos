@@ -173,11 +173,12 @@ auto CPU::write(n1 upper, n1 lower, n24 address, n16 data) -> void {
                 if(upper) system.spriteRam[address >> 1].byte(1) = data.byte(1);
                 if(lower) system.spriteRam[address >> 1].byte(0) = data.byte(0);
                 return;
-        case 1: address &= 0xfffff;
-                address.bit(19) = system.io.pcmUploadBank;
-                address >>= 1;
-                //libretro: pcmRam[(addr >> 1) + bank*0x80000], odd byte addr only
-                if(lower) system.pcmRam[(address + (system.io.pcmUploadBank << 19)) & 0xfffff] = data.byte(0);
+        case 1: //PCM DRAM: index = (byte addr >> 1) + bank*0x80000, & 0xFFFFF
+                //(libretro neocd memory_mapped.cpp AREA_PCM). The previous
+                //code folded the bank into bit 19 of the byte address AND
+                //added bank<<19, double-counting it (bank-1 uploads landed
+                //0x40000 past their target).
+                if(lower) system.pcmRam[((address >> 1) + (system.io.pcmUploadBank << 19)) & 0xfffff] = data.byte(0);
                 return;
         case 4: address >>= 1;
                 if(lower) apu.ram[address & 0x1ffff] = data.byte(0);

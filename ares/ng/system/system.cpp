@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <android/log.h>
+#include <cstdio>
 
 namespace ares::NeoGeo {
 
@@ -192,7 +193,15 @@ auto System::power(bool reset) -> void {
 }
 
 auto System::readC(n32 address) -> n8 {
-  if(NeoGeo::Model::NeoGeoCD()) return spriteRam.read(address >> 1).byte(address & 1);
+  if(NeoGeo::Model::NeoGeoCD()) {
+    //Sprite DRAM is a 16-bit word array; the 68K's byte stores land in the
+    //high lane at even addresses and the low lane at odd addresses (see
+    //CPU::write case 0), so byte @address lives in lane !(address&1). Reading
+    //lane (address&1) returned every word's bytes swapped — scrambled sprite
+    //pixels. (libretro neocd models the transfer area as a plain byte array
+    //byte@A -> sprRam[A], which is exactly this lane mapping.)
+    return spriteRam.read(address >> 1).byte(!(address & 1));
+  }
   return cartridge.readC(address);
 }
 
@@ -209,6 +218,25 @@ auto System::readVA(n32 address) -> n8 {
 auto System::readVB(n32 address) -> n8 {
   if(NeoGeo::Model::NeoGeoCD()) return 0xff;
   return cartridge.readVB(address);
+}
+
+//Diagnostic: dump the NGCD graphics memories as raw files under `dir` so the
+//HUD "black rectangle" bug can be inspected offline (are the HUD fix/sprite
+//tiles the untouched 0xFF fill, or a broken palette?).
+auto System::dumpNgGfx(const string& dir) -> void {
+  if(!NeoGeo::Model::NeoGeoCD()) return;
+  auto dump = [&](const char* name, const void* data, u32 bytes) -> void {
+    string path = {dir, "/", name};
+    FILE* fp = fopen(path.data(), "wb");
+    if(!fp) { __android_log_print(ANDROID_LOG_ERROR, "NeoGeo", "dumpNgGfx: cannot open %s", name); return; }
+    fwrite(data, 1, bytes, fp);
+    fclose(fp);
+  };
+  dump("ng_spr.raw", (const u8*)system.spriteRam.data(), 4_MiB);
+  dump("ng_fix.raw", (const u8*)system.fixRam.data(),    128_KiB);
+  dump("ng_vram.raw",(const u8*)lspc.vram.data(),        68_KiB);
+  dump("ng_pram.raw",(const u8*)lspc.pram.data(),        16_KiB);
+  __android_log_print(ANDROID_LOG_INFO, "NeoGeo", "dumpNgGfx: wrote ng_gfx files to %s", dir.data());
 }
 
 };

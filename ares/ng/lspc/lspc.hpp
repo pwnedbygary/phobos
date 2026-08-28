@@ -73,4 +73,10 @@ struct LSPC : Thread {
   n1 hscale[16][16];
 };
 
+//Diagnostic: when set, the sprite renderer logs sprites that draw a long run
+//of near-black pixels (candidates for the NGCD "black rectangle" HUD bug),
+//including the tile number, palette and whether all four plane bytes are the
+//untouched 0xFF fill (=> tile data was never uploaded).
+extern bool ngGfxDiag;
+
 extern LSPC lspc;

@@ -2889,6 +2889,10 @@ else if (port->type() == "Keyboard") {
     LOGI("System reset requested");
   }
   auto frameAdvance() -> void { lock_guard<recursive_mutex> lock(*runMutex); if (root) root->run(); }
+  auto dumpNgGfx(const char* dir) -> void {
+    lock_guard<recursive_mutex> lock(*runMutex);
+    ::ares::NeoGeo::system.dumpNgGfx(dir);
+  }
   auto setMuteAudio(bool muted) -> void { muteAudioAtomic = muted; }
   auto setShader(const char* path) -> bool { return true; }
   auto saveState(const char* path) -> bool {
@@ -3179,34 +3183,15 @@ else if (port->type() == "Keyboard") {
       LOGI("ZX control scheme set to %d", scheme);
   }
 
-  // Neo Geo CD read-speed multiplier (sectors per 75Hz tick).
-  // 1 = real CD 1x ≈ 150KiB/s (what real CDZ hardware did).
-  //
-  // The cap is 2x. The CDD runs on the 68K's clock in this model, so the
-  // BIOS's access-machine ($C0E99E) and DMA handlers must drain each sector
-  // in the 80,000 / N 68K clocks between ticks. At >2x, the BIOS can't
-  // finish a state transition before the next CDD tick preempts it, and
-  // the access machine reads back a CDC register that hasn't been written
-  // yet (DISC I/O ERROR ID=0002 on the loader screen, ID=0000 elsewhere).
-  // The 68K's instruction pacing also visibly slows on a real-time boot
-  // intro at high N. 1x..2x are equivalent in practice for the loader
-  // and for in-game disc reads.
-  //
-  // NOTE: this is a true per-second instruction cap of the BIOS, NOT a
-  // display-rate cap — the existing "fast-forward" hotkey (target frame
-  // time = 1e6/refreshRate/speed) only relaxes the 120Hz display cap, it
-  // does not advance the 68K faster. For NGCD boot/loader fast-forward
-  // you need real 68K time-slicing (a future change), not just the
-  // refresh-rate cap relaxation.
-  auto setCdSpeed(s32 speed) -> void {
-      if (speed < 1) speed = 1;
-      if (speed > 2) {
-          LOGI("Neo Geo CD speed %d capped to 2x (BIOS access-machine cannot drain faster)", (int)speed);
-          speed = 2;
-      }
-      ::ares::NeoGeo::cdd.readSpeed = (u32)speed;
-      LOGI("Neo Geo CD read speed set to %dx", (int)speed);
-  }
+  // Neo Geo CD drive speed is fixed at 1x (authentic 75Hz CDD tick). The
+  // CDD runs on the 68K's clock in this model, so the BIOS's access-machine
+  // ($C0E99E) and DMA handlers must drain each sector in the ~80,000 68K
+  // clocks between ticks. At >1x the BIOS can't finish a state transition
+  // before the next CDD tick preempts it, and the access machine reads back
+  // a CDC register that hasn't been written yet (DISC I/O ERROR ID=0002 on
+  // the loader screen, ID=0000 elsewhere) — so the drive speed is fixed at
+  // 1x. A real loader fast-forward would need 68K time-slicing (multiple
+  // emulation frames per host frame), not a faster CDD tick.
 
   // Mute the ZX tape's Audio stream (the raw EAR waveform — the loud screech
   // while LOAD "" plays). The GAME still receives the EAR bit via

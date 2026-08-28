@@ -11,7 +11,13 @@ auto LSPC::render(n9 y) -> void {
   n4 hshrink = ~0;
   n8 vshrink = ~0;
 
-  for(u32 sprite : range(381)) {
+  //MVS/AES process sprite slots 0..380. The CD system (LSPC2) processes
+  //slots 1..381 — slot 0 is never rendered and slot 381 IS (libretro neocd
+  //and Geolith both iterate 1..381; MAME 0..380).
+  u32 spriteFirst = NeoGeo::Model::NeoGeoCD() ? 1 : 0;
+  u32 spriteLast  = NeoGeo::Model::NeoGeoCD() ? 382 : 381;
+
+  for(u32 sprite : range(spriteFirst, spriteLast)) {
     n16 sattributes = vram[0x8000 | sprite];
     n16 yattributes = vram[0x8200 | sprite];
     n16 xattributes = vram[0x8400 | sprite];
@@ -47,8 +53,19 @@ auto LSPC::render(n9 y) -> void {
     n2  animate    = attributes.bit(2,3);
     n8  palette    = attributes.bit(8,15);
 
-    tileNumber.bit(16,19) = attributes.bit(4,7);
-    if(auto mask = cartridge.cromMask()) tileNumber &= mask >> 7;  //wrap tile numbers like hardware (MAME masks the 26-bit gfx address)
+    if(NeoGeo::Model::NeoGeoCD()) {
+      //Neo Geo CD: the sprite tile number's upper bits come from the odd
+      //word's "tile MSB" field (bits 4..7), folded into tile bits 12..15 and
+      //masked to 15 bits (the 4MiB sprite DRAM / 128-byte tiles) — Geolith
+      //(neogeo_spr: (attr & 0x00f0) << 12, then & crommask=0x7fff). Dropping
+      //them (libretro-style) makes HUD/UI sprites that use the MSB field
+      //resolve to the wrong tiles. Characters use MSBs = 0, so they're
+      //unaffected.
+      tileNumber = (tileNumber | (u32)attributes.bit(4,7) << 12) & 0x7fff;
+    } else {
+      tileNumber.bit(16,19) = attributes.bit(4,7);
+      if(auto mask = cartridge.cromMask()) tileNumber &= mask >> 7;  //wrap tile numbers like hardware (MAME masks the 26-bit gfx address)
+    }
     if(vflip) row ^= 0xf;
     switch(animate * !animation.disable) {
     case 0: break;
@@ -60,10 +77,24 @@ auto LSPC::render(n9 y) -> void {
     n13 pramAddress = io.pramBank << 12 | palette << 4;
     n27 tileAddress = (tileNumber << 5 | row) << 2;
 
-    n16 d0 = system.readC(tileAddress + 0) << 8 | system.readC(tileAddress + 64 + 0) << 0;
-    n16 d1 = system.readC(tileAddress + 2) << 8 | system.readC(tileAddress + 64 + 2) << 0;
-    n16 d2 = system.readC(tileAddress + 1) << 8 | system.readC(tileAddress + 64 + 1) << 0;
-    n16 d3 = system.readC(tileAddress + 3) << 8 | system.readC(tileAddress + 64 + 3) << 0;
+    n16 d0, d1, d2, d3;
+    if(NeoGeo::Model::NeoGeoCD()) {
+      //Neo Geo CD sprite DRAM byte order differs from the cartridge C ROM:
+      //the four plane bytes of a row are stored in [1,0,3,2] order (the CD
+      //bus is word-lane-swapped vs MVS) — Geolith "CD SPR DRAM: Non-
+      //interleaved byte order [1, 0, 3, 2]" vs cart "[0, 2, 1, 3]", and
+      //libretro neocd decodes the same [1,0,3,2] plane order.
+      d0 = system.readC(tileAddress + 1) << 8 | system.readC(tileAddress + 64 + 1) << 0;
+      d1 = system.readC(tileAddress + 0) << 8 | system.readC(tileAddress + 64 + 0) << 0;
+      d2 = system.readC(tileAddress + 3) << 8 | system.readC(tileAddress + 64 + 3) << 0;
+      d3 = system.readC(tileAddress + 2) << 8 | system.readC(tileAddress + 64 + 2) << 0;
+    } else {
+      //MVS/AES cartridge C ROM: odd/even interleaved plane bytes [0,2,1,3].
+      d0 = system.readC(tileAddress + 0) << 8 | system.readC(tileAddress + 64 + 0) << 0;
+      d1 = system.readC(tileAddress + 2) << 8 | system.readC(tileAddress + 64 + 2) << 0;
+      d2 = system.readC(tileAddress + 1) << 8 | system.readC(tileAddress + 64 + 1) << 0;
+      d3 = system.readC(tileAddress + 3) << 8 | system.readC(tileAddress + 64 + 3) << 0;
+    }
 
     n9  px = 0;
     n4  bx = hflip;

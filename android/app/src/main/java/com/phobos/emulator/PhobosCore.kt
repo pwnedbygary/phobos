@@ -31,10 +31,10 @@ object PhobosCore {
     external fun setN64CountPerOp(value: Int)
     external fun setN64CpuOverclock(factor: Int)
     external fun setN64Pak(pakName: String)
-    external fun setCdSpeed(speed: Int)
     external fun getRumbleState(): Boolean
     external fun resetSystem()
     external fun frameAdvance()
+    external fun dumpNgGfx(dir: String)
     external fun setMuteAudio(muted: Boolean)
     external fun setShader(path: String): Boolean
     external fun saveState(path: String): Boolean

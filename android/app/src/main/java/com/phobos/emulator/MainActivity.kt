@@ -137,6 +137,13 @@ class MainActivity : ComponentActivity() {
      * ready before loading, so cold-start intent loads behave like UI loads.
      */
     private fun handleDebugLoadIntent(intent: android.content.Intent?) {
+        // Debug: dump NGCD graphics memories (sprite/fix/vram/pram) to filesDir.
+        // Usage: adb shell am start -n com.phobos.emulator/.MainActivity --ez dump_ng_gfx true
+        if (intent?.getBooleanExtra("dump_ng_gfx", false) == true) {
+            PhobosCore.dumpNgGfx(filesDir.absolutePath)
+            Log.i("Phobos", "dumpNgGfx: wrote to ${filesDir.absolutePath}")
+            return
+        }
         val uri = intent?.getStringExtra("load_uri") ?: return
         val name = intent.getStringExtra("load_name") ?: return
         val system = intent.getStringExtra("load_system") ?: return

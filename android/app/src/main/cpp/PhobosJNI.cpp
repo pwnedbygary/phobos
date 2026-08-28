@@ -127,6 +127,13 @@ Java_com_phobos_emulator_PhobosCore_frameAdvance(JNIEnv* env, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_dumpNgGfx(JNIEnv* env, jobject, jstring dir) {
+    const char* nativeDir = env->GetStringUTFChars(dir, 0);
+    ares::dumpNgGfx(nativeDir);
+    env->ReleaseStringUTFChars(dir, nativeDir);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setMuteAudio(JNIEnv* env, jobject, jboolean muted) {
     ares::setMuteAudio(muted);
 }
@@ -237,11 +244,6 @@ Java_com_phobos_emulator_PhobosCore_setTapeSpeed(JNIEnv* env, jobject, jint spee
 extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setZxControlScheme(JNIEnv* env, jobject, jint scheme) {
     ares::setZxControlScheme(scheme);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_phobos_emulator_PhobosCore_setCdSpeed(JNIEnv* env, jobject, jint speed) {
-    ares::setCdSpeed(speed);
 }
 
 extern "C" JNIEXPORT void JNICALL

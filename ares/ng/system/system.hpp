@@ -36,6 +36,7 @@ struct System {
   auto readS(n32) -> n8;
   auto readVA(n32) -> n8;
   auto readVB(n32) -> n8;
+  auto dumpNgGfx(const string& dir) -> void;
 
   auto load(Node::System& node, string name) -> bool;
   auto unload() -> void;

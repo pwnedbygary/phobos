@@ -35,21 +35,30 @@ auto Dma::start() -> void {
     break;
 
   case 0xe2dd:
-    //copy bytes from addr1 to addr2, skip odd bytes
+    //copy bytes from addr1 to addr2, skip odd bytes (libretro neocd
+    //dmaOpCopyOddBytes): per 16-bit source word the destination receives the
+    //word AND its byte-swap — 4 destination bytes per word — the Neo Geo CD's
+    //odd-lane DRAM layout. (MAME's byte-zero-extended variant — which this
+    //port followed — stored [b,00,b,00], halving the 4bpp planes on HUD tile
+    //data: the HUD "black boxes"/glyph artifacts.)
     while(count--) {
-      writeWord(address2 + 0, readByte(address1 + 0));
-      writeWord(address2 + 2, readByte(address1 + 1));
+      n16 data = readWord(address1);
+      writeWord(address2 + 0, data);
+      writeWord(address2 + 2, data << 8 | data >> 8);
       address1 += 2;
       address2 += 4;
     }
     break;
 
   case 0xfc2d:
-    //copy from LC8951 external buffer to RAM, skip odd bytes
+    //copy from LC8951 external buffer to RAM, skip odd bytes (libretro neocd
+    //dmaOpCopyCdromOddBytes): per 16-bit buffer word the destination receives
+    //data>>8 then data — 4 destination bytes per word (see 0xe2dd above).
     if(auto data = cdc.initTransfer(count)) {
       while(count--) {
-        writeByte(address1 + 0, data[0]);
-        writeByte(address1 + 2, data[1]);
+        n16 w = n16(data[0]) << 8 | data[1];
+        writeWord(address1 + 0, w >> 8);
+        writeWord(address1 + 2, w);
         address1 += 4;
         data += 2;
       }

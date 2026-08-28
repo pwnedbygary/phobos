@@ -87,11 +87,11 @@ auto LSPC::step(u32 clocks) -> void {
 auto LSPC::main() -> void {
   step(1);
   if(NeoGeo::Model::NeoGeoCD()) {
-    //CDD/CDC tick: 75Hz at 1x read speed; scales with the per-core CD speed
-    //multiplier (75 * readSpeed) so disc loads complete faster while keeping
-    //the exact per-sector protocol (one decoder IRQ per sector).
-    u32 cddHz = 75 * (cdd.readSpeed ? cdd.readSpeed : 1);
-    if(io.cddCounter += 1, io.cddCounter >= 6'000'000 / cddHz) {
+    //CDD/CDC tick at the authentic 75Hz 1x rate (one sector + one decoder
+    //IRQ per tick). Higher rates make the BIOS's access machine read CDC
+    //registers before the pipeline has written them → DISC I/O ERROR
+    //ID=0000/0002, so the drive speed is fixed at 1x.
+    if(io.cddCounter += 1, io.cddCounter >= 6'000'000 / 75) {
       io.cddCounter = 0;
       cdd.tick();
     }

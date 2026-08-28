@@ -137,11 +137,6 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         settingsStore.setZxControlScheme(system, scheme)
         PhobosCore.setZxControlScheme(scheme)
     }
-    // Neo Geo CD per-core read-speed multiplier (1 = CD 1x, up to 96).
-    fun setCdSpeed(system: String, speed: Int) = viewModelScope.launch(Dispatchers.IO) {
-        settingsStore.setCdSpeed(system, speed)
-        PhobosCore.setCdSpeed(speed)
-    }
     fun setZxStickToKeys(system: String, enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setZxStickToKeys(system, enabled)
         PhobosCore.setZxStickToKeys(enabled)
@@ -1590,11 +1585,6 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                 val binds = currentSettings.zxKeyBindings[effectiveSystem] ?: emptyMap()
                 binds.forEach { (label, bit) -> PhobosCore.setZxKeyBinding(label, bit) }
                 PhobosCore.setZxTapeMuted(currentSettings.zxTapeMuted)
-            }
-
-            // Neo Geo CD per-core read-speed multiplier (1 = CD 1x).
-            if (effectiveSystem.contains("Neo Geo CD", ignoreCase = true)) {
-                PhobosCore.setCdSpeed(currentSettings.cdSpeed[effectiveSystem] ?: 1)
             }
 
             // Resolve the user-configured Saves Path (SAF content:// URI) to a

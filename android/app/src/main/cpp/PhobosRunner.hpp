@@ -49,6 +49,7 @@ namespace ares {
   auto setSkipBootRom(bool enabled) -> void;
   auto resetSystem() -> void;
   auto frameAdvance() -> void;
+  auto dumpNgGfx(const char* dir) -> void;
   auto setMuteAudio(bool muted) -> void;
   auto setShader(const char* path) -> bool;
   auto setRegion(s32 regionIndex) -> void;
@@ -89,7 +90,6 @@ namespace ares {
   auto playTape() -> bool;
   auto setTapeSpeed(s32 speed) -> void;
   auto setZxControlScheme(s32 scheme) -> void;
-  auto setCdSpeed(s32 speed) -> void;
   auto setZxStickToKeys(bool enabled) -> void;
   auto setZxReversePitch(bool enabled) -> void;
   auto setZxKeyBinding(const char* label, s32 bit) -> void;

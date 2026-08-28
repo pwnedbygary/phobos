@@ -98,8 +98,8 @@ auto Cdd::tick() -> void {
   }
 
   //sector pipeline: stream one sector per tick while a read is active.
-  //The tick itself runs at 75 * readSpeed Hz (lspc.cpp), so the loader
-  //consumes sectors N× faster while keeping the exact per-sector protocol
+  //The tick itself runs at the fixed 75Hz 1x rate (lspc.cpp), so the loader
+  //consumes sectors at authentic CD speed with the exact per-sector protocol
   //(one decoder IRQ per sector; header always matches the sector being
   //consumed). Ring-buffer safety net: never write a sector that would wrap
   //onto data the BIOS hasn't DMA'd out of the 0x8000-byte PT/DAC ring.
@@ -278,9 +278,8 @@ auto Cdd::stop() -> void {
   status = 0x0000;
   control |= 0x0100;    //data mode
   statusHack = 0x0e;    //"tray moving" — required by the boot disc-check
-  //~2s of tray settling in wall time: ticks come at 75*readSpeed Hz, so the
-  //counter scales inversely with the speed multiplier.
-  settleCounter = (n16)(150 * (readSpeed ? readSpeed : 1));
+  //~2s of tray settling in wall time: ticks come at the fixed 75Hz 1x rate.
+  settleCounter = 150;
 }
 
 auto Cdd::handleTocCommands() -> void {
