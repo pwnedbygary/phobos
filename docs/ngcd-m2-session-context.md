@@ -46,6 +46,14 @@ blank lead-in and returned **all-zero sectors**, which stalled the whole BIOS bo
 `sector*2448+2352` (physical), which is correct because `vfs::cdrom::loadSub` synthesizes subchannel for
 every physical sector.
 
+## THE #3 GOTCHA: FIX (text) upload zone index (FIX DEPLOYED — keep it)
+The transfer-area upload zone for FIX DRAM (`case 5` in `CPU::write`, window `$E00000-$EFFFFF`) must map
+to the 128KiB `fixRam` as `(address >> 1) & 0x1FFFF` (accepting the lower lane / odd-byte stores, per
+libretro neocd `memory_mapped.cpp`). The old code masked with `0x3FFFF` — a **heap overrun** (writes
+past the 128KiB array into adjacent RAM) on top of wrong indexing, which garbled the in-game text layer.
+Sprite/PCM/Z80 zones mirror the same `>>1` word-index model (verified against libretro; SPR renders
+correctly, leave it).
+
 ## BIOS boot / state machine (all addresses are the swapped/executed view)
 - Reset vector (emulator interpretation, LE words): `SP=$10F300`, `PC=$C00402` → `jmp $C0A5B6`.
 - **Top-level state dispatcher `$C00108`**: `move.b $73d8(a5),d0` ×4 → table at `$C00116`:
@@ -85,11 +93,32 @@ every physical sector.
 
 ## CDD settle + disc-detect HLE (KEEP — pragmatic, documented)
 - `stop()` keeps `statusHack=0x0e` ("tray moving") — boot disc-check requires it — and arms
-  `settleCounter=150` (~2 s @ 75 Hz). `tick()` then transitions to `0x09` (CdStopped), and **pokes
-  `$10F656` bit 0** (`w.byte(1) |= 0x01`) when a disc is present. That bit is what triggers the BIOS's own
-  boot-init (`$C0CEC4`), which runs the TOC/position phase and sets bit 7 itself. ⚠ Do NOT poke bit 7
-  directly: it auto-boots the loader before the TOC exists → garbage READ (`0xFF` MSF → DISC I/O ERROR).
-  (The natural setter `$C007CA`/`$C00858` never executes in this emulator's path; bit-0 poke is the standing HLE.)
+  `settleCounter` (scaled: `150 × readSpeed`, ~2 s wall time). `tick()` then transitions to `0x09`
+  (CdStopped), and **pokes `$10F656` bit 0** (`w.byte(1) |= 0x01`) when a disc is present. That bit is
+  what triggers the BIOS's own boot-init (`$C0CEC4`), which runs the TOC/position phase and sets bit 7
+  itself. ⚠ Do NOT poke bit 7 directly: it auto-boots the loader before the TOC exists → garbage READ
+  (`0xFF` MSF → DISC I/O ERROR). (The natural setter `$C007CA`/`$C00858` never executes in this
+  emulator's path; bit-0 poke is the standing HLE.)
+- **2026-08-27 fix**: the poke is gated on **bit 7 clear** (`if(!(w.byte(1) & 0x80))`). Previously every
+  STOP re-armed the settle, and every settle re-poked bit 0 → the BIOS's boot-init re-ran forever →
+  the CD player menu blipped "WAIT FOR A MOMENT" every ~2s. Once the BIOS sets bit 7 (disc-ready) it
+  also clears bit 0; gating the poke on bit 7 means the disc check runs once and stays done.
+
+## CD read speed option (per-core, pause menu — ✳ "Instant" is safe)
+- Setting `cdd.readSpeed` scales the CDD tick to `75 × readSpeed` Hz (lspc.cpp), so the sector pipeline
+  and decoder IRQs run N× faster. One sector + one decoder IRQ per tick is preserved at every speed —
+  the BIOS sees the exact same protocol, just clocked faster (like a CD drive that spins N× up).
+- **Compatibility analysis**: NGCD has no drive-speed register and no wall-clock reference; the loader
+  paces on instruction-counted loops and block counters ($7688/$76BC) that simply drain N× sooner.
+  Seeks clear `statusCdc` bit 0 (delivery stops until the next READ), so there's no position drift —
+  unlike PS1, where fast drives can break seek/Q-subchannel timing. The one real hazard (ring overflow:
+  PT wrapping over data the BIOS hasn't DMA'd from the 0x8000-byte PT/DAC ring) is guarded in `tick()`
+  — a sector is only written while `(PT + 2352 - DAC) & 0x7fff` leaves room. So 96x "Instant" is safe
+  by construction; if a title ever misbehaves at a high multiplier, dropping the option a notch is the
+  fallback.
+- Distribution: pause menu → "CD Speed" dropdown (1x..96x) → SettingsStore `cd_speed_<system>` →
+  `PhobosCore.setCdSpeed` → `ares::setCdSpeed` → `cdd.readSpeed`. Applied per-core (Map keyed by
+  system name) and re-pushed on load in `MainViewModel.loadRom`.
 
 ## DMA model (working — keep as-is)
 - LC8953 trigger is byte `$FF0061`: `$00` = load microcode, `$40` = start DMA. 68K byte store arrives as

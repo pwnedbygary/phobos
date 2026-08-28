@@ -90,6 +90,8 @@ data class EmulatorSettings(
     val systemFirmwarePaths: Map<String, String> = emptyMap(),
     // ZX per-core control scheme (0=Kempston,1=QAOP,2=ZXZX,3=ELITE,4=CUSTOM)
     val zxControlScheme: Map<String, Int> = emptyMap(),
+    // Neo Geo CD per-core read-speed multiplier (sectors per 75Hz tick, 1=CD 1x)
+    val cdSpeed: Map<String, Int> = emptyMap(),
     // ZX per-core key rebinds: system -> {keyboardLabel -> gamepadBit}
     val zxKeyBindings: Map<String, Map<String, Int>> = emptyMap(),
     val zxStickToKeys: Map<String, Boolean> = emptyMap(),
@@ -162,6 +164,8 @@ class SettingsStore(private val context: Context) {
         val ZX_BIND_PREFIX = "zx_bind_"
         val ZX_STICK_PREFIX = "zx_stick_"
         val ZX_REVERSE_PREFIX = "zx_reverse_"
+        // Neo Geo CD per-core read-speed multiplier (1 = CD 1x)
+        val CD_SPEED_PREFIX = "cd_speed_"
     }
 
     val settings: Flow<EmulatorSettings> = context.dataStore.data.map { preferences ->
@@ -173,6 +177,7 @@ class SettingsStore(private val context: Context) {
         val zxBinds = mutableMapOf<String, Map<String, Int>>()
         val zxSticks = mutableMapOf<String, Boolean>()
         val zxReverses = mutableMapOf<String, Boolean>()
+        val cdSpeeds = mutableMapOf<String, Int>()
 
         preferences.asMap().forEach { (key, value) ->
             val name = key.name
@@ -198,6 +203,8 @@ class SettingsStore(private val context: Context) {
                 hotkeys[action] = combo
             } else if (name.startsWith(ZX_SCHEME_PREFIX) && value is Int) {
                 zxSchemes[name.removePrefix(ZX_SCHEME_PREFIX)] = value
+            } else if (name.startsWith(CD_SPEED_PREFIX) && value is Int) {
+                cdSpeeds[name.removePrefix(CD_SPEED_PREFIX)] = value
             } else if (name.startsWith(ZX_BIND_PREFIX) && value is String) {
                 // "label=bit,label=bit,..." — labels contain spaces (e.g. "SPACE BREAK")
                 val system = name.removePrefix(ZX_BIND_PREFIX)
@@ -327,6 +334,7 @@ class SettingsStore(private val context: Context) {
             zxKeyBindings = zxBinds,
             zxStickToKeys = zxSticks,
             zxReversePitch = zxReverses,
+            cdSpeed = cdSpeeds,
             hasDefaultsInitialized = safeGet(HAS_DEFAULTS_INITIALIZED, false)
         )
     }
@@ -435,6 +443,7 @@ class SettingsStore(private val context: Context) {
         p[HIDDEN_SYSTEMS] = if (visible) current - system else current + system
     }
     suspend fun setZxControlScheme(system: String, scheme: Int) = context.dataStore.edit { it[intPreferencesKey(ZX_SCHEME_PREFIX + system)] = scheme }
+    suspend fun setCdSpeed(system: String, speed: Int) = context.dataStore.edit { it[intPreferencesKey(CD_SPEED_PREFIX + system)] = speed }
     suspend fun setZxStickToKeys(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_STICK_PREFIX + system)] = enabled }
     suspend fun setZxReversePitch(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_REVERSE_PREFIX + system)] = enabled }
     suspend fun setZxKeyBinding(system: String, label: String, bit: Int) = context.dataStore.edit { p ->

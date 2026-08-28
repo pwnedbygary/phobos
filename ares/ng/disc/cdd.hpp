@@ -29,6 +29,14 @@ struct Cdd {
   n16 latch16 = 0;     //nff0016
   n2  region = 1;      //1 = US (English BIOS menus); 0 = Japan
 
+  //CD read speed multiplier: the CDD tick (and thus the sector pipeline and
+  //decoder IRQ cadence) runs at 75 * readSpeed Hz. 1 = authentic CD 1x
+  //(75 sectors/s ≈ 150KiB/s — what real CDZ hardware did). Higher values
+  //make the drive "spin faster": the BIOS gets exactly one sector + one
+  //decoder IRQ per tick, so the protocol is identical — just N× faster.
+  //Must stay ≥1; the Java side offers up to 96x ("Instant").
+  u32 readSpeed = 1;
+
   //interrupt state (level 2, vectors 0x15/0x16/0x17)
   n1 type1Pending = 0;
   n1 type2Pending = 0;

@@ -33,6 +33,18 @@ directory reads at 75 Hz, DMA, decoder IRQs) → BIOS sets disc-ready itself →
 main loop. The `$10F656` bit-0 poke (disc-detected HLE at settle) remains — it triggers the BIOS's own
 boot-init, which then does everything else naturally.
 
+**Same-day follow-up (2026-08-27 evening):**
+- **"WAIT FOR A MOMENT" 2s blink fixed** — the bit-0 poke is now gated on bit 7 clear
+  (`if(!(w.byte(1) & 0x80))`). Every STOP re-armed the settle and every settle re-poked bit 0, so the
+  BIOS's boot-init re-ran forever and the menu blipped WAIT every ~2s. Now the disc check runs once.
+- **FIX (text) upload-zone heap overrun fixed** — `case 5` mapped `(address>>1) & 0x3FFFF` into a
+  128KiB `fixRam`; mask must be `0x1FFFF` (matches libretro neocd). Fixes garbled in-game text.
+- **New: per-core CD read speed option** (pause menu → "CD Speed": 1x..96x "Instant"). `cdd.readSpeed`
+  scales the CDD tick to `75×N` Hz — one sector + one decoder IRQ per tick is preserved at any speed,
+  so the protocol is identical, just N× faster (like a spinning-up drive). Ring overflow (PT wrapping
+  over undrained DAC data) is guarded in `tick()`. Distribution: SettingsStore `cd_speed_<system>` →
+  `PhobosCore.setCdSpeed` → `ares::setCdSpeed` → `cdd.readSpeed`; re-pushed on load in `loadRom`.
+
 Open items (non-blocking): decide C→X/D→Y remap for the 4-face-button layout on the Retroid; flag the
 unrelated AGP 9.3.1→9.3.2 bump in `android/gradle/libs.versions.toml`.
 

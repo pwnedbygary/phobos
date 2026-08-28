@@ -54,9 +54,15 @@ auto Cdd::tick() -> void {
         //from there.  Poking bit 7 directly was wrong: it auto-booted the
         //loader BEFORE the TOC phase, so the loader's READ carried $FF
         //positions (lba=754887 garbage → DISC I/O ERROR).
+        //
+        //Only poke while bit 7 (disc-ready) is still clear: once the BIOS's
+        //boot-init completes it sets bit 7 itself and clears bit 0, and any
+        //further settles (the loader menu keeps issuing STOPs) must NOT
+        //re-trigger the whole disc check — otherwise the screen cycles
+        //"WAIT FOR A MOMENT" every ~2s forever.
         {
           auto& w = system.wram[(0x108000 + 0x7656) >> 1];
-          w.byte(1) |= 0x01;
+          if(!(w.byte(1) & 0x80)) w.byte(1) |= 0x01;
         }
       } else {
         statusHack = 0;       //Stop mode (no disc)
@@ -81,9 +87,17 @@ auto Cdd::tick() -> void {
     }
   }
 
-  //sector pipeline: stream one sector per tick while a read is active
+  //sector pipeline: stream one sector per tick while a read is active.
+  //The tick itself runs at 75 * readSpeed Hz (lspc.cpp), so the loader
+  //consumes sectors N× faster while keeping the exact per-sector protocol
+  //(one decoder IRQ per sector; header always matches the sector being
+  //consumed). Ring-buffer safety net: never write a sector that would wrap
+  //onto data the BIOS hasn't DMA'd out of the 0x8000-byte PT/DAC ring.
   if(statusCdc & 0x01) {
-    readLbaToBuffer();
+    u16 pt  = (u32)cdc.wreg[0xc] | (u32)cdc.wreg[0xd] << 8;
+    u16 dac = (u32)cdc.wreg[0x4] | (u32)cdc.wreg[0x5] << 8;
+    u32 ahead = (pt + 2352 - dac) & 0x7fff;
+    if(ahead <= 0x7fff - 2352) readLbaToBuffer();
   }
 }
 
@@ -254,7 +268,9 @@ auto Cdd::stop() -> void {
   status = 0x0000;
   control |= 0x0100;    //data mode
   statusHack = 0x0e;    //"tray moving" — required by the boot disc-check
-  settleCounter = 150;  //~2s at 75Hz, then report settled Stopped (0x09)
+  //~2s of tray settling in wall time: ticks come at 75*readSpeed Hz, so the
+  //counter scales inversely with the speed multiplier.
+  settleCounter = (n16)(150 * (readSpeed ? readSpeed : 1));
 }
 
 auto Cdd::handleTocCommands() -> void {

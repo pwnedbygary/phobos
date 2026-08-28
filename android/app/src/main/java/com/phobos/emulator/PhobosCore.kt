@@ -31,6 +31,7 @@ object PhobosCore {
     external fun setN64CountPerOp(value: Int)
     external fun setN64CpuOverclock(factor: Int)
     external fun setN64Pak(pakName: String)
+    external fun setCdSpeed(speed: Int)
     external fun getRumbleState(): Boolean
     external fun resetSystem()
     external fun frameAdvance()

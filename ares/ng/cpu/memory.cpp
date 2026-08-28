@@ -92,7 +92,7 @@ auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
         case 0: return system.spriteRam[(address & 0xfffff) >> 1];
         case 1: return system.pcmRam[(address & 0xfffff) >> 1];
         case 4: return apu.ram[(address & 0x1ffff) + upper];
-        case 5: return system.fixRam[(address & 0x3ffff) >> 1];
+        case 5: return system.fixRam[(address >> 1) & 0x1ffff];
       }
     } else if(address <= 0xffffff) {
       return readIO(upper, lower, address, data);
@@ -163,6 +163,11 @@ auto CPU::write(n1 upper, n1 lower, n24 address, n16 data) -> void {
   if(NeoGeo::Model::NeoGeoCD()) {
     if(address <= 0xefffff) {
       switch(system.io.uploadZone) {
+        //Transfer-area upload zones ($E00000-$EFFFFF window). Index math mirrors
+        //libretro neocd memory_mapped.cpp (the working reference): each zone
+        //accepts the 68K's byte stores through the low lane at odd addresses
+        //(the bus is effectively byte-swapped on the CD); the 16-bit word index
+        //is address>>1 masked to each RAM's size.
         case 0: address &= 0xfffff;
                 address.bit(20, 21) = system.io.spriteUploadBank;
                 if(upper) system.spriteRam[address >> 1].byte(1) = data.byte(1);
@@ -171,13 +176,15 @@ auto CPU::write(n1 upper, n1 lower, n24 address, n16 data) -> void {
         case 1: address &= 0xfffff;
                 address.bit(19) = system.io.pcmUploadBank;
                 address >>= 1;
-                if(lower) system.pcmRam[address] = data.byte(0);
+                //libretro: pcmRam[(addr >> 1) + bank*0x80000], odd byte addr only
+                if(lower) system.pcmRam[(address + (system.io.pcmUploadBank << 19)) & 0xfffff] = data.byte(0);
                 return;
         case 4: address >>= 1;
                 if(lower) apu.ram[address & 0x1ffff] = data.byte(0);
                 return;
-        case 5: address >>= 1;
-                if(lower) system.fixRam[address & 0x3ffff] = data.byte(0);
+        case 5: //FIX DRAM 128KiB — index MUST be & 0x1ffff (0x3ffff overflows the
+                //array and corrupts adjacent memory → garbled text layer)
+                if(lower) system.fixRam[(address >> 1) & 0x1ffff] = data.byte(0);
                 return;
       }
       return;

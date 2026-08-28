@@ -89,6 +89,7 @@ namespace ares {
   auto playTape() -> bool;
   auto setTapeSpeed(s32 speed) -> void;
   auto setZxControlScheme(s32 scheme) -> void;
+  auto setCdSpeed(s32 speed) -> void;
   auto setZxStickToKeys(bool enabled) -> void;
   auto setZxReversePitch(bool enabled) -> void;
   auto setZxKeyBinding(const char* label, s32 bit) -> void;

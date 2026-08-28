@@ -87,7 +87,11 @@ auto LSPC::step(u32 clocks) -> void {
 auto LSPC::main() -> void {
   step(1);
   if(NeoGeo::Model::NeoGeoCD()) {
-    if(io.cddCounter += 1, io.cddCounter >= 6'000'000 / 75) {
+    //CDD/CDC tick: 75Hz at 1x read speed; scales with the per-core CD speed
+    //multiplier (75 * readSpeed) so disc loads complete faster while keeping
+    //the exact per-sector protocol (one decoder IRQ per sector).
+    u32 cddHz = 75 * (cdd.readSpeed ? cdd.readSpeed : 1);
+    if(io.cddCounter += 1, io.cddCounter >= 6'000'000 / cddHz) {
       io.cddCounter = 0;
       cdd.tick();
     }

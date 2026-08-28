@@ -872,6 +872,52 @@ fun EmulationMenu(
                         }
                     }
 
+                    // ── CD Speed (Neo Geo CD — per-core read multiplier) ────
+                    if (systemName.contains("Neo Geo CD", ignoreCase = true)) {
+                        item {
+                            MenuSection("CD Speed") {
+                                val speeds = listOf(
+                                    1 to "1x (Real CD)",
+                                    2 to "2x",
+                                    3 to "3x",
+                                    4 to "4x",
+                                    6 to "6x",
+                                    8 to "8x",
+                                    12 to "12x",
+                                    16 to "16x",
+                                    24 to "24x",
+                                    32 to "32x",
+                                    48 to "48x",
+                                    96 to "Instant"
+                                )
+                                var cdSpeedExpanded by remember { mutableStateOf(false) }
+                                val currentSpeed = settings.cdSpeed[systemName] ?: 1
+                                ListItem(
+                                    headlineContent = { Text("Disc Read Speed") },
+                                    supportingContent = { Text("Sectors per 75Hz tick. 1x = real CD 1× ≈ 150KiB/s (authentic, slow); higher values load much faster.") },
+                                    trailingContent = {
+                                        Box {
+                                            TextButton(onClick = { cdSpeedExpanded = true }) {
+                                                Text(speeds.firstOrNull { it.first == currentSpeed }?.second ?: "${currentSpeed}x")
+                                            }
+                                            DropdownMenu(expanded = cdSpeedExpanded, onDismissRequest = { cdSpeedExpanded = false }) {
+                                                speeds.forEach { (speed, label) ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(label) },
+                                                        onClick = {
+                                                            cdSpeedExpanded = false
+                                                            viewModel.setCdSpeed(systemName, speed)
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
                     // ── Settings Toggles ─────────────────────────────────────
                     item {
                         MenuSection("Settings Toggles") {

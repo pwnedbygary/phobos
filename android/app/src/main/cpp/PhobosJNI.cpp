@@ -240,6 +240,11 @@ Java_com_phobos_emulator_PhobosCore_setZxControlScheme(JNIEnv* env, jobject, jin
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setCdSpeed(JNIEnv* env, jobject, jint speed) {
+    ares::setCdSpeed(speed);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setZxStickToKeys(JNIEnv* env, jobject, jboolean enabled) {
     ares::setZxStickToKeys(enabled);
 }

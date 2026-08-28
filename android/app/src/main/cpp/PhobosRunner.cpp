@@ -3179,6 +3179,16 @@ else if (port->type() == "Keyboard") {
       LOGI("ZX control scheme set to %d", scheme);
   }
 
+  // Neo Geo CD read-speed multiplier (sectors per 75Hz tick).
+  // 1 = real CD 1x ≈ 150KiB/s (what real CDZ hardware did); higher values
+  // load the disc faster, up to the ring-buffer cap (13 sectors/tick).
+  auto setCdSpeed(s32 speed) -> void {
+      if (speed < 1) speed = 1;
+      if (speed > 4096) speed = 4096;
+      ::ares::NeoGeo::cdd.readSpeed = (u32)speed;
+      LOGI("Neo Geo CD read speed set to %dx", (int)speed);
+  }
+
   // Mute the ZX tape's Audio stream (the raw EAR waveform — the loud screech
   // while LOAD "" plays). The GAME still receives the EAR bit via
   // TapeDeck::read() (independent of the audio stream), so loading is
