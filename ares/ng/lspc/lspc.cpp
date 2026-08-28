@@ -1,4 +1,3 @@
-#include <android/log.h>
 namespace ares::NeoGeo {
 
 LSPC lspc;

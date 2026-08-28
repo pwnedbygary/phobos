@@ -195,7 +195,13 @@ auto CPU::write(n1 upper, n1 lower, n24 address, n16 data) -> void {
 auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
   //REG_P1CNT
   if((address & 0xfe0000) == 0x300000 && upper) {
-    data.byte(1) = controllerPort1.readButtons();
+    //NEO-C1 selector gate (libretro neocd controller1Handlers): controller
+    //data only appears when $380001 holds 0x00/0x12/0x1B; otherwise idle $FF.
+    if(system.io.ctrlSelector == 0x00 || system.io.ctrlSelector == 0x12 || system.io.ctrlSelector == 0x1b) {
+      data.byte(1) = controllerPort1.readButtons();
+    } else {
+      data.byte(1) = 0xff;
+    }
   }
 
   //REG_DIPSW
@@ -242,16 +248,43 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
 
   //REG_P2CNT
   if((address & 0xfe0000) == 0x340000 && upper) {
-    data.byte(1) = controllerPort2.readButtons();
+    if(system.io.ctrlSelector == 0x00 || system.io.ctrlSelector == 0x12 || system.io.ctrlSelector == 0x1b) {
+      data.byte(1) = controllerPort2.readButtons();
+    } else {
+      data.byte(1) = 0xff;
+    }
   }
 
   //REG_STATUS_B
   if((address & 0xfe0000) == 0x380000 && upper) {
-    data.bit( 8, 9) = controllerPort1.readControls();
-    data.bit(10,11) = controllerPort2.readControls();
-    data.bit(12,13) = 0b00;  //0b00 = memory card inserted
-    data.bit(14)    = cardSlot.lock != 0;
-    data.bit(15)    = NeoGeo::Model::NeoGeoMVS();  //0 = AES; 1 = MVS
+    if(NeoGeo::Model::NeoGeoCD()) {
+      //libretro neocd controller3 handlers: a byte read of $380000 returns the
+      //Start/Select byte in the LOW byte (bits 0-3, P1 Start/Sel = 0/1, P2 = 2/3,
+      //active-low); a WORD read returns it in the HIGH byte (input3<<8 | 0xFF).
+      //Both are gated by the $380001 selector (0x00/0x12/0x1B valid; byte reads
+      //of odd addresses return 0xFF).
+      n8 v = 0x0f;
+      if(system.io.ctrlSelector == 0x00 || system.io.ctrlSelector == 0x12 || system.io.ctrlSelector == 0x1b) {
+        n2 c1 = controllerPort1.readControls();
+        n2 c2 = controllerPort2.readControls();
+        v.bit(0) = c1.bit(0);  //P1 Start
+        v.bit(1) = c1.bit(1);  //P1 Select
+        v.bit(2) = c2.bit(0);  //P2 Start
+        v.bit(3) = c2.bit(1);  //P2 Select
+      }
+      //Lanes: the m68k's byte read of even $380000 uses /UDS and takes byte(1);
+      //word reads take both. libretro's word read is input3<<8|0xFF, so the
+      //Start/Select byte lives in byte(1) for both access sizes; odd-address
+      //byte reads ($380001) fall through with upper=0 and read 0xFF elsewhere.
+      data.byte(1) = v;
+      data.byte(0) = 0xff;
+    } else {
+      data.bit( 8, 9) = controllerPort1.readControls();
+      data.bit(10,11) = controllerPort2.readControls();
+      data.bit(12,13) = 0b00;  //0b00 = memory card inserted
+      data.bit(14)    = cardSlot.lock != 0;
+      data.bit(15)    = NeoGeo::Model::NeoGeoMVS();  //0 = AES; 1 = MVS
+    }
   }
 
   //REG_VRAMADDR
@@ -323,8 +356,17 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
 
   //REG_POUTPUT
   if((address & 0xfe0070) == 0x380000 && lower) {
-    controllerPort1.writeOutputs(data.bit(0,2));
-    controllerPort2.writeOutputs(data.bit(3,5));
+    //NEO-C1 controller selector (libretro neocd controller3WriteByte): on CD
+    //systems a byte write to $380001 (upper=0, lower=1) selects what
+    //$300000/$340000/$380000 return (0x00/0x12/0x1B = controller data). The
+    //68k presents an odd byte store as address&~1 with lower=1. On AES/MVS
+    //this address is REG_POUTPUT (controller output lines) instead.
+    if(NeoGeo::Model::NeoGeoCD() && !upper) {
+      system.io.ctrlSelector = data.byte(0);
+    } else {
+      controllerPort1.writeOutputs(data.bit(0,2));
+      controllerPort2.writeOutputs(data.bit(3,5));
+    }
   }
 
   //REG_CRDBANK
@@ -557,7 +599,20 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
 
 //DMA controller
   if((address & 0xfffffe) == 0xff0060) {
-    if(data.bit(6)) dma.start();
+    //LC8953 trigger is the BYTE $FF0061 (wiki: $00 = load microcode, $40 = start
+    //DMA). The 68k presents an odd byte store as address&~1 with lower=1 and the
+    //value in the low byte; word stores to $FF0060 keep upper+lower. The BIOS
+    //(neocdz) writes move.b #$40,$FF0061 to start every upload DMA.
+    if(!upper) {  //byte write to $FF0061 (odd)
+      n8 b = data.byte(0);
+      if(b == 0x40) {
+        dma.start();
+      } else {
+        //$00 = load microcode; the LC8953 upload program lives in $FF0080-$FF008E
+      }
+    } else {
+      if(data.bit(6)) dma.start();
+    }
     return;
   }
   if((address & 0xfffffe) == 0xff0064) { dma.setAddress1Hi(data); return; }
@@ -590,10 +645,26 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
   }
 
   //REG_IRQACK: bits 3/4/5 acknowledge the CDD type3/type2/type1 IRQs.
-  //The NeoCD BIOS writes $FF000F (0x08/0x10/0x20). The pending flags are
-  //consumed only by the CPU dispatch; the acknowledge just records the
-  //acknowledged state so late-arriving acks cannot swallow sector events.
+  //The NeoCD BIOS writes $FF000F with 0x08 (type1) / 0x10 (type2) / 0x20
+  //(type3) at the top of each vector stub. On hardware the CDD IRQ line
+  //stays asserted while any type is unacked; the 68k then takes the next
+  //unacked type on the following dispatch. Our dispatch must therefore
+  //NOT consume pending flags by itself — the ack write here clears the
+  //acknowledged type, and the CPU keeps dispatching while any type remains
+  //pending. (Without this, a continuously-streaming type1 sector IRQ
+  //starves the 75Hz type2 access IRQ, and the BIOS wait loop that needs
+  //$76BC>=8 via the access handler never completes — "WAIT FOR A MOMENT"
+  //forever.)
   if((address & 0xfffffe) == 0xff000e || (address & 0xfffffe) == 0xff000f) {
+    if(lower) {
+      if(data.byte(0) & 0x08) cdd.type1Pending = 0;
+      if(data.byte(0) & 0x10) cdd.type2Pending = 0;
+      if(data.byte(0) & 0x20) cdd.type3Pending = 0;
+      //re-assert the CDD interrupt if any type is still pending
+      if(cdd.type1Pending || cdd.type2Pending || cdd.type3Pending) {
+        cpu.raise(CPU::Interrupt::CDD);
+      }
+    }
     return;
   }
 

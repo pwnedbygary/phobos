@@ -136,11 +136,12 @@ object GameInputState {
         push(force = true)
     }
 
-    /** Replace the full on-screen (virtual) button mask and push. */
-    fun updateVirtualButtons(mask: Int) {
-        virtualButtons = mask
-        push(force = true)
-    }
+  /** Replace the full on-screen (virtual) button mask and push. */
+  fun updateVirtualButtons(mask: Int) {
+    Log.i("PhobosInput", "Touch virtualButtons=%08x".format(mask))
+    virtualButtons = mask
+    push(force = true)
+  }
 
     /**
      * Processes a joystick MotionEvent using the user's input mappings.

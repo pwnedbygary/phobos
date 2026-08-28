@@ -53,11 +53,16 @@ auto Disc::disconnect() -> void {
 }
 
 auto Disc::readSectorRaw(u32 lba) -> std::vector<u8> {
+  //nall::vfs::cdrom stores the image as a raw 2448-byte-per-sector stream that
+  //begins at the disc lead-in: logical LBA N lives at physical sector
+  //(LeadInSectors + LBAtoABA(N)).  Seeking at lba*2448 hits the blank lead-in
+  //and yields all-zero sectors (PS1::Drive uses the same mapping).
   std::vector<u8> sector;
   if(!fd) return sector;
-  if(lba >= fd->size() / 2448) return sector;
+  s64 physical = (s64)CD::LeadInSectors + (s64)CD::LBAtoABA((s32)lba);
+  if(physical < 0 || (u64)physical >= fd->size() / 2448) return sector;
   sector.resize(2352);
-  fd->seek(lba * 2448);
+  fd->seek(2448ull * (u64)physical);
   fd->read({sector.data(), sector.size()});
   return sector;
 }

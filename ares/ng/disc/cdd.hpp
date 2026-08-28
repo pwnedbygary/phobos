@@ -14,6 +14,7 @@ struct Cdd {
   //cd deck state
   n16 status = 0;      //CDD_STATUS
   n16 curStatus = 0;   //SCD_STATUS
+  n16 settleCounter = 0;  //75Hz ticks until drive settles after a Stop
   n16 min = 0;
   n16 sec = 0;
   n16 frame = 0;

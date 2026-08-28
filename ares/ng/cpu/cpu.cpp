@@ -1,6 +1,7 @@
 namespace ares::NeoGeo {
 
 CPU cpu;
+
 #include "memory.cpp"
 #include "debugger.cpp"
 #include "serialization.cpp"
@@ -46,16 +47,25 @@ auto CPU::main() -> void {
 
     //Neo Geo CD: CDD interrupts (level 2, distinct vectors 0x15/0x16/0x17).
     //The 75Hz CDD tick asserts type2 while the read/DMA completion asserts
-    //type1/type3. The BIOS masks to IPL 7 during the boot processing, so the
-    //CDD IRQs are taken regardless of the CPU IPL (mirrors the hardware where
-    //the sector/CDC completion must interrupt the loader).
-    if(NeoGeo::Model::NeoGeoCD()) {
-      if(lower(Interrupt::CDD)) {
-        debugger.interrupt("CDD");
-        if(cdd.type3Pending) { cdd.type3Pending = 0; cdd.type3Ack = 0; return interrupt(Vector::CDDType3, 2); }
-        if(cdd.type1Pending) { cdd.type1Pending = 0; cdd.type1Ack = 0; return interrupt(Vector::CDDType1, 2); }
-        if(cdd.type2Pending) { cdd.type2Pending = 0; cdd.type2Ack = 0; return interrupt(Vector::CDDType2, 2); }
-        return interrupt(Vector::CDDType2, 2);
+    //type1/type3. This is a normal level-2 IRQ (MAME: set_input_line(2)):
+    //accepted only while SR IPL < 2 — the 68k masks the level once taken
+    //(r.i = 2 in exception()) and only re-takes it after the handler's RTE
+    //restores SR, by which time the BIOS has acked the type via $FF000F.
+    //Hardware semantics (MAME ngcd_state::irq_update): the IRQ line stays
+    //asserted while ANY type is unacked; the BIOS acknowledges each type
+    //(bits 5/4/3 = 0x20/0x10/0x08 = type3/type2/type1), which clears ONLY
+    //that type, and the next dispatch takes the next unacked type.  Pending
+    //flags are therefore consumed by the ACK write, NOT by the dispatch —
+    //otherwise a continuously-streaming type3 sector IRQ starves the 75Hz
+    //type2 access IRQ and the BIOS's boot wait loop ($76BC>=8, advanced by
+    //the access handler) never completes.
+    if(NeoGeo::Model::NeoGeoCD() && 2 > r.i) {
+      if(io.interruptPending.bit((u32)Interrupt::CDD)) {
+        if(cdd.type3Pending) { cdd.type3Ack = 0; return interrupt(Vector::CDDType3, 2); }
+        if(cdd.type1Pending) { cdd.type1Ack = 0; return interrupt(Vector::CDDType1, 2); }
+        if(cdd.type2Pending) { cdd.type2Ack = 0; return interrupt(Vector::CDDType2, 2); }
+        //line asserted but no type pending (late ack / spurious): deassert
+        io.interruptPending.bit((u32)Interrupt::CDD) = 0;
       }
     }
   }

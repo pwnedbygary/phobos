@@ -30,11 +30,55 @@ auto Cdd::commsControl(n1 clockEdge, n1 send) -> void {
 }
 
 auto Cdd::tick() -> void {
+  //CDD settle: after a Stop the tray mechanism takes ~2s to settle on real
+  //hardware. Report 0x0E ("tray moving") during that window — the BIOS boot
+  //disc-check requires it — then transition to 0x09 (stopped) so the game
+  //loader's status poll sees a settled drive and proceeds to issue Play/read.
+  //(MAME's lc89510 NeoCD path never settles — its neocd driver is
+  //MACHINE_NOT_WORKING. libretro neocd uses CdStopped=0x90 = nibble 9.)
+  if(settleCounter) {
+    if(--settleCounter == 0) {
+      bool disc = hasDisc();
+      if(disc) {
+        statusHack = 9;       //Reading TOC (disc present, drive settled)
+        curStatus = 0x0900;   //CDD_STOPPED — disc present
+        status = 0x0900;
+        control |= 0x0100;    //data mode
+        //Pragmatic HLE: on real hardware the CDD's disc-detect report path
+        //sets $10F656 bit 0 ("disc detected", BIOS site $C0BD98).  From
+        //there the BIOS's own boot-init ($C0CEC4: btst #0,$10F656) runs
+        //the full disc/TOC phase — which populates the loader's position
+        //regs and sets bit 7 itself ($C0D2E4) before the auto-boot gate
+        //($C14C40).  Our CDD never delivers that report, so we poke bit 0
+        //at settle (drive settled + disc present) and let the BIOS take it
+        //from there.  Poking bit 7 directly was wrong: it auto-booted the
+        //loader BEFORE the TOC phase, so the loader's READ carried $FF
+        //positions (lba=754887 garbage → DISC I/O ERROR).
+        {
+          auto& w = system.wram[(0x108000 + 0x7656) >> 1];
+          w.byte(1) |= 0x01;
+        }
+      } else {
+        statusHack = 0;       //Stop mode (no disc)
+        curStatus = 0x0000;
+        status = 0x0000;
+      }
+      export();               //refresh the reply the loader polls
+    }
+  }
+
+  //On real hardware the CDD autonomously fills rx[] with its current status
+  //every ~64Hz (~75Hz here). The BIOS reads rx[] via $FF0160 at any time.
+  //MAME calls CDD_Export() on every CDD timer tick for this reason.
+  export();
+
   //CDD "access" interrupt: fires continuously at 75Hz once enabled by the
   //BIOS writing nff0002 (REG_FF0002) with bits 4+6 set (MAME: nff0002 & 0x0050).
-  if(reg2 & 0x0050) {
-    type2Pending = 1;
-    cpu.raise(CPU::Interrupt::CDD);
+  if(reg2 & 0x0050 && !prohibitIrq) {
+    if(!type2Pending) {
+      type2Pending = 1;
+      cpu.raise(CPU::Interrupt::CDD);
+    }
   }
 
   //sector pipeline: stream one sector per tick while a read is active
@@ -46,13 +90,13 @@ auto Cdd::tick() -> void {
 auto Cdd::readLbaToBuffer() -> void {
   bool dataTrack = control & 0x0100;
   u8 sector[2352] = {};
+  auto raw = disc.readSectorRaw(curLba);
+  bool rawOk = !raw.empty();
   if(dataTrack) {
-    auto raw = disc.readSectorRaw(curLba);
-    if(!raw.empty()) memory::copy(sector, raw.data(), (u32)raw.size() < 2352 ? (u32)raw.size() : 2352u);
+    if(rawOk) memory::copy(sector, raw.data(), (u32)raw.size() < 2352 ? (u32)raw.size() : 2352u);
     //mode1: 12 sync + 4 header + 2048 data + 288 ecc
   } else {
-    auto raw = disc.readSectorRaw(curLba);
-    if(!raw.empty()) memory::copy(sector, raw.data(), (u32)raw.size() < 2352 ? (u32)raw.size() : 2352u);
+    if(rawOk) memory::copy(sector, raw.data(), (u32)raw.size() < 2352 ? (u32)raw.size() : 2352u);
   }
 
   cdc.updateHeader();
@@ -112,7 +156,16 @@ auto Cdd::ctrlChecks() -> void {
 }
 
 auto Cdd::raiseType1() -> void {
-  type1Pending = 1;
+  //LC8951 decoder-complete → BIOS vector $15 (0xC0A40A), NOT $17.
+  //MAME: scd_ctrl_checks() → m_type1_interrupt_callback() → irq_update picks
+  //vector 0x15 when ack bit 0x20 is unset.  The BIOS stub at $C0A40A acks
+  //$FF000F=0x20 and calls the CDD access machine $C0E99E — which drives
+  //$7688/$76B6/$76BC (the boot wait-loop exit counters).  Sending this
+  //event to vector $17 (stub $C0A44E, "unused") starves the access machine
+  //and the loader sits in its wait loop forever.  The pending flag mapping
+  //to vectors is: type3=21(0x15)=$C0A40A, type2=22(0x16)=$C0A42C,
+  //type1=23(0x17)=$C0A44E (matches the BIOS ROM vector table).
+  type3Pending = 1;
   cpu.raise(CPU::Interrupt::CDD);
 }
 
@@ -200,7 +253,8 @@ auto Cdd::stop() -> void {
   curStatus = 0x0900;   //CDD_STOPPED
   status = 0x0000;
   control |= 0x0100;    //data mode
-  statusHack = 0x0e;
+  statusHack = 0x0e;    //"tray moving" — required by the boot disc-check
+  settleCounter = 150;  //~2s at 75Hz, then report settled Stopped (0x09)
 }
 
 auto Cdd::handleTocCommands() -> void {
@@ -418,4 +472,5 @@ auto Cdd::trackIsData(u8 track) const -> bool {
   auto t = disc.session.track(track);
   return t ? t->isData() : false;
 }
+
 }

@@ -171,6 +171,24 @@ auto System::power(bool reset) -> void {
   scheduler.power(cpu);
 
   io = {};
+
+  //Neo Geo CD: the real BIOS's controller-type probe ($C0930C) never runs in
+  //this emulator's boot, so the four controller slot TYPE bytes stay 0 and the
+  //BIOS's input handler ($C09584/$C095D4) masks ALL controller input to zero —
+  //Start/D-pad never register in the CD Player menu, so the game can't boot.
+  //The libretro neocd core handles the same pads with a simple always-connected
+  //joystick model. Seed BOTH byte lanes of the controller-struct area
+  //($7D90-$7DAF at a5=$108000 → $10FD90-$10FDAF) with the joystick type (3):
+  //the 68k reads byte N from word N>>1's OTHER lane (even address → byte 1,
+  //odd → byte 0), so writing only one lane left the type bytes at 0 and the
+  //mask path still zeroed the input. The BIOS overwrites the held/edge/repeat
+  //fields every frame; only the type bytes matter and now always read 3.
+  if(NeoGeo::Model::NeoGeoCD()) {
+    for(u32 addr = 0x10fd90; addr <= 0x10fdae; addr += 2) {
+      system.wram[addr >> 1].byte(0) = 3;
+      system.wram[addr >> 1].byte(1) = 3;
+    }
+  }
 }
 
 auto System::readC(n32 address) -> n8 {

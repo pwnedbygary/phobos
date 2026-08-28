@@ -54,6 +54,11 @@ struct System {
     n1 ledLatch2;
     n8 ledData;
 
+    //NEO-C1 controller selector (written via $380001). Controller data at
+    //$300000/$340000/$380000 is only returned when the selector is 0x00/0x12/0x1B
+    //(libretro neocd controller1/2/3Handlers). This is what the CD BIOS sets.
+    n8 ctrlSelector = 0;
+
     //Neo Geo CD upload control
     n3 uploadZone;
     n2 spriteUploadBank;

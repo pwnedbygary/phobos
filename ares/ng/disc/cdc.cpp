@@ -42,7 +42,6 @@ auto Cdc::dataRead() -> n8 {
   case R_STAT3:  ret = rreg[R_STAT3];              break;
   }
 
-  __android_log_print(ANDROID_LOG_INFO, "NGCD", "CDC read reg %02x -> %02x", reg, ret);
   return ret;
 }
 
@@ -53,8 +52,6 @@ auto Cdc::dataWrite(n8 data) -> void {
 
   static const n1 changers0[16] = {1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0};
   if(changers0[reg]) reg0 = (reg0 & 0xfff0) | ((reg + 1) & 0xf);
-
-  __android_log_print(ANDROID_LOG_INFO, "NGCD", "CDC write reg %02x <- %02x", reg, data);
 
   switch(reg) {
   case W_SBOUT:

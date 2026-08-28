@@ -883,6 +883,72 @@ uses many; ares VU has known partial accuracy in rounding/overflow edge cases).
 
 ### 🔄 IN FLIGHT (OPEN / investigating / diagnosed / broken-gated / implemented-awaiting-verify)
 
+#### Task NGCD-M2 — Neo Geo CD drive/IRQ/DMA boot blocker (IN FLIGHT 2026-08-25, uncommitted)
+
+**Symptom:** Neo Geo CD game boot `START` does nothing — the BIOS receives Start, programs the CDC, and
+begins a disc read, but game code never reaches `0x100000`, so the game never boots past boot state 3.
+
+**Input question is CLOSED (probe verdict, on-device 2026-08-25):** a temporary PAD probe in
+`ares/ng/controller/arcade-stick/arcade-stick.cpp` logged button state from `readControls()/pollCoin()`.
+Captured logcat while holding A then pressing Start on the Retroid built-in pad:
+
+| Evidence | Conclusion |
+|---|---|
+| `PAD probe … a=1` (held A) | A (`k:96`) reaches the core — input works |
+| `PAD probe … start=1` (pressed Start) | Start (`k:108`) reaches the core — input works |
+| BIOS programmed CDC (`reg 01←e2`, `0a←a7`, `0b←f0`) + began read (`stat=0001`, ~8 s) | BIOS received Start, started CD load |
+| `t1=0` entire run; `pend=0010` (CDD pending) yet never dispatched | **type1 (sector-completion) IRQ never fires — the boot blocker** |
+
+**Conclusion:** front-end input (`k:` mapping, hotkey capture, `controllerPlayerIndex`) is 100% working.
+The blocker is entirely the in-progress **NGCD M2** drive/IRQ/DMA pipeline.
+
+**Root cause (static review, cross-referenced with wiki.neogeodev.org):**
+- **Defect 1 — DMA trigger mismatch** (`ares/ng/cpu/memory.cpp:560-575`): LC8953 trigger register is the
+  **byte** `$FF0061` with `$00`=load microcode, `$40`=start DMA (per the [DMA](https://wiki.neogeodev.org/index.php/DMA)
+  + [LC8953](https://wiki.neogeodev.org/index.php/LC8953) pages); params are 32-bit at `$FF0064`/`$FF0068`/`$FF0070`,
+  microcode via `$FF0080`-`$FF008E`. Current code matches the **word** `0xff0060` checking `bit(6)` and swallows the
+  microcode as a no-op — this is why "`FF0061` DMA never fires".
+- **Defect 2 — CDD/type1 pending but not dispatched** (`ares/ng/cpu/cpu.cpp:38-64`): log shows `pend=0010` with
+  `t1=t2=t3=0` — the CDD dispatch block isn't being reached. Hypotheses in priority order: (1) empty
+  `if(NeoGeo::Model::NeoGeoCD()){}` at the top of dispatch / early returns shadow the CDD block;
+  (2) `type1Pending` cleared before dispatch or sector pipeline body not running despite `stat=0001`;
+  (3) `REG_IRQACK` (`$FF000F`) writes swallowed as no-ops never clear/latch pending correctly.
+
+> [!NOTE]
+> MAME's `neogeocd.cpp` (GPL, docs-only) is the behavioral reference; the Sanyo CDC `DTEI`/`DTBSY`/`DTTRG`
+> handshake pattern already exists tested in `ares/md/mcd/cdc.cpp` and should be mirrored.
+
+**Planned fix (not yet executed at time of writing):** (1) correct the `$FF0061` byte trigger + route DMA
+param/microcode registers; verify `Dma::start()` modes against MAME; (2) rework `CPU::main()` CDD dispatch so
+`type1` (sector completion) beats the constant 75 Hz `type2`; confirm `tick→readLbaToBuffer→ctrlChecks→raiseType1`.
+
+**Verification:** deploy to `49016109` (Retroid Pocket 6, SamSho RPG disc); grep `NGCD|CDD|CDC|DMA`;
+pass = `type1` increments + DMA start fires non-busy + code reaches `0x100000` → game boots; no AES/MVS regression.
+
+> [!IMPORTANT]
+> **2026-08-26 session — major re-diagnosis, read `docs/ngcd-m2-session-context.md` for the full briefing.**
+> The original Defect 1/2 framing is superseded. Summary of new findings:
+> - **BIOS file is byte-swapped** (loaded via `readl(2)` = LE words; MAME `ROM_GROUPWORD|ROM_REVERSE`). Static
+>   disasm must use `ngcd_work/bios_swapped.bin` — the raw file disassembles to garbage (earlier
+>   "self-decrypting BIOS" theory was wrong). Reset entry: SP=$10F300, PC=$C00402 → `$C0A5B6`.
+> - **Input model fixed per libretro neocd** (`memory_input.cpp`): selector register `$380001`
+>   (valid = {0x00,0x12,0x1B}) gates `$300000`/`$340000`/`$380000`; `$380000` byte(1) carries Start/Select
+>   low-nibble (P1 Start/Sel = bits 0/1, P2 = 2/3), active-low. 68K byte-store to odd addr → `write(0,1,waddr)`
+>   — detect selector via `!upper` on the `$380000` handler, not the raw address.
+> - **DMA trigger fixed per wiki/MAME**: byte `$FF0061`, `$40`=start DMA (`$00`=load microcode). Old word
+>   `$FF0060` bit(6) never fired. BIOS writes `move.b #$40,$ff0061` at dozens of sites.
+> - **CDD settle fix**: `stop()` keeps `statusHack=0x0e` (boot disc-check REQUIRES it) + `settleCounter=150`;
+>   `tick()` → `0x09` + re-export after ~2 s so the loader's status poll sees a settled drive.
+> - **VERIFIED on-device**: pressing Start now issues `CDD READ lba=13 track=1`, streams 735 sectors,
+>   type1 IRQs fire (t1 718→1434) — the first real disc load. The BIOS then returns to the CD Player instead
+>   of booting the game.
+> - **CURRENT BLOCKER**: the BIOS's controller struct TYPE bytes (`$10FD94/$10FD9A/$10FDA0/$10FDA6`, a5=$108000)
+>   stay 0 because the detection probe `$C0930C` never runs in this emulator's boot → the input handler
+>   `$C09584` takes the `$C095D4` mask path → held/edge (`$10FEDC/$10FDAC`) always 0 → menu Start/D-pad ignored.
+>   Fix in progress: seed both byte lanes `$10FD90-$10FDAF` = 3 (joystick type) at `System::power()`; if that
+>   doesn't take, move into `Cdd::tick()`. Byte-lane gotcha: even byte addr N = byte 1 of word N>>1.
+> - All instrumentation (WR/WRX/TYPWR/P1RD/SB1RD/SELW, IPC/DET/BOOT/STR, PAD probe, RPL traces) is TEMP.
+
 #### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES — 1994-95 WARNING hang FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:172` `tst.b $10FD82` + `13C0...60F8` → `kof95`/`samsho3`/`4`/`5` titles, `wiki:Slot_check_security`/`wiki:PROGSF1`/`wiki:NEO-SMA`); `kof98` `PROGSF1` FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:374` `decryptKof98` + `ares/ng/cartridge/board/progsf1.cpp:19` `header @100: 4e 45 4f 2d` `✓` `49016109`); **SMA grid (`kof99`/`kof2000`/`garou`/`mslug3`) FIXED 2026-08-22** — was a hardcoded 68K reset-vector override (`p[0..7]=0x10f300`) in all 6 SMA branches of `decrypt()`; only kof2000 matched, the others jumped to a wrong entry → BIOS slot-grid. Removed override (kept `NEO-GEO` header patch); P-ROM decrypt verified bit-identical to MAME `prot_sma.cpp`. The `loadRoms 0xC0000 hole` hypothesis was WRONG. + SELECT-coin and switch-game SIGSEGV FIXED 2026-08-22 (see detailed note below)., plus non-MVS sets (`kof98umh` PGM, `kofnw`/`kofxi` Atomiswave) correctly rejected
 
 **✅ PCE / PC Engine CD / SuperGrafx — FIXED & VERIFIED 2026-08-18 (commit `2795e5813`):**
