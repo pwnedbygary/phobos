@@ -60,9 +60,19 @@ auto Cdd::tick() -> void {
         //further settles (the loader menu keeps issuing STOPs) must NOT
         //re-trigger the whole disc check — otherwise the screen cycles
         //"WAIT FOR A MOMENT" every ~2s forever.
+        //
+        //Also never poke while bit 0 is ALREADY set (one-shot edge):
+        //$C0CEC4 runs the entire boot-init whenever bit 0 is set, so a
+        //re-poke mid-init re-enters it, re-issues its initial STOP burst and
+        //re-arms the settle before it can finish — at CD speeds >1x the
+        //pipeline is fast enough to make this loop continuously and the disc
+        //check spins in state 1 forever (eventually a DISC I/O ERROR).
+        //The BIOS clears bit 0 itself at boot-init completion, so poking
+        //only when both bit 7 and bit 0 are clear gives exactly one edge
+        //per settle.
         {
           auto& w = system.wram[(0x108000 + 0x7656) >> 1];
-          if(!(w.byte(1) & 0x80)) w.byte(1) |= 0x01;
+          if(!(w.byte(1) & 0x80) && !(w.byte(1) & 0x01)) w.byte(1) |= 0x01;
         }
       } else {
         statusHack = 0;       //Stop mode (no disc)
