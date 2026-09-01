@@ -996,13 +996,14 @@ logo, title art, char select, level select, in-fight HUD/characters/backgrounds 
 - The boot-phase direct transfer writes (`case 0`) also started at `+0x80` (first non-zero word at
   `0x82` in the NGUPL log) — consistent with `[128-byte header][tiles]` blocks uploaded by the game.
 
-**Next (2026-09-01 plan, step 2):** static NGCD file-format analysis of the SamSho RPG CHD (extracted with
-`chdman`; refs: libretro `neocd` loader/memory_mapped, MAME `neogeocd.cpp`/`megacdcd.cpp`, wiki.neogeodev.org
-file-structure + LSPC2 pages): decode the 128-byte file headers (load addr/size), disasm the 68K sprite
-loader, pinpoint the +0x80 origin and whether the game's tile numbering counts the header as tile 0.
-Then an instrumented on-device round (temp NGE2DD/NGUPL traces + `dumpNgGfx`) to confirm the faithful fix
-(write-side/DMA-dest correction scoped to header-carrying blocks; NOT a global fetch change) + full
-MVS/AES regression + commit/push + docs.
+**Next (2026-09-01 plan, step 2):** ~~static NGCD file-format analysis~~ **DONE** — see
+`docs/ngcd-m2-session-context.md` "2026-09-01 static round": disc format = RAW 2352 sectors; NGCD FS records
+(LBA@+2, size@+10, name_len@+32); IPL.TXT boot list decoded; **every .SPR file carries a real 128-byte
+zero header** (the observed "+0x80 DRAM lead-in = the files themselves); and — the new strong candidate —
+**our `0xfc2d` DMA writes [d0,00,d1,d0] per source word vs Geolith's ground truth [00,d0,d0,d1] (one-byte
+phase shift for word destinations; byte-mapped FIX/Z80/PCM dests are unaffected)**. Next round: on-device
+instrumented verification of the 0xfc2d→SPR path + the proposed fix; write-side/DMA-dest correction scoped
+to header-carrying blocks; NOT a global fetch change.
 
 **Input default (resolved 2026-09-01):** Neo Geo / NGCD default mapping implemented in
 `resolveButtonBit` (`android/app/src/main/cpp/PhobosRunner.cpp`): X→A, Y→B, A→C, B→D, R1→A+B, R2→C+D,

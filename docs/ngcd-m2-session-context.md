@@ -226,3 +226,42 @@ that render correctly.
 - Open hypothesis: the 0xe2dd dest bank at DMA time ≠ bank where 0x2000 lives; needs the game's CD-side
   file format (2026-09-01 static-analysis round underway: `chdman extractcd` of the SamSho RPG CHD +
   libretro/MAME/wiki refs + 68K disasm of the game's loader).
+
+#### 2026-09-01 static round — NGCD disc file format (conclusions)
+
+1. **Disc layout** (SamSho RPG EXTract): `chdman extractcd` → raw **2352-byte sectors** (MODE1/2352; LBA N at
+   offset N*2352; user data at +16; the emulator's `vfs::cdrom` mapping at 2448*[LeadIn+LBAtoABA] is the
+   IMAGE-side mapping — unrelated). PVD at LBA 16 (`CD001`).
+2. **FS record format is NOT vanilla ISO9660**: dir records = length(1), LBA **32-bit LE at +2**, 8 bytes
+   unknown at +4..+11 (BIOS file-header area?), **size 32-bit LE at +10**, name-len at **+32**, name at +33;
+   len=0 → skip to next 2048 boundary. Matches libretro neocd `findFile()`/`readVolumeDescriptor()` exactly
+   (they should be the working reference, not a generic ISO9660 parser).
+3. **File table (84 entries)** for this disc: `045_P1.PRG` (lba 23, 1MB — main program), `F.FIX` (128KB),
+   `IPL.TXT` (128B boot list!), `JC_0..3.SPR` (4 × 1MB, banks 0-3 = the title/menu/intro sprites!),
+   `BK_0..C.SPR` (backgrounds), `PL_0..E.SPR/PAT/PCM` (players), `P045.Z80`, `JOCHU.PCM/PAT`, text .TXT
+   files. **IPL.TXT** = `F.FIX,0,0 / 045_P1.PRG,0,0 / JC_0.SPR,0,0 / JC_1.SPR,1,0 / JC_2.SPR,2,0 /
+   JC_3.SPR,3,0 / P045.Z80,0,0 / JOCHU.PCM,0,0 / JOCHU.PAT,0,0` — the boot list the BIOS loads.
+4. **THE 128-BYTE PER-FILE HEADER IS REAL (on disc!):** every `.SPR` file begins with **128 zero bytes**,
+   then the tile data (verified: PL_0.SPR data starts at +0x80; JC_*.SPR first non-zero byte at 0x80).
+   The observed device-side "tile data at +0x80" = the game uploaded `[header][tiles]` — the +0x80 lead-in
+   is a property of the game's DATA FILES, NOT an emulator artifact. A tilemap referencing tile N where the
+   data lives at N+1 is therefore fully explained IF the game's tile numbering counts the header — the
+   remaining question is which side (game numbering vs. emulator DMA landing) is off.
+5. **DMA ground truth (Geolith `geo_cd.c` — the working reference, byte-for-byte):**
+   - `0xe2dd`: `write(swapped_word)` then `write(word)` per source word = dest [s1,s0,s0,s1] (matches our
+     `9230e4d60` rewrite through ares' LE word arrays — verified numerically).
+   - `0xfc2d` (LC8951 buffer → dest): `write(data>>8)` then `write(data)` → dest bytes **[0x00, d0, d0, d1]**
+     for word destinations. **OUR `9230e4d60` implementation produces [d0, 0x00, d1, d0] — ONE BYTE
+     PHASE-SHIFTED vs the ground truth.** For BYTE-mapped dests (FIX/Z80/PCM, lane-1 writes) ours matches
+     (only the low byte is taken). 0xfc2d-to-SPR (word dest) is therefore the **strongest candidate root
+     cause for the residual title-menu text corruption** (a one-byte phase shift in the 4bpp stream = the
+     observed slight misalignment/overlap, while the 0xe2dd-path HUD/characters are correct).
+6. **MAME `neogeocd.cpp`** held no loader/fs logic (BIOS-side); used as docs-only for the register map.
+   Geolith `geo_lspc.c` sprite fetch confirms NO +0x80 in the fetch path: `toffset = (tnum << 7) % csz`,
+   `tpix` reads c[tbase+0..3] with the [1,0,3,2] CD order — our committed fetch matches.
+
+**Next (on-device, instrumented):** log the 68K's 0xfc2d setups (dest address/count) + re-dump the title
+menu; if a 0xfc2d→SPR transfer is confirmed, flip our 0xfc2d to the Geolith byte layout and verify the menu
+text; if the write-side still doesn't explain tile 0x2000's +0x80 data, instrument the game's own upload
+loop (68K disasm region-selected from `045_P1.PRG` at the upload sites found at 0x2314c/0x38001/0x99a3b/
+0xc6625 fc2d references + device trace of the e2dd site).
