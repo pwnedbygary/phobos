@@ -6,8 +6,9 @@ Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-
 ## 🚀 CURRENT STATUS (2026-09-01)
 
 **Latest work: Neo Geo CD — RENDERING ROUND COMPLETE (committed `9230e4d60` + `783a6cc27`).**
-Full technical record: `docs/ngcd-m2-session-context.md` (+ Aug-28 appendices), `docs/implementation-plan.md` →
-Task NGCD-M2 (RESOLVED) + Task NGCD-M3 (residual). Prior status below.
+Full technical record (incl. Aug-28 appendix + 2026-09-01 static round): `docs/implementation-plan.md` →
+**Task NGCD-M2** (RESOLVED; "Neo Geo CD consolidated reference" block) + **Task NGCD-M3** (residual). Prior
+status below.
 
 **Verified on-device (RP6 `49016109`, SamSho RPG):** BIOS menu, NEO-GEO CD logo, title, character select,
 level-select (was a black screen), in-fight HUD (life/POW bars, KO counter) + characters + backgrounds all
@@ -119,7 +120,7 @@ work.** The blocker is entirely the in-progress NGCD M2 drive/IRQ/DMA pipeline.
 Start, `adb -s 49016109 logcat -d | grep -E "NGCD|CDD|CDC|DMA"`. Then wire `type1` dispatch (priority over 75 Hz
 `type2`) + the `$FF0061` byte DMA trigger + microcode routing; iterate until the game boots past boot state 3
 (code reaches `0x100000`); confirm no AES/MVS regression. See `docs/implementation-plan.md` → **Task NGCD-M2**
-and `docs/ngcd-m2-session-context.md`.
+and the "Neo Geo CD consolidated reference" block under it.
 
 **Neo Geo (Task #10c, UNCOMMITTED state):** Un-gated for diagnosis via `if (false && identifiedSystem == "Neo Geo")` in PhobosRunner.cpp. kof2003.zip loads (MIA: AES; core reports "Neo Geo MVS", MVS BIOS sp-e.sp1 attached; "VFS: Failed to attach static.rom" = benign warning), **runs 59.2-60.1 FPS sustained** (old black-screen/0-FPS hang GONE). Streams registered: FM (ch=2, 500kHz) + SSG (ch=1, 500kHz). **BUT audio ring stays 0/12000 (0%) and no sound** — multi-stream lockstep (`PhobosRunner.cpp` audio() ~1384-1417: emit only when EVERY stream pending, bounded 8192) or mute path suspect. Video presentation unverified — every adb loader load ran HEADLESS (no navigation → no SurfaceView). FIXES LANDED UNCOMMITTED: (1) debug loader now navigates to the emulator screen (mirrors SystemDetailScreen flow); (2) swap-screen feature (below). After build+deploy: verify NG video via loader, then investigate the 0% audio ring, then finalize gate state + verify MVS/AES + commit.
 

@@ -886,9 +886,9 @@ uses many; ares VU has known partial accuracy in rounding/overflow edge cases).
 #### Task NGCD-M2 — ✅ RESOLVED (boot achieved 2026-08-27, verified on-device)
 
 **Status: DONE.** SamSho RPG boots to full title/attract on the Retroid — solved via raw-sector LBA offset,
-decoder-IRQ vector fix, ack-based pending, IPL-gated CDD dispatch, controller struct seeding (see
-`docs/ngcd-m2-session-context.md`, rewritten 2026-08-27 — THE briefing). Rendering round that followed
-(2026-08-28, `9230e4d60` + `783a6cc27`) verified BIOS menu/title/char-select/level-select/HUD/characters
+decoder-IRQ vector fix, ack-based pending, IPL-gated CDD dispatch, controller struct seeding (the full
+briefing is now the **"Neo Geo CD consolidated reference"** block below this task). Rendering round that
+followed (2026-08-28, `9230e4d60` + `783a6cc27`) verified BIOS menu/title/char-select/level-select/HUD/characters
 all correct @59.2 FPS. **Docs/handoff.md CURRENT STATUS now carries the 2026-09-01 state.**
 
 The diagnostic record below is the (re)framing during the 2026-08-26 re-diagnosis; keep for reference but
@@ -935,8 +935,8 @@ param/microcode registers; verify `Dma::start()` modes against MAME; (2) rework 
 pass = `type1` increments + DMA start fires non-busy + code reaches `0x100000` → game boots; no AES/MVS regression.
 
 > [!IMPORTANT]
-> **2026-08-26 session — major re-diagnosis, read `docs/ngcd-m2-session-context.md` for the full briefing.**
-> The original Defect 1/2 framing is superseded. Summary of new findings:
+> **2026-08-26 session — major re-diagnosis. The original Defect 1/2 framing is superseded — full briefing
+> is the "Neo Geo CD consolidated reference" block below this task.** Summary of new findings:
 > - **BIOS file is byte-swapped** (loaded via `readl(2)` = LE words; MAME `ROM_GROUPWORD|ROM_REVERSE`). Static
 >   disasm must use `ngcd_work/bios_swapped.bin` — the raw file disassembles to garbage (earlier
 >   "self-decrypting BIOS" theory was wrong). Reset entry: SP=$10F300, PC=$C00402 → `$C0A5B6`.
@@ -973,6 +973,180 @@ pass = `type1` increments + DMA start fires non-busy + code reaches `0x100000` �
 >   CD read-speed was fully REMOVED 2026-08-28 (`9230e4d60` — fixed 1x; unsound at >1x,
 >   DISC I/O ERROR ID=0000/0002 even at 2x).
 
+### 🗄 Neo Geo CD consolidated reference (merged from `docs/ngcd-m2-session-context.md`, 2026-09-01)
+
+> Drop-in briefing for continuing NGCD work. Public hardware reference:
+> https://wiki.neogeodev.org/index.php/Main_Page
+
+**Environment**
+- Device: **Retroid Pocket 6**, serial **49016109**. ⚠ If the NotificationShade has stable focus, key events
+  never reach the app — reboot the device, unlock, then relaunch (adb keyevents only work with the app focused).
+- Test disc: **Samurai Shodown RPG** (TRACK 29 / TIME 68:12).
+- ROM: `/storage/EBFF-F6C0/ROMs/neo-geo-cd/Samurai Spirits ~ Samurai Shodown (Japan) (En,Ja).chd`
+  (dir is `neo-geo-cd`, not `neogeocd`). **Do NOT copy the ROM to /data/local/tmp — the app gets EACCES.**
+- Build (⚠ /home is mounted read-only; gradle wrapper lock fails):
+  `GRADLE_USER_HOME=/home/garyb/LLM-Projects/phobos/android/.gradle-home ./gradlew app:assembleModernDebug`
+  → `app/build/outputs/apk/modern/debug/app-modern-debug.apk`.
+- **ALWAYS verify the native lib rebuilt**: `unzip -p <apk> lib/arm64-v8a/libphobos_android.so > /tmp/x.so &&
+  grep -c "<new marker string>" /tmp/x.so` — string present = native picked up the change. (Burned twice.)
+- Deploy: `adb shell am force-stop com.phobos.emulator && adb install -r <apk> && adb logcat -c &&`
+  `adb shell "am start -n com.phobos.emulator/.MainActivity --es load_uri 'file:///...shodown...chd' --es load_name SamShodown --es load_system 'Neo Geo CD'"` (~30-45 s to CD Player, ~60-90 s to title screen).
+- BIOS: `neocdz.bin` from `/home/garyb/Mounts/Emulation/Emulation/APKs/neocd.zip`, 524288 bytes. Working copies:
+  `ngcd_work/ngcd_bios.bin` (raw file) and **`ngcd_work/bios_swapped.bin` (the file the 68K actually executes —
+  ALWAYS disassemble THIS one)**. Helper: `/tmp/disasm_bios.py <start> <end>` (capstone m68k on swapped).
+
+**THE #1 GOTCHA: the BIOS file is byte-swapped.** `ares/ng/system/system.cpp:146` loads the BIOS with
+`fp->readl(2L)` (little-endian 16-bit word). The 68K therefore executes **each file word with its byte lanes
+reversed** (matches MAME `ROM_GROUPWORD|ROM_REVERSE`). **Disassembling the raw file gives complete garbage.**
+Always work from `ngcd_work/bios_swapped.bin`.
+
+**THE #2 GOTCHA: raw-sector LBA offset (FIX DEPLOYED — keep it).** `nall::vfs::cdrom` (the CHD/CUE image the
+app attaches as `cd.rom`) stores a raw 2448-byte-per-sector stream that **begins at the disc lead-in**: logical
+LBA N lives at physical sector **(`CD::LeadInSectors` + `CD::LBAtoABA(N)`) = 7500 + N + 150** (nall/cd/session.hpp
+constants). `Disc::readSectorRaw(lba)` must seek `2448 * (LeadInSectors + LBAtoABA(lba))` — the old `lba*2448`
+read the blank lead-in and returned **all-zero sectors**, which stalled the whole BIOS boot (directory compare
+at `$C0D4C4` failed; loader looped "WAIT FOR A MOMENT"). PS1's `Drive` uses the same mapping
+(`ares/ps1/disc/drive.cpp:20,132`). The subchannel/TOC decode in `Disc::connect()` reads at `sector*2448+2352`
+(physical), which is correct because `vfs::cdrom::loadSub` synthesizes subchannel for every physical sector.
+
+**THE #3 GOTCHA: FIX (text) upload zone index (FIX DEPLOYED — keep it).** The transfer-area upload zone for FIX
+DRAM (`case 5` in `CPU::write`, window `$E00000-$EFFFFF`) must map to the 128KiB `fixRam` as
+`(address >> 1) & 0x1FFFF` (accepting the lower lane / odd-byte stores, per libretro neocd `memory_mapped.cpp`).
+The old code masked with `0x3FFFF` — a **heap overrun** (writes past the 128KiB array into adjacent RAM) on top
+of wrong indexing, which garbled the in-game text layer. Sprite/PCM/Z80 zones mirror the same `>>1` word-index
+model (verified against libretro; SPR renders correctly, leave it).
+
+**BIOS boot / state machine** (all addresses are the swapped/executed view)
+- Reset vector (emulator interpretation, LE words): `SP=$10F300`, `PC=$C00402` → `jmp $C0A5B6`.
+- **Top-level state dispatcher `$C00108`**: `move.b $73d8(a5),d0` ×4 → table at `$C00116`:
+  state 0 → `$C14852` (boot), 1 → `$C14C2A` (disc check), 2 → `$C0C966` (CD Player), **3 → `$C0CA74`
+  (game load)** — the Start gate is here, 4 → `$C05122` (game boot).
+- Game-load gate `$C0CA86`: `tst.b $7656; bpl → skip; move.b $7dad,d0; andi #$5; beq → skip; move.b #$80,$76b9`
+  — needs **bit 7 (disc-ready) of `$10F656`** plus P2 edge bits; then `$C0CA9E: tst $76b9; bmi → $C0CE72` (dispatch).
+- Boot-init `$C0CEC4`: requires `$10F656` **bit 0** (`btst #0` at `$C0CEDE`-family) before running the
+  disc/TOC/position phase; completes by setting the disc-ready bit itself at **`$C0D2E4: bset #7, $7656`**
+  (gated on `$7679==0`).
+- CDD command dispatcher `$C0BBAA` (reads tx[0] from `$76FA(a5)`), jump table at `$C0BC44`:
+  cmd 2 → `$C0C2B6` (TOC), cmd 3 → `$C0C30A` (READ), cmd 4 → `$C0C4C2` (seek), cmd 6 → pause,
+  cmd 7 → `$C0C5EE` (resume = builds a PLAY `0x30` packet), cmd 10 → init, cmd 11-15 → unknown.
+- Boot wait loop `$C0CF56` (0x100000-iteration timeout): dispatches cmd 6/9 into the TX FIFO every 65536
+  iterations via `$C0C6D6`; exits to the directory parse (`lea $c0d523,a0; lea $111204,a1; bsr $C0D4C4` —
+  byte-compares the loaded directory against "CD001"/"LOGO_J.PRG"/"LOGO_U.PRG"/"LOGO_E.PRG"/"TITLE_J.SYS"...
+  tables) when `$76B6==0` (cleared by `$C0EC40` when the `$7688` block counter reaches 0) or `$76BC>=8`.
+- Access/status machine `$C0E99E` (dispatches on `$76B7` via table at `$C0E9B2`): state 0 `$C0E9BA` reads
+  CDC status (`$FF0101`/`$FF0103`, `btst #5` → error `$C0ED4E`); state 1 `$C0EA0E` reads the sector header
+  (CDC reg `$C0EA6A`: 4 bytes into `$76D0`), compares against the expected position `$76C8`, reads data
+  (reg 0xC), ticks `$76BA/$76BB/$76BC/$7688` and eventually clears `$76B6` → boot-init proceeds.
+
+**CDD IRQ/vector model (ALL FIXED — keep them)**
+1. **75Hz access IRQ** (`tick()`, `reg2 & 0x0050 && !prohibitIrq` → `type2Pending`) → vector **`$16`**
+   → stub `$C0A42C` (acks `$FF000F=0x10`, serial RX path `$C0BA6A`).
+2. **Decoder-complete IRQ** (`ctrlChecks()`, IFCTRL bit5 → previously `type1Pending`) → **MUST be vector `$15`**
+   → stub `$C0A40A` (acks `$FF000F=0x20`, calls the **access machine `$C0E99E`**). ⚠ Hooked as `type3Pending`
+   (CDDType3=21=0x15); sending it to vector `$17` (stub `$C0A44E`, "unused") starved the access machine and
+   the boot wait loop never exited. This was THE fix that let the boot-init complete.
+3. `$C0A44E` (vector `$17`, ack `$08`) is unused by the loader.
+4. **IRQ acceptance is IPL-gated**: `CPU::main` dispatches CDD only when `2 > r.i` (normal level-2 IRQ;
+   MAME `set_input_line(2)`). Without the gate, type2 interrupts re-enter before the handler RTE and the
+   CPU wedges (IRQ storm — the "PCE-like flicker" from earlier sessions).
+5. **Pending flags are consumed by the $FF000F ACK write, NOT by the dispatch** (`memory.cpp` REG_IRQACK):
+   ack 0x20/0x10/0x08 clears type3/type2/type1 respectively; the line re-asserts if another type is still
+   pending (`cpu.raise(CDD)`). Consuming at dispatch starved type2 under sector streaming.
+
+**CDD settle + disc-detect HLE (KEEP — pragmatic, documented)**
+- `stop()` keeps `statusHack=0x0e` ("tray moving") — boot disc-check requires it — and arms
+  `settleCounter` (scaled: `150 × readSpeed`, ~2 s wall time). `tick()` then transitions to `0x09`
+  (CdStopped), and **pokes `$10F656` bit 0** (`w.byte(1) |= 0x01`) when a disc is present. That bit is
+  what triggers the BIOS's own boot-init (`$C0CEC4`), which runs the TOC/position phase and sets bit 7
+  itself. ⚠ Do NOT poke bit 7 directly: it auto-boots the loader before the TOC exists → garbage READ
+  (`0xFF` MSF → DISC I/O ERROR). (The natural setter `$C007CA`/`$C00858` never executes in this
+  emulator's path; bit-0 poke is the standing HLE.)
+- **2026-08-27 fix**: the poke is gated on **bit 7 clear** (`if(!(w.byte(1) & 0x80))`). Previously every
+  STOP re-armed the settle, and every settle re-poked bit 0 → the BIOS's boot-init re-ran forever →
+  the CD player menu blipped "WAIT FOR A MOMENT" every ~2s. Once the BIOS sets bit 7 (disc-ready) it
+  also clears bit 0; gating the poke on bit 7 means the disc check runs once and stays done.
+
+**CD read speed option — REMOVED 2026-08-28 (historical).** The pause-menu CD Speed feature (`cdd.readSpeed`,
+`75 × N` Hz tick) was deleted in `9230e4d60` at the user's directive: at >1x the BIOS's access machine
+(`$C0E99E`) reads CDC registers the pipeline hasn't written yet → **DISC I/O ERROR ID=0000/0002** (observed
+even at 2x). The 96x "Instant" analysis below is superseded. Original compatibility analysis (why it seemed
+safe in theory): NGCD has no drive-speed register and no wall-clock reference; the loader paces on
+instruction-counted loops and block counters ($7688/$76BC) that drain N× sooner; seeks clear `statusCdc` bit 0
+(delivery stops until the next READ), so no position drift; the one real hazard (ring overflow: PT wrapping
+over data the BIOS hasn't DMA'd from the 0x8000-byte PT/DAC ring) was guarded in `tick()` — a sector is only
+written while `(PT + 2352 - DAC) & 0x7fff` leaves room. The ring-buffer safety net remains. Note the
+"fast-forward" hotkey does NOT help NGCD loaders — real loader fast-forward needs 68K time-slicing (post-1.0).
+
+**DMA model (working — keep as-is)**
+- LC8953 trigger is byte `$FF0061`: `$00` = load microcode, `$40` = start DMA. 68K byte store arrives as
+  `CPU::write(0,1,$FF0060,$4040)` → `!upper && data.byte(0)==0x40` → `dma.start()`.
+- `Dma::start()` modes match MAME `neogeo.cpp do_dma` (0xcffd, 0xe2dd, 0xfc2d, 0xfe3d/0xfe6d, 0xfef5,
+  0xffc5/0xffcd/0xffdd). The loader streams directory/game sectors via repeated
+  `ffc5 count=1024 a1=$111204` (CDC buffer → RAM) plus `fe6d` (word copy); the ffc5 source is
+  `cdc.initTransfer()` (buffer+DAC, gated on DTTRG/IFCTRL). `$FF0080-$FF008E` (microcode upload) is a no-op — fine.
+- ⚠ As of `9230e4d60` the 0xe2dd/0xfc2d byte-order follows libretro's mirrored-word model; the Geolith
+  ground-truth comparison (see Task NGCD-M3) shows **0xfc2d is one byte off for word destinations** — the
+  M3 residual candidate.
+
+**Input model (implemented per libretro neocd — KEEP IT)**
+libretro `src/memory_input.cpp` is the authoritative controller model:
+- **Selector**: byte write to **`$380001`** selects the controller bank. Data at `$300000`/`$340000`/`$380000`
+  is only valid when selector ∈ {0x00, 0x12, 0x1B}; otherwise `$FF`/`$0F`.
+  ⚠ 68K byte store to odd `$380001` arrives as `CPU::write(0,1,$380000,data<<8|data)` — detect via
+  `!upper` on the `$380000` writeIO handler, store `data.byte(0)`.
+- `$300000` P1CNT = `readButtons()`: bits 0-3 D-pad, 4-7 A/B/C/D, **active-low**.
+- `$380000` STATUS_B (CD): **Start/Select live in byte(1)** (68K `move.b $380000` = even addr → `/UDS` →
+  byte(1); libretro word read = `input3<<8 | 0xFF`). Low nibble = P1 Start(0)/P1 Sel(1)/P2 Start(2)/
+  P2 Sel(3), active-low, idle 0x0F. Do NOT put Start/Select in byte(0).
+- Controller-struct type seeding in `System::power()`: both byte lanes of `$10FD90-$10FDAF` set to 3
+  (joystick) so the BIOS's `cmpi.b #$3,(a0)` detection at `$C09584` doesn't mask input to zero. Byte-lane
+  gotcha: even address N reads byte 1 of word N>>1 — seed BOTH lanes.
+
+**Verified on-device flow (final clean build)**
+1. CD player/menu renders (~30-45 s after launch); commands flow (GETTOC subs, status polls).
+2. On Start (or with disc-ready set): boot-init runs — READ lba=13 (MSF 00:02:13) streams real directory
+   sectors (`secRd` climbing at 75 Hz), decoder IRQs fire, DMA `ffc5`→`$111204` + `fe6d` copies land; the
+   `$C0D4C4` compare passes.
+3. BIOS sets `$10F656` bit 7 itself → Start gate latches `$76B9=0x80` → dispatch to game load
+   (state 3 `$C0CA74`); game loader streams via ffc5 DMA; title screen renders.
+
+**Reference implementations (use these, do not re-derive)**
+- **libretro neocd** (`github.com/libretro/neocd_libretro` — the `libretro/neocd` name 404s): `src/memory_input.cpp`
+  (selector + controller handlers), `src/cdromcontroller.cpp` + `lc8951.cpp` (status machine: Stop→Idle,
+  Query→Stopped 0x90, Play→Playing), `src/hlebios.cpp` (`pollInput()`: BIOS RAM pad struct layout;
+  `findFile()`/`readVolumeDescriptor()` — the WORKING fs-parse reference). NOTE: libretro uses a byte-packet
+  LC8951 serial protocol; the real CDZ BIOS uses the 10-nibble protocol with `$FF0160-$FF0167`.
+- **Geolith** (`github.com/libretro/geolith-libretro` — "highly accurate" NG AES/MVS/CD(!) core): `geo_lspc.c`
+  sprite fetch (CD plane order [1,0,3,2], `toffset = (tnum << 7) % csz`, no +0x80), `geo_cd.c` DMA engine
+  (0xe2dd/fc2d ground truth), `geo_chd.c` disc. THE correct-DMA reference.
+- **MAME**: `src/mame/snk/neogeocd.cpp` (irq_update: ack bits 0x08/0x10/0x20 → vectors 0x17/0x16/0x15, DMA
+  do_dma modes, register map) + `src/mame/shared/megacdcd.cpp` (lc89510 CDD — nibble protocol). ⚠ MAME's neocd
+  is MACHINE_NOT_WORKING and its odd-byte DMA heuristic is WRONG (the old HUD black-box cause).
+- Wiki: https://wiki.neogeodev.org/index.php/Main_Page (68k memory map, Memory_mapped_registers, DMA, LC8953).
+
+**Tooling notes**
+- Static disasm: `ngcd_work/bios_swapped.bin` + `/tmp/disasm_bios.py` (capstone CS_ARCH_M68K). Beware data
+  interleave — spammy regex scans over data pages produce false positives.
+- All TEMP diagnostics (ST/WR/TYPWR/WRX/P1RD/SB1RD/SELW traces, cputrace2.txt, RPL/import/GETSTAT/dbgPrint,
+  SECT/RAWREAD/initTransfer dumps, rdCtrl probe, SETTLE EXPIRE/HLE logs, DMA logs, IRQ counter print) have
+  been **removed** from the final build. Markers to verify absence in the .so: `disc-detected`, `ST %d`,
+  `DMA ffc5 dump`, `RAWREAD`, `cddBlock`.
+- On-device visual checks: `adb shell screencap -p /sdcard/x.png && adb pull` then ASCII-render with PIL
+  (model can't view images directly). The NotificationShade keeping focus blocks key events — reboot+unlock
+  before testing input (adb `keyevent 108` = BUTTON_START works when the app has focus).
+- `dumpNgGfx` harness: `adb shell am start -n com.phobos.emulator/.MainActivity --ez dump_ng_gfx true` →
+  `ng_{spr,fix,vram,pram,wram}.raw` in `filesDir`.
+
+**Work state (commits)**
+- Committed & pushed (2026-09-01): NGCD M1 BIOS-boot skeleton (`2c5f7f444`); M2a disc plumbing
+  (`9511cea73`); M2b CDD/CDC/DMA (`cbcf013a3`, `a7d4cdd82`, `1fd485e7e`, `8b4909a0f`, `aa6335cd3`);
+  boot polish + CD-speed cap (`917c94eb2`, `d9830757e`, `2bc5a5e12`); rendering round (`9230e4d60`) +
+  work-RAM dump in dumpNgGfx (`783a6cc27`); input default + docs (`3dd9a0f0a`, `b0bf74dba`, `6c45ba7ee`).
+- The bit-0 disc-detect poke remains as the documented HLE (`cdd.cpp settle → $10F656 bit 0`, gated on
+  bit-7 clear).
+- Open items: flag the unrelated AGP 9.3.1→9.3.2 bump in `android/gradle/libs.versions.toml`; verify NGCD
+  audio on-device.
+
 #### Task NGCD-M3 — NGCD rendering completeness: title-menu text residual (IN FLIGHT, static analysis 2026-09-01)
 
 **State:** boot + rendering mostly complete; ONE residual — the **title-menu text glitch** (SamSho RPG):
@@ -996,14 +1170,66 @@ logo, title art, char select, level select, in-fight HUD/characters/backgrounds 
 - The boot-phase direct transfer writes (`case 0`) also started at `+0x80` (first non-zero word at
   `0x82` in the NGUPL log) — consistent with `[128-byte header][tiles]` blocks uploaded by the game.
 
-**Next (2026-09-01 plan, step 2):** ~~static NGCD file-format analysis~~ **DONE** — see
-`docs/ngcd-m2-session-context.md` "2026-09-01 static round": disc format = RAW 2352 sectors; NGCD FS records
-(LBA@+2, size@+10, name_len@+32); IPL.TXT boot list decoded; **every .SPR file carries a real 128-byte
-zero header** (the observed "+0x80 DRAM lead-in = the files themselves); and — the new strong candidate —
-**our `0xfc2d` DMA writes [d0,00,d1,d0] per source word vs Geolith's ground truth [00,d0,d0,d1] (one-byte
-phase shift for word destinations; byte-mapped FIX/Z80/PCM dests are unaffected)**. Next round: on-device
-instrumented verification of the 0xfc2d→SPR path + the proposed fix; write-side/DMA-dest correction scoped
-to header-carrying blocks; NOT a global fetch change.
+**2026-08-28 appendix — rendering round (`9230e4d60` + `783a6cc27`, committed & pushed 2026-09-01).**
+Fixed & user-verified (all playable/rendering at 59.2 FPS, SamSho RPG on RP6): BIOS menu, NEO-GEO CD logo,
+title, character select, level-select (was black), in-fight HUD (life bars, POW bars, KO counter, text),
+characters, backgrounds.
+
+1. **CD sprite DRAM plane order [1,0,3,2]** vs MVS cart [0,2,1,3] (Geolith `neo_spr` cdmode; libretro same)
+   — `lspc/render.cpp:87-90`.
+2. **`System::readC` lane**: `spriteRam.read(address >> 1).byte(!(address & 1))` (upload lane model from
+   libretro `memory_mapped.cpp` byte@A → sprRam[A]) — was `.byte(address & 1)` (inverted).
+3. **Sprite slots 1..381** on CD (MVS 0..380).
+4. **Tile-number MSB**: CD `attributes.bit(4,7) << 12` masked `& 0x7fff` (Geolith `(attr & 0x00f0) << 12`
+   then crommask=0x7fff); MVS keeps bits 16..19.
+5. **DMA `0xe2dd`/`0xfc2d` odd-byte modes** — the HUD root cause: MAME heuristics zero-extend bytes into
+   separate words `[b,0,b,0]`, halving the 4bpp planes on word-aligned tile data (black boxes, "88888888"
+   glyphs, half-detail sprites). Rewritten to libretro's mirrored-word layout `[data, swap(data)]` =
+   4 dest bytes per 16-bit source word — `dma.cpp:37-67`.
+6. **OPNB ADPCM → `pcmRam` via `system.readVA`** (was 0xff on CD); PCM upload bank math fixed.
+7. **CD read-speed feature removed** (user directive): 75 Hz 1x fixed. Unsound at >1x — the BIOS access
+   machine reads CDC regs the pipeline hasn't written (DISC I/O ERROR ID=0000/0002, seen even at 2x).
+8. **`dumpNgGfx` harness** kept: `--ez dump_ng_gfx true` → `ng_{spr,fix,vram,pram,wram}.raw` (`System::dumpNgGfx`).
+
+**2026-09-01 static round — NGCD disc file format (full conclusions; scratch in /tmp/opencode/ngcd_static —**
+`ssrpg.bin`/`ssrpg.cue` from `chdman extractcd`, `ng_*.raw` pulled from the device, `neocd/` + `geolith/` clones):
+
+1. **Disc layout**: raw **2352-byte sectors** (MODE1/2352; LBA N at offset N*2352; user data at +16; the
+   emulator's `vfs::cdrom` mapping at 2448*[LeadIn+LBAtoABA] is the IMAGE-side mapping — unrelated). PVD at
+   LBA 16 (`CD001`).
+2. **FS record format is NOT vanilla ISO9660**: dir records = length(1), LBA **32-bit LE at +2**, size
+   **32-bit LE at +10**, name-len at **+32**, name at +33; len=0 → skip to next 2048 boundary. Matches libretro
+   neocd `findFile()`/`readVolumeDescriptor()` exactly (that code is the working fs-parse reference).
+3. **File table (84 entries)** for this disc: `045_P1.PRG` (lba 23, 1MB — main program), `F.FIX` (128KB),
+   `IPL.TXT` (128B boot list!), `JC_0..3.SPR` (4 × 1MB, banks 0-3 = the title/menu/intro sprites!),
+   `BK_0..C.SPR` (backgrounds), `PL_0..E.SPR/PAT/PCM` (players), `P045.Z80`, `JOCHU.PCM/PAT`, text .TXT
+   files. **IPL.TXT** = `F.FIX,0,0 / 045_P1.PRG,0,0 / JC_0.SPR,0,0 / JC_1.SPR,1,0 / JC_2.SPR,2,0 /
+   JC_3.SPR,3,0 / P045.Z80,0,0 / JOCHU.PCM,0,0 / JOCHU.PAT,0,0` — the boot list the BIOS loads.
+4. **THE 128-BYTE PER-FILE HEADER IS REAL (on disc!):** every `.SPR` file begins with **128 zero bytes**,
+   then the tile data (verified: PL_0.SPR data starts at +0x80; JC_*.SPR first non-zero byte at 0x80).
+   The observed device-side "tile data at +0x80" = the game uploaded `[header][tiles]` — the +0x80 lead-in
+   is a property of the game's DATA FILES, NOT an emulator artifact. A tilemap referencing tile N where the
+   data lives at N+1 is therefore fully explained IF the game's tile numbering counts the header — the
+   remaining question is which side (game numbering vs. emulator DMA landing) is off.
+5. **DMA ground truth (Geolith `geo_cd.c` — byte-for-byte):**
+   - `0xe2dd`: `write(swapped_word)` then `write(word)` per source word = dest [s1,s0,s0,s1] (matches our
+     `9230e4d60` rewrite through ares' LE word arrays — verified numerically).
+   - `0xfc2d` (LC8951 buffer → dest): `write(data>>8)` then `write(data)` → dest bytes **[0x00, d0, d0, d1]**
+     for word destinations. **OUR `9230e4d60` implementation produces [d0, 0x00, d1, d0] — ONE BYTE
+     PHASE-SHIFTED vs the ground truth.** For BYTE-mapped dests (FIX/Z80/PCM, lane-1 writes) ours matches
+     (only the low byte is taken). 0xfc2d-to-SPR (word dest) is therefore the **strongest candidate root
+     cause for the residual title-menu text corruption** (a one-byte phase shift in the 4bpp stream = the
+     observed slight misalignment/overlap, while the 0xe2dd-path HUD/characters are correct).
+6. **MAME `neogeocd.cpp`** held no loader/fs logic (BIOS-side); used as docs-only for the register map.
+   Geolith `geo_lspc.c` sprite fetch confirms NO +0x80 in the fetch path: `toffset = (tnum << 7) % csz`,
+   `tpix` reads c[tbase+0..3] with the [1,0,3,2] CD order — our committed fetch matches.
+
+**Next (on-device, instrumented):** log the 68K's 0xfc2d setups (dest address/count) + re-dump the title
+menu; if a 0xfc2d→SPR transfer is confirmed, flip our 0xfc2d to the Geolith byte layout and verify the menu
+text; if the write-side still doesn't explain tile 0x2000's +0x80 data, instrument the game's own upload
+loop (68K disasm region-selected from `045_P1.PRG` at the upload sites found at 0x2314c/0x38001/0x99a3b/
+0xc6625 fc2d references + device trace of the e2dd site). The fix is a write-side/DMA-dest correction scoped
+to header-carrying blocks; NOT a global fetch change (proven wrong).
 
 **Input default (resolved 2026-09-01):** Neo Geo / NGCD default mapping implemented in
 `resolveButtonBit` (`android/app/src/main/cpp/PhobosRunner.cpp`): X→A, Y→B, A→C, B→D, R1→A+B, R2→C+D,
