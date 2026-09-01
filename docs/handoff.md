@@ -3,13 +3,46 @@
 **Phobos** is an Android N64-first multi-system emulator (package `com.phobos.emulator`, module `:app`, native lib `libphobos_android.so`).
 Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-RDP Vulkan renderer, libadrenotools Turnip driver). UI is Jetpack Compose.
 
-## 🚀 CURRENT STATUS (2026-08-27)
+## 🚀 CURRENT STATUS (2026-09-01)
 
-**Latest work: Neo Geo CD M2 — ✅ GAME BOOTS! SamSho RPG title screen renders on-device (final clean build).**
-Full briefing: **`docs/ngcd-m2-session-context.md`** (rewritten 2026-08-27 — read it first). Also see
-`docs/implementation-plan.md` → Task NGCD-M2.
+**Latest work: Neo Geo CD — RENDERING ROUND COMPLETE (committed `9230e4d60` + `783a6cc27`).**
+Full technical record: `docs/ngcd-m2-session-context.md` (+ Aug-28 appendices), `docs/implementation-plan.md` →
+Task NGCD-M2 (RESOLVED) + Task NGCD-M3 (residual). Prior status below.
 
-**Neo Geo CD (NGCD) M2, 2026-08-27 session — BOOT ACHIEVED.** The last three blockers, all fixed and verified:
+**Verified on-device (RP6 `49016109`, SamSho RPG):** BIOS menu, NEO-GEO CD logo, title, character select,
+level-select (was a black screen), in-fight HUD (life/POW bars, KO counter) + characters + backgrounds all
+correct @59.2 FPS. Game code stays in its main loop.
+
+**Neo Geo CD rendering fixes (2026-08-28, `9230e4d60` — committed & pushed):**
+1. **CD sprite DRAM plane order [1,0,3,2]** (MVS cart is [0,2,1,3]) — the CD data bus is word-lane-swapped
+   (Geolith `cdmode`; libretro neocd agrees) — `lspc/render.cpp`.
+2. **`System::readC` byte lane**: byte@even lives in lane 1 (`.byte(!(address&1))`) — was inverted vs the
+   transfer-area upload, scrambling sprite pixels.
+3. **CD sprite slots 1..381** (slot 0 unused, 381 IS used; MVS is 0..380).
+4. **Tile-number MSB**: CD odd-word bits 4..7 fold into tile bits 12..15 masked to `0x7fff` (Geolith), not
+   bits 16..19 like MVS.
+5. **THE HUD root cause — DMA `0xe2dd`/`0xfc2d` ("skip odd bytes")**: the port had followed MAME's
+   unvalidated LC8953 heuristic (byte zero-extended into separate words = `[b,0,b,0]`, halving the 4bpp
+   planes on word-aligned tile data → HUD black boxes / "88888888" glyphs / half-detail characters).
+   Rewritten to libretro's mirrored-word layout (`[lo,hi,hi,lo]` per source word) — `dma.cpp`.
+6. **OPNB ADPCM** now reads `pcmRam` via `system.readVA` on CD (was `0xff`); PCM upload bank math fixed.
+7. **CD read-speed feature REMOVED** (user directive 2026-08-28): `cdd.readSpeed` + all app wiring deleted —
+   the drive is fixed at the authentic 75 Hz 1x CDD tick. The feature was unsound: at >1x the BIOS's access
+   machine (`$C0E99E`) reads CDC registers the pipeline hasn't written yet → **DISC I/O ERROR ID=0000/0002**
+   (observed even at 2x on the final build). The `dumpNgGfx` debug harness remains (`--ez dump_ng_gfx true`).
+
+**Open residual (Task NGCD-M3 — track it):** the **title-menu text glitch** (menu text sprites whose tile
+families `0x2000`/`0x0c00`/`0x4376` had a 128-byte lead-in: data at tile*128+0x80, blank at base). Ruled out:
+global +0x80 fetch (breaks BIOS menu/characters — block-specific), 0xe2dd source-header skip (breaks
+everything — the work-RAM source is already plain tiles). Open hypothesis: dest-bank mismatch at DMA time.
+Static CD file-format analysis is the next round (step 2 of the 2026-09-01 plan).
+
+**Neo Geo / Neo Geo CD input default (2026-09-01, `resolveButtonBit`):** Xbox-layout reference,
+physical → core button: **X→A, Y→B, A→C, B→D; R1→A+B, R2→C+D, L1→B+C, L2→A+B+C, R3→B+C+D**
+(bitmask per core button; Supersedes the Genesis-heritage C→R1/D→R2 single-bit mapping for Neo Geo systems
+only). D-pad + Start/Select (coin) unchanged. The full per-core/per-game rebinder is still Tasks 13a-13d.
+
+**Prior status (2026-08-27 — Neo Geo CD M2 boot achieved):**
 
 1. **Raw-sector LBA offset (THE hidden data bug):** `nall::vfs::cdrom` images begin at the disc lead-in —
    logical LBA N lives at physical sector `LeadInSectors + LBAtoABA(N)` = `7500 + N + 150`.
@@ -39,21 +72,13 @@ boot-init, which then does everything else naturally.
   BIOS's boot-init re-ran forever and the menu blipped WAIT every ~2s. Now the disc check runs once.
 - **FIX (text) upload-zone heap overrun fixed** — `case 5` mapped `(address>>1) & 0x3FFFF` into a
   128KiB `fixRam`; mask must be `0x1FFFF` (matches libretro neocd). Fixes garbled in-game text.
-- **Per-core CD read speed option** (pause menu → "CD Speed", capped at **1x..2x**).
-  `cdd.readSpeed` scales the CDD tick to `75×N` Hz — one sector + one decoder IRQ per tick is
-  preserved at any speed, so the protocol is identical, just N× faster. The 2x cap is
-  empirical: at >2x the BIOS's access machine cannot drain sectors fast enough (returns
-  MSF=0 / no-response → DISC I/O ERROR ID=0000/0002), and the 68K's instruction pacing
-  visibly slows on the boot intro. The "fast-forward" hotkey does NOT help here — it
-  relaxes the 120Hz display cap but does not advance the 68K's instruction clock; for
-  loader fast-forward on NGCD we'd need real 68K time-slicing (a future change).
-  Ring overflow (PT wrapping over undrained DAC data) remains guarded in `tick()`.
-  Distribution: SettingsStore `cd_speed_<system>` → `PhobosCore.setCdSpeed` →
-  `ares::setCdSpeed` → `cdd.readSpeed`; re-pushed on load in `loadRom`. Any persisted value
-  >2 from an older build is capped at the JNI entry and logged.
+- **Per-core CD read speed option — REMOVED 2026-08-28 (`9230e4d60`, see CURRENT STATUS above).**
+  The drive is fixed at authentic 1x. The old caption: the CDD tick scaled to `75×N` Hz; at >1x the BIOS's
+  access machine cannot drain sectors fast enough (MSF=0 / no-response → DISC I/O ERROR ID=0000/0002), so the
+  feature was removed at the user's directive. Ring overflow remains guarded in `tick()`.
 
-Open items (non-blocking): decide C→X/D→Y remap for the 4-face-button layout on the Retroid; flag the
-unrelated AGP 9.3.1→9.3.2 bump in `android/gradle/libs.versions.toml`.
+Open items (non-blocking): flag the unrelated AGP 9.3.1→9.3.2 bump in `android/gradle/libs.versions.toml`;
+verify NGCD audio (OPNB/ADPCM path) on-device while in a fight.
 
 **Prior status (2026-08-25)**:
 

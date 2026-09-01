@@ -883,7 +883,16 @@ uses many; ares VU has known partial accuracy in rounding/overflow edge cases).
 
 ### 🔄 IN FLIGHT (OPEN / investigating / diagnosed / broken-gated / implemented-awaiting-verify)
 
-#### Task NGCD-M2 — Neo Geo CD drive/IRQ/DMA boot blocker (IN FLIGHT 2026-08-25, uncommitted)
+#### Task NGCD-M2 — ✅ RESOLVED (boot achieved 2026-08-27, verified on-device)
+
+**Status: DONE.** SamSho RPG boots to full title/attract on the Retroid — solved via raw-sector LBA offset,
+decoder-IRQ vector fix, ack-based pending, IPL-gated CDD dispatch, controller struct seeding (see
+`docs/ngcd-m2-session-context.md`, rewritten 2026-08-27 — THE briefing). Rendering round that followed
+(2026-08-28, `9230e4d60` + `783a6cc27`) verified BIOS menu/title/char-select/level-select/HUD/characters
+all correct @59.2 FPS. **Docs/handoff.md CURRENT STATUS now carries the 2026-09-01 state.**
+
+The diagnostic record below is the (re)framing during the 2026-08-26 re-diagnosis; keep for reference but
+treat it as resolved:
 
 **Symptom:** Neo Geo CD game boot `START` does nothing — the BIOS receives Start, programs the CDC, and
 begins a disc read, but game code never reaches `0x100000`, so the game never boots past boot state 3.
@@ -961,6 +970,45 @@ pass = `type1` increments + DMA start fires non-busy + code reaches `0x100000` �
 >   NOTE: the "fast-forward" hotkey does NOT help NGCD loaders — it relaxes the 120Hz
 >   display cap, but does not advance the 68K's instruction clock. Real loader
 >   fast-forward on NGCD needs 68K time-slicing (future work, post-1.0).
+>   CD read-speed was fully REMOVED 2026-08-28 (`9230e4d60` — fixed 1x; unsound at >1x,
+>   DISC I/O ERROR ID=0000/0002 even at 2x).
+
+#### Task NGCD-M3 — NGCD rendering completeness: title-menu text residual (IN FLIGHT, static analysis 2026-09-01)
+
+**State:** boot + rendering mostly complete; ONE residual — the **title-menu text glitch** (SamSho RPG):
+the menu text sprites whose tile families **`0x2000` / `0x0c00` / `0x4376`** have their data at
+**tile*128 + 0x80** in the sprite DRAM (blank at base), so the rows render shifted/overlapping
+(the user's screenshot: "HOW TO PLAY" over "PLAY MORE"). Everything else verified correct (BIOS menu,
+logo, title art, char select, level select, in-fight HUD/characters/backgrounds @59.2 FPS).
+
+**Verified facts (on-device dumps, 2026-08-28 session):**
+- The empty tiles' data sits at +0x80 (`0x2000`→`0x100080` pattern; also `0x3400`, `0x4c60`); tiles like
+  `0x4667`/`0x5dcd`/`0x0c59` have data AT base (characters — correct).
+- **RULED OUT — global +0x80 tile fetch**: broke the BIOS menu (stripes scattered) and shifted the
+  characters → the lead-in is block-specific, not universal.
+- **RULED OUT — 0xe2dd source-header skip (+0x80 on the source)**: made the title dramatically worse
+  (full-screen shifted-tile pattern) → the work-RAM DMA source (`0x115E06`, the game's loader staging)
+  is ALREADY plain tile data — no per-file header in the staging.
+- **RULED OUT — MAME LC8953 odd-byte DMA model**: that was the HUD black-box root cause (fixed by the
+  libretro mirrored-word rewrite in `9230e4d60`); residual survived that fix.
+- Open hypothesis (session end): the `0xe2dd` dest bank (`$E00000` + `spriteUploadBank`) at DMA time
+  differs from the bank where `0x2000` lives → the lead-in comes from a different write path.
+- The boot-phase direct transfer writes (`case 0`) also started at `+0x80` (first non-zero word at
+  `0x82` in the NGUPL log) — consistent with `[128-byte header][tiles]` blocks uploaded by the game.
+
+**Next (2026-09-01 plan, step 2):** static NGCD file-format analysis of the SamSho RPG CHD (extracted with
+`chdman`; refs: libretro `neocd` loader/memory_mapped, MAME `neogeocd.cpp`/`megacdcd.cpp`, wiki.neogeodev.org
+file-structure + LSPC2 pages): decode the 128-byte file headers (load addr/size), disasm the 68K sprite
+loader, pinpoint the +0x80 origin and whether the game's tile numbering counts the header as tile 0.
+Then an instrumented on-device round (temp NGE2DD/NGUPL traces + `dumpNgGfx`) to confirm the faithful fix
+(write-side/DMA-dest correction scoped to header-carrying blocks; NOT a global fetch change) + full
+MVS/AES regression + commit/push + docs.
+
+**Input default (resolved 2026-09-01):** Neo Geo / NGCD default mapping implemented in
+`resolveButtonBit` (`android/app/src/main/cpp/PhobosRunner.cpp`): X→A, Y→B, A→C, B→D, R1→A+B, R2→C+D,
+L1→B+C, L2→A+B+C, R3→B+C+D (bitmask per core button; supersedes Genesis-heritage C→R1/D→R2 for Neo Geo
+systems). Full per-core/per-game rebinder remains Tasks 13a-13d (3-tier hierarchy — next priority after
+NGCD stable).
 
 #### Task 10c — PCE family RESOLVED 2026-08-18 (`2795e5813`); ZX 128K RESOLVED 2026-08-18 (`1bf97e3ac`); Neo Geo MVS/AES — 1994-95 WARNING hang FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:172` `tst.b $10FD82` + `13C0...60F8` → `kof95`/`samsho3`/`4`/`5` titles, `wiki:Slot_check_security`/`wiki:PROGSF1`/`wiki:NEO-SMA`); `kof98` `PROGSF1` FIXED 2026-08-21 (`mia/medium/neo-geo.cpp:374` `decryptKof98` + `ares/ng/cartridge/board/progsf1.cpp:19` `header @100: 4e 45 4f 2d` `✓` `49016109`); **SMA grid (`kof99`/`kof2000`/`garou`/`mslug3`) FIXED 2026-08-22** — was a hardcoded 68K reset-vector override (`p[0..7]=0x10f300`) in all 6 SMA branches of `decrypt()`; only kof2000 matched, the others jumped to a wrong entry → BIOS slot-grid. Removed override (kept `NEO-GEO` header patch); P-ROM decrypt verified bit-identical to MAME `prot_sma.cpp`. The `loadRoms 0xC0000 hole` hypothesis was WRONG. + SELECT-coin and switch-game SIGSEGV FIXED 2026-08-22 (see detailed note below)., plus non-MVS sets (`kof98umh` PGM, `kofnw`/`kofxi` Atomiswave) correctly rejected
 

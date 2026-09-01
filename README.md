@@ -84,14 +84,14 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | PC Engine (HuCard) | ✅ |
 | SuperGrafx | ✅ |
 | Neo Geo (MVS/AES) | ✅ Graphics + controls fixed (KOF2003 verified @59.2 FPS); **audio works** (KOF2003 confirmed; `ring buffer 0/12000` log is a suspected formatting artifact); per-title compat matrix → [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) |
+| Neo Geo CD | ✅ **Boots + renders** (Samurai Shodown RPG verified @59.2 FPS: BIOS menu, title, char-select, in-game HUD/characters/backgrounds) — residual title-menu text glitch tracked as Task NGCD-M3 |
 | **Known broken / under investigation** | |
 | PC Engine CD | ❌ Does not boot (PCE HuCard + SuperGrafx work) |
 
-> Sega Saturn and Neo Geo CD are not listed: neither has a usable core (Saturn is
-> an ares stub with an empty System::run; Neo Geo CD does not exist in ares). The
-> core stubs remain in the tree for future work, but the systems are removed from
-> the app and not supported. (PC Engine CD is loaded by the PCE core but does not
-> boot on-device — tracked in Known issues.)
+> Sega Saturn is not listed: upstream ares never completed the core (empty System::run stub,
+> kept in the tree for future work). Neo Geo CD is no longer in that bucket — it boots and
+> renders in this fork (see above). PC Engine CD is loaded by the PCE core but does not
+> boot on-device — tracked in Known issues.
 
 ### Known issues / not yet functional
 
@@ -106,11 +106,11 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 Phobos targets **perfect compatibility** for the Neo Geo MVS/AES library. Notes for users:
 
-- **Scope:** strictly **Neo Geo MVS/AES** — it is **not** a general arcade core. Neo Geo CD is a separate, future core (not in 1.0 scope).
+- **Scope:** strictly **Neo Geo MVS/AES** for the cartridge core — it is **not** a general arcade core. Neo Geo CD is a separate core, now booting + rendering (see the systems table; residual tracked as Task NGCD-M3).
 - **"FBNeo + MAME hybrid":** only Neo Geo ROM/driver data and decryption routines are borrowed from MAME and FBNeo (CMC/CMC42/CMC50/SMA/PCM2/PVC, kof2k2-family) to maximize Neo Geo coverage — other arcade boards are not emulated.
 - **Current status (2026-08-19):** graphics fixed (sprite zoom tables + vflip/zoom decode, mirroring MAME); P1/P2 input mirror fixed (P1 works; P2 needs a second controller on a handheld); **audio works** (KOF2003 confirmed on-device) — the `ring buffer 0/12000` log line is suspected to be a string-formatting bug, not a real fault.
 - **Per-title compatibility matrix:** [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) — 288 titles, categorized by protection (PVC/K2K2/CMC42/CMC50/PCM2/SMA/bootleg/standard) and ranked hardest-first, with Boot/Gfx/Audio/Ctrl status columns.
-- **Controls:** default mapping puts A/B on the face buttons and **C/D on R1/R2** (Genesis-heritage bit mapping in `resolveButtonBit`). Per-core + per-game controller rebinding (RetroArch-style 3-tier Global→Core→Game) is a planned task.
+- **Controls:** Neo Geo default mapping (Xbox-layout reference) — **X→A, Y→B, A→C, B→D, R1→A+B, R2→C+D, L1→B+C, L2→A+B+C, R3→B+C+D** (multi-bit combos; supersedes the Genesis-heritage C→R1/D→R2 single-bit mapping). Per-core + per-game controller rebinding (RetroArch-style 3-tier Global→Core→Game) is a planned task (13a-13d).
 
 ---
 

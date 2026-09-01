@@ -1,11 +1,15 @@
 # Neo Geo CD (NGCD) — Session Context for openCode handoff
 
 > Drop-in briefing for a fresh LLM/engineer continuing this work. Read this first, then
-> `docs/handoff.md` and `docs/implementation-plan.md` (Task NGCD-M2) for the always-current repo state.
+> `docs/handoff.md` and `docs/implementation-plan.md` (Task NGCD-M2 = RESOLVED, Task NGCD-M3 = residual
+> title-menu text glitch) for the always-current repo state.
 > Public hardware reference: https://wiki.neogeodev.org/index.php/Main_Page
 
-## Objective — ✅ COMPLETE (2026-08-27): SamSho RPG boots
+## Objective — ✅ COMPLETE (2026-08-27 boot; 2026-08-28 rendering round committed `9230e4d60` + `783a6cc27`)
 Fix **Neo Geo CD** boot on Phobos Android so the BIOS boots the game. Game code must reach `0x100000`.
+
+**2026-08-28 rendering round (residual = Task NGCD-M3):** all rendering verified correct EXCEPT the
+title-menu text tile families (see the "Rendering residual" appendix at the end of this file).
 
 **Verified on-device (final clean build):** the disc boots past the CD Player/menu gate and the game
 loads — the title/attract screen renders and animates, the CPU executes game code (stable main-loop PC
@@ -174,10 +178,51 @@ libretro `src/memory_input.cpp` is the authoritative controller model:
   before testing input (adb `keyevent 108` = BUTTON_START works when the app has focus).
 
 ## Work state
-- Committed: NGCD M1 BIOS-boot skeleton (`2c5f7f444`); M2a disc plumbing (`9511cea73`); M2b CDD/CDC/DMA.
-- Uncommitted (this session, all verified): raw-sector LBA offset in `Disc::readSectorRaw`; decoder IRQ
-  vector fix (`raiseType1`→`type3Pending` = vector `$15`); ack-based type pending + line re-raise in
-  REG_IRQACK; IPL-gated CDD dispatch (`2 > r.i`); `prohibitIrq`-aware type2 tick; strip of ALL temp
-  diagnostics. The bit-0 disc-detect poke remains as the documented HLE.
-- Open items (non-blocking): decide C→X/D→Y remap for the 4-face-button layout on the Retroid;
-  flag the unrelated AGP 9.3.1→9.3.2 bump in `android/gradle/libs.versions.toml`.
+- Committed & pushed (2026-09-01): NGCD M1 BIOS-boot skeleton (`2c5f7f444`); M2a disc plumbing
+  (`9511cea73`); M2b CDD/CDC/DMA (`cbcf013a3`, `a7d4cdd82`, `1fd485e7e`, `8b4909a0f`, `aa6335cd3`);
+  boot polish + CD-speed cap (`917c94eb2`, `d9830757e`, `2bc5a5e12`); rendering round (`9230e4d60`) +
+  work-RAM dump in dumpNgGfx (`783a6cc27`).
+- The bit-0 disc-detect poke remains as the documented HLE (`cdd.cpp settle → $10F656 bit 0`, gated on
+  bit-7 clear).
+- Open items: flag the unrelated AGP 9.3.1→9.3.2 bump in `android/gradle/libs.versions.toml`; verify NGCD
+  audio on-device.
+
+---
+
+## 2026-08-28 appendix — rendering round (`9230e4d60` + `783a6cc27`, committed & pushed 2026-09-01)
+
+**Fixed & user-verified (all playable/rendering at 59.2 FPS, SamSho RPG on RP6):** BIOS menu, NEO-GEO CD logo,
+title, character select, level-select (was black), in-fight HUD (life bars, POW bars, KO counter, text),
+characters, backgrounds.
+
+1. **CD sprite DRAM plane order [1,0,3,2]** vs MVS cart [0,2,1,3] (Geolith `neo_spr` cdmode; libretro same)
+   — `lspc/render.cpp:87-90`.
+2. **`System::readC` lane**: `spriteRam.read(address >> 1).byte(!(address & 1))` (upload lane model from
+   libretro `memory_mapped.cpp` byte@A → sprRam[A]) — was `.byte(address & 1)` (inverted).
+3. **Sprite slots 1..381** on CD (MVS 0..380).
+4. **Tile-number MSB**: CD `attributes.bit(4,7) << 12` masked `& 0x7fff` (Geolith `(attr & 0x00f0) << 12`
+   then crommask=0x7fff); MVS keeps bits 16..19.
+5. **DMA `0xe2dd`/`0xfc2d` odd-byte modes** — the HUD root cause: MAME heuristics zero-extend bytes into
+   separate words `[b,0,b,0]`, halving the 4bpp planes on word-aligned tile data (black boxes, "88888888"
+   glyphs, half-detail sprites). Rewritten to libretro's mirrored-word layout `[data, swap(data)]` =
+   4 dest bytes per 16-bit source word — `dma.cpp:37-67`.
+6. **OPNB ADPCM → `pcmRam` via `system.readVA`** (was 0xff on CD); PCM upload bank math fixed.
+7. **CD read-speed feature removed** (user directive): 75 Hz 1x fixed. Unsound at >1x — the BIOS access
+   machine reads CDC regs the pipeline hasn't written (DISC I/O ERROR ID=0000/0002, seen even at 2x).
+8. **`dumpNgGfx` harness** kept: `adb shell am start -n com.phobos.emulator/.MainActivity --ez dump_ng_gfx
+   true` → `ng_{spr,fix,vram,pram,wram}.raw` in `filesDir` (`PhobosCore.dumpNgGfx`, JNI → `System::dumpNgGfx`).
+
+### Rendering residual → Task NGCD-M3 (open)
+Title-menu text glitch. On-device VRAM/sprite-RAM dumps: the menu/HUD text tile families **`0x2000` /
+`0x0c00` / `0x4376`** (+ `0x3400`, `0x4c60`) are **blank at base and populated at +0x80** (data at
+tile*128+0x80). Populated-at-base tiles (`0x4667`, `0x5dcd`, `0x0c59`, `0x225e`) = characters/HUD parts
+that render correctly.
+
+- RULED OUT: global +0x80 tile fetch (broke BIOS menu/characters — block-specific, not universal).
+- RULED OUT: 0xe2dd source-header skip +0x80 (title went full-screen-shifted; work-RAM source
+  `0x115E06` is already plain tiles).
+- Known: boot-phase direct transfer writes (`case 0`) first non-zero word at offset `0x82` — the game's
+  own uploads carry a `[128-byte header][tiles]` shape for SOME blocks; characters/menu don't.
+- Open hypothesis: the 0xe2dd dest bank at DMA time ≠ bank where 0x2000 lives; needs the game's CD-side
+  file format (2026-09-01 static-analysis round underway: `chdman extractcd` of the SamSho RPG CHD +
+  libretro/MAME/wiki refs + 68K disasm of the game's loader).
