@@ -522,6 +522,16 @@ namespace ares {
           else if (nodeName == "R2") b = VirtualGamepad::R2;
           else if (nodeName == "L3") b = VirtualGamepad::L3;
           else if (nodeName == "R3") b = VirtualGamepad::R3;
+      } else if (systemName.beginsWith("Neo Geo") && !systemName.contains("Pocket")) {
+          // Neo Geo / Neo Geo CD 4-button default (Xbox-layout reference):
+          // X=A, Y=B, A=C, B=D — and the shoulders/stick-click carry the
+          // classic button combos (setValue's (buttons & b) != 0 test makes a
+          // bitmask per core button work unchanged). Supersedes the
+          // Genesis-heritage C->R1 / D->R2 single-bit mapping.
+          if      (nodeName == "A") b = VirtualGamepad::X | VirtualGamepad::R1 | VirtualGamepad::L2;
+          else if (nodeName == "B") b = VirtualGamepad::Y | VirtualGamepad::R1 | VirtualGamepad::L1 | VirtualGamepad::L2 | VirtualGamepad::R3;
+          else if (nodeName == "C") b = VirtualGamepad::A | VirtualGamepad::R2 | VirtualGamepad::L1 | VirtualGamepad::L2 | VirtualGamepad::R3;
+          else if (nodeName == "D") b = VirtualGamepad::B | VirtualGamepad::R2 | VirtualGamepad::R3;
       }
 
       return b;
