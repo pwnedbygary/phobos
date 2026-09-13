@@ -1,0 +1,27 @@
+modules = ["java-graalvm22.3"]
+[nix]
+channel = "stable-25_05"
+packages = ["unzip", "jdk17"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Build APKs"
+
+[[workflows.workflow]]
+name = "Build APKs"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash scripts/build-replit.sh"
+
+[workflows.workflow.metadata]
+outputType = "console"

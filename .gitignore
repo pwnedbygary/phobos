@@ -29,6 +29,9 @@
 !CMakePresets.json
 !port_to_android.py
 !setup_grade.py
+!/.replit
+!/replit.nix
+!/replit.md
 
 # Exclude old macOS Finder metadata
 .DS_Store
