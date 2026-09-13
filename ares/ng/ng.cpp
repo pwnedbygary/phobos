@@ -1,0 +1,17 @@
+#include <ares/ares.hpp>
+#include "ng.hpp"
+
+//started: 2021-05-18
+
+#include <ng/system/system.cpp>
+#include <ng/disc/disc.cpp>
+#include <ng/disc/cdd.cpp>
+#include <ng/disc/cdc.cpp>
+#include <ng/disc/dma.cpp>
+#include <ng/cpu/cpu.cpp>
+#include <ng/apu/apu.cpp>
+#include <ng/lspc/lspc.cpp>
+#include <ng/opnb/opnb.cpp>
+#include <ng/cartridge/cartridge.cpp>
+#include <ng/controller/controller.cpp>
+#include <ng/card/card.cpp>

@@ -1,0 +1,3574 @@
+#include "PhobosRunner.hpp"
+#include "vfs_android.hpp"
+#include <mia/mia.hpp>
+#include <android/log.h>
+#include <android/native_window.h>
+#include <android/native_window_jni.h>
+#include <aaudio/AAudio.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <arm_neon.h>
+#include <pthread.h>
+#include <sched.h>
+#include <dlfcn.h>
+#include <mutex>
+#include <memory>
+#include <thread>
+#include <condition_variable>
+#include <atomic>
+#include <deque>
+#include <vector>
+#include <map>
+#include <set>
+#include <algorithm>
+
+#include <a26/a26.hpp>
+#include <cv/cv.hpp>
+#include <fc/fc.hpp>
+#include <gb/gb.hpp>
+#include <gba/gba.hpp>
+#include <md/md.hpp>
+#include <ms/ms.hpp>
+#include <msx/msx.hpp>
+#include <n64/n64.hpp>
+#include <ng/ng.hpp>
+#include <ngp/ngp.hpp>
+#include <pce/pce.hpp>
+#undef NCCS
+#include <ps1/ps1.hpp>
+#include <sfc/sfc.hpp>
+#include <sg/sg.hpp>
+#include <spec/spec.hpp>
+#include <ws/ws.hpp>
+
+#include <nall/encode/png.hpp>
+#include <adrenotools/driver.h>
+
+using namespace nall;
+using namespace nall::primitives;
+
+#define LOG_TAG "PhobosCore"
+
+namespace ares {
+  auto addLog(LogLevel level, string message) -> void;
+}
+
+static inline void log_internal(ares::LogLevel level, const char* format, ...) {
+    char buf[2048];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+
+    // Always print to Logcat for now so user can see it in terminal too
+    s32 androidLevel = ANDROID_LOG_INFO;
+    switch(level) {
+        case ares::LogLevel::Trace: androidLevel = ANDROID_LOG_VERBOSE; break;
+        case ares::LogLevel::Debug: androidLevel = ANDROID_LOG_DEBUG; break;
+        case ares::LogLevel::Info:  androidLevel = ANDROID_LOG_INFO; break;
+        case ares::LogLevel::Warn:  androidLevel = ANDROID_LOG_WARN; break;
+        case ares::LogLevel::Error: androidLevel = ANDROID_LOG_ERROR; break;
+        case ares::LogLevel::Fatal: androidLevel = ANDROID_LOG_FATAL; break;
+        default: break;
+    }
+    __android_log_print(androidLevel, LOG_TAG, "%s", buf);
+
+    ares::addLog(level, buf);
+}
+
+#define LOGI(...) log_internal(ares::LogLevel::Info, __VA_ARGS__)
+#define LOGD(...) log_internal(ares::LogLevel::Debug, __VA_ARGS__)
+#define LOGE(...) log_internal(ares::LogLevel::Error, __VA_ARGS__)
+#define LOGW(...) log_internal(ares::LogLevel::Warn, __VA_ARGS__)
+
+namespace ares {
+  Node::System root;
+  std::atomic<bool> isPausedAtomic{false};
+  std::atomic<bool> emulationRunning{false};
+  std::atomic<bool> fastForwardAtomic{false};
+  std::atomic<f32>  ffSpeedLimitAtomic{2.0f};
+  // Per-core refresh rate reported by ares via Screen::refreshRateHint().
+  // Most cores are 60 Hz but WonderSwan/NGP run at ~75 Hz and PAL cores at
+  // 50 Hz — the old hardcoded 60 FPS cap throttled those cores and caused
+  // audio/video desync. Written from the ares video thread, read by the
+  // emulation loop for the frame cap / fast-forward target.
+  std::atomic<double> refreshRateAtomic{60.0};
+  std::atomic<bool> resetRequestedAtomic{false};
+  // N64 debug instrumentation gate: when OFF (default) the per-second
+  // "N64 PC:" / "N64 STALL/HANG" diagnostics are skipped entirely so logs stay
+  // clean and no per-second core-state reads cost CPU. Toggle ON from Settings
+  // (N64 Experimental) or the pause menu when debugging freezes.
+  std::atomic<bool> n64DebugLoggingAtomic{false};
+  // Accessor for the ares core files (vi.cpp, rdp_device.cpp) so the
+  // PhobosVI/PhobosRDP diagnostics are gated behind the same toggle.
+  auto n64DebugLoggingEnabled() -> bool { return n64DebugLoggingAtomic.load(); }
+  pthread_t emuThread = 0;
+  std::atomic<bool> emuThreadRunning{false};
+  // Set while unloadSystem() / the N64DD reload is tearing down a system
+  // (freeing the ares singleton hardware: rdram.ram, cartridge.rom, dd.disk).
+  // setEmulationRunning(true) refuses to spawn a fresh emu thread during this
+  // window: the new thread copies `localRoot = root` (the OLD, half-torn-down
+  // system) and runs CPU::LW against the freed buffers -> SIGSEGV on unload
+  // (the 64DD quit -> reload crash). The thread is spawned by initialize() /
+  // the N64DD reload itself AFTER the teardown completes.
+  static std::atomic<bool> systemUnloading{false};
+  // Identity of the CURRENT emulation thread. platform callbacks (audio) must
+  // reject calls from an ABANDONED zombie thread: unloadSystem()'s abandon
+  // path deliberately leaks a stuck emulation thread, and if it later unsticks
+  // it keeps emulating the OLD system — it must never touch the NEW system's
+  // shared audio pipeline (stream registry / ring buffer / AAudio stream).
+  static std::atomic<pthread_t> currentEmuThread{0};
+
+  static s32 romFd = -1;
+  static s32 secondaryRomFd = -1;
+  static std::shared_ptr<mia::Pak> currentMedium;
+  static std::shared_ptr<mia::Pak> secondaryMedium;
+  static std::atomic<bool> firstFrameRendered{false};
+  static ANativeWindow* nativeWindow = nullptr;
+  static AAudioStream* audioStream = nullptr;
+  // Base name (no extension) of the currently loaded ROM — used to key the
+  // per-game save files on disk (saves/<System>/<RomName>.save.ram etc.) so
+  // different games never overwrite each other's saves.
+  static string currentRomBase;
+
+  // ── Dedicated audio thread + ring buffer ────────────────────────────────
+  // The emulation thread NEVER blocks on AAudioStream_write, and never does
+  // O(n) work on a growing queue. Samples go into a FIXED-CAPACITY ring
+  // buffer (O(1) push/pop, no memmove) capped at ~125ms; the dedicated audio
+  // thread drains it into AAudio with a bounded blocking write. This removes
+  // the synchronous-write churn (underrun→restart) that throttled run() to
+  // 50-57 FPS, and the small cap keeps latency low (GBA UI "dings" were
+  // delayed ~0.5s by an earlier 1s-cap vector queue). Oldest samples are
+  // dropped (overwritten) when the emulator out-produces the DAC, so a
+  // fast-forward burst can't leave a backlog that keeps playing after you
+  // drop back to 60.
+  static std::mutex audioMutex;
+  static std::condition_variable audioCV;
+  static constexpr size_t audioRingCapacity = 48000 * 2 / 8;  // ~125ms stereo floats
+  static std::vector<f32> audioRing;        // fixed capacity, used as a ring
+  static size_t audioRingHead = 0;          // oldest sample index
+  static size_t audioRingSize = 0;          // samples currently buffered
+  static std::thread audioThread;
+  static std::atomic<bool> audioThreadRunning{false};
+  static std::atomic<bool> audioThreadStop{false};
+
+  // ── Audio stream registry (lockstep mixing) ────────────────────────────
+  // Ares exposes one Node::Audio::Stream per sound source (Mega Drive:
+  // YM2612 + PSG + CD-DA + PCM; Master System: PSG + YM2413; MSX: PSG +
+  // SCC + tape; etc.). The emulation thread invokes platform->audio(stream)
+  // for whichever stream has pending output, so the host must MIX all
+  // streams sample-aligned — exactly what upstream desktop ares
+  // Program::audio does. Streams register lazily on first sight and are
+  // cleared in unloadSystem() (both the clean and abandon paths). The
+  // registry holds strong refs; audio() copies it under the mutex so a
+  // concurrent clear can't invalidate an in-flight mix.
+  static std::mutex audioStreamsMutex;
+  static std::vector<Node::Audio::Stream> audioStreams;
+  // Bumped whenever the registry changes (stream added / cleared). The
+  // emulation thread caches a snapshot keyed on this, so the hot audio()
+  // path (the ZX ULA fires it millions of times/sec) avoids a mutex lock +
+  // linear scan + heap copy on EVERY call. The emulation thread is the only
+  // audio() caller (zombie gate) and is recreated per load, so the cache is
+  // naturally scoped to one system's stream set.
+  static std::atomic<u64> audioStreamsVersion{0};
+
+  static auto audioThreadMain() -> void {
+    // [Phobos] Audio diagnostics (Task 46 investigation, 2026-08-18): log ring
+    // fill + AAudio xrun count once/sec while playing, so we can distinguish
+    // CLOCK-DRIFT UNDERRUNS (ring → 0, xrun increments) from CD-DA GAP POPS
+    // (ring healthy, xrun flat, pops coincide with CD track boundaries).
+    auto diagStart = std::chrono::steady_clock::now();
+    s64 lastXruns = 0;
+    while (!audioThreadStop.load()) {
+      std::vector<f32> chunk;
+      {
+        std::unique_lock<std::mutex> lock(audioMutex);
+        audioCV.wait_for(lock, std::chrono::milliseconds(20),
+            []{ return audioRingSize > 0 || audioThreadStop.load(); });
+        if (audioThreadStop.load() && audioRingSize == 0) break;
+        if (audioRingSize == 0) continue;
+        // Drain up to ~2048 floats (1024 stereo frames) per iteration.
+        size_t take = std::min<size_t>(audioRingSize, 2048);
+        chunk.resize(take);
+        for (size_t i = 0; i < take; i++)
+          chunk[i] = audioRing[(audioRingHead + i) % audioRingCapacity];
+        audioRingHead = (audioRingHead + take) % audioRingCapacity;
+        audioRingSize -= take;
+        // Wake the emulation thread's audio-pacing wait so it can resume
+        // running frames as soon as the DAC has drained enough.
+        audioCV.notify_one();
+      }
+      if (chunk.empty()) continue;
+
+      AAudioStream* stream = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(audioMutex);
+        stream = audioStream;
+      }
+      // Paused/closed: drop queued audio so stale samples never pop on resume.
+      if (!stream || isPausedAtomic.load()) continue;
+
+      s32 total = (s32)chunk.size() / 2;
+      s32 written = 0;
+      // Blocking write is fine here (dedicated thread); 20ms cap per call so
+      // a wedged stream can't hang the thread forever.
+      while (written < total) {
+        s32 result = AAudioStream_write(stream, chunk.data() + written * 2,
+            total - written, 20'000'000);
+        if (result > 0) written += result;
+        else break; // stream stopped or error: drop the remainder
+      }
+
+      // [Phobos] Audio diagnostics (Task 46): 1x/sec log ring fill + xruns.
+      auto nowDiag = std::chrono::steady_clock::now();
+      auto diagElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(nowDiag - diagStart).count();
+      if (diagElapsed >= 1000) {
+        diagStart = nowDiag;
+        s64 xruns = 0;
+        if (stream) {
+          s64 count = AAudioStream_getXRunCount(stream);
+          if (count >= 0) xruns = count;
+        }
+        s64 newXruns = xruns - lastXruns;
+        lastXruns = xruns;
+        LOGI("AudioDiag: ring=%zu/%zu (%.0f%%) xruns+%lld (total %lld)",
+             audioRingSize, (size_t)audioRingCapacity,
+             (f64)audioRingSize * 100.0 / (f64)audioRingCapacity,
+             (long long)newXruns, (long long)xruns);
+      }
+    }
+  }
+
+  static std::mutex windowMutex;
+  static bool windowChanged = false;
+  static u32 currentWidth = 0;
+  static u32 currentHeight = 0;
+  static u32 bufferWidth = 0;
+  static u32 bufferHeight = 0;
+  static std::vector<u32> lastFrameBuffer;
+
+  // Performance Monitoring
+  static std::atomic<u64> frameCount{0};
+  static std::atomic<u64> lastFrameTime{0};
+  static std::atomic<f64> currentFps{0.0};
+  static std::atomic<f64> avgFrameTime{0.0};
+  static auto lastStatsUpdateTime = std::chrono::steady_clock::now();
+
+  static std::deque<LogEntry> logBuffer;
+  static std::mutex logMutex;
+  static std::recursive_mutex systemMutex;
+  // Guards ONLY core execution (root->run / root->power / serialize).
+  // Raw pointer — when the emulation thread is abandoned while holding this
+  // mutex, we release() the pointer (leaking the mutex) and allocate a
+  // fresh one. Destroying a locked std::recursive_mutex is UB.
+  static std::recursive_mutex* runMutex = new std::recursive_mutex();
+  static Node::Object cachedPlayer1;
+
+  struct InputState {
+    std::atomic<f32> lx{0.0f}, ly{0.0f}, rx{0.0f}, ry{0.0f};
+    std::atomic<s32> buttons{0};
+  } inputState;
+
+  static u64 nativeInputLogCounter = 0;
+
+  struct VirtualGamepad {
+    enum : u32 {
+        Up       = 1 << 0,
+        Down     = 1 << 1,
+        Left     = 1 << 2,
+        Right    = 1 << 3,
+        A        = 1 << 4,
+        B        = 1 << 5,
+        X        = 1 << 6,
+        Y        = 1 << 7,
+        L1       = 1 << 8,
+        R1       = 1 << 9,
+        L2       = 1 << 10,
+        R2       = 1 << 11,
+        L3       = 1 << 12,
+        R3       = 1 << 13,
+        Select   = 1 << 14,
+        Start    = 1 << 15,
+        Home     = 1 << 16,
+        LS_Up    = 1 << 17,
+        LS_Down  = 1 << 18,
+        LS_Left  = 1 << 19,
+        LS_Right = 1 << 20,
+        RS_Up    = 1 << 21,
+        RS_Down  = 1 << 22,
+        RS_Left  = 1 << 23,
+        RS_Right = 1 << 24,
+    };
+  };
+
+  // Bind-once input caches, mirroring ares desktop's InputMapping::bind(): node
+  // names are resolved to VirtualGamepad bits / axis slots ONCE per node and
+  // cached, so per-read cost is a map lookup instead of repeated string
+  // matching on the emulation thread. Caches are keyed by RAW Node::Input*
+  // (button.get()/axis.get()): they MUST be invalidated whenever the node tree
+  // is rebuilt (connectDevices() re-allocates controller ports — PS1 analog
+  // toggle, N64DD disk mount, reload). Otherwise a freed address recycled by
+  // the allocator for a NEW node collides with a stale entry → the new control
+  // binds to the OLD control's bit/slot (e.g. left stick reads R-stick or
+  // nothing) — the "PS1 analog toggle degrades after 3rd toggle" bug.
+  // inputCacheMutex guards these maps: input() runs on the emulation thread
+  // while connectDevices() can clear them from the UI/JNI thread, so a clear
+  // racing a lookup on std::map is UB (corruption) without the lock.
+  static std::map<const void*, u32> inputButtonCache;
+  static std::map<const void*, u32> inputAxisCache;  // axis slot + 1; 0 = unmapped
+  static s32 inputCacheOrientation = -1;
+  static std::mutex inputCacheMutex;
+
+  static auto invalidateInputCaches() -> void {
+    std::lock_guard<std::mutex> lock(inputCacheMutex);
+    inputButtonCache.clear();
+    inputAxisCache.clear();
+    inputCacheOrientation = -1;
+  }
+
+  // On-screen keyboard state (ZX Spectrum / 128). setKeyboardKey() toggles
+  // membership; AndroidPlatform::input() sources keyboard-button values from
+  // this set so the core's per-frame Keyboard::read() poll sees the press.
+  static std::mutex zxKeyboardMutex;
+  static std::set<string> zxKeysPressed;
+  // Gamepad-scheme-derived keyboard keys (QAOP/ZXZX), set each frame from
+  // setInput(); the keyboard input path checks both sets.
+  static std::set<string> zxSchemeKeysPressed;
+
+  // ZX gamepad control scheme: maps the gamepad (VirtualGamepad bits) onto
+  // keyboard keys for games that don't support Kempston.
+  // 0 = none (Kempston only), 1 = QAOP+Space, 2 = ZXZX+Space, 3 = ELITE.
+  static std::atomic<s32> zxControlScheme{0};
+  // ZX scheme-translation toggles (Layer 2 — orthogonal to per-core rebinding
+  // which lives at Layer 1: physical input → VirtualGamepad bits).
+  // zxStickToKeys: left-stick cardinal → same D-pad bits the scheme maps, so
+  // the stick drives the scheme keys for ANY ZX game.
+  // zxReversePitch: swap Up↔Down key mapping (aircraft-style: pull back =
+  // pitch up), applies to stick AND d-pad together.
+  static std::atomic<bool> zxStickToKeys{false};
+  static std::atomic<bool> zxReversePitch{false};
+  // Per-key rebind overrides: ZX keyboard label -> gamepad bit. When a key
+  // has an entry here, the ZX scheme path uses it INSTEAD of the built-in
+  // scheme mapping (ELITE/QAOP/ZXZX). Layer 2.5 — sits above the scheme
+  // defaults, below Layer-1 (physical->bit) rebinding. Guarded by
+  // zxKeyboardMutex like the pressed-key sets.
+  static std::map<string, u32> zxKeyBindings;
+
+  // Map a VirtualGamepad bit to the ZX keyboard keys for the active scheme.
+  // Start -> ENTER is universal (all schemes) since ENTER is used everywhere
+  // on the ZX (menus, prompts, LOAD confirmation).
+  static auto zxSchemeKeys(u32 bit, s32 scheme) -> std::vector<string> {
+    std::vector<string> keys;
+    auto add = [&](const char* a, const char* b = nullptr) {
+      keys.push_back(a);
+      if (b) keys.push_back(b);
+    };
+    // Start button -> ENTER (all schemes).
+    if (bit == VirtualGamepad::Start) add("ENTER");
+    switch (scheme) {
+      case 1: // QAOP + Space
+        if (bit == VirtualGamepad::Left)  add("Q");
+        if (bit == VirtualGamepad::Right) add("P");
+        if (bit == VirtualGamepad::A)     add("SPACE BREAK");
+        break;
+      case 2: // ZXZX + Space
+        if (bit == VirtualGamepad::Left)  add("Z");
+        if (bit == VirtualGamepad::Right) add("X");
+        if (bit == VirtualGamepad::A)     add("SPACE BREAK");
+        break;
+      case 3: // ELITE (Flight + Combat) — definitive Firebird 1985 manual layout
+        // Flying: S=Dive, X=Climb, N=Roll Left, M=Roll Right, SPACE=Increase
+        //   speed, SYMBOL SHIFT=Decrease speed, 1-4=Views.
+        // Combat: A=Fire laser, T=Target missile, F=Fire missile, U=Unarm
+        //   missile, E=ECM, W=Energy bomb, Q=Escape capsule.
+        // Nav: H=Hyperspace, J=Torus jump drive, G+H=Intergalactic jump,
+        //   C=Docking computer on/off, D=Distance to system.
+        // Aircraft convention (pull back = climb): Up=S (dive/push forward),
+        //   Down=X (climb/pull back). Reverse Pitch swaps them.
+        // Gamepad mapping (14 inputs, flight-first):
+        if (bit == VirtualGamepad::Up)    add(zxReversePitch.load() ? "X" : "S");
+        if (bit == VirtualGamepad::Down)  add(zxReversePitch.load() ? "S" : "X");
+        if (bit == VirtualGamepad::Left)  add("N");
+        if (bit == VirtualGamepad::Right) add("M");
+        if (bit == VirtualGamepad::A)     add("A");
+        if (bit == VirtualGamepad::B)     add("C");       // Docking computer on/off
+        if (bit == VirtualGamepad::X)     add("SPACE BREAK"); // Increase speed
+        if (bit == VirtualGamepad::Y)     add("SYMBOL SHIFT");
+        if (bit == VirtualGamepad::L1)    add("T");
+        if (bit == VirtualGamepad::R1)    add("U");
+        if (bit == VirtualGamepad::L2)    add("H");
+        if (bit == VirtualGamepad::R2)    add("J");
+        if (bit == VirtualGamepad::Select) add("1");
+        break;
+    }
+    return keys;
+  }
+
+  static auto isZxKeyboardSystem(const string& systemName) -> bool {
+    return systemName == "ZX Spectrum" || systemName == "ZX Spectrum 128";
+  }
+
+  // True if the button name is one of the ZX keyboard matrix labels. The
+  // matrix has no "Up"/"Down"/"Left"/"Right"/"Fire" — those belong to the
+  // Kempston joystick (and other port devices), so they must read from the
+  // gamepad bitmask, NOT the keyboard-source (otherwise the ZX branch would
+  // zero them every frame → Kempston joystick dead).
+  static auto isZxKeyboardKey(const string& name) -> bool {
+    static const string keys[] = {
+      "CAPS SHIFT", "Z", "X", "C", "V",
+      "A", "S", "D", "F", "G",
+      "Q", "W", "E", "R", "T",
+      "1", "2", "3", "4", "5",
+      "0", "9", "8", "7", "6",
+      "P", "O", "I", "U", "Y",
+      "ENTER", "L", "K", "J", "H",
+      "SPACE BREAK", "SYMBOL SHIFT", "M", "N", "B",
+    };
+    for (auto& k : keys) if (name == k) return true;
+    return false;
+  }
+
+  // Determine which controller port (0-based player index) a button belongs to.
+  // Walks up from the button node to find a "Controller Port N" ancestor. Returns
+  // 0 for player 1; >0 for additional players. Non-controller inputs (keyboard,
+  // etc.) have no such ancestor and return 0. Without this, resolveButtonBit maps
+  // purely by leaf name, so P2's "A" resolves to the SAME gamepad bit as P1's "A"
+  // -> a single pad drives both players (observed on Neo Geo KOF2003).
+  static auto controllerPlayerIndex(Node::Input::Input input) -> s32 {
+    Node::Object node = input;
+    for (int depth = 0; depth < 8 && node; depth++) {
+      string name = node->name();
+      if (name.beginsWith("Controller Port")) {
+        if (name.size() >= 1) {
+          char c = name[name.size() - 1];
+          if (c >= '1' && c <= '9') return c - '1';
+        }
+        return 0;
+      }
+      node = ares::Node::parent(node);
+    }
+    return 0;
+  }
+
+  static auto resolveButtonBit(const string& nodeName, const string& systemName, bool vertical) -> u32 {
+      u32 b = 0;
+
+      // Standard D-Pad
+      if (nodeName == "Up" || nodeName == "↑") b = VirtualGamepad::Up;
+      else if (nodeName == "Down" || nodeName == "↓") b = VirtualGamepad::Down;
+      else if (nodeName == "Left" || nodeName == "←") b = VirtualGamepad::Left;
+      else if (nodeName == "Right" || nodeName == "→") b = VirtualGamepad::Right;
+
+      // Face Buttons
+      else if (nodeName == "A" || nodeName == "Cross" || nodeName == "I" || nodeName == "1" || nodeName == "○") b = VirtualGamepad::A;
+      else if (nodeName == "B" || nodeName == "Circle" || nodeName == "II" || nodeName == "2" || nodeName == "×") b = VirtualGamepad::B;
+      else if (nodeName == "Fire") b = VirtualGamepad::A;  // Atari 2600 single fire button
+      else if (nodeName == "C") b = VirtualGamepad::R1; // Genesis 6-button / 3-button C -> R1
+      else if (nodeName == "D") b = VirtualGamepad::R2; // Neo Geo D -> R2
+      else if (nodeName == "X" || nodeName == "Square" || nodeName == "III" || nodeName == "□") b = VirtualGamepad::X;
+      else if (nodeName == "Y" || nodeName == "Triangle" || nodeName == "IV" || nodeName == "△") b = VirtualGamepad::Y;
+      else if (nodeName == "Z") b = VirtualGamepad::R2; // Genesis 6-button Z -> R2
+
+      // Shoulders / Triggers
+      else if (nodeName == "L" || nodeName == "L1" || nodeName == "L-Bumper") b = VirtualGamepad::L1;
+      else if (nodeName == "R" || nodeName == "R1" || nodeName == "R-Bumper") b = VirtualGamepad::R1;
+      else if (nodeName == "L2" || nodeName == "L-Trigger") b = VirtualGamepad::L2;
+      else if (nodeName == "R2" || nodeName == "R-Trigger") b = VirtualGamepad::R2;
+
+      // Stick Clicks
+      else if (nodeName == "L3" || nodeName == "L-Stick-Click") b = VirtualGamepad::L3;
+      else if (nodeName == "R3" || nodeName == "R-Stick-Click") b = VirtualGamepad::R3;
+
+      // System Buttons
+      else if (nodeName == "Select" || nodeName == "Mode") b = VirtualGamepad::Select;
+      else if (nodeName == "Start" || nodeName == "Run") b = VirtualGamepad::Start;
+      else if (nodeName == "Home") b = VirtualGamepad::Home;
+
+      // WonderSwan Specific Names (Horizontal Layout as Default)
+      else if (nodeName == "X1") b = vertical ? VirtualGamepad::X : VirtualGamepad::Up;      // Vertical: X, Horizontal: D-Up
+      else if (nodeName == "X2") b = vertical ? VirtualGamepad::Y : VirtualGamepad::Right;   // Vertical: Y, Horizontal: D-Right
+      else if (nodeName == "X3") b = vertical ? VirtualGamepad::B : VirtualGamepad::Down;    // Vertical: B, Horizontal: D-Down
+      else if (nodeName == "X4") b = vertical ? VirtualGamepad::A : VirtualGamepad::Left;    // Vertical: A, Horizontal: D-Left
+      else if (nodeName == "Y1") b = vertical ? VirtualGamepad::Left : VirtualGamepad::L1;   // Vertical: D-Left, Horizontal: L1
+      else if (nodeName == "Y2") b = vertical ? VirtualGamepad::Up : VirtualGamepad::R1;     // Vertical: D-Up, Horizontal: R1
+      else if (nodeName == "Y3") b = vertical ? VirtualGamepad::Right : VirtualGamepad::X;   // Vertical: D-Right, Horizontal: X
+      else if (nodeName == "Y4") b = vertical ? VirtualGamepad::Down : VirtualGamepad::Y;    // Vertical: D-Down, Horizontal: Y
+
+      else if (nodeName == "A")  b = vertical ? VirtualGamepad::L1 : VirtualGamepad::B;      // Vertical: L1, Horizontal: B
+      else if (nodeName == "B")  b = vertical ? VirtualGamepad::R1 : VirtualGamepad::A;      // Vertical: R1, Horizontal: A
+
+      // Stick-as-Buttons (for Digital mapping to Sticks)
+      else if (nodeName == "L-Up") b = VirtualGamepad::LS_Up;
+      else if (nodeName == "L-Down") b = VirtualGamepad::LS_Down;
+      else if (nodeName == "L-Left") b = VirtualGamepad::LS_Left;
+      else if (nodeName == "L-Right") b = VirtualGamepad::LS_Right;
+      else if (nodeName == "R-Up") b = VirtualGamepad::RS_Up;
+      else if (nodeName == "R-Down") b = VirtualGamepad::RS_Down;
+      else if (nodeName == "R-Left") b = VirtualGamepad::RS_Left;
+      else if (nodeName == "R-Right") b = VirtualGamepad::RS_Right;
+
+      // Special System Overrides
+      if (systemName == "Nintendo 64") {
+          if (nodeName == "Z") b = VirtualGamepad::L2;
+          else if (nodeName == "C-Up")    b = VirtualGamepad::RS_Up;
+          else if (nodeName == "C-Down")  b = VirtualGamepad::RS_Down;
+          else if (nodeName == "C-Left")  b = VirtualGamepad::RS_Left;
+          else if (nodeName == "C-Right") b = VirtualGamepad::RS_Right;
+      } else if (systemName == "PlayStation") {
+          // DualShock uses L1, R1, L2, R2, L3, R3 explicitly
+          if      (nodeName == "L1") b = VirtualGamepad::L1;
+          else if (nodeName == "R1") b = VirtualGamepad::R1;
+          else if (nodeName == "L2") b = VirtualGamepad::L2;
+          else if (nodeName == "R2") b = VirtualGamepad::R2;
+          else if (nodeName == "L3") b = VirtualGamepad::L3;
+          else if (nodeName == "R3") b = VirtualGamepad::R3;
+      } else if (systemName.beginsWith("Neo Geo") && !systemName.contains("Pocket")) {
+          // Neo Geo / Neo Geo CD 4-button default (Xbox-layout reference):
+          // X=A, Y=B, A=C, B=D — and the shoulders/stick-click carry the
+          // classic button combos (setValue's (buttons & b) != 0 test makes a
+          // bitmask per core button work unchanged). Supersedes the
+          // Genesis-heritage C->R1 / D->R2 single-bit mapping.
+          if      (nodeName == "A") b = VirtualGamepad::X | VirtualGamepad::R1 | VirtualGamepad::L2;
+          else if (nodeName == "B") b = VirtualGamepad::Y | VirtualGamepad::R1 | VirtualGamepad::L1 | VirtualGamepad::L2 | VirtualGamepad::R3;
+          else if (nodeName == "C") b = VirtualGamepad::A | VirtualGamepad::R2 | VirtualGamepad::L1 | VirtualGamepad::L2 | VirtualGamepad::R3;
+          else if (nodeName == "D") b = VirtualGamepad::B | VirtualGamepad::R2 | VirtualGamepad::R3;
+      }
+
+      return b;
+  }
+
+  static auto resolveAxisSlot(const string& lowerName) -> s32 {
+      if (lowerName == "lx" || lowerName == "l-stick x" || lowerName == "left x" || lowerName == "x-axis" || lowerName == "x" || lowerName == "player 1 x-axis") return 0;
+      if (lowerName == "ly" || lowerName == "l-stick y" || lowerName == "left y" || lowerName == "y-axis" || lowerName == "y" || lowerName == "player 1 y-axis") return 1;
+      if (lowerName == "rx" || lowerName == "r-stick x" || lowerName == "right x" || lowerName == "z-axis" || lowerName == "player 2 x-axis" || lowerName == "z") return 2;
+      if (lowerName == "ry" || lowerName == "r-stick y" || lowerName == "right y" || lowerName == "rz-axis" || lowerName == "player 2 y-axis" || lowerName == "rz") return 3;
+      return -1;
+  }
+
+  static bool muteAudioAtomic = false;
+  static bool fastBootAtomic = false;
+  static bool autoSaveMemoryAtomic = false;  // "Auto-Save Memory" — disabled by default
+  static bool autoLoadMemoryAtomic = false;   // "Auto-Load Memory" — disabled by default
+  static s32 regionPreference = 0;
+  static std::atomic<s32>  n64UpscaleFactor{1};
+  static std::atomic<bool> n64Recompiler{true};
+  static std::atomic<bool> n64ExpansionPak{true};
+  static std::atomic<bool> n64DisableVIProcessing{false};
+  static std::atomic<bool> n64WeaveDeinterlacing{false};
+  static std::atomic<bool> n64SupersampleScanout{false};
+  // VI Overclock percent (100 = native). Written to ::ares::Nintendo64::vi.
+  // overclockPercent at load/reset; makes the VI generate frames faster so
+  // the game's logic runs at a genuinely higher FPS (Mupen64Plus-FZ style).
+  static std::atomic<s32> n64ViOverclock{100};
+  // Count Per Operation (1-3, default 2) + R4300 Overclock factor (0-5,
+  // 2^f) — Mupen64Plus-FZ style CPU timing knobs, written to
+  // ::ares::Nintendo64::cpu.countPerOp / overclockFactor at load/reset.
+  static std::atomic<s32> n64CountPerOp{2};
+  static std::atomic<s32> n64CpuOverclock{0};
+  static std::atomic<bool> skipBootRom{false};
+  static bool ps1AnalogMode = true;
+  static bool orientationVertical = false;
+  static string customDriverPath;
+  static string nativeLibraryDir;
+  static string tempFilePath;
+  static string homePath;
+  static string savesPath;
+  static string vulkanCachePath;
+  static std::map<string, string> firmwareMap;
+
+  // N64 Player 1 controller pak ("None" | "Rumble Pak" | "Controller Pak").
+  // Rumble state is polled from Kotlin; player1PakDir backs the Controller
+  // Pak's save.pak (created on demand in pak() when a Controller Pak attaches).
+  static string n64Pak = "None";
+  static std::atomic<bool> rumbleState{false};
+  static std::chrono::steady_clock::time_point lastRumbleOnTime{};
+  static std::shared_ptr<vfs::directory> player1PakDir;
+
+  // Forward declaration — defined with the N64 setters below, but called from
+  // unloadSystem() which appears earlier in this translation unit.
+  static auto exportControllerPak() -> void;
+  // Flush cartridge/battery saves to disk (defined with the setters below,
+  // called from unloadSystem() and the pause path).
+  static auto flushSavesToDisk() -> void;
+
+  // N64 JIT hang-detector state (see emulationLoop).
+  static u32 hangZeroSeconds = 0;
+  // Stall-spin detector: if the guest PC is identical across consecutive 1s
+  // samples while frames are still being produced (frozen-but-60fps), the CPU
+  // is spinning in a wait loop that isn't resolving. Track it and dump the
+  // full hardware state once we're sure it's stuck.
+  static u64 stallLastPc = 0;
+  static u32 stallSameCount = 0;
+  static bool stallLogged = false;
+
+  auto addLog(LogLevel level, string message) -> void {
+    std::lock_guard<std::mutex> lock(logMutex);
+    logBuffer.push_back({level, message});
+    if (logBuffer.size() > 5000) logBuffer.pop_front();
+  }
+
+  static std::atomic<u32> emuThreadGeneration{0};
+
+  // ── Abandoned ("zombie") emulation threads ─────────────────────────────
+  // When unloadSystem() / the N64DD reload path cannot wait out a frame that
+  // is taking too long (>2s: Vulkan fence stalls, pipeline-compile storms),
+  // the emu thread is deliberately leaked (it holds a localRoot shared_ptr,
+  // so the node tree stays alive). BUT the N64 core keeps ALL emulated state
+  // (rdram.ram, cartridge.rom, dd.disk, ...) in namespace-global singletons,
+  // so the NEXT ::ares::Nintendo64::load() → System::unload() frees those
+  // buffers underneath the still-running zombie → SIGSEGV in the interpreter
+  // (CPU::LW / RSP DMA) — the "crash while unloading" bug. N64 run() always
+  // returns (all fence waits are bounded), so a "stuck" frame eventually
+  // completes and the zombie exits at its loop-top generation check. We keep
+  // the zombie's pthread_t + an exit flag and join it (bounded) BEFORE any
+  // N64 load that would re-initialize the singletons.
+  struct EmuThreadCookie {
+    u32 generation = 0;
+    std::shared_ptr<std::atomic<bool>> exited = std::make_shared<std::atomic<bool>>(false);
+  };
+  static std::shared_ptr<EmuThreadCookie> currentEmuThreadCookie;
+  static std::mutex zombieThreadsMutex;
+  static std::vector<std::pair<pthread_t, std::shared_ptr<std::atomic<bool>>>> zombieThreads;
+
+  auto emulationLoop(u32 generation) -> void {
+    #if defined(ANDROID)
+    setpriority(PRIO_PROCESS, 0, -10);
+    #endif
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    s32 num_cores = sysconf(_SC_NPROCESSORS_CONF);
+    for (s32 i = std::max(0, num_cores - 4); i < num_cores; i++) {
+        CPU_SET(i, &cpuset);
+    }
+    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+
+    // Absolute frame deadline for pacing (see below). Persists across the
+    // loop so sleep overshoot never compounds frame-to-frame.
+    auto frameDeadline = std::chrono::steady_clock::now();
+
+    while (emulationRunning && emuThreadGeneration == generation) {
+      // Take a local shared_ptr copy so the zombie thread holds a
+      // reference to the N64 System even after the main thread
+      // replaces the global 'root'. Prevents use-after-free in the
+      // abandon path.
+      auto localRoot = root;
+
+      if (resetRequestedAtomic.exchange(false)) {
+        std::lock_guard<std::recursive_mutex> lock(*runMutex);
+        if (localRoot) {
+            // power(true) = soft reset. Node::System::power() defaults to
+            // reset=false, which would take the N64 cold-boot path and
+            // destroy/recreate the Vulkan device (poisoning it on Turnip).
+            localRoot->power(true);
+            addLog(LogLevel::Info, "System reset (async)");
+            LOGI("System reset complete (async)");
+        }
+      }
+
+      if (!isPausedAtomic) {
+        auto start = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::recursive_mutex> lock(*runMutex);
+            if (localRoot) {
+                localRoot->run();
+            }
+            else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        auto end = std::chrono::steady_clock::now();
+
+        // Per-core pacing: the cap target is derived from the core's native
+        // refresh rate (60/75/50 Hz) instead of a hardcoded 60 FPS, so
+        // WonderSwan (~75 Hz) and PAL cores are no longer throttled.
+        double refreshRate = refreshRateAtomic.load();
+
+        if (fastForwardAtomic) {
+            f64 speed = (f64)ffSpeedLimitAtomic;
+            if (speed > 0.0) {
+                f64 targetFrameTime = (1000000.0 / refreshRate) / speed;
+                auto actualFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+                if (actualFrameTime < targetFrameTime) {
+                    std::this_thread::sleep_for(std::chrono::microseconds((s64)(targetFrameTime - (f64)actualFrameTime)));
+                }
+            }
+        }
+
+        lastFrameTime = (u64)std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        avgFrameTime = avgFrameTime * 0.9 + (f64)lastFrameTime * 0.1;
+        frameCount++;
+
+        // Pacing (non-fast-forward): hold an ABSOLUTE frame deadline so
+        // sleep overshoot never compounds frame-to-frame (the old
+        // sleep_for(remaining-budget) approach drifted 60fps to ~52 and
+        // drained the GPU pipeline each frame, exposing fence latency).
+        //
+        // Pure deadline pacing (no audio-ring condition): earlier we tried
+        // also waiting for the audio ring to drain below a target, but that
+        // over-throttled audio-heavy cores (Mega CD/Genesis YM2612 triple-
+        // stream fills the ring faster than the DAC drains it → 34fps) and
+        // under-throttled light-audio cores (Atari 2600 ran 119fps because
+        // the ring was always below target → no wait). The absolute video
+        // deadline is the correct universal pace for every core.
+        if (!fastForwardAtomic) {
+          double frameTarget = 1000000.0 / refreshRate;
+          auto period = std::chrono::microseconds((s64)frameTarget);
+          frameDeadline += period;
+          std::this_thread::sleep_until(frameDeadline);
+          // Snap the deadline forward only if we're behind by a FULL frame
+          // or more (a genuinely heavy frame / hitch). Small sleep overshoot
+          // (waking slightly after the deadline — normal on Android) must
+          // NOT trigger a full-period advance: doing so advances the
+          // deadline 2x per wall-clock frame and locks the core at half
+          // speed (N64 ran 30fps, MD-family 34fps). Small overshoot is
+          // absorbed by the next iteration running back-to-back, keeping
+          // the average locked to the target rate.
+          auto now = std::chrono::steady_clock::now();
+          while (now > frameDeadline + period) {
+            frameDeadline += period;
+          }
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatsUpdateTime).count();
+        if (elapsed >= 1000) {
+            currentFps = (f64)frameCount * 1000.0 / (f64)elapsed;
+            LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms", (f64)currentFps, (f64)avgFrameTime / 1000.0);
+            frameCount = 0;
+            lastStatsUpdateTime = now;
+
+            // Per-second perf profile (N64 only, gated by debug logging so it
+            // costs nothing normally): tells us whether the core is CPU-bound
+            // (cpuCycles + icache/dcache tag churn) or RSP-bound (rsp cycles),
+            // so we know which lever to pull for a CPU-heavy game.
+            #if defined(CORE_N64)
+            if (n64DebugLoggingAtomic.load() && root && root->name() == "Nintendo 64") {
+              auto& prof = ::ares::Nintendo64::cpu.profile;
+              s64 rspCycles = ::ares::Nintendo64::rsp.dma.clock;  // cumulative-ish
+              LOGI("N64 Profile: cpuCycles=%lld exc=%lld icache(H=%lld M=%lld W=%lld) dcache(H=%lld M=%lld W=%lld) rspDmaClk=%lld",
+                (long long)prof.cpuCycles, (long long)prof.cpuCyclesExc,
+                (long long)prof.icacheHits, (long long)prof.icacheMisses, (long long)prof.icacheWritebacks,
+                (long long)prof.dcacheHits, (long long)prof.dcacheMisses, (long long)prof.dcacheWritebacks,
+                (long long)rspCycles);
+            }
+            #endif
+
+            // N64 hang/stall diagnostic (Conker's BFD pub/pause-menu freezes):
+            //  1) CPU truly halted (FPS ~0)  → "N64 HANG"
+            //  2) CPU SPINNING (FPS stays high, screen frozen, SAME PC every
+            //     second) → "N64 STALL" — the guest is in a wait loop that
+            //     isn't resolving. Dump the FULL hardware state: what is it
+            //     waiting on (RSP DMA? RDP busy? SI/PI DMA? an interrupt that
+            //     never fires? a scheduler event far in the future?).
+            #if defined(CORE_N64)
+            if (n64DebugLoggingAtomic.load() && root && root->name() == "Nintendo 64" && !isPausedAtomic.load()) {
+                u64 pc = ::ares::Nintendo64::cpu.ipu.pc;
+                auto& status = ::ares::Nintendo64::cpu.scc.status;
+                auto& cause = ::ares::Nintendo64::cpu.scc.cause;
+                // JIT compiles cached RDRAM only. If the spinning PC is NOT in
+                // RDRAM, the code is interpreter-run and the stall is a guest
+                // hardware wait whose resolution depends on how often the
+                // scheduler steps (JitInterleaving).
+                bool jittable = (pc >= 0x8000'0000ull && pc < 0x8040'0000ull);
+
+                auto dumpStall = [&](const char* tag) {
+                    auto& rspStatus = ::ares::Nintendo64::rsp.status;
+                    auto& rdpCmd    = ::ares::Nintendo64::rdp.command;
+                    auto& siIo      = ::ares::Nintendo64::si.io;
+                    auto& piIo      = ::ares::Nintendo64::pi.io;
+                    auto& aiIo      = ::ares::Nintendo64::ai.io;
+                    auto& viIo      = ::ares::Nintendo64::vi.io;
+                    // [Phobos diag] Disassemble the instructions at the spin
+                    // PC so we can see WHAT the guest is polling (RSP status?
+                    // RDP status? a memory flag?). PC is a u64 (sign-extended
+                    // KSEG0); mask to 32-bit for the disassembler.
+                    auto pc32 = (u32)pc;
+                    string disasm;
+                    for (int i = 0; i < 4; i++) {
+                        u32 insn = (u32)::ares::Nintendo64::cpu.readDebug<::ares::Nintendo64::Word>(pc32 + i * 4);
+                        string text = ::ares::Nintendo64::cpu.disassembler.disassemble(pc32 + i * 4, insn);
+                        disasm.append("\n  ["); disasm.append(hex(pc32 + i * 4, 8L)); disasm.append("] "); disasm.append(text);
+                    }
+                    // [Phobos diag] Also disassemble the exception vector
+                    // (0x80000180) dispatch + the fatal-trap region around the
+                    // spin PC so we can see the handler's check that leads to
+                    // the hang (Mischief Makers: beq-self at 0x800008b8).
+                    u32 vecBase = 0x80000180u;
+                    string vecDisasm;
+                    for (int i = 0; i < 12; i++) {
+                        u32 insn = (u32)::ares::Nintendo64::cpu.readDebug<::ares::Nintendo64::Word>(vecBase + i * 4);
+                        string text = ::ares::Nintendo64::cpu.disassembler.disassemble(vecBase + i * 4, insn);
+                        vecDisasm.append("\n  ["); vecDisasm.append(hex(vecBase + i * 4, 8L)); vecDisasm.append("] "); vecDisasm.append(text);
+                    }
+                    u32 trapStart = (pc32 & ~0x3fu) - 0x80;
+                    string trapDisasm;
+                    for (int i = 0; i < 24; i++) {
+                        u32 addr = trapStart + i * 4;
+                        u32 insn = (u32)::ares::Nintendo64::cpu.readDebug<::ares::Nintendo64::Word>(addr);
+                        string text = ::ares::Nintendo64::cpu.disassembler.disassemble(addr, insn);
+                        trapDisasm.append("\n  ["); trapDisasm.append(hex(addr, 8L)); trapDisasm.append("] "); trapDisasm.append(text);
+                    }
+                    // [Phobos diag] Disassemble the game's REAL IRQ handler
+                    // (the vector jumps to it: k0 = 0x800A5FC8) so we can see
+                    // what it reads that leads to the fatal trap.
+                    u32 handlerBase = 0x800a5fc8u;
+                    string handlerDisasm;
+                    for (int i = 0; i < 32; i++) {
+                        u32 addr = handlerBase + i * 4;
+                        u32 insn = (u32)::ares::Nintendo64::cpu.readDebug<::ares::Nintendo64::Word>(addr);
+                        string text = ::ares::Nintendo64::cpu.disassembler.disassemble(addr, insn);
+                        handlerDisasm.append("\n  ["); handlerDisasm.append(hex(addr, 8L)); handlerDisasm.append("] "); handlerDisasm.append(text);
+                    }
+                    LOGW("%s: PC=0x%08llx jittable=%d FPS=%.1f mask=%02x pend=%02x "
+                         "IE=%d EXL=%d ERL=%d exc=%d clock=%lld thr=%u "
+                         "rsp(halt=%d broken=%d dmaBusy=%d dmaFull=%d) "
+                         "rdp(pipe=%d buf=%d crash=%d frz=%d cur=%d end=%d) "
+                         "si(dmaBusy=%d ioBusy=%d pend=%d) pi(dmaBusy=%d ioBusy=%d "
+                         "latch=%d) ai(dmaCnt=%d dmaEn=%d) vi(vc=%d fld=%d) "
+                         "queue(next=%d) EPC=0x%08llx%s%s%s%s",
+                         tag, (unsigned long long)pc, (int)jittable, (double)currentFps,
+                         (int)status.interruptMask, (int)cause.interruptPending,
+                         (int)status.interruptEnable, (int)status.exceptionLevel,
+                         (int)status.errorLevel, (int)cause.exceptionCode,
+                         (long long)::ares::Nintendo64::cpu.clock,
+                         (unsigned)::ares::scheduler.threads(),
+                         (int)rspStatus.halted, (int)rspStatus.broken,
+                         (int)::ares::Nintendo64::rsp.dma.busy.any(), (int)::ares::Nintendo64::rsp.dma.full.any(),
+                         (int)rdpCmd.pipeBusy, (int)rdpCmd.bufferBusy,
+                         (int)rdpCmd.crashed, (int)rdpCmd.freeze,
+                         (int)rdpCmd.current, (int)rdpCmd.end,
+                         (int)siIo.dmaBusy, (int)siIo.ioBusy, (int)siIo.readPending,
+                         (int)piIo.dmaBusy, (int)piIo.ioBusy, (int)piIo.busLatch,
+                         (int)aiIo.dmaCount, (int)aiIo.dmaEnable,
+                         (int)viIo.vcounter, (int)viIo.field,
+                         (int)::ares::Nintendo64::queue.timeToNextEvent(),
+                         (const char*)disasm.data(),
+                         (const char*)vecDisasm.data(),
+                         (const char*)trapDisasm.data(),
+                         (const char*)handlerDisasm.data());
+                };
+
+                if (currentFps <= 0.5) {
+                    if (++hangZeroSeconds >= 2) {
+                        dumpStall("N64 HANG");
+                    }
+                } else {
+                    hangZeroSeconds = 0;
+                    if (pc == stallLastPc) {
+                        if (++stallSameCount >= 3) {
+                            // Confirmed stall: log the full state once, then
+                            // keep logging every second while it persists.
+                            if (!stallLogged) {
+                                stallLogged = true;
+                                dumpStall("N64 STALL");
+                            } else {
+                                dumpStall("N64 STALL(cont)");
+                            }
+                        }
+                    } else {
+                        stallSameCount = 0;
+                        stallLogged = false;
+                    }
+                    stallLastPc = pc;
+                    LOGI("N64 PC: 0x%08llx (FPS=%.1f) jittable=%d mask=%02x pend=%02x IE=%d exc=%d",
+                         (unsigned long long)pc, (double)currentFps, (int)jittable,
+                         (int)status.interruptMask, (int)cause.interruptPending,
+                         (int)status.interruptEnable, (int)cause.exceptionCode);
+                }
+            } else {
+                hangZeroSeconds = 0;
+                stallSameCount = 0;
+                stallLogged = false;
+            }
+            #endif
+        }
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    LOGI("Emulation thread generation %u exiting", generation);
+  }
+
+  static auto ensureThread() -> void {
+    if (emuThread && emuThreadRunning) return;
+    // Reset abandoned thread state so a fresh emulation thread is created.
+    if (emuThread) {
+      LOGW("ensureThread: replacing abandoned emulation thread");
+      emuThread = 0;
+      emuThreadRunning = false;
+      runMutex = new std::recursive_mutex();
+    }
+    emuThreadRunning = true;
+    u32 gen = ++emuThreadGeneration;
+    // The cookie carries the exit flag the zombie-parking machinery uses to
+    // detect when the thread has finished its in-flight frame. The heap copy
+    // is owned by the thread; the shared_ptr here keeps the flag alive.
+    auto cookie = std::make_shared<EmuThreadCookie>();
+    cookie->generation = gen;
+    currentEmuThreadCookie = cookie;
+    pthread_create(&emuThread, nullptr, [](void* arg) -> void* {
+        std::unique_ptr<EmuThreadCookie> cookie((EmuThreadCookie*)arg);
+        emulationLoop(cookie->generation);
+        cookie->exited->store(true, std::memory_order_release);
+        emuThreadRunning = false;
+        return nullptr;
+    }, new EmuThreadCookie(*cookie));
+    currentEmuThread.store(emuThread);
+  }
+
+  auto setEmulationRunning(bool running) -> void {
+    if (emulationRunning == running) return;
+    if (running && systemUnloading.load()) {
+      LOGW("setEmulationRunning(true) deferred: system teardown in progress");
+      return;
+    }
+    emulationRunning = running;
+    if (running) ensureThread();
+  }
+
+  // Wait for parked zombie threads to finish their in-flight frame and exit.
+  // MUST be called before ::ares::Nintendo64::load() (or anything that
+  // re-initializes the N64 singleton hardware) and before spawning a fresh
+  // emulation thread. N64 run() always returns (all fence waits are bounded),
+  // so a "stuck" frame eventually completes and the zombie exits at its
+  // loop-top check; this waits it out so it can't race the teardown.
+  static auto joinAbandonedThreads(int budgetMs = 10000) -> void {
+    std::lock_guard<std::mutex> lock(zombieThreadsMutex);
+    for (auto it = zombieThreads.begin(); it != zombieThreads.end(); ) {
+      pthread_t handle = it->first;
+      auto& exited = it->second;
+      if (exited->load(std::memory_order_acquire)) {
+        pthread_join(handle, nullptr);
+        LOGI("Zombie thread %lu joined (had already exited)", (unsigned long)handle);
+        it = zombieThreads.erase(it);
+        continue;
+      }
+      bool joined = false;
+      for (int waited = 0; waited < budgetMs; waited += 10) {
+        if (exited->load(std::memory_order_acquire)) {
+          pthread_join(handle, nullptr);
+          LOGI("Zombie thread %lu joined after ~%dms", (unsigned long)handle, waited);
+          joined = true;
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      if (joined) {
+        it = zombieThreads.erase(it);
+      } else {
+        LOGW("Zombie thread %lu still running after %dms — leaving parked", (unsigned long)handle, budgetMs);
+        ++it;
+      }
+    }
+  }
+
+  // Park the currently-running emulation thread as a zombie: it is stuck
+  // inside root->run() (a frame taking >2s) and we are about to drop the
+  // handle. The next N64 load joins it via joinAbandonedThreads() BEFORE
+  // touching the singleton hardware, closing the use-after-free window.
+  static auto parkZombieThread() -> void {
+    if (!emuThread) return;
+    {
+      std::lock_guard<std::mutex> lock(zombieThreadsMutex);
+      zombieThreads.push_back({emuThread,
+          currentEmuThreadCookie ? currentEmuThreadCookie->exited
+                                 : std::make_shared<std::atomic<bool>>(false)});
+      LOGW("Zombie thread %lu parked (joined before the next N64 load)", (unsigned long)emuThread);
+    }
+    emuThread = 0;
+    emuThreadRunning = false;
+    currentEmuThread.store(0);
+    currentEmuThreadCookie.reset();
+  }
+
+  struct AndroidPlatform : Platform {
+    auto attach(Node::Object node) -> void override {
+      string name = node->name();
+      LOGD("Attach: %s", (const char*)name);
+    }
+
+    auto detach(Node::Object node) -> void override {
+      string name = node->name();
+      LOGD("Detach: %s", (const char*)name);
+    }
+
+    auto log(Node::Debugger::Tracer::Tracer tracer, string_view message) -> void override {
+      string msg = message;
+      addLog(LogLevel::Trace, string{"[Ares Log] ", msg});
+    }
+
+    auto event(Event event) -> void override {
+      if (event == Event::Power) LOGI("Ares Event: Power");
+      if (event == Event::Shutdown) LOGI("Ares Event: Shutdown");
+    }
+
+    auto status(string_view message) -> void override {
+      string msg = message;
+      addLog(LogLevel::Info, string{"[Ares Status] ", msg});
+    }
+
+    auto time() -> s64 override {
+      return (s64)std::time(nullptr);
+    }
+
+    auto refreshRateHint(double refreshRate) -> void override {
+      // Called by ares Screen nodes (some cores call it every frame). Ignore
+      // garbage values and only log when the rate actually changes so we
+      // don't spam logcat for dynamic-rate cores (WonderSwan, Atari 2600).
+      if (refreshRate < 20.0 || refreshRate > 240.0) return;
+      double prev = refreshRateAtomic.exchange(refreshRate);
+      if (std::abs(prev - refreshRate) > 0.5) {
+        LOGI("Refresh rate hint: %.2f Hz", refreshRate);
+      }
+    }
+
+    auto input(Node::Input::Input input) -> void override {
+      if (!root) return;
+      string systemName = root->name();
+
+      u32 buttons = (u32)inputState.buttons.load();
+      f32 lx = inputState.lx.load();
+      f32 ly = inputState.ly.load();
+      f32 rx = inputState.rx.load();
+      f32 ry = inputState.ry.load();
+
+      // Invalidate bind-once caches if the WonderSwan orientation mode changed
+      // (it remaps several button names). Cheap bool compare per call.
+      if (inputCacheOrientation != (s32)orientationVertical) {
+          std::lock_guard<std::mutex> lock(inputCacheMutex);
+          inputButtonCache.clear();
+          inputAxisCache.clear();
+          inputCacheOrientation = (s32)orientationVertical;
+      }
+
+      if (auto button = input->cast<Node::Input::Button>()) {
+          u32 b = 0;
+          {
+              std::lock_guard<std::mutex> lock(inputCacheMutex);
+              auto it = inputButtonCache.find(button.get());
+              if (it == inputButtonCache.end()) {
+                  // Bind once, then cache (mirrors ares InputMapping::bind()): names
+                  // resolve on the first read; per-read is a map lookup + bit test.
+                  // Only player 1 (controller port 0) maps to the single handheld
+                  // gamepad; players 2+ have no gamepad source here, so leave them
+                  // unmapped. Without this, resolveButtonBit maps purely by leaf
+                  // name and P2's "A" resolves to the SAME bit as P1's "A", so one
+                  // pad drives both players (observed on Neo Geo KOF2003).
+                  if (controllerPlayerIndex(button) == 0) {
+                      b = resolveButtonBit(button->name(), systemName, orientationVertical);
+                  } else {
+                      b = 0;
+                  }
+                  inputButtonCache[button.get()] = b;
+              } else {
+                  b = it->second;
+              }
+          }
+
+          // Always set the value (resetting if not mapped) to ensure state consistency.
+          // ZX Spectrum / 128 keyboard-matrix buttons are keyboard-backed: source the
+          // value from the on-screen keyboard set instead of zeroing it (otherwise the
+          // core's per-frame Keyboard::read() would immediately clear an on-screen key
+          // press). Kempston joystick buttons (Up/Down/Left/Right/Fire) are NOT matrix
+          // keys — they must read from the gamepad bitmask, or the ZX branch would zero
+          // them every frame → Kempston joystick dead.
+          if (isZxKeyboardSystem(systemName) && isZxKeyboardKey(button->name())) {
+              std::lock_guard<std::mutex> klock(zxKeyboardMutex);
+              // Pressed if the on-screen keyboard OR the gamepad scheme holds it.
+              button->setValue(zxKeysPressed.count(button->name()) > 0 || zxSchemeKeysPressed.count(button->name()) > 0);
+          } else {
+              button->setValue(b != 0 && (buttons & b) != 0);
+          }
+      } else if (auto axis = input->cast<Node::Input::Axis>()) {
+          s32 slot = -1;
+          {
+              std::lock_guard<std::mutex> lock(inputCacheMutex);
+              auto it = inputAxisCache.find(axis.get());
+              if (it == inputAxisCache.end()) {
+                  string nodeName = axis->name();
+                  string lowerName = nodeName.downcase();
+                  slot = resolveAxisSlot(lowerName);
+                  inputAxisCache[axis.get()] = (u32)(slot + 1);  // 0 = unmapped
+              } else {
+                  slot = (s32)it->second - 1;
+              }
+          }
+
+          s16 value = 0;
+          if (slot >= 0) {
+              switch (slot) {
+                  case 0: value = (s16)(lx * 32767.0f); break;
+                  case 1: value = (s16)(ly * 32767.0f); break;
+                  case 2: value = (s16)(rx * 32767.0f); break;
+                  case 3: value = (s16)(ry * 32767.0f); break;
+              }
+          }
+
+          // Diagnostic heartbeat only (ares logs nothing per read): every 600th
+          // axis read ≈ every 5-10 s at typical PS1 pad poll rates. The old
+          // "|| abs(value) > 1000" clause logged EVERY deflected-stick read on
+          // the emulation thread — thousands of synchronous logd writes/sec
+          // while the stick moved, which stalled emulation and caused lag.
+          static u64 axisLogCount = 0;
+          if (axisLogCount++ % 2000 == 0) {
+              LOGI("PhobosNativeInput: System='%s' Axis='%s' Matched=%d Value=%d (lx=%.2f, ly=%.2f)",
+                   (const char*)systemName, (const char*)axis->name(), slot >= 0, (int)value, (double)lx, (double)ly);
+          }
+
+          if (slot >= 0) {
+              axis->setValue(value);
+          }
+      } else if (auto rumble = input->cast<Node::Input::Rumble>()) {
+          // N64 Rumble Pak + PS1 DualShock: binary motor state. Stored in an
+          // atomic for the Kotlin side to poll — no JNI attach needed on the
+          // emulation thread.
+          //
+          // Trust the game's bit exactly: the N64 controller is polled every
+          // frame, so a 0-hold means rumbleState mirrors the game's write each
+          // poll. This lets the Kotlin side see every hit's rising edge (the
+          // game writes 1 on a racket hit, 0 between) so the decaying-hit
+          // envelope re-triggers on EVERY hit, not just the first. If the game
+          // writes 1 continuously with no 0 gaps (no edge), this can't help —
+          // but MT's per-hit rumble implies it writes 0 between hits.
+          rumbleState.store(rumble->enable());
+      }
+    }
+
+    auto video(Node::Video::Screen screen, const u32* data, u32 pitch, u32 width, u32 height) -> void override {
+      if (width == 0 || height == 0 || isPausedAtomic) return;
+      // NOTE: no currentEmuThread gate here — ares Video::Threaded=true means
+      // this runs on the ares Screen thread, NOT the emulation thread. Gating
+      // on currentEmuThread would reject every frame (black screen regression
+      // 2026-08-14). The Screen thread is per-system and dies with it, so it
+      // cannot become a zombie like the emu thread.
+
+      static u64 frameLogCount = 0;
+      if (frameLogCount++ % 2000 == 0) {
+          LOGD("Video: %s, %ux%u, data[0]=%08x", (const char*)screen->name(), width, height, data ? data[0] : 0);
+      }
+
+      lock_guard<std::mutex> lock(windowMutex);
+      if (!nativeWindow) return;
+
+      if (!firstFrameRendered) firstFrameRendered = true;
+
+      // Special handling for WonderSwan Rotation
+      bool rotate = false;
+      if (root && root->name().contains("WonderSwan") && orientationVertical) {
+          rotate = true;
+      }
+
+      // Special handling for N64 Vulkan Direct Scanout
+      bool isN64Vulkan = false;
+      #if defined(CORE_N64)
+      if (root && root->name() == "Nintendo 64" && ::ares::Nintendo64::vulkan.enable) {
+          isN64Vulkan = true;
+      }
+      #endif
+
+      // Determine if we should use 2x scaling for sharpness (disable for N64 Vulkan which handles its own res)
+      bool scale2x = (width <= 320) && !rotate && !isN64Vulkan;
+      u32 targetW = rotate ? height : (scale2x ? width * 2 : width);
+      u32 targetH = rotate ? width : (scale2x ? height * 2 : height);
+
+      if (windowChanged || targetW != bufferWidth || targetH != bufferHeight) {
+          ANativeWindow_setBuffersGeometry(nativeWindow, (s32)targetW, (s32)targetH, WINDOW_FORMAT_RGBA_8888);
+          bufferWidth = targetW;
+          bufferHeight = targetH;
+          currentWidth = width;
+          currentHeight = height;
+          windowChanged = false;
+      }
+
+      ANativeWindow_Buffer buffer;
+      if (ANativeWindow_lock(nativeWindow, &buffer, nullptr) == 0) {
+        auto* dest = (u32*)buffer.bits;
+        s32 dst_stride = buffer.stride;
+
+        if (lastFrameBuffer.size() < (u64)width * height) lastFrameBuffer.resize(width * height);
+
+        const u8* vData = nullptr;
+        u32 vW = 0, vH = 0;
+        #if defined(CORE_N64)
+        if (isN64Vulkan && !::ares::Nintendo64::vi.io.cpuScanoutActive) {
+            // Normal N64 Vulkan scanout. When the VI's CPU fallback rendered
+            // (wide mode — Rogue Squadron's 1024 menu), cpuScanoutActive is
+            // set and we present the CPU-written screen buffer (`data`)
+            // instead of the Vulkan scanout (which parallel-RDP clamps to 640
+            // → black).
+            ::ares::Nintendo64::vulkan.mapScanoutRead(vData, vW, vH);
+        }
+        #endif
+
+        auto colorMap = [&](u32 p) -> u32 {
+            u32 colors = screen->colors();
+            if (colors > 0 && p < colors) {
+                return screen->lookupPalette(p);
+            }
+            return p;
+        };
+
+        if (rotate) {
+            if (!data) { ANativeWindow_unlockAndPost(nativeWindow); return; }
+            s32 src_stride = pitch / 4;
+            for (s32 y = 0; y < (s32)height; y++) {
+                const u32* srcLine = data + y * src_stride;
+                for (s32 x = 0; x < (s32)width; x++) {
+                    u32 p = colorMap(srcLine[x]);
+                    u32 ap = 0xFF000000 | ((p << 16) & 0x00FF0000) | (p & 0x0000FF00) | ((p >> 16) & 0x000000FF);
+                    // 90 degree clockwise rotation: (x, y) -> (h - 1 - y, x)
+                    dest[x * dst_stride + (height - 1 - y)] = ap;
+                    lastFrameBuffer[y * width + x] = ap;
+                }
+            }
+        } else if (isN64Vulkan && !::ares::Nintendo64::vi.io.cpuScanoutActive) {
+            // Direct SIMD NEON vectorized copy from Vulkan RGBA to Android ABGR.
+            // vData can be null when the scanout fence timed out in
+            // mapScanoutRead() — but mapScanoutRead() still acquired
+            // vulkan.mutex (scanoutLock). unmapScanoutRead() MUST run in ALL
+            // cases, otherwise the screen thread leaks vulkan.mutex forever and
+            // the emulation thread blocks in scanoutAsync → run() never
+            // returns → black screen after reset. This was the N64 reset hang.
+            // When the VI's CPU fallback rendered (wide mode), we present the
+            // CPU `data` buffer via the else branch below instead.
+            if (vData) {
+                u32 copyW = std::min(width, vW);
+                u32 copyH = std::min(height, vH);
+                // [Phobos diag] Is the scanout content reaching video()?
+                if (::ares::n64DebugLoggingEnabled() && vW && vH) {
+                    const u32* dbg0 = (const u32*)vData;
+                    const u32* dbgMid = (const u32*)(vData + (vH/2) * vW * 4);
+                    __android_log_print(ANDROID_LOG_INFO, "PhobosV",
+                        "video: vW=%u vH=%u copyW=%u copyH=%u buf0=%08x bufMid=%08x",
+                        vW, vH, copyW, copyH, dbg0[0], dbgMid[vW/2]);
+                }
+                for (s32 y = 0; y < (s32)copyH; y++) {
+                    const u32* srcLine = (const u32*)(vData + y * vW * 4);
+                    u32* destLine = dest + y * dst_stride;
+                    s32 x = 0;
+                    #if defined(__aarch64__) || defined(__arm__)
+                    uint32x4_t alpha = vdupq_n_u32(0xFF000000);
+                    for (; x <= (s32)copyW - 4; x += 4) {
+                        uint32x4_t p = vld1q_u32(srcLine + x);
+                        uint32x4_t result = vorrq_u32(alpha, p);
+                        vst1q_u32(destLine + x, result);
+                    }
+                    #endif
+                    for (; x < (s32)copyW; x++) {
+                        destLine[x] = 0xFF000000 | srcLine[x];
+                    }
+                }
+            }
+            ::ares::Nintendo64::vulkan.unmapScanoutRead();
+        } else if (scale2x) {
+            if (!data) { ANativeWindow_unlockAndPost(nativeWindow); return; }
+            s32 src_stride = pitch / 4;
+            for (s32 y = 0; y < (s32)height; y++) {
+                const u32* srcLine = data + y * src_stride;
+                u32* destLine1 = dest + (y * 2) * dst_stride;
+                u32* destLine2 = dest + (y * 2 + 1) * dst_stride;
+                u32* saveLine = lastFrameBuffer.data() + y * width;
+
+                for (s32 x = 0; x < (s32)width; x++) {
+                    u32 p = colorMap(srcLine[x]);
+                    u32 ap = 0xFF000000 | ((p << 16) & 0x00FF0000) | (p & 0x0000FF00) | ((p >> 16) & 0x000000FF);
+                    destLine1[x * 2] = ap;
+                    destLine1[x * 2 + 1] = ap;
+                    destLine2[x * 2] = ap;
+                    destLine2[x * 2 + 1] = ap;
+                    saveLine[x] = ap;
+                }
+            }
+        } else {
+            if (!data) { ANativeWindow_unlockAndPost(nativeWindow); return; }
+            s32 src_stride = pitch / 4;
+            for (s32 y = 0; y < (s32)height; y++) {
+                const u32* srcLine = data + y * src_stride;
+                u32* destLine = dest + y * dst_stride;
+                u32* saveLine = lastFrameBuffer.data() + y * width;
+                for (s32 x = 0; x < (s32)width; x++) {
+                    u32 p = colorMap(srcLine[x]);
+                    u32 ap = 0xFF000000 | ((p << 16) & 0x00FF0000) | (p & 0x0000FF00) | ((p >> 16) & 0x000000FF);
+                    destLine[x] = ap;
+                    saveLine[x] = ap;
+                }
+            }
+        }
+        ANativeWindow_unlockAndPost(nativeWindow);
+      }
+    }
+
+    auto audio(Node::Audio::Stream stream) -> void override {
+      if (isPausedAtomic) return;
+      // Reject audio from an abandoned zombie emulation thread (see
+      // currentEmuThread): after the abandon path leaks a stuck thread, it may
+      // later resume and keep emulating the OLD system. It must not register
+      // streams, mix, or push samples into the NEW system's pipeline.
+      if (pthread_self() != currentEmuThread.load()) return;
+
+      {
+        std::unique_lock<std::mutex> lock(audioMutex);
+        if (!audioStream) {
+          AAudioStreamBuilder* builder;
+          AAudio_createStreamBuilder(&builder);
+          AAudioStreamBuilder_setSampleRate(builder, 48000);
+          AAudioStreamBuilder_setChannelCount(builder, 2);
+          AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
+          AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+          AAudioStreamBuilder_openStream(builder, &audioStream);
+          AAudioStreamBuilder_delete(builder);
+          if (audioStream) {
+            // 32 bursts (~6144 frames at 48k = ~128ms): holds several frames
+            // of output and rides out short stalls without underrunning.
+            s32 burst = AAudioStream_getFramesPerBurst(audioStream);
+            s32 bufferFrames = burst * 32;
+            AAudioStream_setBufferSizeInFrames(audioStream, bufferFrames);
+            // Prime with silence so the first emulated frames have headroom.
+            std::vector<f32> silence((size_t)bufferFrames * 2, 0.0f);
+            s64 written = 0;
+            while (written < bufferFrames) {
+                s32 n = AAudioStream_write(audioStream, silence.data() + written * 2,
+                    (s32)(bufferFrames - written), 0);
+                if (n <= 0) break;
+                written += n;
+            }
+            AAudioStream_requestStart(audioStream);
+          }
+        }
+      }
+      // Restart the audio thread if it was stopped (unloadSystem stops it).
+      // This MUST be outside the `if (!audioStream)` block: with stream-reuse
+      // across loads, audioStream stays non-null, so the open block (which
+      // used to spawn the thread) is skipped — without this, the audio thread
+      // never restarts → NO SOUND in any core after the first load (regression
+      // 2026-08-14).
+      if (!audioThreadRunning.load()) {
+        audioThreadStop.store(false);
+        audioThread = std::thread(audioThreadMain);
+        audioThreadRunning.store(true);
+      }
+
+      // Push MIXED samples into the audio ring buffer (O(1), fixed ~125ms
+      // cap). Never blocks; oldest samples are overwritten when the
+      // emulator out-produces the DAC so a fast-forward burst can't leave
+      // a backlog. Cores expose one stream per sound source; the emulation
+      // thread calls this for whichever stream just produced output, so we
+      // must MIX all streams sample-aligned — draining a single stream
+      // unmixed is what garbled Mega Drive/CD audio (each stream's pending
+      // block was appended sequentially instead of summed).
+      if (audioStream) {
+        // Thread-local snapshot cache keyed on audioStreamsVersion. The
+        // emulation thread is the only audio() caller and is recreated per
+        // load, so the cache is naturally scoped to one system's stream set.
+        // This removes the per-call mutex lock + linear scan + heap copy that
+        // the ZX ULA (firing audio() millions of times/sec) was paying — the
+        // source of the remaining ~1 FPS of fat.
+        thread_local u64 cachedAudioVersion = 0;
+        thread_local std::vector<Node::Audio::Stream> cachedStreams;
+        u64 ver = audioStreamsVersion.load(std::memory_order_acquire);
+        if (ver != cachedAudioVersion) {
+          std::lock_guard<std::mutex> lock(audioStreamsMutex);
+          cachedStreams = audioStreams;
+          cachedAudioVersion = ver;
+        }
+
+        // Register this stream on first sight (rare — once per stream per
+        // load). Only touches the registry when the cached snapshot doesn't
+        // contain it, so the hot path stays lock-free.
+        bool known = false;
+        for (auto& s : cachedStreams) { if (s == stream) { known = true; break; } }
+        if (!known) {
+          std::lock_guard<std::mutex> lock(audioStreamsMutex);
+          bool stillUnknown = true;
+          for (auto& s : audioStreams) { if (s == stream) { stillUnknown = false; break; } }
+          if (stillUnknown) {
+            audioStreams.push_back(stream);
+            LOGI("Audio: registered stream '%s' (ch=%u, %.0fHz) — %zu total",
+                 (const char*)stream->name(), stream->channels(),
+                 stream->frequency(), audioStreams.size());
+            audioStreamsVersion.fetch_add(1, std::memory_order_release);
+          }
+          // Refresh the local snapshot so subsequent calls use it directly.
+          cachedStreams = audioStreams;
+          cachedAudioVersion = audioStreamsVersion.load(std::memory_order_acquire);
+        }
+
+        // Fast path: single stream — drain it directly into the ring (no
+        // lockstep, no clamp). This is the common case for single-stream cores
+        // (N64, GBA, PS1, GB/GBC...) and avoids all mixing overhead.
+        if (cachedStreams.size() == 1) {
+          thread_local std::vector<f32> localBuffer;
+          localBuffer.clear();
+          f64 samples[2];
+          while (stream->pending()) {
+            u32 channels = stream->read(samples);
+            if (channels == 1) {
+              localBuffer.push_back((f32)samples[0]);
+              localBuffer.push_back((f32)samples[0]);
+            } else {
+              localBuffer.push_back((f32)samples[0]);
+              localBuffer.push_back((f32)samples[1]);
+            }
+          }
+          if (!localBuffer.empty()) {
+            if (muteAudioAtomic) std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
+            std::lock_guard<std::mutex> lock(audioMutex);
+            if (audioRing.empty()) audioRing.resize(audioRingCapacity);
+            for (f32 s : localBuffer) {
+              audioRing[(audioRingHead + audioRingSize) % audioRingCapacity] = s;
+              if (audioRingSize < audioRingCapacity) audioRingSize++;
+              else audioRingHead = (audioRingHead + 1) % audioRingCapacity;
+            }
+            audioCV.notify_one();
+          }
+          return;
+        }
+
+        // Multi-stream: lockstep mix using the cached snapshot (no copy).
+        thread_local std::vector<f32> localBuffer;
+        localBuffer.clear();
+
+        // Lockstep mixing (mirrors upstream desktop ares Program::audio):
+        // emit one output frame only when EVERY stream has a pending frame;
+        // read one frame from each and sum (mono is duplicated to both
+        // channels). All streams resample to 48kHz, so they stay aligned.
+        // Bounded at 8192 frames/call so a pathological backlog can never
+        // stall the emulation thread inside audio() for an unbounded time.
+        u32 drained = 0;
+        while (drained < 8192) {
+          bool allPending = true;
+          for (auto& s : cachedStreams) {
+            if (!s->pending()) { allPending = false; break; }
+          }
+          if (!allPending) break;
+          drained++;
+
+          f64 sample[2] = {0.0, 0.0};
+          f64 buffer[2];
+          for (auto& s : cachedStreams) {
+            u32 channels = s->read(buffer);
+            if (channels == 1) {
+              sample[0] += buffer[0];
+              sample[1] += buffer[0];
+            } else {
+              sample[0] += buffer[0];
+              sample[1] += buffer[1];
+            }
+          }
+          localBuffer.push_back((f32)std::clamp(sample[0], -1.0, 1.0));
+          localBuffer.push_back((f32)std::clamp(sample[1], -1.0, 1.0));
+          drained++;
+        }
+
+        if (!localBuffer.empty()) {
+            if (muteAudioAtomic) {
+                std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
+            }
+            std::lock_guard<std::mutex> lock(audioMutex);
+            if (audioRing.empty()) audioRing.resize(audioRingCapacity);
+            for (f32 s : localBuffer) {
+              audioRing[(audioRingHead + audioRingSize) % audioRingCapacity] = s;
+              if (audioRingSize < audioRingCapacity) audioRingSize++;
+              else audioRingHead = (audioRingHead + 1) % audioRingCapacity; // overwrite oldest
+            }
+            audioCV.notify_one();
+        }
+      }
+    }
+
+    auto pak(Node::Object node) -> std::shared_ptr<vfs::directory> override {
+      if (!node) return std::make_shared<vfs::directory>();
+      string nodeName = node->name();
+      LOGI("VFS: pak() requested for node: %s", (const char*)nodeName);
+
+      if (nodeName.endsWith("Cartridge") || nodeName.endsWith("Disc") || nodeName.endsWith("Card")) {
+        if (currentMedium && currentMedium->pak) {
+            LOGI("VFS: Returning currentMedium pak for %s", (const char*)nodeName);
+            return currentMedium->pak;
+        }
+        LOGW("VFS: No currentMedium pak available for %s", (const char*)nodeName);
+      }
+
+      // ZX Spectrum tape: Tape::load() reads "program.tape" (decoded audio)
+      // from this pak — the MIA medium pak IS the tape.
+      if (nodeName.endsWith("Tape") && root && root->name().beginsWith("ZX Spectrum")) {
+        if (currentMedium && currentMedium->pak) {
+            LOGI("VFS: Returning currentMedium pak for %s (tape)", (const char*)nodeName);
+            return currentMedium->pak;
+        }
+        LOGW("VFS: No currentMedium pak available for %s", (const char*)nodeName);
+      }
+
+      if (nodeName.endsWith("Disk") || nodeName.endsWith("Expansion")) {
+        if (secondaryMedium && secondaryMedium->pak) {
+            LOGI("VFS: Returning secondaryMedium pak for %s", (const char*)nodeName);
+            return secondaryMedium->pak;
+        }
+        LOGW("VFS: No secondaryMedium pak available for %s", (const char*)nodeName);
+      }
+
+      // N64 Controller Pak: platform->pak() is only invoked for a Gamepad node
+      // when a Controller Pak is attached (a Rumble Pak needs no storage). Seed
+      // the directory with save.pak from the persistent saves dir, marking it
+      // "loaded" so Gamepad::connect() imports the bank count + data. Cache the
+      // dir so unloadSystem()/setN64Pak() can export the RAM back to disk.
+      if (nodeName == "Gamepad" && root && root->name() == "Nintendo 64") {
+        player1PakDir = std::make_shared<vfs::directory>();
+        player1PakDir->setAttribute("name", nodeName);
+        if (savesPath) {
+          // Per-ROM Controller Pak (same key as cartridge saves): each game
+          // gets its own save.pak so games don't clobber each other's
+          // controller-pak data (ares models the pak as a single 32KB bank,
+          // not multi-page like real hardware).
+          string romKey = currentRomBase;
+          romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+          if (romKey.size() == 0) romKey = "rom";
+          string savePath = string{savesPath, "/Nintendo 64/", romKey, "/save.pak"};
+          auto data = nall::file::read(savePath);
+          if (data.size()) {
+            if (auto fp = vfs::memory::open(data)) {
+              fp->setName("save.pak");
+              fp->setAttribute("loaded", true);
+              player1PakDir->append("save.pak", fp);
+              LOGI("VFS: Attached save.pak (%zu bytes) to Gamepad pak [%s]", data.size(), (const char*)romKey);
+              return player1PakDir;
+            }
+          }
+        }
+        // No persisted save yet — pre-create a blank bank so
+        // Gamepad::connect()'s create path can reallocate + format it
+        // (that path only runs when save.pak already exists in the dir).
+        player1PakDir->append("save.pak", 32_KiB);
+        return player1PakDir;
+      }
+
+      auto dir = std::make_shared<vfs::directory>();
+      dir->setAttribute("name", nodeName);
+      dir->setAttribute("title", "Phobos Game");
+      dir->setAttribute("region", "NTSC-U");
+
+      string systemPath = string{homePath, "/System/", nodeName, "/"};
+
+      auto attachFile = [&](string fileName, string vfsName = "") {
+          if (!vfsName) vfsName = fileName;
+          string filePath;
+          if (fileName.find("/")) filePath = fileName;
+          else {
+              filePath = string{systemPath, fileName};
+              // Robustness: handle potential double slashes or missing slashes
+              if (systemPath.endsWith("/") && fileName.beginsWith("/")) {
+                  filePath = string{systemPath.slice(0, -1), fileName};
+              } else if (!systemPath.endsWith("/") && !fileName.beginsWith("/")) {
+                  filePath = string{systemPath, "/", fileName};
+              }
+          }
+
+          auto data = nall::file::read(filePath);
+          if (data.size()) {
+              if (auto fp = vfs::memory::open(data)) {
+                  dir->append(vfsName, fp);
+                  LOGI("VFS: Attached %s to %s system pak (Size: %zu)", (const char*)fileName, (const char*)nodeName, data.size());
+                  return true;
+              }
+          }
+          LOGW("VFS: Failed to attach %s to %s (Expected Path: %s)", (const char*)fileName, (const char*)nodeName, (const char*)filePath);
+          return false;
+      };
+
+      if (nodeName == "Super Famicom") {
+          attachFile("boards.bml");
+          attachFile("ipl.rom");
+      } else if (nodeName == "ColecoVision") {
+          bool attached = false;
+          auto it_cv = firmwareMap.find("fw_coleco");
+          if (it_cv != firmwareMap.end()) attached = attachFile((const char*)it_cv->second, "bios.rom");
+          if (!attached) attachFile("bios.rom");
+      } else if (nodeName == "Famicom") {
+          attachFile("boards.bml");
+      } else if (nodeName == "PlayStation") {
+          bool attached = false;
+          auto it_us = firmwareMap.find("fw_psx_us");
+          if (it_us != firmwareMap.end()) attached = attachFile((const char*)it_us->second, "bios.rom");
+          if (!attached) {
+              auto it_jp = firmwareMap.find("fw_psx_jp");
+              if (it_jp != firmwareMap.end()) attached = attachFile((const char*)it_jp->second, "bios.rom");
+          }
+          if (!attached) {
+              auto it_eu = firmwareMap.find("fw_psx_eu");
+              if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
+          }
+          if (!attached) attached = attachFile("bios.rom");
+      } else if (nodeName == "Mega Drive") {
+          // Mega CD: ares uses "Mega Drive" as root node even for CD mode.
+          // The MCD::load() sub-system reads "bios.rom" from this pak — if
+          // omitted the sub-68000 runs from zeroed RAM (black screen, audio only).
+          bool attached = false;
+          auto it_us = firmwareMap.find("fw_mcd_us");
+          if (it_us != firmwareMap.end()) attached = attachFile((const char*)it_us->second, "bios.rom");
+          if (!attached) {
+              auto it_jp = firmwareMap.find("fw_mcd_jp");
+              if (it_jp != firmwareMap.end()) attached = attachFile((const char*)it_jp->second, "bios.rom");
+          }
+          if (!attached) {
+              auto it_eu = firmwareMap.find("fw_mcd_eu");
+              if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
+          }
+          if (!attached) attachFile("bios.rom");
+      } else if (nodeName == "Neo Geo CD") {
+          // Neo Geo CD needs the CD BIOS (neocd.zip via fw_ng_cd) in the system
+          // pak, plus the shared LSPC zoom table (000-lo.lo) from neogeo.zip.
+          bool attached = false;
+          auto it_ngcd = firmwareMap.find("fw_ng_cd");
+          if (it_ngcd != firmwareMap.end()) attached = attachFile((const char*)it_ngcd->second, "bios.rom");
+          if (!attached) attached = attachFile("bios.rom");
+          string zipPath = string{tempFilePath, "/neogeo.zip"};
+          bool haveZoomy = false;
+          if (file::exists(zipPath)) {
+            Decode::ZIP zip;
+            if (zip.open(zipPath)) {
+              for (auto& zf : zip.file) {
+                string n = zf.name.downcase();
+                if (!haveZoomy && n.equals("000-lo.lo")) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 0x20000) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("zoomy.rom", fp); haveZoomy = true;
+                      LOGI("VFS: Neo Geo CD LSPC zoom table (000-lo.lo) attached");
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if (!haveZoomy) attachFile("zoomy.rom");
+      } else if (nodeName == "Neo Geo" || nodeName == "Neo Geo AES" || nodeName == "Neo Geo MVS") {
+          // neogeo.zip is copied to mia_temp. Extract BIOS + fix-layer ROM.
+          string zipPath = string{tempFilePath, "/neogeo.zip"};
+          bool haveBios = false, haveStatic = false, haveZoomy = false;
+          if (file::exists(zipPath)) {
+            Decode::ZIP zip;
+            if (zip.open(zipPath)) {
+              for (auto& zf : zip.file) {
+                string n = zf.name.downcase();
+                // UniBIOS first (most forgiving, handles MVS/AES auto-detect),
+                // then MVS BIOS variants (sp-e, sp-j2, sp-u2, sp1-u2),
+                // then sp-s2.sp1 (universal AES) as last resort.
+                if (!haveBios && n.beginsWith("uni-bios")) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 131072) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("bios.rom", fp); haveBios = true;
+                      LOGI("VFS: Neo Geo BIOS: UniBIOS (%s)", (const char*)zf.name);
+                    }
+                  }
+                }
+                if (!haveBios && (n.equals("sp-e.sp1") || n.equals("sp-j2.sp1") || n.equals("sp-u2.sp1") || n.equals("sp1-u2") || n.equals("sp1-u3.bin") || n.equals("sp1-u4.bin"))) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 131072) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("bios.rom", fp); haveBios = true;
+                      LOGI("VFS: Neo Geo BIOS: MVS (%s)", (const char*)zf.name);
+                    }
+                  }
+                }
+                if (!haveBios && n.equals("sp-s2.sp1")) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 131072) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("bios.rom", fp); haveBios = true;
+                      LOGI("VFS: Neo Geo BIOS: AES universal (sp-s2.sp1)");
+                    }
+                  }
+                }
+                // sfix.sfix = 131KB BIOS fix-layer font. Only needed for
+                // AES (home console). MVS arcade boards get fix ROM from
+                // the cartridge itself — attaching a BIOS font can conflict.
+                if (!haveStatic && n.iequals("sfix.sfix")) {
+                  // Skip for now — MVS doesn't need system-pak static.rom.
+                }
+                // 000-lo.lo = the LSPC vertical zoom table (MAME "spritegen:zoomy")
+                if (!haveZoomy && n.equals("000-lo.lo")) {
+                  auto data = zip.extract(zf);
+                  if (data.size() == 0x20000) {
+                    if (auto fp = vfs::memory::open(data)) {
+                      dir->append("zoomy.rom", fp); haveZoomy = true;
+                      LOGI("VFS: Neo Geo LSPC zoom table (000-lo.lo) attached");
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if (!haveBios) attachFile("bios.rom");
+          if (!haveStatic) attachFile("static.rom");
+      } else if (nodeName == "Nintendo 64") {
+          bool attached = false;
+          auto it_ntsc = firmwareMap.find("fw_n64_pif_ntsc");
+          if (it_ntsc != firmwareMap.end()) attached = attachFile((const char*)it_ntsc->second, "pif.ntsc.rom");
+          if (!attached) {
+              auto it_pal = firmwareMap.find("fw_n64_pif_pal");
+              if (it_pal != firmwareMap.end()) attached = attachFile((const char*)it_pal->second, "pif.pal.rom");
+          }
+          if (!attached) attached = attachFile("pif.ntsc.rom");
+          if (!attached) attached = attachFile("pif.pal.rom");
+          if (!attached) LOGE("VFS: FAILED to attach PIF for Nintendo 64!");
+          #if defined(CORE_N64)
+          // The 64DD system node keeps the name "Nintendo 64" (information.dd
+          // is the flag that distinguishes it) — so this same branch serves
+          // both. When loaded as a 64DD variant, the drive needs its IPL ROM
+          // or it can't initialize (no CIC, no boot) → disk games black-screen.
+          // Try US, then JP, then DEV — the 64DD firmware scanner may map any
+          // of the three keys depending on which IPL the user supplied.
+          if (::ares::Nintendo64::_DD()) {
+              bool ddAttached = false;
+              auto it_us = firmwareMap.find("fw_n64dd_us");
+              if (it_us != firmwareMap.end()) ddAttached = attachFile((const char*)it_us->second, "64dd.ipl.rom");
+              if (!ddAttached) {
+                  auto it_jp = firmwareMap.find("fw_n64dd_jp");
+                  if (it_jp != firmwareMap.end()) ddAttached = attachFile((const char*)it_jp->second, "64dd.ipl.rom");
+              }
+              if (!ddAttached) {
+                  auto it_dev = firmwareMap.find("fw_n64dd_dev");
+                  if (it_dev != firmwareMap.end()) ddAttached = attachFile((const char*)it_dev->second, "64dd.ipl.rom");
+              }
+              if (!ddAttached) attachFile("64dd.ipl.rom");
+          }
+          // [Phobos] The 64DD RTC (time.rtc) must EXIST in the system pak so
+          // DD::RTC::save() can write to it. MIA's Nintendo64DD system creates
+          // it (0x10 bytes); the ares core writes the live RTC into it via
+          // root->save(). Without a file node here, the write silently no-ops
+          // and the RTC never persists ("Error 48 — Date/Time not set" on
+          // every boot after first save).
+          if (::ares::Nintendo64::_DD()) {
+            // The 64DD RTC (time.rtc) must EXIST in the system pak so
+            // DD::RTC::save() can write to it (pak is rebuilt per call).
+            dir->append("time.rtc", 0x10);
+          }
+          #endif
+      } else if (nodeName == "Nintendo 64DD") {
+          // Defensive: in case a future ares names the DD root node distinctly.
+          bool attached = false;
+          auto it_ntsc = firmwareMap.find("fw_n64_pif_ntsc");
+          if (it_ntsc != firmwareMap.end()) attached = attachFile((const char*)it_ntsc->second, "pif.ntsc.rom");
+          if (!attached) attachFile("pif.ntsc.rom");
+          auto it_dd = firmwareMap.find("fw_n64dd_jp");
+          if (it_dd != firmwareMap.end()) attachFile((const char*)it_dd->second, "64dd.ipl.rom");
+          else attachFile("64dd.ipl.rom");
+      } else if (nodeName == "Neo Geo Pocket" || nodeName == "Neo Geo Pocket Color") {
+          // NGP/NGPC needs bios.rom for TLCS900H CPU boot vector + KGE init.
+          // Without it CPU reads 0x00 (NOP-loop) → white/black screen forever.
+          bool attached = false;
+          auto it = firmwareMap.find(nodeName == "Neo Geo Pocket Color" ? "fw_ngpc" : "fw_ngp");
+          if (it != firmwareMap.end()) attached = attachFile((const char*)it->second, "bios.rom");
+          if (!attached) attachFile("bios.rom");
+      } else if (nodeName == "Game Boy Advance") {
+          auto it_gba = firmwareMap.find("fw_gba");
+          if (it_gba != firmwareMap.end()) attachFile((const char*)it_gba->second, "bios.rom");
+          else attachFile("bios.rom");
+      } else if (nodeName == "Game Boy") {
+          bool attached = false;
+          auto it_gb = firmwareMap.find("fw_gb_boot");
+          if (it_gb != firmwareMap.end()) attached = attachFile((const char*)it_gb->second, "boot.rom");
+          if (!attached) attached = attachFile("boot.dmg-0.rom", "boot.rom");
+      } else if (nodeName == "Game Boy Color") {
+          bool attached = false;
+          auto it_gbc = firmwareMap.find("fw_gbc_boot");
+          if (it_gbc != firmwareMap.end()) attached = attachFile((const char*)it_gbc->second, "boot.rom");
+          if (!attached) attached = attachFile("boot.cgb-0.rom", "boot.rom");
+      } else if (nodeName == "WonderSwan" || nodeName == "WonderSwan Color") {
+          if (!skipBootRom) attachFile("boot.rom");
+      } else if (nodeName == "MSX" || nodeName == "MSX2") {
+          attachFile("bios.rom");
+          if (nodeName == "MSX2") attachFile("sub.rom");
+      } else if (nodeName == "PC Engine" || nodeName == "SuperGrafx" || nodeName == "PC Engine Duo" || nodeName == "PC Engine CD") {
+          bool attached = false;
+          auto it_pce = firmwareMap.find("fw_pce_cd_3_jp");
+          if (it_pce != firmwareMap.end()) attached = attachFile((const char*)it_pce->second, "bios.rom");
+          if (!attached) {
+              auto it_ge = firmwareMap.find("fw_pce_cd_ge_jp");
+              if (it_ge != firmwareMap.end()) attached = attachFile((const char*)it_ge->second, "bios.rom");
+          }
+          if (!attached) attached = attachFile("bios.rom");
+      } else if (nodeName == "ZX Spectrum" || nodeName == "ZX Spectrum 128") {
+          // The ZX Spectrum REQUIRES its system ROM to boot and run the tape
+          // loader. Without it the core allocates the ROM filled with 0xFF —
+          // the CPU executes RST-38h garbage → colored stripe screen, tape
+          // games never load.
+          // 48K: 16K bios.rom. 128K: 16K bios.rom + 16K sub.rom.
+          bool attached = false;
+          if (nodeName == "ZX Spectrum 128") {
+              auto it_zx = firmwareMap.find("fw_zx128");
+              if (it_zx != firmwareMap.end()) attached = attachFile((const char*)it_zx->second, "bios.rom");
+              if (!attached) {
+                  auto it_48 = firmwareMap.find("fw_zx48");
+                  if (it_48 != firmwareMap.end()) attached = attachFile((const char*)it_48->second, "bios.rom");
+              }
+              if (!attached) attachFile("bios.rom");
+              // sub.rom = 128K second half (e.g. Fuse 128-1.rom)
+              auto it_sub = firmwareMap.find("fw_zx128_sub");
+              if (it_sub != firmwareMap.end()) attachFile((const char*)it_sub->second, "sub.rom");
+              else attachFile("sub.rom");
+          } else {
+              auto it_zx = firmwareMap.find("fw_zx48");
+              if (it_zx != firmwareMap.end()) attached = attachFile((const char*)it_zx->second, "bios.rom");
+              if (!attached) attached = attachFile("bios.rom");
+          }
+      }
+
+      return dir;
+    }
+  };
+
+  static AndroidPlatform androidPlatform;
+  Platform* platform = &androidPlatform;
+
+  auto unloadSystem() -> void {
+  // Block setEmulationRunning(true) until the teardown below completes: a
+  // fresh emu thread spawned mid-teardown would grab the OLD root (localRoot
+  // shared_ptr copy) and run CPU::LW against the freed singleton hardware
+  // (rdram/cartridge.rom/dd.disk) -> SIGSEGV (the 64DD quit->reload crash).
+  systemUnloading.store(true);
+    isPausedAtomic = true;
+    fastForwardAtomic = false;
+    // A reset requested during a hung session must NOT carry into the next
+    // system: the abandoned thread never consumed it, and a fresh load would
+    // consume it as a soft-reset right after boot → CPU stuck at the boot ROM
+    // (0xffffffffbfc00000, 60fps, 0.00ms frame time, never enters the game).
+    resetRequestedAtomic.store(false);
+
+    // Stop the audio thread FIRST (it may be mid-write to audioStream),
+    // then stop/close the stream. Leaving the stream draining while the menu
+    // shows causes continuous underruns → pops on every exit and load.
+    if (audioThreadRunning.load()) {
+      {
+        std::lock_guard<std::mutex> lock(audioMutex);
+        audioThreadStop.store(true);
+      }
+      audioCV.notify_one();
+      if (audioThread.joinable()) audioThread.join();
+      audioThreadRunning.store(false);
+    }
+    // Keep the AAudio stream ALIVE across unload/load (do NOT close it here).
+    // Closing + immediately reopening (e.g. quit a hung ZX 128K → reload)
+    // corrupts AAudio's internal DefaultDispatch thread → SIGSEGV 0x80. The
+    // stream is reused on the next load; audio() sees it non-null and skips
+    // the open path. Only the audio THREAD is stopped (so no drain while the
+    // menu shows). The stream is closed in the abandon path / process teardown.
+    {
+      std::lock_guard<std::mutex> lock(audioMutex);
+      // Clear the ring so stale samples don't pop on the next load.
+      audioRingHead = 0;
+      audioRingSize = 0;
+    }
+
+    // Tell the emulation thread to stop and wait for it to release runMutex.
+    // We hold the lock briefly just to verify the thread has released it;
+    // then we unlock and proceed with the full unload under systemMutex.
+    setEmulationRunning(false);
+
+    bool acquired = false;
+    if (!emuThreadRunning) {
+      // No thread running — safe to grab the mutex immediately.
+      runMutex->lock();
+      acquired = true;
+    } else {
+      // Wait up to 2 seconds for the thread to finish its current frame.
+      for (int i = 0; i < 200; i++) {
+        if (runMutex->try_lock()) { acquired = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+
+    if (!acquired) {
+      // Thread is stuck inside root->run(). The zombie holds a
+      // localRoot reference.
+      LOGI("unloadSystem: emulation thread stuck, abandoning system");
+
+      // IMPORTANT: do NOT set Vulkan::discardPipelineCache here. The zombie
+      // never destroys the system while it is stuck, so the flag never serves
+      // its intended purpose (arming skip-idle teardown) — it only poisons
+      // the NEXT N64 load by clearing the in-memory cache before the disk
+      // cache is read, forcing a full shader-recompile storm (sync GPU
+      // stalls of 10-500ms per pipeline, killing FPS and making fast-forward
+      // useless until the cache re-warms). A stuck non-N64 core (e.g. PC
+      // Engine) taking this path destroyed the user's warm N64 cache exactly
+      // this way. Real wedge handling belongs in Vulkan::unload()'s bounded
+      // scanout-fence check, which arms skip_idle_on_destroy only when the
+      // GPU is actually unresponsive.
+      // Similarly, skipCachePersist must not be set here: it would prevent
+      // the next normal unload from persisting newly-compiled pipelines.
+
+      std::lock_guard<std::recursive_mutex> lock(systemMutex);
+
+      // Orphan the current system and its runner mutex. We leak the
+      // mutex pointers because the zombie thread may still hold locks.
+      // We clear 'root' so no new calls use the old system.
+      // The shared_ptr ref in the zombie thread's 'localRoot' keeps it
+      // alive until (if ever) it exits its loop iteration.
+      root = {};
+      runMutex = new std::recursive_mutex();
+      emuThreadGeneration.fetch_add(1);
+
+      cachedPlayer1 = {};
+      invalidateInputCaches();
+      currentMedium.reset();
+      secondaryMedium.reset();
+      player1PakDir.reset();
+      rumbleState.store(false);
+      lastRumbleOnTime = {};
+      {
+        std::lock_guard<std::mutex> lock(audioStreamsMutex);
+        audioStreams.clear();
+        audioStreamsVersion.fetch_add(1, std::memory_order_release);
+      }
+      // Abandon path: the zombie may still hold the AAudio stream. Close it so
+      // the next load starts fresh — the zombie's audio() calls are gated by
+      // currentEmuThread (now 0) and the stream pointer is nulled. After
+      // close(), AAudio's internal DefaultDispatch thread is still winding
+      // down asynchronously; wait for its state to reach a terminal state so
+      // the next load's open() can't race a live dispatch thread (the SIGSEGV
+      // 0x80 on a fresh load after a quit).
+      {
+        std::lock_guard<std::mutex> lock(audioMutex);
+        if (audioStream) {
+          AAudioStream* oldStream = audioStream;
+          AAudioStream_requestStop(oldStream);
+          AAudioStream_close(oldStream);
+          audioStream = nullptr;
+          // Bounded wait for AAudio teardown (dispatch thread exit).
+          constexpr int kMaxWaitMs = 300;
+          for (int i = 0; i < kMaxWaitMs; i += 10) {
+            aaudio_stream_state_t st = AAudioStream_getState(oldStream);
+            if (st == AAUDIO_STREAM_STATE_UNINITIALIZED || st == AAUDIO_STREAM_STATE_CLOSED) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+        }
+      }
+      // Park the stuck thread as a zombie so the next N64 load joins it
+      // BEFORE re-initializing the singleton hardware (see
+      // joinAbandonedThreads). Without this, the next load's System::unload()
+      // frees rdram/cartridge.rom/dd.disk under the running zombie → SIGSEGV
+      // in CPU::LW (the "crash while unloading" bug).
+      parkZombieThread();
+      systemUnloading.store(false);
+      LOGI("System abandoned (thread stuck)");
+      return;
+    }
+    // Thread exited cleanly — we hold runMutex. Release it and unload normally.
+    runMutex->unlock();
+
+    std::lock_guard<std::recursive_mutex> lock(systemMutex);
+    if (root) {
+        // Flush cartridge/battery saves to the persistent saves directory
+        // (same code path as the pause flush). Must run BEFORE root->unload()
+        // so the medium pak still holds the live save state.
+        flushSavesToDisk();
+        // Export NGP/NGPC CPU RAM + BIOS (settings region)
+        // root->save() flushes CPU::save() which updates the 12KB ram array.
+        // Read it directly — the VFS roundtrip is unreliable.
+        if (savesPath && (root->name() == "Neo Geo Pocket" || root->name() == "Neo Geo Pocket Color")) {
+          root->save();
+          string saveDir = {savesPath, "/", root->name(), "/"};
+          directory::create(saveDir);
+          // CPU RAM (12KB)
+          auto& ram = ares::NeoGeoPocket::cpu.ram;
+          if (ram.size() == 12_KiB) {
+            std::vector<u8> buf(12_KiB);
+            memcpy(buf.data(), ram.data(), 12_KiB);
+            file::write({saveDir, "cpu.ram"}, buf);
+            LOGI("Saves: exported cpu.ram (12KB) for %s", (const char*)root->name());
+          }
+          // BIOS (64KB) — language/date settings live in top 2KB EEPROM region
+          auto& bios = ares::NeoGeoPocket::system.bios;
+          if (bios.size() == 64_KiB) {
+            std::vector<u8> buf(64_KiB);
+            memcpy(buf.data(), bios.data(), 64_KiB);
+            file::write({saveDir, "bios.rom"}, buf);
+            LOGI("Saves: exported bios.rom (64KB) for %s", (const char*)root->name());
+          }
+        }
+        root->unload();
+        root.reset();
+
+        // No more audio() callbacks can arrive once the core is unloaded
+        // (unloadSystem() set isPausedAtomic=true first). Drop the stream
+        // registry so the next system starts with a clean mix.
+        {
+          std::lock_guard<std::mutex> lock(audioStreamsMutex);
+          audioStreams.clear();
+          audioStreamsVersion.fetch_add(1, std::memory_order_release);
+        }
+
+        // Export the N64 Controller Pak: System::unload() → save() flushed
+        // Gamepad::save() (Controller Pak RAM) into player1PakDir.
+        exportControllerPak();
+        player1PakDir.reset();
+        rumbleState.store(false);
+        lastRumbleOnTime = {};
+    }
+    cachedPlayer1 = {};
+    invalidateInputCaches();
+    currentMedium.reset();
+    secondaryMedium.reset();
+    // [Phobos] The emulation thread has exited cleanly (we acquired runMutex and
+    // joined/witnessed its exit). Drop the stale pthread handle so the next
+    // setEmulationRunning(true) -> ensureThread() doesn't log the misleading
+    // "replacing abandoned emulation thread" warning and realloc runMutex (a
+    // tiny per-load leak). The abandon path leaves this set on purpose (zombie).
+    emuThread = 0;
+    emuThreadRunning = false;
+    currentEmuThread.store(0);
+    currentEmuThreadCookie.reset();
+    systemUnloading.store(false);
+    LOGI("System unloaded");
+  }
+
+  static auto connectDevices(Node::Object node) -> void {
+    if (!node) return;
+    LOGI("VFS: connectDevices for system '%s'", (const char*)node->name());
+    // The node tree is about to be (re)built: port disconnects/allocates free
+    // and can recycle Node::Input object addresses. The input caches are keyed
+    // by raw pointer, so stale entries would mis-bind controls after a PS1
+    // analog toggle (DualShock <-> Digital Gamepad), N64DD disk mount, or
+    // reload. Clear them up front (thread-safe vs the emulation thread).
+    invalidateInputCaches();
+    auto ports = node->find<Node::Port>();
+    s32 portIndex = 1;
+
+    for (auto& port : ports) {
+      LOGI("VFS: connectDevices - name='%s', type='%s', family='%s'", (const char*)port->name(), (const char*)port->type(), (const char*)port->family());
+      // MSX Tape/Tray: skip entirely (ares manages them, our touch crashes).
+      // ZX Spectrum: the tray MUST be connected — Tape::allocate() creates
+      // the node/stream/data that Tape::serialize() derefs during power();
+      // skipping it crashes with a null-pointer SIGSEGV on load.
+      if (port->type() == "Tape" || port->type() == "Tray" || port->type() == "Tape Deck") {
+          string fam = port->family();
+          if (fam != "ZX Spectrum") continue;
+          if (port->allocate()) {
+              LOGI("VFS: Connecting %s tape tray", (const char*)fam);
+              port->connect();
+          } else {
+              LOGE("VFS: FAILED to allocate %s tape", (const char*)fam);
+          }
+          portIndex++;
+          continue;
+      }
+      // Disc Tray: connect for all disc-based systems. Only skip for
+      // PC Engine / SuperGrafx HuCard games (name != "CD" / "Duo").
+      if (port->name() == "Disc Tray") {
+          string sysName = node ? node->name() : "";
+          // HuCard-only PCE: skip tray connect to prevent feeding ROM as CD.
+          bool isHuCard = (sysName == "PC Engine" || sysName == "SuperGrafx");
+          if (isHuCard) { portIndex++; continue; }
+          if (port->allocate()) {
+              LOGI("VFS: Connecting Disc Tray for '%s'", (const char*)sysName);
+              port->connect();
+          }
+          portIndex++;
+          continue;
+      }
+      if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive" || port->type() == "Floppy Disk") {
+        // The N64DD "Disk Drive" port has type "Floppy Disk"; connecting it
+        // mounts the .ndd disk medium (returned by pak() for the
+        // "Nintendo 64DD Disk" node).
+        if (port->allocate()) {
+            LOGI("VFS: Allocated %s port", (const char*)port->type());
+            port->connect();
+            LOGI("VFS: Successfully called port->connect() for %s", (const char*)port->type());
+        } else {
+            LOGE("VFS: FAILED to allocate %s port", (const char*)port->type());
+        }
+      } else if (port->type() == "Memory Card") {
+        // PS1 memory-card ports must get a Memory Card, NOT a controller. The
+        // controller branch below matches ports by name contains("Port"), which
+        // would otherwise hijack "Memory Card Port 1/2" and connect Digital
+        // Gamepads there — corrupting the SIO bus routing (memcards only wake on
+        // 0x81, gamepads wake on 0x01, so a stray gamepad can answer controller
+        // polls) and silently breaking memcard saves.
+        string defaultDevice = "Memory Card";
+        auto currentConnected = port->connected();
+        if (currentConnected && currentConnected->name() == defaultDevice) {
+            LOGI("VFS: Port %s already connected to %s", (const char*)port->name(), (const char*)defaultDevice);
+            portIndex++;
+            continue;
+        }
+        if (port->connected()) port->disconnect();
+        if (auto pNode = port->allocate(defaultDevice)) {
+            LOGI("VFS: Allocated %s on %s", (const char*)defaultDevice, (const char*)port->name());
+            port->connect();
+            LOGI("VFS: Connected %s on %s", (const char*)defaultDevice, (const char*)port->name());
+        } else {
+            LOGE("VFS: FAILED to allocate %s on %s (Family: '%s', Sys: '%s')", (const char*)defaultDevice, (const char*)port->name(), (const char*)port->family(), (const char*)(node ? node->name() : ""));
+        }
+        portIndex++;
+      } else if (port->type() == "Controller" || port->type() == "Control Pad" || port->name().find("Controller") || port->name().find("Port")) {
+        string defaultDevice = "Gamepad";
+        string family = port->family();
+        string sysName = node ? node->name() : "";
+
+        if (family.find("Nintendo 64") || sysName.find("Nintendo 64")) defaultDevice = (sysName == "Arcade") ? "Aleck64" : "Gamepad";
+        else if (family.find("Super Famicom") || sysName.find("Super Famicom") || sysName.find("SNES")) defaultDevice = "Gamepad";
+        else if (family.find("Mega Drive") || sysName.find("Mega Drive") || sysName.find("Genesis") || sysName.find("Mega CD") || sysName.find("Sega CD")) {
+            if (port->name().find("Extension")) defaultDevice = ""; // Extension port doesn't take gamepad
+            else defaultDevice = "Fighting Pad";
+        }
+        else if (family.find("MSX") || sysName.find("MSX")) defaultDevice = "Gamepad";
+        else if (sysName.find("PlayStation")) {
+            // Always allocate a DualShock on Port 1: the runtime analog toggle
+            // Respect ps1AnalogMode: DualShock when analog is on, Digital
+            // Gamepad when off. The hotkey toggle flips ps1AnalogMode and
+            // calls connectDevices(root) which re-allocates the port.
+            // Use port name (not portIndex) — Disc Tray bumps the counter.
+            {
+                bool isPort1 = (port->name() == "Controller Port 1");
+                defaultDevice = isPort1 ? (ps1AnalogMode ? "DualShock" : "Digital Gamepad") : "Digital Gamepad";
+            }
+        }
+        else if (family.find("Neo Geo") || sysName.find("Neo Geo")) defaultDevice = "Arcade Stick";
+        else if (family.find("PC Engine") || sysName.find("PC Engine") || sysName.find("SuperGrafx")) defaultDevice = "Gamepad";
+        else if (family.find("Atari 2600") || sysName.find("Atari 2600")) defaultDevice = "Gamepad";
+        else if (family.find("ColecoVision") || sysName.find("ColecoVision")) defaultDevice = "Gamepad";
+        else if (family.find("ZX Spectrum") || sysName.find("ZX Spectrum")) {
+            // ZX Spectrum: the Expansion port takes a Kempston joystick
+            // (enables gamepad play in joystick games like Manic Miner).
+            // No standard gamepad ports exist; only the Expansion port is used.
+            if (port->name().find("Expansion")) defaultDevice = "Kempston";
+            else defaultDevice = "";
+        }
+
+        if (!defaultDevice) { portIndex++; continue; }
+
+        // Check if port is already connected to the desired device
+        auto currentConnected = port->connected();
+        if (currentConnected && currentConnected->name() == defaultDevice) {
+            LOGI("VFS: Port %s already connected to %s", (const char*)port->name(), (const char*)defaultDevice);
+            portIndex++;
+            continue;
+        }
+
+        if (port->connected()) port->disconnect();
+
+        if (auto pNode = port->allocate(defaultDevice)) {
+            LOGI("VFS: Allocated %s controller on %s", (const char*)defaultDevice, (const char*)port->name());
+            port->connect();
+            LOGI("VFS: Connected %s on %s", (const char*)defaultDevice, (const char*)port->name());
+
+            if (portIndex == 1) {
+                cachedPlayer1 = pNode;
+                LOGI("VFS: Cached Player 1 Peripheral: %s", (const char*)cachedPlayer1->name());
+
+                // Attach the configured controller pak (Rumble / Controller Pak)
+                // to Player 1's Gamepad. The Pak sub-port is hot-swappable, so a
+                // later setN64Pak() call can swap it without a reload.
+                if (root && root->name() == "Nintendo 64" && n64Pak != "None") {
+                    for (auto& pakPort : pNode->find<Node::Port>()) {
+                        if (pakPort->type() != "Pak") continue;
+                        if (auto slot = pakPort->allocate(n64Pak)) {
+                            pakPort->connect();
+                            LOGI("VFS: Attached %s to Player 1 (N64)", (const char*)n64Pak);
+                        }
+                        break;
+                    }
+                }
+            }
+        } else {
+            LOGE("VFS: FAILED to allocate %s on %s (Family: '%s', Sys: '%s')", (const char*)defaultDevice, (const char*)port->name(), (const char*)family, (const char*)sysName);
+        }
+        portIndex++;
+      }
+else if (port->type() == "Keyboard") {
+        // ZX Spectrum keyboard only supports the "Original" matrix layout;
+        // MSX uses "Japanese". Pick by family so the ZX matrix buttons are
+        // created. MUST call connect() after allocate() — connect() is what
+        // builds the 8x5 button matrix; without it the on-screen keys find
+        // no buttons and do nothing.
+        string defaultLayout = "Japanese";
+        string fam = port->family();
+        if (fam.find("ZX Spectrum")) defaultLayout = "Original";
+        if (port->allocate(defaultLayout)) {
+            LOGI("VFS: Allocated %s keyboard on %s", (const char*)defaultLayout, (const char*)port->name());
+            port->connect();
+            LOGI("VFS: Connected %s keyboard on %s", (const char*)defaultLayout, (const char*)port->name());
+        }
+      }
+    }
+  }
+
+  auto initialize(const char* systemNamePtr, const char* uriPtr, const char* romNamePtr) -> bool {
+    string systemName = systemNamePtr;
+    string uri = uriPtr;
+    string romName = romNamePtr ? romNamePtr : "";
+    // Key the per-game save directory by the ROM base name (no extension).
+    currentRomBase = romName;
+    if (auto dot = currentRomBase.findPrevious(currentRomBase.size(), ".")) currentRomBase = currentRomBase.slice(0, *dot);
+    if (currentRomBase.size() == 0) currentRomBase = "rom";
+    unloadSystem();
+
+    std::unique_lock<std::recursive_mutex> lock(systemMutex);
+
+    isPausedAtomic = false;
+    // Belt-and-suspenders: a stale reset must never fire on the fresh system.
+    resetRequestedAtomic.store(false);
+    firstFrameRendered = false;
+
+    scheduler.reset();
+
+    LOGI("Initializing system: %s, uri: %s", (const char*)systemName, (const char*)uri);
+
+    if (customDriverPath) {
+        LOGI("adrenotools: Attempting load. NativeLibDir: %s, DriverPath: %s, RedirectDir: %s", (const char*)nativeLibraryDir, (const char*)customDriverPath, (const char*)tempFilePath);
+
+        maybe<u32> lastSlash = customDriverPath.findPrevious(customDriverPath.size(), "/");
+        string driverDir = lastSlash ? customDriverPath.slice(0, *lastSlash + 1) : "";
+        string driverFile = lastSlash ? customDriverPath.slice(*lastSlash + 1) : customDriverPath;
+
+        // HACK: Some drivers expect libvulkan.so.1, but Android only provides libvulkan.so
+        string libVulkan1 = string{tempFilePath, "/libvulkan.so.1"};
+        if (access((const char*)libVulkan1, F_OK) == -1) {
+            symlink("/system/lib64/libvulkan.so", (const char*)libVulkan1);
+            LOGI("adrenotools: Created symlink libvulkan.so.1 -> /system/lib64/libvulkan.so");
+        }
+
+        // Flags: CUSTOM (1) | FILE_REDIRECT (2) = 3
+        void* vulkanModule = adrenotools_open_libvulkan(RTLD_NOW, 3, nullptr, (const char*)nativeLibraryDir, (const char*)driverDir, (const char*)driverFile, (const char*)tempFilePath, nullptr);
+
+        if (vulkanModule) {
+            auto gipa = (PFN_vkGetInstanceProcAddr)dlsym(vulkanModule, "vkGetInstanceProcAddr");
+            if (gipa) {
+                LOGI("adrenotools: Successfully resolved vkGetInstanceProcAddr");
+                ::Vulkan::Context::init_loader(gipa, true);
+            } else {
+                LOGE("adrenotools: Failed to resolve vkGetInstanceProcAddr from custom driver! dlerror: %s", dlerror());
+                ::Vulkan::Context::init_loader(nullptr, true);
+            }
+        } else {
+            LOGE("adrenotools: Failed to load custom driver! dlerror: %s", dlerror());
+            ::Vulkan::Context::init_loader(nullptr, true);
+        }
+    } else {
+        LOGI("Environment: Using system default Vulkan driver");
+        ::Vulkan::Context::init_loader(nullptr, true);
+    }
+
+    if (romFd == -1) return false;
+    struct stat st;
+    if(fstat(romFd, &st) != 0) return false;
+
+    string extension = "bin";
+    if(auto position = uri.findPrevious(uri.size(), ".")) {
+        extension = uri.slice(*position + 1).downcase();
+        if(auto paramStart = extension.find("?")) extension = extension.slice(0, *paramStart);
+        if(auto paramStart = extension.find("&")) extension = extension.slice(0, *paramStart);
+    }
+
+    if (!tempFilePath) return false;
+    // For MAME/arcade systems, MIA needs the ROM filename for database
+    // lookup (manifestDatabaseArcade). Use the library's RomFile.name
+    // which is a clean filename — the URI is encoded and unusable here.
+    string tempFname = "phobos_rom_temp";
+    if (systemName.contains("Neo Geo")) {
+      if (romName.size() > 0) {
+        tempFname = romName;
+        if (auto dot = tempFname.find(".")) tempFname = tempFname.slice(0, *dot);
+      }
+    }
+    string tempPath = string{tempFilePath, "/", tempFname, ".", extension};
+
+    FILE* f = fopen((const char*)tempPath, "wb");
+    if (!f) return false;
+    std::vector<u8> copyBuf;
+    copyBuf.resize(1024 * 1024);
+    lseek(romFd, 0, SEEK_SET);
+    while (true) {
+        ssize_t r = read(romFd, copyBuf.data(), copyBuf.size());
+        if (r <= 0) break;
+        fwrite(copyBuf.data(), 1, r, f);
+    }
+    fclose(f);
+
+    string loadPath = tempPath;
+    string identifiedSystem = systemName;
+    if (systemName == "Auto" || systemName == "Nintendo 64") {
+      auto matches = mia::identify(loadPath);
+      if (!matches.empty()) {
+          LOGI("MIA: Identified system as %s", (const char*)matches[0]);
+          identifiedSystem = matches[0];
+      }
+    }
+
+    string lookup = identifiedSystem;
+    LOGI("MIA: Identified system: '%s', lookup: '%s'", (const char*)identifiedSystem, (const char*)lookup);
+    bool forceZipLoad = false;
+    if (lookup.find("Nintendo 64")) {
+        if (lookup != "Nintendo 64DD") identifiedSystem = "Nintendo 64";
+    }
+    else if (lookup.find("Atari 2600") || lookup.find("A26") || lookup.find("Atari2600") || lookup.find("Stella")) identifiedSystem = "Atari 2600";
+    else if (lookup.find("ColecoVision") || lookup.find("Coleco") || lookup.find("CV")) identifiedSystem = "ColecoVision";
+    else if (lookup.find("SG-1000") || lookup.find("SG1000")) identifiedSystem = "SG-1000";
+    else if (lookup.find("ZX Spectrum 128") || lookup.find("ZXSpectrum128") || lookup.find("Spectrum 128")) identifiedSystem = "ZX Spectrum 128";
+    else if (lookup.find("ZX Spectrum") || lookup.find("ZXSpectrum") || lookup.find("ZX")) identifiedSystem = "ZX Spectrum";
+    else if (lookup.find("Super Famicom") || lookup.find("SNES")) identifiedSystem = "Super Famicom";
+    else if (lookup.find("Famicom") || lookup.find("NES")) identifiedSystem = "Famicom";
+    else if (lookup.find("PlayStation") || lookup.find("PS1")) identifiedSystem = "PlayStation";
+    else if (lookup.find("Neo Geo Pocket Color") || lookup.find("NGPC") || lookup.find("NGC")) identifiedSystem = "Neo Geo Pocket Color";
+    else if (lookup.find("Neo Geo Pocket") || lookup.find("NGP") || lookup.find("NGP ")) identifiedSystem = "Neo Geo Pocket";
+    else if (lookup.find("Neo Geo CD") || lookup.find("NeoGeoCD") || lookup.find("Neo-Geo-CD") || lookup.find("NGCD") || lookup.find("neogeocd")) {
+        identifiedSystem = "Neo Geo CD";
+        forceZipLoad = true;
+    }
+    else if (lookup.find("Neo Geo")) {
+        identifiedSystem = "Neo Geo";
+        forceZipLoad = true;
+    }
+    else if (lookup.find("Mega Drive") || lookup.find("Genesis")) identifiedSystem = "Mega Drive";
+    else if (lookup.find("Master System")) identifiedSystem = "Master System";
+    else if (lookup.find("Game Gear")) identifiedSystem = "Game Gear";
+    else if (lookup.find("Game Boy Advance")) identifiedSystem = "Game Boy Advance";
+    else if (lookup.find("Game Boy Color")) identifiedSystem = "Game Boy Color";
+    else if (lookup.find("Game Boy")) identifiedSystem = "Game Boy";
+    else if (lookup.find("WonderSwan Color") || lookup.find("WSC")) identifiedSystem = "WonderSwan Color";
+    else if (lookup.find("WonderSwan") || lookup.find("WS")) identifiedSystem = "WonderSwan";
+    else if (lookup.find("PC Engine CD") || lookup.find("PCE CD") || lookup.find("TG16 CD") || lookup.find("TurboGrafx CD") || lookup.find("turbografx-cd")) identifiedSystem = "PC Engine CD";
+    else if (lookup.find("SuperGrafx") || lookup.find("Super Grafx") || lookup.find("supergrafx")) identifiedSystem = "SuperGrafx";
+    else if (lookup.find("PC Engine") || lookup.find("PC-Engine") || lookup.find("TG16") || lookup.find("PCE") || lookup.find("TurboGrafx") || lookup.find("tg16")) identifiedSystem = "PC Engine";
+    else if (lookup.find("MSX2")) identifiedSystem = "MSX2";
+    else if (lookup.find("MSX")) identifiedSystem = "MSX";
+    else if (lookup.find("Mega CD") || lookup.find("Sega CD")) identifiedSystem = "Mega CD";
+
+    currentMedium = mia::Medium::create(identifiedSystem);
+    if (!currentMedium && identifiedSystem == "Neo Geo") {
+        currentMedium = mia::Medium::create("Neo Geo MVS");
+        if(!currentMedium) currentMedium = mia::Medium::create("Neo Geo AES");
+    }
+    // ZX Spectrum 128 shares the ZX Spectrum tape medium (the .tap/.tzx/.wav
+    // loader is identical; the 48K vs 128K model is chosen at core load()).
+    if (!currentMedium && identifiedSystem == "ZX Spectrum 128") {
+        currentMedium = mia::Medium::create("ZX Spectrum");
+    }
+
+    if (!currentMedium) {
+        LOGE("MIA: Failed to create medium for %s", (const char*)identifiedSystem);
+        return false;
+    }
+    LOGI("MIA: Created medium for %s", (const char*)identifiedSystem);
+
+    bool isDisc = extension == "chd" || extension == "iso" || extension == "cue" || extension == "mdf" || extension == "img";
+    // Neo Geo ROMs are multi-file zips (e.g. mslug.zip). Don't extract them
+    // or we lose the internal file structure MIA needs for the database lookup.
+    bool isNeoGeo = (string)identifiedSystem == "Neo Geo";
+    if (!forceZipLoad && !isDisc && extension == "zip" && !isNeoGeo) {
+        LOGI("MIA: Attempting ZIP extraction for %s", (const char*)loadPath);
+        std::vector<u8> romBuffer = currentMedium->read(loadPath);
+        if (!romBuffer.empty()) {
+            LOGI("MIA: Extracted %zu bytes from ZIP", romBuffer.size());
+            string aresExt = "bin";
+            if (identifiedSystem == "Game Boy") aresExt = "gb";
+            if (identifiedSystem == "Game Boy Color") aresExt = "gbc";
+            if (identifiedSystem == "Game Boy Advance") aresExt = "gba";
+            if (identifiedSystem == "Super Famicom") aresExt = "sfc";
+            if (identifiedSystem == "Famicom") aresExt = "fc";
+            if (identifiedSystem == "Nintendo 64") aresExt = "z64";
+            if (identifiedSystem == "ZX Spectrum" || identifiedSystem == "ZX Spectrum 128") {
+                // The ZX medium dispatches on filename extension (.tap/.tzx/.wav),
+                // so sniff the extracted bytes to pick the right one. TZX has a
+                // "ZXTape!\x1a" signature; WAV starts with "RIFF"; TAP has no
+                // header (starts with a 2-byte big-endian block length).
+                if (romBuffer.size() >= 8 && memcmp(romBuffer.data(), "ZXTape!", 7) == 0) aresExt = "tzx";
+                else if (romBuffer.size() >= 4 && memcmp(romBuffer.data(), "RIFF", 4) == 0) aresExt = "wav";
+                else aresExt = "tap";
+                LOGI("MIA: ZX Spectrum zip content sniffed as .%s", (const char*)aresExt);
+
+                // 48K vs 128K model detection by CONTENT, not filename (the
+                // Library merged the two ZX entries, so a bare "ZX Spectrum"
+                // load must pick the right model). TAP blocks are
+                // [len_lo][len_hi][flag][data...]; a header block (flag==0x00)
+                // has data[0] = type: 0x00=program, 0x03=bytes/screen,
+                // 0x04=microdrive. 128K tapes typically carry a program header
+                // whose NAME (data[1..10]) contains "128", and/or a bytes
+                // (0x03) screen header + a separate 128K loader. We treat the
+                // tape as 128K if ANY header block's name contains "128" or
+                // the first data block is a 0x03 bytes header (screen$ loader
+                // pattern is 128K-era). Fall back to filename if content is
+                // inconclusive.
+                if (identifiedSystem == "ZX Spectrum") {
+                    bool is128 = false;
+                    if (aresExt == "tap" && romBuffer.size() >= 4) {
+                        size_t off = 0;
+                        // First block's length (TAP is little-endian 16-bit).
+                        if (romBuffer.size() >= 2) {
+                            size_t blockLen = romBuffer[0] | (romBuffer[1] << 8);
+                            size_t dataStart = 2;
+                            size_t dataEnd = dataStart + blockLen;
+                            if (blockLen >= 2 && dataEnd <= romBuffer.size()) {
+                                u8 flag = romBuffer[dataStart];
+                                if (flag == 0x00 && blockLen >= 11) {
+                                    u8 type = romBuffer[dataStart + 1];
+                                    char name[11] = {};
+                                    memcpy(name, romBuffer.data() + dataStart + 2, 10);
+                                    if (type == 0x03) is128 = true;  // bytes/screen header
+                                    if (strstr(name, "128")) is128 = true;
+                                }
+                            }
+                        }
+                    }
+                    if (!is128) {
+                        // Filename fallback (standard convention).
+                        string lower = romName;
+                        lower = lower.downcase();
+                        if (lower.find("128")) is128 = true;  // nall find: truthy = found
+                    }
+                    if (is128) {
+                        identifiedSystem = "ZX Spectrum 128";
+                        LOGI("ZX: tape detected as 128K (content/filename)");
+                    } else {
+                        LOGI("ZX: tape detected as 48K");
+                    }
+                }
+            }
+
+            string rawRomPath = string{tempFilePath, "/phobos_rom_raw.", aresExt};
+            FILE* rf = fopen((const char*)rawRomPath, "wb");
+            if (rf) { fwrite(romBuffer.data(), 1, romBuffer.size(), rf); fclose(rf); }
+            loadPath = rawRomPath;
+        } else {
+            LOGW("MIA: ZIP extraction returned empty buffer");
+        }
+    }
+
+    // Non-ZIP ZX files (raw .tap/.tzx/.wav): run the same 48K/128K content
+    // detection so raw 128K tapes are gated too (not just zipped ones). TAP
+    // header block: [len_lo][len_hi][flag][data...]; header (flag==0) has
+    // data[0]=type (0x03=bytes/screen → 128K-era) and data[1..10]=name
+    // ("128" in the loader name → 128K). Filename fallback for TZX/WAV.
+    if (identifiedSystem == "ZX Spectrum" && extension != "zip") {
+        bool is128 = false;
+        auto raw = nall::file::read(loadPath);
+        if (raw.size() >= 4 && loadPath.iendsWith(".tap")) {
+            size_t blockLen = raw[0] | (raw[1] << 8);
+            size_t dataStart = 2;
+            if (blockLen >= 2 && dataStart + blockLen <= raw.size()) {
+                u8 flag = raw[dataStart];
+                if (flag == 0x00 && blockLen >= 11) {
+                    u8 type = raw[dataStart + 1];
+                    char name[11] = {};
+                    memcpy(name, raw.data() + dataStart + 2, 10);
+                    if (type == 0x03) is128 = true;
+                    if (strstr(name, "128")) is128 = true;
+                }
+            }
+        }
+        if (!is128) {
+            string lower = romName;
+            lower = lower.downcase();
+            if (lower.find("128")) is128 = true;
+        }
+        if (is128) {
+            identifiedSystem = "ZX Spectrum 128";
+            LOGI("ZX: raw tape detected as 128K (content/filename)");
+        } else {
+            LOGI("ZX: raw tape detected as 48K");
+        }
+    }
+
+    // ── BROKEN-CORE GATE ───────────────────────────────────────────────────
+    // Systems that load but produce NO frames (black screen / 0 FPS). Fail the
+    // load cleanly BEFORE any core/thread/audio setup — no emulation thread is
+    // spawned, so no hang / zombie / crash. Kotlin shows a popup
+    // ("<System> Unsupported") and returns to the library. Remove entries once
+    // the underlying core is fixed.
+    //   - ZX Spectrum 128: UNGATED 2026-08-18 — root cause was the tape pak
+    //     lookup: platform->pak() matched root->name() == "ZX Spectrum" but the
+    //     128K core names its root "ZX Spectrum 128" → empty pak → tape
+    //     frequency 0 → resampler ratio 0 → infinite loop in Cubic::write.
+    //     Fixed via root->name().beginsWith("ZX Spectrum") (Task 10c).
+    //   - PC Engine / PC Engine CD / SuperGrafx: UNGATED 2026-08-18 — root
+    //     cause was the missing PROFILE_PERFORMANCE define (empty PSG::main
+    //     deadlocked the scheduler at the first CPU timer sync); fixed via
+    //     CMakeLists.txt PROFILE_PERFORMANCE (Task 10c).
+    //   - Neo Geo (MVS/AES): loads, BIOS OK, black screen, 0 FPS. UNGATED
+    //     2026-08-18 for diagnosis (instrumentation: MIA/VFS logs).
+    if (false && identifiedSystem == "Neo Geo") {
+        LOGE("%s: unsupported (scheduler hang) — refusing to load", (const char*)identifiedSystem);
+        currentMedium.reset();
+        return false;
+    }
+
+    auto loadResult = currentMedium->load(loadPath);
+    if (loadResult != successful) {
+        LOGE("MIA: Failed to load medium for %s at %s (Result: %d)", (const char*)identifiedSystem, (const char*)loadPath, (s32)loadResult.result);
+        return false;
+    }
+    LOGI("MIA: Successfully loaded medium %s", (const char*)loadPath);
+
+    bool success = false;
+    root = {};
+
+    auto getRegion = [&](const char* ntscU, const char* ntscJ, const char* pal) -> const char* {
+        switch(regionPreference) {
+            case 2: case 3: return ntscJ;
+            case 4: case 5: return pal;
+            default: return ntscU;
+        }
+    };
+
+    LOGI("Ares: Loading core for %s", (const char*)identifiedSystem);
+    if (identifiedSystem == "Nintendo 64" || identifiedSystem == "Nintendo 64DD") {
+      // Join any parked zombie from a previous abandon BEFORE re-initializing
+      // the N64 singleton hardware: System::load → System::unload frees
+      // rdram.ram / cartridge.rom / dd.disk, and a still-running zombie reads
+      // those → SIGSEGV in CPU::LW (the "crash while unloading" bug).
+      joinAbandonedThreads();
+      ::ares::Nintendo64::vulkan.enable = true; // DEFAULT TO VULKAN
+      // Set pipeline cache path for Vulkan shader persistence.
+      // Prefer the user-configured Vulkan cache directory (Task 40); fall back
+      // to the saves directory so the cache persists next to the save data.
+      string cacheDir = vulkanCachePath;
+      if (!cacheDir) cacheDir = savesPath;
+      if (cacheDir && strlen(cacheDir) > 0) {
+        ::ares::Nintendo64::vulkan.pipelineCachePath = string{cacheDir, "/n64_vulkan_pipeline_cache.bin"};
+        LOGI("N64: Pipeline cache path: %s", (const char*)::ares::Nintendo64::vulkan.pipelineCachePath);
+      }
+      if (n64UpscaleFactor < 1) n64UpscaleFactor = 1;
+    if (n64UpscaleFactor > 4) n64UpscaleFactor = 4; // memory safety: see setN64Upscale()
+      ::ares::Nintendo64::vulkan.internalUpscale = (u32)n64UpscaleFactor.load();
+      ::ares::Nintendo64::vulkan.outputUpscale = n64SupersampleScanout.load() ? 1 : (u32)n64UpscaleFactor.load();
+      ::ares::Nintendo64::vulkan.disableVideoInterfaceProcessing = n64DisableVIProcessing.load();
+      ::ares::Nintendo64::vulkan.weaveDeinterlacing = n64WeaveDeinterlacing.load();
+      ::ares::Nintendo64::vulkan.supersampleScanout = n64SupersampleScanout.load();
+      ::ares::Nintendo64::vi.overclockPercent = n64ViOverclock.load();
+      ::ares::Nintendo64::cpu.countPerOp = n64CountPerOp.load();
+      ::ares::Nintendo64::cpu.overclockFactor = n64CpuOverclock.load();
+      ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
+      ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
+      bool is64DD = (identifiedSystem == "Nintendo 64DD" || extension == "ndd" || extension == "d64" || secondaryMedium != nullptr);
+      ::ares::Nintendo64::system.expansionPak = n64ExpansionPak.load();
+
+      const char* regionString = getRegion(
+          is64DD ? "[Nintendo] Nintendo 64DD (NTSC-U)" : "[Nintendo] Nintendo 64 (NTSC)",
+          is64DD ? "[Nintendo] Nintendo 64DD (NTSC-J)" : "[Nintendo] Nintendo 64 (NTSC-J)",
+          "[Nintendo] Nintendo 64 (PAL)"
+      );
+
+      success = ::ares::Nintendo64::load(root, regionString);
+    } else if (identifiedSystem == "Super Famicom") {
+      ::ares::SuperFamicom::ppu.implementation = &::ares::SuperFamicom::ppuPerformanceImpl;
+      ::ares::SuperFamicom::ppu.accurate = false;
+      success = ::ares::SuperFamicom::load(root, getRegion("[Nintendo] Super Famicom (NTSC)", "[Nintendo] Super Famicom (NTSC)", "[Nintendo] Super Famicom (PAL)"));
+    } else if (identifiedSystem == "Famicom") {
+      success = ::ares::Famicom::load(root, getRegion("[Nintendo] Famicom (NTSC-U)", "[Nintendo] Famicom (NTSC-J)", "[Nintendo] Famicom (PAL)"));
+    } else if (identifiedSystem == "PlayStation") {
+      success = ::ares::PlayStation::load(root, getRegion("[Sony] PlayStation (NTSC-U)", "[Sony] PlayStation (NTSC-J)", "[Sony] PlayStation (PAL)"));
+    } else if (identifiedSystem == "Game Boy Advance") {
+      success = ::ares::GameBoyAdvance::load(root, "[Nintendo] Game Boy Advance");
+    } else if (identifiedSystem == "Game Boy") {
+      success = ::ares::GameBoy::load(root, "[Nintendo] Game Boy");
+    } else if (identifiedSystem == "Game Boy Color") {
+      success = ::ares::GameBoy::load(root, "[Nintendo] Game Boy Color");
+    } else if (identifiedSystem == "Mega Drive") {
+      success = ::ares::MegaDrive::load(root, getRegion("[Sega] Mega Drive (NTSC-U)", "[Sega] Mega Drive (NTSC-J)", "[Sega] Mega Drive (PAL)"));
+    } else if (identifiedSystem == "Neo Geo CD") {
+       success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo CD");
+    } else if (identifiedSystem == "Neo Geo") {
+       success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo MVS");
+       if(!success) success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo AES");
+    } else if (identifiedSystem == "Master System") {
+       success = ::ares::MasterSystem::load(root, getRegion("[Sega] Master System (NTSC-U)", "[Sega] Master System (NTSC-J)", "[Sega] Master System (PAL)"));
+    } else if (identifiedSystem == "Game Gear") {
+       success = ::ares::MasterSystem::load(root, getRegion("[Sega] Game Gear (NTSC-U)", "[Sega] Game Gear (NTSC-J)", "[Sega] Game Gear (PAL)"));
+    } else if (identifiedSystem == "PC Engine CD") {
+       success = ::ares::PCEngine::load(root, getRegion("[NEC] PC Engine Duo (NTSC-J)", "[NEC] PC Engine Duo (NTSC-J)", "[NEC] PC Engine Duo (NTSC-J)"));
+    } else if (identifiedSystem == "SuperGrafx") {
+       success = ::ares::PCEngine::load(root, "[NEC] SuperGrafx (NTSC-J)");
+    } else if (identifiedSystem == "PC Engine") {
+       success = ::ares::PCEngine::load(root, getRegion("[NEC] TurboGrafx 16 (NTSC-U)", "[NEC] PC Engine (NTSC-J)", "[NEC] PC Engine (NTSC-J)"));
+    } else if (identifiedSystem == "MSX2") {
+       success = ::ares::MSX::load(root, getRegion("[Microsoft] MSX2 (NTSC)", "[Microsoft] MSX2 (NTSC)", "[Microsoft] MSX2 (PAL)"));
+    } else if (identifiedSystem == "MSX") {
+       success = ::ares::MSX::load(root, getRegion("[Microsoft] MSX (NTSC)", "[Microsoft] MSX (NTSC)", "[Microsoft] MSX (PAL)"));
+    } else if (identifiedSystem == "Mega CD") {
+       success = ::ares::MegaDrive::load(root, getRegion("[Sega] Mega CD (NTSC-U)", "[Sega] Mega CD (NTSC-J)", "[Sega] Mega CD (PAL)"));
+    } else if (identifiedSystem == "WonderSwan Color") {
+       success = ::ares::WonderSwan::load(root, "[Bandai] WonderSwan Color");
+    } else if (identifiedSystem == "WonderSwan") {
+       success = ::ares::WonderSwan::load(root, "[Bandai] WonderSwan");
+    } else if (identifiedSystem == "Neo Geo Pocket" || identifiedSystem == "Neo Geo Pocket Color") {
+       // MIA always returns "Neo Geo Pocket" but the library may specify
+       // "Neo Geo Pocket Color" — use the system name from the library
+       // to disambiguate, since the TLCS900H CPU boots differently per model.
+       string aresName = "[SNK] Neo Geo Pocket";
+       if (systemName.downcase().find("color") || identifiedSystem == "Neo Geo Pocket Color") aresName = "[SNK] Neo Geo Pocket Color";
+       success = ::ares::NeoGeoPocket::load(root, aresName);
+    } else if (identifiedSystem == "Neo Geo CD") {
+       success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo CD");
+    } else if (identifiedSystem == "Neo Geo") {
+       success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo MVS");
+       if(!success) success = ::ares::NeoGeo::load(root, "[SNK] Neo Geo AES");
+    } else if (identifiedSystem == "Atari 2600") {
+       success = ::ares::Atari2600::load(root, getRegion("[Atari] Atari 2600 (NTSC)", "[Atari] Atari 2600 (NTSC)", "[Atari] Atari 2600 (PAL)"));
+    } else if (identifiedSystem == "ColecoVision") {
+       success = ::ares::ColecoVision::load(root, getRegion("[Coleco] ColecoVision (NTSC)", "[Coleco] ColecoVision (NTSC)", "[Coleco] ColecoVision (PAL)"));
+    } else if (identifiedSystem == "SG-1000") {
+       success = ::ares::SG1000::load(root, getRegion("[Sega] SG-1000 (NTSC)", "[Sega] SG-1000 (NTSC)", "[Sega] SG-1000 (PAL)"));
+    } else if (identifiedSystem == "ZX Spectrum") {
+       success = ::ares::ZXSpectrum::load(root, "[Sinclair] ZX Spectrum");
+    } else if (identifiedSystem == "ZX Spectrum 128") {
+       success = ::ares::ZXSpectrum::load(root, "[Sinclair] ZX Spectrum 128");
+    } else {
+        LOGE("Ares: Unidentified system (no load case)");
+    }
+
+    if (success && root) {
+      for (auto& setting : root->find<Node::Setting::Boolean>()) {
+          if (setting->name() == "Fast Boot") setting->setValue(fastBootAtomic);
+          if (setting->name() == "Expansion Pak") setting->setValue(n64ExpansionPak);
+          if (setting->name() == "Recompiler" && (identifiedSystem == "Nintendo 64" || identifiedSystem == "Nintendo 64DD")) {
+              setting->setValue(n64Recompiler);
+              LOGI("N64: CPU Recompiler set to %s", n64Recompiler ? "ON" : "OFF");
+          }
+      }
+      for (auto& setting : root->find<Node::Setting::Setting>()) setting->setLatch();
+      if (identifiedSystem == "Game Boy Advance") {
+          for (auto& setting : root->find<Node::Setting::Boolean>()) {
+              if (setting->name() == "Real Time Clock") {
+                  setting->setValue(true);
+                  LOGI("GBA: Real Time Clock enabled");
+              }
+          }
+      }
+
+      if (identifiedSystem == "Nintendo 64" || identifiedSystem == "Nintendo 64DD") {
+          ::ares::Nintendo64::option("Recompiler", n64Recompiler ? "true" : "false");
+          LOGI("N64: CPU Recompiler set to %s", n64Recompiler ? "ON" : "OFF");
+      }
+
+      // Import game save data (SRAM, EEPROM, Flash, RTC, 64DD disk) — always
+      // restores. Must run BEFORE connectDevices(): the core reads cartridge/
+      // disk save files from the medium pak at port-connect time, so a
+      // post-connect import never reaches the cartridge (fresh each load).
+      if (savesPath) {
+        // Per-game save subdirectory (same key as flushSavesToDisk):
+        // saves/<System>/<RomBase>/
+        string romKey = currentRomBase;
+        romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+        if (romKey.size() == 0) romKey = "rom";
+        string saveDir = {savesPath, "/", identifiedSystem, "/", romKey, "/"};
+        directory::create(saveDir);
+        // Import matching save files from the persistent dir into a given pak.
+        auto importIntoPak = [&](auto& pak) -> void {
+          for (auto& saveNode : pak->files()) {
+            string fileName = saveNode->name();
+            if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
+                !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
+                !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
+                !fileName.endsWith(".flash") && !fileName.endsWith(".rtc") &&
+                !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error")) continue;
+            string fullPath = {saveDir, fileName};
+            auto existing = file::read(fullPath);
+            if (existing.size() == 0) continue;
+            if (auto fp = pak->write(fileName)) {
+              // vfs::memory::write silently drops bytes past the current size —
+              // resize to the imported size first (mirrors MIA's Pak::load).
+              if (fp->size() != existing.size()) fp->resize(existing.size());
+              fp->write({existing.data(), (u32)existing.size()});
+              LOGI("Saves: imported %s (%zu bytes) for %s", (const char*)fileName, existing.size(), (const char*)identifiedSystem);
+            }
+          }
+        };
+        // Cartridge medium pak.
+        if (currentMedium && currentMedium->pak) importIntoPak(currentMedium->pak);
+        // 64DD disk medium pak (program.disk / program.disk.error).
+        if (secondaryMedium && secondaryMedium->pak) importIntoPak(secondaryMedium->pak);
+        // System pak (root->pak()): time.rtc for 64DD.
+        if (root) {
+          auto sysPak = root->pak();
+          if (sysPak) importIntoPak(sysPak);
+        }
+        // MIA-level sidecar saves (.sav, .flash, cpu.ram): restore them to
+        // mia_temp so MIA's Pak::load() / ares' CPU::load() pick them up.
+        for (auto& saveName : {"program.sav", "program.flash"}) {
+          string fullPath = {saveDir, saveName};
+          auto existing = file::read(fullPath);
+          if (existing.size() == 0) continue;
+          string sidecarPath = string{tempFilePath, "/", saveName};
+          file::write(sidecarPath, existing);
+          LOGI("Saves: imported sidecar %s (%zu bytes) for %s", saveName, existing.size(), (const char*)identifiedSystem);
+        }
+      }
+
+      connectDevices(root);
+
+      // Inject saved cpu.ram + bios.rom BEFORE power-on so CPU::power()
+      // sees ram[0x2c7a]!=0 → warm-boot path → skip language/date prompts.
+      if (identifiedSystem == "Neo Geo Pocket" || identifiedSystem == "Neo Geo Pocket Color") {
+        if (savesPath) {
+          string d = string{savesPath, "/", identifiedSystem, "/"};
+          auto r = nall::file::read({d, "cpu.ram"});
+          if (r.size() == 12_KiB) { memcpy(ares::NeoGeoPocket::cpu.ram.data(), r.data(), 12_KiB); ares::NeoGeoPocket::cpu.ram.write(0x2c7a, 1); }
+          r = nall::file::read({d, "bios.rom"});
+          if (r.size() == 64_KiB) { memcpy((void*)ares::NeoGeoPocket::system.bios.data(), r.data(), 64_KiB); }
+        }
+      }
+
+      root->power();
+
+      if (skipBootRom) {
+          if (identifiedSystem == "Game Boy" || identifiedSystem == "Game Boy Color") {
+              LOGI("GB: Applying post-boot register state (Skip Boot ROM)");
+              ::ares::GameBoy::cpu.r.pc.word = 0x0100;
+              ::ares::GameBoy::cpu.r.af.word = 0x01b0;
+              ::ares::GameBoy::cpu.r.bc.word = 0x0013;
+              ::ares::GameBoy::cpu.r.de.word = 0x00d8;
+              ::ares::GameBoy::cpu.r.hl.word = 0x014d;
+              ::ares::GameBoy::cpu.r.sp.word = 0xfffe;
+
+              ::ares::GameBoy::ppu.status.displayEnable = 1;
+              ::ares::GameBoy::ppu.status.bgEnable = 1;
+              ::ares::GameBoy::ppu.status.obEnable = 1;
+              ::ares::GameBoy::ppu.status.bgTiledataSelect = 1;
+
+              ::ares::GameBoy::ppu.bgp[0] = 0;
+              ::ares::GameBoy::ppu.bgp[1] = 1;
+              ::ares::GameBoy::ppu.bgp[2] = 2;
+              ::ares::GameBoy::ppu.bgp[3] = 3;
+
+              ::ares::GameBoy::ppu.latch.displayEnable = 1;
+
+              // Force redraw
+              ::ares::GameBoy::ppu.status.ly = 0;
+              ::ares::GameBoy::ppu.status.lx = 0;
+
+              ::ares::GameBoy::cartridge.bootromEnable = false;
+          }
+      }
+
+      // The old system's teardown (unloadSystem at the top) is complete and
+      // the new root is fully loaded — re-allow thread spawns, then start.
+      systemUnloading.store(false);
+      setEmulationRunning(true);
+      LOGI("System loaded successfully: %s", (const char*)identifiedSystem);
+      return true;
+    }
+    LOGE("Ares: Failed to load system %s", (const char*)identifiedSystem);
+    return false;
+  }
+
+  auto setFastBoot(bool enabled) -> void { fastBootAtomic = enabled; LOGI("Fast boot %s", enabled ? "enabled" : "disabled"); }
+  auto setAutoSaveMemory(bool enabled) -> void { autoSaveMemoryAtomic = enabled; LOGI("Auto-save memory %s", enabled ? "enabled" : "disabled"); }
+  auto setAutoLoadMemory(bool enabled) -> void { autoLoadMemoryAtomic = enabled; LOGI("Auto-load memory %s", enabled ? "enabled" : "disabled"); }
+
+  // Flush cartridge/battery saves to the persistent saves directory. Called
+  // on pause (so backing out / app-switch doesn't lose progress) and on clean
+  // unload. Writes to savesPath/<system>/<RomBase>/ so different games never
+  // overwrite each other's saves. Only runs while the system is loaded and the
+  // emulation thread is NOT mid-frame (pause path holds the emulation; unload
+  // path holds systemMutex).
+  static auto flushSavesToDisk() -> void {
+    if (!savesPath || !root) return;
+    // CRITICAL: flush the LIVE core state into the pak(s) FIRST. The game's
+    // SRAM/EEPROM/Flash live in the ares core (e.g. N64 cartridge.ram, 64DD
+    // disk), NOT in the pak — reading the pak directly returns whatever was
+    // last imported/written, so the flush would persist STALE data. root->save()
+    // → Cartridge::save() / DD::save() / RTC → live state into the pak(s), then
+    // we copy to the persistent dir.
+    root->save();
+    string sysName = root->name();
+    // Per-game subdirectory (keyed by ROM base name) so games don't clobber
+    // each other's saves: saves/<System>/<RomBase>/
+    string romKey = currentRomBase;
+    // Sanitize: the ROM name can contain chars that are legal on Linux but
+    // awkward on some filesystems — keep it simple, drop slashes/colons.
+    romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+    if (romKey.size() == 0) romKey = "rom";
+    string saveDir = {savesPath, "/", sysName, "/", romKey, "/"};
+    directory::create(saveDir);
+    bool wrote = false;
+    // Copy a save node's bytes to disk if it matches the save filter and is
+    // non-empty/non-zero.
+    auto flushNode = [&](auto& saveNode) -> void {
+      string fileName = saveNode->name();
+      if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
+          !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
+          !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
+          !fileName.endsWith(".flash") && !fileName.endsWith(".rtc") &&
+          !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error")) return;
+      auto fp = saveNode;
+      fp->seek(0);
+      auto size = fp->size();
+      if (size == 0) return;
+      std::vector<u8> buf(size);
+      fp->read({buf.data(), size});
+      bool allZero = true;
+      for (auto b : buf) { if (b != 0) { allZero = false; break; } }
+      if (allZero) return;
+      string fullPath = {saveDir, fileName};
+      file::write(fullPath, {buf.data(), size});
+      wrote = true;
+      LOGI("Saves: flushed %s (%zu bytes) for %s [%s]", (const char*)fileName, size, (const char*)sysName, (const char*)romKey);
+    };
+    // Cartridge medium pak.
+    if (currentMedium && currentMedium->pak) {
+      for (auto& saveNode : currentMedium->pak->files()) flushNode(saveNode);
+    }
+    // 64DD disk medium pak (program.disk / program.disk.error) — the disk save
+    // area and error table live in secondaryMedium, NOT the cartridge pak.
+    if (secondaryMedium && secondaryMedium->pak) {
+      for (auto& saveNode : secondaryMedium->pak->files()) flushNode(saveNode);
+    }
+    // System pak (root->pak()): holds time.rtc for 64DD (RTC save area) and
+    // pif.rom for every N64. The RTC is written here by DD::RTC::save() via
+    // root->save(), so we must flush it too or the 64DD RTC never persists
+    // ("Error 48 — Date/Time not set" on every boot after first save).
+    if (root && root->pak()) {
+      for (auto& saveNode : root->pak()->files()) flushNode(saveNode);
+    }
+    // MIA-level sidecar saves (.sav, .flash for NGP/NGPC/WonderSwan): copy
+    // from mia_temp so they survive cleanup (same as unload).
+    for (auto& saveName : {"program.sav", "program.flash"}) {
+      string sidecarPath = string{tempFilePath, "/", saveName};
+      auto data = file::read(sidecarPath);
+      if (data.size() == 0) continue;
+      bool allZero = true;
+      for (auto b : data) { if (b != 0) { allZero = false; break; } }
+      if (allZero) continue;
+      string fullPath = {saveDir, saveName};
+      file::write(fullPath, data);
+      wrote = true;
+      LOGI("Saves: flushed MIA sidecar %s (%zu bytes) for %s [%s]", saveName, data.size(), (const char*)sysName, (const char*)romKey);
+    }
+    if (!wrote) LOGI("Saves: flush complete (nothing to write) for %s [%s]", (const char*)sysName, (const char*)romKey);
+  }
+
+  auto setPause(bool paused) -> void {
+    isPausedAtomic = paused;
+    // Flush saves when PAUSING (leaving gameplay): the user may back out or
+    // swipe the app away, which skips the clean-unload export. The emulation
+    // thread is idle at this point (pause gate), so this is race-free.
+    if (paused) flushSavesToDisk();
+    // Stop the audio stream while paused so it doesn't keep draining with no
+    // new samples (underrun pops in the pause menu); restart it on resume.
+    // The audio thread checks isPausedAtomic and drops queued samples while
+    // paused, so stale audio never plays on resume.
+    // Only requestStart if not already starting/started — calling it on an
+    // already-starting stream returns -895 and can desync the clock.
+    std::lock_guard<std::mutex> lock(audioMutex);
+    if (audioStream) {
+      if (paused) {
+        AAudioStream_requestStop(audioStream);
+      } else {
+        aaudio_stream_state_t state = AAudioStream_getState(audioStream);
+        if (state != AAUDIO_STREAM_STATE_STARTING && state != AAUDIO_STREAM_STATE_STARTED) {
+          AAudioStream_requestStart(audioStream);
+        }
+      }
+    }
+    LOGI("Emulation %s", paused ? "paused" : "resumed");
+  }
+  auto setFastForward(bool enabled) -> void { fastForwardAtomic = enabled; LOGI("Fast forward %s", enabled ? "enabled" : "disabled"); }
+  auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
+  auto setN64DebugLogging(bool enabled) -> void { n64DebugLoggingAtomic = enabled; LOGI("N64 debug logging %s", enabled ? "enabled" : "disabled"); }
+  auto resetSystem() -> void {
+    resetRequestedAtomic.store(true);
+    #if defined(CORE_N64)
+    // Soft reset: keep the Vulkan device alive. Destroying the device and
+    // creating a fresh one in the same process is fundamentally broken on
+    // Turnip/Mesa — even when teardown "succeeds" (bounded fence waits),
+    // the newly created device's fences can fail to signal, so the first
+    // frame after reset hangs forever with no output. Upstream ares soft
+    // resets N64 with the device alive (System::power(true) keeps it when
+    // discardPipelineCache is false), which is both correct and fast — the
+    // pipeline cache survives, so no post-reset shader-recompile storm.
+    // The VI/deinterlace/supersample atomics below are read live by
+    // scanoutAsync every frame, so the new values simply take effect
+    // immediately.
+    //
+    // Defensive: clear any stale teardown flags so a reset never inherits
+    // a device-teardown decision from an earlier path. (The abandon path
+    // no longer sets these — it destroyed the warm pipeline cache — but
+    // clearing them here guarantees reset always takes the keep-device
+    // branch.)
+    ::ares::Nintendo64::Vulkan::discardPipelineCache = false;
+    ::ares::Nintendo64::Vulkan::skipCachePersist = false;
+    ::ares::Nintendo64::vulkan.disableVideoInterfaceProcessing = n64DisableVIProcessing.load();
+    ::ares::Nintendo64::vulkan.weaveDeinterlacing = n64WeaveDeinterlacing.load();
+    ::ares::Nintendo64::vulkan.supersampleScanout = n64SupersampleScanout.load();
+    ::ares::Nintendo64::vi.overclockPercent = n64ViOverclock.load();
+    ::ares::Nintendo64::cpu.countPerOp = n64CountPerOp.load();
+    ::ares::Nintendo64::cpu.overclockFactor = n64CpuOverclock.load();
+    ::ares::Nintendo64::vulkan.outputUpscale = n64SupersampleScanout.load() ? 1 : (u32)n64UpscaleFactor.load();
+    ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
+    ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
+    #endif
+    LOGI("System reset requested");
+  }
+  auto frameAdvance() -> void { lock_guard<recursive_mutex> lock(*runMutex); if (root) root->run(); }
+  auto dumpNgGfx(const char* dir) -> void {
+    lock_guard<recursive_mutex> lock(*runMutex);
+    ::ares::NeoGeo::system.dumpNgGfx(dir);
+  }
+  auto setMuteAudio(bool muted) -> void { muteAudioAtomic = muted; }
+  auto setShader(const char* path) -> bool { return true; }
+  auto saveState(const char* path) -> bool {
+    bool wasPaused = isPausedAtomic.exchange(true);
+    lock_guard<recursive_mutex> lock(*runMutex);
+    if (!root) { isPausedAtomic.store(wasPaused); return false; }
+    auto s = root->serialize(true);
+    bool result = nall::file::write(path, {s.data(), s.size()});
+    LOGI("Save state to %s: %s", path, result ? "success" : "failed");
+    isPausedAtomic.store(wasPaused);
+    return result;
+  }
+  auto loadState(const char* path) -> bool {
+    bool wasPaused = isPausedAtomic.exchange(true);
+    lock_guard<recursive_mutex> lock(*runMutex);
+    if (!root) { isPausedAtomic.store(wasPaused); return false; }
+
+    auto totalStart = std::chrono::steady_clock::now();
+    FILE* f = fopen(path, "rb");
+    if (!f) { LOGE("loadState: File not found or unreadable: %s", path); isPausedAtomic.store(wasPaused); return false; }
+    fclose(f);
+
+    auto readStart = std::chrono::steady_clock::now();
+    auto data = nall::file::read(path);
+    auto readEnd = std::chrono::steady_clock::now();
+
+    if (data.size() == 0) { LOGE("loadState: nall::file::read returned empty data for %s", (const char*)path); isPausedAtomic.store(wasPaused); return false; }
+
+    auto unserializeStart = std::chrono::steady_clock::now();
+    nall::serializer s(data.data(), data.size());
+    bool result = root->unserialize(s);
+    auto unserializeEnd = std::chrono::steady_clock::now();
+
+    auto totalEnd = std::chrono::steady_clock::now();
+    LOGI("LoadState Timing: Total=%lldms, FileRead=%lldms, Unserialize=%lldms",
+        (s64)std::chrono::duration_cast<std::chrono::milliseconds>(totalEnd - totalStart).count(),
+        (s64)std::chrono::duration_cast<std::chrono::milliseconds>(readEnd - readStart).count(),
+        (s64)std::chrono::duration_cast<std::chrono::milliseconds>(unserializeEnd - unserializeStart).count());
+
+    LOGI("Load state from %s: %s", (const char*)path, result ? "success" : "failed");
+    isPausedAtomic.store(wasPaused);
+    return result;
+  }
+  auto setLogLevel(s32 level) -> void { /* retained for JNI API compatibility; log verbosity no longer filters frontend logs */ }
+  auto setRegion(s32 regionIndex) -> void { regionPreference = regionIndex; }
+  auto setN64Upscale(s32 factor) -> void {
+    if (factor < 1) factor = 1;
+    // Hard cap at 4x: 8x on a 640x240 framebuffer creates ~5120x3840
+    // internal targets (~150MB per buffer, multiple in flight) which
+    // exhausts device memory — kswapd thrashes, dequeueBuffer fails,
+    // ANR (observed in the field). Clamping here (the JNI entry point)
+    // protects both the pause menu and the settings menu.
+    if (factor > 4) factor = 4;
+    n64UpscaleFactor = factor;
+    LOGI("N64 upscale factor set to %dx (applies on next reset)", factor);
+  }
+  auto setN64Recompiler(bool enabled) -> void {
+    n64Recompiler = enabled;
+    LOGI("N64 recompiler set to %s (applies on next reset)", enabled ? "enabled" : "disabled");
+  }
+  auto setSkipBootRom(bool enabled) -> void { skipBootRom = enabled; LOGI("Skip Boot ROM set to %s", enabled ? "enabled" : "disabled"); }
+  // VI/deinterlace/supersample settings cannot be applied live — they
+  // alter the RDP scanout pipeline which is actively rendering frames.
+  // Mutating them mid-frame causes GPU fence deadlocks (the emulation
+  // thread blocks indefinitely in scanoutAsync waiting for a fence that
+  // the GPU can no longer signal with the changed VI config).
+  // Instead, just persist the preference; it takes effect on the next
+  // System Reset or fresh load.
+  auto setN64DisableVIProcessing(bool enabled) -> void {
+    n64DisableVIProcessing = enabled;
+    LOGI("N64 disable VI processing set to %d (applies on next reset)", enabled);
+  }
+  auto setN64WeaveDeinterlacing(bool enabled) -> void {
+    n64WeaveDeinterlacing = enabled;
+    LOGI("N64 weave deinterlacing set to %d (applies on next reset)", enabled);
+  }
+  auto setN64SupersampleScanout(bool enabled) -> void {
+    n64SupersampleScanout = enabled;
+    LOGI("N64 supersample scanout set to %d (applies on next reset)", enabled);
+  }
+  auto setN64ViOverclock(s32 percent) -> void {
+    if (percent < 100) percent = 100;
+    if (percent > 300) percent = 300;
+    n64ViOverclock = percent;
+    LOGI("N64 VI overclock set to %d%% (applies on next reset)", percent);
+  }
+  auto setN64CountPerOp(s32 value) -> void {
+    if (value < 1) value = 1;
+    if (value > 3) value = 3;
+    n64CountPerOp = value;
+    LOGI("N64 count per op set to %d (applies on next reset)", value);
+  }
+  auto setN64CpuOverclock(s32 factor) -> void {
+    if (factor < 0) factor = 0;
+    if (factor > 5) factor = 5;
+    n64CpuOverclock = factor;
+    LOGI("N64 CPU overclock factor set to %d (2^%d) (applies on next reset)", factor, factor);
+  }
+  auto setN64ExpansionPak(bool enabled) -> void {
+    if (n64ExpansionPak == enabled) return;
+    n64ExpansionPak = enabled;
+    LOGI("N64 expansion pak set to %d", enabled);
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    if (root && root->name() == "Nintendo 64") {
+        for (auto& setting : root->find<Node::Setting::Boolean>()) {
+            if (setting->name() == "Expansion Pak") setting->setValue(enabled);
+        }
+    }
+  }
+
+  // N64 Player 1 controller pak (Rumble Pak / Controller Pak). Hot-swappable:
+  // re-allocates the Gamepad's "Pak" sub-port. The Controller Pak's save.pak
+  // is flushed to disk on swap and on unload.
+  static auto exportControllerPak() -> void {
+    if (!player1PakDir || !savesPath) return;
+    if (auto fp = player1PakDir->read("save.pak")) {
+      fp->seek(0);
+      auto size = fp->size();
+      if (!size) return;
+      std::vector<u8> buf(size);
+      fp->read({buf.data(), size});
+      bool allZero = true;
+      for (auto b : buf) { if (b != 0) { allZero = false; break; } }
+      if (allZero) return;
+      // Per-ROM Controller Pak (same key as cartridge saves).
+      string romKey = currentRomBase;
+      romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+      if (romKey.size() == 0) romKey = "rom";
+      string saveDir = {savesPath, "/Nintendo 64/", romKey, "/"};
+      directory::create(saveDir);
+      file::write({saveDir, "save.pak"}, {buf.data(), size});
+      LOGI("Saves: exported save.pak (%zu bytes) for Nintendo 64 [%s]", size, (const char*)romKey);
+    }
+  }
+
+  auto setN64Pak(const char* pakName) -> void {
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    string desired = pakName ? pakName : "None";
+    if (n64Pak == desired) return;
+    n64Pak = desired;
+    LOGI("N64 controller pak set to %s", (const char*)desired);
+    if (root && root->name() == "Nintendo 64" && cachedPlayer1) {
+      for (auto& pakPort : cachedPlayer1->find<Node::Port>()) {
+        if (pakPort->type() != "Pak") continue;
+        // allocate() disconnects the old pak first; Gamepad::disconnect()
+        // flushes Controller Pak RAM into player1PakDir — export it, then
+        // connect the newly allocated slot.
+        pakPort->allocate(desired);
+        exportControllerPak();
+        if (desired != "None" && pakPort->connected()) {
+          pakPort->connect();
+          LOGI("VFS: Attached %s to Player 1 (N64)", (const char*)desired);
+        }
+        break;
+      }
+    }
+  }
+
+  auto getRumbleState() -> bool {
+    return rumbleState.load();
+  }
+  auto setPs1AnalogMode(bool enabled) -> void {
+    if (ps1AnalogMode == enabled) return;
+    ps1AnalogMode = enabled;
+    LOGI("PS1 analog mode set to %d", enabled);
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    if (root && root->name() == "PlayStation") {
+        connectDevices(root);
+    }
+  }
+  // Runtime analog toggle: flips ps1AnalogMode and re-allocates controller
+  // port 1 to swap between DualShock and Digital Gamepad.
+  // Returns the NEW ps1AnalogMode value (true = analog ON) so the Kotlin
+  // side can persist the correct state — it previously returned "true"
+  // (toggle succeeded) always, so DataStore was set to true on EVERY toggle
+  // and the pause-menu switch showed ON even when analog was actually OFF.
+  auto togglePs1AnalogMode() -> bool {
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    if (!root || root->name() != "PlayStation") return false;
+    ps1AnalogMode = !ps1AnalogMode;
+    LOGI("PS1 analog toggle -> %d", (int)ps1AnalogMode);
+    connectDevices(root);
+    return ps1AnalogMode;
+  }
+  auto setStickToDpad(bool enabled) -> void {
+    // Deprecated
+  }
+  auto setCustomDriverPath(const char* path) -> void { customDriverPath = path ? (string)path : ""; LOGI("Custom driver path set: %s", (const char*)customDriverPath); }
+  auto setOrientationMode(bool vertical) -> void { orientationVertical = vertical; LOGI("Orientation mode set to %s", vertical ? "Vertical" : "Horizontal"); }
+  auto setRomFd(s32 fd) -> void { lock_guard<recursive_mutex> lock(systemMutex); if (romFd != -1) ::close(romFd); romFd = fd; }
+  auto setSecondaryRomFd(s32 fd) -> void { lock_guard<recursive_mutex> lock(systemMutex); if (secondaryRomFd != -1) ::close(secondaryRomFd); secondaryRomFd = fd; }
+  auto setTempFilePath(const char* path) -> void { tempFilePath = path ? (string)path : ""; }
+  auto setLoadDiskImageToRam(bool enabled) -> void { /* Deprecated */ }
+
+  auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void {
+      static u64 inputLogCount = 0;
+      if (inputLogCount++ % 30 == 0 && (abs(lx) > 0.05f || abs(ly) > 0.05f || abs(rx) > 0.05f || abs(ry) > 0.05f)) {
+          LOGI("PhobosRunner: setInput LS(%.2f, %.2f) RS(%.2f, %.2f) BTNS=%08x", (double)lx, (double)ly, (double)rx, (double)ry, buttons);
+      }
+      inputState.lx = lx;
+      inputState.ly = ly;
+      inputState.rx = rx;
+      inputState.ry = ry;
+      inputState.buttons = buttons;
+
+      // ZX gamepad control scheme: translate the gamepad bitmask into
+      // keyboard keys for the active scheme (QAOP / ZXZX / ELITE). Updated
+      // every setInput so the keyboard path sources scheme presses alongside
+      // the on-screen keyboard. When zxStickToKeys is on, the left stick's
+      // cardinal directions are OR'd in as D-pad bits first, so the stick
+      // drives the SAME scheme keys as the D-pad (and reverse pitch applies
+      // to both). inputState.buttons keeps the ORIGINAL mask — stick-derived
+      // keys are scheme-only, never exposed to other systems.
+      if (isZxKeyboardSystem(root ? root->name() : "")) {
+          s32 scheme = zxControlScheme.load();
+          u32 effButtons = (u32)buttons;
+          if (zxStickToKeys.load()) {
+              // Left stick cardinal -> D-pad bits (Up=1<<0, Down=1<<1,
+              // Left=1<<2, Right=1<<3). Android AXIS_Y is negative when
+              // pushed up; threshold matches the ~50% hysteresis press.
+              if (ly < -0.5f) effButtons |= VirtualGamepad::Up;
+              if (ly >  0.5f) effButtons |= VirtualGamepad::Down;
+              if (lx < -0.5f) effButtons |= VirtualGamepad::Left;
+              if (lx >  0.5f) effButtons |= VirtualGamepad::Right;
+          }
+          std::set<string> schemeKeys;
+          if (scheme != 0) {
+              // Scheme 4 = CUSTOM: the per-key rebind map IS the scheme (plus
+              // Start->ENTER universal). Presets 1/2/3 ignore the map entirely
+              // so QAOP/ZXZX/ELITE stay pristine — rebinds only take effect in
+              // CUSTOM mode, keeping the state obvious from the scheme label.
+              if (scheme == 4) {
+                  std::map<string, u32> overrides;
+                  {
+                      std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+                      overrides = zxKeyBindings;
+                  }
+                  for (u32 bit = 1; bit; bit <<= 1) {
+                      if (!(effButtons & bit)) continue;
+                      if (bit == VirtualGamepad::Start) { schemeKeys.insert("ENTER"); continue; }
+                      for (auto& [key, bindBit] : overrides) {
+                          if (bindBit == bit) { schemeKeys.insert(key); break; }
+                      }
+                  }
+              } else {
+                  for (u32 bit = 1; bit; bit <<= 1) {
+                      if (!(effButtons & bit)) continue;
+                      for (auto& key : zxSchemeKeys(bit, scheme)) schemeKeys.insert(key);
+                  }
+              }
+          }
+          {
+              std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+              zxSchemeKeysPressed.swap(schemeKeys);
+          }
+      }
+  }
+
+  // ZX scheme-translation toggles (Layer 2 — orthogonal to per-core rebinding).
+  auto setZxStickToKeys(bool enabled) -> void {
+      zxStickToKeys = enabled;
+      LOGI("ZX stick-to-keys set to %d", (int)enabled);
+  }
+
+  auto setZxReversePitch(bool enabled) -> void {
+      zxReversePitch = enabled;
+      LOGI("ZX reverse pitch set to %d", (int)enabled);
+  }
+
+  // Per-key rebind: bind ZX keyboard key `label` to gamepad bit `bit`
+  // (0 = clear). Takes effect immediately on the next setInput.
+  auto setZxKeyBinding(const char* label, s32 bit) -> void {
+      if (!label) return;
+      std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+      if (bit == 0) {
+          zxKeyBindings.erase(label);
+          LOGI("ZX key binding cleared: %s", label);
+      } else {
+          zxKeyBindings[label] = (u32)bit;
+          LOGI("ZX key binding set: %s -> bit %d", label, (int)bit);
+      }
+  }
+
+  // ZX gamepad control scheme setter
+  // (0 = Kempston, 1 = QAOP, 2 = ZXZX, 3 = ELITE, 4 = CUSTOM).
+  auto setZxControlScheme(s32 scheme) -> void {
+      zxControlScheme = scheme;
+      LOGI("ZX control scheme set to %d", scheme);
+  }
+
+  // Neo Geo CD drive speed is fixed at 1x (authentic 75Hz CDD tick). The
+  // CDD runs on the 68K's clock in this model, so the BIOS's access-machine
+  // ($C0E99E) and DMA handlers must drain each sector in the ~80,000 68K
+  // clocks between ticks. At >1x the BIOS can't finish a state transition
+  // before the next CDD tick preempts it, and the access machine reads back
+  // a CDC register that hasn't been written yet (DISC I/O ERROR ID=0002 on
+  // the loader screen, ID=0000 elsewhere) — so the drive speed is fixed at
+  // 1x. A real loader fast-forward would need 68K time-slicing (multiple
+  // emulation frames per host frame), not a faster CDD tick.
+
+  // Mute the ZX tape's Audio stream (the raw EAR waveform — the loud screech
+  // while LOAD "" plays). The GAME still receives the EAR bit via
+  // TapeDeck::read() (independent of the audio stream), so loading is
+  // unaffected — only the speaker output is silenced. On unmute the stream
+  // resumes normally. Find the tape node's child Audio::Stream and setMuted().
+  // Sticky: remembers the desired state so it applies even when the tape node
+  // doesn't exist yet (loadRom pushes this BEFORE connectDevices creates the
+  // tape) — applyZxTapeMuted() re-applies it whenever a tape connects.
+  static std::atomic<bool> zxTapeMutedState{false};
+  auto applyZxTapeMuted() -> void {
+    if (!root || !isZxKeyboardSystem(root->name())) return;
+    auto tapes = root->find<Node::Tape>();
+    if (tapes.empty()) return;
+    auto tapeNode = tapes[0];
+    auto streams = tapeNode->find<Node::Audio::Stream>();
+    if (streams.empty()) return;
+    streams[0]->setMuted(zxTapeMutedState.load());
+  }
+  auto setZxTapeMuted(bool muted) -> void {
+    zxTapeMutedState = muted;
+    applyZxTapeMuted();
+    LOGI("ZXTape: audio %s", muted ? "muted" : "unmuted");
+  }
+
+  // Tape progress for the loading UI: returns 0..10000 (percent*100) while the
+  // tape is PLAYING, or -1 when not playing / no tape. The UI hides the bar
+  // whenever this is < 0, so a finished tape (playing()==false) correctly hides
+  // the bar instead of showing a stuck 0%.
+  auto getZxTapeProgress() -> s32 {
+    if (!root || !isZxKeyboardSystem(root->name())) return -1;
+    auto tapes = root->find<Node::Tape>();
+    if (tapes.empty()) return -1;
+    auto tape = tapes[0];
+    if (!tape->playing()) return -1;
+    u64 length = tape->length();
+    if (length == 0) return -1;
+    u64 position = tape->position();
+    u64 pct = position * 10000 / length;
+    return (s32)pct;
+  }
+
+  // ZX Spectrum (and other keyboard-based cores): press/release a keyboard
+  // key by its matrix label (e.g. "J", "ENTER", "SPACE BREAK"). The pressed
+  // state lives in a set that AndroidPlatform::input() sources keyboard-button
+  // values from each frame (the core's Keyboard::read() polls platform->input).
+  auto setKeyboardKey(const char* label, bool pressed) -> void {
+    if (!root || !label || !isZxKeyboardSystem(root->name())) return;
+    string key = label;
+    std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+    if (pressed) zxKeysPressed.insert(key);
+    else zxKeysPressed.erase(key);
+  }
+
+  // Start playback of the ZX Spectrum tape (equivalent to ares desktop's
+  // "Play Tape" button). Without this, Tape::read() returns 0 (stopped) and
+  // LOAD "" never receives the tape signal.
+  auto playTape() -> bool {
+    if (!root || !isZxKeyboardSystem(root->name())) return false;
+    // Search the whole tree for the Tape node (the ZX tray nests it under
+    // TapeDeck -> Tray; a direct find is more robust than assuming the path).
+    auto tapes = root->find<Node::Tape>();
+    if (tapes.empty()) { LOGI("ZXTape: no tape node found in tree"); return false; }
+    auto tape = tapes[0];
+    if (tape->length() == 0) { LOGI("ZXTape: tape empty (length=0)"); return false; }
+    tape->setPosition(0);
+    tape->play();
+    LOGI("ZXTape: playing (len=%llu)", (unsigned long long)tape->length());
+    return true;
+  }
+
+  // ZX Spectrum tape-speed multiplier (1 = real-time, 4/8 = faster loading).
+  auto setTapeSpeed(s32 speed) -> void {
+    if (!root || !isZxKeyboardSystem(root->name())) return;
+    auto tapes = root->find<Node::Tape>();
+    if (tapes.empty()) return;
+    tapes[0]->tapeSpeed = (u32)max(1, speed);
+    LOGI("ZXTape: speed set to %u", tapes[0]->tapeSpeed.load());
+  }
+
+  auto setNativeLibraryDir(const char* path) -> void { nativeLibraryDir = path ? (string)path : ""; LOGI("Native library dir set: %s", (const char*)nativeLibraryDir); }
+  auto setFirmwarePath(const char* path) -> void { LOGI("Firmware path set: %s", path ? path : ""); }
+  auto mapFirmwareFile(const char* name, const char* path) -> void { firmwareMap[name] = path ? (string)path : ""; LOGI("Firmware mapped: %s -> %s", name, (const char*)path); }
+  auto setHomePath(const char* path) -> void {
+    homePath = path ? (string)path : "";
+    LOGI("Home path set: %s", (const char*)homePath);
+    mia::setHomeLocation([] {
+      string p = homePath;
+      if (!p.endsWith("/")) p.append("/");
+      return p;
+    });
+  }
+  auto setSavesPath(const char* path) -> void {
+    savesPath = path ? (string)path : "";
+    LOGI("Saves path set: %s", (const char*)savesPath);
+  }
+  auto setVulkanCachePath(const char* path) -> void {
+    vulkanCachePath = path ? (string)path : "";
+    LOGI("Vulkan cache path set: %s", (const char*)vulkanCachePath);
+  }
+
+  auto loadSecondaryRom(const char* systemNamePtr, const char* uriPtr) -> bool {
+    string systemName = systemNamePtr;
+    string uri = uriPtr;
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    LOGI("Loading secondary medium: %s, uri: %s", (const char*)systemName, (const char*)uri);
+
+    if (secondaryRomFd == -1) return false;
+
+    string extension = "bin";
+    if(auto position = uri.findPrevious(uri.size(), ".")) {
+        extension = uri.slice(*position + 1).downcase();
+    }
+
+    if (!tempFilePath) return false;
+    string tempPath = string{tempFilePath, "/phobos_secondary.", extension};
+
+    FILE* f = fopen((const char*)tempPath, "wb");
+    if (!f) return false;
+    std::vector<u8> copyBuf;
+    copyBuf.resize(1024 * 1024);
+    lseek(secondaryRomFd, 0, SEEK_SET);
+    while (true) {
+        ssize_t r = read(secondaryRomFd, copyBuf.data(), copyBuf.size());
+        if (r <= 0) break;
+        fwrite(copyBuf.data(), 1, r, f);
+    }
+    fclose(f);
+
+    // The .ndd/.d64/.n64dd disk images are a separate MIA medium type that
+    // exposes program.disk for the 64DD drive; plain "Nintendo 64" would
+    // treat the file as a cartridge ROM.
+    string mediumName = systemName;
+    if (systemName == "Nintendo 64" && (extension == "ndd" || extension == "d64" || extension == "n64dd")) {
+        mediumName = "Nintendo 64DD";
+    }
+    secondaryMedium = mia::Medium::create(mediumName);
+    if (!secondaryMedium) {
+        LOGE("MIA: Failed to create secondary medium for %s", (const char*)mediumName);
+        return false;
+    }
+
+    auto loadResult = secondaryMedium->load(tempPath);
+    if (loadResult != successful) {
+        LOGE("MIA: Failed to load secondary medium for %s (Result: %d)", (const char*)mediumName, (s32)loadResult.result);
+        return false;
+    }
+
+    #if defined(CORE_N64)
+    // N64DD: mounting a disk requires the system to be a 64DD variant — that
+    // is what creates the "Nintendo 64DD" node with its "Disk Drive" port.
+    // A plain "Nintendo 64" system has no drive, so the .ndd can't attach.
+    // Reload the system as 64DD (keeping the cartridge medium) so the cart +
+    // expansion disk boot together, mirroring desktop ares (load game, then
+    // pick disk). The emulation thread is paused here (menu), so resetting
+    // root while it sleeps in the pause branch is safe.
+    if (root && root->name() == "Nintendo 64" && mediumName == "Nintendo 64DD") {
+        LOGI("N64DD: reloading system as Nintendo 64DD to mount disk");
+        // Block setEmulationRunning(true) while we tear down the old system
+        // below (a fresh thread would grab the OLD root and run CPU::LW against
+        // the freed singleton hardware). Cleared before the thread restart.
+        systemUnloading.store(true);
+        // Stop the emulation thread BEFORE touching root, and WAIT for it to
+        // fully exit. The emu thread may be stuck inside root->run() (not
+        // sleeping in the pause branch) — nulling root then spawns a new
+        // thread that races the old thread's teardown (CPU::LW / RSP DMA
+        // SIGSEGV on freed cartridge/RDRAM). We must not flip
+        // emulationRunning back on until the old thread has confirmed exit,
+        // or it resumes with its stale localRoot.
+        isPausedAtomic = true;
+        fastForwardAtomic = false;
+        setEmulationRunning(false);
+        bool joined = false;
+        if (emuThread && emuThreadRunning) {
+            // Wait for the old thread to exit (bounded: it may be stuck).
+            for (int i = 0; i < 200 && emuThreadRunning.load(); i++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            if (!emuThreadRunning.load()) {
+                pthread_join(emuThread, nullptr);
+                emuThread = 0;
+                joined = true;
+            }
+        } else {
+            emuThread = 0;
+            joined = true;
+        }
+        if (!joined) {
+            LOGW("N64DD: emulation thread stuck inside a frame (>2s); abandoning the old system and aborting the disk mount");
+            // The zombie is still executing on the N64 singleton hardware
+            // (rdram.ram / cartridge.rom / dd.disk). Do NOT proceed to
+            // ::ares::Nintendo64::load() here — System::load → System::unload
+            // would free those buffers underneath the running zombie → SIGSEGV
+            // in CPU::LW (the "crash while unloading" bug). Same abandon
+            // semantics as unloadSystem(): drop the global root (the zombie's
+            // localRoot keeps the node tree alive), leak the old runMutex (the
+            // zombie holds it), bump the generation so the zombie exits at its
+            // loop-top check once its frame completes, and PARK the handle so
+            // the next N64 load joins it before re-initializing the singletons.
+            root = {};
+            runMutex = new std::recursive_mutex();
+            emuThreadGeneration.fetch_add(1);
+            parkZombieThread();
+            systemUnloading.store(false);
+            return false;
+        }
+        // Old thread is fully dead — safe to tear down root. Also join any
+        // OLDER parked zombies before re-initializing the singleton hardware.
+        root = {};
+        joinAbandonedThreads();
+        // The old system's audio streams are dead now — clear the registry so
+        // the fresh 64DD system's streams register cleanly (otherwise the new
+        // system mixes with stale dead streams → no sound after the reload).
+        {
+            std::lock_guard<std::mutex> lock(audioStreamsMutex);
+            audioStreams.clear();
+            audioStreamsVersion.fetch_add(1, std::memory_order_release);
+        }
+        ::ares::Nintendo64::vulkan.enable = true;  // settings persist from cart load
+        const char* regionString = [&]() -> const char* {
+            // No PAL 64DD exists; every non-NTSC-U preference uses NTSC-J.
+            if (regionPreference == 2 || regionPreference == 3 ||
+                regionPreference == 4 || regionPreference == 5) {
+                return "[Nintendo] Nintendo 64DD (NTSC-J)";
+            }
+            return "[Nintendo] Nintendo 64DD (NTSC-U)";
+        }();
+        bool ok = ::ares::Nintendo64::load(root, regionString);
+        if (ok && root) {
+            ::ares::Nintendo64::option("Recompiler", n64Recompiler ? "true" : "false");
+            // Re-import the cartridge + disk + RTC saves for the fresh 64DD
+            // node. Per-ROM dir (same key as flushSavesToDisk). Must run
+            // BEFORE connectDevices so the core reads the restored saves at
+            // port connect time (and so the system pak's time.rtc is present
+            // when DD::load() reads it).
+            if (savesPath) {
+                string romKey = currentRomBase;
+                romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+                if (romKey.size() == 0) romKey = "rom";
+                string saveDir = {savesPath, "/Nintendo 64/", romKey, "/"};
+                directory::create(saveDir);
+                auto importPak = [&](auto& pak) -> void {
+                  for (auto& saveNode : pak->files()) {
+                    string fileName = saveNode->name();
+                    if (!fileName.endsWith(".ram") && !fileName.endsWith(".srm") &&
+                        !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
+                        !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
+                        !fileName.endsWith(".flash") && !fileName.endsWith(".rtc") &&
+                        !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error")) continue;
+                    string path = {saveDir, fileName};
+                    auto data = nall::file::read(path);
+                    if (!data.empty()) {
+                      saveNode->write(data.data(), data.size());
+                      LOGI("Saves: imported save for %s", (const char*)fileName);
+                    }
+                  }
+                };
+                if (currentMedium && currentMedium->pak) importPak(currentMedium->pak);
+                if (secondaryMedium && secondaryMedium->pak) importPak(secondaryMedium->pak);
+                if (root) {
+                  auto sysPak = root->pak();
+                  if (sysPak) importPak(sysPak);
+                }
+            }
+            // [Phobos] Attach the cartridge + disk BEFORE powering on. Desktop
+            // ares loads the .z64 and .ndd TOGETHER, so the IPL/boot sees both
+            // from the start. Powering on first (old order) booted the 64DD IPL
+            // with NO cartridge attached → F-Zero X's "cannot play with this
+            // disk alone" check failed on reload.
+            connectDevices(root);  // attaches Cartridge + mounts .ndd (Disk Drive)
+            root->power();
+            // Restart the emulation thread for the new 64DD system (we stopped
+            // it above so it wouldn't race the teardown). The teardown is done,
+            // so re-allow thread spawns.
+            systemUnloading.store(false);
+            setEmulationRunning(true);
+            LOGI("N64DD: system reloaded with disk drive");
+            return true;
+        }
+        systemUnloading.store(false);
+        LOGE("N64DD: failed to reload system as 64DD");
+        return false;
+    }
+    #endif
+
+    // PS1 multi-disc swap: the Disc Tray is hot-swappable (ares mounts on
+    // tray->connect()). Replace currentMedium with the newly-loaded disc and
+    // re-connect the tray — the core re-reads cd.rom + TOC from the new pak.
+    // No full reload — the console stays running and the game sees the new
+    // disc (multi-disc games poll for a change). This is the fix for the old
+    // "Change Disc" button, which only ran connectDevices() and never mounted
+    // the new disc.
+    if (root && systemName == "PlayStation") {
+        currentMedium = secondaryMedium;
+        // NOTE: use scan(), NOT find() — find<T>(name) only searches DIRECT
+        // children, and the PS1 Disc Tray is nested at root → PlayStation →
+        // Disc Tray. find() returned null → "Disc Tray not found" on every
+        // swap (MGS disc change). scan() recurses the whole tree.
+        auto discTray = root->scan<Node::Port>("Disc Tray");
+        if (discTray) {
+            isPausedAtomic = true;
+            fastForwardAtomic = false;
+            // Disconnect (ejects the current disc), then re-allocate + connect
+            // so the core re-reads cd.rom + TOC from the new medium's pak.
+            // Disc::connect() expects cd (the peripheral) to exist, so allocate
+            // recreates it before connect.
+            discTray->disconnect();
+            discTray->allocate("PlayStation Disc");
+            discTray->connect();
+            isPausedAtomic = false;
+            LOGI("PS1: disc swapped to %s", (const char*)secondaryMedium->name());
+            return true;
+        }
+        LOGE("PS1: Disc Tray not found — cannot swap");
+        return false;
+    }
+
+    if (root) {
+        connectDevices(root); // Refresh ports to attach new medium
+        LOGI("Secondary medium loaded successfully");
+        return true;
+    }
+    return false;
+  }
+
+  auto setSurface(JNIEnv* env, jobject surface) -> void {
+    lock_guard<std::mutex> lock(windowMutex);
+    LOGI("PhobosSurface: setSurface called. Old=%p, New=%p", nativeWindow, surface);
+    if (nativeWindow) ANativeWindow_release(nativeWindow);
+    nativeWindow = surface ? ANativeWindow_fromSurface(env, surface) : nullptr;
+    if (nativeWindow) {
+        LOGI("PhobosSurface: New ANativeWindow acquired: %p", nativeWindow);
+    }
+    windowChanged = true;
+  }
+  auto getNewLogs() -> std::vector<LogEntry> {
+    lock_guard<mutex> lock(logMutex);
+    std::vector<LogEntry> logs;
+    logs.reserve(logBuffer.size());
+    for (auto& entry : logBuffer) logs.push_back(std::move(entry));
+    logBuffer.clear();
+    return logs;
+  }
+  auto isFirstFrameRendered() -> bool { return firstFrameRendered.load(); }
+  auto getPerformanceStats() -> PerformanceStats {
+    PerformanceStats stats;
+    stats.fps = currentFps.load();
+    stats.frameTime = avgFrameTime.load() / 1000.0;
+    stats.activeCore = (s32)sched_getcpu();
+    #if defined(CORE_N64)
+    stats.pipelineFailures = ::ares::Nintendo64::Vulkan::pipelineFailureCount.load(std::memory_order_relaxed);
+    stats.isAdrenoDriver = (bool)::ares::Nintendo64::Vulkan::gpuDeviceName.find("Adreno");
+    #else
+    stats.pipelineFailures = 0;
+    stats.isAdrenoDriver = false;
+    #endif
+    return stats;
+  }
+  auto takeScreenshot(const char* path) -> bool {
+    lock_guard<mutex> lock(windowMutex);
+    if (lastFrameBuffer.empty() || currentWidth == 0 || currentHeight == 0) return false;
+    std::vector<u32> converted;
+    converted.resize(lastFrameBuffer.size());
+    for(u32 i = 0; i < lastFrameBuffer.size(); i++) {
+        u32 p = lastFrameBuffer[i];
+        converted[i] = (p & 0xFF00FF00) | ((p >> 16) & 0x000000FF) | ((p << 16) & 0x00FF0000);
+    }
+    return nall::Encode::PNG::RGBA8(path, converted.data(), (s32)currentWidth * 4, (s32)currentWidth, (s32)currentHeight);
+  }
+}

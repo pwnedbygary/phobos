@@ -1,0 +1,257 @@
+cmake_minimum_required(VERSION 3.22)
+project(phobos)
+
+add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY SLJIT_CONFIG_ARM_64=1 SLJIT_HAVE_CONFIG_PRE=1 SLJIT_HAVE_CONFIG_POST=1 SLJIT_DEBUG=0 ARES_ENABLE_ZIP ARES_ENABLE_CHD CORE_A26 CORE_CV CORE_FC CORE_GB CORE_GBA CORE_MD CORE_MS CORE_MSX CORE_N64 CORE_NG CORE_NGP CORE_PCE CORE_PS1 CORE_SATURN CORE_SFC CORE_SG CORE_SPEC CORE_WS PHOBOS_TAPE_SPEED PROFILE_PERFORMANCE)
+add_compile_options(-w -O3 -flto=thin -ftree-vectorize -funroll-loops -fno-math-errno -fno-trapping-math)
+
+add_subdirectory(thirdparty/libadrenotools)
+
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/nall/nall
+    ${CMAKE_CURRENT_SOURCE_DIR}/nall
+    ${CMAKE_CURRENT_SOURCE_DIR}/libco
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares
+    ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/vulkan
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/util
+    ${CMAKE_CURRENT_SOURCE_DIR}/ares/n64/vulkan/parallel-rdp/parallel-rdp
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libadrenotools/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/volk
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/vma
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/CMakeLists.txt
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/GL
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/KHR
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/TZXFile
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/jansson
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/miniz-3.1.1
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/zstd-1.5.7
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libchdr/deps/lzma-25.01/src/real
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/librashader/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/qon
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljit/sljit_src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljitAllocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljitConfigPost.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sljitConfigPre.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sse2neon.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/xxhash.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ymfm/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/xxhash.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/GLFW
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Vulkan-Headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Vulkan-Headers/include
+)
+
+set(ARES_SOURCES
+    ares/component/processor/arm7tdmi/arm7tdmi.cpp
+    ares/component/processor/m68000/m68000.cpp
+    ares/component/processor/mos6502/mos6502.cpp
+    ares/component/processor/hg51b/hg51b.cpp
+    ares/component/processor/sh2/sh2.cpp
+    ares/component/processor/z80/z80.cpp
+    ares/component/processor/spc700/spc700.cpp
+    ares/component/processor/v30mz/v30mz.cpp
+    ares/component/processor/sm83/sm83.cpp
+    ares/a26/a26.cpp
+    ares/cv/cv.cpp
+    ares/fc/fc.cpp
+    ares/gb/gb.cpp
+    ares/gba/gba.cpp
+    ares/md/md.cpp
+    ares/ms/ms.cpp
+    ares/msx/msx.cpp
+    ares/n64/n64.cpp
+    ares/ng/ng.cpp
+    ares/ngp/ngp.cpp
+    ares/pce/pce.cpp
+    ares/ps1/ps1.cpp
+    ares/saturn/system/system.cpp
+    ares/sfc/sfc.cpp
+    ares/sg/sg.cpp
+    ares/spec/spec.cpp
+    ares/ws/ws.cpp
+)
+
+set(OTHER_SOURCES
+    nall/nall/nall.cpp
+    nall/nall/gdb/server.cpp
+    mia/mia.cpp
+    libco/aarch64.c
+    thirdparty/volk/volk.c
+    thirdparty/GLFW/glfw_stub.cpp
+    android/app/src/main/cpp/PhobosRunner.cpp
+    android/app/src/main/cpp/PhobosJNI.cpp
+    ares/ares/android_globals.cpp
+    ares/pce/vdp-performance/vdp.cpp
+    thirdparty/libchdr/src/libchdr_bitstream.c
+    thirdparty/libchdr/src/libchdr_cdrom.c
+    thirdparty/libchdr/src/libchdr_chd.c
+    thirdparty/libchdr/src/libchdr_flac.c
+    thirdparty/libchdr/src/libchdr_huffman.c
+    thirdparty/libchdr/src/libchdr_codec_cdfl.c
+    thirdparty/libchdr/src/libchdr_codec_cdlz.c
+    thirdparty/libchdr/src/libchdr_codec_cdzl.c
+    thirdparty/libchdr/src/libchdr_codec_cdzs.c
+    thirdparty/libchdr/src/libchdr_codec_flac.c
+    thirdparty/libchdr/src/libchdr_codec_huff.c
+    thirdparty/libchdr/src/libchdr_codec_lzma.c
+    thirdparty/libchdr/src/libchdr_codec_zlib.c
+    thirdparty/libchdr/src/libchdr_codec_zstd.c
+    thirdparty/libchdr/deps/lzma-25.01/src/real/LzmaDec.c
+    thirdparty/libchdr/deps/miniz-3.1.1/miniz.c
+    thirdparty/libchdr/deps/zstd-1.5.7/zstddeclib.c
+    ares/ares/debug/debug.cpp
+    ares/ares/node/node.cpp
+    ares/ares/memory/fixed-allocator.cpp
+    ares/component/audio/ay38910/ay38910.cpp
+    ares/component/audio/msm5205/msm5205.cpp
+    ares/component/audio/sn76489/sn76489.cpp
+    ares/component/audio/t6w28/t6w28.cpp
+    ares/component/audio/ym2149/ym2149.cpp
+    ares/component/audio/ym2413/ym2413.cpp
+    ares/component/audio/ym2612/ym2612.cpp
+    ares/component/eeprom/m24c/m24c.cpp
+    ares/component/eeprom/m93lcx6/m93lcx6.cpp
+    ares/component/flash/sst39sf0x0/sst39sf0x0.cpp
+    ares/component/io/i8255/i8255.cpp
+    ares/component/processor/gsu/gsu.cpp
+    ares/component/processor/huc6280/huc6280.cpp
+    ares/component/processor/i8080/i8080.cpp
+    ares/component/processor/m68hc05/m68hc05.cpp
+    ares/component/processor/sm5k/sm5k.cpp
+    ares/component/processor/ssp1601/ssp1601.cpp
+    ares/component/processor/tlcs900h/tlcs900h.cpp
+    ares/component/processor/upd96050/upd96050.cpp
+    ares/component/processor/wdc65816/wdc65816.cpp
+    ares/component/rtc/s3511a/s3511a.cpp
+    ares/component/video/tms9918/tms9918.cpp
+    ares/component/video/v9938/v9938.cpp
+    ares/pce/vdp-performance/vdp.cpp
+    ares/n64/vulkan/vulkan.cpp
+    thirdparty/sljit/sljit_src/sljitLir.c
+    thirdparty/qon/qon.cpp
+    thirdparty/sljitAllocator.cpp
+    thirdparty/ymfm/src/ymfm_adpcm.cpp
+    thirdparty/ymfm/src/ymfm_misc.cpp
+    thirdparty/ymfm/src/ymfm_opl.cpp
+    thirdparty/ymfm/src/ymfm_opm.cpp
+    thirdparty/ymfm/src/ymfm_opn.cpp
+    thirdparty/ymfm/src/ymfm_opq.cpp
+    thirdparty/ymfm/src/ymfm_opz.cpp
+    thirdparty/ymfm/src/ymfm_pcm.cpp
+    thirdparty/ymfm/src/ymfm_ssg.cpp
+    thirdparty/TZXFile/TZXAudioGenerator.cpp
+    thirdparty/TZXFile/TZXBlock.cpp
+    thirdparty/TZXFile/TZXBlockArchiveInfo.cpp
+    thirdparty/TZXFile/TZXBlockCustomInfo.cpp
+    thirdparty/TZXFile/TZXBlockGroupEnd.cpp
+    thirdparty/TZXFile/TZXBlockGroupStart.cpp
+    thirdparty/TZXFile/TZXBlockHardwareType.cpp
+    thirdparty/TZXFile/TZXBlockKansasCityStandard.cpp
+    thirdparty/TZXFile/TZXBlockLoopEnd.cpp
+    thirdparty/TZXFile/TZXBlockLoopStart.cpp
+    thirdparty/TZXFile/TZXBlockMessage.cpp
+    thirdparty/TZXFile/TZXBlockPause.cpp
+    thirdparty/TZXFile/TZXBlockPulseSequence.cpp
+    thirdparty/TZXFile/TZXBlockPureData.cpp
+    thirdparty/TZXFile/TZXBlockPureTone.cpp
+    thirdparty/TZXFile/TZXBlockStandardSpeedData.cpp
+    thirdparty/TZXFile/TZXBlockStopTheTape48K.cpp
+    thirdparty/TZXFile/TZXBlockTextDescription.cpp
+    thirdparty/TZXFile/TZXBlockTurboSpeedData.cpp
+    thirdparty/TZXFile/TZXFile.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/command_ring.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/rdp_device.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/rdp_dump_write.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/rdp_renderer.cpp
+    ares/n64/vulkan/parallel-rdp/parallel-rdp/video_interface.cpp
+    ares/n64/vulkan/parallel-rdp/util/aligned_alloc.cpp
+    ares/n64/vulkan/parallel-rdp/util/arena_allocator.cpp
+    ares/n64/vulkan/parallel-rdp/util/environment.cpp
+    ares/n64/vulkan/parallel-rdp/util/logging.cpp
+    ares/n64/vulkan/parallel-rdp/util/thread_id.cpp
+    ares/n64/vulkan/parallel-rdp/util/thread_name.cpp
+    ares/n64/vulkan/parallel-rdp/util/timeline_trace_file.cpp
+    ares/n64/vulkan/parallel-rdp/util/timer.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/buffer.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/buffer_pool.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/command_buffer.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/command_pool.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/context.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/cookie.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/descriptor_set.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/device.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/event_manager.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/fence.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/fence_manager.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/image.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/indirect_layout.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/memory_allocator.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/pipeline_event.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/query_pool.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/render_pass.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/sampler.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/semaphore.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/semaphore_manager.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/shader.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/wsi.cpp
+    ares/n64/vulkan/parallel-rdp/vulkan/texture/texture_format.cpp
+)
+
+add_library(phobos_android SHARED
+    ${ARES_SOURCES}
+    ${OTHER_SOURCES}
+)
+
+set(ARES_ALL_SOURCES
+    ${ARES_SOURCES}
+    ares/ares/android_globals.cpp
+    ares/ares/debug/debug.cpp
+    ares/ares/node/node.cpp
+    ares/ares/memory/fixed-allocator.cpp
+    ares/component/audio/ay38910/ay38910.cpp
+    ares/component/audio/msm5205/msm5205.cpp
+    ares/component/audio/sn76489/sn76489.cpp
+    ares/component/audio/t6w28/t6w28.cpp
+    ares/component/audio/ym2149/ym2149.cpp
+    ares/component/audio/ym2413/ym2413.cpp
+    ares/component/audio/ym2612/ym2612.cpp
+    ares/component/eeprom/m24c/m24c.cpp
+    ares/component/eeprom/m93lcx6/m93lcx6.cpp
+    ares/component/flash/sst39sf0x0/sst39sf0x0.cpp
+    ares/component/io/i8255/i8255.cpp
+    ares/component/processor/gsu/gsu.cpp
+    ares/component/processor/huc6280/huc6280.cpp
+    ares/component/processor/i8080/i8080.cpp
+    ares/component/processor/m68hc05/m68hc05.cpp
+    ares/component/processor/sm5k/sm5k.cpp
+    ares/component/processor/ssp1601/ssp1601.cpp
+    ares/component/processor/tlcs900h/tlcs900h.cpp
+    ares/component/processor/upd96050/upd96050.cpp
+    ares/component/processor/wdc65816/wdc65816.cpp
+    ares/component/rtc/s3511a/s3511a.cpp
+    ares/component/video/tms9918/tms9918.cpp
+    ares/component/video/v9938/v9938.cpp
+    ares/pce/vdp-performance/vdp.cpp
+    ares/n64/vulkan/vulkan.cpp
+    nall/nall/gdb/server.cpp
+)
+
+set_property(SOURCE ${ARES_ALL_SOURCES} PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ares/ares/ares.hpp")
+
+find_library(log-lib log)
+find_library(android-lib android)
+find_library(aaudio-lib aaudio)
+find_library(vulkan-lib vulkan)
+find_library(egl-lib EGL)
+find_library(gles-lib GLESv3)
+find_library(z-lib z)
+find_library(dl-lib dl)
+
+target_link_libraries(phobos_android ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} adrenotools)
