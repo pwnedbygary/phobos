@@ -32,12 +32,20 @@ specialists and review. No connected target, identified reference APK, ROM ident
 matched settings or frame traces. Consequently **zero fresh native performance
 runs**, no measured ranking by speed, no parity or speedup claim.
 
-## Pinned reference, not the user's installed configuration
+## Pinned user-supplied reference, not an attested installed configuration
 
-Handoff identifies `https://github.com/pwnedbygary/mupen64plus-ae-turnip`.
-`git ls-remote` and an isolated shallow clone of `master` agree on
-`dc955483a97daa99cb1f9db06e2334464fa1664d`. This pins the source comparison only;
-the user's installed branch/APK and benchmark settings remain unconfirmed.
+The user supplied the stable reference
+`https://github.com/pwnedbygary/mupen64plus-ae-turnip` tag `v336`.
+Read-only `git ls-remote` resolves that tag to
+`dc955483a97daa99cb1f9db06e2334464fa1664d`, matching the source revision
+previously inspected. Debug/DD branches are excluded. The tag contents and
+“stable” characterization are user-reported and were not independently
+measured here. The source pin is useful for comparison, but the installed
+reference branch/APK, Phobos APK, device, driver, settings, and benchmark
+identity remain unconfirmed.
+
+Upstream context is `https://github.com/ares-emulator/ares`; it is not a
+drop-in performance reference or permission to transplant code.
 
 All reference paths below are relative to that fork at that revision:
 
@@ -67,10 +75,11 @@ The old implementation plan's performance section (search `2–3×`, `SyncFull`,
 | Async RDP makes CPU 2–3× faster / massive improvement | No controlled trace supports a magnitude. Conditional reference wait is real; safety and Phobos benefit unknown. Withdraw bypass recommendation. |
 | Mario Tennis frequently SyncFull-stalls | Wait site exists; no counts or wait histogram in available evidence. Frequency/dominance unmeasured. |
 | Native NEON must beat SSE-to-NEON | ARM64 includes sse2neon (`ares/n64/n64.hpp:17-24`), SIMD gate in `accuracy.hpp:22-29`. Generated release assembly and workload timing required. |
+| Reference RSP is proven native-NEON and Phobos translation is slower | Source-level intrinsic style does not establish generated instructions or workload share. Disassemble exact release objects and sample RSP time before any rewrite. |
 | JIT cadence should be raised for full speed | `accuracy.hpp:9-16` is 2048*2 and records historic Conker regressions at larger cadence. Preserve default; old FPS comments are reports, not new runs. |
 | Broad perf pass still needs basic compiler tuning | `CMakeLists.txt:4-5` already enables O3, ThinLTO, vectorization and unrolling. `android/app/build.gradle.kts:36-53` sets legacy armv8-a+simd / modern armv8.2-a+fp16+dotprod. Inspect actual compile commands before proposing flags. |
 | Audio callback always locks/copies stream registry | Versioned cache already exists (`PhobosRunner.cpp:155-173`); don't propose an already-landed optimization. |
-| Old overall compatibility/signing status is current | Historical reports remain useful regression targets, not fresh validation. Signing is outside scope. |
+| Old overall compatibility/signing status is current | Historical reports remain useful regression targets, not fresh validation. Signing/update safety is outside this audit and separately blocked. |
 
 ## Ranked investigation backlog
 
@@ -117,17 +126,20 @@ No blind removal of synchronization, watchdog additions or fake completion.
 
 ## Next bounded experiment and blockers
 
-Use [the protocol](mario-tennis-benchmark.md) to identify the actual two installed
-builds and collect external low-overhead CPU/scheduler/frame traces first.
+Use [the protocol](mario-tennis-benchmark.md) to identify the actual Phobos APK
+and the reference APK built from the user-supplied `v336` source, then collect
+external low-overhead CPU/scheduler/frame traces first.
 No custom instrumentation is justified yet without a device to validate its
 overhead. If external traces cannot attribute the waits, the next *separate*
 reviewed change is an opt-in bounded stage recorder at the listed sites, with
 no timing changes and with on/off overhead measurement.
 
-Missing inputs: actual reference branch/revision and APK identity; target device/OS,
+Missing inputs: attested reference and Phobos APK identities; target device/OS,
 driver binary/version; legal game hash/region, reproducible scene and settings.
-Historical handoff mentions Retroid Pocket 6 / Adreno 740, but this run has not
-confirmed that device or its driver. These block native comparison, not this audit.
+The user-supplied reference source/tag is now identified, but an APK built from
+that tag is not. Historical handoff mentions Retroid Pocket 6 / Adreno 740, but
+this run has not confirmed that device or its driver. These block native
+comparison, not this audit.
 
 Documentation checks: `git diff --check`, internal Markdown link existence and
 independent source-citation/snapshot review are the appropriate acceptance checks.

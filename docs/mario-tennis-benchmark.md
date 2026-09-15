@@ -1,7 +1,13 @@
 # Mario Tennis matched-native comparison protocol
 
 Status: protocol established; **no matched runs collected**. Never replace blank
-fields with remembered FPS. Source candidate pins are in [performance-audit.md](performance-audit.md).
+fields with remembered FPS. The user-supplied reference source is now identified
+as tag `v336` of
+[mupen64plus-ae-turnip](https://github.com/pwnedbygary/mupen64plus-ae-turnip),
+resolved read-only to `dc955483a97daa99cb1f9db06e2334464fa1664d`; source
+identification does not identify an attested reference APK. Candidate pins and
+blockers are in [performance-audit.md](performance-audit.md). Use only the
+stable-tag source for this comparison; debug/DD branches are excluded.
 
 ## Run manifest (required before comparison)
 
@@ -115,5 +121,7 @@ For a later patch add lifecycle/accuracy regression runs: Mario Tennis intro and
 gameplay, Conker, Rogue Squadron, reset, state save/load, quit/reload, and representative
 non-N64 threaded video/multi-stream audio cores. Stop on corruption/hangs.
 
-Current results table: **empty**. Missing device access and run identities block
-execution and comparative conclusions; they do not justify inventing measurements.
+Current results table: **empty**. The resolved source tag removes the
+source-branch ambiguity, but missing device access, attested APK identities,
+driver/settings/ROM identity, and run traces still block execution and
+comparative conclusions; they do not justify inventing measurements.

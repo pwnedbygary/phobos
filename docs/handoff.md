@@ -8,33 +8,46 @@ The hook restores pinned submodules and runs Gradle help without prompting for
 licenses. Full APK compilation remains separate. Verification and exact-snapshot
 independent review results are recorded outside the frozen snapshot.
 
-## Evidence baseline — 2026-09-15
+## Reconciled documentation baseline — 2026-09-15
 
-The current performance record is [performance-audit.md](performance-audit.md);
-the reproducible comparison gate is [mario-tennis-benchmark.md](mario-tennis-benchmark.md).
-The [development process](development-process.md) and [coordinator prompt](coordinator-prompt.md)
-apply before every authored commit and supersede the historical broad-staging,
-immediate-commit and auto-deploy instructions below. Native measurements are pending;
-old FPS reports are historical, not freshly reproduced results. Preserve timing
-defaults: the historical 60-FPS policy is not authorization to change timing.
-Signing status below is historical and outside this audit; consult the separate
-signing work before distributing or installing APKs.
+The authoritative roadmap is [implementation-plan.md](implementation-plan.md);
+its dated detailed evidence is preserved in
+[implementation-history.md](implementation-history.md). The current performance
+record is [performance-audit.md](performance-audit.md), and the reproducible
+comparison gate is [mario-tennis-benchmark.md](mario-tennis-benchmark.md).
+The [development process](development-process.md) and
+[coordinator prompt](coordinator-prompt.md) apply before every authored change
+and supersede the historical broad-staging, immediate-commit, and auto-deploy
+instructions retained below.
 
-This iteration changes documentation only. Clean baseline, upstream/reference
-pins, capability checks, findings and next experiment are recorded in the audit.
-No emulator behavior, signing, saves or device data changed. Independent review
-of the final snapshot is required; its hashes/verdict belong in the commit record,
-not a self-referential hashed document.
+The user-supplied comparison source is
+[mupen64plus-ae-turnip](https://github.com/pwnedbygary/mupen64plus-ae-turnip)
+stable tag `v336`, read-only resolved to
+`dc955483a97daa99cb1f9db06e2334464fa1664d`. Debug/DD branches are excluded.
+The tag contents and “stable” characterization are user-reported, not
+independently measured here; an attested reference APK, matched device/driver/
+settings, ROM identity, and traces are still blockers. Upstream context is
+[ares](https://github.com/ares-emulator/ares), not a drop-in patch source.
+
+This iteration changes documentation only. No emulator behavior, signing,
+saves, APK, build, or device data changed. Native performance measurements are
+pending; old FPS reports are historical, not freshly reproduced results.
+Preserve timing defaults. Task #4 audio-buffer reuse is cancelled, not
+authorized, and not the next automatic change. Task #2 release APK update
+safety remains separately blocked waiting for input.
 
 **Phobos** is an Android N64-first multi-system emulator (package `com.phobos.emulator`, module `:app`, native lib `libphobos_android.so`).
 Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-RDP Vulkan renderer, libadrenotools Turnip driver). UI is Jetpack Compose.
 
-## 🚀 CURRENT STATUS (2026-09-01)
+## Historical session detail (retained for context; not a current verification)
 
-**Latest work: Neo Geo CD — RENDERING ROUND COMPLETE (committed `9230e4d60` + `783a6cc27`).**
-Full technical record (incl. Aug-28 appendix + 2026-09-01 static round): `docs/implementation-plan.md` →
-**Task NGCD-M2** (RESOLVED; "Neo Geo CD consolidated reference" block) + **Task NGCD-M3** (residual). Prior
-status below.
+**Latest reported work: Neo Geo CD — RENDERING ROUND COMPLETE (committed
+`9230e4d60` + `783a6cc27`).** Full technical record (incl. Aug-28 appendix +
+2026-09-01 static round) is in [implementation-history.md](implementation-history.md)
+at [Task NGCD-M2](implementation-history.md#task-ngcd-m2), the
+[Neo Geo CD consolidated reference](implementation-history.md#neo-geo-cd-consolidated-reference),
+and [Task NGCD-M3](implementation-history.md#task-ngcd-m3). The current
+disposition is in [implementation-plan.md](implementation-plan.md).
 
 **Verified on-device (RP6 `49016109`, SamSho RPG):** BIOS menu, NEO-GEO CD logo, title, character select,
 level-select (was a black screen), in-fight HUD (life/POW bars, KO counter) + characters + backgrounds all
@@ -145,8 +158,10 @@ work.** The blocker is entirely the in-progress NGCD M2 drive/IRQ/DMA pipeline.
 **Repro / next step:** device `49016109` (Retroid Pocket 6, Adreno 740), SamSho RPG disc. Clear logcat, press
 Start, `adb -s 49016109 logcat -d | grep -E "NGCD|CDD|CDC|DMA"`. Then wire `type1` dispatch (priority over 75 Hz
 `type2`) + the `$FF0061` byte DMA trigger + microcode routing; iterate until the game boots past boot state 3
-(code reaches `0x100000`); confirm no AES/MVS regression. See `docs/implementation-plan.md` → **Task NGCD-M2**
-and the "Neo Geo CD consolidated reference" block under it.
+(code reaches `0x100000`); confirm no AES/MVS regression. See
+[implementation-plan.md](implementation-plan.md), the
+[archived Task NGCD-M2 record](implementation-history.md#task-ngcd-m2), and
+the [Neo Geo CD consolidated reference](implementation-history.md#neo-geo-cd-consolidated-reference).
 
 **Neo Geo (Task #10c, UNCOMMITTED state):** Un-gated for diagnosis via `if (false && identifiedSystem == "Neo Geo")` in PhobosRunner.cpp. kof2003.zip loads (MIA: AES; core reports "Neo Geo MVS", MVS BIOS sp-e.sp1 attached; "VFS: Failed to attach static.rom" = benign warning), **runs 59.2-60.1 FPS sustained** (old black-screen/0-FPS hang GONE). Streams registered: FM (ch=2, 500kHz) + SSG (ch=1, 500kHz). **BUT audio ring stays 0/12000 (0%) and no sound** — multi-stream lockstep (`PhobosRunner.cpp` audio() ~1384-1417: emit only when EVERY stream pending, bounded 8192) or mute path suspect. Video presentation unverified — every adb loader load ran HEADLESS (no navigation → no SurfaceView). FIXES LANDED UNCOMMITTED: (1) debug loader now navigates to the emulator screen (mirrors SystemDetailScreen flow); (2) swap-screen feature (below). After build+deploy: verify NG video via loader, then investigate the 0% audio ring, then finalize gate state + verify MVS/AES + commit.
 
@@ -168,13 +183,20 @@ All three are UNCOMMITTED. The `kof99`/`kof2000` `NEO-SMA` "Still ✗" line in t
 - **Neo Geo INPUT FIX:** the Neo Geo `ControllerPort` connects an "Arcade Stick" (correct — `connectDevices` already routes Neo Geo → `"Arcade Stick"` at `PhobosRunner.cpp:2088`; my `port.cpp` edit accepting `"Gamepad"` is a harmless no-op). The actual dead input was a FRONT-END bug: many controllers report the D-pad as a HAT axis, which `GameInputState.updateHotkeyDpad` only routed into `hotkeyKeys` (hotkey combos), never into gameplay button bits. Fixed by latching the hat D-pad into `hwButtons` bits 0–3 (`GameInputState.kt`). A/B/C/D always worked (they arrive as keycodes); analog sticks are digital-only for Neo Geo (expected, NOT a bug). Memory `bugfix/neo-geo-input-gamepad`.
 - **Neo Geo Background Graphical Glitch (FIXED & VERIFIED on-device):** Samurai Shodown (and other games using 32-tile tall background sprites) had a massive black horizontal band across the middle of the screen. Root cause in `ares/ng/lspc/render.cpp`: `tile` was declared as `n4` (4-bit integer, 0..15). For lines `ry >= 256` (lower half of 32-tile sprites), `tile ^= 0x1f` truncated to 4 bits (`tile ^= 0x0f`), wrapping back to tiles 0..15 instead of accessing tiles 16..31 in VRAM. Changed `tile` to `n5` (5-bit integer, 0..31). Also safeguarded `cartridge.cromMask()` tile wrapping. Verified on-device via screencap: center screen black rows dropped from hundreds to 0, background renders continuously.
 
-**Next priority:** Task #49 (N64 save import/export UI), commit current Neo Geo + driver downloader work.
+**Historical next priority:** Task #49 (N64 save import/export UI), followed
+by committing the then-uncommitted Neo Geo and driver-downloader work. This
+old sequencing is retained for history; the current priority and dispositions
+are in [implementation-plan.md](implementation-plan.md).
 
 ## NEO GEO CD (future task — reference)
 ares has a dedicated Neo Geo CD fork branch by Luke Usher: `https://github.com/ares-emulator/ares/tree/neogeo-cd`. Closely linked hardware to AES/MVS — once AES/MVS work, pull ONLY the files needed for the NG CD core (CD-ROM hardware + CD audio paths; do NOT pull the whole branch) and port them into `ares/`. Track as a new task after Task #10c lands.
 
-## ALWAYS-READ REFERENCES (for details not covered here)
-- **Implementation plan (DEEP reference — task queue + full notes):** `/home/garyb/LLM-Projects/phobos/docs/implementation-plan.md` — also at `.cache/.../implementation_plan.artifact.md` (same content; the in-repo copy is authoritative). Priority queue = open only; ✅ Complete section = archived write-ups; IN FLIGHT = detailed status.
+## ALWAYS-READ REFERENCES
+- **Canonical roadmap and current dispositions:** [implementation-plan.md](implementation-plan.md).
+- **Detailed historical task archive:** [implementation-history.md](implementation-history.md).
+- **Performance evidence and ranked investigations:** [performance-audit.md](performance-audit.md).
+- **Matched native comparison protocol:** [mario-tennis-benchmark.md](mario-tennis-benchmark.md).
+- **Development/change gate:** [development-process.md](development-process.md).
 - **README.md** (repo root) — full systems matrix, feature list, build requirements.
 - **Prior huge conversation (grep for context):** `/home/garyb/Desktop/agent-mode-conversation.json`.
 
@@ -185,8 +207,13 @@ ares has a dedicated Neo Geo CD fork branch by Luke Usher: `https://github.com/a
 - `/home/garyb/LLM-Projects/phobos/ares` — Native core fork (N64 in `ares/n64/`, parallel-RDP Vulkan in `n64/vulkan/`).
 - `/home/garyb/LLM-Projects/phobos/thirdparty/` — parallel-rdp, sljit, adrenotools, volk, etc.
 
-## Build / Deploy / Test
-- Build: `gradle app:assembleDebug`. Deploy: IDE deploy module `:app`, `DEFAULT_ACTIVITY`, RUN.
+## Historical Build / Deploy / Test Notes
+
+The commands in this section are retained as reported history, not current
+instructions. Use [development-process.md](development-process.md) and the
+requested flavor's real production path before any future build or device
+validation.
+- Historical build: `gradle app:assembleDebug`. Historical deploy: IDE deploy module `:app`, `DEFAULT_ACTIVITY`, RUN.
 - Device: serial **49016109** (Retroid Pocket 6, Adreno 740, custom Turnip driver at `files/gpu_drivers/libvulkan_freedreno.so`).
 - Logcat tags: `Phobos`, `PhobosCore`, `PhobosJNI`, `PhobosVulkan`, `Granite`, `hook_impl`, `vulkan`.
 
@@ -202,24 +229,33 @@ ares has a dedicated Neo Geo CD fork branch by Luke Usher: `https://github.com/a
 9. **PS1 CD-DA Audio Pops (Task 46 — 2026-08-18):** Fixed via fade envelope on playback state transitions. Root cause: disc drive state changes (reading/playingCDDA) would snap samples from music→0, creating hard clicks. Solution: 150-sample linear fade (3.4ms @ 44.1kHz) applied in `cdda.cpp:clockSample()` when entering/exiting CD-DA playback. Eliminates pops without audio artifacts. Commit `1822c5757`.
 10. **Ape Escape cinematics (Task 9 — 2026-08-18):** Fixed XA filter routing. Ape Escape's `TITLE.STR` interleaves `subMode=0x48` channel-0 MDEC video/data sectors with `subMode=0x64` channel-1 XA audio sectors. Phobos applied the configured file/channel filter to both, dropping the video sectors before the CD FIFO. Filtering now applies only to XA audio sectors (`subMode & 0x44`), allowing video data to reach MDEC. Verified on Retroid Pocket 6 with a clean build and cold USA-region launch; intro plays and reaches the menu normally.
 
-## Open Priority Queue
-- **Neo Geo MVS/AES — CORE FULLY WORKING (games load/run ~60 FPS, audio, input, and tall-sprite/background rendering all verified on-device). REMAINING: broad game-compat pass via `docs/neo-geo-compatibility.md`. PCEngineCD deferred until NG fully stable.
-- **PER-CORE + PER-GAME CONTROLLER REMAPPING — NEXT PRIORITY (right after NG stable):** Tasks **13a** (per-core custom controller layouts), **13b** (per-core rebinding), **13c** (multi-controller / per-player pad assignment), **13d** (per-game rebinding). All four done together (same code path). 3-tier hierarchy like RetroArch — **Global** default → **Per-Core** override → **Per-Game** override (top priority wins). Pulled up from the QoL phase: Neo Geo C/D currently land on R1/R2 (Genesis-heritage bit mapping in `resolveButtonBit`); per-core defaults + user rebinding (and per-game overrides for weird default control schemes) is the proper fix.
-- **#72:** N64 RDP-ParaLLEl perf investigation vs pwnedbygary/mupen64plus-ae-turnip (some games far faster there — port applicable fast paths).
-- **#49:** N64 save import/export UI (.sra/.eep/.fla/.mpk).
-- **#52:** PS1 multi-disc swap verify (MGS disc 2 swap fix applied via recursive `scan`).
-- **#61:** Proper release APK signing (FIXED & VERIFIED — stable release keystore in `android/keystore/release.keystore`, distinct from debug keystore, supports in-place upgrades across releases).
-- **Other:** Task 42 (Perf Monitor settings), Task 51 (ZX multi-tape swap).
+## Current Priority Queue
 
-## Working Agreements & Policies
+The former queue is superseded. See the authoritative
+[open-task inventory](implementation-plan.md#open-task-inventory-and-disposition),
+the [ranked roadmap](implementation-plan.md#ranked-current-roadmap), and the
+[historical archive](implementation-history.md). In brief: establish the
+v336/Phobos APK identities and matched traces first; then measure presentation,
+SyncFull waits, pacing, and attribution without changing synchronization.
+NGCD-M3 and broad Neo Geo compatibility remain bounded residuals. Task #49,
+controller QoL, perf metrics, save/UI work, and the non-N64 performance tasks
+remain inventoried/deferred rather than silently dropped.
 
-- **Measure first, then fix** — never blind-patch the recompiler.
-- **Accuracy vs. Speed** — accuracy is preferred, but never below full 60 FPS (raise `JitInterleaving` / perf knobs if below floor).
-- **Commit + push on every good result** — checkpoint working states immediately (`git add -u`, descriptive commit, push).
-- **Auto-deploy after every build** — immediately deploy to device after `assembleDebug`.
-- **UI Toggles** — use `rememberUpdatedState` for state params inside `pointerInput` gesture handlers.
-- **Vulkan Mutex** — the abandon path must NEVER take `vulkan.mutex` (zombie deadlock).
-- **Documentation** — update BOTH handoff.md AND implementation-plan.md on every completed task before moving to next one.
+## Current Working Agreements & Policies
+
+- Read [development-process.md](development-process.md) before changes; its
+  exact-snapshot, independent-review, staging, and publication gates supersede
+  the historical recipes below.
+- Measure first, preserve timing and synchronization defaults, and report
+  unknowns explicitly. No blind recompiler, renderer, cache, RSP, or audio
+  replacement.
+- The abandon path must never take `vulkan.mutex`; preserve save, signing,
+  lifecycle, and multi-system behavior.
+- Update both [handoff.md](handoff.md) and
+  [implementation-plan.md](implementation-plan.md) with evidence, checks,
+  limitations, and the next eligible experiment.
+- Task #4 audio-buffer reuse is cancelled and is not authorized as the next
+  automatic change.
 
 ## Practical Build & Debug Tips
 
