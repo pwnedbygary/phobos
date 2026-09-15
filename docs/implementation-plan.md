@@ -85,7 +85,7 @@ the [archive](implementation-history.md).
 
 This status is not a new verification pass. In particular, Task #61's former
 signing report is historical; release/update safety is owned by the separate
-Task #2, currently blocked waiting for input. Do not represent old signing
+Task #2, now cancelled and not authorized to resume. Do not represent old signing
 evidence as a current APK identity.
 
 ### Explicit current residuals
@@ -99,8 +99,8 @@ evidence as a current APK identity.
   game-specific audio/input/graphics reports need a fresh, bounded matrix
   pass; the core-level fixes are historical evidence, not a blanket claim
   that every set is compatible.
-- **Task #2 release APK update safety:** separate work is blocked waiting for
-  input. This plan does not reopen signing or alter release configuration.
+- **Task #2 release APK update safety:** cancelled; compatibility remains
+  unverified. This plan does not reopen signing or alter release configuration.
 - **Performance comparison:** the v336 source pin is now identified, but the
   attested reference APK, Phobos APK identity, target/device/driver/settings,
   legal ROM hash, and traces are still missing.
@@ -180,7 +180,7 @@ former record reported completion, not that this pass reverified it.
 | 51 | ZX multi-tape swap and multi-file ZIP picker | **Deferred QoL, retained.** [Archive](implementation-history.md#task-51) |
 | 59 | Write-through dcache bypass | **Parked high-risk.** Task 58's direct bypass broke DMA; no default/per-game enablement. [Archive](implementation-history.md#task-59) |
 | 60 | Per-game hash overrides | **Parked.** Revisit only with a demonstrated, measured need and explicit timing review. [Archive](implementation-history.md#task-60) |
-| 61 | Proper release APK signing / in-place upgrades | **Historical record claimed fixed, but current release/update safety is owned by Task #2 and blocked waiting for input.** No current signing assertion or release change in this documentation pass. [Archive](implementation-history.md#task-61) |
+| 61 | Proper release APK signing / in-place upgrades | **Historical record claimed fixed, but current release/update compatibility is unverified; Task #2 is cancelled.** No current signing assertion or release change in this documentation pass. [Archive](implementation-history.md#task-61) |
 | Mischief Makers | N64 RSP accuracy | **Parked.** Reference-RSP/instruction evidence required; no VU guess patch. [Archive](implementation-history.md#mischief-makers) |
 | 63 | PS1 R3000 recompiler | **Deferred, profile first.** Interpreter fallback and independent correctness fixtures required. [Archive](implementation-history.md#task-63) |
 | 64 | PS1 GPU off-CPU / Vulkan | **Deferred, split into measured blitter versus high-risk renderer work.** [Archive](implementation-history.md#task-64) |
@@ -193,7 +193,7 @@ former record reported completion, not that this pass reverified it.
 | 71 | Dynamic speed compensation | **Deferred product/accuracy decision.** Not a generic speedup. [Archive](implementation-history.md#task-71) |
 | 72 | N64 RDP-ParaLLEl comparison | **P0/P1 evidence investigation.** Use pinned v336 only; debug DD branches excluded; no transplant or async toggle from source comparison. [Archive](implementation-history.md#task-72) |
 | Run-Ahead audit | Feature completeness | **Open wiring audit.** The old UI toggle was reported inert; bridge and presentation semantics need a separately reviewed change. [Archive](implementation-history.md#feature-completeness) |
-| Task #2 | Release APK update safety | **Separate blocked task; waiting for input.** Not reopened here. |
+| Task #2 | Release APK update safety | **Cancelled.** Not reopened here; update compatibility remains unverified. |
 | Task #4 | Audio drain-buffer reuse | **Cancelled. Not authorized and not next automatic change.** |
 | Saturn | Core/product scope | **Out of scope** absent an explicit product/licensing decision. |
 

@@ -79,7 +79,7 @@ The old implementation plan's performance section (search `2–3×`, `SyncFull`,
 | JIT cadence should be raised for full speed | `accuracy.hpp:9-16` is 2048*2 and records historic Conker regressions at larger cadence. Preserve default; old FPS comments are reports, not new runs. |
 | Broad perf pass still needs basic compiler tuning | `CMakeLists.txt:4-5` already enables O3, ThinLTO, vectorization and unrolling. `android/app/build.gradle.kts:36-53` sets legacy armv8-a+simd / modern armv8.2-a+fp16+dotprod. Inspect actual compile commands before proposing flags. |
 | Audio callback always locks/copies stream registry | Versioned cache already exists (`PhobosRunner.cpp:155-173`); don't propose an already-landed optimization. |
-| Old overall compatibility/signing status is current | Historical reports remain useful regression targets, not fresh validation. Signing/update safety is outside this audit and separately blocked. |
+| Old overall compatibility/signing status is current | Historical reports remain useful regression targets, not fresh validation. Signing/update safety is outside this audit; its separate task is cancelled and compatibility remains unverified. |
 
 ## Ranked investigation backlog
 

@@ -30,6 +30,7 @@
 !port_to_android.py
 !setup_grade.py
 !/.replit
+!/.gitmodules
 !/replit.nix
 !/replit.md
 

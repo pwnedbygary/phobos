@@ -1,5 +1,30 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Resume with another LLM — start here
+
+Repository: https://github.com/pwnedbygary/phobos, branch `master`.
+Use the portable startup prompt in [coordinator-prompt.md](coordinator-prompt.md).
+No prior chat history or access to Replit is required to read this handoff.
+Verify the checkout, tools and device access rather than assuming this environment.
+
+Read in order:
+1. [Development process](development-process.md): independent review before every authored commit.
+2. [Implementation plan](implementation-plan.md): authoritative current priorities and task dispositions.
+3. [Performance audit](performance-audit.md) and [benchmark protocol](mario-tennis-benchmark.md).
+4. [Implementation history](implementation-history.md) only for relevant historical details.
+
+Next action: establish matched Phobos/v336 APK, device, driver, settings and scene
+identities, then collect baseline traces. No optimization or performance parity
+has been demonstrated. Do not resume the cancelled signing or audio-buffer tasks
+without new authorization. Preserve saves and do not assume APK update compatibility.
+
+Publication preparation: the plan reconciliation received independent PASS,
+including byte-for-byte preservation of the original plan in its archival appendix.
+This follow-up corrects cancelled signing-task status and adds this portable entry
+point, and restores tracking of the existing `.gitmodules` file for fresh clones.
+Documentation and Git-metadata checks/review accompany the commit; no APK/device test
+is implied. Verify GitHub's branch tip against local HEAD after publication.
+
 ## Post-merge environment repair
 
 Scope: configure the absent Replit post-merge hook; no emulator, signing or device
@@ -34,7 +59,7 @@ saves, APK, build, or device data changed. Native performance measurements are
 pending; old FPS reports are historical, not freshly reproduced results.
 Preserve timing defaults. Task #4 audio-buffer reuse is cancelled, not
 authorized, and not the next automatic change. Task #2 release APK update
-safety remains separately blocked waiting for input.
+safety is now cancelled; update compatibility remains unverified.
 
 **Phobos** is an Android N64-first multi-system emulator (package `com.phobos.emulator`, module `:app`, native lib `libphobos_android.so`).
 Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-RDP Vulkan renderer, libadrenotools Turnip driver). UI is Jetpack Compose.
