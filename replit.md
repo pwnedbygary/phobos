@@ -53,6 +53,14 @@ build-tools 36.0.0, NDK 28.2.13676358, CMake 3.22.1, and platform-tools.
 Gradle may install additional required SDK components. Native dependencies
 are restored with recursive Git submodule initialization.
 
+## Post-merge setup
+
+`scripts/post-merge.sh` restores pinned native submodules and runs Gradle `help`
+to validate build configuration. It is non-interactive and does not build APKs,
+install to a device, change signing, or accept SDK licenses. If the SDK is missing,
+run `bash scripts/setup-android-replit.sh` interactively, then retry setup.
+Full APK builds remain available through the Build APKs workflow.
+
 ## Signing and Git
 
 Existing release signing behavior is unchanged: without the configured release

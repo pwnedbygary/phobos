@@ -1,5 +1,13 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Post-merge environment repair
+
+Scope: configure the absent Replit post-merge hook; no emulator, signing or device
+changes. Observed failure: HOOK_NOT_FOUND; native submodule was uninitialized.
+The hook restores pinned submodules and runs Gradle help without prompting for
+licenses. Full APK compilation remains separate. Verification and exact-snapshot
+independent review results are recorded outside the frozen snapshot.
+
 ## Evidence baseline — 2026-09-15
 
 The current performance record is [performance-audit.md](performance-audit.md);

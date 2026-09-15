@@ -25,3 +25,7 @@ args = "bash scripts/build-replit.sh"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 180000

@@ -1,5 +1,13 @@
 # Phobos Emulator — Implementation Plan (revised 2026-08-16)
 
+## Post-merge setup repair
+
+The missing Replit hook is addressed by `scripts/post-merge.sh`: initialize pinned
+submodules, then validate Gradle configuration with `help`. This is not an APK
+build or device verification. SDK license acceptance remains interactive and
+separate. Actual execution and independent snapshot-review results accompany
+the repair outside this document.
+
 > **2026-09-15 superseding performance/process baseline:** Read
 > [performance-audit.md](performance-audit.md), [mario-tennis-benchmark.md](mario-tennis-benchmark.md)
 > and [development-process.md](development-process.md). Historical “2–3×”, “Massive”
