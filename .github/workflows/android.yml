@@ -45,6 +45,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       # The NDK is ~1.5 GB; cache the whole SDK dir so repeat builds don't
       # re-download it. Keyed on the gradle build files + the component list.
