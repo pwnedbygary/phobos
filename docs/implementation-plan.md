@@ -1,5 +1,16 @@
 # Phobos Emulator — Implementation Plan (revised 2026-08-16)
 
+> **2026-09-15 superseding performance/process baseline:** Read
+> [performance-audit.md](performance-audit.md), [mario-tennis-benchmark.md](mario-tennis-benchmark.md)
+> and [development-process.md](development-process.md). Historical “2–3×”, “Massive”
+> async-RDP gain and native-NEON superiority language below is unproven, not a result.
+> The old recommendation to bypass SyncFull or add an async toggle is withdrawn
+> pending DP interrupt/coherency/lifecycle analysis and controlled native evidence.
+> Keep timing defaults unchanged. Older immediate commit/push and broad staging
+> recipes are superseded by exact-snapshot independent PASS and explicit staging.
+> This iteration is a documentation/static-audit baseline, not an optimization
+> implementation or fresh validation of the old completed-feature claims.
+
 > [!IMPORTANT]
 > **Sessions reorganized 2026-08-15:** completed tasks are ARCHIVED (removed from the
 > queue; full write-ups preserved in Detailed Task Notes). All tasks + notes are now

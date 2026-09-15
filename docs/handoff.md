@@ -1,5 +1,23 @@
 # Phobos — Android Multi-System Emulator (ares fork) — HANDOFF
 
+## Evidence baseline — 2026-09-15
+
+The current performance record is [performance-audit.md](performance-audit.md);
+the reproducible comparison gate is [mario-tennis-benchmark.md](mario-tennis-benchmark.md).
+The [development process](development-process.md) and [coordinator prompt](coordinator-prompt.md)
+apply before every authored commit and supersede the historical broad-staging,
+immediate-commit and auto-deploy instructions below. Native measurements are pending;
+old FPS reports are historical, not freshly reproduced results. Preserve timing
+defaults: the historical 60-FPS policy is not authorization to change timing.
+Signing status below is historical and outside this audit; consult the separate
+signing work before distributing or installing APKs.
+
+This iteration changes documentation only. Clean baseline, upstream/reference
+pins, capability checks, findings and next experiment are recorded in the audit.
+No emulator behavior, signing, saves or device data changed. Independent review
+of the final snapshot is required; its hashes/verdict belong in the commit record,
+not a self-referential hashed document.
+
 **Phobos** is an Android N64-first multi-system emulator (package `com.phobos.emulator`, module `:app`, native lib `libphobos_android.so`).
 Native core is a heavily customized fork of **ares** (JIT recompilers, parallel-RDP Vulkan renderer, libadrenotools Turnip driver). UI is Jetpack Compose.
 

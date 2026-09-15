@@ -1,5 +1,14 @@
 # Phobos on Replit
 
+## Required change process
+
+All authored changes follow [development-process](docs/development-process.md)
+and [coordinator-prompt](docs/coordinator-prompt.md), including documentation,
+tests, amendments and release commits. Independent PASS on the exact snapshot
+is required before commit. These supersede older broad-staging/immediate-commit
+instructions. See [performance audit](docs/performance-audit.md) and
+[Mario Tennis protocol](docs/mario-tennis-benchmark.md); no speedup is established.
+
 This is a native Android project, not a web app. Preserve the Kotlin/Compose,
 C++/JNI, Gradle and CMake structure. No browser server or deployment is needed.
 
