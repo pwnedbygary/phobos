@@ -35,16 +35,15 @@ auto Dma::start() -> void {
     break;
 
   case 0xe2dd:
-    //copy bytes from addr1 to addr2, skip odd bytes (libretro neocd
-    //dmaOpCopyOddBytes): per 16-bit source word the destination receives the
-    //word AND its byte-swap — 4 destination bytes per word — the Neo Geo CD's
-    //odd-lane DRAM layout. (MAME's byte-zero-extended variant — which this
-    //port followed — stored [b,00,b,00], halving the 4bpp planes on HUD tile
-    //data: the HUD "black boxes"/glyph artifacts.)
+    //copy words from addr1 to addr2, skip odd bytes: each source word is
+    //written as two destination words, byte-swapped first, then as-is. The
+    //byte-wide DRAMs (FIX/PCM/Z80) keep only the low byte of a word write, so
+    //they receive the source bytes in order; SPR DRAM receives [s1,s0,s0,s1]
+    //in 68K byte order.
     while(count--) {
       n16 data = readWord(address1);
-      writeWord(address2 + 0, data);
-      writeWord(address2 + 2, data << 8 | data >> 8);
+      writeWord(address2 + 0, data << 8 | data >> 8);
+      writeWord(address2 + 2, data);
       address1 += 2;
       address2 += 4;
     }
