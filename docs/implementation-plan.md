@@ -90,10 +90,15 @@ evidence as a current APK identity.
 
 ### Explicit current residuals
 
-- **NGCD-M3:** title-menu text residual remains an open compatibility
-  investigation. The historical candidate is a scoped `0xfc2d` DMA
-  word-destination phase difference; no DMA change is authorized without a
-  bounded, independent check. See
+- **NGCD-M3:** title-menu text fix awaiting device validation (see
+  [handoff](handoff.md#ngcd-m3-title-menu-text-fix--2026-09-24)): `0xe2dd` now
+  writes the byte-swapped word first. FIX/PCM/Z80 DRAM receive the source
+  bytes in order, as in Geolith, libretro NeoCD and MAME, and SPR DRAM
+  matches Geolith and NeoCD. The user's screenshot is consistent with the
+  FIX row-pair swap the old order causes; `tests/ngcd/run-tests.sh` covers it
+  on the host. The historical `0xfc2d` phase candidate is ruled out. The CD
+  sprite tile index (MSB field folded into bits 12..15) and the CD Z80
+  program memory are separate issues recorded in the handoff. See
   [archived Task NGCD-M3](implementation-history.md#task-ngcd-m3).
 - **Neo Geo compatibility:** broad matrix coverage and any remaining
   game-specific audio/input/graphics reports need a fresh, bounded matrix
@@ -170,7 +175,7 @@ former record reported completion, not that this pass reverified it.
 
 | Former ID / heading | Area | Current disposition |
 |---|---|---|
-| NGCD-M3 | Neo Geo CD title-menu text residual | **Open, P1 compatibility investigation.** Preserve the historical evidence; no global fetch or unreviewed DMA change. [Archive](implementation-history.md#task-ngcd-m3) |
+| NGCD-M3 | Neo Geo CD title-menu text residual | **Open, P1; `0xe2dd` fix awaiting device validation.** Screenshot consistent with FIX row pairs swapped; `0xe2dd` byte-wide delivery matches three references (SPR matches Geolith/NeoCD), host harness `tests/ngcd/`; `0xfc2d` phase candidate ruled out; CD sprite tile index and CD Z80 program memory recorded in the handoff. No global fetch change. [Handoff](handoff.md#ngcd-m3-title-menu-text-fix--2026-09-24), [Archive](implementation-history.md#task-ngcd-m3) |
 | 10c/10a remainder: Neo Geo MVS/AES compatibility | Neo Geo | **Open, bounded matrix pass.** PCE/ZX portions are historically resolved; Neo Geo core-level fixes are historical, so do not claim all sets verified. [10a](implementation-history.md#task-10a), [10c](implementation-history.md#task-10c) |
 | 13a, 13b, 13c, 13d | Controller layouts/rebinding/multi-player | **Deferred QoL, retained.** Implement as one hierarchy (global → core → game) after core stability; [13a](implementation-history.md#task-13a), [13b](implementation-history.md#task-13b), [13c](implementation-history.md#task-13c), and [13d](implementation-history.md#task-13d) are archived. |
 | 14, 15, 15a, 16, 18, 19, 31 | UI/touch/shader/polish | **Deferred QoL, retained.** No active implementation instruction. [Archive index](implementation-history.md#task-14) |

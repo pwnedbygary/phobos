@@ -25,6 +25,76 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## NGCD-M3 title-menu text fix — 2026-09-24
+
+Scope: Neo Geo CD only. `ares/ng/disc/dma.cpp` (`0xe2dd` write order) and a
+host harness in `tests/ngcd/`. `0xe2dd` writes wherever its destination points,
+e.g. the FIX, PCM, Z80 and SPR upload zones; the DMA engine only exists on the
+CD, so no MVS/AES path changes. Base `cc8f86f80`, branch `cursor/ngcd-title-text-e2dd-36ae`.
+
+Observations:
+- User screenshot, SamSho CD title menu (2026-09-24, phone capture at about
+  1.4x): each menu letter has a detached top stroke with a gap row below it.
+  Marks like underscores sit after "HOW" and before "GAME", in the columns
+  directly above the "T" of "EXIT" and the "T" of "TO". The footer text,
+  which is off the 8-pixel FIX grid (sprites), is intact.
+- `tests/ngcd/run-tests.sh` drives the real `Dma::start`, the transfer-area
+  `CPU::write` zones, `System::readC` and `LSPC::render` with synthetic data.
+  Expected values come from Geolith (`geo_cd.c`, `geo_lspc.c`), libretro NeoCD
+  (`memory.cpp`, `memory_mapped.cpp`, `video.cpp`) and MAME
+  (`snk/neogeocd.cpp`, `snk/neogeo_spr.cpp`). On the base: 2823 checks,
+  321 failures, all `0xe2dd`. FIX, PCM and Z80 receive every byte pair
+  swapped, where all three references deliver the source bytes in order to
+  byte-wide DRAM. SPR gets `[s0,s1,s1,s0]` instead of Geolith/NeoCD's
+  `[s1,s0,s0,s1]` (MAME's SPR result differs from both). FIX glyphs uploaded
+  this way render 244/256 pixels wrong. With the patch: 0 failures.
+- `0xfc2d` (FIX and SPR), `0xffc5`, the `[1,0,3,2]` sprite plane order, flips
+  and the CDC buffer → `0xffc5` → `LSPC::render` chain already match.
+
+Derived:
+- The screenshot is consistent with FIX row pairs swapped (0↔1, 2↔3, 4↔5,
+  6↔7) in a font whose letters use rows 1..7. FIX byte
+  `((x << 2 & 24) ^ 16) | row` holds one row of a two-pixel column, so a
+  byte-pair swap is a row-pair swap, and only `0xe2dd` produces one in this
+  core. `9230e4d60` introduced the reversed order; the earlier MAME-style code
+  delivered FIX bytes in order.
+- The archived "`0xfc2d` one byte off" candidate quotes `[d0,00,d1,d0]`,
+  which is the host little-endian byte view of the `n16` words holding the
+  reference `[00,d0,d0,d1]` in `ng_spr.raw`. It is not a defect, and flipping
+  it would break the FIX/PCM/Z80 loads that use `0xfc2d`. The archive's
+  "`0xe2dd` verified numerically" note has the same misreading. The Sep-23
+  device trace recorded in the `78c220ad2` commit message (unmerged
+  `fix/ngcd-m3-fc2d-byte-phase`, which merges cleanly with this change) shows
+  `0xfc2d` targeting only PCM, Z80 and FIX.
+
+Limitations and separate findings:
+- PCM and Z80 uploads through `0xe2dd` change too; this is host-tested only
+  and cannot be heard on the device yet (next item).
+- On the CD the Z80 zone is backed only by the APU's 2KiB work RAM, and the
+  Z80 fetches code through `cartridge.readM` (0xFF without a cartridge). Z80
+  sound programs therefore cannot run on the CD before or after this change,
+  and the YM2610 is the core's only audio stream (no CD-audio stream), so
+  NGCD games should be silent (derived from the code, not observed). This
+  separate, pre-existing issue also blocks the older "verify NGCD audio"
+  item below.
+- The CD sprite tile index in `ares/ng/lspc/render.cpp` ORs the odd word's
+  MSB field into tile bits 12..15, while all three references use
+  `even word & 0x7fff`. It is not visible in the screenshot, and `9230e4d60`
+  claims HUD/UI sprites need it, so it needs its own device check.
+
+Checks run (Ubuntu 24.04, g++ 13.3.0):
+`bash tests/ngcd/run-tests.sh /tmp/ngcd-build-A` in this checkout, and the
+same `tests/ngcd` copied into a clean worktree at `cc8f86f80`, run with
+`bash tests/ngcd/run-tests.sh /tmp/ngcd-build-base`. Not run: Android build
+(no SDK/NDK here and `thirdparty/libadrenotools` is not checked out;
+`android.yml` builds release APKs on push) and device validation (no device).
+
+Next eligible experiment: install the CI APK on RP6 `49016109` and check the
+SamSho title menu text. Compare the BIOS menu, other text screens and in-fight
+HUD colours against the base build. If HUD or BIOS colours differ,
+compare the same screen in Geolith or NeoCD before treating it as a
+regression: `9230e4d60` recorded those screens as correct with the old order.
+
 ## Post-merge environment repair
 
 Scope: configure the absent Replit post-merge hook; no emulator, signing or device
