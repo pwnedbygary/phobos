@@ -30,7 +30,14 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 Scope: Neo Geo CD only. `ares/ng/disc/dma.cpp` (`0xe2dd` write order) and a
 host harness in `tests/ngcd/`. `0xe2dd` writes wherever its destination points,
 e.g. the FIX, PCM, Z80 and SPR upload zones; the DMA engine only exists on the
-CD, so no MVS/AES path changes. Base `cc8f86f80`, branch `cursor/ngcd-title-text-e2dd-36ae`.
+CD, so no MVS/AES path changes. Base `cc8f86f80`; commits `23c7a1b5a` (fix),
+`2cac30152` (tests) and `cfa84f339` (docs) from branch
+`cursor/ngcd-title-text-e2dd-36ae`.
+
+Status (2026-09-24): the user tested the change and reported that the SamSho
+CD title-menu text now renders correctly. The APK and device identity were
+not recorded. The Android CI release build (legacy + modern) of `cfa84f339`
+passed in GitHub Actions run 36038721749.
 
 Observations:
 - User screenshot, SamSho CD title menu (2026-09-24, phone capture at about
@@ -63,9 +70,9 @@ Derived:
   reference `[00,d0,d0,d1]` in `ng_spr.raw`. It is not a defect, and flipping
   it would break the FIX/PCM/Z80 loads that use `0xfc2d`. The archive's
   "`0xe2dd` verified numerically" note has the same misreading. The Sep-23
-  device trace recorded in the `78c220ad2` commit message (unmerged
-  `fix/ngcd-m3-fc2d-byte-phase`, which merges cleanly with this change) shows
-  `0xfc2d` targeting only PCM, Z80 and FIX.
+  device trace (2942 DMAs, from temporary probes in unmerged WIP commit
+  `78c220ad2` on `fix/ngcd-m3-fc2d-byte-phase`) showed `0xfc2d` targeting
+  only PCM (256), Z80 (32) and FIX (52), with sprites arriving via `0xffc5`.
 
 Limitations and separate findings:
 - PCM and Z80 uploads through `0xe2dd` change too; this is host-tested only
@@ -89,11 +96,32 @@ same `tests/ngcd` copied into a clean worktree at `cc8f86f80`, run with
 (no SDK/NDK here and `thirdparty/libadrenotools` is not checked out;
 `android.yml` builds release APKs on push) and device validation (no device).
 
-Next eligible experiment: install the CI APK on RP6 `49016109` and check the
-SamSho title menu text. Compare the BIOS menu, other text screens and in-fight
-HUD colours against the base build. If HUD or BIOS colours differ,
-compare the same screen in Geolith or NeoCD before treating it as a
-regression: `9230e4d60` recorded those screens as correct with the old order.
+Remaining checks (not yet reported): compare the BIOS menu, other text screens
+and in-fight HUD colours against a build from before this change. If HUD or
+BIOS colours differ, compare the same screen in Geolith or NeoCD before
+treating it as a regression: `9230e4d60` recorded those screens as correct with
+the old order. The CD sprite tile index and CD Z80 program memory findings
+above are separate follow-ups.
+
+Method notes for future NGCD work (how this was found):
+- Compare against Geolith, libretro NeoCD and MAME source code, not against
+  comments or summaries, and translate their expressions literally. The CD
+  tile-index fold came from porting `(attr & 0x00f0) << 12` (bits 4..7 to
+  16..19) as `attr.bit(4,7) << 12` (bits 12..15).
+- Test the real core on the host before a device round. `bash
+  tests/ngcd/run-tests.sh` needs no SDK, BIOS, disc or device. Add a case for
+  the path you intend to change, and show it failing on the base first.
+- `dumpNgGfx` files such as `ng_spr.raw` and `ng_wram.raw` store `n16` words in
+  host little-endian order, so each byte pair is swapped relative to 68K byte
+  order. Reading them as byte arrays produced the archived `0xfc2d` and
+  `0xe2dd` misreadings.
+- Map the screenshot symptom to a layer before choosing a fix. Rows swapped
+  in pairs inside 8x8 glyphs point to a FIX byte-pair swap; wrong glyphs or
+  tiles point to a tile index; right shapes in wrong colours point to sprite
+  plane or byte order.
+- Keep device rounds to one change. `9230e4d60` verified several rendering
+  and DMA changes together; its `0xe2dd` part broke FIX uploads, and the
+  leftover glitch was then attributed to other causes.
 
 ## Post-merge environment repair
 
