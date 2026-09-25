@@ -60,6 +60,7 @@ auto CPU::Exception::nmi() -> void {
   self.scc.status.tlbShutdown = 0;
   self.scc.status.softReset = 0;
   self.scc.status.errorLevel = 1;
+  self.recompiler.invalidateStateKey();
   self.scc.epcError = self.ipu.pc;
   self.pipeline.setPc(0xffff'ffff'bfc0'0000);
 }

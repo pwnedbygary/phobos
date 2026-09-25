@@ -1095,12 +1095,35 @@ struct CPU : Thread {
       u32 startAddress = 0;
       u32 endAddress = 0;
       u8* sectionDirty = nullptr;
+      u32 generation = 0;  //sectionGeneration of its section when linked in
     };
 
     struct Section {
       Block* blocks[SectionWords];
       u8 lineBlocks[SectionLineCount];
     };
+
+    // Direct-mapped front for block(), for aligned KSEG0 RDRAM PCs only: there
+    // the physical address follows from the PC. An entry's block is valid while
+    // its section is not dirty and has not been cleared since it was linked in.
+    struct FastLookup {
+      u32 vaddr = 0;     //low half; the high half of a KSEG0 PC is all ones
+      u32 stateKey = 0;  //the state key uses bits 0-26
+      Block* block = nullptr;
+    };
+    enum : u32 { FastLookupSize = 4096 };
+
+    static auto isKseg0Rdram(u64 vaddr) -> bool {
+      return vaddr >= 0xffff'ffff'8000'0000ull && vaddr <= 0xffff'ffff'83ef'ffffull;
+    }
+
+    auto fastBlock(u64 vaddr, u32 address, u64 stateKey) const -> Block* {
+      auto& fast = fastLookup[vaddr >> 2 & FastLookupSize - 1];
+      if(fast.vaddr != (u32)vaddr || fast.stateKey != (u32)stateKey) return nullptr;
+      auto index = sectionIndex(address);
+      if(sectionDirty[index] || fast.block->generation != sectionGeneration[index]) return nullptr;
+      return fast.block;
+    }
 
     struct SlowPath {
       std::vector<sljit_jump*> enters;
@@ -1123,8 +1146,15 @@ struct CPU : Thread {
       sectionDirty.resize(SectionCount);
       std::ranges::fill(sections, nullptr);
       std::ranges::fill(sectionDirty, 0);
+      sectionGeneration.assign(SectionCount, 0);
+      fastLookup.assign(FastLookupSize, {});
       activeBlock = nullptr;
+      invalidateStateKey();
     }
+
+    // Must be called after any write to the Status or FCSR fields in the
+    // state key, or to rdram.mapIdentity.
+    auto invalidateStateKey() -> void { modeKeyValid = false; }
 
     auto isRdramAddress(u32 address) const -> bool {
       return address < RdramSize;
@@ -1201,11 +1231,12 @@ struct CPU : Thread {
       }
     }
 
+    auto computeModeKey() const -> u64;
     auto computeStateKey() const -> u64;
     auto reservedInstruction64() const -> bool;
     auto updateStackPointerStateKey(s16 offset) -> void;
     auto section(u32 address) -> Section*;
-    auto block(u64 vaddr, u32 address) -> Block*;
+    auto block(u64 vaddr, u32 address, u64 stateKey) -> Block*;
 
     auto flushDeferredCycles() -> void;
     auto setupPipeline() -> void;
@@ -1245,6 +1276,8 @@ struct CPU : Thread {
     bool emitAllocatorFlushed = false;
     EmitPcMode emitPcMode = EmitPcMode::JitTime;
     StateKey emitStateKey = 0;
+    mutable u64 modeKey = 0;
+    mutable bool modeKeyValid = false;
     u64 emitVaddr = 0;
     u32 emitDeferredCycles = 0;
     u32 emitFpuFastMxcsr = 0;
@@ -1255,6 +1288,8 @@ struct CPU : Thread {
     std::vector<SlowPath> slowPaths;
     std::vector<Section*> sections;
     std::vector<u8> sectionDirty;
+    std::vector<u32> sectionGeneration;
+    std::vector<FastLookup> fastLookup;
   } recompiler{*this};
   s64 jitClockTarget = 0;
 

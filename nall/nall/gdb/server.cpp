@@ -110,11 +110,6 @@ namespace nall::GDB {
     return std::ranges::find(breakpoints, pc) != breakpoints.end();
   }
 
-  auto Server::hasWatchpoints() const -> bool {
-    if(!hasActiveClient) return false;
-    return !watchpointRead.empty() || !watchpointWrite.empty();
-  }
-
   /**
    * NOTE: please read the comment in the header server.hpp file before making any changes here!
    */

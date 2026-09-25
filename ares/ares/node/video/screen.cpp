@@ -243,6 +243,12 @@ auto Screen::refresh() -> void {
   auto input  = _inputB.get();
   auto output = _output.get();
 
+  if(_passthrough) {
+    // The frontend presents this frame itself; hand over the viewport only.
+    platform->video(std::static_pointer_cast<Core::Video::Screen>(shared_from_this()), output + viewX + viewY * width, width * sizeof(u32), viewWidth, viewHeight);
+    return;
+  }
+
   for(u32 y : range(height)) {
     auto source = input  + y * pitch;
     auto target = output + y * width;

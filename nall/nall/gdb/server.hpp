@@ -100,7 +100,11 @@ class Server : public nall::TCPText::Server {
       return !breakpoints.empty() || singleStepActive || !watchpointRead.empty() || !watchpointWrite.empty();
     }
     auto hasBreakpointAt(u64 pc) const -> bool;
-    auto hasWatchpoints() const -> bool;
+    // Inline: the N64 recompiler asks on every block lookup.
+    auto hasWatchpoints() const -> bool {
+      if(!hasActiveClient) return false;
+      return !watchpointRead.empty() || !watchpointWrite.empty();
+    }
     
     auto getPcOverride() const { return pcOverride; };
 

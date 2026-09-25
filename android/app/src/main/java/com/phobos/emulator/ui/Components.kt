@@ -11,9 +11,11 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.R
 import com.phobos.emulator.data.RegionPreference
@@ -51,6 +53,65 @@ fun SettingsCheckboxItem(title: String, checked: Boolean, onCheckedChange: (Bool
         },
         modifier = Modifier.fillMaxWidth().clickable { onCheckedChange(!checked) }
     )
+}
+
+/** A list row with a dropdown picker on the right. */
+@Composable
+fun <T> SettingsDropdownItem(
+    title: String,
+    description: String?,
+    current: T,
+    options: List<T>,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+    enabled: Boolean = true,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ListItem(
+        modifier = Modifier.alpha(if (enabled) 1f else 0.4f),
+        headlineContent = { Text(title) },
+        supportingContent = if (description != null) { { Text(description) } } else null,
+        trailingContent = {
+            Box {
+                TextButton(enabled = enabled, onClick = { expanded = true }) { Text(label(current)) }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    options.forEach { option ->
+                        DropdownMenuItem(text = { Text(label(option)) }, onClick = { onSelect(option); expanded = false })
+                    }
+                }
+            }
+        },
+    )
+}
+
+/** A labeled slider that follows the finger locally and persists once the drag ends. */
+@Composable
+fun SettingsSliderItem(
+    title: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    format: (Float) -> String = { "${(it * 100).roundToInt()}%" },
+    enabled: Boolean = true,
+    onCommit: (Float) -> Unit,
+) {
+    var local by remember { mutableFloatStateOf(value) }
+    LaunchedEffect(value) { local = value }
+    Column(Modifier.alpha(if (enabled) 1f else 0.4f)) {
+        Text(
+            "$title: ${format(local)}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
+        Slider(
+            value = local,
+            onValueChange = { local = it },
+            onValueChangeFinished = { onCommit(local) },
+            valueRange = range,
+            enabled = enabled,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+    }
 }
 
 @Composable

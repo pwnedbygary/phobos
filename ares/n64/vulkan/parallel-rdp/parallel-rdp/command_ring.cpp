@@ -63,12 +63,16 @@ CommandRing::~CommandRing()
 void CommandRing::drain()
 {
 	std::unique_lock<std::mutex> holder{lock};
+	if (write_count == completed_count)
+		return;
+	kick_locked();
 	// BOUNDED drain: if the ring thread is wedged (e.g. waiting on a GPU
 	// fence that Turnip never signals after a soft reset), the unconditional
 	// wait below would hang the emulation thread inside run() forever —
 	// black screen, no output. Wait up to 2s, log, then proceed; the ring
 	// will catch up on a later frame.
 	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+	producer_waiting = true;
 	while (write_count != completed_count)
 	{
 		if (cond.wait_for(holder, std::chrono::milliseconds(100)) == std::cv_status::timeout &&
@@ -80,25 +84,33 @@ void CommandRing::drain()
 			break;
 		}
 	}
+	producer_waiting = false;
 }
 
 void CommandRing::enqueue_command(unsigned num_words, const uint32_t *words)
 {
 	std::unique_lock<std::mutex> holder{lock};
-	// BOUNDED ring-space wait (see drain()): never wedge the caller forever
-	// if the ring thread has stalled. After 2s, drop the command and return
-	// so the emulation thread can keep running.
-	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
-	while (write_count + num_words + 1 > read_count + ring.size())
+	if (write_count + num_words + 1 > read_count + ring.size())
 	{
-		if (cond.wait_for(holder, std::chrono::milliseconds(100)) == std::cv_status::timeout &&
-		    std::chrono::steady_clock::now() >= deadline)
+		kick_locked();
+		// BOUNDED ring-space wait (see drain()): never wedge the caller forever
+		// if the ring thread has stalled. After 2s, drop the command and return
+		// so the emulation thread can keep running.
+		auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+		producer_waiting = true;
+		while (write_count + num_words + 1 > read_count + ring.size())
 		{
-			LOGE("CommandRing::enqueue_command: timed out waiting for ring space "
-			     "(write=%llu read=%llu size=%zu). Dropping command.\n",
-			     (unsigned long long)write_count, (unsigned long long)read_count, ring.size());
-			return;
+			if (cond.wait_for(holder, std::chrono::milliseconds(100)) == std::cv_status::timeout &&
+			    std::chrono::steady_clock::now() >= deadline)
+			{
+				producer_waiting = false;
+				LOGE("CommandRing::enqueue_command: timed out waiting for ring space "
+				     "(write=%llu read=%llu size=%zu). Dropping command.\n",
+				     (unsigned long long)write_count, (unsigned long long)read_count, ring.size());
+				return;
+			}
 		}
+		producer_waiting = false;
 	}
 
 	size_t mask = ring.size() - 1;
@@ -106,7 +118,43 @@ void CommandRing::enqueue_command(unsigned num_words, const uint32_t *words)
 	for (unsigned i = 0; i < num_words; i++)
 		ring[write_count++ & mask] = words[i];
 
-	cond.notify_one();
+	// Android's pthread_cond_signal always makes a futex syscall, so only a
+	// sleeping worker is woken, and within a batch at most once per
+	// KICK_WORDS so it keeps working alongside the producer.
+	notify_pending = true;
+	pending_words += num_words + 1;
+	if (!batching || pending_words >= KICK_WORDS)
+		kick_locked();
+}
+
+void CommandRing::begin_batch()
+{
+	std::lock_guard<std::mutex> holder{lock};
+	batching = true;
+}
+
+void CommandRing::end_batch()
+{
+	std::lock_guard<std::mutex> holder{lock};
+	batching = false;
+	kick_locked();
+}
+
+void CommandRing::kick()
+{
+	std::lock_guard<std::mutex> holder{lock};
+	kick_locked();
+}
+
+void CommandRing::kick_locked()
+{
+	if (!notify_pending)
+		return;
+	notify_pending = false;
+	pending_words = 0;
+	// A worker that is not waiting re-checks for work before it sleeps.
+	if (consumer_waiting)
+		cond.notify_one();
 }
 
 void CommandRing::thread_loop()
@@ -127,14 +175,23 @@ void CommandRing::thread_loop()
 	for (;;)
 	{
 		bool is_idle = false;
+		uint64_t taken_count = 0;
 		{
 			std::unique_lock<std::mutex> holder{lock};
-			if (cond.wait_for(holder, std::chrono::microseconds(500), [this]() { return write_count > read_count; }))
+			consumer_waiting = true;
+			bool has_work = cond.wait_for(holder, std::chrono::microseconds(500), [this]() { return write_count > read_count; });
+			consumer_waiting = false;
+			if (has_work)
 			{
-				uint32_t num_words = ring[read_count++ & mask];
-				tmp_buffer.resize(num_words);
-				for (uint32_t i = 0; i < num_words; i++)
+				// Take everything queued so far under one lock.
+				size_t available = size_t(write_count - read_count);
+				tmp_buffer.resize(available);
+				for (size_t i = 0; i < available; i++)
 					tmp_buffer[i] = ring[read_count++ & mask];
+				taken_count = read_count;
+				// A producer waiting for ring space can continue now.
+				if (producer_waiting)
+					cond.notify_one();
 			}
 			else
 			{
@@ -146,16 +203,33 @@ void CommandRing::thread_loop()
 			}
 		}
 
-		if (tmp_buffer.empty())
+		if (is_idle)
+		{
+			processor->enqueue_command_direct(1, tmp_buffer.data());
+			continue;
+		}
+
+		bool quit = false;
+		size_t pos = 0;
+		while (pos < tmp_buffer.size())
+		{
+			uint32_t num_words = tmp_buffer[pos++];
+			// A zero-length command is the teardown sentinel.
+			if (num_words == 0)
+			{
+				quit = true;
+				break;
+			}
+			processor->enqueue_command_direct(num_words, tmp_buffer.data() + pos);
+			pos += num_words;
+		}
+		if (quit)
 			break;
 
-		processor->enqueue_command_direct(tmp_buffer.size(), tmp_buffer.data());
-		if (!is_idle)
-		{
-			std::lock_guard<std::mutex> holder{lock};
-			completed_count = read_count;
+		std::lock_guard<std::mutex> holder{lock};
+		completed_count = taken_count;
+		if (producer_waiting)
 			cond.notify_one();
-		}
 	}
 }
 }

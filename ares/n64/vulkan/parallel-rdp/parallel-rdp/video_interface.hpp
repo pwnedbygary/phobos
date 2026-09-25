@@ -90,12 +90,28 @@ struct VIScanoutBuffer
 
 class Renderer;
 
+// [Phobos] A framebuffer the RDP used as its color image in a frame that has
+// completed (SYNC_FULL). Lets the VI end the wide-mode transition hold as soon
+// as the buffer it scans out actually holds a rendered frame.
+struct RenderedFramebuffer
+{
+	uint32_t addr = 0;
+	uint32_t width = 0;
+	uint32_t bytes_per_pixel = 0;
+	uint32_t sequence = 0; // SYNC_FULL count when this buffer last completed
+};
+
 class VideoInterface : public Vulkan::DebugChannelInterface
 {
 public:
 	void set_device(Vulkan::Device *device);
 	void set_renderer(Renderer *renderer);
 	void set_vi_register(VIRegister reg, uint32_t value);
+
+	// [Phobos] Most recent completed framebuffers (see RenderedFramebuffer), set
+	// by the command processor right before each scanout.
+	static constexpr unsigned RENDERED_FRAMEBUFFER_HISTORY = 8;
+	void set_rendered_framebuffers(const RenderedFramebuffer *framebuffers, unsigned count);
 
 	void set_rdram(const Vulkan::Buffer *rdram, size_t offset, size_t size);
 	void set_hidden_rdram(const Vulkan::Buffer *hidden_rdram);
@@ -162,16 +178,25 @@ private:
 	VkImageLayout prev_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	bool prev_image_is_external = false;
 
-	// [Phobos] Rogue Squadron menu-transition: hold the previous frame when the
-	// VI display width changes (mode switch) so the first scanout of the new
-	// mode — which reads RDRAM the RDP hasn't rendered yet — doesn't flash
-	// white/rainbow garbage. ~3.5s at 60fps covers the on-device menu texture
-	// load (tuned 2026-08-15: 2s still flashed, 5s was more than needed).
-	// Per-frame double buffering keeps vi_width constant, so it is never
-	// suppressed.
+	// [Phobos] Wide-mode transition hold (Rogue Squadron menu): after the VI width
+	// changes to a wide mode, re-present the previous picture until the RDP has
+	// completed a frame in the buffer the VI now scans out (after the change, so a
+	// buffer address reused across modes does not count), so the unrendered new
+	// buffer never flashes white/rainbow garbage. MODE_CHANGE_HOLD_SCANOUTS is
+	// only a safety cap (~3.5s @ 60fps, the original fixed hold tuned 2026-08-15).
+	// Armed only on a real transition: a previous picture exists and the old width
+	// was stable for MODE_STABLE_SCANOUTS, so boot-time VI setup never freezes
+	// the first frame. Per-frame double buffering keeps vi_width constant.
 	static constexpr uint32_t MODE_CHANGE_HOLD_SCANOUTS = 210; // ~3.5s @ 60fps
+	static constexpr uint32_t MODE_STABLE_SCANOUTS = 30;
 	uint32_t last_vi_width = 0;
 	uint32_t mode_change_hold = 0;
+	uint32_t mode_change_sequence = 0;
+	uint32_t scanouts_in_mode = 0;
+	RenderedFramebuffer rendered_framebuffers[RENDERED_FRAMEBUFFER_HISTORY] = {};
+	unsigned rendered_framebuffer_count = 0;
+	uint32_t newest_rendered_sequence() const;
+	bool origin_rendered_since_mode_change(uint32_t vi_origin) const;
 
 	size_t rdram_offset = 0;
 	size_t rdram_size = 0;

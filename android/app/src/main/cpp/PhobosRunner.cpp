@@ -126,6 +126,8 @@ namespace ares {
   static std::atomic<bool> firstFrameRendered{false};
   static ANativeWindow* nativeWindow = nullptr;
   static AAudioStream* audioStream = nullptr;
+  // audioStream != nullptr, readable without audioMutex (audio() runs per sample).
+  static std::atomic<bool> audioStreamOpen{false};
   // Base name (no extension) of the currently loaded ROM — used to key the
   // per-game save files on disk (saves/<System>/<RomName>.save.ram etc.) so
   // different games never overwrite each other's saves.
@@ -190,8 +192,9 @@ namespace ares {
         // Drain up to ~2048 floats (1024 stereo frames) per iteration.
         size_t take = std::min<size_t>(audioRingSize, 2048);
         chunk.resize(take);
-        for (size_t i = 0; i < take; i++)
-          chunk[i] = audioRing[(audioRingHead + i) % audioRingCapacity];
+        size_t first = std::min(take, audioRingCapacity - audioRingHead);
+        memcpy(chunk.data(), audioRing.data() + audioRingHead, first * sizeof(f32));
+        memcpy(chunk.data() + first, audioRing.data(), (take - first) * sizeof(f32));
         audioRingHead = (audioRingHead + take) % audioRingCapacity;
         audioRingSize -= take;
         // Wake the emulation thread's audio-pacing wait so it can resume
@@ -237,6 +240,33 @@ namespace ares {
              (long long)newXruns, (long long)xruns);
       }
     }
+  }
+
+  // Logical display size of the last presented frame (getVideoGeometry()),
+  // written by the video thread and read by the UI for aspect-correct sizing.
+  static std::atomic<f32> videoDisplayWidth{0.0f};
+  static std::atomic<f32> videoDisplayHeight{0.0f};
+
+  // Display size as ares desktop computes it: the core's scale and pixel aspect
+  // describe the unrotated image, so undo ares' own 90/270 rotation first; the
+  // frontend WonderSwan rotation swaps the axes once more.
+  // tvPicture: the frame size follows the video mode (N64 scans out 240 or 480
+  // lines at 640 dots, PS1 uses 256-640 dots) while the picture always fills a
+  // 4:3 TV, and neither core's pixel aspect says so. Keep 4:3 at the frame's
+  // line count so integer scaling still sees 240 or 480 lines.
+  static auto recordVideoGeometry(const Node::Video::Screen& screen, u32 width, u32 height, bool frontendRotate, bool tvPicture) -> void {
+    bool coreRotated = screen->rotation() == 90 || screen->rotation() == 270;
+    f64 sourceWidth = coreRotated ? height : width;
+    f64 sourceHeight = coreRotated ? width : height;
+    f64 scaleX = screen->scaleX() > 0 ? screen->scaleX() : 1.0;
+    f64 scaleY = screen->scaleY() > 0 ? screen->scaleY() : 1.0;
+    f64 aspectX = screen->aspectX() > 0 ? screen->aspectX() : 1.0;
+    f64 aspectY = screen->aspectY() > 0 ? screen->aspectY() : 1.0;
+    f64 displayHeight = sourceHeight * scaleY;
+    f64 displayWidth = tvPicture ? displayHeight * 4.0 / 3.0 : sourceWidth * scaleX * aspectX / aspectY;
+    if (coreRotated != frontendRotate) std::swap(displayWidth, displayHeight);
+    videoDisplayWidth.store((f32)displayWidth, std::memory_order_relaxed);
+    videoDisplayHeight.store((f32)displayHeight, std::memory_order_relaxed);
   }
 
   static std::mutex windowMutex;
@@ -314,10 +344,45 @@ namespace ares {
   // inputCacheMutex guards these maps: input() runs on the emulation thread
   // while connectDevices() can clear them from the UI/JNI thread, so a clear
   // racing a lookup on std::map is UB (corruption) without the lock.
-  static std::map<const void*, u32> inputButtonCache;
+  struct ButtonBinding {
+    u32 bits = 0;               // VirtualGamepad bits that press this button
+    bool zxKeyboardKey = false; // ZX keyboard-matrix key (sourced from the key sets)
+    bool playerOne = true;      // controller port 1, or not under a port (keyboards)
+    u32 seenPresses = 0;        // pressGeneration(bits) at the last read (quick-tap delivery)
+  };
+  static std::map<const void*, ButtonBinding> inputButtonCache;
   static std::map<const void*, u32> inputAxisCache;  // axis slot + 1; 0 = unmapped
   static s32 inputCacheOrientation = -1;
   static std::mutex inputCacheMutex;
+
+  // Quick taps: every rising edge of a VirtualGamepad bit bumps its counter
+  // (setInput()). A button node whose bits were pressed since its last read
+  // reads as pressed once, so a tap that starts and ends between two core polls
+  // (touch taps can be shorter than a frame) still reaches the game — for every
+  // node that maps the bit, including Neo Geo combo bits shared by two buttons.
+  // Only recent presses replay: a press made while paused or while the game was
+  // not polling (loading) must not surface later as a phantom press.
+  static std::atomic<u32> bitPressCount[32];
+  static std::atomic<s64> bitPressTimeMs[32];
+  static constexpr s64 TAP_REPLAY_WINDOW_MS = 100;
+  static auto steadyMs() -> s64 {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+  static auto pressGeneration(u32 bits) -> u32 {
+    u32 generation = 0;
+    for (u32 remaining = bits; remaining; remaining &= remaining - 1) {
+      generation += bitPressCount[__builtin_ctz(remaining)].load(std::memory_order_acquire);
+    }
+    return generation;
+  }
+  static auto latestPressMs(u32 bits) -> s64 {
+    s64 latest = 0;
+    for (u32 remaining = bits; remaining; remaining &= remaining - 1) {
+      latest = std::max(latest, bitPressTimeMs[__builtin_ctz(remaining)].load(std::memory_order_relaxed));
+    }
+    return latest;
+  }
 
   static auto invalidateInputCaches() -> void {
     std::lock_guard<std::mutex> lock(inputCacheMutex);
@@ -326,11 +391,14 @@ namespace ares {
     inputCacheOrientation = -1;
   }
 
-  // On-screen keyboard state (ZX Spectrum / 128). setKeyboardKey() toggles
-  // membership; AndroidPlatform::input() sources keyboard-button values from
-  // this set so the core's per-frame Keyboard::read() poll sees the press.
-  static std::mutex zxKeyboardMutex;
-  static std::set<string> zxKeysPressed;
+  // On-screen keyboard state (ZX Spectrum / 128 keyboard, MSX keyboard,
+  // ColecoVision keypad). setKeyboardKey() toggles membership;
+  // AndroidPlatform::input() sources those buttons from this set so the core's
+  // keyboard/keypad poll sees the press. keyboardKeyCount mirrors the set size
+  // so input() can skip the lock while nothing is held.
+  static std::mutex keyboardMutex;
+  static std::set<string> keyboardKeysPressed;
+  static std::atomic<u32> keyboardKeyCount{0};
   // Gamepad-scheme-derived keyboard keys (QAOP/ZXZX), set each frame from
   // setInput(); the keyboard input path checks both sets.
   static std::set<string> zxSchemeKeysPressed;
@@ -351,7 +419,7 @@ namespace ares {
   // has an entry here, the ZX scheme path uses it INSTEAD of the built-in
   // scheme mapping (ELITE/QAOP/ZXZX). Layer 2.5 — sits above the scheme
   // defaults, below Layer-1 (physical->bit) rebinding. Guarded by
-  // zxKeyboardMutex like the pressed-key sets.
+  // keyboardMutex like the pressed-key sets.
   static std::map<string, u32> zxKeyBindings;
 
   // Map a VirtualGamepad bit to the ZX keyboard keys for the active scheme.
@@ -406,6 +474,21 @@ namespace ares {
 
   static auto isZxKeyboardSystem(const string& systemName) -> bool {
     return systemName == "ZX Spectrum" || systemName == "ZX Spectrum 128";
+  }
+
+  // Systems whose keyboard or keypad keys can be held from the on-screen
+  // controls (setKeyboardKey). ZX keys are keyboard-only (see input()); MSX
+  // keys and the ColecoVision keypad also keep their gamepad-bit mapping.
+  static auto isOnScreenKeyboardSystem(const string& systemName) -> bool {
+    return isZxKeyboardSystem(systemName) || systemName == "MSX" || systemName == "MSX2" ||
+           systemName == "ColecoVision";
+  }
+
+  static auto clearOnScreenKeys() -> void {
+    std::lock_guard<std::mutex> lock(keyboardMutex);
+    keyboardKeysPressed.clear();
+    zxSchemeKeysPressed.clear();
+    keyboardKeyCount.store(0);
   }
 
   // True if the button name is one of the ZX keyboard matrix labels. The
@@ -522,7 +605,7 @@ namespace ares {
           else if (nodeName == "R2") b = VirtualGamepad::R2;
           else if (nodeName == "L3") b = VirtualGamepad::L3;
           else if (nodeName == "R3") b = VirtualGamepad::R3;
-      } else if (systemName.beginsWith("Neo Geo") && !systemName.contains("Pocket")) {
+      } else if (systemName.beginsWith("Neo Geo") && !systemName.beginsWith("Neo Geo Pocket")) {
           // Neo Geo / Neo Geo CD 4-button default (Xbox-layout reference):
           // X=A, Y=B, A=C, B=D — and the shoulders/stick-click carry the
           // classic button combos (setValue's (buttons & b) != 0 test makes a
@@ -532,6 +615,20 @@ namespace ares {
           else if (nodeName == "B") b = VirtualGamepad::Y | VirtualGamepad::R1 | VirtualGamepad::L1 | VirtualGamepad::L2 | VirtualGamepad::R3;
           else if (nodeName == "C") b = VirtualGamepad::A | VirtualGamepad::R2 | VirtualGamepad::L1 | VirtualGamepad::L2 | VirtualGamepad::R3;
           else if (nodeName == "D") b = VirtualGamepad::B | VirtualGamepad::R2 | VirtualGamepad::R3;
+      } else if (systemName == "Atari 2600") {
+          // Console switches. Game Reset/Select are momentary; ares flips the
+          // difficulty and TV Type switches on each press (a26/riot/io.cpp), so
+          // momentary bits drive all of them. Without these, games that need
+          // Game Reset to start could not be started at all.
+          if      (nodeName == "Reset")            b = VirtualGamepad::Start;
+          else if (nodeName == "Left Difficulty")  b = VirtualGamepad::L1;
+          else if (nodeName == "Right Difficulty") b = VirtualGamepad::R1;
+          else if (nodeName == "TV Type")          b = VirtualGamepad::L2;
+      } else if (systemName == "Master System") {
+          // The console's Pause button raises the NMI (ms/system/controls.cpp).
+          if (nodeName == "Pause") b = VirtualGamepad::Start;
+      } else if (systemName.beginsWith("Neo Geo Pocket")) {
+          if (nodeName == "Option") b = VirtualGamepad::Start;
       }
 
       return b;
@@ -546,6 +643,58 @@ namespace ares {
   }
 
   static bool muteAudioAtomic = false;
+
+  // Per-emulation-thread audio state, in one thread_local: with minSdk < 29
+  // every thread_local access is an emulated-TLS call, and audio() runs once
+  // per output sample.
+  //   pending: mixed samples not yet handed to the audio thread. Each hand-off
+  //   can wake that thread with a futex syscall, so samples go over in blocks
+  //   of audioPushSamples and at the end of each emulated frame.
+  struct AudioThreadState {
+    u64 streamsVersion = 0;
+    std::vector<Node::Audio::Stream> streams;
+    std::vector<f32> pending;
+  };
+  static constexpr size_t audioPushSamples = 256 * 2;  // 256 stereo frames, ~5 ms
+  static auto audioThreadState() -> AudioThreadState& {
+    thread_local AudioThreadState state;
+    return state;
+  }
+
+  static auto pushAudio(std::vector<f32>& samples) -> void {
+    if (samples.empty()) return;
+    if (muteAudioAtomic) std::fill(samples.begin(), samples.end(), 0.0f);
+    bool wasEmpty;
+    {
+      std::lock_guard<std::mutex> lock(audioMutex);
+      if (audioRing.empty()) audioRing.resize(audioRingCapacity);
+      const f32* source = samples.data();
+      size_t count = samples.size();
+      if (count > audioRingCapacity) {
+        source += count - audioRingCapacity;
+        count = audioRingCapacity;
+      }
+      // Overwrite the oldest samples when the emulator out-produces the DAC.
+      size_t overflow = audioRingSize + count > audioRingCapacity ? audioRingSize + count - audioRingCapacity : 0;
+      audioRingHead = (audioRingHead + overflow) % audioRingCapacity;
+      audioRingSize -= overflow;
+      wasEmpty = audioRingSize == 0;
+      size_t tail = (audioRingHead + audioRingSize) % audioRingCapacity;
+      size_t first = std::min(count, audioRingCapacity - tail);
+      memcpy(audioRing.data() + tail, source, first * sizeof(f32));
+      memcpy(audioRing.data(), source + first, (count - first) * sizeof(f32));
+      audioRingSize += count;
+    }
+    // The audio thread only waits while the ring is empty.
+    if (wasEmpty) audioCV.notify_one();
+    samples.clear();
+  }
+
+  static auto flushAudio() -> void {
+    if (pthread_self() != currentEmuThread.load()) return;
+    pushAudio(audioThreadState().pending);
+  }
+
   static bool fastBootAtomic = false;
   static bool autoSaveMemoryAtomic = false;  // "Auto-Save Memory" — disabled by default
   static bool autoLoadMemoryAtomic = false;   // "Auto-Load Memory" — disabled by default
@@ -565,6 +714,22 @@ namespace ares {
   // ::ares::Nintendo64::cpu.countPerOp / overclockFactor at load/reset.
   static std::atomic<s32> n64CountPerOp{2};
   static std::atomic<s32> n64CpuOverclock{0};
+  // Asynchronous RDP (N64 Experimental, default off): SyncFull does not wait
+  // for the GPU. Applies live to ::ares::Nintendo64::vulkan.asynchronousRdp.
+  static std::atomic<bool> n64AsyncRdp{false};
+
+  // With asynchronous RDP the GPU can still be writing RDRAM when the emulation
+  // thread stops; wait for it before snapshotting or replacing that memory
+  // (state save/load, reset). Callers hold runMutex, so no new RDP work starts.
+  static auto drainN64RdpIfAsync() -> void {
+    #if defined(CORE_N64)
+    auto& vulkan = ::ares::Nintendo64::vulkan;
+    if (root && root->name() == "Nintendo 64" && vulkan.enable &&
+        (vulkan.asynchronousRdp.load() || vulkan.rdpWorkPending.load())) {
+      vulkan.drainRdp();
+    }
+    #endif
+  }
   static std::atomic<bool> skipBootRom{false};
   static bool ps1AnalogMode = true;
   static bool orientationVertical = false;
@@ -656,6 +821,7 @@ namespace ares {
       if (resetRequestedAtomic.exchange(false)) {
         std::lock_guard<std::recursive_mutex> lock(*runMutex);
         if (localRoot) {
+            drainN64RdpIfAsync();
             // power(true) = soft reset. Node::System::power() defaults to
             // reset=false, which would take the N64 cold-boot path and
             // destroy/recreate the Vulkan device (poisoning it on Turnip).
@@ -674,6 +840,7 @@ namespace ares {
             }
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
+        flushAudio();
         auto end = std::chrono::steady_clock::now();
 
         // Per-core pacing: the cap target is derived from the core's native
@@ -1022,7 +1189,6 @@ namespace ares {
 
     auto input(Node::Input::Input input) -> void override {
       if (!root) return;
-      string systemName = root->name();
 
       u32 buttons = (u32)inputState.buttons.load();
       f32 lx = inputState.lx.load();
@@ -1040,7 +1206,8 @@ namespace ares {
       }
 
       if (auto button = input->cast<Node::Input::Button>()) {
-          u32 b = 0;
+          ButtonBinding binding;
+          bool tapPending = false;
           {
               std::lock_guard<std::mutex> lock(inputCacheMutex);
               auto it = inputButtonCache.find(button.get());
@@ -1052,15 +1219,23 @@ namespace ares {
                   // unmapped. Without this, resolveButtonBit maps purely by leaf
                   // name and P2's "A" resolves to the SAME bit as P1's "A", so one
                   // pad drives both players (observed on Neo Geo KOF2003).
-                  if (controllerPlayerIndex(button) == 0) {
-                      b = resolveButtonBit(button->name(), systemName, orientationVertical);
-                  } else {
-                      b = 0;
+                  string systemName = root->name();
+                  ButtonBinding fresh;
+                  fresh.playerOne = controllerPlayerIndex(button) == 0;
+                  if (fresh.playerOne) {
+                      fresh.bits = resolveButtonBit(button->name(), systemName, orientationVertical);
                   }
-                  inputButtonCache[button.get()] = b;
-              } else {
-                  b = it->second;
+                  fresh.zxKeyboardKey = isZxKeyboardSystem(systemName) && isZxKeyboardKey(button->name());
+                  fresh.seenPresses = pressGeneration(fresh.bits);
+                  it = inputButtonCache.emplace(button.get(), fresh).first;
               }
+              if (it->second.bits) {
+                  u32 presses = pressGeneration(it->second.bits);
+                  tapPending = presses != it->second.seenPresses &&
+                               steadyMs() - latestPressMs(it->second.bits) < TAP_REPLAY_WINDOW_MS;
+                  it->second.seenPresses = presses;
+              }
+              binding = it->second;
           }
 
           // Always set the value (resetting if not mapped) to ensure state consistency.
@@ -1070,12 +1245,21 @@ namespace ares {
           // press). Kempston joystick buttons (Up/Down/Left/Right/Fire) are NOT matrix
           // keys — they must read from the gamepad bitmask, or the ZX branch would zero
           // them every frame → Kempston joystick dead.
-          if (isZxKeyboardSystem(systemName) && isZxKeyboardKey(button->name())) {
-              std::lock_guard<std::mutex> klock(zxKeyboardMutex);
+          if (binding.zxKeyboardKey) {
+              std::lock_guard<std::mutex> klock(keyboardMutex);
               // Pressed if the on-screen keyboard OR the gamepad scheme holds it.
-              button->setValue(zxKeysPressed.count(button->name()) > 0 || zxSchemeKeysPressed.count(button->name()) > 0);
+              button->setValue(keyboardKeysPressed.count(button->name()) > 0 || zxSchemeKeysPressed.count(button->name()) > 0);
           } else {
-              button->setValue(b != 0 && (buttons & b) != 0);
+              u32 b = binding.bits;
+              bool pressed = tapPending || (b != 0 && (buttons & b) != 0);
+              // MSX keyboard keys and the ColecoVision keypad can also be held from
+              // the on-screen controls; the set is empty unless such a key is held.
+              // Player 1 only: both ColecoVision pads have keypad keys with the same names.
+              if (!pressed && binding.playerOne && keyboardKeyCount.load(std::memory_order_relaxed) != 0) {
+                  std::lock_guard<std::mutex> klock(keyboardMutex);
+                  pressed = keyboardKeysPressed.count(button->name()) > 0;
+              }
+              button->setValue(pressed);
           }
       } else if (auto axis = input->cast<Node::Input::Axis>()) {
           s32 slot = -1;
@@ -1100,17 +1284,6 @@ namespace ares {
                   case 2: value = (s16)(rx * 32767.0f); break;
                   case 3: value = (s16)(ry * 32767.0f); break;
               }
-          }
-
-          // Diagnostic heartbeat only (ares logs nothing per read): every 600th
-          // axis read ≈ every 5-10 s at typical PS1 pad poll rates. The old
-          // "|| abs(value) > 1000" clause logged EVERY deflected-stick read on
-          // the emulation thread — thousands of synchronous logd writes/sec
-          // while the stick moved, which stalled emulation and caused lag.
-          static u64 axisLogCount = 0;
-          if (axisLogCount++ % 2000 == 0) {
-              LOGI("PhobosNativeInput: System='%s' Axis='%s' Matched=%d Value=%d (lx=%.2f, ly=%.2f)",
-                   (const char*)systemName, (const char*)axis->name(), slot >= 0, (int)value, (double)lx, (double)ly);
           }
 
           if (slot >= 0) {
@@ -1140,31 +1313,30 @@ namespace ares {
       // 2026-08-14). The Screen thread is per-system and dies with it, so it
       // cannot become a zombie like the emu thread.
 
-      static u64 frameLogCount = 0;
-      if (frameLogCount++ % 2000 == 0) {
-          LOGD("Video: %s, %ux%u, data[0]=%08x", (const char*)screen->name(), width, height, data ? data[0] : 0);
-      }
-
       lock_guard<std::mutex> lock(windowMutex);
       if (!nativeWindow) return;
 
       if (!firstFrameRendered) firstFrameRendered = true;
 
-      // Special handling for WonderSwan Rotation
-      bool rotate = false;
-      if (root && root->name().contains("WonderSwan") && orientationVertical) {
-          rotate = true;
-      }
+      // WonderSwan vertical games are rotated here, in the frontend.
+      bool rotate = root && root->name().beginsWith("WonderSwan") && orientationVertical;
+      bool tvPicture = root && (root->name() == "Nintendo 64" || root->name() == "PlayStation");
+      recordVideoGeometry(screen, width, height, rotate, tvPicture);
 
-      // Special handling for N64 Vulkan Direct Scanout
       bool isN64Vulkan = false;
       #if defined(CORE_N64)
-      if (root && root->name() == "Nintendo 64" && ::ares::Nintendo64::vulkan.enable) {
-          isN64Vulkan = true;
-      }
+      isN64Vulkan = root && root->name() == "Nintendo 64" && ::ares::Nintendo64::vulkan.enable;
+      // Normal N64 Vulkan frames are presented straight from parallel-RDP's
+      // scanout buffer (VI::refresh passes the Screen through). When the VI's
+      // CPU fallback rendered instead, cpuScanoutActive is set and `data` holds
+      // the picture.
+      bool presentScanout = isN64Vulkan && !::ares::Nintendo64::vi.io.cpuScanoutActive;
+      #else
+      bool presentScanout = false;
       #endif
 
-      // Determine if we should use 2x scaling for sharpness (disable for N64 Vulkan which handles its own res)
+      // Nearest-neighbour 2x for small software frames keeps them sharp when the
+      // compositor scales the window (N64 Vulkan output is already full size).
       bool scale2x = (width <= 320) && !rotate && !isN64Vulkan;
       u32 targetW = rotate ? height : (scale2x ? width * 2 : width);
       u32 targetH = rotate ? width : (scale2x ? height * 2 : height);
@@ -1179,120 +1351,129 @@ namespace ares {
       }
 
       ANativeWindow_Buffer buffer;
-      if (ANativeWindow_lock(nativeWindow, &buffer, nullptr) == 0) {
-        auto* dest = (u32*)buffer.bits;
-        s32 dst_stride = buffer.stride;
+      if (ANativeWindow_lock(nativeWindow, &buffer, nullptr) != 0) return;
+      if ((u32)buffer.width < targetW || (u32)buffer.height < targetH) {
+          // The geometry request did not take effect; writing would overrun the buffer.
+          ANativeWindow_unlockAndPost(nativeWindow);
+          bufferWidth = 0;
+          return;
+      }
+      auto* dest = (u32*)buffer.bits;
+      u32 destStride = (u32)buffer.stride;
 
-        if (lastFrameBuffer.size() < (u64)width * height) lastFrameBuffer.resize(width * height);
+      if (presentScanout) {
+          presentN64Scanout(dest, destStride, width, height);
+      } else if (data) {
+          if (lastFrameBuffer.size() < (u64)width * height) lastFrameBuffer.resize((u64)width * height);
+          u32 sourceStride = pitch / 4;
+          u32 colors = screen->colors();
+          if (rotate) {
+              for (u32 y = 0; y < height; y++) {
+                  u32* saveLine = lastFrameBuffer.data() + y * width;
+                  convertToWindowPixels(data + y * sourceStride, saveLine, width, screen, colors);
+                  // 90 degree clockwise rotation: (x, y) -> (h - 1 - y, x)
+                  for (u32 x = 0; x < width; x++) dest[x * destStride + (height - 1 - y)] = saveLine[x];
+              }
+          } else {
+              for (u32 y = 0; y < height; y++) {
+                  u32* saveLine = lastFrameBuffer.data() + y * width;
+                  convertToWindowPixels(data + y * sourceStride, saveLine, width, screen, colors);
+                  if (scale2x) {
+                      doubleLineWidth(saveLine, width, dest + (y * 2) * destStride, dest + (y * 2 + 1) * destStride);
+                  } else {
+                      memcpy(dest + y * destStride, saveLine, width * sizeof(u32));
+                  }
+              }
+          }
+      }
+      ANativeWindow_unlockAndPost(nativeWindow);
+    }
 
-        const u8* vData = nullptr;
-        u32 vW = 0, vH = 0;
-        #if defined(CORE_N64)
-        if (isN64Vulkan && !::ares::Nintendo64::vi.io.cpuScanoutActive) {
-            // Normal N64 Vulkan scanout. When the VI's CPU fallback rendered
-            // (wide mode — Rogue Squadron's 1024 menu), cpuScanoutActive is
-            // set and we present the CPU-written screen buffer (`data`)
-            // instead of the Vulkan scanout (which parallel-RDP clamps to 640
-            // → black).
-            ::ares::Nintendo64::vulkan.mapScanoutRead(vData, vW, vH);
-        }
-        #endif
+    // Copies the N64 Vulkan scanout (RGBA bytes) into the window, forcing alpha.
+    // mapScanoutRead() takes vulkan.mutex even when the fence wait times out
+    // (vData null), so unmapScanoutRead() must always follow — otherwise the
+    // screen thread keeps the mutex and the emulation thread hangs in
+    // scanoutAsync (the old N64 reset hang).
+    static auto presentN64Scanout(u32* dest, u32 destStride, u32 width, u32 height) -> void {
+      #if defined(CORE_N64)
+      const u8* vData = nullptr;
+      u32 vW = 0, vH = 0;
+      u32 copyW = 0, copyH = 0;
+      ::ares::Nintendo64::vulkan.mapScanoutRead(vData, vW, vH);
+      if (vData) {
+          copyW = std::min(width, vW);
+          copyH = std::min(height, vH);
+          if (::ares::n64DebugLoggingEnabled() && vW && vH) {
+              const u32* dbg0 = (const u32*)vData;
+              const u32* dbgMid = (const u32*)(vData + (vH / 2) * vW * 4);
+              __android_log_print(ANDROID_LOG_INFO, "PhobosV",
+                  "video: vW=%u vH=%u copyW=%u copyH=%u buf0=%08x bufMid=%08x",
+                  vW, vH, copyW, copyH, dbg0[0], dbgMid[vW / 2]);
+          }
+          for (u32 y = 0; y < copyH; y++) {
+              const u32* srcLine = (const u32*)(vData + y * vW * 4);
+              u32* destLine = dest + y * destStride;
+              u32 x = 0;
+              #if defined(__aarch64__)
+              uint32x4_t alpha = vdupq_n_u32(0xFF000000);
+              for (; x + 4 <= copyW; x += 4) vst1q_u32(destLine + x, vorrq_u32(alpha, vld1q_u32(srcLine + x)));
+              #endif
+              for (; x < copyW; x++) destLine[x] = 0xFF000000 | srcLine[x];
+          }
+      }
+      // Whatever the scanout did not cover (display blanked, fence timeout, smaller
+      // scanout) is black; otherwise this window buffer would show an older frame.
+      for (u32 y = 0; y < height; y++) {
+          u32* destLine = dest + y * destStride;
+          for (u32 x = y < copyH ? copyW : 0; x < width; x++) destLine[x] = 0xFF000000;
+      }
+      ::ares::Nintendo64::vulkan.unmapScanoutRead();
+      #endif
+    }
 
-        auto colorMap = [&](u32 p) -> u32 {
-            u32 colors = screen->colors();
-            if (colors > 0 && p < colors) {
-                return screen->lookupPalette(p);
-            }
-            return p;
-        };
+    // ares Screen output (0xAARRGGBB) -> RGBA_8888 window pixels (0xAABBGGRR),
+    // alpha forced opaque. Values below `colors` are still palette indices (only
+    // the LaserActive line-override path can emit those) and resolve through the
+    // palette exactly as before; a vector group containing one finishes scalar.
+    static auto convertToWindowPixels(const u32* source, u32* target, u32 count,
+                                      const Node::Video::Screen& screen, u32 colors) -> void {
+      u32 x = 0;
+      #if defined(__aarch64__)
+      static const uint8_t swapRB[16] = {2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15};
+      const uint8x16_t shuffle = vld1q_u8(swapRB);
+      const uint32x4_t opaque = vdupq_n_u32(0xFF000000);
+      const uint32x4_t paletteLimit = vdupq_n_u32(colors);
+      for (; x + 4 <= count; x += 4) {
+          uint32x4_t p = vld1q_u32(source + x);
+          if (vmaxvq_u32(vcltq_u32(p, paletteLimit)) != 0) break;
+          uint8x16_t swapped = vqtbl1q_u8(vreinterpretq_u8_u32(p), shuffle);
+          vst1q_u32(target + x, vorrq_u32(vreinterpretq_u32_u8(swapped), opaque));
+      }
+      #endif
+      for (; x < count; x++) {
+          u32 p = source[x];
+          if (p < colors) p = screen->lookupPalette(p);
+          target[x] = 0xFF000000 | ((p << 16) & 0x00FF0000) | (p & 0x0000FF00) | ((p >> 16) & 0x000000FF);
+      }
+    }
 
-        if (rotate) {
-            if (!data) { ANativeWindow_unlockAndPost(nativeWindow); return; }
-            s32 src_stride = pitch / 4;
-            for (s32 y = 0; y < (s32)height; y++) {
-                const u32* srcLine = data + y * src_stride;
-                for (s32 x = 0; x < (s32)width; x++) {
-                    u32 p = colorMap(srcLine[x]);
-                    u32 ap = 0xFF000000 | ((p << 16) & 0x00FF0000) | (p & 0x0000FF00) | ((p >> 16) & 0x000000FF);
-                    // 90 degree clockwise rotation: (x, y) -> (h - 1 - y, x)
-                    dest[x * dst_stride + (height - 1 - y)] = ap;
-                    lastFrameBuffer[y * width + x] = ap;
-                }
-            }
-        } else if (isN64Vulkan && !::ares::Nintendo64::vi.io.cpuScanoutActive) {
-            // Direct SIMD NEON vectorized copy from Vulkan RGBA to Android ABGR.
-            // vData can be null when the scanout fence timed out in
-            // mapScanoutRead() — but mapScanoutRead() still acquired
-            // vulkan.mutex (scanoutLock). unmapScanoutRead() MUST run in ALL
-            // cases, otherwise the screen thread leaks vulkan.mutex forever and
-            // the emulation thread blocks in scanoutAsync → run() never
-            // returns → black screen after reset. This was the N64 reset hang.
-            // When the VI's CPU fallback rendered (wide mode), we present the
-            // CPU `data` buffer via the else branch below instead.
-            if (vData) {
-                u32 copyW = std::min(width, vW);
-                u32 copyH = std::min(height, vH);
-                // [Phobos diag] Is the scanout content reaching video()?
-                if (::ares::n64DebugLoggingEnabled() && vW && vH) {
-                    const u32* dbg0 = (const u32*)vData;
-                    const u32* dbgMid = (const u32*)(vData + (vH/2) * vW * 4);
-                    __android_log_print(ANDROID_LOG_INFO, "PhobosV",
-                        "video: vW=%u vH=%u copyW=%u copyH=%u buf0=%08x bufMid=%08x",
-                        vW, vH, copyW, copyH, dbg0[0], dbgMid[vW/2]);
-                }
-                for (s32 y = 0; y < (s32)copyH; y++) {
-                    const u32* srcLine = (const u32*)(vData + y * vW * 4);
-                    u32* destLine = dest + y * dst_stride;
-                    s32 x = 0;
-                    #if defined(__aarch64__) || defined(__arm__)
-                    uint32x4_t alpha = vdupq_n_u32(0xFF000000);
-                    for (; x <= (s32)copyW - 4; x += 4) {
-                        uint32x4_t p = vld1q_u32(srcLine + x);
-                        uint32x4_t result = vorrq_u32(alpha, p);
-                        vst1q_u32(destLine + x, result);
-                    }
-                    #endif
-                    for (; x < (s32)copyW; x++) {
-                        destLine[x] = 0xFF000000 | srcLine[x];
-                    }
-                }
-            }
-            ::ares::Nintendo64::vulkan.unmapScanoutRead();
-        } else if (scale2x) {
-            if (!data) { ANativeWindow_unlockAndPost(nativeWindow); return; }
-            s32 src_stride = pitch / 4;
-            for (s32 y = 0; y < (s32)height; y++) {
-                const u32* srcLine = data + y * src_stride;
-                u32* destLine1 = dest + (y * 2) * dst_stride;
-                u32* destLine2 = dest + (y * 2 + 1) * dst_stride;
-                u32* saveLine = lastFrameBuffer.data() + y * width;
-
-                for (s32 x = 0; x < (s32)width; x++) {
-                    u32 p = colorMap(srcLine[x]);
-                    u32 ap = 0xFF000000 | ((p << 16) & 0x00FF0000) | (p & 0x0000FF00) | ((p >> 16) & 0x000000FF);
-                    destLine1[x * 2] = ap;
-                    destLine1[x * 2 + 1] = ap;
-                    destLine2[x * 2] = ap;
-                    destLine2[x * 2 + 1] = ap;
-                    saveLine[x] = ap;
-                }
-            }
-        } else {
-            if (!data) { ANativeWindow_unlockAndPost(nativeWindow); return; }
-            s32 src_stride = pitch / 4;
-            for (s32 y = 0; y < (s32)height; y++) {
-                const u32* srcLine = data + y * src_stride;
-                u32* destLine = dest + y * dst_stride;
-                u32* saveLine = lastFrameBuffer.data() + y * width;
-                for (s32 x = 0; x < (s32)width; x++) {
-                    u32 p = colorMap(srcLine[x]);
-                    u32 ap = 0xFF000000 | ((p << 16) & 0x00FF0000) | (p & 0x0000FF00) | ((p >> 16) & 0x000000FF);
-                    destLine[x] = ap;
-                    saveLine[x] = ap;
-                }
-            }
-        }
-        ANativeWindow_unlockAndPost(nativeWindow);
+    // Writes each pixel twice across two window lines (nearest-neighbour 2x).
+    // Never reads the window buffer, which may be write-combined memory.
+    static auto doubleLineWidth(const u32* source, u32 width, u32* line1, u32* line2) -> void {
+      u32 x = 0;
+      #if defined(__aarch64__)
+      for (; x + 4 <= width; x += 4) {
+          uint32x4_t p = vld1q_u32(source + x);
+          uint32x4x2_t doubled = vzipq_u32(p, p);
+          vst1q_u32(line1 + x * 2, doubled.val[0]);
+          vst1q_u32(line1 + x * 2 + 4, doubled.val[1]);
+          vst1q_u32(line2 + x * 2, doubled.val[0]);
+          vst1q_u32(line2 + x * 2 + 4, doubled.val[1]);
+      }
+      #endif
+      for (; x < width; x++) {
+          line1[x * 2] = line1[x * 2 + 1] = source[x];
+          line2[x * 2] = line2[x * 2 + 1] = source[x];
       }
     }
 
@@ -1304,7 +1485,7 @@ namespace ares {
       // streams, mix, or push samples into the NEW system's pipeline.
       if (pthread_self() != currentEmuThread.load()) return;
 
-      {
+      if (!audioStreamOpen.load(std::memory_order_acquire)) {
         std::unique_lock<std::mutex> lock(audioMutex);
         if (!audioStream) {
           AAudioStreamBuilder* builder;
@@ -1333,6 +1514,7 @@ namespace ares {
             AAudioStream_requestStart(audioStream);
           }
         }
+        audioStreamOpen.store(audioStream != nullptr, std::memory_order_release);
       }
       // Restart the audio thread if it was stopped (unloadSystem stops it).
       // This MUST be outside the `if (!audioStream)` block: with stream-reuse
@@ -1354,15 +1536,16 @@ namespace ares {
       // must MIX all streams sample-aligned — draining a single stream
       // unmixed is what garbled Mega Drive/CD audio (each stream's pending
       // block was appended sequentially instead of summed).
-      if (audioStream) {
+      if (audioStreamOpen.load(std::memory_order_relaxed)) {
         // Thread-local snapshot cache keyed on audioStreamsVersion. The
         // emulation thread is the only audio() caller and is recreated per
         // load, so the cache is naturally scoped to one system's stream set.
         // This removes the per-call mutex lock + linear scan + heap copy that
         // the ZX ULA (firing audio() millions of times/sec) was paying — the
         // source of the remaining ~1 FPS of fat.
-        thread_local u64 cachedAudioVersion = 0;
-        thread_local std::vector<Node::Audio::Stream> cachedStreams;
+        auto& audioState = audioThreadState();
+        auto& cachedAudioVersion = audioState.streamsVersion;
+        auto& cachedStreams = audioState.streams;
         u64 ver = audioStreamsVersion.load(std::memory_order_acquire);
         if (ver != cachedAudioVersion) {
           std::lock_guard<std::mutex> lock(audioStreamsMutex);
@@ -1391,12 +1574,11 @@ namespace ares {
           cachedAudioVersion = audioStreamsVersion.load(std::memory_order_acquire);
         }
 
-        // Fast path: single stream — drain it directly into the ring (no
-        // lockstep, no clamp). This is the common case for single-stream cores
-        // (N64, GBA, PS1, GB/GBC...) and avoids all mixing overhead.
+        // Fast path: single stream — drain it directly (no lockstep, no
+        // clamp). This is the common case for single-stream cores (N64, GBA,
+        // PS1, GB/GBC...) and avoids all mixing overhead.
+        auto& localBuffer = audioState.pending;
         if (cachedStreams.size() == 1) {
-          thread_local std::vector<f32> localBuffer;
-          localBuffer.clear();
           f64 samples[2];
           while (stream->pending()) {
             u32 channels = stream->read(samples);
@@ -1408,23 +1590,11 @@ namespace ares {
               localBuffer.push_back((f32)samples[1]);
             }
           }
-          if (!localBuffer.empty()) {
-            if (muteAudioAtomic) std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
-            std::lock_guard<std::mutex> lock(audioMutex);
-            if (audioRing.empty()) audioRing.resize(audioRingCapacity);
-            for (f32 s : localBuffer) {
-              audioRing[(audioRingHead + audioRingSize) % audioRingCapacity] = s;
-              if (audioRingSize < audioRingCapacity) audioRingSize++;
-              else audioRingHead = (audioRingHead + 1) % audioRingCapacity;
-            }
-            audioCV.notify_one();
-          }
+          if (localBuffer.size() >= audioPushSamples) pushAudio(localBuffer);
           return;
         }
 
         // Multi-stream: lockstep mix using the cached snapshot (no copy).
-        thread_local std::vector<f32> localBuffer;
-        localBuffer.clear();
 
         // Lockstep mixing (mirrors upstream desktop ares Program::audio):
         // emit one output frame only when EVERY stream has a pending frame;
@@ -1458,19 +1628,7 @@ namespace ares {
           drained++;
         }
 
-        if (!localBuffer.empty()) {
-            if (muteAudioAtomic) {
-                std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
-            }
-            std::lock_guard<std::mutex> lock(audioMutex);
-            if (audioRing.empty()) audioRing.resize(audioRingCapacity);
-            for (f32 s : localBuffer) {
-              audioRing[(audioRingHead + audioRingSize) % audioRingCapacity] = s;
-              if (audioRingSize < audioRingCapacity) audioRingSize++;
-              else audioRingHead = (audioRingHead + 1) % audioRingCapacity; // overwrite oldest
-            }
-            audioCV.notify_one();
-        }
+        if (localBuffer.size() >= audioPushSamples) pushAudio(localBuffer);
       }
     }
 
@@ -1828,6 +1986,11 @@ namespace ares {
   systemUnloading.store(true);
     isPausedAtomic = true;
     fastForwardAtomic = false;
+    // Keys held on the on-screen keyboard must not carry into the next game.
+    clearOnScreenKeys();
+    // The next game reports its own geometry with its first frame.
+    videoDisplayWidth.store(0.0f);
+    videoDisplayHeight.store(0.0f);
     // A reset requested during a hung session must NOT carry into the next
     // system: the abandoned thread never consumed it, and a fresh load would
     // consume it as a soft-reset right after boot → CPU stuck at the boot ROM
@@ -1933,6 +2096,7 @@ namespace ares {
           AAudioStream_requestStop(oldStream);
           AAudioStream_close(oldStream);
           audioStream = nullptr;
+          audioStreamOpen.store(false, std::memory_order_release);
           // Bounded wait for AAudio teardown (dispatch thread exit).
           constexpr int kMaxWaitMs = 300;
           for (int i = 0; i < kMaxWaitMs; i += 10) {
@@ -2538,6 +2702,9 @@ else if (port->type() == "Keyboard") {
       ::ares::Nintendo64::cpu.overclockFactor = n64CpuOverclock.load();
       ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
       ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
+      ::ares::Nintendo64::vulkan.asynchronousRdp = n64AsyncRdp.load();
+      // video() below presents the Vulkan scanout directly (see VI::refresh).
+      ::ares::Nintendo64::vulkan.frontendPresentsScanout = true;
       bool is64DD = (identifiedSystem == "Nintendo 64DD" || extension == "ndd" || extension == "d64" || secondaryMedium != nullptr);
       ::ares::Nintendo64::system.expansionPak = n64ExpansionPak.load();
 
@@ -2895,6 +3062,7 @@ else if (port->type() == "Keyboard") {
     ::ares::Nintendo64::vulkan.outputUpscale = n64SupersampleScanout.load() ? 1 : (u32)n64UpscaleFactor.load();
     ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
     ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
+    ::ares::Nintendo64::vulkan.asynchronousRdp = n64AsyncRdp.load();
     #endif
     LOGI("System reset requested");
   }
@@ -2909,6 +3077,7 @@ else if (port->type() == "Keyboard") {
     bool wasPaused = isPausedAtomic.exchange(true);
     lock_guard<recursive_mutex> lock(*runMutex);
     if (!root) { isPausedAtomic.store(wasPaused); return false; }
+    drainN64RdpIfAsync();
     auto s = root->serialize(true);
     bool result = nall::file::write(path, {s.data(), s.size()});
     LOGI("Save state to %s: %s", path, result ? "success" : "failed");
@@ -2932,6 +3101,7 @@ else if (port->type() == "Keyboard") {
     if (data.size() == 0) { LOGE("loadState: nall::file::read returned empty data for %s", (const char*)path); isPausedAtomic.store(wasPaused); return false; }
 
     auto unserializeStart = std::chrono::steady_clock::now();
+    drainN64RdpIfAsync(); // in-flight GPU writes must not land in the restored RDRAM
     nall::serializer s(data.data(), data.size());
     bool result = root->unserialize(s);
     auto unserializeEnd = std::chrono::steady_clock::now();
@@ -3000,6 +3170,16 @@ else if (port->type() == "Keyboard") {
     if (factor > 5) factor = 5;
     n64CpuOverclock = factor;
     LOGI("N64 CPU overclock factor set to %d (2^%d) (applies on next reset)", factor, factor);
+  }
+  // Unlike the VI settings above this only changes whether SyncFull waits for
+  // the GPU, so it is safe to apply live. Turning it off takes effect at the
+  // next SyncFull, which waits for all earlier work.
+  auto setN64AsyncRdp(bool enabled) -> void {
+    n64AsyncRdp = enabled;
+    #if defined(CORE_N64)
+    ::ares::Nintendo64::vulkan.asynchronousRdp = enabled;
+    #endif
+    LOGI("N64 asynchronous RDP %s (applies immediately)", enabled ? "enabled" : "disabled");
   }
   auto setN64ExpansionPak(bool enabled) -> void {
     if (n64ExpansionPak == enabled) return;
@@ -3098,15 +3278,20 @@ else if (port->type() == "Keyboard") {
   auto setLoadDiskImageToRam(bool enabled) -> void { /* Deprecated */ }
 
   auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void {
-      static u64 inputLogCount = 0;
-      if (inputLogCount++ % 30 == 0 && (abs(lx) > 0.05f || abs(ly) > 0.05f || abs(rx) > 0.05f || abs(ry) > 0.05f)) {
-          LOGI("PhobosRunner: setInput LS(%.2f, %.2f) RS(%.2f, %.2f) BTNS=%08x", (double)lx, (double)ly, (double)rx, (double)ry, buttons);
-      }
       inputState.lx = lx;
       inputState.ly = ly;
       inputState.rx = rx;
       inputState.ry = ry;
-      inputState.buttons = buttons;
+      u32 previous = (u32)inputState.buttons.exchange(buttons);
+      u32 rising = (u32)buttons & ~previous;
+      if (rising && !isPausedAtomic.load(std::memory_order_relaxed)) {
+          s64 now = steadyMs();
+          for (; rising; rising &= rising - 1) {
+              u32 bit = __builtin_ctz(rising);
+              bitPressTimeMs[bit].store(now, std::memory_order_relaxed);
+              bitPressCount[bit].fetch_add(1, std::memory_order_release);  // publishes the time
+          }
+      }
 
       // ZX gamepad control scheme: translate the gamepad bitmask into
       // keyboard keys for the active scheme (QAOP / ZXZX / ELITE). Updated
@@ -3137,7 +3322,7 @@ else if (port->type() == "Keyboard") {
               if (scheme == 4) {
                   std::map<string, u32> overrides;
                   {
-                      std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+                      std::lock_guard<std::mutex> lock(keyboardMutex);
                       overrides = zxKeyBindings;
                   }
                   for (u32 bit = 1; bit; bit <<= 1) {
@@ -3155,7 +3340,7 @@ else if (port->type() == "Keyboard") {
               }
           }
           {
-              std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+              std::lock_guard<std::mutex> lock(keyboardMutex);
               zxSchemeKeysPressed.swap(schemeKeys);
           }
       }
@@ -3176,7 +3361,7 @@ else if (port->type() == "Keyboard") {
   // (0 = clear). Takes effect immediately on the next setInput.
   auto setZxKeyBinding(const char* label, s32 bit) -> void {
       if (!label) return;
-      std::lock_guard<std::mutex> lock(zxKeyboardMutex);
+      std::lock_guard<std::mutex> lock(keyboardMutex);
       if (bit == 0) {
           zxKeyBindings.erase(label);
           LOGI("ZX key binding cleared: %s", label);
@@ -3244,16 +3429,19 @@ else if (port->type() == "Keyboard") {
     return (s32)pct;
   }
 
-  // ZX Spectrum (and other keyboard-based cores): press/release a keyboard
-  // key by its matrix label (e.g. "J", "ENTER", "SPACE BREAK"). The pressed
-  // state lives in a set that AndroidPlatform::input() sources keyboard-button
-  // values from each frame (the core's Keyboard::read() polls platform->input).
+  // Keyboard-based cores (ZX Spectrum, MSX, ColecoVision keypad): press or
+  // release a key by its core input label (e.g. "J", "ENTER", "SPACE BREAK",
+  // "RETURN", "F1 F6", "#"). AndroidPlatform::input() sources those buttons
+  // from the set whenever the core polls its keyboard/keypad.
   auto setKeyboardKey(const char* label, bool pressed) -> void {
-    if (!root || !label || !isZxKeyboardSystem(root->name())) return;
+    if (!label) return;
+    // Releases are always applied so a key can't stay latched across a reload.
+    if (pressed && (!root || !isOnScreenKeyboardSystem(root->name()))) return;
     string key = label;
-    std::lock_guard<std::mutex> lock(zxKeyboardMutex);
-    if (pressed) zxKeysPressed.insert(key);
-    else zxKeysPressed.erase(key);
+    std::lock_guard<std::mutex> lock(keyboardMutex);
+    if (pressed) keyboardKeysPressed.insert(key);
+    else keyboardKeysPressed.erase(key);
+    keyboardKeyCount.store((u32)keyboardKeysPressed.size());
   }
 
   // Start playback of the ZX Spectrum tape (equivalent to ares desktop's
@@ -3421,6 +3609,7 @@ else if (port->type() == "Keyboard") {
             audioStreamsVersion.fetch_add(1, std::memory_order_release);
         }
         ::ares::Nintendo64::vulkan.enable = true;  // settings persist from cart load
+        ::ares::Nintendo64::vulkan.frontendPresentsScanout = true;
         const char* regionString = [&]() -> const char* {
             // No PAL 64DD exists; every non-NTSC-U preference uses NTSC-J.
             if (regionPreference == 2 || regionPreference == 3 ||
@@ -3546,6 +3735,9 @@ else if (port->type() == "Keyboard") {
     return logs;
   }
   auto isFirstFrameRendered() -> bool { return firstFrameRendered.load(); }
+  auto getVideoGeometry() -> VideoGeometry {
+    return {videoDisplayWidth.load(std::memory_order_relaxed), videoDisplayHeight.load(std::memory_order_relaxed)};
+  }
   auto getPerformanceStats() -> PerformanceStats {
     PerformanceStats stats;
     stats.fps = currentFps.load();
@@ -3561,6 +3753,19 @@ else if (port->type() == "Keyboard") {
     return stats;
   }
   auto takeScreenshot(const char* path) -> bool {
+    #if defined(CORE_N64)
+    // N64 Vulkan frames are presented straight from the scanout buffer and never
+    // pass through lastFrameBuffer, so read the retained scanout (valid while
+    // paused) and convert RGBA bytes to the ARGB the PNG encoder expects.
+    if (root && root->name() == "Nintendo 64" && ::ares::Nintendo64::vulkan.enable &&
+        !::ares::Nintendo64::vi.io.cpuScanoutActive) {
+      std::vector<u32> pixels;
+      u32 width = 0, height = 0;
+      if (!::ares::Nintendo64::vulkan.readScanout(pixels, width, height)) return false;
+      for (auto& p : pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
+      return nall::Encode::PNG::RGBA8(path, pixels.data(), (s32)width * 4, (s32)width, (s32)height);
+    }
+    #endif
     lock_guard<mutex> lock(windowMutex);
     if (lastFrameBuffer.empty() || currentWidth == 0 || currentHeight == 0) return false;
     std::vector<u32> converted;

@@ -32,6 +32,13 @@ namespace ares {
     bool isAdrenoDriver;
   };
 
+  // Logical size of the last presented frame after the core's pixel-aspect
+  // correction (0 x 0 before the first frame of a game).
+  struct VideoGeometry {
+    f32 width;
+    f32 height;
+  };
+
   auto initialize(const char* systemName, const char* uri, const char* romName) -> bool;
   auto unloadSystem() -> void;
   auto setPause(bool paused) -> void;
@@ -63,6 +70,7 @@ namespace ares {
   auto setN64ViOverclock(s32 percent) -> void;
   auto setN64CountPerOp(s32 value) -> void;
   auto setN64CpuOverclock(s32 factor) -> void;
+  auto setN64AsyncRdp(bool enabled) -> void;
   auto setN64Pak(const char* pakName) -> void;
   auto getRumbleState() -> bool;
   auto setPs1AnalogMode(bool enabled) -> void;
@@ -96,4 +104,5 @@ namespace ares {
   auto setZxTapeMuted(bool muted) -> void;
   auto getZxTapeProgress() -> s32;
   auto getPerformanceStats() -> PerformanceStats;
+  auto getVideoGeometry() -> VideoGeometry;
 }

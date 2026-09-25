@@ -2,6 +2,8 @@ package com.phobos.emulator.ui
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Environment
 import android.os.VibrationEffect
@@ -22,6 +24,11 @@ import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
+import com.phobos.emulator.ui.touch.ElementOverride
+import com.phobos.emulator.ui.touch.TouchFamily
+import com.phobos.emulator.ui.touch.TouchLayoutCodec
+import com.phobos.emulator.ui.touch.TouchPrefs
+import com.phobos.emulator.ui.touch.touchLayoutKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -32,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -39,6 +47,7 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.util.zip.CRC32
 import java.util.zip.ZipInputStream
+import kotlin.math.roundToInt
 
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -49,6 +58,14 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class InstalledDriver(val name: String, val path: String, val source: String, val tag: String)
+
+/** Logical picture size after the core's pixel-aspect correction (e.g. SNES ≈ 292.6 x 224, GBA 240 x 160). */
+data class VideoGeometry(val width: Float, val height: Float) {
+    val aspect: Float get() = width / height
+}
+
+/** A filled save-state slot: its preview (null for states saved before previews existed) and save time. */
+data class StateSlotPreview(val image: Bitmap?, val savedAtMillis: Long)
 private data class DriverSidecar(val owner: String, val repo: String, val tag: String)
 
 class MainViewModel(private val context: Context, private val settingsStore: SettingsStore) : ViewModel(), DefaultLifecycleObserver {
@@ -67,9 +84,15 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     private val _driverSuccessEvent = MutableSharedFlow<String>()
     val driverSuccessEvent = _driverSuccessEvent.asSharedFlow()
 
-    // Task 17: slot index reserved for the "Auto" state (saved on unload,
-    // loaded on boot). Any negative slot maps to <rom>.state.auto.
-    companion object { const val AUTO_STATE_SLOT = -1 }
+    companion object {
+        // Task 17: slot index reserved for the "Auto" state (saved on unload,
+        // loaded on boot). Any negative slot maps to <rom>.state.auto.
+        const val AUTO_STATE_SLOT = -1
+
+        private const val N64_APPLIES_ON_RESET = "Takes effect after Reset System or reloading the game"
+        private const val N64_APPLIES_ON_RELOAD = "Takes effect the next time the game is loaded"
+        private const val PREVIEW_MAX_WIDTH = 320
+    }
 
     private var wasEmulationRunningBeforePause = false
 
@@ -98,12 +121,32 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setColorEmulation(enabled: Boolean) = viewModelScope.launch { settingsStore.setColorEmulation(enabled) }
     fun setInterframeBlending(enabled: Boolean) = viewModelScope.launch { settingsStore.setInterframeBlending(enabled) }
     fun setOverscan(enabled: Boolean) = viewModelScope.launch { settingsStore.setOverscan(enabled) }
-    fun setRunAhead(enabled: Boolean) = viewModelScope.launch { settingsStore.setRunAhead(enabled) }
     fun setAutoSaveState(enabled: Boolean) = viewModelScope.launch { settingsStore.setAutoSaveState(enabled) }
     fun setAutoLoadState(enabled: Boolean) = viewModelScope.launch { settingsStore.setAutoLoadState(enabled) }
     fun setN64Upscale(factor: Int) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64Upscale(factor)
         PhobosCore.setN64Upscale(factor)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
+    }
+
+    // Most N64 Experimental options are only read by the core at load or reset
+    // (PhobosRunner.cpp setN64*: changing the RDP scanout pipeline mid-frame can
+    // deadlock the GPU fence). Say so while a game runs instead of appearing to
+    // do nothing. Debounced so adjusting several options shows one toast.
+    private var n64NoticeJob: kotlinx.coroutines.Job? = null
+    private fun noticeN64SettingDeferred(message: String) {
+        if (!_isLoaded.value || !currentSystemName.contains("Nintendo 64")) return
+        n64NoticeJob?.cancel()
+        n64NoticeJob = viewModelScope.launch(Dispatchers.Main) {
+            delay(300)
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Asynchronous RDP applies immediately (it only changes whether SyncFull waits for the GPU). */
+    fun setN64AsyncRdp(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64AsyncRdp(enabled)
+        PhobosCore.setN64AsyncRdp(enabled)
     }
     fun setCustomDriverPath(path: String) = viewModelScope.launch {
         settingsStore.setCustomDriverPath(path)
@@ -130,6 +173,8 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setN64ExpansionPak(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64ExpansionPak(enabled)
         PhobosCore.setN64ExpansionPak(enabled)
+        // RDRAM is sized when the game loads (ares n64 System::load).
+        noticeN64SettingDeferred(N64_APPLIES_ON_RELOAD)
     }
 
     // ZX per-core control scheme + rebinds (Layer 2.5 — the CUSTOM scheme).
@@ -161,38 +206,46 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setN64DisableVIProcessing(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64DisableVIProcessing(enabled)
         PhobosCore.setN64DisableVIProcessing(enabled)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
     }
     fun setN64WeaveDeinterlacing(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64WeaveDeinterlacing(enabled)
         PhobosCore.setN64WeaveDeinterlacing(enabled)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
     }
     fun setN64SupersampleScanout(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64SupersampleScanout(enabled)
         PhobosCore.setN64SupersampleScanout(enabled)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
     }
     fun setN64ViOverclock(percent: Int) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64ViOverclock(percent)
         PhobosCore.setN64ViOverclock(percent)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
     }
     fun setN64UseDefaultCountPerOp(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64UseDefaultCountPerOp(enabled)
         // When "use default" is on, force the stock value (2) to native.
         PhobosCore.setN64CountPerOp(if (enabled) 2 else settings.value.n64CountPerOp)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
     }
     fun setN64CountPerOp(value: Int) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64CountPerOp(value)
         settingsStore.setN64UseDefaultCountPerOp(false)
         PhobosCore.setN64CountPerOp(value)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
     }
     fun setN64UseDefaultCpuOverclock(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64UseDefaultCpuOverclock(enabled)
         // When "use default" is on, force the stock value (0) to native.
         PhobosCore.setN64CpuOverclock(if (enabled) 0 else settings.value.n64CpuOverclock)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
     }
     fun setN64CpuOverclock(factor: Int) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64CpuOverclock(factor)
         settingsStore.setN64UseDefaultCpuOverclock(false)
         PhobosCore.setN64CpuOverclock(factor)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
     }
     fun setN64Pak(pak: String) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64Pak(pak)
@@ -204,6 +257,17 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     }
     fun setFullScreenMode(enabled: Boolean) = viewModelScope.launch { settingsStore.setFullScreenMode(enabled) }
     fun setShowTouchControls(enabled: Boolean) = viewModelScope.launch { settingsStore.setShowTouchControls(enabled) }
+    fun updateTouchPrefs(transform: (TouchPrefs) -> TouchPrefs) = viewModelScope.launch {
+        settingsStore.updateTouchPrefs(transform)
+    }
+    fun touchLayoutOverrides(family: TouchFamily, landscape: Boolean): Map<String, ElementOverride> =
+        TouchLayoutCodec.decode(settings.value.touchLayouts[touchLayoutKey(family, landscape)])
+    fun saveTouchLayout(family: TouchFamily, landscape: Boolean, overrides: Map<String, ElementOverride>) = viewModelScope.launch {
+        settingsStore.setTouchLayout(touchLayoutKey(family, landscape), TouchLayoutCodec.encode(overrides))
+    }
+    fun resetTouchLayout(family: TouchFamily, landscape: Boolean) = viewModelScope.launch {
+        settingsStore.setTouchLayout(touchLayoutKey(family, landscape), "")
+    }
     fun setShowPerformanceMonitor(enabled: Boolean) = viewModelScope.launch { settingsStore.setShowPerformanceMonitor(enabled) }
     fun setPerfShowFps(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowFps(enabled) }
     fun setPerfShowFrameTime(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowFrameTime(enabled) }
@@ -376,13 +440,40 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         }
     }
 
+    /** File name of a state slot; slot < 0 is the Auto slot (Task 17). */
+    private fun stateFileName(romName: String, slot: Int) =
+        if (slot < 0) "$romName.state.auto" else "$romName.state$slot"
+
+    private fun slotLabel(slot: Int) = if (slot < 0) "Auto" else "Slot $slot"
+
+    // Task 50 preview stored next to its state. PNG data under a non-image
+    // extension so gallery apps don't index save-state folders on shared storage.
+    private fun thumbnailName(stateFileName: String) = "$stateFileName.thumb"
+
+    // Bumped after a state is saved or deleted so slot previews reload.
+    private val _stateRevision = MutableStateFlow(0)
+    val stateRevision: StateFlow<Int> = _stateRevision.asStateFlow()
+
     // Shared save logic (also used by Auto-Save State, Task 17 — slot < 0 = "Auto").
     // Must run on Dispatchers.IO; performs the native snapshot + copies the result
     // to the configured SAF path (or internal fallback). Returns success.
     private suspend fun performSaveState(systemName: String, romName: String, slot: Int): Boolean {
-        val fileName = if (slot < 0) "$romName.state.auto" else "$romName.state$slot"
-        val slotLabel = if (slot < 0) "Auto" else "Slot $slot"
-        val tempFile = File(context.cacheDir, "temp_state")
+        // Per-call temp files, so a concurrent load or save can't replace this state before it is copied.
+        val tempFile = File(context.cacheDir, "state-save-${System.nanoTime()}.tmp")
+        val tempThumb = File(context.cacheDir, "state-thumb-${System.nanoTime()}.tmp")
+        try {
+            return saveStateFromTemp(systemName, romName, slot, tempFile, tempThumb)
+        } finally {
+            tempFile.delete()
+            tempThumb.delete()
+        }
+    }
+
+    private suspend fun saveStateFromTemp(
+        systemName: String, romName: String, slot: Int, tempFile: File, tempThumb: File,
+    ): Boolean {
+        val fileName = stateFileName(romName, slot)
+        val slotLabel = slotLabel(slot)
         val sanitizedName = getSanitizedSystemName(systemName)
 
         // 1. Tell native to save to a local accessible path
@@ -395,12 +486,15 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             return false
         }
 
+        // Best effort: a failed capture only drops the slot's preview, never the save.
+        val thumb = tempThumb.takeIf { capturePreview(it) }
+
         // 2. Copy from local path to the user's selected SAF path.
         //    Task 41: fall back to internal storage when no SAF path is
         //    configured so states aren't silently lost.
         val baseUriString = settings.value.statesPath
         val internalStatesDir = File(context.filesDir, "states/$sanitizedName")
-        return try {
+        val saved = try {
             if (baseUriString.isNotEmpty()) {
                 val baseUri = Uri.parse(baseUriString)
                 val rootDir = DocumentFile.fromTreeUri(context, baseUri)
@@ -410,6 +504,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                     context.contentResolver.openOutputStream(stateFile.uri)?.use { output ->
                         tempFile.inputStream().use { input -> input.copyTo(output) }
                     }
+                    systemDir?.let { writeSafThumbnail(it, thumbnailName(fileName), thumb) }
                     Log.i("Phobos", "Synced state to SAF: ${stateFile.uri}")
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
@@ -420,6 +515,8 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                 // Internal fallback: filesDir/states/<system>/<file>
                 if (!internalStatesDir.exists()) internalStatesDir.mkdirs()
                 tempFile.copyTo(File(internalStatesDir, fileName), overwrite = true)
+                val internalThumb = File(internalStatesDir, thumbnailName(fileName))
+                runCatching { if (thumb != null) thumb.copyTo(internalThumb, overwrite = true) else internalThumb.delete() }
                 Log.i("Phobos", "Saved state to internal: ${File(internalStatesDir, fileName).absolutePath}")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
@@ -433,7 +530,98 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             }
             false
         }
+        if (saved) _stateRevision.update { it + 1 }
+        return saved
     }
+
+    /**
+     * Writes a menu-sized PNG of the current frame to [target]. The native screenshot is a
+     * full-size uncompressed PNG (about 20 MB for a 4x N64 frame), so it is downscaled first.
+     */
+    private fun capturePreview(target: File): Boolean {
+        val shot = File(context.cacheDir, "state-shot-${System.nanoTime()}.png")
+        return try {
+            if (!PhobosCore.takeScreenshot(shot.absolutePath) || shot.length() == 0L) return false
+            val bitmap = toDisplayAspect(decodePreview { shot.inputStream() } ?: return false)
+            target.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+            target.length() > 0
+        } catch (e: Exception) {
+            Log.w("Phobos", "State preview not captured: ${e.message}")
+            false
+        } finally {
+            shot.delete()
+        }
+    }
+
+    /**
+     * Stretches a frame to the picture's display aspect (an N64 progressive scanout is
+     * 640x240 but shows at 4:3). Skipped when the picture is rotated relative to the frame
+     * (WonderSwan vertical), since the screenshot is not.
+     */
+    private fun toDisplayAspect(bitmap: Bitmap): Bitmap {
+        val geometry = PhobosCore.getVideoGeometry()
+        if (geometry.size != 2 || geometry[0] <= 0f || geometry[1] <= 0f) return bitmap
+        if ((geometry[0] >= geometry[1]) != (bitmap.width >= bitmap.height)) return bitmap
+        val height = (bitmap.width * geometry[1] / geometry[0]).roundToInt().coerceAtLeast(1)
+        if (height == bitmap.height) return bitmap
+        return Bitmap.createScaledBitmap(bitmap, bitmap.width, height, true).also { bitmap.recycle() }
+    }
+
+    /** Decodes a preview at roughly menu size; an upscaled N64 scanout can be 2560 px wide. */
+    private fun decodePreview(open: () -> InputStream?): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        open()?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= PREVIEW_MAX_WIDTH) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        return open()?.use { BitmapFactory.decodeStream(it, null, options) }
+    }
+
+    private fun writeSafThumbnail(dir: DocumentFile, name: String, source: File?) {
+        try {
+            val existing = dir.findFile(name)
+            if (source == null) {
+                existing?.delete()
+                return
+            }
+            val target = existing ?: dir.createFile("application/octet-stream", name) ?: return
+            context.contentResolver.openOutputStream(target.uri, "wt")?.use { output ->
+                source.inputStream().use { input -> input.copyTo(output) }
+            }
+        } catch (e: Exception) {
+            Log.w("Phobos", "State preview not saved: ${e.message}")
+        }
+    }
+
+    /** The state in [slot] with its preview, or null when the slot is empty. */
+    suspend fun stateSlotPreview(systemName: String, romName: String, slot: Int): StateSlotPreview? =
+        withContext(Dispatchers.IO) {
+            val fileName = stateFileName(romName, slot)
+            val sanitizedName = getSanitizedSystemName(systemName)
+            try {
+                val baseUriString = settings.value.statesPath
+                if (baseUriString.isNotEmpty()) {
+                    val systemDir = DocumentFile.fromTreeUri(context, Uri.parse(baseUriString))
+                        ?.findFile(sanitizedName) ?: return@withContext null
+                    val children = systemDir.listFiles()
+                    val state = children.firstOrNull { it.name == fileName } ?: return@withContext null
+                    val image = children.firstOrNull { it.name == thumbnailName(fileName) }?.let { thumb ->
+                        decodePreview { context.contentResolver.openInputStream(thumb.uri) }
+                    }
+                    StateSlotPreview(image, state.lastModified())
+                } else {
+                    val dir = File(context.filesDir, "states/$sanitizedName")
+                    val state = File(dir, fileName).takeIf { it.exists() } ?: return@withContext null
+                    val thumb = File(dir, thumbnailName(fileName))
+                    StateSlotPreview(if (thumb.exists()) decodePreview { thumb.inputStream() } else null, state.lastModified())
+                }
+            } catch (e: Exception) {
+                Log.w("Phobos", "State preview unavailable: ${e.message}")
+                null
+            }
+        }
 
     fun loadState(systemName: String, romName: String, slot: Int = 0) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -445,9 +633,10 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     // Returns true if a state was found and loaded.
     private suspend fun performLoadState(systemName: String, romName: String, slot: Int): Boolean {
         val startTime = System.currentTimeMillis()
-        val fileName = if (slot < 0) "$romName.state.auto" else "$romName.state$slot"
-        val slotLabel = if (slot < 0) "Auto" else "Slot $slot"
-        val tempFile = File(context.cacheDir, "temp_state")
+        val fileName = stateFileName(romName, slot)
+        val slotLabel = slotLabel(slot)
+        // Per-call temp file (see performSaveState); only the SAF path uses it.
+        val tempFile = File(context.cacheDir, "state-load-${System.nanoTime()}.tmp")
         val sanitizedName = getSanitizedSystemName(systemName)
         Log.d("Phobos", "loadState start: $fileName")
 
@@ -499,14 +688,15 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         } catch (e: Exception) {
             Log.e("Phobos", "Error during loadState: ${e.message}")
             false
+        } finally {
+            tempFile.delete()
         }
     }
 
     fun deleteState(systemName: String, romName: String, slot: Int = 0) {
         viewModelScope.launch(Dispatchers.IO) {
-            // Mirror performSaveState/performLoadState: slot < 0 = "Auto" slot.
-            val fileName = if (slot < 0) "$romName.state.auto" else "$romName.state$slot"
-            val slotLabel = if (slot < 0) "Auto" else "Slot $slot"
+            val fileName = stateFileName(romName, slot)
+            val slotLabel = slotLabel(slot)
             val sanitizedName = getSanitizedSystemName(systemName)
             val baseUriString = settings.value.statesPath
             var deleted = false
@@ -520,6 +710,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         deleted = safState.delete()
                         Log.i("Phobos", "Deleted state from SAF: $fileName (result=$deleted)")
                     }
+                    systemDir?.findFile(thumbnailName(fileName))?.delete()
                 }
                 // Also remove the internal fallback copy if present.
                 val internalStateFile = File(context.filesDir, "states/$sanitizedName/$fileName")
@@ -527,10 +718,12 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                     deleted = internalStateFile.delete() || deleted
                     Log.i("Phobos", "Deleted state internally: $fileName")
                 }
+                File(context.filesDir, "states/$sanitizedName/${thumbnailName(fileName)}").delete()
             } catch (e: Exception) {
                 Log.e("Phobos", "Error during deleteState: ${e.message}")
             }
             if (deleted) {
+                _stateRevision.update { it + 1 }
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Deleted state from $slotLabel", Toast.LENGTH_SHORT).show()
                 }
@@ -656,6 +849,11 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     private val _perfStats = MutableStateFlow(PerformanceStats(0.0, 0.0, 0))
     val perfStats: StateFlow<PerformanceStats> = _perfStats
 
+    // Logical size of the running game's picture (pixel-aspect corrected), for aspect-correct
+    // display; null until the first frame of a game.
+    private val _videoGeometry = MutableStateFlow<VideoGeometry?>(null)
+    val videoGeometry: StateFlow<VideoGeometry?> = _videoGeometry
+
     private val _currentSlot = MutableStateFlow(0)
     val currentSlot: StateFlow<Int> = _currentSlot
 
@@ -709,6 +907,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setN64Recompiler(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64Recompiler(enabled)
         PhobosCore.setN64Recompiler(enabled)
+        noticeN64SettingDeferred(N64_APPLIES_ON_RESET)
     }
 
     fun setSkipBootRom(enabled: Boolean) = viewModelScope.launch {
@@ -768,6 +967,13 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                         _logs.value = updatedLogs
                     }
                     
+                    val geometry = if (_isLoaded.value) {
+                        PhobosCore.getVideoGeometry().let { g ->
+                            if (g.size == 2 && g[0] > 0f && g[1] > 0f) VideoGeometry(g[0], g[1]) else null
+                        }
+                    } else null
+                    if (geometry != _videoGeometry.value) _videoGeometry.value = geometry
+
                     if (_isLoaded.value && !_isPaused.value) {
                         val stats = PhobosCore.getPerformanceStats()
                         _perfStats.value = stats
@@ -1567,6 +1773,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setN64ViOverclock(currentSettings.n64ViOverclock)
             PhobosCore.setN64CountPerOp(if (currentSettings.n64UseDefaultCountPerOp) 2 else currentSettings.n64CountPerOp)
             PhobosCore.setN64CpuOverclock(if (currentSettings.n64UseDefaultCpuOverclock) 0 else currentSettings.n64CpuOverclock)
+            PhobosCore.setN64AsyncRdp(currentSettings.n64AsyncRdp)
             PhobosCore.setN64Pak(currentSettings.n64Pak)
             // Push the persisted N64 debug-logging toggle on EVERY load so native
             // matches DataStore at emulation start. The init block pushes the

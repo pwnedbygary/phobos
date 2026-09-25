@@ -167,16 +167,29 @@ auto CPU::instruction() -> bool {
     return true;
   }
 
-  auto access = devirtualize<Read, Word>(ipu.pc);
+  // devirtualize()'s KSEG0 RDRAM result, inline: an aligned PC there raises
+  // no exception and needs no TLB lookup.
+  u64 pc = ipu.pc;
+  bool kseg0 = Recompiler::isKseg0Rdram(pc) && !(pc & 3);
+  PhysAccess access;
+  if(kseg0) {
+    access = {true, true, (u32)pc & 0x3eff'ffff, pc};
+  } else {
+    access = devirtualize<Read, Word>(pc);
+  }
   if(!access) return true;
 
   if(Accuracy::CPU::Recompiler && recompiler.enabled && access.cache) {
     if(vaddrAlignedError<Word>(access.vaddr, false)) return true;
-    auto block = recompiler.block(ipu.pc, access.paddr);
+    auto stateKey = recompiler.computeStateKey();
+    Recompiler::Block* block = kseg0 ? recompiler.fastBlock(pc, access.paddr, stateKey) : nullptr;
+    if(!block) block = recompiler.block(pc, access.paddr, stateKey);
     if(block) {
       if(Thread::clock >= jitClockTarget) {
-        s64 timerDelta = (s64)scc.compare - (s64)scc.count;
-        if(timerDelta < 0) timerDelta = 0;
+        // Count and Compare are 33-bit. Once Count has passed Compare the next
+        // timer interrupt comes after Count wraps, so the distance is taken
+        // modulo 2^33; clamping it to 0 would synchronize after every block.
+        s64 timerDelta = (s64)(((u64)scc.compare - (u64)scc.count) & 0x1'ffff'ffffull);
         s64 queueDelta = queue.timeToNextEvent();
         if(queueDelta < 0) queueDelta = 0;
         s64 capBudget = min<s64>(Accuracy::CPU::JitInterleaving, min(timerDelta, queueDelta));

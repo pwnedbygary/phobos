@@ -255,3 +255,12 @@ find_library(z-lib z)
 find_library(dl-lib dl)
 
 target_link_libraries(phobos_android ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} adrenotools)
+
+# Objects are ThinLTO bitcode (-flto=thin above). Without LTO flags on the link
+# line lld still runs ThinLTO, but its backend defaults to -O2.
+target_link_options(phobos_android PRIVATE -flto=thin -O3)
+
+# Only the JNIEXPORT entry points need to be visible outside the library.
+# Hidden symbols let internal calls and global accesses skip the PLT and GOT.
+# Not global: libadrenotools' hook libraries export their entry points by default.
+target_compile_options(phobos_android PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)

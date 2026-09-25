@@ -39,6 +39,7 @@ android {
             dimension = "abiTarget"
             externalNativeBuild {
                 cmake {
+                    cFlags += "-march=armv8-a+simd"
                     cppFlags += "-march=armv8-a+simd"
                 }
             }
@@ -47,6 +48,7 @@ android {
             dimension = "abiTarget"
             externalNativeBuild {
                 cmake {
+                    cFlags += "-march=armv8.2-a+fp16+dotprod"
                     cppFlags += "-march=armv8.2-a+fp16+dotprod"
                 }
             }

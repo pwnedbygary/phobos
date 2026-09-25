@@ -9,21 +9,17 @@ auto n64DebugLoggingEnabled() -> bool;
 
 namespace ares::Nintendo64 {
 
-// Called from parallel-RDP's op_set_color_image to publish the real RDP
-// framebuffer width/address (see vi.hpp / rdp.hpp). The VI's CPU scanout
-// fallback uses these so it strides by the RDP width, not the VI display
-// width (fixes Rogue Squadron's 512-render→640-present black menu).
+// Called from parallel-RDP's op_set_color_image to publish the RDP's latest
+// color image (see rdp.hpp). Only the N64 Debug Logging coherency probe in
+// CommandProcessor::scanout reads it now: the latest color image is usually
+// the back buffer, so scanout geometry comes from the VI registers.
 auto setRdpFramebuffer(unsigned width, unsigned address) -> void {
   rdp.rdpFramebufferWidth  = width;
   rdp.rdpFramebufferAddress = address;
 }
 
-// Read accessors for the parallel-RDP scanout path (CommandProcessor::scanout).
-// These are written on the RDP command thread (op_set_color_image) and read on
-// the screen thread — but only ever set to the RDP's actual SET_COLOR_IMAGE
-// values, which change once per mode/buffer, so a torn read is impossible
-// (32-bit aligned writes are atomic on ARM64). Reading the Renderer's fb here
-// instead would race with set_color_framebuffer's queue flushes.
+// Written on the RDP command thread and read on the screen thread; 32-bit
+// aligned writes are atomic on ARM64, so a torn read is impossible.
 auto rdpFramebufferWidth() -> unsigned { return rdp.rdpFramebufferWidth; }
 auto rdpFramebufferAddress() -> unsigned { return rdp.rdpFramebufferAddress; }
 
@@ -203,14 +199,29 @@ auto VI::main() -> void {
 auto VI::refresh() -> void {
   #if defined(VULKAN)
   if(vulkan.enable && gpuOutputValid) {
-    // Rogue Squadron menu: VI_WIDTH=1024 (the game lies; it renders 512-wide).
-    // parallel-RDP's VI scanout always produces a 640-wide buffer and does the
+    // Rogue Squadron menu: VI_WIDTH=1024 over a 512-wide RDP buffer (the stride
+    // interlaces it). parallel-RDP's VI scanout always produces a 640-wide buffer and does the
     // full VI scaling (XStart/XAdd) in its fragment shader — exactly like
     // desktop. The old "clamps to 640 → black" premise was based on the OOB
     // copy-loop bug below (now fixed with the downscale), so wide modes are
     // handled by the Vulkan path here; the CPU RDRAM fallback below is only
     // reached when Vulkan is disabled.
     io.cpuScanoutActive = 0;
+    if(vulkan.frontendPresentsScanout) {
+      // [Phobos] The Android frontend maps and presents the scanout itself, so
+      // don't copy it into the Screen (a full frame under vulkan.mutex) and let
+      // the Screen skip its per-pixel pass. Only the viewport size is needed.
+      u32 width = 0, height = 0;
+      if(vulkan.scanoutSize(width, height)) screen->setViewport(0, 0, width, height);
+      screen->setPassthrough(true);
+      {
+        //endScanout() dereferences the implementation, which a concurrent reset may replace.
+        std::lock_guard<std::recursive_mutex> lock(vulkan.mutex);
+        vulkan.endScanout();
+      }
+      return;
+    }
+    screen->setPassthrough(false);
     const u8* rgba = nullptr;
     u32 width = 0, height = 0;
     vulkan.mapScanoutRead(rgba, width, height);
@@ -280,6 +291,7 @@ auto VI::refresh() -> void {
   }
   #endif
 
+  screen->setPassthrough(false);
   if(io.serrate == 0) screen->setProgressive(0);
   if(io.serrate == 1) screen->setInterlace(!io.field);
 
@@ -305,13 +317,14 @@ auto VI::refresh() -> void {
   if(dx0 >= hscan_start) dx0 += 8;
   if(dx1 <  hscan_stop)  dx1 -= 7;
 
-  // The scanline stride must be the RDP's FRAMEBUFFER width, not the VI's
-  // display WIDTH register. Rogue Squadron renders 512-wide but sets the VI
-  // WIDTH=1024 (presented scaled to 640 via XScale) — striding by 1024 reads
-  // the wrong rows (black). Fall back to vi.io.width when the RDP hasn't set
-  // a color image yet.
-  u32 pitch = rdp.rdpFramebufferWidth ? (u32)rdp.rdpFramebufferWidth : (u32)vi.io.width;
-  u32 fbBase = rdp.rdpFramebufferAddress ? (u32)rdp.rdpFramebufferAddress : (u32)vi.io.dramAddress;
+  // Upstream geometry: scan from the VI origin at the VI width. [Phobos]
+  // 2026-09-24: an earlier Rogue Squadron attempt strode from the RDP's latest
+  // color image instead, which is the back buffer under double buffering and
+  // drops the interlaced field offset. Rogue Squadron's 1024 stride over its
+  // 512-wide buffer is how the game interlaces; the menu was fixed by the VI
+  // field-toggle revert.
+  u32 pitch = vi.io.width;
+  u32 fbBase = vi.io.dramAddress;
   // Mark that the CPU fallback rendered this frame so video() presents the
   // CPU screen buffer, not the (black) Vulkan scanout for wide modes.
   io.cpuScanoutActive = 1;

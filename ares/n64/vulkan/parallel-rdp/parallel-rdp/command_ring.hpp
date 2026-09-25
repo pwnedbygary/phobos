@@ -47,7 +47,17 @@ public:
 
 	void enqueue_command(unsigned num_words, const uint32_t *words);
 
+	// Only a sleeping worker is woken. Between begin_batch() and end_batch()
+	// that happens at most once per KICK_WORDS and at end_batch() (or kick()),
+	// instead of once per command.
+	void begin_batch();
+	void end_batch();
+	// Wakes the worker if a batch has unannounced commands. Anything that
+	// waits for the worker must kick first.
+	void kick();
+
 private:
+	enum { KICK_WORDS = 128 };
 	CommandProcessor *processor = nullptr;
 	std::thread thr;
 	std::mutex lock;
@@ -57,6 +67,14 @@ private:
 	uint64_t write_count = 0;
 	uint64_t read_count = 0;
 	uint64_t completed_count = 0;
+	// Guarded by lock.
+	bool batching = false;
+	bool notify_pending = false;
+	bool producer_waiting = false;
+	bool consumer_waiting = false;
+	unsigned pending_words = 0;
+
+	void kick_locked();
 
 	void thread_loop();
 	void teardown_thread();

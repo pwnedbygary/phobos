@@ -74,6 +74,12 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                         checked = settings.n64WeaveDeinterlacing,
                         onCheckedChange = { viewModel.setN64WeaveDeinterlacing(it) }
                     )
+                    SettingsSwitchItem(
+                        title = "Asynchronous RDP",
+                        description = "Don't wait for the GPU at each RDP full sync. Faster, but effects where the game reads back rendered frames (photos, motion blur, pause backgrounds) can glitch. Applies immediately.",
+                        checked = settings.n64AsyncRdp,
+                        onCheckedChange = { viewModel.setN64AsyncRdp(it) }
+                    )
                 }
             }
             item {

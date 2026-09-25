@@ -16,6 +16,7 @@ import coil.ImageLoader
 import coil.decode.SvgDecoder
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.input.GameInputState
+import com.phobos.emulator.input.InputBindings
 import com.phobos.emulator.ui.MainScaffold
 import com.phobos.emulator.ui.MainViewModel
 import com.phobos.emulator.ui.RomFile
@@ -35,14 +36,6 @@ class MainActivity : ComponentActivity() {
 
     // Debug/test harness scope for the adb-driven ROM loader (intent extras).
     private val debugScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
-    // True while the emulator screen's Compose Box holds focus. When set, key
-    // events are handled by Compose's onKeyEvent (which pushes to GameInputState);
-    // the Activity-level fallback must then NOT re-process the same key, or every
-    // press would be pushed twice — the root cause of the "rapid-fire" D-pad and
-    // face buttons across all cores.
-    @Volatile
-    private var emulatorKeyHandled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -216,11 +209,9 @@ class MainActivity : ComponentActivity() {
         }
         findViewById<android.view.View>(android.R.id.content).addOnAttachStateChangeListener(onWindowFocusChanged)
 
+        // Fires only while the content view itself holds focus (Android doesn't pass unhandled
+        // keys up to parent listeners), so it never double-pushes a key the emulator screen handled.
         findViewById<android.view.View>(android.R.id.content).setOnKeyListener { _, keyCode, event ->
-            // When the emulator screen's Compose Box has focus, its onKeyEvent
-            // already translated and pushed this key. Skip to avoid double-push.
-            if (emulatorKeyHandled) return@setOnKeyListener false
-
             // Swap-screen hotkey: works from ANY screen. With the emulator
             // screen visible → pause + leave to library; from library/settings
             // with a game loaded (paused) → navigate back and resume.
@@ -243,25 +234,13 @@ class MainActivity : ComponentActivity() {
                 // Swallow auto-repeat so held buttons don't rapidly toggle.
                 if (event.repeatCount > 0) return@setOnKeyListener true
 
-                var bitmask = 0
-                viewModel.settings.value.inputMappings.forEach { (bit, binding) ->
-                    if (binding == "k:$keyCode") bitmask = bitmask or bit
-                }
-                if (bitmask != 0) {
-                    GameInputState.setButton(bitmask, event.action != android.view.KeyEvent.ACTION_UP)
+                val bits = InputBindings.of(viewModel.settings.value.inputMappings).bitsForKey(keyCode)
+                if (bits != 0) {
+                    GameInputState.setButton(bits, event.action != android.view.KeyEvent.ACTION_UP)
                     return@setOnKeyListener true
                 }
             }
             false
         }
-    }
-
-    /**
-     * Lets the emulator screen toggle which path owns key handling: when the
-     * Compose Box holds focus, its onKeyEvent is authoritative; the Activity
-     * fallback only kicks in when focus is lost.
-     */
-    fun setEmulatorKeyHandled(handled: Boolean) {
-        emulatorKeyHandled = handled
     }
 }

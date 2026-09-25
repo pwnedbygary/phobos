@@ -5,10 +5,18 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.phobos.emulator.LogLevel
+import com.phobos.emulator.ui.touch.AnalogMode
+import com.phobos.emulator.ui.touch.DpadMode
+import com.phobos.emulator.ui.touch.HapticLevel
+import com.phobos.emulator.ui.touch.TouchPrefs
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
+
+/** Parses a persisted enum name, falling back to [default] for unknown or renamed values. */
+private inline fun <reified T : Enum<T>> enumOrDefault(name: String, default: T): T =
+    enumValues<T>().firstOrNull { it.name == name } ?: default
 
 enum class ThemeMode {
     LIGHT, DARK, AUTO
@@ -42,6 +50,9 @@ data class EmulatorSettings(
     val autoLoadState: Boolean = false,
     val fullScreenMode: Boolean = false,
     val showTouchControls: Boolean = true,
+    val touch: TouchPrefs = TouchPrefs(),
+    // "<familyKey>_<land|port>" -> TouchLayoutCodec-encoded per-element overrides.
+    val touchLayouts: Map<String, String> = emptyMap(),
     val showPerformanceMonitor: Boolean = false,
     val perfShowFps: Boolean = true,
     val perfShowFrameTime: Boolean = true,
@@ -71,6 +82,8 @@ data class EmulatorSettings(
     val n64CountPerOp: Int = 2,
     val n64UseDefaultCpuOverclock: Boolean = true,
     val n64CpuOverclock: Int = 0,
+    // Asynchronous RDP (Mupen64Plus "SynchronousRDP" off): faster, less accurate. Off by default.
+    val n64AsyncRdp: Boolean = false,
     val n64Pak: String = "None",
     val n64DebugLogging: Boolean = false,
     val orientationVertical: Boolean = false,
@@ -111,6 +124,23 @@ class SettingsStore(private val context: Context) {
         val AUTO_LOAD_MEMORY = booleanPreferencesKey("auto_load_memory")
         val FULL_SCREEN_MODE = booleanPreferencesKey("full_screen_mode")
         val SHOW_TOUCH_CONTROLS = booleanPreferencesKey("show_touch_controls")
+        val TOUCH_OPACITY = floatPreferencesKey("touch_opacity")
+        val TOUCH_OPACITY_PORTRAIT = floatPreferencesKey("touch_opacity_portrait")
+        val TOUCH_SCALE = floatPreferencesKey("touch_scale")
+        val TOUCH_HAPTICS = stringPreferencesKey("touch_haptics")
+        val TOUCH_SLIDE = booleanPreferencesKey("touch_slide_between_buttons")
+        val TOUCH_AUTO_HOLD = booleanPreferencesKey("touch_auto_hold")
+        val TOUCH_SWAP_HANDS = booleanPreferencesKey("touch_swap_hands")
+        val TOUCH_IDLE_FADE = booleanPreferencesKey("touch_idle_fade")
+        val TOUCH_DPAD_MODE = stringPreferencesKey("touch_dpad_mode")
+        val TOUCH_DPAD_DIAGONAL = floatPreferencesKey("touch_dpad_diagonal")
+        val TOUCH_ANALOG_MODE = stringPreferencesKey("touch_analog_mode")
+        val TOUCH_ANALOG_DEADZONE = floatPreferencesKey("touch_analog_deadzone")
+        val TOUCH_ANALOG_SENSITIVITY = floatPreferencesKey("touch_analog_sensitivity")
+        val TOUCH_HIDE_ON_CONTROLLER = booleanPreferencesKey("touch_hide_on_controller")
+        val TOUCH_SHOW_MENU = booleanPreferencesKey("touch_show_menu_button")
+        val TOUCH_SHOW_FAST_FORWARD = booleanPreferencesKey("touch_show_fast_forward_button")
+        const val TOUCH_LAYOUT_PREFIX = "touch_layout_"
         val SHOW_PERFORMANCE_MONITOR = booleanPreferencesKey("show_performance_monitor")
         val PERF_SHOW_FPS = booleanPreferencesKey("perf_show_fps")
         val PERF_SHOW_FRAMETIME = booleanPreferencesKey("perf_show_frametime")
@@ -140,6 +170,7 @@ class SettingsStore(private val context: Context) {
         val N64_COUNT_PER_OP = intPreferencesKey("n64_count_per_op")
         val N64_USE_DEFAULT_CPU_OVERCLOCK = booleanPreferencesKey("n64_use_default_cpu_overclock")
         val N64_CPU_OVERCLOCK = intPreferencesKey("n64_cpu_overclock")
+        val N64_ASYNC_RDP = booleanPreferencesKey("n64_async_rdp")
         val N64_PAK = stringPreferencesKey("n64_pak")
         val N64_DEBUG_LOGGING = booleanPreferencesKey("n64_debug_logging")
         val ORIENTATION_VERTICAL = booleanPreferencesKey("orientation_vertical")
@@ -173,10 +204,13 @@ class SettingsStore(private val context: Context) {
         val zxBinds = mutableMapOf<String, Map<String, Int>>()
         val zxSticks = mutableMapOf<String, Boolean>()
         val zxReverses = mutableMapOf<String, Boolean>()
+        val touchLayouts = mutableMapOf<String, String>()
 
         preferences.asMap().forEach { (key, value) ->
             val name = key.name
-            if (name.startsWith("rom_path_") && value is String) {
+            if (name.startsWith(TOUCH_LAYOUT_PREFIX) && value is String) {
+                touchLayouts[name.removePrefix(TOUCH_LAYOUT_PREFIX)] = value
+            } else if (name.startsWith("rom_path_") && value is String) {
                 val system = name.removePrefix("rom_path_")
                 romPaths.getOrPut(system) { mutableSetOf() }.add(value)
             } else if (name.startsWith("rom_paths_") && value is Set<*>) {
@@ -264,8 +298,8 @@ class SettingsStore(private val context: Context) {
         }
 
         EmulatorSettings(
-            themeMode = try { ThemeMode.valueOf(safeGetString(THEME_MODE, ThemeMode.AUTO.name)) } catch(e: Exception) { ThemeMode.AUTO },
-            regionPreference = try { RegionPreference.valueOf(safeGetString(REGION_PREFERENCE, RegionPreference.NTSC_U_NTSC_J_PAL.name)) } catch(e: Exception) { RegionPreference.NTSC_U_NTSC_J_PAL },
+            themeMode = enumOrDefault(safeGetString(THEME_MODE, ThemeMode.AUTO.name), ThemeMode.AUTO),
+            regionPreference = enumOrDefault(safeGetString(REGION_PREFERENCE, ""), RegionPreference.NTSC_U_NTSC_J_PAL),
             fastBoot = safeGet(FAST_BOOT, false),
             muteAudio = safeGet(MUTE_AUDIO, false),
             colorEmulation = safeGet(COLOR_EMULATION, true),
@@ -278,6 +312,8 @@ class SettingsStore(private val context: Context) {
             autoLoadState = safeGet(AUTO_LOAD_MEMORY, false),
             fullScreenMode = safeGet(FULL_SCREEN_MODE, false),
             showTouchControls = safeGet(SHOW_TOUCH_CONTROLS, true),
+            touch = preferences.touchPrefs(),
+            touchLayouts = touchLayouts,
             showPerformanceMonitor = safeGet(SHOW_PERFORMANCE_MONITOR, false),
             perfShowFps = safeGet(PERF_SHOW_FPS, true),
             perfShowFrameTime = safeGet(PERF_SHOW_FRAMETIME, true),
@@ -289,7 +325,7 @@ class SettingsStore(private val context: Context) {
             perfOverlayPosY = safeGet(PERF_OVERLAY_POS_Y, 0.0f),
             zxKeyboardOpacity = safeGet(ZX_KEYBOARD_OPACITY, 1.0f),
             zxTapeMuted = safeGet(ZX_TAPE_MUTED, true),  // default ON — only silences the tape stream, not game audio
-            logVerbosity = try { LogLevel.valueOf(safeGetString(LOG_VERBOSITY, LogLevel.INFO.name)) } catch(e: Exception) { LogLevel.INFO },
+            logVerbosity = enumOrDefault(safeGetString(LOG_VERBOSITY, ""), LogLevel.INFO),
             fastForwardSpeed = safeGet(FAST_FORWARD_SPEED, 2.0f),
             n64Upscale = safeGet(N64_UPSCALE, 1),
             n64Recompiler = safeGet(N64_RECOMPILER, true),
@@ -307,6 +343,7 @@ class SettingsStore(private val context: Context) {
             n64CountPerOp = safeGet(N64_COUNT_PER_OP, 2),
             n64UseDefaultCpuOverclock = safeGet(N64_USE_DEFAULT_CPU_OVERCLOCK, true),
             n64CpuOverclock = safeGet(N64_CPU_OVERCLOCK, 0),
+            n64AsyncRdp = safeGet(N64_ASYNC_RDP, false),
             n64Pak = safeGetString(N64_PAK, "None"),
             n64DebugLogging = safeGet(N64_DEBUG_LOGGING, false),
             orientationVertical = safeGet(ORIENTATION_VERTICAL, false),
@@ -317,7 +354,7 @@ class SettingsStore(private val context: Context) {
             vulkanCachePath = safeGetString(VULKAN_CACHE_PATH, ""),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
             shaderPath = safeGetString(SHADER_PATH, ""),
-            aspectRatioMode = try { AspectRatioMode.valueOf(safeGetString(ASPECT_RATIO_MODE, AspectRatioMode.CORE_PROVIDED.name)) } catch(e: Exception) { AspectRatioMode.CORE_PROVIDED },
+            aspectRatioMode = enumOrDefault(safeGetString(ASPECT_RATIO_MODE, ""), AspectRatioMode.CORE_PROVIDED),
             hiddenSystems = preferences[HIDDEN_SYSTEMS] ?: emptySet(),
             hotkeys = finalHotkeys,
             inputMappings = mappings,
@@ -382,6 +419,61 @@ class SettingsStore(private val context: Context) {
     suspend fun setAutoLoadState(enabled: Boolean) = context.dataStore.edit { it[AUTO_LOAD_MEMORY] = enabled }
     suspend fun setFullScreenMode(enabled: Boolean) = context.dataStore.edit { it[FULL_SCREEN_MODE] = enabled }
     suspend fun setShowTouchControls(enabled: Boolean) = context.dataStore.edit { it[SHOW_TOUCH_CONTROLS] = enabled }
+    /** Read-modify-write in one transaction, so quick successive edits are not lost. */
+    suspend fun updateTouchPrefs(transform: (TouchPrefs) -> TouchPrefs) = context.dataStore.edit {
+        val prefs = transform(it.touchPrefs())
+        it[TOUCH_OPACITY] = prefs.opacity.coerceIn(0.1f, 1f)
+        it[TOUCH_OPACITY_PORTRAIT] = prefs.opacityPortrait.coerceIn(0.1f, 1f)
+        it[TOUCH_SCALE] = prefs.scale.coerceIn(0.5f, 1.8f)
+        it[TOUCH_HAPTICS] = prefs.haptics.name
+        it[TOUCH_SLIDE] = prefs.slideBetweenButtons
+        it[TOUCH_AUTO_HOLD] = prefs.autoHold
+        it[TOUCH_SWAP_HANDS] = prefs.swapHands
+        it[TOUCH_IDLE_FADE] = prefs.idleFade
+        it[TOUCH_DPAD_MODE] = prefs.dpadMode.name
+        it[TOUCH_DPAD_DIAGONAL] = prefs.dpadDiagonal.coerceIn(0f, 1f)
+        it[TOUCH_ANALOG_MODE] = prefs.analogMode.name
+        it[TOUCH_ANALOG_DEADZONE] = prefs.analogDeadzone.coerceIn(0f, 0.5f)
+        it[TOUCH_ANALOG_SENSITIVITY] = prefs.analogSensitivity.coerceIn(0.5f, 2f)
+        it[TOUCH_HIDE_ON_CONTROLLER] = prefs.hideOnController
+        it[TOUCH_SHOW_MENU] = prefs.showMenuButton
+        it[TOUCH_SHOW_FAST_FORWARD] = prefs.showFastForwardButton
+    }
+
+    private fun Preferences.touchPrefs(): TouchPrefs {
+        val raw = asMap()
+        // Same type-guarded read as the settings flow: a value of the wrong type falls back.
+        fun <T> get(key: Preferences.Key<T>, default: T): T {
+            val value = raw[key]
+            @Suppress("UNCHECKED_CAST")
+            return if (value != null && value::class.java == default!!::class.java) value as T else default
+        }
+        fun getString(key: Preferences.Key<String>, default: String): String = raw[key]?.toString() ?: default
+        val d = TouchPrefs()
+        return TouchPrefs(
+            opacity = get(TOUCH_OPACITY, d.opacity),
+            opacityPortrait = get(TOUCH_OPACITY_PORTRAIT, d.opacityPortrait),
+            scale = get(TOUCH_SCALE, d.scale),
+            haptics = enumOrDefault(getString(TOUCH_HAPTICS, d.haptics.name), d.haptics),
+            slideBetweenButtons = get(TOUCH_SLIDE, d.slideBetweenButtons),
+            autoHold = get(TOUCH_AUTO_HOLD, d.autoHold),
+            swapHands = get(TOUCH_SWAP_HANDS, d.swapHands),
+            idleFade = get(TOUCH_IDLE_FADE, d.idleFade),
+            dpadMode = enumOrDefault(getString(TOUCH_DPAD_MODE, d.dpadMode.name), d.dpadMode),
+            dpadDiagonal = get(TOUCH_DPAD_DIAGONAL, d.dpadDiagonal),
+            analogMode = enumOrDefault(getString(TOUCH_ANALOG_MODE, d.analogMode.name), d.analogMode),
+            analogDeadzone = get(TOUCH_ANALOG_DEADZONE, d.analogDeadzone),
+            analogSensitivity = get(TOUCH_ANALOG_SENSITIVITY, d.analogSensitivity),
+            hideOnController = get(TOUCH_HIDE_ON_CONTROLLER, d.hideOnController),
+            showMenuButton = get(TOUCH_SHOW_MENU, d.showMenuButton),
+            showFastForwardButton = get(TOUCH_SHOW_FAST_FORWARD, d.showFastForwardButton),
+        )
+    }
+    /** Saves one family/orientation layout; an empty [encoded] string restores the defaults. */
+    suspend fun setTouchLayout(layoutKey: String, encoded: String) = context.dataStore.edit {
+        val key = stringPreferencesKey(TOUCH_LAYOUT_PREFIX + layoutKey)
+        if (encoded.isEmpty()) it.remove(key) else it[key] = encoded
+    }
     suspend fun setShowPerformanceMonitor(enabled: Boolean) = context.dataStore.edit { it[SHOW_PERFORMANCE_MONITOR] = enabled }
     suspend fun setPerfShowFps(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_FPS] = enabled }
     suspend fun setPerfShowFrameTime(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_FRAMETIME] = enabled }
@@ -412,6 +504,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setN64CountPerOp(value: Int) = context.dataStore.edit { it[N64_COUNT_PER_OP] = value }
     suspend fun setN64UseDefaultCpuOverclock(enabled: Boolean) = context.dataStore.edit { it[N64_USE_DEFAULT_CPU_OVERCLOCK] = enabled }
     suspend fun setN64CpuOverclock(factor: Int) = context.dataStore.edit { it[N64_CPU_OVERCLOCK] = factor }
+    suspend fun setN64AsyncRdp(enabled: Boolean) = context.dataStore.edit { it[N64_ASYNC_RDP] = enabled }
     suspend fun setN64Pak(pak: String) = context.dataStore.edit { it[N64_PAK] = pak }
     suspend fun setN64DebugLogging(enabled: Boolean) = context.dataStore.edit { it[N64_DEBUG_LOGGING] = enabled }
     suspend fun setGlobalPath(key: Preferences.Key<String>, path: String) = context.dataStore.edit { it[key] = path }

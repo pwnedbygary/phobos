@@ -29,14 +29,16 @@ struct LoggingInterface : Util::LoggingInterface {
 
     // Rate-limit the repetitive "flush render state / dispatch will be dropped"
     // spam that floods logcat when the GPU driver can't compile compute shaders.
-    // These fire at ~120/sec and cause measurable performance overhead.
-    // TEMPORARILY DISABLED (2026-08-15) for the Rogue Squadron menu debug — we
-    // need to see if the menu's render is being silently dropped. Restore after.
-    if (false && (strstr(buffer, "flush render state") || strstr(buffer, "dispatch will be dropped"))) {
-      auto now = std::chrono::steady_clock::now();
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFlushError).count();
-      if (elapsed < 5000) return true; // suppress for 5 seconds
-      lastFlushError = now;
+    // These fire at ~120/sec and cause measurable performance overhead. (It was
+    // disabled on 2026-08-15 for the Rogue Squadron menu investigation, which
+    // has since concluded; the first message of each 5 s window still logs.)
+    if (strstr(buffer, "flush render state") || strstr(buffer, "dispatch will be dropped")) {
+      s64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      s64 last = lastFlushErrorMs.load(std::memory_order_relaxed);
+      if (now - last < 5000) return true; // suppress for 5 seconds
+      // Logged from several threads; one of them wins the window.
+      if (!lastFlushErrorMs.compare_exchange_strong(last, now, std::memory_order_relaxed)) return true;
     }
 
     // Suppress "Thread does not exist in thread manager or is not the main
@@ -54,7 +56,7 @@ struct LoggingInterface : Util::LoggingInterface {
     return true;
   }
 
-  std::chrono::steady_clock::time_point lastFlushError;
+  std::atomic<s64> lastFlushErrorMs{-5000};
 } loggingInterface;
 
 struct Vulkan::Implementation {
@@ -251,6 +253,12 @@ auto Vulkan::render() -> bool {
     } while(--length);
   }
 
+  struct CommandBatch {
+    ::RDP::CommandProcessor& processor;
+    CommandBatch(::RDP::CommandProcessor& processor) : processor(processor) { processor.begin_command_batch(); }
+    ~CommandBatch() { processor.end_command_batch(); }
+  } batch{*implementation->processor};
+
   while(queueOffset < queueSize) {
     u32 op = buffer[queueOffset * 2];
     u32 code = op >> 24 & 63;
@@ -267,7 +275,16 @@ auto Vulkan::render() -> bool {
     }
 
     if(::RDP::Op(code) == ::RDP::Op::SyncFull) {
-      implementation->processor->wait_for_timeline(implementation->processor->signal_timeline());
+      // Synchronous (default): the DP interrupt is raised only after the GPU has
+      // finished all prior work, so the CPU never reads RDRAM the GPU is still
+      // writing. Asynchronous RDP (opt-in) skips the wait, as Mupen64Plus does
+      // with SynchronousRDP=False.
+      if(!asynchronousRdp.load(std::memory_order_relaxed)) {
+        implementation->processor->wait_for_timeline(implementation->processor->signal_timeline());
+        rdpWorkPending.store(false, std::memory_order_relaxed);
+      } else {
+        rdpWorkPending.store(true, std::memory_order_relaxed);
+      }
       rdp.syncFull();
     }
 
@@ -374,6 +391,37 @@ auto Vulkan::endScanout() -> void {
     implementation->endCount++;
     implementation->condition.notify_one();
   }
+}
+
+auto Vulkan::drainRdp() -> void {
+  std::lock_guard<std::recursive_mutex> lock(mutex);
+  if(!implementation || !implementation->processor) return;
+  implementation->processor->wait_for_timeline(implementation->processor->signal_timeline());
+  rdpWorkPending.store(false, std::memory_order_relaxed);
+}
+
+auto Vulkan::scanoutSize(u32& width, u32& height) -> bool {
+  std::lock_guard<std::recursive_mutex> lock(mutex);
+  if(!implementation || !implementation->scanout.width || !implementation->scanout.height) return false;
+  width = implementation->scanout.width;
+  height = implementation->scanout.height;
+  return true;
+}
+
+auto Vulkan::readScanout(std::vector<u32>& rgba, u32& width, u32& height) -> bool {
+  // Takes the mutex directly (not scanoutLock, which belongs to the screen
+  // thread's map/unmap pair), so it serializes with presentation and resets.
+  std::lock_guard<std::recursive_mutex> lock(mutex);
+  if(!implementation || !implementation->scanout.fence || !implementation->scanout.buffer) return false;
+  if(!implementation->scanout.width || !implementation->scanout.height) return false;
+  if(!implementation->scanout.fence->wait_timeout(100'000'000ull)) return false;
+  auto source = (const u32*)implementation->device.map_host_buffer(*implementation->scanout.buffer, ::Vulkan::MEMORY_ACCESS_READ_BIT);
+  if(!source) return false;
+  width = implementation->scanout.width;
+  height = implementation->scanout.height;
+  rgba.assign(source, source + (size_t)width * height);
+  implementation->device.unmap_host_buffer(*implementation->scanout.buffer, ::Vulkan::MEMORY_ACCESS_READ_BIT);
+  return true;
 }
 
 auto Vulkan::crashed() -> const char* {
