@@ -1,6 +1,9 @@
 # Phobos implementation plan — canonical roadmap and status
 
-**Last reconciled: 2026-09-15.** This is the authoritative current roadmap.
+**Last reconciled: 2026-09-24** (task dispositions and safeguards updated for the
+compiled but not yet device-tested touch-controls/performance work described in the
+[handoff](handoff.md#touch-controls-overhaul-and-performance-scan--2026-09-24-in-progress);
+the rest of the 2026-09-15 reconciliation stands). This is the authoritative current roadmap.
 It is deliberately compact: indexed dated evidence from the former 1,874-line
 plan is preserved in [implementation-history.md](implementation-history.md),
 whose final non-operative appendix contains the complete original snapshot
@@ -23,11 +26,14 @@ verification, and an open task is not authorization to change code.
 
 ## Current evidence boundary
 
-This reconciliation is documentation-only. It changes no emulator behavior,
-timing default, save format, signing identity, APK, build, or device data.
-The current audit reports zero fresh native performance runs, no connected
-target, no matched settings, and no comparative speedup. Historical device
-reports remain useful regression targets but are not current measurements.
+The 2026-09-15 reconciliation was documentation-only. The 2026-09-24 session changed
+source at the user's explicit request (touch controls, behavior-preserving host
+optimizations, opt-in Asynchronous RDP, the Rogue Squadron hold, save-state previews).
+It compiles for both flavors and its host unit tests pass, but nothing has run on a
+device or been measured; it changes no timing default or save format.
+There are still zero fresh native performance runs, no matched settings, and no
+comparative speedup. Historical device reports remain useful regression targets but are
+not current measurements.
 
 The user-supplied reference is:
 
@@ -54,7 +60,10 @@ The user-supplied reference is:
   ordering, live/hidden RDRAM visibility, framebuffer reads, readback barriers,
   reset, state save/load, quit/reload, unload/abandon, and timeout ownership.
   Keep the current wait until an independently reviewed ownership model and
-  lifecycle/accuracy tests exist.
+  lifecycle/accuracy tests exist. **2026-09-24:** the user explicitly authorized an
+  opt-in *Asynchronous RDP* setting (N64 Experimental, default off). The default
+  stays synchronous; the opt-in path drains the GPU before state save/load and
+  reset ([performance audit](performance-audit.md#2026-09-24-scan-and-behavior-preserving-changes)).
 - **RSP SIMD is not a proven native-NEON advantage.** The ARM64
   `ARCHITECTURE_SUPPORTS_SSE4_1`/`sse2neon` path may generate NEON, but source
   intrinsics do not establish scalar fallback, native-NEON superiority, or a
@@ -63,7 +72,9 @@ The user-supplied reference is:
 - **Presentation is not a proven reference advantage.** Both implementations
   have maps/copies/waits/locks and window operations. Measure map/fence wait,
   copy/format conversion, window lock/post, and presented-frame outcomes
-  separately; never infer a speedup from a path diagram.
+  separately; never infer a speedup from a path diagram. (2026-09-24: the two
+  discarded CPU frame passes on the N64 Vulkan path were removed as a
+  behavior-preserving change; the effect is unmeasured.)
 - Never acquire `vulkan.mutex` in an abandon path. Preserve race-free
   framebuffer ownership and DP interrupt order.
 - Do not uninstall, clear app data, overwrite unbacked saves, or publish ROMs,
@@ -178,11 +189,14 @@ former record reported completion, not that this pass reverified it.
 |---|---|---|
 | NGCD-M3 | Neo Geo CD title-menu text residual | **Resolved 2026-09-24 (user-reported title-menu check).** BIOS menu/HUD colour comparison not yet reported. Screenshot consistent with FIX row pairs swapped; `0xe2dd` byte-wide delivery matches three references (SPR matches Geolith/NeoCD), host harness `tests/ngcd/`; `0xfc2d` phase candidate ruled out; CD sprite tile index and CD Z80 program memory recorded in the handoff. No global fetch change. [Handoff](handoff.md#ngcd-m3-title-menu-text-fix--2026-09-24), [Archive](implementation-history.md#task-ngcd-m3) |
 | 10c/10a remainder: Neo Geo MVS/AES compatibility | Neo Geo | **Open, bounded matrix pass.** PCE/ZX portions are historically resolved; Neo Geo core-level fixes are historical, so do not claim all sets verified. [10a](implementation-history.md#task-10a), [10c](implementation-history.md#task-10c) |
-| 13a, 13b, 13c, 13d | Controller layouts/rebinding/multi-player | **Deferred QoL, retained.** Implement as one hierarchy (global → core → game) after core stability; [13a](implementation-history.md#task-13a), [13b](implementation-history.md#task-13b), [13c](implementation-history.md#task-13c), and [13d](implementation-history.md#task-13d) are archived. |
-| 14, 15, 15a, 16, 18, 19, 31 | UI/touch/shader/polish | **Deferred QoL, retained.** No active implementation instruction. [Archive index](implementation-history.md#task-14) |
+| Touch controls overhaul | Touch input/UI | **Implemented 2026-09-24; compiles, 41 host unit tests pass.** Per-family layouts, multi-touch engine, editor, settings, quick-tap delivery, native input-map fixes. Needs the device checklist. [Design and findings](touch-controls.md) |
+| 13a | Per-core custom layouts | **Implemented for touch (2026-09-24, not device-tested):** per-family, per-orientation layouts and editor. Physical-controller layouts stay with 13b–13d. [Archive](implementation-history.md#task-13a) |
+| 13b, 13c, 13d | Controller rebinding/multi-player | **Deferred QoL, retained.** Implement as one hierarchy (global → core → game) after core stability; [13b](implementation-history.md#task-13b), [13c](implementation-history.md#task-13c), and [13d](implementation-history.md#task-13d) are archived. |
+| 15a, 16, 31 | Pause-menu quick actions, touch resize/reposition, PS1 shapes | **Implemented 2026-09-24, not device-tested:** quick-action row (save, load, screenshot, controls, reset); layout editor; drawn PlayStation symbols with the correct bits (the old overlay's labels were wrong). [Touch design](touch-controls.md) |
+| 14, 15, 18, 19 | Responsive UI, polish/shader menu, video options, UI coloration | **Deferred QoL, retained.** Portrait picture placement changed with the touch work; no other instruction. [Archive index](implementation-history.md#task-14) |
 | 42, 42b, 43, 44 | Perf monitor/game-FPS/GPU/CPU/thermal | **Deferred until attribution need is demonstrated.** Do not fabricate counters. [42](implementation-history.md#task-42), [42b](implementation-history.md#task-42b), [43](implementation-history.md#task-43), [44](implementation-history.md#task-44) |
 | 49 | N64 save import/export | **Open, retained.** UI and format mapping require save-safe review; not a performance task. [Archive](implementation-history.md#task-49) |
-| 50 | Save-state screenshots | **Deferred QoL, retained.** [Archive](implementation-history.md#task-50) |
+| 50 | Save-state screenshots | **Implemented 2026-09-24, not device-tested.** Each save also writes `<state>.thumb` (PNG data under a non-image extension, so gallery apps skip it) next to the state in SAF or internal storage; a failed capture drops only the preview. The pause menu shows the slot's preview and save time; delete removes both. [Archive](implementation-history.md#task-50) |
 | 51 | ZX multi-tape swap and multi-file ZIP picker | **Deferred QoL, retained.** [Archive](implementation-history.md#task-51) |
 | 59 | Write-through dcache bypass | **Parked high-risk.** Task 58's direct bypass broke DMA; no default/per-game enablement. [Archive](implementation-history.md#task-59) |
 | 60 | Per-game hash overrides | **Parked.** Revisit only with a demonstrated, measured need and explicit timing review. [Archive](implementation-history.md#task-60) |
@@ -197,8 +211,9 @@ former record reported completion, not that this pass reverified it.
 | 69 | CPU/GPU performance overlay | **Deferred enablement work.** External traces precede extra instrumentation. [Archive](implementation-history.md#task-69) |
 | 70 | ZX Z80 recompiler | **Deferred/likely skip.** Profile before touching. [Archive](implementation-history.md#task-70) |
 | 71 | Dynamic speed compensation | **Deferred product/accuracy decision.** Not a generic speedup. [Archive](implementation-history.md#task-71) |
-| 72 | N64 RDP-ParaLLEl comparison | **P0/P1 evidence investigation.** Use pinned v336 only; debug DD branches excluded; no transplant or async toggle from source comparison. [Archive](implementation-history.md#task-72) |
-| Run-Ahead audit | Feature completeness | **Open wiring audit.** The old UI toggle was reported inert; bridge and presentation semantics need a separately reviewed change. [Archive](implementation-history.md#feature-completeness) |
+| 72 | N64 RDP-ParaLLEl comparison | **P0/P1 evidence investigation.** Use pinned v336 only; debug DD branches excluded; no code transplant. 2026-09-24: ranked gap hypotheses recorded; the user authorized an opt-in (default-off) Asynchronous RDP setting, and the redundant N64 presentation copies were removed (both compiled, not measured). [Audit](performance-audit.md#2026-09-24-scan-and-behavior-preserving-changes), [Archive](implementation-history.md#task-72) |
+| Rogue Squadron transition hold | N64 VI | **Refined 2026-09-24, compiled; needs device validation.** The fixed ~3.5 s hold also armed at boot for games starting in a wide VI mode (frozen black frame). It now arms only on a real transition and ends as soon as the RDP completes a frame in the displayed buffer (3.5 s cap kept). Scanout coherency range and CPU fallback returned to the upstream VI geometry. [Handoff](handoff.md#touch-controls-overhaul-and-performance-scan--2026-09-24-in-progress), [Archive](implementation-history.md#rogue-squadron) |
+| Run-Ahead audit | Feature completeness | **Audited 2026-09-24: confirmed inert** (the setting was stored but never reached native code). The switch is hidden; the stored preference is kept. Implementing it needs per-frame serialize/run/restore with video and audio suppressed on the hidden frame; impractical on N64 (GPU-side RDRAM), a separately reviewed change elsewhere. [Archive](implementation-history.md#feature-completeness) |
 | Task #2 | Release APK update safety | **Cancelled.** Not reopened here; update compatibility remains unverified. |
 | Task #4 | Audio drain-buffer reuse | **Cancelled. Not authorized and not next automatic change.** |
 | Saturn | Core/product scope | **Out of scope** absent an explicit product/licensing decision. |
@@ -226,6 +241,7 @@ Before an implementation task leaves “deferred” or “parked,” record:
 - a rollback path and a clear stop condition. No source-only “2–3×,”
   “massive,” “native NEON,” or “direct presentation” claim is sufficient.
 
-The next eligible action is therefore the P0 identity/trace gate, not an async
-SyncFull bypass, RSP rewrite, audio-buffer reuse, CPU overclock, or renderer
+The next eligible action is to device-check the 2026-09-24 work (see the handoff), then
+the P0 identity/trace gate — not a
+default SyncFull change, RSP rewrite, audio-buffer reuse, CPU overclock, or renderer
 replacement.

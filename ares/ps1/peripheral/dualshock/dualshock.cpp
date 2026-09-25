@@ -2,10 +2,6 @@
 // However, we start up in Analog Mode due to there not being
 // enough buttons to properly map the "Analog" button on the controller
 
-#if defined(__ANDROID__)
-#include <android/log.h>
-#endif
-
 DualShock::DualShock(Node::Port parent) {
   node = parent->append<Node::Peripheral>("DualShock");
 
@@ -284,18 +280,6 @@ auto DualShock::readPad() -> std::vector<u8> {
   platform->input(ly);
   u8 bLX = linearize(lx->value());
   u8 bLY = linearize(ly->value());
-
-  // TEMP DIAG: report the full packet the game receives (buttons + sticks).
-  #if defined(__ANDROID__)
-  static u64 readTraceCount = 0;
-  if(readTraceCount++ % 30 == 0) {
-    __android_log_print(ANDROID_LOG_INFO, "PhobosDualShock",
-      "analogMode=%d configMode=%d B1=%02x B2=%02x RX=%u RY=%u LX=%u LY=%u",
-      (int)analogMode, (int)configMode,
-      (unsigned)result[0], (unsigned)result[1],
-      (unsigned)bRX, (unsigned)bRY, (unsigned)bLX, (unsigned)bLY);
-  }
-  #endif
 
   result.push_back(bLX);
   result.push_back(bLY);

@@ -39,11 +39,8 @@
 // Gated by the Phobos "N64 Debug Logging" toggle (defined in PhobosRunner.cpp).
 namespace ares {
 auto n64DebugLoggingEnabled() -> bool;
-// Free function the parallel-RDP path calls to publish the real RDP framebuffer
-// width/address for the VI CPU scanout fallback (Rogue Squadron: RDP renders
-// 512-wide, VI presents 640-wide via XScale with WIDTH=1024 — the VI must
-// stride by the RDP width or it reads the wrong rows → black). Defined in the
-// ares N64 core (vi.cpp).
+// The RDP's latest color image, published for the N64 Debug Logging probes.
+// Defined in the ares N64 core (vi.cpp).
 namespace Nintendo64 {
 auto setRdpFramebuffer(unsigned width, unsigned address) -> void;
 auto rdpFramebufferWidth() -> unsigned;
@@ -282,6 +279,52 @@ void CommandProcessor::clear_buffer(Vulkan::Buffer &buffer, uint32_t value)
 void CommandProcessor::op_sync_full(const uint32_t *)
 {
 	renderer.flush_and_signal();
+	commit_rendered_framebuffers();
+}
+
+void CommandProcessor::note_frame_color_image(const RenderedFramebuffer &target)
+{
+	for (unsigned i = 0; i < frame_color_image_count; i++)
+	{
+		if (frame_color_images[i].addr == target.addr)
+		{
+			frame_color_images[i] = target;
+			return;
+		}
+	}
+	if (frame_color_image_count < MAX_FRAME_COLOR_IMAGES)
+		frame_color_images[frame_color_image_count++] = target;
+	else
+		frame_color_images[MAX_FRAME_COLOR_IMAGES - 1] = target;
+}
+
+void CommandProcessor::commit_rendered_framebuffers()
+{
+	// A frame that never re-issued SET_COLOR_IMAGE still rendered into the current one.
+	if (current_color_image.width)
+		note_frame_color_image(current_color_image);
+
+	constexpr unsigned history = VideoInterface::RENDERED_FRAMEBUFFER_HISTORY;
+	std::lock_guard<std::mutex> holder{rendered_framebuffer_lock};
+	rendered_sequence++;
+	for (unsigned i = 0; i < frame_color_image_count; i++)
+	{
+		auto &done = frame_color_images[i];
+		done.sequence = rendered_sequence;
+		unsigned kept = 0;
+		for (unsigned j = 0; j < rendered_framebuffer_count; j++)
+			if (rendered_framebuffers[j].addr != done.addr)
+				rendered_framebuffers[kept++] = rendered_framebuffers[j];
+		if (kept == history)
+		{
+			for (unsigned j = 1; j < history; j++)
+				rendered_framebuffers[j - 1] = rendered_framebuffers[j];
+			kept--;
+		}
+		rendered_framebuffers[kept++] = done;
+		rendered_framebuffer_count = kept;
+	}
+	frame_color_image_count = 0;
 }
 
 void CommandProcessor::decode_triangle_setup(TriangleSetup &setup, const uint32_t *words) const
@@ -469,11 +512,10 @@ void CommandProcessor::op_set_color_image(const uint32_t *words)
 	}
 
 	renderer.set_color_framebuffer(addr, width, fbfmt);
-	// Publish the real RDP framebuffer width/address for the ares VI CPU scanout
-	// fallback (Rogue Squadron renders 512-wide but the VI presents 640-wide via
-	// XScale with WIDTH=1024 — the VI must stride by the RDP width). The ares
-	// software RDP::setColorImage() is NOT used in the Vulkan path; parallel-RDP
-	// handles SET_COLOR_IMAGE here.
+	// I4 color images (size 0) are never scanned out; 32-bit is 4 bytes per pixel.
+	current_color_image = { addr, width, size == 3 ? 4u : size };
+	note_frame_color_image(current_color_image);
+	// Published for the N64 Debug Logging probes only (see ares rdp.hpp).
 	::ares::Nintendo64::setRdpFramebuffer(width, addr);
 	// Diagnostic: log RDP framebuffer changes (Rogue Squadron menu investigation),
 	// gated by the Phobos N64 Debug Logging toggle. During the WIDE menu
@@ -1195,12 +1237,11 @@ Vulkan::ImageHandle CommandProcessor::scanout(const ScanoutOptions &opts, VkImag
 	}
 	renderer.unlock_command_processing();
 
-	// [Phobos] Rogue Squadron fix: pass the RDP's real framebuffer width/address
-	// into the VI scanout so the VRAM extract strides by the RDP width, not the
-	// VI display width (the game renders 512-wide but sets VI_WIDTH=1024 →
-	// without this, every row after the first reads wrong VRAM → black menu).
-	// fb_width/fb_offset come from the ares core (rdp.rdpFramebuffer*), NOT the
-	// renderer — reading Renderer::fb here would race with the RDP worker
+	// [Phobos] Completed framebuffers for the VI wide-mode transition hold.
+	{
+		std::lock_guard<std::mutex> holder{rendered_framebuffer_lock};
+		vi.set_rendered_framebuffers(rendered_framebuffers, rendered_framebuffer_count);
+	}
 	auto scanout = vi.scanout(target_layout, opts, renderer.get_scaling_factor());
 	return scanout;
 }

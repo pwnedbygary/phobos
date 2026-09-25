@@ -23,6 +23,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <queue>
 #include "device.hpp"
@@ -210,6 +211,22 @@ private:
 #ifndef PARALLEL_RDP_SHADER_DIR
 	std::unique_ptr<ShaderBank> shader_bank;
 #endif
+
+	// [Phobos] Color images of the frame in flight, committed to the completed
+	// history at SYNC_FULL and handed to the VI before each scanout (see
+	// VideoInterface wide-mode transition hold). The history is written by the
+	// ring worker and read by scanout(); the lock covers the drain timeout path.
+	// Declared before the ring so they outlive its worker thread.
+	static constexpr unsigned MAX_FRAME_COLOR_IMAGES = 4;
+	RenderedFramebuffer current_color_image = {};
+	RenderedFramebuffer frame_color_images[MAX_FRAME_COLOR_IMAGES] = {};
+	unsigned frame_color_image_count = 0;
+	RenderedFramebuffer rendered_framebuffers[VideoInterface::RENDERED_FRAMEBUFFER_HISTORY] = {};
+	unsigned rendered_framebuffer_count = 0;
+	uint32_t rendered_sequence = 0;
+	std::mutex rendered_framebuffer_lock;
+	void note_frame_color_image(const RenderedFramebuffer &target);
+	void commit_rendered_framebuffers();
 
 	// Tear-down order is important here.
 	Renderer renderer;

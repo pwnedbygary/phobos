@@ -34,13 +34,6 @@
 // Gated by the Phobos "N64 Debug Logging" toggle (defined in PhobosRunner.cpp).
 namespace ares {
 auto n64DebugLoggingEnabled() -> bool;
-// The RDP's real framebuffer (from SET_COLOR_IMAGE via setRdpFramebuffer in
-// the ares core). Used by scanout_memory_range so the coherency sync covers
-// the actual framebuffer when the VI width LIES (Rogue Squadron menu).
-namespace Nintendo64 {
-auto rdpFramebufferWidth() -> unsigned;
-auto rdpFramebufferAddress() -> unsigned;
-}
 }
 
 #ifndef PARALLEL_RDP_SHADER_DIR
@@ -403,15 +396,15 @@ void VideoInterface::scanout_memory_range(unsigned &offset, unsigned &length) co
 		return;
 	}
 
-	// [Phobos] Rogue Squadron menu fix: the VI WIDTH can LIE about the real
-	// framebuffer (renders 512-wide, VI_WIDTH=1024). The coherency sync must
-	// cover the RDP's ACTUAL framebuffer (published via setRdpFramebuffer),
-	// not the VI's fake display geometry — otherwise resolve_coherency_external
-	// syncs a 1024-strided range at the VI origin that never includes the real
-	// 512-wide buffer, so the rendered pixels never reach RDRAM (menu appears
-	// empty/black). When the RDP fb width differs from the VI width, use it.
-	unsigned fbWidth = ::ares::Nintendo64::rdpFramebufferWidth() ? ::ares::Nintendo64::rdpFramebufferWidth() : (unsigned)reg.vi_width;
-	unsigned fbAddr  = ::ares::Nintendo64::rdpFramebufferAddress() ? ::ares::Nintendo64::rdpFramebufferAddress() : (unsigned)reg.vi_offset;
+	// Upstream geometry: this range must cover exactly what vram_fetch_stage()
+	// reads (the VI origin at the VI width). [Phobos] 2026-09-24: an earlier
+	// Rogue Squadron attempt substituted the RDP's latest color image here. That
+	// is the back buffer under double buffering, so CPU-drawn frames (boot logos)
+	// never reached the upscaled / non-coherent RDRAM the VI reads, and with
+	// Rogue Squadron's 1024 VI stride over a 512-wide buffer it covered only half
+	// of the rows. The menu was fixed by the VI field-toggle revert instead.
+	unsigned fbWidth = (unsigned)reg.vi_width;
+	unsigned fbAddr  = (unsigned)reg.vi_offset;
 
 	int pixel_size = ((reg.status & VI_CONTROL_TYPE_MASK) | VI_CONTROL_TYPE_RGBA5551_BIT) == VI_CONTROL_TYPE_RGBA8888_BIT ? 4 : 2;
 	fbAddr &= ~(pixel_size - 1);
@@ -1247,6 +1240,37 @@ void VideoInterface::end_vi_register_per_scanline()
 	per_line_state.ended = true;
 }
 
+void VideoInterface::set_rendered_framebuffers(const RenderedFramebuffer *framebuffers, unsigned count)
+{
+	rendered_framebuffer_count = std::min(count, RENDERED_FRAMEBUFFER_HISTORY);
+	for (unsigned i = 0; i < rendered_framebuffer_count; i++)
+		rendered_framebuffers[i] = framebuffers[i];
+}
+
+uint32_t VideoInterface::newest_rendered_sequence() const
+{
+	uint32_t newest = 0;
+	for (unsigned i = 0; i < rendered_framebuffer_count; i++)
+		newest = std::max(newest, rendered_framebuffers[i].sequence);
+	return newest;
+}
+
+bool VideoInterface::origin_rendered_since_mode_change(uint32_t vi_origin) const
+{
+	for (unsigned i = 0; i < rendered_framebuffer_count; i++)
+	{
+		auto &fb = rendered_framebuffers[i];
+		if (!fb.width || !fb.bytes_per_pixel || fb.sequence <= mode_change_sequence)
+			continue;
+		// The VI origin is the framebuffer base plus at most a few lines (field or
+		// overscan offset). Sixteen lines stays well short of an adjacent buffer.
+		uint32_t span = fb.width * fb.bytes_per_pixel * 16u;
+		if (vi_origin >= fb.addr && vi_origin < fb.addr + span)
+			return true;
+	}
+	return false;
+}
+
 Vulkan::ImageHandle VideoInterface::scanout(VkImageLayout target_layout, const ScanoutOptions &options, unsigned scaling_factor_)
 {
 	unsigned downscale_steps = std::min(8u, options.downscale_steps);
@@ -1263,35 +1287,46 @@ Vulkan::ImageHandle VideoInterface::scanout(VkImageLayout target_layout, const S
 		return scanout;
 	}
 
-	// [Phobos] Rogue Squadron menu transition (2026-08-15): when the VI display
-	// width CHANGES (e.g. attract demo 400-wide → menu 1024-wide), the first
-	// [Phobos] Rogue Squadron menu transition (2026-08-15): when the VI display
-	// width CHANGES to a WIDE mode (e.g. attract demo 400-wide → menu
-	// 1024-wide), the first scanout of the new mode reads RDRAM the RDP hasn't
-	// rendered yet → a white/rainbow garbage frame that can last SECONDS while
-	// the menu's big textures load on-device. Hold the previous valid frame for
-	// MODE_CHANGE_HOLD_SCANOUTS after a width change so the new mode's buffer
-	// has time to be rendered.
+	// [Phobos] Rogue Squadron menu transition (2026-08-15, refined 2026-09-24):
+	// when the VI width changes to a WIDE mode (attract demo 400-wide → menu
+	// 1024-wide), the first scanouts of the new mode read RDRAM the RDP hasn't
+	// rendered yet → white/rainbow garbage while the menu loads. Re-present the
+	// previous picture until the RDP has completed a frame (after the change) in
+	// the buffer the VI now shows, with MODE_CHANGE_HOLD_SCANOUTS as a cap.
 	//
-	// GATED to wide-mode targets (vi_width > VI_SCANOUT_WIDTH) so normal games
-	// that switch between standard widths (e.g. 640 menu ↔ 320 gameplay) are
-	// NEVER held — only Rogue Squadron-style wide-VI transitions are.
+	// Only wide targets (vi_width > VI_SCANOUT_WIDTH) are held, and only on a
+	// real transition: the original fixed hold also armed on the first valid
+	// scanout of any game booting into a wide mode (last_vi_width starts at 0)
+	// and then re-presented that first, usually black, frame for ~3.5s.
 	if (regs.vi_width != (int)last_vi_width)
 	{
 		bool new_is_wide = regs.vi_width > VI_SCANOUT_WIDTH;
+		bool real_transition = prev_scanout_image && scanouts_in_mode >= MODE_STABLE_SCANOUTS;
+		mode_change_hold = (new_is_wide && real_transition) ? MODE_CHANGE_HOLD_SCANOUTS : 0;
+		mode_change_sequence = newest_rendered_sequence();
 		if (::ares::n64DebugLoggingEnabled())
 			__android_log_print(ANDROID_LOG_INFO, "PhobosVI",
-				"mode-change: vi_w %u -> %u (wide=%d), holding prev frame %u scanouts",
-				last_vi_width, (unsigned)regs.vi_width, new_is_wide,
-				(unsigned)MODE_CHANGE_HOLD_SCANOUTS);
+				"mode-change: vi_w %u -> %u (wide=%d, transition=%d), hold cap %u scanouts",
+				last_vi_width, (unsigned)regs.vi_width, new_is_wide, real_transition,
+				(unsigned)mode_change_hold);
 		last_vi_width = (uint32_t)regs.vi_width;
-		// Only hold when the NEW width is a wide mode. Standard-width switches
-		// (menu↔gameplay in normal games) must not be delayed.
-		mode_change_hold = new_is_wide ? MODE_CHANGE_HOLD_SCANOUTS : 0;
+		scanouts_in_mode = 0;
 	}
-	else if (mode_change_hold > 0)
+	else
 	{
-		mode_change_hold--;
+		if (scanouts_in_mode < MODE_STABLE_SCANOUTS)
+			scanouts_in_mode++;
+		if (mode_change_hold > 0)
+			mode_change_hold--;
+	}
+
+	if (mode_change_hold > 0 && origin_rendered_since_mode_change((uint32_t)regs.vi_offset))
+	{
+		if (::ares::n64DebugLoggingEnabled())
+			__android_log_print(ANDROID_LOG_INFO, "PhobosVI",
+				"mode-change: new buffer rendered, hold released with %u scanouts left",
+				(unsigned)mode_change_hold);
+		mode_change_hold = 0;
 	}
 
 	if (mode_change_hold > 0 && prev_scanout_image)

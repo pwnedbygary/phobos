@@ -124,6 +124,11 @@ completion. Require tests for framebuffer effects, reset, state save/restore,
 quit/reload, GPU timeout and DP interrupts before considering an async design.
 No blind removal of synchronization, watchdog additions or fake completion.
 
+**2026-09-24 update:** the user explicitly asked for an opt-in **Asynchronous RDP**
+setting (Mupen's `SynchronousRDP=False`), default off. The default stays synchronous.
+See [the 2026-09-24 section](#2026-09-24-scan-and-behavior-preserving-changes)
+for how the opt-in path drains the GPU before state save/load and reset.
+
 ## Next bounded experiment and blockers
 
 Use [the protocol](mario-tennis-benchmark.md) to identify the actual Phobos APK
@@ -144,3 +149,92 @@ comparison, not this audit.
 Documentation checks: `git diff --check`, internal Markdown link existence and
 independent source-citation/snapshot review are the appropriate acceptance checks.
 Actual final command results and review hashes are recorded in the commit record.
+
+## 2026-09-24 scan and behavior-preserving changes
+
+The user asked for every remaining host-side performance gain in every core, with
+accuracy first. Written source-only while the user's phone was in use by another
+session, then compiled for both flavors with host unit tests passing (see the
+[handoff](handoff.md#checks-run-2026-09-24-local-mac-no-device)); nothing has run on a
+device or been measured, so **no speedup is claimed**. Five read-only passes informed
+it: N64 versus the Mupen64Plus-AE parallel
+plugin at the pinned `v336` source, build/infrastructure/JNI bridge, per-core hot
+loops, and the two touch-control references. Classes: **(a)** behavior-preserving
+host change, **(b)** accuracy or configuration difference (report or opt-in only),
+**(c)** needs measurement.
+
+### Why Mupen64Plus-AE's parallel-RDP runs faster (ranked hypotheses)
+
+1. **(b) SyncFull.** Both builds wait at the same site, but the Mupen64Plus-AE app
+   writes `SynchronousRDP=False` (`ParallelRdpPrefs.java:62` →
+   `NativeConfigFiles.java:335`), so its CPU never waits for the GPU at a full sync.
+   Phobos always waited. Now an opt-in setting (below).
+2. **(a) Presentation.** Each N64 Vulkan frame took three CPU passes in Phobos: the VI
+   copied the mapped scanout into the Screen under `vulkan.mutex`, the Screen ran a
+   full-frame palette pass, and the frontend mapped and copied the scanout again,
+   discarding the first two. Mupen does one copy. Fixed (below).
+3. **(c) Incoherent RDRAM.** If `VK_EXT_external_memory_host` import fails,
+   parallel-RDP keeps a separate GPU RDRAM copy and syncs it on every flush and
+   scanout. Both builds allocate 64 KiB-aligned RDRAM, so import should succeed on
+   Adreno; confirm on device by searching logcat tag `Granite` for
+   `VK_EXT_external_memory_host not supported or failed`. No new log is needed.
+4. **(b)/(c) Configuration.** Phobos always sets
+   `COMMAND_PROCESSOR_FLAG_HOST_VISIBLE_HIDDEN_RDRAM_BIT` (CPU-visible coverage bits),
+   uses 4 frame contexts (Mupen 3), keeps bindless on (Mupen disables it) and never
+   calls `set_quirks`.
+5. **(c) CPU/RSP architecture.** ares runs a cycle-accurate R4300 JIT (no block
+   chaining, emulated caches, `JitInterleaving` 2048×2) and its own RSP recompiler;
+   Mupen64Plus-AE profiles use a dynarec and `rsp-parallel`. Likely the largest
+   remaining gap and outside parallel-RDP glue; not a candidate for host-side change.
+6. **(a) Overheads.** The Granite repetitive-error rate limiter was disabled
+   (`if (false && …)`), and several diagnostics ran in hot paths (below).
+
+### Implemented
+
+| Change | Files | Class | Notes |
+|---|---|---|---|
+| N64 Vulkan frames presented once | `ares/n64/vi/vi.cpp`, `ares/ares/node/video/screen.{hpp,cpp}`, `ares/n64/vulkan/vulkan.{hpp,cpp}`, `PhobosRunner.cpp` | (a) | `vulkan.frontendPresentsScanout` (set by the Android frontend at N64 load): `VI::refresh` sets only the viewport and calls `endScanout`; `Screen::setPassthrough(true)` makes `Screen::refresh` call `platform->video` without the palette pass; the frontend maps and copies the scanout once. The CPU fallback path and non-Android behavior are unchanged. |
+| N64 screenshots from the scanout | `vulkan.{hpp,cpp}` `readScanout`, `PhobosRunner.cpp` `takeScreenshot` | correctness | Needed once frames stopped passing through `lastFrameBuffer`; see touch-controls F17. |
+| Non-N64 video conversion | `PhobosRunner.cpp` `convertToWindowPixels`, `doubleLineWidth` | (a) | NEON R/B swap (`vqtbl1q_u8`), palette-range check once per frame (`vcltq`/`vmaxvq`), NEON 2× line doubling (`vzipq_u32`); `lastFrameBuffer` is written only on this software path. |
+| Input callback | `PhobosRunner.cpp` `input()`, `setInput()` | (a) | Per-node binding cache (bits, ZX-key flag); system name resolved only on a cache miss; keyboard set consulted only while a key is held; removed the axis heartbeat and `setInput` logs. Quick-tap press counters added (touch-controls F19). |
+| Granite error rate limiter re-enabled | `vulkan.cpp` `LoggingInterface` | (a) | First message per 5 s window still logs. |
+| Hot-path diagnostics removed | `ares/ng/cartridge/board/sma.cpp`, `ares/ps1/peripheral/dualshock/dualshock.cpp`, `ares/ps1/disc/cdxa.cpp`, `PhobosRunner.cpp` | (a) | Neo Geo SMA presence/PRN/write logs on every access; PS1 DualShock "TEMP DIAG" every 30 reads; PS1 CD-XA 1 Hz sector/sample logs; frontend video `LOGD` every 2,000 frames. One-time SMA load logs and the rare bank-switch log remain. |
+| PS1 BIOS TTY tracer off on Android | `ares/ps1/cpu/debugger.cpp` | (a) | `setTerminal(true)` made the message tracer permanently enabled, so every taken branch ran the BIOS putchar/puts hook and printed to stdout, which Android discards. Desktop builds unchanged. |
+| Neo Geo LSPC model check hoisted | `ares/ng/lspc/render.cpp` | (a) | `Model::NeoGeoCD()` read once per line instead of twice per visible sprite. |
+| ThinLTO link optimization | `CMakeLists.txt` | (a) | Objects were already ThinLTO bitcode; `target_link_options(phobos_android PRIVATE -flto=thin -O3)` runs the LTO backend at O3 instead of lld's default O2. Verify the link line with `ninja -v`. |
+| C sources get the flavor `-march` | `android/app/build.gradle.kts` | (a) | `cFlags` now mirror `cppFlags` (libco, sljit, volk, libchdr/zstd/lzma/miniz). |
+| Opt-in Asynchronous RDP (default off) | `vulkan.{hpp,cpp}`, `PhobosRunner.cpp`, `PhobosJNI.cpp`, `PhobosCore.kt`, `SettingsStore.kt`, `MainViewModel.kt`, `N64ExperimentalSettingsScreen.kt`, `EmulationMenu.kt` | (b), user-authorized | `vulkan.asynchronousRdp` skips the SyncFull timeline wait. It applies immediately (next full sync), so no restart or notice is needed. Before state save, state load and reset the frontend calls `Vulkan::drainRdp()` (bounded 2 s timeline wait; never on an abandon path) while the setting is on, or while `rdpWorkPending` shows an async full sync that nothing has waited on since (the setting was just switched off), so in-flight GPU writes cannot land in a snapshot or restored RDRAM. Games that read rendered frames back with the CPU (photos, motion blur, pause backgrounds) may glitch. |
+
+Correctness changes in the same area, from the Rogue Squadron review (details in the
+[handoff](handoff.md#touch-controls-overhaul-and-performance-scan--2026-09-24-in-progress)):
+`scanout_memory_range` and the ares CPU fallback use the VI origin and width again
+(upstream), not the RDP's latest color image, and the wide-mode transition hold is armed
+only on real transitions and released as soon as the new buffer is rendered.
+
+### Considered and not changed
+
+| Item | Class | Reason |
+|---|---|---|
+| SyncFull default | (b) | Stays synchronous; async is opt-in only. |
+| `PROFILE_PERFORMANCE` | (b) | Matches upstream ares. Already skips per-step SFC coprocessor sync (`sfc/cpu/timing.cpp:51-53`) and decimates PCE PSG audio 64× (`pce/psg/psg.cpp:38-44`). Do not extend. |
+| SFC performance PPU | (b) | Phobos already forces `accurate=false` (scanline renderer). Reported only; MD and PCE keep their accurate VDPs. |
+| Audio drain buffer reuse | — | Task #4 is cancelled and not authorized. |
+| JIT icache profile counters | (a) | The recompiler already counts only in homebrew mode; the per-instruction increments are in the interpreter, and homebrew reads them through the emux interface. Negligible gain, guest-visible. |
+| `unlikely` on PS1/SFC/MD/GBA/GB/PCE/FC debugger hooks; GBA DAC window copies | (a)/(c) | Speculative code-layout gains in upstream core files; measure first. |
+| `-fvisibility=hidden`, `-mcpu`/`-mtune`, PGO | (a)/(c) | Visibility risks libadrenotools' symbol lookups; the others need device A/B runs. |
+| Screen mutex across `platform->video`; `Vulkan::render` lock scope | (a)/(c) | Buffer-ownership changes; measure lock contention first. |
+| 1 Hz FPS and `AudioDiag` logs, N64 debug-logging dumps | — | Negligible at 1 Hz and useful field diagnostics; N64 dumps are behind the debug toggle. |
+
+### Required verification
+
+1. Done 2026-09-24 (NDK 26.1, local): both flavors build, `:app:testModernDebugUnitTest`
+   passes, and the link command contains `-flto=thin -O3`. A CI build with NDK 28.2 is
+   still needed.
+2. Device regressions: N64 (Mario Tennis intro and gameplay, Conker, Zelda OoT, Rogue
+   Squadron boot and menu, a game that boots into a wide VI mode) for presentation,
+   screenshots, pause/resume, reset, state save/load, rotation; Neo Geo SMA title
+   (Garou, KOF 99); PS1 FMV with XA audio; a non-N64 system in each video path
+   (palette, 2× line doubling).
+3. Asynchronous RDP on and off, including state save/load and reset while on.
+4. Any speed claim needs the [benchmark protocol](mario-tennis-benchmark.md) and
+   external traces, before and after.

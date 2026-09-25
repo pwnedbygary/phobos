@@ -30,6 +30,8 @@ object PhobosCore {
     external fun setN64ViOverclock(percent: Int)
     external fun setN64CountPerOp(value: Int)
     external fun setN64CpuOverclock(factor: Int)
+    /** Asynchronous RDP: SyncFull stops waiting for the GPU (faster, less accurate). Applies immediately. */
+    external fun setN64AsyncRdp(enabled: Boolean)
     external fun setN64Pak(pakName: String)
     external fun getRumbleState(): Boolean
     external fun resetSystem()
@@ -70,6 +72,8 @@ object PhobosCore {
     external fun setZxTapeMuted(muted: Boolean)
     external fun getZxTapeProgress(): Int
     external fun getPerformanceStats(): PerformanceStats
+    /** Logical [width, height] of the last frame after the core's pixel-aspect correction; 0s before the first frame. */
+    external fun getVideoGeometry(): FloatArray
 
     object Input {
         const val UP       = 1 shl 0

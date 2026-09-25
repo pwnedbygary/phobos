@@ -55,6 +55,10 @@ struct Screen : Video {
 
   auto setProgressive(bool progressiveDouble = false) -> void;
   auto setInterlace(bool interlaceField) -> void;
+  // [Phobos] Skip the per-pixel conversion for the frame being refreshed: the
+  // frontend presents the picture from another source (N64 Vulkan scanout).
+  // Set from the refresh callback; platform->video() still receives the viewport.
+  auto setPassthrough(bool passthrough) -> void { _passthrough = passthrough; }
 
   auto attach(Node::Video::Sprite) -> void;
   auto detach(Node::Video::Sprite) -> void;
@@ -114,6 +118,7 @@ protected:
   bool _progressiveDouble = false;
   bool _interlace = false;
   bool _interlaceField = false;
+  bool _passthrough = false;
   u32  _viewportX = 0;
   u32  _viewportY = 0;
   u32  _viewportWidth = 0;

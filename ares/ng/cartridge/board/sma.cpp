@@ -266,16 +266,9 @@ struct SMA : Interface {
 
   auto readP(n1 upper, n1 lower, n24 address, n16 data) -> n16 override {
     // SMA protection: presence
-    if(isPresenceRead(address)) {
-      __android_log_print(ANDROID_LOG_DEBUG, "PhobosSMA", "SMA presence read $%06x -> 9A37", (int)address);
-      return 0x9A37;
-    }
+    if(isPresenceRead(address)) return 0x9A37;
     // PRN
-    if(isPRNRead(address)) {
-      auto v = random_r();
-      __android_log_print(ANDROID_LOG_DEBUG, "PhobosSMA", "SMA PRN read $%06x -> %04x", (int)address, v);
-      return v;
-    }
+    if(isPRNRead(address)) return random_r();
 
     if(address <= 0x0fffff) return prom[address >> 1];
     if(address >= 0x200000 && address <= 0x2fffff) {
@@ -294,9 +287,6 @@ struct SMA : Interface {
   }
 
   auto writeP(n1 upper, n1 lower, n24 address, n16 data) -> void override {
-    if(address >= 0x2fe000 && address <= 0x2fffff) {
-      __android_log_print(ANDROID_LOG_DEBUG, "PhobosSMA", "SMA write $%06x upper=%d lower=%d data=%04x type=%d", (int)address, (int)upper, (int)lower, (int)data, (int)type);
-    }
     if(isBankWrite(address)) {
       // Data is 16-bit word; MAME expects lower bits scrambled. Accept full word.
       // For byte writes, extract relevant byte
@@ -307,9 +297,6 @@ struct SMA : Interface {
       updateBankBase(bankSel);
       __android_log_print(ANDROID_LOG_DEBUG, "PhobosSMA", "SMA bank write $%06x data=%04x sel=%04x -> base=%06x type=%d", (int)address, (int)data, bankSel, bankBase, (int)type);
       return;
-    }
-    if(address >= 0x200000 && address <= 0x2fffff) {
-      // __android_log_print(ANDROID_LOG_DEBUG, "PhobosSMA", "SMA generic write $%06x data=%04x", (int)address, (int)data);
     }
     // Also handle PRN reads that might be written? ignore.
     // Fallback: if generic write at any 0x200000-0x2FFFFF area incorrectly tries to bankswitch (some games write bank via low byte)

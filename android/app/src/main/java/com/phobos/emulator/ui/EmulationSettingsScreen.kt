@@ -54,12 +54,8 @@ fun EmulationSettingsScreen(
                     // Fast Boot moved to the pause menu (per-core Boot Options) —
                     // ares only supports it on GB/GBC, NGP/NGPC, PS1, so the
                     // global toggle was a silent no-op on other cores.
-                    SettingsSwitchItem(
-                        title = "Run-Ahead",
-                        description = "Removes one frame of input lag",
-                        checked = settings.runAhead,
-                        onCheckedChange = { viewModel.setRunAhead(it) }
-                    )
+                    // Run-Ahead is hidden until the core implements it: the old
+                    // switch was never wired to native code.
                     SettingsSwitchItem(
                         title = "Auto-Save State",
                         description = "Save a state snapshot automatically when you quit a game",

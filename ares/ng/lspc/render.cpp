@@ -14,8 +14,9 @@ auto LSPC::render(n9 y) -> void {
   //MVS/AES process sprite slots 0..380. The CD system (LSPC2) processes
   //slots 1..381 — slot 0 is never rendered and slot 381 IS (libretro neocd
   //and Geolith both iterate 1..381; MAME 0..380).
-  u32 spriteFirst = NeoGeo::Model::NeoGeoCD() ? 1 : 0;
-  u32 spriteLast  = NeoGeo::Model::NeoGeoCD() ? 382 : 381;
+  const bool neoGeoCD = NeoGeo::Model::NeoGeoCD();
+  u32 spriteFirst = neoGeoCD ? 1 : 0;
+  u32 spriteLast  = neoGeoCD ? 382 : 381;
 
   for(u32 sprite : range(spriteFirst, spriteLast)) {
     n16 sattributes = vram[0x8000 | sprite];
@@ -53,7 +54,7 @@ auto LSPC::render(n9 y) -> void {
     n2  animate    = attributes.bit(2,3);
     n8  palette    = attributes.bit(8,15);
 
-    if(NeoGeo::Model::NeoGeoCD()) {
+    if(neoGeoCD) {
       //Neo Geo CD: the sprite tile number's upper bits come from the odd
       //word's "tile MSB" field (bits 4..7), folded into tile bits 12..15 and
       //masked to 15 bits (the 4MiB sprite DRAM / 128-byte tiles) — Geolith
@@ -78,7 +79,7 @@ auto LSPC::render(n9 y) -> void {
     n27 tileAddress = (tileNumber << 5 | row) << 2;
 
     n16 d0, d1, d2, d3;
-    if(NeoGeo::Model::NeoGeoCD()) {
+    if(neoGeoCD) {
       //Neo Geo CD sprite DRAM byte order differs from the cartridge C ROM:
       //the four plane bytes of a row are stored in [1,0,3,2] order (the CD
       //bus is word-lane-swapped vs MVS) — Geolith "CD SPR DRAM: Non-

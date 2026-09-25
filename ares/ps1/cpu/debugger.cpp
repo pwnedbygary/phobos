@@ -27,7 +27,11 @@ auto CPU::Debugger::load(Node::Object parent) -> void {
   tracer.function = parent->append<Node::Debugger::Tracer::Notification>("Function", "CPU");
 
   tracer.message->setAutoLineBreak(false);
+  #if !defined(__ANDROID__)
+  //Android discards app stdout; a live terminal tracer would only add BIOS TTY
+  //hook checks to every taken branch.
   tracer.message->setTerminal(true);
+  #endif
 }
 
 auto CPU::Debugger::instruction() -> void {

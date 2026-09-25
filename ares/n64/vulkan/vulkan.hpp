@@ -14,6 +14,11 @@ struct Vulkan {
   auto mapScanoutRead(const u8*& rgba, u32& width, u32& height) -> void;
   auto unmapScanoutRead() -> void;
   auto endScanout() -> void;
+  // [Phobos] Size of the most recently submitted scanout (no fence wait).
+  auto scanoutSize(u32& width, u32& height) -> bool;
+  // [Phobos] Copy of the last completed scanout (RGBA bytes per pixel), for
+  // screenshots from any thread; safe while paused because the buffer persists.
+  auto readScanout(std::vector<u32>& rgba, u32& width, u32& height) -> bool;
   auto crashed() -> const char*;
   auto setSkipIdleOnDestroy(bool skip) -> void;
   // Called from VI::power() on reset: drops the stale scanout fence from
@@ -68,6 +73,23 @@ struct Vulkan {
   std::unique_lock<std::recursive_mutex> scanoutLock;
 
   bool enable = true;
+  // [Phobos] Set by the Android frontend, which presents the scanout buffer
+  // straight to the window (PhobosRunner video()). VI::refresh then skips
+  // copying the scanout into the ares Screen and marks the Screen frame as
+  // pass-through, removing two full-frame CPU passes per frame. The CPU RDRAM
+  // fallback path is unaffected.
+  bool frontendPresentsScanout = false;
+  // [Phobos] Opt-in "Asynchronous RDP" (N64 Experimental, default off), the
+  // equivalent of Mupen64Plus-AE's SynchronousRDP=False: SyncFull raises the DP
+  // interrupt without waiting for the GPU to finish. Faster, but CPU reads of
+  // RDRAM the GPU is still writing (framebuffer effects, readbacks) can see an
+  // unfinished frame. Applies live; the frontend drains the GPU (drainRdp)
+  // before state save/load and reset while it is on, or while rdpWorkPending
+  // says a SyncFull skipped its wait and nothing has waited since (the setting
+  // may have just been switched off).
+  std::atomic<bool> asynchronousRdp = false;
+  std::atomic<bool> rdpWorkPending = false;
+  auto drainRdp() -> void;
   // Written by the JNI thread (PhobosRunner::resetSystem) and read by the
   // emulation thread (scanoutAsync) every frame, so these must be atomic.
   std::atomic<bool> disableVideoInterfaceProcessing = false;

@@ -211,6 +211,13 @@ Historical evidence: the former plan attributed the menu issue to the VI field
 toggle and reported reverting it, retaining a wide-mode transition hold, and
 preserving framebuffer/coherency fixes.
 
+> **2026-09-24 refinement (compiled, not yet device-tested):** the fixed hold also armed on the
+> first scanout of games that boot into a wide VI mode and froze that (black) frame for
+> about 3.5 s. It now arms only on real transitions and releases once the RDP completes
+> a frame in the displayed buffer; the "coherency range fix" and the CPU-fallback
+> stride were returned to upstream VI geometry. See the
+> [handoff](handoff.md#touch-controls-overhaul-and-performance-scan--2026-09-24-in-progress).
+
 #### <a id="n64dd-reload"></a>N64DD quit→reload SIGSEGV — FIXED 2026-08-17
 
 Historical evidence: the former plan attributed the race to stale Kotlin
@@ -1157,6 +1164,9 @@ FIX: hold the previous valid frame for `MODE_CHANGE_HOLD_SCANOUTS` (210 ≈ 3.5s
 tuned 2s→still flashed, 5s→long, 3.5s=perfect) after a vi_width change, GATED to wide
 targets only (vi_width > 640) so normal games (640↔320, MT user-verified flawless) are
 never delayed. Diagnostic `mode-change: vi_w %u -> %u (wide=%d)` when it fires.
+*(Superseded 2026-09-24 by a content-driven release and real-transition arming, and the
+coherency range above was returned to upstream VI geometry: see the
+[summary entry](#rogue-squadron).)*
 
 **Diagnostics in tree (CLEAN UP once the flash is resolved):** `PhobosVI` (video buf
 probe, pixbox, cpu15 + alt0/altMid, extract geometry, scanoutValid/hlpf/serrate),

@@ -15,7 +15,8 @@ fun InputsSettingsScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit,
     onNavigateToInputs: () -> Unit,
-    onNavigateToHotkeys: () -> Unit
+    onNavigateToHotkeys: () -> Unit,
+    onNavigateToTouch: () -> Unit
 ) {
     val settings by viewModel.settings.collectAsState()
 
@@ -45,6 +46,11 @@ fun InputsSettingsScreen(
                         description = "Display virtual on-screen buttons",
                         checked = settings.showTouchControls,
                         onCheckedChange = { viewModel.setShowTouchControls(it) }
+                    )
+                    SettingsClickableItem(
+                        title = "Touch Controls",
+                        description = "Opacity, size, haptics, D-pad and stick feel, and per-system layouts",
+                        onClick = onNavigateToTouch
                     )
                     SettingsClickableItem(
                         title = "Controller Mapping",

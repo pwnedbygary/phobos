@@ -15,6 +15,11 @@ import androidx.navigation.compose.*
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
 
+private const val TOUCH_EDITOR_ROUTE = "settings/touch-editor/{family}"
+
+/** Routes drawn edge to edge without the bottom navigation bar. */
+private val FULL_SCREEN_ROUTES = setOf("system/{name}", "emulator/{system}/{rom}", TOUCH_EDITOR_ROUTE)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScaffold(viewModel: MainViewModel) {
@@ -48,7 +53,7 @@ fun MainScaffold(viewModel: MainViewModel) {
 
     Scaffold(
         bottomBar = {
-            if (currentDestination?.route != "system/{name}" && currentDestination?.route != "emulator/{system}/{rom}") {
+            if (currentDestination?.route !in FULL_SCREEN_ROUTES) {
                 NavigationBar {
                     NavigationBarItem(
                         icon = { Icon(Icons.Default.Home, contentDescription = "Library") },
@@ -141,7 +146,25 @@ fun MainScaffold(viewModel: MainViewModel) {
                     viewModel = viewModel,
                     onBack = { navController.popBackStack() },
                     onNavigateToInputs = { navController.navigate("settings/input-mapping") },
-                    onNavigateToHotkeys = { navController.navigate("settings/hotkeys") }
+                    onNavigateToHotkeys = { navController.navigate("settings/hotkeys") },
+                    onNavigateToTouch = { navController.navigate("settings/touch") }
+                )
+            }
+            composable("settings/touch") {
+                TouchSettingsScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() },
+                    onEditLayout = { family -> navController.navigate("settings/touch-editor/${family.key}") }
+                )
+            }
+            composable(
+                route = TOUCH_EDITOR_ROUTE,
+                arguments = listOf(navArgument("family") { type = NavType.StringType })
+            ) { backStackEntry ->
+                TouchLayoutEditorScreen(
+                    viewModel = viewModel,
+                    familyKey = backStackEntry.arguments?.getString("family") ?: "",
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable("settings/visibility") {

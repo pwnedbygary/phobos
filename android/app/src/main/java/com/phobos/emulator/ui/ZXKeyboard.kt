@@ -1,7 +1,5 @@
 package com.phobos.emulator.ui
 
-import android.view.KeyEvent
-import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -22,7 +20,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -96,38 +93,13 @@ fun ZXKeyboardOverlay(
     onTurboTape: (Boolean) -> Unit,
     controlScheme: Int,
     onControlScheme: (Int) -> Unit,
-    systemName: String,
     rebindTarget: String?,
     onRebindTarget: (String?) -> Unit,
-    onBindKey: (String, Int) -> Unit = { _, _ -> },
     boundKeys: Set<String> = emptySet(),
     keyboardOpacity: Float = 1.0f
 ) {
-    // ── CUSTOM rebind capture ──────────────────────────────────────────────
-    // When a key is waiting for a gamepad control, listen for button presses
-    // (key events), then bind via the hoisted callback.
-    val view = LocalView.current
-    val currentSystemName by rememberUpdatedState(systemName)
-    val currentRebindTarget by rememberUpdatedState(rebindTarget)
-
-    DisposableEffect(rebindTarget != null) {
-        if (rebindTarget == null) return@DisposableEffect onDispose {}
-
-        val keyListener = View.OnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                val bit = mapKeyCodeToBit(keyCode)
-                if (bit != 0) {
-                    currentRebindTarget?.let { target ->
-                        onBindKey(target, bit)
-                        onRebindTarget(null)
-                    }
-                    true
-                } else false
-            } else false
-        }
-        view.setOnKeyListener(keyListener)
-        onDispose { view.setOnKeyListener(null) }
-    }
+    // CUSTOM rebinding: the next controller button is captured by EmulatorScreen's key handler,
+    // which sees keys before this overlay could.
 
     // Rebinding is only available in CUSTOM mode (scheme 4). Long-press a key
     // to start binding it to a gamepad control.
@@ -540,6 +512,8 @@ private fun RowScope.Key(
     onLongPressRebind: ((String) -> Unit)? = null
 ) {
     val haptic = LocalHapticFeedback.current
+    // Read at gesture time: the callback turns on and off with the CUSTOM scheme.
+    val currentOnLongPressRebind by rememberUpdatedState(onLongPressRebind)
 
     var pressed by remember { mutableStateOf(false) }
     var flash by remember { mutableStateOf(false) }
@@ -618,7 +592,7 @@ private fun RowScope.Key(
                 detectTapGestures(
                     onLongPress = {
                         // In CUSTOM mode, long-press starts rebinding this key.
-                        onLongPressRebind?.invoke(label)
+                        currentOnLongPressRebind?.invoke(label)
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     },
                     onPress = {

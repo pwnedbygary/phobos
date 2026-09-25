@@ -25,6 +25,250 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+**Active work (2026-09-24):** a large change set (touch controls, performance,
+Asynchronous RDP, Rogue Squadron hold, save-state previews) on branch
+`feature/touch-controls-perf-2026-09`: compiled for both flavors, host unit tests
+pass, not yet device-tested — read the next section before changing anything.
+
+## Touch controls overhaul and performance scan — 2026-09-24 (in progress)
+
+Status: **implemented on branch `feature/touch-controls-perf-2026-09` (base
+`6acee27cb`); compiled for both flavors and host unit tests pass (see "Checks run");
+not yet run on a device.** Committed only after independent review of the frozen
+snapshot, per the development process. Device checks are the remaining step.
+
+User requests (2026-09-24, Cursor session):
+1. Scan the whole codebase for performance gains in every core, keeping accuracy
+   (ares' cycle-accuracy philosophy) first; the Mupen64Plus parallel-RDP gap was the
+   trigger. Prior analysis: [performance audit](performance-audit.md) and the archived
+   2026-08-20 comparison in [implementation history](implementation-history.md#task-72).
+2. Perform the remaining implementation-plan tasks; top priority is a complete,
+   pretty overhaul of the touch controls, as good as or better than Mupen64Plus-AE's,
+   borrowing freely from [mupen64plus-ae-turnip](https://github.com/pwnedbygary/mupen64plus-ae-turnip)
+   and [Argosy Launcher](https://github.com/rommapp/argosy-launcher).
+3. Refactor code that could be more readable/maintainable when touching it (ares core
+   files stay close to upstream; only targeted behavior-preserving fixes there).
+4. Document everything found, changed and still to do, for posterity and LLM handoff.
+5. Add an **Asynchronous RDP** option (Mupen's `SynchronousRDP=False`) under N64
+   Experimental, default off, toggleable from both the pause menu and Settings; if it
+   needs a restart, tell the user (it does not: it applies at the next full sync).
+6. Review the Star Wars: Rogue Squadron fix (a delay before presenting frames after a
+   VI mode change) that causes extended black screens at boot in some games, and find a
+   better fix that keeps Rogue Squadron rendering correctly.
+
+Constraints in force:
+- **Do not run anything that touches the phone** (user is using it with another
+  LLM). Before that instruction, read-only `adb` queries were run once: device
+  `FY24227104AB` = nubia Red Magic 9 Pro (NX769J, SM8650, Android 16, 1116×2480,
+  60/90/120 Hz). Phobos is **not installed** on it; installed: Mupen64Plus turnip
+  (`org.mupen64plusae.turnip.pwnedbygary` + `.debug`), Argosy, RetroArch, AetherSX2,
+  Dolphin, Eden. No adb commands since. The auto-reviewer also blocked local command
+  execution under this instruction, so the work was written with file edits and
+  read-only research; the user later authorized the local build, review and commit
+  (still no phone access).
+- `/Users/gbagley/LLM-Projects/mupen64plus-ae-turnip` is being edited by another
+  agent (branch `fix/fullscreen-gallery-branding`): **read-only**, no git commands.
+- Local toolchain found (unverified by a build): JDK 17 at
+  `/Library/Java/JavaVirtualMachines/temurin-17.jdk`; SDK at `~/Library/Android/sdk`
+  (platform 37.0, build-tools 36.0.0, CMake 3.22.1, NDK **26.1.10909125 only**; CI
+  uses 28.2.13676358); `thirdparty/libadrenotools` submodule **not initialized**;
+  no Gradle cache yet.
+
+### What was done
+
+- **Touch controls** (design, findings F1–F24, reference comparison and device
+  checklist in [touch-controls.md](touch-controls.md)): `ui/touch/` (model, per-family
+  layouts, placement, engine, renderer, overlay, layout editor),
+  `ui/TouchSettingsScreen.kt`, persistence in `SettingsStore`/`MainViewModel`, routes in
+  `MainScaffold`, pause-menu Touch Controls section and quick actions, portrait picture
+  at the top, hide while a controller is used. Research-driven additions: 48 dp minimum
+  targets, auto-hold, swap hands, idle fade, separate portrait opacity, quick-tap
+  delivery. Old `ui/TouchControls.kt` deleted.
+- **Input refactor:** `input/InputBindings.kt`, `input/Hotkeys.kt`, rewritten
+  `input/GameInputState.kt`; `EmulatorScreen.kt` split into `EmulatorScreen`,
+  `EmulationMenu`, `EmulatorDialogs`, `ZxTapeProgress`; `MainActivity` cleanup.
+- **Native input fixes** (`PhobosRunner.cpp`): 2600 console switches, SMS Pause, NGP
+  Option; on-screen keys for MSX and the ColecoVision keypad; key set cleared on unload;
+  per-bit press counters so quick taps reach the core.
+- **Aspect ratio (F13):** `recordVideoGeometry()` / JNI `getVideoGeometry()` /
+  `MainViewModel.videoGeometry`; Core Provided uses each core's real aspect, Integer
+  Scaled works in physical pixels.
+- **Performance** (full list, reasons and the ranked Mupen-gap explanation in the
+  [performance audit](performance-audit.md#2026-09-24-scan-and-behavior-preserving-changes)):
+  N64 Vulkan frames presented once instead of three CPU passes (`Screen::setPassthrough`,
+  `vulkan.frontendPresentsScanout`); N64 screenshots from the scanout; NEON non-N64
+  video conversion; cached input bindings; Granite error rate limiter re-enabled;
+  hot-path logs removed (Neo Geo SMA, PS1 DualShock/CD-XA, video, axis); PS1 BIOS TTY
+  tracer off on Android; Neo Geo LSPC model check hoisted; ThinLTO link at `-O3`;
+  flavor `-march` for C sources.
+- **Asynchronous RDP** (request 5): `vulkan.asynchronousRdp` gates the SyncFull
+  timeline wait; `setN64AsyncRdp` JNI → `PhobosCore` → `SettingsStore`
+  (`n64_async_rdp`, default false) → `MainViewModel.setN64AsyncRdp` → switches in
+  Settings → N64 Experimental → Rendering and in the pause menu's N64 Experimental
+  screen. Applies live; the frontend drains the GPU (`Vulkan::drainRdp`) before state
+  save, state load and reset while it is on, or while async work is still unwaited
+  (`vulkan.rdpWorkPending`, for a setting switched off moments earlier). Other N64 Experimental options that only apply at reset
+  or reload now show a toast saying so while an N64 game runs.
+- **Rogue Squadron** (request 6): see below.
+- **Save-state previews (plan task 50):** each save writes `<state>.thumb` next to the
+  state; the pause menu shows the current slot's preview and save time.
+- **Run-Ahead audit:** confirmed the switch was never wired to native code; hidden
+  (stored preference kept). Settings summary text corrected.
+
+### Rogue Squadron transition hold — analysis and fix
+
+History (see [implementation history](implementation-history.md#rogue-squadron)): the
+menu's black screen was fixed by reverting the VI field toggle (`eae573558`,
+`f21bfe54e`). The white/rainbow flash when the attract demo (VI width 400) switches to
+the menu (VI width 1024, a 512-wide RDP buffer at `0x790000` scanned with a 1024 stride
+for interlacing) was hidden by re-presenting the previous frame for a fixed 210
+scanouts, about 3.5 s (`6a556f111`), limited to widths above 640 (`89fa3ad5f`).
+
+Problems found:
+1. **Boot freeze (the black screens).** `last_vi_width` starts at 0, so the first valid
+   scanout of any game whose VI width is above 640 armed the hold even though no
+   previous picture existed. That first frame, usually black, then became the
+   "previous" picture and was re-presented for about 3.5 s. Games that boot into a wide
+   VI mode froze on it, and so could any later wide transition from a black fade.
+2. **Wrong scanout geometry.** Three places used the RDP's latest color image instead of
+   the buffer the VI actually displays: `VideoInterface::scanout_memory_range` (the
+   range synced before scanout when upscaling or when RDRAM is not host-coherent), and
+   the ares CPU fallback in `vi.cpp` (used when Vulkan is unavailable). Under double
+   buffering the latest color image is the back buffer, so CPU-drawn frames such as
+   boot logos never reached the upscaled RDRAM (black) and the fallback showed
+   half-drawn frames without the interlaced field offset. With Rogue Squadron's 1024
+   stride over a 512-wide buffer, the substituted range also covered only half the rows
+   the VI reads. These came from a hypothesis the history lists as a false lead
+   (striding by the RDP width); the extract itself was already restored to the upstream
+   VI geometry on 2026-08-15.
+
+Fix (`ares/n64/vulkan/parallel-rdp/parallel-rdp/{video_interface,rdp_device}.{hpp,cpp}`,
+`ares/n64/vi/vi.cpp`, comments in `ares/n64/rdp/{rdp.hpp,render.cpp}`):
+- The hold arms only on a real transition: a previous picture exists and the old width
+  was stable for 30 scanouts. Boot-time VI setup never arms it.
+- It ends as soon as the VI origin lies within the first 16 lines of a framebuffer the
+  RDP completed *after* the change (a buffer address reused across modes does not
+  count). `CommandProcessor` records each frame's color images and commits them at
+  `SYNC_FULL`, stamped with a sequence number, into an 8-entry history (ring worker
+  thread, guarded by a small mutex, declared before the ring so it outlives the worker);
+  `scanout()` hands the history to the VI after draining the ring. The 210-scanout cap
+  remains as a safety net. For Rogue Squadron the VI origin alternates
+  `0x790400`/`0x790800`, one or two lines into the `0x790000` buffer.
+- `scanout_memory_range` and the CPU fallback use the VI origin and width, exactly
+  what the VRAM extract reads (upstream). `setRdpFramebuffer`/`rdpFramebuffer*` now feed
+  only the N64 Debug Logging coherency probe.
+
+Device validation (N64 Debug Logging shows `PhobosVI mode-change: …` and
+`hold released with N scanouts left`):
+- Rogue Squadron: boot (no long black screen), attract demo → menu (no white/rainbow
+  flash), menu → mission and back; also with 2× upscale.
+- A game that boots into a wide VI mode, plus Mario Tennis, Conker and Zelda OoT, to
+  check nothing else holds or changes.
+- If Rogue Squadron's flash returns, the RDP must be completing frames into the menu
+  buffer before the menu is drawn. Then keep the arming fix and remove the
+  `origin_recently_rendered` release (fixed cap again), or require a minimum hold.
+
+### Changed files (for review)
+
+Under `android/app/src/main/java/com/phobos/emulator/`: new `ui/touch/{TouchModel,
+TouchLayouts,TouchPlacement,TouchEngine,TouchRenderer,TouchControlsOverlay,
+TouchLayoutEditor}.kt`, `ui/{TouchSettingsScreen,EmulationMenu,EmulatorDialogs,
+ZxTapeProgress}.kt`, `input/{InputBindings,Hotkeys}.kt`; modified
+`ui/{EmulatorScreen,Components,MainViewModel,MainScaffold,InputsSettingsScreen,
+ZXKeyboard,N64ExperimentalSettingsScreen,EmulationSettingsScreen,SettingsScreen}.kt`,
+`data/SettingsStore.kt`, `input/GameInputState.kt`, `MainActivity.kt`, `PhobosCore.kt`;
+deleted `ui/TouchControls.kt`. Tests: new
+`android/app/src/test/java/com/phobos/emulator/ui/touch/{TouchEngineTest,
+TouchLayoutCodecTest,TouchLayoutsTest}.kt`.
+
+Native: `android/app/src/main/cpp/{PhobosRunner.cpp,PhobosRunner.hpp,PhobosJNI.cpp}`;
+`ares/n64/vulkan/{vulkan.hpp,vulkan.cpp}`; `ares/ares/node/video/{screen.hpp,screen.cpp}`;
+`ares/n64/vi/vi.cpp`; `ares/n64/rdp/{rdp.hpp,render.cpp}`;
+`ares/n64/vulkan/parallel-rdp/parallel-rdp/{video_interface.hpp,video_interface.cpp,
+rdp_device.hpp,rdp_device.cpp}`; `ares/ng/cartridge/board/sma.cpp`;
+`ares/ng/lspc/render.cpp`; `ares/ps1/{disc/cdxa.cpp,peripheral/dualshock/dualshock.cpp,
+cpu/debugger.cpp}`. Build: `CMakeLists.txt`, `android/app/build.gradle.kts`. Docs:
+`docs/{touch-controls,handoff,implementation-plan,performance-audit,
+implementation-history}.md`.
+
+### Pre-build review (advisory)
+
+Three independent read-only reviews (native C++, the touch package, the app layer; no
+commands run) found no definite compile errors and about twenty logic issues. Fixed:
+- Native: the nall `contains()` misuse that disabled the Neo Geo map and rotated every
+  system in WonderSwan vertical mode (touch-controls F20, F21); stale frames when the N64
+  scanout is missing or smaller than the window (now black) and a guard against a
+  window buffer smaller than requested; quick-tap replays limited to presses under
+  100 ms and not counted while paused; `endScanout()` in the passthrough path taken under
+  `vulkan.mutex`; the Rogue Squadron release requires a frame completed after the change;
+  the new parallel-RDP members declared before the command ring (teardown order);
+  Granite rate limiter state made atomic.
+- Touch: editor taps no longer pin elements; taps between a cluster's buttons are not
+  background taps; cancelled gestures; sliding onto action buttons; one finger per stick;
+  equal D-pad sectors on first touch; press stickiness; per-axis minimum targets; stick
+  thumb shows output; idle fade only after the last finger lifts; capped render caches;
+  touch settings written in one DataStore transaction.
+- App: hat D-pad clobbering key D-pads (F22); ZX rebind capture and scheme persistence
+  (F23); pause-menu controller navigation, editor key isolation and quit-dialog cancel
+  (F24); focus-loss release on the right node; keyboard hotkey only on ZX; fast-forward
+  reset when leaving the screen; the first tap after using a controller only reveals
+  hidden controls when they were hidden; the Settings-side editor honors WonderSwan
+  vertical mode; save-state previews captured before the state and decoded downsampled.
+
+Not changed (pre-existing, recorded for follow-up): `contains("Neo Geo")` when naming the
+ROM temp file; a debug-only `NoSuchElementException` in `MainActivity`'s adb load path
+when the app starts cold (`viewModel.systems.first {}`); touch placement avoids display
+cutouts but not system gesture areas; the Neo Geo 2×2 grid's center presses B+C (they
+are corridor neighbours; A–D, the other pair, is too far apart).
+
+### Checks run (2026-09-24, local Mac, no device)
+
+Toolchain: Temurin OpenJDK 17.0.20.1, Gradle 9.6.0 (wrapper), AGP 9.3.2, Kotlin 2.2.10,
+Compose BOM 2024.06.00, CMake 3.22.1, **NDK 26.1.10909125** (the only NDK installed here;
+CI's AGP default is 28.2.13676358, so CI compiles with a newer clang).
+`thirdparty/libadrenotools` initialized at its pinned `8fae8ce25`.
+
+Local-only setup, all git-ignored: `android/local.properties` (`sdk.dir`),
+`GRADLE_USER_HOME=.local/gradle-home`, an init script
+`.local/gradle/init-local-ndk.gradle` that sets `android.ndkVersion = "26.1.10909125"`,
+`-Pandroid.builder.sdkDownload=false`, and a Java trust store
+`.local/certs/truststore.p12` (JDK roots plus the Mac's keychain roots) passed with
+`-Djavax.net.ssl.trustStore…`, because the JDK rejected the TLS certificate presented
+for `services.gradle.org` on this network.
+
+Results, all from `android/` with the setup above:
+- `./gradlew :app:compileModernDebugKotlin`: BUILD SUCCESSFUL. Warnings only, all in
+  untouched code (deprecated `Icons.Filled.ArrowBack`/`List`, `statusBarColor`, two
+  unchecked casts in `SettingsStore.updateInputMapping`).
+- `./gradlew :app:testModernDebugUnitTest`: BUILD SUCCESSFUL; `TouchEngineTest` 25,
+  `TouchLayoutCodecTest` 6, `TouchLayoutsTest` 5 tests, 0 failures.
+- `./gradlew :app:externalNativeBuildModernDebug`: BUILD SUCCESSFUL (4 min 7 s);
+  `libphobos_android.so` linked. `build.ninja` confirms `-flto=thin -O3` on the link
+  line and `-march=armv8.2-a+fp16+dotprod` on C sources (e.g. `libco/aarch64.c`).
+- `./gradlew :app:externalNativeBuildLegacyDebug`: BUILD SUCCESSFUL (3 min 52 s);
+  `-flto=thin -O3` on the link line, `-march=armv8-a+simd` on C sources.
+
+Formal review of that snapshot: native PASS; touch and app/docs NEEDS CHANGES (menu
+release reach, auto-hold latches across relayout, focus after resuming from a
+controller-navigated pause menu, three doc statements). After the fixes (plus
+non-blocking items: `rdpWorkPending` drain, ColecoVision keypad player 1 only, editor
+pinch-to-drag handoff, save order restored with per-call temp files, compressed
+previews, listener ownership) the checks were rerun:
+- `./gradlew :app:testModernDebugUnitTest`: BUILD SUCCESSFUL; `TouchEngineTest` 30,
+  `TouchLayoutCodecTest` 6, `TouchLayoutsTest` 5 tests (41), 0 failures.
+- `./gradlew :app:externalNativeBuildModernDebug :app:externalNativeBuildLegacyDebug`:
+  BUILD SUCCESSFUL (3 min 49 s); both libraries relinked with `-flto=thin -O3`.
+
+Not run: APK packaging/signing, a build with NDK 28.2, and anything on a device.
+
+### Next steps
+
+1. Device checks: the checklist in [touch-controls.md](touch-controls.md#verification-plan),
+   the Rogue Squadron list above, and the regressions in the
+   [performance audit](performance-audit.md#required-verification).
+2. A CI build (NDK 28.2) before release.
+3. Publish (push) the branch only when authorized.
+
 ## NGCD-M3 title-menu text fix — 2026-09-24
 
 Scope: Neo Geo CD only. `ares/ng/disc/dma.cpp` (`0xe2dd` write order) and a

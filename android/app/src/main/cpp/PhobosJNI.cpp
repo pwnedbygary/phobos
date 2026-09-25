@@ -311,6 +311,11 @@ Java_com_phobos_emulator_PhobosCore_setN64CpuOverclock(JNIEnv* env, jobject, jin
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64AsyncRdp(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setN64AsyncRdp(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64Pak(JNIEnv* env, jobject, jstring pakName) {
     const char* nativePakName = env->GetStringUTFChars(pakName, 0);
     ares::setN64Pak(nativePakName);
@@ -475,4 +480,13 @@ Java_com_phobos_emulator_PhobosCore_getPerformanceStats(JNIEnv* env, jobject) {
     jmethodID constructor = env->GetMethodID(cls, "<init>", "(DDIIZ)V");
 
     return env->NewObject(cls, constructor, (f64)stats.fps, (f64)stats.frameTime, (s32)stats.activeCore, (s32)stats.pipelineFailures, (jboolean)stats.isAdrenoDriver);
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_phobos_emulator_PhobosCore_getVideoGeometry(JNIEnv* env, jobject) {
+    ares::VideoGeometry geometry = ares::getVideoGeometry();
+    jfloat values[2] = {(jfloat)geometry.width, (jfloat)geometry.height};
+    jfloatArray result = env->NewFloatArray(2);
+    if (result) env->SetFloatArrayRegion(result, 0, 2, values);
+    return result;
 }
