@@ -43,6 +43,7 @@ auto RDRAM::power(bool reset) -> void {
       if(chip.ccHigh <= chip.ccLow) chip.ccHigh = chip.ccLow + 1;
     }
     mapIdentity = 0;
+    cpu.recompiler.invalidateStateKey();
   }
   profile = {};
 }
@@ -79,6 +80,7 @@ auto RDRAM::encodeCCI(n6 cci) -> u32 {
 }
 
 auto RDRAM::updateMapping() -> void {
+  cpu.recompiler.invalidateStateKey();
   mapIdentity = 1;
   for(u32 n : range(4)) {
     auto& chip = chips[n];

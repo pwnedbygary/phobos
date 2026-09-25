@@ -138,6 +138,9 @@ public:
 	// Queues up state and drawing commands.
 	void enqueue_command(unsigned num_words, const uint32_t *words);
 	void enqueue_command_direct(unsigned num_words, const uint32_t *words);
+	// Commands enqueued between these reach the ring worker with one wake-up.
+	void begin_command_batch();
+	void end_command_batch();
 
 	void set_quirks(const Quirks &quirks);
 

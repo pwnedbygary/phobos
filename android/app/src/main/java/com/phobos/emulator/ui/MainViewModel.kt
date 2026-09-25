@@ -47,6 +47,7 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.util.zip.CRC32
 import java.util.zip.ZipInputStream
+import kotlin.math.roundToInt
 
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -541,7 +542,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         val shot = File(context.cacheDir, "state-shot-${System.nanoTime()}.png")
         return try {
             if (!PhobosCore.takeScreenshot(shot.absolutePath) || shot.length() == 0L) return false
-            val bitmap = decodePreview { shot.inputStream() } ?: return false
+            val bitmap = toDisplayAspect(decodePreview { shot.inputStream() } ?: return false)
             target.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
             bitmap.recycle()
             target.length() > 0
@@ -551,6 +552,20 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         } finally {
             shot.delete()
         }
+    }
+
+    /**
+     * Stretches a frame to the picture's display aspect (an N64 progressive scanout is
+     * 640x240 but shows at 4:3). Skipped when the picture is rotated relative to the frame
+     * (WonderSwan vertical), since the screenshot is not.
+     */
+    private fun toDisplayAspect(bitmap: Bitmap): Bitmap {
+        val geometry = PhobosCore.getVideoGeometry()
+        if (geometry.size != 2 || geometry[0] <= 0f || geometry[1] <= 0f) return bitmap
+        if ((geometry[0] >= geometry[1]) != (bitmap.width >= bitmap.height)) return bitmap
+        val height = (bitmap.width * geometry[1] / geometry[0]).roundToInt().coerceAtLeast(1)
+        if (height == bitmap.height) return bitmap
+        return Bitmap.createScaledBitmap(bitmap, bitmap.width, height, true).also { bitmap.recycle() }
     }
 
     /** Decodes a preview at roughly menu size; an upscaled N64 scanout can be 2560 px wide. */

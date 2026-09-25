@@ -253,6 +253,12 @@ auto Vulkan::render() -> bool {
     } while(--length);
   }
 
+  struct CommandBatch {
+    ::RDP::CommandProcessor& processor;
+    CommandBatch(::RDP::CommandProcessor& processor) : processor(processor) { processor.begin_command_batch(); }
+    ~CommandBatch() { processor.end_command_batch(); }
+  } batch{*implementation->processor};
+
   while(queueOffset < queueSize) {
     u32 op = buffer[queueOffset * 2];
     u32 code = op >> 24 & 63;

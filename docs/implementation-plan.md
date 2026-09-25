@@ -1,9 +1,11 @@
 # Phobos implementation plan — canonical roadmap and status
 
-**Last reconciled: 2026-09-24** (task dispositions and safeguards updated for the
-compiled but not yet device-tested touch-controls/performance work described in the
-[handoff](handoff.md#touch-controls-overhaul-and-performance-scan--2026-09-24-in-progress);
-the rest of the 2026-09-15 reconciliation stands). This is the authoritative current roadmap.
+**Last reconciled: 2026-09-25** (tasks 50 and 72 updated with device-measured N64
+performance and aspect/preview work — see the
+[performance audit](performance-audit.md#2026-09-25-device-profiling-retroid-pocket-6-and-changes);
+task dispositions and safeguards from 2026-09-24 for the touch-controls/performance work
+in the [handoff](handoff.md#touch-controls-overhaul-and-performance-scan--2026-09-24-in-progress)
+and the rest of the 2026-09-15 reconciliation stand). This is the authoritative current roadmap.
 It is deliberately compact: indexed dated evidence from the former 1,874-line
 plan is preserved in [implementation-history.md](implementation-history.md),
 whose final non-operative appendix contains the complete original snapshot
@@ -196,7 +198,7 @@ former record reported completion, not that this pass reverified it.
 | 14, 15, 18, 19 | Responsive UI, polish/shader menu, video options, UI coloration | **Deferred QoL, retained.** Portrait picture placement changed with the touch work; no other instruction. [Archive index](implementation-history.md#task-14) |
 | 42, 42b, 43, 44 | Perf monitor/game-FPS/GPU/CPU/thermal | **Deferred until attribution need is demonstrated.** Do not fabricate counters. [42](implementation-history.md#task-42), [42b](implementation-history.md#task-42b), [43](implementation-history.md#task-43), [44](implementation-history.md#task-44) |
 | 49 | N64 save import/export | **Open, retained.** UI and format mapping require save-safe review; not a performance task. [Archive](implementation-history.md#task-49) |
-| 50 | Save-state screenshots | **Implemented 2026-09-24, not device-tested.** Each save also writes `<state>.thumb` (PNG data under a non-image extension, so gallery apps skip it) next to the state in SAF or internal storage; a failed capture drops only the preview. The pause menu shows the slot's preview and save time; delete removes both. [Archive](implementation-history.md#task-50) |
+| 50 | Save-state screenshots | **Implemented 2026-09-24; seen working on device 2026-09-25.** Each save also writes `<state>.thumb` (PNG data under a non-image extension, so gallery apps skip it) next to the state in SAF or internal storage; a failed capture drops only the preview. The pause menu shows the slot's preview and save time; delete removes both. Since 2026-09-25 the preview is stretched to the picture's display aspect (an N64 progressive scanout is 640×240 but shows at 4:3); previews saved earlier stay squashed until re-saved. [Archive](implementation-history.md#task-50) |
 | 51 | ZX multi-tape swap and multi-file ZIP picker | **Deferred QoL, retained.** [Archive](implementation-history.md#task-51) |
 | 59 | Write-through dcache bypass | **Parked high-risk.** Task 58's direct bypass broke DMA; no default/per-game enablement. [Archive](implementation-history.md#task-59) |
 | 60 | Per-game hash overrides | **Parked.** Revisit only with a demonstrated, measured need and explicit timing review. [Archive](implementation-history.md#task-60) |
@@ -211,7 +213,7 @@ former record reported completion, not that this pass reverified it.
 | 69 | CPU/GPU performance overlay | **Deferred enablement work.** External traces precede extra instrumentation. [Archive](implementation-history.md#task-69) |
 | 70 | ZX Z80 recompiler | **Deferred/likely skip.** Profile before touching. [Archive](implementation-history.md#task-70) |
 | 71 | Dynamic speed compensation | **Deferred product/accuracy decision.** Not a generic speedup. [Archive](implementation-history.md#task-71) |
-| 72 | N64 RDP-ParaLLEl comparison | **P0/P1 evidence investigation.** Use pinned v336 only; debug DD branches excluded; no code transplant. 2026-09-24: ranked gap hypotheses recorded; the user authorized an opt-in (default-off) Asynchronous RDP setting, and the redundant N64 presentation copies were removed (both compiled, not measured). [Audit](performance-audit.md#2026-09-24-scan-and-behavior-preserving-changes), [Archive](implementation-history.md#task-72) |
+| 72 | N64 RDP-ParaLLEl comparison | **P0/P1 evidence investigation.** Use pinned v336 only; debug DD branches excluded; no code transplant. 2026-09-24: ranked gap hypotheses recorded; the user authorized an opt-in (default-off) Asynchronous RDP setting, and the redundant N64 presentation copies were removed (both compiled, not measured). 2026-09-25: measured on the Retroid Pocket 6 against the user's Mupen64Plus-AE `Parallel` profile (same Turnip driver) with simpleperf and a save-state benchmark; root causes fixed (a sync after every JIT block from a Count/Compare clamp, a futex per audio sample and per RDP command, PLT/GOT, state-key and block-lookup cost); Mario Tennis gameplay 50.6 → 58.4 FPS average (Mario vs Boo save state, 30 s × 2, Asynchronous RDP on; default is off). Next: CPU block linking, RSP dispatch; opt-in speed options await the user's decision. [Audit](performance-audit.md#2026-09-25-device-profiling-retroid-pocket-6-and-changes), [Archive](implementation-history.md#task-72) |
 | Rogue Squadron transition hold | N64 VI | **Refined 2026-09-24, compiled; needs device validation.** The fixed ~3.5 s hold also armed at boot for games starting in a wide VI mode (frozen black frame). It now arms only on a real transition and ends as soon as the RDP completes a frame in the displayed buffer (3.5 s cap kept). Scanout coherency range and CPU fallback returned to the upstream VI geometry. [Handoff](handoff.md#touch-controls-overhaul-and-performance-scan--2026-09-24-in-progress), [Archive](implementation-history.md#rogue-squadron) |
 | Run-Ahead audit | Feature completeness | **Audited 2026-09-24: confirmed inert** (the setting was stored but never reached native code). The switch is hidden; the stored preference is kept. Implementing it needs per-frame serialize/run/restore with video and audio suppressed on the hidden frame; impractical on N64 (GPU-side RDRAM), a separately reviewed change elsewhere. [Archive](implementation-history.md#feature-completeness) |
 | Task #2 | Release APK update safety | **Cancelled.** Not reopened here; update compatibility remains unverified. |

@@ -25,10 +25,18 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-**Active work (2026-09-24):** a large change set (touch controls, performance,
-Asynchronous RDP, Rogue Squadron hold, save-state previews) on branch
-`feature/touch-controls-perf-2026-09`: compiled for both flavors, host unit tests
-pass, not yet device-tested — read the next section before changing anything.
+**Active work (2026-09-25):** branch `feature/touch-controls-perf-2026-09` (draft PR
+#2). On top of the 2026-09-24 change set (touch controls, performance, Asynchronous RDP,
+Rogue Squadron hold, save-state previews; read the next section before changing
+anything), a second commit makes N64 emulation substantially cheaper on device —
+Mario Tennis gameplay 50.6 → 58.4 FPS average on the Retroid Pocket 6 (Mario vs Boo
+save state, 30 s × 2, Asynchronous RDP on; default is off) — and fixes the squashed
+N64/PS1 picture and save-state previews; the tap-to-show top bar is replaced by the
+on-screen menu button at the user's request ([touch controls](touch-controls.md)).
+What was measured, why Phobos was slow, what changed (including the one timing change,
+the JIT budget) and what is next are in the
+[performance audit](performance-audit.md#2026-09-25-device-profiling-retroid-pocket-6-and-changes).
+Local builds for performance numbers must use NDK 28.2 (the CI toolchain).
 
 ## Touch controls overhaul and performance scan — 2026-09-24 (in progress)
 
@@ -260,6 +268,33 @@ previews, listener ownership) the checks were rerun:
   BUILD SUCCESSFUL (3 min 49 s); both libraries relinked with `-flto=thin -O3`.
 
 Not run: APK packaging/signing, a build with NDK 28.2, and anything on a device.
+
+### Checks run (2026-09-25, local Mac + Retroid Pocket 6 `49016109`)
+
+Toolchain: Temurin OpenJDK 17, Gradle wrapper, **NDK 28.2.13676358** (CI's AGP
+default; installed locally for this pass). Same git-ignored Gradle/truststore setup as
+2026-09-24, with the init script pinning `android.ndkVersion = "28.2.13676358"`.
+
+Host:
+- `./gradlew :app:externalNativeBuildModernRelease :app:externalNativeBuildLegacyRelease`
+  and matching `assemble*Release` packaging: BUILD SUCCESSFUL for both flavors.
+- `./gradlew :app:testModernDebugUnitTest`: BUILD SUCCESSFUL; 41 tests, 0 failures
+  (`TouchEngineTest` / `TouchLayoutCodecTest` / `TouchLayoutsTest`).
+
+Device (RP6 only; Red Magic never used):
+- Mario vs Boo save-state FPS (30 s × 2, Asynchronous RDP on): CI `373cec0` 50.6 FPS;
+  this change set 58.4 / 58.4 FPS (see
+  [performance audit](performance-audit.md#2026-09-25-device-profiling-retroid-pocket-6-and-changes)).
+- N64 picture and a freshly captured save-state preview show at 4:3 (progressive
+  640×240 scanouts); older previews stay squashed until re-saved.
+- Smoke: Zelda OoT, Paper Mario, Rogue Squadron, Mischief Makers, F-Zero X, Wave Race 64
+  boot and run; Conker's pub menu held ~4 minutes at ~60 FPS.
+- Tap-to-pause with the menu button hidden was exercised after the top bar removal;
+  tap-while-loading is gated on `isLoaded` (review fix).
+
+Formal review of the frozen snapshot: native PASS (LOW timing-doc notes folded into the
+audit); Kotlin/docs NEEDS CHANGES (tap-while-loading, FPS claim context, orientation
+source, rate wording) — fixed in this tree before commit.
 
 ### Next steps
 

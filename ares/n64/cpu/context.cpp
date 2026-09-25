@@ -1,4 +1,5 @@
 auto CPU::Context::setMode() -> void {
+  self.recompiler.invalidateStateKey();
   mode = min(2, self.scc.status.privilegeMode);
   if(self.scc.status.exceptionLevel) mode = Mode::Kernel;
   if(self.scc.status.errorLevel) mode = Mode::Kernel;

@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
@@ -21,15 +20,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -52,10 +44,10 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -63,7 +55,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.phobos.emulator.PhobosCore
-import com.phobos.emulator.R
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.input.GameInputState
@@ -72,14 +63,15 @@ import com.phobos.emulator.input.InputBindings
 import com.phobos.emulator.input.comboUsesDpad
 import com.phobos.emulator.input.mapKeyCodeToBit
 import com.phobos.emulator.input.matchingHotkeys
+import com.phobos.emulator.ui.touch.ButtonCluster
 import com.phobos.emulator.ui.touch.TouchAction
 import com.phobos.emulator.ui.touch.TouchControlsOverlay
 import com.phobos.emulator.ui.touch.TouchFamily
 import com.phobos.emulator.ui.touch.TouchLayoutCodec
 import com.phobos.emulator.ui.touch.TouchLayoutEditor
 import com.phobos.emulator.ui.touch.TouchLayouts
+import com.phobos.emulator.ui.touch.isHidden
 import com.phobos.emulator.ui.touch.touchLayoutKey
-import kotlinx.coroutines.delay
 
 private val VOLUME_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
 
@@ -93,8 +85,6 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     val videoGeometry by viewModel.videoGeometry.collectAsState()
 
     var showQuitDialog by remember { mutableStateOf(false) }
-    // Top bar (back / title / pause) auto-hides; tapping empty screen space toggles it.
-    var showTopBar by remember { mutableStateOf(true) }
     var editingTouchLayout by remember { mutableStateOf(false) }
     // A physical controller is in use: touch controls hide until the screen is touched again.
     var controllerActive by remember { mutableStateOf(false) }
@@ -208,9 +198,6 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             focusRequester.requestFocus()
         }
     }
-    LaunchedEffect(showTopBar, isPaused) {
-        if (showTopBar && !isPaused) { delay(3000); showTopBar = false }
-    }
     BackHandler { if (!isLoaded || isPaused) askToQuit() }
     BackHandler(enabled = editingTouchLayout) { editingTouchLayout = false }
 
@@ -255,11 +242,21 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     val portraitOverrides = remember(portraitLayout) { TouchLayoutCodec.decode(portraitLayout) }
     val touchVisible = isLoaded && !isPaused && !editingTouchLayout && settings.showTouchControls &&
         !(touchPrefs.hideOnController && controllerActive)
+    // Match TouchControlsOverlay: landscape vs portrait from this screen's own size,
+    // not Configuration (which can disagree in split-screen / inset layouts).
+    var landscapeScreen by remember { mutableStateOf(true) }
+    // Without an on-screen menu button (touch controls off, or the button turned off or
+    // hidden in the layout editor) a tap on the game opens the pause menu instead.
+    val menuButtonShown = touchVisible && touchLayout.elements.any { element ->
+        element is ButtonCluster && element.buttons.any { it.action == TouchAction.MENU } &&
+            !isHidden(element, (if (landscapeScreen) landscapeOverrides else portraitOverrides)[element.id], landscapeScreen)
+    }
 
     // ── Main container ───────────────────────────────────────────────────────
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .onSizeChanged { landscapeScreen = it.width >= it.height }
             .background(Color.Black)
             // Before focusable() so it observes this node's focus (hasFocus includes children).
             .onFocusChanged { if (!it.hasFocus) GameInputState.releaseAllButtons() }
@@ -326,7 +323,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             onTap = {
                 // With touch controls hidden for a controller, the first tap brings them back.
                 if (controllerActive && settings.showTouchControls && touchPrefs.hideOnController) controllerActive = false
-                else showTopBar = !showTopBar
+                else if (isLoaded && !menuButtonShown) viewModel.setPause(true)
             },
         )
 
@@ -346,7 +343,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                         TouchAction.NONE -> {}
                     }
                 },
-                onBackgroundTap = { showTopBar = !showTopBar },
+                onBackgroundTap = { if (isLoaded && !menuButtonShown) viewModel.setPause(true) },
             )
         }
 
@@ -377,8 +374,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 
         // ── Performance monitor (draggable/resizable) ───────────────────────
         if (isLoaded && !isPaused && settings.showPerformanceMonitor) {
-            key(showTopBar) {
-                val metrics = LocalContext.current.resources.displayMetrics
+            val metrics = LocalContext.current.resources.displayMetrics
+            key(metrics.widthPixels, metrics.heightPixels) {
                 PerformanceOverlay(
                     perfStats = perfStats,
                     savedScale = settings.perfOverlayScale,
@@ -399,16 +396,6 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                     showShaderFails = settings.perfShowShaderFails,
                 )
             }
-        }
-
-        if (isLoaded && !editingTouchLayout && (showTopBar || isPaused || showQuitDialog)) {
-            TopBar(
-                romName = romName,
-                isPaused = isPaused,
-                onBack = { askToQuit() },
-                onTogglePause = { viewModel.togglePause() },
-                modifier = Modifier.align(Alignment.TopCenter),
-            )
         }
 
         if (isPaused && !editingTouchLayout) {
@@ -518,21 +505,3 @@ private fun LoadingOverlay(systemName: String) {
     }
 }
 
-@Composable
-private fun TopBar(romName: String, isPaused: Boolean, onBack: () -> Unit, onTogglePause: () -> Unit, modifier: Modifier) {
-    Surface(color = Color.Black.copy(alpha = 0.6f), modifier = modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.statusBarsPadding().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-            }
-            Text(
-                romName, style = MaterialTheme.typography.titleMedium, color = Color.White,
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 1,
-            )
-            IconButton(onClick = onTogglePause) {
-                if (isPaused) Icon(Icons.Default.PlayArrow, contentDescription = "Resume", tint = Color.White)
-                else Icon(painterResource(R.drawable.ic_pause), contentDescription = "Pause", tint = Color.White)
-            }
-        }
-    }
-}

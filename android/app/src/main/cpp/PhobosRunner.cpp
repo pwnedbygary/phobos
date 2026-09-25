@@ -126,6 +126,8 @@ namespace ares {
   static std::atomic<bool> firstFrameRendered{false};
   static ANativeWindow* nativeWindow = nullptr;
   static AAudioStream* audioStream = nullptr;
+  // audioStream != nullptr, readable without audioMutex (audio() runs per sample).
+  static std::atomic<bool> audioStreamOpen{false};
   // Base name (no extension) of the currently loaded ROM — used to key the
   // per-game save files on disk (saves/<System>/<RomName>.save.ram etc.) so
   // different games never overwrite each other's saves.
@@ -190,8 +192,9 @@ namespace ares {
         // Drain up to ~2048 floats (1024 stereo frames) per iteration.
         size_t take = std::min<size_t>(audioRingSize, 2048);
         chunk.resize(take);
-        for (size_t i = 0; i < take; i++)
-          chunk[i] = audioRing[(audioRingHead + i) % audioRingCapacity];
+        size_t first = std::min(take, audioRingCapacity - audioRingHead);
+        memcpy(chunk.data(), audioRing.data() + audioRingHead, first * sizeof(f32));
+        memcpy(chunk.data() + first, audioRing.data(), (take - first) * sizeof(f32));
         audioRingHead = (audioRingHead + take) % audioRingCapacity;
         audioRingSize -= take;
         // Wake the emulation thread's audio-pacing wait so it can resume
@@ -247,7 +250,11 @@ namespace ares {
   // Display size as ares desktop computes it: the core's scale and pixel aspect
   // describe the unrotated image, so undo ares' own 90/270 rotation first; the
   // frontend WonderSwan rotation swaps the axes once more.
-  static auto recordVideoGeometry(const Node::Video::Screen& screen, u32 width, u32 height, bool frontendRotate) -> void {
+  // tvPicture: the frame size follows the video mode (N64 scans out 240 or 480
+  // lines at 640 dots, PS1 uses 256-640 dots) while the picture always fills a
+  // 4:3 TV, and neither core's pixel aspect says so. Keep 4:3 at the frame's
+  // line count so integer scaling still sees 240 or 480 lines.
+  static auto recordVideoGeometry(const Node::Video::Screen& screen, u32 width, u32 height, bool frontendRotate, bool tvPicture) -> void {
     bool coreRotated = screen->rotation() == 90 || screen->rotation() == 270;
     f64 sourceWidth = coreRotated ? height : width;
     f64 sourceHeight = coreRotated ? width : height;
@@ -255,8 +262,8 @@ namespace ares {
     f64 scaleY = screen->scaleY() > 0 ? screen->scaleY() : 1.0;
     f64 aspectX = screen->aspectX() > 0 ? screen->aspectX() : 1.0;
     f64 aspectY = screen->aspectY() > 0 ? screen->aspectY() : 1.0;
-    f64 displayWidth = sourceWidth * scaleX * aspectX / aspectY;
     f64 displayHeight = sourceHeight * scaleY;
+    f64 displayWidth = tvPicture ? displayHeight * 4.0 / 3.0 : sourceWidth * scaleX * aspectX / aspectY;
     if (coreRotated != frontendRotate) std::swap(displayWidth, displayHeight);
     videoDisplayWidth.store((f32)displayWidth, std::memory_order_relaxed);
     videoDisplayHeight.store((f32)displayHeight, std::memory_order_relaxed);
@@ -636,6 +643,58 @@ namespace ares {
   }
 
   static bool muteAudioAtomic = false;
+
+  // Per-emulation-thread audio state, in one thread_local: with minSdk < 29
+  // every thread_local access is an emulated-TLS call, and audio() runs once
+  // per output sample.
+  //   pending: mixed samples not yet handed to the audio thread. Each hand-off
+  //   can wake that thread with a futex syscall, so samples go over in blocks
+  //   of audioPushSamples and at the end of each emulated frame.
+  struct AudioThreadState {
+    u64 streamsVersion = 0;
+    std::vector<Node::Audio::Stream> streams;
+    std::vector<f32> pending;
+  };
+  static constexpr size_t audioPushSamples = 256 * 2;  // 256 stereo frames, ~5 ms
+  static auto audioThreadState() -> AudioThreadState& {
+    thread_local AudioThreadState state;
+    return state;
+  }
+
+  static auto pushAudio(std::vector<f32>& samples) -> void {
+    if (samples.empty()) return;
+    if (muteAudioAtomic) std::fill(samples.begin(), samples.end(), 0.0f);
+    bool wasEmpty;
+    {
+      std::lock_guard<std::mutex> lock(audioMutex);
+      if (audioRing.empty()) audioRing.resize(audioRingCapacity);
+      const f32* source = samples.data();
+      size_t count = samples.size();
+      if (count > audioRingCapacity) {
+        source += count - audioRingCapacity;
+        count = audioRingCapacity;
+      }
+      // Overwrite the oldest samples when the emulator out-produces the DAC.
+      size_t overflow = audioRingSize + count > audioRingCapacity ? audioRingSize + count - audioRingCapacity : 0;
+      audioRingHead = (audioRingHead + overflow) % audioRingCapacity;
+      audioRingSize -= overflow;
+      wasEmpty = audioRingSize == 0;
+      size_t tail = (audioRingHead + audioRingSize) % audioRingCapacity;
+      size_t first = std::min(count, audioRingCapacity - tail);
+      memcpy(audioRing.data() + tail, source, first * sizeof(f32));
+      memcpy(audioRing.data(), source + first, (count - first) * sizeof(f32));
+      audioRingSize += count;
+    }
+    // The audio thread only waits while the ring is empty.
+    if (wasEmpty) audioCV.notify_one();
+    samples.clear();
+  }
+
+  static auto flushAudio() -> void {
+    if (pthread_self() != currentEmuThread.load()) return;
+    pushAudio(audioThreadState().pending);
+  }
+
   static bool fastBootAtomic = false;
   static bool autoSaveMemoryAtomic = false;  // "Auto-Save Memory" — disabled by default
   static bool autoLoadMemoryAtomic = false;   // "Auto-Load Memory" — disabled by default
@@ -781,6 +840,7 @@ namespace ares {
             }
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
+        flushAudio();
         auto end = std::chrono::steady_clock::now();
 
         // Per-core pacing: the cap target is derived from the core's native
@@ -1260,7 +1320,8 @@ namespace ares {
 
       // WonderSwan vertical games are rotated here, in the frontend.
       bool rotate = root && root->name().beginsWith("WonderSwan") && orientationVertical;
-      recordVideoGeometry(screen, width, height, rotate);
+      bool tvPicture = root && (root->name() == "Nintendo 64" || root->name() == "PlayStation");
+      recordVideoGeometry(screen, width, height, rotate, tvPicture);
 
       bool isN64Vulkan = false;
       #if defined(CORE_N64)
@@ -1424,7 +1485,7 @@ namespace ares {
       // streams, mix, or push samples into the NEW system's pipeline.
       if (pthread_self() != currentEmuThread.load()) return;
 
-      {
+      if (!audioStreamOpen.load(std::memory_order_acquire)) {
         std::unique_lock<std::mutex> lock(audioMutex);
         if (!audioStream) {
           AAudioStreamBuilder* builder;
@@ -1453,6 +1514,7 @@ namespace ares {
             AAudioStream_requestStart(audioStream);
           }
         }
+        audioStreamOpen.store(audioStream != nullptr, std::memory_order_release);
       }
       // Restart the audio thread if it was stopped (unloadSystem stops it).
       // This MUST be outside the `if (!audioStream)` block: with stream-reuse
@@ -1474,15 +1536,16 @@ namespace ares {
       // must MIX all streams sample-aligned — draining a single stream
       // unmixed is what garbled Mega Drive/CD audio (each stream's pending
       // block was appended sequentially instead of summed).
-      if (audioStream) {
+      if (audioStreamOpen.load(std::memory_order_relaxed)) {
         // Thread-local snapshot cache keyed on audioStreamsVersion. The
         // emulation thread is the only audio() caller and is recreated per
         // load, so the cache is naturally scoped to one system's stream set.
         // This removes the per-call mutex lock + linear scan + heap copy that
         // the ZX ULA (firing audio() millions of times/sec) was paying — the
         // source of the remaining ~1 FPS of fat.
-        thread_local u64 cachedAudioVersion = 0;
-        thread_local std::vector<Node::Audio::Stream> cachedStreams;
+        auto& audioState = audioThreadState();
+        auto& cachedAudioVersion = audioState.streamsVersion;
+        auto& cachedStreams = audioState.streams;
         u64 ver = audioStreamsVersion.load(std::memory_order_acquire);
         if (ver != cachedAudioVersion) {
           std::lock_guard<std::mutex> lock(audioStreamsMutex);
@@ -1511,12 +1574,11 @@ namespace ares {
           cachedAudioVersion = audioStreamsVersion.load(std::memory_order_acquire);
         }
 
-        // Fast path: single stream — drain it directly into the ring (no
-        // lockstep, no clamp). This is the common case for single-stream cores
-        // (N64, GBA, PS1, GB/GBC...) and avoids all mixing overhead.
+        // Fast path: single stream — drain it directly (no lockstep, no
+        // clamp). This is the common case for single-stream cores (N64, GBA,
+        // PS1, GB/GBC...) and avoids all mixing overhead.
+        auto& localBuffer = audioState.pending;
         if (cachedStreams.size() == 1) {
-          thread_local std::vector<f32> localBuffer;
-          localBuffer.clear();
           f64 samples[2];
           while (stream->pending()) {
             u32 channels = stream->read(samples);
@@ -1528,23 +1590,11 @@ namespace ares {
               localBuffer.push_back((f32)samples[1]);
             }
           }
-          if (!localBuffer.empty()) {
-            if (muteAudioAtomic) std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
-            std::lock_guard<std::mutex> lock(audioMutex);
-            if (audioRing.empty()) audioRing.resize(audioRingCapacity);
-            for (f32 s : localBuffer) {
-              audioRing[(audioRingHead + audioRingSize) % audioRingCapacity] = s;
-              if (audioRingSize < audioRingCapacity) audioRingSize++;
-              else audioRingHead = (audioRingHead + 1) % audioRingCapacity;
-            }
-            audioCV.notify_one();
-          }
+          if (localBuffer.size() >= audioPushSamples) pushAudio(localBuffer);
           return;
         }
 
         // Multi-stream: lockstep mix using the cached snapshot (no copy).
-        thread_local std::vector<f32> localBuffer;
-        localBuffer.clear();
 
         // Lockstep mixing (mirrors upstream desktop ares Program::audio):
         // emit one output frame only when EVERY stream has a pending frame;
@@ -1578,19 +1628,7 @@ namespace ares {
           drained++;
         }
 
-        if (!localBuffer.empty()) {
-            if (muteAudioAtomic) {
-                std::fill(localBuffer.begin(), localBuffer.end(), 0.0f);
-            }
-            std::lock_guard<std::mutex> lock(audioMutex);
-            if (audioRing.empty()) audioRing.resize(audioRingCapacity);
-            for (f32 s : localBuffer) {
-              audioRing[(audioRingHead + audioRingSize) % audioRingCapacity] = s;
-              if (audioRingSize < audioRingCapacity) audioRingSize++;
-              else audioRingHead = (audioRingHead + 1) % audioRingCapacity; // overwrite oldest
-            }
-            audioCV.notify_one();
-        }
+        if (localBuffer.size() >= audioPushSamples) pushAudio(localBuffer);
       }
     }
 
@@ -2058,6 +2096,7 @@ namespace ares {
           AAudioStream_requestStop(oldStream);
           AAudioStream_close(oldStream);
           audioStream = nullptr;
+          audioStreamOpen.store(false, std::memory_order_release);
           // Bounded wait for AAudio teardown (dispatch thread exit).
           constexpr int kMaxWaitMs = 300;
           for (int i = 0; i < kMaxWaitMs; i += 10) {

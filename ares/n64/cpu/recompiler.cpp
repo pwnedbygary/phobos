@@ -223,7 +223,7 @@ This keeps write-side invalidation cheap (since it is bound to memory writes tha
 are extremely common) and moves cleanup work to lookup time.
 */
 
-auto CPU::Recompiler::computeStateKey() const -> u64 {
+auto CPU::Recompiler::computeModeKey() const -> u64 {
   StateKey stateKey = 0;
   bool reverseEndian = !self.scc.status.exceptionLevel
                     && !self.scc.status.errorLevel
@@ -246,6 +246,19 @@ auto CPU::Recompiler::computeStateKey() const -> u64 {
   stateKey.setFpuOverflowEnabled(self.fpu.csr.enable.overflow());
   stateKey.setFpuDivisionByZeroEnabled(self.fpu.csr.enable.divisionByZero());
   stateKey.setFpuInvalidOperationEnabled(self.fpu.csr.enable.invalidOperation());
+  stateKey.setRdramMapIdentity(rdram.mapIdentity);
+  return stateKey;
+}
+
+// The mode bits (Status, FCSR, RDRAM map) only change through a few C++
+// writers, which call invalidateStateKey(); GP/SP change constantly and are
+// evaluated on every lookup.
+auto CPU::Recompiler::computeStateKey() const -> u64 {
+  if(!modeKeyValid) {
+    modeKey = computeModeKey();
+    modeKeyValid = true;
+  }
+  StateKey stateKey = modeKey;
   const u64 cachedBase = 0xffff'ffff'8000'0000ull;
   const u64 cachedEnd  = 0xffff'ffff'807f'ffffull;
   auto gp = self.ipu.r[28].u64;
@@ -258,7 +271,6 @@ auto CPU::Recompiler::computeStateKey() const -> u64 {
   stateKey.setSpAligned4((sp & 3) == 0);
   stateKey.setSpAligned8((sp & 7) == 0);
   stateKey.setWatchpointsActive(GDB::server.hasWatchpoints());
-  stateKey.setRdramMapIdentity(rdram.mapIdentity);
   return stateKey;
 }
 
@@ -291,6 +303,7 @@ auto CPU::Recompiler::section(u32 address) -> Section* {
     memory::jitprotect(false);
     *section = {};
     memory::jitprotect(true);
+    sectionGeneration[index]++;
     if(dirty) {
       sectionDirty[index] = 0;
     }
@@ -300,20 +313,23 @@ auto CPU::Recompiler::section(u32 address) -> Section* {
     memory::jitprotect(false);
     *section = {};
     memory::jitprotect(true);
+    sectionGeneration[index]++;
     sectionDirty[index] = 0;
   }
   return section;
 }
 
-auto CPU::Recompiler::block(u64 vaddr, u32 address) -> Block* {
+// Slow path behind fastBlock(): finds or compiles the block and remembers
+// KSEG0 entry points in fastLookup.
+auto CPU::Recompiler::block(u64 vaddr, u32 address, u64 stateKey) -> Block* {
   auto section = this->section(address);
   if(!section) return nullptr;
 
   auto index = blockIndex(address);
-  auto stateKey = computeStateKey();
   auto vaddrPage = vaddr & ~0xfffull;
   for(auto block = section->blocks[index]; block; block = block->next) {
     if(block->stateKey == stateKey && block->vaddrPage == vaddrPage) {
+      if(isKseg0Rdram(vaddr)) fastLookup[vaddr >> 2 & FastLookupSize - 1] = {(u32)vaddr, (u32)stateKey, block};
       return block;
     }
   }
@@ -332,6 +348,7 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address) -> Block* {
       section->lineBlocks[line] = 1;
     }
     block->sectionDirty = sectionDirty.data() + sectionIndex(block->startAddress);
+    block->generation = sectionGeneration[sectionIndex(block->startAddress)];
     auto registerAlias = [&](u32 aliasAddress) -> Block* {
       if(aliasAddress == block->startAddress) return block;
       auto aliasIndex = blockIndex(aliasAddress);
@@ -349,6 +366,7 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address) -> Block* {
       alias->startAddress = aliasAddress;
       alias->endAddress = block->endAddress;
       alias->sectionDirty = block->sectionDirty;
+      alias->generation = block->generation;
       section->blocks[aliasIndex] = alias;
       section->lineBlocks[sectionLineIndex(aliasAddress)] = 1;
       return alias;
@@ -357,6 +375,8 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address) -> Block* {
       registerAlias(aliasAddress);
     }
     memory::jitprotect(true);
+    // emit() may have flushed everything (reset() clears fastLookup), so index afresh.
+    if(isKseg0Rdram(vaddr)) fastLookup[vaddr >> 2 & FastLookupSize - 1] = {(u32)vaddr, (u32)stateKey, block};
   }
   return block;
 }

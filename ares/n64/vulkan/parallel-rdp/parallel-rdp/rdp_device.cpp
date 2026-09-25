@@ -949,6 +949,18 @@ void CommandProcessor::enqueue_command_inner(unsigned num_words, const uint32_t 
 		ring.enqueue_command(num_words, words);
 }
 
+void CommandProcessor::begin_command_batch()
+{
+	if (!single_threaded_processing)
+		ring.begin_batch();
+}
+
+void CommandProcessor::end_command_batch()
+{
+	if (!single_threaded_processing)
+		ring.end_batch();
+}
+
 void CommandProcessor::enqueue_command(unsigned num_words, const uint32_t *words)
 {
 	if (dump_writer && !dump_in_command_list)
@@ -1177,6 +1189,9 @@ uint64_t CommandProcessor::signal_timeline()
 
 void CommandProcessor::wait_for_timeline(uint64_t index)
 {
+	// The ring worker must see the signal command before we wait on it.
+	if (!single_threaded_processing)
+		ring.kick();
 	Vulkan::QueryPoolHandle start_ts, end_ts;
 	if (measure_stall_time)
 		start_ts = device.write_calibrated_timestamp();

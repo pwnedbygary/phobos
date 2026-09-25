@@ -35,7 +35,7 @@ Observed by reading `ui/TouchControls.kt`, `input/GameInputState.kt`,
 | F10 | **Unreachable console inputs.** `resolveButtonBit()` has no case for Atari 2600 `Reset` (Game Reset, needed to start most 2600 games), `Left Difficulty`, `Right Difficulty`, `TV Type`; Master System `Pause`; Neo Geo Pocket `Option`. They are polled every frame but always read "not pressed". | `ares/a26/system/controls.cpp`, `ares/a26/riot/io.cpp`, `ares/ms/system/controls.cpp`, `ares/ngp/system/controls.cpp` | Fixed natively: 2600 Reset→Start, Left/Right Difficulty→L1/R1, TV Type→L2 (ares flips the three switches on each rising edge, so momentary bits are correct); SMS Pause→Start; NGP Option→Start. Physical controllers get these too (Start/L1/R1/L2 bindings). |
 | F11 | **ColecoVision keypad keys 3–9, 0, `*`, `#` and all MSX keyboard keys are unreachable** from any input, because `setKeyboardKey()` only accepts ZX Spectrum. Many ColecoVision games need the keypad to start. | `PhobosRunner.cpp` `setKeyboardKey`, `input()` | Fixed natively: the keyboard path accepts ColecoVision and MSX (held keys OR'd with any existing bit mapping; ZX keeps its keyboard-only semantics). Touch layouts add a ColecoVision keypad and MSX SPACE/RETURN (+ F1–F5/ESC in the editor). |
 | F12 | WonderSwan: the WS-specific `A`/`B` branches in `resolveButtonBit()` are dead code (the generic `A`/`B` branch matches first), so A/B are always the A/B bits. In vertical mode `X4` and `X3` also resolve to the A and B bits, so they collide with A/B. | `PhobosRunner.cpp` `resolveButtonBit()` | Documented. The vertical touch layout shows no separate A/B buttons, but its X4/X3 still press the core's A/B natively because they share those bits. Native cleanup deferred (behavior change for hardware users). |
-| F13 | "Core Provided" aspect ratio was a fixed 4:3 for every system, so handhelds were stretched (GBA 3:2, GB/GBC and Game Gear 10:9, WonderSwan 14:9, NGP 20:19); "Integer Scaled" assumed 320×240 and scaled in dp, not pixels. | old `EmulatorScreen` picture sizing (`ratio = 4f / 3f`) | Fixed: `PhobosRunner.cpp` `recordVideoGeometry()` computes the logical display size per frame the way ares desktop does (viewport × `scaleX/Y`, × `aspectX/aspectY`, undoing core rotation and applying the WonderSwan frontend rotation); JNI `getVideoGeometry()`; `MainViewModel.videoGeometry` (polled with the stats loop); `GamePicture` uses it for Core Provided and integer-scales in physical pixels. Falls back to 4:3 / 320×240 until the first frame. |
+| F13 | "Core Provided" aspect ratio was a fixed 4:3 for every system, so handhelds were stretched (GBA 3:2, GB/GBC and Game Gear 10:9, WonderSwan 14:9, NGP 20:19); "Integer Scaled" assumed 320×240 and scaled in dp, not pixels. | old `EmulatorScreen` picture sizing (`ratio = 4f / 3f`) | Fixed: `PhobosRunner.cpp` `recordVideoGeometry()` computes the logical display size per frame the way ares desktop does (viewport × `scaleX/Y`, × `aspectX/aspectY`, undoing core rotation and applying the WonderSwan frontend rotation); JNI `getVideoGeometry()`; `MainViewModel.videoGeometry` (polled with the stats loop); `GamePicture` uses it for Core Provided and integer-scales in physical pixels. Falls back to 4:3 / 320×240 until the first frame. N64 and PS1 get a 4:3 picture at the frame's line count (2026-09-25): their frame size follows the video mode (an N64 progressive scanout is 640×240, which showed at 8:3) and neither core declares a pixel aspect for it. |
 | F14 | The default `analog_toggle` hotkey (C button alone) matched, was consumed as a hotkey, and had **no handler**: the C button did nothing on any system and the PS1 analog toggle hotkey never worked. | old `EmulatorScreen` hotkey `when` | Fixed: PS1 toggles DualShock analog mode; on other systems the key is not consumed and reaches game mapping. |
 | F15 | `MainActivity.setEmulatorKeyHandled()` and its flag were never called/set (dead code). | grep: no callers | Removed; no behavior change. |
 | F16 | The on-screen key set was never cleared, and `setKeyboardKey()` dropped releases once `root` was gone, so a key held during unload could stay "pressed" into the next keyboard-system game. | `PhobosRunner.cpp` `setKeyboardKey`, `unloadSystem` | Fixed: releases always apply; `unloadSystem()` clears the set. |
@@ -69,7 +69,7 @@ All under `android/app/src/main/java/com/phobos/emulator/`:
 Refactors that came with the integration (behavior preserved unless a finding above says otherwise):
 
 - `ui/EmulatorScreen.kt` (was ~1,050 lines) split into `EmulatorScreen.kt` (screen, input,
-  touch/editor wiring, `GamePicture`, `TopBar`, `LoadingOverlay`), `EmulationMenu.kt`
+  touch/editor wiring, `GamePicture`, `LoadingOverlay`), `EmulationMenu.kt`
   (pause menu, now with a quick-action row and a Touch Controls section; plan task 15a),
   `EmulatorDialogs.kt` and `ZxTapeProgress.kt`.
 - `ui/Components.kt` gained `SettingsDropdownItem` and `SettingsSliderItem` (slider
@@ -120,8 +120,13 @@ rebind capture now lives in `ui/EmulatorScreen.kt`, which imports it (the listen
 - Toggle buttons latch on press. Actions: fast-forward and keyboard fire on press; menu
   fires on release over the button.
 - A quick tap on empty space (≤350 ms, ≤12 dp travel, outside every control's bounds) is
-  reported as a background tap (the overlay covers the screen, so it replaces the old
-  tap-to-show-top-bar handler). A tap that misses the buttons inside a cluster is not.
+  reported as a background tap. A tap that misses the buttons inside a cluster is not.
+- The pause menu is opened by the on-screen menu button. The old tap-to-show top bar
+  (back arrow, title, pause/play) was removed on 2026-09-25 at the user's request: when
+  no menu button is on screen (touch controls off, or the button turned off in Touch
+  settings or hidden in the layout editor), a tap on the game opens the pause menu
+  instead (only after the ROM has finished loading). With touch controls hidden for a
+  controller, the first tap still brings them back.
 - The stick thumb graphic shows the output: it reaches its travel limit exactly at full
   deflection.
 - Idle fade starts only after the last finger lifts.

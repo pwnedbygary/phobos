@@ -154,6 +154,7 @@ auto CPU::setControlRegisterFPU(n5 index, n32 data) -> void {
     fpu.csr.cause.setUnimplementedOperation(data.bit(17));
     fpu.csr.compare                      = data.bit(23);
     fpu.csr.flushSubnormals              = data.bit(24);
+    recompiler.invalidateStateKey();
 
     if(fpu.csr.roundMode != roundModePrevious) {
       switch(fpu.csr.roundMode) {

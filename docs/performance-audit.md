@@ -221,7 +221,7 @@ only on real transitions and released as soon as the new buffer is rendered.
 | Audio drain buffer reuse | — | Task #4 is cancelled and not authorized. |
 | JIT icache profile counters | (a) | The recompiler already counts only in homebrew mode; the per-instruction increments are in the interpreter, and homebrew reads them through the emux interface. Negligible gain, guest-visible. |
 | `unlikely` on PS1/SFC/MD/GBA/GB/PCE/FC debugger hooks; GBA DAC window copies | (a)/(c) | Speculative code-layout gains in upstream core files; measure first. |
-| `-fvisibility=hidden`, `-mcpu`/`-mtune`, PGO | (a)/(c) | Visibility risks libadrenotools' symbol lookups; the others need device A/B runs. |
+| `-mcpu`/`-mtune`, PGO | (a)/(c) | Need device A/B runs. (`-fvisibility=hidden` was done on 2026-09-25, scoped to `phobos_android` so libadrenotools keeps its exports.) |
 | Screen mutex across `platform->video`; `Vulkan::render` lock scope | (a)/(c) | Buffer-ownership changes; measure lock contention first. |
 | 1 Hz FPS and `AudioDiag` logs, N64 debug-logging dumps | — | Negligible at 1 Hz and useful field diagnostics; N64 dumps are behind the debug toggle. |
 
@@ -238,3 +238,108 @@ only on real transitions and released as soon as the new buffer is rendered.
 3. Asynchronous RDP on and off, including state save/load and reset while on.
 4. Any speed claim needs the [benchmark protocol](mario-tennis-benchmark.md) and
    external traces, before and after.
+
+## 2026-09-25 device profiling (Retroid Pocket 6) and changes
+
+The user reported Mario Tennis dropping into the 30s–40s in Phobos while Mupen64Plus-AE
+with parallel-RDP held 60, and that Asynchronous RDP did not close the gap. Everything
+below was measured on the RP6 (Snapdragon 8 Gen 2: Cortex-X3 prime core at 3.19 GHz,
+2×A715, 2×A710, 3×A510), with release builds from NDK 28.2 (the CI toolchain; an
+NDK 26.1 local build ran 10–15% slower and was not used for comparisons).
+
+**Method.** CPU profiles came from `simpleperf` against local builds carrying
+`<profileable android:shell="true"/>` (never committed); per-thread CPU from
+`/proc/<pid>/task/*/stat`; FPS from the 1 Hz `Emulation Stats` log. The Mario Tennis
+attract loop is not a reliable benchmark: after 25–45 s the demo plays out differently
+between runs, so dips land at different times. The benchmark is instead the user's
+slot-0 save state (a Mario vs Boo match): launch, load the state with Z+L1, sample 30 s,
+two runs per build, Asynchronous RDP on.
+
+**Mupen reference.** The user's Mupen64Plus-AE build with the `Parallel` profile
+(new_dynarec, `rsp-parallel`, parallel-RDP at 1×, `SynchronousRDP=False`) and the same
+Turnip v26.3.0-R5 driver as Phobos: 59–62 FPS presented (SurfaceFlinger timestats),
+emulation thread about 22% of a core, whole emulation process about 30%. Its native code
+is built with `APP_OPTIM := release` even in the debug APK. Mupen presents synchronously
+(it waits for the scanout fence on its emulation thread), so presentation is not what
+makes it faster.
+
+**Phobos baseline (CI build of `373cec0`).** In the match: 50.6 FPS average, worst
+second 27.1, frame-time p90 26.2 ms; emulation thread 84–86% of the X3 (it is placed
+there 95% of the time, at about 3.08 GHz, with negligible run-queue wait).
+
+### What made Phobos slow, in order of cost
+
+1. **A full synchronize after every JIT block.** `CPU::instruction()` capped the JIT
+   budget by `compare - count` and clamped a negative value to 0. Count and Compare are
+   33-bit counters; once Count passes Compare the next timer interrupt comes only after
+   Count wraps (about 92 seconds at the default countPerOp), but the clamp made the
+   budget 0 for that whole time. Mario Tennis runs in that state permanently, so every
+   block ended in `CPU::synchronize()` — about 3 million times a second in the match
+   (cycle-derived: ~93.75 MHz / ~30 cycles per short block under the clamp). That also
+   ran the RSP in tiny slices. `JitInterleaving` (2048×2) was never reached; this is
+   also why the 2026-08-12 A/B saw no difference between 2048×2 and 4096×2 in
+   Mario Tennis.
+2. **A futex syscall per audio sample and per RDP command.** Bionic's
+   `pthread_cond_signal` always makes a `futex` call. `AndroidPlatform::audio()` ran
+   about 32,000 times a second, each locking `audioMutex` twice and notifying; the
+   parallel-RDP `CommandRing` notified once per command (up to 160,000 a second in a
+   match) and its worker relocked and notified per command too. Together about 15% of
+   the emulation thread, plus about 29,000 wake-ups a second of the audio thread.
+3. **Per-dispatch block lookup.** Blocks always return to the dispatcher. After the
+   clamp fix, simpleperf on the same Mario vs Boo scene still showed about 9 million
+   dispatches a second (blocks end long before the interleaving budget; synchronizes
+   are only ~46 k/s). At the clamped baseline the synchronize rate (~3 M/s) was the
+   costly one; `computeStateKey()` rebuilt about 25 fields every lookup (about 10% of
+   the emulation thread) and the section/list lookup missed cache on the block table
+   and block structs.
+4. **PLT/GOT indirection.** With default visibility, every internal call went through
+   the PLT and every global (`cpu`, `rsp`, `vi`, `rdram`, ...) through the GOT.
+5. **Frame-boundary waits.** The emulation thread waits at scanout for the ring
+   worker to drain, and `Screen::frame()` spins on `nall::spinloop()`, which is
+   `usleep(1)` (50–100 µs) on ARM, until the screen thread takes the frame. Present in
+   Mupen in equivalent form; small in heavy scenes, where the thread is CPU-bound.
+
+Asynchronous RDP only removes the SyncFull wait, which was not the bottleneck: the
+emulation thread stayed 86% busy with it on.
+
+### Implemented
+
+| Change | Files | Class | Notes |
+|---|---|---|---|
+| JIT budget uses the distance to Compare modulo 2³³ | `ares/n64/cpu/cpu.cpp` | timing | Syncs fell from about 3,000,000 to about 46,000 a second. Phases where Count had passed Compare now get the designed `JitInterleaving` budget (never more), instead of a sync per block. The budget is still capped to the distance through the wrap, so a Compare past the wrap is not overshot by more than one block (the same `JitInterleaving` bound as any other timer). Two related bounds stay as before, just more visible with fewer syncs: (1) an MTC0 to Count/Compare ends the block but does not re-cap a running `jitClockTarget`, so a handler that writes `Compare = Count + small` while Count is past Compare can see the interrupt up to about one interleaving late; (2) the interrupt check can miss a step that crosses both the 2³³ wrap and Compare, and Compare = 0 never fires — both pre-existing. Opt-in overclock and countPerOp also change effective speed slightly: `peripheralClocks >>= f` and `clocks*countPerOp/4` truncate once per sync, so ~65× fewer syncs retain more of those fractional clocks than the old sync-every-block path (defaults are unaffected because every step cost is even). Conker's pub menu ran 4+ minutes at 60 FPS without a stall; Zelda OoT, Paper Mario, Rogue Squadron, Mischief Makers, F-Zero X and Wave Race 64 boot and run. |
+| Audio handed over in blocks | `PhobosRunner.cpp` | (a) | Samples collect in one per-thread `AudioThreadState` (one emulated-TLS lookup per call at `minSdk` 26) and move to the ring every 256 stereo frames and at the end of each emulated frame; ring copies are two `memcpy` segments; the audio thread is only notified when the ring was empty; `audioStreamOpen` replaces the per-sample `audioMutex` check. Output samples are identical. |
+| RDP ring wakes only a sleeping worker | `parallel-rdp/command_ring.{hpp,cpp}`, `rdp_device.{hpp,cpp}`, `vulkan.cpp` | (a) | `Vulkan::render()` brackets each command range with `begin/end_command_batch()`. The producer notifies only when the worker is waiting, and within a batch at most once per 128 words so the worker keeps working alongside it; `drain()`, a full ring and `wait_for_timeline()` kick first. The worker takes every queued command under one lock and notifies only a waiting producer. Same commands, same order. An earlier variant that notified once per batch starved the worker on long display lists and was replaced. |
+| Hidden symbol visibility | `CMakeLists.txt` | (a) | `-fvisibility=hidden -fvisibility-inlines-hidden` on `phobos_android` only (all 67 JNI entry points are `JNIEXPORT`; libadrenotools and its hook libraries keep default visibility). |
+| Cached state-key mode bits | `ares/n64/cpu/{recompiler.cpp,cpu.hpp,context.cpp,exceptions.cpp,interpreter-fpu.cpp}`, `ares/n64/rdram/rdram.cpp` | (a) | Status/FCSR/RDRAM-map bits are recomputed only after `invalidateStateKey()`, called from `Context::setMode()` (power, exception entry, Status and Config writes, ERET), `Exception::nmi()`, `setControlRegisterFPU()`, `Recompiler::reset()` (power, flush, state load) and the two RDRAM map writers. The JIT never writes these fields directly (MTC0/CTC1/ERET call C++). GP/SP/watchpoint bits are still evaluated per lookup. A development build cross-checked the cached key against a full recomputation every 1024th lookup: no mismatch in millions of checks. |
+| Inline fast block lookup | `ares/n64/cpu/{cpu.hpp,cpu.cpp,recompiler.cpp}`, `nall/nall/gdb/server.{hpp,cpp}` | (a) | 4096-entry direct-mapped table (16-byte entries) for aligned KSEG0 RDRAM PCs, checked inline in `CPU::instruction()`; a hit requires a clean section whose generation matches the block's (bumped whenever `section()` clears it; `reset()` clears the table). The KSEG0 `devirtualize()` result is computed inline, and `GDB::Server::hasWatchpoints()` is inline. |
+| N64/PS1 picture aspect | `PhobosRunner.cpp` `recordVideoGeometry` | correctness | See touch-controls F13: N64 progressive scanouts (640×240) were shown at 8:3. |
+
+### Results (Mario vs Boo save state, 30 s, Asynchronous RDP on)
+
+Measured on the Retroid Pocket 6 with local Modern release builds of this working tree
+(NDK 28.2.13676358, both flavors compiled; the table is Modern). Asynchronous RDP was
+turned on for the runs (it defaults to off). An earlier RDP-ring variant that notified
+once per batch is not in these numbers; it was replaced before measurement by the
+128-word kick path described above.
+
+| Build | Average FPS | Worst second | Frame p90 | Emulation thread |
+|---|---|---|---|---|
+| CI `373cec0` | 50.6 | 27.1 | 26.2 ms | 84% |
+| This change set (two runs) | 58.4 / 58.4 | 49.7 / 45.9 | 17.4 / 18.4 ms | 76% |
+
+The remaining dips are the first seconds after a state load (the JIT recompiling) and
+short CPU-bound stretches of the match. Mupen still does the same work with under a
+third of the emulation-thread CPU: its dynarec links blocks and does not emulate the
+caches, its timing is approximate, and its RSP runs whole tasks at once.
+
+### Next (not implemented)
+
+- Block linking in the CPU recompiler, keeping the budget and interrupt checks at
+  each jump (the largest remaining accuracy-neutral item: dispatch is still about 15%
+  of the emulation thread).
+- RSP dispatch: `RSP::Recompiler::Block::execute()` copies the ~88-byte pipeline state
+  before every block (about 4 million a second).
+- `Screen::frame()` handoff: a condition variable instead of `spinloop()`.
+- Opt-in speed options under N64 Experimental (faster sync, skipping cache emulation,
+  RSP task mode): the user chose to decide after the accuracy-neutral work, with
+  measurements.
