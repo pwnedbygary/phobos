@@ -185,12 +185,19 @@ object TouchLayouts {
             Stick.LEFT, size = 144f, gate = StickGate.OCTAGON,
         ),
         DpadElement(land = Placement(TOP_LEFT, 64f, 128f), port = Placement(BOTTOM_LEFT, 72f, -240f), size = 96f),
-        single("z", "Z", Placement(TOP_LEFT, 62f, 32f), Placement(BOTTOM_LEFT, 146f, -336f),
-            TouchButton("Z", Input.L2, w = 100f, h = 40f, shape = SHOULDER_LEFT, labelScale = 0.55f)),
-        single("l", "L", Placement(TOP_LEFT, 160f, 32f), Placement(BOTTOM_LEFT, 50f, -336f),
-            TouchButton("L", Input.L1, w = 72f, h = 36f, shape = PILL, labelScale = 0.55f)),
+        single("l", "L", Placement(TOP_LEFT, 62f, 32f), Placement(BOTTOM_LEFT, 146f, -336f),
+            TouchButton("L", Input.L1, w = 100f, h = 40f, shape = SHOULDER_LEFT, labelScale = 0.55f)),
+        single("z", "Z", Placement(TOP_LEFT, 160f, 32f), Placement(BOTTOM_LEFT, 50f, -336f),
+            TouchButton("Z", Input.L2, w = 72f, h = 36f, shape = PILL, labelScale = 0.55f)),
         single("r", "R", Placement(TOP_RIGHT, -62f, 32f), Placement(BOTTOM_RIGHT, -60f, -336f),
             TouchButton("R", Input.R1, w = 100f, h = 40f, shape = SHOULDER_RIGHT, labelScale = 0.55f)),
+        // Second Z mirrors the left pair in landscape. Four shoulder buttons don't fit
+        // one row on narrow portrait screens, so it starts hidden there (left Z remains).
+        ButtonCluster(
+            "z_right", "Z (right)", Placement(TOP_RIGHT, -160f, 32f), Placement(BOTTOM_RIGHT, -156f, -336f),
+            listOf(TouchButton("Z", Input.L2, w = 72f, h = 36f, shape = PILL, labelScale = 0.55f)),
+            hiddenInPortrait = true,
+        ),
         ButtonCluster(
             "c_buttons", "C buttons",
             Placement(TOP_RIGHT, -96f, 128f), Placement(BOTTOM_RIGHT, -96f, -246f),

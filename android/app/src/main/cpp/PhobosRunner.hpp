@@ -71,6 +71,9 @@ namespace ares {
   auto setN64CountPerOp(s32 value) -> void;
   auto setN64CpuOverclock(s32 factor) -> void;
   auto setN64AsyncRdp(bool enabled) -> void;
+  auto setN64FasterSync(bool enabled) -> void;
+  auto setN64SkipCaches(bool enabled) -> void;
+  auto setN64RspTaskMode(bool enabled) -> void;
   auto setN64Pak(const char* pakName) -> void;
   auto getRumbleState() -> bool;
   auto setPs1AnalogMode(bool enabled) -> void;

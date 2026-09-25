@@ -317,8 +317,17 @@ former plan.
 
 #### <a id="task-19"></a>Task 19 — Customizable UI coloration (listed QoL work)
 
+**2026-09-25 expansion (deferred, not started):** user wants an eventual app UI
+overhaul — go bananas on chrome, settings, menus, typography, accents, and
+motion: clean modern aesthetic with many selectable themes based on common IDE
+colorways, plus optional retrowave/synthwave inspired by mupen64plus-ae-turnip.
+**Constraint: keep system library cards mostly as they are** (preserve the
+existing card art / composition); theming can tint chrome around them but should
+not replace or redesign that art. Remains P3 / after core stability; no code in
+the N64 perf workstream.
+
 Historical queue entry retained; no separate detailed note existed in the
-former plan.
+former plan before this expansion.
 
 #### <a id="task-31"></a>Task 31 — PS1 authentic on-screen shapes (listed QoL work)
 
@@ -329,6 +338,13 @@ former plan.
 
 The former plan proposed configurable FPS/frame-time/RAM/core/shader/GPU/CPU/
 thermal/driver/refresh metrics.
+
+**2026-09-25 expansion (deferred, not started):** overhaul the in-game performance
+overlay presentation to match something like **MangoHud** or **GameNative** —
+the current overlay works but looks janky. Show whatever metrics are actually
+available for the running system; do not invent GPU/thermal numbers without a
+real source. Visual polish can proceed ahead of new counters; new counters still
+need attribution evidence (Tasks 42b/43/44/69).
 
 #### <a id="task-42b"></a>Task 42b — Perf Monitor: Game FPS (true N64 render rate) (PLANNED 2026-08-17)
 

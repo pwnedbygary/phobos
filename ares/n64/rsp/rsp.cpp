@@ -34,6 +34,21 @@ auto RSP::unload() -> void {
 }
 
 auto RSP::main() -> void {
+  // Opt-in task mode: let an unhalted RSP run ahead of the CPU (up to about one
+  // NTSC frame of 187.5 MHz clock units) instead of slicing with it, approximating
+  // Mupen's whole-task RSP. The lead cap bounds microcodes that spin waiting on
+  // the CPU; the instruction guard bounds a runaway. Remaining time (normally
+  // halted idle) falls through to the regular loop so DMA keeps progressing.
+  if(taskMode.load(std::memory_order_relaxed) && !status.halted) {
+    constexpr s64 MaxLead = 187'500'000 / 60;
+    constexpr u32 Guard = 2'000'000;
+    for(u32 n = 0; n < Guard && !status.halted && Thread::clock < MaxLead; n++) {
+      auto clock = Thread::clock;
+      instruction();
+      dmaStep(Thread::clock - clock);
+    }
+  }
+
   while(Thread::clock < 0) {
     auto clock = Thread::clock;
 

@@ -14,7 +14,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextLayoutResult
@@ -109,18 +108,24 @@ class TouchPainter(private val textMeasurer: TextMeasurer) {
             drawSoftShadow(cross, r * 2f, opacity)
             drawBody(cross, bounds.translate(-origin), Color(TouchPalette.NEUTRAL), false, opacity)
             if (bits != 0) {
+                // Seamless L/T/+ fills: each lit arm runs through the hub, then
+                // the pieces are unioned and clipped to the cross so diagonals
+                // read as one continuous highlight (no stacked alpha at the join).
                 val accent = Color(TouchPalette.GOLD)
-                clipPath(cross) {
-                    for ((bit, armRect) in dpadArms(r, arm)) {
-                        if (bits and bit == 0) continue
-                        drawRect(
-                            brush = Brush.radialGradient(
-                                listOf(lerp(accent, Color.White, 0.25f), accent.copy(alpha = 0.55f)),
-                                center = armRect.center, radius = r,
-                            ),
-                            topLeft = armRect.topLeft, size = armRect.size, alpha = 0.9f * opacity,
-                        )
-                    }
+                val lit = dpadLitPath(r, arm, bits)
+                if (lit != null) {
+                    val clipped = Path().apply { op(lit, cross, PathOperation.Intersect) }
+                    val glow = dpadGlowCenter(r, bits)
+                    drawPath(
+                        clipped,
+                        brush = Brush.radialGradient(
+                            0f to lerp(accent, Color.White, 0.35f),
+                            0.55f to accent.copy(alpha = 0.75f),
+                            1f to accent.copy(alpha = 0.35f),
+                            center = glow, radius = r * 1.05f,
+                        ),
+                        alpha = 0.92f * opacity,
+                    )
                 }
             }
             drawRim(cross, bounds.translate(-origin), r * 2f, Color(TouchPalette.NEUTRAL), false, opacity)
@@ -154,12 +159,36 @@ class TouchPainter(private val textMeasurer: TextMeasurer) {
         return Path().apply { op(horizontal, vertical, PathOperation.Union) }
     }
 
-    private fun dpadArms(r: Float, arm: Float): List<Pair<Int, Rect>> = listOf(
-        TouchEngine.UP to Rect(-arm / 2f, -r, arm / 2f, -arm * 0.15f),
-        TouchEngine.DOWN to Rect(-arm / 2f, arm * 0.15f, arm / 2f, r),
-        TouchEngine.LEFT to Rect(-r, -arm / 2f, -arm * 0.15f, arm / 2f),
-        TouchEngine.RIGHT to Rect(arm * 0.15f, -arm / 2f, r, arm / 2f),
-    )
+    /** Lit region for [bits]: each arm includes the hub so diagonals form one L. */
+    private fun dpadLitPath(r: Float, arm: Float, bits: Int): Path? {
+        val half = arm / 2f
+        var lit: Path? = null
+        fun absorb(rect: Rect) {
+            val piece = Path().apply { addRect(rect) }
+            lit = when (val current = lit) {
+                null -> piece
+                else -> Path().apply { op(current, piece, PathOperation.Union) }
+            }
+        }
+        if (bits and TouchEngine.UP != 0) absorb(Rect(-half, -r, half, half))
+        if (bits and TouchEngine.DOWN != 0) absorb(Rect(-half, -half, half, r))
+        if (bits and TouchEngine.LEFT != 0) absorb(Rect(-r, -half, half, half))
+        if (bits and TouchEngine.RIGHT != 0) absorb(Rect(-half, -half, r, half))
+        return lit
+    }
+
+    /** Gradient focus toward the pressed directions. */
+    private fun dpadGlowCenter(r: Float, bits: Int): Offset {
+        var x = 0f
+        var y = 0f
+        var n = 0
+        if (bits and TouchEngine.RIGHT != 0) { x += 1f; n++ }
+        if (bits and TouchEngine.LEFT != 0) { x -= 1f; n++ }
+        if (bits and TouchEngine.DOWN != 0) { y += 1f; n++ }
+        if (bits and TouchEngine.UP != 0) { y -= 1f; n++ }
+        if (n == 0) return Offset.Zero
+        return Offset(x / n * r * 0.42f, y / n * r * 0.42f)
+    }
 
     // ── Sticks ─────────────────────────────────────────────────────────────
 

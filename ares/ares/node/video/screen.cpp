@@ -22,6 +22,7 @@ Screen::~Screen() {
   if constexpr(ares::Video::Threaded) {
     if(_canvasWidth && _canvasHeight) {
       _kill = true;
+      _frameCondition.notify_all();
       _thread.join();
     }
   }
@@ -33,9 +34,15 @@ auto Screen::main(uintptr_t) -> void {
     unique_lock<mutex> lock(_frameMutex);
 
     auto timeout = std::chrono::milliseconds(10);
-    if(_frameCondition.wait_for(lock, timeout, [&] { return _frame.load(); })) {
-      refresh();
+    if(_frameCondition.wait_for(lock, timeout, [&] { return _frame.load() || _kill.load(); })) {
+      if(_kill) break;
+      // Claim the frame under the mutex, then release before refresh so the
+      // emulation thread can wait on !_frame without spinning and without
+      // holding _frameMutex across the (possibly long) GPU present path.
       _frame = false;
+      lock.unlock();
+      _frameCondition.notify_all();
+      refresh();
     }
 
     if(_kill) break;
@@ -44,6 +51,7 @@ auto Screen::main(uintptr_t) -> void {
 
 auto Screen::quit() -> void {
   _kill = true;
+  _frameCondition.notify_all();
   _thread.join();
   _sprites.clear();
 }
@@ -202,16 +210,18 @@ auto Screen::colors(u32 colors, std::function<n64 (n32)> color) -> void {
 
 auto Screen::frame() -> void {
   if(runAhead()) return;
-  // Bounded handoff spin: a video thread wedged in a GPU fence wait or a
+  // Bounded handoff wait: a video thread wedged in a GPU fence wait or a
   // window lock must not hang the emulation thread inside run() forever
   // (that blocks unload/reset and forces the "abandon system" path, which
   // leaks a poisoned Vulkan device and makes later N64 loads flaky). After
   // ~100ms, proceed with the frame handoff; the video thread picks up the
   // latest buffer when it recovers and the stale frame is dropped.
-  auto handoffDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-  while(_frame) {
-    spinloop();
-    if(std::chrono::steady_clock::now() >= handoffDeadline) break;
+  if constexpr(ares::Video::Threaded) {
+    unique_lock<mutex> lock(_frameMutex);
+    auto handoffDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    _frameCondition.wait_until(lock, handoffDeadline, [&] {
+      return !_frame.load() || _kill.load();
+    });
   }
 
   lock_guard<recursive_mutex> lock(_mutex);
@@ -220,8 +230,11 @@ auto Screen::frame() -> void {
     refresh();
     _frame = false;
   } else {
-    _frame = true;
-    _frameCondition.notify_one();
+    {
+      lock_guard<mutex> frameLock(_frameMutex);
+      _frame = true;
+    }
+    _frameCondition.notify_all();
   }
 }
 

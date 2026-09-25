@@ -337,8 +337,10 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, u64 stateKey) -> Block* {
   }
 
   auto findLinked = [&](u32 targetAddress, u64 targetStateKey, u64 targetVaddrPage) -> Block* {
+    auto targetSection = this->section(targetAddress);
+    if(!targetSection) return nullptr;
     auto targetIndex = blockIndex(targetAddress);
-    for(auto target = section->blocks[targetIndex]; target; target = target->next) {
+    for(auto target = targetSection->blocks[targetIndex]; target; target = target->next) {
       if(target->stateKey != targetStateKey) continue;
       if(target->vaddrPage != targetVaddrPage) continue;
       if(target->startAddress != targetAddress) continue;
@@ -348,20 +350,37 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, u64 stateKey) -> Block* {
   };
 
   auto resolvePending = [&](Block* target) -> void {
+    auto targetSection = this->section(target->startAddress);
+    if(!targetSection) return;
     auto targetIndex = blockIndex(target->startAddress);
-    auto* pending = &section->pending[targetIndex];
+    auto* pending = &targetSection->pending[targetIndex];
     while(*pending) {
       auto entry = *pending;
       if(entry->expectedStateKey == target->stateKey
       && entry->expectedVaddrPage == target->vaddrPage
       && entry->expectedTargetAddress == target->startAddress) {
-        entry->source->linkedBlock = target;
+        if(entry->slot) entry->slot->linked = target;
+        else if(entry->source) entry->source->linkedBlock = target;
         linkInstalledBackpatch++;
         *pending = entry->next;
         continue;
       }
       pending = &entry->next;
     }
+  };
+
+  auto queuePending = [&](Block* source, LinkSlot* slot, u32 targetAddress, u64 stateKey, u64 vaddrPage) {
+    auto targetSection = this->section(targetAddress);
+    if(!targetSection) return;
+    auto pending = (Pending*)allocator.acquire(sizeof(Pending));
+    pending->source = source;
+    pending->slot = slot;
+    pending->next = targetSection->pending[blockIndex(targetAddress)];
+    pending->expectedStateKey = stateKey;
+    pending->expectedVaddrPage = vaddrPage;
+    pending->expectedTargetAddress = targetAddress;
+    targetSection->pending[blockIndex(targetAddress)] = pending;
+    linkPendingQueued++;
   };
 
   auto installLink = [&](Block* source) -> void {
@@ -371,14 +390,18 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       source->linkedBlock = target;
       linkInstalledDirect++;
     } else {
-      auto pending = (Pending*)allocator.acquire(sizeof(Pending));
-      pending->source = source;
-      pending->next = section->pending[blockIndex(source->linkAddress)];
-      pending->expectedStateKey = source->stateKey;
-      pending->expectedVaddrPage = source->linkVaddrPage;
-      pending->expectedTargetAddress = source->linkAddress;
-      section->pending[blockIndex(source->linkAddress)] = pending;
-      linkPendingQueued++;
+      queuePending(source, nullptr, source->linkAddress, source->stateKey, source->linkVaddrPage);
+    }
+  };
+
+  auto installLinkSlot = [&](LinkSlot* slot) -> void {
+    if(!slot || slot->targetAddress == ~0u) return;
+    linkCandidates++;
+    if(auto target = findLinked(slot->targetAddress, slot->stateKey, slot->targetVaddrPage)) {
+      slot->linked = target;
+      linkInstalledDirect++;
+    } else {
+      queuePending(nullptr, slot, slot->targetAddress, slot->stateKey, slot->targetVaddrPage);
     }
   };
 
@@ -427,6 +450,11 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       if(alias != block) resolvePending(alias);
     }
     installLink(block);
+    for(auto slot : emitEdgeSlots) {
+      slot->sourceSectionDirty = block->sectionDirty;
+      installLinkSlot(slot);
+    }
+    emitEdgeSlots.clear();
     resolvePending(block);
     memory::jitprotect(true);
     // emit() may have flushed everything (reset() clears fastLookup), so index afresh.
@@ -635,6 +663,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
   emitStateKeyChanged = false;
   emitAllocatorFlushed = false;
   emitAliasAddresses.clear();
+  emitEdgeSlots.clear();
   if(unlikely(allocator.available() < 1_MiB)) {
     print("CPU JIT: flushing all blocks\n");
     allocator.release();
@@ -699,11 +728,10 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       (void)unused;
       if(takenVaddr != ~0ull && isKseg0Rdram(takenVaddr) && !(takenVaddr & 3)
       && isKseg0Rdram(plan.startVaddr)) {
-        u32 targetPaddr = (u32)takenVaddr & 0x3eff'ffff;
-        if(sectionIndex(targetPaddr) == startSection) {
-          linkAddress = targetPaddr;
-          linkVaddrPage = takenVaddr & ~0xfffull;
-        }
+        // Same- or cross-section KSEG0 RDRAM target; runtime checks target
+        // section dirtiness and generation.
+        linkAddress = (u32)takenVaddr & 0x3eff'ffff;
+        linkVaddrPage = takenVaddr & ~0xfffull;
       }
     }
   }
@@ -733,7 +761,45 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
     pendingJumpJumps.push_back(j);
   };
 
-  auto emitInternalDispatch = [&](EmitPlannedInstruction& br) {
+  auto emitEdgeTrampoline = [&](u64 targetVaddr, bool linkable) {
+    // Same delay-slot safety as terminal J linking (see emitInternalDispatch).
+    if(!linkable) {
+      jumpEpilog();
+      return;
+    }
+    // Accuracy-gated: KSEG0 RDRAM only, same constraints as terminal J linking.
+    if(!isKseg0Rdram(targetVaddr) || (targetVaddr & 3) || !isKseg0Rdram(plan.startVaddr)) {
+      jumpEpilog();
+      return;
+    }
+    auto slot = (LinkSlot*)allocator.acquire(sizeof(LinkSlot));
+    slot->linked = nullptr;
+    slot->targetAddress = (u32)targetVaddr & 0x3eff'ffff;
+    slot->targetVaddrPage = targetVaddr & ~0xfffull;
+    // Use the live emit key (SP/GP bits may have changed since block entry).
+    slot->stateKey = emitStateKey;
+    slot->sourceSectionDirty = nullptr;  // filled at publish
+    slot->sourceSectionIndex = startSection;
+    slot->targetSectionIndex = sectionIndex(slot->targetAddress);
+    emitEdgeSlots.push_back(slot);
+
+    constexpr sljit_sw linkedOff = (sljit_sw)offsetof(LinkSlot, linked);
+    mov64(reg(0), imm((sljit_sw)slot));
+    cmp64(mem(reg(0), linkedOff), imm(0), set_z);
+    jumpEpilog(flag_z);
+    callf(&CPU::jitLinkedCodeFromSlot, imm64(slot));
+    sljit_set_label(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_RETURN_REG, 0, SLJIT_IMM, 0), epilogue);
+    mov64(reg(3), reg(0));
+    mov64(reg(0), sreg(0));
+    mov64(reg(1), sreg(1));
+    mov64(reg(2), sreg(2));
+    sljit_s32 linkArgs = SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 1)
+                       | SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 2)
+                       | SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 3);
+    sljit_emit_icall(compiler, SLJIT_CALL | SLJIT_CALL_RETURN, linkArgs, reg(3).fst, reg(3).snd);
+  };
+
+  auto emitInternalDispatch = [&](EmitPlannedInstruction& br, EmitPlannedInstruction& delay) {
     cmp64(CpuClockMem, CpuJitClockTargetMem, set_uge);
     jumpEpilog(flag_uge);
     auto [branchTakenVaddr, branchFallthroughVaddr] =
@@ -744,9 +810,14 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       if(target == branchTakenVaddr) tInt = true;
       if(target == branchFallthroughVaddr) fInt = true;
     }
-    // This runs right after the branch delay slot.
-    // No internal edge: return to dispatcher.
-    if(!tInt && !fInt) { jumpEpilog(); return; }
+    // An external edge may link only after a delay slot that cannot change the
+    // state key or timer state (the terminal-J rule), with no helper call and no
+    // in-block SP/GP key churn. The C++ gate re-checks PC and the live key anyway.
+    bool edgeLinkable = !emitCallfEmitted && !emitStateKeyChanged
+      && !delay.info.branch() && !delay.info.jitStateKeyMayChange()
+      && !delay.info.countCompareWrite();
+    // A taken branch sets EndBlock, so the delay slot's EndBlock check exits the
+    // block before this dispatch; only the not-taken (fallthrough) edge reaches it.
     if(tInt && fInt) {
       // Both edges internal: choose taken/fallthrough from runtime pipeline PC.
       cmp64(PipelineReg(pc), imm(s64(branchTakenVaddr)), set_z);
@@ -759,18 +830,23 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       return;
     }
     if(tInt) {
-      // Taken internal, fallthrough external.
+      // Taken internal, fallthrough external → link or epilogue on fallthrough.
       cmp64(PipelineReg(pc), imm(s64(branchTakenVaddr)), set_z);
       auto takenJ = jump(flag_z);
-      jumpEpilog();
+      emitEdgeTrampoline(branchFallthroughVaddr, edgeLinkable);
       setLabelOrDefer(takenJ, branchTakenVaddr);
       return;
     }
-    // Fallthrough internal, taken external.
-    cmp64(PipelineReg(pc), imm(s64(branchFallthroughVaddr)), set_z);
-    auto fJ = jump(flag_z);
-    jumpEpilog();
-    setLabelOrDefer(fJ, branchFallthroughVaddr);
+    if(fInt) {
+      // Fallthrough internal, taken external: the taken path already left via EndBlock.
+      cmp64(PipelineReg(pc), imm(s64(branchFallthroughVaddr)), set_z);
+      auto fJ = jump(flag_z);
+      jumpEpilog();
+      setLabelOrDefer(fJ, branchFallthroughVaddr);
+      return;
+    }
+    // Both edges external: link the fallthrough edge (the only one reaching here).
+    emitEdgeTrampoline(branchFallthroughVaddr, edgeLinkable);
   };
 
   for(auto& [targetVaddr, targetLabel] : internalLabels) {
@@ -888,14 +964,14 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       && plan.instructions[idx - 1].info.branch() && !plan.instructions[idx - 1].info.unconditionalJump();
     if(prevIsConditionalBranch) {
       // Conditional branch dispatch happens after its delay slot.
-      emitInternalDispatch(plan.instructions[idx - 1]);
+      emitInternalDispatch(plan.instructions[idx - 1], ii);
     }
     if(delaySlot && emitCallfEmitted) delaySlotEmittedCallf = true;
     prevBranched = branched;
   }
 
-  if(delaySlotEmittedCallf) {
-    // Helpers in the delay slot can change state the link gate does not re-check.
+  if(delaySlotEmittedCallf || emitStateKeyChanged) {
+    // Helpers or in-block SP/GP key churn: the entry stateKey is not the exit key.
     linkAddress = ~0u;
     linkVaddrPage = 0;
     for(auto jump : pendingLinkTrampolineJumps) sljit_set_label(jump, epilogue);
@@ -969,7 +1045,15 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
           add64(ProfileIcacheMissesMem, ProfileIcacheMissesMem, imm(1));
           if(!sdram) add64(mem0(RdramRbusIcacheReadsAddr), mem0(RdramRbusIcacheReadsAddr), imm(ICache));
         }
+        // Fill stall (48*2, as in InstructionCache::Line::fill). Skipped at run time
+        // under the opt-in "skip cache timing" hack so the toggle reaches blocks
+        // compiled before it changed.
+        static_assert(sizeof(CPU::skipCaches) == 1, "JIT reads skipCaches as one byte");
+        mov32_u8(reg(0), mem(sreg(0), (sljit_sw)offsetof(CPU, skipCaches)));
+        cmp32(reg(0), imm(0), set_z);
+        auto skipStall = jump(flag_nz);
         emitCpuStep(96);
+        setLabel(skipStall);
         mov32(IcacheTagKeyMem(lineIndex), imm(tagKey));
         mov64(reg(1), mem0(ramDataField));
         mov128(IcacheLineWordsMem(lineIndex, 0x00), mem(reg(1), sljit_sw(ramByteOff + 0x00)));

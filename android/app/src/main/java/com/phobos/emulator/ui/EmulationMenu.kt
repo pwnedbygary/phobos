@@ -391,6 +391,13 @@ fun ColumnScope.N64ExperimentalSection(viewModel: MainViewModel, settings: Emula
             }
         }
         item {
+            MenuSection("Speed hacks") {
+                SettingsSwitchItem("Faster CPU sync", "4× interleave. May freeze timing-sensitive games. Applies immediately.", settings.n64FasterSync) { viewModel.setN64FasterSync(it) }
+                SettingsSwitchItem("Skip cache timing", "No cache stall cycles (Mupen-style); contents stay emulated. Applies immediately.", settings.n64SkipCaches) { viewModel.setN64SkipCaches(it) }
+                SettingsSwitchItem("RSP task mode", "RSP runs ahead of the CPU (Mupen-style). Applies immediately.", settings.n64RspTaskMode) { viewModel.setN64RspTaskMode(it) }
+            }
+        }
+        item {
             MenuSection("Overclocking") {
                 SettingsDropdownItem(
                     title = "VI Overclock",
