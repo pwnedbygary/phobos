@@ -86,7 +86,7 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                 SettingsCategory("Speed hacks") {
                     SettingsSwitchItem(
                         title = "Faster CPU sync",
-                        description = "4× CPU↔peripheral interleave (like a larger Mupen dynarec quantum). Can freeze timing-sensitive games (e.g. Conker pub). Applies immediately.",
+                        description = "4× CPU↔peripheral interleave (like a larger Mupen dynarec quantum). Timing-sensitive games may misbehave. Applies immediately.",
                         checked = settings.n64FasterSync,
                         onCheckedChange = { viewModel.setN64FasterSync(it) }
                     )

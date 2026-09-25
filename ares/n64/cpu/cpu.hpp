@@ -717,6 +717,8 @@ struct CPU : Thread {
   auto getControlRegister(n5) -> u64;
   auto setControlRegister(n5, n64) -> void;
   auto getControlRandom() -> u8;
+  //Count advances in synchronize(); this is the part accrued since then, in scc.count units.
+  auto countSinceSync() const -> u64;
 
   auto DMFC0(r64& rt, u8 rd) -> void;
   auto DMTC0(cr64& rt, u8 rd) -> void;
@@ -819,6 +821,9 @@ struct CPU : Thread {
   //    memory stays coherent with the JIT's inline dcache paths and DMA.
   std::atomic<bool> fasterSync{false};
   std::atomic<bool> skipCaches{false};
+  // Count accrued before an MTC0 Count in the current sync period (scc.count units);
+  // synchronize() skips it. Not serialized: zero at every frame boundary.
+  u64 countWriteSkip = 0;
 
   //interpreter-fpu.cpp
   float_env fenv;

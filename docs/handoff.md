@@ -25,14 +25,22 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-**Active work (2026-09-25):** branch `feature/n64-accuracy-neutral-perf-2026-09`.
+**Active work (2026-09-25):** branch `feature/n64-accuracy-neutral-perf-2026-09`
+([PR #4](https://github.com/pwnedbygary/phobos/pull/4), commit `c02166932`).
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
 PC/live-state-key gates, RSP pipeline hash-skip, `Screen::frame` CV. Opt-in N64
 Experimental speed hacks (faster CPU sync, skip cache timing, RSP task mode; default
-off, not yet measured). Touch: seamless D-pad diagonals; N64 L large / Z pills both
+off). Measured one at a time on the RP6: no clear FPS gain in Mario vs Boo, and Faster
+CPU sync stalled Conker's pub for 91.5 s at a time — a lost CP0 timer interrupt (Count only
+advanced at sync; Conker's ~25 µs timer landed behind Count), root-caused on device and
+fixed (accurate between-sync Count reads, wrap-safe timer check). Conker with Faster CPU
+sync then ran 280 s stall-free; a default-settings regression run with the fix is still
+pending (the RP6 disconnected). Touch: seamless D-pad diagonals; N64 L large / Z pills both
 sides in landscape (right Z hidden in portrait by default). Mario vs Boo final snapshot 55.6 / 58.3 FPS mean over two runs (RP6 run-to-run
 variance); smoke OK on Mario Tennis, Mischief Makers, F-Zero X, Paper Mario, OoT, Conker.
-Host unit tests 41/41. Bugbot: three high findings fixed, final pass clean. See
+All RP6 runs that day had Asynchronous RDP **on** (the persisted setting); earlier notes
+and the commit message said off. Host unit tests 41/41. Bugbot: three high findings
+fixed, final pass clean. See
 [performance audit](performance-audit.md#2026-09-25-follow-up-accuracy-neutral-backlog--experimental-speed-hacks).
 
 Earlier linking: branch `feature/n64-block-linking-2026-09` merged. Same-section

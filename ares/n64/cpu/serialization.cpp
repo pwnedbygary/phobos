@@ -131,6 +131,7 @@ auto CPU::serialize(serializer& s) -> void {
 
   s(cop2.latch);
 
+  countWriteSkip = 0;
   if constexpr(Accuracy::CPU::Recompiler) {
     recompiler.reset();
   }

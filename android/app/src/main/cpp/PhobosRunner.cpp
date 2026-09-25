@@ -1023,6 +1023,7 @@ namespace ares {
                          (int)aiIo.dmaCount, (int)aiIo.dmaEnable,
                          (int)viIo.vcounter, (int)viIo.field,
                          (int)::ares::Nintendo64::queue.timeToNextEvent(),
+                         (unsigned long long)(u64)::ares::Nintendo64::cpu.scc.epc,
                          (const char*)disasm.data(),
                          (const char*)vecDisasm.data(),
                          (const char*)trapDisasm.data(),

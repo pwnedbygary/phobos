@@ -116,7 +116,12 @@ auto CPU::synchronize() -> void {
   // so it scales with the full (overclocked) CPU clock.
   s64 countIncrement = clocks * countPerOp.load() / 4;
   if(countIncrement < 0) countIncrement = 0;
-  if(scc.count < scc.compare && scc.count + countIncrement >= scc.compare) {
+  countIncrement -= min<s64>(countIncrement, (s64)countWriteSkip);
+  countWriteSkip = 0;
+  // Count and Compare are 33-bit: the modular distance also catches a crossing that
+  // straddles the wrap (including Compare = 0), which a linear compare misses.
+  u64 compareDistance = ((u64)scc.compare - (u64)scc.count) & 0x1'ffff'ffffull;
+  if(compareDistance != 0 && compareDistance <= (u64)countIncrement) {
     setInterruptPending(Interrupt::Timer, 1);
   }
   scc.count += countIncrement;
@@ -193,8 +198,7 @@ auto CPU::instruction() -> bool {
         s64 queueDelta = queue.timeToNextEvent();
         if(queueDelta < 0) queueDelta = 0;
         s64 interleave = Accuracy::CPU::JitInterleaving;
-        // Opt-in faster sync (N64 Experimental): 4× interleave. Conker's pub
-        // menu historically froze at upstream 4096*2; measure before relying on it.
+        // Opt-in faster sync (N64 Experimental): 4× interleave.
         if(fasterSync.load(std::memory_order_relaxed)) interleave *= 4;
         s64 capBudget = min<s64>(interleave, min(timerDelta, queueDelta));
         jitClockTarget = Thread::clock + capBudget;
@@ -333,6 +337,7 @@ auto CPU::raiseCoprocessor1Exception() -> void {
 
 auto CPU::power(bool reset) -> void {
   Thread::reset();
+  countWriteSkip = 0;
 
   context.endian = Context::Endian::Big;
   context.mode = Context::Mode::Kernel;

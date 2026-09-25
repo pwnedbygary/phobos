@@ -958,6 +958,16 @@ IDENTICAL (bare Thread::clock, direct calls, same Queue) — N64 was NEVER migra
 co-routine scheduler upstream either. The scheduler would add 2+ co_switch per sync vs 5
 direct calls; MT is CPU/dcache-bound with RSP idle → not worth the risk.
 
+**2026-09-25 root cause (supersedes the "overshoot" wording above):** the stall is a lost
+CP0 timer interrupt. Count advances only at `synchronize()`, so Conker's 1171-tick (~25 µs)
+libultra timer — armed as read Count, add delay, write Compare — lands behind Count
+whenever a sync step between the read and the write exceeds 1171 ticks. The thread then
+waits until Count wraps back to Compare (91.6 s; measured stalls 91.53–91.54 s). The
+spinning PC `0x1000117c` is Conker's TLB-mapped idle loop (KUSEG), not ROM. Fixed the
+same day by making MFC0 Count include clocks since the last sync (plus Count-write and
+wrap-safe crossing handling); Conker with a 4× interleave then ran 280 s stall-free.
+Details and device logs: [performance audit](performance-audit.md).
+
 #### Task 20 — Audio crackling (FIXED 2026-08-09)
 
 `Threaded = false` globally was the root cause — forced emulation threads to do video

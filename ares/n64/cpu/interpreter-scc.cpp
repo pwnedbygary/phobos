@@ -1,3 +1,8 @@
+auto CPU::countSinceSync() const -> u64 {
+  if(Thread::clock <= 0) return 0;
+  return (u64)(Thread::clock * countPerOp.load(std::memory_order_relaxed) / 4);
+}
+
 auto CPU::getControlRegister(n5 index) -> u64 {
   n64 data;
   switch(index) {
@@ -36,7 +41,10 @@ auto CPU::getControlRegister(n5 index) -> u64 {
     data = scc.badVirtualAddress;
     break;
   case  9:  //count
-    data.bit(0,31) = scc.count >> 1;
+    // Include the clocks run since the last sync. A stale value lets a sync land
+    // between a guest's "read Count, write Compare = Count + delay", leaving Compare
+    // behind Count so the timer only fires after Count wraps (~91.6 s; Conker's pub).
+    data.bit(0,31) = ((u64)scc.count + countSinceSync() - countWriteSkip) >> 1;
     break;
   case 10:  //entryhi
     data.bit( 0, 7) = scc.tlb.addressSpaceID;
@@ -169,7 +177,9 @@ auto CPU::setControlRegister(n5 index, n64 data) -> void {
   //scc.badVirtualAddress = data;  //read-only
     break;
   case  9:  //count
-    scc.count = data.bit(0,31) << 1;
+    // The next synchronize() must not add the clocks that ran before this write.
+    scc.count = (u64)data.bit(0,31) << 1;
+    countWriteSkip = countSinceSync();
     break;
   case 10:  //entryhi
     scc.tlb.addressSpaceID            = data.bit( 0, 7);
@@ -179,6 +189,9 @@ auto CPU::setControlRegister(n5 index, n64 data) -> void {
   case 11:  //compare
     scc.compare = data.bit(0,31) << 1;
     setInterruptPending(Interrupt::Timer, 0);
+    // The running JIT budget was capped against the old Compare; resync so the next
+    // budget is capped against this one and the interrupt is not up to one interleave late.
+    forceSynchronize();
     break;
   case 12: {//status
     bool floatingPointMode = scc.status.floatingPointMode;
