@@ -210,6 +210,50 @@ auto CPU::instruction() -> bool {
   return true;
 }
 
+// Accuracy-gated cross-block tail-call: same checks as the top of instruction(),
+// plus dirty/budget. Returns the next block's code, or nullptr to take the epilogue.
+auto CPU::jitLinkedCode() -> u8* {
+  auto block = recompiler.activeBlock;
+  if(!block) return nullptr;
+  if(!block->sectionDirty || *block->sectionDirty) {
+    recompiler.linkAbortDirty++;
+    return nullptr;
+  }
+  if(Thread::clock >= jitClockTarget) {
+    recompiler.linkAbortBudget++;
+    return nullptr;
+  }
+  if(auto interrupts = scc.cause.interruptPending & scc.status.interruptMask) {
+    if(scc.status.interruptEnable && !scc.status.exceptionLevel && !scc.status.errorLevel) {
+      recompiler.linkAbortIrq++;
+      return nullptr;
+    }
+  }
+  if(scc.nmiPending || scc.sysadFrozen) {
+    recompiler.linkAbortIrq++;  // same counter as IE interrupts; split later if profiling needs it
+    return nullptr;
+  }
+  auto linked = block->linkedBlock;
+  if(!linked) {
+    recompiler.linkAbortNoTarget++;
+    return nullptr;
+  }
+  // Section wipe bumps generation and clears the tables; orphaned Block* must not run.
+  auto targetIndex = recompiler.sectionIndex(linked->startAddress);
+  if(linked->generation != recompiler.sectionGeneration[targetIndex]
+  || block->generation != recompiler.sectionGeneration[recompiler.sectionIndex(block->startAddress)]) {
+    recompiler.linkAbortNoTarget++;
+    return nullptr;
+  }
+  if(linked->sectionDirty && *linked->sectionDirty) {
+    recompiler.linkAbortDirty++;
+    return nullptr;
+  }
+  recompiler.linkTaken++;
+  recompiler.activeBlock = linked;
+  return linked->code;
+}
+
 auto CPU::instructionPrologue(u64 address, u32 instruction) -> void {
   debugger.instruction(address, instruction);
 }

@@ -332,11 +332,15 @@ short CPU-bound stretches of the match. Mupen still does the same work with unde
 third of the emulation-thread CPU: its dynarec links blocks and does not emulate the
 caches, its timing is approximate, and its RSP runs whole tasks at once.
 
+### 2026-09-25 follow-up: same-section unconditional `J` linking
+
+| Change | Files | Class | Notes |
+|---|---|---|---|
+| Same-section `J` block linking | `ares/n64/cpu/{cpu.hpp,cpu.cpp,recompiler.cpp}`, `PhobosRunner.cpp` (stats) | (a) | Revive ares-style lazy links for opcode `J` only (not `JR`/`JAL`), same 4 KiB section, KSEG0, safe delay slot. Each hop re-checks dirtiness, `jitClockTarget`, interrupt/NMI/`sysadFrozen`. Unresolved `linkedBlock` is rejected in JIT before the C++ trampoline (GP/SP state-key churn leaves many candidates unresolved). Mario vs Boo save-state (Async RDP off): mean FPS 59.8; emulation-thread CPU ~109% of one core vs ~123% on the prior master build; ~18k successful links/s. |
+
 ### Next (not implemented)
 
-- Block linking in the CPU recompiler, keeping the budget and interrupt checks at
-  each jump (the largest remaining accuracy-neutral item: dispatch is still about 15%
-  of the emulation thread).
+- Dual-edge / conditional external linking and cross-section links (with target generation checks).
 - RSP dispatch: `RSP::Recompiler::Block::execute()` copies the ~88-byte pipeline state
   before every block (about 4 million a second).
 - `Screen::frame()` handoff: a condition variable instead of `spinloop()`.

@@ -25,17 +25,20 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
-**Active work (2026-09-25):** branch `feature/touch-controls-perf-2026-09` (draft PR
-#2). On top of the 2026-09-24 change set (touch controls, performance, Asynchronous RDP,
-Rogue Squadron hold, save-state previews; read the next section before changing
-anything), a second commit makes N64 emulation substantially cheaper on device —
+**Active work (2026-09-25):** branch `feature/n64-block-linking-2026-09` on top of
+master `3d14408de`. Same-section unconditional `J` linking (accuracy-gated) is
+implemented and measured on the Retroid Pocket 6: Mario vs Boo save-state ~59.8 FPS
+with emulation-thread CPU ~109% of one core vs ~123% on the merged touch/perf
+pass (RP6 `49016109`). See the
+[performance audit](performance-audit.md#2026-09-25-follow-up-same-section-unconditional-j-linking).
+
+Earlier: branch `feature/touch-controls-perf-2026-09` (merged PR #2). On top of the
+2026-09-24 change set (touch controls, performance, Asynchronous RDP, Rogue Squadron
+hold, save-state previews), a second commit made N64 emulation substantially cheaper —
 Mario Tennis gameplay 50.6 → 58.4 FPS average on the Retroid Pocket 6 (Mario vs Boo
-save state, 30 s × 2, Asynchronous RDP on; default is off) — and fixes the squashed
+save state, 30 s × 2, Asynchronous RDP on; default is off) — and fixed the squashed
 N64/PS1 picture and save-state previews; the tap-to-show top bar is replaced by the
 on-screen menu button at the user's request ([touch controls](touch-controls.md)).
-What was measured, why Phobos was slow, what changed (including the one timing change,
-the JIT budget) and what is next are in the
-[performance audit](performance-audit.md#2026-09-25-device-profiling-retroid-pocket-6-and-changes).
 Local builds for performance numbers must use NDK 28.2 (the CI toolchain).
 
 ## Touch controls overhaul and performance scan — 2026-09-24 (in progress)
