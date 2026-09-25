@@ -148,6 +148,18 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         settingsStore.setN64AsyncRdp(enabled)
         PhobosCore.setN64AsyncRdp(enabled)
     }
+    fun setN64FasterSync(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64FasterSync(enabled)
+        PhobosCore.setN64FasterSync(enabled)
+    }
+    fun setN64SkipCaches(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64SkipCaches(enabled)
+        PhobosCore.setN64SkipCaches(enabled)
+    }
+    fun setN64RspTaskMode(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setN64RspTaskMode(enabled)
+        PhobosCore.setN64RspTaskMode(enabled)
+    }
     fun setCustomDriverPath(path: String) = viewModelScope.launch {
         settingsStore.setCustomDriverPath(path)
         PhobosCore.setCustomDriverPath(path)
@@ -1774,6 +1786,9 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setN64CountPerOp(if (currentSettings.n64UseDefaultCountPerOp) 2 else currentSettings.n64CountPerOp)
             PhobosCore.setN64CpuOverclock(if (currentSettings.n64UseDefaultCpuOverclock) 0 else currentSettings.n64CpuOverclock)
             PhobosCore.setN64AsyncRdp(currentSettings.n64AsyncRdp)
+            PhobosCore.setN64FasterSync(currentSettings.n64FasterSync)
+            PhobosCore.setN64SkipCaches(currentSettings.n64SkipCaches)
+            PhobosCore.setN64RspTaskMode(currentSettings.n64RspTaskMode)
             PhobosCore.setN64Pak(currentSettings.n64Pak)
             // Push the persisted N64 debug-logging toggle on EVERY load so native
             // matches DataStore at emulation start. The init block pushes the

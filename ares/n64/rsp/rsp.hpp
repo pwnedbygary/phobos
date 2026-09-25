@@ -316,6 +316,11 @@ struct RSP : Thread, Memory::RCP<RSP> {
     n1 signal[8];
   } status{*this};
 
+  // Opt-in: let an unhalted RSP run ahead of the CPU (capped at about one
+  // frame) instead of slicing against the CPU interleave. Mupen-style "whole
+  // task" approximation; default off.
+  std::atomic<bool> taskMode{false};
+
   struct Profile {
     s64 cycles;
     s64 haltedCycles;
@@ -614,13 +619,22 @@ struct RSP : Thread, Memory::RCP<RSP> {
 
     struct Block {
       auto execute(RSP& self) -> void {
-        self.pipeline = pipeline;  //must be updated first so instructionEpilog() can handle taken branch
+        // Install the pipeline fingerprint this block was compiled to leave
+        // behind (exit state, clocks cleared). Skip the full copy when the
+        // live hazard fingerprint already matches — common for tight RSP loops
+        // that re-enter the same IMEM PC through the context cache.
+        if(self.pipeline.hash() != pipelineHash) {
+          self.pipeline = pipeline;
+        } else {
+          self.pipeline.clocks = 0;
+        }
         ((void (*)(RSP*, IPU*, VU*))code)(&self, &self.ipu, &self.vpu);
       }
 
       u8* code;
       u12 size;
       Pipeline pipeline;  //state at *end* of block excepting taken branch stall
+      u32 pipelineHash = 0;
     };
 
     struct BlockHashPair {

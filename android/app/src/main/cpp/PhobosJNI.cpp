@@ -316,6 +316,21 @@ Java_com_phobos_emulator_PhobosCore_setN64AsyncRdp(JNIEnv* env, jobject, jboolea
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64FasterSync(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setN64FasterSync(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64SkipCaches(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setN64SkipCaches(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setN64RspTaskMode(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setN64RspTaskMode(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64Pak(JNIEnv* env, jobject, jstring pakName) {
     const char* nativePakName = env->GetStringUTFChars(pakName, 0);
     ares::setN64Pak(nativePakName);

@@ -717,6 +717,10 @@ namespace ares {
   // Asynchronous RDP (N64 Experimental, default off): SyncFull does not wait
   // for the GPU. Applies live to ::ares::Nintendo64::vulkan.asynchronousRdp.
   static std::atomic<bool> n64AsyncRdp{false};
+  // Opt-in speed hacks (N64 Experimental, default off). Apply live.
+  static std::atomic<bool> n64FasterSync{false};
+  static std::atomic<bool> n64SkipCaches{false};
+  static std::atomic<bool> n64RspTaskMode{false};
 
   // With asynchronous RDP the GPU can still be writing RDRAM when the emulation
   // thread stops; wait for it before snapshotting or replacing that memory
@@ -1019,6 +1023,7 @@ namespace ares {
                          (int)aiIo.dmaCount, (int)aiIo.dmaEnable,
                          (int)viIo.vcounter, (int)viIo.field,
                          (int)::ares::Nintendo64::queue.timeToNextEvent(),
+                         (unsigned long long)(u64)::ares::Nintendo64::cpu.scc.epc,
                          (const char*)disasm.data(),
                          (const char*)vecDisasm.data(),
                          (const char*)trapDisasm.data(),
@@ -2712,8 +2717,11 @@ else if (port->type() == "Keyboard") {
       ::ares::Nintendo64::vi.overclockPercent = n64ViOverclock.load();
       ::ares::Nintendo64::cpu.countPerOp = n64CountPerOp.load();
       ::ares::Nintendo64::cpu.overclockFactor = n64CpuOverclock.load();
+      ::ares::Nintendo64::cpu.fasterSync = n64FasterSync.load();
+      ::ares::Nintendo64::cpu.skipCaches = n64SkipCaches.load();
       ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
       ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
+      ::ares::Nintendo64::rsp.taskMode = n64RspTaskMode.load();
       ::ares::Nintendo64::vulkan.asynchronousRdp = n64AsyncRdp.load();
       // video() below presents the Vulkan scanout directly (see VI::refresh).
       ::ares::Nintendo64::vulkan.frontendPresentsScanout = true;
@@ -3071,9 +3079,12 @@ else if (port->type() == "Keyboard") {
     ::ares::Nintendo64::vi.overclockPercent = n64ViOverclock.load();
     ::ares::Nintendo64::cpu.countPerOp = n64CountPerOp.load();
     ::ares::Nintendo64::cpu.overclockFactor = n64CpuOverclock.load();
+    ::ares::Nintendo64::cpu.fasterSync = n64FasterSync.load();
+    ::ares::Nintendo64::cpu.skipCaches = n64SkipCaches.load();
     ::ares::Nintendo64::vulkan.outputUpscale = n64SupersampleScanout.load() ? 1 : (u32)n64UpscaleFactor.load();
     ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
     ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
+    ::ares::Nintendo64::rsp.taskMode = n64RspTaskMode.load();
     ::ares::Nintendo64::vulkan.asynchronousRdp = n64AsyncRdp.load();
     #endif
     LOGI("System reset requested");
@@ -3192,6 +3203,27 @@ else if (port->type() == "Keyboard") {
     ::ares::Nintendo64::vulkan.asynchronousRdp = enabled;
     #endif
     LOGI("N64 asynchronous RDP %s (applies immediately)", enabled ? "enabled" : "disabled");
+  }
+  auto setN64FasterSync(bool enabled) -> void {
+    n64FasterSync = enabled;
+    #if defined(CORE_N64)
+    ::ares::Nintendo64::cpu.fasterSync = enabled;
+    #endif
+    LOGI("N64 faster sync %s (applies immediately)", enabled ? "enabled" : "disabled");
+  }
+  auto setN64SkipCaches(bool enabled) -> void {
+    n64SkipCaches = enabled;
+    #if defined(CORE_N64)
+    ::ares::Nintendo64::cpu.skipCaches = enabled;
+    #endif
+    LOGI("N64 skip cache timing %s (applies immediately)", enabled ? "enabled" : "disabled");
+  }
+  auto setN64RspTaskMode(bool enabled) -> void {
+    n64RspTaskMode = enabled;
+    #if defined(CORE_N64)
+    ::ares::Nintendo64::rsp.taskMode = enabled;
+    #endif
+    LOGI("N64 RSP task mode %s (applies immediately)", enabled ? "enabled" : "disabled");
   }
   auto setN64ExpansionPak(bool enabled) -> void {
     if (n64ExpansionPak == enabled) return;

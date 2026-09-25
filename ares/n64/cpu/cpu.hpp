@@ -201,7 +201,7 @@ struct CPU : Thread {
       }
 
       auto fill(u32 paddr, CPU& cpu) -> void {
-        cpu.step(48 * 2);
+        if(!cpu.skipCaches.load(std::memory_order_relaxed)) cpu.step(48 * 2);
         const u32 tag = paddr & ~0x0000'0fffu;
         tagKey = tag;
         setValid(true);
@@ -209,7 +209,7 @@ struct CPU : Thread {
       }
 
       auto writeBack(CPU& cpu) -> void {
-        cpu.step(48 * 2);
+        if(!cpu.skipCaches.load(std::memory_order_relaxed)) cpu.step(48 * 2);
         const u32 tag = tagKey & ~0x0000'0fffu;
         cpu.busWriteBurst<ICache>(tag | index, words);
       }
@@ -717,6 +717,8 @@ struct CPU : Thread {
   auto getControlRegister(n5) -> u64;
   auto setControlRegister(n5, n64) -> void;
   auto getControlRandom() -> u8;
+  //Count advances in synchronize(); this is the part accrued since then, in scc.count units.
+  auto countSinceSync() const -> u64;
 
   auto DMFC0(r64& rt, u8 rd) -> void;
   auto DMTC0(cr64& rt, u8 rd) -> void;
@@ -812,6 +814,16 @@ struct CPU : Thread {
   //    faster at the same rendered frame rate).
   std::atomic<s32> countPerOp{2};
   std::atomic<s32> overclockFactor{0};
+  // Opt-in speed hacks (N64 Experimental, default off). Unserialized.
+  //  fasterSync: enlarge CPU↔peripheral interleave (×4 JitInterleaving).
+  //  skipCaches: don't charge icache/dcache fill and writeback stall cycles
+  //    (Mupen models no cache timing). Cache contents stay fully emulated, so
+  //    memory stays coherent with the JIT's inline dcache paths and DMA.
+  std::atomic<bool> fasterSync{false};
+  std::atomic<bool> skipCaches{false};
+  // Count accrued before an MTC0 Count in the current sync period (scc.count units);
+  // synchronize() skips it. Not serialized: zero at every frame boundary.
+  u64 countWriteSkip = 0;
 
   //interpreter-fpu.cpp
   float_env fenv;
@@ -1091,7 +1103,7 @@ struct CPU : Thread {
 
       u8* code = nullptr;
       Block* next = nullptr;
-      Block* linkedBlock = nullptr;  //same-section terminal J target, if resolved
+      Block* linkedBlock = nullptr;  //terminal J target, if resolved
       u64 stateKey = 0;
       u64 vaddrPage = 0;
       u32 startAddress = 0;
@@ -1102,9 +1114,22 @@ struct CPU : Thread {
       u32 generation = 0;  //sectionGeneration of its section when linked in
     };
 
-    // Lazy backpatch: sources waiting for a not-yet-compiled same-section target.
+    // Per-exit link for external conditional edges (long-block mid-block exits).
+    // Allocated from the bump allocator; `linked` is filled lazily like Block::linkedBlock.
+    struct LinkSlot {
+      Block* linked = nullptr;
+      u32 targetAddress = ~0u;
+      u64 targetVaddrPage = 0;
+      u64 stateKey = 0;
+      u8* sourceSectionDirty = nullptr;
+      u32 sourceSectionIndex = 0;
+      u32 targetSectionIndex = 0;
+    };
+
+    // Lazy backpatch: sources waiting for a not-yet-compiled target.
     struct Pending {
-      Block* source = nullptr;
+      Block* source = nullptr;   // terminal J: sets source->linkedBlock
+      LinkSlot* slot = nullptr;  // edge: sets slot->linked
       Pending* next = nullptr;
       u64 expectedStateKey = 0;
       u64 expectedVaddrPage = 0;
@@ -1301,6 +1326,7 @@ struct CPU : Thread {
     Block* activeBlock = nullptr;
     bump_allocator allocator;
     std::vector<u32> emitAliasAddresses;
+    std::vector<LinkSlot*> emitEdgeSlots;
     std::vector<SlowPath> slowPaths;
     std::vector<Section*> sections;
     std::vector<u8> sectionDirty;
@@ -1318,6 +1344,7 @@ struct CPU : Thread {
     u64 linkAbortIrq = 0;
     u64 linkAbortNoTarget = 0;
   } recompiler{*this};
+  auto jitLinkedCodeFromSlot(Recompiler::LinkSlot* slot) -> u8*;
   s64 jitClockTarget = 0;
 
   struct Disassembler {

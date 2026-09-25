@@ -336,14 +336,108 @@ caches, its timing is approximate, and its RSP runs whole tasks at once.
 
 | Change | Files | Class | Notes |
 |---|---|---|---|
-| Same-section `J` block linking | `ares/n64/cpu/{cpu.hpp,cpu.cpp,recompiler.cpp}`, `PhobosRunner.cpp` (stats) | (a) | Revive ares-style lazy links for opcode `J` only (not `JR`/`JAL`), same 4 KiB section, KSEG0, safe delay slot. Each hop re-checks dirtiness, `jitClockTarget`, interrupt/NMI/`sysadFrozen`. Unresolved `linkedBlock` is rejected in JIT before the C++ trampoline (GP/SP state-key churn leaves many candidates unresolved). Mario vs Boo save-state (Async RDP off): mean FPS 59.8; emulation-thread CPU ~109% of one core vs ~123% on the prior master build; ~18k successful links/s. |
+| Same-section `J` block linking | `ares/n64/cpu/{cpu.hpp,cpu.cpp,recompiler.cpp}`, `PhobosRunner.cpp` (stats) | (a) | Revive ares-style lazy links for opcode `J` only (not `JR`/`JAL`), same 4 KiB section, KSEG0, safe delay slot. Each hop re-checks dirtiness, `jitClockTarget`, interrupt/NMI/`sysadFrozen`. Unresolved `linkedBlock` is rejected in JIT before the C++ trampoline (GP/SP state-key churn leaves many candidates unresolved). Mario vs Boo save-state (Async RDP on — this row first said off, but the device setting was enabled; see the correction below): mean FPS 59.8; emulation-thread CPU ~109% of one core vs ~123% on the prior master build; ~18k successful links/s. |
+
+### 2026-09-25 follow-up: accuracy-neutral backlog + Experimental speed hacks
+
+On branch `feature/n64-accuracy-neutral-perf-2026-09` ([PR #4](https://github.com/pwnedbygary/phobos/pull/4)).
+Defaults unchanged except where noted; speed hacks are opt-in under N64 Experimental.
+
+**Correction (Async RDP):** every RP6 run on 2026-09-25 had Asynchronous RDP **on** —
+the persisted device setting; load logs print `N64 asynchronous RDP enabled` for each
+run. Earlier text here, the `J`-linking row above, and commit `c02166932` said "off". The
+before/after comparisons still hold: every run used the same setting.
+
+| Change | Files | Class | Notes |
+|---|---|---|---|
+| Cross-section + dual-edge linking | `ares/n64/cpu/{cpu.hpp,cpu.cpp,recompiler.cpp}` | (a) | Terminal `J` may link across 4 KiB sections (target generation/dirty checks). A block ending in a not-taken conditional branch links its external fallthrough through a per-exit `LinkSlot` (`jitLinkedCodeFromSlot`); a taken branch sets `EndBlock` and leaves before that dispatch. Edge links need the terminal-`J` delay-slot rule (no branch, state-key change, Count/Compare write or helper call; no in-block SP/GP key change). Both link helpers also require the runtime PC to equal the link target and the live `computeStateKey()` to equal the target block's key — the same identity the dispatcher uses. |
+| RSP pipeline hash skip | `ares/n64/rsp/{rsp.hpp,recompiler.cpp}` | (a) | `Block::execute()` skips the full pipeline assign when `pipeline.hash()` matches the specialization key; otherwise still copies and zeros `clocks`. |
+| `Screen::frame` CV handoff | `ares/ares/node/video/screen.cpp` | (a) | Producer waits on `_frameCondition` (100 ms deadline) instead of `spinloop()`; consumer clears `_frame` then unlocks before `refresh()` and notifies. |
+| Faster CPU sync | `cpu.cpp`, Settings / Experimental UI, JNI | (b) opt-in | `fasterSync`: `JitInterleaving × 4`. Default off. Stalled Conker's pub until the Count read fix below. |
+| Skip cache timing | `dcache.cpp`, `cpu.hpp` icache fill, Settings / UI, JNI | (b) opt-in | `skipCaches`: no icache/dcache fill or writeback stall cycles (Mupen models none). Cache contents stay emulated: a C++-only dcache bypass would be incoherent with the JIT's inline dcache hit paths and CACHE ops (the Task 58/59 hazard), so none is done. Default off. |
+| RSP task mode | `rsp.cpp`, Settings / UI, JNI | (b) opt-in | `taskMode`: an unhalted RSP runs ahead of the CPU up to ~1 frame (`187'500'000 / 60` clock units; 2M-instruction guard), then the regular loop handles remaining halted time so DMA still progresses. Default off. |
+
+**Mischief Makers:** previously parked (fatal trap after Start from bad RSP audio results).
+On RP6 after the Count/Compare budget wrap, title → save select → in-game dialogue ran at
+~60 FPS. Likely a side effect of contiguous RSP slices; VU accuracy not claimed fixed.
+
+**Touch (same branch):** seamless D-pad diagonal highlight (unioned L-fill); N64 L = large
+shoulder, Z = small pills on both sides in landscape. The right Z starts hidden in
+portrait (four shoulder buttons don't fit one 360 dp row; the layout editor can show it).
+Host unit tests: 41 pass (`:app:testModernDebugUnitTest`, including layout overlap).
+
+**Measure (Mario vs Boo save state, 30 s, Async RDP on, RP6 `49016109`):** final
+snapshot, two runs: mean FPS 55.6 and 58.3 (emulation thread 129% and 112% of one core;
+steady stretches ~59–60). An earlier snapshot of this branch measured 58.2 / 110%. The
+same build varies this much run to run on the RP6, so no FPS change is claimed for the
+review fixes. `linkTaken` ~30k/s. Smoke (18–25 s each, no crashes or N64 STALL): Mario
+Tennis, Mischief Makers, F-Zero X, Paper Mario, Ocarina of Time, Conker (intro at ~60).
+
+**Speed hacks (commit `c02166932`, Async RDP on, one hack at a time, same save state):**
+
+| Config | Mean FPS per run | Emulation thread | Notes |
+|---|---|---|---|
+| All off | 53.7, 55.1 | 126–127% | Same build earlier: 55.6, 58.3. |
+| Faster CPU sync | 53.9, 55.3 | 127% | No gain. Conker's pub menu: after ~75 s of normal play, repeated 10–20 s freezes with brief recoveries (screen-region hashes; the core kept presenting ~60 FPS and logged no N64 STALL). Switching it off live restored smooth animation (0 static samples in 42 s). Reproduces the `accuracy.hpp` note that interleaves above `2048*2` freeze Conker's pub. |
+| Skip cache timing | 57.6 (one comparable run) | 117–130% | The changed timing makes the benchmark play out differently: two runs ended at the pre-match screen and one likely missed the load hotkey, so those runs aren't scene-comparable. |
+| RSP task mode | 55.2, 56.7 | 125% | Within run-to-run noise. |
+| All three | 57.4 (one run) | 128% | Within noise. |
+
+None of the three gives a measurable gain in this scene, so the remaining gap to Mupen is
+not sync overhead or cache stall cycles. The emulation thread stays near 125%.
+
+**Why Faster CPU sync stalls Conker (root cause, confirmed on device):** ares advances the
+CP0 Count register only inside `CPU::synchronize()`. Between syncs, MFC0 Count returns the
+value from the last sync, and a timer interrupt fires only when one sync step moves Count
+across Compare (`cpu.cpp`, `interpreter-scc.cpp`). libultra arms a timer as *read Count, add
+a delay, write Compare*. Conker uses a very short timer, 1171 Count ticks (~25 µs). If a
+sync lands between the read and the write, Count jumps past the new Compare. The write
+then sits behind Count, and the interrupt cannot fire until Count wraps back to it:
+2³² ticks at 46.875 MHz = 91.6 s. The waiting thread blocks, the RSP, RDP and audio go
+idle (AI queue empty), and only the VI interrupt continues.
+
+A temporary debug-gated log of Compare writes caught this at both stalls in one run:
+Compare `ba1694dd` was written 809 ticks behind Count (read `ba16904a` + 1171). The game
+resumed 91.54 s later, when Count reached `ba1694dd` again, then stalled 1 s later the same
+way (91.53 s). No wrap-straddle miss was logged.
+
+The default interleave (2048×2 clocks ≈ 1024 Count ticks per step) keeps each jump just
+under Conker's 1171-tick timer. That matches the historical table: 1024×2 and 2048×2 are
+stall-free, while 4096×2 and above stall. Faster CPU sync (4096 ticks per step) usually
+exceeds it. The default is therefore safe only by about a 15% margin; upstream ares has the
+same Count model.
+
+A fix is possible without changing timing defaults: make Count reads include the clocks
+run since the last sync (and account for them on Count writes), and use a wrap-safe
+crossing check. That keeps `Compare = Count + delay` in the future at any interleave.
+
+**Fix (same day):** `CPU::countSinceSync()` adds the clocks run since the last sync to MFC0
+Count. MTC0 Count records those clocks (`countWriteSkip`) so the next sync doesn't add
+them again; the field is runtime-only (not serialized) and is reset on power and state
+load. MTC0 Compare forces a resync so the JIT budget is re-capped against the new
+Compare. `synchronize()` fires the timer on a modular 33-bit distance, which also covers
+a crossing that straddles the wrap and Compare = 0. With the fix and Faster CPU sync on,
+Conker ran 280 s through boot, intro and the pub with no RSP gap over 3 s; both earlier
+runs had stalled twice for 91.5 s in the same window. A default-settings regression run
+(Mario vs Boo, smoke titles) with the fix has not run yet: the RP6 disconnected first.
+
+The same capture exposed a latent crash in the N64 Debug Logging stall dump
+(`PhobosRunner.cpp`): its format string had an `EPC=0x%08llx` field with no argument, so
+later `%s` fields read shifted varargs. Earlier dumps printed a heap pointer as "EPC", and
+this build segfaulted in `vsnprintf`. The EPC argument is now passed.
+
+**Review:** Bugbot on the uncommitted diff, four passes. Fixed: (1) `LinkSlot` recorded
+the block-entry state key instead of `emitStateKey`; (2) conditional edge links lacked
+the terminal-`J` delay-slot rule — both link helpers now also verify runtime PC and the
+live state key; (3) "skip cache timing" missed the JIT's inline icache-miss stall. The
+first draft of skip-caches bypassed the dcache in C++ only (incoherent with the JIT's
+inline dcache paths), replaced by timing-only. Final pass: no bugs.
 
 ### Next (not implemented)
 
-- Dual-edge / conditional external linking and cross-section links (with target generation checks).
-- RSP dispatch: `RSP::Recompiler::Block::execute()` copies the ~88-byte pipeline state
-  before every block (about 4 million a second).
-- `Screen::frame()` handoff: a condition variable instead of `spinloop()`.
-- Opt-in speed options under N64 Experimental (faster sync, skipping cache emulation,
-  RSP task mode): the user chose to decide after the accuracy-neutral work, with
-  measurements.
+- Decide whether to keep Faster CPU sync: it no longer stalls Conker, but showed no FPS
+  gain in Mario vs Boo.
+- Direct-branch linking for taken conditional branches (would need the taken path to
+  skip `EndBlock`, as in ares `edf712f2f`) — optional further win.
+- Broader UI theme system (IDE colorways; keep system card art) and a MangoHud-style
+  performance overlay — P3 QoL, deferred.

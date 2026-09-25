@@ -317,8 +317,17 @@ former plan.
 
 #### <a id="task-19"></a>Task 19 — Customizable UI coloration (listed QoL work)
 
+**2026-09-25 expansion (deferred, not started):** user wants an eventual app UI
+overhaul — go bananas on chrome, settings, menus, typography, accents, and
+motion: clean modern aesthetic with many selectable themes based on common IDE
+colorways, plus optional retrowave/synthwave inspired by mupen64plus-ae-turnip.
+**Constraint: keep system library cards mostly as they are** (preserve the
+existing card art / composition); theming can tint chrome around them but should
+not replace or redesign that art. Remains P3 / after core stability; no code in
+the N64 perf workstream.
+
 Historical queue entry retained; no separate detailed note existed in the
-former plan.
+former plan before this expansion.
 
 #### <a id="task-31"></a>Task 31 — PS1 authentic on-screen shapes (listed QoL work)
 
@@ -329,6 +338,13 @@ former plan.
 
 The former plan proposed configurable FPS/frame-time/RAM/core/shader/GPU/CPU/
 thermal/driver/refresh metrics.
+
+**2026-09-25 expansion (deferred, not started):** overhaul the in-game performance
+overlay presentation to match something like **MangoHud** or **GameNative** —
+the current overlay works but looks janky. Show whatever metrics are actually
+available for the running system; do not invent GPU/thermal numbers without a
+real source. Visual polish can proceed ahead of new counters; new counters still
+need attribution evidence (Tasks 42b/43/44/69).
 
 #### <a id="task-42b"></a>Task 42b — Perf Monitor: Game FPS (true N64 render rate) (PLANNED 2026-08-17)
 
@@ -941,6 +957,16 @@ vs 4096*2 — dips are SI-DMA waits, not sync overhead).
 IDENTICAL (bare Thread::clock, direct calls, same Queue) — N64 was NEVER migrated to the
 co-routine scheduler upstream either. The scheduler would add 2+ co_switch per sync vs 5
 direct calls; MT is CPU/dcache-bound with RSP idle → not worth the risk.
+
+**2026-09-25 root cause (supersedes the "overshoot" wording above):** the stall is a lost
+CP0 timer interrupt. Count advances only at `synchronize()`, so Conker's 1171-tick (~25 µs)
+libultra timer — armed as read Count, add delay, write Compare — lands behind Count
+whenever a sync step between the read and the write exceeds 1171 ticks. The thread then
+waits until Count wraps back to Compare (91.6 s; measured stalls 91.53–91.54 s). The
+spinning PC `0x1000117c` is Conker's TLB-mapped idle loop (KUSEG), not ROM. Fixed the
+same day by making MFC0 Count include clocks since the last sync (plus Count-write and
+wrap-safe crossing handling); Conker with a 4× interleave then ran 280 s stall-free.
+Details and device logs: [performance audit](performance-audit.md).
 
 #### Task 20 — Audio crackling (FIXED 2026-08-09)
 

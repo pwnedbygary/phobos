@@ -116,7 +116,12 @@ auto CPU::synchronize() -> void {
   // so it scales with the full (overclocked) CPU clock.
   s64 countIncrement = clocks * countPerOp.load() / 4;
   if(countIncrement < 0) countIncrement = 0;
-  if(scc.count < scc.compare && scc.count + countIncrement >= scc.compare) {
+  countIncrement -= min<s64>(countIncrement, (s64)countWriteSkip);
+  countWriteSkip = 0;
+  // Count and Compare are 33-bit: the modular distance also catches a crossing that
+  // straddles the wrap (including Compare = 0), which a linear compare misses.
+  u64 compareDistance = ((u64)scc.compare - (u64)scc.count) & 0x1'ffff'ffffull;
+  if(compareDistance != 0 && compareDistance <= (u64)countIncrement) {
     setInterruptPending(Interrupt::Timer, 1);
   }
   scc.count += countIncrement;
@@ -192,7 +197,10 @@ auto CPU::instruction() -> bool {
         s64 timerDelta = (s64)(((u64)scc.compare - (u64)scc.count) & 0x1'ffff'ffffull);
         s64 queueDelta = queue.timeToNextEvent();
         if(queueDelta < 0) queueDelta = 0;
-        s64 capBudget = min<s64>(Accuracy::CPU::JitInterleaving, min(timerDelta, queueDelta));
+        s64 interleave = Accuracy::CPU::JitInterleaving;
+        // Opt-in faster sync (N64 Experimental): 4× interleave.
+        if(fasterSync.load(std::memory_order_relaxed)) interleave *= 4;
+        s64 capBudget = min<s64>(interleave, min(timerDelta, queueDelta));
         jitClockTarget = Thread::clock + capBudget;
       }
       block->execute(*this);
@@ -238,10 +246,64 @@ auto CPU::jitLinkedCode() -> u8* {
     recompiler.linkAbortNoTarget++;
     return nullptr;
   }
+  // The same identity the dispatcher would use for the next block: the runtime
+  // PC must be the J target and the live state key must match the target's.
+  u64 targetVaddr = block->linkVaddrPage | (block->linkAddress & 0xfff);
+  if(ipu.pc != targetVaddr || linked->stateKey != recompiler.computeStateKey()) {
+    recompiler.linkAbortNoTarget++;
+    return nullptr;
+  }
   // Section wipe bumps generation and clears the tables; orphaned Block* must not run.
   auto targetIndex = recompiler.sectionIndex(linked->startAddress);
   if(linked->generation != recompiler.sectionGeneration[targetIndex]
   || block->generation != recompiler.sectionGeneration[recompiler.sectionIndex(block->startAddress)]) {
+    recompiler.linkAbortNoTarget++;
+    return nullptr;
+  }
+  if(linked->sectionDirty && *linked->sectionDirty) {
+    recompiler.linkAbortDirty++;
+    return nullptr;
+  }
+  recompiler.linkTaken++;
+  recompiler.activeBlock = linked;
+  return linked->code;
+}
+
+auto CPU::jitLinkedCodeFromSlot(Recompiler::LinkSlot* slot) -> u8* {
+  if(!slot) return nullptr;
+  auto block = recompiler.activeBlock;
+  if(!block) return nullptr;
+  if(!slot->sourceSectionDirty || *slot->sourceSectionDirty) {
+    recompiler.linkAbortDirty++;
+    return nullptr;
+  }
+  if(Thread::clock >= jitClockTarget) {
+    recompiler.linkAbortBudget++;
+    return nullptr;
+  }
+  if(auto interrupts = scc.cause.interruptPending & scc.status.interruptMask) {
+    if(scc.status.interruptEnable && !scc.status.exceptionLevel && !scc.status.errorLevel) {
+      recompiler.linkAbortIrq++;
+      return nullptr;
+    }
+  }
+  if(scc.nmiPending || scc.sysadFrozen) {
+    recompiler.linkAbortIrq++;
+    return nullptr;
+  }
+  auto linked = slot->linked;
+  if(!linked) {
+    recompiler.linkAbortNoTarget++;
+    return nullptr;
+  }
+  // Runtime PC must be this edge's target and the live key must match the target's.
+  u64 targetVaddr = slot->targetVaddrPage | (slot->targetAddress & 0xfff);
+  if(ipu.pc != targetVaddr || linked->stateKey != recompiler.computeStateKey()) {
+    recompiler.linkAbortNoTarget++;
+    return nullptr;
+  }
+  if(linked->generation != recompiler.sectionGeneration[slot->targetSectionIndex]
+  || block->generation != recompiler.sectionGeneration[slot->sourceSectionIndex]) {
     recompiler.linkAbortNoTarget++;
     return nullptr;
   }
@@ -275,6 +337,7 @@ auto CPU::raiseCoprocessor1Exception() -> void {
 
 auto CPU::power(bool reset) -> void {
   Thread::reset();
+  countWriteSkip = 0;
 
   context.endian = Context::Endian::Big;
   context.mode = Context::Mode::Kernel;

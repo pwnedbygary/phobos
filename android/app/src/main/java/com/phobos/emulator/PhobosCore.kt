@@ -32,6 +32,9 @@ object PhobosCore {
     external fun setN64CpuOverclock(factor: Int)
     /** Asynchronous RDP: SyncFull stops waiting for the GPU (faster, less accurate). Applies immediately. */
     external fun setN64AsyncRdp(enabled: Boolean)
+    external fun setN64FasterSync(enabled: Boolean)
+    external fun setN64SkipCaches(enabled: Boolean)
+    external fun setN64RspTaskMode(enabled: Boolean)
     external fun setN64Pak(pakName: String)
     external fun getRumbleState(): Boolean
     external fun resetSystem()

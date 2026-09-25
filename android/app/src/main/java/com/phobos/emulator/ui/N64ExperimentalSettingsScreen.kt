@@ -83,6 +83,28 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                 }
             }
             item {
+                SettingsCategory("Speed hacks") {
+                    SettingsSwitchItem(
+                        title = "Faster CPU sync",
+                        description = "4× CPU↔peripheral interleave (like a larger Mupen dynarec quantum). Timing-sensitive games may misbehave. Applies immediately.",
+                        checked = settings.n64FasterSync,
+                        onCheckedChange = { viewModel.setN64FasterSync(it) }
+                    )
+                    SettingsSwitchItem(
+                        title = "Skip cache timing",
+                        description = "Don't charge R4300 cache miss/writeback stall cycles (Mupen doesn't model them), so the emulated CPU gets more done per frame, like a mild overclock. Cache contents stay emulated. Timing-sensitive games may change behavior. Applies immediately.",
+                        checked = settings.n64SkipCaches,
+                        onCheckedChange = { viewModel.setN64SkipCaches(it) }
+                    )
+                    SettingsSwitchItem(
+                        title = "RSP task mode",
+                        description = "Let the RSP run ahead of the CPU (up to about a frame) instead of in lockstep slices (Mupen rsp-parallel style). Less sync overhead; timing-sensitive RSP games may glitch. Applies immediately.",
+                        checked = settings.n64RspTaskMode,
+                        onCheckedChange = { viewModel.setN64RspTaskMode(it) }
+                    )
+                }
+            }
+            item {
                 SettingsCategory("Overclocking") {
                     var overclockExpanded by remember { mutableStateOf(false) }
                     ListItem(
