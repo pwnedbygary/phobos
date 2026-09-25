@@ -898,7 +898,19 @@ namespace ares {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatsUpdateTime).count();
         if (elapsed >= 1000) {
             currentFps = (f64)frameCount * 1000.0 / (f64)elapsed;
-            LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms", (f64)currentFps, (f64)avgFrameTime / 1000.0);
+            #if defined(CORE_N64)
+            if (root && root->name() == "Nintendo 64") {
+              auto& rc = ::ares::Nintendo64::cpu.recompiler;
+              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms linkTaken=%llu cand=%llu miss=%llu budget=%llu irq=%llu dirty=%llu",
+                (f64)currentFps, (f64)avgFrameTime / 1000.0,
+                (unsigned long long)rc.linkTaken, (unsigned long long)rc.linkCandidates,
+                (unsigned long long)rc.linkAbortNoTarget, (unsigned long long)rc.linkAbortBudget,
+                (unsigned long long)rc.linkAbortIrq, (unsigned long long)rc.linkAbortDirty);
+            } else
+            #endif
+            {
+              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms", (f64)currentFps, (f64)avgFrameTime / 1000.0);
+            }
             frameCount = 0;
             lastStatsUpdateTime = now;
 

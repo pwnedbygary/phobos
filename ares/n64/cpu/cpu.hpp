@@ -47,6 +47,7 @@ struct CPU : Thread {
   template<bool Recompiled> auto instructionEpilogue() -> void;
   auto raiseCoprocessor1Exception() -> void;
   auto icacheFillLine(u64 vaddr, u32 paddr) -> void;
+  auto jitLinkedCode() -> u8*;
 
   auto power(bool reset) -> void;
 
@@ -1090,16 +1091,29 @@ struct CPU : Thread {
 
       u8* code = nullptr;
       Block* next = nullptr;
+      Block* linkedBlock = nullptr;  //same-section terminal J target, if resolved
       u64 stateKey = 0;
       u64 vaddrPage = 0;
       u32 startAddress = 0;
       u32 endAddress = 0;
+      u32 linkAddress = ~0u;   //physical start of link target; ~0 = not a candidate
+      u64 linkVaddrPage = 0;   //must match the target block's vaddrPage
       u8* sectionDirty = nullptr;
       u32 generation = 0;  //sectionGeneration of its section when linked in
     };
 
+    // Lazy backpatch: sources waiting for a not-yet-compiled same-section target.
+    struct Pending {
+      Block* source = nullptr;
+      Pending* next = nullptr;
+      u64 expectedStateKey = 0;
+      u64 expectedVaddrPage = 0;
+      u32 expectedTargetAddress = 0;
+    };
+
     struct Section {
       Block* blocks[SectionWords];
+      Pending* pending[SectionWords];
       u8 lineBlocks[SectionLineCount];
     };
 
@@ -1150,6 +1164,8 @@ struct CPU : Thread {
       fastLookup.assign(FastLookupSize, {});
       activeBlock = nullptr;
       invalidateStateKey();
+      linkCandidates = linkInstalledDirect = linkPendingQueued = linkInstalledBackpatch = 0;
+      linkTaken = linkAbortDirty = linkAbortBudget = linkAbortIrq = linkAbortNoTarget = 0;
     }
 
     // Must be called after any write to the Status or FCSR fields in the
@@ -1290,6 +1306,17 @@ struct CPU : Thread {
     std::vector<u8> sectionDirty;
     std::vector<u32> sectionGeneration;
     std::vector<FastLookup> fastLookup;
+
+    // Same-section unconditional-J linking (accuracy-gated).
+    u64 linkCandidates = 0;
+    u64 linkInstalledDirect = 0;
+    u64 linkPendingQueued = 0;
+    u64 linkInstalledBackpatch = 0;
+    u64 linkTaken = 0;
+    u64 linkAbortDirty = 0;
+    u64 linkAbortBudget = 0;
+    u64 linkAbortIrq = 0;
+    u64 linkAbortNoTarget = 0;
   } recompiler{*this};
   s64 jitClockTarget = 0;
 

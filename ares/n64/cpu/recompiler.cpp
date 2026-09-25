@@ -186,8 +186,10 @@ resolved after the delay slot (as required by guest semantics).
 - one edge internal: local jump for internal edge, epilogue exit otherwise;
 - no internal edge: exit through epilogue.
 
-Runtime cross-block branch chaining is intentionally disabled in this design.
-The implementation favors predictable exits through the common epilogue path.
+Runtime cross-block chaining is limited to same-section unconditional `J`
+(not `JR`/`JAL`), with a trampoline that re-checks section dirtiness, the JIT
+budget, and interrupt/NMI/`sysadFrozen` before a tail-call. Conditional and
+indirect exits still return through the common epilogue to `CPU::instruction()`.
 
 Pipeline and PC handling
 ------------------------
@@ -334,6 +336,52 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, u64 stateKey) -> Block* {
     }
   }
 
+  auto findLinked = [&](u32 targetAddress, u64 targetStateKey, u64 targetVaddrPage) -> Block* {
+    auto targetIndex = blockIndex(targetAddress);
+    for(auto target = section->blocks[targetIndex]; target; target = target->next) {
+      if(target->stateKey != targetStateKey) continue;
+      if(target->vaddrPage != targetVaddrPage) continue;
+      if(target->startAddress != targetAddress) continue;
+      return target;
+    }
+    return nullptr;
+  };
+
+  auto resolvePending = [&](Block* target) -> void {
+    auto targetIndex = blockIndex(target->startAddress);
+    auto* pending = &section->pending[targetIndex];
+    while(*pending) {
+      auto entry = *pending;
+      if(entry->expectedStateKey == target->stateKey
+      && entry->expectedVaddrPage == target->vaddrPage
+      && entry->expectedTargetAddress == target->startAddress) {
+        entry->source->linkedBlock = target;
+        linkInstalledBackpatch++;
+        *pending = entry->next;
+        continue;
+      }
+      pending = &entry->next;
+    }
+  };
+
+  auto installLink = [&](Block* source) -> void {
+    if(source->linkAddress == ~0u) return;
+    linkCandidates++;
+    if(auto target = findLinked(source->linkAddress, source->stateKey, source->linkVaddrPage)) {
+      source->linkedBlock = target;
+      linkInstalledDirect++;
+    } else {
+      auto pending = (Pending*)allocator.acquire(sizeof(Pending));
+      pending->source = source;
+      pending->next = section->pending[blockIndex(source->linkAddress)];
+      pending->expectedStateKey = source->stateKey;
+      pending->expectedVaddrPage = source->linkVaddrPage;
+      pending->expectedTargetAddress = source->linkAddress;
+      section->pending[blockIndex(source->linkAddress)] = pending;
+      linkPendingQueued++;
+    }
+  };
+
   auto block = emit(vaddr, address, stateKey);
   if(block) {
     if(emitAllocatorFlushed) {
@@ -361,10 +409,13 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       auto alias = (Block*)allocator.acquire(sizeof(Block));
       alias->code = block->code;
       alias->next = section->blocks[aliasIndex];
+      alias->linkedBlock = nullptr;
       alias->stateKey = block->stateKey;
       alias->vaddrPage = block->vaddrPage;
       alias->startAddress = aliasAddress;
       alias->endAddress = block->endAddress;
+      alias->linkAddress = ~0u;
+      alias->linkVaddrPage = 0;
       alias->sectionDirty = block->sectionDirty;
       alias->generation = block->generation;
       section->blocks[aliasIndex] = alias;
@@ -372,8 +423,11 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       return alias;
     };
     for(auto aliasAddress : emitAliasAddresses) {
-      registerAlias(aliasAddress);
+      auto alias = registerAlias(aliasAddress);
+      if(alias != block) resolvePending(alias);
     }
+    installLink(block);
+    resolvePending(block);
     memory::jitprotect(true);
     // emit() may have flushed everything (reset() clears fastLookup), so index afresh.
     if(isKseg0Rdram(vaddr)) fastLookup[vaddr >> 2 & FastLookupSize - 1] = {(u32)vaddr, (u32)stateKey, block};
@@ -628,9 +682,37 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
   slowPaths.clear();
   emitDeferredCycles = 0;
 
+  // Same-section unconditional J (opcode 0x02) after a safe delay slot:
+  // record the physical target for lazy linking at publish time.
+  u32 linkAddress = ~0u;
+  u64 linkVaddrPage = 0;
+  if(plan.instructions.size() >= 2) {
+    auto& branch = plan.instructions[plan.instructions.size() - 2];
+    auto& delay = plan.instructions.back();
+    if(branch.info.unconditionalJump() && !branch.info.unconditionalJumpAndLink()
+    && (branch.instruction >> 26) == 0x02
+    && !delay.info.branch()
+    && !delay.info.jitStateKeyMayChange()
+    && !delay.info.countCompareWrite()) {
+      auto [takenVaddr, unused] = computeBranchTargets(emitStateKey.coprocessor1Enabled(),
+                                                       branch.vaddr, branch.instruction);
+      (void)unused;
+      if(takenVaddr != ~0ull && isKseg0Rdram(takenVaddr) && !(takenVaddr & 3)
+      && isKseg0Rdram(plan.startVaddr)) {
+        u32 targetPaddr = (u32)takenVaddr & 0x3eff'ffff;
+        if(sectionIndex(targetPaddr) == startSection) {
+          linkAddress = targetPaddr;
+          linkVaddrPage = takenVaddr & ~0xfffull;
+        }
+      }
+    }
+  }
+
   // Pending forward jumps to internal labels not yet resolved (parallel vectors).
   std::vector<u64>          pendingJumpVaddrs;
   std::vector<sljit_jump*>  pendingJumpJumps;
+  // EndBlock exits from a linkable J's delay slot jump here instead of the epilogue.
+  std::vector<sljit_jump*>  pendingLinkTrampolineJumps;
 
   auto bindSlowPaths = [&](size_t first, sljit_label* resume, u32 deferredCycles, bool jumpEpilogFlag) -> void {
     // Convert deferred slow-path placeholders into concrete resumes.
@@ -701,6 +783,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
 
   // Phase 4: emit the planned instruction sequence.
   bool prevBranched = false;
+  bool delaySlotEmittedCallf = false;
   for(size_t idx = 0; idx < plan.instructions.size(); idx++) {
     auto& ii = plan.instructions[idx];
     bool firstInstruction = (idx == 0);
@@ -785,7 +868,14 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       mov32(PipelineReg(state), PipelineReg(nstate));
     }
     if(needEndBlockCheck) {
-      jumpEpilog(flag_nz);
+      // Unconditional-J delay slot: take the link trampoline instead of returning.
+      bool linkableTerminal = delaySlot && linkAddress != ~0u
+        && idx + 1 == plan.instructions.size();
+      if(linkableTerminal) {
+        pendingLinkTrampolineJumps.push_back(jump(flag_nz));
+      } else {
+        jumpEpilog(flag_nz);
+      }
     }
 
     if(slowPaths.size() != slowPathStart) {
@@ -800,7 +890,16 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       // Conditional branch dispatch happens after its delay slot.
       emitInternalDispatch(plan.instructions[idx - 1]);
     }
+    if(delaySlot && emitCallfEmitted) delaySlotEmittedCallf = true;
     prevBranched = branched;
+  }
+
+  if(delaySlotEmittedCallf) {
+    // Helpers in the delay slot can change state the link gate does not re-check.
+    linkAddress = ~0u;
+    linkVaddrPage = 0;
+    for(auto jump : pendingLinkTrampolineJumps) sljit_set_label(jump, epilogue);
+    pendingLinkTrampolineJumps.clear();
   }
 
   for(auto& [targetVaddr, targetLabel] : internalLabels) {
@@ -818,6 +917,33 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
 
   // Phase 5: emit epilogue and deferred slow paths.
   flushDeferredCycles();
+  if(linkAddress != ~0u) {
+    auto trampoline = sljit_emit_label(compiler);
+    for(auto jump : pendingLinkTrampolineJumps) sljit_set_label(jump, trampoline);
+    pendingLinkTrampolineJumps.clear();
+    // Fast reject unresolved links without entering C++ (miss rate is high while
+    // GP/SP state-key bits churn).
+    constexpr sljit_sw activeBlockOff = (sljit_sw)offsetof(CPU, recompiler)
+                                      + (sljit_sw)offsetof(Recompiler, activeBlock);
+    constexpr sljit_sw linkedBlockOff = (sljit_sw)offsetof(Block, linkedBlock);
+    mov64(reg(0), mem(sreg(0), activeBlockOff));
+    cmp64(mem(reg(0), linkedBlockOff), imm(0), set_z);
+    jumpEpilog(flag_z);
+    // Tail-call the linked block when jitLinkedCode() returns its code pointer.
+    callf(&CPU::jitLinkedCode);
+    sljit_set_label(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_RETURN_REG, 0, SLJIT_IMM, 0), epilogue);
+    mov64(reg(3), reg(0));
+    mov64(reg(0), sreg(0));
+    mov64(reg(1), sreg(1));
+    mov64(reg(2), sreg(2));
+    sljit_s32 linkArgs = SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 1)
+                       | SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 2)
+                       | SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 3);
+    sljit_emit_icall(compiler, SLJIT_CALL | SLJIT_CALL_RETURN, linkArgs, reg(3).fst, reg(3).snd);
+  } else {
+    for(auto jump : pendingLinkTrampolineJumps) sljit_set_label(jump, epilogue);
+    pendingLinkTrampolineJumps.clear();
+  }
   jumpEpilog();
   for(auto& slow : slowPaths) {
     // Every deferred slow path gets a dedicated entry trampoline.
@@ -872,10 +998,13 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
   auto block = (Block*)allocator.acquire(sizeof(Block));
   block->code = endFunction();
   block->next = nullptr;
+  block->linkedBlock = nullptr;
   block->stateKey = stateKey;
   block->vaddrPage = plan.startVaddr & ~0xfffull;
   block->startAddress = startAddress;
   block->endAddress = windowEndAddress;
+  block->linkAddress = linkAddress;
+  block->linkVaddrPage = linkVaddrPage;
   block->sectionDirty = sectionDirty.data() + startSection;
 
   return block;
