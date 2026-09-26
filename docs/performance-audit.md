@@ -351,7 +351,7 @@ before/after comparisons still hold: every run used the same setting.
 | Change | Files | Class | Notes |
 |---|---|---|---|
 | Cross-section + dual-edge linking | `ares/n64/cpu/{cpu.hpp,cpu.cpp,recompiler.cpp}` | (a) | Terminal `J` may link across 4 KiB sections (target generation/dirty checks). A block ending in a not-taken conditional branch links its external fallthrough through a per-exit `LinkSlot` (`jitLinkedCodeFromSlot`); a taken branch sets `EndBlock` and leaves before that dispatch. Edge links need the terminal-`J` delay-slot rule (no branch, state-key change, Count/Compare write or helper call; no in-block SP/GP key change). Both link helpers also require the runtime PC to equal the link target and the live `computeStateKey()` to equal the target block's key — the same identity the dispatcher uses. |
-| RSP pipeline hash skip | `ares/n64/rsp/{rsp.hpp,recompiler.cpp}` | (a) | `Block::execute()` skips the full pipeline assign when `pipeline.hash()` matches the specialization key; otherwise still copies and zeros `clocks`. |
+| RSP pipeline hash skip | `ares/n64/rsp/{rsp.hpp,recompiler.cpp}` | (a) | `Block::execute()` skips the full pipeline assign when `pipeline.hash()` matches the specialization key; otherwise still copies and zeros `clocks`. **Reverted** later the same day: the hash cost far more than the copy (see [RSP pipeline copy restored](#2026-09-25-follow-up-rsp-pipeline-copy-restored-regression-fix)). |
 | `Screen::frame` CV handoff | `ares/ares/node/video/screen.cpp` | (a) | Producer waits on `_frameCondition` (100 ms deadline) instead of `spinloop()`; consumer clears `_frame` then unlocks before `refresh()` and notifies. |
 | Faster CPU sync | `cpu.cpp`, Settings / Experimental UI, JNI | (b) opt-in | `fasterSync`: `JitInterleaving × 4`. Default off. Stalled Conker's pub until the Count read fix below. |
 | Skip cache timing | `dcache.cpp`, `cpu.hpp` icache fill, Settings / UI, JNI | (b) opt-in | `skipCaches`: no icache/dcache fill or writeback stall cycles (Mupen models none). Cache contents stay emulated: a C++-only dcache bypass would be incoherent with the JIT's inline dcache hit paths and CACHE ops (the Task 58/59 hazard), so none is done. Default off. |
@@ -474,10 +474,49 @@ performance-hint session reporting each frame's work against the frame period (5
 and both (59.2 and 59.3). The hint session alone barely moved the thread (89–92% of frames on
 the X3) and added nothing on top of pinning, so it isn't part of the change.
 
+### 2026-09-25 follow-up: RSP pipeline copy restored (regression fix)
+
+Branch `feature/rsp-pipeline-copy-2026-09`, stacked on the fastest-core change
+([PR #6](https://github.com/pwnedbygary/phobos/pull/6)). It reverts the RSP pipeline hash skip
+from [PR #4](https://github.com/pwnedbygary/phobos/pull/4).
+
+**Finding.** An 8 s simpleperf profile of the Mario vs Boo match (cpu-clock with off-CPU
+samples and DWARF call graphs, profileable local build) put 27% of the emulation thread's
+time in `RSP::Pipeline::hash()`. PR #4 made `Block::execute()` compute that CRC32, byte by
+byte over 28 bytes of hazard state, before every RSP block, to skip copying the ~90-byte
+pipeline struct when the hash matched. RSP blocks run millions of times a second, and the
+hash costs far more than the copy it saved. The skip path also wasn't equivalent to the copy:
+it only cleared `clocks` and left the other fields as they were. This likely explains why
+Mario vs Boo measured about 58.5 FPS after PR #4 against 59.8 after `J` linking alone, which
+was put down to run-to-run variance at the time.
+
+**Change.** `Block::execute()` copies the block's pipeline unconditionally again, exactly as
+upstream, and the `pipelineHash` field is gone.
+
+**Measured** (Mario vs Boo save state, 30 s, Async RDP on, fastest-core pin on, two runs each):
+
+| Build | Mean FPS | Worst second | 10th-percentile second | Intervals over 20 ms | Longest interval | Emulation thread CPU |
+|---|---|---|---|---|---|---|
+| PR #6 | 59.4, 59.5 | 53.4, 53.9 | 58.6, 58.6 | 176, 156 | 28.6, 28.3 ms | 81% |
+| This change | 59.9, 59.9 | 59.6, 59.6 | 59.6, 59.8 | 21, 11 | 24.6, 24.9 ms | 76% |
+
+Smoke: Mischief Makers, F-Zero X, Paper Mario, Ocarina of Time and Conker run at ~60 FPS
+with no crashes.
+
+**Other waits in the same profile.** About 11% of the emulation thread's time was spent
+blocked on a mutex inside the Turnip driver's `vkQueueSubmit`: three quarters of it from the
+VI scanout submit (`RDP::VideoInterface::scanout`), the rest from the RDP renderer's submit.
+Submit ioctls took another ~10%. Another thread holds the driver's queue lock at those
+moments, likely the presentation thread's `vkQueuePresentKHR` or the RDP worker's submits.
+
 ### Next (not implemented)
 
-- The emulation thread is blocked for ~18% of each frame inside `root->run()` in the Mario
-  vs Boo match; an off-CPU profile of those waits is the next measurement.
+- Find which thread holds the Turnip queue lock while the emulation thread's scanout submit
+  waits, then move or split that work (for example a separate queue, or submitting scanout
+  from the RDP worker).
+- Conker's intro runs on a mid core: under that lighter load Qualcomm core control keeps
+  the fastest core paused, so the pin doesn't apply and frame intervals jitter. A
+  performance-hint session might raise the mid core's clock there (untested).
 - Decide whether to keep Faster CPU sync: it no longer stalls Conker, but showed no FPS
   gain in Mario vs Boo.
 - Direct-branch linking for taken conditional branches (would need the taken path to

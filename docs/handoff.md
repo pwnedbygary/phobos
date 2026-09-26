@@ -34,10 +34,14 @@ thread to the fastest CPU core, re-applied every frame because Android resets th
 affinity (Settings → Emulation, default on). Mario vs Boo 59.4 / 59.5 FPS mean, worst second
 ~54, versus 58.3 / 58.6 and ~44 with it off
 ([audit](performance-audit.md#2026-09-25-follow-up-emulation-thread-on-the-fastest-core)).
+Stacked on that: branch `feature/rsp-pipeline-copy-2026-09` reverts PR #4's RSP pipeline
+hash skip, which a profile showed costing 27% of the emulation thread. Mario vs Boo then
+held 59.9 / 59.9 FPS with worst second 59.6 and ~90% fewer frames over 20 ms
+([audit](performance-audit.md#2026-09-25-follow-up-rsp-pipeline-copy-restored-regression-fix)).
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
-PC/live-state-key gates, RSP pipeline hash-skip, `Screen::frame` CV. Opt-in N64
+PC/live-state-key gates, RSP pipeline hash-skip (since reverted), `Screen::frame` CV. Opt-in N64
 Experimental speed hacks (faster CPU sync, skip cache timing, RSP task mode; default
 off). Measured one at a time on the RP6: no clear FPS gain in Mario vs Boo, and Faster
 CPU sync stalled Conker's pub for 91.5 s at a time — a lost CP0 timer interrupt (Count only
