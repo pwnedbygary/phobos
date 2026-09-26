@@ -46,7 +46,12 @@ duplicate Reset button removed
 Stacked on that: branch `feature/ui-theme-2026-09` ([PR #9](https://github.com/pwnedbygary/phobos/pull/9))
 adds the theme system: 37 IDE-colorway themes in Settings → Appearance and an optional Retrowave
 effects toggle; system cards, HUD and touch controls unchanged (see the plan's UI theme row).
-PRs #4–#9 are stacked and merge in order.
+Stacked on that: branch `feature/n64-taken-links-2026-09` ([PR #10](https://github.com/pwnedbygary/phobos/pull/10))
+keeps loops inside the CPU JIT block: a taken branch back into the same block no longer returns
+to the dispatcher (10.1 → 0.6 million round trips a second in Mario vs Boo; fast-forward
+89.2 → 95.4 FPS), with CP0 Count and PC identical to the previous build after a state load
+([audit](performance-audit.md#2026-09-26-follow-up-loops-stay-in-the-jit-block)).
+PRs #4–#10 are stacked and merge in order.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
