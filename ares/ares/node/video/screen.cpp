@@ -31,21 +31,13 @@ Screen::~Screen() {
 auto Screen::main(uintptr_t) -> void {
   thread::setName("dev.ares.screen");
   while(!_kill) {
-    unique_lock<mutex> lock(_frameMutex);
-
-    auto timeout = std::chrono::milliseconds(10);
-    if(_frameCondition.wait_for(lock, timeout, [&] { return _frame.load() || _kill.load(); })) {
-      if(_kill) break;
-      // Claim the frame under the mutex, then release before refresh so the
-      // emulation thread can wait on !_frame without spinning and without
-      // holding _frameMutex across the (possibly long) GPU present path.
-      _frame = false;
-      lock.unlock();
-      _frameCondition.notify_all();
-      refresh();
+    {
+      unique_lock<mutex> lock(_frameMutex);
+      auto timeout = std::chrono::milliseconds(10);
+      if(!_frameCondition.wait_for(lock, timeout, [&] { return _frame.load() || _kill.load(); })) continue;
     }
-
     if(_kill) break;
+    refresh();
   }
 }
 
@@ -210,28 +202,19 @@ auto Screen::colors(u32 colors, std::function<n64 (n32)> color) -> void {
 
 auto Screen::frame() -> void {
   if(runAhead()) return;
-  // Bounded handoff wait: a video thread wedged in a GPU fence wait or a
-  // window lock must not hang the emulation thread inside run() forever
-  // (that blocks unload/reset and forces the "abandon system" path, which
-  // leaks a poisoned Vulkan device and makes later N64 loads flaky). After
-  // ~100ms, proceed with the frame handoff; the video thread picks up the
-  // latest buffer when it recovers and the stale frame is dropped.
-  if constexpr(ares::Video::Threaded) {
-    unique_lock<mutex> lock(_frameMutex);
-    auto handoffDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-    _frameCondition.wait_until(lock, handoffDeadline, [&] {
-      return !_frame.load() || _kill.load();
-    });
-  }
-
   lock_guard<recursive_mutex> lock(_mutex);
   _inputA.swap(_inputB);
   if constexpr(!ares::Video::Threaded) {
     refresh();
     _frame = false;
   } else {
+    // Hand over without waiting for the video thread, which presents the newest
+    // frame when it is free. A frame it never claimed is dropped; its buffer is
+    // the emulator's again after the swap, so clear it the way refresh() clears
+    // a presented one (passthrough frames never read these buffers).
     {
       lock_guard<mutex> frameLock(_frameMutex);
+      if(_frame && !_passthrough) memory::fill<u32>(_inputA.get(), _canvasWidth * _canvasHeight, _fillColor);
       _frame = true;
     }
     _frameCondition.notify_all();
@@ -239,7 +222,9 @@ auto Screen::frame() -> void {
 }
 
 auto Screen::refresh() -> void {
-  lock_guard<recursive_mutex> lock(_mutex);
+  unique_lock<recursive_mutex> lock(_mutex);
+  // Claim the handed-over frame under the same lock frame() swaps it with.
+  if constexpr(ares::Video::Threaded) _frame = false;
   if(runAhead()) return;
 
   refreshPalette();
@@ -258,6 +243,7 @@ auto Screen::refresh() -> void {
 
   if(_passthrough) {
     // The frontend presents this frame itself; hand over the viewport only.
+    lock.unlock();
     platform->video(std::static_pointer_cast<Core::Video::Screen>(shared_from_this()), output + viewX + viewY * width, width * sizeof(u32), viewWidth, viewHeight);
     return;
   }
@@ -376,8 +362,11 @@ auto Screen::refresh() -> void {
     swap(viewWidth, viewHeight);
   }
 
-  platform->video(std::static_pointer_cast<Core::Video::Screen>(shared_from_this()), output + viewX + viewY * width, width * sizeof(u32), viewWidth, viewHeight);
   memory::fill<u32>(_inputB.get(), width * height, _fillColor);
+  // Present outside the lock: the platform may block for a free window buffer
+  // (vsync), and frame() on the emulation thread must not wait for that.
+  lock.unlock();
+  platform->video(std::static_pointer_cast<Core::Video::Screen>(shared_from_this()), output + viewX + viewY * width, width * sizeof(u32), viewWidth, viewHeight);
 }
 
 auto Screen::lookupPalette(u32 index) -> u32 {

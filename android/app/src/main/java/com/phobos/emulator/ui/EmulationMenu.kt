@@ -145,17 +145,6 @@ fun EmulationMenu(
                         }
                         item { TouchControlsSection(viewModel, settings, onEditTouchLayout) }
                         item { DisplaySection(viewModel, settings) }
-                        item {
-                            MenuSection("System") {
-                                Button(
-                                    onClick = { viewModel.resetSystem(); onResume() },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                                ) {
-                                    Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(8.dp)); Text("Reset System")
-                                }
-                            }
-                        }
                     }
                 }
 

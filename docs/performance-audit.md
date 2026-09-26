@@ -509,8 +509,61 @@ VI scanout submit (`RDP::VideoInterface::scanout`), the rest from the RDP render
 Submit ioctls took another ~10%. Another thread holds the driver's queue lock at those
 moments, likely the presentation thread's `vkQueuePresentKHR` or the RDP worker's submits.
 
+### 2026-09-26 follow-up: frame handoff no longer waits for the display
+
+Branch `feature/n64-rsp-dispatch-2026-09`, stacked on the RSP pipeline copy fix
+([PR #7](https://github.com/pwnedbygary/phobos/pull/7)).
+
+**Finding.** With Fast Forward Speed set to Unlimited, fast-forward in Mario Tennis still ran at
+59.8 FPS, and every frame's measured time stretched to 16.7 ms, one display refresh. Right after
+a state load, the same scene took about 9 ms per frame at normal speed. ares' threaded `Screen`
+handed each frame to its video thread under `Screen::_mutex`, and the video thread held that
+mutex for its whole `refresh()`, including the platform present: `ANativeWindow_lock` blocks until
+the display returns a buffer, which happens at vsync. `Screen::frame()` also waited for the video
+thread to claim the previous frame. So the emulation thread could never get more than one frame
+ahead of the display. Fast-forward was capped at the refresh rate on every system. At normal
+speed, the emulator's own 60 Hz deadline clock and the display's vsync drifted against each
+other and periodically held frames that needed 9–12 ms of work until the next vsync.
+
+**Change (ares `Screen`, all systems): mailbox handoff.** `frame()` swaps its finished frame in
+under `_mutex` without waiting. A frame the video thread never claimed is dropped, and its buffer
+is cleared the way `refresh()` clears a presented one (skipped for passthrough frames, which
+never read these buffers). The video thread claims the newest frame and prepares it under
+`_mutex`, including the core's refresh callback (N64 VI, PS1 blitter), then releases the lock
+and only then calls the platform present. Non-threaded video is unchanged.
+
+Also in this change: the RSP recompiler reads the instruction-tracer flag once per
+`RSP::main()` instead of on every block lookup, where the chain of dependent loads stalled the
+block-cache load. The RSP I/O tracer hooks only touch their register-name tables when tracing
+is on. The pause menu's duplicate "Reset System" button is gone; Reset stays in the quick-action
+row.
+
+**Measured** (RP6 in High Performance mode, `performance_mode=2`; Async RDP on; fastest-core pin on):
+
+| Metric | PR #7 | This change |
+|---|---|---|
+| Fast-forward, Mario vs Boo, uncapped FPS | 59.8 (capped) | 89.8 (80.5–98.7) |
+| Fast-forward, attract loop | capped at 60 | 87–134 |
+| Mario vs Boo 30 s × 2: mean FPS | 59.9, 59.9 | 60.0, 59.9 |
+| Mario vs Boo: intervals over 20 ms | 1, 3 | 6, 23 (the 23 fall in one 7 s heavy stretch) |
+| Mario vs Boo: measured time per frame | 15.2, 14.3 ms | 11.1, 11.2 ms |
+| Attract loop, 120 s: worst second | 51.3 | 59.0 |
+| Attract loop: intervals over 20 ms | 2.17 per second | 0.69 per second |
+| Attract loop: measured time per frame | 14.5 ms | 11.3 ms |
+
+The new build's attract run excludes a 16 s window where the user switched fast-forward on,
+plus 5 s after it. Presented frames (SurfaceFlinger timestats, Mario vs Boo, 30 s): both builds
+showed 1,797–1,798 frames, all 16 ms present-to-present, none dropped. At 3.2 GHz this scene
+doesn't make either build miss a refresh; the gains are headroom, worst cases and fast-forward.
+Standard performance mode, where the user first saw drops, is still to be measured. Smoke:
+Mischief Makers, F-Zero X, Paper Mario, Ocarina of Time, Super Mario All-Stars (SNES),
+Sub-Terrania (Genesis) and the PlayStation boot (Ape Escape) run at 60 FPS with no crashes.
+
 ### Next (not implemented)
 
+- Measure this change and the fastest-core pin in the RP6's Standard performance mode, and try
+  a performance-hint session so the fast core clocks up there (the user saw High Performance
+  mode run the fast core at 3.2 GHz instead of ~2.8 GHz, with visibly steadier frame times).
 - Find which thread holds the Turnip queue lock while the emulation thread's scanout submit
   waits, then move or split that work (for example a separate queue, or submitting scanout
   from the RDP worker).
