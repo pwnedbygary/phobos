@@ -38,6 +38,11 @@ Stacked on that: branch `feature/rsp-pipeline-copy-2026-09` reverts PR #4's RSP 
 hash skip, which a profile showed costing 27% of the emulation thread. Mario vs Boo then
 held 59.9 / 59.9 FPS with worst second 59.6 and ~90% fewer frames over 20 ms
 ([audit](performance-audit.md#2026-09-25-follow-up-rsp-pipeline-copy-restored-regression-fix)).
+Stacked on that: branch `feature/n64-rsp-dispatch-2026-09` makes ares' `Screen` handoff a
+mailbox, so the emulation thread no longer waits for vsync (fast-forward was capped at 60 on
+every system; now 90–134 FPS in Mario Tennis), plus RSP dispatch trims and the pause menu's
+duplicate Reset button removed
+([audit](performance-audit.md#2026-09-26-follow-up-frame-handoff-no-longer-waits-for-the-display)).
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

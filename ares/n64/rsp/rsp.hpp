@@ -686,6 +686,8 @@ struct RSP : Thread, Memory::RCP<RSP> {
     }
 
     bool enabled = true;
+    // Instruction-tracer state, sampled once per RSP::main() instead of on every block lookup.
+    bool traceMode = false;
     Pipeline pipeline;
     bump_allocator allocator;
     array<Block*[2048]> context;

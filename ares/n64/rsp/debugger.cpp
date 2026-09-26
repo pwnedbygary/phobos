@@ -79,18 +79,17 @@ auto RSP::Debugger::instruction() -> void {
 }
 
 auto RSP::Debugger::ioSCC(bool mode, u32 address, u32 data) -> void {
-  static const std::vector<string> registerNames = {
-    "SP_PBUS_ADDRESS",
-    "SP_DRAM_ADDRESS",
-    "SP_READ_LENGTH",
-    "SP_WRITE_LENGTH",
-    "SP_STATUS",
-    "SP_DMA_FULL",
-    "SP_DMA_BUSY",
-    "SP_SEMAPHORE",
-  };
-
   if(unlikely(tracer.io->enabled())) {
+    static const std::vector<string> registerNames = {
+      "SP_PBUS_ADDRESS",
+      "SP_DRAM_ADDRESS",
+      "SP_READ_LENGTH",
+      "SP_WRITE_LENGTH",
+      "SP_STATUS",
+      "SP_DMA_FULL",
+      "SP_DMA_BUSY",
+      "SP_SEMAPHORE",
+    };
     string message;
     string name = (address < registerNames.size() ? registerNames[address] : string("SP_UNKNOWN"));
     if(mode == Read) {
@@ -104,12 +103,11 @@ auto RSP::Debugger::ioSCC(bool mode, u32 address, u32 data) -> void {
 }
 
 auto RSP::Debugger::ioStatus(bool mode, u32 address, u32 data) -> void {
-  static const std::vector<string> registerNames = {
-    "SP_PC_REG",
-    "SP_IBIST",
-  };
-
   if(unlikely(tracer.io->enabled())) {
+    static const std::vector<string> registerNames = {
+      "SP_PC_REG",
+      "SP_IBIST",
+    };
     string message;
     string name = (address < registerNames.size() ? registerNames[address] : string("SP_UNKNOWN"));
     if(mode == Read) {

@@ -34,6 +34,8 @@ auto RSP::unload() -> void {
 }
 
 auto RSP::main() -> void {
+  recompiler.traceMode = debugger.tracer.instruction->enabled();
+
   // Opt-in task mode: let an unhalted RSP run ahead of the CPU (up to about one
   // NTSC frame of 187.5 MHz clock units) instead of slicing with it, approximating
   // Mupen's whole-task RSP. The lead cap bounds microcodes that spin waiting on
