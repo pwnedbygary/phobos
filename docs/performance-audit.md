@@ -648,10 +648,16 @@ Amped Up, SM64 B3313 and Conker run at 60 FPS with no crashes or N64 stalls.
 - Conker's intro runs on a mid core: under that lighter load Qualcomm core control keeps
   the fastest core paused, so the pin doesn't apply and frame intervals jitter. A
   performance-hint session might raise the mid core's clock there (untested).
-- Idle-loop skip: for a pure polling loop (loads from cached RDRAM only, no stores or helper
-  calls, loop-invariant registers), advance the clock to the budget end in one step, a whole
-  number of iterations, which is exactly what running it would do. The Mario Tennis poll would
-  then cost almost nothing instead of ~10 million iterations a second.
+- Idle-loop skip (prototyped 2026-09-26, not merged): for a pure polling loop (straight-line
+  body, one load from a constant cached RDRAM address, no stores or helper calls, loop-invariant
+  registers), advance the clock to the budget end in whole iterations, which is exactly what
+  running it would do. On the RP6 it kept CP0 Count, PC and RDRAM identical to this PR over
+  1,200 frames and raised uncapped fast-forward from 95.7 to 104.3 FPS. At 60 FPS, though, the
+  lighter load let Qualcomm core control park the prime core (CPU 7 paused; the per-frame pin
+  then fails), and the emulation thread ran on the mid cores, whose `scaling_max_freq` read
+  1.79 GHz in High Performance mode (the Retroid performance service re-applies its CPU profile
+  about every 10 s): 8.8–14.5 ms per frame versus ~10.9 ms on the prime core with this PR. An ADPF performance-hint session (targets 8 and 16.7 ms) didn't
+  bring the prime core back. Needs a way to keep the emulation thread on a fast core first.
 - Taken branches to other blocks, `JAL` and `JR` still return to the dispatcher (about 0.11,
   0.11 and 0.12 million a second in Mario vs Boo).
 - The UI theme system ([PR #9](https://github.com/pwnedbygary/phobos/pull/9)) and the
