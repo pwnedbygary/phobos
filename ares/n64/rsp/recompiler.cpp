@@ -506,7 +506,6 @@ auto RSP::Recompiler::emit(u12 address, bool callInstructionPrologue) -> Block* 
   block->code = endFunction();
   block->size = address - start;
   block->pipeline = pipeline;
-  block->pipelineHash = pipeline.hash();
 
 //print(hex(PC, 8L), " ", instructions, " ", size(), "\n");
   return block;
