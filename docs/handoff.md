@@ -26,7 +26,10 @@ Documentation and Git-metadata checks/review accompany the commit; no APK/device
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 **Active work (2026-09-25):** branch `feature/n64-accuracy-neutral-perf-2026-09`
-([PR #4](https://github.com/pwnedbygary/phobos/pull/4), commit `c02166932`).
+([PR #4](https://github.com/pwnedbygary/phobos/pull/4), commits `c02166932` and `ffe337ceb`).
+Stacked on it: branch `feature/perf-hud-2026-09` (its own PR, based on PR #4's branch) with
+the MangoHud-style performance HUD (builds, 50 host tests pass, verified on the RP6; see plan
+tasks 42–44/69).
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
 PC/live-state-key gates, RSP pipeline hash-skip, `Screen::frame` CV. Opt-in N64
 Experimental speed hacks (faster CPU sync, skip cache timing, RSP task mode; default
@@ -34,8 +37,8 @@ off). Measured one at a time on the RP6: no clear FPS gain in Mario vs Boo, and 
 CPU sync stalled Conker's pub for 91.5 s at a time — a lost CP0 timer interrupt (Count only
 advanced at sync; Conker's ~25 µs timer landed behind Count), root-caused on device and
 fixed (accurate between-sync Count reads, wrap-safe timer check). Conker with Faster CPU
-sync then ran 280 s stall-free; a default-settings regression run with the fix is still
-pending (the RP6 disconnected). Touch: seamless D-pad diagonals; N64 L large / Z pills both
+sync then ran 280 s stall-free; at default settings the fix measured Mario vs Boo 58.5 /
+58.8 FPS and the smoke titles ran clean. Touch: seamless D-pad diagonals; N64 L large / Z pills both
 sides in landscape (right Z hidden in portrait by default). Mario vs Boo final snapshot 55.6 / 58.3 FPS mean over two runs (RP6 run-to-run
 variance); smoke OK on Mario Tennis, Mischief Makers, F-Zero X, Paper Mario, OoT, Conker.
 All RP6 runs that day had Asynchronous RDP **on** (the persisted setting); earlier notes

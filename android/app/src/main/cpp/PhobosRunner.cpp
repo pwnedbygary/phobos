@@ -21,6 +21,7 @@
 #include <map>
 #include <set>
 #include <algorithm>
+#include <array>
 
 #include <a26/a26.hpp>
 #include <cv/cv.hpp>
@@ -283,6 +284,15 @@ namespace ares {
   static std::atomic<f64> currentFps{0.0};
   static std::atomic<f64> avgFrameTime{0.0};
   static auto lastStatsUpdateTime = std::chrono::steady_clock::now();
+  // Frame-to-frame intervals (ms) for the performance HUD's frame-time graph. Written by
+  // the emulation thread; getFrameTimes() tolerates reading an element mid-update.
+  static constexpr u32 FrameIntervalHistory = 240;
+  static std::array<std::atomic<f32>, FrameIntervalHistory> frameIntervals{};
+  static std::atomic<u32> frameIntervalCursor{0};
+  static std::atomic<s32> emuThreadTid{0};
+  static std::atomic<s32> emuThreadCore{-1};
+  // Unpaused run time of the current emulation thread (one per loaded game), in µs.
+  static std::atomic<u64> playedMicros{0};
 
   static std::deque<LogEntry> logBuffer;
   static std::mutex logMutex;
@@ -814,6 +824,14 @@ namespace ares {
     // Absolute frame deadline for pacing (see below). Persists across the
     // loop so sleep overshoot never compounds frame-to-frame.
     auto frameDeadline = std::chrono::steady_clock::now();
+    auto lastFrameStart = frameDeadline;
+    bool haveLastFrameStart = false;
+    emuThreadTid.store((s32)gettid(), std::memory_order_relaxed);
+    // HUD history is per thread: the abandon and 64DD-reload paths replace the
+    // thread without going through unloadSystem()'s clean-path reset.
+    emuThreadCore.store(-1, std::memory_order_relaxed);
+    frameIntervalCursor.store(0, std::memory_order_release);
+    playedMicros.store(0, std::memory_order_relaxed);
 
     while (emulationRunning && emuThreadGeneration == generation) {
       // Take a local shared_ptr copy so the zombie thread holds a
@@ -837,6 +855,16 @@ namespace ares {
 
       if (!isPausedAtomic) {
         auto start = std::chrono::steady_clock::now();
+        if (haveLastFrameStart) {
+          s64 intervalUs = std::chrono::duration_cast<std::chrono::microseconds>(start - lastFrameStart).count();
+          u32 cursor = frameIntervalCursor.load(std::memory_order_relaxed);
+          frameIntervals[cursor % FrameIntervalHistory].store((f32)intervalUs / 1000.0f, std::memory_order_relaxed);
+          frameIntervalCursor.store(cursor + 1, std::memory_order_release);
+          if (intervalUs > 0) playedMicros.fetch_add((u64)intervalUs, std::memory_order_relaxed);
+        }
+        lastFrameStart = start;
+        haveLastFrameStart = true;
+        emuThreadCore.store((s32)sched_getcpu(), std::memory_order_relaxed);
         {
             std::lock_guard<std::recursive_mutex> lock(*runMutex);
             if (localRoot) {
@@ -1065,6 +1093,8 @@ namespace ares {
             #endif
         }
       } else {
+        // A paused gap is not a frame interval.
+        haveLastFrameStart = false;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
     }
@@ -2199,6 +2229,8 @@ namespace ares {
     currentEmuThread.store(0);
     currentEmuThreadCookie.reset();
     systemUnloading.store(false);
+    frameIntervalCursor.store(0, std::memory_order_release);
+    emuThreadCore.store(-1, std::memory_order_relaxed);
     LOGI("System unloaded");
   }
 
@@ -3786,7 +3818,11 @@ else if (port->type() == "Keyboard") {
     PerformanceStats stats;
     stats.fps = currentFps.load();
     stats.frameTime = avgFrameTime.load() / 1000.0;
-    stats.activeCore = (s32)sched_getcpu();
+    // The emulation thread's core; the caller runs on a UI worker thread.
+    stats.activeCore = emuThreadCore.load(std::memory_order_relaxed);
+    stats.emuTid = emuThreadTid.load(std::memory_order_relaxed);
+    stats.targetFps = refreshRateAtomic.load();
+    stats.playTimeMs = (s64)(playedMicros.load(std::memory_order_relaxed) / 1000);
     #if defined(CORE_N64)
     stats.pipelineFailures = ::ares::Nintendo64::Vulkan::pipelineFailureCount.load(std::memory_order_relaxed);
     stats.isAdrenoDriver = (bool)::ares::Nintendo64::Vulkan::gpuDeviceName.find("Adreno");
@@ -3795,6 +3831,14 @@ else if (port->type() == "Keyboard") {
     stats.isAdrenoDriver = false;
     #endif
     return stats;
+  }
+  auto getFrameTimes(f32* out, u32 capacity) -> u32 {
+    u32 end = frameIntervalCursor.load(std::memory_order_acquire);
+    u32 count = std::min<u32>(std::min<u32>(end, FrameIntervalHistory), capacity);
+    for (u32 i = 0; i < count; i++) {
+      out[i] = frameIntervals[(end - count + i) % FrameIntervalHistory].load(std::memory_order_relaxed);
+    }
+    return count;
   }
   auto takeScreenshot(const char* path) -> bool {
     #if defined(CORE_N64)

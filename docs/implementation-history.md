@@ -346,6 +346,13 @@ available for the running system; do not invent GPU/thermal numbers without a
 real source. Visual polish can proceed ahead of new counters; new counters still
 need attribution evidence (Tasks 42b/43/44/69).
 
+**Implemented the same day** on branch `feature/perf-hud-2026-09` (see the plan row).
+Native code records frame-to-frame intervals (240-entry ring, `PhobosCore.getFrameTimes()`)
+and the emulation thread's id and core. `HudTelemetrySampler` reads `/proc/self`,
+`/proc/self/task/<emu tid>`, cpufreq, kgsl and thermal-zone sysfs nodes, `ActivityManager`,
+battery and `PowerManager` about once a second off the main thread. Any node the app
+can't read is dropped after the first failure and its value hidden.
+
 #### <a id="task-42b"></a>Task 42b — Perf Monitor: Game FPS (true N64 render rate) (PLANNED 2026-08-17)
 
 The former plan proposed distinguishing VI scanout rate from framebuffer-origin

@@ -492,9 +492,20 @@ Java_com_phobos_emulator_PhobosCore_getPerformanceStats(JNIEnv* env, jobject) {
     ares::PerformanceStats stats = ares::getPerformanceStats();
 
     jclass cls = env->FindClass("com/phobos/emulator/PerformanceStats");
-    jmethodID constructor = env->GetMethodID(cls, "<init>", "(DDIIZ)V");
+    jmethodID constructor = env->GetMethodID(cls, "<init>", "(DDIIZIDJ)V");
 
-    return env->NewObject(cls, constructor, (f64)stats.fps, (f64)stats.frameTime, (s32)stats.activeCore, (s32)stats.pipelineFailures, (jboolean)stats.isAdrenoDriver);
+    return env->NewObject(cls, constructor, (f64)stats.fps, (f64)stats.frameTime, (s32)stats.activeCore,
+                          (s32)stats.pipelineFailures, (jboolean)stats.isAdrenoDriver,
+                          (s32)stats.emuTid, (f64)stats.targetFps, (jlong)stats.playTimeMs);
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_phobos_emulator_PhobosCore_getFrameTimes(JNIEnv* env, jobject) {
+    f32 values[240];
+    u32 count = ares::getFrameTimes(values, 240);
+    jfloatArray result = env->NewFloatArray((jsize)count);
+    if (result && count) env->SetFloatArrayRegion(result, 0, (jsize)count, values);
+    return result;
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL

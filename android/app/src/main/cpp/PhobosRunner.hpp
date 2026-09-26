@@ -30,6 +30,9 @@ namespace ares {
     s32 activeCore;
     s32 pipelineFailures;
     bool isAdrenoDriver;
+    s32 emuTid;      // emulation thread id (for per-thread CPU sampling)
+    f64 targetFps;   // core's native refresh rate
+    s64 playTimeMs;  // unpaused run time since the game's emulation thread started
   };
 
   // Logical size of the last presented frame after the core's pixel-aspect
@@ -107,5 +110,7 @@ namespace ares {
   auto setZxTapeMuted(bool muted) -> void;
   auto getZxTapeProgress() -> s32;
   auto getPerformanceStats() -> PerformanceStats;
+  // Most recent frame-to-frame intervals in ms, oldest first; returns how many were written.
+  auto getFrameTimes(f32* out, u32 capacity) -> u32;
   auto getVideoGeometry() -> VideoGeometry;
 }

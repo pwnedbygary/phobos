@@ -418,8 +418,11 @@ load. MTC0 Compare forces a resync so the JIT budget is re-capped against the ne
 Compare. `synchronize()` fires the timer on a modular 33-bit distance, which also covers
 a crossing that straddles the wrap and Compare = 0. With the fix and Faster CPU sync on,
 Conker ran 280 s through boot, intro and the pub with no RSP gap over 3 s; both earlier
-runs had stalled twice for 91.5 s in the same window. A default-settings regression run
-(Mario vs Boo, smoke titles) with the fix has not run yet: the RP6 disconnected first.
+runs had stalled twice for 91.5 s in the same window. Default-settings regression with the
+fix (RP6, Async RDP on, new performance HUD on): Mario vs Boo 58.5 and 58.8 FPS mean
+(emulation thread ~110%; slowest-10% seconds ~57 FPS versus 47–50 in earlier runs of the
+day). Mischief Makers, F-Zero X, Paper Mario and Ocarina of Time boot and run at ~60 with
+no crashes, and Conker reaches the pub at ~60.
 
 The same capture exposed a latent crash in the N64 Debug Logging stall dump
 (`PhobosRunner.cpp`): its format string had an `EPC=0x%08llx` field with no argument, so
