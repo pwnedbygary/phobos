@@ -7,7 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -55,17 +55,9 @@ fun SystemDetailScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(systemName) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        },
+    PhobosScaffold(
+        title = systemName,
+        onBack = onBack,
         floatingActionButton = {
             FloatingActionButton(onClick = { launcher.launch(null) }) {
                 Icon(Icons.Default.Add, contentDescription = "Add ROM Directory")
@@ -88,7 +80,8 @@ fun SystemDetailScreen(
             } else {
                 Card(
                     modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
                 ) {
                     Column(modifier = Modifier.padding(8.dp)) {
                         Text("Search Directories:", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp))
@@ -118,12 +111,17 @@ fun SystemDetailScreen(
                         Text("No compatible ROMs found in these folders", style = MaterialTheme.typography.bodyMedium)
                     }
                 } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(roms) { rom ->
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 88.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        itemsIndexed(roms) { index, rom ->
                             ListItem(
                                 headlineContent = { Text(rom.name) },
-                                leadingContent = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                                modifier = Modifier.clickable { 
+                                leadingContent = { IconBadge(Icons.Default.PlayArrow) },
+                                colors = transparentListItemColors(),
+                                modifier = Modifier.groupedCard(index, roms.size, MaterialTheme.colorScheme.surfaceContainer).clickable {
                                     viewModel.loadRom(context, systemName, rom)
                                     onRomClick(Uri.encode(systemName), Uri.encode(rom.name))
                                 }

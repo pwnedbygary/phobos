@@ -92,18 +92,7 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("GPU Driver Manager") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    PhobosScaffold(title = "GPU Driver Manager", onBack = onBack) { innerPadding ->
         LazyColumn(
             modifier = Modifier.padding(innerPadding).fillMaxSize().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -117,8 +106,8 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
 
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                SettingsCard {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                         Text("Active Driver", style = MaterialTheme.typography.titleMedium)
                         Spacer(modifier = Modifier.height(8.dp))
                         DriverChoiceRow(
@@ -330,14 +319,14 @@ private fun DriverActionsRow(onDownload: () -> Unit, onInstall: () -> Unit, onDe
             onClick = onDelete,
             modifier = Modifier.weight(1f),
             colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFFD32F2F),
-                contentColor = Color.White
+                containerColor = MaterialTheme.colorScheme.error,
+                contentColor = MaterialTheme.colorScheme.onError
             )
         ) {
             Box(
                 modifier = Modifier
                     .size(width = 16.dp, height = 2.dp)
-                    .background(Color.White, MaterialTheme.shapes.extraSmall)
+                    .background(MaterialTheme.colorScheme.onError, MaterialTheme.shapes.extraSmall)
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text("Delete")
@@ -353,7 +342,7 @@ private fun DriverChoiceRow(label: String, sublabel: String, selected: Boolean, 
         leadingContent = { RadioButton(selected = selected, onClick = null) },
         modifier = Modifier.fillMaxWidth().clickable { onClick() },
         colors = ListItemDefaults.colors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
         )
     )
 }

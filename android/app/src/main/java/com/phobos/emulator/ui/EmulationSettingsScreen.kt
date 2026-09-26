@@ -3,7 +3,6 @@ package com.phobos.emulator.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -19,18 +18,7 @@ fun EmulationSettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsState()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Emulation") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    PhobosScaffold(title = "Emulation", onBack = onBack) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .padding(innerPadding)

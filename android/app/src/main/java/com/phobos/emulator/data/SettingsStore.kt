@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.ui.hud.HudConfig
+import com.phobos.emulator.ui.theme.ThemeRegistry
 import com.phobos.emulator.ui.touch.AnalogMode
 import com.phobos.emulator.ui.touch.DpadMode
 import com.phobos.emulator.ui.touch.HapticLevel
@@ -39,7 +40,12 @@ enum class AspectRatioMode(val label: String) {
 }
 
 data class EmulatorSettings(
+    // Light/Dark/Auto for the adaptive themes (System, Phobos).
     val themeMode: ThemeMode = ThemeMode.AUTO,
+    val themeId: String = ThemeRegistry.SYSTEM_ID,
+    // Paired themes (One Dark / One Light, ...) switch to their sibling to match the system.
+    val themeFollowSystem: Boolean = false,
+    val retrowaveEffects: Boolean = false,
     val regionPreference: RegionPreference = RegionPreference.NTSC_U_NTSC_J_PAL,
     val fastBoot: Boolean = false,
     val muteAudio: Boolean = false,
@@ -128,6 +134,9 @@ data class EmulatorSettings(
 class SettingsStore(private val context: Context) {
     companion object {
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val UI_THEME = stringPreferencesKey("ui_theme")
+        val UI_THEME_FOLLOW_SYSTEM = booleanPreferencesKey("ui_theme_follow_system")
+        val RETROWAVE_EFFECTS = booleanPreferencesKey("retrowave_effects")
         val REGION_PREFERENCE = stringPreferencesKey("region_preference")
         val FAST_BOOT = booleanPreferencesKey("fast_boot")
         val MUTE_AUDIO = booleanPreferencesKey("mute_audio")
@@ -327,6 +336,9 @@ class SettingsStore(private val context: Context) {
 
         EmulatorSettings(
             themeMode = enumOrDefault(safeGetString(THEME_MODE, ThemeMode.AUTO.name), ThemeMode.AUTO),
+            themeId = safeGetString(UI_THEME, ThemeRegistry.SYSTEM_ID),
+            themeFollowSystem = safeGet(UI_THEME_FOLLOW_SYSTEM, false),
+            retrowaveEffects = safeGet(RETROWAVE_EFFECTS, false),
             regionPreference = enumOrDefault(safeGetString(REGION_PREFERENCE, ""), RegionPreference.NTSC_U_NTSC_J_PAL),
             fastBoot = safeGet(FAST_BOOT, false),
             muteAudio = safeGet(MUTE_AUDIO, false),
@@ -449,6 +461,12 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun setThemeMode(mode: ThemeMode) = context.dataStore.edit { it[THEME_MODE] = mode.name }
+    /** Both keys in one edit, so the UI never renders an id with the previous follow-system flag. */
+    suspend fun setTheme(id: String, followSystem: Boolean) = context.dataStore.edit {
+        it[UI_THEME] = id
+        it[UI_THEME_FOLLOW_SYSTEM] = followSystem
+    }
+    suspend fun setRetrowaveEffects(enabled: Boolean) = context.dataStore.edit { it[RETROWAVE_EFFECTS] = enabled }
     suspend fun setRegionPreference(pref: RegionPreference) = context.dataStore.edit { it[REGION_PREFERENCE] = pref.name }
     suspend fun setFastBoot(enabled: Boolean) = context.dataStore.edit { it[FAST_BOOT] = enabled }
     suspend fun setMuteAudio(enabled: Boolean) = context.dataStore.edit { it[MUTE_AUDIO] = enabled }

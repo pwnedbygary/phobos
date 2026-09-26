@@ -7,9 +7,8 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -66,18 +65,7 @@ fun HotkeyMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Hotkeys") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    PhobosScaffold(title = "Hotkeys", onBack = onBack) { innerPadding ->
         Box(
             modifier = Modifier
                 .padding(innerPadding)
@@ -95,8 +83,12 @@ fun HotkeyMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     } else false
                 }
         ) {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(hotkeys) { (name, key) ->
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                itemsIndexed(hotkeys) { index, (name, key) ->
                     val boundCombo = settings.hotkeys[key] ?: emptyList()
                     val boundKeyNames = boundCombo.joinToString(" + ") { 
                         KeyEvent.keyCodeToString(it).removePrefix("KEYCODE_")
@@ -127,7 +119,8 @@ fun HotkeyMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                                 }
                             }
                         },
-                        modifier = Modifier.pointerInput(Unit) {
+                        colors = transparentListItemColors(),
+                        modifier = Modifier.groupedCard(index, hotkeys.size, MaterialTheme.colorScheme.surfaceContainer).pointerInput(Unit) {
                             detectTapGestures(
                                 onTap = { 
                                     currentCombo.clear()
@@ -145,7 +138,7 @@ fun HotkeyMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.5f))
+                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f))
                         .clickable { mappingTarget = null },
                     contentAlignment = Alignment.Center
                 ) {

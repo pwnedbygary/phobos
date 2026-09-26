@@ -11,9 +11,8 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -119,18 +118,7 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Controller Mapping") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    PhobosScaffold(title = "Controller Mapping", onBack = onBack) { innerPadding ->
         Box(
             modifier = Modifier
                 .padding(innerPadding)
@@ -176,7 +164,11 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     } else false
                 }
         ) {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 item {
                     Text(
                         "Tap 'Bind' then press a key or move a stick. Long-press a row to clear it.",
@@ -186,7 +178,7 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     )
                 }
 
-                items(aresButtons) { (name, bit) ->
+                itemsIndexed(aresButtons) { index, (name, bit) ->
                     val binding = settings.inputMappings[bit]
                     
                     ListItem(
@@ -234,7 +226,8 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                                 }
                             }
                         },
-                        modifier = Modifier.pointerInput(Unit) {
+                        colors = transparentListItemColors(),
+                        modifier = Modifier.groupedCard(index, aresButtons.size, MaterialTheme.colorScheme.surfaceContainer).pointerInput(Unit) {
                             detectTapGestures(
                                 onTap = { mappingTarget = bit; focusRequester.requestFocus() },
                                 onLongPress = { viewModel.clearInputMapping(bit) }
@@ -245,7 +238,7 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 
                 item {
                     Spacer(modifier = Modifier.height(16.dp))
-                    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth()) {
                         Button(
                             onClick = { viewModel.clearAllMappings() },
                             modifier = Modifier.weight(1f),
@@ -270,7 +263,7 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.5f))
+                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f))
                         .clickable { mappingTarget = null },
                     contentAlignment = Alignment.Center
                 ) {

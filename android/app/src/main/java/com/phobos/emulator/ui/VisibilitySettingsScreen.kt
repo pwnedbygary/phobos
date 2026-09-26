@@ -3,9 +3,8 @@ package com.phobos.emulator.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -17,23 +16,13 @@ fun VisibilitySettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val allSystems = viewModel.systems
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Platform Visibility") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    PhobosScaffold(title = "Platform Visibility", onBack = onBack) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize(),
-            contentPadding = PaddingValues(16.dp)
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             item {
                 Text(
@@ -43,7 +32,7 @@ fun VisibilitySettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            items(allSystems) { system ->
+            itemsIndexed(allSystems) { index, system ->
                 val isVisible = system !in settings.hiddenSystems
                 ListItem(
                     headlineContent = { Text(system) },
@@ -53,8 +42,10 @@ fun VisibilitySettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                             onCheckedChange = { viewModel.setSystemVisibility(system, it) }
                         )
                     },
+                    colors = transparentListItemColors(),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .groupedCard(index, allSystems.size, MaterialTheme.colorScheme.surfaceContainer)
                         .clickable { viewModel.setSystemVisibility(system, !isVisible) }
                 )
             }

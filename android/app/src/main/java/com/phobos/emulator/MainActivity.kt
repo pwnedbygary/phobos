@@ -9,12 +9,15 @@ import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import coil.Coil
 import coil.ImageLoader
 import coil.decode.SvgDecoder
 import com.phobos.emulator.data.SettingsStore
+import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.InputBindings
 import com.phobos.emulator.ui.MainScaffold
@@ -25,9 +28,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+
+private data class ThemeSelection(val id: String, val mode: ThemeMode, val followSystem: Boolean, val retrowave: Boolean)
 
 class MainActivity : ComponentActivity() {
 
@@ -57,11 +64,18 @@ class MainActivity : ComponentActivity() {
         lifecycle.addObserver(viewModel)
 
         setContent {
-            val settingsState = viewModel.settings.collectAsState()
-            val settings = settingsState.value
-            
-            PhobosTheme(themeMode = settings.themeMode) {
-                MainScaffold(viewModel = viewModel)
+            // viewModel.settings starts from defaults until DataStore loads; waiting for the stored
+            // theme keeps launches from flashing, and animating away from, the default theme.
+            val theme by remember {
+                settingsStore.settings
+                    .map { ThemeSelection(it.themeId, it.themeMode, it.themeFollowSystem, it.retrowaveEffects) }
+                    .distinctUntilChanged()
+            }.collectAsState(initial = null)
+
+            theme?.let {
+                PhobosTheme(themeId = it.id, themeMode = it.mode, followSystem = it.followSystem, retrowave = it.retrowave) {
+                    MainScaffold(viewModel = viewModel)
+                }
             }
         }
 

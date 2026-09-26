@@ -8,15 +8,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -38,14 +33,7 @@ fun TouchSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onEditLayo
     val settings by viewModel.settings.collectAsState()
     val touch = settings.touch
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Touch Controls") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            )
-        }
-    ) { innerPadding ->
+    PhobosScaffold(title = "Touch Controls", onBack = onBack) { innerPadding ->
         LazyColumn(
             modifier = Modifier.padding(innerPadding).fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
