@@ -1315,6 +1315,12 @@ struct CPU : Thread {
     bool emitCallfEmitted = false;
     bool emitStateKeyChanged = false;
     bool emitAllocatorFlushed = false;
+    // Set while emitting a conditional branch whose taken edge stays in the block
+    // (an internal backward target): taken then sets DelaySlot without EndBlock.
+    bool emitTakenStaysInBlock = false;
+    auto takenBranchState() const -> u32 {
+      return emitTakenStaysInBlock ? Pipeline::DelaySlot : Pipeline::DelaySlot | Pipeline::EndBlock;
+    }
     EmitPcMode emitPcMode = EmitPcMode::JitTime;
     StateKey emitStateKey = 0;
     mutable u64 modeKey = 0;

@@ -559,21 +559,107 @@ Standard performance mode, where the user first saw drops, is still to be measur
 Mischief Makers, F-Zero X, Paper Mario, Ocarina of Time, Super Mario All-Stars (SNES),
 Sub-Terrania (Genesis) and the PlayStation boot (Ape Escape) run at 60 FPS with no crashes.
 
+### 2026-09-26 follow-up: speed hacks re-measured; GPU driver waits after the handoff fix
+
+Measurements only, no code change. RP6 in High Performance mode, Async RDP on, fastest-core pin
+on, build `551e9348f` (the PR #9 CI APK).
+
+**Speed hacks** (Mario vs Boo save state, 30 s × 2, one hack at a time):
+
+| Config | Intervals over 20 ms | Longest interval | Work per frame | Emulation thread CPU |
+|---|---|---|---|---|
+| All off | 1, 2 | 20.1, 21.0 ms | 11.6, 11.5 ms | 54% |
+| Faster CPU sync | 0, 0 | 16.8, 16.8 ms | 11.5, 11.3 ms | 53–54% |
+| RSP task mode | 15, 11 | 28.3, 27.1 ms | 10.6, 10.6 ms | 50–51% |
+| Skip cache timing | 0, 7 | 16.8, 25.4 ms | 12.0, 11.6 ms | 60–64% |
+
+Every run averaged 60.0 FPS. Work per frame is the stats log's `AvgFrameTime`, which no longer
+includes waiting for the display since the mailbox handoff.
+
+- Faster CPU sync saves about 0.2 ms per frame (under 2%), within run-to-run variation. It stays
+  an opt-in, default off: it costs nothing when off, and the Conker stall it exposed was fixed at
+  the root (Count reads between syncs).
+- RSP task mode cuts average work by about 8% but bunches RSP work into fewer frames, with 5–10
+  times as many intervals over 20 ms. At 60 FPS that is worse pacing; it could only help uncapped
+  fast-forward.
+- Skip cache timing costs host CPU. The N64 CPU still runs a fixed number of cycles per frame,
+  so cheaper instructions only mean more idle-loop iterations to emulate. It is an emulated-CPU
+  overclock for games that slow down on hardware, not a host speedup.
+
+**GPU driver waits.** An off-CPU profile of the same build (Mario vs Boo, 8 s), compared with
+the profile in the [RSP pipeline copy](#2026-09-25-follow-up-rsp-pipeline-copy-restored-regression-fix)
+section (build `f1fde64`): the emulation thread's off-CPU time with the GPU driver on the stack
+fell from 14.9% to 3.8%, and inside the VI scanout path from 5.2% to 0.02%. The thread now sleeps
+in the frame limiter 32% of the time, against 1% before. With the scanout submit's waits gone,
+moving that submit off the emulation thread isn't worth doing. The two builds are before PR #7
+and after PR #8, so this doesn't separate those changes' effects.
+
+### 2026-09-26 follow-up: loops stay in the JIT block
+
+Branch `feature/n64-taken-links-2026-09` ([PR #10](https://github.com/pwnedbygary/phobos/pull/10)),
+stacked on the theme system ([PR #9](https://github.com/pwnedbygary/phobos/pull/9)).
+
+**Finding.** Temporary exit counters in the CPU recompiler (Mario vs Boo, 30 s) counted about
+10.1 million dispatcher round trips a second. 94% were taken conditional branches back to an
+earlier instruction of the same block, i.e. loops, and 97% of those came from one four-instruction
+loop where Mario Tennis polls a flag between frames (`lui v0, 0x8006` / `lw v0, 0x1f6c(v0)` /
+`beq v0, zero, -3` / `nop`). A taken branch always ended the block, so every poll went back
+through `CPU::instruction()`: the interrupt checks, the state-key computation and the block
+lookup. Not-taken edges already continued inside the block or linked to the next one.
+
+**Change.** A conditional branch whose taken target is an already emitted instruction of the same
+block no longer sets `EndBlock` when taken. After the delay slot the taken edge passes the same
+budget check as the fallthrough edge, plus a check that no mode-key change (Status, FCSR, RDRAM
+map) happened, and jumps to the target's label. `EndBlock` then only signals an exception or an
+invalidation, which still leave through the epilogue. The delay slot must not change the state key
+or timer state, and no in-block SP key change may precede the branch; if the delay slot calls a
+helper, the taken edge exits as before. Cycles are still charged per instruction, and the budget
+exit happens at the same clock.
+
+**Timing check.** With Asynchronous RDP off, where the emulation is deterministic, a temporary
+probe logged an RDRAM hash, the CP0 Count register and the PC 120, 300, 600 and 1,200 frames
+after loading the Mario vs Boo save state. Count and PC matched the previous build at every
+checkpoint in every run, and the RDRAM hashes matched at 300, 600 and 1,200 frames. The frame-120
+hash, and once the 1,200 one, also varied between runs of the same build (framebuffer data from
+before the load). Boot isn't deterministic on this device even for one build, so boot runs weren't
+comparable.
+
+**Measured** (RP6 in High Performance mode, Async RDP on, fastest-core pin on; local release
+builds of this branch with and without the change, runs interleaved):
+
+| Metric | Before | After |
+|---|---|---|
+| Dispatcher round trips (instrumented builds) | 10.1 M/s | 0.6 M/s |
+| Fast-forward, Mario vs Boo, uncapped FPS | 89.2, 89.2, 89.2 | 95.5, 95.3 |
+| Fast-forward, measured time per frame | 11.4 ms | 10.6 ms |
+| Mario vs Boo 30 s, measured time per frame | 11.9, 11.6 ms | 9.8, 10.9 ms |
+| Mario vs Boo, intervals over 20 ms | 7, 1 | 4, 0 |
+
+The poll loop itself still runs about 10 million times a second, now entirely as JIT code.
+Smoke: F-Zero X, Paper Mario, Ocarina of Time,
+Mischief Makers, Rogue Squadron, Hybrid Heaven, GT 64, Wave Race 64 Shindou Edition, Mario Kart 64
+Amped Up, SM64 B3313 and Conker run at 60 FPS with no crashes or N64 stalls.
+
 ### Next (not implemented)
 
 - Measure this change and the fastest-core pin in the RP6's Standard performance mode, and try
   a performance-hint session so the fast core clocks up there (the user saw High Performance
   mode run the fast core at 3.2 GHz instead of ~2.8 GHz, with visibly steadier frame times).
-- Find which thread holds the Turnip queue lock while the emulation thread's scanout submit
-  waits, then move or split that work (for example a separate queue, or submitting scanout
-  from the RDP worker).
 - Conker's intro runs on a mid core: under that lighter load Qualcomm core control keeps
   the fastest core paused, so the pin doesn't apply and frame intervals jitter. A
   performance-hint session might raise the mid core's clock there (untested).
-- Decide whether to keep Faster CPU sync: it no longer stalls Conker, but showed no FPS
-  gain in Mario vs Boo.
-- Direct-branch linking for taken conditional branches (would need the taken path to
-  skip `EndBlock`, as in ares `edf712f2f`) — optional further win.
+- Idle-loop skip (prototyped 2026-09-26, not merged): for a pure polling loop (straight-line
+  body, one load from a constant cached RDRAM address, no stores or helper calls, loop-invariant
+  registers), advance the clock to the budget end in whole iterations, which is exactly what
+  running it would do. On the RP6 it kept CP0 Count, PC and RDRAM identical to this PR over
+  1,200 frames and raised uncapped fast-forward from 95.7 to 104.3 FPS. At 60 FPS, though, the
+  lighter load let Qualcomm core control park the prime core (CPU 7 paused; the per-frame pin
+  then fails), and the emulation thread ran on the mid cores, whose `scaling_max_freq` read
+  1.79 GHz in High Performance mode (the Retroid performance service re-applies its CPU profile
+  about every 10 s): 8.8–14.5 ms per frame versus ~10.9 ms on the prime core with this PR. An ADPF performance-hint session (targets 8 and 16.7 ms) didn't
+  bring the prime core back. Needs a way to keep the emulation thread on a fast core first.
+- Taken branches to other blocks, `JAL` and `JR` still return to the dispatcher (about 0.11,
+  0.11 and 0.12 million a second in Mario vs Boo).
 - The UI theme system ([PR #9](https://github.com/pwnedbygary/phobos/pull/9)) and the
   MangoHud-style performance overlay ([PR #5](https://github.com/pwnedbygary/phobos/pull/5))
   are done.

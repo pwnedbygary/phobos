@@ -1047,7 +1047,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
     auto done = jump();
     setLabel(taken);
     emitBranchTarget(i16);
-    mov32(PipelineReg(nstate), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(PipelineReg(nstate), imm(takenBranchState()));
     setLabel(done);
     return EmitExecuteResult::MayBranch;
   }

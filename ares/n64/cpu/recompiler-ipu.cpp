@@ -522,7 +522,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction, bool emitSlowPath, EmitPcMode
     cmov64(reg(2), reg(1), reg(0), flag_z);
     mov64(PipelineReg(nextpc), reg(2));
     mov32(reg(0), imm(Pipeline::DelaySlot));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_z);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -536,7 +536,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction, bool emitSlowPath, EmitPcMode
     cmov64(reg(2), reg(1), reg(0), flag_nz);
     mov64(PipelineReg(nextpc), reg(2));
     mov32(reg(0), imm(Pipeline::DelaySlot));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_nz);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -550,7 +550,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction, bool emitSlowPath, EmitPcMode
     cmov64(reg(2), reg(1), reg(0), flag_sle);
     mov64(PipelineReg(nextpc), reg(2));
     mov32(reg(0), imm(Pipeline::DelaySlot));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_sle);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -564,7 +564,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction, bool emitSlowPath, EmitPcMode
     cmov64(reg(2), reg(1), reg(0), flag_sgt);
     mov64(PipelineReg(nextpc), reg(2));
     mov32(reg(0), imm(Pipeline::DelaySlot));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_sgt);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -684,7 +684,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction, bool emitSlowPath, EmitPcMode
     cmov32(reg(0), reg(1), reg(5), flag_z);
     mov32(PipelineReg(state), reg(0));
     mov32(reg(0), imm(0));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_z);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -711,7 +711,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction, bool emitSlowPath, EmitPcMode
     cmov32(reg(0), reg(1), reg(5), flag_nz);
     mov32(PipelineReg(state), reg(0));
     mov32(reg(0), imm(0));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_nz);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -738,7 +738,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction, bool emitSlowPath, EmitPcMode
     cmov32(reg(0), reg(1), reg(5), flag_sle);
     mov32(PipelineReg(state), reg(0));
     mov32(reg(0), imm(0));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_sle);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -765,7 +765,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction, bool emitSlowPath, EmitPcMode
     cmov32(reg(0), reg(1), reg(5), flag_sgt);
     mov32(PipelineReg(state), reg(0));
     mov32(reg(0), imm(0));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_sgt);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -1839,7 +1839,7 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction, EmitPcMode pcMode) -> EmitExec
     cmov64(reg(2), reg(1), reg(0), flag_slt);
     mov64(PipelineReg(nextpc), reg(2));
     mov32(reg(0), imm(Pipeline::DelaySlot));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_slt);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -1853,7 +1853,7 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction, EmitPcMode pcMode) -> EmitExec
     cmov64(reg(2), reg(1), reg(0), flag_sge);
     mov64(PipelineReg(nextpc), reg(2));
     mov32(reg(0), imm(Pipeline::DelaySlot));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_sge);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -1880,7 +1880,7 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction, EmitPcMode pcMode) -> EmitExec
     cmov32(reg(0), reg(1), reg(5), flag_slt);
     mov32(PipelineReg(state), reg(0));
     mov32(reg(0), imm(0));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_slt);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -1907,7 +1907,7 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction, EmitPcMode pcMode) -> EmitExec
     cmov32(reg(0), reg(1), reg(5), flag_sge);
     mov32(PipelineReg(state), reg(0));
     mov32(reg(0), imm(0));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_sge);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -2021,7 +2021,7 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction, EmitPcMode pcMode) -> EmitExec
     cmov64(reg(2), reg(1), reg(0), flag_slt);
     mov64(PipelineReg(nextpc), reg(2));
     mov32(reg(0), imm(Pipeline::DelaySlot));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_slt);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -2035,7 +2035,7 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction, EmitPcMode pcMode) -> EmitExec
     cmov64(reg(2), reg(1), reg(0), flag_sge);
     mov64(PipelineReg(nextpc), reg(2));
     mov32(reg(0), imm(Pipeline::DelaySlot));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_sge);
     mov32(PipelineReg(nstate), reg(2));
     emitLink31();
@@ -2064,7 +2064,7 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction, EmitPcMode pcMode) -> EmitExec
     cmov32(reg(0), reg(1), reg(5), flag_slt);
     mov32(PipelineReg(state), reg(0));
     mov32(reg(0), imm(0));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_slt);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
@@ -2092,7 +2092,7 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction, EmitPcMode pcMode) -> EmitExec
     cmov32(reg(0), reg(1), reg(5), flag_sge);
     mov32(PipelineReg(state), reg(0));
     mov32(reg(0), imm(0));
-    mov32(reg(1), imm(Pipeline::DelaySlot | Pipeline::EndBlock));
+    mov32(reg(1), imm(takenBranchState()));
     cmov32(reg(2), reg(1), reg(0), flag_sge);
     mov32(PipelineReg(nstate), reg(2));
     return EmitExecuteResult::MayBranch;
