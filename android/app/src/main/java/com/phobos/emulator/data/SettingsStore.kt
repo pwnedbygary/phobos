@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.phobos.emulator.LogLevel
+import com.phobos.emulator.ui.hud.HudConfig
 import com.phobos.emulator.ui.touch.AnalogMode
 import com.phobos.emulator.ui.touch.DpadMode
 import com.phobos.emulator.ui.touch.HapticLevel
@@ -59,6 +60,15 @@ data class EmulatorSettings(
     val perfShowRam: Boolean = true,
     val perfShowCore: Boolean = true,
     val perfShowShaderFails: Boolean = false,
+    val perfShowGraph: Boolean = true,
+    val perfShowCpu: Boolean = true,
+    val perfShowGpu: Boolean = true,
+    val perfShowBattery: Boolean = false,
+    val perfShowThermal: Boolean = false,
+    val perfShowSystem: Boolean = false,
+    val perfShowClock: Boolean = false,
+    val perfHudHorizontal: Boolean = false,
+    val perfHudOpacity: Float = 0.55f,
     val perfOverlayScale: Float = 1.0f,
     val perfOverlayPosX: Float = 1.0f,  // 0=left, 1=right
     val perfOverlayPosY: Float = 0.0f,  // 0=top, 1=bottom
@@ -151,6 +161,15 @@ class SettingsStore(private val context: Context) {
         val PERF_SHOW_RAM = booleanPreferencesKey("perf_show_ram")
         val PERF_SHOW_CORE = booleanPreferencesKey("perf_show_core")
         val PERF_SHOW_SHADER_FAILS = booleanPreferencesKey("perf_show_shader_fails")
+        val PERF_SHOW_GRAPH = booleanPreferencesKey("perf_show_graph")
+        val PERF_SHOW_CPU = booleanPreferencesKey("perf_show_cpu")
+        val PERF_SHOW_GPU = booleanPreferencesKey("perf_show_gpu")
+        val PERF_SHOW_BATTERY = booleanPreferencesKey("perf_show_battery")
+        val PERF_SHOW_THERMAL = booleanPreferencesKey("perf_show_thermal")
+        val PERF_SHOW_SYSTEM = booleanPreferencesKey("perf_show_system")
+        val PERF_SHOW_CLOCK = booleanPreferencesKey("perf_show_clock")
+        val PERF_HUD_HORIZONTAL = booleanPreferencesKey("perf_hud_horizontal")
+        val PERF_HUD_OPACITY = floatPreferencesKey("perf_hud_opacity")
         val PERF_OVERLAY_SCALE = floatPreferencesKey("perf_overlay_scale")
         val PERF_OVERLAY_POS_X = floatPreferencesKey("perf_overlay_pos_x")
         val PERF_OVERLAY_POS_Y = floatPreferencesKey("perf_overlay_pos_y")
@@ -327,6 +346,15 @@ class SettingsStore(private val context: Context) {
             perfShowRam = safeGet(PERF_SHOW_RAM, true),
             perfShowCore = safeGet(PERF_SHOW_CORE, true),
             perfShowShaderFails = safeGet(PERF_SHOW_SHADER_FAILS, false),
+            perfShowGraph = safeGet(PERF_SHOW_GRAPH, true),
+            perfShowCpu = safeGet(PERF_SHOW_CPU, true),
+            perfShowGpu = safeGet(PERF_SHOW_GPU, true),
+            perfShowBattery = safeGet(PERF_SHOW_BATTERY, false),
+            perfShowThermal = safeGet(PERF_SHOW_THERMAL, false),
+            perfShowSystem = safeGet(PERF_SHOW_SYSTEM, false),
+            perfShowClock = safeGet(PERF_SHOW_CLOCK, false),
+            perfHudHorizontal = safeGet(PERF_HUD_HORIZONTAL, false),
+            perfHudOpacity = safeGet(PERF_HUD_OPACITY, 0.55f),
             perfOverlayScale = safeGet(PERF_OVERLAY_SCALE, 1.0f),
             perfOverlayPosX = safeGet(PERF_OVERLAY_POS_X, 1.0f),
             perfOverlayPosY = safeGet(PERF_OVERLAY_POS_Y, 0.0f),
@@ -490,6 +518,29 @@ class SettingsStore(private val context: Context) {
     suspend fun setPerfShowRam(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_RAM] = enabled }
     suspend fun setPerfShowCore(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_CORE] = enabled }
     suspend fun setPerfShowShaderFails(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_SHADER_FAILS] = enabled }
+    suspend fun setPerfShowGraph(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_GRAPH] = enabled }
+    suspend fun setPerfShowCpu(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_CPU] = enabled }
+    suspend fun setPerfShowGpu(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_GPU] = enabled }
+    suspend fun setPerfShowBattery(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_BATTERY] = enabled }
+    suspend fun setPerfShowThermal(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_THERMAL] = enabled }
+    suspend fun setPerfShowSystem(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_SYSTEM] = enabled }
+    suspend fun setPerfShowClock(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_CLOCK] = enabled }
+    suspend fun setPerfHudHorizontal(enabled: Boolean) = context.dataStore.edit { it[PERF_HUD_HORIZONTAL] = enabled }
+    suspend fun setPerfHudOpacity(opacity: Float) = context.dataStore.edit { it[PERF_HUD_OPACITY] = opacity }
+    /** Writes every metric toggle of [config] in one edit (used by HUD presets). */
+    suspend fun setPerfHudMetrics(config: HudConfig) = context.dataStore.edit {
+        it[PERF_SHOW_FPS] = config.fps
+        it[PERF_SHOW_FRAMETIME] = config.frameTime
+        it[PERF_SHOW_GRAPH] = config.graph
+        it[PERF_SHOW_CPU] = config.cpu
+        it[PERF_SHOW_CORE] = config.cpuDetail
+        it[PERF_SHOW_GPU] = config.gpu
+        it[PERF_SHOW_RAM] = config.ram
+        it[PERF_SHOW_BATTERY] = config.battery
+        it[PERF_SHOW_THERMAL] = config.thermal
+        it[PERF_SHOW_SYSTEM] = config.system
+        it[PERF_SHOW_CLOCK] = config.clock
+    }
     suspend fun setPerfOverlayScale(scale: Float) = context.dataStore.edit { it[PERF_OVERLAY_SCALE] = scale }
     suspend fun setPerfOverlayPosX(x: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_X] = x }
     suspend fun setPerfOverlayPosY(y: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_Y] = y }

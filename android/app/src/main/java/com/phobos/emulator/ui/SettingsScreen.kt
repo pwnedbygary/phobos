@@ -36,7 +36,7 @@ fun SettingsScreen(
         item { SettingsClickableItem(title = "Video", description = "Color emulation, interframe blending, shaders", onClick = onNavigateToVideo) }
         item { SettingsClickableItem(title = "N64 Experimental", description = "Rendering, overclocking, debug logging", onClick = onNavigateToN64Experimental) }
         item { SettingsClickableItem(title = "Audio", description = "Mute and audio options", onClick = onNavigateToAudio) }
-        item { SettingsClickableItem(title = "Performance Monitor", description = "In-game FPS overlay and metrics", onClick = onNavigateToPerformance) }
+        item { SettingsClickableItem(title = "Performance Monitor", description = "In-game HUD: FPS, frame times, CPU/GPU, battery", onClick = onNavigateToPerformance) }
         item { SettingsClickableItem(title = "Inputs & Hotkeys", description = "Touch controls, controller mapping, hotkeys", onClick = onNavigateToInputs) }
         item { SettingsClickableItem(title = "Paths", description = "Firmware and save directories", onClick = onNavigateToPaths) }
         item { SettingsClickableItem(title = "Platform Visibility", description = "Choose which systems to show in your library", onClick = onNavigateToVisibility) }

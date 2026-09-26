@@ -63,6 +63,8 @@ import com.phobos.emulator.input.InputBindings
 import com.phobos.emulator.input.comboUsesDpad
 import com.phobos.emulator.input.mapKeyCodeToBit
 import com.phobos.emulator.input.matchingHotkeys
+import com.phobos.emulator.ui.hud.PerformanceHudOverlay
+import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.touch.ButtonCluster
 import com.phobos.emulator.ui.touch.TouchAction
 import com.phobos.emulator.ui.touch.TouchControlsOverlay
@@ -72,6 +74,7 @@ import com.phobos.emulator.ui.touch.TouchLayoutEditor
 import com.phobos.emulator.ui.touch.TouchLayouts
 import com.phobos.emulator.ui.touch.isHidden
 import com.phobos.emulator.ui.touch.touchLayoutKey
+import kotlin.math.roundToInt
 
 private val VOLUME_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
 
@@ -372,28 +375,24 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             }
         }
 
-        // ── Performance monitor (draggable/resizable) ───────────────────────
+        // ── Performance HUD (MangoHud-style, draggable) ─────────────────────
         if (isLoaded && !isPaused && settings.showPerformanceMonitor) {
             val metrics = LocalContext.current.resources.displayMetrics
             key(metrics.widthPixels, metrics.heightPixels) {
-                PerformanceOverlay(
-                    perfStats = perfStats,
-                    savedScale = settings.perfOverlayScale,
+                PerformanceHudOverlay(
+                    stats = perfStats,
+                    config = settings.hudConfig(),
+                    systemName = viewModel.loadedSystemName,
+                    resolution = videoGeometry?.let { "${it.width.roundToInt()}\u00D7${it.height.roundToInt()}" },
                     savedPosX = settings.perfOverlayPosX,
                     savedPosY = settings.perfOverlayPosY,
                     screenWidth = metrics.widthPixels,
                     screenHeight = metrics.heightPixels,
-                    onScaleChanged = { viewModel.setPerfOverlayScale(it) },
                     onPositionChanged = { x, y ->
                         viewModel.setPerfOverlayPosX(x)
                         viewModel.setPerfOverlayPosY(y)
                     },
                     modifier = Modifier.fillMaxSize(),
-                    showFps = settings.perfShowFps,
-                    showFrameTime = settings.perfShowFrameTime,
-                    showRam = settings.perfShowRam,
-                    showCore = settings.perfShowCore,
-                    showShaderFails = settings.perfShowShaderFails,
                 )
             }
         }

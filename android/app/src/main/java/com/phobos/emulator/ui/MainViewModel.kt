@@ -24,6 +24,8 @@ import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
+import com.phobos.emulator.ui.hud.HudPreset
+import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.touch.ElementOverride
 import com.phobos.emulator.ui.touch.TouchFamily
 import com.phobos.emulator.ui.touch.TouchLayoutCodec
@@ -286,6 +288,22 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setPerfShowRam(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowRam(enabled) }
     fun setPerfShowCore(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowCore(enabled) }
     fun setPerfShowShaderFails(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowShaderFails(enabled) }
+    fun setPerfShowGraph(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowGraph(enabled) }
+    fun setPerfShowCpu(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowCpu(enabled) }
+    fun setPerfShowGpu(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowGpu(enabled) }
+    fun setPerfShowBattery(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowBattery(enabled) }
+    fun setPerfShowThermal(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowThermal(enabled) }
+    fun setPerfShowSystem(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowSystem(enabled) }
+    fun setPerfShowClock(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowClock(enabled) }
+    fun setPerfHudHorizontal(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfHudHorizontal(enabled) }
+    fun setPerfHudOpacity(opacity: Float) = viewModelScope.launch { settingsStore.setPerfHudOpacity(opacity) }
+    fun applyPerfHudPreset(preset: HudPreset) = viewModelScope.launch {
+        settingsStore.setPerfHudMetrics(preset.applyTo(settings.value.hudConfig()))
+    }
+    fun resetPerfOverlayPosition() = viewModelScope.launch {
+        settingsStore.setPerfOverlayPosX(0f)
+        settingsStore.setPerfOverlayPosY(0f)
+    }
     fun setPerfOverlayScale(scale: Float) = viewModelScope.launch { settingsStore.setPerfOverlayScale(scale) }
     fun setPerfOverlayPosX(x: Float) = viewModelScope.launch { settingsStore.setPerfOverlayPosX(x) }
     fun setPerfOverlayPosY(y: Float) = viewModelScope.launch { settingsStore.setPerfOverlayPosY(y) }
@@ -858,7 +876,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     @Volatile
     private var currentRomName: String = ""
 
-    private val _perfStats = MutableStateFlow(PerformanceStats(0.0, 0.0, 0))
+    private val _perfStats = MutableStateFlow(PerformanceStats(0.0, 0.0, -1))
     val perfStats: StateFlow<PerformanceStats> = _perfStats
 
     // Logical size of the running game's picture (pixel-aspect corrected), for aspect-correct

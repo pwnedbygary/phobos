@@ -75,6 +75,8 @@ object PhobosCore {
     external fun setZxTapeMuted(muted: Boolean)
     external fun getZxTapeProgress(): Int
     external fun getPerformanceStats(): PerformanceStats
+    /** Recent frame-to-frame intervals in ms, oldest first (up to 240). */
+    external fun getFrameTimes(): FloatArray
     /** Logical [width, height] of the last frame after the core's pixel-aspect correction; 0s before the first frame. */
     external fun getVideoGeometry(): FloatArray
 
@@ -118,10 +120,18 @@ data class LogEntry(
 
 data class PerformanceStats(
     val fps: Double,
+    /** Average emulation work time per frame (ms), excluding pacing sleep. */
     val frameTime: Double,
+    /** CPU core the emulation thread last ran on (-1 before the first frame). */
     val activeCore: Int,
     val pipelineFailures: Int = 0,
-    val isAdrenoDriver: Boolean = false
+    val isAdrenoDriver: Boolean = false,
+    /** Emulation thread id, for per-thread CPU sampling (0 before the first frame). */
+    val emuTid: Int = 0,
+    /** The running core's native refresh rate. */
+    val targetFps: Double = 60.0,
+    /** Unpaused time played since the game was loaded, in ms. */
+    val playTimeMs: Long = 0,
 )
 
 data class PhobosSetting(
