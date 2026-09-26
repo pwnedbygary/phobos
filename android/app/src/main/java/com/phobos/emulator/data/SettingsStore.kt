@@ -98,6 +98,7 @@ data class EmulatorSettings(
     val n64FasterSync: Boolean = false,
     val n64SkipCaches: Boolean = false,
     val n64RspTaskMode: Boolean = false,
+    val pinFastestCore: Boolean = true,
     val n64Pak: String = "None",
     val n64DebugLogging: Boolean = false,
     val orientationVertical: Boolean = false,
@@ -197,6 +198,7 @@ class SettingsStore(private val context: Context) {
         val N64_FASTER_SYNC = booleanPreferencesKey("n64_faster_sync")
         val N64_SKIP_CACHES = booleanPreferencesKey("n64_skip_caches")
         val N64_RSP_TASK_MODE = booleanPreferencesKey("n64_rsp_task_mode")
+        val PIN_FASTEST_CORE = booleanPreferencesKey("pin_fastest_core")
         val N64_PAK = stringPreferencesKey("n64_pak")
         val N64_DEBUG_LOGGING = booleanPreferencesKey("n64_debug_logging")
         val ORIENTATION_VERTICAL = booleanPreferencesKey("orientation_vertical")
@@ -382,6 +384,7 @@ class SettingsStore(private val context: Context) {
             n64FasterSync = safeGet(N64_FASTER_SYNC, false),
             n64SkipCaches = safeGet(N64_SKIP_CACHES, false),
             n64RspTaskMode = safeGet(N64_RSP_TASK_MODE, false),
+            pinFastestCore = safeGet(PIN_FASTEST_CORE, true),
             n64Pak = safeGetString(N64_PAK, "None"),
             n64DebugLogging = safeGet(N64_DEBUG_LOGGING, false),
             orientationVertical = safeGet(ORIENTATION_VERTICAL, false),
@@ -569,6 +572,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setN64FasterSync(enabled: Boolean) = context.dataStore.edit { it[N64_FASTER_SYNC] = enabled }
     suspend fun setN64SkipCaches(enabled: Boolean) = context.dataStore.edit { it[N64_SKIP_CACHES] = enabled }
     suspend fun setN64RspTaskMode(enabled: Boolean) = context.dataStore.edit { it[N64_RSP_TASK_MODE] = enabled }
+    suspend fun setPinFastestCore(enabled: Boolean) = context.dataStore.edit { it[PIN_FASTEST_CORE] = enabled }
     suspend fun setN64Pak(pak: String) = context.dataStore.edit { it[N64_PAK] = pak }
     suspend fun setN64DebugLogging(enabled: Boolean) = context.dataStore.edit { it[N64_DEBUG_LOGGING] = enabled }
     suspend fun setGlobalPath(key: Preferences.Key<String>, path: String) = context.dataStore.edit { it[key] = path }

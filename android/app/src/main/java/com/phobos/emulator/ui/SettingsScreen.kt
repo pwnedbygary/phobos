@@ -32,7 +32,7 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item { SettingsClickableItem(title = "Appearance", description = "Theme and visual styling", onClick = onNavigateToAppearance) }
-        item { SettingsClickableItem(title = "Emulation", description = "Region, firmware, GPU drivers, auto-save", onClick = onNavigateToEmulation) }
+        item { SettingsClickableItem(title = "Emulation", description = "Region, firmware, GPU drivers, auto-save, CPU core", onClick = onNavigateToEmulation) }
         item { SettingsClickableItem(title = "Video", description = "Color emulation, interframe blending, shaders", onClick = onNavigateToVideo) }
         item { SettingsClickableItem(title = "N64 Experimental", description = "Rendering, overclocking, debug logging", onClick = onNavigateToN64Experimental) }
         item { SettingsClickableItem(title = "Audio", description = "Mute and audio options", onClick = onNavigateToAudio) }

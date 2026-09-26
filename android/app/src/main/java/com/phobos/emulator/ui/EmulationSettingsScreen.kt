@@ -71,6 +71,16 @@ fun EmulationSettingsScreen(
                     FastForwardSpeedSelectorItem(settings.fastForwardSpeed) { viewModel.setFastForwardSpeed(it) }
                 }
             }
+            item {
+                SettingsCategory("Performance") {
+                    SettingsSwitchItem(
+                        title = "Use the fastest CPU core",
+                        description = "Keeps emulation on the device's fastest core for steadier frame rates. Turn off to let Android choose.",
+                        checked = settings.pinFastestCore,
+                        onCheckedChange = { viewModel.setPinFastestCore(it) }
+                    )
+                }
+            }
         }
     }
 }
