@@ -436,11 +436,51 @@ live state key; (3) "skip cache timing" missed the JIT's inline icache-miss stal
 first draft of skip-caches bypassed the dcache in C++ only (incoherent with the JIT's
 inline dcache paths), replaced by timing-only. Final pass: no bugs.
 
+### 2026-09-25 follow-up: emulation thread on the fastest core
+
+Branch `feature/emu-sched-2026-09`, stacked on the performance HUD
+([PR #5](https://github.com/pwnedbygary/phobos/pull/5)). Host scheduling only; emulated
+timing is unchanged.
+
+**Finding.** The new HUD showed the emulation thread's core and clock, and the RP6 often ran
+it on the Cortex-A715/A710 cores (2.8 GHz) rather than the Cortex-X3 (3.19 GHz). Sampling the
+thread's CPU every 50 ms during Conker's attract mode put it on the X3 about a third of the
+time; in the Mario vs Boo match it was there for 83–89% of frames. The existing
+`sched_setaffinity` to the last four cores at thread start had no lasting effect: Android
+resets a thread's affinity when it moves the app between cpusets, and the thread was found
+with all eight CPUs allowed. In the match the thread is CPU-bound at the frame budget
+(emulation work ~16.5–17 ms per frame while running ~82% of the time; the rest is waits inside
+the frame), so a frame spent on a slower core overruns.
+
+**Change.** Settings → Emulation → "Use the fastest CPU core" (default on). The emulation
+thread's affinity is set to the highest-capacity CPUs (`cpu_capacity`, else
+`cpuinfo_max_freq`; on the RP6 only CPU 7) and re-applied every frame. Under light load
+Qualcomm core control pauses the fastest core; `sched_setaffinity` then fails with EINVAL and
+the scheduler's placement stands. Genesis and SNES smoke runs hit this and ran at 60 FPS on
+the mid cores. Off restores the previous one-shot last-four-cores mask. The 1 Hz
+`Emulation Stats` log line now also reports the longest frame interval and the number of
+intervals over 20 ms.
+
+**Measured** (Mario vs Boo save state, 30 s, Async RDP on, two runs each):
+
+| Setting | Mean FPS | Worst second | 10th-percentile second | Intervals over 20 ms | Longest interval | Work per frame |
+|---|---|---|---|---|---|---|
+| On | 59.4, 59.5 | 53.4, 53.9 | 58.6, 58.6 | 176, 156 | 28.6, 28.3 ms | 16.7 ms |
+| Off | 58.3, 58.6 | 44.3, 44.7 | 55.9, 56.4 | 254, 235 | 34.3, 31.8 ms | 17.2 ms |
+
+An experiment build compared four modes in the same scene (two runs each): the scheduler's
+choice (57.6 and 58.1 FPS), the fastest core re-applied every frame (59.5 and 59.5), an ADPF
+performance-hint session reporting each frame's work against the frame period (58.5 and 58.3),
+and both (59.2 and 59.3). The hint session alone barely moved the thread (89–92% of frames on
+the X3) and added nothing on top of pinning, so it isn't part of the change.
+
 ### Next (not implemented)
 
+- The emulation thread is blocked for ~18% of each frame inside `root->run()` in the Mario
+  vs Boo match; an off-CPU profile of those waits is the next measurement.
 - Decide whether to keep Faster CPU sync: it no longer stalls Conker, but showed no FPS
   gain in Mario vs Boo.
 - Direct-branch linking for taken conditional branches (would need the taken path to
   skip `EndBlock`, as in ares `edf712f2f`) — optional further win.
-- Broader UI theme system (IDE colorways; keep system card art) and a MangoHud-style
-  performance overlay — P3 QoL, deferred.
+- Broader UI theme system (IDE colorways; keep system card art) — P3 QoL, deferred. The
+  MangoHud-style performance overlay is done ([PR #5](https://github.com/pwnedbygary/phobos/pull/5)).

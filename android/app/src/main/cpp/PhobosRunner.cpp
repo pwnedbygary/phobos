@@ -731,6 +731,37 @@ namespace ares {
   static std::atomic<bool> n64FasterSync{false};
   static std::atomic<bool> n64SkipCaches{false};
   static std::atomic<bool> n64RspTaskMode{false};
+  // Keep the emulation thread on the fastest CPU cores (Settings > Emulation, default on).
+  static std::atomic<bool> pinFastestCore{true};
+
+  // The CPUs with the highest capacity (the prime core or big cluster), from cpu_capacity
+  // or, on kernels without it, cpuinfo_max_freq. Empty when neither is readable for every CPU.
+  static auto fastestCpus(s32 count) -> std::vector<s32> {
+    for (const char* format : {"/sys/devices/system/cpu/cpu%d/cpu_capacity",
+                               "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq"}) {
+      std::vector<s64> score((size_t)std::max(count, 0), 0);
+      bool complete = count > 0;
+      for (s32 cpu = 0; cpu < count && complete; cpu++) {
+        char path[96];
+        snprintf(path, sizeof(path), format, cpu);
+        long long value = 0;
+        if (FILE* file = fopen(path, "r")) {
+          if (fscanf(file, "%lld", &value) != 1) value = 0;
+          fclose(file);
+        }
+        score[cpu] = value;
+        complete = value > 0;
+      }
+      if (!complete) continue;
+      s64 best = *std::max_element(score.begin(), score.end());
+      std::vector<s32> cpus;
+      for (s32 cpu = 0; cpu < count; cpu++) {
+        if (score[cpu] == best) cpus.push_back(cpu);
+      }
+      return cpus;
+    }
+    return {};
+  }
 
   // With asynchronous RDP the GPU can still be writing RDRAM when the emulation
   // thread stops; wait for it before snapshotting or replacing that memory
@@ -820,6 +851,13 @@ namespace ares {
         CPU_SET(i, &cpuset);
     }
     sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+    cpu_set_t fastestSet;
+    CPU_ZERO(&fastestSet);
+    for (s32 cpu : fastestCpus(num_cores)) CPU_SET(cpu, &fastestSet);
+    if (CPU_COUNT(&fastestSet) == 0) fastestSet = cpuset;
+    bool pinnedToFastest = false;
+    u32 slowFrames = 0;
+    s64 longestFrameIntervalUs = 0;
 
     // Absolute frame deadline for pacing (see below). Persists across the
     // loop so sleep overshoot never compounds frame-to-frame.
@@ -861,9 +899,18 @@ namespace ares {
           frameIntervals[cursor % FrameIntervalHistory].store((f32)intervalUs / 1000.0f, std::memory_order_relaxed);
           frameIntervalCursor.store(cursor + 1, std::memory_order_release);
           if (intervalUs > 0) playedMicros.fetch_add((u64)intervalUs, std::memory_order_relaxed);
+          if (intervalUs > 20000) slowFrames++;
+          longestFrameIntervalUs = std::max(longestFrameIntervalUs, intervalUs);
         }
         lastFrameStart = start;
         haveLastFrameStart = true;
+        // Re-applied every frame: Android resets thread affinity whenever it moves the
+        // app between cpusets. The call fails (EINVAL) while the SoC keeps the fastest
+        // core paused under light load (Qualcomm core control), leaving the scheduler's choice.
+        bool pinFastest = pinFastestCore.load(std::memory_order_relaxed);
+        if (pinFastest) sched_setaffinity(0, sizeof(cpu_set_t), &fastestSet);
+        else if (pinnedToFastest) sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+        pinnedToFastest = pinFastest;
         emuThreadCore.store((s32)sched_getcpu(), std::memory_order_relaxed);
         {
             std::lock_guard<std::recursive_mutex> lock(*runMutex);
@@ -933,17 +980,21 @@ namespace ares {
             #if defined(CORE_N64)
             if (root && root->name() == "Nintendo 64") {
               auto& rc = ::ares::Nintendo64::cpu.recompiler;
-              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms linkTaken=%llu cand=%llu miss=%llu budget=%llu irq=%llu dirty=%llu",
+              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms LongestFrame=%.1fms Over20ms=%u linkTaken=%llu cand=%llu miss=%llu budget=%llu irq=%llu dirty=%llu",
                 (f64)currentFps, (f64)avgFrameTime / 1000.0,
+                (f64)longestFrameIntervalUs / 1000.0, slowFrames,
                 (unsigned long long)rc.linkTaken, (unsigned long long)rc.linkCandidates,
                 (unsigned long long)rc.linkAbortNoTarget, (unsigned long long)rc.linkAbortBudget,
                 (unsigned long long)rc.linkAbortIrq, (unsigned long long)rc.linkAbortDirty);
             } else
             #endif
             {
-              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms", (f64)currentFps, (f64)avgFrameTime / 1000.0);
+              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms LongestFrame=%.1fms Over20ms=%u",
+                (f64)currentFps, (f64)avgFrameTime / 1000.0, (f64)longestFrameIntervalUs / 1000.0, slowFrames);
             }
             frameCount = 0;
+            slowFrames = 0;
+            longestFrameIntervalUs = 0;
             lastStatsUpdateTime = now;
 
             // Per-second perf profile (N64 only, gated by debug logging so it
@@ -3256,6 +3307,10 @@ else if (port->type() == "Keyboard") {
     ::ares::Nintendo64::rsp.taskMode = enabled;
     #endif
     LOGI("N64 RSP task mode %s (applies immediately)", enabled ? "enabled" : "disabled");
+  }
+  auto setPinFastestCore(bool enabled) -> void {
+    pinFastestCore = enabled;
+    LOGI("Emulation thread %s", enabled ? "pinned to the fastest CPU cores" : "placed by the scheduler");
   }
   auto setN64ExpansionPak(bool enabled) -> void {
     if (n64ExpansionPak == enabled) return;

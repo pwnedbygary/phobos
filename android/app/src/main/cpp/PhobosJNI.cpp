@@ -331,6 +331,11 @@ Java_com_phobos_emulator_PhobosCore_setN64RspTaskMode(JNIEnv* env, jobject, jboo
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPinFastestCore(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setPinFastestCore(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64Pak(JNIEnv* env, jobject, jstring pakName) {
     const char* nativePakName = env->GetStringUTFChars(pakName, 0);
     ares::setN64Pak(nativePakName);
