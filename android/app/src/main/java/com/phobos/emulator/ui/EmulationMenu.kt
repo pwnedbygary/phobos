@@ -43,6 +43,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -63,6 +64,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.ui.theme.LocalPhobosTheme
+import com.phobos.emulator.ui.theme.neonGlow
 import java.text.DateFormat
 import java.util.Date
 
@@ -86,12 +89,18 @@ fun EmulationMenu(
     BackHandler(enabled = experimentalOpen) { experimentalOpen = false }
 
     Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)).clickable(enabled = false) {},
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.7f)).clickable(enabled = false) {},
         contentAlignment = Alignment.Center,
     ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(0.85f).fillMaxHeight(0.8f),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        val menuShape = MaterialTheme.shapes.extraLarge
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .fillMaxHeight(0.8f)
+                .then(if (LocalPhobosTheme.current.retrowave) Modifier.neonGlow(MaterialTheme.colorScheme.primary, menuShape, 0.8f) else Modifier),
+            shape = menuShape,
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            contentColor = MaterialTheme.colorScheme.onSurface,
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 if (experimentalOpen) {
@@ -271,6 +280,7 @@ private fun N64Section(viewModel: MainViewModel, settings: EmulatorSettings, onO
             headlineContent = { Text("N64 Experimental") },
             supportingContent = { Text("Overclocking, VI rendering, debug logging") },
             trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+            colors = transparentListItemColors(),
             modifier = Modifier.clickable(onClick = onOpenExperimental),
         )
     }
@@ -349,10 +359,15 @@ private fun DisplaySection(viewModel: MainViewModel, settings: EmulatorSettings)
 
 @Composable
 fun MenuSection(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier = Modifier.padding(vertical = 8.dp)) {
-        Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.height(4.dp)); content()
-        HorizontalDivider(modifier = Modifier.padding(top = 8.dp), thickness = 0.5.dp)
+    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+        SectionHeader(title)
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ) {
+            Column(Modifier.fillMaxWidth().padding(8.dp), content = content)
+        }
     }
 }
 

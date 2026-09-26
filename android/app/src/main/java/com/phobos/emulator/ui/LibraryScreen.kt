@@ -63,6 +63,9 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    ScreenHeader("Library", "${systems.size} ${if (systems.size == 1) "system" else "systems"}")
+                }
                 items(systems) { system ->
                     SystemCard(system, onClick = { 
                         onSystemClick(Uri.encode(system)) 

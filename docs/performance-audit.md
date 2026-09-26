@@ -574,5 +574,6 @@ Sub-Terrania (Genesis) and the PlayStation boot (Ape Escape) run at 60 FPS with 
   gain in Mario vs Boo.
 - Direct-branch linking for taken conditional branches (would need the taken path to
   skip `EndBlock`, as in ares `edf712f2f`) — optional further win.
-- Broader UI theme system (IDE colorways; keep system card art) — P3 QoL, deferred. The
-  MangoHud-style performance overlay is done ([PR #5](https://github.com/pwnedbygary/phobos/pull/5)).
+- The UI theme system ([PR #9](https://github.com/pwnedbygary/phobos/pull/9)) and the
+  MangoHud-style performance overlay ([PR #5](https://github.com/pwnedbygary/phobos/pull/5))
+  are done.

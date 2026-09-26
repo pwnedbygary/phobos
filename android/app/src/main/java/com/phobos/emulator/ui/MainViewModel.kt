@@ -114,6 +114,8 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     }
 
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsStore.setThemeMode(mode) }
+    fun setTheme(id: String, followSystem: Boolean = false) = viewModelScope.launch { settingsStore.setTheme(id, followSystem) }
+    fun setRetrowaveEffects(enabled: Boolean) = viewModelScope.launch { settingsStore.setRetrowaveEffects(enabled) }
     fun setRegionPreference(pref: RegionPreference) = viewModelScope.launch { settingsStore.setRegionPreference(pref) }
     fun setFastBoot(enabled: Boolean) = viewModelScope.launch { settingsStore.setFastBoot(enabled) }
     fun setMuteAudio(enabled: Boolean) = viewModelScope.launch {

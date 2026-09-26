@@ -3,7 +3,6 @@ package com.phobos.emulator.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -15,18 +14,7 @@ import androidx.compose.ui.unit.dp
 fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("N64 Experimental") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    PhobosScaffold(title = "N64 Experimental", onBack = onBack) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .padding(innerPadding)
@@ -43,6 +31,7 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                         else -> "1x Native (SD)"
                     }
                     ListItem(
+                        colors = transparentListItemColors(),
                         headlineContent = { Text("N64 Resolution / Upscaling") },
                         supportingContent = { Text("Parallel-RDP internal rendering resolution") },
                         trailingContent = {
@@ -108,6 +97,7 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                 SettingsCategory("Overclocking") {
                     var overclockExpanded by remember { mutableStateOf(false) }
                     ListItem(
+                        colors = transparentListItemColors(),
                         headlineContent = { Text("VI Overclock") },
                         supportingContent = { Text("Run the N64's video interface faster so games render above 50/60Hz (game logic speeds up too, like Mupen64Plus FZ). Applies on next reset.") },
                         trailingContent = {
@@ -133,6 +123,7 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                     var countPerOpExpanded by remember { mutableStateOf(false) }
                     val countPerOpEnabled = !settings.n64UseDefaultCountPerOp
                     ListItem(
+                        colors = transparentListItemColors(),
                         modifier = Modifier.alpha(if (countPerOpEnabled) 1f else 0.4f),
                         headlineContent = { Text("Count Per Operation") },
                         supportingContent = { Text("Count register advance per op. Default 2. 1 = overclock (may be unstable), 3 = underclock.") },
@@ -162,6 +153,7 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                     var cpuOverclockExpanded by remember { mutableStateOf(false) }
                     val cpuOverclockEnabled = !settings.n64UseDefaultCpuOverclock
                     ListItem(
+                        colors = transparentListItemColors(),
                         modifier = Modifier.alpha(if (cpuOverclockEnabled) 1f else 0.4f),
                         headlineContent = { Text("Overclocking Factor") },
                         supportingContent = { Text("Overclocks the R4300 by 2^factor (0 = none). Game logic runs faster at the same frame rate.") },

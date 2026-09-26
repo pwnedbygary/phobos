@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -93,19 +92,11 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("BIOS Firmware Locations") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        },
+    PhobosScaffold(
+        title = "BIOS Firmware Locations",
+        onBack = onBack,
         bottomBar = {
-            Surface(tonalElevation = 2.dp) {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
                 Row(
                     modifier = Modifier
                         .padding(16.dp)
@@ -179,7 +170,7 @@ fun FirmwareRow(info: FirmwareInfo, path: String, onClick: () -> Unit) {
         RowText(
             if (path.isEmpty()) "(unset)" else Uri.parse(path).lastPathSegment ?: path,
             Modifier.weight(3f),
-            color = if (path.isEmpty()) Color.Gray else MaterialTheme.colorScheme.primary
+            color = if (path.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
         )
     }
 }

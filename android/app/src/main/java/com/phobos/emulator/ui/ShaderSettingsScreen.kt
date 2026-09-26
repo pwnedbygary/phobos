@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -37,24 +36,16 @@ fun ShaderSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Shaders (Slang)") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    if (settings.shaderPath.isNotEmpty()) {
-                        IconButton(onClick = { viewModel.setShaderPath("") }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear Shader")
-                        }
-                    }
+    PhobosScaffold(
+        title = "Shaders (Slang)",
+        onBack = onBack,
+        actions = {
+            if (settings.shaderPath.isNotEmpty()) {
+                IconButton(onClick = { viewModel.setShaderPath("") }) {
+                    Icon(Icons.Default.Clear, contentDescription = "Clear Shader")
                 }
-            )
-        }
+            }
+        },
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
