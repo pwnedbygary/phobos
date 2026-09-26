@@ -57,7 +57,9 @@ CPU sync stalled Conker's pub for 91.5 s at a time — a lost CP0 timer interrup
 advanced at sync; Conker's ~25 µs timer landed behind Count), root-caused on device and
 fixed (accurate between-sync Count reads, wrap-safe timer check). Conker with Faster CPU
 sync then ran 280 s stall-free; at default settings the fix measured Mario vs Boo 58.5 /
-58.8 FPS and the smoke titles ran clean. Touch: seamless D-pad diagonals; N64 L large / Z pills both
+58.8 FPS and the smoke titles ran clean. Re-measured on the PR #9 build: still no worthwhile
+gain, so Faster CPU sync stays an opt-in
+([audit](performance-audit.md#2026-09-26-follow-up-speed-hacks-re-measured-gpu-driver-waits-after-the-handoff-fix)). Touch: seamless D-pad diagonals; N64 L large / Z pills both
 sides in landscape (right Z hidden in portrait by default). Mario vs Boo final snapshot 55.6 / 58.3 FPS mean over two runs (RP6 run-to-run
 variance); smoke OK on Mario Tennis, Mischief Makers, F-Zero X, Paper Mario, OoT, Conker.
 All RP6 runs that day had Asynchronous RDP **on** (the persisted setting); earlier notes
