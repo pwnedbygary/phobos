@@ -43,6 +43,10 @@ mailbox, so the emulation thread no longer waits for vsync (fast-forward was cap
 every system; now 90–134 FPS in Mario Tennis), plus RSP dispatch trims and the pause menu's
 duplicate Reset button removed
 ([audit](performance-audit.md#2026-09-26-follow-up-frame-handoff-no-longer-waits-for-the-display)).
+Stacked on that: branch `feature/ui-theme-2026-09` ([PR #9](https://github.com/pwnedbygary/phobos/pull/9))
+adds the theme system: 37 IDE-colorway themes in Settings → Appearance and an optional Retrowave
+effects toggle; system cards, HUD and touch controls unchanged (see the plan's UI theme row).
+PRs #4–#9 are stacked and merge in order.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
