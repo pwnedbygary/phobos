@@ -186,6 +186,13 @@ resolved after the delay slot (as required by guest semantics).
 - one edge internal: local jump for internal edge, epilogue exit otherwise;
 - no internal edge: exit through epilogue.
 
+A taken branch normally sets EndBlock and leaves after its delay slot. A branch
+back to an already emitted label (a loop) instead stays in the block: taken sets
+only DelaySlot, and after the delay slot the edge passes the same budget check as
+the fallthrough (plus a mode-key check) before jumping to the label. EndBlock then
+still means an exception or invalidation. The delay slot must not change the state
+key or timer state, and no in-block SP key change may come before the branch.
+
 Runtime cross-block chaining is limited to same-section unconditional `J`
 (not `JR`/`JAL`), with a trampoline that re-checks section dirtiness, the JIT
 budget, and interrupt/NMI/`sysadFrozen` before a tail-call. Conditional and
@@ -799,9 +806,26 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
     sljit_emit_icall(compiler, SLJIT_CALL | SLJIT_CALL_RETURN, linkArgs, reg(3).fst, reg(3).snd);
   };
 
-  auto emitInternalDispatch = [&](EmitPlannedInstruction& br, EmitPlannedInstruction& delay) {
+  auto emitInternalDispatch = [&](EmitPlannedInstruction& br, EmitPlannedInstruction& delay,
+                                  bool takenStaysInBlock) {
     cmp64(CpuClockMem, CpuJitClockTargetMem, set_uge);
     jumpEpilog(flag_uge);
+    // A taken branch sets EndBlock, so the delay slot's EndBlock check exits the
+    // block before this dispatch, unless the branch was emitted to stay in the block
+    // (takenStaysInBlock: a backward internal target). Then the taken edge arrives here
+    // too, and goes back to its label under the same budget check as the fallthrough,
+    // or to the epilogue if the delay slot called a helper or changed the SP key.
+    bool takenToEpilog = takenStaysInBlock && (emitCallfEmitted || emitStateKeyChanged);
+    if(takenStaysInBlock && !takenToEpilog) {
+      // A mode-key change inside the loop (Status, FCSR, RDRAM map) leaves through
+      // the dispatcher, which recomputes the key.
+      constexpr sljit_sw modeKeyValidOff = (sljit_sw)offsetof(CPU, recompiler)
+                                         + (sljit_sw)offsetof(Recompiler, modeKeyValid);
+      static_assert(sizeof(modeKeyValid) == 1, "JIT reads modeKeyValid as one byte");
+      mov32_u8(reg(0), mem(sreg(0), modeKeyValidOff));
+      cmp32(reg(0), imm(0), set_z);
+      jumpEpilog(flag_z);
+    }
     auto [branchTakenVaddr, branchFallthroughVaddr] =
       computeBranchTargets(emitStateKey.coprocessor1Enabled(), br.vaddr, br.instruction);
     bool tInt = false;
@@ -816,8 +840,10 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
     bool edgeLinkable = !emitCallfEmitted && !emitStateKeyChanged
       && !delay.info.branch() && !delay.info.jitStateKeyMayChange()
       && !delay.info.countCompareWrite();
-    // A taken branch sets EndBlock, so the delay slot's EndBlock check exits the
-    // block before this dispatch; only the not-taken (fallthrough) edge reaches it.
+    auto bindTaken = [&](sljit_jump* takenJ) {
+      if(takenToEpilog) sljit_set_label(takenJ, epilogue);
+      else setLabelOrDefer(takenJ, branchTakenVaddr);
+    };
     if(tInt && fInt) {
       // Both edges internal: choose taken/fallthrough from runtime pipeline PC.
       cmp64(PipelineReg(pc), imm(s64(branchTakenVaddr)), set_z);
@@ -825,7 +851,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       cmp64(PipelineReg(pc), imm(s64(branchFallthroughVaddr)), set_z);
       auto fallJ = jump(flag_z);
       jumpEpilog();
-      setLabelOrDefer(takenJ, branchTakenVaddr);
+      bindTaken(takenJ);
       setLabelOrDefer(fallJ, branchFallthroughVaddr);
       return;
     }
@@ -834,7 +860,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       cmp64(PipelineReg(pc), imm(s64(branchTakenVaddr)), set_z);
       auto takenJ = jump(flag_z);
       emitEdgeTrampoline(branchFallthroughVaddr, edgeLinkable);
-      setLabelOrDefer(takenJ, branchTakenVaddr);
+      bindTaken(takenJ);
       return;
     }
     if(fInt) {
@@ -859,6 +885,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
 
   // Phase 4: emit the planned instruction sequence.
   bool prevBranched = false;
+  bool prevTakenStaysInBlock = false;
   bool delaySlotEmittedCallf = false;
   for(size_t idx = 0; idx < plan.instructions.size(); idx++) {
     auto& ii = plan.instructions[idx];
@@ -915,10 +942,28 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       deferSlowPathCacheMiss(icacheMiss, ii.address);
     }
 
+    // A conditional branch back to an already emitted label stays in the block when
+    // taken, if its delay slot can't change the state key or timer state and no SP
+    // key change came before (the label's code assumes the current key). Not while
+    // tracing: a jump to a label skips that instruction's prologue hook.
+    bool takenStaysInBlock = false;
+    if(info.branch() && !info.unconditionalJump() && !delaySlot && !callInstructionPrologue
+    && idx + 1 < plan.instructions.size()) {
+      auto& delay = plan.instructions[idx + 1];
+      auto [takenVaddr, unused] = computeBranchTargets(emitStateKey.coprocessor1Enabled(), ii.vaddr, instruction);
+      (void)unused;
+      auto label = takenVaddr <= ii.vaddr ? findInternalLabel(takenVaddr) : nullptr;
+      takenStaysInBlock = label && *label && !emitStateKeyChanged
+        && !delay.info.branch() && !delay.info.jitStateKeyMayChange()
+        && !delay.info.countCompareWrite();
+    }
+
     auto slowPathStart = slowPaths.size();
     // Branch emitters require a ready pipeline window.
     if(info.branch()) setupPipeline();
+    emitTakenStaysInBlock = takenStaysInBlock;
     auto emitResult = emitEXECUTE(instruction, false, emitPcMode);
+    emitTakenStaysInBlock = false;
     bool branched = emitResult == EmitExecuteResult::MayBranch;
     u32 instructionCycles = 1 * 2;
     u32 jumpToSelf = 2 << 26 | u32(ii.vaddr >> 2 & 0x3ff'ffff);
@@ -964,10 +1009,11 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       && plan.instructions[idx - 1].info.branch() && !plan.instructions[idx - 1].info.unconditionalJump();
     if(prevIsConditionalBranch) {
       // Conditional branch dispatch happens after its delay slot.
-      emitInternalDispatch(plan.instructions[idx - 1], ii);
+      emitInternalDispatch(plan.instructions[idx - 1], ii, prevTakenStaysInBlock);
     }
     if(delaySlot && emitCallfEmitted) delaySlotEmittedCallf = true;
     prevBranched = branched;
+    prevTakenStaysInBlock = takenStaysInBlock;
   }
 
   if(delaySlotEmittedCallf || emitStateKeyChanged) {
