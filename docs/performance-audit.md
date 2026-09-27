@@ -790,9 +790,46 @@ Drive, YM2612 and PSG streams mixed) ran 60 s at 59.9 FPS with the ring steady, 
 ±0.06% and no underruns after startup. Pacing at the field rate without rate control left the ring
 empty, and it underran during hitches, so the two changes go together.
 
+### 2026-09-27 follow-up: RSP multiply-accumulate instructions as inline NEON
+
+Branch `feature/rsp-vu-neon-2026-09` ([PR #15](https://github.com/pwnedbygary/phobos/pull/15)),
+stacked on [PR #14](https://github.com/pwnedbygary/phobos/pull/14).
+
+**Finding.** In a whole-process profile of Mario vs Boo, the bodies of the RSP vector
+instructions took about 16% of the emulation thread's work (busy-wait spin excluded), two thirds
+of it the multiply and multiply-accumulate family (VMADH 1.28%, VMADN 1.19%, VMUDN, VMADM, VMUDM,
+VMUDL, VMADL and VMUDH together about 4.5% of all samples). The RSP JIT called a C++ helper for
+each, whose SSE code runs through sse2neon; those intrinsics map almost one to one onto NEON, so
+rewriting the helpers alone would gain little.
+
+**Change.** `ares/n64/rsp/vu-neon.hpp` generates AArch64 NEON code for those eight instructions as
+raw instruction words, and the RSP recompiler emits them inline (`sljit_emit_op_custom`, base
+register from `sljit_get_register_index`) instead of the helper call. Each sequence loads its
+operands and the accumulator from the VU struct, computes (element broadcast with `DUP`/`TRN`,
+full-width multiplies, the 48-bit accumulator carry from an unsigned compare, `SQXTN` or a select
+for the clamp) and stores the results, using only v16–v29. Other architectures and the remaining
+vector instructions keep the helpers.
+
+**Verification.** `tests/rsp-vu-neon` runs the generated words from an executable buffer on an
+AArch64 host and compares the whole VU state with ares' SSE code (through sse2neon) and its scalar
+reference: about 95 million checks over four seeds (every instruction, all 16 element selectors,
+eight register choices including aliasing and both ends of the register file, operands biased to
+carry and saturation boundaries), with no mismatch. Planting a wrong carry or a wrong broadcast
+lane in a copy of the generator produced 75,409 and 152,699 mismatches, and the 40 encodings match
+the assembler. On the RP6 (determinism probe, Async RDP forced off after the Mario vs Boo state
+load), CP0 Count and PC matched the previous build at 120, 300, 600 and 1,200 frames in two runs
+each, and RDRAM matched at frame 300. The other RDRAM hashes differ between runs of the same build,
+because the probe hashes while the GPU can still be writing the frame.
+
+**Measured** (RP6, Standard mode, busy-wait on, Mario vs Boo, 88 s per run, builds alternated): per
+frame emulation work 7.728 and 7.836 ms for PR #14 against 7.549 and 7.555 ms, 3.0% less. The
+remaining cost is mostly each sequence's loads and stores of the accumulator.
+
 ### Next (not implemented)
 
-- RSP vector-instruction overhead: the VU ops are C++ helpers called from the RSP JIT.
+- RSP vector instructions: keep the accumulator in NEON registers across consecutive multiply-
+  accumulate instructions, and emit the other frequent ones (VMULF, VMACF, VADD, VSUB, VMOV, VGE,
+  VLT, VMRG) inline; the rest are still C++ helpers called from the RSP JIT.
 - Taken branches to other blocks, `JAL` and `JR` still return to the dispatcher (about 0.11,
   0.11 and 0.12 million a second in Mario vs Boo).
 - The UI theme system ([PR #9](https://github.com/pwnedbygary/phobos/pull/9)) and the

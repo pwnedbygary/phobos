@@ -3,6 +3,8 @@ namespace ares {
 auto n64DebugLoggingEnabled() -> bool;
 }
 
+#include "vu-neon.hpp"
+
 namespace ares::Nintendo64 {
 
 RSP rsp;

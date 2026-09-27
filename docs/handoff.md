@@ -73,7 +73,12 @@ paces the N64 at the field rate its VI registers produce (59.826 Hz for progress
 than a fixed 59.94) and adds dynamic audio rate control for all systems, so the audio ring no
 longer fills until it drops samples
 ([audit](performance-audit.md#2026-09-27-follow-up-n64-paced-at-the-vis-field-rate-dynamic-audio-rate-control)).
-PRs #4–#14 are stacked and merge in order.
+Stacked on that: branch `feature/rsp-vu-neon-2026-09` ([PR #15](https://github.com/pwnedbygary/phobos/pull/15))
+emits the RSP multiply and multiply-accumulate instructions as inline NEON from the RSP JIT
+(`ares/n64/rsp/vu-neon.hpp`), checked bit for bit against the SSE and scalar implementations by
+`tests/rsp-vu-neon/run-tests.sh` on an AArch64 host; 3.0% less per-frame work in Mario vs Boo
+([audit](performance-audit.md#2026-09-27-follow-up-rsp-multiply-accumulate-instructions-as-inline-neon)).
+PRs #4–#15 are stacked and merge in order.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

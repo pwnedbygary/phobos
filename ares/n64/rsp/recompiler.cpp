@@ -552,6 +552,13 @@ auto RSP::Recompiler::emit(u12 address, bool callInstructionPrologue) -> Block* 
   case 0xf: callf(name<0xf>, __VA_ARGS__); break; \
   }
 
+//multiply and multiply-accumulate instructions run as inline NEON on arm64 (vu-neon.hpp)
+#if defined(ARCHITECTURE_ARM64)
+#define callvuNeon(name) emitVuNeon(RspVuNeon::Op::name, E, Vdn, Vsn, Vtn)
+#else
+#define callvuNeon(name) callvu(&RSP::name, mem(Vd), mem(Vs), mem(Vt))
+#endif
+
 auto RSP::Recompiler::emitEXECUTE(u32 instruction, u32 pc, bool delaySlot, bool emitSlowPath, u32 slowPathClocks) -> void {
   auto memReg2 = [&](const op_base& base, const op_base& index) -> op_base {
     return {SLJIT_MEM2(base.fst, index.fst), 0};
@@ -1319,6 +1326,15 @@ auto RSP::Recompiler::emitSCC(u32 instruction) -> void {
 }
 
 auto RSP::Recompiler::emitVU(u32 instruction) -> void {
+  #if defined(ARCHITECTURE_ARM64)
+  auto emitVuNeon = [&](RspVuNeon::Op op, u32 e, u32 vd, u32 vs, u32 vt) -> void {
+    static const RspVuNeon::Layout layout{offsetof(VU, r), offsetof(VU, acch), offsetof(VU, accm), offsetof(VU, accl)};
+    std::vector<uint32_t> words;
+    RspVuNeon::emit(words, op, e, vd, vs, vt, sljit_get_register_index(SLJIT_GP_REGISTER, sreg(2).fst), layout);
+    for(auto word : words) sljit_emit_op_custom(compiler, &word, sizeof(word));
+  };
+  #endif
+
   #define E (instruction >> 7 & 15)
   switch(instruction >> 21 & 0x1f) {
 
@@ -1399,25 +1415,25 @@ auto RSP::Recompiler::emitVU(u32 instruction) -> void {
 
   //VMUDL Vd,Vs,Vt(e)
   case 0x04: {
-    callvu(&RSP::VMUDL, mem(Vd), mem(Vs), mem(Vt));
+    callvuNeon(VMUDL);
     return;
   }
 
   //VMUDM Vd,Vs,Vt(e)
   case 0x05: {
-    callvu(&RSP::VMUDM, mem(Vd), mem(Vs), mem(Vt));
+    callvuNeon(VMUDM);
     return;
   }
 
   //VMUDN Vd,Vs,Vt(e)
   case 0x06: {
-    callvu(&RSP::VMUDN, mem(Vd), mem(Vs), mem(Vt));
+    callvuNeon(VMUDN);
     return;
   }
 
   //VMUDH Vd,Vs,Vt(e)
   case 0x07: {
-    callvu(&RSP::VMUDH, mem(Vd), mem(Vs), mem(Vt));
+    callvuNeon(VMUDH);
     return;
   }
 
@@ -1447,25 +1463,25 @@ auto RSP::Recompiler::emitVU(u32 instruction) -> void {
 
   //VMADL Vd,Vs,Vt(e)
   case 0x0c: {
-    callvu(&RSP::VMADL, mem(Vd), mem(Vs), mem(Vt));
+    callvuNeon(VMADL);
     return;
   }
 
   //VMADM Vd,Vs,Vt(e)
   case 0x0d: {
-    callvu(&RSP::VMADM, mem(Vd), mem(Vs), mem(Vt));
+    callvuNeon(VMADM);
     return;
   }
 
   //VMADN Vd,Vs,Vt(e)
   case 0x0e: {
-    callvu(&RSP::VMADN, mem(Vd), mem(Vs), mem(Vt));
+    callvuNeon(VMADN);
     return;
   }
 
   //VMADH Vd,Vs,Vt(e)
   case 0x0f: {
-    callvu(&RSP::VMADH, mem(Vd), mem(Vs), mem(Vt));
+    callvuNeon(VMADH);
     return;
   }
 
