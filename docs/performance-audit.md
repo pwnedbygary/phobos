@@ -755,6 +755,41 @@ The profiled runs' largest dips (down to 44–48 FPS) began within a second of t
 stopping, while simpleperf finalized and the file was copied off the device, and runs without
 the profiler had none, so they are left out.
 
+### 2026-09-27 follow-up: N64 paced at the VI's field rate; dynamic audio rate control
+
+Branch `feature/n64-vi-field-rate-2026-09` ([PR #14](https://github.com/pwnedbygary/phobos/pull/14)),
+stacked on [PR #13](https://github.com/pwnedbygary/phobos/pull/13).
+
+**Finding.** The frontend paces emulation at the refresh rate the core hints. The N64 VI hinted a
+fixed 59.94 Hz (50 Hz PAL), but ares times each field from the game's VI registers: 263 lines of
+63.56 µs in the progressive modes most games use (16.715 ms, 59.826 Hz), and 262.5 lines
+(59.94 Hz) only in interlaced modes. Progressive games therefore ran 0.19% fast and produced audio
+0.19% faster than the DAC played it: in Mario vs Boo the output ring filled at +0.5 to +1.3% of its
+size per second until it overwrote its oldest samples, with up to a quarter second of audio
+latency by then.
+
+**Change.**
+- The VI hints the average field rate its registers produce whenever that changes (lines per
+  field times line length, with the leap pattern and the VI overclock), so pacing follows the
+  game's video mode. A progressive game's FPS counter now reads 59.8.
+- With the rates matched, nothing kept a cushion in the ring, and a late frame emptied it. Dynamic
+  rate control now trims every audio stream's resampling rate by up to ±0.5% (inaudible), once per
+  frame, toward a quarter-full ring. ares' `Stream::setResamplerTrim` changes the cubic
+  resampler's ratio without resetting it. This applies to every system.
+- The per-second stats line shows the pacing target, and AudioDiag the current trim.
+
+**Measured** (RP6, Standard mode, busy-wait on, Async RDP on, Mario vs Boo, 180 s each):
+
+| Build | Pacing target | Ring drift | Seconds with the ring at 95% or more | Underruns after 20 s |
+|---|---|---|---|---|
+| PR #13 | 59.94 Hz | +0.79%/s | 16 | 4 |
+| This change | 59.826 Hz | +0.06%/s | 0 | 0 |
+
+The trim settled within ±0.05% (up to +0.2% while refilling after a hitch). Sub-Terrania (Mega
+Drive, YM2612 and PSG streams mixed) ran 60 s at 59.9 FPS with the ring steady, trims within
+±0.06% and no underruns after startup. Pacing at the field rate without rate control left the ring
+empty, and it underran during hitches, so the two changes go together.
+
 ### Next (not implemented)
 
 - RSP vector-instruction overhead: the VU ops are C++ helpers called from the RSP JIT.

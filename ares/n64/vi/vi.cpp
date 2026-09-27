@@ -50,10 +50,8 @@ auto VI::load(Node::Object parent) -> void {
   screen->setRefresh(std::bind_front(&VI::refresh, this));
   // VI Overclock: scale the host refresh hint so the emulation loop paces at
   // the overclocked frame rate (e.g. 120Hz at 2x), not the native 50/60Hz.
-  // Accurate base rates: NTSC N64 runs at 59.94 Hz (525-line VI_V_SYNC_NTSC,
-  // color-carrier locked — NOT exactly 60), PAL at 50.0 Hz. Using 60 instead of
-  // 59.94 drifts the host pacing 0.1% slow vs the core → periodic dropped/
-  // duplicated frames + slow audio pitch drift on long sessions.
+  // 59.94 Hz (NTSC interlaced) and 50 Hz are starting values; once the game
+  // programs the VI, main() hints the field rate its registers produce.
   s32 oc = overclockPercent.load();
   if (oc <= 0) oc = 100;
   screen->refreshRateHint((Region::PAL() ? 50.0 : 59.94) * oc / 100);
@@ -120,6 +118,12 @@ auto VI::main() -> void {
         // The Conker freeze in that commit was the coincidence change (kept).
         io.field += !io.halfLinesPerField.bit(0);
         if(++io.leapCounter == 5) io.leapCounter = 0;
+        // The host paces frames at the hinted rate, so it must follow the registers:
+        // NTSC progressive fields run at 59.83 Hz, interlaced ones at 59.94 Hz.
+        if(f64 rate = fieldRate(); rate != hintedFieldRate) {
+          hintedFieldRate = rate;
+          screen->refreshRateHint(rate);
+        }
       }
 
       if(io.vcounter == io.vstart >> 1) {
@@ -194,6 +198,20 @@ auto VI::main() -> void {
       step(0x800);
     }
   }
+}
+
+// Average field rate of the current timing registers, counted as main() steps them: a field is
+// (halfLinesPerField + 1) / 2 lines (263 progressive, 262.5 on average interlaced), each
+// quarterLineDuration + 1 VI clocks except line 1, which takes the leap pattern's value.
+auto VI::fieldRate() const -> f64 {
+  s32 oc = overclockPercent.load();
+  if(oc <= 0) oc = 100;
+  auto scaled = [&](u32 clocks) -> u32 { return oc == 100 ? clocks : clocks * 100 / oc; };
+  f64 leap = 0;
+  for(u32 n = 0; n < 5; n++) leap += scaled(io.hsyncLeap[io.leapPattern.bit(n)]);
+  f64 lines = (io.halfLinesPerField + 1) / 2.0;
+  f64 clocks = (lines - 1) * scaled(io.quarterLineDuration + 1) + leap / 5;
+  return clocks > 0 ? system.videoFrequency() / clocks : 0;
 }
 
 auto VI::refresh() -> void {
@@ -426,11 +444,12 @@ auto VI::power(bool reset) -> void {
   clockFraction = 0;
 
   // VI Overclock: refresh the host pacing hint on (re)boot so a changed
-  // overclock takes effect at the next reset/load. NTSC = 59.94 (not 60) —
-  // matches the VI's real frame rate (see VI::load).
+  // overclock takes effect at the next reset/load. Starting value until main()
+  // hints the rate of the game's VI mode (see VI::load).
   s32 oc = overclockPercent.load();
   if (oc <= 0) oc = 100;
   screen->refreshRateHint((Region::PAL() ? 50.0 : 59.94) * oc / 100);
+  hintedFieldRate = 0;
 
   #if defined(VULKAN)
   gpuOutputValid = false;

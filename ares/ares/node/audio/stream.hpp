@@ -11,6 +11,7 @@ struct Stream : Audio {
   auto setChannels(u32 channels) -> void;
   auto setFrequency(f64 frequency) -> void;
   auto setResamplerFrequency(f64 resamplerFrequency) -> void;
+  auto setResamplerTrim(f64 trim) -> void;
   auto setMuted(bool muted) -> void;
 
   auto resetFilters() -> void;
@@ -46,5 +47,6 @@ protected:
   std::vector<Channel> _channels;
   f64 _frequency = 48000.0;
   f64 _resamplerFrequency = 48000.0;
+  f64 _resamplerTrim = 1.0;
   bool _muted = false;
 };

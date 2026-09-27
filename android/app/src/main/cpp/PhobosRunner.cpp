@@ -151,6 +151,8 @@ namespace ares {
   static std::vector<f32> audioRing;        // fixed capacity, used as a ring
   static size_t audioRingHead = 0;          // oldest sample index
   static size_t audioRingSize = 0;          // samples currently buffered
+  static std::atomic<size_t> audioRingFill{0};  // audioRingSize, readable without audioMutex
+  static std::atomic<f64> audioRateTrim{1.0};   // last dynamic rate control trim, for AudioDiag
   static std::thread audioThread;
   static std::atomic<bool> audioThreadRunning{false};
   static std::atomic<bool> audioThreadStop{false};
@@ -198,6 +200,7 @@ namespace ares {
         memcpy(chunk.data() + first, audioRing.data(), (take - first) * sizeof(f32));
         audioRingHead = (audioRingHead + take) % audioRingCapacity;
         audioRingSize -= take;
+        audioRingFill.store(audioRingSize, std::memory_order_relaxed);
         // Wake the emulation thread's audio-pacing wait so it can resume
         // running frames as soon as the DAC has drained enough.
         audioCV.notify_one();
@@ -235,10 +238,11 @@ namespace ares {
         }
         s64 newXruns = xruns - lastXruns;
         lastXruns = xruns;
-        LOGI("AudioDiag: ring=%zu/%zu (%.0f%%) xruns+%lld (total %lld)",
+        LOGI("AudioDiag: ring=%zu/%zu (%.0f%%) xruns+%lld (total %lld) trim=%+.3f%%",
              audioRingSize, (size_t)audioRingCapacity,
              (f64)audioRingSize * 100.0 / (f64)audioRingCapacity,
-             (long long)newXruns, (long long)xruns);
+             (long long)newXruns, (long long)xruns,
+             (audioRateTrim.load(std::memory_order_relaxed) - 1.0) * 100.0);
       }
     }
   }
@@ -668,6 +672,10 @@ namespace ares {
     u64 streamsVersion = 0;
     std::vector<Node::Audio::Stream> streams;
     std::vector<f32> pending;
+    // Dynamic rate control (updateAudioRateControl).
+    f64 smoothedFill = 0.0;
+    f64 appliedTrim = 1.0;
+    u64 trimmedVersion = 0;
   };
   static constexpr size_t audioPushSamples = 256 * 2;  // 256 stereo frames, ~5 ms
   static auto audioThreadState() -> AudioThreadState& {
@@ -698,15 +706,36 @@ namespace ares {
       memcpy(audioRing.data() + tail, source, first * sizeof(f32));
       memcpy(audioRing.data(), source + first, (count - first) * sizeof(f32));
       audioRingSize += count;
+      audioRingFill.store(audioRingSize, std::memory_order_relaxed);
     }
     // The audio thread only waits while the ring is empty.
     if (wasEmpty) audioCV.notify_one();
     samples.clear();
   }
 
+  // Dynamic rate control. Emulated audio and the DAC run on different clocks that frame pacing
+  // can't match exactly, so the ring would slowly fill (then drop samples) or run dry (then
+  // underrun). Once per frame, every stream's resampling rate is trimmed by up to ±0.5%, too
+  // little to hear, toward a quarter-full ring, which also leaves a cushion for late frames.
+  static constexpr f64 audioRateControlRange = 0.005;
+  static constexpr f64 audioRingTargetFill = 0.25;
+  static auto updateAudioRateControl(AudioThreadState& state) -> void {
+    f64 fill = (f64)audioRingFill.load(std::memory_order_relaxed) / (f64)audioRingCapacity;
+    state.smoothedFill += (fill - state.smoothedFill) * 0.05;
+    f64 error = std::clamp((audioRingTargetFill - state.smoothedFill) / audioRingTargetFill, -1.0, 1.0);
+    f64 trim = 1.0 + audioRateControlRange * error;
+    if (std::abs(trim - state.appliedTrim) < 0.0001 && state.trimmedVersion == state.streamsVersion) return;
+    for (auto& stream : state.streams) stream->setResamplerTrim(trim);
+    state.appliedTrim = trim;
+    state.trimmedVersion = state.streamsVersion;
+    audioRateTrim.store(trim, std::memory_order_relaxed);
+  }
+
   static auto flushAudio() -> void {
     if (pthread_self() != currentEmuThread.load()) return;
-    pushAudio(audioThreadState().pending);
+    auto& state = audioThreadState();
+    pushAudio(state.pending);
+    updateAudioRateControl(state);
   }
 
   static bool fastBootAtomic = false;
@@ -1005,17 +1034,17 @@ namespace ares {
             #if defined(CORE_N64)
             if (root && root->name() == "Nintendo 64") {
               auto& rc = ::ares::Nintendo64::cpu.recompiler;
-              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms LongestFrame=%.1fms Over20ms=%u linkTaken=%llu cand=%llu miss=%llu budget=%llu irq=%llu dirty=%llu",
+              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms LongestFrame=%.1fms Over20ms=%u Target=%.3f linkTaken=%llu cand=%llu miss=%llu budget=%llu irq=%llu dirty=%llu",
                 (f64)currentFps, (f64)avgFrameTime / 1000.0,
-                (f64)longestFrameIntervalUs / 1000.0, slowFrames,
+                (f64)longestFrameIntervalUs / 1000.0, slowFrames, refreshRate,
                 (unsigned long long)rc.linkTaken, (unsigned long long)rc.linkCandidates,
                 (unsigned long long)rc.linkAbortNoTarget, (unsigned long long)rc.linkAbortBudget,
                 (unsigned long long)rc.linkAbortIrq, (unsigned long long)rc.linkAbortDirty);
             } else
             #endif
             {
-              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms LongestFrame=%.1fms Over20ms=%u",
-                (f64)currentFps, (f64)avgFrameTime / 1000.0, (f64)longestFrameIntervalUs / 1000.0, slowFrames);
+              LOGI("Emulation Stats: FPS=%.1f, AvgFrameTime=%.2fms LongestFrame=%.1fms Over20ms=%u Target=%.3f",
+                (f64)currentFps, (f64)avgFrameTime / 1000.0, (f64)longestFrameIntervalUs / 1000.0, slowFrames, refreshRate);
             }
             frameCount = 0;
             slowFrames = 0;
@@ -2143,6 +2172,7 @@ namespace ares {
       // Clear the ring so stale samples don't pop on the next load.
       audioRingHead = 0;
       audioRingSize = 0;
+      audioRingFill.store(0, std::memory_order_relaxed);
     }
 
     // Tell the emulation thread to stop and wait for it to release runMutex.

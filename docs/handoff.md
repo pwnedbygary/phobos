@@ -68,7 +68,12 @@ keeps the RP6's emulation thread on CPU 7 at full clock
 On Turnip, Granite now uses binary fences instead of timeline semaphores, so GPU submits no
 longer wait behind the driver's fence waits (Mario vs Boo's rally dips: worst second ~52 → 60 FPS;
 [audit](performance-audit.md#2026-09-27-follow-up-gpu-submits-on-turnip-no-longer-wait-for-the-gpu)).
-PRs #4–#13 are stacked and merge in order.
+Stacked on that: branch `feature/n64-vi-field-rate-2026-09` ([PR #14](https://github.com/pwnedbygary/phobos/pull/14))
+paces the N64 at the field rate its VI registers produce (59.826 Hz for progressive modes rather
+than a fixed 59.94) and adds dynamic audio rate control for all systems, so the audio ring no
+longer fills until it drops samples
+([audit](performance-audit.md#2026-09-27-follow-up-n64-paced-at-the-vis-field-rate-dynamic-audio-rate-control)).
+PRs #4–#14 are stacked and merge in order.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

@@ -13,7 +13,7 @@ auto Stream::setResamplerFrequency(f64 resamplerFrequency) -> void {
 
   for(auto& channel : _channels) {
     channel.nyquist.clear();
-    channel.resampler.reset(_frequency, _resamplerFrequency);
+    channel.resampler.reset(_frequency / _resamplerTrim, _resamplerFrequency);
   }
 
   if(_frequency >= _resamplerFrequency * 2) {
@@ -39,6 +39,13 @@ auto Stream::setResamplerFrequency(f64 resamplerFrequency) -> void {
       }
     }
   }
+}
+
+//scales the output rate by `trim` without resetting the resamplers, for small continuous
+//corrections (dynamic rate control); kept across setFrequency() and setResamplerFrequency()
+auto Stream::setResamplerTrim(f64 trim) -> void {
+  _resamplerTrim = trim;
+  for(auto& channel : _channels) channel.resampler.setInputFrequency(_frequency / trim);
 }
 
 auto Stream::setMuted(bool muted) -> void {

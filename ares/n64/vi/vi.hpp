@@ -23,6 +23,7 @@ struct VI : Thread, Memory::RCP<VI> {
   auto refresh() -> void;
   auto power(bool reset) -> void;
   auto active() -> bool { return io.colorDepth != 0; }
+  auto fieldRate() const -> f64;
 
   //io.cpp
   auto readWord(u32 address, Thread& thread) -> u32;
@@ -77,6 +78,7 @@ struct VI : Thread, Memory::RCP<VI> {
 
 //unserialized:
   bool refreshed;
+  f64 hintedFieldRate = 0;  //last rate passed to refreshRateHint() by main()
 
   //VI Overclock (Mupen64Plus-FZ style): 100 = native 50/60Hz. >100 makes the
   // VI generate frames faster so the game's frame logic (VI-interrupt driven)
