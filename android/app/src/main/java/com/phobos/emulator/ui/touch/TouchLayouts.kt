@@ -215,7 +215,8 @@ object TouchLayouts {
             Placement(BOTTOM_RIGHT, -108f, -86f), Placement(BOTTOM_RIGHT, -104f, -104f),
             listOf(
                 TouchButton("A", Input.A, dx = 34f, dy = 14f, w = 66f, accent = TouchPalette.N64_A),
-                TouchButton("B", Input.B, dx = -40f, dy = -28f, w = 56f, accent = TouchPalette.N64_B),
+                // The core reads N64 B from the X bit (PhobosRunner resolveButtonBit).
+                TouchButton("B", Input.X, dx = -40f, dy = -28f, w = 56f, accent = TouchPalette.N64_B),
             ),
             multiHit = true,
         ),

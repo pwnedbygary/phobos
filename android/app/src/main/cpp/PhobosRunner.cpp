@@ -603,6 +603,10 @@ namespace ares {
       // Special System Overrides
       if (systemName == "Nintendo 64") {
           if (nodeName == "Z") b = VirtualGamepad::L2;
+          // N64 B sits up and to the left of A. BUTTON_X holds that spot relative to BUTTON_A in
+          // both common layouts: the left face button when A is at the bottom (Xbox codes) and
+          // the top one when A is on the right (Nintendo codes).
+          else if (nodeName == "B") b = VirtualGamepad::X;
           else if (nodeName == "C-Up")    b = VirtualGamepad::RS_Up;
           else if (nodeName == "C-Down")  b = VirtualGamepad::RS_Down;
           else if (nodeName == "C-Left")  b = VirtualGamepad::RS_Left;

@@ -51,7 +51,11 @@ keeps loops inside the CPU JIT block: a taken branch back into the same block no
 to the dispatcher (10.1 → 0.6 million round trips a second in Mario vs Boo; fast-forward
 89.2 → 95.4 FPS), with CP0 Count and PC identical to the previous build after a state load
 ([audit](performance-audit.md#2026-09-26-follow-up-loops-stay-in-the-jit-block)).
-PRs #4–#10 are stacked and merge in order.
+Stacked on that: branch `feature/n64-b-on-y-card-glow-2026-09` ([PR #11](https://github.com/pwnedbygary/phobos/pull/11))
+moves N64 B to the face button up and to the left of A (Android `BUTTON_X`: the physical Y button
+on the RP6 in its Xbox layout mode), so the pad matches an N64 controller, with the on-screen B
+following; and the library's console tiles get the Retrowave neon edge.
+PRs #4–#11 are stacked and merge in order.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
