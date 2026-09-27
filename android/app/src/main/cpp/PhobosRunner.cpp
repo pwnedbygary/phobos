@@ -737,6 +737,21 @@ namespace ares {
   static std::atomic<bool> n64RspTaskMode{false};
   // Keep the emulation thread on the fastest CPU cores (Settings > Emulation, default on).
   static std::atomic<bool> pinFastestCore{true};
+  // Busy-wait for the next N64 frame instead of sleeping (Settings > Emulation, default off).
+  static std::atomic<bool> busyWaitPacing{false};
+
+  // A thread that sleeps part of every frame reads to Android as a medium load: the fastest
+  // core gets paused or clocked down, and heavy frames then overrun until it reacts. Spinning
+  // keeps the core as busy as fast-forward does, at a battery and heat cost, so it is only
+  // used for N64, whose frames take a large share of the frame period.
+  static auto waitUntil(std::chrono::steady_clock::time_point deadline, bool spin) -> void {
+    if (!spin) return std::this_thread::sleep_until(deadline);
+    while (std::chrono::steady_clock::now() < deadline) {
+      #if defined(__aarch64__)
+      asm volatile("yield" ::: "memory");
+      #endif
+    }
+  }
 
   // The CPUs with the highest capacity (the prime core or big cluster), from cpu_capacity
   // or, on kernels without it, cpuinfo_max_freq. Empty when neither is readable for every CPU.
@@ -934,6 +949,8 @@ namespace ares {
         // refresh rate (60/75/50 Hz) instead of a hardcoded 60 FPS, so
         // WonderSwan (~75 Hz) and PAL cores are no longer throttled.
         double refreshRate = refreshRateAtomic.load();
+        bool spinWait = busyWaitPacing.load(std::memory_order_relaxed) && localRoot
+          && localRoot->name() == "Nintendo 64";
 
         if (fastForwardAtomic) {
             f64 speed = (f64)ffSpeedLimitAtomic;
@@ -941,7 +958,7 @@ namespace ares {
                 f64 targetFrameTime = (1000000.0 / refreshRate) / speed;
                 auto actualFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
                 if (actualFrameTime < targetFrameTime) {
-                    std::this_thread::sleep_for(std::chrono::microseconds((s64)(targetFrameTime - (f64)actualFrameTime)));
+                    waitUntil(end + std::chrono::microseconds((s64)(targetFrameTime - (f64)actualFrameTime)), spinWait);
                 }
             }
         }
@@ -966,7 +983,7 @@ namespace ares {
           double frameTarget = 1000000.0 / refreshRate;
           auto period = std::chrono::microseconds((s64)frameTarget);
           frameDeadline += period;
-          std::this_thread::sleep_until(frameDeadline);
+          waitUntil(frameDeadline, spinWait);
           // Snap the deadline forward only if we're behind by a FULL frame
           // or more (a genuinely heavy frame / hitch). Small sleep overshoot
           // (waking slightly after the deadline — normal on Android) must
@@ -3319,6 +3336,10 @@ else if (port->type() == "Keyboard") {
   auto setPinFastestCore(bool enabled) -> void {
     pinFastestCore = enabled;
     LOGI("Emulation thread %s", enabled ? "pinned to the fastest CPU cores" : "placed by the scheduler");
+  }
+  auto setBusyWaitPacing(bool enabled) -> void {
+    busyWaitPacing = enabled;
+    LOGI("N64 frame pacing %s between frames", enabled ? "busy-waits" : "sleeps");
   }
   auto setN64ExpansionPak(bool enabled) -> void {
     if (n64ExpansionPak == enabled) return;

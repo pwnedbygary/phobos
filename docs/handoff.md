@@ -60,7 +60,12 @@ adds an exact idle-loop skip that runs only while fast-forwarding (uncapped fast
 103 → ~111 FPS; timing identical over 1,200 frames). At normal speed it stays off because the
 RP6's power management answered the lighter load with a slower core or clock
 ([audit](performance-audit.md#2026-09-27-follow-up-exact-idle-loop-skip-while-fast-forwarding-the-fast-core-cant-be-forced)).
-PRs #4–#12 are stacked and merge in order.
+Stacked on that: branch `feature/busy-wait-pacing-2026-09` ([PR #13](https://github.com/pwnedbygary/phobos/pull/13))
+makes the debug load intent reliably open the game screen, and adds an opt-in Settings →
+Emulation → Keep the fast core busy (N64) that spins between frames instead of sleeping, which
+keeps the RP6's emulation thread on CPU 7 at full clock
+([audit](performance-audit.md#2026-09-27-follow-up-optional-busy-wait-between-n64-frames)).
+PRs #4–#13 are stacked and merge in order.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

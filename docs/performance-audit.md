@@ -686,6 +686,36 @@ frame, 0–4 intervals over 20 ms, CPU 7 at 1.84–2.48 GHz. Conker's intro miss
 intervals over 20 ms, longest 43 ms) because heavy frames overrun at those clocks; in High
 Performance mode it had 2–8.
 
+### 2026-09-27 follow-up: optional busy-wait between N64 frames
+
+Branch `feature/busy-wait-pacing-2026-09` ([PR #13](https://github.com/pwnedbygary/phobos/pull/13)),
+stacked on [PR #12](https://github.com/pwnedbygary/phobos/pull/12).
+
+**Finding.** Mario Tennis runs at 100–120 FPS in fast-forward on the RP6 but still drops frames
+at 60 FPS. Fast-forward keeps the emulation thread saturated, so core control keeps CPU 7 online at
+3.19 GHz. At 60 FPS the thread sleeps part of every frame: in High Performance mode core control
+paused CPU 7, the per-frame pin failed, and the thread ran on the mid cores at 2.8 GHz, where heavy
+frames overran.
+
+**Change.** Settings → Emulation → Keep the fast core busy (N64), off by default. In N64 games the
+frame limiter spins until the next deadline (with the AArch64 `yield` hint) instead of sleeping,
+including the fast-forward speed limit, so the thread looks as busy as in fast-forward. That costs
+battery and heat: the performance overlay read 75 °C on CPU 7 after a few minutes. Other systems
+keep sleeping, since their frames take a small share of the frame period.
+
+**Measured** (Mario vs Boo save state, 30 s, High Performance mode, Async RDP on, Turnip
+v26.3.0-R5). Scripted runs start the game with the debug load intent, which before this branch
+could leave the game running behind the Library screen, where the state-load hotkey does
+nothing; runs without a `Load state … success` log line are excluded.
+
+| Pacing | Intervals over 20 ms | Time per frame | Worst second | Emulation thread |
+|---|---|---|---|---|
+| Sleep (default) | 46, 51, 56 | 11.3–11.4 ms | 50.8–52.0 FPS | Mid cores at 2.8 GHz, CPU 7 paused |
+| Busy-wait | 37, 36 | 9.9 ms | 51.7–52.5 FPS | CPU 7 at 3.19 GHz |
+
+The worst seconds didn't move. They come from stalls in the GPU driver at fixed moments of a
+rally, handled in the next follow-up.
+
 ### Next (not implemented)
 
 - RSP vector-instruction overhead: the VU ops are C++ helpers called from the RSP JIT.

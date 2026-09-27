@@ -166,6 +166,10 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
         settingsStore.setPinFastestCore(enabled)
         PhobosCore.setPinFastestCore(enabled)
     }
+    fun setBusyWaitPacing(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setBusyWaitPacing(enabled)
+        PhobosCore.setBusyWaitPacing(enabled)
+    }
     fun setN64RspTaskMode(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
         settingsStore.setN64RspTaskMode(enabled)
         PhobosCore.setN64RspTaskMode(enabled)
@@ -1818,6 +1822,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
             PhobosCore.setN64SkipCaches(currentSettings.n64SkipCaches)
             PhobosCore.setN64RspTaskMode(currentSettings.n64RspTaskMode)
             PhobosCore.setPinFastestCore(currentSettings.pinFastestCore)
+            PhobosCore.setBusyWaitPacing(currentSettings.busyWaitPacing)
             PhobosCore.setN64Pak(currentSettings.n64Pak)
             // Push the persisted N64 debug-logging toggle on EVERY load so native
             // matches DataStore at emulation start. The init block pushes the

@@ -336,6 +336,11 @@ Java_com_phobos_emulator_PhobosCore_setPinFastestCore(JNIEnv* env, jobject, jboo
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setBusyWaitPacing(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setBusyWaitPacing(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64Pak(JNIEnv* env, jobject, jstring pakName) {
     const char* nativePakName = env->GetStringUTFChars(pakName, 0);
     ares::setN64Pak(nativePakName);
