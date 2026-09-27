@@ -1678,6 +1678,12 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 		ext.supports_driver_properties = true;
 	}
 
+	// On Turnip (KGSL), a submit that signals a timeline semaphore waits on a driver lock until
+	// another thread's wait on it returns, so every submit stalls until the GPU catches up.
+	// Binary fences and semaphores don't.
+	if (ext.driver_id == VK_DRIVER_ID_MESA_TURNIP)
+		ext.vk12_features.timelineSemaphore = VK_FALSE;
+
 	if (ext.device_api_core_version < VK_API_VERSION_1_3)
 	{
 		ext.vk13_props.minSubgroupSize = size_control_props.minSubgroupSize;

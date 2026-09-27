@@ -65,6 +65,9 @@ makes the debug load intent reliably open the game screen, and adds an opt-in Se
 Emulation → Keep the fast core busy (N64) that spins between frames instead of sleeping, which
 keeps the RP6's emulation thread on CPU 7 at full clock
 ([audit](performance-audit.md#2026-09-27-follow-up-optional-busy-wait-between-n64-frames)).
+On Turnip, Granite now uses binary fences instead of timeline semaphores, so GPU submits no
+longer wait behind the driver's fence waits (Mario vs Boo's rally dips: worst second ~52 → 60 FPS;
+[audit](performance-audit.md#2026-09-27-follow-up-gpu-submits-on-turnip-no-longer-wait-for-the-gpu)).
 PRs #4–#13 are stacked and merge in order.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.

@@ -716,6 +716,45 @@ nothing; runs without a `Load state … success` log line are excluded.
 The worst seconds didn't move. They come from stalls in the GPU driver at fixed moments of a
 rally, handled in the next follow-up.
 
+### 2026-09-27 follow-up: GPU submits on Turnip no longer wait for the GPU
+
+Same branch ([PR #13](https://github.com/pwnedbygary/phobos/pull/13)).
+
+**Finding.** With the emulation thread on CPU 7, Mario vs Boo still dropped to 52–57 FPS for a
+second or two at the same moments of a rally, about 25–30 and 35–40 s after the state load (31–33
+and 9 intervals over 20 ms). Whole-process profiles with the game on screen (simpleperf, on- and
+off-CPU, frame-pointer call chains) show the emulation thread waiting for parallel-RDP's command
+ring at those moments (20–21% of the time for ring space, 11% for the drain), and the RDP worker
+blocked on a mutex inside Turnip's `vkQueueSubmit` 13–27% of the time, against about 1% otherwise.
+99–100% of those waits ended within 0.1 ms of parallel-RDP's fence thread returning from a kernel
+wait for the GPU inside the driver; at random, 33–48% would have ended within 1 ms. It isn't GPU
+capacity: 14–24% busy normally and up to 45% at those moments, at 615 MHz. The pipeline compile
+thread's activity didn't line up with the stalls.
+
+Granite waits on its fences through timeline semaphores when the driver has them, and Turnip on
+KGSL emulates timeline semaphores. There, a submit that signals the semaphore waited until the
+fence thread's wait for the GPU returned. Polling instead (`vkGetSemaphoreCounterValue` with
+short sleeps) didn't help: the query itself blocked in the kernel the same way, and the dips
+stayed.
+
+**Change.** Granite doesn't enable timeline semaphores on Turnip and uses the binary fences and
+semaphores it already uses on drivers without them.
+
+**Measured** (Mario vs Boo, High Performance mode, busy-wait on, Async RDP on, Turnip v26.3.0-R5;
+one stats trace and one profiled run per build; intervals over 20 ms in each moment's worst two
+seconds):
+
+| Build | Moment 1 | Moment 1 worst second | Moment 2 |
+|---|---|---|---|
+| Timeline semaphores | 33, 31 | 52.2, 52.5 FPS | 9, 9 |
+| Polling the fence | 30, 32 | 51.2, 52.6 FPS | 8, 8 |
+| Binary fences | 12, 10 | 60.0, 60.2 FPS | 0, 0 |
+
+In normal play the emulation thread's time blocked in the driver's submit went from 4.4% to none.
+The profiled runs' largest dips (down to 44–48 FPS) began within a second of the recording
+stopping, while simpleperf finalized and the file was copied off the device, and runs without
+the profiler had none, so they are left out.
+
 ### Next (not implemented)
 
 - RSP vector-instruction overhead: the VU ops are C++ helpers called from the RSP JIT.
