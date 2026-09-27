@@ -32,14 +32,16 @@ import com.phobos.emulator.ui.touch.TouchLayoutCodec
 import com.phobos.emulator.ui.touch.TouchPrefs
 import com.phobos.emulator.ui.touch.touchLayoutKey
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -807,11 +809,13 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setEmulatorScreenVisible(visible: Boolean) { _emulatorScreenVisible.value = visible }
 
     // One-shot navigation requests from outside the NavHost (debug loader,
-    // activity key fallback). MainScaffold collects and navigates.
-    private val _navEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
-    val navEvents: SharedFlow<String> = _navEvents
+    // activity key fallback). MainScaffold collects and navigates. A channel, so a
+    // request made before MainScaffold collects (it is composed once the stored
+    // theme loads, and the debug loader can ask sooner) is delivered, not dropped.
+    private val _navEvents = Channel<String>(Channel.BUFFERED)
+    val navEvents: Flow<String> = _navEvents.receiveAsFlow()
 
-    fun navigateTo(route: String) { _navEvents.tryEmit(route) }
+    fun navigateTo(route: String) { _navEvents.trySend(route) }
 
     /** Pause + leave to the library; the game stays loaded (swap-screen feature). */
     fun swapToLibrary() {

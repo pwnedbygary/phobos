@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.*
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
+import kotlinx.coroutines.flow.first
 
 private const val TOUCH_EDITOR_ROUTE = "settings/touch-editor/{family}"
 private const val EMULATOR_ROUTE = "emulator/{system}/{rom}"
@@ -59,6 +60,8 @@ fun MainScaffold(viewModel: MainViewModel) {
     // Navigation requests from outside the NavHost (debug intent loader,
     // activity key fallback for the swap-screen hotkey).
     LaunchedEffect(Unit) {
+        // Requests queued before this composition can arrive before the NavHost sets its graph.
+        navController.currentBackStackEntryFlow.first()
         viewModel.navEvents.collect { route ->
             if (route == "library" || route == "console" || route == "settings") {
                 navController.navigate(route) {
