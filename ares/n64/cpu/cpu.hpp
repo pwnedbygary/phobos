@@ -48,6 +48,7 @@ struct CPU : Thread {
   auto raiseCoprocessor1Exception() -> void;
   auto icacheFillLine(u64 vaddr, u32 paddr) -> void;
   auto jitLinkedCode() -> u8*;
+  auto jitIdleSkip(u32 iterationClocks) -> void;
 
   auto power(bool reset) -> void;
 
@@ -821,6 +822,10 @@ struct CPU : Thread {
   //    memory stays coherent with the JIT's inline dcache paths and DMA.
   std::atomic<bool> fasterSync{false};
   std::atomic<bool> skipCaches{false};
+  // Exact idle-loop skip (see jitIdleSkip), enabled by the frontend only while fast-forwarding.
+  // At normal speed the time saved would just be idle, and on the Retroid Pocket 6 the lighter
+  // load let power management move the emulation thread to slower cores and clocks.
+  std::atomic<bool> idleSkip{false};
   // Count accrued before an MTC0 Count in the current sync period (scc.count units);
   // synchronize() skips it. Not serialized: zero at every frame boundary.
   u64 countWriteSkip = 0;

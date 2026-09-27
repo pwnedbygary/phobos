@@ -919,6 +919,10 @@ namespace ares {
         {
             std::lock_guard<std::recursive_mutex> lock(*runMutex);
             if (localRoot) {
+                #if defined(CORE_N64)
+                ::ares::Nintendo64::cpu.idleSkip.store(fastForwardAtomic.load(std::memory_order_relaxed),
+                                                       std::memory_order_relaxed);
+                #endif
                 localRoot->run();
             }
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));

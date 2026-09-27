@@ -269,6 +269,15 @@ auto CPU::jitLinkedCode() -> u8* {
   return linked->code;
 }
 
+// A pure polling loop's taken back-edge (see the recompiler's idle-loop analysis): every
+// iteration costs the same and changes nothing until the next sync, so running out the
+// budget is the same as adding whole iterations to the clock.
+auto CPU::jitIdleSkip(u32 iterationClocks) -> void {
+  s64 remaining = jitClockTarget - Thread::clock;
+  if(remaining <= 0) return;
+  Thread::clock += (remaining + iterationClocks - 1) / iterationClocks * iterationClocks;
+}
+
 auto CPU::jitLinkedCodeFromSlot(Recompiler::LinkSlot* slot) -> u8* {
   if(!slot) return nullptr;
   auto block = recompiler.activeBlock;

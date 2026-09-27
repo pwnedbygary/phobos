@@ -640,24 +640,55 @@ Smoke: F-Zero X, Paper Mario, Ocarina of Time,
 Mischief Makers, Rogue Squadron, Hybrid Heaven, GT 64, Wave Race 64 Shindou Edition, Mario Kart 64
 Amped Up, SM64 B3313 and Conker run at 60 FPS with no crashes or N64 stalls.
 
+### 2026-09-27 follow-up: exact idle-loop skip while fast-forwarding; the fast core can't be forced
+
+Branch `feature/n64-ff-idle-skip-2026-09` ([PR #12](https://github.com/pwnedbygary/phobos/pull/12)),
+stacked on [PR #11](https://github.com/pwnedbygary/phobos/pull/11).
+
+**Idle-loop skip.** A backward branch that stays in its block (PR #10) is also checked for a pure
+polling loop: a straight-line body from the label through the delay slot, with no other entry,
+made only of simple ALU ops and at most one load from a constant, aligned, cached RDRAM address,
+where every register it reads is loop-invariant or written earlier in the same iteration. Each
+iteration is then identical until something outside the CPU runs, which only happens at a sync.
+While the skip is enabled, the loop's taken back-edge calls `CPU::jitIdleSkip`, which adds whole
+iterations to the clock (instruction cycles plus the dcache hit latency the JIT charges) until
+the budget runs out, then leaves through the dispatcher. Not applied in homebrew mode, with
+watchpoints, or without the RDRAM identity map. Timing check (Async RDP off, skip always on): CP0
+Count and PC matched the previous build at 120, 300, 600 and 1,200 frames after the Mario vs Boo
+state load in two runs, and the RDRAM hashes matched at 300, 600 and 1,200 frames.
+
+The frontend enables the skip (`CPU::idleSkip`) only while fast-forwarding; otherwise the
+back-edge jumps to its label as before. Uncapped fast-forward, Mario vs Boo, RP6 in High
+Performance mode: 103.1 and 103.1 FPS for PR #10 versus 113.2, 105.4, 112.0 and 113.3 with the
+skip (an earlier session: 95.7 → 104.3).
+
+**Why not at normal speed.** The time saved at 60 FPS is idle anyway, and on the RP6 the lighter
+load changes how power management treats the emulation thread. In Standard mode
+(`performance_mode=0`; mid cores up to 2.8 GHz) the governor held CPU 7 at 1.84 GHz with the skip
+versus 1.84–2.48 GHz without it, so per-frame work fell only from 13.7 to 12.2 ms. In High
+Performance mode (`performance_mode=2`) core control pauses CPU 7 once it is under 30% busy for
+100 ms, and with the skip the thread lost CPU 7 more often: in one session it ran on the mid cores
+(capped at 1.79 GHz then) where PR #10 stayed on CPU 7, and in another session one skip run had 32
+frame intervals over 20 ms per 30 s versus 1–7 for PR #10 (mid cores at 2.8 GHz that time).
+
+**Keeping the fast core: nothing an app can do works.** Raising the thread's `uclamp.min` with
+`sched_setattr` is refused (EPERM). An ADPF performance-hint session (targets 8 and 16.7 ms)
+changed neither placement nor clocks. Spinning through the idle part of a frame while CPU 7 is
+paused (so the current core looks saturated) did bring CPU 7 back: in Standard mode the thread
+then stayed on it, and with the skip plus this spin Conker's intro went from 214 and 233
+intervals over 20 ms per 30 s to 123 and 117. In High Performance mode, though, CPU 7 paused again right after each recovery (28
+recoveries in 10 s) and the migrations cost 32 intervals over 20 ms, so it isn't shipped. PR #10's
+busy-waiting keeps the thread looking busy enough for core control to keep CPU 7, which is why
+normal speed keeps that behavior.
+
+**Standard mode, for reference** (PR #10, Mario vs Boo, 30 s × 4): 60.0 FPS, 11.8–15.0 ms per
+frame, 0–4 intervals over 20 ms, CPU 7 at 1.84–2.48 GHz. Conker's intro misses more (214 and 233
+intervals over 20 ms, longest 43 ms) because heavy frames overrun at those clocks; in High
+Performance mode it had 2–8.
+
 ### Next (not implemented)
 
-- Measure this change and the fastest-core pin in the RP6's Standard performance mode, and try
-  a performance-hint session so the fast core clocks up there (the user saw High Performance
-  mode run the fast core at 3.2 GHz instead of ~2.8 GHz, with visibly steadier frame times).
-- Conker's intro runs on a mid core: under that lighter load Qualcomm core control keeps
-  the fastest core paused, so the pin doesn't apply and frame intervals jitter. A
-  performance-hint session might raise the mid core's clock there (untested).
-- Idle-loop skip (prototyped 2026-09-26, not merged): for a pure polling loop (straight-line
-  body, one load from a constant cached RDRAM address, no stores or helper calls, loop-invariant
-  registers), advance the clock to the budget end in whole iterations, which is exactly what
-  running it would do. On the RP6 it kept CP0 Count, PC and RDRAM identical to this PR over
-  1,200 frames and raised uncapped fast-forward from 95.7 to 104.3 FPS. At 60 FPS, though, the
-  lighter load let Qualcomm core control park the prime core (CPU 7 paused; the per-frame pin
-  then fails), and the emulation thread ran on the mid cores, whose `scaling_max_freq` read
-  1.79 GHz in High Performance mode (the Retroid performance service re-applies its CPU profile
-  about every 10 s): 8.8–14.5 ms per frame versus ~10.9 ms on the prime core with this PR. An ADPF performance-hint session (targets 8 and 16.7 ms) didn't
-  bring the prime core back. Needs a way to keep the emulation thread on a fast core first.
+- RSP vector-instruction overhead: the VU ops are C++ helpers called from the RSP JIT.
 - Taken branches to other blocks, `JAL` and `JR` still return to the dispatcher (about 0.11,
   0.11 and 0.12 million a second in Mario vs Boo).
 - The UI theme system ([PR #9](https://github.com/pwnedbygary/phobos/pull/9)) and the

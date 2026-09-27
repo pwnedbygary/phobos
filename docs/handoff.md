@@ -55,7 +55,12 @@ Stacked on that: branch `feature/n64-b-on-y-card-glow-2026-09` ([PR #11](https:/
 moves N64 B to the face button up and to the left of A (Android `BUTTON_X`: the physical Y button
 on the RP6 in its Xbox layout mode), so the pad matches an N64 controller, with the on-screen B
 following; and the library's console tiles get the Retrowave neon edge.
-PRs #4–#11 are stacked and merge in order.
+Stacked on that: branch `feature/n64-ff-idle-skip-2026-09` ([PR #12](https://github.com/pwnedbygary/phobos/pull/12))
+adds an exact idle-loop skip that runs only while fast-forwarding (uncapped fast-forward
+103 → ~111 FPS; timing identical over 1,200 frames). At normal speed it stays off because the
+RP6's power management answered the lighter load with a slower core or clock
+([audit](performance-audit.md#2026-09-27-follow-up-exact-idle-loop-skip-while-fast-forwarding-the-fast-core-cant-be-forced)).
+PRs #4–#12 are stacked and merge in order.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

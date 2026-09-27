@@ -807,7 +807,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
   };
 
   auto emitInternalDispatch = [&](EmitPlannedInstruction& br, EmitPlannedInstruction& delay,
-                                  bool takenStaysInBlock) {
+                                  bool takenStaysInBlock, u32 idleClocks) {
     cmp64(CpuClockMem, CpuJitClockTargetMem, set_uge);
     jumpEpilog(flag_uge);
     // A taken branch sets EndBlock, so the delay slot's EndBlock check exits the
@@ -840,9 +840,23 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
     bool edgeLinkable = !emitCallfEmitted && !emitStateKeyChanged
       && !delay.info.branch() && !delay.info.jitStateKeyMayChange()
       && !delay.info.countCompareWrite();
+    // Called where the preceding code has already left unconditionally, so a pure polling
+    // loop's skip stub can be placed right here.
     auto bindTaken = [&](sljit_jump* takenJ) {
-      if(takenToEpilog) sljit_set_label(takenJ, epilogue);
-      else setLabelOrDefer(takenJ, branchTakenVaddr);
+      if(takenToEpilog) {
+        sljit_set_label(takenJ, epilogue);
+      } else if(idleClocks) {
+        // Loops back to the label unless the frontend enabled the skip (fast-forward).
+        setLabel(takenJ);
+        static_assert(sizeof(CPU::idleSkip) == 1, "JIT reads idleSkip as one byte");
+        mov32_u8(reg(0), mem(sreg(0), (sljit_sw)offsetof(CPU, idleSkip)));
+        cmp32(reg(0), imm(0), set_z);
+        setLabelOrDefer(jump(flag_z), branchTakenVaddr);
+        callf(&CPU::jitIdleSkip, imm(idleClocks));
+        jumpEpilog();
+      } else {
+        setLabelOrDefer(takenJ, branchTakenVaddr);
+      }
     };
     if(tInt && fInt) {
       // Both edges internal: choose taken/fallthrough from runtime pipeline PC.
@@ -883,9 +897,101 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
     setLabelOrDefer(entryJump, targetVaddr);
   }
 
+  // Pure polling loop, for a backward branch whose taken edge stays in the block: a
+  // straight-line body from the label through the delay slot, with no other entry, made
+  // only of the ALU ops below and at most one load from a constant, aligned, cached RDRAM
+  // address, where every register read is loop-invariant or written earlier in the same
+  // iteration. Iterations are then identical and cost the returned clocks each (the load
+  // hits the dcache after the first) until something outside the CPU runs, which only
+  // happens at a sync. Returns 0 for any other loop.
+  auto idleLoopClocks = [&](size_t labelIdx, size_t branchIdx) -> u32 {
+    if(system.homebrewMode || emitStateKey.watchpointsActive() || !emitStateKey.rdramMapIdentity()) return 0;
+    for(size_t k = labelIdx + 1; k <= branchIdx; k++) {
+      if(findInternalLabel(plan.instructions[k].vaddr)) return 0;
+    }
+    u32 clocks = 0;
+    u32 loads = 0;
+    u32 written = 0;
+    u32 readFirst = 0;
+    u32 knownMask = 1;
+    u64 known[32] = {};
+    auto read = [&](u32 r) {
+      if(r && !(written >> r & 1)) readFirst |= 1u << r;
+    };
+    auto write = [&](u32 r) {
+      if(!r) return;
+      written |= 1u << r;
+      knownMask &= ~(1u << r);
+    };
+    auto setKnown = [&](u32 r, u64 value) {
+      if(!r) return;
+      known[r] = value;
+      knownMask |= 1u << r;
+    };
+    for(size_t i = labelIdx; i <= branchIdx + 1; i++) {
+      auto& pi = plan.instructions[i];
+      u32 in = pi.instruction;
+      u32 op = in >> 26, rs = in >> 21 & 31, rt = in >> 16 & 31, rd = in >> 11 & 31;
+      u32 jumpToSelf = 2 << 26 | u32(pi.vaddr >> 2 & 0x3ff'ffff);
+      clocks += in == branchToSelf || in == jumpToSelf ? 64 * 2 : 1 * 2;
+      if(i == branchIdx) {
+        if(op == 0x04 || op == 0x05 || op == 0x14 || op == 0x15) { read(rs); read(rt); continue; }
+        if(op == 0x06 || op == 0x07 || op == 0x16 || op == 0x17) { read(rs); continue; }
+        if(op == 0x01 && rt <= 0x03) { read(rs); continue; }  //BLTZ BGEZ BLTZL BGEZL
+        return 0;
+      }
+      switch(op) {
+      case 0x00: {
+        u32 funct = in & 63;
+        if(funct == 0x00 || funct == 0x02 || funct == 0x03) {  //SLL SRL SRA
+          read(rt); write(rd); break;
+        }
+        if(funct == 0x04 || funct == 0x06 || funct == 0x07 || funct == 0x21 || funct == 0x23
+        || (funct >= 0x24 && funct <= 0x27) || funct == 0x2a || funct == 0x2b) {
+          read(rs); read(rt); write(rd); break;  //SLLV SRLV SRAV ADDU SUBU AND OR XOR NOR SLT SLTU
+        }
+        return 0;
+      }
+      case 0x09: {  //ADDIU
+        bool isKnown = knownMask >> rs & 1;
+        u64 value = known[rs];
+        read(rs); write(rt);
+        if(isKnown) setKnown(rt, u64(s64(s32(u32(value) + u32(s32(s16(in)))))));
+        break;
+      }
+      case 0x0d: {  //ORI
+        bool isKnown = knownMask >> rs & 1;
+        u64 value = known[rs];
+        read(rs); write(rt);
+        if(isKnown) setKnown(rt, value | u16(in));
+        break;
+      }
+      case 0x0a: case 0x0b: case 0x0c: case 0x0e:  //SLTI SLTIU ANDI XORI
+        read(rs); write(rt); break;
+      case 0x0f:  //LUI
+        write(rt); setKnown(rt, u64(s64(s32(u32(u16(in)) << 16)))); break;
+      case 0x20: case 0x21: case 0x23: case 0x24: case 0x25: {  //LB LH LW LBU LHU
+        if(++loads > 1 || !(knownMask >> rs & 1)) return 0;
+        u64 address = known[rs] + u64(s64(s16(in)));
+        u64 size = op == 0x23 ? 4 : op == 0x21 || op == 0x25 ? 2 : 1;
+        if(address < 0xffff'ffff'8000'0000ull || address > 0xffff'ffff'807f'ffffull) return 0;
+        if(address & (size - 1)) return 0;
+        read(rs); write(rt);
+        clocks += 2;  // dcache hit latency, as jitMemoryOpcode charges it
+        break;
+      }
+      default:
+        return 0;
+      }
+    }
+    if(readFirst & written) return 0;
+    return clocks;
+  };
+
   // Phase 4: emit the planned instruction sequence.
   bool prevBranched = false;
   bool prevTakenStaysInBlock = false;
+  u32 prevIdleClocks = 0;
   bool delaySlotEmittedCallf = false;
   for(size_t idx = 0; idx < plan.instructions.size(); idx++) {
     auto& ii = plan.instructions[idx];
@@ -947,6 +1053,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
     // key change came before (the label's code assumes the current key). Not while
     // tracing: a jump to a label skips that instruction's prologue hook.
     bool takenStaysInBlock = false;
+    u32 idleClocks = 0;
     if(info.branch() && !info.unconditionalJump() && !delaySlot && !callInstructionPrologue
     && idx + 1 < plan.instructions.size()) {
       auto& delay = plan.instructions[idx + 1];
@@ -956,6 +1063,11 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       takenStaysInBlock = label && *label && !emitStateKeyChanged
         && !delay.info.branch() && !delay.info.jitStateKeyMayChange()
         && !delay.info.countCompareWrite();
+      if(takenStaysInBlock) {
+        size_t labelIdx = idx;
+        while(plan.instructions[labelIdx].vaddr != takenVaddr) labelIdx--;
+        idleClocks = idleLoopClocks(labelIdx, idx);
+      }
     }
 
     auto slowPathStart = slowPaths.size();
@@ -1009,11 +1121,12 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       && plan.instructions[idx - 1].info.branch() && !plan.instructions[idx - 1].info.unconditionalJump();
     if(prevIsConditionalBranch) {
       // Conditional branch dispatch happens after its delay slot.
-      emitInternalDispatch(plan.instructions[idx - 1], ii, prevTakenStaysInBlock);
+      emitInternalDispatch(plan.instructions[idx - 1], ii, prevTakenStaysInBlock, prevIdleClocks);
     }
     if(delaySlot && emitCallfEmitted) delaySlotEmittedCallf = true;
     prevBranched = branched;
     prevTakenStaysInBlock = takenStaysInBlock;
+    prevIdleClocks = idleClocks;
   }
 
   if(delaySlotEmittedCallf || emitStateKeyChanged) {
