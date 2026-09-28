@@ -851,10 +851,63 @@ build, as noted above, but come from a small set of states).
 frame emulation work 7.767 and 7.635 ms for PR #15 against 7.539 and 7.514 ms, 2.3% less (medians
 7.35 → 7.09 ms); with PR #15, about 5% less than before the NEON work.
 
+### 2026-09-27 follow-up: parallel-RDP keeps up to 256 render contexts in flight
+
+Branch `feature/rdp-inflight-depth-2026-09` ([PR #17](https://github.com/pwnedbygary/phobos/pull/17)),
+based on `master`.
+
+**Finding.** In Standard mode, where the GPU stays at its 401 MHz floor, Mario Tennis's shot
+showcases (the replay after some winning shots) had 11–16 frames over 20 ms each with Async RDP
+and busy-wait on, up to 29 ms. It wasn't heat or clocks: nothing throttled, and during those
+seconds the emulation thread ran only 73–86% of the time while the GPU was 23–33% busy. A
+whole-process profile, with command processing single-threaded so the renderer ran on the
+emulation thread, had it waiting in `Renderer::flush_queues` for a `FenceHolder` 20.6% of the time
+during a showcase: about 370 waits a second with a median of 0.56 ms, against 45 a second
+otherwise. parallel-RDP gives each render context (one flush of up to 256 primitives) one of 32
+buffer sets, and before reusing a set it waits for the fence of the submission that last used it,
+so the renderer can be at most 32 contexts ahead of the GPU. The showcases issue many small render
+passes, and at 401 MHz the renderer kept coming back around to sets whose submissions the GPU
+hadn't finished.
+
+**Change.** `Limits::NumSyncStates` goes from 32 to 256, and the mask of sets waiting for the next
+submission becomes a `std::bitset`. The GPU work and its order are unchanged; the renderer can just
+run further ahead of the GPU within a frame. A buffer set is 333 KiB, mostly the 32K-entry span
+table, with one copy where GPU memory is host-visible (two on a discrete GPU without it), so this
+adds 73 MiB on the RP6 (83 MiB in total). The staging ring for RDRAM readback exists only when
+RDRAM can't be mapped (a discrete GPU without `VK_EXT_external_memory_host`). It held one RDRAM per
+buffer set, and 32 sets also meant at most 32 readbacks in flight, since the ring has no other
+protection against reusing space a pending readback still needs. It stays at 32 RDRAMs (256 MiB,
+not 2 GiB), and a submission with a readback now first waits for the one 32 readbacks earlier
+(`Limits::MaxReadbacksInFlight`), which keeps that bound. This diverges from upstream parallel-RDP
+(`rdp_data_structures.hpp`, `rdp_renderer.{hpp,cpp}`), so keep it when updating the vendored copy.
+
+**Measured** (RP6, Standard mode; a save state taken just after a winning shot, loaded six times
+per build 20 s apart; frames over 20 ms from the per-second stats in the four seconds of each
+showcase):
+
+| Settings | Buffer sets | Frames over 20 ms (six showcases) | Per showcase | Worst frame |
+|---|---|---|---|---|
+| Async RDP and busy-wait on | 32 (`master`) | 82 | 11–16 | 29 ms |
+| | 64 | 43 | 5–10 | 24 ms |
+| | 128 | 2 | 0–1 | 22 ms |
+| | 256 (this change) | 5 | 0–2 | 22 ms |
+| Defaults (both off) | 32 (`master`) | 138 | 20–24 | 29 ms |
+| | 128 | 79 | 11–15 | 30 ms |
+| | 256 (this change) | 91 | 14–17 | 29 ms |
+
+With Async RDP and busy-wait on, no other second had a frame over 20 ms in any build; 128 and 256
+buffer sets measure the same here, and 256 leaves headroom for scenes with more render passes. At
+the defaults, SyncFull makes the emulation thread wait until the GPU has finished everything,
+however deep the queue, so the showcases keep 11–17 frames over 20 ms and the rest of the game
+0.30–0.33 a second in every build.
+
 ### Next (not implemented)
 
 - RSP vector instructions: emit the other frequent ones (VMULF, VMACF, VADD, VSUB, VMOV, VGE, VLT,
   VMRG) inline; the rest are still C++ helpers called from the RSP JIT.
+- The screen thread holds `vulkan.mutex` while it waits for the scanout fence
+  (`Vulkan::mapScanoutRead`), and the emulation thread's per-frame Vulkan calls wait behind it:
+  about 3% of its time during a Mario Tennis showcase.
 - Taken branches to other blocks, `JAL` and `JR` still return to the dispatcher (about 0.11,
   0.11 and 0.12 million a second in Mario vs Boo).
 - The UI theme system ([PR #9](https://github.com/pwnedbygary/phobos/pull/9)) and the

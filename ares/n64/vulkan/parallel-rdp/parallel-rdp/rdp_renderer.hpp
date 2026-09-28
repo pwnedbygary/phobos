@@ -26,6 +26,7 @@
 #include "device.hpp"
 #include "rdp_common.hpp"
 #include "worker_thread.hpp"
+#include <bitset>
 #include <unordered_set>
 
 namespace RDP
@@ -180,6 +181,8 @@ private:
 		unsigned num_pages = 0;
 		unsigned staging_readback_pages = 0;
 		unsigned staging_readback_index = 0; // Ringbuffer the readbacks.
+		Vulkan::Fence staging_readback_fences[Limits::MaxReadbacksInFlight];
+		unsigned staging_readback_fence_index = 0;
 	} incoherent;
 
 	size_t rdram_offset = 0;
@@ -313,7 +316,7 @@ private:
 
 	RenderBuffersUpdater buffer_instances[Limits::NumSyncStates];
 	InternalSynchronization internal_sync[Limits::NumSyncStates];
-	uint32_t sync_indices_needs_flush = 0;
+	std::bitset<Limits::NumSyncStates> sync_indices_needs_flush;
 	unsigned buffer_instance = 0;
 	uint32_t base_primitive_index = 0;
 	unsigned pending_render_passes = 0;

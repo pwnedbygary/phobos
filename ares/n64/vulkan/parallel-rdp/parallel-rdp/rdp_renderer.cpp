@@ -630,7 +630,8 @@ void Renderer::set_rdram(Vulkan::Buffer *buffer, uint8_t *host_rdram, size_t off
 			// If we cannot map RDRAM, we need a staging readback buffer.
 			Vulkan::BufferCreateInfo readback_info = {};
 			readback_info.domain = Vulkan::BufferDomain::CachedCoherentHostPreferCached;
-			readback_info.size = rdram_size * Limits::NumSyncStates;
+			// One RDRAM per readback in flight; submit_to_queue() keeps at most MaxReadbacksInFlight in flight.
+			readback_info.size = rdram_size * Limits::MaxReadbacksInFlight;
 			readback_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 			incoherent.staging_readback = device->create_buffer(readback_info);
 			device->set_name(*incoherent.staging_readback, "staging-readback");
@@ -2444,7 +2445,18 @@ void Renderer::submit_to_queue()
 	{
 		CoherencyOperation op;
 		if (pending_host_visible_render_passes)
+		{
+			if (incoherent.staging_readback)
+			{
+				auto &oldest = incoherent.staging_readback_fences[incoherent.staging_readback_fence_index];
+				if (oldest)
+				{
+					oldest->wait();
+					oldest.reset();
+				}
+			}
 			resolve_coherency_gpu_to_host(op, *stream.cmd);
+		}
 
 		device->submit(stream.cmd, &fence);
 
@@ -2452,16 +2464,21 @@ void Renderer::submit_to_queue()
 		{
 			enqueue_fence_wait(fence);
 			op.fence = fence;
+			if (incoherent.staging_readback)
+			{
+				incoherent.staging_readback_fences[incoherent.staging_readback_fence_index] = fence;
+				incoherent.staging_readback_fence_index =
+						(incoherent.staging_readback_fence_index + 1) % Limits::MaxReadbacksInFlight;
+			}
 			if (!op.copies.empty())
 				processor.enqueue_coherency_operation(std::move(op));
 		}
 	}
 
-	Util::for_each_bit(sync_indices_needs_flush, [&](unsigned bit) {
-		auto &sync = internal_sync[bit];
-		sync.fence = fence;
-	});
-	sync_indices_needs_flush = 0;
+	for (unsigned i = 0; i < Limits::NumSyncStates; i++)
+		if (sync_indices_needs_flush.test(i))
+			internal_sync[i].fence = fence;
+	sync_indices_needs_flush.reset();
 	stream.cmd.reset();
 }
 
@@ -2927,9 +2944,9 @@ void Renderer::flush_queues()
 
 	auto &instance = buffer_instances[buffer_instance];
 	auto &sync = internal_sync[buffer_instance];
-	if (sync_indices_needs_flush & (1u << buffer_instance))
+	if (sync_indices_needs_flush.test(buffer_instance))
 		submit_to_queue();
-	sync_indices_needs_flush |= 1u << buffer_instance;
+	sync_indices_needs_flush.set(buffer_instance);
 
 	if (sync.fence)
 	{
@@ -2971,7 +2988,7 @@ void Renderer::flush_queues()
 
 			// We're going to keep reading the same data structures, so make sure
 			// we signal fence after upscaled render pass is submitted.
-			sync_indices_needs_flush |= 1u << buffer_instance;
+			sync_indices_needs_flush.set(buffer_instance);
 		}
 
 		submit_render_pass_upscaled(*stream.cmd);

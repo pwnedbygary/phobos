@@ -83,6 +83,11 @@ branches from `master`. Branch `feature/rsp-acc-cache-2026-09`
 ([PR #16](https://github.com/pwnedbygary/phobos/pull/16)) keeps the RSP accumulator in NEON
 registers across consecutive multiply-accumulate instructions, 2.3% less per-frame work
 ([audit](performance-audit.md#2026-09-27-follow-up-rsp-accumulator-kept-in-neon-registers)).
+Branch `feature/rdp-inflight-depth-2026-09` ([PR #17](https://github.com/pwnedbygary/phobos/pull/17))
+lets parallel-RDP keep 256 render contexts in flight instead of 32 (73 MiB more GPU memory), which
+removes nearly all of Mario Tennis's shot-showcase stutter in Standard mode with Async RDP and
+busy-wait on (frames over 20 ms per showcase 11–16 → 0–2)
+([audit](performance-audit.md#2026-09-27-follow-up-parallel-rdp-keeps-up-to-256-render-contexts-in-flight)).
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
