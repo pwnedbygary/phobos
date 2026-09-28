@@ -14,7 +14,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.LinearGradientShader
 import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.PaintingStyle
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.addOutline
@@ -31,11 +33,13 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 
 /**
- * Draws a glass panel of [shape] around the content: a soft shadow outside the panel only, so it
- * never shows through the translucent fill; [fill] at [alpha]; the style's gloss from the top left
- * and shade toward the bottom right; then, over the content, a hairline [rim] that is brightest
- * along the top edge, scaled by the style's rim strength, or a solid [outline] in its place.
- * Paths and brushes are cached per size, so a color change (the theme's cross-fade) only redraws.
+ * Draws a glass panel of [shape] around the content: a soft shadow and a tight contact shadow
+ * outside the panel only, so they never show through the translucent fill; [fill] at [alpha]; the
+ * style's gloss from the top left and shade toward the bottom right; a bevel inside the edge, light
+ * along the top and dark along the bottom; then, over the content, a hairline [rim] that is
+ * brightest along the top edge, scaled by the style's rim strength, or a solid [outline] in its
+ * place. Paths, brushes and paints are cached per size, so a color change (the theme's cross-fade)
+ * only redraws.
  */
 fun Modifier.glassPanel(
     shape: Shape,
@@ -47,7 +51,8 @@ fun Modifier.glassPanel(
     shadow: Boolean = true,
     outline: Color = Color.Unspecified,
 ): Modifier = this then GlassPanelElement(
-    shape, fill, alpha, style.glossAlpha, style.shadeAlpha, if (shadow) style.shadowAlpha else 0f, isDark,
+    shape, fill, alpha, style.glossAlpha, style.shadeAlpha, if (shadow) style.shadowAlpha else 0f,
+    if (shadow) style.contactShadowAlpha else 0f, style.bevelLight, style.bevelShade, isDark,
     if (rim) style.rimStrength else 0f, outline,
 )
 
@@ -58,6 +63,9 @@ private data class GlassPanelElement(
     val gloss: Float,
     val shade: Float,
     val shadow: Float,
+    val contact: Float,
+    val bevelLight: Float,
+    val bevelShade: Float,
     val isDark: Boolean,
     val rim: Float,
     val outline: Color,
@@ -75,6 +83,10 @@ private class GlassPanelNode(private var spec: GlassPanelElement) : Modifier.Nod
     private val path = Path()
     private val shadowPath = Path()
     private val shadowPaint = Paint()
+    private val contactPath = Path()
+    private val contactPaint = Paint()
+    private val bevelPaint = Paint()
+    private var bevel = false
     private var sheen: Brush? = null
     private var rimBrush: Brush? = null
     private var rimStroke = Stroke()
@@ -85,7 +97,10 @@ private class GlassPanelNode(private var spec: GlassPanelElement) : Modifier.Nod
     fun update(new: GlassPanelElement) {
         val old = spec
         spec = new
-        if (new.shape != old.shape || new.gloss != old.gloss || new.shade != old.shade || new.shadow != old.shadow || new.isDark != old.isDark || new.rim != old.rim) {
+        if (new.shape != old.shape || new.gloss != old.gloss || new.shade != old.shade || new.shadow != old.shadow ||
+            new.contact != old.contact || new.bevelLight != old.bevelLight || new.bevelShade != old.bevelShade ||
+            new.isDark != old.isDark || new.rim != old.rim
+        ) {
             cachedSize = Size.Unspecified
         }
         invalidateDraw()
@@ -94,11 +109,17 @@ private class GlassPanelNode(private var spec: GlassPanelElement) : Modifier.Nod
     override fun ContentDrawScope.draw() {
         if (size != cachedSize || layoutDirection != cachedDirection || density != cachedDensity) rebuild()
         val spec = spec
-        if (spec.shadow > 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.drawPath(shadowPath, shadowPaint) } }
+        if ((spec.shadow > 0f || spec.contact > 0f) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            clipPath(path, ClipOp.Difference) {
+                drawIntoCanvas {
+                    if (spec.shadow > 0f) it.drawPath(shadowPath, shadowPaint)
+                    if (spec.contact > 0f) it.drawPath(contactPath, contactPaint)
+                }
+            }
         }
         drawPath(path, spec.fill, alpha = spec.alpha)
         sheen?.let { drawPath(path, it) }
+        if (bevel) clipPath(path) { drawIntoCanvas { it.drawPath(path, bevelPaint) } }
         drawContent()
         if (spec.outline.isSpecified) drawPath(path, spec.outline, style = rimStroke)
         else if (spec.rim > 0f) rimBrush?.let { drawPath(path, it, style = rimStroke) }
@@ -112,10 +133,34 @@ private class GlassPanelNode(private var spec: GlassPanelElement) : Modifier.Nod
         shadowPath.reset()
         shadowPath.addOutline(outline)
         shadowPath.translate(Offset(0f, SHADOW_OFFSET.toPx()))
-        // Hardware-accelerated canvases ignore mask filters before Android 9; draw() skips the shadow there.
-        if (spec.shadow > 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        contactPath.reset()
+        contactPath.addOutline(outline)
+        contactPath.translate(Offset(0f, CONTACT_OFFSET.toPx()))
+        // Hardware-accelerated canvases ignore mask filters before Android 9; draw() skips the shadows and bevel there.
+        val masks = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+        if (spec.shadow > 0f && masks) {
             shadowPaint.color = Color.Black.copy(alpha = spec.shadow)
             shadowPaint.asFrameworkPaint().maskFilter = BlurMaskFilter(SHADOW_BLUR.toPx(), BlurMaskFilter.Blur.NORMAL)
+        }
+        if (spec.contact > 0f && masks) {
+            contactPaint.color = Color.Black.copy(alpha = spec.contact)
+            contactPaint.asFrameworkPaint().maskFilter = BlurMaskFilter(CONTACT_BLUR.toPx(), BlurMaskFilter.Blur.NORMAL)
+        }
+        bevel = (spec.bevelLight > 0f || spec.bevelShade > 0f) && masks
+        if (bevel) {
+            // Centered on the outline and clipped to the panel, so half the stroke shows, softened inward.
+            bevelPaint.style = PaintingStyle.Stroke
+            bevelPaint.strokeWidth = BEVEL_STROKE.toPx()
+            bevelPaint.shader = LinearGradientShader(
+                from = Offset.Zero,
+                to = Offset(0f, size.height),
+                colors = listOf(
+                    Color.White.copy(alpha = spec.bevelLight), Color.White.copy(alpha = 0f),
+                    Color.Black.copy(alpha = 0f), Color.Black.copy(alpha = spec.bevelShade),
+                ),
+                colorStops = listOf(0f, 0.5f, 0.5f, 1f),
+            )
+            bevelPaint.asFrameworkPaint().maskFilter = BlurMaskFilter(BEVEL_BLUR.toPx(), BlurMaskFilter.Blur.NORMAL)
         }
         val corner = Offset(size.width, size.height)
         sheen = if (spec.gloss > 0f || spec.shade > 0f) {
@@ -156,6 +201,12 @@ private class GlassPanelNode(private var spec: GlassPanelElement) : Modifier.Nod
     private companion object {
         val SHADOW_OFFSET = 4.dp
         val SHADOW_BLUR = 12.dp
+        val CONTACT_OFFSET = 1.5.dp
+        val CONTACT_BLUR = 3.dp
+
+        /** 4 dp inside the edge plus the blur, under the 8 dp text keeps from a panel's edge. */
+        val BEVEL_STROKE = 8.dp
+        val BEVEL_BLUR = 2.5.dp
         val RIM = 1.dp
     }
 }

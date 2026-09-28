@@ -31,6 +31,11 @@ data class Glow(val color: Color, val alpha: Float, val x: Float, val y: Float, 
  * backdrop it can end up over. [level] is the user's Glass effects setting: Subtle scales every
  * strength down and raises the panel floor, and Off makes panels and the dock opaque with no
  * glows, gloss, shade or shadow. [rimStrength] scales the rim highlight.
+ *
+ * Depth: a tight contact shadow at [contactShadowAlpha] grounds each panel under its softer
+ * shadow, and a bevel along the inside of the edge, light toward the top left at [bevelLight] and
+ * dark toward the bottom right at [bevelShade], gives the glass visible thickness. Both stay in the
+ * band along a panel's edge that text keeps clear of, so they don't enter the contrast searches.
  */
 @Immutable
 data class GlassStyle(
@@ -44,6 +49,9 @@ data class GlassStyle(
     val glows: List<Glow>,
     val level: GlassEffects = GlassEffects.FULL,
     val rimStrength: Float = 1f,
+    val contactShadowAlpha: Float = 0f,
+    val bevelLight: Float = 0f,
+    val bevelShade: Float = 0f,
 ) {
     companion object {
         fun of(
@@ -123,7 +131,12 @@ internal class GlassBuilder(
                     passesOverAnything(primaryIcon, ICON_CONTRAST) { over(scheme.primary, INDICATOR, sheen(panel(step / 100f, it))) }
             }
         }?.let { it / 100f } ?: 1f
-        return GlassStyle(panelAlpha, accentPanelAlpha, dockAlpha, gloss, shade, shadowAlpha, indicator(dockAlpha, sheens), glows, level, strength.rim)
+        return GlassStyle(
+            panelAlpha, accentPanelAlpha, dockAlpha, gloss, shade, shadowAlpha, indicator(dockAlpha, sheens), glows, level, strength.rim,
+            contactShadowAlpha = if (retrowave) 0f else strength.shadow * if (isDark) DARK_CONTACT else LIGHT_CONTACT,
+            bevelLight = strength.bevel * if (isDark) DARK_BEVEL_LIGHT else LIGHT_BEVEL_LIGHT,
+            bevelShade = strength.bevel * if (isDark) DARK_BEVEL_SHADE else LIGHT_BEVEL_SHADE,
+        )
     }
 
     /** The least opaque panel alpha from the floor up (in hundredths) at which [text] passes over every backdrop. */
@@ -246,9 +259,9 @@ internal class GlassBuilder(
     private class Spot(val x: Float, val y: Float, val radius: Float)
 
     /** Per-level panel floor (in hundredths) and multipliers on the design strengths below. */
-    private enum class Strength(val panelFloor: Int, val glow: Float, val gloss: Float, val shade: Float, val shadow: Float, val rim: Float) {
-        FULL(60, 1f, 1f, 1f, 1f, 1f),
-        SUBTLE(80, 0.45f, 0.5f, 0.5f, 0.6f, 0.5f),
+    private enum class Strength(val panelFloor: Int, val glow: Float, val gloss: Float, val shade: Float, val shadow: Float, val rim: Float, val bevel: Float) {
+        FULL(60, 1f, 1f, 1f, 1f, 1f, 1f),
+        SUBTLE(80, 0.45f, 0.5f, 0.5f, 0.6f, 0.5f, 0.5f),
     }
 
     private companion object {
@@ -271,6 +284,16 @@ internal class GlassBuilder(
          * edges, 12 dp from the shadow's, where the blur leaves under 5% of its peak.
          */
         const val SHADOW_REACH = 0.1f
+
+        /** The contact shadow's peak; it is offset 1.5 dp with a 3 dp blur, so it never reaches text or a neighbor. */
+        const val DARK_CONTACT = 0.35f
+        const val LIGHT_CONTACT = 0.12f
+
+        /** The bevel's peaks; it reaches about 6 dp into a panel, short of the 8 dp text keeps from the edge. */
+        const val DARK_BEVEL_LIGHT = 0.16f
+        const val LIGHT_BEVEL_LIGHT = 0.7f
+        const val DARK_BEVEL_SHADE = 0.4f
+        const val LIGHT_BEVEL_SHADE = 0.1f
 
         const val INDICATOR = 0.24f
         const val DARK_GLOW = 0.5f
