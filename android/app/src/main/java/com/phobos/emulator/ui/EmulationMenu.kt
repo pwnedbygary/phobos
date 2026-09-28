@@ -360,7 +360,7 @@ private fun DisplaySection(viewModel: MainViewModel, settings: EmulatorSettings)
 @Composable
 fun MenuSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(modifier = Modifier.padding(vertical = 4.dp)) {
-        SectionHeader(title)
+        SectionHeader(title, onBackdrop = false)
         Surface(
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -399,6 +399,11 @@ fun ColumnScope.N64ExperimentalSection(viewModel: MainViewModel, settings: Emula
                 SettingsSwitchItem("Faster CPU sync", "4× interleave. Timing-sensitive games may misbehave. Applies immediately.", settings.n64FasterSync) { viewModel.setN64FasterSync(it) }
                 SettingsSwitchItem("Skip cache timing", "No cache stall cycles (Mupen-style); contents stay emulated. Applies immediately.", settings.n64SkipCaches) { viewModel.setN64SkipCaches(it) }
                 SettingsSwitchItem("RSP task mode", "RSP runs ahead of the CPU (Mupen-style). Applies immediately.", settings.n64RspTaskMode) { viewModel.setN64RspTaskMode(it) }
+            }
+        }
+        item {
+            MenuSection("Frame pacing") {
+                SettingsSwitchItem("Keep the fast core busy", "Waits between frames on the fastest core instead of sleeping, keeping it at full clock. Fewer slowdowns, more battery drain and heat. Applies immediately.", settings.busyWaitPacing) { viewModel.setBusyWaitPacing(it) }
             }
         }
         item {

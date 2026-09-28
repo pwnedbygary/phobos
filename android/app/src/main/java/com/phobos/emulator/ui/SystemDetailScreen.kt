@@ -70,7 +70,7 @@ fun SystemDetailScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text("No directories selected", style = MaterialTheme.typography.bodyLarge)
+                        BackdropText("No directories selected", style = MaterialTheme.typography.bodyLarge)
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(onClick = { launcher.launch(null) }) {
                             Text("Add ROM Folder")
@@ -104,7 +104,7 @@ fun SystemDetailScreen(
                 
                 if (roms.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No compatible ROMs found in these folders", style = MaterialTheme.typography.bodyMedium)
+                        BackdropText("No compatible ROMs found in these folders", style = MaterialTheme.typography.bodyMedium)
                     }
                 } else {
                     // The bottom padding lets the last row scroll clear of the add-folder button.

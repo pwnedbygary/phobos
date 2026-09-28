@@ -38,6 +38,8 @@ data class Glow(val color: Color, val alpha: Float, val x: Float, val y: Float, 
  * band along a panel's edge that text keeps clear of, so they don't enter the contrast searches.
  * At [refraction] above zero (the Full level, Android 13 and later), the dock draws the pages and
  * backdrop behind it through a lens that bends them within that same band, where the tint thins.
+ * With Retrowave effects, headers and other text drawn straight on the sunset sit on a soft plate
+ * of the background at [backdropPlateAlpha], the least that keeps them at WCAG AA over the sun.
  */
 @Immutable
 data class GlassStyle(
@@ -55,6 +57,7 @@ data class GlassStyle(
     val bevelLight: Float = 0f,
     val bevelShade: Float = 0f,
     val refraction: Float = 0f,
+    val backdropPlateAlpha: Float = 0f,
 ) {
     companion object {
         fun of(
@@ -95,7 +98,7 @@ internal class GlassBuilder(
         ),
     )
 
-    /** Text drawn straight on the backdrop: screen titles, section headers and subtitles. */
+    /** Text drawn straight on the backdrop: screen titles, section headers, subtitles, notes and empty states. */
     private val screenText = Luminances(listOf(scheme.onBackground, scheme.onSurfaceVariant, scheme.primary))
 
     /** The dock's tab labels. */
@@ -106,7 +109,10 @@ internal class GlassBuilder(
     fun build(): GlassStyle {
         if (level == GlassEffects.OFF) {
             val glows = designedGlows().map { it.copy(alpha = 0f) }
-            return GlassStyle(1f, 1f, 1f, 0f, 0f, 0f, indicator(dockAlpha = 1f, listOf<(Color) -> Color>({ it })), glows, level, rimStrength = 0f)
+            return GlassStyle(
+                1f, 1f, 1f, 0f, 0f, 0f, indicator(dockAlpha = 1f, listOf<(Color) -> Color>({ it })), glows, level, rimStrength = 0f,
+                backdropPlateAlpha = backdropPlate(),
+            )
         }
         val glows = if (retrowave) designedGlows().map { it.copy(alpha = 0f) } else fitGlows()
         val screenBackdrops = glowBackdrops(glows)
@@ -140,7 +146,16 @@ internal class GlassBuilder(
             bevelLight = strength.bevel * if (isDark) DARK_BEVEL_LIGHT else LIGHT_BEVEL_LIGHT,
             bevelShade = strength.bevel * if (isDark) DARK_BEVEL_SHADE else LIGHT_BEVEL_SHADE,
             refraction = if (level == GlassEffects.FULL) 1f else 0f,
+            backdropPlateAlpha = backdropPlate(),
         )
+    }
+
+    /** The background's alpha behind text on the Retrowave sunset: the least that keeps screen text at AA over all of it. */
+    private fun backdropPlate(): Float {
+        if (!retrowave) return 0f
+        val scene = sunsetScene(SunsetColors(scheme, isDark))
+        return (0..100).firstOrNull { step -> scene.all { screenText.pass(over(scheme.background, step / 100f, it), TEXT_CONTRAST) } }
+            ?.let { it / 100f } ?: 1f
     }
 
     /** The least opaque panel alpha from the floor up (in hundredths) at which [text] passes over every backdrop. */
@@ -211,11 +226,12 @@ internal class GlassBuilder(
             layers.flatMap { under -> listOf(under) + GLOW_SAMPLES.map { over(glow.color, glow.alpha * it, under) } }
         }.distinct()
 
-    /**
-     * The sunset's colors, including its brightest parts (the sun, its glow, the horizon line and
-     * stars), each also under the inner half of a card's neon halo.
-     */
-    private fun sunsetBackdrops(sunset: SunsetColors): List<Color> {
+    /** The sunset's colors (see [sunsetScene]), each also under the inner half of a card's neon halo. */
+    private fun sunsetBackdrops(sunset: SunsetColors): List<Color> =
+        sunsetScene(sunset).flatMap { listOf(it, over(scheme.primary, NEON_HALO / 2f, it), over(scheme.primary, NEON_HALO, it)) }.distinct()
+
+    /** The sunset's colors, including its brightest parts: the sun, its glow, the horizon line and stars. */
+    private fun sunsetScene(sunset: SunsetColors): List<Color> {
         // Gradients blend in sRGB, where brightness can dip between the ends, so they are sampled along the way.
         fun gradient(from: Color, to: Color) = GLOW_SAMPLES.map { over(to, it, from) } + from
         val sky = gradient(sunset.skyTop, sunset.skyMiddle) + gradient(sunset.skyMiddle, sunset.skyBottom)
@@ -225,8 +241,7 @@ internal class GlassBuilder(
         val lines = floor.map { over(sunset.grid, it) } +
             listOf(sunset.skyBottom, sunset.floorTop).flatMap { listOf(over(sunset.horizonGlow, it), over(sunset.horizonLine, it)) }
         val stars = if (sunset.isDark) listOf(over(sunset.star, sunset.starMaxAlpha, sunset.skyTop)) else emptyList()
-        val scene = (sky + glowAtSun + sun + floor + lines + stars).distinct()
-        return scene.flatMap { listOf(it, over(scheme.primary, NEON_HALO / 2f, it), over(scheme.primary, NEON_HALO, it)) }.distinct()
+        return (sky + glowAtSun + sun + floor + lines + stars).distinct()
     }
 
     private fun panel(alpha: Float, backdrop: Color) = over(scheme.surfaceContainer, alpha, backdrop)

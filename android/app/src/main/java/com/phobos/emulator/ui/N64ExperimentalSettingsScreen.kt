@@ -94,6 +94,16 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                 }
             }
             item {
+                SettingsCategory("Frame pacing") {
+                    SettingsSwitchItem(
+                        title = "Keep the fast core busy",
+                        description = "Waits between frames on the fastest core instead of sleeping, so Android keeps emulation there at full clock, as in fast-forward. Fewer slowdowns, but more battery drain and heat.",
+                        checked = settings.busyWaitPacing,
+                        onCheckedChange = { viewModel.setBusyWaitPacing(it) }
+                    )
+                }
+            }
+            item {
                 SettingsCategory("Overclocking") {
                     var overclockExpanded by remember { mutableStateOf(false) }
                     ListItem(

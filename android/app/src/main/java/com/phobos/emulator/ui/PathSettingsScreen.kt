@@ -32,7 +32,7 @@ fun PathSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
             
             item {
-                Text(
+                BackdropText(
                     "Note: These paths define where common emulator files are stored. The internal system files (Home Path) are managed automatically for stability.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

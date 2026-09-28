@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neon
 import com.phobos.emulator.ui.theme.neonBar
+import com.phobos.emulator.ui.theme.sunsetPlate
 
 /**
  * Height of the floating dock, which pages run under to the bottom of the screen: lists pad their
@@ -112,14 +113,16 @@ fun PhobosTopBar(
 fun ScreenHeader(title: String, subtitle: String? = null, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
     val retrowave = LocalPhobosTheme.current.retrowave
+    val plate = Modifier.sunsetPlate(scheme.background, LocalPhobosTheme.current.glass.backdropPlateAlpha)
     Column(modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, bottom = 8.dp)) {
         Text(
             text = if (retrowave) title.uppercase() else title,
             style = if (retrowave) MaterialTheme.typography.headlineMedium.neon(scheme.primary) else MaterialTheme.typography.headlineMedium,
             color = if (retrowave) scheme.primary else scheme.onBackground,
+            modifier = plate,
         )
         if (subtitle != null) {
-            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant, modifier = plate)
         }
     }
 }

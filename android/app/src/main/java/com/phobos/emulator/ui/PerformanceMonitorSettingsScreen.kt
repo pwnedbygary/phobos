@@ -132,7 +132,7 @@ fun PerformanceMonitorSettingsScreen(viewModel: MainViewModel, onBack: () -> Uni
                 }
             }
             item {
-                Text(
+                BackdropText(
                     "Stats the device doesn't expose to apps (often GPU load and temperatures) are hidden automatically.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

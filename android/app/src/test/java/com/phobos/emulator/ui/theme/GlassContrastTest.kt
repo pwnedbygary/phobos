@@ -87,6 +87,18 @@ class GlassContrastTest {
     }
 
     @Test
+    fun retrowaveBackdropTextReachesAaOnItsPlate() = assertAll { v, retrowave, level ->
+        if (!retrowave) return@assertAll emptyList()
+        val s = v.scheme
+        val style = v.style(retrowave = true, level)
+        val text = listOf("onBackground" to s.onBackground, "onSurfaceVariant" to s.onSurfaceVariant, "primary" to s.primary)
+        sunsetScene(v).flatMap { backdrop ->
+            val plate = composite(s.background.toArgb(), backdrop, paint(style.backdropPlateAlpha))
+            text.map { (role, color) -> Check("$role on the backdrop plate over ${hex(backdrop)}", color.toArgb(), plate, 4.5) }
+        }
+    }
+
+    @Test
     fun dockLabelsReachAaOverAnythingScrollingUnder() = assertAll { v, retrowave, level ->
         val s = v.scheme
         val labels = listOf("onSurface" to s.onSurface, "onSurfaceVariant" to s.onSurfaceVariant)
@@ -137,6 +149,7 @@ class GlassContrastTest {
                     "accent panel alpha ${style.accentPanelAlpha} below the panel's".takeUnless { style.accentPanelAlpha in style.panelAlpha..1f },
                     "glows drawn with Retrowave effects".takeUnless { !retrowave || style.glows.all { it.alpha == 0f } },
                     "shadow drawn with Retrowave effects".takeUnless { !retrowave || style.shadowAlpha == 0f },
+                    "backdrop plate without Retrowave effects".takeUnless { retrowave || style.backdropPlateAlpha == 0f },
                 )
                 if (problems.isEmpty()) null else "${v.name}${if (retrowave) " with Retrowave" else ""}, $level: ${problems.joinToString()}"
             }
@@ -185,6 +198,13 @@ class GlassContrastTest {
 
     /** The Retrowave sunset across its gradients, each point also under a card's neon halo at every strength. */
     private fun sunsetBackdrops(v: Variant): List<Int> {
+        val primary = v.scheme.primary.toArgb()
+        val steps = (0..4).map { it / 4.0 }
+        return sunsetScene(v).flatMap { under -> steps.map { composite(primary, under, NEON_HALO * it) } }.distinct()
+    }
+
+    /** The Retrowave sunset across its gradients: the sky, the sun and its glow, the floor, grid, horizon and stars. */
+    private fun sunsetScene(v: Variant): List<Int> {
         val sunset = SunsetColors(v.scheme, v.isDark)
         fun argb(color: Color) = color.copy(alpha = 1f).toArgb()
         val steps = (0..4).map { it / 4.0 }
@@ -201,9 +221,7 @@ class GlassContrastTest {
                 composite(argb(sunset.horizonLine), under, sunset.horizonLine.alpha.toDouble())
         }
         val stars = if (sunset.isDark) steps.map { composite(argb(sunset.star), argb(sunset.skyTop), 0.15 + (sunset.starMaxAlpha - 0.15) * it) } else emptyList()
-        val scene = (sky + glowAtSun + sun + floor + grid + horizon + stars).distinct()
-        val primary = v.scheme.primary.toArgb()
-        return scene.flatMap { under -> steps.map { composite(primary, under, NEON_HALO * it) } }.distinct()
+        return (sky + glowAtSun + sun + floor + grid + horizon + stars).distinct()
     }
 
     private fun assertAll(checks: (Variant, Boolean, GlassEffects) -> List<Check>) {

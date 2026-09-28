@@ -85,7 +85,7 @@ fun ShaderSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
 
             item {
-                Text(
+                BackdropText(
                     "Note: Librashader supports standard RetroArch Slang presets. Ensure all referenced .slang and texture files are in the same relative directories as the .slangp file.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

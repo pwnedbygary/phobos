@@ -151,7 +151,7 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
 
             item {
-                Text(
+                BackdropText(
                     "Install custom GPU drivers (e.g., Turnip) by downloading from a GitHub source or uploading a .adpkg.zip / .so file. These drivers can significantly improve performance and fix graphical glitches in N64 and other Vulkan-based cores.",
                     style = MaterialTheme.typography.bodySmall
                 )

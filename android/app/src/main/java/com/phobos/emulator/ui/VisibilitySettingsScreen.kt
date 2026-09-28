@@ -23,7 +23,7 @@ fun VisibilitySettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             contentPadding = pageContentPadding(),
         ) {
             item {
-                Text(
+                BackdropText(
                     "Select the systems you want to display in your library grid.",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(bottom = 16.dp),

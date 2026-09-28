@@ -67,12 +67,6 @@ fun EmulationSettingsScreen(
                         checked = settings.pinFastestCore,
                         onCheckedChange = { viewModel.setPinFastestCore(it) }
                     )
-                    SettingsSwitchItem(
-                        title = "Keep the fast core busy (N64)",
-                        description = "In N64 games, busy-waits between frames instead of sleeping, so Android keeps emulation on its fastest core at full clock, as in fast-forward. Fewer slowdowns, but more battery drain and heat.",
-                        checked = settings.busyWaitPacing,
-                        onCheckedChange = { viewModel.setBusyWaitPacing(it) }
-                    )
                 }
             }
         }

@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,6 +43,7 @@ import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.glassPanel
 import com.phobos.emulator.ui.theme.neon
+import com.phobos.emulator.ui.theme.sunsetPlate
 import com.phobos.emulator.ui.theme.neonGlow
 
 /** A titled group of settings rows on a rounded card. */
@@ -53,23 +55,50 @@ fun SettingsCategory(title: String, content: @Composable ColumnScope.() -> Unit)
     }
 }
 
-/** Section title in the primary color; uppercase neon with retrowave effects. */
+/**
+ * Section title in the primary color; uppercase neon with retrowave effects, on a soft plate where
+ * it is drawn straight on the sunset ([onBackdrop]; false inside panels such as the pause menu).
+ */
 @Composable
-fun SectionHeader(title: String, modifier: Modifier = Modifier, trailing: (@Composable () -> Unit)? = null) {
-    val primary = MaterialTheme.colorScheme.primary
-    val retrowave = LocalPhobosTheme.current.retrowave
+fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Boolean = true, trailing: (@Composable () -> Unit)? = null) {
+    val scheme = MaterialTheme.colorScheme
+    val primary = scheme.primary
+    val theme = LocalPhobosTheme.current
+    val retrowave = theme.retrowave
     Row(
         modifier = modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = if (retrowave) title.uppercase() else title,
-            style = if (retrowave) MaterialTheme.typography.labelLarge.neon(primary) else MaterialTheme.typography.titleSmall,
-            color = primary,
-            modifier = Modifier.weight(1f),
-        )
+        Box(Modifier.weight(1f)) {
+            Text(
+                text = if (retrowave) title.uppercase() else title,
+                style = if (retrowave) MaterialTheme.typography.labelLarge.neon(primary) else MaterialTheme.typography.titleSmall,
+                color = primary,
+                modifier = if (onBackdrop) Modifier.sunsetPlate(scheme.background, theme.glass.backdropPlateAlpha) else Modifier,
+            )
+        }
         trailing?.invoke()
     }
+}
+
+/**
+ * Text drawn straight on the page backdrop rather than on a panel (notes, hints, empty states), on
+ * the headers' soft plate so it stays readable where it passes over the Retrowave sun.
+ */
+@Composable
+fun BackdropText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    color: Color = Color.Unspecified,
+) {
+    val theme = LocalPhobosTheme.current
+    Text(
+        text,
+        modifier = modifier.sunsetPlate(MaterialTheme.colorScheme.background, theme.glass.backdropPlateAlpha),
+        style = style,
+        color = color,
+    )
 }
 
 /**

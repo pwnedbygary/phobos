@@ -43,6 +43,29 @@ fun RetrowaveBackdrop(modifier: Modifier = Modifier) {
     Spacer(modifier.drawWithCache { sunsetGrid(scheme, isDark) })
 }
 
+/**
+ * A soft plate of [color] at [alpha] behind text drawn straight on the sunset (headers, notes, empty
+ * states), so it stays readable where it passes over the sun ([GlassStyle.backdropPlateAlpha]). Draws
+ * nothing at zero.
+ */
+fun Modifier.sunsetPlate(color: Color, alpha: Float): Modifier = if (alpha <= 0f) this else drawWithCache {
+    val reach = PLATE_REACH.toPx()
+    val paint = Paint().apply {
+        this.color = color.copy(alpha = alpha)
+        // Hardware-accelerated canvases ignore mask filters before Android 9, which get a hard-edged plate.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            asFrameworkPaint().maskFilter = BlurMaskFilter(PLATE_BLUR.toPx(), BlurMaskFilter.Blur.NORMAL)
+        }
+    }
+    val plate = Rect(-reach, -reach, size.width + reach, size.height + reach)
+    onDrawBehind { drawIntoCanvas { it.drawRoundRect(plate.left, plate.top, plate.right, plate.bottom, reach, reach, paint) } }
+}
+
+private val PLATE_BLUR = 6.dp
+
+/** Past the text by more than the blur's falloff (about 1.7 times its radius), so the plate is at full alpha behind every glyph. */
+private val PLATE_REACH = 14.dp
+
 /** The sunset's colors, shared with the glass panels' contrast search ([GlassStyle]). */
 internal class SunsetColors(scheme: ColorScheme, val isDark: Boolean) {
     // Light themes get a paler scene so text over it stays crisp.

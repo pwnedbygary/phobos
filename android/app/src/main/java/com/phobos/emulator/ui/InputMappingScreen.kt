@@ -168,7 +168,7 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp + LocalDockInset.current),
             ) {
                 item {
-                    Text(
+                    BackdropText(
                         "Tap 'Bind' then press a key or move a stick. Long-press a row to clear it.",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(16.dp),
