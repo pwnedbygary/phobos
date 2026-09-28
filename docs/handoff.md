@@ -124,6 +124,12 @@ levels. Pages run under the floating dock to the bottom of the screen and pad th
 height (`LocalDockInset`), so content scrolls behind and around it. Because anything can pass under
 the dock, its opacity is searched against any color: 0.81–1.0 (0.97–0.98 in the median theme), so its
 labels keep 4.5:1 and the selected icon 3:1 on a full-strength pill.
+For depth, each panel adds a tight contact shadow under its soft shadow and a soft bevel inside its
+edge, light along the top and dark along the bottom; both stay within the 8 dp band along the edge
+that text keeps clear of, and scale with the level (half at Subtle, none at Off). The app now draws
+edge to edge on every Android version (`WindowCompat.setDecorFitsSystemWindows(window, false)`), as
+Android 15 enforces, and the navigation bar is transparent from Android 10, so pages also show
+behind the gesture handle; Android adds its own scrim behind three-button navigation.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

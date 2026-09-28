@@ -116,8 +116,9 @@ private fun SystemBarsEffect(colorScheme: ColorScheme, isDark: Boolean) {
     val view = LocalView.current
     if (view.isInEditMode) return
     val statusBar = colorScheme.background
-    // The floating dock sits over the pages and their backdrop, so the system bar below it matches the background.
-    val navigationBar = colorScheme.background
+    // Pages run under the floating dock to the bottom of the screen and show through the navigation bar; from
+    // Android 10 the system keeps three-button navigation legible over them with its own scrim.
+    val navigationBar = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) Color.Transparent else colorScheme.background
     SideEffect {
         val window = (view.context as Activity).window
         // From Android 15 the app is edge-to-edge and draws behind transparent system bars itself.

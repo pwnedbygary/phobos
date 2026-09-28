@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import coil.Coil
@@ -49,6 +50,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Edge to edge on every version, as Android 15 enforces: pages scroll under the floating dock
+        // and the navigation bar, and the Scaffolds pad for the system bars themselves.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         val imageLoader = ImageLoader.Builder(this)
             .components {
