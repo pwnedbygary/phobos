@@ -5,7 +5,10 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -13,10 +16,23 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Settings
@@ -26,16 +42,24 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.navigation.NavBackStackEntry
 import com.phobos.emulator.ui.theme.GlassBackdrop
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.RetrowaveBackdrop
-import com.phobos.emulator.ui.theme.neonBar
+import com.phobos.emulator.ui.theme.glassPanel
 import com.phobos.emulator.ui.theme.neonBloom
+import com.phobos.emulator.ui.theme.neonGlow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.*
@@ -103,7 +127,7 @@ fun MainScaffold(viewModel: MainViewModel) {
             contentColor = MaterialTheme.colorScheme.onBackground,
             bottomBar = {
                 if (route !in FULL_SCREEN_ROUTES) {
-                    PhobosNavigationBar(
+                    PhobosDock(
                         route = route,
                         retrowave = retrowave,
                         onNavigate = { target ->
@@ -278,28 +302,85 @@ private val NAV_TABS = listOf(
     NavTab("settings", "Settings", Icons.Rounded.Settings, Icons.Outlined.Settings),
 )
 
+/**
+ * Floating glass dock for the top-level tabs. Custom items rather than Material's
+ * NavigationBarItem, whose layout assumes the 80 dp NavigationBar height.
+ */
 @Composable
-private fun PhobosNavigationBar(route: String?, retrowave: Boolean, onNavigate: (String) -> Unit) {
+private fun PhobosDock(route: String?, retrowave: Boolean, onNavigate: (String) -> Unit) {
     val scheme = MaterialTheme.colorScheme
-    NavigationBar(
-        containerColor = if (retrowave) scheme.surfaceContainer.copy(alpha = 0.92f) else scheme.surfaceContainer,
-        tonalElevation = 0.dp,
-        modifier = if (retrowave) Modifier.neonBar(scheme, lineAtBottom = false) else Modifier,
+    val theme = LocalPhobosTheme.current
+    val shape = RoundedCornerShape(28.dp)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(horizontal = 24.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        NAV_TABS.forEach { tab ->
-            val selected = route == tab.route
-            NavigationBarItem(
-                selected = selected,
-                onClick = { onNavigate(tab.route) },
-                icon = {
-                    Icon(
-                        if (selected) tab.selectedIcon else tab.icon,
-                        contentDescription = tab.label,
-                        modifier = if (selected && retrowave) Modifier.neonBloom(scheme.primary) else Modifier,
+        Row(
+            modifier = Modifier
+                .widthIn(max = 440.dp)
+                .fillMaxWidth()
+                .then(if (retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier)
+                .glassPanel(shape, scheme.surfaceContainer, theme.glass.panelAlpha, theme.glass, theme.isDark, rim = !retrowave, shadow = !retrowave)
+                .selectableGroup()
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+        ) {
+            NAV_TABS.forEach { tab ->
+                DockItem(tab, selected = route == tab.route, retrowave, onClick = { onNavigate(tab.route) }, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** A dock tab: the selected one's icon sits on a translucent primary pill that springs open. */
+@Composable
+private fun DockItem(tab: NavTab, selected: Boolean, retrowave: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    val pillAlpha = LocalPhobosTheme.current.glass.indicatorAlpha
+    val selection by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow),
+        label = "dockSelection",
+    )
+    val iconColor by animateColorAsState(if (selected) scheme.primary else scheme.onSurfaceVariant, label = "dockIcon")
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(22.dp))
+            .selectable(selected = selected, onClick = onClick, role = Role.Tab)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .size(width = 56.dp, height = 30.dp)
+                .drawBehind {
+                    // The spring overshoots; the pill grows past its width but never past its verified alpha.
+                    val width = size.width * (0.4f + 0.6f * selection)
+                    drawRoundRect(
+                        color = scheme.primary,
+                        topLeft = Offset((size.width - width) / 2f, 0f),
+                        size = Size(width, size.height),
+                        cornerRadius = CornerRadius(size.height / 2f),
+                        alpha = pillAlpha * selection.coerceIn(0f, 1f),
                     )
                 },
-                label = { Text(tab.label) },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (selected) tab.selectedIcon else tab.icon,
+                contentDescription = null,
+                tint = iconColor,
+                modifier = if (selected && retrowave) Modifier.neonBloom(scheme.primary) else Modifier,
             )
         }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            tab.label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) scheme.onSurface else scheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
