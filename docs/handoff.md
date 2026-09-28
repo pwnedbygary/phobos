@@ -165,6 +165,17 @@ setting it changed was put back. Its open findings (no confirmation on Reset All
 save state's Delete, a status bar flash at a cold game launch, the navigation handle over the quit
 dialog, a likely false driver-update notice, launch intents dropped while Phobos runs) are in the
 plan's device sweep and frontend launch rows.
+Branch `fix/sweep-findings-2026-09` ([PR #24](https://github.com/pwnedbygary/phobos/pull/24)) fixes
+all but the last. Reset All Layouts and a save state's Delete ask first, and Delete is disabled on an
+empty slot. The stored settings are read once before the first frame (bounded at 500 ms), so a cold
+launch straight into a game no longer shows the status bar for about 1.2 s over the Initializing
+screen, and the first frame already has the saved theme. Every dialog hides the same system bars as
+the screen under it (`DialogSystemBars`), so the quit dialog no longer brings the navigation handle
+back over a full-screen game. The driver update check only counts releases in the installed
+driver's line: StevenMXZ's repo publishes Turnip, Turnip Gen8 and Qualcomm lines side by side, and
+Gen8 V36 had been offered as an update to Turnip v26.3.0-R5. Checked on the RP6, the cold launch
+frame by frame from screen recordings (`.local/device/cold-rec.sh` and `frames.swift`); the driver
+check has host tests.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
