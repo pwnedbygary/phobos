@@ -36,6 +36,8 @@ data class Glow(val color: Color, val alpha: Float, val x: Float, val y: Float, 
  * shadow, and a bevel along the inside of the edge, light toward the top left at [bevelLight] and
  * dark toward the bottom right at [bevelShade], gives the glass visible thickness. Both stay in the
  * band along a panel's edge that text keeps clear of, so they don't enter the contrast searches.
+ * At [refraction] above zero (the Full level, Android 13 and later), the dock draws the pages and
+ * backdrop behind it through a lens that bends them within that same band, where the tint thins.
  */
 @Immutable
 data class GlassStyle(
@@ -52,6 +54,7 @@ data class GlassStyle(
     val contactShadowAlpha: Float = 0f,
     val bevelLight: Float = 0f,
     val bevelShade: Float = 0f,
+    val refraction: Float = 0f,
 ) {
     companion object {
         fun of(
@@ -136,6 +139,7 @@ internal class GlassBuilder(
             contactShadowAlpha = if (retrowave) 0f else strength.shadow * if (isDark) DARK_CONTACT else LIGHT_CONTACT,
             bevelLight = strength.bevel * if (isDark) DARK_BEVEL_LIGHT else LIGHT_BEVEL_LIGHT,
             bevelShade = strength.bevel * if (isDark) DARK_BEVEL_SHADE else LIGHT_BEVEL_SHADE,
+            refraction = if (level == GlassEffects.FULL) 1f else 0f,
         )
     }
 

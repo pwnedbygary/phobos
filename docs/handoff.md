@@ -136,6 +136,16 @@ swipe down shows it for a moment), since the clock and icons are what the settin
 Games hide both bars as before, and leaving a game now restores the menus' state (the navigation bar,
 and the status bar only with the setting off) instead of showing every bar. The gesture handle stays
 in the menus so going home remains one swipe.
+Branch `feature/glass-refraction-2026-09` ([PR #22](https://github.com/pwnedbygary/phobos/pull/22)),
+stacked on PR #21, upgrades Compose (BOM 2024.06.00 → 2024.12.01: Compose UI 1.7.6, Material 3
+1.3.1) for its graphics layers. At the Full level on Android 13 and later, the dock draws the pages
+and backdrop behind it through a frosted lens (`ui/theme/Refraction.kt`): a 4 dp blur, and within the
+8 dp band along its edge the scene bends inward by up to 6 dp with a slight color fringe while the tint
+thins to 0.3; the labels keep out of that band, so they still sit over the contrast-safe tint. Only the
+dock gets the lens: on every tile it rendered offscreen each frame, and scrolling the Library fell to a
+34 ms median frame (61% janky), against 12 ms with the dock alone and 9 ms without a lens (about 3.5%
+janky either way). Nothing is captured during games, at Subtle or Off, or before Android 13. If the
+device can't compile the shader, the dock falls back to its plain tint.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
