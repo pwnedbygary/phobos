@@ -99,6 +99,22 @@ corners), and the console illustrations are recolored from the active theme inst
 their original colors (`ui/theme/ConsoleArtPalette.kt`, loaded through `ui/ConsoleArtFetcher.kt`),
 replacing Task 19's earlier rule to preserve the card art. Builds; 67 host tests pass, including a
 check of every illustration in every theme. Not yet checked on the RP6.
+Stacked on that: branch `feature/glass-ui-2026-09` gives the app a glass look at the user's request.
+Cards and grouped rows on every settings-style screen, the Library and the log console are
+translucent panels over soft color glows (`ui/theme/Glass.kt` computes the values,
+`ui/theme/GlassPanel.kt` draws them), and the bottom navigation is a floating glass dock. The
+console art now takes the glass tile's color as its anchor, so dark consoles stay darker than it.
+The glows take each accent's hue at about the background's luminance, so they add color without
+making the backdrop brighter or darker. Panel and glow strengths are searched once per theme from
+its final colors (under 2 ms per theme on the Mac) so that text keeps 4.5:1 over the worst backdrop:
+panels with body text sit at 0.60 alpha in every theme, and Retrowave panels need 0.69–0.98 over the
+sun. The glows and panels are static and cached per size, nothing blurs the backdrop (no
+RenderEffect; only the panel shadow is a blurred rounded rectangle), and the backdrop is hidden
+behind the running game like the sunset. Builds; 72 host tests pass, including composited-contrast
+checks for every theme and for Material You schemes from 24 seed hues. Not yet checked on the RP6.
+Screen titles and section headers are drawn straight on the backdrop, and where they pass over the
+Retrowave sun they fall below 4.5:1 in every theme (primary text over the primary-colored sun is
+about 1:1). The sunset and headers are unchanged here, so this predates the glass work.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
