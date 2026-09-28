@@ -114,7 +114,13 @@ behind the running game like the sunset. Builds; 72 host tests pass, including c
 checks for every theme and for Material You schemes from 24 seed hues. Not yet checked on the RP6.
 Screen titles and section headers are drawn straight on the backdrop, and where they pass over the
 Retrowave sun they fall below 4.5:1 in every theme (primary text over the primary-colored sun is
-about 1:1). The sunset and headers are unchanged here, so this predates the glass work.
+about 1:1). The sunset and headers are unchanged here, so this predates the glass work. A Glass
+effects setting in Settings → Appearance (Full, the default; Subtle; Off) is carried in the theme's
+glass values, so every glass surface follows it and it applies at once. Subtle keeps the structure
+with glows at about half strength, half the gloss, shade and rim, and panels at 0.80 alpha in every
+theme without Retrowave. Off gives opaque cards with the faint outline and the standard navigation bar, since
+a floating dock only makes sense over glass; Retrowave keeps its sunset and neon edges, with opaque
+panels. The contrast tests run every check at all three levels.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
