@@ -7,7 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -78,12 +78,8 @@ fun SystemDetailScreen(
                     }
                 }
             } else {
-                Card(
-                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
-                ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
+                SettingsCard(Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)) {
                         Text("Search Directories:", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp))
                         directoryUris.forEach { uri ->
                             Row(
@@ -111,21 +107,20 @@ fun SystemDetailScreen(
                         Text("No compatible ROMs found in these folders", style = MaterialTheme.typography.bodyMedium)
                     }
                 } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 88.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        itemsIndexed(roms) { index, rom ->
-                            ListItem(
-                                headlineContent = { Text(rom.name) },
-                                leadingContent = { IconBadge(Icons.Default.PlayArrow) },
-                                colors = transparentListItemColors(),
-                                modifier = Modifier.groupedCard(index, roms.size, MaterialTheme.colorScheme.surfaceContainer).clickable {
-                                    viewModel.loadRom(context, systemName, rom)
-                                    onRomClick(Uri.encode(systemName), Uri.encode(rom.name))
-                                }
-                            )
+                    // The bottom padding lets the last row scroll clear of the add-folder button.
+                    SettingsCard(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp).weight(1f, fill = false)) {
+                        LazyColumn(contentPadding = PaddingValues(bottom = 64.dp)) {
+                            items(roms) { rom ->
+                                ListItem(
+                                    headlineContent = { Text(rom.name) },
+                                    leadingContent = { IconBadge(Icons.Default.PlayArrow) },
+                                    colors = transparentListItemColors(),
+                                    modifier = Modifier.clickable {
+                                        viewModel.loadRom(context, systemName, rom)
+                                        onRomClick(Uri.encode(systemName), Uri.encode(rom.name))
+                                    }
+                                )
+                            }
                         }
                     }
                 }
