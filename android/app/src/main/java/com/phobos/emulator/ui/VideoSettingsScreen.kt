@@ -47,7 +47,7 @@ fun VideoSettingsScreen(
                     )
                     SettingsSwitchItem(
                         title = "Full Screen Mode",
-                        description = "Hides system bars during emulation",
+                        description = "Hides the status bar in the menus, and all system bars in games",
                         checked = settings.fullScreenMode,
                         onCheckedChange = { viewModel.setFullScreenMode(it) }
                     )

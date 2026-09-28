@@ -1,5 +1,6 @@
 package com.phobos.emulator.ui
 
+import android.app.Activity
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -66,11 +67,17 @@ import com.phobos.emulator.ui.theme.neonBloom
 import com.phobos.emulator.ui.theme.neonGlow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.*
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 
 private const val TOUCH_EDITOR_ROUTE = "settings/touch-editor/{family}"
 private const val EMULATOR_ROUTE = "emulator/{system}/{rom}"
@@ -114,6 +121,20 @@ fun MainScaffold(viewModel: MainViewModel) {
 
     val route = currentDestination?.route
     val retrowave = LocalPhobosTheme.current.retrowave
+
+    // Full Screen Mode also hides the status bar in the menus (a swipe down shows it for a moment). The game
+    // screen hides both bars and, when it closes, restores this state.
+    val fullScreen by remember { viewModel.settings.map { it.fullScreenMode }.distinctUntilChanged() }
+        .collectAsState(initial = viewModel.settings.value.fullScreenMode)
+    val view = LocalView.current
+    DisposableEffect(fullScreen) {
+        (view.context as? Activity)?.window?.let { window ->
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (fullScreen) controller.hide(WindowInsetsCompat.Type.statusBars()) else controller.show(WindowInsetsCompat.Type.statusBars())
+        }
+        onDispose {}
+    }
     // Faded rather than removed so leaving for the game doesn't pop mid-transition; nothing is
     // drawn behind the running game.
     val backdropAlpha by animateFloatAsState(

@@ -130,6 +130,12 @@ that text keeps clear of, and scale with the level (half at Subtle, none at Off)
 edge to edge on every Android version (`WindowCompat.setDecorFitsSystemWindows(window, false)`), as
 Android 15 enforces, and the navigation bar is transparent from Android 10, so pages also show
 behind the gesture handle; Android adds its own scrim behind three-button navigation.
+Branch `feature/fullscreen-ui-2026-09` ([PR #21](https://github.com/pwnedbygary/phobos/pull/21)),
+stacked on PR #20, makes Settings → Video → Full Screen Mode also hide the status bar in the menus (a
+swipe down shows it for a moment), since the clock and icons are what the setting promises to hide.
+Games hide both bars as before, and leaving a game now restores the menus' state (the navigation bar,
+and the status bar only with the setting off) instead of showing every bar. The gesture handle stays
+in the menus so going home remains one swipe.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

@@ -179,7 +179,12 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         onDispose {
-            if (window != null) WindowCompat.getInsetsController(window, view).show(WindowInsetsCompat.Type.systemBars())
+            // Back to the menus' state: the navigation bar, and the status bar unless Full Screen Mode hides it there too.
+            if (window != null) {
+                val controller = WindowCompat.getInsetsController(window, view)
+                controller.show(WindowInsetsCompat.Type.navigationBars())
+                if (!settings.fullScreenMode) controller.show(WindowInsetsCompat.Type.statusBars())
+            }
         }
     }
 
