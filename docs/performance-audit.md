@@ -901,6 +901,44 @@ the defaults, SyncFull makes the emulation thread wait until the GPU has finishe
 however deep the queue, so the showcases keep 11–17 frames over 20 ms and the rest of the game
 0.30–0.33 a second in every build.
 
+### 2026-09-28 follow-up: the busy-wait waits in WFE
+
+Branch `feature/busy-wait-wfe-2026-09` ([PR #18](https://github.com/pwnedbygary/phobos/pull/18)),
+based on `master`.
+
+**Finding.** Keep the fast core busy (N64) spun on `clock_gettime` with the `yield` hint through
+the idle part of every frame, and the Cortex-X3 runs that loop at full speed. On battery, with the
+showcase save state from the previous section, the RP6 drew 4.76 W with it against 3.58 W with the
+thread sleeping: about 1.2 W for keeping the emulation thread on CPU 7 at full clock. Sleeping,
+the thread was on CPU 7 only 40% of the time, CPU 7 ran at a median 1.84 GHz, and per-frame work
+rose from 7.2 to 12.1 ms.
+
+**Change.** The wait now executes `WFE` until 200 µs before the deadline and spins the rest. `WFE`
+clock-gates the core until the next event, and the kernel's timer event stream (10 kHz,
+`HWCAP_EVTSTRM`) wakes it at least every 100 µs. The thread never leaves the CPU, so the scheduler
+and the governor see the same busy thread as before. Without the event stream the wait spins as
+before.
+
+**Measured** (RP6 on battery, Standard mode, Async RDP and busy-wait on, 256 buffer sets; the
+showcase save state loaded six times per variant, one experiment build switching the wait with a
+debug property; battery power from `current_now` × `voltage_now`, sampled 10 times a second over
+wireless adb):
+
+| Wait | Battery power | Prime-core sensor (mean) | Emulation thread on CPU 7 | CPU 7 at 3.19 GHz while on it | Work per frame | Frames over 20 ms (showcases / rest) |
+|---|---|---|---|---|---|---|
+| `yield` spin (before) | 4.76 W | 61.1 °C | 100% | 98.6% | 7.18 ms | 0 / 0 |
+| `isb` spin | 5.10 W | 65.0 °C | 100% | 97.7% | 7.48 ms | 0 / 19 |
+| `WFE` (this change) | 4.15 W | 58.9 °C | 100% | 98.7% | 7.44 ms | 3 / 0 |
+| Sleep, spin the last 4 ms | 3.95 W | 56.3 °C | 100% | 1.5% | 9.58 ms | 0 / 2 |
+| Sleep (busy-wait off) | 3.58 W | 49.6 °C | 40% | 0.4% | 12.07 ms | 4 / 14 |
+
+`WFE` halves the busy-wait's cost with the same placement and clock; three showcase frames over
+20 ms are within the 0–5 the `yield` spin measured on this build. Sleeping through all but the
+last 4 ms saved a little more, but the governor then settled CPU 7 around 2.2 GHz and per-frame
+work grew by a third, which heavier games can't afford. An `isb` loop drew more than `yield`. The
+runs went in the table's order without a pause, so later runs started warmer, which works against
+`WFE` rather than for it.
+
 ### Next (not implemented)
 
 - RSP vector instructions: emit the other frequent ones (VMULF, VMACF, VADD, VSUB, VMOV, VGE, VLT,

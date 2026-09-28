@@ -88,6 +88,10 @@ lets parallel-RDP keep 256 render contexts in flight instead of 32 (73 MiB more 
 removes nearly all of Mario Tennis's shot-showcase stutter in Standard mode with Async RDP and
 busy-wait on (frames over 20 ms per showcase 11–16 → 0–2)
 ([audit](performance-audit.md#2026-09-27-follow-up-parallel-rdp-keeps-up-to-256-render-contexts-in-flight)).
+Branch `feature/busy-wait-wfe-2026-09` ([PR #18](https://github.com/pwnedbygary/phobos/pull/18))
+makes Keep the fast core busy (N64) wait in `WFE` instead of spinning: the same placement and clock,
+about half the power (RP6 on battery 4.76 → 4.15 W; sleeping 3.58 W)
+([audit](performance-audit.md#2026-09-28-follow-up-the-busy-wait-waits-in-wfe)).
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

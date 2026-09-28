@@ -10,6 +10,10 @@
 #include <arm_neon.h>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/auxv.h>
+#if defined(__aarch64__)
+#include <asm/hwcap.h>
+#endif
 #include <dlfcn.h>
 #include <mutex>
 #include <memory>
@@ -770,11 +774,20 @@ namespace ares {
   static std::atomic<bool> busyWaitPacing{false};
 
   // A thread that sleeps part of every frame reads to Android as a medium load: the fastest
-  // core gets paused or clocked down, and heavy frames then overrun until it reacts. Spinning
+  // core gets paused or clocked down, and heavy frames then overrun until it reacts. Busy-waiting
   // keeps the core as busy as fast-forward does, at a battery and heat cost, so it is only
   // used for N64, whose frames take a large share of the frame period.
   static auto waitUntil(std::chrono::steady_clock::time_point deadline, bool spin) -> void {
     if (!spin) return std::this_thread::sleep_until(deadline);
+    #if defined(__aarch64__)
+    // WFE clock-gates the core while the thread keeps running, so Android still sees a busy core.
+    // Only the kernel's timer event stream (every 100 us) guarantees a wake-up; the last 200 us spin.
+    static const bool eventStream = (getauxval(AT_HWCAP) & HWCAP_EVTSTRM) != 0;
+    if (eventStream) {
+      auto coarse = deadline - std::chrono::microseconds(200);
+      while (std::chrono::steady_clock::now() < coarse) asm volatile("wfe" ::: "memory");
+    }
+    #endif
     while (std::chrono::steady_clock::now() < deadline) {
       #if defined(__aarch64__)
       asm volatile("yield" ::: "memory");
