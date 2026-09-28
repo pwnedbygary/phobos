@@ -19,12 +19,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import coil.compose.AsyncImage
 import com.phobos.emulator.R
+import com.phobos.emulator.ui.theme.ConsoleArtPalette
+import com.phobos.emulator.ui.theme.LocalPhobosTheme
 
 @Composable
 fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     val systems by viewModel.visibleSystems.collectAsState()
+    val theme = LocalPhobosTheme.current
+    val artPalette = remember(theme.scheme, theme.success, theme.warning) {
+        ConsoleArtPalette(theme.scheme, theme.success, theme.warning)
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Image(
@@ -35,7 +42,8 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                 .align(Alignment.BottomEnd)
                 .offset(x = 100.dp, y = 100.dp)
                 .alpha(0.10f),
-            contentScale = ContentScale.Fit
+            contentScale = ContentScale.Fit,
+            colorFilter = artPalette.logoFilter
         )
 
         if (systems.isEmpty()) {
@@ -45,7 +53,8 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                         painter = painterResource(id = R.drawable.phobos_logo),
                         contentDescription = "Phobos Logo",
                         modifier = Modifier.size(120.dp),
-                        alpha = 0.3f
+                        alpha = 0.3f,
+                        colorFilter = artPalette.logoFilter
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
@@ -66,7 +75,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                     ScreenHeader("Library", "${systems.size} ${if (systems.size == 1) "system" else "systems"}")
                 }
                 items(systems) { system ->
-                    SystemCard(system, onClick = { 
+                    SystemCard(system, artPalette, onClick = { 
                         onSystemClick(Uri.encode(system)) 
                     })
                 }
@@ -75,9 +84,9 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     }
 }
 
-/** Console tile on the same themed card surface as the settings cards. */
+/** Console tile on the same themed card surface as the settings cards, with the console in the theme's colors. */
 @Composable
-fun SystemCard(system: String, onClick: () -> Unit) {
+fun SystemCard(system: String, artPalette: ConsoleArtPalette, onClick: () -> Unit) {
     ThemedCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -96,12 +105,23 @@ fun SystemCard(system: String, onClick: () -> Unit) {
                     .fillMaxWidth(),
                 contentAlignment = Alignment.Center
             ) {
-                AsyncImage(
-                    model = getSystemIcon(system),
-                    contentDescription = system,
-                    modifier = Modifier.size(80.dp),
-                    contentScale = ContentScale.Fit
-                )
+                val asset = getSystemIcon(system)
+                if (asset != null) {
+                    AsyncImage(
+                        model = ConsoleArt(asset, artPalette),
+                        contentDescription = system,
+                        modifier = Modifier.size(80.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Image(
+                        painter = painterResource(id = R.drawable.phobos_logo),
+                        contentDescription = system,
+                        modifier = Modifier.size(80.dp),
+                        contentScale = ContentScale.Fit,
+                        colorFilter = artPalette.logoFilter
+                    )
+                }
             }
             Text(
                 system,
@@ -115,8 +135,9 @@ fun SystemCard(system: String, onClick: () -> Unit) {
     }
 }
 
-private fun getSystemIcon(system: String): Any {
-    val assetName = when {
+/** The system's illustration in `assets/platforms`, or null for systems without one. */
+private fun getSystemIcon(system: String): String? {
+    return when {
         system.contains("Neo Geo Pocket Color", ignoreCase = true) -> "neo-geo-pocket-color"
         system.contains("Neo Geo Pocket", ignoreCase = true) -> "neo-geo-pocket"
         system.contains("Neo Geo", ignoreCase = true) && system.contains("CD", ignoreCase = true) -> "neo-geo-cd"
@@ -146,11 +167,5 @@ private fun getSystemIcon(system: String): Any {
         system.contains("ZX Spectrum 128", ignoreCase = true) || system.contains("ZX Spectrum", ignoreCase = true) -> "zx-spectrum"
         system.contains("Arcade", ignoreCase = true) -> "arcade"
         else -> null
-    }
-
-    return if (assetName != null) {
-        "file:///android_asset/platforms/$assetName.svg"
-    } else {
-        R.drawable.phobos_logo
     }
 }

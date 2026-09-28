@@ -39,11 +39,13 @@ data class PhobosThemeInfo(
     val retrowave: Boolean,
     val success: Color,
     val warning: Color,
+    /** The theme's final colors; [MaterialTheme.colorScheme] cross-fades to them after a change. */
+    val scheme: ColorScheme,
 )
 
 val LocalPhobosTheme = compositionLocalOf {
     val fallback = ThemeRegistry.resolve(ThemeRegistry.SYSTEM_ID, ThemeMode.DARK, followSystem = false, systemDark = true)
-    PhobosThemeInfo(fallback.theme, fallback.isDark, retrowave = false, fallback.colors.success, fallback.colors.warning)
+    PhobosThemeInfo(fallback.theme, fallback.isDark, retrowave = false, fallback.colors.success, fallback.colors.warning, fallback.colors.scheme)
 }
 
 @Composable
@@ -63,7 +65,7 @@ fun PhobosTheme(
     val colorScheme = animateColorScheme(colors.scheme)
     SystemBarsEffect(colorScheme, resolved.isDark)
 
-    val info = PhobosThemeInfo(resolved.theme, resolved.isDark, retrowave, colors.success, colors.warning)
+    val info = PhobosThemeInfo(resolved.theme, resolved.isDark, retrowave, colors.success, colors.warning, colors.scheme)
     CompositionLocalProvider(LocalPhobosTheme provides info) {
         MaterialTheme(
             colorScheme = colorScheme,

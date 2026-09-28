@@ -20,6 +20,8 @@ import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.InputBindings
+import com.phobos.emulator.ui.ConsoleArtFetcher
+import com.phobos.emulator.ui.ConsoleArtKeyer
 import com.phobos.emulator.ui.MainScaffold
 import com.phobos.emulator.ui.MainViewModel
 import com.phobos.emulator.ui.RomFile
@@ -50,6 +52,8 @@ class MainActivity : ComponentActivity() {
         val imageLoader = ImageLoader.Builder(this)
             .components {
                 add(SvgDecoder.Factory())
+                add(ConsoleArtKeyer())
+                add(ConsoleArtFetcher.Factory())
             }
             .build()
         Coil.setImageLoader(imageLoader)
