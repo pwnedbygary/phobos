@@ -7,10 +7,11 @@ name: Android Build
 # Only RELEASE builds are produced here — debug builds stay local/off-CI so
 # nobody gets the dev build from GitHub.
 #
-# The release build type signs with the debug keystore (see
-# android/app/build.gradle.kts), which AGP auto-generates on the runner, so the
-# APKs install for sideloading. If you later want proper release signing, add
-# the keystore as secrets and wire them in (see "Release signing" notes below).
+# The release build type signs with android/keystore/release.keystore, which is
+# committed with the default passwords in android/app/build.gradle.kts, so CI and
+# local release APKs install over each other. That key is public; for private
+# release signing, provide PHOBOS_KEYSTORE_FILE, PHOBOS_KEYSTORE_PASSWORD,
+# PHOBOS_KEY_ALIAS and PHOBOS_KEY_PASSWORD from secrets (the build reads them).
 
 on:
   push:

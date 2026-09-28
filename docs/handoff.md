@@ -112,9 +112,9 @@ sun. The glows and panels are static and cached per size, nothing blurs the back
 RenderEffect; only the panel shadow is a blurred rounded rectangle), and the backdrop is hidden
 behind the running game like the sunset. Builds; 73 host tests pass, including composited-contrast
 checks for every theme and for Material You schemes from 24 seed hues. Checked on the RP6.
-Screen titles and section headers are drawn straight on the backdrop, and where they pass over the
-Retrowave sun they fall below 4.5:1 in every theme (primary text over the primary-colored sun is
-about 1:1). The sunset and headers are unchanged here, so this predates the glass work. A Glass
+Screen titles and section headers are drawn straight on the backdrop, and where they passed over the
+Retrowave sun they fell below 4.5:1 in every theme (primary text over the primary-colored sun was
+about 1:1); PR #23 fixes that with a soft plate behind them. A Glass
 effects setting in Settings → Appearance (Full, the default; Subtle; Off) is carried in the theme's
 glass values, so every glass surface follows it and it applies at once. Subtle keeps the structure
 with glows at about half strength, half the gloss, shade and rim, and panels at 0.80 alpha in every
@@ -146,6 +146,25 @@ dock gets the lens: on every tile it rendered offscreen each frame, and scrollin
 34 ms median frame (61% janky), against 12 ms with the dock alone and 9 ms without a lens (about 3.5%
 janky either way). Nothing is captured during games, at Subtle or Off, or before Android 13. If the
 device can't compile the shader, the dock falls back to its plain tint.
+Branch `feature/cleanup-2026-09` ([PR #23](https://github.com/pwnedbygary/phobos/pull/23)) puts
+Retrowave headers drawn on the sunset (screen titles, section headers), and the notes and empty
+states drawn straight on the backdrop (`BackdropText`), on a soft plate of the background, at the
+least opacity that keeps them at 4.5:1 over the sun (0.67–0.93 by theme; a host test checks every
+theme). It moves Keep the fast core busy to N64 Experimental → Frame pacing (in Settings and in
+the pause menu), and
+updates the plan: Task 61 (in-place upgrades work, but the committed release key is public),
+Task 69 (superseded by the overlay), the PS1, Genesis VDP and Saturn rows (wanted eventually), a
+list of candidate N64 Experimental performance options, and two planned features: the performance
+monitor's settings in the pause menu plus resizing it on screen by pinching or dragging handles on
+its corners and sides, with the text wrapping and scaling to fit; and controller and hotkey
+settings in the pause menu, per console and per game (Tasks 13b and 13d).
+A scripted sweep on the RP6 (2026-09-28) checked the three glass levels and theme changes, the
+plates, Rogue Squadron's mode-change hold, the pause menu's quick actions, the status bar after
+leaving a game with Full Screen Mode on and off, and the touch layout editor from Settings; every
+setting it changed was put back. Its open findings (no confirmation on Reset All Layouts or on a
+save state's Delete, a status bar flash at a cold game launch, the navigation handle over the quit
+dialog, a likely false driver-update notice, launch intents dropped while Phobos runs) are in the
+plan's device sweep and frontend launch rows.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
