@@ -12,11 +12,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import coil.Coil
 import coil.ImageLoader
 import coil.decode.SvgDecoder
+import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
@@ -36,9 +39,14 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 private data class ThemeSelection(val id: String, val mode: ThemeMode, val followSystem: Boolean, val retrowave: Boolean, val glass: GlassEffects)
+
+private fun EmulatorSettings.themeSelection() = ThemeSelection(themeId, themeMode, themeFollowSystem, retrowaveEffects, glassEffects)
+
+private const val STARTUP_SETTINGS_TIMEOUT_MS = 500L
 
 class MainActivity : ComponentActivity() {
 
@@ -64,22 +72,32 @@ class MainActivity : ComponentActivity() {
         Coil.setImageLoader(imageLoader)
         
         settingsStore = SettingsStore(this)
+        // The stored settings, read once before the first frame (bounded), so the window starts in the
+        // saved full-screen state and the first frame already has the saved theme. A launch straight
+        // into a game starts with both bars hidden, as the game screen will.
+        val startupSettings = runBlocking { withTimeoutOrNull(STARTUP_SETTINGS_TIMEOUT_MS) { settingsStore.settings.first() } }
+        if (startupSettings?.fullScreenMode == true) {
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(if (startsGame(intent)) WindowInsetsCompat.Type.systemBars() else WindowInsetsCompat.Type.statusBars())
+            }
+        }
         viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return MainViewModel(applicationContext, settingsStore) as T
+                return MainViewModel(applicationContext, settingsStore, startupSettings ?: EmulatorSettings()) as T
             }
         })[MainViewModel::class.java]
 
         lifecycle.addObserver(viewModel)
 
         setContent {
-            // viewModel.settings starts from defaults until DataStore loads; waiting for the stored
-            // theme keeps launches from flashing, and animating away from, the default theme.
+            // viewModel.settings starts from defaults if the startup read timed out; waiting for the
+            // stored theme then keeps launches from flashing, and animating away from, the default theme.
             val theme by remember {
                 settingsStore.settings
-                    .map { ThemeSelection(it.themeId, it.themeMode, it.themeFollowSystem, it.retrowaveEffects, it.glassEffects) }
+                    .map { it.themeSelection() }
                     .distinctUntilChanged()
-            }.collectAsState(initial = null)
+            }.collectAsState(initial = startupSettings?.themeSelection())
 
             theme?.let {
                 PhobosTheme(themeId = it.id, themeMode = it.mode, followSystem = it.followSystem, retrowave = it.retrowave, glassEffects = it.glass) {
@@ -139,6 +157,9 @@ class MainActivity : ComponentActivity() {
         debugScope.cancel()
         super.onDestroy()
     }
+
+    /** Whether [intent] loads a game straight away (see [handleDebugLoadIntent]). */
+    private fun startsGame(intent: android.content.Intent?): Boolean = intent?.getStringExtra("load_uri") != null
 
     /**
      * Debug/test harness: load a ROM directly from adb without UI interaction.

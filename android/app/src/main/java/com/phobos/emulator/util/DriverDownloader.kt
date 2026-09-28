@@ -31,6 +31,26 @@ data class DriverAsset(
     val publishedAt: String
 )
 
+/**
+ * A release tag with its digit runs collapsed. Repos publish several driver lines side by side
+ * (StevenMXZ: Turnip "v26.3.0-R5", Turnip Gen8 "v36" and Qualcomm "v863.1_a7xx"), and a line keeps
+ * its tag's shape from one release to the next.
+ */
+internal fun driverLine(tag: String): String = tag.replace(Regex("\\d+"), "#")
+
+/**
+ * The newest release in the installed driver's line that was published after it, or null. A newer
+ * release in another line, such as a driver for another GPU generation, isn't an update.
+ */
+internal fun newerDriverRelease(installedTag: String, assets: List<DriverAsset>): DriverAsset? {
+    val line = driverLine(installedTag)
+    val sameLine = assets.filter { it.tag != "unknown" && driverLine(it.tag) == line }
+    val installedAt = sameLine.firstOrNull { it.tag == installedTag }?.publishedAt
+    return sameLine
+        .filter { it.tag != installedTag && (installedAt == null || it.publishedAt > installedAt) }
+        .maxByOrNull { it.publishedAt }
+}
+
 /** GitHub repos that publish Adreno/Mesa Turnip driver builds. */
 val DRIVER_SOURCES = listOf(
     DriverSource("K11MCH1", "Classic AdrenoTools releases (Turnip v26.x, Qualcomm)", "K11MCH1", "AdrenoToolsDrivers"),

@@ -59,6 +59,7 @@ import androidx.lifecycle.LifecycleOwner
 import com.phobos.emulator.util.DriverAsset
 import com.phobos.emulator.util.DriverDownloader
 import com.phobos.emulator.util.DriverSource
+import com.phobos.emulator.util.newerDriverRelease
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -73,9 +74,13 @@ data class VideoGeometry(val width: Float, val height: Float) {
 data class StateSlotPreview(val image: Bitmap?, val savedAtMillis: Long)
 private data class DriverSidecar(val owner: String, val repo: String, val tag: String)
 
-class MainViewModel(private val context: Context, private val settingsStore: SettingsStore) : ViewModel(), DefaultLifecycleObserver {
+class MainViewModel(
+    private val context: Context,
+    private val settingsStore: SettingsStore,
+    initialSettings: EmulatorSettings = EmulatorSettings(),
+) : ViewModel(), DefaultLifecycleObserver {
     val settings: StateFlow<EmulatorSettings> = settingsStore.settings
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), EmulatorSettings())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), initialSettings)
 
     // Driver download progress (downloaded, total); total = -1 when unknown.
     private val _downloadProgress = MutableStateFlow(Pair(-1L, -1L))
@@ -1350,10 +1355,8 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
                 settingsStore.setDriverUpdateCheckTime(now)
                 val info = readDriverSourceSidecar(path) ?: return@launch
                 val source = DriverSource(info.owner, "", info.owner, info.repo)
-                val latest = DriverDownloader.fetchAssets(source).maxByOrNull { it.publishedAt } ?: return@launch
-                if (latest.tag != "unknown" && latest.tag != info.tag) {
-                    _driverUpdateEvent.emit("Driver update available: ${info.owner}/${info.repo} → ${latest.tag}")
-                }
+                val newer = newerDriverRelease(info.tag, DriverDownloader.fetchAssets(source)) ?: return@launch
+                _driverUpdateEvent.emit("Driver update available: ${info.owner}/${info.repo} → ${newer.tag}")
             } catch (e: Exception) {
                 Log.w("Phobos", "Driver update check failed: ${e.message}")
             }

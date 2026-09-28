@@ -7,14 +7,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.touch.AnalogMode
@@ -31,6 +36,7 @@ import java.util.Locale
 fun TouchSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onEditLayout: (TouchFamily) -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val touch = settings.touch
+    var confirmResetAll by remember { mutableStateOf(false) }
 
     PhobosScaffold(title = "Touch Controls", onBack = onBack) { innerPadding ->
         LazyColumn(
@@ -134,17 +140,30 @@ fun TouchSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onEditLayo
                 }
             }
             item {
-                OutlinedButton(
+                OutlinedButton(onClick = { confirmResetAll = true }, modifier = Modifier.fillMaxWidth()) { Text("Reset All Layouts") }
+            }
+        }
+    }
+
+    if (confirmResetAll) {
+        AlertDialog(
+            onDismissRequest = { confirmResetAll = false },
+            title = { DialogSystemBars(settings.fullScreenMode, inGame = false); Text("Reset all layouts?") },
+            text = { Text("Every system's touch layout goes back to its default, in landscape and portrait. This can't be undone.") },
+            confirmButton = {
+                TextButton(
                     onClick = {
+                        confirmResetAll = false
                         TouchFamily.entries.forEach { family ->
                             viewModel.resetTouchLayout(family, landscape = true)
                             viewModel.resetTouchLayout(family, landscape = false)
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Reset All Layouts") }
-            }
-        }
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Reset") }
+            },
+            dismissButton = { TextButton(onClick = { confirmResetAll = false }) { Text("Cancel") } },
+        )
     }
 }
 

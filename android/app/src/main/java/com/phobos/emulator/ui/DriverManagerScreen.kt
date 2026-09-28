@@ -162,6 +162,7 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     // ── Download modal ───────────────────────────────────────────────────────
     if (showDownload) {
         Dialog(onDismissRequest = { showDownload = false }) {
+            DialogSystemBars(settings.fullScreenMode, inGame = false)
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 tonalElevation = 4.dp,
@@ -260,6 +261,7 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     // ── Delete modal ─────────────────────────────────────────────────────────
     if (showDelete) {
         Dialog(onDismissRequest = { showDelete = false }) {
+            DialogSystemBars(settings.fullScreenMode, inGame = false)
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 tonalElevation = 4.dp,

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -45,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -202,15 +204,21 @@ private fun SaveStateSection(
     currentSlot: Int, onResume: () -> Unit,
 ) {
     val stateRevision by viewModel.stateRevision.collectAsState()
-    var preview by remember { mutableStateOf<StateSlotPreview?>(null) }
-    LaunchedEffect(systemName, romName, currentSlot, stateRevision) {
-        preview = viewModel.stateSlotPreview(systemName, romName, currentSlot)
+    // A preview belongs to the slot and save revision it was loaded for; while another one loads
+    // there is none, so the row doesn't show the previous slot and Delete stays disabled.
+    val previewKey = listOf(systemName, romName, currentSlot, stateRevision)
+    var loadedPreview by remember { mutableStateOf<Pair<List<Any>, StateSlotPreview?>?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    LaunchedEffect(previewKey) {
+        loadedPreview = previewKey to viewModel.stateSlotPreview(systemName, romName, currentSlot)
     }
+    val preview = loadedPreview?.takeIf { it.first == previewKey }?.second
+    val slotName = if (currentSlot < 0) "Slot Auto" else "Slot $currentSlot"
     MenuSection("Save / Load States") {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { viewModel.decrementSlot() }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Prev") }
-                Text(if (currentSlot < 0) "Slot Auto" else "Slot $currentSlot", style = MaterialTheme.typography.bodyLarge)
+                Text(slotName, style = MaterialTheme.typography.bodyLarge)
                 IconButton(onClick = { viewModel.incrementSlot() }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next") }
             }
             Row {
@@ -219,7 +227,8 @@ private fun SaveStateSection(
                 Button(onClick = { viewModel.loadState(systemName, romName, currentSlot); onResume() }) { Text("Load") }
                 Spacer(Modifier.width(8.dp))
                 OutlinedButton(
-                    onClick = { viewModel.deleteState(systemName, romName, currentSlot) },
+                    onClick = { confirmDelete = true },
+                    enabled = preview != null,
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) { Text("Delete") }
             }
@@ -232,6 +241,21 @@ private fun SaveStateSection(
         SettingsSwitchItem("Auto-Load State", "Restore the auto-saved state when a game is loaded", settings.autoLoadState) {
             viewModel.setAutoLoadState(it)
         }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { DialogSystemBars(settings.fullScreenMode, inGame = true); Text("Delete this save state?") },
+            text = { Text("The state in $slotName is deleted for good.") },
+            confirmButton = {
+                TextButton(
+                    onClick = { confirmDelete = false; viewModel.deleteState(systemName, romName, currentSlot) },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
     }
 }
 

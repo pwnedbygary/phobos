@@ -21,15 +21,17 @@ fun EmulatorDialogs(
     onQuitConfirmed: () -> Unit,
     onLeave: () -> Unit,
 ) {
+    val settings by viewModel.settings.collectAsState()
     val showDriverSuggestion by viewModel.showDriverSuggestion.collectAsState()
     val unsupportedSystem by viewModel.unsupportedSystem.collectAsState()
     val biosRequired by viewModel.biosRequired.collectAsState()
     val neoGeoRomLoadFailed by viewModel.neoGeoRomLoadFailed.collectAsState()
+    val fullScreen = settings.fullScreenMode
 
     if (showQuitDialog) {
         AlertDialog(
             onDismissRequest = onQuitDismissed,
-            title = { Text("Quit Emulation") },
+            title = { DialogSystemBars(fullScreen, inGame = true); Text("Quit Emulation") },
             text = { Text("Are you sure you want to stop emulating $romName?") },
             confirmButton = { TextButton(onClick = onQuitConfirmed) { Text("Quit") } },
             dismissButton = { TextButton(onClick = onQuitDismissed) { Text("Cancel") } },
@@ -39,7 +41,7 @@ fun EmulatorDialogs(
     if (showDriverSuggestion) {
         AlertDialog(
             onDismissRequest = { viewModel.dismissDriverSuggestion() },
-            title = { Text("GPU Driver Issue Detected") },
+            title = { DialogSystemBars(fullScreen, inGame = true); Text("GPU Driver Issue Detected") },
             text = {
                 Text(
                     "The built-in GPU driver is unable to compile shaders needed by this game. " +
@@ -57,6 +59,7 @@ fun EmulatorDialogs(
             title = "$system Unsupported",
             message = "$system games are currently unsupported in this build. " +
                 "This is a known issue being worked on.\n\nPlease try a different system or game.",
+            fullScreen = fullScreen,
             onDismiss = { viewModel.dismissUnsupportedSystem(); onLeave() },
         )
     }
@@ -67,6 +70,7 @@ fun EmulatorDialogs(
             message = "The Neo Geo core cannot boot without a BIOS.\n\n" +
                 "Add neogeo.zip (containing sp-e.sp1 and 000-lo.lo) by setting the Neo Geo BIOS in " +
                 "Settings, or place neogeo.zip next to your ROMs, then try loading the game again.",
+            fullScreen = fullScreen,
             onDismiss = { viewModel.dismissBiosRequired(); onLeave() },
         )
     }
@@ -78,16 +82,17 @@ fun EmulatorDialogs(
                 "not a valid Neo Geo MVS/AES game (for example, 1941 is a CPS-1 Capcom title, not " +
                 "Neo Geo).\n\nVerify the ROM is a real Neo Geo cartridge (e.g. kof2003) and that " +
                 "neogeo.zip is set in Settings, then try again.",
+            fullScreen = fullScreen,
             onDismiss = { viewModel.dismissNeoGeoRomLoadFailed(); onLeave() },
         )
     }
 }
 
 @Composable
-private fun LoadFailureDialog(title: String, message: String, onDismiss: () -> Unit) {
+private fun LoadFailureDialog(title: String, message: String, fullScreen: Boolean, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
+        title = { DialogSystemBars(fullScreen, inGame = true); Text(title) },
         text = { Text(message) },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
     )
