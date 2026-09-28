@@ -71,7 +71,7 @@ fun PhobosTheme(
         if (useDynamic) dynamicColors(context, resolved.isDark) else resolved.colors
     }
     val colorScheme = animateColorScheme(colors.scheme)
-    SystemBarsEffect(colorScheme, resolved.isDark, floatingDock = glassEffects != GlassEffects.OFF)
+    SystemBarsEffect(colorScheme, resolved.isDark)
     val glass = remember(colors, resolved.isDark, retrowave, glassEffects) {
         GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, retrowave, glassEffects)
     }
@@ -112,13 +112,12 @@ private fun animateColorScheme(target: ColorScheme): ColorScheme {
 
 @Suppress("DEPRECATION")
 @Composable
-private fun SystemBarsEffect(colorScheme: ColorScheme, isDark: Boolean, floatingDock: Boolean) {
+private fun SystemBarsEffect(colorScheme: ColorScheme, isDark: Boolean) {
     val view = LocalView.current
     if (view.isInEditMode) return
     val statusBar = colorScheme.background
-    // The floating dock sits over the screen's backdrop, so the system bar below it matches the background;
-    // the standard navigation bar (glass effects off) continues into it.
-    val navigationBar = if (floatingDock) colorScheme.background else colorScheme.surfaceContainer
+    // The floating dock sits over the pages and their backdrop, so the system bar below it matches the background.
+    val navigationBar = colorScheme.background
     SideEffect {
         val window = (view.context as Activity).window
         // From Android 15 the app is edge-to-edge and draws behind transparent system bars itself.

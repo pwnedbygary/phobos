@@ -2,7 +2,6 @@ package com.phobos.emulator.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -36,7 +35,7 @@ fun TouchSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onEditLayo
     PhobosScaffold(title = "Touch Controls", onBack = onBack) { innerPadding ->
         LazyColumn(
             modifier = Modifier.padding(innerPadding).fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = pageContentPadding(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item {

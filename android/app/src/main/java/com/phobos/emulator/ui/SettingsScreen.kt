@@ -40,7 +40,7 @@ fun SettingsScreen(
     val themeName = LocalPhobosTheme.current.theme.name
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = pageContentPadding(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { ScreenHeader("Settings") }

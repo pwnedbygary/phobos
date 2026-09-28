@@ -94,7 +94,7 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     PhobosScaffold(title = "GPU Driver Manager", onBack = onBack) { innerPadding ->
         LazyColumn(
             modifier = Modifier.padding(innerPadding).fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = pageContentPadding(),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {

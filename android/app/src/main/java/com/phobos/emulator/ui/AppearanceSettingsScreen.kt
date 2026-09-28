@@ -32,7 +32,7 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 156.dp),
             modifier = Modifier.padding(innerPadding).fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = pageContentPadding(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

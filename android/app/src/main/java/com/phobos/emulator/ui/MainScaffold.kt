@@ -18,9 +18,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -59,10 +62,10 @@ import com.phobos.emulator.ui.theme.GlassBackdrop
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.RetrowaveBackdrop
 import com.phobos.emulator.ui.theme.glassPanel
-import com.phobos.emulator.ui.theme.neonBar
 import com.phobos.emulator.ui.theme.neonBloom
 import com.phobos.emulator.ui.theme.neonGlow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.*
 import androidx.navigation.NavType
@@ -130,156 +133,162 @@ fun MainScaffold(viewModel: MainViewModel) {
             contentColor = MaterialTheme.colorScheme.onBackground,
             bottomBar = {
                 if (route !in FULL_SCREEN_ROUTES) {
-                    val onNavigate: (String) -> Unit = { target ->
+                    PhobosDock(route, retrowave) { target ->
                         navController.navigate(target) {
                             popUpTo(navController.graph.startDestinationId)
                             launchSingleTop = true
                         }
                     }
-                    if (LocalPhobosTheme.current.glass.level == GlassEffects.OFF) {
-                        PhobosNavigationBar(route, retrowave, onNavigate)
-                    } else {
-                        PhobosDock(route, retrowave, onNavigate)
-                    }
                 }
             }
         ) { innerPadding ->
-            NavHost(
-                navController,
-                startDestination = "library",
-                modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding),
-                enterTransition = { if (involvesEmulator()) LegacyEnter else if (betweenTabs()) TabEnter else fadeIn(tween(220, delayMillis = 60)) + slideInHorizontally(tween(300)) { it / 10 } },
-                exitTransition = { if (involvesEmulator()) LegacyExit else if (betweenTabs()) TabExit else fadeOut(tween(160)) },
-                popEnterTransition = { if (involvesEmulator()) LegacyEnter else fadeIn(tween(220, delayMillis = 60)) },
-                popExitTransition = { if (involvesEmulator()) LegacyExit else fadeOut(tween(160)) + slideOutHorizontally(tween(300)) { it / 10 } },
-            ) {
-                composable("library") {
-                    LibraryScreen(viewModel, onSystemClick = { name ->
-                        navController.navigate("system/$name")
-                    })
-                }
-                composable("console") { ConsoleScreen(viewModel) }
-                composable("settings") {
-                    SettingsScreen(
-                        viewModel = viewModel,
-                        onNavigateToAppearance = { navController.navigate("settings/appearance") },
-                        onNavigateToEmulation = { navController.navigate("settings/emulation") },
-                        onNavigateToVideo = { navController.navigate("settings/video") },
-                        onNavigateToN64Experimental = { navController.navigate("settings/n64-experimental") },
-                        onNavigateToAudio = { navController.navigate("settings/audio") },
-                        onNavigateToPerformance = { navController.navigate("settings/performance") },
-                        onNavigateToInputs = { navController.navigate("settings/inputs") },
-                        onNavigateToPaths = { navController.navigate("settings/paths") },
-                        onNavigateToVisibility = { navController.navigate("settings/visibility") },
-                        onNavigateToAbout = { navController.navigate("settings/about") }
-                    )
-                }
-                composable("settings/appearance") {
-                    AppearanceSettingsScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/emulation") {
-                    EmulationSettingsScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() },
-                        onNavigateToFirmware = { navController.navigate("settings/firmware") },
-                        onNavigateToDrivers = { navController.navigate("settings/drivers") }
-                    )
-                }
-                composable("settings/video") {
-                    VideoSettingsScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() },
-                        onNavigateToShaders = { navController.navigate("settings/shaders") }
-                    )
-                }
-                composable("settings/n64-experimental") {
-                    N64ExperimentalSettingsScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/audio") {
-                    AudioSettingsScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/performance") {
-                    PerformanceMonitorSettingsScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/inputs") {
-                    InputsSettingsScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() },
-                        onNavigateToInputs = { navController.navigate("settings/input-mapping") },
-                        onNavigateToHotkeys = { navController.navigate("settings/hotkeys") },
-                        onNavigateToTouch = { navController.navigate("settings/touch") }
-                    )
-                }
-                composable("settings/touch") {
-                    TouchSettingsScreen(
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() },
-                        onEditLayout = { family -> navController.navigate("settings/touch-editor/${family.key}") }
-                    )
-                }
-                composable(
-                    route = TOUCH_EDITOR_ROUTE,
-                    arguments = listOf(navArgument("family") { type = NavType.StringType })
-                ) { backStackEntry ->
-                    TouchLayoutEditorScreen(
-                        viewModel = viewModel,
-                        familyKey = backStackEntry.arguments?.getString("family") ?: "",
-                        onBack = { navController.popBackStack() }
-                    )
-                }
-                composable("settings/visibility") {
-                    VisibilitySettingsScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/firmware") {
-                    FirmwareSettingsScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/input-mapping") {
-                    InputMappingScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/hotkeys") {
-                    HotkeyMappingScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/shaders") {
-                    ShaderSettingsScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/paths") {
-                    PathSettingsScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/drivers") {
-                    DriverManagerScreen(viewModel, onBack = { navController.popBackStack() })
-                }
-                composable("settings/about") {
-                    AboutScreen(onBack = { navController.popBackStack() })
-                }
-                composable(
-                    route = "system/{name}",
-                    arguments = listOf(navArgument("name") { type = NavType.StringType })
-                ) { backStackEntry ->
-                    val systemName = backStackEntry.arguments?.getString("name") ?: ""
-                    SystemDetailScreen(
-                        encodedSystemName = systemName,
-                        viewModel = viewModel,
-                        onBack = { navController.popBackStack() },
-                        onRomClick = { system, rom ->
-                            navController.navigate("emulator/$system/$rom")
-                        }
-                    )
-                }
-                composable(
-                    route = "emulator/{system}/{rom}",
-                    arguments = listOf(
-                        navArgument("system") { type = NavType.StringType },
-                        navArgument("rom") { type = NavType.StringType }
-                    )
-                ) { backStackEntry ->
-                    val system = backStackEntry.arguments?.getString("system") ?: ""
-                    val rom = backStackEntry.arguments?.getString("rom") ?: ""
-                    EmulatorScreen(
-                        viewModel = viewModel,
-                        systemName = Uri.decode(system),
-                        romName = Uri.decode(rom),
-                        onBack = { navController.popBackStack() }
-                    )
+            // Pages with the dock run under it to the bottom of the screen; LocalDockInset tells
+            // them how far to pad their ends instead.
+            val docked = route !in FULL_SCREEN_ROUTES
+            val direction = LocalLayoutDirection.current
+            val pagePadding = if (!docked) innerPadding else PaddingValues(
+                start = innerPadding.calculateStartPadding(direction),
+                top = innerPadding.calculateTopPadding(),
+                end = innerPadding.calculateEndPadding(direction),
+            )
+            CompositionLocalProvider(LocalDockInset provides if (docked) innerPadding.calculateBottomPadding() else 0.dp) {
+                NavHost(
+                    navController,
+                    startDestination = "library",
+                    modifier = Modifier.padding(pagePadding).consumeWindowInsets(innerPadding),
+                    enterTransition = { if (involvesEmulator()) LegacyEnter else if (betweenTabs()) TabEnter else fadeIn(tween(220, delayMillis = 60)) + slideInHorizontally(tween(300)) { it / 10 } },
+                    exitTransition = { if (involvesEmulator()) LegacyExit else if (betweenTabs()) TabExit else fadeOut(tween(160)) },
+                    popEnterTransition = { if (involvesEmulator()) LegacyEnter else fadeIn(tween(220, delayMillis = 60)) },
+                    popExitTransition = { if (involvesEmulator()) LegacyExit else fadeOut(tween(160)) + slideOutHorizontally(tween(300)) { it / 10 } },
+                ) {
+                    composable("library") {
+                        LibraryScreen(viewModel, onSystemClick = { name ->
+                            navController.navigate("system/$name")
+                        })
+                    }
+                    composable("console") { ConsoleScreen(viewModel) }
+                    composable("settings") {
+                        SettingsScreen(
+                            viewModel = viewModel,
+                            onNavigateToAppearance = { navController.navigate("settings/appearance") },
+                            onNavigateToEmulation = { navController.navigate("settings/emulation") },
+                            onNavigateToVideo = { navController.navigate("settings/video") },
+                            onNavigateToN64Experimental = { navController.navigate("settings/n64-experimental") },
+                            onNavigateToAudio = { navController.navigate("settings/audio") },
+                            onNavigateToPerformance = { navController.navigate("settings/performance") },
+                            onNavigateToInputs = { navController.navigate("settings/inputs") },
+                            onNavigateToPaths = { navController.navigate("settings/paths") },
+                            onNavigateToVisibility = { navController.navigate("settings/visibility") },
+                            onNavigateToAbout = { navController.navigate("settings/about") }
+                        )
+                    }
+                    composable("settings/appearance") {
+                        AppearanceSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/emulation") {
+                        EmulationSettingsScreen(
+                            viewModel = viewModel,
+                            onBack = { navController.popBackStack() },
+                            onNavigateToFirmware = { navController.navigate("settings/firmware") },
+                            onNavigateToDrivers = { navController.navigate("settings/drivers") }
+                        )
+                    }
+                    composable("settings/video") {
+                        VideoSettingsScreen(
+                            viewModel = viewModel,
+                            onBack = { navController.popBackStack() },
+                            onNavigateToShaders = { navController.navigate("settings/shaders") }
+                        )
+                    }
+                    composable("settings/n64-experimental") {
+                        N64ExperimentalSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/audio") {
+                        AudioSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/performance") {
+                        PerformanceMonitorSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/inputs") {
+                        InputsSettingsScreen(
+                            viewModel = viewModel,
+                            onBack = { navController.popBackStack() },
+                            onNavigateToInputs = { navController.navigate("settings/input-mapping") },
+                            onNavigateToHotkeys = { navController.navigate("settings/hotkeys") },
+                            onNavigateToTouch = { navController.navigate("settings/touch") }
+                        )
+                    }
+                    composable("settings/touch") {
+                        TouchSettingsScreen(
+                            viewModel = viewModel,
+                            onBack = { navController.popBackStack() },
+                            onEditLayout = { family -> navController.navigate("settings/touch-editor/${family.key}") }
+                        )
+                    }
+                    composable(
+                        route = TOUCH_EDITOR_ROUTE,
+                        arguments = listOf(navArgument("family") { type = NavType.StringType })
+                    ) { backStackEntry ->
+                        TouchLayoutEditorScreen(
+                            viewModel = viewModel,
+                            familyKey = backStackEntry.arguments?.getString("family") ?: "",
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
+                    composable("settings/visibility") {
+                        VisibilitySettingsScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/firmware") {
+                        FirmwareSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/input-mapping") {
+                        InputMappingScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/hotkeys") {
+                        HotkeyMappingScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/shaders") {
+                        ShaderSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/paths") {
+                        PathSettingsScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/drivers") {
+                        DriverManagerScreen(viewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable("settings/about") {
+                        AboutScreen(onBack = { navController.popBackStack() })
+                    }
+                    composable(
+                        route = "system/{name}",
+                        arguments = listOf(navArgument("name") { type = NavType.StringType })
+                    ) { backStackEntry ->
+                        val systemName = backStackEntry.arguments?.getString("name") ?: ""
+                        SystemDetailScreen(
+                            encodedSystemName = systemName,
+                            viewModel = viewModel,
+                            onBack = { navController.popBackStack() },
+                            onRomClick = { system, rom ->
+                                navController.navigate("emulator/$system/$rom")
+                            }
+                        )
+                    }
+                    composable(
+                        route = "emulator/{system}/{rom}",
+                        arguments = listOf(
+                            navArgument("system") { type = NavType.StringType },
+                            navArgument("rom") { type = NavType.StringType }
+                        )
+                    ) { backStackEntry ->
+                        val system = backStackEntry.arguments?.getString("system") ?: ""
+                        val rom = backStackEntry.arguments?.getString("rom") ?: ""
+                        EmulatorScreen(
+                            viewModel = viewModel,
+                            systemName = Uri.decode(system),
+                            romName = Uri.decode(rom),
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
                 }
             }
         }
@@ -306,41 +315,16 @@ private val NAV_TABS = listOf(
     NavTab("settings", "Settings", Icons.Rounded.Settings, Icons.Outlined.Settings),
 )
 
-/** The standard Material navigation bar, used with glass effects off. */
-@Composable
-private fun PhobosNavigationBar(route: String?, retrowave: Boolean, onNavigate: (String) -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    NavigationBar(
-        containerColor = if (retrowave) scheme.surfaceContainer.copy(alpha = 0.92f) else scheme.surfaceContainer,
-        tonalElevation = 0.dp,
-        modifier = if (retrowave) Modifier.neonBar(scheme, lineAtBottom = false) else Modifier,
-    ) {
-        NAV_TABS.forEach { tab ->
-            val selected = route == tab.route
-            NavigationBarItem(
-                selected = selected,
-                onClick = { onNavigate(tab.route) },
-                icon = {
-                    Icon(
-                        if (selected) tab.selectedIcon else tab.icon,
-                        contentDescription = tab.label,
-                        modifier = if (selected && retrowave) Modifier.neonBloom(scheme.primary) else Modifier,
-                    )
-                },
-                label = { Text(tab.label) },
-            )
-        }
-    }
-}
-
 /**
- * Floating glass dock for the top-level tabs. Custom items rather than Material's
- * NavigationBarItem, whose layout assumes the 80 dp NavigationBar height.
+ * Floating dock for the top-level tabs, over the pages, which scroll under it. Custom items rather
+ * than Material's NavigationBarItem, whose layout assumes the 80 dp NavigationBar height. Glass at
+ * the Full and Subtle levels; with glass effects off, solid with the cards' faint outline.
  */
 @Composable
 private fun PhobosDock(route: String?, retrowave: Boolean, onNavigate: (String) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val theme = LocalPhobosTheme.current
+    val glassOff = theme.glass.level == GlassEffects.OFF
     val shape = RoundedCornerShape(28.dp)
     Box(
         Modifier
@@ -354,7 +338,10 @@ private fun PhobosDock(route: String?, retrowave: Boolean, onNavigate: (String) 
                 .widthIn(max = 440.dp)
                 .fillMaxWidth()
                 .then(if (retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier)
-                .glassPanel(shape, scheme.surfaceContainer, theme.glass.panelAlpha, theme.glass, theme.isDark, rim = !retrowave, shadow = !retrowave)
+                .glassPanel(
+                    shape, scheme.surfaceContainer, theme.glass.dockAlpha, theme.glass, theme.isDark, rim = !retrowave, shadow = !retrowave,
+                    outline = if (glassOff && !retrowave) scheme.outlineVariant.copy(alpha = 0.45f) else Color.Unspecified,
+                )
                 .selectableGroup()
                 .padding(horizontal = 6.dp, vertical = 6.dp),
         ) {

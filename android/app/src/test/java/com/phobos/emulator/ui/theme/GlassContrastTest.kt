@@ -23,7 +23,8 @@ import kotlin.math.roundToInt
  * built the way Android 12 and 13 build them (Material's tonal-spot palettes from 24 seed hues,
  * mapped to roles at the tones Compose Material 3 1.2.1 uses), each with and without Retrowave
  * effects, at each Glass effects level. Backdrops are sampled more finely than the app's own search: every glow at every tenth
- * of its strength in every combination, and the sunset across its gradients.
+ * of its strength in every combination, and the sunset across its gradients. The dock, which pages scroll under, is
+ * checked over greys and hues across the whole range rather than over the backdrop alone.
  */
 class GlassContrastTest {
 
@@ -59,11 +60,11 @@ class GlassContrastTest {
         listOf("panel" to (style.panelAlpha to body), "accent panel" to (style.accentPanelAlpha to accents)).flatMap { (kind, pair) ->
             val (alpha, text) = pair
             backdrops.flatMap { backdrop ->
-                val fill = composite(s.surfaceContainer.toArgb(), backdrop, alpha.toDouble())
+                val fill = composite(s.surfaceContainer.toArgb(), backdrop, paint(alpha))
                 val lit = listOf(
                     "" to fill,
-                    " under the gloss" to composite(WHITE, fill, style.glossAlpha.toDouble()),
-                    " under the shade" to composite(BLACK, fill, style.shadeAlpha.toDouble()),
+                    " under the gloss" to composite(WHITE, fill, paint(style.glossAlpha)),
+                    " under the shade" to composite(BLACK, fill, paint(style.shadeAlpha)),
                 )
                 lit.flatMap { (where, background) ->
                     text.map { (role, color) -> Check("$role on a $kind$where over ${hex(backdrop)}", color.toArgb(), background, 4.5) }
@@ -86,12 +87,20 @@ class GlassContrastTest {
     }
 
     @Test
+    fun dockLabelsReachAaOverAnythingScrollingUnder() = assertAll { v, retrowave, level ->
+        val s = v.scheme
+        val labels = listOf("onSurface" to s.onSurface, "onSurfaceVariant" to s.onSurfaceVariant)
+        dockFills(v, v.style(retrowave, level), retrowave).flatMap { (where, fill) ->
+            labels.map { (role, color) -> Check("$role on the dock$where", color.toArgb(), fill, 4.5) }
+        }
+    }
+
+    @Test
     fun dockSelectionKeepsItsIconVisible() = assertAll { v, retrowave, level ->
         val style = v.style(retrowave, level)
         val primary = v.scheme.primary.toArgb()
-        panelBackdrops(v, style, retrowave).map { backdrop ->
-            val pill = composite(primary, composite(v.scheme.surfaceContainer.toArgb(), backdrop, style.panelAlpha.toDouble()), style.indicatorAlpha.toDouble())
-            Check("primary icon on the dock's pill over ${hex(backdrop)}", primary, pill, 3.0)
+        dockFills(v, style, retrowave).map { (where, fill) ->
+            Check("primary icon on the dock's pill$where", primary, composite(primary, fill, paint(style.indicatorAlpha)), 3.0)
         }
     }
 
@@ -123,6 +132,7 @@ class GlassContrastTest {
                     (style.glossAlpha == 0f && style.shadeAlpha == 0f && style.shadowAlpha == 0f && style.glows.all { it.alpha == 0f })
                 val problems = listOfNotNull(
                     "panel alpha ${style.panelAlpha} below the $level floor".takeUnless { style.panelAlpha in floor..1f },
+                    "dock alpha ${style.dockAlpha} below the $level floor".takeUnless { style.dockAlpha in floor..1f },
                     "gloss, shade, shadow or glows with glass effects off".takeUnless { flat },
                     "accent panel alpha ${style.accentPanelAlpha} below the panel's".takeUnless { style.accentPanelAlpha in style.panelAlpha..1f },
                     "glows drawn with Retrowave effects".takeUnless { !retrowave || style.glows.all { it.alpha == 0f } },
@@ -132,6 +142,35 @@ class GlassContrastTest {
             }
         }
         assertTrue(failures.joinToString("\n"), failures.isEmpty())
+    }
+
+    /**
+     * Colors that can scroll under the dock: greys across the whole range, and saturated and
+     * pastel primaries and secondaries at several strengths.
+     */
+    private val anyContent: List<Int> = run {
+        val greys = (0..255 step 5).map { (0xFF shl 24) or (it shl 16) or (it shl 8) or it }
+        val hues = listOf(0xFF0000, 0x00FF00, 0x0000FF, 0x00FFFF, 0xFF00FF, 0xFFFF00).map { it or (0xFF shl 24) }
+        val strengths = (1..4).map { it / 4.0 }
+        (greys + hues.flatMap { hue -> strengths.flatMap { t -> listOf(composite(hue, BLACK, t), composite(hue, WHITE, t)) } }).distinct()
+    }
+
+    /**
+     * The dock's fill, plain and at its gloss's and shade's peaks, over everything that can scroll
+     * under it; with Retrowave effects also through the neon halo at every strength.
+     */
+    private fun dockFills(v: Variant, style: GlassStyle, retrowave: Boolean): List<Pair<String, Int>> {
+        val primary = v.scheme.primary.toArgb()
+        val container = v.scheme.surfaceContainer.toArgb()
+        val under = if (retrowave) anyContent.flatMap { c -> (0..4).map { composite(primary, c, NEON_HALO * it / 4) } }.distinct() else anyContent
+        return under.flatMap { content ->
+            val fill = composite(container, content, paint(style.dockAlpha))
+            listOf(
+                " over ${hex(content)}" to fill,
+                " under the gloss over ${hex(content)}" to composite(WHITE, fill, paint(style.glossAlpha)),
+                " under the shade over ${hex(content)}" to composite(BLACK, fill, paint(style.shadeAlpha)),
+            )
+        }
     }
 
     /** Colors under a panel: the glows (or the sunset), and a neighboring panel's shadow where it reaches. */
@@ -213,6 +252,9 @@ class GlassContrastTest {
     }
 
     private fun composite(foreground: Int, background: Int, alpha: Float) = composite(foreground, background, alpha.toDouble())
+
+    /** A style alpha as the screen applies it: Compose passes paint alpha to Android as 8 bits, rounded. */
+    private fun paint(alpha: Float): Double = (alpha * 255f).roundToInt() / 255.0
 
     /** Gradient interpolation between two opaque colors, per 8-bit channel. */
     private fun lerp(a: Int, b: Int, t: Double) = composite(b, a, t)

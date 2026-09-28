@@ -49,7 +49,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
         )
 
         if (systems.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxSize().padding(bottom = LocalDockInset.current), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Image(
                         painter = painterResource(id = R.drawable.phobos_logo),
@@ -69,7 +69,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 140.dp),
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = pageContentPadding(),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {

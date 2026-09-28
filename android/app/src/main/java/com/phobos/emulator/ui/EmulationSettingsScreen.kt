@@ -23,7 +23,7 @@ fun EmulationSettingsScreen(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = pageContentPadding(),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {

@@ -21,20 +21,22 @@ data class Glow(val color: Color, val alpha: Float, val x: Float, val y: Float, 
 /**
  * The glass look for one theme, computed once from its final colors rather than the cross-fading
  * ones. Panels fill with `surfaceContainer` at [panelAlpha], or at [accentPanelAlpha] where they
- * also show secondary, tertiary, error, success or warning text. A white gloss from the top left
- * peaks at [glossAlpha] and a shade toward black at the bottom right at [shadeAlpha]; panels cast a
- * black shadow at [shadowAlpha] (none with Retrowave effects, whose neon edge takes its place).
- * The dock's selection pill is `primary` at [indicatorAlpha]. [glows] sit behind the screens, at
- * zero alpha with Retrowave effects, which keep their sunset. Each value is the strongest (or, for
- * the panels, the most see-through) that keeps text at WCAG AA against every backdrop it can end
- * up over. [level] is the user's Glass effects setting: Subtle scales every strength down and
- * raises the panel floor, and Off makes panels opaque with no glows, gloss, shade or shadow.
- * [rimStrength] scales the rim highlight.
+ * also show secondary, tertiary, error, success or warning text. The floating dock, which pages
+ * scroll under, fills at [dockAlpha], so its labels hold up over any color. A white gloss from the
+ * top left peaks at [glossAlpha] and a shade toward black at the bottom right at [shadeAlpha];
+ * panels cast a black shadow at [shadowAlpha] (none with Retrowave effects, whose neon edge takes
+ * its place). The dock's selection pill is `primary` at [indicatorAlpha]. [glows] sit behind the
+ * screens, at zero alpha with Retrowave effects, which keep their sunset. Each value is the
+ * strongest (or, for the panels, the most see-through) that keeps text at WCAG AA against every
+ * backdrop it can end up over. [level] is the user's Glass effects setting: Subtle scales every
+ * strength down and raises the panel floor, and Off makes panels and the dock opaque with no
+ * glows, gloss, shade or shadow. [rimStrength] scales the rim highlight.
  */
 @Immutable
 data class GlassStyle(
     val panelAlpha: Float,
     val accentPanelAlpha: Float,
+    val dockAlpha: Float,
     val glossAlpha: Float,
     val shadeAlpha: Float,
     val shadowAlpha: Float,
@@ -85,10 +87,15 @@ internal class GlassBuilder(
     /** Text drawn straight on the backdrop: screen titles, section headers and subtitles. */
     private val screenText = Luminances(listOf(scheme.onBackground, scheme.onSurfaceVariant, scheme.primary))
 
+    /** The dock's tab labels. */
+    private val dockText = Luminances(listOf(scheme.onSurface, scheme.onSurfaceVariant))
+
+    private val primaryIcon = Luminances(listOf(scheme.primary))
+
     fun build(): GlassStyle {
         if (level == GlassEffects.OFF) {
             val glows = designedGlows().map { it.copy(alpha = 0f) }
-            return GlassStyle(1f, 1f, 0f, 0f, 0f, 0f, glows, level, rimStrength = 0f)
+            return GlassStyle(1f, 1f, 1f, 0f, 0f, 0f, indicator(dockAlpha = 1f, listOf<(Color) -> Color>({ it })), glows, level, rimStrength = 0f)
         }
         val glows = if (retrowave) designedGlows().map { it.copy(alpha = 0f) } else fitGlows()
         val screenBackdrops = glowBackdrops(glows)
@@ -106,17 +113,42 @@ internal class GlassBuilder(
                 accentFills.all { accentText.pass(over(overlay, it), TEXT_CONTRAST) }
         val gloss = strongest(strength.gloss * if (isDark) DARK_GLOSS else LIGHT_GLOSS) { overlayPasses(Color.White.copy(alpha = it)) }
         val shade = strongest(strength.shade * if (isDark) DARK_SHADE else LIGHT_SHADE) { overlayPasses(Color.Black.copy(alpha = it)) }
-        val primaryIcon = Luminances(listOf(scheme.primary))
-        val indicator = strongest(INDICATOR) { alpha ->
-            fills.all { primaryIcon.pass(over(scheme.primary, alpha, it), ICON_CONTRAST) }
-        }
-        return GlassStyle(panelAlpha, accentPanelAlpha, gloss, shade, shadowAlpha, indicator, glows, level, strength.rim)
+        // The dock's fill as its labels, and the selected icon on a full-strength pill, see it:
+        // plain, at the gloss's peak and at the shade's. Anything can be under it, the Retrowave
+        // neon halo included.
+        val sheens = listOf<(Color) -> Color>({ it }, { over(Color.White, gloss, it) }, { over(Color.Black, shade, it) })
+        val dockAlpha = (strength.panelFloor..100).firstOrNull { step ->
+            sheens.all { sheen ->
+                passesOverAnything(dockText, TEXT_CONTRAST) { sheen(panel(step / 100f, it)) } &&
+                    passesOverAnything(primaryIcon, ICON_CONTRAST) { over(scheme.primary, INDICATOR, sheen(panel(step / 100f, it))) }
+            }
+        }?.let { it / 100f } ?: 1f
+        return GlassStyle(panelAlpha, accentPanelAlpha, dockAlpha, gloss, shade, shadowAlpha, indicator(dockAlpha, sheens), glows, level, strength.rim)
     }
 
     /** The least opaque panel alpha from the floor up (in hundredths) at which [text] passes over every backdrop. */
     private fun mostSeeThrough(text: Luminances, backdrops: List<Color>): Float =
         (strength.panelFloor..100).firstOrNull { step -> backdrops.all { text.pass(panel(step / 100f, it), TEXT_CONTRAST) } }
             ?.let { it / 100f } ?: 1f
+
+    /**
+     * The strongest selection pill that keeps the selected icon visible on the dock, filled at
+     * [dockAlpha] and seen through each of [sheens], whatever scrolls under it.
+     */
+    private fun indicator(dockAlpha: Float, sheens: List<(Color) -> Color>): Float = strongest(INDICATOR) { alpha ->
+        sheens.all { sheen -> passesOverAnything(primaryIcon, ICON_CONTRAST) { over(scheme.primary, alpha, sheen(panel(dockAlpha, it))) } }
+    }
+
+    /**
+     * Whether [text] passes against [surface] laid over any color at all. Compositing is monotonic
+     * in each channel, so the results over black and over white bound every other: both must pass
+     * and sit on the same side of each text color's luminance.
+     */
+    private fun passesOverAnything(text: Luminances, minimum: Float, surface: (Color) -> Color): Boolean {
+        val dark = surface(Color.Black)
+        val light = surface(Color.White)
+        return text.pass(dark, minimum) && text.pass(light, minimum) && text.sameSide(dark, light)
+    }
 
     private fun designedGlows(): List<Glow> {
         val peak = strength.glow * if (isDark) DARK_GLOW else LIGHT_GLOW
@@ -201,6 +233,13 @@ internal class GlassBuilder(
         fun pass(background: Color, minimum: Float): Boolean {
             val b = background.luminance()
             return values.all { t -> (max(t, b) + 0.05f) / (min(t, b) + 0.05f) >= minimum + MARGIN }
+        }
+
+        /** Whether [a] and [b] are both darker, or both lighter, than each of these colors. */
+        fun sameSide(a: Color, b: Color): Boolean {
+            val la = a.luminance()
+            val lb = b.luminance()
+            return values.all { t -> (la - t) * (lb - t) > 0f }
         }
     }
 

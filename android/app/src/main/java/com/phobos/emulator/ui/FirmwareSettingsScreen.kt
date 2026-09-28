@@ -115,7 +115,7 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
         }
     ) { innerPadding ->
-        ThemedCard(Modifier.padding(innerPadding).padding(start = 16.dp, end = 16.dp, top = 8.dp).fillMaxSize()) {
+        ThemedCard(Modifier.padding(innerPadding).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = LocalDockInset.current).fillMaxSize()) {
             Column {
                 // Header
                 Row(

@@ -28,7 +28,7 @@ enum class ThemeMode {
 enum class GlassEffects(val label: String, val description: String) {
     FULL("Full", "See-through cards over soft color glows, with gloss and shading"),
     SUBTLE("Subtle", "Calmer: faint glows and mostly solid cards"),
-    OFF("Off", "Solid cards and the standard navigation bar"),
+    OFF("Off", "Solid cards and dock, with no glows, gloss or shading"),
 }
 
 enum class RegionPreference(val label: String) {

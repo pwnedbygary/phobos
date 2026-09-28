@@ -17,14 +17,28 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neon
 import com.phobos.emulator.ui.theme.neonBar
+
+/**
+ * Height of the floating dock, which pages run under to the bottom of the screen: lists pad their
+ * ends by it so the last item can scroll clear, and fixed layouts stop above it. Zero on pages
+ * without the dock.
+ */
+val LocalDockInset = compositionLocalOf { 0.dp }
+
+/** A page list's content padding: [padding] on every side, plus room at the end to scroll clear of the dock. */
+@Composable
+fun pageContentPadding(padding: Dp = 16.dp): PaddingValues =
+    PaddingValues(start = padding, top = padding, end = padding, bottom = padding + LocalDockInset.current)
 
 /**
  * Frame shared by every page: a transparent Scaffold, so the app background and the retrowave

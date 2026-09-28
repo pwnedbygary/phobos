@@ -22,6 +22,7 @@ fun AboutScreen(onBack: () -> Unit) {
         Column(
             modifier = Modifier
                 .padding(innerPadding)
+                .padding(bottom = LocalDockInset.current)
                 .fillMaxSize()
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
