@@ -43,27 +43,44 @@ fun RetrowaveBackdrop(modifier: Modifier = Modifier) {
     Spacer(modifier.drawWithCache { sunsetGrid(scheme, isDark) })
 }
 
+/** The sunset's colors, shared with the glass panels' contrast search ([GlassStyle]). */
+internal class SunsetColors(scheme: ColorScheme, val isDark: Boolean) {
+    // Light themes get a paler scene so text over it stays crisp.
+    private val strength = if (isDark) 1f else 0.6f
+    val skyTop = scheme.background
+    val skyMiddle = lerp(scheme.background, scheme.secondary, 0.06f * strength)
+    val skyBottom = lerp(scheme.background, scheme.primary, 0.34f * strength)
+    val sunTop = scheme.tertiary
+    val sunBottom = scheme.primary
+    val sunAlpha = 0.9f * strength
+    val sunGlow = scheme.primary.copy(alpha = 0.3f * strength)
+    val floorTop = lerp(scheme.background, scheme.primary, 0.14f * strength)
+    val floorBottom = scheme.background
+    val grid = scheme.secondary.copy(alpha = 0.5f * strength)
+    val horizonGlow = scheme.primary.copy(alpha = 0.35f * strength)
+    val horizonLine = scheme.primary.copy(alpha = 0.9f * strength)
+    val star = scheme.onBackground
+    val starMaxAlpha = 0.6f
+}
+
 private fun CacheDrawScope.sunsetGrid(scheme: ColorScheme, isDark: Boolean): DrawResult {
     val width = size.width
     val height = size.height
-    // Light themes get a paler scene so text over it stays crisp.
-    val strength = if (isDark) 1f else 0.6f
-    val background = scheme.background
-    val primary = scheme.primary
+    val colors = SunsetColors(scheme, isDark)
     val horizon = height * 0.62f
 
     val sky = Brush.verticalGradient(
-        0f to background,
-        0.5f to lerp(background, scheme.secondary, 0.06f * strength),
-        1f to lerp(background, primary, 0.34f * strength),
+        0f to colors.skyTop,
+        0.5f to colors.skyMiddle,
+        1f to colors.skyBottom,
         startY = 0f,
         endY = horizon,
     )
     val sunRadius = min(width, height) * 0.2f
     val sunCenter = Offset(width / 2f, horizon - sunRadius * 0.3f)
-    val sun = Brush.verticalGradient(listOf(scheme.tertiary, primary), startY = sunCenter.y - sunRadius, endY = horizon)
+    val sun = Brush.verticalGradient(listOf(colors.sunTop, colors.sunBottom), startY = sunCenter.y - sunRadius, endY = horizon)
     val sunGlow = Brush.radialGradient(
-        listOf(primary.copy(alpha = 0.3f * strength), Color.Transparent),
+        listOf(colors.sunGlow, Color.Transparent),
         center = sunCenter,
         radius = sunRadius * 2.4f,
     )
@@ -76,12 +93,11 @@ private fun CacheDrawScope.sunsetGrid(scheme: ColorScheme, isDark: Boolean): Dra
             addRect(Rect(sunCenter.x - sunRadius, y, sunCenter.x + sunRadius, y + sunRadius * (0.02f + 0.045f * t)))
         }
     }
-    val floor = Brush.verticalGradient(listOf(lerp(background, primary, 0.14f * strength), background), startY = horizon, endY = height)
-    val gridColor = scheme.secondary.copy(alpha = 0.5f * strength)
-    val grid = Brush.verticalGradient(listOf(gridColor.copy(alpha = 0f), gridColor), startY = horizon, endY = height)
+    val floor = Brush.verticalGradient(listOf(colors.floorTop, colors.floorBottom), startY = horizon, endY = height)
+    val grid = Brush.verticalGradient(listOf(colors.grid.copy(alpha = 0f), colors.grid), startY = horizon, endY = height)
     val glowHalf = 18.dp.toPx()
     val horizonGlow = Brush.verticalGradient(
-        listOf(Color.Transparent, primary.copy(alpha = 0.35f * strength), Color.Transparent),
+        listOf(Color.Transparent, colors.horizonGlow, Color.Transparent),
         startY = horizon - glowHalf,
         endY = horizon + glowHalf,
     )
@@ -89,17 +105,16 @@ private fun CacheDrawScope.sunsetGrid(scheme: ColorScheme, isDark: Boolean): Dra
     val columnSpacing = width / 7f
     val random = Random(84)
     val stars = if (isDark) List(48) { Star(Offset(random.nextFloat() * width, random.nextFloat() * horizon * 0.85f), random.nextFloat()) } else emptyList()
-    val starColor = scheme.onBackground
 
     return onDrawBehind {
         drawRect(sky, size = Size(width, horizon))
         stars.forEach { star ->
-            drawCircle(starColor, radius = (0.6f + star.twinkle).dp.toPx(), center = star.position, alpha = 0.15f + 0.45f * star.twinkle)
+            drawCircle(colors.star, radius = (0.6f + star.twinkle).dp.toPx(), center = star.position, alpha = 0.15f + (colors.starMaxAlpha - 0.15f) * star.twinkle)
         }
         drawCircle(sunGlow, radius = sunRadius * 2.4f, center = sunCenter)
         clipRect(bottom = horizon) {
             clipPath(bands, ClipOp.Difference) {
-                drawCircle(sun, radius = sunRadius, center = sunCenter, alpha = 0.9f * strength)
+                drawCircle(sun, radius = sunRadius, center = sunCenter, alpha = colors.sunAlpha)
             }
         }
         drawRect(floor, topLeft = Offset(0f, horizon), size = Size(width, height - horizon))
@@ -113,7 +128,7 @@ private fun CacheDrawScope.sunsetGrid(scheme: ColorScheme, isDark: Boolean): Dra
             drawLine(grid, top, Offset(width / 2f + column * columnSpacing, height), lineWidth)
         }
         drawRect(horizonGlow, topLeft = Offset(0f, horizon - glowHalf), size = Size(width, glowHalf * 2))
-        drawLine(primary.copy(alpha = 0.9f * strength), Offset(0f, horizon), Offset(width, horizon), 1.5.dp.toPx())
+        drawLine(colors.horizonLine, Offset(0f, horizon), Offset(width, horizon), 1.5.dp.toPx())
     }
 }
 

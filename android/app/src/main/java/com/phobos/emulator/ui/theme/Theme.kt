@@ -41,11 +41,17 @@ data class PhobosThemeInfo(
     val warning: Color,
     /** The theme's final colors; [MaterialTheme.colorScheme] cross-fades to them after a change. */
     val scheme: ColorScheme,
+    /** Glass panel and backdrop values for [scheme]; they switch at once while the colors cross-fade. */
+    val glass: GlassStyle,
 )
 
 val LocalPhobosTheme = compositionLocalOf {
     val fallback = ThemeRegistry.resolve(ThemeRegistry.SYSTEM_ID, ThemeMode.DARK, followSystem = false, systemDark = true)
-    PhobosThemeInfo(fallback.theme, fallback.isDark, retrowave = false, fallback.colors.success, fallback.colors.warning, fallback.colors.scheme)
+    val colors = fallback.colors
+    PhobosThemeInfo(
+        fallback.theme, fallback.isDark, retrowave = false, colors.success, colors.warning, colors.scheme,
+        GlassStyle.of(colors.scheme, colors.success, colors.warning, fallback.isDark, retrowave = false),
+    )
 }
 
 @Composable
@@ -64,8 +70,11 @@ fun PhobosTheme(
     }
     val colorScheme = animateColorScheme(colors.scheme)
     SystemBarsEffect(colorScheme, resolved.isDark)
+    val glass = remember(colors, resolved.isDark, retrowave) {
+        GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, retrowave)
+    }
 
-    val info = PhobosThemeInfo(resolved.theme, resolved.isDark, retrowave, colors.success, colors.warning, colors.scheme)
+    val info = PhobosThemeInfo(resolved.theme, resolved.isDark, retrowave, colors.success, colors.warning, colors.scheme, glass)
     CompositionLocalProvider(LocalPhobosTheme provides info) {
         MaterialTheme(
             colorScheme = colorScheme,

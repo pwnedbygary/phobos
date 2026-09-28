@@ -1,6 +1,5 @@
 package com.phobos.emulator.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -55,15 +54,12 @@ fun ConsoleScreen(viewModel: MainViewModel) {
             }
         },
     ) { innerPadding ->
-        Surface(
+        ThemedCard(
             modifier = Modifier
                 .padding(innerPadding)
                 .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
                 .fillMaxSize(),
-            shape = MaterialTheme.shapes.large,
-            color = scheme.surfaceContainerLowest,
-            contentColor = scheme.onSurface,
-            border = BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.5f)),
+            accentText = true,
         ) {
             if (logs.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

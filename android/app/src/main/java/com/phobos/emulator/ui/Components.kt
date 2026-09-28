@@ -4,9 +4,13 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
@@ -25,6 +29,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -36,6 +41,7 @@ import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
+import com.phobos.emulator.ui.theme.glassPanel
 import com.phobos.emulator.ui.theme.neon
 import com.phobos.emulator.ui.theme.neonGlow
 
@@ -68,32 +74,55 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, trailing: (@Comp
 }
 
 /**
- * Card surface shared by settings groups and library tiles: frosted with a neon edge when retrowave
- * effects are on, a faint outline otherwise. It casts no shadow, and a click ripple stays inside [shape].
+ * Glass card shared by settings groups, library tiles and the other screens' panels: a translucent
+ * surface over the backdrop with a gloss, a shade and a bright top rim, or with the neon edge in
+ * place of the rim and shadow when retrowave effects are on. The fill is as see-through as text
+ * contrast allows; set [accentText] where the card shows secondary, tertiary, error, success or
+ * warning text. A click ripple stays inside [shape], and a clickable card dips slightly when pressed.
  */
 @Composable
 fun ThemedCard(
     modifier: Modifier = Modifier,
     shape: Shape = MaterialTheme.shapes.large,
     onClick: (() -> Unit)? = null,
+    accentText: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val retrowave = LocalPhobosTheme.current.retrowave
-    val cardModifier = if (retrowave) modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else modifier
-    val color = if (retrowave) scheme.surfaceContainer.copy(alpha = 0.92f) else scheme.surfaceContainer
-    val border = if (retrowave) null else BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.45f))
+    val theme = LocalPhobosTheme.current
+    val glass = theme.glass
+    val panel = Modifier.glassPanel(
+        shape = shape,
+        fill = scheme.surfaceContainer,
+        alpha = if (accentText) glass.accentPanelAlpha else glass.panelAlpha,
+        style = glass,
+        isDark = theme.isDark,
+        rim = !theme.retrowave,
+        shadow = !theme.retrowave,
+    )
+    val edge = if (theme.retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier
     if (onClick != null) {
-        Surface(onClick = onClick, modifier = cardModifier, shape = shape, color = color, contentColor = scheme.onSurface, border = border, content = content)
+        val interactionSource = remember { MutableInteractionSource() }
+        val pressed by interactionSource.collectIsPressedAsState()
+        val scale by animateFloatAsState(if (pressed) 0.97f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "cardPress")
+        Surface(
+            onClick = onClick,
+            modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale }.then(edge).then(panel),
+            shape = shape,
+            color = Color.Transparent,
+            contentColor = scheme.onSurface,
+            interactionSource = interactionSource,
+            content = content,
+        )
     } else {
-        Surface(modifier = cardModifier, shape = shape, color = color, contentColor = scheme.onSurface, border = border, content = content)
+        Surface(modifier = modifier.then(edge).then(panel), shape = shape, color = Color.Transparent, contentColor = scheme.onSurface, content = content)
     }
 }
 
-/** Rounded card for settings rows. */
+/** Glass card for settings rows; see [ThemedCard] for [accentText]. */
 @Composable
-fun SettingsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    ThemedCard(modifier.fillMaxWidth()) {
+fun SettingsCard(modifier: Modifier = Modifier, accentText: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
+    ThemedCard(modifier.fillMaxWidth(), accentText = accentText) {
         Column(Modifier.padding(vertical = 6.dp), content = content)
     }
 }

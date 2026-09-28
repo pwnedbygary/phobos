@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -29,8 +30,9 @@ import com.phobos.emulator.ui.theme.LocalPhobosTheme
 fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     val systems by viewModel.visibleSystems.collectAsState()
     val theme = LocalPhobosTheme.current
-    val artPalette = remember(theme.scheme, theme.success, theme.warning) {
-        ConsoleArtPalette(theme.scheme, theme.success, theme.warning)
+    val artPalette = remember(theme.scheme, theme.success, theme.warning, theme.glass.panelAlpha) {
+        val tile = theme.scheme.surfaceContainer.copy(alpha = theme.glass.panelAlpha).compositeOver(theme.scheme.background)
+        ConsoleArtPalette(theme.scheme, theme.success, theme.warning, tile)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

@@ -21,11 +21,11 @@ import kotlin.math.min
  * below its cards, the darkest tone is extended toward black so their detail stays visible. White
  * (the halo behind each console) becomes the lightest tone. Colored parts take the accent closest
  * in hue (weighed by how colorful it is), blended with the grey tone for their lightness so the
- * shading survives.
+ * shading survives. [tile] is the card color the art is drawn on.
  */
 @Immutable
-class ConsoleArtPalette(scheme: ColorScheme, success: Color, warning: Color) {
-    private val tile = Oklab.of(scheme.surfaceContainer)
+class ConsoleArtPalette(scheme: ColorScheme, success: Color, warning: Color, tile: Color = scheme.surfaceContainer) {
+    private val tileTone = Oklab.of(tile)
 
     /** The theme's tones sorted dark to light, then the same with the shadow extension. */
     private val themeTones: List<Oklab>
@@ -46,11 +46,11 @@ class ConsoleArtPalette(scheme: ColorScheme, success: Color, warning: Color) {
             scheme.outline, scheme.outlineVariant, scheme.onSurfaceVariant, scheme.onSurface,
         )
         val accentRoles = listOf(scheme.primary, scheme.secondary, scheme.tertiary, scheme.error, success, warning)
-        key = (toneRoles + accentRoles).joinToString(",") { Integer.toHexString(it.toArgb()) }
+        key = (toneRoles + accentRoles + tile).joinToString(",") { Integer.toHexString(it.toArgb()) }
 
         themeTones = toneRoles.map(Oklab::of).sortedBy { it.l }
         val darkest = themeTones.first()
-        val floor = max(0f, tile.l - SHADOW_RANGE)
+        val floor = max(0f, tileTone.l - SHADOW_RANGE)
         tones = if (darkest.l - floor > TONE_GAP) {
             val k = floor / darkest.l
             listOf(Oklab(floor, darkest.a * k, darkest.b * k)) + themeTones
@@ -59,7 +59,7 @@ class ConsoleArtPalette(scheme: ColorScheme, success: Color, warning: Color) {
         }
         val lo = tones.first().l
         val hi = tones.last().l
-        split = if (hi - lo > TONE_GAP) ((tile.l - lo) / (hi - lo)).coerceIn(MID_GREY, MAX_SPLIT) else MID_GREY
+        split = if (hi - lo > TONE_GAP) ((tileTone.l - lo) / (hi - lo)).coerceIn(MID_GREY, MAX_SPLIT) else MID_GREY
 
         val accentTones = accentRoles.map(Oklab::of)
         accents = accentTones.filter { it.chroma >= MIN_ACCENT_CHROMA }.ifEmpty { accentTones }
@@ -108,7 +108,7 @@ class ConsoleArtPalette(scheme: ColorScheme, success: Color, warning: Color) {
     private fun greyTone(l: Float): Oklab {
         val lo = tones.first().l
         val hi = tones.last().l
-        val target = if (l <= split) lo + (tile.l - lo) * (l / split) else tile.l + (hi - tile.l) * ((l - split) / (1f - split))
+        val target = if (l <= split) lo + (tileTone.l - lo) * (l / split) else tileTone.l + (hi - tileTone.l) * ((l - split) / (1f - split))
         return toneAt(target)
     }
 

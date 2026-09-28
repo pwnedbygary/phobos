@@ -100,18 +100,28 @@ class ConsoleArtTest {
         val bodies = greys.filter { lightness(it) <= DARK_BODY }
         assertTrue("no dark greys found", bodies.isNotEmpty())
         val failures = variants.filter { it.isDark }.flatMap { v ->
-            val tile = v.colors.scheme.surfaceContainer.toArgb()
-            val tileLightness = lightness(tile)
-            val darkBodies = bodies.mapNotNull { grey ->
-                val mapped = lightness(v.palette.map(Color(grey)).toArgb())
-                if (mapped < tileLightness) null
-                else "${v.name}: ${hex(grey)} became lightness ${fmt(mapped)}, not darker than the tile's ${fmt(tileLightness)}"
-            }
-            val halo = composite(v.palette.map(Color.White).toArgb(), tile, HALO_OPACITY)
-            val haloContrast = contrast(halo, tile)
-            darkBodies + listOfNotNull(
-                if (haloContrast >= HALO_CONTRAST) null else "${v.name}: halo is ${fmt(haloContrast)}:1 against the tile",
+            val s = v.colors.scheme
+            // The Library draws tiles as glass: surfaceContainer at the panel alpha over the background.
+            val glassAlpha = GlassStyle.of(s, v.colors.success, v.colors.warning, isDark = true, retrowave = false).panelAlpha
+            val glassTile = composite(s.surfaceContainer.toArgb(), s.background.toArgb(), glassAlpha.toDouble())
+            val tiles = listOf(
+                "tile" to (v.palette to s.surfaceContainer.toArgb()),
+                "glass tile" to (ConsoleArtPalette(s, v.colors.success, v.colors.warning, Color(glassTile)) to glassTile),
             )
+            tiles.flatMap { (label, pair) ->
+                val (palette, tile) = pair
+                val tileLightness = lightness(tile)
+                val darkBodies = bodies.mapNotNull { grey ->
+                    val mapped = lightness(palette.map(Color(grey)).toArgb())
+                    if (mapped < tileLightness) null
+                    else "${v.name}: ${hex(grey)} became lightness ${fmt(mapped)}, not darker than the $label's ${fmt(tileLightness)}"
+                }
+                val halo = composite(palette.map(Color.White).toArgb(), tile, HALO_OPACITY)
+                val haloContrast = contrast(halo, tile)
+                darkBodies + listOfNotNull(
+                    if (haloContrast >= HALO_CONTRAST) null else "${v.name}: halo is ${fmt(haloContrast)}:1 against the $label",
+                )
+            }
         }
         assertTrue(failures.joinToString("\n"), failures.isEmpty())
     }

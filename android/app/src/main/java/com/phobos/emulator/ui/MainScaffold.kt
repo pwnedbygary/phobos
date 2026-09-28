@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavBackStackEntry
+import com.phobos.emulator.ui.theme.GlassBackdrop
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.RetrowaveBackdrop
 import com.phobos.emulator.ui.theme.neonBar
@@ -87,14 +88,15 @@ fun MainScaffold(viewModel: MainViewModel) {
     // Faded rather than removed so leaving for the game doesn't pop mid-transition; nothing is
     // drawn behind the running game.
     val backdropAlpha by animateFloatAsState(
-        targetValue = if (retrowave && route != EMULATOR_ROUTE && route != TOUCH_EDITOR_ROUTE) 1f else 0f,
+        targetValue = if (route != EMULATOR_ROUTE && route != TOUCH_EDITOR_ROUTE) 1f else 0f,
         animationSpec = tween(500),
         label = "backdrop",
     )
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         if (backdropAlpha > 0f) {
-            RetrowaveBackdrop(Modifier.fillMaxSize().graphicsLayer { alpha = backdropAlpha })
+            val backdrop = Modifier.fillMaxSize().graphicsLayer { alpha = backdropAlpha }
+            if (retrowave) RetrowaveBackdrop(backdrop) else GlassBackdrop(backdrop)
         }
         Scaffold(
             containerColor = Color.Transparent,
