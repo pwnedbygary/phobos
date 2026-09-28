@@ -6,6 +6,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.google.android.material.color.utilities.Hct
+import com.phobos.emulator.data.GlassEffects
 import com.google.android.material.color.utilities.SchemeTonalSpot
 import com.google.android.material.color.utilities.TonalPalette
 import org.junit.Assert.assertTrue
@@ -21,13 +22,13 @@ import kotlin.math.roundToInt
  * than on opaque roles. Covers every palette of every registered theme plus Material You schemes
  * built the way Android 12 and 13 build them (Material's tonal-spot palettes from 24 seed hues,
  * mapped to roles at the tones Compose Material 3 1.2.1 uses), each with and without Retrowave
- * effects. Backdrops are sampled more finely than the app's own search: every glow at every tenth
+ * effects, at each Glass effects level. Backdrops are sampled more finely than the app's own search: every glow at every tenth
  * of its strength in every combination, and the sunset across its gradients.
  */
 class GlassContrastTest {
 
     private class Variant(val name: String, val scheme: ColorScheme, val success: Color, val warning: Color, val isDark: Boolean) {
-        fun style(retrowave: Boolean) = GlassStyle.of(scheme, success, warning, isDark, retrowave)
+        fun style(retrowave: Boolean, level: GlassEffects) = GlassStyle.of(scheme, success, warning, isDark, retrowave, level)
     }
 
     private class Check(val label: String, val foreground: Int, val background: Int, val minimum: Double)
@@ -46,9 +47,9 @@ class GlassContrastTest {
     }
 
     @Test
-    fun panelTextReachesAaOverEveryBackdrop() = assertAll { v, retrowave ->
+    fun panelTextReachesAaOverEveryBackdrop() = assertAll { v, retrowave, level ->
         val s = v.scheme
-        val style = v.style(retrowave)
+        val style = v.style(retrowave, level)
         val body = listOf("onSurface" to s.onSurface, "onSurfaceVariant" to s.onSurfaceVariant, "primary" to s.primary)
         val accents = body + listOf(
             "secondary" to s.secondary, "tertiary" to s.tertiary, "error" to s.error,
@@ -72,10 +73,10 @@ class GlassContrastTest {
     }
 
     @Test
-    fun screenTextReachesAaOverTheGlows() = assertAll { v, retrowave ->
+    fun screenTextReachesAaOverTheGlows() = assertAll { v, retrowave, level ->
         if (retrowave) return@assertAll emptyList()
         val s = v.scheme
-        val style = v.style(retrowave = false)
+        val style = v.style(retrowave = false, level)
         val text = listOf("onBackground" to s.onBackground, "onSurfaceVariant" to s.onSurfaceVariant, "primary" to s.primary)
         glowBackdrops(v, style).flatMap { backdrop ->
             listOf(backdrop, composite(BLACK, backdrop, style.shadowAlpha * SHADOW_REACH)).flatMap { background ->
@@ -85,8 +86,8 @@ class GlassContrastTest {
     }
 
     @Test
-    fun dockSelectionKeepsItsIconVisible() = assertAll { v, retrowave ->
-        val style = v.style(retrowave)
+    fun dockSelectionKeepsItsIconVisible() = assertAll { v, retrowave, level ->
+        val style = v.style(retrowave, level)
         val primary = v.scheme.primary.toArgb()
         panelBackdrops(v, style, retrowave).map { backdrop ->
             val pill = composite(primary, composite(v.scheme.surfaceContainer.toArgb(), backdrop, style.panelAlpha.toDouble()), style.indicatorAlpha.toDouble())
@@ -98,7 +99,7 @@ class GlassContrastTest {
     fun glowsStayNearTheBackgroundsLuminance() {
         val failures = variants.flatMap { v ->
             val background = luminance(v.scheme.background.toArgb())
-            v.style(retrowave = false).glows.mapNotNull { glow ->
+            v.style(retrowave = false, GlassEffects.FULL).glows.mapNotNull { glow ->
                 val l = luminance(glow.color.toArgb())
                 val ceiling = if (v.isDark) max(background, DARK_GLOW_LUMINANCE) else background
                 if (l <= ceiling + LUMINANCE_ROUNDING) null
@@ -111,15 +112,23 @@ class GlassContrastTest {
     @Test
     fun valuesStayInRange() {
         val failures = variants.flatMap { v ->
-            listOf(false, true).mapNotNull { retrowave ->
-                val style = v.style(retrowave)
+            listOf(false, true).flatMap { retrowave -> GlassEffects.entries.map { retrowave to it } }.mapNotNull { (retrowave, level) ->
+                val style = v.style(retrowave, level)
+                val floor = when (level) {
+                    GlassEffects.FULL -> 0.6f
+                    GlassEffects.SUBTLE -> 0.8f
+                    GlassEffects.OFF -> 1f
+                }
+                val flat = level != GlassEffects.OFF ||
+                    (style.glossAlpha == 0f && style.shadeAlpha == 0f && style.shadowAlpha == 0f && style.glows.all { it.alpha == 0f })
                 val problems = listOfNotNull(
-                    "panel alpha ${style.panelAlpha}".takeUnless { style.panelAlpha in 0.6f..1f },
+                    "panel alpha ${style.panelAlpha} below the $level floor".takeUnless { style.panelAlpha in floor..1f },
+                    "gloss, shade, shadow or glows with glass effects off".takeUnless { flat },
                     "accent panel alpha ${style.accentPanelAlpha} below the panel's".takeUnless { style.accentPanelAlpha in style.panelAlpha..1f },
                     "glows drawn with Retrowave effects".takeUnless { !retrowave || style.glows.all { it.alpha == 0f } },
                     "shadow drawn with Retrowave effects".takeUnless { !retrowave || style.shadowAlpha == 0f },
                 )
-                if (problems.isEmpty()) null else "${v.name}${if (retrowave) " with Retrowave" else ""}: ${problems.joinToString()}"
+                if (problems.isEmpty()) null else "${v.name}${if (retrowave) " with Retrowave" else ""}, $level: ${problems.joinToString()}"
             }
         }
         assertTrue(failures.joinToString("\n"), failures.isEmpty())
@@ -158,13 +167,15 @@ class GlassContrastTest {
         return scene.flatMap { under -> steps.map { composite(primary, under, NEON_HALO * it) } }.distinct()
     }
 
-    private fun assertAll(checks: (Variant, Boolean) -> List<Check>) {
+    private fun assertAll(checks: (Variant, Boolean, GlassEffects) -> List<Check>) {
         val failures = variants.flatMap { v ->
             listOf(false, true).flatMap { retrowave ->
-                checks(v, retrowave).mapNotNull { check ->
-                    val ratio = contrast(check.foreground, check.background)
-                    if (ratio >= check.minimum) null
-                    else "${v.name}${if (retrowave) " with Retrowave" else ""}: ${check.label} is ${fmt(ratio)}:1, needs ${check.minimum}:1"
+                GlassEffects.entries.flatMap { level ->
+                    checks(v, retrowave, level).mapNotNull { check ->
+                        val ratio = contrast(check.foreground, check.background)
+                        if (ratio >= check.minimum) null
+                        else "${v.name}${if (retrowave) " with Retrowave" else ""}, $level: ${check.label} is ${fmt(ratio)}:1, needs ${check.minimum}:1"
+                    }
                 }
             }
         }

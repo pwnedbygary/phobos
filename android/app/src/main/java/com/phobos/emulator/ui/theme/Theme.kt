@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.ThemeMode
 
 /** What screens need to know about the active theme beyond [MaterialTheme]. */
@@ -60,6 +61,7 @@ fun PhobosTheme(
     themeMode: ThemeMode = ThemeMode.AUTO,
     followSystem: Boolean = false,
     retrowave: Boolean = false,
+    glassEffects: GlassEffects = GlassEffects.FULL,
     content: @Composable () -> Unit,
 ) {
     val resolved = ThemeRegistry.resolve(themeId, themeMode, followSystem, isSystemInDarkTheme())
@@ -69,9 +71,9 @@ fun PhobosTheme(
         if (useDynamic) dynamicColors(context, resolved.isDark) else resolved.colors
     }
     val colorScheme = animateColorScheme(colors.scheme)
-    SystemBarsEffect(colorScheme, resolved.isDark)
-    val glass = remember(colors, resolved.isDark, retrowave) {
-        GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, retrowave)
+    SystemBarsEffect(colorScheme, resolved.isDark, floatingDock = glassEffects != GlassEffects.OFF)
+    val glass = remember(colors, resolved.isDark, retrowave, glassEffects) {
+        GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, retrowave, glassEffects)
     }
 
     val info = PhobosThemeInfo(resolved.theme, resolved.isDark, retrowave, colors.success, colors.warning, colors.scheme, glass)
@@ -110,12 +112,13 @@ private fun animateColorScheme(target: ColorScheme): ColorScheme {
 
 @Suppress("DEPRECATION")
 @Composable
-private fun SystemBarsEffect(colorScheme: ColorScheme, isDark: Boolean) {
+private fun SystemBarsEffect(colorScheme: ColorScheme, isDark: Boolean, floatingDock: Boolean) {
     val view = LocalView.current
     if (view.isInEditMode) return
     val statusBar = colorScheme.background
-    // The navigation dock floats above the screen's backdrop, so the system bar below it matches the background.
-    val navigationBar = colorScheme.background
+    // The floating dock sits over the screen's backdrop, so the system bar below it matches the background;
+    // the standard navigation bar (glass effects off) continues into it.
+    val navigationBar = if (floatingDock) colorScheme.background else colorScheme.surfaceContainer
     SideEffect {
         val window = (view.context as Activity).window
         // From Android 15 the app is edge-to-edge and draws behind transparent system bars itself.

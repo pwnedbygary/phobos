@@ -21,6 +21,7 @@ import com.phobos.emulator.PerformanceStats
 import com.phobos.emulator.PhobosCore
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
@@ -118,6 +119,7 @@ class MainViewModel(private val context: Context, private val settingsStore: Set
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsStore.setThemeMode(mode) }
     fun setTheme(id: String, followSystem: Boolean = false) = viewModelScope.launch { settingsStore.setTheme(id, followSystem) }
     fun setRetrowaveEffects(enabled: Boolean) = viewModelScope.launch { settingsStore.setRetrowaveEffects(enabled) }
+    fun setGlassEffects(level: GlassEffects) = viewModelScope.launch { settingsStore.setGlassEffects(level) }
     fun setRegionPreference(pref: RegionPreference) = viewModelScope.launch { settingsStore.setRegionPreference(pref) }
     fun setFastBoot(enabled: Boolean) = viewModelScope.launch { settingsStore.setFastBoot(enabled) }
     fun setMuteAudio(enabled: Boolean) = viewModelScope.launch {

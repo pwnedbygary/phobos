@@ -2,6 +2,7 @@ package com.phobos.emulator.ui.theme
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import com.phobos.emulator.data.GlassEffects
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -101,13 +102,13 @@ class ConsoleArtTest {
         assertTrue("no dark greys found", bodies.isNotEmpty())
         val failures = variants.filter { it.isDark }.flatMap { v ->
             val s = v.colors.scheme
-            // The Library draws tiles as glass: surfaceContainer at the panel alpha over the background.
-            val glassAlpha = GlassStyle.of(s, v.colors.success, v.colors.warning, isDark = true, retrowave = false).panelAlpha
-            val glassTile = composite(s.surfaceContainer.toArgb(), s.background.toArgb(), glassAlpha.toDouble())
-            val tiles = listOf(
-                "tile" to (v.palette to s.surfaceContainer.toArgb()),
-                "glass tile" to (ConsoleArtPalette(s, v.colors.success, v.colors.warning, Color(glassTile)) to glassTile),
-            )
+            // The Library draws tiles as glass: surfaceContainer at each level's panel alpha over the background.
+            val glassTiles = GlassEffects.entries.map { level ->
+                val alpha = GlassStyle.of(s, v.colors.success, v.colors.warning, isDark = true, retrowave = false, level).panelAlpha
+                val tile = composite(s.surfaceContainer.toArgb(), s.background.toArgb(), alpha.toDouble())
+                "glass tile ($level)" to (ConsoleArtPalette(s, v.colors.success, v.colors.warning, Color(tile)) to tile)
+            }
+            val tiles = listOf("tile" to (v.palette to s.surfaceContainer.toArgb())) + glassTiles
             tiles.flatMap { (label, pair) ->
                 val (palette, tile) = pair
                 val tileLightness = lightness(tile)

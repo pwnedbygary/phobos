@@ -16,6 +16,7 @@ import androidx.lifecycle.ViewModelProvider
 import coil.Coil
 import coil.ImageLoader
 import coil.decode.SvgDecoder
+import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.input.GameInputState
@@ -36,7 +37,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-private data class ThemeSelection(val id: String, val mode: ThemeMode, val followSystem: Boolean, val retrowave: Boolean)
+private data class ThemeSelection(val id: String, val mode: ThemeMode, val followSystem: Boolean, val retrowave: Boolean, val glass: GlassEffects)
 
 class MainActivity : ComponentActivity() {
 
@@ -72,12 +73,12 @@ class MainActivity : ComponentActivity() {
             // theme keeps launches from flashing, and animating away from, the default theme.
             val theme by remember {
                 settingsStore.settings
-                    .map { ThemeSelection(it.themeId, it.themeMode, it.themeFollowSystem, it.retrowaveEffects) }
+                    .map { ThemeSelection(it.themeId, it.themeMode, it.themeFollowSystem, it.retrowaveEffects, it.glassEffects) }
                     .distinctUntilChanged()
             }.collectAsState(initial = null)
 
             theme?.let {
-                PhobosTheme(themeId = it.id, themeMode = it.mode, followSystem = it.followSystem, retrowave = it.retrowave) {
+                PhobosTheme(themeId = it.id, themeMode = it.mode, followSystem = it.followSystem, retrowave = it.retrowave, glassEffects = it.glass) {
                     MainScaffold(viewModel = viewModel)
                 }
             }

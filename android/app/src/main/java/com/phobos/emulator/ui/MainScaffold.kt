@@ -54,10 +54,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.navigation.NavBackStackEntry
+import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.ui.theme.GlassBackdrop
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.RetrowaveBackdrop
 import com.phobos.emulator.ui.theme.glassPanel
+import com.phobos.emulator.ui.theme.neonBar
 import com.phobos.emulator.ui.theme.neonBloom
 import com.phobos.emulator.ui.theme.neonGlow
 import androidx.compose.ui.platform.LocalContext
@@ -120,23 +122,25 @@ fun MainScaffold(viewModel: MainViewModel) {
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         if (backdropAlpha > 0f) {
             val backdrop = Modifier.fillMaxSize().graphicsLayer { alpha = backdropAlpha }
-            if (retrowave) RetrowaveBackdrop(backdrop) else GlassBackdrop(backdrop)
+            if (retrowave) RetrowaveBackdrop(backdrop)
+            else if (LocalPhobosTheme.current.glass.level != GlassEffects.OFF) GlassBackdrop(backdrop)
         }
         Scaffold(
             containerColor = Color.Transparent,
             contentColor = MaterialTheme.colorScheme.onBackground,
             bottomBar = {
                 if (route !in FULL_SCREEN_ROUTES) {
-                    PhobosDock(
-                        route = route,
-                        retrowave = retrowave,
-                        onNavigate = { target ->
-                            navController.navigate(target) {
-                                popUpTo(navController.graph.startDestinationId)
-                                launchSingleTop = true
-                            }
-                        },
-                    )
+                    val onNavigate: (String) -> Unit = { target ->
+                        navController.navigate(target) {
+                            popUpTo(navController.graph.startDestinationId)
+                            launchSingleTop = true
+                        }
+                    }
+                    if (LocalPhobosTheme.current.glass.level == GlassEffects.OFF) {
+                        PhobosNavigationBar(route, retrowave, onNavigate)
+                    } else {
+                        PhobosDock(route, retrowave, onNavigate)
+                    }
                 }
             }
         ) { innerPadding ->
@@ -301,6 +305,33 @@ private val NAV_TABS = listOf(
     NavTab("console", "Console", Icons.Rounded.Terminal, Icons.Outlined.Terminal),
     NavTab("settings", "Settings", Icons.Rounded.Settings, Icons.Outlined.Settings),
 )
+
+/** The standard Material navigation bar, used with glass effects off. */
+@Composable
+private fun PhobosNavigationBar(route: String?, retrowave: Boolean, onNavigate: (String) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    NavigationBar(
+        containerColor = if (retrowave) scheme.surfaceContainer.copy(alpha = 0.92f) else scheme.surfaceContainer,
+        tonalElevation = 0.dp,
+        modifier = if (retrowave) Modifier.neonBar(scheme, lineAtBottom = false) else Modifier,
+    ) {
+        NAV_TABS.forEach { tab ->
+            val selected = route == tab.route
+            NavigationBarItem(
+                selected = selected,
+                onClick = { onNavigate(tab.route) },
+                icon = {
+                    Icon(
+                        if (selected) tab.selectedIcon else tab.icon,
+                        contentDescription = tab.label,
+                        modifier = if (selected && retrowave) Modifier.neonBloom(scheme.primary) else Modifier,
+                    )
+                },
+                label = { Text(tab.label) },
+            )
+        }
+    }
+}
 
 /**
  * Floating glass dock for the top-level tabs. Custom items rather than Material's

@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
+import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.glassPanel
@@ -77,6 +78,7 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, trailing: (@Comp
  * place of the rim and shadow when retrowave effects are on. The fill is as see-through as text
  * contrast allows; set [accentText] where the card shows secondary, tertiary, error, success or
  * warning text. A click ripple stays inside [shape], and a clickable card dips slightly when pressed.
+ * With glass effects off it is the opaque surface with a faint outline (or the neon edge).
  */
 @Composable
 fun ThemedCard(
@@ -89,6 +91,7 @@ fun ThemedCard(
     val scheme = MaterialTheme.colorScheme
     val theme = LocalPhobosTheme.current
     val glass = theme.glass
+    val glassOff = glass.level == GlassEffects.OFF
     val panel = Modifier.glassPanel(
         shape = shape,
         fill = scheme.surfaceContainer,
@@ -97,12 +100,13 @@ fun ThemedCard(
         isDark = theme.isDark,
         rim = !theme.retrowave,
         shadow = !theme.retrowave,
+        outline = if (glassOff && !theme.retrowave) scheme.outlineVariant.copy(alpha = 0.45f) else Color.Unspecified,
     )
     val edge = if (theme.retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier
     if (onClick != null) {
         val interactionSource = remember { MutableInteractionSource() }
         val pressed by interactionSource.collectIsPressedAsState()
-        val scale by animateFloatAsState(if (pressed) 0.97f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "cardPress")
+        val scale by animateFloatAsState(if (pressed && !glassOff) 0.97f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "cardPress")
         Surface(
             onClick = onClick,
             modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale }.then(edge).then(panel),

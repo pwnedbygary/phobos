@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.ThemeGroup
@@ -45,6 +46,14 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         description = "Synthwave sunset backdrop, neon glow on cards and selections, and glowing bars. Works with any theme; best with Synthwave '84.",
                         checked = settings.retrowaveEffects,
                         onCheckedChange = { viewModel.setRetrowaveEffects(it) },
+                    )
+                    SettingsDropdownItem(
+                        title = "Glass effects",
+                        description = settings.glassEffects.description,
+                        current = settings.glassEffects,
+                        options = GlassEffects.entries,
+                        label = { it.label },
+                        onSelect = { viewModel.setGlassEffects(it) },
                     )
                 }
             }

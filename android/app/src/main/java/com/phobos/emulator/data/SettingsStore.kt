@@ -24,6 +24,13 @@ enum class ThemeMode {
     LIGHT, DARK, AUTO
 }
 
+/** How strongly cards and the backdrop take the glass look. */
+enum class GlassEffects(val label: String, val description: String) {
+    FULL("Full", "See-through cards over soft color glows, with gloss and shading"),
+    SUBTLE("Subtle", "Calmer: faint glows and mostly solid cards"),
+    OFF("Off", "Solid cards and the standard navigation bar"),
+}
+
 enum class RegionPreference(val label: String) {
     NTSC_U_NTSC_J_PAL("NTSC-U -> NTSC-J -> PAL"),
     NTSC_U_PAL_NTSC_J("NTSC-U -> PAL -> NTSC-J"),
@@ -46,6 +53,7 @@ data class EmulatorSettings(
     // Paired themes (One Dark / One Light, ...) switch to their sibling to match the system.
     val themeFollowSystem: Boolean = false,
     val retrowaveEffects: Boolean = false,
+    val glassEffects: GlassEffects = GlassEffects.FULL,
     val regionPreference: RegionPreference = RegionPreference.NTSC_U_NTSC_J_PAL,
     val fastBoot: Boolean = false,
     val muteAudio: Boolean = false,
@@ -138,6 +146,7 @@ class SettingsStore(private val context: Context) {
         val UI_THEME = stringPreferencesKey("ui_theme")
         val UI_THEME_FOLLOW_SYSTEM = booleanPreferencesKey("ui_theme_follow_system")
         val RETROWAVE_EFFECTS = booleanPreferencesKey("retrowave_effects")
+        val GLASS_EFFECTS = stringPreferencesKey("glass_effects")
         val REGION_PREFERENCE = stringPreferencesKey("region_preference")
         val FAST_BOOT = booleanPreferencesKey("fast_boot")
         val MUTE_AUDIO = booleanPreferencesKey("mute_audio")
@@ -341,6 +350,7 @@ class SettingsStore(private val context: Context) {
             themeId = safeGetString(UI_THEME, ThemeRegistry.SYSTEM_ID),
             themeFollowSystem = safeGet(UI_THEME_FOLLOW_SYSTEM, false),
             retrowaveEffects = safeGet(RETROWAVE_EFFECTS, false),
+            glassEffects = enumOrDefault(safeGetString(GLASS_EFFECTS, GlassEffects.FULL.name), GlassEffects.FULL),
             regionPreference = enumOrDefault(safeGetString(REGION_PREFERENCE, ""), RegionPreference.NTSC_U_NTSC_J_PAL),
             fastBoot = safeGet(FAST_BOOT, false),
             muteAudio = safeGet(MUTE_AUDIO, false),
@@ -470,6 +480,7 @@ class SettingsStore(private val context: Context) {
         it[UI_THEME_FOLLOW_SYSTEM] = followSystem
     }
     suspend fun setRetrowaveEffects(enabled: Boolean) = context.dataStore.edit { it[RETROWAVE_EFFECTS] = enabled }
+    suspend fun setGlassEffects(level: GlassEffects) = context.dataStore.edit { it[GLASS_EFFECTS] = level.name }
     suspend fun setRegionPreference(pref: RegionPreference) = context.dataStore.edit { it[REGION_PREFERENCE] = pref.name }
     suspend fun setFastBoot(enabled: Boolean) = context.dataStore.edit { it[FAST_BOOT] = enabled }
     suspend fun setMuteAudio(enabled: Boolean) = context.dataStore.edit { it[MUTE_AUDIO] = enabled }

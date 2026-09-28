@@ -6,6 +6,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
@@ -21,6 +22,7 @@ import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.invalidateDraw
@@ -32,8 +34,8 @@ import androidx.compose.ui.unit.dp
  * Draws a glass panel of [shape] around the content: a soft shadow outside the panel only, so it
  * never shows through the translucent fill; [fill] at [alpha]; the style's gloss from the top left
  * and shade toward the bottom right; then, over the content, a hairline [rim] that is brightest
- * along the top edge. Paths and brushes are cached per size, so a color change (the theme's
- * cross-fade) only redraws.
+ * along the top edge, scaled by the style's rim strength, or a solid [outline] in its place.
+ * Paths and brushes are cached per size, so a color change (the theme's cross-fade) only redraws.
  */
 fun Modifier.glassPanel(
     shape: Shape,
@@ -43,8 +45,10 @@ fun Modifier.glassPanel(
     isDark: Boolean,
     rim: Boolean = true,
     shadow: Boolean = true,
+    outline: Color = Color.Unspecified,
 ): Modifier = this then GlassPanelElement(
-    shape, fill, alpha, style.glossAlpha, style.shadeAlpha, if (shadow) style.shadowAlpha else 0f, isDark, rim,
+    shape, fill, alpha, style.glossAlpha, style.shadeAlpha, if (shadow) style.shadowAlpha else 0f, isDark,
+    if (rim) style.rimStrength else 0f, outline,
 )
 
 private data class GlassPanelElement(
@@ -55,7 +59,8 @@ private data class GlassPanelElement(
     val shade: Float,
     val shadow: Float,
     val isDark: Boolean,
-    val rim: Boolean,
+    val rim: Float,
+    val outline: Color,
 ) : ModifierNodeElement<GlassPanelNode>() {
     override fun create() = GlassPanelNode(this)
 
@@ -80,7 +85,7 @@ private class GlassPanelNode(private var spec: GlassPanelElement) : Modifier.Nod
     fun update(new: GlassPanelElement) {
         val old = spec
         spec = new
-        if (new.shape != old.shape || new.gloss != old.gloss || new.shade != old.shade || new.shadow != old.shadow || new.isDark != old.isDark) {
+        if (new.shape != old.shape || new.gloss != old.gloss || new.shade != old.shade || new.shadow != old.shadow || new.isDark != old.isDark || new.rim != old.rim) {
             cachedSize = Size.Unspecified
         }
         invalidateDraw()
@@ -95,7 +100,8 @@ private class GlassPanelNode(private var spec: GlassPanelElement) : Modifier.Nod
         drawPath(path, spec.fill, alpha = spec.alpha)
         sheen?.let { drawPath(path, it) }
         drawContent()
-        if (spec.rim) rimBrush?.let { drawPath(path, it, style = rimStroke) }
+        if (spec.outline.isSpecified) drawPath(path, spec.outline, style = rimStroke)
+        else if (spec.rim > 0f) rimBrush?.let { drawPath(path, it, style = rimStroke) }
     }
 
     private fun ContentDrawScope.rebuild() {
@@ -124,14 +130,20 @@ private class GlassPanelNode(private var spec: GlassPanelElement) : Modifier.Nod
         } else {
             null
         }
+        val rim = spec.rim
         rimBrush = if (spec.isDark) {
-            Brush.verticalGradient(0f to Color.White.copy(alpha = 0.28f), 0.5f to Color.White.copy(alpha = 0.07f), 1f to Color.White.copy(alpha = 0.04f), endY = size.height)
+            Brush.verticalGradient(
+                0f to Color.White.copy(alpha = 0.28f * rim),
+                0.5f to Color.White.copy(alpha = 0.07f * rim),
+                1f to Color.White.copy(alpha = 0.04f * rim),
+                endY = size.height,
+            )
         } else {
             Brush.verticalGradient(
-                0f to Color.White.copy(alpha = 0.9f),
+                0f to Color.White.copy(alpha = 0.9f * rim),
                 0.4f to Color.White.copy(alpha = 0f),
                 0.4f to Color.Black.copy(alpha = 0f),
-                1f to Color.Black.copy(alpha = 0.1f),
+                1f to Color.Black.copy(alpha = 0.1f * rim),
                 endY = size.height,
             )
         }
@@ -154,9 +166,13 @@ private class GlassPanelNode(private var spec: GlassPanelElement) : Modifier.Nod
  */
 @Composable
 fun GlassBackdrop(modifier: Modifier = Modifier) {
-    val glows = LocalPhobosTheme.current.glass.glows
-    val colors = glows.map { glow ->
-        animateColorAsState(glow.color.copy(alpha = glow.alpha), tween(durationMillis = 450), label = "glow").value
+    val glass = LocalPhobosTheme.current.glass
+    val glows = glass.glows
+    // Keyed by level so a Glass effects change applies at once; theme changes still fade.
+    val colors = key(glass.level) {
+        glows.map { glow ->
+            animateColorAsState(glow.color.copy(alpha = glow.alpha), tween(durationMillis = 450), label = "glow").value
+        }
     }
     Spacer(
         modifier.drawWithCache {
@@ -171,7 +187,7 @@ fun GlassBackdrop(modifier: Modifier = Modifier) {
                     radius = glow.radius * extent,
                 )
             }
-            onDrawBehind { brushes.forEach { drawRect(it) } }
+            onDrawBehind { brushes.forEachIndexed { index, brush -> if (colors[index].alpha > 0f) drawRect(brush) } }
         },
     )
 }

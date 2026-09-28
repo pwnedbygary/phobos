@@ -5,6 +5,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
+import com.phobos.emulator.data.GlassEffects
 import androidx.compose.ui.graphics.luminance
 import kotlin.math.max
 import kotlin.math.min
@@ -26,7 +27,9 @@ data class Glow(val color: Color, val alpha: Float, val x: Float, val y: Float, 
  * The dock's selection pill is `primary` at [indicatorAlpha]. [glows] sit behind the screens, at
  * zero alpha with Retrowave effects, which keep their sunset. Each value is the strongest (or, for
  * the panels, the most see-through) that keeps text at WCAG AA against every backdrop it can end
- * up over.
+ * up over. [level] is the user's Glass effects setting: Subtle scales every strength down and
+ * raises the panel floor, and Off makes panels opaque with no glows, gloss, shade or shadow.
+ * [rimStrength] scales the rim highlight.
  */
 @Immutable
 data class GlassStyle(
@@ -37,10 +40,18 @@ data class GlassStyle(
     val shadowAlpha: Float,
     val indicatorAlpha: Float,
     val glows: List<Glow>,
+    val level: GlassEffects = GlassEffects.FULL,
+    val rimStrength: Float = 1f,
 ) {
     companion object {
-        fun of(scheme: ColorScheme, success: Color, warning: Color, isDark: Boolean, retrowave: Boolean): GlassStyle =
-            GlassBuilder(scheme, success, warning, isDark, retrowave).build()
+        fun of(
+            scheme: ColorScheme,
+            success: Color,
+            warning: Color,
+            isDark: Boolean,
+            retrowave: Boolean,
+            level: GlassEffects = GlassEffects.FULL,
+        ): GlassStyle = GlassBuilder(scheme, success, warning, isDark, retrowave, level).build()
     }
 }
 
@@ -56,7 +67,10 @@ internal class GlassBuilder(
     warning: Color,
     private val isDark: Boolean,
     private val retrowave: Boolean,
+    private val level: GlassEffects,
 ) {
+    private val strength = if (level == GlassEffects.SUBTLE) Strength.SUBTLE else Strength.FULL
+
     /** Text on most panels: list rows, labels and links. */
     private val bodyText = Luminances(listOf(scheme.onSurface, scheme.onSurfaceVariant, scheme.primary))
 
@@ -72,9 +86,13 @@ internal class GlassBuilder(
     private val screenText = Luminances(listOf(scheme.onBackground, scheme.onSurfaceVariant, scheme.primary))
 
     fun build(): GlassStyle {
+        if (level == GlassEffects.OFF) {
+            val glows = designedGlows().map { it.copy(alpha = 0f) }
+            return GlassStyle(1f, 1f, 0f, 0f, 0f, 0f, glows, level, rimStrength = 0f)
+        }
         val glows = if (retrowave) designedGlows().map { it.copy(alpha = 0f) } else fitGlows()
         val screenBackdrops = glowBackdrops(glows)
-        val shadowAlpha = if (retrowave) 0f else strongest(if (isDark) DARK_SHADOW else LIGHT_SHADOW) { alpha ->
+        val shadowAlpha = if (retrowave) 0f else strongest(strength.shadow * if (isDark) DARK_SHADOW else LIGHT_SHADOW) { alpha ->
             screenBackdrops.all { screenText.pass(over(Color.Black, alpha * SHADOW_REACH, it), TEXT_CONTRAST) }
         }
         val panelBackdrops = if (retrowave) sunsetBackdrops(SunsetColors(scheme, isDark))
@@ -86,22 +104,22 @@ internal class GlassBuilder(
         fun overlayPasses(overlay: Color) =
             fills.all { bodyText.pass(over(overlay, it), TEXT_CONTRAST) } &&
                 accentFills.all { accentText.pass(over(overlay, it), TEXT_CONTRAST) }
-        val gloss = strongest(if (isDark) DARK_GLOSS else LIGHT_GLOSS) { overlayPasses(Color.White.copy(alpha = it)) }
-        val shade = strongest(if (isDark) DARK_SHADE else LIGHT_SHADE) { overlayPasses(Color.Black.copy(alpha = it)) }
+        val gloss = strongest(strength.gloss * if (isDark) DARK_GLOSS else LIGHT_GLOSS) { overlayPasses(Color.White.copy(alpha = it)) }
+        val shade = strongest(strength.shade * if (isDark) DARK_SHADE else LIGHT_SHADE) { overlayPasses(Color.Black.copy(alpha = it)) }
         val primaryIcon = Luminances(listOf(scheme.primary))
         val indicator = strongest(INDICATOR) { alpha ->
             fills.all { primaryIcon.pass(over(scheme.primary, alpha, it), ICON_CONTRAST) }
         }
-        return GlassStyle(panelAlpha, accentPanelAlpha, gloss, shade, shadowAlpha, indicator, glows)
+        return GlassStyle(panelAlpha, accentPanelAlpha, gloss, shade, shadowAlpha, indicator, glows, level, strength.rim)
     }
 
     /** The least opaque panel alpha from the floor up (in hundredths) at which [text] passes over every backdrop. */
     private fun mostSeeThrough(text: Luminances, backdrops: List<Color>): Float =
-        (PANEL_FLOOR_STEPS..100).firstOrNull { step -> backdrops.all { text.pass(panel(step / 100f, it), TEXT_CONTRAST) } }
+        (strength.panelFloor..100).firstOrNull { step -> backdrops.all { text.pass(panel(step / 100f, it), TEXT_CONTRAST) } }
             ?.let { it / 100f } ?: 1f
 
     private fun designedGlows(): List<Glow> {
-        val peak = if (isDark) DARK_GLOW else LIGHT_GLOW
+        val peak = strength.glow * if (isDark) DARK_GLOW else LIGHT_GLOW
         return GLOW_SPOTS.map { (accent, spot) -> Glow(glowColor(accent(scheme)), peak, spot.x, spot.y, spot.radius) }
     }
 
@@ -188,6 +206,12 @@ internal class GlassBuilder(
 
     private class Spot(val x: Float, val y: Float, val radius: Float)
 
+    /** Per-level panel floor (in hundredths) and multipliers on the design strengths below. */
+    private enum class Strength(val panelFloor: Int, val glow: Float, val gloss: Float, val shade: Float, val shadow: Float, val rim: Float) {
+        FULL(60, 1f, 1f, 1f, 1f, 1f),
+        SUBTLE(80, 0.45f, 0.5f, 0.5f, 0.6f, 0.5f),
+    }
+
     private companion object {
         const val TEXT_CONTRAST = 4.5f
         const val ICON_CONTRAST = 3f
@@ -195,7 +219,6 @@ internal class GlassBuilder(
         /** Covers rounding differences and the one-step dithering of drawn gradients. */
         const val MARGIN = 0.05f
 
-        const val PANEL_FLOOR_STEPS = 60
         const val DARK_GLOSS = 0.08f
         const val LIGHT_GLOSS = 0.35f
         const val DARK_SHADE = 0.2f
