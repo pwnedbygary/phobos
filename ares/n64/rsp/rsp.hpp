@@ -674,6 +674,7 @@ struct RSP : Thread, Memory::RCP<RSP> {
     auto emitVU(u32 instruction) -> void;
     auto emitLWC2(u32 instruction, u32 pc, bool delaySlot, bool emitSlowPath, u32 slowPathClocks) -> void;
     auto emitSWC2(u32 instruction, u32 pc, bool delaySlot, bool emitSlowPath, u32 slowPathClocks) -> void;
+    auto flushAcc() -> void;
 
     static auto mask(u12 address, u12 size) -> u64 {
       //1 bit per 64 bytes
@@ -688,6 +689,9 @@ struct RSP : Thread, Memory::RCP<RSP> {
     bool enabled = true;
     // Instruction-tracer state, sampled once per RSP::main() instead of on every block lookup.
     bool traceMode = false;
+    // While compiling: NEON multiply-accumulate code left the accumulator in registers, and the
+    // VU struct's copy is stale until flushAcc() (see vu-neon.hpp).
+    bool accCached = false;
     Pipeline pipeline;
     bump_allocator allocator;
     array<Block*[2048]> context;

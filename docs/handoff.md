@@ -78,7 +78,11 @@ emits the RSP multiply and multiply-accumulate instructions as inline NEON from 
 (`ares/n64/rsp/vu-neon.hpp`), checked bit for bit against the SSE and scalar implementations by
 `tests/rsp-vu-neon/run-tests.sh` on an AArch64 host; 3.0% less per-frame work in Mario vs Boo
 ([audit](performance-audit.md#2026-09-27-follow-up-rsp-multiply-accumulate-instructions-as-inline-neon)).
-PRs #4–#15 are stacked and merge in order.
+PRs #4–#15 were merged into `master` on 2026-09-27 (fast-forward, same commits); new work
+branches from `master`. Branch `feature/rsp-acc-cache-2026-09`
+([PR #16](https://github.com/pwnedbygary/phobos/pull/16)) keeps the RSP accumulator in NEON
+registers across consecutive multiply-accumulate instructions, 2.3% less per-frame work
+([audit](performance-audit.md#2026-09-27-follow-up-rsp-accumulator-kept-in-neon-registers)).
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

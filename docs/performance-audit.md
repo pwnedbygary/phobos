@@ -825,11 +825,36 @@ because the probe hashes while the GPU can still be writing the frame.
 frame emulation work 7.728 and 7.836 ms for PR #14 against 7.549 and 7.555 ms, 3.0% less. The
 remaining cost is mostly each sequence's loads and stores of the accumulator.
 
+### 2026-09-27 follow-up: RSP accumulator kept in NEON registers
+
+Branch `feature/rsp-acc-cache-2026-09` ([PR #16](https://github.com/pwnedbygary/phobos/pull/16)),
+based on `master` (PRs #4–#15 were merged into it the same day).
+
+**Change.** Microcode chains multiply-accumulate instructions (the 32-bit multiply idiom is
+VMUDL, VMADM, VMADN, VMADH), so the RSP recompiler now leaves the accumulator in v19–v21 after a
+NEON sequence and the next one starts from there. The VU struct's copy is stale meanwhile, so the
+recompiler stores it (`flushAcc`) before any instruction other than the eight NEON ones and the
+scalar ALU instructions (which compile to register arithmetic without calls, slow paths or
+branches), before an epilogue that commits a branch, sits in a delay slot, checks for a halt or
+calls the tracer prologue, and at the end of the block. Slow paths come only from instructions
+that flush first, so they always see the stored accumulator.
+
+**Verification.** `tests/rsp-vu-neon` now also runs every instruction with the accumulator kept
+and then flushed, and preloaded, and 4,000 random chains of 2–5 instructions against the
+references applied in order: 10.4 million checks, no mismatch. Dropping the accumulator store at
+the end of a chain in a copy of the generator gave 7,091 mismatches. On the RP6 (determinism
+probe), CP0 Count and PC matched PR #15 at all four checkpoints in two runs each, and one run's
+RDRAM hashes matched a PR #14 run's at all four checkpoints (the hashes vary between runs of any
+build, as noted above, but come from a small set of states).
+
+**Measured** (RP6, Standard mode, busy-wait on, Mario vs Boo, 88 s per run, builds alternated): per
+frame emulation work 7.767 and 7.635 ms for PR #15 against 7.539 and 7.514 ms, 2.3% less (medians
+7.35 → 7.09 ms); with PR #15, about 5% less than before the NEON work.
+
 ### Next (not implemented)
 
-- RSP vector instructions: keep the accumulator in NEON registers across consecutive multiply-
-  accumulate instructions, and emit the other frequent ones (VMULF, VMACF, VADD, VSUB, VMOV, VGE,
-  VLT, VMRG) inline; the rest are still C++ helpers called from the RSP JIT.
+- RSP vector instructions: emit the other frequent ones (VMULF, VMACF, VADD, VSUB, VMOV, VGE, VLT,
+  VMRG) inline; the rest are still C++ helpers called from the RSP JIT.
 - Taken branches to other blocks, `JAL` and `JR` still return to the dispatcher (about 0.11,
   0.11 and 0.12 million a second in Mario vs Boo).
 - The UI theme system ([PR #9](https://github.com/pwnedbygary/phobos/pull/9)) and the

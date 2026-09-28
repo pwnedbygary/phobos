@@ -335,6 +335,8 @@ static auto dump(const char* label, const VU& s, int reg) -> void {
   fprintf(stderr, "\n");
 }
 
+struct Step { Op op; int e, vd, vs, vt; };
+
 int main(int argc, char** argv) {
   int states = argc > 1 ? atoi(argv[1]) : 3000;
   uint64_t seed = argc > 2 ? strtoull(argv[2], nullptr, 0) : 0x5253505655ull;
@@ -344,40 +346,76 @@ int main(int argc, char** argv) {
   const int regs[][3] = {{1, 2, 3}, {4, 4, 5}, {6, 7, 6}, {8, 9, 9}, {10, 10, 10}, {0, 31, 17}, {31, 0, 31}, {30, 29, 0}};
   const Op ops[] = {Op::VMUDL, Op::VMUDM, Op::VMUDN, Op::VMUDH, Op::VMADL, Op::VMADM, Op::VMADN, Op::VMADH};
 
-  CodeBuffer code(4 << 20);
+  CodeBuffer code(64 << 20);
   uint64_t checks = 0, failures = 0, referenceMismatches = 0;
+
+  //runs `f` and the references on random states; steps are applied in order
+  auto check = [&](Function f, const std::vector<Step>& steps, int count, const char* mode) {
+    for(int i = 0; i < count; i++) {
+      VU initial;
+      randomState(rng, initial);
+      VU a = initial, b = initial, c = initial;
+      for(auto& s : steps) {
+        sisd::run(a, s.op, s.e, s.vd, s.vs, s.vt);
+        simd::run(b, s.op, s.e, s.vd, s.vs, s.vt);
+      }
+      f(&c);
+      checks++;
+      auto& last = steps.back();
+      if(memcmp(&a, &b, sizeof(VU)) != 0 && referenceMismatches++ < 5) {
+        fprintf(stderr, "scalar and SSE references differ (%s): %s e=%d vd=%d vs=%d vt=%d\n", mode, opName(last.op), last.e, last.vd, last.vs, last.vt);
+        dump("scalar", a, last.vd); dump("sse", b, last.vd);
+      }
+      if(memcmp(&b, &c, sizeof(VU)) != 0 && failures++ < 10) {
+        fprintf(stderr, "NEON differs from SSE (%s, %zu steps, last %s e=%d vd=%d vs=%d vt=%d)\n", mode, steps.size(), opName(last.op), last.e, last.vd, last.vs, last.vt);
+        dump("input", initial, last.vd); dump("sse", b, last.vd); dump("neon", c, last.vd);
+      }
+    }
+  };
+
+  //every instruction alone: stored as usual, kept in v19-v21 and then flushed, and with the
+  //accumulator already loaded into v19-v21
+  enum Mode { Plain, Keep, Preloaded };
+  const char* modeNames[] = {"plain", "kept", "preloaded"};
   for(Op op : ops) {
     for(int e = 0; e < 16; e++) {
       for(auto& r : regs) {
-        std::vector<uint32_t> words;
-        RspVuNeon::emit(words, op, e, r[0], r[1], r[2], 0, layout);
-        Function f = code.add(words);
-        for(int i = 0; i < states; i++) {
-          VU initial;
-          randomState(rng, initial);
-          VU a = initial, b = initial, c = initial;
-          sisd::run(a, op, e, r[0], r[1], r[2]);
-          simd::run(b, op, e, r[0], r[1], r[2]);
-          f(&c);
-          checks++;
-          bool refsAgree = memcmp(&a, &b, sizeof(VU)) == 0;
-          if(!refsAgree && referenceMismatches++ < 5) {
-            fprintf(stderr, "scalar and SSE references differ: %s e=%d vd=%d vs=%d vt=%d\n", opName(op), e, r[0], r[1], r[2]);
-            dump("scalar", a, r[0]); dump("sse", b, r[0]);
+        for(int mode : {Plain, Keep, Preloaded}) {
+          std::vector<uint32_t> words;
+          if(mode == Preloaded) {
+            words.push_back(RspVuNeon::encode::ldrq(RspVuNeon::v::acch, 0, layout.acch));
+            words.push_back(RspVuNeon::encode::ldrq(RspVuNeon::v::accm, 0, layout.accm));
+            words.push_back(RspVuNeon::encode::ldrq(RspVuNeon::v::accl, 0, layout.accl));
           }
-          if(memcmp(&b, &c, sizeof(VU)) != 0) {
-            if(failures++ < 10) {
-              fprintf(stderr, "NEON differs from SSE: %s e=%d vd=%d vs=%d vt=%d\n", opName(op), e, r[0], r[1], r[2]);
-              dump("input", initial, r[0]); dump("sse", b, r[0]); dump("neon", c, r[0]);
-            }
-          }
+          RspVuNeon::emit(words, op, e, r[0], r[1], r[2], 0, layout, mode == Preloaded, mode == Keep);
+          if(mode == Keep) RspVuNeon::flushAcc(words, 0, layout);
+          check(code.add(words), {{op, e, r[0], r[1], r[2]}}, states, modeNames[mode]);
         }
       }
     }
   }
-  printf("%llu checks (8 instructions x 16 elements x %zu register choices x %d states), seed 0x%llx: "
+  uint64_t singleChecks = checks;
+
+  //chains of 2-5 random instructions with the accumulator kept between them, ending either with
+  //the last instruction storing it or with a flush
+  for(int chain = 0; chain < 4000; chain++) {
+    std::vector<Step> steps(2 + rng() % 4);
+    for(auto& s : steps) s = {ops[rng() % 8], (int)(rng() % 16), (int)(rng() % 32), (int)(rng() % 32), (int)(rng() % 32)};
+    bool endFlush = rng() & 1;
+    std::vector<uint32_t> words;
+    for(size_t i = 0; i < steps.size(); i++) {
+      auto& s = steps[i];
+      RspVuNeon::emit(words, s.op, s.e, s.vd, s.vs, s.vt, 0, layout, i > 0, i + 1 < steps.size() || endFlush);
+    }
+    if(endFlush) RspVuNeon::flushAcc(words, 0, layout);
+    check(code.add(words), steps, states / 10 + 1, endFlush ? "chain, flushed" : "chain");
+  }
+
+  printf("%llu checks, seed 0x%llx: %llu single-instruction (8 instructions x 16 elements x %zu register choices x "
+         "3 accumulator modes x %d states) and %llu for 4000 chains of 2-5 instructions: "
          "%llu NEON mismatches, %llu scalar/SSE reference mismatches\n",
-         (unsigned long long)checks, sizeof(regs) / sizeof(regs[0]), states, (unsigned long long)seed,
+         (unsigned long long)checks, (unsigned long long)seed, (unsigned long long)singleChecks,
+         sizeof(regs) / sizeof(regs[0]), states, (unsigned long long)(checks - singleChecks),
          (unsigned long long)failures, (unsigned long long)referenceMismatches);
   return failures || referenceMismatches ? 1 : 0;
 }

@@ -4,9 +4,11 @@
 //words. The recompiler emits them with sljit_emit_op_custom; tests/rsp-vu-neon runs the same
 //words against the SSE and scalar implementations in interpreter-vpu.cpp.
 //
-//Each sequence loads its operands from the VU struct, computes, and stores the results, so it
-//keeps no state in registers between instructions. It only uses v16-v29, which are caller-saved
-//and left alone by sljit in integer code (sljit uses v30/v31 as float temporaries).
+//Each sequence loads its operands from the VU struct, computes, and stores the results. The
+//accumulator can instead stay in v19 (acch), v20 (accm) and v21 (accl) from one sequence to the
+//next (accLoaded, keepAcc); the caller must then store it with flushAcc before anything else can
+//read the VU struct's copy or clobber those registers. Only v16-v29 are used: they are caller-
+//saved and left alone by sljit in integer code (sljit uses v30/v31 as float temporaries).
 //
 //Element n of a vector register is 16-bit lane 7 - n in memory (see r128::u16), which only
 //matters for the element broadcast; everything else is lane-wise.
@@ -43,7 +45,7 @@ namespace encode {
   constexpr uint32_t CMEQ_8H   = 0x6e608c00;
   constexpr uint32_t CMEQZ_8H  = 0x4e609800;  //CMEQ Vd.8H, Vn.8H, #0
   constexpr uint32_t CMGEZ_8H  = 0x6e608800;  //CMGE Vd.8H, Vn.8H, #0
-  constexpr uint32_t AND_16B   = 0x4e201c00, BSL_16B   = 0x6e601c00;
+  constexpr uint32_t AND_16B   = 0x4e201c00, BSL_16B   = 0x6e601c00, ORR_16B = 0x4ea01c00;
   constexpr uint32_t SQXTN_4H  = 0x0e614800, SQXTN2_8H = 0x4e614800;
   constexpr uint32_t SXTL_4S   = 0x0f10a400, SXTL2_4S  = 0x4f10a400;
   constexpr uint32_t UXTL_4S   = 0x2f10a400, UXTL2_4S  = 0x6f10a400;
@@ -120,10 +122,36 @@ inline auto clampMid(std::vector<uint32_t>& out) -> uint32_t {
   return v::t6;
 }
 
+//Stores an accumulator left in v19-v21 by keepAcc.
+inline auto flushAcc(std::vector<uint32_t>& out, uint32_t base, const Layout& layout) -> void {
+  using namespace encode;
+  out.push_back(strq(v::acch, base, layout.acch));
+  out.push_back(strq(v::accm, base, layout.accm));
+  out.push_back(strq(v::accl, base, layout.accl));
+}
+
 //Appends the code for `op vd, vs, vt(e)`. base is the X register holding the VU address.
-inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uint32_t vs, uint32_t vt, uint32_t base, const Layout& layout) -> void {
+//accLoaded: the accumulator is already in v19-v21. keepAcc: leave it there instead of storing it.
+inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uint32_t vs, uint32_t vt, uint32_t base,
+                 const Layout& layout, bool accLoaded = false, bool keepAcc = false) -> void {
   using namespace encode;
   auto vreg = [&](uint32_t n) { return layout.r + n * 16; };
+  auto loadAcc = [&](bool high, bool middle, bool low) {
+    if(accLoaded) return;
+    if(high)   out.push_back(ldrq(v::acch, base, layout.acch));
+    if(middle) out.push_back(ldrq(v::accm, base, layout.accm));
+    if(low)    out.push_back(ldrq(v::accl, base, layout.accl));
+  };
+  //the whole accumulator, with accl taken from the given register
+  auto storeAcc = [&](uint32_t accl) {
+    if(keepAcc) {
+      if(accl != v::accl) out.push_back(rrr(ORR_16B, v::accl, accl, accl));
+      return;
+    }
+    out.push_back(strq(v::acch, base, layout.acch));
+    out.push_back(strq(v::accm, base, layout.accm));
+    out.push_back(strq(accl, base, layout.accl));
+  };
   out.push_back(ldrq(v::vs, base, vreg(vs)));
   out.push_back(ldrq(v::vt, base, vreg(vt)));
   uint32_t vte = broadcast(out, e);
@@ -133,9 +161,8 @@ inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uin
     products(out, vte, false, false, v::t0, v::t1);
     out.push_back(rrr(UZP2_8H, v::accl, v::t0, v::t1));
     out.push_back(MOVI0_2D | v::acch);
-    out.push_back(strq(v::acch, base, layout.acch));
-    out.push_back(strq(v::acch, base, layout.accm));
-    out.push_back(strq(v::accl, base, layout.accl));
+    out.push_back(MOVI0_2D | v::accm);
+    storeAcc(v::accl);
     out.push_back(strq(v::accl, base, vreg(vd)));
     return;
   }
@@ -146,9 +173,7 @@ inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uin
     out.push_back(rrr(UZP1_8H, v::accl, v::t0, v::t1));
     out.push_back(rrr(UZP2_8H, v::accm, v::t0, v::t1));
     out.push_back(sshr8h(v::acch, v::accm, 15));
-    out.push_back(strq(v::acch, base, layout.acch));
-    out.push_back(strq(v::accm, base, layout.accm));
-    out.push_back(strq(v::accl, base, layout.accl));
+    storeAcc(v::accl);
     out.push_back(strq(op == Op::VMUDM ? v::accm : v::accl, base, vreg(vd)));
     return;
   }
@@ -160,17 +185,14 @@ inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uin
     out.push_back(rr(SQXTN_4H,  v::t2, v::t0));
     out.push_back(rr(SQXTN2_8H, v::t2, v::t1));
     out.push_back(MOVI0_2D | v::accl);
-    out.push_back(strq(v::acch, base, layout.acch));
-    out.push_back(strq(v::accm, base, layout.accm));
-    out.push_back(strq(v::accl, base, layout.accl));
+    storeAcc(v::accl);
     out.push_back(strq(v::t2, base, vreg(vd)));
     return;
   }
 
   case Op::VMADH: {  //acch:accm += s16(vs) * s16(vt) (32-bit wrap); vd = clamp(acch:accm)
     products(out, vte, true, true, v::t0, v::t1);
-    out.push_back(ldrq(v::acch, base, layout.acch));
-    out.push_back(ldrq(v::accm, base, layout.accm));
+    loadAcc(true, true, keepAcc);  //accl is unchanged, so it is only needed when kept
     out.push_back(rrr(ZIP1_8H, v::t2, v::accm, v::acch));
     out.push_back(rrr(ZIP2_8H, v::t3, v::accm, v::acch));
     out.push_back(rrr(ADD_4S, v::t2, v::t2, v::t0));
@@ -179,8 +201,11 @@ inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uin
     out.push_back(rrr(UZP2_8H, v::acch, v::t2, v::t3));
     out.push_back(rr(SQXTN_4H,  v::t4, v::t2));
     out.push_back(rr(SQXTN2_8H, v::t4, v::t3));
-    out.push_back(strq(v::acch, base, layout.acch));
-    out.push_back(strq(v::accm, base, layout.accm));
+    if(!keepAcc) {
+      out.push_back(strq(v::acch, base, layout.acch));
+      out.push_back(strq(v::accm, base, layout.accm));
+      if(accLoaded) out.push_back(strq(v::accl, base, layout.accl));  //an earlier kept op may have changed it
+    }
     out.push_back(strq(v::t4, base, vreg(vd)));
     return;
   }
@@ -188,9 +213,7 @@ inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uin
   case Op::VMADM:    //acc += s16(vs) * u16(vt); vd = clamp(acch:accm)
   case Op::VMADN: {  //acc += u16(vs) * s16(vt); vd = clampLow
     products(out, vte, op == Op::VMADM, op == Op::VMADN, v::t0, v::t1);
-    out.push_back(ldrq(v::acch, base, layout.acch));
-    out.push_back(ldrq(v::accm, base, layout.accm));
-    out.push_back(ldrq(v::accl, base, layout.accl));
+    loadAcc(true, true, true);
     //48-bit add of the sign-extended product: the low 32 bits (accm:accl) with the carry out
     //taken from an unsigned compare, the high 16 bits (acch) plus the product's sign.
     out.push_back(rrr(ZIP1_8H, v::t2, v::accl, v::accm));
@@ -208,9 +231,7 @@ inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uin
     out.push_back(rrr(UZP1_8H, v::accl, v::t4, v::t5));
     out.push_back(rrr(UZP2_8H, v::accm, v::t4, v::t5));
     uint32_t result = op == Op::VMADN ? clampLow(out, v::accl) : clampMid(out);
-    out.push_back(strq(v::acch, base, layout.acch));
-    out.push_back(strq(v::accm, base, layout.accm));
-    out.push_back(strq(v::accl, base, layout.accl));
+    storeAcc(v::accl);
     out.push_back(strq(result, base, vreg(vd)));
     return;
   }
@@ -218,9 +239,7 @@ inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uin
   case Op::VMADL: {  //acc += u16(vs) * u16(vt) >> 16; vd = clampLow
     products(out, vte, false, false, v::t0, v::t1);
     out.push_back(rrr(UZP2_8H, v::t0, v::t0, v::t1));
-    out.push_back(ldrq(v::acch, base, layout.acch));
-    out.push_back(ldrq(v::accm, base, layout.accm));
-    out.push_back(ldrq(v::accl, base, layout.accl));
+    loadAcc(true, true, true);
     out.push_back(rrr(ADD_8H, v::t2, v::accl, v::t0));
     out.push_back(rrr(CMHI_8H, v::t3, v::accl, v::t2));  //-1 where accl carried
     out.push_back(rrr(SUB_8H, v::accm, v::accm, v::t3));
@@ -228,9 +247,7 @@ inline auto emit(std::vector<uint32_t>& out, Op op, uint32_t e, uint32_t vd, uin
     out.push_back(rrr(AND_16B, v::t3, v::t3, v::t4));    //-1 where accm carried too
     out.push_back(rrr(SUB_8H, v::acch, v::acch, v::t3));
     uint32_t result = clampLow(out, v::t2);
-    out.push_back(strq(v::acch, base, layout.acch));
-    out.push_back(strq(v::accm, base, layout.accm));
-    out.push_back(strq(v::t2, base, layout.accl));
+    storeAcc(v::t2);
     out.push_back(strq(result, base, vreg(vd)));
     return;
   }

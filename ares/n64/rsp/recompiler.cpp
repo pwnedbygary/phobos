@@ -355,6 +355,7 @@ auto RSP::Recompiler::emit(u12 address, bool callInstructionPrologue) -> Block* 
 
   auto block = (Block*)allocator.acquire(sizeof(Block));
   beginFunction(3, 4);
+  accCached = false;
   u32 deferredClocks = 0;
   bool emitHomebrewMetrics = system.homebrewMode;
   mov32(RecompilerReg(slowPathFlushedClocks), imm(0));
@@ -408,6 +409,8 @@ auto RSP::Recompiler::emit(u12 address, bool callInstructionPrologue) -> Block* 
     return 0;
   };
   auto emitInstructionEpilogue = [&](u32 clocks, bool exit, bool delaySlot, bool commit, bool branched, u32 nextpc, bool checkHalted) -> void {
+    //these can call out, leave the block or end it
+    if(delaySlot || callInstructionPrologue || commit || (exit && checkHalted)) flushAcc();
     if(delaySlot) {
       flushDeferredForCallf();
       emitClockFlush(clocks);
@@ -439,6 +442,7 @@ auto RSP::Recompiler::emit(u12 address, bool callInstructionPrologue) -> Block* 
       flushDeferredForCallf();
     }
     if(callInstructionPrologue) {
+      flushAcc();
       callf(&RSP::instructionPrologue, imm(instruction));
     }
     if(delaySlot) mov32(BranchReg(nstate), imm(0));
@@ -461,6 +465,7 @@ auto RSP::Recompiler::emit(u12 address, bool callInstructionPrologue) -> Block* 
           flushDeferredForCallf();
         }
         if(callInstructionPrologue) {
+          flushAcc();
           callf(&RSP::instructionPrologue, imm(instruction));
         }
         checkHalted |= op1.mayHalt();
@@ -482,6 +487,7 @@ auto RSP::Recompiler::emit(u12 address, bool callInstructionPrologue) -> Block* 
     if(delaySlot || endBlock || address == start) break;
     delaySlot = branched;
   }
+  flushAcc();
   flushDeferredAtBlockEnd();
   deferredClocks = 0;
   jumpEpilog();
@@ -559,7 +565,48 @@ auto RSP::Recompiler::emit(u12 address, bool callInstructionPrologue) -> Block* 
 #define callvuNeon(name) callvu(&RSP::name, mem(Vd), mem(Vs), mem(Vt))
 #endif
 
+static const RspVuNeon::Layout vuNeonLayout{
+  offsetof(RSP::VU, r), offsetof(RSP::VU, acch), offsetof(RSP::VU, accm), offsetof(RSP::VU, accl)};
+
+//Instructions whose code leaves an accumulator kept in NEON registers alone: the NEON
+//multiply-accumulate instructions, and scalar ALU instructions, which compile to register
+//arithmetic without calls, slow paths or branches. Any other instruction flushes it first.
+static auto keepsAccCache(u32 instruction) -> bool {
+  switch(instruction >> 26) {
+  case 0x00:
+    switch(instruction & 0x3f) {
+    case 0x00: case 0x02: case 0x03: case 0x04: case 0x06: case 0x07:  //shifts
+    case 0x20: case 0x21: case 0x22: case 0x23:                        //ADD(U), SUB(U)
+    case 0x24: case 0x25: case 0x26: case 0x27:                        //AND, OR, XOR, NOR
+    case 0x2a: case 0x2b:                                              //SLT(U)
+      return true;
+    }
+    return false;
+  case 0x08: case 0x09: case 0x0a: case 0x0b: case 0x0c: case 0x0d: case 0x0e: case 0x0f:  //ADDI(U)-LUI
+    return true;
+  case 0x12:  //COP2 vector instructions emitted by callvuNeon
+    if(!(instruction >> 25 & 1)) return false;
+    switch(instruction & 0x3f) {
+    case 0x04: case 0x05: case 0x06: case 0x07: case 0x0c: case 0x0d: case 0x0e: case 0x0f:
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+auto RSP::Recompiler::flushAcc() -> void {
+  #if defined(ARCHITECTURE_ARM64)
+  if(!accCached) return;
+  std::vector<uint32_t> words;
+  RspVuNeon::flushAcc(words, sljit_get_register_index(SLJIT_GP_REGISTER, sreg(2).fst), vuNeonLayout);
+  for(auto word : words) sljit_emit_op_custom(compiler, &word, sizeof(word));
+  accCached = false;
+  #endif
+}
+
 auto RSP::Recompiler::emitEXECUTE(u32 instruction, u32 pc, bool delaySlot, bool emitSlowPath, u32 slowPathClocks) -> void {
+  if(accCached && !keepsAccCache(instruction)) flushAcc();
   auto memReg2 = [&](const op_base& base, const op_base& index) -> op_base {
     return {SLJIT_MEM2(base.fst, index.fst), 0};
   };
@@ -1328,10 +1375,11 @@ auto RSP::Recompiler::emitSCC(u32 instruction) -> void {
 auto RSP::Recompiler::emitVU(u32 instruction) -> void {
   #if defined(ARCHITECTURE_ARM64)
   auto emitVuNeon = [&](RspVuNeon::Op op, u32 e, u32 vd, u32 vs, u32 vt) -> void {
-    static const RspVuNeon::Layout layout{offsetof(VU, r), offsetof(VU, acch), offsetof(VU, accm), offsetof(VU, accl)};
     std::vector<uint32_t> words;
-    RspVuNeon::emit(words, op, e, vd, vs, vt, sljit_get_register_index(SLJIT_GP_REGISTER, sreg(2).fst), layout);
+    RspVuNeon::emit(words, op, e, vd, vs, vt, sljit_get_register_index(SLJIT_GP_REGISTER, sreg(2).fst),
+                    vuNeonLayout, accCached, true);
     for(auto word : words) sljit_emit_op_custom(compiler, &word, sizeof(word));
+    accCached = true;
   };
   #endif
 
