@@ -96,10 +96,10 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         title = "BIOS Firmware Locations",
         onBack = onBack,
         bottomBar = {
-            Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+            ThemedCard(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth()) {
                 Row(
                     modifier = Modifier
-                        .padding(16.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                         .fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -115,29 +115,31 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
         }
     ) { innerPadding ->
-        Column(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
-            // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                HeaderText("Emulator", Modifier.weight(2f))
-                HeaderText("Type", Modifier.weight(1.5f))
-                HeaderText("Region", Modifier.weight(1f))
-                HeaderText("Location", Modifier.weight(3f))
-            }
+        ThemedCard(Modifier.padding(innerPadding).padding(start = 16.dp, end = 16.dp, top = 8.dp).fillMaxSize()) {
+            Column {
+                // Header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    HeaderText("Emulator", Modifier.weight(2f))
+                    HeaderText("Type", Modifier.weight(1.5f))
+                    HeaderText("Region", Modifier.weight(1f))
+                    HeaderText("Location", Modifier.weight(3f))
+                }
 
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                items(firmwareList) { info ->
-                    val path = settings.systemFirmwarePaths[info.systemKey] ?: ""
-                    FirmwareRow(info, path) {
-                        selectedFirmwareKey = info.systemKey
-                        launcher.launch(arrayOf("*/*"))
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    items(firmwareList) { info ->
+                        val path = settings.systemFirmwarePaths[info.systemKey] ?: ""
+                        FirmwareRow(info, path) {
+                            selectedFirmwareKey = info.systemKey
+                            launcher.launch(arrayOf("*/*"))
+                        }
+                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
                     }
-                    HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }
@@ -161,7 +163,7 @@ fun FirmwareRow(info: FirmwareInfo, path: String, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(8.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         RowText(info.emulator, Modifier.weight(2f))

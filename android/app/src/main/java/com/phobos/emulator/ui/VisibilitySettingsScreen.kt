@@ -3,7 +3,6 @@ package com.phobos.emulator.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,7 +21,6 @@ fun VisibilitySettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 .padding(innerPadding)
                 .fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             item {
                 Text(
@@ -32,22 +30,25 @@ fun VisibilitySettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            itemsIndexed(allSystems) { index, system ->
-                val isVisible = system !in settings.hiddenSystems
-                ListItem(
-                    headlineContent = { Text(system) },
-                    trailingContent = {
-                        Checkbox(
-                            checked = isVisible,
-                            onCheckedChange = { viewModel.setSystemVisibility(system, it) }
+            item {
+                SettingsCard {
+                    allSystems.forEach { system ->
+                        val isVisible = system !in settings.hiddenSystems
+                        ListItem(
+                            headlineContent = { Text(system) },
+                            trailingContent = {
+                                Checkbox(
+                                    checked = isVisible,
+                                    onCheckedChange = { viewModel.setSystemVisibility(system, it) }
+                                )
+                            },
+                            colors = transparentListItemColors(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.setSystemVisibility(system, !isVisible) }
                         )
-                    },
-                    colors = transparentListItemColors(),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .groupedCard(index, allSystems.size, MaterialTheme.colorScheme.surfaceContainer)
-                        .clickable { viewModel.setSystemVisibility(system, !isVisible) }
-                )
+                    }
+                }
             }
         }
     }

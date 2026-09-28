@@ -20,7 +20,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -94,11 +93,13 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 
     PhobosScaffold(title = "GPU Driver Manager", onBack = onBack) { innerPadding ->
         LazyColumn(
-            modifier = Modifier.padding(innerPadding).fillMaxSize().padding(16.dp),
+            modifier = Modifier.padding(innerPadding).fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                DriverActionsRow(
+                DriverActionsCard(
+                    progress = progress,
                     onDownload = { showDownload = true },
                     onInstall = { launcher.launch(arrayOf("*/*")) },
                     onDelete = { openDelete() }
@@ -106,36 +107,32 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
 
             item {
-                SettingsCard {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                        Text("Active Driver", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        DriverChoiceRow(
-                            label = "System Default (Adreno)",
-                            sublabel = "Built-in driver",
-                            selected = settings.customDriverPath.isEmpty(),
-                            onClick = { viewModel.setCustomDriverPath("") }
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                        Column(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())
-                        ) {
-                            if (installed.isEmpty() && settings.customDriverPath.isNotEmpty()) {
+                SettingsCategory("Active Driver") {
+                    DriverChoiceRow(
+                        label = "System Default (Adreno)",
+                        sublabel = "Built-in driver",
+                        selected = settings.customDriverPath.isEmpty(),
+                        onClick = { viewModel.setCustomDriverPath("") }
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                    Column(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())
+                    ) {
+                        if (installed.isEmpty() && settings.customDriverPath.isNotEmpty()) {
+                            DriverChoiceRow(
+                                label = settings.customDriverPath.substringAfterLast("/"),
+                                sublabel = "Currently active (not found in downloads)",
+                                selected = true,
+                                onClick = {}
+                            )
+                        } else {
+                            installed.forEach { drv ->
                                 DriverChoiceRow(
-                                    label = settings.customDriverPath.substringAfterLast("/"),
-                                    sublabel = "Currently active (not found in downloads)",
-                                    selected = true,
-                                    onClick = {}
+                                    label = drv.name,
+                                    sublabel = "${drv.source}${if (drv.tag.isNotEmpty()) "  ·  ${drv.tag}" else ""}",
+                                    selected = settings.customDriverPath == drv.path,
+                                    onClick = { viewModel.setCustomDriverPath(drv.path) }
                                 )
-                            } else {
-                                installed.forEach { drv ->
-                                    DriverChoiceRow(
-                                        label = drv.name,
-                                        sublabel = "${drv.source}${if (drv.tag.isNotEmpty()) "  ·  ${drv.tag}" else ""}",
-                                        selected = settings.customDriverPath == drv.path,
-                                        onClick = { viewModel.setCustomDriverPath(drv.path) }
-                                    )
-                                }
                             }
                         }
                     }
@@ -143,12 +140,14 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
 
             item {
-                SettingsSwitchItem(
-                    title = "Driver Update Notifications",
-                    description = "Notify when a newer driver is available from the source you installed",
-                    checked = settings.driverUpdateNotifications,
-                    onCheckedChange = { viewModel.setDriverUpdateNotifications(it) }
-                )
+                SettingsCategory("Notifications") {
+                    SettingsSwitchItem(
+                        title = "Driver Update Notifications",
+                        description = "Notify when a newer driver is available from the source you installed",
+                        checked = settings.driverUpdateNotifications,
+                        onCheckedChange = { viewModel.setDriverUpdateNotifications(it) }
+                    )
+                }
             }
 
             item {
@@ -299,6 +298,36 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     }
 }
 
+/** Download, install and delete actions on a glass card, with the progress of a driver being downloaded for install. */
+@Composable
+private fun DriverActionsCard(progress: Pair<Long, Long>, onDownload: () -> Unit, onInstall: () -> Unit, onDelete: () -> Unit) {
+    SettingsCard {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+            DriverActionsRow(onDownload, onInstall, onDelete)
+            val (downloaded, total) = progress
+            if (downloaded >= 0) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    if (total > 0 && downloaded > 0) "Downloading driver: ${formatDriverSize(downloaded)} of ${formatDriverSize(total)}"
+                    else "Downloading driver…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                if (total > 0) {
+                    LinearProgressIndicator(
+                        progress = { (downloaded.toFloat() / total).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+        }
+    }
+}
+
 @Composable
 private fun DriverActionsRow(onDownload: () -> Unit, onInstall: () -> Unit, onDelete: () -> Unit) {
     Row(
@@ -336,14 +365,21 @@ private fun DriverActionsRow(onDownload: () -> Unit, onInstall: () -> Unit, onDe
 
 @Composable
 private fun DriverChoiceRow(label: String, sublabel: String, selected: Boolean, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
     ListItem(
         headlineContent = { Text(label) },
         supportingContent = { if (sublabel.isNotEmpty()) Text(sublabel) },
         leadingContent = { RadioButton(selected = selected, onClick = null) },
         modifier = Modifier.fillMaxWidth().clickable { onClick() },
-        colors = ListItemDefaults.colors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-        )
+        colors = if (selected) {
+            ListItemDefaults.colors(
+                containerColor = scheme.primaryContainer,
+                headlineColor = scheme.onPrimaryContainer,
+                supportingColor = scheme.onPrimaryContainer,
+            )
+        } else {
+            transparentListItemColors()
+        }
     )
 }
 

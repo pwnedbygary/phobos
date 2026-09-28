@@ -55,17 +55,8 @@ fun ShaderSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            "Current Shader",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
+                SettingsCategory("Current Shader") {
+                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
                         Text(
                             if (settings.shaderPath.isEmpty()) "No shader active" 
                             else settings.shaderPath.substringAfterLast("%2F").substringAfterLast("/"),
@@ -75,7 +66,7 @@ fun ShaderSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                             Text(
                                 settings.shaderPath,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }

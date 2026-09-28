@@ -7,7 +7,6 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.*
@@ -85,52 +84,55 @@ fun HotkeyMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
             ) {
-                itemsIndexed(hotkeys) { index, (name, key) ->
-                    val boundCombo = settings.hotkeys[key] ?: emptyList()
-                    val boundKeyNames = boundCombo.joinToString(" + ") { 
-                        KeyEvent.keyCodeToString(it).removePrefix("KEYCODE_")
-                    }
-
-                    ListItem(
-                        headlineContent = { Text(name) },
-                        supportingContent = { 
-                            Text(if (boundKeyNames.isNotEmpty()) "Bound to: $boundKeyNames" else "Not bound") 
-                        },
-                        trailingContent = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (boundCombo.isNotEmpty()) {
-                                    IconButton(onClick = { viewModel.setHotkey(key, emptyList()) }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear")
-                                    }
-                                }
-                                if (mappingTarget == key) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                } else {
-                                    Button(onClick = { 
-                                        currentCombo.clear()
-                                        mappingTarget = key 
-                                        focusRequester.requestFocus()
-                                    }) {
-                                        Text("Bind")
-                                    }
-                                }
+                item {
+                    SettingsCard {
+                        hotkeys.forEach { (name, key) ->
+                            val boundCombo = settings.hotkeys[key] ?: emptyList()
+                            val boundKeyNames = boundCombo.joinToString(" + ") {
+                                KeyEvent.keyCodeToString(it).removePrefix("KEYCODE_")
                             }
-                        },
-                        colors = transparentListItemColors(),
-                        modifier = Modifier.groupedCard(index, hotkeys.size, MaterialTheme.colorScheme.surfaceContainer).pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = { 
-                                    currentCombo.clear()
-                                    mappingTarget = key 
-                                    focusRequester.requestFocus()
+
+                            ListItem(
+                                headlineContent = { Text(name) },
+                                supportingContent = {
+                                    Text(if (boundKeyNames.isNotEmpty()) "Bound to: $boundKeyNames" else "Not bound")
                                 },
-                                onLongPress = { viewModel.setHotkey(key, emptyList()) }
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (boundCombo.isNotEmpty()) {
+                                            IconButton(onClick = { viewModel.setHotkey(key, emptyList()) }) {
+                                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                            }
+                                        }
+                                        if (mappingTarget == key) {
+                                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                        } else {
+                                            Button(onClick = {
+                                                currentCombo.clear()
+                                                mappingTarget = key
+                                                focusRequester.requestFocus()
+                                            }) {
+                                                Text("Bind")
+                                            }
+                                        }
+                                    }
+                                },
+                                colors = transparentListItemColors(),
+                                modifier = Modifier.pointerInput(key) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            currentCombo.clear()
+                                            mappingTarget = key
+                                            focusRequester.requestFocus()
+                                        },
+                                        onLongPress = { viewModel.setHotkey(key, emptyList()) }
+                                    )
+                                }
                             )
                         }
-                    )
+                    }
                 }
             }
 

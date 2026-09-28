@@ -14,7 +14,6 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.ArrowDropDown
@@ -35,7 +34,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
@@ -125,16 +123,6 @@ fun SettingsCard(modifier: Modifier = Modifier, accentText: Boolean = false, con
     ThemedCard(modifier.fillMaxWidth(), accentText = accentText) {
         Column(Modifier.padding(vertical = 6.dp), content = content)
     }
-}
-
-/**
- * Background for one row of a card spanning several lazy-list items: large corners at the ends,
- * small ones between rows (pair with a 2 dp item spacing).
- */
-fun Modifier.groupedCard(index: Int, count: Int, color: Color, outer: Dp = 20.dp, inner: Dp = 6.dp): Modifier {
-    val top = if (index == 0) outer else inner
-    val bottom = if (index == count - 1) outer else inner
-    return clip(RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom)).background(color)
 }
 
 /** List rows drawn on a card leave the card's color showing. */

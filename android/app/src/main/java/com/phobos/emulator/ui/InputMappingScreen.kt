@@ -11,7 +11,6 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.*
@@ -167,7 +166,6 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 item {
                     Text(
@@ -178,62 +176,66 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     )
                 }
 
-                itemsIndexed(aresButtons) { index, (name, bit) ->
-                    val binding = settings.inputMappings[bit]
-                    
-                    ListItem(
-                        headlineContent = { Text(name) },
-                        supportingContent = { 
-                            if (binding != null) {
-                                if (binding.startsWith("a:")) {
-                                    val parts = binding.split(":")
-                                    val axis = parts[1].toInt()
-                                    val pos = parts[2] == "1"
-                                    val axisName = when(axis) {
-                                        MotionEvent.AXIS_X -> "L-Stick X"
-                                        MotionEvent.AXIS_Y -> "L-Stick Y"
-                                        MotionEvent.AXIS_Z -> "R-Stick X"
-                                        MotionEvent.AXIS_RZ -> "R-Stick Y"
-                                        MotionEvent.AXIS_HAT_X -> "D-Pad X (Axis 15)"
-                                        MotionEvent.AXIS_HAT_Y -> "D-Pad Y (Axis 16)"
-                                        else -> "Axis $axis"
+                item {
+                    SettingsCard {
+                        aresButtons.forEach { (name, bit) ->
+                            val binding = settings.inputMappings[bit]
+
+                            ListItem(
+                                headlineContent = { Text(name) },
+                                supportingContent = { 
+                                    if (binding != null) {
+                                        if (binding.startsWith("a:")) {
+                                            val parts = binding.split(":")
+                                            val axis = parts[1].toInt()
+                                            val pos = parts[2] == "1"
+                                            val axisName = when(axis) {
+                                                MotionEvent.AXIS_X -> "L-Stick X"
+                                                MotionEvent.AXIS_Y -> "L-Stick Y"
+                                                MotionEvent.AXIS_Z -> "R-Stick X"
+                                                MotionEvent.AXIS_RZ -> "R-Stick Y"
+                                                MotionEvent.AXIS_HAT_X -> "D-Pad X (Axis 15)"
+                                                MotionEvent.AXIS_HAT_Y -> "D-Pad Y (Axis 16)"
+                                                else -> "Axis $axis"
+                                            }
+                                            Text("Bound to $axisName (${if (pos) "+" else "-"})")
+                                        } else if (binding.startsWith("k:")) {
+                                            val keyCode = binding.removePrefix("k:").toInt()
+                                            Text("Bound to Key: $keyCode (${KeyEvent.keyCodeToString(keyCode)})")
+                                        }
+                                    } else {
+                                        Text("Not bound")
                                     }
-                                    Text("Bound to $axisName (${if (pos) "+" else "-"})")
-                                } else if (binding.startsWith("k:")) {
-                                    val keyCode = binding.removePrefix("k:").toInt()
-                                    Text("Bound to Key: $keyCode (${KeyEvent.keyCodeToString(keyCode)})")
-                                }
-                            } else {
-                                Text("Not bound")
-                            }
-                        },
-                        trailingContent = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (binding != null) {
-                                    IconButton(onClick = { viewModel.clearInputMapping(bit) }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (binding != null) {
+                                            IconButton(onClick = { viewModel.clearInputMapping(bit) }) {
+                                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                            }
+                                        }
+                                        if (mappingTarget == bit) {
+                                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                        } else {
+                                            Button(onClick = { 
+                                                mappingTarget = bit 
+                                                focusRequester.requestFocus()
+                                            }) {
+                                                Text("Bind")
+                                            }
+                                        }
                                     }
+                                },
+                                colors = transparentListItemColors(),
+                                modifier = Modifier.pointerInput(bit) {
+                                    detectTapGestures(
+                                        onTap = { mappingTarget = bit; focusRequester.requestFocus() },
+                                        onLongPress = { viewModel.clearInputMapping(bit) }
+                                    )
                                 }
-                                if (mappingTarget == bit) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                } else {
-                                    Button(onClick = { 
-                                        mappingTarget = bit 
-                                        focusRequester.requestFocus()
-                                    }) {
-                                        Text("Bind")
-                                    }
-                                }
-                            }
-                        },
-                        colors = transparentListItemColors(),
-                        modifier = Modifier.groupedCard(index, aresButtons.size, MaterialTheme.colorScheme.surfaceContainer).pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = { mappingTarget = bit; focusRequester.requestFocus() },
-                                onLongPress = { viewModel.clearInputMapping(bit) }
                             )
                         }
-                    )
+                    }
                 }
                 
                 item {
