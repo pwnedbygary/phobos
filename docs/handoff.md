@@ -92,6 +92,13 @@ Branch `feature/busy-wait-wfe-2026-09` ([PR #18](https://github.com/pwnedbygary/
 makes Keep the fast core busy (N64) wait in `WFE` instead of spinning: the same placement and clock,
 about half the power (RP6 on battery 4.76 → 4.15 W; sleeping 3.58 W)
 ([audit](performance-audit.md#2026-09-28-follow-up-the-busy-wait-waits-in-wfe)).
+Branch `cursor/library-theme-cards-c6f7`, based on PR #18's commit, themes the Library at the
+user's request: its tiles and the system page's directory and ROM cards use the Settings cards'
+surface (`ThemedCard` in `ui/Components.kt`: no shadow, and a tile's ripple stays inside its
+corners), and the console illustrations are recolored from the active theme instead of keeping
+their original colors (`ui/theme/ConsoleArtPalette.kt`, loaded through `ui/ConsoleArtFetcher.kt`),
+replacing Task 19's earlier rule to preserve the card art. Builds; 67 host tests pass, including a
+check of every illustration in every theme. Not yet checked on the RP6.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

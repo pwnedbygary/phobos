@@ -326,6 +326,11 @@ existing card art / composition); theming can tint chrome around them but should
 not replace or redesign that art. Remains P3 / after core stability; no code in
 the N64 perf workstream.
 
+**2026-09-28:** at the user's request, the Library's console art now follows the
+active theme: the illustrations keep their composition but are recolored from
+the theme's palette, which replaces the constraint above. See the plan's UI
+theme row.
+
 Historical queue entry retained; no separate detailed note existed in the
 former plan before this expansion.
 
