@@ -3,7 +3,6 @@ package com.phobos.emulator.ui
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,8 +21,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import coil.compose.AsyncImage
 import com.phobos.emulator.R
-import com.phobos.emulator.ui.theme.LocalPhobosTheme
-import com.phobos.emulator.ui.theme.neonGlow
 
 @Composable
 fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
@@ -78,25 +75,15 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     }
 }
 
-/** Console tile; with retrowave effects it gets the same frosted neon edge as the settings cards. */
+/** Console tile on the same themed card surface as the settings cards. */
 @Composable
 fun SystemCard(system: String, onClick: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    val retrowave = LocalPhobosTheme.current.retrowave
-    val shape = RoundedCornerShape(12.dp)
-    Card(
+    ThemedCard(
         modifier = Modifier
             .fillMaxWidth()
-            .height(160.dp)
-            .then(if (retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier)
-            .clickable { onClick() },
-        elevation = CardDefaults.cardElevation(defaultElevation = if (retrowave) 0.dp else 2.dp),
-        colors = if (retrowave) {
-            CardDefaults.cardColors(containerColor = scheme.surfaceContainer.copy(alpha = 0.92f))
-        } else {
-            CardDefaults.cardColors()
-        },
-        shape = shape
+            .height(160.dp),
+        shape = RoundedCornerShape(12.dp),
+        onClick = onClick
     ) {
         Column(
             modifier = Modifier.padding(12.dp),

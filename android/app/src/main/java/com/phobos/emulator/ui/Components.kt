@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -66,21 +67,33 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, trailing: (@Comp
     }
 }
 
-/** Rounded card for settings rows; frosted with a neon edge when retrowave effects are on. */
+/**
+ * Card surface shared by settings groups and library tiles: frosted with a neon edge when retrowave
+ * effects are on, a faint outline otherwise. It casts no shadow, and a click ripple stays inside [shape].
+ */
 @Composable
-fun SettingsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun ThemedCard(
+    modifier: Modifier = Modifier,
+    shape: Shape = MaterialTheme.shapes.large,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
     val scheme = MaterialTheme.colorScheme
     val retrowave = LocalPhobosTheme.current.retrowave
-    val shape = MaterialTheme.shapes.large
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .then(if (retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier),
-        shape = shape,
-        color = if (retrowave) scheme.surfaceContainer.copy(alpha = 0.92f) else scheme.surfaceContainer,
-        contentColor = scheme.onSurface,
-        border = if (retrowave) null else BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.45f)),
-    ) {
+    val cardModifier = if (retrowave) modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else modifier
+    val color = if (retrowave) scheme.surfaceContainer.copy(alpha = 0.92f) else scheme.surfaceContainer
+    val border = if (retrowave) null else BorderStroke(1.dp, scheme.outlineVariant.copy(alpha = 0.45f))
+    if (onClick != null) {
+        Surface(onClick = onClick, modifier = cardModifier, shape = shape, color = color, contentColor = scheme.onSurface, border = border, content = content)
+    } else {
+        Surface(modifier = cardModifier, shape = shape, color = color, contentColor = scheme.onSurface, border = border, content = content)
+    }
+}
+
+/** Rounded card for settings rows. */
+@Composable
+fun SettingsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    ThemedCard(modifier.fillMaxWidth()) {
         Column(Modifier.padding(vertical = 6.dp), content = content)
     }
 }
