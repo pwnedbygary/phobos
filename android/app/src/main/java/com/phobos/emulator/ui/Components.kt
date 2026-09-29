@@ -7,13 +7,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.ArrowDropDown
@@ -36,6 +36,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.data.GlassEffects
@@ -45,6 +46,17 @@ import com.phobos.emulator.ui.theme.glassPanel
 import com.phobos.emulator.ui.theme.neon
 import com.phobos.emulator.ui.theme.sunsetPlate
 import com.phobos.emulator.ui.theme.neonGlow
+import com.phobos.emulator.ui.theme.PixelProgressBar
+import com.phobos.emulator.ui.theme.PixelSectionHeading
+import com.phobos.emulator.ui.theme.PixelSliderThumb
+import com.phobos.emulator.ui.theme.PixelSliderTrack
+import com.phobos.emulator.ui.theme.PixelSwitch
+import com.phobos.emulator.ui.theme.pillShape
+import com.phobos.emulator.ui.theme.pixelBorder
+import com.phobos.emulator.ui.theme.pixelEdge
+import com.phobos.emulator.ui.theme.pixelPanel
+import com.phobos.emulator.ui.theme.pixelPlate
+import com.phobos.emulator.ui.theme.pixelShadow
 
 /** A titled group of settings rows on a rounded card. */
 @Composable
@@ -71,10 +83,18 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Bool
     ) {
         Box(Modifier.weight(1f)) {
             Text(
-                text = if (retrowave) title.uppercase() else title,
-                style = if (retrowave) MaterialTheme.typography.labelLarge.neon(primary) else MaterialTheme.typography.titleSmall,
+                text = if (retrowave || theme.pixel) title.uppercase() else title,
+                style = when {
+                    retrowave -> MaterialTheme.typography.labelLarge.neon(primary)
+                    theme.pixel -> PixelSectionHeading.pixelShadow(pixelShadow(theme.isDark))
+                    else -> MaterialTheme.typography.titleSmall
+                },
                 color = primary,
-                modifier = if (onBackdrop) Modifier.sunsetPlate(scheme.background, theme.glass.backdropPlateAlpha) else Modifier,
+                modifier = when {
+                    !onBackdrop -> Modifier
+                    theme.pixel -> Modifier.pixelPlate(scheme.background)
+                    else -> Modifier.sunsetPlate(scheme.background, theme.glass.backdropPlateAlpha)
+                },
             )
         }
         trailing?.invoke()
@@ -93,9 +113,10 @@ fun BackdropText(
     color: Color = Color.Unspecified,
 ) {
     val theme = LocalPhobosTheme.current
+    val background = MaterialTheme.colorScheme.background
     Text(
         text,
-        modifier = modifier.sunsetPlate(MaterialTheme.colorScheme.background, theme.glass.backdropPlateAlpha),
+        modifier = modifier.then(if (theme.pixel) Modifier.pixelPlate(background) else Modifier.sunsetPlate(background, theme.glass.backdropPlateAlpha)),
         style = style,
         color = color,
     )
@@ -121,21 +142,25 @@ fun ThemedCard(
     val theme = LocalPhobosTheme.current
     val glass = theme.glass
     val glassOff = glass.level == GlassEffects.OFF
-    val panel = Modifier.glassPanel(
-        shape = shape,
-        fill = scheme.surfaceContainer,
-        alpha = if (accentText) glass.accentPanelAlpha else glass.panelAlpha,
-        style = glass,
-        isDark = theme.isDark,
-        rim = !theme.retrowave,
-        shadow = !theme.retrowave,
-        outline = if (glassOff && !theme.retrowave) scheme.outlineVariant.copy(alpha = 0.45f) else Color.Unspecified,
-    )
+    val panel = if (theme.pixel) {
+        Modifier.pixelPanel(shape, scheme.surfaceContainer, pixelBorder(scheme), pixelShadow(theme.isDark))
+    } else {
+        Modifier.glassPanel(
+            shape = shape,
+            fill = scheme.surfaceContainer,
+            alpha = if (accentText) glass.accentPanelAlpha else glass.panelAlpha,
+            style = glass,
+            isDark = theme.isDark,
+            rim = !theme.retrowave,
+            shadow = !theme.retrowave,
+            outline = if (glassOff && !theme.retrowave) scheme.outlineVariant.copy(alpha = 0.45f) else Color.Unspecified,
+        )
+    }
     val edge = if (theme.retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier
     if (onClick != null) {
         val interactionSource = remember { MutableInteractionSource() }
         val pressed by interactionSource.collectIsPressedAsState()
-        val scale by animateFloatAsState(if (pressed && !glassOff) 0.97f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "cardPress")
+        val scale by animateFloatAsState(if (pressed && (theme.pixel || !glassOff)) 0.97f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "cardPress")
         Surface(
             onClick = onClick,
             modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale }.then(edge).then(panel),
@@ -179,7 +204,7 @@ fun IconBadge(icon: ImageVector, modifier: Modifier = Modifier) {
 fun ValuePill(text: String, modifier: Modifier = Modifier, trailingIcon: ImageVector? = null) {
     Surface(
         modifier = modifier.widthIn(max = 200.dp),
-        shape = CircleShape,
+        shape = pillShape(),
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     ) {
@@ -199,11 +224,15 @@ fun SettingsSwitchItem(title: String, description: String, checked: Boolean, onC
         headlineContent = { Text(title) },
         supportingContent = if (description.isNotEmpty()) { { Text(description) } } else null,
         trailingContent = {
-            Switch(
-                checked = checked,
-                onCheckedChange = null,
-                thumbContent = if (checked) { { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(SwitchDefaults.IconSize)) } } else null,
-            )
+            if (LocalPhobosTheme.current.pixel) {
+                PixelSwitch(checked)
+            } else {
+                Switch(
+                    checked = checked,
+                    onCheckedChange = null,
+                    thumbContent = if (checked) { { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(SwitchDefaults.IconSize)) } } else null,
+                )
+            }
         },
         colors = transparentListItemColors(),
         modifier = Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
@@ -239,7 +268,7 @@ fun <T> SettingsDropdownItem(
         trailingContent = {
             Box {
                 ValuePill(label(current), trailingIcon = Icons.Rounded.ArrowDropDown)
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                PhobosDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                     options.forEach { option ->
                         val selected = option == current
                         DropdownMenuItem(
@@ -256,6 +285,7 @@ fun <T> SettingsDropdownItem(
 }
 
 /** A labeled slider that follows the finger locally and persists once the drag ends. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsSliderItem(
     title: String,
@@ -277,13 +307,86 @@ fun SettingsSliderItem(
             Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
             ValuePill(format(local))
         }
-        Slider(
-            value = local,
-            onValueChange = { local = it },
-            onValueChangeFinished = { onCommit(local) },
-            valueRange = range,
-            enabled = enabled,
+        if (LocalPhobosTheme.current.pixel) {
+            Slider(
+                value = local,
+                onValueChange = { local = it },
+                enabled = enabled,
+                onValueChangeFinished = { onCommit(local) },
+                thumb = { PixelSliderThumb() },
+                track = { state ->
+                    val span = state.valueRange.endInclusive - state.valueRange.start
+                    PixelSliderTrack(if (span > 0f) (state.value - state.valueRange.start) / span else 0f)
+                },
+                valueRange = range,
+            )
+        } else {
+            Slider(
+                value = local,
+                onValueChange = { local = it },
+                onValueChangeFinished = { onCommit(local) },
+                valueRange = range,
+                enabled = enabled,
+            )
+        }
+    }
+}
+
+/** Material's alert dialog; a pixel window, with a hard border and shadow, with pixel art effects. */
+@Composable
+fun PhobosAlertDialog(
+    onDismissRequest: () -> Unit,
+    confirmButton: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    dismissButton: @Composable (() -> Unit)? = null,
+    title: @Composable (() -> Unit)? = null,
+    text: @Composable (() -> Unit)? = null,
+    properties: DialogProperties = DialogProperties(),
+) {
+    val shape = AlertDialogDefaults.shape
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        confirmButton = confirmButton,
+        modifier = modifier.then(dialogEdge(shape)),
+        dismissButton = dismissButton,
+        title = title,
+        text = text,
+        shape = shape,
+        properties = properties,
+    )
+}
+
+/** The edge of a dialog panel in [shape]: a pixel panel's hard border and shadow with pixel art effects. */
+@Composable
+fun dialogEdge(shape: Shape): Modifier {
+    val theme = LocalPhobosTheme.current
+    return if (theme.pixel) Modifier.pixelEdge(shape, pixelBorder(theme.scheme), pixelShadow(theme.isDark)) else Modifier
+}
+
+/** Material's dropdown menu; with pixel art effects, a hard border in place of its soft shadow. */
+@Composable
+fun PhobosDropdownMenu(expanded: Boolean, onDismissRequest: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    val theme = LocalPhobosTheme.current
+    if (theme.pixel) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = onDismissRequest,
+            shadowElevation = 0.dp,
+            border = BorderStroke(2.dp, pixelBorder(theme.scheme)),
+            content = content,
         )
+    } else {
+        DropdownMenu(expanded = expanded, onDismissRequest = onDismissRequest, content = content)
+    }
+}
+
+/** Linear progress, indeterminate while [progress] is null; blocks in a bordered bar with pixel art effects. */
+@Composable
+fun ProgressBar(progress: (() -> Float)?, modifier: Modifier = Modifier) {
+    when {
+        LocalPhobosTheme.current.pixel -> PixelProgressBar(progress, modifier)
+        progress != null -> LinearProgressIndicator(progress = progress, modifier = modifier)
+        else -> LinearProgressIndicator(modifier = modifier)
     }
 }
 

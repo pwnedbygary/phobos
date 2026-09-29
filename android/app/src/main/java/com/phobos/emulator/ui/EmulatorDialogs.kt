@@ -1,6 +1,5 @@
 package com.phobos.emulator.ui
 
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,7 +28,7 @@ fun EmulatorDialogs(
     val fullScreen = settings.fullScreenMode
 
     if (showQuitDialog) {
-        AlertDialog(
+        PhobosAlertDialog(
             onDismissRequest = onQuitDismissed,
             title = { DialogSystemBars(fullScreen, inGame = true); Text("Quit Emulation") },
             text = { Text("Are you sure you want to stop emulating $romName?") },
@@ -39,7 +38,7 @@ fun EmulatorDialogs(
     }
 
     if (showDriverSuggestion) {
-        AlertDialog(
+        PhobosAlertDialog(
             onDismissRequest = { viewModel.dismissDriverSuggestion() },
             title = { DialogSystemBars(fullScreen, inGame = true); Text("GPU Driver Issue Detected") },
             text = {
@@ -90,7 +89,7 @@ fun EmulatorDialogs(
 
 @Composable
 private fun LoadFailureDialog(title: String, message: String, fullScreen: Boolean, onDismiss: () -> Unit) {
-    AlertDialog(
+    PhobosAlertDialog(
         onDismissRequest = onDismiss,
         title = { DialogSystemBars(fullScreen, inGame = true); Text(title) },
         text = { Text(message) },

@@ -233,6 +233,14 @@ concepts: a pixel-art Phobos (the real moon's shape, with a D-pad crater) in fro
 launcher icon is adaptive (background and foreground layers; no text and no monochrome layer, both
 the user's choices), and the in-app logo is the round icon. `tools/logo/build_icon.py` rebuilds every
 asset from the two source images beside it (it needs Pillow).
+Branch `feature/pixel-ui-2026-09`, stacked on the logo branch, adds a Pixel art style to Settings →
+Appearance, where the Retrowave switch became a Style effects setting (`UiEffects`: None, Retrowave,
+Pixel art). Its pieces are in `ui/theme/Pixel.kt` (the fonts, type scale, `PixelShape` and shapes,
+panels, plates, and the switch, slider and progress bar) and `ui/theme/PixelScene.kt` (the backdrop,
+plain Kotlin with host tests). Material's buttons, switch and slider don't take their shapes from the
+theme, so button call sites pass `pillShape()`, and dialogs, menus and progress bars go through
+`PhobosAlertDialog`, `PhobosDropdownMenu` and `ProgressBar` in `ui/Components.kt`. New ones should
+do the same, or they stay rounded under Pixel art.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

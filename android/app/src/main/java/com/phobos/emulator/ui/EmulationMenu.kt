@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -39,7 +38,6 @@ import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.TouchApp
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -78,6 +76,10 @@ import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
+import com.phobos.emulator.ui.theme.pillShape
+import com.phobos.emulator.ui.theme.pixelBorder
+import com.phobos.emulator.ui.theme.pixelEdge
+import com.phobos.emulator.ui.theme.pixelShadow
 import com.phobos.emulator.util.N64SaveFormat
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -113,7 +115,13 @@ fun EmulationMenu(
             modifier = Modifier
                 .fillMaxWidth(0.85f)
                 .fillMaxHeight(0.8f)
-                .then(if (LocalPhobosTheme.current.retrowave) Modifier.neonGlow(MaterialTheme.colorScheme.primary, menuShape, 0.8f) else Modifier),
+                .then(
+                    when {
+                        LocalPhobosTheme.current.retrowave -> Modifier.neonGlow(MaterialTheme.colorScheme.primary, menuShape, 0.8f)
+                        LocalPhobosTheme.current.pixel -> Modifier.pixelEdge(menuShape, pixelBorder(MaterialTheme.colorScheme), pixelShadow(LocalPhobosTheme.current.isDark))
+                        else -> Modifier
+                    },
+                ),
             shape = menuShape,
             color = MaterialTheme.colorScheme.surfaceContainer,
             contentColor = MaterialTheme.colorScheme.onSurface,
@@ -144,7 +152,7 @@ fun EmulationMenu(
                         if (systemName.contains("Nintendo 64") || systemName.contains("PlayStation")) {
                             item {
                                 MenuSection("Disc Management") {
-                                    Button(onClick = { diskLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {
+                                    Button(onClick = { diskLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth(), shape = pillShape()) {
                                         Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp))
                                         Text(if (systemName.contains("Nintendo 64")) "Insert 64DD Disk" else "Change Disc")
                                     }
@@ -176,9 +184,9 @@ fun EmulationMenu(
 
                 Spacer(Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    OutlinedButton(onClick = onQuit, modifier = Modifier.weight(1f)) { Text("Quit Game") }
-                    OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f)) { Text("Library") }
-                    Button(onClick = onResume, modifier = Modifier.weight(1f)) { Text("Resume") }
+                    OutlinedButton(onClick = onQuit, modifier = Modifier.weight(1f), shape = pillShape()) { Text("Quit Game") }
+                    OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f), shape = pillShape()) { Text("Library") }
+                    Button(onClick = onResume, modifier = Modifier.weight(1f), shape = pillShape()) { Text("Resume") }
                 }
             }
         }
@@ -205,7 +213,7 @@ private fun QuickActions(
 
 @Composable
 private fun QuickAction(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier) {
-    FilledTonalButton(onClick = onClick, modifier = modifier, contentPadding = ButtonDefaults.TextButtonContentPadding) {
+    FilledTonalButton(onClick = onClick, modifier = modifier, shape = pillShape(), contentPadding = ButtonDefaults.TextButtonContentPadding) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(icon, contentDescription = null)
             Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
@@ -237,13 +245,14 @@ private fun SaveStateSection(
                 IconButton(onClick = { viewModel.incrementSlot() }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next") }
             }
             Row {
-                Button(onClick = { viewModel.saveState(systemName, romName, currentSlot); onResume() }) { Text("Save") }
+                Button(onClick = { viewModel.saveState(systemName, romName, currentSlot); onResume() }, shape = pillShape()) { Text("Save") }
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = { viewModel.loadState(systemName, romName, currentSlot); onResume() }) { Text("Load") }
+                Button(onClick = { viewModel.loadState(systemName, romName, currentSlot); onResume() }, shape = pillShape()) { Text("Load") }
                 Spacer(Modifier.width(8.dp))
                 OutlinedButton(
                     onClick = { confirmDelete = true },
                     enabled = preview != null,
+                    shape = pillShape(),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) { Text("Delete") }
             }
@@ -259,7 +268,7 @@ private fun SaveStateSection(
     }
 
     if (confirmDelete) {
-        AlertDialog(
+        PhobosAlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { DialogSystemBars(settings.fullScreenMode, inGame = true); Text("Delete this save state?") },
             text = { Text("The state in $slotName is deleted for good.") },
@@ -280,7 +289,7 @@ private fun StateSlotPreviewRow(preview: StateSlotPreview?) {
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
             modifier = Modifier.width(120.dp).aspectRatio(4f / 3f)
-                .clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+                .clip(MaterialTheme.shapes.extraSmall).background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center,
         ) {
             if (image != null) {
@@ -402,7 +411,7 @@ private fun rememberSaveTransfer(viewModel: MainViewModel, settings: EmulatorSet
         )
     }
     if (choosingFormat) {
-        AlertDialog(
+        PhobosAlertDialog(
             onDismissRequest = { choosingFormat = false },
             title = { DialogSystemBars(settings.fullScreenMode, inGame = true); Text("Export save") },
             text = {
@@ -429,7 +438,7 @@ private fun rememberSaveTransfer(viewModel: MainViewModel, settings: EmulatorSet
         )
     }
     conflict?.let { (folder, files) ->
-        AlertDialog(
+        PhobosAlertDialog(
             onDismissRequest = { conflict = null },
             title = {
                 DialogSystemBars(settings.fullScreenMode, inGame = true)
@@ -446,7 +455,7 @@ private fun rememberSaveTransfer(viewModel: MainViewModel, settings: EmulatorSet
         )
     }
     failure?.let { reason ->
-        AlertDialog(
+        PhobosAlertDialog(
             onDismissRequest = { failure = null },
             title = { DialogSystemBars(settings.fullScreenMode, inGame = true); Text("Couldn't export the save") },
             text = { Text(reason) },
@@ -462,7 +471,7 @@ private fun SaveImportDialog(
     onCartridgeOrder: (Boolean) -> Unit, onImport: () -> Unit, onDismiss: () -> Unit,
 ) {
     val canImport = preview.plan.writes.isNotEmpty()
-    AlertDialog(
+    PhobosAlertDialog(
         onDismissRequest = onDismiss,
         title = { DialogSystemBars(settings.fullScreenMode, inGame = true); Text(if (canImport) "Import this save?" else "Nothing to import") },
         text = {
@@ -545,7 +554,7 @@ private fun TouchControlsSection(viewModel: MainViewModel, settings: EmulatorSet
             }
         }
         SettingsSliderItem("Size", settings.touch.scale, 0.6f..1.6f) { v -> viewModel.updateTouchPrefs { it.copy(scale = v) } }
-        FilledTonalButton(onClick = onEditTouchLayout, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        FilledTonalButton(onClick = onEditTouchLayout, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), shape = pillShape()) {
             Icon(Icons.Default.TouchApp, null); Spacer(Modifier.width(8.dp)); Text("Edit Layout")
         }
     }

@@ -47,7 +47,7 @@ fun SettingsScreen(
         item { ScreenHeader("Settings") }
         item {
             SettingsCategory("Personalize") {
-                SettingsClickableItem(title = "Appearance", description = "Theme: $themeName · colors, retrowave effects", onClick = onNavigateToAppearance, icon = Icons.Rounded.Palette)
+                SettingsClickableItem(title = "Appearance", description = "Theme: $themeName · colors, style effects", onClick = onNavigateToAppearance, icon = Icons.Rounded.Palette)
             }
         }
         item {

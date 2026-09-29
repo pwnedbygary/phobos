@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.ui.touch.AnalogMode
 import com.phobos.emulator.ui.touch.DpadMode
 import com.phobos.emulator.ui.touch.HapticLevel
@@ -140,13 +140,13 @@ fun TouchSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onEditLayo
                 }
             }
             item {
-                OutlinedButton(onClick = { confirmResetAll = true }, modifier = Modifier.fillMaxWidth()) { Text("Reset All Layouts") }
+                OutlinedButton(onClick = { confirmResetAll = true }, modifier = Modifier.fillMaxWidth(), shape = pillShape()) { Text("Reset All Layouts") }
             }
         }
     }
 
     if (confirmResetAll) {
-        AlertDialog(
+        PhobosAlertDialog(
             onDismissRequest = { confirmResetAll = false },
             title = { DialogSystemBars(settings.fullScreenMode, inGame = false); Text("Reset all layouts?") },
             text = { Text("Every system's touch layout goes back to its default, in landscape and portrait. This can't be undone.") },

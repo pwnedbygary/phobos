@@ -31,6 +31,13 @@ enum class GlassEffects(val label: String, val description: String) {
     OFF("Off", "Solid cards and dock, with no glows, gloss or shading"),
 }
 
+/** A style layered over the chosen theme's colors, with its own backdrop, panels, type and shapes. */
+enum class UiEffects(val label: String, val description: String) {
+    NONE("None", "The theme on its own, with the glass effects below"),
+    RETROWAVE("Retrowave", "Synthwave sunset backdrop, neon glow on cards and selections, and glowing bars. Best with Synthwave '84"),
+    PIXEL_ART("Pixel art", "Pixel fonts, stepped corners, solid pixel panels and a pixel starfield, like the app icon"),
+}
+
 enum class RegionPreference(val label: String) {
     NTSC_U_NTSC_J_PAL("NTSC-U -> NTSC-J -> PAL"),
     NTSC_U_PAL_NTSC_J("NTSC-U -> PAL -> NTSC-J"),
@@ -52,7 +59,7 @@ data class EmulatorSettings(
     val themeId: String = ThemeRegistry.SYSTEM_ID,
     // Paired themes (One Dark / One Light, ...) switch to their sibling to match the system.
     val themeFollowSystem: Boolean = false,
-    val retrowaveEffects: Boolean = false,
+    val uiEffects: UiEffects = UiEffects.NONE,
     val glassEffects: GlassEffects = GlassEffects.FULL,
     val regionPreference: RegionPreference = RegionPreference.NTSC_U_NTSC_J_PAL,
     val fastBoot: Boolean = false,
@@ -150,7 +157,9 @@ class SettingsStore(private val context: Context) {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val UI_THEME = stringPreferencesKey("ui_theme")
         val UI_THEME_FOLLOW_SYSTEM = booleanPreferencesKey("ui_theme_follow_system")
+        // Read only when UI_EFFECTS was never written (settings from before the style choice); kept in step for older builds.
         val RETROWAVE_EFFECTS = booleanPreferencesKey("retrowave_effects")
+        val UI_EFFECTS = stringPreferencesKey("ui_effects")
         val GLASS_EFFECTS = stringPreferencesKey("glass_effects")
         val REGION_PREFERENCE = stringPreferencesKey("region_preference")
         val FAST_BOOT = booleanPreferencesKey("fast_boot")
@@ -357,7 +366,10 @@ class SettingsStore(private val context: Context) {
             themeMode = enumOrDefault(safeGetString(THEME_MODE, ThemeMode.AUTO.name), ThemeMode.AUTO),
             themeId = safeGetString(UI_THEME, ThemeRegistry.SYSTEM_ID),
             themeFollowSystem = safeGet(UI_THEME_FOLLOW_SYSTEM, false),
-            retrowaveEffects = safeGet(RETROWAVE_EFFECTS, false),
+            uiEffects = enumOrDefault(
+                safeGetString(UI_EFFECTS, ""),
+                if (safeGet(RETROWAVE_EFFECTS, false)) UiEffects.RETROWAVE else UiEffects.NONE,
+            ),
             glassEffects = enumOrDefault(safeGetString(GLASS_EFFECTS, GlassEffects.FULL.name), GlassEffects.FULL),
             regionPreference = enumOrDefault(safeGetString(REGION_PREFERENCE, ""), RegionPreference.NTSC_U_NTSC_J_PAL),
             fastBoot = safeGet(FAST_BOOT, false),
@@ -490,7 +502,10 @@ class SettingsStore(private val context: Context) {
         it[UI_THEME] = id
         it[UI_THEME_FOLLOW_SYSTEM] = followSystem
     }
-    suspend fun setRetrowaveEffects(enabled: Boolean) = context.dataStore.edit { it[RETROWAVE_EFFECTS] = enabled }
+    suspend fun setUiEffects(effects: UiEffects) = context.dataStore.edit {
+        it[UI_EFFECTS] = effects.name
+        it[RETROWAVE_EFFECTS] = effects == UiEffects.RETROWAVE
+    }
     suspend fun setGlassEffects(level: GlassEffects) = context.dataStore.edit { it[GLASS_EFFECTS] = level.name }
     suspend fun setRegionPreference(pref: RegionPreference) = context.dataStore.edit { it[REGION_PREFERENCE] = pref.name }
     suspend fun setFastBoot(enabled: Boolean) = context.dataStore.edit { it[FAST_BOOT] = enabled }

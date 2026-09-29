@@ -37,7 +37,7 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                         trailingContent = {
                             Box {
                                 TextButton(onClick = { upscaleExpanded = true }) { Text(currentUpscaleText) }
-                                DropdownMenu(expanded = upscaleExpanded, onDismissRequest = { upscaleExpanded = false }) {
+                                PhobosDropdownMenu(expanded = upscaleExpanded, onDismissRequest = { upscaleExpanded = false }) {
                                     DropdownMenuItem(text = { Text("1x Native (SD)") }, onClick = { viewModel.setN64Upscale(1); upscaleExpanded = false })
                                     DropdownMenuItem(text = { Text("2x HD (480p/960i)") }, onClick = { viewModel.setN64Upscale(2); upscaleExpanded = false })
                                     DropdownMenuItem(text = { Text("4x UHD (4K)") }, onClick = { viewModel.setN64Upscale(4); upscaleExpanded = false })
@@ -113,7 +113,7 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                         trailingContent = {
                             Box {
                                 TextButton(onClick = { overclockExpanded = true }) { Text("${settings.n64ViOverclock / 100.0f}x") }
-                                DropdownMenu(expanded = overclockExpanded, onDismissRequest = { overclockExpanded = false }) {
+                                PhobosDropdownMenu(expanded = overclockExpanded, onDismissRequest = { overclockExpanded = false }) {
                                     listOf(100, 125, 150, 175, 200).forEach { pct ->
                                         DropdownMenuItem(
                                             text = { Text("${pct / 100.0f}x") },
@@ -143,7 +143,7 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                                     enabled = countPerOpEnabled,
                                     onClick = { countPerOpExpanded = true }
                                 ) { Text("${settings.n64CountPerOp}") }
-                                DropdownMenu(expanded = countPerOpExpanded, onDismissRequest = { countPerOpExpanded = false }) {
+                                PhobosDropdownMenu(expanded = countPerOpExpanded, onDismissRequest = { countPerOpExpanded = false }) {
                                     listOf(1, 2, 3).forEach { v ->
                                         DropdownMenuItem(
                                             text = { Text("$v") },
@@ -173,7 +173,7 @@ fun N64ExperimentalSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) 
                                     enabled = cpuOverclockEnabled,
                                     onClick = { cpuOverclockExpanded = true }
                                 ) { Text("${settings.n64CpuOverclock}") }
-                                DropdownMenu(expanded = cpuOverclockExpanded, onDismissRequest = { cpuOverclockExpanded = false }) {
+                                PhobosDropdownMenu(expanded = cpuOverclockExpanded, onDismissRequest = { cpuOverclockExpanded = false }) {
                                     listOf(0, 1, 2, 3, 4, 5).forEach { v ->
                                         DropdownMenuItem(
                                             text = { Text("$v") },

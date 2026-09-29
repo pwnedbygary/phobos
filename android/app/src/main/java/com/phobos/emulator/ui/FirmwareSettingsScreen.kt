@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.phobos.emulator.ui.theme.pillShape
 
 data class FirmwareInfo(
     val emulator: String,
@@ -103,7 +104,7 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         .fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Button(onClick = { viewModel.scanFirmware(context) }) {
+                    Button(onClick = { viewModel.scanFirmware(context) }, shape = pillShape()) {
                         Text("Scan Folder")
                     }
                     Row {

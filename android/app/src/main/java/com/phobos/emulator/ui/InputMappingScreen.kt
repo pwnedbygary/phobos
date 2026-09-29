@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.PhobosCore
+import com.phobos.emulator.ui.theme.pillShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -220,7 +221,7 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                                             Button(onClick = { 
                                                 mappingTarget = bit 
                                                 focusRequester.requestFocus()
-                                            }) {
+                                            }, shape = pillShape()) {
                                                 Text("Bind")
                                             }
                                         }
@@ -244,6 +245,7 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         Button(
                             onClick = { viewModel.clearAllMappings() },
                             modifier = Modifier.weight(1f),
+                            shape = pillShape(),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
                         ) {
                             Text("Clear All")
@@ -252,6 +254,7 @@ fun InputMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         Button(
                             onClick = { viewModel.resetDefaultMapping() },
                             modifier = Modifier.weight(1f),
+                            shape = pillShape(),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
                         ) {
                             Text("Reset Defaults")

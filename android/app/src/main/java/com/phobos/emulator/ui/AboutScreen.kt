@@ -20,6 +20,7 @@ import com.phobos.emulator.BuildConfig
 import com.phobos.emulator.R
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonBloom
+import com.phobos.emulator.ui.theme.pillShape
 import java.util.Locale
 
 private val flavorName = BuildConfig.FLAVOR.replaceFirstChar { it.uppercase() }
@@ -130,18 +131,19 @@ private fun UpdateStatus(state: AppUpdateState, onCheck: () -> Unit, onInstall: 
             when (state) {
                 AppUpdateState.Checking, is AppUpdateState.Downloading, is AppUpdateState.Installing ->
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                is AppUpdateState.Available -> Button(onClick = onInstall) { Text("Update") }
-                is AppUpdateState.Failed -> Button(onClick = if (state.update != null) onInstall else onCheck) { Text("Try again") }
-                is AppUpdateState.UpToDate -> OutlinedButton(onClick = onCheck) { Text("Check again") }
-                AppUpdateState.Idle -> OutlinedButton(onClick = onCheck) { Text("Check") }
+                is AppUpdateState.Available -> Button(onClick = onInstall, shape = pillShape()) { Text("Update") }
+                is AppUpdateState.Failed -> Button(onClick = if (state.update != null) onInstall else onCheck, shape = pillShape()) { Text("Try again") }
+                is AppUpdateState.UpToDate -> OutlinedButton(onClick = onCheck, shape = pillShape()) { Text("Check again") }
+                AppUpdateState.Idle -> OutlinedButton(onClick = onCheck, shape = pillShape()) { Text("Check") }
             }
         },
         colors = transparentListItemColors(),
     )
     if (state is AppUpdateState.Downloading) {
-        val progressModifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-        if (state.progress >= 0f) LinearProgressIndicator(progress = { state.progress }, modifier = progressModifier)
-        else LinearProgressIndicator(modifier = progressModifier)
+        ProgressBar(
+            progress = if (state.progress >= 0f) ({ state.progress }) else null,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        )
     }
 }
 

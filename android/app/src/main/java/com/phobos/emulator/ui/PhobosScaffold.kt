@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neon
 import com.phobos.emulator.ui.theme.neonBar
+import com.phobos.emulator.ui.theme.pixelPlate
+import com.phobos.emulator.ui.theme.pixelShadow
 import com.phobos.emulator.ui.theme.sunsetPlate
 
 /**
@@ -78,12 +80,17 @@ fun PhobosTopBar(
     scrollBehavior: TopAppBarScrollBehavior? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val retrowave = LocalPhobosTheme.current.retrowave
+    val theme = LocalPhobosTheme.current
+    val retrowave = theme.retrowave
     TopAppBar(
         title = {
             Text(
-                text = if (retrowave) title.uppercase() else title,
-                style = if (retrowave) MaterialTheme.typography.titleLarge.neon(scheme.primary) else MaterialTheme.typography.titleLarge,
+                text = if (retrowave || theme.pixel) title.uppercase() else title,
+                style = when {
+                    retrowave -> MaterialTheme.typography.titleLarge.neon(scheme.primary)
+                    theme.pixel -> MaterialTheme.typography.titleLarge.pixelShadow(pixelShadow(theme.isDark))
+                    else -> MaterialTheme.typography.titleLarge
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -112,12 +119,17 @@ fun PhobosTopBar(
 @Composable
 fun ScreenHeader(title: String, subtitle: String? = null, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
-    val retrowave = LocalPhobosTheme.current.retrowave
-    val plate = Modifier.sunsetPlate(scheme.background, LocalPhobosTheme.current.glass.backdropPlateAlpha)
+    val theme = LocalPhobosTheme.current
+    val retrowave = theme.retrowave
+    val plate = if (theme.pixel) Modifier.pixelPlate(scheme.background) else Modifier.sunsetPlate(scheme.background, theme.glass.backdropPlateAlpha)
     Column(modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, bottom = 8.dp)) {
         Text(
-            text = if (retrowave) title.uppercase() else title,
-            style = if (retrowave) MaterialTheme.typography.headlineMedium.neon(scheme.primary) else MaterialTheme.typography.headlineMedium,
+            text = if (retrowave || theme.pixel) title.uppercase() else title,
+            style = when {
+                retrowave -> MaterialTheme.typography.headlineMedium.neon(scheme.primary)
+                theme.pixel -> MaterialTheme.typography.headlineMedium.pixelShadow(pixelShadow(theme.isDark))
+                else -> MaterialTheme.typography.headlineMedium
+            },
             color = if (retrowave) scheme.primary else scheme.onBackground,
             modifier = plate,
         )

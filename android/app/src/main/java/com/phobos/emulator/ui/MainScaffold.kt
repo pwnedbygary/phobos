@@ -59,6 +59,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.addOutline
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -70,7 +73,13 @@ import com.phobos.emulator.ui.theme.GlassBackdrop
 import com.phobos.emulator.ui.theme.GlassCapture
 import com.phobos.emulator.ui.theme.LocalGlassCapture
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
+import com.phobos.emulator.ui.theme.PixelBackdrop
+import com.phobos.emulator.ui.theme.PixelPillShape
+import com.phobos.emulator.ui.theme.PixelShape
 import com.phobos.emulator.ui.theme.RetrowaveBackdrop
+import com.phobos.emulator.ui.theme.pixelBorder
+import com.phobos.emulator.ui.theme.pixelPanel
+import com.phobos.emulator.ui.theme.pixelShadow
 import com.phobos.emulator.ui.theme.glassPanel
 import com.phobos.emulator.ui.theme.recordForGlass
 import com.phobos.emulator.ui.theme.neonBloom
@@ -142,6 +151,7 @@ fun MainScaffold(viewModel: MainViewModel) {
 
     val route = currentDestination?.route
     val retrowave = LocalPhobosTheme.current.retrowave
+    val pixel = LocalPhobosTheme.current.pixel
 
     // Full Screen Mode also hides the status bar in the menus (a swipe down shows it for a moment). The game
     // screen hides both bars and, when it closes, restores this state.
@@ -166,7 +176,7 @@ fun MainScaffold(viewModel: MainViewModel) {
     val backdropAlpha by backdropFade
 
     // The dock refracts what's behind it: the backdrop and the pages, recorded only while its lens can be on.
-    val lens = LocalPhobosTheme.current.glass.refraction > 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    val lens = !pixel && LocalPhobosTheme.current.glass.refraction > 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
     val backdropLayer = rememberGraphicsLayer()
     val pagesLayer = rememberGraphicsLayer()
     val glassCapture = remember(backdropLayer, pagesLayer) {
@@ -178,7 +188,8 @@ fun MainScaffold(viewModel: MainViewModel) {
             val backdrop = Modifier.fillMaxSize()
                 .then(if (lens) Modifier.recordForGlass(backdropLayer) { glassCapture.onRecorded?.invoke() } else Modifier)
                 .graphicsLayer { alpha = backdropAlpha }
-            if (retrowave) RetrowaveBackdrop(backdrop)
+            if (pixel) PixelBackdrop(LocalPhobosTheme.current.scheme, LocalPhobosTheme.current.isDark, backdrop)
+            else if (retrowave) RetrowaveBackdrop(backdrop)
             else if (LocalPhobosTheme.current.glass.level != GlassEffects.OFF) GlassBackdrop(backdrop)
         }
         CompositionLocalProvider(LocalGlassCapture provides glassCapture) {
@@ -370,7 +381,7 @@ private fun LaunchSystemDialog(
     onChoose: (String) -> Unit,
     onCancel: () -> Unit,
 ) {
-    AlertDialog(
+    PhobosAlertDialog(
         onDismissRequest = onCancel,
         // Material's width range (up to 560 dp) rather than the platform's narrower one, for more columns.
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -424,7 +435,18 @@ private fun PhobosDock(route: String?, retrowave: Boolean, onNavigate: (String) 
     val scheme = MaterialTheme.colorScheme
     val theme = LocalPhobosTheme.current
     val glassOff = theme.glass.level == GlassEffects.OFF
-    val shape = RoundedCornerShape(28.dp)
+    val shape = if (theme.pixel) PixelShape(4.dp, 3) else RoundedCornerShape(28.dp)
+    val panel = if (theme.pixel) {
+        Modifier.pixelPanel(shape, scheme.surfaceContainer, pixelBorder(scheme), pixelShadow(theme.isDark))
+    } else {
+        Modifier
+            .then(if (retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier)
+            .glassPanel(
+                shape, scheme.surfaceContainer, theme.glass.dockAlpha, theme.glass, theme.isDark, rim = !retrowave, shadow = !retrowave,
+                outline = if (glassOff && !retrowave) scheme.outlineVariant.copy(alpha = 0.45f) else Color.Unspecified,
+                overPages = true,
+            )
+    }
     Box(
         Modifier
             .fillMaxWidth()
@@ -436,12 +458,7 @@ private fun PhobosDock(route: String?, retrowave: Boolean, onNavigate: (String) 
             modifier = Modifier
                 .widthIn(max = 440.dp)
                 .fillMaxWidth()
-                .then(if (retrowave) Modifier.neonGlow(scheme.primary, shape, intensity = 0.45f) else Modifier)
-                .glassPanel(
-                    shape, scheme.surfaceContainer, theme.glass.dockAlpha, theme.glass, theme.isDark, rim = !retrowave, shadow = !retrowave,
-                    outline = if (glassOff && !retrowave) scheme.outlineVariant.copy(alpha = 0.45f) else Color.Unspecified,
-                    overPages = true,
-                )
+                .then(panel)
                 .selectableGroup()
                 .padding(horizontal = 6.dp, vertical = 6.dp),
         ) {
@@ -456,16 +473,20 @@ private fun PhobosDock(route: String?, retrowave: Boolean, onNavigate: (String) 
 @Composable
 private fun DockItem(tab: NavTab, selected: Boolean, retrowave: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
-    val pillAlpha = LocalPhobosTheme.current.glass.indicatorAlpha
+    val pixel = LocalPhobosTheme.current.pixel
+    val pillAlpha = if (pixel) 1f else LocalPhobosTheme.current.glass.indicatorAlpha
     val selection by animateFloatAsState(
         targetValue = if (selected) 1f else 0f,
         animationSpec = spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMediumLow),
         label = "dockSelection",
     )
-    val iconColor by animateColorAsState(if (selected) scheme.primary else scheme.onSurfaceVariant, label = "dockIcon")
+    val iconColor by animateColorAsState(
+        if (selected) (if (pixel) scheme.onPrimaryContainer else scheme.primary) else scheme.onSurfaceVariant,
+        label = "dockIcon",
+    )
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(22.dp))
+            .clip(if (pixel) PixelShape(3.dp, 2) else RoundedCornerShape(22.dp))
             .selectable(selected = selected, onClick = onClick, role = Role.Tab)
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -476,13 +497,19 @@ private fun DockItem(tab: NavTab, selected: Boolean, retrowave: Boolean, onClick
                 .drawBehind {
                     // The spring overshoots; the pill grows past its width but never past its verified alpha.
                     val width = size.width * (0.4f + 0.6f * selection)
-                    drawRoundRect(
-                        color = scheme.primary,
-                        topLeft = Offset((size.width - width) / 2f, 0f),
-                        size = Size(width, size.height),
-                        cornerRadius = CornerRadius(size.height / 2f),
-                        alpha = pillAlpha * selection.coerceIn(0f, 1f),
-                    )
+                    val alpha = pillAlpha * selection.coerceIn(0f, 1f)
+                    if (pixel) {
+                        val pill = Path().apply { addOutline(PixelPillShape.createOutline(Size(width, size.height), layoutDirection, this@drawBehind)) }
+                        translate(left = (size.width - width) / 2f) { drawPath(pill, scheme.primaryContainer, alpha = alpha) }
+                    } else {
+                        drawRoundRect(
+                            color = scheme.primary,
+                            topLeft = Offset((size.width - width) / 2f, 0f),
+                            size = Size(width, size.height),
+                            cornerRadius = CornerRadius(size.height / 2f),
+                            alpha = alpha,
+                        )
+                    }
                 },
             contentAlignment = Alignment.Center,
         ) {

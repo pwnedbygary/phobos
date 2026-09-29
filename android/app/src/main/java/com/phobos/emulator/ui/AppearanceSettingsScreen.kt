@@ -16,9 +16,11 @@ import androidx.compose.ui.unit.dp
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.ThemeMode
+import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.ThemeGroup
 import com.phobos.emulator.ui.theme.ThemeRegistry
+import com.phobos.emulator.ui.theme.pillShape
 
 @Composable
 fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
@@ -41,19 +43,22 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
             fullWidth {
                 SettingsCategory("Effects") {
-                    SettingsSwitchItem(
-                        title = "Retrowave effects",
-                        description = "Synthwave sunset backdrop, neon glow on cards and selections, and glowing bars. Works with any theme; best with Synthwave '84.",
-                        checked = settings.retrowaveEffects,
-                        onCheckedChange = { viewModel.setRetrowaveEffects(it) },
+                    SettingsDropdownItem(
+                        title = "Style effects",
+                        description = settings.uiEffects.description,
+                        current = settings.uiEffects,
+                        options = UiEffects.entries,
+                        label = { it.label },
+                        onSelect = { viewModel.setUiEffects(it) },
                     )
                     SettingsDropdownItem(
                         title = "Glass effects",
-                        description = settings.glassEffects.description,
+                        description = if (settings.uiEffects == UiEffects.PIXEL_ART) "Pixel art uses solid panels." else settings.glassEffects.description,
                         current = settings.glassEffects,
                         options = GlassEffects.entries,
                         label = { it.label },
                         onSelect = { viewModel.setGlassEffects(it) },
+                        enabled = settings.uiEffects != UiEffects.PIXEL_ART,
                     )
                 }
             }
@@ -63,12 +68,12 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     SectionHeader(
                         title = "${group.title} · ${themes.size}",
                         modifier = Modifier.padding(top = 12.dp),
-                        trailing = if (group == ThemeGroup.RETROWAVE && !settings.retrowaveEffects) {
+                        trailing = if (group == ThemeGroup.RETROWAVE && settings.uiEffects != UiEffects.RETROWAVE) {
                             {
-                                FilledTonalButton(onClick = { viewModel.setRetrowaveEffects(true) }) {
+                                FilledTonalButton(onClick = { viewModel.setUiEffects(UiEffects.RETROWAVE) }, shape = pillShape()) {
                                     Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(6.dp))
-                                    Text("Turn on effects")
+                                    Text(if (settings.uiEffects == UiEffects.NONE) "Turn on effects" else "Switch to Retrowave")
                                 }
                             }
                         } else null,
@@ -161,7 +166,7 @@ private fun ModeSelector(selectedIndex: Int, labels: List<String>, onSelect: (In
             SegmentedButton(
                 selected = index == selectedIndex,
                 onClick = { onSelect(index) },
-                shape = SegmentedButtonDefaults.itemShape(index, labels.size),
+                shape = SegmentedButtonDefaults.itemShape(index, labels.size, pillShape()),
             ) {
                 Text(label, maxLines = 1)
             }

@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.ThemeMode
+import com.phobos.emulator.data.UiEffects
 
 /** What screens need to know about the active theme beyond [MaterialTheme]. */
 @Immutable
@@ -37,20 +38,26 @@ data class PhobosThemeInfo(
     /** The theme being shown (the sibling when Auto switched to it). */
     val theme: AppTheme,
     val isDark: Boolean,
-    val retrowave: Boolean,
+    /** The style layered over the theme's colors (Settings → Appearance → Style effects). */
+    val effects: UiEffects,
     val success: Color,
     val warning: Color,
     /** The theme's final colors; [MaterialTheme.colorScheme] cross-fades to them after a change. */
     val scheme: ColorScheme,
     /** Glass panel and backdrop values for [scheme]; they switch at once while the colors cross-fade. */
     val glass: GlassStyle,
-)
+) {
+    val retrowave: Boolean get() = effects == UiEffects.RETROWAVE
+
+    /** The pixel font, stepped corners, pixel panels and the pixel backdrop. */
+    val pixel: Boolean get() = effects == UiEffects.PIXEL_ART
+}
 
 val LocalPhobosTheme = compositionLocalOf {
     val fallback = ThemeRegistry.resolve(ThemeRegistry.SYSTEM_ID, ThemeMode.DARK, followSystem = false, systemDark = true)
     val colors = fallback.colors
     PhobosThemeInfo(
-        fallback.theme, fallback.isDark, retrowave = false, colors.success, colors.warning, colors.scheme,
+        fallback.theme, fallback.isDark, UiEffects.NONE, colors.success, colors.warning, colors.scheme,
         GlassStyle.of(colors.scheme, colors.success, colors.warning, fallback.isDark, retrowave = false),
     )
 }
@@ -60,10 +67,12 @@ fun PhobosTheme(
     themeId: String = ThemeRegistry.SYSTEM_ID,
     themeMode: ThemeMode = ThemeMode.AUTO,
     followSystem: Boolean = false,
-    retrowave: Boolean = false,
+    effects: UiEffects = UiEffects.NONE,
     glassEffects: GlassEffects = GlassEffects.FULL,
     content: @Composable () -> Unit,
 ) {
+    val retrowave = effects == UiEffects.RETROWAVE
+    val pixel = effects == UiEffects.PIXEL_ART
     val resolved = ThemeRegistry.resolve(themeId, themeMode, followSystem, isSystemInDarkTheme())
     val context = LocalContext.current
     val useDynamic = resolved.theme.dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -76,12 +85,12 @@ fun PhobosTheme(
         GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, retrowave, glassEffects)
     }
 
-    val info = PhobosThemeInfo(resolved.theme, resolved.isDark, retrowave, colors.success, colors.warning, colors.scheme, glass)
+    val info = PhobosThemeInfo(resolved.theme, resolved.isDark, effects, colors.success, colors.warning, colors.scheme, glass)
     CompositionLocalProvider(LocalPhobosTheme provides info) {
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = PhobosTypography,
-            shapes = PhobosShapes,
+            typography = if (pixel) PixelTypography else PhobosTypography,
+            shapes = if (pixel) PixelShapes else PhobosShapes,
             content = content,
         )
     }

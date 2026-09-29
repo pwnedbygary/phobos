@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.DRIVER_SOURCES
 import com.phobos.emulator.util.DriverAsset
 import com.phobos.emulator.util.DriverSource
@@ -166,7 +167,7 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 tonalElevation = 4.dp,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp)
+                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).then(dialogEdge(MaterialTheme.shapes.medium))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -237,14 +238,10 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                                                 )
                                                 if (downloading) {
                                                     Spacer(modifier = Modifier.height(8.dp))
-                                                    if (total > 0) {
-                                                        LinearProgressIndicator(
-                                                            progress = { (downloaded.toFloat() / total).coerceIn(0f, 1f) },
-                                                            modifier = Modifier.fillMaxWidth()
-                                                        )
-                                                    } else {
-                                                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                                    }
+                                                    ProgressBar(
+                                                        progress = if (total > 0) ({ (downloaded.toFloat() / total).coerceIn(0f, 1f) }) else null,
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    )
                                                 }
                                             }
                                         }
@@ -265,7 +262,7 @@ fun DriverManagerScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 tonalElevation = 4.dp,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp)
+                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).then(dialogEdge(MaterialTheme.shapes.medium))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Delete Driver", style = MaterialTheme.typography.titleMedium)
@@ -316,14 +313,10 @@ private fun DriverActionsCard(progress: Pair<Long, Long>, onDownload: () -> Unit
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                if (total > 0) {
-                    LinearProgressIndicator(
-                        progress = { (downloaded.toFloat() / total).coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                } else {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
+                ProgressBar(
+                    progress = if (total > 0) ({ (downloaded.toFloat() / total).coerceIn(0f, 1f) }) else null,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Spacer(modifier = Modifier.height(4.dp))
             }
         }
@@ -336,12 +329,12 @@ private fun DriverActionsRow(onDownload: () -> Unit, onInstall: () -> Unit, onDe
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Button(onClick = onDownload, modifier = Modifier.weight(1f)) {
+        Button(onClick = onDownload, modifier = Modifier.weight(1f), shape = pillShape()) {
             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("Download")
         }
-        Button(onClick = onInstall, modifier = Modifier.weight(1f)) {
+        Button(onClick = onInstall, modifier = Modifier.weight(1f), shape = pillShape()) {
             Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("Install")
@@ -349,6 +342,7 @@ private fun DriverActionsRow(onDownload: () -> Unit, onInstall: () -> Unit, onDe
         Button(
             onClick = onDelete,
             modifier = Modifier.weight(1f),
+            shape = pillShape(),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.error,
                 contentColor = MaterialTheme.colorScheme.onError

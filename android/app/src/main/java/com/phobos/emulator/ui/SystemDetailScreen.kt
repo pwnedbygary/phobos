@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.phobos.emulator.ui.theme.pillShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,7 +73,7 @@ fun SystemDetailScreen(
                         Spacer(modifier = Modifier.height(16.dp))
                         BackdropText("No directories selected", style = MaterialTheme.typography.bodyLarge)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Button(onClick = { launcher.launch(null) }) {
+                        Button(onClick = { launcher.launch(null) }, shape = pillShape()) {
                             Text("Add ROM Folder")
                         }
                     }

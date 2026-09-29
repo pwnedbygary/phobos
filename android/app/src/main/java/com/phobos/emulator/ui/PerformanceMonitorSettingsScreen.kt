@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -35,6 +34,7 @@ import com.phobos.emulator.ui.hud.HudConfig
 import com.phobos.emulator.ui.hud.HudPreset
 import com.phobos.emulator.ui.hud.PerformanceHud
 import com.phobos.emulator.ui.hud.hudConfig
+import com.phobos.emulator.ui.theme.pillShape
 import java.util.Locale
 import kotlin.math.sin
 
@@ -112,6 +112,7 @@ fun PerformanceMonitorSettingsScreen(viewModel: MainViewModel, onBack: () -> Uni
                     OutlinedButton(
                         onClick = { viewModel.resetPerfOverlayPosition() },
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        shape = pillShape(),
                     ) { Text("Reset position (top left)") }
                 }
             }
@@ -165,13 +166,13 @@ private fun HudPreview(config: HudConfig) {
         thermalStatus = 0, thermalHeadroom = 0.42f,
     )
     Column {
-        Text("Preview (sample values)", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        BackdropText("Preview (sample values)", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         Box(
             modifier = Modifier
                 .padding(top = 8.dp)
                 .fillMaxWidth()
                 .heightIn(min = if (config.horizontal) 64.dp else 120.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(MaterialTheme.shapes.small)
                 .background(Brush.linearGradient(listOf(Color(0xFF1B3A5C), Color(0xFF3E7A4E), Color(0xFF8C6D3A)))),
             contentAlignment = Alignment.TopStart,
         ) {

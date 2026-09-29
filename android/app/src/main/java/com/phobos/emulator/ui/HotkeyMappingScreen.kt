@@ -23,6 +23,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import com.phobos.emulator.LogLevel
+import com.phobos.emulator.ui.theme.pillShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -113,7 +114,7 @@ fun HotkeyMappingScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                                                 currentCombo.clear()
                                                 mappingTarget = key
                                                 focusRequester.requestFocus()
-                                            }) {
+                                            }, shape = pillShape()) {
                                                 Text("Bind")
                                             }
                                         }

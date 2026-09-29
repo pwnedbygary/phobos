@@ -5,7 +5,6 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BrightnessAuto
 import androidx.compose.material.icons.rounded.Check
@@ -28,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.AppTheme
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
+import com.phobos.emulator.ui.theme.pillShape
 
 /** Label and icon for a theme's appearance: adaptive themes follow the mode, others are fixed. */
 fun AppTheme.appearanceLabel(): Pair<String, ImageVector> = when {
@@ -67,7 +67,7 @@ fun ThemeSwatchCard(theme: AppTheme, scheme: ColorScheme, selected: Boolean, onC
                 MiniSwitch(scheme, Modifier.align(Alignment.BottomEnd))
                 if (selected) {
                     Box(
-                        Modifier.align(Alignment.Center).size(26.dp).clip(CircleShape).background(app.primary),
+                        Modifier.align(Alignment.Center).size(26.dp).clip(pillShape()).background(app.primary),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(Icons.Rounded.Check, contentDescription = "Selected", tint = app.onPrimary, modifier = Modifier.size(18.dp))
@@ -108,18 +108,18 @@ private fun MiniWindow(scheme: ColorScheme, modifier: Modifier) {
 
 @Composable
 private fun Bar(color: Color, fraction: Float) {
-    Box(Modifier.fillMaxWidth(fraction).height(5.dp).clip(CircleShape).background(color))
+    Box(Modifier.fillMaxWidth(fraction).height(5.dp).clip(pillShape()).background(color))
 }
 
 @Composable
 private fun Dot(color: Color, size: androidx.compose.ui.unit.Dp) {
-    Box(Modifier.size(size).clip(CircleShape).background(color))
+    Box(Modifier.size(size).clip(pillShape()).background(color))
 }
 
 @Composable
 private fun MiniSwitch(scheme: ColorScheme, modifier: Modifier) {
-    Box(modifier.size(width = 26.dp, height = 14.dp).clip(CircleShape).background(scheme.primary).padding(2.dp)) {
-        Box(Modifier.align(Alignment.CenterEnd).size(10.dp).clip(CircleShape).background(scheme.onPrimary))
+    Box(modifier.size(width = 26.dp, height = 14.dp).clip(pillShape()).background(scheme.primary).padding(2.dp)) {
+        Box(Modifier.align(Alignment.CenterEnd).size(10.dp).clip(pillShape()).background(scheme.onPrimary))
     }
 }
 
@@ -130,7 +130,7 @@ fun PaletteStrip(scheme: ColorScheme, success: Color, warning: Color, modifier: 
         scheme.background, scheme.surfaceContainer, scheme.surfaceContainerHighest, scheme.primary,
         scheme.secondary, scheme.tertiary, scheme.error, success, warning,
     )
-    Row(modifier.fillMaxWidth().height(22.dp).clip(CircleShape)) {
+    Row(modifier.fillMaxWidth().height(22.dp).clip(pillShape())) {
         colors.forEach { Box(Modifier.weight(1f).fillMaxHeight().background(it)) }
     }
 }

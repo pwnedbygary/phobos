@@ -5,7 +5,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -30,8 +29,10 @@ import com.phobos.emulator.ui.theme.LocalPhobosTheme
 fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     val systems by viewModel.visibleSystems.collectAsState()
     val theme = LocalPhobosTheme.current
-    val artPalette = remember(theme.scheme, theme.success, theme.warning, theme.glass.panelAlpha) {
-        val tile = theme.scheme.surfaceContainer.copy(alpha = theme.glass.panelAlpha).compositeOver(theme.scheme.background)
+    // Pixel art's tiles are solid panels, whatever the glass level.
+    val tileAlpha = if (theme.pixel) 1f else theme.glass.panelAlpha
+    val artPalette = remember(theme.scheme, theme.success, theme.warning, tileAlpha) {
+        val tile = theme.scheme.surfaceContainer.copy(alpha = tileAlpha).compositeOver(theme.scheme.background)
         ConsoleArtPalette(theme.scheme, theme.success, theme.warning, tile)
     }
 
@@ -93,7 +94,7 @@ fun SystemCard(system: String, artPalette: ConsoleArtPalette, onClick: () -> Uni
         modifier = Modifier
             .fillMaxWidth()
             .height(160.dp),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
         onClick = onClick
     ) {
         Column(

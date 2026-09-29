@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.phobos.emulator.ui.theme.pillShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,7 +77,8 @@ fun ShaderSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             item {
                 Button(
                     onClick = { launcher.launch(arrayOf("*/*")) },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = pillShape()
                 ) {
                     Icon(Icons.Default.Settings, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
