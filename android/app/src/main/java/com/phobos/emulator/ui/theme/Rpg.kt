@@ -29,12 +29,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
-import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -50,7 +48,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontSynthesis
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -143,17 +140,6 @@ internal fun rpgLattice(scheme: ColorScheme, isDark: Boolean): Color =
 /** A gauge's empty trough. */
 internal fun rpgTrough(scheme: ColorScheme, isDark: Boolean): Color =
     if (isDark) lerp(scheme.surfaceContainer, Color.Black, 0.5f) else scheme.surfaceContainerHighest
-
-/** [shape]'s outline in [size] shrunk by [inset] on every side. */
-private fun Density.insetOutline(shape: Shape, size: Size, layoutDirection: LayoutDirection, inset: Float): Path = Path().apply {
-    val inner = Size((size.width - inset * 2).coerceAtLeast(0f), (size.height - inset * 2).coerceAtLeast(0f))
-    addOutline(shape.createOutline(inner, layoutDirection, this@insetOutline))
-    translate(Offset(inset, inset))
-}
-
-/** The ring of [shape] in [size] between [from] and [to] in from its edge. */
-private fun Density.ring(shape: Shape, size: Size, layoutDirection: LayoutDirection, from: Float, to: Float): Path =
-    Path.combine(PathOperation.Difference, insetOutline(shape, size, layoutDirection, from), insetOutline(shape, size, layoutDirection, to))
 
 /** A window frame's paths: dark [lines] four art pixels wide, with a [band] two wide over their middle. */
 private class WindowFrame(val lines: Path, val band: Path)

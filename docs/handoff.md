@@ -261,6 +261,11 @@ Branch `feature/rpg-style-2026-09`, stacked on the CRT branch, adds the 16-bit R
 with fontTools: `pyftsubset DotGothic16-Regular.ttf --layout-features='' --unicodes=U+0020-007E,U+00A0-017F,U+0370-03FF,U+0400-04FF,U+2000-206F,U+20A0-20CF,U+2100-214F,U+2190-21FF,U+2200-22FF,U+2460-24FF,U+2500-259F,U+25A0-25FF,U+2600-26FF`.
 The dropped layout features select Japanese glyph variants, widths and vertical forms, the "fi" and
 "fl" ligatures and a slashed zero, none of which the app uses.
+Branch `feature/manga-style-2026-09`, stacked on the RPG branch, adds the manga ink style (`MangaUi`
+in `ui/theme/Manga.kt`), with Bangers and Comic Neue from google/fonts unmodified. The RPG and manga
+borders are drawn as rings, a shape minus a copy of it shrunk by the border's width (`ring` in
+`UiStyle.kt`), rather than as strokes clipped to the shape, which left a faint fringe outside stepped
+corners.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

@@ -16,11 +16,17 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import com.phobos.emulator.data.UiEffects
 import kotlinx.coroutines.delay
 
@@ -122,6 +128,17 @@ abstract class SolidUi : UiStyle() {
     abstract fun ProgressBar(progress: (() -> Float)?, modifier: Modifier)
 }
 
+/** [shape]'s outline in [size] shrunk by [inset] on every side. */
+private fun Density.insetOutline(shape: Shape, size: Size, layoutDirection: LayoutDirection, inset: Float): Path = Path().apply {
+    val inner = Size((size.width - inset * 2).coerceAtLeast(0f), (size.height - inset * 2).coerceAtLeast(0f))
+    addOutline(shape.createOutline(inner, layoutDirection, this@insetOutline))
+    translate(Offset(inset, inset))
+}
+
+/** The ring of [shape] in [size] between [from] and [to] in from its edge: a border drawn as a fill, with no clipping. */
+internal fun Density.ring(shape: Shape, size: Size, layoutDirection: LayoutDirection, from: Float, to: Float): Path =
+    Path.combine(PathOperation.Difference, insetOutline(shape, size, layoutDirection, from), insetOutline(shape, size, layoutDirection, to))
+
 /** The pill of buttons, value pills and segmented buttons in the current style ([UiStyle.pill]). */
 @Composable
 @ReadOnlyComposable
@@ -134,6 +151,7 @@ val UiEffects.style: UiStyle
         UiEffects.PIXEL_ART -> PixelUi
         UiEffects.CRT -> CrtUi
         UiEffects.RPG -> RpgUi
+        UiEffects.MANGA -> MangaUi
     }
 
 /**
