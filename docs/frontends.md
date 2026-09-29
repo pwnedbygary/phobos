@@ -110,7 +110,10 @@ Argosy only offers the emulators in its built-in registry, and a user can't add 
 Phobos needs an entry there: a change to
 [rommapp/argosy-launcher](https://github.com/rommapp/argosy-launcher). With it, Argosy starts
 Phobos with a FileProvider URI and its platform slug, and nothing needs setting up in Phobos.
-The entry is prepared but not yet submitted.
+The entry is submitted as
+[rommapp/argosy-launcher#471](https://github.com/rommapp/argosy-launcher/pull/471) and awaits
+the maintainers' review; Argosy's debug build with it started games in Phobos on a Retroid
+Pocket 6.
 
 ## Retroid launcher
 

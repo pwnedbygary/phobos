@@ -117,8 +117,9 @@ Phobos targets **perfect compatibility** for the Neo Geo MVS/AES library. Notes 
 
 ## Starting games from a frontend
 
-ES-DE and Daijisho can start games in Phobos, and Argosy will once Phobos is in its emulator
-registry; [docs/frontends.md](docs/frontends.md) has the setup for each. The Retroid Pocket's
+ES-DE and Daijisho can start games in Phobos, and Argosy will once its maintainers accept
+Phobos's registry entry ([rommapp/argosy-launcher#471](https://github.com/rommapp/argosy-launcher/pull/471));
+[docs/frontends.md](docs/frontends.md) has the setup for each. The Retroid Pocket's
 own launcher has a fixed emulator list and can't.
 
 ---

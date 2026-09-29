@@ -186,9 +186,12 @@ while a game runs: loads and unloads take its lock and only the owning instance 
 screens can overlap while one game replaces another, so `EmulatorScreen` checks
 `emulatorScreenReplaced` before touching shared state, and the core's surface is released only
 by its owner (`PhobosCore.attachSurface`/`drawsTo`). Checked on the RP6 with `adb` standing in
-for the frontends. Argosy needs an entry in its hardcoded registry: prepared locally
-(`.local/review/argosy/`); the user agreed to submit it now that v1.1.0 is out, after Argosy's
-own checks (a hardware test with its debug build, its `takt` review).
+for the frontends. Argosy needs an entry in its hardcoded registry: submitted as
+[rommapp/argosy-launcher#471](https://github.com/rommapp/argosy-launcher/pull/471) from the
+user's fork (branch `add-phobos-emulator`) after v1.1.0, a hardware test with Argosy's debug build
+on the RP6 and the user's `takt` review (APPROVE), and awaiting the maintainers. Greptile's only
+note is that its test checks 8 of the 27 platforms; a new commit there needs a fresh `takt`
+summary in the PR body, which the user runs.
 Branch `feature/app-updater-2026-09` ([PR #26](https://github.com/pwnedbygary/phobos/pull/26)) adds
 the in-app updater the user asked for (Settings → About). Builds are numbered from git history in
 `android/app/build.gradle.kts` (version code 100000 + commit count, version name from
@@ -197,6 +200,14 @@ numbered by the old tag mapping. CI stages `update.json` next to the APKs
 (`.github/scripts/stage-apks.sh`) for tag releases and for a `nightly-<code>` pre-release on every
 push to `master`; `util/AppUpdates.kt` picks the newest build for the installed flavor, checks the
 download and installs it through `PackageInstaller`, with Android's confirmation.
+Branch `docs/new-systems-2026-09` records the user's direction for new systems (2026-09-29):
+Phobos as a better RetroArch over time, retro systems only, without the PlayStation 2 / GameCube
+generation. [new-systems.md](new-systems.md) lists the candidates and routes: PPSSPP for the PSP
+and Flycast for the Dreamcast (both named by the user) through a libretro host, Mednafen's Saturn
+emulation, the systems the ares tree has but Phobos doesn't list (32X, Super Game Boy, Arcade,
+LaserActive, Pocket Challenge V2), melonDS for the DS (suggested), arcade boards, smaller consoles
+and computers. Bundling GPL emulators makes the app GPL-3.0-or-later, and PPSSPP ships the PSP's
+decryption keys: both are the user's decisions, before any of that work starts.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
