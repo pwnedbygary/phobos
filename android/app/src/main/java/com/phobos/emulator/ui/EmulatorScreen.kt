@@ -110,6 +110,10 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     val focusRequester = remember { FocusRequester() }
     val view = LocalView.current
     val window = (view.context as? Activity)?.window
+    // This screen, to the ViewModel: when a frontend starts a game over the running one, the new game's
+    // screen arrives while this one is still leaving, and from then on this one leaves things to it.
+    val screen = remember { Any() }
+    fun takeFocus() { if (!viewModel.emulatorScreenReplaced(screen)) focusRequester.requestFocus() }
 
     var pressedKeys by remember { mutableStateOf(setOf<Int>()) }
     var fastForwardToggled by remember { mutableStateOf(false) }
@@ -139,7 +143,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             HotkeyAction.FRAME_ADVANCE -> if (isPaused) PhobosCore.frameAdvance()
             HotkeyAction.MUTE -> viewModel.setMuteAudio(!settings.muteAudio)
             HotkeyAction.SCREENSHOT -> viewModel.takeScreenshot(systemName, romName)
-            HotkeyAction.RELOAD -> viewModel.roms.value.find { it.name == romName }?.let { viewModel.loadRom(view.context, systemName, it) }
+            HotkeyAction.RELOAD -> viewModel.reloadGame(view.context)
             HotkeyAction.QUIT -> askToQuit()
             HotkeyAction.KEYBOARD -> if (systemName.contains("ZX Spectrum", ignoreCase = true)) showKeyboard = !showKeyboard else return false
             HotkeyAction.LIBRARY -> viewModel.swapToLibrary()
@@ -180,7 +184,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         }
         onDispose {
             // Back to the menus' state: the navigation bar, and the status bar unless Full Screen Mode hides it there too.
-            if (window != null) {
+            if (window != null && !viewModel.emulatorScreenReplaced(screen)) {
                 val controller = WindowCompat.getInsetsController(window, view)
                 controller.show(WindowInsetsCompat.Type.navigationBars())
                 if (!settings.fullScreenMode) controller.show(WindowInsetsCompat.Type.statusBars())
@@ -190,11 +194,11 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
     LaunchedEffect(isLoaded) {
-        if (isLoaded) {
+        if (isLoaded && !viewModel.emulatorScreenReplaced(screen)) {
             viewModel.setPause(false)
             PhobosCore.setEmulationRunning(true)
             // Take focus right away so hardware keys (hotkeys, gamepad) reach onPreviewKeyEvent.
-            focusRequester.requestFocus()
+            takeFocus()
         }
     }
     LaunchedEffect(isPaused, editingTouchLayout) {
@@ -203,19 +207,27 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             pressedKeys = emptySet() // Re-arm hotkey combos.
         } else if (isLoaded && !editingTouchLayout) {
             // Controller navigation of the pause menu moves focus into it; game input needs it back.
-            focusRequester.requestFocus()
+            takeFocus()
         }
     }
     BackHandler { if (!isLoaded || isPaused) askToQuit() }
     BackHandler(enabled = editingTouchLayout) { editingTouchLayout = false }
 
     DisposableEffect(Unit) {
-        viewModel.setEmulatorScreenVisible(true)
-        onDispose {
-            viewModel.setEmulatorScreenVisible(false)
+        // Replacing another game's screen, which leaves input to this one once replaced: start from
+        // released input, as that screen's exit would have left it.
+        if (viewModel.emulatorScreenVisible.value) {
             GameInputState.reset()
-            // fastForwardToggled starts false when the screen returns, so native must match.
             PhobosCore.setFastForward(false)
+        }
+        viewModel.emulatorScreenShown(screen)
+        onDispose {
+            if (!viewModel.emulatorScreenReplaced(screen)) {
+                GameInputState.reset()
+                // fastForwardToggled starts false when the screen returns, so native must match.
+                PhobosCore.setFastForward(false)
+            }
+            viewModel.emulatorScreenGone(screen)
             // The game stays loaded (paused) when leaving the screen — the swap-screen hotkey
             // relies on it. Unloading only happens through the quit dialog.
         }
@@ -226,8 +238,9 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
         romName = romName,
         showQuitDialog = showQuitDialog,
         onQuitDismissed = { showQuitDialog = false; if (resumeOnQuitCancel) viewModel.setPause(false) },
-        onQuitConfirmed = { showQuitDialog = false; viewModel.unloadSystem(); onBack() },
-        onLeave = onBack,
+        // A game a frontend started returns to it; otherwise back to the Library.
+        onQuitConfirmed = { showQuitDialog = false; viewModel.unloadSystem(); if (!viewModel.leaveGame()) onBack() },
+        onLeave = { if (!viewModel.leaveGame()) onBack() },
     )
 
     // ── Touch layout for this system ─────────────────────────────────────────
@@ -352,6 +365,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                     }
                 },
                 onBackgroundTap = { if (isLoaded && !menuButtonShown) viewModel.setPause(true) },
+                ownsInput = { !viewModel.emulatorScreenReplaced(screen) },
             )
         }
 
@@ -482,9 +496,11 @@ private fun GamePicture(
                         GameInputState.handleMotionEvent(event, viewModel.settings.value.inputMappings, systemName)
                     }
                     holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(h: SurfaceHolder) { PhobosCore.setSurface(h.surface) }
-                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, h2: Int) { PhobosCore.setSurface(h.surface) }
-                        override fun surfaceDestroyed(h: SurfaceHolder) { viewModel.setPause(true); PhobosCore.setSurface(null) }
+                        override fun surfaceCreated(h: SurfaceHolder) { PhobosCore.attachSurface(h.surface) }
+                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, h2: Int) { PhobosCore.refreshSurface(h.surface) }
+                        override fun surfaceDestroyed(h: SurfaceHolder) {
+                            if (PhobosCore.drawsTo(h.surface)) { viewModel.setPause(true); PhobosCore.detachSurface(h.surface) }
+                        }
                     })
                 }
             },

@@ -30,11 +30,15 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -78,6 +82,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.compose.*
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
@@ -111,6 +116,9 @@ fun MainScaffold(viewModel: MainViewModel) {
                     popUpTo(navController.graph.startDestinationId)
                     launchSingleTop = true
                 }
+            } else if (route.startsWith("emulator/")) {
+                // One game screen at a time: a game a frontend starts over the running one replaces its screen.
+                navController.navigate(route) { popUpTo(EMULATOR_ROUTE) { inclusive = true } }
             } else {
                 navController.navigate(route)
             }
@@ -338,6 +346,45 @@ fun MainScaffold(viewModel: MainViewModel) {
             }
         }
     }
+
+    val launchChoice by viewModel.launchChoice.collectAsState()
+    val inGame by viewModel.emulatorScreenVisible.collectAsState()
+    launchChoice?.let { choice ->
+        LaunchSystemDialog(choice, fullScreen, inGame, onChoose = viewModel::chooseLaunchSystem, onCancel = viewModel::cancelLaunchChoice)
+    }
+}
+
+/** Asks which system a game a frontend started is for, when neither the frontend nor the file says. */
+@Composable
+private fun LaunchSystemDialog(
+    choice: LaunchChoice,
+    fullScreen: Boolean,
+    inGame: Boolean,
+    onChoose: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        // Material's width range (up to 560 dp) rather than the platform's narrower one, for more columns.
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier.padding(horizontal = 24.dp),
+        title = { DialogSystemBars(fullScreen, inGame); Text("Choose a system") },
+        text = {
+            Column {
+                Text(choice.rom.name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 160.dp), modifier = Modifier.heightIn(max = 280.dp)) {
+                    items(choice.candidates) { system ->
+                        TextButton(onClick = { onChoose(system) }) {
+                            Text(system, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
 }
 
 // navigation-compose's default transitions, kept for the emulator route so its SurfaceView timing is unchanged.

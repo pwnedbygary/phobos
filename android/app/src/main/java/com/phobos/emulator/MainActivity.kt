@@ -16,6 +16,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import coil.Coil
 import coil.ImageLoader
 import coil.decode.SvgDecoder
@@ -25,6 +26,7 @@ import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.InputBindings
+import com.phobos.emulator.launch.launchRequestOf
 import com.phobos.emulator.ui.ConsoleArtFetcher
 import com.phobos.emulator.ui.ConsoleArtKeyer
 import com.phobos.emulator.ui.MainScaffold
@@ -72,6 +74,10 @@ class MainActivity : ComponentActivity() {
         Coil.setImageLoader(imageLoader)
         
         settingsStore = SettingsStore(this)
+        // A game another app (a frontend) asked for. Not when the activity is recreated after the process
+        // died: the old request's file grant is gone, and the Library is shown instead.
+        val launch = if (savedInstanceState == null) intent?.let(::launchRequestOf) else null
+        val debugLoad = savedInstanceState == null && isDebugLoad(intent)
         // The stored settings, read once before the first frame (bounded), so the window starts in the
         // saved full-screen state and the first frame already has the saved theme. A launch straight
         // into a game starts with both bars hidden, as the game screen will.
@@ -79,7 +85,7 @@ class MainActivity : ComponentActivity() {
         if (startupSettings?.fullScreenMode == true) {
             WindowCompat.getInsetsController(window, window.decorView).apply {
                 systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                hide(if (startsGame(intent)) WindowInsetsCompat.Type.systemBars() else WindowInsetsCompat.Type.statusBars())
+                hide(if (launch != null || debugLoad) WindowInsetsCompat.Type.systemBars() else WindowInsetsCompat.Type.statusBars())
             }
         }
         viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
@@ -145,12 +151,19 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        handleDebugLoadIntent(intent)
+        // Quitting a game a frontend started (or a launch that can't go ahead) returns to the frontend.
+        lifecycleScope.launch { viewModel.leaveToFrontend.collect { finishAndRemoveTask() } }
+
+        if (savedInstanceState == null) handleDebugLoadIntent(intent)
+        launch?.let(viewModel::launchExternal)
     }
 
+    // MainActivity is singleTask, so a frontend's launch while Phobos runs arrives here.
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleDebugLoadIntent(intent)
+        launchRequestOf(intent)?.let(viewModel::launchExternal)
     }
 
     override fun onDestroy() {
@@ -158,8 +171,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    /** Whether [intent] loads a game straight away (see [handleDebugLoadIntent]). */
-    private fun startsGame(intent: android.content.Intent?): Boolean = intent?.getStringExtra("load_uri") != null
+    private fun isDebugLoad(intent: android.content.Intent?): Boolean = intent?.getStringExtra("load_uri") != null
 
     /**
      * Debug/test harness: load a ROM directly from adb without UI interaction.
@@ -170,25 +182,23 @@ class MainActivity : ComponentActivity() {
      *     --es load_name "Final Lap Twin (USA).zip" \
      *     --es load_system "PC Engine"
      *
-     * Waits (bounded) for native asset extraction + settings/firmware paths to be
-     * ready before loading, so cold-start intent loads behave like UI loads.
+     * Waits (bounded) for native asset extraction and the stored settings before
+     * loading, so cold-start intent loads behave like UI loads.
      */
     private fun handleDebugLoadIntent(intent: android.content.Intent?) {
+        if (intent == null || intent.flags and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
         // Debug: dump NGCD graphics memories (sprite/fix/vram/pram) to filesDir.
         // Usage: adb shell am start -n com.phobos.emulator/.MainActivity --ez dump_ng_gfx true
-        if (intent?.getBooleanExtra("dump_ng_gfx", false) == true) {
+        if (intent.getBooleanExtra("dump_ng_gfx", false)) {
             PhobosCore.dumpNgGfx(filesDir.absolutePath)
             Log.i("Phobos", "dumpNgGfx: wrote to ${filesDir.absolutePath}")
             return
         }
-        val uri = intent?.getStringExtra("load_uri") ?: return
+        val uri = intent.getStringExtra("load_uri") ?: return
         val name = intent.getStringExtra("load_name") ?: return
         val system = intent.getStringExtra("load_system") ?: return
         debugScope.launch {
-            withTimeoutOrNull(8000) {
-                viewModel.systems.first { it.isNotEmpty() }
-                viewModel.settings.first { it.systemFirmwarePaths.isNotEmpty() }
-            }
+            viewModel.awaitLaunchReady()
             Log.d("Phobos", "debugLoad: loading system='$system', rom='$name'")
             viewModel.loadRom(applicationContext, system, RomFile(name, Uri.parse(uri)))
             // Mirror the UI tap flow (SystemDetailScreen loads THEN navigates)

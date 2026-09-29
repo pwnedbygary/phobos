@@ -25,6 +25,9 @@ import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
+import com.phobos.emulator.launch.LaunchRequest
+import com.phobos.emulator.launch.LaunchTarget
+import com.phobos.emulator.launch.resolveLaunch
 import com.phobos.emulator.ui.hud.HudPreset
 import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.touch.ElementOverride
@@ -32,7 +35,9 @@ import com.phobos.emulator.ui.touch.TouchFamily
 import com.phobos.emulator.ui.touch.TouchLayoutCodec
 import com.phobos.emulator.ui.touch.TouchPrefs
 import com.phobos.emulator.ui.touch.touchLayoutKey
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -41,12 +46,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -74,6 +83,23 @@ data class VideoGeometry(val width: Float, val height: Float) {
 data class StateSlotPreview(val image: Bitmap?, val savedAtMillis: Long)
 private data class DriverSidecar(val owner: String, val repo: String, val tag: String)
 
+/** A game another app asked for, waiting on the user to pick its system. */
+data class LaunchChoice(val rom: RomFile, val candidates: List<String>)
+
+/**
+ * The game the native core holds. The core is one per process but MainViewModel is one per activity, and a
+ * frontend's clear-task launch replaces the activity while a game runs, so loads and unloads from every
+ * instance take [lock], and only the instance that loaded the game ([owner]) unloads it on its way out.
+ * Unloads run in [scope], which outlives the ViewModel that started them.
+ */
+private object CoreSession {
+    val lock = Mutex()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile var system = ""
+    @Volatile var rom = ""
+    @Volatile var owner: Any? = null
+}
+
 class MainViewModel(
     private val context: Context,
     private val settingsStore: SettingsStore,
@@ -98,6 +124,11 @@ class MainViewModel(
         // Task 17: slot index reserved for the "Auto" state (saved on unload,
         // loaded on boot). Any negative slot maps to <rom>.state.auto.
         const val AUTO_STATE_SLOT = -1
+
+        // First launches unpack the core's assets before the systems are listed.
+        private const val LAUNCH_READY_TIMEOUT_MS = 15_000L
+        // A settings change made meanwhile moves [settings] past the stored values it waits for.
+        private const val SETTINGS_READY_TIMEOUT_MS = 2_000L
 
         private const val N64_APPLIES_ON_RESET = "Takes effect after Reset System or reloading the game"
         private const val N64_APPLIES_ON_RELOAD = "Takes effect the next time the game is loaded"
@@ -426,33 +457,55 @@ class MainViewModel(
     }
 
     fun unloadSystem() {
-        viewModelScope.launch(Dispatchers.IO) {
-            // Clear the loaded/paused flags BEFORE the native teardown. The
-            // teardown is slow (64DD: flushSavesToDisk copies a ~70MB
-            // program.disk), and while it runs the OLD system's singleton
-            // hardware (rdram, cartridge.rom, dd.disk) is being freed. If a
-            // new EmulatorScreen composes during that window with a STALE
-            // _isLoaded=true, its LaunchedEffect(isLoaded) fires
-            // setEmulationRunning(true) -> a fresh emu thread grabs the OLD
-            // root and runs CPU::LW against the freed buffers -> SIGSEGV on
-            // unload (the 64DD quit -> reload crash). Clearing the flag first
-            // makes the new screen show "Initializing..." until the load lands.
-            // Auto-Save State (Task 17): snapshot the state BEFORE any
-            // teardown, while the core is still alive.
-            val sysName = currentSystemName
-            val romName = currentRomName
-            if (settings.value.autoSaveState && sysName.isNotEmpty() && romName.isNotEmpty()) {
-                try { performSaveState(sysName, romName, AUTO_STATE_SLOT) } catch (e: Exception) {
-                    Log.e("Phobos", "Auto-save failed: ${e.message}")
-                }
-            }
-            _isLoaded.value = false
-            _isPaused.value = false
-            PhobosCore.setEmulationRunning(false)
-            PhobosCore.unloadSystem()
-            currentSystemName = ""
-            currentRomName = ""
+        // Not viewModelScope: quitting a game a frontend started finishes the activity straight away.
+        CoreSession.scope.launch {
+            CoreSession.lock.withLock { if (CoreSession.owner === sessionToken) closeSessionLocked(autoSave = true) }
         }
+    }
+
+    override fun onCleared() {
+        // The activity is finishing for good (Back from the Library, a frontend's clear-task launch, or returning
+        // to the frontend): a game this instance loaded is saved and unloaded, unless another instance's load
+        // has replaced it already.
+        CoreSession.scope.launch {
+            CoreSession.lock.withLock { if (CoreSession.owner === sessionToken) closeSessionLocked(autoSave = true) }
+        }
+    }
+
+    /**
+     * Unloads the game the core holds, whichever instance loaded it, snapshotting it first when [autoSave] and
+     * Auto-Save State (Task 17) are on. Call with [CoreSession.lock] held.
+     */
+    private suspend fun closeSessionLocked(autoSave: Boolean) {
+        val sysName = CoreSession.system
+        val romName = CoreSession.rom
+        if (sysName.isEmpty()) return
+        // The snapshot comes BEFORE any teardown, while the core is still alive.
+        if (autoSave && settings.value.autoSaveState && romName.isNotEmpty()) {
+            try { performSaveState(sysName, romName, AUTO_STATE_SLOT) } catch (e: Exception) {
+                Log.e("Phobos", "Auto-save failed: ${e.message}")
+            }
+        }
+        // Clear the loaded/paused flags BEFORE the native teardown. The
+        // teardown is slow (64DD: flushSavesToDisk copies a ~70MB
+        // program.disk), and while it runs the OLD system's singleton
+        // hardware (rdram, cartridge.rom, dd.disk) is being freed. If a
+        // new EmulatorScreen composes during that window with a STALE
+        // _isLoaded=true, its LaunchedEffect(isLoaded) fires
+        // setEmulationRunning(true) -> a fresh emu thread grabs the OLD
+        // root and runs CPU::LW against the freed buffers -> SIGSEGV on
+        // unload (the 64DD quit -> reload crash). Clearing the flag first
+        // makes the new screen show "Initializing..." until the load lands.
+        _isLoaded.value = false
+        _isPaused.value = false
+        PhobosCore.setEmulationRunning(false)
+        PhobosCore.unloadSystem()
+        CoreSession.system = ""
+        CoreSession.rom = ""
+        CoreSession.owner = null
+        currentSystemName = ""
+        currentRomName = ""
+        loadedRom = null
     }
 
     fun setSystemVisibility(system: String, visible: Boolean) = viewModelScope.launch {
@@ -817,7 +870,23 @@ class MainViewModel(
     private val _emulatorScreenVisible = MutableStateFlow(false)
     val emulatorScreenVisible: StateFlow<Boolean> = _emulatorScreenVisible
 
-    fun setEmulatorScreenVisible(visible: Boolean) { _emulatorScreenVisible.value = visible }
+    // The EmulatorScreen on show. When a frontend starts a game over the running one, the new game's screen
+    // arrives before the old one leaves, so only the current screen's exit counts.
+    private var emulatorScreen: Any? = null
+
+    fun emulatorScreenShown(screen: Any) {
+        emulatorScreen = screen
+        _emulatorScreenVisible.value = true
+    }
+
+    fun emulatorScreenGone(screen: Any) {
+        if (emulatorScreen !== screen) return
+        emulatorScreen = null
+        _emulatorScreenVisible.value = false
+    }
+
+    /** Whether another EmulatorScreen has replaced [screen]. */
+    fun emulatorScreenReplaced(screen: Any): Boolean = emulatorScreen.let { it != null && it !== screen }
 
     // One-shot navigation requests from outside the NavHost (debug loader,
     // activity key fallback). MainScaffold collects and navigates. A channel, so a
@@ -896,6 +965,95 @@ class MainViewModel(
     /** Base name (no extension) of the currently loaded ROM — key for auto-save/load. */
     @Volatile
     private var currentRomName: String = ""
+
+    // This instance, as the owner of the game in CoreSession.
+    private val sessionToken = Any()
+
+    // The file the running game came from, for Reload.
+    @Volatile
+    private var loadedRom: RomFile? = null
+
+    // The running game was started by another app (a frontend), so leaving it returns there.
+    @Volatile
+    private var externalSession = false
+
+    private val _launchChoice = MutableStateFlow<LaunchChoice?>(null)
+    val launchChoice: StateFlow<LaunchChoice?> = _launchChoice.asStateFlow()
+
+    // Returning to the app that started the game: MainActivity finishes its task.
+    private val _leaveToFrontend = Channel<Unit>(Channel.CONFLATED)
+    val leaveToFrontend: Flow<Unit> = _leaveToFrontend.receiveAsFlow()
+
+    /**
+     * Waits (bounded) until a load finds what a load from the Library finds: the core's systems, listed once the
+     * assets are unpacked, and the stored settings in [settings] (which start from the defaults when the startup
+     * read timed out). False when the systems didn't come in time.
+     */
+    suspend fun awaitLaunchReady(): Boolean {
+        val ready = withTimeoutOrNull(LAUNCH_READY_TIMEOUT_MS) { _systems.first { it.isNotEmpty() } } != null
+        withTimeoutOrNull(SETTINGS_READY_TIMEOUT_MS) {
+            val stored = settingsStore.settings.first()
+            settings.first { it == stored }
+        }
+        return ready
+    }
+
+    /** Starts the game [request] asks for (a frontend's launch), or asks which system it is for. */
+    fun launchExternal(request: LaunchRequest) {
+        viewModelScope.launch {
+            if (!awaitLaunchReady()) {
+                Log.w("Phobos", "Launch: not ready in time for ${request.uri}")
+                return@launch
+            }
+            val native = _systems.value
+            val extensions = native.associateWith { PhobosCore.getSystemExtensions(it) }
+            val target = resolveLaunch(context, request, native, extensions, settings.value.systemRomPaths)
+            Log.i("Phobos", "Launch: ${request.uri} (system hint ${request.systemHint}) -> $target")
+            when (target) {
+                is LaunchTarget.Ready -> startExternal(target.system, target.rom)
+                is LaunchTarget.ChooseSystem -> _launchChoice.value = LaunchChoice(target.rom, target.candidates)
+                is LaunchTarget.Unreadable -> {
+                    Toast.makeText(
+                        context,
+                        "Phobos can't read ${target.name}. Add its folder to the system in Phobos (Add ROM Folder), then try again.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    if (!_isLoaded.value) _leaveToFrontend.trySend(Unit)
+                }
+            }
+        }
+    }
+
+    fun chooseLaunchSystem(system: String) {
+        val choice = _launchChoice.value ?: return
+        _launchChoice.value = null
+        startExternal(system, choice.rom)
+    }
+
+    /** The user closed the system choice: back to the app that asked, unless a game is running here. */
+    fun cancelLaunchChoice() {
+        _launchChoice.value = null
+        if (!_isLoaded.value) _leaveToFrontend.trySend(Unit)
+    }
+
+    private fun startExternal(system: String, rom: RomFile) {
+        externalSession = true
+        if (_isLoaded.value && currentSystemName == system && currentRomName == rom.name) {
+            // The game that's running (a frontend's resume): it carries on where it is.
+            if (!_emulatorScreenVisible.value) swapBackToGame()
+            return
+        }
+        startLoad(context, system, rom)
+        navigateTo("emulator/${Uri.encode(system)}/${Uri.encode(rom.name)}")
+    }
+
+    /** After quitting or a failed load: true when the game came from another app, which Phobos returns to. */
+    fun leaveGame(): Boolean {
+        if (!externalSession) return false
+        externalSession = false
+        _leaveToFrontend.trySend(Unit)
+        return true
+    }
 
     private val _perfStats = MutableStateFlow(PerformanceStats(0.0, 0.0, -1))
     val perfStats: StateFlow<PerformanceStats> = _perfStats
@@ -1740,7 +1898,31 @@ class MainViewModel(
     }
 
     fun loadRom(context: Context, systemName: String, rom: RomFile) {
+        externalSession = false
+        startLoad(context, systemName, rom)
+    }
+
+    /** Loads the running game's file again (the Reload hotkey), wherever it was started from. */
+    fun reloadGame(context: Context) {
+        val rom = loadedRom ?: return
+        val system = currentSystemName.takeIf { it.isNotEmpty() } ?: return
+        startLoad(context, system, rom)
+    }
+
+    private fun startLoad(context: Context, systemName: String, rom: RomFile) {
         viewModelScope.launch(Dispatchers.IO) {
+            CoreSession.lock.withLock {
+                // A loaded game is saved and unloaded first, as quitting it would, even one a replaced activity
+                // loaded; reloading the running game starts it over without saving it.
+                val reload = CoreSession.owner === sessionToken && CoreSession.system == systemName && CoreSession.rom == rom.name
+                closeSessionLocked(autoSave = !reload)
+                loadLocked(context, systemName, rom)
+            }
+        }
+    }
+
+    private suspend fun loadLocked(context: Context, systemName: String, rom: RomFile) {
+        withContext(Dispatchers.IO) {
             // For the merged "ZX Spectrum" entry, native detects 48K vs 128K by
             // CONTENT (TAP header block scan) — see PhobosRunner initialize().
             // effectiveSystem stays "ZX Spectrum"; native upgrades to
@@ -1932,6 +2114,10 @@ class MainViewModel(
                     PhobosCore.setRomFd(pfd.detachFd())
                     val success = PhobosCore.loadRom(effectiveSystem, rom.uri.toString(), rom.name)
                     if (success) {
+                        CoreSession.system = effectiveSystem
+                        CoreSession.rom = rom.name
+                        CoreSession.owner = sessionToken
+                        loadedRom = rom
                         _isLoaded.value = true
                         currentSystemName = effectiveSystem
                         currentRomName = rom.name
@@ -2007,10 +2193,12 @@ class MainViewModel(
         PhobosCore.setHomePath(root.absolutePath)
 
         // Default native saves dir — the configured Saves Path (if any) is
-        // resolved and pushed at load time in loadRom().
+        // resolved and pushed at load time in loadRom(). Left alone while a game
+        // a replaced activity loaded is still in the core: native writes its
+        // battery saves to the current path when it unloads.
         val savesDir = File(context.filesDir, "saves")
         if (!savesDir.exists()) savesDir.mkdirs()
-        PhobosCore.setSavesPath(savesDir.absolutePath)
+        if (CoreSession.system.isEmpty()) PhobosCore.setSavesPath(savesDir.absolutePath)
     }
 
     /**

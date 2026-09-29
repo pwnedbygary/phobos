@@ -63,6 +63,30 @@ object PhobosCore {
     external fun setFirmwarePath(path: String)
     external fun mapFirmwareFile(name: String, path: String)
     external fun setSurface(surface: Any?)
+
+    // The surface the core draws to. A game screen can replace another (a frontend starting a game over the
+    // running one), and the old screen can lose its surface after the new screen attached its own.
+    private var attachedSurface: Surface? = null
+
+    fun attachSurface(surface: Surface) {
+        attachedSurface = surface
+        setSurface(surface)
+    }
+
+    /** Whether the core draws to [surface], rather than to a screen's that replaced it. */
+    fun drawsTo(surface: Surface): Boolean = attachedSurface === surface
+
+    /** Sends [surface] again after a size change, if the core still draws to it. */
+    fun refreshSurface(surface: Surface) {
+        if (drawsTo(surface)) setSurface(surface)
+    }
+
+    fun detachSurface(surface: Surface) {
+        if (!drawsTo(surface)) return
+        attachedSurface = null
+        setSurface(null)
+    }
+
     external fun isFirstFrameRendered(): Boolean
     external fun getBlacklistedPipelineCount(): Int
     external fun getNewLogs(): List<LogEntry>

@@ -45,6 +45,8 @@ import kotlinx.coroutines.delay
  *
  * The landscape or portrait customization and opacity are chosen from the overlay's own size.
  * Touches that land on no control and lift quickly are reported through [onBackgroundTap].
+ * [ownsInput] turns false once another game's screen has replaced this overlay's; the overlay
+ * then leaves the shared input to the new one when it goes.
  */
 @Composable
 fun TouchControlsOverlay(
@@ -55,6 +57,7 @@ fun TouchControlsOverlay(
     onAction: (TouchAction) -> Unit,
     onBackgroundTap: () -> Unit,
     modifier: Modifier = Modifier,
+    ownsInput: () -> Boolean = { true },
 ) {
     val view = LocalView.current
     val density = LocalDensity.current
@@ -75,11 +78,12 @@ fun TouchControlsOverlay(
         engine.prefs = prefs
         engine.density = density.density
     }
+    val currentOwnsInput by rememberUpdatedState(ownsInput)
     DisposableEffect(engine) {
         onDispose {
             engine.releaseAll()
             engine.resetLatches()
-            sink.publish(engine)
+            if (currentOwnsInput()) sink.publish(engine)
             sink.flushPendingReleases()
         }
     }
