@@ -96,6 +96,11 @@ data class EmulatorSettings(
     val customDriverPath: String = "",
     val driverUpdateNotifications: Boolean = true,
     val driverUpdateCheckTime: Long = 0L,
+    /** Check GitHub for a newer Phobos at most once a day when it starts. */
+    val appUpdateAutoCheck: Boolean = true,
+    /** Offer the nightly build of every push to master, not only releases. */
+    val appUpdateNightly: Boolean = false,
+    val appUpdateCheckTime: Long = 0L,
     val ps1AnalogMode: Boolean = true,
     val n64ExpansionPak: Boolean = true,
     val n64DisableVIProcessing: Boolean = false,
@@ -203,6 +208,9 @@ class SettingsStore(private val context: Context) {
         val CUSTOM_DRIVER_PATH = stringPreferencesKey("custom_driver_path")
         val DRIVER_UPDATE_NOTIFICATIONS = booleanPreferencesKey("driver_update_notifications")
         val DRIVER_UPDATE_CHECK_TIME = longPreferencesKey("driver_update_check_time")
+        val APP_UPDATE_AUTO_CHECK = booleanPreferencesKey("app_update_auto_check")
+        val APP_UPDATE_NIGHTLY = booleanPreferencesKey("app_update_nightly")
+        val APP_UPDATE_CHECK_TIME = longPreferencesKey("app_update_check_time")
         val PS1_ANALOG_MODE = booleanPreferencesKey("ps1_analog_mode")
         val N64_EXPANSION_PAK = booleanPreferencesKey("n64_expansion_pak")
         val N64_DISABLE_VI_PROCESSING = booleanPreferencesKey("n64_disable_vi_processing")
@@ -394,6 +402,9 @@ class SettingsStore(private val context: Context) {
             customDriverPath = safeGetString(CUSTOM_DRIVER_PATH, ""),
             driverUpdateNotifications = safeGet(DRIVER_UPDATE_NOTIFICATIONS, true),
             driverUpdateCheckTime = safeGet(DRIVER_UPDATE_CHECK_TIME, 0L),
+            appUpdateAutoCheck = safeGet(APP_UPDATE_AUTO_CHECK, true),
+            appUpdateNightly = safeGet(APP_UPDATE_NIGHTLY, false),
+            appUpdateCheckTime = safeGet(APP_UPDATE_CHECK_TIME, 0L),
             ps1AnalogMode = safeGet(PS1_ANALOG_MODE, true),
             n64ExpansionPak = safeGet(N64_EXPANSION_PAK, true),
             n64DisableVIProcessing = safeGet(N64_DISABLE_VI_PROCESSING, false),
@@ -589,6 +600,9 @@ class SettingsStore(private val context: Context) {
     suspend fun setCustomDriverPath(path: String) = context.dataStore.edit { it[CUSTOM_DRIVER_PATH] = path }
     suspend fun setDriverUpdateNotifications(enabled: Boolean) = context.dataStore.edit { it[DRIVER_UPDATE_NOTIFICATIONS] = enabled }
     suspend fun setDriverUpdateCheckTime(time: Long) = context.dataStore.edit { it[DRIVER_UPDATE_CHECK_TIME] = time }
+    suspend fun setAppUpdateAutoCheck(enabled: Boolean) = context.dataStore.edit { it[APP_UPDATE_AUTO_CHECK] = enabled }
+    suspend fun setAppUpdateNightly(enabled: Boolean) = context.dataStore.edit { it[APP_UPDATE_NIGHTLY] = enabled }
+    suspend fun setAppUpdateCheckTime(time: Long) = context.dataStore.edit { it[APP_UPDATE_CHECK_TIME] = time }
     suspend fun setPs1AnalogMode(enabled: Boolean) = context.dataStore.edit { it[PS1_ANALOG_MODE] = enabled }
     suspend fun setOrientationMode(vertical: Boolean) = context.dataStore.edit { it[ORIENTATION_VERTICAL] = vertical }
     suspend fun setN64ExpansionPak(enabled: Boolean) = context.dataStore.edit { it[N64_EXPANSION_PAK] = enabled }

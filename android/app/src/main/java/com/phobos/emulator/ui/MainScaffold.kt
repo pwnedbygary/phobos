@@ -132,6 +132,13 @@ fun MainScaffold(viewModel: MainViewModel) {
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
     }
+    // And for a newer Phobos (at most once a day, when allowed).
+    LaunchedEffect(Unit) {
+        viewModel.checkForAppUpdate(automatic = true)
+        viewModel.appUpdateEvent.collect { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        }
+    }
 
     val route = currentDestination?.route
     val retrowave = LocalPhobosTheme.current.retrowave
@@ -309,7 +316,7 @@ fun MainScaffold(viewModel: MainViewModel) {
                             DriverManagerScreen(viewModel, onBack = { navController.popBackStack() })
                         }
                         composable("settings/about") {
-                            AboutScreen(onBack = { navController.popBackStack() })
+                            AboutScreen(viewModel, onBack = { navController.popBackStack() })
                         }
                         composable(
                             route = "system/{name}",

@@ -65,10 +65,14 @@ import kotlin.math.roundToInt
 
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.phobos.emulator.BuildConfig
+import com.phobos.emulator.util.AppUpdate
+import com.phobos.emulator.util.AppUpdater
 import com.phobos.emulator.util.DriverAsset
 import com.phobos.emulator.util.DriverDownloader
 import com.phobos.emulator.util.DriverSource
 import com.phobos.emulator.util.newerDriverRelease
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -85,6 +89,19 @@ private data class DriverSidecar(val owner: String, val repo: String, val tag: S
 
 /** A game another app asked for, waiting on the user to pick its system. */
 data class LaunchChoice(val rom: RomFile, val candidates: List<String>)
+
+/** Where an update of Phobos itself stands (Settings → About). */
+sealed interface AppUpdateState {
+    data object Idle : AppUpdateState
+    data object Checking : AppUpdateState
+    data class UpToDate(val checkedAt: Long) : AppUpdateState
+    data class Available(val update: AppUpdate) : AppUpdateState
+    /** [progress] is 0..1, or negative when the size isn't known. */
+    data class Downloading(val update: AppUpdate, val progress: Float) : AppUpdateState
+    /** Handed to Android's installer, which asks the user to confirm. */
+    data class Installing(val update: AppUpdate) : AppUpdateState
+    data class Failed(val message: String, val update: AppUpdate?) : AppUpdateState
+}
 
 /**
  * The game the native core holds. The core is one per process but MainViewModel is one per activity, and a
@@ -129,6 +146,8 @@ class MainViewModel(
         private const val LAUNCH_READY_TIMEOUT_MS = 15_000L
         // A settings change made meanwhile moves [settings] past the stored values it waits for.
         private const val SETTINGS_READY_TIMEOUT_MS = 2_000L
+        // "Once a day" with some slack, so a check around the same time each day isn't skipped.
+        private const val APP_UPDATE_INTERVAL_MS = 20 * 3_600_000L
 
         private const val N64_APPLIES_ON_RESET = "Takes effect after Reset System or reloading the game"
         private const val N64_APPLIES_ON_RELOAD = "Takes effect the next time the game is loaded"
@@ -1519,6 +1538,90 @@ class MainViewModel(
                 Log.w("Phobos", "Driver update check failed: ${e.message}")
             }
         }
+    }
+
+    private val _appUpdate = MutableStateFlow<AppUpdateState>(AppUpdateState.Idle)
+    val appUpdate: StateFlow<AppUpdateState> = _appUpdate.asStateFlow()
+    private val _appUpdateEvent = MutableSharedFlow<String>()
+    val appUpdateEvent = _appUpdateEvent.asSharedFlow()
+    private var appUpdateJob: Job? = null
+
+    init {
+        viewModelScope.launch {
+            AppUpdater.installFailures.collect { message ->
+                _appUpdate.update { if (it is AppUpdateState.Installing) AppUpdateState.Failed(message, it.update) else it }
+            }
+        }
+    }
+
+    /**
+     * Checks GitHub for a newer Phobos: from Settings → About, or ([automatic]) when Phobos starts, at most
+     * once a day when allowed, saying so in a toast unless a game is on screen. Not while an update is being
+     * checked, downloaded or confirmed in Android's installer.
+     */
+    fun checkForAppUpdate(automatic: Boolean) {
+        if (appUpdateJob?.isActive == true || _appUpdate.value is AppUpdateState.Installing) return
+        appUpdateJob = viewModelScope.launch(Dispatchers.IO) {
+            // At launch [settings] can still be the defaults, so the stored values decide.
+            val current = if (automatic) settingsStore.settings.first() else settings.value
+            if (automatic) {
+                val now = System.currentTimeMillis()
+                if (!current.appUpdateAutoCheck || now - current.appUpdateCheckTime < APP_UPDATE_INTERVAL_MS) return@launch
+                settingsStore.setAppUpdateCheckTime(now)
+            }
+            _appUpdate.value = AppUpdateState.Checking
+            _appUpdate.value = try {
+                val update = AppUpdater.check(BuildConfig.VERSION_CODE.toLong(), BuildConfig.FLAVOR, current.appUpdateNightly)
+                if (update == null) {
+                    AppUpdateState.UpToDate(System.currentTimeMillis())
+                } else {
+                    if (automatic && !_emulatorScreenVisible.value) {
+                        _appUpdateEvent.emit("Phobos ${update.manifest.versionName} is available in Settings → About")
+                    }
+                    AppUpdateState.Available(update)
+                }
+            } catch (e: Exception) {
+                Log.w("Phobos", "Update check failed: ${e.message}")
+                if (automatic) AppUpdateState.Idle else AppUpdateState.Failed(e.message ?: "The check failed.", null)
+            }
+        }
+    }
+
+    /** Downloads the update found and hands it to Android's installer. */
+    fun installAppUpdate() {
+        val update = when (val state = _appUpdate.value) {
+            is AppUpdateState.Available -> state.update
+            is AppUpdateState.Failed -> state.update
+            else -> null
+        } ?: return
+        if (appUpdateJob?.isActive == true) return
+        appUpdateJob = viewModelScope.launch(Dispatchers.IO) {
+            _appUpdate.value = AppUpdateState.Downloading(update, 0f)
+            try {
+                var shownPercent = Int.MIN_VALUE
+                val apk = AppUpdater.download(context, update, File(context.cacheDir, "updates")) { progress ->
+                    val percent = (progress * 100).toInt()
+                    if (percent != shownPercent) {
+                        shownPercent = percent
+                        _appUpdate.value = AppUpdateState.Downloading(update, progress)
+                    }
+                }
+                _appUpdate.value = AppUpdateState.Installing(update)
+                AppUpdater.install(context, apk)
+            } catch (e: Exception) {
+                Log.w("Phobos", "Update failed: ${e.message}")
+                _appUpdate.value = AppUpdateState.Failed(e.message ?: "The update failed.", update)
+            }
+        }
+    }
+
+    fun setAppUpdateAutoCheck(enabled: Boolean) = viewModelScope.launch { settingsStore.setAppUpdateAutoCheck(enabled) }
+
+    /** Switches the channel, then checks again (see [checkForAppUpdate] for when it doesn't). */
+    fun setAppUpdateNightly(enabled: Boolean) = viewModelScope.launch {
+        settingsStore.setAppUpdateNightly(enabled)
+        withTimeoutOrNull(SETTINGS_READY_TIMEOUT_MS) { settings.first { it.appUpdateNightly == enabled } } ?: return@launch
+        checkForAppUpdate(automatic = false)
     }
 
     private fun writeDriverSourceSidecar(soPath: String, source: DriverSource, tag: String) {

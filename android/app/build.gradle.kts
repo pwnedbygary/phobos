@@ -3,6 +3,19 @@ plugins {
     alias(libs.plugins.kotlinCompose)
 }
 
+fun git(vararg args: String): String? = runCatching {
+    providers.exec {
+        commandLine("git", *args)
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().takeIf { it.isNotEmpty() }
+}.getOrNull()
+
+// Every build is numbered from git history, locally and on CI alike: the code is 100000 plus the commit
+// count, above the codes the old tag mapping gave (v1.1.0 is 10100), so an update is never a downgrade;
+// the name is the tag on a tagged commit and "<tag>-<commits since>-g<hash>" otherwise.
+val gitVersionCode = git("rev-list", "--count", "HEAD")?.toIntOrNull()?.let { 100_000 + it } ?: 1
+val gitVersionName = git("describe", "--tags", "--match", "v[0-9]*")?.removePrefix("v") ?: "0.0.0-dev"
+
 android {
     namespace = "com.phobos.emulator"
     compileSdk = 37
@@ -12,11 +25,9 @@ android {
         minSdk = 26
         targetSdk = 37
 
-        // Version comes from the GitHub Actions tag when present (see
-        // .github/workflows/android.yml: tag v1.2.3 -> versionName 1.2.3,
-        // versionCode 10203). Local builds / branch builds fall back to these.
-        versionCode = (findProperty("versionCode") as String? ?: "1").toInt()
-        versionName = findProperty("versionName") as String? ?: "1.0"
+        // -PversionCode / -PversionName override the numbering from git history.
+        versionCode = (findProperty("versionCode") as String?)?.toInt() ?: gitVersionCode
+        versionName = findProperty("versionName") as String? ?: gitVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -142,6 +153,8 @@ dependencies {
     implementation(libs.androidx.documentfile)
 
     testImplementation(libs.junit)
+    // org.json's real implementation; android.jar only has throwing stubs off the device.
+    testImplementation(libs.org.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -38,6 +38,7 @@ fun SettingsScreen(
     onNavigateToAbout: () -> Unit
 ) {
     val themeName = LocalPhobosTheme.current.theme.name
+    val appUpdate by viewModel.appUpdate.collectAsState()
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = pageContentPadding(),
@@ -67,7 +68,9 @@ fun SettingsScreen(
         }
         item {
             SettingsCategory("About") {
-                SettingsClickableItem(title = "About", description = "Version, licenses, and info", onClick = onNavigateToAbout, icon = Icons.Rounded.Info)
+                val aboutDescription = (appUpdate as? AppUpdateState.Available)
+                    ?.let { "Update available: Phobos ${it.update.manifest.versionName}" } ?: "Version, updates, and info"
+                SettingsClickableItem(title = "About", description = aboutDescription, onClick = onNavigateToAbout, icon = Icons.Rounded.Info)
             }
         }
     }
