@@ -7,12 +7,12 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.material3.ColorScheme
@@ -20,7 +20,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
@@ -206,13 +205,60 @@ val PixelShapes = Shapes(
 /** Stands in for Material's fully rounded pill, which [Shapes] doesn't cover, with pixel art effects. */
 val PixelPillShape = PixelShape(2.dp, 2)
 
-/**
- * The pill of buttons, value pills and segmented buttons: [CircleShape], which is what Material's
- * buttons use, or [PixelPillShape] with pixel art effects.
- */
-@Composable
-@ReadOnlyComposable
-fun pillShape(): CornerBasedShape = if (LocalPhobosTheme.current.pixel) PixelPillShape else CircleShape
+/** Pixel art, the look of the app icon. */
+object PixelUi : SolidUi() {
+    override val typography: Typography get() = PixelTypography
+    override val shapes: Shapes get() = PixelShapes
+    override val pill: CornerBasedShape get() = PixelPillShape
+    override val capitalHeaders: Boolean get() = true
+
+    @Composable
+    override fun titleStyle(base: TextStyle) = base.pixelShadow(pixelShadow(LocalPhobosTheme.current.isDark))
+
+    @Composable
+    override fun sectionStyle(base: TextStyle) = PixelSectionHeading.pixelShadow(pixelShadow(LocalPhobosTheme.current.isDark))
+
+    /** Takes the theme's final colors, not the cross-fade: the scene is rendered again whenever its colors change. */
+    @Composable
+    override fun Backdrop(modifier: Modifier) {
+        val theme = LocalPhobosTheme.current
+        PixelBackdrop(theme.scheme, theme.isDark, modifier)
+    }
+
+    @Composable
+    override fun plate() = Modifier.pixelPlate(MaterialTheme.colorScheme.background)
+
+    @Composable
+    override fun panel(shape: Shape, fill: Color) =
+        Modifier.pixelPanel(shape, fill, pixelBorder(MaterialTheme.colorScheme), pixelShadow(LocalPhobosTheme.current.isDark))
+
+    @Composable
+    override fun edge(shape: Shape) =
+        Modifier.pixelEdge(shape, pixelBorder(MaterialTheme.colorScheme), pixelShadow(LocalPhobosTheme.current.isDark))
+
+    @Composable
+    override fun menuBorder() = BorderStroke(PANEL_BORDER, pixelBorder(MaterialTheme.colorScheme))
+
+    override val dockShape: Shape = PixelShape(4.dp, 3)
+    override val dockTabShape: Shape = PixelShape(3.dp, 2)
+    override fun DrawScope.drawDockIndicator(size: Size, alpha: Float, colors: ColorScheme) =
+        drawOutline(PixelPillShape.createOutline(size, layoutDirection, this), colors.primaryContainer, alpha = alpha)
+
+    @Composable
+    override fun dockIconColor() = MaterialTheme.colorScheme.onPrimaryContainer
+
+    @Composable
+    override fun Switch(checked: Boolean) = PixelSwitch(checked)
+
+    @Composable
+    override fun SliderThumb() = PixelSliderThumb()
+
+    @Composable
+    override fun SliderTrack(fraction: Float) = PixelSliderTrack(fraction)
+
+    @Composable
+    override fun ProgressBar(progress: (() -> Float)?, modifier: Modifier) = PixelProgressBar(progress, modifier)
+}
 
 /** The pixel backdrop's colors for [scheme]: light themes get a paler, quieter scene. */
 internal fun pixelSceneColors(scheme: ColorScheme, isDark: Boolean): PixelSceneColors {

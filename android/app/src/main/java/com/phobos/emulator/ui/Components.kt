@@ -7,7 +7,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -46,17 +45,7 @@ import com.phobos.emulator.ui.theme.glassPanel
 import com.phobos.emulator.ui.theme.neon
 import com.phobos.emulator.ui.theme.sunsetPlate
 import com.phobos.emulator.ui.theme.neonGlow
-import com.phobos.emulator.ui.theme.PixelProgressBar
-import com.phobos.emulator.ui.theme.PixelSectionHeading
-import com.phobos.emulator.ui.theme.PixelSliderThumb
-import com.phobos.emulator.ui.theme.PixelSliderTrack
-import com.phobos.emulator.ui.theme.PixelSwitch
 import com.phobos.emulator.ui.theme.pillShape
-import com.phobos.emulator.ui.theme.pixelBorder
-import com.phobos.emulator.ui.theme.pixelEdge
-import com.phobos.emulator.ui.theme.pixelPanel
-import com.phobos.emulator.ui.theme.pixelPlate
-import com.phobos.emulator.ui.theme.pixelShadow
 
 /** A titled group of settings rows on a rounded card. */
 @Composable
@@ -77,25 +66,29 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Bool
     val primary = scheme.primary
     val theme = LocalPhobosTheme.current
     val retrowave = theme.retrowave
+    val solid = theme.solid
     Row(
         modifier = modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.weight(1f)) {
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = if (retrowave || theme.pixel) title.uppercase() else title,
+                text = if (retrowave || solid?.capitalHeaders == true) title.uppercase() else title,
                 style = when {
                     retrowave -> MaterialTheme.typography.labelLarge.neon(primary)
-                    theme.pixel -> PixelSectionHeading.pixelShadow(pixelShadow(theme.isDark))
+                    solid != null -> solid.sectionStyle(MaterialTheme.typography.titleSmall)
                     else -> MaterialTheme.typography.titleSmall
                 },
                 color = primary,
                 modifier = when {
                     !onBackdrop -> Modifier
-                    theme.pixel -> Modifier.pixelPlate(scheme.background)
+                    solid != null -> solid.plate()
                     else -> Modifier.sunsetPlate(scheme.background, theme.glass.backdropPlateAlpha)
                 },
             )
+            solid?.sectionRule()?.let { rule ->
+                Spacer(Modifier.padding(start = 12.dp).weight(1f).height(8.dp).then(rule))
+            }
         }
         trailing?.invoke()
     }
@@ -116,7 +109,7 @@ fun BackdropText(
     val background = MaterialTheme.colorScheme.background
     Text(
         text,
-        modifier = modifier.then(if (theme.pixel) Modifier.pixelPlate(background) else Modifier.sunsetPlate(background, theme.glass.backdropPlateAlpha)),
+        modifier = modifier.then(theme.solid?.plate() ?: Modifier.sunsetPlate(background, theme.glass.backdropPlateAlpha)),
         style = style,
         color = color,
     )
@@ -142,8 +135,9 @@ fun ThemedCard(
     val theme = LocalPhobosTheme.current
     val glass = theme.glass
     val glassOff = glass.level == GlassEffects.OFF
-    val panel = if (theme.pixel) {
-        Modifier.pixelPanel(shape, scheme.surfaceContainer, pixelBorder(scheme), pixelShadow(theme.isDark))
+    val solid = theme.solid
+    val panel = if (solid != null) {
+        solid.panel(shape, scheme.surfaceContainer)
     } else {
         Modifier.glassPanel(
             shape = shape,
@@ -160,7 +154,7 @@ fun ThemedCard(
     if (onClick != null) {
         val interactionSource = remember { MutableInteractionSource() }
         val pressed by interactionSource.collectIsPressedAsState()
-        val scale by animateFloatAsState(if (pressed && (theme.pixel || !glassOff)) 0.97f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "cardPress")
+        val scale by animateFloatAsState(if (pressed && (solid != null || !glassOff)) 0.97f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "cardPress")
         Surface(
             onClick = onClick,
             modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale }.then(edge).then(panel),
@@ -224,8 +218,9 @@ fun SettingsSwitchItem(title: String, description: String, checked: Boolean, onC
         headlineContent = { Text(title) },
         supportingContent = if (description.isNotEmpty()) { { Text(description) } } else null,
         trailingContent = {
-            if (LocalPhobosTheme.current.pixel) {
-                PixelSwitch(checked)
+            val solid = LocalPhobosTheme.current.solid
+            if (solid != null) {
+                solid.Switch(checked)
             } else {
                 Switch(
                     checked = checked,
@@ -307,16 +302,17 @@ fun SettingsSliderItem(
             Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
             ValuePill(format(local))
         }
-        if (LocalPhobosTheme.current.pixel) {
+        val solid = LocalPhobosTheme.current.solid
+        if (solid != null) {
             Slider(
                 value = local,
                 onValueChange = { local = it },
                 enabled = enabled,
                 onValueChangeFinished = { onCommit(local) },
-                thumb = { PixelSliderThumb() },
+                thumb = { solid.SliderThumb() },
                 track = { state ->
                     val span = state.valueRange.endInclusive - state.valueRange.start
-                    PixelSliderTrack(if (span > 0f) (state.value - state.valueRange.start) / span else 0f)
+                    solid.SliderTrack(if (span > 0f) (state.value - state.valueRange.start) / span else 0f)
                 },
                 valueRange = range,
             )
@@ -356,23 +352,24 @@ fun PhobosAlertDialog(
     )
 }
 
-/** The edge of a dialog panel in [shape]: a pixel panel's hard border and shadow with pixel art effects. */
+/** The edge of a dialog panel in [shape]: the solid style's edge, such as a pixel panel's border and shadow. */
 @Composable
 fun dialogEdge(shape: Shape): Modifier {
     val theme = LocalPhobosTheme.current
-    return if (theme.pixel) Modifier.pixelEdge(shape, pixelBorder(theme.scheme), pixelShadow(theme.isDark)) else Modifier
+    return theme.solid?.edge(shape) ?: Modifier
 }
 
-/** Material's dropdown menu; with pixel art effects, a hard border in place of its soft shadow. */
+/** Material's dropdown menu; in a solid style, its border in place of the menu's soft shadow. */
 @Composable
 fun PhobosDropdownMenu(expanded: Boolean, onDismissRequest: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     val theme = LocalPhobosTheme.current
-    if (theme.pixel) {
+    val solid = theme.solid
+    if (solid != null) {
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = onDismissRequest,
             shadowElevation = 0.dp,
-            border = BorderStroke(2.dp, pixelBorder(theme.scheme)),
+            border = solid.menuBorder(),
             content = content,
         )
     } else {
@@ -380,11 +377,12 @@ fun PhobosDropdownMenu(expanded: Boolean, onDismissRequest: () -> Unit, content:
     }
 }
 
-/** Linear progress, indeterminate while [progress] is null; blocks in a bordered bar with pixel art effects. */
+/** Linear progress, indeterminate while [progress] is null; the solid style's own bar in a solid style. */
 @Composable
 fun ProgressBar(progress: (() -> Float)?, modifier: Modifier = Modifier) {
+    val solid = LocalPhobosTheme.current.solid
     when {
-        LocalPhobosTheme.current.pixel -> PixelProgressBar(progress, modifier)
+        solid != null -> solid.ProgressBar(progress, modifier)
         progress != null -> LinearProgressIndicator(progress = progress, modifier = modifier)
         else -> LinearProgressIndicator(modifier = modifier)
     }

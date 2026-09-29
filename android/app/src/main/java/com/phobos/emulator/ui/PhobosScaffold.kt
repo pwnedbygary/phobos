@@ -2,14 +2,18 @@ package com.phobos.emulator.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -19,16 +23,18 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neon
 import com.phobos.emulator.ui.theme.neonBar
-import com.phobos.emulator.ui.theme.pixelPlate
-import com.phobos.emulator.ui.theme.pixelShadow
+import com.phobos.emulator.ui.theme.rememberCursorBlink
 import com.phobos.emulator.ui.theme.sunsetPlate
 
 /**
@@ -82,18 +88,24 @@ fun PhobosTopBar(
     val scheme = MaterialTheme.colorScheme
     val theme = LocalPhobosTheme.current
     val retrowave = theme.retrowave
+    val solid = theme.solid
     TopAppBar(
         title = {
-            Text(
-                text = if (retrowave || theme.pixel) title.uppercase() else title,
-                style = when {
-                    retrowave -> MaterialTheme.typography.titleLarge.neon(scheme.primary)
-                    theme.pixel -> MaterialTheme.typography.titleLarge.pixelShadow(pixelShadow(theme.isDark))
-                    else -> MaterialTheme.typography.titleLarge
-                },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            val style = when {
+                retrowave -> MaterialTheme.typography.titleLarge.neon(scheme.primary)
+                solid != null -> solid.titleStyle(MaterialTheme.typography.titleLarge)
+                else -> MaterialTheme.typography.titleLarge
+            }
+            Row {
+                Text(
+                    text = if (retrowave || solid?.capitalHeaders == true) title.uppercase() else title,
+                    style = style,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
+                )
+                if (solid?.titleCursor == true) TitleCursor(style, LocalContentColor.current)
+            }
         },
         navigationIcon = {
             if (onBack != null) {
@@ -106,7 +118,7 @@ fun PhobosTopBar(
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = Color.Transparent,
             scrolledContainerColor = if (retrowave) scheme.surfaceContainer.copy(alpha = 0.92f) else scheme.surfaceContainer,
-            titleContentColor = if (retrowave) scheme.primary else scheme.onSurface,
+            titleContentColor = if (retrowave) scheme.primary else solid?.titleColor(onPanel = true) ?: scheme.onSurface,
             navigationIconContentColor = scheme.onSurface,
             actionIconContentColor = scheme.onSurfaceVariant,
         ),
@@ -121,20 +133,42 @@ fun ScreenHeader(title: String, subtitle: String? = null, modifier: Modifier = M
     val scheme = MaterialTheme.colorScheme
     val theme = LocalPhobosTheme.current
     val retrowave = theme.retrowave
-    val plate = if (theme.pixel) Modifier.pixelPlate(scheme.background) else Modifier.sunsetPlate(scheme.background, theme.glass.backdropPlateAlpha)
+    val solid = theme.solid
+    val plate = solid?.plate() ?: Modifier.sunsetPlate(scheme.background, theme.glass.backdropPlateAlpha)
+    val style = when {
+        retrowave -> MaterialTheme.typography.headlineMedium.neon(scheme.primary)
+        solid != null -> solid.titleStyle(MaterialTheme.typography.headlineMedium)
+        else -> MaterialTheme.typography.headlineMedium
+    }
+    val color = if (retrowave) scheme.primary else solid?.titleColor(onPanel = false) ?: scheme.onBackground
     Column(modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, bottom = 8.dp)) {
-        Text(
-            text = if (retrowave || theme.pixel) title.uppercase() else title,
-            style = when {
-                retrowave -> MaterialTheme.typography.headlineMedium.neon(scheme.primary)
-                theme.pixel -> MaterialTheme.typography.headlineMedium.pixelShadow(pixelShadow(theme.isDark))
-                else -> MaterialTheme.typography.headlineMedium
-            },
-            color = if (retrowave) scheme.primary else scheme.onBackground,
-            modifier = plate,
-        )
+        Row(plate) {
+            Text(
+                text = if (retrowave || solid?.capitalHeaders == true) title.uppercase() else title,
+                style = style,
+                color = color,
+                modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
+            )
+            if (solid?.titleCursor == true) TitleCursor(style, color)
+        }
         if (subtitle != null) {
             Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant, modifier = plate)
         }
     }
+}
+
+/** A terminal's block cursor after a title in [style], blinking; hidden from accessibility services. */
+@Composable
+private fun RowScope.TitleCursor(style: TextStyle, color: Color) {
+    val on = rememberCursorBlink(enabled = true)
+    val density = LocalDensity.current
+    val width = with(density) { (style.fontSize * 0.5f).toDp() }
+    val height = with(density) { (style.fontSize * 0.62f).toDp() }
+    Spacer(
+        Modifier
+            .padding(start = width / 3)
+            .size(width, height)
+            .alignBy { it.measuredHeight }
+            .drawBehind { if (on.value) drawRect(color) },
+    )
 }

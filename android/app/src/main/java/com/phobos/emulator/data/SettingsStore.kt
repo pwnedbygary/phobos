@@ -36,6 +36,7 @@ enum class UiEffects(val label: String, val description: String) {
     NONE("None", "The theme on its own, with the glass effects below"),
     RETROWAVE("Retrowave", "Synthwave sunset backdrop, neon glow on cards and selections, and glowing bars. Best with Synthwave '84"),
     PIXEL_ART("Pixel art", "Pixel fonts, stepped corners, solid pixel panels and a pixel starfield, like the app icon"),
+    CRT("CRT terminal", "Terminal type with a phosphor glow, scanlines, boxed windows and a blinking cursor"),
 }
 
 enum class RegionPreference(val label: String) {

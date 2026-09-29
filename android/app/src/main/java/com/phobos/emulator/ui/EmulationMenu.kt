@@ -77,9 +77,6 @@ import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
 import com.phobos.emulator.ui.theme.pillShape
-import com.phobos.emulator.ui.theme.pixelBorder
-import com.phobos.emulator.ui.theme.pixelEdge
-import com.phobos.emulator.ui.theme.pixelShadow
 import com.phobos.emulator.util.N64SaveFormat
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -118,8 +115,7 @@ fun EmulationMenu(
                 .then(
                     when {
                         LocalPhobosTheme.current.retrowave -> Modifier.neonGlow(MaterialTheme.colorScheme.primary, menuShape, 0.8f)
-                        LocalPhobosTheme.current.pixel -> Modifier.pixelEdge(menuShape, pixelBorder(MaterialTheme.colorScheme), pixelShadow(LocalPhobosTheme.current.isDark))
-                        else -> Modifier
+                        else -> dialogEdge(menuShape)
                     },
                 ),
             shape = menuShape,

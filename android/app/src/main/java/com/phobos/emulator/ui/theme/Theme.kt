@@ -49,8 +49,11 @@ data class PhobosThemeInfo(
 ) {
     val retrowave: Boolean get() = effects == UiEffects.RETROWAVE
 
-    /** The pixel font, stepped corners, pixel panels and the pixel backdrop. */
-    val pixel: Boolean get() = effects == UiEffects.PIXEL_ART
+    /** The look of [effects]. */
+    val style: UiStyle get() = effects.style
+
+    /** [style] when it draws solid panels, headers and controls of its own; null for the glass look. */
+    val solid: SolidUi? get() = style as? SolidUi
 }
 
 val LocalPhobosTheme = compositionLocalOf {
@@ -72,7 +75,6 @@ fun PhobosTheme(
     content: @Composable () -> Unit,
 ) {
     val retrowave = effects == UiEffects.RETROWAVE
-    val pixel = effects == UiEffects.PIXEL_ART
     val resolved = ThemeRegistry.resolve(themeId, themeMode, followSystem, isSystemInDarkTheme())
     val context = LocalContext.current
     val useDynamic = resolved.theme.dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -89,8 +91,8 @@ fun PhobosTheme(
     CompositionLocalProvider(LocalPhobosTheme provides info) {
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = if (pixel) PixelTypography else PhobosTypography,
-            shapes = if (pixel) PixelShapes else PhobosShapes,
+            typography = effects.style.typography,
+            shapes = effects.style.shapes,
             content = content,
         )
     }

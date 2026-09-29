@@ -20,7 +20,9 @@ import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.ThemeGroup
 import com.phobos.emulator.ui.theme.ThemeRegistry
+import com.phobos.emulator.ui.theme.SolidUi
 import com.phobos.emulator.ui.theme.pillShape
+import com.phobos.emulator.ui.theme.style
 
 @Composable
 fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
@@ -51,14 +53,15 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         label = { it.label },
                         onSelect = { viewModel.setUiEffects(it) },
                     )
+                    val solidStyle = settings.uiEffects.style is SolidUi
                     SettingsDropdownItem(
                         title = "Glass effects",
-                        description = if (settings.uiEffects == UiEffects.PIXEL_ART) "Pixel art uses solid panels." else settings.glassEffects.description,
+                        description = if (solidStyle) "${settings.uiEffects.label} uses solid panels." else settings.glassEffects.description,
                         current = settings.glassEffects,
                         options = GlassEffects.entries,
                         label = { it.label },
                         onSelect = { viewModel.setGlassEffects(it) },
-                        enabled = settings.uiEffects != UiEffects.PIXEL_ART,
+                        enabled = !solidStyle,
                     )
                 }
             }

@@ -29,8 +29,8 @@ import com.phobos.emulator.ui.theme.LocalPhobosTheme
 fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     val systems by viewModel.visibleSystems.collectAsState()
     val theme = LocalPhobosTheme.current
-    // Pixel art's tiles are solid panels, whatever the glass level.
-    val tileAlpha = if (theme.pixel) 1f else theme.glass.panelAlpha
+    // A solid style's tiles are opaque, whatever the glass level.
+    val tileAlpha = if (theme.solid != null) 1f else theme.glass.panelAlpha
     val artPalette = remember(theme.scheme, theme.success, theme.warning, tileAlpha) {
         val tile = theme.scheme.surfaceContainer.copy(alpha = tileAlpha).compositeOver(theme.scheme.background)
         ConsoleArtPalette(theme.scheme, theme.success, theme.warning, tile)
