@@ -209,6 +209,13 @@ LaserActive, Pocket Challenge V2), melonDS for the DS (suggested), arcade boards
 and computers. The user decided both open questions on 2026-09-29: the app moves to
 GPL-3.0-or-later when the first GPL core lands, and PPSSPP ships as upstream does, with the PSP's
 decryption keys in its source (an exception to the rule against publishing keys, for PPSSPP only).
+Branch `docs/perf-scan-2026-09`, stacked on it, records a read-only performance scan of every core
+([audit](performance-audit.md#2026-09-29-scan-of-every-core-accuracy-preserving)): ranked,
+accuracy-preserving opportunities (headroom per core first, then a PS1 recompiler, ZX key polling,
+the 32X's SH-2 recompiler, cothread switches, 68000/ARM7TDMI dispatch, the PC Engine VDC, the GBA
+timers) and four places where Phobos follows ares's speed-leaning defaults (SNES scanline PPU,
+SNES coprocessor sync, PC Engine PSG output rate, GBA/WonderSwan pixel accuracy), which only the
+user can change.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

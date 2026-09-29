@@ -941,6 +941,8 @@ runs went in the table's order without a pause, so later runs started warmer, wh
 
 ### Next (not implemented)
 
+- The [2026-09-29 scan of every core](#2026-09-29-scan-of-every-core-accuracy-preserving) below
+  covers the other systems.
 - RSP vector instructions: emit the other frequent ones (VMULF, VMACF, VADD, VSUB, VMOV, VGE, VLT,
   VMRG) inline; the rest are still C++ helpers called from the RSP JIT.
 - The screen thread holds `vulkan.mutex` while it waits for the scanout fence
@@ -951,3 +953,125 @@ runs went in the table's order without a pause, so later runs started warmer, wh
 - The UI theme system ([PR #9](https://github.com/pwnedbygary/phobos/pull/9)) and the
   MangoHud-style performance overlay ([PR #5](https://github.com/pwnedbygary/phobos/pull/5))
   are done.
+
+## 2026-09-29 scan of every core (accuracy-preserving)
+
+At the user's request, every core and the shared code were scanned for performance that can be
+won back without changing emulated behavior. Five read-only scans covered the Android host
+pipeline, ares's scheduler and shared chips, the 8- and 16-bit cores, the PS1 core and the build;
+the claims below were then checked against the source, and several of the scans' impact
+estimates were revised down on inspection. Estimates come from reading code, not from profiles:
+no non-N64 core has been profiled yet. Nothing was changed.
+
+### Where Phobos trades accuracy for speed today
+
+These follow upstream ares's defaults and are not Phobos bugs, but they bear on the
+accuracy-first goal:
+
+| Where | What | Source |
+|---|---|---|
+| SNES video | The scanline renderer (`ppu-performance`) instead of the dot-based PPU | `PhobosRunner.cpp` sets `ppu.implementation = &ppuPerformanceImpl` for every Super Famicom load |
+| SNES coprocessors | The SA-1, SuperFX, DSPs and the other cartridge chips synchronize with the S-CPU once per scanline and on bus access, not after every CPU step | `PROFILE_PERFORMANCE` in the root `CMakeLists.txt`; `ares/sfc/cpu/timing.cpp` |
+| PC Engine audio | The PSG's output is taken every 64 clocks (about 56 kHz) instead of every clock; its internal state still advances exactly | `PROFILE_PERFORMANCE`; `ares/pce/psg/psg.cpp` |
+| GBA video, WonderSwan video and audio | ares's Pixel Accuracy option is left off, so they render by scanline | `ares/gba/system/system.cpp`, `ares/ws/system/system.cpp`; Phobos never sets the option |
+
+The Mega Drive and PC Engine keep ares's accurate VDPs: the Mega Drive's performance VDP is
+compiled out (`#if 0`), and the PC Engine sets `vdp.setAccurate(true)`. Each accurate variant
+costs CPU time (the dot-based SNES PPU synchronizes with the CPU every two clocks during active
+display), by an amount not yet measured on the RP6. Switching is the user's decision; the work
+below is what would pay for it.
+
+### Ranked opportunities
+
+Ranked by the benefit where a core is short of speed, then by how many systems gain. All keep
+emulated behavior identical.
+
+1. **Measure each core's headroom first.** Uncapped fast-forward speed per system on the RP6 shows
+   which cores come near their frame budget; a core already running at several times full speed
+   gains only battery life from optimization. The four accurate variants above belong in the
+   same measurement.
+2. **A PS1 recompiler** ([Task 63](implementation-plan.md#open-task-inventory-and-disposition)).
+   `ares/ps1` has only the interpreter. An exact sljit recompiler with the N64's block cache,
+   invalidation on writes, block linking and cycle accounting would be the largest single CPU
+   gain for the PS1. Large.
+3. **ZX Spectrum (and MSX) key polling.** `ULA::in` polls one keyboard row for each selected row
+   bit on every read of port `0xFE` (`ares/spec/ula/ula.cpp`), and each key poll in
+   `PhobosRunner.cpp`'s `input()` takes `inputCacheMutex`, a map lookup, `keyboardMutex` and two
+   `std::set<string>` lookups. The ROM's tape loader reads that port in a tight loop, about
+   59,000 times a second at normal speed with five key polls each: an estimated 5–10% of a core at
+   1×, rising with fast tape loading. A lock-free snapshot of the pressed keys, updated when the
+   on-screen keyboard or the control scheme changes, removes it. The MSX polls a column of eight
+   keys per keyboard read, far less often. Small to medium.
+4. **The 32X's SH-2 recompiler.** ares has one, but it stays off unless
+   `MegaDrive::option("Recompiler", "true")` is called (`ares/md/system/system.cpp`); turn it on
+   when the 32X is exposed ([new systems](new-systems.md#systems-ares-already-has)). Small.
+5. **Cothread switches.** The arm64 build uses `libco/aarch64.c`, whose `co_switch` goes through a
+   function pointer (`co_swap`). The Game Boy, Master System, NES, Mega Drive and PC Engine
+   synchronize every cycle or dot, so switches run in the millions a second there; a direct call
+   and a leaner `Thread::synchronize` fast path help every core without changing when anything
+   synchronizes. Small; count the switches first.
+6. **Instruction dispatch in the 68000 and ARM7TDMI.** Both keep `std::function` tables
+   (`instructionTable[65536]` in the 68000; the ARM and Thumb tables the GBA runs), so every
+   instruction pays a type-erased call. Plain function or member pointers carrying the operands
+   the lambdas capture would do the same work for less. Large, since bind matrices generate the
+   tables.
+7. **The PC Engine's accurate VDC.** Each background dot re-reads the tile's attributes and two
+   pattern words from VRAM, and each sprite dot re-reads pattern words for every object on the
+   line (`ares/pce/vdp/background.cpp`, `sprite.cpp`). Latching per 8-pixel tile and building a
+   sprite line buffer when the line starts would remove most of that traffic, but the output must
+   stay identical to the current code, mid-line VRAM writes included, so it needs golden-frame
+   tests. Medium.
+8. **The GBA's CPU step.** Every clock runs the IRQ synchronizer and all four timers with their
+   latch checks (`ares/gba/cpu/cpu.cpp`), even with every timer disabled. Skipping disabled timers
+   in bulk, with cascades and latch timing unchanged, needs tests. Medium.
+9. **Smaller PS1 items.** `DMA::active()` scans the channels on every call and `CPU::waitDMA()`
+   calls it from the bus timing (a running count makes it constant-time); rectangles and sprites
+   are drawn as a quadrilateral of two triangles (an axis-aligned path giving identical pixels);
+   NEON for the pixel, gaussian, reverb and blitter loops with the same integer math; and MDEC's
+   float IDCT and color conversion (integer versions only if they match the current output bit
+   for bit). Small to medium each.
+10. **Build flags.** `-mtune=cortex-x3` for the modern flavor (scheduling only; the instruction
+    set stays the flavor's), `-fno-plt`, and profile-guided optimization, which is large to set
+    up (training runs on the device) but helps every core. Dropping the stack protector and
+    `_FORTIFY_SOURCE` from release builds would be a security trade-off, not an accuracy one.
+    Already right: `-O3` with ThinLTO at `-O3`, hidden visibility, static libc++, `NDEBUG`, the
+    aarch64 libco backend and stripped libraries; no fast-math, since the PS1 GPU and the N64 FPU
+    depend on exact float results.
+11. **Smaller host and core items.** The 1 Hz emulation stats and audio diagnostics are logged in
+    release builds regardless of the log level (`setLogLevel` does nothing); the Kotlin side polls
+    performance stats every 500 ms even with the HUD hidden (the same poll feeds the driver
+    suggestion), and `getNewLogs` looks up its JNI classes on every call; YM2612 picks its
+    algorithm through eight separate `if`s; the Mega Drive VDP's DAC evaluates the test-register
+    and shadow/highlight branches for every pixel; the GBA's DAC copies the window enables for
+    every pixel while a window is on; the SNES scanline PPU rebuilds window masks for each layer
+    on each line.
+
+### Checked and not worth changing, or already efficient
+
+- Software frames are written twice (converted into `lastFrameBuffer`, then copied or doubled into
+  the window), but on the Screen thread and from lines already in cache, and the buffer also
+  serves screenshots and save-state previews: a small saving. Doubling frames up to 320 pixels wide
+  keeps small systems sharp under the compositor's filtering; dropping it needs a GPU presentation
+  path with nearest-neighbor or integer scaling first.
+- The audio path's one thread-local lookup per sample (emulated TLS below Android 10) and the
+  per-frame affinity call each cost well under 0.1% of a core, and the affinity call is
+  deliberate.
+- `Screen`'s per-line override arrays are sized width × height where the height would do (about
+  2.7 MB at 640×480), but they are filled only at power-on: memory, not time.
+- The multi-stream mixer counts each frame twice (`drained++`), which halves its per-call cap to
+  4,096 frames; harmless, to fix when the code is next touched.
+- Already efficient: the audio ring and thread, the stream registry cache, the bind-once pad cache,
+  deadline pacing, NEON pixel conversion, the threaded `Screen`, the PS1 GPU's render thread and
+  lookup tables, the PS1 CPU's 1,024-cycle sync batching and GTE divide table, the Mega Drive's
+  sprite cache and slot schedule, the GBA's linear background latch, and the SNES DSP's schedule.
+
+### Out of bounds
+
+Coarser synchronization or skipped cycles (the other cores' equivalents of the N64 Experimental
+speed hacks), extending `PROFILE_PERFORMANCE`, scanline renderers in place of dot-based ones, HLE,
+and anything that changes float rounding (fast-math,
+`-ffp-contract=fast`, or fixed-point rewrites that don't match bit for bit). The PS1 CPU's hardware
+breakpoints (`Accuracy::CPU::Breakpoints` in `ares/ps1/accuracy.hpp`) stay on as well: turning
+them off would drop a hardware feature that cheat devices use. The Mega Drive's performance VDP
+([Task 67](implementation-plan.md#open-task-inventory-and-disposition), which the user wants
+eventually) renders by scanline, so it belongs with the opt-in choices, not this list.
