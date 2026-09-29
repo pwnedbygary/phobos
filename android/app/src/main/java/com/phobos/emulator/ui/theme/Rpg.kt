@@ -38,7 +38,6 @@ import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
@@ -102,25 +101,8 @@ private val RpgShapes = Shapes(
 
 private val RpgPill = PixelShape(ART, 2)
 
-/**
- * A window's fill at its top: the panel's color tinted toward the primary color, at no less contrast
- * with the theme's text than the panel's color has, since themes tune their accents to just pass AA on it.
- */
-internal fun rpgWindowTop(fill: Color, primary: Color, isDark: Boolean): Color {
-    val tinted = lerp(fill, primary, 0.16f)
-    // Text is light in dark themes and dark in light ones, so the tint moves the other way.
-    val away = if (isDark) Color.Black else Color.White
-    val limit = fill.luminance() * if (isDark) 0.97f else 1.03f
-    fun safe(color: Color) = if (isDark) color.luminance() <= limit else color.luminance() >= limit
-    if (safe(tinted)) return tinted
-    var low = 0f
-    var high = 1f
-    repeat(16) {
-        val mid = (low + high) / 2f
-        if (safe(lerp(tinted, away, mid))) high = mid else low = mid
-    }
-    return lerp(tinted, away, high)
-}
+/** A window's fill at its top: the panel's color tinted toward the primary color ([tintKeepingContrast]). */
+internal fun rpgWindowTop(fill: Color, primary: Color, isDark: Boolean): Color = tintKeepingContrast(fill, primary, 0.16f, isDark)
 
 /** A window's fill at its bottom: deeper in dark themes and paler in light ones, the far end of the gradient. */
 internal fun rpgWindowBottom(fill: Color, isDark: Boolean): Color =

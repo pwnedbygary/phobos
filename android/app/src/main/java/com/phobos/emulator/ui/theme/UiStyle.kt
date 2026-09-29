@@ -24,6 +24,8 @@ import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -128,6 +130,26 @@ abstract class SolidUi : UiStyle() {
     abstract fun ProgressBar(progress: (() -> Float)?, modifier: Modifier)
 }
 
+/**
+ * [base] tinted [amount] of the way toward [accent], then moved away from the theme's text (toward black
+ * in dark themes, white in light ones) until it has at least [base]'s contrast with it. Themes tune
+ * their accents to just pass AA on their surfaces, so a plain tint would take accent text below it.
+ */
+internal fun tintKeepingContrast(base: Color, accent: Color, amount: Float, isDark: Boolean): Color {
+    val tinted = lerp(base, accent, amount)
+    val away = if (isDark) Color.Black else Color.White
+    val limit = base.luminance() * if (isDark) 0.97f else 1.03f
+    fun safe(color: Color) = if (isDark) color.luminance() <= limit else color.luminance() >= limit
+    if (safe(tinted)) return tinted
+    var low = 0f
+    var high = 1f
+    repeat(16) {
+        val mid = (low + high) / 2f
+        if (safe(lerp(tinted, away, mid))) high = mid else low = mid
+    }
+    return lerp(tinted, away, high)
+}
+
 /** [shape]'s outline in [size] shrunk by [inset] on every side. */
 private fun Density.insetOutline(shape: Shape, size: Size, layoutDirection: LayoutDirection, inset: Float): Path = Path().apply {
     val inner = Size((size.width - inset * 2).coerceAtLeast(0f), (size.height - inset * 2).coerceAtLeast(0f))
@@ -152,6 +174,15 @@ val UiEffects.style: UiStyle
         UiEffects.CRT -> CrtUi
         UiEffects.RPG -> RpgUi
         UiEffects.MANGA -> MangaUi
+        UiEffects.XMB -> XmbUi
+    }
+
+/** What these effects' glass panels sit over, for the contrast searches in [GlassStyle]. */
+val UiEffects.glassScene: GlassScene
+    get() = when (this) {
+        UiEffects.RETROWAVE -> GlassScene.SUNSET
+        UiEffects.XMB -> GlassScene.WAVES
+        else -> GlassScene.GLOWS
     }
 
 /**

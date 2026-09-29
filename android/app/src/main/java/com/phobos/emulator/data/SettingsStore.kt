@@ -39,6 +39,7 @@ enum class UiEffects(val label: String, val description: String) {
     CRT("CRT terminal", "Terminal type with a phosphor glow, scanlines, boxed windows and a blinking cursor"),
     RPG("16-bit RPG", "Framed menu windows over a patterned backdrop, dot-matrix type and a pointing-hand cursor, like a classic console RPG"),
     MANGA("Manga ink", "Ink-lined panels, comic lettering, caption boxes, screentone and impact bursts, like a page of a manga"),
+    XMB("XMB waves", "Glass panels over slowly flowing waves of light on a color gradient, like a game console's home menu"),
 }
 
 enum class RegionPreference(val label: String) {

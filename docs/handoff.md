@@ -266,6 +266,20 @@ in `ui/theme/Manga.kt`), with Bangers and Comic Neue from google/fonts unmodifie
 borders are drawn as rings, a shape minus a copy of it shrunk by the border's width (`ring` in
 `UiStyle.kt`), rather than as strokes clipped to the shape, which left a faint fringe outside stepped
 corners.
+Branch `feature/xmb-style-2026-09`, stacked on the manga branch, adds the XMB waves style (`XmbUi` in
+`ui/theme/Xmb.kt`). It keeps the glass panels, so it is a plain `UiStyle` with its own type scale and
+backdrop rather than a `SolidUi`; the shared components draw glass for any style that isn't solid.
+`GlassStyle.of` takes a `GlassScene` (the glows, Retrowave's sunset or the XMB waves, picked by
+`UiEffects.glassScene`) in place of its Retrowave flag. For the waves it checks text over colors from
+`WaveColors`, the class the backdrop draws with, so a change to the waves reaches the contrast search.
+Another glass style with its own backdrop would add a scene and the colors to check over it.
+`tintKeepingContrast` moved from the RPG style to `UiStyle.kt` for the gradient's tints. The font,
+`res/font/mplus1.ttf`, is the variable `MPLUS1[wght].ttf` from google/fonts cut down with fontTools,
+keeping the weight axis and the layout features the app's text uses: `pyftsubset 'MPLUS1[wght].ttf' --layout-features='kern,mark,mkmk,ccmp,rvrn,liga,locl,tnum,pnum,case'`
+with the `--unicodes` ranges above. Its default instance is Thin, so each weight in `XmbFont` sets
+the weight axis. The backdrop waits 25 ms between frames, about 30 frames a second with the wait for
+the next vsync; redrawn at every frame, it kept the RP6 rendering about 88 frames a second in the
+menus.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

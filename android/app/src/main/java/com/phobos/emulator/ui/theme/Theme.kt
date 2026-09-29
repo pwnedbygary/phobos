@@ -61,7 +61,7 @@ val LocalPhobosTheme = compositionLocalOf {
     val colors = fallback.colors
     PhobosThemeInfo(
         fallback.theme, fallback.isDark, UiEffects.NONE, colors.success, colors.warning, colors.scheme,
-        GlassStyle.of(colors.scheme, colors.success, colors.warning, fallback.isDark, retrowave = false),
+        GlassStyle.of(colors.scheme, colors.success, colors.warning, fallback.isDark, GlassScene.GLOWS),
     )
 }
 
@@ -74,7 +74,7 @@ fun PhobosTheme(
     glassEffects: GlassEffects = GlassEffects.FULL,
     content: @Composable () -> Unit,
 ) {
-    val retrowave = effects == UiEffects.RETROWAVE
+    val scene = effects.glassScene
     val resolved = ThemeRegistry.resolve(themeId, themeMode, followSystem, isSystemInDarkTheme())
     val context = LocalContext.current
     val useDynamic = resolved.theme.dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -83,8 +83,8 @@ fun PhobosTheme(
     }
     val colorScheme = animateColorScheme(colors.scheme)
     SystemBarsEffect(colorScheme, resolved.isDark)
-    val glass = remember(colors, resolved.isDark, retrowave, glassEffects) {
-        GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, retrowave, glassEffects)
+    val glass = remember(colors, resolved.isDark, scene, glassEffects) {
+        GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, scene, glassEffects)
     }
 
     val info = PhobosThemeInfo(resolved.theme, resolved.isDark, effects, colors.success, colors.warning, colors.scheme, glass)

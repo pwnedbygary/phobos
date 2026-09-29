@@ -21,15 +21,16 @@ import kotlin.math.roundToInt
  * WCAG checks for the glass look, measured on the composited 8-bit colors the screen shows rather
  * than on opaque roles. Covers every palette of every registered theme plus Material You schemes
  * built the way Android 12 and 13 build them (Material's tonal-spot palettes from 24 seed hues,
- * mapped to roles at the tones Compose Material 3 1.2.1 uses), each with and without Retrowave
- * effects, at each Glass effects level. Backdrops are sampled more finely than the app's own search: every glow at every tenth
- * of its strength in every combination, and the sunset across its gradients. The dock, which pages scroll under, is
- * checked over greys and hues across the whole range rather than over the backdrop alone.
+ * mapped to roles at the tones Compose Material 3 1.2.1 uses), each over every scene (the glows,
+ * Retrowave's sunset and the XMB waves), at each Glass effects level. Backdrops are sampled more finely than the app's own
+ * search: every glow at every tenth of its strength in every combination, and the sunset and the waves across their
+ * gradients. The dock, which pages scroll under, is checked over greys and hues across the whole range rather than over
+ * the backdrop alone.
  */
 class GlassContrastTest {
 
     private class Variant(val name: String, val scheme: ColorScheme, val success: Color, val warning: Color, val isDark: Boolean) {
-        fun style(retrowave: Boolean, level: GlassEffects) = GlassStyle.of(scheme, success, warning, isDark, retrowave, level)
+        fun style(scene: GlassScene, level: GlassEffects) = GlassStyle.of(scheme, success, warning, isDark, scene, level)
     }
 
     private class Check(val label: String, val foreground: Int, val background: Int, val minimum: Double)
@@ -48,15 +49,15 @@ class GlassContrastTest {
     }
 
     @Test
-    fun panelTextReachesAaOverEveryBackdrop() = assertAll { v, retrowave, level ->
+    fun panelTextReachesAaOverEveryBackdrop() = assertAll { v, scene, level ->
         val s = v.scheme
-        val style = v.style(retrowave, level)
+        val style = v.style(scene, level)
         val body = listOf("onSurface" to s.onSurface, "onSurfaceVariant" to s.onSurfaceVariant, "primary" to s.primary)
         val accents = body + listOf(
             "secondary" to s.secondary, "tertiary" to s.tertiary, "error" to s.error,
             "success" to v.success, "warning" to v.warning,
         )
-        val backdrops = panelBackdrops(v, style, retrowave)
+        val backdrops = panelBackdrops(v, style, scene)
         listOf("panel" to (style.panelAlpha to body), "accent panel" to (style.accentPanelAlpha to accents)).flatMap { (kind, pair) ->
             val (alpha, text) = pair
             backdrops.flatMap { backdrop ->
@@ -74,10 +75,10 @@ class GlassContrastTest {
     }
 
     @Test
-    fun screenTextReachesAaOverTheGlows() = assertAll { v, retrowave, level ->
-        if (retrowave) return@assertAll emptyList()
+    fun screenTextReachesAaOverTheGlows() = assertAll { v, scene, level ->
+        if (scene != GlassScene.GLOWS) return@assertAll emptyList()
         val s = v.scheme
-        val style = v.style(retrowave = false, level)
+        val style = v.style(GlassScene.GLOWS, level)
         val text = listOf("onBackground" to s.onBackground, "onSurfaceVariant" to s.onSurfaceVariant, "primary" to s.primary)
         glowBackdrops(v, style).flatMap { backdrop ->
             listOf(backdrop, composite(BLACK, backdrop, style.shadowAlpha * SHADOW_REACH)).flatMap { background ->
@@ -87,31 +88,31 @@ class GlassContrastTest {
     }
 
     @Test
-    fun retrowaveBackdropTextReachesAaOnItsPlate() = assertAll { v, retrowave, level ->
-        if (!retrowave) return@assertAll emptyList()
+    fun sceneTextReachesAaOnItsPlate() = assertAll { v, scene, level ->
+        if (scene == GlassScene.GLOWS) return@assertAll emptyList()
         val s = v.scheme
-        val style = v.style(retrowave = true, level)
+        val style = v.style(scene, level)
         val text = listOf("onBackground" to s.onBackground, "onSurfaceVariant" to s.onSurfaceVariant, "primary" to s.primary)
-        sunsetScene(v).flatMap { backdrop ->
+        (if (scene == GlassScene.SUNSET) sunsetScene(v) else waveScene(v)).flatMap { backdrop ->
             val plate = composite(s.background.toArgb(), backdrop, paint(style.backdropPlateAlpha))
             text.map { (role, color) -> Check("$role on the backdrop plate over ${hex(backdrop)}", color.toArgb(), plate, 4.5) }
         }
     }
 
     @Test
-    fun dockLabelsReachAaOverAnythingScrollingUnder() = assertAll { v, retrowave, level ->
+    fun dockLabelsReachAaOverAnythingScrollingUnder() = assertAll { v, scene, level ->
         val s = v.scheme
         val labels = listOf("onSurface" to s.onSurface, "onSurfaceVariant" to s.onSurfaceVariant)
-        dockFills(v, v.style(retrowave, level), retrowave).flatMap { (where, fill) ->
+        dockFills(v, v.style(scene, level), scene).flatMap { (where, fill) ->
             labels.map { (role, color) -> Check("$role on the dock$where", color.toArgb(), fill, 4.5) }
         }
     }
 
     @Test
-    fun dockSelectionKeepsItsIconVisible() = assertAll { v, retrowave, level ->
-        val style = v.style(retrowave, level)
+    fun dockSelectionKeepsItsIconVisible() = assertAll { v, scene, level ->
+        val style = v.style(scene, level)
         val primary = v.scheme.primary.toArgb()
-        dockFills(v, style, retrowave).map { (where, fill) ->
+        dockFills(v, style, scene).map { (where, fill) ->
             Check("primary icon on the dock's pill$where", primary, composite(primary, fill, paint(style.indicatorAlpha)), 3.0)
         }
     }
@@ -120,7 +121,7 @@ class GlassContrastTest {
     fun glowsStayNearTheBackgroundsLuminance() {
         val failures = variants.flatMap { v ->
             val background = luminance(v.scheme.background.toArgb())
-            v.style(retrowave = false, GlassEffects.FULL).glows.mapNotNull { glow ->
+            v.style(GlassScene.GLOWS, GlassEffects.FULL).glows.mapNotNull { glow ->
                 val l = luminance(glow.color.toArgb())
                 val ceiling = if (v.isDark) max(background, DARK_GLOW_LUMINANCE) else background
                 if (l <= ceiling + LUMINANCE_ROUNDING) null
@@ -133,8 +134,8 @@ class GlassContrastTest {
     @Test
     fun valuesStayInRange() {
         val failures = variants.flatMap { v ->
-            listOf(false, true).flatMap { retrowave -> GlassEffects.entries.map { retrowave to it } }.mapNotNull { (retrowave, level) ->
-                val style = v.style(retrowave, level)
+            GlassScene.entries.flatMap { scene -> GlassEffects.entries.map { scene to it } }.mapNotNull { (scene, level) ->
+                val style = v.style(scene, level)
                 val floor = when (level) {
                     GlassEffects.FULL -> 0.6f
                     GlassEffects.SUBTLE -> 0.8f
@@ -147,11 +148,11 @@ class GlassContrastTest {
                     "dock alpha ${style.dockAlpha} below the $level floor".takeUnless { style.dockAlpha in floor..1f },
                     "gloss, shade, shadow or glows with glass effects off".takeUnless { flat },
                     "accent panel alpha ${style.accentPanelAlpha} below the panel's".takeUnless { style.accentPanelAlpha in style.panelAlpha..1f },
-                    "glows drawn with Retrowave effects".takeUnless { !retrowave || style.glows.all { it.alpha == 0f } },
-                    "shadow drawn with Retrowave effects".takeUnless { !retrowave || style.shadowAlpha == 0f },
-                    "backdrop plate without Retrowave effects".takeUnless { retrowave || style.backdropPlateAlpha == 0f },
+                    "glows drawn over the ${label(scene)}".takeUnless { scene == GlassScene.GLOWS || style.glows.all { it.alpha == 0f } },
+                    "shadow drawn over the ${label(scene)}".takeUnless { scene == GlassScene.GLOWS || style.shadowAlpha == 0f },
+                    "backdrop plate over the glows".takeUnless { scene != GlassScene.GLOWS || style.backdropPlateAlpha == 0f },
                 )
-                if (problems.isEmpty()) null else "${v.name}${if (retrowave) " with Retrowave" else ""}, $level: ${problems.joinToString()}"
+                if (problems.isEmpty()) null else "${v.name} over the ${label(scene)}, $level: ${problems.joinToString()}"
             }
         }
         assertTrue(failures.joinToString("\n"), failures.isEmpty())
@@ -172,10 +173,10 @@ class GlassContrastTest {
      * The dock's fill, plain and at its gloss's and shade's peaks, over everything that can scroll
      * under it; with Retrowave effects also through the neon halo at every strength.
      */
-    private fun dockFills(v: Variant, style: GlassStyle, retrowave: Boolean): List<Pair<String, Int>> {
+    private fun dockFills(v: Variant, style: GlassStyle, scene: GlassScene): List<Pair<String, Int>> {
         val primary = v.scheme.primary.toArgb()
         val container = v.scheme.surfaceContainer.toArgb()
-        val under = if (retrowave) anyContent.flatMap { c -> (0..4).map { composite(primary, c, NEON_HALO * it / 4) } }.distinct() else anyContent
+        val under = if (scene == GlassScene.SUNSET) anyContent.flatMap { c -> (0..4).map { composite(primary, c, NEON_HALO * it / 4) } }.distinct() else anyContent
         return under.flatMap { content ->
             val fill = composite(container, content, paint(style.dockAlpha))
             listOf(
@@ -186,9 +187,33 @@ class GlassContrastTest {
         }
     }
 
-    /** Colors under a panel: the glows (or the sunset), and a neighboring panel's shadow where it reaches. */
-    private fun panelBackdrops(v: Variant, style: GlassStyle, retrowave: Boolean): List<Int> =
-        if (retrowave) sunsetBackdrops(v) else glowBackdrops(v, style).flatMap { listOf(it, composite(BLACK, it, style.shadowAlpha * SHADOW_REACH)) }.distinct()
+    /** Colors under a panel: the glows and a neighboring panel's shadow where it reaches, the sunset, or the waves. */
+    private fun panelBackdrops(v: Variant, style: GlassStyle, scene: GlassScene): List<Int> = when (scene) {
+        GlassScene.GLOWS -> glowBackdrops(v, style).flatMap { listOf(it, composite(BLACK, it, style.shadowAlpha * SHADOW_REACH)) }.distinct()
+        GlassScene.SUNSET -> sunsetBackdrops(v)
+        GlassScene.WAVES -> waveScene(v)
+    }
+
+    /**
+     * The XMB waves' gradient, and across the band the ribbons reach, every point under none to all of
+     * the ribbons, plain, under a crest's glow, and under its glow and line.
+     */
+    private fun waveScene(v: Variant): List<Int> {
+        val waves = WaveColors(v.scheme, v.isDark)
+        fun argb(color: Color) = color.copy(alpha = 1f).toArgb()
+        fun layer(color: Color, under: Int) = composite(argb(color), under, paint(color.alpha))
+        val steps = (0..8).map { it / 8.0 }
+        val sky = listOf(waves.top, waves.middle, waves.bottom).map(::argb).zipWithNext().flatMap { (a, b) -> steps.map { lerp(a, b, it) } }
+        val band = WaveColors.BAND
+        val underRibbons = (0..16).map { argb(waves.skyAt(band.start + (band.endInclusive - band.start) * it / 16f)) }
+        val lit = underRibbons.flatMap { under ->
+            (1..WaveColors.MAX_OVERLAP).runningFold(under) { color, _ -> layer(waves.ribbon, color) }.flatMap { ribbons ->
+                val glow = layer(waves.crestGlow, ribbons)
+                listOf(ribbons, glow, layer(waves.crest, glow))
+            }
+        }
+        return (sky + lit).distinct()
+    }
 
     /** The background under every combination of glows, each at every tenth of its strength, in drawing order. */
     private fun glowBackdrops(v: Variant, style: GlassStyle): List<Int> =
@@ -224,14 +249,14 @@ class GlassContrastTest {
         return (sky + glowAtSun + sun + floor + grid + horizon + stars).distinct()
     }
 
-    private fun assertAll(checks: (Variant, Boolean, GlassEffects) -> List<Check>) {
+    private fun assertAll(checks: (Variant, GlassScene, GlassEffects) -> List<Check>) {
         val failures = variants.flatMap { v ->
-            listOf(false, true).flatMap { retrowave ->
+            GlassScene.entries.flatMap { scene ->
                 GlassEffects.entries.flatMap { level ->
-                    checks(v, retrowave, level).mapNotNull { check ->
+                    checks(v, scene, level).mapNotNull { check ->
                         val ratio = contrast(check.foreground, check.background)
                         if (ratio >= check.minimum) null
-                        else "${v.name}${if (retrowave) " with Retrowave" else ""}, $level: ${check.label} is ${fmt(ratio)}:1, needs ${check.minimum}:1"
+                        else "${v.name} over the ${label(scene)}, $level: ${check.label} is ${fmt(ratio)}:1, needs ${check.minimum}:1"
                     }
                 }
             }
@@ -293,6 +318,8 @@ class GlassContrastTest {
         }
         0.2126 * channel(argb shr 16 and 0xFF) + 0.7152 * channel(argb shr 8 and 0xFF) + 0.0722 * channel(argb and 0xFF)
     }
+
+    private fun label(scene: GlassScene) = scene.name.lowercase(Locale.ROOT)
 
     private fun hex(argb: Int) = String.format(Locale.ROOT, "#%06x", argb and 0xFFFFFF)
 

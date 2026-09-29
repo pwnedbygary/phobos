@@ -104,7 +104,7 @@ class ConsoleArtTest {
             val s = v.colors.scheme
             // The Library draws tiles as glass: surfaceContainer at each level's panel alpha over the background.
             val glassTiles = GlassEffects.entries.map { level ->
-                val alpha = GlassStyle.of(s, v.colors.success, v.colors.warning, isDark = true, retrowave = false, level).panelAlpha
+                val alpha = GlassStyle.of(s, v.colors.success, v.colors.warning, isDark = true, GlassScene.GLOWS, level).panelAlpha
                 val tile = composite(s.surfaceContainer.toArgb(), s.background.toArgb(), alpha.toDouble())
                 "glass tile ($level)" to (ConsoleArtPalette(s, v.colors.success, v.colors.warning, Color(tile)) to tile)
             }

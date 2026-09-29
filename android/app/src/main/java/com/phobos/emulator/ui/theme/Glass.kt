@@ -18,15 +18,19 @@ import kotlin.math.roundToInt
 @Immutable
 data class Glow(val color: Color, val alpha: Float, val x: Float, val y: Float, val radius: Float)
 
+/** What the glass panels sit over: soft glows, Retrowave's sunset, or the XMB waves. */
+enum class GlassScene { GLOWS, SUNSET, WAVES }
+
 /**
  * The glass look for one theme, computed once from its final colors rather than the cross-fading
  * ones. Panels fill with `surfaceContainer` at [panelAlpha], or at [accentPanelAlpha] where they
  * also show secondary, tertiary, error, success or warning text. The floating dock, which pages
  * scroll under, fills at [dockAlpha], so its labels hold up over any color. A white gloss from the
  * top left peaks at [glossAlpha] and a shade toward black at the bottom right at [shadeAlpha];
- * panels cast a black shadow at [shadowAlpha] (none with Retrowave effects, whose neon edge takes
- * its place). The dock's selection pill is `primary` at [indicatorAlpha]. [glows] sit behind the
- * screens, at zero alpha with Retrowave effects, which keep their sunset. Each value is the
+ * panels cast a black shadow at [shadowAlpha] (none over the sunset, where Retrowave's neon edge
+ * takes its place, or over the XMB waves). The dock's selection pill is `primary` at
+ * [indicatorAlpha]. [glows] sit behind the screens, at zero alpha over the sunset or the waves,
+ * which draw their own scenes. Each value is the
  * strongest (or, for the panels, the most see-through) that keeps text at WCAG AA against every
  * backdrop it can end up over. [level] is the user's Glass effects setting: Subtle scales every
  * strength down and raises the panel floor, and Off makes panels and the dock opaque with no
@@ -38,8 +42,8 @@ data class Glow(val color: Color, val alpha: Float, val x: Float, val y: Float, 
  * band along a panel's edge that text keeps clear of, so they don't enter the contrast searches.
  * At [refraction] above zero (the Full level, Android 13 and later), the dock draws the pages and
  * backdrop behind it through a lens that bends them within that same band, where the tint thins.
- * With Retrowave effects, headers and other text drawn straight on the sunset sit on a soft plate
- * of the background at [backdropPlateAlpha], the least that keeps them at WCAG AA over the sun.
+ * Over the sunset or the waves, headers and other text drawn straight on the scene sit on a soft
+ * plate of the background at [backdropPlateAlpha], the least that keeps them at WCAG AA over all of it.
  */
 @Immutable
 data class GlassStyle(
@@ -65,9 +69,9 @@ data class GlassStyle(
             success: Color,
             warning: Color,
             isDark: Boolean,
-            retrowave: Boolean,
+            scene: GlassScene,
             level: GlassEffects = GlassEffects.FULL,
-        ): GlassStyle = GlassBuilder(scheme, success, warning, isDark, retrowave, level).build()
+        ): GlassStyle = GlassBuilder(scheme, success, warning, isDark, scene, level).build()
     }
 }
 
@@ -82,7 +86,7 @@ internal class GlassBuilder(
     success: Color,
     warning: Color,
     private val isDark: Boolean,
-    private val retrowave: Boolean,
+    private val scene: GlassScene,
     private val level: GlassEffects,
 ) {
     private val strength = if (level == GlassEffects.SUBTLE) Strength.SUBTLE else Strength.FULL
@@ -114,13 +118,16 @@ internal class GlassBuilder(
                 backdropPlateAlpha = backdropPlate(),
             )
         }
-        val glows = if (retrowave) designedGlows().map { it.copy(alpha = 0f) } else fitGlows()
+        val glows = if (scene == GlassScene.GLOWS) fitGlows() else designedGlows().map { it.copy(alpha = 0f) }
         val screenBackdrops = glowBackdrops(glows)
-        val shadowAlpha = if (retrowave) 0f else strongest(strength.shadow * if (isDark) DARK_SHADOW else LIGHT_SHADOW) { alpha ->
+        val shadowAlpha = if (scene != GlassScene.GLOWS) 0f else strongest(strength.shadow * if (isDark) DARK_SHADOW else LIGHT_SHADOW) { alpha ->
             screenBackdrops.all { screenText.pass(over(Color.Black, alpha * SHADOW_REACH, it), TEXT_CONTRAST) }
         }
-        val panelBackdrops = if (retrowave) sunsetBackdrops(SunsetColors(scheme, isDark))
-        else screenBackdrops + screenBackdrops.map { over(Color.Black, shadowAlpha * SHADOW_REACH, it) }
+        val panelBackdrops = when (scene) {
+            GlassScene.GLOWS -> screenBackdrops + screenBackdrops.map { over(Color.Black, shadowAlpha * SHADOW_REACH, it) }
+            GlassScene.SUNSET -> sunsetBackdrops(SunsetColors(scheme, isDark))
+            GlassScene.WAVES -> waveScene(WaveColors(scheme, isDark))
+        }
         val panelAlpha = mostSeeThrough(bodyText, panelBackdrops)
         val accentPanelAlpha = max(panelAlpha, mostSeeThrough(accentText, panelBackdrops))
         val fills = panelBackdrops.map { panel(panelAlpha, it) }
@@ -142,7 +149,7 @@ internal class GlassBuilder(
         }?.let { it / 100f } ?: 1f
         return GlassStyle(
             panelAlpha, accentPanelAlpha, dockAlpha, gloss, shade, shadowAlpha, indicator(dockAlpha, sheens), glows, level, strength.rim,
-            contactShadowAlpha = if (retrowave) 0f else strength.shadow * if (isDark) DARK_CONTACT else LIGHT_CONTACT,
+            contactShadowAlpha = if (scene == GlassScene.SUNSET) 0f else strength.shadow * if (isDark) DARK_CONTACT else LIGHT_CONTACT,
             bevelLight = strength.bevel * if (isDark) DARK_BEVEL_LIGHT else LIGHT_BEVEL_LIGHT,
             bevelShade = strength.bevel * if (isDark) DARK_BEVEL_SHADE else LIGHT_BEVEL_SHADE,
             refraction = if (level == GlassEffects.FULL) 1f else 0f,
@@ -150,12 +157,33 @@ internal class GlassBuilder(
         )
     }
 
-    /** The background's alpha behind text on the Retrowave sunset: the least that keeps screen text at AA over all of it. */
+    /** The background's alpha behind text on the sunset or the waves: the least that keeps screen text at AA over all of it. */
     private fun backdropPlate(): Float {
-        if (!retrowave) return 0f
-        val scene = sunsetScene(SunsetColors(scheme, isDark))
-        return (0..100).firstOrNull { step -> scene.all { screenText.pass(over(scheme.background, step / 100f, it), TEXT_CONTRAST) } }
+        val colors = when (scene) {
+            GlassScene.GLOWS -> return 0f
+            GlassScene.SUNSET -> sunsetScene(SunsetColors(scheme, isDark))
+            GlassScene.WAVES -> waveScene(WaveColors(scheme, isDark))
+        }
+        return (0..100).firstOrNull { step -> colors.all { screenText.pass(over(scheme.background, step / 100f, it), TEXT_CONTRAST) } }
             ?.let { it / 100f } ?: 1f
+    }
+
+    /**
+     * The XMB scene's colors: its gradient, and across the band the ribbons reach, each point under
+     * one to [WaveColors.MAX_OVERLAP] ribbons, with a crest's glow and line on top.
+     */
+    private fun waveScene(waves: WaveColors): List<Color> {
+        fun gradient(from: Color, to: Color) = GLOW_SAMPLES.map { over(to, it, from) } + from
+        val sky = gradient(waves.top, waves.middle) + gradient(waves.middle, waves.bottom)
+        val band = WaveColors.BAND
+        val underRibbons = (0..BAND_SAMPLES).map { Color(waves.skyAt(band.start + (band.endInclusive - band.start) * it / BAND_SAMPLES).toArgb()) }
+        val lit = underRibbons.flatMap { under ->
+            (1..WaveColors.MAX_OVERLAP).runningFold(under) { color, _ -> over(waves.ribbon, color) }.flatMap { ribbons ->
+                val glow = over(waves.crestGlow, ribbons)
+                listOf(ribbons, glow, over(waves.crest, glow))
+            }
+        }
+        return (sky + lit).distinct()
     }
 
     /** The least opaque panel alpha from the floor up (in hundredths) at which [text] passes over every backdrop. */
@@ -329,6 +357,9 @@ internal class GlassBuilder(
 
         /** Points along a glow's falloff, or a gradient, at which the backdrop is checked. */
         val GLOW_SAMPLES = listOf(0.25f, 0.5f, 0.75f, 1f)
+
+        /** Steps across the band the XMB ribbons reach at which the gradient under them is checked. */
+        const val BAND_SAMPLES = 4
 
         val GLOW_SPOTS: List<Pair<(ColorScheme) -> Color, Spot>> = listOf(
             { s: ColorScheme -> s.primary } to Spot(0.12f, 0f, 0.75f),
