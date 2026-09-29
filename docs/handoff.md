@@ -256,6 +256,11 @@ scene, which is rendered again whenever its colors change, takes the final color
 `UiEffects` entry, a `SolidUi` object in its own file and a contrast test built on
 `StyleTestSupport.kt`, which has every theme's palettes, Material You schemes from 24 seed hues and
 the WCAG helpers.
+Branch `feature/rpg-style-2026-09`, stacked on the CRT branch, adds the 16-bit RPG style (`RpgUi` in
+`ui/theme/Rpg.kt`). Its font, `res/font/dotgothic16.ttf`, is DotGothic16 from google/fonts cut down
+with fontTools: `pyftsubset DotGothic16-Regular.ttf --layout-features='' --unicodes=U+0020-007E,U+00A0-017F,U+0370-03FF,U+0400-04FF,U+2000-206F,U+20A0-20CF,U+2100-214F,U+2190-21FF,U+2200-22FF,U+2460-24FF,U+2500-259F,U+25A0-25FF,U+2600-26FF`.
+The dropped layout features select Japanese glyph variants, widths and vertical forms, the "fi" and
+"fl" ligatures and a slashed zero, none of which the app uses.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

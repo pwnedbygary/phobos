@@ -133,6 +133,7 @@ val UiEffects.style: UiStyle
         UiEffects.NONE, UiEffects.RETROWAVE -> GlassUi
         UiEffects.PIXEL_ART -> PixelUi
         UiEffects.CRT -> CrtUi
+        UiEffects.RPG -> RpgUi
     }
 
 /**
