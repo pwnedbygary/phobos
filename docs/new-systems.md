@@ -87,8 +87,9 @@ contains them, but Phobos's system table doesn't list them.
   SGB's borders and palettes. Needs the Super Game Boy cartridge ROM as firmware, loaded with the
   game the way ares loads a second cartridge.
 - **Arcade**: ares's N64-based Aleck64 boards (`ares/n64`) and Sega's SG-1000A (`ares/sg`), with
-  MAME-format sets read by `mia/medium/mame.cpp`. A small set of games; the runner already picks
-  the Aleck64 controls.
+  MAME-format sets read by `mia/medium/mame.cpp`. A small set of games; the runner still picks the
+  Aleck64 controls. Phobos listed Arcade until Task 35 removed it (2026-08-09; the reason wasn't
+  recorded), so bringing it back is the user's call.
 - **LaserActive** (Mega LD and PC Engine LD): niche, with very large disc images.
 - **Pocket Challenge V2**: a WonderSwan variant for educational software; niche.
 
