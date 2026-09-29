@@ -176,6 +176,19 @@ driver's line: StevenMXZ's repo publishes Turnip, Turnip Gen8 and Qualcomm lines
 Gen8 V36 had been offered as an update to Turnip v26.3.0-R5. Checked on the RP6, the cold launch
 frame by frame from screen recordings (`.local/device/cold-rec.sh` and `frames.swift`); the driver
 check has host tests.
+Branch `feature/frontend-launch-2026-09` ([PR #25](https://github.com/pwnedbygary/phobos/pull/25))
+lets frontends start games (setup in [frontends.md](frontends.md)). `MainActivity` is
+`singleTask`; `launch/ExternalLaunch.kt` reads the intent and opens the file, through a folder
+Phobos holds when no grant came with it, and `launch/LaunchSystems.kt` (plain Kotlin, host tests)
+works out the system. The game the native core holds now lives in `CoreSession` in
+`MainViewModel.kt`, because a clear-task launch replaces the activity, and with it the ViewModel,
+while a game runs: loads and unloads take its lock and only the owning instance unloads. Game
+screens can overlap while one game replaces another, so `EmulatorScreen` checks
+`emulatorScreenReplaced` before touching shared state, and the core's surface is released only
+by its owner (`PhobosCore.attachSurface`/`drawsTo`). Checked on the RP6 with `adb` standing in
+for the frontends. Argosy needs an entry in its hardcoded registry: prepared locally, not
+submitted until the user agrees. Next, at the user's request: an in-app updater from GitHub
+Releases (plan row "App updates from GitHub").
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

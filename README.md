@@ -114,6 +114,14 @@ Phobos targets **perfect compatibility** for the Neo Geo MVS/AES library. Notes 
 
 ---
 
+## Starting games from a frontend
+
+ES-DE and Daijisho can start games in Phobos, and Argosy will once Phobos is in its emulator
+registry; [docs/frontends.md](docs/frontends.md) has the setup for each. The Retroid Pocket's
+own launcher has a fixed emulator list and can't.
+
+---
+
 ## Building Phobos
 
 Requires the Android SDK (platform 37, build-tools 36, NDK 28.x, CMake 3.22.1)
