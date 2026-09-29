@@ -224,7 +224,10 @@ byte orders were measured on the user's own saves (local copies in the git-ignor
 reload of the running game (`startLoad`'s `beforeLoad` hook), after the unload has written the
 current save, and moves the files it replaces plus the auto-save state to `Backups/<date>` beside
 the save. Native `getSaveFiles` and `flushSaves` (`PhobosRunner.cpp`) list the game's saves and write
-them, the Controller Pak's included, to disk. Not yet checked on a device.
+them, the Controller Pak's included, to disk. Checked on the RP6 (2026-09-29): a Mupen64Plus `.fla`
+import (the save showed in Paper Mario's file select), a RetroArch export into RetroArch's
+`saves/n64` (byte-identical FlashRAM), the replace prompt, and a `.srm` import that moved the
+auto-save state into the backup folder.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
