@@ -186,9 +186,17 @@ while a game runs: loads and unloads take its lock and only the owning instance 
 screens can overlap while one game replaces another, so `EmulatorScreen` checks
 `emulatorScreenReplaced` before touching shared state, and the core's surface is released only
 by its owner (`PhobosCore.attachSurface`/`drawsTo`). Checked on the RP6 with `adb` standing in
-for the frontends. Argosy needs an entry in its hardcoded registry: prepared locally, not
-submitted until the user agrees. Next, at the user's request: an in-app updater from GitHub
-Releases (plan row "App updates from GitHub").
+for the frontends. Argosy needs an entry in its hardcoded registry: prepared locally
+(`.local/review/argosy/`); the user agreed to submit it now that v1.1.0 is out, after Argosy's
+own checks (a hardware test with its debug build, its `takt` review).
+Branch `feature/app-updater-2026-09` ([PR #26](https://github.com/pwnedbygary/phobos/pull/26)) adds
+the in-app updater the user asked for (Settings → About). Builds are numbered from git history in
+`android/app/build.gradle.kts` (version code 100000 + commit count, version name from
+`git describe`), so a local install is never a downgrade from a release; v1.1.0 was the last build
+numbered by the old tag mapping. CI stages `update.json` next to the APKs
+(`.github/scripts/stage-apks.sh`) for tag releases and for a `nightly-<code>` pre-release on every
+push to `master`; `util/AppUpdates.kt` picks the newest build for the installed flavor, checks the
+download and installs it through `PackageInstaller`, with Android's confirmation.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

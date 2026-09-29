@@ -58,7 +58,8 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 ### 8. CI / distribution
 
-- GitHub Actions builds **release-only** APKs (legacy + modern flavors) on every commit; a version tag (`v1.2.3`) maps to `versionName`/`versionCode` and publishes a GitHub Release. Debug builds are never published.
+- GitHub Actions builds **release-only** APKs (legacy + modern flavors) on every commit. A version tag (`v1.2.3`) publishes a GitHub Release, and every push to `master` publishes a nightly pre-release; both carry `update.json` for the in-app updater (Settings → About), which installs the newer build of the installed flavor through Android's installer. Debug builds are never published.
+- Every build is numbered from git history, locally and on CI alike: version code 100000 + the commit count, version name the tag on a tagged commit and `<tag>-<commits since>-g<hash>` otherwise.
 
 ---
 
