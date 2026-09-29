@@ -56,9 +56,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.zip.CRC32
 import java.util.zip.ZipInputStream
 import kotlin.math.roundToInt
@@ -71,6 +76,11 @@ import com.phobos.emulator.util.AppUpdater
 import com.phobos.emulator.util.DriverAsset
 import com.phobos.emulator.util.DriverDownloader
 import com.phobos.emulator.util.DriverSource
+import com.phobos.emulator.util.N64SaveFormat
+import com.phobos.emulator.util.N64SaveImportPlan
+import com.phobos.emulator.util.N64SaveKind
+import com.phobos.emulator.util.N64SaveRead
+import com.phobos.emulator.util.N64SaveTransfer
 import com.phobos.emulator.util.newerDriverRelease
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.asSharedFlow
@@ -101,6 +111,22 @@ sealed interface AppUpdateState {
     /** Handed to Android's installer, which asks the user to confirm. */
     data class Installing(val update: AppUpdate) : AppUpdateState
     data class Failed(val message: String, val update: AppUpdate?) : AppUpdateState
+}
+
+/** Save files picked for import into the running N64 game: what they would change, and the ones that can't be used. */
+data class SaveImportPreview(
+    val plan: N64SaveImportPlan,
+    val unreadable: List<N64SaveRead.Unreadable>,
+    /** A Mupen64Plus SRAM or FlashRAM file was picked, whose byte order the user can override. */
+    val offersCartridgeOrder: Boolean,
+)
+
+/** How exporting the running game's save went. */
+sealed interface SaveExportResult {
+    data class Done(val files: List<String>) : SaveExportResult
+    /** Files already in the folder, which aren't replaced without asking. */
+    data class Existing(val files: List<String>) : SaveExportResult
+    data class Failed(val reason: String) : SaveExportResult
 }
 
 /**
@@ -854,6 +880,204 @@ class MainViewModel(
                 }
             }
         }
+    }
+
+    // ─── N64 save import and export (pause menu) ─────────────────────────────
+
+    /** The running N64 game's battery saves: the size native keeps and the file it writes, per save type. */
+    private fun gameSaveFiles(): Map<N64SaveKind, Pair<Int, File>> =
+        PhobosCore.getSaveFiles().mapNotNull { entry ->
+            val fields = entry.split('\t')
+            if (fields.size != 3) return@mapNotNull null
+            val kind = N64SaveKind.ofFileName(fields[0]) ?: return@mapNotNull null
+            val size = fields[1].toIntOrNull() ?: return@mapNotNull null
+            kind to (size to File(fields[2]))
+        }.toMap()
+
+    /** Reads the picked files and matches them against the running game's saves; nothing is written. */
+    suspend fun previewSaveImport(uris: List<Uri>, cartridgeOrder: Boolean): SaveImportPreview = withContext(Dispatchers.IO) {
+        val game = gameSaveFiles().mapValues { it.value.first }
+        val reads = uris.map { readSaveForImport(it, cartridgeOrder) }
+        val sources = reads.filterIsInstance<N64SaveRead.Ok>().map { it.source }
+        SaveImportPreview(
+            plan = N64SaveTransfer.plan(sources, game),
+            unreadable = reads.filterIsInstance<N64SaveRead.Unreadable>(),
+            offersCartridgeOrder = sources.any {
+                it.format == N64SaveFormat.MUPEN64PLUS && (N64SaveKind.SRAM in it.parts || N64SaveKind.FLASH in it.parts)
+            },
+        )
+    }
+
+    private fun readSaveForImport(uri: Uri, cartridgeOrder: Boolean): N64SaveRead {
+        val name = displayName(uri) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "save"
+        return try {
+            val data = context.contentResolver.openInputStream(uri)?.use { input ->
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    out.write(buffer, 0, count)
+                    if (out.size() > N64SaveTransfer.MAX_FILE_SIZE) return N64SaveRead.Unreadable(name, "it is larger than any N64 save")
+                }
+                out.toByteArray()
+            } ?: return N64SaveRead.Unreadable(name, "it couldn't be opened")
+            N64SaveTransfer.read(name, data, cartridgeOrder)
+        } catch (e: Exception) {
+            N64SaveRead.Unreadable(name, "it couldn't be read (${e.message})")
+        }
+    }
+
+    private fun displayName(uri: Uri): String? = try {
+        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
+     * Imports [plan] into the running game. The game unloads first, which writes its current save to disk;
+     * the files the import replaces and the game's auto-save state (loading it would bring the old save
+     * back) then move to a dated folder under Backups beside the save, and the game loads again with the
+     * imported save.
+     */
+    fun importSave(context: Context, plan: N64SaveImportPlan) {
+        val rom = loadedRom ?: return
+        val system = currentSystemName.takeIf { it.isNotEmpty() } ?: return
+        val romName = currentRomName
+        viewModelScope.launch(Dispatchers.IO) {
+            val targets = gameSaveFiles().mapValues { it.value.second }
+            if (plan.writes.isEmpty() || plan.writes.keys.any { it !in targets }) return@launch
+            startLoad(context, system, rom) { writeImportedSave(system, romName, plan, targets) }
+        }
+    }
+
+    private suspend fun writeImportedSave(system: String, romName: String, plan: N64SaveImportPlan, targets: Map<N64SaveKind, File>) {
+        val saveDir = targets[N64SaveKind.EEPROM]?.parentFile ?: targets[N64SaveKind.SRAM]?.parentFile
+            ?: targets[N64SaveKind.FLASH]?.parentFile ?: targets.values.first().parentFile ?: return
+        val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+        val backup = File(saveDir, "Backups/$stamp")
+        val replaced = plan.writes.keys.mapNotNull { kind -> targets[kind] }
+        val existed = replaced.filter { it.isFile }.toSet()
+        val restoreStates = mutableListOf<() -> Unit>()
+        var writing = false
+        val message = try {
+            for (target in existed) {
+                backup.mkdirs()
+                target.copyTo(File(backup, target.name), overwrite = true)
+            }
+            moveAutoStateTo(backup, system, romName, restoreStates)
+            writing = true
+            for ((kind, data) in plan.writes) {
+                val target = targets.getValue(kind)
+                target.parentFile?.mkdirs()
+                target.writeBytes(data)
+            }
+            "Imported the ${plan.writes.keys.joinToString(" and ") { it.label }} save"
+        } catch (e: Exception) {
+            Log.e("Phobos", "Save import failed", e)
+            // Before the writes the originals are untouched, and a backup copy may be incomplete.
+            if (writing) {
+                for (target in replaced) {
+                    runCatching { if (target in existed) File(backup, target.name).copyTo(target, overwrite = true) else target.delete() }
+                }
+            }
+            restoreStates.forEach { runCatching(it) }
+            if (restoreStates.isNotEmpty()) _stateRevision.update { it + 1 }
+            "The save couldn't be imported: ${e.message}"
+        }
+        withContext(Dispatchers.Main) { Toast.makeText(context, message, Toast.LENGTH_LONG).show() }
+    }
+
+    /**
+     * Moves the game's auto-save state and its preview into [dir], from the States folder and internal
+     * storage, adding to [restore] how to put each file back. Throws if the state stays behind, since
+     * loading it would bring the old save back over the import.
+     */
+    private fun moveAutoStateTo(dir: File, systemName: String, romName: String, restore: MutableList<() -> Unit>) {
+        val stateName = stateFileName(romName, -1)
+        val sanitizedName = getSanitizedSystemName(systemName)
+        val baseUriString = settings.value.statesPath
+        val safDir = if (baseUriString.isNotEmpty()) DocumentFile.fromTreeUri(context, Uri.parse(baseUriString))?.findFile(sanitizedName) else null
+        for (name in listOf(stateName, thumbnailName(stateName))) {
+            val document = safDir?.findFile(name)
+            if (safDir != null && document != null) {
+                val copy = File(dir, name)
+                dir.mkdirs()
+                val copied = context.contentResolver.openInputStream(document.uri)?.use { input ->
+                    copy.outputStream().use { input.copyTo(it) }
+                    true
+                } ?: false
+                if (copied && document.delete()) {
+                    restore += {
+                        safDir.createFile("application/octet-stream", name)?.let { restored ->
+                            context.contentResolver.openOutputStream(restored.uri, "wt")?.use { output -> copy.inputStream().use { it.copyTo(output) } }
+                        }
+                    }
+                } else if (name == stateName) {
+                    throw IOException("the auto-save state couldn't be moved aside")
+                }
+            }
+            val internal = File(context.filesDir, "states/$sanitizedName/$name")
+            if (internal.isFile) {
+                val copy = File(dir, "internal/$name")
+                copy.parentFile?.mkdirs()
+                internal.copyTo(copy, overwrite = true)
+                if (internal.delete()) {
+                    restore += { copy.copyTo(internal, overwrite = true) }
+                } else if (name == stateName) {
+                    throw IOException("the auto-save state couldn't be moved aside")
+                }
+            }
+        }
+        _stateRevision.update { it + 1 }
+    }
+
+    /**
+     * Writes the running game's save into [folder] in [format]. Files already there are only replaced
+     * when [replace] is set; otherwise their names come back for the user to confirm.
+     */
+    suspend fun exportSave(folder: Uri, format: N64SaveFormat, replace: Boolean): SaveExportResult = withContext(Dispatchers.IO) {
+        try {
+            PhobosCore.flushSaves()
+            val files = gameSaveFiles()
+            val saves = files.mapNotNull { (kind, entry) -> entry.second.takeIf { it.isFile }?.let { kind to it.readBytes() } }.toMap()
+            if (saves.isEmpty()) return@withContext SaveExportResult.Failed("This game hasn't saved anything yet.")
+            val romBase = files.values.first().second.parentFile?.name ?: currentRomName
+            val outputs = N64SaveTransfer.export(format, saves, romBase)
+            val root = DocumentFile.fromTreeUri(context, folder)
+                ?: return@withContext SaveExportResult.Failed("The folder couldn't be opened.")
+            val existing = outputs.map { it.first }.filter { findDocument(root, it) != null }
+            if (existing.isNotEmpty() && !replace) return@withContext SaveExportResult.Existing(existing)
+            for ((path, data) in outputs) {
+                val document = findDocument(root, path) ?: createDocument(root, path)
+                    ?: return@withContext SaveExportResult.Failed("$path couldn't be created.")
+                context.contentResolver.openOutputStream(document.uri, "wt")?.use { it.write(data) }
+                    ?: return@withContext SaveExportResult.Failed("$path couldn't be written.")
+            }
+            SaveExportResult.Done(outputs.map { it.first })
+        } catch (e: Exception) {
+            Log.e("Phobos", "Save export failed", e)
+            SaveExportResult.Failed(e.message ?: "The export failed.")
+        }
+    }
+
+    // A document at [path] ("name" or "folder/name") under [root], if there is one.
+    private fun findDocument(root: DocumentFile, path: String): DocumentFile? {
+        val parts = path.split('/')
+        var dir = root
+        for (part in parts.dropLast(1)) dir = dir.findFile(part)?.takeIf { it.isDirectory } ?: return null
+        return dir.findFile(parts.last())
+    }
+
+    private fun createDocument(root: DocumentFile, path: String): DocumentFile? {
+        val parts = path.split('/')
+        var dir = root
+        for (part in parts.dropLast(1)) {
+            dir = dir.findFile(part)?.takeIf { it.isDirectory } ?: dir.createDirectory(part) ?: return null
+        }
+        return dir.createFile("application/octet-stream", parts.last())
     }
 
     private val _systems = MutableStateFlow<List<String>>(emptyList())
@@ -2012,13 +2236,15 @@ class MainViewModel(
         startLoad(context, system, rom)
     }
 
-    private fun startLoad(context: Context, systemName: String, rom: RomFile) {
+    /** [beforeLoad] runs once the previous game is unloaded, with its battery saves written to disk. */
+    private fun startLoad(context: Context, systemName: String, rom: RomFile, beforeLoad: (suspend () -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             CoreSession.lock.withLock {
                 // A loaded game is saved and unloaded first, as quitting it would, even one a replaced activity
                 // loaded; reloading the running game starts it over without saving it.
                 val reload = CoreSession.owner === sessionToken && CoreSession.system == systemName && CoreSession.rom == rom.name
                 closeSessionLocked(autoSave = !reload)
+                beforeLoad?.invoke()
                 loadLocked(context, systemName, rom)
             }
         }

@@ -3247,6 +3247,43 @@ else if (port->type() == "Keyboard") {
   }
   auto setMuteAudio(bool muted) -> void { muteAudioAtomic = muted; }
   auto setShader(const char* path) -> bool { return true; }
+  // The loaded game's battery saves, for the pause menu's save import and export: one
+  // "name\tsize\tpath" entry per save the core keeps, where path is the file
+  // flushSavesToDisk() (or exportControllerPak() for save.pak) writes it to.
+  auto getSaveFiles() -> std::vector<string> {
+    lock_guard<recursive_mutex> lock(*runMutex);
+    std::vector<string> files;
+    if (!root || !savesPath) return files;
+    string romKey = currentRomBase;
+    romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+    if (romKey.size() == 0) romKey = "rom";
+    string saveDir = {savesPath, "/", root->name(), "/", romKey, "/"};
+    if (currentMedium && currentMedium->pak) {
+      for (auto& file : currentMedium->pak->files()) {
+        string name = file->name();
+        if (name != "save.eeprom" && name != "save.ram" && name != "save.flash") continue;
+        files.push_back(string{name, "\t", (u64)file->size(), "\t", saveDir, name});
+      }
+    }
+    if (player1PakDir && root->name() == "Nintendo 64") {
+      if (auto fp = player1PakDir->read("save.pak")) {
+        files.push_back(string{"save.pak\t", (u64)fp->size(), "\t", savesPath, "/Nintendo 64/", romKey, "/save.pak"});
+      }
+    }
+    return files;
+  }
+
+  // Writes every battery save, the Controller Pak's included, to disk now instead of at unload.
+  auto flushSaves() -> void {
+    bool wasPaused = isPausedAtomic.exchange(true);
+    lock_guard<recursive_mutex> lock(*runMutex);
+    if (root) {
+      flushSavesToDisk();
+      exportControllerPak();
+    }
+    isPausedAtomic.store(wasPaused);
+  }
+
   auto saveState(const char* path) -> bool {
     bool wasPaused = isPausedAtomic.exchange(true);
     lock_guard<recursive_mutex> lock(*runMutex);

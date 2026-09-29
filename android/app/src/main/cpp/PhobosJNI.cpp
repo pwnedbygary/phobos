@@ -162,6 +162,23 @@ Java_com_phobos_emulator_PhobosCore_loadState(JNIEnv* env, jobject, jstring path
     return success ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_phobos_emulator_PhobosCore_getSaveFiles(JNIEnv* env, jobject) {
+    auto files = ares::getSaveFiles();
+    jobjectArray array = env->NewObjectArray((jsize)files.size(), env->FindClass("java/lang/String"), nullptr);
+    for (jsize i = 0; i < (jsize)files.size(); i++) {
+        jstring entry = env->NewStringUTF((const char*)files[i]);
+        env->SetObjectArrayElement(array, i, entry);
+        env->DeleteLocalRef(entry);
+    }
+    return array;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_flushSaves(JNIEnv*, jobject) {
+    ares::flushSaves();
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_phobos_emulator_PhobosCore_takeScreenshot(JNIEnv* env, jobject, jstring path) {
     const char* nativePath = env->GetStringUTFChars(path, 0);

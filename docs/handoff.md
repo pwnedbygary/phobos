@@ -216,6 +216,15 @@ the 32X's SH-2 recompiler, cothread switches, 68000/ARM7TDMI dispatch, the PC En
 timers) and four places where Phobos follows ares's speed-leaning defaults (SNES scanline PPU,
 SNES coprocessor sync, PC Engine PSG output rate, GBA/WonderSwan pixel accuracy), which only the
 user can change.
+Branch `feature/n64-save-transfer-2026-09` implements Task 49: the pause menu's Save Data section
+(N64) imports battery saves from Mupen64Plus, RetroArch or a Phobos backup and exports them in
+those formats. The conversions are plain Kotlin with host tests (`util/N64SaveTransfer.kt`); the
+byte orders were measured on the user's own saves (local copies in the git-ignored
+`.local/ref/n64-save-samples/`, with `FINDINGS.md`). An import runs between the unload and the
+reload of the running game (`startLoad`'s `beforeLoad` hook), after the unload has written the
+current save, and moves the files it replaces plus the auto-save state to `Backups/<date>` beside
+the save. Native `getSaveFiles` and `flushSaves` (`PhobosRunner.cpp`) list the game's saves and write
+them, the Controller Pak's included, to disk. Not yet checked on a device.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

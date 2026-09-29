@@ -46,6 +46,10 @@ object PhobosCore {
     external fun setShader(path: String): Boolean
     external fun saveState(path: String): Boolean
     external fun loadState(path: String): Boolean
+    /** The loaded game's battery saves, one "name\tsize\tpath" entry each (N64: save.eeprom, save.ram, save.flash, save.pak). */
+    external fun getSaveFiles(): Array<String>
+    /** Writes every battery save, the Controller Pak's included, to disk now. */
+    external fun flushSaves()
     external fun takeScreenshot(path: String): Boolean
     external fun setFastBoot(enabled: Boolean)
     external fun setSkipBootRom(enabled: Boolean)

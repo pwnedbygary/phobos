@@ -52,6 +52,8 @@ namespace ares {
   auto setN64DebugLogging(bool enabled) -> void;
   auto saveState(const char* path) -> bool;
   auto loadState(const char* path) -> bool;
+  auto getSaveFiles() -> std::vector<string>;
+  auto flushSaves() -> void;
   auto takeScreenshot(const char* path) -> bool;
   auto setFastBoot(bool enabled) -> void;
   auto setAutoSaveMemory(bool enabled) -> void;

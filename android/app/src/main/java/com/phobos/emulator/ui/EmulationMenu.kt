@@ -1,6 +1,8 @@
 package com.phobos.emulator.ui
 
 import android.content.res.Configuration
+import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,7 +23,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -29,6 +34,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.TouchApp
@@ -37,6 +44,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -44,6 +52,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,6 +62,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +78,8 @@ import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
+import com.phobos.emulator.util.N64SaveFormat
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
@@ -86,6 +98,8 @@ fun EmulationMenu(
     val diskLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.loadSecondaryRom(context, systemName, RomFile(uri.lastPathSegment ?: "Disk", uri))
     }
+    // Composed here, not in the list, so the list can't dispose its pickers' results or dialogs.
+    val saveTransfer = if (systemName.contains("Nintendo 64", ignoreCase = true)) rememberSaveTransfer(viewModel, settings) else null
     // The N64 Experimental screen replaces the main list (with a back arrow) to keep the menu short.
     var experimentalOpen by remember { mutableStateOf(false) }
     BackHandler(enabled = experimentalOpen) { experimentalOpen = false }
@@ -139,6 +153,7 @@ fun EmulationMenu(
                         }
                         if (systemName.contains("Nintendo 64", ignoreCase = true)) {
                             item { N64Section(viewModel, settings, onOpenExperimental = { experimentalOpen = true }) }
+                            saveTransfer?.let { transfer -> item { SaveDataSection(transfer) } }
                         }
                         if (systemName.contains("PlayStation", ignoreCase = true)) {
                             item {
@@ -308,6 +323,179 @@ private fun N64Section(viewModel: MainViewModel, settings: EmulatorSettings, onO
             modifier = Modifier.clickable(onClick = onOpenExperimental),
         )
     }
+}
+
+/** N64 save import and export: [pickImport] opens the file picker, [chooseExport] the format dialog. */
+private class SaveTransfer(val pickImport: () -> Unit, val chooseExport: () -> Unit)
+
+@Composable
+private fun SaveDataSection(transfer: SaveTransfer) {
+    MenuSection("Save Data") {
+        ListItem(
+            headlineContent = { Text("Import Save") },
+            supportingContent = { Text("From Mupen64Plus, RetroArch or a Phobos backup") },
+            leadingContent = { Icon(Icons.Default.FileDownload, null) },
+            colors = transparentListItemColors(),
+            modifier = Modifier.clickable(onClick = transfer.pickImport),
+        )
+        ListItem(
+            headlineContent = { Text("Export Save") },
+            supportingContent = { Text("For Mupen64Plus, RetroArch or a backup") },
+            leadingContent = { Icon(Icons.Default.FileUpload, null) },
+            colors = transparentListItemColors(),
+            modifier = Modifier.clickable(onClick = transfer.chooseExport),
+        )
+    }
+}
+
+private val N64SaveFormat.description: String
+    get() = when (this) {
+        N64SaveFormat.MUPEN64PLUS -> ".eep, .sra, .fla and .mpk files"
+        N64SaveFormat.RETROARCH -> "One .srm file, named after the ROM"
+        N64SaveFormat.PHOBOS -> "A folder of Phobos's save files, to keep as a backup"
+    }
+
+@Composable
+private fun rememberSaveTransfer(viewModel: MainViewModel, settings: EmulatorSettings): SaveTransfer {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var importUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var cartridgeOrder by remember { mutableStateOf(false) }
+    var preview by remember { mutableStateOf<SaveImportPreview?>(null) }
+    var choosingFormat by remember { mutableStateOf(false) }
+    var exportFormat by remember { mutableStateOf(N64SaveFormat.RETROARCH) }
+    var conflict by remember { mutableStateOf<Pair<Uri, List<String>>?>(null) }
+    var failure by remember { mutableStateOf<String?>(null) }
+
+    fun refreshPreview() {
+        val uris = importUris
+        val order = cartridgeOrder
+        scope.launch { preview = viewModel.previewSaveImport(uris, order) }
+    }
+    fun export(folder: Uri, replace: Boolean) {
+        val format = exportFormat
+        scope.launch {
+            when (val result = viewModel.exportSave(folder, format, replace)) {
+                is SaveExportResult.Done -> Toast.makeText(context, "Exported ${result.files.joinToString()}", Toast.LENGTH_LONG).show()
+                is SaveExportResult.Existing -> conflict = folder to result.files
+                is SaveExportResult.Failed -> failure = result.reason
+            }
+        }
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            importUris = uris
+            cartridgeOrder = false
+            refreshPreview()
+        }
+    }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { folder ->
+        if (folder != null) export(folder, replace = false)
+    }
+
+    preview?.let { current ->
+        SaveImportDialog(
+            preview = current, settings = settings, cartridgeOrder = cartridgeOrder,
+            onCartridgeOrder = { cartridgeOrder = it; refreshPreview() },
+            onImport = { preview = null; viewModel.importSave(context, current.plan) },
+            onDismiss = { preview = null },
+        )
+    }
+    if (choosingFormat) {
+        AlertDialog(
+            onDismissRequest = { choosingFormat = false },
+            title = { DialogSystemBars(settings.fullScreenMode, inGame = true); Text("Export save") },
+            text = {
+                Column {
+                    for (format in N64SaveFormat.entries) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                                .selectable(selected = exportFormat == format, onClick = { exportFormat = format })
+                                .padding(vertical = 4.dp),
+                        ) {
+                            RadioButton(selected = exportFormat == format, onClick = null)
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(format.label, style = MaterialTheme.typography.bodyLarge)
+                                Text(format.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { choosingFormat = false; exportLauncher.launch(null) }) { Text("Choose Folder") } },
+            dismissButton = { TextButton(onClick = { choosingFormat = false }) { Text("Cancel") } },
+        )
+    }
+    conflict?.let { (folder, files) ->
+        AlertDialog(
+            onDismissRequest = { conflict = null },
+            title = {
+                DialogSystemBars(settings.fullScreenMode, inGame = true)
+                Text(if (files.size == 1) "Replace the existing file?" else "Replace ${files.size} existing files?")
+            },
+            text = { Text(files.joinToString("\n")) },
+            confirmButton = {
+                TextButton(
+                    onClick = { conflict = null; export(folder, replace = true) },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Replace") }
+            },
+            dismissButton = { TextButton(onClick = { conflict = null }) { Text("Cancel") } },
+        )
+    }
+    failure?.let { reason ->
+        AlertDialog(
+            onDismissRequest = { failure = null },
+            title = { DialogSystemBars(settings.fullScreenMode, inGame = true); Text("Couldn't export the save") },
+            text = { Text(reason) },
+            confirmButton = { TextButton(onClick = { failure = null }) { Text("OK") } },
+        )
+    }
+    return remember(importLauncher) { SaveTransfer(pickImport = { importLauncher.launch(arrayOf("*/*")) }, chooseExport = { choosingFormat = true }) }
+}
+
+@Composable
+private fun SaveImportDialog(
+    preview: SaveImportPreview, settings: EmulatorSettings, cartridgeOrder: Boolean,
+    onCartridgeOrder: (Boolean) -> Unit, onImport: () -> Unit, onDismiss: () -> Unit,
+) {
+    val canImport = preview.plan.writes.isNotEmpty()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { DialogSystemBars(settings.fullScreenMode, inGame = true); Text(if (canImport) "Import this save?" else "Nothing to import") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((kind, source) in preview.plan.sources) Text("${kind.label}: $source", style = MaterialTheme.typography.bodyMedium)
+                if (canImport) {
+                    Text(
+                        "What it replaces moves to a Backups folder beside the save first, with this game's auto-save " +
+                            "state, which would bring the old save back. Then the game restarts with the imported save.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                val notes = preview.plan.notes + preview.unreadable.map { "${it.name}: ${it.reason}." }
+                for (note in notes) Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (preview.offersCartridgeOrder) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().clickable { onCartridgeOrder(!cartridgeOrder) },
+                    ) {
+                        Checkbox(checked = cartridgeOrder, onCheckedChange = onCartridgeOrder)
+                        Text(
+                            "The SRAM or FlashRAM file is a cartridge dump or from ares, already in N64 byte order",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (canImport) TextButton(onClick = onImport) { Text("Import") } else TextButton(onClick = onDismiss) { Text("OK") }
+        },
+        dismissButton = if (canImport) ({ TextButton(onClick = onDismiss) { Text("Cancel") } }) else null,
+    )
 }
 
 @Composable
