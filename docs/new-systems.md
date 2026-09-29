@@ -61,7 +61,8 @@ GPL-3.0-or-later in practice. For Phobos:
   be linked into the app.
 - The ares-derived files keep their ISC notices; the GPL covers the combined app.
 
-This is the user's decision, and it comes before any of the GPL-based rows. Other licenses:
+**Decided 2026-09-29:** the user accepts GPL-3.0-or-later for the whole app, switched when the
+first GPL core lands (with the license text and notices updated in that change). Other licenses:
 Handy (Lynx) is zlib-licensed and fits either way; FinalBurn Neo's non-commercial license is
 incompatible with the GPL; most of MAME's drivers and devices are BSD-3-Clause, so they can be
 ported into a native core under either license, although MAME as a whole is GPL-2.0-or-later.
@@ -70,10 +71,11 @@ ported into a native core under either license, although MAME as a whole is GPL-
 
 Phobos's rule is never to publish ROMs, firmware or keys. PPSSPP's source contains the keys for
 decrypting commercial PSP games' executables, so bundling it puts them in the APK (the repository
-would only reference PPSSPP's). That needs the user's call before the PSP work starts; the
-alternative, asking users for a key file or decrypted games, would shut out most of them. MAME's
-CPS-3 driver keeps per-game keys in its source, and Flycast's NAOMI support should be checked for
-the same question.
+would only reference PPSSPP's). **Decided 2026-09-29:** the user allows shipping PPSSPP as
+upstream does, keys included, rather than asking users for a key file or decrypted games, which
+would shut out most of them. That exception covers PPSSPP only: MAME's CPS-3 driver keeps
+per-game keys in its source, and Flycast's NAOMI support should be checked for the same question,
+before either is used.
 
 ## Systems ares already has
 
@@ -109,8 +111,8 @@ buffered rendering, no frame skipping, the default CPU clock, fast memory off.
 
 Phobos's side: the libretro host, a PSP touch layout (d-pad, analog nub, four face buttons, L and
 R, Start and Select), a PSP folder for the memory stick (PPSSPP keeps saves as a memory stick
-directory tree), loading the image formats PPSSPP accepts (ISO, CSO, PBP and others), and the
-keys question above. First milestone: the core builds into both flavors, boots homebrew and then
+directory tree), and loading the image formats PPSSPP accepts (ISO, CSO, PBP and others); the
+keys ship with PPSSPP (see Keys). First milestone: the core builds into both flavors, boots homebrew and then
 a game from the user's library, and matches the standalone PPSSPP app's frame rate on the RP6.
 
 ## Dreamcast, NAOMI and Atomiswave
@@ -221,8 +223,7 @@ A suggestion; the user sets the order.
 
 1. The systems ares already has (native, no license question), starting with the 32X and the Super
    Game Boy.
-2. The licensing and keys decisions.
-3. The libretro host with the PSP (PPSSPP), then the Dreamcast (Flycast), then the Saturn
-   (Mednafen).
-4. The DS (melonDS), if wanted.
-5. Arcade boards (CPS-1, CPS-2), then the smaller systems by demand.
+2. The libretro host with the PSP (PPSSPP), then the Dreamcast (Flycast), then the Saturn
+   (Mednafen); the licensing and keys questions were settled on 2026-09-29.
+3. The DS (melonDS), if wanted.
+4. Arcade boards (CPS-1, CPS-2), then the smaller systems by demand.

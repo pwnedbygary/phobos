@@ -206,8 +206,9 @@ generation. [new-systems.md](new-systems.md) lists the candidates and routes: PP
 and Flycast for the Dreamcast (both named by the user) through a libretro host, Mednafen's Saturn
 emulation, the systems the ares tree has but Phobos doesn't list (32X, Super Game Boy, Arcade,
 LaserActive, Pocket Challenge V2), melonDS for the DS (suggested), arcade boards, smaller consoles
-and computers. Bundling GPL emulators makes the app GPL-3.0-or-later, and PPSSPP ships the PSP's
-decryption keys: both are the user's decisions, before any of that work starts.
+and computers. The user decided both open questions on 2026-09-29: the app moves to
+GPL-3.0-or-later when the first GPL core lands, and PPSSPP ships as upstream does, with the PSP's
+decryption keys in its source (an exception to the rule against publishing keys, for PPSSPP only).
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
