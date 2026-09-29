@@ -228,6 +228,11 @@ them, the Controller Pak's included, to disk. Checked on the RP6 (2026-09-29): a
 import (the save showed in Paper Mario's file select), a RetroArch export into RetroArch's
 `saves/n64` (byte-identical FlashRAM), the replace prompt, and a `.srm` import that moved the
 auto-save state into the backup folder.
+Branch `feature/new-logo-2026-09` replaces the logo with the design the user chose from thirteen
+concepts: a pixel-art Phobos (the real moon's shape, with a D-pad crater) in front of Mars. The
+launcher icon is adaptive (background and foreground layers; no text and no monochrome layer, both
+the user's choices), and the in-app logo is the round icon. `tools/logo/build_icon.py` rebuilds every
+asset from the two source images beside it (it needs Pillow).
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
