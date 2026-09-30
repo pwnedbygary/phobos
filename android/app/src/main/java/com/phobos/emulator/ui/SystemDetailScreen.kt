@@ -116,7 +116,7 @@ fun SystemDetailScreen(
                                     headlineContent = { Text(rom.name) },
                                     leadingContent = { IconBadge(Icons.Default.PlayArrow) },
                                     colors = transparentListItemColors(),
-                                    modifier = Modifier.clickable {
+                                    modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable {
                                         // The game already paused behind the Library carries on instead of restarting
                                         if (viewModel.isRunning(systemName, rom.name)) {
                                             viewModel.swapBackToGame()

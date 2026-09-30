@@ -162,7 +162,7 @@ fun ThemedCard(
         val scale by animateFloatAsState(if (pressed && (solid != null || !glassOff)) 0.97f else 1f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), label = "cardPress")
         Surface(
             onClick = onClick,
-            modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale }.then(edge).then(panel),
+            modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale }.then(edge).then(panel).focusRing(scheme.primary, shape),
             shape = shape,
             color = Color.Transparent,
             contentColor = scheme.onSurface,
@@ -235,7 +235,7 @@ fun SettingsSwitchItem(title: String, description: String, checked: Boolean, onC
             }
         },
         colors = transparentListItemColors(),
-        modifier = Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
+        modifier = Modifier.fillMaxWidth().focusRing(MaterialTheme.colorScheme.primary).toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
     )
 }
 
@@ -245,7 +245,7 @@ fun SettingsCheckboxItem(title: String, checked: Boolean, onCheckedChange: (Bool
         headlineContent = { Text(title) },
         trailingContent = { Checkbox(checked = checked, onCheckedChange = null) },
         colors = transparentListItemColors(),
-        modifier = Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Checkbox, onValueChange = onCheckedChange),
+        modifier = Modifier.fillMaxWidth().focusRing(MaterialTheme.colorScheme.primary).toggleable(value = checked, role = Role.Checkbox, onValueChange = onCheckedChange),
     )
 }
 
@@ -262,7 +262,7 @@ fun <T> SettingsDropdownItem(
 ) {
     var expanded by remember { mutableStateOf(false) }
     ListItem(
-        modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f).clickable(enabled = enabled) { expanded = true },
+        modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f).focusRing(MaterialTheme.colorScheme.primary).clickable(enabled = enabled) { expanded = true },
         headlineContent = { Text(title) },
         supportingContent = if (description != null) { { Text(description) } } else null,
         trailingContent = {
@@ -401,7 +401,7 @@ fun SettingsClickableItem(title: String, description: String, onClick: () -> Uni
         leadingContent = if (icon != null) { { IconBadge(icon) } } else null,
         trailingContent = { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null) },
         colors = transparentListItemColors(),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().focusRing(MaterialTheme.colorScheme.primary).clickable(onClick = onClick),
     )
 }
 

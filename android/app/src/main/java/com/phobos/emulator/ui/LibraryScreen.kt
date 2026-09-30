@@ -158,12 +158,12 @@ private fun RunningGameCard(game: RunningGame, fill: Color, onResume: () -> Unit
             }
             Spacer(Modifier.width(12.dp))
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onResume, shape = pillShape()) {
+                Button(onClick = onResume, modifier = Modifier.focusRing(MaterialTheme.colorScheme.onPrimary, pillShape()), shape = pillShape()) {
                     Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
                     Text("Resume")
                 }
-                OutlinedButton(onClick = onQuit, shape = pillShape()) { Text("Quit") }
+                OutlinedButton(onClick = onQuit, modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary, pillShape()), shape = pillShape()) { Text("Quit") }
             }
         }
     }

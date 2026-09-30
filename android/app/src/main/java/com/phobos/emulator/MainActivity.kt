@@ -148,6 +148,15 @@ class MainActivity : ComponentActivity() {
                 } else {
                     pressedKeys.clear()
                 }
+                // L1/R1 outside the game step through the Library, Console and Settings tabs (MainScaffold),
+                // unless the Library hotkey uses them.
+                val shoulder = event.keyCode == KeyEvent.KEYCODE_BUTTON_L1 || event.keyCode == KeyEvent.KEYCODE_BUTTON_R1
+                if (!visible && shoulder && event.keyCode !in (viewModel.settings.value.hotkeys["library"] ?: emptyList())) {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        viewModel.stepTab(if (event.keyCode == KeyEvent.KEYCODE_BUTTON_L1) -1 else 1)
+                    }
+                    return true
+                }
                 return originalCallback.dispatchKeyEvent(event)
             }
         }
@@ -229,8 +238,10 @@ class MainActivity : ComponentActivity() {
         // 1) Let the view hierarchy (mapping screen listener, emulator SurfaceView) try first.
         if (super.dispatchGenericMotionEvent(event)) return true
 
-        // 2) Emulator-only fallback: full mapping pipeline through shared state.
-        if (viewModel.isLoaded.value &&
+        // 2) Emulator-only fallback: full mapping pipeline through shared state, while the game runs on
+        //    screen. Paused or behind the Library the motion is left unhandled, so Android turns a hat D-pad
+        //    (the RP6's) and the left stick into D-pad keys that move focus through the menus.
+        if (viewModel.isLoaded.value && viewModel.emulatorScreenVisible.value && !viewModel.isPaused.value &&
             (event.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
             event.action == MotionEvent.ACTION_MOVE) {
             return GameInputState.handleMotionEvent(event, viewModel.settings.value.inputMappings, viewModel.loadedSystemName)

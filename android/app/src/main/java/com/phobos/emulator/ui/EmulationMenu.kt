@@ -192,9 +192,10 @@ fun EmulationMenu(
 
                 Spacer(Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    OutlinedButton(onClick = onQuit, modifier = Modifier.weight(1f), shape = pillShape()) { Text("Quit Game") }
-                    OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f), shape = pillShape()) { Text("Library") }
-                    Button(onClick = onResume, modifier = Modifier.weight(1f), shape = pillShape()) { Text("Resume") }
+                    val ring = MaterialTheme.colorScheme.primary
+                    OutlinedButton(onClick = onQuit, modifier = Modifier.weight(1f).focusRing(ring, pillShape()), shape = pillShape()) { Text("Quit Game") }
+                    OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f).focusRing(ring, pillShape()), shape = pillShape()) { Text("Library") }
+                    Button(onClick = onResume, modifier = Modifier.weight(1f).focusRing(MaterialTheme.colorScheme.onPrimary, pillShape()), shape = pillShape()) { Text("Resume") }
                 }
             }
         }
@@ -221,7 +222,7 @@ private fun QuickActions(
 
 @Composable
 private fun QuickAction(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier) {
-    FilledTonalButton(onClick = onClick, modifier = modifier, shape = pillShape(), contentPadding = ButtonDefaults.TextButtonContentPadding) {
+    FilledTonalButton(onClick = onClick, modifier = modifier.focusRing(MaterialTheme.colorScheme.primary, pillShape()), shape = pillShape(), contentPadding = ButtonDefaults.TextButtonContentPadding) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(icon, contentDescription = null)
             Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
@@ -337,7 +338,7 @@ private fun N64Section(viewModel: MainViewModel, settings: EmulatorSettings, onO
             supportingContent = { Text("Overclocking, VI rendering, debug logging") },
             trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
             colors = transparentListItemColors(),
-            modifier = Modifier.clickable(onClick = onOpenExperimental),
+            modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable(onClick = onOpenExperimental),
         )
     }
 }
@@ -578,7 +579,7 @@ private fun DisplaySection(viewModel: MainViewModel, settings: EmulatorSettings,
             supportingContent = { Text("Preset, layout and which stats it shows") },
             trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
             colors = transparentListItemColors(),
-            modifier = Modifier.clickable(onClick = onOpenPerfHud),
+            modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable(onClick = onOpenPerfHud),
         )
         SettingsDropdownItem(
             title = "Aspect Ratio",

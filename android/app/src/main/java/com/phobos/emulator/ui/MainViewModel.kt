@@ -19,6 +19,7 @@ import com.phobos.emulator.LogEntry
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.PerformanceStats
 import com.phobos.emulator.PhobosCore
+import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.data.GlassEffects
@@ -45,6 +46,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -436,7 +438,14 @@ class MainViewModel(
     fun setPause(paused: Boolean) {
         _isPaused.value = paused
         PhobosCore.setPause(paused)
+        // Controller input goes to the menus while paused, so a button held now would stay down for the game.
+        if (paused) GameInputState.releaseAllButtons()
     }
+
+    private val _tabSteps = MutableSharedFlow<Int>(extraBufferCapacity = 4)
+    /** Steps through the dock's tabs from L1/R1 (MainActivity), for MainScaffold: -1 back, +1 on. */
+    val tabSteps: SharedFlow<Int> = _tabSteps.asSharedFlow()
+    fun stepTab(step: Int) { _tabSteps.tryEmit(step) }
 
     fun addSystemRomPath(system: String, path: String) = viewModelScope.launch {
         settingsStore.addSystemRomPath(system, path)

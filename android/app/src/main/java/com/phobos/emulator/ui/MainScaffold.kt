@@ -141,6 +141,22 @@ fun MainScaffold(viewModel: MainViewModel) {
         }
     }
 
+    // L1/R1 outside the game (MainActivity): the dock tab before or after the current page's
+    // section, wrapping around; the game screen and its pause menu keep them.
+    LaunchedEffect(Unit) {
+        viewModel.tabSteps.collect { step ->
+            val current = navController.currentDestination?.route ?: return@collect
+            if (current.startsWith("emulator/")) return@collect
+            val section = NAV_TABS.indexOfFirst { current == it.route || current.startsWith(it.route + "/") }
+                .takeIf { it >= 0 } ?: NAV_TABS.indexOfFirst { it.route == "library" }
+            val target = NAV_TABS[(section + step).mod(NAV_TABS.size)].route
+            navController.navigate(target) {
+                popUpTo(navController.graph.startDestinationId)
+                launchSingleTop = true
+            }
+        }
+    }
+
     val route = currentDestination?.route
     val theme = LocalPhobosTheme.current
     val retrowave = theme.retrowave
@@ -479,9 +495,11 @@ private fun DockItem(tab: NavTab, selected: Boolean, retrowave: Boolean, onClick
         if (selected) solid?.dockIconColor() ?: scheme.primary else scheme.onSurfaceVariant,
         label = "dockIcon",
     )
+    val tabShape = solid?.dockTabShape ?: RoundedCornerShape(22.dp)
     Column(
         modifier = modifier
-            .clip(solid?.dockTabShape ?: RoundedCornerShape(22.dp))
+            .clip(tabShape)
+            .focusRing(scheme.primary, tabShape)
             .selectable(selected = selected, onClick = onClick, role = Role.Tab)
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

@@ -381,6 +381,14 @@ while the emulator screen isn't showing, with the frame `swapToLibrary()` captur
 `PhobosCore.takeScreenshot`) drives the Library's Running card (`RunningGameCard` in
 `LibraryScreen.kt`), and the system page's ROM tap calls `swapBackToGame()` for the running game
 (`isRunning`) instead of loading it again.
+Branch `feature/controller-nav-2026-09`: `MainActivity.dispatchGenericMotionEvent` passes joystick
+motion to `GameInputState` only while the game runs on screen (`emulatorScreenVisible && !isPaused`).
+Otherwise it's left unhandled, so ViewRootImpl turns the RP6's hat D-pad (its built-in controller is
+an "Xbox Wireless Controller" with HAT_X/HAT_Y and no D-pad keys) and left stick into D-pad keys for
+Compose focus. `Modifier.focusRing` (`ui/FocusRing.kt`) rings the focused element; it's on
+`ThemedCard`, the settings rows, the dock tabs, the pause menu's actions and rows, ROM rows and the
+Running card. The window callback turns L1/R1 into `viewModel.stepTab()`, which `MainScaffold`
+follows to the neighbouring dock tab, and `setPause(true)` calls `GameInputState.releaseAllButtons()`.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
