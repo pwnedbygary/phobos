@@ -319,6 +319,9 @@ text and icons are drawn opaque and faded with their outline, which would otherw
 and the Library tiles use them; a top-bar action's icon should be a `LegibleIcon`, whose outline
 follows its own tint (the Console's and Shaders' are). `LegibilityTest` and `GlassContrastTest`
 check the outline and tile colors for every theme.
+Branch `fix/console-follow-2026-09`, stacked on it, keys the Console's scroll-to-end on the log list
+rather than its size, which stops changing once the log holds `MainViewModel`'s 2,000 lines. A drag
+(`DragInteraction.Start` on the list) stops following; coming to rest at the end resumes it.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
