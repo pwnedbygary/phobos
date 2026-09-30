@@ -376,6 +376,11 @@ Branch `feature/perf-hud-order-2026-09`, stacked on it: `HudConfig.order` (`HudI
 in `perfHudOrder`; `HudItem.parseOrder` drops names it doesn't know and appends missing items in
 their default order) drives both HUD layouts, and the vertical one still puts FPS and frame time in
 one row when they're next to each other. `PerfHudOrderItems` is the reorder list on both screens.
+Branch `feature/library-running-2026-09`, stacked on it: `MainViewModel.runningGame` (the loaded game
+while the emulator screen isn't showing, with the frame `swapToLibrary()` captures through
+`PhobosCore.takeScreenshot`) drives the Library's Running card (`RunningGameCard` in
+`LibraryScreen.kt`), and the system page's ROM tap calls `swapBackToGame()` for the running game
+(`isRunning`) instead of loading it again.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

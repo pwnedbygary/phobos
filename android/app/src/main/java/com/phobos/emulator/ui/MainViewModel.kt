@@ -98,6 +98,9 @@ data class VideoGeometry(val width: Float, val height: Float) {
 
 /** A filled save-state slot: its preview (null for states saved before previews existed) and save time. */
 data class StateSlotPreview(val image: Bitmap?, val savedAtMillis: Long)
+
+/** The game left paused behind the Library (Pause menu > Library, or its hotkey), with its last frame when captured. */
+data class RunningGame(val systemName: String, val romName: String, val frame: Bitmap?)
 private data class DriverSidecar(val owner: String, val repo: String, val tag: String)
 
 /** A game another app asked for, waiting on the user to pick its system. */
@@ -554,6 +557,7 @@ class MainViewModel(
         // makes the new screen show "Initializing..." until the load lands.
         _isLoaded.value = false
         _isPaused.value = false
+        _runningFrame.value = null
         PhobosCore.setEmulationRunning(false)
         PhobosCore.unloadSystem()
         CoreSession.system = ""
@@ -1134,6 +1138,21 @@ class MainViewModel(
     private val _emulatorScreenVisible = MutableStateFlow(false)
     val emulatorScreenVisible: StateFlow<Boolean> = _emulatorScreenVisible
 
+    // The game a captured frame shows: a capture that finishes after a game change isn't passed off as the new game's.
+    private data class CapturedFrame(val systemName: String, val romName: String, val bitmap: Bitmap)
+    private val _runningFrame = MutableStateFlow<CapturedFrame?>(null)
+    /** The loaded game while another screen shows, for the Library's Running card; null otherwise. */
+    val runningGame: StateFlow<RunningGame?> = combine(_isLoaded, _emulatorScreenVisible, _runningFrame) { loaded, visible, frame ->
+        if (loaded && !visible && currentSystemName.isNotEmpty() && currentRomName.isNotEmpty()) {
+            val bitmap = frame?.takeIf { it.systemName == currentSystemName && it.romName == currentRomName }?.bitmap
+            RunningGame(currentSystemName, currentRomName, bitmap)
+        } else null
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Whether [romName] on [systemName] is the game that's loaded. */
+    fun isRunning(systemName: String, romName: String): Boolean =
+        _isLoaded.value && currentSystemName == systemName && currentRomName == romName
+
     // The EmulatorScreen on show. When a frontend starts a game over the running one, the new game's screen
     // arrives before the old one leaves, so only the current screen's exit counts.
     private var emulatorScreen: Any? = null
@@ -1164,7 +1183,27 @@ class MainViewModel(
     /** Pause + leave to the library; the game stays loaded (swap-screen feature). */
     fun swapToLibrary() {
         setPause(true)
+        captureRunningFrame()
         navigateTo("library")
+    }
+
+    private fun captureRunningFrame() {
+        val systemName = currentSystemName
+        val romName = currentRomName
+        viewModelScope.launch(Dispatchers.IO) {
+            val shot = File(context.cacheDir, "running-${System.nanoTime()}.png")
+            val frame = try {
+                if (PhobosCore.takeScreenshot(shot.absolutePath) && shot.length() > 0) {
+                    decodePreview { shot.inputStream() }?.let { toDisplayAspect(it) }
+                } else null
+            } catch (e: Exception) {
+                Log.w("Phobos", "Running game's frame not captured: ${e.message}")
+                null
+            } finally {
+                shot.delete()
+            }
+            _runningFrame.value = frame?.let { CapturedFrame(systemName, romName, it) }
+        }
     }
 
     /** Return to the running game from library/settings; resumes emulation. */

@@ -117,8 +117,13 @@ fun SystemDetailScreen(
                                     leadingContent = { IconBadge(Icons.Default.PlayArrow) },
                                     colors = transparentListItemColors(),
                                     modifier = Modifier.clickable {
-                                        viewModel.loadRom(context, systemName, rom)
-                                        onRomClick(Uri.encode(systemName), Uri.encode(rom.name))
+                                        // The game already paused behind the Library carries on instead of restarting
+                                        if (viewModel.isRunning(systemName, rom.name)) {
+                                            viewModel.swapBackToGame()
+                                        } else {
+                                            viewModel.loadRom(context, systemName, rom)
+                                            onRomClick(Uri.encode(systemName), Uri.encode(rom.name))
+                                        }
                                     }
                                 )
                             }
