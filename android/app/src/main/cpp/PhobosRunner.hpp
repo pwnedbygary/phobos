@@ -98,8 +98,8 @@ namespace ares {
   auto setNativeLibraryDir(const char* path) -> void;
   auto setFirmwarePath(const char* path) -> void;
   auto mapFirmwareFile(const char* name, const char* path) -> void;
-  // Firmware keys [system] can't start without that aren't set or don't fit ("fw_mcd" for any
-  // Mega CD BIOS); empty when nothing is missing or the system has no such check.
+  // Firmware keys [system] can't start without that aren't set ("fw_mcd" for any Mega CD BIOS);
+  // empty when nothing is missing or the system has no such check.
   auto missingFirmware(const char* system) -> std::vector<string>;
   auto setCustomDriverPath(const char* path) -> void;
   auto loadSecondaryRom(const char* systemName, const char* uri) -> bool;

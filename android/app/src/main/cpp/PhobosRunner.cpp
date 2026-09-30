@@ -847,22 +847,21 @@ namespace ares {
   static string vulkanCachePath;
   static std::map<string, string> firmwareMap;
 
-  // The 32X's boot ROMs, which Phobos doesn't ship: Sega's 68000 vector table and the two SH-2 boot
-  // ROMs, set on the Firmware screen (else read from System/Mega Drive/). Each has one size, so a
-  // wrong file counts as missing.
-  struct Mega32XBootFile { const char* key; const char* name; size_t size; };
-  static constexpr Mega32XBootFile mega32XBootFiles[] = {
-    {"fw_32x_g", "vector.rom", 256},
-    {"fw_32x_m", "sh2.boot.mrom", 2048},
-    {"fw_32x_s", "sh2.boot.srom", 1024},
+  // The 32X's boot ROMs: Sega's 68000 vector table and the two SH-2 boot ROMs, from the Firmware
+  // screen when set there, else the copies ares bundles. A set file of the wrong size is ignored.
+  struct Mega32XBootFile { const char* key; const char* name; const mia::Resource::Blob& bundled; };
+  static const Mega32XBootFile mega32XBootFiles[] = {
+    {"fw_32x_g", "vector.rom", mia::Resource::Mega32X::Vector},
+    {"fw_32x_m", "sh2.boot.mrom", mia::Resource::Mega32X::SH2BootM},
+    {"fw_32x_s", "sh2.boot.srom", mia::Resource::Mega32X::SH2BootS},
   };
 
   static auto readMega32XBootFile(const Mega32XBootFile& file) -> std::vector<u8> {
-    std::vector<u8> data;
-    if (auto it = firmwareMap.find(file.key); it != firmwareMap.end()) data = nall::file::read(it->second);
-    if (data.size() != file.size) data = nall::file::read(string{homePath, "/System/Mega Drive/", file.name});
-    if (data.size() != file.size) data.clear();
-    return data;
+    if (auto it = firmwareMap.find(file.key); it != firmwareMap.end()) {
+      auto data = nall::file::read(it->second);
+      if (data.size() == file.bundled.size) return data;
+    }
+    return {file.bundled.data, file.bundled.data + file.bundled.size};
   }
 
   // Whether pak() has a Mega CD BIOS to give the Mega Drive system pak.
@@ -1964,11 +1963,7 @@ namespace ares {
           if (!attached) attachFile("bios.rom");
           // Mega 32X and Mega CD 32X: M32X::load() reads the boot ROMs from this pak.
           if (node->attribute("configuration").find("32X")) {
-              for (auto& file : mega32XBootFiles) {
-                  auto data = readMega32XBootFile(file);
-                  if (data.empty()) { LOGW("VFS: 32X boot ROM %s missing", file.name); continue; }
-                  if (auto fp = vfs::memory::open(data)) dir->append(file.name, fp);
-              }
+              for (auto& file : mega32XBootFiles) dir->append(file.name, readMega32XBootFile(file));
           }
       } else if (nodeName == "Neo Geo CD") {
           // Neo Geo CD needs the CD BIOS (neocd.zip via fw_ng_cd) in the system
@@ -2150,24 +2145,19 @@ namespace ares {
           // loader. Without it the core allocates the ROM filled with 0xFF —
           // the CPU executes RST-38h garbage → colored stripe screen, tape
           // games never load.
-          // 48K: 16K bios.rom. 128K: 16K bios.rom + 16K sub.rom.
-          bool attached = false;
-          if (nodeName == "ZX Spectrum 128") {
-              auto it_zx = firmwareMap.find("fw_zx128");
-              if (it_zx != firmwareMap.end()) attached = attachFile((const char*)it_zx->second, "bios.rom");
-              if (!attached) {
-                  auto it_48 = firmwareMap.find("fw_zx48");
-                  if (it_48 != firmwareMap.end()) attached = attachFile((const char*)it_48->second, "bios.rom");
-              }
-              if (!attached) attachFile("bios.rom");
+          // 48K: 16K bios.rom. 128K: 16K bios.rom + 16K sub.rom. A ROM set on
+          // the Firmware screen comes first, else the copies ares bundles.
+          bool is128 = nodeName == "ZX Spectrum 128";
+          auto it_zx = firmwareMap.find(is128 ? "fw_zx128" : "fw_zx48");
+          bool attached = it_zx != firmwareMap.end() && attachFile((const char*)it_zx->second, "bios.rom");
+          if (!attached) attached = attachFile("bios.rom");
+          if (!attached) dir->append("bios.rom", is128 ? mia::Resource::ZXSpectrum128::BIOS : mia::Resource::ZXSpectrum::BIOS);
+          if (is128) {
               // sub.rom = 128K second half (e.g. Fuse 128-1.rom)
               auto it_sub = firmwareMap.find("fw_zx128_sub");
-              if (it_sub != firmwareMap.end()) attachFile((const char*)it_sub->second, "sub.rom");
-              else attachFile("sub.rom");
-          } else {
-              auto it_zx = firmwareMap.find("fw_zx48");
-              if (it_zx != firmwareMap.end()) attached = attachFile((const char*)it_zx->second, "bios.rom");
-              if (!attached) attached = attachFile("bios.rom");
+              bool sub = it_sub != firmwareMap.end() && attachFile((const char*)it_sub->second, "sub.rom");
+              if (!sub) sub = attachFile("sub.rom");
+              if (!sub) dir->append("sub.rom", mia::Resource::ZXSpectrum128::Sub);
           }
       }
 
@@ -2870,8 +2860,8 @@ else if (port->type() == "Keyboard") {
         return false;
     }
 
-    // Without its BIOS the 32X's SH-2s run from empty boot ROMs (a black screen); the Library asks
-    // missingFirmware() first and says what to add.
+    // Without its BIOS the Mega CD's sub-68000 runs from empty memory (a black screen); the Library
+    // asks missingFirmware() first and says what to add.
     if (!missingFirmware((const char*)identifiedSystem).empty()) {
         LOGE("%s: BIOS missing — refusing to load", (const char*)identifiedSystem);
         currentMedium.reset();
@@ -3780,12 +3770,7 @@ else if (port->type() == "Keyboard") {
   auto missingFirmware(const char* system) -> std::vector<string> {
     std::vector<string> missing;
     string name = system ? system : "";
-    if (name == "Mega 32X" || name == "Mega CD 32X") {
-      for (auto& file : mega32XBootFiles) {
-        if (readMega32XBootFile(file).empty()) missing.push_back(file.key);
-      }
-    }
-    if (name == "Mega CD 32X" && !hasMegaCDBios()) missing.push_back("fw_mcd");
+    if ((name == "Mega CD" || name == "Mega CD 32X") && !hasMegaCDBios()) missing.push_back("fw_mcd");
     return missing;
   }
   auto setHomePath(const char* path) -> void {

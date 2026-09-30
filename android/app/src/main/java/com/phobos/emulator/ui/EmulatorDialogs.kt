@@ -11,7 +11,7 @@ import androidx.compose.ui.Modifier
 
 /**
  * Dialogs shown over the emulator: quit confirmation, GPU driver suggestion, and load failures
- * (unsupported core, missing Neo Geo or 32X BIOS, Neo Geo ROM that failed to load). Load-failure
+ * (unsupported core, missing Neo Geo or Mega CD BIOS, Neo Geo ROM that failed to load). Load-failure
  * dialogs return to the previous screen via [onLeave] because nothing was loaded.
  */
 @Composable
@@ -79,11 +79,13 @@ fun EmulatorDialogs(
     }
 
     firmwareRequired?.let { required ->
+        val one = required.keys.size == 1
         LoadFailureDialog(
             title = "BIOS Required",
-            message = "${required.system} games need these BIOS files, which Phobos doesn't include:\n\n" +
+            message = "${required.system} games need ${if (one) "this BIOS file" else "these BIOS files"}, " +
+                "which Phobos doesn't include:\n\n" +
                 required.keys.joinToString("\n") { "• ${firmwareFileName(it)}" } +
-                "\n\nAdd them in Settings → Emulation → Firmware (BIOS).",
+                "\n\nAdd ${if (one) "it" else "them"} in Settings → Emulation → Firmware (BIOS).",
             fullScreen = fullScreen,
             onDismiss = { viewModel.dismissFirmwareRequired(); onLeave() },
         )

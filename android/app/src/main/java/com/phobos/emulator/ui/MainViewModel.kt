@@ -1946,7 +1946,7 @@ class MainViewModel(
         "scph7502.bin" to "fw_psx_eu",
         // FDS alternate
         "fds.rom" to "fw_fds",
-        // ZX Spectrum 48K system ROM (required to boot)
+        // ZX Spectrum 48K system ROM (ares's copy is used when none is set)
         "48.rom" to "fw_zx48",
         "zx48.rom" to "fw_zx48",
         "zxspectrum.rom" to "fw_zx48",

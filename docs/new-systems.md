@@ -77,6 +77,14 @@ would shut out most of them. That exception covers PPSSPP only: MAME's CPS-3 dri
 per-game keys in its source, and Flycast's NAOMI support should be checked for the same question,
 before either is used.
 
+**Firmware, decided 2026-09-29:** Phobos ships whatever firmware upstream ares ships, and no
+more: its `ares/System` folder (the APK's assets) and the `mia/Firmware` files ares compiles in
+(`mia/resource/resource.bml`). That is the Game Boy, Game Boy Color, WonderSwan and Pocket
+Challenge V2 boot ROMs, the N64 PIF and CIC ROMs, Sega's TMSS and the SVP's ROM, the 32X's boot
+ROMs, the SNES's IPL and coprocessor firmware, the ZX Spectrum 48K and 128K ROMs, and C-BIOS for
+the MSX. Firmware ares doesn't ship (the Mega CD, PlayStation, Neo Geo, GBA and other BIOSes)
+stays the user's to supply.
+
 ## Systems ares already has
 
 These are native, ISC and raise no licensing question: the ares tree Phobos builds already
@@ -85,8 +93,8 @@ contains them, but Phobos's system table doesn't list them.
 - **Mega 32X and Mega CD 32X** (`ares/md/m32x`): the 32X's library (Virtua Racing Deluxe,
   Knuckles' Chaotix, Star Wars Arcade, Doom) and the handful of CD 32X games. Two SH-2s run beside
   the Mega Drive's 68000 and Z80, so measure on the RP6 first. **Added 2026-09-29** (branch
-  `feature/sega-32x-2026-09`), with the SH-2 recompiler on and the 32X BIOS from the Firmware
-  screen; not yet measured with a game.
+  `feature/sega-32x-2026-09`), with the SH-2 recompiler on and ares's bundled 32X BIOS unless the
+  Firmware screen sets another; not yet measured with a game.
 - **Super Game Boy** (`ares/sfc/coprocessor/icd` with the Game Boy core): Game Boy games with the
   SGB's borders and palettes. Needs the Super Game Boy cartridge ROM as firmware, loaded with the
   game the way ares loads a second cartridge.

@@ -33,9 +33,6 @@ data class FirmwareInfo(
 
 /** The file the BIOS behind a key from `PhobosCore.missingFirmware` usually comes as. */
 fun firmwareFileName(key: String): String = when (key) {
-    "fw_32x_g" -> "32X_G_BIOS.BIN (68000)"
-    "fw_32x_m" -> "32X_M_BIOS.BIN (SH-2 master)"
-    "fw_32x_s" -> "32X_S_BIOS.BIN (SH-2 slave)"
     "fw_mcd" -> "Mega CD BIOS (US, Japan or Europe)"
     else -> key
 }

@@ -66,7 +66,7 @@ object PhobosCore {
     external fun setNativeLibraryDir(path: String)
     external fun setFirmwarePath(path: String)
     external fun mapFirmwareFile(name: String, path: String)
-    /** Firmware keys [systemName] can't start without that aren't mapped or don't fit ("fw_mcd": any Mega CD BIOS). */
+    /** Firmware keys [systemName] can't start without that aren't mapped ("fw_mcd": any Mega CD BIOS). */
     external fun missingFirmware(systemName: String): List<String>
     external fun setSurface(surface: Any?)
 

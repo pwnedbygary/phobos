@@ -204,9 +204,40 @@ set(OTHER_SOURCES
     ares/n64/vulkan/parallel-rdp/vulkan/texture/texture_format.cpp
 )
 
+# The firmware ares bundles (mia/resource/resource.bml, data in mia/Firmware), shipped as upstream
+# ships it: upstream writes these arrays with its sourcery tool, this at configure time.
+set(MIA_RESOURCE_BML ${CMAKE_CURRENT_SOURCE_DIR}/mia/resource/resource.bml)
+set(MIA_RESOURCE_CPP ${CMAKE_CURRENT_BINARY_DIR}/mia-resource.cpp)
+file(STRINGS "${MIA_RESOURCE_BML}" MIA_RESOURCE_LINES)
+set(MIA_RESOURCE_INPUTS "${MIA_RESOURCE_BML}")
+set(MIA_RESOURCE_CODE "// Generated from mia/resource/resource.bml by CMakeLists.txt.\n#include <mia/resource/resource.hpp>\n\nnamespace mia::Resource {\n")
+set(MIA_RESOURCE_NAMESPACE "")
+foreach(line IN LISTS MIA_RESOURCE_LINES)
+  if(line MATCHES "^  namespace name=([A-Za-z0-9]+)")
+    if(MIA_RESOURCE_NAMESPACE)
+      string(APPEND MIA_RESOURCE_CODE "}\n")
+    endif()
+    set(MIA_RESOURCE_NAMESPACE ${CMAKE_MATCH_1})
+    string(APPEND MIA_RESOURCE_CODE "namespace ${MIA_RESOURCE_NAMESPACE} {\n")
+  elseif(line MATCHES "binary name=([A-Za-z0-9]+) file=\"([^\"]+)\"")
+    set(MIA_RESOURCE_NAME ${CMAKE_MATCH_1})
+    get_filename_component(MIA_RESOURCE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/mia/resource/${CMAKE_MATCH_2}" ABSOLUTE)
+    list(APPEND MIA_RESOURCE_INPUTS "${MIA_RESOURCE_FILE}")
+    file(READ "${MIA_RESOURCE_FILE}" MIA_RESOURCE_HEX HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," MIA_RESOURCE_BYTES "${MIA_RESOURCE_HEX}")
+    string(APPEND MIA_RESOURCE_CODE
+      "static const uint8_t ${MIA_RESOURCE_NAME}Data[] = {${MIA_RESOURCE_BYTES}};\n"
+      "const Blob ${MIA_RESOURCE_NAME}{${MIA_RESOURCE_NAME}Data, sizeof ${MIA_RESOURCE_NAME}Data};\n")
+  endif()
+endforeach()
+string(APPEND MIA_RESOURCE_CODE "}\n}\n")
+file(CONFIGURE OUTPUT "${MIA_RESOURCE_CPP}" CONTENT "${MIA_RESOURCE_CODE}" @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${MIA_RESOURCE_INPUTS})
+
 add_library(phobos_android SHARED
     ${ARES_SOURCES}
     ${OTHER_SOURCES}
+    ${MIA_RESOURCE_CPP}
 )
 
 set(ARES_ALL_SOURCES

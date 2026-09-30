@@ -286,14 +286,19 @@ the Library. In `PhobosRunner.cpp`, both load `ares::MegaDrive` with a 32X confi
 goes in the executable buffer the N64's recompilers use, which `M32X::power()` releases. `pak()`
 adds the boot ROMs (`vector.rom`, `sh2.boot.mrom`, `sh2.boot.srom`) to the Mega Drive system pak
 when the configuration names the 32X, from the `fw_32x_g`, `fw_32x_m` and `fw_32x_s` firmware
-slots or else `System/Mega Drive/`. `missingFirmware()` (`PhobosCore.missingFirmware`) lists what a
-system lacks; the view model asks it before loading and shows BIOS Required, and `initialize()`
-refuses the load as a backstop. `connectDevices()` leaves the Mega CD 32X's cartridge slot empty so
-that ares builds the 32X's own board there. The Mega CD 32X reads its disc through mia's Mega CD
-medium. Save restores now take the folder name from the root node, as the flush always did. The
-32X BIOS isn't in the APK: Phobos doesn't publish firmware, and mia's resources are stubbed on
-Android (`mia/resource/resource.hpp`), so ares's copies in `mia/Firmware/Mega 32X/` never reach
-the app.
+slots or else the copies ares bundles (next paragraph). `missingFirmware()`
+(`PhobosCore.missingFirmware`) lists what a system lacks, now only the Mega CD BIOS; the view model
+asks it before loading and shows BIOS Required, and `initialize()` refuses the load as a backstop.
+`connectDevices()` leaves the Mega CD 32X's cartridge slot empty so that ares builds the 32X's own
+board there. The Mega CD 32X reads its disc through mia's Mega CD medium. Save restores now take
+the folder name from the root node, as the flush always did.
+Branch `feature/upstream-firmware-2026-09` ships the firmware upstream ares ships. mia's resources
+were empty stubs; `mia/resource/resource.hpp` now declares them as `Blob`s (data and size, which
+convert to the span and pointer mia's call sites take), and the root `CMakeLists.txt` writes their
+data into `mia-resource.cpp` in the build directory at configure time, from `resource.bml` and
+`mia/Firmware`, rerunning when either changes. When upstream adds firmware, copy the file into
+`mia/Firmware`, add its line to `resource.bml` and its name to the header. `pak()` falls back to
+`mia::Resource` for the 32X's boot ROMs and the ZX Spectrum's ROMs.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
