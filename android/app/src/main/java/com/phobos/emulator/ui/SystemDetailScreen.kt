@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.pillShape
+import com.phobos.emulator.util.romTitle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -31,6 +32,24 @@ fun SystemDetailScreen(
     val settings by viewModel.settings.collectAsState()
     val roms by viewModel.roms.collectAsState()
     val context = LocalContext.current
+    // A multi-disc game asks which disc to start from, the last one played picked to begin with.
+    var choosingDisc by remember { mutableStateOf<RomFile?>(null) }
+    choosingDisc?.let { game ->
+        DiscChoiceDialog(
+            title = romTitle(game.name),
+            discs = game.discs,
+            selected = viewModel.lastDisc(systemName, game),
+            confirmLabel = "Start",
+            fullScreen = settings.fullScreenMode,
+            inGame = false,
+            onDismiss = { choosingDisc = null },
+            onChoose = { disc ->
+                choosingDisc = null
+                viewModel.loadRom(context, systemName, game, disc)
+                onRomClick(Uri.encode(systemName), Uri.encode(game.name))
+            },
+        )
+    }
 
     val directoryUris = remember(settings.systemRomPaths[systemName]) {
         settings.systemRomPaths[systemName]?.map { Uri.parse(it) } ?: emptyList()
@@ -112,14 +131,20 @@ fun SystemDetailScreen(
                     SettingsCard(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp).weight(1f, fill = false)) {
                         LazyColumn(contentPadding = PaddingValues(bottom = 64.dp)) {
                             items(roms) { rom ->
+                                val multiDisc = rom.discs.size > 1
                                 ListItem(
-                                    headlineContent = { Text(rom.name) },
+                                    headlineContent = { Text(if (rom.discs.isEmpty()) rom.name else romTitle(rom.name)) },
+                                    supportingContent = if (multiDisc) {
+                                        { Text("${rom.discs.size} discs") }
+                                    } else null,
                                     leadingContent = { IconBadge(Icons.Default.PlayArrow) },
                                     colors = transparentListItemColors(),
                                     modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable {
                                         // The game already paused behind the Library carries on instead of restarting
                                         if (viewModel.isRunning(systemName, rom.name)) {
                                             viewModel.swapBackToGame()
+                                        } else if (multiDisc) {
+                                            choosingDisc = rom
                                         } else {
                                             viewModel.loadRom(context, systemName, rom)
                                             onRomClick(Uri.encode(systemName), Uri.encode(rom.name))

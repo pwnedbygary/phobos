@@ -60,6 +60,9 @@ object PhobosCore {
     external fun setLogLevel(level: Int)
     external fun setRomFd(fd: Int)
     external fun setSecondaryRomFd(fd: Int)
+    /** A file the next load (or disc change) opens by path where it is, instead of copying the descriptor's. */
+    external fun setRomPath(path: String)
+    external fun setSecondaryRomPath(path: String)
     external fun setTempFilePath(path: String)
     external fun setLoadDiskImageToRam(enabled: Boolean)
     external fun setOrientationMode(vertical: Boolean)

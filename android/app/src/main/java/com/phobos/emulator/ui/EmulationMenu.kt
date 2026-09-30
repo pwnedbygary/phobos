@@ -109,6 +109,27 @@ fun EmulationMenu(
         systemName.contains("PlayStation") -> "Disc"
         else -> null
     }
+    // A multi-disc game's Disc button lists its discs; otherwise it picks a file.
+    val discs by viewModel.loadedDiscs.collectAsState()
+    val discInDrive by viewModel.currentDisc.collectAsState()
+    var choosingDisc by remember { mutableStateOf(false) }
+    if (choosingDisc) {
+        DiscChoiceDialog(
+            title = "Change disc",
+            discs = discs,
+            selected = discInDrive,
+            confirmLabel = "Insert",
+            fullScreen = settings.fullScreenMode,
+            inGame = true,
+            onDismiss = { choosingDisc = false },
+            onChoose = { disc ->
+                choosingDisc = false
+                if (disc != discInDrive) viewModel.changeDisc(context, disc)
+            },
+            inDrive = discInDrive,
+            otherFile = { choosingDisc = false; diskLauncher.launch(arrayOf("*/*")) },
+        )
+    }
     // Composed here, not in the list, so the list can't dispose its pickers' results or dialogs.
     val saveTransfer = if (systemName.contains("Nintendo 64", ignoreCase = true)) rememberSaveTransfer(viewModel, settings) else null
     // The N64 Experimental and Performance Monitor pages replace the main list (with a back arrow)
@@ -153,7 +174,7 @@ fun EmulationMenu(
                                 onLoad = { viewModel.loadState(systemName, romName, currentSlot); onResume() },
                                 onScreenshot = { viewModel.takeScreenshot(systemName, romName) },
                                 onToggleTouchControls = { viewModel.setShowTouchControls(!settings.showTouchControls) },
-                                onDisc = { diskLauncher.launch(arrayOf("*/*")) },
+                                onDisc = { if (discs.size > 1) choosingDisc = true else diskLauncher.launch(arrayOf("*/*")) },
                                 onReset = { viewModel.resetSystem(); onResume() },
                             )
                         }

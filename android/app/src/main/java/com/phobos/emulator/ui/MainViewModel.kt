@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.DocumentsContract
@@ -63,6 +64,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -86,6 +88,11 @@ import com.phobos.emulator.util.N64SaveImportPlan
 import com.phobos.emulator.util.N64SaveKind
 import com.phobos.emulator.util.N64SaveRead
 import com.phobos.emulator.util.N64SaveTransfer
+import com.phobos.emulator.util.cueTracks
+import com.phobos.emulator.util.cueWithTracksIn
+import com.phobos.emulator.util.groupDiscSets
+import com.phobos.emulator.util.m3uEntries
+import com.phobos.emulator.util.m3uEntryPath
 import com.phobos.emulator.util.newerDriverRelease
 import com.phobos.emulator.util.romTitle
 import com.phobos.emulator.util.withoutDiscNumber
@@ -191,6 +198,13 @@ class MainViewModel(
         private const val N64_APPLIES_ON_RESET = "Takes effect after Reset System or reloading the game"
         private const val N64_APPLIES_ON_RELOAD = "Takes effect the next time the game is loaded"
         private const val PREVIEW_MAX_WIDTH = 320
+        // mia_temp's folder for the track files of the .cue sheets in play.
+        private const val CUE_TRACKS = "cue_tracks"
+        // CD systems whose mia media only read their discs (their save() writes nothing), so a disc can
+        // load where it is instead of from a copy.
+        private val IN_PLACE_SYSTEMS = setOf("PlayStation", "Mega CD", "Mega CD 32X", "PC Engine CD", "Neo Geo CD")
+        // Systems whose disc native code can change while the game runs; the other CD systems read a disc from the start.
+        private val DISC_SWAP_SYSTEMS = setOf("PlayStation")
     }
 
     private var wasEmulationRunningBeforePause = false
@@ -571,12 +585,17 @@ class MainViewModel(
         _runningFrame.value = null
         PhobosCore.setEmulationRunning(false)
         PhobosCore.unloadSystem()
+        // Native code removes its own copies on unload; the .cue tracks copied for it go too.
+        File(context.cacheDir, "mia_temp/$CUE_TRACKS").deleteRecursively()
+        File(context.cacheDir, "cue-sheet.cue").delete()
         CoreSession.system = ""
         CoreSession.rom = ""
         CoreSession.owner = null
         currentSystemName = ""
         currentRomName = ""
         loadedRom = null
+        _loadedDiscs.value = emptyList()
+        _currentDisc.value = -1
     }
 
     fun setSystemVisibility(system: String, visible: Boolean) = viewModelScope.launch {
@@ -661,6 +680,9 @@ class MainViewModel(
 
         // Best effort: a failed capture only drops the slot's preview, never the save.
         val thumb = tempThumb.takeIf { capturePreview(it) }
+        // A multi-disc game's state notes its disc, so loading it puts that disc back.
+        val disc = _currentDisc.value.takeIf { it >= 0 && romName == currentRomName && _loadedDiscs.value.size > 1 }
+        val discNote = disc?.let { File(context.cacheDir, "state-disc-${System.nanoTime()}.tmp").apply { writeText("${it + 1}") } }
 
         // 2. Copy from local path to the user's selected SAF path.
         //    Task 41: fall back to internal storage when no SAF path is
@@ -677,7 +699,10 @@ class MainViewModel(
                     context.contentResolver.openOutputStream(stateFile.uri)?.use { output ->
                         tempFile.inputStream().use { input -> input.copyTo(output) }
                     }
-                    systemDir?.let { writeSafThumbnail(it, thumbnailName(fileName), thumb) }
+                    systemDir?.let {
+                        writeSafSidecar(it, thumbnailName(fileName), thumb)
+                        writeSafSidecar(it, discName(fileName), discNote)
+                    }
                     Log.i("Phobos", "Synced state to SAF: ${stateFile.uri}")
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
@@ -690,6 +715,8 @@ class MainViewModel(
                 tempFile.copyTo(File(internalStatesDir, fileName), overwrite = true)
                 val internalThumb = File(internalStatesDir, thumbnailName(fileName))
                 runCatching { if (thumb != null) thumb.copyTo(internalThumb, overwrite = true) else internalThumb.delete() }
+                val internalDisc = File(internalStatesDir, discName(fileName))
+                runCatching { if (discNote != null) discNote.copyTo(internalDisc, overwrite = true) else internalDisc.delete() }
                 Log.i("Phobos", "Saved state to internal: ${File(internalStatesDir, fileName).absolutePath}")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
@@ -703,6 +730,7 @@ class MainViewModel(
             }
             false
         }
+        discNote?.delete()
         if (saved) _stateRevision.update { it + 1 }
         return saved
     }
@@ -752,7 +780,8 @@ class MainViewModel(
         return open()?.use { BitmapFactory.decodeStream(it, null, options) }
     }
 
-    private fun writeSafThumbnail(dir: DocumentFile, name: String, source: File?) {
+    /** Copies [source] into [dir] as [name] beside a state, or removes the file there when [source] is null. */
+    private fun writeSafSidecar(dir: DocumentFile, name: String, source: File?) {
         try {
             val existing = dir.findFile(name)
             if (source == null) {
@@ -764,8 +793,27 @@ class MainViewModel(
                 source.inputStream().use { input -> input.copyTo(output) }
             }
         } catch (e: Exception) {
-            Log.w("Phobos", "State preview not saved: ${e.message}")
+            Log.w("Phobos", "State sidecar $name not saved: ${e.message}")
         }
+    }
+
+    // The disc a multi-disc game's state was saved on, as "2" for disc 2.
+    private fun discName(stateFileName: String) = "$stateFileName.disc"
+
+    /** The disc (index) a multi-disc game's state in [slot] was saved on, or null. */
+    private fun stateDisc(systemName: String, romName: String, slot: Int): Int? {
+        val name = discName(stateFileName(romName, slot))
+        val sanitizedName = getSanitizedSystemName(systemName)
+        val text = runCatching {
+            val baseUriString = settings.value.statesPath
+            if (baseUriString.isNotEmpty()) {
+                DocumentFile.fromTreeUri(context, Uri.parse(baseUriString))?.findFile(sanitizedName)?.findFile(name)
+                    ?.let { note -> context.contentResolver.openInputStream(note.uri)?.bufferedReader()?.use { it.readText() } }
+            } else {
+                File(context.filesDir, "states/$sanitizedName/$name").takeIf { it.exists() }?.readText()
+            }
+        }.getOrNull()
+        return text?.trim()?.toIntOrNull()?.minus(1)?.takeIf { it >= 0 }
     }
 
     /** The state in [slot] with its preview, or null when the slot is empty. */
@@ -843,7 +891,28 @@ class MainViewModel(
             }
 
             if (stateFile != null) {
-                val nativeSuccess = PhobosCore.loadState(stateFile.absolutePath)
+                // A multi-disc game's state goes back with the disc it was saved on.
+                val disc = (if (_loadedDiscs.value.size > 1 && romName == currentRomName) stateDisc(systemName, romName, slot) else null)
+                    ?.takeIf { it in _loadedDiscs.value.indices && it != _currentDisc.value }
+                if (disc != null && systemName !in DISC_SWAP_SYSTEMS) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "The state in $slotLabel was saved on disc ${disc + 1}; start the game from that disc to load it", Toast.LENGTH_LONG).show()
+                    }
+                    return false
+                }
+                // Paused from the disc change until the state is in, so the game never runs the new disc with the old state.
+                if (disc != null) PhobosCore.setPause(true)
+                val nativeSuccess = try {
+                    if (disc != null && !swapToDisc(context, disc)) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "The state in $slotLabel needs disc ${disc + 1}, which couldn't be inserted", Toast.LENGTH_LONG).show()
+                        }
+                        return false
+                    }
+                    PhobosCore.loadState(stateFile.absolutePath)
+                } finally {
+                    if (disc != null) PhobosCore.setPause(_isPaused.value)
+                }
                 Log.d("Phobos", "loadState: Native Unserialize took ${System.currentTimeMillis() - startTime}ms")
                 if (nativeSuccess) {
                     Log.i("Phobos", "Successfully loaded state from $fileName. Total time: ${System.currentTimeMillis() - startTime}ms")
@@ -894,6 +963,7 @@ class MainViewModel(
                         Log.i("Phobos", "Deleted state from SAF: $fileName (result=$deleted)")
                     }
                     systemDir?.findFile(thumbnailName(fileName))?.delete()
+                    systemDir?.findFile(discName(fileName))?.delete()
                 }
                 // Also remove the internal fallback copy if present.
                 val internalStateFile = File(context.filesDir, "states/$sanitizedName/$fileName")
@@ -902,6 +972,7 @@ class MainViewModel(
                     Log.i("Phobos", "Deleted state internally: $fileName")
                 }
                 File(context.filesDir, "states/$sanitizedName/${thumbnailName(fileName)}").delete()
+                File(context.filesDir, "states/$sanitizedName/${discName(fileName)}").delete()
             } catch (e: Exception) {
                 Log.e("Phobos", "Error during deleteState: ${e.message}")
             }
@@ -1132,6 +1203,20 @@ class MainViewModel(
 
     private val _roms = MutableStateFlow<List<RomFile>>(emptyList())
     val roms: StateFlow<List<RomFile>> = _roms
+
+    // The running game's discs (empty for a single file) and the index of the one in the drive.
+    private val _loadedDiscs = MutableStateFlow<List<RomFile>>(emptyList())
+    val loadedDiscs: StateFlow<List<RomFile>> = _loadedDiscs.asStateFlow()
+    private val _currentDisc = MutableStateFlow(-1)
+    val currentDisc: StateFlow<Int> = _currentDisc.asStateFlow()
+
+    /** The disc a multi-disc game last ran from, preselected when it starts again. */
+    fun lastDisc(systemName: String, game: RomFile): Int =
+        (settings.value.lastDisc["$systemName/${game.name}"] ?: 0).coerceIn(0, (game.discs.size - 1).coerceAtLeast(0))
+
+    private fun rememberDisc(systemName: String, gameName: String, disc: Int) {
+        viewModelScope.launch { settingsStore.setLastDisc("$systemName/$gameName", disc) }
+    }
 
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs
@@ -2292,18 +2377,56 @@ class MainViewModel(
     fun scanRoms(context: Context, systemName: String, directoryUris: List<Uri>) {
         viewModelScope.launch {
             val extensions = PhobosCore.getSystemExtensions(systemName)
+            // CD systems also list .m3u playlists, which gather a game's discs.
+            val discSystem = "cue" in extensions || "chd" in extensions
             val foundRoms = withContext(Dispatchers.IO) {
                 val result = mutableListOf<RomFile>()
                 directoryUris.forEach { uri ->
                     val rootDir = DocumentFile.fromTreeUri(context, uri)
                     if (rootDir != null) {
-                        scanRecursive(rootDir, extensions, result)
+                        scanRecursive(rootDir, if (discSystem) extensions + "m3u" else extensions, result)
                     }
                 }
-                result.distinctBy { it.uri }.sortedBy { it.name }
+                val files = result.distinctBy { it.uri }
+                (if (discSystem) withDiscSets(context, files) else files).sortedBy { it.name }
             }
             _roms.value = foundRoms
         }
+    }
+
+    /**
+     * Each multi-disc game as one entry: the files an .m3u playlist lists, or files of one folder that
+     * differ only in "(Disc N)". A playlist that lists none of the scanned files is left out.
+     */
+    private fun withDiscSets(context: Context, files: List<RomFile>): List<RomFile> {
+        val (playlists, others) = files.partition { it.name.endsWith(".m3u", ignoreCase = true) }
+        val listed = mutableSetOf<RomFile>()
+        val fromPlaylists = playlists.mapNotNull { playlist ->
+            val text = runCatching {
+                context.contentResolver.openInputStream(playlist.uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull() ?: return@mapNotNull null
+            val playlistPath = pathOf(playlist)
+            val discs = m3uEntries(text).mapNotNull { entry ->
+                // Beside the playlist, or wherever the entry's path leads from the playlist's folder.
+                others.firstOrNull { it.parentUri == playlist.parentUri && it.name.equals(entry, ignoreCase = true) }
+                    ?: playlistPath?.let { m3uEntryPath(it, entry) }
+                        ?.let { path -> others.firstOrNull { pathOf(it).equals(path, ignoreCase = true) } }
+            }
+            if (discs.isEmpty()) return@mapNotNull null
+            listed += discs
+            RomFile(playlist.name, discs.first().uri, playlist.parentUri, discs)
+        }
+        val (sets, singles) = groupDiscSets(others.filter { it !in listed }, { it.name }, { it.parentUri })
+        return fromPlaylists + sets.map { RomFile(it.title, it.discs.first().uri, it.discs.first().parentUri, it.discs) } + singles
+    }
+
+    // A scanned file's path, to follow a playlist's entries: the storage provider's document id
+    // ("EBFF-F6C0:ROMs/psx/Game/Game.m3u"), or a file's own path. Other providers' ids aren't paths.
+    private fun pathOf(file: RomFile): String? = when (file.uri.scheme) {
+        "file" -> file.uri.path
+        "content" -> file.uri.takeIf { it.authority == "com.android.externalstorage.documents" }
+            ?.let { runCatching { DocumentsContract.getDocumentId(it) }.getOrNull() }
+        else -> null
     }
 
     private fun scanRecursive(directory: DocumentFile, extensions: List<String>, result: MutableList<RomFile>) {
@@ -2320,20 +2443,21 @@ class MainViewModel(
         }
     }
 
-    fun loadRom(context: Context, systemName: String, rom: RomFile) {
+    /** [disc] is the disc a multi-disc game starts from. */
+    fun loadRom(context: Context, systemName: String, rom: RomFile, disc: Int = 0) {
         externalSession = false
-        startLoad(context, systemName, rom)
+        startLoad(context, systemName, rom, disc)
     }
 
-    /** Loads the running game's file again (the Reload hotkey), wherever it was started from. */
+    /** Loads the running game's file again (the Reload hotkey), wherever it was started from, from the disc in the drive. */
     fun reloadGame(context: Context) {
         val rom = loadedRom ?: return
         val system = currentSystemName.takeIf { it.isNotEmpty() } ?: return
-        startLoad(context, system, rom)
+        startLoad(context, system, rom, _currentDisc.value.coerceAtLeast(0))
     }
 
     /** [beforeLoad] runs once the previous game is unloaded, with its battery saves written to disk. */
-    private fun startLoad(context: Context, systemName: String, rom: RomFile, beforeLoad: (suspend () -> Unit)? = null) {
+    private fun startLoad(context: Context, systemName: String, rom: RomFile, disc: Int = 0, beforeLoad: (suspend () -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             CoreSession.lock.withLock {
                 // A loaded game is saved and unloaded first, as quitting it would, even one a replaced activity
@@ -2341,12 +2465,12 @@ class MainViewModel(
                 val reload = CoreSession.owner === sessionToken && CoreSession.system == systemName && CoreSession.rom == rom.name
                 closeSessionLocked(autoSave = !reload)
                 beforeLoad?.invoke()
-                loadLocked(context, systemName, rom)
+                loadLocked(context, systemName, rom, disc)
             }
         }
     }
 
-    private suspend fun loadLocked(context: Context, systemName: String, rom: RomFile) {
+    private suspend fun loadLocked(context: Context, systemName: String, rom: RomFile, disc: Int = 0) {
         withContext(Dispatchers.IO) {
             // For the merged "ZX Spectrum" entry, native detects 48K vs 128K by
             // CONTENT (TAP header block scan) — see PhobosRunner initialize().
@@ -2483,6 +2607,7 @@ class MainViewModel(
             if (!tempDir.exists()) {
                 tempDir.mkdirs()
             }
+            removeStaleGameCopies(tempDir)
             PhobosCore.setTempFilePath(miaTempPath)
 
             // Sync Firmware Path and Mappings
@@ -2543,11 +2668,20 @@ class MainViewModel(
                 return@withContext
             }
 
-            // Open the ROM file descriptor
+            // A multi-disc game starts from the chosen disc; its session, states and cards go by the game's name.
+            val discIndex = if (rom.discs.isEmpty()) -1 else disc.coerceIn(0, rom.discs.lastIndex)
+            val file = if (discIndex >= 0) rom.discs[discIndex] else rom
             try {
-                context.contentResolver.openFileDescriptor(rom.uri, "r")?.use { pfd ->
-                    PhobosCore.setRomFd(pfd.detachFd())
-                    val success = PhobosCore.loadRom(effectiveSystem, rom.uri.toString(), rom.name)
+                val inPlace = inPlacePath(effectiveSystem, file)
+                val descriptor = if (inPlace == null) openGameFile(context, file, startsGame = true) else null
+                if (inPlace != null || descriptor != null) descriptor.use {
+                    if (inPlace != null) {
+                        PhobosCore.setRomFd(-1)
+                        PhobosCore.setRomPath(inPlace)
+                    } else {
+                        PhobosCore.setRomFd(descriptor!!.detachFd())
+                    }
+                    val success = PhobosCore.loadRom(effectiveSystem, file.uri.toString(), rom.name)
                     if (success) {
                         CoreSession.system = effectiveSystem
                         CoreSession.rom = rom.name
@@ -2556,14 +2690,21 @@ class MainViewModel(
                         _isLoaded.value = true
                         currentSystemName = effectiveSystem
                         currentRomName = rom.name
+                        _loadedDiscs.value = rom.discs
+                        _currentDisc.value = discIndex
+                        if (rom.discs.size > 1) rememberDisc(effectiveSystem, rom.name, discIndex)
                         // Auto-Load State (Task 17): restore the auto-saved state
                         // right after the core is loaded but BEFORE the emulation
                         // thread starts (the thread is spawned by EmulatorScreen's
                         // LaunchedEffect(isLoaded) after this coroutine returns, so
                         // no race with runMutex). Silently skip when no auto state
                         // exists (performLoadState returns false + logs only).
+                        // A state from another disc is skipped: the player chose to start from this one.
                         if (settings.value.autoLoadState) {
-                            try {
+                            val autoStateDisc = if (rom.discs.size > 1) stateDisc(effectiveSystem, rom.name, AUTO_STATE_SLOT) else null
+                            if (autoStateDisc != null && autoStateDisc != discIndex) {
+                                Log.i("Phobos", "Auto-load skipped: the auto state is from disc ${autoStateDisc + 1}")
+                            } else try {
                                 performLoadState(effectiveSystem, rom.name, AUTO_STATE_SLOT)
                             } catch (e: Exception) {
                                 Log.e("Phobos", "Auto-load failed: ${e.message}")
@@ -2590,6 +2731,9 @@ class MainViewModel(
                 }
             } catch (e: Exception) {
                 Log.e("Phobos", "Error opening ROM FD: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Couldn't open ${file.name}: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -2599,18 +2743,120 @@ class MainViewModel(
     fun loadSecondaryRom(context: Context, systemName: String, rom: RomFile) {
         viewModelScope.launch(Dispatchers.IO) {
             Log.d("Phobos", "loadSecondaryRom starting: system='$systemName', name='${rom.name}'")
-            try {
-                context.contentResolver.openFileDescriptor(rom.uri, "r")?.use { pfd ->
-                    PhobosCore.setSecondaryRomFd(pfd.detachFd())
-                    val success = PhobosCore.loadSecondaryRom(systemName, rom.uri.toString())
-                    if (!success) {
-                        Log.e("Phobos", "Native loadSecondaryRom failed for $systemName")
+            // A picked file that is one of the game's discs counts as that disc; any other file as none.
+            if (insertDisc(context, systemName, rom)) _currentDisc.value = _loadedDiscs.value.indexOfFirst { it.uri == rom.uri }
+        }
+    }
+
+    /** Puts disc [index] of the running game in the drive, as swapping discs on the console would. */
+    fun changeDisc(context: Context, index: Int) {
+        viewModelScope.launch(Dispatchers.IO) { swapToDisc(context, index) }
+    }
+
+    private suspend fun swapToDisc(context: Context, index: Int): Boolean {
+        val disc = _loadedDiscs.value.getOrNull(index) ?: return false
+        val system = currentSystemName.takeIf { it.isNotEmpty() } ?: return false
+        val inserted = insertDisc(context, system, disc)
+        if (inserted) {
+            _currentDisc.value = index
+            rememberDisc(system, currentRomName, index)
+        }
+        withContext(Dispatchers.Main) {
+            Toast.makeText(context, if (inserted) "Disc ${index + 1} inserted" else "Couldn't insert disc ${index + 1}", Toast.LENGTH_SHORT).show()
+        }
+        return inserted
+    }
+
+    /** Hands [file] to the core as the new disc, or the 64DD disk. */
+    private fun insertDisc(context: Context, systemName: String, file: RomFile): Boolean =
+        try {
+            val inPlace = inPlacePath(systemName, file)
+            val descriptor = if (inPlace == null) openGameFile(context, file, startsGame = false) else null
+            if (inPlace != null || descriptor != null) {
+                descriptor.use {
+                    if (inPlace != null) {
+                        PhobosCore.setSecondaryRomFd(-1)
+                        PhobosCore.setSecondaryRomPath(inPlace)
+                    } else {
+                        PhobosCore.setSecondaryRomFd(descriptor!!.detachFd())
+                    }
+                    PhobosCore.loadSecondaryRom(systemName, file.uri.toString()).also { success ->
+                        if (!success) Log.e("Phobos", "Native loadSecondaryRom failed for $systemName")
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("Phobos", "Error opening Secondary ROM FD: ${e.message}")
-            }
+            } else false
+        } catch (e: Exception) {
+            Log.e("Phobos", "Error opening Secondary ROM FD: ${e.message}")
+            false
         }
+
+    /**
+     * [file]'s path when it can load where it is: a .cue or .chd disc of a system that only reads its discs,
+     * in a folder the app can read by path. Null means native code copies it from a descriptor instead.
+     */
+    private fun inPlacePath(systemName: String, file: RomFile): String? {
+        if (systemName !in IN_PLACE_SYSTEMS) return null
+        val name = file.name.lowercase()
+        if (!name.endsWith(".cue") && !name.endsWith(".chd")) return null
+        val path = when (file.uri.scheme) {
+            "file" -> file.uri.path
+            "content" -> file.uri.takeIf { it.authority == "com.android.externalstorage.documents" }?.let { resolveSafPath(it.toString()) }
+            else -> null
+        } ?: return null
+        return path.takeIf { File(it).canRead() }
+    }
+
+    /**
+     * The descriptor native code copies [file] from. Native code copies only that file into mia_temp, where a
+     * .cue sheet's tracks would be missing, so they're copied into mia_temp/cue_tracks and the sheet handed
+     * over names them there. [startsGame] clears the previous game's tracks; a disc change keeps the
+     * session's, since the disc in the drive still reads them until the new one is in.
+     */
+    private fun openGameFile(context: Context, file: RomFile, startsGame: Boolean): ParcelFileDescriptor? {
+        if (!file.name.endsWith(".cue", ignoreCase = true)) return context.contentResolver.openFileDescriptor(file.uri, "r")
+        val tracksDir = File(context.cacheDir, "mia_temp/$CUE_TRACKS")
+        if (startsGame) tracksDir.deleteRecursively()
+        tracksDir.mkdirs()
+        val sheet = context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { it.readText() } ?: return null
+        for (track in cueTracks(sheet)) {
+            val (source, size) = trackBeside(context, file, track)
+                ?: throw FileNotFoundException("$track, which ${file.name} names, isn't beside it")
+            val target = File(tracksDir, track.substringAfterLast('/'))
+            if (target.length() == size) continue
+            context.contentResolver.openInputStream(source)?.use { input -> target.outputStream().use { input.copyTo(it) } }
+                ?: throw FileNotFoundException(track)
+        }
+        val handedOver = File(context.cacheDir, "cue-sheet.cue")
+        handedOver.writeText(cueWithTracksIn(sheet, CUE_TRACKS))
+        return ParcelFileDescriptor.open(handedOver, ParcelFileDescriptor.MODE_READ_ONLY)
+    }
+
+    /** A .cue sheet's track, looked up from the sheet's folder, and its size. */
+    private fun trackBeside(context: Context, sheet: RomFile, track: String): Pair<Uri, Long>? {
+        if (sheet.uri.scheme == "file") {
+            val trackFile = File(File(sheet.uri.path ?: return null).parentFile, track)
+            return if (trackFile.isFile) Uri.fromFile(trackFile) to trackFile.length() else null
+        }
+        var dir = sheet.parentUri?.let { DocumentFile.fromTreeUri(context, it) } ?: return null
+        val parts = track.split('/').filter { it.isNotEmpty() }
+        for (part in parts.dropLast(1)) dir = childNamed(dir, part)?.takeIf { it.isDirectory } ?: return null
+        val trackFile = childNamed(dir, parts.lastOrNull() ?: return null)?.takeIf { it.isFile } ?: return null
+        return trackFile.uri to trackFile.length()
+    }
+
+    // Sheets don't always match the files' case ("GAME.BIN" beside "Game.bin").
+    private fun childNamed(dir: DocumentFile, name: String): DocumentFile? =
+        dir.findFile(name) ?: dir.listFiles().firstOrNull { it.name.equals(name, ignoreCase = true) }
+
+    /**
+     * Game copies in mia_temp that were never unloaded (the app closed mid-game, or builds that kept every copy).
+     * Only top-level files with a game's extension go, and not neogeo.zip, already copied for a Neo Geo game by
+     * then; the driver's redirected files sit in folders and the firmware copies are named fw_*.
+     */
+    private fun removeStaleGameCopies(tempDir: File) {
+        val extensions = PhobosCore.enumerateSystems().flatMap { PhobosCore.getSystemExtensions(it) }.toSet() + "zip" + "7z"
+        tempDir.listFiles { file -> file.isFile && file.extension.lowercase() in extensions && file.name != "neogeo.zip" && !file.name.startsWith("fw_") }
+            ?.forEach { if (it.delete()) Log.i("Phobos", "Removed stale temp copy ${it.name}") }
     }
     
     private fun extractAssets() {
@@ -2650,10 +2896,11 @@ class MainViewModel(
         val uri = Uri.parse(uriString)
         if (uri.scheme != "content") return uriString
         return try {
-            val docId = if (DocumentsContract.isTreeUri(uri)) {
-                DocumentsContract.getTreeDocumentId(uri)
-            } else {
-                DocumentsContract.getDocumentId(uri)
+            // A file inside a picked folder carries both ids; its own is the document id.
+            val docId = when {
+                DocumentsContract.isDocumentUri(context, uri) -> DocumentsContract.getDocumentId(uri)
+                DocumentsContract.isTreeUri(uri) -> DocumentsContract.getTreeDocumentId(uri)
+                else -> DocumentsContract.getDocumentId(uri)
             }
             val colon = docId.indexOf(':')
             if (colon < 0) return null
@@ -2719,5 +2966,7 @@ class MainViewModel(
 data class RomFile(
     val name: String,
     val uri: Uri,
-    val parentUri: Uri? = null
+    val parentUri: Uri? = null,
+    /** A multi-disc game's discs in order, from an .m3u playlist or "(Disc N)" files; [name] is then the game's. */
+    val discs: List<RomFile> = emptyList(),
 )

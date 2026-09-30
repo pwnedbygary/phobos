@@ -157,6 +157,8 @@ data class EmulatorSettings(
     val zxKeyBindings: Map<String, Map<String, Int>> = emptyMap(),
     val zxStickToKeys: Map<String, Boolean> = emptyMap(),
     val zxReversePitch: Map<String, Boolean> = emptyMap(),
+    // The disc each multi-disc game last ran from: "<system>/<game>" -> disc index
+    val lastDisc: Map<String, Int> = emptyMap(),
     val hasDefaultsInitialized: Boolean = false
 )
 
@@ -268,6 +270,7 @@ class SettingsStore(private val context: Context) {
         val ZX_BIND_PREFIX = "zx_bind_"
         val ZX_STICK_PREFIX = "zx_stick_"
         val ZX_REVERSE_PREFIX = "zx_reverse_"
+        val LAST_DISC_PREFIX = "last_disc_"
     }
 
     val settings: Flow<EmulatorSettings> = context.dataStore.data.map { preferences ->
@@ -279,6 +282,7 @@ class SettingsStore(private val context: Context) {
         val zxBinds = mutableMapOf<String, Map<String, Int>>()
         val zxSticks = mutableMapOf<String, Boolean>()
         val zxReverses = mutableMapOf<String, Boolean>()
+        val lastDiscs = mutableMapOf<String, Int>()
         val touchLayouts = mutableMapOf<String, String>()
 
         preferences.asMap().forEach { (key, value) ->
@@ -324,6 +328,8 @@ class SettingsStore(private val context: Context) {
                 zxSticks[name.removePrefix(ZX_STICK_PREFIX)] = value
             } else if (name.startsWith(ZX_REVERSE_PREFIX) && value is Boolean) {
                 zxReverses[name.removePrefix(ZX_REVERSE_PREFIX)] = value
+            } else if (name.startsWith(LAST_DISC_PREFIX) && value is Int) {
+                lastDiscs[name.removePrefix(LAST_DISC_PREFIX)] = value
             }
         }
 
@@ -465,6 +471,7 @@ class SettingsStore(private val context: Context) {
             zxKeyBindings = zxBinds,
             zxStickToKeys = zxSticks,
             zxReversePitch = zxReverses,
+            lastDisc = lastDiscs,
             hasDefaultsInitialized = safeGet(HAS_DEFAULTS_INITIALIZED, false)
         )
     }
@@ -672,6 +679,7 @@ class SettingsStore(private val context: Context) {
         p[HIDDEN_SYSTEMS] = if (visible) current - system else current + system
     }
     suspend fun setZxControlScheme(system: String, scheme: Int) = context.dataStore.edit { it[intPreferencesKey(ZX_SCHEME_PREFIX + system)] = scheme }
+    suspend fun setLastDisc(game: String, disc: Int) = context.dataStore.edit { it[intPreferencesKey(LAST_DISC_PREFIX + game)] = disc }
     suspend fun setZxStickToKeys(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_STICK_PREFIX + system)] = enabled }
     suspend fun setZxReversePitch(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_REVERSE_PREFIX + system)] = enabled }
     suspend fun setZxKeyBinding(system: String, label: String, bit: Int) = context.dataStore.edit { p ->

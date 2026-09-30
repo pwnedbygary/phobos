@@ -392,6 +392,20 @@ Java_com_phobos_emulator_PhobosCore_setSecondaryRomFd(JNIEnv* env, jobject, jint
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setRomPath(JNIEnv* env, jobject, jstring path) {
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    ares::setRomPath(nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setSecondaryRomPath(JNIEnv* env, jobject, jstring path) {
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    ares::setSecondaryRomPath(nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setSurface(JNIEnv* env, jobject, jobject surface) {
     ares::setSurface(env, surface);
 }

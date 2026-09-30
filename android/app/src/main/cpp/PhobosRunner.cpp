@@ -126,6 +126,22 @@ namespace ares {
 
   static s32 romFd = -1;
   static s32 secondaryRomFd = -1;
+  // A disc image the app can read by path, which the next load (or disc change) opens where it is
+  // instead of copying the descriptor's file into mia_temp. Cleared once used.
+  static string romPath;
+  static string secondaryRomPath;
+  // mia_temp copies of the running game's files (the game, a changed disc, an unzipped ROM), removed
+  // when it unloads.
+  static std::vector<string> tempCopies;
+  static auto rememberTempCopy(const string& path) -> void {
+    if (std::find(tempCopies.begin(), tempCopies.end(), path) == tempCopies.end()) tempCopies.push_back(path);
+  }
+  static auto removeTempCopies() -> void {
+    for (auto& path : tempCopies) {
+      if (::unlink((const char*)path) == 0) LOGI("Removed temp copy %s", (const char*)path);
+    }
+    tempCopies.clear();
+  }
   static std::shared_ptr<mia::Pak> currentMedium;
   static std::shared_ptr<mia::Pak> secondaryMedium;
   static std::atomic<bool> firstFrameRendered{false};
@@ -2529,6 +2545,7 @@ namespace ares {
     invalidateInputCaches();
     currentMedium.reset();
     secondaryMedium.reset();
+    removeTempCopies();
     // [Phobos] The emulation thread has exited cleanly (we acquired runMutex and
     // joined/witnessed its exit). Drop the stale pthread handle so the next
     // setEmulationRunning(true) -> ensureThread() doesn't log the misleading
@@ -2776,9 +2793,13 @@ else if (port->type() == "Keyboard") {
         ::Vulkan::Context::init_loader(nullptr, true);
     }
 
-    if (romFd == -1) return false;
-    struct stat st;
-    if(fstat(romFd, &st) != 0) return false;
+    string directPath = romPath;
+    romPath = "";
+    if (!directPath) {
+      if (romFd == -1) return false;
+      struct stat st;
+      if(fstat(romFd, &st) != 0) return false;
+    }
 
     string extension = "bin";
     if(auto position = uri.findPrevious(uri.size(), ".")) {
@@ -2798,21 +2819,27 @@ else if (port->type() == "Keyboard") {
         if (auto dot = tempFname.find(".")) tempFname = tempFname.slice(0, *dot);
       }
     }
-    string tempPath = string{tempFilePath, "/", tempFname, ".", extension};
+    string loadPath = directPath;
+    if (!loadPath) {
+      string tempPath = string{tempFilePath, "/", tempFname, ".", extension};
 
-    FILE* f = fopen((const char*)tempPath, "wb");
-    if (!f) return false;
-    std::vector<u8> copyBuf;
-    copyBuf.resize(1024 * 1024);
-    lseek(romFd, 0, SEEK_SET);
-    while (true) {
-        ssize_t r = read(romFd, copyBuf.data(), copyBuf.size());
-        if (r <= 0) break;
-        fwrite(copyBuf.data(), 1, r, f);
+      FILE* f = fopen((const char*)tempPath, "wb");
+      if (!f) return false;
+      std::vector<u8> copyBuf;
+      copyBuf.resize(1024 * 1024);
+      lseek(romFd, 0, SEEK_SET);
+      while (true) {
+          ssize_t r = read(romFd, copyBuf.data(), copyBuf.size());
+          if (r <= 0) break;
+          fwrite(copyBuf.data(), 1, r, f);
+      }
+      fclose(f);
+      loadPath = tempPath;
+      rememberTempCopy(tempPath);
+    } else {
+      LOGI("Loading in place: %s", (const char*)loadPath);
     }
-    fclose(f);
 
-    string loadPath = tempPath;
     string identifiedSystem = systemName;
     if (systemName == "Auto" || systemName == "Nintendo 64") {
       auto matches = mia::identify(loadPath);
@@ -2963,6 +2990,7 @@ else if (port->type() == "Keyboard") {
             FILE* rf = fopen((const char*)rawRomPath, "wb");
             if (rf) { fwrite(romBuffer.data(), 1, romBuffer.size(), rf); fclose(rf); }
             loadPath = rawRomPath;
+            rememberTempCopy(rawRomPath);
         } else {
             LOGW("MIA: ZIP extraction returned empty buffer");
         }
@@ -3749,6 +3777,8 @@ else if (port->type() == "Keyboard") {
   auto setOrientationMode(bool vertical) -> void { orientationVertical = vertical; LOGI("Orientation mode set to %s", vertical ? "Vertical" : "Horizontal"); }
   auto setRomFd(s32 fd) -> void { lock_guard<recursive_mutex> lock(systemMutex); if (romFd != -1) ::close(romFd); romFd = fd; }
   auto setSecondaryRomFd(s32 fd) -> void { lock_guard<recursive_mutex> lock(systemMutex); if (secondaryRomFd != -1) ::close(secondaryRomFd); secondaryRomFd = fd; }
+  auto setRomPath(const char* path) -> void { lock_guard<recursive_mutex> lock(systemMutex); romPath = path ? (string)path : ""; }
+  auto setSecondaryRomPath(const char* path) -> void { lock_guard<recursive_mutex> lock(systemMutex); secondaryRomPath = path ? (string)path : ""; }
   auto setTempFilePath(const char* path) -> void { tempFilePath = path ? (string)path : ""; }
   auto setLoadDiskImageToRam(bool enabled) -> void { /* Deprecated */ }
 
@@ -3981,7 +4011,9 @@ else if (port->type() == "Keyboard") {
     lock_guard<std::recursive_mutex> lock(systemMutex);
     LOGI("Loading secondary medium: %s, uri: %s", (const char*)systemName, (const char*)uri);
 
-    if (secondaryRomFd == -1) return false;
+    string loadPath = secondaryRomPath;
+    secondaryRomPath = "";
+    if (!loadPath && secondaryRomFd == -1) return false;
 
     string extension = "bin";
     if(auto position = uri.findPrevious(uri.size(), ".")) {
@@ -3989,19 +4021,25 @@ else if (port->type() == "Keyboard") {
     }
 
     if (!tempFilePath) return false;
-    string tempPath = string{tempFilePath, "/phobos_secondary.", extension};
+    if (!loadPath) {
+      string tempPath = string{tempFilePath, "/phobos_secondary.", extension};
 
-    FILE* f = fopen((const char*)tempPath, "wb");
-    if (!f) return false;
-    std::vector<u8> copyBuf;
-    copyBuf.resize(1024 * 1024);
-    lseek(secondaryRomFd, 0, SEEK_SET);
-    while (true) {
-        ssize_t r = read(secondaryRomFd, copyBuf.data(), copyBuf.size());
-        if (r <= 0) break;
-        fwrite(copyBuf.data(), 1, r, f);
+      FILE* f = fopen((const char*)tempPath, "wb");
+      if (!f) return false;
+      std::vector<u8> copyBuf;
+      copyBuf.resize(1024 * 1024);
+      lseek(secondaryRomFd, 0, SEEK_SET);
+      while (true) {
+          ssize_t r = read(secondaryRomFd, copyBuf.data(), copyBuf.size());
+          if (r <= 0) break;
+          fwrite(copyBuf.data(), 1, r, f);
+      }
+      fclose(f);
+      loadPath = tempPath;
+      rememberTempCopy(tempPath);
+    } else {
+      LOGI("Loading secondary medium in place: %s", (const char*)loadPath);
     }
-    fclose(f);
 
     // The .ndd/.d64/.n64dd disk images are a separate MIA medium type that
     // exposes program.disk for the 64DD drive; plain "Nintendo 64" would
@@ -4016,7 +4054,7 @@ else if (port->type() == "Keyboard") {
         return false;
     }
 
-    auto loadResult = secondaryMedium->load(tempPath);
+    auto loadResult = secondaryMedium->load(loadPath);
     if (loadResult != successful) {
         LOGE("MIA: Failed to load secondary medium for %s (Result: %d)", (const char*)mediumName, (s32)loadResult.result);
         return false;
@@ -4168,14 +4206,17 @@ else if (port->type() == "Keyboard") {
     // "Change Disc" button, which only ran connectDevices() and never mounted
     // the new disc.
     if (root && systemName == "PlayStation") {
-        currentMedium = secondaryMedium;
         // NOTE: use scan(), NOT find() — find<T>(name) only searches DIRECT
         // children, and the PS1 Disc Tray is nested at root → PlayStation →
         // Disc Tray. find() returned null → "Disc Tray not found" on every
         // swap (MGS disc change). scan() recurses the whole tree.
         auto discTray = root->scan<Node::Port>("Disc Tray");
         if (discTray) {
-            isPausedAtomic = true;
+            // A state load can swap discs mid-game, so the frame in progress finishes first; the pause menu keeps
+            // the game paused afterwards.
+            bool wasPaused = isPausedAtomic.exchange(true);
+            lock_guard<recursive_mutex> frame(*runMutex);
+            currentMedium = secondaryMedium;
             fastForwardAtomic = false;
             // Disconnect (ejects the current disc), then re-allocate + connect
             // so the core re-reads cd.rom + TOC from the new medium's pak.
@@ -4184,7 +4225,7 @@ else if (port->type() == "Keyboard") {
             discTray->disconnect();
             discTray->allocate("PlayStation Disc");
             discTray->connect();
-            isPausedAtomic = false;
+            isPausedAtomic = wasPaused;
             LOGI("PS1: disc swapped to %s", (const char*)secondaryMedium->name());
             return true;
         }

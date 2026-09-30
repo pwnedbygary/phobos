@@ -91,6 +91,9 @@ namespace ares {
   auto setLogLevel(s32 level) -> void;
   auto setRomFd(s32 fd) -> void;
   auto setSecondaryRomFd(s32 fd) -> void;
+  // A file the next load (or disc change) opens by path where it is, instead of copying the descriptor's.
+  auto setRomPath(const char* path) -> void;
+  auto setSecondaryRomPath(const char* path) -> void;
   auto setTempFilePath(const char* path) -> void;
   auto setLoadDiskImageToRam(bool enabled) -> void;
   auto setOrientationMode(bool vertical) -> void;
