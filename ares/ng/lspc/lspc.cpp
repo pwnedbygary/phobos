@@ -121,7 +121,9 @@ auto LSPC::main() -> void {
 }
 
 auto LSPC::frame() -> void {
-  screen->setViewport(0, 0, 320, 256);
+  //the picture is lines 16-239 (see main()); the lines above and below it are border
+  if(screen->overscan()) screen->setViewport(0, 0, 320, 256);
+  else screen->setViewport(0, 16, 320, 224);
   screen->frame();
   scheduler.exit(Event::Frame);
 }

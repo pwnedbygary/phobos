@@ -369,6 +369,9 @@ neocd's test; `Cdd::doubleSpeed`) the drive reads data at 150 sectors a second (
 as the real CDZ does; audio stays at 75 and the front and top loaders stay single speed. On the RP6
 Samurai Shodown booted with no input, loaded its title in 21 s instead of 40 and a stage in 7 s
 instead of 13.5 with no DISC I/O ERRORs, and played its attract demo with music.
+Branch `fix/ng-crop-border-2026-09`, stacked on it: `LSPC::frame()` sets the viewport to the 224
+picture lines (`0, 16, 320, 224`) unless `screen->overscan()`, instead of always the full 320×256
+frame with its 16-line borders, so Core Provided no longer letterboxes Neo Geo games.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
