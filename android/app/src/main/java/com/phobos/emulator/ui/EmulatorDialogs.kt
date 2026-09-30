@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import com.phobos.emulator.util.romTitle
 
 /**
  * Dialogs shown over the emulator: quit confirmation, GPU driver suggestion, and load failures
@@ -35,7 +36,7 @@ fun EmulatorDialogs(
         PhobosAlertDialog(
             onDismissRequest = onQuitDismissed,
             title = { DialogSystemBars(fullScreen, inGame = true); Text("Quit Emulation") },
-            text = { Text("Are you sure you want to stop emulating $romName?") },
+            text = { Text("Are you sure you want to stop emulating ${romTitle(romName)}?") },
             confirmButton = { TextButton(onClick = onQuitConfirmed) { Text("Quit") } },
             dismissButton = { TextButton(onClick = onQuitDismissed) { Text("Cancel") } },
         )

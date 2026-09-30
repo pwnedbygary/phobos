@@ -781,13 +781,14 @@ class MainViewModel(
 
     fun loadState(systemName: String, romName: String, slot: Int = 0) {
         viewModelScope.launch(Dispatchers.IO) {
-            performLoadState(systemName, romName, slot)
+            performLoadState(systemName, romName, slot, announceFailure = true)
         }
     }
 
     // Shared load logic (also used by Auto-Load State, Task 17 — slot < 0 = "Auto").
-    // Returns true if a state was found and loaded.
-    private suspend fun performLoadState(systemName: String, romName: String, slot: Int): Boolean {
+    // Returns true if a state was found and loaded. [announceFailure] says so in a toast when
+    // it wasn't; Auto-Load at game start stays quiet.
+    private suspend fun performLoadState(systemName: String, romName: String, slot: Int, announceFailure: Boolean = false): Boolean {
         val startTime = System.currentTimeMillis()
         val fileName = stateFileName(romName, slot)
         val slotLabel = slotLabel(slot)
@@ -835,14 +836,23 @@ class MainViewModel(
                     true
                 } else {
                     Log.e("Phobos", "Native loadState failed")
+                    if (announceFailure) withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Couldn't load the state in $slotLabel", Toast.LENGTH_SHORT).show()
+                    }
                     false
                 }
             } else {
                 Log.w("Phobos", "loadState: no state file found for $fileName")
+                if (announceFailure) withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "No state in $slotLabel", Toast.LENGTH_SHORT).show()
+                }
                 false
             }
         } catch (e: Exception) {
             Log.e("Phobos", "Error during loadState: ${e.message}")
+            if (announceFailure) withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Couldn't load the state in $slotLabel", Toast.LENGTH_SHORT).show()
+            }
             false
         } finally {
             tempFile.delete()

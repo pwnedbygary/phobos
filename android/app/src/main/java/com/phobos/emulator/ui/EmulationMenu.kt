@@ -255,7 +255,7 @@ private fun SaveStateSection(
             Row {
                 Button(onClick = { viewModel.saveState(systemName, romName, currentSlot); onResume() }, shape = pillShape()) { Text("Save") }
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = { viewModel.loadState(systemName, romName, currentSlot); onResume() }, shape = pillShape()) { Text("Load") }
+                Button(onClick = { viewModel.loadState(systemName, romName, currentSlot); onResume() }, enabled = preview != null, shape = pillShape()) { Text("Load") }
                 Spacer(Modifier.width(8.dp))
                 OutlinedButton(
                     onClick = { confirmDelete = true },

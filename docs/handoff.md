@@ -351,6 +351,10 @@ Branch `fix/firmware-slot-persist-2026-09`, stacked on it, has Settings → Firm
 take the persistable read grant (`takePersistableUriPermission`), so a picked file still loads after
 a reboot or an app update; picks made before it need redoing once. Files found by scanning the
 Firmware folder already worked, through the folder's persisted grant.
+Branch `fix/pause-menu-nits-2026-09`, stacked on it: `performLoadState` takes `announceFailure`
+(set by `loadState`, not by Auto-Load) and toasts when a slot is empty or the core refuses the state;
+the pause menu's Load is disabled without a state, like Delete; the quit dialog uses `romTitle()`
+(`util/RomNames.kt`), which drops a short alphanumeric extension only.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
