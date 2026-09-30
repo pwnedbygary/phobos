@@ -347,6 +347,10 @@ linker can't read the macOS 27 SDK's stubs, so link against Xcode's 15.4 SDK, wi
 `CXX="xcrun clang++" CC="xcrun clang"
 LDFLAGS="-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.4.sdk"
 bash tests/ngcd/run-tests.sh`.
+Branch `fix/firmware-slot-persist-2026-09`, stacked on it, has Settings → Firmware's per-slot picker
+take the persistable read grant (`takePersistableUriPermission`), so a picked file still loads after
+a reboot or an app update; picks made before it need redoing once. Files found by scanning the
+Firmware folder already worked, through the folder's persisted grant.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

@@ -1,5 +1,6 @@
 package com.phobos.emulator.ui
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -46,6 +47,8 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && selectedFirmwareKey != null) {
+            // Without a persisted grant the pick stops working after a reboot or an app update.
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             viewModel.setSystemFirmwarePath(selectedFirmwareKey!!, uri.toString())
         }
         selectedFirmwareKey = null
