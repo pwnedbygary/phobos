@@ -103,50 +103,106 @@ auto Cdd::tick() -> void {
   //(one decoder IRQ per sector; header always matches the sector being
   //consumed). Ring-buffer safety net: never write a sector that would wrap
   //onto data the BIOS hasn't DMA'd out of the 0x8000-byte PT/DAC ring.
+  //Audio sectors go to the speakers and, as in libretro neocd's decoder, only
+  //refresh the header registers: the BIOS never takes them out of the ring, so
+  //letting them in would fill it and stall the next data read (DISC I/O ERROR 0002).
+  bool audio = false;
   if(statusCdc & 0x01) {
-    u16 pt  = (u32)cdc.wreg[0xc] | (u32)cdc.wreg[0xd] << 8;
-    u16 dac = (u32)cdc.wreg[0x4] | (u32)cdc.wreg[0x5] << 8;
-    u32 ahead = (pt + 2352 - dac) & 0x7fff;
-    if(ahead <= 0x7fff - 2352) readLbaToBuffer();
+    if(!(control & 0x0100)) {
+      audio = true;
+      playSector(disc.readSectorRaw(curLba));
+      if(cdc.wreg[0xa] & 0x80) cdc.updateHeader();  //REG_W_CTRL0 DECEN
+      curLba++;
+    } else {
+      u16 pt  = (u32)cdc.wreg[0xc] | (u32)cdc.wreg[0xd] << 8;
+      u16 dac = (u32)cdc.wreg[0x4] | (u32)cdc.wreg[0x5] << 8;
+      u32 ahead = (pt + 2352 - dac) & 0x7fff;
+      if(ahead <= 0x7fff - 2352) readLbaToBuffer(disc.readSectorRaw(curLba));
+    }
+  }
+  if(!audio) playSector({});
+}
+
+//The BIOS's tables of the disc, which it fills from the table of contents on the disc-detect path
+//that the poke in tick() stands in for (CDZ BIOS $C0BFC6): at $10F572 each track's start as BCD
+//minutes and seconds, two bytes a track from track 1, then where the disc ends, used for track
+//lengths ($C0B73C); at $10F798 the start as BCD minutes, seconds and frames, three bytes a track,
+//which the play command is built from ($C0C5EE); the end time at $10F642, the last track at $10F64A,
+//and $10F797 set when track 1 is data. Without them no music plays: the BIOS sends FF:FF:FF.
+auto Cdd::writeTrackTable() -> void {
+  auto poke = [](u32 address, u8 data) {
+    auto& word = system.wram[address >> 1];
+    if(address & 1) word.byte(0) = data;
+    else word.byte(1) = data;
+  };
+  auto bcd = [](u32 value) -> u8 { return (value / 10) << 4 | value % 10; };
+  auto time = [&](u32 address, s32 lba) {
+    u32 seconds = u32(lba + 150) / 75;
+    poke(address + 0, bcd(seconds / 60 % 100));
+    poke(address + 1, bcd(seconds % 60));
+  };
+  u8 last = 0;
+  for(u32 track = 1; track <= 99 && track <= disc.session.lastTrack; track++) {
+    auto entry = disc.session.track(track);
+    if(!entry || !entry->index(1)) continue;
+    s32 lba = entry->index(1)->lba;
+    time(0x10f570 + track * 2, lba);
+    time(0x10f798 + (track - 1) * 3, lba);
+    poke(0x10f798 + (track - 1) * 3 + 2, bcd(u32(lba + 150) % 75));
+    if(track == 1) poke(0x10f797, trackIsData(1));
+    last = track;
+  }
+  if(!last) return;
+  if(last < 99) time(0x10f570 + (last + 1) * 2, disc.session.leadOut.lba);
+  time(0x10f642, disc.session.leadOut.lba);
+  poke(0x10f64a, bcd(last));
+}
+
+//The Z80 address of the track byte in the block where the sound driver posts CD audio requests and the
+//BIOS takes them from, from the BIOS's pointer at $10F6EA (0xE1FDF0, the Z80's $FEF8, on the discs seen)
+auto Cdd::requestTrackAddress() const -> u32 {
+  u32 block = (u32)system.wram[0x10f6ea >> 1] << 16 | system.wram[0x10f6ec >> 1];
+  if(block < 0xe00000 || block > 0xefffff) return ~0u;
+  return ((block + 2) >> 1) & 0xffff;
+}
+
+auto Cdd::playSector(const std::vector<u8>& sector) -> void {
+  if(!disc.stream) return;
+  //588 stereo frames of 16-bit little-endian samples: 75 sectors a second is 44.1kHz
+  bool audible = sector.size() >= 2352;
+  for(u32 n : range(588)) {
+    if(audible) {
+      lastLeft  = s16(sector[n * 4 + 0] | sector[n * 4 + 1] << 8) / 32768.0;
+      lastRight = s16(sector[n * 4 + 2] | sector[n * 4 + 3] << 8) / 32768.0;
+      fade = std::min(1.0, fade + 1.0 / 220);
+    } else {
+      fade = std::max(0.0, fade - 1.0 / 220);
+    }
+    disc.stream->frame(lastLeft * fade, lastRight * fade);
   }
 }
 
-auto Cdd::readLbaToBuffer() -> void {
-  bool dataTrack = control & 0x0100;
+//a data sector (tick() sends audio sectors to playSector instead)
+auto Cdd::readLbaToBuffer(const std::vector<u8>& raw) -> void {
+  //mode1: 12 sync + 4 header + 2048 data + 288 ecc
   u8 sector[2352] = {};
-  auto raw = disc.readSectorRaw(curLba);
-  bool rawOk = !raw.empty();
-  if(dataTrack) {
-    if(rawOk) memory::copy(sector, raw.data(), (u32)raw.size() < 2352 ? (u32)raw.size() : 2352u);
-    //mode1: 12 sync + 4 header + 2048 data + 288 ecc
-  } else {
-    if(rawOk) memory::copy(sector, raw.data(), (u32)raw.size() < 2352 ? (u32)raw.size() : 2352u);
-  }
+  if(!raw.empty()) memory::copy(sector, raw.data(), (u32)raw.size() < 2352 ? (u32)raw.size() : 2352u);
 
   cdc.updateHeader();
 
-  if(!dataTrack) {
-    advanceReadPos();
-  }
-
   if(cdc.wreg[0xa] & 0x80) {  //REG_W_CTRL0
     if(cdc.wreg[0xa] & 0x04) {
-      if(dataTrack) {
-        advanceReadPos();
-        u16 pt = (u32)cdc.wreg[0xc] | (u32)cdc.wreg[0xd] << 8;
-        memory::copy(&cdc.buffer[pt + 4], sector + 16, 2048);
-        cdc.buffer[pt + 0] = cdc.rreg[4];  //HEAD0
-        cdc.buffer[pt + 1] = cdc.rreg[5];  //HEAD1
-        cdc.buffer[pt + 2] = cdc.rreg[6];  //HEAD2
-        cdc.buffer[pt + 3] = cdc.rreg[7];  //HEAD3
-        //NeoCDZ protection: some titles (e.g. samsprg) are not recognized
-        //unless the "Copyright by SNK" marker is patched (MAME hack)
-        if(cdc.buffer[pt + 4 + 64] == 'g' && !memcmp(&cdc.buffer[pt + 4], "Copyright by SNK", 16)) {
-          cdc.buffer[pt + 4 + 64] = 'f';
-        }
-      } else {
-        u16 pt = (u32)cdc.wreg[0xc] | (u32)cdc.wreg[0xd] << 8;
-        memory::copy(&cdc.buffer[pt], sector, 2352);
+      advanceReadPos();
+      u16 pt = (u32)cdc.wreg[0xc] | (u32)cdc.wreg[0xd] << 8;
+      memory::copy(&cdc.buffer[pt + 4], sector + 16, 2048);
+      cdc.buffer[pt + 0] = cdc.rreg[4];  //HEAD0
+      cdc.buffer[pt + 1] = cdc.rreg[5];  //HEAD1
+      cdc.buffer[pt + 2] = cdc.rreg[6];  //HEAD2
+      cdc.buffer[pt + 3] = cdc.rreg[7];  //HEAD3
+      //NeoCDZ protection: some titles (e.g. samsprg) are not recognized
+      //unless the "Copyright by SNK" marker is patched (MAME hack)
+      if(cdc.buffer[pt + 4 + 64] == 'g' && !memcmp(&cdc.buffer[pt + 4], "Copyright by SNK", 16)) {
+        cdc.buffer[pt + 4 + 64] = 'f';
       }
     }
     ctrlChecks();
@@ -194,16 +250,19 @@ auto Cdd::raiseType1() -> void {
 }
 
 auto Cdd::serialReset() -> void {
-  //CDD serial link reset ($FF0181 active low): re-sync the nibble handshake
+  //CDD serial link reset ($FF0181 active low): re-sync the nibble handshake.
+  //The drive carries on as it was (libretro neocd resets only the packet
+  //pointers): the BIOS pulses this every frame while a track plays ($C0B514),
+  //and its pause and stop commands wait for the drive to report playing.
   clock = 1;
   memory::fill(rx, sizeof(rx));
   memory::fill(tx, sizeof(tx));
   wordCount = 0;
-  statusHack = 9;
 }
 
 auto Cdd::reset() -> void {
   serialReset();
+  statusHack = 9;
   status = 0;
   curStatus = 0;
   min = sec = frame = ext = 0;
@@ -217,6 +276,9 @@ auto Cdd::reset() -> void {
   type2Pending = 0;
   type3Pending = 0;
   prohibitIrq = 0;
+  fade = 0.0;
+  lastLeft = 0.0;
+  lastRight = 0.0;
 }
 
 auto Cdd::import() -> bool {
@@ -230,6 +292,7 @@ auto Cdd::import() -> bool {
   case 0x6: pause();          break;  //stop
   case 0x7: resume();         break;  //resume
   case 0xa: init();           break;  //init
+  case 0xb: playTrack();      break;  //play from the start of a track (libretro neocd: "move to track")
   default:  unknown();        break;
   }
   return true;
@@ -398,6 +461,24 @@ auto Cdd::read() -> void {
   setDataAudioMode();
   min = toBcd(curTrack);
   statusCdc |= 0x01;    //set CDC read
+  statusHack = 1;
+}
+
+auto Cdd::playTrack() -> void {
+  clearResult();
+  if(!hasDisc()) return;
+  n8 track = (tx[3] & 0x0f) + (tx[2] & 0x0f) * 10;
+  if(track > disc.session.lastTrack) track = disc.session.lastTrack;
+  if(track < 1) track = 1;
+  auto t = disc.session.track(track);
+  if(!t || !t->index(1)) return;
+  curLba = t->index(1)->lba;
+  curTrack = track;
+  curStatus = 0x0100;   //CDD_PLAYINGCDDA
+  status = 0x0102;
+  setDataAudioMode();
+  min = toBcd(curTrack);
+  statusCdc |= 0x01;
   statusHack = 1;
 }
 

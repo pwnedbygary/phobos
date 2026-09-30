@@ -30,7 +30,8 @@ struct APU : Z80, Z80::Bus, Thread {
   auto main() -> void;
   auto step(u32 clocks) -> void override;
   auto power(bool reset) -> void;
-  auto restart() -> void;
+  //Neo Geo CD (REG_Z80RST): held while the BIOS loads the sound program; release resets the Z80 and YM2610
+  auto setReset(bool line) -> void;
 
   //memory.cpp
   auto read(n16 address) -> n8 override;
@@ -62,6 +63,8 @@ struct APU : Z80, Z80::Bus, Thread {
     n8 bankC = 0x0e;
     n8 bankD = 0x1e;
   } rom;
+
+  n1 held;  //in reset (Neo Geo CD only)
 };
 
 extern APU apu;

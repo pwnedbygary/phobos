@@ -64,6 +64,9 @@ struct System {
     n3 uploadZone;
     n2 spriteUploadBank;
     n1 pcmUploadBank;
+    //Neo Geo CD $FF0004: VBL (0x030) and raster timer (0x300) interrupt enables. The BIOS turns VBL
+    //off while it loads, since its VBL handler points the transfer area at the Z80's RAM.
+    n16 irqMask2;
     n32 rtcCounter;
     n1 rtcTimePulse;
     n1 coin = 0;        //MVS coin line held low (inserted). Driven by START (auto-credit) or a SELECT coin pulse.

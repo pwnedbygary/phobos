@@ -7,7 +7,9 @@ APU apu;
 
 auto APU::load(Node::Object parent) -> void {
   node = parent->append<Node::Object>("APU");
-  ram.allocate(2_KiB);
+  //the Neo Geo CD's Z80 has 64KiB of RAM, which the BIOS loads with the sound program, in place of
+  //the cartridge's M1 ROM and the 2KiB of work RAM
+  ram.allocate(NeoGeo::Model::NeoGeoCD() ? 64_KiB : 2_KiB);
   debugger.load(node);
 }
 
@@ -18,6 +20,8 @@ auto APU::unload() -> void {
 }
 
 auto APU::main() -> void {
+  if(held) return step(64);
+
   if(nmi.pending && nmi.enable) {
     Z80::nmi();
     nmi.pending = 0;
@@ -49,9 +53,13 @@ auto APU::power(bool reset) -> void {
   rom.bankB = 0x06;
   rom.bankC = 0x0e;
   rom.bankD = 0x1e;
+  //the Neo Geo CD's Z80 waits for the BIOS to load its RAM and release it (setReset)
+  held = NeoGeo::Model::NeoGeoCD();
 }
 
-auto APU::restart() -> void {
+auto APU::setReset(bool line) -> void {
+  held = line;
+  if(line) return;
   Z80::reset();
   communication = {};
   nmi = {};
@@ -60,6 +68,7 @@ auto APU::restart() -> void {
   rom.bankB = 0x06;
   rom.bankC = 0x0e;
   rom.bankD = 0x1e;
+  opnb.reset();
 }
 
 }

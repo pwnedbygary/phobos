@@ -57,6 +57,14 @@ auto OPNB::power(bool reset) -> void {
   Thread::create(8'000'000, std::bind_front(&OPNB::main, this));
 }
 
+//the chip alone, leaving its thread running (the Neo Geo CD resets it with the Z80)
+auto OPNB::reset() -> void {
+  ym2610.reset();
+  busyCyclesRemaining = 0;
+  timerCyclesRemaining[0] = 0;
+  timerCyclesRemaining[1] = 0;
+}
+
 auto OPNB::read(n2 address) -> n8 {
   return ym2610.read(address);
 }
@@ -66,7 +74,7 @@ auto OPNB::write(n2 address, n8 data) -> void {
 }
 
 auto OPNB::readPCMA(u32 address) -> u8 {
-  //CD: ADPCM samples live in the 1MiB PCM DRAM (pcmRam), uploaded via the
+  //CD: ADPCM-A and ADPCM-B samples both live in the 1MiB PCM DRAM (pcmRam), uploaded via the
   //transfer area. (cartridge.readVA returns 0xff on CD — no cartridge board.)
   return system.readVA(address);
 }

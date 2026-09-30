@@ -322,6 +322,9 @@ check the outline and tile colors for every theme.
 Branch `fix/console-follow-2026-09`, stacked on it, keys the Console's scroll-to-end on the log list
 rather than its size, which stops changing once the log holds `MainViewModel`'s 2,000 lines. A drag
 (`DragInteraction.Start` on the list) stops following; coming to rest at the end resumes it.
+Branch `feature/ngcd-audio-2026-09` gives the Neo Geo CD its sound: the Z80 runs the BIOS-loaded
+program, CD audio plays, and two drive fixes keep the music from breaking loads and the BIOS's
+track changes ([Neo Geo CD sound](#neo-geo-cd-sound--2026-09-30)).
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
@@ -620,6 +623,64 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## Neo Geo CD sound — 2026-09-30
+
+Branch `feature/ngcd-audio-2026-09`, at the user's request. Before it, Neo Geo CD games had no
+sound: the Z80 had no program (see the NGCD-M3 section below) and the core had no CD audio.
+
+What changed, all in `ares/ng`:
+- The Z80 (`apu/`) has 64 KiB of RAM on the CD, which the BIOS loads through the transfer area's
+  Z80 zone and the Z80 runs from. It is held in reset from power-on until the BIOS writes a non-zero
+  value to REG_Z80RST (`$FF0183`), and released with a Z80 and YM2610 reset (`APU::setReset`,
+  `OPNB::reset`). The 68000 reads the zone back byte-wide on the low lane (`cpu/memory.cpp`).
+- ADPCM-B reads the 1 MiB PCM RAM, as ADPCM-A does (`System::readVB`).
+- `$FF0004` (`System::IO::irqMask2`) holds the VBL (0x030) and raster timer (0x300) interrupt
+  enables, and reads back. The BIOS turns VBL off while it loads, because its VBL handler points the
+  transfer area at the Z80's RAM; without the mask that corrupted sound programs mid-upload.
+  `lspc/lspc.cpp` gates both interrupts on it.
+- CD audio is `Disc::stream` ("CD-DA", 44.1 kHz stereo). Every 75 Hz drive tick feeds it a sector
+  of audio or of silence, since the frontend mixes streams in lockstep; starts and stops ramp over
+  220 samples (`Cdd::playSector`).
+- The BIOS's tables of the disc (`Cdd::writeTrackTable`, layout in its comment). The BIOS fills them
+  from the drive's table of contents on the disc-detect path (`$C0BFC6`), which the core skips with
+  its "disc detected" poke at settle, so every play command it built was FF:FF:FF. The core fills
+  them when the BIOS clears a music request it has taken from the sound driver: the byte at the Z80
+  address from the BIOS pointer at `$10F6EA` (`$E1FDF0`, the Z80's `$FEF8`, on the discs seen).
+  Filling them at the poke instead stalled the boot.
+- The drive plays from a track's start on command `0xB`. Audio sectors go to the stream and only
+  refresh the decoder's header registers, as in libretro neocd, instead of entering the decoder's
+  ring buffer, which the BIOS never empties of audio: after the first music, the next data read
+  found the ring full and failed with DISC I/O ERROR 0002.
+- `Cdd::serialReset` (`$FF0181` low) no longer sets the drive status to 9. The BIOS pulses that line
+  every frame while a track plays (`$C0B514`), and with the drive reporting 9 instead of 1
+  (playing), its pause and stop commands (queue handlers `$C0C506`, `$C0C566`) waited for the
+  queue's 20 s timeout (`$C0BBD8`, 1,500 exchanges). That froze the continue countdown, and
+  one-shot tracks played on into the next track.
+- CD save states carry a format number after the header (`CDSerializerFormat`, now 1), so older CD
+  states are refused rather than read misaligned; AES and MVS states are unaffected.
+
+BIOS behavior found on the way (CDZ BIOS):
+- Music requests: the sound driver posts a mode and track at Z80 `$FEF8`/`$FEF9`. The BIOS copies
+  them to `$10F6F6`–`$10F6F8` and `$10F64B` and queues command 7 in its queue at `$10F472` (read and
+  write pointers `$10F650`/`$10F651`, dispatch table `$C0BC44`); command 7 (`$C0C5EE`) builds
+  `3 M S F` from the three-byte table.
+- Track ends: the BIOS doesn't watch the drive's position. It counts frames down from the track's
+  length in the two-byte table (`$C0B73C`: length × 60 − 570 at 60 Hz), and when the count runs out
+  it pauses a one-shot track (mode `$0202`). The drive plays on into the next track until told
+  otherwise, as real drives and libretro neocd do.
+- After its disc check (about 28 s after boot on the RP6) the BIOS stays at its CD-player menu,
+  "PUSH START BUTTON", and loads the game only on START; the auto-boot gate the settle comment in
+  `cdd.cpp` mentions (`$C14C40`) isn't reached. This predates the branch.
+- libretro neocd reads data at 150 sectors a second on the CDZ, a double-speed drive, and 75 on the
+  front and top loaders; the core reads everything at 75. Relevant to the faster-loading task.
+
+Checked on the RP6 with Samurai Spirits ~ Samurai Shodown (CHD): the BIOS jingle and menu effects;
+the character-select, stage, continue and game-over music; the stage loading after the
+character-select music; the continue countdown running out through the save prompt to the title;
+three games in a row. Load times are unchanged: 40 s from the BIOS's START to the title, 13.5 s for
+a stage. Not yet seen: a looping stage track reaching its loop point, since idle fights ended first
+(the stage tracks run 3.7 to 4.5 minutes).
+
 ## NGCD-M3 title-menu text fix — 2026-09-24
 
 Scope: Neo Geo CD only. `ares/ng/disc/dma.cpp` (`0xe2dd` write order) and a
@@ -678,7 +739,7 @@ Limitations and separate findings:
   and the YM2610 is the core's only audio stream (no CD-audio stream), so
   NGCD games should be silent (derived from the code, not observed). This
   separate, pre-existing issue also blocks the older "verify NGCD audio"
-  item below.
+  item below. (Fixed 2026-09-30: [Neo Geo CD sound](#neo-geo-cd-sound--2026-09-30).)
 - The CD sprite tile index in `ares/ng/lspc/render.cpp` ORs the odd word's
   MSB field into tile bits 12..15, while all three references use
   `even word & 0x7fff`. It is not visible in the screenshot, and `9230e4d60`

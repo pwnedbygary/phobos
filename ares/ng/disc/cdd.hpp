@@ -50,7 +50,19 @@ struct Cdd {
   auto tick() -> void;
 
   //sector pipeline
-  auto readLbaToBuffer() -> void;
+  auto readLbaToBuffer(const std::vector<u8>& raw) -> void;
+
+  //CD audio (Disc::stream): one sector, or silence when it's empty. Starts and stops ramp over
+  //about 5ms so they don't click, like the PlayStation core's CD audio.
+  auto playSector(const std::vector<u8>& sector) -> void;
+  f64 fade = 0.0;
+  f64 lastLeft = 0.0;
+  f64 lastRight = 0.0;
+
+  //the BIOS's tables of the disc, filled when it takes a CD audio request from the sound driver
+  auto writeTrackTable() -> void;
+  auto requestTrackAddress() const -> u32;
+
   auto advanceReadPos() -> void;
   auto ctrlChecks() -> void;
   auto raiseType1() -> void;
@@ -72,6 +84,7 @@ struct Cdd {
   auto getTrackType() -> void;
   auto getDiscRecognition() -> void;
   auto read() -> void;
+  auto playTrack() -> void;
   auto seek() -> void;
   auto pause() -> void;
   auto resume() -> void;

@@ -11,4 +11,5 @@ auto APU::serialize(serializer& s) -> void {
   s(rom.bankB);
   s(rom.bankC);
   s(rom.bankD);
+  if(NeoGeo::Model::NeoGeoCD()) s(held);
 }

@@ -216,7 +216,7 @@ auto System::readVA(n32 address) -> n8 {
 }
 
 auto System::readVB(n32 address) -> n8 {
-  if(NeoGeo::Model::NeoGeoCD()) return 0xff;
+  if(NeoGeo::Model::NeoGeoCD()) return pcmRam.read(address);
   return cartridge.readVB(address);
 }
 

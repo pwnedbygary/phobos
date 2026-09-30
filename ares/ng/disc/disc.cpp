@@ -14,10 +14,16 @@ auto Disc::load(Node::Object parent) -> void {
   tray->setAllocate([&](auto name) { return allocate(tray); });
   tray->setConnect([&] { return connect(); });
   tray->setDisconnect([&] { return disconnect(); });
+
+  stream = node->append<Node::Audio::Stream>("CD-DA");
+  stream->setChannels(2);
+  stream->setFrequency(44100);
 }
 
 auto Disc::unload() -> void {
   disconnect();
+  node->remove(stream);
+  stream.reset();
   tray.reset();
   node.reset();
 }

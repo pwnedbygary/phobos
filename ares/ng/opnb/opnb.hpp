@@ -12,6 +12,7 @@ struct OPNB : Thread {
   auto main() -> void;
   auto step(u32 clocks) -> void;
   auto power(bool reset) -> void;
+  auto reset() -> void;
 
   auto read(n2 address) -> n8;
   auto write(n2 address, n8 data) -> void;

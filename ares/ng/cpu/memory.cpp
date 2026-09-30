@@ -91,7 +91,7 @@ auto CPU::read(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
       switch(system.io.uploadZone) {
         case 0: return system.spriteRam[(address & 0xfffff) >> 1];
         case 1: return system.pcmRam[(address & 0xfffff) >> 1];
-        case 4: return apu.ram[(address & 0x1ffff) + upper];
+        case 4: return 0xff00 | apu.ram[(address >> 1) & 0xffff];  //byte-wide, on the low lane
         case 5: return system.fixRam[(address >> 1) & 0x1ffff];
       }
     } else if(address <= 0xffffff) {
@@ -180,8 +180,13 @@ auto CPU::write(n1 upper, n1 lower, n24 address, n16 data) -> void {
                 //0x40000 past their target).
                 if(lower) system.pcmRam[((address >> 1) + (system.io.pcmUploadBank << 19)) & 0xfffff] = data.byte(0);
                 return;
-        case 4: address >>= 1;
-                if(lower) apu.ram[address & 0x1ffff] = data.byte(0);
+        case 4: //Z80 RAM 64KiB
+                if(lower) {
+                  u32 z80 = (address >> 1) & 0xffff;
+                  //the BIOS clearing a CD audio request it has taken from the sound driver
+                  if(data.byte(0) == 0 && apu.ram[z80] && z80 == cdd.requestTrackAddress()) cdd.writeTrackTable();
+                  apu.ram[z80] = data.byte(0);
+                }
                 return;
         case 5: //FIX DRAM 128KiB — index MUST be & 0x1ffff (0x3ffff overflows the
                 //array and corrupts adjacent memory → garbled text layer)
@@ -343,6 +348,11 @@ auto CPU::readIO(n1 upper, n1 lower, n24 address, n16 data) -> n16 {
     //REG_CDD_REGION (DIP switch; 0 = Japan)
     if((address & 0xfffffe) == 0xff011c) {
       data = ~((0x10 | (cdd.region & 3)) << 8);
+      return data;
+    }
+    //the BIOS's interrupt handlers save this mask and restore it
+    if((address & 0xfffffe) == 0xff0004) {
+      data = system.io.irqMask2;
       return data;
     }
   }
@@ -706,15 +716,22 @@ auto CPU::writeIO(n1 upper, n1 lower, n24 address, n16 data) -> void {
     return;
   }
 
+  //$FF0004: VBL and raster timer interrupt enables (System::IO::irqMask2)
+  if((address & 0xfffffe) == 0xff0004) {
+    if(upper) system.io.irqMask2.byte(1) = data.byte(1);
+    if(lower) system.io.irqMask2.byte(0) = data.byte(0);
+    return;
+  }
+
   //REG_TRANSAREA (written at $FF0105)
   if((address & 0xfffffe) == 0xff0104) {
     system.io.uploadZone = data;
     return;
   }
 
-  //REG_Z80RST
+  //REG_Z80RST ($FF0183): $00 holds the Z80 in reset, anything else releases it
   if((address & 0xfffffe) == 0xff0182) {
-    apu.restart();
+    if(lower) apu.setReset(data.byte(0) == 0);
     return;
   }
 

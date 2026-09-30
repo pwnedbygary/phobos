@@ -11,6 +11,9 @@ struct Disc {
   VFS::Pak pak;
   VFS::File fd;
   CD::Session session;
+  //CD audio at 44.1kHz. The frontend mixes streams in lockstep, so it has to run whether or not a
+  //track plays: Cdd::tick() feeds it one sector's worth, audio or silence, 75 times a second.
+  Node::Audio::Stream stream;
 
   //disc.cpp
   auto load(Node::Object) -> void;

@@ -1,4 +1,8 @@
 static const string SerializerVersion = "v134";
+//Neo Geo CD states carry a format number of their own after the header, so a CD state from before a
+//CD-only change is refused instead of read misaligned, while AES and MVS states stay valid.
+//1: the Z80's 64KiB of RAM and its reset line, and the $FF0004 interrupt mask.
+static const u32 CDSerializerFormat = 1;
 
 auto System::serialize(bool synchronize) -> serializer {
   if(synchronize) scheduler.enter(Scheduler::Mode::Synchronize);
@@ -13,6 +17,10 @@ auto System::serialize(bool synchronize) -> serializer {
   s(synchronize);
   s(version);
   s(description);
+  if(NeoGeo::Model::NeoGeoCD()) {
+    u32 cdFormat = CDSerializerFormat;
+    s(cdFormat);
+  }
 
   serialize(s, synchronize);
   return s;
@@ -31,6 +39,11 @@ auto System::unserialize(serializer& s) -> bool {
 
   if(signature != SerializerSignature) return false;
   if(string{version} != SerializerVersion) return false;
+  if(NeoGeo::Model::NeoGeoCD()) {
+    u32 cdFormat = 0;
+    s(cdFormat);
+    if(cdFormat != CDSerializerFormat) return false;
+  }
 
   if(synchronize) power(/* reset = */ false);
   serialize(s, synchronize);
@@ -57,4 +70,5 @@ auto System::serialize(serializer& s, bool synchronize) -> void {
   s(io.ledData);
   s(io.rtcCounter);
   s(io.rtcTimePulse);
+  if(NeoGeo::Model::NeoGeoCD()) s(io.irqMask2);
 }

@@ -75,7 +75,7 @@ auto LSPC::step(u32 clocks) -> void {
     if(timer.reloadOnZero) {
       timer.counter = timer.reload;
     }
-    if(irq.timerAcknowledge && timer.interruptEnable) {
+    if(irq.timerAcknowledge && timer.interruptEnable && (!NeoGeo::Model::NeoGeoCD() || (system.io.irqMask2 & 0x300) == 0x300)) {
       irq.timerAcknowledge = 0;
       cpu.raise(CPU::Interrupt::Timer);
     }
@@ -104,7 +104,7 @@ auto LSPC::main() -> void {
         animation.counter = animation.speed;
         animation.frame++;
       }
-      if(irq.vblankAcknowledge) {
+      if(irq.vblankAcknowledge && (!NeoGeo::Model::NeoGeoCD() || (system.io.irqMask2 & 0x030) == 0x030)) {
         irq.vblankAcknowledge = 0;
         cpu.raise(CPU::Interrupt::Vblank);
       }
