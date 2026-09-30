@@ -5,22 +5,36 @@ import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,12 +43,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -48,6 +64,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -74,9 +94,11 @@ import com.phobos.emulator.ui.touch.TouchLayoutEditor
 import com.phobos.emulator.ui.touch.TouchLayouts
 import com.phobos.emulator.ui.touch.isHidden
 import com.phobos.emulator.ui.touch.touchLayoutKey
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 private val VOLUME_KEYS = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
+private const val MENU_REVEAL_MS = 3000L
 
 @Composable
 fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String, onBack: () -> Unit) {
@@ -267,11 +289,19 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     // not Configuration (which can disagree in split-screen / inset layouts).
     var landscapeScreen by remember { mutableStateOf(true) }
     // Without an on-screen menu button (touch controls off, or the button turned off or
-    // hidden in the layout editor) a tap on the game opens the pause menu instead.
+    // hidden in the layout editor) a tap on the game reveals one for a few seconds instead.
+    // Only that button opens the pause menu, so a thumb brushing the screen can't.
     val menuButtonShown = touchVisible && touchLayout.elements.any { element ->
         element is ButtonCluster && element.buttons.any { it.action == TouchAction.MENU } &&
             !isHidden(element, (if (landscapeScreen) landscapeOverrides else portraitOverrides)[element.id], landscapeScreen)
     }
+    var menuRevealed by remember { mutableStateOf(false) }
+    var menuRevealCount by remember { mutableIntStateOf(0) }
+    fun revealMenuButton() { menuRevealed = true; menuRevealCount++ }
+    LaunchedEffect(menuRevealCount) {
+        if (menuRevealed) { delay(MENU_REVEAL_MS); menuRevealed = false }
+    }
+    LaunchedEffect(isPaused) { if (isPaused) menuRevealed = false }
 
     // ── Main container ───────────────────────────────────────────────────────
     Box(
@@ -344,7 +374,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             onTap = {
                 // With touch controls hidden for a controller, the first tap brings them back.
                 if (controllerActive && settings.showTouchControls && touchPrefs.hideOnController) controllerActive = false
-                else if (isLoaded && !menuButtonShown) viewModel.setPause(true)
+                else if (isLoaded && !menuButtonShown) revealMenuButton()
             },
         )
 
@@ -364,7 +394,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                         TouchAction.NONE -> {}
                     }
                 },
-                onBackgroundTap = { if (isLoaded && !menuButtonShown) viewModel.setPause(true) },
+                onBackgroundTap = { if (isLoaded && !menuButtonShown) revealMenuButton() },
                 ownsInput = { !viewModel.emulatorScreenReplaced(screen) },
             )
         }
@@ -414,6 +444,18 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                     modifier = Modifier.fillMaxSize(),
                 )
             }
+        }
+
+        AnimatedVisibility(
+            visible = menuRevealed && isLoaded && !isPaused && !editingTouchLayout && !menuButtonShown,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                .padding(top = 16.dp),
+        ) {
+            MenuRevealButton(onOpenMenu = { menuRevealed = false; viewModel.setPause(true) })
         }
 
         if (isPaused && !editingTouchLayout) {
@@ -509,6 +551,29 @@ private fun GamePicture(
                 .padding(top = topInset)
                 .size(width, height),
         )
+    }
+}
+
+/** Opens the pause menu for a game without an on-screen menu button; shown briefly after a tap on the game. */
+@Composable
+private fun MenuRevealButton(onOpenMenu: () -> Unit) {
+    val currentOnOpenMenu by rememberUpdatedState(onOpenMenu)
+    Row(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.6f))
+            .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape)
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                onClick { currentOnOpenMenu(); true }
+            }
+            .pointerInput(Unit) { detectTapGestures(onTap = { currentOnOpenMenu() }) }
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Menu, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("Menu", color = Color.White, style = MaterialTheme.typography.labelLarge)
     }
 }
 
