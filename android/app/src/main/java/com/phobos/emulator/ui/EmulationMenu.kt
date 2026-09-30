@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -30,8 +31,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.DoNotTouch
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
@@ -71,6 +73,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
@@ -97,6 +101,13 @@ fun EmulationMenu(
     val context = LocalContext.current
     val diskLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.loadSecondaryRom(context, systemName, RomFile(uri.lastPathSegment ?: "Disk", uri))
+    }
+    val slotPreview = rememberSlotPreview(viewModel, systemName, romName, currentSlot)
+    // The 64DD takes disks and the PlayStation discs; other systems have no Disc button.
+    val discLabel = when {
+        systemName.contains("Nintendo 64") -> "Disk"
+        systemName.contains("PlayStation") -> "Disc"
+        else -> null
     }
     // Composed here, not in the list, so the list can't dispose its pickers' results or dialogs.
     val saveTransfer = if (systemName.contains("Nintendo 64", ignoreCase = true)) rememberSaveTransfer(viewModel, settings) else null
@@ -135,28 +146,22 @@ fun EmulationMenu(
                     LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         item {
                             QuickActions(
+                                canLoad = slotPreview != null,
+                                touchControlsShown = settings.showTouchControls,
+                                discLabel = discLabel,
                                 onSave = { viewModel.saveState(systemName, romName, currentSlot); onResume() },
                                 onLoad = { viewModel.loadState(systemName, romName, currentSlot); onResume() },
                                 onScreenshot = { viewModel.takeScreenshot(systemName, romName) },
-                                onEditControls = onEditTouchLayout,
+                                onToggleTouchControls = { viewModel.setShowTouchControls(!settings.showTouchControls) },
+                                onDisc = { diskLauncher.launch(arrayOf("*/*")) },
                                 onReset = { viewModel.resetSystem(); onResume() },
                             )
                         }
-                        item { SaveStateSection(viewModel, settings, systemName, romName, currentSlot, onResume) }
+                        item { SaveStateSection(viewModel, settings, systemName, romName, currentSlot, slotPreview) }
                         if (supportsFastBoot(systemName)) {
                             item {
                                 MenuSection("Boot Options") {
                                     SettingsSwitchItem("Fast Boot", "Skip BIOS and intro animations", settings.fastBoot) { viewModel.setFastBoot(it) }
-                                }
-                            }
-                        }
-                        if (systemName.contains("Nintendo 64") || systemName.contains("PlayStation")) {
-                            item {
-                                MenuSection("Disc Management") {
-                                    Button(onClick = { diskLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth(), shape = pillShape()) {
-                                        Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp))
-                                        Text(if (systemName.contains("Nintendo 64")) "Insert 64DD Disk" else "Change Disc")
-                                    }
                                 }
                             }
                         }
@@ -209,42 +214,73 @@ private fun supportsFastBoot(systemName: String): Boolean =
 
 @Composable
 private fun QuickActions(
-    onSave: () -> Unit, onLoad: () -> Unit, onScreenshot: () -> Unit, onEditControls: () -> Unit, onReset: () -> Unit,
+    canLoad: Boolean, touchControlsShown: Boolean, discLabel: String?,
+    onSave: () -> Unit, onLoad: () -> Unit, onScreenshot: () -> Unit,
+    onToggleTouchControls: () -> Unit, onDisc: () -> Unit, onReset: () -> Unit,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         QuickAction(Icons.Default.Save, "Save", onSave, Modifier.weight(1f))
-        QuickAction(Icons.Default.Download, "Load", onLoad, Modifier.weight(1f))
+        QuickAction(Icons.Default.Download, "Load", onLoad, Modifier.weight(1f), enabled = canLoad)
         QuickAction(Icons.Default.CameraAlt, "Shot", onScreenshot, Modifier.weight(1f))
-        QuickAction(Icons.Default.TouchApp, "Controls", onEditControls, Modifier.weight(1f))
+        QuickAction(
+            if (touchControlsShown) Icons.Default.TouchApp else Icons.Default.DoNotTouch,
+            "Controls",
+            onToggleTouchControls,
+            Modifier.weight(1f).semantics { stateDescription = if (touchControlsShown) "Touch controls shown" else "Touch controls hidden" },
+            outlined = !touchControlsShown,
+        )
+        if (discLabel != null) QuickAction(Icons.Default.Album, discLabel, onDisc, Modifier.weight(1f))
         QuickAction(Icons.Default.Refresh, "Reset", onReset, Modifier.weight(1f))
     }
 }
 
+/** [outlined] marks a toggle that is off. */
 @Composable
-private fun QuickAction(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier) {
-    FilledTonalButton(onClick = onClick, modifier = modifier.focusRing(MaterialTheme.colorScheme.primary, pillShape()), shape = pillShape(), contentPadding = ButtonDefaults.TextButtonContentPadding) {
+private fun QuickAction(
+    icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier,
+    enabled: Boolean = true, outlined: Boolean = false,
+) {
+    val buttonModifier = modifier.focusRing(MaterialTheme.colorScheme.primary, pillShape())
+    val content: @Composable RowScope.() -> Unit = {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(icon, contentDescription = null)
             Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
         }
     }
+    if (outlined) {
+        OutlinedButton(
+            onClick = onClick, modifier = buttonModifier, enabled = enabled, shape = pillShape(),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+            contentPadding = ButtonDefaults.TextButtonContentPadding, content = content,
+        )
+    } else {
+        FilledTonalButton(
+            onClick = onClick, modifier = buttonModifier, enabled = enabled, shape = pillShape(),
+            contentPadding = ButtonDefaults.TextButtonContentPadding, content = content,
+        )
+    }
+}
+
+/** The current slot's preview; null for an empty slot and while it loads. */
+@Composable
+private fun rememberSlotPreview(viewModel: MainViewModel, systemName: String, romName: String, slot: Int): StateSlotPreview? {
+    val stateRevision by viewModel.stateRevision.collectAsState()
+    // A preview belongs to the slot and save revision it was loaded for; while another one loads
+    // there is none, so the menu doesn't show the previous slot and Load and Delete stay disabled.
+    val previewKey = listOf(systemName, romName, slot, stateRevision)
+    var loadedPreview by remember { mutableStateOf<Pair<List<Any>, StateSlotPreview?>?>(null) }
+    LaunchedEffect(previewKey) {
+        loadedPreview = previewKey to viewModel.stateSlotPreview(systemName, romName, slot)
+    }
+    return loadedPreview?.takeIf { it.first == previewKey }?.second
 }
 
 @Composable
 private fun SaveStateSection(
     viewModel: MainViewModel, settings: EmulatorSettings, systemName: String, romName: String,
-    currentSlot: Int, onResume: () -> Unit,
+    currentSlot: Int, preview: StateSlotPreview?,
 ) {
-    val stateRevision by viewModel.stateRevision.collectAsState()
-    // A preview belongs to the slot and save revision it was loaded for; while another one loads
-    // there is none, so the row doesn't show the previous slot and Delete stays disabled.
-    val previewKey = listOf(systemName, romName, currentSlot, stateRevision)
-    var loadedPreview by remember { mutableStateOf<Pair<List<Any>, StateSlotPreview?>?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
-    LaunchedEffect(previewKey) {
-        loadedPreview = previewKey to viewModel.stateSlotPreview(systemName, romName, currentSlot)
-    }
-    val preview = loadedPreview?.takeIf { it.first == previewKey }?.second
     val slotName = if (currentSlot < 0) "Slot Auto" else "Slot $currentSlot"
     MenuSection("Save / Load States") {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -253,18 +289,12 @@ private fun SaveStateSection(
                 Text(slotName, style = MaterialTheme.typography.bodyLarge)
                 IconButton(onClick = { viewModel.incrementSlot() }) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next") }
             }
-            Row {
-                Button(onClick = { viewModel.saveState(systemName, romName, currentSlot); onResume() }, shape = pillShape()) { Text("Save") }
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = { viewModel.loadState(systemName, romName, currentSlot); onResume() }, enabled = preview != null, shape = pillShape()) { Text("Load") }
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(
-                    onClick = { confirmDelete = true },
-                    enabled = preview != null,
-                    shape = pillShape(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) { Text("Delete") }
-            }
+            OutlinedButton(
+                onClick = { confirmDelete = true },
+                enabled = preview != null,
+                shape = pillShape(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) { Text("Delete") }
         }
         StateSlotPreviewRow(preview)
         // Auto-Save / Auto-Load STATE toggles (all cores), distinct from cartridge/flash save flushing.
@@ -554,7 +584,6 @@ private fun TouchControlsSection(viewModel: MainViewModel, settings: EmulatorSet
     // Opacity is kept per orientation; adjust the one in use.
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     MenuSection("Touch Controls") {
-        SettingsSwitchItem("Show Touch Controls", "", settings.showTouchControls) { viewModel.setShowTouchControls(it) }
         if (landscape) {
             SettingsSliderItem("Opacity", settings.touch.opacity, 0.1f..1f) { v -> viewModel.updateTouchPrefs { it.copy(opacity = v) } }
         } else {
