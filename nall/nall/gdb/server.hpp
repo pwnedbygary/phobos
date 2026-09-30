@@ -2,6 +2,7 @@
 
 #include <nall/tcptext/tcptext-server.hpp>
 #include <nall/gdb/watchpoint.hpp>
+#include <array>
 #include <functional>
 
 namespace nall::GDB {
@@ -140,6 +141,7 @@ class Server : public nall::TCPText::Server {
     std::vector<u64> breakpoints{};
     std::vector<Watchpoint> watchpointRead{};
     std::vector<Watchpoint> watchpointWrite{};
+    std::array<bool, 256> passSignals{};
 
     auto processCommand(const string& cmd, bool &shouldReply) -> string;
     auto resetClientData() -> void;

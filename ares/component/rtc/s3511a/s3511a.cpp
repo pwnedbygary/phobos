@@ -19,9 +19,10 @@ auto S3511A::load() -> void {
     return;
   }
 
-  timestamp = time(0) - timestamp;
-  //prevent insurmountable slowdown by limiting skips to 5 years
-  if(timestamp < 60*60*24*365*5) {
+  time_t now = time(0);
+  time_t saved = (time_t)timestamp;
+  if(now > saved) {
+    timestamp = now - saved;
     while(timestamp--) tickSecond();
   }
 
@@ -31,7 +32,6 @@ auto S3511A::load() -> void {
   // year, re-seed to the current host time (a future-dated clock is the game's
   // deliberate choice — left alone). seedCurrentTime() also updates the stored
   // timestamp so the re-seed sticks on the next boot.
-  time_t now = time(0);
   struct tm* lt = localtime(&now);
   if(lt && BCD::decode(year()) < BCD::decode(BCD::encode(u8(lt->tm_year % 100)))) {
     seedCurrentTime();

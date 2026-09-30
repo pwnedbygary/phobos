@@ -7,13 +7,16 @@ auto DD::RTC::load() -> void {
   //byte 0 to 7 = raw rtc time (last updated, only 6 bytes are used)
   n64 check = 0;
   for(auto n : range(8)) check.byte(n) = ram.read<Byte>(n);
+  //byte 8 to 15 = timestamp of when the last save was made
+  n64 timestamp = 0;
+  for(auto n : range(8)) timestamp.byte(n) = ram.read<Byte>(8 + n);
   __android_log_print(ANDROID_LOG_WARN, "PhobosDD",
     "RTC load: %02x%02x %02x%02x %02x%02x %02x%02x | ts=%08llx | check=%016llx new=%d valid=%d",
     ram.read<Byte>(0), ram.read<Byte>(1), ram.read<Byte>(2), ram.read<Byte>(3),
     ram.read<Byte>(4), ram.read<Byte>(5), ram.read<Byte>(6), ram.read<Byte>(7),
     (unsigned long long)ram.read<Dual>(8),
     (unsigned long long)check, !~check ? 1 : 0, valid() ? 1 : 0);
-  if(!~check || check == 0) {  //new save file (all-0xFF erased EEPROM OR all-zero placeholder)
+  if(!~check || check == 0 || !~timestamp) {  //new save file (all-0xFF erased EEPROM, all-zero placeholder, or no save timestamp)
     // [Phobos] Seed a fresh 64DD RTC with the current host time in BCD.
     // On real hardware the RTC comes pre-set from the factory; leaving it
     // all-0xFF (or the all-zero node Phobos creates for a missing time.rtc)
@@ -29,14 +32,13 @@ auto DD::RTC::load() -> void {
     return;
   }
 
-  //byte 8 to 15 = timestamp of when the last save was made
-  n64 timestamp = 0;
-  for(auto n : range(8)) timestamp.byte(n) = ram.read<Byte>(8 + n);
-  if(!~timestamp) return;  //new save file
-
   //update based on the amount of time that has passed since the last save
-  timestamp = time(0) - timestamp;
-  while(timestamp--) tickSecond();
+  time_t now = time(0);
+  time_t saved = (time_t)timestamp;
+  if(now > saved) {
+    timestamp = now - saved;
+    while(timestamp--) tickSecond();
+  }
 }
 
 // [Phobos] Write the current wall-clock time into the RTC as BCD

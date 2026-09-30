@@ -3,6 +3,7 @@
 
 //started: 2011-09-05
 
+#include <fc/vs/unisystem.cpp>
 #include <fc/system/system.cpp>
 #include <fc/controller/controller.cpp>
 #include <fc/expansion/expansion.cpp>

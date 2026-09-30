@@ -687,6 +687,65 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## Upstream ares merge — 2026-09-30
+
+Branch `merge/upstream-ares-2026-09`, at the user's request: a merge commit of upstream ares
+`4cb8d92b4` (2026-09-22), 77 commits past the fork point `cdabe5c5a` (2026-07-25), so the next sync
+starts from it. How each overlap was resolved, for the next merge:
+
+- Desktop front end: Phobos deleted `desktop-ui`, `hiro` and `ruby`; upstream's edits to 24 of their
+  files and its new `desktop-ui/emulator/atari-5200.cpp` stay deleted.
+- N64 Count/Compare: Phobos's implementation stays (`countSinceSync`, `countWriteSkip`, the modular
+  timer distance in `CPU::instruction`), so `cpu.cpp`, `interpreter-scc.cpp` and `serialization.cpp`
+  are unchanged from master. Upstream fixed the same two bugs (`430def86f`, `e4217366c`) with
+  `stepCount`/`flushCount`/`effectiveCount` and a `countClock` field, but still clamps the JIT's
+  timer distance at zero (a sync after every block once Count passes Compare) and adds `countClock`
+  to save states; mixing the two would count clocks twice.
+- N64 RDRAM size (`8da242f5a`): taken; the JIT checks `rdram.ram.size` instead of 8 MiB. With the
+  Expansion Pak on (the default) nothing changes; with it off, code above 4 MiB falls back to the
+  interpreter (every `section()` caller handles a missing section).
+- `ares/n64/vulkan`: `vulkan.hpp` keeps `#include "rdp_device.hpp"`, since `PhobosRunner.cpp`
+  reaches `::Vulkan::Context` through it; upstream moved the include to `vulkan.cpp` for non-unity
+  builds, and that copy is dropped.
+- `nall` recompiler: `mov128` keeps Phobos's ARM64 path of two 64-bit moves (sljit's SIMD move
+  crashes on some Snapdragons); other architectures take upstream's `SLJIT_TMP_DEST_VREG`. The N64
+  JIT now declares its two float scratch registers (`beginFunction(3, 3, 6, 2)`) and passes flags
+  to `fcmp32`/`fcmp64`, as the newer sljit needs.
+- sljit: upstream's newer copy plus Phobos's `sljit.h`. Phobos had inverted the store size in the
+  ARM64 integer-to-float conversion to memory (a double was stored as 4 bytes); upstream's is back.
+  The N64 JIT always converts into a register, so nothing changes today.
+- Clocks: the 64DD and the GBA's S-3511A keep Phobos's host-time seeding. Upstream now seeds too,
+  but its GBA seed leaves status `0x82` (halted), which Pokémon's clock driver treats as unset and
+  overwrites with 2000-01-01. Taken from upstream: the guard against a clock that went backwards,
+  the 64DD's missing timestamp counting as a new save, and GBA saves older than five years catching
+  up fully (the cap is gone).
+- `mia/medium/mame.cpp`: upstream's rewrite (`AssemblyResult`, parent chains, strict record
+  checks), with Phobos's `load32_word_swap` interleave (King of Fighters 2003, Metal Slug 5, SNK vs.
+  Capcom) and
+  basename matching of archive members added back. Every ROM record in the Neo Geo, Arcade and Vs.
+  databases passes the new checks. `neo-geo.cpp` takes upstream's result-based loading and keeps
+  Phobos's decryption and load log.
+- Build: Phobos's hand-kept source list gains `armv6m.cpp` (the Atari 2600's Harmony carts), the
+  `ares/resource/resource.hpp` stub gains `Sprite::Famicom::Crosshair` (the XG-1 light gun), and the
+  unity files keep Phobos's `ares.hpp` header. The stub's images are empty, as they have been since
+  the first commit, so a light gun would have no crosshair; none can be connected in Phobos
+  (`connectDevices` in `PhobosRunner.cpp` always connects the gamepad), so exposing the Zapper,
+  Super Scope, Justifier, Light Phaser or XG-1 needs ares's real sprites generated first, as mia's
+  firmware is. The APK's own database copies
+  (`android/app/src/main/assets/Database`) gain upstream's `Atari 2600.bml` (region, board and
+  phosphor by checksum) and the updated `Famicom.bml`; they aren't synced from `mia/Database`
+  automatically.
+- The Atari 2600 core now reads the console switches once a frame, so a press shorter than a frame
+  (such as `adb shell input keyevent`) can be missed; hold it (`--longpress`) in device scripts.
+
+Checked on the RP6, A/B against master's nightly `1.1.0-32-gec1a0b25`: Mario Tennis fast-forward
+work per frame 6.36 / 6.23 ms before, 6.40 / 6.35 ms after (within run-to-run spread; fast-forward
+was capped at 2x, 118 FPS), and 59.8 FPS at normal speed in both; Dig Dug went from garbage at
+236 FPS to correct play; Asteroids, Yars' Revenge, 8 Eyes, Pokémon Unbound, Link's Awakening DX,
+King of Fighters 2003, Garou and Alpha Mission II run. Not exposed yet: the Atari 5200 core (not in
+the build), Vs. UniSystem games (need `VsSystem.bml` in the assets plus coin and DIP-switch inputs)
+and the N64 GameCube controller.
+
 ## Neo Geo CD sound — 2026-09-30
 
 Branch `feature/ngcd-audio-2026-09`, at the user's request. Before it, Neo Geo CD games had no

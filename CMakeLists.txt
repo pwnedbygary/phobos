@@ -50,6 +50,7 @@ include_directories(
 
 set(ARES_SOURCES
     ares/component/processor/arm7tdmi/arm7tdmi.cpp
+    ares/component/processor/armv6m/armv6m.cpp
     ares/component/processor/m68000/m68000.cpp
     ares/component/processor/mos6502/mos6502.cpp
     ares/component/processor/hg51b/hg51b.cpp

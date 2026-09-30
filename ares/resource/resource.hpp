@@ -15,6 +15,7 @@ namespace ares::Resource {
       inline DummyImage VolumeA0, VolumeA1, VolumeA2;
       inline DummyImage VolumeB0, VolumeB1, VolumeB2, VolumeB3;
     }
+    namespace Famicom { inline DummyImage Crosshair; }
     namespace SuperFamicom { inline DummyImage CrosshairRed, CrosshairGreen, CrosshairBlue; }
   }
 }

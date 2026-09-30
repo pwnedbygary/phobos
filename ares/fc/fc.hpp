@@ -24,6 +24,7 @@ auto enumerate() -> std::vector<string>;
 
   #include <fc/controller/controller.hpp>
   #include <fc/expansion/expansion.hpp>
+  #include <fc/vs/unisystem.hpp>
   #include <fc/system/system.hpp>
   #include <fc/cartridge/cartridge.hpp>
   #include <fc/cpu/cpu.hpp>

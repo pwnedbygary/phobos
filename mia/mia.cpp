@@ -112,6 +112,7 @@ auto construct() -> void {
 
   media.push_back("Arcade");
   media.push_back("Atari 2600");
+  media.push_back("Atari 5200");
   media.push_back("BS Memory");
   media.push_back("ColecoVision");
   media.push_back("Famicom");
