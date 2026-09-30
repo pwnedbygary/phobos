@@ -3268,16 +3268,6 @@ else if (port->type() == "Keyboard") {
           auto sysPak = root->pak();
           if (sysPak) importIntoPak(sysPak);
         }
-        // MIA-level sidecar saves (.sav, .flash, cpu.ram): restore them to
-        // mia_temp so MIA's Pak::load() / ares' CPU::load() pick them up.
-        for (auto& saveName : {"program.sav", "program.flash"}) {
-          string fullPath = {saveDir, saveName};
-          auto existing = file::read(fullPath);
-          if (existing.size() == 0) continue;
-          string sidecarPath = string{tempFilePath, "/", saveName};
-          file::write(sidecarPath, existing);
-          LOGI("Saves: imported sidecar %s (%zu bytes) for %s", saveName, existing.size(), (const char*)identifiedSystem);
-        }
       }
 
       bool playStation = root->name() == "PlayStation";
@@ -3409,20 +3399,6 @@ else if (port->type() == "Keyboard") {
     // ("Error 48 — Date/Time not set" on every boot after first save).
     if (root && root->pak()) {
       for (auto& saveNode : root->pak()->files()) flushNode(saveNode);
-    }
-    // MIA-level sidecar saves (.sav, .flash for NGP/NGPC/WonderSwan): copy
-    // from mia_temp so they survive cleanup (same as unload).
-    for (auto& saveName : {"program.sav", "program.flash"}) {
-      string sidecarPath = string{tempFilePath, "/", saveName};
-      auto data = file::read(sidecarPath);
-      if (data.size() == 0) continue;
-      bool allZero = true;
-      for (auto b : data) { if (b != 0) { allZero = false; break; } }
-      if (allZero) continue;
-      string fullPath = {saveDir, saveName};
-      file::write(fullPath, data);
-      wrote = true;
-      LOGI("Saves: flushed MIA sidecar %s (%zu bytes) for %s [%s]", saveName, data.size(), (const char*)sysName, (const char*)romKey);
     }
     if (!wrote) LOGI("Saves: flush complete (nothing to write) for %s [%s]", (const char*)sysName, (const char*)romKey);
   }
