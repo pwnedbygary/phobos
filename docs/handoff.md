@@ -358,6 +358,17 @@ Branch `fix/pause-menu-nits-2026-09`, stacked on it: `performLoadState` takes `a
 (set by `loadState`, not by Auto-Load) and toasts when a slot is empty or the core refuses the state;
 the pause menu's Load is disabled without a state, like Delete; the quit dialog uses `romTitle()`
 (`util/RomNames.kt`), which drops a short alphanumeric extension only.
+Branch `feature/ngcd-cdz-drive-2026-09` makes the Neo Geo CD boot and load like a CDZ. The drive
+starts idle and reports itself stopped once asked about the disc (`Cdd::handleTocCommands`), as in
+libretro neocd. It used to start at 9, which the BIOS's command queue counts as busy (`$C0BBD8`),
+so the BIOS's first command waited out its 20 s queue timeout, the disc check ended about 28 s after
+boot, and the CD-player menu waited for START. Now the BIOS reads the table of contents and
+recognizes the disc within about 3 s (`$C0BCF8` sets `$10F656` bit 0) and boots the game by itself
+in the logo's last 384 frames (`$C14C2A`). With the CDZ's BIOS (`00C0 A3E8` at `$C0006C`, libretro
+neocd's test; `Cdd::doubleSpeed`) the drive reads data at 150 sectors a second (`Cdd::tickPeriod`),
+as the real CDZ does; audio stays at 75 and the front and top loaders stay single speed. On the RP6
+Samurai Shodown booted with no input, loaded its title in 21 s instead of 40 and a stage in 7 s
+instead of 13.5 with no DISC I/O ERRORs, and played its attract demo with music.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
@@ -703,9 +714,11 @@ BIOS behavior found on the way (CDZ BIOS):
   otherwise, as real drives and libretro neocd do.
 - After its disc check (about 28 s after boot on the RP6) the BIOS stays at its CD-player menu,
   "PUSH START BUTTON", and loads the game only on START; the auto-boot gate the settle comment in
-  `cdd.cpp` mentions (`$C14C40`) isn't reached. This predates the branch.
+  `cdd.cpp` mentions (`$C14C40`) isn't reached. This predates the branch. (Fixed the same day by
+  branch `feature/ngcd-cdz-drive-2026-09`; see its note in the active-work section.)
 - libretro neocd reads data at 150 sectors a second on the CDZ, a double-speed drive, and 75 on the
-  front and top loaders; the core reads everything at 75. Relevant to the faster-loading task.
+  front and top loaders; the core reads everything at 75. Relevant to the faster-loading task. (The
+  CDZ reads at 150 since the same branch.)
 
 Checked on the RP6 with Samurai Spirits ~ Samurai Shodown (CHD): the BIOS jingle and menu effects;
 the character-select, stage, continue and game-over music; the stage loading after the

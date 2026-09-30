@@ -148,6 +148,12 @@ auto System::power(bool reset) -> void {
     }
   }
 
+  //libretro neocd tells the CDZ's BIOS by these words at $C0006C; the front and top loaders have
+  //single-speed drives
+  if(NeoGeo::Model::NeoGeoCD()) {
+    cdd.doubleSpeed = bios.size() > 0x37 && bios[0x36] == 0x00c0 && bios[0x37] == 0xa3e8;
+  }
+
   if(NeoGeo::Model::NeoGeoMVS()) {
     if(auto fp = pak->read("static.rom")) {
       srom.allocate(fp->size() >> 1);

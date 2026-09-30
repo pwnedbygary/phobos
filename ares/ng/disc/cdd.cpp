@@ -49,9 +49,11 @@ auto Cdd::tick() -> void {
         //there the BIOS's own boot-init ($C0CEC4: btst #0,$10F656) runs
         //the full disc/TOC phase — which populates the loader's position
         //regs and sets bit 7 itself ($C0D2E4) before the auto-boot gate
-        //($C14C40).  Our CDD never delivers that report, so we poke bit 0
-        //at settle (drive settled + disc present) and let the BIOS take it
-        //from there.  Poking bit 7 directly was wrong: it auto-booted the
+        //($C14C40).  At power-on the BIOS now sets bit 0 itself, through its
+        //disc recognition ($C0BCF8), since the drive reports itself stopped
+        //once asked about the disc (handleTocCommands); this poke at settle
+        //(drive settled + disc present) is left for a settle that finds
+        //neither bit set.  Poking bit 7 directly was wrong: it auto-booted the
         //loader BEFORE the TOC phase, so the loader's READ carried $FF
         //positions (lba=754887 garbage → DISC I/O ERROR).
         //
@@ -123,8 +125,14 @@ auto Cdd::tick() -> void {
   if(!audio) playSector({});
 }
 
-//The BIOS's tables of the disc, which it fills from the table of contents on the disc-detect path
-//that the poke in tick() stands in for (CDZ BIOS $C0BFC6): at $10F572 each track's start as BCD
+auto Cdd::tickPeriod() const -> u32 {
+  bool readingData = (statusCdc & 0x01) && (control & 0x0100);
+  return 6'000'000 / (doubleSpeed && readingData ? 150 : 75);
+}
+
+//The BIOS's tables of the disc, which it fills from the table of contents when it recognizes the
+//disc at power-on (CDZ BIOS $C0BFC6), and which the core fills again when the BIOS takes a music
+//request, for a disc recognized through the settle poke instead: at $10F572 each track's start as BCD
 //minutes and seconds, two bytes a track from track 1, then where the disc ends, used for track
 //lengths ($C0B73C); at $10F798 the start as BCD minutes, seconds and frames, three bytes a track,
 //which the play command is built from ($C0C5EE); the end time at $10F642, the last track at $10F64A,
@@ -168,9 +176,11 @@ auto Cdd::requestTrackAddress() const -> u32 {
 
 auto Cdd::playSector(const std::vector<u8>& sector) -> void {
   if(!disc.stream) return;
-  //588 stereo frames of 16-bit little-endian samples: 75 sectors a second is 44.1kHz
+  //588 stereo frames of 16-bit little-endian samples: 75 sectors a second is 44.1kHz. While the
+  //CDZ's drive ticks at 150 a second (reading data, so this is silence) a tick is half as long.
+  u32 frames = 588 * tickPeriod() / (6'000'000 / 75);
   bool audible = sector.size() >= 2352;
-  for(u32 n : range(588)) {
+  for(u32 n : range(frames)) {
     if(audible) {
       lastLeft  = s16(sector[n * 4 + 0] | sector[n * 4 + 1] << 8) / 32768.0;
       lastRight = s16(sector[n * 4 + 2] | sector[n * 4 + 3] << 8) / 32768.0;
@@ -262,7 +272,9 @@ auto Cdd::serialReset() -> void {
 
 auto Cdd::reset() -> void {
   serialReset();
-  statusHack = 9;
+  //idle at power-on, as in libretro neocd: the BIOS's queue counts 9 as busy and waited out its 20s
+  //timeout before its first command, missing the window in which it boots a game by itself ($C14C2A)
+  statusHack = 0;
   status = 0;
   curStatus = 0;
   min = sec = frame = ext = 0;
@@ -346,6 +358,13 @@ auto Cdd::stop() -> void {
 }
 
 auto Cdd::handleTocCommands() -> void {
+  //An idle drive with a disc in reports itself stopped once asked about the disc (libretro neocd):
+  //the BIOS reads the table of contents and recognizes the disc ($C0BCF8) only from a stopped drive.
+  if(statusHack == 0 && hasDisc()) {
+    statusHack = 9;
+    curStatus = 0x0900;
+    control |= 0x0100;
+  }
   n8 subcmd = tx[3];
   status = (status & 0xff00) | subcmd;
   switch(subcmd) {

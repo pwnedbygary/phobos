@@ -23,6 +23,7 @@ struct Cdd {
   n16 statusCdc = 0;   //SCD_STATUS_CDC
   s32 curLba = 0;
   n8  curTrack = 0;
+  n1  doubleSpeed = 0; //the CDZ's drive: data at 150 sectors a second (set from the BIOS at power)
 
   //misc latches
   n16 reg2 = 0;        //nff0002 (CDD/CDC control latch)
@@ -51,6 +52,8 @@ struct Cdd {
   //75Hz drive tick: raises the CDD type2 interrupt (MAME nff0002 & 0x0050)
   //and advances the sector pipeline.
   auto tick() -> void;
+  //6MHz LSPC clocks between ticks: 150 a second while the CDZ reads data, else 75
+  auto tickPeriod() const -> u32;
 
   //sector pipeline
   auto readLbaToBuffer(const std::vector<u8>& raw) -> void;

@@ -87,11 +87,10 @@ auto LSPC::step(u32 clocks) -> void {
 auto LSPC::main() -> void {
   step(1);
   if(NeoGeo::Model::NeoGeoCD()) {
-    //CDD/CDC tick at the authentic 75Hz 1x rate (one sector + one decoder
-    //IRQ per tick). Higher rates make the BIOS's access machine read CDC
-    //registers before the pipeline has written them → DISC I/O ERROR
-    //ID=0000/0002, so the drive speed is fixed at 1x.
-    if(io.cddCounter += 1, io.cddCounter >= 6'000'000 / 75) {
+    //CDD/CDC tick: one sector and one decoder IRQ per tick, at the drive's
+    //own speed (Cdd::tickPeriod): 75 a second, or 150 while the CDZ's
+    //double-speed drive reads data, as libretro neocd has it.
+    if(io.cddCounter += 1, io.cddCounter >= cdd.tickPeriod()) {
       io.cddCounter = 0;
       cdd.tick();
     }
