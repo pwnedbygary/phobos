@@ -74,6 +74,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
 import com.phobos.emulator.ui.theme.pillShape
@@ -99,9 +100,11 @@ fun EmulationMenu(
     }
     // Composed here, not in the list, so the list can't dispose its pickers' results or dialogs.
     val saveTransfer = if (systemName.contains("Nintendo 64", ignoreCase = true)) rememberSaveTransfer(viewModel, settings) else null
-    // The N64 Experimental screen replaces the main list (with a back arrow) to keep the menu short.
+    // The N64 Experimental and Performance Monitor pages replace the main list (with a back arrow)
+    // to keep the menu short.
     var experimentalOpen by remember { mutableStateOf(false) }
-    BackHandler(enabled = experimentalOpen) { experimentalOpen = false }
+    var perfHudOpen by remember { mutableStateOf(false) }
+    BackHandler(enabled = experimentalOpen || perfHudOpen) { experimentalOpen = false; perfHudOpen = false }
 
     Box(
         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.7f)).clickable(enabled = false) {},
@@ -125,6 +128,8 @@ fun EmulationMenu(
             Column(modifier = Modifier.padding(16.dp)) {
                 if (experimentalOpen) {
                     N64ExperimentalSection(viewModel, settings, onBack = { experimentalOpen = false })
+                } else if (perfHudOpen) {
+                    PerfHudMenuSection(viewModel, settings, onBack = { perfHudOpen = false })
                 } else {
                     Text("Emulation Paused", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 8.dp))
                     LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -181,7 +186,7 @@ fun EmulationMenu(
                             item { ZxKeyboardSection(viewModel, settings, showKeyboard, onKeyboardToggle, zxControlScheme, onZxControlScheme) }
                         }
                         item { TouchControlsSection(viewModel, settings, onEditTouchLayout) }
-                        item { DisplaySection(viewModel, settings) }
+                        item { DisplaySection(viewModel, settings, onOpenPerfHud = { perfHudOpen = true }) }
                     }
                 }
 
@@ -564,10 +569,17 @@ private fun TouchControlsSection(viewModel: MainViewModel, settings: EmulatorSet
 }
 
 @Composable
-private fun DisplaySection(viewModel: MainViewModel, settings: EmulatorSettings) {
+private fun DisplaySection(viewModel: MainViewModel, settings: EmulatorSettings, onOpenPerfHud: () -> Unit) {
     MenuSection("Display") {
         SettingsSwitchItem("Full Screen", "", settings.fullScreenMode) { viewModel.setFullScreenMode(it) }
         SettingsSwitchItem("Performance Monitor", "", settings.showPerformanceMonitor) { viewModel.setShowPerformanceMonitor(it) }
+        ListItem(
+            headlineContent = { Text("Performance Monitor Contents") },
+            supportingContent = { Text("Preset, layout and which stats it shows") },
+            trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+            colors = transparentListItemColors(),
+            modifier = Modifier.clickable(onClick = onOpenPerfHud),
+        )
         SettingsDropdownItem(
             title = "Aspect Ratio",
             description = null,
@@ -592,6 +604,29 @@ fun MenuSection(title: String, content: @Composable ColumnScope.() -> Unit) {
         ) {
             Column(Modifier.fillMaxWidth().padding(8.dp), content = content)
         }
+    }
+}
+
+// ─── Performance Monitor sub-menu ────────────────────────────────────────────
+// The same controls as Settings > Performance Monitor, so the HUD can be changed without leaving
+// the game.
+
+@Composable
+fun ColumnScope.PerfHudMenuSection(viewModel: MainViewModel, settings: EmulatorSettings, onBack: () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+        Text("Performance Monitor", style = MaterialTheme.typography.headlineSmall)
+    }
+    LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { HudPreview(settings.hudConfig(), onBackdrop = false) }
+        item {
+            MenuSection("Overlay") {
+                SettingsSwitchItem("Show Performance Monitor", "Drag it to move.", settings.showPerformanceMonitor) { viewModel.setShowPerformanceMonitor(it) }
+            }
+        }
+        item { MenuSection("Preset") { PerfHudPresetChips(viewModel, settings) } }
+        item { MenuSection("Layout") { PerfHudLayoutItems(viewModel, settings) } }
+        item { MenuSection("Metrics") { PerfHudMetricItems(viewModel, settings) } }
     }
 }
 

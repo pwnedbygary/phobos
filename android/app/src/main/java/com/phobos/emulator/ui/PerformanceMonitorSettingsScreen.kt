@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.PerformanceStats
+import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.ui.hud.HostSample
 import com.phobos.emulator.ui.hud.HudConfig
 import com.phobos.emulator.ui.hud.HudPreset
@@ -47,7 +48,6 @@ import kotlin.math.sin
 fun PerformanceMonitorSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val config = settings.hudConfig()
-    val activePreset = HudPreset.matching(config)
 
     PhobosScaffold(title = "Performance Monitor", onBack = onBack) { innerPadding ->
         LazyColumn(
@@ -68,70 +68,9 @@ fun PerformanceMonitorSettingsScreen(viewModel: MainViewModel, onBack: () -> Uni
                     )
                 }
             }
-            item {
-                SettingsCategory("Preset") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        HudPreset.entries.forEach { preset ->
-                            FilterChip(
-                                selected = activePreset == preset,
-                                onClick = { viewModel.applyPerfHudPreset(preset) },
-                                label = { Text(preset.label) },
-                            )
-                        }
-                        FilterChip(selected = activePreset == null, onClick = {}, enabled = activePreset == null, label = { Text("Custom") })
-                    }
-                }
-            }
-            item {
-                SettingsCategory("Layout") {
-                    SettingsSwitchItem(
-                        title = "Horizontal",
-                        description = "One compact line instead of a column",
-                        checked = settings.perfHudHorizontal,
-                        onCheckedChange = { viewModel.setPerfHudHorizontal(it) }
-                    )
-                    SettingsSliderItem(
-                        title = "Size",
-                        value = settings.perfOverlayScale,
-                        range = 0.6f..2.0f,
-                        format = { String.format(Locale.US, "%.1f\u00D7", it) },
-                        onCommit = { viewModel.setPerfOverlayScale(it) },
-                    )
-                    SettingsSliderItem(
-                        title = "Background opacity",
-                        value = settings.perfHudOpacity,
-                        range = 0f..0.9f,
-                        onCommit = { viewModel.setPerfHudOpacity(it) },
-                    )
-                    OutlinedButton(
-                        onClick = { viewModel.resetPerfOverlayPosition() },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        shape = pillShape(),
-                    ) { Text("Reset position (top left)") }
-                }
-            }
-            item {
-                SettingsCategory("Metrics") {
-                    SettingsSwitchItem("FPS", "Frames per second and speed versus the system's native rate", settings.perfShowFps) { viewModel.setPerfShowFps(it) }
-                    SettingsSwitchItem("Frame time", "Average time between frames", settings.perfShowFrameTime) { viewModel.setPerfShowFrameTime(it) }
-                    SettingsSwitchItem("Frame-time graph", "Recent frame intervals; red dots mark stutters", settings.perfShowGraph) { viewModel.setPerfShowGraph(it) }
-                    SettingsSwitchItem("CPU", "Emulation thread load (100% = one core fully busy) and CPU temperature", settings.perfShowCpu) { viewModel.setPerfShowCpu(it) }
-                    SettingsSwitchItem("CPU core & clock", "Which core the emulator runs on and its current clock", settings.perfShowCore) { viewModel.setPerfShowCore(it) }
-                    SettingsSwitchItem("GPU", "GPU load, clock and temperature", settings.perfShowGpu) { viewModel.setPerfShowGpu(it) }
-                    SettingsSwitchItem("Memory", "Emulator memory and total system RAM in use", settings.perfShowRam) { viewModel.setPerfShowRam(it) }
-                    SettingsSwitchItem("Battery", "Charge, power draw and battery temperature", settings.perfShowBattery) { viewModel.setPerfShowBattery(it) }
-                    SettingsSwitchItem("Thermal status", "Android's thermal throttling state", settings.perfShowThermal) { viewModel.setPerfShowThermal(it) }
-                    SettingsSwitchItem("System & resolution", "Running system and output resolution", settings.perfShowSystem) { viewModel.setPerfShowSystem(it) }
-                    SettingsSwitchItem("Clock & session", "Time of day and time played", settings.perfShowClock) { viewModel.setPerfShowClock(it) }
-                    SettingsSwitchItem("Shader failures (N64)", "Warn when the GPU driver fails to compile shaders", settings.perfShowShaderFails) { viewModel.setPerfShowShaderFails(it) }
-                }
-            }
+            item { SettingsCategory("Preset") { PerfHudPresetChips(viewModel, settings) } }
+            item { SettingsCategory("Layout") { PerfHudLayoutItems(viewModel, settings) } }
+            item { SettingsCategory("Metrics") { PerfHudMetricItems(viewModel, settings) } }
             item {
                 BackdropText(
                     "Stats the device doesn't expose to apps (often GPU load and temperatures) are hidden automatically.",
@@ -144,9 +83,77 @@ fun PerformanceMonitorSettingsScreen(viewModel: MainViewModel, onBack: () -> Uni
     }
 }
 
+// The preset, layout and metric controls, shared by this screen and the pause menu's
+// Performance Monitor page.
+
+@Composable
+fun PerfHudPresetChips(viewModel: MainViewModel, settings: EmulatorSettings) {
+    val activePreset = HudPreset.matching(settings.hudConfig())
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HudPreset.entries.forEach { preset ->
+            FilterChip(
+                selected = activePreset == preset,
+                onClick = { viewModel.applyPerfHudPreset(preset) },
+                label = { Text(preset.label) },
+            )
+        }
+        FilterChip(selected = activePreset == null, onClick = {}, enabled = activePreset == null, label = { Text("Custom") })
+    }
+}
+
+@Composable
+fun PerfHudLayoutItems(viewModel: MainViewModel, settings: EmulatorSettings) {
+    SettingsSwitchItem(
+        title = "Horizontal",
+        description = "One compact line instead of a column",
+        checked = settings.perfHudHorizontal,
+        onCheckedChange = { viewModel.setPerfHudHorizontal(it) }
+    )
+    SettingsSliderItem(
+        title = "Size",
+        value = settings.perfOverlayScale,
+        range = 0.6f..2.0f,
+        format = { String.format(Locale.US, "%.1f\u00D7", it) },
+        onCommit = { viewModel.setPerfOverlayScale(it) },
+    )
+    SettingsSliderItem(
+        title = "Background opacity",
+        value = settings.perfHudOpacity,
+        range = 0f..0.9f,
+        onCommit = { viewModel.setPerfHudOpacity(it) },
+    )
+    OutlinedButton(
+        onClick = { viewModel.resetPerfOverlayPosition() },
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        shape = pillShape(),
+    ) { Text("Reset position (top left)") }
+}
+
+@Composable
+fun PerfHudMetricItems(viewModel: MainViewModel, settings: EmulatorSettings) {
+    SettingsSwitchItem("FPS", "Frames per second and speed versus the system's native rate", settings.perfShowFps) { viewModel.setPerfShowFps(it) }
+    SettingsSwitchItem("Frame time", "Average time between frames", settings.perfShowFrameTime) { viewModel.setPerfShowFrameTime(it) }
+    SettingsSwitchItem("Frame-time graph", "Recent frame intervals; red dots mark stutters", settings.perfShowGraph) { viewModel.setPerfShowGraph(it) }
+    SettingsSwitchItem("CPU", "Emulation thread load (100% = one core fully busy) and CPU temperature", settings.perfShowCpu) { viewModel.setPerfShowCpu(it) }
+    SettingsSwitchItem("CPU core & clock", "Which core the emulator runs on and its current clock", settings.perfShowCore) { viewModel.setPerfShowCore(it) }
+    SettingsSwitchItem("GPU", "GPU load, clock and temperature", settings.perfShowGpu) { viewModel.setPerfShowGpu(it) }
+    SettingsSwitchItem("Memory", "Emulator memory and total system RAM in use", settings.perfShowRam) { viewModel.setPerfShowRam(it) }
+    SettingsSwitchItem("Battery", "Charge, power draw and battery temperature", settings.perfShowBattery) { viewModel.setPerfShowBattery(it) }
+    SettingsSwitchItem("Thermal status", "Android's thermal throttling state", settings.perfShowThermal) { viewModel.setPerfShowThermal(it) }
+    SettingsSwitchItem("System & resolution", "Running system and output resolution", settings.perfShowSystem) { viewModel.setPerfShowSystem(it) }
+    SettingsSwitchItem("Clock & session", "Time of day and time played", settings.perfShowClock) { viewModel.setPerfShowClock(it) }
+    SettingsSwitchItem("Shader failures (N64)", "Warn when the GPU driver fails to compile shaders", settings.perfShowShaderFails) { viewModel.setPerfShowShaderFails(it) }
+}
+
 /** The HUD over a stand-in game scene, using fixed sample values. */
 @Composable
-private fun HudPreview(config: HudConfig) {
+fun HudPreview(config: HudConfig, onBackdrop: Boolean = true) {
     val frameTimes = remember {
         FloatArray(180) { i ->
             val wobble = (sin(i * 0.35) * 0.35 + sin(i * 0.09) * 0.25).toFloat()
@@ -166,7 +173,9 @@ private fun HudPreview(config: HudConfig) {
         thermalStatus = 0, thermalHeadroom = 0.42f,
     )
     Column {
-        BackdropText("Preview (sample values)", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        val label = "Preview (sample values)"
+        if (onBackdrop) BackdropText(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        else Text(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         Box(
             modifier = Modifier
                 .padding(top = 8.dp)

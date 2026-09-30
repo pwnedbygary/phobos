@@ -332,6 +332,11 @@ Emulation → Performance, and the pause menu's Neo Geo CD section): Accurate (1
 paces like fast forward capped at the chosen rate. The emulated drive keeps its speed, so the BIOS
 sees 1x timing; speeding up the drive itself is what gave DISC I/O ERRORs before (see the
 `lspc.cpp` comment). How close a load gets to the cap depends on the device.
+Branch `feature/perf-hud-pause-menu-2026-09`, stacked on it, adds Performance Monitor Contents to the
+pause menu's Display section. It opens a page in place of the menu's list, like N64 Experimental,
+with the live preview and the same preset, layout and metric controls as Settings → Performance
+Monitor; both screens use `PerfHudPresetChips`, `PerfHudLayoutItems` and `PerfHudMetricItems` from
+`PerformanceMonitorSettingsScreen.kt`.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
