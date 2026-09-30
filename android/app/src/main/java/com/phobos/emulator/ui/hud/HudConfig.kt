@@ -20,13 +20,62 @@ data class HudConfig(
     val horizontal: Boolean = false,
     val opacity: Float = 0.55f,
     val scale: Float = 1f,
+    /** The order the items are drawn in, left to right or top to bottom. */
+    val order: List<HudItem> = HudItem.entries,
 ) {
+    /** Whether [item] is switched on (the CPU row also shows for its core and clock alone). */
+    fun shows(item: HudItem): Boolean = when (item) {
+        HudItem.FPS -> fps
+        HudItem.FRAME_TIME -> frameTime
+        HudItem.GRAPH -> graph
+        HudItem.CPU -> cpu || cpuDetail
+        HudItem.GPU -> gpu
+        HudItem.RAM -> ram
+        HudItem.BATTERY -> battery
+        HudItem.THERMAL -> thermal
+        HudItem.SYSTEM -> system
+        HudItem.CLOCK -> clock
+    }
+
     /** True when this config shows the same metrics as [other] (layout and appearance ignored). */
     fun sameMetrics(other: HudConfig): Boolean =
         fps == other.fps && frameTime == other.frameTime && graph == other.graph &&
             cpu == other.cpu && cpuDetail == other.cpuDetail && gpu == other.gpu && ram == other.ram &&
             battery == other.battery && thermal == other.thermal && system == other.system &&
             clock == other.clock
+}
+
+/** The HUD's items, declared in their default order. */
+enum class HudItem(val label: String) {
+    FPS("FPS"),
+    FRAME_TIME("Frame time"),
+    GRAPH("Frame-time graph"),
+    CPU("CPU"),
+    GPU("GPU"),
+    RAM("Memory"),
+    BATTERY("Battery"),
+    THERMAL("Thermal status"),
+    SYSTEM("System & resolution"),
+    CLOCK("Clock & session");
+
+    companion object {
+        /** A saved order ("FPS,GRAPH,…"): names it doesn't know are dropped, and items it lacks follow in their default order. */
+        fun parseOrder(saved: String): List<HudItem> {
+            val named = saved.split(',').mapNotNull { name -> entries.firstOrNull { it.name == name.trim() } }.distinct()
+            return named + entries.filter { it !in named }
+        }
+
+        fun encodeOrder(order: List<HudItem>): String = order.joinToString(",") { it.name }
+    }
+}
+
+/** This order with [item] moved [by] places, negative towards the start, stopping at either end. */
+fun List<HudItem>.moved(item: HudItem, by: Int): List<HudItem> {
+    val from = indexOf(item)
+    if (from < 0) return this
+    val to = (from + by).coerceIn(0, size - 1)
+    if (to == from) return this
+    return toMutableList().apply { removeAt(from); add(to, item) }
 }
 
 /** One-tap metric sets, like MangoHud/GameNative presets. Layout and appearance are kept. */
@@ -77,4 +126,5 @@ fun EmulatorSettings.hudConfig(): HudConfig = HudConfig(
     horizontal = perfHudHorizontal,
     opacity = perfHudOpacity,
     scale = perfOverlayScale,
+    order = HudItem.parseOrder(perfHudOrder),
 )

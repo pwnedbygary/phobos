@@ -29,6 +29,7 @@ import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.launch.LaunchRequest
 import com.phobos.emulator.launch.LaunchTarget
 import com.phobos.emulator.launch.resolveLaunch
+import com.phobos.emulator.ui.hud.HudItem
 import com.phobos.emulator.ui.hud.HudPreset
 import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.touch.ElementOverride
@@ -400,6 +401,7 @@ class MainViewModel(
     fun setPerfShowSystem(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowSystem(enabled) }
     fun setPerfShowClock(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfShowClock(enabled) }
     fun setPerfHudHorizontal(enabled: Boolean) = viewModelScope.launch { settingsStore.setPerfHudHorizontal(enabled) }
+    fun setPerfHudOrder(order: List<HudItem>) = viewModelScope.launch { settingsStore.setPerfHudOrder(HudItem.encodeOrder(order)) }
     fun setPerfHudOpacity(opacity: Float) = viewModelScope.launch { settingsStore.setPerfHudOpacity(opacity) }
     fun applyPerfHudPreset(preset: HudPreset) = viewModelScope.launch {
         settingsStore.setPerfHudMetrics(preset.applyTo(settings.value.hudConfig()))

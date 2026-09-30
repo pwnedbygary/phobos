@@ -269,15 +269,18 @@ fun PerformanceHud(
     val background = Color(0xFF020202).copy(alpha = config.opacity.coerceIn(0f, 1f))
     val shape = RoundedCornerShape((8 * s).dp)
 
-    val rows = buildList {
-        if (config.cpu || config.cpuDetail) cpuSegs(config, stats, host)?.let { add(Triple("CPU", HudColors.cpu, it)) }
-        if (config.gpu) gpuSegs(host)?.let { add(Triple("GPU", HudColors.gpu, it)) }
-        if (config.ram) ramSegs(host)?.let { add(Triple("RAM", HudColors.ram, it)) }
-        if (config.battery) batterySegs(host)?.let { add(Triple("BAT", HudColors.battery, it)) }
-        if (config.thermal) thermalSegs(host)?.let { add(Triple("THM", HudColors.thermal, it)) }
-        if (config.system) systemSegs(systemLabel, resolution)?.let { add(Triple("SYS", HudColors.engine, it)) }
-        if (config.clock) add(Triple("TIME", HudColors.clock, clockSegs(sessionSeconds)))
+    // A labelled stat row (CPU, GPU, ...), or null when the device gives nothing to show
+    fun row(item: HudItem): Triple<String, Color, List<Seg>>? = when (item) {
+        HudItem.CPU -> cpuSegs(config, stats, host)?.let { Triple("CPU", HudColors.cpu, it) }
+        HudItem.GPU -> gpuSegs(host)?.let { Triple("GPU", HudColors.gpu, it) }
+        HudItem.RAM -> ramSegs(host)?.let { Triple("RAM", HudColors.ram, it) }
+        HudItem.BATTERY -> batterySegs(host)?.let { Triple("BAT", HudColors.battery, it) }
+        HudItem.THERMAL -> thermalSegs(host)?.let { Triple("THM", HudColors.thermal, it) }
+        HudItem.SYSTEM -> systemSegs(systemLabel, resolution)?.let { Triple("SYS", HudColors.engine, it) }
+        HudItem.CLOCK -> Triple("TIME", HudColors.clock, clockSegs(sessionSeconds))
+        HudItem.FPS, HudItem.FRAME_TIME, HudItem.GRAPH -> null
     }
+    val shown = config.order.filter { config.shows(it) }
     val shaderWarning = config.shaderFails && stats.pipelineFailures > 0
 
     if (config.horizontal) {
@@ -290,32 +293,34 @@ fun PerformanceHud(
             verticalArrangement = Arrangement.spacedBy((2 * s).dp),
         ) {
             val item = Modifier.align(Alignment.CenterVertically)
-            if (config.fps) {
-                Text(
-                    segsText(
-                        listOf(Seg(if (stats.fps > 0) fmt1(stats.fps) else "--", color = fpsColor(stats.fps, target), bold = true), unit(" FPS")),
-                        base * 1.15f,
-                    ),
-                    style = hudStyle(base),
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = item,
-                )
-            }
-            if (config.frameTime && intervalMs != null) {
-                Text(segsText(listOf(value(fmt1(intervalMs)), unit("ms")), base), style = hudStyle(base), maxLines = 1, softWrap = false, modifier = item)
-            }
-            for ((label, color, segs) in rows) {
-                Text(
-                    segsText(listOf(Seg("$label ", color = color, bold = true)) + segs, base),
-                    style = hudStyle(base),
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = item,
-                )
-            }
-            if (config.graph && frameTimes.size >= 2) {
-                Box(item) { FrameTimeGraph(frameTimes, targetMs, (64 * s).dp, (16 * s).dp) }
+            for (entry in shown) {
+                when (entry) {
+                    HudItem.FPS -> Text(
+                        segsText(
+                            listOf(Seg(if (stats.fps > 0) fmt1(stats.fps) else "--", color = fpsColor(stats.fps, target), bold = true), unit(" FPS")),
+                            base * 1.15f,
+                        ),
+                        style = hudStyle(base),
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = item,
+                    )
+                    HudItem.FRAME_TIME -> if (intervalMs != null) {
+                        Text(segsText(listOf(value(fmt1(intervalMs)), unit("ms")), base), style = hudStyle(base), maxLines = 1, softWrap = false, modifier = item)
+                    }
+                    HudItem.GRAPH -> if (frameTimes.size >= 2) {
+                        Box(item) { FrameTimeGraph(frameTimes, targetMs, (64 * s).dp, (16 * s).dp) }
+                    }
+                    else -> row(entry)?.let { (label, color, segs) ->
+                        Text(
+                            segsText(listOf(Seg("$label ", color = color, bold = true)) + segs, base),
+                            style = hudStyle(base),
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = item,
+                        )
+                    }
+                }
             }
             if (shaderWarning) {
                 Text(
@@ -338,47 +343,66 @@ fun PerformanceHud(
             .padding(horizontal = (9 * s).dp, vertical = (6 * s).dp),
         verticalArrangement = Arrangement.spacedBy((2 * s).dp),
     ) {
-        if (config.fps || (config.frameTime && intervalMs != null)) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                val segs = buildList {
-                    if (config.fps) {
-                        add(Seg(if (stats.fps > 0) fmt1(stats.fps) else "--", color = fpsColor(stats.fps, target), bold = true))
-                        add(unit(" FPS"))
+        var i = 0
+        while (i < shown.size) {
+            val entry = shown[i]
+            when (entry) {
+                HudItem.FPS, HudItem.FRAME_TIME -> {
+                    // FPS and frame time share a row when they're next to each other
+                    val paired = shown.getOrNull(i + 1).let { it == HudItem.FPS || it == HudItem.FRAME_TIME }
+                    val withFps = entry == HudItem.FPS || paired
+                    val withMs = (entry == HudItem.FRAME_TIME || paired) && intervalMs != null
+                    val segs = buildList {
+                        if (withFps) {
+                            add(Seg(if (stats.fps > 0) fmt1(stats.fps) else "--", color = fpsColor(stats.fps, target), bold = true))
+                            add(unit(" FPS"))
+                        }
+                        if (withMs && intervalMs != null) {
+                            if (isNotEmpty()) add(gap())
+                            add(value(fmt1(intervalMs)))
+                            add(unit("ms"))
+                        }
+                        if (withFps && stats.fps > 0) {
+                            add(gap())
+                            add(Seg("${(stats.fps / target * 100).roundToInt()}%", color = HudColors.dim, small = true))
+                        }
                     }
-                    if (config.frameTime && intervalMs != null) {
-                        if (isNotEmpty()) add(gap())
-                        add(value(fmt1(intervalMs)))
-                        add(unit("ms"))
+                    if (segs.isNotEmpty()) {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(segsText(segs, base * 1.25f), style = hudStyle(base * 1.25f), maxLines = 1, softWrap = false)
+                        }
                     }
-                    if (config.fps && stats.fps > 0) {
-                        add(gap())
-                        add(Seg("${(stats.fps / target * 100).roundToInt()}%", color = HudColors.dim, small = true))
-                    }
+                    i += if (paired) 2 else 1
                 }
-                Text(segsText(segs, base * 1.25f), style = hudStyle(base * 1.25f), maxLines = 1, softWrap = false)
-            }
-        }
-        if (config.graph && frameTimes.size >= 2) {
-            Row(Modifier.width(graphWidth), verticalAlignment = Alignment.CenterVertically) {
-                Text(segsText(listOf(Seg("frametime", color = HudColors.frametime.copy(alpha = 0.85f), small = true)), base), style = hudStyle(base))
-                Spacer(Modifier.weight(1f))
-                frameTimes.maxOrNull()?.let { maxMs ->
-                    Text(segsText(listOf(Seg("max ${fmt1(maxMs)} ms", color = HudColors.dim, small = true)), base), style = hudStyle(base))
+                HudItem.GRAPH -> {
+                    if (frameTimes.size >= 2) {
+                        Row(Modifier.width(graphWidth), verticalAlignment = Alignment.CenterVertically) {
+                            Text(segsText(listOf(Seg("frametime", color = HudColors.frametime.copy(alpha = 0.85f), small = true)), base), style = hudStyle(base))
+                            Spacer(Modifier.weight(1f))
+                            frameTimes.maxOrNull()?.let { maxMs ->
+                                Text(segsText(listOf(Seg("max ${fmt1(maxMs)} ms", color = HudColors.dim, small = true)), base), style = hudStyle(base))
+                            }
+                        }
+                        FrameTimeGraph(frameTimes, targetMs, graphWidth, (34 * s).dp)
+                        Spacer(Modifier.height((2 * s).dp))
+                    }
+                    i++
                 }
-            }
-            FrameTimeGraph(frameTimes, targetMs, graphWidth, (34 * s).dp)
-            Spacer(Modifier.height((2 * s).dp))
-        }
-        for ((label, color, segs) in rows) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    segsText(listOf(Seg(label, color = color, bold = true)), base * 0.9f),
-                    style = hudStyle(base * 0.9f),
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier.width(labelWidth),
-                )
-                Text(segsText(segs, base), style = hudStyle(base), maxLines = 1, softWrap = false)
+                else -> {
+                    row(entry)?.let { (label, color, segs) ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                segsText(listOf(Seg(label, color = color, bold = true)), base * 0.9f),
+                                style = hudStyle(base * 0.9f),
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.width(labelWidth),
+                            )
+                            Text(segsText(segs, base), style = hudStyle(base), maxLines = 1, softWrap = false)
+                        }
+                    }
+                    i++
+                }
             }
         }
         if (shaderWarning) {

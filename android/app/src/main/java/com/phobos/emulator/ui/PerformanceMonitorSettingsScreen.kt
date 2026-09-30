@@ -13,11 +13,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -32,9 +38,11 @@ import com.phobos.emulator.PerformanceStats
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.ui.hud.HostSample
 import com.phobos.emulator.ui.hud.HudConfig
+import com.phobos.emulator.ui.hud.HudItem
 import com.phobos.emulator.ui.hud.HudPreset
 import com.phobos.emulator.ui.hud.PerformanceHud
 import com.phobos.emulator.ui.hud.hudConfig
+import com.phobos.emulator.ui.hud.moved
 import com.phobos.emulator.ui.theme.pillShape
 import java.util.Locale
 import kotlin.math.sin
@@ -71,6 +79,7 @@ fun PerformanceMonitorSettingsScreen(viewModel: MainViewModel, onBack: () -> Uni
             item { SettingsCategory("Preset") { PerfHudPresetChips(viewModel, settings) } }
             item { SettingsCategory("Layout") { PerfHudLayoutItems(viewModel, settings) } }
             item { SettingsCategory("Metrics") { PerfHudMetricItems(viewModel, settings) } }
+            item { SettingsCategory("Order") { PerfHudOrderItems(viewModel, settings) } }
             item {
                 BackdropText(
                     "Stats the device doesn't expose to apps (often GPU load and temperatures) are hidden automatically.",
@@ -149,6 +158,35 @@ fun PerfHudMetricItems(viewModel: MainViewModel, settings: EmulatorSettings) {
     SettingsSwitchItem("System & resolution", "Running system and output resolution", settings.perfShowSystem) { viewModel.setPerfShowSystem(it) }
     SettingsSwitchItem("Clock & session", "Time of day and time played", settings.perfShowClock) { viewModel.setPerfShowClock(it) }
     SettingsSwitchItem("Shader failures (N64)", "Warn when the GPU driver fails to compile shaders", settings.perfShowShaderFails) { viewModel.setPerfShowShaderFails(it) }
+}
+
+/** The items in the order the HUD draws them (left to right, or top to bottom), each movable a place at a time. */
+@Composable
+fun PerfHudOrderItems(viewModel: MainViewModel, settings: EmulatorSettings) {
+    val config = settings.hudConfig()
+    val order = config.order
+    order.forEachIndexed { index, item ->
+        ListItem(
+            headlineContent = { Text(item.label) },
+            supportingContent = if (config.shows(item)) null else ({ Text("Hidden") }),
+            trailingContent = {
+                Row {
+                    IconButton(onClick = { viewModel.setPerfHudOrder(order.moved(item, -1)) }, enabled = index > 0) {
+                        Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "Move ${item.label} earlier")
+                    }
+                    IconButton(onClick = { viewModel.setPerfHudOrder(order.moved(item, 1)) }, enabled = index < order.lastIndex) {
+                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Move ${item.label} later")
+                    }
+                }
+            },
+            colors = transparentListItemColors(),
+        )
+    }
+    TextButton(
+        onClick = { viewModel.setPerfHudOrder(HudItem.entries) },
+        enabled = order != HudItem.entries,
+        modifier = Modifier.padding(horizontal = 8.dp),
+    ) { Text("Default order") }
 }
 
 /** The HUD over a stand-in game scene, using fixed sample values. */

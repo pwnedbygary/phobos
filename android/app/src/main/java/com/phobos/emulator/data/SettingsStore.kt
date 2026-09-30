@@ -93,6 +93,8 @@ data class EmulatorSettings(
     val perfShowSystem: Boolean = false,
     val perfShowClock: Boolean = false,
     val perfHudHorizontal: Boolean = false,
+    /** The HUD items' order as their names ("FPS,GRAPH,…"); empty for the default (HudItem.parseOrder). */
+    val perfHudOrder: String = "",
     val perfHudOpacity: Float = 0.55f,
     val perfOverlayScale: Float = 1.0f,
     val perfOverlayPosX: Float = 1.0f,  // 0=left, 1=right
@@ -209,6 +211,7 @@ class SettingsStore(private val context: Context) {
         val PERF_SHOW_SYSTEM = booleanPreferencesKey("perf_show_system")
         val PERF_SHOW_CLOCK = booleanPreferencesKey("perf_show_clock")
         val PERF_HUD_HORIZONTAL = booleanPreferencesKey("perf_hud_horizontal")
+        val PERF_HUD_ORDER = stringPreferencesKey("perf_hud_order")
         val PERF_HUD_OPACITY = floatPreferencesKey("perf_hud_opacity")
         val PERF_OVERLAY_SCALE = floatPreferencesKey("perf_overlay_scale")
         val PERF_OVERLAY_POS_X = floatPreferencesKey("perf_overlay_pos_x")
@@ -407,6 +410,7 @@ class SettingsStore(private val context: Context) {
             perfShowSystem = safeGet(PERF_SHOW_SYSTEM, false),
             perfShowClock = safeGet(PERF_SHOW_CLOCK, false),
             perfHudHorizontal = safeGet(PERF_HUD_HORIZONTAL, false),
+            perfHudOrder = safeGetString(PERF_HUD_ORDER, ""),
             perfHudOpacity = safeGet(PERF_HUD_OPACITY, 0.55f),
             perfOverlayScale = safeGet(PERF_OVERLAY_SCALE, 1.0f),
             perfOverlayPosX = safeGet(PERF_OVERLAY_POS_X, 1.0f),
@@ -595,6 +599,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setPerfShowSystem(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_SYSTEM] = enabled }
     suspend fun setPerfShowClock(enabled: Boolean) = context.dataStore.edit { it[PERF_SHOW_CLOCK] = enabled }
     suspend fun setPerfHudHorizontal(enabled: Boolean) = context.dataStore.edit { it[PERF_HUD_HORIZONTAL] = enabled }
+    suspend fun setPerfHudOrder(order: String) = context.dataStore.edit { it[PERF_HUD_ORDER] = order }
     suspend fun setPerfHudOpacity(opacity: Float) = context.dataStore.edit { it[PERF_HUD_OPACITY] = opacity }
     /** Writes every metric toggle of [config] in one edit (used by HUD presets). */
     suspend fun setPerfHudMetrics(config: HudConfig) = context.dataStore.edit {

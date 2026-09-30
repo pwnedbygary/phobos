@@ -627,6 +627,7 @@ fun ColumnScope.PerfHudMenuSection(viewModel: MainViewModel, settings: EmulatorS
         item { MenuSection("Preset") { PerfHudPresetChips(viewModel, settings) } }
         item { MenuSection("Layout") { PerfHudLayoutItems(viewModel, settings) } }
         item { MenuSection("Metrics") { PerfHudMetricItems(viewModel, settings) } }
+        item { MenuSection("Order") { PerfHudOrderItems(viewModel, settings) } }
     }
 }
 
