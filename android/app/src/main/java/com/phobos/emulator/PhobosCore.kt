@@ -65,6 +65,8 @@ object PhobosCore {
     external fun setOrientationMode(vertical: Boolean)
     external fun setHomePath(path: String)
     external fun setSavesPath(path: String)
+    /** The folder name for the next game's PS1 memory cards: its name without the disc number. */
+    external fun setMemoryCardKey(key: String)
     external fun setVulkanCachePath(path: String)
     external fun setNativeLibraryDir(path: String)
     external fun setFirmwarePath(path: String)

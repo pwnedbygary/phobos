@@ -903,6 +903,131 @@ namespace ares {
   static std::chrono::steady_clock::time_point lastRumbleOnTime{};
   static std::shared_ptr<vfs::directory> player1PakDir;
 
+  // PS1 memory cards. ares leaves a card's storage to the frontend, as desktop ares keeps a card file
+  // per game; the disc's pak has no save.card, so the card's writes were dropped. Each port gets its own
+  // pak, saved as saves/PlayStation/<game>/save.card and save2.card, where <game> is the name Kotlin
+  // gives without the disc number so all of a game's discs share the card.
+  struct Ps1MemoryCard {
+    std::shared_ptr<vfs::directory> pak;
+    std::vector<u8> seen;   // contents at the last check
+    std::vector<u8> saved;  // contents in the save file
+    std::chrono::steady_clock::time_point changed{};
+  };
+  static Ps1MemoryCard ps1MemoryCards[2];
+  static string ps1MemoryCardKey;
+  static string ps1MemoryCardDir;
+  static std::chrono::steady_clock::time_point ps1MemoryCardsChecked{};
+  // The emulation thread's check and the pause/unload flush both write the cards.
+  static std::mutex ps1MemoryCardMutex;
+
+  static auto ps1MemoryCardDevice(u32 port) -> ::ares::PlayStation::MemoryCard* {
+    auto& slot = port == 0 ? ::ares::PlayStation::memoryCardPort1 : ::ares::PlayStation::memoryCardPort2;
+    return dynamic_cast<::ares::PlayStation::MemoryCard*>(slot.device.get());
+  }
+
+  static auto ps1MemoryCardFile(u32 port) -> const char* { return port == 0 ? "save.card" : "save2.card"; }
+
+  // Before the ports connect: each pak holds its saved card, marked loaded so MemoryCard reads it.
+  static auto loadPs1MemoryCards() -> void {
+    std::lock_guard<std::mutex> lock(ps1MemoryCardMutex);
+    string key = ps1MemoryCardKey ? ps1MemoryCardKey : currentRomBase;
+    key.replace("/", "_"); key.replace("\\", "_"); key.replace(":", "_");
+    if (!key) key = "rom";
+    ps1MemoryCardDir = savesPath ? string{savesPath, "/PlayStation/", key, "/"} : string{};
+    for (u32 port : range(2)) {
+      auto& card = ps1MemoryCards[port];
+      card = {};
+      card.pak = std::make_shared<vfs::directory>();
+      card.pak->append("save.card", 128_KiB);
+      if (!ps1MemoryCardDir) continue;
+      auto data = nall::file::read({ps1MemoryCardDir, ps1MemoryCardFile(port)});
+      if (data.size() != 128_KiB) continue;
+      if (auto fp = card.pak->write("save.card")) {
+        fp->write({data.data(), (u32)data.size()});
+        fp->setAttribute("loaded", true);
+        LOGI("Saves: loaded PS1 memory card %u for [%s]", port + 1, (const char*)key);
+      }
+    }
+  }
+
+  // After the ports connect: what each card holds now is what its file holds.
+  static auto trackPs1MemoryCards() -> void {
+    std::lock_guard<std::mutex> lock(ps1MemoryCardMutex);
+    for (u32 port : range(2)) {
+      auto& card = ps1MemoryCards[port];
+      card.seen.clear();
+      card.saved.clear();
+      if (auto device = ps1MemoryCardDevice(port)) {
+        card.seen.assign(device->memory.data, device->memory.data + device->memory.size);
+        card.saved = card.seen;
+      }
+    }
+    ps1MemoryCardsChecked = std::chrono::steady_clock::now();
+  }
+
+  // Written to a temporary file and renamed over the card, so a crash mid-write keeps the old card.
+  static auto writePs1MemoryCard(u32 port, const std::vector<u8>& data) -> bool {
+    if (!ps1MemoryCardDir) return false;
+    directory::create(ps1MemoryCardDir);
+    string path = {ps1MemoryCardDir, ps1MemoryCardFile(port)};
+    string temp = {path, ".tmp"};
+    s32 fd = ::open((const char*)temp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return false;
+    bool ok = ::write(fd, data.data(), data.size()) == (ssize_t)data.size();
+    ok = ::fsync(fd) == 0 && ok;
+    ::close(fd);
+    if (!ok || ::rename((const char*)temp, (const char*)path) != 0) {
+      ::unlink((const char*)temp);
+      LOGE("Saves: couldn't write PS1 memory card %u (%s)", port + 1, (const char*)path);
+      return false;
+    }
+    LOGI("Saves: wrote PS1 memory card %u (%s)", port + 1, (const char*)path);
+    return true;
+  }
+
+  // Emulation thread, after a frame: a card the game wrote and then left alone for a second is saved,
+  // so an in-game save survives a crash or the app being killed before the next pause.
+  static auto checkPs1MemoryCards() -> void {
+    auto now = std::chrono::steady_clock::now();
+    if (now - ps1MemoryCardsChecked < std::chrono::milliseconds(500)) return;
+    ps1MemoryCardsChecked = now;
+    std::lock_guard<std::mutex> lock(ps1MemoryCardMutex);
+    for (u32 port : range(2)) {
+      auto& card = ps1MemoryCards[port];
+      auto device = ps1MemoryCardDevice(port);
+      if (!device || card.seen.size() != device->memory.size) continue;
+      if (memcmp(device->memory.data, card.seen.data(), card.seen.size()) != 0) {
+        memcpy(card.seen.data(), device->memory.data, card.seen.size());
+        card.changed = now;
+      } else if (card.seen != card.saved && now - card.changed >= std::chrono::seconds(1)) {
+        if (writePs1MemoryCard(port, card.seen)) card.saved = card.seen;
+      }
+    }
+  }
+
+  // Pause and unload: any card with unsaved writes is saved at once. The pause path doesn't hold
+  // runMutex and a frame can be halfway through writing a card, so the card is read between frames;
+  // when a frame doesn't end in time, checkPs1MemoryCards saves the card after the next frame.
+  static auto flushPs1MemoryCards() -> void {
+    std::unique_lock<std::recursive_mutex> frame(*runMutex, std::defer_lock);
+    for (u32 attempt = 0; !frame.try_lock(); attempt++) {
+      if (attempt == 50) {
+        LOGW("Saves: PS1 memory cards not flushed, a frame is still running");
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    std::lock_guard<std::mutex> lock(ps1MemoryCardMutex);
+    for (u32 port : range(2)) {
+      auto& card = ps1MemoryCards[port];
+      auto device = ps1MemoryCardDevice(port);
+      if (!device || card.saved.size() != device->memory.size) continue;
+      std::vector<u8> data(device->memory.data, device->memory.data + device->memory.size);
+      if (data == card.saved) continue;
+      if (writePs1MemoryCard(port, data)) card.saved = card.seen = data;
+    }
+  }
+
   // Forward declaration — defined with the N64 setters below, but called from
   // unloadSystem() which appears earlier in this translation unit.
   static auto exportControllerPak() -> void;
@@ -1032,6 +1157,7 @@ namespace ares {
                                                        std::memory_order_relaxed);
                 #endif
                 localRoot->run();
+                if (localRoot->name() == "PlayStation") checkPs1MemoryCards();
                 if (ngcdLoadSpeed.load(std::memory_order_relaxed) > 1 && localRoot->name() == "Neo Geo CD") {
                     auto& cdd = ::ares::NeoGeo::cdd;
                     if ((cdd.statusCdc & 0x01) && (cdd.control & 0x0100)) loadBoostFrames = 30;
@@ -1861,6 +1987,12 @@ namespace ares {
       if (!node) return std::make_shared<vfs::directory>();
       string nodeName = node->name();
       LOGI("VFS: pak() requested for node: %s", (const char*)nodeName);
+
+      if (nodeName == "Memory Card" && root && root->name() == "PlayStation") {
+        auto port = node->parent().lock();
+        auto& card = ps1MemoryCards[port && port->name().endsWith("2") ? 1 : 0];
+        if (card.pak) return card.pak;
+      }
 
       if (nodeName.endsWith("Cartridge") || nodeName.endsWith("Disc") || nodeName.endsWith("Card")) {
         if (currentMedium && currentMedium->pak) {
@@ -3120,7 +3252,10 @@ else if (port->type() == "Keyboard") {
         }
       }
 
+      bool playStation = root->name() == "PlayStation";
+      if (playStation) loadPs1MemoryCards();
       connectDevices(root);
+      if (playStation) trackPs1MemoryCards();
 
       // Inject saved cpu.ram + bios.rom BEFORE power-on so CPU::power()
       // sees ram[0x2c7a]!=0 → warm-boot path → skip language/date prompts.
@@ -3197,6 +3332,7 @@ else if (port->type() == "Keyboard") {
     // we copy to the persistent dir.
     root->save();
     string sysName = root->name();
+    if (sysName == "PlayStation") flushPs1MemoryCards();
     // Per-game subdirectory (keyed by ROM base name) so games don't clobber
     // each other's saves: saves/<System>/<RomBase>/
     string romKey = currentRomBase;
@@ -3830,6 +3966,9 @@ else if (port->type() == "Keyboard") {
   auto setSavesPath(const char* path) -> void {
     savesPath = path ? (string)path : "";
     LOGI("Saves path set: %s", (const char*)savesPath);
+  }
+  auto setMemoryCardKey(const char* key) -> void {
+    ps1MemoryCardKey = key ? (string)key : "";
   }
   auto setVulkanCachePath(const char* path) -> void {
     vulkanCachePath = path ? (string)path : "";

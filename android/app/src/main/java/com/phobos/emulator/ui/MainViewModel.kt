@@ -87,6 +87,8 @@ import com.phobos.emulator.util.N64SaveKind
 import com.phobos.emulator.util.N64SaveRead
 import com.phobos.emulator.util.N64SaveTransfer
 import com.phobos.emulator.util.newerDriverRelease
+import com.phobos.emulator.util.romTitle
+import com.phobos.emulator.util.withoutDiscNumber
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -2462,6 +2464,7 @@ class MainViewModel(
                 ?: File(context.filesDir, "saves").absolutePath
             PhobosCore.setSavesPath(savesDir)
             Log.i("Phobos", "Saves path resolved: $savesDir")
+            PhobosCore.setMemoryCardKey(withoutDiscNumber(romTitle(rom.name)))
 
             // Vulkan pipeline cache dir (Task 40): user-configured path, else
             // internal default (files/vulkan_cache).
