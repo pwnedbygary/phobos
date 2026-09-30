@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -23,7 +24,9 @@ import androidx.compose.runtime.remember
 import coil.compose.AsyncImage
 import com.phobos.emulator.R
 import com.phobos.emulator.ui.theme.ConsoleArtPalette
+import com.phobos.emulator.ui.theme.LegibleText
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
+import com.phobos.emulator.ui.theme.libraryTileFill
 
 @Composable
 fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
@@ -31,10 +34,12 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     val theme = LocalPhobosTheme.current
     // A solid style's tiles are opaque, whatever the glass level.
     val tileAlpha = if (theme.solid != null) 1f else theme.glass.panelAlpha
-    val artPalette = remember(theme.scheme, theme.success, theme.warning, tileAlpha) {
-        val tile = theme.scheme.surfaceContainer.copy(alpha = tileAlpha).compositeOver(theme.scheme.background)
+    val artPalette = remember(theme.scheme, theme.isDark, theme.success, theme.warning, tileAlpha) {
+        val tile = libraryTileFill(theme.scheme, theme.isDark).copy(alpha = tileAlpha).compositeOver(theme.scheme.background)
         ConsoleArtPalette(theme.scheme, theme.success, theme.warning, tile)
     }
+    val scheme = MaterialTheme.colorScheme
+    val tileFill = remember(scheme, theme.isDark) { libraryTileFill(scheme, theme.isDark) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Image(
@@ -60,7 +65,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                         colorFilter = artPalette.logoFilter
                     )
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text(
+                    LegibleText(
                         "No systems found",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
@@ -78,7 +83,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                     ScreenHeader("Library", "${systems.size} ${if (systems.size == 1) "system" else "systems"}")
                 }
                 items(systems) { system ->
-                    SystemCard(system, artPalette, onClick = { 
+                    SystemCard(system, artPalette, tileFill, onClick = { 
                         onSystemClick(Uri.encode(system)) 
                     })
                 }
@@ -87,15 +92,16 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     }
 }
 
-/** Console tile on the same themed card surface as the settings cards, with the console in the theme's colors. */
+/** Console tile: a themed card in [fill] ([libraryTileFill]), with the console in the theme's colors and an outlined name. */
 @Composable
-fun SystemCard(system: String, artPalette: ConsoleArtPalette, onClick: () -> Unit) {
+fun SystemCard(system: String, artPalette: ConsoleArtPalette, fill: Color, onClick: () -> Unit) {
     ThemedCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(160.dp),
         shape = MaterialTheme.shapes.small,
-        onClick = onClick
+        onClick = onClick,
+        fill = fill,
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -126,10 +132,9 @@ fun SystemCard(system: String, artPalette: ConsoleArtPalette, onClick: () -> Uni
                     )
                 }
             }
-            Text(
+            LegibleText(
                 system,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2

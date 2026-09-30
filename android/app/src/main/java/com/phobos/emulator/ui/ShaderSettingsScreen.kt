@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.phobos.emulator.ui.theme.LegibleIcon
 import com.phobos.emulator.ui.theme.pillShape
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,7 +44,7 @@ fun ShaderSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         actions = {
             if (settings.shaderPath.isNotEmpty()) {
                 IconButton(onClick = { viewModel.setShaderPath("") }) {
-                    Icon(Icons.Default.Clear, contentDescription = "Clear Shader")
+                    LegibleIcon(Icons.Default.Clear, contentDescription = "Clear Shader")
                 }
             }
         },

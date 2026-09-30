@@ -75,6 +75,21 @@ class GlassContrastTest {
     }
 
     @Test
+    fun libraryTileNamesReachAaOverEveryBackdrop() = assertAll { v, scene, level ->
+        val style = v.style(scene, level)
+        val tile = libraryTileFill(v.scheme, v.isDark).toArgb()
+        val name = v.scheme.onSurface.toArgb()
+        panelBackdrops(v, style, scene).flatMap { backdrop ->
+            val fill = composite(tile, backdrop, paint(style.panelAlpha))
+            listOf(
+                "" to fill,
+                " under the gloss" to composite(WHITE, fill, paint(style.glossAlpha)),
+                " under the shade" to composite(BLACK, fill, paint(style.shadeAlpha)),
+            ).map { (where, background) -> Check("onSurface on a Library tile$where over ${hex(backdrop)}", name, background, 4.5) }
+        }
+    }
+
+    @Test
     fun screenTextReachesAaOverTheGlows() = assertAll { v, scene, level ->
         if (scene != GlassScene.GLOWS) return@assertAll emptyList()
         val s = v.scheme

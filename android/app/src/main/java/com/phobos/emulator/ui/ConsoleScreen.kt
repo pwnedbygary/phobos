@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import com.phobos.emulator.LogEntry
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.R
+import com.phobos.emulator.ui.theme.LegibleIcon
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 
 @Composable
@@ -40,17 +41,17 @@ fun ConsoleScreen(viewModel: MainViewModel) {
         title = "Log Console",
         actions = {
             IconButton(onClick = { autoScroll = !autoScroll }) {
-                Icon(
+                LegibleIcon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = "Toggle Auto-scroll",
                     tint = if (autoScroll) scheme.primary else scheme.onSurfaceVariant
                 )
             }
             IconButton(onClick = { viewModel.exportLogs(context) }) {
-                Icon(painterResource(R.drawable.ic_share), contentDescription = "Share Logs")
+                LegibleIcon(painterResource(R.drawable.ic_share), contentDescription = "Share Logs")
             }
             IconButton(onClick = { viewModel.clearLogs() }) {
-                Icon(Icons.Default.Clear, contentDescription = "Clear Logs")
+                LegibleIcon(Icons.Default.Clear, contentDescription = "Clear Logs")
             }
         },
     ) { innerPadding ->

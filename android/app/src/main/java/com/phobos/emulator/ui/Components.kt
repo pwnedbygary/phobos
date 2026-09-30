@@ -40,6 +40,7 @@ import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
+import com.phobos.emulator.ui.theme.LegibleText
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.glassPanel
 import com.phobos.emulator.ui.theme.neon
@@ -57,8 +58,9 @@ fun SettingsCategory(title: String, content: @Composable ColumnScope.() -> Unit)
 }
 
 /**
- * Section title in the primary color; uppercase neon with retrowave effects, on a soft plate where
- * it is drawn straight on the sunset ([onBackdrop]; false inside panels such as the pause menu).
+ * Section title in the primary color; uppercase neon with retrowave effects, on a soft plate and
+ * outlined where it is drawn straight on the backdrop ([onBackdrop]; false inside panels such as the
+ * pause menu).
  */
 @Composable
 fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Boolean = true, trailing: (@Composable () -> Unit)? = null) {
@@ -72,20 +74,22 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Bool
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = if (retrowave || solid?.capitalHeaders == true) title.uppercase() else title,
-                style = when {
-                    retrowave -> MaterialTheme.typography.labelLarge.neon(primary)
-                    solid != null -> solid.sectionStyle(MaterialTheme.typography.titleSmall)
-                    else -> MaterialTheme.typography.titleSmall
-                },
-                color = primary,
-                modifier = when {
-                    !onBackdrop -> Modifier
-                    solid != null -> solid.plate()
-                    else -> Modifier.sunsetPlate(scheme.background, theme.glass.backdropPlateAlpha)
-                },
-            )
+            val text = if (retrowave || solid?.capitalHeaders == true) title.uppercase() else title
+            val style = when {
+                retrowave -> MaterialTheme.typography.labelLarge.neon(primary)
+                solid != null -> solid.sectionStyle(MaterialTheme.typography.titleSmall)
+                else -> MaterialTheme.typography.titleSmall
+            }
+            if (onBackdrop) {
+                LegibleText(
+                    text,
+                    style = style,
+                    color = primary,
+                    modifier = solid?.plate() ?: Modifier.sunsetPlate(scheme.background, theme.glass.backdropPlateAlpha),
+                )
+            } else {
+                Text(text, style = style, color = primary)
+            }
             solid?.sectionRule()?.let { rule ->
                 Spacer(Modifier.padding(start = 12.dp).weight(1f).height(8.dp).then(rule))
             }
@@ -96,7 +100,7 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, onBackdrop: Bool
 
 /**
  * Text drawn straight on the page backdrop rather than on a panel (notes, hints, empty states), on
- * the headers' soft plate so it stays readable where it passes over the Retrowave sun.
+ * the headers' soft plate and outlined so it stays readable over any part of the backdrop.
  */
 @Composable
 fun BackdropText(
@@ -107,7 +111,7 @@ fun BackdropText(
 ) {
     val theme = LocalPhobosTheme.current
     val background = MaterialTheme.colorScheme.background
-    Text(
+    LegibleText(
         text,
         modifier = modifier.then(theme.solid?.plate() ?: Modifier.sunsetPlate(background, theme.glass.backdropPlateAlpha)),
         style = style,
@@ -129,6 +133,7 @@ fun ThemedCard(
     shape: Shape = MaterialTheme.shapes.large,
     onClick: (() -> Unit)? = null,
     accentText: Boolean = false,
+    fill: Color = MaterialTheme.colorScheme.surfaceContainer,
     content: @Composable () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -137,11 +142,11 @@ fun ThemedCard(
     val glassOff = glass.level == GlassEffects.OFF
     val solid = theme.solid
     val panel = if (solid != null) {
-        solid.panel(shape, scheme.surfaceContainer)
+        solid.panel(shape, fill)
     } else {
         Modifier.glassPanel(
             shape = shape,
-            fill = scheme.surfaceContainer,
+            fill = fill,
             alpha = if (accentText) glass.accentPanelAlpha else glass.panelAlpha,
             style = glass,
             isDark = theme.isDark,

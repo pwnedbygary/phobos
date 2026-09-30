@@ -11,12 +11,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
@@ -31,6 +29,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.phobos.emulator.ui.theme.LegibleIcon
+import com.phobos.emulator.ui.theme.LegibleText
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neon
 import com.phobos.emulator.ui.theme.neonBar
@@ -97,9 +97,10 @@ fun PhobosTopBar(
                 else -> MaterialTheme.typography.titleLarge
             }
             Row {
-                Text(
+                LegibleText(
                     text = if (retrowave || solid?.capitalHeaders == true) title.uppercase() else title,
                     style = style,
+                    color = LocalContentColor.current,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
@@ -110,7 +111,7 @@ fun PhobosTopBar(
         navigationIcon = {
             if (onBack != null) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                    LegibleIcon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
                 }
             }
         },
@@ -143,7 +144,7 @@ fun ScreenHeader(title: String, subtitle: String? = null, modifier: Modifier = M
     val color = if (retrowave) scheme.primary else solid?.titleColor(onPanel = false) ?: scheme.onBackground
     Column(modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, bottom = 8.dp)) {
         Row(plate) {
-            Text(
+            LegibleText(
                 text = if (retrowave || solid?.capitalHeaders == true) title.uppercase() else title,
                 style = style,
                 color = color,
@@ -152,7 +153,7 @@ fun ScreenHeader(title: String, subtitle: String? = null, modifier: Modifier = M
             if (solid?.titleCursor == true) TitleCursor(style, color)
         }
         if (subtitle != null) {
-            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant, modifier = plate)
+            LegibleText(subtitle, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant, modifier = plate)
         }
     }
 }

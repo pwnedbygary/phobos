@@ -307,6 +307,18 @@ settings are latched, and on every change, under `systemMutex`. The view model c
 from the settings store on an IO thread and also sends them before each load. The original Game
 Boy's "Color Emulation" is a String setting (a choice of palettes) and is left alone, as ares desktop
 leaves it.
+Branch `feature/theme-legibility-2026-09`, stacked on the video settings branch, tints the Library
+tiles and outlines text over uncontrolled backgrounds (`ui/theme/Legibility.kt`). `libraryTileFill()`
+is the tile color, which `ThemedCard` now takes as `fill` (the card color by default) and
+`ConsoleArtPalette` gets as its tile. `legibilityOutline()` picks an outline color for a text or icon
+color; `LegibleText` draws a stroked copy of the text under it (the stroke is twice the outline's
+reach, and the text covers its inner half), `LegibleIcon` and `Modifier.legibleOutline()` draw the
+content eight times offset in a layer tinted with the outline color, under the content. Translucent
+text and icons are drawn opaque and faded with their outline, which would otherwise show through them.
+`ScreenHeader`, `SectionHeader` (on the backdrop), `BackdropText`, the top bar's title and back arrow
+and the Library tiles use them; a top-bar action's icon should be a `LegibleIcon`, whose outline
+follows its own tint (the Console's and Shaders' are). `LegibilityTest` and `GlassContrastTest`
+check the outline and tile colors for every theme.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
