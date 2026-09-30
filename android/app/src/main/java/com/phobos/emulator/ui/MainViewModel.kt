@@ -47,6 +47,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -1408,6 +1409,17 @@ class MainViewModel(
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
             PhobosCore.setN64CpuOverclock(if (settings.value.n64UseDefaultCpuOverclock) 0 else settings.value.n64CpuOverclock)
             PhobosCore.setNativeLibraryDir(context.applicationInfo.nativeLibraryDir)
+
+            // Settings > Video also applies to a running game. Off the main thread: the native
+            // setter waits for a game load to finish.
+            launch(Dispatchers.IO) {
+                settingsStore.settings
+                    .map { Triple(it.overscan, it.colorEmulation, it.interframeBlending) }
+                    .distinctUntilChanged()
+                    .collect { (overscan, colorEmulation, interframeBlending) ->
+                        PhobosCore.setVideoSettings(overscan, colorEmulation, interframeBlending)
+                    }
+            }
             
             withContext(Dispatchers.IO) {
                 settingsStore.initializeDefaults()
@@ -2356,6 +2368,7 @@ class MainViewModel(
             PhobosCore.setN64RspTaskMode(currentSettings.n64RspTaskMode)
             PhobosCore.setPinFastestCore(currentSettings.pinFastestCore)
             PhobosCore.setBusyWaitPacing(currentSettings.busyWaitPacing)
+            PhobosCore.setVideoSettings(currentSettings.overscan, currentSettings.colorEmulation, currentSettings.interframeBlending)
             PhobosCore.setN64Pak(currentSettings.n64Pak)
             // Push the persisted N64 debug-logging toggle on EVERY load so native
             // matches DataStore at emulation start. The init block pushes the

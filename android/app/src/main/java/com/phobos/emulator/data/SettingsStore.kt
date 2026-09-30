@@ -70,7 +70,7 @@ data class EmulatorSettings(
     val muteAudio: Boolean = false,
     val colorEmulation: Boolean = true,
     val interframeBlending: Boolean = true,
-    val overscan: Boolean = true,
+    val overscan: Boolean = false,
     val runAhead: Boolean = false,
     val autoSaveState: Boolean = true,
     val autoLoadState: Boolean = false,
@@ -380,7 +380,7 @@ class SettingsStore(private val context: Context) {
             muteAudio = safeGet(MUTE_AUDIO, false),
             colorEmulation = safeGet(COLOR_EMULATION, true),
             interframeBlending = safeGet(INTERFRAME_BLENDING, true),
-            overscan = safeGet(OVERSCAN, true),
+            overscan = safeGet(OVERSCAN, false),
             runAhead = safeGet(RUN_AHEAD, false),
             // Keys are legacy-named (auto_save_memory) for DataStore persistence
             // compatibility — they toggle save STATES, not cart/flash saves.

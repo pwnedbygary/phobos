@@ -41,7 +41,7 @@ fun VideoSettingsScreen(
                     )
                     SettingsSwitchItem(
                         title = "Overscan",
-                        description = "Displays the full frame without cropping borders",
+                        description = "Shows the border around the picture, which TVs hid",
                         checked = settings.overscan,
                         onCheckedChange = { viewModel.setOverscan(it) }
                     )

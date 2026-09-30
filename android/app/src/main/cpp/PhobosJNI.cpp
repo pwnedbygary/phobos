@@ -360,6 +360,11 @@ Java_com_phobos_emulator_PhobosCore_setBusyWaitPacing(JNIEnv* env, jobject, jboo
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setVideoSettings(JNIEnv* env, jobject, jboolean overscan, jboolean colorEmulation, jboolean interframeBlending) {
+    ares::setVideoSettings(overscan == JNI_TRUE, colorEmulation == JNI_TRUE, interframeBlending == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64Pak(JNIEnv* env, jobject, jstring pakName) {
     const char* nativePakName = env->GetStringUTFChars(pakName, 0);
     ares::setN64Pak(nativePakName);

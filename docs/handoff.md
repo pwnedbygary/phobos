@@ -299,6 +299,14 @@ data into `mia-resource.cpp` in the build directory at configure time, from `res
 `mia/Firmware`, rerunning when either changes. When upstream adds firmware, copy the file into
 `mia/Firmware`, add its line to `resource.bml` and its name to the header. `pak()` falls back to
 `mia::Resource` for the 32X's boot ROMs and the ZX Spectrum's ROMs.
+Branch `fix/video-settings-2026-09` passes Settings → Video to the cores. `setVideoSettings()` in
+`PhobosRunner.cpp` keeps the three values, and `applyVideoSettings()` sets overscan on every screen
+and the cores' "Color Emulation" and "Interframe Blending" Boolean settings, calling `modify()` as
+well as `setValue()`, which skips it when the value is unchanged. It runs after load, before the
+settings are latched, and on every change, under `systemMutex`. The view model collects the three
+from the settings store on an IO thread and also sends them before each load. The original Game
+Boy's "Color Emulation" is a String setting (a choice of palettes) and is left alone, as ares desktop
+leaves it.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

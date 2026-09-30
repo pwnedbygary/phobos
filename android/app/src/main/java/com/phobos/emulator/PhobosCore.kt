@@ -37,6 +37,8 @@ object PhobosCore {
     external fun setN64RspTaskMode(enabled: Boolean)
     external fun setPinFastestCore(enabled: Boolean)
     external fun setBusyWaitPacing(enabled: Boolean)
+    /** Settings > Video; applies to the loaded game immediately. */
+    external fun setVideoSettings(overscan: Boolean, colorEmulation: Boolean, interframeBlending: Boolean)
     external fun setN64Pak(pakName: String)
     external fun getRumbleState(): Boolean
     external fun resetSystem()

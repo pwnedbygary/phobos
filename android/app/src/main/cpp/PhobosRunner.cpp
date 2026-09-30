@@ -772,6 +772,25 @@ namespace ares {
   static std::atomic<bool> pinFastestCore{true};
   // Busy-wait for the next N64 frame instead of sleeping (Settings > Emulation, default off).
   static std::atomic<bool> busyWaitPacing{false};
+  // Settings > Video. Overscan shows the border around the picture; cores without one ignore it.
+  static std::atomic<bool> videoOverscan{false};
+  static std::atomic<bool> videoColorEmulation{true};
+  static std::atomic<bool> videoInterframeBlending{true};
+
+  // setValue() skips modify() when the value is unchanged, and the cores only turn interframe
+  // blending on in modify(), so it is called either way.
+  static auto applyVideoSettings() -> void {
+    if (!root) return;
+    for (auto& screen : root->find<Node::Video::Screen>()) screen->setOverscan(videoOverscan);
+    for (auto& setting : root->find<Node::Setting::Boolean>()) {
+      bool value;
+      if (setting->name() == "Color Emulation") value = videoColorEmulation;
+      else if (setting->name() == "Interframe Blending") value = videoInterframeBlending;
+      else continue;
+      setting->setValue(value);
+      setting->modify(value);
+    }
+  }
 
   // A thread that sleeps part of every frame reads to Android as a medium load: the fastest
   // core gets paused or clocked down, and heavy frames then overrun until it reacts. Busy-waiting
@@ -3015,6 +3034,7 @@ else if (port->type() == "Keyboard") {
               LOGI("N64: CPU Recompiler set to %s", n64Recompiler ? "ON" : "OFF");
           }
       }
+      applyVideoSettings();
       for (auto& setting : root->find<Node::Setting::Setting>()) setting->setLatch();
       if (identifiedSystem == "Game Boy Advance") {
           for (auto& setting : root->find<Node::Setting::Boolean>()) {
@@ -3474,6 +3494,15 @@ else if (port->type() == "Keyboard") {
   auto setBusyWaitPacing(bool enabled) -> void {
     busyWaitPacing = enabled;
     LOGI("N64 frame pacing %s between frames", enabled ? "busy-waits" : "sleeps");
+  }
+  auto setVideoSettings(bool overscan, bool colorEmulation, bool interframeBlending) -> void {
+    videoOverscan = overscan;
+    videoColorEmulation = colorEmulation;
+    videoInterframeBlending = interframeBlending;
+    LOGI("Video: overscan %s, color emulation %s, interframe blending %s",
+         overscan ? "on" : "off", colorEmulation ? "on" : "off", interframeBlending ? "on" : "off");
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    applyVideoSettings();
   }
   auto setN64ExpansionPak(bool enabled) -> void {
     if (n64ExpansionPak == enabled) return;
