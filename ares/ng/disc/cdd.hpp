@@ -45,6 +45,9 @@ struct Cdd {
   auto reset() -> void;
   auto serialReset() -> void;
 
+  //serialization.cpp
+  auto serialize(serializer&) -> void;
+
   //75Hz drive tick: raises the CDD type2 interrupt (MAME nff0002 & 0x0050)
   //and advances the sector pipeline.
   auto tick() -> void;

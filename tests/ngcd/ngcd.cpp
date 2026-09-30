@@ -319,6 +319,115 @@ static auto testDiscToScreen() -> void {
   compareSprite("disc tile", tile, 0x0400, tile);
 }
 
+//Save states: every piece of CD state the core keeps comes back after a save and a load.
+struct CdSnapshot {
+  std::vector<u16> sprite;
+  std::vector<u8> pcm, fix, z80, buffer;
+  std::vector<u64> drive, decoder, transfer, io;
+  std::vector<f64> audio;
+};
+
+static auto snapshotCd() -> CdSnapshot {
+  CdSnapshot s;
+  for(u32 i = 0; i < system.spriteRam.size(); i++) s.sprite.push_back(system.spriteRam[i]);
+  for(u32 i = 0; i < system.pcmRam.size(); i++) s.pcm.push_back(system.pcmRam[i]);
+  for(u32 i = 0; i < system.fixRam.size(); i++) s.fix.push_back(system.fixRam[i]);
+  for(u32 i = 0; i < apu.ram.size(); i++) s.z80.push_back(apu.ram[i]);
+  for(u32 i = 0; i < Cdc::BufferSize; i++) s.buffer.push_back(cdc.buffer[i]);
+  for(u32 i = 0; i < 10; i++) s.drive.push_back(cdd.rx[i] | cdd.tx[i] << 8);
+  s.drive.insert(s.drive.end(), {
+    cdd.wordCount, cdd.clock, cdd.statusHack, cdd.status, cdd.curStatus, cdd.settleCounter,
+    cdd.min, cdd.sec, cdd.frame, cdd.ext, cdd.control, cdd.statusCdc, (u64)(u32)cdd.curLba,
+    cdd.curTrack, cdd.reg2, cdd.latch16, cdd.type1Pending, cdd.type2Pending, cdd.type3Pending,
+    cdd.type1Ack, cdd.type2Ack, cdd.type3Ack, cdd.prohibitIrq,
+  });
+  for(u32 i = 0; i < 16; i++) s.decoder.push_back(cdc.wreg[i] | cdc.rreg[i] << 8);
+  s.decoder.insert(s.decoder.end(), {cdc.reg0, cdc.reg1, cdc.decode});
+  s.transfer = {dma.address1, dma.address2, dma.value1, dma.value2, dma.count, dma.mode};
+  s.io = {
+    system.io.irqMask2, system.io.ctrlSelector, system.io.uploadZone, system.io.spriteUploadBank,
+    system.io.pcmUploadBank, lspc.io.cddCounter, apu.held,
+  };
+  s.audio = {cdd.fade, cdd.lastLeft, cdd.lastRight};
+  return s;
+}
+
+static auto fillCd(u32 seed) -> void {
+  auto p = pattern(0x10000, seed);
+  auto word = [&](u32 i) -> u32 { return p[i & 0xffff] | p[(i + 1) & 0xffff] << 8; };
+  for(u32 i = 0; i < system.spriteRam.size(); i++) system.spriteRam[i] = word(i * 3);
+  for(u32 i = 0; i < system.pcmRam.size(); i++) system.pcmRam[i] = p[(i * 7) & 0xffff];
+  for(u32 i = 0; i < system.fixRam.size(); i++) system.fixRam[i] = p[(i * 5) & 0xffff];
+  for(u32 i = 0; i < apu.ram.size(); i++) apu.ram[i] = p[i & 0xffff] ^ 0xa5;
+  for(u32 i = 0; i < Cdc::BufferSize; i++) cdc.buffer[i] = p[(i * 11) & 0xffff];
+  for(u32 i = 0; i < 10; i++) { cdd.rx[i] = p[400 + i] & 15; cdd.tx[i] = p[410 + i] & 15; }
+  cdd.wordCount = p[420] % 10;
+  cdd.clock = p[421];
+  cdd.statusHack = p[422] & 15;
+  cdd.status = word(423);
+  cdd.curStatus = word(425);
+  cdd.settleCounter = word(427);
+  cdd.min = word(429);
+  cdd.sec = word(431);
+  cdd.frame = word(433);
+  cdd.ext = word(435);
+  cdd.control = word(437);
+  cdd.statusCdc = word(439);
+  cdd.curLba = (s32)(word(441) << 16 | word(443)) >> 8;
+  cdd.curTrack = p[445];
+  cdd.reg2 = word(446);
+  cdd.latch16 = word(448);
+  cdd.type1Pending = p[450];
+  cdd.type2Pending = p[451];
+  cdd.type3Pending = p[452];
+  cdd.type1Ack = p[453];
+  cdd.type2Ack = p[454];
+  cdd.type3Ack = p[455];
+  cdd.prohibitIrq = p[456];
+  cdd.fade = p[457] / 255.0;
+  cdd.lastLeft = (p[458] - 128) / 128.0;
+  cdd.lastRight = (p[459] - 128) / 128.0;
+  for(u32 i = 0; i < 16; i++) { cdc.wreg[i] = p[500 + i]; cdc.rreg[i] = p[520 + i]; }
+  cdc.reg0 = word(540);
+  cdc.reg1 = word(542);
+  cdc.decode = word(544);
+  dma.address1 = word(600) << 16 | word(602);
+  dma.address2 = word(604) << 16 | word(606);
+  dma.value1 = word(608);
+  dma.value2 = word(610);
+  dma.count = word(612) << 16 | word(614);
+  dma.mode = word(616);
+  system.io.irqMask2 = word(700);
+  system.io.ctrlSelector = p[702];
+  system.io.uploadZone = p[703];
+  system.io.spriteUploadBank = p[704];
+  system.io.pcmUploadBank = p[705];
+  lspc.io.cddCounter = word(706) % (6'000'000 / 75);
+  apu.held = p[708];
+}
+
+static auto testSerializeRoundTrip() -> void {
+  std::printf("Save state round trip: CD memories, drive, decoder and DMA\n");
+  fillCd(1);
+  auto saved = snapshotCd();
+  auto state = system.serialize(false);
+  fillCd(2);
+  CHECK(snapshotCd().sprite != saved.sprite, "the second fill should differ from the first");
+  serializer reader{state.data(), state.size()};
+  CHECK(system.unserialize(reader), "unserialize refused the state");
+  auto loaded = snapshotCd();
+  CHECK(loaded.sprite == saved.sprite, "sprite RAM differs after the round trip");
+  CHECK(loaded.pcm == saved.pcm, "PCM RAM differs after the round trip");
+  CHECK(loaded.fix == saved.fix, "FIX RAM differs after the round trip");
+  CHECK(loaded.z80 == saved.z80, "Z80 RAM differs after the round trip");
+  CHECK(loaded.buffer == saved.buffer, "decoder buffer differs after the round trip");
+  CHECK(loaded.drive == saved.drive, "drive state differs after the round trip");
+  CHECK(loaded.decoder == saved.decoder, "decoder registers differ after the round trip");
+  CHECK(loaded.transfer == saved.transfer, "DMA registers differ after the round trip");
+  CHECK(loaded.io == saved.io, "CD I/O registers differ after the round trip");
+  CHECK(loaded.audio == saved.audio, "CD audio fade state differs after the round trip");
+}
+
 static auto run() -> int {
   TestPlatform testPlatform;
   ares::platform = &testPlatform;
@@ -338,6 +447,7 @@ static auto run() -> int {
   testSpriteFetch();
   testFixText();
   testDiscToScreen();
+  testSerializeRoundTrip();
 
   std::printf("\n%d checks, %d failures\n", checks, failures);
   root.reset();

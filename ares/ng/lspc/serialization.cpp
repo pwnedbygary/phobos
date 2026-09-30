@@ -22,6 +22,7 @@ auto LSPC::serialize(serializer& s) -> void {
   s(io.vramAddress);
   s(io.vramIncrement);
   s(io.pramBank);
+  if(NeoGeo::Model::NeoGeoCD()) s(io.cddCounter);
   for(u16 x = 0; x < 256; x++)
     for(u16 y = 0; y < 256; y++)
       s(vscale[x][y]);

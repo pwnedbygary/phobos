@@ -24,6 +24,9 @@ struct Dma {
   auto writeWord(n32 address, n16 data) -> void;
   auto readByte(n32 address) -> n8;
   auto readWord(n32 address) -> n16;
+
+  //serialization.cpp
+  auto serialize(serializer&) -> void;
 };
 
 extern Dma dma;

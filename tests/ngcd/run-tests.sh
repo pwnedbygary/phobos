@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-#Builds and runs the Neo Geo CD layout checks on the host (Linux, g++ >= 13).
+#Builds and runs the Neo Geo CD layout and save state checks on the host (Linux, g++ >= 13;
+#macOS with clang).
 #usage: tests/ngcd/run-tests.sh [build-dir]
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -37,5 +38,8 @@ if [[ ! -f $OUT/obj/libco.o ]]; then
 fi
 compile "$HERE/ngcd.cpp" ngcd always
 
-$CXX -o "$OUT/ngcd" "$OUT"/obj/*.o -lpthread -ldl
+#macOS: nall needs CoreFoundation; LDFLAGS can name an SDK the linker understands (-isysroot)
+LIBS="-lpthread -ldl"
+if [[ $(uname) == Darwin ]]; then LIBS="$LIBS -framework CoreFoundation"; fi
+$CXX ${LDFLAGS:-} -o "$OUT/ngcd" "$OUT"/obj/*.o $LIBS
 "$OUT/ngcd"

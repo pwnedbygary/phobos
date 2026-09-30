@@ -337,6 +337,16 @@ pause menu's Display section. It opens a page in place of the menu's list, like 
 with the live preview and the same preset, layout and metric controls as Settings → Performance
 Monitor; both screens use `PerfHudPresetChips`, `PerfHudLayoutItems` and `PerfHudMetricItems` from
 `PerformanceMonitorSettingsScreen.kt`.
+Branch `feature/ngcd-savestates-2026-09`, stacked on it, completes Neo Geo CD save states, which left
+out everything the CD has that a cartridge system doesn't: the sprite, PCM and FIX RAM (5.1 MiB),
+the upload and controller-select registers, the drive (`Cdd`), decoder (`Cdc`, with its buffer) and
+DMA (`Dma`) state, and the LSPC's drive tick counter (`ares/ng/disc/serialization.cpp`,
+`CDSerializerFormat` 2). The host harness `tests/ngcd/` gained a round trip over all of it, which
+fails when any piece is left out. The harness also runs on the dev Mac: its Command Line Tools
+linker can't read the macOS 27 SDK's stubs, so link against Xcode's 15.4 SDK, with
+`CXX="xcrun clang++" CC="xcrun clang"
+LDFLAGS="-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.4.sdk"
+bash tests/ngcd/run-tests.sh`.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

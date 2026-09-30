@@ -25,6 +25,9 @@ struct Cdc {
   //buffer access for the DMA controller
   auto initTransfer(u32 words) -> n8*;
   auto endTransfer() -> void;
+
+  //serialization.cpp
+  auto serialize(serializer&) -> void;
 };
 
 extern Cdc cdc;
