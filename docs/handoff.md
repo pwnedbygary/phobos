@@ -291,7 +291,10 @@ slots or else the copies ares bundles (next paragraph). `missingFirmware()`
 asks it before loading and shows BIOS Required, and `initialize()` refuses the load as a backstop.
 `connectDevices()` leaves the Mega CD 32X's cartridge slot empty so that ares builds the 32X's own
 board there. The Mega CD 32X reads its disc through mia's Mega CD medium. Save restores now take
-the folder name from the root node, as the flush always did.
+the folder name from the root node, as the flush always did. On the RP6 six 32X games (Knuckles'
+Chaotix, Virtua Racing Deluxe, Virtua Fighter, Stellar Assault, Blackthorne, NBA Jam TE) run at
+59.9 FPS with the emulation thread at 66–75% of a core, with the bundled boot ROMs; no Mega CD 32X
+disc has been run.
 Branch `feature/upstream-firmware-2026-09` ships the firmware upstream ares ships. mia's resources
 were empty stubs; `mia/resource/resource.hpp` now declares them as `Blob`s (data and size, which
 convert to the span and pointer mia's call sites take), and the root `CMakeLists.txt` writes their
