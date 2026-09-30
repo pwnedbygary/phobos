@@ -25,8 +25,10 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"SG-1000", {"sg1000", "sg"}},
     {"Master System", {"ms", "sms"}},
     {"Mega Drive", {"md", "gen", "bin"}},
+    {"Mega 32X", {"32x", "bin"}},
     {"Game Gear", {"gg"}},
     {"Mega CD", {"cue", "chd", "iso"}},
+    {"Mega CD 32X", {"cue", "chd", "iso"}},
     {"PlayStation", {"cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"}},
     {"Neo Geo", {"ng", "neo"}},
     {"Neo Geo CD", {"ngc", "cue", "chd", "iso", "bin", "zip"}},
@@ -507,6 +509,24 @@ Java_com_phobos_emulator_PhobosCore_mapFirmwareFile(JNIEnv* env, jobject, jstrin
     ares::mapFirmwareFile(nativeName, nativePath);
     env->ReleaseStringUTFChars(name, nativeName);
     env->ReleaseStringUTFChars(path, nativePath);
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_phobos_emulator_PhobosCore_missingFirmware(JNIEnv* env, jobject, jstring systemName) {
+    const char* nativeSystemName = env->GetStringUTFChars(systemName, 0);
+    auto missing = ares::missingFirmware(nativeSystemName);
+    env->ReleaseStringUTFChars(systemName, nativeSystemName);
+
+    jclass listClass = env->FindClass("java/util/ArrayList");
+    jmethodID listConstructor = env->GetMethodID(listClass, "<init>", "()V");
+    jmethodID listAdd = env->GetMethodID(listClass, "add", "(Ljava/lang/Object;)Z");
+    jobject list = env->NewObject(listClass, listConstructor);
+    for (const auto& key : missing) {
+        jstring s = env->NewStringUTF((const char*)key);
+        env->CallBooleanMethod(list, listAdd, s);
+        env->DeleteLocalRef(s);
+    }
+    return list;
 }
 
 extern "C" JNIEXPORT void JNICALL

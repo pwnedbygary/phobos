@@ -847,6 +847,33 @@ namespace ares {
   static string vulkanCachePath;
   static std::map<string, string> firmwareMap;
 
+  // The 32X's boot ROMs, which Phobos doesn't ship: Sega's 68000 vector table and the two SH-2 boot
+  // ROMs, set on the Firmware screen (else read from System/Mega Drive/). Each has one size, so a
+  // wrong file counts as missing.
+  struct Mega32XBootFile { const char* key; const char* name; size_t size; };
+  static constexpr Mega32XBootFile mega32XBootFiles[] = {
+    {"fw_32x_g", "vector.rom", 256},
+    {"fw_32x_m", "sh2.boot.mrom", 2048},
+    {"fw_32x_s", "sh2.boot.srom", 1024},
+  };
+
+  static auto readMega32XBootFile(const Mega32XBootFile& file) -> std::vector<u8> {
+    std::vector<u8> data;
+    if (auto it = firmwareMap.find(file.key); it != firmwareMap.end()) data = nall::file::read(it->second);
+    if (data.size() != file.size) data = nall::file::read(string{homePath, "/System/Mega Drive/", file.name});
+    if (data.size() != file.size) data.clear();
+    return data;
+  }
+
+  // Whether pak() has a Mega CD BIOS to give the Mega Drive system pak.
+  static auto hasMegaCDBios() -> bool {
+    auto present = [](const string& path) { return nall::file::exists(path) && nall::file::size(path) > 0; };
+    for (auto key : {"fw_mcd_us", "fw_mcd_jp", "fw_mcd_eu"}) {
+      if (auto it = firmwareMap.find(key); it != firmwareMap.end() && present(it->second)) return true;
+    }
+    return present(string{homePath, "/System/Mega Drive/bios.rom"});
+  }
+
   // N64 Player 1 controller pak ("None" | "Rumble Pak" | "Controller Pak").
   // Rumble state is polled from Kotlin; player1PakDir backs the Controller
   // Pak's save.pak (created on demand in pak() when a Controller Pak attaches).
@@ -1935,6 +1962,14 @@ namespace ares {
               if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
           }
           if (!attached) attachFile("bios.rom");
+          // Mega 32X and Mega CD 32X: M32X::load() reads the boot ROMs from this pak.
+          if (node->attribute("configuration").find("32X")) {
+              for (auto& file : mega32XBootFiles) {
+                  auto data = readMega32XBootFile(file);
+                  if (data.empty()) { LOGW("VFS: 32X boot ROM %s missing", file.name); continue; }
+                  if (auto fp = vfs::memory::open(data)) dir->append(file.name, fp);
+              }
+          }
       } else if (nodeName == "Neo Geo CD") {
           // Neo Geo CD needs the CD BIOS (neocd.zip via fw_ng_cd) in the system
           // pak, plus the shared LSPC zoom table (000-lo.lo) from neogeo.zip.
@@ -2398,6 +2433,11 @@ namespace ares {
           continue;
       }
       if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive" || port->type() == "Floppy Disk") {
+        // Mega CD 32X: the 32X fills the cartridge slot with no cartridge in it
+        // (the game is in the Mega CD's tray). Cartridge::power() builds that
+        // board only when the slot is left empty; a connected slot would get
+        // the disc's pak on a plain board, cutting the 68000 off from the 32X.
+        if (port->type() == "Cartridge" && node->attribute("configuration").find("Mega CD 32X")) continue;
         // The N64DD "Disk Drive" port has type "Floppy Disk"; connecting it
         // mounts the .ndd disk medium (returned by pak() for the
         // "Nintendo 64DD Disk" node).
@@ -2650,6 +2690,8 @@ else if (port->type() == "Keyboard") {
         identifiedSystem = "Neo Geo";
         forceZipLoad = true;
     }
+    else if (lookup.find("Mega CD 32X") || lookup.find("Sega CD 32X")) identifiedSystem = "Mega CD 32X";
+    else if (lookup.find("32X")) identifiedSystem = "Mega 32X";
     else if (lookup.find("Mega Drive") || lookup.find("Genesis")) identifiedSystem = "Mega Drive";
     else if (lookup.find("Master System")) identifiedSystem = "Master System";
     else if (lookup.find("Game Gear")) identifiedSystem = "Game Gear";
@@ -2675,6 +2717,10 @@ else if (port->type() == "Keyboard") {
     if (!currentMedium && identifiedSystem == "ZX Spectrum 128") {
         currentMedium = mia::Medium::create("ZX Spectrum");
     }
+    // Mega CD 32X games are Mega CD discs; the 32X comes from the system's configuration.
+    if (!currentMedium && identifiedSystem == "Mega CD 32X") {
+        currentMedium = mia::Medium::create("Mega CD");
+    }
 
     if (!currentMedium) {
         LOGE("MIA: Failed to create medium for %s", (const char*)identifiedSystem);
@@ -2698,6 +2744,7 @@ else if (port->type() == "Keyboard") {
             if (identifiedSystem == "Super Famicom") aresExt = "sfc";
             if (identifiedSystem == "Famicom") aresExt = "fc";
             if (identifiedSystem == "Nintendo 64") aresExt = "z64";
+            if (identifiedSystem == "Mega 32X") aresExt = "32x";
             if (identifiedSystem == "ZX Spectrum" || identifiedSystem == "ZX Spectrum 128") {
                 // The ZX medium dispatches on filename extension (.tap/.tzx/.wav),
                 // so sniff the extracted bytes to pick the right one. TZX has a
@@ -2823,6 +2870,14 @@ else if (port->type() == "Keyboard") {
         return false;
     }
 
+    // Without its BIOS the 32X's SH-2s run from empty boot ROMs (a black screen); the Library asks
+    // missingFirmware() first and says what to add.
+    if (!missingFirmware((const char*)identifiedSystem).empty()) {
+        LOGE("%s: BIOS missing — refusing to load", (const char*)identifiedSystem);
+        currentMedium.reset();
+        return false;
+    }
+
     auto loadResult = currentMedium->load(loadPath);
     if (loadResult != successful) {
         LOGE("MIA: Failed to load medium for %s at %s (Result: %d)", (const char*)identifiedSystem, (const char*)loadPath, (s32)loadResult.result);
@@ -2923,6 +2978,14 @@ else if (port->type() == "Keyboard") {
        success = ::ares::MSX::load(root, getRegion("[Microsoft] MSX (NTSC)", "[Microsoft] MSX (NTSC)", "[Microsoft] MSX (PAL)"));
     } else if (identifiedSystem == "Mega CD") {
        success = ::ares::MegaDrive::load(root, getRegion("[Sega] Mega CD (NTSC-U)", "[Sega] Mega CD (NTSC-J)", "[Sega] Mega CD (PAL)"));
+    } else if (identifiedSystem == "Mega 32X" || identifiedSystem == "Mega CD 32X") {
+       // The SH-2s' recompiler is off unless asked for. Its code goes in the
+       // executable buffer the N64's recompilers use, which M32X::power()
+       // releases, so a parked N64 thread must be gone first.
+       joinAbandonedThreads();
+       ::ares::MegaDrive::option("Recompiler", "true");
+       if (identifiedSystem == "Mega 32X") success = ::ares::MegaDrive::load(root, getRegion("[Sega] Mega 32X (NTSC-U)", "[Sega] Mega 32X (NTSC-J)", "[Sega] Mega 32X (PAL)"));
+       else success = ::ares::MegaDrive::load(root, getRegion("[Sega] Mega CD 32X (NTSC-U)", "[Sega] Mega CD 32X (NTSC-J)", "[Sega] Mega CD 32X (PAL)"));
     } else if (identifiedSystem == "WonderSwan Color") {
        success = ::ares::WonderSwan::load(root, "[Bandai] WonderSwan Color");
     } else if (identifiedSystem == "WonderSwan") {
@@ -2983,11 +3046,12 @@ else if (port->type() == "Keyboard") {
       // post-connect import never reaches the cartridge (fresh each load).
       if (savesPath) {
         // Per-game save subdirectory (same key as flushSavesToDisk):
-        // saves/<System>/<RomBase>/
+        // saves/<System>/<RomBase>/, named by the core's root node, which is
+        // "Mega Drive" for the Mega CD and the 32X too.
         string romKey = currentRomBase;
         romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
         if (romKey.size() == 0) romKey = "rom";
-        string saveDir = {savesPath, "/", identifiedSystem, "/", romKey, "/"};
+        string saveDir = {savesPath, "/", root->name(), "/", romKey, "/"};
         directory::create(saveDir);
         // Import matching save files from the persistent dir into a given pak.
         auto importIntoPak = [&](auto& pak) -> void {
@@ -3713,6 +3777,17 @@ else if (port->type() == "Keyboard") {
   auto setNativeLibraryDir(const char* path) -> void { nativeLibraryDir = path ? (string)path : ""; LOGI("Native library dir set: %s", (const char*)nativeLibraryDir); }
   auto setFirmwarePath(const char* path) -> void { LOGI("Firmware path set: %s", path ? path : ""); }
   auto mapFirmwareFile(const char* name, const char* path) -> void { firmwareMap[name] = path ? (string)path : ""; LOGI("Firmware mapped: %s -> %s", name, (const char*)path); }
+  auto missingFirmware(const char* system) -> std::vector<string> {
+    std::vector<string> missing;
+    string name = system ? system : "";
+    if (name == "Mega 32X" || name == "Mega CD 32X") {
+      for (auto& file : mega32XBootFiles) {
+        if (readMega32XBootFile(file).empty()) missing.push_back(file.key);
+      }
+    }
+    if (name == "Mega CD 32X" && !hasMegaCDBios()) missing.push_back("fw_mcd");
+    return missing;
+  }
   auto setHomePath(const char* path) -> void {
     homePath = path ? (string)path : "";
     LOGI("Home path set: %s", (const char*)homePath);

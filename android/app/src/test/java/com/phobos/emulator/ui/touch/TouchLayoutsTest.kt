@@ -32,6 +32,8 @@ class TouchLayoutsTest {
         assertEquals(TouchFamily.PS1, TouchFamily.of("PlayStation"))
         assertEquals(TouchFamily.GB, TouchFamily.of("Game Boy Color"))
         assertEquals(TouchFamily.MEGA_DRIVE, TouchFamily.of("Mega CD"))
+        assertEquals(TouchFamily.MEGA_DRIVE, TouchFamily.of("Mega 32X"))
+        assertEquals(TouchFamily.MEGA_DRIVE, TouchFamily.of("Mega CD 32X"))
         assertEquals(TouchFamily.NEO_GEO, TouchFamily.of("Neo Geo CD"))
         assertEquals(TouchFamily.ZX, TouchFamily.of("ZX Spectrum 128"))
         assertEquals(TouchFamily.GENERIC, TouchFamily.of("Something New"))

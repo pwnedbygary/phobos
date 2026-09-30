@@ -31,6 +31,15 @@ data class FirmwareInfo(
     val systemKey: String // Key used in SettingsStore
 )
 
+/** The file the BIOS behind a key from `PhobosCore.missingFirmware` usually comes as. */
+fun firmwareFileName(key: String): String = when (key) {
+    "fw_32x_g" -> "32X_G_BIOS.BIN (68000)"
+    "fw_32x_m" -> "32X_M_BIOS.BIN (SH-2 master)"
+    "fw_32x_s" -> "32X_S_BIOS.BIN (SH-2 slave)"
+    "fw_mcd" -> "Mega CD BIOS (US, Japan or Europe)"
+    else -> key
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
@@ -61,6 +70,9 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             FirmwareInfo("Master System", "BIOS", "US", "fw_ms_us"),
             FirmwareInfo("Master System", "BIOS", "Japan", "fw_ms_jp"),
             FirmwareInfo("Master System", "BIOS", "Europe", "fw_ms_eu"),
+            FirmwareInfo("Mega 32X", "68000 BIOS", "World", "fw_32x_g"),
+            FirmwareInfo("Mega 32X", "SH-2 Master", "World", "fw_32x_m"),
+            FirmwareInfo("Mega 32X", "SH-2 Slave", "World", "fw_32x_s"),
             FirmwareInfo("Mega CD", "BIOS", "US", "fw_mcd_us"),
             FirmwareInfo("Mega CD", "BIOS", "Japan", "fw_mcd_jp"),
             FirmwareInfo("Mega CD", "BIOS", "Europe", "fw_mcd_eu"),

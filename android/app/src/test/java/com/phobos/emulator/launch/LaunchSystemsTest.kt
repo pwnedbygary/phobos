@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LaunchSystemsTest {
-    // PhobosJNI.cpp's systemExtensions on 2026-09-28.
+    // PhobosJNI.cpp's systemExtensions on 2026-09-29.
     private val extensions = mapOf(
         "Atari 2600" to listOf("a26", "bin"),
         "ColecoVision" to listOf("col", "cv"),
@@ -21,8 +21,10 @@ class LaunchSystemsTest {
         "SG-1000" to listOf("sg1000", "sg"),
         "Master System" to listOf("ms", "sms"),
         "Mega Drive" to listOf("md", "gen", "bin"),
+        "Mega 32X" to listOf("32x", "bin"),
         "Game Gear" to listOf("gg"),
         "Mega CD" to listOf("cue", "chd", "iso"),
+        "Mega CD 32X" to listOf("cue", "chd", "iso"),
         "PlayStation" to listOf("cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"),
         "Neo Geo" to listOf("ng", "neo"),
         "Neo Geo CD" to listOf("ngc", "cue", "chd", "iso", "bin", "zip"),
@@ -59,19 +61,23 @@ class LaunchSystemsTest {
             "zx" to "ZX Spectrum", "sg1000" to "SG-1000", "sms" to "Master System", "gg" to "Game Gear",
             "nes" to "Famicom", "fds" to "Famicom", "snes" to "Super Famicom", "n64dd" to "Nintendo 64",
             "ngpc" to "Neo Geo Pocket Color", "neogeocd" to "Neo Geo CD", "supergrafx" to "SuperGrafx",
+            "32x" to "Mega 32X", "sega32" to "Mega 32X",
         ).forEach { (slug, system) -> assertEquals(slug, system, LaunchSystems.systemForName(slug)) }
         // ES-DE's system names.
         mapOf(
             "megadrive" to "Mega Drive", "mastersystem" to "Master System", "sg-1000" to "SG-1000",
             "tg-cd" to "PC Engine CD", "pcenginecd" to "PC Engine CD", "zxspectrum" to "ZX Spectrum",
             "wonderswancolor" to "WonderSwan Color", "colecovision" to "ColecoVision", "sfc" to "Super Famicom",
-            "megacdjp" to "Mega CD", "msx1" to "MSX",
+            "megacdjp" to "Mega CD", "msx1" to "MSX", "sega32x" to "Mega 32X", "sega32xjp" to "Mega 32X",
+            "sega32xna" to "Mega 32X",
         ).forEach { (name, system) -> assertEquals(name, system, LaunchSystems.systemForName(name)) }
         // Daijisho's short names, and Phobos's own names in any case and spacing.
         assertEquals("Master System", LaunchSystems.systemForName("master"))
         assertEquals("WonderSwan", LaunchSystems.systemForName("ws"))
         assertEquals("Nintendo 64", LaunchSystems.systemForName("Nintendo 64"))
         assertEquals("Mega CD", LaunchSystems.systemForName("MEGA CD"))
+        assertEquals("Mega 32X", LaunchSystems.systemForName("Mega 32X"))
+        assertEquals("Mega CD 32X", LaunchSystems.systemForName("Mega CD 32X"))
         assertEquals("ZX Spectrum", LaunchSystems.systemForName("ZX Spectrum 128"))
         listOf("arcade", "ps2", "saturn", "", null).forEach { assertNull(it, LaunchSystems.systemForName(it)) }
     }
@@ -94,7 +100,7 @@ class LaunchSystemsTest {
         assertEquals(found("Nintendo 64"), resolve("Mario.z64", "$root/ROMs/Mario.z64", folders = wrong))
         // "Inside" means under the folder, not a name that starts the same.
         val prefix = mapOf("PlayStation" to listOf("$root/ROMs/ps"))
-        assertEquals(Match.Ask(listOf("Mega CD", "Neo Geo CD", "PC Engine CD", "PlayStation")),
+        assertEquals(Match.Ask(listOf("Mega CD", "Mega CD 32X", "Neo Geo CD", "PC Engine CD", "PlayStation")),
             resolve("Game.cue", "$root/ROMs/ps2/Game.cue", folders = prefix))
     }
 
@@ -132,8 +138,20 @@ class LaunchSystemsTest {
         assertEquals(Match.Ask(LaunchSystems.librarySystems(systems).sorted()), resolve("Unknown.zip", entries = listOf("a.txt")))
     }
 
+    @Test fun discsFiledWithThe32xAreCd32xGames() {
+        // ES-DE keeps CD 32X discs in its 32X folders and sends them as sega32x.
+        assertEquals(found("Mega CD 32X"), resolve("Night Trap.chd", hint = "sega32x"))
+        assertEquals(found("Mega CD 32X"), resolve("Night Trap.chd", "$root/ROMs/sega32x/Night Trap.chd"))
+        // Cartridges stay 32X games, however they're named or packed.
+        assertEquals(found("Mega 32X"), resolve("Chaotix.32x"))
+        assertEquals(found("Mega 32X"), resolve("Chaotix.zip", hint = "sega32x"))
+        assertEquals(found("Mega 32X"), resolve("Doom.bin", "$root/ROMs/sega32x/Doom.bin"))
+        // Other systems' discs are left alone.
+        assertEquals(found("Mega CD"), resolve("Sonic CD.chd", hint = "segacd"))
+    }
+
     @Test fun anUnclearGameAsksBetweenTheSystemsThatTakeIt() {
-        assertEquals(Match.Ask(listOf("Mega CD", "Neo Geo CD", "PC Engine CD", "PlayStation")), resolve("Game.cue"))
+        assertEquals(Match.Ask(listOf("Mega CD", "Mega CD 32X", "Neo Geo CD", "PC Engine CD", "PlayStation")), resolve("Game.cue"))
         assertEquals(Match.Ask(listOf("MSX", "MSX2", "ZX Spectrum")), resolve("Game.tzx"))
         val all = resolve("Game.xyz") as Match.Ask
         assertTrue("ZX Spectrum" in all.candidates)

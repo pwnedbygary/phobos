@@ -1,14 +1,17 @@
 package com.phobos.emulator.ui
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 
 /**
  * Dialogs shown over the emulator: quit confirmation, GPU driver suggestion, and load failures
- * (unsupported core, missing Neo Geo BIOS, Neo Geo ROM that failed to load). Load-failure
+ * (unsupported core, missing Neo Geo or 32X BIOS, Neo Geo ROM that failed to load). Load-failure
  * dialogs return to the previous screen via [onLeave] because nothing was loaded.
  */
 @Composable
@@ -24,6 +27,7 @@ fun EmulatorDialogs(
     val showDriverSuggestion by viewModel.showDriverSuggestion.collectAsState()
     val unsupportedSystem by viewModel.unsupportedSystem.collectAsState()
     val biosRequired by viewModel.biosRequired.collectAsState()
+    val firmwareRequired by viewModel.firmwareRequired.collectAsState()
     val neoGeoRomLoadFailed by viewModel.neoGeoRomLoadFailed.collectAsState()
     val fullScreen = settings.fullScreenMode
 
@@ -74,6 +78,17 @@ fun EmulatorDialogs(
         )
     }
 
+    firmwareRequired?.let { required ->
+        LoadFailureDialog(
+            title = "BIOS Required",
+            message = "${required.system} games need these BIOS files, which Phobos doesn't include:\n\n" +
+                required.keys.joinToString("\n") { "• ${firmwareFileName(it)}" } +
+                "\n\nAdd them in Settings → Emulation → Firmware (BIOS).",
+            fullScreen = fullScreen,
+            onDismiss = { viewModel.dismissFirmwareRequired(); onLeave() },
+        )
+    }
+
     neoGeoRomLoadFailed?.let {
         LoadFailureDialog(
             title = "Neo Geo ROM Failed to Load",
@@ -92,7 +107,7 @@ private fun LoadFailureDialog(title: String, message: String, fullScreen: Boolea
     PhobosAlertDialog(
         onDismissRequest = onDismiss,
         title = { DialogSystemBars(fullScreen, inGame = true); Text(title) },
-        text = { Text(message) },
+        text = { Text(message, Modifier.verticalScroll(rememberScrollState())) },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
     )
 }

@@ -1004,7 +1004,8 @@ emulated behavior identical.
    keys per keyboard read, far less often. Small to medium.
 4. **The 32X's SH-2 recompiler.** ares has one, but it stays off unless
    `MegaDrive::option("Recompiler", "true")` is called (`ares/md/system/system.cpp`); turn it on
-   when the 32X is exposed ([new systems](new-systems.md#systems-ares-already-has)). Small.
+   when the 32X is exposed ([new systems](new-systems.md#systems-ares-already-has)). Small. **Done
+   2026-09-29** with the 32X's Library entries: both 32X systems load with it on.
 5. **Cothread switches.** The arm64 build uses `libco/aarch64.c`, whose `co_switch` goes through a
    function pointer (`co_swap`). The Game Boy, Master System, NES, Mega Drive and PC Engine
    synchronize every cycle or dot, so switches run in the millions a second there; a direct call

@@ -20,6 +20,8 @@ up each frontend. The Retroid launcher can't be set up; see [below](#retroid-lau
 - **The system (optional):** the extra `platform` or `system`. It takes Phobos's own names
   (`Nintendo 64`), Argosy's platform slugs (`n64`, `psx`, `genesis`, `tg16`), ES-DE's system
   names (`megadrive`, `pcenginecd`, `zxspectrum`) and Daijisho's short names (`master`, `ws`).
+  A disc image sent as a 32X game (ES-DE keeps CD 32X discs in its `sega32x` folders) starts as
+  a Mega CD 32X game.
   Without it, Phobos goes by the Library folder the game is in, then an extension only one
   system uses, then the names of the folders above the game (`n64`, `psx`, `neo-geo-cd`),
   then what a `.zip` holds. If that still isn't clear, it asks.

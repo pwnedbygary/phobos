@@ -31,8 +31,13 @@ object LaunchSystems {
         "SG-1000" to listOf("sg1000", "segasg1000"),
         "Master System" to listOf("mastersystem", "sms", "master", "mark3", "segamastersystem"),
         "Mega Drive" to listOf("megadrive", "genesis", "md", "megadrivejp", "segagenesis", "segamegadrive"),
+        "Mega 32X" to listOf(
+            "mega32x", "32x", "sega32x", "sega32xjp", "sega32xna", "sega32", "segamegadrive32x", "segagenesis32x",
+            "segasuper32x",
+        ),
         "Game Gear" to listOf("gamegear", "gg", "segagamegear"),
         "Mega CD" to listOf("megacd", "segacd", "scd", "megacdjp"),
+        "Mega CD 32X" to listOf("megacd32x", "segacd32x", "sega32xcd", "32xcd", "cd32x"),
         "PlayStation" to listOf("playstation", "psx", "ps1", "sonyplaystation"),
         "Neo Geo" to listOf("neogeo", "neogeoaes", "neogeomvs"),
         "Neo Geo CD" to listOf("neogeocd", "neocd", "neogeocdjp"),
@@ -50,6 +55,9 @@ object LaunchSystems {
 
     /** Extensions two systems list where one is the usual meaning: a .gb file is a Game Boy game. */
     private val preferred = mapOf("gb" to "Game Boy", "ngc" to "Neo Geo Pocket Color")
+
+    /** Cartridge systems whose CD add-on's discs frontends file with them (ES-DE's 32X folders take CD 32X games). */
+    private val cdAddOns = mapOf("Mega 32X" to "Mega CD 32X")
 
     /** Archives every system's folder can hold (the Library lists .zip for all of them). */
     private val archives = setOf("zip", "7z")
@@ -92,7 +100,8 @@ object LaunchSystems {
      * it is started from the Library; an extension only one system uses; the names of the folders above the file
      * (ES-DE and most setups keep each system in a folder named after it); the usual meaning of an extension two
      * systems share; the files inside a .zip ([archiveEntries], read only when needed). Otherwise the user is
-     * asked, choosing between the systems that take the extension, or all of them.
+     * asked, choosing between the systems that take the extension, or all of them. A disc image the hint or a
+     * folder name puts under the 32X is a CD 32X game.
      */
     fun resolve(
         romName: String,
@@ -105,10 +114,16 @@ object LaunchSystems {
     ): Match {
         val available = librarySystems(systems).toSet()
         fun known(system: String?) = system?.takeIf { it in available }
-
-        known(systemForName(hint))?.let { return Match.Found(it) }
-
         val ext = extensionOf(romName)
+        // A disc filed under a cartridge system is its CD add-on's game.
+        fun named(name: String?): String? {
+            val system = systemForName(name)
+            val cd = system?.let { cdAddOns[it] } ?: return system
+            return if (ext !in extensions[system].orEmpty() && ext in extensions[cd].orEmpty()) cd else system
+        }
+
+        known(named(hint))?.let { return Match.Found(it) }
+
         val index = extensionIndex(extensions)
         if (path != null) {
             known(libraryFolderSystem(path, ext, libraryFolders, index))?.let { return Match.Found(it) }
@@ -116,7 +131,7 @@ object LaunchSystems {
         fun unique(e: String) = index[e]?.singleOrNull()
         known(unique(ext))?.let { return Match.Found(it) }
         if (path != null) {
-            for (folder in folderNames(path)) known(systemForName(folder))?.let { return Match.Found(it) }
+            for (folder in folderNames(path)) known(named(folder))?.let { return Match.Found(it) }
         }
         known(preferred[ext])?.let { return Match.Found(it) }
         if (ext == "zip") {

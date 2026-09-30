@@ -280,6 +280,20 @@ with the `--unicodes` ranges above. Its default instance is Thin, so each weight
 the weight axis. The backdrop waits 25 ms between frames, about 30 frames a second with the wait for
 the next vsync; redrawn at every frame, it kept the RP6 rendering about 88 frames a second in the
 menus.
+Branch `feature/sega-32x-2026-09`, stacked on the XMB commit, adds the Mega 32X and Mega CD 32X to
+the Library. In `PhobosRunner.cpp`, both load `ares::MegaDrive` with a 32X configuration after
+`MegaDrive::option("Recompiler", "true")` and `joinAbandonedThreads()`: the SH-2 recompiler's code
+goes in the executable buffer the N64's recompilers use, which `M32X::power()` releases. `pak()`
+adds the boot ROMs (`vector.rom`, `sh2.boot.mrom`, `sh2.boot.srom`) to the Mega Drive system pak
+when the configuration names the 32X, from the `fw_32x_g`, `fw_32x_m` and `fw_32x_s` firmware
+slots or else `System/Mega Drive/`. `missingFirmware()` (`PhobosCore.missingFirmware`) lists what a
+system lacks; the view model asks it before loading and shows BIOS Required, and `initialize()`
+refuses the load as a backstop. `connectDevices()` leaves the Mega CD 32X's cartridge slot empty so
+that ares builds the 32X's own board there. The Mega CD 32X reads its disc through mia's Mega CD
+medium. Save restores now take the folder name from the root node, as the flush always did. The
+32X BIOS isn't in the APK: Phobos doesn't publish firmware, and mia's resources are stubbed on
+Android (`mia/resource/resource.hpp`), so ares's copies in `mia/Firmware/Mega 32X/` never reach
+the app.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

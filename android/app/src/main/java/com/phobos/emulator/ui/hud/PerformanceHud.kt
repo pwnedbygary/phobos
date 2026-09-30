@@ -121,6 +121,8 @@ fun hudSystemLabel(systemName: String): String = when (systemName) {
     "Game Boy Advance" -> "GBA"
     "Mega Drive" -> "MD"
     "Mega CD" -> "MCD"
+    "Mega 32X" -> "32X"
+    "Mega CD 32X" -> "CD32X"
     "Master System" -> "SMS"
     "Game Gear" -> "GG"
     "PC Engine", "SuperGrafx" -> "PCE"

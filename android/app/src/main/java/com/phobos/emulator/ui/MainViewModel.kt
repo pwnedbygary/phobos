@@ -101,6 +101,9 @@ private data class DriverSidecar(val owner: String, val repo: String, val tag: S
 /** A game another app asked for, waiting on the user to pick its system. */
 data class LaunchChoice(val rom: RomFile, val candidates: List<String>)
 
+/** A game that wasn't started because its [system] lacks the firmware [keys] ([PhobosCore.missingFirmware]). */
+data class FirmwareRequired(val system: String, val keys: List<String>)
+
 /** Where an update of Phobos itself stands (Settings → About). */
 sealed interface AppUpdateState {
     data object Idle : AppUpdateState
@@ -1170,6 +1173,10 @@ class MainViewModel(
     val biosRequired: StateFlow<String?> = _biosRequired
     fun dismissBiosRequired() { _biosRequired.value = null }
 
+    private val _firmwareRequired = MutableStateFlow<FirmwareRequired?>(null)
+    val firmwareRequired: StateFlow<FirmwareRequired?> = _firmwareRequired
+    fun dismissFirmwareRequired() { _firmwareRequired.value = null }
+
     // When the Neo Geo BIOS was present but the ROM still failed to load, the
     // failure is the ROM itself (e.g. it isn't actually a Neo Geo MVS/AES game,
     // like a CPS-1 zip mis-categorised as Neo Geo) — NOT a missing BIOS. Surface
@@ -1903,6 +1910,11 @@ class MainViewModel(
         "bios_cd_j.bin" to "fw_mcd_jp",
         "mcd_v1_10e.bin" to "fw_mcd_eu",
         "bios_cd_e.bin" to "fw_mcd_eu",
+        "32x_g_bios.bin" to "fw_32x_g",
+        "32x_m_bios.bin" to "fw_32x_m",
+        "32x_s_bios.bin" to "fw_32x_s",
+        "sh2.boot.mrom" to "fw_32x_m",
+        "sh2.boot.srom" to "fw_32x_s",
         "syscard1.pce" to "fw_pce_cd_1_jp",
         "syscard3.pce" to "fw_pce_cd_3_jp",
         "syscard3u.pce" to "fw_pce_cd_3_us",
@@ -2005,6 +2017,10 @@ class MainViewModel(
         "d0569c83" to "fw_ms_eu",        // SMS BIOS EU
         // Game Gear BIOS
         "eecf3fa1" to "fw_gg",           // Game Gear BIOS
+        // 32X BIOS
+        "5c12eae8" to "fw_32x_g",        // 32X_G_BIOS.BIN (68000)
+        "dd9c46b8" to "fw_32x_m",        // 32X_M_BIOS.BIN (SH-2 master)
+        "bfda1fe5" to "fw_32x_s",        // 32X_S_BIOS.BIN (SH-2 slave)
         // MSX BIOS
         "ee229390" to "fw_msx",          // MSX BIOS JP
         "fcb98b8a" to "fw_msx2_main",    // MSX2 MAIN JP
@@ -2436,6 +2452,13 @@ class MainViewModel(
                 } catch (e: Exception) {
                     Log.e("Phobos", "Failed to map firmware $key: ${e.message}")
                 }
+            }
+
+            val missingFirmware = PhobosCore.missingFirmware(effectiveSystem)
+            if (missingFirmware.isNotEmpty()) {
+                Log.w("Phobos", "$effectiveSystem needs firmware: $missingFirmware")
+                _firmwareRequired.value = FirmwareRequired(effectiveSystem, missingFirmware)
+                return@withContext
             }
 
             // Open the ROM file descriptor

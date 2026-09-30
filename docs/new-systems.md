@@ -84,7 +84,9 @@ contains them, but Phobos's system table doesn't list them.
 
 - **Mega 32X and Mega CD 32X** (`ares/md/m32x`): the 32X's library (Virtua Racing Deluxe,
   Knuckles' Chaotix, Star Wars Arcade, Doom) and the handful of CD 32X games. Two SH-2s run beside
-  the Mega Drive's 68000 and Z80, so measure on the RP6 first. The Library already has 32X art.
+  the Mega Drive's 68000 and Z80, so measure on the RP6 first. **Added 2026-09-29** (branch
+  `feature/sega-32x-2026-09`), with the SH-2 recompiler on and the 32X BIOS from the Firmware
+  screen; not yet measured with a game.
 - **Super Game Boy** (`ares/sfc/coprocessor/icd` with the Game Boy core): Game Boy games with the
   SGB's borders and palettes. Needs the Super Game Boy cartridge ROM as firmware, loaded with the
   game the way ares loads a second cartridge.

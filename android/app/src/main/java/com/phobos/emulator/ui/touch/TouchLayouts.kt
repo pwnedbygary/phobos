@@ -22,7 +22,7 @@ enum class TouchFamily(val key: String, val displayName: String) {
     NES("nes", "Famicom / NES"),
     GB("gb", "Game Boy / Game Boy Color"),
     GBA("gba", "Game Boy Advance"),
-    MEGA_DRIVE("md", "Mega Drive / Mega CD"),
+    MEGA_DRIVE("md", "Mega Drive / Mega CD / 32X"),
     MASTER_SYSTEM("sms", "Master System"),
     SG1000("sg1000", "SG-1000"),
     GAME_GEAR("gg", "Game Gear"),
@@ -45,7 +45,7 @@ enum class TouchFamily(val key: String, val displayName: String) {
             "Famicom" -> NES
             "Game Boy", "Game Boy Color" -> GB
             "Game Boy Advance" -> GBA
-            "Mega Drive", "Mega CD" -> MEGA_DRIVE
+            "Mega Drive", "Mega CD", "Mega 32X", "Mega CD 32X" -> MEGA_DRIVE
             "Master System" -> MASTER_SYSTEM
             "SG-1000" -> SG1000
             "Game Gear" -> GAME_GEAR
