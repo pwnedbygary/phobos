@@ -155,6 +155,13 @@ fun EmulationMenu(
                                 }
                             }
                         }
+                        if (systemName == "Neo Geo CD") {
+                            item {
+                                MenuSection("Neo Geo CD") {
+                                    NgcdLoadSpeedItem(settings.ngcdLoadSpeed) { viewModel.setNgcdLoadSpeed(it) }
+                                }
+                            }
+                        }
                         if (systemName.contains("Nintendo 64", ignoreCase = true)) {
                             item { N64Section(viewModel, settings, onOpenExperimental = { experimentalOpen = true }) }
                             saveTransfer?.let { transfer -> item { SaveDataSection(transfer) } }

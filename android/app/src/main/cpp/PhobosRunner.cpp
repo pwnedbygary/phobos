@@ -776,6 +776,9 @@ namespace ares {
   static std::atomic<bool> videoOverscan{false};
   static std::atomic<bool> videoColorEmulation{true};
   static std::atomic<bool> videoInterframeBlending{true};
+  // Settings > Emulation > Performance and the pause menu: how much faster than real time a Neo Geo
+  // CD game runs while its drive reads data (1 = real time). The drive itself keeps its speed.
+  static std::atomic<s32> ngcdLoadSpeed{1};
 
   // setValue() skips modify() when the value is unchanged, and the cores only turn interframe
   // blending on in modify(), so it is called either way.
@@ -970,6 +973,9 @@ namespace ares {
     auto frameDeadline = std::chrono::steady_clock::now();
     auto lastFrameStart = frameDeadline;
     bool haveLastFrameStart = false;
+    // Frames left of a Neo Geo CD load boost: it lasts half a second past the last data read, so
+    // it carries across the BIOS's short pauses between files.
+    u32 loadBoostFrames = 0;
     emuThreadTid.store((s32)gettid(), std::memory_order_relaxed);
     // HUD history is per thread: the abandon and 64DD-reload paths replace the
     // thread without going through unloadSystem()'s clean-path reset.
@@ -1026,6 +1032,13 @@ namespace ares {
                                                        std::memory_order_relaxed);
                 #endif
                 localRoot->run();
+                if (ngcdLoadSpeed.load(std::memory_order_relaxed) > 1 && localRoot->name() == "Neo Geo CD") {
+                    auto& cdd = ::ares::NeoGeo::cdd;
+                    if ((cdd.statusCdc & 0x01) && (cdd.control & 0x0100)) loadBoostFrames = 30;
+                    else if (loadBoostFrames) loadBoostFrames--;
+                } else {
+                    loadBoostFrames = 0;
+                }
             }
             else std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -1039,8 +1052,10 @@ namespace ares {
         bool spinWait = busyWaitPacing.load(std::memory_order_relaxed) && localRoot
           && localRoot->name() == "Nintendo 64";
 
-        if (fastForwardAtomic) {
-            f64 speed = (f64)ffSpeedLimitAtomic;
+        // A Neo Geo CD load boost paces like fast forward, capped at the chosen speed.
+        bool loadBoost = loadBoostFrames && !fastForwardAtomic;
+        if (fastForwardAtomic || loadBoost) {
+            f64 speed = loadBoost ? (f64)ngcdLoadSpeed.load(std::memory_order_relaxed) : (f64)ffSpeedLimitAtomic;
             if (speed > 0.0) {
                 f64 targetFrameTime = (1000000.0 / refreshRate) / speed;
                 auto actualFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
@@ -1066,7 +1081,7 @@ namespace ares {
         // under-throttled light-audio cores (Atari 2600 ran 119fps because
         // the ring was always below target → no wait). The absolute video
         // deadline is the correct universal pace for every core.
-        if (!fastForwardAtomic) {
+        if (!fastForwardAtomic && !loadBoost) {
           double frameTarget = 1000000.0 / refreshRate;
           auto period = std::chrono::microseconds((s64)frameTarget);
           frameDeadline += period;
@@ -3275,6 +3290,7 @@ else if (port->type() == "Keyboard") {
   }
   auto setFastForward(bool enabled) -> void { fastForwardAtomic = enabled; LOGI("Fast forward %s", enabled ? "enabled" : "disabled"); }
   auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
+  auto setNgcdLoadSpeed(s32 speed) -> void { ngcdLoadSpeed = std::max(1, speed); LOGI("Neo Geo CD loading speed set to %dx", std::max(1, speed)); }
   auto setN64DebugLogging(bool enabled) -> void { n64DebugLoggingAtomic = enabled; LOGI("N64 debug logging %s", enabled ? "enabled" : "disabled"); }
   auto resetSystem() -> void {
     resetRequestedAtomic.store(true);

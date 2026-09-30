@@ -114,6 +114,11 @@ Java_com_phobos_emulator_PhobosCore_setFastForwardSpeed(JNIEnv* env, jobject, jf
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setNgcdLoadSpeed(JNIEnv* env, jobject, jint speed) {
+    ares::setNgcdLoadSpeed((s32)speed);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64DebugLogging(JNIEnv* env, jobject, jboolean enabled) {
     ares::setN64DebugLogging(enabled);
 }

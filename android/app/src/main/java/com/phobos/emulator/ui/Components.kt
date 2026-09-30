@@ -430,6 +430,18 @@ fun FastForwardSpeedSelectorItem(currentSpeed: Float, onSpeedSelected: (Float) -
 }
 
 @Composable
+fun NgcdLoadSpeedItem(current: Int, onSelect: (Int) -> Unit) {
+    SettingsDropdownItem(
+        title = "Neo Geo CD Loading Speed",
+        description = "Runs the game faster while the disc loads, up to this rate if the device keeps up. The emulated drive keeps its real speed.",
+        current = current,
+        options = listOf(1, 2, 4, 8),
+        label = { if (it == 1) "Accurate (1x)" else "${it}x" },
+        onSelect = onSelect,
+    )
+}
+
+@Composable
 fun RegionSelectorItem(currentPref: RegionPreference, onPrefSelected: (RegionPreference) -> Unit) {
     SettingsDropdownItem(
         title = "Region Preference",

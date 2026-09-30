@@ -129,6 +129,8 @@ data class EmulatorSettings(
     val n64SkipCaches: Boolean = false,
     val n64RspTaskMode: Boolean = false,
     val pinFastestCore: Boolean = true,
+    /** How much faster than real time Neo Geo CD games run while the drive loads; 1 = real time. */
+    val ngcdLoadSpeed: Int = 1,
     val busyWaitPacing: Boolean = false,
     val n64Pak: String = "None",
     val n64DebugLogging: Boolean = false,
@@ -239,6 +241,7 @@ class SettingsStore(private val context: Context) {
         val N64_SKIP_CACHES = booleanPreferencesKey("n64_skip_caches")
         val N64_RSP_TASK_MODE = booleanPreferencesKey("n64_rsp_task_mode")
         val PIN_FASTEST_CORE = booleanPreferencesKey("pin_fastest_core")
+        val NGCD_LOAD_SPEED = intPreferencesKey("ngcd_load_speed")
         val BUSY_WAIT_PACING = booleanPreferencesKey("busy_wait_pacing")
         val N64_PAK = stringPreferencesKey("n64_pak")
         val N64_DEBUG_LOGGING = booleanPreferencesKey("n64_debug_logging")
@@ -436,6 +439,7 @@ class SettingsStore(private val context: Context) {
             n64SkipCaches = safeGet(N64_SKIP_CACHES, false),
             n64RspTaskMode = safeGet(N64_RSP_TASK_MODE, false),
             pinFastestCore = safeGet(PIN_FASTEST_CORE, true),
+            ngcdLoadSpeed = safeGet(NGCD_LOAD_SPEED, 1),
             busyWaitPacing = safeGet(BUSY_WAIT_PACING, false),
             n64Pak = safeGetString(N64_PAK, "None"),
             n64DebugLogging = safeGet(N64_DEBUG_LOGGING, false),
@@ -638,6 +642,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setN64SkipCaches(enabled: Boolean) = context.dataStore.edit { it[N64_SKIP_CACHES] = enabled }
     suspend fun setN64RspTaskMode(enabled: Boolean) = context.dataStore.edit { it[N64_RSP_TASK_MODE] = enabled }
     suspend fun setPinFastestCore(enabled: Boolean) = context.dataStore.edit { it[PIN_FASTEST_CORE] = enabled }
+    suspend fun setNgcdLoadSpeed(speed: Int) = context.dataStore.edit { it[NGCD_LOAD_SPEED] = speed }
     suspend fun setBusyWaitPacing(enabled: Boolean) = context.dataStore.edit { it[BUSY_WAIT_PACING] = enabled }
     suspend fun setN64Pak(pak: String) = context.dataStore.edit { it[N64_PAK] = pak }
     suspend fun setN64DebugLogging(enabled: Boolean) = context.dataStore.edit { it[N64_DEBUG_LOGGING] = enabled }

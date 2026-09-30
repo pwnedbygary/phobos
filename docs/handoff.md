@@ -325,6 +325,13 @@ rather than its size, which stops changing once the log holds `MainViewModel`'s 
 Branch `feature/ngcd-audio-2026-09` gives the Neo Geo CD its sound: the Z80 runs the BIOS-loaded
 program, CD audio plays, and two drive fixes keep the music from breaking loads and the BIOS's
 track changes ([Neo Geo CD sound](#neo-geo-cd-sound--2026-09-30)).
+Branch `feature/ngcd-fast-load-2026-09`, stacked on it, adds Neo Geo CD Loading Speed (Settings →
+Emulation → Performance, and the pause menu's Neo Geo CD section): Accurate (1x, the default), 2x,
+4x or 8x. After every frame the emulation loop checks whether the drive is reading data
+(`Cdd::statusCdc` bit 0 with `Cdd::control` bit 8); while it is, and for 30 frames after, the loop
+paces like fast forward capped at the chosen rate. The emulated drive keeps its speed, so the BIOS
+sees 1x timing; speeding up the drive itself is what gave DISC I/O ERRORs before (see the
+`lspc.cpp` comment). How close a load gets to the cap depends on the device.
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime

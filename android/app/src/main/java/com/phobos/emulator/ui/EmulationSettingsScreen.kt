@@ -67,6 +67,7 @@ fun EmulationSettingsScreen(
                         checked = settings.pinFastestCore,
                         onCheckedChange = { viewModel.setPinFastestCore(it) }
                     )
+                    NgcdLoadSpeedItem(settings.ngcdLoadSpeed) { viewModel.setNgcdLoadSpeed(it) }
                 }
             }
         }
