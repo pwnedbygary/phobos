@@ -3556,6 +3556,33 @@ else if (port->type() == "Keyboard") {
     return files;
   }
 
+  // The loaded game's player-one buttons by the pad bit that presses them, for the controller
+  // settings: one "bit\tname" entry per pair, resolveButtonBit read backwards. A button several
+  // bits press (the Neo Geo shoulder combos) has an entry for each. Keyboards are left out, and so
+  // is the ZX Spectrum, whose pad plays the keys of its control scheme.
+  auto getButtonNames() -> std::vector<string> {
+    lock_guard<recursive_mutex> lock(*runMutex);
+    std::vector<string> names;
+    if (!root || isZxKeyboardSystem(root->name())) return names;
+    string systemName = root->name();
+    for (auto& button : root->find<Node::Input::Button>()) {
+      if (controllerPlayerIndex(button) != 0) continue;
+      bool keyboard = false;
+      Node::Object node = button;
+      for (int depth = 0; depth < 8 && node && !keyboard; depth++, node = ares::Node::parent(node)) {
+        keyboard = node->name().endsWith("Keyboard");
+      }
+      if (keyboard) continue;
+      u32 bits = resolveButtonBit(button->name(), systemName, orientationVertical);
+      for (u32 bit = 1; bits; bit <<= 1) {
+        if (!(bits & bit)) continue;
+        bits &= ~bit;
+        names.push_back(string{(u64)bit, "\t", button->name()});
+      }
+    }
+    return names;
+  }
+
   // Writes every battery save, the Controller Pak's included, to disk now instead of at unload.
   auto flushSaves() -> void {
     bool wasPaused = isPausedAtomic.exchange(true);

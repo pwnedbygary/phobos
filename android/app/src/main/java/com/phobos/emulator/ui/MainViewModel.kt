@@ -20,6 +20,10 @@ import com.phobos.emulator.LogEntry
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.PerformanceStats
 import com.phobos.emulator.PhobosCore
+import com.phobos.emulator.input.ActiveControls
+import com.phobos.emulator.input.ControlCapture
+import com.phobos.emulator.input.ControlLevel
+import com.phobos.emulator.input.Controls
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
@@ -170,6 +174,25 @@ class MainViewModel(
 ) : ViewModel(), DefaultLifecycleObserver {
     val settings: StateFlow<EmulatorSettings> = settingsStore.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), initialSettings)
+
+    // The loaded game, as the level its controls resolve at; null with none loaded.
+    private val _loadedGame = MutableStateFlow<ControlLevel.Game?>(null)
+    val loadedGame: StateFlow<ControlLevel.Game?> = _loadedGame.asStateFlow()
+
+    /**
+     * The button bindings and hotkeys every input path reads: the loaded game's, else the global
+     * ones. Resolved once per change, and kept current with no screen watching, since key handling
+     * reads it outside composition.
+     */
+    val activeControls: StateFlow<ActiveControls> = combine(settings, _loadedGame) { s, game ->
+        ActiveControls.at(game ?: ControlLevel.AllConsoles, s.inputMappings, s.hotkeys, s.controlOverrides)
+    }.stateIn(
+        viewModelScope, SharingStarted.Eagerly,
+        ActiveControls.at(ControlLevel.AllConsoles, initialSettings.inputMappings, initialSettings.hotkeys, initialSettings.controlOverrides),
+    )
+
+    /** The press being captured for a binding, in Settings or the pause menu. */
+    val controlCapture = ControlCapture(viewModelScope)
 
     // Driver download progress (downloaded, total); total = -1 when unknown.
     private val _downloadProgress = MutableStateFlow(Pair(-1L, -1L))
@@ -496,6 +519,8 @@ class MainViewModel(
         PhobosCore.setPause(paused)
         // Controller input goes to the menus while paused, so a button held now would stay down for the game.
         if (paused) GameInputState.releaseAllButtons()
+        // Back in the game, a stick or trigger still held from a binding is the game's again.
+        else controlCapture.cancel()
     }
 
     private val _tabSteps = MutableSharedFlow<Int>(extraBufferCapacity = 4)
@@ -622,6 +647,7 @@ class MainViewModel(
         // makes the new screen show "Initializing..." until the load lands.
         _isLoaded.value = false
         _isPaused.value = false
+        _loadedGame.value = null
         _runningFrame.value = null
         PhobosCore.setEmulationRunning(false)
         PhobosCore.unloadSystem()
@@ -642,24 +668,57 @@ class MainViewModel(
         settingsStore.setSystemVisibility(system, visible)
     }
 
-    fun resetDefaultMapping() = viewModelScope.launch {
-        settingsStore.resetDefaultMapping()
+    // Controller edits run one at a time, each on the settings as stored, so a console or game
+    // change is never worked out from bindings another edit is still writing.
+    private val controlsEdit = Mutex()
+    private fun editControls(edit: suspend (EmulatorSettings) -> Unit) = viewModelScope.launch {
+        controlsEdit.withLock { edit(settingsStore.settings.first()) }
     }
 
-    fun setHotkey(action: String, combo: List<Int>) = viewModelScope.launch {
-        settingsStore.setHotkey(action, combo)
+    fun resetDefaultMapping() = editControls { settingsStore.resetDefaultMapping() }
+
+    fun clearAllMappings() = editControls { settingsStore.clearAllMappings() }
+
+    /** Binds [bit] at [level]; a button already using [binding] there takes [bit]'s old binding. */
+    fun bindButton(level: ControlLevel, bit: Int, binding: String) = editControls { s ->
+        val scope = level.scope
+        if (scope == null) settingsStore.updateInputMapping(bit, binding)
+        else settingsStore.setScopedMappings(scope, Controls.bindButton(level, bit, binding, s.inputMappings, s.controlOverrides))
     }
 
-    fun clearAllMappings() = viewModelScope.launch {
-        settingsStore.clearAllMappings()
+    fun unbindButton(level: ControlLevel, bit: Int) = editControls { s ->
+        val scope = level.scope
+        if (scope == null) settingsStore.clearInputMapping(bit)
+        else settingsStore.setScopedMappings(scope, Controls.unbindButton(level, bit, s.inputMappings, s.controlOverrides))
     }
 
-    fun clearInputMapping(aresBit: Int) = viewModelScope.launch {
-        settingsStore.clearInputMapping(aresBit)
+    /** [bit] at a console or game [level] goes back to what the level inherits. */
+    fun inheritButton(level: ControlLevel, bit: Int) = editControls {
+        level.scope?.let { settingsStore.setScopedMappings(it, mapOf(bit to null)) }
     }
 
-    fun updateInputMapping(aresBit: Int, binding: String) = viewModelScope.launch {
-        settingsStore.updateInputMapping(aresBit, binding)
+    fun inheritAllButtons(level: ControlLevel) = editControls {
+        level.scope?.let { settingsStore.clearScopedMappings(it) }
+    }
+
+    /** Sets hotkey [action] at [level]; an empty [combo] unbinds it there. */
+    fun bindHotkey(level: ControlLevel, action: String, combo: List<Int>) = editControls { s ->
+        val scope = level.scope
+        if (scope == null) settingsStore.setHotkey(action, combo)
+        else settingsStore.setScopedHotkey(scope, action, Controls.hotkeyChange(level, action, combo, s.hotkeys, s.controlOverrides))
+    }
+
+    fun inheritHotkey(level: ControlLevel, action: String) = editControls {
+        level.scope?.let { settingsStore.setScopedHotkey(it, action, null) }
+    }
+
+    fun inheritAllHotkeys(level: ControlLevel) = editControls {
+        level.scope?.let { settingsStore.clearScopedHotkeys(it) }
+    }
+
+    /** The loaded game's button names by pad bit (N64 "Z" for L2); empty with no game loaded. */
+    suspend fun consoleButtonNames(): Map<Int, String> = withContext(Dispatchers.IO) {
+        if (_isLoaded.value) Controls.buttonNames(PhobosCore.getButtonNames().toList()) else emptyMap()
     }
 
     private fun getSanitizedSystemName(name: String): String {
@@ -2413,6 +2472,7 @@ class MainViewModel(
     fun togglePause() {
         _isPaused.value = !_isPaused.value
         PhobosCore.setPause(_isPaused.value)
+        if (!_isPaused.value) controlCapture.cancel()
     }
 
     fun scanRoms(context: Context, systemName: String, directoryUris: List<Uri>) {
@@ -2640,6 +2700,7 @@ class MainViewModel(
             Log.i("Phobos", "Vulkan cache path resolved: $cacheDir")
             _isPaused.value = false
             _isLoaded.value = false
+            _loadedGame.value = null
             PhobosCore.setPause(false)
 
             // Set writable temp directory for MIA
@@ -2735,6 +2796,7 @@ class MainViewModel(
                         _isLoaded.value = true
                         currentSystemName = effectiveSystem
                         currentRomName = rom.name
+                        _loadedGame.value = ControlLevel.Game(effectiveSystem, rom.name)
                         _loadedDiscs.value = rom.discs
                         _currentDisc.value = discIndex
                         if (rom.discs.size > 1) rememberDisc(effectiveSystem, rom.name, discIndex)

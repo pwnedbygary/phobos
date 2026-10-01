@@ -103,6 +103,7 @@ private const val MENU_REVEAL_MS = 3000L
 @Composable
 fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
+    val controls by viewModel.activeControls.collectAsState()
     val isPaused by viewModel.isPaused.collectAsState()
     val isLoaded by viewModel.isLoaded.collectAsState()
     val perfStats by viewModel.perfStats.collectAsState()
@@ -183,8 +184,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     // a key release and is not supported from the hat.
     val onHatChanged = rememberUpdatedState<() -> Unit> {
         val pressed = pressedKeys + GameInputState.hotkeyKeys
-        for (action in matchingHotkeys(settings.hotkeys, pressed)) {
-            val combo = settings.hotkeys[action].orEmpty()
+        for (action in matchingHotkeys(controls.hotkeys, pressed)) {
+            val combo = controls.hotkeys[action].orEmpty()
             if (action != HotkeyAction.FAST_FORWARD_HOLD && comboUsesDpad(combo)) runHotkey(action)
         }
     }
@@ -342,17 +343,17 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 // so combos like Z + D-pad Right work on controllers with a hat D-pad.
                 var consumed = false
                 if (isDown) {
-                    for (action in matchingHotkeys(settings.hotkeys, pressedKeys + GameInputState.hotkeyKeys)) {
+                    for (action in matchingHotkeys(controls.hotkeys, pressedKeys + GameInputState.hotkeyKeys)) {
                         if (runHotkey(action)) consumed = true
                     }
-                } else if (!fastForwardToggled && settings.hotkeys[HotkeyAction.FAST_FORWARD_HOLD]?.contains(keyCode) == true) {
+                } else if (!fastForwardToggled && controls.hotkeys[HotkeyAction.FAST_FORWARD_HOLD]?.contains(keyCode) == true) {
                     PhobosCore.setFastForward(false)
                 }
                 if (consumed) return@onPreviewKeyEvent true
                 // Paused: mapped buttons navigate the menu (BUTTON_A falls back to DPAD_CENTER).
                 if (isPaused) return@onPreviewKeyEvent false
 
-                val bits = InputBindings.of(settings.inputMappings).bitsForKey(keyCode)
+                val bits = InputBindings.of(controls.mappings).bitsForKey(keyCode)
                 if (bits != 0) {
                     GameInputState.setButton(bits, isDown)
                     return@onPreviewKeyEvent true
@@ -537,7 +538,7 @@ private fun GamePicture(
                     setZOrderMediaOverlay(true)
                     isFocusable = false
                     setOnGenericMotionListener { _, event ->
-                        GameInputState.handleMotionEvent(event, viewModel.settings.value.inputMappings, systemName)
+                        GameInputState.handleMotionEvent(event, viewModel.activeControls.value.mappings, systemName)
                     }
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(h: SurfaceHolder) { PhobosCore.attachSurface(h.surface) }

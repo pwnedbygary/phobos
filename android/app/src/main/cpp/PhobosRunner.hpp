@@ -55,6 +55,7 @@ namespace ares {
   auto saveState(const char* path) -> bool;
   auto loadState(const char* path) -> bool;
   auto getSaveFiles() -> std::vector<string>;
+  auto getButtonNames() -> std::vector<string>;
   auto flushSaves() -> void;
   auto takeScreenshot(const char* path) -> bool;
   auto setFastBoot(bool enabled) -> void;

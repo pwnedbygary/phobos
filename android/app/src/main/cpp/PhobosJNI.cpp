@@ -186,6 +186,18 @@ Java_com_phobos_emulator_PhobosCore_getSaveFiles(JNIEnv* env, jobject) {
     return array;
 }
 
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_phobos_emulator_PhobosCore_getButtonNames(JNIEnv* env, jobject) {
+    auto names = ares::getButtonNames();
+    jobjectArray array = env->NewObjectArray((jsize)names.size(), env->FindClass("java/lang/String"), nullptr);
+    for (jsize i = 0; i < (jsize)names.size(); i++) {
+        jstring entry = env->NewStringUTF((const char*)names[i]);
+        env->SetObjectArrayElement(array, i, entry);
+        env->DeleteLocalRef(entry);
+    }
+    return array;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_flushSaves(JNIEnv*, jobject) {
     ares::flushSaves();

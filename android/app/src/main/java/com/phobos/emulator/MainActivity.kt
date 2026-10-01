@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.net.Uri
 import android.util.Log
 import android.view.InputDevice
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
@@ -128,12 +129,17 @@ class MainActivity : ComponentActivity() {
         window.callback = object : android.view.Window.Callback by originalCallback {
             private val pressedKeys = mutableSetOf<Int>()
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                // A press being captured for a binding goes nowhere else.
+                val systemBack = event.keyCode == KeyEvent.KEYCODE_BACK && event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
+                if (event.action != KeyEvent.ACTION_MULTIPLE &&
+                    viewModel.controlCapture.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, systemBack)
+                ) return true
                 val visible = viewModel.emulatorScreenVisible.value
                 val loaded = viewModel.isLoaded.value
                 if (visible || (loaded && viewModel.isPaused.value)) {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                         pressedKeys += event.keyCode
-                        val libraryCombo = viewModel.settings.value.hotkeys["library"] ?: emptyList()
+                        val libraryCombo = viewModel.activeControls.value.hotkeys["library"] ?: emptyList()
                         if (libraryCombo.isNotEmpty() &&
                             libraryCombo.size == pressedKeys.size &&
                             libraryCombo.all { pressedKeys.contains(it) }
@@ -151,7 +157,7 @@ class MainActivity : ComponentActivity() {
                 // L1/R1 outside the game step through the Library, Console and Settings tabs (MainScaffold),
                 // unless the Library hotkey uses them.
                 val shoulder = event.keyCode == KeyEvent.KEYCODE_BUTTON_L1 || event.keyCode == KeyEvent.KEYCODE_BUTTON_R1
-                if (!visible && shoulder && event.keyCode !in (viewModel.settings.value.hotkeys["library"] ?: emptyList())) {
+                if (!visible && shoulder && event.keyCode !in (viewModel.activeControls.value.hotkeys["library"] ?: emptyList())) {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                         viewModel.stepTab(if (event.keyCode == KeyEvent.KEYCODE_BUTTON_L1) -1 else 1)
                     }
@@ -221,13 +227,11 @@ class MainActivity : ComponentActivity() {
     /**
      * Joystick motion is dispatched here before it reaches the view hierarchy.
      *
-     * The view tree gets the event FIRST (via super) so the Controller Mapping
-     * screen's OnGenericMotionListener can capture sticks for binding, and the
-     * emulator's SurfaceView listener can process its own events. Previously this
-     * method consumed every joystick move and returned true, which silently
-     * swallowed those events — that is why analog sticks could never be bound in
-     * the mapping menu, and why in-game stick handling bypassed the user's axis
-     * mappings (raw AXIS_X/Y/Z/RZ was hardcoded).
+     * A capture for a binding ([MainViewModel.controlCapture]) takes every joystick move while it
+     * runs. Otherwise the view tree gets the event first (via super) so the emulator's SurfaceView
+     * listener can process its own events. Previously this method consumed every joystick move
+     * and returned true, which silently swallowed those events, and in-game stick handling
+     * bypassed the user's axis mappings (raw AXIS_X/Y/Z/RZ was hardcoded).
      *
      * Only when the emulator core is loaded AND no view handled the event do we
      * translate the motion event ourselves. Everything is routed through
@@ -235,7 +239,12 @@ class MainActivity : ComponentActivity() {
      * (the previous cause of dropped / "rapid fire" inputs).
      */
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
-        // 1) Let the view hierarchy (mapping screen listener, emulator SurfaceView) try first.
+        // 0) A stick or hat move being captured for a binding goes nowhere else.
+        if ((event.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK && event.action == MotionEvent.ACTION_MOVE &&
+            viewModel.controlCapture.onJoystickMove(event::getAxisValue)
+        ) return true
+
+        // 1) Let the view hierarchy (emulator SurfaceView) try first.
         if (super.dispatchGenericMotionEvent(event)) return true
 
         // 2) Emulator-only fallback: full mapping pipeline through shared state, while the game runs on
@@ -244,7 +253,7 @@ class MainActivity : ComponentActivity() {
         if (viewModel.isLoaded.value && viewModel.emulatorScreenVisible.value && !viewModel.isPaused.value &&
             (event.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK &&
             event.action == MotionEvent.ACTION_MOVE) {
-            return GameInputState.handleMotionEvent(event, viewModel.settings.value.inputMappings, viewModel.loadedSystemName)
+            return GameInputState.handleMotionEvent(event, viewModel.activeControls.value.mappings, viewModel.loadedSystemName)
         }
         return false
     }
@@ -283,7 +292,7 @@ class MainActivity : ComponentActivity() {
             // with a game loaded (paused) → navigate back and resume.
             if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 fallbackPressedKeys += keyCode
-                val libraryCombo = viewModel.settings.value.hotkeys["library"] ?: emptyList()
+                val libraryCombo = viewModel.activeControls.value.hotkeys["library"] ?: emptyList()
                 if (libraryCombo.isNotEmpty()) {
                     val allPressed = fallbackPressedKeys + GameInputState.hotkeyKeys
                     if (libraryCombo.size == allPressed.size && libraryCombo.all { allPressed.contains(it) }) {
@@ -300,7 +309,7 @@ class MainActivity : ComponentActivity() {
                 // Swallow auto-repeat so held buttons don't rapidly toggle.
                 if (event.repeatCount > 0) return@setOnKeyListener true
 
-                val bits = InputBindings.of(viewModel.settings.value.inputMappings).bitsForKey(keyCode)
+                val bits = InputBindings.of(viewModel.activeControls.value.mappings).bitsForKey(keyCode)
                 if (bits != 0) {
                     GameInputState.setButton(bits, event.action != android.view.KeyEvent.ACTION_UP)
                     return@setOnKeyListener true

@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
@@ -78,6 +79,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.input.ControlLevel
 import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
@@ -134,11 +136,17 @@ fun EmulationMenu(
     }
     // Composed here, not in the list, so the list can't dispose its pickers' results or dialogs.
     val saveTransfer = if (systemName.contains("Nintendo 64", ignoreCase = true)) rememberSaveTransfer(viewModel, settings) else null
-    // The N64 Experimental and Performance Monitor pages replace the main list (with a back arrow)
-    // to keep the menu short.
+    // The N64 Experimental, Performance Monitor and controller pages replace the main list (with a
+    // back arrow) to keep the menu short.
     var experimentalOpen by remember { mutableStateOf(false) }
     var perfHudOpen by remember { mutableStateOf(false) }
-    BackHandler(enabled = experimentalOpen || perfHudOpen) { experimentalOpen = false; perfHudOpen = false }
+    var controllerPage by remember { mutableStateOf<ControllerPage?>(null) }
+    val game by viewModel.loadedGame.collectAsState()
+    // Kept here, so coming back from a page returns to the same place in the list.
+    val menuListState = rememberLazyListState()
+    BackHandler(enabled = experimentalOpen || perfHudOpen || controllerPage != null) {
+        experimentalOpen = false; perfHudOpen = false; controllerPage = null
+    }
 
     Box(
         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.7f)).clickable(enabled = false) {},
@@ -160,13 +168,17 @@ fun EmulationMenu(
             contentColor = MaterialTheme.colorScheme.onSurface,
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                if (experimentalOpen) {
+                val openPage = controllerPage
+                val openGame = game
+                if (openPage != null && openGame != null) {
+                    ControllerMenuPage(viewModel, openGame, openPage, onBack = { controllerPage = null })
+                } else if (experimentalOpen) {
                     N64ExperimentalSection(viewModel, settings, onBack = { experimentalOpen = false })
                 } else if (perfHudOpen) {
                     PerfHudMenuSection(viewModel, settings, onBack = { perfHudOpen = false })
                 } else {
                     Text("Emulation Paused", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 8.dp))
-                    LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LazyColumn(modifier = Modifier.weight(1f), state = menuListState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         item {
                             QuickActions(
                                 canLoad = slotPreview != null,
@@ -213,6 +225,7 @@ fun EmulationMenu(
                         if (systemName.contains("ZX Spectrum", ignoreCase = true)) {
                             item { ZxKeyboardSection(viewModel, settings, showKeyboard, onKeyboardToggle, zxControlScheme, onZxControlScheme) }
                         }
+                        game?.let { running -> item { ControllerSection(running, settings, onOpen = { controllerPage = it }) } }
                         item { TouchControlsSection(viewModel, settings, onEditTouchLayout) }
                         item { DisplaySection(viewModel, settings, onOpenPerfHud = { perfHudOpen = true }) }
                     }
@@ -247,7 +260,7 @@ private fun QuickActions(
         QuickAction(Icons.Default.CameraAlt, "Shot", onScreenshot, Modifier.weight(1f))
         QuickAction(
             if (touchControlsShown) Icons.Default.TouchApp else Icons.Default.DoNotTouch,
-            "Controls",
+            "Touch",
             onToggleTouchControls,
             Modifier.weight(1f).semantics { stateDescription = if (touchControlsShown) "Touch controls shown" else "Touch controls hidden" },
             outlined = !touchControlsShown,
@@ -598,6 +611,35 @@ private fun ZxKeyboardSection(
         // Silences the tape-loading screech; the game still receives the EAR bit.
         SettingsSwitchItem("Mute Tape Audio", "Silence the loud tape-loading screech.", settings.zxTapeMuted) { viewModel.setZxTapeMuted(it) }
     }
+}
+
+/** Opens the Buttons and Hotkeys pages, and says when the game has settings of its own. */
+@Composable
+private fun ControllerSection(game: ControlLevel.Game, settings: EmulatorSettings, onOpen: (ControllerPage) -> Unit) {
+    val overrides = settings.controlOverrides
+    MenuSection("Controller") {
+        ControllerPageLink(
+            ControllerPage.BUTTONS,
+            if (overrides.hasMappings(game)) "This game has buttons of its own" else "What each button does, here or for every game",
+            onOpen,
+        )
+        ControllerPageLink(
+            ControllerPage.HOTKEYS,
+            if (overrides.hasHotkeys(game)) "This game has hotkeys of its own" else "Button combos for the menu, states and more",
+            onOpen,
+        )
+    }
+}
+
+@Composable
+private fun ControllerPageLink(page: ControllerPage, description: String, onOpen: (ControllerPage) -> Unit) {
+    ListItem(
+        headlineContent = { Text(page.title) },
+        supportingContent = { Text(description) },
+        trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+        colors = transparentListItemColors(),
+        modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable { onOpen(page) },
+    )
 }
 
 @Composable

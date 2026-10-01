@@ -5,6 +5,8 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.phobos.emulator.LogLevel
+import com.phobos.emulator.input.ControlOverrides
+import com.phobos.emulator.input.ScopedKeys
 import com.phobos.emulator.ui.hud.HudConfig
 import com.phobos.emulator.ui.theme.ThemeRegistry
 import com.phobos.emulator.ui.touch.AnalogMode
@@ -149,6 +151,8 @@ data class EmulatorSettings(
     val aspectRatioMode: AspectRatioMode = AspectRatioMode.CORE_PROVIDED,
     // Map<AresBit, StringBinding> where StringBinding is "k:KEYCODE" or "a:AXIS:POS(1/0)"
     val inputMappings: Map<Int, String> = emptyMap(),
+    /** Button bindings and hotkeys a console or a game changes from [inputMappings] and [hotkeys]. */
+    val controlOverrides: ControlOverrides = ControlOverrides(),
     val hiddenSystems: Set<String> = emptySet(),
     val hotkeys: Map<String, List<Int>> = emptyMap(),
     val systemRomPaths: Map<String, Set<String>> = emptyMap(),
@@ -287,10 +291,19 @@ class SettingsStore(private val context: Context) {
         val zxReverses = mutableMapOf<String, Boolean>()
         val lastDiscs = mutableMapOf<String, Int>()
         val touchLayouts = mutableMapOf<String, String>()
+        val scopedMappings = mutableMapOf<String, MutableMap<Int, String>>()
+        val scopedHotkeys = mutableMapOf<String, MutableMap<String, List<Int>>>()
 
         preferences.asMap().forEach { (key, value) ->
             val name = key.name
-            if (name.startsWith(TOUCH_LAYOUT_PREFIX) && value is String) {
+            val scopedMapping = if (value is String) ScopedKeys.parse(name, ScopedKeys.MAPPING_PREFIX) else null
+            val scopedHotkey = if (value is String) ScopedKeys.parse(name, ScopedKeys.HOTKEY_PREFIX) else null
+            if (scopedMapping != null) {
+                scopedMapping.second.toIntOrNull()?.let { bit -> scopedMappings.getOrPut(scopedMapping.first) { mutableMapOf() }[bit] = value as String }
+            } else if (scopedHotkey != null) {
+                scopedHotkeys.getOrPut(scopedHotkey.first) { mutableMapOf() }[scopedHotkey.second] =
+                    (value as String).split(",").mapNotNull { it.trim().toIntOrNull() }
+            } else if (name.startsWith(TOUCH_LAYOUT_PREFIX) && value is String) {
                 touchLayouts[name.removePrefix(TOUCH_LAYOUT_PREFIX)] = value
             } else if (name.startsWith("rom_path_") && value is String) {
                 val system = name.removePrefix("rom_path_")
@@ -469,6 +482,7 @@ class SettingsStore(private val context: Context) {
             hiddenSystems = preferences[HIDDEN_SYSTEMS] ?: emptySet(),
             hotkeys = finalHotkeys,
             inputMappings = mappings,
+            controlOverrides = ControlOverrides(scopedMappings, scopedHotkeys),
             systemRomPaths = romPaths,
             systemFirmwarePaths = fwPaths,
             zxControlScheme = zxSchemes,
@@ -705,6 +719,27 @@ class SettingsStore(private val context: Context) {
         p[key] = binds.entries.joinToString(",") { (l, b) -> "$l=$b" }
     }
     suspend fun setHotkey(action: String, combo: List<Int>) = context.dataStore.edit { it[stringPreferencesKey(HOTKEYS_PREFIX + action)] = combo.joinToString(",") }
+
+    /** A console's or game's binding changes in one edit: a binding, "" to unbind, null to inherit. */
+    suspend fun setScopedMappings(scope: String, changes: Map<Int, String?>) = context.dataStore.edit { p ->
+        changes.forEach { (bit, binding) ->
+            val key = stringPreferencesKey(ScopedKeys.mapping(scope, bit))
+            if (binding == null) p.remove(key) else p[key] = binding
+        }
+    }
+    /** A console's or game's hotkey: a combo, empty to unbind, null to inherit. */
+    suspend fun setScopedHotkey(scope: String, action: String, combo: List<Int>?) = context.dataStore.edit { p ->
+        val key = stringPreferencesKey(ScopedKeys.hotkey(scope, action))
+        if (combo == null) p.remove(key) else p[key] = combo.joinToString(",")
+    }
+    /** Every button binding [scope] changes, back to inheriting. */
+    suspend fun clearScopedMappings(scope: String) = context.dataStore.edit { p ->
+        p.asMap().keys.filter { ScopedKeys.parse(it.name, ScopedKeys.MAPPING_PREFIX)?.first == scope }.forEach { p.remove(it) }
+    }
+    /** Every hotkey [scope] changes, back to inheriting. */
+    suspend fun clearScopedHotkeys(scope: String) = context.dataStore.edit { p ->
+        p.asMap().keys.filter { ScopedKeys.parse(it.name, ScopedKeys.HOTKEY_PREFIX)?.first == scope }.forEach { p.remove(it) }
+    }
     suspend fun resetDefaultMapping() {
         context.dataStore.edit { p ->
             p.asMap().keys.filter { it.name.startsWith("mapping_") }.forEach { p.remove(it) }
