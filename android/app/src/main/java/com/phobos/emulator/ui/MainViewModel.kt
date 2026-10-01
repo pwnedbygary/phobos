@@ -205,6 +205,38 @@ class MainViewModel(
         private val IN_PLACE_SYSTEMS = setOf("PlayStation", "Mega CD", "Mega CD 32X", "PC Engine CD", "Neo Geo CD")
         // Systems whose disc native code can change while the game runs; the other CD systems read a disc from the start.
         private val DISC_SWAP_SYSTEMS = setOf("PlayStation")
+        // The firmware keys each system's pak() in PhobosRunner.cpp reads, so a load copies only what its game can
+        // use. Neo Geo's neogeo.zip is copied on its own.
+        private val SYSTEM_FIRMWARE: Map<String, Set<String>> = run {
+            val megaCd = setOf("fw_mcd_us", "fw_mcd_jp", "fw_mcd_eu")
+            val mega32x = setOf("fw_32x_g", "fw_32x_m", "fw_32x_s")
+            val pceCd = setOf("fw_pce_cd_3_jp", "fw_pce_cd_ge_jp")
+            val gameBoy = setOf("fw_gb_boot", "fw_gbc_boot")
+            val pocket = setOf("fw_ngp", "fw_ngpc")
+            val zx = setOf("fw_zx48", "fw_zx128", "fw_zx128_sub")
+            mapOf(
+                "PlayStation" to setOf("fw_psx_us", "fw_psx_jp", "fw_psx_eu"),
+                "Mega Drive" to megaCd,
+                "Mega CD" to megaCd,
+                "Mega 32X" to megaCd + mega32x,
+                "Mega CD 32X" to megaCd + mega32x,
+                "Nintendo 64" to setOf("fw_n64_pif_ntsc", "fw_n64_pif_pal", "fw_n64dd_us", "fw_n64dd_jp", "fw_n64dd_dev"),
+                "Neo Geo CD" to setOf("fw_ng_cd"),
+                "Neo Geo Pocket" to pocket,
+                "Neo Geo Pocket Color" to pocket,
+                "Game Boy" to gameBoy,
+                "Game Boy Color" to gameBoy,
+                "Game Boy Advance" to setOf("fw_gba"),
+                "ColecoVision" to setOf("fw_coleco"),
+                "PC Engine" to pceCd,
+                "PC Engine CD" to pceCd,
+                "SuperGrafx" to pceCd,
+                "ZX Spectrum" to zx,
+                "ZX Spectrum 128" to zx,
+            )
+        }
+        // Systems whose pak() reads neogeo.zip (the BIOS, and the LSPC zoom table the Neo Geo CD shares).
+        private val NEOGEO_ZIP_SYSTEMS = setOf("Neo Geo", "Neo Geo CD")
     }
 
     private var wasEmulationRunningBeforePause = false
@@ -2490,7 +2522,7 @@ class MainViewModel(
             // For Neo Geo, copy neogeo.zip to mia_temp via ContentResolver
             // (firmware paths are content URIs, not real filesystem paths)
             var ngBiosPresent = false
-            if (systemName.contains("Neo Geo")) {
+            if (systemName in NEOGEO_ZIP_SYSTEMS) {
                 val miaTempPath = File(context.cacheDir, "mia_temp")
                 if (!miaTempPath.exists()) miaTempPath.mkdirs()
                 val destFile = File(miaTempPath, "neogeo.zip")
@@ -2612,7 +2644,10 @@ class MainViewModel(
 
             // Sync Firmware Path and Mappings
             // For each mapped firmware, if it's a URI, copy it to a temp file so native code can read it.
+            // Only the firmware the game's system reads; a system the app doesn't list gets all of it.
+            val firmwareKeys = if (effectiveSystem in PhobosCore.enumerateSystems()) SYSTEM_FIRMWARE[effectiveSystem].orEmpty() else null
             currentSettings.systemFirmwarePaths.forEach { (key, uriString) ->
+                if (firmwareKeys != null && key !in firmwareKeys) return@forEach
                 try {
                     val firmwareFileName = "fw_$key"
                     val tempFile = File(miaTempPath, firmwareFileName)
@@ -2716,7 +2751,7 @@ class MainViewModel(
                         // spawning any threads. Neo Geo refuses only when its
                         // mandatory BIOS is absent. Surface a clear popup
                         // instead of a hang/crash.
-                        if (effectiveSystem.contains("Neo Geo", ignoreCase = true)) {
+                        if (effectiveSystem in NEOGEO_ZIP_SYSTEMS) {
                             // Only blame the BIOS when neogeo.zip was genuinely
                             // absent. If it was copied but the ROM still failed,
                             // the ROM itself is the problem (wrong/missing game).
