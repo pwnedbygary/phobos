@@ -119,6 +119,11 @@ Java_com_phobos_emulator_PhobosCore_setNgcdLoadSpeed(JNIEnv* env, jobject, jint 
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setZxLoadSpeed(JNIEnv* env, jobject, jint speed) {
+    ares::setZxLoadSpeed((s32)speed);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64DebugLogging(JNIEnv* env, jobject, jboolean enabled) {
     ares::setN64DebugLogging(enabled);
 }
@@ -258,11 +263,6 @@ Java_com_phobos_emulator_PhobosCore_setKeyboardKey(JNIEnv* env, jobject, jstring
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_phobos_emulator_PhobosCore_playTape(JNIEnv* env, jobject) {
     return ares::playTape() ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_phobos_emulator_PhobosCore_setTapeSpeed(JNIEnv* env, jobject, jint speed) {
-    ares::setTapeSpeed(speed);
 }
 
 extern "C" JNIEXPORT void JNICALL

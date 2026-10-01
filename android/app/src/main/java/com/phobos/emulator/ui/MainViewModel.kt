@@ -431,6 +431,10 @@ class MainViewModel(
         settingsStore.setNgcdLoadSpeed(speed)
         PhobosCore.setNgcdLoadSpeed(speed)
     }
+    fun setZxLoadSpeed(speed: Int) = viewModelScope.launch {
+        settingsStore.setZxLoadSpeed(speed)
+        PhobosCore.setZxLoadSpeed(speed)
+    }
     fun setFullScreenMode(enabled: Boolean) = viewModelScope.launch { settingsStore.setFullScreenMode(enabled) }
     fun setShowTouchControls(enabled: Boolean) = viewModelScope.launch { settingsStore.setShowTouchControls(enabled) }
     fun updateTouchPrefs(transform: (TouchPrefs) -> TouchPrefs) = viewModelScope.launch {
@@ -1593,6 +1597,7 @@ class MainViewModel(
             PhobosCore.setFastBoot(settings.value.fastBoot)
             PhobosCore.setFastForwardSpeed(settings.value.fastForwardSpeed)
             PhobosCore.setNgcdLoadSpeed(settings.value.ngcdLoadSpeed)
+            PhobosCore.setZxLoadSpeed(settings.value.zxLoadSpeed)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
             PhobosCore.setN64CpuOverclock(if (settings.value.n64UseDefaultCpuOverclock) 0 else settings.value.n64CpuOverclock)
@@ -2581,6 +2586,7 @@ class MainViewModel(
             PhobosCore.setRegion(currentSettings.regionPreference.ordinal)
             PhobosCore.setFastForwardSpeed(currentSettings.fastForwardSpeed)
             PhobosCore.setNgcdLoadSpeed(currentSettings.ngcdLoadSpeed)
+            PhobosCore.setZxLoadSpeed(currentSettings.zxLoadSpeed)
             PhobosCore.setCustomDriverPath(currentSettings.customDriverPath)
             PhobosCore.setPs1AnalogMode(currentSettings.ps1AnalogMode)
             PhobosCore.setN64ExpansionPak(currentSettings.n64ExpansionPak)

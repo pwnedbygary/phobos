@@ -18,6 +18,7 @@ object PhobosCore {
     external fun setFastForward(enabled: Boolean)
     external fun setFastForwardSpeed(speed: Float)
     external fun setNgcdLoadSpeed(speed: Int)
+    external fun setZxLoadSpeed(speed: Int)
     external fun setN64DebugLogging(enabled: Boolean)
     external fun setN64Upscale(factor: Int)
     external fun setN64Recompiler(enabled: Boolean)
@@ -107,7 +108,6 @@ object PhobosCore {
     external fun setInput(lx: Float, ly: Float, rx: Float, ry: Float, buttons: Int)
     external fun setKeyboardKey(label: String, pressed: Boolean)
     external fun playTape(): Boolean
-    external fun setTapeSpeed(speed: Int)
     external fun setZxControlScheme(scheme: Int)
     external fun setZxStickToKeys(enabled: Boolean)
     external fun setZxReversePitch(enabled: Boolean)

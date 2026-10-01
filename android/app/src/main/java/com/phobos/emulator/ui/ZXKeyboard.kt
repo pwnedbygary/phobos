@@ -136,8 +136,9 @@ fun ZXKeyboardOverlay(
     onSymLatched: (Boolean) -> Unit,
     capsLatched: Boolean,
     onCapsLatched: (Boolean) -> Unit,
-    turboTape: Boolean,
-    onTurboTape: (Boolean) -> Unit,
+    // How fast the game runs while a tape plays (the tape keeps its real speed).
+    loadSpeed: Int,
+    onLoadSpeed: (Int) -> Unit,
     controlScheme: Int,
     onControlScheme: (Int) -> Unit,
     rebindTarget: String?,
@@ -256,31 +257,32 @@ fun ZXKeyboardOverlay(
                         listOf("ENTER"),
                     ),
                     // After ENTER, the ROM waits for the tape signal — start the
-                    // tape playback. Turbo toggle: 2x when enabled (faster loads),
-                    // 1x real-time when off (always safe).
-                    onAfterSteps = {
-                        PhobosCore.setTapeSpeed(if (turboTape) 2 else 1)
-                        PhobosCore.playTape()
-                    },
+                    // tape playback.
+                    onAfterSteps = { PhobosCore.playTape() },
                     onClearShifts = clearShifts
                 )
                 // DELETE = CAPS SHIFT + 0 and BREAK = CAPS SHIFT + SPACE, as on the real keyboard.
                 ChordKey(listOf(CAPS, "0"), weight = 1.5f, height = macroHeight, label = "DELETE")
                 ChordKey(listOf(CAPS, SPACE), weight = 1.5f, height = macroHeight, label = "BREAK")
-                // TURBO tape toggle: 1x (real-time) <-> 2x (faster loads).
-                ToggleKey(
-                    label = "TURBO",
+                // How fast tapes load: the game runs up to this many times real time while one plays.
+                PickerKey(
+                    label = "TAPE ${loadSpeed}x",
+                    active = loadSpeed > 1,
                     weight = 1.5f,
                     height = macroHeight,
-                    active = turboTape,
-                    onToggle = { onTurboTape(it) }
+                    options = LOAD_SPEEDS.map { it to loadSpeedLabel(it) },
+                    selected = loadSpeed,
+                    onSelect = onLoadSpeed,
                 )
                 // The game's scheme, picked from a list. CUSTOM (4) uses only the per-key rebind map;
                 // the presets stay pristine.
-                SchemeKey(
-                    scheme = controlScheme,
+                PickerKey(
+                    label = zxScheme(controlScheme).short,
+                    active = controlScheme != 0,
                     weight = 2f,
                     height = macroHeight,
+                    options = ZX_SCHEMES.map { it.id to it.label },
+                    selected = controlScheme,
                     onSelect = onControlScheme,
                 )
             }
@@ -368,63 +370,21 @@ private fun RowScope.ChordKey(
     }
 }
 
+// A macro-row button that opens a list to pick from; [active] lights it when the pick isn't the default.
 @Composable
-private fun RowScope.ToggleKey(
+private fun RowScope.PickerKey(
     label: String,
-    weight: Float,
-    height: Dp,
     active: Boolean,
-    onToggle: (Boolean) -> Unit
-) {
-    val haptic = LocalHapticFeedback.current
-    var pressed by remember { mutableStateOf(false) }
-    // rememberUpdatedState keeps the handler reading the CURRENT active value
-    // (pointerInput keys on `label` only, so without this the closure captures
-    // the initial value and the toggle never turns OFF).
-    val currentActive by rememberUpdatedState(active)
-    val shape = RoundedCornerShape(6.dp)
-    val bgMod = if (active) {
-        Modifier.background(Color(0xFF3D7EDB), shape)
-    } else {
-        Modifier.background(Brush.verticalGradient(listOf(Color(0xFF4A6FA5), Color(0xFF2E4E7A)), 0f, 50f), shape)
-    }
-
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .weight(weight)
-            .height(height)
-            .graphicsLayer { scaleX = if (pressed) 0.94f else 1f; scaleY = if (pressed) 0.94f else 1f }
-            .then(bgMod)
-            .border(1.5.dp, if (active) Color.White else Color(0xFF1E3A5F), shape)
-            .pointerInput(label) {
-                detectTapGestures(
-                    onPress = {
-                        pressed = true
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onToggle(!currentActive)
-                        tryAwaitRelease()
-                        pressed = false
-                    }
-                )
-            }
-    ) {
-        Text(label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-    }
-}
-
-@Composable
-private fun RowScope.SchemeKey(
-    scheme: Int,
     weight: Float,
     height: Dp,
+    options: List<Pair<Int, String>>,
+    selected: Int,
     onSelect: (Int) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(6.dp)
-    val active = scheme != 0
     val bgMod = if (active) {
         Modifier.background(Color(0xFF3D7EDB), shape)
     } else {
@@ -451,13 +411,13 @@ private fun RowScope.SchemeKey(
                 )
             }
     ) {
-        Text(zxScheme(scheme).short, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {
-            ZX_SCHEMES.forEach { option ->
+            options.forEach { (value, text) ->
                 DropdownMenuItem(
-                    text = { Text(option.label) },
-                    onClick = { choosing = false; onSelect(option.id) },
-                    trailingIcon = if (option.id == scheme) ({ Icon(Icons.Default.Check, contentDescription = "In use") }) else null,
+                    text = { Text(text) },
+                    onClick = { choosing = false; onSelect(value) },
+                    trailingIcon = if (value == selected) ({ Icon(Icons.Default.Check, contentDescription = "In use") }) else null,
                 )
             }
         }
@@ -478,9 +438,9 @@ private fun RowScope.MacroKey(
     var flash by remember { mutableStateOf(false) }
     val active = pressed || flash
     // rememberUpdatedState so the pointerInput closure always calls the LATEST
-    // onAfterSteps/onClearShifts (they close over hoisted state like turboTape;
-    // pointerInput only restarts on `label`, so without this the macro would
-    // use stale turboTape/scheme values forever).
+    // onAfterSteps/onClearShifts (they close over hoisted state; pointerInput
+    // only restarts on `label`, so without this the macro would use stale
+    // values forever).
     val currentOnAfterSteps by rememberUpdatedState(onAfterSteps)
     val currentOnClearShifts by rememberUpdatedState(onClearShifts)
 

@@ -575,7 +575,7 @@ private fun ZxKeyboardSection(
     showKeyboard: Boolean, onKeyboardToggle: (Boolean) -> Unit,
     zxControlScheme: Int, onZxControlScheme: (Int) -> Unit,
 ) {
-    MenuSection("Keyboard") {
+    MenuSection("ZX Spectrum") {
         SettingsSwitchItem("On-Screen Keyboard", "Show the compact keyboard to type LOAD etc.", showKeyboard) { onKeyboardToggle(it) }
         SettingsDropdownItem(
             title = "Control Scheme",
@@ -594,6 +594,7 @@ private fun ZxKeyboardSection(
             )
         }
         SettingsSliderItem("Keyboard Opacity", settings.zxKeyboardOpacity, 0.2f..1.0f) { viewModel.setZxKeyboardOpacity(it) }
+        ZxLoadSpeedItem(settings.zxLoadSpeed) { viewModel.setZxLoadSpeed(it) }
         // Silences the tape-loading screech; the game still receives the EAR bit.
         SettingsSwitchItem("Mute Tape Audio", "Silence the loud tape-loading screech.", settings.zxTapeMuted) { viewModel.setZxTapeMuted(it) }
     }

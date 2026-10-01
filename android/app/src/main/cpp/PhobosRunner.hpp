@@ -50,6 +50,7 @@ namespace ares {
   auto setFastForward(bool enabled) -> void;
   auto setFastForwardSpeed(f32 speed) -> void;
   auto setNgcdLoadSpeed(s32 speed) -> void;
+  auto setZxLoadSpeed(s32 speed) -> void;
   auto setN64DebugLogging(bool enabled) -> void;
   auto saveState(const char* path) -> bool;
   auto loadState(const char* path) -> bool;
@@ -116,7 +117,6 @@ namespace ares {
   auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void;
   auto setKeyboardKey(const char* label, bool pressed) -> void;
   auto playTape() -> bool;
-  auto setTapeSpeed(s32 speed) -> void;
   auto setZxControlScheme(s32 scheme) -> void;
   auto setZxStickToKeys(bool enabled) -> void;
   auto setZxReversePitch(bool enabled) -> void;

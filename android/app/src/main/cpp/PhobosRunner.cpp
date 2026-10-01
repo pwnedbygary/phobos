@@ -828,6 +828,9 @@ namespace ares {
   // Settings > Emulation > Performance and the pause menu: how much faster than real time a Neo Geo
   // CD game runs while its drive reads data (1 = real time). The drive itself keeps its speed.
   static std::atomic<s32> ngcdLoadSpeed{1};
+  // The same for a ZX Spectrum game while a loader reads its tape. The tape plays at its real speed,
+  // so every loader, custom and protected ones included, sees the timing it expects.
+  static std::atomic<s32> zxLoadSpeed{1};
 
   // setValue() skips modify() when the value is unchanged, and the cores only turn interframe
   // blending on in modify(), so it is called either way.
@@ -1148,8 +1151,10 @@ namespace ares {
     auto lastFrameStart = frameDeadline;
     bool haveLastFrameStart = false;
     // Frames left of a Neo Geo CD load boost: it lasts half a second past the last data read, so
-    // it carries across the BIOS's short pauses between files.
+    // it carries across the BIOS's short pauses between files; a ZX tape's, half a second past the
+    // last loader read.
     u32 loadBoostFrames = 0;
+    s32 loadBoostSpeed = 1;
     emuThreadTid.store((s32)gettid(), std::memory_order_relaxed);
     // HUD history is per thread: the abandon and 64DD-reload paths replace the
     // thread without going through unloadSystem()'s clean-path reset.
@@ -1211,6 +1216,20 @@ namespace ares {
                     auto& cdd = ::ares::NeoGeo::cdd;
                     if ((cdd.statusCdc & 0x01) && (cdd.control & 0x0100)) loadBoostFrames = 30;
                     else if (loadBoostFrames) loadBoostFrames--;
+                    loadBoostSpeed = ngcdLoadSpeed.load(std::memory_order_relaxed);
+                } else if (isZxKeyboardSystem(localRoot->name())) {
+                    // While a loader reads the playing tape: loaders read its signal about a thousand
+                    // times a frame, games reading the keyboard a few dozen, so a game that starts
+                    // before its tape ends runs at its real speed. The reads are counted per frame at
+                    // every speed, so raising the speed mid-tape goes by this frame's. The hold
+                    // bridges the gaps between a tape's blocks.
+                    auto& deck = ::ares::ZXSpectrum::tapeDeck;
+                    bool loaderReading = deck.playing() && deck.reads > 200;
+                    deck.reads = 0;
+                    loadBoostSpeed = zxLoadSpeed.load(std::memory_order_relaxed);
+                    if (loadBoostSpeed <= 1) loadBoostFrames = 0;
+                    else if (loaderReading) loadBoostFrames = 25;
+                    else if (loadBoostFrames) loadBoostFrames--;
                 } else {
                     loadBoostFrames = 0;
                 }
@@ -1227,10 +1246,10 @@ namespace ares {
         bool spinWait = busyWaitPacing.load(std::memory_order_relaxed) && localRoot
           && localRoot->name() == "Nintendo 64";
 
-        // A Neo Geo CD load boost paces like fast forward, capped at the chosen speed.
+        // A load boost paces like fast forward, capped at the chosen speed.
         bool loadBoost = loadBoostFrames && !fastForwardAtomic;
         if (fastForwardAtomic || loadBoost) {
-            f64 speed = loadBoost ? (f64)ngcdLoadSpeed.load(std::memory_order_relaxed) : (f64)ffSpeedLimitAtomic;
+            f64 speed = loadBoost ? (f64)loadBoostSpeed : (f64)ffSpeedLimitAtomic;
             if (speed > 0.0) {
                 f64 targetFrameTime = (1000000.0 / refreshRate) / speed;
                 auto actualFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
@@ -3464,6 +3483,7 @@ else if (port->type() == "Keyboard") {
   auto setFastForward(bool enabled) -> void { fastForwardAtomic = enabled; LOGI("Fast forward %s", enabled ? "enabled" : "disabled"); }
   auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
   auto setNgcdLoadSpeed(s32 speed) -> void { ngcdLoadSpeed = std::max(1, speed); LOGI("Neo Geo CD loading speed set to %dx", std::max(1, speed)); }
+  auto setZxLoadSpeed(s32 speed) -> void { zxLoadSpeed = std::max(1, speed); LOGI("ZX Spectrum tape loading speed set to %dx", std::max(1, speed)); }
   auto setN64DebugLogging(bool enabled) -> void { n64DebugLoggingAtomic = enabled; LOGI("N64 debug logging %s", enabled ? "enabled" : "disabled"); }
   auto resetSystem() -> void {
     resetRequestedAtomic.store(true);
@@ -3972,15 +3992,6 @@ else if (port->type() == "Keyboard") {
     tape->play();
     LOGI("ZXTape: playing (len=%llu)", (unsigned long long)tape->length());
     return true;
-  }
-
-  // ZX Spectrum tape-speed multiplier (1 = real-time, 4/8 = faster loading).
-  auto setTapeSpeed(s32 speed) -> void {
-    if (!root || !isZxKeyboardSystem(root->name())) return;
-    auto tapes = root->find<Node::Tape>();
-    if (tapes.empty()) return;
-    tapes[0]->tapeSpeed = (u32)max(1, speed);
-    LOGI("ZXTape: speed set to %u", tapes[0]->tapeSpeed.load());
   }
 
   auto setNativeLibraryDir(const char* path) -> void { nativeLibraryDir = path ? (string)path : ""; LOGI("Native library dir set: %s", (const char*)nativeLibraryDir); }

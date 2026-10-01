@@ -435,11 +435,28 @@ fun NgcdLoadSpeedItem(current: Int, onSelect: (Int) -> Unit) {
         title = "Neo Geo CD Loading Speed",
         description = "Runs the game faster while the disc loads, up to this rate if the device keeps up. The emulated drive keeps its real speed.",
         current = current,
-        options = listOf(1, 2, 4, 8),
-        label = { if (it == 1) "Accurate (1x)" else "${it}x" },
+        options = LOAD_SPEEDS,
+        label = ::loadSpeedLabel,
         onSelect = onSelect,
     )
 }
+
+@Composable
+fun ZxLoadSpeedItem(current: Int, onSelect: (Int) -> Unit) {
+    SettingsDropdownItem(
+        title = "ZX Spectrum Tape Loading Speed",
+        description = "Runs the game faster while a tape plays, up to this rate if the device keeps up. The tape keeps its real speed, so every loader works.",
+        current = current,
+        options = LOAD_SPEEDS,
+        label = ::loadSpeedLabel,
+        onSelect = onSelect,
+    )
+}
+
+/** The speeds a game can run at while it loads (a Neo Geo CD's disc, a ZX Spectrum's tape). */
+val LOAD_SPEEDS = listOf(1, 2, 4, 8)
+
+fun loadSpeedLabel(speed: Int): String = if (speed == 1) "Accurate (1x)" else "${speed}x"
 
 @Composable
 fun RegionSelectorItem(currentPref: RegionPreference, onPrefSelected: (RegionPreference) -> Unit) {

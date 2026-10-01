@@ -122,7 +122,6 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     val density = LocalDensity.current
     var zxSymLatched by remember { mutableStateOf(false) }
     var zxCapsLatched by remember { mutableStateOf(false) }
-    var zxTurboTape by remember { mutableStateOf(false) }
     // The saved scheme is what loadRom applied natively.
     val zxControlScheme = viewModel.zxControlScheme(settings, systemName, romName)
     // ZX CUSTOM rebind target: keyboard key currently being bound (null = not rebinding).
@@ -414,7 +413,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                     .onSizeChanged { zxKeyboardHeight = with(density) { it.height.toDp() } },
                 symLatched = zxSymLatched, onSymLatched = { zxSymLatched = it },
                 capsLatched = zxCapsLatched, onCapsLatched = { zxCapsLatched = it },
-                turboTape = zxTurboTape, onTurboTape = { zxTurboTape = it },
+                loadSpeed = settings.zxLoadSpeed, onLoadSpeed = { viewModel.setZxLoadSpeed(it) },
                 controlScheme = zxControlScheme, onControlScheme = { viewModel.setZxControlScheme(systemName, romName, it) },
                 rebindTarget = zxRebindTarget, onRebindTarget = { zxRebindTarget = it },
                 onClose = { showKeyboard = false },
