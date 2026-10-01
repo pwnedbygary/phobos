@@ -1373,13 +1373,13 @@ class MainViewModel(
     val neoGeoRomLoadFailed: StateFlow<String?> = _neoGeoRomLoadFailed
     fun dismissNeoGeoRomLoadFailed() { _neoGeoRomLoadFailed.value = null }
 
-    // ZX tape-load progress: -1 = no tape, else (playing?10000:0)+pct*100.
-    // Polled ~10 Hz while a ZX game is loaded for the loading progress bar.
+    // ZX tape-load progress: -1 = no tape playing, else hundredths of a percent (0..10000).
+    // Polled ~10 Hz while a ZX game is loaded, for the keyboard's loading stripe.
     private val _zxTapeProgress = MutableStateFlow(-1)
     val zxTapeProgress: StateFlow<Int> = _zxTapeProgress
 
     init {
-        // Poll tape progress for the ZX loading overlay.
+        // Poll tape progress for the ZX keyboard's loading stripe.
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
                 val loaded = _isLoaded.value

@@ -115,7 +115,11 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     var controllerActive by remember { mutableStateOf(false) }
 
     // ZX Spectrum on-screen keyboard state, hoisted here so it survives hiding the keyboard.
+    val isZx = systemName.contains("ZX Spectrum", ignoreCase = true)
     var showKeyboard by remember { mutableStateOf(false) }
+    // The keyboard's height, kept clear of the game picture so the game stays in view above it.
+    var zxKeyboardHeight by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
     var zxSymLatched by remember { mutableStateOf(false) }
     var zxCapsLatched by remember { mutableStateOf(false) }
     var zxTurboTape by remember { mutableStateOf(false) }
@@ -371,6 +375,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             geometry = videoGeometry,
             systemName = systemName,
             alignTop = settings.showTouchControls,
+            bottomReserve = if (isLoaded && showKeyboard && isZx) zxKeyboardHeight else 0.dp,
             onTap = {
                 // With touch controls hidden for a controller, the first tap brings them back.
                 if (controllerActive && settings.showTouchControls && touchPrefs.hideOnController) controllerActive = false
@@ -399,29 +404,24 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             )
         }
 
-        // ── ZX Spectrum keyboard and tape progress ──────────────────────────
-        val isZx = systemName.contains("ZX Spectrum", ignoreCase = true)
+        // ── ZX Spectrum keyboard, whose rainbow stripe shows a loading tape's progress ──
+        // Progress = 0..10000 (percent * 100); -1 = no tape playing.
+        val tapeProgress by viewModel.zxTapeProgress.collectAsState()
         if (isLoaded && showKeyboard && isZx) {
             ZXKeyboardOverlay(
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .onSizeChanged { zxKeyboardHeight = with(density) { it.height.toDp() } },
                 symLatched = zxSymLatched, onSymLatched = { zxSymLatched = it },
                 capsLatched = zxCapsLatched, onCapsLatched = { zxCapsLatched = it },
                 turboTape = zxTurboTape, onTurboTape = { zxTurboTape = it },
                 controlScheme = zxControlScheme, onControlScheme = { viewModel.setZxControlScheme(systemName, romName, it) },
                 rebindTarget = zxRebindTarget, onRebindTarget = { zxRebindTarget = it },
+                onClose = { showKeyboard = false },
                 boundKeys = (settings.zxKeyBindings[systemName] ?: emptyMap()).keys,
                 keyboardOpacity = settings.zxKeyboardOpacity,
+                tapeProgress = tapeProgress.takeIf { it >= 0 }?.let { it / 10000f },
             )
-        }
-        if (isLoaded && isZx) {
-            // Progress = 0..10000 (percent * 100); -1 = no tape playing.
-            val tapeProgress by viewModel.zxTapeProgress.collectAsState()
-            if (tapeProgress >= 0) {
-                ZxTapeProgressBar(
-                    percent = tapeProgress / 100f,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 10.dp).fillMaxWidth(0.75f),
-                )
-            }
         }
 
         // ── Performance HUD (MangoHud-style, draggable) ─────────────────────
@@ -490,7 +490,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 /**
  * The emulator's SurfaceView, sized by the aspect-ratio setting from the core's reported
  * [geometry] (4:3 / 320x240 until the first frame). With touch controls enabled the picture sits
- * at the top in portrait so the controls get the lower part of the screen.
+ * at the top in portrait so the controls get the lower part of the screen. [bottomReserve] is
+ * kept free below the picture, which then sits at the top (the ZX Spectrum keyboard).
  */
 @Composable
 private fun GamePicture(
@@ -499,6 +500,7 @@ private fun GamePicture(
     geometry: VideoGeometry?,
     systemName: String,
     alignTop: Boolean,
+    bottomReserve: Dp,
     onTap: () -> Unit,
 ) {
     val currentOnTap by rememberUpdatedState(onTap)
@@ -512,8 +514,9 @@ private fun GamePicture(
             .pointerInput(Unit) { detectTapGestures(onTap = { currentOnTap() }) },
     ) {
         val portrait = maxHeight > maxWidth
-        val topInset = if (portrait && alignTop) cutoutTop else 0.dp
-        val availableHeight = maxHeight - topInset
+        val atTop = (portrait && alignTop) || bottomReserve > 0.dp
+        val topInset = if (atTop) cutoutTop else 0.dp
+        val availableHeight = maxOf(maxHeight - topInset - bottomReserve, 1.dp)
         val baseWidth = geometry?.width ?: 320f
         val baseHeight = geometry?.height ?: 240f
         val ratio = baseWidth / baseHeight
@@ -547,7 +550,7 @@ private fun GamePicture(
                 }
             },
             modifier = Modifier
-                .align(if (portrait && alignTop) Alignment.TopCenter else Alignment.Center)
+                .align(if (atTop) Alignment.TopCenter else Alignment.Center)
                 .padding(top = topInset)
                 .size(width, height),
         )

@@ -1,34 +1,44 @@
 package com.phobos.emulator.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.res.Configuration
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.PhobosCore
@@ -36,16 +46,19 @@ import com.phobos.emulator.util.ZX_SCHEMES
 import com.phobos.emulator.util.zxScheme
 import kotlinx.coroutines.delay
 
-// On-screen ZX Spectrum 48K keyboard, styled after the classic layout
-// (torinak.com/qaop/keyboard). Keys map to the core's Keyboard matrix labels
-// via setKeyboardKey(). Each press HOLDS ~60ms so the core's per-frame poll
-// (50 Hz) sees it; visual highlight + haptic on every press.
+// On-screen ZX Spectrum 48K keyboard, laid out and labelled like the real one
+// (torinak.com/qaop/keyboard): four rows of ten keys, each with its letter, its red
+// SYMBOL SHIFT symbol and its BASIC keyword (on the number keys, what CAPS SHIFT does).
+// Keys map to the core's Keyboard matrix labels via setKeyboardKey(). Each press HOLDS
+// ~60ms so the core's per-frame poll (50 Hz) sees it; visual highlight + haptic on
+// every press.
 //
 // SHIFT behavior:
 //  - SYMBOL SHIFT is LATCHING: tap to hold (keys show their symbols), tap
 //    again to release (keys revert to letters). While latched, the pressed
 //    key's value goes through the matrix with SYMBOL SHIFT held.
-//  - CAPS SHIFT is also latching (held until tapped again).
+//  - CAPS SHIFT is also latching (held until tapped again); the number keys
+//    then show what they do with it.
 
 private val ROW1 = listOf("1","2","3","4","5","6","7","8","9","0")
 private val ROW2 = listOf("Q","W","E","R","T","Y","U","I","O","P")
@@ -59,11 +72,13 @@ private val CAPS = "CAPS SHIFT"
 
 // Authentic ZX palette
 private val Chassis = Color(0xFF1F1B1B)
-private val KeyTop = Color(0xFF7A7D80)
-private val KeyBottom = Color(0xFF575A5C)
+private val KeyTop = Color(0xFF6E7176)
+private val KeyBottom = Color(0xFF4B4E52)
 private val KeyBorder = Color(0xFF000000)
 private val KeyPressed = Color(0xFF9CD2FF)   // bright feedback on press
-private val SymColor = Color(0xFF9CD2FF)     // symbol text when SYM latched
+private val SymbolRed = Color(0xFFFF6B5E)    // the keys' red SYMBOL SHIFT legends
+private val KeywordGray = Color(0xFFD0D3D7)
+private val StripeUnloaded = Color(0xFF8A8C8F) // the stripe still to fill while a tape loads
 
 // ZX Spectrum rainbow: red -> yellow -> green -> blue
 private val Rainbow = Brush.horizontalGradient(
@@ -75,16 +90,41 @@ private val Rainbow = Brush.horizontalGradient(
     )
 )
 
-// SYMBOL SHIFT + key -> symbol (authentic ZX Spectrum 48K layout).
+// A plain face for the legends: the themes' display fonts can make C, O and 0 or B and 8 look alike.
+private val LegendFont = FontFamily.SansSerif
+
+// SYMBOL SHIFT + key, as the 48K types it.
 private val ZXSymbols = mapOf(
-    "1" to "!", "2" to "\"", "3" to "#", "4" to "$", "5" to "%",
+    "1" to "!", "2" to "@", "3" to "#", "4" to "$", "5" to "%",
     "6" to "&", "7" to "'", "8" to "(", "9" to ")", "0" to "_",
-    "Q" to "!", "W" to "?", "E" to "£", "R" to "<", "T" to ">",
-    "Y" to "←", "U" to "↑", "I" to "↓", "O" to "→", "P" to "\"",
-    "A" to "[", "S" to "]", "D" to "$", "F" to ";", "G" to ":",
-    "H" to "=", "J" to "+", "K" to "-", "L" to "*",
-    "Z" to "\\", "X" to "\"", "C" to "?", "V" to "/", "B" to "^",
+    "Q" to "<=", "W" to "<>", "E" to ">=", "R" to "<", "T" to ">",
+    "Y" to "AND", "U" to "OR", "I" to "AT", "O" to ";", "P" to "\"",
+    "A" to "STOP", "S" to "NOT", "D" to "STEP", "F" to "TO", "G" to "THEN",
+    "H" to "↑", "J" to "-", "K" to "+", "L" to "=",
+    "Z" to ":", "X" to "£", "C" to "?", "V" to "/", "B" to "*",
     "N" to ",", "M" to ".",
+)
+
+// The keyword each letter types at the start of a line, and what CAPS SHIFT does with each number.
+private val ZXKeywords = mapOf(
+    "1" to "EDIT", "2" to "CAPS LOCK", "3" to "TRUE VID", "4" to "INV VID", "5" to "←",
+    "6" to "↓", "7" to "↑", "8" to "→", "9" to "GRAPH", "0" to "DELETE",
+    "Q" to "PLOT", "W" to "DRAW", "E" to "REM", "R" to "RUN", "T" to "RAND",
+    "Y" to "RETURN", "U" to "IF", "I" to "INPUT", "O" to "POKE", "P" to "PRINT",
+    "A" to "NEW", "S" to "SAVE", "D" to "DIM", "F" to "FOR", "G" to "GO TO",
+    "H" to "GO SUB", "J" to "LOAD", "K" to "LIST", "L" to "LET",
+    "Z" to "COPY", "X" to "CLEAR", "C" to "CONT", "V" to "CLS", "B" to "BORDER",
+    "N" to "NEXT", "M" to "PAUSE", SPACE to "BREAK",
+)
+
+// What every key on the keyboard shares: its size, the shift latches and the CUSTOM rebinding.
+private class KeyboardState(
+    val keyHeight: Dp,
+    val symLatched: Boolean,
+    val capsLatched: Boolean,
+    val rebindTarget: String?,
+    val boundKeys: Set<String>,
+    val onLongPressRebind: ((String) -> Unit)?,
 )
 
 @Composable
@@ -102,8 +142,11 @@ fun ZXKeyboardOverlay(
     onControlScheme: (Int) -> Unit,
     rebindTarget: String?,
     onRebindTarget: (String?) -> Unit,
+    onClose: () -> Unit,
     boundKeys: Set<String> = emptySet(),
-    keyboardOpacity: Float = 1.0f
+    keyboardOpacity: Float = 1.0f,
+    // How far a playing tape has loaded, 0 to 1; null when no tape plays.
+    tapeProgress: Float? = null
 ) {
     // CUSTOM rebinding: the next controller button is captured by EmulatorScreen's key handler,
     // which sees keys before this overlay could.
@@ -114,155 +157,165 @@ fun ZXKeyboardOverlay(
     val longPressRebind: ((String) -> Unit)? = if (rebindEnabled) { label ->
         onRebindTarget(label)
     } else null
+    // Landscape leaves the game little height above the keyboard, so the keys are shorter there.
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val state = KeyboardState(
+        keyHeight = if (landscape) 38.dp else 48.dp,
+        symLatched = symLatched,
+        capsLatched = capsLatched,
+        rebindTarget = rebindTarget,
+        boundKeys = boundKeys,
+        onLongPressRebind = longPressRebind,
+    )
+    val macroHeight = if (landscape) 32.dp else 40.dp
+    val clearShifts = {
+        PhobosCore.setKeyboardKey(SHIFT, false)
+        PhobosCore.setKeyboardKey(CAPS, false)
+        onSymLatched(false)
+        onCapsLatched(false)
+    }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .graphicsLayer { alpha = keyboardOpacity }
-            .background(Chassis)
-            .padding(bottom = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        // Rainbow stripe + ZX SPECTRUM wordmark
-        Box(
-            modifier = Modifier
+    CompositionLocalProvider(LocalTextStyle provides TextStyle(fontFamily = LegendFont)) {
+        Column(
+            modifier = modifier
                 .fillMaxWidth()
-                .height(34.dp)
-                .background(Rainbow),
-            contentAlignment = Alignment.CenterStart
+                .graphicsLayer { alpha = keyboardOpacity }
+                .background(Chassis)
+                .padding(bottom = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(
-                text = "ZX SPECTRUM",
-                color = Color.Black,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Black,
-                fontStyle = FontStyle.Italic,
-                letterSpacing = 2.sp,
-                modifier = Modifier.padding(start = 14.dp)
-            )
-        }
-
-        // Macro row: one-tap LOAD "" + CLS + CLEAR
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            MacroKey(
-                label = "LOAD \"\"",
-                weight = 3f,
-                // Full LOAD "" = J (LOAD), then SYM+P (quote), SYM+P (quote),
-                // then ENTER. The quotes are REQUIRED — LOAD + ENTER alone
-                // re-prompts "Program:" and waits.
-                // MUST clear any latched shift first: if SYM/CAPS is stuck on,
-                // J types "-" (SYM+J) instead of LOAD.
-                steps = listOf(
-                    listOf("J"),
-                    listOf(SHIFT, "P"),
-                    listOf(SHIFT, "P"),
-                    listOf("ENTER"),
-                ),
-                // After ENTER, the ROM waits for the tape signal — start the
-                // tape playback. Turbo toggle: 2x when enabled (faster loads),
-                // 1x real-time when off (always safe).
-                onAfterSteps = {
-                    PhobosCore.setTapeSpeed(if (turboTape) 2 else 1)
-                    PhobosCore.playTape()
-                },
-                onClearShifts = {
-                    PhobosCore.setKeyboardKey(SHIFT, false)
-                    PhobosCore.setKeyboardKey(CAPS, false)
-                    onSymLatched(false)
-                    onCapsLatched(false)
+            // Rainbow stripe, wordmark and the button that puts the keyboard away. While a tape plays,
+            // the stripe is its progress bar: the rainbow fills in from the left as the tape loads.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(26.dp)
+                    .drawBehind {
+                        if (tapeProgress == null) {
+                            drawRect(Rainbow)
+                        } else {
+                            val loaded = size.width * tapeProgress.coerceIn(0f, 1f)
+                            drawRect(StripeUnloaded)
+                            clipRect(right = loaded) { drawRect(Rainbow) }
+                            // The tape's read position.
+                            val edge = 2.dp.toPx()
+                            drawRect(Color.White.copy(alpha = 0.85f), topLeft = Offset(loaded - edge, 0f), size = Size(edge, size.height))
+                        }
+                    },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "ZX Spectrum",
+                    color = Color.Black,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black,
+                    fontStyle = FontStyle.Italic,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.padding(start = 14.dp).weight(1f)
+                )
+                if (tapeProgress != null) {
+                    Text(
+                        text = "Loading ${(tapeProgress * 100).toInt()}%",
+                        color = Color.Black,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
                 }
-            )
-            MacroKey(
-                label = "CLS",
-                weight = 1.5f,
-                // CAPS SHIFT + 1 = CLS (clear screen).
-                steps = listOf(listOf(CAPS, "1")),
-                onClearShifts = {
-                    PhobosCore.setKeyboardKey(SHIFT, false)
-                    PhobosCore.setKeyboardKey(CAPS, false)
-                    onSymLatched(false)
-                    onCapsLatched(false)
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(56.dp)
+                        .pointerInput(Unit) { detectTapGestures(onTap = { onClose() }) }
+                ) {
+                    Icon(Icons.Default.KeyboardHide, contentDescription = "Hide the keyboard", tint = Color.Black, modifier = Modifier.size(20.dp))
                 }
-            )
-            // TURBO tape toggle: 1x (real-time) <-> 2x (faster loads).
-            ToggleKey(
-                label = "TURBO",
-                weight = 1.5f,
-                active = turboTape,
-                onToggle = { onTurboTape(it) }
-            )
-            // The game's scheme, picked from a list. CUSTOM (4) uses only the per-key rebind map;
-            // the presets stay pristine.
-            SchemeKey(
-                scheme = controlScheme,
-                weight = 2f,
-                onSelect = onControlScheme,
-            )
-        }
+            }
 
-        KeyboardRow(ROW1, labelSize = 15.sp, padStart = 0.65f, padEnd = 0.65f, symLatched = symLatched,
-            rebindTarget = rebindTarget, isBound = { boundKeys.contains(it) },
-            onLongPressRebind = longPressRebind)
-        KeyboardRow(ROW2, labelSize = 15.sp, padStart = 0.65f, padEnd = 0.65f, symLatched = symLatched,
-            rebindTarget = rebindTarget, isBound = { boundKeys.contains(it) },
-            onLongPressRebind = longPressRebind)
-        // Row 3: CAPS SHIFT + A-L + ENTER
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Key(
-                label = CAPS,
-                weight = 1.6f, labelSize = 11.sp,
-                symLatched = symLatched,
-                onSymToggle = {},
-                latched = capsLatched,
-                onLatchChange = { onCapsLatched(it) },
-                rebindTarget = rebindTarget, isBound = boundKeys.contains(CAPS),
-                onLongPressRebind = longPressRebind
-            )
-            ROW3.forEach {
-                Key(it, weight = 1f, labelSize = 15.sp, symLatched = symLatched, onSymToggle = {},
-                    rebindTarget = rebindTarget, isBound = boundKeys.contains(it),
-                    onLongPressRebind = longPressRebind)
+            // Macro row: one-tap LOAD "", DELETE and BREAK, the tape speed and the control scheme
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MacroKey(
+                    label = "LOAD \"\"",
+                    weight = 2.5f,
+                    height = macroHeight,
+                    // Full LOAD "" = J (LOAD), then SYM+P (quote), SYM+P (quote),
+                    // then ENTER. The quotes are REQUIRED — LOAD + ENTER alone
+                    // re-prompts "Program:" and waits.
+                    // MUST clear any latched shift first: if SYM/CAPS is stuck on,
+                    // J types "-" (SYM+J) instead of LOAD.
+                    steps = listOf(
+                        listOf("J"),
+                        listOf(SHIFT, "P"),
+                        listOf(SHIFT, "P"),
+                        listOf("ENTER"),
+                    ),
+                    // After ENTER, the ROM waits for the tape signal — start the
+                    // tape playback. Turbo toggle: 2x when enabled (faster loads),
+                    // 1x real-time when off (always safe).
+                    onAfterSteps = {
+                        PhobosCore.setTapeSpeed(if (turboTape) 2 else 1)
+                        PhobosCore.playTape()
+                    },
+                    onClearShifts = clearShifts
+                )
+                // DELETE = CAPS SHIFT + 0 and BREAK = CAPS SHIFT + SPACE, as on the real keyboard.
+                ChordKey(listOf(CAPS, "0"), weight = 1.5f, height = macroHeight, label = "DELETE")
+                ChordKey(listOf(CAPS, SPACE), weight = 1.5f, height = macroHeight, label = "BREAK")
+                // TURBO tape toggle: 1x (real-time) <-> 2x (faster loads).
+                ToggleKey(
+                    label = "TURBO",
+                    weight = 1.5f,
+                    height = macroHeight,
+                    active = turboTape,
+                    onToggle = { onTurboTape(it) }
+                )
+                // The game's scheme, picked from a list. CUSTOM (4) uses only the per-key rebind map;
+                // the presets stay pristine.
+                SchemeKey(
+                    scheme = controlScheme,
+                    weight = 2f,
+                    height = macroHeight,
+                    onSelect = onControlScheme,
+                )
             }
-            Key(ENTER, weight = 1.6f, labelSize = 11.sp, symLatched = symLatched, onSymToggle = {},
-                rebindTarget = rebindTarget, isBound = boundKeys.contains(ENTER),
-                onLongPressRebind = longPressRebind)
-        }
-        // Row 4: SYMBOL SHIFT + Z-M + SPACE
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Key(
-                label = SHIFT,
-                weight = 1.6f, labelSize = 11.sp,
-                symLatched = symLatched,
-                onSymToggle = { onSymLatched(it) },
-                latched = symLatched,
-                onLatchChange = { onSymLatched(it) },
-                rebindTarget = rebindTarget, isBound = boundKeys.contains(SHIFT),
-                onLongPressRebind = longPressRebind
-            )
-            ROW4.forEach {
-                Key(it, weight = 1f, labelSize = 15.sp, symLatched = symLatched, onSymToggle = {},
-                    rebindTarget = rebindTarget, isBound = boundKeys.contains(it),
-                    onLongPressRebind = longPressRebind)
+
+            // The 48K's four rows of ten, offset row by row as on the real keyboard.
+            KeyRow(padEnd = 0.5f) {
+                ROW1.forEach { Key(it, state) }
             }
-            Key(SPACE, weight = 2.6f, labelSize = 11.sp, symLatched = symLatched, onSymToggle = {},
-                rebindTarget = rebindTarget, isBound = boundKeys.contains(SPACE),
-                onLongPressRebind = longPressRebind)
-            // BACK = CAPS SHIFT + 0 (authentic ZX DELETE). Chord both keys.
-            ChordKey(listOf(CAPS, "0"), weight = 1.4f, label = "BACK", labelSize = 11.sp)
+            KeyRow(padStart = 0.5f) {
+                ROW2.forEach { Key(it, state) }
+            }
+            KeyRow(padStart = 0.25f) {
+                ROW3.forEach { Key(it, state) }
+                Key(ENTER, state, weight = 1.25f)
+            }
+            KeyRow {
+                Key(CAPS, state, weight = 1.25f, latched = capsLatched, onLatchChange = { onCapsLatched(it) })
+                ROW4.forEach { Key(it, state) }
+                Key(SHIFT, state, latched = symLatched, onLatchChange = { onSymLatched(it) })
+                Key(SPACE, state, weight = 1.25f)
+            }
         }
+    }
+}
+
+@Composable
+private fun KeyRow(padStart: Float = 0f, padEnd: Float = 0f, keys: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (padStart > 0f) Spacer(modifier = Modifier.weight(padStart))
+        keys()
+        if (padEnd > 0f) Spacer(modifier = Modifier.weight(padEnd))
     }
 }
 
@@ -270,8 +323,8 @@ fun ZXKeyboardOverlay(
 private fun RowScope.ChordKey(
     keys: List<String>,
     weight: Float,
-    label: String,
-    labelSize: TextUnit
+    height: Dp,
+    label: String
 ) {
     val haptic = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
@@ -280,19 +333,19 @@ private fun RowScope.ChordKey(
 
     val shape = RoundedCornerShape(6.dp)
     val bgModifier = if (active) {
-        Modifier.background(KeyPressed, shape)
+        Modifier.background(Color(0xFF3D7EDB), shape)
     } else {
-        Modifier.background(Brush.verticalGradient(listOf(KeyTop, KeyBottom), 0f, 50f), shape)
+        Modifier.background(Brush.verticalGradient(listOf(Color(0xFF4A6FA5), Color(0xFF2E4E7A)), 0f, 50f), shape)
     }
 
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .weight(weight)
-            .height(44.dp)
-            .graphicsLayer { scaleX = if (pressed) 0.92f else 1f; scaleY = if (pressed) 0.92f else 1f }
+            .height(height)
+            .graphicsLayer { scaleX = if (pressed) 0.94f else 1f; scaleY = if (pressed) 0.94f else 1f }
             .then(bgModifier)
-            .border(1.5.dp, KeyBorder, shape)
+            .border(1.5.dp, if (active) Color.White else Color(0xFF1E3A5F), shape)
             .pointerInput(keys) {
                 detectTapGestures(
                     onPress = {
@@ -311,7 +364,7 @@ private fun RowScope.ChordKey(
                 )
             }
     ) {
-        Text(label, color = Color.White, fontSize = labelSize, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -319,6 +372,7 @@ private fun RowScope.ChordKey(
 private fun RowScope.ToggleKey(
     label: String,
     weight: Float,
+    height: Dp,
     active: Boolean,
     onToggle: (Boolean) -> Unit
 ) {
@@ -339,7 +393,7 @@ private fun RowScope.ToggleKey(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .weight(weight)
-            .height(40.dp)
+            .height(height)
             .graphicsLayer { scaleX = if (pressed) 0.94f else 1f; scaleY = if (pressed) 0.94f else 1f }
             .then(bgMod)
             .border(1.5.dp, if (active) Color.White else Color(0xFF1E3A5F), shape)
@@ -363,6 +417,7 @@ private fun RowScope.ToggleKey(
 private fun RowScope.SchemeKey(
     scheme: Int,
     weight: Float,
+    height: Dp,
     onSelect: (Int) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
@@ -380,7 +435,7 @@ private fun RowScope.SchemeKey(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .weight(weight)
-            .height(40.dp)
+            .height(height)
             .graphicsLayer { scaleX = if (pressed) 0.94f else 1f; scaleY = if (pressed) 0.94f else 1f }
             .then(bgMod)
             .border(1.5.dp, if (active) Color.White else Color(0xFF1E3A5F), shape)
@@ -413,6 +468,7 @@ private fun RowScope.SchemeKey(
 private fun RowScope.MacroKey(
     label: String,
     weight: Float,
+    height: Dp,
     steps: List<List<String>>,
     onAfterSteps: () -> Unit = {},
     onClearShifts: () -> Unit = {}
@@ -439,7 +495,7 @@ private fun RowScope.MacroKey(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .weight(weight)
-            .height(40.dp)
+            .height(height)
             .graphicsLayer { scaleX = if (pressed) 0.94f else 1f; scaleY = if (pressed) 0.94f else 1f }
             .then(bgModifier)
             .border(1.5.dp, if (active) Color.White else Color(0xFF1E3A5F), shape)
@@ -478,85 +534,70 @@ private fun RowScope.MacroKey(
 }
 
 @Composable
-private fun KeyboardRow(
-    keys: List<String>,
-    labelSize: TextUnit,
-    padStart: Float,
-    padEnd: Float,
-    symLatched: Boolean,
-    rebindTarget: String? = null,
-    isBound: (String) -> Boolean = { false },
-    onLongPressRebind: ((String) -> Unit)? = null
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Edge pads replicate the real keyboard's offset key columns.
-        Spacer(modifier = Modifier.weight(padStart))
-        keys.forEach {
-            Key(it, weight = 1f, labelSize = labelSize, symLatched = symLatched,
-                onSymToggle = {}, rebindTarget = rebindTarget, isBound = isBound(it),
-                onLongPressRebind = onLongPressRebind)
-        }
-        Spacer(modifier = Modifier.weight(padEnd))
-    }
-}
-
-@Composable
 private fun RowScope.Key(
     label: String,
-    weight: Float,
-    labelSize: TextUnit,
-    symLatched: Boolean,
-    onSymToggle: (Boolean) -> Unit,
+    state: KeyboardState,
+    weight: Float = 1f,
     latched: Boolean = false,
-    onLatchChange: (Boolean) -> Unit = {},
-    rebindTarget: String? = null,
-    isBound: Boolean = false,
-    onLongPressRebind: ((String) -> Unit)? = null
+    onLatchChange: (Boolean) -> Unit = {}
 ) {
     val haptic = LocalHapticFeedback.current
     // Read at gesture time: the callback turns on and off with the CUSTOM scheme.
-    val currentOnLongPressRebind by rememberUpdatedState(onLongPressRebind)
+    val currentOnLongPressRebind by rememberUpdatedState(state.onLongPressRebind)
 
     var pressed by remember { mutableStateOf(false) }
     var flash by remember { mutableStateOf(false) }
-    // Pulsing while this key is the rebind target (waiting for a gamepad control).
-    var pulse by remember { mutableStateOf(false) }
     // Track whether THIS key is the active rebind target.
-    val isRebindTarget = label == rebindTarget
+    val isRebindTarget = label == state.rebindTarget
+    val isBound = label in state.boundKeys
 
     // rememberUpdatedState keeps the gesture handler reading the CURRENT
-    // latched/symLatched values on every tap (pointerInput keys on `label`
-    // only, so without this the closure captures the initial value and shift
-    // keys never toggle OFF).
+    // latched value on every tap (pointerInput keys on `label` only, so
+    // without this the closure captures the initial value and shift keys
+    // never toggle OFF).
     val currentLatched by rememberUpdatedState(latched)
     val currentIsRebindTarget by rememberUpdatedState(isRebindTarget)
 
     val isShift = label == CAPS || label == SHIFT
-    val isSymbolKey = label in ZXSymbols
     // A latched shift is "active" and shown highlighted. The rebind-target key
     // pulses (active + border glow) while waiting for a gamepad control.
     val active = pressed || flash || latched || currentIsRebindTarget
 
-    // Pulse animation for the key being rebound: drive `pulse` via an infinite
-    // transition when this key is the target.
+    // Pulse animation for the key being rebound.
     val transition = rememberInfiniteTransition()
     val pulseAlpha by transition.animateFloat(
         initialValue = 1f, targetValue = 0.4f,
         animationSpec = infiniteRepeatable(tween(400), RepeatMode.Reverse)
     )
 
-    // Show the symbol when SYM is latched; letters/caps otherwise.
-    val display = when {
+    val symbol = ZXSymbols[label]
+    val keyword = ZXKeywords[label]
+    val digit = label.length == 1 && label[0].isDigit()
+    val showingSymbol = state.symLatched && symbol != null
+    val showingCapsFunction = state.capsLatched && !showingSymbol && digit && keyword != null
+    // The big legend is what the key types now: its symbol while SYMBOL SHIFT is latched,
+    // a number's CAPS SHIFT function while CAPS SHIFT is.
+    val main = when {
+        label == CAPS -> "CAPS\nSHIFT"
+        label == SHIFT -> "SYMBOL\nSHIFT"
         label == SPACE -> "SPACE"
-        label == ENTER -> "ENTER"
-        label == CAPS -> "CAPS"
-        label == SHIFT -> "SYM"
-        isSymbolKey && symLatched -> ZXSymbols[label]!!
+        showingSymbol -> symbol!!
+        showingCapsFunction -> keyword!!
         else -> label
+    }
+    // The small legends: the symbol (or the letter, while the symbol is the big one) in the
+    // corner, the keyword along the bottom.
+    val corner = if (showingSymbol) label else symbol
+    val bottom = if (showingCapsFunction) null else keyword
+    val mainColor = when {
+        showingSymbol || label == SHIFT -> SymbolRed
+        else -> Color.White
+    }
+    val mainSize = when {
+        main.contains('\n') -> 9.sp
+        main.length == 1 -> 17.sp
+        main.length <= 3 -> 14.sp
+        else -> 10.sp
     }
 
     val keyBrush = Brush.verticalGradient(
@@ -576,10 +617,9 @@ private fun RowScope.Key(
     }
 
     Box(
-        contentAlignment = Alignment.Center,
         modifier = Modifier
             .weight(weight)
-            .height(44.dp)
+            .height(state.keyHeight)
             .graphicsLayer {
                 scaleX = if (pressed) 0.92f else 1f
                 scaleY = if (pressed) 0.92f else 1f
@@ -605,7 +645,6 @@ private fun RowScope.Key(
                         if (isShift) {
                             // Latching shift: toggle held state.
                             val newLatched = !currentLatched
-                            if (label == SHIFT) onSymToggle(newLatched)
                             onLatchChange(newLatched)
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             PhobosCore.setKeyboardKey(label, newLatched)
@@ -632,18 +671,39 @@ private fun RowScope.Key(
             }
     ) {
         Text(
-            text = display,
-            color = if (isSymbolKey && symLatched) SymColor else Color.White,
-            fontSize = labelSize,
+            text = main,
+            color = if (active && !currentIsRebindTarget) Color.Black else mainColor,
+            fontSize = mainSize,
+            lineHeight = mainSize,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
-            maxLines = 1
+            maxLines = 2,
+            modifier = Modifier.align(Alignment.Center).padding(bottom = if (bottom != null) 7.dp else 0.dp)
         )
+        if (corner != null) {
+            Text(
+                text = corner,
+                color = if (showingSymbol) Color.White else SymbolRed,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = 4.dp)
+            )
+        }
+        if (bottom != null) {
+            Text(
+                text = bottom,
+                color = KeywordGray,
+                fontSize = 7.5.sp,
+                maxLines = 1,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp)
+            )
+        }
         // Bound-key indicator: a small dot in the corner (CUSTOM mode).
         if (isBound) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
+                    .align(Alignment.TopStart)
                     .padding(3.dp)
                     .size(5.dp)
                     .background(Color(0xFF4CAF50), RoundedCornerShape(3.dp))
