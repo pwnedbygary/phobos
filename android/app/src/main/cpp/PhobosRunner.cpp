@@ -439,7 +439,9 @@ namespace ares {
 
   // ZX gamepad control scheme: maps the gamepad (VirtualGamepad bits) onto
   // keyboard keys for games that don't support Kempston.
-  // 0 = none (Kempston only), 1 = QAOP+Space, 2 = ZXZX+Space, 3 = ELITE.
+  // 0 = none (Kempston only), 1 = Q/P + Space (Manic Miner), 2 = Z/X + Space,
+  // 3 = ELITE, 4 = CUSTOM, 5 = Sinclair 1, 6 = Sinclair 2, 7 = Cursor,
+  // 8 = QAOP + Space.
   static std::atomic<s32> zxControlScheme{0};
   // ZX scheme-translation toggles (Layer 2 — orthogonal to per-core rebinding
   // which lives at Layer 1: physical input → VirtualGamepad bits).
@@ -468,10 +470,41 @@ namespace ares {
     // Start button -> ENTER (all schemes).
     if (bit == VirtualGamepad::Start) add("ENTER");
     switch (scheme) {
-      case 1: // QAOP + Space
+      case 1: // Q/P + Space: Manic Miner's left, right and jump
         if (bit == VirtualGamepad::Left)  add("Q");
         if (bit == VirtualGamepad::Right) add("P");
         if (bit == VirtualGamepad::A)     add("SPACE BREAK");
+        break;
+      // The Sinclair Interface 2 and Cursor joysticks are wired to number keys, so games
+      // read them as the keyboard.
+      case 5: // Sinclair 1: Interface 2's left port, keys 6-0
+        if (bit == VirtualGamepad::Left)  add("6");
+        if (bit == VirtualGamepad::Right) add("7");
+        if (bit == VirtualGamepad::Down)  add("8");
+        if (bit == VirtualGamepad::Up)    add("9");
+        if (bit == VirtualGamepad::A)     add("0");
+        break;
+      case 6: // Sinclair 2: Interface 2's right port, keys 1-5
+        if (bit == VirtualGamepad::Left)  add("1");
+        if (bit == VirtualGamepad::Right) add("2");
+        if (bit == VirtualGamepad::Down)  add("3");
+        if (bit == VirtualGamepad::Up)    add("4");
+        if (bit == VirtualGamepad::A)     add("5");
+        break;
+      case 7: // Cursor (Protek, AGF): the arrow keys 5-8, fire on 0
+        if (bit == VirtualGamepad::Left)  add("5");
+        if (bit == VirtualGamepad::Down)  add("6");
+        if (bit == VirtualGamepad::Up)    add("7");
+        if (bit == VirtualGamepad::Right) add("8");
+        if (bit == VirtualGamepad::A)     add("0");
+        break;
+      case 8: // QAOP + Space, with M on B: the usual keys of games without joystick support
+        if (bit == VirtualGamepad::Up)    add("Q");
+        if (bit == VirtualGamepad::Down)  add("A");
+        if (bit == VirtualGamepad::Left)  add("O");
+        if (bit == VirtualGamepad::Right) add("P");
+        if (bit == VirtualGamepad::A)     add("SPACE BREAK");
+        if (bit == VirtualGamepad::B)     add("M");
         break;
       case 2: // ZXZX + Space
         if (bit == VirtualGamepad::Left)  add("Z");
@@ -3852,8 +3885,7 @@ else if (port->type() == "Keyboard") {
       }
   }
 
-  // ZX gamepad control scheme setter
-  // (0 = Kempston, 1 = QAOP, 2 = ZXZX, 3 = ELITE, 4 = CUSTOM).
+  // ZX gamepad control scheme setter (the ids zxControlScheme lists).
   auto setZxControlScheme(s32 scheme) -> void {
       zxControlScheme = scheme;
       LOGI("ZX control scheme set to %d", scheme);

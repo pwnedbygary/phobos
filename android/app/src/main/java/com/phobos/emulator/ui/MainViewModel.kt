@@ -345,9 +345,13 @@ class MainViewModel(
         noticeN64SettingDeferred(N64_APPLIES_ON_RELOAD)
     }
 
-    // ZX per-core control scheme + rebinds (Layer 2.5 — the CUSTOM scheme).
-    fun setZxControlScheme(system: String, scheme: Int) = viewModelScope.launch(Dispatchers.IO) {
-        settingsStore.setZxControlScheme(system, scheme)
+    /** A ZX game's control scheme: the game's own, else its system's, else Kempston. */
+    fun zxControlScheme(settings: EmulatorSettings, system: String, game: String): Int =
+        settings.zxControlScheme["$system/$game"] ?: settings.zxControlScheme[system] ?: 0
+
+    // ZX control scheme per game, rebinds per core (Layer 2.5 — the CUSTOM scheme).
+    fun setZxControlScheme(system: String, game: String, scheme: Int) = viewModelScope.launch(Dispatchers.IO) {
+        settingsStore.setZxControlScheme("$system/$game", scheme)
         PhobosCore.setZxControlScheme(scheme)
     }
     fun setZxStickToKeys(system: String, enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) {
@@ -2605,7 +2609,7 @@ class MainViewModel(
 
             // ZX per-core control scheme + rebinds + toggles (keyboard cores).
             if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true)) {
-                PhobosCore.setZxControlScheme(currentSettings.zxControlScheme[effectiveSystem] ?: 0)
+                PhobosCore.setZxControlScheme(zxControlScheme(currentSettings, effectiveSystem, rom.name))
                 PhobosCore.setZxStickToKeys(currentSettings.zxStickToKeys[effectiveSystem] ?: false)
                 PhobosCore.setZxReversePitch(currentSettings.zxReversePitch[effectiveSystem] ?: false)
                 val binds = currentSettings.zxKeyBindings[effectiveSystem] ?: emptyMap()

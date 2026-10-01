@@ -10,6 +10,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,6 +32,8 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.PhobosCore
+import com.phobos.emulator.util.ZX_SCHEMES
+import com.phobos.emulator.util.zxScheme
 import kotlinx.coroutines.delay
 
 // On-screen ZX Spectrum 48K keyboard, styled after the classic layout
@@ -189,16 +196,12 @@ fun ZXKeyboardOverlay(
                 active = turboTape,
                 onToggle = { onTurboTape(it) }
             )
-            // SCHEME cycler: Kempston -> QAOP -> ZXZX -> ELITE -> CUSTOM.
-            // CUSTOM (4) uses only the per-key rebind map; presets stay pristine.
+            // The game's scheme, picked from a list. CUSTOM (4) uses only the per-key rebind map;
+            // the presets stay pristine.
             SchemeKey(
                 scheme = controlScheme,
                 weight = 2f,
-                onCycle = {
-                    val next = (controlScheme + 1) % 5
-                    onControlScheme(next)
-                    PhobosCore.setZxControlScheme(next)
-                }
+                onSelect = onControlScheme,
             )
         }
 
@@ -360,18 +363,12 @@ private fun RowScope.ToggleKey(
 private fun RowScope.SchemeKey(
     scheme: Int,
     weight: Float,
-    onCycle: () -> Unit
+    onSelect: (Int) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
+    var choosing by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(6.dp)
-    val label = when (scheme) {
-        1 -> "QAOP"
-        2 -> "ZXZX"
-        3 -> "ELITE"
-        4 -> "CUSTOM"
-        else -> "KEMP"
-    }
     val active = scheme != 0
     val bgMod = if (active) {
         Modifier.background(Color(0xFF3D7EDB), shape)
@@ -387,19 +384,28 @@ private fun RowScope.SchemeKey(
             .graphicsLayer { scaleX = if (pressed) 0.94f else 1f; scaleY = if (pressed) 0.94f else 1f }
             .then(bgMod)
             .border(1.5.dp, if (active) Color.White else Color(0xFF1E3A5F), shape)
-            .pointerInput(scheme) {
+            .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
                         pressed = true
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onCycle()
+                        choosing = true
                         tryAwaitRelease()
                         pressed = false
                     }
                 )
             }
     ) {
-        Text(label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(zxScheme(scheme).short, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {
+            ZX_SCHEMES.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    onClick = { choosing = false; onSelect(option.id) },
+                    trailingIcon = if (option.id == scheme) ({ Icon(Icons.Default.Check, contentDescription = "In use") }) else null,
+                )
+            }
+        }
     }
 }
 

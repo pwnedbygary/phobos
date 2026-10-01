@@ -151,7 +151,7 @@ data class EmulatorSettings(
     val hotkeys: Map<String, List<Int>> = emptyMap(),
     val systemRomPaths: Map<String, Set<String>> = emptyMap(),
     val systemFirmwarePaths: Map<String, String> = emptyMap(),
-    // ZX per-core control scheme (0=Kempston,1=QAOP,2=ZXZX,3=ELITE,4=CUSTOM)
+    // ZX control scheme ids (ZX_SCHEMES) by "system/game", or by system for the games without their own
     val zxControlScheme: Map<String, Int> = emptyMap(),
     // ZX per-core key rebinds: system -> {keyboardLabel -> gamepadBit}
     val zxKeyBindings: Map<String, Map<String, Int>> = emptyMap(),
@@ -678,7 +678,8 @@ class SettingsStore(private val context: Context) {
         val current = p[HIDDEN_SYSTEMS] ?: emptySet()
         p[HIDDEN_SYSTEMS] = if (visible) current - system else current + system
     }
-    suspend fun setZxControlScheme(system: String, scheme: Int) = context.dataStore.edit { it[intPreferencesKey(ZX_SCHEME_PREFIX + system)] = scheme }
+    /** [key] is a system, or "system/game" for one game. */
+    suspend fun setZxControlScheme(key: String, scheme: Int) = context.dataStore.edit { it[intPreferencesKey(ZX_SCHEME_PREFIX + key)] = scheme }
     suspend fun setLastDisc(game: String, disc: Int) = context.dataStore.edit { it[intPreferencesKey(LAST_DISC_PREFIX + game)] = disc }
     suspend fun setZxStickToKeys(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_STICK_PREFIX + system)] = enabled }
     suspend fun setZxReversePitch(system: String, enabled: Boolean) = context.dataStore.edit { it[booleanPreferencesKey(ZX_REVERSE_PREFIX + system)] = enabled }

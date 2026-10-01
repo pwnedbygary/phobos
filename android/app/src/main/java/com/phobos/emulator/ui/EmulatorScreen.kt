@@ -120,7 +120,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     var zxCapsLatched by remember { mutableStateOf(false) }
     var zxTurboTape by remember { mutableStateOf(false) }
     // The saved scheme is what loadRom applied natively.
-    val zxControlScheme = settings.zxControlScheme[systemName] ?: 0
+    val zxControlScheme = viewModel.zxControlScheme(settings, systemName, romName)
     // ZX CUSTOM rebind target: keyboard key currently being bound (null = not rebinding).
     var zxRebindTarget by remember { mutableStateOf<String?>(null) }
     // Cancelling the quit dialog returns to where it was opened: the running game or the pause menu.
@@ -407,7 +407,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 symLatched = zxSymLatched, onSymLatched = { zxSymLatched = it },
                 capsLatched = zxCapsLatched, onCapsLatched = { zxCapsLatched = it },
                 turboTape = zxTurboTape, onTurboTape = { zxTurboTape = it },
-                controlScheme = zxControlScheme, onControlScheme = { viewModel.setZxControlScheme(systemName, it) },
+                controlScheme = zxControlScheme, onControlScheme = { viewModel.setZxControlScheme(systemName, romName, it) },
                 rebindTarget = zxRebindTarget, onRebindTarget = { zxRebindTarget = it },
                 boundKeys = (settings.zxKeyBindings[systemName] ?: emptyMap()).keys,
                 keyboardOpacity = settings.zxKeyboardOpacity,
@@ -468,7 +468,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 onLibrary = { viewModel.swapToLibrary() },
                 onEditTouchLayout = { editingTouchLayout = true },
                 zxControlScheme = zxControlScheme,
-                onZxControlScheme = { scheme -> viewModel.setZxControlScheme(systemName, scheme) },
+                onZxControlScheme = { scheme -> viewModel.setZxControlScheme(systemName, romName, scheme) },
             )
         }
 

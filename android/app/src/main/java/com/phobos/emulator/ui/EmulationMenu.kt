@@ -83,6 +83,8 @@ import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.neonGlow
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.N64SaveFormat
+import com.phobos.emulator.util.ZX_SCHEMES
+import com.phobos.emulator.util.zxScheme
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
@@ -575,13 +577,12 @@ private fun ZxKeyboardSection(
 ) {
     MenuSection("Keyboard") {
         SettingsSwitchItem("On-Screen Keyboard", "Show the compact keyboard to type LOAD etc.", showKeyboard) { onKeyboardToggle(it) }
-        // Control schemes: 0=Kempston, 1=QAOP, 2=ZXZX, 3=ELITE, 4=CUSTOM (long-press a key to rebind).
         SettingsDropdownItem(
             title = "Control Scheme",
-            description = "Kempston / QAOP / ZXZX / ELITE / CUSTOM",
+            description = "What the gamepad plays this game as: a joystick, or keys",
             current = zxControlScheme,
-            options = listOf(0, 1, 2, 3, 4),
-            label = { ZX_SCHEME_LABELS[it] },
+            options = ZX_SCHEMES.map { it.id },
+            label = { zxScheme(it).label },
             onSelect = onZxControlScheme,
         )
         if (zxControlScheme == 4) {
@@ -597,8 +598,6 @@ private fun ZxKeyboardSection(
         SettingsSwitchItem("Mute Tape Audio", "Silence the loud tape-loading screech.", settings.zxTapeMuted) { viewModel.setZxTapeMuted(it) }
     }
 }
-
-private val ZX_SCHEME_LABELS = listOf("KEMP", "QAOP", "ZXZX", "ELITE", "CUSTOM")
 
 @Composable
 private fun TouchControlsSection(viewModel: MainViewModel, settings: EmulatorSettings, onEditTouchLayout: () -> Unit) {
