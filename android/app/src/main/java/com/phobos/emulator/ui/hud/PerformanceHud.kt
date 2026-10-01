@@ -2,7 +2,6 @@ package com.phobos.emulator.ui.hud
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,9 +32,18 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.PointerInputModifierNode
+import androidx.compose.ui.node.currentValueOf
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -43,11 +51,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.round
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toOffset
 import com.phobos.emulator.PerformanceStats
 import com.phobos.emulator.PhobosCore
 import kotlinx.coroutines.Dispatchers
@@ -453,7 +462,10 @@ private fun FrameTimeGraph(times: FloatArray, targetMs: Float, width: Dp, height
 /**
  * In-game host for [PerformanceHud]: samples telemetry off the main thread, polls the
  * frame-time history, and lets the user drag the HUD (position persisted as a 0..1
- * fraction of the free space on each axis).
+ * fraction of the free space on each axis). A finger that lands where [isControlAt] finds a
+ * control (a point in this overlay's coordinates) goes to that control instead, and a tap
+ * that doesn't drag reaches whatever is under the HUD. The HUD stays above [bottomLimit], where
+ * an on-screen keyboard takes the screen.
  */
 @Composable
 fun PerformanceHudOverlay(
@@ -467,6 +479,8 @@ fun PerformanceHudOverlay(
     screenHeight: Int,
     onPositionChanged: (Float, Float) -> Unit,
     modifier: Modifier = Modifier,
+    isControlAt: (Offset) -> Boolean = { false },
+    bottomLimit: Float = Float.POSITIVE_INFINITY,
 ) {
     val context = LocalContext.current
     val sampler = remember { HudTelemetrySampler(context) }
@@ -496,39 +510,39 @@ fun PerformanceHudOverlay(
     }
 
     var hudSize by remember { mutableStateOf(IntSize.Zero) }
-    var dragPos by remember { mutableStateOf<Offset?>(null) }
+    // A fraction of the free space, like the saved position, so it follows that space as it changes.
+    var dragFraction by remember { mutableStateOf<Offset?>(null) }
     val maxX = max(0, screenWidth - hudSize.width).toFloat()
-    val maxY = max(0, screenHeight - hudSize.height).toFloat()
+    val maxY = max(0f, min(screenHeight.toFloat(), bottomLimit) - hudSize.height)
     val latestMaxX by rememberUpdatedState(maxX)
     val latestMaxY by rememberUpdatedState(maxY)
     val latestSavedX by rememberUpdatedState(savedPosX)
     val latestSavedY by rememberUpdatedState(savedPosY)
-    val pos = dragPos ?: Offset(savedPosX.coerceIn(0f, 1f) * maxX, savedPosY.coerceIn(0f, 1f) * maxY)
+    val latestIsControlAt by rememberUpdatedState(isControlAt)
+    fun currentPos(): Offset {
+        val f = dragFraction ?: Offset(latestSavedX, latestSavedY)
+        return Offset(f.x.coerceIn(0f, 1f) * latestMaxX, f.y.coerceIn(0f, 1f) * latestMaxY)
+    }
 
     Box(modifier) {
         Box(
             Modifier
-                .offset { IntOffset(pos.x.coerceIn(0f, maxX).roundToInt(), pos.y.coerceIn(0f, maxY).roundToInt()) }
+                .offset { currentPos().round() }
                 .onSizeChanged { hudSize = it }
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragEnd = {
-                            dragPos?.let {
-                                onPositionChanged(
-                                    if (latestMaxX > 0f) it.x / latestMaxX else 0f,
-                                    if (latestMaxY > 0f) it.y / latestMaxY else 0f,
-                                )
-                            }
+                .then(
+                    HudDragElement(
+                        // From where the HUD is placed, so the point is the one the controls get.
+                        isControlAt = { latestIsControlAt(currentPos().round().toOffset() + it) },
+                        onDrag = { drag ->
+                            val start = currentPos()
+                            dragFraction = Offset(
+                                if (latestMaxX > 0f) ((start.x + drag.x) / latestMaxX).coerceIn(0f, 1f) else 0f,
+                                if (latestMaxY > 0f) ((start.y + drag.y) / latestMaxY).coerceIn(0f, 1f) else 0f,
+                            )
                         },
-                    ) { change, drag ->
-                        change.consume()
-                        val start = dragPos ?: Offset(latestSavedX.coerceIn(0f, 1f) * latestMaxX, latestSavedY.coerceIn(0f, 1f) * latestMaxY)
-                        dragPos = Offset(
-                            (start.x + drag.x).coerceIn(0f, latestMaxX),
-                            (start.y + drag.y).coerceIn(0f, latestMaxY),
-                        )
-                    }
-                }
+                        onDragEnd = { dragFraction?.let { onPositionChanged(it.x, it.y) } },
+                    )
+                )
         ) {
             PerformanceHud(
                 stats = stats,
@@ -540,5 +554,78 @@ fun PerformanceHudOverlay(
                 sessionSeconds = stats.playTimeMs / 1000,
             )
         }
+    }
+}
+
+private data class HudDragElement(
+    val isControlAt: (Offset) -> Boolean,
+    val onDrag: (Offset) -> Unit,
+    val onDragEnd: () -> Unit,
+) : ModifierNodeElement<HudDragNode>() {
+    override fun create() = HudDragNode(isControlAt, onDrag, onDragEnd)
+
+    override fun update(node: HudDragNode) {
+        node.isControlAt = isControlAt
+        node.onDrag = onDrag
+        node.onDragEnd = onDragEnd
+    }
+}
+
+/**
+ * Drags the HUD with one finger that lands on it where [isControlAt] (given the HUD's own
+ * coordinates) finds no control. The HUD shares every touch with the layers under it, so a
+ * finger on a control reaches that control. The HUD sees each event in the initial pass, before
+ * those layers: once its finger drags, every move and the lift are consumed. Before the touch
+ * slop a move is consumed wherever [isControlAt] finds a control, and the touch overlay only
+ * slides a finger onto buttons that test finds, so the finger can't press one and hold it through
+ * the drag; its other moves, and a tap's lift, reach the layers under the HUD.
+ */
+private class HudDragNode(
+    var isControlAt: (Offset) -> Boolean,
+    var onDrag: (Offset) -> Unit,
+    var onDragEnd: () -> Unit,
+) : Modifier.Node(), PointerInputModifierNode, CompositionLocalConsumerModifierNode {
+    private var finger: PointerId? = null
+    private var dragging = false
+    private var travel = Offset.Zero
+
+    override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
+        if (pass != PointerEventPass.Initial) return
+        for (change in pointerEvent.changes) {
+            if (finger == null && change.changedToDownIgnoreConsumed() && !isControlAt(change.position)) {
+                finger = change.id
+                dragging = false
+                travel = Offset.Zero
+            }
+            if (change.id != finger) continue
+            if (!change.pressed) {
+                if (dragging) change.consume()
+                end()
+                continue
+            }
+            val delta = change.positionChangeIgnoreConsumed()
+            if (dragging) {
+                onDrag(delta)
+            } else {
+                travel += delta
+                if (travel.getDistance() > currentValueOf(LocalViewConfiguration).touchSlop) {
+                    dragging = true
+                    onDrag(travel)
+                }
+            }
+            // The touch overlay lets a finger slide onto a control, which would then stay held through the drag.
+            if (dragging || isControlAt(change.position)) change.consume()
+        }
+    }
+
+    override fun onCancelPointerInput() = end()
+
+    override fun sharePointerInputWithSiblings() = true
+
+    private fun end() {
+        val dragged = dragging
+        finger = null
+        dragging = false
+        if (dragged) onDragEnd()
     }
 }

@@ -303,6 +303,9 @@ class TouchEngine {
 
     // ── Hit testing ────────────────────────────────────────────────────────
 
+    /** Whether a finger landing at ([x], [y]) now would take a control rather than the background. */
+    fun isControlAt(x: Float, y: Float): Boolean = grabAt(x, y) !is Grab.Background
+
     private fun grabAt(x: Float, y: Float): Grab {
         directButtonAt(x, y)?.let { return Grab.Buttons(listOf(it)) }
         gapPairAt(x, y)?.let { return Grab.Buttons(it) }

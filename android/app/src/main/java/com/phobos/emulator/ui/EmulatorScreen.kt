@@ -54,12 +54,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -88,6 +91,7 @@ import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.touch.ButtonCluster
 import com.phobos.emulator.ui.touch.TouchAction
 import com.phobos.emulator.ui.touch.TouchControlsOverlay
+import com.phobos.emulator.ui.touch.TouchControlsProbe
 import com.phobos.emulator.ui.touch.TouchFamily
 import com.phobos.emulator.ui.touch.TouchLayoutCodec
 import com.phobos.emulator.ui.touch.TouchLayoutEditor
@@ -120,6 +124,9 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     var showKeyboard by remember { mutableStateOf(false) }
     // The keyboard's height, kept clear of the game picture so the game stays in view above it.
     var zxKeyboardHeight by remember { mutableStateOf(0.dp) }
+    // Where the keyboard sits; the performance HUD stays above it.
+    var zxKeyboardBounds by remember { mutableStateOf(Rect.Zero) }
+    val touchProbe = remember { TouchControlsProbe() }
     val density = LocalDensity.current
     var zxSymLatched by remember { mutableStateOf(false) }
     var zxCapsLatched by remember { mutableStateOf(false) }
@@ -401,6 +408,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 },
                 onBackgroundTap = { if (isLoaded && !menuButtonShown) revealMenuButton() },
                 ownsInput = { !viewModel.emulatorScreenReplaced(screen) },
+                probe = touchProbe,
             )
         }
 
@@ -411,7 +419,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             ZXKeyboardOverlay(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .onSizeChanged { zxKeyboardHeight = with(density) { it.height.toDp() } },
+                    .onSizeChanged { zxKeyboardHeight = with(density) { it.height.toDp() } }
+                    .onPlaced { zxKeyboardBounds = it.boundsInParent() },
                 symLatched = zxSymLatched, onSymLatched = { zxSymLatched = it },
                 capsLatched = zxCapsLatched, onCapsLatched = { zxCapsLatched = it },
                 loadSpeed = settings.zxLoadSpeed, onLoadSpeed = { viewModel.setZxLoadSpeed(it) },
@@ -442,6 +451,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                         viewModel.setPerfOverlayPosY(y)
                     },
                     modifier = Modifier.fillMaxSize(),
+                    isControlAt = { p -> touchProbe.isControlAt(p.x, p.y) },
+                    bottomLimit = if (showKeyboard && isZx && !zxKeyboardBounds.isEmpty) zxKeyboardBounds.top else Float.POSITIVE_INFINITY,
                 )
             }
         }

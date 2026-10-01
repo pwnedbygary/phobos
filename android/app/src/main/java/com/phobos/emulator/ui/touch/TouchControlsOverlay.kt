@@ -46,7 +46,8 @@ import kotlinx.coroutines.delay
  * The landscape or portrait customization and opacity are chosen from the overlay's own size.
  * Touches that land on no control and lift quickly are reported through [onBackgroundTap].
  * [ownsInput] turns false once another game's screen has replaced this overlay's; the overlay
- * then leaves the shared input to the new one when it goes.
+ * then leaves the shared input to the new one when it goes. [probe] answers for layers drawn
+ * over the controls whether a finger would land on one.
  */
 @Composable
 fun TouchControlsOverlay(
@@ -58,6 +59,7 @@ fun TouchControlsOverlay(
     onBackgroundTap: () -> Unit,
     modifier: Modifier = Modifier,
     ownsInput: () -> Boolean = { true },
+    probe: TouchControlsProbe? = null,
 ) {
     val view = LocalView.current
     val density = LocalDensity.current
@@ -86,6 +88,10 @@ fun TouchControlsOverlay(
             if (currentOwnsInput()) sink.publish(engine)
             sink.flushPendingReleases()
         }
+    }
+    DisposableEffect(probe, engine) {
+        probe?.engine = engine
+        onDispose { if (probe != null && probe.engine === engine) probe.engine = null }
     }
 
     // Optional idle fade: dim a few seconds after the last finger lifts; any touch restores.
@@ -141,7 +147,9 @@ fun TouchControlsOverlay(
                                     // Compose delivers a cancelled gesture as an already-consumed lift.
                                     change.changedToUpIgnoreConsumed() ->
                                         if (change.isConsumed) engine.cancel(id) else engine.up(id, p.x, p.y, change.uptimeMillis)
-                                    change.pressed && change.positionChanged() -> engine.move(id, p.x, p.y, change.uptimeMillis)
+                                    // A move a layer above consumed (the performance HUD's drag) isn't the controls'.
+                                    change.pressed && !change.isConsumed && change.positionChanged() ->
+                                        engine.move(id, p.x, p.y, change.uptimeMillis)
                                 }
                                 change.consume()
                             }
@@ -168,6 +176,13 @@ fun TouchControlsOverlay(
 
 private const val IDLE_FADE_DELAY_MS = 5_000L
 private const val IDLE_FADE_OPACITY = 0.25f
+
+/** Whether a finger at a point, in the overlay's coordinates, would land on a touch control. */
+class TouchControlsProbe {
+    internal var engine: TouchEngine? = null
+
+    fun isControlAt(x: Float, y: Float): Boolean = engine?.isControlAt(x, y) == true
+}
 
 /** Forwards touch state to the core, sending only what changed since the last event. */
 private class TouchInputSink {

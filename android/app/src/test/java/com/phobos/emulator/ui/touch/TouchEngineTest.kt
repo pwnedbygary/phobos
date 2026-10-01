@@ -3,6 +3,7 @@ package com.phobos.emulator.ui.touch
 import com.phobos.emulator.PhobosCore.Input
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -155,6 +156,28 @@ class TouchEngineTest {
         e.down(1, 500f, 400f, 0)
         e.up(1, 500f, 400f, 2_000)
         assertNull(e.consumeEvents())
+    }
+
+    @Test fun controlsAreFoundWhereAFingerWouldTakeThem() {
+        val e = engine()
+        assertTrue(e.isControlAt(840f, 400f))
+        assertTrue(e.isControlAt(500f, 50f))
+        assertTrue(e.isControlAt(270f, 200f))
+        assertFalse(e.isControlAt(500f, 400f))
+        // A held stick takes no second finger.
+        e.down(1, 200f, 600f, 0)
+        assertFalse(e.isControlAt(210f, 600f))
+    }
+
+    @Test fun aFingerFromTheBackgroundSlidesOnlyOntoPointsFoundAsControls() {
+        val e = engine()
+        e.down(1, 600f, 400f, 0)
+        for (x in 600..800 step 2) {
+            val onControl = e.isControlAt(x.toFloat(), 400f)
+            e.move(1, x.toFloat(), 400f, 10)
+            if (!onControl) assertEquals(0, e.buttonBits)
+        }
+        assertTrue(e.buttonBits != 0)
     }
 
     @Test fun toggleButtonLatches() {
