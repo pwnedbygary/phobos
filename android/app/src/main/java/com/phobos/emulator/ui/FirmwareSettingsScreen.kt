@@ -22,7 +22,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.phobos.emulator.ui.theme.pillShape
 
 data class FirmwareInfo(
@@ -197,7 +196,6 @@ fun RowText(text: String, modifier: Modifier, color: Color = Color.Unspecified) 
         text = text,
         modifier = modifier.basicMarquee(),
         style = MaterialTheme.typography.bodySmall,
-        fontSize = 12.sp,
         maxLines = 1,
         color = color
     )

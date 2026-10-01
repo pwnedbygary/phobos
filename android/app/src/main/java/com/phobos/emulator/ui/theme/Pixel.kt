@@ -42,11 +42,10 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.font.FontSynthesis
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -62,13 +61,22 @@ import kotlin.math.roundToInt
 /** Press Start 2P (SIL Open Font License 1.1; see LICENSE), an 8x8 arcade font, for short uppercase headings. */
 val PixelHeadingFont = FontFamily(Font(R.font.press_start_2p))
 
-/** Pixelify Sans (SIL Open Font License 1.1; see LICENSE), a variable-weight pixel font drawn for reading. */
-@OptIn(ExperimentalTextApi::class)
+/**
+ * Galmuri11 (SIL Open Font License 1.1; see LICENSE), a pixel font drawn for reading whose letters and
+ * digits stay apart (C, O and 0, B and 8, Z and 2, S and 5), in a regular and a bold.
+ */
 val PixelFont = FontFamily(
-    Font(R.font.pixelify_sans, FontWeight.Normal, variationSettings = FontVariation.Settings(FontVariation.weight(400))),
-    Font(R.font.pixelify_sans, FontWeight.Medium, variationSettings = FontVariation.Settings(FontVariation.weight(500))),
-    Font(R.font.pixelify_sans, FontWeight.SemiBold, variationSettings = FontVariation.Settings(FontVariation.weight(600))),
-    Font(R.font.pixelify_sans, FontWeight.Bold, variationSettings = FontVariation.Settings(FontVariation.weight(700))),
+    Font(R.font.galmuri11, FontWeight.Normal),
+    Font(R.font.galmuri11_bold, FontWeight.Bold),
+)
+
+/**
+ * Galmuri9, drawn on fewer, larger pixels at the same size, so the small styles stay crisp. It has no
+ * bold, so bold small text takes Galmuri11's, whose capitals stand as tall at the same size.
+ */
+val PixelSmallFont = FontFamily(
+    Font(R.font.galmuri9, FontWeight.Normal),
+    Font(R.font.galmuri11_bold, FontWeight.Bold),
 )
 
 /**
@@ -86,15 +94,29 @@ private fun heading(size: Int, lineHeight: Int) = TextStyle(
 
 private val Base = Typography()
 
-/** Pixelify's standard ligatures join "fi" and "fl" into one glyph that reads like a capital A. */
+/** Press Start 2P would join "fi" and "fl" into one 8x8 cell. */
 private const val NO_LIGATURES = "liga 0"
 
-private fun TextStyle.inPixelFont(weight: FontWeight) =
-    copy(fontFamily = PixelFont, fontWeight = weight, letterSpacing = 0.sp, fontFeatureSettings = NO_LIGATURES)
+/** Galmuri draws large in its em square, so its type runs this much smaller than Material's. */
+private const val PIXEL_SCALE = 0.75f
+
+/** Slashed zeros, so 0 and O differ. */
+private const val PIXEL_FEATURES = "zero 1"
+
+/** Galmuri has a regular and a bold, and a synthesized weight would smear its pixels. */
+private fun TextStyle.inPixelFont(bold: Boolean = false, family: FontFamily = PixelFont) = copy(
+    fontFamily = family,
+    fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+    fontSize = (fontSize.value * PIXEL_SCALE).sp,
+    letterSpacing = 0.sp,
+    fontSynthesis = FontSynthesis.None,
+    fontFeatureSettings = PIXEL_FEATURES,
+)
 
 /**
  * The type scale with pixel art effects: page headers and the top bar's title in Press Start 2P,
- * everything else, dialog titles included, in Pixelify Sans at Material's sizes.
+ * everything else, dialog titles included, in Galmuri. At [PIXEL_SCALE] its capitals stand about as
+ * tall as Material's, and Material's line heights keep every row's height.
  */
 val PixelTypography = Typography(
     displayLarge = heading(36, 54),
@@ -102,16 +124,16 @@ val PixelTypography = Typography(
     displaySmall = heading(24, 36),
     headlineLarge = heading(24, 36),
     headlineMedium = heading(21, 32),
-    headlineSmall = Base.headlineSmall.inPixelFont(FontWeight.Bold),
+    headlineSmall = Base.headlineSmall.inPixelFont(bold = true),
     titleLarge = heading(15, 24),
-    titleMedium = Base.titleMedium.inPixelFont(FontWeight.SemiBold),
-    titleSmall = Base.titleSmall.inPixelFont(FontWeight.SemiBold),
-    bodyLarge = Base.bodyLarge.inPixelFont(FontWeight.Normal),
-    bodyMedium = Base.bodyMedium.inPixelFont(FontWeight.Normal),
-    bodySmall = Base.bodySmall.inPixelFont(FontWeight.Normal),
-    labelLarge = Base.labelLarge.inPixelFont(FontWeight.SemiBold),
-    labelMedium = Base.labelMedium.inPixelFont(FontWeight.Medium),
-    labelSmall = Base.labelSmall.inPixelFont(FontWeight.Medium),
+    titleMedium = Base.titleMedium.inPixelFont(bold = true),
+    titleSmall = Base.titleSmall.inPixelFont(bold = true),
+    bodyLarge = Base.bodyLarge.inPixelFont(),
+    bodyMedium = Base.bodyMedium.inPixelFont(),
+    bodySmall = Base.bodySmall.inPixelFont(family = PixelSmallFont),
+    labelLarge = Base.labelLarge.inPixelFont(bold = true),
+    labelMedium = Base.labelMedium.inPixelFont(family = PixelSmallFont),
+    labelSmall = Base.labelSmall.inPixelFont(family = PixelSmallFont),
 )
 
 /** Section headers with pixel art effects: small Press Start 2P, uppercase at the call site. */
