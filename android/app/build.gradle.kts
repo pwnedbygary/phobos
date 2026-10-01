@@ -121,7 +121,8 @@ android {
 
 // Build ALL variants (legacy + modern, debug + release) whenever assembleDebug
 // runs, so one command produces every installable APK for A/B and distribution.
-// Release is signed with the debug keystore (see buildTypes.release above).
+// Release is signed with the release keystore, or with the debug key where there
+// is none (see signingConfigs above).
 afterEvaluate {
     tasks.named("assembleDebug") {
         dependsOn("assembleLegacyDebug", "assembleModernDebug", "assembleLegacyRelease", "assembleModernRelease")
