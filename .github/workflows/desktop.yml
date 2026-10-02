@@ -1,20 +1,22 @@
 name: Desktop Build
 
-# Builds the desktop program from CMakeLists.txt on every commit: a Linux x86-64 AppImage with its
-# .zsync, a Windows x64 Phobos.exe and a universal macOS Phobos.app. A version tag attaches them
-# to that tag's GitHub Release, where the AppImage's update information looks for the .zsync.
-# The Android APKs stay on android.yml.
+# Builds the desktop program from CMakeLists.txt for master, version tags and pull requests: a
+# Linux x86-64 AppImage with its .zsync, a Windows x64 Phobos.exe and a universal macOS
+# Phobos.app. A version tag attaches them to that tag's GitHub Release, where the AppImage's
+# update information looks for the .zsync. The Android APKs stay on android.yml.
 
+# Branches build through their pull requests; a push trigger for them too would run every
+# commit twice.
 on:
   push:
-    branches: [ '**' ]
+    branches: [ master ]
     tags: [ '*' ]
   pull_request:
   workflow_dispatch:
 
-# A pull request's push and pull_request runs share a group, so only one of them builds.
+# A newer commit replaces its branch's run in progress.
 concurrency:
-  group: desktop-${{ github.head_ref || github.ref_name }}
+  group: desktop-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
