@@ -18,10 +18,8 @@
 #include <pthread.h>
 #include <sched.h>
 #if defined(_WIN32)
-#include <windows.h>
 #include <io.h>
-#elif defined(__linux__)
-#include <sys/syscall.h>
+#include <filesystem>
 #endif
 #include <mutex>
 #include <memory>
@@ -1111,8 +1109,10 @@ namespace ares {
     #if defined(_WIN32)
     ok = _commit(_fileno(file)) == 0 && ok;
     fclose(file);
-    // rename() refuses to replace an existing file on Windows.
-    ok = ok && MoveFileExA((const char*)temp, (const char*)path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    // rename() refuses to replace an existing file on Windows; std::filesystem::rename replaces it.
+    std::error_code error;
+    if (ok) std::filesystem::rename((const char*)temp, (const char*)path, error);
+    ok = ok && !error;
     #else
     ok = fsync(fileno(file)) == 0 && ok;
     fclose(file);
@@ -1245,16 +1245,9 @@ namespace ares {
     // last loader read.
     u32 loadBoostFrames = 0;
     s32 loadBoostSpeed = 1;
+    // Only the Android HUD reads it, to sample this thread's CPU time from /proc.
     #if defined(__ANDROID__)
     emuThreadTid.store((s32)gettid(), std::memory_order_relaxed);
-    #elif defined(__linux__)
-    emuThreadTid.store((s32)syscall(SYS_gettid), std::memory_order_relaxed);
-    #elif defined(_WIN32)
-    emuThreadTid.store((s32)GetCurrentThreadId(), std::memory_order_relaxed);
-    #elif defined(__APPLE__)
-    u64 machThreadId = 0;
-    pthread_threadid_np(nullptr, &machThreadId);
-    emuThreadTid.store((s32)machThreadId, std::memory_order_relaxed);
     #endif
     // HUD history is per thread: the abandon and 64DD-reload paths replace the
     // thread without going through unloadSystem()'s clean-path reset.

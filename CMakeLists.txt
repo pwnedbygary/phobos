@@ -372,8 +372,9 @@ else()
     # Phobos.exe needs nothing beside it: the C++ runtime and winpthreads link in statically,
     # and Vulkan is loaded at run time from the driver's vulkan-1.dll.
     target_sources(phobos PRIVATE desktop/PlatformWindows.cpp ${CMAKE_CURRENT_BINARY_DIR}/phobos.rc)
-    target_link_options(phobos PRIVATE -static)
-    target_link_libraries(phobos PRIVATE ws2_32)
+    target_link_options(phobos PRIVATE -static $<$<CONFIG:Release>:-s>)
+    # nall's registry helpers use shlwapi; its gdb server, Winsock.
+    target_link_libraries(phobos PRIVATE shlwapi ws2_32)
     set_target_properties(phobos PROPERTIES WIN32_EXECUTABLE ON OUTPUT_NAME Phobos)
   endif()
 endif()
