@@ -2024,13 +2024,13 @@ namespace ares {
 
       if (!audioStreamOpen.load(std::memory_order_acquire)) {
         // Without an audio device (a desktop can have none) this would retry on every core
-        // write; try again once a second and discard the samples until then.
+        // write; try again every few seconds and discard the samples until then.
         static s64 nextOpenAttemptMs = 0;
         if (steadyMs() >= nextOpenAttemptMs) {
           std::unique_lock<std::mutex> lock(audioMutex);
           bool open = phobos::host::openAudio();
           audioStreamOpen.store(open, std::memory_order_release);
-          if (!open) nextOpenAttemptMs = steadyMs() + 1000;
+          if (!open) nextOpenAttemptMs = steadyMs() + 5000;
         }
         if (!audioStreamOpen.load(std::memory_order_acquire)) {
           f64 discarded[2];
