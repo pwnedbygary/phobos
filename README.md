@@ -94,6 +94,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | Neo Geo CD | ✅ Boots, renders and has sound (Samurai Shodown verified), with the CDZ's double-speed drive and an optional faster loading speed |
 | **Added, not yet tried with a game on-device** | |
 | Mega CD 32X, Super Game Boy, Arcade (Aleck64, SG-1000A) | Load paths, firmware slots and touch layouts are in |
+| LaserActive (Mega LD, PC Engine LD) | `.mmi` discs read straight from the SD card; both PAC BIOSes boot (60 FPS on the RP6), and Side in the pause menu turns the disc over |
 
 > Sega Saturn is not listed: upstream ares never completed the core (empty System::run stub,
 > kept in the tree for future work).
@@ -101,7 +102,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 ### Known issues / not yet functional
 
 - **MSX tapes** — the MSX's tape deck isn't connected yet, so cassette games don't load.
-- **Mega CD and PC Engine CD saves** — the consoles' internal backup RAM isn't kept between sessions, so a save made in such a game's own menu is lost when it closes.
+- **Mega CD, PC Engine CD and PC Engine LD saves** — the consoles' internal backup RAM isn't kept between sessions, so a save made in such a game's own menu is lost when it closes.
 
 ---
 

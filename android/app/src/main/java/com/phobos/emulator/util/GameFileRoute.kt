@@ -1,7 +1,7 @@
 package com.phobos.emulator.util
 
 /** Systems whose games are only read where they are: one that can't be read by path isn't started. */
-val NO_COPY_SYSTEMS = setOf("PC Engine CD")
+val NO_COPY_SYSTEMS = setOf("PC Engine CD", "Mega LD", "PC Engine LD")
 
 /** How a game's file reaches native code. */
 sealed interface GameFileRoute {

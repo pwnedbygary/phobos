@@ -250,12 +250,15 @@ class MainViewModel(
             val gameBoy = setOf("fw_gb_boot", "fw_gbc_boot")
             val pocket = setOf("fw_ngp", "fw_ngpc")
             val zx = setOf("fw_zx48", "fw_zx128", "fw_zx128_sub")
+            val laserSega = setOf("fw_laseractive_sega_us", "fw_laseractive_sega_jp")
+            val laserNec = setOf("fw_laseractive_nec_us", "fw_laseractive_nec_jp", "fw_laseractive_nec_lp")
             mapOf(
                 "PlayStation" to setOf("fw_psx_us", "fw_psx_jp", "fw_psx_eu"),
                 "Mega Drive" to megaCd,
                 "Mega CD" to megaCd,
                 "Mega 32X" to megaCd + mega32x,
                 "Mega CD 32X" to megaCd + mega32x,
+                "Mega LD" to laserSega,
                 "Nintendo 64" to setOf("fw_n64_pif_ntsc", "fw_n64_pif_pal", "fw_n64dd_us", "fw_n64dd_jp", "fw_n64dd_dev"),
                 "Neo Geo CD" to setOf("fw_ng_cd"),
                 "Neo Geo Pocket" to pocket,
@@ -267,6 +270,7 @@ class MainViewModel(
                 "ColecoVision" to setOf("fw_coleco"),
                 "PC Engine" to pceCd,
                 "PC Engine CD" to pceCd,
+                "PC Engine LD" to laserNec,
                 "SuperGrafx" to pceCd,
                 "ZX Spectrum" to zx,
                 "ZX Spectrum 128" to zx,
@@ -2699,6 +2703,7 @@ class MainViewModel(
                         _loadedGame.value = ControlLevel.Game(effectiveSystem, rom.name)
                         _loadedDiscs.value = rom.discs
                         _currentDisc.value = discIndex
+                        _laserdiscSide.value = null
                         if (rom.discs.size > 1) rememberDisc(effectiveSystem, rom.name, discIndex)
                         // Auto-Load State (Task 17): restore the auto-saved state
                         // right after the core is loaded but BEFORE the emulation
@@ -2756,6 +2761,29 @@ class MainViewModel(
     /** Puts disc [index] of the running game in the drive, as swapping discs on the console would. */
     fun changeDisc(context: Context, index: Int) {
         viewModelScope.launch(Dispatchers.IO) { swapToDisc(context, index) }
+    }
+
+    private val _laserdiscSide = MutableStateFlow<String?>(null)
+    /** The side of the LaserActive disc in the tray: null for the first, where a game starts, and "" for none. */
+    val laserdiscSide: StateFlow<String?> = _laserdiscSide
+
+    /** The sides of the LaserActive disc being played, in order. */
+    fun laserdiscSides(): List<String> = PhobosCore.getLaserdiscSides()
+
+    /** Puts [side] of the LaserActive disc in the tray, or takes the disc out for "". */
+    fun changeLaserdiscSide(context: Context, side: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val changed = PhobosCore.setLaserdiscSide(side)
+            if (changed) _laserdiscSide.value = side
+            withContext(Dispatchers.Main) {
+                val message = when {
+                    !changed -> "Couldn't change the disc"
+                    side.isEmpty() -> "Disc taken out"
+                    else -> "$side in the tray"
+                }
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private suspend fun swapToDisc(context: Context, index: Int): Boolean {

@@ -21,7 +21,10 @@ class GameFileRouteTest {
     }
 
     @Test
-    fun aPcEngineCdDiscWithoutAPathIsNotCopied() {
-        assertEquals(GameFileRoute.Refused, gameFileRoute("PC Engine CD", null))
+    fun cdAndLaserdiscImagesWithoutAPathAreNotCopied() {
+        for (system in listOf("PC Engine CD", "Mega LD", "PC Engine LD")) {
+            assertEquals(GameFileRoute.Refused, gameFileRoute(system, null))
+        }
+        assertEquals(GameFileRoute.InPlace("/sdcard/game.mmi"), gameFileRoute("Mega LD", "/sdcard/game.mmi"))
     }
 }

@@ -46,11 +46,11 @@ enum class TouchFamily(val key: String, val displayName: String) {
             "Famicom" -> NES
             "Game Boy", "Game Boy Color" -> GB
             "Game Boy Advance" -> GBA
-            "Mega Drive", "Mega CD", "Mega 32X", "Mega CD 32X" -> MEGA_DRIVE
+            "Mega Drive", "Mega CD", "Mega 32X", "Mega CD 32X", "Mega LD" -> MEGA_DRIVE
             "Master System" -> MASTER_SYSTEM
             "SG-1000" -> SG1000
             "Game Gear" -> GAME_GEAR
-            "PC Engine", "PC Engine CD", "SuperGrafx" -> PCE
+            "PC Engine", "PC Engine CD", "SuperGrafx", "PC Engine LD" -> PCE
             "Neo Geo", "Neo Geo CD" -> NEO_GEO
             "Arcade" -> ARCADE
             "Neo Geo Pocket", "Neo Geo Pocket Color" -> NGP

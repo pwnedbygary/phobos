@@ -38,6 +38,8 @@ fun firmwareFileName(key: String): String = when (key) {
     "fw_mcd" -> "Mega CD BIOS (US, Japan or Europe)"
     "fw_sgb" -> "Super Game Boy or Super Game Boy 2 cartridge ROM"
     "fw_pce_cd" -> "PC Engine CD System Card 3.0 (Japan)"
+    "fw_laseractive_sega" -> "LaserActive SEGA PAC BIOS (US v1.04 or Japan v1.02)"
+    "fw_laseractive_nec" -> "LaserActive NEC PAC BIOS (PAC-N10, PAC-N1 or PCE-LP1)"
     else -> key
 }
 

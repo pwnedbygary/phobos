@@ -16,6 +16,8 @@ class LaunchSystemsTest {
         "Super Famicom" to listOf("sfc", "smc", "swc", "fig", "bs", "st"),
         "Super Game Boy" to listOf("gb"),
         "Arcade" to listOf("zip"),
+        "Mega LD" to listOf("mmi"),
+        "PC Engine LD" to listOf("mmi"),
         "Nintendo 64" to listOf("n64", "v64", "z64", "n64dd", "ndd", "d64"),
         "Game Boy" to listOf("gb"),
         "Game Boy Color" to listOf("gb", "gbc", "nbc"),
@@ -150,6 +152,13 @@ class LaunchSystemsTest {
             found("Arcade"),
             resolve("11beat.zip", entries = listOf("nus-zhaj.u3", "pifdata.bin")),
         )
+    }
+
+    @Test fun laserActiveHintsSelectMegaLdOrPceLd() {
+        assertEquals(found("Mega LD"), resolve("Game.mmi", hint = "megald"))
+        assertEquals(found("Mega LD"), resolve("Game.mmi", hint = "laseractive"))
+        assertEquals(found("PC Engine LD"), resolve("Game.mmi", hint = "necpac"))
+        assertEquals(found("PC Engine LD"), resolve("Game.mmi", hint = "ldrom2"))
     }
 
     @Test fun zipsAreIdentifiedByWhatTheyHold() {

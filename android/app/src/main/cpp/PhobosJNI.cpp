@@ -20,6 +20,8 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"Super Famicom", {"sfc", "smc", "swc", "fig", "bs", "st"}},
     {"Super Game Boy", {"gb"}},
     {"Arcade", {"zip"}},
+    {"Mega LD", {"mmi"}},
+    {"PC Engine LD", {"mmi"}},
     {"Nintendo 64", {"n64", "v64", "z64", "n64dd", "ndd", "d64"}},
     {"Game Boy", {"gb"}},
     {"Game Boy Color", {"gb", "gbc", "nbc"}},
@@ -590,6 +592,29 @@ Java_com_phobos_emulator_PhobosCore_missingFirmware(JNIEnv* env, jobject, jstrin
         env->DeleteLocalRef(s);
     }
     return list;
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_phobos_emulator_PhobosCore_getLaserdiscSides(JNIEnv* env, jobject) {
+    auto sides = ares::laserdiscSides();
+    jclass listClass = env->FindClass("java/util/ArrayList");
+    jmethodID listConstructor = env->GetMethodID(listClass, "<init>", "()V");
+    jmethodID listAdd = env->GetMethodID(listClass, "add", "(Ljava/lang/Object;)Z");
+    jobject list = env->NewObject(listClass, listConstructor);
+    for (const auto& side : sides) {
+        jstring s = env->NewStringUTF((const char*)side);
+        env->CallBooleanMethod(list, listAdd, s);
+        env->DeleteLocalRef(s);
+    }
+    return list;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_phobos_emulator_PhobosCore_setLaserdiscSide(JNIEnv* env, jobject, jstring side) {
+    const char* nativeSide = env->GetStringUTFChars(side, 0);
+    bool changed = ares::setLaserdiscSide(nativeSide);
+    env->ReleaseStringUTFChars(side, nativeSide);
+    return changed;
 }
 
 extern "C" JNIEXPORT void JNICALL

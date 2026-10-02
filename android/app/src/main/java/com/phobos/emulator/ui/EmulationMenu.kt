@@ -107,11 +107,26 @@ fun EmulationMenu(
         if (uri != null) viewModel.loadSecondaryRom(context, systemName, RomFile(uri.lastPathSegment ?: "Disk", uri))
     }
     val slotPreview = rememberSlotPreview(viewModel, systemName, romName, currentSlot)
-    // The 64DD takes disks and the PlayStation discs; other systems have no Disc button.
+    // The 64DD takes disks, the PlayStation discs, and a LaserActive disc turns over; other systems have no
+    // Disc button.
+    val laserActive = systemName == "Mega LD" || systemName == "PC Engine LD"
     val discLabel = when {
         systemName.contains("Nintendo 64") -> "Disk"
         systemName.contains("PlayStation") -> "Disc"
+        laserActive -> "Side"
         else -> null
+    }
+    var choosingSide by remember { mutableStateOf(false) }
+    if (choosingSide) {
+        val sides = remember { viewModel.laserdiscSides() }
+        val sideInTray by viewModel.laserdiscSide.collectAsState()
+        SideChoiceDialog(
+            sides = sides,
+            inTray = sideInTray ?: sides.firstOrNull().orEmpty(),
+            fullScreen = settings.fullScreenMode,
+            onDismiss = { choosingSide = false },
+            onChoose = { side -> choosingSide = false; viewModel.changeLaserdiscSide(context, side) },
+        )
     }
     // A multi-disc game's Disc button lists its discs; otherwise it picks a file.
     val discs by viewModel.loadedDiscs.collectAsState()
@@ -188,7 +203,13 @@ fun EmulationMenu(
                                 onLoad = { viewModel.loadState(systemName, romName, currentSlot); onResume() },
                                 onScreenshot = { viewModel.takeScreenshot(systemName, romName) },
                                 onToggleTouchControls = { viewModel.setShowTouchControls(!settings.showTouchControls) },
-                                onDisc = { if (discs.size > 1) choosingDisc = true else diskLauncher.launch(arrayOf("*/*")) },
+                                onDisc = {
+                                    when {
+                                        laserActive -> choosingSide = true
+                                        discs.size > 1 -> choosingDisc = true
+                                        else -> diskLauncher.launch(arrayOf("*/*"))
+                                    }
+                                },
                                 onReset = { viewModel.resetSystem(); onResume() },
                             )
                         }

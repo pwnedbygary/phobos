@@ -687,6 +687,31 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## LaserActive (Mega LD and PC Engine LD) — 2026-10-02
+
+Branch `cursor/laseractive-2b67`, stacked on `cursor/pce-cd-in-place-loading-2b67` (PR 2 of the LaserActive
+plan). The plan row "LaserActive (Mega LD and PC Engine LD)" has the details; this records what was checked
+and what wasn't.
+
+- **Checks run:** both flavors build (`./gradlew testModernDebugUnitTest assembleModernRelease
+  assembleLegacyRelease`), 224 host tests pass (new: `laserActiveHintsSelectMegaLdOrPceLd`, and
+  `GameFileRouteTest` covers `.mmi`). On the RP6 (modern release over PR 1's build, data kept), with two
+  stand-in `.mmi` discs made for the test (a `MediaInfo.json` with sides A and B and no streams, no game data;
+  deleted afterwards with their saves and states): a frontend-style launch (`system` extra `megald`, then
+  `pcengineld`) resolved each, loaded it in place and attached the PAC BIOS (SEGA PAC US, NEC PAC PAC-N10);
+  both BIOS menus ran at 60 FPS; Side listed A, B and No disc, put in side B and took the disc out with the
+  core running on (the SEGA PAC's prompt changed to "Select The Play Button"); the next game started with side A
+  marked again; Mega LD's backup RAM was written to `Saves/Mega Drive/<game>/backup.ram` and imported on the
+  next load. Regression loads of The Terminator (Mega CD), Sub-Terrania (Mega Drive), Rondo of Blood (PC Engine
+  CD) and Final Lap Twin (PC Engine) logged "Loading in place" with the right firmware at 60 FPS.
+- **Not checked:** a real LaserActive game (none on the RP6), so laserdisc video, analog audio, digital tracks
+  and seeking aren't verified; `.mmi` games in the Library and their tile (none in the ROM folders); the legacy
+  APK on a device.
+- **Measuring on the RP6:** frame rates read while its screen is asleep are throttled (19 FPS for Mega LD here,
+  60 once awake); check `dumpsys power | grep mWakefulness` first.
+- **Device setting:** the RP6 wasn't charging, so `screen_off_timeout` went from 600000 to 1800000 for the
+  test and is restored to 600000.
+
 ## PC Engine CD, games loaded in place, firmware by content — 2026-10-02
 
 Branch `cursor/pce-cd-in-place-loading-2b67` (PR 1 of the LaserActive plan; LaserActive follows on top).

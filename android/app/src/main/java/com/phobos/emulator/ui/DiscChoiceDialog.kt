@@ -71,3 +71,45 @@ fun DiscChoiceDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/**
+ * Picks a side of the LaserActive disc being played, or no disc (""), as a player turns the disc over when the
+ * game asks. [inTray] is the side in the tray.
+ */
+@Composable
+fun SideChoiceDialog(
+    sides: List<String>,
+    inTray: String,
+    fullScreen: Boolean,
+    onDismiss: () -> Unit,
+    onChoose: (String) -> Unit,
+) {
+    val options = sides + ""
+    var choice by remember(sides, inTray) { mutableIntStateOf(options.indexOf(inTray).coerceAtLeast(0)) }
+    PhobosAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { DialogSystemBars(fullScreen, inGame = true); Text("Change side") },
+        text = {
+            Column(Modifier.selectableGroup()) {
+                options.forEachIndexed { index, side ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .focusRing(MaterialTheme.colorScheme.primary)
+                            .selectable(selected = index == choice, role = Role.RadioButton) { choice = index }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = index == choice, onClick = null)
+                        Text(side.ifEmpty { "No disc" }, Modifier.padding(start = 12.dp).weight(1f), style = MaterialTheme.typography.bodyLarge)
+                        if (side == inTray) {
+                            Text("In the tray", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onChoose(options[choice]) }) { Text("Insert") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
