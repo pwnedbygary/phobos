@@ -14,6 +14,7 @@ class LaunchSystemsTest {
         "ColecoVision" to listOf("col", "cv"),
         "Famicom" to listOf("fc", "nes", "unf", "unif", "unh", "fds"),
         "Super Famicom" to listOf("sfc", "smc", "swc", "fig", "bs", "st"),
+        "Super Game Boy" to listOf("gb"),
         "Nintendo 64" to listOf("n64", "v64", "z64", "n64dd", "ndd", "d64"),
         "Game Boy" to listOf("gb"),
         "Game Boy Color" to listOf("gb", "gbc", "nbc"),
@@ -129,6 +130,13 @@ class LaunchSystemsTest {
     @Test fun sharedExtensionsFallBackToTheirUsualSystem() {
         assertEquals(found("Game Boy"), resolve("Tetris.gb"))
         assertEquals(found("Neo Geo Pocket Color"), resolve("Sonic.ngc"))
+    }
+
+    @Test fun superGameBoyHintSelectsTheSgbSystem() {
+        assertEquals(found("Super Game Boy"), resolve("Tetris.gb", hint = "sgb"))
+        assertEquals(found("Super Game Boy"), resolve("Tetris.gb", hint = "supergameboy"))
+        // Without a hint, .gb stays Game Boy.
+        assertEquals(found("Game Boy"), resolve("Tetris.gb"))
     }
 
     @Test fun zipsAreIdentifiedByWhatTheyHold() {

@@ -24,6 +24,7 @@ object LaunchSystems {
             "superfamicom", "sfc", "snes", "snesna", "supernes", "supernintendo", "supernintendoentertainmentsystem",
             "satellaview", "sufami",
         ),
+        "Super Game Boy" to listOf("supergameboy", "sgb", "sgb1", "sgb2"),
         "Nintendo 64" to listOf("nintendo64", "n64", "n64dd", "64dd"),
         "Game Boy" to listOf("gameboy", "gb", "nintendogameboy"),
         "Game Boy Color" to listOf("gameboycolor", "gbc", "nintendogameboycolor"),

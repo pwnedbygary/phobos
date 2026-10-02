@@ -151,6 +151,7 @@ fun hudSystemLabel(systemName: String): String = when (systemName) {
     "Nintendo 64", "Nintendo 64DD" -> "N64"
     "PlayStation" -> "PS1"
     "Super Famicom" -> "SNES"
+    "Super Game Boy" -> "SGB"
     "Famicom" -> "NES"
     "Game Boy" -> "GB"
     "Game Boy Color" -> "GBC"

@@ -229,6 +229,7 @@ private fun getSystemIcon(system: String): String? {
         system.contains("Neo Geo", ignoreCase = true) -> "neogeomvs"
         system.contains("Mega Drive", ignoreCase = true) || system.contains("Genesis", ignoreCase = true) -> "genesis"
         system.contains("SNES", ignoreCase = true) || system.contains("Super Famicom", ignoreCase = true) -> "snes"
+        system.contains("Super Game Boy", ignoreCase = true) -> "snes"
         system.contains("NES", ignoreCase = true) || system.contains("Famicom", ignoreCase = true) -> "nes"
         system.contains("Nintendo 64", ignoreCase = true) -> "n64"
         system.contains("Game Boy Advance", ignoreCase = true) -> "gba"

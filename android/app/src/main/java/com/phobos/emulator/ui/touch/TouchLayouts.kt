@@ -41,7 +41,7 @@ enum class TouchFamily(val key: String, val displayName: String) {
         fun of(system: String): TouchFamily = when (system) {
             "Nintendo 64" -> N64
             "PlayStation" -> PS1
-            "Super Famicom" -> SNES
+            "Super Famicom", "Super Game Boy" -> SNES
             "Famicom" -> NES
             "Game Boy", "Game Boy Color" -> GB
             "Game Boy Advance" -> GBA

@@ -254,6 +254,7 @@ class MainViewModel(
                 "Neo Geo Pocket Color" to pocket,
                 "Game Boy" to gameBoy,
                 "Game Boy Color" to gameBoy,
+                "Super Game Boy" to setOf("fw_sgb1", "fw_sgb2"),
                 "Game Boy Advance" to setOf("fw_gba"),
                 "ColecoVision" to setOf("fw_coleco"),
                 "PC Engine" to pceCd,
@@ -2223,6 +2224,17 @@ class MainViewModel(
         "dmg_boot.bin" to "fw_gb_boot",
         "cgb_boot.bin" to "fw_gbc_boot",
         "sgb_boot.bin" to "fw_sgb_boot",
+        // Super Game Boy / SGB2 cartridge dumps (not the 256-byte SM83 boot ROM).
+        "sgb.sfc" to "fw_sgb1",
+        "sgb.smc" to "fw_sgb1",
+        "sgb1.sfc" to "fw_sgb1",
+        "sgb1.smc" to "fw_sgb1",
+        "super game boy.sfc" to "fw_sgb1",
+        "super game boy.smc" to "fw_sgb1",
+        "sgb2.sfc" to "fw_sgb2",
+        "sgb2.smc" to "fw_sgb2",
+        "super game boy 2.sfc" to "fw_sgb2",
+        "super game boy 2.smc" to "fw_sgb2",
         // Alternate filenames
         "gb_bios.bin" to "fw_gb_boot",
         "gbc_bios.bin" to "fw_gbc_boot",
@@ -2280,6 +2292,15 @@ class MainViewModel(
             if (name.contains("dev")) return "fw_n64dd_dev"
             if (name.contains("usa") || name.contains("(us") || name.contains("proto")) return "fw_n64dd_us"
             return "fw_n64dd_jp"
+        }
+        // Super Game Boy cartridge (not the tiny SM83 boot ROM named sgb_boot).
+        if (name.contains("sgb") && !name.contains("boot")) {
+            if (name.contains("sgb2") || name.contains("game boy 2") || name.contains("gameboy2")) return "fw_sgb2"
+            return "fw_sgb1"
+        }
+        if (name.contains("super game boy") || name.contains("supergameboy")) {
+            if (name.contains("2")) return "fw_sgb2"
+            return "fw_sgb1"
         }
         return null
     }

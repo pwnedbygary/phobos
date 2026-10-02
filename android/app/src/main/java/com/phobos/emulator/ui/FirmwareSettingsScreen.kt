@@ -34,6 +34,7 @@ data class FirmwareInfo(
 /** The file the BIOS behind a key from `PhobosCore.missingFirmware` usually comes as. */
 fun firmwareFileName(key: String): String = when (key) {
     "fw_mcd" -> "Mega CD BIOS (US, Japan or Europe)"
+    "fw_sgb" -> "Super Game Boy or Super Game Boy 2 cartridge ROM"
     else -> key
 }
 
@@ -97,6 +98,8 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             FirmwareInfo("PlayStation", "BIOS", "US", "fw_psx_us"),
             FirmwareInfo("PlayStation", "BIOS", "Japan", "fw_psx_jp"),
             FirmwareInfo("PlayStation", "BIOS", "Europe", "fw_psx_eu"),
+            FirmwareInfo("Super Game Boy", "SGB cartridge", "World", "fw_sgb1"),
+            FirmwareInfo("Super Game Boy", "SGB2 cartridge", "Japan", "fw_sgb2"),
             FirmwareInfo("SuperGrafx CD", "Arcade Card", "Japan", "fw_supergrafx_ac_jp"),
             FirmwareInfo("ZX Spectrum", "BIOS (48K)", "World", "fw_zx48"),
             FirmwareInfo("ZX Spectrum 128", "BIOS (128-0)", "World", "fw_zx128"),

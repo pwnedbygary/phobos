@@ -941,6 +941,44 @@ namespace ares {
     return {file.bundled.data, file.bundled.data + file.bundled.size};
   }
 
+  // Whether pak() has a Super Game Boy cartridge ROM (the ~256–512 KiB boot cart,
+  // not the 256-byte SM83 boot ROM bundled in mia).
+  static auto hasSuperGameBoyCart() -> bool {
+    auto present = [](const string& path) {
+      return nall::file::exists(path) && nall::file::size(path) >= 0x10000;
+    };
+    for (auto key : {"fw_sgb2", "fw_sgb1", "fw_sgb"}) {
+      if (auto it = firmwareMap.find(key); it != firmwareMap.end() && present(it->second)) return true;
+    }
+    return false;
+  }
+
+  static auto superGameBoyCartPath() -> string {
+    auto present = [](const string& path) {
+      return nall::file::exists(path) && nall::file::size(path) >= 0x10000;
+    };
+    // Prefer SGB2 when both are set (dedicated oscillator, slightly later cart).
+    // Load still tries later candidates if this file fails MIA load.
+    for (auto key : {"fw_sgb2", "fw_sgb1", "fw_sgb"}) {
+      if (auto it = firmwareMap.find(key); it != firmwareMap.end() && present(it->second)) return it->second;
+    }
+    return {};
+  }
+
+  // Candidate SGB cart paths in preference order (SGB2 → SGB1 → generic).
+  static auto superGameBoyCartCandidates() -> std::vector<string> {
+    auto present = [](const string& path) {
+      return nall::file::exists(path) && nall::file::size(path) >= 0x10000;
+    };
+    std::vector<string> out;
+    for (auto key : {"fw_sgb2", "fw_sgb1", "fw_sgb"}) {
+      if (auto it = firmwareMap.find(key); it != firmwareMap.end() && present(it->second)) {
+        out.push_back(it->second);
+      }
+    }
+    return out;
+  }
+
   // Whether pak() has a Mega CD BIOS to give the Mega Drive system pak.
   static auto hasMegaCDBios() -> bool {
     auto present = [](const string& path) { return nall::file::exists(path) && nall::file::size(path) > 0; };
@@ -2115,6 +2153,24 @@ namespace ares {
         if (card.pak) return card.pak;
       }
 
+      if (nodeName == "Game Boy Cartridge") {
+        // Super Game Boy only: the GB game is secondaryMedium. Do not use
+        // secondaryMedium for other systems (64DD disk, disc swap, etc.).
+        if (root && root->name() == "Super Famicom" && secondaryMedium) {
+            if (secondaryMedium->pak) {
+                LOGI("VFS: Returning secondaryMedium pak for %s", (const char*)nodeName);
+                return secondaryMedium->pak;
+            }
+            LOGW("VFS: No secondaryMedium pak for %s (SGB)", (const char*)nodeName);
+            return {};
+        }
+        if (currentMedium && currentMedium->pak) {
+            LOGI("VFS: Returning currentMedium pak for %s", (const char*)nodeName);
+            return currentMedium->pak;
+        }
+        LOGW("VFS: No medium pak available for %s", (const char*)nodeName);
+      }
+
       if (nodeName.endsWith("Cartridge") || nodeName.endsWith("Disc") || nodeName.endsWith("Card")) {
         if (currentMedium && currentMedium->pak) {
             LOGI("VFS: Returning currentMedium pak for %s", (const char*)nodeName);
@@ -2986,6 +3042,7 @@ else if (port->type() == "Keyboard") {
     else if (lookup.find("Master System")) identifiedSystem = "Master System";
     else if (lookup.find("Game Gear")) identifiedSystem = "Game Gear";
     else if (lookup.find("Game Boy Advance")) identifiedSystem = "Game Boy Advance";
+    else if (lookup.find("Super Game Boy") || lookup == "SGB") identifiedSystem = "Super Game Boy";
     else if (lookup.find("Game Boy Color")) identifiedSystem = "Game Boy Color";
     else if (lookup.find("Game Boy")) identifiedSystem = "Game Boy";
     else if (lookup.find("WonderSwan Color") || lookup.find("WSC")) identifiedSystem = "WonderSwan Color";
@@ -2997,7 +3054,20 @@ else if (port->type() == "Keyboard") {
     else if (lookup.find("MSX")) identifiedSystem = "MSX";
     else if (lookup.find("Mega CD") || lookup.find("Sega CD")) identifiedSystem = "Mega CD";
 
-    currentMedium = mia::Medium::create(identifiedSystem);
+    // Super Game Boy: the user's file is a Game Boy game; the SGB boot cart is
+    // firmware. Keep loadPath as the user's game through ZIP extract, load it
+    // as a Game Boy medium first, then swap to the Super Famicom SGB cart.
+    auto superGameBoyCarts = identifiedSystem == "Super Game Boy"
+        ? superGameBoyCartCandidates() : std::vector<string>{};
+    if (identifiedSystem == "Super Game Boy") {
+        if (superGameBoyCarts.empty()) {
+            LOGE("Super Game Boy: cartridge ROM missing — set it in Firmware");
+            return false;
+        }
+        currentMedium = mia::Medium::create("Game Boy");
+    } else {
+        currentMedium = mia::Medium::create(identifiedSystem);
+    }
     if (!currentMedium && identifiedSystem == "Neo Geo") {
         currentMedium = mia::Medium::create("Neo Geo MVS");
         if(!currentMedium) currentMedium = mia::Medium::create("Neo Geo AES");
@@ -3031,6 +3101,7 @@ else if (port->type() == "Keyboard") {
             if (identifiedSystem == "Game Boy") aresExt = "gb";
             if (identifiedSystem == "Game Boy Color") aresExt = "gbc";
             if (identifiedSystem == "Game Boy Advance") aresExt = "gba";
+            if (identifiedSystem == "Super Game Boy") aresExt = "gb";
             if (identifiedSystem == "Super Famicom") aresExt = "sfc";
             if (identifiedSystem == "Famicom") aresExt = "fc";
             if (identifiedSystem == "Nintendo 64") aresExt = "z64";
@@ -3176,6 +3247,34 @@ else if (port->type() == "Keyboard") {
     }
     LOGI("MIA: Successfully loaded medium %s", (const char*)loadPath);
 
+    if (identifiedSystem == "Super Game Boy") {
+        // User's Game Boy ROM is now in currentMedium (ZIP already extracted).
+        secondaryMedium = currentMedium;
+        currentMedium.reset();
+        string loadedCart;
+        for (auto& cart : superGameBoyCarts) {
+            currentMedium = mia::Medium::create("Super Famicom");
+            if (!currentMedium) {
+                LOGE("Super Game Boy: failed to create Super Famicom medium");
+                secondaryMedium.reset();
+                return false;
+            }
+            auto sgbResult = currentMedium->load(cart);
+            if (sgbResult == successful) {
+                loadedCart = cart;
+                break;
+            }
+            LOGW("Super Game Boy: cart load failed at %s (Result: %d); trying next", (const char*)cart, (s32)sgbResult.result);
+            currentMedium.reset();
+        }
+        if (!loadedCart) {
+            LOGE("Super Game Boy: all configured cartridge ROMs failed to load");
+            secondaryMedium.reset();
+            return false;
+        }
+        LOGI("Super Game Boy: loaded SGB cart %s + Game Boy game %s", (const char*)loadedCart, (const char*)loadPath);
+    }
+
     bool success = false;
     root = {};
 
@@ -3232,7 +3331,7 @@ else if (port->type() == "Keyboard") {
       );
 
       success = ::ares::Nintendo64::load(root, regionString);
-    } else if (identifiedSystem == "Super Famicom") {
+    } else if (identifiedSystem == "Super Famicom" || identifiedSystem == "Super Game Boy") {
       ::ares::SuperFamicom::ppu.implementation = &::ares::SuperFamicom::ppuPerformanceImpl;
       ::ares::SuperFamicom::ppu.accurate = false;
       success = ::ares::SuperFamicom::load(root, getRegion("[Nintendo] Super Famicom (NTSC)", "[Nintendo] Super Famicom (NTSC)", "[Nintendo] Super Famicom (PAL)"));
@@ -3338,12 +3437,13 @@ else if (port->type() == "Keyboard") {
       // post-connect import never reaches the cartridge (fresh each load).
       if (savesPath) {
         // Per-game save subdirectory (same key as flushSavesToDisk):
-        // saves/<System>/<RomBase>/, named by the core's root node, which is
-        // "Mega Drive" for the Mega CD and the 32X too.
+        // saves/<System>/<RomBase>/. SGB shares the Game Boy folder so the
+        // same ROM keeps progress across GB and SGB launches.
         string romKey = currentRomBase;
         romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
         if (romKey.size() == 0) romKey = "rom";
-        string saveDir = {savesPath, "/", root->name(), "/", romKey, "/"};
+        string sysFolder = identifiedSystem == "Super Game Boy" ? string{"Game Boy"} : root->name();
+        string saveDir = {savesPath, "/", sysFolder, "/", romKey, "/"};
         directory::create(saveDir);
         // Import matching save files from the persistent dir into a given pak.
         auto importIntoPak = [&](auto& pak) -> void {
@@ -3381,6 +3481,38 @@ else if (port->type() == "Keyboard") {
       bool playStation = root->name() == "PlayStation";
       if (playStation) loadPs1MemoryCards();
       connectDevices(root);
+      // Super Game Boy: the nested Game Boy Cartridge Slot only appears after
+      // the SGB cart connects. Do NOT re-run connectDevices — that reconnects
+      // the SNES cart, tears down the ICD, and leaves an orphaned GB port.
+      // Only allocate empty Game Boy cartridge ports that appeared under ICD.
+      if (identifiedSystem == "Super Game Boy") {
+        bool gbAttached = false;
+        for (auto& port : root->find<Node::Port>()) {
+          if (port->type() != "Cartridge") continue;
+          if (port->family() != "Game Boy" && port->family() != "Game Boy Color") continue;
+          if (port->connected()) { gbAttached = true; continue; }
+          if (port->allocate()) {
+            LOGI("VFS: Connecting nested %s (%s) for SGB", (const char*)port->name(), (const char*)port->family());
+            port->connect();
+            if (port->connected()) gbAttached = true;
+          } else {
+            LOGE("VFS: FAILED to allocate nested Game Boy cartridge for SGB");
+          }
+        }
+        if (!gbAttached) {
+          LOGE("Super Game Boy: Game Boy cartridge did not attach — refusing to start");
+          setEmulationRunning(false);
+          root->unload();
+          root.reset();
+          currentMedium.reset();
+          secondaryMedium.reset();
+          return false;
+        }
+        for (auto& setting : root->find<Node::Setting::Boolean>()) {
+          if (setting->name() == "Fast Boot") setting->setValue(fastBootAtomic);
+        }
+        for (auto& setting : root->find<Node::Setting::Setting>()) setting->setLatch();
+      }
       if (playStation) trackPs1MemoryCards();
 
       // Inject saved cpu.ram + bios.rom BEFORE power-on so CPU::power()
@@ -3398,7 +3530,8 @@ else if (port->type() == "Keyboard") {
       root->power();
 
       if (skipBootRom) {
-          if (identifiedSystem == "Game Boy" || identifiedSystem == "Game Boy Color") {
+          if (identifiedSystem == "Game Boy" || identifiedSystem == "Game Boy Color"
+              || identifiedSystem == "Super Game Boy") {
               LOGI("GB: Applying post-boot register state (Skip Boot ROM)");
               ::ares::GameBoy::cpu.r.pc.word = 0x0100;
               ::ares::GameBoy::cpu.r.af.word = 0x01b0;
@@ -3442,6 +3575,14 @@ else if (port->type() == "Keyboard") {
   auto setAutoSaveMemory(bool enabled) -> void { autoSaveMemoryAtomic = enabled; LOGI("Auto-save memory %s", enabled ? "enabled" : "disabled"); }
   auto setAutoLoadMemory(bool enabled) -> void { autoLoadMemoryAtomic = enabled; LOGI("Auto-load memory %s", enabled ? "enabled" : "disabled"); }
 
+  // Folder under savesPath for battery saves. SGB shares "Game Boy" so the
+  // same ROM keeps progress when launched as GB or SGB (root is Super Famicom).
+  static auto saveSystemFolder() -> string {
+    if (!root) return {};
+    if (root->name() == "Super Famicom" && secondaryMedium) return "Game Boy";
+    return root->name();
+  }
+
   // Flush cartridge/battery saves to the persistent saves directory. Called
   // on pause (so backing out / app-switch doesn't lose progress) and on clean
   // unload. Writes to savesPath/<system>/<RomBase>/ so different games never
@@ -3457,8 +3598,8 @@ else if (port->type() == "Keyboard") {
     // → Cartridge::save() / DD::save() / RTC → live state into the pak(s), then
     // we copy to the persistent dir.
     root->save();
-    string sysName = root->name();
-    if (sysName == "PlayStation") flushPs1MemoryCards();
+    string sysName = saveSystemFolder();
+    if (root->name() == "PlayStation") flushPs1MemoryCards();
     // Per-game subdirectory (keyed by ROM base name) so games don't clobber
     // each other's saves: saves/<System>/<RomBase>/
     string romKey = currentRomBase;
@@ -3598,14 +3739,17 @@ else if (port->type() == "Keyboard") {
     string romKey = currentRomBase;
     romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
     if (romKey.size() == 0) romKey = "rom";
-    string saveDir = {savesPath, "/", root->name(), "/", romKey, "/"};
-    if (currentMedium && currentMedium->pak) {
-      for (auto& file : currentMedium->pak->files()) {
+    string saveDir = {savesPath, "/", saveSystemFolder(), "/", romKey, "/"};
+    auto listPak = [&](auto& pak) -> void {
+      for (auto& file : pak->files()) {
         string name = file->name();
         if (name != "save.eeprom" && name != "save.ram" && name != "save.flash") continue;
         files.push_back(string{name, "\t", (u64)file->size(), "\t", saveDir, name});
       }
-    }
+    };
+    if (currentMedium && currentMedium->pak) listPak(currentMedium->pak);
+    // SGB: battery lives on the Game Boy secondary medium, not the SGB cart.
+    if (secondaryMedium && secondaryMedium->pak) listPak(secondaryMedium->pak);
     if (player1PakDir && root->name() == "Nintendo 64") {
       if (auto fp = player1PakDir->read("save.pak")) {
         files.push_back(string{"save.pak\t", (u64)fp->size(), "\t", savesPath, "/Nintendo 64/", romKey, "/save.pak"});
@@ -4114,6 +4258,7 @@ else if (port->type() == "Keyboard") {
     std::vector<string> missing;
     string name = system ? system : "";
     if ((name == "Mega CD" || name == "Mega CD 32X") && !hasMegaCDBios()) missing.push_back("fw_mcd");
+    if (name == "Super Game Boy" && !hasSuperGameBoyCart()) missing.push_back("fw_sgb");
     return missing;
   }
   auto setHomePath(const char* path) -> void {

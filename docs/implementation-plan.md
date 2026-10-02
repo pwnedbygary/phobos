@@ -153,7 +153,9 @@ lands as its own PR; the inventory rows below have the details.
    LaserActive and Pocket Challenge V2, each with Library art in the existing
    style; the user is looking for games to test them with, so they are made
    usable in the meantime. With them, Phobos's own platform tiles in place of
-   the set used so far (BAXY Square's, by way of RomM).
+   the set used so far (BAXY Square's, by way of RomM). Super Game Boy is
+   wired on `feature/ares-systems-sgb-2026-10` (SGB cart as firmware, GB game
+   as secondary; device boot check waits on a `.gb` ROM on the RP6).
 7. **Libretro host and PSP (PPSSPP)**, relicensing to GPL-3.0-or-later. Not a
    strict port: enhancements and performance gains are welcome, with accuracy
    first.
