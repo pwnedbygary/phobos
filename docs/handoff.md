@@ -687,6 +687,27 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## PC Engine CD, games loaded in place, firmware by content — 2026-10-02
+
+Branch `cursor/pce-cd-in-place-loading-2b67` (PR 1 of the LaserActive plan; LaserActive follows on top).
+The plan rows "PC Engine CD boots", "Games load from where they are", "Firmware matched by content" and
+"CHD pregaps left out of the image" have the details; this records what was checked and what wasn't.
+
+- **Checks run:** both flavors build (`./gradlew testModernDebugUnitTest assembleModernRelease
+  assembleLegacyRelease`, JDK 17, NDK 28.2), host tests pass (new: `GameFileRouteTest`, `FirmwareIdsTest`).
+  On the RP6 (modern release over the nightly, data kept): Rondo of Blood boots through System Card 3.0 and
+  plays its intro in place; regression loads through the adb load intent of Final Lap Twin (PC Engine),
+  The Terminator (Mega CD CHD), Ape Escape (PS1 CHD), Pokémon Unbound (GBA zip), Alpha Mission II (Neo Geo)
+  and F-Zero X (N64) all logged "Loading in place" and restored their saves from Phobos's folder.
+- **Firmware on the RP6:** the six missing BIOS files (LaserActive SEGA PAC US/JP and NEC PAC PAC-N10, PAC-N1,
+  PCE-LP1, from `Abdess/retrobios`, SHA-256 checked against upstream ares's list; `aleck64.zip` from MAME's
+  set) went into `/storage/emulated/0/Emulation Settings/Phobos/Firmware/`, and a content scan filled their
+  slots and corrected the ones the name matching had got wrong. Nothing was committed to the repository.
+- **Not checked:** a frontend launch whose URI has no path (the copy fallback, and the PC Engine CD refusal
+  dialog), a SuperGrafx game (none on the RP6), the Rondo of Blood audio against a redump image (the user heard
+  about 2 s of offset left with the translated CHD), and the legacy APK on a device.
+- **Device setting:** `stay_on_while_plugged_in` was 7 before testing and is restored to 7 afterwards.
+
 ## Upstream ares merge — 2026-09-30
 
 Branch `merge/upstream-ares-2026-09`, at the user's request: a merge commit of upstream ares

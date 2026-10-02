@@ -152,6 +152,14 @@ inline auto CHD::load(const string& location) -> bool {
         index.end = -1;
         index.chd_lba = -1;
         track.indices.push_back(index);
+      } else if(pregap_frames > 0) {
+        //a pregap left out of the image (PREGAP without a 'V' PGTYPE) is silence on the disc, and the
+        //tracks after it start that much later, as with a cue sheet's PREGAP; games seek to those positions
+        index.lba = disc_lba;
+        index.end = disc_lba + pregap_frames - 1;
+        index.chd_lba = -1;
+        disc_lba += pregap_frames;
+        track.indices.push_back(index);
       }
     }
 

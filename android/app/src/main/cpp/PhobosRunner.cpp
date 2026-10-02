@@ -1028,6 +1028,16 @@ namespace ares {
     return present(string{homePath, "/System/Mega Drive/bios.rom"});
   }
 
+  // Whether pak() has a System Card for the PC Engine Duo's BIOS, which ares doesn't ship; without one the
+  // CD unit runs from an empty ROM and the game stays on a black screen.
+  static auto hasPCEngineCDBios() -> bool {
+    auto present = [](const string& path) { return nall::file::exists(path) && nall::file::size(path) > 0; };
+    for (auto key : {"fw_pce_cd_3_jp", "fw_pce_cd_ge_jp"}) {
+      if (auto it = firmwareMap.find(key); it != firmwareMap.end() && present(it->second)) return true;
+    }
+    return present(string{homePath, "/System/PC Engine/bios.rom"});
+  }
+
   // N64 Player 1 controller pak ("None" | "Rumble Pak" | "Controller Pak").
   // Rumble state is polled from Kotlin; player1PakDir backs the Controller
   // Pak's save.pak (created on demand in pak() when a Controller Pak attaches).
@@ -2795,15 +2805,12 @@ namespace ares {
           portIndex++;
           continue;
       }
-      // Disc Tray: connect for all disc-based systems. Only skip for
-      // PC Engine / SuperGrafx HuCard games (name != "CD" / "Duo").
+      // Disc Tray: connect whenever the core has one. A PC Engine HuCard or
+      // SuperGrafx game has no CD unit (PCD::Present()), so no tray either;
+      // the Duo's root is also named "PC Engine", so the name can't tell them apart.
       if (port->name() == "Disc Tray") {
-          string sysName = node ? node->name() : "";
-          // HuCard-only PCE: skip tray connect to prevent feeding ROM as CD.
-          bool isHuCard = (sysName == "PC Engine" || sysName == "SuperGrafx");
-          if (isHuCard) { portIndex++; continue; }
           if (port->allocate()) {
-              LOGI("VFS: Connecting Disc Tray for '%s'", (const char*)sysName);
+              LOGI("VFS: Connecting Disc Tray for '%s'", (const char*)(node ? node->name() : ""));
               port->connect();
           }
           portIndex++;
@@ -4122,7 +4129,14 @@ else if (port->type() == "Keyboard") {
   auto setSecondaryRomFd(s32 fd) -> void { lock_guard<recursive_mutex> lock(systemMutex); if (secondaryRomFd != -1) ::close(secondaryRomFd); secondaryRomFd = fd; }
   auto setRomPath(const char* path) -> void { lock_guard<recursive_mutex> lock(systemMutex); romPath = path ? (string)path : ""; }
   auto setSecondaryRomPath(const char* path) -> void { lock_guard<recursive_mutex> lock(systemMutex); secondaryRomPath = path ? (string)path : ""; }
-  auto setTempFilePath(const char* path) -> void { tempFilePath = path ? (string)path : ""; }
+  auto setTempFilePath(const char* path) -> void {
+    tempFilePath = path ? (string)path : "";
+    // Games load from where they are, so mia must not look beside them for saves (another emulator's .sav
+    // would be imported) or write any there: Phobos keeps saves itself (importIntoPak, flushSavesToDisk).
+    mia::setSaveLocation([] { return string{tempFilePath, "/mia-saves/"}; });
+    // A parent set such as aleck64.zip that isn't beside the game: the app copies its Firmware pick here.
+    mia::setParentLocation([] { return string{tempFilePath, "/"}; });
+  }
   auto setLoadDiskImageToRam(bool enabled) -> void { /* Deprecated */ }
 
   auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void {
@@ -4344,6 +4358,7 @@ else if (port->type() == "Keyboard") {
     string name = system ? system : "";
     if ((name == "Mega CD" || name == "Mega CD 32X") && !hasMegaCDBios()) missing.push_back("fw_mcd");
     if (name == "Super Game Boy" && !hasSuperGameBoyCart()) missing.push_back("fw_sgb");
+    if (name == "PC Engine CD" && !hasPCEngineCDBios()) missing.push_back("fw_pce_cd");
     return missing;
   }
   auto setHomePath(const char* path) -> void {

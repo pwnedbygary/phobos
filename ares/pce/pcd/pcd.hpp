@@ -25,8 +25,8 @@ struct PCD : Thread {
     } memory;
   } debugger;
 
-  // Present() must be at file scope (after extern PCD pcd).
-  static auto Present() -> bool;
+  // Only the models with a CD unit built in have one, so HuCard and SuperGrafx games run without it.
+  static auto Present() -> bool { return Model::PCEngineDuo(); }
 
   auto title() const -> string { return information.title; }
   auto bramEnable() const -> bool { return io.bramEnable; }
@@ -498,5 +498,3 @@ struct PCD : Thread {
 };
 
 extern PCD pcd;
-
-inline auto PCD::Present() -> bool { return pcd.fd.operator bool(); }
