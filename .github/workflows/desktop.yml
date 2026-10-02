@@ -12,8 +12,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A pull request's push and pull_request runs share a group, so only one of them builds.
 concurrency:
-  group: desktop-${{ github.head_ref || github.ref }}
+  group: desktop-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
