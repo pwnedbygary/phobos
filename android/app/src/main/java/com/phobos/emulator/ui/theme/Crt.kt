@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.R
+import com.phobos.emulator.data.CrtBackdropScene
 import kotlin.math.max
 
 /** VT323 (SIL Open Font License 1.1; see LICENSE), the type of DEC's VT320 terminal. */
@@ -126,13 +127,24 @@ private const val SCANLINE_PITCH = 3
 
 /** The CRT backdrop: the background with a phosphor bloom in the middle, scanlines and a vignette. */
 @Composable
-fun CrtBackdrop(scheme: ColorScheme, isDark: Boolean, modifier: Modifier = Modifier) {
+fun CrtBackdrop(
+    scheme: ColorScheme,
+    isDark: Boolean,
+    scene: CrtBackdropScene = CrtBackdropScene.GREEN,
+    modifier: Modifier = Modifier,
+) {
     Spacer(
         modifier.drawWithCache {
             val background = scheme.background
             val center = size.center
             val radius = size.maxDimension * 0.75f
-            val bloom = Brush.radialGradient(listOf(lerp(background, scheme.primary, crtBloom(isDark)), background), center, radius)
+            val phosphor = when (scene) {
+                CrtBackdropScene.GREEN -> Color(0xFF54FF8B)
+                CrtBackdropScene.AMBER -> Color(0xFFFFB347)
+                CrtBackdropScene.BLUE -> Color(0xFF69B7FF)
+            }
+            val bloomColor = lerp(scheme.primary, phosphor, 0.6f)
+            val bloom = Brush.radialGradient(listOf(lerp(background, bloomColor, crtBloom(isDark)), background), center, radius)
             val vignette = Brush.radialGradient(
                 0.5f to Color.Transparent,
                 1f to Color.Black.copy(alpha = crtVignette(isDark)),
@@ -196,7 +208,8 @@ object CrtUi : SolidUi() {
     }
 
     @Composable
-    override fun Backdrop(modifier: Modifier) = CrtBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, modifier)
+    override fun Backdrop(modifier: Modifier) =
+        CrtBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, LocalPhobosTheme.current.crtBackdrop, modifier)
 
     @Composable
     override fun plate(): Modifier {

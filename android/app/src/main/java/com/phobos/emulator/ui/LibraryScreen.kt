@@ -11,9 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
@@ -30,9 +28,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import coil.compose.AsyncImage
 import com.phobos.emulator.R
+import com.phobos.emulator.data.PlatformIconPack
+import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.ui.theme.ConsoleArtPalette
+import com.phobos.emulator.ui.theme.CrtUi
 import com.phobos.emulator.ui.theme.LegibleText
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
+import com.phobos.emulator.ui.theme.MangaUi
+import com.phobos.emulator.ui.theme.PixelUi
+import com.phobos.emulator.ui.theme.PlatformGlyphIcon
+import com.phobos.emulator.ui.theme.PlatformGlyphStyle
+import com.phobos.emulator.ui.theme.RpgUi
 import com.phobos.emulator.ui.theme.libraryTileFill
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.romTitle
@@ -44,7 +50,6 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     val settings by viewModel.settings.collectAsState()
     var confirmQuit by remember { mutableStateOf(false) }
     val theme = LocalPhobosTheme.current
-    // A solid style's tiles are opaque, whatever the glass level.
     val tileAlpha = if (theme.solid != null) 1f else theme.glass.panelAlpha
     val artPalette = remember(theme.scheme, theme.isDark, theme.success, theme.warning, tileAlpha) {
         val tile = libraryTileFill(theme.scheme, theme.isDark).copy(alpha = tileAlpha).compositeOver(theme.scheme.background)
@@ -52,22 +57,18 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     }
     val scheme = MaterialTheme.colorScheme
     val tileFill = remember(scheme, theme.isDark) { libraryTileFill(scheme, theme.isDark) }
+    val iconPack = remember(settings.platformIconPack, settings.uiEffects) {
+        resolveIconPack(settings.platformIconPack, settings.uiEffects)
+    }
+    val mangaPage = theme.style is MangaUi
+    val gridSpacing = when {
+        mangaPage -> 10.dp
+        theme.style is PixelUi || theme.style is RpgUi -> 12.dp
+        else -> 16.dp
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Image(
-            painter = painterResource(id = R.drawable.phobos_logo),
-            contentDescription = null,
-            modifier = Modifier
-                .size(400.dp)
-                .align(Alignment.BottomEnd)
-                .offset(x = 100.dp, y = 100.dp)
-                .alpha(0.10f),
-            contentScale = ContentScale.Fit,
-            colorFilter = artPalette.logoFilter
-        )
-
         if (systems.isEmpty()) {
-            // A game a frontend started can be running with no ROM folders set up here.
             running?.let { game ->
                 Box(Modifier.padding(pageContentPadding())) {
                     RunningGameCard(game, tileFill, onResume = { viewModel.swapBackToGame() }, onQuit = { confirmQuit = true })
@@ -92,10 +93,10 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
             }
         } else {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 140.dp),
+                columns = GridCells.Adaptive(minSize = if (mangaPage) 150.dp else 140.dp),
                 contentPadding = pageContentPadding(),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(gridSpacing),
+                horizontalArrangement = Arrangement.spacedBy(gridSpacing)
             ) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     ScreenHeader("Library", "${systems.size} ${if (systems.size == 1) "system" else "systems"}")
@@ -106,9 +107,13 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
                     }
                 }
                 items(systems) { system ->
-                    SystemCard(system, artPalette, tileFill, onClick = { 
-                        onSystemClick(Uri.encode(system)) 
-                    })
+                    SystemCard(
+                        system = system,
+                        artPalette = artPalette,
+                        fill = tileFill,
+                        iconPack = iconPack,
+                        onClick = { onSystemClick(Uri.encode(system)) },
+                    )
                 }
             }
         }
@@ -121,12 +126,22 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
             title = { DialogSystemBars(settings.fullScreenMode, inGame = false); Text("Quit Emulation") },
             text = { Text("Are you sure you want to stop emulating ${romTitle(quitting.romName)}?") },
             confirmButton = {
-                // As from the pause menu: a game another app started returns there
                 TextButton(onClick = { confirmQuit = false; viewModel.unloadSystem(); viewModel.leaveGame() }) { Text("Quit") }
             },
             dismissButton = { TextButton(onClick = { confirmQuit = false }) { Text("Cancel") } },
         )
     }
+}
+
+/** Resolves Match style to a concrete pack from the active style effects. */
+fun resolveIconPack(pack: PlatformIconPack, effects: UiEffects): PlatformIconPack = when (pack) {
+    PlatformIconPack.MATCH_STYLE -> when (effects) {
+        UiEffects.PIXEL_ART -> PlatformIconPack.PIXEL
+        UiEffects.MANGA -> PlatformIconPack.MANGA
+        UiEffects.RPG -> PlatformIconPack.PIXEL
+        else -> PlatformIconPack.SYSTEMATIC
+    }
+    else -> pack
 }
 
 /** The game paused behind the Library: its last frame, name and system, with Resume and Quit. Tapping it resumes too. */
@@ -169,13 +184,37 @@ private fun RunningGameCard(game: RunningGame, fill: Color, onResume: () -> Unit
     }
 }
 
-/** Console tile: a themed card in [fill] ([libraryTileFill]), with the console in the theme's colors and an outlined name. */
+/**
+ * Console tile. Manga ink turns each system into a panel with a caption strip; Pixel art uses a
+ * chunky pixel box; 16-bit RPG uses a framed menu window; Retrowave / glass keep the glowing cards.
+ */
 @Composable
-fun SystemCard(system: String, artPalette: ConsoleArtPalette, fill: Color, onClick: () -> Unit) {
+fun SystemCard(
+    system: String,
+    artPalette: ConsoleArtPalette,
+    fill: Color,
+    iconPack: PlatformIconPack,
+    onClick: () -> Unit,
+) {
+    when (LocalPhobosTheme.current.style) {
+        is MangaUi -> MangaPanelSystemCard(system, artPalette, fill, iconPack, onClick)
+        is PixelUi -> PixelBoxSystemCard(system, artPalette, fill, iconPack, onClick)
+        is RpgUi -> RpgWindowSystemCard(system, artPalette, fill, iconPack, onClick)
+        is CrtUi -> CrtPanelSystemCard(system, artPalette, fill, iconPack, onClick)
+        else -> GlassSystemCard(system, artPalette, fill, iconPack, onClick)
+    }
+}
+
+@Composable
+private fun GlassSystemCard(
+    system: String,
+    artPalette: ConsoleArtPalette,
+    fill: Color,
+    iconPack: PlatformIconPack,
+    onClick: () -> Unit,
+) {
     ThemedCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(160.dp),
+        modifier = Modifier.fillMaxWidth().height(160.dp),
         shape = MaterialTheme.shapes.small,
         onClick = onClick,
         fill = fill,
@@ -183,75 +222,260 @@ fun SystemCard(system: String, artPalette: ConsoleArtPalette, fill: Color, onCli
         Column(
             modifier = Modifier.padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                val asset = getSystemIcon(system)
-                if (asset != null) {
-                    AsyncImage(
-                        model = ConsoleArt(asset, artPalette),
-                        contentDescription = system,
-                        modifier = Modifier.size(80.dp),
-                        contentScale = ContentScale.Fit
-                    )
-                } else {
-                    Image(
-                        painter = painterResource(id = R.drawable.phobos_logo),
-                        contentDescription = system,
-                        modifier = Modifier.size(80.dp),
-                        contentScale = ContentScale.Fit,
-                        colorFilter = artPalette.logoFilter
-                    )
-                }
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                SystemIcon(system, artPalette, iconPack, size = 80.dp)
             }
             LegibleText(
                 system,
                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2
+                maxLines = 2,
             )
         }
     }
 }
 
-/** The system's illustration in `assets/platforms`, or null for systems without one. */
-private fun getSystemIcon(system: String): String? {
-    return when {
-        system.contains("Neo Geo Pocket Color", ignoreCase = true) -> "neo-geo-pocket-color"
-        system.contains("Neo Geo Pocket", ignoreCase = true) -> "neo-geo-pocket"
-        system.contains("Neo Geo", ignoreCase = true) && system.contains("CD", ignoreCase = true) -> "neo-geo-cd"
-        system.contains("Neo Geo", ignoreCase = true) -> "neogeomvs"
-        system.contains("Mega Drive", ignoreCase = true) || system.contains("Genesis", ignoreCase = true) -> "genesis"
-        system.contains("SNES", ignoreCase = true) || system.contains("Super Famicom", ignoreCase = true) -> "snes"
-        system.contains("Super Game Boy", ignoreCase = true) -> "snes"
-        system.contains("NES", ignoreCase = true) || system.contains("Famicom", ignoreCase = true) -> "nes"
-        system.contains("Nintendo 64", ignoreCase = true) -> "n64"
-        system.contains("Game Boy Advance", ignoreCase = true) -> "gba"
-        system.contains("Game Boy Color", ignoreCase = true) -> "gbc"
-        system.contains("Game Boy", ignoreCase = true) -> "gb"
-        system.contains("PlayStation", ignoreCase = true) -> "psx"
-        system.contains("Game Gear", ignoreCase = true) -> "gamegear"
-        system.contains("MSX2", ignoreCase = true) -> "msx2"
-        system.contains("MSX", ignoreCase = true) -> "msx"
-        system.contains("PC Engine", ignoreCase = true) && system.contains("CD", ignoreCase = true) -> "pcecd"
-        system.contains("PC Engine", ignoreCase = true) || system.contains("PCE", ignoreCase = true) || system.contains("TurboGrafx", ignoreCase = true) -> "pce"
-        system.contains("Sega 32X", ignoreCase = true) || system.contains("32X", ignoreCase = true) -> "sega32"
-        system.contains("Mega CD", ignoreCase = true) -> "segacd"
-        system.contains("Master System", ignoreCase = true) || system.contains("Mark III", ignoreCase = true) || system.contains("SG-1000", ignoreCase = true) -> "sms"
-        system.contains("ColecoVision", ignoreCase = true) -> "colecovision"
-        system.contains("Atari 2600", ignoreCase = true) -> "atari2600"
-        system.contains("LaserActive", ignoreCase = true) -> "laseractive"
-        system.contains("SuperGrafx", ignoreCase = true) -> "supergrafx"
-        system.contains("WonderSwan Color", ignoreCase = true) -> "wonderswan-color"
-        system.contains("WonderSwan", ignoreCase = true) || system.contains("Pocket Challenge", ignoreCase = true) -> "wonderswan"
-        system.contains("ZX Spectrum 128", ignoreCase = true) || system.contains("ZX Spectrum", ignoreCase = true) -> "zx-spectrum"
-        system.contains("Arcade", ignoreCase = true) -> "arcade"
-        else -> null
+/** A manga panel: paper fill, ink border (from [MangaUi]), art above a caption box for the name. */
+@Composable
+private fun MangaPanelSystemCard(
+    system: String,
+    artPalette: ConsoleArtPalette,
+    fill: Color,
+    iconPack: PlatformIconPack,
+    onClick: () -> Unit,
+) {
+    val paper = MaterialTheme.colorScheme.background
+    val panelFill = fill.copy(alpha = 0.92f).compositeOver(paper)
+    ThemedCard(
+        modifier = Modifier.fillMaxWidth().height(168.dp),
+        shape = MaterialTheme.shapes.small,
+        onClick = onClick,
+        fill = panelFill,
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                SystemIcon(system, artPalette, iconPack, size = 78.dp)
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(paper)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    system.uppercase(),
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
+
+/** A pixel-art box: stepped corners and a solid pixel panel around the console glyph. */
+@Composable
+private fun PixelBoxSystemCard(
+    system: String,
+    artPalette: ConsoleArtPalette,
+    fill: Color,
+    iconPack: PlatformIconPack,
+    onClick: () -> Unit,
+) {
+    ThemedCard(
+        modifier = Modifier.fillMaxWidth().height(156.dp),
+        shape = MaterialTheme.shapes.small,
+        onClick = onClick,
+        fill = fill,
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.extraSmall)
+                    .background(fill.copy(alpha = 0.55f).compositeOver(MaterialTheme.colorScheme.background)),
+                contentAlignment = Alignment.Center,
+            ) {
+                SystemIcon(system, artPalette, iconPack, size = 72.dp)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                system.uppercase(),
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** A 16-bit RPG text window: framed panel with the console and name laid out like a menu entry. */
+@Composable
+private fun RpgWindowSystemCard(
+    system: String,
+    artPalette: ConsoleArtPalette,
+    fill: Color,
+    iconPack: PlatformIconPack,
+    onClick: () -> Unit,
+) {
+    ThemedCard(
+        modifier = Modifier.fillMaxWidth().height(156.dp),
+        shape = MaterialTheme.shapes.small,
+        onClick = onClick,
+        fill = fill,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                SystemIcon(system, artPalette, iconPack, size = 72.dp)
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                system,
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** A CRT terminal panel: boxed window with the console name and a blinking block cursor, like LIBRARY. */
+@Composable
+private fun CrtPanelSystemCard(
+    system: String,
+    artPalette: ConsoleArtPalette,
+    fill: Color,
+    iconPack: PlatformIconPack,
+    onClick: () -> Unit,
+) {
+    val nameStyle = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+    val nameColor = MaterialTheme.colorScheme.primary
+    ThemedCard(
+        modifier = Modifier.fillMaxWidth().height(160.dp),
+        shape = MaterialTheme.shapes.small,
+        onClick = onClick,
+        fill = fill,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                SystemIcon(system, artPalette, iconPack, size = 80.dp)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    system.uppercase(),
+                    style = nameStyle,
+                    textAlign = TextAlign.Center,
+                    color = nameColor,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                TitleCursor(nameStyle, nameColor)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SystemIcon(
+    system: String,
+    artPalette: ConsoleArtPalette,
+    iconPack: PlatformIconPack,
+    size: androidx.compose.ui.unit.Dp,
+) {
+    val slug = systemIconSlug(system)
+    val glyphStyle = when (iconPack) {
+        PlatformIconPack.PIXEL -> PlatformGlyphStyle.PIXEL
+        PlatformIconPack.MANGA -> PlatformGlyphStyle.MANGA
+        PlatformIconPack.PHOBOS -> PlatformGlyphStyle.PHOBOS
+        else -> null
+    }
+    if (glyphStyle != null && slug != null) {
+        val scheme = MaterialTheme.colorScheme
+        PlatformGlyphIcon(
+            slug = slug,
+            style = glyphStyle,
+            accent = scheme.primary,
+            ink = scheme.onSurface,
+            fill = scheme.surfaceContainerHighest,
+            modifier = Modifier.size(size),
+        )
+    } else if (slug != null) {
+        val asset = systematicAssetFor(slug)
+        if (asset != null) {
+            AsyncImage(
+                model = ConsoleArt(asset, artPalette),
+                contentDescription = system,
+                modifier = Modifier.size(size),
+                contentScale = ContentScale.Fit,
+            )
+        } else {
+            // Newer systems without a Systematic SVG still get a Phobos glyph.
+            PlatformGlyphIcon(
+                slug = slug,
+                style = PlatformGlyphStyle.PHOBOS,
+                accent = MaterialTheme.colorScheme.primary,
+                ink = MaterialTheme.colorScheme.onSurface,
+                fill = MaterialTheme.colorScheme.surfaceContainerHighest,
+                modifier = Modifier.size(size),
+            )
+        }
+    } else {
+        Image(
+            painter = painterResource(id = R.drawable.phobos_logo),
+            contentDescription = system,
+            modifier = Modifier.size(size),
+            contentScale = ContentScale.Fit,
+            colorFilter = artPalette.logoFilter,
+        )
+    }
+}
+
+/**
+ * Basename under assets/platforms for the Systematic pack, or null when none ships.
+ * Glyph-only slugs (e.g. `sgb`) alias to the closest shipped SVG so Systematic stays Systematic.
+ */
+private fun systematicAssetFor(slug: String): String? = when (slug) {
+    "sgb" -> "snes"
+    "pceld" -> "laseractive"
+    else -> slug.takeIf { it in SYSTEMATIC_ASSETS }
+}
+private val SYSTEMATIC_ASSETS = setOf(
+    "atari2600", "colecovision", "nes", "snes", "arcade", "laseractive", "n64",
+    "gb", "gbc", "gba", "sms", "genesis", "sega32", "gamegear", "segacd", "psx",
+    "neogeomvs", "neo-geo-cd", "neo-geo-pocket", "neo-geo-pocket-color", "zx-spectrum",
+    "pce", "pcecd", "supergrafx", "wonderswan", "wonderswan-color", "msx", "msx2",
+)

@@ -28,19 +28,22 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.dp
+import com.phobos.emulator.data.RetrowaveBackdropScene
 import kotlin.math.min
 import kotlin.random.Random
 
 /**
- * Synthwave sunset behind the app's screens: a sky fading into the theme's primary color, a banded
- * sun and a perspective grid floor. Colors come from the active theme, so it suits any palette, and
- * the drawing is cached until the size or colors change.
+ * Synthwave backdrop behind the app's screens: a sunset, an endless grid, or a city skyline.
+ * Colors come from the active theme, so it suits any palette.
  */
 @Composable
-fun RetrowaveBackdrop(modifier: Modifier = Modifier) {
+fun RetrowaveBackdrop(
+    modifier: Modifier = Modifier,
+    scene: RetrowaveBackdropScene = RetrowaveBackdropScene.SUNSET,
+) {
     val scheme = MaterialTheme.colorScheme
     val isDark = LocalPhobosTheme.current.isDark
-    Spacer(modifier.drawWithCache { sunsetGrid(scheme, isDark) })
+    Spacer(modifier.drawWithCache { sunsetGrid(scheme, isDark, scene) })
 }
 
 /**
@@ -86,7 +89,7 @@ internal class SunsetColors(scheme: ColorScheme, val isDark: Boolean) {
     val starMaxAlpha = 0.6f
 }
 
-private fun CacheDrawScope.sunsetGrid(scheme: ColorScheme, isDark: Boolean): DrawResult {
+private fun CacheDrawScope.sunsetGrid(scheme: ColorScheme, isDark: Boolean, scene: RetrowaveBackdropScene): DrawResult {
     val width = size.width
     val height = size.height
     val colors = SunsetColors(scheme, isDark)
@@ -134,10 +137,27 @@ private fun CacheDrawScope.sunsetGrid(scheme: ColorScheme, isDark: Boolean): Dra
         stars.forEach { star ->
             drawCircle(colors.star, radius = (0.6f + star.twinkle).dp.toPx(), center = star.position, alpha = 0.15f + (colors.starMaxAlpha - 0.15f) * star.twinkle)
         }
-        drawCircle(sunGlow, radius = sunRadius * 2.4f, center = sunCenter)
-        clipRect(bottom = horizon) {
-            clipPath(bands, ClipOp.Difference) {
-                drawCircle(sun, radius = sunRadius, center = sunCenter, alpha = colors.sunAlpha)
+        if (scene == RetrowaveBackdropScene.SUNSET) {
+            drawCircle(sunGlow, radius = sunRadius * 2.4f, center = sunCenter)
+            clipRect(bottom = horizon) {
+                clipPath(bands, ClipOp.Difference) {
+                    drawCircle(sun, radius = sunRadius, center = sunCenter, alpha = colors.sunAlpha)
+                }
+            }
+        }
+        if (scene == RetrowaveBackdropScene.CITY) {
+            val silhouette = lerp(colors.skyBottom, Color.Black, if (isDark) 0.72f else 0.48f)
+            var x = -width * 0.04f
+            var building = 0
+            while (x < width) {
+                val buildingWidth = width * (0.06f + (building % 4) * 0.025f)
+                val buildingHeight = height * (0.10f + (building % 5) * 0.035f)
+                drawRect(silhouette, Offset(x, horizon - buildingHeight), Size(buildingWidth, buildingHeight))
+                if (building % 3 == 0) {
+                    drawRect(scheme.secondary.copy(alpha = 0.25f), Offset(x + buildingWidth * 0.45f, horizon - buildingHeight - height * 0.025f), Size(1.dp.toPx(), height * 0.025f))
+                }
+                x += buildingWidth * 0.86f
+                building++
             }
         }
         drawRect(floor, topLeft = Offset(0f, horizon), size = Size(width, height - horizon))

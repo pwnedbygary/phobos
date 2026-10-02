@@ -13,11 +13,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.phobos.emulator.data.CatalogBackdrop
+import com.phobos.emulator.data.CrtBackdropScene
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.data.GlassBackdropScene
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.MangaBackdropScene
 import com.phobos.emulator.data.PixelBackdropScene
+import com.phobos.emulator.data.PlatformIconPack
+import com.phobos.emulator.data.RetrowaveBackdropScene
+import com.phobos.emulator.data.RpgBackdropScene
+import com.phobos.emulator.data.ScreensaverDelay
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
+import com.phobos.emulator.data.XmbBackdropScene
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.ThemeGroup
 import com.phobos.emulator.ui.theme.ThemeRegistry
@@ -30,7 +39,6 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val shown = LocalPhobosTheme.current
     val dynamicAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    // The System card previews the live scheme when it is the one showing (wallpaper colors).
     val liveScheme = MaterialTheme.colorScheme
 
     PhobosScaffold(title = "Appearance", onBack = onBack) { innerPadding ->
@@ -54,14 +62,31 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         label = { it.label },
                         onSelect = { viewModel.setUiEffects(it) },
                     )
-                    if (settings.uiEffects == UiEffects.PIXEL_ART) {
+                    BackdropDropdown(settings, viewModel)
+                    SettingsDropdownItem(
+                        title = "Platform icons",
+                        description = settings.platformIconPack.description,
+                        current = settings.platformIconPack,
+                        options = PlatformIconPack.entries,
+                        label = { it.label },
+                        onSelect = { viewModel.setPlatformIconPack(it) },
+                    )
+                    SettingsDropdownItem(
+                        title = "Screensaver",
+                        description = settings.screensaverDelay.description,
+                        current = settings.screensaverDelay,
+                        options = ScreensaverDelay.entries,
+                        label = { it.label },
+                        onSelect = { viewModel.setScreensaverDelay(it) },
+                    )
+                    if (settings.screensaverDelay != ScreensaverDelay.OFF) {
                         SettingsDropdownItem(
-                            title = "Backdrop",
-                            description = settings.pixelBackdrop.description,
-                            current = settings.pixelBackdrop,
-                            options = PixelBackdropScene.entries,
-                            label = { it.label },
-                            onSelect = { viewModel.setPixelBackdrop(it) },
+                            title = "Screensaver backdrop",
+                            description = settings.screensaverBackdrop.description,
+                            current = settings.screensaverBackdrop,
+                            options = CatalogBackdrop.screensaverChoices,
+                            label = { it.menuLabel },
+                            onSelect = { viewModel.setScreensaverBackdrop(it) },
                         )
                     }
                     val solidStyle = settings.uiEffects.style is SolidUi
@@ -105,6 +130,68 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun BackdropDropdown(settings: EmulatorSettings, viewModel: MainViewModel) {
+    when (settings.uiEffects) {
+        UiEffects.PIXEL_ART -> SettingsDropdownItem(
+            title = "Backdrop",
+            description = settings.pixelBackdrop.description,
+            current = settings.pixelBackdrop,
+            options = PixelBackdropScene.entries,
+            label = { it.label },
+            onSelect = { viewModel.setPixelBackdrop(it) },
+        )
+        UiEffects.MANGA -> SettingsDropdownItem(
+            title = "Backdrop",
+            description = settings.mangaBackdrop.description,
+            current = settings.mangaBackdrop,
+            options = MangaBackdropScene.entries,
+            label = { it.label },
+            onSelect = { viewModel.setMangaBackdrop(it) },
+        )
+        UiEffects.RPG -> SettingsDropdownItem(
+            title = "Backdrop",
+            description = settings.rpgBackdrop.description,
+            current = settings.rpgBackdrop,
+            options = RpgBackdropScene.entries,
+            label = { it.label },
+            onSelect = { viewModel.setRpgBackdrop(it) },
+        )
+        UiEffects.RETROWAVE -> SettingsDropdownItem(
+            title = "Backdrop",
+            description = settings.retrowaveBackdrop.description,
+            current = settings.retrowaveBackdrop,
+            options = RetrowaveBackdropScene.entries,
+            label = { it.label },
+            onSelect = { viewModel.setRetrowaveBackdrop(it) },
+        )
+        UiEffects.CRT -> SettingsDropdownItem(
+            title = "Backdrop",
+            description = settings.crtBackdrop.description,
+            current = settings.crtBackdrop,
+            options = CrtBackdropScene.entries,
+            label = { it.label },
+            onSelect = { viewModel.setCrtBackdrop(it) },
+        )
+        UiEffects.XMB -> SettingsDropdownItem(
+            title = "Backdrop",
+            description = settings.xmbBackdrop.description,
+            current = settings.xmbBackdrop,
+            options = XmbBackdropScene.entries,
+            label = { it.label },
+            onSelect = { viewModel.setXmbBackdrop(it) },
+        )
+        UiEffects.NONE -> SettingsDropdownItem(
+            title = "Backdrop",
+            description = settings.glassBackdrop.description,
+            current = settings.glassBackdrop,
+            options = GlassBackdropScene.entries,
+            label = { it.label },
+            onSelect = { viewModel.setGlassBackdrop(it) },
+        )
     }
 }
 

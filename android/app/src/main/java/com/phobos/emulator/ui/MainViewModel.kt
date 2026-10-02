@@ -26,13 +26,22 @@ import com.phobos.emulator.input.ControlLevel
 import com.phobos.emulator.input.Controls
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.data.AspectRatioMode
+import com.phobos.emulator.data.CatalogBackdrop
+import com.phobos.emulator.data.CrtBackdropScene
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.data.GlassBackdropScene
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.MangaBackdropScene
 import com.phobos.emulator.data.PixelBackdropScene
+import com.phobos.emulator.data.PlatformIconPack
 import com.phobos.emulator.data.RegionPreference
+import com.phobos.emulator.data.RetrowaveBackdropScene
+import com.phobos.emulator.data.RpgBackdropScene
+import com.phobos.emulator.data.ScreensaverDelay
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
+import com.phobos.emulator.data.XmbBackdropScene
 import com.phobos.emulator.launch.LaunchRequest
 import com.phobos.emulator.launch.LaunchTarget
 import com.phobos.emulator.launch.resolveLaunch
@@ -291,7 +300,43 @@ class MainViewModel(
     fun setTheme(id: String, followSystem: Boolean = false) = viewModelScope.launch { settingsStore.setTheme(id, followSystem) }
     fun setUiEffects(effects: UiEffects) = viewModelScope.launch { settingsStore.setUiEffects(effects) }
     fun setPixelBackdrop(scene: PixelBackdropScene) = viewModelScope.launch { settingsStore.setPixelBackdrop(scene) }
+    fun setMangaBackdrop(scene: MangaBackdropScene) = viewModelScope.launch { settingsStore.setMangaBackdrop(scene) }
+    fun setRpgBackdrop(scene: RpgBackdropScene) = viewModelScope.launch { settingsStore.setRpgBackdrop(scene) }
+    fun setRetrowaveBackdrop(scene: RetrowaveBackdropScene) = viewModelScope.launch { settingsStore.setRetrowaveBackdrop(scene) }
+    fun setCrtBackdrop(scene: CrtBackdropScene) = viewModelScope.launch { settingsStore.setCrtBackdrop(scene) }
+    fun setGlassBackdrop(scene: GlassBackdropScene) = viewModelScope.launch { settingsStore.setGlassBackdrop(scene) }
+    fun setXmbBackdrop(scene: XmbBackdropScene) = viewModelScope.launch { settingsStore.setXmbBackdrop(scene) }
+    fun setPlatformIconPack(pack: PlatformIconPack) = viewModelScope.launch { settingsStore.setPlatformIconPack(pack) }
+    fun setScreensaverDelay(delay: ScreensaverDelay) = viewModelScope.launch { settingsStore.setScreensaverDelay(delay) }
+    fun setScreensaverBackdrop(backdrop: CatalogBackdrop) = viewModelScope.launch { settingsStore.setScreensaverBackdrop(backdrop) }
     fun setGlassEffects(level: GlassEffects) = viewModelScope.launch { settingsStore.setGlassEffects(level) }
+
+    /** Bumps idle tracking so the screensaver does not arm (and dismisses if showing). */
+    fun noteUserActivity() {
+        _userActivity.tryEmit(Unit)
+    }
+
+    private val _userActivity = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val userActivity: SharedFlow<Unit> = _userActivity
+
+    /** True while the idle screensaver overlay is covering the menus. */
+    private val _screensaverActive = MutableStateFlow(false)
+    val screensaverActive: StateFlow<Boolean> = _screensaverActive.asStateFlow()
+
+    fun setScreensaverActive(active: Boolean) {
+        _screensaverActive.value = active
+    }
+
+    /**
+     * When the screensaver is showing, consumes a key/button so Library/Settings and shoulder-tab
+     * navigation do not also fire, and wakes the screensaver.
+     */
+    fun consumeScreensaverInput(): Boolean {
+        if (!_screensaverActive.value) return false
+        noteUserActivity()
+        return true
+    }
+
     fun setRegionPreference(pref: RegionPreference) = viewModelScope.launch { settingsStore.setRegionPreference(pref) }
     fun setFastBoot(enabled: Boolean) = viewModelScope.launch { settingsStore.setFastBoot(enabled) }
     fun setMuteAudio(enabled: Boolean) = viewModelScope.launch {

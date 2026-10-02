@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.R
+import com.phobos.emulator.data.RpgBackdropScene
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -152,23 +153,72 @@ private fun fontDot(style: TextStyle): Float = with(LocalDensity.current) { max(
 /** The lattice's diamonds, in art pixels across. */
 private const val LATTICE = 16
 
-/** The RPG backdrop: the background under a faint diamond lattice, like the pattern behind a menu screen. */
+/** The RPG backdrop: a menu lattice, starfield, or torchlit dungeon wall. */
 @Composable
-fun RpgBackdrop(scheme: ColorScheme, isDark: Boolean, modifier: Modifier = Modifier) {
+fun RpgBackdrop(
+    scheme: ColorScheme,
+    isDark: Boolean,
+    scene: RpgBackdropScene = RpgBackdropScene.LATTICE,
+    modifier: Modifier = Modifier,
+) {
     Spacer(
         modifier.drawWithCache {
-            val art = max(1, ART.toPx().roundToInt())
-            val side = LATTICE * art
-            val line = rpgLattice(scheme, isDark).toArgb()
-            val background = scheme.background.toArgb()
-            val pixels = IntArray(side * side) { i ->
-                val x = (i % side) / art
-                val y = (i / side) / art
-                if ((x + y) % LATTICE == 0 || (x - y + LATTICE) % LATTICE == 0) line else background
+            when (scene) {
+                RpgBackdropScene.LATTICE -> {
+                    val art = max(1, ART.toPx().roundToInt())
+                    val side = LATTICE * art
+                    val line = rpgLattice(scheme, isDark).toArgb()
+                    val background = scheme.background.toArgb()
+                    val pixels = IntArray(side * side) { i ->
+                        val x = (i % side) / art
+                        val y = (i / side) / art
+                        if ((x + y) % LATTICE == 0 || (x - y + LATTICE) % LATTICE == 0) line else background
+                    }
+                    val tile = Bitmap.createBitmap(pixels, side, side, Bitmap.Config.ARGB_8888).asImageBitmap()
+                    val brush = ShaderBrush(ImageShader(tile, TileMode.Repeated, TileMode.Repeated))
+                    onDrawBehind { drawRect(brush) }
+                }
+                RpgBackdropScene.STARS -> {
+                    val sky = lerp(scheme.background, Color(0xFF0B1028), if (isDark) 0.62f else 0.28f)
+                    val star = lerp(scheme.onBackground, Color.White, 0.5f)
+                    onDrawBehind {
+                        drawRect(sky)
+                        repeat(86) { index ->
+                            val x = ((index * 47) % 101) / 100f * size.width
+                            val y = ((index * 71 + 13) % 103) / 102f * size.height
+                            val twinkle = 0.3f + (index % 5) * 0.14f
+                            drawCircle(star, radius = if (index % 11 == 0) 1.5.dp.toPx() else 0.7.dp.toPx(), center = Offset(x, y), alpha = twinkle)
+                        }
+                    }
+                }
+                RpgBackdropScene.DUNGEON -> {
+                    val wall = lerp(scheme.background, Color.Black, if (isDark) 0.38f else 0.18f)
+                    val mortar = lerp(wall, Color.Black, 0.5f)
+                    val brick = lerp(wall, scheme.primary, 0.08f)
+                    val glow = lerp(scheme.tertiary, Color(0xFFFFB34D), 0.55f)
+                    onDrawBehind {
+                        drawRect(wall)
+                        val course = 26.dp.toPx()
+                        val brickWidth = 58.dp.toPx()
+                        var y = 0f
+                        var row = 0
+                        while (y < size.height) {
+                            val shift = if (row % 2 == 0) 0f else brickWidth / 2f
+                            var x = -shift
+                            while (x < size.width) {
+                                drawRect(brick, Offset(x + 1.dp.toPx(), y + 1.dp.toPx()), Size(brickWidth - 2.dp.toPx(), course - 2.dp.toPx()))
+                                x += brickWidth
+                            }
+                            drawLine(mortar, Offset(0f, y), Offset(size.width, y), 1.dp.toPx())
+                            y += course
+                            row++
+                        }
+                        listOf(0.2f, 0.5f, 0.8f).forEach { x ->
+                            drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.24f), Color.Transparent), center = Offset(size.width * x, size.height * 0.46f), radius = 110.dp.toPx()), radius = 110.dp.toPx(), center = Offset(size.width * x, size.height * 0.46f))
+                        }
+                    }
+                }
             }
-            val tile = Bitmap.createBitmap(pixels, side, side, Bitmap.Config.ARGB_8888).asImageBitmap()
-            val brush = ShaderBrush(ImageShader(tile, TileMode.Repeated, TileMode.Repeated))
-            onDrawBehind { drawRect(brush) }
         },
     )
 }
@@ -228,7 +278,8 @@ object RpgUi : SolidUi() {
     }
 
     @Composable
-    override fun Backdrop(modifier: Modifier) = RpgBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, modifier)
+    override fun Backdrop(modifier: Modifier) =
+        RpgBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, LocalPhobosTheme.current.rpgBackdrop, modifier)
 
     @Composable
     override fun plate(): Modifier {

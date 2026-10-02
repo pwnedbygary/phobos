@@ -1878,6 +1878,14 @@ SOFTWARE.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
+Phobos platform glyphs (ui/theme/PlatformGlyphs.kt, PlatformGlyphArt.kt)
+
+Original console silhouettes drawn for Phobos (Phobos / Pixel / Manga icon
+packs under Settings → Appearance → Platform icons). Not derived from the
+Systematic set above.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
 ZX Spectrum 48K and 128K ROMs (mia/Firmware/ZX Spectrum, ZX Spectrum 128)
 
 Copyright Amstrad plc (originally Sinclair Research Ltd).

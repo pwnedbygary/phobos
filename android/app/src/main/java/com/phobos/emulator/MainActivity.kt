@@ -21,12 +21,18 @@ import androidx.lifecycle.lifecycleScope
 import coil.Coil
 import coil.ImageLoader
 import coil.decode.SvgDecoder
+import com.phobos.emulator.data.CrtBackdropScene
 import com.phobos.emulator.data.EmulatorSettings
+import com.phobos.emulator.data.GlassBackdropScene
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.MangaBackdropScene
 import com.phobos.emulator.data.PixelBackdropScene
+import com.phobos.emulator.data.RetrowaveBackdropScene
+import com.phobos.emulator.data.RpgBackdropScene
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
+import com.phobos.emulator.data.XmbBackdropScene
 import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.input.InputBindings
 import com.phobos.emulator.launch.launchRequestOf
@@ -54,9 +60,18 @@ private data class ThemeSelection(
     val effects: UiEffects,
     val glass: GlassEffects,
     val pixelBackdrop: PixelBackdropScene,
+    val mangaBackdrop: MangaBackdropScene,
+    val rpgBackdrop: RpgBackdropScene,
+    val retrowaveBackdrop: RetrowaveBackdropScene,
+    val crtBackdrop: CrtBackdropScene,
+    val glassBackdrop: GlassBackdropScene,
+    val xmbBackdrop: XmbBackdropScene,
 )
 
-private fun EmulatorSettings.themeSelection() = ThemeSelection(themeId, themeMode, themeFollowSystem, uiEffects, glassEffects, pixelBackdrop)
+private fun EmulatorSettings.themeSelection() = ThemeSelection(
+    themeId, themeMode, themeFollowSystem, uiEffects, glassEffects,
+    pixelBackdrop, mangaBackdrop, rpgBackdrop, retrowaveBackdrop, crtBackdrop, glassBackdrop, xmbBackdrop,
+)
 
 private const val STARTUP_SETTINGS_TIMEOUT_MS = 500L
 
@@ -123,6 +138,12 @@ class MainActivity : ComponentActivity() {
                     effects = it.effects,
                     glassEffects = it.glass,
                     pixelBackdrop = it.pixelBackdrop,
+                    mangaBackdrop = it.mangaBackdrop,
+                    rpgBackdrop = it.rpgBackdrop,
+                    retrowaveBackdrop = it.retrowaveBackdrop,
+                    crtBackdrop = it.crtBackdrop,
+                    glassBackdrop = it.glassBackdrop,
+                    xmbBackdrop = it.xmbBackdrop,
                 ) {
                     MainScaffold(viewModel = viewModel)
                 }
@@ -144,11 +165,13 @@ class MainActivity : ComponentActivity() {
         window.callback = object : android.view.Window.Callback by originalCallback {
             private val pressedKeys = mutableSetOf<Int>()
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-                // A press being captured for a binding goes nowhere else.
+                viewModel.noteUserActivity()
+                // A press being captured for a binding goes nowhere else — including the screensaver.
                 val systemBack = event.keyCode == KeyEvent.KEYCODE_BACK && event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
                 if (event.action != KeyEvent.ACTION_MULTIPLE &&
                     viewModel.controlCapture.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, systemBack)
                 ) return true
+                if (viewModel.consumeScreensaverInput()) return true
                 val visible = viewModel.emulatorScreenVisible.value
                 val loaded = viewModel.isLoaded.value
                 if (visible || (loaded && viewModel.isPaused.value)) {
@@ -258,6 +281,10 @@ class MainActivity : ComponentActivity() {
         if ((event.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK && event.action == MotionEvent.ACTION_MOVE &&
             viewModel.controlCapture.onJoystickMove(event::getAxisValue)
         ) return true
+
+        // Do not wake the screensaver or bump idle from stick ACTION_MOVE: analog drift would
+        // either keep the timer from arming or dismiss the overlay instantly. Hats that become
+        // D-pad keys still wake via dispatchKeyEvent; touch dismisses the overlay directly.
 
         // 1) Let the view hierarchy (emulator SurfaceView) try first.
         if (super.dispatchGenericMotionEvent(event)) return true

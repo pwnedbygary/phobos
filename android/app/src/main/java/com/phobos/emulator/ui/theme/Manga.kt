@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.R
+import com.phobos.emulator.data.MangaBackdropScene
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.floor
@@ -120,42 +121,82 @@ private val CAPTION_REACH_Y = 3.dp
 private val TONE_PITCH = 8.dp
 
 /**
- * The manga backdrop: paper with a screentone whose dots grow from nothing a quarter of the way down
- * to their full size at the bottom. One column of the tone is rendered and repeated across.
+ * The manga backdrop: a screentone page, radiating speed lines, or an ink splash page.
  */
 @Composable
-fun MangaBackdrop(scheme: ColorScheme, isDark: Boolean, modifier: Modifier = Modifier) {
+fun MangaBackdrop(
+    scheme: ColorScheme,
+    isDark: Boolean,
+    scene: MangaBackdropScene = MangaBackdropScene.TONE,
+    modifier: Modifier = Modifier,
+) {
     Spacer(
         modifier.drawWithCache {
-            val pitch = max(4, TONE_PITCH.toPx().roundToInt())
-            val rows = pitch / 2f
-            val height = max(1, size.height.roundToInt())
             val paper = scheme.background
             val ink = mangaTone(scheme, isDark)
-            val pixels = IntArray(pitch * height)
-            val largest = rows * 0.62f
-            for (y in 0 until height) {
-                val t = ((y.toFloat() / height - 0.25f) / 0.75f).coerceIn(0f, 1f)
-                val radius = largest * t * t * (3 - 2 * t)
-                val row = floor(y / rows).toInt()
-                for (x in 0 until pitch) {
-                    var coverage = 0f
-                    if (radius > 0f) {
-                        for (r in row - 1..row + 1) {
-                            val dy = y + 0.5f - (r + 0.5f) * rows
-                            val offset = if (r % 2 == 0) 0f else pitch / 2f
-                            for (k in -1..1) {
-                                val dx = x + 0.5f - (offset + k * pitch)
-                                coverage = max(coverage, (radius - sqrt(dx * dx + dy * dy) + 0.5f).coerceIn(0f, 1f))
+            when (scene) {
+                MangaBackdropScene.TONE -> {
+                    val pitch = max(4, TONE_PITCH.toPx().roundToInt())
+                    val rows = pitch / 2f
+                    val height = max(1, size.height.roundToInt())
+                    val pixels = IntArray(pitch * height)
+                    val largest = rows * 0.62f
+                    for (y in 0 until height) {
+                        val t = ((y.toFloat() / height - 0.25f) / 0.75f).coerceIn(0f, 1f)
+                        val radius = largest * t * t * (3 - 2 * t)
+                        val row = floor(y / rows).toInt()
+                        for (x in 0 until pitch) {
+                            var coverage = 0f
+                            if (radius > 0f) {
+                                for (r in row - 1..row + 1) {
+                                    val dy = y + 0.5f - (r + 0.5f) * rows
+                                    val offset = if (r % 2 == 0) 0f else pitch / 2f
+                                    for (k in -1..1) {
+                                        val dx = x + 0.5f - (offset + k * pitch)
+                                        coverage = max(coverage, (radius - sqrt(dx * dx + dy * dy) + 0.5f).coerceIn(0f, 1f))
+                                    }
+                                }
                             }
+                            pixels[y * pitch + x] = lerp(paper, ink, coverage).toArgb()
                         }
                     }
-                    pixels[y * pitch + x] = lerp(paper, ink, coverage).toArgb()
+                    val column = Bitmap.createBitmap(pixels, pitch, height, Bitmap.Config.ARGB_8888).asImageBitmap()
+                    val brush = ShaderBrush(ImageShader(column, TileMode.Repeated, TileMode.Clamp))
+                    onDrawBehind { drawRect(brush) }
+                }
+                MangaBackdropScene.SPEED_LINES -> onDrawBehind {
+                    drawRect(paper)
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val reach = size.maxDimension
+                    repeat(48) { index ->
+                        val angle = 2 * PI * index / 48 + (index % 3) * 0.035
+                        val start = reach * (0.10f + (index % 5) * 0.025f)
+                        val end = reach * (0.68f + (index % 4) * 0.10f)
+                        val from = Offset(center.x + cos(angle).toFloat() * start, center.y + sin(angle).toFloat() * start)
+                        val to = Offset(center.x + cos(angle).toFloat() * end, center.y + sin(angle).toFloat() * end)
+                        drawLine(ink.copy(alpha = 0.52f), from, to, strokeWidth = 1.2.dp.toPx())
+                    }
+                }
+                MangaBackdropScene.SPLASH -> onDrawBehind {
+                    drawRect(paper)
+                    val center = Offset(size.width * 0.52f, size.height * 0.48f)
+                    val splash = Path().apply {
+                        repeat(28) { index ->
+                            val angle = 2 * PI * index / 28
+                            val radius = size.minDimension * (if (index % 4 == 0) 0.24f else 0.16f + (index % 3) * 0.025f)
+                            val point = Offset(center.x + cos(angle).toFloat() * radius, center.y + sin(angle).toFloat() * radius)
+                            if (index == 0) moveTo(point.x, point.y) else lineTo(point.x, point.y)
+                        }
+                        close()
+                    }
+                    drawPath(splash, ink.copy(alpha = 0.7f))
+                    repeat(22) { index ->
+                        val x = if (index % 2 == 0) size.width * 0.08f else size.width * 0.92f
+                        val y = size.height * ((index + 1) / 23f)
+                        drawCircle(ink.copy(alpha = 0.28f), radius = (1 + index % 3).dp.toPx(), center = Offset(x, y))
+                    }
                 }
             }
-            val column = Bitmap.createBitmap(pixels, pitch, height, Bitmap.Config.ARGB_8888).asImageBitmap()
-            val brush = ShaderBrush(ImageShader(column, TileMode.Repeated, TileMode.Clamp))
-            onDrawBehind { drawRect(brush) }
         },
     )
 }
@@ -203,7 +244,8 @@ object MangaUi : SolidUi() {
     }
 
     @Composable
-    override fun Backdrop(modifier: Modifier) = MangaBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, modifier)
+    override fun Backdrop(modifier: Modifier) =
+        MangaBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, LocalPhobosTheme.current.mangaBackdrop, modifier)
 
     /** A caption box: paper inside a thin ink line, like a narration box. */
     @Composable

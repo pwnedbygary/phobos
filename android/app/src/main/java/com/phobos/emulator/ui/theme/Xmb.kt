@@ -18,7 +18,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.compositeOver
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.ExperimentalTextApi
@@ -30,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.R
+import com.phobos.emulator.data.XmbBackdropScene
 import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.sin
@@ -184,7 +184,12 @@ private val WAVES = listOf(
  * by ribbons of light that drift and twist, holding still when Android's animations are off.
  */
 @Composable
-fun XmbBackdrop(scheme: ColorScheme, isDark: Boolean, modifier: Modifier = Modifier) {
+fun XmbBackdrop(
+    scheme: ColorScheme,
+    isDark: Boolean,
+    scene: XmbBackdropScene = XmbBackdropScene.WAVES,
+    modifier: Modifier = Modifier,
+) {
     // Frame times are on the monotonic clock, so starting from it keeps the first animated frame from jumping.
     val time = remember { mutableFloatStateOf(wavePhase(System.nanoTime() / 1_000_000)) }
     LaunchedEffect(Unit) {
@@ -198,24 +203,32 @@ fun XmbBackdrop(scheme: ColorScheme, isDark: Boolean, modifier: Modifier = Modif
     Spacer(
         modifier.drawWithCache {
             val colors = WaveColors(scheme, isDark)
-            val sky = Brush.verticalGradient(0f to colors.top, WaveColors.MIDDLE to colors.middle, 1f to colors.bottom)
+            val bottom = when (scene) {
+                XmbBackdropScene.DEEP -> lerp(colors.bottom, Color.Black, 0.35f)
+                else -> colors.bottom
+            }
+            val sky = Brush.verticalGradient(0f to colors.top, WaveColors.MIDDLE to colors.middle, 1f to bottom)
             val glow = Stroke(6.dp.toPx())
             val crest = Stroke(1.5.dp.toPx())
             val fill = Path()
             val upper = Path()
             val lower = Path()
-            fun DrawScope.drawCrest(edge: Path) {
-                drawPath(edge, colors.crestGlow, style = glow)
-                drawPath(edge, colors.crest, style = crest)
-            }
             onDrawBehind {
                 drawRect(sky)
                 val now = time.floatValue
-                WAVES.forEach { wave ->
+                val waves = if (scene == XmbBackdropScene.CALM) WAVES.take(1) else WAVES
+                val strength = when (scene) {
+                    XmbBackdropScene.CALM -> 0.5f
+                    XmbBackdropScene.DEEP -> 1.35f
+                    XmbBackdropScene.WAVES -> 1f
+                }
+                waves.forEach { wave ->
                     wave.trace(size, now, fill, upper, lower)
-                    drawPath(fill, colors.ribbon)
-                    drawCrest(upper)
-                    drawCrest(lower)
+                    drawPath(fill, colors.ribbon, alpha = strength)
+                    drawPath(upper, colors.crestGlow, alpha = strength, style = glow)
+                    drawPath(upper, colors.crest, alpha = strength, style = crest)
+                    drawPath(lower, colors.crestGlow, alpha = strength, style = glow)
+                    drawPath(lower, colors.crest, alpha = strength, style = crest)
                 }
             }
         },
@@ -228,5 +241,6 @@ object XmbUi : UiStyle() {
     override val ownBackdrop: Boolean get() = true
 
     @Composable
-    override fun Backdrop(modifier: Modifier) = XmbBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, modifier)
+    override fun Backdrop(modifier: Modifier) =
+        XmbBackdrop(MaterialTheme.colorScheme, LocalPhobosTheme.current.isDark, LocalPhobosTheme.current.xmbBackdrop, modifier)
 }

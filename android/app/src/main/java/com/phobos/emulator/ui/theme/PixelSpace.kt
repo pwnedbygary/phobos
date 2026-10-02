@@ -8,15 +8,14 @@ import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
 
 /**
- * The space backdrop: stars over a banded, dithered sky, and the limb of a planet along the bottom with
- * a lit side, a shaded side, craters and a bright rim with a dithered glow. The planet turns slowly
- * about a level axis, its craters drifting up toward the limb, slowing and foreshortening as they near
- * it; a few stars at a time twinkle, and now and then a shooting star crosses the sky.
+ * The space backdrop: Mars' ochre limb along the bottom, turning craters, and Phobos orbiting through
+ * the upper sky as a small D-pad moon. Stars twinkle and occasional shooting stars cross the scene.
  *
  * Across the face, craters are squashed as much as the still picture always drew them; only the last
  * few pixels below the limb squash them further, as a sphere would, so they stay visible right up to it.
@@ -106,12 +105,40 @@ internal class SpaceArt(cols: Int, rows: Int, private val colors: PixelSceneColo
             stars.twinkle(time, out, colors.star)
             meteors.paint(time, out, colors.star)
         }
+        paintPhobos(if (live) time else 0L, out)
     }
 
     override fun hold(time: Long): Long {
         if (meteors.flying(time)) return PixelArt.FRAME_MS
         val twinkle = TWINKLE_STEP_MS - Math.floorMod(time, TWINKLE_STEP_MS)
-        return min(twinkle, meteors.untilNext(time)).coerceAtLeast(1L)
+        val orbit = PHOBOS_STEP_MS - Math.floorMod(time, PHOBOS_STEP_MS)
+        return min(min(twinkle, meteors.untilNext(time)), orbit).coerceAtLeast(1L)
+    }
+
+    /** Phobos follows an elliptical orbit while the D-pad glyph on its face slowly turns. */
+    private fun paintPhobos(time: Long, out: IntArray) {
+        val phase = Math.floorMod(time, PHOBOS_ORBIT_MS).toFloat() / PHOBOS_ORBIT_MS * TAU
+        val cx = cols * 0.53f + cos(phase) * cols * 0.36f
+        val cy = rows * 0.39f + sin(phase) * rows * 0.23f
+        val r = min(cols, rows) * 0.055f
+        if (r < 1f) return
+        val body = PixelKit.mix(colors.planetLit, colors.star, 0.32f)
+        val shade = PixelKit.mix(colors.planetShade, colors.crater, 0.35f)
+        val dpad = PixelKit.mix(colors.crater, colors.skyTop, 0.4f)
+        for (y in floor(cy - r).toInt()..ceil(cy + r).toInt()) for (x in floor(cx - r).toInt()..ceil(cx + r).toInt()) {
+            val dx = x + 0.5f - cx
+            val dy = y + 0.5f - cy
+            if (dx * dx + dy * dy < r * r) PixelKit.put(out, cols, rows, x, y, if (dx > r * 0.25f || dy > r * 0.4f) shade else body)
+        }
+        val turn = Math.floorMod(time, PHOBOS_SPIN_MS).toFloat() / PHOBOS_SPIN_MS * TAU
+        val arm = max(1, (r * 0.55f).toInt())
+        val width = max(1, (r * 0.22f).toInt())
+        for (v in -arm..arm) for (u in -width..width) {
+            val rx = (u * cos(turn) - v * sin(turn)).roundToInt()
+            val ry = (u * sin(turn) + v * cos(turn)).roundToInt()
+            PixelKit.put(out, cols, rows, cx.roundToInt() + rx, cy.roundToInt() + ry, dpad)
+            PixelKit.put(out, cols, rows, cx.roundToInt() - ry, cy.roundToInt() + rx, dpad)
+        }
     }
 
     /** The row of the limb above the column [dx] from the planet's center. */
@@ -186,6 +213,9 @@ internal class SpaceArt(cols: Int, rows: Int, private val colors: PixelSceneColo
         /** A whole turn takes 18 minutes: a crater crosses the face in about a minute and a half. */
         const val PLANET_TURN_MS = 1_080_000L
         const val TWINKLE_STEP_MS = 250L
+        const val PHOBOS_STEP_MS = 125L
+        const val PHOBOS_ORBIT_MS = 38_000L
+        const val PHOBOS_SPIN_MS = 12_000L
 
         fun wrap(angle: Float): Float {
             var a = angle % TAU

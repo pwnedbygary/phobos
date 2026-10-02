@@ -6,6 +6,7 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
 
@@ -14,7 +15,7 @@ import kotlin.random.Random
  * brick and question blocks with coins spinning above them, and grass over a brick ground. The clouds
  * move a pixel at a time, the coins turn eight times a second and the question marks blink.
  */
-internal class PlainsArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int = 1985) : PixelArt(cols, rows) {
+internal class PlainsArt(cols: Int, rows: Int, private val palette: PixelPalette, seed: Int = 1985) : PixelArt(cols, rows) {
     private val still = IntArray(cols * rows)
     private val block = (rows * 0.045f).roundToInt().coerceIn(6, 16)
     private val ground = (rows - max(8f, rows * 0.13f)).toInt().coerceIn(0, rows)
@@ -35,6 +36,8 @@ internal class PlainsArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int 
 
     /** Each coin's center column and bottom row. */
     private val coins = ArrayList<IntArray>()
+    private val actors = ArrayList<IntArray>()
+    private val foes = ArrayList<IntArray>()
     private val coinHeight = (block * 0.75f).roundToInt().coerceAtLeast(4)
     private val coin = palette.tint(palette.tertiary, 0.95f)
     private val coinShade = palette.tint(palette.tertiary, 0.62f)
@@ -58,6 +61,10 @@ internal class PlainsArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int 
             val top = (rows * (0.04f + 0.28f * random.nextFloat())).toInt().coerceAtMost((rows * 0.42f).toInt() - height).coerceAtLeast(0)
             clouds += cloud(height, body, PixelKit.mix(body, skyLow, 0.3f), PixelKit.mix(body, skyLow, 0.6f), random.nextFloat() * (cols + height * 3), top, if (far) 2f else 4f)
         }
+        repeat((2 + random.nextInt(3)).coerceAtMost(4)) { skin ->
+            actors += intArrayOf(random.nextInt(cols), skin % HEROES.size, random.nextInt(4_000))
+        }
+        repeat((cols / 140).coerceIn(1, 4)) { foes += intArrayOf(random.nextInt(cols), random.nextInt(4_000)) }
     }
 
     override fun compose(time: Long, out: IntArray, live: Boolean) {
@@ -76,10 +83,37 @@ internal class PlainsArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int 
         val shade = blink[Math.floorMod(Math.floorDiv(now, 250L), 4L).toInt()]
         for (index in marks) out[index] = shade
         val frame = Math.floorMod(Math.floorDiv(now, COIN_FRAME_MS), 4L).toInt()
-        for (c in coins) paintCoin(out, c[0], c[1], frame)
+        for ((index, c) in coins.withIndex()) {
+            val collected = actors.any { actor ->
+                val actorX = Math.floorMod((actor[0] + now / 90).toInt(), cols)
+                kotlin.math.abs(actorX - c[0]) < block && Math.floorMod(now + actor[2], 4_000L) < 850L
+            }
+            if (!collected) paintCoin(out, c[0], c[1], frame)
+        }
+        paintActors(out, now)
     }
 
     override fun hold(time: Long): Long = COIN_FRAME_MS - Math.floorMod(time, COIN_FRAME_MS)
+
+    /** Tiny platform heroes run, periodically jump, and squash the wandering mushroom-shaped foes. */
+    private fun paintActors(out: IntArray, time: Long) {
+        for (actor in actors) {
+            val x = Math.floorMod((actor[0] + time / 90).toInt(), cols + 8) - 4
+            val jump = Math.floorMod(time + actor[2], 4_000L)
+            val lift = if (jump < 900) (sin(jump / 900.0 * Math.PI) * block * 3).toInt() else 0
+            val colors = HERO_COLORS[actor[1] % HERO_COLORS.size].map { it.first to palette.tint(it.second, 0.9f) }.toMap()
+            PixelKit.sprite(out, cols, rows, HEROES[actor[1] % HEROES.size], x, ground - 6 - lift, colors)
+        }
+        for (foe in foes) {
+            val x = Math.floorMod((foe[0] + if ((time + foe[1]) / 1_200 % 2L == 0L) time / 150 else -time / 150).toInt(), cols)
+            val stomped = actors.any { actor ->
+                val heroX = Math.floorMod((actor[0] + time / 90).toInt(), cols)
+                val jumping = Math.floorMod(time + actor[2], 4_000L) < 900L
+                jumping && kotlin.math.abs(heroX - x) < 3
+            }
+            if (!stomped) PixelKit.sprite(out, cols, rows, FOE, x, ground - 4, mapOf('b' to palette.tint(palette.primary, 0.42f), 'd' to outline))
+        }
+    }
 
     /** Rounded hills standing on the ground, up to [width] wide and [height] tall, with a lighter crest. */
     private fun mounds(seed: Int, count: Int, width: Float, height: Float, color: Int, crest: Int) {
@@ -228,5 +262,18 @@ internal class PlainsArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int 
         const val COIN_FRAME_MS = 125L
         const val BLACK = 0xFF000000.toInt()
         val MARK = listOf(".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#..")
+        val HEROES = listOf(
+            listOf(".rr.", "rrrr", ".ss.", "s.ss"),
+            listOf(".gg.", "gggg", ".ss.", "s.ss"),
+            listOf(".ww.", "wwww", ".ss.", "s.ss"),
+            listOf(".gg.", "gggg", "gssg", ".gg."),
+        )
+        val HERO_COLORS = listOf(
+            listOf('r' to 0xFFFF4030.toInt(), 's' to 0xFFF6C38A.toInt()),
+            listOf('g' to 0xFF4ACB5C.toInt(), 's' to 0xFFF6C38A.toInt()),
+            listOf('w' to 0xFFFFE8D0.toInt(), 's' to 0xFFF6C38A.toInt()),
+            listOf('g' to 0xFF56C86A.toInt(), 's' to 0xFFE9B45D.toInt()),
+        )
+        val FOE = listOf(".bb.", "bbbb", "d..d", ".dd.")
     }
 }

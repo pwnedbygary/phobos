@@ -105,7 +105,7 @@ fun PhobosTopBar(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
                 )
-                if (solid?.titleCursor == true) TitleCursor(style, LocalContentColor.current)
+                if (solid?.titleCursor == true) TitleCursorAligned(style, LocalContentColor.current)
             }
         },
         navigationIcon = {
@@ -150,7 +150,7 @@ fun ScreenHeader(title: String, subtitle: String? = null, modifier: Modifier = M
                 color = color,
                 modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
             )
-            if (solid?.titleCursor == true) TitleCursor(style, color)
+            if (solid?.titleCursor == true) TitleCursorAligned(style, color)
         }
         if (subtitle != null) {
             LegibleText(subtitle, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant, modifier = plate)
@@ -160,16 +160,21 @@ fun ScreenHeader(title: String, subtitle: String? = null, modifier: Modifier = M
 
 /** A terminal's block cursor after a title in [style], blinking; hidden from accessibility services. */
 @Composable
-private fun RowScope.TitleCursor(style: TextStyle, color: Color) {
+fun TitleCursor(style: TextStyle, color: Color, modifier: Modifier = Modifier) {
     val on = rememberCursorBlink(enabled = true)
     val density = LocalDensity.current
     val width = with(density) { (style.fontSize * 0.5f).toDp() }
     val height = with(density) { (style.fontSize * 0.62f).toDp() }
     Spacer(
-        Modifier
+        modifier
             .padding(start = width / 3)
             .size(width, height)
-            .alignBy { it.measuredHeight }
             .drawBehind { if (on.value) drawRect(color) },
     )
+}
+
+/** [TitleCursor] aligned to the baseline of accompanying title text inside a [Row]. */
+@Composable
+fun RowScope.TitleCursorAligned(style: TextStyle, color: Color) {
+    TitleCursor(style, color, Modifier.alignBy { it.measuredHeight })
 }

@@ -33,7 +33,11 @@ internal abstract class PixelArt(val cols: Int, val rows: Int) {
             PixelBackdropScene.SPACE -> SpaceArt(cols, rows, pixelSceneColors(scheme, isDark))
             PixelBackdropScene.NIGHT_DRIVE -> NightDriveArt(cols, rows, pixelPalette(scheme, isDark))
             PixelBackdropScene.PLAINS -> PlainsArt(cols, rows, pixelPalette(scheme, isDark))
-            PixelBackdropScene.SAKURA -> SakuraArt(cols, rows, pixelPalette(scheme, isDark))
+            PixelBackdropScene.SAKURA_CYCLE -> SakuraArt(cols, rows, pixelPalette(scheme, isDark), SakuraMode.CYCLE)
+            PixelBackdropScene.SAKURA_NIGHT -> SakuraArt(cols, rows, pixelPalette(scheme, isDark), SakuraMode.NIGHT)
+            PixelBackdropScene.SAKURA_DAY -> SakuraArt(cols, rows, pixelPalette(scheme, isDark), SakuraMode.DAY)
+            PixelBackdropScene.UNDERWATER -> UnderwaterArt(cols, rows, pixelPalette(scheme, isDark))
+            PixelBackdropScene.CASTLE -> CastleArt(cols, rows, pixelPalette(scheme, isDark))
         }
     }
 }

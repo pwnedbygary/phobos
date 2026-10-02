@@ -28,10 +28,16 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import com.phobos.emulator.data.CrtBackdropScene
+import com.phobos.emulator.data.GlassBackdropScene
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.MangaBackdropScene
 import com.phobos.emulator.data.PixelBackdropScene
+import com.phobos.emulator.data.RetrowaveBackdropScene
+import com.phobos.emulator.data.RpgBackdropScene
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
+import com.phobos.emulator.data.XmbBackdropScene
 
 /** What screens need to know about the active theme beyond [MaterialTheme]. */
 @Immutable
@@ -49,6 +55,12 @@ data class PhobosThemeInfo(
     val glass: GlassStyle,
     /** The scene behind the pages in the Pixel art style. */
     val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
+    val mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,
+    val rpgBackdrop: RpgBackdropScene = RpgBackdropScene.LATTICE,
+    val retrowaveBackdrop: RetrowaveBackdropScene = RetrowaveBackdropScene.SUNSET,
+    val crtBackdrop: CrtBackdropScene = CrtBackdropScene.GREEN,
+    val glassBackdrop: GlassBackdropScene = GlassBackdropScene.GLOWS,
+    val xmbBackdrop: XmbBackdropScene = XmbBackdropScene.WAVES,
 ) {
     val retrowave: Boolean get() = effects == UiEffects.RETROWAVE
 
@@ -76,6 +88,12 @@ fun PhobosTheme(
     effects: UiEffects = UiEffects.NONE,
     glassEffects: GlassEffects = GlassEffects.FULL,
     pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
+    mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,
+    rpgBackdrop: RpgBackdropScene = RpgBackdropScene.LATTICE,
+    retrowaveBackdrop: RetrowaveBackdropScene = RetrowaveBackdropScene.SUNSET,
+    crtBackdrop: CrtBackdropScene = CrtBackdropScene.GREEN,
+    glassBackdrop: GlassBackdropScene = GlassBackdropScene.GLOWS,
+    xmbBackdrop: XmbBackdropScene = XmbBackdropScene.WAVES,
     content: @Composable () -> Unit,
 ) {
     val scene = effects.glassScene
@@ -91,7 +109,10 @@ fun PhobosTheme(
         GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, scene, glassEffects)
     }
 
-    val info = PhobosThemeInfo(resolved.theme, resolved.isDark, effects, colors.success, colors.warning, colors.scheme, glass, pixelBackdrop)
+    val info = PhobosThemeInfo(
+        resolved.theme, resolved.isDark, effects, colors.success, colors.warning, colors.scheme, glass,
+        pixelBackdrop, mangaBackdrop, rpgBackdrop, retrowaveBackdrop, crtBackdrop, glassBackdrop, xmbBackdrop,
+    )
     CompositionLocalProvider(LocalPhobosTheme provides info) {
         MaterialTheme(
             colorScheme = colorScheme,

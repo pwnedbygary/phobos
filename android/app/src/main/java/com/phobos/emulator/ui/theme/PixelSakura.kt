@@ -12,11 +12,18 @@ import kotlin.math.sqrt
 import kotlin.random.Random
 
 /**
- * The sakura backdrop: a full moon over layered mountains, a pagoda with lit windows on the hill, and a
- * cherry branch in blossom reaching in from the corner, under a starry sky. Petals drift down on the
- * wind, drawn 8 times a second, swaying and turning as they fall, and a few stars at a time twinkle.
+ * The sakura backdrop: a moonlit, sunlit, or slowly cycling sky over layered mountains, a pagoda, and
+ * a cherry branch in blossom. Petals drift down on the wind at eight frames a second.
  */
-internal class SakuraArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int = 1990) : PixelArt(cols, rows) {
+internal enum class SakuraMode { NIGHT, DAY, CYCLE }
+
+internal class SakuraArt(
+    cols: Int,
+    rows: Int,
+    private val palette: PixelPalette,
+    private val mode: SakuraMode = SakuraMode.NIGHT,
+    private val seed: Int = 1990,
+) : PixelArt(cols, rows) {
     private val still = IntArray(cols * rows)
     private val starColor = palette.tint(palette.onBackground, 0.75f)
     private val stars = StarField(cols, rows, (rows * 0.5f).toInt(), cols * rows / 240, seed)
@@ -27,15 +34,7 @@ internal class SakuraArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int 
     private val petals: Array<DoubleArray>
 
     init {
-        PixelKit.sky(still, cols, 0, rows, palette.background, palette.tint(palette.primary, 0.3f), bands = 7)
-        stars.paint(still, starColor)
-        paintMoon(palette.tint(palette.onBackground, 0.9f), palette.tint(palette.onBackground, 0.7f), palette.tint(palette.onBackground, 0.3f), seed)
-        paintRidge(PixelKit.ridge(cols, seed + 1, 0.3f), rows * 0.8f, rows * 0.2f, palette.tint(palette.secondary, 0.28f))
-        paintRidge(PixelKit.ridge(cols, seed + 2, 0.45f), rows * 0.86f, rows * 0.12f, palette.tint(palette.secondary, 0.18f))
-        val silhouette = PixelKit.mix(palette.background, BLACK, if (palette.isDark) 0.45f else 0.35f)
-        paintHill(silhouette)
-        paintPagoda(silhouette, palette.tint(palette.tertiary, 0.85f))
-        paintBranch(silhouette, seed)
+        paintScene(if (mode == SakuraMode.DAY) 1f else if (mode == SakuraMode.NIGHT) 0f else EVENING, 0L)
 
         val random = Random(seed + 5)
         petals = Array((cols * rows / 2600).coerceIn(6, 90)) {
@@ -52,9 +51,15 @@ internal class SakuraArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int 
     }
 
     override fun compose(time: Long, out: IntArray, live: Boolean) {
+        val daylight = when (mode) {
+            SakuraMode.NIGHT -> 0f
+            SakuraMode.DAY -> 1f
+            SakuraMode.CYCLE -> if (live) cycleDaylight(time) else EVENING
+        }
+        paintScene(daylight, if (live) time else 0L)
         System.arraycopy(still, 0, out, 0, still.size)
         if (!live) return
-        stars.twinkle(time, out, starColor)
+        if (daylight < 0.6f) stars.twinkle(time, out, starColor)
         val seconds = time / 1000.0
         petals.forEachIndexed { i, p ->
             val angle = 2 * PI * time / p[5] + p[6]
@@ -72,9 +77,40 @@ internal class SakuraArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int 
 
     override fun hold(time: Long): Long = PETAL_FRAME_MS - Math.floorMod(time, PETAL_FRAME_MS)
 
-    private fun paintMoon(moon: Int, shade: Int, glow: Int, seed: Int) {
-        val cx = cols * 0.73f
-        val cy = rows * 0.27f
+    /** Rebuilds the static landscape with the current day-to-night lighting. */
+    private fun paintScene(daylight: Float, time: Long) {
+        val nightTop = palette.background
+        val dayTop = PixelKit.mix(palette.tint(palette.secondary, 0.72f), 0xFF58A9E8.toInt(), 0.5f)
+        val nightBottom = palette.tint(palette.primary, 0.3f)
+        val dayBottom = PixelKit.mix(palette.tint(palette.onBackground, 0.45f), 0xFFBFE8FF.toInt(), 0.6f)
+        PixelKit.sky(still, cols, 0, rows, PixelKit.mix(nightTop, dayTop, daylight), PixelKit.mix(nightBottom, dayBottom, daylight), bands = 7)
+        if (daylight < 0.75f) stars.paint(still, starColor)
+        val sunArc = cycleArc(if (mode == SakuraMode.CYCLE) time else if (mode == SakuraMode.DAY) CYCLE_MS / 4 else 3 * CYCLE_MS / 4)
+        val moonArc = cycleArc(if (mode == SakuraMode.CYCLE) time + CYCLE_MS / 2 else 3 * CYCLE_MS / 4)
+        if (daylight > 0.08f) paintSun(sunArc.first, sunArc.second, palette.tint(palette.tertiary, 0.95f), palette.tint(palette.onBackground, 0.8f))
+        if (daylight < 0.92f) paintMoon(moonArc.first, moonArc.second, palette.tint(palette.onBackground, 0.9f), palette.tint(palette.onBackground, 0.7f), palette.tint(palette.onBackground, 0.3f), seed)
+        paintRidge(PixelKit.ridge(cols, seed + 1, 0.3f), rows * 0.8f, rows * 0.2f, PixelKit.mix(palette.tint(palette.secondary, 0.28f), palette.tint(palette.secondary, 0.62f), daylight))
+        paintRidge(PixelKit.ridge(cols, seed + 2, 0.45f), rows * 0.86f, rows * 0.12f, PixelKit.mix(palette.tint(palette.secondary, 0.18f), palette.tint(palette.secondary, 0.46f), daylight))
+        val silhouette = PixelKit.mix(PixelKit.mix(palette.background, BLACK, if (palette.isDark) 0.45f else 0.35f), palette.tint(palette.secondary, 0.25f), daylight * 0.45f)
+        paintHill(silhouette)
+        paintPagoda(silhouette, PixelKit.mix(palette.tint(palette.tertiary, 0.85f), palette.tint(palette.tertiary, 0.35f), daylight))
+        paintBranch(silhouette, seed)
+    }
+
+    private fun cycleDaylight(time: Long): Float {
+        val phase = Math.floorMod(time, CYCLE_MS).toFloat() / CYCLE_MS
+        return ((sin(phase * 2f * PI - PI / 2).toFloat() + 1f) / 2f).coerceIn(0f, 1f)
+    }
+
+    /** Sun and moon travel opposite halves of the same horizon-to-horizon arc. */
+    private fun cycleArc(time: Long): Pair<Float, Float> {
+        val phase = Math.floorMod(time, CYCLE_MS).toFloat() / CYCLE_MS
+        val x = cols * (0.1f + 0.8f * phase)
+        val y = rows * (0.54f - 0.35f * sin(phase * PI).toFloat())
+        return x to y
+    }
+
+    private fun paintMoon(cx: Float, cy: Float, moon: Int, shade: Int, glow: Int, seed: Int) {
         val r = min(cols, rows) * 0.12f
         if (r < 2f) return
         val random = Random(seed + 3)
@@ -95,6 +131,15 @@ internal class SakuraArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int 
                     if (strength * 0.7f > PixelKit.threshold(x, y)) still[i] = PixelKit.mix(still[i], glow, 0.5f)
                 }
             }
+        }
+    }
+
+    private fun paintSun(cx: Float, cy: Float, sun: Int, glow: Int) {
+        val r = min(cols, rows) * 0.1f
+        for (y in floor(cy - r - 3).toInt()..ceil(cy + r + 3).toInt()) for (x in floor(cx - r - 3).toInt()..ceil(cx + r + 3).toInt()) {
+            val d = sqrt((x + 0.5f - cx) * (x + 0.5f - cx) + (y + 0.5f - cy) * (y + 0.5f - cy))
+            if (d < r) PixelKit.put(still, cols, rows, x, y, sun)
+            else if (d < r + 3 && PixelKit.threshold(x, y) < 0.4f) PixelKit.blend(still, cols, rows, x, y, glow, 0.35f)
         }
     }
 
@@ -212,6 +257,8 @@ internal class SakuraArt(cols: Int, rows: Int, palette: PixelPalette, seed: Int 
 
     private companion object {
         const val PETAL_FRAME_MS = 125L
+        const val CYCLE_MS = 108_000L
+        const val EVENING = 0.35f
         const val BLACK = 0xFF000000.toInt()
         const val WHITE = 0xFFFFFFFF.toInt()
         const val PINK = 0xFFFFB7D5.toInt()

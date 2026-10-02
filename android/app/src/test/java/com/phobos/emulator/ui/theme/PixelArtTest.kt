@@ -31,7 +31,11 @@ class PixelArtTest {
         PixelBackdropScene.SPACE -> SpaceArt(cols, rows, spaceColors)
         PixelBackdropScene.NIGHT_DRIVE -> NightDriveArt(cols, rows, palette)
         PixelBackdropScene.PLAINS -> PlainsArt(cols, rows, palette)
-        PixelBackdropScene.SAKURA -> SakuraArt(cols, rows, palette)
+        PixelBackdropScene.SAKURA_CYCLE -> SakuraArt(cols, rows, palette, SakuraMode.CYCLE)
+        PixelBackdropScene.SAKURA_NIGHT -> SakuraArt(cols, rows, palette, SakuraMode.NIGHT)
+        PixelBackdropScene.SAKURA_DAY -> SakuraArt(cols, rows, palette, SakuraMode.DAY)
+        PixelBackdropScene.UNDERWATER -> UnderwaterArt(cols, rows, palette)
+        PixelBackdropScene.CASTLE -> CastleArt(cols, rows, palette)
     }
 
     private fun frame(art: PixelArt, time: Long, live: Boolean = true) = IntArray(art.cols * art.rows).also { art.compose(time, it, live) }

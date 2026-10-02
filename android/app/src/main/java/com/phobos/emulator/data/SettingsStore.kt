@@ -46,10 +46,76 @@ enum class UiEffects(val label: String, val description: String) {
 
 /** The scene the Pixel art style draws behind the pages (Settings → Appearance → Backdrop). */
 enum class PixelBackdropScene(val label: String, val description: String) {
-    SPACE("Space", "A planet turning below twinkling stars, with now and then a shooting star"),
+    SPACE("Space", "Mars turning below the stars, with Phobos (D-pad moon) in orbit and occasional shooting stars"),
     NIGHT_DRIVE("Night drive", "A road racing toward a striped sun between the mountains"),
-    PLAINS("Pixel plains", "Clouds drifting over the hills, floating blocks and spinning coins"),
-    SAKURA("Sakura night", "Cherry blossom petals falling under a full moon"),
+    PLAINS("Pixel plains", "A Mario-like stage: heroes run, jump, pop bricks, collect coins and stomp foes"),
+    SAKURA_CYCLE("Sakura", "Day↔night cycle: moon and sun rise and set while petals fall"),
+    SAKURA_NIGHT("Sakura night", "Cherry blossom petals falling under a full moon"),
+    SAKURA_DAY("Sakura day", "Cherry blossom petals falling under a bright sun"),
+    UNDERWATER("Underwater", "Bubbles rising past a coral reef under a wavy surface"),
+    CASTLE("Pixel castle", "Torches flickering on a brick wall under a starry battlement"),
+}
+
+/** Library console art pack (Settings → Appearance → Platform icons). */
+enum class PlatformIconPack(val label: String, val description: String) {
+    MATCH_STYLE(
+        "Match style",
+        "Systematic by default; Pixel and Manga packs when those styles are on",
+    ),
+    SYSTEMATIC("Systematic", "BAXY Square top-down consoles (MIT), recolored to the theme"),
+    PHOBOS("Phobos", "Original Phobos silhouettes for every system, including newer ones"),
+    PIXEL("Pixel", "Chunky pixel-art console glyphs"),
+    MANGA("Manga", "Ink-line console glyphs with screentone shading"),
+}
+
+/** Manga ink backdrop variants. */
+enum class MangaBackdropScene(val label: String, val description: String) {
+    TONE("Screentone", "Paper with a screentone that densifies toward the bottom"),
+    SPEED_LINES("Speed lines", "Radial ink speed lines bursting from the center"),
+    SPLASH("Splash page", "A bold ink splash with sparse tone at the edges"),
+}
+
+/** 16-bit RPG backdrop variants. */
+enum class RpgBackdropScene(val label: String, val description: String) {
+    LATTICE("Lattice", "A faint diamond lattice behind the menu windows"),
+    STARS("Starfield", "Twinkling stars over a deep menu sky"),
+    DUNGEON("Dungeon", "Brick courses with torchlight pools"),
+}
+
+/** Retrowave / synthwave backdrop variants. */
+enum class RetrowaveBackdropScene(val label: String, val description: String) {
+    SUNSET("Sunset", "Banded sun over a perspective grid floor"),
+    GRID("Neon grid", "An endless neon floor grid without the sun"),
+    CITY("Night city", "A skyline silhouette under a neon sky"),
+}
+
+/** CRT terminal backdrop phosphor tint. */
+enum class CrtBackdropScene(val label: String, val description: String) {
+    GREEN("Green phosphor", "Classic green bloom with scanlines"),
+    AMBER("Amber phosphor", "Warm amber bloom with scanlines"),
+    BLUE("Blue phosphor", "Cool blue bloom with scanlines"),
+}
+
+/** Glass / default backdrop variants when no solid style owns the scene. */
+enum class GlassBackdropScene(val label: String, val description: String) {
+    GLOWS("Soft glows", "Floating color orbs behind the glass cards"),
+    AURORA("Aurora", "Slow vertical color bands like an aurora"),
+    MESH("Mesh", "A faint geometric mesh over the background"),
+}
+
+/** XMB wave backdrop variants. */
+enum class XmbBackdropScene(val label: String, val description: String) {
+    WAVES("Waves", "Slow ribbons of light over a color gradient"),
+    CALM("Calm", "Quieter waves with a deeper gradient"),
+    DEEP("Deep", "Stronger ribbons over a darker depth"),
+}
+
+/** Idle screensaver that shows only the current backdrop until interrupted. */
+enum class ScreensaverDelay(val label: String, val description: String, val millis: Long?) {
+    OFF("Off", "No screensaver", null),
+    ONE_MINUTE("1 minute", "Show the backdrop after one minute idle", 60_000L),
+    FIVE_MINUTES("5 minutes", "Show the backdrop after five minutes idle", 300_000L),
+    TEN_MINUTES("10 minutes", "Show the backdrop after ten minutes idle", 600_000L),
 }
 
 enum class RegionPreference(val label: String) {
@@ -75,6 +141,16 @@ data class EmulatorSettings(
     val themeFollowSystem: Boolean = false,
     val uiEffects: UiEffects = UiEffects.NONE,
     val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
+    val mangaBackdrop: MangaBackdropScene = MangaBackdropScene.TONE,
+    val rpgBackdrop: RpgBackdropScene = RpgBackdropScene.LATTICE,
+    val retrowaveBackdrop: RetrowaveBackdropScene = RetrowaveBackdropScene.SUNSET,
+    val crtBackdrop: CrtBackdropScene = CrtBackdropScene.GREEN,
+    val glassBackdrop: GlassBackdropScene = GlassBackdropScene.GLOWS,
+    val xmbBackdrop: XmbBackdropScene = XmbBackdropScene.WAVES,
+    val platformIconPack: PlatformIconPack = PlatformIconPack.MATCH_STYLE,
+    val screensaverDelay: ScreensaverDelay = ScreensaverDelay.OFF,
+    /** Independent of the app style: which catalog backdrop the idle screensaver shows. */
+    val screensaverBackdrop: CatalogBackdrop = CatalogBackdrop.MATCH_APP,
     val glassEffects: GlassEffects = GlassEffects.FULL,
     val regionPreference: RegionPreference = RegionPreference.NTSC_U_NTSC_J_PAL,
     val fastBoot: Boolean = false,
@@ -196,6 +272,15 @@ class SettingsStore(private val context: Context) {
         val RETROWAVE_EFFECTS = booleanPreferencesKey("retrowave_effects")
         val UI_EFFECTS = stringPreferencesKey("ui_effects")
         val PIXEL_BACKDROP = stringPreferencesKey("pixel_backdrop")
+        val MANGA_BACKDROP = stringPreferencesKey("manga_backdrop")
+        val RPG_BACKDROP = stringPreferencesKey("rpg_backdrop")
+        val RETROWAVE_BACKDROP = stringPreferencesKey("retrowave_backdrop")
+        val CRT_BACKDROP = stringPreferencesKey("crt_backdrop")
+        val GLASS_BACKDROP = stringPreferencesKey("glass_backdrop")
+        val XMB_BACKDROP = stringPreferencesKey("xmb_backdrop")
+        val PLATFORM_ICON_PACK = stringPreferencesKey("platform_icon_pack")
+        val SCREENSAVER_DELAY = stringPreferencesKey("screensaver_delay")
+        val SCREENSAVER_BACKDROP = stringPreferencesKey("screensaver_backdrop")
         val GLASS_EFFECTS = stringPreferencesKey("glass_effects")
         val REGION_PREFERENCE = stringPreferencesKey("region_preference")
         val FAST_BOOT = booleanPreferencesKey("fast_boot")
@@ -428,7 +513,20 @@ class SettingsStore(private val context: Context) {
                 safeGetString(UI_EFFECTS, ""),
                 if (safeGet(RETROWAVE_EFFECTS, false)) UiEffects.RETROWAVE else UiEffects.NONE,
             ),
-            pixelBackdrop = enumOrDefault(safeGetString(PIXEL_BACKDROP, ""), PixelBackdropScene.SPACE),
+            // Pre-split installs stored SAKURA for the moonlit scene; SAKURA_CYCLE is the new day↔night option.
+            pixelBackdrop = when (val raw = safeGetString(PIXEL_BACKDROP, "")) {
+                "SAKURA" -> PixelBackdropScene.SAKURA_NIGHT
+                else -> enumOrDefault(raw, PixelBackdropScene.SPACE)
+            },
+            mangaBackdrop = enumOrDefault(safeGetString(MANGA_BACKDROP, ""), MangaBackdropScene.TONE),
+            rpgBackdrop = enumOrDefault(safeGetString(RPG_BACKDROP, ""), RpgBackdropScene.LATTICE),
+            retrowaveBackdrop = enumOrDefault(safeGetString(RETROWAVE_BACKDROP, ""), RetrowaveBackdropScene.SUNSET),
+            crtBackdrop = enumOrDefault(safeGetString(CRT_BACKDROP, ""), CrtBackdropScene.GREEN),
+            glassBackdrop = enumOrDefault(safeGetString(GLASS_BACKDROP, ""), GlassBackdropScene.GLOWS),
+            xmbBackdrop = enumOrDefault(safeGetString(XMB_BACKDROP, ""), XmbBackdropScene.WAVES),
+            platformIconPack = enumOrDefault(safeGetString(PLATFORM_ICON_PACK, ""), PlatformIconPack.MATCH_STYLE),
+            screensaverDelay = enumOrDefault(safeGetString(SCREENSAVER_DELAY, ""), ScreensaverDelay.OFF),
+            screensaverBackdrop = enumOrDefault(safeGetString(SCREENSAVER_BACKDROP, ""), CatalogBackdrop.MATCH_APP),
             glassEffects = enumOrDefault(safeGetString(GLASS_EFFECTS, GlassEffects.FULL.name), GlassEffects.FULL),
             regionPreference = enumOrDefault(safeGetString(REGION_PREFERENCE, ""), RegionPreference.NTSC_U_NTSC_J_PAL),
             fastBoot = safeGet(FAST_BOOT, false),
@@ -577,6 +675,15 @@ class SettingsStore(private val context: Context) {
         it[RETROWAVE_EFFECTS] = effects == UiEffects.RETROWAVE
     }
     suspend fun setPixelBackdrop(scene: PixelBackdropScene) = context.dataStore.edit { it[PIXEL_BACKDROP] = scene.name }
+    suspend fun setMangaBackdrop(scene: MangaBackdropScene) = context.dataStore.edit { it[MANGA_BACKDROP] = scene.name }
+    suspend fun setRpgBackdrop(scene: RpgBackdropScene) = context.dataStore.edit { it[RPG_BACKDROP] = scene.name }
+    suspend fun setRetrowaveBackdrop(scene: RetrowaveBackdropScene) = context.dataStore.edit { it[RETROWAVE_BACKDROP] = scene.name }
+    suspend fun setCrtBackdrop(scene: CrtBackdropScene) = context.dataStore.edit { it[CRT_BACKDROP] = scene.name }
+    suspend fun setGlassBackdrop(scene: GlassBackdropScene) = context.dataStore.edit { it[GLASS_BACKDROP] = scene.name }
+    suspend fun setXmbBackdrop(scene: XmbBackdropScene) = context.dataStore.edit { it[XMB_BACKDROP] = scene.name }
+    suspend fun setPlatformIconPack(pack: PlatformIconPack) = context.dataStore.edit { it[PLATFORM_ICON_PACK] = pack.name }
+    suspend fun setScreensaverDelay(delay: ScreensaverDelay) = context.dataStore.edit { it[SCREENSAVER_DELAY] = delay.name }
+    suspend fun setScreensaverBackdrop(backdrop: CatalogBackdrop) = context.dataStore.edit { it[SCREENSAVER_BACKDROP] = backdrop.name }
     suspend fun setGlassEffects(level: GlassEffects) = context.dataStore.edit { it[GLASS_EFFECTS] = level.name }
     suspend fun setRegionPreference(pref: RegionPreference) = context.dataStore.edit { it[REGION_PREFERENCE] = pref.name }
     suspend fun setFastBoot(enabled: Boolean) = context.dataStore.edit { it[FAST_BOOT] = enabled }

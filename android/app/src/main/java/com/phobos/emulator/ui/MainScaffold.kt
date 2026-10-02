@@ -17,6 +17,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -63,13 +66,19 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.navigation.NavBackStackEntry
+import com.phobos.emulator.data.GlassBackdropScene
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.ui.theme.CatalogBackdropView
 import com.phobos.emulator.ui.theme.GlassBackdrop
 import com.phobos.emulator.ui.theme.GlassCapture
+import com.phobos.emulator.ui.theme.GlassCatalogBackdrop
 import com.phobos.emulator.ui.theme.LocalGlassCapture
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.RetrowaveBackdrop
@@ -94,7 +103,16 @@ import kotlinx.coroutines.flow.map
 
 private const val TOUCH_EDITOR_ROUTE = "settings/touch-editor/{family}"
 private const val EMULATOR_ROUTE = "emulator/{system}/{rom}"
+private const val INPUT_MAPPING_ROUTE = "settings/input-mapping"
+private const val HOTKEY_MAPPING_ROUTE = "settings/hotkeys"
 private val TOP_LEVEL_ROUTES = setOf("library", "console", "settings")
+/** Routes where the idle screensaver must not cover the UI (game, editors, bind capture). */
+private val NO_SCREENSAVER_ROUTES = setOf(
+    EMULATOR_ROUTE,
+    TOUCH_EDITOR_ROUTE,
+    INPUT_MAPPING_ROUTE,
+    HOTKEY_MAPPING_ROUTE,
+)
 
 /** Routes drawn edge to edge without the bottom navigation bar. */
 private val FULL_SCREEN_ROUTES = setOf("system/{name}", EMULATOR_ROUTE, TOUCH_EDITOR_ROUTE)
@@ -162,6 +180,57 @@ fun MainScaffold(viewModel: MainViewModel) {
     val theme = LocalPhobosTheme.current
     val retrowave = theme.retrowave
     val style = theme.style
+    val settings by viewModel.settings.collectAsState()
+    var screensaverVisible by remember { mutableStateOf(false) }
+    var idleGeneration by remember { mutableIntStateOf(0) }
+
+    fun setScreensaverVisible(visible: Boolean) {
+        screensaverVisible = visible
+        // Keep the activity key/motion gate in lockstep with the overlay (not a later effect).
+        viewModel.setScreensaverActive(visible)
+    }
+
+    fun noteIdleActivity() {
+        if (!screensaverVisible) {
+            idleGeneration++
+            viewModel.noteUserActivity()
+        }
+    }
+
+    fun dismissScreensaver() {
+        if (screensaverVisible) {
+            setScreensaverVisible(false)
+            idleGeneration++
+            viewModel.noteUserActivity()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.userActivity.collect {
+            // Keys / external activity: dismiss if showing, else reset the idle timer.
+            // Read the ViewModel flag (not the Compose state) so this collector is not stale.
+            if (viewModel.screensaverActive.value) {
+                setScreensaverVisible(false)
+            }
+            idleGeneration++
+        }
+    }
+
+    val capturing by viewModel.controlCapture.target.collectAsState()
+
+    // Arm the screensaver after idle; never over the game, bind screens, or an in-progress capture.
+    LaunchedEffect(settings.screensaverDelay, idleGeneration, route, capturing) {
+        val idle = settings.screensaverDelay.millis
+        if (idle == null || route in NO_SCREENSAVER_ROUTES || capturing != null) {
+            setScreensaverVisible(false)
+            return@LaunchedEffect
+        }
+        setScreensaverVisible(false)
+        kotlinx.coroutines.delay(idle)
+        if (route !in NO_SCREENSAVER_ROUTES && viewModel.controlCapture.target.value == null) {
+            setScreensaverVisible(true)
+        }
+    }
 
     // Full Screen Mode also hides the status bar in the menus (a swipe down shows it for a moment). The game
     // screen hides both bars and, when it closes, restores this state.
@@ -193,14 +262,47 @@ fun MainScaffold(viewModel: MainViewModel) {
         GlassCapture(backdropLayer, pagesLayer).also { it.backdropAlpha = { backdropFade.value } }
     }
 
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).onGloballyPositioned { glassCapture.root = it }) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            // Idle tracking only while the screensaver is off. Dismissing from Initial here
+            // would tear the overlay down before the same tap is consumed, clicking through.
+            .pointerInput(screensaverVisible) {
+                if (screensaverVisible) return@pointerInput
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(PointerEventPass.Initial)
+                        idleGeneration++
+                    }
+                }
+            }
+            .onGloballyPositioned { glassCapture.root = it },
+    ) {
         if (backdropAlpha > 0f) {
             val backdrop = Modifier.fillMaxSize()
                 .then(if (lens) Modifier.recordForGlass(backdropLayer) { glassCapture.onRecorded?.invoke() } else Modifier)
                 .graphicsLayer { alpha = backdropAlpha }
             if (style.ownBackdrop) style.Backdrop(backdrop)
-            else if (retrowave) RetrowaveBackdrop(backdrop)
-            else if (theme.glass.level != GlassEffects.OFF) GlassBackdrop(backdrop)
+            else if (retrowave) RetrowaveBackdrop(backdrop, theme.retrowaveBackdrop)
+            else when (theme.glassBackdrop) {
+                // Soft glows use the live glass orb when Glass effects are on; otherwise the
+                // catalog's standalone glows (Glass effects Off zeroes the live orb alphas).
+                GlassBackdropScene.GLOWS ->
+                    if (theme.glass.level != GlassEffects.OFF) GlassBackdrop(backdrop)
+                    else GlassCatalogBackdrop(
+                        MaterialTheme.colorScheme,
+                        theme.isDark,
+                        GlassBackdropScene.GLOWS,
+                        backdrop,
+                    )
+                else -> GlassCatalogBackdrop(
+                    MaterialTheme.colorScheme,
+                    theme.isDark,
+                    theme.glassBackdrop,
+                    backdrop,
+                )
+            }
         }
         // While a moving backdrop shows, the pages and the dock keep a layer of their own, so a change in
         // the backdrop doesn't draw them again. Never over the game: its surface shows through the window.
@@ -213,6 +315,7 @@ fun MainScaffold(viewModel: MainViewModel) {
                 bottomBar = {
                     if (route !in FULL_SCREEN_ROUTES) {
                         PhobosDock(route, retrowave) { target ->
+                            noteIdleActivity()
                             navController.navigate(target) {
                                 popUpTo(navController.graph.startDestinationId)
                                 launchSingleTop = true
@@ -382,6 +485,32 @@ fun MainScaffold(viewModel: MainViewModel) {
                         }
                     }
                 }
+            }
+        }
+
+        if (screensaverVisible) {
+            val dismissInteraction = remember { MutableInteractionSource() }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+                    // Consumes the dismiss tap so Library tiles / buttons underneath do not fire.
+                    .clickable(
+                        interactionSource = dismissInteraction,
+                        indication = null,
+                        onClick = { dismissScreensaver() },
+                    )
+                    .focusable()
+                    .onKeyEvent {
+                        dismissScreensaver()
+                        true
+                    },
+            ) {
+                CatalogBackdropView(
+                    backdrop = settings.screensaverBackdrop,
+                    settings = settings,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
     }
