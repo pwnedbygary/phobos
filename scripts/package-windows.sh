@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Zips the Windows x64 build as dist/Phobos-<version>-windows-x64.zip, after checking that
-# Phobos.exe imports nothing but Windows' own DLLs: the C++ runtime, winpthreads and SDL are
-# linked in, and Vulkan comes from the driver's vulkan-1.dll, opened at run time.
+# Zips the Windows x64 build as dist/Phobos-<version>-windows-x64.zip (Phobos.exe with the System
+# and Database folders it copies into its data folder), after checking that Phobos.exe imports
+# nothing but Windows' own DLLs: the C++ runtime, winpthreads and SDL are linked in, and Vulkan
+# comes from the driver's vulkan-1.dll, opened at run time.
 #   scripts/package-windows.sh [build directory]
 # OBJDUMP picks the objdump that reads PE files (x86_64-w64-mingw32-objdump when cross-compiling).
 set -euo pipefail
@@ -25,6 +26,7 @@ STAGE="$DIST/Phobos-$VERSION-windows-x64"
 rm -rf "$STAGE" "$STAGE.zip"
 mkdir -p "$STAGE"
 cp "$EXE" "$STAGE/Phobos.exe"
-(cd "$STAGE" && cmake -E tar cf "$STAGE.zip" --format=zip Phobos.exe)
+cp -R "$BUILD/Database" "$BUILD/System" "$STAGE/"
+(cd "$DIST" && cmake -E tar cf "$STAGE.zip" --format=zip "$(basename "$STAGE")")
 rm -rf "$STAGE"
 echo "$STAGE.zip"

@@ -27,6 +27,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 cp "$BUILD/phobos" "$APP/Contents/MacOS/Phobos"
 cp "$MOLTENVK" "$APP/Contents/Frameworks/libMoltenVK.dylib"
+cp -R "$BUILD/Database" "$BUILD/System" "$APP/Contents/Resources/"
 
 ICONSET="$ROOT/build/Phobos.iconset"
 rm -rf "$ICONSET"

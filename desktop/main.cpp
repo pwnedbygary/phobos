@@ -138,6 +138,24 @@ private:
   bool quit = false;
 };
 
+// Boot ROMs (System) and game databases (Database) ship beside the program: in the build folder
+// and the Windows zip, in usr/share/phobos in the AppImage, and in Phobos.app's Resources, which
+// is SDL's base path there. Missing files are copied into the data folder the runner reads.
+static auto installSystemFiles(const std::string& dataFolder) -> void {
+  const char* base = SDL_GetBasePath();
+  std::error_code error;
+  for (auto relative : {"", "../share/phobos/"}) {
+    auto resources = toPath(std::string(base ? base : "") + relative);
+    if (!fs::is_directory(resources / "System", error)) continue;
+    for (auto folder : {"Database", "System"}) {
+      fs::copy(resources / folder, toPath(dataFolder) / folder, fs::copy_options::recursive | fs::copy_options::skip_existing, error);
+      if (error) SDL_Log("Couldn't copy %s into %s: %s", folder, dataFolder.c_str(), error.message().c_str());
+    }
+    return;
+  }
+  SDL_Log("No System folder beside Phobos: games that need its boot ROMs won't start");
+}
+
 auto Shell::run(int argc, char* argv[]) -> int {
   if (!setup(argc, argv)) return 1;
   while (!quit) {
@@ -195,6 +213,7 @@ auto Shell::setup(int argc, char* argv[]) -> bool {
   for (auto folder : {"saves", "states", "firmware", "vulkan", "tmp"}) {
     fs::create_directories(toPath(dataFolder + folder), error);
   }
+  installSystemFiles(dataFolder);
   settings.load(dataFolder + "settings.ini");
   gamesFolder = settings.text("games");
   firmwareFolder = settings.text("firmware", dataFolder + "firmware");
