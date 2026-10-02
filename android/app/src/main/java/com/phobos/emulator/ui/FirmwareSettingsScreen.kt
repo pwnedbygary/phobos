@@ -100,6 +100,7 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             FirmwareInfo("PlayStation", "BIOS", "Europe", "fw_psx_eu"),
             FirmwareInfo("Super Game Boy", "SGB cartridge", "World", "fw_sgb1"),
             FirmwareInfo("Super Game Boy", "SGB2 cartridge", "Japan", "fw_sgb2"),
+            FirmwareInfo("Arcade", "Aleck64 PIF set", "World", "fw_aleck64"),
             FirmwareInfo("SuperGrafx CD", "Arcade Card", "Japan", "fw_supergrafx_ac_jp"),
             FirmwareInfo("ZX Spectrum", "BIOS (48K)", "World", "fw_zx48"),
             FirmwareInfo("ZX Spectrum 128", "BIOS (128-0)", "World", "fw_zx128"),

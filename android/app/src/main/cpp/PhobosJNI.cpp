@@ -19,6 +19,7 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"Famicom", {"fc", "nes", "unf", "unif", "unh", "fds"}},
     {"Super Famicom", {"sfc", "smc", "swc", "fig", "bs", "st"}},
     {"Super Game Boy", {"gb"}},
+    {"Arcade", {"zip"}},
     {"Nintendo 64", {"n64", "v64", "z64", "n64dd", "ndd", "d64"}},
     {"Game Boy", {"gb"}},
     {"Game Boy Color", {"gb", "gbc", "nbc"}},

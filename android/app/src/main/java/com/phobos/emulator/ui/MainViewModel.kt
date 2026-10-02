@@ -266,6 +266,8 @@ class MainViewModel(
         }
         // Systems whose pak() reads neogeo.zip (the BIOS, and the LSPC zoom table the Neo Geo CD shares).
         private val NEOGEO_ZIP_SYSTEMS = setOf("Neo Geo", "Neo Geo CD")
+        // Arcade Aleck64 sets resolve parent ROMs from aleck64.zip beside the game zip.
+        private val ARCADE_ZIP_SYSTEMS = setOf("Arcade")
     }
 
     private var wasEmulationRunningBeforePause = false
@@ -2173,6 +2175,7 @@ class MainViewModel(
         "scph5502.bin" to "fw_psx_eu",
         "scph101.bin" to "fw_psx_us_v45",
         "neogeo.zip" to "fw_ng_bios",
+        "aleck64.zip" to "fw_aleck64",
         "aes.zip" to "fw_ng_aes",
         "neocd.zip" to "fw_ng_cd",
         "neocd.bin" to "fw_ng_cd",
@@ -2690,6 +2693,52 @@ class MainViewModel(
                 if (copied) Log.i("Phobos", "neogeo.zip ready in mia_temp")
                 ngBiosPresent = copied
             }
+            // Aleck64 parent BIOS set: MIA looks for aleck64.zip beside the game zip.
+            if (systemName in ARCADE_ZIP_SYSTEMS) {
+                val miaTempPath = File(context.cacheDir, "mia_temp")
+                if (!miaTempPath.exists()) miaTempPath.mkdirs()
+                val destFile = File(miaTempPath, "aleck64.zip")
+                var copied = false
+                val firmwareUri = currentSettings.systemFirmwarePaths["fw_aleck64"]
+                if (firmwareUri != null) {
+                    try {
+                        context.contentResolver.openInputStream(Uri.parse(firmwareUri))?.use { input ->
+                            destFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        copied = destFile.exists() && destFile.length() > 0
+                    } catch (_: Exception) {}
+                }
+                if (!copied) {
+                    rom.parentUri?.let { pUri ->
+                        val parentDir = DocumentFile.fromTreeUri(context, pUri)
+                        parentDir?.findFile("aleck64.zip")?.let { biosFile ->
+                            try {
+                                context.contentResolver.openInputStream(biosFile.uri)?.use { input ->
+                                    destFile.outputStream().use { output -> input.copyTo(output) }
+                                }
+                                copied = destFile.exists() && destFile.length() > 0
+                                if (copied) Log.i("Phobos", "Copied aleck64.zip from ROM folder")
+                            } catch (_: Exception) {}
+                        }
+                    }
+                }
+                if (!copied) {
+                    try {
+                        val romFile = if (rom.uri.scheme == "file") java.io.File(rom.uri.path ?: "") else null
+                        val parent = romFile?.parentFile
+                        val biosFile = parent?.let { java.io.File(it, "aleck64.zip") }?.takeIf { it.exists() }
+                            ?: parent?.parentFile?.let { java.io.File(it, "aleck64.zip") }?.takeIf { it.exists() }
+                        if (biosFile != null && biosFile.exists()) {
+                            biosFile.inputStream().use { input ->
+                                destFile.outputStream().use { output -> input.copyTo(output) }
+                            }
+                            copied = destFile.exists() && destFile.length() > 0
+                            if (copied) Log.i("Phobos", "Copied aleck64.zip from file path ${biosFile.path}")
+                        }
+                    } catch (_: Exception) {}
+                }
+                if (copied) Log.i("Phobos", "aleck64.zip ready in mia_temp")
+            }
             Log.d("Phobos", "Syncing settings to native: Driver='${currentSettings.customDriverPath}', Recompiler=${currentSettings.n64Recompiler}")
             
             PhobosCore.setFastBoot(currentSettings.fastBoot)
@@ -3016,7 +3065,7 @@ class MainViewModel(
      */
     private fun removeStaleGameCopies(tempDir: File) {
         val extensions = PhobosCore.enumerateSystems().flatMap { PhobosCore.getSystemExtensions(it) }.toSet() + "zip" + "7z"
-        tempDir.listFiles { file -> file.isFile && file.extension.lowercase() in extensions && file.name != "neogeo.zip" && !file.name.startsWith("fw_") }
+        tempDir.listFiles { file -> file.isFile && file.extension.lowercase() in extensions && file.name != "neogeo.zip" && file.name != "aleck64.zip" && !file.name.startsWith("fw_") }
             ?.forEach { if (it.delete()) Log.i("Phobos", "Removed stale temp copy ${it.name}") }
     }
     

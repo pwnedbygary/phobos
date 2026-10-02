@@ -597,6 +597,10 @@ namespace ares {
       }
       node = ares::Node::parent(node);
     }
+    // Arcade boards (Aleck64 / SG-1000A) name buttons "Player 1 …" / "Player 2 …".
+    string leaf = input->name();
+    if (leaf.beginsWith("Player 1")) return 0;
+    if (leaf.beginsWith("Player 2")) return 1;
     return 0;
   }
 
@@ -668,6 +672,27 @@ namespace ares {
           else if (nodeName == "C-Down")  b = VirtualGamepad::RS_Down;
           else if (nodeName == "C-Left")  b = VirtualGamepad::RS_Left;
           else if (nodeName == "C-Right") b = VirtualGamepad::RS_Right;
+      } else if (systemName == "Arcade") {
+          // Aleck64 / SG-1000A: "Player N …" leaves, plus cabinet Service/Test.
+          string leaf = nodeName;
+          if (leaf.beginsWith("Player 1 ") || leaf.beginsWith("Player 2 ")) leaf = leaf.slice(9);
+          if (leaf == "Up") b = VirtualGamepad::Up;
+          else if (leaf == "Down") b = VirtualGamepad::Down;
+          else if (leaf == "Left") b = VirtualGamepad::Left;
+          else if (leaf == "Right") b = VirtualGamepad::Right;
+          else if (leaf == "Start") b = VirtualGamepad::Start;
+          else if (leaf == "Coin") b = VirtualGamepad::Select;
+          else if (leaf == "Button 1") b = VirtualGamepad::A;
+          else if (leaf == "Button 2") b = VirtualGamepad::B;
+          else if (leaf == "Button 3") b = VirtualGamepad::X;
+          else if (leaf == "Button 4") b = VirtualGamepad::Y;
+          else if (leaf == "Button 5") b = VirtualGamepad::L1;
+          else if (leaf == "Button 6") b = VirtualGamepad::R1;
+          else if (leaf == "Button 7") b = VirtualGamepad::L2;
+          else if (leaf == "Button 8") b = VirtualGamepad::R2;
+          else if (leaf == "Button 9") b = VirtualGamepad::L3;
+          else if (nodeName == "Service") b = VirtualGamepad::Home;
+          else if (nodeName == "Test") b = VirtualGamepad::R3;
       } else if (systemName == "PlayStation") {
           // DualShock uses L1, R1, L2, R2, L3, R3 explicitly
           if      (nodeName == "L1") b = VirtualGamepad::L1;
@@ -901,13 +926,28 @@ namespace ares {
     return {};
   }
 
+  // SETA Aleck64 reports root name "Arcade" (same as SG-1000A). Distinguish by
+  // the configuration string set in Nintendo64::System::load.
+  static auto isAleck64Session() -> bool {
+    return root && root->name() == "Arcade" &&
+        root->attribute("configuration") == "[SETA] Aleck 64";
+  }
+  static auto isN64VulkanSession() -> bool {
+    #if defined(CORE_N64)
+    return root && ::ares::Nintendo64::vulkan.enable &&
+        (root->name() == "Nintendo 64" || isAleck64Session());
+    #else
+    return false;
+    #endif
+  }
+
   // With asynchronous RDP the GPU can still be writing RDRAM when the emulation
   // thread stops; wait for it before snapshotting or replacing that memory
   // (state save/load, reset). Callers hold runMutex, so no new RDP work starts.
   static auto drainN64RdpIfAsync() -> void {
     #if defined(CORE_N64)
     auto& vulkan = ::ares::Nintendo64::vulkan;
-    if (root && root->name() == "Nintendo 64" && vulkan.enable &&
+    if (isN64VulkanSession() &&
         (vulkan.asynchronousRdp.load() || vulkan.rdpWorkPending.load())) {
       vulkan.drainRdp();
     }
@@ -1783,12 +1823,13 @@ namespace ares {
 
       // WonderSwan vertical games are rotated here, in the frontend.
       bool rotate = root && root->name().beginsWith("WonderSwan") && orientationVertical;
-      bool tvPicture = root && (root->name() == "Nintendo 64" || root->name() == "PlayStation");
+      bool tvPicture = root && (root->name() == "Nintendo 64" || root->name() == "PlayStation"
+          || isAleck64Session());
       recordVideoGeometry(screen, width, height, rotate, tvPicture);
 
       bool isN64Vulkan = false;
       #if defined(CORE_N64)
-      isN64Vulkan = root && root->name() == "Nintendo 64" && ::ares::Nintendo64::vulkan.enable;
+      isN64Vulkan = isN64VulkanSession();
       // Normal N64 Vulkan frames are presented straight from parallel-RDP's
       // scanout buffer (VI::refresh passes the Screen through). When the VI's
       // CPU fallback rendered instead, cpuScanoutActive is set and `data` holds
@@ -2976,7 +3017,7 @@ else if (port->type() == "Keyboard") {
     // lookup (manifestDatabaseArcade). Use the library's RomFile.name
     // which is a clean filename — the URI is encoded and unusable here.
     string tempFname = "phobos_rom_temp";
-    if (systemName.contains("Neo Geo")) {
+    if (systemName.contains("Neo Geo") || systemName == "Arcade") {
       if (romName.size() > 0) {
         tempFname = romName;
         if (auto dot = tempFname.find(".")) tempFname = tempFname.slice(0, *dot);
@@ -3036,6 +3077,10 @@ else if (port->type() == "Keyboard") {
         identifiedSystem = "Neo Geo";
         forceZipLoad = true;
     }
+    else if (lookup.find("Arcade") || lookup.find("Aleck64") || lookup.find("Aleck 64") || lookup == "MAME") {
+        identifiedSystem = "Arcade";
+        forceZipLoad = true;
+    }
     else if (lookup.find("Mega CD 32X") || lookup.find("Sega CD 32X")) identifiedSystem = "Mega CD 32X";
     else if (lookup.find("32X")) identifiedSystem = "Mega 32X";
     else if (lookup.find("Mega Drive") || lookup.find("Genesis")) identifiedSystem = "Mega Drive";
@@ -3089,10 +3134,11 @@ else if (port->type() == "Keyboard") {
     LOGI("MIA: Created medium for %s", (const char*)identifiedSystem);
 
     bool isDisc = extension == "chd" || extension == "iso" || extension == "cue" || extension == "mdf" || extension == "img";
-    // Neo Geo ROMs are multi-file zips (e.g. mslug.zip). Don't extract them
-    // or we lose the internal file structure MIA needs for the database lookup.
+    // Neo Geo and Arcade ROMs are multi-file zips. Don't extract them or
+    // we lose the internal file structure MIA needs for the database lookup.
     bool isNeoGeo = (string)identifiedSystem == "Neo Geo";
-    if (!forceZipLoad && !isDisc && extension == "zip" && !isNeoGeo) {
+    bool isArcade = (string)identifiedSystem == "Arcade";
+    if (!forceZipLoad && !isDisc && extension == "zip" && !isNeoGeo && !isArcade) {
         LOGI("MIA: Attempting ZIP extraction for %s", (const char*)loadPath);
         std::vector<u8> romBuffer = currentMedium->read(loadPath);
         if (!romBuffer.empty()) {
@@ -3331,6 +3377,45 @@ else if (port->type() == "Keyboard") {
       );
 
       success = ::ares::Nintendo64::load(root, regionString);
+    } else if (identifiedSystem == "Arcade") {
+      // Board is chosen by MIA from Arcade.bml / VsSystem.bml after the zip loads.
+      string board = currentMedium && currentMedium->pak ? currentMedium->pak->attribute("board") : "";
+      if (board == "nintendo/aleck64") {
+        joinAbandonedThreads();
+        ::ares::Nintendo64::vulkan.enable = true;
+        string cacheDir = vulkanCachePath;
+        if (!cacheDir) cacheDir = savesPath;
+        if (cacheDir && strlen(cacheDir) > 0) {
+          ::ares::Nintendo64::vulkan.pipelineCachePath = string{cacheDir, "/n64_vulkan_pipeline_cache.bin"};
+        }
+        if (n64UpscaleFactor < 1) n64UpscaleFactor = 1;
+        if (n64UpscaleFactor > 4) n64UpscaleFactor = 4;
+        ::ares::Nintendo64::vulkan.internalUpscale = (u32)n64UpscaleFactor.load();
+        ::ares::Nintendo64::vulkan.outputUpscale = n64SupersampleScanout.load() ? 1 : (u32)n64UpscaleFactor.load();
+        ::ares::Nintendo64::vulkan.disableVideoInterfaceProcessing = n64DisableVIProcessing.load();
+        ::ares::Nintendo64::vulkan.weaveDeinterlacing = n64WeaveDeinterlacing.load();
+        ::ares::Nintendo64::vulkan.supersampleScanout = n64SupersampleScanout.load();
+        ::ares::Nintendo64::vi.overclockPercent = n64ViOverclock.load();
+        ::ares::Nintendo64::cpu.countPerOp = n64CountPerOp.load();
+        ::ares::Nintendo64::cpu.overclockFactor = n64CpuOverclock.load();
+        ::ares::Nintendo64::cpu.fasterSync = n64FasterSync.load();
+        ::ares::Nintendo64::cpu.skipCaches = n64SkipCaches.load();
+        ::ares::Nintendo64::cpu.recompiler.enabled = n64Recompiler.load();
+        ::ares::Nintendo64::rsp.recompiler.enabled = n64Recompiler.load();
+        ::ares::Nintendo64::rsp.taskMode = n64RspTaskMode.load();
+        ::ares::Nintendo64::vulkan.asynchronousRdp = n64AsyncRdp.load();
+        ::ares::Nintendo64::vulkan.frontendPresentsScanout = true;
+        success = ::ares::Nintendo64::load(root, "[SETA] Aleck 64");
+      } else if (board == "sega/sg1000a") {
+        success = ::ares::SG1000::load(root, "[Sega] SG-1000A");
+      } else if (board == "nintendo/vs") {
+        // Vs. UniSystem is in Arcade.bml's companion VsSystem.bml, but its
+        // root is still "Famicom" and needs separate cabinet input wiring.
+        // Overnight #6 is Aleck64 (+ SG-1000A); refuse Vs until that lands.
+        LOGE("Arcade: Vs. UniSystem is not supported yet");
+      } else {
+        LOGE("Arcade: unsupported board '%s'", (const char*)board);
+      }
     } else if (identifiedSystem == "Super Famicom" || identifiedSystem == "Super Game Boy") {
       ::ares::SuperFamicom::ppu.implementation = &::ares::SuperFamicom::ppuPerformanceImpl;
       ::ares::SuperFamicom::ppu.accurate = false;
@@ -4577,8 +4662,7 @@ else if (port->type() == "Keyboard") {
     // N64 Vulkan frames are presented straight from the scanout buffer and never
     // pass through lastFrameBuffer, so read the retained scanout (valid while
     // paused) and convert RGBA bytes to the ARGB the PNG encoder expects.
-    if (root && root->name() == "Nintendo 64" && ::ares::Nintendo64::vulkan.enable &&
-        !::ares::Nintendo64::vi.io.cpuScanoutActive) {
+    if (isN64VulkanSession() && !::ares::Nintendo64::vi.io.cpuScanoutActive) {
       std::vector<u32> pixels;
       u32 width = 0, height = 0;
       if (!::ares::Nintendo64::vulkan.readScanout(pixels, width, height)) return false;

@@ -165,6 +165,7 @@ fun hudSystemLabel(systemName: String): String = when (systemName) {
     "PC Engine", "SuperGrafx" -> "PCE"
     "PC Engine CD" -> "PCECD"
     "Neo Geo" -> "NEOGEO"
+    "Arcade" -> "ARCADE"
     "Neo Geo CD" -> "NGCD"
     "Neo Geo Pocket", "Neo Geo Pocket Color" -> "NGP"
     "WonderSwan", "WonderSwan Color" -> "WS"

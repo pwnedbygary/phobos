@@ -51,6 +51,7 @@ enum class TouchFamily(val key: String, val displayName: String) {
             "Game Gear" -> GAME_GEAR
             "PC Engine", "PC Engine CD", "SuperGrafx" -> PCE
             "Neo Geo", "Neo Geo CD" -> NEO_GEO
+            "Arcade" -> NEO_GEO
             "Neo Geo Pocket", "Neo Geo Pocket Color" -> NGP
             "WonderSwan", "WonderSwan Color" -> WONDERSWAN
             "Atari 2600" -> ATARI_2600

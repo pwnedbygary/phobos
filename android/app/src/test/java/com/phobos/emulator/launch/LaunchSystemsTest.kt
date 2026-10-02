@@ -15,6 +15,7 @@ class LaunchSystemsTest {
         "Famicom" to listOf("fc", "nes", "unf", "unif", "unh", "fds"),
         "Super Famicom" to listOf("sfc", "smc", "swc", "fig", "bs", "st"),
         "Super Game Boy" to listOf("gb"),
+        "Arcade" to listOf("zip"),
         "Nintendo 64" to listOf("n64", "v64", "z64", "n64dd", "ndd", "d64"),
         "Game Boy" to listOf("gb"),
         "Game Boy Color" to listOf("gb", "gbc", "nbc"),
@@ -80,7 +81,10 @@ class LaunchSystemsTest {
         assertEquals("Mega 32X", LaunchSystems.systemForName("Mega 32X"))
         assertEquals("Mega CD 32X", LaunchSystems.systemForName("Mega CD 32X"))
         assertEquals("ZX Spectrum", LaunchSystems.systemForName("ZX Spectrum 128"))
-        listOf("arcade", "ps2", "saturn", "", null).forEach { assertNull(it, LaunchSystems.systemForName(it)) }
+        listOf("ps2", "saturn", "", null).forEach { assertNull(it, LaunchSystems.systemForName(it)) }
+        assertEquals("Arcade", LaunchSystems.systemForName("arcade"))
+        assertEquals("Arcade", LaunchSystems.systemForName("aleck64"))
+        assertEquals("Arcade", LaunchSystems.systemForName("mame"))
     }
 
     @Test fun theFrontendsHintComesFirst() {
@@ -137,6 +141,15 @@ class LaunchSystemsTest {
         assertEquals(found("Super Game Boy"), resolve("Tetris.gb", hint = "supergameboy"))
         // Without a hint, .gb stays Game Boy.
         assertEquals(found("Game Boy"), resolve("Tetris.gb"))
+    }
+
+    @Test fun arcadeHintAndAleck64ZipSelectArcade() {
+        assertEquals(found("Arcade"), resolve("11beat.zip", hint = "arcade"))
+        assertEquals(found("Arcade"), resolve("11beat.zip", hint = "aleck64"))
+        assertEquals(
+            found("Arcade"),
+            resolve("11beat.zip", entries = listOf("nus-zhaj.u3", "pifdata.bin")),
+        )
     }
 
     @Test fun zipsAreIdentifiedByWhatTheyHold() {

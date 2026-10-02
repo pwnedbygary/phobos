@@ -25,6 +25,7 @@ object LaunchSystems {
             "satellaview", "sufami",
         ),
         "Super Game Boy" to listOf("supergameboy", "sgb", "sgb1", "sgb2"),
+        "Arcade" to listOf("arcade", "aleck64", "mame", "sg1000a"),
         "Nintendo 64" to listOf("nintendo64", "n64", "n64dd", "64dd"),
         "Game Boy" to listOf("gameboy", "gb", "nintendogameboy"),
         "Game Boy Color" to listOf("gameboycolor", "gbc", "nintendogameboycolor"),
@@ -65,6 +66,9 @@ object LaunchSystems {
 
     /** Files of a Neo Geo MVS/AES set (for example 242-p1.p1 and 242-c1.c1). */
     private val neoGeoSetParts = setOf("p1", "p2", "m1", "s1", "c1", "c2", "v1", "v2")
+
+    /** Files that mark a MAME Aleck64 set (parent BIOS or game) inside a .zip. */
+    private val aleck64SetParts = setOf("pifdata.bin", "normpnt.rom", "normslp.rom")
 
     private fun normalize(name: String) = name.lowercase().filter { it.isLetterOrDigit() }
 
@@ -140,6 +144,8 @@ object LaunchSystems {
             val entryExts = entries.map { extensionOf(it.substringAfterLast('/')) }
             for (e in entryExts) known(unique(e) ?: preferred[e])?.let { return Match.Found(it) }
             if (entryExts.any { it in neoGeoSetParts }) known("Neo Geo")?.let { return Match.Found(it) }
+            val baseNames = entries.map { it.substringAfterLast('/').lowercase() }
+            if (baseNames.any { it in aleck64SetParts }) known("Arcade")?.let { return Match.Found(it) }
         }
         val candidates = index[ext]?.filter { it in available }.orEmpty()
         return Match.Ask(candidates.ifEmpty { available.sorted() })
