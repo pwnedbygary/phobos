@@ -38,6 +38,10 @@ private:
   std::vector<SDL_Gamepad*> pads;
   int stickBits = 0;
   bool rumbling = false;
+  // Buttons pressed since the last poll. A tap shorter than a frame is over before poll() reads
+  // the held state, so its press is kept for one poll.
+  int keyboardTaps = 0;
+  int padTaps = 0;
 };
 
 // The core's labels for a host key on the ZX Spectrum or MSX keyboard; empty when the key
