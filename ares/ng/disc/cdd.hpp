@@ -1,7 +1,9 @@
 // Neo Geo CD deck driver (CDD). The BIOS communicates with the CD mechanism
 // over a 4-bit serial link: 10-nibble command blocks written via $FF0162,
 // clocked through $FF0164, with 10-nibble status replies read via $FF0160.
-// Ported faithfully from MAME's lc89510_temp_device NeoCD path.
+// Ported faithfully from MAME's lc89510_temp_device NeoCD path
+// (src/mame/shared/megacdcd.cpp, license:BSD-3-Clause copyright-holders:David
+// Haywood; see "MAME (portions)" in LICENSE).
 
 struct Cdd {
   //serial link

@@ -2,6 +2,9 @@
 // count/mode registers, then writes $FF0061 with bit 6 set to start a transfer.
 // Modes (from MAME neogeocd.cpp do_dma): self-address writes, RAM<->RAM
 // copies, fills, and copies from the LC8951 external buffer to RAM.
+// src/mame/snk/neogeocd.cpp is license:BSD-3-Clause copyright-holders:Bryan
+// McPhail,Ernesto Corvi,Andrew Prime,Zsolt Vasvari; see "MAME (portions)" in
+// LICENSE.
 
 struct Dma {
   n32 address1 = 0;

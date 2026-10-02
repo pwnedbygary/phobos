@@ -2,6 +2,8 @@
 //Protocol mirrors MAME's upd4990a: a 4-bit command is shifted in MSB-first on
 //CLK while STB is high and latched on STB rising edge. MODE_TIME_READ(3) loads
 //the calendar into the 48-bit shift register; MODE_SHIFT(1) clocks it out LSB-first.
+//MAME's src/devices/machine/upd1990a.cpp is license:BSD-3-Clause
+//copyright-holders:Curt Coder, hap; see "MAME (portions)" in LICENSE.
 static auto rtcClk() -> void {
   auto& r = system.io.rtc;
   u8 in = r.shiftReg[6] & 1;

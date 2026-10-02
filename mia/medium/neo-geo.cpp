@@ -1,6 +1,7 @@
 // Decryption algorithms heavily based on/borrowed MAME
 // See https://github.com/mamedev/mame/tree/master/src/devices/bus/neogeo
-// and the MAME section in LICENCE in the ares license text.
+// (license:BSD-3-Clause copyright-holders:S. Smith,David Haywood,Fabio Priuli;
+// prot_sma.cpp also Razoola, Mr.K) and "MAME (portions)" in LICENSE.
 
 struct NeoGeo : Mame {
   auto name() -> string override { return "Neo Geo"; }

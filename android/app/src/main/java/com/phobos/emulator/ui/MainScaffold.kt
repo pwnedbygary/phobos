@@ -336,7 +336,14 @@ fun MainScaffold(viewModel: MainViewModel) {
                             DriverManagerScreen(viewModel, onBack = { navController.popBackStack() })
                         }
                         composable("settings/about") {
-                            AboutScreen(viewModel, onBack = { navController.popBackStack() })
+                            AboutScreen(
+                                viewModel,
+                                onBack = { navController.popBackStack() },
+                                onOpenLicenses = { navController.navigate("settings/about/licenses") },
+                            )
+                        }
+                        composable("settings/about/licenses") {
+                            LicensesScreen(onBack = { navController.popBackStack() })
                         }
                         composable(
                             route = "system/{name}",

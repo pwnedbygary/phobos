@@ -1,7 +1,9 @@
 // Neo Geo CD LC8951-compatible CD controller (CDC). The 68K accesses its
 // register file through two ports: $FF0100 (register address select, with
 // auto-advance on most accesses) and $FF0102 (register data). Ported from
-// MAME's lc89510_temp_device NeoCD path.
+// MAME's lc89510_temp_device NeoCD path (src/mame/shared/megacdcd.cpp,
+// license:BSD-3-Clause copyright-holders:David Haywood; see "MAME (portions)"
+// in LICENSE).
 
 struct Cdc {
   static constexpr u32 BufferSize = (32 * 1024 * 2) + 2352;

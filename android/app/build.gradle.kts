@@ -119,6 +119,33 @@ android {
     }
 }
 
+// The repository's LICENSE, with every third-party notice, ships in the APK as
+// assets/licenses/LICENSE.txt for Settings → About → Open-source licenses.
+abstract class CopyLicenseNotices : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val license: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val dir = outputDir.get().asFile.resolve("licenses")
+        dir.mkdirs()
+        license.get().asFile.copyTo(dir.resolve("LICENSE.txt"), overwrite = true)
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val copyNotices = tasks.register<CopyLicenseNotices>("copy${variant.name.replaceFirstChar { it.uppercase() }}LicenseNotices") {
+            license.set(rootProject.file("../LICENSE"))
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(copyNotices, CopyLicenseNotices::outputDir)
+    }
+}
+
 // Build ALL variants (legacy + modern, debug + release) whenever assembleDebug
 // runs, so one command produces every installable APK for A/B and distribution.
 // Release is signed with the release keystore, or with the debug key where there

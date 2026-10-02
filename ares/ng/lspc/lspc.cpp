@@ -26,7 +26,8 @@ auto LSPC::load(Node::Object parent) -> void {
   //the real table from the BIOS set via loadZoomy().
   memory::fill<n8>(vscale, sizeof(vscale), 0xff);
 
-  // Horizontal zoom table (MVS) — MAME's authoritative zoom_x_tables.
+  // Horizontal zoom table (MVS) — MAME's authoritative zoom_x_tables
+  // (src/mame/snk/neogeo_spr.cpp, license:BSD-3-Clause; see "MAME (portions)" in LICENSE).
   // hscale[zoom][x] = 1 selects source pixel x for that horizontal shrink level.
   // (The previous hbits-derived table diverged from hardware for zoom 9..14,
   //  garbling horizontally-zoomed sprites such as scaled sports pitches.)

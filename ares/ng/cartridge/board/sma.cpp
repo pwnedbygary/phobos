@@ -1,3 +1,6 @@
+// Ported from MAME's src/devices/bus/neogeo/sma.cpp and prot_sma.cpp
+// (license:BSD-3-Clause copyright-holders:S. Smith,David Haywood,Fabio Priuli,
+// Razoola, Mr.K; see "MAME (portions)" in LICENSE).
 struct SMA : Interface {
   using Interface::Interface;
 

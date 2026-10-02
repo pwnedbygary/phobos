@@ -5,6 +5,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -26,7 +28,7 @@ import java.util.Locale
 private val flavorName = BuildConfig.FLAVOR.replaceFirstChar { it.uppercase() }
 
 @Composable
-fun AboutScreen(viewModel: MainViewModel, onBack: () -> Unit) {
+fun AboutScreen(viewModel: MainViewModel, onBack: () -> Unit, onOpenLicenses: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val update by viewModel.appUpdate.collectAsState()
     PhobosScaffold(title = "About", onBack = onBack) { innerPadding ->
@@ -95,6 +97,15 @@ fun AboutScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     description = "Also offer the build of every change to Phobos, not only releases. Nightly builds are less tested.",
                     checked = settings.appUpdateNightly,
                     onCheckedChange = { viewModel.setAppUpdateNightly(it) },
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            SettingsCategory("Licenses") {
+                SettingsClickableItem(
+                    title = "Open-source licenses",
+                    description = "Phobos is based on ares (© 2004–2025 ares team, Near et al., ISC license) and uses open-source components under their own licenses",
+                    onClick = onOpenLicenses,
+                    icon = Icons.Rounded.Description,
                 )
             }
             Spacer(modifier = Modifier.height(24.dp))
