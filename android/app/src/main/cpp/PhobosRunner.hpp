@@ -1,7 +1,9 @@
 #pragma once
 #include <ares/ares.hpp>
 #include <array>
+#if defined(__ANDROID__)
 #include <jni.h>
+#endif
 
 namespace ares {
   using namespace nall;
@@ -114,7 +116,9 @@ namespace ares {
   auto missingFirmware(const char* system) -> std::vector<string>;
   auto setCustomDriverPath(const char* path) -> void;
   auto loadSecondaryRom(const char* systemName, const char* uri) -> bool;
+#if defined(__ANDROID__)
   auto setSurface(JNIEnv* env, jobject surface) -> void;
+#endif
   auto getNewLogs() -> std::vector<LogEntry>;
   auto isFirstFrameRendered() -> bool;
   auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void;
