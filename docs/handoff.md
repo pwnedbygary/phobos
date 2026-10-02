@@ -687,6 +687,27 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## CD backup RAM kept between sessions — 2026-10-02
+
+Branch `cursor/cd-backup-ram-2b67`, stacked on `cursor/laseractive-2b67`. The plan row "CD backup RAM kept
+between sessions" has the details; this records what was checked and how.
+
+- **Checks run:** both flavors build (`./gradlew testModernDebugUnitTest assembleModernRelease
+  assembleLegacyRelease`), 224 host tests pass (the change is native only). On the RP6 (modern release, data
+  kept): with no saved copy, The Terminator flushed mia's formatted 8 KiB on pause. Then backup RAM files with a
+  marker (`PHOBOS BRAM TEST` at 0x100; the PC Engine one formatted with the `HUBM` header) were put in the save
+  folders of The Terminator, Rondo of Blood and the PC Engine LD stand-in disc. Each game logged the import (and
+  for the PC Engine ones "restored backup.ram" before the system loaded); switching to the next game through the
+  adb load intent wrote its auto state, which held the marker (so the core had the data), and flushed a file
+  identical to the marked one. Sub-Terrania (Mega Drive) and Final Lap Twin (PC Engine HuCard) flushed nothing.
+- **Test hygiene:** Auto-Load State is on, and states hold the backup RAM, so the four games' auto states were
+  moved aside first and put back afterwards (original timestamps); the app was force-stopped at the end so the
+  last game wrote no auto state over a restored one, and the test files, stand-in disc and its saves and states
+  were deleted. Pausing (Home) flushes saves too, which avoids tapping the pause menu when the RP6 has rotated.
+- **Not checked:** a save made in a game's own menu, a Mega CD 32X game (none on the RP6), the legacy APK on a
+  device.
+- **Device setting:** `screen_off_timeout` went from 600000 to 1800000 for the test and is restored to 600000.
+
 ## LaserActive (Mega LD and PC Engine LD) — 2026-10-02
 
 Branch `cursor/laseractive-2b67`, stacked on `cursor/pce-cd-in-place-loading-2b67` (PR 2 of the LaserActive

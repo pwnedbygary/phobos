@@ -102,7 +102,6 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 ### Known issues / not yet functional
 
 - **MSX tapes** — the MSX's tape deck isn't connected yet, so cassette games don't load.
-- **Mega CD, PC Engine CD and PC Engine LD saves** — the consoles' internal backup RAM isn't kept between sessions, so a save made in such a game's own menu is lost when it closes.
 
 ---
 

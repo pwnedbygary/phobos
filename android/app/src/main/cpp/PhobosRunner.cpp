@@ -1056,9 +1056,9 @@ namespace ares {
     return false;
   }
 
-  // The Mega LD's backup RAM as mia's Mega LD system pak leaves it (mia/system/mega-ld.cpp): 8 KiB of 0xFF
-  // ending in the format the BIOS looks for.
-  static auto megaLDBackupRam() -> std::vector<u8> {
+  // The Mega CD's backup RAM as mia's Mega CD, Mega CD 32X and Mega LD system paks leave it
+  // (mia/system/mega-cd.cpp): 8 KiB of 0xFF ending in the format the BIOS looks for.
+  static auto megaCDBackupRam() -> std::vector<u8> {
     static constexpr u8 format[64] = {
       0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x00,0x00,0x00,0x00,0x40,
       0x00,0x7d,0x00,0x7d,0x00,0x7d,0x00,0x7d,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -1068,6 +1068,21 @@ namespace ares {
     std::vector<u8> ram(8_KiB, 0xff);
     std::copy(std::begin(format), std::end(format), ram.end() - sizeof(format));
     return ram;
+  }
+
+  // The PC Engine CD's 2 KiB backup RAM: the loaded game's copy in [system]'s saves folder (where
+  // flushSavesToDisk() writes it), else blank, as mia's PC Engine system pak starts it. PCD::load() reads it
+  // when the system loads, before importIntoPak runs, so the saved copy has to be in the pak from the start.
+  static auto pcEngineCDBackupRam(const string& system) -> std::vector<u8> {
+    std::vector<u8> ram(2_KiB);
+    if (!savesPath) return ram;
+    string romKey = currentRomBase;
+    romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+    if (romKey.size() == 0) romKey = "rom";
+    auto saved = nall::file::read(string{savesPath, "/", system, "/", romKey, "/backup.ram"});
+    if (saved.size() != ram.size()) return ram;
+    LOGI("Saves: restored backup.ram (%zu bytes) for %s [%s]", saved.size(), (const char*)system, (const char*)romKey);
+    return saved;
   }
 
   // N64 Player 1 controller pak ("None" | "Rumble Pak" | "Controller Pak").
@@ -2380,7 +2395,7 @@ namespace ares {
           auto it = firmwareMap.find(japan ? "fw_laseractive_sega_jp" : "fw_laseractive_sega_us");
           if (it != firmwareMap.end()) attachFile((const char*)it->second, "bios.rom");
           dir->append("tmss.rom", mia::Resource::MegaDrive::TMSS);
-          dir->append("backup.ram", megaLDBackupRam());
+          dir->append("backup.ram", megaCDBackupRam());
       } else if (nodeName == "Mega Drive") {
           // Mega CD: ares uses "Mega Drive" as root node even for CD mode.
           // The MCD::load() sub-system reads "bios.rom" from this pak — if
@@ -2401,6 +2416,9 @@ namespace ares {
           if (node->attribute("configuration").find("32X")) {
               for (auto& file : mega32XBootFiles) dir->append(file.name, readMega32XBootFile(file));
           }
+          // Mega CD and Mega CD 32X: MCD::connect() reads the backup RAM, which importIntoPak replaces with the
+          // game's saved copy before the disc tray connects; MCD::save() writes it back for flushSavesToDisk().
+          if (node->attribute("configuration").find("Mega CD")) dir->append("backup.ram", megaCDBackupRam());
       } else if (nodeName == "Neo Geo CD") {
           // Neo Geo CD needs the CD BIOS (neocd.zip via fw_ng_cd) in the system
           // pak, plus the shared LSPC zoom table (000-lo.lo) from neogeo.zip.
@@ -2573,6 +2591,7 @@ namespace ares {
               auto it = firmwareMap.find(key);
               if (it != firmwareMap.end() && attachFile((const char*)it->second, "bios.rom")) break;
           }
+          dir->append("backup.ram", pcEngineCDBackupRam(nodeName));
       } else if (nodeName == "PC Engine" || nodeName == "SuperGrafx" || nodeName == "PC Engine Duo" || nodeName == "PC Engine CD") {
           bool attached = false;
           auto it_pce = firmwareMap.find("fw_pce_cd_3_jp");
@@ -2582,6 +2601,8 @@ namespace ares {
               if (it_ge != firmwareMap.end()) attached = attachFile((const char*)it_ge->second, "bios.rom");
           }
           if (!attached) attached = attachFile("bios.rom");
+          // The Duo is the PC Engine model with the CD unit (PC Engine CD games).
+          if (node->attribute("configuration").find("Duo")) dir->append("backup.ram", pcEngineCDBackupRam(nodeName));
       } else if (nodeName == "ZX Spectrum" || nodeName == "ZX Spectrum 128") {
           // The ZX Spectrum REQUIRES its system ROM to boot and run the tape
           // loader. Without it the core allocates the ROM filled with 0xFF —
