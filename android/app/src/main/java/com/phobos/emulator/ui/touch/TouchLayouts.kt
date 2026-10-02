@@ -439,7 +439,7 @@ object TouchLayouts {
             add(single("fast_forward", "Fast forward", spots.ffLand, spots.ffPort,
                 TouchButton("Fast forward", glyph = Glyph.FAST_FORWARD, w = 36f, action = TouchAction.FAST_FORWARD)))
         }
-        if (family == TouchFamily.ZX) {
+        if (family == TouchFamily.ZX || family == TouchFamily.MSX) {
             add(single("keyboard", "Keyboard", spots.keyboardLand, spots.keyboardPort,
                 TouchButton("Keyboard", glyph = Glyph.KEYBOARD, w = 36f, action = TouchAction.KEYBOARD)))
         }

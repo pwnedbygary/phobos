@@ -225,6 +225,9 @@ fun EmulationMenu(
                         if (systemName.contains("ZX Spectrum", ignoreCase = true)) {
                             item { ZxKeyboardSection(viewModel, settings, showKeyboard, onKeyboardToggle, zxControlScheme, onZxControlScheme) }
                         }
+                        if (systemName == "MSX" || systemName == "MSX2") {
+                            item { MsxKeyboardSection(viewModel, settings, systemName, showKeyboard, onKeyboardToggle) }
+                        }
                         game?.let { running -> item { ControllerSection(running, settings, onOpen = { controllerPage = it }) } }
                         item { TouchControlsSection(viewModel, settings, onEditTouchLayout) }
                         item { DisplaySection(viewModel, settings, onOpenPerfHud = { perfHudOpen = true }) }
@@ -613,6 +616,17 @@ private fun ZxKeyboardSection(
         ZxLoadSpeedItem(settings.zxLoadSpeed) { viewModel.setZxLoadSpeed(it) }
         // Silences the tape-loading screech; the game still receives the EAR bit.
         SettingsSwitchItem("Mute Tape Audio", "Silence the loud tape-loading screech.", settings.zxTapeMuted) { viewModel.setZxTapeMuted(it) }
+    }
+}
+
+@Composable
+private fun MsxKeyboardSection(
+    viewModel: MainViewModel, settings: EmulatorSettings, systemName: String,
+    showKeyboard: Boolean, onKeyboardToggle: (Boolean) -> Unit,
+) {
+    MenuSection(systemName) {
+        SettingsSwitchItem("On-Screen Keyboard", "Show the MSX keyboard, for games that use its keys", showKeyboard) { onKeyboardToggle(it) }
+        SettingsSliderItem("Keyboard Opacity", settings.zxKeyboardOpacity, 0.2f..1.0f) { viewModel.setZxKeyboardOpacity(it) }
     }
 }
 

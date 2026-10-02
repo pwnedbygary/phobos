@@ -119,13 +119,15 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     // A physical controller is in use: touch controls hide until the screen is touched again.
     var controllerActive by remember { mutableStateOf(false) }
 
-    // ZX Spectrum on-screen keyboard state, hoisted here so it survives hiding the keyboard.
+    // On-screen keyboard state (ZX Spectrum and MSX), hoisted here so it survives hiding the keyboard.
     val isZx = systemName.contains("ZX Spectrum", ignoreCase = true)
+    val isMsx = systemName == "MSX" || systemName == "MSX2"
+    val hasKeyboard = isZx || isMsx
     var showKeyboard by remember { mutableStateOf(false) }
     // The keyboard's height, kept clear of the game picture so the game stays in view above it.
-    var zxKeyboardHeight by remember { mutableStateOf(0.dp) }
+    var keyboardHeight by remember { mutableStateOf(0.dp) }
     // Where the keyboard sits; the performance HUD stays above it.
-    var zxKeyboardBounds by remember { mutableStateOf(Rect.Zero) }
+    var keyboardBounds by remember { mutableStateOf(Rect.Zero) }
     val touchProbe = remember { TouchControlsProbe() }
     val density = LocalDensity.current
     var zxSymLatched by remember { mutableStateOf(false) }
@@ -178,7 +180,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             HotkeyAction.SCREENSHOT -> viewModel.takeScreenshot(systemName, romName)
             HotkeyAction.RELOAD -> viewModel.reloadGame(view.context)
             HotkeyAction.QUIT -> askToQuit()
-            HotkeyAction.KEYBOARD -> if (systemName.contains("ZX Spectrum", ignoreCase = true)) showKeyboard = !showKeyboard else return false
+            HotkeyAction.KEYBOARD -> if (hasKeyboard) showKeyboard = !showKeyboard else return false
             HotkeyAction.LIBRARY -> viewModel.swapToLibrary()
             HotkeyAction.PS1_ANALOG_TOGGLE -> if (systemName == "PlayStation") viewModel.togglePs1AnalogMode() else return false
             else -> return false
@@ -382,7 +384,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             geometry = videoGeometry,
             systemName = systemName,
             alignTop = settings.showTouchControls,
-            bottomReserve = if (isLoaded && showKeyboard && isZx) zxKeyboardHeight else 0.dp,
+            bottomReserve = if (isLoaded && showKeyboard && hasKeyboard) keyboardHeight else 0.dp,
             onTap = {
                 // With touch controls hidden for a controller, the first tap brings them back.
                 if (controllerActive && settings.showTouchControls && touchPrefs.hideOnController) controllerActive = false
@@ -418,8 +420,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             ZXKeyboardOverlay(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .onSizeChanged { zxKeyboardHeight = with(density) { it.height.toDp() } }
-                    .onPlaced { zxKeyboardBounds = it.boundsInParent() },
+                    .onSizeChanged { keyboardHeight = with(density) { it.height.toDp() } }
+                    .onPlaced { keyboardBounds = it.boundsInParent() },
                 symLatched = zxSymLatched, onSymLatched = { zxSymLatched = it },
                 capsLatched = zxCapsLatched, onCapsLatched = { zxCapsLatched = it },
                 loadSpeed = settings.zxLoadSpeed, onLoadSpeed = { viewModel.setZxLoadSpeed(it) },
@@ -432,6 +434,17 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 onTapePlaying = { viewModel.setZxTapePlaying(it) },
                 onTapeRewind = { viewModel.rewindZxTape() },
                 onTapeLoad = { viewModel.playZxTapeFromStart() },
+            )
+        }
+        if (isLoaded && showKeyboard && isMsx) {
+            MSXKeyboardOverlay(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .onSizeChanged { keyboardHeight = with(density) { it.height.toDp() } }
+                    .onPlaced { keyboardBounds = it.boundsInParent() },
+                msx2 = systemName == "MSX2",
+                onClose = { showKeyboard = false },
+                keyboardOpacity = settings.zxKeyboardOpacity,
             )
         }
 
@@ -454,7 +467,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                     },
                     modifier = Modifier.fillMaxSize(),
                     isControlAt = { p -> touchProbe.isControlAt(p.x, p.y) },
-                    bottomLimit = if (showKeyboard && isZx && !zxKeyboardBounds.isEmpty) zxKeyboardBounds.top else Float.POSITIVE_INFINITY,
+                    bottomLimit = if (showKeyboard && hasKeyboard && !keyboardBounds.isEmpty) keyboardBounds.top else Float.POSITIVE_INFINITY,
                 )
             }
         }
@@ -504,7 +517,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
  * The emulator's SurfaceView, sized by the aspect-ratio setting from the core's reported
  * [geometry] (4:3 / 320x240 until the first frame). With touch controls enabled the picture sits
  * at the top in portrait so the controls get the lower part of the screen. [bottomReserve] is
- * kept free below the picture, which then sits at the top (the ZX Spectrum keyboard).
+ * kept free below the picture, which then sits at the top (the ZX Spectrum or MSX keyboard).
  */
 @Composable
 private fun GamePicture(

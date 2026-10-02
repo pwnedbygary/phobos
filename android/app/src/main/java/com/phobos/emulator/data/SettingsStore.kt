@@ -101,7 +101,7 @@ data class EmulatorSettings(
     val perfOverlayScale: Float = 1.0f,
     val perfOverlayPosX: Float = 1.0f,  // 0=left, 1=right
     val perfOverlayPosY: Float = 0.0f,  // 0=top, 1=bottom
-    val zxKeyboardOpacity: Float = 1.0f,  // on-screen ZX keyboard alpha (0-1)
+    val zxKeyboardOpacity: Float = 1.0f,  // on-screen ZX Spectrum and MSX keyboard alpha (0-1)
     val zxTapeMuted: Boolean = true,     // mute the loud ZX tape-loading screech (default ON — only silences the tape stream, not game audio)
     val logVerbosity: LogLevel = LogLevel.INFO,
     val fastForwardSpeed: Float = 2.0f,

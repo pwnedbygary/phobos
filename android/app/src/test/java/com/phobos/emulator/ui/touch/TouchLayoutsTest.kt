@@ -36,7 +36,15 @@ class TouchLayoutsTest {
         assertEquals(TouchFamily.MEGA_DRIVE, TouchFamily.of("Mega CD 32X"))
         assertEquals(TouchFamily.NEO_GEO, TouchFamily.of("Neo Geo CD"))
         assertEquals(TouchFamily.ZX, TouchFamily.of("ZX Spectrum 128"))
+        assertEquals(TouchFamily.MSX, TouchFamily.of("MSX2"))
         assertEquals(TouchFamily.GENERIC, TouchFamily.of("Something New"))
+    }
+
+    @Test fun onlyKeyboardSystemsHaveTheKeyboardButton() {
+        val withKeyboard = TouchFamily.entries.filter { family ->
+            TouchLayouts.forFamily(family).elements.any { it.id == "keyboard" }
+        }
+        assertEquals(setOf(TouchFamily.ZX, TouchFamily.MSX), withKeyboard.toSet())
     }
 
     @Test fun playStationFaceButtonsMatchNativeBits() {
