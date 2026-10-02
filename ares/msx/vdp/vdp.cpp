@@ -66,6 +66,11 @@ auto VDP::frame() -> void {
     int y = 27;
     int width = 284 - 28;
     int height = 243 - 51;
+    // [Phobos] Where V9938::DAC::setup() draws a 212-line picture.
+    if(Model::MSX2() && V9938::overscan()) {
+      y = 17;
+      height = 212;
+    }
 
     screen->setSize(width * screenScale, height * screenScale);
     screen->setViewport(x * screenScale, y * screenScale, width * screenScale, height * screenScale);

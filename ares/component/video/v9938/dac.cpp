@@ -1,6 +1,7 @@
 auto V9938::DAC::setup(n9 voffset) -> void {
-  //TODO: Verify border in overscan mode
-  voffset = (voffset + (self.latch.overscan ? 13 : 27)) % 243;
+  // [Phobos] The 212-line picture starts 10 lines before the 192-line one: 17 lines after the
+  // frame's start at 60 Hz, against 27.
+  voffset = (voffset + (self.latch.overscan ? 17 : 27)) % 243;
   output = self.screen->pixels().data() + voffset * 1136;
   if(self.interlace() && self.field()) output += 568;
   for(auto n: range(568)) output[n] = self.pram[self.io.colorBackground];
