@@ -163,6 +163,14 @@ lands as its own PR; the inventory rows below have the details.
    can't go under the GPL, so no GPL core (PPSSPP, Flycast) comes in for now.
    Phobos's own code goes under GPL-3.0-or-later on its own (row "Licenses of
    bundled resources").
+8. **Desktop builds** (requested 2026-10-02): a Linux x86-64 AppImage with its
+   .zsync, a Windows x64 Phobos.exe and a universal macOS app, running the same
+   cores and runner without the Turnip installer. First cut on branch
+   `cursor/desktop-phobos-ports-a292`
+   ([PR #80](https://github.com/pwnedbygary/phobos/pull/80)); see the
+   [handoff](handoff.md#desktop-builds--2026-10-02). Its SDL shell is a
+   placeholder: the user wants the desktop UI at parity with the Android app's,
+   and accepts the placeholder until then.
 
 Japanese isn't needed (the user reads English and Spanish): Japanese legends
 and options are left out or kept secondary.
