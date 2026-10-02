@@ -64,7 +64,10 @@ auto openAudio() -> bool {
   SDL_AudioSpec spec{SDL_AUDIO_F32, 2, 48000};
   audioStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
   if (!audioStream) {
-    SDL_Log("Audio: %s", SDL_GetError());
+    // The runner retries while a game runs; say why only once.
+    static bool reported = false;
+    if (!reported) SDL_Log("No audio device: %s", SDL_GetError());
+    reported = true;
     return false;
   }
   // Prime with silence so the first emulated frames have headroom.
