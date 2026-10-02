@@ -1,5 +1,6 @@
 package com.phobos.emulator.ui.hud
 
+import androidx.compose.ui.geometry.Offset
 import com.phobos.emulator.data.EmulatorSettings
 
 /** What the performance HUD shows and how it looks; built from [EmulatorSettings]. */
@@ -127,4 +128,14 @@ fun EmulatorSettings.hudConfig(): HudConfig = HudConfig(
     opacity = perfHudOpacity,
     scale = perfOverlayScale,
     order = HudItem.parseOrder(perfHudOrder),
+)
+
+/** Where the monitor goes. A position dragged in an older version stands in until it's moved again. */
+fun EmulatorSettings.hudPlacement(): HudPlacement = HudPlacement(
+    position = HudPosition.fromSetting(perfHudPosition, perfOverlayPosX, perfOverlayPosY),
+    customLandscape = decodeHudFractions(perfHudPosLandscape),
+    customPortrait = decodeHudFractions(perfHudPosPortrait),
+    sizeLandscape = HudBoxSize.decode(perfHudSizeLandscape),
+    sizePortrait = HudBoxSize.decode(perfHudSizePortrait),
+    legacy = Offset(perfOverlayPosX.coerceIn(0f, 1f), perfOverlayPosY.coerceIn(0f, 1f)),
 )

@@ -21,7 +21,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,11 +38,12 @@ import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.ui.hud.HostSample
 import com.phobos.emulator.ui.hud.HudConfig
 import com.phobos.emulator.ui.hud.HudItem
+import com.phobos.emulator.ui.hud.HudPosition
 import com.phobos.emulator.ui.hud.HudPreset
 import com.phobos.emulator.ui.hud.PerformanceHud
 import com.phobos.emulator.ui.hud.hudConfig
+import com.phobos.emulator.ui.hud.hudPlacement
 import com.phobos.emulator.ui.hud.moved
-import com.phobos.emulator.ui.theme.pillShape
 import java.util.Locale
 import kotlin.math.sin
 
@@ -70,7 +70,7 @@ fun PerformanceMonitorSettingsScreen(viewModel: MainViewModel, onBack: () -> Uni
                 SettingsCategory("Overlay") {
                     SettingsSwitchItem(
                         title = "Show Performance Monitor",
-                        description = "In-game HUD with FPS, frame times and system stats. Drag it to move.",
+                        description = "In-game HUD with FPS, frame times and system stats. Press and hold it in a game to move or resize it.",
                         checked = settings.showPerformanceMonitor,
                         onCheckedChange = { viewModel.setShowPerformanceMonitor(it) }
                     )
@@ -118,11 +118,23 @@ fun PerfHudPresetChips(viewModel: MainViewModel, settings: EmulatorSettings) {
 
 @Composable
 fun PerfHudLayoutItems(viewModel: MainViewModel, settings: EmulatorSettings) {
+    val horizontal = settings.perfHudHorizontal
+    val placement = settings.hudPlacement()
+    val position = placement.position
     SettingsSwitchItem(
         title = "Horizontal",
         description = "One compact line instead of a column",
-        checked = settings.perfHudHorizontal,
+        checked = horizontal,
         onCheckedChange = { viewModel.setPerfHudHorizontal(it) }
+    )
+    // The horizontal layout sits centered at the top or bottom; the column stays for the vertical one.
+    SettingsDropdownItem(
+        title = "Position",
+        description = if (position == HudPosition.CUSTOM) "Moved on screen. Pick a place to put it back." else null,
+        current = position,
+        options = if (horizontal) listOf(position.onEdge(top = true), position.onEdge(top = false)) else HudPosition.PRESETS,
+        label = { it.label(horizontal) },
+        onSelect = { viewModel.setPerfHudPosition(it) },
     )
     SettingsSliderItem(
         title = "Size",
@@ -131,17 +143,20 @@ fun PerfHudLayoutItems(viewModel: MainViewModel, settings: EmulatorSettings) {
         format = { String.format(Locale.US, "%.1f\u00D7", it) },
         onCommit = { viewModel.setPerfOverlayScale(it) },
     )
+    if (placement.sizeLandscape != null || placement.sizePortrait != null) {
+        ListItem(
+            headlineContent = { Text("Box size") },
+            supportingContent = { Text("Set on screen, with the text fitted to the box instead of the size above") },
+            trailingContent = { TextButton(onClick = { viewModel.clearPerfHudSizes() }) { Text("Reset") } },
+            colors = transparentListItemColors(),
+        )
+    }
     SettingsSliderItem(
         title = "Background opacity",
         value = settings.perfHudOpacity,
         range = 0f..0.9f,
         onCommit = { viewModel.setPerfHudOpacity(it) },
     )
-    OutlinedButton(
-        onClick = { viewModel.resetPerfOverlayPosition() },
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        shape = pillShape(),
-    ) { Text("Reset position (top left)") }
 }
 
 @Composable

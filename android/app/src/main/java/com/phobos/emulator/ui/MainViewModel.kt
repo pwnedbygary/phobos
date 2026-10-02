@@ -35,8 +35,11 @@ import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.launch.LaunchRequest
 import com.phobos.emulator.launch.LaunchTarget
 import com.phobos.emulator.launch.resolveLaunch
+import com.phobos.emulator.ui.hud.HudEdit
 import com.phobos.emulator.ui.hud.HudItem
+import com.phobos.emulator.ui.hud.HudPosition
 import com.phobos.emulator.ui.hud.HudPreset
+import com.phobos.emulator.ui.hud.encodeHudFractions
 import com.phobos.emulator.ui.hud.hudConfig
 import com.phobos.emulator.ui.touch.ElementOverride
 import com.phobos.emulator.ui.touch.TouchFamily
@@ -495,13 +498,18 @@ class MainViewModel(
     fun applyPerfHudPreset(preset: HudPreset) = viewModelScope.launch {
         settingsStore.setPerfHudMetrics(preset.applyTo(settings.value.hudConfig()))
     }
-    fun resetPerfOverlayPosition() = viewModelScope.launch {
-        settingsStore.setPerfOverlayPosX(0f)
-        settingsStore.setPerfOverlayPosY(0f)
-    }
     fun setPerfOverlayScale(scale: Float) = viewModelScope.launch { settingsStore.setPerfOverlayScale(scale) }
-    fun setPerfOverlayPosX(x: Float) = viewModelScope.launch { settingsStore.setPerfOverlayPosX(x) }
-    fun setPerfOverlayPosY(y: Float) = viewModelScope.launch { settingsStore.setPerfOverlayPosY(y) }
+    fun setPerfHudPosition(position: HudPosition) = viewModelScope.launch { settingsStore.setPerfHudPosition(position.name) }
+    fun saveHudEdit(edit: HudEdit) = viewModelScope.launch {
+        settingsStore.savePerfHudEdit(
+            position = edit.position.name,
+            landscape = edit.landscape,
+            fractions = edit.custom?.let(::encodeHudFractions),
+            size = edit.size?.encode(),
+            scale = edit.scale,
+        )
+    }
+    fun clearPerfHudSizes() = viewModelScope.launch { settingsStore.clearPerfHudSizes() }
     fun setLogVerbosity(level: LogLevel) = viewModelScope.launch {
         settingsStore.setLogVerbosity(level)
         PhobosCore.setLogLevel(level.ordinal)

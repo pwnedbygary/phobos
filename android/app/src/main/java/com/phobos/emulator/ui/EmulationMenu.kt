@@ -731,7 +731,7 @@ fun ColumnScope.PerfHudMenuSection(viewModel: MainViewModel, settings: EmulatorS
         item { HudPreview(settings.hudConfig(), onBackdrop = false) }
         item {
             MenuSection("Overlay") {
-                SettingsSwitchItem("Show Performance Monitor", "Drag it to move.", settings.showPerformanceMonitor) { viewModel.setShowPerformanceMonitor(it) }
+                SettingsSwitchItem("Show Performance Monitor", "Press and hold it in the game to move or resize it.", settings.showPerformanceMonitor) { viewModel.setShowPerformanceMonitor(it) }
             }
         }
         item { MenuSection("Preset") { PerfHudPresetChips(viewModel, settings) } }

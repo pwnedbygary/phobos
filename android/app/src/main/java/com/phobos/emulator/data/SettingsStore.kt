@@ -101,6 +101,14 @@ data class EmulatorSettings(
     val perfOverlayScale: Float = 1.0f,
     val perfOverlayPosX: Float = 1.0f,  // 0=left, 1=right
     val perfOverlayPosY: Float = 0.0f,  // 0=top, 1=bottom
+    /** The monitor's Position (a HudPosition name); empty until set, when the dragged position above decides it. */
+    val perfHudPosition: String = "",
+    /** Where the monitor was moved on screen in each orientation ("x,y"); empty for the position above. */
+    val perfHudPosLandscape: String = "",
+    val perfHudPosPortrait: String = "",
+    /** The monitor's size set on screen in each orientation ("w,h" of the screen); empty for its automatic size. */
+    val perfHudSizeLandscape: String = "",
+    val perfHudSizePortrait: String = "",
     val zxKeyboardOpacity: Float = 1.0f,  // on-screen ZX Spectrum and MSX keyboard alpha (0-1)
     val zxTapeMuted: Boolean = true,     // mute the loud ZX tape-loading screech (default ON — only silences the tape stream, not game audio)
     val logVerbosity: LogLevel = LogLevel.INFO,
@@ -226,6 +234,11 @@ class SettingsStore(private val context: Context) {
         val PERF_OVERLAY_SCALE = floatPreferencesKey("perf_overlay_scale")
         val PERF_OVERLAY_POS_X = floatPreferencesKey("perf_overlay_pos_x")
         val PERF_OVERLAY_POS_Y = floatPreferencesKey("perf_overlay_pos_y")
+        val PERF_HUD_POSITION = stringPreferencesKey("perf_hud_position")
+        val PERF_HUD_POS_LANDSCAPE = stringPreferencesKey("perf_hud_pos_landscape")
+        val PERF_HUD_POS_PORTRAIT = stringPreferencesKey("perf_hud_pos_portrait")
+        val PERF_HUD_SIZE_LANDSCAPE = stringPreferencesKey("perf_hud_size_landscape")
+        val PERF_HUD_SIZE_PORTRAIT = stringPreferencesKey("perf_hud_size_portrait")
         val ZX_KEYBOARD_OPACITY = floatPreferencesKey("zx_keyboard_opacity")
         val ZX_TAPE_MUTED = booleanPreferencesKey("zx_tape_muted")
         val LOG_VERBOSITY = stringPreferencesKey("log_verbosity")
@@ -440,6 +453,11 @@ class SettingsStore(private val context: Context) {
             perfOverlayScale = safeGet(PERF_OVERLAY_SCALE, 1.0f),
             perfOverlayPosX = safeGet(PERF_OVERLAY_POS_X, 1.0f),
             perfOverlayPosY = safeGet(PERF_OVERLAY_POS_Y, 0.0f),
+            perfHudPosition = safeGetString(PERF_HUD_POSITION, ""),
+            perfHudPosLandscape = safeGetString(PERF_HUD_POS_LANDSCAPE, ""),
+            perfHudPosPortrait = safeGetString(PERF_HUD_POS_PORTRAIT, ""),
+            perfHudSizeLandscape = safeGetString(PERF_HUD_SIZE_LANDSCAPE, ""),
+            perfHudSizePortrait = safeGetString(PERF_HUD_SIZE_PORTRAIT, ""),
             zxKeyboardOpacity = safeGet(ZX_KEYBOARD_OPACITY, 1.0f),
             zxTapeMuted = safeGet(ZX_TAPE_MUTED, true),  // default ON — only silences the tape stream, not game audio
             logVerbosity = enumOrDefault(safeGetString(LOG_VERBOSITY, ""), LogLevel.INFO),
@@ -645,8 +663,34 @@ class SettingsStore(private val context: Context) {
         it[PERF_SHOW_CLOCK] = config.clock
     }
     suspend fun setPerfOverlayScale(scale: Float) = context.dataStore.edit { it[PERF_OVERLAY_SCALE] = scale }
-    suspend fun setPerfOverlayPosX(x: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_X] = x }
-    suspend fun setPerfOverlayPosY(y: Float) = context.dataStore.edit { it[PERF_OVERLAY_POS_Y] = y }
+    /** A place for the monitor, which forgets where it was moved on screen. */
+    suspend fun setPerfHudPosition(position: String) = context.dataStore.edit {
+        it[PERF_HUD_POSITION] = position
+        it.remove(PERF_HUD_POS_LANDSCAPE)
+        it.remove(PERF_HUD_POS_PORTRAIT)
+    }
+    /**
+     * What the monitor's on-screen edit leaves, in one edit: its position, where it was moved in
+     * that orientation ([fractions]; null for a place, which forgets where it was moved in both),
+     * its size there (null for automatic) and its scale.
+     */
+    suspend fun savePerfHudEdit(position: String, landscape: Boolean, fractions: String?, size: String?, scale: Float) =
+        context.dataStore.edit {
+            it[PERF_HUD_POSITION] = position
+            if (fractions != null) {
+                it[if (landscape) PERF_HUD_POS_LANDSCAPE else PERF_HUD_POS_PORTRAIT] = fractions
+            } else {
+                it.remove(PERF_HUD_POS_LANDSCAPE)
+                it.remove(PERF_HUD_POS_PORTRAIT)
+            }
+            val sizeKey = if (landscape) PERF_HUD_SIZE_LANDSCAPE else PERF_HUD_SIZE_PORTRAIT
+            if (size != null) it[sizeKey] = size else it.remove(sizeKey)
+            it[PERF_OVERLAY_SCALE] = scale
+        }
+    suspend fun clearPerfHudSizes() = context.dataStore.edit {
+        it.remove(PERF_HUD_SIZE_LANDSCAPE)
+        it.remove(PERF_HUD_SIZE_PORTRAIT)
+    }
     suspend fun setZxKeyboardOpacity(opacity: Float) = context.dataStore.edit { it[ZX_KEYBOARD_OPACITY] = opacity.coerceIn(0.2f, 1.0f) }
     suspend fun setZxTapeMuted(muted: Boolean) = context.dataStore.edit { it[ZX_TAPE_MUTED] = muted }
     suspend fun setLogVerbosity(level: LogLevel) = context.dataStore.edit { it[LOG_VERBOSITY] = level.name }

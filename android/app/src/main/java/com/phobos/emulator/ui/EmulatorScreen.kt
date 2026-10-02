@@ -42,7 +42,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,7 +63,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
@@ -88,6 +86,7 @@ import com.phobos.emulator.input.mapKeyCodeToBit
 import com.phobos.emulator.input.matchingHotkeys
 import com.phobos.emulator.ui.hud.PerformanceHudOverlay
 import com.phobos.emulator.ui.hud.hudConfig
+import com.phobos.emulator.ui.hud.hudPlacement
 import com.phobos.emulator.ui.touch.ButtonCluster
 import com.phobos.emulator.ui.touch.TouchAction
 import com.phobos.emulator.ui.touch.TouchControlsOverlay
@@ -116,6 +115,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
 
     var showQuitDialog by remember { mutableStateOf(false) }
     var editingTouchLayout by remember { mutableStateOf(false) }
+    // Moving or resizing the performance monitor on screen, with the game paused.
+    var editingHud by remember { mutableStateOf(false) }
     // A physical controller is in use: touch controls hide until the screen is touched again.
     var controllerActive by remember { mutableStateOf(false) }
 
@@ -247,6 +248,10 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
     }
     BackHandler { if (!isLoaded || isPaused) askToQuit() }
     BackHandler(enabled = editingTouchLayout) { editingTouchLayout = false }
+    BackHandler(enabled = editingHud) {
+        editingHud = false
+        viewModel.setPause(false)
+    }
 
     DisposableEffect(Unit) {
         // Replacing another game's screen, which leaves input to this one once replaced: start from
@@ -330,8 +335,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 val native = keyEvent.nativeKeyEvent
                 val keyCode = native.keyCode
                 val isDown = keyEvent.type == KeyEventType.KeyDown
-                // Leave volume keys to the system, and every key to the layout editor.
-                if (keyCode in VOLUME_KEYS || editingTouchLayout) return@onPreviewKeyEvent false
+                // Leave volume keys to the system, and every key to the layout editors.
+                if (keyCode in VOLUME_KEYS || editingTouchLayout || editingHud) return@onPreviewKeyEvent false
                 // Paused: let key repeats drive focus navigation in the pause menu.
                 if (native.repeatCount > 0) return@onPreviewKeyEvent !isPaused
 
@@ -448,28 +453,30 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             )
         }
 
-        // ── Performance HUD (MangoHud-style, draggable) ─────────────────────
-        if (isLoaded && !isPaused && settings.showPerformanceMonitor) {
-            val metrics = LocalContext.current.resources.displayMetrics
-            key(metrics.widthPixels, metrics.heightPixels) {
-                PerformanceHudOverlay(
-                    stats = perfStats,
-                    config = settings.hudConfig(),
-                    systemName = viewModel.loadedSystemName,
-                    resolution = videoGeometry?.let { "${it.width.roundToInt()}\u00D7${it.height.roundToInt()}" },
-                    savedPosX = settings.perfOverlayPosX,
-                    savedPosY = settings.perfOverlayPosY,
-                    screenWidth = metrics.widthPixels,
-                    screenHeight = metrics.heightPixels,
-                    onPositionChanged = { x, y ->
-                        viewModel.setPerfOverlayPosX(x)
-                        viewModel.setPerfOverlayPosY(y)
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                    isControlAt = { p -> touchProbe.isControlAt(p.x, p.y) },
-                    bottomLimit = if (showKeyboard && hasKeyboard && !keyboardBounds.isEmpty) keyboardBounds.top else Float.POSITIVE_INFINITY,
-                )
-            }
+        // ── Performance HUD (MangoHud-style); press and hold it to move or resize it ──
+        if (isLoaded && (!isPaused || editingHud) && settings.showPerformanceMonitor) {
+            PerformanceHudOverlay(
+                stats = perfStats,
+                config = settings.hudConfig(),
+                placement = settings.hudPlacement(),
+                systemName = viewModel.loadedSystemName,
+                resolution = videoGeometry?.let { "${it.width.roundToInt()}\u00D7${it.height.roundToInt()}" },
+                editing = editingHud,
+                onEditRequest = {
+                    if (!isPaused) {
+                        editingHud = true
+                        viewModel.setPause(true)
+                    }
+                },
+                onEditDone = { edit ->
+                    edit?.let { viewModel.saveHudEdit(it) }
+                    editingHud = false
+                    viewModel.setPause(false)
+                },
+                modifier = Modifier.fillMaxSize(),
+                isControlAt = { p -> touchProbe.isControlAt(p.x, p.y) },
+                bottomLimit = if (showKeyboard && hasKeyboard && !keyboardBounds.isEmpty) keyboardBounds.top else Float.POSITIVE_INFINITY,
+            )
         }
 
         AnimatedVisibility(
@@ -484,7 +491,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             MenuRevealButton(onOpenMenu = { menuRevealed = false; viewModel.setPause(true) })
         }
 
-        if (isPaused && !editingTouchLayout) {
+        if (isPaused && !editingTouchLayout && !editingHud) {
             EmulationMenu(
                 viewModel = viewModel, systemName = systemName, romName = romName,
                 showKeyboard = showKeyboard,
