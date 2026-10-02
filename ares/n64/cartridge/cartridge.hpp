@@ -12,10 +12,40 @@ struct Cartridge {
       if(address < 0x1000'0000 || address >= 0x1000'0000 + self.rom.size) return false;
       piView = {self.rom.data, self.rom.size};
       piViewOffset = address - 0x1000'0000;
-      piViewWritable = false;
+      piViewWritable = self.sixtyFourDrive.romWrites;
       return true;
     }
+    //[Phobos] cartridge ROM made writable by the 64drive (see SixtyFourDrive) keeps track of what changed
+    auto piWriteHalf(u16 data, PIDeviceTiming timing) -> void override {
+      if(piViewWritable && piViewOffset < piView.size()) self.romWritten(piViewOffset);
+      PIDeviceMemory::piWriteHalf(data, timing);
+    }
   } romDevice{*this};
+
+  //[Phobos] The control registers of the 64drive flash cartridge, as far as the 64DD conversion cartridges
+  //(CIC-NUS-5167) use them: they wait for its status to read idle, then send command F0 to make cartridge
+  //ROM writable, and save their data by writing it into cartridge ROM. Without the device, the wait polls
+  //open bus two million times, longer than the PIF waits for the boot to finish, and the console halts.
+  struct SixtyFourDrive : PIDevice {
+    Cartridge& self;
+    SixtyFourDrive(Cartridge& self) : self(self) {}
+    n1  present;
+    n1  romWrites;
+    u32 piAddr = 0;
+    u16 latch = 0;
+
+    auto piAddress(u32 address, PIDeviceTiming timing) -> bool override;
+    auto piReadHalf(PIDeviceTiming timing) -> maybe<u16> override;
+    auto piWriteHalf(u16 data, PIDeviceTiming timing) -> void override;
+    auto readWord(u32 address) -> u32;
+    auto command(u32 data) -> void;
+  } sixtyFourDrive{*this};
+
+  //[Phobos] which 64 KiB blocks of cartridge ROM have been written, kept with the game's saves as save.cartrom
+  std::vector<bool> romDirty;
+  auto romWritten(u32 offset) -> void { if((offset >> 16) < romDirty.size()) romDirty[offset >> 16] = true; }
+  auto loadRomWrites() -> void;
+  auto saveRomWrites() -> void;
 
   struct RamDevice : PIDeviceMemory {
     Cartridge& self;

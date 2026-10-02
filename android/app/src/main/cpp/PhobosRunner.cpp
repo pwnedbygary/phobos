@@ -3304,7 +3304,8 @@ else if (port->type() == "Keyboard") {
                 !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
                 !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
                 !fileName.endsWith(".flash") && !fileName.endsWith(".rtc") &&
-                !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error")) continue;
+                !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error") &&
+                !fileName.endsWith(".cartrom")) continue;
             string fullPath = {saveDir, fileName};
             auto existing = file::read(fullPath);
             if (existing.size() == 0) continue;
@@ -3427,7 +3428,8 @@ else if (port->type() == "Keyboard") {
           !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
           !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
           !fileName.endsWith(".flash") && !fileName.endsWith(".rtc") &&
-          !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error")) return;
+          !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error") &&
+          !fileName.endsWith(".cartrom")) return;
       auto fp = saveNode;
       fp->seek(0);
       auto size = fp->size();
@@ -4242,10 +4244,13 @@ else if (port->type() == "Keyboard") {
                         !fileName.endsWith(".eeprom") && !fileName.endsWith(".card") &&
                         !fileName.endsWith(".sav") && !fileName.endsWith(".fla") &&
                         !fileName.endsWith(".flash") && !fileName.endsWith(".rtc") &&
-                        !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error")) continue;
+                        !fileName.endsWith(".disk") && !fileName.endsWith(".disk.error") &&
+                        !fileName.endsWith(".cartrom")) continue;
                     string path = {saveDir, fileName};
                     auto data = nall::file::read(path);
                     if (!data.empty()) {
+                      if (saveNode->size() != data.size()) saveNode->resize(data.size());
+                      saveNode->seek(0);
                       saveNode->write(data.data(), data.size());
                       LOGI("Saves: imported save for %s", (const char*)fileName);
                     }

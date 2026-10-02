@@ -6,6 +6,7 @@ Cartridge& cartridge = cartridgeSlot.cartridge;
 #include "rtc.cpp"
 #include "joybus.cpp"
 #include "isviewer.cpp"
+#include "sixtyfourdrive.cpp"
 #include "debugger.cpp"
 #include "serialization.cpp"
 
@@ -53,10 +54,19 @@ auto Cartridge::connect() -> void {
     isviewer.tracer->setTerminal(true);
   }
 
+  //[Phobos] Writes stay enabled from the start, so a state loaded into a new session still saves.
+  if(information.cic == "CIC-NUS-5167") {
+    sixtyFourDrive.present = 1;
+    sixtyFourDrive.romWrites = 1;
+    romDirty.assign((rom.size + 0xffff) >> 16, false);
+    loadRomWrites();
+  }
+
   pi.attach(romDevice, 0);
   if(ram) pi.attach(ramDevice, 1);
   if(flash) pi.attach(flash, 1);
   if(isviewer.enabled()) pi.attach(isviewer, 1);
+  if(sixtyFourDrive.present) pi.attach(sixtyFourDrive, 1);
 
   debugger.load(node);
 
@@ -70,6 +80,10 @@ auto Cartridge::disconnect() -> void {
   pi.detach(ramDevice);
   pi.detach(flash);
   pi.detach(isviewer);
+  pi.detach(sixtyFourDrive);
+  sixtyFourDrive.present = 0;
+  sixtyFourDrive.romWrites = 0;
+  romDirty.clear();
   debugger.unload(node);
   rom.reset();
   ram.reset();
@@ -94,6 +108,8 @@ auto Cartridge::save() -> void {
   if(auto fp = pak->write("save.flash")) {
     flash.save(fp);
   }
+
+  if(sixtyFourDrive.present) saveRomWrites();
 
   rtc.save();
 }

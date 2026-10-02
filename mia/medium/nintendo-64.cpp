@@ -128,6 +128,10 @@ auto Nintendo64::load(string location) -> LoadResult {
   if(auto node = document["game/board/memory(type=RTC,content=Save)"]) {
     Medium::load(node, ".rtc");
   }
+  //[Phobos] 64DD conversion cartridges save into cartridge ROM; the core keeps what they wrote here.
+  if(document["game/board/cic"].string() == "CIC-NUS-5167") {
+    pak->append("save.cartrom", 0);
+  }
 
   return successful;
 }
