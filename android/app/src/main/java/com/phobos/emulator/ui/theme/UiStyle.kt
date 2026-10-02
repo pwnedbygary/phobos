@@ -48,6 +48,9 @@ abstract class UiStyle {
     /** Whether [Backdrop] replaces the glass glows (and Retrowave's sunset) behind the pages. */
     open val ownBackdrop: Boolean get() = false
 
+    /** Whether [Backdrop] moves on its own while the pages hold still. */
+    open val animatedBackdrop: Boolean get() = false
+
     @Composable
     open fun Backdrop(modifier: Modifier) {}
 }

@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.PixelBackdropScene
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
@@ -53,6 +54,16 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         label = { it.label },
                         onSelect = { viewModel.setUiEffects(it) },
                     )
+                    if (settings.uiEffects == UiEffects.PIXEL_ART) {
+                        SettingsDropdownItem(
+                            title = "Backdrop",
+                            description = settings.pixelBackdrop.description,
+                            current = settings.pixelBackdrop,
+                            options = PixelBackdropScene.entries,
+                            label = { it.label },
+                            onSelect = { viewModel.setPixelBackdrop(it) },
+                        )
+                    }
                     val solidStyle = settings.uiEffects.style is SolidUi
                     SettingsDropdownItem(
                         title = "Glass effects",

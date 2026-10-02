@@ -1,5 +1,6 @@
 package com.phobos.emulator.ui.theme
 
+import android.animation.ValueAnimator
 import android.graphics.Bitmap
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -9,7 +10,9 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
@@ -20,8 +23,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -41,12 +51,17 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontSynthesis
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -54,8 +69,11 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.R
+import com.phobos.emulator.data.PixelBackdropScene
+import kotlinx.coroutines.delay
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Press Start 2P (SIL Open Font License 1.1; see LICENSE), an 8x8 arcade font, for short uppercase headings. */
@@ -233,6 +251,7 @@ object PixelUi : SolidUi() {
     override val shapes: Shapes get() = PixelShapes
     override val pill: CornerBasedShape get() = PixelPillShape
     override val capitalHeaders: Boolean get() = true
+    override val animatedBackdrop: Boolean get() = true
 
     @Composable
     override fun titleStyle(base: TextStyle) = base.pixelShadow(pixelShadow(LocalPhobosTheme.current.isDark))
@@ -244,7 +263,7 @@ object PixelUi : SolidUi() {
     @Composable
     override fun Backdrop(modifier: Modifier) {
         val theme = LocalPhobosTheme.current
-        PixelBackdrop(theme.scheme, theme.isDark, modifier)
+        PixelBackdrop(theme.scheme, theme.isDark, theme.pixelBackdrop, modifier)
     }
 
     @Composable
@@ -301,29 +320,121 @@ internal fun pixelSceneColors(scheme: ColorScheme, isDark: Boolean): PixelSceneC
     )
 }
 
+/** The theme's colors for the pixel backdrops besides space. */
+internal fun pixelPalette(scheme: ColorScheme, isDark: Boolean) = PixelPalette(
+    background = scheme.background.toArgb(),
+    onBackground = scheme.onBackground.toArgb(),
+    primary = scheme.primary.toArgb(),
+    secondary = scheme.secondary.toArgb(),
+    tertiary = scheme.tertiary.toArgb(),
+    isDark = isDark,
+)
+
 /** The size of one art pixel in the backdrop. */
 private val ART_PIXEL = 4.dp
 
 /**
- * Pixel-art backdrop behind the app's screens: stars over a banded, dithered sky and a planet's limb
- * along the bottom, in the theme's colors. It is rendered small, one element per art pixel, and
- * scaled up without filtering, so it stays crisp and costs almost nothing to draw.
+ * The pixel-art backdrop behind the app's screens: [scene] in the theme's colors. It's drawn small, one
+ * element per art pixel, and scaled up without filtering, so it stays crisp and costs little: the
+ * picture is drawn again only when something in it has moved, a few times a second, or every frame
+ * while something is in flight. It holds still when Android's animations are off, and it isn't
+ * composed at all behind a running game.
  */
 @Composable
-fun PixelBackdrop(scheme: ColorScheme, isDark: Boolean, modifier: Modifier = Modifier) {
-    Spacer(
-        modifier.drawWithCache {
-            val pixelPx = max(1f, ART_PIXEL.toPx())
-            val cols = ceil(size.width / pixelPx).toInt().coerceAtLeast(1)
-            val rows = ceil(size.height / pixelPx).toInt().coerceAtLeast(1)
-            val pixels = PixelScene.render(cols, rows, pixelSceneColors(scheme, isDark))
-            val image = Bitmap.createBitmap(pixels, cols, rows, Bitmap.Config.ARGB_8888).asImageBitmap()
-            val target = IntSize(ceil(cols * pixelPx).toInt(), ceil(rows * pixelPx).toInt())
-            onDrawBehind {
-                drawImage(image, dstOffset = IntOffset.Zero, dstSize = target, filterQuality = FilterQuality.None)
+fun PixelBackdrop(scheme: ColorScheme, isDark: Boolean, scene: PixelBackdropScene, modifier: Modifier = Modifier) {
+    val pixelPx = with(LocalDensity.current) { max(1f, ART_PIXEL.toPx()) }
+    var grid by remember { mutableStateOf(IntSize.Zero) }
+    val live = remember { ValueAnimator.areAnimatorsEnabled() }
+    val frame = remember(scene, grid, scheme, isDark) {
+        if (grid.width <= 0 || grid.height <= 0) null
+        // Frame times are on the monotonic clock, so starting from it keeps the first animated frame from jumping.
+        else PixelFrame(PixelArt.of(scene, grid.width, grid.height, scheme, isDark), System.nanoTime() / 1_000_000, live)
+    }
+    LaunchedEffect(frame) {
+        val shown = frame ?: return@LaunchedEffect
+        if (!live) return@LaunchedEffect
+        var time = shown.time
+        while (true) {
+            val wait = shown.art.hold(time)
+            if (wait > PixelArt.FRAME_MS) delay(wait - PixelArt.FRAME_MS / 2)
+            withFrameMillis { now ->
+                time = now
+                shown.update(now)
             }
-        },
-    )
+        }
+    }
+    Box(modifier.onSizeChanged { grid = IntSize(ceil(it.width / pixelPx).toInt(), ceil(it.height / pixelPx).toInt()) }) {
+        val width = ceil((frame?.art?.cols ?: 0) * pixelPx).toInt()
+        frame?.bands?.forEach { band ->
+            val top = (band.firstRow * pixelPx).roundToInt()
+            val height = (band.endRow * pixelPx).roundToInt() - top
+            // A layer of its own, so a change in one band redraws only that strip of the screen.
+            Spacer(
+                Modifier
+                    .offset { IntOffset(0, top) }
+                    .layout { measurable, _ ->
+                        val placeable = measurable.measure(Constraints.fixed(width, height))
+                        layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                    }
+                    .graphicsLayer()
+                    .drawBehind {
+                        band.version.intValue
+                        drawImage(band.image, dstOffset = IntOffset.Zero, dstSize = IntSize(width, height), filterQuality = FilterQuality.None)
+                    },
+            )
+        }
+    }
+}
+
+/**
+ * A pixel backdrop's picture in bands of [BAND_ROWS] art rows, each a bitmap of its own: the picture
+ * is composed at each moment it changes, and only the bands whose pixels changed are uploaded and
+ * drawn again.
+ */
+private class PixelFrame(val art: PixelArt, var time: Long, private val live: Boolean) {
+    class Band(val firstRow: Int, val endRow: Int, cols: Int) {
+        val bitmap: Bitmap = Bitmap.createBitmap(cols, endRow - firstRow, Bitmap.Config.ARGB_8888)
+        val image = bitmap.asImageBitmap()
+        val version = mutableIntStateOf(0)
+    }
+
+    private val pixels = IntArray(art.cols * art.rows)
+    private val shown = IntArray(pixels.size)
+    val bands = (0 until art.rows step BAND_ROWS).map { Band(it, min(it + BAND_ROWS, art.rows), art.cols) }
+
+    init {
+        art.compose(if (live) time else 0L, pixels, live)
+        for (band in bands) upload(band)
+    }
+
+    fun update(now: Long) {
+        time = now
+        art.compose(now, pixels, live)
+        for (band in bands) {
+            val from = band.firstRow * art.cols
+            val to = band.endRow * art.cols
+            var same = true
+            for (i in from until to) {
+                if (pixels[i] != shown[i]) {
+                    same = false
+                    break
+                }
+            }
+            if (same) continue
+            upload(band)
+            band.version.intValue++
+        }
+    }
+
+    private fun upload(band: Band) {
+        val from = band.firstRow * art.cols
+        band.bitmap.setPixels(pixels, from, art.cols, 0, 0, art.cols, band.endRow - band.firstRow)
+        System.arraycopy(pixels, from, shown, from, (band.endRow - band.firstRow) * art.cols)
+    }
+
+    private companion object {
+        const val BAND_ROWS = 16
+    }
 }
 
 /**

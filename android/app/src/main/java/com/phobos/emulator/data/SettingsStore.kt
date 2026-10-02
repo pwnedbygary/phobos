@@ -37,11 +37,19 @@ enum class GlassEffects(val label: String, val description: String) {
 enum class UiEffects(val label: String, val description: String) {
     NONE("None", "The theme on its own, with the glass effects below"),
     RETROWAVE("Retrowave", "Synthwave sunset backdrop, neon glow on cards and selections, and glowing bars. Best with Synthwave '84"),
-    PIXEL_ART("Pixel art", "Pixel fonts, stepped corners, solid pixel panels and a pixel starfield, like the app icon"),
+    PIXEL_ART("Pixel art", "Pixel fonts, stepped corners, solid pixel panels and an animated pixel backdrop, like the app icon"),
     CRT("CRT terminal", "Terminal type with a phosphor glow, scanlines, boxed windows and a blinking cursor"),
     RPG("16-bit RPG", "Framed menu windows over a patterned backdrop, dot-matrix type and a pointing-hand cursor, like a classic console RPG"),
     MANGA("Manga ink", "Ink-lined panels, comic lettering, caption boxes, screentone and impact bursts, like a page of a manga"),
     XMB("XMB waves", "Glass panels over slowly flowing waves of light on a color gradient, like a game console's home menu"),
+}
+
+/** The scene the Pixel art style draws behind the pages (Settings → Appearance → Backdrop). */
+enum class PixelBackdropScene(val label: String, val description: String) {
+    SPACE("Space", "A planet turning below twinkling stars, with now and then a shooting star"),
+    NIGHT_DRIVE("Night drive", "A road racing toward a striped sun between the mountains"),
+    PLAINS("Pixel plains", "Clouds drifting over the hills, floating blocks and spinning coins"),
+    SAKURA("Sakura night", "Cherry blossom petals falling under a full moon"),
 }
 
 enum class RegionPreference(val label: String) {
@@ -66,6 +74,7 @@ data class EmulatorSettings(
     // Paired themes (One Dark / One Light, ...) switch to their sibling to match the system.
     val themeFollowSystem: Boolean = false,
     val uiEffects: UiEffects = UiEffects.NONE,
+    val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
     val glassEffects: GlassEffects = GlassEffects.FULL,
     val regionPreference: RegionPreference = RegionPreference.NTSC_U_NTSC_J_PAL,
     val fastBoot: Boolean = false,
@@ -186,6 +195,7 @@ class SettingsStore(private val context: Context) {
         // Read only when UI_EFFECTS was never written (settings from before the style choice); kept in step for older builds.
         val RETROWAVE_EFFECTS = booleanPreferencesKey("retrowave_effects")
         val UI_EFFECTS = stringPreferencesKey("ui_effects")
+        val PIXEL_BACKDROP = stringPreferencesKey("pixel_backdrop")
         val GLASS_EFFECTS = stringPreferencesKey("glass_effects")
         val REGION_PREFERENCE = stringPreferencesKey("region_preference")
         val FAST_BOOT = booleanPreferencesKey("fast_boot")
@@ -418,6 +428,7 @@ class SettingsStore(private val context: Context) {
                 safeGetString(UI_EFFECTS, ""),
                 if (safeGet(RETROWAVE_EFFECTS, false)) UiEffects.RETROWAVE else UiEffects.NONE,
             ),
+            pixelBackdrop = enumOrDefault(safeGetString(PIXEL_BACKDROP, ""), PixelBackdropScene.SPACE),
             glassEffects = enumOrDefault(safeGetString(GLASS_EFFECTS, GlassEffects.FULL.name), GlassEffects.FULL),
             regionPreference = enumOrDefault(safeGetString(REGION_PREFERENCE, ""), RegionPreference.NTSC_U_NTSC_J_PAL),
             fastBoot = safeGet(FAST_BOOT, false),
@@ -565,6 +576,7 @@ class SettingsStore(private val context: Context) {
         it[UI_EFFECTS] = effects.name
         it[RETROWAVE_EFFECTS] = effects == UiEffects.RETROWAVE
     }
+    suspend fun setPixelBackdrop(scene: PixelBackdropScene) = context.dataStore.edit { it[PIXEL_BACKDROP] = scene.name }
     suspend fun setGlassEffects(level: GlassEffects) = context.dataStore.edit { it[GLASS_EFFECTS] = level.name }
     suspend fun setRegionPreference(pref: RegionPreference) = context.dataStore.edit { it[REGION_PREFERENCE] = pref.name }
     suspend fun setFastBoot(enabled: Boolean) = context.dataStore.edit { it[FAST_BOOT] = enabled }

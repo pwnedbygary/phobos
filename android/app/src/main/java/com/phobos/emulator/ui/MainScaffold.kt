@@ -59,6 +59,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
@@ -201,8 +202,12 @@ fun MainScaffold(viewModel: MainViewModel) {
             else if (retrowave) RetrowaveBackdrop(backdrop)
             else if (theme.glass.level != GlassEffects.OFF) GlassBackdrop(backdrop)
         }
+        // While a moving backdrop shows, the pages and the dock keep a layer of their own, so a change in
+        // the backdrop doesn't draw them again. Never over the game: its surface shows through the window.
+        val layered = style.animatedBackdrop && route != EMULATOR_ROUTE && route != TOUCH_EDITOR_ROUTE
         CompositionLocalProvider(LocalGlassCapture provides glassCapture) {
             Scaffold(
+                modifier = if (layered) Modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen } else Modifier,
                 containerColor = Color.Transparent,
                 contentColor = MaterialTheme.colorScheme.onBackground,
                 bottomBar = {

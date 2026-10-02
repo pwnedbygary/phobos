@@ -28,6 +28,7 @@ import com.phobos.emulator.input.GameInputState
 import com.phobos.emulator.data.AspectRatioMode
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.PixelBackdropScene
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
@@ -286,6 +287,7 @@ class MainViewModel(
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsStore.setThemeMode(mode) }
     fun setTheme(id: String, followSystem: Boolean = false) = viewModelScope.launch { settingsStore.setTheme(id, followSystem) }
     fun setUiEffects(effects: UiEffects) = viewModelScope.launch { settingsStore.setUiEffects(effects) }
+    fun setPixelBackdrop(scene: PixelBackdropScene) = viewModelScope.launch { settingsStore.setPixelBackdrop(scene) }
     fun setGlassEffects(level: GlassEffects) = viewModelScope.launch { settingsStore.setGlassEffects(level) }
     fun setRegionPreference(pref: RegionPreference) = viewModelScope.launch { settingsStore.setRegionPreference(pref) }
     fun setFastBoot(enabled: Boolean) = viewModelScope.launch { settingsStore.setFastBoot(enabled) }

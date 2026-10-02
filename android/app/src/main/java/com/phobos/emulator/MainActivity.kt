@@ -23,6 +23,7 @@ import coil.ImageLoader
 import coil.decode.SvgDecoder
 import com.phobos.emulator.data.EmulatorSettings
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.PixelBackdropScene
 import com.phobos.emulator.data.SettingsStore
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
@@ -46,9 +47,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
-private data class ThemeSelection(val id: String, val mode: ThemeMode, val followSystem: Boolean, val effects: UiEffects, val glass: GlassEffects)
+private data class ThemeSelection(
+    val id: String,
+    val mode: ThemeMode,
+    val followSystem: Boolean,
+    val effects: UiEffects,
+    val glass: GlassEffects,
+    val pixelBackdrop: PixelBackdropScene,
+)
 
-private fun EmulatorSettings.themeSelection() = ThemeSelection(themeId, themeMode, themeFollowSystem, uiEffects, glassEffects)
+private fun EmulatorSettings.themeSelection() = ThemeSelection(themeId, themeMode, themeFollowSystem, uiEffects, glassEffects, pixelBackdrop)
 
 private const val STARTUP_SETTINGS_TIMEOUT_MS = 500L
 
@@ -108,7 +116,14 @@ class MainActivity : ComponentActivity() {
             }.collectAsState(initial = startupSettings?.themeSelection())
 
             theme?.let {
-                PhobosTheme(themeId = it.id, themeMode = it.mode, followSystem = it.followSystem, effects = it.effects, glassEffects = it.glass) {
+                PhobosTheme(
+                    themeId = it.id,
+                    themeMode = it.mode,
+                    followSystem = it.followSystem,
+                    effects = it.effects,
+                    glassEffects = it.glass,
+                    pixelBackdrop = it.pixelBackdrop,
+                ) {
                     MainScaffold(viewModel = viewModel)
                 }
             }

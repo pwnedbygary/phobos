@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.PixelBackdropScene
 import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 
@@ -46,6 +47,8 @@ data class PhobosThemeInfo(
     val scheme: ColorScheme,
     /** Glass panel and backdrop values for [scheme]; they switch at once while the colors cross-fade. */
     val glass: GlassStyle,
+    /** The scene behind the pages in the Pixel art style. */
+    val pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
 ) {
     val retrowave: Boolean get() = effects == UiEffects.RETROWAVE
 
@@ -72,6 +75,7 @@ fun PhobosTheme(
     followSystem: Boolean = false,
     effects: UiEffects = UiEffects.NONE,
     glassEffects: GlassEffects = GlassEffects.FULL,
+    pixelBackdrop: PixelBackdropScene = PixelBackdropScene.SPACE,
     content: @Composable () -> Unit,
 ) {
     val scene = effects.glassScene
@@ -87,7 +91,7 @@ fun PhobosTheme(
         GlassStyle.of(colors.scheme, colors.success, colors.warning, resolved.isDark, scene, glassEffects)
     }
 
-    val info = PhobosThemeInfo(resolved.theme, resolved.isDark, effects, colors.success, colors.warning, colors.scheme, glass)
+    val info = PhobosThemeInfo(resolved.theme, resolved.isDark, effects, colors.success, colors.warning, colors.scheme, glass, pixelBackdrop)
     CompositionLocalProvider(LocalPhobosTheme provides info) {
         MaterialTheme(
             colorScheme = colorScheme,
