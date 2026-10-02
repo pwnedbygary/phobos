@@ -3608,7 +3608,7 @@ else if (port->type() == "Keyboard") {
     drainN64RdpIfAsync();
     auto s = root->serialize(true);
     bool result = nall::file::write(path, {s.data(), s.size()});
-    LOGI("Save state to %s: %s", path, result ? "success" : "failed");
+    LOGI("Save state to %s: %s (%u bytes)", path, result ? "success" : "failed", (unsigned)s.size());
     isPausedAtomic.store(wasPaused);
     return result;
   }

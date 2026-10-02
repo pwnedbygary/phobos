@@ -34,13 +34,11 @@ private:
     string name = "ZX Spectrum";
     Model model = Model::Spectrum48k;
     double frequency = 3'500'000;
-    u32 serializeSize[2];
   } information;
 
   //serialization.cpp
   auto serialize(serializer&) -> void;
   auto serializeAll(serializer&, bool synchronize) -> void;
-  auto serializeInit(bool synchronize) -> uint;
 };
 
 extern ROM rom;

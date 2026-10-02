@@ -22,6 +22,14 @@ auto TapeDeck::unload() -> void {
   node = {};
 }
 
+auto TapeDeck::serialize(serializer& s) -> void {
+  tray.tape.serialize(s);
+  // [Phobos] A stop the user held during a load is still held when the state is loaded.
+  bool held = heldByUser;
+  s(held);
+  if(s.reading()) heldByUser = held;
+}
+
 auto TapeDeck::detectLoader() -> void {
   u64 elapsed = cpu.cycles - lastReadCycle;
   u8 b = cpu.bc.byte.hi;

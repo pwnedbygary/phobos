@@ -3,4 +3,5 @@ auto CPU::serialize(serializer& s) -> void {
   Thread::serialize(s);
 
   ram.serialize(s);
+  s(irqLine);
 }

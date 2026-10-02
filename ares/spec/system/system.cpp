@@ -121,9 +121,6 @@ auto System::power(bool reset) -> void {
   }
   tapeDeck.power();
   scheduler.power(cpu);
-
-  information.serializeSize[0] = serializeInit(0);
-  information.serializeSize[1] = serializeInit(1);
 }
 
 }

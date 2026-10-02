@@ -800,7 +800,7 @@ class MainViewModel(
                 val systemDir = rootDir?.findFile(sanitizedName) ?: rootDir?.createDirectory(sanitizedName)
                 val stateFile = systemDir?.findFile(fileName) ?: systemDir?.createFile("application/octet-stream", fileName)
                 if (stateFile != null) {
-                    context.contentResolver.openOutputStream(stateFile.uri)?.use { output ->
+                    context.contentResolver.openOutputStream(stateFile.uri, "wt")?.use { output ->
                         tempFile.inputStream().use { input -> input.copyTo(output) }
                     }
                     systemDir?.let {

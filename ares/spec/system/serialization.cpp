@@ -1,40 +1,41 @@
-static const string SerializerVersion = "v132";
+static const string SerializerVersion = "v133";
 
 auto System::serialize(bool synchronize) -> serializer {
   if(synchronize) scheduler.enter(Scheduler::Mode::Synchronize);
   serializer s;
 
-  uint signature = 0x31545342;
-  uint size = s.capacity();
+  u32  signature = SerializerSignature;
   char version[16] = {};
   char description[512] = {};
+  u32  model = (u32)information.model;
   memory::copy(&version, (const char*)SerializerVersion, SerializerVersion.size());
 
   s(signature);
-  s(size);
   s(synchronize);
   s(version);
   s(description);
+  s(model);
   serializeAll(s, synchronize);
   return s;
 }
 
 auto System::unserialize(serializer& s) -> bool {
-  uint signature = 0;
-  uint size = 0;
+  u32  signature = 0;
   bool synchronize = true;
   char version[16] = {};
   char description[512] = {};
+  u32  model = 0;
 
   s(signature);
-  s(size);
   s(synchronize);
   s(version);
   s(description);
+  s(model);
 
-  if(signature != 0x31545342) return false;
-  if(size != information.serializeSize[synchronize]) return false;
+  if(signature != SerializerSignature) return false;
   if(string{version} != SerializerVersion) return false;
+  // [Phobos] A 48K and a 128K state differ in layout (the RAM's size, the AY chip), so neither loads into the other.
+  if(model != (u32)information.model) return false;
 
   if(synchronize) power(/* reset =*/ false);
   serializeAll(s, synchronize);
@@ -44,31 +45,17 @@ auto System::unserialize(serializer& s) -> bool {
 //internal
 
 auto System::serialize(serializer& s) -> void {
+  s(romBank);
+  s(screenBank);
+  s(ramBank);
+  s(pagingDisabled);
 }
 
 auto System::serializeAll(serializer& s, bool synchronize) -> void {
   scheduler.setSynchronize(synchronize);
   system.serialize(s);
-  //keyboard.serialize(s);
   cpu.serialize(s);
-  tapeDeck.tray.tape.serialize(s);
-  //vdp.serialize(s);
-  //psg.serialize(s);
-}
-
-auto System::serializeInit(bool synchronize) -> uint {
-  serializer s;
-
-  uint signature = 0;
-  uint size = 0;
-  char version[16] = {};
-  char description[512] = {};
-
-  s(signature);
-  s(size);
-  s(synchronize);
-  s(version);
-  s(description);
-  serializeAll(s, synchronize);
-  return s.size();
+  ula.serialize(s);
+  if(model() == Model::Spectrum128) psg.serialize(s);
+  tapeDeck.serialize(s);
 }
