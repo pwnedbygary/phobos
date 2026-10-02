@@ -6,6 +6,24 @@
 
 namespace phobos::desktop {
 
+static const std::pair<SDL_Scancode, int> keyboardPad[] = {
+  {SDL_SCANCODE_UP, PadUp}, {SDL_SCANCODE_DOWN, PadDown}, {SDL_SCANCODE_LEFT, PadLeft}, {SDL_SCANCODE_RIGHT, PadRight},
+  {SDL_SCANCODE_X, PadA}, {SDL_SCANCODE_Z, PadB}, {SDL_SCANCODE_S, PadX}, {SDL_SCANCODE_A, PadY},
+  {SDL_SCANCODE_Q, PadL1}, {SDL_SCANCODE_W, PadR1}, {SDL_SCANCODE_1, PadL2}, {SDL_SCANCODE_3, PadR2},
+  {SDL_SCANCODE_RETURN, PadStart}, {SDL_SCANCODE_RSHIFT, PadSelect},
+};
+
+static const std::pair<SDL_GamepadButton, int> padButtons[] = {
+  {SDL_GAMEPAD_BUTTON_DPAD_UP, PadUp}, {SDL_GAMEPAD_BUTTON_DPAD_DOWN, PadDown},
+  {SDL_GAMEPAD_BUTTON_DPAD_LEFT, PadLeft}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, PadRight},
+  {SDL_GAMEPAD_BUTTON_SOUTH, PadA}, {SDL_GAMEPAD_BUTTON_EAST, PadB},
+  {SDL_GAMEPAD_BUTTON_WEST, PadX}, {SDL_GAMEPAD_BUTTON_NORTH, PadY},
+  {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, PadL1}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, PadR1},
+  {SDL_GAMEPAD_BUTTON_LEFT_STICK, PadL3}, {SDL_GAMEPAD_BUTTON_RIGHT_STICK, PadR3},
+  {SDL_GAMEPAD_BUTTON_BACK, PadSelect}, {SDL_GAMEPAD_BUTTON_START, PadStart},
+  {SDL_GAMEPAD_BUTTON_GUIDE, PadHome},
+};
+
 auto Input::openConnected() -> void {
   int count = 0;
   if (SDL_JoystickID* ids = SDL_GetGamepads(&count)) {
@@ -17,7 +35,15 @@ auto Input::openConnected() -> void {
 }
 
 auto Input::handle(const SDL_Event& event) -> void {
-  if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+  if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+    for (auto [key, bit] : keyboardPad) {
+      if (event.key.scancode == key) keyboardTaps |= bit;
+    }
+  } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+    for (auto [button, bit] : padButtons) {
+      if (event.gbutton.button == button) padTaps |= bit;
+    }
+  } else if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
     for (auto* pad : pads) {
       if (SDL_GetGamepadID(pad) == event.gdevice.which) return;
     }
@@ -45,27 +71,14 @@ auto Input::poll(bool keyboardIsPad, bool latchSticks) -> PadState {
   PadState state;
   if (keyboardIsPad) {
     const bool* keys = SDL_GetKeyboardState(nullptr);
-    static const std::pair<SDL_Scancode, int> keyboardPad[] = {
-      {SDL_SCANCODE_UP, PadUp}, {SDL_SCANCODE_DOWN, PadDown}, {SDL_SCANCODE_LEFT, PadLeft}, {SDL_SCANCODE_RIGHT, PadRight},
-      {SDL_SCANCODE_X, PadA}, {SDL_SCANCODE_Z, PadB}, {SDL_SCANCODE_S, PadX}, {SDL_SCANCODE_A, PadY},
-      {SDL_SCANCODE_Q, PadL1}, {SDL_SCANCODE_W, PadR1}, {SDL_SCANCODE_1, PadL2}, {SDL_SCANCODE_3, PadR2},
-      {SDL_SCANCODE_RETURN, PadStart}, {SDL_SCANCODE_RSHIFT, PadSelect},
-    };
     for (auto [key, bit] : keyboardPad) {
       if (keys[key]) state.buttons |= bit;
     }
+    state.buttons |= keyboardTaps;
   }
+  state.buttons |= padTaps;
+  keyboardTaps = padTaps = 0;
 
-  static const std::pair<SDL_GamepadButton, int> padButtons[] = {
-    {SDL_GAMEPAD_BUTTON_DPAD_UP, PadUp}, {SDL_GAMEPAD_BUTTON_DPAD_DOWN, PadDown},
-    {SDL_GAMEPAD_BUTTON_DPAD_LEFT, PadLeft}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, PadRight},
-    {SDL_GAMEPAD_BUTTON_SOUTH, PadA}, {SDL_GAMEPAD_BUTTON_EAST, PadB},
-    {SDL_GAMEPAD_BUTTON_WEST, PadX}, {SDL_GAMEPAD_BUTTON_NORTH, PadY},
-    {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, PadL1}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, PadR1},
-    {SDL_GAMEPAD_BUTTON_LEFT_STICK, PadL3}, {SDL_GAMEPAD_BUTTON_RIGHT_STICK, PadR3},
-    {SDL_GAMEPAD_BUTTON_BACK, PadSelect}, {SDL_GAMEPAD_BUTTON_START, PadStart},
-    {SDL_GAMEPAD_BUTTON_GUIDE, PadHome},
-  };
   float strongest = 0.0f;
   float leftTrigger = 0.0f, rightTrigger = 0.0f;
   for (auto* pad : pads) {

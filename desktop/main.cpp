@@ -161,12 +161,13 @@ auto Shell::run(int argc, char* argv[]) -> int {
   while (!quit) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+      input.handle(event);
       switch (event.type) {
       case SDL_EVENT_QUIT: quit = true; break;
       case SDL_EVENT_KEY_DOWN:
       case SDL_EVENT_KEY_UP: handleKey(event.key); break;
       case SDL_EVENT_DROP_FILE: if (event.drop.data) open(event.drop.data); break;
-      default: input.handle(event); break;
+      default: break;
       }
     }
     {
