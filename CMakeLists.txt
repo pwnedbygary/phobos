@@ -349,6 +349,11 @@ else()
   )
   find_package(Threads REQUIRED)
   target_link_libraries(phobos PRIVATE phobos_core SDL3::SDL3-static Threads::Threads ${CMAKE_DL_LIBS})
+  # The boot ROMs and game databases the Android app ships as assets, beside the program; it
+  # copies them into its data folder at start, as the app's extractAssets() does.
+  add_custom_command(TARGET phobos POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/Database $<TARGET_FILE_DIR:phobos>/Database
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/System $<TARGET_FILE_DIR:phobos>/System)
   if(WIN32)
     # The icon is made from the PNG at configure time when Python is around; without it the
     # executable just has no icon.
