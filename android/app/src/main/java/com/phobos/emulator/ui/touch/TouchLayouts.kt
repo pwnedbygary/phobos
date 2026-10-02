@@ -28,6 +28,7 @@ enum class TouchFamily(val key: String, val displayName: String) {
     GAME_GEAR("gg", "Game Gear"),
     PCE("pce", "PC Engine / CD / SuperGrafx"),
     NEO_GEO("neogeo", "Neo Geo / Neo Geo CD"),
+    ARCADE("arcade", "Arcade"),
     NGP("ngp", "Neo Geo Pocket / Color"),
     WONDERSWAN("ws", "WonderSwan / Color"),
     ATARI_2600("a26", "Atari 2600"),
@@ -51,7 +52,7 @@ enum class TouchFamily(val key: String, val displayName: String) {
             "Game Gear" -> GAME_GEAR
             "PC Engine", "PC Engine CD", "SuperGrafx" -> PCE
             "Neo Geo", "Neo Geo CD" -> NEO_GEO
-            "Arcade" -> NEO_GEO
+            "Arcade" -> ARCADE
             "Neo Geo Pocket", "Neo Geo Pocket Color" -> NGP
             "WonderSwan", "WonderSwan Color" -> WONDERSWAN
             "Atari 2600" -> ATARI_2600
@@ -147,6 +148,7 @@ object TouchLayouts {
             systemPills("SELECT" to Input.SELECT, "RUN" to Input.START),
         )
         TouchFamily.NEO_GEO -> neoGeo()
+        TouchFamily.ARCADE -> arcade()
         TouchFamily.NGP -> listOf(
             dpad(),
             face(diagonalPair(TouchButton("A", Input.A), TouchButton("B", Input.B))),
@@ -289,6 +291,40 @@ object TouchLayouts {
             TouchButton("MODE", Input.SELECT, w = 64f, h = 26f, shape = PILL, labelScale = 0.5f), hidden = true),
     )
 
+    /**
+     * Aleck64 / SG-1000A cabinet: left stick (Aleck64 games), D-pad, four face
+     * buttons matching resolveButtonBit Button 1..4 → A/B/X/Y, Coin and Start.
+     * Coin/Start sit above the face cluster so they do not overlap the stick
+     * in portrait (systemPills at bottom-center would).
+     */
+    private fun arcade(): List<TouchElement> = listOf(
+        AnalogElement(
+            "stick", "Analog stick",
+            Placement(BOTTOM_LEFT, 108f, -100f), Placement(BOTTOM_LEFT, 98f, -106f),
+            Stick.LEFT, size = 144f, gate = StickGate.OCTAGON,
+        ),
+        DpadElement(land = Placement(TOP_LEFT, 64f, 128f), port = Placement(BOTTOM_LEFT, 72f, -240f), size = 96f),
+        ButtonCluster(
+            "face", "1 2 3 4",
+            FACE_LAND, FACE_PORT,
+            listOf(
+                TouchButton("1", Input.A, dx = -32f, dy = 30f, w = 56f, accent = TouchPalette.RED),
+                TouchButton("2", Input.B, dx = 26f, dy = 18f, w = 56f, accent = TouchPalette.YELLOW),
+                TouchButton("3", Input.X, dx = -26f, dy = -30f, w = 56f, accent = TouchPalette.GREEN),
+                TouchButton("4", Input.Y, dx = 32f, dy = -42f, w = 56f, accent = TouchPalette.BLUE),
+            ),
+            multiHit = true,
+        ),
+        ButtonCluster(
+            "cabinet", "Coin Start",
+            Placement(BOTTOM_RIGHT, -104f, -220f), Placement(BOTTOM_RIGHT, -100f, -286f),
+            listOf(
+                TouchButton("COIN", Input.SELECT, dx = -40f, w = 52f, h = 28f, shape = PILL, labelScale = 0.4f),
+                TouchButton("START", Input.START, dx = 40f, w = 52f, h = 28f, shape = PILL, labelScale = 0.4f),
+            ),
+        ),
+    )
+
     /** A/B/C/D in a slanted 2x2 grid; combination buttons are available from the editor. */
     private fun neoGeo(): List<TouchElement> = listOf(
         dpad(),
@@ -428,7 +464,7 @@ object TouchLayouts {
 
     private fun systemButtons(family: TouchFamily, options: Options): List<TouchElement> = buildList {
         val spots = when (family) {
-            TouchFamily.N64 -> N64_SPOTS
+            TouchFamily.N64, TouchFamily.ARCADE -> N64_SPOTS
             TouchFamily.COLECOVISION -> COLECO_SPOTS
             else -> DEFAULT_SPOTS
         }
