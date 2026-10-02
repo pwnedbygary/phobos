@@ -252,7 +252,7 @@ auto Shell::setup(int argc, char* argv[]) -> bool {
   if (!argument.empty()) {
     launchedWithGame = true;
     open(argument);
-    if (!game) SDL_Log("%s", message.c_str());
+    launchedWithGame = game.has_value();
   }
   return true;
 }
