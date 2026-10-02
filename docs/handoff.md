@@ -421,6 +421,56 @@ N64/PS1 picture and save-state previews; the tap-to-show top bar is replaced by 
 on-screen menu button at the user's request ([touch controls](touch-controls.md)).
 Local builds for performance numbers must use NDK 28.2 (the CI toolchain).
 
+## Desktop builds — 2026-10-02
+
+Branch `cursor/desktop-phobos-ports-a292` ([PR #80](https://github.com/pwnedbygary/phobos/pull/80)),
+at the user's request: Phobos for Linux (AppImage + .zsync), Windows (Phobos.exe) and macOS
+(universal Phobos.app), alongside the Android app.
+
+- Build: `CMakeLists.txt` builds the cores, mia and the runner as `phobos_core`. Android links it
+  into `libphobos_android.so` with the old flags and libadrenotools; elsewhere it links into the
+  `phobos` program with SDL 3.2.30 (FetchContent, static). sljit and libco pick the CPU from the
+  compiler instead of ARM64 being hardcoded. Presets: `linux-x64`, `windows-x64` (MSYS2 UCRT64),
+  `windows-x64-cross` (MinGW-w64 from Linux), `macos-universal`.
+- Runner: ANativeWindow, AAudio and the adrenotools loader moved unchanged behind
+  `PhobosHost.hpp` into `PhobosHostAndroid.cpp`; `desktop/PhobosHostDesktop.cpp` is the SDL
+  version. Desktop Vulkan comes from `libvulkan.so.1`, `vulkan-1.dll` or the bundled MoltenVK.
+  Thread affinity, the thread id and the WFE wait stay Android-only. Also changed for both:
+  without an audio device the runner discards samples and retries every five seconds (it used to
+  retry on every core write), and PS1 memory cards are written through stdio.
+- Assets: the APK's `assets/System` (boot ROMs) and `assets/Database` ship beside the desktop
+  program, and it copies missing files into its data folder at start, as `extractAssets()` does.
+- Shell (`desktop/`): a placeholder UI in SDL's debug font: library (disc sets, cue/m3u, folder
+  names decide shared extensions), pause menu (states, reset, fast-forward, mute, disc change, N64
+  options, PS1 analog, fullscreen), ZX Spectrum and MSX keyboards, rumble, firmware matched as
+  `MainViewModel.scanFirmware()` matches it, `settings.ini`.
+- Packaging: `scripts/package-linux-appimage.sh`, `scripts/package-windows.sh`,
+  `scripts/package-macos-app.sh`; CI in `.github/workflows/desktop.yml`.
+
+Checks run (2026-10-02, Linux x86-64 VM, no GPU, no sound card, no controller):
+- Linux: GCC 13.3, CMake 3.28.3: `cmake --preset linux-x64 && cmake --build build/linux-x64`
+  builds. Blargg's `cpu_instrs.gb` passes all tests at 59.8 FPS; library, pause menu, save and
+  load state, and quit to library work (driven with xdotool).
+- AppImage: `scripts/package-linux-appimage.sh build/linux-x64` writes the AppImage (7.5 MB) and
+  its .zsync. Run from outside the tree with an empty data folder, it installs System/Database
+  and runs the same test.
+- Windows: MinGW-w64 GCC 13 (posix), `cmake --preset windows-x64-cross`. `scripts/package-windows.sh`
+  confirms Phobos.exe imports only Windows' own DLLs. Under Wine 9.0 it runs the same test at
+  59.8 FPS.
+- macOS: GitHub Actions run 37071950243 (macos-latest) built and packaged the app; `lipo -archs`:
+  x86_64 arm64; MoltenVK 1.4.2 bundled; signed ad hoc.
+- Android: JDK 21, AGP 9.3.2, NDK 28.2.13676358, CMake 3.22.1:
+  `./gradlew :app:assembleLegacyDebug :app:testModernDebugUnitTest` succeeds, 211 tests pass,
+  and all 85 JNI functions are exported. lld's `--why-extract` shows the archive members the
+  static link leaves out are unused (Saturn stub, unused CPUs and ymfm chips, parallel-RDP's WSI).
+
+Not checked: any device or real desktop hardware; Nintendo 64 on desktop (no GPU here; MoltenVK
+untested); audio output; gamepads and rumble; the independent review that
+[development-process.md](development-process.md) requires before commit (the PR is a draft for it).
+
+Next: UI parity with the Android app (the user's direction); N64 on real desktop GPUs, including
+MoltenVK; MSVC/clang-cl is not supported (the runner's threads use pthreads; MinGW provides them).
+
 ## Touch controls overhaul and performance scan — 2026-09-24 (in progress)
 
 Status: **implemented on branch `feature/touch-controls-perf-2026-09` (base
