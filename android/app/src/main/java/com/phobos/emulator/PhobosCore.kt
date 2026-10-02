@@ -127,6 +127,8 @@ object PhobosCore {
     external fun getFrameTimes(): FloatArray
     /** Logical [width, height] of the last frame after the core's pixel-aspect correction; 0s before the first frame. */
     external fun getVideoGeometry(): FloatArray
+    /** The running core's refresh-rate hint (Hz), updated as soon as ares reports it. */
+    external fun getRefreshRateHint(): Double
 
     object Input {
         const val UP       = 1 shl 0

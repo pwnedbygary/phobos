@@ -133,4 +133,6 @@ namespace ares {
   // Most recent frame-to-frame intervals in ms, oldest first; returns how many were written.
   auto getFrameTimes(f32* out, u32 capacity) -> u32;
   auto getVideoGeometry() -> VideoGeometry;
+  /** The core's refresh-rate hint (live atomic; not the UI's polled stats copy). */
+  auto getRefreshRateHint() -> f64;
 }

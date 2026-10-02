@@ -1766,6 +1766,16 @@ namespace ares {
       u32 targetW = rotate ? height : (scale2x ? width * 2 : width);
       u32 targetH = rotate ? width : (scale2x ? height * 2 : height);
 
+      // Ask for a display rate that fits the game (e.g. 60 Hz rather than 120 for a 60 Hz
+      // game). On a 120 Hz panel a frame that finishes a little early or late in its period
+      // stays up for one refresh or three; at 60 Hz each frame gets one whole refresh.
+      static double hintedFrameRate = 0.0;
+      double contentRate = refreshRateAtomic.load();
+      if (windowChanged || std::abs(contentRate - hintedFrameRate) > 0.5) {
+          setWindowFrameRate(nativeWindow, contentRate);
+          hintedFrameRate = contentRate;
+      }
+
       if (windowChanged || targetW != bufferWidth || targetH != bufferHeight) {
           ANativeWindow_setBuffersGeometry(nativeWindow, (s32)targetW, (s32)targetH, WINDOW_FORMAT_RGBA_8888);
           bufferWidth = targetW;
@@ -1812,6 +1822,43 @@ namespace ares {
           }
       }
       ANativeWindow_unlockAndPost(nativeWindow);
+    }
+
+    // Ask the compositor for a display mode near the game's rate. Looked up at run time
+    // since minSdk is 26. On the RP6, FIXED_SOURCE + the two-arg (seamless-only) call
+    // registered a 60 Hz override but left the panel at 120 Hz; Mupen's Parallel profile
+    // votes DEFAULT and the panel does switch. Prefer WithChangeStrategy(ALWAYS) so a
+    // non-seamless mode change is still allowed, and snap near-60 NTSC rates to 60 Hz so
+    // the vote matches a supported mode exactly. Java also sets preferredDisplayModeId.
+    static auto setWindowFrameRate(ANativeWindow* window, double rate) -> void {
+      using SetFrameRate = int32_t (*)(ANativeWindow*, float, int8_t);
+      using SetFrameRateWithStrategy = int32_t (*)(ANativeWindow*, float, int8_t, int8_t);
+      static auto symbols = [] {
+        struct {
+          SetFrameRateWithStrategy withStrategy;
+          SetFrameRate setFrameRate;
+        } s{};
+        void* android = dlopen("libandroid.so", RTLD_NOW);
+        if (android) {
+          s.withStrategy = (SetFrameRateWithStrategy)dlsym(android, "ANativeWindow_setFrameRateWithChangeStrategy");
+          s.setFrameRate = (SetFrameRate)dlsym(android, "ANativeWindow_setFrameRate");
+        }
+        return s;
+      }();
+      if (!window || rate <= 0.0) return;
+      float request = (float)rate;
+      // Progressive N64 (~59.826) and 59.94 NTSC: match the panel's 60 Hz mode.
+      if (std::abs(rate - 60.0) < 1.5 || std::abs(rate - 59.94) < 1.5) request = 60.0f;
+      // DEFAULT (0) + ALWAYS (1): see ANATIVEWINDOW_FRAME_RATE_* / CHANGE_FRAME_RATE_*.
+      int32_t result = -1;
+      if (symbols.withStrategy) {
+        result = symbols.withStrategy(window, request, /*DEFAULT*/ 0, /*ALWAYS*/ 1);
+      } else if (symbols.setFrameRate) {
+        result = symbols.setFrameRate(window, request, /*DEFAULT*/ 0);
+      } else {
+        return;
+      }
+      LOGI("Window frame rate %.3f Hz requested as %.3f (%d)", rate, request, result);
     }
 
     // Copies the N64 Vulkan scanout (RGBA bytes) into the window, forcing alpha.
@@ -2421,6 +2468,8 @@ namespace ares {
     // The next game reports its own geometry with its first frame.
     videoDisplayWidth.store(0.0f);
     videoDisplayHeight.store(0.0f);
+    // Don't leave the previous core's rate on the next load (PAL → NTSC, etc.).
+    refreshRateAtomic.store(60.0);
     // A reset requested during a hung session must NOT carry into the next
     // system: the abandoned thread never consumed it, and a fresh load would
     // consume it as a soft-reset right after boot → CPU stuck at the boot ROM
@@ -4348,6 +4397,9 @@ else if (port->type() == "Keyboard") {
   auto isFirstFrameRendered() -> bool { return firstFrameRendered.load(); }
   auto getVideoGeometry() -> VideoGeometry {
     return {videoDisplayWidth.load(std::memory_order_relaxed), videoDisplayHeight.load(std::memory_order_relaxed)};
+  }
+  auto getRefreshRateHint() -> f64 {
+    return refreshRateAtomic.load();
   }
   auto getPerformanceStats() -> PerformanceStats {
     PerformanceStats stats;

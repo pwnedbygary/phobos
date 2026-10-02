@@ -939,6 +939,46 @@ work grew by a third, which heavier games can't afford. An `isb` loop drew more 
 runs went in the table's order without a pause, so later runs started warmer, which works against
 `WFE` rather than for it.
 
+### 2026-10-02 follow-up: present at the game's display rate
+
+Branch `feature/frame-pacing-2026-10`, based on `master` after the F-Zero EK cart-hack fix.
+
+**Finding.** On the RP6's 120 Hz panel, Phobos left the display at 120 Hz while Mario Tennis
+paced at 59.826 Hz. A frame that finished a little early in its period stayed up for one
+refresh (8.3 ms) and a late one for three (25 ms), so SurfaceFlinger's present-to-present
+histogram had ~3–8% of intervals over 18 ms even when the emulation stats read 59.9 FPS and
+no frame over 20 ms of work. Mupen's Parallel profile (user settings left alone, then
+restored) switches the panel to 60 Hz; its presented intervals were almost all 16.7 ms,
+with rarer 33 ms slips.
+
+**Change.** When the window is first used and whenever the core's refresh-rate hint changes,
+`ANativeWindow_setFrameRateWithChangeStrategy` is called with that rate (snapped to 60 Hz for
+near-NTSC), `DEFAULT` compatibility, and `CHANGE_FRAME_RATE_ALWAYS` (falling back to the
+two-arg API on older devices). The emulator screen also sets `Window.preferredDisplayModeId`
+to the closest supported mode and votes `Surface.setFrameRate` the same way Mupen's Parallel
+profile does. FIXED_SOURCE alone registered a 60 Hz override on the RP6 but left the panel at
+120 Hz (`supportsFrameRateOverrideByContent=false`); preferredDisplayModeId and DEFAULT are
+what switch the mode.
+
+**Measured** (RP6, Standard mode, Async RDP and busy-wait off — the defaults; Mario Tennis
+USA; thermal status 0 throughout):
+
+| App / build | Scene | Presented intervals over 18 ms | Panel during play |
+|---|---|---|---|
+| Phobos before (104511) | Mario vs Boo, 30 s | 2.7–3.0% (49–54 of ~1800) | 120 Hz |
+| Phobos before | Attract after Reset, 60 s | 7.6% (275 of 3639) | 120 Hz |
+| Phobos 104554 (this change) | Attract / SurfaceView, 20 s | **0%** (0 of 1200; all 16 ms) | **60 Hz** |
+| Mupen64Plus-AE Parallel (user profile) | Attract warm-up, ~60 s | ~1.8% (65 of 3582; almost all 33 ms) | 60 Hz |
+
+`preferredDisplayModeId=1` and `Window frame rate 59.826 Hz requested as 60.000 (0)` appear in
+logcat within a second of load; dumpsys shows `refresh-rate: 60.00 Hz` / `modeId 1` starting from
+a cold 120 Hz panel (no Mupen residue). An earlier FIXED_SOURCE-only attempt (104510/104512)
+registered a 60 Hz override without switching the mode when
+`supportsFrameRateOverrideByContent=false`.
+
+Emulation-thread work per frame at the defaults stayed about 7–11 ms in the match (59.9 FPS
+mean). Async RDP and busy-wait stay opt-in.
+
 ### Next (not implemented)
 
 - The [2026-09-29 scan of every core](#2026-09-29-scan-of-every-core-accuracy-preserving) below

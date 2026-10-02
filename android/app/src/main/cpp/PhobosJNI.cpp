@@ -616,6 +616,11 @@ Java_com_phobos_emulator_PhobosCore_getFrameTimes(JNIEnv* env, jobject) {
     return result;
 }
 
+extern "C" JNIEXPORT jdouble JNICALL
+Java_com_phobos_emulator_PhobosCore_getRefreshRateHint(JNIEnv*, jobject) {
+    return (jdouble)ares::getRefreshRateHint();
+}
+
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_phobos_emulator_PhobosCore_getVideoGeometry(JNIEnv* env, jobject) {
     ares::VideoGeometry geometry = ares::getVideoGeometry();

@@ -97,6 +97,7 @@ import com.phobos.emulator.ui.touch.TouchLayoutEditor
 import com.phobos.emulator.ui.touch.TouchLayouts
 import com.phobos.emulator.ui.touch.isHidden
 import com.phobos.emulator.ui.touch.touchLayoutKey
+import com.phobos.emulator.util.DisplayRefresh
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -224,6 +225,31 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 val controller = WindowCompat.getInsetsController(window, view)
                 controller.show(WindowInsetsCompat.Type.navigationBars())
                 if (!settings.fullScreenMode) controller.show(WindowInsetsCompat.Type.statusBars())
+            }
+        }
+    }
+
+    // Match the panel to the game's rate (e.g. 60 Hz on a 120 Hz display). Native
+    // ANativeWindow_setFrameRate alone can leave the panel at 120 on some devices;
+    // preferredDisplayModeId is what switches the mode there. Read the live native
+    // hint (not polled perfStats), which unload resets and the core updates ASAP.
+    val activity = view.context as? Activity
+    var contentHz by remember { mutableStateOf(60.0) }
+    LaunchedEffect(isLoaded) {
+        if (!isLoaded || activity == null || viewModel.emulatorScreenReplaced(screen)) return@LaunchedEffect
+        while (true) {
+            val hz = PhobosCore.getRefreshRateHint()
+            if (hz > 1.0) {
+                contentHz = hz
+                DisplayRefresh.preferContentRate(activity, hz)
+            }
+            delay(200)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            if (activity != null && !viewModel.emulatorScreenReplaced(screen)) {
+                DisplayRefresh.clearPreferredDisplayMode(activity)
             }
         }
     }
@@ -388,6 +414,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             settings = settings,
             geometry = videoGeometry,
             systemName = systemName,
+            contentHz = contentHz,
             alignTop = settings.showTouchControls,
             bottomReserve = if (isLoaded && showKeyboard && hasKeyboard) keyboardHeight else 0.dp,
             onTap = {
@@ -532,11 +559,13 @@ private fun GamePicture(
     settings: EmulatorSettings,
     geometry: VideoGeometry?,
     systemName: String,
+    contentHz: Double,
     alignTop: Boolean,
     bottomReserve: Dp,
     onTap: () -> Unit,
 ) {
     val currentOnTap by rememberUpdatedState(onTap)
+    val currentContentHz by rememberUpdatedState(contentHz)
     val density = LocalDensity.current
     // In full screen the status bar is hidden, so keep the picture clear of the camera cutout.
     val cutoutTop: Dp = if (settings.fullScreenMode) with(density) { WindowInsets.displayCutout.getTop(density).toDp() } else 0.dp
@@ -574,13 +603,26 @@ private fun GamePicture(
                         GameInputState.handleMotionEvent(event, viewModel.activeControls.value.mappings, systemName)
                     }
                     holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(h: SurfaceHolder) { PhobosCore.attachSurface(h.surface) }
-                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, h2: Int) { PhobosCore.refreshSurface(h.surface) }
+                        override fun surfaceCreated(h: SurfaceHolder) {
+                            DisplayRefresh.setSurfaceFrameRate(h.surface, currentContentHz)
+                            PhobosCore.attachSurface(h.surface)
+                        }
+                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, h2: Int) {
+                            DisplayRefresh.setSurfaceFrameRate(h.surface, currentContentHz)
+                            PhobosCore.refreshSurface(h.surface)
+                        }
                         override fun surfaceDestroyed(h: SurfaceHolder) {
-                            if (PhobosCore.drawsTo(h.surface)) { viewModel.setPause(true); PhobosCore.detachSurface(h.surface) }
+                            if (PhobosCore.drawsTo(h.surface)) {
+                                DisplayRefresh.clearSurfaceFrameRate(h.surface)
+                                viewModel.setPause(true)
+                                PhobosCore.detachSurface(h.surface)
+                            }
                         }
                     })
                 }
+            },
+            update = { view ->
+                view.holder.surface?.takeIf { it.isValid }?.let { DisplayRefresh.setSurfaceFrameRate(it, contentHz) }
             },
             modifier = Modifier
                 .align(if (atTop) Alignment.TopCenter else Alignment.Center)
