@@ -13,12 +13,16 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,6 +44,7 @@ import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
+import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.ui.theme.LegibleText
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
 import com.phobos.emulator.ui.theme.glassPanel
@@ -450,6 +455,40 @@ fun ZxLoadSpeedItem(current: Int, onSelect: (Int) -> Unit) {
         options = LOAD_SPEEDS,
         label = ::loadSpeedLabel,
         onSelect = onSelect,
+    )
+}
+
+@Composable
+fun ZxTapeControlItem(automatic: Boolean, onSelect: (Boolean) -> Unit) {
+    SettingsDropdownItem(
+        title = "ZX Spectrum Tape Control",
+        description = "Automatic plays the tape while a game's loader reads it and stops it when the game moves on, so multi-load games find their next part. Manual leaves the tape to its buttons.",
+        current = automatic,
+        options = listOf(true, false),
+        label = { if (it) "Automatic" else "Manual" },
+        onSelect = onSelect,
+    )
+}
+
+/** The tape's counter with its rewind and play or stop buttons. */
+@Composable
+fun ZxTapeItem(tape: ZxTape, onPlaying: (Boolean) -> Unit, onRewind: () -> Unit) {
+    val ring = MaterialTheme.colorScheme.primary
+    ListItem(
+        headlineContent = { Text("Tape") },
+        supportingContent = { Text(tape.status) },
+        trailingContent = {
+            Row {
+                IconButton(onClick = onRewind, enabled = tape.positionMs > 0, modifier = Modifier.focusRing(ring, CircleShape)) {
+                    Icon(Icons.Rounded.SkipPrevious, contentDescription = "Rewind the tape")
+                }
+                IconButton(onClick = { onPlaying(!tape.playing) }, modifier = Modifier.focusRing(ring, CircleShape)) {
+                    if (tape.playing) Icon(Icons.Rounded.Pause, contentDescription = "Stop the tape")
+                    else Icon(Icons.Rounded.PlayArrow, contentDescription = "Play the tape")
+                }
+            }
+        },
+        colors = transparentListItemColors(),
     )
 }
 

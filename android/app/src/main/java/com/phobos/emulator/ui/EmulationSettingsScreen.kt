@@ -69,6 +69,7 @@ fun EmulationSettingsScreen(
                     )
                     NgcdLoadSpeedItem(settings.ngcdLoadSpeed) { viewModel.setNgcdLoadSpeed(it) }
                     ZxLoadSpeedItem(settings.zxLoadSpeed) { viewModel.setZxLoadSpeed(it) }
+                    ZxTapeControlItem(settings.zxTapeAuto) { viewModel.setZxTapeAuto(it) }
                 }
             }
         }

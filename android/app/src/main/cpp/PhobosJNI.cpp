@@ -124,6 +124,11 @@ Java_com_phobos_emulator_PhobosCore_setZxLoadSpeed(JNIEnv* env, jobject, jint sp
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setZxTapeAuto(JNIEnv* env, jobject, jboolean enabled) {
+    ares::setZxTapeAuto(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64DebugLogging(JNIEnv* env, jobject, jboolean enabled) {
     ares::setN64DebugLogging(enabled);
 }
@@ -306,9 +311,22 @@ Java_com_phobos_emulator_PhobosCore_setZxTapeMuted(JNIEnv* env, jobject, jboolea
     ares::setZxTapeMuted(muted);
 }
 
-extern "C" JNIEXPORT jint JNICALL
-Java_com_phobos_emulator_PhobosCore_getZxTapeProgress(JNIEnv* env, jobject) {
-    return (jint)ares::getZxTapeProgress();
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_phobos_emulator_PhobosCore_getZxTapeState(JNIEnv* env, jobject) {
+    auto state = ares::getZxTapeState();
+    jintArray result = env->NewIntArray((jsize)state.size());
+    if (result) env->SetIntArrayRegion(result, 0, (jsize)state.size(), state.data());
+    return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setZxTapePlaying(JNIEnv* env, jobject, jboolean play) {
+    ares::setZxTapePlaying(play == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_rewindZxTape(JNIEnv* env, jobject) {
+    ares::rewindZxTape();
 }
 
 extern "C" JNIEXPORT void JNICALL

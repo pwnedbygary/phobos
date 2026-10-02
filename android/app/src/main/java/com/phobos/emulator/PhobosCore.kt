@@ -19,6 +19,7 @@ object PhobosCore {
     external fun setFastForwardSpeed(speed: Float)
     external fun setNgcdLoadSpeed(speed: Int)
     external fun setZxLoadSpeed(speed: Int)
+    external fun setZxTapeAuto(enabled: Boolean)
     external fun setN64DebugLogging(enabled: Boolean)
     external fun setN64Upscale(factor: Int)
     external fun setN64Recompiler(enabled: Boolean)
@@ -115,7 +116,12 @@ object PhobosCore {
     external fun setZxReversePitch(enabled: Boolean)
     external fun setZxKeyBinding(label: String, bit: Int)
     external fun setZxTapeMuted(muted: Boolean)
-    external fun getZxTapeProgress(): Int
+    /** The ZX Spectrum tape: [in (1 or 0), playing (1 or 0), position ms, length ms]. */
+    external fun getZxTapeState(): IntArray
+    /** Plays the tape from where it stands (from its start once it has run out), or stops it. */
+    external fun setZxTapePlaying(play: Boolean)
+    /** Stops the tape at its start. */
+    external fun rewindZxTape()
     external fun getPerformanceStats(): PerformanceStats
     /** Recent frame-to-frame intervals in ms, oldest first (up to 240). */
     external fun getFrameTimes(): FloatArray

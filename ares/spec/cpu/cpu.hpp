@@ -42,6 +42,9 @@ struct CPU : Z80, Z80::Bus, Thread {
   //serialization.cpp
   auto serialize(serializer&) -> void;
 
+  // [Phobos] T-states run since the program started, for the tape deck's loader detection.
+  u64 cycles = 0;
+
 private:
   n1 irqLine;
 };

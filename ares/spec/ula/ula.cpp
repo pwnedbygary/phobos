@@ -153,6 +153,7 @@ auto ULA::in(n16 port) -> n8 {
   value.bit(0, 4) = keys;
   value.bit(5) = 1;
 
+  tapeDeck.detectLoader();
   if (tapeDeck.playing()) {
     value.bit(6) = tapeDeck.read();
   } else {

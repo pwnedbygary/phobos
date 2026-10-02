@@ -831,6 +831,9 @@ namespace ares {
   // The same for a ZX Spectrum game while a loader reads its tape. The tape plays at its real speed,
   // so every loader, custom and protected ones included, sees the timing it expects.
   static std::atomic<s32> zxLoadSpeed{1};
+  // Settings > Emulation and the pause menu: the ZX Spectrum tape plays while a loader reads it and
+  // stops once the game moves on (TapeDeck::detectLoader()), so multi-load games find their next part.
+  static std::atomic<bool> zxTapeAuto{true};
 
   // setValue() skips modify() when the value is unchanged, and the cores only turn interframe
   // blending on in modify(), so it is called either way.
@@ -1210,6 +1213,9 @@ namespace ares {
                 ::ares::Nintendo64::cpu.idleSkip.store(fastForwardAtomic.load(std::memory_order_relaxed),
                                                        std::memory_order_relaxed);
                 #endif
+                // Set before the frame, so a change made in the pause menu applies from the first frame after it.
+                bool zx = isZxKeyboardSystem(localRoot->name());
+                if (zx) ::ares::ZXSpectrum::tapeDeck.autoControl = zxTapeAuto.load(std::memory_order_relaxed);
                 localRoot->run();
                 if (localRoot->name() == "PlayStation") checkPs1MemoryCards();
                 if (ngcdLoadSpeed.load(std::memory_order_relaxed) > 1 && localRoot->name() == "Neo Geo CD") {
@@ -1217,7 +1223,7 @@ namespace ares {
                     if ((cdd.statusCdc & 0x01) && (cdd.control & 0x0100)) loadBoostFrames = 30;
                     else if (loadBoostFrames) loadBoostFrames--;
                     loadBoostSpeed = ngcdLoadSpeed.load(std::memory_order_relaxed);
-                } else if (isZxKeyboardSystem(localRoot->name())) {
+                } else if (zx) {
                     // While a loader reads the playing tape: loaders read its signal about a thousand
                     // times a frame, games reading the keyboard a few dozen, so a game that starts
                     // before its tape ends runs at its real speed. The reads are counted per frame at
@@ -3484,6 +3490,7 @@ else if (port->type() == "Keyboard") {
   auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
   auto setNgcdLoadSpeed(s32 speed) -> void { ngcdLoadSpeed = std::max(1, speed); LOGI("Neo Geo CD loading speed set to %dx", std::max(1, speed)); }
   auto setZxLoadSpeed(s32 speed) -> void { zxLoadSpeed = std::max(1, speed); LOGI("ZX Spectrum tape loading speed set to %dx", std::max(1, speed)); }
+  auto setZxTapeAuto(bool enabled) -> void { zxTapeAuto = enabled; LOGI("ZX Spectrum tape: automatic control %s", enabled ? "on" : "off"); }
   auto setN64DebugLogging(bool enabled) -> void { n64DebugLoggingAtomic = enabled; LOGI("N64 debug logging %s", enabled ? "enabled" : "disabled"); }
   auto resetSystem() -> void {
     resetRequestedAtomic.store(true);
@@ -3972,23 +3979,6 @@ else if (port->type() == "Keyboard") {
     LOGI("ZXTape: audio %s", muted ? "muted" : "unmuted");
   }
 
-  // Tape progress for the loading UI: returns 0..10000 (percent*100) while the
-  // tape is PLAYING, or -1 when not playing / no tape. The UI hides the bar
-  // whenever this is < 0, so a finished tape (playing()==false) correctly hides
-  // the bar instead of showing a stuck 0%.
-  auto getZxTapeProgress() -> s32 {
-    if (!root || !isZxKeyboardSystem(root->name())) return -1;
-    auto tapes = root->find<Node::Tape>();
-    if (tapes.empty()) return -1;
-    auto tape = tapes[0];
-    if (!tape->playing()) return -1;
-    u64 length = tape->length();
-    if (length == 0) return -1;
-    u64 position = tape->position();
-    u64 pct = position * 10000 / length;
-    return (s32)pct;
-  }
-
   // Keyboard-based cores (ZX Spectrum, MSX, ColecoVision keypad): press or
   // release a key by its core input label (e.g. "J", "ENTER", "SPACE BREAK",
   // "RETURN", "F1 F6", "#"). AndroidPlatform::input() sources those buttons
@@ -4008,6 +3998,7 @@ else if (port->type() == "Keyboard") {
   // "Play Tape" button). Without this, Tape::read() returns 0 (stopped) and
   // LOAD "" never receives the tape signal.
   auto playTape() -> bool {
+    std::lock_guard<std::recursive_mutex> lock(*runMutex);
     if (!root || !isZxKeyboardSystem(root->name())) return false;
     // Search the whole tree for the Tape node (the ZX tray nests it under
     // TapeDeck -> Tray; a direct find is more robust than assuming the path).
@@ -4017,8 +4008,52 @@ else if (port->type() == "Keyboard") {
     if (tape->length() == 0) { LOGI("ZXTape: tape empty (length=0)"); return false; }
     tape->setPosition(0);
     tape->play();
+    ::ares::ZXSpectrum::tapeDeck.heldByUser = false;
     LOGI("ZXTape: playing (len=%llu)", (unsigned long long)tape->length());
     return true;
+  }
+
+  // The ZX Spectrum tape for the tape controls: whether one is in, whether it plays, and where it
+  // stands and how long it runs, in milliseconds.
+  auto getZxTapeState() -> std::array<s32, 4> {
+    if (!root || !isZxKeyboardSystem(root->name())) return {};
+    auto& tape = ::ares::ZXSpectrum::tapeDeck.tray.tape.node;
+    if (!tape || tape->length() == 0) return {};
+    u64 hz = std::max<u64>(tape->frequency(), 1);
+    return {1, tape->playing() ? 1 : 0, (s32)(tape->position() * 1000 / hz), (s32)(tape->length() * 1000 / hz)};
+  }
+
+  // Plays the tape from where it stands, or from its start once it has run out, or stops it. The
+  // automatic control leaves a tape the user stopped alone until the game moves on from that load.
+  auto setZxTapePlaying(bool play) -> void {
+    std::lock_guard<std::recursive_mutex> lock(*runMutex);
+    if (!root || !isZxKeyboardSystem(root->name())) return;
+    auto& deck = ::ares::ZXSpectrum::tapeDeck;
+    auto& tape = deck.tray.tape.node;
+    if (!tape || tape->length() == 0) return;
+    if (play) {
+      if (tape->position() >= tape->length()) tape->setPosition(0);
+      deck.heldByUser = false;
+      tape->play();
+    } else {
+      tape->stop();
+      deck.heldByUser = true;
+    }
+    LOGI("ZXTape: %s at %llu of %llu", play ? "played" : "stopped",
+         (unsigned long long)tape->position(), (unsigned long long)tape->length());
+  }
+
+  // Stops the tape at its start.
+  auto rewindZxTape() -> void {
+    std::lock_guard<std::recursive_mutex> lock(*runMutex);
+    if (!root || !isZxKeyboardSystem(root->name())) return;
+    auto& deck = ::ares::ZXSpectrum::tapeDeck;
+    auto& tape = deck.tray.tape.node;
+    if (!tape) return;
+    tape->stop();
+    tape->setPosition(0);
+    deck.heldByUser = false;
+    LOGI("ZXTape: rewound");
   }
 
   auto setNativeLibraryDir(const char* path) -> void { nativeLibraryDir = path ? (string)path : ""; LOGI("Native library dir set: %s", (const char*)nativeLibraryDir); }

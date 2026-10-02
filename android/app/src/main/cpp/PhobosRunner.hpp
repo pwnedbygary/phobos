@@ -1,5 +1,6 @@
 #pragma once
 #include <ares/ares.hpp>
+#include <array>
 #include <jni.h>
 
 namespace ares {
@@ -51,6 +52,7 @@ namespace ares {
   auto setFastForwardSpeed(f32 speed) -> void;
   auto setNgcdLoadSpeed(s32 speed) -> void;
   auto setZxLoadSpeed(s32 speed) -> void;
+  auto setZxTapeAuto(bool enabled) -> void;
   auto setN64DebugLogging(bool enabled) -> void;
   auto saveState(const char* path) -> bool;
   auto loadState(const char* path) -> bool;
@@ -118,12 +120,15 @@ namespace ares {
   auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void;
   auto setKeyboardKey(const char* label, bool pressed) -> void;
   auto playTape() -> bool;
+  // The ZX Spectrum tape: {in, playing, position ms, length ms}.
+  auto getZxTapeState() -> std::array<s32, 4>;
+  auto setZxTapePlaying(bool play) -> void;
+  auto rewindZxTape() -> void;
   auto setZxControlScheme(s32 scheme) -> void;
   auto setZxStickToKeys(bool enabled) -> void;
   auto setZxReversePitch(bool enabled) -> void;
   auto setZxKeyBinding(const char* label, s32 bit) -> void;
   auto setZxTapeMuted(bool muted) -> void;
-  auto getZxTapeProgress() -> s32;
   auto getPerformanceStats() -> PerformanceStats;
   // Most recent frame-to-frame intervals in ms, oldest first; returns how many were written.
   auto getFrameTimes(f32* out, u32 capacity) -> u32;

@@ -14,6 +14,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardHide
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -29,6 +32,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -43,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.PhobosCore
 import com.phobos.emulator.util.ZX_SCHEMES
+import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.zxScheme
 import kotlinx.coroutines.delay
 
@@ -146,8 +151,11 @@ fun ZXKeyboardOverlay(
     onClose: () -> Unit,
     boundKeys: Set<String> = emptySet(),
     keyboardOpacity: Float = 1.0f,
-    // How far a playing tape has loaded, 0 to 1; null when no tape plays.
-    tapeProgress: Float? = null
+    // The tape, shown on the stripe with its controls.
+    tape: ZxTape = ZxTape(),
+    onTapePlaying: (Boolean) -> Unit = {},
+    onTapeRewind: () -> Unit = {},
+    onTapeLoad: () -> Unit = {},
 ) {
     // CUSTOM rebinding: the next controller button is captured by EmulatorScreen's key handler,
     // which sees keys before this overlay could.
@@ -186,17 +194,19 @@ fun ZXKeyboardOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Rainbow stripe, wordmark and the button that puts the keyboard away. While a tape plays,
-            // the stripe is its progress bar: the rainbow fills in from the left as the tape loads.
+            // Rainbow stripe, wordmark, the tape's controls and the button that puts the keyboard away.
+            // While a tape plays or stands part way through, the stripe is its progress bar: the rainbow
+            // fills in from the left as the tape loads.
+            val tapeShown = tape.playing || tape.paused
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(26.dp)
                     .drawBehind {
-                        if (tapeProgress == null) {
+                        if (!tapeShown) {
                             drawRect(Rainbow)
                         } else {
-                            val loaded = size.width * tapeProgress.coerceIn(0f, 1f)
+                            val loaded = size.width * tape.progress
                             drawRect(StripeUnloaded)
                             clipRect(right = loaded) { drawRect(Rainbow) }
                             // The tape's read position.
@@ -215,24 +225,24 @@ fun ZXKeyboardOverlay(
                     letterSpacing = 1.sp,
                     modifier = Modifier.padding(start = 14.dp).weight(1f)
                 )
-                if (tapeProgress != null) {
+                if (tapeShown) {
                     Text(
-                        text = "Loading ${(tapeProgress * 100).toInt()}%",
+                        text = "${if (tape.playing) "Loading" else "Stopped"} ${(tape.progress * 100).toInt()}%",
                         color = Color.Black,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1
                     )
                 }
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(56.dp)
-                        .pointerInput(Unit) { detectTapGestures(onTap = { onClose() }) }
-                ) {
-                    Icon(Icons.Default.KeyboardHide, contentDescription = "Hide the keyboard", tint = Color.Black, modifier = Modifier.size(20.dp))
+                if (tape.inserted) {
+                    StripeButton(Icons.Default.SkipPrevious, "Rewind the tape", onClick = onTapeRewind)
+                    StripeButton(
+                        icon = if (tape.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        description = if (tape.playing) "Stop the tape" else "Play the tape",
+                        onClick = { onTapePlaying(!tape.playing) },
+                    )
                 }
+                StripeButton(Icons.Default.KeyboardHide, "Hide the keyboard", width = 56.dp, onClick = onClose)
             }
 
             // Macro row: one-tap LOAD "", DELETE and BREAK, the tape speed and the control scheme
@@ -256,9 +266,9 @@ fun ZXKeyboardOverlay(
                         listOf(SHIFT, "P"),
                         listOf("ENTER"),
                     ),
-                    // After ENTER, the ROM waits for the tape signal — start the
-                    // tape playback.
-                    onAfterSteps = { PhobosCore.playTape() },
+                    // After ENTER, the ROM waits for the tape signal until it comes
+                    // (or BREAK), so the tape may start a moment later.
+                    onAfterSteps = onTapeLoad,
                     onClearShifts = clearShifts
                 )
                 // DELETE = CAPS SHIFT + 0 and BREAK = CAPS SHIFT + SPACE, as on the real keyboard.
@@ -305,6 +315,21 @@ fun ZXKeyboardOverlay(
                 Key(SPACE, state, weight = 1.25f)
             }
         }
+    }
+}
+
+/** An icon on the keyboard's stripe, with a touch target the stripe's full height. */
+@Composable
+private fun StripeButton(icon: ImageVector, description: String, width: Dp = 44.dp, onClick: () -> Unit) {
+    val currentOnClick by rememberUpdatedState(onClick)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(width)
+            .pointerInput(Unit) { detectTapGestures(onTap = { currentOnClick() }) }
+    ) {
+        Icon(icon, contentDescription = description, tint = Color.Black, modifier = Modifier.size(20.dp))
     }
 }
 

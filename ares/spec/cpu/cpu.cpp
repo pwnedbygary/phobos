@@ -32,6 +32,7 @@ auto CPU::main() -> void {
 }
 
 auto CPU::step(uint clocks) -> void {
+  cycles += clocks;
   Thread::step(clocks);
   Thread::synchronize();
 }

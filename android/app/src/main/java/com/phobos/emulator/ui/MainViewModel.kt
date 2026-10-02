@@ -92,6 +92,7 @@ import com.phobos.emulator.util.N64SaveImportPlan
 import com.phobos.emulator.util.N64SaveKind
 import com.phobos.emulator.util.N64SaveRead
 import com.phobos.emulator.util.N64SaveTransfer
+import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.cueTracks
 import com.phobos.emulator.util.cueWithTracksIn
 import com.phobos.emulator.util.groupDiscSets
@@ -457,6 +458,10 @@ class MainViewModel(
     fun setZxLoadSpeed(speed: Int) = viewModelScope.launch {
         settingsStore.setZxLoadSpeed(speed)
         PhobosCore.setZxLoadSpeed(speed)
+    }
+    fun setZxTapeAuto(enabled: Boolean) = viewModelScope.launch {
+        settingsStore.setZxTapeAuto(enabled)
+        PhobosCore.setZxTapeAuto(enabled)
     }
     fun setFullScreenMode(enabled: Boolean) = viewModelScope.launch { settingsStore.setFullScreenMode(enabled) }
     fun setShowTouchControls(enabled: Boolean) = viewModelScope.launch { settingsStore.setShowTouchControls(enabled) }
@@ -1436,24 +1441,40 @@ class MainViewModel(
     val neoGeoRomLoadFailed: StateFlow<String?> = _neoGeoRomLoadFailed
     fun dismissNeoGeoRomLoadFailed() { _neoGeoRomLoadFailed.value = null }
 
-    // ZX tape-load progress: -1 = no tape playing, else hundredths of a percent (0..10000).
-    // Polled ~10 Hz while a ZX game is loaded, for the keyboard's loading stripe.
-    private val _zxTapeProgress = MutableStateFlow(-1)
-    val zxTapeProgress: StateFlow<Int> = _zxTapeProgress
+    // The ZX Spectrum's tape, polled ~10 Hz while a ZX game is loaded, for the keyboard's stripe and
+    // the tape controls.
+    private val _zxTape = MutableStateFlow(ZxTape())
+    val zxTape: StateFlow<ZxTape> = _zxTape
+
+    private fun refreshZxTape() {
+        val next = if (_isLoaded.value && currentSystemName.contains("ZX Spectrum", ignoreCase = true)) {
+            ZxTape.of(PhobosCore.getZxTapeState())
+        } else ZxTape()
+        if (next != _zxTape.value) _zxTape.value = next
+    }
 
     init {
-        // Poll tape progress for the ZX keyboard's loading stripe.
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
-                val loaded = _isLoaded.value
-                val sys = currentSystemName
-                val next = if (loaded && (sys.contains("ZX Spectrum", ignoreCase = true))) {
-                    PhobosCore.getZxTapeProgress()
-                } else -1
-                if (next != _zxTapeProgress.value) _zxTapeProgress.value = next
+                refreshZxTape()
                 delay(100)
             }
         }
+    }
+
+    fun setZxTapePlaying(play: Boolean) = viewModelScope.launch(Dispatchers.Default) {
+        PhobosCore.setZxTapePlaying(play)
+        refreshZxTape()
+    }
+
+    fun playZxTapeFromStart() = viewModelScope.launch(Dispatchers.Default) {
+        PhobosCore.playTape()
+        refreshZxTape()
+    }
+
+    fun rewindZxTape() = viewModelScope.launch(Dispatchers.Default) {
+        PhobosCore.rewindZxTape()
+        refreshZxTape()
     }
 
     // Current emulated system name ("Nintendo 64", "PlayStation", ...) — used by
@@ -1657,6 +1678,7 @@ class MainViewModel(
             PhobosCore.setFastForwardSpeed(settings.value.fastForwardSpeed)
             PhobosCore.setNgcdLoadSpeed(settings.value.ngcdLoadSpeed)
             PhobosCore.setZxLoadSpeed(settings.value.zxLoadSpeed)
+            PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
             PhobosCore.setN64CpuOverclock(if (settings.value.n64UseDefaultCpuOverclock) 0 else settings.value.n64CpuOverclock)
@@ -2647,6 +2669,7 @@ class MainViewModel(
             PhobosCore.setFastForwardSpeed(currentSettings.fastForwardSpeed)
             PhobosCore.setNgcdLoadSpeed(currentSettings.ngcdLoadSpeed)
             PhobosCore.setZxLoadSpeed(currentSettings.zxLoadSpeed)
+            PhobosCore.setZxTapeAuto(currentSettings.zxTapeAuto)
             PhobosCore.setCustomDriverPath(currentSettings.customDriverPath)
             PhobosCore.setPs1AnalogMode(currentSettings.ps1AnalogMode)
             PhobosCore.setN64ExpansionPak(currentSettings.n64ExpansionPak)

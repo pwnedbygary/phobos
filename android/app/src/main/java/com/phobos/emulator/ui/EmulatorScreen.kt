@@ -412,9 +412,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
             )
         }
 
-        // ── ZX Spectrum keyboard, whose rainbow stripe shows a loading tape's progress ──
-        // Progress = 0..10000 (percent * 100); -1 = no tape playing.
-        val tapeProgress by viewModel.zxTapeProgress.collectAsState()
+        // ── ZX Spectrum keyboard, whose rainbow stripe shows the tape's progress and controls ──
+        val zxTape by viewModel.zxTape.collectAsState()
         if (isLoaded && showKeyboard && isZx) {
             ZXKeyboardOverlay(
                 modifier = Modifier
@@ -429,7 +428,10 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 onClose = { showKeyboard = false },
                 boundKeys = (settings.zxKeyBindings[systemName] ?: emptyMap()).keys,
                 keyboardOpacity = settings.zxKeyboardOpacity,
-                tapeProgress = tapeProgress.takeIf { it >= 0 }?.let { it / 10000f },
+                tape = zxTape,
+                onTapePlaying = { viewModel.setZxTapePlaying(it) },
+                onTapeRewind = { viewModel.rewindZxTape() },
+                onTapeLoad = { viewModel.playZxTapeFromStart() },
             )
         }
 
