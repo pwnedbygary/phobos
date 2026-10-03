@@ -716,6 +716,14 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## N64 hack bugs narrowed — 2026-10-03
+
+Docs only (branch `cursor/n64-hack-notes-2b67`, stacked on `cursor/cleanups-2b67`). The plan rows "Super Mario 64
+B3313 v1.0.2 Hotfix 3 stops at boot" and "F-Zero ZX Overdrive's picture" have what N64 Debug Logging showed: B3313
+v1.0.2 boots into RAM and spins taking exceptions, and Overdrive runs but its scanned-out framebuffer stays black.
+On the RP6, N64 Debug Logging was switched on and Asynchronous RDP off for the runs, then both were set back
+(logging off, Asynchronous RDP on); Phobos was force-stopped after each run, so no auto state was written.
+
 ## Cleanups — 2026-10-03
 
 Branch `cursor/cleanups-2b67`: the cleanups the user picked on 2026-10-03.
