@@ -7,9 +7,11 @@ import java.util.zip.ZipInputStream
 
 /**
  * What a firmware file is, judged by its content alone (its name plays no part): the SHA-256 of the bytes the
- * loader uses, the file itself or the first file in a zip, and for a zip the CRC32s of all its files.
+ * loader uses, the file itself or the first file in a zip, and for a zip the CRC32s of all its files. A file 512
+ * bytes past a multiple of 8 KiB also has the SHA-256 of what follows those 512 bytes, a copier's header, which
+ * some PC Engine card dumps carry.
  */
-data class FirmwareContent(val sha256: String?, val zipCrcs: Set<String> = emptySet())
+data class FirmwareContent(val sha256: String?, val zipCrcs: Set<String> = emptySet(), val unheaderedSha256: String? = null)
 
 /** What a slot's file is to it: a known-good dump, some other file, or a file the app can't open. */
 enum class FirmwareStatus { Verified, Unrecognized, Unreadable }
@@ -97,13 +99,20 @@ object FirmwareIds {
     val builtIn = setOf(
         "fw_32x_g", "fw_32x_m", "fw_32x_s", "fw_zx48", "fw_zx128", "fw_zx128_sub",
         "fw_n64_pif_ntsc", "fw_n64_pif_pal", "fw_gb_boot", "fw_gbc_boot",
+        "fw_msx", "fw_msx2_main", "fw_msx2_sub",
     )
+
+    /** PC Engine card slots: their loader drops a copier's 512-byte header (pak() in PhobosRunner.cpp). */
+    private val headerStripped = setOf("fw_pce_cd_1_jp", "fw_pce_cd_3_jp", "fw_pce_cd_3_us", "fw_pce_cd_ge_jp", "fw_supergrafx_ac_jp")
 
     /** The slots [content] is a known-good dump for. */
     fun slotsFor(content: FirmwareContent): Set<String> {
         zipSets.firstOrNull { (crcs, _) -> content.zipCrcs.containsAll(crcs) }?.let { return it.second }
-        val hash = content.sha256 ?: return emptySet()
-        return sha256.filterValues { hash in it }.keys
+        val hash = content.sha256
+        val unheadered = content.unheaderedSha256
+        return sha256.filter { (key, hashes) ->
+            (hash != null && hash in hashes) || (unheadered != null && key in headerStripped && unheadered in hashes)
+        }.keys
     }
 
     fun isVerified(key: String, content: FirmwareContent?): Boolean = content != null && key in slotsFor(content)
@@ -127,34 +136,52 @@ fun firmwareContentOf(input: InputStream): FirmwareContent {
         read += n
     }
     buffered.reset()
-    if (!isZipSignature(head.copyOf(read))) return FirmwareContent(sha256Of(buffered))
-    var first: String? = null
+    if (!isZipSignature(head.copyOf(read))) {
+        val hashes = hashesOf(buffered)
+        return FirmwareContent(hashes.sha256, unheaderedSha256 = hashes.unheaderedSha256)
+    }
+    var first: Hashes? = null
     val crcs = mutableSetOf<String>()
     ZipInputStream(buffered).use { zip ->
         while (true) {
             val entry = zip.nextEntry ?: break
             if (entry.isDirectory) continue
             val crc = CRC32()
-            val sha = sha256Of(zip, crc)
+            val hashes = hashesOf(zip, crc)
             crcs += "%08x".format(crc.value)
-            if (first == null) first = sha
+            if (first == null) first = hashes
         }
     }
-    return FirmwareContent(first, crcs)
+    return FirmwareContent(first?.sha256, crcs, first?.unheaderedSha256)
 }
 
-/** The SHA-256 of what's left of [input], whose bytes also go to [crc]. */
-private fun sha256Of(input: InputStream, crc: CRC32? = null): String {
+private const val COPIER_HEADER = 512
+
+private class Hashes(val sha256: String, val unheaderedSha256: String?)
+
+/**
+ * The SHA-256 of what's left of [input], whose bytes also go to [crc], and when it runs 512 bytes past a multiple
+ * of 8 KiB, the SHA-256 of what follows those 512 bytes.
+ */
+private fun hashesOf(input: InputStream, crc: CRC32? = null): Hashes {
     val digest = MessageDigest.getInstance("SHA-256")
+    val pastHeader = MessageDigest.getInstance("SHA-256")
     val buffer = ByteArray(64 * 1024)
+    var total = 0L
     while (true) {
         val n = input.read(buffer)
         if (n < 0) break
         digest.update(buffer, 0, n)
         crc?.update(buffer, 0, n)
+        val skip = (COPIER_HEADER - total).coerceIn(0L, n.toLong()).toInt()
+        if (skip < n) pastHeader.update(buffer, skip, n - skip)
+        total += n
     }
-    return digest.digest().joinToString("") { "%02x".format(it) }
+    val unheadered = if (total % 8192 == COPIER_HEADER.toLong()) hex(pastHeader.digest()) else null
+    return Hashes(hex(digest.digest()), unheadered)
 }
+
+private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
 
 /**
  * The slots a scan sets and the URI each gets: every slot whose current file isn't a verified dump takes a

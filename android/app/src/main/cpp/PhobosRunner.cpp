@@ -2355,7 +2355,9 @@ namespace ares {
 
       string systemPath = string{homePath, "/System/", nodeName, "/"};
 
-      auto attachFile = [&](string fileName, string vfsName = "") {
+      // stripCopierHeader: a PC Engine card dump 512 bytes past a multiple of 8 KiB carries a copier's
+      // header, which the core would read as the start of the BIOS.
+      auto attachFile = [&](string fileName, string vfsName = "", bool stripCopierHeader = false) {
           if (!vfsName) vfsName = fileName;
           string filePath;
           if (fileName.find("/")) filePath = fileName;
@@ -2370,6 +2372,10 @@ namespace ares {
           }
 
           auto data = nall::file::read(filePath);
+          if (stripCopierHeader && data.size() % 8_KiB == 512) {
+              data.erase(data.begin(), data.begin() + 512);
+              LOGI("VFS: Dropped the 512-byte copier header of %s", (const char*)fileName);
+          }
           if (data.size()) {
               if (auto fp = vfs::memory::open(data)) {
                   dir->append(vfsName, fp);
@@ -2621,10 +2627,10 @@ namespace ares {
       } else if (nodeName == "PC Engine" || nodeName == "SuperGrafx" || nodeName == "PC Engine Duo" || nodeName == "PC Engine CD") {
           bool attached = false;
           auto it_pce = firmwareMap.find("fw_pce_cd_3_jp");
-          if (it_pce != firmwareMap.end()) attached = attachFile((const char*)it_pce->second, "bios.rom");
+          if (it_pce != firmwareMap.end()) attached = attachFile((const char*)it_pce->second, "bios.rom", true);
           if (!attached) {
               auto it_ge = firmwareMap.find("fw_pce_cd_ge_jp");
-              if (it_ge != firmwareMap.end()) attached = attachFile((const char*)it_ge->second, "bios.rom");
+              if (it_ge != firmwareMap.end()) attached = attachFile((const char*)it_ge->second, "bios.rom", true);
           }
           if (!attached) attached = attachFile("bios.rom");
           // The Duo is the PC Engine model with the CD unit (PC Engine CD games).

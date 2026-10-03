@@ -714,6 +714,16 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## Headered PC Engine card dumps — 2026-10-03
+
+Branch `cursor/headered-system-cards-2b67`, stacked on `cursor/msx-tape-speed-2b67`. The plan row "Headered PC
+Engine card dumps" has the details.
+
+- **Checks run:** both flavors build, 233 host tests pass (new: `aPcEngineCardDumpIsKnownWithoutItsCopierHeader`,
+  `theUnheaderedHashIsWhatFollowsACopiersHeader`). On the RP6, `tail -c +513 syscard1.pce | sha256sum` gave
+  ares's System Card 1.0 hash (the file never left the device), and the Firmware screen showed that slot Verified.
+- **Not checked:** a headered System Card 3.0 or Games Express card booting a game (the RP6's are unheadered).
+
 ## MSX tape loading speed — 2026-10-03
 
 Branch `cursor/msx-tape-speed-2b67`, stacked on `cursor/msx-tapes-2b67`. The plan row "MSX tape loading speed" has

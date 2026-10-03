@@ -99,4 +99,24 @@ class FirmwareIdsTest {
         )
         assertEquals(mapOf("fw_ms_eu" to "uri:a"), firmwareAssignments(found, setOf("fw_ms_us")))
     }
+
+    @Test
+    fun aPcEngineCardDumpIsKnownWithoutItsCopierHeader() {
+        val headeredSystemCard3 = FirmwareContent("0".repeat(64), unheaderedSha256 = systemCard3)
+        assertEquals(setOf("fw_pce_cd_3_jp", "fw_supergrafx_ac_jp"), FirmwareIds.slotsFor(headeredSystemCard3))
+        // Only the PC Engine card slots' loader drops a header.
+        assertEquals(emptySet<String>(), FirmwareIds.slotsFor(FirmwareContent("0".repeat(64), unheaderedSha256 = psxUs)))
+    }
+
+    @Test
+    fun theUnheaderedHashIsWhatFollowsACopiersHeader() {
+        val card = ByteArray(16 * 1024) { (it * 7).toByte() }
+        val headered = ByteArray(512) { 0x55 } + card
+        val content = firmwareContentOf(headered.inputStream())
+        assertEquals(sha256(headered), content.sha256)
+        assertEquals(sha256(card), content.unheaderedSha256)
+        assertEquals(null, firmwareContentOf(card.inputStream()).unheaderedSha256)
+        // A zipped dump is its first file, as the load-time copy extracts it.
+        assertEquals(sha256(card), firmwareContentOf(zip("syscard.pce" to headered).inputStream()).unheaderedSha256)
+    }
 }
