@@ -6,6 +6,7 @@ namespace ares::PlayStationPortable {
 #include "interpreter-ipu.cpp"
 #include "interpreter-scc.cpp"
 #include "interpreter-fpu.cpp"
+#include "interpreter-vfpu.cpp"
 #include "exceptions.cpp"
 #include "recompiler.cpp"
 #include "recompiler-ipu.cpp"
@@ -14,6 +15,8 @@ namespace ares::PlayStationPortable {
 auto Allegrex::power(u32 entry) -> void {
   ipu = {};
   fpu = {};
+  vfpu = {};
+  vfpuPrefixesUsed();
   scc = {};
   pipeline = {};
   ipu.pc = entry;

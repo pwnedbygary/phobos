@@ -217,6 +217,9 @@ struct Machine {
   auto fpr(uint32_t index) const -> uint32_t { return cpu.fpu.r[index]; }
 };
 
+//vfpu.cpp
+auto vfpuTests() -> Tests;
+
 inline int failures = 0;
 inline const char* currentTest = "";
 

@@ -742,6 +742,19 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 3: the VFPU — 2026-10-03
+
+Branch `cursor/psp-vfpu-ares-2b67`, stacked on part 2 (`cursor/psp-recompiler-2b67`), for the user to review.
+[psp-core.md](psp-core.md#part-3-the-vfpu) has what it covers and assumes.
+
+- **What it is:** `ares/psp/cpu/interpreter-vfpu.cpp`, every VFPU instruction in ares's style (one function per
+  mnemonic, decoder tables in `interpreter.cpp`), from the earlier stashed work rewritten. Two of its old test
+  expectations were wrong and are fixed: vcst 8 is pi/2 (the constants are numbered from 1), and a prefix
+  constant is picked by the swizzle and absolute bits together. The recompiler runs it through the interpreter.
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 51 groups pass on the Mac (UBSan) and in `phobos-linux` (GCC
+  13, ASan and UBSan): ten VFPU groups on both engines, and the generated programs now mix in VFPU instructions.
+- **The stashes** `stash@{0}` and `stash@{1}` (the VFPU work before the rewrite) are now superseded.
+
 ## PSP core, part 2: the recompiler — 2026-10-03
 
 Branch `cursor/psp-recompiler-2b67`, stacked on part 1 (`cursor/psp-core-2b67`), for the user to review. As the user
