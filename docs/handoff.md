@@ -742,6 +742,21 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 1: the Allegrex CPU — 2026-10-03
+
+Branch `cursor/psp-core-2b67`, for the user to review. The user chose an original PSP core over PPSSPP (whose GPL
+can't cover the firmware compiled into the native library), with PPSSPP readable as a reference, the published keys
+for retail executables, and firmware optional per module family. [psp-core.md](psp-core.md) has the decisions,
+sources, design and phases.
+
+- **Part 1:** `psp/cpu/allegrex.cpp`, an interpreter for the Allegrex's integer and FPU instructions (the VFPU is
+  part 2), plain C++20 with no ares dependency. Not in the app.
+- **Checks run:** `tests/allegrex/run-tests.sh` on the Mac, 14 groups pass with the undefined-behavior sanitizer
+  (the address sanitizer's runtime hangs at start on this macOS, so the script uses it on Linux only); the new
+  PSP Core Tests workflow runs both sanitizers. The binutils Allegrex test's assembled examples serve as vectors.
+- **Not checked against hardware:** division by zero, FPU arithmetic outside round-to-nearest, conversions of NaN
+  or out-of-range values (psp-core.md lists what the code assumes).
+
 ## N64 hack bugs narrowed — 2026-10-03
 
 Docs only (branch `cursor/n64-hack-notes-2b67`, stacked on `cursor/cleanups-2b67`). The plan rows "Super Mario 64

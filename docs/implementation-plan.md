@@ -157,7 +157,11 @@ lands as its own PR; the inventory rows below have the details.
    Arcade (Aleck64 and SG-1000A), PC Engine CD, LaserActive (Mega LD and
    PC Engine LD) and Pocket Challenge V2 are on master (rows below). The platform tiles remain:
    the Phobos, Pixel and Manga packs are a first pass beside Systematic.
-7. **Libretro host and PSP (PPSSPP)**, relicensing to GPL-3.0-or-later. Not a
+7. **PSP**, as an original core written for Phobos (the user's choice,
+   2026-10-03; [psp-core.md](psp-core.md)): high-level emulation of the OS,
+   firmware optional per module family; part 1, the Allegrex CPU, is on branch
+   `cursor/psp-core-2b67`. First planned as a **libretro host and PSP
+   (PPSSPP)**, relicensing to GPL-3.0-or-later. Not a
    strict port: enhancements and performance gains are welcome, with accuracy
    first. **Parked 2026-10-03:** the user keeps the firmware ares ships, which
    can't go under the GPL, so no GPL core (PPSSPP, Flycast) comes in for now.
