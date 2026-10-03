@@ -402,14 +402,16 @@ in `GlassContrastTest`. `GlassBuilder` keeps the gloss and shade weak enough for
 falls back to when no see-through one passes. `CatalogBackdrop` (`data/BackdropCatalog.kt`) lists every scene of every
 style for the screensaver, so a new scene goes in its style's enum and there; `CatalogBackdropView`
 draws any of them in the current theme's colors. The screensaver lives in `MainScaffold`: an effect
-keyed on the delay, an idle counter, the route and the binding capture shows it after the delay,
-never on `NO_SCREENSAVER_ROUTES` or during a capture. While it shows,
+keyed on the delay, an idle counter, the route, the binding capture and the dialog and menu hold
+shows it after the delay, never on `NO_SCREENSAVER_ROUTES`, during a capture or while held. While
+it shows, the page backdrop fades out and leaves composition, as behind the game;
 `MainViewModel.consumeScreensaverInput()` makes the window callback drop keys, and a `BackHandler`
 takes Back, which predictive back delivers without that callback. Input bumps the idle counter only
 while the screensaver could arm, since each bump recomposes the scaffold. Dialogs and menus take
 input in windows of their own, so `PhobosAlertDialog`, `PhobosDropdownMenu` and the Driver
-Manager's dialogs call `HoldScreensaver()`, which keeps it from arming while they're open; a new
-dialog or menu outside those should call it too. The Library's console art
+Manager's dialogs call `HoldScreensaver()`, which keeps it from arming while they're open, however
+long. It counts only under the `LocalScreensaverHold` that `MainScaffold` provides to the pages and
+to its own dialogs, so a new dialog or menu should call it within those. The Library's console art
 goes through `systemIconSlug` (`ui/PlatformIcons.kt`): Systematic's SVG for the slug, or for the
 Phobos, Pixel and Manga packs a glyph from `ui/theme/PlatformGlyphs.kt` drawn by
 `PlatformGlyphArt.kt`. A new system needs a slug, listed in `systemIconSlugs` with a glyph
