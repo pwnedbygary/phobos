@@ -45,7 +45,7 @@ struct VFPUSegment { s32 c0, m, n, e; };
 
 //A table's result at a 23-bit index, as float bits. The tables cover rcp over [1, 2), rsq and sqrt over [1, 4)
 //(the index drops the input's lowest bit), exp2 over [1, 2), cos over a quarter turn and asin over [0, 1); each
-//function scales from there.
+//function scales from there. (log2's table is fixed point instead: vfpuLog2() reads it.)
 static auto interpolate(const VFPUSegment* segments, u32 index) -> u32 {
   auto& segment = segments[index >> 16];
   s64 x2 = index & 0xffff;
@@ -200,6 +200,42 @@ static auto vfpuArcsine(u32 bits) -> u32 {
   if(x.nan() || x.exponent > 127 || (x.exponent == 127 && x.mantissa)) return 0x7f80'0001 | x.sign;
   if(x.exponent == 127) return x.sign | 0x3f80'0000;
   return x.sign | interpolate(asinSegments, u32(fixed23(FloatParts{bits & 0x7fff'ffff})));
+}
+
+//value * 2^-point as float bits, for a positive value of at most 24 significant bits (so it's exact).
+static auto fixedBits(u64 value, s32 point) -> u32 {
+  if(!value) return 0;
+  s32 top = 63 - std::countl_zero(value);  //where the leading one is
+  u32 mantissa = u32(top > 23 ? value >> (top - 23) : value << (23 - top)) & 0x7f'ffff;
+  return u32(top - point + 127) << 23 | mantissa;
+}
+
+//log2 of x = 2^p * (1 + f) is p + log2(1 + f), and log2's table holds log2(1 + f) in fixed point, in units of
+//2^-24 in every segment. The result is fixed point too, so how precise it is depends on its size, not as a float:
+//- From 1 up (p >= 0): p plus the table's value, truncated to 22 bits after the point, and to 23 significant bits
+//  once p needs some of them. (From 4 up the PSP sometimes gives one unit less: not worked out yet.)
+//- Below 1 (p < 0): the PSP takes a cheaper path, a straight line through the segment: its first value cut to 17
+//  bits after the point, its slope with the low 9 bits dropped, and no squared term. The result's magnitude,
+//  |p| - log2(1 + f), is truncated to 15 bits after the point whatever its size, so just below 1 it's -0.
+static auto vfpuLog2(u32 bits) -> u32 {
+  FloatParts x{bits};
+  if(x.nan() || (x.sign && !x.zero())) return 0x7f80'0001;  //negative numbers have no logarithm
+  if(x.zero()) return 0xff80'0000;                            //-infinity, for either zero (denormals too)
+  if(x.infinite()) return 0x7f80'0000;
+  s64 p = s64(x.exponent) - 127;
+  auto& segment = log2Segments[x.mantissa >> 16];
+  s64 x2 = x.mantissa & 0xffff;
+  if(p < 0) {
+    s64 first = segment.c0 + 2 * segment.n;  //the segment's first value: its squared term is 2n there (u = 1024)
+    s64 line = (first >> 7 << 15) + (segment.m >> 9) * x2;  //log2(1 + f), in units of 2^-32
+    s64 magnitude = ((-p << 32) - line) >> 17;              //|log2 x|, in units of 2^-15
+    return 0x8000'0000 | fixedBits(magnitude, 15);
+  }
+  s64 t = (x2 >> 6) - 512;
+  s64 u = (t * t + 255) >> 8;
+  s64 value = (p << 24) + segment.c0 + (segment.m * x2 >> 17) + (segment.n * u >> InterpolatorScale);
+  s32 drop = std::max(2, 63 - std::countl_zero(u64(value)) - 22);  //22 bits after the point, 23 significant
+  return fixedBits(u64(value) >> drop << drop, 24);
 }
 
 //Half-precision floats (16 bits: sign, 5-bit exponent, 10-bit mantissa), as vfim, vf2h and vh2f use them. Neither
@@ -849,7 +885,7 @@ auto Allegrex::VLGB(u8 vd, u8 vs, u32 size) -> void {
 }
 
 auto Allegrex::VLOG2(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return std::log2(s); }, NaNSign::Positive);
+  vfpuUnaryBits(vd, vs, size, vfpuLog2);
 }
 
 auto Allegrex::VMAX(u8 vd, u8 vs, u8 vt, u32 size) -> void {

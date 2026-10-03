@@ -742,6 +742,18 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: VFPU log2 exact below 4 — 2026-10-03
+
+A third commit on `cursor/psp-vfpu-exact-2b67`. `vlog2`'s table is fixed point (units of 2^-24 over [1, 2)),
+which the same interpolator fits; the core adds the exponent as a whole number and truncates to 22 bits after the
+point and 23 significant bits. Below 1 the PSP takes a cheaper path, found from the full sweep: a straight line
+per segment (the table's first value cut to 17 bits after the point, its slope missing its low 9 bits, no squared
+term) and the magnitude truncated to 15 bits after the point, whatever its size; `fit.py` checks it against all
+2^23 results below 1. Exact on all 16.8 million results from 1/2 up to 2 and on every spread-out input below 4;
+from 4 up about half are one unit high (88.35% of the spread-out set overall), which needs whole binades above 4
+from a second round of measurements. The measured group replays vlog2's spread-out sample (inputs below 4) and
+every 1024th result from 1/2 up to 2.
+
 ## PSP core: VFPU sine and cosine exact — 2026-10-03
 
 A second commit on `cursor/psp-vfpu-exact-2b67`: the table behind `vsin` and `vcos` turned out to be cosine's (sine

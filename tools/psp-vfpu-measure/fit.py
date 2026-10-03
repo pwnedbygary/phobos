@@ -10,7 +10,9 @@
 # 256s). The result, in units of 2^(e - 150) (so a float's 24-bit significand when its exponent is e), is
 #     c0 + floor(m * x2 / 2^17) + floor(n * u / 2^Q)
 # truncated to a multiple of 4 (22 bits) in the segment's own binade, and made a float. Q is one constant, found
-# here too. The table behind vsin and vcos is cosine's: sine is it read backwards. log2 doesn't fit this model yet.
+# here too. The table behind vsin and vcos is cosine's: sine is it read backwards. log2's table is fixed point
+# instead: every segment works in units of 2^-24 (log2 over [1, 2) is between 0 and 1), and the core adds the
+# input's exponent to it (see vfpuLog2() for that, and for the cheaper path the PSP takes below 1).
 #
 # Everything below is fitted from the measurements alone: nothing comes from PPSSPP's code or tables.
 
@@ -129,6 +131,19 @@ def fit_function(name, indexed, q, fixed=None, significant=False):
     return table
 
 
+def check_log2_below_one(table, results):
+    """Below 1 the PSP takes a straight line through each segment of log2's table: its first value cut to 17 bits
+    after the point, its slope with the low 9 bits dropped, no squared term; and it truncates the magnitude
+    |log2 x| to 15 bits after the point. True if that reproduces every result from 1/2 up to 1 (as vfpuLog2()
+    computes it), so the table still serves both paths."""
+    index = np.arange(1 << 23, dtype=np.int64)
+    c0, m, n, _ = (np.array(column, dtype=np.int64)[index >> 16] for column in zip(*table))
+    line = (((c0 + 2 * n) >> 7) << 15) + (m >> 9) * (index & 0xffff)  # units of 2^-32
+    magnitude = ((1 << 32) - line) >> 17  # |log2 x| in units of 2^-15, for x = (1 + index / 2^23) / 2
+    expected = (magnitude.astype(np.float64) * 2.0**-15).astype(np.float32).view(np.uint32) | 0x80000000
+    return bool((expected == results).all())
+
+
 def write_header(path, q, tables):
     with open(path, "w") as out:
         out.write(
@@ -151,26 +166,31 @@ def main():
     folder = sys.argv[1]
     header = sys.argv[2] if len(sys.argv) > 2 else None
     load = lambda name: np.fromfile(f"{folder}/{name}.bin", dtype="<u4")
-    #name: results by 23-bit index (the others are read from these: vrexp2 is exp2's backwards, vsin cos's, and
-    #vnrcp and vnsin are negations)
+    #name: results by 23-bit index, and the one base of a fixed-point table (the others are read from these:
+    #vrexp2 is exp2's backwards, vsin cos's, and vnrcp and vnsin are negations)
     functions = {
-        "rcp": load("vrcp-1-2"),
-        "rsq": load("vrsq-1-4")[0::2],
-        "sqrt": load("vsqrt-1-4")[0::2],
-        "exp2": load("vexp2-1-2"),
-        "cos": load("vcos-fixed"),
-        "asin": load("vasin-fixed")[: 1 << 23],
+        "rcp": (load("vrcp-1-2"), None),
+        "rsq": (load("vrsq-1-4")[0::2], None),
+        "sqrt": (load("vsqrt-1-4")[0::2], None),
+        "exp2": (load("vexp2-1-2"), None),
+        "cos": (load("vcos-fixed"), None),
+        "asin": (load("vasin-fixed")[: 1 << 23], None),
+        "log2": (load("vlog2-half-2")[1 << 23:], 126),  #from 1 up to 2; units of 2^-24 (2^(126 - 150))
     }
     for q in range(9, 15):
         tables = {}
-        for name, indexed in functions.items():
-            table = fit_function(name, indexed, q)
+        for name, (indexed, fixed) in functions.items():
+            table = fit_function(name, indexed, q, fixed)
             print(f"Q = {q}: {name}: {'all 2^23 results reproduced' if table else 'no fit'}")
             if not table:
                 break
             tables[name] = table
         if len(tables) == len(functions):
             print(f"every function fits with Q = {q}")
+            below = check_log2_below_one(tables["log2"], load("vlog2-half-2")[: 1 << 23])
+            print(f"log2 below 1: {'all 2^23 results reproduced' if below else 'the straight line does not fit'}")
+            if not below:
+                return
             if header:
                 write_header(header, q, tables)
                 print(f"wrote {header}")

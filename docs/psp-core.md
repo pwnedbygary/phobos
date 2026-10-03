@@ -164,18 +164,18 @@ The random number generator is the hardware's, as fp64 worked it out from a PSP'
 a linear congruential generator, a xorshift and a Pell-like sequence with a carry, added together, their state
 packed into the eight RCX registers (`vfpuRandom()`); `vrnds` spreads its seed over them; `vrndi` and `vrndf`
 fill lanes from the last back, and their destination prefix only reaches the last lane. Implemented from that
-description (no PPSSPP code), and checked against the states fp64 recovered from a PSP for the first draws after
-power on. The carry's rule matched all of his data, but isn't understood, and those first draws don't exercise it.
+description (no PPSSPP code), and checked against the user's PSP: its state at power on and the numbers of 64
+seeds all match, including those that exercise the carry (psp-vfpu-measurements.md).
 
 The math functions `vrcp`, `vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2`, `vsin`, `vcos`, `vnsin` and `vasin` (and
 `vrot`'s sine and cosine) are the PSP's own: its quadratic interpolator with coefficients fitted from our
 measurements (`vfpu-segments.hpp`, from `tools/psp-vfpu-measure/fit.py`), exact on every measured input; see
-psp-vfpu-measurements.md.
+psp-vfpu-measurements.md. So is `vlog2` below 4, from a fixed-point table and a cheaper straight-line path below 1;
+from 4 up about half its results are one unit above the PSP's, which drops more precision there.
 
-Not checked against hardware: `vlog2` (still computed in double precision, so its last bits differ from a PSP's),
-`vrot` on its own (it uses vsin's and vcos's), `vwbn` (implemented from its description; no test), and what
-reserved size combinations do
-(they raise ReservedInstruction, and leave the prefixes). Which instructions use up the prefixes: every VFPU
+Not checked against hardware: `vrot` on its own (it uses vsin's and vcos's), `vwbn` (implemented from its
+description; no test), and what reserved size combinations do (they raise ReservedInstruction, and leave the
+prefixes). Which instructions use up the prefixes: every VFPU
 arithmetic instruction, and `vnop`, as pspdev's documentation says (PPSSPP keeps them through `vnop`, but the
 documentation rests on tests on hardware); not `vsync`, `vflush`, `vmfvc` and `vmtvc`, which the documentation
 doesn't cover, as in PPSSPP; nor the loads, stores and moves to integer registers.

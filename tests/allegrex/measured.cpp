@@ -4,10 +4,11 @@
 //the rest of the measurements, which are kept outside the repository.
 //
 //Covered here: the random number generator (its start, 64 seeds of 4096 draws, vrndi.q's lanes); vadd, vsub,
-//vmul and vdiv on a million spread-out inputs between them (NaN results included); and the first 16384 spread-out
+//vmul and vdiv on a million spread-out inputs between them (NaN results included); the first 16384 spread-out
 //results of each math function the core computes exactly (vrcp, vnrcp, vrsq, vsqrt, vexp2, vrexp2, vsin, vnsin,
-//vcos, vasin: the *-spread-16k files, which start the full *-spread files). vdot's file is kept for when the core
-//sums its products as the PSP does.
+//vcos, vasin: the *-spread-16k files, which start the full *-spread files); and vlog2, except from 4 up, where the
+//PSP sometimes gives one unit less than the core (its spread-out results, and every 1024th result from 1/2 up to
+//2). vdot's file is kept for when the core sums its products as the PSP does.
 
 #include "harness.hpp"
 
@@ -90,17 +91,40 @@ static auto measuredArithmetic(const char* name, uint32_t instruction, uint32_t 
 }
 
 //A math function's first results on spread-out inputs: per quad, four inputs from the generator in C000, the
-//results in C010.
-static auto measuredFunction(const char* name, uint32_t instruction, uint32_t seed) -> void {
+//results in C010. checked picks the inputs whose results the core must match (all of them if not given).
+static auto measuredFunction(const char* name, uint32_t instruction, uint32_t seed,
+                             bool (*checked)(uint32_t input) = nullptr) -> void {
   auto hardware = loadMeasured(name);
   CHECK(hardware.size(), 16384);
   if(hardware.size() != 16384) return;
   Machine m;
   m.cpu.power(Base);
   auto& v = m.cpu.vfpu.r;
-  uint32_t state = seed, exact = 0;
+  uint32_t state = seed, input[4], count = 0, exact = 0;
   for(uint32_t quad = 0; quad < hardware.size() / 4; quad++) {
-    for(uint32_t lane = 0; lane < 4; lane++) v[32 * lane] = state = state * 1664525u + 1013904223u;
+    for(uint32_t lane = 0; lane < 4; lane++) v[32 * lane] = input[lane] = state = state * 1664525u + 1013904223u;
+    m.cpu.execute(Base, instruction);
+    for(uint32_t lane = 0; lane < 4; lane++) {
+      if(checked && !checked(input[lane])) continue;
+      count++;
+      exact += hardware[quad * 4 + lane] == v[1 + 32 * lane];
+    }
+  }
+  CHECK(exact, count);
+}
+
+//Every 1024th result of a sweep over consecutive inputs from first (the *-1k files). The instruction works out
+//each lane on its own, so they're replayed four to a quad.
+static auto measuredSweep(const char* name, uint32_t instruction, uint32_t first) -> void {
+  auto hardware = loadMeasured(name);
+  CHECK(hardware.size(), 16384);
+  if(hardware.size() != 16384) return;
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  uint32_t exact = 0;
+  for(uint32_t quad = 0; quad < hardware.size() / 4; quad++) {
+    for(uint32_t lane = 0; lane < 4; lane++) v[32 * lane] = first + (quad * 4 + lane) * 1024;
     m.cpu.execute(Base, instruction);
     for(uint32_t lane = 0; lane < 4; lane++) exact += hardware[quad * 4 + lane] == v[1 + 32 * lane];
   }
@@ -128,6 +152,9 @@ auto measured() -> void {
   measuredFunction("vnsin-spread-16k.bin", 0xd01a8081, 9);
   measuredFunction("vcos-spread-16k.bin", 0xd0138081, 10);
   measuredFunction("vasin-spread-16k.bin", 0xd0178081, 11);
+  auto belowFour = [](uint32_t x) { return x < 0x4080'0000 || x >= 0x7f80'0000; };  //all but positive x >= 4
+  measuredFunction("vlog2-spread-16k.bin", 0xd0158081, 7, belowFour);
+  measuredSweep("vlog2-half-2-1k.bin", 0xd0158081, 0x3f00'0000);
 }
 
 }
