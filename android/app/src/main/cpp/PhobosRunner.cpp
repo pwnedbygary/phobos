@@ -144,6 +144,12 @@ namespace ares {
   }
   static std::shared_ptr<mia::Pak> currentMedium;
   static std::shared_ptr<mia::Pak> secondaryMedium;
+  // The running MSX game's data tape: a .wav kept with its saves, which the tape controls put in the
+  // deck in place of the game's own tape (if it has one) and which records what the MSX saves to tape.
+  static std::shared_ptr<mia::Pak> msxDataTape;
+  static string msxDataTapePath;
+  static bool msxDataTapeIn = false;
+  static u64 msxGameTapePosition = 0;
   static std::atomic<bool> firstFrameRendered{false};
   static ANativeWindow* nativeWindow = nullptr;
   static AAudioStream* audioStream = nullptr;
@@ -2298,6 +2304,10 @@ namespace ares {
       // ZX Spectrum and MSX tapes: Tape::load() reads "program.tape" (decoded audio)
       // from this pak — the MIA medium pak IS the tape.
       if (nodeName.endsWith("Tape") && root && (root->name().beginsWith("ZX Spectrum") || root->name().beginsWith("MSX"))) {
+        if (root->name().beginsWith("MSX") && msxDataTapeIn && msxDataTape && msxDataTape->pak) {
+            LOGI("VFS: Returning the data tape pak for %s", (const char*)nodeName);
+            return msxDataTape->pak;
+        }
         if (currentMedium && currentMedium->pak) {
             LOGI("VFS: Returning currentMedium pak for %s (tape)", (const char*)nodeName);
             return currentMedium->pak;
@@ -2762,6 +2772,10 @@ namespace ares {
       invalidateInputCaches();
       currentMedium.reset();
       secondaryMedium.reset();
+      msxDataTape.reset();
+      msxDataTapeIn = false;
+      msxGameTapePosition = 0;
+      ::ares::MSX::tapeDeck.recordArmed = false;
       player1PakDir.reset();
       rumbleState.store(false);
       lastRumbleOnTime = {};
@@ -2860,6 +2874,10 @@ namespace ares {
     invalidateInputCaches();
     currentMedium.reset();
     secondaryMedium.reset();
+    msxDataTape.reset();
+    msxDataTapeIn = false;
+    msxGameTapePosition = 0;
+    ::ares::MSX::tapeDeck.recordArmed = false;
     removeTempCopies();
     // [Phobos] The emulation thread has exited cleanly (we acquired runMutex and
     // joined/witnessed its exit). Drop the stale pthread handle so the next
@@ -2899,6 +2917,9 @@ namespace ares {
           string fam = port->family();
           bool msxTape = fam == "MSX" && currentMedium && currentMedium->pak && currentMedium->pak->attribute("tape").boolean();
           if (fam != "ZX Spectrum" && !msxTape) continue;
+          // The game's own MSX tape only plays: recording goes to the data tape, and a state that was
+          // recording can't start recording over the game when it loads with this tape in.
+          if (msxTape) currentMedium->pak->setAttribute("writable", false);
           if (port->allocate()) {
               LOGI("VFS: Connecting %s tape tray", (const char*)fam);
               port->connect();
@@ -3824,6 +3845,29 @@ else if (port->type() == "Keyboard") {
   // overwrite each other's saves. Only runs while the system is loaded and the
   // emulation thread is NOT mid-frame (pause path holds the emulation; unload
   // path holds systemMutex).
+  // The running game's save folder, saves/<System>/<RomBase>/, created if missing.
+  static auto gameSaveFolder() -> string {
+    string romKey = currentRomBase;
+    romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+    if (romKey.size() == 0) romKey = "rom";
+    string saveDir = {savesPath, "/", saveSystemFolder(), "/", romKey, "/"};
+    directory::create(saveDir);
+    return saveDir;
+  }
+
+  // Writes what the MSX's data tape recorded since it was last written to its .wav.
+  static auto saveMsxDataTape() -> void {
+    if (!msxDataTape || !msxDataTape->pak) return;
+    if (msxDataTapeIn) ::ares::MSX::tapeDeck.tray.tape.save();
+    if (!msxDataTape->pak->attribute("modified").boolean()) return;
+    if (msxDataTape->save(msxDataTapePath)) {
+      msxDataTape->pak->setAttribute("modified", false);
+      LOGI("Saves: wrote the MSX data tape %s", (const char*)msxDataTapePath);
+    } else {
+      LOGE("Saves: couldn't write the MSX data tape %s", (const char*)msxDataTapePath);
+    }
+  }
+
   static auto flushSavesToDisk() -> void {
     if (!savesPath || !root) return;
     // CRITICAL: flush the LIVE core state into the pak(s) FIRST. The game's
@@ -3835,6 +3879,7 @@ else if (port->type() == "Keyboard") {
     root->save();
     string sysName = saveSystemFolder();
     if (root->name() == "PlayStation") flushPs1MemoryCards();
+    if (root->name().beginsWith("MSX")) saveMsxDataTape();
     // Per-game subdirectory (keyed by ROM base name) so games don't clobber
     // each other's saves: saves/<System>/<RomBase>/
     string romKey = currentRomBase;
@@ -4494,14 +4539,75 @@ else if (port->type() == "Keyboard") {
     LOGI("ZXTape: rewound");
   }
 
-  // The MSX tape for the keyboard's stripe, as getZxTapeState() gives the ZX Spectrum's. The motor
-  // relay plays and stops it, so the stripe only shows it and winds it back.
-  auto getMsxTapeState() -> std::array<s32, 4> {
+  // The MSX tape for the tape controls, as getZxTapeState() gives the ZX Spectrum's, then whether it's
+  // the data tape, whether recording is armed and whether it's recording. The motor relay plays and
+  // stops it, so the controls only show it, wind it back, swap it and arm recording.
+  auto getMsxTapeState() -> std::array<s32, 7> {
     if (!root || !root->name().beginsWith("MSX")) return {};
-    auto& tape = ::ares::MSX::tapeDeck.tray.tape.node;
-    if (!tape || tape->length() == 0) return {};
+    auto& deck = ::ares::MSX::tapeDeck;
+    auto& tape = deck.tray.tape.node;
+    if (!tape || (tape->length() == 0 && !msxDataTapeIn)) return {};
     u64 hz = std::max<u64>(tape->frequency(), 1);
-    return {1, tape->playing() ? 1 : 0, (s32)(tape->position() * 1000 / hz), (s32)(tape->length() * 1000 / hz)};
+    return {1, tape->playing() ? 1 : 0, (s32)(tape->position() * 1000 / hz), (s32)(tape->length() * 1000 / hz),
+            msxDataTapeIn ? 1 : 0, deck.recordArmed ? 1 : 0, tape->recording() ? 1 : 0};
+  }
+
+  // Puts the MSX's data tape in the deck, or takes it out for the game's own tape if the game has one.
+  // The data tape is data-tape.wav in the game's save folder; the first one starts blank.
+  auto setMsxTape(bool data) -> void {
+    std::lock_guard<std::recursive_mutex> lock(*runMutex);
+    if (!root || !root->name().beginsWith("MSX") || !savesPath || data == msxDataTapeIn) return;
+    auto& deck = ::ares::MSX::tapeDeck;
+    auto& port = deck.tray.port;
+    if (!port) return;
+    saveMsxDataTape();
+    deck.recordArmed = false;
+    if (port->connected()) {
+      if (!msxDataTapeIn && deck.tray.tape.node) msxGameTapePosition = deck.tray.tape.node->position();
+      port->disconnect();
+    }
+    msxDataTapeIn = false;
+    if (data) {
+      if (!msxDataTape) {
+        string path = {gameSaveFolder(), "data-tape.wav"};
+        // 4 x 44.1 kHz: a recording lands each edge the CPU writes on the tape's next sample, and at 44.1 kHz
+        // that shifted the BIOS's 2400 Hz pulses by an eighth of their length, enough to misread a bit now and then.
+        if (!file::exists(path)) Encode::WAV::mono<u16>(path, std::span<const u16>{}, 176400);
+        auto medium = mia::Medium::create("MSX");
+        if (medium && medium->load(path) == successful && medium->pak) {
+          msxDataTape = medium;
+          msxDataTapePath = path;
+        } else {
+          LOGE("MSXTape: couldn't load the data tape %s", (const char*)path);
+        }
+      }
+      msxDataTapeIn = (bool)msxDataTape;
+    }
+    bool gameTape = currentMedium && currentMedium->pak && currentMedium->pak->attribute("tape").boolean();
+    if ((msxDataTapeIn || gameTape) && port->allocate()) {
+      port->connect();
+      // A real MSX doesn't sound its cassette: the signal only reaches the PSG's port.
+      if (auto& stream = deck.tray.tape.stream) stream->setMuted(true);
+      // The game's tape goes back in where it was taken out, as a multi-load game left it.
+      if (auto& tape = deck.tray.tape.node; tape && !msxDataTapeIn) tape->setPosition(std::min(msxGameTapePosition, tape->length()));
+    }
+    // A loader waiting with the motor on (and interrupts off) won't write port C again to start this tape.
+    deck.motor(::ares::MSX::cpu.cassetteMotor());
+    LOGI("MSXTape: %s in the deck", msxDataTapeIn ? "the data tape" : gameTape ? "the game's tape" : "no tape");
+  }
+
+  // Arms or disarms recording onto the data tape; while armed, the motor relay records instead of playing.
+  auto setMsxTapeRecord(bool armed) -> void {
+    std::lock_guard<std::recursive_mutex> lock(*runMutex);
+    if (!root || !root->name().beginsWith("MSX")) return;
+    auto& deck = ::ares::MSX::tapeDeck;
+    deck.recordArmed = armed && msxDataTapeIn;
+    if (!deck.recordArmed) {
+      if (auto& tape = deck.tray.tape.node; tape && tape->recording()) tape->stop();
+      saveMsxDataTape();
+    }
+    deck.motor(::ares::MSX::cpu.cassetteMotor());
+    LOGI("MSXTape: recording %s", deck.recordArmed ? "armed" : "off");
   }
 
   auto rewindMsxTape() -> void {

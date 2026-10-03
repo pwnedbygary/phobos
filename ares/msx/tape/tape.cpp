@@ -91,7 +91,9 @@ auto Tape::main() -> void {
       node->setLength(length);
     }
 
-    data[position++] = (range >> 1) + (input ? 1 : 0);
+    //[Phobos] the full range, as the blank tape around a recording is 0: half the range plus the bit made a
+    //signal one step tall, which the .wav kept but a reload's normalization against that 0 flattened
+    data[position++] = input ? range : 0;
     pak->setAttribute("modified", true);
     node->setPosition(position);
     stream->frame(input ? 1.0f : 0.0f);
@@ -141,6 +143,14 @@ auto Tape::unload() -> void {
   input = 0;
 }
 
+//[Phobos] what was recorded, into the pak, with the tape still loaded, for the frontend to save it
+auto Tape::save() -> void {
+  if(!pak || !pak->attribute("modified").boolean() || data.size() == 0) return;
+  auto fd = pak->write("program.tape");
+  fd->resize(data.size() * sizeof(u64));
+  data.save(fd);
+}
+
 auto Tape::read() -> n1 {
   if(!node || !node->playing()) return 0;
   return output;
@@ -170,7 +180,7 @@ auto Tape::serialize(serializer& s) -> void {
     node->setPosition(min(position, node->length()));
     node->stop();
     if(playing) node->play();
-    if(recording) node->record();
+    if(recording && node->supportRecord()) node->record();
   }
 }
 

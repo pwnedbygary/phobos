@@ -716,6 +716,32 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## MSX tape saving — 2026-10-03
+
+Branch `cursor/msx-tape-saving-2b67`, stacked on `cursor/n64-hack-notes-2b67`. The plan row "MSX tape saving" has
+the details; the user chose a data tape per game in its save folder.
+
+- **Checks run:** the modern release builds, 240 host tests pass (new: `theDeckStateNamesTheTapeAndItsRecording`,
+  `aBlankOrRecordingDataTapeSaysSo`). On the RP6 with the user's MSX BIOS and a stand-in tape written for the test
+  (`SAVETEST.cas`, from a script kept outside the repository): `CLOAD` loaded its program from the game's tape; with
+  Data Tape and Record on, `RUN` recorded it (`CSAVE "SAVED"` inside the program); the pause wrote
+  `data-tape.wav`. A decoder written for the check read the file back as the exact program. After quitting and
+  launching again, the data tape (Record off) loaded with `CLOAD`, and `LIST` showed the three lines exactly, twice.
+  With the blank data tape in, `CLOAD` waited; swapping the game's tape back in started it at once ("Found:SVTEST").
+- **Found on the way:** recording stored half the range plus the bit, a signal one step tall that a reload
+  flattened (fixed to the full range), and at 44.1 kHz `CLOAD` misread a byte now and then (new data tapes run at
+  176.4 kHz). The review found that a state doesn't record which tape was in, so a state saved while recording
+  could start recording over the game's own tape; that tape no longer takes recordings, and a restored recording
+  resumes only on a tape that does. Its second pass found that a swap didn't resync the motor relay, so a loader
+  waiting with interrupts off never started the new tape; its third, that a recording a state brought back without
+  the arming didn't stop with the motor (it now stops). The fourth found no bugs.
+- **Cleaned up on the RP6:** the test tape, its save folder, its auto state (written on quitting) and the empty MSX
+  folders they left.
+- **Unexplained once:** one scripted run, the first launch right after installing, stalled at its first `CLOAD`
+  (the game's tape never started, so nothing was recorded). The same steps by hand and two full scripted runs
+  after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
+- **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
+
 ## N64 hack bugs narrowed — 2026-10-03
 
 Docs only (branch `cursor/n64-hack-notes-2b67`, stacked on `cursor/cleanups-2b67`). The plan rows "Super Mario 64

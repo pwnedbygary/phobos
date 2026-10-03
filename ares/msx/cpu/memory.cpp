@@ -160,6 +160,7 @@ auto CPU::writeSecondarySlot(n8 data) -> void {
 auto CPU::writePortC(n8 data) -> void {
   io.portC = data;
   keyboard.write(data.bit(0,3));
+  tapeDeck.write(data.bit(5));
   tapeDeck.motor(!data.bit(4));
 }
 

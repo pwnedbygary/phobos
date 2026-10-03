@@ -127,10 +127,17 @@ object PhobosCore {
     external fun setZxTapePlaying(play: Boolean)
     /** Stops the tape at its start. */
     external fun rewindZxTape()
-    /** The MSX tape, as [getZxTapeState] gives the ZX Spectrum's; the MSX's motor relay plays and stops it. */
+    /**
+     * The MSX tape, as [getZxTapeState] gives the ZX Spectrum's, then [data tape (1 or 0), recording armed (1 or 0),
+     * recording (1 or 0)]; the MSX's motor relay plays and stops it.
+     */
     external fun getMsxTapeState(): IntArray
     /** Winds the MSX tape back to its start; it plays from there if the motor is on. */
     external fun rewindMsxTape()
+    /** Puts the game's data tape (a .wav with its saves) in the MSX's deck, or the game's own tape back. */
+    external fun setMsxTape(data: Boolean)
+    /** Arms recording onto the data tape: the motor relay then records what the MSX saves, at the tape's end. */
+    external fun setMsxTapeRecord(armed: Boolean)
     external fun getPerformanceStats(): PerformanceStats
     /** Recent frame-to-frame intervals in ms, oldest first (up to 240). */
     external fun getFrameTimes(): FloatArray

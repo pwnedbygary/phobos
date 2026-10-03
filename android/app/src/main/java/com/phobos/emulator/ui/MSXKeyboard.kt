@@ -162,6 +162,8 @@ fun MSXKeyboardOverlay(
     keyboardOpacity: Float = 1.0f,
     // The tape, shown on the stripe; the MSX's motor relay plays and stops it, so it only rewinds here.
     tape: ZxTape = ZxTape(),
+    // The data tape is recording what the MSX saves.
+    recording: Boolean = false,
     onTapeRewind: () -> Unit = {},
 ) {
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -190,7 +192,7 @@ fun MSXKeyboardOverlay(
     ) {
         // While a tape plays or stands part way through, the stripe is its progress bar: the blues fill in
         // from the left as the tape loads, as the ZX Spectrum keyboard's rainbow does.
-        val tapeShown = tape.playing || tape.paused
+        val tapeShown = recording || tape.playing || tape.paused
         val currentTapeRewind by rememberUpdatedState(onTapeRewind)
         Row(
             modifier = Modifier
@@ -222,7 +224,7 @@ fun MSXKeyboardOverlay(
             )
             if (tapeShown) {
                 Text(
-                    text = "${if (tape.playing) "Loading" else "Stopped"} ${(tape.progress * 100).toInt()}%",
+                    text = if (recording) "Recording" else "${if (tape.playing) "Loading" else "Stopped"} ${(tape.progress * 100).toInt()}%",
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,

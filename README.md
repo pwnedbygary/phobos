@@ -81,7 +81,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | PlayStation | ✅ DualShock + analog toggle, memcards, save states, multi-disc swap (MGS verified), Ape Escape opening cinematic verified |
 | Neo Geo Pocket / Color | ✅ BIOS settings (language/date) persist |
 | WonderSwan / Color | ✅ |
-| MSX / MSX2 | ✅ On-screen MSX keyboard; tapes (`.cas`, `.wav`, `.tzx`, `.tsx`) run from the cassette motor as on the real machine (`CLOAD`, `BLOAD` or `RUN"CAS:"` with a BASIC BIOS set in Firmware; the bundled C-BIOS has none), up to 8x faster while they load |
+| MSX / MSX2 | ✅ On-screen MSX keyboard; tapes (`.cas`, `.wav`, `.tzx`, `.tsx`) run from the cassette motor as on the real machine (`CLOAD`, `BLOAD` or `RUN"CAS:"` with a BASIC BIOS set in Firmware; the bundled C-BIOS has none), up to 8x faster while they load; each game has a data tape for what it saves to tape (`CSAVE`, `SAVE"CAS:"`), in the pause menu's MSX section |
 | Atari 2600, ColecoVision | ✅ |
 | ZX Spectrum (48K and 128K) | ✅ Tape loading with automatic tape control and a faster-loading option, 48K keyboard, control schemes (Kempston, Sinclair, Cursor, QAOP and more) remembered per game, save states |
 | SG-1000 | ✅ Verified 2026-08-14 |
@@ -102,7 +102,8 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 ### Known issues / not yet functional
 
-- **Saving to MSX tape** — tapes load, but `CSAVE` and `SAVE"CAS:"` don't record to them.
+- **Super Mario 64 B3313 v1.0.2 Hotfix 3** stops at a black screen (its UAA2 build runs), and **F-Zero ZX Overdrive**
+  runs with a black picture; both N64 hacks are open in the implementation plan.
 
 ---
 

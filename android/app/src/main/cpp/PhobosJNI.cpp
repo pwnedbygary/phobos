@@ -353,6 +353,16 @@ Java_com_phobos_emulator_PhobosCore_rewindMsxTape(JNIEnv* env, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setMsxTape(JNIEnv* env, jobject, jboolean data) {
+    ares::setMsxTape(data);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setMsxTapeRecord(JNIEnv* env, jobject, jboolean armed) {
+    ares::setMsxTapeRecord(armed);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64ExpansionPak(JNIEnv* env, jobject, jboolean enabled) {
     ares::setN64ExpansionPak(enabled);
 }

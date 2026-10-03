@@ -119,6 +119,7 @@ import com.phobos.emulator.util.groupDiscSets
 import com.phobos.emulator.util.isZipSignature
 import com.phobos.emulator.util.m3uEntries
 import com.phobos.emulator.util.m3uEntryPath
+import com.phobos.emulator.util.MsxDeck
 import com.phobos.emulator.util.msxTapeFirmware
 import com.phobos.emulator.util.newerDriverRelease
 import com.phobos.emulator.util.romTitle
@@ -1537,14 +1538,14 @@ class MainViewModel(
         if (next != _zxTape.value) _zxTape.value = next
     }
 
-    // The MSX's tape, polled with the ZX Spectrum's, for the MSX keyboard's stripe and the pause menu.
-    private val _msxTape = MutableStateFlow(ZxTape())
-    val msxTape: StateFlow<ZxTape> = _msxTape
+    // The MSX's deck, polled with the ZX Spectrum's tape, for the MSX keyboard's stripe and the pause menu.
+    private val _msxTape = MutableStateFlow(MsxDeck())
+    val msxTape: StateFlow<MsxDeck> = _msxTape
 
     private fun refreshMsxTape() {
         val next = if (_isLoaded.value && currentSystemName.startsWith("MSX")) {
-            ZxTape.of(PhobosCore.getMsxTapeState())
-        } else ZxTape()
+            MsxDeck.of(PhobosCore.getMsxTapeState())
+        } else MsxDeck()
         if (next != _msxTape.value) _msxTape.value = next
     }
 
@@ -1560,6 +1561,16 @@ class MainViewModel(
 
     fun rewindMsxTape() = viewModelScope.launch(Dispatchers.Default) {
         PhobosCore.rewindMsxTape()
+        refreshMsxTape()
+    }
+
+    fun setMsxDataTape(data: Boolean) = viewModelScope.launch(Dispatchers.Default) {
+        PhobosCore.setMsxTape(data)
+        refreshMsxTape()
+    }
+
+    fun setMsxTapeRecord(armed: Boolean) = viewModelScope.launch(Dispatchers.Default) {
+        PhobosCore.setMsxTapeRecord(armed)
         refreshMsxTape()
     }
 

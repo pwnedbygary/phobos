@@ -649,8 +649,20 @@ private fun MsxKeyboardSection(
         SettingsSwitchItem("On-Screen Keyboard", "Show the MSX keyboard, for games that use its keys", showKeyboard) { onKeyboardToggle(it) }
         SettingsSliderItem("Keyboard Opacity", settings.zxKeyboardOpacity, 0.2f..1.0f) { viewModel.setZxKeyboardOpacity(it) }
         // The MSX's motor relay plays and stops the tape, so it only has a rewind button.
-        val tape by viewModel.msxTape.collectAsState()
-        if (tape.inserted) ZxTapeItem(tape, onPlaying = null, onRewind = { viewModel.rewindMsxTape() })
+        val deck by viewModel.msxTape.collectAsState()
+        SettingsSwitchItem(
+            "Data Tape",
+            "A tape kept with this game's saves, in place of its own tape, for what the MSX saves to tape and loads back",
+            deck.dataTape,
+        ) { viewModel.setMsxDataTape(it) }
+        if (deck.dataTape) {
+            SettingsSwitchItem(
+                "Record",
+                "Record what the MSX saves (CSAVE, SAVE\"CAS:\") onto the end of the data tape. Off, it plays back.",
+                deck.recordArmed,
+            ) { viewModel.setMsxTapeRecord(it) }
+        }
+        if (deck.tape.inserted) ZxTapeItem(deck.tape, onPlaying = null, onRewind = { viewModel.rewindMsxTape() }, status = deck.status)
         MsxLoadSpeedItem(settings.msxLoadSpeed) { viewModel.setMsxLoadSpeed(it) }
     }
 }

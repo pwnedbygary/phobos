@@ -14,6 +14,9 @@ struct TapeDeck {
   auto motor(bool on) -> void;
   //[Phobos] Winds the tape back to its start; it plays from there if the motor is on.
   auto rewind() -> void;
+  //[Phobos] With recording armed, the relay records the cassette output (bit 5 of port C) onto the end
+  //of a tape that takes recording, instead of playing it, as with a deck's record button held down.
+  n1 recordArmed;
 
   auto load(Node::Object) -> void;
   auto unload() -> void;

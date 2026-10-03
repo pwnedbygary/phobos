@@ -14,7 +14,19 @@ auto TapeDeck::power() -> void {
 
 auto TapeDeck::motor(bool on) -> void {
   auto& tape = tray.tape.node;
-  if(!tape || tape->length() == 0) return;
+  if(!tape) return;
+  if(recordArmed && tape->supportRecord()) {
+    if(on && !tape->recording()) {
+      tape->stop();
+      tape->setPosition(tape->length());
+      tape->record();
+    }
+    if(!on && tape->recording()) tape->stop();
+    return;
+  }
+  //a state can bring back a recording without the frontend's arming, which states don't keep
+  if(tape->recording()) tape->stop();
+  if(tape->length() == 0) return;
   if(on && !tape->playing() && tape->position() < tape->length()) tape->play();
   if(!on && tape->playing()) tape->stop();
 }

@@ -481,7 +481,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 msx2 = systemName == "MSX2",
                 onClose = { showKeyboard = false },
                 keyboardOpacity = settings.zxKeyboardOpacity,
-                tape = msxTape,
+                tape = msxTape.tape,
+                recording = msxTape.recording,
                 onTapeRewind = { viewModel.rewindMsxTape() },
             )
         }
