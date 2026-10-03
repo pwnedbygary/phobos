@@ -50,6 +50,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
     val settings by viewModel.settings.collectAsState()
     var confirmQuit by remember { mutableStateOf(false) }
     val theme = LocalPhobosTheme.current
+    // A solid style's tiles are opaque, whatever the glass level.
     val tileAlpha = if (theme.solid != null) 1f else theme.glass.panelAlpha
     val artPalette = remember(theme.scheme, theme.isDark, theme.success, theme.warning, tileAlpha) {
         val tile = libraryTileFill(theme.scheme, theme.isDark).copy(alpha = tileAlpha).compositeOver(theme.scheme.background)
@@ -69,6 +70,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (systems.isEmpty()) {
+            // A game a frontend started can be running with no ROM folders set up here.
             running?.let { game ->
                 Box(Modifier.padding(pageContentPadding())) {
                     RunningGameCard(game, tileFill, onResume = { viewModel.swapBackToGame() }, onQuit = { confirmQuit = true })
@@ -126,6 +128,7 @@ fun LibraryScreen(viewModel: MainViewModel, onSystemClick: (String) -> Unit) {
             title = { DialogSystemBars(settings.fullScreenMode, inGame = false); Text("Quit Emulation") },
             text = { Text("Are you sure you want to stop emulating ${romTitle(quitting.romName)}?") },
             confirmButton = {
+                // As from the pause menu: a game another app started returns there
                 TextButton(onClick = { confirmQuit = false; viewModel.unloadSystem(); viewModel.leaveGame() }) { Text("Quit") }
             },
             dismissButton = { TextButton(onClick = { confirmQuit = false }) { Text("Cancel") } },

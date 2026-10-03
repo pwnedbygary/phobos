@@ -39,6 +39,7 @@ fun AppearanceSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
     val shown = LocalPhobosTheme.current
     val dynamicAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    // The System card previews the live scheme when it is the one showing (wallpaper colors).
     val liveScheme = MaterialTheme.colorScheme
 
     PhobosScaffold(title = "Appearance", onBack = onBack) { innerPadding ->
