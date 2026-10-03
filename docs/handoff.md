@@ -714,6 +714,23 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## Pocket Challenge V2 — 2026-10-03
+
+Branch `cursor/pocket-challenge-v2-2b67`, from master. The plan row "Pocket Challenge V2" has the details;
+this records what was checked.
+
+- **Checks run:** both flavors build (`./gradlew testModernDebugUnitTest assembleModernRelease
+  assembleLegacyRelease`), 231 host tests pass (new: `pocketChallengeV2GamesAndNames`; the glyph and touch
+  layout tests cover the new icon and family). On the RP6 (modern release, data kept), a stand-in cartridge
+  (a 64 KiB ROM whose reset vector jumps to an endless loop, with a valid footer and checksum; deleted
+  afterwards with the save folder it left) launched as a frontend would (`system=pcv2`): it loaded in place,
+  attached the bundled 4 KiB boot ROM and ran at 75.5 FPS (target 75.47), and the pause menu's Buttons page
+  showed A as Circle, B as Clear, Select as Escape and Start as View.
+- **Not checked:** a real game (none on the RP6), the touch layout on screen (touch controls are off on the
+  RP6; the layout tests check overlap and placement), the legacy APK on a device.
+- **On the RP6:** `input swipe` with a long duration hung over the pause menu; `input touchscreen swipe ...
+  150` under a `perl -e 'alarm 10; exec @ARGV'` guard scrolls it (macOS has no `timeout`).
+
 ## CD backup RAM kept between sessions — 2026-10-02
 
 Branch `cursor/cd-backup-ram-2b67`, stacked on `cursor/laseractive-2b67`. The plan row "CD backup RAM kept

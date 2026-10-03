@@ -45,6 +45,7 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"SuperGrafx", {"sgx"}},
     {"WonderSwan", {"ws"}},
     {"WonderSwan Color", {"wsc"}},
+    {"Pocket Challenge V2", {"pc2", "pcv2"}},
     {"MSX", {"msx", "rom", "wav", "tzx", "tsx", "cas"}},
     {"MSX2", {"msx2", "rom", "wav", "tzx", "tsx", "cas"}},
 };

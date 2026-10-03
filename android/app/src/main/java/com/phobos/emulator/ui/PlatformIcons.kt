@@ -40,7 +40,8 @@ fun systemIconSlug(system: String): String? {
         system.contains("Mega LD", ignoreCase = true) || system.contains("LaserActive", ignoreCase = true) -> "laseractive"
         system.contains("SuperGrafx", ignoreCase = true) -> "supergrafx"
         system.contains("WonderSwan Color", ignoreCase = true) -> "wonderswan-color"
-        system.contains("WonderSwan", ignoreCase = true) || system.contains("Pocket Challenge", ignoreCase = true) -> "wonderswan"
+        system.contains("WonderSwan", ignoreCase = true) -> "wonderswan"
+        system.contains("Pocket Challenge", ignoreCase = true) -> "pcv2"
         system.contains("ZX Spectrum 128", ignoreCase = true) || system.contains("ZX Spectrum", ignoreCase = true) -> "zx-spectrum"
         system.contains("Arcade", ignoreCase = true) -> "arcade"
         else -> null
@@ -52,5 +53,5 @@ val systemIconSlugs: Set<String> = setOf(
     "atari2600", "colecovision", "nes", "snes", "sgb", "arcade", "laseractive", "pceld",
     "n64", "gb", "gbc", "gba", "sms", "genesis", "sega32", "gamegear", "segacd", "psx",
     "neogeomvs", "neo-geo-cd", "neo-geo-pocket", "neo-geo-pocket-color", "zx-spectrum",
-    "pce", "pcecd", "supergrafx", "wonderswan", "wonderswan-color", "msx", "msx2",
+    "pce", "pcecd", "supergrafx", "wonderswan", "wonderswan-color", "pcv2", "msx", "msx2",
 )

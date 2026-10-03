@@ -37,6 +37,7 @@ class TouchLayoutsTest {
         assertEquals(TouchFamily.NEO_GEO, TouchFamily.of("Neo Geo CD"))
         assertEquals(TouchFamily.ZX, TouchFamily.of("ZX Spectrum 128"))
         assertEquals(TouchFamily.MSX, TouchFamily.of("MSX2"))
+        assertEquals(TouchFamily.POCKET_CHALLENGE, TouchFamily.of("Pocket Challenge V2"))
         assertEquals(TouchFamily.GENERIC, TouchFamily.of("Something New"))
     }
 

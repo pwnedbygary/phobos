@@ -31,6 +31,7 @@ enum class TouchFamily(val key: String, val displayName: String) {
     ARCADE("arcade", "Arcade"),
     NGP("ngp", "Neo Geo Pocket / Color"),
     WONDERSWAN("ws", "WonderSwan / Color"),
+    POCKET_CHALLENGE("pcv2", "Pocket Challenge V2"),
     ATARI_2600("a26", "Atari 2600"),
     COLECOVISION("cv", "ColecoVision"),
     MSX("msx", "MSX / MSX2"),
@@ -55,6 +56,7 @@ enum class TouchFamily(val key: String, val displayName: String) {
             "Arcade" -> ARCADE
             "Neo Geo Pocket", "Neo Geo Pocket Color" -> NGP
             "WonderSwan", "WonderSwan Color" -> WONDERSWAN
+            "Pocket Challenge V2" -> POCKET_CHALLENGE
             "Atari 2600" -> ATARI_2600
             "ColecoVision" -> COLECOVISION
             "MSX", "MSX2" -> MSX
@@ -155,6 +157,7 @@ object TouchLayouts {
             systemPills("OPTION" to Input.START),
         )
         TouchFamily.WONDERSWAN -> wonderSwan(options.wonderSwanVertical)
+        TouchFamily.POCKET_CHALLENGE -> pocketChallenge()
         TouchFamily.ATARI_2600 -> atari2600()
         TouchFamily.COLECOVISION -> colecoVision()
         TouchFamily.MSX -> msx()
@@ -382,6 +385,19 @@ object TouchLayouts {
             id = "x_pad", title = "X buttons",
         ),
         systemPills("START" to Input.START),
+    )
+
+    /** Circle, Clear and Pass where upstream ares maps them (bottom, right, left); View = Start, Escape = Select. */
+    private fun pocketChallenge(): List<TouchElement> = listOf(
+        dpad(),
+        face(
+            listOf(
+                TouchButton("Circle", Input.A, dx = 0f, dy = 30f, w = 60f, glyph = Glyph.PS_CIRCLE, accent = TouchPalette.RED),
+                TouchButton("CLEAR", Input.B, dx = 54f, dy = -12f, w = 52f, labelScale = 0.26f),
+                TouchButton("PASS", Input.X, dx = -54f, dy = -12f, w = 52f, labelScale = 0.26f),
+            )
+        ),
+        systemPills("ESCAPE" to Input.SELECT, "VIEW" to Input.START),
     )
 
     /** Joystick + fire, Game Reset / Game Select switches; difficulty and TV switches in the editor. */

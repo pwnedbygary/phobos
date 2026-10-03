@@ -693,6 +693,14 @@ namespace ares {
           else if (leaf == "Button 9") b = VirtualGamepad::L3;
           else if (nodeName == "Service") b = VirtualGamepad::Home;
           else if (nodeName == "Test") b = VirtualGamepad::R3;
+      } else if (systemName == "Pocket Challenge V2") {
+          // As upstream ares's desktop app maps them: Circle at the bottom of the face buttons, Clear on the
+          // right, Pass on the left, View as Start and Escape as Select.
+          if      (nodeName == "Circle") b = VirtualGamepad::A;
+          else if (nodeName == "Clear")  b = VirtualGamepad::B;
+          else if (nodeName == "Pass")   b = VirtualGamepad::X;
+          else if (nodeName == "View")   b = VirtualGamepad::Start;
+          else if (nodeName == "Escape") b = VirtualGamepad::Select;
       } else if (systemName == "PlayStation") {
           // DualShock uses L1, R1, L2, R2, L3, R3 explicitly
           if      (nodeName == "L1") b = VirtualGamepad::L1;
@@ -2580,7 +2588,7 @@ namespace ares {
           auto it_gbc = firmwareMap.find("fw_gbc_boot");
           if (it_gbc != firmwareMap.end()) attached = attachFile((const char*)it_gbc->second, "boot.rom");
           if (!attached) attached = attachFile("boot.cgb-0.rom", "boot.rom");
-      } else if (nodeName == "WonderSwan" || nodeName == "WonderSwan Color") {
+      } else if (nodeName == "WonderSwan" || nodeName == "WonderSwan Color" || nodeName == "Pocket Challenge V2") {
           if (!skipBootRom) attachFile("boot.rom");
       } else if (nodeName == "MSX" || nodeName == "MSX2") {
           attachFile("bios.rom");
@@ -3172,6 +3180,7 @@ else if (port->type() == "Keyboard") {
     else if (lookup.find("Super Game Boy") || lookup == "SGB") identifiedSystem = "Super Game Boy";
     else if (lookup.find("Game Boy Color")) identifiedSystem = "Game Boy Color";
     else if (lookup.find("Game Boy")) identifiedSystem = "Game Boy";
+    else if (lookup.find("Pocket Challenge")) identifiedSystem = "Pocket Challenge V2";
     else if (lookup.find("WonderSwan Color") || lookup.find("WSC")) identifiedSystem = "WonderSwan Color";
     else if (lookup.find("WonderSwan") || lookup.find("WS")) identifiedSystem = "WonderSwan";
     else if (lookup.find("PC Engine CD") || lookup.find("PCE CD") || lookup.find("TG16 CD") || lookup.find("TurboGrafx CD") || lookup.find("turbografx-cd")) identifiedSystem = "PC Engine CD";
@@ -3563,6 +3572,8 @@ else if (port->type() == "Keyboard") {
        success = ::ares::WonderSwan::load(root, "[Bandai] WonderSwan Color");
     } else if (identifiedSystem == "WonderSwan") {
        success = ::ares::WonderSwan::load(root, "[Bandai] WonderSwan");
+    } else if (identifiedSystem == "Pocket Challenge V2") {
+       success = ::ares::WonderSwan::load(root, "[Benesse] Pocket Challenge V2");
     } else if (identifiedSystem == "Neo Geo Pocket" || identifiedSystem == "Neo Geo Pocket Color") {
        // MIA always returns "Neo Geo Pocket" but the library may specify
        // "Neo Geo Pocket Color" — use the system name from the library

@@ -171,6 +171,7 @@ fun hudSystemLabel(systemName: String): String = when (systemName) {
     "Neo Geo CD" -> "NGCD"
     "Neo Geo Pocket", "Neo Geo Pocket Color" -> "NGP"
     "WonderSwan", "WonderSwan Color" -> "WS"
+    "Pocket Challenge V2" -> "PCV2"
     "Atari 2600" -> "A2600"
     "ColecoVision" -> "CV"
     "ZX Spectrum", "ZX Spectrum 128" -> "ZX"

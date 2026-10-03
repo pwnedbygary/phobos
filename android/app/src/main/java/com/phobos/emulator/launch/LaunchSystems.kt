@@ -53,6 +53,7 @@ object LaunchSystems {
         "SuperGrafx" to listOf("supergrafx", "sgx"),
         "WonderSwan" to listOf("wonderswan", "ws"),
         "WonderSwan Color" to listOf("wonderswancolor", "wsc"),
+        "Pocket Challenge V2" to listOf("pocketchallengev2", "pocketchallenge", "pcv2", "benessepocketchallengev2"),
         "MSX" to listOf("msx", "msx1"),
         "MSX2" to listOf("msx2"),
     ).flatMap { (system, keys) -> keys.map { it to system } }.toMap()

@@ -106,7 +106,9 @@ contains them, but Phobos's system table doesn't list them.
   2026-10-02** (branch `cursor/laseractive-2b67`, on top of PC Engine CD's): `.mmi` discs are read
   where they are, both PAC BIOSes boot on the RP6, and Side in the pause menu turns the disc over;
   not yet tried with a game.
-- **Pocket Challenge V2**: a WonderSwan variant for educational software; niche.
+- **Pocket Challenge V2**: a WonderSwan variant for educational software; niche. **Added
+  2026-10-03** (branch `cursor/pocket-challenge-v2-2b67`): `.pc2` and `.pcv2` files with the
+  bundled boot ROM, upstream's button mapping and a touch layout; not yet tried with a game.
 
 Each needs an entry in the system table, its loader checked on Android, firmware entries, a
 touch layout, Library art and launch aliases, and afterwards Argosy's platform list.

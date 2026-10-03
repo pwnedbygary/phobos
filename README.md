@@ -95,6 +95,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | **Added, not yet tried with a game on-device** | |
 | Mega CD 32X, Super Game Boy, Arcade (Aleck64, SG-1000A) | Load paths, firmware slots and touch layouts are in |
 | LaserActive (Mega LD, PC Engine LD) | `.mmi` discs read straight from the SD card; both PAC BIOSes boot (60 FPS on the RP6), and Side in the pause menu turns the disc over |
+| Pocket Challenge V2 | `.pc2` games with the bundled boot ROM, its own buttons (Circle, Clear, Pass, View, Escape) and touch layout; a test cartridge runs at 75 FPS |
 
 > Sega Saturn is not listed: upstream ares never completed the core (empty System::run stub,
 > kept in the tree for future work).

@@ -41,6 +41,7 @@ class LaunchSystemsTest {
         "SuperGrafx" to listOf("sgx"),
         "WonderSwan" to listOf("ws"),
         "WonderSwan Color" to listOf("wsc"),
+        "Pocket Challenge V2" to listOf("pc2", "pcv2"),
         "MSX" to listOf("msx", "rom", "wav", "tzx", "tsx", "cas"),
         "MSX2" to listOf("msx2", "rom", "wav", "tzx", "tsx", "cas"),
     )
@@ -159,6 +160,14 @@ class LaunchSystemsTest {
         assertEquals(found("Mega LD"), resolve("Game.mmi", hint = "laseractive"))
         assertEquals(found("PC Engine LD"), resolve("Game.mmi", hint = "necpac"))
         assertEquals(found("PC Engine LD"), resolve("Game.mmi", hint = "ldrom2"))
+    }
+
+    @Test fun pocketChallengeV2GamesAndNames() {
+        assertEquals(found("Pocket Challenge V2"), resolve("Game.pc2"))
+        assertEquals(found("Pocket Challenge V2"), resolve("Game.pcv2"))
+        assertEquals(found("Pocket Challenge V2"), resolve("Game.zip", "$root/ROMs/pcv2/Game.zip"))
+        assertEquals("Pocket Challenge V2", LaunchSystems.systemForName("pcv2"))
+        assertEquals("Pocket Challenge V2", LaunchSystems.systemForName("Pocket Challenge V2"))
     }
 
     @Test fun zipsAreIdentifiedByWhatTheyHold() {
