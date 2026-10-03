@@ -12,6 +12,12 @@ class PlatformGlyphsTest {
     }
 
     @Test
+    fun everySystemHasAGlyphOfItsOwn() {
+        val shared = PlatformGlyphs.bySlug.entries.groupBy({ it.value }, { it.key }).values.filter { it.size > 1 }
+        assertTrue("systems sharing a glyph: $shared", shared.isEmpty())
+    }
+
+    @Test
     fun glyphRowsAreRectangularAndUseKnownCells() {
         PlatformGlyphs.bySlug.forEach { (slug, rows) ->
             assertTrue("$slug has no rows", rows.isNotEmpty())
