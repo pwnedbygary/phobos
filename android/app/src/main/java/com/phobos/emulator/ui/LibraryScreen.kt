@@ -434,7 +434,8 @@ private fun SystemIcon(
             accent = scheme.primary,
             ink = scheme.onSurface,
             fill = scheme.surfaceContainerHighest,
-            modifier = Modifier.size(size),
+            // The silhouettes are wider than they are tall, so a wider box draws them larger in the same tile.
+            modifier = Modifier.size(width = size * 1.4f, height = size),
         )
     } else if (slug != null) {
         val asset = systematicAssetFor(slug)

@@ -28,6 +28,15 @@ class PlatformGlyphsTest {
     }
 
     @Test
+    fun everyGlyphSharesOneGrid() {
+        // One grid for all, so every tile draws its cells at the same size.
+        PlatformGlyphs.bySlug.forEach { (slug, rows) ->
+            assertEquals("$slug's height", PlatformGlyphs.HEIGHT, rows.size)
+            rows.forEach { assertEquals("$slug's width", PlatformGlyphs.WIDTH, it.length) }
+        }
+    }
+
+    @Test
     fun glyphRowsAreRectangularAndUseKnownCells() {
         PlatformGlyphs.bySlug.forEach { (slug, rows) ->
             assertTrue("$slug has no rows", rows.isNotEmpty())

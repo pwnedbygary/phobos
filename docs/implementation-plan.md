@@ -156,7 +156,11 @@ lands as its own PR; the inventory rows below have the details.
    the set used so far (BAXY Square's, by way of RomM). Super Game Boy,
    Arcade (Aleck64 and SG-1000A), PC Engine CD, LaserActive (Mega LD and
    PC Engine LD) and Pocket Challenge V2 are on master (rows below). The platform tiles remain:
-   the Phobos, Pixel and Manga packs are a first pass beside Systematic.
+   the Phobos, Pixel and Manga packs are a first pass beside Systematic. **Second pass
+   2026-10-03** (branch `cursor/platform-tiles-2b67`): bigger, more distinct silhouettes, as
+   the user asked: solid consoles with their features cut in, each on one 22x15 grid, drawn
+   about 40% larger in the library. Systematic stays the default until the user approves
+   Phobos.
 7. **Libretro host and PSP (PPSSPP)**, relicensing to GPL-3.0-or-later. Not a
    strict port: enhancements and performance gains are welcome, with accuracy
    first. **Parked 2026-10-03:** the user keeps the firmware ares ships, which

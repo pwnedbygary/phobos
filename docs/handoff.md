@@ -874,6 +874,28 @@ Branch `cursor/cleanups-2b67`: the cleanups the user picked on 2026-10-03.
   Chrono Trigger (SNES) got gamepads on both controller ports, nothing on the Expansion Port and no error, at
   60.2 FPS.
 
+## Platform tiles, second pass — 2026-10-03
+
+Branch `cursor/platform-tiles-2b67`, for the user to approve. They asked for bigger, more distinct console
+silhouettes, with Phobos becoming the default pack only if they approve it, so Systematic stays the default.
+
+- `PlatformGlyphs.kt`: every console redrawn as a solid silhouette (ink) with its features cut in (body and shade)
+  and accents, on one 22x15 grid, so every tile draws its cells at the same size. Each is shaped after the console:
+  the N64's hump and four ports, the Mega Drive's ring, the Master System's wedge, the PlayStation's round lid, the
+  2600's ribs and woodgrain, the ColecoVision's keypads, the Neo Geo's stick (and the CD's disc lid), the
+  LaserActive's disc tray, the Game Boys upright, the GBA's shoulders, the Game Gear's tall screen, the Neo Geo
+  Pocket's round stick, the 32X on its Mega Drive and the Super Game Boy holding a cartridge. The drawings sit in
+  the source as pictures; `art()` centres them on the grid. The Pixel and Manga packs draw the same grids.
+- `LibraryScreen.kt`: the glyph packs draw in a box 1.4 times as wide as before (the drawings are wider than tall),
+  about 40% larger in the same tiles. The glyphs the Systematic pack falls back to keep the square box, beside its
+  SVG consoles.
+- **Checks run:** the modern release builds and 242 host tests pass (new: `everyGlyphSharesOneGrid`; the existing
+  test that no two glyphs are under four cells apart passes). On the RP6, with the user's Manga theme and pack, the
+  library shows the new silhouettes at the larger size. Contact sheets of all three styles in dark and light came
+  from a preview script kept outside the repository.
+- **Not checked:** the Phobos pack on the device (switching packs would have changed the user's setting while they
+  were using the device; the contact sheets show it).
+
 ## Boot pass of every game on the RP6 — 2026-10-03
 
 Docs only (branch `cursor/boot-pass-notes-2b67`, stacked on `cursor/load-failures-m3u-2b67`). With the build of that
