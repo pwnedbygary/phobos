@@ -16,8 +16,9 @@ constexpr u32 ModuleStart = 0xd632'acdb, ModuleInfoNid = 0xf01d'73a7;  //the NID
 
 //The test program, linked as if it started at 0 (a PRX) or at linkedAt (a static executable):
 //  0x000  code, using addresses the loader must move: a jal, and addresses built with lui and addiu (one already
-//         carrying into the upper half, one lui shared by two lower halves, and one that only carries once moved
-//         to a base whose low half is 0x4000 or more); then halt
+//         carrying into the upper half, one lui shared by two lower halves, one that only carries once moved to a
+//         base whose low half is 0x4000 or more, and the same with its lower half marked as a plain 16-bit
+//         relocation); then halt
 //  0x040  the function the jal calls: v0 = 7, return
 //  0x100  a pointer to the text at 0x180
 //  0x200  the module info
@@ -52,7 +53,9 @@ struct TestProgram {
     b.put32(0x18, lw(s2, int32_t(lo(0x100)), at));       relocate(0x18, 6);
     b.put32(0x1c, lui(s3, hi(0x5000)));                  relocate(0x1c, 5);
     b.put32(0x20, addiu(s3, s3, lo(0x5000)));            relocate(0x20, 6);
-    b.put32(0x24, halt);
+    b.put32(0x24, lui(s4, hi(0x5000)));                  relocate(0x24, 5);
+    b.put32(0x28, addiu(s4, s4, lo(0x5000)));            relocate(0x28, 1);
+    b.put32(0x2c, halt);
     b.put32(0x40, addiu(v0, zero, 7));
     b.put32(0x44, jr(ra));
     b.put32(0x48, nop);
@@ -128,6 +131,7 @@ static auto runCode(System& s, const Module& module, bool recompile) -> void {
   CHECK(s.ipu.r[s1], base + 0x100);
   CHECK(s.ipu.r[s2], base + 0x180);
   CHECK(s.ipu.r[s3], base + 0x5000);
+  CHECK(s.ipu.r[s4], base + 0x5000);
   CHECK(s.exceptions.size(), 0);
 }
 
@@ -211,6 +215,22 @@ static auto strippedPrx() -> void {
     CHECK(module.exports.size(), 2);
     runCode(s, module, recompile);
   }
+}
+
+//A PRX that kept its sections but has its relocations in a program header: they're found there.
+static auto relocationsInProgramHeader() -> void {
+  System s;
+  TestProgram program;
+  program.elf.sections.pop_back();  //no relocation section
+  ElfBuilder::Segment table;
+  table.type = 0x7000'00a0;
+  table.bytes = program.relocations;
+  program.elf.segments.push_back(table);
+  auto file = program.build();
+  Module module;
+  CHECK(loadInto(s, file, 0x0880'4000, module).empty(), true);
+  CHECK(s.memory.read(Allegrex::Word, 0x0880'4100), 0x0880'4180);
+  runCode(s, module, false);
 }
 
 //A static executable, linked at 0x08804000 as pspdev's are: nothing moves, the base asked for is ignored.
@@ -304,18 +324,27 @@ static auto refused() -> void {
   }
   {
     TestProgram program;
-    relocation(program.relocations, 0x24, 7);  //GPREL16, which pspdev removes
+    relocation(program.relocations, 0x2c, 7);  //GPREL16, which pspdev removes
     program.elf.sections.back().bytes = program.relocations;
     CHECK(contains(why(program.build()), "type 7"), true);
   }
   {
     TestProgram program;
-    relocation(program.relocations, 0x24, 2, 0, 5);  //a segment that isn't there
+    relocation(program.relocations, 0x2c, 2, 0, 5);  //a segment that isn't there
     program.elf.sections.back().bytes = program.relocations;
     CHECK(contains(why(program.build()), "segment that isn't there"), true);
   }
   {
     TestProgram program(0xffa0, 0, false);
+    ElfBuilder::Segment packed;
+    packed.type = 0x7000'00a1;
+    packed.bytes.put32(0, 0);
+    program.elf.segments.push_back(packed);
+    CHECK(contains(why(program.build()), "packed relocations"), true);
+  }
+  {
+    TestProgram program;  //sections kept, but its only relocations packed: refused all the same
+    program.elf.sections.pop_back();
     ElfBuilder::Segment packed;
     packed.type = 0x7000'00a1;
     packed.bytes.put32(0, 0);
@@ -371,7 +400,8 @@ static auto realPrograms() -> void {
 
 auto loaderTests() -> Tests {
   return {
-    {"loader prx", prx}, {"loader stripped prx", strippedPrx}, {"loader static executable", staticExecutable},
+    {"loader prx", prx}, {"loader stripped prx", strippedPrx}, {"loader relocations in a program header", relocationsInProgramHeader},
+    {"loader static executable", staticExecutable},
     {"loader pbp", pbp}, {"loader refusals", refused}, {"loader real programs", realPrograms},
   };
 }

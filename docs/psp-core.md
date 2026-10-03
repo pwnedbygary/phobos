@@ -265,12 +265,14 @@ relocatable modules (PRX, type `0xffa0`, linked as if at 0). Games and newer hom
 - **Segments**: each loadable program header is copied to memory (a PRX's moved to the base the kernel picks) and
   its zeroed part filled.
 - **Relocations** (PRX only), from the relocation sections (type `0x700000a0`), or the program headers of that type
-  when a program kept no sections: a word address for `j`/`jal`, whole pointers, and addresses built by `lui` and an
+  when there are no such sections: a word address for `j`/`jal`, whole pointers, and addresses built by `lui` and an
   instruction adding a signed lower half, where moving the address may carry into the upper half, so each `lui`
-  waits for the lower half after it (one `lui` can serve several). The info word's segment numbers are program
+  waits for the lower half after it (one `lui` can serve several). A plain 16-bit relocation gives the same 16
+  bits and completes a waiting `lui` too, as some retail modules pair them. The info word's segment numbers are program
   header indexes: the offset counts from the first, and the second's address is added. pspdev's PRXs have a single
   segment at 0, where adding that segment's address and adding how far it moved agree; retail modules with more
-  segments will settle which is meant (phase 7). The packed form (`0x700000a1`) isn't read yet.
+  segments will settle which is meant (phase 7). The packed form (`0x700000a1`) isn't read yet: a program with it is
+  refused, whatever else it has.
 - **The module info**: its section (`.rodata.sceModuleInfo`), or in a stripped PRX the first program header's
   physical address, which holds its file offset. Its name, version, attributes, `gp`, and its two tables:
 - **Imports**: per library, the NIDs of the functions called and a stub for each, which becomes `jr ra` with
@@ -291,6 +293,8 @@ the wiki's bot check blocked fetching it) for the `~PSP` header, and programs bu
 Tests (`tests/psp/loader.cpp`): programs built in the test by `elf.hpp` (no binaries in the repository): a PRX with
 every relocation type, whose moved code then runs on both engines and builds the right addresses (including one where
 only the move makes the lower half carry, and a `lui` shared by two lower halves); the same PRX stripped of its
-sections; a static executable; a PBP; and each refusal. Three broken versions (no carry, `jal` targets not moved, a
-`lui` adjusted twice) each failed them. `tools/psp-test-programs/build.sh <folder>` builds a real hello world
+sections; relocations in a program header next to kept sections; a static executable; a PBP; and each refusal.
+Three broken versions (no carry, `jal` targets not moved, a `lui` adjusted twice) each failed them, as did the two
+mistakes Bugbot's review found in the first version (a `lui` left waiting when its lower half came as a 16-bit
+relocation; packed relocations not noticed when sections were kept). `tools/psp-test-programs/build.sh <folder>` builds a real hello world
 (static, PRX and EBOOT) with pspdev's toolchain; with `PSP_TEST_PROGRAMS=<folder>` the tests load those too.

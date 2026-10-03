@@ -135,11 +135,13 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
   //within that segment. (Sony's tools and pspdev's alike number segments by their program headers. pspdev's PRXs
   //have a single segment, starting at 0; retail modules with more will show the segment numbers matter.)
   if(module.relocatable) {
+    for(auto& segment : segments) {
+      if(segment.type == SonyPackedRelocations) return "packed relocations (PT_PSP_REL2) aren't supported yet";
+    }
     std::vector<std::pair<u32, u32>> tables;  //file offset and size of each list of relocations
     for(auto& section : sections) if(section.type == SonyRelocations) tables.push_back({section.offset, section.size});
-    if(sections.empty()) {
+    if(tables.empty()) {
       for(auto& segment : segments) {
-        if(segment.type == SonyPackedRelocations) return "packed relocations (PT_PSP_REL2) aren't supported yet";
         if(segment.type == SonyRelocations) tables.push_back({segment.offset, segment.fileSize});
       }
     }
@@ -158,9 +160,6 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
         if(!memory.pointer(address, 4)) return "a relocation points outside the program: " + hex(address);
         u32 word = memory.read(4, address);
         switch(kind) {
-        case Relocation16:
-          memory.write(4, address, (word & 0xffff'0000) | ((word + add) & 0xffff));
-          break;
         case Relocation32:
           memory.write(4, address, word + add);
           break;
@@ -170,9 +169,12 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
         case RelocationHi16:
           pendingHi16.push_back({address, add});
           break;
+        case Relocation16:
         case RelocationLo16: {
           //An address built by lui (the upper half) and an instruction that adds a signed lower half: moving it may
           //carry into the upper half, which is why each lui waits for its lower half. One lui can serve several.
+          //A plain 16-bit relocation gives the same 16 bits, and completes a waiting lui the same way: some retail
+          //modules pair them like that.
           s32 low = s16(word & 0xffff);
           for(auto& pending : pendingHi16) {
             u32 hi = memory.read(4, pending.address);
