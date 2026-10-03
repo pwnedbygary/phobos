@@ -716,6 +716,22 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## Phobos's own code under GPL-3.0-or-later — 2026-10-03
+
+Branch `cursor/gpl-own-code-v2-2b67`, for the user to merge: #94's commit, rebased onto master after #95 and #96
+merged. It follows their answers of 2026-10-03: the work-email commits are cleared, and the firmware stays, so no
+GPL code from elsewhere comes in.
+
+- LICENSE opens with a Phobos notice (© 2026 Phobos Team, as the About screen has it): Phobos's own code under
+  GPL-3.0-or-later, each component under its own license, and the firmware ares ships outside the GPL. COPYING is
+  the GPL's text from gnu.org (SHA-256 `3972dc97…`, the published file); the build appends it to the APK's notices
+  as their last one. The README gains a License section, and the Licenses and About screens say what's under the GPL.
+- **Checks run:** the modern release builds, 241 host tests pass on master (`LicenseNoticesTest` now expects Phobos
+  then ares and the GPL grant, and checks that COPYING is GPL v3 without a notice rule in it), and the APK's notices
+  open on Phobos's and end with the GPL. On the RP6, with #94's build, Settings → About → Open-source licenses opened
+  on Phobos's notice first, then ares, and ended with GNU GENERAL PUBLIC LICENSE.
+- **Not checked:** the legacy APK on a device.
+
 ## MSX tape saving — 2026-10-03
 
 Branch `cursor/msx-tape-saving-2b67`, stacked on `cursor/n64-hack-notes-2b67`. The plan row "MSX tape saving" has
