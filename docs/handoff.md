@@ -742,6 +742,18 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the VFPU's random number generator — 2026-10-03
+
+Branch `cursor/psp-vfpu-random-2b67`, stacked on part 4. The user chose, for the VFPU's accuracy: the real random
+number generator, implemented from the published research (fp64's, PPSSPP issue 16946) with no PPSSPP code; and
+exact math functions from measurements on the user's own PSP (a dump program comes next).
+
+- **What it is:** `vfpuRandom()`, `VRNDS`, `VRNDI`, `VRNDF` in `interpreter-vfpu.cpp`, plus the RCX registers'
+  power-on values and their 20-bit width. psp-core.md has the details.
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 53 groups pass on the Mac (UBSan) and in `phobos-linux`; the
+  new group checks the generator's state after 3, 4, 14 and 19 draws against the states fp64 recovered from a PSP,
+  the seeding layout, the lane order and the prefix quirk.
+
 ## PSP core, part 4: loads and stores straight to RAM — 2026-10-03
 
 Branch `cursor/psp-fastmem-2b67`, stacked on part 3. The user approved parts 1-3 and asked for the whole PSP feature

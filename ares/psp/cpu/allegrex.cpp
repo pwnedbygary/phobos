@@ -18,6 +18,7 @@ auto Allegrex::power(u32 entry) -> void {
   fpu = {};
   vfpu = {};
   vfpu.pfxs = vfpu.pfxt = PrefixIdentity;  //the prefixes start out doing nothing
+  for(u32 n : range(8)) vfpu.rcx[n] = 0x3f80'0000 | (n < 4 ? 1 << n : 0);  //the random number generator's start
   scc = {};
   pipeline = {};
   ipu.pc = entry;

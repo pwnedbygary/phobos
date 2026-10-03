@@ -8,10 +8,11 @@
 //The VFPU has no denormals (numbers too tiny for the normal float format): they count as zero, keeping their
 //sign, both read and written. It always rounds to the nearest. On the hardware its functions (sine, 2^x and so
 //on) are approximations; here they're computed in double precision, so results can differ from a PSP's in the
-//last bits.
+//last bits. Its random number generator is the hardware's (vfpuRandom()).
 //
 //Sources: pspdev's VFPU documentation (https://pspdev.github.io/vfpu-docs/) for the encodings and what each
-//instruction does, and binutils' Allegrex support for the encodings.
+//instruction does, and binutils' Allegrex support for the encodings; for the random number generator, what fp64
+//worked out from a PSP's output (PPSSPP issue 16946); PPSSPP's behavior where these are silent, as noted.
 
 //The prefixes' resting state: the lanes in their own order (x, y, z, w), nothing else changed.
 static constexpr u32 PrefixIdentity = 0xe4;
@@ -228,18 +229,43 @@ auto Allegrex::vfpuSetControl(u8 index, u32 value) -> void {
   case 2: vfpu.pfxd = value & 0xfff; return;
   case 3: vfpu.cc = value & 0x3f; return;
   }
-  if(index >= 8 && index < 16) vfpu.rcx[index - 8] = value;
+  //the random number generator's registers keep 20 bits; the rest always read as 0x3f8 (see vfpuRandom())
+  if(index >= 8 && index < 16) vfpu.rcx[index - 8] = 0x3f80'0000 | (value & 0xf'ffff);
 }
 
-//The hardware's random number generator isn't documented, so this is a stand-in: a xorshift generator, kept in
-//the first state register, which vrnds seeds.
+//The random number generator, as fp64 worked it out from a PSP's output (PPSSPP issue 16946). It combines four
+//simple generators and adds up their outputs:
+//  - a: a linear congruential generator, each step a * 69069 + 1;
+//  - b: a xorshift generator (Marsaglia's, with shifts of 13, 17 and 5);
+//  - c and d: a sequence like the Pell numbers, each new term twice the last plus the one before (2d + c), plus
+//  - e: a carry, set when c + d / 2 + e overflows 32 bits, and added into the next term.
+//Each draw steps all of them and gives a + b + d.
+//
+//Their state lives in the eight RCX control registers, laid out oddly: registers 0-3 hold the low halves of a, b,
+//c and d, registers 4-7 the high halves, each register four bits of e above that (register n holding bits 4n to
+//4n + 3), and the top bits always read 0x3f8, so each register looks like a float from 1 up to 1.015625. The
+//carry rule is the one that matched every one of fp64's datasets; how it really works isn't known.
 auto Allegrex::vfpuRandom() -> u32 {
-  u32 x = vfpu.rcx[0] ? vfpu.rcx[0] : 0x3f80'0001;
-  x ^= x << 13;
-  x ^= x >> 17;
-  x ^= x << 5;
-  vfpu.rcx[0] = x;
-  return x;
+  auto& rcx = vfpu.rcx;
+  u32 a = (rcx[0] & 0xffff) | rcx[4] << 16;
+  u32 b = (rcx[1] & 0xffff) | rcx[5] << 16;
+  u32 c = (rcx[2] & 0xffff) | rcx[6] << 16;
+  u32 d = (rcx[3] & 0xffff) | rcx[7] << 16;
+  u32 e = 0;
+  for(u32 n : range(8)) e |= (rcx[n] >> 16 & 15) << (4 * n);
+
+  a = a * 69069 + 1;
+  b ^= b << 13;
+  b ^= b >> 17;
+  b ^= b << 5;
+  u32 next = 2 * d + c + e;
+  e = (u64(c) + (d >> 1) + e) >> 32;
+  c = d;
+  d = next;
+
+  const u32 parts[4] = {a, b, c, d};
+  for(u32 n : range(8)) rcx[n] = 0x3f80'0000 | (e >> (4 * n) & 15) << 16 | (parts[n % 4] >> (16 * (n / 4)) & 0xffff);
+  return a + b + d;
 }
 
 template<typename F> auto Allegrex::vfpuUnary(u8 vd, u8 vs, u32 size, F function) -> void {
@@ -798,22 +824,30 @@ auto Allegrex::VREXP2(u8 vd, u8 vs, u32 size) -> void {
 }
 
 //vrndf1 and vrndf2: random floats from 1 up to 2, or from 2 up to 4 (a random mantissa under a fixed exponent).
+//vrndi: random 32-bit integers. Both fill the lanes from the last one back (the first number drawn goes in the
+//last lane), and their destination prefix only applies to the last lane, with lane 0's settings: as fp64's data
+//and PPSSPP have it.
 auto Allegrex::VRNDF(u8 vd, u32 size, u32 exponent) -> void {
   Vector d{};
-  for(u32 i : range(size)) d.lane[i] = exponent | (vfpuRandom() & 0x7f'ffff);
-  vfpuWrite(vd, size, d, vfpu.pfxd);
+  for(u32 i = size; i-- > 0;) d.lane[i] = exponent | (vfpuRandom() & 0x7f'ffff);
+  u32 last = size - 1;
+  vfpuWrite(vd, size, d, (vfpu.pfxd & 0x100) << last | (vfpu.pfxd & 3) << (2 * last));
 }
 
-//vrndi: random 32-bit integers.
 auto Allegrex::VRNDI(u8 vd, u32 size) -> void {
   Vector d{};
-  for(u32 i : range(size)) d.lane[i] = vfpuRandom();
-  vfpuWrite(vd, size, d, vfpu.pfxd);
+  for(u32 i = size; i-- > 0;) d.lane[i] = vfpuRandom();
+  u32 last = size - 1;
+  vfpuWrite(vd, size, d, (vfpu.pfxd & 0x100) << last | (vfpu.pfxd & 3) << (2 * last));
 }
 
-//vrnds.s: seeds the random number generator with rs.
+//vrnds.s: seeds the random number generator with rs's bits. Each RCX register gets one half of the seed (the low
+//half in registers 0-3, the high half in 4-7) and one of its nibbles above that (register n nibble n).
 auto Allegrex::VRNDS(u8 vs, u32) -> void {
-  vfpu.rcx[0] = vfpuRead(vs, 1, vfpu.pfxs).lane[0];
+  u32 seed = vfpuRead(vs, 1, vfpu.pfxs).lane[0];
+  for(u32 n : range(8)) {
+    vfpu.rcx[n] = 0x3f80'0000 | (seed >> (4 * n) & 15) << 16 | (seed >> (16 * (n / 4)) & 0xffff);
+  }
 }
 
 //vrot: the sine and cosine of rs (in quarter turns) placed in the lanes of rd that the placement field names,

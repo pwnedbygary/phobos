@@ -160,9 +160,17 @@ the destination prefix saturates or masks; every VFPU instruction but the prefix
 count as zero both ways, and only round-to-nearest exists. The recompiler runs the VFPU through the interpreter
 for now (its branches included), as it does the FPU.
 
+The random number generator is the hardware's, as fp64 worked it out from a PSP's output (PPSSPP issue 16946):
+a linear congruential generator, a xorshift and a Pell-like sequence with a carry, added together, their state
+packed into the eight RCX registers (`vfpuRandom()`); `vrnds` spreads its seed over them; `vrndi` and `vrndf`
+fill lanes from the last back, and their destination prefix only reaches the last lane. Implemented from that
+description (no PPSSPP code), and checked against the states fp64 recovered from a PSP for the first draws after
+power on. The carry's rule matched all of his data, but isn't understood, and those first draws don't exercise it.
+
 Not checked against hardware: the transcendental functions (computed in double precision; the hardware
-approximates, so the last bits can differ), the random number generator (undocumented; a xorshift stands in,
-seeded by `vrnds`), `vwbn` (implemented from its description; no test), and what reserved size combinations do
+approximates, so the last bits can differ: the user will measure them on their PSP so exact versions can be
+written from our own data), the generator's carry, `vwbn` (implemented from its description; no test), and what
+reserved size combinations do
 (they raise ReservedInstruction, and leave the prefixes). Which instructions use up the prefixes: every VFPU
 arithmetic instruction, and `vnop`, as pspdev's documentation says (PPSSPP keeps them through `vnop`, but the
 documentation rests on tests on hardware); not `vsync`, `vflush`, `vmfvc` and `vmtvc`, which the documentation
