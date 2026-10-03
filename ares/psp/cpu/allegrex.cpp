@@ -4,7 +4,7 @@
 #include <cmath>
 #include <limits>
 
-namespace phobos::psp {
+namespace ares::PlayStationPortable {
 
 namespace {
   // Instruction fields.

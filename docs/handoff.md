@@ -749,8 +749,8 @@ can't cover the firmware compiled into the native library), with PPSSPP readable
 for retail executables, and firmware optional per module family. [psp-core.md](psp-core.md) has the decisions,
 sources, design and phases.
 
-- **Part 1:** `psp/cpu/allegrex.cpp`, an interpreter for the Allegrex's integer and FPU instructions (the VFPU is
-  part 2), plain C++20 with no ares dependency. Not in the app.
+- **Part 1:** `ares/psp/cpu/allegrex.cpp`, an interpreter for the Allegrex's integer and FPU instructions (the VFPU
+  is part 2). It sits under `ares/` as the other systems do, the CPU in plain C++20 so far. Not in the app.
 - **Checks run:** `tests/allegrex/run-tests.sh` on the Mac, 14 groups pass with the undefined-behavior sanitizer
   (the address sanitizer's runtime hangs at start on this macOS, so the script uses it on Linux only); the new
   PSP Core Tests workflow runs both sanitizers. The binutils Allegrex test's assembled examples serve as vectors.

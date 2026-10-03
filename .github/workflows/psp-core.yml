@@ -1,14 +1,14 @@
 name: PSP Core Tests
 
-# The PSP core (psp/) isn't in the app yet; its parts are tested on the host, here with the address and
+# The PSP core (ares/psp) isn't in the app yet; its parts are tested on the host, here with the address and
 # undefined-behavior sanitizers.
 
 on:
   push:
     branches: [ master ]
-    paths: [ 'psp/**', 'tests/allegrex/**', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'tests/allegrex/**', '.github/workflows/psp-core.yml' ]
   pull_request:
-    paths: [ 'psp/**', 'tests/allegrex/**', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'tests/allegrex/**', '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
 concurrency:

@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <functional>
 
-namespace phobos::psp {
+namespace ares::PlayStationPortable {
 
 // What the CPU reads and writes through. Addresses are the CPU's own; the memory map decides what they reach.
 struct Bus {

@@ -1,9 +1,9 @@
-//Host tests for psp/cpu/allegrex: each runs a short program from RAM and checks the registers and memory.
+//Host tests for ares/psp/cpu/allegrex: each runs a short program from RAM and checks the registers and memory.
 //The encodings come from the MIPS32 manual; the Allegrex-only ones are the assembled examples in binutils'
 //Allegrex test (gas/testsuite/gas/mips/allegrex.d).
 //usage: tests/allegrex/run-tests.sh
 
-#include "../../psp/cpu/allegrex.hpp"
+#include "../../ares/psp/cpu/allegrex.hpp"
 
 #include <bit>
 #include <cmath>
@@ -14,8 +14,8 @@
 #include <utility>
 #include <vector>
 
-using phobos::psp::Allegrex;
-using phobos::psp::Bus;
+using ares::PlayStationPortable::Allegrex;
+using ares::PlayStationPortable::Bus;
 using Exception = Allegrex::Exception;
 
 namespace {

@@ -43,8 +43,9 @@ with host tests, is on branch `cursor/psp-core-2b67`. Nothing is in the app yet.
 
 ## Design
 
-- Plain C++20 under `psp/`, with no ares dependency, so each part is tested on the host (`tests/<part>/`); the
-  runner will present it the way it presents the ares systems (picture, sound, controls, states).
+- Under `ares/psp/` (namespace `ares::PlayStationPortable`), as ares's systems are: around the CPU and the other
+  parts goes an ares system, which the runner presents the way it presents the others (picture, sound, controls,
+  states). The CPU is plain C++20 so far, so it's tested on the host without the rest of ares (`tests/allegrex/`).
 - The CPU works through a `Bus` interface; the memory map (scratchpad, VRAM, main RAM, hardware registers) is a
   `Bus`.
 - Imports: the loader writes each imported function's stub as `jr ra` with `syscall n` in its delay slot, `n`
@@ -66,7 +67,7 @@ with host tests, is on branch `cursor/psp-core-2b67`. Nothing is in the app yet.
 
 ## Part 1: the Allegrex CPU
 
-`psp/cpu/allegrex.hpp` and `allegrex.cpp`: an interpreter with branch delay slots (a taken branch sets the address
+`ares/psp/cpu/allegrex.hpp` and `allegrex.cpp`: an interpreter with branch delay slots (a taken branch sets the address
 after the delay slot), likely branches that skip their delay slot when not taken, the Allegrex's encodings for
 `clz`, `clo`, `madd`, `maddu`, `msub` and `msubu`, its `min`, `max`, `bitrev`, `wsbw`, `halt`, `mfic` and `mtic`,
 unaligned loads and stores (`lwl`, `lwr`, `swl`, `swr`, little-endian), `ll` and `sc`, and the FPU: arithmetic,
@@ -79,4 +80,4 @@ by the dividend's sign, `hi` = the dividend), FPU arithmetic in rounding modes o
 nearest is used), and conversions of NaN or out-of-range values (0x7fffffff, MIPS's default).
 
 Tests: `tests/allegrex/run-tests.sh` (14 groups, with the undefined-behavior sanitizer; on Linux the address
-sanitizer too, which the PSP Core Tests workflow runs for changes to `psp/`).
+sanitizer too, which the PSP Core Tests workflow runs for changes to `ares/psp/`).
