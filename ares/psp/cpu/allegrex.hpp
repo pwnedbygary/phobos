@@ -296,6 +296,17 @@ struct Allegrex {
   struct Vector { u32 lane[4]; };
   struct Matrix { u32 element[16]; };
 
+  //The VFPU never passes a NaN through: whatever went in, a NaN result is always 0x7f800001 with a sign that
+  //depends on the instruction (measured on a PSP with tools/psp-vfpu-measure). Unknown leaves the host's NaN, for
+  //instructions not measured yet.
+  enum class NaNSign : u32 {
+    Unknown,   //not measured: the host's NaN
+    Positive,  //always positive
+    Input,     //the input's sign
+    Negated,   //the opposite of the input's sign
+    Product,   //the two inputs' signs multiplied (negative when exactly one is)
+  };
+
   //interpreter-vfpu.cpp
   auto vfpuFloat(u32 bits) const -> f32;
   auto vfpuBits(f64 value) const -> u32;
@@ -309,8 +320,9 @@ struct Allegrex {
   auto vfpuControl(u8 index) const -> u32;
   auto vfpuSetControl(u8 index, u32 value) -> void;
   auto vfpuRandom() -> u32;
-  template<typename F> auto vfpuUnary(u8 vd, u8 vs, u32 size, F function) -> void;
-  template<typename F> auto vfpuBinary(u8 vd, u8 vs, u8 vt, u32 size, F function) -> void;
+  auto vfpuNaN(u32 result, NaNSign sign, u32 s, u32 t = 0) const -> u32;
+  template<typename F> auto vfpuUnary(u8 vd, u8 vs, u32 size, F function, NaNSign sign = NaNSign::Unknown) -> void;
+  template<typename F> auto vfpuBinary(u8 vd, u8 vs, u8 vt, u32 size, F function, NaNSign sign = NaNSign::Unknown) -> void;
 
   auto BV(bool value, bool likely, u8 bit, s16 imm) -> void;
   auto LVLQ(u8 vt, cu32& rs, s16 imm) -> void;

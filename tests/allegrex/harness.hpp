@@ -232,6 +232,9 @@ struct Machine {
 //vfpu.cpp
 auto vfpuTests() -> Tests;
 
+//measured.cpp
+auto measured() -> void;
+
 inline int failures = 0;
 inline const char* currentTest = "";
 
