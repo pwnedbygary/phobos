@@ -77,26 +77,37 @@ val XmbTypography = with(PhobosTypography) {
     )
 }
 
-/** The XMB scene's colors, shared with the glass panels' contrast search ([GlassStyle]). */
-internal class WaveColors(scheme: ColorScheme, isDark: Boolean) {
+/** The XMB [scene]'s colors, shared with the glass panels' contrast search ([GlassStyle]). */
+internal class WaveColors(scheme: ColorScheme, isDark: Boolean, scene: XmbBackdropScene = XmbBackdropScene.WAVES) {
     /** Tints of the primary color at no less contrast with the text than the background has, like the glass glows. */
     val top = tintKeepingContrast(scheme.background, scheme.primary, 0.4f, isDark)
     val middle = tintKeepingContrast(scheme.background, scheme.primary, 0.2f, isDark)
 
-    /** Deeper in dark themes and paler in light ones, away from the text. */
-    val bottom = if (isDark) lerp(scheme.background, Color.Black, 0.35f) else lerp(scheme.background, Color.White, 0.5f)
+    /** Deeper in dark themes, deeper still for Deep, and paler in light ones, away from the text. */
+    val bottom = when {
+        !isDark -> lerp(scheme.background, Color.White, 0.5f)
+        scene == XmbBackdropScene.DEEP -> lerp(lerp(scheme.background, Color.Black, 0.35f), Color.Black, 0.35f)
+        else -> lerp(scheme.background, Color.Black, 0.35f)
+    }
 
     /** The ribbons' light: white on dark themes, and the primary color on light ones, where white wouldn't show. */
     private val light = if (isDark) Color.White else scheme.primary
 
+    /** How strongly the ribbons show: fainter when Calm, stronger when Deep. */
+    private val strength = when (scene) {
+        XmbBackdropScene.CALM -> 0.5f
+        XmbBackdropScene.DEEP -> 1.35f
+        XmbBackdropScene.WAVES -> 1f
+    }
+
     /** A ribbon's see-through fill. */
-    val ribbon = light.copy(alpha = 0.06f)
+    val ribbon = light.copy(alpha = 0.06f * strength)
 
     /** The soft glow along each edge of a ribbon, a wide stroke under [crest]. */
-    val crestGlow = light.copy(alpha = 0.05f)
+    val crestGlow = light.copy(alpha = 0.05f * strength)
 
     /** The bright line along each edge of a ribbon. */
-    val crest = light.copy(alpha = if (isDark) 0.24f else 0.3f)
+    val crest = light.copy(alpha = (if (isDark) 0.24f else 0.3f) * strength)
 
     /** The gradient at [fraction] of the height, blended per sRGB channel as the screen blends it. */
     fun skyAt(fraction: Float): Color =
@@ -202,12 +213,8 @@ fun XmbBackdrop(
     }
     Spacer(
         modifier.drawWithCache {
-            val colors = WaveColors(scheme, isDark)
-            val bottom = when (scene) {
-                XmbBackdropScene.DEEP -> lerp(colors.bottom, Color.Black, 0.35f)
-                else -> colors.bottom
-            }
-            val sky = Brush.verticalGradient(0f to colors.top, WaveColors.MIDDLE to colors.middle, 1f to bottom)
+            val colors = WaveColors(scheme, isDark, scene)
+            val sky = Brush.verticalGradient(0f to colors.top, WaveColors.MIDDLE to colors.middle, 1f to colors.bottom)
             val glow = Stroke(6.dp.toPx())
             val crest = Stroke(1.5.dp.toPx())
             val fill = Path()
@@ -217,18 +224,13 @@ fun XmbBackdrop(
                 drawRect(sky)
                 val now = time.floatValue
                 val waves = if (scene == XmbBackdropScene.CALM) WAVES.take(1) else WAVES
-                val strength = when (scene) {
-                    XmbBackdropScene.CALM -> 0.5f
-                    XmbBackdropScene.DEEP -> 1.35f
-                    XmbBackdropScene.WAVES -> 1f
-                }
                 waves.forEach { wave ->
                     wave.trace(size, now, fill, upper, lower)
-                    drawPath(fill, colors.ribbon, alpha = strength)
-                    drawPath(upper, colors.crestGlow, alpha = strength, style = glow)
-                    drawPath(upper, colors.crest, alpha = strength, style = crest)
-                    drawPath(lower, colors.crestGlow, alpha = strength, style = glow)
-                    drawPath(lower, colors.crest, alpha = strength, style = crest)
+                    drawPath(fill, colors.ribbon)
+                    drawPath(upper, colors.crestGlow, style = glow)
+                    drawPath(upper, colors.crest, style = crest)
+                    drawPath(lower, colors.crestGlow, style = glow)
+                    drawPath(lower, colors.crest, style = crest)
                 }
             }
         },

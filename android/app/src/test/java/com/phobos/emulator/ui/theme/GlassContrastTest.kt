@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.google.android.material.color.utilities.Hct
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.XmbBackdropScene
 import com.google.android.material.color.utilities.SchemeTonalSpot
 import com.google.android.material.color.utilities.TonalPalette
 import org.junit.Assert.assertTrue
@@ -21,11 +22,11 @@ import kotlin.math.roundToInt
  * WCAG checks for the glass look, measured on the composited 8-bit colors the screen shows rather
  * than on opaque roles. Covers every palette of every registered theme plus Material You schemes
  * built the way Android 12 and 13 build them (Material's tonal-spot palettes from 24 seed hues,
- * mapped to roles at the tones Compose Material 3 1.2.1 uses), each over every scene (the glows,
- * Retrowave's sunset and the XMB waves), at each Glass effects level. Backdrops are sampled more finely than the app's own
- * search: every glow at every tenth of its strength in every combination, and the sunset and the waves across their
- * gradients. The dock, which pages scroll under, is checked over greys and hues across the whole range rather than over
- * the backdrop alone.
+ * mapped to roles at the tones Compose Material 3 1.2.1 uses), each over every scene (the glows, the
+ * aurora and the mesh, Retrowave's sunset and night city, and the XMB waves and deep waves), at each Glass effects level.
+ * Backdrops are sampled more finely than the app's own search: every glow at every tenth of its strength in every
+ * combination, and the drawn scenes across their gradients. The dock, which pages scroll under, is checked over greys and
+ * hues across the whole range rather than over the backdrop alone.
  */
 class GlassContrastTest {
 
@@ -108,10 +109,26 @@ class GlassContrastTest {
         val s = v.scheme
         val style = v.style(scene, level)
         val text = listOf("onBackground" to s.onBackground, "onSurfaceVariant" to s.onSurfaceVariant, "primary" to s.primary)
-        (if (scene == GlassScene.SUNSET) sunsetScene(v) else waveScene(v)).flatMap { backdrop ->
+        sceneColors(v, scene).flatMap { backdrop ->
             val plate = composite(s.background.toArgb(), backdrop, paint(style.backdropPlateAlpha))
             text.map { (role, color) -> Check("$role on the backdrop plate over ${hex(backdrop)}", color.toArgb(), plate, 4.5) }
         }
+    }
+
+    @Test
+    fun topBarStandsOutFromTheAurora() {
+        // The top bar is see-through until content scrolls under it: its title and icons, a checked one in primary, (3:1) over the aurora's upper bands.
+        val failures = variants.flatMap { v ->
+            val stops = AuroraColors(v.scheme, v.isDark).stops.map(::argb)
+            val upper = (0..8).map { lerp(stops[0], stops[1], it / 8.0) }
+            listOf("onSurface" to v.scheme.onSurface, "onSurfaceVariant" to v.scheme.onSurfaceVariant, "primary" to v.scheme.primary).flatMap { (role, color) ->
+                upper.mapNotNull { backdrop ->
+                    val ratio = contrast(color.toArgb(), backdrop)
+                    if (ratio >= 3.0) null else "${v.name}: $role in the top bar over the aurora ${hex(backdrop)} is ${fmt(ratio)}:1, needs 3.0:1"
+                }
+            }
+        }
+        assertTrue("${failures.size} failures\n" + failures.take(25).joinToString("\n"), failures.isEmpty())
     }
 
     @Test
@@ -191,7 +208,8 @@ class GlassContrastTest {
     private fun dockFills(v: Variant, style: GlassStyle, scene: GlassScene): List<Pair<String, Int>> {
         val primary = v.scheme.primary.toArgb()
         val container = v.scheme.surfaceContainer.toArgb()
-        val under = if (scene == GlassScene.SUNSET) anyContent.flatMap { c -> (0..4).map { composite(primary, c, NEON_HALO * it / 4) } }.distinct() else anyContent
+        val retrowave = scene == GlassScene.SUNSET || scene == GlassScene.CITY
+        val under = if (retrowave) anyContent.flatMap { c -> (0..4).map { composite(primary, c, NEON_HALO * it / 4) } }.distinct() else anyContent
         return under.flatMap { content ->
             val fill = composite(container, content, paint(style.dockAlpha))
             listOf(
@@ -202,20 +220,43 @@ class GlassContrastTest {
         }
     }
 
-    /** Colors under a panel: the glows and a neighboring panel's shadow where it reaches, the sunset, or the waves. */
+    /** Colors under a panel: the glows and a neighboring panel's shadow where it reaches, or a drawn scene, Retrowave's under the neon halo. */
     private fun panelBackdrops(v: Variant, style: GlassStyle, scene: GlassScene): List<Int> = when (scene) {
         GlassScene.GLOWS -> glowBackdrops(v, style).flatMap { listOf(it, composite(BLACK, it, style.shadowAlpha * SHADOW_REACH)) }.distinct()
-        GlassScene.SUNSET -> sunsetBackdrops(v)
-        GlassScene.WAVES -> waveScene(v)
+        GlassScene.SUNSET, GlassScene.CITY -> withNeonHalo(v, sceneColors(v, scene))
+        else -> sceneColors(v, scene)
+    }
+
+    /** A drawn scene's colors, which text drawn straight on it sees through its plate. */
+    private fun sceneColors(v: Variant, scene: GlassScene): List<Int> = when (scene) {
+        GlassScene.GLOWS -> error("the glows are fitted, not drawn")
+        GlassScene.AURORA -> auroraScene(v)
+        GlassScene.MESH -> meshScene(v)
+        GlassScene.SUNSET -> sunsetScene(v)
+        GlassScene.CITY -> cityScene(v)
+        GlassScene.WAVES -> waveScene(v, XmbBackdropScene.WAVES)
+        GlassScene.DEEP -> waveScene(v, XmbBackdropScene.DEEP)
+    }
+
+    /** The aurora's gradient, at every eighth of the way between its stops. */
+    private fun auroraScene(v: Variant): List<Int> {
+        val steps = (0..8).map { it / 8.0 }
+        return AuroraColors(v.scheme, v.isDark).stops.map(::argb).zipWithNext().flatMap { (a, b) -> steps.map { lerp(a, b, it) } }.distinct()
+    }
+
+    /** The background, and the mesh's lines at every eighth of their strength, as antialiasing blends their edges into it. */
+    private fun meshScene(v: Variant): List<Int> {
+        val background = v.scheme.background.toArgb()
+        val line = argb(meshLine(v.scheme, v.isDark))
+        return (0..8).map { lerp(background, line, it / 8.0) }.distinct()
     }
 
     /**
      * The XMB waves' gradient, and across the band the ribbons reach, every point under none to all of
      * the ribbons, plain, under a crest's glow, and under its glow and line.
      */
-    private fun waveScene(v: Variant): List<Int> {
-        val waves = WaveColors(v.scheme, v.isDark)
-        fun argb(color: Color) = color.copy(alpha = 1f).toArgb()
+    private fun waveScene(v: Variant, scene: XmbBackdropScene): List<Int> {
+        val waves = WaveColors(v.scheme, v.isDark, scene)
         fun layer(color: Color, under: Int) = composite(argb(color), under, paint(color.alpha))
         val steps = (0..8).map { it / 8.0 }
         val sky = listOf(waves.top, waves.middle, waves.bottom).map(::argb).zipWithNext().flatMap { (a, b) -> steps.map { lerp(a, b, it) } }
@@ -236,33 +277,65 @@ class GlassContrastTest {
             layers.flatMap { under -> (0..10).map { composite(glow.color.toArgb(), under, glow.alpha * it / 10.0) } }.distinct()
         }
 
-    /** The Retrowave sunset across its gradients, each point also under a card's neon halo at every strength. */
-    private fun sunsetBackdrops(v: Variant): List<Int> {
+    /** Retrowave's [colors], each also under a card's neon halo at every strength. */
+    private fun withNeonHalo(v: Variant, colors: List<Int>): List<Int> {
         val primary = v.scheme.primary.toArgb()
         val steps = (0..4).map { it / 4.0 }
-        return sunsetScene(v).flatMap { under -> steps.map { composite(primary, under, NEON_HALO * it) } }.distinct()
+        return colors.flatMap { under -> steps.map { composite(primary, under, NEON_HALO * it) } }.distinct()
     }
 
     /** The Retrowave sunset across its gradients: the sky, the sun and its glow, the floor, grid, horizon and stars. */
     private fun sunsetScene(v: Variant): List<Int> {
         val sunset = SunsetColors(v.scheme, v.isDark)
-        fun argb(color: Color) = color.copy(alpha = 1f).toArgb()
         val steps = (0..4).map { it / 4.0 }
-        val sky = listOf(sunset.skyTop, sunset.skyMiddle, sunset.skyBottom).map(::argb).zipWithNext().flatMap { (a, b) -> steps.map { lerp(a, b, it) } }
         val glowAtSun = (0..6).map { composite(argb(sunset.sunGlow), argb(sunset.skyBottom), sunset.sunGlow.alpha * it / 6.0) }
         val sun = steps.flatMap { t ->
             val color = lerp(argb(sunset.sunTop), argb(sunset.sunBottom), t)
             glowAtSun.map { composite(color, it, sunset.sunAlpha.toDouble()) }
         }
+        return (sunsetSky(sunset) + glowAtSun + sun + sunsetGround(sunset)).distinct()
+    }
+
+    /**
+     * Night city: the sunset's sky, floor, grid and horizon without the sun; the buildings; the horizon's
+     * glow at every strength over their feet, the sky and the floor, with its line on each; stars at every
+     * strength all the way down the sky in dark themes; and the antennas against the sky.
+     */
+    private fun cityScene(v: Variant): List<Int> {
+        val sunset = SunsetColors(v.scheme, v.isDark)
+        val steps = (0..4).map { it / 4.0 }
+        val sky = sunsetSky(sunset)
+        val horizon = listOf(sunset.silhouette, sunset.skyBottom, sunset.floorTop).map(::argb).flatMap { base ->
+            val glows = steps.map { composite(argb(sunset.horizonGlow), base, sunset.horizonGlow.alpha * it) }
+            glows + glows.map { composite(argb(sunset.horizonLine), it, sunset.horizonLine.alpha.toDouble()) }
+        }
+        val stars = if (sunset.isDark) sky.flatMap { under -> steps.map { composite(argb(sunset.star), under, 0.15 + (sunset.starMaxAlpha - 0.15) * it) } } else emptyList()
+        val antennas = sky.map { composite(argb(sunset.antenna), it, sunset.antenna.alpha.toDouble()) }
+        return (sky + sunsetGround(sunset) + horizon + stars + antennas).distinct()
+    }
+
+    /** The sunset's sky across its gradient, and its stars in dark themes. */
+    private fun sunsetSky(sunset: SunsetColors): List<Int> {
+        val steps = (0..4).map { it / 4.0 }
+        val sky = listOf(sunset.skyTop, sunset.skyMiddle, sunset.skyBottom).map(::argb).zipWithNext().flatMap { (a, b) -> steps.map { lerp(a, b, it) } }
+        val stars = if (sunset.isDark) steps.map { composite(argb(sunset.star), argb(sunset.skyTop), 0.15 + (sunset.starMaxAlpha - 0.15) * it) } else emptyList()
+        return sky + stars
+    }
+
+    /** The sunset's floor across its gradient, its grid at every strength, and the horizon's glow and line. */
+    private fun sunsetGround(sunset: SunsetColors): List<Int> {
+        val steps = (0..4).map { it / 4.0 }
         val floor = steps.map { lerp(argb(sunset.floorTop), argb(sunset.floorBottom), it) }
         val grid = floor.flatMap { under -> steps.map { composite(argb(sunset.grid), under, sunset.grid.alpha * it) } }
         val horizon = listOf(argb(sunset.skyBottom), argb(sunset.floorTop)).flatMap { under ->
             steps.map { composite(argb(sunset.horizonGlow), under, sunset.horizonGlow.alpha * it) } +
                 composite(argb(sunset.horizonLine), under, sunset.horizonLine.alpha.toDouble())
         }
-        val stars = if (sunset.isDark) steps.map { composite(argb(sunset.star), argb(sunset.skyTop), 0.15 + (sunset.starMaxAlpha - 0.15) * it) } else emptyList()
-        return (sky + glowAtSun + sun + floor + grid + horizon + stars).distinct()
+        return floor + grid + horizon
     }
+
+    /** [color] made opaque, for layering at its own alpha. */
+    private fun argb(color: Color) = color.copy(alpha = 1f).toArgb()
 
     private fun assertAll(checks: (Variant, GlassScene, GlassEffects) -> List<Check>) {
         val failures = variants.flatMap { v ->

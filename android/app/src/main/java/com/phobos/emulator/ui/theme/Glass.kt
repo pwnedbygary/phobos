@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import com.phobos.emulator.data.GlassEffects
+import com.phobos.emulator.data.XmbBackdropScene
 import androidx.compose.ui.graphics.luminance
 import kotlin.math.max
 import kotlin.math.min
@@ -18,8 +19,11 @@ import kotlin.math.roundToInt
 @Immutable
 data class Glow(val color: Color, val alpha: Float, val x: Float, val y: Float, val radius: Float)
 
-/** What the glass panels sit over: soft glows, Retrowave's sunset, or the XMB waves. */
-enum class GlassScene { GLOWS, SUNSET, WAVES }
+/**
+ * What the glass panels sit over: soft glows, the aurora or the mesh; Retrowave's sunset (its grid
+ * too, the sunset without the sun) or night city; or the XMB waves (calm ones too) or deep ones.
+ */
+enum class GlassScene { GLOWS, AURORA, MESH, SUNSET, CITY, WAVES, DEEP }
 
 /**
  * The glass look for one theme, computed once from its final colors rather than the cross-fading
@@ -27,10 +31,10 @@ enum class GlassScene { GLOWS, SUNSET, WAVES }
  * also show secondary, tertiary, error, success or warning text. The floating dock, which pages
  * scroll under, fills at [dockAlpha], so its labels hold up over any color. A white gloss from the
  * top left peaks at [glossAlpha] and a shade toward black at the bottom right at [shadeAlpha];
- * panels cast a black shadow at [shadowAlpha] (none over the sunset, where Retrowave's neon edge
- * takes its place, or over the XMB waves). The dock's selection pill is `primary` at
- * [indicatorAlpha]. [glows] sit behind the screens, at zero alpha over the sunset or the waves,
- * which draw their own scenes. Each value is the
+ * panels cast a black shadow at [shadowAlpha] (only over the glows: none over a drawn scene, such
+ * as Retrowave's, where the neon edge takes its place). The dock's selection pill is `primary` at
+ * [indicatorAlpha]. [glows] sit behind the screens, at zero alpha over the other scenes, which are
+ * drawn rather than fitted. Each value is the
  * strongest (or, for the panels, the most see-through) that keeps text at WCAG AA against every
  * backdrop it can end up over. [level] is the user's Glass effects setting: Subtle scales every
  * strength down and raises the panel floor, and Off makes panels and the dock opaque with no
@@ -42,7 +46,7 @@ enum class GlassScene { GLOWS, SUNSET, WAVES }
  * band along a panel's edge that text keeps clear of, so they don't enter the contrast searches.
  * At [refraction] above zero (the Full level, Android 13 and later), the dock draws the pages and
  * backdrop behind it through a lens that bends them within that same band, where the tint thins.
- * Over the sunset or the waves, headers and other text drawn straight on the scene sit on a soft
+ * Over any scene but the glows, headers and other text drawn straight on the scene sit on a soft
  * plate of the background at [backdropPlateAlpha], the least that keeps them at WCAG AA over all of it.
  */
 @Immutable
@@ -125,16 +129,20 @@ internal class GlassBuilder(
         }
         val panelBackdrops = when (scene) {
             GlassScene.GLOWS -> screenBackdrops + screenBackdrops.map { over(Color.Black, shadowAlpha * SHADOW_REACH, it) }
-            GlassScene.SUNSET -> sunsetBackdrops(SunsetColors(scheme, isDark))
-            GlassScene.WAVES -> waveScene(WaveColors(scheme, isDark))
+            GlassScene.SUNSET, GlassScene.CITY -> withNeonHalo(sceneColors())
+            else -> sceneColors()
         }
         val panelAlpha = mostSeeThrough(bodyText, panelBackdrops)
         val accentPanelAlpha = max(panelAlpha, mostSeeThrough(accentText, panelBackdrops))
         val fills = panelBackdrops.map { panel(panelAlpha, it) }
         val accentFills = panelBackdrops.map { panel(accentPanelAlpha, it) }
+        // The dock falls back to opaque when no see-through fill passes, so a sheen must leave that readable too.
+        val dockFill = panel(1f, scheme.surfaceContainer)
         fun overlayPasses(overlay: Color) =
             fills.all { bodyText.pass(over(overlay, it), TEXT_CONTRAST) } &&
-                accentFills.all { accentText.pass(over(overlay, it), TEXT_CONTRAST) }
+                accentFills.all { accentText.pass(over(overlay, it), TEXT_CONTRAST) } &&
+                dockText.pass(over(overlay, dockFill), TEXT_CONTRAST) &&
+                primaryIcon.pass(over(scheme.primary, INDICATOR, over(overlay, dockFill)), ICON_CONTRAST)
         val gloss = strongest(strength.gloss * if (isDark) DARK_GLOSS else LIGHT_GLOSS) { overlayPasses(Color.White.copy(alpha = it)) }
         val shade = strongest(strength.shade * if (isDark) DARK_SHADE else LIGHT_SHADE) { overlayPasses(Color.Black.copy(alpha = it)) }
         // The dock's fill as its labels, and the selected icon on a full-strength pill, see it:
@@ -149,7 +157,7 @@ internal class GlassBuilder(
         }?.let { it / 100f } ?: 1f
         return GlassStyle(
             panelAlpha, accentPanelAlpha, dockAlpha, gloss, shade, shadowAlpha, indicator(dockAlpha, sheens), glows, level, strength.rim,
-            contactShadowAlpha = if (scene == GlassScene.SUNSET) 0f else strength.shadow * if (isDark) DARK_CONTACT else LIGHT_CONTACT,
+            contactShadowAlpha = if (scene == GlassScene.SUNSET || scene == GlassScene.CITY) 0f else strength.shadow * if (isDark) DARK_CONTACT else LIGHT_CONTACT,
             bevelLight = strength.bevel * if (isDark) DARK_BEVEL_LIGHT else LIGHT_BEVEL_LIGHT,
             bevelShade = strength.bevel * if (isDark) DARK_BEVEL_SHADE else LIGHT_BEVEL_SHADE,
             refraction = if (level == GlassEffects.FULL) 1f else 0f,
@@ -157,23 +165,37 @@ internal class GlassBuilder(
         )
     }
 
-    /** The background's alpha behind text on the sunset or the waves: the least that keeps screen text at AA over all of it. */
+    /** The background's alpha behind text on a drawn scene: the least that keeps screen text at AA over all of it. */
     private fun backdropPlate(): Float {
-        val colors = when (scene) {
-            GlassScene.GLOWS -> return 0f
-            GlassScene.SUNSET -> sunsetScene(SunsetColors(scheme, isDark))
-            GlassScene.WAVES -> waveScene(WaveColors(scheme, isDark))
-        }
+        if (scene == GlassScene.GLOWS) return 0f
+        val colors = sceneColors()
         return (0..100).firstOrNull { step -> colors.all { screenText.pass(over(scheme.background, step / 100f, it), TEXT_CONTRAST) } }
             ?.let { it / 100f } ?: 1f
     }
+
+    /** The colors a drawn scene (any but the glows) puts behind text and panels. */
+    private fun sceneColors(): List<Color> = when (scene) {
+        GlassScene.GLOWS -> error("the glows are fitted, not drawn")
+        GlassScene.AURORA -> auroraScene(AuroraColors(scheme, isDark))
+        GlassScene.MESH -> meshScene(meshLine(scheme, isDark))
+        GlassScene.SUNSET -> sunsetScene(SunsetColors(scheme, isDark))
+        GlassScene.CITY -> cityScene(SunsetColors(scheme, isDark))
+        GlassScene.WAVES -> waveScene(WaveColors(scheme, isDark))
+        GlassScene.DEEP -> waveScene(WaveColors(scheme, isDark, XmbBackdropScene.DEEP))
+    }
+
+    /** The aurora down its gradient. */
+    private fun auroraScene(aurora: AuroraColors): List<Color> =
+        aurora.stops.zipWithNext().flatMap { (from, to) -> gradient(from, to) }.distinct()
+
+    /** The background, and the mesh's lines blending into it at their antialiased edges. */
+    private fun meshScene(line: Color): List<Color> = listOf(scheme.background) + GLOW_SAMPLES.map { over(line, it, scheme.background) }
 
     /**
      * The XMB scene's colors: its gradient, and across the band the ribbons reach, each point under
      * one to [WaveColors.MAX_OVERLAP] ribbons, with a crest's glow and line on top.
      */
     private fun waveScene(waves: WaveColors): List<Color> {
-        fun gradient(from: Color, to: Color) = GLOW_SAMPLES.map { over(to, it, from) } + from
         val sky = gradient(waves.top, waves.middle) + gradient(waves.middle, waves.bottom)
         val band = WaveColors.BAND
         val underRibbons = (0..BAND_SAMPLES).map { Color(waves.skyAt(band.start + (band.endInclusive - band.start) * it / BAND_SAMPLES).toArgb()) }
@@ -254,23 +276,47 @@ internal class GlassBuilder(
             layers.flatMap { under -> listOf(under) + GLOW_SAMPLES.map { over(glow.color, glow.alpha * it, under) } }
         }.distinct()
 
-    /** The sunset's colors (see [sunsetScene]), each also under the inner half of a card's neon halo. */
-    private fun sunsetBackdrops(sunset: SunsetColors): List<Color> =
-        sunsetScene(sunset).flatMap { listOf(it, over(scheme.primary, NEON_HALO / 2f, it), over(scheme.primary, NEON_HALO, it)) }.distinct()
+    /** Retrowave's [colors], each also under the inner half of a card's neon halo. */
+    private fun withNeonHalo(colors: List<Color>): List<Color> =
+        colors.flatMap { listOf(it, over(scheme.primary, NEON_HALO / 2f, it), over(scheme.primary, NEON_HALO, it)) }.distinct()
 
     /** The sunset's colors, including its brightest parts: the sun, its glow, the horizon line and stars. */
     private fun sunsetScene(sunset: SunsetColors): List<Color> {
-        // Gradients blend in sRGB, where brightness can dip between the ends, so they are sampled along the way.
-        fun gradient(from: Color, to: Color) = GLOW_SAMPLES.map { over(to, it, from) } + from
-        val sky = gradient(sunset.skyTop, sunset.skyMiddle) + gradient(sunset.skyMiddle, sunset.skyBottom)
         val glowAtSun = gradient(sunset.skyBottom, over(sunset.sunGlow.copy(alpha = 1f), sunset.sunGlow.alpha, sunset.skyBottom))
         val sun = gradient(sunset.sunTop, sunset.sunBottom).flatMap { color -> glowAtSun.map { over(color, sunset.sunAlpha, it) } }
-        val floor = gradient(sunset.floorTop, sunset.floorBottom)
-        val lines = floor.map { over(sunset.grid, it) } +
-            listOf(sunset.skyBottom, sunset.floorTop).flatMap { listOf(over(sunset.horizonGlow, it), over(sunset.horizonLine, it)) }
-        val stars = if (sunset.isDark) listOf(over(sunset.star, sunset.starMaxAlpha, sunset.skyTop)) else emptyList()
-        return (sky + glowAtSun + sun + floor + lines + stars).distinct()
+        return (sunsetSky(sunset) + glowAtSun + sun + sunsetGround(sunset)).distinct()
     }
+
+    /**
+     * Night city's colors: the sunset's sky, floor, grid and horizon without the sun; the buildings;
+     * the horizon's glow over their feet, the sky and the floor, with its line on the glow's peak;
+     * stars all the way down the sky in dark themes; and antennas against the sky.
+     */
+    private fun cityScene(sunset: SunsetColors): List<Color> {
+        val sky = sunsetSky(sunset)
+        val horizon = listOf(sunset.silhouette, sunset.skyBottom, sunset.floorTop).flatMap { base ->
+            val glow = over(sunset.horizonGlow, base)
+            gradient(base, glow) + over(sunset.horizonLine, base) + over(sunset.horizonLine, glow)
+        }
+        val stars = if (sunset.isDark) sky.map { over(sunset.star, sunset.starMaxAlpha, it) } else emptyList()
+        return (sky + sunsetGround(sunset) + horizon + stars + sky.map { over(sunset.antenna, it) }).distinct()
+    }
+
+    /** The sunset's sky, and its stars in dark themes. */
+    private fun sunsetSky(sunset: SunsetColors): List<Color> {
+        val stars = if (sunset.isDark) listOf(over(sunset.star, sunset.starMaxAlpha, sunset.skyTop)) else emptyList()
+        return gradient(sunset.skyTop, sunset.skyMiddle) + gradient(sunset.skyMiddle, sunset.skyBottom) + stars
+    }
+
+    /** The sunset's floor, its grid, and the horizon's glow and line. */
+    private fun sunsetGround(sunset: SunsetColors): List<Color> {
+        val floor = gradient(sunset.floorTop, sunset.floorBottom)
+        return floor + floor.map { over(sunset.grid, it) } +
+            listOf(sunset.skyBottom, sunset.floorTop).flatMap { listOf(over(sunset.horizonGlow, it), over(sunset.horizonLine, it)) }
+    }
+
+    /** A gradient from [from] to [to], sampled along the way: gradients blend in sRGB, where brightness can dip between the ends. */
+    private fun gradient(from: Color, to: Color) = GLOW_SAMPLES.map { over(to, it, from) } + from
 
     private fun panel(alpha: Float, backdrop: Color) = over(scheme.surfaceContainer, alpha, backdrop)
 

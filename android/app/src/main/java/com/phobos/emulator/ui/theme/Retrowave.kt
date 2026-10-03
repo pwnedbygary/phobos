@@ -87,6 +87,12 @@ internal class SunsetColors(scheme: ColorScheme, val isDark: Boolean) {
     val horizonLine = scheme.primary.copy(alpha = 0.9f * strength)
     val star = scheme.onBackground
     val starMaxAlpha = 0.6f
+
+    /** Night city's buildings, standing on the horizon. */
+    val silhouette = lerp(skyBottom, Color.Black, if (isDark) 0.72f else 0.48f)
+
+    /** The antennas on some of night city's buildings. */
+    val antenna = scheme.secondary.copy(alpha = 0.25f)
 }
 
 private fun CacheDrawScope.sunsetGrid(scheme: ColorScheme, isDark: Boolean, scene: RetrowaveBackdropScene): DrawResult {
@@ -146,15 +152,14 @@ private fun CacheDrawScope.sunsetGrid(scheme: ColorScheme, isDark: Boolean, scen
             }
         }
         if (scene == RetrowaveBackdropScene.CITY) {
-            val silhouette = lerp(colors.skyBottom, Color.Black, if (isDark) 0.72f else 0.48f)
             var x = -width * 0.04f
             var building = 0
             while (x < width) {
                 val buildingWidth = width * (0.06f + (building % 4) * 0.025f)
                 val buildingHeight = height * (0.10f + (building % 5) * 0.035f)
-                drawRect(silhouette, Offset(x, horizon - buildingHeight), Size(buildingWidth, buildingHeight))
+                drawRect(colors.silhouette, Offset(x, horizon - buildingHeight), Size(buildingWidth, buildingHeight))
                 if (building % 3 == 0) {
-                    drawRect(scheme.secondary.copy(alpha = 0.25f), Offset(x + buildingWidth * 0.45f, horizon - buildingHeight - height * 0.025f), Size(1.dp.toPx(), height * 0.025f))
+                    drawRect(colors.antenna, Offset(x + buildingWidth * 0.45f, horizon - buildingHeight - height * 0.025f), Size(1.dp.toPx(), height * 0.025f))
                 }
                 x += buildingWidth * 0.86f
                 building++

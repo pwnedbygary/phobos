@@ -29,7 +29,10 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
+import com.phobos.emulator.data.GlassBackdropScene
+import com.phobos.emulator.data.RetrowaveBackdropScene
 import com.phobos.emulator.data.UiEffects
+import com.phobos.emulator.data.XmbBackdropScene
 import kotlinx.coroutines.delay
 
 /**
@@ -180,11 +183,20 @@ val UiEffects.style: UiStyle
         UiEffects.XMB -> XmbUi
     }
 
-/** What these effects' glass panels sit over, for the contrast searches in [GlassStyle]. */
-val UiEffects.glassScene: GlassScene
-    get() = when (this) {
-        UiEffects.RETROWAVE -> GlassScene.SUNSET
-        UiEffects.XMB -> GlassScene.WAVES
+/**
+ * What [effects]' glass panels sit over with the backdrop chosen for them, for the contrast searches
+ * in [GlassStyle]. The grid is the sunset without its sun, and calm waves are fainter and fewer, so
+ * they keep the sunset's and the waves' values.
+ */
+fun glassScene(effects: UiEffects, glass: GlassBackdropScene, retrowave: RetrowaveBackdropScene, xmb: XmbBackdropScene): GlassScene =
+    when (effects) {
+        UiEffects.RETROWAVE -> if (retrowave == RetrowaveBackdropScene.CITY) GlassScene.CITY else GlassScene.SUNSET
+        UiEffects.XMB -> if (xmb == XmbBackdropScene.DEEP) GlassScene.DEEP else GlassScene.WAVES
+        UiEffects.NONE -> when (glass) {
+            GlassBackdropScene.GLOWS -> GlassScene.GLOWS
+            GlassBackdropScene.AURORA -> GlassScene.AURORA
+            GlassBackdropScene.MESH -> GlassScene.MESH
+        }
         else -> GlassScene.GLOWS
     }
 

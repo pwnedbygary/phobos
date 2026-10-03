@@ -1,6 +1,7 @@
 package com.phobos.emulator.ui.theme
 
 import androidx.compose.ui.graphics.toArgb
+import com.phobos.emulator.data.XmbBackdropScene
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,10 +13,12 @@ class XmbContrastTest {
     @Test
     fun topBarTitleStandsOutFromTheGradient() {
         // The top bar's title is large text over the top of the gradient, above the band the ribbons reach.
-        val failures = styleVariants.mapNotNull { v ->
-            val waves = WaveColors(v.scheme, v.isDark)
-            val ratio = wcagContrast(v.scheme.onSurface.toArgb(), waves.top.toArgb())
-            if (ratio < 3.0) "${v.name}: the top bar's title over the gradient: ${twoPlaces(ratio)}" else null
+        val failures = styleVariants.flatMap { v ->
+            XmbBackdropScene.entries.mapNotNull { scene ->
+                val waves = WaveColors(v.scheme, v.isDark, scene)
+                val ratio = wcagContrast(v.scheme.onSurface.toArgb(), waves.top.toArgb())
+                if (ratio < 3.0) "${v.name}: the top bar's title over the ${scene.label} gradient: ${twoPlaces(ratio)}" else null
+            }
         }
         assertTrue(failures.take(20).joinToString("\n"), failures.isEmpty())
     }

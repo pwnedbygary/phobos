@@ -96,7 +96,7 @@ fun PhobosTheme(
     xmbBackdrop: XmbBackdropScene = XmbBackdropScene.WAVES,
     content: @Composable () -> Unit,
 ) {
-    val scene = effects.glassScene
+    val scene = glassScene(effects, glassBackdrop, retrowaveBackdrop, xmbBackdrop)
     val resolved = ThemeRegistry.resolve(themeId, themeMode, followSystem, isSystemInDarkTheme())
     val context = LocalContext.current
     val useDynamic = resolved.theme.dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S

@@ -88,7 +88,28 @@ fun CatalogBackdropView(
     }
 }
 
-/** Glass family backdrops that do not need the live [GlassStyle] glows (screensaver / cross-style). */
+/**
+ * The aurora's bands, top to bottom, shared with the glass panels' contrast search ([GlassStyle]):
+ * tints at no less contrast with the text than the background has, like the XMB gradient's, so the
+ * see-through top bar's title and icons hold up over them.
+ */
+internal class AuroraColors(scheme: ColorScheme, isDark: Boolean) {
+    val stops = listOf(
+        tintKeepingContrast(scheme.background, scheme.primary, if (isDark) 0.35f else 0.2f, isDark),
+        tintKeepingContrast(scheme.background, scheme.tertiary, if (isDark) 0.28f else 0.18f, isDark),
+        tintKeepingContrast(scheme.background, scheme.secondary, if (isDark) 0.22f else 0.12f, isDark),
+        scheme.background,
+    )
+}
+
+/** The mesh's lines, shared with the glass panels' contrast search ([GlassStyle]). */
+internal fun meshLine(scheme: ColorScheme, isDark: Boolean): Color =
+    lerp(scheme.background, scheme.primary, if (isDark) 0.18f else 0.12f)
+
+/**
+ * Glass family backdrops that do not need the live [GlassStyle] glows: the aurora and the mesh behind
+ * the pages, and any of the three behind the screensaver, where these glows draw at a fixed strength.
+ */
 @Composable
 fun GlassCatalogBackdrop(
     scheme: ColorScheme,
@@ -123,16 +144,13 @@ fun GlassCatalogBackdrop(
         )
         GlassBackdropScene.AURORA -> Spacer(
             modifier.drawWithCache {
-                val top = lerp(scheme.background, scheme.primary, if (isDark) 0.35f else 0.2f)
-                val mid = lerp(scheme.background, scheme.tertiary, if (isDark) 0.28f else 0.18f)
-                val bottom = lerp(scheme.background, scheme.secondary, if (isDark) 0.22f else 0.12f)
-                val brush = Brush.verticalGradient(listOf(top, mid, bottom, scheme.background))
+                val brush = Brush.verticalGradient(AuroraColors(scheme, isDark).stops)
                 onDrawBehind { drawRect(brush) }
             },
         )
         GlassBackdropScene.MESH -> Spacer(
             modifier.drawWithCache {
-                val line = lerp(scheme.background, scheme.primary, if (isDark) 0.18f else 0.12f)
+                val line = meshLine(scheme, isDark)
                 val pitch = max(12f, min(size.width, size.height) / 24f)
                 onDrawBehind {
                     drawRect(scheme.background)

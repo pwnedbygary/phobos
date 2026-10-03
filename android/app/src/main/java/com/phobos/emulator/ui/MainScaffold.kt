@@ -290,16 +290,8 @@ fun MainScaffold(viewModel: MainViewModel) {
             if (style.ownBackdrop) style.Backdrop(backdrop)
             else if (retrowave) RetrowaveBackdrop(backdrop, theme.retrowaveBackdrop)
             else when (theme.glassBackdrop) {
-                // Soft glows use the live glass orb when Glass effects are on; otherwise the
-                // catalog's standalone glows (Glass effects Off zeroes the live orb alphas).
-                GlassBackdropScene.GLOWS ->
-                    if (theme.glass.level != GlassEffects.OFF) GlassBackdrop(backdrop)
-                    else GlassCatalogBackdrop(
-                        MaterialTheme.colorScheme,
-                        theme.isDark,
-                        GlassBackdropScene.GLOWS,
-                        backdrop,
-                    )
+                // Glass effects Off has no glows: GlassStyle fits them to the text over them, which gets no plate.
+                GlassBackdropScene.GLOWS -> if (theme.glass.level != GlassEffects.OFF) GlassBackdrop(backdrop)
                 else -> GlassCatalogBackdrop(
                     MaterialTheme.colorScheme,
                     theme.isDark,
