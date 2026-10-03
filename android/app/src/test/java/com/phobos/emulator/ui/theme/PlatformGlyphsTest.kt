@@ -13,8 +13,18 @@ class PlatformGlyphsTest {
 
     @Test
     fun everySystemHasAGlyphOfItsOwn() {
-        val shared = PlatformGlyphs.bySlug.entries.groupBy({ it.value }, { it.key }).values.filter { it.size > 1 }
-        assertTrue("systems sharing a glyph: $shared", shared.isEmpty())
+        // At least four cells apart, so no two systems look alike at a glance.
+        val slugs = PlatformGlyphs.bySlug.keys.sorted()
+        val alike = slugs.flatMapIndexed { i, a -> slugs.drop(i + 1).map { b -> Triple(a, b, cellsApart(a, b)) } }.filter { it.third < 4 }
+        assertTrue("glyphs too alike (slug, slug, cells apart): $alike", alike.isEmpty())
+    }
+
+    private fun cellsApart(a: String, b: String): Int {
+        val rowsA = PlatformGlyphs.bySlug.getValue(a)
+        val rowsB = PlatformGlyphs.bySlug.getValue(b)
+        val width = maxOf(rowsA.maxOf { it.length }, rowsB.maxOf { it.length })
+        fun cell(rows: List<String>, row: Int, column: Int) = rows.getOrNull(row)?.getOrNull(column) ?: '.'
+        return (0 until maxOf(rowsA.size, rowsB.size)).sumOf { row -> (0 until width).count { column -> cell(rowsA, row, column) != cell(rowsB, row, column) } }
     }
 
     @Test
