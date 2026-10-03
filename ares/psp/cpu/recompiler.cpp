@@ -55,6 +55,13 @@ auto Allegrex::Recompiler::run() -> u32 {
     self.instruction();
     return 1;
   }
+  //Memory the page table leaves out is the owner's to handle (hardware registers, or another address for memory
+  //listed once elsewhere, as VRAM's copies are), so code there is interpreted: nothing compiled from it can go
+  //stale through a store the recompiler doesn't see.
+  if(self.pages && !self.pages[(ipu.pc & 0x1fff'ffff) / SectionSize]) {
+    self.instruction();
+    return 1;
+  }
   if(sections.empty()) reset();
   auto code = block(ipu.pc);
   ((void (*)(Allegrex*))code)(&self);

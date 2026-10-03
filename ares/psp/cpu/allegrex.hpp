@@ -46,8 +46,11 @@ struct Allegrex {
   //The page table, also set up by the owner: for each 4 KiB page of physical memory (the address's low 29 bits),
   //where that page is in the host's memory, or nullptr for memory the owner handles in read() and write() (such as
   //hardware registers). Compiled code loads and stores straight through it, skipping read() and write(), so it
-  //may only list plain memory, laid out as the PSP sees it (little-endian). Without it, compiled code calls the
-  //interpreter for every load and store. Changing it later needs a recompiler.reset().
+  //may only list plain memory, laid out as the PSP sees it (little-endian), and each piece of it once: memory
+  //that appears at several addresses (VRAM's copies) is listed at one of them, the others left to read() and
+  //write(), because compiled stores only steer clear of the pages holding compiled code, not of other addresses
+  //for the same bytes. Code at addresses the table leaves out is interpreted, never compiled. Without a table,
+  //compiled code calls the interpreter for every load and store. Changing it later needs a recompiler.reset().
   u8** pages = nullptr;
 
   //Why the CPU stopped a program. The numbers are the ones MIPS uses in its Cause register.
