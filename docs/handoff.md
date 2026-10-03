@@ -715,6 +715,27 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## Boot pass of every game on the RP6 — 2026-10-03
+
+Docs only (branch `cursor/boot-pass-notes-2b67`, stacked on `cursor/load-failures-m3u-2b67`). With the build of that
+branch, every game on the RP6's SD card outside the Neo Geo folder was cold-started through the adb load intent: 71
+from 24 folders (the two 64DD IPL files in `64dd` are firmware). A screenshot and the log were taken after 25 s (40 s
+for N64 and CD games), and Phobos was force-stopped in between, so no auto state or save was written. The Neo Geo sets
+had their own pass (section "Neo Geo Z80 banks for M ROMs over 64 KiB").
+
+- **All 71 run at their systems' rates, with no crashes:** Atari 2600, ColecoVision, Master System, Game Gear,
+  SG-1000, Mega Drive and 32X at 59.9 FPS; Game Boy, Game Boy Color and Game Boy Advance at 59.8; NES and SNES at
+  60.1–60.2; PC Engine, PlayStation and N64 at 59.9–60.0; Neo Geo CD at 59.2; Neo Geo Pocket at 60.0; WonderSwan Color
+  at 75.5; ZX Spectrum at 50.1–50.8. The screenshots show titles, intros or demos. A second look at 20 and 55 s
+  cleared the blank ones: both Link's Awakenings, Ape Escape, Castle of Illusion and Judgement Silversword were
+  mid-intro.
+- **Found:** Super Mario 64 B3313 v1.0.2 Hotfix 3 stops at boot, and F-Zero ZX Overdrive's picture is garbled (plan
+  rows of those names). The F-Zero X Expansion Kit's `.ndd` on its own stays black, as expected: the disk needs
+  F-Zero X in the cartridge slot, with the disk inserted from its pause menu (README). Metal Gear Solid's playlist led
+  to the fix in the next section.
+- **Logged but harmless:** every NES and SNES load logs `VFS: FAILED to allocate Gamepad on Expansion Port`, and the
+  games play. ZX Spectrum tapes wait at the Sinclair screen until `LOAD ""` (the keyboard's tape controls).
+
 ## Playlists from frontends, and games that don't start — 2026-10-03
 
 Branch `cursor/load-failures-m3u-2b67`, on master. The plan row "Playlists from frontends, and games that don't start"
