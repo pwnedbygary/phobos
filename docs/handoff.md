@@ -742,6 +742,23 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 4: loads and stores straight to RAM — 2026-10-03
+
+Branch `cursor/psp-fastmem-2b67`, stacked on part 3. The user approved parts 1-3 and asked for the whole PSP feature
+to be stacked and merged at once, so the stack stays open as it grows.
+
+- **What it is:** compiled loads and stores look up a page table the CPU's owner provides (`Allegrex::pages`) and
+  reach host memory directly, with the interpreter as the slow path (misaligned addresses, hardware registers, and
+  stores into pages holding compiled code, which `writePages` leaves out so the store drops that code).
+  [psp-core.md](psp-core.md#the-recompiler) has the details.
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 51 groups pass on the Mac (UBSan) and in `phobos-linux` (GCC
+  13, ASan and UBSan). The test machine's page table leaves one RAM page out, which the generated programs also
+  load and store through, and a test counts that only the store to that page reached write(). Three deliberate
+  mistakes (stores allowed into pages with compiled code, `lh` without sign extension, no alignment check) each
+  failed the tests.
+- **Speed:** the benchmark loop runs at 1206 million instructions a second on the Mac, against 505 without the page
+  table and 150 on the interpreter (`SANITIZE= ALLEGREX_BENCHMARK=1 tests/allegrex/run-tests.sh`).
+
 ## PSP core, part 3: the VFPU — 2026-10-03
 
 Branch `cursor/psp-vfpu-ares-2b67`, stacked on part 2 (`cursor/psp-recompiler-2b67`), for the user to review.

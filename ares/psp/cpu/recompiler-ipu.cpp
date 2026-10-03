@@ -24,10 +24,15 @@
 #define i16 s16(instruction)
 #define n16 u16(instruction)
 
-auto Allegrex::Recompiler::emitInstruction(u32 instruction) -> bool {
+auto Allegrex::Recompiler::emitInstruction(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool {
   switch(instruction >> 26) {
 
   case 0x00: return emitSPECIAL(instruction);
+
+  //loads and stores (recompiler-memory.cpp)
+  case 0x20: case 0x21: case 0x23: case 0x24: case 0x25: case 0x28: case 0x29: case 0x2b:
+  case 0x31: case 0x32: case 0x36: case 0x39: case 0x3a: case 0x3e:
+    return emitLoadStore(address, instruction, count, delaySlot);
 
   //ADDIU Rt,Rs,i16
   case 0x09: {
