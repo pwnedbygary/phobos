@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
@@ -44,6 +46,8 @@ import kotlinx.coroutines.delay
  * invalidated per gesture event without recomposition.
  *
  * The landscape or portrait customization and opacity are chosen from the overlay's own size.
+ * The controls are excluded from Android's edge gestures ([touchAreas]), so a thumb that lands on one
+ * at the screen's edge presses it without bringing the system bars in over the game.
  * Touches that land on no control and lift quickly are reported through [onBackgroundTap].
  * [ownsInput] turns false once another game's screen has replaced this overlay's; the overlay
  * then leaves the shared input to the new one when it goes. [probe] answers for layers drawn
@@ -131,10 +135,12 @@ fun TouchControlsOverlay(
                 frame++
             }
         }
+        val areas = remember(placed, prefs.analogMode, density.density) { touchAreas(placed, prefs.analogMode, density.density) }
 
         Canvas(
-            Modifier
-                .fillMaxSize()
+            areas.fold(Modifier.fillMaxSize()) { exclusions, area ->
+                exclusions.systemGestureExclusion { Rect(area.left, area.top, area.right, area.bottom) }
+            }
                 .pointerInput(engine) {
                     awaitPointerEventScope {
                         while (true) {

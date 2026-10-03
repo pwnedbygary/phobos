@@ -55,6 +55,34 @@ class PlacedButton(val owner: PlacedElement, val index: Int, val button: TouchBu
     }
 }
 
+/** A rectangle in px. */
+data class TouchArea(val left: Float, val top: Float, val right: Float, val bottom: Float)
+
+/**
+ * Where each control takes a finger that lands, as [TouchEngine] hit-tests it: a D-pad's or stick's reach
+ * (a floating stick's whole zone), and around a cluster's buttons with their near-miss margin.
+ */
+fun touchAreas(placed: List<PlacedElement>, analogMode: AnalogMode, density: Float): List<TouchArea> {
+    val minHalf = TouchEngine.MIN_TARGET_RADIUS_DP * density
+    return placed.mapNotNull { el ->
+        when (el.element) {
+            is DpadElement -> squareAround(el.cx, el.cy, el.radius * (1f + TouchEngine.PAD_SLOP))
+            is AnalogElement -> squareAround(
+                el.cx, el.cy,
+                el.radius * if (analogMode == AnalogMode.FLOATING) TouchEngine.FLOATING_ZONE else 1f + TouchEngine.PAD_SLOP,
+            )
+            is ButtonCluster -> el.buttons.map { b ->
+                val scale = 1f + TouchEngine.BUTTON_SLOP
+                val halfW = if (b.isCircle) max(min(b.halfW, b.halfH) * scale, minHalf) else max(b.halfW * scale, minHalf)
+                val halfH = if (b.isCircle) halfW else max(b.halfH * scale, minHalf)
+                TouchArea(b.cx - halfW, b.cy - halfH, b.cx + halfW, b.cy + halfH)
+            }.reduceOrNull { a, b -> TouchArea(min(a.left, b.left), min(a.top, b.top), max(a.right, b.right), max(a.bottom, b.bottom)) }
+        }
+    }
+}
+
+private fun squareAround(cx: Float, cy: Float, half: Float) = TouchArea(cx - half, cy - half, cx + half, cy + half)
+
 /** What the engine wants the host to do after a batch of pointer events. */
 class TouchEvents(
     val haptic: Boolean,

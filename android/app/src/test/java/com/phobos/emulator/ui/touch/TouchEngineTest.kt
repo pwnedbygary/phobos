@@ -180,6 +180,40 @@ class TouchEngineTest {
         assertTrue(e.buttonBits != 0)
     }
 
+    @Test fun touchAreasCoverEveryPointThatTakesAFinger() {
+        for (mode in AnalogMode.entries) {
+            val e = engine(TouchPrefs(analogMode = mode))
+            val areas = touchAreas(e.elements, mode, density = 1f)
+            for (x in 0..1000 step 4) for (y in 0..800 step 4) {
+                if (!e.isControlAt(x.toFloat(), y.toFloat())) continue
+                assertTrue("($x, $y), $mode", areas.any { x >= it.left && x <= it.right && y >= it.top && y <= it.bottom })
+            }
+        }
+    }
+
+    @Test fun touchAreasFollowEachControlsReach() {
+        val fixed = touchAreas(engine().elements, AnalogMode.FIXED, density = 1f)
+        assertEquals(5, fixed.size)
+        // The D-pad and a fixed stick reach 10% past their 100 px radius.
+        assertArea(TouchArea(90f, 90f, 310f, 310f), fixed[0])
+        assertArea(TouchArea(90f, 490f, 310f, 710f), fixed[1])
+        // A cluster's area spans its buttons, each 18% past its 30 px radius.
+        assertArea(TouchArea(724.6f, 364.6f, 875.4f, 435.4f), fixed[2])
+        // A 20 px button still gets a 48 px target.
+        assertArea(TouchArea(776f, 76f, 824f, 124f), fixed[3])
+        // A floating stick takes a finger anywhere in its zone.
+        val floating = touchAreas(engine().elements, AnalogMode.FLOATING, density = 1f)
+        assertArea(TouchArea(20f, 420f, 380f, 780f), floating[1])
+    }
+
+    private fun assertArea(expected: TouchArea, actual: TouchArea) {
+        assertArrayEquals(
+            floatArrayOf(expected.left, expected.top, expected.right, expected.bottom),
+            floatArrayOf(actual.left, actual.top, actual.right, actual.bottom),
+            0.01f,
+        )
+    }
+
     @Test fun toggleButtonLatches() {
         val e = engine()
         e.down(1, 800f, 100f, 0)

@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material3.CircularProgressIndicator
@@ -453,7 +454,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .onSizeChanged { keyboardHeight = with(density) { it.height.toDp() } }
-                    .onPlaced { keyboardBounds = it.boundsInParent() },
+                    .onPlaced { keyboardBounds = it.boundsInParent() }
+                    .then(if (isPaused) Modifier else Modifier.systemGestureExclusion()),
                 symLatched = zxSymLatched, onSymLatched = { zxSymLatched = it },
                 capsLatched = zxCapsLatched, onCapsLatched = { zxCapsLatched = it },
                 loadSpeed = settings.zxLoadSpeed, onLoadSpeed = { viewModel.setZxLoadSpeed(it) },
@@ -474,7 +476,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .onSizeChanged { keyboardHeight = with(density) { it.height.toDp() } }
-                    .onPlaced { keyboardBounds = it.boundsInParent() },
+                    .onPlaced { keyboardBounds = it.boundsInParent() }
+                    .then(if (isPaused) Modifier else Modifier.systemGestureExclusion()),
                 msx2 = systemName == "MSX2",
                 onClose = { showKeyboard = false },
                 keyboardOpacity = settings.zxKeyboardOpacity,

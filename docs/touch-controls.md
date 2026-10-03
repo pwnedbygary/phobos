@@ -104,6 +104,14 @@ rebind capture now lives in `ui/EmulatorScreen.kt`, which imports it (the listen
   pair, and sliding never newly presses an action button (menu, fast-forward, keyboard).
 - A gesture the system takes over (for example a navigation swipe) is cancelled: no
   tap, menu or auto-hold effect.
+- Each control's touch area (the reach described below, `touchAreas` in `TouchEngine.kt`),
+  and the ZX Spectrum and MSX keyboards while the game runs, are excluded from Android's
+  edge gestures (added 2026-10-03). With gesture navigation, a swipe that starts at the
+  left or right edge (69 px on the RP6) and moves inward brings the system bars in over the
+  game in the emulator's immersive mode, covering the top of the picture and the SELECT and
+  START pills; outside immersive mode it starts Back. A swipe from an edge where there's no
+  control still brings the bars in. Android's 200 dp limit on exclusions doesn't apply
+  while the bars are hidden, and it ignores the exclusions while they're shown.
 - Hit priority on finger down: direct button hit → between-buttons corridor (clusters
   with `multiHit`, neighbours only) → D-pad → fixed stick → near-miss button (18% slop,
   and never less than 24 dp from the center on each axis, i.e. a 48 dp target) →

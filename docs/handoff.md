@@ -636,7 +636,8 @@ commands run) found no definite compile errors and about twenty logic issues. Fi
 Not changed (pre-existing, recorded for follow-up): `contains("Neo Geo")` when naming the
 ROM temp file; a debug-only `NoSuchElementException` in `MainActivity`'s adb load path
 when the app starts cold (`viewModel.systems.first {}`); touch placement avoids display
-cutouts but not system gesture areas; the Neo Geo 2×2 grid's center presses B+C (they
+cutouts but not system gesture areas (the controls are excluded from the edge gestures
+since 2026-10-03); the Neo Geo 2×2 grid's center presses B+C (they
 are corridor neighbours; A–D, the other pair, is too far apart).
 
 ### Checks run (2026-09-24, local Mac, no device)
@@ -713,6 +714,25 @@ source, rate wording) — fixed in this tree before commit.
    [performance audit](performance-audit.md#required-verification).
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
+
+## Touch controls out of the edge gestures — 2026-10-03
+
+Branch `cursor/touch-gesture-exclusion-2b67`, stacked on `cursor/msx-tape-bios-2b67`. The plan row "Touch controls
+out of the edge gestures" has the details.
+
+- **Checks run:** the modern release builds, 238 host tests pass (new: `touchAreasCoverEveryPointThatTakesAFinger`,
+  `touchAreasFollowEachControlsReach`). On the RP6 (gesture navigation, 1920×1080 at 369 dpi), touch controls were
+  switched on in the pause menu for the test and off again afterwards. With the installed build (`e0983c7c9`),
+  `input touchscreen swipe 55 836 400 836 150`, from the left edge across Alpha Mission II's D-pad, brought in the
+  status bar and the navigation handle (SystemUI's `EdgeBackGestureHandler` dump: `mIsNavBarShownTransiently=true`;
+  the back gesture itself is disabled while the bars are hidden). With this build the dump's `mExcludeRegion` held
+  the D-pad (49–429 × 651–1031 px), the face buttons, SELECT/START and the menu button, and the same swipe left the
+  bars hidden. The same swipe at y = 300, away from the controls, still brought them in, and paused only the RP6's
+  own strip on the right edge (1891–1920 × 402–678) remained. With Metal Gear's MSX keyboard open its area
+  (0–1920 × 539–1080) was excluded, and not while paused. Phobos was force-stopped after each run, so no auto state
+  was written.
+- **Not checked:** the ZX Spectrum keyboard (the same modifier as the MSX one), portrait, 3-button navigation, and
+  the legacy APK on a device.
 
 ## MSX tapes ask for a BASIC BIOS — 2026-10-03
 
