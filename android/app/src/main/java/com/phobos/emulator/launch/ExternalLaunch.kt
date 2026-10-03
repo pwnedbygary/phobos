@@ -9,6 +9,8 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
 import com.phobos.emulator.ui.RomFile
+import com.phobos.emulator.util.m3uEntries
+import com.phobos.emulator.util.m3uEntryPath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -89,7 +91,16 @@ suspend fun resolveLaunch(
     val match = LaunchSystems.resolve(name, path, request.systemHint, systems, extensions, folders) {
         archiveEntries(resolver, readable)
     }
-    val rom = RomFile(name, readable, parentFolder(resolver, readable, path, primaryRoot))
+    val file = RomFile(name, readable, parentFolder(resolver, readable, path, primaryRoot))
+    // A playlist starts the game it gathers, as the Library lists it, so the saves, states and disc changes match.
+    val rom = if (path != null && name.endsWith(".m3u", ignoreCase = true)) {
+        val entries = playlistDiscs(resolver, readable, path, primaryRoot)
+        val discs = entries.mapNotNull { it.second }
+        if (entries.isEmpty() || discs.size < entries.size) {
+            return@withContext LaunchTarget.Unreadable(entries.firstOrNull { it.second == null }?.first ?: name)
+        }
+        RomFile(name, discs.first().uri, file.parentUri, discs)
+    } else file
     when (match) {
         is LaunchSystems.Match.Found -> LaunchTarget.Ready(match.system, rom)
         is LaunchSystems.Match.Ask -> LaunchTarget.ChooseSystem(rom, match.candidates)
@@ -136,6 +147,21 @@ private fun displayName(resolver: ContentResolver, uri: Uri): String? {
 
 private fun treePath(tree: Uri, primaryRoot: String): String? =
     runCatching { LaunchSystems.documentIdToPath(DocumentsContract.getTreeDocumentId(tree), primaryRoot) }.getOrNull()
+
+/**
+ * The discs the .m3u playlist at [path] lists, each paired with its file name: where its entry leads from the
+ * playlist's folder, or null when Phobos can't read it there.
+ */
+private fun playlistDiscs(resolver: ContentResolver, playlist: Uri, path: String, primaryRoot: String): List<Pair<String, RomFile?>> {
+    val text = runCatching { resolver.openInputStream(playlist)?.bufferedReader()?.use { it.readText() } }.getOrNull()
+        ?: return emptyList()
+    return m3uEntries(text).map { entry ->
+        val discPath = m3uEntryPath(path, entry)
+        val discName = discPath.substringAfterLast('/')
+        val uri = readableUri(resolver, Uri.fromFile(File(discPath)), discPath, primaryRoot)
+        discName to uri?.let { RomFile(discName, it, parentFolder(resolver, it, discPath, primaryRoot)) }
+    }
+}
 
 /**
  * The folder holding the game, through a folder Phobos holds, for the Neo Geo BIOS lookup next to it (see

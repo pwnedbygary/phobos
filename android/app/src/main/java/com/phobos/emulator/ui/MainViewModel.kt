@@ -150,6 +150,9 @@ data class FirmwareRequired(val system: String, val keys: List<String>)
 /** A game of a [system] whose games aren't copied, which wasn't started because it can't be read at [location]. */
 data class DiscNotReadable(val system: String, val location: String)
 
+/** A game [name] that the [system]'s core couldn't start, or whose file couldn't be opened ([reason]). */
+data class GameLoadFailed(val system: String, val name: String, val reason: String? = null)
+
 /** Where an update of Phobos itself stands (Settings → About). */
 sealed interface AppUpdateState {
     data object Idle : AppUpdateState
@@ -1495,12 +1498,6 @@ class MainViewModel(
         setPause(false)
     }
 
-    // Unsupported-system popup (set when a broken core's load is refused —
-    // ZX Spectrum 128).
-    // Holds the system NAME to show in the dialog; null = no popup.
-    private val _unsupportedSystem = MutableStateFlow<String?>(null)
-    val unsupportedSystem: StateFlow<String?> = _unsupportedSystem
-
     // Neo Geo fails to load only when its mandatory BIOS is missing (the core
     // now returns false gracefully instead of SIGSEGVing). Surface a targeted
     // message so the user knows to supply neogeo.zip rather than "load failed".
@@ -1515,6 +1512,10 @@ class MainViewModel(
     private val _discNotReadable = MutableStateFlow<DiscNotReadable?>(null)
     val discNotReadable: StateFlow<DiscNotReadable?> = _discNotReadable
     fun dismissDiscNotReadable() { _discNotReadable.value = null }
+
+    private val _gameLoadFailed = MutableStateFlow<GameLoadFailed?>(null)
+    val gameLoadFailed: StateFlow<GameLoadFailed?> = _gameLoadFailed
+    fun dismissGameLoadFailed() { _gameLoadFailed.value = null }
 
     // When the Neo Geo BIOS was present but the ROM still failed to load, the
     // failure is the ROM itself (e.g. it isn't actually a Neo Geo MVS/AES game,
@@ -2502,6 +2503,13 @@ class MainViewModel(
             _showDriverSuggestion.value = false
             driverSuggestionShown = false
 
+            // A failure from an earlier load, one the player left before it ended, isn't this game's.
+            _firmwareRequired.value = null
+            _discNotReadable.value = null
+            _biosRequired.value = null
+            _neoGeoRomLoadFailed.value = null
+            _gameLoadFailed.value = null
+
             // Sync current settings to native before loading
             val currentSettings = settings.value
             
@@ -2800,31 +2808,26 @@ class MainViewModel(
                         }
                     } else {
                         Log.e("Phobos", "Native loadRom failed for $effectiveSystem")
-                        // Broken core (ZX 128K): native refuses before
-                        // spawning any threads. Neo Geo refuses only when its
-                        // mandatory BIOS is absent. Surface a clear popup
-                        // instead of a hang/crash.
+                        // Every failure gets a popup: nothing loaded, so the loading screen would wait forever.
                         if (effectiveSystem in NEOGEO_ZIP_SYSTEMS) {
                             // Only blame the BIOS when neogeo.zip was genuinely
                             // absent. If it was copied but the ROM still failed,
                             // the ROM itself is the problem (wrong/missing game).
                             if (ngBiosPresent) _neoGeoRomLoadFailed.value = effectiveSystem
                             else _biosRequired.value = effectiveSystem
-                        } else if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true)) {
-                            _unsupportedSystem.value = effectiveSystem
+                        } else {
+                            _gameLoadFailed.value = GameLoadFailed(effectiveSystem, rom.name)
                         }
                     }
+                } else {
+                    _gameLoadFailed.value = GameLoadFailed(effectiveSystem, rom.name, "Android didn't open ${file.name}.")
                 }
             } catch (e: Exception) {
                 Log.e("Phobos", "Error opening ROM FD: ${e.message}")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Couldn't open ${file.name}: ${e.message}", Toast.LENGTH_LONG).show()
-                }
+                _gameLoadFailed.value = GameLoadFailed(effectiveSystem, rom.name, e.message ?: "${file.name} couldn't be opened.")
             }
         }
     }
-
-    fun dismissUnsupportedSystem() { _unsupportedSystem.value = null }
 
     fun loadSecondaryRom(context: Context, systemName: String, rom: RomFile) {
         viewModelScope.launch(Dispatchers.IO) {

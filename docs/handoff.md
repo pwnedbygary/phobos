@@ -715,6 +715,22 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## Playlists from frontends, and games that don't start — 2026-10-03
+
+Branch `cursor/load-failures-m3u-2b67`, on master. The plan row "Playlists from frontends, and games that don't start"
+has the details.
+
+- **Checks run:** the modern release builds, 238 host tests pass. On the RP6, `am start -a android.intent.action.VIEW
+  -d "file:///…/psx/Metal Gear Solid/Metal Gear Solid.m3u" --es system psx` logged `Launch: … -> Ready(system=
+  PlayStation, rom=RomFile(name=Metal Gear Solid.m3u, uri=…[Disc 1].chd, …)`, loaded Disc 1 in place and reached the
+  game's opening at 60 FPS. Before, it logged `MIA: Failed to load medium` and stayed on the loading screen until
+  force-stopped. The bare playlist through the adb load intent, which doesn't expand playlists, makes the core refuse
+  the load: the "Game Didn't Start" dialog came up, and OK went back to the Library. A file of random bytes named as a
+  PlayStation disc isn't such a case: the core takes it, and the BIOS starts with no game.
+- **Not checked:** a playlist from a frontend that hands Phobos a content URI with no path (its discs can't be found
+  then, so it gets the "can't read" message), the "Android didn't open" reason, and returning to a real frontend after
+  the dialog (the test launches came from adb).
+
 ## Neo Geo Z80 banks for M ROMs over 64 KiB — 2026-10-03
 
 Branch `cursor/neo-geo-z80-banks-2b67`, on master. The plan row "Neo Geo Z80 banks for M ROMs over 64 KiB" and the

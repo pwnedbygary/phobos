@@ -12,8 +12,8 @@ import com.phobos.emulator.util.romTitle
 
 /**
  * Dialogs shown over the emulator: quit confirmation, GPU driver suggestion, and load failures
- * (unsupported core, missing BIOS, a game that can't be read where it is, Neo Geo ROM that failed to load). Load-failure
- * dialogs return to the previous screen via [onLeave] because nothing was loaded.
+ * (missing BIOS, a game that can't be read where it is, Neo Geo ROM that failed to load, any other game that didn't
+ * start). Load-failure dialogs return to the previous screen via [onLeave] because nothing was loaded.
  */
 @Composable
 fun EmulatorDialogs(
@@ -26,11 +26,11 @@ fun EmulatorDialogs(
 ) {
     val settings by viewModel.settings.collectAsState()
     val showDriverSuggestion by viewModel.showDriverSuggestion.collectAsState()
-    val unsupportedSystem by viewModel.unsupportedSystem.collectAsState()
     val biosRequired by viewModel.biosRequired.collectAsState()
     val firmwareRequired by viewModel.firmwareRequired.collectAsState()
     val discNotReadable by viewModel.discNotReadable.collectAsState()
     val neoGeoRomLoadFailed by viewModel.neoGeoRomLoadFailed.collectAsState()
+    val gameLoadFailed by viewModel.gameLoadFailed.collectAsState()
     val fullScreen = settings.fullScreenMode
 
     if (showQuitDialog) {
@@ -56,16 +56,6 @@ fun EmulatorDialogs(
                 )
             },
             confirmButton = { TextButton(onClick = { viewModel.dismissDriverSuggestion() }) { Text("OK") } },
-        )
-    }
-
-    unsupportedSystem?.let { system ->
-        LoadFailureDialog(
-            title = "$system Unsupported",
-            message = "$system games are currently unsupported in this build. " +
-                "This is a known issue being worked on.\n\nPlease try a different system or game.",
-            fullScreen = fullScreen,
-            onDismiss = { viewModel.dismissUnsupportedSystem(); onLeave() },
         )
     }
 
@@ -113,6 +103,16 @@ fun EmulatorDialogs(
                 "neogeo.zip is set in Settings, then try again.",
             fullScreen = fullScreen,
             onDismiss = { viewModel.dismissNeoGeoRomLoadFailed(); onLeave() },
+        )
+    }
+
+    gameLoadFailed?.let { failed ->
+        LoadFailureDialog(
+            title = "Game Didn't Start",
+            message = "${romTitle(failed.name)} couldn't be started as a ${failed.system} game" +
+                (failed.reason?.let { ":\n\n$it" } ?: ". The file may be damaged, or in a format Phobos doesn't read."),
+            fullScreen = fullScreen,
+            onDismiss = { viewModel.dismissGameLoadFailed(); onLeave() },
         )
     }
 }
