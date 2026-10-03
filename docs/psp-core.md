@@ -1,7 +1,8 @@
 # PSP core
 
-**Status (2026-10-03):** started, at the user's request. Part 1, the Allegrex CPU's integer and FPU instructions
-with host tests, is on branch `cursor/psp-core-2b67`. Nothing is in the app yet.
+**Status (2026-10-03):** started, at the user's request. Part 1, the Allegrex CPU's interpreter (integer and FPU
+instructions) with host tests, is on branch `cursor/psp-core-2b67`; the recompiler comes next. Nothing is in the app
+yet.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -24,6 +25,14 @@ with host tests, is on branch `cursor/psp-core-2b67`. Nothing is in the app yet.
   and a setting can load Sony's own library modules from the user's firmware where running them is easier than
   reimplementing them (the system fonts in `flash0:/font`, the audio codec libraries, perhaps video playback).
   The decryption keys can't come from there: they are in the PSP's crypto hardware, not in the firmware files.
+- **A recompiler from the start, the interpreter as its fallback.** Speed and accuracy are the project's aims, so
+  the CPU gets a dynamic recompiler (dynarec) early rather than as a late optimization. The interpreter stays: it is
+  the reference the recompiler is tested against, and runs whatever the recompiler doesn't handle. The recompiler's
+  MIPS-generic parts are kept apart so other MIPS systems can reuse them (ares's PS1 CPU is interpreter-only).
+- **Code in the style of ares and near**, so it reads as part of the same codebase: plain structs with public
+  members, `auto f() -> T`, one function per instruction named after its mnemonic, decoder tables built with
+  macros as in ares's PS1 and N64 cores. Everything important is explained in plain language in the comments, for
+  someone who has never seen a MIPS CPU.
 
 ## Sources
 
@@ -45,29 +54,47 @@ with host tests, is on branch `cursor/psp-core-2b67`. Nothing is in the app yet.
 
 - Under `ares/psp/` (namespace `ares::PlayStationPortable`), as ares's systems are: around the CPU and the other
   parts goes an ares system, which the runner presents the way it presents the others (picture, sound, controls,
-  states). The CPU is plain C++20 so far, so it's tested on the host without the rest of ares (`tests/allegrex/`).
-- The CPU works through a `Bus` interface; the memory map (scratchpad, VRAM, main RAM, hardware registers) is a
-  `Bus`.
+  states). The CPU uses only nall and ares's integer types, so it's tested on the host without the rest of ares
+  (`tests/allegrex/`, whose `prelude.hpp` stands in for `ares.hpp`).
+- The CPU reads and writes memory through virtual `read()` and `write()`, as ares's ARM7TDMI does for the Game Boy
+  Advance; the PSP's memory map (scratchpad, VRAM, main RAM, hardware registers) implements them.
 - Imports: the loader writes each imported function's stub as `jr ra` with `syscall n` in its delay slot, `n`
   standing for the function's NID. The CPU passes the code to `syscallHook`; by then `pc` already holds the return
   address, so the HLE kernel can return a value in `v0` or switch threads by saving and restoring the CPU's state.
 - Graphics: the GE runs the game's display lists into the emulated VRAM with a software renderer first; the GPU
   later.
 
+## The recompiler (planned)
+
+Built on ares's recompiler framework (`nall::recompiler::generic`, over sljit, for ARM64 and x86-64), the way ares's
+N64 CPU uses it (`ares/n64/cpu/recompiler.cpp`):
+
+- Blocks: starting at an address, instructions are compiled until a branch and its delay slot, into native code
+  that updates the same registers the interpreter uses. Compiled blocks are kept per 4 KiB of memory.
+- Common integer instructions become native code; anything else (rare instructions, the FPU and VFPU at first) is
+  compiled as a call to the interpreter's function for it, so every instruction works from the start and gets
+  faster one at a time.
+- Syscalls and exceptions leave the block, so the HLE kernel sees exactly the state the interpreter would give it.
+- A store into memory holding compiled code, or a `cache` instruction over it, throws those blocks away.
+- Differential tests: every test program runs through both engines, and the registers and memory must match.
+
 ## Phases
 
-1. The Allegrex's integer and FPU instructions, host tests (part 1).
-2. The VFPU: registers, prefixes, instructions, tested against the pspdev documentation's examples.
-3. Memory map; loading an unencrypted `EBOOT.PBP`, ELF or PRX; the first HLE functions (module start, threads,
+1. The Allegrex's integer and FPU instructions in the interpreter, host tests (part 1).
+2. The recompiler, with differential tests against the interpreter.
+3. The VFPU: registers, prefixes, instructions, tested against the pspdev documentation's examples.
+4. Memory map; loading an unencrypted `EBOOT.PBP`, ELF or PRX; the first HLE functions (module start, threads,
    display, controls, files); a homebrew test program run on the host.
-4. The GE: display lists, a software rasterizer (2D first), the display.
-5. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
-6. Retail executables: `~PSP` decryption.
-7. Audio (`sceAudio`, then ATRAC3+ and MP3), video (PSMF), the optional firmware modules, a recompiler for speed.
+5. The GE: display lists, a software rasterizer (2D first), the display.
+6. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
+7. Retail executables: `~PSP` decryption.
+8. Audio (`sceAudio`, then ATRAC3+ and MP3), video (PSMF), the optional firmware modules.
 
 ## Part 1: the Allegrex CPU
 
-`ares/psp/cpu/allegrex.hpp` and `allegrex.cpp`: an interpreter with branch delay slots (a taken branch sets the address
+`ares/psp/cpu/`: `allegrex.hpp` (the registers and every instruction's declaration), `allegrex.cpp` (fetch and
+run), `interpreter.cpp` (the decoder tables), `interpreter-ipu.cpp`, `interpreter-fpu.cpp`, `interpreter-scc.cpp`
+(the instructions) and `exceptions.cpp`. An interpreter with branch delay slots (a taken branch sets the address
 after the delay slot), likely branches that skip their delay slot when not taken, the Allegrex's encodings for
 `clz`, `clo`, `madd`, `maddu`, `msub` and `msubu`, its `min`, `max`, `bitrev`, `wsbw`, `halt`, `mfic` and `mtic`,
 unaligned loads and stores (`lwl`, `lwr`, `swl`, `swr`, little-endian), `ll` and `sc`, and the FPU: arithmetic,
@@ -80,4 +107,5 @@ by the dividend's sign, `hi` = the dividend), FPU arithmetic in rounding modes o
 nearest is used), and conversions of NaN or out-of-range values (0x7fffffff, MIPS's default).
 
 Tests: `tests/allegrex/run-tests.sh` (14 groups, with the undefined-behavior sanitizer; on Linux the address
-sanitizer too, which the PSP Core Tests workflow runs for changes to `ares/psp/`).
+sanitizer too, which the PSP Core Tests workflow runs for changes to `ares/psp/`, nall or ares's types).
+`harness.hpp` holds the test machine (a CPU over 64 KiB of RAM) and the instruction encoders.

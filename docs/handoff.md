@@ -749,11 +749,17 @@ can't cover the firmware compiled into the native library), with PPSSPP readable
 for retail executables, and firmware optional per module family. [psp-core.md](psp-core.md) has the decisions,
 sources, design and phases.
 
-- **Part 1:** `ares/psp/cpu/allegrex.cpp`, an interpreter for the Allegrex's integer and FPU instructions (the VFPU
-  is part 2). It sits under `ares/` as the other systems do, the CPU in plain C++20 so far. Not in the app.
+- **Part 1:** `ares/psp/cpu/`, an interpreter for the Allegrex's integer and FPU instructions. It sits under
+  `ares/` as the other systems do, written in ares's style (nall types, mnemonic-named instruction functions,
+  macro decoder tables, memory through virtual `read()`/`write()` like the ARM7TDMI) with plain-language comments,
+  as the user asked. Not in the app.
+- **Next, as the user directed:** a recompiler from the start, on ares's sljit framework like the N64 CPU, with this
+  interpreter as its reference and fallback, and its MIPS-generic parts reusable by other MIPS systems; then the
+  VFPU. psp-core.md has the plan.
 - **Checks run:** `tests/allegrex/run-tests.sh` on the Mac, 14 groups pass with the undefined-behavior sanitizer
   (the address sanitizer's runtime hangs at start on this macOS, so the script uses it on Linux only); the new
-  PSP Core Tests workflow runs both sanitizers. The binutils Allegrex test's assembled examples serve as vectors.
+  PSP Core Tests workflow runs both sanitizers. The CPU is built against nall and ares's types alone
+  (`tests/allegrex/prelude.hpp`). The binutils Allegrex test's assembled examples serve as vectors.
 - **Not checked against hardware:** division by zero, FPU arithmetic outside round-to-nearest, conversions of NaN
   or out-of-range values (psp-core.md lists what the code assumes).
 
