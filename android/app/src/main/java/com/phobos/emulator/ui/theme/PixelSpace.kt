@@ -14,7 +14,7 @@ import kotlin.math.sqrt
 import kotlin.random.Random
 
 /**
- * The space backdrop: Mars' ochre limb along the bottom, turning craters, and Phobos orbiting through
+ * The space backdrop: Mars' limb along the bottom, turning craters, and Phobos orbiting through
  * the upper sky as a small D-pad moon. Stars twinkle and occasional shooting stars cross the scene.
  *
  * Across the face, craters are squashed as much as the still picture always drew them; only the last

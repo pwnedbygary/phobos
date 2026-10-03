@@ -48,7 +48,7 @@ enum class UiEffects(val label: String, val description: String) {
 enum class PixelBackdropScene(val label: String, val description: String) {
     SPACE("Space", "Mars turning below the stars, with Phobos (D-pad moon) in orbit and occasional shooting stars"),
     NIGHT_DRIVE("Night drive", "A road racing toward a striped sun between the mountains"),
-    PLAINS("Pixel plains", "A Mario-like stage: heroes run, jump, pop bricks, collect coins and stomp foes"),
+    PLAINS("Pixel plains", "A Mario-like stage: heroes run and jump, collect coins and stomp foes"),
     SAKURA_CYCLE("Sakura", "Day↔night cycle: moon and sun rise and set while petals fall"),
     SAKURA_NIGHT("Sakura night", "Cherry blossom petals falling under a full moon"),
     SAKURA_DAY("Sakura day", "Cherry blossom petals falling under a bright sun"),
@@ -60,7 +60,7 @@ enum class PixelBackdropScene(val label: String, val description: String) {
 enum class PlatformIconPack(val label: String, val description: String) {
     MATCH_STYLE(
         "Match style",
-        "Systematic by default; Pixel and Manga packs when those styles are on",
+        "Pixel with Pixel art and 16-bit RPG, Manga with Manga ink, Systematic otherwise",
     ),
     SYSTEMATIC("Systematic", "BAXY Square top-down consoles (MIT), recolored to the theme"),
     PHOBOS("Phobos", "Original Phobos silhouettes for every system, including newer ones"),
@@ -147,7 +147,7 @@ data class EmulatorSettings(
     val crtBackdrop: CrtBackdropScene = CrtBackdropScene.GREEN,
     val glassBackdrop: GlassBackdropScene = GlassBackdropScene.GLOWS,
     val xmbBackdrop: XmbBackdropScene = XmbBackdropScene.WAVES,
-    val platformIconPack: PlatformIconPack = PlatformIconPack.MATCH_STYLE,
+    val platformIconPack: PlatformIconPack = PlatformIconPack.SYSTEMATIC,
     val screensaverDelay: ScreensaverDelay = ScreensaverDelay.OFF,
     /** Independent of the app style: which catalog backdrop the idle screensaver shows. */
     val screensaverBackdrop: CatalogBackdrop = CatalogBackdrop.MATCH_APP,
@@ -524,7 +524,7 @@ class SettingsStore(private val context: Context) {
             crtBackdrop = enumOrDefault(safeGetString(CRT_BACKDROP, ""), CrtBackdropScene.GREEN),
             glassBackdrop = enumOrDefault(safeGetString(GLASS_BACKDROP, ""), GlassBackdropScene.GLOWS),
             xmbBackdrop = enumOrDefault(safeGetString(XMB_BACKDROP, ""), XmbBackdropScene.WAVES),
-            platformIconPack = enumOrDefault(safeGetString(PLATFORM_ICON_PACK, ""), PlatformIconPack.MATCH_STYLE),
+            platformIconPack = enumOrDefault(safeGetString(PLATFORM_ICON_PACK, ""), PlatformIconPack.SYSTEMATIC),
             screensaverDelay = enumOrDefault(safeGetString(SCREENSAVER_DELAY, ""), ScreensaverDelay.OFF),
             screensaverBackdrop = enumOrDefault(safeGetString(SCREENSAVER_BACKDROP, ""), CatalogBackdrop.MATCH_APP),
             glassEffects = enumOrDefault(safeGetString(GLASS_EFFECTS, GlassEffects.FULL.name), GlassEffects.FULL),
