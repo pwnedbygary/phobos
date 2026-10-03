@@ -33,6 +33,125 @@ static constexpr u32 ConstantTable[20] = {
 
 static constexpr u32 One = 0x3f80'0000;  //1.0
 
+//The math functions as a PSP computes them, worked out from results measured on one (docs/psp-vfpu-measurements.md)
+//by tools/psp-vfpu-measure/fit.py. Each function turns its argument into a 23-bit index into one quadratic
+//interpolator: the index's top 7 bits pick one of 128 segments, each with its own integers c0, m, n and binade e;
+//the low 16 bits, x2, enter a linear term in full, and a squared term sees only their top 10 bits, as a distance t
+//from the segment's middle, squared and rounded up to a multiple of 256 (u). The result, in units of 2^(e - 150)
+//(a float's 24-bit significand when its exponent is e), is c0 + floor(m * x2 / 2^17) + floor(n * u / 2^Q),
+//truncated to a multiple of 4: 22 bits. vfpu-segments.hpp holds the fitted tables.
+struct VFPUSegment { s32 c0, m, n, e; };
+#include "vfpu-segments.hpp"
+
+//A table's result at a 23-bit index, as float bits. The tables cover rcp over [1, 2), rsq and sqrt over [1, 4)
+//(the index drops the input's lowest bit), exp2 over [1, 2) and asin over [0, 1); each function scales from there.
+static auto interpolate(const VFPUSegment* segments, u32 index) -> u32 {
+  auto& segment = segments[index >> 16];
+  s64 x2 = index & 0xffff;
+  s64 t = (x2 >> 6) - 512;
+  s64 u = (t * t + 255) >> 8;
+  s64 value = segment.c0 + (segment.m * x2 >> 17) + (segment.n * u >> InterpolatorScale);
+  value &= ~3ll;
+  if(value <= 0) return 0;
+  s32 e = segment.e;
+  while(value >= 1 << 24) value >>= 1, e++;  //carried into the next binade
+  while(value < 1 << 23) value <<= 1, e--;   //below the segment's binade
+  return e << 23 | (value & 0x7f'ffff);
+}
+
+//bits times 2^k, by moving the exponent: too big gives infinity, too small zero (the VFPU has no denormals).
+static auto scaleBits(u32 bits, s32 k) -> u32 {
+  if(!(bits & 0x7fff'ffff)) return bits;
+  s32 e = s32(bits >> 23 & 0xff) + k;
+  if(e >= 255) return (bits & 0x8000'0000) | 0x7f80'0000;
+  if(e <= 0) return bits & 0x8000'0000;
+  return (bits & 0x807f'ffff) | u32(e) << 23;
+}
+
+//The parts of a float: its sign bit, exponent and mantissa, a denormal counting as zero.
+struct FloatParts {
+  FloatParts(u32 bits) : sign(bits & 0x8000'0000), exponent(bits >> 23 & 0xff), mantissa(bits & 0x7f'ffff) {
+    if(exponent == 0) mantissa = 0;
+  }
+  auto zero() const -> bool { return exponent == 0; }
+  auto infinite() const -> bool { return exponent == 0xff && !mantissa; }
+  auto nan() const -> bool { return exponent == 0xff && mantissa; }
+  u32 sign, exponent, mantissa;
+};
+
+//|x| as a fixed-point number with 23 bits after the point, the rest dropped; clamped at 2^40 (far past where exp2
+//overflows), so large inputs stay large.
+static auto fixed23(FloatParts x) -> s64 {
+  if(x.zero()) return 0;
+  s64 shift = s64(x.exponent) - 127;
+  s64 significand = x.mantissa | 0x80'0000;
+  if(shift >= 17) return s64(1) << 40;
+  if(shift >= 0) return significand << shift;
+  if(shift > -24) return significand >> -shift;
+  return 0;
+}
+
+static auto vfpuReciprocal(u32 bits) -> u32 {
+  FloatParts x{bits};
+  if(x.nan()) return 0x7f80'0001 | x.sign;
+  if(x.infinite()) return x.sign;
+  if(x.zero()) return x.sign | 0x7f80'0000;
+  return x.sign | scaleBits(interpolate(rcpSegments, x.mantissa), 127 - s32(x.exponent));
+}
+
+//x = 2^p * (1 + f): an even p takes the index's lower half ([1, 2)), an odd one its upper half ([2, 4)), and
+//the result is scaled by 2^-floor(p / 2) for rsq, 2^floor(p / 2) for sqrt.
+static auto vfpuReciprocalSqrt(u32 bits) -> u32 {
+  FloatParts x{bits};
+  if(x.nan()) return 0x7f80'0001 | x.sign;
+  if(x.zero()) return x.sign | 0x7f80'0000;
+  if(x.sign) return 0xff80'0001;
+  if(x.infinite()) return 0;
+  s32 p = s32(x.exponent) - 127;
+  u32 index = (p & 1 ? 1 << 22 : 0) | x.mantissa >> 1;
+  return scaleBits(interpolate(rsqSegments, index), -(p >> 1));
+}
+
+static auto vfpuSqrt(u32 bits) -> u32 {
+  FloatParts x{bits};
+  if(x.nan()) return 0x7f80'0001;
+  if(x.zero()) return 0;  //-0 too
+  if(x.sign) return 0x7f80'0001;
+  if(x.infinite()) return bits;
+  s32 p = s32(x.exponent) - 127;
+  u32 index = (p & 1 ? 1 << 22 : 0) | x.mantissa >> 1;
+  return scaleBits(interpolate(sqrtSegments, index), p >> 1);
+}
+
+//2^y, which exp2 (y = x) and rexp2 (y = -x) share. |y| is split into a whole part n and a 23-bit fraction. A
+//positive y (or zero) reads the table at the fraction: 2^y = 2^(1 + fraction) * 2^(n - 1). A negative y reads it
+//backwards, the fraction's bits inverted: 2^y = 2^(1 + ~fraction) * 2^(-n - 2).
+static auto vfpuPower2(u32 bits, bool negate) -> u32 {
+  FloatParts x{bits};
+  if(x.nan()) return 0x7f80'0001;
+  bool negative = !x.zero() && (x.sign != 0) != negate;
+  s64 fixed = fixed23(FloatParts{bits & 0x7fff'ffff});
+  s64 n = fixed >> 23;
+  if(!negative) {
+    if(n > 128) return 0x7f80'0000;
+    return scaleBits(interpolate(exp2Segments, u32(fixed & 0x7f'ffff)), s32(n - 1));
+  }
+  if(n > 150) return 0;
+  return scaleBits(interpolate(exp2Segments, u32(~fixed & 0x7f'ffff)), s32(-n - 2));
+}
+
+static auto vfpuExp2(u32 bits) -> u32 { return vfpuPower2(bits, false); }
+static auto vfpuReciprocalExp2(u32 bits) -> u32 { return vfpuPower2(bits, true); }
+
+//arcsine in quarter turns: |x| as a 23-bit fixed-point index, the result taking x's sign; 1 itself gives 1, and
+//past 1 there's no arcsine.
+static auto vfpuArcsine(u32 bits) -> u32 {
+  FloatParts x{bits};
+  if(x.nan() || x.exponent > 127 || (x.exponent == 127 && x.mantissa)) return 0x7f80'0001 | x.sign;
+  if(x.exponent == 127) return x.sign | 0x3f80'0000;
+  return x.sign | interpolate(asinSegments, u32(fixed23(FloatParts{bits & 0x7fff'ffff})));
+}
+
 //The VFPU measures angles in quarter turns: sin(1) is the sine of 90 degrees.
 static constexpr f64 QuarterTurn = 1.5707963267948966;
 
@@ -287,6 +406,14 @@ template<typename F> auto Allegrex::vfpuUnary(u8 vd, u8 vs, u32 size, F function
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
+//For functions that work on a lane's bits directly (the exact math functions above).
+template<typename F> auto Allegrex::vfpuUnaryBits(u8 vd, u8 vs, u32 size, F function) -> void {
+  auto s = vfpuRead(vs, size, vfpu.pfxs);
+  Vector d{};
+  for(u32 i : range(size)) d.lane[i] = function(s.lane[i]);
+  vfpuWrite(vd, size, d, vfpu.pfxd);
+}
+
 template<typename F> auto Allegrex::vfpuBinary(u8 vd, u8 vs, u8 vt, u32 size, F function, NaNSign sign) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
   auto t = vfpuRead(vt, size, vfpu.pfxt);
@@ -400,7 +527,7 @@ auto Allegrex::VADD(u8 vd, u8 vs, u8 vt, u32 size) -> void {
 
 //arcsine, in quarter turns
 auto Allegrex::VASIN(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return std::asin((f64)s) / QuarterTurn; }, NaNSign::Input);
+  vfpuUnaryBits(vd, vs, size, vfpuArcsine);
 }
 
 //vfad adds up the lanes into one value; vavg averages them.
@@ -534,13 +661,9 @@ auto Allegrex::VDOT(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
 
-//2 to the power of x, which reaches infinity at 128 and zero at -127 (no denormals)
+//2 to the power of x
 auto Allegrex::VEXP2(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) -> f64 {
-    if(s >= 128.0f) return std::numeric_limits<f64>::infinity();
-    if(s <= -127.0f) return 0.0;
-    return std::exp2((f64)s);
-  }, NaNSign::Positive);
+  vfpuUnaryBits(vd, vs, size, vfpuExp2);
 }
 
 //vf2h: pairs of floats into pairs of half floats packed in one lane, so a quad becomes a pair.
@@ -776,7 +899,7 @@ auto Allegrex::VNOP() -> void {
 
 //-1/x
 auto Allegrex::VNRCP(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return -1.0f / s; }, NaNSign::Negated);
+  vfpuUnaryBits(vd, vs, size, [](u32 s) { return vfpuReciprocal(s) ^ 0x8000'0000; });
 }
 
 //minus the sine, of quarter turns
@@ -826,16 +949,12 @@ auto Allegrex::VQMUL(u8 vd, u8 vs, u8 vt, u32) -> void {
 
 //1/x
 auto Allegrex::VRCP(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return 1.0f / s; }, NaNSign::Input);
+  vfpuUnaryBits(vd, vs, size, vfpuReciprocal);
 }
 
 //2 to the power of -x
 auto Allegrex::VREXP2(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) -> f64 {
-    if(s >= 127.0f) return 0.0;
-    if(s <= -128.0f) return std::numeric_limits<f64>::infinity();
-    return std::exp2(-(f64)s);
-  }, NaNSign::Positive);
+  vfpuUnaryBits(vd, vs, size, vfpuReciprocalExp2);
 }
 
 //vrndf1 and vrndf2: random floats from 1 up to 2, or from 2 up to 4 (a random mantissa under a fixed exponent).
@@ -885,7 +1004,7 @@ auto Allegrex::VROT(u8 vd, u8 vs, u32 size, u8 placement) -> void {
 
 //1/sqrt(x)
 auto Allegrex::VRSQ(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return 1.0 / std::sqrt((f64)s); }, NaNSign::Input);
+  vfpuUnaryBits(vd, vs, size, vfpuReciprocalSqrt);
 }
 
 //vs2i and vus2i: each lane's two halfwords into two lanes, as the top halfword of an integer (vs2i), or scaled up
@@ -975,7 +1094,7 @@ auto Allegrex::VSOCP(u8 vd, u8 vs, u32 size) -> void {
 }
 
 auto Allegrex::VSQRT(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return std::sqrt(s); }, NaNSign::Positive);
+  vfpuUnaryBits(vd, vs, size, vfpuSqrt);
 }
 
 //vsrt1-vsrt4.q: the four passes of a sorting network over a quad's lanes, each putting pairs of lanes in order

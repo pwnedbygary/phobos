@@ -323,6 +323,7 @@ struct Allegrex {
   auto vfpuNaN(u32 result, NaNSign sign, u32 s, u32 t = 0) const -> u32;
   template<typename F> auto vfpuUnary(u8 vd, u8 vs, u32 size, F function, NaNSign sign = NaNSign::Unknown) -> void;
   template<typename F> auto vfpuBinary(u8 vd, u8 vs, u8 vt, u32 size, F function, NaNSign sign = NaNSign::Unknown) -> void;
+  template<typename F> auto vfpuUnaryBits(u8 vd, u8 vs, u32 size, F function) -> void;
 
   auto BV(bool value, bool likely, u8 bit, s16 imm) -> void;
   auto LVLQ(u8 vt, cu32& rs, s16 imm) -> void;

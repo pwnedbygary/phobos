@@ -167,8 +167,12 @@ fill lanes from the last back, and their destination prefix only reaches the las
 description (no PPSSPP code), and checked against the states fp64 recovered from a PSP for the first draws after
 power on. The carry's rule matched all of his data, but isn't understood, and those first draws don't exercise it.
 
-Not checked against hardware: the transcendental functions (computed in double precision; the hardware
-approximates, so the last bits can differ), the generator's carry, `vwbn` (implemented from its description; no test), and what
+The math functions `vrcp`, `vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2` and `vasin` are the PSP's own: its
+quadratic interpolator with coefficients fitted from our measurements (`vfpu-segments.hpp`, from
+`tools/psp-vfpu-measure/fit.py`), exact on every measured input; see psp-vfpu-measurements.md.
+
+Not checked against hardware: `vsin`, `vcos`, `vnsin` and `vlog2` (still computed in double precision, so their
+last bits differ from a PSP's), `vwbn` (implemented from its description; no test), and what
 reserved size combinations do
 (they raise ReservedInstruction, and leave the prefixes). Which instructions use up the prefixes: every VFPU
 arithmetic instruction, and `vnop`, as pspdev's documentation says (PPSSPP keeps them through `vnop`, but the
