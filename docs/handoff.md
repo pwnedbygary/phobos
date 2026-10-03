@@ -856,6 +856,17 @@ v1.0.2 boots into RAM and spins taking exceptions, and Overdrive runs but its sc
 On the RP6, N64 Debug Logging was switched on and Asynchronous RDP off for the runs, then both were set back
 (logging off, Asynchronous RDP on); Phobos was force-stopped after each run, so no auto state was written.
 
+## MSX 40-column text — 2026-10-03
+
+Branch `cursor/msx-text-columns-2b67`. The plan row "MSX 40-column text" has the details: ares's TMS9918 and V9938
+drew text mode across the whole line, so each row's first character showed again at the right edge; the 40 columns
+now sit between eight-pixel borders.
+
+- **Checks run:** the modern release builds. On the RP6, with the user's MSX BIOS and a cartridge written for the
+  test that returns at once, BASIC's screen showed the stray column before and doesn't now. The test cartridge and
+  the empty save folder it left were removed afterwards.
+- **Not checked:** an SG-1000, SC-3000 or ColecoVision program in text mode (same code), an MSX2.
+
 ## Cleanups — 2026-10-03
 
 Branch `cursor/cleanups-2b67`: the cleanups the user picked on 2026-10-03.
