@@ -806,6 +806,26 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## MSX game in one cartridge slot — 2026-10-03
+
+Branch `cursor/msx-one-cartridge-v2-2b67` (#99's commit, rebased onto master after the desktop and licensing PRs
+merged). The plan row "MSX game in one cartridge slot" has the details: an MSX
+cartridge game was connected to the Expansion Slot as well as the Cartridge Slot, so the BIOS found a second copy;
+`connectDevices` now leaves the Expansion Slot empty, as ares's own frontend does. A state holds the board of each
+slot with a cartridge in, so MSX states move to v135 and older ones are refused (the review's finding: they would
+have loaded misaligned).
+
+- **Checks run:** the modern release builds, 240 host tests pass. On the RP6, a probe cartridge written for the test
+  printed "S1 S1 S2" and held before the change, and now prints "S1 S1" before the BIOS goes on to BASIC. The log
+  lists one cartridge port instead of two. A state saved to slot 0 loaded back. The probe, its states and its save
+  folder were removed afterwards.
+- **Version code:** the RP6 has the desktop branch's build number (104601, 11 commits ahead of master), and Android
+  refuses downgrades on this user build, so this test build was given the same number (`-PversionCode=104601`).
+  The in-app updater couldn't install master's nightlies there until master passed 104601, which the desktop PR's
+  merge did.
+- **Seen, fixed separately:** in 40-column text (SCREEN 0), each row's first character showed again at the right
+  edge (branch `cursor/msx-text-columns-2b67`).
+
 ## Phobos's own code under GPL-3.0-or-later — 2026-10-03
 
 Branch `cursor/gpl-own-code-v2-2b67`, for the user to merge: #94's commit, rebased onto master after #95 and #96
