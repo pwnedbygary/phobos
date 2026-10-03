@@ -40,6 +40,8 @@ fun firmwareFileName(key: String): String = when (key) {
     "fw_pce_cd" -> "PC Engine CD System Card 3.0 (Japan)"
     "fw_laseractive_sega" -> "LaserActive SEGA PAC BIOS (US v1.04 or Japan v1.02)"
     "fw_laseractive_nec" -> "LaserActive NEC PAC BIOS (PAC-N10, PAC-N1 or PCE-LP1)"
+    "fw_msx_basic" -> "An MSX BIOS with BASIC (such as MSX.ROM), which tapes load through; the built-in C-BIOS has none"
+    "fw_msx2_basic" -> "MSX2 main and sub BIOS (such as MSX2.ROM and MSX2EXT.ROM), which tapes load through; the built-in C-BIOS has no BASIC"
     else -> key
 }
 

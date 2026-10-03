@@ -714,6 +714,16 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## MSX tapes ask for a BASIC BIOS — 2026-10-03
+
+Branch `cursor/msx-tape-bios-2b67`, stacked on `cursor/headered-system-cards-2b67`. The plan row "MSX tapes ask for a
+BASIC BIOS" has the details.
+
+- **Checks run:** both flavors build, 236 host tests pass (new `MsxTapesTest`: tapes need `fw_msx`, or both MSX2
+  ROMs; cartridges and other systems need nothing). On the RP6 the stand-in tape loaded straight away with the
+  user's BIOS set (no dialog), and was deleted afterwards.
+- **Not checked:** the BIOS Required dialog on the RP6, which would mean clearing the user's MSX firmware picks.
+
 ## Headered PC Engine card dumps — 2026-10-03
 
 Branch `cursor/headered-system-cards-2b67`, stacked on `cursor/msx-tape-speed-2b67`. The plan row "Headered PC

@@ -119,6 +119,7 @@ import com.phobos.emulator.util.groupDiscSets
 import com.phobos.emulator.util.isZipSignature
 import com.phobos.emulator.util.m3uEntries
 import com.phobos.emulator.util.m3uEntryPath
+import com.phobos.emulator.util.msxTapeFirmware
 import com.phobos.emulator.util.newerDriverRelease
 import com.phobos.emulator.util.romTitle
 import com.phobos.emulator.util.withoutDiscNumber
@@ -2681,6 +2682,7 @@ class MainViewModel(
             // For each mapped firmware, if it's a URI, copy it to a temp file so native code can read it.
             // Only the firmware the game's system reads; a system the app doesn't list gets all of it.
             val firmwareKeys = if (effectiveSystem in PhobosCore.enumerateSystems()) SYSTEM_FIRMWARE[effectiveSystem].orEmpty() else null
+            val mappedFirmware = mutableSetOf<String>()
             currentSettings.systemFirmwarePaths.forEach { (key, uriString) ->
                 if (firmwareKeys != null && key !in firmwareKeys) return@forEach
                 try {
@@ -2724,18 +2726,22 @@ class MainViewModel(
                                 }
                             }
                             PhobosCore.mapFirmwareFile(key, tempFile.absolutePath)
+                            if (tempFile.length() > 0) mappedFirmware += key
                         } else {
                             Log.w("Phobos", "Firmware file not found or inaccessible: $uriString")
                         }
                     } else {
                         PhobosCore.mapFirmwareFile(key, uriString)
+                        val path = if (uriString.startsWith("file://")) Uri.parse(uriString).path.orEmpty() else uriString
+                        if (File(path).length() > 0) mappedFirmware += key
                     }
                 } catch (e: Exception) {
                     Log.e("Phobos", "Failed to map firmware $key: ${e.message}")
                 }
             }
 
-            val missingFirmware = PhobosCore.missingFirmware(effectiveSystem)
+            val missingFirmware = PhobosCore.missingFirmware(effectiveSystem) +
+                msxTapeFirmware(effectiveSystem, rom.name, mappedFirmware)
             if (missingFirmware.isNotEmpty()) {
                 Log.w("Phobos", "$effectiveSystem needs firmware: $missingFirmware")
                 _firmwareRequired.value = FirmwareRequired(effectiveSystem, missingFirmware)
