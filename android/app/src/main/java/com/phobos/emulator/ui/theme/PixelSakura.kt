@@ -56,7 +56,8 @@ internal class SakuraArt(
             SakuraMode.DAY -> 1f
             SakuraMode.CYCLE -> if (live) cycleDaylight(time) else EVENING
         }
-        paintScene(daylight, if (live) time else 0L)
+        // Night and day keep the landscape init painted; only the cycle relights it.
+        if (mode == SakuraMode.CYCLE) paintScene(daylight, if (live) time else 0L)
         System.arraycopy(still, 0, out, 0, still.size)
         if (!live) return
         if (daylight < 0.6f) stars.twinkle(time, out, starColor)
