@@ -753,7 +753,10 @@ Branch `cursor/psp-vfpu-ares-2b67`, stacked on part 2 (`cursor/psp-recompiler-2b
   constant is picked by the swizzle and absolute bits together. The recompiler runs it through the interpreter.
 - **Checks run:** `tests/allegrex/run-tests.sh`, all 51 groups pass on the Mac (UBSan) and in `phobos-linux` (GCC
   13, ASan and UBSan): ten VFPU groups on both engines, and the generated programs now mix in VFPU instructions.
-- **The stashes** `stash@{0}` and `stash@{1}` (the VFPU work before the rewrite) are now superseded.
+- **Prefixes, from a review:** an instruction that raises an exception leaves the prefixes, and `vmfvc`/`vmtvc`
+  don't use them up (as in PPSSPP, where pspdev's documentation is silent), so `vmtvc` can set one; `vnop` does use
+  them up, as the documentation says.
+- **The stashes** of the VFPU work before the rewrite were dropped, with copies kept outside the repository.
 
 ## PSP core, part 2: the recompiler — 2026-10-03
 

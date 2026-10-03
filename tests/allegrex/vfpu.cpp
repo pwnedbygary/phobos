@@ -490,11 +490,29 @@ auto more() -> void {
   CHECK(stores.cpu.vfpu.cc, 0x2a);
   CHECK(stores.cpu.vfpu.r[S(2, 1, 0)], 0x2a);
 
-  //vnop uses up the prefixes, as pspdev's documentation says: the vadd after it is plain.
+  //Which instructions use up the prefixes. vpfxs here negates rs's lane 0, so a vadd.s of 1 and 2 that still sees
+  //it gives 1, and one after the prefixes were used up gives 3.
+  auto oneAndTwo = [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = bits(1.0f); s.vfpu.r[S(2, 0, 0)] = bits(2.0f); };
+  uint32_t negateX = 0xe4 | 1 << 16;
+  //vnop uses them up, as pspdev's documentation says.
   Machine nop;
-  nop.run({vpfxs(0xe4 | 1 << 16), vnop, alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))},
-          [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = bits(1.0f); s.vfpu.r[S(2, 0, 0)] = bits(2.0f); });
-  CHECK(nop.cpu.vfpu.r[S(0, 0, 0)], bits(3.0f));  //not -1 + 2
+  nop.run({vpfxs(negateX), vnop, alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0))}, oneAndTwo);
+  CHECK(nop.cpu.vfpu.r[S(0, 0, 0)], bits(3.0f));
+  //vmfvc doesn't, and vmtvc can set one (control register 128 is rs's prefix).
+  Machine control;
+  control.run({vpfxs(negateX), alu(0b110100000, 1, S(3, 0, 0), 3, 0x50), alu(Vadd, 1, S(0, 0, 0), S(1, 0, 0), S(2, 0, 0)),
+               alu(0b110100000, 1, 0, S(3, 1, 0), 0x51), alu(Vadd, 1, S(0, 1, 0), S(1, 0, 0), S(2, 0, 0))},
+              [&](Allegrex& s) { oneAndTwo(s); s.vfpu.r[S(3, 1, 0)] = negateX; });
+  CHECK(control.cpu.vfpu.r[S(0, 0, 0)], bits(1.0f));  //still negated after vmfvc
+  CHECK(control.cpu.vfpu.r[S(0, 1, 0)], bits(1.0f));  //negated by the prefix vmtvc set
+  //An instruction that raises an exception instead of running leaves them: here a reserved encoding of the vadd
+  //group, and vcrs, which only exists for triples, used on a quad.
+  for(uint32_t reserved : {0x61800000u, alu(Vcrs, 4, Rw(0, 0), Rw(1, 0), Rw(2, 0))}) {
+    Machine fault;
+    fault.run({vpfxs(negateX), reserved}, oneAndTwo);
+    CHECK(fault.exceptions.size(), 1);
+    CHECK(fault.cpu.vfpu.pfxs, negateX);
+  }
 }
 
 auto vfpuTests() -> Tests {

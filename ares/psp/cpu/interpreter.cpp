@@ -65,7 +65,7 @@ auto Allegrex::decoderEXECUTE() -> void {
   op(0x15, BNEL, RS, RT, IMMi16);
   op(0x16, BLEZL, RS, IMMi16);
   op(0x17, BGTZL, RS, IMMi16);
-  //VFPU instructions use up the prefixes (see VFPU in allegrex.hpp)
+  //VFPU instructions use up the prefixes once they've run (see VFPU in allegrex.hpp)
   case 0x18: decoderVFPU0(); return vfpuPrefixesUsed();
   case 0x19: decoderVFPU1(); return vfpuPrefixesUsed();
   case 0x1b: decoderVFPU3(); return vfpuPrefixesUsed();
@@ -87,7 +87,13 @@ auto Allegrex::decoderEXECUTE() -> void {
   op(0x30, LL, RT, RS, IMMi16);
   op(0x31, LWC1, FT, RS, IMMi16);
   op(0x32, LVS, VTS, RS, IMMv);
-  case 0x34: decoderVFPU4(); return vfpuPrefixesUsed();
+  case 0x34:
+    //vmfvc and vmtvc move control registers, the prefixes among them, and leave the prefixes alone (as PPSSPP
+    //has them; pspdev's documentation doesn't say)
+    if(OPCODE >> 16 == 0xd050) return VMFVC(VD, u8(OPCODE >> 8 & 0x7f));
+    if(OPCODE >> 16 == 0xd051) return VMTVC(u8(OPCODE & 0x7f), VS);
+    decoderVFPU4();
+    return vfpuPrefixesUsed();
   case 0x35:  //lvl.q, or lvr.q when bit 1 is set
     if(OPCODE & 2) return LVRQ(VTQ, RS, IMMv);
     return LVLQ(VTQ, RS, IMMv);
@@ -350,8 +356,6 @@ auto Allegrex::decoderVFPU4() -> void {
   op(0x48, VSRT, VD, VS, VN, 3);
   op(0x49, VSRT, VD, VS, VN, 4);
   op(0x4a, VSGN, VD, VS, VN);
-  op(0x50, VMFVC, VD, u8(OPCODE >> 8 & 0x7f));
-  op(0x51, VMTVC, u8(OPCODE & 0x7f), VS);
   op(0x59, VT4444, VD, VS, VN);
   op(0x5a, VT5551, VD, VS, VN);
   op(0x5b, VT5650, VD, VS, VN);

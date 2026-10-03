@@ -16,7 +16,7 @@ auto Allegrex::power(u32 entry) -> void {
   ipu = {};
   fpu = {};
   vfpu = {};
-  vfpuPrefixesUsed();
+  vfpu.pfxs = vfpu.pfxt = PrefixIdentity;  //the prefixes start out doing nothing
   scc = {};
   pipeline = {};
   ipu.pc = entry;

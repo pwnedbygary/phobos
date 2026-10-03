@@ -199,7 +199,10 @@ auto Allegrex::vfpuWriteMatrix(u8 reg, u32 size, const Matrix& value) -> void {
   for(u32 i : range(size * size)) vfpu.r[index[i]] = value.element[i];
 }
 
+//An instruction has used the prefixes, so they go back to doing nothing. One that raised an exception instead of
+//running (a reserved encoding, say) leaves them as they were.
 auto Allegrex::vfpuPrefixesUsed() -> void {
+  if(pipeline.exception) return;
   vfpu.pfxs = PrefixIdentity;
   vfpu.pfxt = PrefixIdentity;
   vfpu.pfxd = 0;
@@ -646,7 +649,8 @@ auto Allegrex::VMAX(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   vfpuBinary(vd, vs, vt, size, [](f32 s, f32 t) { return std::fmax(s, t); });
 }
 
-//vmfvc and vmtvc move a control register to or from a VFPU register.
+//vmfvc and vmtvc move a control register to or from a VFPU register. Unlike the other VFPU instructions they
+//leave the prefixes alone (see decoderEXECUTE()), so vmtvc can set one.
 auto Allegrex::VMFVC(u8 vd, u8 index) -> void {
   vfpu.r[vd] = vfpuControl(index);
 }
@@ -950,7 +954,8 @@ auto Allegrex::VSUB(u8 vd, u8 vs, u8 vt, u32 size) -> void {
 }
 
 //vsync and vflush wait for the VFPU's pipeline, or its writes to memory, to finish: there's nothing to wait for
-//here. Whether they use up the prefixes isn't documented; being waits rather than operations, they're taken not to.
+//here. pspdev's documentation doesn't say whether they use up the prefixes; they don't in PPSSPP, nor here. (PPSSPP
+//keeps the prefixes through vnop too, but the documentation, which rests on tests on hardware, says otherwise.)
 auto Allegrex::VSYNC() -> void {
 }
 

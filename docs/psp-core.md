@@ -149,9 +149,11 @@ for now (its branches included), as it does the FPU.
 
 Not checked against hardware: the transcendental functions (computed in double precision; the hardware
 approximates, so the last bits can differ), the random number generator (undocumented; a xorshift stands in,
-seeded by `vrnds`), `vwbn` (implemented from its description; no test), whether `vsync` and `vflush` use up the
-prefixes (taken not to; `vnop` does, as documented), and what reserved size combinations do (they raise
-ReservedInstruction).
+seeded by `vrnds`), `vwbn` (implemented from its description; no test), and what reserved size combinations do
+(they raise ReservedInstruction, and leave the prefixes). Which instructions use up the prefixes: every VFPU
+arithmetic instruction, and `vnop`, as pspdev's documentation says (PPSSPP keeps them through `vnop`, but the
+documentation rests on tests on hardware); not `vsync`, `vflush`, `vmfvc` and `vmtvc`, which the documentation
+doesn't cover, as in PPSSPP; nor the loads, stores and moves to integer registers.
 
 Tests: `tests/allegrex/vfpu.cpp`, ten groups (addressing, arithmetic, prefixes, products, comparisons,
 conversions, functions, matrices, moves, and more instructions worked out by hand from the descriptions), run on
