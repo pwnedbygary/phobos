@@ -2,7 +2,7 @@
 #Builds and runs the PSP system's tests (ares/psp beyond the CPU) on the host, as tests/allegrex/run-tests.sh does
 #the CPU's: against nall, ares's types and sljit alone, with the undefined-behavior sanitizer, and on Linux the
 #address sanitizer too.
-#usage: tests/psp/run-tests.sh   (SANITIZE= turns the sanitizers off)
+#usage: tests/psp/run-tests.sh   (SANITIZE= turns the sanitizers off; PSP_TEST_PROGRAMS: see loader.cpp)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -39,6 +39,6 @@ fi
 # shellcheck disable=SC2086
 $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" \
   -include "$ROOT/tests/allegrex/prelude.hpp" "$ROOT/ares/psp/cpu/allegrex.cpp" "$ROOT/ares/psp/memory/memory.cpp" \
-  "$HERE/main.cpp" "$HERE/memory.cpp" "$NALL" "$SLJIT" "$ALLOCATOR" \
+  "$ROOT/ares/psp/kernel/loader.cpp" "$HERE/main.cpp" "$HERE/memory.cpp" "$HERE/loader.cpp" "$NALL" "$SLJIT" "$ALLOCATOR" \
   "${LIBRARIES[@]}" -o "$OUT/psp"
 "$OUT/psp"

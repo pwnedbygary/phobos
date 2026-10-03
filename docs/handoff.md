@@ -742,6 +742,17 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 6: the loader — 2026-10-03
+
+Branch `cursor/psp-loader-2b67`, stacked on `cursor/psp-memory-2b67`: `ares/psp/kernel/loader.cpp` loads static
+executables, PRXs (relocations: 26-bit jumps, pointers, `lui` with its lower halves) and `EBOOT.PBP`'s program; reads
+the module info; patches each import's stub to `jr ra; syscall n`; lists the exports; refuses with a reason
+(encrypted programs named from their `~PSP` header, per the PSP Developer Wiki page the user saved). Checked against a
+real hello world built by pspdev (`tools/psp-test-programs/build.sh`, source only; `PSP_TEST_PROGRAMS`), which shows
+what part 7 needs: about 45 functions from 11 libraries. Checks: 12 groups on the Mac (UBSan) and in `phobos-linux`
+(ASan and UBSan, with the real programs); three broken versions each failed. Open: whether relocation segment numbers
+add a segment's address or its displacement, which only multi-segment retail modules can show (phase 7).
+
 ## PSP core, part 5: the memory map — 2026-10-03
 
 Branch `cursor/psp-memory-2b67`, stacked on `cursor/psp-vfpu-round2-2b67`: `ares/psp/memory/` (the scratchpad,
