@@ -716,6 +716,25 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## MSX game in one cartridge slot — 2026-10-03
+
+Branch `cursor/msx-one-cartridge-2b67`. The plan row "MSX game in one cartridge slot" has the details: an MSX
+cartridge game was connected to the Expansion Slot as well as the Cartridge Slot, so the BIOS found a second copy;
+`connectDevices` now leaves the Expansion Slot empty, as ares's own frontend does. A state holds the board of each
+slot with a cartridge in, so MSX states move to v135 and older ones are refused (the review's finding: they would
+have loaded misaligned).
+
+- **Checks run:** the modern release builds, 240 host tests pass. On the RP6, a probe cartridge written for the test
+  printed "S1 S1 S2" and held before the change, and now prints "S1 S1" before the BIOS goes on to BASIC. The log
+  lists one cartridge port instead of two. A state saved to slot 0 loaded back. The probe, its states and its save
+  folder were removed afterwards.
+- **Version code:** the RP6 has the desktop branch's build number (104601, 11 commits ahead of master), and Android
+  refuses downgrades on this user build, so this test build was given the same number (`-PversionCode=104601`).
+  The in-app updater won't install master's nightlies there until master passes 104601 (merging the desktop PR
+  does).
+- **Seen, not changed here:** in 40-column text (SCREEN 0), each row's first character shows again at the right edge,
+  as it did in the MSX tape screenshots before this change.
+
 ## MSX tape saving — 2026-10-03
 
 Branch `cursor/msx-tape-saving-2b67`, stacked on `cursor/n64-hack-notes-2b67`. The plan row "MSX tape saving" has

@@ -2954,6 +2954,9 @@ namespace ares {
         // scanning the slots for one would read a board built around nothing.
         if (port->type() == "Cartridge" && port->family().beginsWith("MSX") && currentMedium && currentMedium->pak
             && currentMedium->pak->attribute("tape").boolean()) continue;
+        // The MSX's second slot stays empty, as ares leaves it: connected there too, the game would be a second
+        // cartridge for the BIOS to find. (MSX states are v135 since: a state holds each connected slot's board.)
+        if (port->type() == "Cartridge" && port->family().beginsWith("MSX") && port->name() == "Expansion Slot") continue;
         // The N64DD "Disk Drive" port has type "Floppy Disk"; connecting it
         // mounts the .ndd disk medium (returned by pak() for the
         // "Nintendo 64DD Disk" node).
