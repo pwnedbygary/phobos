@@ -289,7 +289,7 @@ struct Allegrex {
     u32 pfxt;
     u32 pfxd;
     u32 cc;
-    u32 rcx[8];  //the random number generator's state: control registers 136 to 143
+    u32 rcx[8];  //the random number generator's state: control registers 136 to 143 (see vfpuRandom())
   } vfpu;
 
   //The lanes of a vector operand, and the elements of a matrix operand (row r, column c at r * size + c).

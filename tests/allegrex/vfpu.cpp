@@ -515,11 +515,71 @@ auto more() -> void {
   }
 }
 
+//The random number generator. From power on, its state after each draw must be the one fp64 recovered from a
+//PSP's output (PPSSPP issue 16946), unpacked here from the eight RCX registers into its five parts.
+auto random() -> void {
+  struct State { uint32_t a, b, c, d, e; };
+  auto unpack = [](const Allegrex& cpu) -> State {
+    auto& r = cpu.vfpu.rcx;
+    State s{(r[0] & 0xffff) | r[4] << 16, (r[1] & 0xffff) | r[5] << 16, (r[2] & 0xffff) | r[6] << 16,
+            (r[3] & 0xffff) | r[7] << 16, 0};
+    for(uint32_t n = 0; n < 8; n++) s.e |= (r[n] >> 16 & 15) << (4 * n);
+    return s;
+  };
+  auto vrndi = [](uint32_t size, uint32_t rd) { return unary(0x21, size, rd, 0); };
+
+  const struct { uint32_t draws; State state; } recovered[] = {
+    { 3, {0xc35937cc, 0x2998d882, 0x00000030, 0x00000074, 0}},
+    { 4, {0x2e130a5d, 0x6398b906, 0x00000074, 0x00000118, 0}},
+    {14, {0x22dc176b, 0xbc304c24, 0x000be744, 0x001cbcc0, 0}},
+    {19, {0x9e3c9a7c, 0x1a7acf35, 0x03d038f0, 0x0934cf34, 0}},
+  };
+  for(auto& [draws, state] : recovered) {
+    Machine m;
+    std::vector<uint32_t> program(draws, vrndi(1, S(3, 0, 0)));
+    m.run(program);
+    State s = unpack(m.cpu);
+    CHECK(s.a, state.a);
+    CHECK(s.b, state.b);
+    CHECK(s.c, state.c);
+    CHECK(s.d, state.d);
+    CHECK(s.e, state.e);
+    CHECK(m.cpu.vfpu.r[S(3, 0, 0)], state.a + state.b + state.d);  //each draw gives a + b + d
+  }
+
+  //The registers start as 1, 2, 4 and 8 for c and d's low halves (and a's and b's), and always read 0x3f8 on top.
+  Machine fresh;
+  fresh.run({});
+  CHECK(fresh.cpu.vfpu.rcx[0], 0x3f800001);
+  CHECK(fresh.cpu.vfpu.rcx[3], 0x3f800008);
+  CHECK(fresh.cpu.vfpu.rcx[7], 0x3f800000);
+
+  //vrnds.s spreads the seed over the registers: a half each (low for 0-3, high for 4-7) and one nibble each.
+  Machine seed;
+  seed.run({alu(0b110100000, 1, 0, S(1, 0, 0), 0x20), mtv(t0, 128 + 8 + 2), mfv(t1, 128 + 8 + 2)},
+           [](Allegrex& s) { s.vfpu.r[S(1, 0, 0)] = 0x12345678; s.ipu.r[t0] = 0xffffffff; });
+  const uint32_t seeded[8] = {0x3f885678, 0x3f875678, 0x3f865678, 0x3f855678,
+                              0x3f841234, 0x3f831234, 0x3f821234, 0x3f811234};
+  for(uint32_t n = 0; n < 8; n++) if(n != 2) CHECK(seed.cpu.vfpu.rcx[n], seeded[n]);
+  CHECK(seed.gpr(t1), 0x3f8fffff);  //mtvc keeps 20 bits of an RCX register
+
+  //vrndi.q fills its lanes from the last back, and its destination prefix (here masking lane 0) applies to the
+  //last lane only.
+  Machine quad, singles, masked;
+  quad.run({vrndi(4, Rw(3, 0))});
+  singles.run({vrndi(1, S(2, 0, 0)), vrndi(1, S(2, 1, 0)), vrndi(1, S(2, 2, 0)), vrndi(1, S(2, 3, 0))});
+  for(uint32_t lane = 0; lane < 4; lane++) CHECK(quad.cpu.vfpu.r[S(3, lane, 0)], singles.cpu.vfpu.r[S(2, 3 - lane, 0)]);
+  masked.run({vpfxd(1 << 8), vrndi(2, Rw(3, 0))}, [](Allegrex& s) { setQuad(s, Rw(3, 0), {7, 7, 7, 7}); });
+  CHECK(masked.cpu.vfpu.r[S(3, 0, 0)], singles.cpu.vfpu.r[S(2, 1, 0)]);  //the second number drawn
+  CHECK(masked.cpu.vfpu.r[S(3, 1, 0)], bits(7.0f));                      //masked
+}
+
 auto vfpuTests() -> Tests {
   return {
     {"vfpu addressing", addressing}, {"vfpu arithmetic", arithmetic}, {"vfpu prefixes", prefixes},
     {"vfpu products", products}, {"vfpu comparisons", comparisons}, {"vfpu conversions", conversions},
     {"vfpu functions", functions}, {"vfpu matrices", matrices}, {"vfpu moves", moves}, {"vfpu more", more},
+    {"vfpu random", random},
   };
 }
 
