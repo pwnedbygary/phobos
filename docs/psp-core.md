@@ -1,8 +1,8 @@
 # PSP core
 
 **Status (2026-10-03):** started, at the user's request. Part 1, the Allegrex CPU's interpreter (integer and FPU
-instructions) with host tests, is on branch `cursor/psp-core-2b67`; the recompiler comes next. Nothing is in the app
-yet.
+instructions) with host tests, is on branch `cursor/psp-core-2b67`; part 2, the recompiler, on
+`cursor/psp-recompiler-2b67` on top of it. Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -64,24 +64,50 @@ yet.
 - Graphics: the GE runs the game's display lists into the emulated VRAM with a software renderer first; the GPU
   later.
 
-## The recompiler (planned)
+## The recompiler
 
-Built on ares's recompiler framework (`nall::recompiler::generic`, over sljit, for ARM64 and x86-64), the way ares's
-N64 CPU uses it (`ares/n64/cpu/recompiler.cpp`):
+Part 2 (`ares/psp/cpu/recompiler.cpp`, `recompiler-ipu.cpp`), built on ares's recompiler framework
+(`nall::recompiler::generic`, over sljit, for ARM64 and x86-64) as ares's N64 CPU is:
 
-- Blocks: starting at an address, instructions are compiled until a branch and its delay slot, into native code
-  that updates the same registers the interpreter uses. Compiled blocks are kept per 4 KiB of memory.
-- Common integer instructions become native code; anything else (rare instructions, the FPU and VFPU at first) is
-  compiled as a call to the interpreter's function for it, so every instruction works from the start and gets
-  faster one at a time.
-- Syscalls and exceptions leave the block, so the HLE kernel sees exactly the state the interpreter would give it.
-- A store into memory holding compiled code, or a `cache` instruction over it, throws those blocks away.
-- Differential tests: every test program runs through both engines, and the registers and memory must match.
+- **Blocks.** From an address, instructions are compiled up to a branch and its delay slot, the end of the 4 KiB
+  section, or an instruction after which compiled code mustn't go on by itself (`syscall`, whose HLE handler may
+  switch threads; `break`, `eret`, `halt`). The code works on the interpreter's own registers, so either engine
+  can carry on where the other stopped, and leaves `pc` and `pd` exactly as the interpreter would.
+- **Native and interpreted.** The common integer instructions that can't raise exceptions, and the branches and
+  jumps, become native code. Every other instruction is compiled as a call to `execute()`, the interpreter's own
+  path, so it behaves identically; that includes everything that can raise an exception, after which the block
+  leaves (`pipeline.exception`). The FPU's branches go to the interpreter too, as does a branch in a section's last
+  word (whose delay slot is in the next section).
+- **Where blocks can't start**, between a branch and its delay slot (a thread the HLE kernel switched to may have
+  stopped there) or at a misaligned address, the interpreter takes one step.
+- **The cache** files blocks by the section they start in, by physical address (the low 29 bits), and remembers
+  which mirror they were compiled for: code run through another mirror is compiled afresh, as its return
+  addresses differ. When the code memory (32 MiB) runs low, everything is thrown away and compiled again.
+- **Invalidation.** Whoever writes memory that can hold code calls `recompiler.invalidate()` (or
+  `invalidateRange()`), which drops the whole section: the PSP's memory map will for every write, the CPU's and
+  the ones it doesn't make (DMA, the HLE kernel loading a module); the tests' machine does it for every write.
+- **The MIPS-generic parts** (the cache by physical address, delay slots, the calls into the interpreter) are
+  plain MIPS and would serve another MIPS CPU without a TLB, such as the PS1's R3000A; only the native
+  instructions are Allegrex's.
+
+Not yet: linking blocks to each other (each block returns to the dispatcher), keeping MIPS registers in host
+registers, a fast path for loads and stores into RAM (they call the interpreter), native FPU code, tracking code
+finer than 4 KiB (a game that writes data next to its code recompiles that code each time), and code that
+rewrites itself further on in the block it's running (the rest of that block runs as compiled; the next run
+gets the new code).
+
+Tests: every test group runs on both engines, plus recompiler cases (blocks kept in the cache, code that rewrites
+a function it already ran, a branch across a section, a thread switch at a syscall in a delay slot to a thread
+stopped in another delay slot, a function called through two mirrors, an exception mid-block) and 500 generated
+programs (forward branches of every kind, loads and stores, FPU instructions, overflows and misaligned accesses)
+that must end in exactly the same state on both: every register, `pc`, `pd`, the FPU, the memory and the
+exceptions. Four deliberately broken versions of the recompiler (a wrong compare, a wrong address after a
+branch not taken, `nor` without the not, delay-slot instructions given the wrong `pc`) each failed them.
 
 ## Phases
 
 1. The Allegrex's integer and FPU instructions in the interpreter, host tests (part 1).
-2. The recompiler, with differential tests against the interpreter.
+2. The recompiler, with differential tests against the interpreter (part 2; its later steps are listed above).
 3. The VFPU: registers, prefixes, instructions, tested against the pspdev documentation's examples.
 4. Memory map; loading an unencrypted `EBOOT.PBP`, ELF or PRX; the first HLE functions (module start, threads,
    display, controls, files); a homebrew test program run on the host.

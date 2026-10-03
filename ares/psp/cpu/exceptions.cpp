@@ -5,6 +5,7 @@
 //not implemented yet: it goes to exceptionHook with the address of the instruction that raised it, or, without a
 //hook, the CPU halts there.
 auto Allegrex::exception(Exception code) -> void {
+  pipeline.exception = 1;
   if(exceptionHook) return exceptionHook(code, pipeline.address);
   scc.halted = 1;
 }

@@ -58,6 +58,7 @@ struct Allegrex {
   //allegrex.cpp
   auto power(u32 entry) -> void;
   auto instruction() -> void;
+  auto execute(u32 address, u32 instruction) -> u32;
   auto run(u64 instructions) -> u64;
 
   //The integer unit: 32 general registers (r0 always reads as zero), hi and lo (where multiply and divide put their
@@ -96,6 +97,7 @@ struct Allegrex {
   struct Pipeline {
     u32 address;      //where the instruction being executed came from
     n32 instruction;  //the instruction word itself
+    u32 exception;    //set if it raised an exception, so compiled code knows to stop right after it
   } pipeline;
 
   //interpreter.cpp: picks the operation an instruction word names
@@ -242,6 +244,62 @@ struct Allegrex {
   //exceptions.cpp
   auto exception(Exception) -> void;
   auto addressError(Exception, u32 address) -> void;
+
+  //The recompiler (dynamic recompiler, or dynarec): it translates the game's MIPS code into the host's own machine
+  //code (ARM64 or x86-64) a block at a time, and runs that instead, which is far faster than decoding every
+  //instruction again each time it runs. A block is the straight run of instructions from an address up to a branch
+  //and its delay slot. Common instructions become native code; every other instruction is compiled as a call into
+  //the interpreter, so the two always agree, and the interpreter stays the reference the recompiler is tested
+  //against. It's built on ares's sljit framework (nall/recompiler/generic), as the N64's CPU is.
+  struct Recompiler : recompiler::generic {
+    Allegrex& self;
+    Recompiler(Allegrex& self) : generic(allocator), self(self) {}
+
+    //Compiled blocks are filed by the 4 KiB of memory (the "section") they start in, so a write to memory can
+    //throw away exactly the code compiled from there. The Allegrex reaches the same memory through mirrors
+    //(cached, uncached, kernel) that differ only in an address's top three bits, so sections are indexed by the
+    //physical address, the 29 bits below those.
+    enum : u32 {
+      SectionSize  = 4_KiB,
+      SectionWords = SectionSize / 4,
+      SectionCount = 512_MiB / SectionSize,
+    };
+
+    struct Section {
+      u32 mirror = 0;                 //the top three address bits its blocks were compiled for
+      u8* blocks[SectionWords] = {};  //the compiled code starting at each word, or nullptr
+    };
+
+    //The compiled code finds the CPU's state through sljit's saved register S0, which holds the CPU's address:
+    //a field is at that address plus its offset within the CPU.
+    auto field(const void* member) const -> mem {
+      return mem(sreg(0), (const u8*)member - (const u8*)&self);
+    }
+    auto gpr(u32 index) const -> mem { return field(&self.ipu.r[index]); }
+
+    //recompiler.cpp
+    auto reset() -> void;
+    auto invalidate(u32 address) -> void;
+    auto invalidateRange(u32 address, u32 size) -> void;
+    auto run() -> u32;
+    auto block(u32 address) -> u8*;
+    auto emit(u32 address) -> u8*;
+    auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
+    auto isBranch(u32 instruction) const -> bool;
+    auto endsBlock(u32 instruction) const -> bool;
+
+    //recompiler-ipu.cpp
+    auto emitInstruction(u32 instruction) -> bool;
+    auto emitSPECIAL(u32 instruction) -> bool;
+    auto emitBranch(u32 address, u32 instruction, u32 count) -> bool;
+    auto emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void;
+    auto emitJump(u32 target) -> void;
+
+    bool enabled = false;
+    u32 executed = 0;  //how many instructions the last block ran: each block sets it as it leaves
+    bump_allocator allocator;
+    std::vector<std::unique_ptr<Section>> sections;
+  } recompiler{*this};
 };
 
 }
