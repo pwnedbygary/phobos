@@ -742,6 +742,29 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: VFPU sine and cosine exact — 2026-10-03
+
+A second commit on `cursor/psp-vfpu-exact-2b67`: the table behind `vsin` and `vcos` turned out to be cosine's (sine
+is it read backwards), which fits the same interpolator; very large arguments wrap as the hardware's 5-bit shift
+does (a shift of exactly 32, 64 or 96 gives 0). `vsin`, `vcos`, `vnsin` and `vrot` now use it: exact on every
+full-range and spread-out input. Ten math instructions are exact; `vlog2` and `vdot` remain. Checks: 54 groups pass
+on the Mac and in `phobos-linux`; the measured group replays the first 16384 results of each of the ten.
+
+## PSP core: seven VFPU math functions exact — 2026-10-03
+
+Branch `cursor/psp-vfpu-exact-2b67`, stacked on the measurements. `tools/psp-vfpu-measure/fit.py` fits the
+quadratic interpolator published about the hardware to the user's PSP's results, and the core now computes `vrcp`,
+`vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2` and `vasin` with those coefficients (`ares/psp/cpu/vfpu-segments.hpp`,
+generated): exact on all of their full-range results and on a million spread-out inputs each.
+
+- **Found on the way:** `vsqrt`/`vrsq` ignore the input's lowest bit; `vrexp2` reads `vexp2`'s table backwards,
+  as `vexp2` does for negative inputs; `vcos` is `vsin` backwards; `vsqrt(-0)` is +0; `vsin` is fixed point and
+  doesn't fit the model yet (nor does `vlog2`).
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 54 groups pass on the Mac (UBSan, which caught an
+  out-of-range shift in the first version) and in `phobos-linux`; the measured group now also replays the first
+  16384 spread-out results of each of the seven (0.2 MB). `compare.sh` on the full data: the table in
+  psp-vfpu-measurements.md.
+
 ## PSP core: the VFPU against the user's PSP — 2026-10-03
 
 Branch `cursor/psp-vfpu-measured-2b67`, stacked on the measurement program. The user ran it (firmware 6.61) and

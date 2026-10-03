@@ -23,38 +23,40 @@ words, in input order. 27 files, 455 MB:
 Spread-out inputs come from `state = state * 1664525 + 1013904223`, taking each new state, from each test's seed.
 
 **In the repository:** [`tests/allegrex/measured/`](../tests/allegrex/measured/) has `manifest.txt`, the SHA-256 of
-all 27 files (`SHA256SUMS`), and the random number and arithmetic files, xz-compressed (5.2 MB). The test suite
-checks the core against them on every run (`measured.cpp`). The other 21 files (the math functions, 449 MB, about
+all 27 files (`SHA256SUMS`), the random number and arithmetic files, and the first 16384 results of each exact math
+function's spread-out file (`*-spread-16k`), xz-compressed (5.5 MB). The test suite checks the core against them on
+every run (`measured.cpp`). The other 21 files (the math functions, 449 MB, about
 30 MB compressed) are kept outside the repository by the user's choice; `SHA256SUMS` identifies them, and they can
 be shared on request.
 
 ## Results
 
-How often the core's result matched the PSP's bit for bit, after the findings below were applied (the NaN rules),
-and the worst difference otherwise, in units in the last place (ulps: how many representable floats apart):
+How often the core's result matches the PSP's bit for bit, now that the findings below are applied, and the worst
+difference otherwise, in units in the last place (ulps: how many representable floats apart). `vlog2` and `vdot`
+are still the core's approximations:
 
 | test | results | exact | worst (ulps) |
 | --- | --- | --- | --- |
-| vrcp-1-2 | 8388608 | 1294598 (15.43%) | 6 |
-| vrsq-1-4 | 16777216 | 2526952 (15.06%) | 7 |
-| vsqrt-1-4 | 16777216 | 1352136 (8.06%) | 6 |
-| vexp2-1-2 | 8388608 | 1329680 (15.85%) | 5 |
-| vrexp2-1-2 | 8388608 | 443655 (5.29%) | 7 |
+| vrcp-1-2 | 8388608 | 8388608 (100.00%) | 0 |
+| vrsq-1-4 | 16777216 | 16777216 (100.00%) | 0 |
+| vsqrt-1-4 | 16777216 | 16777216 (100.00%) | 0 |
+| vexp2-1-2 | 8388608 | 8388608 (100.00%) | 0 |
+| vrexp2-1-2 | 8388608 | 8388608 (100.00%) | 0 |
 | vlog2-half-2 | 16777216 | 80568 (0.48%) | 935274650 |
-| vsin-fixed | 8388608 | 813071 (9.69%) | 69595 |
-| vcos-fixed | 8388608 | 813071 (9.69%) | 69595 |
-| vasin-fixed | 8388612 | 1371213 (16.35%) | 333740 |
-| vrcp-spread | 1048576 | 175174 (16.71%) | 6 |
-| vnrcp-spread | 1048576 | 176474 (16.83%) | 5 |
-| vrsq-spread | 1048576 | 606725 (57.86%) | 7 |
-| vsqrt-spread | 1048576 | 567868 (54.16%) | 6 |
-| vexp2-spread | 1048576 | 723762 (69.02%) | 6 |
-| vrexp2-spread | 1048576 | 723376 (68.99%) | 7 |
+| vsin-fixed | 8388608 | 8388608 (100.00%) | 0 |
+| vcos-fixed | 8388608 | 8388608 (100.00%) | 0 |
+| vasin-fixed | 8388612 | 8388612 (100.00%) | 0 |
+| vrcp-spread | 1048576 | 1048576 (100.00%) | 0 |
+| vnrcp-spread | 1048576 | 1048576 (100.00%) | 0 |
+| vrsq-spread | 1048576 | 1048576 (100.00%) | 0 |
+| vsqrt-spread | 1048576 | 1048576 (100.00%) | 0 |
+| vexp2-spread | 1048576 | 1048576 (100.00%) | 0 |
+| vrexp2-spread | 1048576 | 1048576 (100.00%) | 0 |
 | vlog2-spread | 1048576 | 572521 (54.60%) | 932532706 |
-| vsin-spread | 1048576 | 168297 (16.05%) | 1065353216 |
-| vnsin-spread | 1048576 | 167205 (15.95%) | 1065353216 |
-| vcos-spread | 1048576 | 593300 (56.58%) | 2130706432 |
-| vasin-spread | 1048576 | 535707 (51.09%) | 866317536 |
+| vsin-spread | 1048576 | 1048576 (100.00%) | 0 |
+| vnsin-spread | 1048576 | 1048576 (100.00%) | 0 |
+| vcos-spread | 1048576 | 1048576 (100.00%) | 0 |
+| vasin-spread | 1048576 | 1048576 (100.00%) | 0 |
 | vadd-spread | 262144 | 262144 (100.00%) | 0 |
 | vsub-spread | 262144 | 262144 (100.00%) | 0 |
 | vmul-spread | 262144 | 262144 (100.00%) | 0 |
@@ -83,7 +85,25 @@ The random number generator: all 263,944 words match (the start, 64 seeds of 409
 
 - **The math functions keep 22 bits.** Every finite result of `vrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2`, `vlog2`,
   `vsin` and `vcos` over their full ranges has its two lowest bits zero: 22 of a float's 24 significant bits (98.75%
-  of `vasin`'s). The core's double-precision results carry every bit; the usual difference is a few ulps.
+  of `vasin`'s).
+- **They're one quadratic interpolator, and our own data pins it down.** The structure published about the
+  hardware (PPSSPP's write-up of fp64's work: 128 segments per function, a linear term over the index's low 16
+  bits and a squared term over their top 10, results truncated to 22 bits) fits our measurements exactly, and
+  [`tools/psp-vfpu-measure/fit.py`](../tools/psp-vfpu-measure/fit.py) finds every segment's integers from them:
+  `vrcp`, `vrsq`, `vsqrt`, `vexp2`, `vcos` and `vasin`, each of their 2^23 results reproduced, with one scale
+  (Q = 9) for all. The core uses those tables (`ares/psp/cpu/vfpu-segments.hpp`), not PPSSPP's.
+- **Some functions are others read differently.** `vsqrt` and `vrsq` ignore their input's lowest bit (pairs of
+  inputs give the same result over [1, 4)); `vrexp2` reads `vexp2`'s table backwards, its fraction's bits
+  inverted, and so does `vexp2` for negative inputs: both are one 2^y; the table behind sine and cosine is
+  cosine's, sine being it read backwards (`vsin` of k is `vcos` of 2^23 - k); `vnrcp` and `vnsin` are the
+  negations.
+- **Edges:** the arguments become 23-bit fixed point by dropping the rest; `vsqrt(-0)` is +0; `vrexp2(0)` and
+  `vexp2(0)` are exactly 1; `vasin(1)` is exactly 1 and past 1 is NaN.
+- **Sine and cosine of very large arguments** (2^32 quarter turns and up) come out as if the argument were much
+  smaller: the shift that turns the argument into fixed point has only 5 bits, so it wraps around past 2^31, and a
+  shift of exactly 32, 64 or 96 shifts everything out, leaving 0 (sine 0, cosine 1). That reproduces every one of
+  the million spread-out results.
+- **`vlog2` doesn't fit the model as it is**; it needs more work.
 - **`vsin`, `vcos` and `vasin` work on fixed-point arguments,** so tiny inputs give 0 and results step in 2^-23 of
   a quarter turn; and `vsin`/`vcos` of very large inputs give values unrelated to the true sine.
 - **`vlog2` near 1** is accurate in absolute terms, not relative ones, hence the large ulp counts for results near
@@ -93,10 +113,9 @@ The random number generator: all 263,944 words match (the start, 64 seeds of 409
 
 ## Next
 
-Exact math functions: fitting the PSP's way of computing them (published as one quadratic interpolator per
-function over 128 segments, its results truncated to 22 bits) to these results, from our own data rather than
-PPSSPP's GPL tables, as the user chose; then `vdot`'s summation, and `vsin`/`vcos` for large inputs. `compare.sh`
-shows the progress against the full data.
+`vlog2`, and `vdot`'s summation.
+`compare.sh` shows the progress against the full data; `fit.py <results> ares/psp/cpu/vfpu-segments.hpp`
+regenerates the tables.
 
 ## Reproducing
 
