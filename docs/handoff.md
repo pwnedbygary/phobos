@@ -742,6 +742,15 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: measuring the VFPU on a real PSP — 2026-10-03
+
+`tools/psp-vfpu-measure`, a homebrew program that records what a PSP's VFPU computes (math functions over their
+whole reduced ranges and a million spread-out inputs, the random number generator from 64 seeds, arithmetic edge
+cases), for exact math functions fitted from our own data, as the user chose. Built in `phobos-linux` with
+pspdev's ARM64 toolchain (installed in `/opt/pspdev`); the build is in `.local/psp-vfpu-measure/EBOOT.PBP`, not in
+the repository. Its VFPU instructions were checked in the disassembly against the core's decoder. Waiting on the
+user to run it on their PSP and bring back `results/` (about 450 MB). psp-core.md has the details.
+
 ## PSP core: the VFPU's random number generator — 2026-10-03
 
 Branch `cursor/psp-vfpu-random-2b67`, stacked on part 4. The user chose, for the VFPU's accuracy: the real random

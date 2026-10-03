@@ -168,8 +168,7 @@ description (no PPSSPP code), and checked against the states fp64 recovered from
 power on. The carry's rule matched all of his data, but isn't understood, and those first draws don't exercise it.
 
 Not checked against hardware: the transcendental functions (computed in double precision; the hardware
-approximates, so the last bits can differ: the user will measure them on their PSP so exact versions can be
-written from our own data), the generator's carry, `vwbn` (implemented from its description; no test), and what
+approximates, so the last bits can differ), the generator's carry, `vwbn` (implemented from its description; no test), and what
 reserved size combinations do
 (they raise ReservedInstruction, and leave the prefixes). Which instructions use up the prefixes: every VFPU
 arithmetic instruction, and `vnop`, as pspdev's documentation says (PPSSPP keeps them through `vnop`, but the
@@ -180,3 +179,22 @@ Tests: `tests/allegrex/vfpu.cpp`, ten groups (addressing, arithmetic, prefixes, 
 conversions, functions, matrices, moves, and more instructions worked out by hand from the descriptions), run on
 both engines; the generated programs that compare the engines include VFPU instructions and its branches, and
 compare its registers, prefixes and condition codes.
+
+### Measuring the VFPU on a PSP
+
+To make the math functions exact from our own data (the user chose this over adopting PPSSPP's GPL tables, and
+has a PSP to run it on), `tools/psp-vfpu-measure` records what a real PSP computes. It's a homebrew program, built
+with pspdev's toolchain (`make` in that folder, with `psp-config` on the PATH; the `phobos-linux` container has the
+toolchain in `/opt/pspdev`). On a PSP with custom firmware it writes, beside its EBOOT.PBP in `results/` (about
+450 MB, resumable):
+
+- every input of the range each math function reduces its argument to (`vrcp` over [1, 2), `vrsq` and `vsqrt` over
+  [1, 4), `vexp2` and `vrexp2` over [1, 2), `vlog2` over [1/2, 2), `vsin`, `vcos` and `vasin` over k / 2^23), and a
+  million spread-out inputs for each of them and their negated forms;
+- the random number generator: its state and numbers at start, then the state after `vrnds` and 4096 draws for 64
+  seeds (some chosen to exercise the carry), and `vrndi.q`'s lane order;
+- `vadd`, `vsub`, `vmul`, `vdiv` and `vdot` on spread-out inputs (every sign, size, denormal, infinity and NaN).
+
+`manifest.txt` says how each file's inputs are made; the files hold only the hardware's results. The next step,
+once the user has run it: fit the functions to those results on the host, as the hardware computes them, check
+the generator's carry, and compare the arithmetic's edge cases.
