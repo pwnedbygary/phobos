@@ -349,6 +349,7 @@ fun PhobosAlertDialog(
     text: @Composable (() -> Unit)? = null,
     properties: DialogProperties = DialogProperties(),
 ) {
+    HoldScreensaver()
     val shape = AlertDialogDefaults.shape
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -372,6 +373,7 @@ fun dialogEdge(shape: Shape): Modifier {
 /** Material's dropdown menu; in a solid style, its border in place of the menu's soft shadow. */
 @Composable
 fun PhobosDropdownMenu(expanded: Boolean, onDismissRequest: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    if (expanded) HoldScreensaver()
     val theme = LocalPhobosTheme.current
     val solid = theme.solid
     if (solid != null) {

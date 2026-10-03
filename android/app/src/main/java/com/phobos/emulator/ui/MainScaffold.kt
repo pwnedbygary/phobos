@@ -115,6 +115,30 @@ private val NO_SCREENSAVER_ROUTES = setOf(
     HOTKEY_MAPPING_ROUTE,
 )
 
+/**
+ * The dialogs and menus open over the pages. They take input in windows of their own, which the idle
+ * timer doesn't see, so the screensaver waits until none is open and then times from zero.
+ */
+class ScreensaverHold {
+    var count by mutableIntStateOf(0)
+        private set
+
+    fun acquire() { count++ }
+    fun release() { count-- }
+}
+
+val LocalScreensaverHold = staticCompositionLocalOf { ScreensaverHold() }
+
+/** Holds the screensaver off while this is composed: call it from an open dialog or menu. */
+@Composable
+fun HoldScreensaver() {
+    val hold = LocalScreensaverHold.current
+    DisposableEffect(hold) {
+        hold.acquire()
+        onDispose { hold.release() }
+    }
+}
+
 /** Routes drawn edge to edge without the bottom navigation bar. */
 private val FULL_SCREEN_ROUTES = setOf("system/{name}", EMULATOR_ROUTE, TOUCH_EDITOR_ROUTE)
 
@@ -185,9 +209,11 @@ fun MainScaffold(viewModel: MainViewModel) {
     val capturing by viewModel.controlCapture.target.collectAsState()
     var screensaverVisible by remember { mutableStateOf(false) }
     var idleGeneration by remember { mutableIntStateOf(0) }
+    val screensaverHold = remember { ScreensaverHold() }
     // Each idle reset recomposes this scaffold, so input resets it only while the screensaver could
     // arm: not for a game's keys and touches, nor with the screensaver Off.
-    val screensaverCanArm = settings.screensaverDelay.millis != null && route !in NO_SCREENSAVER_ROUTES && capturing == null
+    val screensaverCanArm = settings.screensaverDelay.millis != null && route !in NO_SCREENSAVER_ROUTES && capturing == null &&
+        screensaverHold.count == 0
     val canArm by rememberUpdatedState(screensaverCanArm)
 
     fun setScreensaverVisible(visible: Boolean) {
@@ -222,16 +248,16 @@ fun MainScaffold(viewModel: MainViewModel) {
         }
     }
 
-    // Arm the screensaver after idle; never over the game, bind screens, or an in-progress capture.
-    LaunchedEffect(settings.screensaverDelay, idleGeneration, route, capturing) {
+    // Arm the screensaver after idle; never over the game, bind screens, an in-progress capture, or an open dialog or menu.
+    LaunchedEffect(settings.screensaverDelay, idleGeneration, route, capturing, screensaverHold.count) {
         val idle = settings.screensaverDelay.millis
-        if (idle == null || route in NO_SCREENSAVER_ROUTES || capturing != null) {
+        if (idle == null || route in NO_SCREENSAVER_ROUTES || capturing != null || screensaverHold.count > 0) {
             setScreensaverVisible(false)
             return@LaunchedEffect
         }
         setScreensaverVisible(false)
         kotlinx.coroutines.delay(idle)
-        if (route !in NO_SCREENSAVER_ROUTES && viewModel.controlCapture.target.value == null) {
+        if (route !in NO_SCREENSAVER_ROUTES && viewModel.controlCapture.target.value == null && screensaverHold.count == 0) {
             setScreensaverVisible(true)
         }
     }
@@ -303,7 +329,7 @@ fun MainScaffold(viewModel: MainViewModel) {
         // While a moving backdrop shows, the pages and the dock keep a layer of their own, so a change in
         // the backdrop doesn't draw them again. Never over the game: its surface shows through the window.
         val layered = style.animatedBackdrop && route != EMULATOR_ROUTE && route != TOUCH_EDITOR_ROUTE
-        CompositionLocalProvider(LocalGlassCapture provides glassCapture) {
+        CompositionLocalProvider(LocalGlassCapture provides glassCapture, LocalScreensaverHold provides screensaverHold) {
             Scaffold(
                 modifier = if (layered) Modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen } else Modifier,
                 containerColor = Color.Transparent,
@@ -516,7 +542,9 @@ fun MainScaffold(viewModel: MainViewModel) {
     val launchChoice by viewModel.launchChoice.collectAsState()
     val inGame by viewModel.emulatorScreenVisible.collectAsState()
     launchChoice?.let { choice ->
-        LaunchSystemDialog(choice, fullScreen, inGame, onChoose = viewModel::chooseLaunchSystem, onCancel = viewModel::cancelLaunchChoice)
+        CompositionLocalProvider(LocalScreensaverHold provides screensaverHold) {
+            LaunchSystemDialog(choice, fullScreen, inGame, onChoose = viewModel::chooseLaunchSystem, onCancel = viewModel::cancelLaunchChoice)
+        }
     }
 }
 
