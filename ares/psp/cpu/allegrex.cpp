@@ -7,6 +7,8 @@ namespace ares::PlayStationPortable {
 #include "interpreter-scc.cpp"
 #include "interpreter-fpu.cpp"
 #include "exceptions.cpp"
+#include "recompiler.cpp"
+#include "recompiler-ipu.cpp"
 
 //Clears every register and starts the program at entry (the game's entry point, as the loader finds it).
 auto Allegrex::power(u32 entry) -> void {
@@ -16,26 +18,46 @@ auto Allegrex::power(u32 entry) -> void {
   pipeline = {};
   ipu.pc = entry;
   ipu.pd = entry + 4;
+  recompiler.reset();
 }
 
 //Runs one instruction: fetch it, move the program counter along, then do what it says. The program counter moves
 //before the instruction runs, so a branch only has to point pd somewhere else (see IPU in allegrex.hpp).
 auto Allegrex::instruction() -> void {
-  pipeline.address = ipu.pc;
-  if(pipeline.address & 3) return addressError(Exception::AddressLoad, pipeline.address);
-  pipeline.instruction = read(Word, pipeline.address);
+  u32 address = ipu.pc;
+  if(address & 3) {
+    pipeline.address = address;
+    return addressError(Exception::AddressLoad, address);
+  }
+  u32 word = read(Word, address);
   ipu.pc = ipu.pd;
   ipu.pd += 4;
-  decoderEXECUTE();
-  ipu.r[0] = 0;  //instructions may write r0, but it always reads as zero
+  execute(address, word);
 }
 
-//Runs up to the given number of instructions, stopping early if the CPU halts; returns how many ran.
+//Does what one instruction word says, once pc and pd have moved past it. The interpreter comes here for every
+//instruction, and compiled code for each instruction it has no native version of, so both run the same code.
+//Returns whether the instruction raised an exception.
+auto Allegrex::execute(u32 address, u32 instruction) -> u32 {
+  pipeline.address = address;
+  pipeline.instruction = instruction;
+  pipeline.exception = 0;
+  decoderEXECUTE();
+  ipu.r[0] = 0;  //instructions may write r0, but it always reads as zero
+  return pipeline.exception;
+}
+
+//Runs at least the given number of instructions, stopping early if the CPU halts; returns how many ran. With the
+//recompiler, whole blocks run at a time, so it may run a few more than asked.
 auto Allegrex::run(u64 instructions) -> u64 {
   u64 executed = 0;
   while(executed < instructions && !scc.halted) {
-    instruction();
-    executed++;
+    if(recompiler.enabled) {
+      executed += recompiler.run();
+    } else {
+      instruction();
+      executed++;
+    }
   }
   return executed;
 }

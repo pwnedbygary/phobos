@@ -63,6 +63,31 @@ constexpr auto mfhi(uint32_t d) { return R(0x10, d, 0, 0); }
 constexpr auto mflo(uint32_t d) { return R(0x12, d, 0, 0); }
 constexpr auto mthi(uint32_t s) { return R(0x11, 0, s, 0); }
 constexpr auto mtlo(uint32_t s) { return R(0x13, 0, s, 0); }
+constexpr auto movz(uint32_t d, uint32_t s, uint32_t t) { return R(0x0a, d, s, t); }
+constexpr auto movn(uint32_t d, uint32_t s, uint32_t t) { return R(0x0b, d, s, t); }
+constexpr auto rotr(uint32_t d, uint32_t t, uint32_t a) { return R(0x02, d, 1, t, a); }
+constexpr auto rotrv(uint32_t d, uint32_t t, uint32_t s) { return R(0x06, d, s, t, 1); }
+constexpr auto clz(uint32_t d, uint32_t s) { return R(0x16, d, s, 0); }
+constexpr auto clo(uint32_t d, uint32_t s) { return R(0x17, d, s, 0); }
+constexpr auto madd(uint32_t s, uint32_t t) { return R(0x1c, 0, s, t); }
+constexpr auto maddu(uint32_t s, uint32_t t) { return R(0x1d, 0, s, t); }
+constexpr auto msub(uint32_t s, uint32_t t) { return R(0x2e, 0, s, t); }
+constexpr auto msubu(uint32_t s, uint32_t t) { return R(0x2f, 0, s, t); }
+constexpr auto max(uint32_t d, uint32_t s, uint32_t t) { return R(0x2c, d, s, t); }
+constexpr auto min(uint32_t d, uint32_t s, uint32_t t) { return R(0x2d, d, s, t); }
+//SPECIAL3: ext and ins (rd holds the field's size minus one, or its top bit), and bshfl's shuffles
+constexpr auto ext(uint32_t t, uint32_t s, uint32_t lsb, uint32_t size) {
+  return 0x1fu << 26 | s << 21 | t << 16 | (size - 1) << 11 | lsb << 6 | 0x00;
+}
+constexpr auto ins(uint32_t t, uint32_t s, uint32_t lsb, uint32_t size) {
+  return 0x1fu << 26 | s << 21 | t << 16 | (lsb + size - 1) << 11 | lsb << 6 | 0x04;
+}
+constexpr auto bshfl(uint32_t shuffle, uint32_t d, uint32_t t) { return 0x1fu << 26 | t << 16 | d << 11 | shuffle << 6 | 0x20; }
+constexpr auto wsbh(uint32_t d, uint32_t t) { return bshfl(0x02, d, t); }
+constexpr auto wsbw(uint32_t d, uint32_t t) { return bshfl(0x03, d, t); }
+constexpr auto seb(uint32_t d, uint32_t t) { return bshfl(0x10, d, t); }
+constexpr auto bitrev(uint32_t d, uint32_t t) { return bshfl(0x14, d, t); }
+constexpr auto seh(uint32_t d, uint32_t t) { return bshfl(0x18, d, t); }
 constexpr auto jr(uint32_t s) { return R(0x08, 0, s, 0); }
 constexpr auto jalr(uint32_t d, uint32_t s) { return R(0x09, d, s, 0); }
 constexpr auto syscall(uint32_t code) { return code << 6 | 0x0c; }
@@ -77,7 +102,10 @@ constexpr auto beql(uint32_t s, uint32_t t, int32_t o) { return I(0x14, t, s, o)
 constexpr auto bnel(uint32_t s, uint32_t t, int32_t o) { return I(0x15, t, s, o); }
 constexpr auto bltz(uint32_t s, int32_t o) { return I(0x01, 0x00, s, o); }
 constexpr auto bgez(uint32_t s, int32_t o) { return I(0x01, 0x01, s, o); }
+constexpr auto bltzl(uint32_t s, int32_t o) { return I(0x01, 0x02, s, o); }
 constexpr auto bgezl(uint32_t s, int32_t o) { return I(0x01, 0x03, s, o); }
+constexpr auto blezl(uint32_t s, int32_t o) { return I(0x16, 0, s, o); }
+constexpr auto bgtzl(uint32_t s, int32_t o) { return I(0x17, 0, s, o); }
 constexpr auto bltzal(uint32_t s, int32_t o) { return I(0x01, 0x10, s, o); }
 constexpr auto bgezal(uint32_t s, int32_t o) { return I(0x01, 0x11, s, o); }
 constexpr auto bltzall(uint32_t s, int32_t o) { return I(0x01, 0x12, s, o); }
@@ -113,11 +141,15 @@ constexpr auto bc1(uint32_t kind, int32_t o) { return 0x45000000u | kind << 16 |
 enum : uint32_t { Bc1f, Bc1t, Bc1fl, Bc1tl };
 enum : uint32_t { CondF, CondUn, CondEq, CondUeq, CondOlt, CondUlt, CondOle, CondUle };
 
-//64 KiB of RAM at Base; anything else is a test bug, so it stops the run.
+//Which engine Machine runs programs on, unless a test picks one: main() runs every test on each.
+inline bool useRecompiler = false;
+
+//64 KiB of RAM at Base, also reachable through the Allegrex's mirrors (the same address with other top three bits,
+//such as 0x48800000 for 0x08800000); anything else is a test bug, so it stops the run.
 struct Ram {
   std::vector<uint8_t> bytes = std::vector<uint8_t>(0x10000);
   auto at(uint32_t address) -> uint8_t& {
-    uint32_t offset = address - Base;
+    uint32_t offset = (address & 0x1fffffff) - (Base & 0x1fffffff);
     if(offset >= bytes.size()) {
       std::fprintf(stderr, "access outside the test's RAM: %08x\n", address);
       std::abort();
@@ -132,7 +164,8 @@ struct Ram {
   auto write32(uint32_t a, uint32_t v) -> void { write16(a, (uint16_t)v); write16(a + 2, (uint16_t)(v >> 16)); }
 };
 
-//The Allegrex leaves memory to whoever owns it; here that's the test's RAM.
+//The Allegrex leaves memory to whoever owns it; here that's the test's RAM. Like the PSP's memory map, it tells the
+//recompiler about every write, so code compiled from there is compiled again.
 struct TestCPU : Allegrex {
   Ram& ram;
   TestCPU(Ram& ram) : ram(ram) {}
@@ -144,15 +177,17 @@ struct TestCPU : Allegrex {
   }
 
   auto write(u32 size, u32 address, u32 data) -> void override {
-    if(size == Byte) return ram.write8(address, data);
-    if(size == Half) return ram.write16(address, data);
-    ram.write32(address, data);
+    if(size == Byte) ram.write8(address, data);
+    else if(size == Half) ram.write16(address, data);
+    else ram.write32(address, data);
+    recompiler.invalidate(address);
   }
 };
 
 struct Machine {
   Ram ram;
   TestCPU cpu{ram};
+  bool recompile = useRecompiler;
   std::vector<std::pair<Exception, uint32_t>> exceptions;
 
   Machine() {
@@ -164,9 +199,14 @@ struct Machine {
 
   //Places the program at Base with a halt after it, sets up the registers, and runs it until it halts.
   auto run(std::initializer_list<uint32_t> code, const std::function<void(Allegrex&)>& setup = {}) -> void {
+    run(std::vector<uint32_t>(code), setup);
+  }
+
+  auto run(const std::vector<uint32_t>& code, const std::function<void(Allegrex&)>& setup = {}) -> void {
     uint32_t address = Base;
     for(uint32_t word : code) { ram.write32(address, word); address += 4; }
     ram.write32(address, halt);
+    cpu.recompiler.enabled = recompile;
     cpu.power(Base);
     if(setup) setup(cpu);
     cpu.run(10000);

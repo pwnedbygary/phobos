@@ -5,6 +5,8 @@
 
 #include "harness.hpp"
 
+#include <string>
+
 //Inside the harness's namespace, so register names like s1 win over ares's integer types of the same name.
 namespace allegrex_test {
 namespace {
@@ -483,6 +485,281 @@ auto system() -> void {
   CHECK(cache.exceptions.size(), 0);
 }
 
+// Cases the recompiler handles in ways of its own. They run on both engines, which must give the same answers.
+auto recompilerCases() -> void {
+  // A call and a return: on the recompiler, both blocks were compiled and kept.
+  Machine cached;
+  cached.run({addiu(s0, zero, 1), jal(Base + 0x10), nop, halt, addiu(s0, s0, 1), jr(ra), nop});
+  CHECK(cached.gpr(s0), 2);
+  if(cached.recompile) {
+    auto& section = cached.cpu.recompiler.sections[(Base & 0x1fffffff) / 4096];
+    CHECK(section && section->blocks[0], 1);  // the block at Base
+    CHECK(section && section->blocks[4], 1);  // the function at Base + 0x10
+  }
+
+  // Code that rewrites a function it has already run: the second call runs the new instruction.
+  std::vector<uint32_t> rewriting = {
+    jal(Base + 0x40), nop,  // s0 = 1
+    lui(t0, (Base + 0x40) >> 16), ori(t0, t0, (Base + 0x40) & 0xffff),
+    lui(t1, addiu(s0, s0, 10) >> 16), ori(t1, t1, addiu(s0, s0, 10) & 0xffff),
+    sw(t1, 0, t0),          // the function's first instruction becomes addiu s0,s0,10
+    jal(Base + 0x40), nop,  // s0 = 11
+    halt,
+  };
+  rewriting.resize(16, halt);
+  for(uint32_t word : {addiu(s0, s0, 1), jr(ra), nop}) rewriting.push_back(word);  // at Base + 0x40
+  Machine rewrite;
+  rewrite.run(rewriting);
+  CHECK(rewrite.gpr(s0), 11);
+
+  // A branch in the last word of a 4 KiB section, so its delay slot is in the next one: taken, not taken, and a
+  // likely branch not taken, which skips the delay slot.
+  for(auto [branch, delaySlotRuns, nextRuns] : {std::tuple{beq(zero, zero, 2), 1u, 0u},
+                                               std::tuple{bne(zero, zero, 2), 1u, 1u},
+                                               std::tuple{bnel(zero, zero, 2), 0u, 1u}}) {
+    Machine edge;
+    edge.ram.write32(Base + 0xff8, addiu(s0, zero, 1));
+    edge.ram.write32(Base + 0xffc, branch);
+    edge.ram.write32(Base + 0x1000, addiu(s1, zero, 1));  // the delay slot
+    edge.ram.write32(Base + 0x1004, addiu(s2, zero, 1));
+    edge.ram.write32(Base + 0x1008, halt);
+    edge.run({j(Base + 0xff8), nop});
+    CHECK(edge.gpr(s0), 1);
+    CHECK(edge.gpr(s1), delaySlotRuns);
+    CHECK(edge.gpr(s2), nextRuns);
+  }
+
+  // The HLE kernel switching threads at a syscall in a delay slot, to a thread that stopped between a branch and
+  // its delay slot: that delay slot runs, then the branch's target.
+  Machine threads;
+  threads.cpu.syscallHook = [&](u32) -> bool {
+    threads.cpu.ipu.pc = Base + 0x100;
+    threads.cpu.ipu.pd = Base + 0x200;
+    return true;
+  };
+  threads.ram.write32(Base + 0x100, addiu(s1, zero, 1));
+  threads.ram.write32(Base + 0x104, addiu(s2, zero, 1));
+  threads.ram.write32(Base + 0x200, addiu(s3, zero, 1));
+  threads.ram.write32(Base + 0x204, halt);
+  threads.run({jal(Base + 0x10), nop, addiu(s0, zero, 1), halt, jr(ra), syscall(1)});
+  CHECK(threads.gpr(s0), 0);  // the old thread never went on
+  CHECK(threads.gpr(s1), 1);
+  CHECK(threads.gpr(s2), 0);
+  CHECK(threads.gpr(s3), 1);
+
+  // The same function called through two mirrors of the memory: the return address it makes follows the mirror.
+  std::vector<uint32_t> calls = {
+    jal(Base + 0x40), nop, or_(s1, s0, zero),                 // through 0x08800000
+    lui(t0, 0x4880), ori(t0, t0, 0x0040), jalr(ra, t0), nop,  // through 0x48800000
+    halt,
+  };
+  calls.resize(16, halt);
+  for(uint32_t word : {or_(t9, ra, zero), jal(Base + 0x80), nop, jr(t9), nop}) calls.push_back(word);  // Base + 0x40
+  calls.resize(32, halt);
+  for(uint32_t word : {or_(s0, ra, zero), jr(ra), nop}) calls.push_back(word);  // Base + 0x80
+  Machine mirrors;
+  mirrors.run(calls);
+  CHECK(mirrors.gpr(s1), Base + 0x4c);
+  CHECK(mirrors.gpr(s0), 0x40000000 | (Base + 0x4c));
+
+  // An exception in the middle of a block: what ran before it stays done, nothing after it runs, pc is past it.
+  Machine fault;
+  fault.run({addiu(s0, zero, 1), lw(t0, 1, zero), addiu(s1, zero, 1)});
+  CHECK(fault.gpr(s0), 1);
+  CHECK(fault.gpr(s1), 0);
+  CHECK(fault.exceptions.size(), 1);
+  CHECK(fault.cpu.ipu.pc, Base + 8);
+  CHECK(fault.cpu.scc.r[8], 1);
+}
+
+// Random programs, each run by the interpreter and by the recompiler, which must end in exactly the same state.
+// Control only ever moves forward, so every program reaches its halt.
+auto matchesInterpreter() -> void {
+  uint32_t seed = 0x2545f491;
+  auto next = [&]() -> uint32_t {
+    seed ^= seed << 13;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    return seed;
+  };
+  auto random = [&](uint32_t range) -> uint32_t { return next() % range; };
+  // any register but s6 and s7, which hold the address of the halt after the program and of the data
+  auto anyRegister = [&]() -> uint32_t { uint32_t r = random(30); return r >= s6 ? r + 2 : r; };
+  // values that make compares and branches go both ways
+  auto value = [&]() -> uint32_t {
+    switch(random(6)) {
+    case 0: return 0;
+    case 1: return random(16);
+    case 2: return -random(16);
+    case 3: return 0x80000000u >> random(32);
+    default: return next();
+    }
+  };
+
+  constexpr uint32_t Length = 40, Programs = 500;
+  uint32_t mismatches = 0;
+  for(uint32_t program = 0; program < Programs; program++) {
+    std::vector<uint32_t> code;
+    bool afterBranch = false;
+    while(code.size() < Length) {
+      uint32_t index = code.size();
+      uint32_t d = anyRegister(), s = anyRegister(), t = random(4) ? anyRegister() : zero;
+      int32_t immediate = (int32_t)random(0x10000) - 0x8000;
+
+      // A branch goes forward, at most as far as the halt after the program; it never sits in a delay slot, or
+      // last (where a likely branch not taken would skip the halt).
+      bool branch = !afterBranch && index + 1 < Length && random(5) == 0;
+      afterBranch = branch;
+      if(branch) {
+        int32_t offset = 1 + random(std::min<uint32_t>(8, Length - index - 1));
+        uint32_t target = Base + (index + 1 + offset) * 4;
+        switch(random(20)) {
+        case  0: code.push_back(beq(s, t, offset)); break;
+        case  1: code.push_back(bne(s, t, offset)); break;
+        case  2: code.push_back(blez(s, offset)); break;
+        case  3: code.push_back(bgtz(s, offset)); break;
+        case  4: code.push_back(beql(s, t, offset)); break;
+        case  5: code.push_back(bnel(s, t, offset)); break;
+        case  6: code.push_back(blezl(s, offset)); break;
+        case  7: code.push_back(bgtzl(s, offset)); break;
+        case  8: code.push_back(bltz(s, offset)); break;
+        case  9: code.push_back(bgez(s, offset)); break;
+        case 10: code.push_back(bltzl(s, offset)); break;
+        case 11: code.push_back(bgezl(s, offset)); break;
+        case 12: code.push_back(bltzal(s, offset)); break;
+        case 13: code.push_back(bgezal(s, offset)); break;
+        case 14: code.push_back(bltzall(s, offset)); break;
+        case 15: code.push_back(bgezall(s, offset)); break;
+        case 16: code.push_back(j(target)); break;
+        case 17: code.push_back(jal(target)); break;
+        case 18: code.push_back(bc1(random(4), offset)); break;
+        case 19: code.push_back(random(2) ? jr(s6) : jalr(random(2) ? ra : d, s6)); break;  // to the halt
+        }
+        continue;
+      }
+
+      // memory: the 256 bytes of data at s7, aligned, and now and then not
+      uint32_t wordOffset = random(64) * 4 + (random(30) ? 0 : 1 + random(3));
+      uint32_t halfOffset = random(128) * 2 + (random(30) ? 0 : 1);
+      uint32_t byteOffset = random(256);
+      uint32_t word = 0;
+      switch(random(50)) {
+      case  0: word = addiu(d, s, immediate); break;
+      case  1: word = slti(d, s, immediate); break;
+      case  2: word = sltiu(d, s, immediate); break;
+      case  3: word = andi(d, s, immediate); break;
+      case  4: word = ori(d, s, immediate); break;
+      case  5: word = xori(d, s, immediate); break;
+      case  6: word = lui(d, immediate); break;
+      case  7: word = addu(d, s, t); break;
+      case  8: word = subu(d, s, t); break;
+      case  9: word = and_(d, s, t); break;
+      case 10: word = or_(d, s, t); break;
+      case 11: word = xor_(d, s, t); break;
+      case 12: word = nor(d, s, t); break;
+      case 13: word = slt(d, s, t); break;
+      case 14: word = sltu(d, s, t); break;
+      case 15: word = sll(d, t, random(32)); break;
+      case 16: word = srl(d, t, random(32)); break;
+      case 17: word = sra(d, t, random(32)); break;
+      case 18: word = sllv(d, t, s); break;
+      case 19: word = srlv(d, t, s); break;
+      case 20: word = srav(d, t, s); break;
+      case 21: word = rotr(d, t, random(32)); break;
+      case 22: word = rotrv(d, t, s); break;
+      case 23: word = movz(d, s, t); break;
+      case 24: word = movn(d, s, t); break;
+      case 25: word = random(2) ? mfhi(d) : mflo(d); break;
+      case 26: word = random(2) ? mthi(s) : mtlo(s); break;
+      case 27: word = random(2) ? seb(d, t) : seh(d, t); break;
+      case 28: word = random(2) ? max(d, s, t) : min(d, s, t); break;
+      // ones the recompiler leaves to the interpreter (add, addi and sub may overflow, which ends the program)
+      case 29: word = random(2) ? addi(d, s, immediate) : add(d, s, t); break;
+      case 30: word = sub(d, s, t); break;
+      case 31: word = random(2) ? mult(s, t) : multu(s, t); break;
+      case 32: word = random(2) ? div_(s, t) : divu(s, t); break;
+      case 33: word = random(2) ? (random(2) ? madd(s, t) : maddu(s, t)) : (random(2) ? msub(s, t) : msubu(s, t)); break;
+      case 34: word = random(2) ? clz(d, s) : clo(d, s); break;
+      case 35: word = random(3) == 0 ? wsbh(d, t) : random(2) ? wsbw(d, t) : bitrev(d, t); break;
+      case 36: {
+        uint32_t lsb = random(32), size = 1 + random(32 - lsb);
+        word = random(2) ? ext(d, s, lsb, size) : ins(d, s, lsb, size);
+        break;
+      }
+      case 37: word = lw(d, wordOffset, s7); break;
+      case 38: word = sw(t, wordOffset, s7); break;
+      case 39: word = random(2) ? lh(d, halfOffset, s7) : lhu(d, halfOffset, s7); break;
+      case 40: word = sh(t, halfOffset, s7); break;
+      case 41: word = random(2) ? lb(d, byteOffset, s7) : lbu(d, byteOffset, s7); break;
+      case 42: word = sb(t, byteOffset, s7); break;
+      case 43: word = random(2) ? lwl(d, byteOffset, s7) : lwr(d, byteOffset, s7); break;
+      case 44: word = random(2) ? swl(t, byteOffset, s7) : swr(t, byteOffset, s7); break;
+      case 45: word = mtc1(t, random(32)); break;
+      case 46: word = mfc1(d, random(32)); break;
+      case 47: word = fop(random(3), random(32), random(32), random(32)); break;  // add.s, sub.s, mul.s
+      case 48: word = cvtsw(random(32), random(32)); break;
+      case 49: word = ccond(random(16), random(32), random(32)); break;
+      }
+      code.push_back(word);
+    }
+
+    uint32_t registers[32], floats[32], data[64];
+    for(auto& r : registers) r = value();
+    for(auto& f : floats) f = value();
+    for(auto& d : data) d = next();
+    uint32_t hi = value(), lo = value(), csr = random(4) | random(2) << 23 | random(2) << 24;
+    auto setup = [&](Allegrex& c) {
+      for(uint32_t n = 1; n < 32; n++) c.ipu.r[n] = registers[n];
+      c.ipu.r[s6] = Base + Length * 4;
+      c.ipu.r[s7] = Data;
+      c.ipu.hi = hi;
+      c.ipu.lo = lo;
+      for(uint32_t n = 0; n < 32; n++) c.fpu.r[n] = floats[n];
+      c.fpu.csr = csr;
+    };
+    Machine interpreter, recompiler;
+    interpreter.recompile = false;
+    recompiler.recompile = true;
+    for(uint32_t n = 0; n < 64; n++) {
+      interpreter.ram.write32(Data + n * 4, data[n]);
+      recompiler.ram.write32(Data + n * 4, data[n]);
+    }
+    interpreter.run(code, setup);
+    recompiler.run(code, setup);
+
+    auto& a = interpreter.cpu;
+    auto& b = recompiler.cpu;
+    char difference[96] = {};
+    auto differs = [&](const char* what, uint32_t index, uint32_t x, uint32_t y) {
+      if(x != y && !difference[0]) std::snprintf(difference, sizeof(difference), "%s %u: %08x vs %08x", what, index, x, y);
+    };
+    for(uint32_t n = 0; n < 32; n++) differs("r", n, a.ipu.r[n], b.ipu.r[n]);
+    differs("hi", 0, a.ipu.hi, b.ipu.hi);
+    differs("lo", 0, a.ipu.lo, b.ipu.lo);
+    differs("pc", 0, a.ipu.pc, b.ipu.pc);
+    differs("pd", 0, a.ipu.pd, b.ipu.pd);
+    for(uint32_t n = 0; n < 32; n++) differs("f", n, a.fpu.r[n], b.fpu.r[n]);
+    differs("fcr31", 0, a.fpu.csr, b.fpu.csr);
+    differs("badvaddr", 0, a.scc.r[8], b.scc.r[8]);
+    differs("halted", 0, a.scc.halted, b.scc.halted);
+    differs("exceptions", 0, interpreter.exceptions.size(), recompiler.exceptions.size());
+    if(interpreter.exceptions.size() == recompiler.exceptions.size()) {
+      for(uint32_t n = 0; n < interpreter.exceptions.size(); n++) {
+        differs("exception at", n, interpreter.exceptions[n].second, recompiler.exceptions[n].second);
+      }
+    }
+    for(uint32_t n = 0; n < interpreter.ram.bytes.size(); n++) differs("byte", n, interpreter.ram.bytes[n], recompiler.ram.bytes[n]);
+    if(difference[0]) {
+      failures++;
+      if(++mismatches <= 3) {
+        std::printf("FAIL %s: program %u, %s\n", currentTest, program, difference);
+        for(uint32_t n = 0; n < code.size(); n++) std::printf("  %08x: %08x\n", Base + n * 4, code[n]);
+      }
+    }
+  }
+  CHECK(mismatches, 0);
+}
+
 }
 
 }
@@ -493,14 +770,25 @@ int main() {
     {"alu", alu}, {"shifts", shifts}, {"allegrex bits", allegrexBits}, {"multiply/divide", multiplyDivide},
     {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"branches", branches}, {"syscalls", syscalls},
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
-    {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system},
+    {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system}, {"recompiler", recompilerCases},
   };
-  for(auto& [name, run] : tests) {
-    currentTest = name;
-    int before = failures;
-    run();
-    std::printf("%s %s\n", failures == before ? "pass" : "FAIL", name);
+  int groups = 0;
+  for(bool recompiler : {false, true}) {
+    useRecompiler = recompiler;
+    for(auto& [name, run] : tests) {
+      std::string label = std::string(name) + (recompiler ? " (recompiler)" : " (interpreter)");
+      currentTest = label.c_str();
+      int before = failures;
+      run();
+      std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+      groups++;
+    }
   }
-  std::printf("%d failure%s\n", failures, failures == 1 ? "" : "s");
+  currentTest = "recompiler matches interpreter";
+  int before = failures;
+  matchesInterpreter();
+  std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+  groups++;
+  std::printf("%d groups, %d failure%s\n", groups, failures, failures == 1 ? "" : "s");
   return failures ? 1 : 0;
 }
