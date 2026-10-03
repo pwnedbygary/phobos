@@ -715,6 +715,27 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## Neo Geo Z80 banks for M ROMs over 64 KiB — 2026-10-03
+
+Branch `cursor/neo-geo-z80-banks-2b67`, on master. The plan row "Neo Geo Z80 banks for M ROMs over 64 KiB" and the
+Known core status in `neo-geo-compatibility.md` have the details.
+
+- **How it was found:** a boot pass of the RP6's 25 Neo Geo sets (its `neogeoaes` folder, MVS BIOS), each
+  cold-started through the adb load intent, with a screenshot and the log taken after 35 s and Phobos force-stopped
+  in between, so no auto state or save was written. 24 reached their title at 59.2 FPS; Blue's Journey showed the
+  BIOS's Z80 ERROR, though every ROM in its zip matches the database's CRC.
+- **Checks run:** the modern release builds, 238 host tests pass. On the RP6, Blue's Journey reaches its title at
+  59.2 FPS, and the same 25-set pass on this build had all 25 at their titles at 59.2 FPS, with no crashes and the
+  audio ring 46–59% full. A throwaway build, never committed, that also counted banked reads where the old
+  mapping returns different bytes ran the same pass: Blue's Journey's Z80 got such bytes for nearly all its banked
+  reads (24,376,799 of 24,379,392), and Alpha Mission II, Aggressors of Dark Kombat, the King of Fighters '94 and
+  2002 and Puzzle Bobble each got some, in the $8000 or $C000 window at banks in the first 64 KiB, so part of their
+  sound data was wrong before. The other 19 read none in their 35 s. All 25 again reached their titles at 59.2 FPS;
+  one kof95 sample in the first pass read the audio ring empty just as `screencap` started, and this pass had it
+  at 54%.
+- **Not checked:** sound by ear (games whose drivers read banks in the first 64 KiB may sound different now), the
+  AES BIOS, and the legacy APK on a device.
+
 ## Touch controls out of the edge gestures — 2026-10-03
 
 Branch `cursor/touch-gesture-exclusion-2b67`, stacked on `cursor/msx-tape-bios-2b67`. The plan row "Touch controls

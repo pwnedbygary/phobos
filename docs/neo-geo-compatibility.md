@@ -19,6 +19,19 @@ Columns: **Boot** (game loads/runs), **Gfx** (sprites/fix-layer correct),
 single handheld).
 
 ## Known core status (2026-08-21 — wiki.neogeodev.org as primary ref)
+- **Boot — 2026-10-03 pass on the RP6, and the Z80 bank fix:** every Neo Geo set on the RP6
+  (`alpham2`, `androdun`, `aodk`, `aof`, `aof2`, `bjourney`, `blazstar`, `breakers`, `bstars2`,
+  `garou`, `kabukikl`, `kof94` to `kof2003`, `matrim`, `pbobblen`, `sonicwi2`, `sonicwi3`) was
+  cold-started through the adb load intent with the MVS BIOS (`sp-e.sp1`) and checked after 35 s.
+  24 reached their title at 59.2 FPS with the audio ring half full and no underruns after start-up;
+  Blue's Journey stopped at the BIOS's **Z80 ERROR**. The Z80's bank windows ($8000–$F7FF) read an
+  M ROM over 64 KiB 64 KiB too high: `ares/ng/apu/memory.cpp` used MAME's formula, which counts on
+  MAME's region holding a copy of the ROM's first 64 KiB ahead of the ROM, and Phobos's M ROM has
+  none. Blue's Journey's sound driver runs from the power-on banks, so its Z80 ran the wrong code.
+  The windows now index the M ROM from its start (capped at 256 KiB, as MAME's are), and all 25
+  sets reach their titles at 59.2 FPS. A counting build found five more sets that read wrong bytes
+  through the windows in their first 35 s before the fix (`alpham2`, `aodk`, `kof94`, `kof2002`,
+  `pbobblen`), so they may sound different now. Sound wasn't judged by ear.
 - **Boot — 1994-95 WARNING hang:** **FIXED** — `kof95`, `samsho3`, `samsho4`, `samsho5` (and
   `k2k2_samsh5`/`samsh5sp` family) were stuck at the green/red WARNING screen (`move.b
   d0,$300001; bra.s *` at $276/$29A, $4E2/$506, etc. via `tst.b $10FD82` + `tst.w $D00100`
@@ -71,7 +84,7 @@ single handheld).
 | Samurai Shodown V Special / Samurai Spirits Zero Special (NGM-2720) | samsh5sp | K2K2 | ✓* | ✓* | — | ✓ (P1) | **FIXED 2026-08-21*:** same WARNING hang — generic patch fixes boot to title, but K2K2 `samsh5sp` still shows minor attract glitches on some frames (PCM2/V-RAM timing). Marking ✓* (boots) pending full play-test. |
 | Samurai Shodown V Perfect (2026 "Perfect" redump — new MIA entry, S1 mapped to 273-s1.bin) | samsh5pf | K2K2 | — | — | — | — | **NOT FIXED (2026-08-21):** earlier "FIXED" claim was unverified/wrong. This title has TWO blockers: (1) the universal MVS warning-screen stall — coin input was entirely non-functional (no coin node; `REG_STATUS_A` coin bits hardcoded "not inserted"; BIOS freeplay soft-DIP in sram zeroed each boot) so the BIOS waited for a coin that could never be inserted; (2) the K2K2 protection gate (`decryptPcm2(vA,6)` already present in `mia/medium/neo-geo.cpp` for `k2k2_sams5s`). The coin fix (START auto-credits + SELECT = coin button, `ares/ng/controller/arcade-stick/arcade-stick.cpp` + `ares/ng/cpu/memory.cpp`) was applied but on-device boot verification is PENDING. **2026-08-22:** SELECT-coin is now polled every video frame via `LSPC::frame()` → `ControllerPort::pollCoin()` → `ArcadeStick::pollCoin()` (all NG titles), not only when the game reads `REG_STATUS_B`; this closes the case where titles reading only `REG_STATUS_A` never received the SELECT coin pulse. |
 | SNK vs. Capcom - SVC Chaos (NGM-2690 ~ NGH-2690) | svc | PVC | — | — | — | — |  |
-| The King of Fighters 2002 (NGM-2650 ~ NGH-2650) | kof2002 | K2K2 | — | — | — | — |  |
+| The King of Fighters 2002 (NGM-2650 ~ NGH-2650) | kof2002 | K2K2 | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | The King of Fighters 2002 Plus (bootleg set 1) | kf2k2pls | K2K2 | — | — | — | — |  |
 | The King of Fighters 2002 Plus (bootleg set 2) | kf2k2pla | K2K2 | — | — | — | — |  |
 | The King of Fighters 2003 (NGH-2710) | kof2003h | PVC | ✓ | ✓ | ✓ (log artifact) | ✓ (P1) | Export set; same as kof2003 (audio also works) |
@@ -96,7 +109,7 @@ single handheld).
 | The King of Fighters '99 - Millennium Battle (Korean release, non-encrypted program) | kof99ka | CMC42 | — | — | — | — |  |
 | The King of Fighters 2000 (not encrypted) | kof2000n | CMC50 | — | — | — | — |  |
 | The King of Fighters 2001 (NGH-2621) | kof2001h | CMC50 | — | — | — | — |  |
-| The King of Fighters 2001 (NGM-262?) | kof2001 | CMC50 | — | — | — | — |  |
+| The King of Fighters 2001 (NGM-262?) | kof2001 | CMC50 | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | Zupapa! | zupapa | CMC42 | — | — | — | — |  |
 | Garou - Mark of the Wolves (NGH-2530) | garouha | SMA | ✓ | ✓ | — | ✓ (P1) | **FIXED & VERIFIED 2026-08-22:** `✓` title @59.2 FPS `SMA` `prot_sma.cpp` `readBE`/`load16_word_swap` `0010f300` `NEO-GEO` |
 | Garou - Mark of the Wolves (NGM-2530 ~ NGH-2530) | garouh | SMA | ✓ | ✓ | — | ✓ (P1) | **FIXED & VERIFIED 2026-08-22:** `✓` title @59.2 FPS `SMA` `prot_sma.cpp` `readBE`/`load16_word_swap` `0010f300` `NEO-GEO` |
@@ -147,27 +160,27 @@ single handheld).
 | 2020 Super Baseball (set 2) | 2020bba | standard | — | — | — | — |  |
 | 2020 Super Baseball (set 3) | 2020bbh | standard | — | — | — | — |  |
 | 3 Count Bout / Fire Suplex (NGM-043 ~ NGH-043) | 3countb | standard | — | — | — | — |  |
-| Aero Fighters 2 / Sonic Wings 2 | sonicwi2 | standard | — | — | — | — |  |
-| Aero Fighters 3 / Sonic Wings 3 | sonicwi3 | standard | — | — | — | — |  |
-| Aggressors of Dark Kombat / Tsuukai GANGAN Koushinkyoku (ADM-008 ~ ADH-008) | aodk | standard | — | — | — | — |  |
-| Alpha Mission II / ASO II - Last Guardian (NGM-007 ~ NGH-007) | alpham2 | standard | — | — | — | — |  |
+| Aero Fighters 2 / Sonic Wings 2 | sonicwi2 | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
+| Aero Fighters 3 / Sonic Wings 3 | sonicwi3 | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
+| Aggressors of Dark Kombat / Tsuukai GANGAN Koushinkyoku (ADM-008 ~ ADH-008) | aodk | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
+| Alpha Mission II / ASO II - Last Guardian (NGM-007 ~ NGH-007) | alpham2 | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | Alpha Mission II / ASO II - Last Guardian (prototype) | alpham2p | standard | — | — | — | — |  |
-| Andro Dunos (NGM-049 ~ NGH-049) | androdun | standard | — | — | — | — |  |
-| Art of Fighting / Ryuuko no Ken (NGM-044 ~ NGH-044) | aof | standard | — | — | — | — |  |
+| Andro Dunos (NGM-049 ~ NGH-049) | androdun | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
+| Art of Fighting / Ryuuko no Ken (NGM-044 ~ NGH-044) | aof | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | Art of Fighting 2 / Ryuuko no Ken 2 (NGH-056) | aof2a | standard | — | — | — | — |  |
-| Art of Fighting 2 / Ryuuko no Ken 2 (NGM-056) | aof2 | standard | — | — | — | — |  |
+| Art of Fighting 2 / Ryuuko no Ken 2 (NGM-056) | aof2 | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | Art of Fighting 3 - The Path of the Warrior (Korean release) | aof3k | standard | — | — | — | — |  |
 | Art of Fighting 3 - The Path of the Warrior / Art of Fighting - Ryuuko no Ken Gaiden | aof3 | standard | — | — | — | — |  |
 | Bakatonosama Mahjong Manyuuki (MOM-002 ~ MOH-002) | bakatono | standard | — | — | — | — |  |
 | Bang Bang Busters | b2b | standard | — | — | — | — |  |
-| Baseball Stars 2 | bstars2 | standard | — | — | — | — |  |
+| Baseball Stars 2 | bstars2 | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | Baseball Stars Professional (NGH-002) | bstarsh | standard | — | — | — | — |  |
 | Baseball Stars Professional (NGM-002) | bstars | standard | — | — | — | — |  |
 | Battle Flip Shot | flipshot | standard | — | — | — | — |  |
-| Blazing Star | blazstar | standard | — | — | — | — |  |
+| Blazing Star | blazstar | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | Blue's Journey / Raguy (ALH-001) | bjourneyh | standard | — | — | — | — |  |
-| Blue's Journey / Raguy (ALM-001 ~ ALH-001) | bjourney | standard | — | — | — | — |  |
-| Breakers | breakers | standard | — | — | — | — |  |
+| Blue's Journey / Raguy (ALM-001 ~ ALH-001) | bjourney | standard | ✓ | — | — | — | **Fixed 2026-10-03:** stopped at the BIOS's Z80 ERROR, because the Z80's bank windows read an M ROM over 64 KiB 64 KiB too high (Known core status). Reaches its title at 59.2 FPS since. |
+| Breakers | breakers | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | Breakers Revenge | breakrev | standard | — | — | — | — |  |
 | Burning Fight (NGH-018, US) | burningfh | standard | — | — | — | — |  |
 | Burning Fight (NGM-018 ~ NGH-018) | burningf | standard | — | — | — | — |  |
@@ -185,7 +198,7 @@ single handheld).
 | Double Dragon (Neo-Geo) | doubledr | standard | — | — | — | — |  |
 | Dragon's Heaven (development board) | dragonsh | standard | — | — | — | — |  |
 | Eight Man (NGM-025 ~ NGH-025) | eightman | standard | — | — | — | — |  |
-| Far East of Eden - Kabuki Klash / Tengai Makyou - Shin Den | kabukikl | standard | — | — | — | — |  |
+| Far East of Eden - Kabuki Klash / Tengai Makyou - Shin Den | kabukikl | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | Fatal Fury - King of Fighters / Garou Densetsu - Shukumei no Tatakai (NGM-033 ~ NGH-033) | fatfury1 | standard | — | — | — | — |  |
 | Fatal Fury 3 - Road to the Final Victory / Garou Densetsu 3 - Haruka-naru Tatakai (NGM-069 ~ NGH-069) | fatfury3 | standard | — | — | — | — |  |
 | Fatal Fury Special / Garou Densetsu Special (NGM-058 ~ NGH-058, set 1) | fatfursp | standard | — | — | — | — |  |
@@ -251,7 +264,7 @@ single handheld).
 | Power Spikes II (NGM-068) | pspikes2 | standard | — | — | — | — |  |
 | Pulstar | pulstar | standard | — | — | — | — |  |
 | Puzzle Bobble / Bust-A-Move (Neo-Geo, bootleg) | pbobblenb | standard | — | — | — | — |  |
-| Puzzle Bobble / Bust-A-Move (Neo-Geo, NGM-083) | pbobblen | standard | — | — | — | — |  |
+| Puzzle Bobble / Bust-A-Move (Neo-Geo, NGM-083) | pbobblen | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | Puzzle Bobble 2 / Bust-A-Move Again (Neo-Geo) | pbobbl2n | standard | — | — | — | — |  |
 | Puzzle De Pon! | puzzledp | standard | — | — | — | — |  |
 | Puzzle De Pon! R! | puzzldpr | standard | — | — | — | — |  |
@@ -311,15 +324,15 @@ single handheld).
 | The Eye of Typhoon (Tsunami Edition, beta 6) | etyphoon_b6 | standard | — | — | — | — |  |
 | The Eye of Typhoon (Tsunami Edition, beta 7) | etyphoon | standard | — | — | — | — |  |
 | The Irritating Maze / Ultra Denryu Iraira Bou | irrmaze | standard | — | — | — | — |  |
-| The King of Fighters '94 (NGM-055 ~ NGH-055) | kof94 | standard | — | — | — | — |  |
+| The King of Fighters '94 (NGM-055 ~ NGH-055) | kof94 | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | The King of Fighters '95 (NGH-084) | kof95h | standard | — | — | — | — |  |
 | The King of Fighters '95 (NGM-084) | kof95 | standard | ✓ | ✓ | — | ✓ (P1) | **FIXED 2026-08-21:** was stuck at green WARNING (loop `move.b d0,$300001; bra.s *` at $276/$29A via `tst.b $10FD82` + `tst.w $D00100` check at $38D6E). Under ares $10FD82 is non-zero, so check always failed. Fixed in `mia/medium/neo-geo.cpp` by patching `beq→bra` and WARNING loop `bra→rts` (generic for all 1994-95 boot-stub titles). Verified on-device to KOF95 title @59.2 FPS. |
 | The King of Fighters '95 (NGM-084, alt board) | kof95a | standard | — | — | — | — |  |
 | The King of Fighters '96 (NGH-214) | kof96h | standard | — | — | — | — |  |
-| The King of Fighters '96 (NGM-214) | kof96 | standard | — | — | — | — |  |
+| The King of Fighters '96 (NGM-214) | kof96 | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | The King of Fighters '97 (Korean release) | kof97k | standard | — | — | — | — |  |
 | The King of Fighters '97 (NGH-2320) | kof97h | standard | — | — | — | — |  |
-| The King of Fighters '97 (NGM-2320) | kof97 | standard | — | — | — | — |  |
+| The King of Fighters '97 (NGM-2320) | kof97 | standard | ✓ | — | — | — | Reaches its title at 59.2 FPS (RP6 pass, 2026-10-03). |
 | The King of Fighters '97 Plus (bootleg) | kof97pls | standard | — | — | — | — |  |
 | The King of Fighters '98 - The Slugfest / King of Fighters '98 - Dream Match Never Ends (NGH-2420) | kof98h | standard | — | — | — | — |  |
 | The King of Fighters '99 - Millennium Battle (prototype) | kof99p | standard | — | — | — | — |  |
