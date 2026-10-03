@@ -52,6 +52,7 @@ namespace ares {
   auto setFastForwardSpeed(f32 speed) -> void;
   auto setNgcdLoadSpeed(s32 speed) -> void;
   auto setZxLoadSpeed(s32 speed) -> void;
+  auto setMsxLoadSpeed(s32 speed) -> void;
   auto setZxTapeAuto(bool enabled) -> void;
   auto setN64DebugLogging(bool enabled) -> void;
   auto saveState(const char* path) -> bool;

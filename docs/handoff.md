@@ -714,6 +714,17 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## MSX tape loading speed — 2026-10-03
+
+Branch `cursor/msx-tape-speed-2b67`, stacked on `cursor/msx-tapes-2b67`. The plan row "MSX tape loading speed" has
+the details.
+
+- **Checks run:** both flavors build, 231 host tests pass. On the RP6, with the stand-in tape again (deleted
+  afterwards with its states and folders): set to 8x in the pause menu, `CLOAD` ran at 433 to 466 FPS and loaded
+  the tape in about 5 s (32 s at 1x), and the game went back to 59.9 FPS when BASIC stopped the motor. The
+  setting was put back to Accurate (1x) afterwards.
+- **Not checked:** a commercial tape's custom loader at 8x, the legacy APK on a device.
+
 ## MSX tapes — 2026-10-03
 
 Branch `cursor/msx-tapes-2b67`, stacked on `cursor/pocket-challenge-v2-2b67`. The plan row "MSX tapes" has the

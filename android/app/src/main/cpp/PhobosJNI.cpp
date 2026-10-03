@@ -129,6 +129,11 @@ Java_com_phobos_emulator_PhobosCore_setZxLoadSpeed(JNIEnv* env, jobject, jint sp
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setMsxLoadSpeed(JNIEnv* env, jobject, jint speed) {
+    ares::setMsxLoadSpeed((s32)speed);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setZxTapeAuto(JNIEnv* env, jobject, jboolean enabled) {
     ares::setZxTapeAuto(enabled == JNI_TRUE);
 }

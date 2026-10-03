@@ -651,6 +651,7 @@ private fun MsxKeyboardSection(
         // The MSX's motor relay plays and stops the tape, so it only has a rewind button.
         val tape by viewModel.msxTape.collectAsState()
         if (tape.inserted) ZxTapeItem(tape, onPlaying = null, onRewind = { viewModel.rewindMsxTape() })
+        MsxLoadSpeedItem(settings.msxLoadSpeed) { viewModel.setMsxLoadSpeed(it) }
     }
 }
 

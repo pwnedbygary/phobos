@@ -19,6 +19,7 @@ object PhobosCore {
     external fun setFastForwardSpeed(speed: Float)
     external fun setNgcdLoadSpeed(speed: Int)
     external fun setZxLoadSpeed(speed: Int)
+    external fun setMsxLoadSpeed(speed: Int)
     external fun setZxTapeAuto(enabled: Boolean)
     external fun setN64DebugLogging(enabled: Boolean)
     external fun setN64Upscale(factor: Int)

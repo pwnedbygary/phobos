@@ -864,6 +864,8 @@ namespace ares {
   // The same for a ZX Spectrum game while a loader reads its tape. The tape plays at its real speed,
   // so every loader, custom and protected ones included, sees the timing it expects.
   static std::atomic<s32> zxLoadSpeed{1};
+  // The same for an MSX game while its cassette motor runs the tape.
+  static std::atomic<s32> msxLoadSpeed{1};
   // Settings > Emulation and the pause menu: the ZX Spectrum tape plays while a loader reads it and
   // stops once the game moves on (TapeDeck::detectLoader()), so multi-load games find their next part.
   static std::atomic<bool> zxTapeAuto{true};
@@ -1378,6 +1380,13 @@ namespace ares {
                     loadBoostSpeed = zxLoadSpeed.load(std::memory_order_relaxed);
                     if (loadBoostSpeed <= 1) loadBoostFrames = 0;
                     else if (loaderReading) loadBoostFrames = 25;
+                    else if (loadBoostFrames) loadBoostFrames--;
+                } else if (localRoot->name().beginsWith("MSX")) {
+                    // While the motor runs the tape: the BIOS and loaders switch it on only to read the
+                    // tape. The hold bridges the motor's short stops between a tape's blocks.
+                    loadBoostSpeed = msxLoadSpeed.load(std::memory_order_relaxed);
+                    if (loadBoostSpeed <= 1) loadBoostFrames = 0;
+                    else if (::ares::MSX::tapeDeck.playing()) loadBoostFrames = 25;
                     else if (loadBoostFrames) loadBoostFrames--;
                 } else {
                     loadBoostFrames = 0;
@@ -3895,6 +3904,7 @@ else if (port->type() == "Keyboard") {
   auto setFastForwardSpeed(f32 speed) -> void { ffSpeedLimitAtomic = speed; LOGI("Fast forward speed set to %.1fx", (f64)speed); }
   auto setNgcdLoadSpeed(s32 speed) -> void { ngcdLoadSpeed = std::max(1, speed); LOGI("Neo Geo CD loading speed set to %dx", std::max(1, speed)); }
   auto setZxLoadSpeed(s32 speed) -> void { zxLoadSpeed = std::max(1, speed); LOGI("ZX Spectrum tape loading speed set to %dx", std::max(1, speed)); }
+  auto setMsxLoadSpeed(s32 speed) -> void { msxLoadSpeed = std::max(1, speed); LOGI("MSX tape loading speed set to %dx", std::max(1, speed)); }
   auto setZxTapeAuto(bool enabled) -> void { zxTapeAuto = enabled; LOGI("ZX Spectrum tape: automatic control %s", enabled ? "on" : "off"); }
   auto setN64DebugLogging(bool enabled) -> void { n64DebugLoggingAtomic = enabled; LOGI("N64 debug logging %s", enabled ? "enabled" : "disabled"); }
   auto resetSystem() -> void {

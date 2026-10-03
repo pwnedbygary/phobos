@@ -528,6 +528,10 @@ class MainViewModel(
         settingsStore.setZxLoadSpeed(speed)
         PhobosCore.setZxLoadSpeed(speed)
     }
+    fun setMsxLoadSpeed(speed: Int) = viewModelScope.launch {
+        settingsStore.setMsxLoadSpeed(speed)
+        PhobosCore.setMsxLoadSpeed(speed)
+    }
     fun setZxTapeAuto(enabled: Boolean) = viewModelScope.launch {
         settingsStore.setZxTapeAuto(enabled)
         PhobosCore.setZxTapeAuto(enabled)
@@ -1773,6 +1777,7 @@ class MainViewModel(
             PhobosCore.setFastForwardSpeed(settings.value.fastForwardSpeed)
             PhobosCore.setNgcdLoadSpeed(settings.value.ngcdLoadSpeed)
             PhobosCore.setZxLoadSpeed(settings.value.zxLoadSpeed)
+            PhobosCore.setMsxLoadSpeed(settings.value.msxLoadSpeed)
             PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
@@ -2604,6 +2609,7 @@ class MainViewModel(
             PhobosCore.setFastForwardSpeed(currentSettings.fastForwardSpeed)
             PhobosCore.setNgcdLoadSpeed(currentSettings.ngcdLoadSpeed)
             PhobosCore.setZxLoadSpeed(currentSettings.zxLoadSpeed)
+            PhobosCore.setMsxLoadSpeed(currentSettings.msxLoadSpeed)
             PhobosCore.setZxTapeAuto(currentSettings.zxTapeAuto)
             PhobosCore.setCustomDriverPath(currentSettings.customDriverPath)
             PhobosCore.setPs1AnalogMode(currentSettings.ps1AnalogMode)

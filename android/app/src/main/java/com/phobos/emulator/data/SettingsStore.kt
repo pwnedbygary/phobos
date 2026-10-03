@@ -230,6 +230,8 @@ data class EmulatorSettings(
     val ngcdLoadSpeed: Int = 1,
     /** How much faster than real time ZX Spectrum games run while a tape plays; 1 = real time. */
     val zxLoadSpeed: Int = 1,
+    /** How much faster than real time MSX games run while the cassette motor runs the tape; 1 = real time. */
+    val msxLoadSpeed: Int = 1,
     /** The ZX Spectrum tape plays while a loader reads it and stops once the game moves on. */
     val zxTapeAuto: Boolean = true,
     val busyWaitPacing: Boolean = false,
@@ -364,6 +366,7 @@ class SettingsStore(private val context: Context) {
         val PIN_FASTEST_CORE = booleanPreferencesKey("pin_fastest_core")
         val NGCD_LOAD_SPEED = intPreferencesKey("ngcd_load_speed")
         val ZX_LOAD_SPEED = intPreferencesKey("zx_load_speed")
+        val MSX_LOAD_SPEED = intPreferencesKey("msx_load_speed")
         val ZX_TAPE_AUTO = booleanPreferencesKey("zx_tape_auto")
         val BUSY_WAIT_PACING = booleanPreferencesKey("busy_wait_pacing")
         val N64_PAK = stringPreferencesKey("n64_pak")
@@ -597,6 +600,7 @@ class SettingsStore(private val context: Context) {
             pinFastestCore = safeGet(PIN_FASTEST_CORE, true),
             ngcdLoadSpeed = safeGet(NGCD_LOAD_SPEED, 1),
             zxLoadSpeed = safeGet(ZX_LOAD_SPEED, 1),
+            msxLoadSpeed = safeGet(MSX_LOAD_SPEED, 1),
             zxTapeAuto = safeGet(ZX_TAPE_AUTO, true),
             busyWaitPacing = safeGet(BUSY_WAIT_PACING, false),
             n64Pak = safeGetString(N64_PAK, "None"),
@@ -841,6 +845,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setPinFastestCore(enabled: Boolean) = context.dataStore.edit { it[PIN_FASTEST_CORE] = enabled }
     suspend fun setNgcdLoadSpeed(speed: Int) = context.dataStore.edit { it[NGCD_LOAD_SPEED] = speed }
     suspend fun setZxLoadSpeed(speed: Int) = context.dataStore.edit { it[ZX_LOAD_SPEED] = speed }
+    suspend fun setMsxLoadSpeed(speed: Int) = context.dataStore.edit { it[MSX_LOAD_SPEED] = speed }
     suspend fun setZxTapeAuto(enabled: Boolean) = context.dataStore.edit { it[ZX_TAPE_AUTO] = enabled }
     suspend fun setBusyWaitPacing(enabled: Boolean) = context.dataStore.edit { it[BUSY_WAIT_PACING] = enabled }
     suspend fun setN64Pak(pak: String) = context.dataStore.edit { it[N64_PAK] = pak }
