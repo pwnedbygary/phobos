@@ -44,7 +44,8 @@ struct VFPUSegment { s32 c0, m, n, e; };
 #include "vfpu-segments.hpp"
 
 //A table's result at a 23-bit index, as float bits. The tables cover rcp over [1, 2), rsq and sqrt over [1, 4)
-//(the index drops the input's lowest bit), exp2 over [1, 2) and asin over [0, 1); each function scales from there.
+//(the index drops the input's lowest bit), exp2 over [1, 2), cos over a quarter turn and asin over [0, 1); each
+//function scales from there.
 static auto interpolate(const VFPUSegment* segments, u32 index) -> u32 {
   auto& segment = segments[index >> 16];
   s64 x2 = index & 0xffff;
@@ -143,6 +144,55 @@ static auto vfpuPower2(u32 bits, bool negate) -> u32 {
 static auto vfpuExp2(u32 bits) -> u32 { return vfpuPower2(bits, false); }
 static auto vfpuReciprocalExp2(u32 bits) -> u32 { return vfpuPower2(bits, true); }
 
+//Cosine and sine of x quarter turns, both from cosine's table: sine is it read backwards (sin f = cos(1 - f)).
+//|x| becomes 23-bit fixed point; the low two bits of its whole part pick the quadrant, its fraction the point in
+//it. Very large arguments come out strangely, as on the hardware: the shift that makes the fixed-point value has
+//only 5 bits, so past 2^31 it wraps around, and a shift of exactly 32, 64 or 96 shifts everything out, leaving 0.
+static auto quarterTurns(u32 bits) -> s64 {
+  FloatParts x{bits & 0x7fff'ffff};
+  if(x.zero()) return 0;
+  s32 shift = s32(x.exponent) - 127;
+  s64 significand = x.mantissa | 0x80'0000;
+  if(shift >= 32) {
+    shift &= 31;
+    if(shift == 0) return 0;
+  }
+  if(shift >= 0) return significand << shift;
+  if(shift > -24) return significand >> -shift;
+  return 0;
+}
+
+static auto cosineAt(u32 f) -> u32 { return interpolate(cosSegments, f); }
+static auto sineAt(u32 f) -> u32 { return f ? interpolate(cosSegments, (1 << 23) - f) : 0; }
+
+static auto vfpuSine(u32 bits) -> u32 {
+  FloatParts x{bits};
+  if(x.nan()) return 0x7f80'0001 | x.sign;
+  s64 k = quarterTurns(bits);
+  u32 f = k & 0x7f'ffff;
+  u32 result;
+  switch(k >> 23 & 3) {
+  case 0: result = sineAt(f); break;
+  case 1: result = cosineAt(f); break;
+  case 2: result = sineAt(f) ^ 0x8000'0000; break;
+  default: result = cosineAt(f) ^ 0x8000'0000; break;
+  }
+  return result ^ x.sign;  //sin(-x) = -sin(x)
+}
+
+static auto vfpuCosine(u32 bits) -> u32 {
+  FloatParts x{bits};
+  if(x.nan()) return 0x7f80'0001;
+  s64 k = quarterTurns(bits);  //cos(-x) = cos(x)
+  u32 f = k & 0x7f'ffff;
+  switch(k >> 23 & 3) {
+  case 0: return cosineAt(f);
+  case 1: return sineAt(f) ^ 0x8000'0000;
+  case 2: return cosineAt(f) ^ 0x8000'0000;
+  default: return sineAt(f);
+  }
+}
+
 //arcsine in quarter turns: |x| as a 23-bit fixed-point index, the result taking x's sign; 1 itself gives 1, and
 //past 1 there's no arcsine.
 static auto vfpuArcsine(u32 bits) -> u32 {
@@ -151,13 +201,6 @@ static auto vfpuArcsine(u32 bits) -> u32 {
   if(x.exponent == 127) return x.sign | 0x3f80'0000;
   return x.sign | interpolate(asinSegments, u32(fixed23(FloatParts{bits & 0x7fff'ffff})));
 }
-
-//The VFPU measures angles in quarter turns: sin(1) is the sine of 90 degrees.
-static constexpr f64 QuarterTurn = 1.5707963267948966;
-
-//Sine and cosine of x quarter turns. Whole turns are taken off first, so large inputs keep their precision.
-static auto quarterSin(f32 x) -> f64 { return std::sin(std::fmod((f64)x, 4.0) * QuarterTurn); }
-static auto quarterCos(f32 x) -> f64 { return std::cos(std::fmod((f64)x, 4.0) * QuarterTurn); }
 
 //Half-precision floats (16 bits: sign, 5-bit exponent, 10-bit mantissa), as vfim, vf2h and vh2f use them. Neither
 //direction has denormals; infinity and NaN keep their low mantissa bits.
@@ -600,9 +643,9 @@ auto Allegrex::VCMP(u8 condition, u8 vs, u8 vt, u32 size) -> void {
   vfpu.cc = (vfpu.cc & ~affected) | ((bits | any << 4 | every << 5) & affected);
 }
 
-//cosine, of quarter turns
+//cosine, of quarter turns (the VFPU measures angles in quarter turns: cos(1) is the cosine of 90 degrees)
 auto Allegrex::VCOS(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return quarterCos(s); }, NaNSign::Positive);
+  vfpuUnaryBits(vd, vs, size, vfpuCosine);
 }
 
 //vcrs.t: the two halves of a cross product, (sy * tz, sz * tx, sx * ty); subtracting the other half (vcrs with
@@ -904,7 +947,7 @@ auto Allegrex::VNRCP(u8 vd, u8 vs, u32 size) -> void {
 
 //minus the sine, of quarter turns
 auto Allegrex::VNSIN(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return -quarterSin(s); }, NaNSign::Negated);
+  vfpuUnaryBits(vd, vs, size, [](u32 s) { return vfpuSine(s) ^ 0x8000'0000; });
 }
 
 //1 - x ("one's complement" of a value between 0 and 1)
@@ -987,18 +1030,15 @@ auto Allegrex::VRNDS(u8 vs, u32) -> void {
 //vrot: the sine and cosine of rs (in quarter turns) placed in the lanes of rd that the placement field names,
 //for building rotation matrices a row at a time. Bits 0-1 pick the cosine's lane and bits 2-3 the sine's
 //(negated when bit 4 is set); the other lanes get 0. If both name the same lane, that lane gets the cosine and
-//every other lane the sine.
+//every other lane the sine. Its sine and cosine are vsin's and vcos's (not measured on their own).
 auto Allegrex::VROT(u8 vd, u8 vs, u32 size, u8 placement) -> void {
   if(size == 1) return INVALID();
-  f32 angle = vfpuFloat(vfpuRead(vs, 1, vfpu.pfxs).lane[0]);
-  f64 sine = quarterSin(angle), cosine = quarterCos(angle);
-  if(placement & 0x10) sine = -sine;
+  u32 angle = vfpuRead(vs, 1, vfpu.pfxs).lane[0];
+  u32 sine = vfpuSine(angle), cosine = vfpuCosine(angle);
+  if(placement & 0x10) sine ^= 0x8000'0000;
   u32 cosineLane = placement & 3, sineLane = placement >> 2 & 3;
   Vector d{};
-  for(u32 i : range(size)) {
-    f64 value = i == cosineLane ? cosine : cosineLane == sineLane || i == sineLane ? sine : 0.0;
-    d.lane[i] = vfpuBits(value);
-  }
+  for(u32 i : range(size)) d.lane[i] = i == cosineLane ? cosine : cosineLane == sineLane || i == sineLane ? sine : 0;
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
@@ -1072,7 +1112,7 @@ auto Allegrex::VSGN(u8 vd, u8 vs, u32 size) -> void {
 
 //sine, of quarter turns
 auto Allegrex::VSIN(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return quarterSin(s); }, NaNSign::Input);
+  vfpuUnaryBits(vd, vs, size, vfpuSine);
 }
 
 auto Allegrex::VSLT(u8 vd, u8 vs, u8 vt, u32 size) -> void {

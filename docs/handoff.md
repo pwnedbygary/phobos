@@ -742,6 +742,14 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: VFPU sine and cosine exact — 2026-10-03
+
+A second commit on `cursor/psp-vfpu-exact-2b67`: the table behind `vsin` and `vcos` turned out to be cosine's (sine
+is it read backwards), which fits the same interpolator; very large arguments wrap as the hardware's 5-bit shift
+does (a shift of exactly 32, 64 or 96 gives 0). `vsin`, `vcos`, `vnsin` and `vrot` now use it: exact on every
+full-range and spread-out input. Ten math instructions are exact; `vlog2` and `vdot` remain. Checks: 54 groups pass
+on the Mac and in `phobos-linux`; the measured group replays the first 16384 results of each of the ten.
+
 ## PSP core: seven VFPU math functions exact — 2026-10-03
 
 Branch `cursor/psp-vfpu-exact-2b67`, stacked on the measurements. `tools/psp-vfpu-measure/fit.py` fits the

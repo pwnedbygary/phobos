@@ -5,9 +5,9 @@
 //
 //Covered here: the random number generator (its start, 64 seeds of 4096 draws, vrndi.q's lanes); vadd, vsub,
 //vmul and vdiv on a million spread-out inputs between them (NaN results included); and the first 16384 spread-out
-//results of each math function the core computes exactly (vrcp, vnrcp, vrsq, vsqrt, vexp2, vrexp2, vasin: the
-//*-spread-16k files, which start the full *-spread files). vdot's file is kept for when the core sums its products
-//as the PSP does.
+//results of each math function the core computes exactly (vrcp, vnrcp, vrsq, vsqrt, vexp2, vrexp2, vsin, vnsin,
+//vcos, vasin: the *-spread-16k files, which start the full *-spread files). vdot's file is kept for when the core
+//sums its products as the PSP does.
 
 #include "harness.hpp"
 
@@ -124,6 +124,9 @@ auto measured() -> void {
   measuredFunction("vsqrt-spread-16k.bin", 0xd0168081, 4);
   measuredFunction("vexp2-spread-16k.bin", 0xd0148081, 5);
   measuredFunction("vrexp2-spread-16k.bin", 0xd01c8081, 6);
+  measuredFunction("vsin-spread-16k.bin", 0xd0128081, 8);
+  measuredFunction("vnsin-spread-16k.bin", 0xd01a8081, 9);
+  measuredFunction("vcos-spread-16k.bin", 0xd0138081, 10);
   measuredFunction("vasin-spread-16k.bin", 0xd0178081, 11);
 }
 
