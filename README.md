@@ -150,6 +150,14 @@ High-level Components
 * __libco__:      cooperative multithreading library
 * __thirdparty__: parallel-rdp, sljit, libadrenotools, volk
 
+License
+-------
+
+Phobos's own code is licensed under the GNU General Public License, version 3 or (at your option) any later version;
+the license's text is in [COPYING](COPYING). The components Phobos builds on keep their own licenses, all listed in
+[LICENSE](LICENSE). The console firmware that ares ships isn't covered by the GPL (see Phobos's notice at the top of
+LICENSE).
+
 Contributing
 ------------
 
