@@ -110,8 +110,18 @@ internal fun crtScanline(isDark: Boolean): Float = if (isDark) 0.30f else 0.08f
 /** The vignette's darkening at its edge. */
 internal fun crtVignette(isDark: Boolean): Float = if (isDark) 0.45f else 0.12f
 
-/** How far the backdrop's center glows toward the primary color, like a CRT's phosphor bloom. */
+/** How far the backdrop's center glows toward [crtBloomColor], like a CRT's phosphor bloom. */
 internal fun crtBloom(isDark: Boolean): Float = if (isDark) 0.12f else 0.08f
+
+/** The bloom's color: the [scene]'s phosphor mixed into the primary color. */
+internal fun crtBloomColor(scheme: ColorScheme, scene: CrtBackdropScene): Color {
+    val phosphor = when (scene) {
+        CrtBackdropScene.GREEN -> Color(0xFF54FF8B)
+        CrtBackdropScene.AMBER -> Color(0xFFFFB347)
+        CrtBackdropScene.BLUE -> Color(0xFF69B7FF)
+    }
+    return lerp(scheme.primary, phosphor, 0.6f)
+}
 
 /**
  * One scanline every [SCANLINE_PITCH] screen pixels: a repeating image of a dark row under clear
@@ -138,13 +148,7 @@ fun CrtBackdrop(
             val background = scheme.background
             val center = size.center
             val radius = size.maxDimension * 0.75f
-            val phosphor = when (scene) {
-                CrtBackdropScene.GREEN -> Color(0xFF54FF8B)
-                CrtBackdropScene.AMBER -> Color(0xFFFFB347)
-                CrtBackdropScene.BLUE -> Color(0xFF69B7FF)
-            }
-            val bloomColor = lerp(scheme.primary, phosphor, 0.6f)
-            val bloom = Brush.radialGradient(listOf(lerp(background, bloomColor, crtBloom(isDark)), background), center, radius)
+            val bloom = Brush.radialGradient(listOf(lerp(background, crtBloomColor(scheme, scene), crtBloom(isDark)), background), center, radius)
             val vignette = Brush.radialGradient(
                 0.5f to Color.Transparent,
                 1f to Color.Black.copy(alpha = crtVignette(isDark)),

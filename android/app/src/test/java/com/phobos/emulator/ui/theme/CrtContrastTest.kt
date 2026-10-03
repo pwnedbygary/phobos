@@ -2,6 +2,7 @@ package com.phobos.emulator.ui.theme
 
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
+import com.phobos.emulator.data.CrtBackdropScene
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -29,11 +30,14 @@ class CrtContrastTest {
     fun topBarTitleStandsOutFromTheBackdrop() {
         val failures = styleVariants.flatMap { v ->
             val s = v.scheme
-            // Brightest: the bloom's center between scanlines. Darkest: a scanline under the vignette's full strength.
-            val bloom = lerp(s.background, s.primary, crtBloom(v.isDark)).toArgb()
+            // Brightest: each phosphor's bloom center, between scanlines and on one. Darkest: a scanline under the vignette's full strength.
+            val blooms = CrtBackdropScene.entries.flatMap { scene ->
+                val bloom = lerp(s.background, crtBloomColor(s, scene), crtBloom(v.isDark)).toArgb()
+                listOf("the ${scene.label} bloom" to bloom, "a scanline on the ${scene.label} bloom" to blend(black, bloom, paintAlpha(crtScanline(v.isDark))))
+            }
             val vignette = blend(black, s.background.toArgb(), paintAlpha(crtVignette(v.isDark)))
             val darkest = blend(black, vignette, paintAlpha(crtScanline(v.isDark)))
-            listOf("the bloom" to bloom, "a dark scanline" to darkest).mapNotNull { (where, backdrop) ->
+            (blooms + ("a dark scanline" to darkest)).mapNotNull { (where, backdrop) ->
                 val ratio = wcagContrast(s.primary.toArgb(), backdrop)
                 if (ratio < 3.0) "${v.name}: the top bar's title over $where: ${twoPlaces(ratio)}" else null
             }
@@ -54,6 +58,16 @@ class CrtContrastTest {
                 val ratio = wcagContrast(color.toArgb(), s.surfaceContainer.toArgb())
                 if (ratio < 4.5) "${v.name}: $role on a panel: ${twoPlaces(ratio)}" else null
             }
+        }
+        assertTrue(failures.take(20).joinToString("\n"), failures.isEmpty())
+    }
+
+    @Test
+    fun libraryTileNamesReachAa() {
+        // The Library's CRT tiles write the system's name in the primary color on the tile.
+        val failures = styleVariants.mapNotNull { v ->
+            val ratio = wcagContrast(v.scheme.primary.toArgb(), libraryTileFill(v.scheme, v.isDark).toArgb())
+            if (ratio < 4.5) "${v.name}: primary on a Library tile: ${twoPlaces(ratio)}" else null
         }
         assertTrue(failures.take(20).joinToString("\n"), failures.isEmpty())
     }

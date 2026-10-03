@@ -78,4 +78,22 @@ class RpgContrastTest {
         }
         assertTrue(failures.take(20).joinToString("\n"), failures.isEmpty())
     }
+
+    @Test
+    fun topBarTitleStandsOutFromTheStarfieldAndTheDungeon() {
+        // The Dungeon's wall, bricks and mortar lines, each under a torch's light at every tenth of its falloff.
+        val failures = styleVariants.flatMap { v ->
+            val dungeon = RpgDungeonColors(v.scheme, v.isDark)
+            val torch = dungeon.torch.copy(alpha = 1f).toArgb()
+            val stonework = listOf("the wall" to dungeon.wall, "a brick" to dungeon.brick, "a mortar line" to dungeon.mortar)
+            val lit = stonework.flatMap { (what, stone) ->
+                (0..10).map { step -> "$what at ${step * 10}% torchlight" to blend(torch, stone.toArgb(), paintAlpha(dungeon.torch.alpha * step / 10f)) }
+            }
+            (listOf("the starfield's sky" to rpgStarSky(v.scheme, v.isDark).toArgb()) + lit).mapNotNull { (where, backdrop) ->
+                val ratio = wcagContrast(v.scheme.onSurface.toArgb(), backdrop)
+                if (ratio < 3.0) "${v.name}: the top bar's title over $where: ${twoPlaces(ratio)}" else null
+            }
+        }
+        assertTrue(failures.take(20).joinToString("\n"), failures.isEmpty())
+    }
 }

@@ -120,6 +120,20 @@ internal fun rpgFrameEdge(scheme: ColorScheme, isDark: Boolean): Color = if (isD
 internal fun rpgLattice(scheme: ColorScheme, isDark: Boolean): Color =
     lerp(scheme.background, scheme.primary, if (isDark) 0.12f else 0.14f)
 
+/** The Starfield backdrop's sky; light themes keep it pale enough for the top bar's title (3:1). */
+internal fun rpgStarSky(scheme: ColorScheme, isDark: Boolean): Color =
+    lerp(scheme.background, Color(0xFF0B1028), if (isDark) 0.62f else 0.18f)
+
+/** The Dungeon backdrop's stonework and torchlight; light themes keep it pale enough for the top bar's title (3:1). */
+internal class RpgDungeonColors(scheme: ColorScheme, isDark: Boolean) {
+    val wall = lerp(scheme.background, Color.Black, if (isDark) 0.38f else 0.1f)
+    val mortar = lerp(wall, Color.Black, if (isDark) 0.5f else 0.08f)
+    val brick = lerp(wall, scheme.primary, 0.08f)
+
+    /** A torch's light in the middle of its pool, fading out toward the edge. */
+    val torch = lerp(scheme.tertiary, Color(0xFFFFB34D), 0.55f).copy(alpha = 0.24f)
+}
+
 /** A gauge's empty trough. */
 internal fun rpgTrough(scheme: ColorScheme, isDark: Boolean): Color =
     if (isDark) lerp(scheme.surfaceContainer, Color.Black, 0.5f) else scheme.surfaceContainerHighest
@@ -179,7 +193,7 @@ fun RpgBackdrop(
                     onDrawBehind { drawRect(brush) }
                 }
                 RpgBackdropScene.STARS -> {
-                    val sky = lerp(scheme.background, Color(0xFF0B1028), if (isDark) 0.62f else 0.28f)
+                    val sky = rpgStarSky(scheme, isDark)
                     val star = lerp(scheme.onBackground, Color.White, 0.5f)
                     onDrawBehind {
                         drawRect(sky)
@@ -192,10 +206,11 @@ fun RpgBackdrop(
                     }
                 }
                 RpgBackdropScene.DUNGEON -> {
-                    val wall = lerp(scheme.background, Color.Black, if (isDark) 0.38f else 0.18f)
-                    val mortar = lerp(wall, Color.Black, 0.5f)
-                    val brick = lerp(wall, scheme.primary, 0.08f)
-                    val glow = lerp(scheme.tertiary, Color(0xFFFFB34D), 0.55f)
+                    val colors = RpgDungeonColors(scheme, isDark)
+                    val wall = colors.wall
+                    val mortar = colors.mortar
+                    val brick = colors.brick
+                    val torchlight = listOf(colors.torch, colors.torch.copy(alpha = 0f))
                     onDrawBehind {
                         drawRect(wall)
                         val course = 26.dp.toPx()
@@ -214,7 +229,7 @@ fun RpgBackdrop(
                             row++
                         }
                         listOf(0.2f, 0.5f, 0.8f).forEach { x ->
-                            drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.24f), Color.Transparent), center = Offset(size.width * x, size.height * 0.46f), radius = 110.dp.toPx()), radius = 110.dp.toPx(), center = Offset(size.width * x, size.height * 0.46f))
+                            drawCircle(Brush.radialGradient(torchlight, center = Offset(size.width * x, size.height * 0.46f), radius = 110.dp.toPx()), radius = 110.dp.toPx(), center = Offset(size.width * x, size.height * 0.46f))
                         }
                     }
                 }
