@@ -406,7 +406,10 @@ keyed on the delay, an idle counter, the route and the binding capture shows it 
 never on `NO_SCREENSAVER_ROUTES` or during a capture. While it shows,
 `MainViewModel.consumeScreensaverInput()` makes the window callback drop keys, and a `BackHandler`
 takes Back, which predictive back delivers without that callback. Input bumps the idle counter only
-while the screensaver could arm, since each bump recomposes the scaffold. The Library's console art
+while the screensaver could arm, since each bump recomposes the scaffold. Dialogs and menus take
+input in windows of their own, so `PhobosAlertDialog`, `PhobosDropdownMenu` and the Driver
+Manager's dialogs call `HoldScreensaver()`, which keeps it from arming while they're open; a new
+dialog or menu outside those should call it too. The Library's console art
 goes through `systemIconSlug` (`ui/PlatformIcons.kt`): Systematic's SVG for the slug, or for the
 Phobos, Pixel and Manga packs a glyph from `ui/theme/PlatformGlyphs.kt` drawn by
 `PlatformGlyphArt.kt`. A new system needs a slug, listed in `systemIconSlugs` with a glyph
