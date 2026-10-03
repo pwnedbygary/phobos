@@ -4,6 +4,7 @@ import android.app.Activity
 import android.net.Uri
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -181,8 +182,13 @@ fun MainScaffold(viewModel: MainViewModel) {
     val retrowave = theme.retrowave
     val style = theme.style
     val settings by viewModel.settings.collectAsState()
+    val capturing by viewModel.controlCapture.target.collectAsState()
     var screensaverVisible by remember { mutableStateOf(false) }
     var idleGeneration by remember { mutableIntStateOf(0) }
+    // Each idle reset recomposes this scaffold, so input resets it only while the screensaver could
+    // arm: not for a game's keys and touches, nor with the screensaver Off.
+    val screensaverCanArm = settings.screensaverDelay.millis != null && route !in NO_SCREENSAVER_ROUTES && capturing == null
+    val canArm by rememberUpdatedState(screensaverCanArm)
 
     fun setScreensaverVisible(visible: Boolean) {
         screensaverVisible = visible
@@ -212,11 +218,9 @@ fun MainScaffold(viewModel: MainViewModel) {
             if (viewModel.screensaverActive.value) {
                 setScreensaverVisible(false)
             }
-            idleGeneration++
+            if (canArm) idleGeneration++
         }
     }
-
-    val capturing by viewModel.controlCapture.target.collectAsState()
 
     // Arm the screensaver after idle; never over the game, bind screens, or an in-progress capture.
     LaunchedEffect(settings.screensaverDelay, idleGeneration, route, capturing) {
@@ -266,10 +270,10 @@ fun MainScaffold(viewModel: MainViewModel) {
         Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            // Idle tracking only while the screensaver is off. Dismissing from Initial here
-            // would tear the overlay down before the same tap is consumed, clicking through.
-            .pointerInput(screensaverVisible) {
-                if (screensaverVisible) return@pointerInput
+            // Idle tracking only while the screensaver is off and could arm. Dismissing from Initial
+            // here would tear the overlay down before the same tap is consumed, clicking through.
+            .pointerInput(screensaverVisible, screensaverCanArm) {
+                if (screensaverVisible || !screensaverCanArm) return@pointerInput
                 awaitPointerEventScope {
                     while (true) {
                         awaitPointerEvent(PointerEventPass.Initial)
@@ -489,6 +493,8 @@ fun MainScaffold(viewModel: MainViewModel) {
         }
 
         if (screensaverVisible) {
+            // Predictive back skips the window callback's key handling, so Back would otherwise leave the page.
+            BackHandler { dismissScreensaver() }
             val dismissInteraction = remember { MutableInteractionSource() }
             Box(
                 Modifier
