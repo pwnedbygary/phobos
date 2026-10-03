@@ -742,6 +742,24 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the VFPU against the user's PSP — 2026-10-03
+
+Branch `cursor/psp-vfpu-measured-2b67`, stacked on the measurement program. The user ran it (firmware 6.61) and
+left `results/` (455 MB) on the RP6; it's in `.local/psp-vfpu-measure/results/`, outside the repository.
+
+- **Findings** ([psp-vfpu-measurements.md](psp-vfpu-measurements.md)): the random number generator matches all
+  263,944 words; `vadd`, `vsub`, `vmul`, `vdiv` match every non-NaN result; the VFPU's NaN is always `0x7f800001`
+  with a sign that depends on the instruction (now in the core, `NaNSign`, so those four match fully); the math
+  functions keep 22 bits and work on fixed-point arguments (sine, cosine, arcsine), and `vdot` sums differently.
+- **In the repository**, as the user chose: the write-up, `tools/psp-vfpu-measure/compare.sh` (checks the core
+  against a results folder), and in `tests/allegrex/measured/` the manifest, the SHA-256 of all 27 files and the
+  generator and arithmetic files (5.2 MB compressed), which a new test group checks the core against. The math
+  tables stay with the user.
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 54 groups pass on the Mac and in `phobos-linux`; reverting
+  `vadd`'s NaN rule fails the new group.
+- **Firmware:** the user chose targeted reverse engineering of their own firmware where measurements can't answer
+  a question, written up as specifications, never code, with the firmware kept out of the repository.
+
 ## PSP core: measuring the VFPU on a real PSP — 2026-10-03
 
 `tools/psp-vfpu-measure`, a homebrew program that records what a PSP's VFPU computes (math functions over their

@@ -195,6 +195,8 @@ toolchain in `/opt/pspdev`). On a PSP with custom firmware it writes, beside its
   seeds (some chosen to exercise the carry), and `vrndi.q`'s lane order;
 - `vadd`, `vsub`, `vmul`, `vdiv` and `vdot` on spread-out inputs (every sign, size, denormal, infinity and NaN).
 
-`manifest.txt` says how each file's inputs are made; the files hold only the hardware's results. The next step,
-once the user has run it: fit the functions to those results on the host, as the hardware computes them, check
-the generator's carry, and compare the arithmetic's edge cases.
+`manifest.txt` says how each file's inputs are made; the files hold only the hardware's results. The user ran it
+on 2026-10-03 (firmware 6.61): [psp-vfpu-measurements.md](psp-vfpu-measurements.md) has the results and findings.
+The random number generator matched every word; `vadd`, `vsub`, `vmul` and `vdiv` matched every non-NaN result,
+and match NaNs too now that the core gives the VFPU's own NaN (`NaNSign`); the math functions and `vdot` are next.
+`tests/allegrex/measured/` keeps the generator and arithmetic files, which the tests check the core against.

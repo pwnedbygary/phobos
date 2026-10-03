@@ -268,18 +268,33 @@ auto Allegrex::vfpuRandom() -> u32 {
   return a + b + d;
 }
 
-template<typename F> auto Allegrex::vfpuUnary(u8 vd, u8 vs, u32 size, F function) -> void {
+//A NaN result becomes the VFPU's own NaN (see NaNSign in allegrex.hpp); s and t are the inputs it came from.
+auto Allegrex::vfpuNaN(u32 result, NaNSign sign, u32 s, u32 t) const -> u32 {
+  bool isNaN = (result & 0x7f80'0000) == 0x7f80'0000 && (result & 0x7f'ffff);
+  if(!isNaN || sign == NaNSign::Unknown) return result;
+  switch(sign) {
+  case NaNSign::Input: return 0x7f80'0001 | (s & 0x8000'0000);
+  case NaNSign::Negated: return 0x7f80'0001 | (~s & 0x8000'0000);
+  case NaNSign::Product: return 0x7f80'0001 | ((s ^ t) & 0x8000'0000);
+  default: return 0x7f80'0001;
+  }
+}
+
+template<typename F> auto Allegrex::vfpuUnary(u8 vd, u8 vs, u32 size, F function, NaNSign sign) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
   Vector d{};
-  for(u32 i : range(size)) d.lane[i] = vfpuBits(function(vfpuFloat(s.lane[i])));
+  for(u32 i : range(size)) d.lane[i] = vfpuNaN(vfpuBits(function(vfpuFloat(s.lane[i]))), sign, s.lane[i]);
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
-template<typename F> auto Allegrex::vfpuBinary(u8 vd, u8 vs, u8 vt, u32 size, F function) -> void {
+template<typename F> auto Allegrex::vfpuBinary(u8 vd, u8 vs, u8 vt, u32 size, F function, NaNSign sign) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
   auto t = vfpuRead(vt, size, vfpu.pfxt);
   Vector d{};
-  for(u32 i : range(size)) d.lane[i] = vfpuBits(function(vfpuFloat(s.lane[i]), vfpuFloat(t.lane[i])));
+  for(u32 i : range(size)) {
+    u32 result = vfpuBits(function(vfpuFloat(s.lane[i]), vfpuFloat(t.lane[i])));
+    d.lane[i] = vfpuNaN(result, sign, s.lane[i], t.lane[i]);
+  }
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
@@ -380,12 +395,12 @@ auto Allegrex::VABS(u8 vd, u8 vs, u32 size) -> void {
 }
 
 auto Allegrex::VADD(u8 vd, u8 vs, u8 vt, u32 size) -> void {
-  vfpuBinary(vd, vs, vt, size, [](f32 s, f32 t) { return s + t; });
+  vfpuBinary(vd, vs, vt, size, [](f32 s, f32 t) { return s + t; }, NaNSign::Positive);
 }
 
 //arcsine, in quarter turns
 auto Allegrex::VASIN(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return std::asin((f64)s) / QuarterTurn; });
+  vfpuUnary(vd, vs, size, [](f32 s) { return std::asin((f64)s) / QuarterTurn; }, NaNSign::Input);
 }
 
 //vfad adds up the lanes into one value; vavg averages them.
@@ -460,7 +475,7 @@ auto Allegrex::VCMP(u8 condition, u8 vs, u8 vt, u32 size) -> void {
 
 //cosine, of quarter turns
 auto Allegrex::VCOS(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return quarterCos(s); });
+  vfpuUnary(vd, vs, size, [](f32 s) { return quarterCos(s); }, NaNSign::Positive);
 }
 
 //vcrs.t: the two halves of a cross product, (sy * tz, sz * tx, sx * ty); subtracting the other half (vcrs with
@@ -505,7 +520,7 @@ auto Allegrex::VDET(u8 vd, u8 vs, u8 vt, u32 size) -> void {
 }
 
 auto Allegrex::VDIV(u8 vd, u8 vs, u8 vt, u32 size) -> void {
-  vfpuBinary(vd, vs, vt, size, [](f32 s, f32 t) { return s / t; });
+  vfpuBinary(vd, vs, vt, size, [](f32 s, f32 t) { return s / t; }, NaNSign::Product);
 }
 
 //vdot: the dot product of rs and rt (each lane of one times the same lane of the other, all added up), into one
@@ -515,7 +530,7 @@ auto Allegrex::VDOT(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto t = vfpuRead(vt, size, vfpu.pfxt);
   f64 sum = 0;
   for(u32 i : range(size)) sum += (f64)vfpuFloat(s.lane[i]) * vfpuFloat(t.lane[i]);
-  Vector d{{vfpuBits(sum)}};
+  Vector d{{vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0)}};
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
 
@@ -525,7 +540,7 @@ auto Allegrex::VEXP2(u8 vd, u8 vs, u32 size) -> void {
     if(s >= 128.0f) return std::numeric_limits<f64>::infinity();
     if(s <= -127.0f) return 0.0;
     return std::exp2((f64)s);
-  });
+  }, NaNSign::Positive);
 }
 
 //vf2h: pairs of floats into pairs of half floats packed in one lane, so a quad becomes a pair.
@@ -668,7 +683,7 @@ auto Allegrex::VLGB(u8 vd, u8 vs, u32 size) -> void {
 }
 
 auto Allegrex::VLOG2(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return std::log2(s); });
+  vfpuUnary(vd, vs, size, [](f32 s) { return std::log2(s); }, NaNSign::Positive);
 }
 
 auto Allegrex::VMAX(u8 vd, u8 vs, u8 vt, u32 size) -> void {
@@ -740,7 +755,7 @@ auto Allegrex::VMTVC(u8 index, u8 vs) -> void {
 }
 
 auto Allegrex::VMUL(u8 vd, u8 vs, u8 vt, u32 size) -> void {
-  vfpuBinary(vd, vs, vt, size, [](f32 s, f32 t) { return s * t; });
+  vfpuBinary(vd, vs, vt, size, [](f32 s, f32 t) { return s * t; }, NaNSign::Product);
 }
 
 auto Allegrex::VMZERO(u8 vd, u32 size) -> void {
@@ -761,12 +776,12 @@ auto Allegrex::VNOP() -> void {
 
 //-1/x
 auto Allegrex::VNRCP(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return -1.0f / s; });
+  vfpuUnary(vd, vs, size, [](f32 s) { return -1.0f / s; }, NaNSign::Negated);
 }
 
 //minus the sine, of quarter turns
 auto Allegrex::VNSIN(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return -quarterSin(s); });
+  vfpuUnary(vd, vs, size, [](f32 s) { return -quarterSin(s); }, NaNSign::Negated);
 }
 
 //1 - x ("one's complement" of a value between 0 and 1)
@@ -811,7 +826,7 @@ auto Allegrex::VQMUL(u8 vd, u8 vs, u8 vt, u32) -> void {
 
 //1/x
 auto Allegrex::VRCP(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return 1.0f / s; });
+  vfpuUnary(vd, vs, size, [](f32 s) { return 1.0f / s; }, NaNSign::Input);
 }
 
 //2 to the power of -x
@@ -820,7 +835,7 @@ auto Allegrex::VREXP2(u8 vd, u8 vs, u32 size) -> void {
     if(s >= 127.0f) return 0.0;
     if(s <= -128.0f) return std::numeric_limits<f64>::infinity();
     return std::exp2(-(f64)s);
-  });
+  }, NaNSign::Positive);
 }
 
 //vrndf1 and vrndf2: random floats from 1 up to 2, or from 2 up to 4 (a random mantissa under a fixed exponent).
@@ -870,7 +885,7 @@ auto Allegrex::VROT(u8 vd, u8 vs, u32 size, u8 placement) -> void {
 
 //1/sqrt(x)
 auto Allegrex::VRSQ(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return 1.0 / std::sqrt((f64)s); });
+  vfpuUnary(vd, vs, size, [](f32 s) { return 1.0 / std::sqrt((f64)s); }, NaNSign::Input);
 }
 
 //vs2i and vus2i: each lane's two halfwords into two lanes, as the top halfword of an integer (vs2i), or scaled up
@@ -938,7 +953,7 @@ auto Allegrex::VSGN(u8 vd, u8 vs, u32 size) -> void {
 
 //sine, of quarter turns
 auto Allegrex::VSIN(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return quarterSin(s); });
+  vfpuUnary(vd, vs, size, [](f32 s) { return quarterSin(s); }, NaNSign::Input);
 }
 
 auto Allegrex::VSLT(u8 vd, u8 vs, u8 vt, u32 size) -> void {
@@ -960,7 +975,7 @@ auto Allegrex::VSOCP(u8 vd, u8 vs, u32 size) -> void {
 }
 
 auto Allegrex::VSQRT(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnary(vd, vs, size, [](f32 s) { return std::sqrt(s); });
+  vfpuUnary(vd, vs, size, [](f32 s) { return std::sqrt(s); }, NaNSign::Positive);
 }
 
 //vsrt1-vsrt4.q: the four passes of a sorting network over a quad's lanes, each putting pairs of lanes in order
@@ -984,7 +999,7 @@ auto Allegrex::VSRT(u8 vd, u8 vs, u32 size, u32 pass) -> void {
 }
 
 auto Allegrex::VSUB(u8 vd, u8 vs, u8 vt, u32 size) -> void {
-  vfpuBinary(vd, vs, vt, size, [](f32 s, f32 t) { return s - t; });
+  vfpuBinary(vd, vs, vt, size, [](f32 s, f32 t) { return s - t; }, NaNSign::Positive);
 }
 
 //vsync and vflush wait for the VFPU's pipeline, or its writes to memory, to finish: there's nothing to wait for
