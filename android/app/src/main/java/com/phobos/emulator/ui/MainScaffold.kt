@@ -117,7 +117,8 @@ private val NO_SCREENSAVER_ROUTES = setOf(
 
 /**
  * The dialogs and menus open over the pages. They take input in windows of their own, which the idle
- * timer doesn't see, so the screensaver waits until none is open and then times from zero.
+ * timer doesn't see, so the screensaver waits until none is open, however long that is, and then
+ * times from zero.
  */
 class ScreensaverHold {
     var count by mutableIntStateOf(0)
@@ -129,7 +130,11 @@ class ScreensaverHold {
 
 val LocalScreensaverHold = staticCompositionLocalOf { ScreensaverHold() }
 
-/** Holds the screensaver off while this is composed: call it from an open dialog or menu. */
+/**
+ * Holds the screensaver off while this is composed: call it from an open dialog or menu. It counts
+ * only under the hold [MainScaffold] provides, to the pages and to its own dialogs; elsewhere the
+ * default hold is one nothing reads.
+ */
 @Composable
 fun HoldScreensaver() {
     val hold = LocalScreensaverHold.current
@@ -276,9 +281,9 @@ fun MainScaffold(viewModel: MainViewModel) {
         onDispose {}
     }
     // Faded rather than removed so leaving for the game doesn't pop mid-transition; nothing is
-    // drawn behind the running game.
+    // drawn behind the running game, nor behind the screensaver, whose own scene covers the pages.
     val backdropFade = animateFloatAsState(
-        targetValue = if (route != EMULATOR_ROUTE && route != TOUCH_EDITOR_ROUTE) 1f else 0f,
+        targetValue = if (route != EMULATOR_ROUTE && route != TOUCH_EDITOR_ROUTE && !screensaverVisible) 1f else 0f,
         animationSpec = tween(500),
         label = "backdrop",
     )
