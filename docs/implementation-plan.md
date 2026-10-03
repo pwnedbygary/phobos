@@ -167,8 +167,10 @@ lands as its own PR; the inventory rows below have the details.
    .zsync, a Windows x64 Phobos.exe and a universal macOS app, running the same
    cores and runner without the Turnip installer. First cut on branch
    `cursor/desktop-phobos-ports-a292`
-   ([PR #80](https://github.com/pwnedbygary/phobos/pull/80)); see the
-   [handoff](handoff.md#desktop-builds--2026-10-02). Its SDL shell is a
+   ([PR #80](https://github.com/pwnedbygary/phobos/pull/80)), rebased onto
+   master on 2026-10-03 as `cursor/desktop-phobos-2b67`
+   ([PR #97](https://github.com/pwnedbygary/phobos/pull/97)), which replaces
+   it; see the [handoff](handoff.md#desktop-builds--2026-10-02). Its SDL shell is a
    placeholder: the user wants the desktop UI at parity with the Android app's,
    and accepts the placeholder until then.
 

@@ -74,6 +74,7 @@ private:
   auto chooseFolder() -> void;
   auto open(const std::string& path) -> void;
   auto launch(const Game& entry) -> void;
+  auto unloadGame() -> void;
   auto quitGame() -> void;
   auto openMenu() -> void;
   auto closeMenu() -> void;
@@ -305,6 +306,8 @@ auto Shell::launch(const Game& entry) -> void {
   if (!missing.empty()) {
     return show("Missing " + firmwareName((const char*)missing[0]) + ": put it in " + firmwareFolder);
   }
+  // A game dropped on a running one: the runner's per-game keys below must not change until that one is saved.
+  if (game) unloadGame();
   applySettings();
   const auto& file = entry.discs.front();
   ares::setMemoryCardKey(withoutDiscNumber(entry.title).c_str());
@@ -327,7 +330,8 @@ auto Shell::launch(const Game& entry) -> void {
   SDL_SetWindowTitle(window, ("Phobos - " + entry.title).c_str());
 }
 
-auto Shell::quitGame() -> void {
+// Saves and unloads the running game and goes back to the library.
+auto Shell::unloadGame() -> void {
   releaseKeys();
   input.rumble(false);
   ares::setEmulationRunning(false);
@@ -335,6 +339,10 @@ auto Shell::quitGame() -> void {
   game.reset();
   screen = Screen::Library;
   SDL_SetWindowTitle(window, "Phobos");
+}
+
+auto Shell::quitGame() -> void {
+  unloadGame();
   if (launchedWithGame) quit = true;
 }
 

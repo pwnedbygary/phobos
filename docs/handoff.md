@@ -450,9 +450,11 @@ Local builds for performance numbers must use NDK 28.2 (the CI toolchain).
 
 ## Desktop builds — 2026-10-02
 
-Branch `cursor/desktop-phobos-ports-a292` ([PR #80](https://github.com/pwnedbygary/phobos/pull/80)),
+Branch `cursor/desktop-phobos-2b67` ([PR #97](https://github.com/pwnedbygary/phobos/pull/97)),
 at the user's request: Phobos for Linux (AppImage + .zsync), Windows (Phobos.exe) and macOS
-(universal Phobos.app), alongside the Android app.
+(universal Phobos.app), alongside the Android app. The first cut was
+`cursor/desktop-phobos-ports-a292` ([PR #80](https://github.com/pwnedbygary/phobos/pull/80));
+see "Rebased onto master" below.
 
 - Build: `CMakeLists.txt` builds the cores, mia and the runner as `phobos_core`. Android links it
   into `libphobos_android.so` with the old flags and libadrenotools; elsewhere it links into the
@@ -497,6 +499,38 @@ untested); audio output; gamepads and rumble; the independent review that
 
 Next: UI parity with the Android app (the user's direction); N64 on real desktop GPUs, including
 MoltenVK; MSVC/clang-cl is not supported (the runner's threads use pthreads; MinGW provides them).
+
+Rebased onto master (2026-10-03, the user's choice): #80's 11 commits replayed in order on master
+with `git cherry-pick -x`, authors kept, in a new PR; #80 is closed. The two conflicts were next to
+code master added: the LaserActive side functions in `PhobosRunner.cpp/.hpp`, just ahead of the
+`setSurface` that #80 limits to Android, and plan item 7's "Parked" note. Master's runner code since
+#80's base calls nothing Android-only, so the desktop build takes it unchanged. On top of that:
+- The independent review of #80 (Bugbot, posted on #80) found that a game dropped on a running one
+  skipped the key and rumble reset. The same path had a worse problem: `launch()` set the runner's
+  per-game keys (memory card key, ROM path) before `initialize()`, which only then unloads the
+  running game, so its battery save, PS1 memory cards and MSX data tape were written under the new
+  game's name (over the new game's own saves when both are for the same system). `launch()` now
+  unloads the running game first through `unloadGame()`, the teardown `quitGame()` did, without
+  quitting a frontend's session. If the new game then fails to start, the library shows instead of
+  the stopped game. Android isn't affected: `startLoad()` unloads before every load.
+- Not on desktop yet (part of UI parity): the systems added since #80's base (Mega LD, PC Engine LD,
+  Pocket Challenge V2) aren't in `desktop/Library.cpp`'s table, and the LaserActive BIOSes aren't in
+  `desktop/Firmware.cpp`'s copies of the app's firmware maps. The desktop also lacks the app's
+  request for an MSX BIOS with BASIC before a tape starts (`msxFirmwareMissing()`), the MSX tape
+  deck and data tape controls, and LaserActive side changes.
+
+Checks run (2026-10-03, Mac M1 + Retroid Pocket 6 `49016109`):
+- macOS arm64, native rather than the universal preset (Apple clang 17, CMake 4.4.3, Xcode's macOS
+  15.4 SDK; SDL 3.2.30 needs CMake 3.24 or later on macOS, so the Android SDK's 3.22.1 can't
+  configure it): builds. Two homemade 16 KiB MSX cartridges run on the bundled C-BIOS at 60 FPS,
+  with sound through SDL. Handing the second one to the running program (`open -a` on a throwaway
+  app bundle, which SDL delivers as a drop) writes the first game's saves under its own name
+  ("[Blue]") and starts the second. A build of #80's `main.cpp` wrote them as "[Red]".
+- Android: `./gradlew testModernDebugUnitTest assembleModernRelease` succeeds; the 240 tests pass,
+  and all 92 JNI functions the build compiles are exported. On the RP6, an MSX cartridge paused,
+  resumed and quit: AAudio stopped, restarted, and stayed open for the next game, which played
+  sound. Sub-Terrania, Mario Tennis (Turnip through adrenotools) and Ape Escape ran at 60 FPS with
+  sound, as they did in the boot pass on master.
 
 ## Touch controls overhaul and performance scan — 2026-09-24 (in progress)
 
