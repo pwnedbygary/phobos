@@ -205,3 +205,21 @@ on 2026-10-03 (firmware 6.61): [psp-vfpu-measurements.md](psp-vfpu-measurements.
 The random number generator matched every word; `vadd`, `vsub`, `vmul` and `vdiv` matched every non-NaN result,
 and match NaNs too now that the core gives the VFPU's own NaN (`NaNSign`); the math functions and `vdot` are next.
 `tests/allegrex/measured/` keeps the generator and arithmetic files, which the tests check the core against.
+
+The program asks which round to run when it starts: O for that first round, X for the second (about 230 MB,
+`manifest2.txt`), for what the first couldn't settle:
+
+- `vlog2` over a whole binade for each size its results take above 4 (from 4, 16, 2^8, 2^16, 2^32 and 2^64);
+- dot products, sums and averages built to show how the VFPU adds several numbers: one product, two, four of a
+  similar size, exact products of short significands (`vdot`, `vhdp`, `vfad`, `vavg`);
+- every half float through `vh2f`, and a million floats through `vf2h`;
+- `div` and `divu` (division by zero included), and the FPU's conversions and arithmetic in each rounding mode;
+- the instruction recorder: every VFPU instruction, size and immediate pspdev's assembler accepts (1216 entries in
+  `ops.h`, from `ops.py`: `vwbn`'s 256 immediates, `vrot`'s 32 placements, every `vcmp` condition and constant,
+  and 240 random prefix combinations), each copied into a tiny function and run on 64 random register states,
+  recording matrix 2 and the condition codes. A real PSP stops a program at an instruction it doesn't have, which
+  is why only what the assembler accepts is in it, and why it runs last.
+
+`make SMOKE=1` builds a quick version (round 2 straight away, the big tests cut short) for trying the program in
+PPSSPP's PPSSPPHeadless first, which `phobos-linux` has in `/opt/tools/ppsspp`; it says nothing about a PSP.
+`compare.sh` checks whatever files a folder has, from either round.
