@@ -88,7 +88,6 @@ import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.zip.CRC32
 import java.util.zip.ZipInputStream
 import kotlin.math.roundToInt
 
@@ -100,6 +99,11 @@ import com.phobos.emulator.util.AppUpdater
 import com.phobos.emulator.util.DriverAsset
 import com.phobos.emulator.util.DriverDownloader
 import com.phobos.emulator.util.DriverSource
+import com.phobos.emulator.util.FirmwareCandidate
+import com.phobos.emulator.util.FirmwareContent
+import com.phobos.emulator.util.FirmwareIds
+import com.phobos.emulator.util.FirmwareStatus
+import com.phobos.emulator.util.GameFileRoute
 import com.phobos.emulator.util.N64SaveFormat
 import com.phobos.emulator.util.N64SaveImportPlan
 import com.phobos.emulator.util.N64SaveKind
@@ -108,7 +112,11 @@ import com.phobos.emulator.util.N64SaveTransfer
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.cueTracks
 import com.phobos.emulator.util.cueWithTracksIn
+import com.phobos.emulator.util.firmwareAssignments
+import com.phobos.emulator.util.firmwareContentOf
+import com.phobos.emulator.util.gameFileRoute
 import com.phobos.emulator.util.groupDiscSets
+import com.phobos.emulator.util.isZipSignature
 import com.phobos.emulator.util.m3uEntries
 import com.phobos.emulator.util.m3uEntryPath
 import com.phobos.emulator.util.newerDriverRelease
@@ -137,6 +145,9 @@ data class LaunchChoice(val rom: RomFile, val candidates: List<String>)
 
 /** A game that wasn't started because its [system] lacks the firmware [keys] ([PhobosCore.missingFirmware]). */
 data class FirmwareRequired(val system: String, val keys: List<String>)
+
+/** A game of a [system] whose games aren't copied, which wasn't started because it can't be read at [location]. */
+data class DiscNotReadable(val system: String, val location: String)
 
 /** Where an update of Phobos itself stands (Settings → About). */
 sealed interface AppUpdateState {
@@ -237,9 +248,6 @@ class MainViewModel(
         private const val PREVIEW_MAX_WIDTH = 320
         // mia_temp's folder for the track files of the .cue sheets in play.
         private const val CUE_TRACKS = "cue_tracks"
-        // CD systems whose mia media only read their discs (their save() writes nothing), so a disc can
-        // load where it is instead of from a copy.
-        private val IN_PLACE_SYSTEMS = setOf("PlayStation", "Mega CD", "Mega CD 32X", "PC Engine CD", "Neo Geo CD")
         // Systems whose disc native code can change while the game runs; the other CD systems read a disc from the start.
         private val DISC_SWAP_SYSTEMS = setOf("PlayStation")
         // The firmware keys each system's pak() in PhobosRunner.cpp reads, so a load copies only what its game can
@@ -251,12 +259,15 @@ class MainViewModel(
             val gameBoy = setOf("fw_gb_boot", "fw_gbc_boot")
             val pocket = setOf("fw_ngp", "fw_ngpc")
             val zx = setOf("fw_zx48", "fw_zx128", "fw_zx128_sub")
+            val laserSega = setOf("fw_laseractive_sega_us", "fw_laseractive_sega_jp")
+            val laserNec = setOf("fw_laseractive_nec_us", "fw_laseractive_nec_jp", "fw_laseractive_nec_lp")
             mapOf(
                 "PlayStation" to setOf("fw_psx_us", "fw_psx_jp", "fw_psx_eu"),
                 "Mega Drive" to megaCd,
                 "Mega CD" to megaCd,
                 "Mega 32X" to megaCd + mega32x,
                 "Mega CD 32X" to megaCd + mega32x,
+                "Mega LD" to laserSega,
                 "Nintendo 64" to setOf("fw_n64_pif_ntsc", "fw_n64_pif_pal", "fw_n64dd_us", "fw_n64dd_jp", "fw_n64dd_dev"),
                 "Neo Geo CD" to setOf("fw_ng_cd"),
                 "Neo Geo Pocket" to pocket,
@@ -268,6 +279,7 @@ class MainViewModel(
                 "ColecoVision" to setOf("fw_coleco"),
                 "PC Engine" to pceCd,
                 "PC Engine CD" to pceCd,
+                "PC Engine LD" to laserNec,
                 "SuperGrafx" to pceCd,
                 "ZX Spectrum" to zx,
                 "ZX Spectrum 128" to zx,
@@ -275,6 +287,8 @@ class MainViewModel(
         }
         // Systems whose pak() reads neogeo.zip (the BIOS, and the LSPC zoom table the Neo Geo CD shares).
         private val NEOGEO_ZIP_SYSTEMS = setOf("Neo Geo", "Neo Geo CD")
+        // The biggest BIOS is a few MiB (the 64DD IPL is 4); a scan skips anything larger than this unread.
+        private const val MAX_FIRMWARE_SIZE = 32L * 1024 * 1024
         // Arcade Aleck64 sets resolve parent ROMs from aleck64.zip beside the game zip.
         private val ARCADE_ZIP_SYSTEMS = setOf("Arcade")
     }
@@ -1475,7 +1489,7 @@ class MainViewModel(
     }
 
     // Unsupported-system popup (set when a broken core's load is refused —
-    // ZX Spectrum 128, PC Engine, PC Engine CD, SuperGrafx, Neo Geo).
+    // ZX Spectrum 128).
     // Holds the system NAME to show in the dialog; null = no popup.
     private val _unsupportedSystem = MutableStateFlow<String?>(null)
     val unsupportedSystem: StateFlow<String?> = _unsupportedSystem
@@ -1490,6 +1504,10 @@ class MainViewModel(
     private val _firmwareRequired = MutableStateFlow<FirmwareRequired?>(null)
     val firmwareRequired: StateFlow<FirmwareRequired?> = _firmwareRequired
     fun dismissFirmwareRequired() { _firmwareRequired.value = null }
+
+    private val _discNotReadable = MutableStateFlow<DiscNotReadable?>(null)
+    val discNotReadable: StateFlow<DiscNotReadable?> = _discNotReadable
+    fun dismissDiscNotReadable() { _discNotReadable.value = null }
 
     // When the Neo Geo BIOS was present but the ROM still failed to load, the
     // failure is the ROM itself (e.g. it isn't actually a Neo Geo MVS/AES game,
@@ -2214,311 +2232,84 @@ class MainViewModel(
         }.getOrNull()
     }
 
-    private val biosMap = mapOf(
-        "scph5501.bin" to "fw_psx_us",
-        "scph5500.bin" to "fw_psx_jp",
-        "scph5502.bin" to "fw_psx_eu",
-        "scph101.bin" to "fw_psx_us_v45",
-        "neogeo.zip" to "fw_ng_bios",
-        "aleck64.zip" to "fw_aleck64",
-        "aes.zip" to "fw_ng_aes",
-        "neocd.zip" to "fw_ng_cd",
-        "neocd.bin" to "fw_ng_cd",
-        "ngcd.zip" to "fw_ng_cd",
-        "ngcd.bin" to "fw_ng_cd",
-        "ngp.zip" to "fw_ngp",
-        "ngpc.zip" to "fw_ngpc",
-        "ngp.bin" to "fw_ngp",
-        "ngpc.bin" to "fw_ngpc",
-        "Neo Geo Pocket - BIOS (World).bin" to "fw_ngp",
-        "Neo Geo Pocket Color - BIOS (World).bin" to "fw_ngpc",
-        "64dd_ipl.bin" to "fw_n64dd_jp",
-        "n64dd_ipl.bin" to "fw_n64dd_jp",
-        "n64dd_ipl_jp.bin" to "fw_n64dd_jp",
-        "n64dd_ipl_us.bin" to "fw_n64dd_us",
-        "n64dd_ipl_dev.bin" to "fw_n64dd_dev",
-        "[bios] nintendo 64dd ipl (japan) (v1.0).zip" to "fw_n64dd_jp",
-        "[bios] nintendo 64dd ipl (japan) (v1.2).zip" to "fw_n64dd_jp",
-        "[bios] nintendo 64dd ipl (usa) (proto).zip" to "fw_n64dd_us",
-        "[bios] nintendo 64dd ipl (usa) (proto) (v1.0).zip" to "fw_n64dd_us",
-        "[bios] nintendo 64dd ipl (usa) (proto) (v1.1).zip" to "fw_n64dd_us",
-        "nintendo 64dd ipl (japan).bin" to "fw_n64dd_jp",
-        "nintendo 64dd ipl (usa) (proto).bin" to "fw_n64dd_us",
-        "pif.ntsc.rom" to "fw_n64_pif_ntsc",
-        "pif.pal.rom" to "fw_n64_pif_pal",
-        "segacd_usa.bin" to "fw_mcd_us",
-        "segacd_jp.bin" to "fw_mcd_jp",
-        "segacd_eu.bin" to "fw_mcd_eu",
-        "mcd_v1_10.bin" to "fw_mcd_us",
-        "bios_cd_u.bin" to "fw_mcd_us",
-        "mcd_v1_10j.bin" to "fw_mcd_jp",
-        "bios_cd_j.bin" to "fw_mcd_jp",
-        "mcd_v1_10e.bin" to "fw_mcd_eu",
-        "bios_cd_e.bin" to "fw_mcd_eu",
-        "32x_g_bios.bin" to "fw_32x_g",
-        "32x_m_bios.bin" to "fw_32x_m",
-        "32x_s_bios.bin" to "fw_32x_s",
-        "sh2.boot.mrom" to "fw_32x_m",
-        "sh2.boot.srom" to "fw_32x_s",
-        "syscard1.pce" to "fw_pce_cd_1_jp",
-        "syscard3.pce" to "fw_pce_cd_3_jp",
-        "syscard3u.pce" to "fw_pce_cd_3_us",
-        "syscard3us.pce" to "fw_pce_cd_3_us",
-        "gexpress.pce" to "fw_pce_cd_ge_jp",
-        "disksys.rom" to "fw_fds",
-        "coleco.rom" to "fw_coleco",
-        "colecovision.rom" to "fw_coleco",
-        "gba_bios.bin" to "fw_gba",
-        "dmg_boot.bin" to "fw_gb_boot",
-        "cgb_boot.bin" to "fw_gbc_boot",
-        "sgb_boot.bin" to "fw_sgb_boot",
-        // Super Game Boy / SGB2 cartridge dumps (not the 256-byte SM83 boot ROM).
-        "sgb.sfc" to "fw_sgb1",
-        "sgb.smc" to "fw_sgb1",
-        "sgb1.sfc" to "fw_sgb1",
-        "sgb1.smc" to "fw_sgb1",
-        "super game boy.sfc" to "fw_sgb1",
-        "super game boy.smc" to "fw_sgb1",
-        "sgb2.sfc" to "fw_sgb2",
-        "sgb2.smc" to "fw_sgb2",
-        "super game boy 2.sfc" to "fw_sgb2",
-        "super game boy 2.smc" to "fw_sgb2",
-        // Alternate filenames
-        "gb_bios.bin" to "fw_gb_boot",
-        "gbc_bios.bin" to "fw_gbc_boot",
-        "bios_u.sms" to "fw_ms_us",
-        "bios_j.sms" to "fw_ms_jp",
-        "bios_e.sms" to "fw_ms_eu",
-        "msx.rom" to "fw_msx",
-        "msx2.rom" to "fw_msx2_main",
-        "msx2ext.rom" to "fw_msx2_sub",
-        "gg_bios.bin" to "fw_gg",
-        "game_gear_bios.bin" to "fw_gg",
-        // Common PSX BIOS filenames
-        "scph1000.bin" to "fw_psx_jp",
-        "scph1001.bin" to "fw_psx_us",
-        "scph7001.bin" to "fw_psx_us",
-        "scph7003.bin" to "fw_psx_eu",
-        "scph7502.bin" to "fw_psx_eu",
-        // FDS alternate
-        "fds.rom" to "fw_fds",
-        // ZX Spectrum 48K system ROM (ares's copy is used when none is set)
-        "48.rom" to "fw_zx48",
-        "zx48.rom" to "fw_zx48",
-        "zxspectrum.rom" to "fw_zx48",
-        "spectrum.rom" to "fw_zx48",
-        "zx spectrum 48k.rom" to "fw_zx48",
-        "zx spectrum (48k).rom" to "fw_zx48",
-        "[bios] zx spectrum (48k).rom" to "fw_zx48",
-        "sinclair zx spectrum.rom" to "fw_zx48",
-        // ZX Spectrum 128 BIOS + SUB (e.g. Fuse 128-0.rom / 128-1.rom)
-        "128-0.rom" to "fw_zx128",
-        "128_0.rom" to "fw_zx128",
-        "1280.rom" to "fw_zx128",
-        "zx128.rom" to "fw_zx128",
-        "zx spectrum 128.rom" to "fw_zx128",
-        "[bios] zx spectrum 128.rom" to "fw_zx128",
-        "128-1.rom" to "fw_zx128_sub",
-        "128_1.rom" to "fw_zx128_sub",
-        "1281.rom" to "fw_zx128_sub",
-        "zx128_sub.rom" to "fw_zx128_sub"
-    )
+    /**
+     * What native code reads from a firmware file, by content ([firmwareContentOf]); null when it can't be read,
+     * with [permissionLost] when that's because Android no longer lets the app open it (a pick whose grant
+     * wasn't kept), which only picking the file again can undo.
+     */
+    private class FirmwareRead(val content: FirmwareContent?, val permissionLost: Boolean = false)
 
-    // Firmware key aliases: when one key matches via scan, also populate its aliases.
-    // E.g. neogeo.zip → fw_ng_bios should also show under fw_ng_aes and fw_ng_mvs.
-    private val biosAliases = mapOf(
-        "fw_ng_bios" to listOf("fw_ng_aes", "fw_ng_mvs"),
-        "fw_ng_aes"  to listOf("fw_ng_bios", "fw_ng_mvs"),
-        "fw_ng_mvs"  to listOf("fw_ng_bios", "fw_ng_aes"),
-    )
-
-    // Keyword-based heuristic firmware matching.  Works for ANY filename
-    // convention — only checks whether the name contains recognizable keywords.
-    private fun keywordFirmwareMatch(name: String): String? {
-        // N64DD IPL: contains both "64dd" and "ipl"
-        if (name.contains("64dd") && name.contains("ipl")) {
-            if (name.contains("dev")) return "fw_n64dd_dev"
-            if (name.contains("usa") || name.contains("(us") || name.contains("proto")) return "fw_n64dd_us"
-            return "fw_n64dd_jp"
-        }
-        // Super Game Boy cartridge (not the tiny SM83 boot ROM named sgb_boot).
-        if (name.contains("sgb") && !name.contains("boot")) {
-            if (name.contains("sgb2") || name.contains("game boy 2") || name.contains("gameboy2")) return "fw_sgb2"
-            return "fw_sgb1"
-        }
-        if (name.contains("super game boy") || name.contains("supergameboy")) {
-            if (name.contains("2")) return "fw_sgb2"
-            return "fw_sgb1"
-        }
-        return null
+    private fun readFirmware(context: Context, uri: Uri): FirmwareRead = try {
+        FirmwareRead(context.contentResolver.openInputStream(uri)?.use { firmwareContentOf(it) })
+    } catch (e: SecurityException) {
+        Log.e("Phobos", "Firmware: no longer allowed to read $uri")
+        FirmwareRead(null, permissionLost = true)
+    } catch (e: Exception) {
+        Log.e("Phobos", "Firmware: couldn't read $uri: ${e.message}")
+        FirmwareRead(null)
     }
 
-    private val biosCrcMap = mapOf(
-        "1105ca35" to "fw_psx_us", // SCPH-5501
-        "ff3d245b" to "fw_psx_jp", // SCPH-5500
-        "3273398d" to "fw_psx_eu", // SCPH-5502
-        "74360e22" to "fw_n64dd_jp", // N64DD IPL (JP)
-        "5ec82be9" to "fw_n64_pif_sm5", // N64 PIF SM5
-        "4353387a" to "fw_n64_pif_ntsc", // N64 PIF NTSC
-        "59b859e7" to "fw_n64_pif_pal",   // N64 PIF PAL
-        "32fce34a" to "fw_gb_boot",      // DMG Boot ROM
-        "ebf565e8" to "fw_gbc_boot",     // CGB Boot ROM
-        "e03ee2d7" to "fw_sgb_boot",      // SGB Boot ROM
-        // ColecoVision
-        "3c0c41ef" to "fw_coleco",  // ColecoVision BIOS (std 8KB)
-        "6605af34" to "fw_coleco",  // ColecoVision BIOS variant
-        "ff0ecca5" to "fw_coleco",  // BIOS.col
-        "c8338226" to "fw_coleco",  // colecoa.rom
-        "32584700" to "fw_coleco",  // Coleco_Bios.bin
-        "df1c9a84" to "fw_coleco",  // czz50.rom
-        // Common PSX BIOS CRC variants
-        "924e3926" to "fw_psx_us",      // SCPH-1001
-        "55847d8c" to "fw_psx_jp",      // SCPH-1000
-        "a56e4c9e" to "fw_psx_eu",      // SCPH-7003
-        "f7b04630" to "fw_psx_us",      // SCPH-7001
-        // Master System BIOS
-        "48cd46be" to "fw_ms_us",        // SMS BIOS US
-        "80eb3c3c" to "fw_ms_jp",        // SMS BIOS JP
-        "d0569c83" to "fw_ms_eu",        // SMS BIOS EU
-        // Game Gear BIOS
-        "eecf3fa1" to "fw_gg",           // Game Gear BIOS
-        // 32X BIOS
-        "5c12eae8" to "fw_32x_g",        // 32X_G_BIOS.BIN (68000)
-        "dd9c46b8" to "fw_32x_m",        // 32X_M_BIOS.BIN (SH-2 master)
-        "bfda1fe5" to "fw_32x_s",        // 32X_S_BIOS.BIN (SH-2 slave)
-        // MSX BIOS
-        "ee229390" to "fw_msx",          // MSX BIOS JP
-        "fcb98b8a" to "fw_msx2_main",    // MSX2 MAIN JP
-        "57798735" to "fw_msx2_sub",      // MSX2 SUB JP
-        // Neo Geo Pocket
-        "11726b6d" to "fw_ngp",          // NGP BIOS (RetroArch standard)
-        "6232df8d" to "fw_ngp",          // NGP BIOS (World, 64KB)
-        "cdc1a5c2" to "fw_ngpc",         // NGPC BIOS (RetroArch standard)
-        "6eeb6f40" to "fw_ngpc"          // NGPC BIOS (World, 64KB)
-    )
+    private fun firmwareContent(context: Context, uri: Uri): FirmwareContent? = readFirmware(context, uri).content
 
+    private val _firmwareStatus = MutableStateFlow<Map<String, FirmwareStatus>>(emptyMap())
+    /** For each firmware slot with a file, what that file is to the slot ([FirmwareIds]). */
+    val firmwareStatus: StateFlow<Map<String, FirmwareStatus>> = _firmwareStatus
+
+    fun refreshFirmwareStatus(context: Context, paths: Map<String, String>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val set = paths.filterValues { it.isNotEmpty() }
+            val contents = set.values.distinct().associateWith { firmwareContent(context, Uri.parse(it)) }
+            _firmwareStatus.value = set.mapValues { (key, uri) ->
+                val content = contents[uri]
+                when {
+                    content == null -> FirmwareStatus.Unreadable
+                    FirmwareIds.isVerified(key, content) -> FirmwareStatus.Verified
+                    else -> FirmwareStatus.Unrecognized
+                }
+            }
+        }
+    }
+
+    /**
+     * Fills firmware slots from the firmware folder by what each file is, whatever its name: every slot whose
+     * file isn't a known-good dump gets one from the folder ([firmwareAssignments]).
+     */
     fun scanFirmware(context: Context) {
         val firmwareUriString = settings.value.firmwarePath
         if (firmwareUriString.isEmpty()) return
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val rootUri = Uri.parse(firmwareUriString)
-                val rootDir = DocumentFile.fromTreeUri(context, rootUri)
+                val rootDir = DocumentFile.fromTreeUri(context, Uri.parse(firmwareUriString))
                 if (rootDir == null) {
                     Log.e("Phobos", "Firmware scan: DocumentFile.fromTreeUri returned null for $firmwareUriString — SAF permission lost?")
                     return@launch
                 }
-                val allFiles = rootDir.listFiles()
-                Log.i("Phobos", "Firmware scan: found ${allFiles.size} files in firmware folder")
-                var matchedCount = 0
-                allFiles.forEach { file ->
-                    val name = file.name?.lowercase() ?: ""
-                    Log.d("Phobos", "Firmware scan: checking '$name'")
-                    
-                    // 1. Check by filename (matches raw .bin/.rom and known .zip names)
-                    val keyByName = biosMap[name]
-                    if (keyByName != null) {
-                        Log.i("Phobos", "Firmware scan: MATCHED '$name' -> $keyByName")
-                        settingsStore.setSystemFirmwarePath(keyByName, file.uri.toString())
-                        // Also populate aliases (e.g. neogeo.zip shows under AES and MVS too)
-                        biosAliases[keyByName]?.forEach { alias ->
-                            settingsStore.setSystemFirmwarePath(alias, file.uri.toString())
-                        }
-                        matchedCount++
-                        return@forEach
+                val found = rootDir.listFiles()
+                    .filter { it.isFile && it.length() in 1..MAX_FIRMWARE_SIZE }
+                    .mapNotNull { file ->
+                        firmwareContent(context, file.uri)?.let { FirmwareCandidate(file.uri.toString(), file.name.orEmpty(), it) }
                     }
-
-                    // 2. ZIP archives: match by inner file name AND inner CRC32.
-                    // Many BIOS sets ship as No-Intro "[BIOS] ... .zip"; the outer
-                    // zip's CRC is meaningless, so we must inspect the contents.
-                    if (name.endsWith(".zip")) {
-                        var zipMatched = false
-                        try {
-                            context.contentResolver.openInputStream(file.uri)?.use { input ->
-                                java.util.zip.ZipInputStream(java.io.BufferedInputStream(input)).use { zis ->
-                                    var entry = zis.nextEntry
-                                    while (entry != null) {
-                                        if (!entry.isDirectory) {
-                                            val innerName = entry.name.substringAfterLast('/').lowercase()
-                                            // inner name match
-                                            val keyByInnerName = biosMap[innerName]
-                                            if (keyByInnerName != null) {
-                                                Log.i("Phobos", "Firmware scan: ZIP '$name' inner '$innerName' -> $keyByInnerName")
-                                                settingsStore.setSystemFirmwarePath(keyByInnerName, file.uri.toString())
-                                                biosAliases[keyByInnerName]?.forEach { alias ->
-                                                    settingsStore.setSystemFirmwarePath(alias, file.uri.toString())
-                                                }
-                                                matchedCount++
-                                                zipMatched = true
-                                                break
-                                            }
-                                            // inner CRC match
-                                            val crc = CRC32()
-                                            val buffer = ByteArray(8192)
-                                            var bytesRead: Int
-                                            while (zis.read(buffer).also { bytesRead = it } != -1) {
-                                                crc.update(buffer, 0, bytesRead)
-                                            }
-                                            val crcString = String.format("%08x", crc.value)
-                                            val keyByCrc = biosCrcMap[crcString]
-                                            if (keyByCrc != null) {
-                                                Log.i("Phobos", "Firmware scan: ZIP '$name' inner '$innerName' CRC=$crcString -> $keyByCrc")
-                                                settingsStore.setSystemFirmwarePath(keyByCrc, file.uri.toString())
-                                                biosAliases[keyByCrc]?.forEach { alias ->
-                                                    settingsStore.setSystemFirmwarePath(alias, file.uri.toString())
-                                                }
-                                                matchedCount++
-                                                zipMatched = true
-                                                break
-                                            }
-                                        }
-                                        zis.closeEntry()
-                                        entry = zis.nextEntry
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("Phobos", "Error reading ZIP firmware ${file.name}: ${e.message}")
-                        }
-                        if (zipMatched) return@forEach
-                    }
-
-                    // 2.5 Keyword heuristic: match by filename content, not exact name.
-                    //     Catches any naming convention (e.g. "N64DD IPLROM [Japan].n64").
-                    val keyByKeyword = keywordFirmwareMatch(name)
-                    if (keyByKeyword != null) {
-                        Log.i("Phobos", "Firmware scan: KEYWORD MATCHED '$name' -> $keyByKeyword")
-                        settingsStore.setSystemFirmwarePath(keyByKeyword, file.uri.toString())
-                        biosAliases[keyByKeyword]?.forEach { alias ->
-                            settingsStore.setSystemFirmwarePath(alias, file.uri.toString())
-                        }
-                        matchedCount++
-                        return@forEach
-                    }
-
-                    // 3. Check by CRC32 (raw non-zip files)
-                    try {
-                        context.contentResolver.openInputStream(file.uri)?.use { input ->
-                            val crc = CRC32()
-                            val buffer = ByteArray(8192)
-                            var bytesRead: Int
-                            while (input.read(buffer).also { bytesRead = it } != -1) {
-                                crc.update(buffer, 0, bytesRead)
-                            }
-                            val crcString = String.format("%08x", crc.value)
-                            val keyByCrc = biosCrcMap[crcString]
-                            if (keyByCrc != null) {
-                                Log.i("Phobos", "Firmware scan: CRC MATCHED '$name' (CRC=$crcString) -> $keyByCrc")
-                                settingsStore.setSystemFirmwarePath(keyByCrc, file.uri.toString())
-                                matchedCount++
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e("Phobos", "Error calculating CRC for ${file.name}: ${e.message}")
-                    }
+                found.forEach {
+                    Log.d("Phobos", "Firmware scan: ${it.name} sha256=${it.content.sha256?.take(16)} zip=${it.content.zipCrcs.size} -> ${FirmwareIds.slotsFor(it.content)}")
                 }
-                Log.i("Phobos", "Firmware scan complete: $matchedCount firmware file(s) matched")
+                val inFolder = found.associate { it.uri to FirmwareRead(it.content) }
+                val current = settings.value.systemFirmwarePaths.filterValues { it.isNotEmpty() }
+                val reads = current.values.distinct().associateWith { inFolder[it] ?: readFirmware(context, Uri.parse(it)) }
+                val verified = current.filter { (key, uri) -> FirmwareIds.isVerified(key, reads.getValue(uri).content) }.keys
+                val assignments = firmwareAssignments(found, verified)
+                assignments.forEach { (key, uri) ->
+                    Log.i("Phobos", "Firmware scan: $key -> ${found.first { it.uri == uri }.name}")
+                    settingsStore.setSystemFirmwarePath(key, uri)
+                }
+                // A pick the app may no longer open can't come back without picking it again, so it's cleared:
+                // the system then uses its built-in copy, or asks for its BIOS when started.
+                val lost = current.filter { (key, uri) -> reads.getValue(uri).permissionLost && key !in assignments }.keys
+                lost.forEach { key ->
+                    Log.i("Phobos", "Firmware scan: cleared $key, whose file the app may no longer open")
+                    settingsStore.setSystemFirmwarePath(key, "")
+                }
+                Log.i("Phobos", "Firmware scan complete: ${found.size} files read, ${assignments.size} slot(s) set by content, ${lost.size} cleared")
             } catch (e: Exception) {
                 Log.e("Phobos", "Error scanning firmware: ${e.message}")
             }
@@ -2876,13 +2667,17 @@ class MainViewModel(
                         // Use DocumentFile to handle permissions properly if it's from SAF
                         val docFile = DocumentFile.fromSingleUri(context, uri)
                         if (docFile != null && docFile.exists()) {
-                            val fileName = docFile.name?.lowercase() ?: ""
-                            context.contentResolver.openInputStream(uri)?.use { input ->
-                                if (fileName.endsWith(".zip")) {
+                            context.contentResolver.openInputStream(uri)?.use { raw ->
+                                val input = java.io.BufferedInputStream(raw)
+                                input.mark(4)
+                                val head = ByteArray(4).also { input.read(it) }
+                                input.reset()
+                                if (isZipSignature(head)) {
                                     // No-Intro BIOS sets ship as .zip. Extract the first
                                     // non-directory entry to the temp file — the raw
                                     // zip bytes would be garbage when loaded as an IPL.
-                                    java.util.zip.ZipInputStream(java.io.BufferedInputStream(input)).use { zis ->
+                                    // The scan identifies a zip by that same entry.
+                                    java.util.zip.ZipInputStream(input).use { zis ->
                                         var entry = zis.nextEntry
                                         var extracted = false
                                         while (entry != null && !extracted) {
@@ -2926,7 +2721,13 @@ class MainViewModel(
             val discIndex = if (rom.discs.isEmpty()) -1 else disc.coerceIn(0, rom.discs.lastIndex)
             val file = if (discIndex >= 0) rom.discs[discIndex] else rom
             try {
-                val inPlace = inPlacePath(effectiveSystem, file)
+                val route = gameFileRoute(effectiveSystem, inPlacePath(file))
+                if (route == GameFileRoute.Refused) {
+                    Log.e("Phobos", "$effectiveSystem: ${file.name} can't be read where it is, and its games aren't copied")
+                    _discNotReadable.value = DiscNotReadable(effectiveSystem, gameLocation(file))
+                    return@withContext
+                }
+                val inPlace = (route as? GameFileRoute.InPlace)?.path
                 val descriptor = if (inPlace == null) openGameFile(context, file, startsGame = true) else null
                 if (inPlace != null || descriptor != null) descriptor.use {
                     if (inPlace != null) {
@@ -2947,6 +2748,7 @@ class MainViewModel(
                         _loadedGame.value = ControlLevel.Game(effectiveSystem, rom.name)
                         _loadedDiscs.value = rom.discs
                         _currentDisc.value = discIndex
+                        _laserdiscSide.value = null
                         if (rom.discs.size > 1) rememberDisc(effectiveSystem, rom.name, discIndex)
                         // Auto-Load State (Task 17): restore the auto-saved state
                         // right after the core is loaded but BEFORE the emulation
@@ -2967,7 +2769,7 @@ class MainViewModel(
                         }
                     } else {
                         Log.e("Phobos", "Native loadRom failed for $effectiveSystem")
-                        // Broken core (ZX 128K / PCE): native refuses before
+                        // Broken core (ZX 128K): native refuses before
                         // spawning any threads. Neo Geo refuses only when its
                         // mandatory BIOS is absent. Surface a clear popup
                         // instead of a hang/crash.
@@ -2977,9 +2779,7 @@ class MainViewModel(
                             // the ROM itself is the problem (wrong/missing game).
                             if (ngBiosPresent) _neoGeoRomLoadFailed.value = effectiveSystem
                             else _biosRequired.value = effectiveSystem
-                        } else if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true) ||
-                            effectiveSystem.contains("PC Engine", ignoreCase = true) ||
-                            effectiveSystem.contains("SuperGrafx", ignoreCase = true)) {
+                        } else if (effectiveSystem.contains("ZX Spectrum", ignoreCase = true)) {
                             _unsupportedSystem.value = effectiveSystem
                         }
                     }
@@ -3008,6 +2808,29 @@ class MainViewModel(
         viewModelScope.launch(Dispatchers.IO) { swapToDisc(context, index) }
     }
 
+    private val _laserdiscSide = MutableStateFlow<String?>(null)
+    /** The side of the LaserActive disc in the tray: null for the first, where a game starts, and "" for none. */
+    val laserdiscSide: StateFlow<String?> = _laserdiscSide
+
+    /** The sides of the LaserActive disc being played, in order. */
+    fun laserdiscSides(): List<String> = PhobosCore.getLaserdiscSides()
+
+    /** Puts [side] of the LaserActive disc in the tray, or takes the disc out for "". */
+    fun changeLaserdiscSide(context: Context, side: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val changed = PhobosCore.setLaserdiscSide(side)
+            if (changed) _laserdiscSide.value = side
+            withContext(Dispatchers.Main) {
+                val message = when {
+                    !changed -> "Couldn't change the disc"
+                    side.isEmpty() -> "Disc taken out"
+                    else -> "$side in the tray"
+                }
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     private suspend fun swapToDisc(context: Context, index: Int): Boolean {
         val disc = _loadedDiscs.value.getOrNull(index) ?: return false
         val system = currentSystemName.takeIf { it.isNotEmpty() } ?: return false
@@ -3023,9 +2846,14 @@ class MainViewModel(
     }
 
     /** Hands [file] to the core as the new disc, or the 64DD disk. */
-    private fun insertDisc(context: Context, systemName: String, file: RomFile): Boolean =
-        try {
-            val inPlace = inPlacePath(systemName, file)
+    private fun insertDisc(context: Context, systemName: String, file: RomFile): Boolean {
+        val route = gameFileRoute(systemName, inPlacePath(file))
+        if (route == GameFileRoute.Refused) {
+            Log.e("Phobos", "$systemName: ${file.name} can't be read where it is, and its games aren't copied")
+            return false
+        }
+        return try {
+            val inPlace = (route as? GameFileRoute.InPlace)?.path
             val descriptor = if (inPlace == null) openGameFile(context, file, startsGame = false) else null
             if (inPlace != null || descriptor != null) {
                 descriptor.use {
@@ -3044,15 +2872,13 @@ class MainViewModel(
             Log.e("Phobos", "Error opening Secondary ROM FD: ${e.message}")
             false
         }
+    }
 
     /**
-     * [file]'s path when it can load where it is: a .cue or .chd disc of a system that only reads its discs,
-     * in a folder the app can read by path. Null means native code copies it from a descriptor instead.
+     * [file]'s path when it can load where it is, in a folder the app can read by path. Null means it has no
+     * such path (a frontend's or another provider's URI, or a folder Android won't let the app read directly).
      */
-    private fun inPlacePath(systemName: String, file: RomFile): String? {
-        if (systemName !in IN_PLACE_SYSTEMS) return null
-        val name = file.name.lowercase()
-        if (!name.endsWith(".cue") && !name.endsWith(".chd")) return null
+    private fun inPlacePath(file: RomFile): String? {
         val path = when (file.uri.scheme) {
             "file" -> file.uri.path
             "content" -> file.uri.takeIf { it.authority == "com.android.externalstorage.documents" }?.let { resolveSafPath(it.toString()) }
@@ -3060,6 +2886,10 @@ class MainViewModel(
         } ?: return null
         return path.takeIf { File(it).canRead() }
     }
+
+    /** Where [file] is, for a message: its path when the app can name one, else its name. */
+    private fun gameLocation(file: RomFile): String =
+        (if (file.uri.scheme == "file") file.uri.path else resolveSafPath(file.uri.toString())) ?: file.name
 
     /**
      * The descriptor native code copies [file] from. Native code copies only that file into mia_temp, where a

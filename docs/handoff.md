@@ -712,6 +712,73 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## CD backup RAM kept between sessions — 2026-10-02
+
+Branch `cursor/cd-backup-ram-2b67`, stacked on `cursor/laseractive-2b67`. The plan row "CD backup RAM kept
+between sessions" has the details; this records what was checked and how.
+
+- **Checks run:** both flavors build (`./gradlew testModernDebugUnitTest assembleModernRelease
+  assembleLegacyRelease`), 224 host tests pass (the change is native only). On the RP6 (modern release, data
+  kept): with no saved copy, The Terminator flushed mia's formatted 8 KiB on pause. Then backup RAM files with a
+  marker (`PHOBOS BRAM TEST` at 0x100; the PC Engine one formatted with the `HUBM` header) were put in the save
+  folders of The Terminator, Rondo of Blood and the PC Engine LD stand-in disc. Each game logged the import (and
+  for the PC Engine ones "restored backup.ram" before the system loaded); switching to the next game through the
+  adb load intent wrote its auto state, which held the marker (so the core had the data), and flushed a file
+  identical to the marked one. Sub-Terrania (Mega Drive) and Final Lap Twin (PC Engine HuCard) flushed nothing.
+- **Test hygiene:** Auto-Load State is on, and states hold the backup RAM, so the four games' auto states were
+  moved aside first and put back afterwards (original timestamps); the app was force-stopped at the end so the
+  last game wrote no auto state over a restored one, and the test files, stand-in disc and its saves and states
+  were deleted. Pausing (Home) flushes saves too, which avoids tapping the pause menu when the RP6 has rotated.
+- **Not checked:** a save made in a game's own menu, a Mega CD 32X game (none on the RP6), the legacy APK on a
+  device.
+- **Device setting:** `screen_off_timeout` went from 600000 to 1800000 for the test and is restored to 600000.
+
+## LaserActive (Mega LD and PC Engine LD) — 2026-10-02
+
+Branch `cursor/laseractive-2b67`, stacked on `cursor/pce-cd-in-place-loading-2b67` (PR 2 of the LaserActive
+plan). The plan row "LaserActive (Mega LD and PC Engine LD)" has the details; this records what was checked
+and what wasn't.
+
+- **Checks run:** both flavors build (`./gradlew testModernDebugUnitTest assembleModernRelease
+  assembleLegacyRelease`), 224 host tests pass (new: `laserActiveHintsSelectMegaLdOrPceLd`, and
+  `GameFileRouteTest` covers `.mmi`). On the RP6 (modern release over PR 1's build, data kept), with two
+  stand-in `.mmi` discs made for the test (a `MediaInfo.json` with sides A and B and no streams, no game data;
+  deleted afterwards with their saves and states): a frontend-style launch (`system` extra `megald`, then
+  `pcengineld`) resolved each, loaded it in place and attached the PAC BIOS (SEGA PAC US, NEC PAC PAC-N10);
+  both BIOS menus ran at 60 FPS; Side listed A, B and No disc, put in side B and took the disc out with the
+  core running on (the SEGA PAC's prompt changed to "Select The Play Button"); the next game started with side A
+  marked again; Mega LD's backup RAM was written to `Saves/Mega Drive/<game>/backup.ram` and imported on the
+  next load. Regression loads of The Terminator (Mega CD), Sub-Terrania (Mega Drive), Rondo of Blood (PC Engine
+  CD) and Final Lap Twin (PC Engine) logged "Loading in place" with the right firmware at 60 FPS.
+- **Not checked:** a real LaserActive game (none on the RP6), so laserdisc video, analog audio, digital tracks
+  and seeking aren't verified; `.mmi` games in the Library and their tile (none in the ROM folders); the legacy
+  APK on a device.
+- **Measuring on the RP6:** frame rates read while its screen is asleep are throttled (19 FPS for Mega LD here,
+  60 once awake); check `dumpsys power | grep mWakefulness` first.
+- **Device setting:** the RP6 wasn't charging, so `screen_off_timeout` went from 600000 to 1800000 for the
+  test and is restored to 600000.
+
+## PC Engine CD, games loaded in place, firmware by content — 2026-10-02
+
+Branch `cursor/pce-cd-in-place-loading-2b67` (PR 1 of the LaserActive plan; LaserActive follows on top).
+The plan rows "PC Engine CD boots", "Games load from where they are", "Firmware matched by content" and
+"CHD pregaps left out of the image" have the details; this records what was checked and what wasn't.
+
+- **Checks run:** both flavors build (`./gradlew testModernDebugUnitTest assembleModernRelease
+  assembleLegacyRelease`, JDK 17, NDK 28.2), host tests pass (new: `GameFileRouteTest`, `FirmwareIdsTest`).
+  On the RP6 (modern release over the nightly, data kept): Rondo of Blood boots through System Card 3.0 and
+  plays its intro in place; regression loads through the adb load intent of Final Lap Twin (PC Engine),
+  The Terminator (Mega CD CHD), Ape Escape (PS1 CHD), Pokémon Unbound (GBA zip), Alpha Mission II (Neo Geo)
+  and F-Zero X (N64) all logged "Loading in place" and restored their saves from Phobos's folder.
+- **Firmware on the RP6:** the six missing BIOS files (LaserActive SEGA PAC US/JP and NEC PAC PAC-N10, PAC-N1,
+  PCE-LP1, from `Abdess/retrobios`, SHA-256 checked against upstream ares's list; `aleck64.zip` from MAME's
+  set) went into `/storage/emulated/0/Emulation Settings/Phobos/Firmware/`, and a content scan filled their
+  slots and corrected the ones the name matching had got wrong. Nothing was committed to the repository.
+- **Not checked:** a frontend launch whose URI has no path (the copy fallback, and the PC Engine CD refusal
+  dialog), a SuperGrafx game (none on the RP6), the Rondo of Blood audio against a redump image (the user heard
+  about 2 s of offset left with the translated CHD), and the legacy APK on a device.
+- **Device setting:** `stay_on_while_plugged_in` was 7 before testing and is restored to 7 afterwards.
+
 ## Upstream ares merge — 2026-09-30
 
 Branch `merge/upstream-ares-2026-09`, at the user's request: a merge commit of upstream ares

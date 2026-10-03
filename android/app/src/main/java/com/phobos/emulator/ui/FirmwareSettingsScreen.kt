@@ -23,6 +23,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.pillShape
+import com.phobos.emulator.util.FirmwareIds
+import com.phobos.emulator.util.FirmwareStatus
 
 data class FirmwareInfo(
     val emulator: String,
@@ -35,6 +37,9 @@ data class FirmwareInfo(
 fun firmwareFileName(key: String): String = when (key) {
     "fw_mcd" -> "Mega CD BIOS (US, Japan or Europe)"
     "fw_sgb" -> "Super Game Boy or Super Game Boy 2 cartridge ROM"
+    "fw_pce_cd" -> "PC Engine CD System Card 3.0 (Japan)"
+    "fw_laseractive_sega" -> "LaserActive SEGA PAC BIOS (US v1.04 or Japan v1.02)"
+    "fw_laseractive_nec" -> "LaserActive NEC PAC BIOS (PAC-N10, PAC-N1 or PCE-LP1)"
     else -> key
 }
 
@@ -42,8 +47,10 @@ fun firmwareFileName(key: String): String = when (key) {
 @Composable
 fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsState()
+    val status by viewModel.firmwareStatus.collectAsState()
     val context = LocalContext.current
     var selectedFirmwareKey by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(settings.systemFirmwarePaths) { viewModel.refreshFirmwareStatus(context, settings.systemFirmwarePaths) }
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && selectedFirmwareKey != null) {
@@ -145,12 +152,13 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     HeaderText("Type", Modifier.weight(1.5f))
                     HeaderText("Region", Modifier.weight(1f))
                     HeaderText("Location", Modifier.weight(3f))
+                    HeaderText("Status", Modifier.weight(1.4f))
                 }
 
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     items(firmwareList) { info ->
                         val path = settings.systemFirmwarePaths[info.systemKey] ?: ""
-                        FirmwareRow(info, path) {
+                        FirmwareRow(info, path, status[info.systemKey]) {
                             selectedFirmwareKey = info.systemKey
                             launcher.launch(arrayOf("*/*"))
                         }
@@ -173,8 +181,9 @@ fun HeaderText(text: String, modifier: Modifier) {
     )
 }
 
+/** One firmware slot; [status] is what its file is to it, null while unchecked or unset. */
 @Composable
-fun FirmwareRow(info: FirmwareInfo, path: String, onClick: () -> Unit) {
+fun FirmwareRow(info: FirmwareInfo, path: String, status: FirmwareStatus?, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -189,6 +198,19 @@ fun FirmwareRow(info: FirmwareInfo, path: String, onClick: () -> Unit) {
             if (path.isEmpty()) "(unset)" else Uri.parse(path).lastPathSegment ?: path,
             Modifier.weight(3f),
             color = if (path.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
+        )
+        RowText(
+            when {
+                path.isNotEmpty() -> status?.name.orEmpty()
+                info.systemKey in FirmwareIds.builtIn -> "Built-in"
+                else -> ""
+            },
+            Modifier.weight(1.4f),
+            color = when {
+                path.isEmpty() -> MaterialTheme.colorScheme.onSurfaceVariant
+                status == FirmwareStatus.Verified -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.error
+            }
         )
     }
 }

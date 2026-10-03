@@ -1028,6 +1028,63 @@ namespace ares {
     return present(string{homePath, "/System/Mega Drive/bios.rom"});
   }
 
+  // Whether pak() has a System Card for the PC Engine Duo's BIOS, which ares doesn't ship; without one the
+  // CD unit runs from an empty ROM and the game stays on a black screen.
+  static auto hasPCEngineCDBios() -> bool {
+    auto present = [](const string& path) { return nall::file::exists(path) && nall::file::size(path) > 0; };
+    for (auto key : {"fw_pce_cd_3_jp", "fw_pce_cd_ge_jp"}) {
+      if (auto it = firmwareMap.find(key); it != firmwareMap.end() && present(it->second)) return true;
+    }
+    return present(string{homePath, "/System/PC Engine/bios.rom"});
+  }
+
+  static auto firmwareSet(const char* key) -> bool {
+    auto it = firmwareMap.find(key);
+    return it != firmwareMap.end() && nall::file::exists(it->second) && nall::file::size(it->second) > 0;
+  }
+
+  // The LaserActive's PAC BIOSes, which ares doesn't ship: the SEGA PAC's for the Mega LD, the NEC PAC's
+  // (PAC-N10, PAC-N1 or PCE-LP1) for the PC Engine LD.
+  static auto hasLaserActiveSegaBios() -> bool {
+    return firmwareSet("fw_laseractive_sega_us") || firmwareSet("fw_laseractive_sega_jp");
+  }
+
+  static constexpr const char* laserActiveNecBiosKeys[] = {"fw_laseractive_nec_us", "fw_laseractive_nec_jp", "fw_laseractive_nec_lp"};
+
+  static auto hasLaserActiveNecBios() -> bool {
+    for (auto key : laserActiveNecBiosKeys) if (firmwareSet(key)) return true;
+    return false;
+  }
+
+  // The Mega CD's backup RAM as mia's Mega CD, Mega CD 32X and Mega LD system paks leave it
+  // (mia/system/mega-cd.cpp): 8 KiB of 0xFF ending in the format the BIOS looks for.
+  static auto megaCDBackupRam() -> std::vector<u8> {
+    static constexpr u8 format[64] = {
+      0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x00,0x00,0x00,0x00,0x40,
+      0x00,0x7d,0x00,0x7d,0x00,0x7d,0x00,0x7d,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x53,0x45,0x47,0x41,0x5f,0x43,0x44,0x5f,0x52,0x4f,0x4d,0x00,0x01,0x00,0x00,0x00,
+      0x52,0x41,0x4d,0x5f,0x43,0x41,0x52,0x54,0x52,0x49,0x44,0x47,0x45,0x5f,0x5f,0x5f,
+    };
+    std::vector<u8> ram(8_KiB, 0xff);
+    std::copy(std::begin(format), std::end(format), ram.end() - sizeof(format));
+    return ram;
+  }
+
+  // The PC Engine CD's 2 KiB backup RAM: the loaded game's copy in [system]'s saves folder (where
+  // flushSavesToDisk() writes it), else blank, as mia's PC Engine system pak starts it. PCD::load() reads it
+  // when the system loads, before importIntoPak runs, so the saved copy has to be in the pak from the start.
+  static auto pcEngineCDBackupRam(const string& system) -> std::vector<u8> {
+    std::vector<u8> ram(2_KiB);
+    if (!savesPath) return ram;
+    string romKey = currentRomBase;
+    romKey.replace("/", "_"); romKey.replace("\\", "_"); romKey.replace(":", "_");
+    if (romKey.size() == 0) romKey = "rom";
+    auto saved = nall::file::read(string{savesPath, "/", system, "/", romKey, "/backup.ram"});
+    if (saved.size() != ram.size()) return ram;
+    LOGI("Saves: restored backup.ram (%zu bytes) for %s [%s]", saved.size(), (const char*)system, (const char*)romKey);
+    return saved;
+  }
+
   // N64 Player 1 controller pak ("None" | "Rumble Pak" | "Controller Pak").
   // Rumble state is polled from Kotlin; player1PakDir backs the Controller
   // Pak's save.pak (created on demand in pak() when a Controller Pak attaches).
@@ -2212,7 +2269,8 @@ namespace ares {
         LOGW("VFS: No medium pak available for %s", (const char*)nodeName);
       }
 
-      if (nodeName.endsWith("Cartridge") || nodeName.endsWith("Disc") || nodeName.endsWith("Card")) {
+      if (nodeName.endsWith("Cartridge") || nodeName.endsWith("Disc") || nodeName == "Laserdisc"
+          || nodeName.endsWith("Card")) {
         if (currentMedium && currentMedium->pak) {
             LOGI("VFS: Returning currentMedium pak for %s", (const char*)nodeName);
             return currentMedium->pak;
@@ -2329,6 +2387,15 @@ namespace ares {
               if (it_eu != firmwareMap.end()) attached = attachFile((const char*)it_eu->second, "bios.rom");
           }
           if (!attached) attached = attachFile("bios.rom");
+      } else if (nodeName == "Mega Drive" && node->attribute("configuration").find("LaserActive")) {
+          // LaserActive (SEGA PAC): MCD::load() reads the PAC BIOS of the configuration's region (loadRom picks
+          // the region whose BIOS is set) and MCD::connect() the backup RAM, which mia's Mega LD system pak
+          // carries formatted, as here.
+          bool japan = (bool)node->attribute("configuration").find("NTSC-J");
+          auto it = firmwareMap.find(japan ? "fw_laseractive_sega_jp" : "fw_laseractive_sega_us");
+          if (it != firmwareMap.end()) attachFile((const char*)it->second, "bios.rom");
+          dir->append("tmss.rom", mia::Resource::MegaDrive::TMSS);
+          dir->append("backup.ram", megaCDBackupRam());
       } else if (nodeName == "Mega Drive") {
           // Mega CD: ares uses "Mega Drive" as root node even for CD mode.
           // The MCD::load() sub-system reads "bios.rom" from this pak — if
@@ -2349,6 +2416,9 @@ namespace ares {
           if (node->attribute("configuration").find("32X")) {
               for (auto& file : mega32XBootFiles) dir->append(file.name, readMega32XBootFile(file));
           }
+          // Mega CD and Mega CD 32X: MCD::connect() reads the backup RAM, which importIntoPak replaces with the
+          // game's saved copy before the disc tray connects; MCD::save() writes it back for flushSavesToDisk().
+          if (node->attribute("configuration").find("Mega CD")) dir->append("backup.ram", megaCDBackupRam());
       } else if (nodeName == "Neo Geo CD") {
           // Neo Geo CD needs the CD BIOS (neocd.zip via fw_ng_cd) in the system
           // pak, plus the shared LSPC zoom table (000-lo.lo) from neogeo.zip.
@@ -2515,6 +2585,13 @@ namespace ares {
       } else if (nodeName == "MSX" || nodeName == "MSX2") {
           attachFile("bios.rom");
           if (nodeName == "MSX2") attachFile("sub.rom");
+      } else if (nodeName == "PC Engine" && node->attribute("configuration").find("LaserActive")) {
+          // LaserActive (NEC PAC): the first PAC BIOS set, in upstream ares's order (PAC-N10, PAC-N1, PCE-LP1).
+          for (auto key : laserActiveNecBiosKeys) {
+              auto it = firmwareMap.find(key);
+              if (it != firmwareMap.end() && attachFile((const char*)it->second, "bios.rom")) break;
+          }
+          dir->append("backup.ram", pcEngineCDBackupRam(nodeName));
       } else if (nodeName == "PC Engine" || nodeName == "SuperGrafx" || nodeName == "PC Engine Duo" || nodeName == "PC Engine CD") {
           bool attached = false;
           auto it_pce = firmwareMap.find("fw_pce_cd_3_jp");
@@ -2524,6 +2601,8 @@ namespace ares {
               if (it_ge != firmwareMap.end()) attached = attachFile((const char*)it_ge->second, "bios.rom");
           }
           if (!attached) attached = attachFile("bios.rom");
+          // The Duo is the PC Engine model with the CD unit (PC Engine CD games).
+          if (node->attribute("configuration").find("Duo")) dir->append("backup.ram", pcEngineCDBackupRam(nodeName));
       } else if (nodeName == "ZX Spectrum" || nodeName == "ZX Spectrum 128") {
           // The ZX Spectrum REQUIRES its system ROM to boot and run the tape
           // loader. Without it the core allocates the ROM filled with 0xFF —
@@ -2795,15 +2874,12 @@ namespace ares {
           portIndex++;
           continue;
       }
-      // Disc Tray: connect for all disc-based systems. Only skip for
-      // PC Engine / SuperGrafx HuCard games (name != "CD" / "Duo").
+      // Disc Tray: connect whenever the core has one. A PC Engine HuCard or
+      // SuperGrafx game has no CD unit (PCD::Present()), so no tray either;
+      // the Duo's root is also named "PC Engine", so the name can't tell them apart.
       if (port->name() == "Disc Tray") {
-          string sysName = node ? node->name() : "";
-          // HuCard-only PCE: skip tray connect to prevent feeding ROM as CD.
-          bool isHuCard = (sysName == "PC Engine" || sysName == "SuperGrafx");
-          if (isHuCard) { portIndex++; continue; }
           if (port->allocate()) {
-              LOGI("VFS: Connecting Disc Tray for '%s'", (const char*)sysName);
+              LOGI("VFS: Connecting Disc Tray for '%s'", (const char*)(node ? node->name() : ""));
               port->connect();
           }
           portIndex++;
@@ -3080,6 +3156,12 @@ else if (port->type() == "Keyboard") {
     else if (lookup.find("Arcade") || lookup.find("Aleck64") || lookup.find("Aleck 64") || lookup == "MAME") {
         identifiedSystem = "Arcade";
         forceZipLoad = true;
+    }
+    else if (lookup.find("Mega LD") || lookup.find("LaserActive (SEGA") || lookup.find("SEGA PAC") || lookup.find("Sega PAC")) {
+        identifiedSystem = "Mega LD";
+    }
+    else if (lookup.find("PC Engine LD") || lookup.find("LaserActive (NEC") || lookup.find("NEC PAC") || lookup.find("LDROM")) {
+        identifiedSystem = "PC Engine LD";
     }
     else if (lookup.find("Mega CD 32X") || lookup.find("Sega CD 32X")) identifiedSystem = "Mega CD 32X";
     else if (lookup.find("32X")) identifiedSystem = "Mega 32X";
@@ -3441,6 +3523,22 @@ else if (port->type() == "Keyboard") {
        success = ::ares::MasterSystem::load(root, getRegion("[Sega] Master System (NTSC-U)", "[Sega] Master System (NTSC-J)", "[Sega] Master System (PAL)"));
     } else if (identifiedSystem == "Game Gear") {
        success = ::ares::MasterSystem::load(root, getRegion("[Sega] Game Gear (NTSC-U)", "[Sega] Game Gear (NTSC-J)", "[Sega] Game Gear (PAL)"));
+    } else if (identifiedSystem == "Mega LD") {
+       // pak() attaches the PAC BIOS of the configuration's region, so the region follows the BIOSes set: the
+       // preferred one when its BIOS is there, else the other.
+       string config = getRegion(
+           "[Pioneer] LaserActive (SEGA PAC) (NTSC-U)",
+           "[Pioneer] LaserActive (SEGA PAC) (NTSC-J)",
+           "[Pioneer] LaserActive (SEGA PAC) (NTSC-U)");
+       bool japan = (bool)config.find("NTSC-J");
+       if (!firmwareSet(japan ? "fw_laseractive_sega_jp" : "fw_laseractive_sega_us")) japan = !japan;
+       success = ::ares::MegaDrive::load(root, japan
+           ? "[Pioneer] LaserActive (SEGA PAC) (NTSC-J)" : "[Pioneer] LaserActive (SEGA PAC) (NTSC-U)");
+    } else if (identifiedSystem == "PC Engine LD") {
+       success = ::ares::PCEngine::load(root, getRegion(
+           "[Pioneer] LaserActive (NEC PAC) (NTSC-U)",
+           "[Pioneer] LaserActive (NEC PAC) (NTSC-J)",
+           "[Pioneer] LaserActive (NEC PAC) (NTSC-U)"));
     } else if (identifiedSystem == "PC Engine CD") {
        success = ::ares::PCEngine::load(root, getRegion("[NEC] PC Engine Duo (NTSC-J)", "[NEC] PC Engine Duo (NTSC-J)", "[NEC] PC Engine Duo (NTSC-J)"));
     } else if (identifiedSystem == "SuperGrafx") {
@@ -4122,7 +4220,14 @@ else if (port->type() == "Keyboard") {
   auto setSecondaryRomFd(s32 fd) -> void { lock_guard<recursive_mutex> lock(systemMutex); if (secondaryRomFd != -1) ::close(secondaryRomFd); secondaryRomFd = fd; }
   auto setRomPath(const char* path) -> void { lock_guard<recursive_mutex> lock(systemMutex); romPath = path ? (string)path : ""; }
   auto setSecondaryRomPath(const char* path) -> void { lock_guard<recursive_mutex> lock(systemMutex); secondaryRomPath = path ? (string)path : ""; }
-  auto setTempFilePath(const char* path) -> void { tempFilePath = path ? (string)path : ""; }
+  auto setTempFilePath(const char* path) -> void {
+    tempFilePath = path ? (string)path : "";
+    // Games load from where they are, so mia must not look beside them for saves (another emulator's .sav
+    // would be imported) or write any there: Phobos keeps saves itself (importIntoPak, flushSavesToDisk).
+    mia::setSaveLocation([] { return string{tempFilePath, "/mia-saves/"}; });
+    // A parent set such as aleck64.zip that isn't beside the game: the app copies its Firmware pick here.
+    mia::setParentLocation([] { return string{tempFilePath, "/"}; });
+  }
   auto setLoadDiskImageToRam(bool enabled) -> void { /* Deprecated */ }
 
   auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void {
@@ -4344,6 +4449,9 @@ else if (port->type() == "Keyboard") {
     string name = system ? system : "";
     if ((name == "Mega CD" || name == "Mega CD 32X") && !hasMegaCDBios()) missing.push_back("fw_mcd");
     if (name == "Super Game Boy" && !hasSuperGameBoyCart()) missing.push_back("fw_sgb");
+    if (name == "PC Engine CD" && !hasPCEngineCDBios()) missing.push_back("fw_pce_cd");
+    if (name == "Mega LD" && !hasLaserActiveSegaBios()) missing.push_back("fw_laseractive_sega");
+    if (name == "PC Engine LD" && !hasLaserActiveNecBios()) missing.push_back("fw_laseractive_nec");
     return missing;
   }
   auto setHomePath(const char* path) -> void {
@@ -4604,6 +4712,37 @@ else if (port->type() == "Keyboard") {
         return true;
     }
     return false;
+  }
+
+  auto laserdiscSides() -> std::vector<string> {
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    std::vector<string> sides;
+    if (!root || !root->attribute("configuration").find("LaserActive")) return sides;
+    if (!currentMedium || !currentMedium->pak) return sides;
+    string media = currentMedium->pak->attribute("medium");
+    for (auto& side : nall::split_and_strip(media, ",")) {
+      if (side) sides.push_back(side);
+    }
+    return sides;
+  }
+
+  // As ares desktop's Change Side: the tray changes at once, since on a LaserActive the BIOS opens the tray
+  // and closes it again itself.
+  auto setLaserdiscSide(const char* side) -> bool {
+    lock_guard<std::recursive_mutex> lock(systemMutex);
+    if (!root || !root->attribute("configuration").find("LaserActive")) return false;
+    auto tray = root->scan<Node::Port>("Disc Tray");
+    if (!tray) return false;
+    bool wasPaused = isPausedAtomic.exchange(true);
+    lock_guard<recursive_mutex> frame(*runMutex);
+    tray->disconnect();
+    if (side && *side) {
+      tray->allocate(side);
+      tray->connect();
+    }
+    isPausedAtomic = wasPaused;
+    LOGI("LaserActive: %s", side && *side ? side : "disc taken out");
+    return true;
   }
 
   auto setSurface(JNIEnv* env, jobject surface) -> void {

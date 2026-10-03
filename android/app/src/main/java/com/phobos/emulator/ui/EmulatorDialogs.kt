@@ -12,7 +12,7 @@ import com.phobos.emulator.util.romTitle
 
 /**
  * Dialogs shown over the emulator: quit confirmation, GPU driver suggestion, and load failures
- * (unsupported core, missing Neo Geo or Mega CD BIOS, Neo Geo ROM that failed to load). Load-failure
+ * (unsupported core, missing BIOS, a game that can't be read where it is, Neo Geo ROM that failed to load). Load-failure
  * dialogs return to the previous screen via [onLeave] because nothing was loaded.
  */
 @Composable
@@ -29,6 +29,7 @@ fun EmulatorDialogs(
     val unsupportedSystem by viewModel.unsupportedSystem.collectAsState()
     val biosRequired by viewModel.biosRequired.collectAsState()
     val firmwareRequired by viewModel.firmwareRequired.collectAsState()
+    val discNotReadable by viewModel.discNotReadable.collectAsState()
     val neoGeoRomLoadFailed by viewModel.neoGeoRomLoadFailed.collectAsState()
     val fullScreen = settings.fullScreenMode
 
@@ -89,6 +90,17 @@ fun EmulatorDialogs(
                 "\n\nAdd ${if (one) "it" else "them"} in Settings → Emulation → Firmware (BIOS).",
             fullScreen = fullScreen,
             onDismiss = { viewModel.dismissFirmwareRequired(); onLeave() },
+        )
+    }
+
+    discNotReadable?.let { disc ->
+        LoadFailureDialog(
+            title = "Game Can't Be Read Where It Is",
+            message = "Phobos reads ${disc.system} games straight from storage instead of copying them, " +
+                "and Android didn't let it open this one directly:\n\n${disc.location}\n\n" +
+                "Start it from the Library, with its folder on the device's storage or SD card.",
+            fullScreen = fullScreen,
+            onDismiss = { viewModel.dismissDiscNotReadable(); onLeave() },
         )
     }
 

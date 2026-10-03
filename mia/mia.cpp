@@ -7,6 +7,7 @@ namespace mia {
 
 std::function<string ()> homeLocation = [] { return string{Path::user(), "Emulation/Systems/"}; };
 std::function<string ()> saveLocation = [] { return string{}; };
+std::function<string ()> parentLocation = [] { return string{}; };
 std::vector<string> media;
 
 auto locate(const string &name) -> string {
@@ -103,6 +104,10 @@ auto setHomeLocation(std::function<string ()> callback) -> void {
 
 auto setSaveLocation(std::function<string ()> callback) -> void {
   saveLocation = callback;
+}
+
+auto setParentLocation(std::function<string ()> callback) -> void {
+  parentLocation = callback;
 }
 
 auto construct() -> void {

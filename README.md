@@ -1,6 +1,6 @@
 <img src="https://github.com/pwnedbygary/phobos/blob/master/ares/ares/resource/logo%402x.png" width="350"/>
 
-**Phobos** is a multi-system emulator for **Android**, forked from [ares](https://github.com/ares-emulator/ares) (which began development on October 14th, 2004 as a descendant of [higan](https://github.com/higan-emu/higan) and [bsnes](https://github.com/bsnes-emu/bsnes/)). It focuses on accuracy and preservation, but with Android-specific engineering layered on top: a JIT recompiler family, a Vulkan/parallel-RDP renderer for N64, custom Turnip/Adreno driver loading, and a Jetpack Compose UI.
+**Phobos** is a multi-system emulator for **Android**, forked from [ares](https://github.com/ares-emulator/ares) (which began development on October 14th, 2004 as a descendant of [higan](https://github.com/higan-emu/higan) and [bsnes](https://github.com/bsnes-emu/bsnes/)). It focuses on accuracy and preservation, but with Android-specific engineering layered on top: ARM64 work on ares's N64 recompilers and its Vulkan/parallel-RDP renderer, custom Turnip/Adreno driver loading, and a Jetpack Compose UI.
 
 > ares deliberately trades some speed for code clarity (state machines and bitmasks are avoided where possible). Phobos keeps that philosophy for the cores but adds performance-oriented backends around them, so the clarity remains while the hot paths run fast.
 
@@ -12,16 +12,17 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 ### 1. JIT recompilers (CPU + RSP)
 
-- **N64 CPU (VR4300):** ares desktop uses an interpreter-only CPU core. Phobos ships a **dynamic JIT recompiler** (`ares/n64/cpu/recompiler*.cpp`, based on the sljit backend) that compiles cached-RDRAM code blocks to native ARM64. It includes custom fixes such as **in-block self-modifying-code invalidation** (tracked via the data/instruction cache dirty-line mechanism) and is gated per-game by a "Recompiler" toggle.
-- **RSP:** the RSP has its own recompiler plus an SSE4.1/AVX vector path for the vector unit; on ARM64 the vector ops use the scalar/SSE-style emission paths (`ARCHITECTURE_SUPPORTS_SSE4_1` gates the `__m128i` `r128` union). The RSP recompiler also pins the DMEM base in a callee-saved register so DMEM access folds to register-relative addressing.
-- **Synchronization cadence:** the N64 core uses ares' synchronous model (`CPU::synchronize()` drives VI/AI/RSP/RDP directly, the ares co-routine Scheduler is unused by N64 — identical to upstream ares, which never migrated N64 to the scheduler). Phobos tunes `Accuracy::CPU::JitInterleaving` **per-device** (default `2048*2` on the Retroid Pocket 6) to balance sync overhead vs. the JIT's overshoot; upstream's `4096*2` stalls Conker's BFD on-device while `1024*2` costs frames in Mario Tennis.
+- **N64 CPU (VR4300):** ares compiles N64 code with an sljit-based recompiler (`ares/n64/cpu/recompiler*.cpp`); Phobos tunes it for ARM64. Blocks link straight to each other (jumps within and across sections, and not-taken branch edges), loops stay inside their block instead of returning to the dispatcher, an exact idle-loop skip runs while fast-forwarding, and in-block self-modifying code is invalidated through the cache dirty-line mechanism. The CPU Recompiler switch is in the N64 settings and the pause menu.
+- **RSP:** the RSP recompiler emits the multiply and multiply-accumulate vector instructions as inline NEON, keeping the accumulator in NEON registers between them; the other vector instructions go through `sse2neon`.
+- **Synchronization cadence:** the N64 core uses ares' synchronous model (`CPU::synchronize()` drives VI/AI/RSP/RDP directly; the ares co-routine Scheduler is unused by N64, as upstream). Count/Compare include the clocks run since the last sync, so a game's timer can't fall behind Count and wait a full wrap.
 
 ### 2. N64 rendering: Vulkan + parallel-RDP
 
-- ares' desktop N64 renderer is a software RDP. Phobos replaces it with a **Vulkan backend built on parallel-RDP** (`ares/n64/vulkan/`, vendored `parallel-rdp/`), with:
-  - A **command ring + timeline worker + pipeline-compile threads**, pinned to the device's performance cores.
+- ares renders the N64 with **parallel-RDP on Vulkan** (`ares/n64/vulkan/`, vendored `parallel-rdp/`). Phobos adds:
+  - A **command ring + timeline worker + pipeline-compile threads**.
   - **Pipeline cache persistence** (user-configurable path, copy-on-change) so shader compilation doesn't repeat every launch.
   - **Internal upscaling** (1x–4x), **VI post-processing** bypass toggle, **supersample scanout**, and **weave deinterlacing** options.
+  - An opt-in **Asynchronous RDP** (N64 Experimental; the default stays synchronous), up to 256 render contexts in flight, and binary fences on Turnip, whose emulated timeline semaphores made GPU submits wait.
   - **Non-fatal RDP validation:** a malformed command (e.g. a 4-bit VRAM pointer from a save-state load) is logged and skipped instead of crashing the RDP (upstream aborts). This fixed a hard freeze on some save-state restores.
 - The Vulkan `VkDevice` is kept alive across soft resets (the fragile destroy/recreate path is avoided), and bounded waits were added to `CommandRing::drain`, `wait_for_timeline`, and the scanout fence.
 
@@ -31,7 +32,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 ### 4. 64DD support
 
-- The N64 core's **64DD** path is wired end-to-end: firmware scanning maps `fw_n64dd_jp`/`fw_n64dd_us`, a secondary `.ndd` medium can be mounted (JNI `loadSecondaryRom` → native disk mount on the Floppy Disk port), and the pause menu has a "Load Disk" picker. Verified with F-Zero X Expansion Kit at 60fps.
+- The N64 core's **64DD** path is wired end-to-end: the 64DD IPL has Japan, US and development firmware slots, a secondary `.ndd` medium can be mounted (JNI `loadSecondaryRom` → native disk mount on the Floppy Disk port), and the pause menu's Disk action changes disks. Verified with F-Zero X Expansion Kit at 60fps.
 
 ### 5. Input, paks, and controller features
 
@@ -48,7 +49,9 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 - **GBA RTC clock is host-seeded:** a fresh S3511A RTC is initialized with the host date/time (not the 2000 epoch), and legacy saves whose RTC year is behind the host year are auto-reseeded on load. Verified: Pokemon Unbound's in-game clock matches the host.
 - **Auto-Save State / Auto-Load State:** an always-available "Auto" save-state slot (also reachable from the slot cycler after slot 9, and manually save/load/delete-able) is saved automatically on quit and restored on load when enabled. Both toggles live in Settings and the in-game pause menu, for all cores.
 - **N64 save import and export:** the pause menu's Save Data section imports a game's battery save from Mupen64Plus (`.eep`, `.sra`, `.fla`, `.mpk`), RetroArch (`.srm`, compressed or not) or a Phobos backup, and exports it in any of those formats. Mupen64Plus and RetroArch store SRAM and FlashRAM with every 32-bit word reversed, which the conversion undoes. An import first moves the save it replaces, and the game's auto-save state (which would restore the old save), to a Backups folder beside the save, then restarts the game.
-- **PS1 multi-disc swap:** the pause menu's Change Disc hot-swaps the disc tray (disconnect → allocate → connect), re-reading the new disc's `cd.rom` + TOC without reloading the console — no more restart for disc 2.
+- **Multi-disc games:** a game's discs are one Library entry with a disc chooser, and on the PlayStation the pause menu's Disc action hot-swaps the disc tray (disconnect → allocate → connect) with the game paused, re-reading the new disc's `cd.rom` + TOC without reloading the console.
+- **Games load from where they are:** a game the app can read by path is read straight from storage (CD images included), with no copy in the app's cache; Phobos keeps saves in its own folder, never beside the ROM.
+- **Firmware is matched by content:** Settings → Firmware's Scan Folder identifies each BIOS by the SHA-256 of what the core reads (ares's firmware list, the copies Phobos bundles, MAME's Neo Geo CD BIOSes), whatever the file is called, and each slot shows Verified, Unrecognized, Unreadable or Built-in.
 
 ### 7. N64 timing/QoL knobs (Mupen64Plus-FZ style)
 
@@ -78,29 +81,27 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | PlayStation | ✅ DualShock + analog toggle, memcards, save states, multi-disc swap (MGS verified), Ape Escape opening cinematic verified |
 | Neo Geo Pocket / Color | ✅ BIOS settings (language/date) persist |
 | WonderSwan / Color | ✅ |
-| MSX / MSX2 | ✅ (incl. tape) |
+| MSX / MSX2 | ✅ On-screen MSX keyboard (tapes not supported yet) |
 | Atari 2600, ColecoVision | ✅ |
-| ZX Spectrum | ✅ Tape loading, on-screen keyboard, gamepad schemes (QAOP/ZXZX/Kempston) — Manic Miner verified |
+| ZX Spectrum (48K and 128K) | ✅ Tape loading with automatic tape control and a faster-loading option, 48K keyboard, control schemes (Kempston, Sinclair, Cursor, QAOP and more) remembered per game, save states |
 | SG-1000 | ✅ Verified 2026-08-14 |
 | Mega CD | ✅ Audio fixed (lockstep multi-stream mixer, user-verified) |
+| Mega 32X | ✅ Six games verified (Knuckles' Chaotix, Virtua Racing Deluxe, NBA Jam TE and others) |
 | PC Engine (HuCard) | ✅ |
+| PC Engine CD | ✅ Boots through System Card 3.0, read straight from the SD card (Rondo of Blood verified @60 FPS) |
 | SuperGrafx | ✅ |
-| Neo Geo (MVS/AES) | ✅ Graphics + controls fixed (KOF2003 verified @59.2 FPS); **audio works** (KOF2003 confirmed; `ring buffer 0/12000` log is a suspected formatting artifact); per-title compat matrix → [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) |
-| Neo Geo CD | ✅ **Boots + renders** (Samurai Shodown RPG verified @59.2 FPS: BIOS menu, title, char-select, in-game HUD/characters/backgrounds) — residual title-menu text glitch tracked as Task NGCD-M3 |
-| **Known broken / under investigation** | |
-| PC Engine CD | ❌ Does not boot (PCE HuCard + SuperGrafx work) |
+| Neo Geo (MVS/AES) | ✅ Graphics, controls and audio (KOF2003 verified @59.2 FPS); per-title compat matrix → [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) |
+| Neo Geo CD | ✅ Boots, renders and has sound (Samurai Shodown verified), with the CDZ's double-speed drive and an optional faster loading speed |
+| **Added, not yet tried with a game on-device** | |
+| Mega CD 32X, Super Game Boy, Arcade (Aleck64, SG-1000A) | Load paths, firmware slots and touch layouts are in |
+| LaserActive (Mega LD, PC Engine LD) | `.mmi` discs read straight from the SD card; both PAC BIOSes boot (60 FPS on the RP6), and Side in the pause menu turns the disc over |
 
 > Sega Saturn is not listed: upstream ares never completed the core (empty System::run stub,
-> kept in the tree for future work). Neo Geo CD is no longer in that bucket — it boots and
-> renders in this fork (see above). PC Engine CD is loaded by the PCE core but does not
-> boot on-device — tracked in Known issues.
+> kept in the tree for future work).
 
 ### Known issues / not yet functional
 
-- **Neo Geo MVS/AES — audio log artifact** — games boot and render correctly and **have audio** (KOF2003 confirmed on-device). The `ring buffer 0/12000` log line is suspected to be a **string-formatting bug**, not a real audio fault — verify the log formatting. Full per-title status in [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md).
-- **PCE-CD** — does not boot; PCE HuCard + SuperGrafx work.
-- **ZX Spectrum 128K** — gated with a clean "Unsupported" popup (PSG co-routine / scheduler on ARM64, same class as PCE/Neo Geo); 48K works.
-- **N64 load-state** — a stale-DMA exception-loop was seen on some titles after restore; RDP validation is now non-fatal so it degrades instead of freezing.
+- **MSX tapes** — the MSX's tape deck isn't connected yet, so cassette games don't load.
 
 ---
 
@@ -108,11 +109,11 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 Phobos targets **perfect compatibility** for the Neo Geo MVS/AES library. Notes for users:
 
-- **Scope:** strictly **Neo Geo MVS/AES** for the cartridge core — it is **not** a general arcade core. Neo Geo CD is a separate core, now booting + rendering (see the systems table; residual tracked as Task NGCD-M3).
-- **"FBNeo + MAME hybrid":** only Neo Geo ROM/driver data and decryption routines are borrowed from MAME and FBNeo (CMC/CMC42/CMC50/SMA/PCM2/PVC, kof2k2-family) to maximize Neo Geo coverage — other arcade boards are not emulated.
-- **Current status (2026-08-19):** graphics fixed (sprite zoom tables + vflip/zoom decode, mirroring MAME); P1/P2 input mirror fixed (P1 works; P2 needs a second controller on a handheld); **audio works** (KOF2003 confirmed on-device) — the `ring buffer 0/12000` log line is suspected to be a string-formatting bug, not a real fault.
+- **Scope:** strictly **Neo Geo MVS/AES** for the cartridge core — it is **not** a general arcade core (the Arcade system runs the other boards ares has, Aleck64 and SG-1000A). Neo Geo CD is a separate core (see the systems table).
+- **Ported from MAME:** cartridge decryption and banking for the protected sets (CMC/CMC42/CMC50/SMA/PCM2/PVC, the kof2k2 family), the LSPC zoom table and the RTC protocol come from MAME (BSD-3-Clause, notice in [LICENSE](LICENSE)) — other arcade boards are not emulated by this core.
+- **Status:** graphics (sprite zoom tables + vflip/zoom decode, mirroring MAME), controls and audio work (KOF2003 confirmed on-device); player 2 needs a second controller on a handheld.
 - **Per-title compatibility matrix:** [docs/neo-geo-compatibility.md](docs/neo-geo-compatibility.md) — 288 titles, categorized by protection (PVC/K2K2/CMC42/CMC50/PCM2/SMA/bootleg/standard) and ranked hardest-first, with Boot/Gfx/Audio/Ctrl status columns.
-- **Controls:** Neo Geo default mapping (Xbox-layout reference) — **X→A, Y→B, A→C, B→D, R1→A+B, R2→C+D, L1→B+C, L2→A+B+C, R3→B+C+D** (multi-bit combos; supersedes the Genesis-heritage C→R1/D→R2 single-bit mapping). Per-core + per-game controller rebinding (RetroArch-style 3-tier Global→Core→Game) is a planned task (13a-13d).
+- **Controls:** Neo Geo default mapping (Xbox-layout reference) — **X→A, Y→B, A→C, B→D, R1→A+B, R2→C+D, L1→B+C, L2→A+B+C, R3→B+C+D** (multi-bit combos). Buttons can be remapped for one game, a console or all consoles from the pause menu's Controller section or Settings → Inputs & Hotkeys.
 
 ---
 
@@ -127,12 +128,13 @@ own launcher has a fixed emulator list and can't.
 
 ## Building Phobos
 
-Requires the Android SDK (platform 37, build-tools 36, NDK 28.x, CMake 3.22.1)
-and a JDK 17+. From the `android/` directory:
+Requires the Android SDK (platform 37, build-tools 36, NDK 28.x, CMake 3.22.1),
+a JDK 17+, and the `thirdparty/libadrenotools` submodule
+(`git submodule update --init --recursive`). From the `android/` directory:
 
 ```sh
 ./gradlew assembleRelease        # release APKs: app-legacy-release.apk + app-modern-release.apk
-./gradlew assembleDebug          # debug APKs (also builds all four variants)
+./gradlew assembleDebug          # debug APKs for both flavors
 ```
 
 APKs land in `app/build/outputs/apk/<flavor>/<type>/`.

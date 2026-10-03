@@ -72,8 +72,11 @@ namespace mia {
 
   extern std::function<string ()> homeLocation;
   extern std::function<string ()> saveLocation;
+  //where a MAME parent set that isn't beside the game is looked for (empty: nowhere else)
+  extern std::function<string ()> parentLocation;
   auto setHomeLocation(std::function<string ()>) -> void;
   auto setSaveLocation(std::function<string ()>) -> void;
+  auto setParentLocation(std::function<string ()>) -> void;
   auto construct() -> void;
   auto identify(const string& filename) -> std::vector<string>;
   auto import(std::shared_ptr<Pak>, const string& filename) -> bool;

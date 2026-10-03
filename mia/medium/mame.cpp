@@ -308,7 +308,14 @@ auto Mame::loadRomFile(string location, string filename, string region, Markup::
       return assemblyFailure(AssemblyStatus::MalformedParent, {"database manifest is missing for parent ", parent});
     }
 
-    location = {Location::path(location), "/", parentInfo["game/name"].string(), ".zip"};
+    auto parentName = parentInfo["game/name"].string();
+    location = {Location::path(location), "/", parentName, ".zip"};
+    if(!file::exists(location)) {
+      if(auto path = mia::parentLocation()) {
+        string fallback = {path, parentName, ".zip"};
+        if(file::exists(fallback)) location = fallback;
+      }
+    }
     currentInfo = parentInfo;
   }
 }

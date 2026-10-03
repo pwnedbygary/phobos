@@ -102,7 +102,10 @@ contains them, but Phobos's system table doesn't list them.
   MAME-format sets read by `mia/medium/mame.cpp`. A small set of games; the runner still picks the
   Aleck64 controls. Phobos listed Arcade until Task 35 removed it (2026-08-09; the reason wasn't
   recorded), so bringing it back is the user's call.
-- **LaserActive** (Mega LD and PC Engine LD): niche, with very large disc images.
+- **LaserActive** (Mega LD and PC Engine LD): niche, with very large disc images. **Added
+  2026-10-02** (branch `cursor/laseractive-2b67`, on top of PC Engine CD's): `.mmi` discs are read
+  where they are, both PAC BIOSes boot on the RP6, and Side in the pause menu turns the disc over;
+  not yet tried with a game.
 - **Pocket Challenge V2**: a WonderSwan variant for educational software; niche.
 
 Each needs an entry in the system table, its loader checked on Android, firmware entries, a

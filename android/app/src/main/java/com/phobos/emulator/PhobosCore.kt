@@ -80,6 +80,10 @@ object PhobosCore {
     external fun mapFirmwareFile(name: String, path: String)
     /** Firmware keys [systemName] can't start without that aren't mapped ("fw_mcd": any Mega CD BIOS). */
     external fun missingFirmware(systemName: String): List<String>
+    /** The sides of the LaserActive disc being played (its .mmi's media), in order; empty for other systems. */
+    external fun getLaserdiscSides(): List<String>
+    /** Puts [side] of the LaserActive disc in the tray, or takes the disc out for ""; false without one. */
+    external fun setLaserdiscSide(side: String): Boolean
     external fun setSurface(surface: Any?)
 
     // The surface the core draws to. A game screen can replace another (a frontend starting a game over the

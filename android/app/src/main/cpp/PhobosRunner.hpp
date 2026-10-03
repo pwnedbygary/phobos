@@ -114,6 +114,10 @@ namespace ares {
   auto missingFirmware(const char* system) -> std::vector<string>;
   auto setCustomDriverPath(const char* path) -> void;
   auto loadSecondaryRom(const char* systemName, const char* uri) -> bool;
+  // The sides of the LaserActive disc being played (its .mmi's media, in order); empty for other systems.
+  auto laserdiscSides() -> std::vector<string>;
+  // Puts [side] of the LaserActive disc in the tray, or takes the disc out for ""; false without one.
+  auto setLaserdiscSide(const char* side) -> bool;
   auto setSurface(JNIEnv* env, jobject surface) -> void;
   auto getNewLogs() -> std::vector<LogEntry>;
   auto isFirstFrameRendered() -> bool;
