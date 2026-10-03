@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Zips the Windows x64 build as dist/Phobos-<version>-windows-x64.zip (Phobos.exe with the System
-# and Database folders it copies into its data folder), after checking that Phobos.exe imports
+# Zips the Windows x64 build as dist/Phobos-<version>-windows-x64.zip (Phobos.exe, the license
+# notices, and the System and Database folders it copies into its data folder), after checking that Phobos.exe imports
 # nothing but Windows' own DLLs: the C++ runtime, winpthreads and SDL are linked in, and Vulkan
 # comes from the driver's vulkan-1.dll, opened at run time.
 #   scripts/package-windows.sh [build directory]
@@ -27,6 +27,8 @@ rm -rf "$STAGE" "$STAGE.zip"
 mkdir -p "$STAGE"
 cp "$EXE" "$STAGE/Phobos.exe"
 cp -R "$BUILD/Database" "$BUILD/System" "$STAGE/"
+cp "$ROOT/LICENSE" "$STAGE/LICENSE.txt"
+if [[ -f "$ROOT/COPYING" ]]; then cp "$ROOT/COPYING" "$STAGE/COPYING.txt"; fi
 (cd "$DIST" && cmake -E tar cf "$STAGE.zip" --format=zip "$(basename "$STAGE")")
 rm -rf "$STAGE"
 echo "$STAGE.zip"

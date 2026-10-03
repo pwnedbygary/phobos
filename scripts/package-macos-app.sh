@@ -22,12 +22,17 @@ if [[ ! -f "$CACHE/MoltenVK-macos.tar" ]]; then
 fi
 MOLTENVK="$(find "$CACHE" -path '*dylib/macOS/libMoltenVK.dylib' -print -quit)"
 test -n "$MOLTENVK" || { echo "No libMoltenVK.dylib in the MoltenVK $MOLTENVK_VERSION archive" >&2; exit 1; }
+MOLTENVK_LICENSE="$(find "$CACHE" -path '*/MoltenVK/LICENSE' -print -quit)"
+test -n "$MOLTENVK_LICENSE" || { echo "No LICENSE in the MoltenVK $MOLTENVK_VERSION archive" >&2; exit 1; }
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 cp "$BUILD/phobos" "$APP/Contents/MacOS/Phobos"
 cp "$MOLTENVK" "$APP/Contents/Frameworks/libMoltenVK.dylib"
 cp -R "$BUILD/Database" "$BUILD/System" "$APP/Contents/Resources/"
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+if [[ -f "$ROOT/COPYING" ]]; then cp "$ROOT/COPYING" "$APP/Contents/Resources/COPYING"; fi
+cp "$MOLTENVK_LICENSE" "$APP/Contents/Resources/LICENSE-MoltenVK"
 
 ICONSET="$ROOT/build/Phobos.iconset"
 rm -rf "$ICONSET"

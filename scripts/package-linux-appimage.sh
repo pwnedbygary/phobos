@@ -29,8 +29,10 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 export ARCH=x86_64
 
 rm -rf "$APPDIR"
-mkdir -p "$APPDIR/usr/share/phobos"
+mkdir -p "$APPDIR/usr/share/phobos" "$APPDIR/usr/share/doc/phobos"
 cp -R "$BUILD/Database" "$BUILD/System" "$APPDIR/usr/share/phobos/"
+cp "$ROOT/LICENSE" "$APPDIR/usr/share/doc/phobos/"
+if [[ -f "$ROOT/COPYING" ]]; then cp "$ROOT/COPYING" "$APPDIR/usr/share/doc/phobos/"; fi
 cp "$ROOT/ares/ares/resource/icon@2x.png" "$ROOT/build/phobos.png"
 "$TOOLS/linuxdeploy-x86_64.AppImage" --appdir "$APPDIR" \
   --executable "$BUILD/phobos" \

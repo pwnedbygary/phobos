@@ -513,6 +513,10 @@ code master added: the LaserActive side functions in `PhobosRunner.cpp/.hpp`, ju
   unloads the running game first through `unloadGame()`, the teardown `quitGame()` did, without
   quitting a frontend's session. If the new game then fails to start, the library shows instead of
   the stopped game. Android isn't affected: `startLoad()` unloads before every load.
+- The packages carried no license notices. They now ship LICENSE, and COPYING once the relicense lands: in the
+  AppImage's `usr/share/doc/phobos`, beside Phobos.exe as `.txt` files, and in Phobos.app's Resources. Phobos.app
+  also gets MoltenVK's Apache-2.0 license, from MoltenVK's release archive. Still missing: the notice for
+  winpthreads, which Phobos.exe links statically.
 - Not on desktop yet (part of UI parity): the systems added since #80's base (Mega LD, PC Engine LD,
   Pocket Challenge V2) aren't in `desktop/Library.cpp`'s table, and the LaserActive BIOSes aren't in
   `desktop/Firmware.cpp`'s copies of the app's firmware maps. The desktop also lacks the app's
@@ -526,6 +530,8 @@ Checks run (2026-10-03, Mac M1 + Retroid Pocket 6 `49016109`):
   with sound through SDL. Handing the second one to the running program (`open -a` on a throwaway
   app bundle, which SDL delivers as a drop) writes the first game's saves under its own name
   ("[Blue]") and starts the second. A build of #80's `main.cpp` wrote them as "[Red]".
+- `scripts/package-macos-app.sh` on that build: Phobos.app holds LICENSE and LICENSE-MoltenVK (and COPYING, with
+  one in place), its ad hoc signature verifies, and at start it loads the bundled MoltenVK. No N64 game was run.
 - Android: `./gradlew testModernDebugUnitTest assembleModernRelease` succeeds; the 240 tests pass,
   and all 92 JNI functions the build compiles are exported. On the RP6, an MSX cartridge paused,
   resumed and quit: AAudio stopped, restarted, and stayed open for the next game, which played
