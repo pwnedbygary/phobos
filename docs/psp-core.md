@@ -2,8 +2,9 @@
 
 **Status (2026-10-03):** started, at the user's request. Part 1, the Allegrex CPU's interpreter (integer and FPU
 instructions) with host tests, is on branch `cursor/psp-core-2b67`; part 2, the recompiler, on
-`cursor/psp-recompiler-2b67` on top of it; part 3, the VFPU, on `cursor/psp-vfpu-ares-2b67` on top of that. Nothing
-is in the app yet.
+`cursor/psp-recompiler-2b67` on top of it; part 3, the VFPU, on `cursor/psp-vfpu-ares-2b67` on top of that; part 4,
+compiled loads and stores straight to RAM, on `cursor/psp-fastmem-2b67`. The user asked for the whole feature to be
+stacked and merged at once. Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -87,15 +88,27 @@ Part 2 (`ares/psp/cpu/recompiler.cpp`, `recompiler-ipu.cpp`), built on ares's re
 - **Invalidation.** Whoever writes memory that can hold code calls `recompiler.invalidate()` (or
   `invalidateRange()`), which drops the whole section: the PSP's memory map will for every write, the CPU's and
   the ones it doesn't make (DMA, the HLE kernel loading a module); the tests' machine does it for every write.
+- **Loads and stores straight to RAM** (part 4, `recompiler-memory.cpp`). The CPU's owner gives it a page table
+  (`Allegrex::pages`): for each 4 KiB physical page, where it is in host memory, or nothing for memory read()
+  and write() must handle (hardware registers). Compiled `lb`, `lbu`, `lh`, `lhu`, `lw`, `sb`, `sh`, `sw`,
+  `lwc1`, `swc1`, `lv.s`, `sv.s`, `lv.q` and `sv.q` check the alignment, look up the page and access host memory
+  directly; anything else (a misaligned address, a page without an entry) runs the instruction through the
+  interpreter. Stores use a copy of the table without the pages that hold compiled code (`writePages`), so a
+  store there goes through write(), which drops that code, and then the page is fast again. `lwl`, `lwr`,
+  `swl`, `swr`, `ll`, `sc` and the VFPU's unaligned quads still go to the interpreter.
 - **The MIPS-generic parts** (the cache by physical address, delay slots, the calls into the interpreter) are
   plain MIPS and would serve another MIPS CPU without a TLB, such as the PS1's R3000A; only the native
   instructions are Allegrex's.
 
 Not yet: linking blocks to each other (each block returns to the dispatcher), keeping MIPS registers in host
-registers, a fast path for loads and stores into RAM (they call the interpreter), native FPU code, tracking code
-finer than 4 KiB (a game that writes data next to its code recompiles that code each time), and code that
-rewrites itself further on in the block it's running (the rest of that block runs as compiled; the next run
-gets the new code).
+registers, native FPU and VFPU arithmetic, tracking code finer than 4 KiB (a game that writes data next to its
+code recompiles that code each time), and code that rewrites itself further on in the block it's running (the
+rest of that block runs as compiled; the next run gets the new code).
+
+Speed (`SANITIZE= ALLEGREX_BENCHMARK=1 tests/allegrex/run-tests.sh`, a loop of loads, stores and arithmetic, the
+test build at -O1), in millions of instructions a second: on the Mac (ARM64), the interpreter 150, the recompiler
+without a page table 505, with it 1206; in the Linux container (ARM64, 4 cores), 135, 219 and 1212. The PSP's CPU
+runs at up to 333 MHz.
 
 Tests: every test group runs on both engines, plus recompiler cases (blocks kept in the cache, code that rewrites
 a function it already ran, a branch across a section, a thread switch at a syscall in a delay slot to a thread
