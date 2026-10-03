@@ -334,6 +334,19 @@ Java_com_phobos_emulator_PhobosCore_rewindZxTape(JNIEnv* env, jobject) {
     ares::rewindZxTape();
 }
 
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_phobos_emulator_PhobosCore_getMsxTapeState(JNIEnv* env, jobject) {
+    auto state = ares::getMsxTapeState();
+    jintArray result = env->NewIntArray((jsize)state.size());
+    if (result) env->SetIntArrayRegion(result, 0, (jsize)state.size(), state.data());
+    return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_rewindMsxTape(JNIEnv* env, jobject) {
+    ares::rewindMsxTape();
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setN64ExpansionPak(JNIEnv* env, jobject, jboolean enabled) {
     ares::setN64ExpansionPak(enabled);

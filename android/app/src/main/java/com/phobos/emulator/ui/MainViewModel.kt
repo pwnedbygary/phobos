@@ -283,6 +283,8 @@ class MainViewModel(
                 "SuperGrafx" to pceCd,
                 "ZX Spectrum" to zx,
                 "ZX Spectrum 128" to zx,
+                "MSX" to setOf("fw_msx"),
+                "MSX2" to setOf("fw_msx2_main", "fw_msx2_sub"),
             )
         }
         // Systems whose pak() reads neogeo.zip (the BIOS, and the LSPC zoom table the Neo Geo CD shares).
@@ -1529,13 +1531,30 @@ class MainViewModel(
         if (next != _zxTape.value) _zxTape.value = next
     }
 
+    // The MSX's tape, polled with the ZX Spectrum's, for the MSX keyboard's stripe and the pause menu.
+    private val _msxTape = MutableStateFlow(ZxTape())
+    val msxTape: StateFlow<ZxTape> = _msxTape
+
+    private fun refreshMsxTape() {
+        val next = if (_isLoaded.value && currentSystemName.startsWith("MSX")) {
+            ZxTape.of(PhobosCore.getMsxTapeState())
+        } else ZxTape()
+        if (next != _msxTape.value) _msxTape.value = next
+    }
+
     init {
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
                 refreshZxTape()
+                refreshMsxTape()
                 delay(100)
             }
         }
+    }
+
+    fun rewindMsxTape() = viewModelScope.launch(Dispatchers.Default) {
+        PhobosCore.rewindMsxTape()
+        refreshMsxTape()
     }
 
     fun setZxTapePlaying(play: Boolean) = viewModelScope.launch(Dispatchers.Default) {

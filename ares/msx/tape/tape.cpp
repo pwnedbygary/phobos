@@ -152,29 +152,22 @@ auto Tape::write(n1 data) -> void {
 }
 
 auto Tape::serialize(serializer& s) -> void {
+  //[Phobos] As the ZX Spectrum's: the samples, and the length, rate and range that describe them, come
+  //from the loaded tape (8 bytes a sample made a state with a tape tens of megabytes); a state holds
+  //where the tape stands, whether it plays and its signal level.
   u64 position = node ? node->position() : 0;
-  u64 length = node ? node->length() : 0;
-  u64 frequency = node ? node->frequency() : 44100;
   bool playing = node ? node->playing() : false;
   bool recording = node ? node->recording() : false;
 
   Thread::serialize(s);
   s(position);
-  s(length);
-  s(frequency);
   s(playing);
   s(recording);
-  s(range);
   s(output);
   s(input);
-  s(data);
 
   if(s.reading() && node) {
-    node->setPosition(position);
-    node->setLength(length);
-    node->setFrequency(frequency);
-    stream->setFrequency(frequency);
-    Thread::setFrequency(frequency);
+    node->setPosition(min(position, node->length()));
     node->stop();
     if(playing) node->play();
     if(recording) node->record();

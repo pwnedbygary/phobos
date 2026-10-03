@@ -714,6 +714,26 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## MSX tapes — 2026-10-03
+
+Branch `cursor/msx-tapes-2b67`, stacked on `cursor/pocket-challenge-v2-2b67`. The plan row "MSX tapes" has the
+details; this records what was checked and how.
+
+- **Checks run:** both flavors build (`./gradlew testModernDebugUnitTest assembleModernRelease
+  assembleLegacyRelease`), 231 host tests pass. On the RP6 (modern release, data kept), with a stand-in tape
+  written for the test (`PHOBOS.cas`: a file header of ten 0xD3 bytes and the name PHOBOS, then the tokenized
+  program `10 PRINT "PHOBOS TAPE OK"` / `20 GOTO 10` ending in ten zero bytes; deleted afterwards with the save
+  folder, states and empty folders it left) launched as a frontend would (`system=msx`): the user's MSX BIOS
+  booted to MSX BASIC 1.0; `CLOAD` typed on the on-screen keyboard ran the tape (stripe "Loading", 32 s), BASIC
+  printed "Found:PHOBOS" and Ok and stopped the motor (stripe "Stopped 99%"); `RUN` printed the line over and
+  over; the stripe's rewind took the tape to the start; a state saved with the tape in (82,760 bytes) loaded back.
+  Metal Gear (MSX2) boots to its title under the user's MSX2 BIOS pair.
+- **Found on the way:** with a real BIOS the first try crashed (a null read in `Board::Konami::read`): the tape's
+  pak had been connected to the cartridge slot too. Tape games now leave the slots empty.
+- **Not checked:** a commercial tape, a `.wav` or `.tzx` tape, an MSX2 tape, the legacy APK on a device.
+- **On the RP6:** typing goes through the on-screen keyboard (no hardware keyboard mapping); the pause menu's MSX
+  section turns it on.
+
 ## Pocket Challenge V2 — 2026-10-03
 
 Branch `cursor/pocket-challenge-v2-2b67`, from master. The plan row "Pocket Challenge V2" has the details;

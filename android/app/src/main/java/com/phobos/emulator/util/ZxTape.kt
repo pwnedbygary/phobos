@@ -2,7 +2,7 @@ package com.phobos.emulator.util
 
 import java.util.Locale
 
-/** The ZX Spectrum's tape as the tape controls show it. */
+/** The ZX Spectrum's tape, or the MSX's, as the tape controls show it. */
 data class ZxTape(
     val inserted: Boolean = false,
     val playing: Boolean = false,
@@ -25,7 +25,7 @@ data class ZxTape(
     }
 
     companion object {
-        /** From PhobosCore.getZxTapeState(): [in, playing, position ms, length ms]. */
+        /** From PhobosCore.getZxTapeState() or getMsxTapeState(): [in, playing, position ms, length ms]. */
         fun of(state: IntArray): ZxTape =
             if (state.size >= 4 && state[0] != 0) ZxTape(true, state[1] != 0, state[2], state[3]) else ZxTape()
 

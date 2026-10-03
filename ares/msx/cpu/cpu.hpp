@@ -43,6 +43,10 @@ struct CPU : Z80, Z80::Bus, Thread {
   auto readSecondarySlot() -> n8;
   auto writeSecondarySlot(n8 data) -> void;
 
+  auto writePortC(n8 data) -> void;
+  auto writePPIControl(n8 data) -> void;
+  auto cassetteMotor() const -> bool { return !io.portC.bit(4); }
+
   //serialization.cpp
   auto serialize(serializer&) -> void;
 
@@ -55,6 +59,9 @@ private:
 
   struct IO {
     n1 irqLine;
+    //[Phobos] The PPI's port C: the keyboard row (bits 0-3) and the cassette motor relay (bit 4, low
+    //runs the motor). Until the BIOS sets the PPI up, its pins are inputs and the motor stays off.
+    n8 portC = 0xff;
   } io;
 };
 

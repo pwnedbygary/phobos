@@ -74,6 +74,7 @@ auto CPU::in(n16 address) -> n8 {
   case 0xa2: return psg.read();
   case 0xa8: return readPrimarySlot();
   case 0xa9: return keyboard.read();
+  case 0xaa: return io.portC;
   case 0xb5:
     if(Model::MSX2()) return rtc.read();
     return 0xff;
@@ -97,7 +98,8 @@ auto CPU::out(n16 address, n8 data) -> void {
   case 0xa0: return psg.select(data);
   case 0xa1: return psg.write(data);
   case 0xa8: return writePrimarySlot(data);
-  case 0xaa: return keyboard.write(data.bit(0,3));
+  case 0xaa: return writePortC(data);
+  case 0xab: return writePPIControl(data);
   case 0xb4:
     if(Model::MSX2()) return rtc.select(data);
     return;
@@ -149,4 +151,22 @@ auto CPU::writeSecondarySlot(n8 data) -> void {
   slot[primary].secondary[1] = data.bit(2,3);
   slot[primary].secondary[2] = data.bit(4,5);
   slot[primary].secondary[3] = data.bit(6,7);
+}
+
+//
+
+//[Phobos] The BIOS writes port C whole after reading it back (the keyboard scan keeps bits 4-7), and
+//switches the cassette motor one bit at a time through the PPI's control port.
+auto CPU::writePortC(n8 data) -> void {
+  io.portC = data;
+  keyboard.write(data.bit(0,3));
+  tapeDeck.motor(!data.bit(4));
+}
+
+auto CPU::writePPIControl(n8 data) -> void {
+  //setting the PPI's mode clears its outputs, as the BIOS does once at power on
+  if(data.bit(7)) return writePortC(0x00);
+  n8 portC = io.portC;
+  portC.bit(data.bit(1,3)) = data.bit(0);
+  writePortC(portC);
 }

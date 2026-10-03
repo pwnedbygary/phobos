@@ -81,7 +81,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 | PlayStation | ✅ DualShock + analog toggle, memcards, save states, multi-disc swap (MGS verified), Ape Escape opening cinematic verified |
 | Neo Geo Pocket / Color | ✅ BIOS settings (language/date) persist |
 | WonderSwan / Color | ✅ |
-| MSX / MSX2 | ✅ On-screen MSX keyboard (tapes not supported yet) |
+| MSX / MSX2 | ✅ On-screen MSX keyboard; tapes (`.cas`, `.wav`, `.tzx`, `.tsx`) run from the cassette motor as on the real machine (`CLOAD`, `BLOAD` or `RUN"CAS:"` with a BASIC BIOS set in Firmware; the bundled C-BIOS has none) |
 | Atari 2600, ColecoVision | ✅ |
 | ZX Spectrum (48K and 128K) | ✅ Tape loading with automatic tape control and a faster-loading option, 48K keyboard, control schemes (Kempston, Sinclair, Cursor, QAOP and more) remembered per game, save states |
 | SG-1000 | ✅ Verified 2026-08-14 |
@@ -102,7 +102,7 @@ Phobos is not a UI reskin: it carries substantial core and platform engineering.
 
 ### Known issues / not yet functional
 
-- **MSX tapes** — the MSX's tape deck isn't connected yet, so cassette games don't load.
+- **Saving to MSX tape** — tapes load, but `CSAVE` and `SAVE"CAS:"` don't record to them.
 
 ---
 

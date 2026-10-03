@@ -9,4 +9,5 @@ auto CPU::serialize(serializer& s) -> void {
     s(slot.secondary);
   }
   s(io.irqLine);
+  s(io.portC);
 }

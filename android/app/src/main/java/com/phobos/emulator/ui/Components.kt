@@ -472,9 +472,9 @@ fun ZxTapeControlItem(automatic: Boolean, onSelect: (Boolean) -> Unit) {
     )
 }
 
-/** The tape's counter with its rewind and play or stop buttons. */
+/** The tape's counter with its rewind button, and play or stop unless the machine runs the tape itself. */
 @Composable
-fun ZxTapeItem(tape: ZxTape, onPlaying: (Boolean) -> Unit, onRewind: () -> Unit) {
+fun ZxTapeItem(tape: ZxTape, onPlaying: ((Boolean) -> Unit)?, onRewind: () -> Unit) {
     val ring = MaterialTheme.colorScheme.primary
     ListItem(
         headlineContent = { Text("Tape") },
@@ -484,9 +484,11 @@ fun ZxTapeItem(tape: ZxTape, onPlaying: (Boolean) -> Unit, onRewind: () -> Unit)
                 IconButton(onClick = onRewind, enabled = tape.positionMs > 0, modifier = Modifier.focusRing(ring, CircleShape)) {
                     Icon(Icons.Rounded.SkipPrevious, contentDescription = "Rewind the tape")
                 }
-                IconButton(onClick = { onPlaying(!tape.playing) }, modifier = Modifier.focusRing(ring, CircleShape)) {
-                    if (tape.playing) Icon(Icons.Rounded.Pause, contentDescription = "Stop the tape")
-                    else Icon(Icons.Rounded.PlayArrow, contentDescription = "Play the tape")
+                if (onPlaying != null) {
+                    IconButton(onClick = { onPlaying(!tape.playing) }, modifier = Modifier.focusRing(ring, CircleShape)) {
+                        if (tape.playing) Icon(Icons.Rounded.Pause, contentDescription = "Stop the tape")
+                        else Icon(Icons.Rounded.PlayArrow, contentDescription = "Play the tape")
+                    }
                 }
             }
         },

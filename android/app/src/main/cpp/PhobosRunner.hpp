@@ -128,6 +128,9 @@ namespace ares {
   auto getZxTapeState() -> std::array<s32, 4>;
   auto setZxTapePlaying(bool play) -> void;
   auto rewindZxTape() -> void;
+  // The MSX tape: [in, playing, position ms, length ms]; the motor relay plays it, this winds it back.
+  auto getMsxTapeState() -> std::array<s32, 4>;
+  auto rewindMsxTape() -> void;
   auto setZxControlScheme(s32 scheme) -> void;
   auto setZxStickToKeys(bool enabled) -> void;
   auto setZxReversePitch(bool enabled) -> void;

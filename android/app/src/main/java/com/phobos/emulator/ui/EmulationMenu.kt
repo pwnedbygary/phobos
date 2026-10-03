@@ -648,6 +648,9 @@ private fun MsxKeyboardSection(
     MenuSection(systemName) {
         SettingsSwitchItem("On-Screen Keyboard", "Show the MSX keyboard, for games that use its keys", showKeyboard) { onKeyboardToggle(it) }
         SettingsSliderItem("Keyboard Opacity", settings.zxKeyboardOpacity, 0.2f..1.0f) { viewModel.setZxKeyboardOpacity(it) }
+        // The MSX's motor relay plays and stops the tape, so it only has a rewind button.
+        val tape by viewModel.msxTape.collectAsState()
+        if (tape.inserted) ZxTapeItem(tape, onPlaying = null, onRewind = { viewModel.rewindMsxTape() })
     }
 }
 

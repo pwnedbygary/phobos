@@ -2286,9 +2286,9 @@ namespace ares {
         LOGW("VFS: No currentMedium pak available for %s", (const char*)nodeName);
       }
 
-      // ZX Spectrum tape: Tape::load() reads "program.tape" (decoded audio)
+      // ZX Spectrum and MSX tapes: Tape::load() reads "program.tape" (decoded audio)
       // from this pak — the MIA medium pak IS the tape.
-      if (nodeName.endsWith("Tape") && root && root->name().beginsWith("ZX Spectrum")) {
+      if (nodeName.endsWith("Tape") && root && (root->name().beginsWith("ZX Spectrum") || root->name().beginsWith("MSX"))) {
         if (currentMedium && currentMedium->pak) {
             LOGI("VFS: Returning currentMedium pak for %s (tape)", (const char*)nodeName);
             return currentMedium->pak;
@@ -2591,8 +2591,17 @@ namespace ares {
       } else if (nodeName == "WonderSwan" || nodeName == "WonderSwan Color" || nodeName == "Pocket Challenge V2") {
           if (!skipBootRom) attachFile("boot.rom");
       } else if (nodeName == "MSX" || nodeName == "MSX2") {
-          attachFile("bios.rom");
-          if (nodeName == "MSX2") attachFile("sub.rom");
+          // A BIOS set on the Firmware screen comes first: a real MSX's has BASIC, which loading from tape
+          // needs, and the bundled C-BIOS doesn't. An MSX2's main and sub ROMs go together, so both must be set.
+          bool msx2 = nodeName == "MSX2";
+          const char* mainKey = msx2 ? "fw_msx2_main" : "fw_msx";
+          if (firmwareSet(mainKey) && (!msx2 || firmwareSet("fw_msx2_sub"))) {
+              attachFile((const char*)firmwareMap[mainKey], "bios.rom");
+              if (msx2) attachFile((const char*)firmwareMap["fw_msx2_sub"], "sub.rom");
+          } else {
+              attachFile("bios.rom");
+              if (msx2) attachFile("sub.rom");
+          }
       } else if (nodeName == "PC Engine" && node->attribute("configuration").find("LaserActive")) {
           // LaserActive (NEC PAC): the first PAC BIOS set, in upstream ares's order (PAC-N10, PAC-N1, PCE-LP1).
           for (auto key : laserActiveNecBiosKeys) {
@@ -2866,16 +2875,22 @@ namespace ares {
 
     for (auto& port : ports) {
       LOGI("VFS: connectDevices - name='%s', type='%s', family='%s'", (const char*)port->name(), (const char*)port->type(), (const char*)port->family());
-      // MSX Tape/Tray: skip entirely (ares manages them, our touch crashes).
       // ZX Spectrum: the tray MUST be connected — Tape::allocate() creates
       // the node/stream/data that Tape::serialize() derefs during power();
       // skipping it crashes with a null-pointer SIGSEGV on load.
+      // MSX: a game on tape goes in the deck (the motor relay plays it); a
+      // cartridge game leaves the deck empty.
       if (port->type() == "Tape" || port->type() == "Tray" || port->type() == "Tape Deck") {
           string fam = port->family();
-          if (fam != "ZX Spectrum") continue;
+          bool msxTape = fam == "MSX" && currentMedium && currentMedium->pak && currentMedium->pak->attribute("tape").boolean();
+          if (fam != "ZX Spectrum" && !msxTape) continue;
           if (port->allocate()) {
               LOGI("VFS: Connecting %s tape tray", (const char*)fam);
               port->connect();
+              // A real MSX doesn't sound its cassette: the signal only reaches the PSG's port.
+              if (msxTape) {
+                  if (auto& stream = ::ares::MSX::tapeDeck.tray.tape.stream) stream->setMuted(true);
+              }
           } else {
               LOGE("VFS: FAILED to allocate %s tape", (const char*)fam);
           }
@@ -2899,6 +2914,10 @@ namespace ares {
         // board only when the slot is left empty; a connected slot would get
         // the disc's pak on a plain board, cutting the 68000 off from the 32X.
         if (port->type() == "Cartridge" && node->attribute("configuration").find("Mega CD 32X")) continue;
+        // An MSX game on tape leaves the cartridge slots empty: the tape's pak has no ROM, and a real BIOS
+        // scanning the slots for one would read a board built around nothing.
+        if (port->type() == "Cartridge" && port->family().beginsWith("MSX") && currentMedium && currentMedium->pak
+            && currentMedium->pak->attribute("tape").boolean()) continue;
         // The N64DD "Disk Drive" port has type "Floppy Disk"; connecting it
         // mounts the .ndd disk medium (returned by pak() for the
         // "Nintendo 64DD Disk" node).
@@ -4450,6 +4469,23 @@ else if (port->type() == "Keyboard") {
     tape->setPosition(0);
     deck.heldByUser = false;
     LOGI("ZXTape: rewound");
+  }
+
+  // The MSX tape for the keyboard's stripe, as getZxTapeState() gives the ZX Spectrum's. The motor
+  // relay plays and stops it, so the stripe only shows it and winds it back.
+  auto getMsxTapeState() -> std::array<s32, 4> {
+    if (!root || !root->name().beginsWith("MSX")) return {};
+    auto& tape = ::ares::MSX::tapeDeck.tray.tape.node;
+    if (!tape || tape->length() == 0) return {};
+    u64 hz = std::max<u64>(tape->frequency(), 1);
+    return {1, tape->playing() ? 1 : 0, (s32)(tape->position() * 1000 / hz), (s32)(tape->length() * 1000 / hz)};
+  }
+
+  auto rewindMsxTape() -> void {
+    std::lock_guard<std::recursive_mutex> lock(*runMutex);
+    if (!root || !root->name().beginsWith("MSX")) return;
+    ::ares::MSX::tapeDeck.rewind();
+    LOGI("MSXTape: rewound");
   }
 
   auto setNativeLibraryDir(const char* path) -> void { nativeLibraryDir = path ? (string)path : ""; LOGI("Native library dir set: %s", (const char*)nativeLibraryDir); }

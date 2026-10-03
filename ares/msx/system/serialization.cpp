@@ -1,4 +1,5 @@
-static const string SerializerVersion = "v133";
+//[Phobos] v134: the tape's samples are left out and the PPI's port C is kept, so older states don't load.
+static const string SerializerVersion = "v134";
 
 auto System::serialize(bool synchronize) -> serializer {
   if(synchronize) scheduler.enter(Scheduler::Mode::Synchronize);

@@ -8,13 +8,18 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardHide
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -28,6 +33,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.phobos.emulator.PhobosCore
+import com.phobos.emulator.util.ZxTape
 import kotlinx.coroutines.delay
 
 // On-screen MSX keyboard in the international layout, the one the bundled C-BIOS reads the keyboard
@@ -143,6 +149,7 @@ private val MsxShiftLegend = Color(0xFF9D9BFF)
 private val MsxStripe = Brush.horizontalGradient(
     listOf(Color(0xFF5455ED), Color(0xFF7D76FC), Color(0xFF42EBF5))
 )
+private val MsxStripeUnloaded = Color(0xFF34364A) // the stripe still to fill while a tape loads
 
 // A plain face for the legends: the themes' display fonts can make C, O and 0 or B and 8 look alike.
 private val MsxLegendFont = FontFamily.SansSerif
@@ -153,6 +160,9 @@ fun MSXKeyboardOverlay(
     msx2: Boolean,
     onClose: () -> Unit,
     keyboardOpacity: Float = 1.0f,
+    // The tape, shown on the stripe; the MSX's motor relay plays and stops it, so it only rewinds here.
+    tape: ZxTape = ZxTape(),
+    onTapeRewind: () -> Unit = {},
 ) {
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     // Six rows of keys, shorter in landscape so the game keeps some height above them.
@@ -178,8 +188,26 @@ fun MSXKeyboardOverlay(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
+        // While a tape plays or stands part way through, the stripe is its progress bar: the blues fill in
+        // from the left as the tape loads, as the ZX Spectrum keyboard's rainbow does.
+        val tapeShown = tape.playing || tape.paused
+        val currentTapeRewind by rememberUpdatedState(onTapeRewind)
         Row(
-            modifier = Modifier.fillMaxWidth().height(24.dp).background(MsxStripe),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .drawBehind {
+                    if (!tapeShown) {
+                        drawRect(MsxStripe)
+                    } else {
+                        val loaded = size.width * tape.progress
+                        drawRect(MsxStripeUnloaded)
+                        clipRect(right = loaded) { drawRect(MsxStripe) }
+                        // The tape's read position.
+                        val edge = 2.dp.toPx()
+                        drawRect(Color.White.copy(alpha = 0.85f), topLeft = Offset(loaded - edge, 0f), size = Size(edge, size.height))
+                    }
+                },
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -192,6 +220,27 @@ fun MSXKeyboardOverlay(
                 fontFamily = MsxLegendFont,
                 modifier = Modifier.padding(start = 14.dp).weight(1f)
             )
+            if (tapeShown) {
+                Text(
+                    text = "${if (tape.playing) "Loading" else "Stopped"} ${(tape.progress * 100).toInt()}%",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = MsxLegendFont,
+                    maxLines = 1
+                )
+            }
+            if (tape.inserted) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(44.dp)
+                        .pointerInput(Unit) { detectTapGestures(onTap = { currentTapeRewind() }) }
+                ) {
+                    Icon(Icons.Default.SkipPrevious, contentDescription = "Rewind the tape", tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+            }
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier

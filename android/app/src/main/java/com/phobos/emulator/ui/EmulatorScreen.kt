@@ -468,6 +468,7 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 onTapeLoad = { viewModel.playZxTapeFromStart() },
             )
         }
+        val msxTape by viewModel.msxTape.collectAsState()
         if (isLoaded && showKeyboard && isMsx) {
             MSXKeyboardOverlay(
                 modifier = Modifier
@@ -477,6 +478,8 @@ fun EmulatorScreen(viewModel: MainViewModel, systemName: String, romName: String
                 msx2 = systemName == "MSX2",
                 onClose = { showKeyboard = false },
                 keyboardOpacity = settings.zxKeyboardOpacity,
+                tape = msxTape,
+                onTapeRewind = { viewModel.rewindMsxTape() },
             )
         }
 
