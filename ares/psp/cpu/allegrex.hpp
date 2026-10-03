@@ -1,6 +1,13 @@
 #pragma once
 
+#include <array>
 #include <bit>
+#include <cmath>
+#include <limits>
+
+//<termios.h>, which nall includes for its terminal code, defines VMIN (a terminal setting); here it's the VFPU's
+//vmin instruction.
+#undef VMIN
 
 //Sony Allegrex: the PSP's main CPU.
 //
@@ -13,7 +20,7 @@
 //  - Sony added instructions of its own (min, max, bitrev, wsbw, halt, mfic, mtic), and put clz, clo, madd and
 //    msub at different encodings than standard MIPS uses;
 //  - its FPU (coprocessor 1) only works with single-precision floats, never doubles;
-//  - coprocessor 2 is the VFPU, a vector unit that does math on up to four floats at once (added separately);
+//  - coprocessor 2 is the VFPU, a vector unit that does math on up to four floats at once (see VFPU below);
 //  - there's no TLB (the hardware that remaps addresses on other MIPS chips), so an address is just an address.
 //
 //Phobos emulates the PSP at a high level (HLE): the game's own code runs here, instruction by instruction, but the
@@ -108,6 +115,14 @@ struct Allegrex {
   auto decoderSPECIAL3() -> void;
   auto decoderSCC() -> void;
   auto decoderFPU() -> void;
+  auto decoderCOP2() -> void;
+  auto decoderVFPU0() -> void;
+  auto decoderVFPU1() -> void;
+  auto decoderVFPU3() -> void;
+  auto decoderVFPU4() -> void;
+  auto decoderVFPU5() -> void;
+  auto decoderVFPU6() -> void;
+  auto decoderVFPU7() -> void;
   auto INVALID() -> void;
 
   //interpreter-ipu.cpp
@@ -240,6 +255,155 @@ struct Allegrex {
   auto MFC1(u32& rt, u8 fs) -> void;
   auto MTC1(cu32& rt, u8 fs) -> void;
   auto SWC1(u8 ft, cu32& rs, s16 imm) -> void;
+
+  //The VFPU (coprocessor 2): a vector unit for 3D math, which PSP games lean on to move vertices, light them and
+  //animate them.
+  //
+  //Its 128 registers hold single-precision floats (as raw bits, like the FPU's), arranged as eight 4x4 matrices:
+  //picture a stack of eight grids, each 4 rows by 4 columns. Register number r is row r / 32, matrix r / 4 % 8,
+  //column r % 4. An instruction names each operand with a 7-bit register number and says how many lanes it works
+  //on (1 to 4: a single, a pair, a triple or a quad), and the same number names a different shape depending on
+  //that size:
+  //  - a single is just that register;
+  //  - a vector is a column or a row of a matrix: bit 5 picks a row instead of a column, the low two bits which
+  //    one, and bit 6 where along it a pair (two further on) or a triple (one further on) starts;
+  //  - a matrix (2x2, 3x3 or 4x4) uses the same bits, bit 5 then meaning "transposed": rows read as columns.
+  //
+  //The prefixes change how the next instruction reads its operands and writes its result, and are used up by it:
+  //vpfxs sets the one for rs, vpfxt for rt and vpfxd for rd. A source prefix can reorder the lanes (a "swizzle"),
+  //take their absolute values, negate them, or put a constant such as 1 or 1/2 in a lane instead; the destination
+  //prefix can clamp results to 0..1 or -1..1 ("saturate"), or leave lanes unwritten ("mask").
+  //
+  //The condition codes (cc) hold vcmp's results, a bit per lane plus "any lane" and "every lane", which bvt and
+  //bvf branch on and vcmovt and vcmovf choose by.
+  struct VFPU {
+    u32 r[128];
+    u32 pfxs;
+    u32 pfxt;
+    u32 pfxd;
+    u32 cc;
+    u32 rcx[8];  //the random number generator's state: control registers 136 to 143
+  } vfpu;
+
+  //The lanes of a vector operand, and the elements of a matrix operand (row r, column c at r * size + c).
+  struct Vector { u32 lane[4]; };
+  struct Matrix { u32 element[16]; };
+
+  //interpreter-vfpu.cpp
+  auto vfpuFloat(u32 bits) const -> f32;
+  auto vfpuBits(f64 value) const -> u32;
+  auto vfpuLine(u8 reg, u32 size) const -> std::array<u8, 4>;
+  auto vfpuSquare(u8 reg, u32 size) const -> std::array<u8, 16>;
+  auto vfpuRead(u8 reg, u32 size, u32 prefix) const -> Vector;
+  auto vfpuWrite(u8 reg, u32 size, const Vector& value, u32 prefix) -> void;
+  auto vfpuReadMatrix(u8 reg, u32 size) const -> Matrix;
+  auto vfpuWriteMatrix(u8 reg, u32 size, const Matrix& value) -> void;
+  auto vfpuPrefixesUsed() -> void;
+  auto vfpuControl(u8 index) const -> u32;
+  auto vfpuSetControl(u8 index, u32 value) -> void;
+  auto vfpuRandom() -> u32;
+  template<typename F> auto vfpuUnary(u8 vd, u8 vs, u32 size, F function) -> void;
+  template<typename F> auto vfpuBinary(u8 vd, u8 vs, u8 vt, u32 size, F function) -> void;
+
+  auto BV(bool value, bool likely, u8 bit, s16 imm) -> void;
+  auto LVLQ(u8 vt, cu32& rs, s16 imm) -> void;
+  auto LVQ(u8 vt, cu32& rs, s16 imm) -> void;
+  auto LVRQ(u8 vt, cu32& rs, s16 imm) -> void;
+  auto LVS(u8 vt, cu32& rs, s16 imm) -> void;
+  auto MFV(u32& rt, u8 vd) -> void;
+  auto MFVC(u32& rt, u8 index) -> void;
+  auto MTV(cu32& rt, u8 vd) -> void;
+  auto MTVC(cu32& rt, u8 index) -> void;
+  auto SVLQ(u8 vt, cu32& rs, s16 imm) -> void;
+  auto SVQ(u8 vt, cu32& rs, s16 imm) -> void;
+  auto SVRQ(u8 vt, cu32& rs, s16 imm) -> void;
+  auto SVS(u8 vt, cu32& rs, s16 imm) -> void;
+  auto VABS(u8 vd, u8 vs, u32 size) -> void;
+  auto VADD(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VASIN(u8 vd, u8 vs, u32 size) -> void;
+  auto VAVG(u8 vd, u8 vs, u32 size) -> void;
+  auto VBFY1(u8 vd, u8 vs, u32 size) -> void;
+  auto VBFY2(u8 vd, u8 vs, u32 size) -> void;
+  auto VC2I(u8 vd, u8 vs, u32 size) -> void;
+  auto VCMOV(u8 vd, u8 vs, u32 size, bool onFalse, u8 bit) -> void;
+  auto VCMP(u8 condition, u8 vs, u8 vt, u32 size) -> void;
+  auto VCOS(u8 vd, u8 vs, u32 size) -> void;
+  auto VCRS(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VCRSP(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VCST(u8 vd, u32 size, u8 constant) -> void;
+  auto VDET(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VDIV(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VDOT(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VEXP2(u8 vd, u8 vs, u32 size) -> void;
+  auto VF2H(u8 vd, u8 vs, u32 size) -> void;
+  auto VF2I(u8 vd, u8 vs, u32 size, u8 scale, u32 mode) -> void;
+  auto VFAD(u8 vd, u8 vs, u32 size) -> void;
+  auto VFIM(u8 vd, u16 half) -> void;
+  auto VH2F(u8 vd, u8 vs, u32 size) -> void;
+  auto VHDP(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VHTFM(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VI2C(u8 vd, u8 vs, u32 size) -> void;
+  auto VI2F(u8 vd, u8 vs, u32 size, u8 scale) -> void;
+  auto VI2S(u8 vd, u8 vs, u32 size) -> void;
+  auto VI2UC(u8 vd, u8 vs, u32 size) -> void;
+  auto VI2US(u8 vd, u8 vs, u32 size) -> void;
+  auto VIDT(u8 vd, u32 size) -> void;
+  auto VIIM(u8 vd, s16 value) -> void;
+  auto VLGB(u8 vd, u8 vs, u32 size) -> void;
+  auto VLOG2(u8 vd, u8 vs, u32 size) -> void;
+  auto VMAX(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VMFVC(u8 vd, u8 index) -> void;
+  auto VMIDT(u8 vd, u32 size) -> void;
+  auto VMIN(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VMMOV(u8 vd, u8 vs, u32 size) -> void;
+  auto VMMUL(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VMONE(u8 vd, u32 size) -> void;
+  auto VMOV(u8 vd, u8 vs, u32 size) -> void;
+  auto VMSCL(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VMTVC(u8 index, u8 vs) -> void;
+  auto VMUL(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VMZERO(u8 vd, u32 size) -> void;
+  auto VNEG(u8 vd, u8 vs, u32 size) -> void;
+  auto VNOP() -> void;
+  auto VNRCP(u8 vd, u8 vs, u32 size) -> void;
+  auto VNSIN(u8 vd, u8 vs, u32 size) -> void;
+  auto VOCP(u8 vd, u8 vs, u32 size) -> void;
+  auto VONE(u8 vd, u32 size) -> void;
+  auto VPFXD(u32 prefix) -> void;
+  auto VPFXS(u32 prefix) -> void;
+  auto VPFXT(u32 prefix) -> void;
+  auto VQMUL(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VRCP(u8 vd, u8 vs, u32 size) -> void;
+  auto VREXP2(u8 vd, u8 vs, u32 size) -> void;
+  auto VRNDF(u8 vd, u32 size, u32 exponent) -> void;
+  auto VRNDI(u8 vd, u32 size) -> void;
+  auto VRNDS(u8 vs, u32 size) -> void;
+  auto VROT(u8 vd, u8 vs, u32 size, u8 placement) -> void;
+  auto VRSQ(u8 vd, u8 vs, u32 size) -> void;
+  auto VS2I(u8 vd, u8 vs, u32 size) -> void;
+  auto VSAT0(u8 vd, u8 vs, u32 size) -> void;
+  auto VSAT1(u8 vd, u8 vs, u32 size) -> void;
+  auto VSBN(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VSBZ(u8 vd, u8 vs, u32 size) -> void;
+  auto VSCL(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VSCMP(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VSGE(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VSGN(u8 vd, u8 vs, u32 size) -> void;
+  auto VSIN(u8 vd, u8 vs, u32 size) -> void;
+  auto VSLT(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VSOCP(u8 vd, u8 vs, u32 size) -> void;
+  auto VSQRT(u8 vd, u8 vs, u32 size) -> void;
+  auto VSRT(u8 vd, u8 vs, u32 size, u32 pass) -> void;
+  auto VSUB(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VSYNC() -> void;
+  auto VT4444(u8 vd, u8 vs, u32 size) -> void;
+  auto VT5551(u8 vd, u8 vs, u32 size) -> void;
+  auto VT5650(u8 vd, u8 vs, u32 size) -> void;
+  auto VTFM(u8 vd, u8 vs, u8 vt, u32 size) -> void;
+  auto VUC2I(u8 vd, u8 vs, u32 size) -> void;
+  auto VUS2I(u8 vd, u8 vs, u32 size) -> void;
+  auto VWBN(u8 vd, u8 vs, u32 size, u8 scale) -> void;
+  auto VZERO(u8 vd, u32 size) -> void;
 
   //exceptions.cpp
   auto exception(Exception) -> void;

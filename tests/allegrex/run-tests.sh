@@ -42,6 +42,6 @@ fi
 
 # shellcheck disable=SC2086
 $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" \
-  -include "$HERE/prelude.hpp" "$ROOT/ares/psp/cpu/allegrex.cpp" "$HERE/allegrex.cpp" "$NALL" "$SLJIT" "$ALLOCATOR" \
+  -include "$HERE/prelude.hpp" "$ROOT/ares/psp/cpu/allegrex.cpp" "$HERE/allegrex.cpp" "$HERE/vfpu.cpp" "$NALL" "$SLJIT" "$ALLOCATOR" \
   "${LIBRARIES[@]}" -o "$OUT/allegrex"
 "$OUT/allegrex"
