@@ -389,6 +389,28 @@ Compose focus. `Modifier.focusRing` (`ui/FocusRing.kt`) rings the focused elemen
 `ThemedCard`, the settings rows, the dock tabs, the pause menu's actions and rows, ROM rows and the
 Running card. The window callback turns L1/R1 into `viewModel.stepTab()`, which `MainScaffold`
 follows to the neighbouring dock tab, and `setPause(true)` calls `GameInputState.releaseAllButtons()`.
+Branch `feature/appearance-library-themes-2026-10` ([PR #78](https://github.com/pwnedbygary/phobos/pull/78))
+gives every style a choice of backdrop. Each style has its own scene enum in `data/SettingsStore.kt`
+(`PixelBackdropScene`, `MangaBackdropScene`, `RpgBackdropScene`, `RetrowaveBackdropScene`,
+`CrtBackdropScene`, `GlassBackdropScene`, `XmbBackdropScene`), stored under its own key and carried in
+`PhobosThemeInfo`; the style's own `Backdrop`, or `MainScaffold` for glass and Retrowave, draws the
+chosen one. Behind glass, the chosen backdrop also picks the `GlassScene` (`glassScene` in
+`UiStyle.kt`) that the panels and the plates behind headers are fitted to: a new backdrop drawn behind
+glass needs a scene of its own, or one it draws within, with its colors shared between the drawing
+and `GlassBuilder` (as `AuroraColors`, `meshLine`, `SunsetColors` and `WaveColors` are) and sampled
+in `GlassContrastTest`. `GlassBuilder` keeps the gloss and shade weak enough for the opaque dock it
+falls back to when no see-through one passes. `CatalogBackdrop` (`data/BackdropCatalog.kt`) lists every scene of every
+style for the screensaver, so a new scene goes in its style's enum and there; `CatalogBackdropView`
+draws any of them in the current theme's colors. The screensaver lives in `MainScaffold`: an effect
+keyed on the delay, an idle counter, the route and the binding capture shows it after the delay,
+never on `NO_SCREENSAVER_ROUTES` or during a capture. While it shows,
+`MainViewModel.consumeScreensaverInput()` makes the window callback drop keys, and a `BackHandler`
+takes Back, which predictive back delivers without that callback. Input bumps the idle counter only
+while the screensaver could arm, since each bump recomposes the scaffold. The Library's console art
+goes through `systemIconSlug` (`ui/PlatformIcons.kt`): Systematic's SVG for the slug, or for the
+Phobos, Pixel and Manga packs a glyph from `ui/theme/PlatformGlyphs.kt` drawn by
+`PlatformGlyphArt.kt`. A new system needs a slug, listed in `systemIconSlugs` with a glyph
+(`PlatformGlyphsTest` checks the two match).
 On the dev Mac the Gradle distribution and dependency cache live in the git-ignored
 `.local/gradle-home`; set `GRADLE_USER_HOME` to it, since the wrapper can't download there.
 Accuracy-neutral: cross-section `J` and not-taken-edge (`LinkSlot`) linking with runtime
