@@ -635,7 +635,8 @@ commands run) found no definite compile errors and about twenty logic issues. Fi
 
 Not changed (pre-existing, recorded for follow-up): `contains("Neo Geo")` when naming the
 ROM temp file; a debug-only `NoSuchElementException` in `MainActivity`'s adb load path
-when the app starts cold (`viewModel.systems.first {}`); touch placement avoids display
+when the app starts cold (`viewModel.systems.first {}`; since fixed, as the load now waits
+for the app to be ready); touch placement avoids display
 cutouts but not system gesture areas (the controls are excluded from the edge gestures
 since 2026-10-03); the Neo Geo 2×2 grid's center presses B+C (they
 are corridor neighbours; A–D, the other pair, is too far apart).
@@ -714,6 +715,24 @@ source, rate wording) — fixed in this tree before commit.
    [performance audit](performance-audit.md#required-verification).
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
+
+## Cleanups — 2026-10-03
+
+Branch `cursor/cleanups-2b67`: the cleanups the user picked on 2026-10-03.
+
+- NES and SNES loads no longer log `VFS: FAILED to allocate Gamepad on Expansion Port`. `connectDevices` gave every
+  port with "Port" in its name a gamepad, and these consoles' Expansion ports take none; it now skips them, as it
+  does the Mega Drive's Extension port.
+- The FBNeo credit is gone from `neo-geo-compatibility.md`, which now credits MAME alone, as the licensing audit
+  found. The plan's licensing row records the user's four answers, and queue item 7 is parked (the firmware stays,
+  so no GPL cores come in).
+- Stale notes: queue item 6 still had Pocket Challenge V2 on its branch (it's on master), and the 2026-09-24
+  follow-up list now says the debug load's cold-start crash was fixed.
+- `stash@{0}`, an early LaserActive work-in-progress superseded by PR #81, was dropped as the user asked, with a copy
+  kept outside the repository.
+- **Checks run:** the modern release builds, 238 host tests pass (no Kotlin changed). On the RP6, 8 Eyes (NES) and
+  Chrono Trigger (SNES) got gamepads on both controller ports, nothing on the Expansion Port and no error, at
+  60.2 FPS.
 
 ## Boot pass of every game on the RP6 — 2026-10-03
 

@@ -2972,7 +2972,14 @@ namespace ares {
         string sysName = node ? node->name() : "";
 
         if (family.find("Nintendo 64") || sysName.find("Nintendo 64")) defaultDevice = (sysName == "Arcade") ? "Aleck64" : "Gamepad";
-        else if (family.find("Super Famicom") || sysName.find("Super Famicom") || sysName.find("SNES")) defaultDevice = "Gamepad";
+        else if (family.find("Super Famicom") || sysName.find("Super Famicom") || sysName.find("SNES")) {
+            if (port->name().find("Expansion")) defaultDevice = ""; // Expansion port doesn't take gamepad
+            else defaultDevice = "Gamepad";
+        }
+        else if (family.find("Famicom") || sysName.find("Famicom")) {
+            if (port->name().find("Expansion")) defaultDevice = ""; // Expansion port doesn't take gamepad
+            else defaultDevice = "Gamepad";
+        }
         else if (family.find("Mega Drive") || sysName.find("Mega Drive") || sysName.find("Genesis") || sysName.find("Mega CD") || sysName.find("Sega CD")) {
             if (port->name().find("Extension")) defaultDevice = ""; // Extension port doesn't take gamepad
             else defaultDevice = "Fighting Pad";

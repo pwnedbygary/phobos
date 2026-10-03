@@ -2,9 +2,9 @@
 
 **Scope:** This core is strictly **Neo Geo MVS/AES** (`enumerate()` in
 `ares/ng/system/system.cpp` exposes only `[SNK] Neo Geo AES` and `[SNK] Neo Geo MVS`).
-It is **NOT** a general arcade core. The "FBNeo + MAME hybrid" refers only to sourcing
-Neo Geo ROM/driver data and decryption (CMC/CMC42/CMC50/SMA/PCM2/PVC, kof2k2-family)
-from MAME and FBNeo to maximize Neo Geo compatibility — not emulating other arcade boards.
+It is **NOT** a general arcade core. Its Neo Geo ROM/driver data and decryption
+(CMC/CMC42/CMC50/SMA/PCM2/PVC, kof2k2-family) come from MAME (BSD-3-Clause; "MAME (portions)"
+in LICENSE) to maximize Neo Geo compatibility — not to emulate other arcade boards.
 
 ## Status legend
 | Mark | Meaning |
