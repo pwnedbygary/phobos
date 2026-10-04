@@ -174,7 +174,8 @@ static auto geVertices() -> void {
   CHECK(v.color, 0x8899'aabb);
   CHECK(v.x == -2 && v.y == 5 && v.z == 65535, true);  //through mode: x and y signed, depth not
   auto v3d = ge.readVertex(Vertices, format(0x11c));
-  CHECK(v3d.z == -1, true);                             //in 3D the depth is signed too
+  CHECK(v3d.z == -1.0f / 32768, true);                  //in 3D the depth is signed too, and 16-bit numbers 32768ths
+  CHECK(v3d.x == -2.0f / 32768 && v3d.y == 5.0f / 32768, true);
   memory.write(2, Vertices, 0xffff);                    //5650 white
   CHECK(ge.readVertex(Vertices, format(0x10 | 0x100)).color, 0xffff'ffff);
   memory.write(2, Vertices, 0x801f);                    //5551: red at full, alpha set

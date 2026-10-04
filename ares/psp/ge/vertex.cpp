@@ -7,6 +7,7 @@
 //  bits 11-12  indices: 0 none (vertices in order), 1 8-bit, 2 16-bit
 //  bits 14-16  how many weights, less one; bits 18-20 how many morph targets, less one
 //  bit 23      through mode: 2D, positions already in screen pixels and nothing transformed
+//With morph targets, a vertex holds each target's parts one after another (the GE blends them: readVertex).
 
 //The size of an 8-bit, 16-bit or float number: 1, 2 or 4 bytes (0 for none).
 static auto numberSize(u32 format) -> u32 { return format == 3 ? 4 : format; }
@@ -66,34 +67,70 @@ static auto readColor(Memory& memory, u32 address, u32 format) -> u32 {
   return r | g << 8 | b << 16 | a << 24;
 }
 
-//The vertex at address. Positions are signed, except a through-mode depth, which runs 0-65535 (that 8- and 16-bit
-//depths are unsigned in through mode is as PPSSPP has it); texture coordinates and weights are unsigned; normals
-//signed.
-auto GE::readVertex(u32 address, const VertexFormat& f) -> Vertex {
-  if(f.morphs > 1) note("morphing between vertices isn't emulated yet: the first target is used");
-  Vertex vertex;
+//In 3D an 8-bit number counts 128ths and a 16-bit one 32768ths, so that the largest are nearly 1 (a signed 16-bit
+//32767 is 0.99997); floats are as they are. Through mode takes numbers as stored.
+static auto unit(u32 format, bool through) -> float {
+  if(through) return 1.0f;
+  return format == 1 ? 1.0f / 128 : format == 2 ? 1.0f / 32768 : 1.0f;
+}
+
+//One morph target of the vertex at address (or the vertex itself, with none). Positions are signed, except a
+//through-mode depth, which runs 0-65535 (that 8- and 16-bit depths are unsigned in through mode is as PPSSPP has it);
+//texture coordinates and weights are unsigned; normals signed.
+static auto readTarget(Memory& memory, u32 address, const GE::VertexFormat& f) -> GE::Vertex {
+  GE::Vertex vertex;
   if(f.weightFormat) {
+    float scale = unit(f.weightFormat, f.through);
     for(u32 n = 0; n < f.weights; n++) {
-      vertex.weights[n] = readNumber(memory, address + f.weightOffset + n * numberSize(f.weightFormat), f.weightFormat, false);
+      u32 at = address + f.weightOffset + n * numberSize(f.weightFormat);
+      vertex.weights[n] = readNumber(memory, at, f.weightFormat, false) * scale;
     }
   }
   if(f.textureFormat) {
     u32 size = numberSize(f.textureFormat);
-    vertex.u = readNumber(memory, address + f.textureOffset, f.textureFormat, false);
-    vertex.v = readNumber(memory, address + f.textureOffset + size, f.textureFormat, false);
+    float scale = unit(f.textureFormat, f.through);
+    vertex.u = readNumber(memory, address + f.textureOffset, f.textureFormat, false) * scale;
+    vertex.v = readNumber(memory, address + f.textureOffset + size, f.textureFormat, false) * scale;
   }
   if(f.colorFormat) vertex.color = readColor(memory, address + f.colorOffset, f.colorFormat);
   if(f.normalFormat) {
     u32 size = numberSize(f.normalFormat);
-    for(u32 n = 0; n < 3; n++) vertex.normal[n] = readNumber(memory, address + f.normalOffset + n * size, f.normalFormat, true);
+    float scale = unit(f.normalFormat, f.through);
+    for(u32 n = 0; n < 3; n++) {
+      vertex.normal[n] = readNumber(memory, address + f.normalOffset + n * size, f.normalFormat, true) * scale;
+    }
   }
   if(f.positionFormat) {
     u32 size = numberSize(f.positionFormat), at = address + f.positionOffset;
-    vertex.x = readNumber(memory, at, f.positionFormat, true);
-    vertex.y = readNumber(memory, at + size, f.positionFormat, true);
-    vertex.z = readNumber(memory, at + size * 2, f.positionFormat, !f.through);
+    float scale = unit(f.positionFormat, f.through);
+    vertex.x = readNumber(memory, at, f.positionFormat, true) * scale;
+    vertex.y = readNumber(memory, at + size, f.positionFormat, true) * scale;
+    vertex.z = readNumber(memory, at + size * 2, f.positionFormat, !f.through) * scale;
   }
   return vertex;
+}
+
+//The vertex at address. With morph targets (a vertex type with more than one) it's their sum, each part of each
+//target weighted by its MORPH_WEIGHT; colors channel by channel, cut to whole numbers and held to 0-255 (as PPSSPP
+//has it).
+auto GE::readVertex(u32 address, const VertexFormat& f) -> Vertex {
+  if(f.morphs == 1) return readTarget(memory, address, f);
+  Vertex sum;
+  float color[4] = {};
+  for(u32 n = 0; n < f.morphs; n++) {
+    float weight = float24(commands[MorphWeight0 + n]);
+    Vertex target = readTarget(memory, address + n * (f.size / f.morphs), f);
+    for(u32 k = 0; k < 8; k++) sum.weights[k] += target.weights[k] * weight;
+    sum.u += target.u * weight, sum.v += target.v * weight;
+    for(u32 k = 0; k < 4; k++) color[k] += float(target.color >> k * 8 & 0xff) * weight;
+    for(u32 k = 0; k < 3; k++) sum.normal[k] += target.normal[k] * weight;
+    sum.x += target.x * weight, sum.y += target.y * weight, sum.z += target.z * weight;
+  }
+  for(u32 k = 0; k < 4; k++) {
+    s32 value = color[k] > 0 ? s32(std::min(color[k], 255.0f)) : 0;
+    sum.color |= u32(value) << k * 8;
+  }
+  return sum;
 }
 
 //The n-th index of an indexed PRIM: which vertex, counted from the vertex address.

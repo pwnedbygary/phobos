@@ -8,8 +8,8 @@ after it; part 5, the memory map, on `cursor/psp-memory-2b67`; part 6, the loade
 part 7, the first HLE functions, on `cursor/psp-hle-2b67`, which run pspdev's hello world from start to end on the
 host; part 8, files and controls, on `cursor/psp-files-2b67`; part 9, the GE's display lists, on
 `cursor/psp-ge-2b67`; part 10, drawing in 2D, on `cursor/psp-draw-2b67`; the program measuring the GE and the
-controller on a PSP, on `cursor/psp-ge-measure-2b67`. The user asked for the whole feature to be stacked and merged at
-once (GitHub stack #106).
+controller on a PSP, on `cursor/psp-ge-measure-2b67`; part 11, drawing in 3D, on `cursor/psp-3d-2b67`. The user asked
+for the whole feature to be stacked and merged at once (GitHub stack #106).
 Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
@@ -133,7 +133,8 @@ branch not taken, `nor` without the not, delay-slot instructions given the wrong
 4. Memory map (part 5); loading an unencrypted `EBOOT.PBP`, ELF or PRX (part 6); the first HLE functions (module
    start, threads, display, memory, standard output) and a homebrew test program run on the host (part 7); files
    and controls (part 8).
-5. The GE: display lists, clearing and block transfers, and the picture (part 9); drawing in 2D (part 10); then 3D.
+5. The GE: display lists, clearing and block transfers, and the picture (part 9); drawing in 2D (part 10); 3D
+   (part 11); then lighting, mipmaps, lines, curved surfaces.
 6. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
 7. Retail executables: `~PSP` decryption.
 8. Audio (`sceAudio`, then ATRAC3+ and MP3), video (PSMF), the optional firmware modules.
@@ -564,3 +565,70 @@ frame. The two that differ are the PSP's to settle:
   PPSSPP draws them or not depending on where the other corners are, in code its authors mark as unverified;
 - a shrunk sprite's texels (4240 pixels, a texel apart): this core takes a sprite's texture coordinates at each
   pixel's middle, PPSSPP at 7/16 in, as for triangles.
+
+## Part 11: drawing in 3D
+
+`ares/psp/ge/transform.cpp`, and 3D paths in `vertex.cpp`, `draw.cpp` and `pixel.cpp`. Outside through mode:
+
+- **Vertices**: 8- and 16-bit numbers are fractions (128ths and 32768ths). With morph targets a vertex is their sum,
+  each weighted by its MORPH_WEIGHT. With skinning (a vertex type with weights), its position and normal go through
+  the bone matrices its weights pick, and the results are added up, weighted.
+- **The transform**: the world, view and projection matrices in turn (each element the float its 24-bit DATA word
+  holds), then the viewport and the screen offset, rounded to the sixteenth as the GE rounds (up from 0.625 of one).
+- **What isn't drawn**: a primitive with a vertex off the 4096x4096 screen. Depths outside 0-65535 are held to that
+  range with DEPTH_CLIP_ENABLE on, and count as off the screen with it off. A z / w past 1 (by 2^-15) drops a
+  triangle or sprite with any such vertex (DEPTH_CLIP_ENABLE off) or with all of them past the same end (on); points
+  aren't judged by it (as PPSSPP has it). A triangle with every w below zero isn't drawn either.
+- **Clipping**: a triangle is cut at the near plane (z < -w) only, never at the screen's edges (the scissor does
+  those). The new corners are blended in clip space (colors in 256ths) and put on the screen again; with flat shading
+  every piece keeps the last vertex's color.
+- **Culling** (CULL_FACE_ENABLE, not in clear mode, through mode too): CULL 1 draws the triangles running clockwise on
+  the screen, 0 those running counterclockwise; every other triangle of a strip counts the other way round.
+- **Texture coordinates**: perspective-correct across triangles (blended as u/w and 1/w, then divided); colors, depth
+  and fog are blended straight. Mode 0 takes the vertex's, times TEX_SCALE plus TEX_OFFSET; mode 1 the texture
+  matrix's result from the position, the texture coordinates or the normal, its q dividing at each pixel.
+- **Fog**: each vertex's (view z + FOG1) × FOG2, blended across, 0-255, mixed in after the alpha test as
+  (color × f + fog color × (255 − f) + 255) / 256. A FOG1 or FOG2 that isn't a number to a float is a huge number to
+  the GE.
+- **The depth range test** (MIN_Z to MAX_Z), in 3D only, clear mode included.
+- **Sprites in 3D**: both corners transformed and checked by the same rules, then drawn as in 2D, with the second
+  corner's fog.
+
+Not yet: lighting (noted; vertices keep their colors), environment mapping (which comes from lighting), PRIM's kind 7
+(going on with the last primitive's vertices), lines, mipmaps, curved surfaces. Nor these smaller details:
+- a 3D sprite's texture projection (its q is ignored);
+- the fog PPSSPP splits across a 3D sprite;
+- the texture coordinates and normal PPSSPP lets a vertex without them keep from the last one read.
+
+The rules are PPSSPP's software renderer's, for behavior only. The commands' layouts come from pspsdk's GU library:
+`sceGuSetMatrix`'s element order, `sceGuViewport`, `sceGuDepthRange`, `sceGuFog` and `sceGuFrontFace`.
+
+Tests (`tests/psp/draw3d.cpp`) are worked out by hand on a scene where every matrix is the identity and the viewport
+puts a model's x and y on the screen's pixels. They cover:
+- the matrices in order, and the rounding to the sixteenth;
+- each "isn't drawn" rule, for triangles, sprites and points, with DEPTH_CLIP_ENABLE on and off, and every w below
+  zero on its own;
+- a triangle cut at the near plane, the rows and colors it leaves, and flat shading's color on every piece;
+- culling either way, strips, clear mode and through mode;
+- perspective-correct texture coordinates, with q;
+- fog's rounding, its blending across a triangle, and its distance being the view's;
+- the depth range test;
+- both texture coordinate modes, morphing and skinning.
+
+pspsdk's "cube" sample (a textured cube turning in perspective, its back faces culled, depth-tested) runs, and its
+picture is within 1 level of PPSSPP's software renderer on every pixel (`compare-ppsspp.sh`). Twenty-six broken
+versions each failed the tests, among them:
+- the rounding without its 0.375, the depth clamp's rules swapped or dropped, a 3D sprite left unchecked;
+- no clipping, or the cut's colors not blended;
+- texture coordinates blended straight in 3D;
+- culling off, swapped, or not flipped along a strip;
+- fog without its rounding up, from the world's z, or 255ths;
+- the view matrix skipped, the projection's move lost;
+- morphing or skinning ignored.
+
+Five of them first got through (every w below zero, the texture matrix taken for mode 0, an off-screen point, fog
+from the world's z, flat shading after a cut); the tests that now catch them are in the list above.
+
+Found on the way: a 3D scene without a depth range set draws nothing, since MIN_Z and MAX_Z are both 0 at power-on
+(games set them with `sceGuDepthRange`). And `PSP_TEST_PROGRAMS` set but empty made the loader's test read a missing
+file and index an empty module (undefined behavior); every test now treats an empty value as unset.

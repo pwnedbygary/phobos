@@ -742,6 +742,27 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 11: drawing in 3D — 2026-10-04
+
+Branch `cursor/psp-3d-2b67`, stacked on `cursor/psp-ge-measure-2b67` (for stack #106). The GE draws outside through
+mode:
+- vertices scaled to fractions, morphed and skinned;
+- the world, view and projection matrices, the viewport and the GE's rounding to the sixteenth;
+- the rules for what isn't drawn (off the screen, depths, z / w, negative w), with DEPTH_CLIP_ENABLE's clamp;
+- triangles cut at the near plane;
+- culling (strips flipping);
+- perspective-correct texture coordinates, with the texture matrix's projection and TEX_SCALE/TEX_OFFSET;
+- fog, the depth range test, and 3D sprites and points.
+
+Checks:
+- 77 groups pass on the Mac (UBSan) and in `phobos-linux` (ASan and UBSan, with the programs);
+- pspsdk's "cube" sample is within 1 level of PPSSPP's software renderer on every pixel;
+- 26 broken versions each failed the tests (five only after new tests).
+
+The `PSP_TEST_PROGRAMS` readers now treat an empty value as unset; the loader's test hit undefined behavior on one.
+Not yet: lighting, environment mapping, PRIM kind 7, lines, mipmaps, curved surfaces. Next: lighting (PPSSPP's
+Lighting.cpp and TransformCommon read for behavior; "celshading" and "envmap" samples to compare).
+
 ## PSP core: measuring the GE and the controller on a PSP — 2026-10-04
 
 Branch `cursor/psp-ge-measure-2b67`, stacked on `cursor/psp-draw-2b67` (for stack #106). `tools/psp-ge-measure` is a

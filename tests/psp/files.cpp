@@ -352,7 +352,7 @@ static auto controllerTwoReaders() -> void {
 //middle after a seek), reads one the host put there, lists the folder, then waits for the cross button and reports
 //the stick.
 static auto systemProgram() -> void {
-  const char* programs = std::getenv("PSP_TEST_PROGRAMS");
+  const char* programs = testPrograms();
   if(!programs) return;
   for(bool recompile : {false, true}) {
     HostFolder stick;

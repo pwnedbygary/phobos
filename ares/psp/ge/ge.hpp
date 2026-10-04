@@ -40,19 +40,23 @@ struct GE {
     Nop = 0x00, VertexAddress = 0x01, IndexAddress = 0x02, Primitive = 0x04, Bezier = 0x05, Spline = 0x06,
     BoundingBox = 0x07, Jump = 0x08, ConditionalJump = 0x09, Call = 0x0a, Return = 0x0b, End = 0x0c,
     Signal = 0x0e, Finish = 0x0f, Base = 0x10, VertexType = 0x12, OffsetAddress = 0x13, Origin = 0x14,
-    Region1 = 0x15, Region2 = 0x16,
-    TextureMappingEnable = 0x1e, DitherEnable = 0x20, AlphaBlendEnable = 0x21, AlphaTestEnable = 0x22,
-    DepthTestEnable = 0x23, StencilTestEnable = 0x24, ColorTestEnable = 0x27, LogicOpEnable = 0x28,
-    BoneMatrixNumber = 0x2a, BoneMatrixData = 0x2b, MorphWeight0 = 0x2c,
+    Region1 = 0x15, Region2 = 0x16, LightingEnable = 0x17, DepthClipEnable = 0x1c, CullFaceEnable = 0x1d,
+    TextureMappingEnable = 0x1e, FogEnable = 0x1f, DitherEnable = 0x20, AlphaBlendEnable = 0x21,
+    AlphaTestEnable = 0x22, DepthTestEnable = 0x23, StencilTestEnable = 0x24, ColorTestEnable = 0x27,
+    LogicOpEnable = 0x28, BoneMatrixNumber = 0x2a, BoneMatrixData = 0x2b, MorphWeight0 = 0x2c,
     WorldMatrixNumber = 0x3a, WorldMatrixData = 0x3b, ViewMatrixNumber = 0x3c, ViewMatrixData = 0x3d,
     ProjectionMatrixNumber = 0x3e, ProjectionMatrixData = 0x3f, TextureMatrixNumber = 0x40, TextureMatrixData = 0x41,
-    ShadeMode = 0x50, AmbientColor = 0x55, AmbientAlpha = 0x58,
+    ViewportXScale = 0x42, ViewportYScale = 0x43, ViewportZScale = 0x44, ViewportXCenter = 0x45,
+    ViewportYCenter = 0x46, ViewportZCenter = 0x47, TextureScaleU = 0x48, TextureScaleV = 0x49,
+    TextureOffsetU = 0x4a, TextureOffsetV = 0x4b, OffsetX = 0x4c, OffsetY = 0x4d,
+    ShadeMode = 0x50, AmbientColor = 0x55, AmbientAlpha = 0x58, Cull = 0x9b,
     FrameBufferPointer = 0x9c, FrameBufferWidth = 0x9d, DepthBufferPointer = 0x9e, DepthBufferWidth = 0x9f,
     TextureAddress0 = 0xa0, TextureBufferWidth0 = 0xa8, ClutAddress = 0xb0, ClutAddressUpper = 0xb1,
     TransferSource = 0xb2, TransferSourceWidth = 0xb3, TransferDestination = 0xb4, TransferDestinationWidth = 0xb5,
-    TextureSize0 = 0xb8, TextureMode = 0xc2, TextureFormat = 0xc3, ClutLoad = 0xc4, ClutFormat = 0xc5,
-    TextureFilter = 0xc6, TextureWrap = 0xc7, TextureFunction = 0xc9, TextureEnvironmentColor = 0xca,
-    FrameBufferPixelFormat = 0xd2, ClearMode = 0xd3, Scissor1 = 0xd4, Scissor2 = 0xd5,
+    TextureSize0 = 0xb8, TextureMapMode = 0xc0, TextureMode = 0xc2, TextureFormat = 0xc3, ClutLoad = 0xc4,
+    ClutFormat = 0xc5, TextureFilter = 0xc6, TextureWrap = 0xc7, TextureFunction = 0xc9,
+    TextureEnvironmentColor = 0xca, FogEnd = 0xcd, FogSlope = 0xce, FogColor = 0xcf,
+    FrameBufferPixelFormat = 0xd2, ClearMode = 0xd3, Scissor1 = 0xd4, Scissor2 = 0xd5, MinZ = 0xd6, MaxZ = 0xd7,
     ColorTest = 0xd8, ColorReference = 0xd9, ColorTestMask = 0xda, AlphaTest = 0xdb, StencilTest = 0xdc,
     StencilOperation = 0xdd, DepthTest = 0xde, BlendMode = 0xdf, BlendFixedA = 0xe0, BlendFixedB = 0xe1,
     Dither0 = 0xe2, LogicOp = 0xe6, DepthMask = 0xe7, MaskColor = 0xe8, MaskAlpha = 0xe9,
@@ -81,15 +85,21 @@ struct GE {
     u32 returnAddress[2] = {}, returnOffset[2] = {};
   };
 
-  //A vertex as the vertex type lays it out, its numbers as stored: integers keep their values (the 3D path will
-  //scale them; in 2D, "through" mode, they're pixels and texels as they are), colors become 8888 with red in the
-  //low byte, the GE's order.
+  //A vertex as the vertex type lays it out (vertex.cpp): in 2D, "through" mode, its numbers as stored, pixels and
+  //texels; in 3D, fractions. Colors become 8888 with red in the low byte, the GE's order. In 3D, transform.cpp then
+  //puts it on the screen: x and y become pixels (whole sixteenths of one), z the depth, u and v texels.
   struct Vertex {
     float weights[8] = {};
     float u = 0, v = 0;
     u32 color = 0;
     float normal[3] = {};
     float x = 0, y = 0, z = 0;
+    //3D only: the position in clip space (x, y, z, w), whose w makes texture coordinates perspective-correct; the
+    //texture coordinates' divisor (texture projection; 1 otherwise); how much of the color the fog leaves (1: all of
+    //it); and whether the vertex is somewhere the GE can't draw, so that no primitive with it is drawn.
+    float clip[4] = {0, 0, 0, 1};
+    float q = 1, fog = 1;
+    bool outside = false;
   };
   //Where each part of a vertex is, in bytes from its start: each part sits at a multiple of its own size, and a
   //vertex's size is a multiple of its largest part's. Formats are the vertex type's fields: 0 for none.
@@ -98,6 +108,19 @@ struct GE {
     bool through;  //2D: positions are screen pixels, used as they are
     u32 weightOffset, textureOffset, colorOffset, normalOffset, positionOffset;
     u32 size;      //one vertex, all its morph targets included
+  };
+
+  //The 3D settings, gathered once a primitive (transform.cpp): the matrices as floats, the viewport, and the rest.
+  struct Transform {
+    float world[12], view[12], projection[16], textureMatrix[12], bones[96];
+    u32 weights;                 //skinning: how many bone matrices each vertex mixes (0: none)
+    float scale[3], center[3];   //the viewport: x, y and z
+    float offsetX, offsetY;      //where the frame buffer's top left is on the screen, in sixteenths of a pixel
+    bool depthClamp;             //DEPTH_CLIP_ENABLE
+    u32 mapMode, mapSource;      //TEXTURE_MAP_MODE: bits 0-1, how texture coordinates are made; 8-9, from what
+    float textureScale[2], textureOffset[2], textureWidth, textureHeight;
+    bool fog, fogForced;         //fogForced: FOG1 isn't a number, so every vertex's fog is fogValue
+    float fogEnd, fogSlope, fogValue;
   };
 
   //A texture as the commands describe it, gathered once a primitive (texture.cpp).
@@ -121,6 +144,8 @@ struct GE {
     u32 logic, writeMask;  //writeMask: the frame buffer bits not to touch (MASK_COLOR, MASK_ALPHA)
     s32 left, top, right, bottom;  //the scissor rectangle and drawing region, inclusive
     u32 low, high;  //the frame buffer bytes touched, for reporting the change
+    bool depthRange, fog;  //3D only: the depth range test (MIN_Z to MAX_Z), and fog (FOG_ENABLE, not in clear mode)
+    u32 minDepth, maxDepth, fogColor;
   };
 
   Memory& memory;
@@ -153,12 +178,20 @@ struct GE {
   auto readVertex(u32 address, const VertexFormat& format) -> Vertex;
   auto readIndex(u32 n, const VertexFormat& format) -> u32;
 
+  //transform.cpp
+  auto transformState() const -> Transform;
+  auto transform(Vertex& vertex, const Transform& t) -> void;
+  auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
+  auto clipTriangle(PixelState& pixel, Sampler* texture, const Transform& t, const Vertex& a, const Vertex& b,
+                    const Vertex& c, s32 facing) -> void;
+
   //draw.cpp
   auto primitive(u32 kind, u32 count) -> void;
   auto rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to) -> void;
-  auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c) -> void;
+  auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
+                bool perspective) -> void;
   auto point(PixelState& pixel, Sampler* texture, const Vertex& at) -> void;
-  auto shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, float u, float v) -> void;
+  auto shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, float u, float v, u32 fog) -> void;
 
   //texture.cpp
   auto sampler() const -> Sampler;
@@ -169,7 +202,7 @@ struct GE {
 
   //pixel.cpp
   auto pixelState() const -> PixelState;
-  auto drawPixel(PixelState& pixel, s32 x, s32 y, u32 z, u32 color) -> void;
+  auto drawPixel(PixelState& pixel, s32 x, s32 y, u32 z, u32 color, u32 fog = 255) -> void;
 
   //transfer.cpp
   auto transfer() -> void;

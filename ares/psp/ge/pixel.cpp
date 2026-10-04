@@ -1,7 +1,10 @@
 //The pixel pipeline: what happens to each pixel a primitive covers, once its color is worked out (texture and all).
 //In order:
+//  0. in 3D only, the depth range test: a pixel whose depth is outside MIN_Z to MAX_Z is dropped (in clear mode too)
 //  1. the alpha test: the pixel's alpha against a reference, both masked (ALPHA_TEST: bits 0-2 the comparison, 8-15
 //     the reference, 16-23 the mask); failing, the pixel is dropped
+//  1b. in 3D with FOG_ENABLE, fog: the color mixed with FOG_COLOR by the pixel's fog f (0-255: how much of the
+//     color stays), (color * f + fog color * (255 - f) + 255) / 256
 //  2. the color test: its color against a reference, both masked: equal or not (COLOR_TEST, _REFERENCE, _TEST_MASK)
 //  3. the stencil test: the stencil, kept in the frame buffer's alpha bits, against a reference, both masked
 //     (STENCIL_TEST); failing, the stencil is changed as STENCIL_OPERATION's "fail" says (bits 0-2) and the pixel
@@ -121,11 +124,15 @@ auto GE::pixelState() const -> PixelState {
   p.right  = std::min(scissor2 & 0x3ff, region2 & 0x3ff);
   p.bottom = std::min(scissor2 >> 10 & 0x3ff, region2 >> 10 & 0x3ff);
   p.low = ~0u, p.high = 0;
-  return p;
+  p.minDepth = commands[MinZ] & 0xffff;
+  p.maxDepth = commands[MaxZ] & 0xffff;
+  p.fogColor = commands[FogColor] & 0xff'ffff;
+  return p;  //depthRange and fog: the primitive says (3D only)
 }
 
-//A pixel at (x, y), inside the scissor rectangle, with depth z and color (8888, each channel 0-255).
-auto GE::drawPixel(PixelState& p, s32 x, s32 y, u32 z, u32 color) -> void {
+//A pixel at (x, y), inside the scissor rectangle, with depth z, color (8888, each channel 0-255) and fog (0-255).
+auto GE::drawPixel(PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fog) -> void {
+  if(p.depthRange && (z < p.minDepth || z > p.maxDepth)) return;
   u32 bytes = p.format == 3 ? 4 : 2;
   //Both offsets wrap within VRAM and stay multiples of their pixel's size (the buffers start on 16 bytes, VRAM's size
   //is a power of two), so no pixel runs past VRAM's end.
@@ -155,6 +162,13 @@ auto GE::drawPixel(PixelState& p, s32 x, s32 y, u32 z, u32 color) -> void {
   }
   s32 alpha = color >> 24;
   if(p.alphaTest && !passes(p.alphaFunction, alpha & p.alphaMask, p.alphaReference & p.alphaMask)) return;
+  if(p.fog) {
+    u32 fogged = color & 0xff00'0000;
+    for(u32 n = 0; n < 3; n++) {
+      fogged |= u32((channel(color, n) * s32(fog) + channel(p.fogColor, n) * s32(255 - fog) + 255) / 256) << n * 8;
+    }
+    color = fogged;
+  }
   if(p.colorTest && p.colorFunction != 1) {
     bool equal = (color & p.colorMask) == (p.colorReference & p.colorMask);
     if(p.colorFunction == 0 || (p.colorFunction == 2) != equal) return;

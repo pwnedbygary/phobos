@@ -98,9 +98,15 @@ struct HostFolder {
   }
 };
 
-//A program from PSP_TEST_PROGRAMS (see tools/psp-test-programs/build.sh); empty when it isn't set.
+//The folder PSP_TEST_PROGRAMS names (see tools/psp-test-programs/build.sh), or null when it isn't set (or is empty).
+inline auto testPrograms() -> const char* {
+  const char* folder = std::getenv("PSP_TEST_PROGRAMS");
+  return folder && *folder ? folder : nullptr;
+}
+
+//A program from PSP_TEST_PROGRAMS; empty when it isn't set.
 inline auto testProgram(const char* name) -> std::vector<u8> {
-  const char* programs = std::getenv("PSP_TEST_PROGRAMS");
+  const char* programs = testPrograms();
   if(!programs) return {};
   std::ifstream stream(std::string(programs) + "/" + name, std::ios::binary);
   return std::vector<u8>((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
