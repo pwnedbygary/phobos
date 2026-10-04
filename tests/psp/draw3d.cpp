@@ -363,12 +363,152 @@ static auto draw3dMorphAndSkin() -> void {
 
 
 
+//Lighting: vertices with normals (type 0x1ff: float texture coordinates, 8888 color, float normal, float position),
+//drawn as points, whose pixels show their lit colors. A color c counts as 2c + 1: two colors multiply and shift down
+//10 bits; with a light's share (512ths, rounded up, plus one), 19.
+struct VN { float u, v; u32 color; float nx, ny, nz, x, y, z; };
+static auto drawLit(Scene& c, std::initializer_list<VN> vertices) -> void {
+  c.ge.commands[GE::VertexType] = 0x1ff;
+  u32 at = VertexData3D;
+  for(auto& vertex : vertices) {
+    for(float value : {vertex.u, vertex.v}) c.memory.write(4, at, Scene::bits(value)), at += 4;
+    c.memory.write(4, at, vertex.color), at += 4;
+    for(float value : {vertex.nx, vertex.ny, vertex.nz, vertex.x, vertex.y, vertex.z}) {
+      c.memory.write(4, at, Scene::bits(value)), at += 4;
+    }
+  }
+  c.ge.vertexAddress = VertexData3D;
+  c.ge.primitive(GE::Points, vertices.size());
+}
+static auto litPoint(Scene& c, float nx, float ny, float nz, u32 color = 0xffff'ffff) -> u32 {
+  c.clear();
+  drawLit(c, {{0, 0, color, nx, ny, nz, 5, 5, 0}});
+  return c.pixel(5, 5);
+}
+
+//The ambient part: no lights, material ambient (200, 100, 50, 255) times ambient light (255, 128, 0, 255):
+//401 * 511 >> 10 = 200, 201 * 257 >> 10 = 50, 101 * 1 >> 10 = 0, alpha 255; plus emissive (10, 20, 30).
+static auto draw3dLightingAmbient() -> void {
+  Scene c;
+  c.ge.commands[GE::LightingEnable] = 1;
+  c.ge.commands[GE::AmbientColor] = 0x32'64c8, c.ge.commands[GE::AmbientAlpha] = 0xff;
+  c.ge.commands[GE::AmbientLightColor] = 0x00'80ff, c.ge.commands[GE::AmbientLightAlpha] = 0xff;
+  c.ge.commands[GE::MaterialEmissive] = 0x1e'140a;
+  CHECK(litPoint(c, 0, 0, 1), 0x001e'46d2);  //(the alpha written is the stencil, 0)
+  c.ge.commands[GE::MaterialColor] = 1;      //the vertex's red stands for the ambient: 511 * 511 >> 10 + 10, held to 255
+  CHECK(litPoint(c, 0, 0, 1, 0xff00'00ff), 0x001e'14ff);
+}
+
+//A directional light (toward +z: its position (0, 0, 2) is only a direction), white diffuse, on a material diffuse
+//(128, 64, 0): squarely, 511 * 257 * 512 >> 19 = 128 and 64; at a cosine of 0.8, a share of 411: 102 and 51 (the
+//normal made one long first); from behind (NORMAL_REVERSE), nothing. With MATERIAL_COLOR bit 1 the vertex's color
+//(red) is the diffuse. A "powered" diffuse (kind 2) raises the cosine to the coefficient, 2: 0.75 becomes 0.5, a
+//share of 257: 64 and 32.
+static auto draw3dLightingDiffuse() -> void {
+  Scene c;
+  c.ge.commands[GE::LightingEnable] = 1;
+  c.ge.commands[GE::LightEnable0] = 1;
+  c.ge.commands[GE::LightType0] = 0;  //directional; ambient and diffuse
+  c.ge.commands[GE::Light0X + 2] = f24(2);
+  c.ge.commands[GE::Light0Ambient + 1] = 0xff'ffff;  //diffuse white
+  c.ge.commands[GE::MaterialDiffuse] = 0x00'4080;
+  CHECK(litPoint(c, 0, 0, 1), 0x0000'4080);
+  c.ge.commands[GE::LightEnable0] = 0;  //off: nothing
+  CHECK(litPoint(c, 0, 0, 1), 0);
+  c.ge.commands[GE::LightEnable0] = 1;
+  CHECK(litPoint(c, 0.6f, 0, 0.8f), 0x0000'3366);
+  CHECK(litPoint(c, 1.2f, 0, 1.6f), 0x0000'3366);
+  c.ge.commands[GE::NormalReverse] = 1;
+  CHECK(litPoint(c, 0, 0, 1), 0);
+  c.ge.commands[GE::NormalReverse] = 0;
+  c.ge.commands[GE::LightType0] = 2;  //powered diffuse
+  c.ge.commands[GE::MaterialSpecularCoefficient] = f24(2);
+  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x0000'2040);
+  c.ge.commands[GE::LightType0] = 0;
+  //a share rounded up, plus one: at a cosine of 0.501, 512 * 0.501 = 256.5 makes 258 (not 257): on a white material,
+  //261121 * 258 >> 19 = 128 (257 would give 127)
+  c.ge.commands[GE::MaterialDiffuse] = 0xff'ffff;
+  CHECK(litPoint(c, 0.8654485f, 0, 0.501f), 0x0080'8080);
+  c.ge.commands[GE::MaterialDiffuse] = 0x00'4080;
+  c.ge.commands[GE::MaterialColor] = 2;
+  CHECK(litPoint(c, 0, 0, 1, 0xff00'00ff), 0x0000'00ff);
+}
+
+//A point light 2 above, fading as 1 / (linear d): half, a share of 257: 261121 * 257 >> 19 = 127. A spotlight there
+//pointing along +z (the cosine with the direction to the light 1, past the cutoff 0.5): full; pointing along -z: none.
+static auto draw3dLightingPointAndSpot() -> void {
+  Scene c;
+  c.ge.commands[GE::LightingEnable] = 1;
+  c.ge.commands[GE::LightEnable0] = 1;
+  c.ge.commands[GE::LightType0] = 1 << 8;  //a point
+  c.ge.commands[GE::Light0X] = f24(5), c.ge.commands[GE::Light0X + 1] = f24(5), c.ge.commands[GE::Light0X + 2] = f24(2);
+  c.ge.commands[GE::Light0ConstantAttenuation + 1] = f24(1);  //linear
+  c.ge.commands[GE::Light0Ambient + 1] = 0xff'ffff;
+  c.ge.commands[GE::MaterialDiffuse] = 0xff'ffff;
+  CHECK(litPoint(c, 0, 0, 1), 0x007f'7f7f);
+  c.ge.commands[GE::LightType0] = 2 << 8;  //a spotlight
+  c.ge.commands[GE::Light0ConstantAttenuation] = f24(1), c.ge.commands[GE::Light0ConstantAttenuation + 1] = 0;
+  c.ge.commands[GE::Light0CutoffAttenuation] = f24(0.5f);
+  c.ge.commands[GE::Light0ExponentAttenuation] = f24(1);
+  c.ge.commands[GE::Light0DirectionX + 2] = f24(1);
+  CHECK(litPoint(c, 0, 0, 1), 0x00ff'ffff);
+  c.ge.commands[GE::Light0DirectionX + 2] = f24(-1);
+  CHECK(litPoint(c, 0, 0, 1), 0);
+}
+
+//The shine: a directional light toward +z that shines (white specular, no diffuse), the viewer along +z, coefficient
+//2. With the normal at a cosine of 0.75 to the half-way direction, the GE's quick power makes 0.75 squared 0.5 (not
+//0.5625): a share of 257, 127. A coefficient of 1.03125 keeps only the top four bits of its fraction: 1, so 0.75, a
+//share of 385, 191 (not 189). With the view turned so the viewer is along +x, the half-way direction is between +z
+//and +x: a normal there takes the whole shine. Kept apart (LIGHT_MODE 1), the shine is added after the texture
+//(replace: texel (0, 0), blue 0x80): (127, 127, 255); added in, the texture replaces it.
+static auto draw3dLightingSpecular() -> void {
+  Scene c;
+  c.ge.commands[GE::LightingEnable] = 1;
+  c.ge.commands[GE::LightEnable0] = 1;
+  c.ge.commands[GE::LightType0] = 1;  //directional; ambient, diffuse and specular
+  c.ge.commands[GE::Light0X + 2] = f24(1);
+  c.ge.commands[GE::Light0Ambient + 2] = 0xff'ffff;  //specular white
+  c.ge.commands[GE::MaterialSpecular] = 0xff'ffff;
+  c.ge.commands[GE::MaterialSpecularCoefficient] = f24(2);
+  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x007f'7f7f);
+  c.ge.commands[GE::MaterialSpecularCoefficient] = f24(1.03125f);
+  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x00bf'bfbf);
+  //the view: world x to view z, y to y, z to -x, moved so the vertex stays where it was
+  u32 turned[12] = {0, 0, f24(1), 0, f24(1), 0, f24(-1), 0, 0, f24(5), 0, f24(-5)};
+  for(u32 n = 0; n < 12; n++) c.ge.view[n] = turned[n];
+  CHECK(litPoint(c, 0.70710677f, 0, 0.70710677f), 0x00ff'ffff);
+  for(u32 n = 0; n < 12; n++) c.ge.view[n] = n == 0 || n == 4 || n == 8 ? f24(1) : 0;
+  c.ge.commands[GE::MaterialSpecularCoefficient] = f24(2);
+  c.texture();
+  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x0080'0000);
+  c.ge.commands[GE::LightMode] = 1;
+  CHECK(litPoint(c, 0.6614378f, 0, 0.75f), 0x00ff'7f7f);
+}
+
+//Environment mapping (TEXTURE_MAP_MODE 2): u from light 0 (directional, toward +x), v from light 1 (toward +y), lit
+//or not: (the cosine + 1) / 2. Normal (0.6, 0.8, 0): u 0.8, 12.8 texels; v 0.9, 14.4. With light 0 shining, its
+//direction is half way to the viewer's: u (0.6 / sqrt 2 + 1) / 2, 11.4 texels.
+static auto draw3dEnvironmentMap() -> void {
+  Scene c;
+  c.texture();
+  c.ge.commands[GE::TextureMapMode] = 2;
+  c.ge.commands[GE::TextureShadeMapping] = 0 | 1 << 8;
+  c.ge.commands[GE::Light0X] = f24(1);
+  c.ge.commands[GE::Light0X + 3 + 1] = f24(1);
+  CHECK(litPoint(c, 0.6f, 0.8f, 0) & 0xffff, 14 << 8 | 12);
+  c.ge.commands[GE::LightType0] = 1;
+  CHECK(litPoint(c, 0.6f, 0.8f, 0) & 0xffff, 14 << 8 | 11);
+}
+
 auto draw3dTests() -> Tests {
   return {
     {"draw3d transform", draw3dTransform}, {"draw3d outside", draw3dOutside}, {"draw3d clipping", draw3dClipping},
     {"draw3d culling", draw3dCulling}, {"draw3d perspective", draw3dPerspective}, {"draw3d fog", draw3dFog},
     {"draw3d depth range", draw3dDepthRange}, {"draw3d texture coordinates", draw3dTextureCoordinates},
-    {"draw3d morph and skin", draw3dMorphAndSkin},
+    {"draw3d morph and skin", draw3dMorphAndSkin}, {"draw3d lighting ambient", draw3dLightingAmbient},
+    {"draw3d lighting diffuse", draw3dLightingDiffuse}, {"draw3d lighting point and spot", draw3dLightingPointAndSpot},
+    {"draw3d lighting specular", draw3dLightingSpecular}, {"draw3d environment map", draw3dEnvironmentMap},
   };
 }
 

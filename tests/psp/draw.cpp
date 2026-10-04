@@ -497,6 +497,20 @@ static auto cubeSample() -> void {
   });
 }
 
+//pspsdk's "celshading" and "envmap": a turning torus whose texture comes from environment mapping (texture
+//coordinates from lights' directions and its normals); "envmap" lights it too. The torus covers part of the screen,
+//not its bottom corners. ("envmap" prints help over the top left of the first frame buffer, so every other frame
+//shows it.)
+static auto torusSample(const std::string& name, u32 background) -> void {
+  sampleAfterASecond(name, [background](const std::vector<u32>& pixels) {
+    u32 covered = 0;
+    for(u32 pixel : pixels) covered += pixel != background;
+    return pixels[271 * 480] == background && pixels[271 * 480 + 479] == background && covered > 10'000;
+  });
+}
+static auto celshadingSample() -> void { torusSample("celshading", 0xffff'ffff); }
+static auto envmapSample() -> void { torusSample("envmap", 0xff55'4433); }
+
 auto drawTests() -> Tests {
   return {
     {"draw sprites", drawSprites}, {"draw texture formats", drawTextureFormats}, {"draw filter", drawFilter},
@@ -504,7 +518,8 @@ auto drawTests() -> Tests {
     {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles},
     {"draw ambient and filters", drawAmbientAndFilters},
     {"blit sample", blitSample}, {"doublelist sample", doublelistSample}, {"clut sample", clutSample},
-    {"blend sample", blendSample}, {"cube sample", cubeSample},
+    {"blend sample", blendSample}, {"cube sample", cubeSample}, {"celshading sample", celshadingSample},
+    {"envmap sample", envmapSample},
   };
 }
 

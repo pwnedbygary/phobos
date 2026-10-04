@@ -7,6 +7,7 @@ namespace ares::PlayStationPortable {
 #include "vertex.cpp"
 #include "texture.cpp"
 #include "pixel.cpp"
+#include "lighting.cpp"
 #include "transform.cpp"
 #include "draw.cpp"
 #include "transfer.cpp"
