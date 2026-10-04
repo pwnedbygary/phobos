@@ -172,9 +172,15 @@ sanitizer too, which the PSP Core Tests workflow runs for changes to `ares/psp/`
 one function each, named after their mnemonics. The register file is eight 4x4 matrices of floats; a 7-bit
 register number names a single, a row or column vector (pair, triple, quad) or a matrix, by the operand size
 (`vfpuLine()`, `vfpuSquare()`). Source prefixes swizzle, take absolute values, negate or substitute constants;
-the destination prefix saturates or masks; every VFPU instruction but the prefix ones uses them up. Denormals
-count as zero both ways, and only round-to-nearest exists. The recompiler runs the VFPU through the interpreter
-for now (its branches included), as it does the FPU.
+the destination prefix saturates or masks; every VFPU instruction but the prefix ones uses them up. As a PSP does
+it, the math functions take the prefixes on their last lane alone (`vfpuLastLaneFirst()`); a swizzle past an
+operand's size gives 0 in its lane, or leaves that lane's product out of the adders (`vdot`, `vhdp`, `vfad` and
+`vavg`), which add up all four lanes whatever the size (`outsideLanes()`, `vfpuReadFour()`).
+Denormals count as zero both ways: a result is rounded to a float's 24 bits as if exponents went on below 2^-126, the
+smallest normal number, then flushed to a zero of its sign if it's still below (`vfpuBits()`; measured on products,
+taken to hold for quotients). Only round-to-nearest exists. The rest was measured too (psp-vfpu-measurements.md,
+rounds 2 and 3). The recompiler runs the VFPU through the interpreter for now (its branches included), as it does
+the FPU.
 
 The random number generator is the hardware's, as fp64 worked it out from a PSP's output (PPSSPP issue 16946):
 a linear congruential generator, a xorshift and a Pell-like sequence with a carry, added together, their state
@@ -196,10 +202,11 @@ arithmetic instruction, and `vnop`, as pspdev's documentation says (PPSSPP keeps
 documentation rests on tests on hardware); not `vsync`, `vflush`, `vmfvc` and `vmtvc`, which the documentation
 doesn't cover, as in PPSSPP; nor the loads, stores and moves to integer registers.
 
-Tests: `tests/allegrex/vfpu.cpp`, ten groups (addressing, arithmetic, prefixes, products, comparisons,
-conversions, functions, matrices, moves, and more instructions worked out by hand from the descriptions), run on
-both engines; the generated programs that compare the engines include VFPU instructions and its branches, and
-compare its registers, prefixes and condition codes.
+Tests: `tests/allegrex/vfpu.cpp`, twelve groups (addressing, arithmetic, prefixes, products, comparisons,
+conversions, functions, matrices, moves, more instructions worked out by hand from the descriptions, the random
+number generator, and edge cases as a PSP gives them, some of them runs it recorded), run on both engines; the
+generated programs that compare the engines include VFPU instructions and its branches, and compare its registers,
+prefixes and condition codes.
 
 ### Measuring the VFPU on a PSP
 

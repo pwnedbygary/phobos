@@ -588,11 +588,11 @@ auto random() -> void {
   CHECK(masked.cpu.vfpu.r[S(3, 1, 0)], bits(7.0f));                      //masked
 }
 
-//What a PSP does with NaNs, infinities and denormals where the instructions above don't show it, from the second
-//round of measurements (docs/psp-vfpu-measurements.md, round 2); most values are from the recorder's runs. Each
-//case is one instruction word as pspdev's assembler encoded it for the recorder (tests/allegrex/measured/ops.txt),
-//on C000 (s) and C100 (t, S100 being its first lane), the result read from C200, whose unwritten lanes keep their
-//0xdead marks.
+//What a PSP does with NaNs, infinities, denormals and prefixes where the instructions above don't show it, from the
+//second and third rounds of measurements (docs/psp-vfpu-measurements.md); most values are from the recorder's runs
+//(tests/allegrex/measured/ops.txt and ops3.txt list its entries), the tiny products built from round 3's rule. Each
+//case is instruction words as pspdev's assembler encoded them for the recorder, on C000 (s) and C100 (t, S100 being
+//its first lane), the result read from C200, whose unwritten lanes keep their 0xdead marks.
 auto edges() -> void {
   using Quad = std::array<uint32_t, 4>;
   constexpr uint32_t mark = 0xdead0000, one = 0x3f80'0000, minusOne = 0xbf80'0000, nan = 0x7f80'0001;
@@ -649,11 +649,20 @@ auto edges() -> void {
     {"vcos.q", 0xd0138088, {0x7f800000, 0xff800000, 0, 0}, {}, {nan, nan, one, one}},
     {"vnsin.q", 0xd01a8088, {0x7f800000, 0xff800000, 0x7f800000, 0xff800000}, {},
      {nan | 0x8000'0000, nan, nan | 0x8000'0000, nan}},
+    //Products a sliver below 2^-126, the smallest normal number, are rounded to 24 bits first: kept where that
+    //reaches 2^-126 (2^-126 (1 - j² 2^-46) for j = 1448, and j = 1), and otherwise a zero of their sign (j = 1449;
+    //and 2^-126 - 2^-150, which IEEE's denormals would round up to 2^-126).
+    {"vmul.q, tiny products", 0x64048088, {0x3f7ff4b0, 0xbf7ff4ae, 0x3f7fffff, 0xbf7ffffe},
+     {0x008005a8, 0x008005a9, 0x00800000, 0x00800001}, {0x00800000, 0x80000000, 0, 0x80800000}},
+    //A quotient is taken to round the same way (not measured): 2^-126 - 2^-150 again.
+    {"vdiv.s, a tiny quotient", 0x63840008, {0x3f7fffff}, {0x7e800000}, {0, mark | 1, mark | 2, mark | 3}},
   };
-  //Prefixes as a PSP applies them, one recorded run each: vrcp takes them on its last lane alone, with lane 0's
-  //settings (a constant; a setting naming another lane gives 0; the write mask); vfad's t prefix only picks
-  //constants; vhdp's last s lane is forced to one; vscl's t prefix always takes rt; and a swizzle past the
-  //operand's size gives 0 in its lane.
+  //Prefixes as a PSP applies them, one recorded run each: the math functions take them on their last lane alone,
+  //with lane 0's settings (a constant; a setting naming another lane gives 0; the absolute value; the write mask),
+  //and the negating ones (vnrcp, vnsin, vrexp2) ignore the negate setting; vfad's t prefix only picks constants,
+  //vavg's only negates; vhdp's last s lane is forced to one; vscl's t prefix always takes rt; a swizzle past the
+  //operand's size gives 0 in its lane (vh2f splits a 0 that its negate setting can make -0), or leaves the adders'
+  //product out; and the adders add up all four lanes, whatever the size.
   struct Prefixed { const char* name; std::vector<uint32_t> words; Quad s, t, d; };
   const Prefixed prefixed[] = {
     {"vrcp.q, constant", {0xdc0cb310, 0xd0108088}, {0x85ffd1ef, 0x3feba3f9, 0x0844e493, 0xbe17e23d}, {},
@@ -674,6 +683,46 @@ auto edges() -> void {
      {0xf0d9556c, 0xbf1c5d7e, 0, 0xbef4f992}, {}, {0, 0x70d9556c, mark | 2, mark | 3}},
     {"vmov.t, past the size", {0xdc07e5bb, 0xdd0656bc, 0xd0008008}, {0x21061cf5, 0xc35952ef, 0x305dccf9, 0x205df593},
      {}, {0, 0xc0000000, 0xbe2aaaab, mark | 3}},
+    {"vsqrt.q, the last lane's absolute value", {0xdc0c2b24, 0xd0168088},
+     {0xbed7cad3, 0x0000e27d, 0x000099b7, 0xc0bd6701}, {}, {nan, 0, 0, 0x401bb408}},
+    {"vnsin.q, negate unused", {0xdc0377c8, 0xd01a8088}, {0xbe040651, 0x3ef570ab, 0x0000fe15, 0x397b710f}, {},
+     {0x3e4df814, 0xbf2f0f90, 0x80000000, one}},
+    {"vavg.p, t prefix", {0xdd0a36fe, 0xde000af4, 0xd0470088}, {0x0000e201, 0xbc16b7db, 0x414a3cc5, 0x7141133f}, {},
+     {0x3b96b7db, mark | 1, mark | 2, mark | 3}},
+    {"vdot.p, past the size", {0xdc00cede, 0x64840088}, {0x3c948af5, 0x73e7f0ef, 0x534c1af9, 0xbfb77393},
+     {0x39baba15, 0xbf0c8d0f, 0x4192ac19, 0xffffc1b3}, {0, mark | 1, mark | 2, mark | 3}},
+    {"vf2iz.t, past the size", {0xdc058813, 0xd2208008}, {0x00003d12, 0xc056f214, 0x40152866, 0xc01c7c88}, {},
+     {0, 0, 3, mark | 3}},
+    {"vnrcp.q, negate unused", {0xdc03df4b, 0xd0188088}, {0x3e231fb8, 0x322639aa, 0x7f800000, 0xc002627e}, {},
+     {0xc0c8e0c0, 0xccc5214c, 0x80000000, 0xc0bffffc}},
+    {"vrexp2.q, negate unused", {0xdc05de02, 0xd01c8088}, {0x3f01ed4f, 0xc3263659, 0x4b800000, 0xbfb96a9d}, {},
+     {0x3f3413c8, 0x7f800000, 0, 0x3e7ffffc}},
+    {"vrsq.q, the last lane", {0xdc0317a9, 0xd0118088}, {0x3f8f1afb, 0x00002ce5, 0x0000185f, 0x000063e9}, {},
+     {0x3f721cc4, 0x7f800000, 0x7f800000, 0xff800001}},
+    {"vexp2.q, the last lane", {0xdc041e3d, 0xde000c6a, 0xd0148088}, {0x3f625372, 0xb7263774, one, 0x427c67e8}, {},
+     {0x3fec3c70, 0x3f7fff88, 0x40000000, 0x40000000}},
+    {"vlog2.q, the last lane", {0xdc02b08c, 0xd0158088}, {0x3e6de892, 0x4f000000, 0x0000cbe6, 0x979c6c08}, {},
+     {0xc006c400, 0x41f80000, 0xff800000, 0xff800000}},
+    {"vsin.q, the last lane", {0xdc0bb3d7, 0xd0128088}, {0xbf2c0fcb, 0xbc7b8a35, 0x4121722f, 0x3eb56e39}, {},
+     {0xbf5eca3c, 0xbcc58a00, 0xbe10e208, 0xbe8483e8}},
+    {"vcos.q, the last lane", {0xdc091f4f, 0xde000db9, 0xd0138088}, {0x3eff4842, 0xffff94c4, 0x0000ce96, 0x3f800001},
+     {}, {0x3f356ae0, nan, one, mark | 3}},
+    {"vasin.q, the last lane", {0xdc0f5010, 0xde000efe, 0xd0178088}, {0x3ef5cc24, 0x37d0dcf6, 0x00006f98, 0x0000748a},
+     {}, {0x3ea33718, 0x37846a00, 0, 0x80000000}},
+    {"vi2f.p, past the size", {0xdc068c9f, 0xd2800088}, {0xffffe069, 0x807fffff, 0x00002dad, 0xb8937c67}, {},
+     {0, 0, mark | 2, mark | 3}},
+    {"vhdp.p, past the size", {0xdd02591d, 0x66040088}, {0x439f1259, 0xc06341f3, 0xbeb2069d, 0x0000f2d7},
+     {0x3cd25379, 0xffffc013, 0xffffc9bd, 0x3f7fffff}, {0x42d41877, mark | 1, mark | 2, mark | 3}},
+    {"vfad.p, all four lanes", {0xdc05827e, 0xde000a8e, 0xd0460088}, {0x0000049b, 0x8693e785, 0xffffcbff, 0x3c857889},
+     {}, {one, mark | 1, mark | 2, mark | 3}},
+    {"vavg.t, all four lanes", {0xdc07f554, 0xdd08160b, 0xd0478008}, {0x00002edb, 0x0000cbc5, 0xbcbe7a3f, 0x3fc580c9},
+     {}, {0xbfe38e39, mark | 1, mark | 2, mark | 3}},
+    {"vh2f.s, past the size", {0xdc0d4bdd, 0xd0330008}, {0x00006dc5, 0x00006c3f, 0x000042c9, 0x476f7be3}, {},
+     {0, 0x80000000, mark | 2, mark | 3}},
+    {"vf2h.p, past the size", {0xdc0a415f, 0xd0320088}, {0xffffb473, 0xffff9d1d, 0x00004d57, 0x3e5d7ba1}, {},
+     {0, mark | 1, mark | 2, mark | 3}},
+    {"vbfy1.p, past the size", {0xdc0505ea, 0xd0420088}, {0x0000530d, 0xbcc4a8c7, 0x3e531891, 0x00007ceb}, {},
+     {0, 0, mark | 2, mark | 3}},
   };
   auto test = [&](const char* name, const std::vector<uint32_t>& words, const Quad& s, const Quad& t, const Quad& d) {
     Machine m;

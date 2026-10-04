@@ -303,7 +303,8 @@ files), and, packed with xz (360 KB), `fpu-state`, the four FPU files and `vmul-
 | fpu-arith: each operation, rounding to nearest | 4096 | 4096 (100.00%) | 0 |
 | fpu-arith: each operation, the other three modes | 4096 | 52.42% to 80.08% | 1 |
 
-The second recorder list: 36 of its 284 entries match in every run, and 7 more differ only by rounding.
+The second recorder list: 36 of its 284 entries match in every run, and 7 more differ only by rounding (198 and
+54 since: see the findings).
 
 The probes (each run once in rounding mode 0, FCSR's flags, enables and causes cleared, flush to zero off but in
 the -fs ones). The core's results already match:
@@ -358,16 +359,47 @@ the -fs ones). The core's results already match:
   kept, and the rest are 0 (35.35% of the inputs, every one as measured). The core rounds as IEEE's denormals would
   before flushing, so it also keeps 2^-126 from j = 1449 to 2048. Round 2's one `vscl` lane fits too: its product,
   2^-126 - 2^-150, is exact at 24 bits and below 2^-126, so the PSP flushes it to 0, where IEEE's denormal rounding (a
-  tie, to even) takes the core to 2^-126.
-- **The second recorder list** differs in 241 of its 284 entries beyond rounding. These are the data to fit how the
-  math functions take prefixes, what swizzles past the size do, and how `vavg` and `vfad` take t prefixes.
+  tie, to even) takes the core to 2^-126. **Fixed since:** the core rounds every VFPU result this way: `vmul`,
+  `vscl`, `vmscl` and `vcrs` now hand it their exact products, and `vdiv` its quotient to a double's 53 bits (taken to
+  round the same way, not measured). So `vmul-tiny` matches in every result (the host tests replay it), and round
+  2's recorder list gains its `vscl` entry (1158 of 1216 exact).
+- **The second recorder list** matched in 36 of its 284 entries at first. Fitting it gave these rules, now in the
+  core, which bring it to 198 exact and 54 more differing only by rounding:
+  - **The math functions** (`vrcp`, `vrsq`, `vsqrt`, `vsin`, `vcos`, `vasin`, `vexp2`, `vlog2`, `vnrcp`, `vnsin`,
+    `vrexp2`) all take prefixes as round 2 found `vrcp` does: worked out a lane at a time from the last lane back,
+    only the last lane's step sees the prefixes, with lane 0's settings (a constant if it names one; the lane's own
+    input, its absolute value too, with a swizzle of 0; 0 if it names another lane), and lane 0's clamp and write mask
+    go to the last lane alone. `vnrcp`, `vnsin` and `vrexp2` ignore the negate setting: `vnrcp` of a negated 1/6
+    gives -5.999998 (minus its reciprocal), and `vnsin` of a negated 3 gives -sin(3 quarter turns), which is 1.
+  - **The adders add up four lanes, whatever the size.** `vdot`, `vhdp`, `vfad` and `vavg` read all four lanes, each
+    through its own prefix settings, and leave out the product of a lane whose swizzle names a lane past the size
+    (one within the size too). With the prefixes at rest, the lanes past the size name lanes past the size, so
+    nothing changes; but a constant there, or a swizzle back into the operand, adds to the sum. A `vfad.p` whose s
+    prefix puts its own two lanes past the size and the constant 1 in lane 3 gives 1 in every run.
+  - **`vavg`'s t prefix only negates:** a lane whose t prefix sets negate is subtracted, and its absolute and constant
+    settings change nothing (fitting a weight per lane, the constants of either sign, against every run showed it).
+    The sum is divided by the size, which fits the PSP better than weighing each lane by the constant 1/3 does (round
+    2's unprefixed `vavg.t` loses 5 runs that way). `vfad`'s t prefix keeps round 2's rule (1, or 1/3 with the
+    absolute bit, negated with the negate bit).
+  - **A swizzle past the operand's size** also gives 0 in `vf2i`'s, `vi2f`'s and `vbfy1`'s lane, as in the
+    instructions that work lane by lane (for `vbfy1`, seen with both lanes of a pair past it), a half float of 0 in
+    `vf2h` whatever the negate setting, and in `vh2f` a 0 that the negate setting still makes -0 before it's split
+    (so its second float is -0).
+
+  The 54 that differ only by rounding are the adders' (39) and `vlog2`'s above 4 (15): see Next, below. Still open, 32
+  entries, all from the part of the list built to put swizzles past an operand's size into instructions that combine
+  lanes, which compilers don't produce: `vavg` (8: where large terms cancel, the PSP loses the small terms' low bits
+  or the small terms entirely, so it can be far from the core: halving 1.25e35 + 1/2 - 1.25e35 - 2, it gives 0 where
+  the core gives -1; the adders' fit should explain it), `vcmp` (8: given a destination prefix too, it changes
+  condition bits of lanes its write mask leaves out, with no rule seen yet), and `vcrs`, `vcrsp`, `vdet` and `vsocp`
+  (4 each), which reading such a lane as 0 doesn't fit.
 
 ## Next
 
 - From round 2: `vlog2` above 4, and the adders' model (`vdot`, `vhdp`, `vfad`, `vavg`, `vcrsp`, `vdet`, `vqmul` and
   the matrix products).
-- From round 3: the VFPU's tiny products, and the second recorder list's rules (the FPU's are done). The GE's round
-  3 is in [psp-core.md](psp-core.md) ("Round 3's results").
+- From round 3: the second recorder list's 32 open entries (swizzles past the size, above), if a game ever needs them.
+  The GE's round 3 is in [psp-core.md](psp-core.md) ("Round 3's results").
 - For a next round: flush to zero in the directed rounding modes (MIPS documents the smallest normal number when
   rounding toward it; the core gives 0 in every mode), and `cvt.s.w` in each mode.
 
