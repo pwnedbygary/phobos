@@ -230,20 +230,43 @@ least one.
     negative denormals included. `vlgb` of a NaN gives a NaN of the same sign with the input's low byte moved up 16
     bits (`0xffd20000` for `0xfffffa52`; all 7 recorded).
   - **Fixed:** the core follows all of the above now (`vfpuOrder` and the instructions in
-    `ares/psp/cpu/interpreter-vfpu.cpp`), with a test of each rule (`vfpu edges` in `tests/allegrex/vfpu.cpp`). The
-    recorder then matches in 1129 of its 1216 entries, and 38 more differ only by the adders' rounding; what's left
-    is the prefixed entries and the adders.
-  - **Prefixes:** 123 of the differing entries are the random prefix combinations; in 6 of them the core leaves a lane
-    unwritten that the PSP writes (on `vrcp.q` with source and destination prefixes), so the core applies some
-    prefixes differently from the hardware.
+    `ares/psp/cpu/interpreter-vfpu.cpp`), with a test of each rule (`vfpu edges` in `tests/allegrex/vfpu.cpp`). With
+    them the recorder matched 1129 of its 1216 entries, and 38 more only by the adders' rounding; the prefixed
+    entries were left, below.
+  - **Prefixes:** 123 of the differing entries are the random prefix combinations. With the rules above in, 46 still
+    differed beyond rounding, and they come down to a few things the hardware does, each holding in every entry that
+    shows it:
+    - `vrcp.q` takes the prefixes on its last lane alone, with lane 0's settings, as `vrndi` does with its
+      destination prefix: lanes 0 to 2 are the plain reciprocals of their inputs, unclamped and unmasked, and lane
+      3 is masked or clamped by lane 0's destination settings. A constant in lane 0's source setting gives lane 3
+      that constant's reciprocal (5 entries), and a setting naming another lane gives 0 (3 entries), as though the
+      lanes were worked out one at a time from the last, only the first step seeing the prefixes, and that step's
+      input were its own lane alone. How the other math functions (`vrsq`, `vsin` and the rest) take prefixes
+      wasn't recorded.
+    - `vfad` is a dot product with t forced to constants: each lane weighed by 1, or 1/3 where the t prefix sets the
+      absolute bit, negated where it sets negate (the constant bit and a swizzle of 1 forced, the rest kept). So a t
+      prefix changes `vfad`, which has no t operand.
+    - `vhdp` forces s's last lane to such a constant in the same way (1, or 1/3 with the absolute bit, and its sign).
+    - `vscl`'s t prefix takes rt in every lane (its swizzle ignored), its other settings applying lane by lane.
+    - A swizzle that reaches past the operand's size (lane 2 of a pair, lane 3 of a triple) gives 0 as that lane's
+      result, whatever the instruction (`vmov.p`, `vmov.t`, `vadd.s`; and `vrcp`'s last step above); the
+      instruction I first read as `vmov.s` is `vmov.t`, whose lanes 1 and 2 are in range.
+  - **Fixed:** the core takes prefixes this way now (`vrcp`, `vfad`, `vhdp`, `vscl`, and the out-of-range rule for
+    the instructions that work lane by lane), with a test of each from a recorded run. The recorder then matches in
+    1157 of its 1216 entries; 49 more differ only by the adders' rounding, and the last 10 by the adders' rounding
+    beyond 4 ulps (where terms cancel), and one `vscl` lane whose product rounds up to exactly the smallest normal
+    number, which the PSP gives as 0 (so it may flush before rounding).
   - **Rounding:** the rest are the adders (`vdot`, `vhdp`, `vfad`, `vavg`, `vcrsp`, by an ulp) and `vlog2` above 4
     (by 2), as above.
 
 ## Next
 
-- From round 2 (the matrix operands' orientation, `divu`'s LO by zero, the NaN results, kept denormals and the
-  comparisons' order are done): the prefix differences (one entry at a time, against `ops.bin`); then `vlog2` above
-  4, and the adders' model.
+- From round 2, all but the arithmetic is done: what's left is `vlog2` above 4, and the adders' model (`vdot`,
+  `vhdp`, `vfad`, `vavg`, `vcrsp`, `vdet`, `vqmul` and the matrix products).
+- For a third round: how the other math functions take prefixes; whether a swizzle past the size zeroes the result
+  of instructions that don't work lane by lane (sums, cross products, conversions), and when only t's swizzle is
+  out of range; `vavg` with prefixes; and whether results are flushed before they're rounded (the `vscl` lane
+  above).
 - The FPU: a probe that tries one kind of value at a time, to find what the PSP refuses; then the FPU tests without
   them.
 

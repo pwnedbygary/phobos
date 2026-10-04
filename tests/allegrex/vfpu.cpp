@@ -650,17 +650,44 @@ auto edges() -> void {
     {"vnsin.q", 0xd01a8088, {0x7f800000, 0xff800000, 0x7f800000, 0xff800000}, {},
      {nan | 0x8000'0000, nan, nan | 0x8000'0000, nan}},
   };
-  for(auto& c : cases) {
+  //Prefixes as a PSP applies them, one recorded run each: vrcp takes them on its last lane alone, with lane 0's
+  //settings (a constant; a setting naming another lane gives 0; the write mask); vfad's t prefix only picks
+  //constants; vhdp's last s lane is forced to one; vscl's t prefix always takes rt; and a swizzle past the
+  //operand's size gives 0 in its lane.
+  struct Prefixed { const char* name; std::vector<uint32_t> words; Quad s, t, d; };
+  const Prefixed prefixed[] = {
+    {"vrcp.q, constant", {0xdc0cb310, 0xd0108088}, {0x85ffd1ef, 0x3feba3f9, 0x0844e493, 0xbe17e23d}, {},
+     {0xf900170c, 0x3f0b0f2c, 0x76a66cf0, 0x3eaaaaa8}},
+    {"vrcp.q, another lane", {0xdc01ef02, 0xd0108088}, {0x127a075f, 0x00002ae9, 0x3fa53903, 0xffffe02d}, {},
+     {0x6c830e90, 0x7f800000, 0x3f465384, 0}},
+    {"vrcp.q, masked", {0xdc08c19d, 0xdd0ccc31, 0xde0001bb, 0xd0108088},
+     {0xe091319f, 0xbcc70f29, 0xec23e743, 0xadc7e86d}, {}, {0x9e61af3c, 0xc2249d44, 0x92c7ec34, mark | 3}},
+    {"vfad.q, t prefix", {0xdd0b4f9f, 0xd0468088}, {0x437f0000, 0xc31d8ec0, 0xbf2065f2, 0x43466df4}, {},
+     {0xc2c5aa67, mark | 1, mark | 2, mark | 3}},
+    {"vhdp.q, prefixes", {0xdc0b66f4, 0xdd0df9c9, 0x66048088}, {0xe3754950, 0x00000001, 0xbe5f0984, 0x3e58e156},
+     {0xf1852df0, 0x313dbca2, 0xb94be824, 0x3eb958f6}, {0xe2a38636, mark | 1, mark | 2, mark | 3}},
+    {"vscl.q, t prefix", {0xdd0d2f6c, 0xde0004c0, 0x65048088}, {0x87bbe026, 0xb834ca48, 0x5b9b92ba, 0x3c6eddfc},
+     {0x2d5f3fc6, 0x40000000, 0x3f0e1c5a, 0x4f81389c}, {0, 0xb90797b6, mark | 2, 0xaa504ee0}},
+    {"vadd.s, past the size", {0xdc00c46a, 0x60040008}, {0x661b2e33, 0x3b03fcdd, 0xbc298317, 0xf3dbf761},
+     {0xb9f4cc53, 0xfb80dffd, 0x3e3af337, 0x2caa7c81}, {0, mark | 1, mark | 2, mark | 3}},
+    {"vmov.p, past the size", {0xdc0d4292, 0xdd0a1e62, 0xde000430, 0xd0000088},
+     {0xf0d9556c, 0xbf1c5d7e, 0, 0xbef4f992}, {}, {0, 0x70d9556c, mark | 2, mark | 3}},
+    {"vmov.t, past the size", {0xdc07e5bb, 0xdd0656bc, 0xd0008008}, {0x21061cf5, 0xc35952ef, 0x305dccf9, 0x205df593},
+     {}, {0, 0xc0000000, 0xbe2aaaab, mark | 3}},
+  };
+  auto test = [&](const char* name, const std::vector<uint32_t>& words, const Quad& s, const Quad& t, const Quad& d) {
     Machine m;
-    m.run({c.word}, [&](Allegrex& s) {
+    m.run(words, [&](Allegrex& cpu) {
       for(uint32_t k = 0; k < 4; k++) {
-        s.vfpu.r[32 * k] = c.s[k];
-        s.vfpu.r[4 + 32 * k] = c.t[k];
-        s.vfpu.r[8 + 32 * k] = mark | k;
+        cpu.vfpu.r[32 * k] = s[k];
+        cpu.vfpu.r[4 + 32 * k] = t[k];
+        cpu.vfpu.r[8 + 32 * k] = mark | k;
       }
     });
-    for(uint32_t k = 0; k < 4; k++) check(__LINE__, c.name, m.cpu.vfpu.r[8 + 32 * k], c.d[k]);
-  }
+    for(uint32_t k = 0; k < 4; k++) check(__LINE__, name, m.cpu.vfpu.r[8 + 32 * k], d[k]);
+  };
+  for(auto& c : cases) test(c.name, {c.word}, c.s, c.t, c.d);
+  for(auto& c : prefixed) test(c.name, c.words, c.s, c.t, c.d);
 }
 
 auto vfpuTests() -> Tests {

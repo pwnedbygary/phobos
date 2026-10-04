@@ -742,6 +742,24 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the VFPU's prefixes, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-vfpu-prefixes-2b67`, stacked on `cursor/psp-vfpu-nans-2b67` (for stack #106). The recorder's 240
+random prefix combinations, worked out entry by entry (docs/psp-vfpu-measurements.md, round 2, "Prefixes"), in
+ares/psp/cpu/interpreter-vfpu.cpp:
+- `vrcp` takes the prefixes on its last lane alone with lane 0's settings (lanes 0-2 plain; a constant setting
+  honoured, one naming another lane giving 0; the destination's mask and clamp on lane 3), like `vrndi`.
+- `vfad`: t forced to constants (1, or 1/3 with the absolute bit, signs kept); `vhdp`: s's last lane forced the
+  same way; `vscl`: t's swizzle ignored, its other settings per lane.
+- `outsideLanes`: a swizzle past the operand's size gives 0 as that lane's result, in the lane-by-lane instructions
+  (the helpers, vabs, vneg, vmin, vmax, vscmp, vscl).
+- The recorder: 1157 of 1216 entries match, 49 more only by rounding; the last 10 are the adders' rounding beyond 4
+  ulps and one vscl lane that may be flushed before rounding. Unmeasured, for a third round: the other math
+  functions with prefixes, out-of-range swizzles in sums and conversions, vavg with prefixes.
+
+Checks: Allegrex tests 56 groups (prefix cases from recorded runs in `vfpu edges`); PSP system tests; mutations of
+vrcp's rule, the out-of-range rule and vfad's t prefix each fail the tests.
+
 ## PSP core: the VFPU's NaNs, denormals and comparisons, as the PSP measured them — 2026-10-04
 
 Branch `cursor/psp-vfpu-nans-2b67`, stacked on `cursor/psp-vfpu-fixes-2b67` (for stack #106). Rules worked out from
