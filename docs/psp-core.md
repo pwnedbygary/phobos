@@ -593,6 +593,69 @@ level apart from PPSSPP's, because the cut's corners were blended from the other
 256ths rounded the other way (part 11 now blends them from the corner past the plane). An earlier count here, "49 of
 the 51 files", miscounted: it was 48 of 50, the 51st file being the manifest.
 
+#### Results from the user's PSP (2026-10-04)
+
+The user ran the program (with the lighting cases) on their PSP (firmware 6.61). The SHA-256 of every file and the
+manifest are in [`tests/psp/measured/`](../tests/psp/measured/); the files themselves are kept outside the
+repository. `tests/psp/measure.cpp` with `PSP_GE_RESULTS` gives what follows.
+
+**The controller is as uOFW reads the firmware:** a second `sceCtrlReadLatch` took 1-2 µs (it doesn't wait), a
+`sceCtrlReadBufferPositive` just after a vertical blank 9-12 µs (it doesn't either), and a second
+`sceCtrlReadBufferPositive` 16.6-16.8 ms (it waits a frame), all 16 times each.
+
+**40 of the 63 picture files are identical to the core's:** every blend operation and factor, every texture function
+(with alpha and doubling), dithering in 8888 and 5650, the stencil's steps in 4444 and 5551, every texel of the 16-bit
+texture formats (color and alpha), 8-bit colors narrowed into the 16-bit frame buffers (and what the alpha bits get
+with the stencil test off), the sprite corners' quarter turn, the filter shrinking, a stretched sprite's texels, and a
+triangle past the near plane with DEPTH_CLIP_ENABLE off. The pixel pipeline's arithmetic (blending, texture
+functions, dithering, the stencil, formats), as parts 10-12 have it, is the PSP's.
+
+**The other 23 differ, and in 21 of them PPSSPP's software renderer differs from the PSP at exactly the same
+pixels** (the core follows it there); in the other two, the 2D sprite cases, the two differ from the PSP in different
+places. So the PSP's own data is what settles them:
+
+| file | pixels that differ | by | what it shows |
+| --- | --- | --- | --- |
+| `filter-magnify`, `-clamp`, `-37` | 2880, 1620, 991 of 4096 | 1 (13 at most at the odd scale) | the filter's weights or rounding |
+| `gouraud` | 8432 | 1 | colors blended across triangles round otherwise |
+| `texels-triangles-shrunk`, `-stretched` | 1928, 7936 | a texel | texture coordinates across triangles |
+| `texels-sprite-shrunk` | 7424 (PPSSPP 3312) | a texel | which texel a shrunk sprite takes: neither's rule |
+| `coverage-sprites` | 344 (PPSSPP 217) | whole pixels | which pixels sprites cover (below) |
+| `coverage-triangles`, `shared-edges` | 567, 382 | whole pixels | which pixels triangles cover, edges included |
+| `3d-rounding` | 1500 | whole pixels | the rounding onto the screen (below) |
+| `3d-cull`, `3d-rules`, `3d-floor-texels`, `3d-floor-fog` | 48, 146, 2708, 6321 | edges, texels, levels | edges and rounding in 3D |
+| `3d-clip` | 8496 | 1 | colors across a triangle cut at the near plane |
+| `3d-sprite` | 10152 | up to 254 | a 3D sprite's fog and texels: neither's rule |
+| `3d-floor-depth` | 17344 | | not yet comparable (below) |
+| `light-diffuse`, `-specular`, `-spot`, `-point` | 28160, 14848, 2560, 30720 | 1 | lighting's rounding |
+| `light-environment` | 512 | a texel | environment mapping's coordinates |
+
+What the data already says:
+
+- **Sprites** (through mode, corners on sixteenths): the core covers the pixels whose middles (8/16 in) are inside,
+  edges counting, and PPSSPP nearly so. The PSP draws a column while the left edge is at most 9/16 into it, and
+  from the right edge being 9/16 into it; a row while the top edge is at most 8/16 into it (as the core has it), and
+  from the bottom edge being 9/16 into it. The same in all 16 cells of each offset.
+- **3D positions aren't rounded up the way PPSSPP has it** (+0.375 of a sixteenth, which the core copies): the PSP
+  draws the pixel in all 256 cells, with its left and top edges up to 15/256 of a pixel past the sample point the
+  program assumed (7/16 in), where that rounding drops it from 10/256. Either the GE truncates positions to the
+  sixteenth, or its sample point is further into the pixel than 7/16 (as the sprites' are); a case with edges
+  past 8/16 will tell which.
+- **The spotlight's direction is toward the light**, as PPSSPP reads it: the pool has the same shape on the PSP, the
+  differences only a level of rounding.
+- **The depth buffer doesn't read back in the order the program assumed:** none of the floor's 15264 depths match,
+  9616 of them read 0, and 2080 pixels off the floor read something. The PSP's depth buffer is evidently arranged
+  differently in VRAM when the CPU reads it at its normal address (PPSSPP reads depth through a separate mirror),
+  so this file needs that layout worked out before it says anything about depths.
+- **With DEPTH_CLIP_ENABLE off, a triangle reaching past the near plane isn't drawn at all**, as the core has it
+  (`3d-clip-unclamped` is empty on both).
+
+The open questions above, settled: a sprite edge through pixel middles follows neither the core nor PPSSPP (the rule
+above); a shrunk sprite's texels follow neither, PPSSPP's nearer; a 3D sprite's fog follows neither; the spotlight's
+direction is PPSSPP's reading; a second latch read doesn't wait. Next: fit each rule from these files (the coverage
+and sample points, the rounding onto the screen, interpolation, the filter, lighting's rounding, the depth layout),
+one at a time, each fix checked against them.
+
 ## Part 11: drawing in 3D
 
 `ares/psp/ge/transform.cpp`, and 3D paths in `vertex.cpp`, `draw.cpp` and `pixel.cpp`. Outside through mode:

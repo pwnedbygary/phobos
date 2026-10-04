@@ -1,9 +1,10 @@
 # The PSP's VFPU, measured
 
 What a real PSP's vector unit (the VFPU) computes, recorded so Phobos's PSP core can match it exactly, and shared
-so anyone can check it or build on it. Recorded on 2026-10-03 on the user's PSP (firmware 6.61; the program reported
-devkit version `06060110`) with [`tools/psp-vfpu-measure`](../tools/psp-vfpu-measure/main.c), and compared with the
-core by [`tools/psp-vfpu-measure/compare.sh`](../tools/psp-vfpu-measure/compare.sh).
+so anyone can check it or build on it. Recorded on the user's PSP (firmware 6.61; the program reported devkit version
+`06060110`) with [`tools/psp-vfpu-measure`](../tools/psp-vfpu-measure/main.c): round 1 on 2026-10-03, round 2 on
+2026-10-04 (below, with round 1 run again), and compared with the core by
+[`tools/psp-vfpu-measure/compare.sh`](../tools/psp-vfpu-measure/compare.sh).
 
 ## What was recorded
 
@@ -120,15 +121,122 @@ The random number generator: all 263,944 words match (the start, 64 seeds of 409
 - **`vdot` sums its products its own way**, not as a rounded exact sum: about one in five results differ, by up to
   757 ulps when terms cancel.
 
+## Round 2 (2026-10-04)
+
+### What was recorded
+
+`manifest2.txt` describes every file's inputs. 18 files, 238 MB:
+
+- **`vlog2` over a whole binade for each size its results take above 4:** from 4, 16, 2^8, 2^16, 2^32 and 2^64,
+  every input of the binade (`vlog2-4-8` and on).
+- **Dot products, sums and averages built to show how the VFPU adds several numbers:** one product (the other lanes
+  zero), two, four of similar size, exact products of short significands (`vdot-*`), and the same for `vhdp`,
+  `vfad` (sums) and `vavg` (averages).
+- **Every half float through `vh2f`** (`vh2f-all`) and a million floats through `vf2h` (`vf2h-spread`).
+- **`div` and `divu`** of 32 chosen numbers each with each (division by zero included), then spread-out pairs
+  (`ipu-divide`).
+- **The instruction recorder** (`ops.bin`, `ops.txt`): every VFPU instruction pspdev's assembler knows, at each size,
+  and 240 random prefix combinations among them: 1216 entries, each run on 64 random register states.
+- **The FPU's conversions and arithmetic in each rounding mode** (`fpu-convert`, `fpu-arith`) were not recorded: each
+  switched the PSP off twice, and the program gave up on them (below).
+
+Round 1 was run again in the same session: all 26 of its result files came out identical to round 1's, byte for byte
+(only `manifest.txt`'s first line differs, its wording changed since): the PSP gives the same answers every time.
+
+**In the repository:** [`tests/allegrex/measured/`](../tests/allegrex/measured/) has `manifest2.txt`, `ops.txt` (the
+recorder's entries) and the SHA-256 of all 18 files (`SHA256SUMS2`). The files themselves are kept outside the
+repository, like round 1's big files.
+
+### Results
+
+| test | results | exact | worst (ulps) |
+| --- | --- | --- | --- |
+| vlog2-4-8 | 8388608 | 6075144 (72.42%) | 2 |
+| vlog2-16-32 | 8388608 | 5070999 (60.45%) | 4 |
+| vlog2-256-512 | 8388608 | 4446697 (53.01%) | 2 |
+| vlog2-2p16 | 8388608 | 3920844 (46.74%) | 4 |
+| vlog2-2p32 | 8388608 | 4029242 (48.03%) | 4 |
+| vlog2-2p64 | 8388608 | 4654070 (55.48%) | 2 |
+| vdot-one | 262144 | 171530 (65.43%) | 1 |
+| vdot-two | 1048576 | 717271 (68.40%) | 192534 |
+| vdot-close | 1048576 | 663010 (63.23%) | 61598 |
+| vdot-short | 262144 | 207603 (79.19%) | 11776 |
+| vhdp-close | 262144 | 159966 (61.02%) | 85515 |
+| vfad-close | 1048576 | 608721 (58.05%) | 196608 |
+| vfad-two | 262144 | 169417 (64.63%) | 32 |
+| vavg-close | 262144 | 152382 (58.13%) | 16384 |
+| vh2f-all | 65536 | 65536 (100.00%) | 0 |
+| vf2h-spread | 524288 | 524288 (100.00%) | 0 |
+| div (lo and hi) | 8192 | 8192 (100.00%) | |
+| divu hi | 8192 | 8192 (100.00%) | |
+| divu lo | 8192 | 8181 (99.87%) | |
+
+The instruction recorder: 963 of the 1216 entries match in every one of their 64 runs; the other 253 differ in at
+least one.
+
+### Findings
+
+- **`vh2f` and `vf2h` are exactly what the core does:** every half float, and every one of the million floats.
+- **Division by zero doesn't trap, and gives fixed results:** `div` gives LO -1 for a dividend of 0 or more and +1
+  for a negative one, `divu` gives LO 0x0000ffff for a dividend below 0x10000 and 0xffffffff otherwise; HI is the
+  dividend for both. The core has `divu`'s LO always 0xffffffff, which is the 11 differences above.
+- **The FPU stops the PSP on some inputs.** `fpu-convert` (`cvt.w.s`, `round.w.s`, `trunc.w.s`, `ceil.w.s` and
+  `floor.w.s` in each rounding mode) and `fpu-arith` (`add.s`, `sub.s`, `mul.s`, `div.s`, `sqrt.s`) each switched
+  the PSP off twice, at 333 MHz and at the "auto" clock alike, and neither wrote a result. Both start with special
+  values: the conversions with the 32 specials (zeros, denormals, infinities, NaNs, numbers past the integer
+  range), the arithmetic with a mix in which they come up early. The exception enables were cleared for each
+  instruction, so it isn't an enabled trap. The likeliest reading is the MIPS "unimplemented operation" exception,
+  which can't be masked and expects the operating system to finish the operation in software; the PSP's doesn't,
+  for a program. If so, no game can feed those values to those instructions, and what an emulator returns for them
+  matters little. Which values exactly needs a probe that tries them one kind at a time.
+- **`vlog2` above 4 loses precision in a way these binades can now pin down:** from 47% to 72% exact, at most 4 ulps
+  off. The data is there for the fit (as `fit.py` did for 1 up to 2).
+- **The adders aren't IEEE, even with one term.** A single product (`vdot-one`) is exact only 65% of the time, off by
+  one ulp otherwise, so even one product isn't rounded to the nearest; two terms (`vfad-two`) are 65% exact. These
+  files are built to show the products' precision and how the sum is rounded; that's the next fit.
+- **What the recorder found**, by kind (from each differing entry's first difference, checked against its inputs in
+  `ops.bin`):
+  - **Matrices the other way round:** `vmmul.q M200, M000, M100` gives M000 × M100, reading C registers as columns
+    (result column c, row r is the sum over k of M000's column k, row r times M100's column c, row k); the core
+    gives M100 × M000. `vtfm` and `vhtfm` dot each column of the matrix with the vector, where the core dots each
+    row. All of the PSP's finite results fit these (up to rounding). Both are what the core would give if it read
+    matrix operands the other way round (bit 5, transposed, taken the opposite way), which changes nothing for moves
+    and element-wise instructions: the first fix to try. These entries differ in 59 to 64 of their 64 runs, and as
+    games transform vertices with `vtfm`, they matter most.
+  - **NaN results:** in 100 entries the PSP gives its own NaN (`0x7f800001`, or `0xff800001`) where the core doesn't.
+    In 43 the core passes another NaN through: `vocp`, `vscl`, `vmscl`, `vhdp`, `vdet`, `vcrs`, `vqmul`, `vbfy1`,
+    `vbfy2`, `vfad`, `vavg`, `vmmul`, `vhtfm4` and 20 prefixed entries. In 57 it gives a number: `vrot` (46
+    entries), `vsin`, `vcos` and `vnsin` of an infinity, `vsocp` of a NaN, `vtfm3` and `vtfm4` with a NaN in the
+    matrix (some of the matrix ones may be the orientation above), and one prefixed entry. Round 1's rule ("the VFPU
+    never passes a NaN through") holds for all of them, and an infinity has no sine or cosine.
+  - **Denormals kept:** in 59 entries the PSP keeps a denormal's bits where the core flushes it to zero: moves
+    (`vmov`), `vmin`, `vmax`, `vsat0`, `vsat1`, `vsrt2`, `vsrt3`, and prefixed instructions. Arithmetic flushes
+    denormals (round 1); moving, comparing and clamping evidently don't. Likewise `vsgn` and `vscmp` see a denormal
+    (±1 where the core gives 0), and `vsbz` leaves one as it is (the core gives 1.mantissa).
+  - **NaNs in comparisons:** `vsat0` and `vsat1` pass a NaN through unchanged, as a move would; `vmin`, `vsrt1` and
+    `vsrt4` take a negative NaN as smaller than any number (as if comparing the bits), where the core picks the
+    number; `vlgb` of a NaN gives another NaN (`0xffd20000` for `0xfffffa52`).
+  - **Prefixes:** 123 of the differing entries are the random prefix combinations; in 6 of them the core leaves a lane
+    unwritten that the PSP writes (on `vrcp.q` with source and destination prefixes), so the core applies some
+    prefixes differently from the hardware.
+  - **Rounding:** the rest are the adders (`vdot`, `vhdp`, `vfad`, `vavg`, `vcrsp`, by an ulp) and `vlog2` above 4
+    (by 2), as above.
+
 ## Next
 
-`vlog2` from 4 up, and `vdot`'s summation: both need a second round of measurements (whole binades of `vlog2` above
-4, and dot products and sums built to show how the products are added). `compare.sh` shows the progress against
-the full data; `fit.py <results> ares/psp/cpu/vfpu-segments.hpp` regenerates the tables.
+- From round 2, in this order: the matrix operands' orientation (`vmmul`, `vtfm`, `vhtfm`); `divu`'s LO by zero; NaN
+  results, kept denormals and NaNs in comparisons, across the instructions above; the prefix differences (one entry
+  at a time, against `ops.bin`); then `vlog2` above 4, and the adders' model.
+- The FPU: a probe that tries one kind of value at a time, to find what the PSP refuses; then the FPU tests without
+  them.
+
+`compare.sh` shows the progress against the full data; `fit.py <results> ares/psp/cpu/vfpu-segments.hpp` regenerates
+the tables.
 
 ## Reproducing
 
 1. Build the program with pspdev's toolchain (`make` in `tools/psp-vfpu-measure`), copy `EBOOT.PBP` to
-   `PSP/GAME/VFPUMEASURE/` on a PSP with custom firmware, and run it, pressing O for this first round; it writes
-   `results/` beside itself (about 450 MB; resumable). X runs the second round (see psp-core.md).
-2. `tools/psp-vfpu-measure/compare.sh <results folder>` prints the table above for that data.
+   `PSP/GAME/VFPUMEASURE/` on a PSP with custom firmware, and run it, pressing O for round 1 (about 450 MB) or X for
+   round 2 (about 240 MB); it writes `results/` beside itself, and can be started again: finished tests are skipped,
+   and a test that stops the PSP twice is given up on (see its [README](../tools/psp-vfpu-measure/README.md)).
+2. `tools/psp-vfpu-measure/compare.sh <results folder>` prints the tables above for that data.
