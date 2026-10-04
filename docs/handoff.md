@@ -742,6 +742,25 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 9: the GE's display lists — 2026-10-03
+
+Branch `cursor/psp-ge-2b67`, stacked on `cursor/psp-files-2b67` (for GitHub stack #106, which the user keeps). The GE
+(`ares/psp/ge/`) runs display lists by itself: commands kept for `sceGeGetCmd`, matrices, BASE and offset addressing,
+two levels of CALL, stall addresses, FINISH/SIGNAL/END; every vertex layout; clearing and block transfers drawn (the
+rest of drawing is next). Its driver (`kernel/ge.cpp`) follows uOFW's reading of the PSP's: the queue of 64 lists,
+syncing and waiting, callbacks, the SIGNAL kinds (SUSPEND holds the GE until its callback returns), saved state. Calls
+into the program (`kernel/interrupts.cpp`) run as interrupt handlers on top of whatever thread is running, held back
+by `sceKernelCpuSuspendIntr`, unable to wait. Also event flags, exit callbacks, the clocks and `sceRtc` ticks, and
+`Kernel::picture()` (the screen's pixels). Checks: 53 groups on the Mac (UBSan) and in `phobos-linux` (ASan and
+UBSan, with the real programs: a GU program of Phobos's own and pspsdk's sample `copy`, built from source);
+twenty-six broken versions each failed. Reviews (read in full): the PAUSE callback's id, BASE being cleared for the
+next list, and the next list running before a finish callback fixed; event flags checked
+against pspautotests' results from a PSP (a failed poll does tell the bits, as a reviewer doubted; the check order,
+timeouts, deletion and zero timeouts fixed to match); two findings were the PSP driver's own behavior per uOFW, now
+commented. Found on the way: the sample `copy` never waits, so a fixed number of frames took the
+address sanitizer's interpreter minutes; it now runs until the screen has swapped four times. Next: drawing (textures,
+blending, the tests) for pspsdk's other 2D samples.
+
 ## PSP core, part 8: files and controls — 2026-10-03
 
 Branch `cursor/psp-files-2b67`, stacked on `cursor/psp-hle-2b67` (to be added to GitHub stack #106, which the user

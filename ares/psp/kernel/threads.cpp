@@ -54,8 +54,7 @@ auto Kernel::startThread(Thread& thread, u32 argumentLength, u32 argumentPointer
   reschedule();
 }
 
-auto Kernel::save(Thread& thread) -> void {
-  auto& c = thread.context;
+auto Kernel::save(Context& c) -> void {
   std::copy(cpu.ipu.r, cpu.ipu.r + 32, c.gpr);
   c.lo = cpu.ipu.lo; c.hi = cpu.ipu.hi; c.pc = cpu.ipu.pc; c.pd = cpu.ipu.pd;
   std::copy(cpu.fpu.r, cpu.fpu.r + 32, c.fpr);
@@ -64,8 +63,7 @@ auto Kernel::save(Thread& thread) -> void {
   c.pfxs = cpu.vfpu.pfxs; c.pfxt = cpu.vfpu.pfxt; c.pfxd = cpu.vfpu.pfxd; c.cc = cpu.vfpu.cc;
 }
 
-auto Kernel::restore(Thread& thread) -> void {
-  auto& c = thread.context;
+auto Kernel::restore(const Context& c) -> void {
   std::copy(c.gpr, c.gpr + 32, cpu.ipu.r);
   cpu.ipu.lo = c.lo; cpu.ipu.hi = c.hi; cpu.ipu.pc = c.pc; cpu.ipu.pd = c.pd;
   std::copy(c.fpr, c.fpr + 32, cpu.fpu.r);
@@ -89,9 +87,10 @@ auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
 }
 
 //The calling thread waits for something: for wakeAt (a cycle, 0 for no time limit) at the latest. Another thread
-//runs meanwhile.
+//runs meanwhile. (Functions that wait check mayWait() first: a call into the program can't wait.)
 auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer) -> void {
   if(!current) return;
+  if(interrupting) return result(ErrorIllegalContext);
   current->status = Status::Waiting;
   current->wait = wait;
   current->waitID = id;
@@ -101,8 +100,13 @@ auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer) -> void {
 }
 
 //Picks the thread to run: the ready one with the highest priority (the lowest number), the one ready the longest
-//among equals. The running thread keeps the CPU unless one with a strictly higher priority is ready.
+//among equals. The running thread keeps the CPU unless one with a strictly higher priority is ready. During a call
+//into the program the choice waits until it's over.
 auto Kernel::reschedule() -> void {
+  if(interrupting) {
+    rescheduleAfter = true;
+    return;
+  }
   Thread* best = nullptr;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Ready) continue;
@@ -124,13 +128,13 @@ auto Kernel::switchTo(Thread* next) -> void {
     cpu.scc.halted = 0;
     return;
   }
-  if(current) save(*current);
+  if(current) save(current->context);
   current = next;
   if(!next) {
     cpu.scc.halted = 1;
     return;
   }
-  restore(*next);
+  restore(next->context);
   next->status = Status::Running;
   cpu.scc.halted = 0;
 }
@@ -156,6 +160,7 @@ auto Kernel::events() -> void {
     if(thread->wait == Wait::LwMutex) {  //it stops waiting: the mutex has one waiter fewer
       memory.write(4, thread->waitID + 12, memory.read(4, thread->waitID + 12) - 1);
     }
+    if(thread->wait == Wait::EventFlag) eventFlagTimedOut(*thread);
     ready(*thread, thread->wait == Wait::Delay ? 0 : ErrorWaitTimeout);
     woke = true;
   }
@@ -173,8 +178,10 @@ auto Kernel::untilNextEvent() const -> u64 {
 }
 
 //No thread can run: time jumps to the next thing due (or to end, if that comes first). False if nothing ever will be:
-//no thread waits for a time or a frame, so they all wait on each other (or there are none left).
+//no thread waits for a time or a frame, so they all wait on each other (or there are none left). The GE still
+//running, or a call into the program waiting its turn, will come first.
 auto Kernel::idle(u64 end) -> bool {
+  if(geBusy || interrupting || (!calls.empty() && interruptsEnabled)) return true;
   bool timed = false;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
@@ -307,12 +314,14 @@ auto Kernel::sceKernelReferThreadStatus() -> void {
 }
 
 auto Kernel::sceKernelDelayThread() -> void {
+  if(!mayWait()) return;
   result(0);
   block(Wait::Delay, 0, cycles + std::max<u64>(1, u64(arg(0)) * (CPUFrequency / 1'000'000)));
 }
 
 //Sleeps until another thread wakes it, unless a wakeup already came while it was awake.
 auto Kernel::sceKernelSleepThread() -> void {
+  if(!mayWait()) return;
   result(0);
   if(current && current->wakeupCount) {
     current->wakeupCount--;
@@ -334,6 +343,7 @@ auto Kernel::sceKernelWakeupThread() -> void {
 }
 
 auto Kernel::sceKernelWaitThreadEnd() -> void {
+  if(!mayWait()) return;
   auto thread = findThread(arg(0));
   if(!thread || arg(0) == 0) return result(ErrorUnknownThread);
   if(thread->status == Status::Dormant) return result(u32(thread->exitStatus));
@@ -392,6 +402,7 @@ auto Kernel::sceKernelSignalSema() -> void {
 }
 
 auto Kernel::sceKernelWaitSema() -> void {
+  if(!mayWait()) return;
   auto found = semaphores.find(arg(0));
   if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
   auto& semaphore = found->second;
@@ -452,6 +463,7 @@ auto Kernel::sceKernelDeleteLwMutex() -> void {
 }
 
 auto Kernel::sceKernelLockLwMutex() -> void {
+  if(!mayWait()) return;
   u32 workArea = arg(0), count = arg(1), timeout = arg(2);
   if(!lwMutexes.count(memory.read(4, workArea + 16))) return result(ErrorLwMutexNotFound);
   if(s32(count) <= 0) return result(ErrorIllegalCount);

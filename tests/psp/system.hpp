@@ -1,18 +1,21 @@
 //The PSP system tests' machine: the Allegrex with the real memory map (ares/psp/memory) behind it, as the PSP
-//system has it, plus the Allegrex tests' instruction encoders and checks.
+//system has it, and the GE, plus the Allegrex tests' instruction encoders and checks.
 #pragma once
 
 #include "../allegrex/harness.hpp"
 #include "../../ares/psp/memory/memory.hpp"
+#include "../../ares/psp/ge/ge.hpp"
 
 //Inside the Allegrex tests' namespace, so its register names (s0, s1...) hide ares's integer types of the same
 //names.
 namespace allegrex_test::psp {
 
 using ares::PlayStationPortable::Memory;
+using ares::PlayStationPortable::GE;
 
 struct System : Allegrex {
   Memory memory;
+  GE ge{memory};
   std::vector<u8*> table;
   std::vector<std::pair<u32, bool>> unmapped;  //accesses with nothing behind them: the address, and whether a store
   std::vector<std::pair<Exception, u32>> exceptions;
@@ -47,5 +50,6 @@ auto memoryTests() -> Tests;
 auto loaderTests() -> Tests;
 auto kernelTests() -> Tests;
 auto fileTests() -> Tests;
+auto geTests() -> Tests;
 
 }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include "loader.hpp"
+#include "../ge/ge.hpp"
 
 //The HLE kernel: Phobos's own version of the PSP's operating system, as far as a game can see it.
 //
@@ -36,21 +38,33 @@
 //
 //Arguments come in a0-a3 and then t0-t3, the result goes in v0 (v0 and v1 for 64 bits), as the PSP's C compiler
 //passes them.
+//
+//Calls the other way: at times the kernel calls a function of the program's (the GE's callbacks, when a display list
+//finishes or signals). It does so as the PSP calls interrupt handlers, on top of whichever thread is running
+//(interrupts.cpp).
 
 namespace ares::PlayStationPortable {
 
 struct Allegrex;
 struct Memory;
+struct GE;
 
 struct Kernel {
-  //Error codes: pspsdk's pspkerror.h, and those it lacks (the lightweight mutex's, the allocation type's, file not
-  //found) from uOFW's errors.h.
+  //Error codes: pspsdk's pspkerror.h, and those it lacks (the lightweight mutex's, the allocation type's, files',
+  //the GE driver's) from uOFW's errors.h.
   static constexpr u32 ErrorUnknownUID            = 0x8002'00cb;
   static constexpr u32 ErrorIllegalArgument       = 0x8002'00d2;
   static constexpr u32 ErrorIllegalAddress        = 0x8002'00d3;
   static constexpr u32 ErrorIllegalPartition      = 0x8002'00d6;
   static constexpr u32 ErrorAllocationFailed      = 0x8002'00d9;
   static constexpr u32 ErrorNotYetLinked          = 0x8002'013a;  //a function the kernel doesn't have
+  static constexpr u32 ErrorIllegalContext        = 0x8002'0064;  //waiting, from an interrupt handler
+  static constexpr u32 ErrorIllegalAttribute      = 0x8002'0191;
+  static constexpr u32 ErrorIllegalMode           = 0x8002'0195;
+  static constexpr u32 ErrorUnknownEventFlag      = 0x8002'019a;
+  static constexpr u32 ErrorUnknownCallback       = 0x8002'01a1;
+  static constexpr u32 ErrorEventFlagCondition    = 0x8002'01af;  //a poll whose bits aren't set
+  static constexpr u32 ErrorEventFlagPattern      = 0x8002'01b1;  //waiting for no bits at all
   static constexpr u32 ErrorNoMemory              = 0x8002'0190;
   static constexpr u32 ErrorIllegalPriority       = 0x8002'0193;
   static constexpr u32 ErrorIllegalStackSize      = 0x8002'0194;
@@ -72,8 +86,17 @@ struct Kernel {
   static constexpr u32 ErrorLwMutexUnlocked       = 0x8002'01cc;
   static constexpr u32 ErrorLwMutexUnderflow      = 0x8002'01ce;
   static constexpr u32 ErrorLwMutexRecursion      = 0x8002'01cf;
-  static constexpr u32 ErrorInvalidSize           = 0x8000'0104;  //uOFW's errors.h
-  static constexpr u32 ErrorInvalidValue          = 0x8000'01fe;  //uOFW's errors.h
+  //uOFW's errors.h
+  static constexpr u32 ErrorNotSupported          = 0x8000'0004;
+  static constexpr u32 ErrorAlready               = 0x8000'0020;
+  static constexpr u32 ErrorBusy                  = 0x8000'0021;
+  static constexpr u32 ErrorOutOfMemory           = 0x8000'0022;
+  static constexpr u32 ErrorInvalidID             = 0x8000'0100;
+  static constexpr u32 ErrorInvalidIndex          = 0x8000'0102;
+  static constexpr u32 ErrorInvalidPointer        = 0x8000'0103;
+  static constexpr u32 ErrorInvalidSize           = 0x8000'0104;
+  static constexpr u32 ErrorInvalidMode           = 0x8000'0107;
+  static constexpr u32 ErrorInvalidValue          = 0x8000'01fe;
   //files' (uOFW's errors.h)
   static constexpr u32 ErrorIOError               = 0x8001'0005;
   static constexpr u32 ErrorNoPermission          = 0x8001'000d;
@@ -87,10 +110,12 @@ struct Kernel {
 
   static constexpr u64 CPUFrequency = 333'000'000;                   //cycles a second
   static constexpr u64 VblankCycles = CPUFrequency * 1001 / 60'000;  //59.94 frames a second
-  static constexpr u32 Trampoline = 0x0800'0000;  //kernel memory: where a thread returns to when its entry function ends
+  static constexpr u32 Trampoline = 0x0800'0000;  //kernel memory: where a thread returns to when its entry function
+                                                  //ends (and, 8 bytes on, a call into the program)
+  static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
 
-  Kernel(Allegrex& cpu, Memory& memory);
+  Kernel(Allegrex& cpu, Memory& memory, GE& ge);
 
   //What the program writes to its standard output and error; and the kernel's own notes, worth reporting (a
   //function it doesn't have, a thread that will never wake). The system shows or logs them.
@@ -111,6 +136,7 @@ struct Kernel {
 
   Allegrex& cpu;
   Memory& memory;
+  GE& ge;
   Module module;           //the program
   bool exited = false;     //it called sceKernelExitGame (or unloaded itself)
   u64 cycles = 0;          //time since power on
@@ -132,7 +158,7 @@ struct Kernel {
   };
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
-  static constexpr u32 ThreadReturnCode = 1, FirstImportCode = 0x1000;
+  static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, FirstImportCode = 0x1000;
 
   //threads.cpp
   struct Context {  //a thread's registers while another runs
@@ -141,7 +167,7 @@ struct Kernel {
     u32 vpr[128], pfxs, pfxt, pfxd, cc;
   };
   enum class Status : u32 { Running = 1, Ready = 2, Waiting = 4, Dormant = 16 };  //the PSP's numbers
-  enum class Wait : u32 { None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller };
+  enum class Wait : u32 { None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw };
   struct Thread {
     u32 uid;
     std::string name;
@@ -149,8 +175,10 @@ struct Kernel {
     Status status = Status::Dormant;
     Context context{};
     Wait wait = Wait::None;
-    u32 waitID = 0;        //the semaphore, mutex or thread waited for
-    u32 waitCount = 0;     //how many a semaphore or mutex wait needs
+    u32 waitID = 0;        //the semaphore, mutex, thread, event flag or display list waited for
+    u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs
+    u32 waitMode = 0;      //an event flag wait's mode
+    u32 waitPointer = 0;   //where an event flag wait puts the bits it saw
     u64 wakeAt = 0;        //for a delay or timeout: the cycle to wake at (0: none)
     u32 timeoutPointer = 0;
     u64 readySince = 0;    //to keep first-come order among equal priorities
@@ -174,8 +202,8 @@ struct Kernel {
   auto createThread(const std::string& name, u32 entry, u32 priority, u32 stackSize, u32 attributes, u32 gp) -> s32;
   auto startThread(Thread& thread, u32 argumentLength, u32 argumentPointer) -> void;
   auto argumentFits(const Thread& thread, u32 length) const -> bool;
-  auto save(Thread& thread) -> void;
-  auto restore(Thread& thread) -> void;
+  auto save(Context& context) -> void;
+  auto restore(const Context& context) -> void;
   auto ready(Thread& thread, u32 returnValue) -> void;
   auto block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer = 0) -> void;
   auto reschedule() -> void;
@@ -317,14 +345,137 @@ struct Kernel {
   auto sceDisplayGetFrameBuf() -> void;
   auto sceDisplayWaitVblankStart() -> void;
   auto sceDisplayGetVcount() -> void;
+  auto picture(std::vector<u32>& pixels) -> void;
+
+  //interrupts.cpp: calls into the program, as interrupt handlers
+  struct Call {
+    u32 function, gp;
+    u32 arguments[3];
+    bool resumesGe;  //the GE waits for it (a SIGNAL that suspends the list)
+  };
+  std::deque<Call> calls;       //waiting their turn
+  bool interrupting = false;    //one is running
+  bool interruptsEnabled = true;  //sceKernelCpuSuspendIntr holds calls back until sceKernelCpuResumeIntr
+  bool rescheduleAfter = false;   //a thread woke during the call: pick who runs once it's over
+  Context interrupted{};        //the CPU as the call found it
+  bool interruptedHalted = false;
+  bool callResumesGe = false;
+  auto queueCall(u32 function, u32 gp, u32 a0, u32 a1, u32 a2, bool resumesGe = false) -> void;
+  auto startCall() -> void;
+  auto callReturned() -> void;
+  auto mayWait() -> bool;
+  auto sceKernelCpuSuspendIntr() -> void;
+  auto sceKernelCpuResumeIntr() -> void;
+
+  //events.cpp: event flags, and callbacks
+  struct EventFlag {
+    u32 uid;
+    std::string name;
+    u32 attributes, initial, pattern;
+  };
+  struct Callback {
+    u32 uid;
+    std::string name;
+    u32 function, argument, thread;
+  };
+  std::map<u32, EventFlag> eventFlags;
+  std::map<u32, Callback> callbacks;
+  u32 exitCallback = 0;
+  auto eventFlagWaiters(const EventFlag& flag) -> std::vector<Thread*>;
+  auto eventFlagFor(u32 uid, u32 bits, u32 mode) -> EventFlag*;
+  auto eventFlagTimedOut(Thread& thread) -> void;
+  auto sceKernelCreateEventFlag() -> void;
+  auto sceKernelDeleteEventFlag() -> void;
+  auto sceKernelSetEventFlag() -> void;
+  auto sceKernelClearEventFlag() -> void;
+  auto sceKernelWaitEventFlag() -> void;
+  auto sceKernelPollEventFlag() -> void;
+  auto sceKernelReferEventFlagStatus() -> void;
+  auto sceKernelCreateCallback() -> void;
+  auto sceKernelDeleteCallback() -> void;
+  auto sceKernelRegisterExitCallback() -> void;
+  auto sceKernelSleepThreadCB() -> void;
+  auto sceKernelCheckCallback() -> void;
+
+  //ge.cpp: the GE driver
+  static constexpr u32 GeListIDs = 0x4745'0000;  //the first display list's ID ("GE"), then one up for each
+  static constexpr u64 GeBudget = 1'000'000;     //commands the GE runs at a go before letting the CPU on
+  struct GeStackEntry {  //where a list was when a SIGNAL called elsewhere
+    GE::Registers registers;
+    u32 base;
+  };
+  struct GeList {
+    enum class State : u32 { None, Queued, Running, Completed, Paused };  //uOFW's numbers
+    State state = State::None;
+    bool started = false;      //it has run, so its registers are its own
+    bool pausing = false;      //a PAUSE signal: it pauses at its next FINISH
+    bool syncing = false;      //a SYNC signal: its next FINISH doesn't end it
+    GE::Registers registers;   //where it is while not in the GE
+    u32 base = 0;              //BASE's word, kept with them
+    s32 callback = -1;         //its callbacks (sceGeSetCallback's number), or none
+    u32 context = 0;           //where the GE's state is saved as it starts, to be restored as it ends (0: nowhere)
+    u32 stackLimit = 0;        //how deep SIGNAL calls may go
+    std::vector<GeStackEntry> stack;
+    u32 signalID = 0;          //the PAUSE signal's id, for the callback when the pause takes effect
+  };
+  struct GeCallback {
+    bool used = false;
+    u32 signalFunction = 0, signalArgument = 0, finishFunction = 0, finishArgument = 0, gp = 0;
+  };
+  GeList geLists[64];
+  std::deque<u32> geQueue;  //the lists queued, in order: the first is the one the GE has, or will have next
+  std::deque<u32> geFree;   //the lists not queued, the one freed longest ago first: the next enqueued takes it
+  GeCallback geCallbacks[16];
+  s32 geRunning = -1;       //the list the GE is running, or none
+  bool geBusy = false;      //it ran out of budget, and goes on as the CPU runs
+  bool geSuspended = false; //it waits for a callback to return (a SIGNAL that suspends, a FINISH)
+  s32 geFinishing = -1;     //the list whose finish callback runs: the rest of its ending waits for it
+  auto geIndex(u32 id) const -> s32;
+  auto geEnqueue(bool head) -> void;
+  auto geLoad(GeList& list) -> void;
+  auto geRestoreBase(u32 word) -> void;
+  auto geRun() -> void;
+  auto geFinished() -> void;
+  auto geEnded() -> void;
+  auto geSignaled() -> void;
+  auto geStartNext() -> void;
+  auto geCall(GeList& list, bool finish, u32 id, bool suspends = false) -> bool;
+  auto geStalled() const -> bool;
+  auto geDrawSynced() -> void;
+  auto geRemove(u32 index) -> void;
+  auto geWake(Wait wait, u32 index) -> void;
+  auto geSaveContext(u32 address) -> void;
+  auto geRestoreContext(u32 address) -> void;
   auto sceGeEdramGetAddr() -> void;
   auto sceGeEdramGetSize() -> void;
+  auto sceGeListEnQueue() -> void;
+  auto sceGeListEnQueueHead() -> void;
+  auto sceGeListDeQueue() -> void;
+  auto sceGeListUpdateStallAddr() -> void;
+  auto sceGeListSync() -> void;
+  auto sceGeDrawSync() -> void;
+  auto sceGeSetCallback() -> void;
+  auto sceGeUnsetCallback() -> void;
+  auto sceGeContinue() -> void;
+  auto sceGeGetCmd() -> void;
+  auto sceGeGetMtx() -> void;
+  auto sceGeSaveContext() -> void;
+  auto sceGeRestoreContext() -> void;
 
-  //system.cpp: leaving, and the odds and ends a C library's start-up asks for
+  //system.cpp: leaving, clocks, and the odds and ends a C library's start-up asks for
+  u64 startTime = 0;  //the date when the PSP started, in microseconds since 1970
+  auto result64(u64 value) -> void;
   auto sceKernelExitGame() -> void;
   auto sceKernelSelfStopUnloadModule() -> void;
   auto sceUtilityGetSystemParamInt() -> void;
   auto sceNetInetUnavailable() -> void;
+  auto sceKernelGetSystemTimeWide() -> void;
+  auto sceKernelGetSystemTime() -> void;
+  auto sceKernelLibcGettimeofday() -> void;
+  auto sceKernelLibcTime() -> void;
+  auto sceRtcGetCurrentTick() -> void;
+  auto sceRtcGetTickResolution() -> void;
+  auto sceKernelCacheUnneeded() -> void;
 };
 
 }

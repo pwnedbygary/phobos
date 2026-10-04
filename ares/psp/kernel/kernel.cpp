@@ -1,17 +1,21 @@
 #include "kernel.hpp"
 #include "../cpu/allegrex.hpp"
 #include "../memory/memory.hpp"
+#include "../ge/ge.hpp"
 
 namespace ares::PlayStationPortable {
 
 #include "threads.cpp"
+#include "interrupts.cpp"
+#include "events.cpp"
 #include "sysmem.cpp"
 #include "io.cpp"
 #include "ctrl.cpp"
 #include "display.cpp"
+#include "ge.cpp"
 #include "system.cpp"
 
-Kernel::Kernel(Allegrex& cpu, Memory& memory) : cpu(cpu), memory(memory) {
+Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory), ge(ge) {
   auto add = [&](const char* library, const char* name, auto (Kernel::*handler)() -> void) {
     functions.push_back({library, name, handler, nid(name)});
   };
@@ -34,9 +38,37 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory) : cpu(cpu), memory(memory) {
   add("ThreadManForUser",  "sceKernelCreateLwMutex",        &Kernel::sceKernelCreateLwMutex);
   add("ThreadManForUser",  "sceKernelDeleteLwMutex",        &Kernel::sceKernelDeleteLwMutex);
   add("ThreadManForUser",  "sceKernelGetSystemTimeLow",     &Kernel::sceKernelGetSystemTimeLow);
+  add("ThreadManForUser",  "sceKernelGetSystemTimeWide",    &Kernel::sceKernelGetSystemTimeWide);
+  add("ThreadManForUser",  "sceKernelGetSystemTime",        &Kernel::sceKernelGetSystemTime);
+  add("ThreadManForUser",  "sceKernelCreateEventFlag",      &Kernel::sceKernelCreateEventFlag);
+  add("ThreadManForUser",  "sceKernelDeleteEventFlag",      &Kernel::sceKernelDeleteEventFlag);
+  add("ThreadManForUser",  "sceKernelSetEventFlag",         &Kernel::sceKernelSetEventFlag);
+  add("ThreadManForUser",  "sceKernelClearEventFlag",       &Kernel::sceKernelClearEventFlag);
+  add("ThreadManForUser",  "sceKernelWaitEventFlag",        &Kernel::sceKernelWaitEventFlag);
+  add("ThreadManForUser",  "sceKernelWaitEventFlagCB",      &Kernel::sceKernelWaitEventFlag);
+  add("ThreadManForUser",  "sceKernelPollEventFlag",        &Kernel::sceKernelPollEventFlag);
+  add("ThreadManForUser",  "sceKernelReferEventFlagStatus", &Kernel::sceKernelReferEventFlagStatus);
+  add("ThreadManForUser",  "sceKernelCreateCallback",       &Kernel::sceKernelCreateCallback);
+  add("ThreadManForUser",  "sceKernelDeleteCallback",       &Kernel::sceKernelDeleteCallback);
+  add("ThreadManForUser",  "sceKernelSleepThreadCB",        &Kernel::sceKernelSleepThreadCB);
+  add("ThreadManForUser",  "sceKernelCheckCallback",        &Kernel::sceKernelCheckCallback);
   add("Kernel_Library",    "sceKernelLockLwMutex",          &Kernel::sceKernelLockLwMutex);
   add("Kernel_Library",    "sceKernelTryLockLwMutex",       &Kernel::sceKernelTryLockLwMutex);
   add("Kernel_Library",    "sceKernelUnlockLwMutex",        &Kernel::sceKernelUnlockLwMutex);
+  add("Kernel_Library",    "sceKernelCpuSuspendIntr",       &Kernel::sceKernelCpuSuspendIntr);
+  add("Kernel_Library",    "sceKernelCpuResumeIntr",        &Kernel::sceKernelCpuResumeIntr);
+  add("UtilsForUser",      "sceKernelLibcGettimeofday",     &Kernel::sceKernelLibcGettimeofday);
+  add("UtilsForUser",      "sceKernelLibcTime",             &Kernel::sceKernelLibcTime);
+  //the CPU's caches: an emulator has none to write back or throw away
+  add("UtilsForUser",      "sceKernelDcacheWritebackAll",   &Kernel::sceKernelCacheUnneeded);
+  add("UtilsForUser",      "sceKernelDcacheWritebackRange", &Kernel::sceKernelCacheUnneeded);
+  add("UtilsForUser",      "sceKernelDcacheWritebackInvalidateAll",   &Kernel::sceKernelCacheUnneeded);
+  add("UtilsForUser",      "sceKernelDcacheWritebackInvalidateRange", &Kernel::sceKernelCacheUnneeded);
+  add("UtilsForUser",      "sceKernelDcacheInvalidateRange", &Kernel::sceKernelCacheUnneeded);
+  add("UtilsForUser",      "sceKernelIcacheInvalidateAll",  &Kernel::sceKernelCacheUnneeded);
+  add("UtilsForUser",      "sceKernelIcacheInvalidateRange", &Kernel::sceKernelCacheUnneeded);
+  add("sceRtc",            "sceRtcGetCurrentTick",          &Kernel::sceRtcGetCurrentTick);
+  add("sceRtc",            "sceRtcGetTickResolution",       &Kernel::sceRtcGetTickResolution);
   add("SysMemUserForUser", "sceKernelAllocPartitionMemory", &Kernel::sceKernelAllocPartitionMemory);
   add("SysMemUserForUser", "sceKernelFreePartitionMemory",  &Kernel::sceKernelFreePartitionMemory);
   add("SysMemUserForUser", "sceKernelGetBlockHeadAddr",     &Kernel::sceKernelGetBlockHeadAddr);
@@ -77,7 +109,21 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory) : cpu(cpu), memory(memory) {
   add("sceDisplay",        "sceDisplayGetVcount",           &Kernel::sceDisplayGetVcount);
   add("sceGe_user",        "sceGeEdramGetAddr",             &Kernel::sceGeEdramGetAddr);
   add("sceGe_user",        "sceGeEdramGetSize",             &Kernel::sceGeEdramGetSize);
+  add("sceGe_user",        "sceGeListEnQueue",              &Kernel::sceGeListEnQueue);
+  add("sceGe_user",        "sceGeListEnQueueHead",          &Kernel::sceGeListEnQueueHead);
+  add("sceGe_user",        "sceGeListDeQueue",              &Kernel::sceGeListDeQueue);
+  add("sceGe_user",        "sceGeListUpdateStallAddr",      &Kernel::sceGeListUpdateStallAddr);
+  add("sceGe_user",        "sceGeListSync",                 &Kernel::sceGeListSync);
+  add("sceGe_user",        "sceGeDrawSync",                 &Kernel::sceGeDrawSync);
+  add("sceGe_user",        "sceGeSetCallback",              &Kernel::sceGeSetCallback);
+  add("sceGe_user",        "sceGeUnsetCallback",            &Kernel::sceGeUnsetCallback);
+  add("sceGe_user",        "sceGeContinue",                 &Kernel::sceGeContinue);
+  add("sceGe_user",        "sceGeGetCmd",                   &Kernel::sceGeGetCmd);
+  add("sceGe_user",        "sceGeGetMtx",                   &Kernel::sceGeGetMtx);
+  add("sceGe_user",        "sceGeSaveContext",              &Kernel::sceGeSaveContext);
+  add("sceGe_user",        "sceGeRestoreContext",           &Kernel::sceGeRestoreContext);
   add("LoadExecForUser",   "sceKernelExitGame",             &Kernel::sceKernelExitGame);
+  add("LoadExecForUser",   "sceKernelRegisterExitCallback", &Kernel::sceKernelRegisterExitCallback);
   add("ModuleMgrForUser",  "sceKernelSelfStopUnloadModule", &Kernel::sceKernelSelfStopUnloadModule);
   add("sceUtility",        "sceUtilityGetSystemParamInt",   &Kernel::sceUtilityGetSystemParamInt);
   //newlib's sockets: no network yet, so every call fails
@@ -86,6 +132,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory) : cpu(cpu), memory(memory) {
   add("sceNetInet",        "sceNetInetSend",                &Kernel::sceNetInetUnavailable);
   add("sceNetInet",        "sceNetInetGetErrno",            &Kernel::sceNetInetUnavailable);
   cpu.syscallHook = [this](u32 code) { return syscall(code); };
+  ge.log = [this](const std::string& text) { note("GE: " + text); };
 }
 
 //A function's NID: the first four bytes of the SHA-1 hash of its name, as a little-endian word. SHA-1 as FIPS
@@ -142,8 +189,29 @@ auto Kernel::power() -> void {
   workingDirectory = "ms0:/";
   controller = {};
   display = {};
-  memory.write(4, Trampoline, ThreadReturnCode << 6 | 0x0c);  //syscall: the thread's entry function returned
-  memory.write(4, Trampoline + 4, 0x0000'000d);                //break: never reached
+  calls.clear();
+  interrupting = false;
+  interruptsEnabled = true;
+  rescheduleAfter = false;
+  callResumesGe = false;
+  eventFlags.clear();
+  callbacks.clear();
+  exitCallback = 0;
+  ge.power();  //the GE starts afresh with the program, its driver too
+  for(auto& list : geLists) list = {};
+  geQueue.clear();
+  geFree.clear();
+  for(u32 index = 0; index < 64; index++) geFree.push_back(index);
+  for(auto& callback : geCallbacks) callback = {};
+  geRunning = -1;
+  geBusy = false;
+  geSuspended = false;
+  geFinishing = -1;
+  startTime = u64(std::time(nullptr)) * 1'000'000;
+  memory.write(4, Trampoline, ThreadReturnCode << 6 | 0x0c);    //syscall: the thread's entry function returned
+  memory.write(4, Trampoline + 4, 0x0000'000d);                  //break: never reached
+  memory.write(4, Trampoline + 8, CallReturnCode << 6 | 0x0c);  //syscall: a call into the program returned
+  memory.write(4, Trampoline + 12, 0x0000'000d);
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
@@ -208,14 +276,16 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
 auto Kernel::run(u64 budget) -> u64 {
   u64 start = cycles, end = cycles + budget;
   while(cycles < end && !exited) {
-    if(!current) {
+    if(geBusy) geRun();
+    startCall();  //a call into the program waiting its turn runs on whatever's in the CPU, a thread or nothing
+    if(!current && !interrupting) {
       reschedule();
       if(!current && !idle(end)) break;
       continue;
     }
     cycles += cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
-    if(current && cpu.scc.halted) {  //the CPU stopped by itself: a halt instruction, or an exception nobody handled
-      note("the CPU stopped in thread " + current->name);
+    if((current || interrupting) && cpu.scc.halted) {  //it stopped by itself: a halt, or an exception nobody handled
+      note(interrupting ? "the CPU stopped in a call into the program" : "the CPU stopped in thread " + current->name);
       break;
     }
     events();
@@ -241,6 +311,10 @@ auto Kernel::syscall(u32 code) -> bool {
     threadReturned();
     return true;
   }
+  if(code == CallReturnCode) {
+    callReturned();
+    return true;
+  }
   if(code < FirstImportCode || code - FirstImportCode >= imports.size()) {
     note("a syscall (code " + std::to_string(code) + ") that no import stands for");
     return false;
@@ -257,6 +331,7 @@ auto Kernel::syscall(u32 code) -> bool {
     return true;
   }
   (this->*import.function->handler)();
+  startCall();  //what the function set off (a display list finishing) may call into the program now
   return true;
 }
 

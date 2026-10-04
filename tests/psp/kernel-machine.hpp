@@ -14,7 +14,7 @@ using ares::PlayStationPortable::Kernel;
 struct KernelMachine {
   static constexpr u32 Stubs = 0x0890'0000, Strings = 0x0891'0000, Results = 0x0892'0000;
   System system;
-  Kernel kernel{system, system.memory};
+  Kernel kernel{system, system.memory, system.ge};
   std::string output;
   std::vector<std::string> notes;
   std::vector<std::string> stubbed;
