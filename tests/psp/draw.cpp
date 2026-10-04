@@ -181,6 +181,12 @@ static auto drawFilter() -> void {
   t.clampU = true;
   CHECK(c.ge.sample(t, 2.5f, 0.0f) & 0xff, 160);   //held at the edge
   CHECK(c.ge.sample(t, -3.0f, 1.5f) & 0xff, 32);
+  //Each step of the blend drops its fraction, as a PSP's does: across the top two (0 and 15: 7.5, so 7), across the
+  //bottom two (0 and 17: 8.5, so 8), then down between those (7.5, so 7), where blending all four at once gives 8.
+  for(u32 n : {0u, 1u, 2u, 3u}) c.memory.write(4, Texture + (n / 2 * 4 + n % 2) * 4, std::array<u32, 4>{0, 15, 0, 17}[n]);
+  auto stepwise = c.ge.sampler();
+  stepwise.linear = true;
+  CHECK(c.ge.sample(stepwise, 1.0f, 1.0f) & 0xff, 7);
 }
 
 //The texture functions, with the PSP's rounding.

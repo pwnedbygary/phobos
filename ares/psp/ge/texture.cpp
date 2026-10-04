@@ -90,7 +90,8 @@ auto GE::texel(const Sampler& t, s32 u, s32 v) -> u32 {
 }
 
 //The texture at (u, v), in texels (a texel's middle is at +0.5): the texel there, or, filtered, the four whose
-//middles are nearest, weighted by sixteenths.
+//middles are nearest, weighted by sixteenths: the top two blended, then the bottom two, then those two results, each
+//step dropping its fraction (measured on a PSP, docs/psp-core.md: every pixel of the three filter-magnify files).
 auto GE::sample(const Sampler& t, float u, float v) -> u32 {
   auto inside = [](s32 c, u32 size, bool clamp) -> s32 {
     s32 last = std::min<s32>(size, 512) - 1;
@@ -112,9 +113,9 @@ auto GE::sample(const Sampler& t, float u, float v) -> u32 {
   u32 bottomLeft = texel(t, left, bottom), bottomRight = texel(t, right, bottom);
   s32 mixed[4];
   for(u32 n = 0; n < 4; n++) {
-    s32 upper = channel(topLeft, n) * (16 - fractionU) + channel(topRight, n) * fractionU;
-    s32 lower = channel(bottomLeft, n) * (16 - fractionU) + channel(bottomRight, n) * fractionU;
-    mixed[n] = (upper * (16 - fractionV) + lower * fractionV) >> 8;
+    s32 upper = (channel(topLeft, n) * (16 - fractionU) + channel(topRight, n) * fractionU) >> 4;
+    s32 lower = (channel(bottomLeft, n) * (16 - fractionU) + channel(bottomRight, n) * fractionU) >> 4;
+    mixed[n] = (upper * (16 - fractionV) + lower * fractionV) >> 4;
   }
   return pack(mixed[0], mixed[1], mixed[2], mixed[3]);
 }
