@@ -1,12 +1,15 @@
-//tools/psp-ge-measure's program (see its main.c) in Phobos's core. With PSP_TEST_PROGRAMS holding gemeasure.elf, it
-//must run to the end (cross pressed to start it and to leave) and write every test's file. With PSP_GE_RESULTS set to
-//the results folder a real PSP (or another emulator) wrote, each file is compared with that folder's, and what
-//differs is listed rather than failed: finding it is what the program is for. PSP_GE_OURS, when set, is a folder
-//this core's files are copied to, for a closer look.
+//tools/psp-measure's program (see its main.c) in Phobos's core, driven through its menu as a person would. With
+//PSP_TEST_PROGRAMS holding pspmeasure.elf, its GE tests must run to the end and write every file, start afresh (the
+//first files kept in results-1), run again and draw the same, skip what's done on a third run, and the FPU probes
+//must run; then it must leave. With PSP_GE_RESULTS set to the results folder (results/ge) a real PSP (or another
+//emulator) wrote, each file is compared with that folder's, and what differs is listed rather than failed: finding
+//it is what the program is for. PSP_GE_OURS, when set, is a folder this core's files are copied to, for a closer
+//look.
 #include "kernel-machine.hpp"
 
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 
 namespace allegrex_test::psp {
 
@@ -82,28 +85,85 @@ static auto describe(const MeasureFile& file, const std::vector<u32>& ours, cons
                    examples.c_str());
 }
 
-static auto geMeasure() -> void {
-  auto program = testProgram("gemeasure.elf");
+//The FPU probes' files (tools/psp-measure/vfpu.c), 16 bytes each: a, b, the result, FCSR after.
+static const char* probeFiles[] = {
+  "probe-div-zero", "probe-mul-big", "probe-sqrt-negative", "probe-add-infinity", "probe-add-qnan", "probe-add-snan",
+  "probe-cvt-minus-2p31", "probe-cvt-infinity", "probe-cvt-qnan", "probe-cvt-snan", "probe-cvt-2p31", "probe-mul-tiny",
+  "probe-add-denormal", "probe-cvt-denormal", "probe-add-denormal-fs", "probe-mul-tiny-fs", "probe-cvt-denormal-fs",
+};
+
+//The menu's lines (tools/psp-measure/main.c), counted from the top, and the buttons that move through it.
+enum : u32 { ProbesLine = 1, GeRound2Line = 3, AfreshLine = 5, LeaveLine = 6 };
+enum : u32 { Up = 0x0010, Down = 0x0040, Cross = 0x4000 };
+
+//Presses buttons as a person would, times over: let go for ten frames (the program waits for every button to be let
+//go before it takes a choice), then held for five.
+static auto press(KernelMachine& m, u32 buttons, u32 times = 1) -> void {
+  for(u32 n = 0; n < times * 15 && !m.kernel.exited; n++) {
+    m.kernel.controller.buttons = n % 15 < 10 ? 0 : buttons;
+    m.kernel.run(Kernel::VblankCycles);
+  }
+  m.kernel.controller.buttons = 0;
+}
+
+//Moves the menu's mark from line from to line to.
+static auto move(KernelMachine& m, u32 from, u32 to) -> void {
+  if(to > from) press(m, Down, to - from);
+  if(to < from) press(m, Up, from - to);
+}
+
+//Runs with nothing pressed until done() says so or the frames run out; returns done().
+static auto waitFor(KernelMachine& m, u32 frames, const std::function<bool()>& done) -> bool {
+  for(u32 frame = 0; frame < frames && !done() && !m.kernel.exited; frame++) m.kernel.run(Kernel::VblankCycles);
+  return done();
+}
+
+static auto pspMeasure() -> void {
+  auto program = testProgram("pspmeasure.elf");
   if(program.empty()) return;
   HostFolder stick;
-  std::filesystem::create_directories(stick.path / "PSP/GAME/GEMEASURE");
+  auto game = stick.path / "PSP/GAME/PSPMEASURE";
+  std::filesystem::create_directories(game);
   KernelMachine m;
   m.system.recompiler.enabled = true;
   m.kernel.mount("ms0", stick.path.string());
   std::string error;
-  CHECK(m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/GEMEASURE/EBOOT.PBP", error), true);
-  auto results = stick.path / "PSP/GAME/GEMEASURE/results";
-  //cross held to start; once the last file is there, pressed and let go every five frames, since the program waits
-  //for it to be let go and then pressed before leaving
-  m.kernel.controller.buttons = 0x4000;
-  for(u32 frame = 0; frame < 3000 && !m.kernel.exited; frame++) {
-    if(frame == 10) m.kernel.controller.buttons = 0;
-    if(frame > 10 && std::filesystem::exists(results / "controller-timing.bin")) {
-      m.kernel.controller.buttons = frame / 5 % 2 ? 0x4000 : 0;
-    }
-    m.kernel.run(Kernel::VblankCycles);
-  }
-  CHECK(m.kernel.exited, true);
+  CHECK(m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/PSPMEASURE/EBOOT.PBP", error), true);
+  auto results = game / "results" / "ge", kept = game / "results-1" / "ge", vfpu = game / "results" / "vfpu";
+  auto exists = [](std::filesystem::path path) { return [path] { return std::filesystem::exists(path); }; };
+
+  //the GE's tests, then back to the menu (X)
+  move(m, 0, GeRound2Line);
+  press(m, Cross);
+  CHECK(waitFor(m, 3000, exists(results / "controller-timing.bin")), true);
+  press(m, Cross);
+  //starting afresh, which asks first (X again): the files move to results-1
+  move(m, GeRound2Line, AfreshLine);
+  press(m, Cross);
+  press(m, Cross);
+  CHECK(waitFor(m, 100, exists(game / "results-1")), true);
+  CHECK(std::filesystem::exists(results), false);
+  press(m, Cross);
+  //the GE's tests again, into a new results folder
+  move(m, AfreshLine, GeRound2Line);
+  press(m, Cross);
+  CHECK(waitFor(m, 3000, exists(results / "controller-timing.bin")), true);
+  press(m, Cross);
+  //and a third time, which finds every test done and writes none of them again
+  auto written = std::filesystem::last_write_time(results / "blend-source.bin");
+  press(m, Cross);
+  waitFor(m, 120, [] { return false; });
+  CHECK(std::filesystem::last_write_time(results / "blend-source.bin") == written, true);
+  press(m, Cross);
+  //the FPU probes
+  move(m, GeRound2Line, ProbesLine);
+  press(m, Cross);
+  CHECK(waitFor(m, 600, exists(vfpu / "probe-cvt-denormal-fs.bin")), true);
+  press(m, Cross);
+  //leaving
+  move(m, ProbesLine, LeaveLine);
+  press(m, Cross);
+  CHECK(waitFor(m, 100, [&] { return m.kernel.exited; }), true);
 
   const char* reference = std::getenv("PSP_GE_RESULTS");
   const char* copy = std::getenv("PSP_GE_OURS");
@@ -112,12 +172,15 @@ static auto geMeasure() -> void {
     std::string name = std::string(file.name) + ".bin";
     auto ours = readWords(results / name);
     CHECK(ours.size(), file.width * file.height);
+    //the second run drew what the first did (but the controller's timing, which is measured)
+    if(file.height > 1) CHECK(readWords(kept / name) == ours, true);
     if(reference) describe(file, ours, readWords(std::filesystem::path(reference) / name));
     if(copy && std::filesystem::exists(results / name)) {
       std::filesystem::copy_file(results / name, std::filesystem::path(copy) / name,
                                  std::filesystem::copy_options::overwrite_existing);
     }
   }
+  for(auto name : probeFiles) CHECK(readWords(vfpu / (std::string(name) + ".bin")).size(), 4);
 
   //what the files hold, from end to end: the sprite drawn top-left to bottom-right shows its 4x4 texture (texel n,
   //row n / 4 and column n % 4, is (n + 1) * 0x0f0b07) as it is; the one drawn bottom-left to top-right, turned a
@@ -139,7 +202,7 @@ static auto geMeasure() -> void {
 
 auto measureTests() -> Tests {
   return {
-    {"ge measure", geMeasure},
+    {"psp measure", pspMeasure},
   };
 }
 

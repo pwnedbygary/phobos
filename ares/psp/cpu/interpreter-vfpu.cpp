@@ -34,7 +34,7 @@ static constexpr u32 ConstantTable[20] = {
 static constexpr u32 One = 0x3f80'0000;  //1.0
 
 //The math functions as a PSP computes them, worked out from results measured on one (docs/psp-vfpu-measurements.md)
-//by tools/psp-vfpu-measure/fit.py. Each function turns its argument into a 23-bit index into one quadratic
+//by tools/psp-measure/fit.py. Each function turns its argument into a 23-bit index into one quadratic
 //interpolator: the index's top 7 bits pick one of 128 segments, each with its own integers c0, m, n and binade e;
 //the low 16 bits, x2, enter a linear term in full, and a squared term sees only their top 10 bits, as a distance t
 //from the segment's middle, squared and rounded up to a multiple of 256 (u). The result, in units of 2^(e - 150)

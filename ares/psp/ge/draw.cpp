@@ -20,7 +20,7 @@
 //  - Points: the pixel each vertex is in.
 //A vertex without a color takes the material's ambient color (AMBIENT_COLOR, AMBIENT_ALPHA).
 //(Coverage, the sample points and how texture coordinates are stepped were measured on a PSP (docs/psp-core.md,
-//tools/psp-ge-measure), where PPSSPP's software renderer, which the rest follows, has triangles sampled 7/16 in. Not
+//tools/psp-measure), where PPSSPP's software renderer, which the rest follows, has triangles sampled 7/16 in. Not
 //yet: lines, and PRIM's kind 7, which goes on with the last primitive's vertices.)
 
 auto GE::primitive(u32 kind, u32 count) -> void {

@@ -179,7 +179,7 @@ seeds all match, including those that exercise the carry (psp-vfpu-measurements.
 
 The math functions `vrcp`, `vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2`, `vsin`, `vcos`, `vnsin` and `vasin` (and
 `vrot`'s sine and cosine) are the PSP's own: its quadratic interpolator with coefficients fitted from our
-measurements (`vfpu-segments.hpp`, from `tools/psp-vfpu-measure/fit.py`), exact on every measured input; see
+measurements (`vfpu-segments.hpp`, from `tools/psp-measure/fit.py`), exact on every measured input; see
 psp-vfpu-measurements.md. So is `vlog2` below 4, from a fixed-point table and a cheaper straight-line path below 1;
 from 4 up about half its results are one unit above the PSP's, which drops more precision there.
 
@@ -198,10 +198,10 @@ compare its registers, prefixes and condition codes.
 ### Measuring the VFPU on a PSP
 
 To make the math functions exact from our own data (the user chose this over adopting PPSSPP's GPL tables, and
-has a PSP to run it on), `tools/psp-vfpu-measure` records what a real PSP computes. It's a homebrew program, built
-with pspdev's toolchain (`make` in that folder, with `psp-config` on the PATH; the `phobos-linux` container has the
-toolchain in `/opt/pspdev`). On a PSP with custom firmware it writes, beside its EBOOT.PBP in `results/` (about
-450 MB, resumable):
+has a PSP to run it on), `tools/psp-measure` records what a real PSP computes (it began as `tools/psp-vfpu-measure`,
+a program of its own: see the end of this section). It's a homebrew program, built with pspdev's toolchain (`make`
+in that folder, with `psp-config` on the PATH; the `phobos-linux` container has the toolchain in `/opt/pspdev`). On
+a PSP with custom firmware its first round wrote, beside its EBOOT.PBP in `results/` (about 450 MB, resumable):
 
 - every input of the range each math function reduces its argument to (`vrcp` over [1, 2), `vrsq` and `vsqrt` over
   [1, 4), `vexp2` and `vrexp2` over [1, 2), `vlog2` over [1/2, 2), `vsin`, `vcos` and `vasin` over k / 2^23), and a
@@ -216,8 +216,7 @@ The random number generator matched every word; `vadd`, `vsub`, `vmul` and `vdiv
 and match NaNs too now that the core gives the VFPU's own NaN (`NaNSign`); the math functions and `vdot` are next.
 `tests/allegrex/measured/` keeps the generator and arithmetic files, which the tests check the core against.
 
-The program asks which round to run when it starts: O for that first round, X for the second (about 230 MB,
-`manifest2.txt`), for what the first couldn't settle:
+A second round (about 230 MB, `manifest2.txt`) took what the first couldn't settle:
 
 - `vlog2` over a whole binade for each size its results take above 4 (from 4, 16, 2^8, 2^16, 2^32 and 2^64);
 - dot products, sums and averages built to show how the VFPU adds several numbers: one product, two, four of a
@@ -240,13 +239,25 @@ A write that fails doesn't count as the PSP stopping, and a retry whose marker (
 stops the round and says so rather than running unmarked. The results are unchanged: in PPSSPPHeadless the new
 version's files are the old one's, byte for byte.
 
-Square runs a third round (about 6 MB, `manifest3.txt`) for what the second left open, and triangle the FPU probes,
-one value each, each given up on after a single stop: see [the measurements](psp-vfpu-measurements.md) and
-[the tool's README](../tools/psp-vfpu-measure/README.md).
+A third round (about 6 MB, `manifest3.txt`) is for what the second left open, and the FPU probes try one value
+each, each given up on after a single stop: see [the measurements](psp-vfpu-measurements.md) and
+[the tool's README](../tools/psp-measure/README.md).
 
-`make SMOKE=1` builds a quick version (round 3 and the FPU probes straight away, the big tests cut short) for
-trying the program in PPSSPP's PPSSPPHeadless first (with `-i`), which `phobos-linux` has in `/opt/tools/ppsspp`;
-it says nothing about a PSP. `compare.sh` checks whatever files a folder has, from any round.
+Since 2026-10-04, at the user's request, this program and the GE's (below, "Measuring the GE and the controller on
+a PSP") are one, `tools/psp-measure`: one EBOOT.PBP whose menu (up and down pick a line, X runs it) offers every
+round of both, starting afresh, and leaving, and comes back after each round. Starting afresh asks first, then
+renames `results` to `results-1` (or the next number that's free) and starts an empty one, so every test runs
+again; nothing is deleted. The VFPU's and the FPU's files go to `results/vfpu`, the GE's to `results/ge`, and every
+test of both is written, run once more and given up on the same way (`results.c`). The results are unchanged: in
+PPSSPPHeadless the combined program's files are the two old programs', byte for byte, but for the manifests' wording
+and `controller-timing.bin`, whose times are measured (the same reads waited). What round 1 and round 3 record "as
+found" (the random number generator's state, FCSR) is taken when the program starts, so an earlier round in the same
+session can't change it: round 1's random number test runs only while the generator is as it started.
+
+`make SMOKE=1` builds a quick version (round 3's VFPU and FPU tests, the FPU probes and the GE's tests straight
+away, the big tests cut short) for trying the program in PPSSPP's PPSSPPHeadless first (with `-i` and
+`--graphics=software`), which `phobos-linux` has in `/opt/tools/ppsspp`; it says nothing about a PSP. `compare.sh`
+checks whatever VFPU and FPU files a folder has, from any round.
 
 ## Part 5: the memory map
 
@@ -554,10 +565,10 @@ turns that one check off (`ASAN_OPTIONS`); the run takes 95 seconds.
 ### Measuring the GE and the controller on a PSP
 
 The rules above that came from PPSSPP or uOFW rather than from measurements of our own are what
-`tools/psp-ge-measure` records on a real PSP. Like the VFPU's program it's homebrew built with pspdev's toolchain
-(`make SMOKE=1` builds a version for an emulator, which starts at once and leaves when done). It draws each case into
-VRAM, reads the pixels back as they are and writes them to `results/` beside its EBOOT.PBP: 64 result files and a
-manifest, about 15 MB, in a few seconds. The cases:
+the GE and controller half of `tools/psp-measure` records on a real PSP (it began as `tools/psp-ge-measure`, a
+program of its own; since 2026-10-04 the VFPU's measurements and these are one homebrew program, as "Measuring the
+VFPU on a PSP" says). It draws each case into VRAM, reads the pixels back as they are and writes them to
+`results/ge` beside its EBOOT.PBP: 64 result files and a manifest, about 15 MB, in a few seconds. The cases:
 
 - every blend operation and factor, over every source color and alpha;
 - the texture functions, every vertex color against every texel, with alpha and doubling;
@@ -582,8 +593,10 @@ manifest, about 15 MB, in a few seconds. The cases:
   terms; and environment mapping's coordinates over a hemisphere of normals, from a plain light and a shining one.
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in this core (with
-`PSP_TEST_PROGRAMS`), checks that every file is written, and with `PSP_GE_RESULTS` set to a results folder lists what
-differs from it (`PSP_GE_OURS` keeps this core's files for a closer look). Against PPSSPP's software renderer (its
+`PSP_TEST_PROGRAMS`), through its menu as a person would: the GE's tests; starting afresh; the tests again, which
+must draw the same; a third time, which must skip them all; the FPU probes; and leaving. It checks that every file is
+written, and with `PSP_GE_RESULTS` set to a results folder (`results/ge`) lists what differs from it (`PSP_GE_OURS`
+keeps this core's files for a closer look). Against PPSSPP's software renderer (its
 headless build running the smoke version), 61 of the 64 files match: 60 pictures identical, and the controller's
 timing agreeing on what waits (a second latch read doesn't, a buffer read after a vertical blank doesn't either, and a
 second buffer read waits a frame). The three that differ are the PSP's to settle:

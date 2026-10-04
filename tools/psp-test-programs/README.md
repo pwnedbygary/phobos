@@ -23,7 +23,7 @@ against, and none of its code is in Phobos.
 | `system/` | Writes a file and reads it back, reads one the host put there, lists the folder, then waits for a button and reports the analog stick, all through the C library. | `tests/psp/files.cpp` |
 | `gu/` | Drives the GE through pspsdk's GU library: clears the screen, has its signal and finish callbacks called, calls one display list from another, copies a picture into VRAM. | `tests/psp/ge.cpp` |
 | pspsdk's samples | `copy`, `blit`, `clut`, `blend`, `doublelist`, `cube`, `celshading` and `envmap`, from the toolchain's own examples: copying pictures, textures, palettes, blending, 3D, lighting, environment mapping. | `tests/psp/ge.cpp`, `draw.cpp` |
-| `gemeasure.elf` | [tools/psp-ge-measure](../psp-ge-measure/README.md)'s program, run in the core to compare with a real PSP's results. | `tests/psp/measure.cpp` |
+| `pspmeasure.elf` | [tools/psp-measure](../psp-measure/README.md)'s program, run in the core: its menu, and its GE tests to compare with a real PSP's results. | `tests/psp/measure.cpp` |
 
 - `build.sh` builds them all into a folder.
 - `compare-ppsspp.sh` runs `clut`, `blend`, `cube`, `celshading` and `envmap` for one second of the PSP's time in

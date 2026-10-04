@@ -4,7 +4,7 @@
 #relocatable module) and EBOOT.PBP (holding the static one); system.elf, which uses files and the controls
 #(tests/psp/files.cpp); gu.elf, which drives the GE through pspsdk's GU library, and pspsdk's own GU samples "copy",
 #"blit", "clut", "blend", "doublelist", "cube", "celshading" and "envmap" (copy.elf and so on, from the toolchain's
-#samples; tests/psp/ge.cpp and draw.cpp); gemeasure.elf, tools/psp-ge-measure's program (tests/psp/measure.cpp).
+#samples; tests/psp/ge.cpp and draw.cpp); pspmeasure.elf, tools/psp-measure's program (tests/psp/measure.cpp).
 #They're built from source each time, so no binary goes in the repository.
 #usage: tools/psp-test-programs/build.sh <output folder>
 set -euo pipefail
@@ -31,9 +31,10 @@ cp -r "$HERE/gu" "$WORK/gu"
 make -C "$WORK/gu" >/dev/null
 cp "$WORK/gu/gu.elf" "$OUT/"
 
-cp -r "$HERE/../psp-ge-measure" "$WORK/gemeasure"
-make -C "$WORK/gemeasure" >/dev/null
-cp "$WORK/gemeasure/gemeasure.elf" "$OUT/"
+cp -r "$HERE/../psp-measure" "$WORK/pspmeasure"
+make -C "$WORK/pspmeasure" clean >/dev/null  #objects copied from a build in the source folder would look up to date
+make -C "$WORK/pspmeasure" >/dev/null
+cp "$WORK/pspmeasure/pspmeasure.elf" "$OUT/"
 
 SAMPLES="$(psp-config --pspsdk-path)/samples/gu"
 mkdir "$WORK/samples"
@@ -43,4 +44,4 @@ for sample in copy blit clut blend doublelist cube celshading envmap; do
   make -C "$WORK/samples/$sample" >/dev/null
   cp "$WORK/samples/$sample/$sample.elf" "$OUT/"
 done
-echo "built hello.elf, hello.prx, EBOOT.PBP, system.elf, gu.elf, the GU samples and gemeasure.elf in $OUT"
+echo "built hello.elf, hello.prx, EBOOT.PBP, system.elf, gu.elf, the GU samples and pspmeasure.elf in $OUT"

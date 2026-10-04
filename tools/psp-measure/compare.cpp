@@ -1,7 +1,7 @@
-//compare: checks Phobos's VFPU against what a real PSP computed (the results psp-vfpu-measure writes; see
-//main.c for the files). Every input is made again exactly as the PSP program made it, run through the core's own
-//instruction (the same instruction word the PSP ran), and the result compared bit for bit.
-//usage: tools/psp-vfpu-measure/compare.sh <results folder>
+//compare: checks Phobos's VFPU against what a real PSP computed (the results psp-measure's VFPU and FPU tests write
+//into results/vfpu; see vfpu.c for the files). Every input is made again exactly as the PSP program made it, run
+//through the core's own instruction (the same instruction word the PSP ran), and the result compared bit for bit.
+//usage: tools/psp-measure/compare.sh <results folder> (it passes the folder's vfpu/ when there is one)
 //
 //For each test it reports how many results match exactly, and for the others how far off they are in units in
 //the last place (ulps: how many representable floats apart the two results are), plus a few examples. Tests whose
@@ -54,7 +54,7 @@ static auto input(Inputs inputs, uint32_t k, Generator& generator, uint32_t firs
   return 0;
 }
 
-//The PSP program's inputs for the tests built to show how several numbers are added (main.c: dotOne and the
+//The PSP program's inputs for the tests built to show how several numbers are added (vfpu.c: dotOne and the
 //rest), drawn in the same order.
 static auto ranged(Generator& g, uint32_t low, uint32_t width) -> uint32_t {
   uint32_t w = g.next();
@@ -378,7 +378,7 @@ static auto reportFpu(const std::string& folder) -> void {
                                   w[0] >> 24 & 1 ? "on" : "off", w[1]);
   }
   struct Probe { const char* name; uint32_t instruction; };
-  static const Probe probes[] = {  //as main.c's probes, in its order: add.s, mul.s, div.s, sqrt.s, cvt.w.s
+  static const Probe probes[] = {  //as vfpu.c's probes, in its order: add.s, mul.s, div.s, sqrt.s, cvt.w.s
     {"probe-div-zero", 0x46010083}, {"probe-mul-big", 0x46010082}, {"probe-sqrt-negative", 0x46000084},
     {"probe-add-infinity", 0x46010080}, {"probe-add-qnan", 0x46010080}, {"probe-add-snan", 0x46010080},
     {"probe-cvt-minus-2p31", 0x460000a4}, {"probe-cvt-infinity", 0x460000a4}, {"probe-cvt-qnan", 0x460000a4},
@@ -428,7 +428,7 @@ static auto kindOf(uint32_t theirs, uint32_t ours) -> Difference {
   return Other;
 }
 
-//ops.bin or ops3.bin, the instruction recorder (main.c, measureOpsFrom): per entry, its words, then per run
+//ops.bin or ops3.bin, the instruction recorder (vfpu.c, measureOpsFrom): per entry, its words, then per run
 //matrices 0 and 1, the condition codes as set, as read back, and after, and matrix 2 after. Each run is replayed
 //from the condition codes as the PSP read them back, matrix 2 holding the same markers, and the prefixes as after
 //any instruction that used them up; an entry matches when matrix 2 and the condition codes do, in every run. For
@@ -569,7 +569,7 @@ static auto compareRandom(const std::string& folder) -> void {
 int main(int argc, char** argv) {
   using namespace allegrex_test;
   if(argc < 2) {
-    std::fprintf(stderr, "usage: compare <results folder>\n");
+    std::fprintf(stderr, "usage: compare <folder of VFPU and FPU results, such as results/vfpu>\n");
     return 1;
   }
   std::string folder = argv[1];

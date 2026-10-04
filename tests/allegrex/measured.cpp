@@ -1,7 +1,7 @@
-//The VFPU against a real PSP: results tools/psp-vfpu-measure recorded on the user's PSP (firmware 6.61), which the
-//core must reproduce bit for bit. run-tests.sh unpacks them from tests/allegrex/measured/ and passes the folder in
-//ALLEGREX_MEASURED; docs/psp-vfpu-measurements.md describes them, and tools/psp-vfpu-measure/compare.sh checks
-//the rest of the measurements, which are kept outside the repository.
+//The VFPU against a real PSP: results tools/psp-measure recorded on the user's PSP (firmware 6.61), which the core
+//must reproduce bit for bit. run-tests.sh unpacks them from tests/allegrex/measured/ and passes the folder in
+//ALLEGREX_MEASURED; docs/psp-vfpu-measurements.md describes them, and tools/psp-measure/compare.sh checks the rest
+//of the measurements, which are kept outside the repository.
 //
 //Covered here: the random number generator (its start, 64 seeds of 4096 draws, vrndi.q's lanes); vadd, vsub,
 //vmul and vdiv on a million spread-out inputs between them (NaN results included); the first 16384 spread-out
