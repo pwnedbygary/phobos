@@ -4,12 +4,13 @@
 //first puts the vertices on the screen, and cuts triangles at the near plane.
 //
 //  - Sprites: a rectangle between each pair of vertices, in the second's color and depth. It covers the pixels whose
-//    middles are inside, both edges included. Texture coordinates run from one vertex's to the other's, across with
-//    x and down with y; but if the corners are bottom-left and top-right (in either order), the texture is turned a
-//    quarter: its coordinates run down with x and across with y.
-//  - Triangles (each three vertices, or a strip, or a fan): the pixels whose sample points (7/16 of a pixel in from
-//    their top left) are inside, those on an edge counting only on left and top edges, so triangles sharing an edge
-//    don't both draw it. Color, depth and texture coordinates are blended across from the corners, or with flat
+//    middles are inside, the left and top edges included and the right and bottom ones not, its left edge reaching a
+//    sixteenth further left. Texture coordinates run from one vertex's to the other's, across with x and down with
+//    y; but if the corners are bottom-left and top-right (in either order), the texture is turned a quarter: its
+//    coordinates run down with x and across with y.
+//  - Triangles (each three vertices, or a strip, or a fan): the pixels whose middles are inside, those on an edge
+//    counting only on left and top edges, so triangles sharing an edge don't both draw it. Color, depth and texture
+//    coordinates are blended across from the corners at each pixel's middle, or with flat
 //    shading (SHADE_MODE 0) the color is the last vertex's. In 3D the texture coordinates are blended as the
 //    perspective has them (as u/w and 1/w, then divided, so a texture on a floor shrinks into the distance); colors
 //    and depth aren't, nor is the fog.
@@ -18,9 +19,9 @@
 //    other triangle of a strip runs the other way round, so for those it's the other way.
 //  - Points: the pixel each vertex is in.
 //A vertex without a color takes the material's ambient color (AMBIENT_COLOR, AMBIENT_ALPHA).
-//(These rules, the sample points and the corner order's quarter turn among them, are as PPSSPP's software renderer
-//has them, which its authors checked against tests on the PSP. Not yet: lines, and PRIM's kind 7, which goes on with
-//the last primitive's vertices.)
+//(Coverage, the sample points and how texture coordinates are stepped were measured on a PSP (docs/psp-core.md,
+//tools/psp-ge-measure), where PPSSPP's software renderer, which the rest follows, has triangles sampled 7/16 in. Not
+//yet: lines, and PRIM's kind 7, which goes on with the last primitive's vertices.)
 
 auto GE::primitive(u32 kind, u32 count) -> void {
   auto format = vertexFormat();
@@ -119,13 +120,24 @@ static auto chooseFilter(u32 filter, float texelsPerPixel) -> bool {
   return texelsPerPixel <= 1.0f ? filter >> 8 & 1 : filter & 1;
 }
 
+//How a PSP steps texture coordinates across a primitive (measured, docs/psp-core.md): from its leftmost corner (the
+//topmost of two), by a step per pixel that's cut short, toward zero, to a 65536th of a texel when it isn't exact. So
+//a coordinate that should land exactly on a texel boundary falls a hair short of it, on that corner's side (256
+//texels over 240 pixels), while an exact step lands on it (4 texels over 2 pixels). How many bits the step keeps,
+//and which way a step going down (to the left or up) is cut, aren't pinned down; this fits every measurement.
+static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536; }
+
 auto GE::rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to) -> void {
   s32 x0 = fixed(from.x), y0 = fixed(from.y), x1 = fixed(to.x), y1 = fixed(to.y);
   if(x0 == x1 || y0 == y1) return;
   s32 left = std::min(x0, x1), right = std::max(x0, x1), top = std::min(y0, y1), bottom = std::max(y0, y1);
-  //the pixels whose middles (eight sixteenths in) are inside, both edges included
-  s32 firstX = std::max(floorDivide(left - 8 + 15, 16), pixel.left), lastX = std::min(floorDivide(right - 8, 16), pixel.right);
-  s32 firstY = std::max(floorDivide(top - 8 + 15, 16), pixel.top), lastY = std::min(floorDivide(bottom - 8, 16), pixel.bottom);
+  //The pixels whose middles (eight sixteenths in) are inside, the left and top edges included and the right and
+  //bottom ones not, as for triangles; but the left edge reaches a sixteenth further left (measured on a PSP,
+  //docs/psp-core.md: a column is drawn while the left edge is at most 9/16 into it).
+  s32 firstX = std::max(floorDivide(left - 9 + 15, 16), pixel.left);
+  s32 lastX = std::min(floorDivide(right - 8 - 1, 16), pixel.right);
+  s32 firstY = std::max(floorDivide(top - 8 + 15, 16), pixel.top);
+  s32 lastY = std::min(floorDivide(bottom - 8 - 1, 16), pixel.bottom);
   bool turned = (x0 < x1) != (y0 < y1);  //bottom-left and top-right corners: the texture turns a quarter
   if(texture) {
     float across = std::abs(turned ? to.v - from.v : to.u - from.u) / ((right - left) / 16.0f);
@@ -133,12 +145,16 @@ auto GE::rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, cons
   }
   u32 z = u32(std::clamp(to.z, 0.0f, 65535.0f));
   u32 fog = fogAmount(to.fog);  //in 3D, the second vertex's (PPSSPP splits it across the middle; not done here)
+  //texture coordinates at each pixel's middle, stepped from the left (or top) edge's towards the other's
+  auto across = [](f64 first, f64 second, s32 at, s32 start, s32 end) -> float {
+    if(start > end) std::swap(first, second), std::swap(start, end);
+    return first + f64(at - start) / 16 * shortStep(16 * (second - first) / f64(end - start));
+  };
   for(s32 y = firstY; y <= lastY; y++) {
-    float down = float(y * 16 + 8 - y0) / float(y1 - y0);  //from the first vertex's y to the second's
     for(s32 x = firstX; x <= lastX; x++) {
-      float along = float(x * 16 + 8 - x0) / float(x1 - x0);
-      float u = turned ? from.u + down * (to.u - from.u) : from.u + along * (to.u - from.u);
-      float v = turned ? from.v + along * (to.v - from.v) : from.v + down * (to.v - from.v);
+      s32 sampleX = x * 16 + 8, sampleY = y * 16 + 8;
+      float u = turned ? across(from.u, to.u, sampleY, y0, y1) : across(from.u, to.u, sampleX, x0, x1);
+      float v = turned ? across(from.v, to.v, sampleX, x0, x1) : across(from.v, to.v, sampleY, y0, y1);
       shade(pixel, texture, x, y, z, to.color, to.specular, u, v, fog);
     }
   }
@@ -169,10 +185,10 @@ auto GE::triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Ve
   s64 bias2 = rightOrBottom(p[2], p[0], p[1]) ? -1 : 0;
   s64 minX = std::min({p[0].x, p[1].x, p[2].x}), maxX = std::max({p[0].x, p[1].x, p[2].x});
   s64 minY = std::min({p[0].y, p[1].y, p[2].y}), maxY = std::max({p[0].y, p[1].y, p[2].y});
-  s32 firstX = std::max<s32>(floorDivide(s32(minX) - 7 + 15, 16), pixel.left);
-  s32 lastX = std::min<s32>(floorDivide(s32(maxX) - 7, 16), pixel.right);
-  s32 firstY = std::max<s32>(floorDivide(s32(minY) - 7 + 15, 16), pixel.top);
-  s32 lastY = std::min<s32>(floorDivide(s32(maxY) - 7, 16), pixel.bottom);
+  s32 firstX = std::max<s32>(floorDivide(s32(minX) - 8 + 15, 16), pixel.left);
+  s32 lastX = std::min<s32>(floorDivide(s32(maxX) - 8, 16), pixel.right);
+  s32 firstY = std::max<s32>(floorDivide(s32(minY) - 8 + 15, 16), pixel.top);
+  s32 lastY = std::min<s32>(floorDivide(s32(maxY) - 8, 16), pixel.bottom);
 
   bool flat = !(commands[ShadeMode] & 1);
   u32 flatColor = c.color, flatSpecular = c.specular;  //flat shading: the last vertex's, whichever way the corners turned
@@ -183,10 +199,33 @@ auto GE::triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Ve
     texture->linear = chooseFilter(commands[TextureFilter], std::sqrt(texels / (area / 256.0f)));
   }
   float total = float(area);
+  //Without perspective, texture coordinates are stepped from the leftmost corner (see shortStep): its value, then a
+  //step per pixel across and down, from the plane through the three corners.
+  struct Steps { f64 start, across, down; };
+  auto stepsFor = [&](f64 first, f64 second, f64 third, f64 last) -> Steps {
+    f64 x1 = f64(p[1].x - p[0].x), y1 = f64(p[1].y - p[0].y), x2 = f64(p[2].x - p[0].x), y2 = f64(p[2].y - p[0].y);
+    f64 across = ((second - first) * y2 - (third - first) * y1) / f64(area);
+    f64 down = ((third - first) * x1 - (second - first) * x2) / f64(area);
+    return {last, shortStep(16 * across), shortStep(16 * down)};
+  };
+  u32 leftmost = 0;
+  for(u32 k : range(1, 3)) {
+    if(std::tie(p[k].x, p[k].y) < std::tie(p[leftmost].x, p[leftmost].y)) leftmost = k;
+  }
+  s64 startX = p[leftmost].x, startY = p[leftmost].y;
+  auto stepped = [&](const Steps& steps, s64 sampleX, s64 sampleY) -> float {
+    return steps.start + f64(sampleX - startX) / 16 * steps.across + f64(sampleY - startY) / 16 * steps.down;
+  };
+  Steps uStep{}, vStep{};
+  if(texture && !perspective) {
+    const Vertex &va = *p[0].vertex, &vb = *p[1].vertex, &vc = *p[2].vertex, &start = *p[leftmost].vertex;
+    uStep = stepsFor(va.u, vb.u, vc.u, start.u);
+    vStep = stepsFor(va.v, vb.v, vc.v, start.v);
+  }
   for(s32 y = firstY; y <= lastY; y++) {
-    s64 sampleY = s64(y) * 16 + 7;
+    s64 sampleY = s64(y) * 16 + 8;
     for(s32 x = firstX; x <= lastX; x++) {
-      s64 sampleX = s64(x) * 16 + 7;
+      s64 sampleX = s64(x) * 16 + 8;
       s64 w0 = edge(p[1], p[2], sampleX, sampleY), w1 = edge(p[2], p[0], sampleX, sampleY);
       s64 w2 = edge(p[0], p[1], sampleX, sampleY);
       if(w0 + bias0 < 0 || w1 + bias1 < 0 || w2 + bias2 < 0) continue;
@@ -212,7 +251,7 @@ auto GE::triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Ve
         u = (ka * va.u + kb * vb.u + kc * vc.u) / divisor;
         v = (ka * va.v + kb * vb.v + kc * vc.v) / divisor;
       } else if(texture) {
-        u = blend(va.u, vb.u, vc.u), v = blend(va.v, vb.v, vc.v);
+        u = stepped(uStep, sampleX, sampleY), v = stepped(vStep, sampleX, sampleY);
       }
       shade(pixel, texture, x, y, z, color, specular, u, v, fogAmount(blend(va.fog, vb.fog, vc.fog)));
     }

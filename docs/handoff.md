@@ -742,6 +742,25 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: where the GE samples, as the PSP measured it — 2026-10-04
+
+Branch `cursor/psp-ge-sampling-2b67`, stacked on `cursor/psp-vfpu-prefixes-2b67` (for stack #106). From the GE
+pictures the user's PSP drew (docs/psp-core.md, "Fixed since"), in ares/psp/ge/draw.cpp:
+- triangles are covered, and their colors, depth and texture coordinates blended, at each pixel's middle (8/16), not
+  PPSSPP's 7/16: `coverage-triangles` identical in all 256 cells, `shared-edges`, `gouraud`, `3d-rounding`,
+  `3d-cull` too;
+- sprites: the top-left rule at the middle, the left edge a sixteenth further left (`coverage-sprites`);
+- texture coordinates stepped from the leftmost corner with steps cut short to 1/65536 when inexact (`shortStep`):
+  all four `texels-*` files identical, `filter-shrink` kept;
+- 49 of 63 pictures identical (40 before). tests/psp's triangle, clipping and fog expectations moved to the middle
+  sample point.
+
+Next (GE): the filter's weights, lighting's and fog's rounding, perspective texels, the 3D sprite, the depth layout.
+Idea: commit the 49 identical pictures (about 1.1 MB with xz) and make the measure test fail if one changes.
+
+Checks: PSP system tests 84 groups with the test programs (the samples still within a level of PPSSPP); the measure
+comparison against the PSP's results.
+
 ## PSP core: the VFPU's prefixes, as the PSP measured them — 2026-10-04
 
 Branch `cursor/psp-vfpu-prefixes-2b67`, stacked on `cursor/psp-vfpu-nans-2b67` (for stack #106). The recorder's 240

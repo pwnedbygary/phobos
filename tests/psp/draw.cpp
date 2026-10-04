@@ -320,16 +320,43 @@ static auto drawDitherAndMasks() -> void {
   CHECK(c.pixel(0, 0), 0x00aa'bb11);
 }
 
-//Triangles: the pixels whose sample points are inside, not those on right or bottom edges, so two triangles sharing
-//an edge draw each pixel once; colors blended across, or with flat shading the last vertex's.
+//Texture coordinates are stepped from a primitive's leftmost corner, by a step per pixel cut a hair short when it
+//isn't exact (as the user's PSP drew 256 texels over 240 pixels). Here 16 texels over 15 pixels: pixel 7's middle
+//falls exactly on texel 8's left edge, so it takes texel 7, in a sprite and in two triangles. The second triangle's
+//leftmost corner is its bottom left, so going up from it, v at row 7's middle comes out just past 8 instead.
+static auto drawTexelSteps() -> void {
+  auto texel = [](u32 x, u32 y) { return x | y << 8 | 0x80 << 16; };
+  auto ready = [&](Canvas& c) {
+    c.texture(3, 16, 16, 16);
+    for(u32 y = 0; y < 16; y++) {
+      for(u32 x = 0; x < 16; x++) c.memory.write(4, Texture + (y * 16 + x) * 4, texel(x, y) | 0xff00'0000);
+    }
+  };
+  Canvas sprite;
+  ready(sprite);
+  sprite.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 15, 15, 0}});
+  CHECK(sprite.pixel(7, 0), texel(7, 0));
+  CHECK(sprite.pixel(8, 0), texel(9, 0));
+  CHECK(sprite.pixel(0, 7), texel(0, 7));
+  Canvas triangles;
+  ready(triangles);
+  triangles.draw(GE::Triangles, {{0, 0, 0, 0, 0, 0}, {16, 0, 0, 15, 0, 0}, {0, 16, 0, 0, 15, 0},
+                                 {16, 0, 0, 15, 0, 0}, {16, 16, 0, 15, 15, 0}, {0, 16, 0, 0, 15, 0}});
+  CHECK(triangles.pixel(0, 7), texel(0, 7));  //the first triangle, stepped from its top left
+  CHECK(triangles.pixel(7, 0), texel(7, 0));
+  CHECK(triangles.pixel(7, 7), texel(7, 8));  //on the diagonal, the second's: stepped from its bottom left
+}
+
+//Triangles: the pixels whose middles are inside (as a PSP samples them), not those on right or bottom edges, so two
+//triangles sharing an edge draw each pixel once; colors blended across, or with flat shading the last vertex's.
 static auto drawTriangles() -> void {
   Canvas c;
   c.draw(GE::Triangles, {{0, 0, 0xff00'00ff, 0, 0, 0}, {0, 0, 0xff00'ff00, 8, 0, 0}, {0, 0, 0xffff'0000, 0, 8, 0}});
   u32 covered = 0;
   for(u32 y = 0; y < 9; y++) for(u32 x = 0; x < 9; x++) covered += c.pixel(x, y) != 0;
-  CHECK(covered, 36);  //x + y up to 7
-  CHECK(c.pixel(7, 0) != 0 && c.pixel(8, 0) == 0 && c.pixel(4, 4) == 0, true);
-  CHECK(c.pixel(0, 0), 227 | 13 << 8 | 13 << 16);  //mostly the first vertex's red
+  CHECK(covered, 28);  //x + y up to 6: pixel (7, 0)'s middle is on the right edge
+  CHECK(c.pixel(6, 0) != 0 && c.pixel(7, 0) == 0 && c.pixel(4, 4) == 0, true);
+  CHECK(c.pixel(0, 0), 223 | 15 << 8 | 15 << 16);  //mostly the first vertex's red: at (0.5, 0.5), 7/8 of it
   c.memory.fill(VRAM, 0, 0x1000);
   c.ge.commands[GE::ShadeMode] = 0;
   c.draw(GE::Triangles, {{0, 0, 0xff00'00ff, 0, 0, 0}, {0, 0, 0xff00'ff00, 8, 0, 0}, {0, 0, 0xffff'0000, 0, 8, 0}});
@@ -347,15 +374,15 @@ static auto drawTriangles() -> void {
   CHECK(once, true);
   CHECK(square.pixel(8, 4), 0); CHECK(square.pixel(4, 8), 0);
 
-  //two rectangles of two triangles each, sharing an edge at x = 4 7/16, right through column 4's sample points: the
-  //column belongs to the rectangle it's a left edge of, so it's drawn once
+  //two rectangles of two triangles each, sharing an edge at x = 4 1/2, right through column 4's sample points (their
+  //middles): the column belongs to the rectangle it's a left edge of, so it's drawn once
   Canvas shared;
   shared.ge.commands[GE::AlphaBlendEnable] = 1;
   shared.ge.commands[GE::BlendMode] = 10 | 10 << 4;
   shared.ge.commands[GE::BlendFixedA] = 0xff'ffff;
   shared.ge.commands[GE::BlendFixedB] = 0xff'ffff;
-  for(float left : {0.0f, 4.4375f}) {
-    float right = left ? 8.0f : 4.4375f;
+  for(float left : {0.0f, 4.5f}) {
+    float right = left ? 8.0f : 4.5f;
     shared.draw(GE::TriangleStrip, {{0, 0, 0xff01'0101, left, 0, 0}, {0, 0, 0xff01'0101, right, 0, 0},
                                     {0, 0, 0xff01'0101, left, 4, 0}, {0, 0, 0xff01'0101, right, 4, 0}});
   }
@@ -516,7 +543,7 @@ auto drawTests() -> Tests {
     {"draw sprites", drawSprites}, {"draw texture formats", drawTextureFormats}, {"draw filter", drawFilter},
     {"draw texture functions", drawTextureFunctions}, {"draw pixel tests", drawPixelTests}, {"draw blending", drawBlending},
     {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles},
-    {"draw ambient and filters", drawAmbientAndFilters},
+    {"draw texel steps", drawTexelSteps}, {"draw ambient and filters", drawAmbientAndFilters},
     {"blit sample", blitSample}, {"doublelist sample", doublelistSample}, {"clut sample", clutSample},
     {"blend sample", blendSample}, {"cube sample", cubeSample}, {"celshading sample", celshadingSample},
     {"envmap sample", envmapSample},
