@@ -13,6 +13,9 @@ CC=${CC:-cc}
 CXX=${CXX:-c++}
 if [[ $(uname) == Darwin ]]; then DEFAULT_SANITIZE="-fsanitize=undefined"; else DEFAULT_SANITIZE="-fsanitize=address,undefined"; fi
 SANITIZE=${SANITIZE-$DEFAULT_SANITIZE -fno-sanitize-recover=all}
+#The address sanitizer's check for stack use after return gives every call a fresh frame on its own heap, which the
+#interpreter's per-instruction and the GE's per-pixel functions make hundreds of times slower; its other checks stay.
+export ASAN_OPTIONS=${ASAN_OPTIONS-detect_stack_use_after_return=0}
 SYSROOT=()
 LIBRARIES=(-lpthread -ldl)
 if [[ $(uname) == Darwin ]]; then
@@ -41,6 +44,7 @@ $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINE
   -include "$ROOT/tests/allegrex/prelude.hpp" "$ROOT/ares/psp/cpu/allegrex.cpp" "$ROOT/ares/psp/memory/memory.cpp" \
   "$ROOT/ares/psp/kernel/loader.cpp" "$ROOT/ares/psp/kernel/kernel.cpp" "$ROOT/ares/psp/ge/ge.cpp" \
   "$HERE/main.cpp" "$HERE/memory.cpp" "$HERE/loader.cpp" "$HERE/kernel.cpp" "$HERE/files.cpp" "$HERE/ge.cpp" \
+  "$HERE/draw.cpp" \
   "$NALL" "$SLJIT" "$ALLOCATOR" \
   "${LIBRARIES[@]}" -o "$OUT/psp"
 "$OUT/psp"

@@ -41,12 +41,21 @@ struct GE {
     BoundingBox = 0x07, Jump = 0x08, ConditionalJump = 0x09, Call = 0x0a, Return = 0x0b, End = 0x0c,
     Signal = 0x0e, Finish = 0x0f, Base = 0x10, VertexType = 0x12, OffsetAddress = 0x13, Origin = 0x14,
     Region1 = 0x15, Region2 = 0x16,
+    TextureMappingEnable = 0x1e, DitherEnable = 0x20, AlphaBlendEnable = 0x21, AlphaTestEnable = 0x22,
+    DepthTestEnable = 0x23, StencilTestEnable = 0x24, ColorTestEnable = 0x27, LogicOpEnable = 0x28,
     BoneMatrixNumber = 0x2a, BoneMatrixData = 0x2b, MorphWeight0 = 0x2c,
     WorldMatrixNumber = 0x3a, WorldMatrixData = 0x3b, ViewMatrixNumber = 0x3c, ViewMatrixData = 0x3d,
     ProjectionMatrixNumber = 0x3e, ProjectionMatrixData = 0x3f, TextureMatrixNumber = 0x40, TextureMatrixData = 0x41,
+    ShadeMode = 0x50, AmbientColor = 0x55, AmbientAlpha = 0x58,
     FrameBufferPointer = 0x9c, FrameBufferWidth = 0x9d, DepthBufferPointer = 0x9e, DepthBufferWidth = 0x9f,
+    TextureAddress0 = 0xa0, TextureBufferWidth0 = 0xa8, ClutAddress = 0xb0, ClutAddressUpper = 0xb1,
     TransferSource = 0xb2, TransferSourceWidth = 0xb3, TransferDestination = 0xb4, TransferDestinationWidth = 0xb5,
+    TextureSize0 = 0xb8, TextureMode = 0xc2, TextureFormat = 0xc3, ClutLoad = 0xc4, ClutFormat = 0xc5,
+    TextureFilter = 0xc6, TextureWrap = 0xc7, TextureFunction = 0xc9, TextureEnvironmentColor = 0xca,
     FrameBufferPixelFormat = 0xd2, ClearMode = 0xd3, Scissor1 = 0xd4, Scissor2 = 0xd5,
+    ColorTest = 0xd8, ColorReference = 0xd9, ColorTestMask = 0xda, AlphaTest = 0xdb, StencilTest = 0xdc,
+    StencilOperation = 0xdd, DepthTest = 0xde, BlendMode = 0xdf, BlendFixedA = 0xe0, BlendFixedB = 0xe1,
+    Dither0 = 0xe2, LogicOp = 0xe6, DepthMask = 0xe7, MaskColor = 0xe8, MaskAlpha = 0xe9,
     TransferStart = 0xea, TransferSourcePosition = 0xeb, TransferDestinationPosition = 0xec, TransferSize = 0xee,
   };
 
@@ -91,8 +100,32 @@ struct GE {
     u32 size;      //one vertex, all its morph targets included
   };
 
+  //A texture as the commands describe it, gathered once a primitive (texture.cpp).
+  struct Sampler {
+    u32 address, bufferWidth, width, height, format;  //bufferWidth: texels from one row to the next
+    bool swizzled, clampU, clampV, linear;
+    u32 clutFormat, clutShift, clutMask, clutOffset;
+  };
+
+  //The pixel pipeline's settings, gathered once a primitive (pixel.cpp).
+  struct PixelState {
+    bool clear, clearColor, clearAlpha, clearDepth;
+    u32 frameBuffer, stride, format, depthBuffer, depthStride;
+    bool alphaTest, colorTest, stencilTest, depthTest, blend, dither, logicOp, depthWrite;
+    u32 alphaFunction, alphaReference, alphaMask;
+    u32 colorFunction, colorReference, colorMask;
+    u32 stencilFunction, stencilReference, stencilMask, stencilFail, stencilDepthFail, stencilPass;
+    u32 depthFunction;
+    u32 blendSource, blendDestination, blendOperation, fixedA, fixedB;
+    s32 ditherMatrix[16];
+    u32 logic, writeMask;  //writeMask: the frame buffer bits not to touch (MASK_COLOR, MASK_ALPHA)
+    s32 left, top, right, bottom;  //the scissor rectangle and drawing region, inclusive
+    u32 low, high;  //the frame buffer bytes touched, for reporting the change
+  };
+
   Memory& memory;
   u32 commands[256] = {};  //each command's last word
+  u8 clut[1024] = {};      //the palette, as CLUT_LOAD copied it in: textures read it from here, not from memory
   Registers list;
   u32 vertexAddress = 0, indexAddress = 0;  //where the next vertex and index are read
   u32 signalWord = 0, finishWord = 0, endWord = 0;  //what made run() stop: the SIGNAL or FINISH before it, and the END
@@ -122,9 +155,21 @@ struct GE {
 
   //draw.cpp
   auto primitive(u32 kind, u32 count) -> void;
-  auto clearRectangle(const Vertex& from, const Vertex& to) -> void;
-  auto frameBufferAddress() const -> u32;
-  auto depthBufferAddress() const -> u32;
+  auto rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to) -> void;
+  auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c) -> void;
+  auto point(PixelState& pixel, Sampler* texture, const Vertex& at) -> void;
+  auto shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, float u, float v) -> void;
+
+  //texture.cpp
+  auto sampler() const -> Sampler;
+  auto texel(const Sampler& texture, s32 u, s32 v) -> u32;
+  auto sample(const Sampler& texture, float u, float v) -> u32;
+  auto textureFunction(u32 color, u32 texel) const -> u32;
+  auto loadClut() -> void;
+
+  //pixel.cpp
+  auto pixelState() const -> PixelState;
+  auto drawPixel(PixelState& pixel, s32 x, s32 y, u32 z, u32 color) -> void;
 
   //transfer.cpp
   auto transfer() -> void;

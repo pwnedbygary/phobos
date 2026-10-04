@@ -64,6 +64,7 @@ auto GE::run(u64 budget) -> Stop {
     case TextureMatrixNumber:    textureIndex = argument & 0xf; break;
     case TextureMatrixData:      matrixData(textureMatrix, 12, textureIndex, argument); break;
     case TransferStart:          transfer(); break;
+    case ClutLoad:               loadClut(); break;
     }
   }
   return Stop::Busy;

@@ -7,7 +7,7 @@ compiled loads and stores straight to RAM, on `cursor/psp-fastmem-2b67`; the VFP
 after it; part 5, the memory map, on `cursor/psp-memory-2b67`; part 6, the loader, on `cursor/psp-loader-2b67`;
 part 7, the first HLE functions, on `cursor/psp-hle-2b67`, which run pspdev's hello world from start to end on the
 host; part 8, files and controls, on `cursor/psp-files-2b67`; part 9, the GE's display lists, on
-`cursor/psp-ge-2b67`. The user asked for the whole feature to be stacked and merged at once (GitHub stack #106).
+`cursor/psp-ge-2b67`; part 10, drawing in 2D, on `cursor/psp-draw-2b67`. The user asked for the whole feature to be stacked and merged at once (GitHub stack #106).
 Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
@@ -131,8 +131,7 @@ branch not taken, `nor` without the not, delay-slot instructions given the wrong
 4. Memory map (part 5); loading an unencrypted `EBOOT.PBP`, ELF or PRX (part 6); the first HLE functions (module
    start, threads, display, memory, standard output) and a homebrew test program run on the host (part 7); files
    and controls (part 8).
-5. The GE: display lists, clearing and block transfers, and the picture (part 9); a software rasterizer, 2D first,
-   then 3D.
+5. The GE: display lists, clearing and block transfers, and the picture (part 9); drawing in 2D (part 10); then 3D.
 6. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
 7. Retail executables: `~PSP` decryption.
 8. Audio (`sceAudio`, then ATRAC3+ and MP3), video (PSMF), the optional firmware modules.
@@ -484,3 +483,49 @@ them; the code now says so); a list starting after another had BASE cleared (the
 word it saved as a command, and a list that never ran saved 0, a NOP: fixed, with a test); the next list ran before
 the last one's finish callback (the PSP's driver calls it first: fixed, with a test whose callback rewrites the next
 list).
+
+## Part 10: drawing in 2D
+
+`ares/psp/ge/`: `draw.cpp` (primitives), `texture.cpp`, `pixel.cpp` (the pixel pipeline). Through mode, where
+positions are pixels (in sixteenths) and texture coordinates texels.
+
+- **Primitives**: sprites (rectangles between pairs of vertices, covering the pixels whose middles are inside, both
+  edges included; the second vertex's color and depth; corners bottom-left and top-right turn the texture a quarter),
+  triangles, strips and fans (sample points 7/16 into each pixel; pixels exactly on right or bottom edges left to the
+  neighbour; colors, depth and texture coordinates blended across, or the last vertex's color with flat shading), and
+  points. A vertex without a color takes the material's ambient color. Not yet: lines, and 3D.
+- **Textures**: 5650, 5551, 4444, 8888, and 4-, 8-, 16- and 32-bit palette indices (the palette copied into the GE's
+  own 1 KiB by CLUT_LOAD, its index shifted, masked and offset); swizzled storage (pspsdk's layout: blocks 16 bytes by
+  8 rows); repeat or clamp each way; nearest or filtered (four texels by sixteenths, half a texel in), chosen by
+  whether the texture is enlarged or shrunk. Not yet: DXT, mipmaps.
+- **Texture functions**: modulate, decal, blend (with the environment color), replace, add; the texture's alpha or
+  not; color doubling.
+- **The pixel pipeline**, in the PSP's order: alpha test, color test, stencil test and depth test (with the stencil
+  operations, stopping at each format's ends, and the depth written unless masked), blending (every factor and
+  operation), dithering (before the color is held to 0-255), logic operations (leaving the stencil), and the write,
+  sparing the masked bits. The alpha written is the stencil, kept as it was without the stencil test. Clear mode goes
+  through the same writes.
+
+The arithmetic (rounding in the texture functions and blending, the filter's weights, which pixels a primitive covers,
+when the stencil is written) is PPSSPP's software renderer's, which its authors checked against tests on the PSP;
+the commands' layouts come from pspsdk's GU library, and the meanings from pspgu.h. It all wants measuring on the PSP.
+
+Tests (`tests/psp/draw.cpp`), with expected values worked out by hand from those rules: sprites 1:1, turned and
+mirrored; each texture format, the palette's shift, mask and offset, and a swizzled texture against the plain one
+(swizzled the way pspsdk's own sample code does it); the filter's weights, repeat and clamp, the filter chosen by
+enlarging or shrinking; each texture function, with alpha and doubling; each test and stencil operation, in 8888 and
+4444; each blend operation and factor, with a case only the PSP's rounding gets right; dithering, logic operations,
+write masks; triangle coverage, colors blended and flat, two triangles sharing an edge (one through a column's sample
+points) drawing each pixel once; points; the ambient color. With `PSP_TEST_PROGRAMS`, pspsdk's samples: "blit" (a
+texture drawn as one sprite, from its swizzled copy, and in strips, the buttons pressed to switch) and "doublelist"
+(the same through sent lists) leave the picture they must, pixel for pixel; "clut" and "blend" run and draw.
+`tools/psp-test-programs/compare-ppsspp.sh` compares those two with PPSSPP's software renderer after the same second:
+"blend" within 2 levels on every pixel (mean 0.01), "clut" on 99.94% (the rest, up to 13 levels, sit where the filter
+rounds at a boundary, which the two step to differently). Fifteen broken versions each failed the tests (among them
+the texture functions' and blending's rounding, the filter's half texel, swizzled rows, the palette's shift, sprites
+never turning, edges all inclusive, 4444's stencil counting by ones, the alpha test the wrong way round, the depth
+mask ignored, the dither matrix unsigned, no ambient color, the stencil overwritten by alpha, flat shading taking
+the first vertex). A review's claim that a pixel at VRAM's end could run past it was disproved (the offsets stay
+multiples of the pixel's size; the code now says so). Found on the way: the address sanitizer's check for stack use
+after return made the per-pixel functions hundreds of times slower (18 minutes for the samples), so the test script
+turns that one check off (`ASAN_OPTIONS`); the run takes 95 seconds.

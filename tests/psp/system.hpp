@@ -51,5 +51,6 @@ auto loaderTests() -> Tests;
 auto kernelTests() -> Tests;
 auto fileTests() -> Tests;
 auto geTests() -> Tests;
+auto drawTests() -> Tests;
 
 }
