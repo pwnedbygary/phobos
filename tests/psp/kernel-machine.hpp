@@ -5,6 +5,11 @@
 #include "elf.hpp"
 #include "../../ares/psp/kernel/kernel.hpp"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <random>
+
 namespace allegrex_test::psp {
 
 using ares::PlayStationPortable::Kernel;
@@ -73,5 +78,32 @@ struct Assembler {
     li(a0, 1); li(a1, m.string(text)); li(a2, text.size()); call("sceIoWrite");
   }
 };
+
+//A fresh host folder for a test, removed when the test ends.
+struct HostFolder {
+  std::filesystem::path path;
+  HostFolder() {
+    std::random_device random;
+    path = std::filesystem::temp_directory_path() / ("phobos-psp-" + std::to_string(random()));
+    std::filesystem::create_directories(path);
+  }
+  ~HostFolder() { std::error_code error; std::filesystem::remove_all(path, error); }
+  auto put(const std::string& name, const std::string& text) -> void {
+    std::filesystem::create_directories((path / name).parent_path());
+    std::ofstream(path / name, std::ios::binary) << text;
+  }
+  auto get(const std::string& name) -> std::string {
+    std::ifstream file(path / name, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  }
+};
+
+//A program from PSP_TEST_PROGRAMS (see tools/psp-test-programs/build.sh); empty when it isn't set.
+inline auto testProgram(const char* name) -> std::vector<u8> {
+  const char* programs = std::getenv("PSP_TEST_PROGRAMS");
+  if(!programs) return {};
+  std::ifstream stream(std::string(programs) + "/" + name, std::ios::binary);
+  return std::vector<u8>((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+}
 
 }

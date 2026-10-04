@@ -7,7 +7,9 @@ compiled loads and stores straight to RAM, on `cursor/psp-fastmem-2b67`; the VFP
 after it; part 5, the memory map, on `cursor/psp-memory-2b67`; part 6, the loader, on `cursor/psp-loader-2b67`;
 part 7, the first HLE functions, on `cursor/psp-hle-2b67`, which run pspdev's hello world from start to end on the
 host; part 8, files and controls, on `cursor/psp-files-2b67`; part 9, the GE's display lists, on
-`cursor/psp-ge-2b67`; part 10, drawing in 2D, on `cursor/psp-draw-2b67`. The user asked for the whole feature to be stacked and merged at once (GitHub stack #106).
+`cursor/psp-ge-2b67`; part 10, drawing in 2D, on `cursor/psp-draw-2b67`; the program measuring the GE and the
+controller on a PSP, on `cursor/psp-ge-measure-2b67`. The user asked for the whole feature to be stacked and merged at
+once (GitHub stack #106).
 Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
@@ -529,3 +531,36 @@ the first vertex). A review's claim that a pixel at VRAM's end could run past it
 multiples of the pixel's size; the code now says so). Found on the way: the address sanitizer's check for stack use
 after return made the per-pixel functions hundreds of times slower (18 minutes for the samples), so the test script
 turns that one check off (`ASAN_OPTIONS`); the run takes 95 seconds.
+
+### Measuring the GE and the controller on a PSP
+
+The rules above that came from PPSSPP or uOFW rather than from measurements of our own are what
+`tools/psp-ge-measure` records on a real PSP. Like the VFPU's program it's homebrew built with pspdev's toolchain
+(`make SMOKE=1` builds a version for an emulator, which starts at once and leaves when done). It draws each case into
+VRAM, reads the pixels back as they are and writes them to `results/` beside its EBOOT.PBP: 51 files, about 13 MB, in
+a few seconds. The cases:
+
+- every blend operation and factor, over every source color and alpha;
+- the texture functions, every vertex color against every texel, with alpha and doubling;
+- the filter enlarging (repeating, clamped, at an odd scale) and shrinking;
+- which pixels sprites and triangles cover with their corners at each sixteenth of a pixel, and two triangles sharing
+  an edge;
+- the sprite corners' quarter turn, dithering in 8888 and 5650, the stencil's steps in 4444 and 5551;
+- every texel of the 16-bit texture formats (color and alpha), and 8-bit colors narrowed into each 16-bit frame
+  buffer (with what the alpha bits get when the stencil test is off);
+- colors across triangles, and the texel each pixel takes when a texture is shrunk or stretched, as a sprite and as
+  triangles;
+- the controller's timing: whether a second `sceCtrlReadLatch`, a `sceCtrlReadBufferPositive` just after a vertical
+  blank, and a second `sceCtrlReadBufferPositive` wait.
+
+The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in this core (with
+`PSP_TEST_PROGRAMS`), checks that every file is written, and with `PSP_GE_RESULTS` set to a results folder lists what
+differs from it (`PSP_GE_OURS` keeps this core's files for a closer look). Against PPSSPP's software renderer (its
+headless build running the smoke version), 49 of the 51 files are identical, the controller's timing included: a
+second latch read doesn't wait, a buffer read after a vertical blank doesn't either, and a second buffer read waits a
+frame. The two that differ are the PSP's to settle:
+
+- a sprite whose right or bottom edge runs exactly through pixel middles (127 pixels): this core draws them, while
+  PPSSPP draws them or not depending on where the other corners are, in code its authors mark as unverified;
+- a shrunk sprite's texels (4240 pixels, a texel apart): this core takes a sprite's texture coordinates at each
+  pixel's middle, PPSSPP at 7/16 in, as for triangles.

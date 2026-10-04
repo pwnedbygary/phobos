@@ -761,14 +761,6 @@ static auto displayPicture() -> void {
   CHECK(pixels[0], 0xffff'2211);
 }
 
-//Reads a test program built by tools/psp-test-programs/build.sh.
-static auto testProgram(const char* name) -> std::vector<u8> {
-  const char* programs = std::getenv("PSP_TEST_PROGRAMS");
-  if(!programs) return {};
-  std::ifstream stream(std::string(programs) + "/" + name, std::ios::binary);
-  return std::vector<u8>((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-}
-
 //tools/psp-test-programs' GU program: pspsdk's GU library clears, signals, calls a list, finishes and copies.
 static auto guProgram() -> void {
   auto program = testProgram("gu.elf");

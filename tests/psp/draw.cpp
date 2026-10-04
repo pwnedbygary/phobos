@@ -396,13 +396,6 @@ static auto drawAmbientAndFilters() -> void {
   CHECK(c.pixel(1, 0) & 0xff, 40);   //u = 0.75: a quarter of the way to the next texel
 }
 
-static auto testProgram(const char* name) -> std::vector<u8> {
-  const char* programs = std::getenv("PSP_TEST_PROGRAMS");
-  if(!programs) return {};
-  std::ifstream stream(std::string(programs) + "/" + name, std::ios::binary);
-  return std::vector<u8>((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-}
-
 //The picture pspsdk's samples "blit" and "doublelist" draw: a 4444 texture whose texel (x, y) is x*y, copied 1:1.
 static auto blitPicture(Memory& memory, u32 buffer, u32 firstRow) -> bool {
   bool same = true;

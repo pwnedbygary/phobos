@@ -52,5 +52,6 @@ auto kernelTests() -> Tests;
 auto fileTests() -> Tests;
 auto geTests() -> Tests;
 auto drawTests() -> Tests;
+auto measureTests() -> Tests;
 
 }
