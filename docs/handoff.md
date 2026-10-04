@@ -742,6 +742,22 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the VFPU measurement keeps the PSP awake — 2026-10-04
+
+Branch `cursor/psp-vfpu-awake-2b67`, stacked on `cursor/psp-lighting-2b67` (for stack #106). The user's first round-2
+run switched the PSP off around the divide step. The divide is the bare instruction (checked in the built program), so
+the likelier causes are the power-save timer or a crash in the FPU tests after it, which no PSP had run. The program
+now keeps the PSP awake (`scePowerTick`), names each test as it starts, runs the FPU tests last, and retries a test
+that didn't finish once before giving up on it (`<name>.stopped`), so a test that stops the PSP can't hold up the rest.
+Its files are unchanged (byte for byte in PPSSPPHeadless), and the retry and give-up paths were tried there with
+planted `.part` and `.again` files. Five Bugbot passes, each read in full (every summary said "no bugs"). Four
+findings were fixed: the retry marker written before the file opened, a failed write counting as the PSP stopping,
+long tests between progress ticks, and a marker that can't be written letting a test retry forever. The fifth (a
+retry that stops between its last write and the rename to `.bin` is given up on) was left: the window is one close and
+one rename, and giving up renames the file rather than deleting it, so a complete `.stopped` can be renamed by hand.
+The revised EBOOT.PBP is on the RP6 in `Download/VFPUMEASURE2` from 10:19; the last two fixes wait for the next time
+it's connected (neither changes a normal run).
+
 ## PSP core, part 12: lighting — 2026-10-04
 
 Branch `cursor/psp-lighting-2b67`, stacked on `cursor/psp-3d-measure-2b67` (for stack #106). `ares/psp/ge/lighting.cpp`:

@@ -6,7 +6,7 @@ ifdef SMOKE
 CFLAGS += -DSMOKE  #a quick version for an emulator (see main.c)
 endif
 ASFLAGS = $(CFLAGS)
-LIBS =
+LIBS = -lpsppower
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = VFPU measure
