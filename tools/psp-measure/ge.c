@@ -5,13 +5,17 @@
 //stencil's steps, and whether the controller's reads wait; in 3D, perspective-correct texels, the depths and fog
 //written, the GE's rounding onto the screen, the cut at the near plane, which depths stop a primitive, and culling;
 //and lighting: diffuse and the shine across the angles, a spotlight's cone, a point light's fading, environment
-//mapping. These are round 2's (the first the GE had), picked from the menu (main.c).
+//mapping. Those are round 2's (the first the GE had). Round 3 takes what they left open: lighting with normals
+//whose cosines are exact (plain diffuse, powered diffuse and the shine, with material, light and ambient levels),
+//color and fog stepped across primitives, 3D edges near the pixel middle, a receding wall's texels, round 2's 3D
+//sprite taken apart, curved surfaces, and the depth buffer's layout through VRAM's four copies. Each round is
+//picked from the menu (main.c).
 //
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/ge/<test>.bin: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's pixels in the
-//low half). manifest.txt says what each test drew. A test whose file is there is skipped, and one that stops the PSP
-//is given up on, as results.c has it. The program computes nothing: the host runs the same program in Phobos's core
-//(tests/psp/measure.cpp) and compares the files.
+//low half). manifest.txt (round 2) and manifest3.txt (round 3) say what each test drew. A test whose file is there
+//is skipped, and one that stops the PSP is given up on, as results.c has it. The program computes nothing: the host
+//runs the same program in Phobos's core (tests/psp/measure.cpp) and compares the files.
 
 #include "measure.h"
 #include <pspdisplay.h>
@@ -806,20 +810,490 @@ static void writeManifest(void) {
   sceIoClose(file);
 }
 
+//---- round 3: what round 2 left open (docs/psp-core.md, "Results from the user's PSP")
+
+//-- lighting with cosines known exactly
+
+//A normal (a, 0, b) whose a² + b² is a square c² (a Pythagorean triple) is exactly c long, so once the GE makes it
+//one long, its cosine with a light along +z is b / c with no rounding in the length itself. Four numbers whose
+//squares add up to a square (a quadruple: x² + y² + z² = d²) do the same in three dimensions.
+static const unsigned char triples[16][2] = {
+  {3, 4}, {5, 12}, {8, 15}, {7, 24}, {20, 21}, {12, 35}, {9, 40}, {28, 45},
+  {11, 60}, {16, 63}, {33, 56}, {48, 55}, {13, 84}, {36, 77}, {39, 80}, {65, 72},
+};
+static const unsigned char quadruples[16][3] = {
+  {1, 2, 2}, {2, 3, 6}, {1, 4, 8}, {4, 4, 7}, {2, 6, 9}, {6, 6, 7}, {3, 4, 12}, {2, 5, 14},
+  {2, 10, 11}, {1, 12, 12}, {8, 9, 12}, {1, 6, 18}, {6, 6, 17}, {6, 10, 15}, {4, 5, 20}, {4, 8, 19},
+};
+//Color levels where rounding shows: the top, just under and at powers of two, and a few between.
+static const unsigned char levels[16] = {255, 254, 253, 200, 192, 129, 128, 127, 100, 64, 63, 33, 32, 16, 8, 1};
+//sceGuLight turns its components into the GE's light kind: GU_POWERED_DIFFUSE into kind 2 (ambient and a "powered"
+//diffuse, raised to the shine's power as a shine is), GU_DIFFUSE_AND_SPECULAR into kind 1, anything else (GU_DIFFUSE
+//too) into kind 0, ambient and plain diffuse.
+
+typedef struct { float x, y, z; } Normal;
+
+//One row's 16 normals, of a kind: 0 (a, 0, b), cosine b / c; 1 (b, 0, a), cosine a / c; 2-5 kind 0's times 2, 1/2,
+//64 and 1/64 (which the GE has to bring back to one long); 6 (0, a, b), leaning toward y instead; 7 the quadruples,
+//cosine z / d. Every one is exact in floats.
+static void cosineRow(int kind, Normal* normals) {
+  static const float scales[6] = {1, 1, 2, 0.5f, 64, 1.0f / 64};
+  for(int i = 0; i < 16; i++) {
+    float a = triples[i][0], b = triples[i][1];
+    if(kind == 7) normals[i] = (Normal){quadruples[i][0], quadruples[i][1], quadruples[i][2]};
+    else if(kind == 6) normals[i] = (Normal){0, a, b};
+    else if(kind == 1) normals[i] = (Normal){b, 0, a};
+    else normals[i] = (Normal){a * scales[kind], 0, b * scales[kind]};
+  }
+}
+
+//Three levels as a color, one per channel, five apart in the table so a cell's channels differ.
+static unsigned int levelColor(int k) {
+  return 0xff000000u | levels[k & 15] | levels[(k + 5) & 15] << 8 | levels[(k + 10) & 15] << 16;
+}
+
+//Row row of the target's 16x16 cells, each a lit 3D sprite at z 0 in its own color with its own normal. A sprite
+//takes its second vertex's color, lit there, so each cell shows one lit color (as litCells).
+static void litRow(int row, const unsigned int* colors, const Normal* normals) {
+  LitVertex* v = sceGuGetMemory(32 * sizeof(LitVertex));
+  for(int i = 0; i < 16; i++) {
+    float x = i * 16, y = row * 16;
+    const Normal* n = &normals[i];
+    v[i * 2] = (LitVertex){colors[i], n->x, n->y, n->z, ndcX(x), ndcY(y), 0};
+    v[i * 2 + 1] = (LitVertex){colors[i], n->x, n->y, n->z, ndcX(x + 16), ndcY(y + 16), 0};
+  }
+  sceGuDrawArray(GU_SPRITES, LitVertexType, 32, 0, v);
+}
+
+static void allColors(unsigned int color, unsigned int* colors) {
+  for(int i = 0; i < 16; i++) colors[i] = color;
+}
+
+//The cosines: white diffuse light along +z on a white material (plain diffuse, light kind 0). Rows 0-7 the eight
+//kinds of normals (cosineRow), rows 8-15 the same with the light's direction 3 long, which the GE should bring back
+//to one long too.
+static void lightCosines(const char* name) {
+  if(!beginTest(name)) return;
+  beginLit();
+  sceGuLightColor(0, GU_DIFFUSE, 0xffffff);
+  sceGuModelColor(0, 0, 0xffffff, 0);
+  unsigned int colors[16];
+  Normal normals[16];
+  allColors(0xffffffff, colors);
+  for(int row = 0; row < 16; row++) {
+    ScePspFVector3 toward = {0, 0, row < 8 ? 1.0f : 3.0f};
+    if(row % 8 == 0) sceGuLight(0, GU_DIRECTIONAL, GU_AMBIENT_AND_DIFFUSE, &toward);
+    cosineRow(row % 8, normals);
+    litRow(row, colors, normals);
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Powered diffuse (light kind 2), which the core raises to the shine's power as PPSSPP reads it, never measured:
+//the same light and material, rows 0-7 the eight kinds of normals with power 1, rows 8-15 with power 2.
+static void lightPowered(const char* name) {
+  if(!beginTest(name)) return;
+  beginLit();
+  ScePspFVector3 toward = {0, 0, 1};
+  sceGuLight(0, GU_DIRECTIONAL, GU_POWERED_DIFFUSE, &toward);
+  sceGuLightColor(0, GU_DIFFUSE, 0xffffff);
+  sceGuModelColor(0, 0, 0xffffff, 0);
+  unsigned int colors[16];
+  Normal normals[16];
+  allColors(0xffffffff, colors);
+  for(int row = 0; row < 16; row++) {
+    if(row % 8 == 0) sceGuSpecular(row < 8 ? 1.0f : 2.0f);
+    cosineRow(row % 8, normals);
+    litRow(row, colors, normals);
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//The shine alone (light kind 1, its diffuse black): white specular light along +z on a white specular material.
+//With the viewer along +z too, the direction half way between them is +z, so the shine's cosine is the normal's:
+//rows 0-7 the eight kinds of normals with power 1, rows 8-15 with power 2.
+static void lightShine(const char* name) {
+  if(!beginTest(name)) return;
+  beginLit();
+  ScePspFVector3 toward = {0, 0, 1};
+  sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE_AND_SPECULAR, &toward);
+  sceGuLightColor(0, GU_SPECULAR, 0xffffff);
+  sceGuModelColor(0, 0, 0, 0xffffff);
+  unsigned int colors[16];
+  Normal normals[16];
+  allColors(0xffffffff, colors);
+  for(int row = 0; row < 16; row++) {
+    if(row % 8 == 0) sceGuSpecular(row < 8 ? 1.0f : 2.0f);
+    cosineRow(row % 8, normals);
+    litRow(row, colors, normals);
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Material colors: the vertex's color stands for the material's diffuse (MATERIAL_COLOR), three levels per row
+//(levelColor), under white light along +z; across each row, kind 0's cosines.
+static void lightMaterials(const char* name) {
+  if(!beginTest(name)) return;
+  beginLit();
+  ScePspFVector3 toward = {0, 0, 1};
+  sceGuLight(0, GU_DIRECTIONAL, GU_AMBIENT_AND_DIFFUSE, &toward);
+  sceGuLightColor(0, GU_DIFFUSE, 0xffffff);
+  sceGuColorMaterial(GU_DIFFUSE);
+  unsigned int colors[16];
+  Normal normals[16];
+  cosineRow(0, normals);
+  for(int row = 0; row < 16; row++) {
+    allColors(levelColor(row), colors);
+    litRow(row, colors, normals);
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Light colors: row by row, the light's diffuse color takes three levels (levelColor), on a white material; across
+//each row, kind 0's cosines.
+static void lightColors(const char* name) {
+  if(!beginTest(name)) return;
+  beginLit();
+  ScePspFVector3 toward = {0, 0, 1};
+  sceGuLight(0, GU_DIRECTIONAL, GU_AMBIENT_AND_DIFFUSE, &toward);
+  sceGuModelColor(0, 0, 0xffffff, 0);
+  unsigned int colors[16];
+  Normal normals[16];
+  allColors(0xffffffff, colors);
+  cosineRow(0, normals);
+  for(int row = 0; row < 16; row++) {
+    sceGuLightColor(0, GU_DIFFUSE, levelColor(row) & 0xffffff);
+    litRow(row, colors, normals);
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Ambient alone, no cosine: two colors multiplied and rounded. Row by row the light's ambient color takes three
+//levels (levelColor of the row); across each row the vertex's color, standing for the material's ambient, takes
+//them too (levelColor of the column), so each channel meets every pair of levels once. The light's diffuse stays
+//black.
+static void lightAmbient(const char* name) {
+  if(!beginTest(name)) return;
+  beginLit();
+  ScePspFVector3 toward = {0, 0, 1};
+  sceGuLight(0, GU_DIRECTIONAL, GU_AMBIENT_AND_DIFFUSE, &toward);
+  sceGuColorMaterial(GU_AMBIENT);
+  unsigned int colors[16];
+  Normal normals[16];
+  for(int i = 0; i < 16; i++) {
+    colors[i] = levelColor(i);
+    normals[i] = (Normal){0, 0, 1};
+  }
+  for(int row = 0; row < 16; row++) {
+    sceGuLightColor(0, GU_AMBIENT, levelColor(row) & 0xffffff);
+    litRow(row, colors, normals);
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//-- colors and fog stepped across a primitive
+
+//16 ramps, one per band of 16 pixels: the level goes from `from` to `to` over `width` pixels: across the whole
+//target, a pixel short of it, at slopes from shallow to steep, backwards, hardly changing, in a few pixels.
+typedef struct { short width; unsigned char from, to; } Ramp;
+static const Ramp ramps[16] = {
+  {256, 0, 255}, {255, 0, 255}, {240, 0, 255}, {200, 0, 255}, {128, 0, 255}, {100, 0, 255}, {64, 0, 255},
+  {37, 0, 255}, {256, 255, 0}, {100, 255, 0}, {256, 10, 250}, {256, 100, 101}, {16, 0, 255}, {7, 0, 255},
+  {37, 128, 0}, {253, 1, 254},
+};
+//A level as a color: red the level, green the level backwards, blue half of it, so each band shows three ramps.
+static unsigned int rampColor(int level) { return 0xff000000u | level | (255 - level) << 8 | (level / 2) << 16; }
+
+//In through mode: each band a square of two triangles from 0 to its width, along x (or, vertical, along y), the
+//color changing along it alone.
+static void rampColors(const char* name, int vertical) {
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  Vertex* vertices = sceGuGetMemory(16 * 6 * sizeof(Vertex));
+  for(int band = 0; band < 16; band++) {
+    const Ramp* r = &ramps[band];
+    unsigned int from = rampColor(r->from), to = rampColor(r->to);
+    short a = band * 16, b = band * 16 + 16, w = r->width;  //across the band: a to b; along it: 0 to w
+    Vertex* v = vertices + band * 6;
+    if(vertical) {
+      v[0] = (Vertex){0, 0, from, a, 0, 0, 0};
+      v[1] = (Vertex){0, 0, from, b, 0, 0, 0};
+      v[2] = (Vertex){0, 0, to, a, w, 0, 0};
+      v[3] = (Vertex){0, 0, from, b, 0, 0, 0};
+      v[4] = (Vertex){0, 0, to, b, w, 0, 0};
+      v[5] = (Vertex){0, 0, to, a, w, 0, 0};
+    } else {
+      v[0] = (Vertex){0, 0, from, 0, a, 0, 0};
+      v[1] = (Vertex){0, 0, to, w, a, 0, 0};
+      v[2] = (Vertex){0, 0, from, 0, b, 0, 0};
+      v[3] = (Vertex){0, 0, to, w, a, 0, 0};
+      v[4] = (Vertex){0, 0, to, w, b, 0, 0};
+      v[5] = (Vertex){0, 0, from, 0, b, 0, 0};
+    }
+  }
+  sceGuDrawArray(GU_TRIANGLES, VertexType, 16 * 6, 0, vertices);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//The same bands in 3D (identity matrices), each from 3/16 of a pixel in to 5/16 short of its width: corners
+//between pixels, as a triangle cut at the near plane has its new ones (3d-clip's colors were a level off).
+static void rampColors3D(const char* name) {
+  if(!beginTest(name)) return;
+  start3D(&identity, 1);
+  FloatVertex* vertices = sceGuGetMemory(16 * 6 * sizeof(FloatVertex));
+  for(int band = 0; band < 16; band++) {
+    const Ramp* r = &ramps[band];
+    unsigned int from = rampColor(r->from), to = rampColor(r->to);
+    float left = ndcX(3 / 16.0f), right = ndcX(r->width - 5 / 16.0f);
+    float top = ndcY(band * 16), bottom = ndcY(band * 16 + 16);
+    FloatVertex* v = vertices + band * 6;
+    v[0] = (FloatVertex){0, 0, from, left, top, 0};
+    v[1] = (FloatVertex){0, 0, to, right, top, 0};
+    v[2] = (FloatVertex){0, 0, from, left, bottom, 0};
+    v[3] = (FloatVertex){0, 0, to, right, top, 0};
+    v[4] = (FloatVertex){0, 0, to, right, bottom, 0};
+    v[5] = (FloatVertex){0, 0, from, left, bottom, 0};
+  }
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 16 * 6, 0, vertices);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Fog stepped across a primitive (3d-floor-fog was a level off in places): white bands in 3D with fog (near 1, far
+//4, blue), each band's depth going from zLeft at x 0 to zRight at its width, so its fog goes from none (z -1) to all
+//(z -4) or part of the way. The projection keeps w at 1 and only scales z by 1/4 (so -1 to -4 stays inside the
+//depth range): depth can't move x or y, and nothing is stepped for perspective.
+static ScePspFMatrix4 quarterDepth = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 0.25f, 0}, {0, 0, 0, 1}};
+typedef struct { short width; float zLeft, zRight; } FogRamp;
+static const FogRamp fogRamps[16] = {
+  {256, -1, -4}, {255, -1, -4}, {200, -1, -4}, {128, -1, -4}, {100, -1, -4}, {64, -1, -4}, {37, -1, -4},
+  {16, -1, -4}, {256, -4, -1}, {100, -4, -1}, {256, -1.25f, -3.75f}, {256, -2, -2.0625f}, {256, -1, -1.5f},
+  {7, -1, -4}, {37, -3, -1}, {253, -1.015625f, -3.984375f},
+};
+static void rampFog(const char* name) {
+  if(!beginTest(name)) return;
+  start3D(&quarterDepth, 1);
+  sceGuEnable(GU_FOG);
+  sceGuFog(1, 4, 0xff0000);
+  FloatVertex* vertices = sceGuGetMemory(16 * 6 * sizeof(FloatVertex));
+  for(int band = 0; band < 16; band++) {
+    const FogRamp* f = &fogRamps[band];
+    float left = ndcX(0), right = ndcX(f->width), top = ndcY(band * 16), bottom = ndcY(band * 16 + 16);
+    FloatVertex* v = vertices + band * 6;
+    v[0] = (FloatVertex){0, 0, 0xffffffff, left, top, f->zLeft};
+    v[1] = (FloatVertex){0, 0, 0xffffffff, right, top, f->zRight};
+    v[2] = (FloatVertex){0, 0, 0xffffffff, left, bottom, f->zLeft};
+    v[3] = (FloatVertex){0, 0, 0xffffffff, right, top, f->zRight};
+    v[4] = (FloatVertex){0, 0, 0xffffffff, right, bottom, f->zRight};
+    v[5] = (FloatVertex){0, 0, 0xffffffff, left, bottom, f->zLeft};
+  }
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 16 * 6, 0, vertices);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//-- 3D edges, texels and sprites
+
+//The rounding onto the screen where it decides a pixel (round 2's 3d-rounding stayed short of the middle): in cell
+//(i, j) a square whose left edge lies i 256ths past the middle of the cell's pixel column 4 and its top edge j
+//256ths below the middle of row 4; its right and bottom edges as far past the middles of column and row 12. Pixel
+//(4, 4) is drawn while both its edges come back onto the middle (truncated to the sixteenth, all 16 cells of each),
+//not once they round up to the next sixteenth; pixel (12, 12) the other way round.
+static void roundingMiddle3D(const char* name) {
+  if(!beginTest(name)) return;
+  start3D(&identity, 1);
+  FloatVertex* vertices = sceGuGetMemory(256 * 6 * sizeof(FloatVertex));
+  for(int cell = 0; cell < 256; cell++) {
+    float x = (cell & 15) * 16, y = (cell >> 4) * 16, i = (cell & 15) / 256.0f, j = (cell >> 4) / 256.0f;
+    float left = ndcX(x + 4.5f + i), top = ndcY(y + 4.5f + j);
+    float right = ndcX(x + 12.5f + i), bottom = ndcY(y + 12.5f + j);
+    FloatVertex* v = vertices + cell * 6;
+    v[0] = (FloatVertex){0, 0, 0xffffffff, left, top, 0};
+    v[1] = (FloatVertex){0, 0, 0xffffffff, right, top, 0};
+    v[2] = (FloatVertex){0, 0, 0xffffffff, left, bottom, 0};
+    v[3] = (FloatVertex){0, 0, 0xffffffff, right, top, 0};
+    v[4] = (FloatVertex){0, 0, 0xffffffff, right, bottom, 0};
+    v[5] = (FloatVertex){0, 0, 0xffffffff, left, bottom, 0};
+  }
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 256 * 6, 0, vertices);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//A wall receding under the lens, from z -1 at its left edge to z -4 at its right, the texture (texel (x, y) is
+//x | y << 8 | 0x80 << 16) across it from u 0 to 1: perspective-correct texels stepped along x, where the floor
+//(3d-floor-texels, 291 pixels a texel off) steps them along y.
+static void wall3D(const char* name) {
+  if(!beginTest(name)) return;
+  fillTexture(texelXY);
+  start3D(&lens, 1);
+  useTexture(GU_TFX_REPLACE, GU_TCC_RGB);
+  FloatVertex* v = sceGuGetMemory(6 * sizeof(FloatVertex));
+  v[0] = (FloatVertex){0, 0, 0xffffffff, -1, 1, -1};
+  v[1] = (FloatVertex){1, 0, 0xffffffff, 1, 1, -4};  //at w 4: x 0.25, y 0.25 on the screen
+  v[2] = (FloatVertex){0, 1, 0xffffffff, -1, -1, -1};
+  v[3] = (FloatVertex){1, 0, 0xffffffff, 1, 1, -4};
+  v[4] = (FloatVertex){1, 1, 0xffffffff, 1, -1, -4};
+  v[5] = (FloatVertex){0, 1, 0xffffffff, -1, -1, -1};
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 6, 0, v);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Round 2's 3D sprite (3d-sprite, where neither the core's rule nor PPSSPP's held) taken apart: the same sprite under
+//the lens, from (-0.9, 0.9) at nearZ to (0.9, -0.8) at farZ, white; with the texture (modulated) or not, and fog
+//(near 1, far 4, blue) or not.
+static void sprite3DParts(const char* name, int textured, int fogged, float nearZ, float farZ) {
+  if(!beginTest(name)) return;
+  fillTexture(texelXY);
+  start3D(&lens, 1);
+  if(textured) useTexture(GU_TFX_MODULATE, GU_TCC_RGB);
+  if(fogged) {
+    sceGuEnable(GU_FOG);
+    sceGuFog(1, 4, 0xff0000);
+  }
+  FloatVertex* v = sceGuGetMemory(2 * sizeof(FloatVertex));
+  v[0] = (FloatVertex){0, 0, 0xffffffff, -0.9f, 0.9f, nearZ};
+  v[1] = (FloatVertex){1, 1, 0xffffffff, 0.9f, -0.8f, farZ};
+  sceGuDrawArray(GU_SPRITES, FloatVertexType3D, 2, 0, v);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//-- curved surfaces
+
+//A 4x4 grid of control points in 3D (identity matrices), flat or curved: the curved one's edges bow out, and its
+//middle points twist, so the surface's shape and its colors both show.
+static const float flatGrid[4][4][2] = {
+  {{-0.75f, 0.75f}, {-0.25f, 0.75f}, {0.25f, 0.75f}, {0.75f, 0.75f}},
+  {{-0.75f, 0.25f}, {-0.25f, 0.25f}, {0.25f, 0.25f}, {0.75f, 0.25f}},
+  {{-0.75f, -0.25f}, {-0.25f, -0.25f}, {0.25f, -0.25f}, {0.75f, -0.25f}},
+  {{-0.75f, -0.75f}, {-0.25f, -0.75f}, {0.25f, -0.75f}, {0.75f, -0.75f}},
+};
+static const float curvedGrid[4][4][2] = {
+  {{-0.75f, 0.75f}, {-0.25f, 0.875f}, {0.25f, 0.875f}, {0.75f, 0.75f}},
+  {{-0.875f, 0.25f}, {-0.125f, 0.125f}, {0.375f, 0.375f}, {0.875f, 0.25f}},
+  {{-0.875f, -0.25f}, {-0.375f, -0.375f}, {0.125f, -0.125f}, {0.875f, -0.25f}},
+  {{-0.75f, -0.75f}, {-0.25f, -0.875f}, {0.25f, -0.875f}, {0.75f, -0.75f}},
+};
+
+//The curved surfaces (the core doesn't draw them yet): the grid, each control point a color of its own, as a Bezier
+//patch (edges -1) or a spline whose edge types are edges for both directions (SPLINE's bits 16-19, which pspsdk
+//passes on as given: which value means an open or closed edge is for the PSP to show), cut into divisions x
+//divisions pieces (PATCH_DIVISION) drawn as triangles.
+static void patch(const char* name, const float grid[4][4][2], int divisions, int edges) {
+  if(!beginTest(name)) return;
+  start3D(&identity, 1);
+  FloatVertex* v = sceGuGetMemory(16 * sizeof(FloatVertex));
+  for(int j = 0; j < 4; j++) {
+    for(int i = 0; i < 4; i++) {
+      unsigned int color = 0xff000000u | (i * 85) | (j * 85) << 8 | ((3 - i) * 85) << 16;
+      v[j * 4 + i] = (FloatVertex){i, j, color, grid[j][i][0], grid[j][i][1], 0};
+    }
+  }
+  sceGuPatchDivide(divisions, divisions);
+  sceGuPatchPrim(GU_TRIANGLE_STRIP);
+  if(edges < 0) sceGuDrawBezier(FloatVertexType3D, 4, 4, 0, v);
+  else sceGuDrawSpline(FloatVertexType3D, 4, 4, edges, edges, 0, v);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//-- the depth buffer's layout
+
+//Round 2's floor depths didn't read back where the program looked. Here every pixel of a 256x64 area gets a depth
+//of its own, y * 256 + x (a point in through mode, the depth test passing always and writing), over a depth buffer
+//filled with 0xffff; then the whole depth buffer (512x256 values) is read back through VRAM copy `copy`
+//(0x04000000 + copy * 0x200000, uncached), so wherever in it the values land and however that copy arranges them,
+//they're in the file. The depth range is set here, full, since a retried case can be the first to draw after
+//sceGuInit (which leaves it 0 to 0). Last in the round: no program here has read VRAM's other copies on a PSP before.
+static void depthLayout(const char* name, int copy) {
+  if(!beginTest(name)) return;
+  for(int n = 0; n < Stride * 256; n++) VRAM16[Depth / 2 + n] = 0xffff;
+  start(GU_PSM_8888);
+  sceGuDepthRange(65535, 0);
+  sceGuEnable(GU_DEPTH_TEST);
+  sceGuDepthFunc(GU_ALWAYS);
+  sceGuDepthMask(GU_FALSE);
+  Vertex* v = sceGuGetMemory(256 * 64 * sizeof(Vertex));
+  for(int y = 0; y < 64; y++) {
+    for(int x = 0; x < 256; x++) v[y * 256 + x] = (Vertex){0, 0, 0xffffffff, x, y, y * 256 + x, 0};
+  }
+  sceGuDrawArray(GU_POINTS, VertexType, 256 * 64, 0, v);
+  finishList();
+  volatile unsigned short* depths = (volatile unsigned short*)(0x44000000 + copy * 0x200000 + Depth);
+  for(int half = 0; half < 2; half++) {  //pixels holds 512x128 words at a time
+    for(int n = 0; n < Stride * 128; n++) pixels[n] = depths[half * Stride * 128 + n];
+    if(!writeOut(&current, name, pixels, Stride * 128 * 4)) {
+      failed = 1;
+      return;
+    }
+  }
+  if(!finish(&current, name)) failed = 1;
+}
+
+static void writeManifest3(void) {
+  char path[320];
+  snprintf(path, sizeof(path), "%s/manifest3.txt", folder);
+  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if(file < 0) return;
+  static const char text[] =
+    "psp-measure's GE tests, round 3 (tools/psp-measure/ge.c in Phobos says what each test draws): each .bin is the\n"
+    "target's pixels after one test, a little-endian 32-bit word each, row by row, 256x256; but depth-layout-<n>,\n"
+    "the whole depth buffer, 512x256 16-bit values (in the low half), read through VRAM copy n\n"
+    "(0x04000000 + n * 0x200000) after each pixel (x, y) of a 256x64 area was given depth y * 256 + x over 0xffff.\n"
+    "light-*: 16x16 cells of one lit color each; normals with cosines known exactly (Pythagorean triples and\n"
+    "quadruples), levels 255 254 253 200 192 129 128 127 100 64 63 33 32 16 8 1 (the cases are in ge.c).\n"
+    "ramp-*: 16 bands, each a ramp of color (or fog) over its own width. 3d-*: drawn through the matrices.\n"
+    "bezier-*, spline-*: curved surfaces from a 4x4 grid of control points.\n"
+    "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
+  sceIoWrite(file, text, sizeof(text) - 1);
+  sceIoClose(file);
+}
+
+static void round3(void) {
+  writeManifest3();
+  lightCosines("light-cosines");
+  lightPowered("light-powered");
+  lightShine("light-shine");
+  lightMaterials("light-materials");
+  lightColors("light-colors");
+  lightAmbient("light-ambient");
+  rampColors("ramp-colors", 0);
+  rampColors("ramp-colors-vertical", 1);
+  rampColors3D("ramp-colors-3d");
+  rampFog("ramp-fog");
+  roundingMiddle3D("3d-rounding-middle");
+  wall3D("3d-wall-texels");
+  sprite3DParts("3d-sprite-fog", 0, 1, -1, -4);
+  sprite3DParts("3d-sprite-texels", 1, 0, -1, -4);
+  sprite3DParts("3d-sprite-flat", 1, 1, -2, -2);
+  patch("bezier-flat", flatGrid, 4, -1);
+  patch("bezier-curved", curvedGrid, 4, -1);
+  patch("bezier-divide-8", curvedGrid, 8, -1);
+  patch("spline-edges-0", curvedGrid, 4, 0);
+  patch("spline-edges-3", curvedGrid, 4, 3);
+  for(int copy = 0; copy < 4; copy++) {
+    char name[32];
+    snprintf(name, sizeof(name), "depth-layout-%d", copy);
+    depthLayout(name, copy);
+  }
+}
+
 //---- the rounds
 
 static int guReady;  //whether sceGuInit has set the GE up: once, on the first round, kept until geEnd
 
-//A round of the GE's tests into results/ge (so far only round 2, the first). Returns 0 if something couldn't be
-//written.
-int geRound(int round) {
-  if(round != 2) return 1;
-  if(!guReady) {
-    sceGuInit();
-    guReady = 1;
-  }
-  useFolder("ge");
-  failed = 0;
+//Round 2, the GE's first tests, and the controller's timing.
+static void round2(void) {
   writeManifest();
   blend("blend-source", colorX_alphaY, zero, GU_ADD, GU_SRC_ALPHA, GU_FIX, 0, 0);
   blend("blend-destination", black_alphaY, colorX, GU_ADD, GU_FIX, GU_SRC_ALPHA, 0, 0);
@@ -885,6 +1359,19 @@ int geRound(int round) {
   lightPoint("light-point");
   lightEnvironment("light-environment");
   controllerTiming("controller-timing");
+}
+
+//A round of the GE's tests (2 or 3) into results/ge. Returns 0 if something couldn't be written.
+int geRound(int round) {
+  if(round != 2 && round != 3) return 1;
+  if(!guReady) {
+    sceGuInit();
+    guReady = 1;
+  }
+  useFolder("ge");
+  failed = 0;
+  if(round == 2) round2();
+  else round3();
   return !failed;
 }
 

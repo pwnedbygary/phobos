@@ -39,6 +39,7 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
    - Round 3: the VFPU and the FPU (about 6 MB)
+   - Round 3: the GE (about 7 MB)
    - The FPU probes
    - Round 2 again: the VFPU and the FPU (about 230 MB)
    - Round 2 again: the GE and the controller (about 15 MB)
@@ -139,11 +140,31 @@ words and a `manifest.txt`, about 15 MB, in a few seconds. These are round 2's, 
 - **Lighting:** diffuse and the shine across the angles; a spotlight's pool with its direction either way; a point
   light's fading; environment mapping's texture coordinates.
 
+Round 3 (about 7 MB, `manifest3.txt`) takes what round 2 left open (docs/psp-core.md, "Results from the user's
+PSP"), one 256x256 picture per case but the depth buffer's:
+
+- **Lighting with cosines known exactly:** normals built from Pythagorean triples and quadruples (such as (3, 0, 4),
+  five long), so each cosine is an exact fraction, scaled and turned in ways the GE must undo; for plain diffuse
+  (`light-cosines`, also with the light's direction 3 long), powered diffuse (`light-powered`, the GE's light kind
+  2, which round 2 didn't use) and the shine (`light-shine`), at powers 1 and 2; and material, light and ambient
+  colors at levels where rounding shows (`light-materials`, `light-colors`, `light-ambient`).
+- **Colors and fog stepped across a primitive:** 16 ramps at slopes from shallow to steep, in through mode along x
+  and along y, in 3D with corners between pixels (as a triangle cut at the near plane has), and fog ramps in 3D
+  with no perspective (`ramp-*`).
+- **3D:** edges just past the pixel middle, where the GE's rounding onto the screen decides a pixel
+  (`3d-rounding-middle`); a wall receding along x (`3d-wall-texels`); round 2's 3D sprite taken apart into its fog
+  alone, its texels alone, and both at one depth (`3d-sprite-*`).
+- **Curved surfaces:** a 4x4 grid of control points as Bézier patches, flat, curved and cut finer, and as splines
+  with either edge type (`bezier-*`, `spline-*`). The core doesn't draw these yet.
+- **The depth buffer's layout:** every pixel of a 256x64 area given a depth of its own, read back through each of
+  VRAM's four copies (`depth-layout-0` to `-3`, the whole depth buffer's 512x256 values each). Last, as no program
+  here has read VRAM's other copies on a PSP before.
+
 ### How the GE's comparison works
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its
-menu as a person would (the GE's tests, starting afresh, the tests again, the probes, leaving), and checks every file
-is written; with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder
+menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, leaving), and checks
+every file is written; with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder
 (`PSP_GE_OURS` keeps the core's own files for a closer look):
 
 ```
@@ -151,8 +172,8 @@ tools/psp-test-programs/build.sh /tmp/programs   # builds pspmeasure.elf among t
 PSP_TEST_PROGRAMS=/tmp/programs PSP_GE_RESULTS=<results folder>/ge tests/psp/run-tests.sh
 ```
 
-Against PPSSPP's software renderer (its headless build running the `SMOKE` version), 61 of the 64 files match. The
-ones that differ are the questions for the PSP:
+Against PPSSPP's software renderer (its headless build running the `SMOKE` version), 61 of round 2's 64 files
+matched when they were written. The ones that differed were the questions for the PSP:
 
 - a sprite whose right or bottom edge runs exactly through pixel middles;
 - which texel a shrunk sprite takes (the core samples a sprite at each pixel's middle, PPSSPP 7/16 in);
@@ -164,5 +185,11 @@ The user's PSP has answered these and more (docs/psp-core.md, "Results from the 
 are sampled at each pixel's middle, a sprite's left edge reaching a sixteenth further left. Texture coordinates are
 stepped from a primitive's leftmost corner. The spotlight points toward the light, as PPSSPP reads it. With the
 core fixed to match (the filter's rounding and the near-plane cut too), 52 of the 63 pictures are identical to the
-PSP's. The findings go into [docs/psp-core.md](../../docs/psp-core.md), under "Measuring the GE and the controller
-on a PSP".
+PSP's.
+
+For round 3, PPSSPP and the core agree on all six lighting cases (the core's lighting follows PPSSPP's reading), the
+3D sprite at one depth, and the four depth-layout reads (both read VRAM's copies alike). They differ on the ramps,
+the edges near the pixel middle, the wall's texels, and the 3D sprite's fog and texels, where the core now samples
+and steps as round 2 showed the PSP does, or neither is measured yet; and on the curved surfaces, which the core
+doesn't draw. The PSP's files will say which is right. The findings go into
+[docs/psp-core.md](../../docs/psp-core.md), under "Measuring the GE and the controller on a PSP".

@@ -594,9 +594,9 @@ VFPU on a PSP" says). It draws each case into VRAM, reads the pixels back as the
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in this core (with
 `PSP_TEST_PROGRAMS`), through its menu as a person would: the GE's tests; starting afresh; the tests again, which
-must draw the same; a third time, which must skip them all; the FPU probes; and leaving. It checks that every file is
-written, and with `PSP_GE_RESULTS` set to a results folder (`results/ge`) lists what differs from it (`PSP_GE_OURS`
-keeps this core's files for a closer look). Against PPSSPP's software renderer (its
+must draw the same; a third time, which must skip them all; the GE's round 3; the FPU probes; and leaving. It
+checks that every file is written, and with `PSP_GE_RESULTS` set to a results folder (`results/ge`) lists what
+differs from it (`PSP_GE_OURS` keeps this core's files for a closer look). Against PPSSPP's software renderer (its
 headless build running the smoke version), 61 of the 64 files match: 60 pictures identical, and the controller's
 timing agreeing on what waits (a second latch read doesn't, a buffer read after a vertical blank doesn't either, and a
 second buffer read waits a frame). The three that differ are the PSP's to settle:
@@ -702,18 +702,44 @@ buffer's layout. These files don't pin the rest down:
 - Lighting fits neither PPSSPP's arithmetic (colors as 2c + 1, a share in 512ths rounded up) nor any of the simple
   alternatives tried (other encodings of the colors, shares in 256ths to 65536ths rounded each way): the best still
   misses about 60 of the 768 values in `light-diffuse`. The PSP's cosine itself seems to come out a little off, low
-  in some cells and high in others (by up to about 0.3%), as an approximate normalization would; a third round can
-  tell, with normals whose cosines are exact and several material colors.
+  in some cells and high in others (by up to about 0.3%), as an approximate normalization would; round 3 (below)
+  can tell, with normals whose cosines are exact and several material colors. (These cases were plain diffuse,
+  the GE's light kind 0: pspsdk's `sceGuLight` turns `GU_DIFFUSE` into kind 0, and only `GU_POWERED_DIFFUSE` (8)
+  into kind 2, the powered diffuse.)
 - Colors across the clipped triangle and fog across the floor are a level off in scattered pixels, whose values
   land on or near a whole level: like the texture coordinates' short steps, but stepping the colors the same way (in
   65536ths or 256ths) doesn't reproduce them. Cases with a single color ramp across a triangle, at several slopes,
-  would show how the GE steps colors.
+  would show how the GE steps colors (round 3's ramps).
 
 The open questions above, settled: a sprite edge through pixel middles follows neither the core nor PPSSPP (the rule
 above); a shrunk sprite's texels follow neither, PPSSPP's nearer; a 3D sprite's fog follows neither; the spotlight's
 direction is PPSSPP's reading; a second latch read doesn't wait. Next: fit each rule from these files (the coverage
 and sample points, the rounding onto the screen, interpolation, the filter, lighting's rounding, the depth layout),
 one at a time, each fix checked against them.
+
+#### Round 3, ready for the PSP
+
+What these files couldn't settle is round 3's GE line on the menu (about 7 MB, `results/ge`, `manifest3.txt`;
+`tools/psp-measure/ge.c` and its README say what each case draws):
+
+- **Lighting with cosines known exactly:** normals built from Pythagorean triples and quadruples, so each cosine is
+  an exact fraction, also scaled (by 2, 1/2, 64, 1/64) and turned toward y, with the light's direction 1 and 3
+  long; plain diffuse, powered diffuse (kind 2, never measured) and the shine at powers 1 and 2; material, light and
+  ambient colors at levels where rounding shows. Whether the cosine or the color arithmetic is off will show apart.
+- **Color and fog ramps:** 16 slopes each, in through mode along x and along y, in 3D with corners between pixels,
+  and fog in 3D without perspective.
+- **3D:** edges 0 to 15 256ths past the pixel middle (`3d-rounding-middle`), which tells truncation to the sixteenth
+  from rounding; a wall receding along x, for perspective-correct texels in the other direction; round 2's 3D sprite
+  as its fog alone, its texels alone, and both at one depth.
+- **Curved surfaces:** Bézier patches (flat, curved, cut 4x4 and 8x8) and splines with edge types 0 and 3, for when
+  the core draws them.
+- **The depth buffer's layout:** each pixel of a 256x64 area given its own depth, read back through each of VRAM's
+  four copies, so the copy that reads depth in its plain order, if one does, shows.
+
+The core already agrees with PPSSPP's software renderer on the six lighting cases, the flat 3D sprite and the four
+depth reads, and differs on the ramps, the 3D edges, the wall's texels and the sprite's fog and texels, where it now
+samples and steps as round 2 showed, or neither is measured yet, and on the curved surfaces, which the core doesn't
+draw: the PSP's files will say which is right.
 
 ## Part 11: drawing in 3D
 
