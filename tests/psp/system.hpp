@@ -45,5 +45,6 @@ struct System : Allegrex {
 
 auto memoryTests() -> Tests;
 auto loaderTests() -> Tests;
+auto kernelTests() -> Tests;
 
 }

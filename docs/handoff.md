@@ -742,6 +742,22 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 7: the first HLE functions — 2026-10-03
+
+Branch `cursor/psp-hle-2b67`, stacked on `cursor/psp-loader-2b67`: `ares/psp/kernel/` gets the HLE kernel. NIDs
+are computed from names (SHA-1; all 46 of hello world's imports matched pspsdk's names), 54 functions (threads,
+semaphores, lightweight mutexes, memory, standard output, display, exit), a priority scheduler with saved contexts,
+and a clock at 333 MHz with the vertical blank. pspdev's hello world (now also printing to standard output, which
+the tests read) runs from start to end on the host, as a static executable, a PRX and an EBOOT, on both engines.
+Error codes pspsdk lacks come from uOFW's `errors.h` (recollected values were wrong, and corrected before commit).
+A second Bugbot review (its full answer read, as the user asked for every review; the returned summary showed one
+of the three) found start arguments copied past a thread's stack or from bad addresses, and the program's memory
+reserved elsewhere when taken; a third, that loading after an exit ran nothing and a failed load left memory
+reserved (load() now starts afresh, and resets again if it fails); a fourth, the program's path passed to its first
+thread without the same check (now up to 4 KiB): all fixed, with tests the old code fails. Checks: 22 groups on the Mac (UBSan) and in
+`phobos-linux` (GCC 13, ASan and UBSan, with the real programs); four broken versions each failed. Next: files
+(`sceIo*` on a host folder), controls, then the GE (phase 5).
+
 ## PSP core, part 6: the loader — 2026-10-03
 
 Branch `cursor/psp-loader-2b67`, stacked on `cursor/psp-memory-2b67`: `ares/psp/kernel/loader.cpp` loads static
