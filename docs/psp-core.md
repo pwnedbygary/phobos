@@ -538,8 +538,8 @@ turns that one check off (`ASAN_OPTIONS`); the run takes 95 seconds.
 The rules above that came from PPSSPP or uOFW rather than from measurements of our own are what
 `tools/psp-ge-measure` records on a real PSP. Like the VFPU's program it's homebrew built with pspdev's toolchain
 (`make SMOKE=1` builds a version for an emulator, which starts at once and leaves when done). It draws each case into
-VRAM, reads the pixels back as they are and writes them to `results/` beside its EBOOT.PBP: 51 files, about 13 MB, in
-a few seconds. The cases:
+VRAM, reads the pixels back as they are and writes them to `results/` beside its EBOOT.PBP: 59 result files and a
+manifest, about 15 MB, in a few seconds. The cases:
 
 - every blend operation and factor, over every source color and alpha;
 - the texture functions, every vertex color against every texel, with alpha and doubling;
@@ -552,19 +552,31 @@ a few seconds. The cases:
 - colors across triangles, and the texel each pixel takes when a texture is shrunk or stretched, as a sprite and as
   triangles;
 - the controller's timing: whether a second `sceCtrlReadLatch`, a `sceCtrlReadBufferPositive` just after a vertical
-  blank, and a second `sceCtrlReadBufferPositive` wait.
+  blank, and a second `sceCtrlReadBufferPositive` wait;
+- in 3D (part 11): a floor receding in perspective, for the texel each pixel takes, the depths written and the fog
+  across it; a 3D sprite whose corners lie at different depths, textured and fogged; the GE's rounding onto the
+  screen (edges moved in 256ths of a pixel past a sample point); a triangle cut at the near plane, with
+  DEPTH_CLIP_ENABLE on and off; which depths stop triangles, points and sprites, with it on and off; and culling
+  either way, in 3D and through mode.
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in this core (with
 `PSP_TEST_PROGRAMS`), checks that every file is written, and with `PSP_GE_RESULTS` set to a results folder lists what
 differs from it (`PSP_GE_OURS` keeps this core's files for a closer look). Against PPSSPP's software renderer (its
-headless build running the smoke version), 49 of the 51 files are identical, the controller's timing included: a
-second latch read doesn't wait, a buffer read after a vertical blank doesn't either, and a second buffer read waits a
-frame. The two that differ are the PSP's to settle:
+headless build running the smoke version), 56 of the 59 files match: 55 pictures identical, and the controller's
+timing agreeing on what waits (a second latch read doesn't, a buffer read after a vertical blank doesn't either, and a
+second buffer read waits a frame). The three that differ are the PSP's to settle:
 
 - a sprite whose right or bottom edge runs exactly through pixel middles (127 pixels): this core draws them, while
   PPSSPP draws them or not depending on where the other corners are, in code its authors mark as unverified;
 - a shrunk sprite's texels (4240 pixels, a texel apart): this core takes a sprite's texture coordinates at each
-  pixel's middle, PPSSPP at 7/16 in, as for triangles.
+  pixel's middle, PPSSPP at 7/16 in, as for triangles;
+- the 3D sprite's fog (10152 pixels): this core takes the second corner's fog for the whole sprite, while PPSSPP
+  splits it across the sprite's middle (which, its comments say, seems to be the way).
+
+The 3D cases found one difference that was this core's to fix: a triangle cut at the near plane had 7292 pixels a
+level apart from PPSSPP's, because the cut's corners were blended from the other end of the edge, and their colors'
+256ths rounded the other way (part 11 now blends them from the corner past the plane). An earlier count here, "49 of
+the 51 files", miscounted: it was 48 of 50, the 51st file being the manifest.
 
 ## Part 11: drawing in 3D
 
