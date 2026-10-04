@@ -8,7 +8,8 @@
 //results of each math function the core computes exactly (vrcp, vnrcp, vrsq, vsqrt, vexp2, vrexp2, vsin, vnsin,
 //vcos, vasin: the *-spread-16k files, which start the full *-spread files); and vlog2, except from 4 up, where the
 //PSP sometimes gives one unit less than the core (its spread-out results, and every 1024th result from 1/2 up to
-//2). vdot's file is kept for when the core sums its products as the PSP does.
+//2). vdot's file is kept for when the core sums its products as the PSP does. From round 2: div and divu on 8192
+//pairs, dividing by zero included.
 
 #include "harness.hpp"
 
@@ -131,6 +132,27 @@ static auto measuredSweep(const char* name, uint32_t instruction, uint32_t first
   CHECK(exact, hardware.size());
 }
 
+//ipu-divide.bin (round 2): per pair, a and b, then div's lo and hi, then divu's lo and hi. The first 1024 pairs are
+//32 chosen numbers each with each (zero, the most negative number and -1 among them), the rest spread out.
+static auto measuredDivide() -> void {
+  auto hardware = loadMeasured("ipu-divide.bin");
+  CHECK(hardware.size(), 8192u * 6);
+  if(hardware.size() != 8192u * 6) return;
+  Machine m;
+  m.cpu.power(Base);
+  uint32_t exact = 0;
+  for(uint32_t pair = 0; pair < 8192; pair++) {
+    const uint32_t* p = &hardware[pair * 6];
+    m.cpu.ipu.r[t0] = p[0];
+    m.cpu.ipu.r[t1] = p[1];
+    m.cpu.execute(Base, div_(t0, t1));
+    bool same = m.cpu.ipu.lo == p[2] && m.cpu.ipu.hi == p[3];
+    m.cpu.execute(Base, divu(t0, t1));
+    exact += same && m.cpu.ipu.lo == p[4] && m.cpu.ipu.hi == p[5];
+  }
+  CHECK(exact, 8192u);
+}
+
 auto measured() -> void {
   if(!std::getenv("ALLEGREX_MEASURED")) {
     std::printf("(no ALLEGREX_MEASURED folder: run-tests.sh sets it)\n");
@@ -155,6 +177,7 @@ auto measured() -> void {
   auto belowFour = [](uint32_t x) { return x < 0x4080'0000 || x >= 0x7f80'0000; };  //all but positive x >= 4
   measuredFunction("vlog2-spread-16k.bin", 0xd0158081, 7, belowFour);
   measuredSweep("vlog2-half-2-1k.bin", 0xd0158081, 0x3f00'0000);
+  measuredDivide();
 }
 
 }

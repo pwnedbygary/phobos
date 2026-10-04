@@ -742,6 +742,21 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the VFPU's matrices and divu by zero, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-vfpu-fixes-2b67`, stacked on `cursor/psp-measured-2b67` (for stack #106). The first two fixes
+from round 2 (docs/psp-vfpu-measurements.md):
+- `vmmul` is rs turned on its side times rt (rd[r][c] = the sum of rs[k][r] * rt[k][c]), and `vtfm`/`vhtfm` dot the
+  matrix's columns with the vector (ares/psp/cpu/interpreter-vfpu.cpp). Replayed against the recorder, every run
+  without a NaN or infinity in its inputs now matches up to the adders' rounding (it differed in 59-64 of 64 before).
+  The matrix test's second matrix isn't symmetric any more (twice the identity hid the order), and a case is
+  encoded as pspdev's assembler encodes `vmmul` (rs transposed).
+- `divu` by zero gives lo 0xffff for a dividend below 0x10000 (interpreter-ipu.cpp). `ipu-divide.bin` is in
+  tests/allegrex/measured/ (xz, 100 KB), and the measured test group replays its 8192 pairs.
+
+Checks: Allegrex tests 54 groups (interpreter and recompiler), PSP system tests 84 groups with the test programs;
+the old `vmmul` order and a wrong `divu` boundary (0x8000) each fail the tests.
+
 ## PSP core: the user's measurements, round 2 and the GE — 2026-10-04
 
 Branch `cursor/psp-measured-2b67`, stacked on `cursor/psp-vfpu-awake-2b67` (for stack #106). The user ran VFPU

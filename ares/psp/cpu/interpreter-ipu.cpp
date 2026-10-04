@@ -163,9 +163,10 @@ auto Allegrex::CLZ(u32& rd, cu32& rs) -> void {
 }
 
 //Division puts the quotient in lo and the remainder in hi, rounding toward zero (-7 / 2 is -3, remainder -1).
-//Dividing by zero doesn't fault on MIPS; this gives what MIPS chips commonly do (not yet checked on a PSP): lo
-//becomes -1 for a positive dividend and 1 for a negative one, hi the dividend. The most negative number divided by
-//-1 doesn't fit either, and gives itself, remainder 0.
+//Dividing by zero doesn't fault. What a PSP gives then (measured, docs/psp-vfpu-measurements.md, round 2): div's lo
+//is -1 for a dividend of 0 or more and 1 for a negative one; divu's lo is 0xffff for a dividend below 0x10000 and
+//0xffffffff from there up; hi is the dividend for both. The most negative number divided by -1 doesn't fit either,
+//and gives itself, remainder 0.
 auto Allegrex::DIV(cs32& rs, cs32& rt) -> void {
   if(rt == 0) {
     ipu.lo = rs < 0 ? 1 : -1;
@@ -181,7 +182,7 @@ auto Allegrex::DIV(cs32& rs, cs32& rt) -> void {
 
 auto Allegrex::DIVU(cu32& rs, cu32& rt) -> void {
   if(rt == 0) {
-    ipu.lo = -1;
+    ipu.lo = rs < 0x10000 ? 0xffff : 0xffff'ffff;
     ipu.hi = rs;
   } else {
     ipu.lo = rs / rt;
