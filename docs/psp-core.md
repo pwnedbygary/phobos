@@ -154,7 +154,9 @@ ReservedInstruction until part 2.
 
 Not checked against hardware: the result of dividing by zero (it gives what MIPS cores commonly do: `lo` = −1 or 1
 by the dividend's sign, `hi` = the dividend), FPU arithmetic in rounding modes other than nearest (the host's
-nearest is used), and conversions of NaN or out-of-range values (0x7fffffff, MIPS's default).
+nearest is used), and conversions of NaN or out-of-range values (0x7fffffff, MIPS's default). (Since measured:
+division by zero in round 2; in round 3, the PSP's arithmetic follows each rounding mode, and its conversions give
+0x80000000 for negative numbers out of range and -infinity. See psp-vfpu-measurements.md.)
 
 Tests: `tests/allegrex/run-tests.sh` (14 groups, with the undefined-behavior sanitizer; on Linux the address
 sanitizer too, which the PSP Core Tests workflow runs for changes to `ares/psp/`, nall or ares's types).
@@ -606,7 +608,8 @@ second buffer read waits a frame). The three that differ are the PSP's to settle
 - a shrunk sprite's texels (4240 pixels, a texel apart): this core takes a sprite's texture coordinates at each
   pixel's middle, PPSSPP at 7/16 in, as for triangles;
 - the 3D sprite's fog (10152 pixels): this core takes the second corner's fog for the whole sprite, while PPSSPP
-  splits it across the sprite's middle (which, its comments say, seems to be the way).
+  splits it across the sprite's middle (which, its comments say, seems to be the way). (Since measured: the PSP
+  splits it as PPSSPP does; see "Round 3's results".)
 
 The 3D cases found one difference that was this core's to fix: a triangle cut at the near plane had 7292 pixels a
 level apart from PPSSPP's, because the cut's corners were blended from the other end of the edge, and their colors'
@@ -667,7 +670,8 @@ What the data already says:
 - **The depth buffer doesn't read back in the order the program assumed:** none of the floor's 15264 depths match,
   9616 of them read 0, and 2080 pixels off the floor read something. The PSP's depth buffer is evidently arranged
   differently in VRAM when the CPU reads it at its normal address (PPSSPP reads depth through a separate mirror),
-  so this file needs that layout worked out before it says anything about depths.
+  so this file needs that layout worked out before it says anything about depths. (Round 3 worked it out: see
+  "Round 3's results".)
 - **With DEPTH_CLIP_ENABLE off, a triangle reaching past the near plane isn't drawn at all**, as the core has it
   (`3d-clip-unclamped` is empty on both).
 
@@ -712,10 +716,11 @@ buffer's layout. These files don't pin the rest down:
   would show how the GE steps colors (round 3's ramps).
 
 The open questions above, settled: a sprite edge through pixel middles follows neither the core nor PPSSPP (the rule
-above); a shrunk sprite's texels follow neither, PPSSPP's nearer; a 3D sprite's fog follows neither; the spotlight's
-direction is PPSSPP's reading; a second latch read doesn't wait. Next: fit each rule from these files (the coverage
-and sample points, the rounding onto the screen, interpolation, the filter, lighting's rounding, the depth layout),
-one at a time, each fix checked against them.
+above); a shrunk sprite's texels follow neither, PPSSPP's nearer; a 3D sprite's fog and texels together follow
+neither (round 3 took them apart: the fog is PPSSPP's split, the texels neither's); the spotlight's direction is
+PPSSPP's reading; a second latch read doesn't wait. Next: fit each rule from these files (the coverage and sample
+points, the rounding onto the screen, interpolation, the filter, lighting's rounding, the depth layout), one at a
+time, each fix checked against them.
 
 #### Round 3, ready for the PSP
 
@@ -741,6 +746,51 @@ depth reads, and differs on the ramps, the 3D edges, the wall's texels and the s
 samples and steps as round 2 showed, or neither is measured yet, and on the curved surfaces, which the core doesn't
 draw: the PSP's files will say which is right.
 
+#### Round 3's results (2026-10-04)
+
+The user ran round 3 on the same PSP, and round 2 again: all 63 of round 2's pictures came out identical to the first
+session's, byte for byte. The SHA-256 of round 3's 24 files and its manifest are in
+[`tests/psp/measured/`](../tests/psp/measured/) (`SHA256SUMS3`, `manifest3.txt`); the files stay outside the
+repository. Against the core (`tests/psp/measure.cpp` with `PSP_GE_RESULTS`):
+
+- **`light-ambient` is identical:** two colors multiplied (the light's ambient by the material's) round as the core
+  has it.
+- **`light-cosines` is identical but for 2 of its 256 cells:** with exact cosines and white light on white, plain
+  diffuse is the core's arithmetic, but for the cosine 7/25 (twice), where 255 × 0.28 = 71.4 comes out 71 on the PSP
+  and 72 in the core. So round 2's white-light cases (the shine, the spotlight, the point light) were apart mostly
+  for their cosines, which the PSP works out a little differently from inexact normals; `light-diffuse`, on the
+  material (255, 64, 192), for its cosines and its color arithmetic both, as `light-materials` shows.
+- **`light-powered` and `light-shine` differ in 15 cells each, `light-materials` and `light-colors` in 61 each:**
+  every one a level lower on the PSP, where the core's arithmetic (PPSSPP's) rounds up.
+- **The ramps:** `ramp-colors`, `ramp-colors-vertical`, `ramp-colors-3d` and `ramp-fog` are a level apart in 1359 to
+  18976 pixels, the PSP lower but for the vertical ramps (both ways): how the GE steps colors and fog.
+- **`3d-rounding-middle` settles the rounding onto the screen:** the GE truncates a position's offset from screen
+  coordinate 2048 to the sixteenth, toward 2048. Left of and above it, an edge a few 256ths past a pixel's middle is
+  moved further past it, so the pixel isn't drawn; right of and below it, the edge comes back onto the middle, so the
+  pixel is (left and top edges counting). Every one of the 256 cells of both pixels the case watches fits; rounding
+  to the nearest sixteenth, or up from 0.625 of one (PPSSPP, and the core now), doesn't. Here 2048 is also the
+  viewport's center and the middle of the GE's 4096-wide space: a case with another viewport center would tell which
+  the GE truncates toward.
+- **`3d-wall-texels`:** 307 pixels a texel apart, like the floor's 291 (perspective-correct texels).
+- **3D sprites:** `3d-sprite-fog` shows the PSP splits a 3D sprite's fog across its middle column, as PPSSPP does
+  (the two files are identical): here the left half takes the far corner's fog (all of it) and the right half the
+  near corner's (none), where the core takes the second corner's for the whole sprite. `3d-sprite-texels` follows
+  neither the core's rule nor PPSSPP's: across x, u / w and 1 / w go from the left corner's values to the right
+  corner's; down y, v / w goes from the top's to the bottom's; each pixel takes (u / w) / (1 / w) and
+  (v / w) / (1 / w), which is within a texel of every one of the 20304 pixels. So down the left edge, where 1/w is
+  the near corner's, v reaches only a quarter of the texture. `3d-sprite-flat` (both corners at one depth, so one
+  fog) is 1108 pixels a level lower on the PSP.
+- **Curved surfaces:** the PSP draws all five. PPSSPP's differ from them: its flat Bézier patch by up to 2 levels in
+  35155 pixels, its curved ones in their outlines too.
+- **The depth buffer's layout:** only VRAM's fourth copy (0x04600000) reads the depth buffer in order, pixel (x, y)
+  at y × 512 + x. The second (0x04200000) spreads each 16-pixel piece of a row to every 32nd column:
+  y × 512 + (x >> 4) × 32 + (x & 15). The first and third (0x04000000, the address programs use, and 0x04400000) also
+  swap the pieces in pairs and the rows in eights: (y ^ 8) × 512 + ((x >> 4) ^ 1) × 32 + (x & 15). Each formula fits
+  all 16384 values. The case drew only the left 256 columns, so where columns 256 to 511 go (most likely the gaps)
+  isn't measured. That's why round 2's `3d-floor-depth`, read at the first copy, didn't come back in order.
+
+Against PPSSPP's software renderer, the PSP agrees only on `light-ambient`, `3d-sprite-fog` and `depth-layout-3`.
+
 ## Part 11: drawing in 3D
 
 `ares/psp/ge/transform.cpp`, and 3D paths in `vertex.cpp`, `draw.cpp` and `pixel.cpp`. Outside through mode:
@@ -749,7 +799,8 @@ draw: the PSP's files will say which is right.
   each weighted by its MORPH_WEIGHT. With skinning (a vertex type with weights), its position and normal go through
   the bone matrices its weights pick, and the results are added up, weighted.
 - **The transform**: the world, view and projection matrices in turn (each element the float its 24-bit DATA word
-  holds), then the viewport and the screen offset, rounded to the sixteenth as the GE rounds (up from 0.625 of one).
+  holds), then the viewport and the screen offset, rounded to the sixteenth as the GE rounds (up from 0.625 of one;
+  the PSP turned out to truncate toward screen coordinate 2048: see "Round 3's results").
 - **What isn't drawn**: a primitive with a vertex off the 4096x4096 screen. Depths outside 0-65535 are held to that
   range with DEPTH_CLIP_ENABLE on, and count as off the screen with it off. A z / w past 1 (by 2^-15) drops a
   triangle or sprite with any such vertex (DEPTH_CLIP_ENABLE off) or with all of them past the same end (on); points

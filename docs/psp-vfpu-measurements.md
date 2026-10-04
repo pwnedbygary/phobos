@@ -1,10 +1,11 @@
 # The PSP's VFPU, measured
 
-What a real PSP's vector unit (the VFPU) computes, recorded so Phobos's PSP core can match it exactly, and shared
-so anyone can check it or build on it. Recorded on the user's PSP (firmware 6.61; the program reported devkit version
-`06060110`) with `tools/psp-vfpu-measure` (since 2026-10-04 the VFPU and FPU half of
+What a real PSP's vector unit (the VFPU), and its FPU, compute, recorded so Phobos's PSP core can match them exactly,
+and shared so anyone can check them or build on them. Recorded on the user's PSP (firmware 6.61; the program reported
+devkit version `06060110`) with `tools/psp-vfpu-measure` (since 2026-10-04 the VFPU and FPU half of
 [`tools/psp-measure`](../tools/psp-measure/vfpu.c)): round 1 on 2026-10-03, round 2 on 2026-10-04 (below, with
-round 1 run again), and compared with the core by [`tools/psp-measure/compare.sh`](../tools/psp-measure/compare.sh).
+round 1 run again), round 3 later that day (with rounds 1 and 2 again), and compared with the core by
+[`tools/psp-measure/compare.sh`](../tools/psp-measure/compare.sh).
 
 ## What was recorded
 
@@ -189,7 +190,9 @@ least one.
   instruction, so it isn't an enabled trap. The likeliest reading is the MIPS "unimplemented operation" exception,
   which can't be masked and expects the operating system to finish the operation in software; the PSP's doesn't,
   for a program. If so, no game can feed those values to those instructions, and what an emulator returns for them
-  matters little. Which values exactly needs a probe that tries them one kind at a time.
+  matters little. Which values exactly needs a probe that tries them one kind at a time. (Round 3 disproved this
+  reading: in the third session both tests finished, no probe stopped the PSP or raised the unimplemented-operation
+  cause, and the results are IEEE's. See "Round 3".)
 - **`vlog2` above 4 loses precision in a way these binades can now pin down:** from 47% to 72% exact, at most 4 ulps
   off. The data is there for the fit (as `fit.py` did for 1 up to 2).
 - **The adders aren't IEEE, even with one term.** A single product (`vdot-one`) is exact only 65% of the time, off by
@@ -254,27 +257,112 @@ least one.
   - **Fixed:** the core takes prefixes this way now (`vrcp`, `vfad`, `vhdp`, `vscl`, and the out-of-range rule for
     the instructions that work lane by lane), with a test of each from a recorded run. The recorder then matches in
     1157 of its 1216 entries; 49 more differ only by the adders' rounding, and the last 10 by the adders' rounding
-    beyond 4 ulps (where terms cancel), and one `vscl` lane whose product rounds up to exactly the smallest normal
-    number, which the PSP gives as 0 (so it may flush before rounding).
+    beyond 4 ulps (where terms cancel), and one `vscl` lane whose product lies just below the smallest normal number,
+    which the PSP gives as 0 and the core, rounding it as an IEEE denormal, as the smallest normal (round 3 explains
+    it: see "Round 3").
   - **Rounding:** the rest are the adders (`vdot`, `vhdp`, `vfad`, `vavg`, `vcrsp`, by an ulp) and `vlog2` above 4
     (by 2), as above.
 
+## Round 3 (2026-10-04)
+
+### What was recorded
+
+A third session ran [`tools/psp-measure`](../tools/psp-measure/README.md), the two programs made one, on the same PSP:
+round 3, the FPU probes, and rounds 1 and 2 again. `manifest3.txt` describes round 3's files and the probes:
+
+- **The FPU as a program finds it** (`fpu-state`): FCSR, its control and status register, and FIR, which says what
+  FPU it is.
+- **The FPU on safe inputs** (`fpu-convert-safe`, `fpu-arith-safe`): the conversions and the arithmetic in each
+  rounding mode, on zeros and normal numbers only.
+- **Products a sliver below the smallest normal number** (`vmul-tiny`): 2^-126 (1 - j² 2^-46) for j from 1 to 4096.
+- **A second recorder list** (`ops3.bin`, `ops3.txt`): 284 entries, the math functions with prefixes, swizzles past an
+  operand's size in instructions that don't work lane by lane, and `vavg` and `vfad` with t prefixes.
+- **Seventeen FPU probes** (`probe-*`), one value each.
+
+And from round 2, **the FPU's conversions and arithmetic in each rounding mode on every kind of input**
+(`fpu-convert`, `fpu-arith`), which had switched the PSP off twice each in the second session, finished this time.
+Why isn't known: the program's FPU tests have cleared FCSR's exception enables around each instruction they measure
+since round 2's first version. Nothing was given up on, and no probe stopped the PSP. Every repeated result file of
+rounds 1 and 2 came out identical to the earlier sessions', byte for byte, again (the manifests differ only in their
+wording).
+
+**In the repository:** [`tests/allegrex/measured/`](../tests/allegrex/measured/) has `manifest3.txt`, `ops3.txt` and
+the SHA-256 of every file new in this session (`SHA256SUMS3`: round 3's files, the probes, and round 2's two FPU
+files), and, packed with xz (360 KB), `fpu-state`, the four FPU files and `vmul-tiny`, for the host tests to replay.
+`ops3.bin` (3.7 MB) stays outside the repository, like `ops.bin`.
+
+### Results
+
+| test | results | exact | worst (ulps) |
+| --- | --- | --- | --- |
+| vmul-tiny | 262144 | 223744 (85.35%) | (0 where the core gives 2^-126) |
+| fpu-convert-safe: each conversion, each rounding mode | 4096 | 4096 (100.00%) | 0 |
+| fpu-arith-safe: each operation, rounding to nearest | 4096 | 4096 (100.00%) | 0 |
+| fpu-arith-safe: each operation, the other three modes | 4096 | 49.05% to 64.65% | 1 |
+| fpu-convert: each conversion, each rounding mode | 4096 | 3930 (95.95%) | |
+| fpu-arith: each operation, rounding to nearest | 4096 | 4096 (100.00%) | 0 |
+| fpu-arith: each operation, the other three modes | 4096 | 52.42% to 80.08% | 1 |
+
+The second recorder list: 36 of its 284 entries match in every run, and 7 more differ only by rounding.
+
+The probes (each run once in rounding mode 0, FCSR's flags, enables and causes cleared, flush to zero off but in
+the -fs ones). The core's results already match:
+
+| probe | a, b | result | FCSR after |
+| --- | --- | --- | --- |
+| div.s 1 / 0 | 3f800000, 00000000 | 7f800000 | 00008020 (divide by zero) |
+| mul.s 2^126 × 2^126 | 7e800000, 7e800000 | 7f800000 | 00004010 (overflow) |
+| sqrt.s -1 | bf800000 | 7fc00000 | 00010040 (invalid) |
+| add.s infinity + 1 | 7f800000, 3f800000 | 7f800000 | 00000000 |
+| add.s 0x7fbfffff + 1 | 7fbfffff, 3f800000 | 7fffffff | 00010040 (invalid) |
+| add.s 0x7fc00000 + 1 | 7fc00000, 3f800000 | 7fc00000 | 00000000 |
+| cvt.w.s -2^31 | cf000000 | 80000000 | 00000000 |
+| cvt.w.s infinity | 7f800000 | 7fffffff | 00010040 (invalid) |
+| cvt.w.s 0x7fbfffff | 7fbfffff | 7fffffff | 00010040 (invalid) |
+| cvt.w.s 0x7fc00000 | 7fc00000 | 7fffffff | 00010040 (invalid) |
+| cvt.w.s 2^31 | 4f000000 | 7fffffff | 00010040 (invalid) |
+| mul.s 2^-100 × 2^-30 | 0d800000, 30800000 | 00080000 | 00002008 (underflow) |
+| add.s the smallest denormal + 1 | 00000001, 3f800000 | 3f800000 | 00001004 (inexact) |
+| cvt.w.s the smallest denormal | 00000001 | 00000000 | 00001004 (inexact) |
+| the three above with flush to zero | | 00000000, 3f800000, 00000000 | 01002008, 01001004, 01001004 |
+
+### Findings
+
+- **FCSR starts as 0x00000e00:** rounding to nearest, flush to zero off, and the overflow, divide-by-zero and
+  invalid exceptions enabled (bits 9 to 11), so an FPU instruction that overflows, divides by zero or is invalid
+  traps unless the program turns them off. FIR is 0x00003351.
+- **NaNs follow IEEE 754-2008's encoding, not MIPS's older one:** 0x7fc00000, whose top fraction bit is set, is
+  quiet and passes through `add.s` silently; 0x7fbfffff is signaling, raises invalid, and comes back quieted
+  (0x7fffffff: its payload with the quiet bit set); an invalid operation with no NaN going in (`sqrt.s -1`) gives
+  0x7fc00000. (The probes' own labels, written before, have it the other way round.)
+- **The exception bits:** invalid sets cause bit 16 and flag bit 6, divide by zero 15 and 5, overflow 14 and 4
+  (without inexact), underflow 13 and 3 (even for an exact result: 2^-130 came back exactly, as a denormal), inexact
+  12 and 2.
+- **Denormals:** with flush to zero off the FPU computes with them and gives them; with it on (bit 24), 2^-130
+  becomes 0. A denormal going in is used as it is, with no exception of its own.
+- **The rounding modes:** `add.s`, `sub.s`, `mul.s`, `div.s` and `sqrt.s` follow FCSR's rounding mode, as IEEE says
+  (1 - 1 rounding down is -0). The core rounds to nearest whatever the mode, so in the other three it's an ulp off
+  in 35% to 51% of the safe results and 20% to 48% of `fpu-arith`'s. The conversions already follow the mode in the
+  core.
+- **Conversions out of range:** `cvt`, `round`, `trunc`, `ceil` and `floor.w.s` give 0x7fffffff for large positive
+  numbers, infinity and NaNs (raising invalid, the probes show), and 0x80000000 for large negative numbers and
+  -infinity, where the core gives 0x7fffffff.
+- **Tiny products:** the VFPU rounds a product to 24 bits first, as if exponents had no lower limit, then flushes
+  it to 0 if it's below 2^-126. Of the products 2^-126 (1 - j² 2^-46), those up to j = 1448 round to 2^-126 and are
+  kept, and the rest are 0 (35.35% of the inputs, every one as measured). The core rounds as IEEE's denormals would
+  before flushing, so it also keeps 2^-126 from j = 1449 to 2048. Round 2's one `vscl` lane fits too: its product,
+  2^-126 - 2^-150, is exact at 24 bits and below 2^-126, so the PSP flushes it to 0, where IEEE's denormal rounding (a
+  tie, to even) takes the core to 2^-126.
+- **The second recorder list** differs in 241 of its 284 entries beyond rounding. These are the data to fit how the
+  math functions take prefixes, what swizzles past the size do, and how `vavg` and `vfad` take t prefixes.
+
 ## Next
 
-- From round 2, all but the arithmetic is done: what's left is `vlog2` above 4, and the adders' model (`vdot`,
-  `vhdp`, `vfad`, `vavg`, `vcrsp`, `vdet`, `vqmul` and the matrix products).
-- For a third round: how the other math functions take prefixes; whether a swizzle past the size zeroes the result
-  of instructions that don't work lane by lane (sums, cross products, conversions), and when only t's swizzle is
-  out of range; `vavg` with prefixes; and whether results are flushed before they're rounded (the `vscl` lane
-  above).
-- The FPU: a probe that tries one kind of value at a time, to find what the PSP refuses; then the FPU tests without
-  them.
-
-Both are ready as round 3 and the FPU probes, each a line of [`tools/psp-measure`](../tools/psp-measure/README.md)'s
-menu (its README says what each holds): the FPU on safe inputs and FCSR as a program
-finds it, products a sliver below the smallest normal number that tell rounding first from flushing first
-(`vmul-tiny`), a second recorder list of 284 entries (`ops3.h`), and seventeen probes, each run once, given up on if
-it stops the PSP.
+- From round 2: `vlog2` above 4, and the adders' model (`vdot`, `vhdp`, `vfad`, `vavg`, `vcrsp`, `vdet`, `vqmul` and
+  the matrix products).
+- From round 3: the FPU's rounding modes, its conversions out of range and FCSR's starting value; the VFPU's tiny
+  products; and the second recorder list's rules. The GE's round 3 is in [psp-core.md](psp-core.md) ("Round 3's
+  results").
 
 `compare.sh` shows the progress against the full data; `fit.py <results> ares/psp/cpu/vfpu-segments.hpp` regenerates
 the tables.

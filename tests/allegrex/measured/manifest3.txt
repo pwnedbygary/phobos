@@ -1,0 +1,28 @@
+psp-measure's VFPU and FPU tests (tools/psp-measure/vfpu.c in Phobos), round 3
+firmware devkit version 06060110
+spread-out inputs: state = state * 1664525 + 1013904223 from the seed, taking each new state
+vmul-tiny.bin: 262144 results; vmul.q, seed 41: products a sliver below the smallest normal number (tinyProducts)
+vmul-tiny's inputs (vfpu.c: tinyProducts): one draw per lane, lane 0 first; j = 1 + its low 12 bits, s = 0x3f800000 - 2j with the draw's bit 31 for its sign, t = 0x00800000 + j with bit 30 for its sign
+fpu-state.bin: FCSR (FPU control register 31) as the program found it when it started, then FIR (control register 0)
+fpu-convert-safe.bin: as fpu-convert.bin, for 4096 safe inputs (vfpu.c: safeConvertInput, seed 43): x, then for FCSR rounding modes 0-3: cvt.w.s, round.w.s, trunc.w.s, ceil.w.s, floor.w.s
+fpu-arith-safe.bin: as fpu-arith.bin, for 4096 safe pairs (vfpu.c: safeArithmeticInput, seed 44): a, b, then for rounding modes 0-3: add.s, sub.s, mul.s, div.s, and sqrt.s of a's size (its sign bit cleared)
+ops3.bin: the instruction recorder (as ops.bin) for ops3.h's entries, from seed 0x30000 + entry; ops3.txt lists them
+the FPU probes (a menu choice of their own), <name>.bin for each below: a, b, the result, and FCSR after the instruction; run once in rounding mode 0, FCSR's flags, enables and causes cleared, flush to zero (bit 24) off but where set:
+  probe-div-zero: div.s 1 / 0
+  probe-mul-big: mul.s 2^126 * 2^126 (too big)
+  probe-sqrt-negative: sqrt.s -1
+  probe-add-infinity: add.s infinity + 1
+  probe-add-qnan: add.s a quiet NaN (MIPS's, 0x7fbfffff) + 1
+  probe-add-snan: add.s a signaling NaN (MIPS's, 0x7fc00000) + 1
+  probe-cvt-minus-2p31: cvt.w.s -2^31 (the smallest integer, exactly)
+  probe-cvt-infinity: cvt.w.s infinity
+  probe-cvt-qnan: cvt.w.s a quiet NaN (MIPS's, 0x7fbfffff)
+  probe-cvt-snan: cvt.w.s a signaling NaN (MIPS's, 0x7fc00000)
+  probe-cvt-2p31: cvt.w.s 2^31 (one past the largest integer)
+  probe-mul-tiny: mul.s 2^-100 * 2^-30 (a denormal result)
+  probe-add-denormal: add.s the smallest denormal + 1
+  probe-cvt-denormal: cvt.w.s the smallest denormal
+  probe-add-denormal-fs: add.s the smallest denormal + 1, with FCSR's flush-to-zero bit (24) set
+  probe-mul-tiny-fs: mul.s 2^-100 * 2^-30 (a denormal result), with FCSR's flush-to-zero bit (24) set
+  probe-cvt-denormal-fs: cvt.w.s the smallest denormal, with FCSR's flush-to-zero bit (24) set
+<name>.stopped: a test that stopped the PSP (twice, or once for a probe), given up on
