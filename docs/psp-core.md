@@ -580,8 +580,8 @@ frame. The two that differ are the PSP's to settle:
   triangle or sprite with any such vertex (DEPTH_CLIP_ENABLE off) or with all of them past the same end (on); points
   aren't judged by it (as PPSSPP has it). A triangle with every w below zero isn't drawn either.
 - **Clipping**: a triangle is cut at the near plane (z < -w) only, never at the screen's edges (the scissor does
-  those). The new corners are blended in clip space (colors in 256ths) and put on the screen again; with flat shading
-  every piece keeps the last vertex's color.
+  those). The new corners are blended in clip space from the corner past the plane (colors in 256ths, which that way
+  round decides) and put on the screen again; with flat shading every piece keeps the last vertex's color.
 - **Culling** (CULL_FACE_ENABLE, not in clear mode, through mode too): CULL 1 draws the triangles running clockwise on
   the screen, 0 those running counterclockwise; every other triangle of a strip counts the other way round.
 - **Texture coordinates**: perspective-correct across triangles (blended as u/w and 1/w, then divided); colors, depth
