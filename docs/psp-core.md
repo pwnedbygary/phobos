@@ -6,7 +6,8 @@ instructions) with host tests, is on branch `cursor/psp-core-2b67`; part 2, the 
 compiled loads and stores straight to RAM, on `cursor/psp-fastmem-2b67`; the VFPU's measurements on a real PSP
 after it; part 5, the memory map, on `cursor/psp-memory-2b67`; part 6, the loader, on `cursor/psp-loader-2b67`;
 part 7, the first HLE functions, on `cursor/psp-hle-2b67`, which run pspdev's hello world from start to end on the
-host. The user asked for the whole feature to be stacked and merged at once. Nothing is in the app yet.
+host; part 8, files and controls, on `cursor/psp-files-2b67`. The user asked for the whole feature to be stacked and
+merged at once (GitHub stack #106). Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -127,8 +128,8 @@ branch not taken, `nor` without the not, delay-slot instructions given the wrong
 2. The recompiler, with differential tests against the interpreter (part 2; its later steps are listed above).
 3. The VFPU: registers, prefixes, instructions, tested against the pspdev documentation's descriptions (part 3).
 4. Memory map (part 5); loading an unencrypted `EBOOT.PBP`, ELF or PRX (part 6); the first HLE functions (module
-   start, threads, display, memory, standard output) and a homebrew test program run on the host (part 7); then
-   controls and files.
+   start, threads, display, memory, standard output) and a homebrew test program run on the host (part 7); files
+   and controls (part 8).
 5. The GE: display lists, a software rasterizer (2D first), the display.
 6. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
 7. Retail executables: `~PSP` decryption.
@@ -348,3 +349,63 @@ after one exited running nothing, with a failed load leaving memory reserved; an
 first thread unchecked. With `PSP_TEST_PROGRAMS`, pspdev's hello world runs from start to end
 as a static executable, a PRX and an EBOOT on both engines: it prints `hello from a PSP program 42`, draws it on the
 debug screen (pixels lit in the frame buffer it gave the display) and leaves.
+
+## Part 8: files and controls
+
+`ares/psp/kernel/io.cpp` and `ctrl.cpp`.
+
+- **Devices are host folders.** `mount("ms0", folder)` makes the memory stick a folder on the host (and `disc0` the
+  game's disc, until disc images come in phase 6); `umd0:` and `fatms0:` are the PSP's other names for them. A path
+  is worked out in the kernel: relative paths start from the working folder (the program's own at first, however
+  its path is written), either slash separates names, `.` and `..` are resolved there, and a path that would climb
+  above its device, or holds a colon (which a host might read as a drive), is refused; and what a path really names,
+  symbolic links followed, must be inside the folder, so a link in it can't lead out either. The PSP's FAT ignores
+  case, so each name is found whatever its case on the host (on a case-sensitive host such as Linux; macOS's file
+  system ignores case itself); a name not there yet keeps the case it's given.
+- **Files**: `sceIoOpen` with the PSP's flags (read, write, create, truncate, append, exclusive), `sceIoRead`,
+  `sceIoWrite`, `sceIoLseek` (64-bit, in a2 and a3) and `sceIoLseek32`, `sceIoClose`; each open file keeps its own
+  position. Folders: `sceIoDopen`, `sceIoDread` (`.` and `..` first except at a device's top, then the names
+  alphabetically; with the entry's private part asked for, the 8.3 short name and the long one), `sceIoDclose`,
+  `sceIoMkdir`, `sceIoRmdir`, `sceIoRemove`, `sceIoRename`, `sceIoChdir`, `sceIoGetstat` (`SceIoStat`: kind, size,
+  and the times, from nall's `inode::timestamp`). Error codes are the PSP's errno ones, from uOFW's `errors.h`.
+  Not yet: the asynchronous versions many games use, `sceIoDevctl` and `sceIoIoctl`, and disc images.
+- **Controls**, following uOFW's reading of the PSP's controller driver (`ctrl.c`): the system sets
+  `controller.buttons` (pspsdk's `PSP_CTRL_*` bits) and the stick; they're sampled at each vertical blank, or, if
+  the program sets a sampling cycle (5555 to 20000 microseconds; anything else is refused), on that timer instead.
+  The last 64 samples are kept, each with its time, and the stick if sampling was analog (else it reads centred).
+  A game sees only its own buttons (the pad, face buttons, shoulders, start, select, hold, and the bit telling it
+  the system took the controls), not volume or the screen button.
+  - The peek functions give the last samples at once, oldest first. The read ones give the samples that came since
+    the last read and how many; they wait only if none has, so a program that waits for the vertical blank and then
+    reads finds that frame's sample at once. Only one thread may wait to read: the PSP waits on an event flag made
+    for one waiter, and refuses a second (`EVF_MULTI`). Negative versions invert the buttons. A count is a byte,
+    and 64 or more is refused.
+  - The latch gathers, between reads, the buttons pressed, those let go, and those held and not held at some
+    sample. Reading it starts it afresh and doesn't wait. pspsdk's notes say a second read in one sampling cycle
+    waits for the next sample, which uOFW's code doesn't do; the PSP itself could settle it. uOFW's code for a
+    game's latch also differs from its code for the system's latch, and from pspsdk's descriptions, in what counts
+    as pressed and as held; we follow the system's, which agrees with pspsdk.
+
+`Kernel::run()` now takes a budget of the PSP's time in cycles, not instructions: while every thread waits, the clock
+jumps, and that time counts, so running a frame's worth runs one frame.
+
+Tests (`tests/psp/files.cpp`, each with its own temporary host folder): every open mode, reading, writing and seeking;
+folders, status, listing, renaming, removing, relative paths; paths kept inside their device, aliases, backslashes,
+unmounted devices; short names; the controller's samples peeked (times, order, stick, buttons games don't see),
+read (how many were new, more than asked for, at most 63 waiting), latched, on a sampling cycle, and waited for by
+two threads at once; and programs that read it each frame until the cross button, pressed on the tenth, by reading
+alone or by waiting for the frame and then reading. With `PSP_TEST_PROGRAMS`, `tools/psp-test-programs/system` runs through newlib:
+it writes a file and reads it back, reads one the host put there, lists the folder, then waits for the cross button
+and reports the stick; its output and the file it wrote are checked. Broken versions each failed them: `..`
+passed through to the host, names matched with their case (on Linux, whose file system keeps case; CI runs there),
+the controller never sampled, the sampling cycle ignored, the program's folder found by its last `/` only, and nine
+for the controller (reads always waiting, which halves the frame-reading program's speed; the latch not started
+afresh; a second waiter allowed; held buttons not gathered; system buttons shown; times taken at the read; peeks
+of the latest only; no limit on waiting samples; reads in the wrong order). Bugbot's reviews, read in full, found symbolic links leading out of the
+folder, a sample count whose size could overflow its check, a sampling cycle stored but never used, and the program's
+folder missed when its path used backslashes: fixed, with tests the old code fails. The last review found the
+latch emptied for a second thread waiting on it; uOFW's driver showed the latch read doesn't wait at all, and that
+buffer reads wait only when no sample is new (always waiting would have halved the speed of a program reading each
+frame after the vertical blank), so the controller was reworked to match it. One claim, that
+`sceIoLseek`'s 64-bit offset comes in a1 and a2, was wrong: psp-gcc's own calls put it in a2 and a3 (EABI aligns it
+to an even register pair) and `whence` in t0, and the system program's `fseek` through newlib confirms it.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #Builds the PSP core's test programs with pspdev's toolchain (the phobos-linux container has it in /opt/pspdev)
 #into a folder, for PSP_TEST_PROGRAMS (see tests/psp/loader.cpp): hello.elf (a static executable), hello.prx (a
-#relocatable module) and EBOOT.PBP (holding the static one). They're built from source each time, so no binary goes
-#in the repository.
+#relocatable module) and EBOOT.PBP (holding the static one); and system.elf, which uses files and the controls
+#(tests/psp/files.cpp). They're built from source each time, so no binary goes in the repository.
 #usage: tools/psp-test-programs/build.sh <output folder>
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -19,4 +19,8 @@ cp "$WORK/static/hello.elf" "$WORK/static/EBOOT.PBP" "$OUT/"
 cp -r "$HERE/hello" "$WORK/prx"
 make -C "$WORK/prx" BUILD_PRX=1 >/dev/null
 cp "$WORK/prx/hello.prx" "$OUT/"
-echo "built hello.elf, hello.prx and EBOOT.PBP in $OUT"
+
+cp -r "$HERE/system" "$WORK/system"
+make -C "$WORK/system" >/dev/null
+cp "$WORK/system/system.elf" "$OUT/"
+echo "built hello.elf, hello.prx, EBOOT.PBP and system.elf in $OUT"

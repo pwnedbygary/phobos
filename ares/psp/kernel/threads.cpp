@@ -145,6 +145,11 @@ auto Kernel::events() -> void {
     for(auto& [uid, thread] : threads) {
       if(thread->status == Status::Waiting && thread->wait == Wait::Vblank) ready(*thread, 0), woke = true;
     }
+    if(!controller.cycle && sampleController()) woke = true;
+  }
+  while(controller.cycle && cycles >= controller.nextSample) {  //a sampling cycle's timer
+    controller.nextSample += u64(controller.cycle) * (CPUFrequency / 1'000'000);
+    if(sampleController()) woke = true;
   }
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting || !thread->wakeAt || cycles < thread->wakeAt) continue;
@@ -160,25 +165,26 @@ auto Kernel::events() -> void {
 //How many cycles until the next thing that's due (at most until the next vertical blank).
 auto Kernel::untilNextEvent() const -> u64 {
   u64 next = nextVblank;
+  if(controller.cycle) next = std::min(next, controller.nextSample);
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
   }
   return next > cycles ? next - cycles : 1;
 }
 
-//No thread can run: time jumps to the next thing due. False if nothing ever will be: no thread waits for a time or a
-//frame, so they all wait on each other (or there are none left).
-auto Kernel::idle() -> bool {
+//No thread can run: time jumps to the next thing due (or to end, if that comes first). False if nothing ever will be:
+//no thread waits for a time or a frame, so they all wait on each other (or there are none left).
+auto Kernel::idle(u64 end) -> bool {
   bool timed = false;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
-    if(thread->wakeAt || thread->wait == Wait::Vblank) timed = true;
+    if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;
   }
   if(!timed) {
     note(threads.empty() ? "no threads left to run" : "every thread is waiting for another: none will run again");
     return false;
   }
-  cycles += untilNextEvent();
+  cycles = std::min(end, cycles + untilNextEvent());
   events();
   return true;
 }

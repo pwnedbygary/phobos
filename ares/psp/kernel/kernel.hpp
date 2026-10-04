@@ -1,5 +1,10 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
@@ -56,6 +61,7 @@ struct Kernel {
   static constexpr u32 ErrorWaitTimeout           = 0x8002'01a8;
   static constexpr u32 ErrorSemaphoreZero         = 0x8002'01ad;
   static constexpr u32 ErrorSemaphoreOverflow     = 0x8002'01ae;
+  static constexpr u32 ErrorEventFlagMulti        = 0x8002'01b0;  //a second thread waiting where only one may
   static constexpr u32 ErrorIllegalCount          = 0x8002'01bd;
   static constexpr u32 ErrorBadFile               = 0x8002'0323;
   static constexpr u32 ErrorFileNotFound          = 0x8001'0002;
@@ -66,6 +72,18 @@ struct Kernel {
   static constexpr u32 ErrorLwMutexUnlocked       = 0x8002'01cc;
   static constexpr u32 ErrorLwMutexUnderflow      = 0x8002'01ce;
   static constexpr u32 ErrorLwMutexRecursion      = 0x8002'01cf;
+  static constexpr u32 ErrorInvalidSize           = 0x8000'0104;  //uOFW's errors.h
+  static constexpr u32 ErrorInvalidValue          = 0x8000'01fe;  //uOFW's errors.h
+  //files' (uOFW's errors.h)
+  static constexpr u32 ErrorIOError               = 0x8001'0005;
+  static constexpr u32 ErrorNoPermission          = 0x8001'000d;
+  static constexpr u32 ErrorFileExists            = 0x8001'0011;
+  static constexpr u32 ErrorCrossDevice           = 0x8001'0012;
+  static constexpr u32 ErrorDeviceNotFound        = 0x8001'0013;
+  static constexpr u32 ErrorNotDirectory          = 0x8001'0014;
+  static constexpr u32 ErrorIsDirectory           = 0x8001'0015;
+  static constexpr u32 ErrorInvalidArgument       = 0x8001'0016;
+  static constexpr u32 ErrorDirectoryNotEmpty     = 0x8001'005a;
 
   static constexpr u64 CPUFrequency = 333'000'000;                   //cycles a second
   static constexpr u64 VblankCycles = CPUFrequency * 1001 / 60'000;  //59.94 frames a second
@@ -84,7 +102,7 @@ struct Kernel {
   auto power() -> void;
   auto load(const u8* data, u64 size, const std::string& path, std::string& error) -> bool;
   auto start(const u8* data, u64 size, const std::string& path, std::string& error) -> bool;
-  auto run(u64 instructions) -> u64;
+  auto run(u64 budget) -> u64;
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
   auto arg(u32 n) const -> u32;
@@ -123,7 +141,7 @@ struct Kernel {
     u32 vpr[128], pfxs, pfxt, pfxd, cc;
   };
   enum class Status : u32 { Running = 1, Ready = 2, Waiting = 4, Dormant = 16 };  //the PSP's numbers
-  enum class Wait : u32 { None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd };
+  enum class Wait : u32 { None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller };
   struct Thread {
     u32 uid;
     std::string name;
@@ -163,7 +181,7 @@ struct Kernel {
   auto reschedule() -> void;
   auto switchTo(Thread* thread) -> void;
   auto events() -> void;
-  auto idle() -> bool;
+  auto idle(u64 end) -> bool;
   auto untilNextEvent() const -> u64;
   auto endThread(Thread& thread, s32 status) -> void;
   auto threadReturned() -> void;
@@ -212,21 +230,82 @@ struct Kernel {
   auto sceKernelMaxFreeMemSize() -> void;
   auto sceKernelTotalFreeMemSize() -> void;
 
-  //io.cpp: standard input, output and error; files come later
+  //io.cpp: files and folders on the host folders standing for the PSP's devices; standard input, output and error
+  struct OpenFile {
+    std::string path;      //the PSP's name for it, normalized
+    std::string host;
+    bool folder = false;
+    u32 flags = 0;         //what it was opened for (PSP_O_*)
+    u64 position = 0;      //where the next read or write goes
+    std::unique_ptr<std::fstream> stream;
+    std::vector<std::string> entries;  //a folder's names, handed out one at a time
+    u32 nextEntry = 0;
+  };
+  std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
+  std::map<u32, OpenFile> files;
+  u32 nextFile = 3;  //after standard input, output and error
   std::string workingDirectory;
+  auto mount(const std::string& device, const std::string& folder) -> void;
+  auto resolve(const std::string& path, std::string& host, std::string& normalized) -> u32;
+  auto writeStat(u32 address, const std::string& host) -> void;
+  auto seek(u32 file, s64 offset, u32 whence, u64& position) -> u32;
   auto sceKernelStdin() -> void;
   auto sceKernelStdout() -> void;
   auto sceKernelStderr() -> void;
-  auto sceIoWrite() -> void;
-  auto sceIoRead() -> void;
-  auto sceIoClose() -> void;
-  auto sceIoLseek() -> void;
   auto sceIoOpen() -> void;
+  auto sceIoClose() -> void;
+  auto sceIoRead() -> void;
+  auto sceIoWrite() -> void;
+  auto sceIoLseek() -> void;
+  auto sceIoLseek32() -> void;
+  auto sceIoRemove() -> void;
+  auto sceIoMkdir() -> void;
+  auto sceIoRmdir() -> void;
+  auto sceIoRename() -> void;
+  auto sceIoChdir() -> void;
+  auto sceIoGetstat() -> void;
   auto sceIoDopen() -> void;
   auto sceIoDread() -> void;
   auto sceIoDclose() -> void;
-  auto sceIoChdir() -> void;
-  auto sceIoGetstat() -> void;
+
+  //ctrl.cpp: the buttons and the analog stick
+  struct Controller {
+    struct Sample {
+      u32 time = 0;              //when it was taken, in microseconds
+      u32 buttons = 0;
+      u8 x = 128, y = 128;       //the stick (centred unless sampling was analog)
+    };
+    struct Latch {                 //since the latch was last read:
+      u32 made = 0, broken = 0;    //buttons pressed, and let go
+      u32 held = 0, released = 0;  //buttons held at some sample, and not held at some sample
+      u32 samples = 0;             //how many samples that was
+    };
+    u32 buttons = 0;                  //what the player holds now (PSP_CTRL_* bits): the system sets these
+    u8 analogX = 128, analogY = 128;  //the stick, 0-255 on each axis, 128 when left alone
+    u32 cycle = 0, mode = 0;          //sampling cycle (0: at each vertical blank; else microseconds) and mode
+    u64 nextSample = 0;               //with a cycle: when the next sample is due
+    Sample samples[64];               //the last 64 samples, a ring: the next one goes over samples[next], the oldest
+    u32 next = 0;
+    u32 unread = 0;                   //samples since the buffer was last read (at most 63)
+    u32 sampled = 0;                  //the buttons at the last sample
+    Latch latch;
+  } controller;
+  auto sampleController() -> bool;
+  auto writeSamples(u32 address, u32 first, u32 count, bool negative) -> void;
+  auto readSamples(u32 address, u32 count, bool negative) -> u32;
+  auto writeLatch(u32 address) -> u32;
+  auto peekController(bool negative) -> void;
+  auto readController(bool negative) -> void;
+  auto sceCtrlSetSamplingCycle() -> void;
+  auto sceCtrlGetSamplingCycle() -> void;
+  auto sceCtrlSetSamplingMode() -> void;
+  auto sceCtrlGetSamplingMode() -> void;
+  auto sceCtrlPeekBufferPositive() -> void;
+  auto sceCtrlPeekBufferNegative() -> void;
+  auto sceCtrlReadBufferPositive() -> void;
+  auto sceCtrlReadBufferNegative() -> void;
+  auto sceCtrlPeekLatch() -> void;
+  auto sceCtrlReadLatch() -> void;
 
   //display.cpp: where the program's frame is, and the vertical blank
   struct Display {
