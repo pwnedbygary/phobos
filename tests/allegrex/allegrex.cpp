@@ -387,6 +387,31 @@ auto fpuArithmetic() -> void {
   CHECK(m.fpr(10), bits(4.0f));
   CHECK(m.gpr(s0), bits(10.0f));
 
+  // The arithmetic follows the rounding mode in fcr31's low bits, as on a PSP (measured: round 3). 1 + 2^-30 is just
+  // past 1: up gives the next float, the others 1. 1 - 1 is -0 rounding down. 1 / 3 lies between two floats: nearest
+  // and up give the upper one, toward zero and down the lower. And 2^24 + 1, an integer a float can't hold, goes to
+  // 2^24 + 2 rounding up and 2^24 otherwise (nearest goes to the even neighbour).
+  struct Rounded { uint32_t sum, difference, third, integer; };
+  const Rounded byMode[] = {
+    {0x3f800000, 0x00000000, 0x3eaaaaab, 0x4b800000},  // nearest
+    {0x3f800000, 0x00000000, 0x3eaaaaaa, 0x4b800000},  // toward zero
+    {0x3f800001, 0x00000000, 0x3eaaaaab, 0x4b800001},  // up
+    {0x3f800000, 0x80000000, 0x3eaaaaaa, 0x4b800000},  // down
+  };
+  for(uint32_t mode = 0; mode < 4; mode++) {
+    Machine r;
+    r.run({addiu(t0, zero, (int32_t)mode), ctc1(t0, 31), fop(0x00, 2, 0, 1), fop(0x01, 3, 0, 0), fop(0x03, 4, 0, 5),
+           cvtsw(6, 7)},
+          [](Allegrex& s) {
+            s.fpu.r[0] = bits(1.0f); s.fpu.r[1] = 0x30800000;  // 2^-30
+            s.fpu.r[5] = bits(3.0f); s.fpu.r[7] = (1 << 24) + 1;
+          });
+    CHECK(r.fpr(2), byMode[mode].sum);
+    CHECK(r.fpr(3), byMode[mode].difference);
+    CHECK(r.fpr(4), byMode[mode].third);
+    CHECK(r.fpr(6), byMode[mode].integer);
+  }
+
   // Moves keep the exact bits, NaN payloads included.
   Machine nan;
   nan.run({mtc1(t0, 3), fop(0x06, 4, 3), mfc1(s0, 4)}, [](Allegrex& s) { s.ipu.r[t0] = 0x7fa00001; });
@@ -398,7 +423,7 @@ auto fpuConversions() -> void {
   const Case cases[] = {
     {2.5f, 2, 2, 3, 2}, {3.5f, 4, 3, 4, 3}, {-2.5f, (uint32_t)-2, (uint32_t)-2, (uint32_t)-2, (uint32_t)-3},
     {1.4999f, 1, 1, 2, 1}, {-2.7f, (uint32_t)-3, (uint32_t)-2, (uint32_t)-2, (uint32_t)-3},
-    {3e9f, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff}, {-3e9f, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff},
+    {3e9f, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff}, {-3e9f, 0x80000000, 0x80000000, 0x80000000, 0x80000000},
   };
   for(const Case& c : cases) {
     Machine m;

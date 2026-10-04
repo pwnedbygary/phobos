@@ -167,6 +167,7 @@ static auto startArguments() -> void {
   CHECK(m.system.ipu.r[5] >= stack && m.system.ipu.r[5] + longest <= stack + 0x1000 - 0x100, true);
   CHECK(m.system.ipu.r[29] >= stack, true);
   CHECK(m.system.memory.read(1, m.system.ipu.r[5] + longest - 1), 'a');
+  CHECK(u32(m.system.fpu.csr), 0x0000'0e00);  //FCSR as a PSP program finds it (measured, round 3)
 }
 
 //load() reserves the program's memory exactly where the program is, or refuses a program whose segments overlap,
