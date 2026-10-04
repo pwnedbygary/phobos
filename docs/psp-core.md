@@ -240,9 +240,13 @@ A write that fails doesn't count as the PSP stopping, and a retry whose marker (
 stops the round and says so rather than running unmarked. The results are unchanged: in PPSSPPHeadless the new
 version's files are the old one's, byte for byte.
 
-`make SMOKE=1` builds a quick version (round 2 straight away, the big tests cut short) for trying the program in
-PPSSPP's PPSSPPHeadless first, which `phobos-linux` has in `/opt/tools/ppsspp`; it says nothing about a PSP.
-`compare.sh` checks whatever files a folder has, from either round.
+Square runs a third round (about 6 MB, `manifest3.txt`) for what the second left open, and triangle the FPU probes,
+one value each, each given up on after a single stop: see [the measurements](psp-vfpu-measurements.md) and
+[the tool's README](../tools/psp-vfpu-measure/README.md).
+
+`make SMOKE=1` builds a quick version (round 3 and the FPU probes straight away, the big tests cut short) for
+trying the program in PPSSPP's PPSSPPHeadless first (with `-i`), which `phobos-linux` has in `/opt/tools/ppsspp`;
+it says nothing about a PSP. `compare.sh` checks whatever files a folder has, from any round.
 
 ## Part 5: the memory map
 

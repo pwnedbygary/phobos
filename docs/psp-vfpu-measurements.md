@@ -270,13 +270,20 @@ least one.
 - The FPU: a probe that tries one kind of value at a time, to find what the PSP refuses; then the FPU tests without
   them.
 
+Both are ready as round 3 (square) and the FPU probes (triangle) of `tools/psp-vfpu-measure` (its
+[README](../tools/psp-vfpu-measure/README.md) says what each holds): the FPU on safe inputs and FCSR as a program
+finds it, products a sliver below the smallest normal number that tell rounding first from flushing first
+(`vmul-tiny`), a second recorder list of 284 entries (`ops3.h`), and seventeen probes, each run once, given up on if
+it stops the PSP.
+
 `compare.sh` shows the progress against the full data; `fit.py <results> ares/psp/cpu/vfpu-segments.hpp` regenerates
 the tables.
 
 ## Reproducing
 
 1. Build the program with pspdev's toolchain (`make` in `tools/psp-vfpu-measure`), copy `EBOOT.PBP` to
-   `PSP/GAME/VFPUMEASURE/` on a PSP with custom firmware, and run it, pressing O for round 1 (about 450 MB) or X for
-   round 2 (about 240 MB); it writes `results/` beside itself, and can be started again: finished tests are skipped,
-   and a test that stops the PSP twice is given up on (see its [README](../tools/psp-vfpu-measure/README.md)).
+   `PSP/GAME/VFPUMEASURE/` on a PSP with custom firmware, and run it, pressing O for round 1 (about 450 MB), X for
+   round 2 (about 240 MB), square for round 3 (about 6 MB) or triangle for the FPU probes. It writes `results/`
+   beside itself, and can be started again: finished tests are skipped, a test that stops the PSP twice is given up
+   on, and so is a probe that stops it once (see its [README](../tools/psp-vfpu-measure/README.md)).
 2. `tools/psp-vfpu-measure/compare.sh <results folder>` prints the tables above for that data.

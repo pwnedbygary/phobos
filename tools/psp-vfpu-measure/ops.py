@@ -8,7 +8,11 @@
 # used. Instructions the assembler can't express (vrot's every placement, vfim and viim with chosen immediates,
 # prefixes with chosen fields) are built from their fields here, from instructions it did accept.
 #
-# usage: ops.py [ops.h]   (needs psp-as and psp-objdump on the PATH: run it where pspdev is installed)
+# Round 3's entries (ops3.h) are what round 2's prefixed entries left open: the math functions with prefixes,
+# swizzles past an operand's size in the instructions that don't work lane by lane (and in t alone, in ones that
+# do), and vavg and vfad with t prefixes. They're drawn from their own seed, so ops.h stays as it was.
+#
+# usage: ops.py [ops.h [ops3.h]]   (needs psp-as and psp-objdump on the PATH: run it where pspdev is installed)
 
 import random
 import subprocess
@@ -168,20 +172,131 @@ def entries():
     return ops
 
 
-def main():
-    out = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).with_name("ops.h"))
-    ops = entries()
+def spelling(mnemonic, size, operands):
+    """The first spelling psp-as accepts, each operand tried as a single or a vector, as (text, word), or None."""
+    kinds = ("single", "vector")
+    candidates = []
+    for d in kinds:
+        for s in kinds:
+            for t in kinds:
+                regs = {"d": register(d, 2), "s": register(s, 0), "t": register(t, 1)}
+                candidates.append(f"{mnemonic}.{size} " + ", ".join(regs.get(o, o) for o in operands))
+    return first_valid(list(dict.fromkeys(candidates)))
+
+
+def entries3():
+    ops = []
+    choose = random.Random(2027)
+    vpfxs, vpfxt, vpfxd = 0xdc000000, 0xdd000000, 0xde000000
+    lanes = {"s": 1, "p": 2, "t": 3, "q": 4}
+
+    def add(words):
+        ops.append(("prefixed " + " ".join(f"{w:08x}" for w in words), words))
+
+    def outside(size, which):
+        """A random source prefix whose lanes in which take a lane past the operand's size (no constant there)."""
+        p = choose.randrange(1 << 20)
+        for lane in which:
+            p &= ~(1 << (12 + lane))
+            p = (p & ~(3 << (2 * lane))) | choose.randrange(size, 4) << (2 * lane)
+        return p
+
+    def inside(size):
+        """A random source prefix that stays within the operand: each lane a constant or a lane below the size."""
+        p = choose.randrange(1 << 20)
+        for lane in range(4):
+            if not p >> (12 + lane) & 1 and (p >> (2 * lane) & 3) >= size:
+                p = (p & ~(3 << (2 * lane))) | choose.randrange(size) << (2 * lane)
+        return p
+
+    # The math functions with random prefixes: do they take them as vrcp does, on the last lane alone?
+    for mnemonic in ("vrcp", "vnrcp", "vrsq", "vsqrt", "vexp2", "vrexp2", "vlog2", "vsin", "vnsin", "vcos", "vasin"):
+        for size, count in (("q", 10), ("t", 3), ("p", 3)):
+            found = spelling(mnemonic, size, ("d", "s"))
+            if not found:
+                continue
+            for _ in range(count):
+                words = [vpfxs | choose.randrange(1 << 20)]
+                if choose.random() < 0.5:
+                    words.append(vpfxd | choose.randrange(1 << 12))
+                add(words + [found[1]])
+
+    # Swizzles past the operand's size in the instructions that don't work lane by lane, and in t alone in some
+    # that do: is the lane's result 0 there too? roles says which prefixes get such a swizzle.
+    shapes = [("vdot", "p", ("d", "s", "t"), "st"), ("vdot", "t", ("d", "s", "t"), "st"),
+              ("vhdp", "p", ("d", "s", "t"), "st"), ("vhdp", "t", ("d", "s", "t"), "st"),
+              ("vfad", "p", ("d", "s"), "s"), ("vfad", "t", ("d", "s"), "s"),
+              ("vavg", "p", ("d", "s"), "s"), ("vavg", "t", ("d", "s"), "s"),
+              ("vcrs", "t", ("d", "s", "t"), "st"), ("vcrsp", "t", ("d", "s", "t"), "st"),
+              ("vdet", "p", ("d", "s", "t"), "st"), ("vscl", "p", ("d", "s", "t"), "s"), ("vscl", "t", ("d", "s", "t"), "s"),
+              ("vf2h", "p", ("d", "s"), "s"), ("vh2f", "s", ("d", "s"), "s"), ("vh2f", "p", ("d", "s"), "s"),
+              ("vi2f", "p", ("d", "s", "0"), "s"), ("vf2iz", "t", ("d", "s", "0"), "s"), ("vbfy1", "p", ("d", "s"), "s"),
+              ("vsocp", "s", ("d", "s"), "s"), ("vsocp", "p", ("d", "s"), "s"),
+              ("vadd", "p", ("d", "s", "t"), "t"), ("vadd", "t", ("d", "s", "t"), "t"), ("vmul", "s", ("d", "s", "t"), "t"),
+              ("vmin", "p", ("d", "s", "t"), "t"), ("vsub", "t", ("d", "s", "t"), "st")]
+    forms = [(mnemonic, size, spelling(mnemonic, size, operands), "t" in operands, roles)
+             for mnemonic, size, operands, roles in shapes]
+    for size in ("p", "t"):
+        forms.append(("vcmp", size, first_valid([f"vcmp.{size} LT, C000, C100"]), True, "st"))
+    for mnemonic, size, found, has_t, roles in forms:
+        if not found:
+            continue
+        n = lanes[size]
+        cases = (["s", "s2"] if "s" in roles else []) + (["t"] if "t" in roles else []) + (["st"] if roles == "st" else [])
+        for case in cases:
+            words = []
+            if "s" in case:
+                words.append(vpfxs | outside(n, choose.sample(range(n), min(2 if case == "s2" else 1, n))))
+            elif choose.random() < 0.5:
+                words.append(vpfxs | inside(n))
+            if "t" in case:
+                words.append(vpfxt | outside(n, choose.sample(range(n), 1)))
+            elif has_t and choose.random() < 0.5:
+                words.append(vpfxt | inside(n))
+            if choose.random() < 0.3:
+                words.append(vpfxd | choose.randrange(1 << 12))
+            add(words + [found[1]])
+
+    # vavg and vfad with t prefixes (vfad's are forced to constants, round 2 found; vavg's?).
+    for mnemonic, count in (("vavg", 8), ("vfad", 4)):
+        for size in ("p", "t", "q"):
+            found = spelling(mnemonic, size, ("d", "s"))
+            if not found:
+                continue
+            n = lanes[size]
+            for _ in range(count):
+                words = [vpfxs | inside(n)] if choose.random() < 0.7 else []
+                words.append(vpfxt | choose.randrange(1 << 20))
+                if choose.random() < 0.3:
+                    words.append(vpfxd | choose.randrange(1 << 12))
+                add(words + [found[1]])
+    return ops
+
+
+def write(out, ops, count, table, about):
     with out.open("w") as f:
-        f.write("//The instruction recorder's entries (main.c): one VFPU instruction each, after up to three prefix\n"
-                "//instructions, reading matrix 0 (and 1) and writing matrix 2. Generated by ops.py, which keeps only\n"
-                "//what pspdev's assembler accepts. Don't edit: run ops.py again.\n\n")
-        f.write(f"#define OP_COUNT {len(ops)}\n\n")
-        f.write("static const Op ops[OP_COUNT] = {\n")
+        f.write(about)
+        f.write(f"#define {count} {len(ops)}\n\n")
+        f.write(f"static const Op {table}[{count}] = {{\n")
         for text, words in ops:
             padded = ", ".join(f"0x{w:08x}" for w in words + [0] * (4 - len(words)))
             f.write(f"  {{{len(words)}, {{{padded}}}, \"{text}\"}},\n")
         f.write("};\n")
     print(f"{len(ops)} entries -> {out}")
+
+
+def main():
+    here = Path(__file__).parent
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else here / "ops.h"
+    out3 = Path(sys.argv[2]) if len(sys.argv) > 2 else here / "ops3.h"
+    write(out, entries(), "OP_COUNT", "ops",
+          "//The instruction recorder's entries (main.c): one VFPU instruction each, after up to three prefix\n"
+          "//instructions, reading matrix 0 (and 1) and writing matrix 2. Generated by ops.py, which keeps only\n"
+          "//what pspdev's assembler accepts. Don't edit: run ops.py again.\n\n")
+    write(out3, entries3(), "OP3_COUNT", "ops3",
+          "//Round 3's instruction recorder entries (main.c, ops.py's entries3): the math functions with prefixes,\n"
+          "//swizzles past an operand's size, vavg and vfad with t prefixes. Generated by ops.py, which keeps only\n"
+          "//what pspdev's assembler accepts. Don't edit: run ops.py again.\n\n")
 
 
 if __name__ == "__main__":

@@ -9,17 +9,24 @@
 //  built to show how the VFPU adds several numbers; every half float through vh2f, and a million floats through
 //  vf2h; the integer divide, and the FPU's conversions and rounding modes; and the instruction recorder, which runs
 //  every VFPU instruction pspdev's assembler knows (ops.h) on random register states. About 230 MB.
+//- Round 3 (square): what round 2 left open. The FPU's conversions and arithmetic on inputs it's safe with (round
+//  2's FPU tests stopped the PSP), FCSR as a program finds it, products just below the smallest normal number,
+//  and a second recorder list (ops3.h): the math functions with prefixes, swizzles past an operand's size in the
+//  instructions that don't work lane by lane, vavg and vfad with t prefixes. About 6 MB.
+//- The FPU probes (triangle): the FPU on one value at a time of the kinds that may stop the PSP. Each probe that
+//  does is given up on at the next start, which goes on with the next probe.
 //It computes nothing itself: the files only hold what the hardware gave (and for the smaller tests, the inputs),
 //and the host works out the rest.
 //
 //Build with pspdev's toolchain (https://github.com/pspdev/pspdev): make, which gives EBOOT.PBP.
 //Run: copy EBOOT.PBP to a folder under PSP/GAME on the memory stick (say PSP/GAME/VFPUMEASURE) and start it from
 //the XMB; it needs custom firmware that runs homebrew. Results go to results/ beside EBOOT.PBP: one file per
-//test, raw little-endian 32-bit words in the order each test describes below, plus manifest.txt (round 1) or
-//manifest2.txt (round 2). A test whose file exists is skipped, so a round can be stopped and started again. A test
-//that didn't finish runs once more; if it doesn't finish that time either, the next start gives up on it (see
-//begin), so a test that stops the PSP can't hold up the rest. Each test's line on the screen says when it's
-//running, and the program keeps telling the PSP it's busy, so the power-save timer doesn't put it to sleep.
+//test, raw little-endian 32-bit words in the order each test describes below, plus manifest.txt (round 1),
+//manifest2.txt (round 2) or manifest3.txt (round 3 and the probes). A test whose file exists is skipped, so a round
+//can be stopped and started again. A test that didn't finish runs once more; if it doesn't finish that time either,
+//the next start gives up on it (see begin; a probe gets one try), so a test that stops the PSP can't hold up the
+//rest. Each test's line on the screen says when it's running, and the program keeps telling the PSP it's busy, so
+//the power-save timer doesn't put it to sleep.
 
 #include <pspkernel.h>
 #include <pspdebug.h>
@@ -35,8 +42,8 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 #define print pspDebugScreenPrintf
 
 //make SMOKE=1 builds a quick version for trying the program in an emulator before a PSP runs it (PPSSPP's
-//PPSSPPHeadless, which has no buttons to press): it runs round 2 straight away with its big tests cut short, and
-//leaves when done. Its results say nothing about a PSP.
+//PPSSPPHeadless, which has no buttons to press): it runs round 3 and the probes straight away, with its big tests cut
+//short, and leaves when done. Its results say nothing about a PSP.
 #ifdef SMOKE
 enum { Shrink = 8 };
 #else
@@ -265,6 +272,27 @@ static const Test tests2[] = {
   {"vavg-close", vavg, 0, (1u << 18) >> Shrink, 38, 0, "vavg.q, seed 38: as vfad-close (sumClose)", 0, sumClose, 1},
 };
 
+//Round 3: products just below the smallest normal number, 2^-126, by the sliver that decides how the VFPU treats a
+//result too small to be normal (round 2's recorder had a product that rounds up to exactly 2^-126 come out as 0).
+//t is 2^-126 (1 + j 2^-23) and s is 1 - j 2^-23 (as bits 0x00800000 + j and 0x3f800000 - 2j), so the product is
+//2^-126 (1 - j^2 2^-46). Three answers can be told apart: seen to be too small before it's rounded, it's 0 for every
+//j; rounded to 24 bits first and then flushed, it's exactly 2^-126 for j up to 1448; rounded as IEEE's denormals
+//would be and then flushed (what the core does now), exactly 2^-126 for j up to 2048. One draw per lane (lane 0
+//first): j from 1 to 4096 in its low 12 bits, s's sign from bit 31 and t's from bit 30.
+static void tinyProducts(Quad* s, Quad* t, unsigned int* state) {
+  for(int i = 0; i < 4; i++) {
+    unsigned int w = next(state), j = 1 + (w & 4095);
+    s->lane[i] = (w & 0x80000000u) | (0x3f800000u - 2 * j);
+    t->lane[i] = (w << 1 & 0x80000000u) | (0x00800000u + j);
+  }
+}
+
+//Round 3's tests that run through measure().
+static const Test tests3[] = {
+  {"vmul-tiny", vmul, 0, (1u << 18) >> Shrink, 41, 1,
+   "vmul.q, seed 41: products a sliver below the smallest normal number (tinyProducts)", 0, tinyProducts, 0},
+};
+
 static int exists(const char* path) {
   SceIoStat status;
   return sceIoGetstat(path, &status) >= 0;
@@ -285,14 +313,14 @@ static int mark(const char* path) {
 //.bin behind and runs again next time. If its .part is there when it starts, the last run didn't finish it (the PSP
 //stopped, or was stopped, during it): it runs once more, with <name>.again marking that; and if it doesn't finish
 //then either, the next start gives up on it, renaming what it wrote to <name>.stopped, and the round goes on
-//without it.
+//without it. A probe (retry 0) isn't run again: one stop and the next start gives up on it.
 typedef struct {
   char done[320], part[320], again[320];
   SceUID file;
   int line;
 } Output;
 
-static int begin(Output* out, const char* name) {
+static int beginTrying(Output* out, const char* name, int retry) {
   char stopped[320];
   snprintf(out->done, sizeof(out->done), "%s/%s.bin", folder, name);
   snprintf(out->part, sizeof(out->part), "%s/%s.part", folder, name);
@@ -304,14 +332,14 @@ static int begin(Output* out, const char* name) {
     return 0;
   }
   if(exists(stopped)) {
-    print("%-14s given up on (it stopped twice)\n", name);
+    print("%-14s given up on (it stopped the PSP)\n", name);
     return 0;
   }
   int retrying = exists(out->part);
-  if(retrying && exists(out->again)) {
+  if(retrying && (!retry || exists(out->again))) {
     sceIoRename(out->part, stopped);
     sceIoRemove(out->again);
-    print("%-14s stopped twice: given up on\n", name);
+    print("%-14s stopped the PSP%s: given up on\n", name, retry ? " twice" : "");
     return 0;
   }
   out->file = sceIoOpen(out->part, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
@@ -332,12 +360,16 @@ static int begin(Output* out, const char* name) {
   return 1;
 }
 
+static int begin(Output* out, const char* name) { return beginTrying(out, name, 1); }
+
 static int writeOut(Output* out, const char* name, const void* data, int bytes) {
   awake();  //every chunk a long test writes (256 KiB), so no stretch of work goes without telling the PSP
   if(sceIoWrite(out->file, data, bytes) == bytes) return 1;
   print("%-14s write failed (memory stick full?)\n", name);
   sceIoClose(out->file);
-  sceIoRemove(out->again);  //a failed write isn't the PSP stopping: the next start tries it again, not giving up
+  //a failed write isn't the PSP stopping: with no .part (or .again) left, the next start runs the test afresh
+  sceIoRemove(out->part);
+  sceIoRemove(out->again);
   return 0;
 }
 
@@ -349,7 +381,12 @@ static void progress(Output* out, const char* name, unsigned int done, unsigned 
 
 static int finish(Output* out, const char* name) {
   sceIoClose(out->file);
-  sceIoRename(out->part, out->done);
+  if(sceIoRename(out->part, out->done) < 0) {
+    print("%-14s can't rename %s (memory stick?)\n", name, out->part);
+    sceIoRemove(out->part);  //not the PSP stopping either: the next start runs the test afresh
+    sceIoRemove(out->again);
+    return 0;
+  }
   sceIoRemove(out->again);
   pspDebugScreenSetXY(0, out->line);
   print("%-14s done   \n", name);
@@ -577,16 +614,18 @@ FPU_BINARY(subs, "sub.s")
 FPU_BINARY(muls, "mul.s")
 FPU_BINARY(divs, "div.s")
 
-//Conversions to integers: per input (the 32 specials, then 4064 of many kinds from seed 23), the input, then for
-//each rounding mode: cvt.w.s (which follows the mode), round.w.s, trunc.w.s, ceil.w.s and floor.w.s.
-static int measureConvert(void) {
+//Conversions to integers: per input (4096 of them), the input, then for each rounding mode: cvt.w.s (which follows
+//the mode), round.w.s, trunc.w.s, ceil.w.s and floor.w.s.
+typedef unsigned int (*ConvertInput)(int i, unsigned int* state);
+
+static int measureConvertFrom(const char* name, unsigned int seed, ConvertInput input) {
   Output out;
-  int started = begin(&out, "fpu-convert");
+  int started = begin(&out, name);
   if(started <= 0) return started == 0;
   static unsigned int w[4096 * 21];
-  unsigned int state = 23;
+  unsigned int state = seed;
   for(int i = 0; i < 4096; i++) {
-    unsigned int x = i < 32 ? specials[i] : mixed(&state);
+    unsigned int x = input(i, &state);
     unsigned int* p = &w[i * 21];
     *p++ = x;
     for(unsigned int mode = 0; mode < 4; mode++) {
@@ -594,29 +633,180 @@ static int measureConvert(void) {
       *p++ = ceilws(mode, x); *p++ = floorws(mode, x);
     }
   }
-  if(!writeOut(&out, "fpu-convert", w, sizeof(w))) return 0;
-  return finish(&out, "fpu-convert");
+  if(!writeOut(&out, name, w, sizeof(w))) return 0;
+  return finish(&out, name);
 }
 
-//Arithmetic in each rounding mode: per pair (4096, of many kinds, from seed 24), a and b, then for each mode:
-//add.s, sub.s, mul.s, div.s, and sqrt.s of a.
-static int measureArithmetic(void) {
+//Arithmetic in each rounding mode: per pair (4096 of them), a and b, then for each mode: add.s, sub.s, mul.s,
+//div.s, and sqrt.s of a (or with absolute set, of a's size, its sign bit cleared).
+typedef void (*ArithmeticInput)(int i, unsigned int* state, unsigned int* a, unsigned int* b);
+
+static int measureArithmeticFrom(const char* name, unsigned int seed, ArithmeticInput input, int absolute) {
   Output out;
-  int started = begin(&out, "fpu-arith");
+  int started = begin(&out, name);
   if(started <= 0) return started == 0;
   static unsigned int w[4096 * 22];
-  unsigned int state = 24;
+  unsigned int state = seed;
   for(int i = 0; i < 4096; i++) {
-    unsigned int a = mixed(&state), b = mixed(&state);
+    unsigned int a, b;
+    input(i, &state, &a, &b);
     unsigned int* p = &w[i * 22];
     *p++ = a; *p++ = b;
     for(unsigned int mode = 0; mode < 4; mode++) {
       *p++ = adds(mode, a, b); *p++ = subs(mode, a, b); *p++ = muls(mode, a, b);
-      *p++ = divs(mode, a, b); *p++ = sqrts(mode, a);
+      *p++ = divs(mode, a, b); *p++ = sqrts(mode, absolute ? a & 0x7fffffffu : a);
     }
   }
-  if(!writeOut(&out, "fpu-arith", w, sizeof(w))) return 0;
-  return finish(&out, "fpu-arith");
+  if(!writeOut(&out, name, w, sizeof(w))) return 0;
+  return finish(&out, name);
+}
+
+//Round 2's inputs: the 32 specials, then many kinds from seed 23; pairs of many kinds from seed 24.
+static unsigned int anyConvertInput(int i, unsigned int* state) { return i < 32 ? specials[i] : mixed(state); }
+
+static void anyArithmeticInput(int i, unsigned int* state, unsigned int* a, unsigned int* b) {
+  (void)i;
+  *a = mixed(state);
+  *b = mixed(state);
+}
+
+static int measureConvert(void) { return measureConvertFrom("fpu-convert", 23, anyConvertInput); }
+static int measureArithmetic(void) { return measureArithmeticFrom("fpu-arith", 24, anyArithmeticInput, 0); }
+
+//Round 3: the FPU on inputs it's safe with. Round 2's tests stopped the PSP, most likely at the not-a-numbers,
+//infinities, denormals and numbers too big for an integer they started with; these leave all of those out (the
+//probes, below, try them one at a time). The conversions: zeros and normal numbers below 2^31 in size (not -2^31
+//itself, which a probe tries: an FPU that judges the range by the exponent alone would refuse it), chosen ones
+//first (halves and their neighbours, where the rounding modes part, and the edges of the integer range), then a
+//mix from seed 43: any size below 2^31, whole numbers and a half, whole numbers, and small numbers, each sign.
+static const unsigned int safeConvertChosen[32] = {
+  0x00000000, 0x80000000, 0x3f000000, 0xbf000000, 0x3f800000, 0xbf800000, 0x3fc00000, 0xbfc00000,
+  0x40200000, 0xc0200000, 0x3effffff, 0xbeffffff, 0x3f000001, 0xbf000001, 0x3f7fffff, 0xbf7fffff,
+  0x4effffff, 0xceffffff, 0xcefffffe, 0x4b000000, 0xcb000000, 0x4b000001, 0x4affffff, 0xcaffffff,
+  0x4b7fffff, 0x00800000, 0x80800000, 0x3e800000, 0xbe800000, 0x40400000, 0x40600000, 0xc0600000,
+};
+
+static unsigned int floatBits(float x) {
+  unsigned int bits;
+  memcpy(&bits, &x, sizeof(bits));
+  return bits;
+}
+
+static unsigned int safeConvertInput(int i, unsigned int* state) {
+  if(i < 32) return safeConvertChosen[i];
+  unsigned int w = next(state), sign = w & 0x80000000u, r = next(state);
+  switch(w >> 29 & 3) {
+  case 0: return sign | (100 + w % 58) << 23 | (r & 0x7fffffu);              //2^-27 up to 2^31, any mantissa
+  case 1: return sign | floatBits((float)(int)(r >> 10) + 0.5f);             //a whole number and a half
+  case 2: return sign | floatBits((float)(int)(r >> 8));                     //a whole number below 2^24
+  default: return sign | (118 + (w >> 23 & 15)) << 23 | (r & 0x7fffffu);    //2^-9 up to 2^7
+  }
+}
+
+//The arithmetic: pairs of normal numbers within 40 binades of 1, so that no sum, difference, product, quotient or
+//square root (of the first's size) comes out too big, too small or not a number. Chosen pairs first (ties, where
+//rounding to the nearest goes to the even neighbour, and a cancellation, which gives +0 or -0 by the mode), then
+//from seed 44: a quarter of them nearly cancelling (b about -a), the rest any two.
+static const unsigned int safeArithmeticChosen[12][2] = {
+  {0x3f800000, 0x3f800000}, {0x3f800000, 0xbf800000}, {0x3f800000, 0x33800000}, {0x3f800000, 0xb3800000},
+  {0x3fc00000, 0x33800000}, {0x3f800001, 0x33800000}, {0x4b000000, 0x3f000000}, {0x4b000001, 0x3f000000},
+  {0x3f800000, 0x40400000}, {0xbf800000, 0x40400000}, {0x40490fdb, 0x402df854}, {0x53800000, 0x2b800000},
+};
+
+static unsigned int within40(unsigned int* state) {  //a random sign and mantissa, within 40 binades of 1
+  unsigned int w = next(state);
+  return (w & 0x807fffffu) | (87 + next(state) % 81) << 23;
+}
+
+static void safeArithmeticInput(int i, unsigned int* state, unsigned int* a, unsigned int* b) {
+  if(i < 12) {
+    *a = safeArithmeticChosen[i][0];
+    *b = safeArithmeticChosen[i][1];
+    return;
+  }
+  *a = within40(state);
+  unsigned int w = next(state);
+  *b = w >> 30 ? within40(state) : (*a ^ 0x80000000u) ^ (w & 0xffu);
+}
+
+static int measureConvertSafe(void) { return measureConvertFrom("fpu-convert-safe", 43, safeConvertInput); }
+static int measureArithmeticSafe(void) { return measureArithmeticFrom("fpu-arith-safe", 44, safeArithmeticInput, 1); }
+
+//Round 3: FCSR (FPU control register 31) as a program finds it, and FIR (register 0, which says what FPU it is).
+//FCSR's bit 24, flush to zero, decides what the FPU does with denormals.
+static int measureFpuState(void) {
+  Output out;
+  int started = begin(&out, "fpu-state");
+  if(started <= 0) return started == 0;
+  unsigned int w[2];
+  __asm__ volatile("cfc1 %0, $31\n" "cfc1 %1, $0\n" : "=r"(w[0]), "=r"(w[1]));
+  if(!writeOut(&out, "fpu-state", w, sizeof(w))) return 0;
+  return finish(&out, "fpu-state");
+}
+
+//The FPU probes (triangle): one value at a time of the kinds round 2's FPU tests started with, to find which stop
+//the PSP. Each probe runs one instruction once, in rounding mode 0 with FCSR's flags, enables and causes cleared and
+//flush to zero (bit 24) off, unless the probe turns it on (the -fs ones), and writes its inputs, its result, and
+//FCSR after it (whose cause and flag bits say what happened). A probe that stops the PSP isn't tried again: the next start gives up on it (its .stopped file
+//says which it was) and goes on with the next. They're in order from the least likely to stop the PSP to the most.
+//NaNs are in MIPS's encoding, the other way round from most processors': a quiet NaN has its top fraction bit
+//(22) clear (0x7fbfffff, or the VFPU's own 0x7f800001), a signaling one has it set (0x7fc00000).
+#define FPU_PROBE(name, instruction) \
+  static void name(unsigned int fcsr, unsigned int x, unsigned int y, unsigned int* result, unsigned int* after) { \
+    unsigned int saved; \
+    __asm__ volatile(".set push\n" ".set noreorder\n" \
+                     "cfc1 %2, $31\n" "nop\n" "ctc1 %5, $31\n" "nop\n" "mtc1 %3, $f0\n" "mtc1 %4, $f1\n" "nop\n" \
+                     instruction "\n" "nop\n" "mfc1 %0, $f2\n" "cfc1 %1, $31\n" "nop\n" "ctc1 %2, $31\n" "nop\n" \
+                     ".set pop\n" \
+                     : "=&r"(*result), "=&r"(*after), "=&r"(saved) : "r"(x), "r"(y), "r"(fcsr) \
+                     : "$f0", "$f1", "$f2"); \
+  }
+
+FPU_PROBE(probeAdd, "add.s $f2, $f0, $f1")
+FPU_PROBE(probeMul, "mul.s $f2, $f0, $f1")
+FPU_PROBE(probeDiv, "div.s $f2, $f0, $f1")
+FPU_PROBE(probeSqrt, "sqrt.s $f2, $f0")
+FPU_PROBE(probeConvert, "cvt.w.s $f2, $f0")
+
+enum { ProbeAdd, ProbeMul, ProbeDiv, ProbeSqrt, ProbeConvert };
+typedef struct { const char* name; int op; unsigned int a, b, fcsrSet; const char* about; } Probe;
+static const Probe probes[] = {
+  {"probe-div-zero",        ProbeDiv,     0x3f800000, 0x00000000, 0, "div.s 1 / 0"},
+  {"probe-mul-big",         ProbeMul,     0x7e800000, 0x7e800000, 0, "mul.s 2^126 * 2^126 (too big)"},
+  {"probe-sqrt-negative",   ProbeSqrt,    0xbf800000, 0,          0, "sqrt.s -1"},
+  {"probe-add-infinity",    ProbeAdd,     0x7f800000, 0x3f800000, 0, "add.s infinity + 1"},
+  {"probe-add-qnan",        ProbeAdd,     0x7fbfffff, 0x3f800000, 0, "add.s a quiet NaN (MIPS's, 0x7fbfffff) + 1"},
+  {"probe-add-snan",        ProbeAdd,     0x7fc00000, 0x3f800000, 0, "add.s a signaling NaN (MIPS's, 0x7fc00000) + 1"},
+  {"probe-cvt-minus-2p31",  ProbeConvert, 0xcf000000, 0,          0, "cvt.w.s -2^31 (the smallest integer, exactly)"},
+  {"probe-cvt-infinity",    ProbeConvert, 0x7f800000, 0,          0, "cvt.w.s infinity"},
+  {"probe-cvt-qnan",        ProbeConvert, 0x7fbfffff, 0,          0, "cvt.w.s a quiet NaN (MIPS's, 0x7fbfffff)"},
+  {"probe-cvt-snan",        ProbeConvert, 0x7fc00000, 0,          0, "cvt.w.s a signaling NaN (MIPS's, 0x7fc00000)"},
+  {"probe-cvt-2p31",        ProbeConvert, 0x4f000000, 0,          0, "cvt.w.s 2^31 (one past the largest integer)"},
+  {"probe-mul-tiny",        ProbeMul,     0x0d800000, 0x30800000, 0, "mul.s 2^-100 * 2^-30 (a denormal result)"},
+  {"probe-add-denormal",    ProbeAdd,     0x00000001, 0x3f800000, 0, "add.s the smallest denormal + 1"},
+  {"probe-cvt-denormal",    ProbeConvert, 0x00000001, 0,          0, "cvt.w.s the smallest denormal"},
+  {"probe-add-denormal-fs", ProbeAdd,     0x00000001, 0x3f800000, 1u << 24,
+   "add.s the smallest denormal + 1, with FCSR's flush-to-zero bit (24) set"},
+  {"probe-mul-tiny-fs",     ProbeMul,     0x0d800000, 0x30800000, 1u << 24,
+   "mul.s 2^-100 * 2^-30 (a denormal result), with FCSR's flush-to-zero bit (24) set"},
+  {"probe-cvt-denormal-fs", ProbeConvert, 0x00000001, 0,          1u << 24,
+   "cvt.w.s the smallest denormal, with FCSR's flush-to-zero bit (24) set"},
+};
+
+static int measureProbe(const Probe* probe) {
+  Output out;
+  int started = beginTrying(&out, probe->name, 0);
+  if(started <= 0) return started == 0;
+  unsigned int w[4] = {probe->a, probe->b, 0, 0}, fcsr = (fcsrFor(0) & ~(1u << 24)) | probe->fcsrSet;
+  switch(probe->op) {
+  case ProbeAdd: probeAdd(fcsr, probe->a, probe->b, &w[2], &w[3]); break;
+  case ProbeMul: probeMul(fcsr, probe->a, probe->b, &w[2], &w[3]); break;
+  case ProbeDiv: probeDiv(fcsr, probe->a, probe->b, &w[2], &w[3]); break;
+  case ProbeSqrt: probeSqrt(fcsr, probe->a, probe->b, &w[2], &w[3]); break;
+  default: probeConvert(fcsr, probe->a, probe->b, &w[2], &w[3]); break;
+  }
+  if(!writeOut(&out, probe->name, w, sizeof(w))) return 0;
+  return finish(&out, probe->name);
 }
 
 //The instruction recorder. Each entry of ops.h is one VFPU instruction (after up to three prefix instructions)
@@ -626,6 +816,7 @@ static int measureArithmetic(void) {
 //condition codes six random bits. After it, matrix 2 and the condition codes are kept.
 typedef struct { unsigned char count; unsigned int words[4]; const char* text; } Op;
 #include "ops.h"
+#include "ops3.h"  //round 3's list
 
 enum { OpRuns = 64, RunWords = 51 };
 static unsigned int stub[8] __attribute__((aligned(64)));
@@ -653,20 +844,21 @@ static void runOp(const Quad* m0, const Quad* m1, Quad* m2, unsigned int cc, uns
 //words (unused ones zero), then per run: matrix 0 and matrix 1 (16 words each, by column), the condition codes
 //set and as read back before the instruction, the condition codes after it, and matrix 2 after it (by column).
 //Run r of entry e draws its inputs from seed 0x10000 + e: matrix 0 then matrix 1 from mixed(), column by column,
-//then the condition codes as the top six bits of one more draw.
-static int measureOps(void) {
+//then the condition codes as the top six bits of one more draw. Round 3's ops3.bin is the same for ops3.h's
+//entries, from seed 0x30000 + e.
+static int measureOpsFrom(const char* name, const Op* table, int count, unsigned int seeds) {
   Output out;
-  int started = begin(&out, "ops");
+  int started = begin(&out, name);
   if(started <= 0) return started == 0;
-  unsigned int header[4] = {0x53504f56, 1, OP_COUNT, OpRuns};
-  if(!writeOut(&out, "ops", header, sizeof(header))) return 0;
+  unsigned int header[4] = {0x53504f56, 1, count, OpRuns};
+  if(!writeOut(&out, name, header, sizeof(header))) return 0;
   static unsigned int block[5 + OpRuns * RunWords];
   static Quad m0[4], m1[4], m2[4];
-  for(int e = 0; e < OP_COUNT; e++) {
-    const Op* op = &ops[e];
+  for(int e = 0; e < count; e++) {
+    const Op* op = &table[e];
     awake();
     pspDebugScreenSetXY(0, out.line);
-    print("ops %4d/%d %-40.40s", e + 1, OP_COUNT, op->text);
+    print("%s %4d/%d %-40.40s", name, e + 1, count, op->text);
     int n = 0;
     for(int i = 0; i < op->count; i++) stub[n++] = op->words[i];
     stub[n++] = 0x03e00008;  //jr ra
@@ -676,7 +868,7 @@ static int measureOps(void) {
     unsigned int* b = block;
     *b++ = op->count;
     for(int i = 0; i < 4; i++) *b++ = op->words[i];
-    unsigned int state = 0x10000 + e;
+    unsigned int state = seeds + e;
     for(int run = 0; run < OpRuns; run++) {
       for(int c = 0; c < 4; c++) for(int r = 0; r < 4; r++) m0[c].lane[r] = mixed(&state);
       for(int c = 0; c < 4; c++) for(int r = 0; r < 4; r++) m1[c].lane[r] = mixed(&state);
@@ -688,20 +880,23 @@ static int measureOps(void) {
       *b++ = cc; *b++ = before; *b++ = after;
       memcpy(b, m2, 64); b += 16;
     }
-    if(!writeOut(&out, "ops", block, sizeof(block))) return 0;
+    if(!writeOut(&out, name, block, sizeof(block))) return 0;
   }
-  return finish(&out, "ops");
+  return finish(&out, name);
 }
 
-//ops.txt: what each entry of ops.bin is, for people reading the file.
-static void writeOpsList(void) {
+static int measureOps(void) { return measureOpsFrom("ops", ops, OP_COUNT, 0x10000); }
+static int measureOps3(void) { return measureOpsFrom("ops3", ops3, OP3_COUNT, 0x30000); }
+
+//ops.txt (ops3.txt): what each entry of ops.bin (ops3.bin) is, for people reading the file.
+static void writeOpsList(const char* name, const Op* table, int count) {
   char path[320], text[160];
-  snprintf(path, sizeof(path), "%s/ops.txt", folder);
+  snprintf(path, sizeof(path), "%s/%s.txt", folder, name);
   SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
   if(file < 0) return;
-  for(int e = 0; e < OP_COUNT; e++) {
-    int length = snprintf(text, sizeof(text), "%d: %08x %08x %08x %08x (%d): %s\n", e, ops[e].words[0],
-                          ops[e].words[1], ops[e].words[2], ops[e].words[3], ops[e].count, ops[e].text);
+  for(int e = 0; e < count; e++) {
+    int length = snprintf(text, sizeof(text), "%d: %08x %08x %08x %08x (%d): %s\n", e, table[e].words[0],
+                          table[e].words[1], table[e].words[2], table[e].words[3], table[e].count, table[e].text);
     sceIoWrite(file, text, length);
   }
   sceIoClose(file);
@@ -713,7 +908,8 @@ static void writeLine(SceUID file, const char* text) {
 
 static void writeManifest(int round, const Test* list, unsigned int count) {
   char path[320], text[512];
-  snprintf(path, sizeof(path), "%s/%s", folder, round == 1 ? "manifest.txt" : "manifest2.txt");
+  const char* name = round == 1 ? "manifest.txt" : round == 2 ? "manifest2.txt" : "manifest3.txt";
+  snprintf(path, sizeof(path), "%s/%s", folder, name);
   SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
   if(file < 0) return;
   snprintf(text, sizeof(text),
@@ -730,6 +926,24 @@ static void writeManifest(int round, const Test* list, unsigned int count) {
       "vrnd.bin: the RCX registers (8 words) at start and 256 vrndi.s draws; then for 64 seeds (16 chosen, then the "
       "generator from 17): the seed, the RCX registers after vrnds.s, 4096 vrndi.s draws; then after seeding "
       "0x12345678, 256 vrndi.q (4 words each, lane 0 first)\n");
+  } else if(round == 3) {
+    writeLine(file,
+      "vmul-tiny's inputs (main.c: tinyProducts): one draw per lane, lane 0 first; j = 1 + its low 12 bits, s = "
+      "0x3f800000 - 2j with the draw's bit 31 for its sign, t = 0x00800000 + j with bit 30 for its sign\n"
+      "fpu-state.bin: FCSR (FPU control register 31) as the program found it, then FIR (control register 0)\n"
+      "fpu-convert-safe.bin: as fpu-convert.bin, for 4096 safe inputs (main.c: safeConvertInput, seed 43): x, then "
+      "for FCSR rounding modes 0-3: cvt.w.s, round.w.s, trunc.w.s, ceil.w.s, floor.w.s\n"
+      "fpu-arith-safe.bin: as fpu-arith.bin, for 4096 safe pairs (main.c: safeArithmeticInput, seed 44): a, b, then "
+      "for rounding modes 0-3: add.s, sub.s, mul.s, div.s, and sqrt.s of a's size (its sign bit cleared)\n"
+      "ops3.bin: the instruction recorder (as ops.bin) for ops3.h's entries, from seed 0x30000 + entry; ops3.txt "
+      "lists them\n"
+      "the FPU probes (triangle), <name>.bin for each below: a, b, the result, and FCSR after the instruction; run "
+      "once in rounding mode 0, FCSR's flags, enables and causes cleared, flush to zero (bit 24) off but where set:\n");
+    for(unsigned int i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+      snprintf(text, sizeof(text), "  %s: %s\n", probes[i].name, probes[i].about);
+      writeLine(file, text);
+    }
+    writeLine(file, "<name>.stopped: a test that stopped the PSP (twice, or once for a probe), given up on\n");
   } else {
     writeLine(file,
       "the adding tests draw each result's inputs lane 0 first, s then t (see main.c: dotOne, dotTwo, dotClose, "
@@ -751,12 +965,18 @@ static void writeManifest(int round, const Test* list, unsigned int count) {
 int main(int argc, char** argv) {
   pspDebugScreenInit();
   print("psp-vfpu-measure: what this PSP's VFPU computes\n\n");
-  print("X: round 2 (the second measurements, about 230 MB)\n");
+  print("Square: round 3 (the third measurements, about 6 MB)\n");
+  print("Triangle: the FPU probes. Any of them may switch the PSP off: if one\n"
+        "  does, start this again and choose the probes again; it gives up on\n"
+        "  that one and goes on with the next.\n");
+  print("X: round 2 (the second measurements again, about 230 MB)\n");
   print("O: round 1 (the first measurements again, about 450 MB)\n\n");
   SceCtrlData pad;
-  int round = Shrink ? 2 : 0;
+  int round = Shrink ? 3 : 0;  //4: the probes
   while(!round) {
     sceCtrlReadBufferPositive(&pad, 1);
+    if(pad.Buttons & PSP_CTRL_SQUARE) round = 3;
+    if(pad.Buttons & PSP_CTRL_TRIANGLE) round = 4;
     if(pad.Buttons & PSP_CTRL_CROSS) round = 2;
     if(pad.Buttons & PSP_CTRL_CIRCLE) round = 1;
   }
@@ -767,16 +987,30 @@ int main(int argc, char** argv) {
   if(slash) *slash = 0;
   strcat(folder, "/results");
   sceIoMkdir(folder, 0777);
-  print("round %d, writing to %s\n\n", round, folder);
+  if(round == 4) print("the FPU probes, writing to %s\n\n", folder);
+  else print("round %d, writing to %s\n\n", round, folder);
 
   int ok = 1;
   if(round == 1) {
     writeManifest(1, tests, sizeof(tests) / sizeof(tests[0]));
     for(unsigned int i = 0; ok && i < sizeof(tests) / sizeof(tests[0]); i++) ok = measure(&tests[i]);
     if(ok) ok = measureRandom();
+  } else if(round >= 3) {
+    writeManifest(3, tests3, sizeof(tests3) / sizeof(tests3[0]));
+    if(round == 3) {
+      writeOpsList("ops3", ops3, OP3_COUNT);
+      ok = measureFpuState();
+      for(unsigned int i = 0; ok && i < sizeof(tests3) / sizeof(tests3[0]); i++) ok = measure(&tests3[i]);
+      if(ok) ok = measureConvertSafe();
+      if(ok) ok = measureArithmeticSafe();
+      if(ok) ok = measureOps3();
+    }
+    if(round == 4 || Shrink) {  //the quick version for emulators tries the probes too
+      for(unsigned int i = 0; ok && i < sizeof(probes) / sizeof(probes[0]); i++) ok = measureProbe(&probes[i]);
+    }
   } else {
     writeManifest(2, tests2, sizeof(tests2) / sizeof(tests2[0]));
-    writeOpsList();
+    writeOpsList("ops", ops, OP_COUNT);
     for(unsigned int i = 0; ok && i < sizeof(tests2) / sizeof(tests2[0]); i++) ok = measure(&tests2[i]);
     if(ok) ok = measureHalves();
     if(ok) ok = measureFloatsToHalves();
@@ -793,7 +1027,7 @@ int main(int argc, char** argv) {
   }
   do {
     sceCtrlReadBufferPositive(&pad, 1);
-  } while(pad.Buttons & PSP_CTRL_CROSS);  //let go of the X that started round 2 first
+  } while(pad.Buttons & PSP_CTRL_CROSS);  //let go of an X that started round 2 first
   do {
     sceCtrlReadBufferPositive(&pad, 1);
   } while(!(pad.Buttons & PSP_CTRL_CROSS));
