@@ -539,7 +539,7 @@ turns that one check off (`ASAN_OPTIONS`); the run takes 95 seconds.
 The rules above that came from PPSSPP or uOFW rather than from measurements of our own are what
 `tools/psp-ge-measure` records on a real PSP. Like the VFPU's program it's homebrew built with pspdev's toolchain
 (`make SMOKE=1` builds a version for an emulator, which starts at once and leaves when done). It draws each case into
-VRAM, reads the pixels back as they are and writes them to `results/` beside its EBOOT.PBP: 59 result files and a
+VRAM, reads the pixels back as they are and writes them to `results/` beside its EBOOT.PBP: 64 result files and a
 manifest, about 15 MB, in a few seconds. The cases:
 
 - every blend operation and factor, over every source color and alpha;
@@ -558,12 +558,16 @@ manifest, about 15 MB, in a few seconds. The cases:
   across it; a 3D sprite whose corners lie at different depths, textured and fogged; the GE's rounding onto the
   screen (edges moved in 256ths of a pixel past a sample point); a triangle cut at the near plane, with
   DEPTH_CLIP_ENABLE on and off; which depths stop triangles, points and sprites, with it on and off; and culling
-  either way, in 3D and through mode.
+  either way, in 3D and through mode;
+- lighting (part 12), each case 256 cells of one lit color: diffuse across the angles on a material and on the
+  vertex's color standing for it; the shine across the angles with coefficients 2 and 7; a spotlight's pool with its
+  direction toward the light and away from it (which way the GE takes it); a point light's fading with all three
+  terms; and environment mapping's coordinates over a hemisphere of normals, from a plain light and a shining one.
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in this core (with
 `PSP_TEST_PROGRAMS`), checks that every file is written, and with `PSP_GE_RESULTS` set to a results folder lists what
 differs from it (`PSP_GE_OURS` keeps this core's files for a closer look). Against PPSSPP's software renderer (its
-headless build running the smoke version), 56 of the 59 files match: 55 pictures identical, and the controller's
+headless build running the smoke version), 61 of the 64 files match: 60 pictures identical, and the controller's
 timing agreeing on what waits (a second latch read doesn't, a buffer read after a vertical blank doesn't either, and a
 second buffer read waits a frame). The three that differ are the PSP's to settle:
 

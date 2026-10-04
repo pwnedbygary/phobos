@@ -758,6 +758,14 @@ Checks:
 
 Not yet: lines, mipmaps, curved surfaces, bounding boxes, PRIM kind 7.
 
+A second commit adds five lighting cases to `tools/psp-ge-measure` (diffuse and the shine across the angles, a
+spotlight's direction either way, a point light's fading, environment mapping), all identical to PPSSPP's software
+renderer here; 61 of the program's 64 files now match it. While they were being written, an unfinished set of lighting
+cases appeared in `main.c` from another writer (a Cursor agent worker is registered for this folder). The user said
+nothing else was running, so the two sets were merged into one: the other set's cell helper, its finer angle sweep
+and its resets in `start()`, with these halves and cases. Copies of both versions are kept outside the repository in
+`.local/`. The refreshed EBOOT.PBP replaces the one on the RP6 in `Download/GEMEASURE`.
+
 ## PSP core: measuring 3D on a PSP — 2026-10-04
 
 Branch `cursor/psp-3d-measure-2b67`, stacked on `cursor/psp-3d-2b67` (for stack #106). `tools/psp-ge-measure` gains
