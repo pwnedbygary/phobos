@@ -13,7 +13,9 @@ measurements on `cursor/psp-3d-measure-2b67`; part 12, lighting, on `cursor/psp-
 whole feature to be stacked and merged at once (GitHub stack #106).
 Part 13, the PSP in Phobos (an ares system, mia's medium, the Android app's entry), is on `cursor/psp-app-2b67`:
 homebrew runs in the app on the RP6. Part 14, disc images (ISO and CSO, the disc's files, the drive), is on
-`cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`.
+`cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`. Part 17, the functions the retail games that
+now start ask for (callbacks, sound output's timing, power, interrupt handlers, memory pools, the system's dialogs and
+saves), is on `cursor/psp-retail-load-2b67`.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -1234,7 +1236,7 @@ Tests:
   registers, its global pointer, its name), new descriptors going on from the old; a list and a text longer than the
   rest of the state refused; a disc file dropped where no disc image is in the drive (none, or a host folder standing
   for disc0:); host names with '\' or ':' left out of a listing. "state fields": a machine with one of everything has
-  each of 212 fields (the CPU's, the GE's and the
+  each of its fields (212 then, more with part 17's; the CPU's, the GE's and the
   kernel's) changed in turn, each change leaving a value a fresh machine doesn't have, and each must change the
   state; the state, every field changed, then loads into a fresh machine, which must make the very same state; last,
   54 values no machine could hold are refused one at a time, the machine as it was after each (among them each kind
@@ -1324,3 +1326,114 @@ Tests:
   DAX, a JSO and CHDs (hunks of one sector and of four), as from the ISO and the CSO; a CD's CHD, and one needing its
   parent, isn't taken as the disc. Its script builds libchdr as the app does.
 - The app's `LaunchSystemsTest`: .zso, .dax and .jso go to the PSP alone; a .chd by its folder.
+
+## Part 17: the functions retail games ask for
+
+On branch `cursor/psp-retail-load-2b67`, after part 16's "one block for a program's memory" (2026-10-05). Lumines,
+Space Invaders Extreme, Brave Story: New Traveler, GTA: Sindacco Chronicles (a GTA LCS mod with a plain EBOOT) and
+the Street Fighter III 3rd Strike port load from the user's CHDs and run their own code; this part gives them what
+they asked for next, as a scratch host runner (never committed: the system as `tests/psp/ares` builds it, booting a
+CHD, tracing every system call, dumping frames) showed it, function by function. Behavior comes from pspsdk's
+headers and from PPSSPP's reading of the PSP (its tests on the hardware, pspautotests), which the code cites where it
+depends on it; our own code.
+
+- **NIDs that aren't their names' hashes.** Sony gave some later functions random NIDs, so the kernel can list a
+  function by the NID games import (`addNID` in kernel.cpp): sceKernelSetCompiledSdkVersion370 and its siblings for
+  later SDKs (342061e5...), sceKernelStopUnloadSelfModuleWithStatus (8f2df740), under the names the homebrew scene
+  gave them. Every other new function is listed by name, and each name's hash was checked against the NIDs the
+  games import.
+- **Memory** (sysmem.cpp). sceKernelAllocPartitionMemory's aligned types: 3, the lowest place starting on a multiple
+  of an alignment (the fifth argument, a power of two), and 4, the highest; Sony's SDK makes its heaps with them,
+  and refusing them was Space Invaders Extreme's C++ abort and Brave Story's "can't allocate memory". The type is
+  checked first, then the alignment, then the partition. The user partition is a PSP-1000's 24 MiB (0x08800000 to
+  0x0a000000), the first thread's stack at its top as on a PSP, unless the program's PARAM.SFO (its EBOOT.PBP's, or
+  the disc's PSP_GAME/PARAM.SFO) asks for all of RAM with MEMSIZE 1, as the Street Fighter III port does; the
+  shop-bought games don't. Lumines' 23 MiB program leaves it about 1 MiB, in which it makes its threads and a 64 KiB
+  block, as on a PSP. The SDK and compiler versions a program's start-up code sets are kept to be read back.
+- **Callbacks** (events.cpp). A thread's callbacks, once notified (sceKernelNotifyCallback, or the system: the power
+  switch's are told of the battery as they're registered), run on that thread when it waits in a function whose
+  name ends in CB (sceKernelSleepThreadCB, DelayThreadCB, WaitSemaCB, WaitEventFlagCB, WaitThreadEndCB,
+  sceDisplayWaitVblankStartCB, sceUmdWaitDriveStatCB, AllocateFplCB/VplCB) or calls sceKernelCheckCallback, by its
+  priority: it's made ready with its wait kept, its registers and wait are put aside, each callback runs on its stack
+  as fn(times notified, the last word, its argument), one returning non-zero is deleted, and the thread goes back
+  into its wait, which ends at once if its time ran out (the clock doesn't stop for callbacks) or what it waited for
+  came or was deleted meanwhile. Callbacks may wait themselves. A thread's callbacks go with it.
+- **The display** (display.cpp): sceDisplayWaitVblankStartCB, WaitVblank (not waiting, returning 1, inside the
+  vertical blank, which lasts 0.77 ms as pspautotests measured), IsVblank, GetCurrentHcount (lines of 525 dots at
+  9 MHz, counted from the blank's start).
+- **Interrupt handlers** (interrupts.cpp): sceKernelRegisterSubIntrHandler, ReleaseSubIntrHandler, EnableSubIntr,
+  DisableSubIntr for the vertical blank's sub-interrupts 0-15 (the rest are the kernel's) and the GE's (accepted;
+  nothing raises them yet), with interruptman.prx's errors in PPSSPP's order. The vertical blank's run at each blank
+  as calls into the program (part 9), with the global pointer they were registered with; time goes on for them
+  while every thread waits. Lumines' main task waited on its handler.
+- **Sound output's timing** (audio.cpp). The eight channels (reserve, release, blocking and non-blocking outputs,
+  panned or not, rest lengths, data length, format, volume) and the SRC channel (sceAudioOutput2*, sceAudioSRC*), as
+  the PSP's driver behaves by PPSSPP's notes from tests: a channel holds one buffer, read 64 samples at a time for
+  every channel (a block each 64/44100 s) while any plays, the first block taken as the first buffer arrives; a
+  blocking output waits until the channel's buffer has played (one waiter per channel; a second is told BUSY); the
+  SRC channel queues two buffers and returns once one has finished. **The samples aren't played yet: the speakers
+  get silence**, and volumes and formats do nothing; but every buffer takes its playing time, which is what paces
+  the games' sound threads (Lumines' spun at full speed without it, starving its game).
+- **Power** (power.cpp): the battery (on the charger, full), callbacks for the power switch (16 slots), the clocks
+  as games set them and read them back (floats in f0; changing the PLL makes the caller wait as PPSSPP measured: 150
+  ms, 16.6 between 266 and 333 MHz). The CPU's time still counts 333 MHz cycles, one per instruction, whatever is
+  asked: a game at 222 MHz gets its work done faster than a PSP would (it waits for the vertical blank anyway).
+  sceSuspendForUser's power tick and locks, and the volatile memory (0x08400000, 4 MiB) lent once at a time.
+- **Memory pools** (pools.cpp): fixed (FPL) and variable (VPL), created from the user partition, handing out the
+  lowest free block or place (a VPL keeps 32 bytes for itself and 8 before each piece, as the PSP's do; how the PSP
+  chooses places isn't known here, so free sizes may differ), threads waiting in order or by priority, timeouts,
+  deletion and cancelling.
+- **The system's dialogs** (utility.cpp): one at a time, their statuses (starting, running, finished, closing) with
+  PPSSPP's timings. Saves are real: a folder per save in the memory stick's PSP/SAVEDATA (`<game><save>`) holding the
+  data file the game hands over, loaded back, sized (the stick's free space, 1 GiB, the save's size), listed and
+  deleted; a load with none says so (the PSP's "no data"). Not yet: the encryption a PSP applies, the save's
+  PARAM.SFO and icons, and drawing the dialogs. A message dialog is answered Yes at once (its text noted); the
+  keyboard, network settings, game sharing and the browser are cancelled. sceUtilityLoadModule (and the net module
+  versions) marks the optional libraries the HLE provides loaded.
+- **Threads and clocks**: sceKernelChangeThreadPriority, GetThreadExitStatus, TerminateThread,
+  TerminateDeleteThread, Suspend/ResumeThread (a suspended thread isn't scheduled whatever its state),
+  ChangeCurrentThreadAttr, GetThreadStackFreeSize (new stacks are filled with 0xff and the thread's ID written at
+  their bottom, as on a PSP), ReferSemaStatus, the profilers (a retail PSP has none), SysClock2USec(Wide),
+  sceKernelLibcClock, sceRtcGetTick and CompareTick, the Mersenne Twister in the program's memory, sceKernelPrintf,
+  sceDmacMemcpy, the WLAN switch (off), sceImposeSetLanguageMode, and sceKernelStopUnloadSelfModuleWithStatus, which
+  ends the program (a C++ abort ends there).
+- **Save states** carry all of it; the state fields test has every new field, and refuses what no machine could
+  hold (a callback, a waiter or a pool ID not handed out yet, the mixer's count past 49 blocks or started in the
+  future, three buffers on the SRC channel, an SRC rate of 0).
+
+What the games do now, on the host (the frames are the runner's PNGs, kept outside the repository):
+
+- **Lumines**: the Bandai logo, then its title screen ("PRESS START BUTTON", writing its save,
+  `PSP/SAVEDATA/ULUS10002LUMINES`); with Start and Cross pressed it reaches its menu. Still asking for: sceSasCore
+  (its music and effects; __sceSasInit fails and it carries on), sceKernelLoadModule for its own kernel modules
+  (network and sound, from `USRDIR/kmodule`; it prints "False" and carries on).
+- **Street Fighter III 3rd Strike (port)**: the CAPCOM logo, its intro art, and its title screen ("PRESS START
+  BUTTON") at 60 frames a second, four sound threads paced by their channels; no function missing in 1200 frames.
+- **Space Invaders Extreme**: its heap allocated, the utility modules loaded, its channels reserved; __sceSasInit
+  fails, and it then retries sceKernelLoadModule (a module of its own on the disc) in a loop for good: the module
+  manager's.
+- **Brave Story**: its graphics library starts ("SGX system initialize"), then __sceSasInit fails ("failed to
+  initialize SAS"), a load from address 8 follows (a pointer that sound would have set), and it asks for
+  sceIoReadAsync; the screen stays black.
+- **GTA: Sindacco Chronicles**: past its power callbacks, it retries sceKernelLoadModuleByID every half second for
+  `USRDIR/PRX2_6_0/KMOD/AUDIOCODEC.PRX`, one of Sony's library modules (encrypted), which the module manager must
+  recognize as provided by the HLE; also sceIoChangeAsyncPriority and the asynchronous file functions after it.
+
+Next: sceSasCore (a silent one first, voices ending as they're keyed, then the real synthesizer), the asynchronous
+file functions (sceIoReadAsync, WaitAsync, PollAsync, ChangeAsyncPriority...), message pipes and mailboxes (the
+port and Brave Story import them), the module manager's loading (with decryption, another branch's work), and
+playing the sound.
+
+Tests (`tests/psp/run-tests.sh`, 123 groups; `tests/psp/ares` 195 checks): `kernel.cpp` (aligned blocks, the user
+partition from a PBP's and a disc's PARAM.SFO, SDK versions, the self-unload), and new files, programs run on both
+engines: `callbacks.cpp` (callbacks in waits, waits going on after them, by priority, called directly, the vertical
+blank's timing, a vertical blank handler held off and released), `power.cpp` (power callbacks, clocks, volatile
+memory, thread control, stack fill, clocks and dates against known values: MT19937's 10000th number, ticks of
+known dates), `audio.cpp` (channels, the blocking outputs returning after 0, 15, 31 and 47 blocks, the SRC
+channel's queue), `utility.cpp` (a save made, loaded, sized, listed and deleted; dialogs; modules), `pools.cpp`
+(fixed and variable pools, waits, timeouts, deletion). A broken version that never resumed a wait after its
+callbacks failed 18 checks of `callbacks.cpp`.
+
+Uncertain: the vertical blank's exact length (0.77 ms from a measurement of a wait's end), the hcount's origin;
+whether the PSP notifies a power callback as it's registered (PPSSPP's reading); the VPL's placement; the dialogs'
+timings; the CPU clock not slowing at 222 MHz; and the errors taken from PPSSPP's tables where pspsdk has none.
