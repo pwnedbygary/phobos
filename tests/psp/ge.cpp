@@ -5,8 +5,10 @@
 //a GU program of Phobos's own and pspsdk's GU sample "copy".
 #include "kernel-machine.hpp"
 
+#include <csignal>
 #include <cstdlib>
 #include <fstream>
+#include <unistd.h>
 
 namespace allegrex_test::psp {
 
@@ -824,11 +826,124 @@ static auto copySample() -> void {
   }
 }
 
+//Display lists that never end, and no thread to run: one that JUMPs back to its own start; one that jumps back by a
+//SIGNAL (kind 0x10) after every command; one that SYNCs (SIGNAL 0x08) and FINISHes over and over; one that draws a
+//dot and jumps back. Each stops the GE after a million commands, however often it stops on the way, and the frame
+//still ends, the GE going on as time passes (Kernel::idle()) rather than holding the clock still; each vertical blank
+//gives it a million more. With a thread that wakes every 10 microseconds, giving the GE a go each time, a frame's
+//goes still share its million commands. A list that SIGNALs (0x02) for a callback
+//over and over has the GE wait whenever a callback still waits its turn, or runs: one that moves the stall address on
+//finds the list still running at the next SIGNAL, which waits for it.
+static auto geEndless() -> void {
+  //should a list never let go, the tests stop here, saying why, rather than run on forever
+  signal(SIGALRM, [](int) {
+    const char text[] = "FAIL ge endless list: a display list never let go\n";
+    if(write(2, text, sizeof(text) - 1)) {}
+    _exit(1);
+  });
+  alarm(240);
+  for(u32 kind : {0u, 1u, 2u, 3u}) {
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    ListWriter list{memory, ListA};
+    if(kind == 0) list.to(GE::Jump, ListA);
+    if(kind == 1) list.put(GE::Signal, 0x10'0000 | ListA >> 16), list.put(GE::End, ListA & 0xffff);
+    if(kind == 2) list.put(GE::Signal, 0x08'0000), list.put(GE::End), list.put(GE::Finish), list.put(GE::End),
+                  list.to(GE::Jump, ListA);
+    if(kind == 3) {  //a dot, in clear mode, into a small frame buffer: over and over
+      list.put(GE::FrameBufferPointer, 0);
+      list.put(GE::FrameBufferWidth, 16);
+      list.put(GE::FrameBufferPixelFormat, 3);
+      list.put(GE::Scissor1, 0);
+      list.put(GE::Scissor2, 15 << 10 | 15);
+      list.put(GE::Region2, 1023 << 10 | 1023);
+      list.put(GE::ClearMode, 0x101);
+      list.put(GE::VertexType, 0x80'011c);
+      u32 loop = list.address;
+      list.to(GE::VertexAddress, Vertices);
+      list.put(GE::Primitive, GE::Sprites << 16 | 2);
+      list.to(GE::Jump, loop);
+      memory.write(4, Vertices, 0xff00'00ff);
+      memory.write(2, Vertices + 4, 0); memory.write(2, Vertices + 6, 0); memory.write(2, Vertices + 8, 0);
+      memory.write(4, Vertices + 12, 0xff00'00ff);
+      memory.write(2, Vertices + 16, 1); memory.write(2, Vertices + 18, 1); memory.write(2, Vertices + 20, 0);
+    }
+    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    CHECK(m.kernel.geBusy, true);
+    u64 start = m.kernel.cycles, before = m.kernel.geCommands;
+    m.kernel.run(2 * Kernel::VblankCycles);
+    CHECK(m.kernel.cycles - start >= 2 * Kernel::VblankCycles, true);
+    CHECK(m.kernel.geBusy, true);  //and the list goes on,
+    u64 ran = m.kernel.geCommands - before;
+    CHECK(ran >= Kernel::GeBudget && ran <= 2 * Kernel::GeBudget, true);  //a million commands a vertical blank
+  }
+  {
+    KernelMachine m;
+    m.system.recompiler.enabled = false;
+    m.system.power(0x0880'1000);
+    Assembler sleepy{m, 0x0880'1000};
+    sleepy.li(a0, 10); sleepy.call("sceKernelDelayThread");
+    sleepy.put(j(0x0880'1000)); sleepy.put(nop);
+    ListWriter list{m.system.memory, ListA};
+    list.to(GE::Jump, ListA);
+    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    s32 uid = m.kernel.createThread("sleepy", 0x0880'1000, 0x20, 0x1000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+    u64 before = m.kernel.geCommands;
+    m.kernel.run(3 * Kernel::VblankCycles);
+    CHECK(m.kernel.vblanks >= 3, true);
+    u64 ran = m.kernel.geCommands - before;
+    CHECK(ran >= 2 * Kernel::GeBudget && ran <= 4 * Kernel::GeBudget, true);  //each frame's million, used
+  }
+  {
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    constexpr u32 Looks = KernelMachine::Results + 0x40;  //what each callback saw of the list (sceGeListSync's word)
+    Assembler look{m, 0x0880'4300};  //moves the stall address to the list's end, then looks at the list
+    look.put(addiu(sp, sp, -16)); look.put(sw(ra, 12, sp)); look.put(sw(a0, 8, sp));
+    look.li(a0, Kernel::GeListIDs); look.li(a1, ListB + 24); look.call("sceGeListUpdateStallAddr");
+    look.li(a0, Kernel::GeListIDs); look.li(a1, 1); look.call("sceGeListSync");
+    look.put(lw(t1, 8, sp)); look.put(sll(t1, t1, 2)); look.li(t0, Looks); look.put(addu(t0, t0, t1));
+    look.put(sw(v0, 0, t0));
+    look.put(lw(ra, 12, sp)); look.put(addiu(sp, sp, 16));
+    look.put(jr(ra)); look.put(nop);
+    for(u32 n = 0; n < 4; n++) memory.write(4, Callbacks + 4 * n, n ? 0 : 0x0880'4300);
+    u32 id = m.call("sceGeSetCallback", {Callbacks});
+    ListWriter list{memory, ListB};
+    list.put(GE::Signal, 0x02'0001); list.put(GE::End);
+    list.put(GE::Signal, 0x02'0002); list.put(GE::End);
+    list.put(GE::Finish); list.put(GE::End);
+    m.call("sceGeListEnQueue", {ListB, ListB + 8, id, 0});  //stalled at the second SIGNAL
+    m.kernel.run(100'000);
+    CHECK(memory.read(4, Looks + 4), 2);  //the first callback found the list still running: the GE waited for it
+    CHECK(m.call("sceGeListSync", {Kernel::GeListIDs, 1}), 0);  //and once both had run, it finished
+  }
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  constexpr u32 Function = 0x0880'4200;
+  memory.write(4, Function, jr(ra));
+  memory.write(4, Function + 4, 0);  //nop
+  for(u32 n = 0; n < 4; n++) memory.write(4, Callbacks + 4 * n, n ? 0 : Function);
+  u32 id = m.call("sceGeSetCallback", {Callbacks});
+  ListWriter list{memory, ListA};
+  list.put(GE::Signal, 0x02'0001);
+  list.put(GE::End);
+  list.to(GE::Jump, ListA);
+  m.call("sceGeListEnQueue", {ListA, 0, id, 0});
+  bool bounded = m.kernel.calls.size() <= 2 && m.kernel.geSuspended;
+  CHECK(bounded, true);
+  if(bounded) {  //(were they not, running on would pile up more with every go the GE has)
+    m.kernel.run(100'000);
+    CHECK(m.kernel.calls.size() <= 2, true);
+  }
+  alarm(0);
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
     {"ge clear", geClear}, {"ge transfer", geTransfer}, {"ge driver", geDriver}, {"ge base kept", geBaseKept},
-    {"ge saved state", geSaved},
+    {"ge saved state", geSaved}, {"ge endless list", geEndless},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause},
     {"ge calls and threads", geCallsAndThreads},

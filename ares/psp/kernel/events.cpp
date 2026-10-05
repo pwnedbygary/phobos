@@ -38,7 +38,8 @@ auto Kernel::eventFlagWaiters(const EventFlag& flag) -> std::vector<Thread*> {
 //(name, attributes, initial bits, options)
 auto Kernel::sceKernelCreateEventFlag() -> void {
   if(arg(1) & ~0x3ffu) return result(ErrorIllegalAttribute);
-  u32 uid = nextUID++;
+  u32 uid = newUID();
+  if(!uid) return result(ErrorNoMemory);
   eventFlags[uid] = {uid, memory.readString(arg(0), 31), arg(1), arg(2), arg(2)};
   result(uid);
 }
@@ -149,7 +150,8 @@ auto Kernel::sceKernelReferEventFlagStatus() -> void {
 
 //(name, function, argument)
 auto Kernel::sceKernelCreateCallback() -> void {
-  u32 uid = nextUID++;
+  u32 uid = newUID();
+  if(!uid) return result(ErrorNoMemory);
   callbacks[uid] = {uid, memory.readString(arg(0), 31), arg(1), arg(2), current ? current->uid : 0};
   result(uid);
 }

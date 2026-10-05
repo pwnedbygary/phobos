@@ -56,6 +56,9 @@ namespace ares {
   auto setZxTapeAuto(bool enabled) -> void;
   auto setN64DebugLogging(bool enabled) -> void;
   auto saveState(const char* path) -> bool;
+  // 1 saved, 0 nothing to save (a game that ended by itself, a core stuck in a frame for two seconds), -1 not
+  // written.
+  auto trySaveState(const char* path) -> int;
   auto loadState(const char* path) -> bool;
   auto getSaveFiles() -> std::vector<string>;
   auto getButtonNames() -> std::vector<string>;

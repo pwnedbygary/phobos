@@ -6,14 +6,22 @@ auto Kernel::findThread(u32 uid) -> Thread* {
   return found == threads.end() ? nullptr : found->second.get();
 }
 
+//A new object's ID. They count up from 0x100 and are never handed out twice; being positive 32-bit numbers, they run
+//out after 2^31 less 256 of them, and there's none (0) after that: the object can't be made.
+auto Kernel::newUID() -> u32 {
+  return nextUID <= LastUID ? nextUID++ : 0;
+}
+
 //A new thread, dormant until started: its stack comes from the top of the user partition, as the PSP takes it.
 auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 stackSize, u32 attributes, u32 gp) -> s32 {
   if(priority < 0x01 || priority > 0x7f) return ErrorIllegalPriority;
   if(stackSize < 0x200) return ErrorIllegalStackSize;
   auto block = allocate(stackSize, 1, 0, "stack: " + name);
   if(!block) return ErrorNoMemory;
+  u32 uid = newUID();
+  if(!uid) return release(block->uid), ErrorNoMemory;
   auto thread = std::make_unique<Thread>();
-  thread->uid = nextUID++;
+  thread->uid = uid;
   thread->name = name;
   thread->entry = entry;
   thread->priority = thread->initialPriority = priority;
@@ -21,7 +29,6 @@ auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 
   thread->stackSize = block->size;
   thread->attributes = attributes;
   thread->gp = gp;
-  u32 uid = thread->uid;
   threads[uid] = std::move(thread);
   return uid;
 }
@@ -148,6 +155,7 @@ auto Kernel::events() -> void {
   while(cycles >= nextVblank) {
     nextVblank += VblankCycles;
     vblanks++;
+    geLeft = GeBudget;  //the GE's commands for the next frame
     for(auto& [uid, thread] : threads) {
       if(thread->status == Status::Waiting && thread->wait == Wait::Vblank) ready(*thread, 0), woke = true;
     }
@@ -180,11 +188,12 @@ auto Kernel::untilNextEvent() const -> u64 {
 }
 
 //No thread can run: time jumps to the next thing due (or to end, if that comes first). False if nothing ever will be:
-//no thread waits for a time or a frame, so they all wait on each other (or there are none left). The GE still
-//running, or a call into the program waiting its turn, will come first.
+//no thread waits for a time or a frame, so they all wait on each other (or there are none left). A call into the
+//program waiting its turn comes first. The GE still running goes on as time passes: Kernel::run() gives it another
+//go each time round, so even a display list that never ends lets the frame end.
 auto Kernel::idle(u64 end) -> bool {
-  if(geBusy || interrupting || (!calls.empty() && interruptsEnabled)) return true;
-  bool timed = false;
+  if(interrupting || (!calls.empty() && interruptsEnabled)) return true;
+  bool timed = geBusy;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
     if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;
@@ -358,7 +367,8 @@ auto Kernel::sceKernelWaitThreadEnd() -> void {
 auto Kernel::sceKernelCreateSema() -> void {
   s32 initial = s32(arg(2)), maximum = s32(arg(3));
   if(initial < 0 || maximum <= 0 || initial > maximum) return result(ErrorIllegalCount);
-  u32 uid = nextUID++;
+  u32 uid = newUID();
+  if(!uid) return result(ErrorNoMemory);
   semaphores[uid] = {uid, memory.readString(arg(0), 31), arg(1), initial, maximum};
   result(uid);
 }
@@ -440,7 +450,8 @@ auto Kernel::sceKernelCreateLwMutex() -> void {
   u32 workArea = arg(0), attributes = arg(2);
   s32 count = s32(arg(3));
   if(count < 0 || (count > 1 && !(attributes & 0x200))) return result(ErrorIllegalCount);
-  u32 uid = nextUID++;
+  u32 uid = newUID();
+  if(!uid) return result(ErrorNoMemory);
   lwMutexes[uid] = workArea;
   memory.write(4, workArea + 0, u32(count));
   memory.write(4, workArea + 4, count && current ? current->uid : 0xffff'ffff);

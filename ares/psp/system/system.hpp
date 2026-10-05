@@ -59,18 +59,25 @@ struct System {
   auto unload() -> void;
   auto save() -> void;
   auto power(bool reset) -> void;
+  auto serialize(bool synchronize) -> serializer;
+  auto unserialize(serializer& s) -> bool;
 
 private:
   std::vector<u8*> pageTable;  //the CPU's view of memory, page by page (Memory::buildPages)
   std::vector<u32> pixels;     //the frame the game shows
   f64 soundOwed = 0;           //sound frames due to the speakers: 44100 a second, so 735.7 a frame
   u32 unmappedReports = 0;     //accesses to nothing, reported (the first few only)
+  u64 programHash = 0;         //the program that started (hash()): states carry it, to load into it alone
 
   auto allocate(Node::Port port) -> Node::Peripheral;
   auto connect() -> void;
   auto disconnect() -> void;
   auto startProgram() -> void;
   auto startDisc(std::shared_ptr<vfs::file> fp) -> void;
+  static auto hash(std::span<const u8> bytes) -> u64;
+  auto snapshot() -> serializer;
+  auto header(serializer& s) -> bool;
+  auto restore(serializer& s, u32 length) -> bool;
   auto report(bool problem, const std::string& text) -> void;
 };
 

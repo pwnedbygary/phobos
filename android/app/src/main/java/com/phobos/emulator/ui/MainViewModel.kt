@@ -43,6 +43,7 @@ import com.phobos.emulator.data.ThemeMode
 import com.phobos.emulator.data.UiEffects
 import com.phobos.emulator.data.XmbBackdropScene
 import com.phobos.emulator.launch.LaunchRequest
+import com.phobos.emulator.launch.LaunchSystems
 import com.phobos.emulator.launch.LaunchTarget
 import com.phobos.emulator.launch.resolveLaunch
 import com.phobos.emulator.ui.hud.HudEdit
@@ -56,6 +57,7 @@ import com.phobos.emulator.ui.touch.TouchFamily
 import com.phobos.emulator.ui.touch.TouchLayoutCodec
 import com.phobos.emulator.ui.touch.TouchPrefs
 import com.phobos.emulator.ui.touch.touchLayoutKey
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -255,11 +257,6 @@ class MainViewModel(
         private const val CUE_TRACKS = "cue_tracks"
         // Systems whose disc native code can change while the game runs; the other CD systems read a disc from the start.
         private val DISC_SWAP_SYSTEMS = setOf("PlayStation")
-        // Systems whose core can't make a state yet (its state would be empty, which native code refuses to save).
-        private val NO_STATE_SYSTEMS = setOf("PlayStation Portable")
-
-        /** Whether [system]'s core can save and load states. */
-        fun hasStates(system: String) = system !in NO_STATE_SYSTEMS
         // The firmware keys each system's pak() in PhobosRunner.cpp reads, so a load copies only what its game can
         // use. Neo Geo's neogeo.zip is copied on its own.
         private val SYSTEM_FIRMWARE: Map<String, Set<String>> = run {
@@ -724,8 +721,12 @@ class MainViewModel(
         val romName = CoreSession.rom
         if (sysName.isEmpty()) return
         // The snapshot comes BEFORE any teardown, while the core is still alive.
-        if (autoSave && settings.value.autoSaveState && romName.isNotEmpty() && hasStates(sysName)) {
-            try { performSaveState(sysName, romName, AUTO_STATE_SLOT) } catch (e: Exception) {
+        if (autoSave && settings.value.autoSaveState && romName.isNotEmpty()) {
+            try {
+                performSaveState(sysName, romName, AUTO_STATE_SLOT, quiet = true)
+            } catch (e: CancellationException) {
+                Log.i("Phobos", "Auto-save: its screen went away during the save; its message may not have shown")
+            } catch (e: Exception) {
                 Log.e("Phobos", "Auto-save failed: ${e.message}")
             }
         }
@@ -820,15 +821,9 @@ class MainViewModel(
     }
 
     fun saveState(systemName: String, romName: String, slot: Int = 0) {
-        if (!hasStates(systemName)) return statesUnavailable(systemName)
         viewModelScope.launch(Dispatchers.IO) {
             performSaveState(systemName, romName, slot)
         }
-    }
-
-    /** For a state hotkey on a system without states (the menu leaves them out). */
-    private fun statesUnavailable(systemName: String) {
-        Toast.makeText(context, "$systemName states aren't available yet", Toast.LENGTH_SHORT).show()
     }
 
     /** File name of a state slot; slot < 0 is the Auto slot (Task 17). */
@@ -848,28 +843,41 @@ class MainViewModel(
     // Shared save logic (also used by Auto-Save State, Task 17 — slot < 0 = "Auto").
     // Must run on Dispatchers.IO; performs the native snapshot + copies the result
     // to the configured SAF path (or internal fallback). Returns success.
-    private suspend fun performSaveState(systemName: String, romName: String, slot: Int): Boolean {
+    // quiet: a save the player didn't ask for (Auto-Save State as the game quits), which says nothing when there's no
+    // state to save.
+    private suspend fun performSaveState(
+        systemName: String, romName: String, slot: Int, quiet: Boolean = false,
+    ): Boolean {
         // Per-call temp files, so a concurrent load or save can't replace this state before it is copied.
         val tempFile = File(context.cacheDir, "state-save-${System.nanoTime()}.tmp")
         val tempThumb = File(context.cacheDir, "state-thumb-${System.nanoTime()}.tmp")
+        val tempDisc = File(context.cacheDir, "state-disc-${System.nanoTime()}.tmp")
         try {
-            return saveStateFromTemp(systemName, romName, slot, tempFile, tempThumb)
+            return saveStateFromTemp(systemName, romName, slot, tempFile, tempThumb, tempDisc, quiet)
         } finally {
             tempFile.delete()
             tempThumb.delete()
+            tempDisc.delete()
         }
     }
 
     private suspend fun saveStateFromTemp(
-        systemName: String, romName: String, slot: Int, tempFile: File, tempThumb: File,
+        systemName: String, romName: String, slot: Int, tempFile: File, tempThumb: File, tempDisc: File,
+        quiet: Boolean,
     ): Boolean {
         val fileName = stateFileName(romName, slot)
         val slotLabel = slotLabel(slot)
         val sanitizedName = getSanitizedSystemName(systemName)
 
-        // 1. Tell native to save to a local accessible path
-        val nativeSuccess = PhobosCore.saveState(tempFile.absolutePath)
-        if (!nativeSuccess) {
+        // 1. Tell native to save to a local accessible path. There may be none to save: a game that ended by itself
+        // has nothing to carry on from (Auto-Load would bring back where it stopped), and a core stuck in a frame
+        // never hands its state over. A save the player didn't ask for then just isn't made.
+        val made = PhobosCore.trySaveState(tempFile.absolutePath)
+        if (made == 0 && quiet) {
+            Log.i("Phobos", "Auto-save as the game quits: nothing to save")
+            return false
+        }
+        if (made <= 0) {
             Log.e("Phobos", "Native saveState failed")
             withContext(Dispatchers.Main) {
                 Toast.makeText(context, "Save Failed!", Toast.LENGTH_SHORT).show()
@@ -879,9 +887,10 @@ class MainViewModel(
 
         // Best effort: a failed capture only drops the slot's preview, never the save.
         val thumb = tempThumb.takeIf { capturePreview(it) }
-        // A multi-disc game's state notes its disc, so loading it puts that disc back.
+        // A multi-disc game's state notes its disc, so loading it puts that disc back. The note is made below, where
+        // failing to make it fails the save with its message; its copy beside the state is best effort, as the
+        // preview's is.
         val disc = _currentDisc.value.takeIf { it >= 0 && romName == currentRomName && _loadedDiscs.value.size > 1 }
-        val discNote = disc?.let { File(context.cacheDir, "state-disc-${System.nanoTime()}.tmp").apply { writeText("${it + 1}") } }
 
         // 2. Copy from local path to the user's selected SAF path.
         //    Task 41: fall back to internal storage when no SAF path is
@@ -889,25 +898,27 @@ class MainViewModel(
         val baseUriString = settings.value.statesPath
         val internalStatesDir = File(context.filesDir, "states/$sanitizedName")
         val saved = try {
+            val discNote = disc?.let { tempDisc.apply { writeText("${it + 1}") } }
             if (baseUriString.isNotEmpty()) {
                 val baseUri = Uri.parse(baseUriString)
                 val rootDir = DocumentFile.fromTreeUri(context, baseUri)
                 val systemDir = rootDir?.findFile(sanitizedName) ?: rootDir?.createDirectory(sanitizedName)
+                // A folder that can't make the file (its permission revoked, or the folder gone), or gives no way
+                // to write it, fails the save as anything else does: below, with its message.
                 val stateFile = systemDir?.findFile(fileName) ?: systemDir?.createFile("application/octet-stream", fileName)
-                if (stateFile != null) {
-                    context.contentResolver.openOutputStream(stateFile.uri, "wt")?.use { output ->
-                        tempFile.inputStream().use { input -> input.copyTo(output) }
-                    }
-                    systemDir?.let {
-                        writeSafSidecar(it, thumbnailName(fileName), thumb)
-                        writeSafSidecar(it, discName(fileName), discNote)
-                    }
-                    Log.i("Phobos", "Synced state to SAF: ${stateFile.uri}")
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
-                    }
-                    true
-                } else false
+                    ?: throw IOException("the states folder can't hold $fileName")
+                val output = context.contentResolver.openOutputStream(stateFile.uri, "wt")
+                    ?: throw IOException("the states folder gives no way to write $fileName")
+                output.use { tempFile.inputStream().use { input -> input.copyTo(it) } }
+                systemDir?.let {
+                    writeSafSidecar(it, thumbnailName(fileName), thumb)
+                    writeSafSidecar(it, discName(fileName), discNote)
+                }
+                Log.i("Phobos", "Synced state to SAF: ${stateFile.uri}")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Saved state to $slotLabel", Toast.LENGTH_SHORT).show()
+                }
+                true
             } else {
                 // Internal fallback: filesDir/states/<system>/<file>
                 if (!internalStatesDir.exists()) internalStatesDir.mkdirs()
@@ -922,6 +933,10 @@ class MainViewModel(
                 }
                 true
             }
+        } catch (e: CancellationException) {
+            // The screen went away during the save; the cancel takes effect here, once the state is written: the save
+            // stands, and at most its message is lost.
+            throw e
         } catch (e: Exception) {
             Log.e("Phobos", "Failed to sync state to SAF: ${e.message}")
             withContext(Dispatchers.Main) {
@@ -929,7 +944,6 @@ class MainViewModel(
             }
             false
         }
-        discNote?.delete()
         if (saved) _stateRevision.update { it + 1 }
         return saved
     }
@@ -1044,7 +1058,6 @@ class MainViewModel(
         }
 
     fun loadState(systemName: String, romName: String, slot: Int = 0) {
-        if (!hasStates(systemName)) return statesUnavailable(systemName)
         viewModelScope.launch(Dispatchers.IO) {
             performLoadState(systemName, romName, slot, announceFailure = true)
         }
@@ -1684,7 +1697,8 @@ class MainViewModel(
         if (!_isLoaded.value) _leaveToFrontend.trySend(Unit)
     }
 
-    private fun startExternal(system: String, rom: RomFile) {
+    private fun startExternal(system: String, launched: RomFile) {
+        val rom = namedFor(system, launched)
         externalSession = true
         if (_isLoaded.value && currentSystemName == system && currentRomName == rom.name) {
             // The game that's running (a frontend's resume): it carries on where it is.
@@ -1693,6 +1707,17 @@ class MainViewModel(
         }
         startLoad(context, system, rom)
         navigateTo("emulator/${Uri.encode(system)}/${Uri.encode(rom.name)}")
+    }
+
+    /** [rom] under the name the Library gives it on [system]: a PSP program in an EBOOT.PBP goes by its folder. */
+    fun namedFor(system: String, rom: RomFile): RomFile {
+        if (system != LaunchSystems.PSP) return rom
+        val uri = rom.uri
+        val primaryRoot = Environment.getExternalStorageDirectory().absolutePath
+        val folder = LaunchSystems.parentFolderName(
+            uri.scheme, uri.authority, uri.pathSegments, uri.path, primaryRoot, rom.name,
+        )
+        return rom.copy(name = LaunchSystems.pspProgramName(rom.name, folder))
     }
 
     /** After quitting or a failed load: true when the game came from another app, which Phobos returns to. */
@@ -2427,7 +2452,8 @@ class MainViewModel(
                 directoryUris.forEach { uri ->
                     val rootDir = DocumentFile.fromTreeUri(context, uri)
                     if (rootDir != null) {
-                        scanRecursive(rootDir, if (discSystem) extensions + "m3u" else extensions, result)
+                        scanRecursive(rootDir, if (discSystem) extensions + "m3u" else extensions, result,
+                            pspNames = systemName == LaunchSystems.PSP)
                     }
                 }
                 val files = result.distinctBy { it.uri }
@@ -2472,15 +2498,20 @@ class MainViewModel(
         else -> null
     }
 
-    private fun scanRecursive(directory: DocumentFile, extensions: List<String>, result: MutableList<RomFile>) {
+    /** [pspNames]: name the files as PSP programs (see [LaunchSystems.pspProgramName]). */
+    private fun scanRecursive(
+        directory: DocumentFile, extensions: List<String>, result: MutableList<RomFile>, pspNames: Boolean = false,
+    ) {
         directory.listFiles().forEach { file ->
             if (file.isDirectory) {
-                scanRecursive(file, extensions, result)
+                scanRecursive(file, extensions, result, pspNames)
             } else {
                 val name = file.name?.lowercase() ?: ""
                 val ext = name.substringAfterLast('.', "")
                 if (ext.isNotEmpty() && (extensions.contains(ext) || ext == "zip")) {
-                    result.add(RomFile(file.name ?: "Unknown", file.uri, directory.uri))
+                    val fileName = file.name ?: "Unknown"
+                    val romName = if (pspNames) LaunchSystems.pspProgramName(fileName, directory.name) else fileName
+                    result.add(RomFile(romName, file.uri, directory.uri))
                 }
             }
         }

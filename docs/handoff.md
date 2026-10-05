@@ -742,6 +742,89 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: save states — 2026-10-05
+
+Branch `cursor/psp-states-2b67`, stacked on `cursor/psp-umd-2b67` (for stack #106). Save states for the PSP: each part
+saves and loads itself (the CPU's registers, memory 4 KiB at a time with empty pieces left out, the GE's commands,
+palette, list and matrices, and the kernel's program, threads, objects, open files by path, controller, display,
+calls and GE lists), behind a header naming the machine and the program the state was made with. Loading checks what
+it reads (with no fixed limits: a list that claims too much runs out of state instead), refusing what no machine
+could hold, and a bad state leaves the machine as it was, open files and all. A program that has ended makes no
+state, and the app doesn't auto-save one, nor a game whose core is stuck in a frame (`PhobosCore.trySaveState()`). In
+the app, #139's stand-in that left states out for the PSP is gone, and a PSP program in an `EBOOT.PBP` takes its
+folder's name, so homebrew programs' states don't collide. Found on the way: a display list that never ends no longer
+holds everything up (the GE runs a million commands a frame at most however often it stops, time passes while it
+works, and its callbacks can't pile up); IDs and file numbers stop short of 2^31 rather than come round again; folder
+listings leave out host names no PSP path can name. docs/psp-core.md, part 15, describes it. Both test scripts now
+use the address sanitizer on macOS too.
+- **Review:** a general-purpose reviewer (one high finding: every homebrew `EBOOT.PBP` had one name, so one set of
+  states; two medium: the reader's list limits sat below what the kernel can make, and the tests couldn't catch a
+  field left out; three low: range checks, files on a disc no longer in the drive, docs; all fixed). Then a delta
+  review (one high: loading read the running thread after freeing it, which macOS's tests, built without the address
+  sanitizer, missed; four medium: values loaded that would crash or corrupt memory later (a disc file open for
+  writing, IDs handed out twice, display lists the driver couldn't have queued) or hang the machine (endless sound
+  owed, a clock or controller timer far behind); four low: the memory-use claim, test gaps, files removed while open
+  lost by an undone load, and external launches still named "EBOOT.PBP"; all fixed). Then a second delta review
+  (seven low: a loaded state's folder names reaching outside the memory stick, the app's folder naming for providers
+  whose paths are IDs, untested ID and open-file checks, auto-save of a program that had ended, stale script headers
+  and doc wording, an endless display list holding a frame forever (older than this branch), and three files for the
+  next branch in the working tree, kept out of this commit; all fixed). Then a third delta review (one medium: IDs
+  counted past 2^32 came round and handed out one in use; four low: lists that stop every few commands still never
+  let go, a host name with a '\' made the machine's own states unloadable, ".." alone at a device's top untested, and
+  the app's check before an auto-save waiting for ever on a stuck core; all fixed). Then a fourth delta review (four
+  low: a frame could still run between the app's check and its save, an endless display list still took seconds a
+  frame beside a thread that woke often, mutants the tests missed, and a group count in the docs; all fixed, the check
+  and the save now one step: `trySaveState()`). Then a fifth delta review (five low: a save asked for into the Auto
+  slot told nothing when there was nothing to save, the GE's frame budget left out of the state, its refill at each
+  vertical blank untested, a list that draws big primitives over and over still slow to end a frame (left as a stated
+  limit until the GE's timing counts drawing), and stale comments; all fixed). Then a sixth delta review (one low: a
+  states folder that couldn't make the state's file, or gave no way to write it, failed the save without a word or
+  claimed it saved, older than this branch; fixed: both now fail as any other failure does). Then a seventh (two low:
+  a multi-disc game's disc note written outside the save's error handling, so a failure crashed a save asked for or
+  failed the auto-save without a word, older than this branch; and "Not checked" not saying the new failure paths
+  never ran; both fixed) and an eighth (four low: the disc note's copy beside the state still best effort (older than
+  this branch: left as it was, see "Known"), the temporary note left behind when a save is called off, and two
+  handoff lines; the rest fixed), a ninth (three low: a save whose screen went away still logged as a failed
+  auto-save, a leftover variable, and "Not checked"; all fixed), a tenth and an eleventh (two low each, all wording;
+  fixed).
+- **Checks:** the parts' 94 groups with both sanitizers (new: "state fields", where each of 212 fields reaches the
+  state and comes back and 54 values no machine could hold are refused; "kernel states"; "kernel ids run out"; "ge
+  endless list", with four kinds of list that never end, a thread that wakes often, and callbacks), `tests/psp/ares`
+  (163
+  checks on arm64 and x86-64, and with the address sanitizer: cube carries on exactly after a load on both engines and
+  in a fresh session; bad states, cut short by 4 KiB or 4 bytes or owing endless sound, refused with every byte of the
+  machine as it was and a file removed from the host while open still reading; another program refuses cube's state;
+  hello, once it has left, makes no state; cube from a disc image takes its state back and another disc refuses it),
+  the Allegrex tests' 56 groups with both sanitizers, the app's unit tests (`LaunchSystemsTest`: an `EBOOT.PBP` takes
+  its folder's name; a launch's folder from its path, document ID or a URI ending in the file's name). Twenty-six
+  broken versions each failed a test. On the RP6: with build 104631, hello's `EBOOT.PBP`, launched as
+  `Hello/EBOOT.PBP` the way another app launches a game, ran as "Hello.pbp" and auto-saved as `Hello.pbp.state.auto`
+  (216 KB); cube
+  auto-saved (1.59 MB), and saved to slot 0 and loaded from it through the menu, carrying on from where it was saved.
+  With build 104633: leaving hello (which had ended) made no auto state and no failure message; cube saved to slot 0
+  (1.62 MB) and loaded from it through the menu. With build 104634 (the app's check before an auto-save now waits two
+  seconds at most): leaving hello made no auto state again, and leaving cube auto-saved it (1.57 MB). With build
+  104635 (the check and the save one step): leaving hello found nothing to save, saying nothing; leaving cube
+  auto-saved it (1.58 MB). Builds 104636 (quiet only for the auto-save as a game quits) and 104637 (a states folder
+  that can't take the state fails the save) did the same. Build 104638 (a multi-disc note written inside the save's
+  error handling): leaving cube auto-saved it (1.56 MB); hello wasn't left. Build 104639 (the temporary note deleted
+  however a save ends): leaving hello found nothing to save, saying nothing; leaving cube auto-saved it (1.58 MB).
+  Build 104640 (a save whose screen went away no longer logged as failed) did the same (1.57 MB).
+- **Not checked:** the Library's scan naming programs on the RP6 (it uses the same function as the launch, which
+  ran); loading on the interpreter on the RP6; a damaged state whose undoing fails too (the game then starts afresh,
+  but no test can make the machine's own state fail to load); a states folder that can't take the state, and a save
+  asked for with nothing to save (no test or RP6 run made either happen; the app's save code has no unit test); a
+  multi-disc game's save with these builds, and a disc note that can't be written; a save asked for, or the
+  auto-save before a load, whose screen goes away while it runs, so that its message, saved or failed, may not show
+  (the activity finishing).
+- **Known, older than this branch:** a multi-disc game's disc note is copied beside its state as best effort, as the
+  preview is: should that copy fail, the save still says it saved, and the slot keeps the note from its last state,
+  so loading it would put the wrong disc in. Worth fixing with the app's save code's own tests.
+- **Left on the RP6:** hello's `EBOOT.PBP` in the app's `files/psp-test/Hello` folder; `Hello.pbp.state.auto`,
+  `cube.elf.state0` and `cube.elf.state.auto` (each with its thumbnail) in the states folder's `PlayStation
+  Portable`. (The `cube.elf` states
+  from build 104631's run were gone from the folder by build 104633's.)
+
 ## PSP core: disc images (ISO and CSO), the disc's files and the drive — 2026-10-05
 
 Branch `cursor/psp-umd-2b67`, stacked on `cursor/psp-app-2b67` (for stack #106). The PSP's disc as an image: an ISO

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #Builds and runs the PSP system's tests (ares/psp beyond the CPU) on the host, as tests/allegrex/run-tests.sh does
-#the CPU's: against nall, ares's types and sljit alone, with the undefined-behavior sanitizer, and on Linux the
-#address sanitizer too.
+#the CPU's: against nall, ares's types and sljit alone, with the undefined-behavior and address sanitizers.
 #usage: tests/psp/run-tests.sh   (SANITIZE= turns the sanitizers off; PSP_TEST_PROGRAMS: see loader.cpp)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -11,8 +10,7 @@ mkdir -p "$OUT"
 
 CC=${CC:-cc}
 CXX=${CXX:-c++}
-if [[ $(uname) == Darwin ]]; then DEFAULT_SANITIZE="-fsanitize=undefined"; else DEFAULT_SANITIZE="-fsanitize=address,undefined"; fi
-SANITIZE=${SANITIZE-$DEFAULT_SANITIZE -fno-sanitize-recover=all}
+SANITIZE=${SANITIZE--fsanitize=address,undefined -fno-sanitize-recover=all}
 #The address sanitizer's check for stack use after return gives every call a fresh frame on its own heap, which the
 #interpreter's per-instruction and the GE's per-pixel functions make hundreds of times slower; its other checks stay.
 export ASAN_OPTIONS=${ASAN_OPTIONS-detect_stack_use_after_return=0}
@@ -45,7 +43,7 @@ $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINE
   -include "$ROOT/tests/allegrex/prelude.hpp" "$ROOT/ares/psp/cpu/allegrex.cpp" "$ROOT/ares/psp/memory/memory.cpp" \
   "$ROOT/ares/psp/kernel/loader.cpp" "$ROOT/ares/psp/kernel/kernel.cpp" "$ROOT/ares/psp/ge/ge.cpp" \
   "$HERE/main.cpp" "$HERE/memory.cpp" "$HERE/loader.cpp" "$HERE/kernel.cpp" "$HERE/files.cpp" "$HERE/disc.cpp" \
-  "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/measure.cpp" \
+  "$HERE/states.cpp" "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/measure.cpp" \
   "$NALL" "$SLJIT" "$ALLOCATOR" \
   "${LIBRARIES[@]}" -o "$OUT/psp"
 "$OUT/psp"

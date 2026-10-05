@@ -65,9 +65,8 @@ auto System::load(Node::System& root, string name) -> bool {
   node->setPower(std::bind_front(&System::power, this));
   node->setSave(std::bind_front(&System::save, this));
   node->setUnload(std::bind_front(&System::unload, this));
-  //Save states come later: until then a state holds nothing, and loading one fails.
-  node->setSerialize([](bool) -> serializer { return {}; });
-  node->setUnserialize([](serializer&) -> bool { return false; });
+  node->setSerialize(std::bind_front(&System::serialize, this));
+  node->setUnserialize(std::bind_front(&System::unserialize, this));
   root = node;
   if(!node->setPak(pak = platform->pak(node))) return false;
 
@@ -159,6 +158,7 @@ auto System::power(bool reset) -> void {
   cpu.recompiler.enabled = recompile;
   unmappedReports = 0;
   soundOwed = 0;
+  programHash = 0;  //until a program starts
 
   kernel.output = [this](const std::string& text) { report(false, text); };
   kernel.log = [this](const std::string& text) { report(true, text); };
@@ -206,6 +206,7 @@ auto System::startProgram() -> void {
       }
     }
     std::string problem;
+    programHash = hash(program);
     if(!kernel.start(program.data(), program.size(), path, problem)) {
       report(true, "can't start the program: " + problem);
     }
@@ -251,12 +252,98 @@ auto System::startDisc(std::shared_ptr<vfs::file> fp) -> void {
     if(memcmp(magic, "\x7f" "ELF", 4) && memcmp(magic, "\0PBP", 4)) continue;
     std::vector<u8> program(size);
     if(!image->read(start, size, program.data())) continue;
+    programHash = hash(program);
     if(!kernel.start(program.data(), program.size(), std::string{"disc0:/PSP_GAME/SYSDIR/"} + name, problem)) {
       report(true, "can't start the game: " + problem);
     }
     return;
   }
   report(true, encrypted ? "the game's program is encrypted, which isn't read yet" : "the disc has no program");
+}
+
+//Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
+//signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
+//machine's; then memory, the CPU, the GE and the kernel.
+static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
+static constexpr u32 StateVersion = 1;
+
+//The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
+//the program it was made with, as another's memory, threads and files mean nothing to it.
+auto System::hash(std::span<const u8> bytes) -> u64 {
+  u64 value = 0xcbf2'9ce4'8422'2325;
+  for(u8 byte : bytes) value = (value ^ byte) * 0x100'0000'01b3;
+  return value;
+}
+
+//Writes the header, or reads one and says whether it's this machine's.
+auto System::header(serializer& s) -> bool {
+  u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
+  u64 program = programHash;
+  s(signature);
+  s(version);
+  s(ramSize);
+  s(program);
+  return signature == StateSignature && version == StateVersion && ramSize == memory.ram.size() &&
+         program == programHash;
+}
+
+//A save state: none (an empty one, which front ends don't keep) once the program has ended, by leaving or by
+//crashing: there's nothing to carry on from, and a state of it would only bring back where it stopped.
+auto System::serialize(bool synchronize) -> serializer {
+  if(kernel.exited) return {};
+  return snapshot();
+}
+
+//The machine as it is, as a state (unserialize() makes one to go back to, whether the program has ended or not).
+auto System::snapshot() -> serializer {
+  serializer s;
+  header(s);
+  memory.serialize(s);
+  cpu.serialize(s);
+  ge.serialize(s);
+  kernel.serialize(s);
+  s(soundOwed);
+  s(unmappedReports);
+  return s;
+}
+
+//The machine from what follows a state's header, which ends `length` bytes in: false if the state is damaged (a
+//value no machine could hold, or the state ends part way), with the machine left part loaded. Every frame leaves
+//less than one sound frame owed (run()), so a state owing more, or a negative or not-a-number amount, is damaged.
+auto System::restore(serializer& s, u32 length) -> bool {
+  memory.serialize(s);
+  cpu.serialize(s);
+  bool valid = ge.serialize(s);
+  valid = kernel.serialize(s) && valid;
+  s(soundOwed);
+  s(unmappedReports);
+  return valid && soundOwed >= 0 && soundOwed < 1 && s.size() <= length;
+}
+
+//Loads a state; false, with the machine as it was, if it isn't this machine's (nothing is touched then) or turns out
+//damaged part way (the machine is put back from a state of itself made first, which loads as any of its own does).
+//Its open files are set aside as they are and put back the same, still open: a state reopens files by their paths,
+//which a file the program removed or renamed while it had it open no longer has. Should even putting the machine
+//back fail, it starts the game afresh rather than run on from half of each.
+auto System::unserialize(serializer& s) -> bool {
+  u32 length = s.capacity();  //a state to load holds exactly its bytes
+  if(!header(s)) return false;
+  serializer before = snapshot();
+  u32 saved = before.size();
+  auto files = std::move(kernel.files);
+  kernel.files.clear();
+  bool loaded = restore(s, length);
+  if(!loaded) {
+    before.setReading();
+    if(!header(before) || !restore(before, saved)) {
+      report(true, "a damaged state couldn't be undone: the game starts again");
+      power(false);
+      return false;
+    }
+    kernel.files = std::move(files);
+  }
+  cpu.recompiler.reset();  //what it compiled came from memory as it was before
+  return loaded;
 }
 
 //What the program writes, and the kernel's notes: to the log (on Android, logcat's "PSP" tag).

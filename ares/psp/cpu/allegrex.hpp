@@ -75,6 +75,7 @@ struct Allegrex {
 
   //allegrex.cpp
   auto power(u32 entry) -> void;
+  auto serialize(serializer& s) -> void;  //serialization.cpp: for save states
   auto instruction() -> void;
   auto execute(u32 address, u32 instruction) -> u32;
   auto run(u64 instructions) -> u64;

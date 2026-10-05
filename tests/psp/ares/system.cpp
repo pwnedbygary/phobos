@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -227,8 +228,6 @@ auto program(const fs::path& programs, bool recompile) -> void {
   CHECK(psp.kernel.controller.analogX == 128 && psp.kernel.controller.analogY == 127, "the stick's middle");
   host.held.clear();
 
-  //States come later: until then a state holds nothing, which front ends must refuse to save.
-  CHECK(root->serialize(true).size() == 0, "an empty state");
   root->unload();
 }
 
@@ -400,6 +399,155 @@ auto descriptorFiles(const fs::path& programs) -> void {
   }
 }
 
+//Save states (System::serialize() and each part's): a game saved part way and loaded again carries on exactly as it
+//did the first time, frame by frame, on either engine; in a fresh session too; and a state that isn't one, or is cut
+//short, is refused with the game as it was.
+auto states(const fs::path& programs) -> void {
+  std::printf("save states\n");
+  //each frame: the picture the game shows, its time and where the CPU is; at the end, RAM and VRAM
+  auto frame = [&]() -> u64 {
+    std::vector<u32> picture;
+    psp.kernel.picture(picture);
+    u64 hash = 1469598103934665603ull;
+    for(u32 pixel : picture) hash = (hash ^ pixel) * 1099511628211ull;
+    for(u64 value : {psp.kernel.cycles, u64(psp.cpu.ipu.pc), u64(psp.kernel.vblanks)}) {
+      hash = (hash ^ value) * 1099511628211ull;
+    }
+    return hash;
+  };
+  auto memoryHash = [&]() -> u64 {
+    u64 hash = 1469598103934665603ull;
+    for(u8 byte : psp.memory.ram) hash = (hash ^ byte) * 1099511628211ull;
+    for(u8 byte : psp.memory.vram) hash = (hash ^ byte) * 1099511628211ull;
+    return hash;
+  };
+  auto play = [&](Node::System& root) {
+    std::vector<u64> frames;
+    for(u32 n = 0; n < 20; n++) {
+      root->run();
+      frames.push_back(frame());
+    }
+    frames.push_back(memoryHash());
+    return frames;
+  };
+  for(bool recompile : {true, false}) {
+    PlayStationPortable::option("Recompiler", recompile ? "true" : "false");
+    PlayStationPortable::option("Memory Stick", (scratch / "stick").string().c_str());
+    host.game = programPak(programs / "cube.elf", "program.elf");
+    Node::System root;
+    if(!CHECK(start(root), "the PSP starts with cube.elf")) continue;
+    for(u32 n = 0; n < 30; n++) root->run();
+    auto state = root->serialize(true);
+    //memory's pieces that hold anything but zeros, and the rest of the machine besides
+    u32 used = 0;
+    for(u32 at = 0; at < psp.memory.ram.size(); at += 4_KiB) {
+      used += std::any_of(psp.memory.ram.begin() + at, psp.memory.ram.begin() + at + 4_KiB, [](u8 b) { return b; });
+    }
+    CHECK(state.size() > used * 4_KiB && state.size() < used * 4_KiB + 3_MiB, "a state holds memory that's used");
+    auto first = play(root);
+    serializer load{state.data(), state.size()};
+    CHECK(root->unserialize(load), "the state loads");
+    std::string engine = recompile ? "recompiler" : "interpreter";
+    CHECK(play(root) == first, "it carries on exactly as it did (" + engine + ")");
+
+    root->unload();  //a fresh session of the same game
+    if(CHECK(start(root), "the PSP starts again")) {
+      serializer fresh{state.data(), state.size()};
+      CHECK(root->unserialize(fresh), "the state loads in a fresh session");
+      CHECK(play(root) == first, "and carries on exactly as it did");
+    }
+
+    //not a state, states cut short, and one owing endless sound: refused, the whole machine as it was. Cut by 4 KiB,
+    //the kernel's lists run out of state; cut by 4 bytes, only the state's end shows it (its last value, the count of
+    //unmapped accesses reported, is read past it). The sound owed (the 8 bytes before that) is under one frame's
+    //after every frame.
+    auto same = [](const serializer& a, const serializer& b) {
+      return a.size() == b.size() && !memcmp(a.data(), b.data(), a.size());
+    };
+    //...and a file the program has open whose host file is gone (removed while open, so reopening it by its path, as
+    //loading does, can't find it): still open after each refused load, still reading
+    auto openPath = scratch / "stick" / "OPEN.TXT";
+    std::ofstream(openPath) << "still here";
+    PlayStationPortable::Kernel::OpenFile open;
+    open.path = "ms0:/OPEN.TXT";
+    open.host = openPath.string();
+    open.flags = 0x0001;  //PSP_O_RDONLY
+    open.stream = std::make_unique<std::fstream>(openPath, std::ios::binary | std::ios::in);
+    u32 number = psp.kernel.nextFile++;
+    psp.kernel.files[number] = std::move(open);
+    fs::remove(openPath);
+    auto before = root->serialize(true);
+    std::vector<u8> bytes(state.data(), state.data() + state.size());
+    bytes[0] ^= 0xff;
+    serializer wrong{bytes.data(), u32(bytes.size())};
+    CHECK(!root->unserialize(wrong), "a state with the wrong signature is refused");
+    serializer cut{state.data(), u32(state.size() - 4096)};
+    CHECK(!root->unserialize(cut), "a state cut short is refused");
+    serializer clipped{state.data(), u32(state.size() - 4)};
+    CHECK(!root->unserialize(clipped), "a state 4 bytes short is refused");
+    bytes.assign(state.data(), state.data() + state.size());
+    f64 endless = std::numeric_limits<f64>::infinity();
+    memcpy(bytes.data() + bytes.size() - 12, &endless, sizeof(endless));
+    serializer owing{bytes.data(), u32(bytes.size())};
+    CHECK(!root->unserialize(owing), "a state owing endless sound is refused");
+    CHECK(same(root->serialize(true), before), "the machine is as it was, every part of it");
+    auto kept = psp.kernel.files.find(number);
+    std::string text(10, '\0');
+    if(kept != psp.kernel.files.end() && kept->second.stream) {
+      kept->second.stream->seekg(0);
+      kept->second.stream->read(text.data(), text.size());
+    }
+    CHECK(text == "still here", "the file whose host file is gone is still open");
+    root->unload();
+
+    //another program's state (pspsdk's blend sample, which runs on, as cube does): refused before anything is touched
+    host.game = programPak(programs / "blend.elf", "program.elf");
+    if(CHECK(start(root), "the PSP starts with another program")) {
+      auto other = root->serialize(true);
+      serializer cube{state.data(), state.size()};
+      CHECK(!root->unserialize(cube), "it refuses cube's state");
+      CHECK(same(root->serialize(true), other), "and is as it was");
+      root->unload();
+    }
+  }
+
+  //a program that has ended (hello leaves at once) makes no state: there's nothing to carry on from
+  PlayStationPortable::option("Memory Stick", (scratch / "stick").string().c_str());
+  host.game = programPak(programs / "hello.elf", "program.elf");
+  if(Node::System ended; CHECK(start(ended), "the PSP starts with hello")) {
+    std::string printed;
+    runToExit(ended, printed);
+    CHECK(psp.kernel.exited && !ended->serialize(true).size(), "a program that has ended makes no state");
+    ended->unload();
+  }
+
+  //a disc's program is the one its states go with: cube booted from a disc takes its state back, and a disc holding
+  //another program refuses it
+  auto disc = [&](const char* program) {
+    std::ifstream stream(programs / program, std::ios::binary);
+    std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    auto image = disc_image::makeIso({{"PSP_GAME/SYSDIR/EBOOT.BIN", bytes}}).bytes;
+    host.game = std::make_shared<vfs::directory>();
+    host.game->append("disc.iso", vfs::memory::open({image.data(), image.size()}));
+  };
+  disc("cube.elf");
+  Node::System root;
+  if(CHECK(start(root), "the PSP starts with cube on a disc")) {
+    for(u32 n = 0; n < 10; n++) root->run();
+    auto state = root->serialize(true);
+    auto first = play(root);
+    serializer load{state.data(), state.size()};
+    CHECK(root->unserialize(load) && play(root) == first, "its state loads, and it carries on as it did");
+    root->unload();
+    disc("hello.elf");
+    if(CHECK(start(root), "the PSP starts with another disc")) {
+      serializer cube{state.data(), state.size()};
+      CHECK(!root->unserialize(cube), "which refuses cube's state");
+      root->unload();
+    }
+  }
+}
+
 //Where the host gives no memory that code may run from, the recompiler turns itself off, and the interpreter runs
 //the program instead. (Asking for no code memory at all stands for that: the host refuses the mapping.)
 auto noCodeMemory(const fs::path& programs) -> void {
@@ -441,6 +589,7 @@ auto main() -> int {
     noCodeMemory(fs::path{programs});
     discImage(fs::path{programs});
     descriptorFiles(fs::path{programs});
+    states(fs::path{programs});
   } else {
     std::printf("PSP_TEST_PROGRAMS isn't set (or has no hello.elf): the checks that run a program are skipped\n");
   }

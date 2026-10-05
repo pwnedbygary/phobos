@@ -29,6 +29,21 @@ auto Memory::power(u32 ramSize) -> void {
   clear(ram, ramSize);
 }
 
+//Saving and loading memory, for save states: the scratchpad, VRAM and main RAM (whoever loads a state checks first
+//that RAM is the size it was). Each goes 4 KiB at a time: a byte saying whether the piece holds anything but zeros,
+//then its bytes if it does, since games leave much of their 64 MiB untouched and a state needn't carry it.
+auto Memory::serialize(serializer& s) -> void {
+  for(auto* area : {&scratchpad, &vram, &ram}) {
+    for(u32 at = 0; at < area->size(); at += 4_KiB) {
+      std::span<u8> piece{area->data() + at, std::min<size_t>(4_KiB, area->size() - at)};
+      u8 used = s.writing() && std::any_of(piece.begin(), piece.end(), [](u8 byte) { return byte != 0; });
+      s(used);
+      if(used) s(piece);
+      else if(s.reading()) std::fill(piece.begin(), piece.end(), 0);
+    }
+  }
+}
+
 //Where the size bytes from address are in the host's memory, or nullptr if any of them has nothing behind it (or
 //they run past the end of an area, or past a 32-byte piece of VRAM's second or fourth copy, which rearrange them).
 auto Memory::pointer(u32 address, u32 size) -> u8* {

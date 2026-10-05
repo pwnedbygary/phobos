@@ -4115,18 +4115,37 @@ else if (port->type() == "Keyboard") {
     isPausedAtomic.store(wasPaused);
   }
 
-  auto saveState(const char* path) -> bool {
+  // Takes runMutex once the emulation thread's frame ends: false after two seconds of a frame that doesn't (a core
+  // stuck in it, which unloadSystem() waits as long for before abandoning it).
+  auto lockFrame(std::unique_lock<std::recursive_mutex>& lock) -> bool {
+    for (int i = 0; !lock.try_lock(); i++) {
+      if (i == 200) return false;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return true;
+  }
+
+  // Saves a state to path: 1, or 0 when there's none to save, or -1 when it couldn't be written. A core with nothing
+  // to carry on from (a PSP program that ended) gives an empty state; a core stuck in a frame gives none at all. The
+  // core stays paused, and runMutex held, from the check to the write.
+  auto trySaveState(const char* path) -> int {
     bool wasPaused = isPausedAtomic.exchange(true);
-    lock_guard<recursive_mutex> lock(*runMutex);
-    if (!root) { isPausedAtomic.store(wasPaused); return false; }
-    drainN64RdpIfAsync();
-    auto s = root->serialize(true);
-    // A core that can't make a state gives an empty one, which couldn't be loaded back.
-    bool result = s.size() && nall::file::write(path, {s.data(), s.size()});
-    LOGI("Save state to %s: %s (%u bytes)", path, result ? "success" : "failed", (unsigned)s.size());
+    std::unique_lock<std::recursive_mutex> lock(*runMutex, std::defer_lock);
+    int result = 0;
+    if (!lockFrame(lock)) {
+      LOGI("Save state to %s: the core is stuck in a frame", path);
+    } else if (root) {
+      drainN64RdpIfAsync();
+      auto s = root->serialize(true);
+      if (s.size()) result = nall::file::write(path, {s.data(), s.size()}) ? 1 : -1;
+      LOGI("Save state to %s: %s (%u bytes)", path, result > 0 ? "success" : result ? "failed" : "nothing to save",
+           (unsigned)s.size());
+    }
     isPausedAtomic.store(wasPaused);
     return result;
   }
+
+  auto saveState(const char* path) -> bool { return trySaveState(path) > 0; }
   auto loadState(const char* path) -> bool {
     bool wasPaused = isPausedAtomic.exchange(true);
     lock_guard<recursive_mutex> lock(*runMutex);

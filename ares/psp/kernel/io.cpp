@@ -48,6 +48,12 @@ static auto pathNames(const std::string& rest, std::vector<std::string>& names) 
   return 0;
 }
 
+//A new file's number: they count up as IDs do (newUID()), are never handed out twice, and run out the same way (0
+//then: the file can't be opened).
+auto Kernel::newFile() -> u32 {
+  return nextFile <= LastUID ? nextFile++ : 0;
+}
+
 //The folder a program's path is in, written as resolve() writes paths ("ms0:/PSP/GAME/HELLO" for
 //ms0:\PSP\GAME\HELLO\EBOOT.PBP), or nothing if the path names no device.
 static auto programFolder(const std::string& path) -> std::string {
@@ -270,7 +276,8 @@ auto Kernel::openOnDisc(const std::string& path, u32 flags) -> u32 {
     open.sector = entry.sector;
     open.size = entry.size;
   }
-  u32 file = nextFile++;
+  u32 file = newFile();
+  if(!file) return ErrorTooManyFiles;
   files[file] = std::move(open);
   return file;
 }
@@ -296,9 +303,10 @@ auto Kernel::sceIoOpen() -> void {
   auto mode = std::ios::binary | std::ios::in;
   if(write) mode |= std::ios::out;
   if(write && (!exists || (flags & OpenTruncate))) mode |= std::ios::trunc;  //made, or emptied
+  if(nextFile > LastUID) return result(ErrorTooManyFiles);  //before the file is made or emptied
   auto stream = std::make_unique<std::fstream>(host, mode);
   if(!stream->is_open()) return result(ErrorNoPermission);
-  u32 file = nextFile++;
+  u32 file = newFile();
   auto& open = files[file];
   open.path = normalized;
   open.host = host;
@@ -365,9 +373,11 @@ auto Kernel::sceIoWrite() -> void {
     return result(size);
   }
   auto found = files.find(file);
-  if(found == files.end() || found->second.folder || !(found->second.flags & OpenWrite)) return result(ErrorBadFile);
-  if(size && !memory.reaches(data, size)) return result(ErrorIllegalAddress);
+  if(found == files.end()) return result(ErrorBadFile);
   auto& open = found->second;
+  //only a host file opened for writing: nothing on the disc can be written
+  if(open.folder || open.onDisc || !(open.flags & OpenWrite)) return result(ErrorBadFile);
+  if(size && !memory.reaches(data, size)) return result(ErrorIllegalAddress);
   std::vector<char> buffer(size);
   memory.copyOut(buffer.data(), data, size);
   open.stream->clear();
@@ -535,7 +545,8 @@ auto Kernel::sceIoDopen() -> void {
         open.discEntries.push_back(child);
       }
     }
-    u32 file = nextFile++;
+    u32 file = newFile();
+    if(!file) return result(ErrorTooManyFiles);
     files[file] = std::move(open);
     return result(file);
   }
@@ -548,8 +559,12 @@ auto Kernel::sceIoDopen() -> void {
   open.host = host;
   open.folder = true;
   if(normalized.back() != '/') open.entries = {".", ".."};
+  //names no PSP path can name are left out: a '\' parts a path as '/' does, and a ':' ends a device's name
   std::vector<std::string> names;
-  for(auto& entry : std::filesystem::directory_iterator(host, error)) names.push_back(entry.path().filename().string());
+  for(auto& entry : std::filesystem::directory_iterator(host, error)) {
+    auto name = entry.path().filename().string();
+    if(name.find_first_of("\\:") == std::string::npos) names.push_back(name);
+  }
   std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
     for(size_t n = 0; n < a.size() && n < b.size(); n++) {
       auto x = std::tolower(u8(a[n])), y = std::tolower(u8(b[n]));
@@ -558,7 +573,8 @@ auto Kernel::sceIoDopen() -> void {
     return a.size() < b.size();
   });
   open.entries.insert(open.entries.end(), names.begin(), names.end());
-  u32 file = nextFile++;
+  u32 file = newFile();
+  if(!file) return result(ErrorTooManyFiles);
   files[file] = std::move(open);
   result(file);
 }

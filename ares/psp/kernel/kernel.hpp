@@ -67,6 +67,7 @@ struct Kernel {
   static constexpr u32 ErrorEventFlagCondition    = 0x8002'01af;  //a poll whose bits aren't set
   static constexpr u32 ErrorEventFlagPattern      = 0x8002'01b1;  //waiting for no bits at all
   static constexpr u32 ErrorNoMemory              = 0x8002'0190;
+  static constexpr u32 ErrorTooManyFiles          = 0x8002'0320;
   static constexpr u32 ErrorIllegalPriority       = 0x8002'0193;
   static constexpr u32 ErrorIllegalStackSize      = 0x8002'0194;
   static constexpr u32 ErrorIllegalThread         = 0x8002'0197;
@@ -140,6 +141,7 @@ struct Kernel {
   auto arg(u32 n) const -> u32;
   auto result(u32 value) -> void;
   auto note(const std::string& text) -> void;
+  auto serialize(serializer& s) -> bool;  //serialization.cpp: for save states; false if a state is damaged
 
   Allegrex& cpu;
   Memory& memory;
@@ -148,6 +150,8 @@ struct Kernel {
   bool exited = false;     //it called sceKernelExitGame (or unloaded itself)
   u64 cycles = 0;          //time since power on
   u32 nextUID = 0x100;
+  static constexpr u32 LastUID = 0x7fff'ffff;  //IDs are positive 32-bit numbers: a top bit set reads as an error
+  auto newUID() -> u32;
 
   //The system functions, by library and name; a syscall code stands for one import (a library and NID), which may
   //be a function the kernel doesn't have.
@@ -289,6 +293,7 @@ struct Kernel {
   std::shared_ptr<Disc> disc;  //the disc image in the drive (disc0: and umd0:, unless a host folder stands for it)
   std::map<u32, OpenFile> files;
   u32 nextFile = 3;  //after standard input, output and error
+  auto newFile() -> u32;
   std::string workingDirectory;
   std::vector<u32> memoryStickCallbacks;  //callbacks the program registered for the memory stick going in and out
   auto mount(const std::string& device, const std::string& folder) -> void;
@@ -447,7 +452,7 @@ struct Kernel {
 
   //ge.cpp: the GE driver
   static constexpr u32 GeListIDs = 0x4745'0000;  //the first display list's ID ("GE"), then one up for each
-  static constexpr u64 GeBudget = 1'000'000;     //commands the GE runs at a go before letting the CPU on
+  static constexpr u64 GeBudget = 1'000'000;     //commands the GE runs in a frame at most (geLeft)
   struct GeStackEntry {  //where a list was when a SIGNAL called elsewhere
     GE::Registers registers;
     u32 base;
@@ -475,9 +480,11 @@ struct Kernel {
   std::deque<u32> geFree;   //the lists not queued, the one freed longest ago first: the next enqueued takes it
   GeCallback geCallbacks[16];
   s32 geRunning = -1;       //the list the GE is running, or none
-  bool geBusy = false;      //it ran out of budget, and goes on as the CPU runs
+  bool geBusy = false;      //it ran out of the frame's commands, and goes on after the next vertical blank
   bool geSuspended = false; //it waits for a callback to return (a SIGNAL that suspends, a FINISH)
   s32 geFinishing = -1;     //the list whose finish callback runs: the rest of its ending waits for it
+  u64 geLeft = GeBudget;    //commands the GE may still run this frame (each vertical blank gives it GeBudget again)
+  u64 geCommands = 0;       //commands the GE has run since power on (not saved: a count for tests and notes)
   auto geIndex(u32 id) const -> s32;
   auto geEnqueue(bool head) -> void;
   auto geLoad(GeList& list) -> void;

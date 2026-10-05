@@ -43,4 +43,31 @@ auto GE::float24(u32 argument) -> float {
   return value;
 }
 
+//Saving and loading the GE, for save states: its commands' last words (from which every draw works its state out
+//afresh), the palette, the list it's running, where its vertices and indices are, the matrices, and what its next
+//END means. What it noted stays noted. Loading returns false for what no GE could hold: CALLs more than two deep,
+//or an END that means anything but the end, a FINISH or a SIGNAL.
+auto GE::serialize(serializer& s) -> bool {
+  s(commands);
+  s(clut);
+  s(list);
+  s(vertexAddress);
+  s(indexAddress);
+  s(signalWord);
+  s(finishWord);
+  s(endWord);
+  s(bones);
+  s(world);
+  s(view);
+  s(projection);
+  s(textureMatrix);
+  s(boneIndex);
+  s(worldIndex);
+  s(viewIndex);
+  s(projectionIndex);
+  s(textureIndex);
+  s(pending);
+  return list.depth <= 2 && (pending == Stop::Ended || pending == Stop::Finished || pending == Stop::Signaled);
+}
+
 }

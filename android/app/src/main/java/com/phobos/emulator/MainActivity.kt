@@ -254,11 +254,12 @@ class MainActivity : ComponentActivity() {
         debugScope.launch {
             viewModel.awaitLaunchReady()
             Log.d("Phobos", "debugLoad: loading system='$system', rom='$name'")
-            viewModel.loadRom(applicationContext, system, RomFile(name, Uri.parse(uri)))
+            val rom = viewModel.namedFor(system, RomFile(name, Uri.parse(uri)))
+            viewModel.loadRom(applicationContext, system, rom)
             // Mirror the UI tap flow (SystemDetailScreen loads THEN navigates)
             // so the game is visible on the emulator screen instead of running
             // headless behind the library.
-            viewModel.navigateTo("emulator/${Uri.encode(system)}/${Uri.encode(name)}")
+            viewModel.navigateTo("emulator/${Uri.encode(system)}/${Uri.encode(rom.name)}")
         }
     }
 

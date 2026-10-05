@@ -89,6 +89,15 @@ struct GE {
     u32 offset = 0;   //added to addresses (OFFSET_ADDR, ORIGIN)
     u32 depth = 0;    //CALLs not yet returned from; the GE has room for two
     u32 returnAddress[2] = {}, returnOffset[2] = {};
+
+    auto serialize(serializer& s) -> void {
+      s(address);
+      s(stall);
+      s(offset);
+      s(depth);
+      s(returnAddress);
+      s(returnOffset);
+    }
   };
 
   //A vertex as the vertex type lays it out (vertex.cpp): in 2D, "through" mode, its numbers as stored, pixels and
@@ -188,10 +197,12 @@ struct GE {
   //ge.cpp
   auto power() -> void;
   auto note(const std::string& text) -> void;
+  auto serialize(serializer& s) -> bool;
   static auto float24(u32 argument) -> float;
 
   //list.cpp
   auto run(u64 budget) -> Stop;
+  auto run(u64 budget, u64& ran) -> Stop;  //and how many commands ran
   auto relative(u32 argument) const -> u32;
 
   //vertex.cpp

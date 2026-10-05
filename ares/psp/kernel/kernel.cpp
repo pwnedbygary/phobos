@@ -16,6 +16,7 @@ namespace ares::PlayStationPortable {
 #include "display.cpp"
 #include "ge.cpp"
 #include "system.cpp"
+#include "serialization.cpp"
 
 Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory), ge(ge) {
   auto add = [&](const char* library, const char* name, auto (Kernel::*handler)() -> void) {
@@ -227,6 +228,8 @@ auto Kernel::power() -> void {
   geBusy = false;
   geSuspended = false;
   geFinishing = -1;
+  geLeft = GeBudget;
+  geCommands = 0;
   startTime = u64(std::time(nullptr)) * 1'000'000;
   memory.write(4, Trampoline, ThreadReturnCode << 6 | 0x0c);    //syscall: the thread's entry function returned
   memory.write(4, Trampoline + 4, 0x0000'000d);                  //break: never reached
