@@ -297,9 +297,10 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
-//machine's; then memory, the CPU, the GE and the kernel.
+//machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes: 2 since
+//the kernel's threads, semaphores and callbacks gained fields (and pools, sound and the dialogs came).
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 1;
+static constexpr u32 StateVersion = 2;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.

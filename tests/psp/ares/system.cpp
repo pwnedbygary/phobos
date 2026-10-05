@@ -505,6 +505,13 @@ auto states(const fs::path& programs) -> void {
     bytes[0] ^= 0xff;
     serializer wrong{bytes.data(), u32(bytes.size())};
     CHECK(!root->unserialize(wrong), "a state with the wrong signature is refused");
+    //a state of the layout before part 17's threads, semaphores and callbacks (version 1, the header's second word):
+    //refused by its header, before anything is touched (even the compiled code, which any load throws away)
+    bytes.assign(state.data(), state.data() + state.size());
+    bytes[4] = 1, bytes[5] = bytes[6] = bytes[7] = 0;
+    serializer old{bytes.data(), u32(bytes.size())};
+    CHECK(!root->unserialize(old), "a state of version 1 is refused");
+    CHECK(compiledAny() == recompile && same(root->serialize(true), before), "before anything is touched");
     serializer cut{state.data(), u32(state.size() - 4096)};
     CHECK(!root->unserialize(cut), "a state cut short is refused");
     serializer clipped{state.data(), u32(state.size() - 4)};
