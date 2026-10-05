@@ -96,8 +96,10 @@ auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
 }
 
 //The calling thread waits for something: for wakeAt (a cycle, 0 for no time limit) at the latest. Another thread
-//runs meanwhile. (Functions that wait check mayWait() first: a call into the program can't wait.)
-auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer) -> void {
+//runs meanwhile. With callbacks (the functions whose names end in CB), the thread's callbacks run when they're
+//notified, the wait going on after them (events.cpp); one notified already runs at once. (Functions that wait check
+//mayWait() first: a call into the program can't wait.)
+auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer, bool callbacks) -> void {
   if(!current) return;
   if(interrupting) return result(ErrorIllegalContext);
   current->status = Status::Waiting;
@@ -105,7 +107,15 @@ auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer) -> void {
   current->waitID = id;
   current->wakeAt = wakeAt;
   current->timeoutPointer = timeoutPointer;
+  current->callbacks = callbacks;
+  if(callbacks) wakeForCallbacks(*current);
   reschedule();
+}
+
+//When a wait with a timeout gives up: the timeout's microseconds (a word at pointer) from now, as a cycle; 0, no
+//time limit, if there's no pointer.
+auto Kernel::timeout(u32 pointer) const -> u64 {
+  return pointer ? cycles + u64(memory.read(4, pointer)) * (CPUFrequency / 1'000'000) : 0;
 }
 
 //Picks the thread to run: the ready one with the highest priority (the lowest number), the one ready the longest
@@ -130,22 +140,24 @@ auto Kernel::reschedule() -> void {
   switchTo(best);
 }
 
-//Puts the running thread's registers aside and loads next's (none: the CPU idles until a thread is ready).
+//Puts the running thread's registers aside and loads next's (none: the CPU idles until a thread is ready). A thread
+//still in its wait was made ready only to run its callbacks (wakeForCallbacks()): they start now.
 auto Kernel::switchTo(Thread* next) -> void {
   if(current && current == next) {  //it's already in the CPU
     next->status = Status::Running;
     cpu.scc.halted = 0;
-    return;
+  } else {
+    if(current) save(current->context);
+    current = next;
+    if(!next) {
+      cpu.scc.halted = 1;
+      return;
+    }
+    restore(next->context);
+    next->status = Status::Running;
+    cpu.scc.halted = 0;
   }
-  if(current) save(current->context);
-  current = next;
-  if(!next) {
-    cpu.scc.halted = 1;
-    return;
-  }
-  restore(next->context);
-  next->status = Status::Running;
-  cpu.scc.halted = 0;
+  if(next->wait != Wait::None) runCallbacks(*next);
 }
 
 //What's due by now: vertical blanks, delays ending, timeouts running out. A thread woken with a higher priority than
@@ -215,6 +227,7 @@ auto Kernel::idle(u64 end) -> bool {
 auto Kernel::endThread(Thread& thread, s32 status) -> void {
   thread.status = Status::Dormant;
   thread.wait = Wait::None;
+  thread.callbacks = thread.inCallback = false;
   thread.exitStatus = status;
   for(auto& [uid, other] : threads) {
     if(other->status == Status::Waiting && other->wait == Wait::ThreadEnd && other->waitID == thread.uid) {
@@ -261,16 +274,23 @@ auto Kernel::sceKernelExitThread() -> void {
   reschedule();
 }
 
-//The calling thread ends and is deleted at once: its stack goes back to the user partition.
+//A thread is gone: its stack goes back to the user partition, and its callbacks go with it (they could only ever run
+//on it).
+auto Kernel::deleteThread(Thread& thread) -> void {
+  u32 uid = thread.uid;
+  for(auto& block : blocks) {
+    if(block.address == thread.stackBlock) { release(block.uid); break; }
+  }
+  std::erase_if(callbacks, [&](auto& item) { return item.second.thread == uid; });
+  if(current == &thread) current = nullptr;  //nothing to save
+  threads.erase(uid);
+}
+
+//The calling thread ends and is deleted at once.
 auto Kernel::sceKernelExitDeleteThread() -> void {
   if(!current) return;
-  Thread* thread = current;
-  endThread(*thread, s32(arg(0)));
-  current = nullptr;  //nothing to save: the thread is gone
-  for(auto& block : blocks) {
-    if(block.address == thread->stackBlock) { release(block.uid); break; }
-  }
-  threads.erase(thread->uid);
+  endThread(*current, s32(arg(0)));
+  deleteThread(*current);
   reschedule();
 }
 
@@ -279,10 +299,7 @@ auto Kernel::sceKernelDeleteThread() -> void {
   if(!thread || arg(0) == 0) return result(ErrorUnknownThread);
   if(thread == current) return result(ErrorIllegalThread);
   if(thread->status != Status::Dormant) return result(ErrorNotDormant);
-  for(auto& block : blocks) {
-    if(block.address == thread->stackBlock) { release(block.uid); break; }
-  }
-  threads.erase(thread->uid);
+  deleteThread(*thread);
   result(0);
 }
 
@@ -327,21 +344,34 @@ auto Kernel::sceKernelReferThreadStatus() -> void {
   result(0);
 }
 
-auto Kernel::sceKernelDelayThread() -> void {
+//Waits for a number of microseconds (and, with callbacks, runs the thread's callbacks as they're notified).
+auto Kernel::delay(u32 microseconds, bool callbacks) -> void {
   if(!mayWait()) return;
   result(0);
-  block(Wait::Delay, 0, cycles + std::max<u64>(1, u64(arg(0)) * (CPUFrequency / 1'000'000)));
+  block(Wait::Delay, 0, cycles + std::max<u64>(1, u64(microseconds) * (CPUFrequency / 1'000'000)), 0, callbacks);
+}
+
+auto Kernel::sceKernelDelayThread() -> void {
+  delay(arg(0), false);
+}
+
+auto Kernel::sceKernelDelayThreadCB() -> void {
+  delay(arg(0), true);
 }
 
 //Sleeps until another thread wakes it, unless a wakeup already came while it was awake.
-auto Kernel::sceKernelSleepThread() -> void {
+auto Kernel::sleep(bool callbacks) -> void {
   if(!mayWait()) return;
   result(0);
   if(current && current->wakeupCount) {
     current->wakeupCount--;
     return;
   }
-  block(Wait::Sleep, 0, 0);
+  block(Wait::Sleep, 0, 0, 0, callbacks);
+}
+
+auto Kernel::sceKernelSleepThread() -> void {
+  sleep(false);
 }
 
 auto Kernel::sceKernelWakeupThread() -> void {
@@ -356,15 +386,22 @@ auto Kernel::sceKernelWakeupThread() -> void {
   }
 }
 
-auto Kernel::sceKernelWaitThreadEnd() -> void {
+//(thread, timeout): waits for the thread to end, and returns what it ended with.
+auto Kernel::waitThreadEnd(bool callbacks) -> void {
   if(!mayWait()) return;
   auto thread = findThread(arg(0));
   if(!thread || arg(0) == 0) return result(ErrorUnknownThread);
   if(thread->status == Status::Dormant) return result(u32(thread->exitStatus));
-  u32 timeout = arg(1);
   result(0);
-  block(Wait::ThreadEnd, thread->uid, timeout ? cycles + u64(memory.read(4, timeout)) * (CPUFrequency / 1'000'000) : 0,
-        timeout);
+  block(Wait::ThreadEnd, thread->uid, timeout(arg(1)), arg(1), callbacks);
+}
+
+auto Kernel::sceKernelWaitThreadEnd() -> void {
+  waitThreadEnd(false);
+}
+
+auto Kernel::sceKernelWaitThreadEndCB() -> void {
+  waitThreadEnd(true);
 }
 
 auto Kernel::sceKernelCreateSema() -> void {
@@ -416,7 +453,8 @@ auto Kernel::sceKernelSignalSema() -> void {
   reschedule();
 }
 
-auto Kernel::sceKernelWaitSema() -> void {
+//(semaphore, count, timeout)
+auto Kernel::waitSemaphore(bool callbacks) -> void {
   if(!mayWait()) return;
   auto found = semaphores.find(arg(0));
   if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
@@ -428,11 +466,17 @@ auto Kernel::sceKernelWaitSema() -> void {
     semaphore.count -= count;
     return;
   }
-  u32 timeout = arg(2);
   current->waitCount = count;
   current->readySince = ++readySequence;  //its place in the queue
-  block(Wait::Semaphore, semaphore.uid,
-        timeout ? cycles + u64(memory.read(4, timeout)) * (CPUFrequency / 1'000'000) : 0, timeout);
+  block(Wait::Semaphore, semaphore.uid, timeout(arg(2)), arg(2), callbacks);
+}
+
+auto Kernel::sceKernelWaitSema() -> void {
+  waitSemaphore(false);
+}
+
+auto Kernel::sceKernelWaitSemaCB() -> void {
+  waitSemaphore(true);
 }
 
 auto Kernel::sceKernelPollSema() -> void {

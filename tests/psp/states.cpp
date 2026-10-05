@@ -247,6 +247,7 @@ static auto stateFields() -> void {
   };
   contextChanges("thread", &t.context);
   contextChanges("interrupted", &k.interrupted);
+  contextChanges("before its callback", &t.beforeCallback);
   auto& sema = k.semaphores[semaphore];
   auto& eventFlag = k.eventFlags[flag];
   auto& cb = k.callbacks[callback];
@@ -269,6 +270,16 @@ static auto stateFields() -> void {
     {"thread waitPointer", [&] { t.waitPointer ^= 4; }}, {"thread wakeAt", [&] { t.wakeAt ^= 1; }},
     {"thread timeoutPointer", [&] { t.timeoutPointer ^= 4; }}, {"thread readySince", [&] { t.readySince ^= 1; }},
     {"thread exitStatus", [&] { t.exitStatus ^= 1; }}, {"thread wakeupCount", [&] { t.wakeupCount ^= 1; }},
+    {"thread callbacks", [&] { t.callbacks = true; }}, {"thread inCallback", [&] { t.inCallback = true; }},
+    {"thread callbackID", [&] { t.callbackID = callback; }},
+    {"wait before callback", [&] { t.waitBeforeCallback.wait = Kernel::Wait::Sleep; }},
+    {"wait before callback id", [&] { t.waitBeforeCallback.id ^= 1; }},
+    {"wait before callback count", [&] { t.waitBeforeCallback.count ^= 1; }},
+    {"wait before callback mode", [&] { t.waitBeforeCallback.mode ^= 1; }},
+    {"wait before callback pointer", [&] { t.waitBeforeCallback.pointer ^= 4; }},
+    {"wait before callback timeoutPointer", [&] { t.waitBeforeCallback.timeoutPointer ^= 4; }},
+    {"wait before callback wakeAt", [&] { t.waitBeforeCallback.wakeAt ^= 1; }},
+    {"wait before callback callbacks", [&] { t.waitBeforeCallback.callbacks = true; }},
     {"the thread running", [&] { k.current = k.threads[two].get(); }},
     {"readySequence", [&] { k.readySequence += 7; }}, {"nextVblank", [&] { k.nextVblank = k.cycles + 1000; }},
     {"vblanks", [&] { k.vblanks += 7; }},
@@ -281,11 +292,14 @@ static auto stateFields() -> void {
     {"event flag initial", [&] { eventFlag.initial ^= 1; }}, {"event flag pattern", [&] { eventFlag.pattern ^= 1; }},
     {"callback name", [&] { cb.name += "x"; }},
     {"callback function", [&] { cb.function ^= 4; }}, {"callback argument", [&] { cb.argument ^= 1; }},
-    {"callback thread", [&] { cb.thread ^= 1; }},
+    {"callback thread", [&] { cb.thread ^= 1; }}, {"callback notifyCount", [&] { cb.notifyCount ^= 1; }},
+    {"callback notifyArg", [&] { cb.notifyArg ^= 1; }},
     {"exitCallback", [&] { k.exitCallback ^= 1; }}, {"memoryStickCallbacks", [&] { k.memoryStickCallbacks[0] ^= 1; }},
     {"umdCallback", [&] { k.umdCallback ^= 1; }},
     {"block uid", [&] { block.uid ^= 1; }}, {"block name", [&] { block.name += "x"; }},
     {"block address", [&] { block.address ^= 0x100; }}, {"block size", [&] { block.size ^= 0x100; }},
+    {"largeMemory", [&] { k.largeMemory = true; }}, {"sdkVersion", [&] { k.sdkVersion ^= 1; }},
+    {"compilerVersion", [&] { k.compilerVersion ^= 1; }},
     //files: the host file opened again as another, for writing too; the other host file counted as the disc's; the
     //disc's file a folder, read a sector at a time
     {"file path", [&] { host.path = "ms0:/B.TXT"; }},
@@ -403,6 +417,7 @@ static auto stateFields() -> void {
     k.callbacks[k.nextUID] = copy;
   });
   refuses("a block's ID not handed out yet", [&] { k.blocks.back().uid = k.nextUID; });
+  refuses("a thread's callback not handed out yet", [&] { k.threads.at(one)->callbackID = k.nextUID; });
   //a host folder's names as no listing makes them: reading it would join them to its place on the host
   refuses("a folder name reaching out of its folder", [&] { k.files[folder].entries.push_back("../../etc"); });
   refuses("a folder name that's a whole path", [&] { k.files[folder].entries.push_back("/etc"); });

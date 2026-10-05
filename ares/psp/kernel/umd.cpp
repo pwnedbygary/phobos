@@ -21,7 +21,8 @@ auto Kernel::umdWait(u32 stat, u32 timeout, bool callbacks) -> void {
   if(timeout == 1 && !callbacks) timeout = 25;
   else if(timeout && timeout <= 209) timeout = 240;
   result(0);
-  block(Wait::Umd, 0, timeout ? cycles + u64(timeout) * (CPUFrequency / 1'000'000) : 0);
+  if(current) current->waitCount = stat;  //what it waits for, should its callbacks run first (resumeWait())
+  block(Wait::Umd, 0, timeout ? cycles + u64(timeout) * (CPUFrequency / 1'000'000) : 0, 0, callbacks);
 }
 
 //(): 1 if a disc is in the drive.
@@ -58,8 +59,8 @@ auto Kernel::sceUmdWaitDriveStatWithTimer() -> void {
   umdWait(arg(0), arg(1), false);
 }
 
-//(stat, timeout in microseconds): as sceUmdWaitDriveStatWithTimer but without the 25-microsecond step. The PSP would
-//run the thread's callbacks meanwhile; none run in this kernel yet.
+//(stat, timeout in microseconds): as sceUmdWaitDriveStatWithTimer but without the 25-microsecond step, the thread's
+//callbacks running meanwhile.
 auto Kernel::sceUmdWaitDriveStatCB() -> void {
   umdWait(arg(0), arg(1), true);
 }

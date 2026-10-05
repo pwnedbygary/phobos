@@ -58,6 +58,7 @@ struct Kernel {
   static constexpr u32 ErrorIllegalAddress        = 0x8002'00d3;
   static constexpr u32 ErrorIllegalPartition      = 0x8002'00d6;
   static constexpr u32 ErrorAllocationFailed      = 0x8002'00d9;
+  static constexpr u32 ErrorIllegalAlignmentSize  = 0x8002'00e4;  //an aligned block's alignment not a power of two
   static constexpr u32 ErrorNotYetLinked          = 0x8002'013a;  //a function the kernel doesn't have
   static constexpr u32 ErrorIllegalContext        = 0x8002'0064;  //waiting, from an interrupt handler
   static constexpr u32 ErrorIllegalAttribute      = 0x8002'0191;
@@ -170,7 +171,7 @@ struct Kernel {
   };
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
-  static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, FirstImportCode = 0x1000;
+  static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, CallbackReturnCode = 3, FirstImportCode = 0x1000;
 
   //threads.cpp
   struct Context {  //a thread's registers while another runs
@@ -181,6 +182,12 @@ struct Kernel {
   enum class Status : u32 { Running = 1, Ready = 2, Waiting = 4, Dormant = 16 };  //the PSP's numbers
   enum class Wait : u32 {
     None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd,
+  };
+  struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
+    Wait wait = Wait::None;
+    u32 id = 0, count = 0, mode = 0, pointer = 0, timeoutPointer = 0;
+    u64 wakeAt = 0;
+    bool callbacks = false;
   };
   struct Thread {
     u32 uid;
@@ -198,6 +205,11 @@ struct Kernel {
     u64 readySince = 0;    //to keep first-come order among equal priorities
     s32 exitStatus = 0;
     u32 wakeupCount = 0;
+    bool callbacks = false;    //its wait lets its callbacks run (it called a function whose name ends in CB)
+    bool inCallback = false;   //it's running one of them, its own registers and wait put aside till they're done
+    u32 callbackID = 0;        //which
+    Context beforeCallback{};  //the thread as its callbacks found it: in its wait, or in sceKernelCheckCallback
+    WaitState waitBeforeCallback;
   };
   struct Semaphore {
     u32 uid;
@@ -219,7 +231,8 @@ struct Kernel {
   auto save(Context& context) -> void;
   auto restore(const Context& context) -> void;
   auto ready(Thread& thread, u32 returnValue) -> void;
-  auto block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer = 0) -> void;
+  auto block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer = 0, bool callbacks = false) -> void;
+  auto timeout(u32 pointer) const -> u64;
   auto reschedule() -> void;
   auto switchTo(Thread* thread) -> void;
   auto events() -> void;
@@ -230,6 +243,11 @@ struct Kernel {
   auto signalSemaphores(Semaphore& semaphore) -> void;
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
+  auto deleteThread(Thread& thread) -> void;
+  auto delay(u32 microseconds, bool callbacks) -> void;
+  auto sleep(bool callbacks) -> void;
+  auto waitThreadEnd(bool callbacks) -> void;
+  auto waitSemaphore(bool callbacks) -> void;
 
   auto sceKernelCreateThread() -> void;
   auto sceKernelStartThread() -> void;
@@ -239,13 +257,16 @@ struct Kernel {
   auto sceKernelGetThreadId() -> void;
   auto sceKernelReferThreadStatus() -> void;
   auto sceKernelDelayThread() -> void;
+  auto sceKernelDelayThreadCB() -> void;
   auto sceKernelSleepThread() -> void;
   auto sceKernelWakeupThread() -> void;
   auto sceKernelWaitThreadEnd() -> void;
+  auto sceKernelWaitThreadEndCB() -> void;
   auto sceKernelCreateSema() -> void;
   auto sceKernelDeleteSema() -> void;
   auto sceKernelSignalSema() -> void;
   auto sceKernelWaitSema() -> void;
+  auto sceKernelWaitSemaCB() -> void;
   auto sceKernelPollSema() -> void;
   auto sceKernelCreateLwMutex() -> void;
   auto sceKernelDeleteLwMutex() -> void;
@@ -254,23 +275,30 @@ struct Kernel {
   auto sceKernelUnlockLwMutex() -> void;
   auto sceKernelGetSystemTimeLow() -> void;
 
-  //sysmem.cpp: the user partition's memory, handed out in blocks
+  //sysmem.cpp: the user partition's memory, handed out in blocks; and what a program tells the system about itself
   struct Block {
     u32 uid;
     std::string name;
     u32 address, size;
   };
   std::vector<Block> blocks;  //by address
+  bool largeMemory = false;   //the program asked for all of RAM (its PARAM.SFO's MEMSIZE): see userEnd()
+  u32 sdkVersion = 0;         //the SDK the program was built with, as its start-up code tells the system
+  u32 compilerVersion = 0;    //and the version of the compiler that built it
   auto allocate(u32 size, u32 type, u32 address, const std::string& name) -> Block*;
   auto release(u32 uid) -> bool;
   auto userEnd() const -> u32;
   auto largestFree() const -> u32;
+  auto programParameters(const u8* data, u64 size, const std::string& path) -> std::vector<u8>;
 
   auto sceKernelAllocPartitionMemory() -> void;
   auto sceKernelFreePartitionMemory() -> void;
   auto sceKernelGetBlockHeadAddr() -> void;
   auto sceKernelMaxFreeMemSize() -> void;
   auto sceKernelTotalFreeMemSize() -> void;
+  auto sceKernelSetCompiledSdkVersion() -> void;
+  auto sceKernelGetCompiledSdkVersion() -> void;
+  auto sceKernelSetCompilerVersion() -> void;
 
   //io.cpp: files and folders on the host folders standing for the PSP's devices, or on the disc in the drive;
   //standard input, output and error
@@ -394,10 +422,19 @@ struct Kernel {
     u32 mode = 0, width = 480, height = 272;
     u32 frameBuffer = 0, bufferWidth = 0, pixelFormat = 0;
   } display;
+  static constexpr u64 LineCycles = CPUFrequency * 525 / 9'000'000;  //a line: 525 dots at 9 MHz (286 to a frame)
+  static constexpr u64 VblankLength = CPUFrequency * 77 / 100'000;    //the vertical blank lasts 0.77 ms
+  auto inVblank() const -> bool;
+  auto waitVblank(bool callbacks) -> void;
   auto sceDisplaySetMode() -> void;
   auto sceDisplaySetFrameBuf() -> void;
   auto sceDisplayGetFrameBuf() -> void;
   auto sceDisplayWaitVblankStart() -> void;
+  auto sceDisplayWaitVblankStartCB() -> void;
+  auto sceDisplayWaitVblank() -> void;
+  auto sceDisplayWaitVblankCB() -> void;
+  auto sceDisplayIsVblank() -> void;
+  auto sceDisplayGetCurrentHcount() -> void;
   auto sceDisplayGetVcount() -> void;
   auto picture(std::vector<u32>& pixels) -> void;
 
@@ -431,6 +468,7 @@ struct Kernel {
     u32 uid;
     std::string name;
     u32 function, argument, thread;
+    u32 notifyCount = 0, notifyArg = 0;  //times it was notified since it last ran, and the last notification's word
   };
   std::map<u32, EventFlag> eventFlags;
   std::map<u32, Callback> callbacks;
@@ -438,15 +476,31 @@ struct Kernel {
   auto eventFlagWaiters(const EventFlag& flag) -> std::vector<Thread*>;
   auto eventFlagFor(u32 uid, u32 bits, u32 mode) -> EventFlag*;
   auto eventFlagTimedOut(Thread& thread) -> void;
+  auto wakeEventFlagWaiters(EventFlag& flag) -> void;
+  auto waitEventFlag(bool callbacks) -> void;
+  auto notifyCallback(u32 uid, u32 argument) -> bool;
+  auto pendingCallback(const Thread& thread) -> Callback*;
+  auto wakeForCallbacks(Thread& thread) -> void;
+  auto runCallbacks(Thread& thread) -> void;
+  auto callNextCallback(Thread& thread) -> bool;
+  auto callbackReturned() -> void;
+  auto backFromCallbacks(Thread& thread) -> void;
+  auto resumeWait(Thread& thread) -> void;
+  auto deleteCallback(u32 uid) -> bool;
   auto sceKernelCreateEventFlag() -> void;
   auto sceKernelDeleteEventFlag() -> void;
   auto sceKernelSetEventFlag() -> void;
   auto sceKernelClearEventFlag() -> void;
   auto sceKernelWaitEventFlag() -> void;
+  auto sceKernelWaitEventFlagCB() -> void;
   auto sceKernelPollEventFlag() -> void;
   auto sceKernelReferEventFlagStatus() -> void;
   auto sceKernelCreateCallback() -> void;
   auto sceKernelDeleteCallback() -> void;
+  auto sceKernelNotifyCallback() -> void;
+  auto sceKernelCancelCallback() -> void;
+  auto sceKernelGetCallbackCount() -> void;
+  auto sceKernelReferCallbackStatus() -> void;
   auto sceKernelRegisterExitCallback() -> void;
   auto sceKernelSleepThreadCB() -> void;
   auto sceKernelCheckCallback() -> void;
@@ -523,6 +577,7 @@ struct Kernel {
   auto result64(u64 value) -> void;
   auto sceKernelExitGame() -> void;
   auto sceKernelSelfStopUnloadModule() -> void;
+  auto sceKernelStopUnloadSelfModuleWithStatus() -> void;
   auto sceUtilityGetSystemParamInt() -> void;
   auto sceNetInetUnavailable() -> void;
   auto sceKernelGetSystemTimeWide() -> void;

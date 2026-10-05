@@ -134,6 +134,11 @@ auto Kernel::serialize(serializer& s) -> bool {
     context(t.context);
     s(t.wait); s(t.waitID); s(t.waitCount); s(t.waitMode); s(t.waitPointer);
     s(t.wakeAt); s(t.timeoutPointer); s(t.readySince); s(t.exitStatus); s(t.wakeupCount);
+    s(t.callbacks); s(t.inCallback); s(t.callbackID);
+    context(t.beforeCallback);
+    auto& w = t.waitBeforeCallback;
+    s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
+    check(t.callbackID < nextUID);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
     check(t.wait != Wait::Controller || (t.waitCount & 0x7fff'ffff) < 64);
   };
@@ -172,11 +177,13 @@ auto Kernel::serialize(serializer& s) -> bool {
   });
   map(callbacks, [&](Callback& callback) {
     s(callback.uid); text(callback.name); s(callback.function); s(callback.argument); s(callback.thread);
+    s(callback.notifyCount); s(callback.notifyArg);
   });
   s(exitCallback);
   vector(memoryStickCallbacks, [&](u32& callback) { s(callback); });
   s(umdCallback);
   vector(blocks, [&](Block& block) { s(block.uid); text(block.name); s(block.address); s(block.size); });
+  s(largeMemory); s(sdkVersion); s(compilerVersion);
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);

@@ -23,6 +23,11 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   auto add = [&](const char* library, const char* name, auto (Kernel::*handler)() -> void) {
     functions.push_back({library, name, handler, nid(name)});
   };
+  //A function whose NID isn't its name's hash: Sony gave some later functions random NIDs, and the names these go by
+  //are the ones the homebrew scene gave them. Each is listed by the NID games import, as PPSSPP's tables name it.
+  auto addNID = [&](const char* library, const char* name, u32 nid, auto (Kernel::*handler)() -> void) {
+    functions.push_back({library, name, handler, nid});
+  };
   add("ThreadManForUser",  "sceKernelCreateThread",         &Kernel::sceKernelCreateThread);
   add("ThreadManForUser",  "sceKernelStartThread",          &Kernel::sceKernelStartThread);
   add("ThreadManForUser",  "sceKernelExitThread",           &Kernel::sceKernelExitThread);
@@ -31,13 +36,16 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("ThreadManForUser",  "sceKernelGetThreadId",          &Kernel::sceKernelGetThreadId);
   add("ThreadManForUser",  "sceKernelReferThreadStatus",    &Kernel::sceKernelReferThreadStatus);
   add("ThreadManForUser",  "sceKernelDelayThread",          &Kernel::sceKernelDelayThread);
+  add("ThreadManForUser",  "sceKernelDelayThreadCB",        &Kernel::sceKernelDelayThreadCB);
   add("ThreadManForUser",  "sceKernelSleepThread",          &Kernel::sceKernelSleepThread);
   add("ThreadManForUser",  "sceKernelWakeupThread",         &Kernel::sceKernelWakeupThread);
   add("ThreadManForUser",  "sceKernelWaitThreadEnd",        &Kernel::sceKernelWaitThreadEnd);
+  add("ThreadManForUser",  "sceKernelWaitThreadEndCB",      &Kernel::sceKernelWaitThreadEndCB);
   add("ThreadManForUser",  "sceKernelCreateSema",           &Kernel::sceKernelCreateSema);
   add("ThreadManForUser",  "sceKernelDeleteSema",           &Kernel::sceKernelDeleteSema);
   add("ThreadManForUser",  "sceKernelSignalSema",           &Kernel::sceKernelSignalSema);
   add("ThreadManForUser",  "sceKernelWaitSema",             &Kernel::sceKernelWaitSema);
+  add("ThreadManForUser",  "sceKernelWaitSemaCB",           &Kernel::sceKernelWaitSemaCB);
   add("ThreadManForUser",  "sceKernelPollSema",             &Kernel::sceKernelPollSema);
   add("ThreadManForUser",  "sceKernelCreateLwMutex",        &Kernel::sceKernelCreateLwMutex);
   add("ThreadManForUser",  "sceKernelDeleteLwMutex",        &Kernel::sceKernelDeleteLwMutex);
@@ -49,11 +57,15 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("ThreadManForUser",  "sceKernelSetEventFlag",         &Kernel::sceKernelSetEventFlag);
   add("ThreadManForUser",  "sceKernelClearEventFlag",       &Kernel::sceKernelClearEventFlag);
   add("ThreadManForUser",  "sceKernelWaitEventFlag",        &Kernel::sceKernelWaitEventFlag);
-  add("ThreadManForUser",  "sceKernelWaitEventFlagCB",      &Kernel::sceKernelWaitEventFlag);
+  add("ThreadManForUser",  "sceKernelWaitEventFlagCB",      &Kernel::sceKernelWaitEventFlagCB);
   add("ThreadManForUser",  "sceKernelPollEventFlag",        &Kernel::sceKernelPollEventFlag);
   add("ThreadManForUser",  "sceKernelReferEventFlagStatus", &Kernel::sceKernelReferEventFlagStatus);
   add("ThreadManForUser",  "sceKernelCreateCallback",       &Kernel::sceKernelCreateCallback);
   add("ThreadManForUser",  "sceKernelDeleteCallback",       &Kernel::sceKernelDeleteCallback);
+  add("ThreadManForUser",  "sceKernelNotifyCallback",       &Kernel::sceKernelNotifyCallback);
+  add("ThreadManForUser",  "sceKernelCancelCallback",       &Kernel::sceKernelCancelCallback);
+  add("ThreadManForUser",  "sceKernelGetCallbackCount",     &Kernel::sceKernelGetCallbackCount);
+  add("ThreadManForUser",  "sceKernelReferCallbackStatus",  &Kernel::sceKernelReferCallbackStatus);
   add("ThreadManForUser",  "sceKernelSleepThreadCB",        &Kernel::sceKernelSleepThreadCB);
   add("ThreadManForUser",  "sceKernelCheckCallback",        &Kernel::sceKernelCheckCallback);
   add("Kernel_Library",    "sceKernelLockLwMutex",          &Kernel::sceKernelLockLwMutex);
@@ -78,6 +90,28 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("SysMemUserForUser", "sceKernelGetBlockHeadAddr",     &Kernel::sceKernelGetBlockHeadAddr);
   add("SysMemUserForUser", "sceKernelMaxFreeMemSize",       &Kernel::sceKernelMaxFreeMemSize);
   add("SysMemUserForUser", "sceKernelTotalFreeMemSize",     &Kernel::sceKernelTotalFreeMemSize);
+  add("SysMemUserForUser", "sceKernelSetCompiledSdkVersion", &Kernel::sceKernelSetCompiledSdkVersion);
+  add("SysMemUserForUser", "sceKernelGetCompiledSdkVersion", &Kernel::sceKernelGetCompiledSdkVersion);
+  add("SysMemUserForUser", "sceKernelSetCompilerVersion",   &Kernel::sceKernelSetCompilerVersion);
+  //one for each range of SDK versions from 3.7 on, all doing the same
+  addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion370",     0x3420'61e5,
+         &Kernel::sceKernelSetCompiledSdkVersion);
+  addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion380_390", 0x315a'd3a0,
+         &Kernel::sceKernelSetCompiledSdkVersion);
+  addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion395",     0xebd5'c3e6,
+         &Kernel::sceKernelSetCompiledSdkVersion);
+  addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion401_402", 0x057e'7380,
+         &Kernel::sceKernelSetCompiledSdkVersion);
+  addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion500_505", 0x91de'343c,
+         &Kernel::sceKernelSetCompiledSdkVersion);
+  addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion507",     0x7893'f79a,
+         &Kernel::sceKernelSetCompiledSdkVersion);
+  addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion600_602", 0x3566'9d4c,
+         &Kernel::sceKernelSetCompiledSdkVersion);
+  addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion603_605", 0x1b42'17bc,
+         &Kernel::sceKernelSetCompiledSdkVersion);
+  addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion606",     0x358c'a1bb,
+         &Kernel::sceKernelSetCompiledSdkVersion);
   add("StdioForUser",      "sceKernelStdin",                &Kernel::sceKernelStdin);
   add("StdioForUser",      "sceKernelStdout",               &Kernel::sceKernelStdout);
   add("StdioForUser",      "sceKernelStderr",               &Kernel::sceKernelStderr);
@@ -126,6 +160,11 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceDisplay",        "sceDisplaySetFrameBuf",         &Kernel::sceDisplaySetFrameBuf);
   add("sceDisplay",        "sceDisplayGetFrameBuf",         &Kernel::sceDisplayGetFrameBuf);
   add("sceDisplay",        "sceDisplayWaitVblankStart",     &Kernel::sceDisplayWaitVblankStart);
+  add("sceDisplay",        "sceDisplayWaitVblankStartCB",   &Kernel::sceDisplayWaitVblankStartCB);
+  add("sceDisplay",        "sceDisplayWaitVblank",          &Kernel::sceDisplayWaitVblank);
+  add("sceDisplay",        "sceDisplayWaitVblankCB",        &Kernel::sceDisplayWaitVblankCB);
+  add("sceDisplay",        "sceDisplayIsVblank",            &Kernel::sceDisplayIsVblank);
+  add("sceDisplay",        "sceDisplayGetCurrentHcount",    &Kernel::sceDisplayGetCurrentHcount);
   add("sceDisplay",        "sceDisplayGetVcount",           &Kernel::sceDisplayGetVcount);
   add("sceGe_user",        "sceGeEdramGetAddr",             &Kernel::sceGeEdramGetAddr);
   add("sceGe_user",        "sceGeEdramGetSize",             &Kernel::sceGeEdramGetSize);
@@ -145,6 +184,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("LoadExecForUser",   "sceKernelExitGame",             &Kernel::sceKernelExitGame);
   add("LoadExecForUser",   "sceKernelRegisterExitCallback", &Kernel::sceKernelRegisterExitCallback);
   add("ModuleMgrForUser",  "sceKernelSelfStopUnloadModule", &Kernel::sceKernelSelfStopUnloadModule);
+  addNID("ModuleMgrForUser", "sceKernelStopUnloadSelfModuleWithStatus", 0x8f2d'f740,
+         &Kernel::sceKernelStopUnloadSelfModuleWithStatus);
   add("sceUtility",        "sceUtilityGetSystemParamInt",   &Kernel::sceUtilityGetSystemParamInt);
   //newlib's sockets: no network yet, so every call fails
   add("sceNetInet",        "sceNetInetClose",               &Kernel::sceNetInetUnavailable);
@@ -205,6 +246,9 @@ auto Kernel::power() -> void {
   nextVblank = VblankCycles;
   vblanks = 0;
   blocks.clear();
+  largeMemory = false;
+  sdkVersion = 0;
+  compilerVersion = 0;
   files.clear();
   nextFile = 3;
   workingDirectory = "ms0:/";
@@ -237,6 +281,8 @@ auto Kernel::power() -> void {
   memory.write(4, Trampoline + 4, 0x0000'000d);                  //break: never reached
   memory.write(4, Trampoline + 8, CallReturnCode << 6 | 0x0c);  //syscall: a call into the program returned
   memory.write(4, Trampoline + 12, 0x0000'000d);
+  memory.write(4, Trampoline + 16, CallbackReturnCode << 6 | 0x0c);  //syscall: a thread's callback returned
+  memory.write(4, Trampoline + 20, 0x0000'000d);
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
@@ -252,6 +298,7 @@ auto Kernel::load(const u8* data, u64 size, const std::string& path, std::string
 }
 
 auto Kernel::start(const u8* data, u64 size, const std::string& path, std::string& error) -> bool {
+  largeMemory = parameterNumber(programParameters(data, size, path), "MEMSIZE", 0) == 1;
   u64 offset = 0, length = size;
   if(Loader::programInPBP(data, size, offset, length)) {
     data += offset;
@@ -353,6 +400,10 @@ auto Kernel::syscall(u32 code) -> bool {
   }
   if(code == CallReturnCode) {
     callReturned();
+    return true;
+  }
+  if(code == CallbackReturnCode) {
+    callbackReturned();
     return true;
   }
   if(code < FirstImportCode || code - FirstImportCode >= imports.size()) {

@@ -13,6 +13,13 @@ auto Kernel::sceKernelSelfStopUnloadModule() -> void {
   switchTo(nullptr);
 }
 
+//(exit status, argument size, argument, where to put module_stop's status, options): the same, as later SDKs'
+//start-up code calls it (a C++ program's abort() ends here too). The program has no module_stop to run: it's over.
+auto Kernel::sceKernelStopUnloadSelfModuleWithStatus() -> void {
+  exited = true;
+  switchTo(nullptr);
+}
+
 //(which setting, where to put it): the system's settings (psputility_sysparam.h). Language 1 is English; button
 //swap 1 means the cross button confirms, as outside Japan; anything else reads 0.
 auto Kernel::sceUtilityGetSystemParamInt() -> void {
