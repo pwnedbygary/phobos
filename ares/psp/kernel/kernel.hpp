@@ -148,6 +148,7 @@ struct Kernel {
   GE& ge;
   Module module;           //the program
   bool exited = false;     //it called sceKernelExitGame (or unloaded itself)
+  bool stuck = false;      //nothing will run again, which has been noted (once, not every frame; not saved)
   u64 cycles = 0;          //time since power on
   u32 nextUID = 0x100;
   static constexpr u32 LastUID = 0x7fff'ffff;  //IDs are positive 32-bit numbers: a top bit set reads as an error

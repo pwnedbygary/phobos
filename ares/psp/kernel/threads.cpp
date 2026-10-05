@@ -199,7 +199,10 @@ auto Kernel::idle(u64 end) -> bool {
     if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;
   }
   if(!timed) {
-    note(threads.empty() ? "no threads left to run" : "every thread is waiting for another: none will run again");
+    if(!stuck) {
+      note(threads.empty() ? "no threads left to run" : "every thread is waiting for another: none will run again");
+    }
+    stuck = true;
     return false;
   }
   cycles = std::min(end, cycles + untilNextEvent());
