@@ -17,7 +17,12 @@ auto Allegrex::Recompiler::reset() -> void {
   sections.clear();
   writePages.clear();
   if(!enabled) return;
-  if(!allocator) allocator.resize(32_MiB, bump_allocator::executable);
+  if(!allocator) allocator.resize(codeMemory, bump_allocator::executable);
+  if(!allocator) {
+    //No memory that code may run from (a system that forbids it): the interpreter runs everything instead.
+    enabled = false;
+    return;
+  }
   allocator.release();
   sections.resize(SectionCount);
   writePages.resize(SectionCount);
@@ -63,6 +68,10 @@ auto Allegrex::Recompiler::run() -> u32 {
     return 1;
   }
   if(sections.empty()) reset();
+  if(!enabled) {
+    self.instruction();
+    return 1;
+  }
   auto code = block(ipu.pc);
   ((void (*)(Allegrex*))code)(&self);
   return executed;

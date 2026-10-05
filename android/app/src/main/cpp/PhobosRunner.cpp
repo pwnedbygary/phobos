@@ -41,6 +41,7 @@
 #include <pce/pce.hpp>
 #undef NCCS
 #include <ps1/ps1.hpp>
+#include <psp/psp.hpp>
 #include <sfc/sfc.hpp>
 #include <sg/sg.hpp>
 #include <spec/spec.hpp>
@@ -978,6 +979,8 @@ namespace ares {
   static string homePath;
   static string savesPath;
   static string vulkanCachePath;
+  // The folder the user picked for the PSP's memory stick; empty for the shared one in the saves folder.
+  static string pspMemoryStickPath;
   static std::map<string, string> firmwareMap;
 
   // The 32X's boot ROMs: Sega's 68000 vector table and the two SH-2 boot ROMs, from the Firmware
@@ -2944,7 +2947,8 @@ namespace ares {
           portIndex++;
           continue;
       }
-      if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive" || port->type() == "Floppy Disk") {
+      if (port->type() == "Cartridge" || port->type() == "Compact Disc" || port->type() == "Disk Drive" || port->type() == "Floppy Disk"
+          || port->type() == "Universal Media Disc") {
         // Mega CD 32X: the 32X fills the cartridge slot with no cartridge in it
         // (the game is in the Mega CD's tray). Cartridge::power() builds that
         // board only when the slot is left empty; a connected slot would get
@@ -3169,9 +3173,16 @@ else if (port->type() == "Keyboard") {
         if (auto dot = tempFname.find(".")) tempFname = tempFname.slice(0, *dot);
       }
     }
+    // A PSP program's folder stands for its disc (disc0:), so its copies get a folder of their own rather than the
+    // cache other games' copies and the firmware share.
+    string copyFolder = tempFilePath;
+    if (systemName == "PlayStation Portable") {
+      copyFolder = {tempFilePath, "/psp"};
+      directory::create(copyFolder);
+    }
     string loadPath = directPath;
     if (!loadPath) {
-      string tempPath = string{tempFilePath, "/", tempFname, ".", extension};
+      string tempPath = string{copyFolder, "/", tempFname, ".", extension};
 
       FILE* f = fopen((const char*)tempPath, "wb");
       if (!f) return false;
@@ -3212,6 +3223,7 @@ else if (port->type() == "Keyboard") {
     else if (lookup.find("ZX Spectrum") || lookup.find("ZXSpectrum") || lookup.find("ZX")) identifiedSystem = "ZX Spectrum";
     else if (lookup.find("Super Famicom") || lookup.find("SNES")) identifiedSystem = "Super Famicom";
     else if (lookup.find("Famicom") || lookup.find("NES")) identifiedSystem = "Famicom";
+    else if (lookup.find("PlayStation Portable") || lookup.find("PSP")) identifiedSystem = "PlayStation Portable";
     else if (lookup.find("PlayStation") || lookup.find("PS1")) identifiedSystem = "PlayStation";
     else if (lookup.find("Neo Geo Pocket Color") || lookup.find("NGPC") || lookup.find("NGC")) identifiedSystem = "Neo Geo Pocket Color";
     else if (lookup.find("Neo Geo Pocket") || lookup.find("NGP") || lookup.find("NGP ")) identifiedSystem = "Neo Geo Pocket";
@@ -3305,6 +3317,11 @@ else if (port->type() == "Keyboard") {
             if (identifiedSystem == "Famicom") aresExt = "fc";
             if (identifiedSystem == "Nintendo 64") aresExt = "z64";
             if (identifiedSystem == "Mega 32X") aresExt = "32x";
+            if (identifiedSystem == "PlayStation Portable") {
+                // mia's PSP medium goes by the extension: an EBOOT.PBP starts "\0PBP", an ELF "\x7fELF".
+                if (romBuffer.size() >= 4 && memcmp(romBuffer.data(), "\0PBP", 4) == 0) aresExt = "pbp";
+                if (romBuffer.size() >= 4 && memcmp(romBuffer.data(), "\x7f" "ELF", 4) == 0) aresExt = "elf";
+            }
             if (identifiedSystem == "ZX Spectrum" || identifiedSystem == "ZX Spectrum 128") {
                 // The ZX medium dispatches on filename extension (.tap/.tzx/.wav),
                 // so sniff the extracted bytes to pick the right one. TZX has a
@@ -3363,7 +3380,7 @@ else if (port->type() == "Keyboard") {
                 }
             }
 
-            string rawRomPath = string{tempFilePath, "/phobos_rom_raw.", aresExt};
+            string rawRomPath = string{copyFolder, "/phobos_rom_raw.", aresExt};
             FILE* rf = fopen((const char*)rawRomPath, "wb");
             if (rf) { fwrite(romBuffer.data(), 1, romBuffer.size(), rf); fclose(rf); }
             loadPath = rawRomPath;
@@ -3577,6 +3594,15 @@ else if (port->type() == "Keyboard") {
       success = ::ares::Famicom::load(root, getRegion("[Nintendo] Famicom (NTSC-U)", "[Nintendo] Famicom (NTSC-J)", "[Nintendo] Famicom (PAL)"));
     } else if (identifiedSystem == "PlayStation") {
       success = ::ares::PlayStation::load(root, getRegion("[Sony] PlayStation (NTSC-U)", "[Sony] PlayStation (NTSC-J)", "[Sony] PlayStation (PAL)"));
+    } else if (identifiedSystem == "PlayStation Portable") {
+      // Every game shares one memory stick (saves in PSP/SAVEDATA, as on a PSP) unless the user picked a folder.
+      string memoryStick = pspMemoryStickPath;
+      if (!memoryStick && savesPath) memoryStick = {savesPath, "/PlayStation Portable/Memory Stick"};
+      if (memoryStick) directory::create(memoryStick);
+      LOGI("PSP: memory stick at '%s'", (const char*)memoryStick);
+      ::ares::PlayStationPortable::option("Memory Stick", memoryStick);
+      ::ares::PlayStationPortable::option("Recompiler", "true");
+      success = ::ares::PlayStationPortable::load(root, "[Sony] PlayStation Portable");
     } else if (identifiedSystem == "Game Boy Advance") {
       success = ::ares::GameBoyAdvance::load(root, "[Nintendo] Game Boy Advance");
     } else if (identifiedSystem == "Game Boy") {
@@ -4083,7 +4109,8 @@ else if (port->type() == "Keyboard") {
     if (!root) { isPausedAtomic.store(wasPaused); return false; }
     drainN64RdpIfAsync();
     auto s = root->serialize(true);
-    bool result = nall::file::write(path, {s.data(), s.size()});
+    // A core that can't make a state gives an empty one, which couldn't be loaded back.
+    bool result = s.size() && nall::file::write(path, {s.data(), s.size()});
     LOGI("Save state to %s: %s (%u bytes)", path, result ? "success" : "failed", (unsigned)s.size());
     isPausedAtomic.store(wasPaused);
     return result;
@@ -4645,6 +4672,9 @@ else if (port->type() == "Keyboard") {
   }
   auto setMemoryCardKey(const char* key) -> void {
     ps1MemoryCardKey = key ? (string)key : "";
+  }
+  auto setPspMemoryStickPath(const char* path) -> void {
+    pspMemoryStickPath = path ? (string)path : "";
   }
   auto setVulkanCachePath(const char* path) -> void {
     vulkanCachePath = path ? (string)path : "";

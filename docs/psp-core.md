@@ -11,7 +11,8 @@ host; part 8, files and controls, on `cursor/psp-files-2b67`; part 9, the GE's d
 controller on a PSP, on `cursor/psp-ge-measure-2b67`; part 11, drawing in 3D, on `cursor/psp-3d-2b67`, with its
 measurements on `cursor/psp-3d-measure-2b67`; part 12, lighting, on `cursor/psp-lighting-2b67`. The user asked for the
 whole feature to be stacked and merged at once (GitHub stack #106).
-Nothing is in the app yet.
+Part 13, the PSP in Phobos (an ares system, mia's medium, the Android app's entry), is on `cursor/psp-app-2b67`:
+homebrew runs in the app on the RP6.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -964,3 +965,72 @@ Two of them (the shares) first got through: no case crossed a level by one share
 PPSSPP's 512ths, which the core had until round 3, fail them too.
 
 Not yet: lines, mipmaps, curved surfaces (BEZIER, SPLINE), bounding boxes, PRIM's kind 7.
+
+## Part 13: the PSP in Phobos
+
+`ares/psp/psp.hpp`, `psp.cpp` (the whole core as one translation unit, as Phobos builds each core) and
+`ares/psp/system/`: the PSP as an ares system, which Phobos's front ends load, list and run like any other; mia's
+PSP medium (`mia/medium/playstation-portable.cpp`); and the Android app's entry for it.
+
+- **The node tree**, what front ends see: the system "PlayStation Portable" ("[Sony] PlayStation Portable"); a
+  480x272 screen at 59.94 Hz, its pixels as the GE keeps them (red in the low byte) through a palette of 2^24 colors;
+  stereo sound at 44.1 kHz (silence until sceAudio); the controls, named as the PlayStation's are (Up, Down, Left,
+  Right, Triangle, Circle, Cross, Square, L, R, Select, Start, and the stick as "L-Stick X" and "L-Stick Y"), so
+  front ends map them alike; and a "UMD Drive" port (type "Universal Media Disc") taking a "PlayStation Portable
+  Disc" (front ends give a peripheral whose name ends in "Disc" the game's medium).
+- **A frame**: `run()` reads the controls into the HLE kernel (pspsdk's PSP_CTRL_* bits; the stick from -32768 to
+  32767 down to 0 to 255, 128 in the middle), runs the kernel for a frame's time, copies the picture the program
+  shows to the screen, and owes the speakers 735.7 sound frames.
+- **The model**, the user's choices: a PSP-2000/3000 with 64 MiB, English, X confirms.
+- **The game**: mia's medium takes an EBOOT.PBP, ELF or PRX (as `program.pbp`, `.elf` or `.prx`), recognized by its
+  contents, since PlayStation games share .pbp: a PBP isn't a PlayStation game converted to run on a PSP (CATEGORY
+  "ME" in its PARAM.SFO), an ELF or PRX is for MIPS. It recognizes ISO and CSO images too (an ISO says "PSP GAME" in
+  its volume descriptor, a CSO starts "CISO"), so they aren't taken for another system's, but refuses to load them
+  until the core reads them (the next part). A PBP's title comes from its PARAM.SFO. A program starts with the path a
+  PSP would give it: from the memory stick (`ms0:/PSP/GAME/...`) when it's in the memory stick folder already, else
+  from its own folder, which stands for its disc (disc0:, also called umd0:).
+- **The memory stick**: a host folder (option "Memory Stick"), formatted as a PSP formats one (PSP/GAME,
+  PSP/SAVEDATA). The devices are the system's to give at each power-on: none is left from the game before.
+- **Unloading** frees the machine until the next game: the files the program left open, its threads, its memory, the
+  compiled code.
+- **The recompiler** runs the CPU (option "Recompiler"), the interpreter its fallback: where the host refuses memory
+  that code may run from, the recompiler turns itself off and the interpreter runs everything. (nall's
+  `memory::map()` now returns null when `mmap` fails, as its callers expect; it passed `MAP_FAILED` on.)
+- **A crash**: an exception nothing handles is reported once, and the game ends there.
+- **States**: not yet. A state holds nothing, and Phobos's runner refuses to save an empty one (for any core); the
+  app leaves states out of the PSP's menu and doesn't auto-save it on quitting.
+
+In the Android app: the system "PlayStation Portable" with .pbp and .elf (an EBOOT.PBP goes by its Library folder,
+as the PlayStation takes .pbp too; other apps' "psp" names it; disc images wait for the core to read them, and .prx
+files are mostly modules beside an EBOOT.PBP); the runner loads it with the memory stick: one shared folder,
+`<saves>/PlayStation Portable/Memory Stick`, for every game, or the folder picked in Settings, Global Paths, PSP
+Memory Stick; a program copied into the app's cache gets a folder of its own there (its folder is its disc0:), and a
+zipped one keeps its kind (.pbp or .elf, from its first bytes); a touch layout (the d-pad, the face buttons, L, R,
+Select, Start, and the stick beside the d-pad, hidden when held upright, as the PlayStation's sticks are); an icon
+of its own (the Systematic pack has none, so it shows the PlayStation's); "PSP" in the performance HUD. Two menu
+entries that matched "PlayStation" anywhere in a name (the disc button, the DualShock section) now match it exactly.
+
+On the RP6 (2026-10-05): pspsdk's cube, beginobject and controller samples and the hello program run at 60 frames a
+second (cube's frame takes about 8 ms of the 16.7), the controller sample sees a button pressed, and the memory stick
+folder is made beside the saves. pspsdk's font sample stays black: sceLibFont, the PSP's font library (it reads
+flash0's fonts), isn't there yet. A program started from another app's intent is read where it is when the app can
+read the path; otherwise Phobos copies it into its cache first, as it does every game, so a program's own files
+beside it aren't there.
+
+Tests: `tests/psp/ares/run-tests.sh` builds the whole core as Phobos does, with ares's node tree and a test platform
+standing in for the front end (93 checks):
+- the PSP's name, and no other;
+- the node tree: the screen, the sound, every control's name, the drive and what it takes;
+- hello.elf in the drive, on the recompiler (which must have compiled code) and on the interpreter: the memory stick
+  formatted, ms0: and disc0: mounted, the program starting in its disc's folder as `disc0:/hello.elf`, printing its
+  line and leaving; the frame the front end gets is the display's frame buffer pixel for pixel; each button its own
+  bit as the system hands the controls to the kernel; the stick's corner and middle; an empty state;
+- a program on the memory stick: it starts as `ms0:/PSP/GAME/HELLO/hello.elf`, with no disc left from the game
+  before; in the memory stick's top folder, as `ms0:/hello.elf`;
+- no memory for compiled code (the host refusing it): the recompiler turns itself off and hello runs all the same.
+sceDisplaySetMode now refuses any mode but the LCD's and any size but 480x272 (PPSSPP's notes), so no program can
+size the picture past its buffer (`tests/psp/ge.cpp`'s display group checks it).
+The app's unit tests check the PSP's launch names and extensions, its touch layout (the face buttons as the native
+mapping reads them, one shoulder each side, the stick) and its icon.
+
+Next: ISO and CSO images (disc0: and umd0: from the image, sceUmd), save states, sceAudio.

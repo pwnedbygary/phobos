@@ -762,6 +762,14 @@ static auto displayPicture() -> void {
   memory.write(2, VRAM, 0x0f21);  //4444: alpha ignored
   m.kernel.picture(pixels);
   CHECK(pixels[0], 0xffff'2211);
+
+  //The screen's one mode and size; any other is refused, and the picture stays 480x272.
+  CHECK(m.call("sceDisplaySetMode", {0, 480, 272}), 0);
+  CHECK(m.call("sceDisplaySetMode", {1, 480, 272}), Kernel::ErrorInvalidMode);
+  CHECK(m.call("sceDisplaySetMode", {0, 65536, 65536}), Kernel::ErrorInvalidSize);
+  CHECK(m.call("sceDisplaySetMode", {0, 240, 136}), Kernel::ErrorInvalidSize);
+  m.kernel.picture(pixels);
+  CHECK(pixels.size(), 480 * 272);
 }
 
 //tools/psp-test-programs' GU program: pspsdk's GU library clears, signals, calls a list, finishes and copies.

@@ -28,6 +28,7 @@ fun PathSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     PathSelectorItem("States Path", settings.statesPath) { viewModel.setStatesPath(it) }
                     PathSelectorItem("Screenshots Path", settings.screenshotsPath) { viewModel.setScreenshotsPath(it) }
                     PathSelectorItem("Vulkan Cache Path", settings.vulkanCachePath) { viewModel.setVulkanCachePath(it) }
+                    PathSelectorItem("PSP Memory Stick", settings.pspMemoryStickPath) { viewModel.setPspMemoryStickPath(it) }
                 }
             }
             

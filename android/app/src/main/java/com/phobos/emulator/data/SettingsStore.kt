@@ -243,6 +243,8 @@ data class EmulatorSettings(
     val statesPath: String = "",
     val screenshotsPath: String = "",
     val vulkanCachePath: String = "",
+    /** The PSP's memory stick folder; empty for the shared one in the saves folder. */
+    val pspMemoryStickPath: String = "",
     val arcadeRomsPath: String = "",
     val shaderPath: String = "",
     val aspectRatioMode: AspectRatioMode = AspectRatioMode.CORE_PROVIDED,
@@ -377,6 +379,7 @@ class SettingsStore(private val context: Context) {
         val STATES_PATH = stringPreferencesKey("path_states")
         val SCREENSHOTS_PATH = stringPreferencesKey("path_screenshots")
         val VULKAN_CACHE_PATH = stringPreferencesKey("path_vulkan_cache")
+        val PSP_MEMORY_STICK_PATH = stringPreferencesKey("path_psp_memory_stick")
         val ARCADE_ROMS_PATH = stringPreferencesKey("path_arcade_roms")
         val SHADER_PATH = stringPreferencesKey("path_shader")
         val ASPECT_RATIO_MODE = stringPreferencesKey("aspect_ratio_mode")
@@ -611,6 +614,7 @@ class SettingsStore(private val context: Context) {
             statesPath = safeGetString(STATES_PATH, ""),
             screenshotsPath = safeGetString(SCREENSHOTS_PATH, ""),
             vulkanCachePath = safeGetString(VULKAN_CACHE_PATH, ""),
+            pspMemoryStickPath = safeGetString(PSP_MEMORY_STICK_PATH, ""),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
             shaderPath = safeGetString(SHADER_PATH, ""),
             aspectRatioMode = enumOrDefault(safeGetString(ASPECT_RATIO_MODE, ""), AspectRatioMode.CORE_PROVIDED),

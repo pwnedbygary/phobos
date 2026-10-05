@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LaunchSystemsTest {
-    // PhobosJNI.cpp's systemExtensions on 2026-09-29.
+    // PhobosJNI.cpp's systemExtensions on 2026-10-04.
     private val extensions = mapOf(
         "Atari 2600" to listOf("a26", "bin"),
         "ColecoVision" to listOf("col", "cv"),
@@ -30,6 +30,7 @@ class LaunchSystemsTest {
         "Mega CD" to listOf("cue", "chd", "iso"),
         "Mega CD 32X" to listOf("cue", "chd", "iso"),
         "PlayStation" to listOf("cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"),
+        "PlayStation Portable" to listOf("pbp", "elf"),
         "Neo Geo" to listOf("ng", "neo"),
         "Neo Geo CD" to listOf("ngc", "cue", "chd", "iso", "bin", "zip"),
         "Neo Geo Pocket" to listOf("ngp", "nap"),
@@ -88,6 +89,17 @@ class LaunchSystemsTest {
         assertEquals("Arcade", LaunchSystems.systemForName("arcade"))
         assertEquals("Arcade", LaunchSystems.systemForName("aleck64"))
         assertEquals("Arcade", LaunchSystems.systemForName("mame"))
+    }
+
+    @Test fun pspGamesGoToThePsp() {
+        assertEquals("PlayStation Portable", LaunchSystems.systemForName("psp"))
+        assertEquals(found("PlayStation Portable"), resolve("EBOOT.PBP", hint = "psp"))
+        // Only the PSP takes an ELF.
+        assertEquals(found("PlayStation Portable"), resolve("Cube.elf"))
+        // An EBOOT.PBP goes by its folder: the PlayStation takes .pbp too.
+        assertEquals(found("PlayStation Portable"), resolve("EBOOT.PBP", "$root/ROMs/psp/Cube/EBOOT.PBP"))
+        assertEquals(found("PlayStation"), resolve("Game.pbp", "$root/ROMs/psx/Game.pbp"))
+        assertEquals(Match.Ask(listOf("PlayStation", "PlayStation Portable")), resolve("Game.pbp"))
     }
 
     @Test fun theFrontendsHintComesFirst() {

@@ -18,6 +18,7 @@ import com.phobos.emulator.ui.touch.ButtonShape.SHOULDER_RIGHT
 enum class TouchFamily(val key: String, val displayName: String) {
     N64("n64", "Nintendo 64"),
     PS1("ps1", "PlayStation"),
+    PSP("psp", "PlayStation Portable"),
     SNES("snes", "Super Famicom / SNES"),
     NES("nes", "Famicom / NES"),
     GB("gb", "Game Boy / Game Boy Color"),
@@ -43,6 +44,7 @@ enum class TouchFamily(val key: String, val displayName: String) {
         fun of(system: String): TouchFamily = when (system) {
             "Nintendo 64" -> N64
             "PlayStation" -> PS1
+            "PlayStation Portable" -> PSP
             "Super Famicom", "Super Game Boy" -> SNES
             "Famicom" -> NES
             "Game Boy", "Game Boy Color" -> GB
@@ -98,6 +100,7 @@ object TouchLayouts {
     private fun controls(family: TouchFamily, options: Options): List<TouchElement> = when (family) {
         TouchFamily.N64 -> n64()
         TouchFamily.PS1 -> playStation(options.ps1Analog)
+        TouchFamily.PSP -> playStationPortable()
         TouchFamily.SNES -> listOf(
             dpad(),
             face(
@@ -272,6 +275,31 @@ object TouchLayouts {
             )
         }
     }
+
+    /**
+     * The PSP: the PlayStation's face buttons, one L and one R, Select and Start, and the analog stick beside the
+     * d-pad, where the PlayStation's left stick goes (a PSP has it under the d-pad). Upright it would cover Select
+     * and Start, so it starts hidden there, as the PlayStation's sticks do.
+     */
+    private fun playStationPortable(): List<TouchElement> = listOf(
+        dpad(),
+        face(
+            diamond(
+                top = TouchButton("Triangle", Input.Y, glyph = Glyph.PS_TRIANGLE, accent = TouchPalette.PS_TRIANGLE),
+                right = TouchButton("Circle", Input.B, glyph = Glyph.PS_CIRCLE, accent = TouchPalette.PS_CIRCLE),
+                bottom = TouchButton("Cross", Input.A, glyph = Glyph.PS_CROSS, accent = TouchPalette.PS_CROSS),
+                left = TouchButton("Square", Input.X, glyph = Glyph.PS_SQUARE, accent = TouchPalette.PS_SQUARE),
+            )
+        ),
+        shoulder("l", "L", Input.L1, L1_LAND, L1_PORT, left = true),
+        shoulder("r", "R", Input.R1, R1_LAND, R1_PORT, left = false),
+        systemPills("SELECT" to Input.SELECT, "START" to Input.START),
+        AnalogElement(
+            "stick", "Analog stick",
+            Placement(BOTTOM_LEFT, 262f, -86f), Placement(BOTTOM_LEFT, 110f, -64f),
+            Stick.LEFT, size = 116f, hiddenInPortrait = true,
+        ),
+    )
 
     /** Six-button Fighting Pad (3-button games ignore X/Y/Z). Bits: C = R1, Z = R2, Mode = Select. */
     private fun megaDrive(): List<TouchElement> = listOf(

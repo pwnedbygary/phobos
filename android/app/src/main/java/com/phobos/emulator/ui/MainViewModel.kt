@@ -255,6 +255,11 @@ class MainViewModel(
         private const val CUE_TRACKS = "cue_tracks"
         // Systems whose disc native code can change while the game runs; the other CD systems read a disc from the start.
         private val DISC_SWAP_SYSTEMS = setOf("PlayStation")
+        // Systems whose core can't make a state yet (its state would be empty, which native code refuses to save).
+        private val NO_STATE_SYSTEMS = setOf("PlayStation Portable")
+
+        /** Whether [system]'s core can save and load states. */
+        fun hasStates(system: String) = system !in NO_STATE_SYSTEMS
         // The firmware keys each system's pak() in PhobosRunner.cpp reads, so a load copies only what its game can
         // use. Neo Geo's neogeo.zip is copied on its own.
         private val SYSTEM_FIRMWARE: Map<String, Set<String>> = run {
@@ -642,6 +647,7 @@ class MainViewModel(
     fun setSavesPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.SAVES_PATH, path) }
     fun setStatesPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.STATES_PATH, path) }
     fun setScreenshotsPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.SCREENSHOTS_PATH, path) }
+    fun setPspMemoryStickPath(path: String) = viewModelScope.launch { settingsStore.setGlobalPath(SettingsStore.PSP_MEMORY_STICK_PATH, path) }
 
     /**
      * Vulkan Cache Path (Task 40): persists the SAF URI and pushes the resolved
@@ -718,7 +724,7 @@ class MainViewModel(
         val romName = CoreSession.rom
         if (sysName.isEmpty()) return
         // The snapshot comes BEFORE any teardown, while the core is still alive.
-        if (autoSave && settings.value.autoSaveState && romName.isNotEmpty()) {
+        if (autoSave && settings.value.autoSaveState && romName.isNotEmpty() && hasStates(sysName)) {
             try { performSaveState(sysName, romName, AUTO_STATE_SLOT) } catch (e: Exception) {
                 Log.e("Phobos", "Auto-save failed: ${e.message}")
             }
@@ -814,9 +820,15 @@ class MainViewModel(
     }
 
     fun saveState(systemName: String, romName: String, slot: Int = 0) {
+        if (!hasStates(systemName)) return statesUnavailable(systemName)
         viewModelScope.launch(Dispatchers.IO) {
             performSaveState(systemName, romName, slot)
         }
+    }
+
+    /** For a state hotkey on a system without states (the menu leaves them out). */
+    private fun statesUnavailable(systemName: String) {
+        Toast.makeText(context, "$systemName states aren't available yet", Toast.LENGTH_SHORT).show()
     }
 
     /** File name of a state slot; slot < 0 is the Auto slot (Task 17). */
@@ -1032,6 +1044,7 @@ class MainViewModel(
         }
 
     fun loadState(systemName: String, romName: String, slot: Int = 0) {
+        if (!hasStates(systemName)) return statesUnavailable(systemName)
         viewModelScope.launch(Dispatchers.IO) {
             performLoadState(systemName, romName, slot, announceFailure = true)
         }
@@ -2674,6 +2687,8 @@ class MainViewModel(
                 ?: File(context.filesDir, "saves").absolutePath
             PhobosCore.setSavesPath(savesDir)
             Log.i("Phobos", "Saves path resolved: $savesDir")
+            // The PSP's memory stick: the folder the user picked, else native code's shared one under the saves path.
+            PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
             PhobosCore.setMemoryCardKey(withoutDiscNumber(romTitle(rom.name)))
 
             // Vulkan pipeline cache dir (Task 40): user-configured path, else
@@ -2987,6 +3002,9 @@ class MainViewModel(
         val extensions = PhobosCore.enumerateSystems().flatMap { PhobosCore.getSystemExtensions(it) }.toSet() + "zip" + "7z"
         tempDir.listFiles { file -> file.isFile && file.extension.lowercase() in extensions && file.name != "neogeo.zip" && file.name != "aleck64.zip" && !file.name.startsWith("fw_") }
             ?.forEach { if (it.delete()) Log.i("Phobos", "Removed stale temp copy ${it.name}") }
+        // PSP programs are copied into a folder of their own, which stands for the program's disc.
+        File(tempDir, "psp").listFiles { file -> file.isFile }
+            ?.forEach { if (it.delete()) Log.i("Phobos", "Removed stale temp copy psp/${it.name}") }
     }
     
     private fun extractAssets() {

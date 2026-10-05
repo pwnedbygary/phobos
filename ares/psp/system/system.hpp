@@ -1,0 +1,76 @@
+//The PSP as an ares system: the node tree Phobos's front ends see (the screen, the sound, the controls, and the drive
+//the game goes in), and the parts underneath (the Allegrex CPU, the memory map, the GE and the HLE kernel) put
+//together and run a frame at a time.
+//
+//The game: the front end puts a medium in the "UMD Drive": a homebrew program (EBOOT.PBP, an ELF or a PRX) or a disc
+//image (ISO or CSO; not read yet). A program's own folder stands for the disc it would come on (disc0: and umd0:), so
+//it finds the files beside it; or, if the program is on the memory stick already, it runs from there (ms0:), as on a
+//PSP. The memory stick, ms0:, is a folder the front end gives (option "Memory Stick").
+//
+//The model: a PSP-2000/3000, with 64 MiB of RAM (PSP-1000s have 32), set to English with X as the button that
+//confirms.
+//
+//Time: each run() is one frame of the PSP's, 1/59.94 of a second. The controls are read, the kernel runs the game for
+//that long, then the frame the game shows goes to the screen and the frame's sound to the speakers (silence for now:
+//sceAudio comes later).
+struct System {
+  Node::System node;
+  Node::Video::Screen screen;
+  Node::Audio::Stream stream;
+  Node::Port drive;           //where the game goes
+  Node::Peripheral disc;      //the game in it
+  VFS::Pak pak;               //the system's own files (it needs none yet)
+  VFS::Pak gamePak;           //the game's
+
+  //The PSP's controls: the d-pad, the four face buttons, the two shoulder buttons, Select, Start and the analog
+  //stick.
+  struct Controls {
+    Node::Object node;
+    Node::Input::Button up, down, left, right, triangle, circle, cross, square, l, r, select, start;
+    Node::Input::Axis x, y;
+
+    auto load(Node::Object parent) -> void;
+    auto poll() -> void;
+    auto buttons() const -> u32;     //as the PSP's controller reports them (PSP_CTRL_* bits)
+    auto stick(const Node::Input::Axis& axis) const -> u8;  //0 to 255, 128 in the middle
+  } controls;
+
+  //The Allegrex with the memory map behind it.
+  struct Processor : Allegrex {
+    Memory& memory;
+    Processor(Memory& memory) : memory(memory) {}
+    auto read(u32 size, u32 address) -> u32 override { return memory.read(size, address); }
+    auto write(u32 size, u32 address, u32 data) -> void override { memory.write(size, address, data); }
+  };
+  Memory memory;
+  Processor cpu{memory};
+  GE ge{memory};
+  Kernel kernel{cpu, memory, ge};
+
+  string memoryStick;          //the host folder standing for ms0: (option "Memory Stick")
+  bool recompile = true;       //the CPU's recompiler on, the interpreter its fallback (option "Recompiler")
+
+  auto name() const -> string { return "PlayStation Portable"; }
+
+  //system.cpp
+  auto game() -> string;
+  auto run() -> void;
+  auto load(Node::System& node, string name) -> bool;
+  auto unload() -> void;
+  auto save() -> void;
+  auto power(bool reset) -> void;
+
+private:
+  std::vector<u8*> pageTable;  //the CPU's view of memory, page by page (Memory::buildPages)
+  std::vector<u32> pixels;     //the frame the game shows
+  f64 soundOwed = 0;           //sound frames due to the speakers: 44100 a second, so 735.7 a frame
+  u32 unmappedReports = 0;     //accesses to nothing, reported (the first few only)
+
+  auto allocate(Node::Port port) -> Node::Peripheral;
+  auto connect() -> void;
+  auto disconnect() -> void;
+  auto startProgram() -> void;
+  auto report(bool problem, const std::string& text) -> void;
+};
+
+extern System system;

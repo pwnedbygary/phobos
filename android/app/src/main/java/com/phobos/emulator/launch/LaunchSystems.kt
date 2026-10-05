@@ -43,6 +43,7 @@ object LaunchSystems {
         "Mega CD" to listOf("megacd", "segacd", "scd", "megacdjp"),
         "Mega CD 32X" to listOf("megacd32x", "segacd32x", "sega32xcd", "32xcd", "cd32x"),
         "PlayStation" to listOf("playstation", "psx", "ps1", "sonyplaystation"),
+        "PlayStation Portable" to listOf("playstationportable", "psp", "sonypsp", "sonyplaystationportable"),
         "Neo Geo" to listOf("neogeo", "neogeoaes", "neogeomvs"),
         "Neo Geo CD" to listOf("neogeocd", "neocd", "neogeocdjp"),
         "Neo Geo Pocket" to listOf("neogeopocket", "ngp"),

@@ -112,7 +112,7 @@ fun EmulationMenu(
     val laserActive = systemName == "Mega LD" || systemName == "PC Engine LD"
     val discLabel = when {
         systemName.contains("Nintendo 64") -> "Disk"
-        systemName.contains("PlayStation") -> "Disc"
+        systemName == "PlayStation" -> "Disc"
         laserActive -> "Side"
         else -> null
     }
@@ -196,6 +196,7 @@ fun EmulationMenu(
                     LazyColumn(modifier = Modifier.weight(1f), state = menuListState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         item {
                             QuickActions(
+                                states = MainViewModel.hasStates(systemName),
                                 canLoad = slotPreview != null,
                                 touchControlsShown = settings.showTouchControls,
                                 discLabel = discLabel,
@@ -213,7 +214,9 @@ fun EmulationMenu(
                                 onReset = { viewModel.resetSystem(); onResume() },
                             )
                         }
-                        item { SaveStateSection(viewModel, settings, systemName, romName, currentSlot, slotPreview) }
+                        if (MainViewModel.hasStates(systemName)) {
+                            item { SaveStateSection(viewModel, settings, systemName, romName, currentSlot, slotPreview) }
+                        }
                         if (supportsFastBoot(systemName)) {
                             item {
                                 MenuSection("Boot Options") {
@@ -232,7 +235,7 @@ fun EmulationMenu(
                             item { N64Section(viewModel, settings, onOpenExperimental = { experimentalOpen = true }) }
                             saveTransfer?.let { transfer -> item { SaveDataSection(transfer) } }
                         }
-                        if (systemName.contains("PlayStation", ignoreCase = true)) {
+                        if (systemName == "PlayStation") {
                             item {
                                 MenuSection("DualShock") {
                                     var ps1Analog by remember { mutableStateOf(settings.ps1AnalogMode) }
@@ -274,13 +277,15 @@ private fun supportsFastBoot(systemName: String): Boolean =
 
 @Composable
 private fun QuickActions(
-    canLoad: Boolean, touchControlsShown: Boolean, discLabel: String?,
+    states: Boolean, canLoad: Boolean, touchControlsShown: Boolean, discLabel: String?,
     onSave: () -> Unit, onLoad: () -> Unit, onScreenshot: () -> Unit,
     onToggleTouchControls: () -> Unit, onDisc: () -> Unit, onReset: () -> Unit,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        QuickAction(Icons.Default.Save, "Save", onSave, Modifier.weight(1f))
-        QuickAction(Icons.Default.Download, "Load", onLoad, Modifier.weight(1f), enabled = canLoad)
+        if (states) {
+            QuickAction(Icons.Default.Save, "Save", onSave, Modifier.weight(1f))
+            QuickAction(Icons.Default.Download, "Load", onLoad, Modifier.weight(1f), enabled = canLoad)
+        }
         QuickAction(Icons.Default.CameraAlt, "Shot", onScreenshot, Modifier.weight(1f))
         QuickAction(
             if (touchControlsShown) Icons.Default.TouchApp else Icons.Default.DoNotTouch,

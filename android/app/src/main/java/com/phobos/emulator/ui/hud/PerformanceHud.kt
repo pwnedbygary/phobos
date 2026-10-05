@@ -150,6 +150,7 @@ private val clockFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm"
 fun hudSystemLabel(systemName: String): String = when (systemName) {
     "Nintendo 64", "Nintendo 64DD" -> "N64"
     "PlayStation" -> "PS1"
+    "PlayStation Portable" -> "PSP"
     "Super Famicom" -> "SNES"
     "Super Game Boy" -> "SGB"
     "Famicom" -> "NES"
