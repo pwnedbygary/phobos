@@ -237,6 +237,11 @@ static auto controllerLatch() -> void {
   CHECK(m.system.memory.read(4, Buffer + 4), 0x2000);     //broken
   CHECK(m.system.memory.read(4, Buffer + 8), 0x6010);     //held at some sample
   CHECK(m.system.memory.read(4, Buffer + 12), ~0x4010u);  //not held at some sample
+  //the same into a buffer at an unaligned address in VRAM's fourth copy, whose words cross its 32-byte pieces
+  constexpr u32 Unaligned = 0x0460'001e;
+  CHECK(m.call("sceCtrlPeekLatch", {Unaligned}), 2);
+  CHECK(m.system.memory.read(4, Unaligned + 0), 0x2000);
+  CHECK(m.system.memory.read(4, Unaligned + 12), ~0x4010u);
   CHECK(m.call("sceCtrlReadLatch", {Buffer}), 2);         //the same, then it starts afresh
   CHECK(m.system.memory.read(4, Buffer + 8), 0x6010);
   CHECK(m.call("sceCtrlReadLatch", {Buffer}), 0);         //at once, with nothing gathered

@@ -109,7 +109,7 @@ static auto sampleCount(u32 argument) -> u32 { return argument & 0xff; }
 auto Kernel::peekController(bool negative) -> void {
   u32 address = arg(0), count = sampleCount(arg(1));
   if(count >= 64) return result(ErrorInvalidSize);
-  if(count && !memory.pointer(address, count * 16)) return result(ErrorIllegalAddress);
+  if(count && !memory.reaches(address, count * 16)) return result(ErrorIllegalAddress);
   writeSamples(address, (controller.next + 64 - count) % 64, count, negative);
   result(count);
 }
@@ -121,7 +121,7 @@ auto Kernel::readController(bool negative) -> void {
   if(!mayWait()) return;
   u32 address = arg(0), count = sampleCount(arg(1));
   if(count >= 64) return result(ErrorInvalidSize);
-  if(count && !memory.pointer(address, count * 16)) return result(ErrorIllegalAddress);
+  if(count && !memory.reaches(address, count * 16)) return result(ErrorIllegalAddress);
   if(controller.unread) return result(readSamples(address, count, negative));
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wait == Wait::Controller) return result(ErrorEventFlagMulti);
@@ -137,14 +137,14 @@ auto Kernel::sceCtrlReadBufferPositive() -> void { readController(false); }
 auto Kernel::sceCtrlReadBufferNegative() -> void { readController(true); }
 
 auto Kernel::sceCtrlPeekLatch() -> void {
-  if(!memory.pointer(arg(0), 16)) return result(ErrorIllegalAddress);
+  if(!memory.reaches(arg(0), 16)) return result(ErrorIllegalAddress);
   result(writeLatch(arg(0)));
 }
 
 //As peek, and starts the latch afresh. It doesn't wait: read again before the next sample and the latch is empty,
 //with a count of 0. (pspsdk's notes say a second read waits for the next sample; the PSP itself could settle it.)
 auto Kernel::sceCtrlReadLatch() -> void {
-  if(!memory.pointer(arg(0), 16)) return result(ErrorIllegalAddress);
+  if(!memory.reaches(arg(0), 16)) return result(ErrorIllegalAddress);
   result(writeLatch(arg(0)));
   controller.latch = {};
 }

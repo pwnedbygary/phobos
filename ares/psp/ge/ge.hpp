@@ -212,7 +212,7 @@ struct GE {
 
   //draw.cpp
   auto primitive(u32 kind, u32 count) -> void;
-  auto rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to) -> void;
+  auto rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                 bool perspective) -> void;
   auto point(PixelState& pixel, Sampler* texture, const Vertex& at) -> void;

@@ -742,6 +742,46 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the GE's rounding, 3D sprites and depth layout, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-ge-round3-fixes-2b67`, stacked on `cursor/psp-vfpu-round3-fixes-2b67` (for stack #106). From
+round 3's GE data:
+- The rounding onto the screen (ge/transform.cpp `project()`): a position's distance from screen coordinate 2048 is
+  cut to a sixteenth toward 2048 (was PPSSPP's +0.375 then toward zero), in doubles. Off the screen: outside 0-65535
+  once cut (a sixteenth or more left of 0, or 4096 or more), which follows from the rounding but wasn't measured.
+  Whether it's 2048 or the viewport's center isn't settled (they were the same in the case).
+- 3D sprites (ge/draw.cpp `rectangle()`, now told whether it's 3D): the fog split at the middle column, each half
+  taking the fog of the corner on the other side (measured with the first corner at the top left; either order, as
+  PPSSPP's rule has it, read for behavior; the middle halfway rounded down, the right half winning a column on it:
+  assumed); texels with u / w and 1 / w across x and v / w down y, then divided. A turned 3D sprite isn't measured:
+  the same rule with the coordinates swapped; a corner with no w in front of the camera falls back on 2D stepping.
+- The depth buffer's layout (memory/memory.cpp, ge/pixel.cpp): VRAM's second copy flips offset bits 6 and 13, the
+  fourth first turns bits 5-9 round by one place, and the GE reaches its depth buffer as the fourth copy shows it.
+  `pointer()` maps those copies (a range must stay in one 32-byte piece), `copyIn()`/`copyOut()`/`fill()` go piece by
+  piece there, and `changed()` reports each copy where it sees the change (16 KiB blocks for longer changes). The HLE
+  kernel checks game buffers with the new `reaches()` (the range inside one area or copy), as `pointer()` would now
+  refuse a long one through a rearranging copy; and `read()`/`write()` take an access that crosses a piece of one (an
+  HLE function's, at a game's unaligned address) a byte at a time. Columns 256-511 land in the gaps the measurement
+  left, by the rule; not measured.
+- **Checks:** against the PSP's round-3 files (tests/psp with `PSP_GE_RESULTS`): `3d-rounding-middle`,
+  `3d-sprite-fog`, `3d-sprite-flat` and all four `depth-layout` files now identical, `3d-sprite-texels` 72 pixels a
+  level apart (was 20304), round 2's `3d-sprite` 53 (was 10152), `3d-floor-depth` 1388 by 1 (was 17424 by up to
+  255), `3d-clip` 1512 (was 1535); every other file unchanged (60 identical, was 54). Unit tests: the rounding both
+  sides of 2048 and the screen's edges once cut; a 3D sprite's fog halves in either vertex order and where its
+  middle falls (even and odd widths); its perspective texels upright, turned, and with a corner behind the camera;
+  the copies' mapping (exhaustively, each way the other's reverse, and against the measured formulas), reads, change
+  reports (a long change through the first copy too), bulk copies and an unaligned word through them, and
+  `sceCtrlPeekLatch` into an unaligned buffer in the fourth copy; the depth helpers read through the fourth copy.
+  PSP tests 86 groups, 0 failures, on arm64 and x86_64 (Rosetta), the comparison identical on both; Allegrex tests
+  56, 0 failures. Sixteen mutations (the old rounding or screen bounds; the fog unsplit, by vertex order, its middle
+  rounded up or its tie to the left; affine, swapped-when-turned or unguarded 3D texels; linear depth; no
+  rearranging; the fourth copy like the second; bulk copies in one piece, which crashes the sanitizer build; changes
+  at one offset, or the long path keyed on the source alone; no byte-at-a-time writes) each fail them. Review: a
+  general-purpose reviewer (eight low findings: the off-screen test against the cut position, the screen bounds and
+  the fog's tie and vertex order stated as measured, HLE buffer checks refusing the rearranging copies, a latent
+  overflow in the bulk copies' range check, "512 KiB" for 1.5 MiB, test gaps, two short lines; all fixed), then
+  delta reviews (unaligned HLE accesses across a piece, and long lines; fixed) ending with no findings.
+
 ## PSP core: the VFPU's tiny products and round 3's prefix rules — 2026-10-04
 
 Branch `cursor/psp-vfpu-round3-fixes-2b67`, stacked on `cursor/psp-fpu-measured-2b67` (for stack #106). From round

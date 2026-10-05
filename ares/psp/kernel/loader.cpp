@@ -104,7 +104,7 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
       return "a segment runs past the end of the file";
     }
     u32 address = relocation + segment.address;
-    if(!memory.pointer(address, segment.memorySize ? segment.memorySize : 1)) {
+    if(!memory.reaches(address, segment.memorySize ? segment.memorySize : 1)) {
       return "a segment (" + hex(address) + ", " + std::to_string(segment.memorySize) + " bytes) doesn't fit in memory";
     }
     memory.copyIn(address, data + segment.offset, segment.fileSize);
@@ -157,7 +157,7 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
         u32 address = segmentAddress(from) + file.read32(offset + n);
         u32 add = segmentAddress(to);
         if(kind == RelocationNone) continue;
-        if(!memory.pointer(address, 4)) return "a relocation points outside the program: " + hex(address);
+        if(!memory.reaches(address, 4)) return "a relocation points outside the program: " + hex(address);
         u32 word = memory.read(4, address);
         switch(kind) {
         case Relocation32:
@@ -206,7 +206,7 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
     u32 offset = first.physical & 0x7fff'ffff;
     if(offset >= first.offset) module.moduleInfo = relocation + first.address + (offset - first.offset);
   }
-  if(!module.moduleInfo || !memory.pointer(module.moduleInfo, ModuleInfoSize)) return "no module info";
+  if(!module.moduleInfo || !memory.reaches(module.moduleInfo, ModuleInfoSize)) return "no module info";
   u32 info = module.moduleInfo;
   module.attributes = memory.read(2, info);
   module.version[0] = memory.read(1, info + 2);
@@ -220,13 +220,13 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
   //The imports: one entry per library, each len words long: the library's name, its version and attributes, the
   //entry's length, counts of variables and functions, and where the NIDs and the stubs are.
   for(u32 at = importsStart; at < importsEnd;) {
-    if(!memory.pointer(at, 20)) return "the import table is broken";
+    if(!memory.reaches(at, 20)) return "the import table is broken";
     u32 length = memory.read(1, at + 8);
     u32 variables = memory.read(1, at + 9), functions = memory.read(2, at + 10);
     u32 nids = memory.read(4, at + 12), stubs = memory.read(4, at + 16);
     std::string library = memory.readString(memory.read(4, at), 64);
     if(length < 5) return "an import entry is too short";
-    if(functions && (!memory.pointer(nids, functions * 4) || !memory.pointer(stubs, functions * 8))) {
+    if(functions && (!memory.reaches(nids, functions * 4) || !memory.reaches(stubs, functions * 8))) {
       return "the imports from " + library + " point outside memory";
     }
     for(u32 n = 0; n < functions; n++) {
@@ -244,14 +244,14 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
   //entry points, such as module_start), version and attributes, length, counts, and a table of all the NIDs,
   //functions first, followed by the address of each.
   for(u32 at = exportsStart; at < exportsEnd;) {
-    if(!memory.pointer(at, 16)) return "the export table is broken";
+    if(!memory.reaches(at, 16)) return "the export table is broken";
     u32 length = memory.read(1, at + 8);
     u32 variables = memory.read(1, at + 9), functions = memory.read(2, at + 10), table = memory.read(4, at + 12);
     u32 namePointer = memory.read(4, at);
     std::string library = namePointer ? memory.readString(namePointer, 64) : "";
     if(length < 4) return "an export entry is too short";
     u32 count = functions + variables;
-    if(count && !memory.pointer(table, count * 8)) return "the exports of " + module.name + " point outside memory";
+    if(count && !memory.reaches(table, count * 8)) return "the exports of " + module.name + " point outside memory";
     for(u32 n = 0; n < count; n++) {
       module.exports.push_back({library, memory.read(4, table + n * 4), memory.read(4, table + (count + n) * 4),
                                 n >= functions});

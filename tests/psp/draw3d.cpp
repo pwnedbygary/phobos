@@ -9,6 +9,7 @@ namespace allegrex_test::psp {
 
 constexpr u32 VertexData3D = 0x0896'0000, Texture3D = 0x0898'0000;
 constexpr u32 VRAM3D = Memory::VRAMBase;
+constexpr u32 DepthSeen3D = Memory::VRAMBase + 3 * Memory::VRAMSize;  //VRAM's fourth copy: depth as the GE has it
 
 //A float as a command's argument: its top 24 bits.
 static auto f24(float value) -> u32 { u32 bits; std::memcpy(&bits, &value, 4); return bits >> 8; }
@@ -52,7 +53,7 @@ struct Scene {
   }
   static auto bits(float value) -> u32 { u32 word; std::memcpy(&word, &value, 4); return word; }
   auto pixel(u32 x, u32 y) -> u32 { return memory.read(4, VRAM3D + (y * 16 + x) * 4); }
-  auto depth(u32 x, u32 y) -> u32 { return memory.read(2, VRAM3D + 0x1'0000 + (y * 16 + x) * 2); }
+  auto depth(u32 x, u32 y) -> u32 { return memory.read(2, DepthSeen3D + 0x1'0000 + (y * 16 + x) * 2); }
   auto clear() -> void { memory.fill(VRAM3D, 0, 0x2'0000); }
   //a 16x16 8888 texture at Texture3D whose texel (x, y) is x | y << 8 | 0x80 << 16, nearest, replace
   auto texture() -> void {
@@ -69,7 +70,7 @@ struct Scene {
 };
 
 //The matrices, in order (world, then view, then projection), and the viewport: a 3D sprite lands where they put it,
-//at its depth; and the GE's rounding onto the screen, to the sixteenth: up from 0.625 of one.
+//at its depth; and the GE's rounding onto the screen, to the sixteenth: toward screen coordinate 2048.
 static auto draw3dTransform() -> void {
   Scene c;
   c.draw(GE::Sprites, {{0, 0, 0xff00'00ff, 2, 1, 0.1f}, {0, 0, 0xff00'00ff, 6, 5, 0.1f}});
@@ -93,15 +94,29 @@ static auto draw3dTransform() -> void {
   c.ge.commands[GE::ViewportXScale] = GE::ViewportXScale << 24 | f24(1);
   c.ge.commands[GE::ViewportXCenter] = GE::ViewportXCenter << 24 | f24(2048);
 
-  //rounding: screen x * 16 + 0.375, cut toward zero
+  //rounding: the distance from 2048 cut to a sixteenth, toward 2048 (so right of it down, left of it up)
   auto t = c.ge.transformState();
   GE::Vertex v;
-  v.clip[0] = 2 + 0.6f / 16;
+  v.clip[0] = 2 + 0.9f / 16;
   c.ge.project(v, t, false);
   CHECK(v.x == 2.0f, true);
-  v.clip[0] = 2 + 0.7f / 16;
+  v.clip[0] = 2 + 1.1f / 16;
   c.ge.project(v, t, false);
   CHECK(v.x == 2.0625f, true);
+  v.clip[0] = -2 - 0.9f / 16;
+  c.ge.project(v, t, false);
+  CHECK(v.x == -2.0f, true);
+  v.clip[0] = -2 - 1.1f / 16;
+  c.ge.project(v, t, false);
+  CHECK(v.x == -2.0625f, true);
+  //the screen's edges, once cut: a 32nd left of 0 and 4095 + 31/32 are on it, a 16th left of 0 and 4096 off it
+  struct Edge { float screen; bool off; };
+  const Edge edges[] = {{-1.0f / 32, false}, {4095 + 31.0f / 32, false}, {-1.0f / 16, true}, {4096, true}};
+  for(Edge edge : edges) {
+    v.clip[0] = edge.screen - 2048;
+    c.ge.project(v, t, false);
+    CHECK(v.outside == edge.off, true);
+  }
 }
 
 //What isn't drawn: a primitive with a vertex off the screen's 4096 pixels; with DEPTH_CLIP_ENABLE off, one with a
@@ -258,12 +273,37 @@ static auto draw3dPerspective() -> void {
   b.q = 0.5f;
   c.ge.triangle(pixel, &texture, a, b, d, 0, true);
   CHECK(c.pixel(7, 0) & 0xff, 3);
+
+  //A 3D sprite from (0, 0) at w 1 to (16, 16) at w 4: u / w and 1 / w across x, v / w down y. At pixel (7, 0),
+  //0.46875 across: u = (4 * 0.46875) / (1 - 0.75 * 0.46875) = 2.89 (in 2D, 7). At (0, 15), 0.03125 across and
+  //0.96875 down: v = (4 * 0.96875) / (1 - 0.75 * 0.03125) = 3.97, so down the left edge it reaches a quarter.
+  GE::Vertex e, f;
+  e.x = 0, e.y = 0, e.u = 0, e.v = 0, e.color = 0xffff'ffff;
+  f.x = 16, f.y = 16, f.u = 16, f.v = 16, f.clip[3] = 4, f.color = 0xffff'ffff;
+  c.ge.rectangle(pixel, &texture, e, f, true);
+  CHECK(c.pixel(7, 0) & 0xff, 2);
+  CHECK(c.pixel(0, 15) >> 8 & 0xff, 3);
+  c.ge.rectangle(pixel, &texture, e, f, false);
+  CHECK(c.pixel(7, 0) & 0xff, 7);
+  //Turned (corners bottom-left and top-right): v runs across x and u down y, the same way. At (7, 0) v is 2.89, as u
+  //was above, and u = (4 + (0 - 4) * 0.03125) / (1 - 0.75 * 0.46875) = 5.98.
+  GE::Vertex g, h;
+  g.x = 0, g.y = 16, g.u = 0, g.v = 0, g.color = 0xffff'ffff;
+  h.x = 16, h.y = 0, h.u = 16, h.v = 16, h.clip[3] = 4, h.color = 0xffff'ffff;
+  c.ge.rectangle(pixel, &texture, g, h, true);
+  CHECK(c.pixel(7, 0) & 0xffff, 0x0205);
+  //A corner with no w in front of the camera: 2D's stepping.
+  f.clip[3] = -1;
+  c.ge.rectangle(pixel, &texture, e, f, true);
+  CHECK(c.pixel(7, 0) & 0xff, 7);
 }
 
 //Fog: FOG1 1, FOG2 0.5: a vertex at view z 0 keeps half its color, (0 + 1) * 0.5 = 0.5, 128 of 255:
 //red (0 * 128 + 255 * 127 + 255) / 256 = 127 from the fog color; green (255 * 128 + 255) / 256 = 128. At z 1, fog 1:
 //none; at z -0.9, 0.05: 12 of 255. Not in through mode. Across a triangle the fog is blended from the corners: from
-//1 (z 1) at two to 0 (z -1) at the third, at pixel (7, 0) (the third's weight 0.46484375) it's 0.53515625, 137.
+//1 (z 1) at two to 0 (z -1) at the third, at pixel (7, 0) (the third's weight 0.46484375) it's 0.53515625, 137. A
+//sprite is split at its middle column, each half taking the fog of the corner on the other side, whichever corner
+//comes first.
 static auto draw3dFog() -> void {
   Scene c;
   c.ge.commands[GE::FogEnable] = 1;
@@ -286,6 +326,23 @@ static auto draw3dFog() -> void {
   c.clear();
   c.draw(GE::Triangles, {{0, 0, 0xff00'ff00, 0, 0, 1}, {0, 0, 0xff00'ff00, 16, 0, -1}, {0, 0, 0xff00'ff00, 0, 16, 1}});
   CHECK(c.pixel(7, 0), u32((255 * 136 + 255) / 256) << 8 | u32((255 * 119 + 255) / 256));  //at (7.5, 0.5)
+  for(bool first : {true, false}) {  //no fog (z 1) at the left corner, all fog (z -1) at the right, either order
+    c.clear();
+    V3 left{0, 0, 0xff00'ff00, 0, 0, 1}, right{0, 0, 0xff00'ff00, 8, 4, -1};
+    if(first) c.draw(GE::Sprites, {left, right});
+    else c.draw(GE::Sprites, {right, left});
+    CHECK(c.pixel(3, 1), 0x0000'00ff);  //the left half: the right corner's fog, all of it
+    CHECK(c.pixel(4, 1), 0x0000'ff00);  //the right half: the left corner's, none
+  }
+  //Where the middle falls: halfway, rounded down, and a column whose middle (8/16 in) is at most a sixteenth left of
+  //it is the right half's. From x 0 to 7.125 the middle is 57 sixteenths and column 3's middle 56; so too from 0 to
+  //7.1875 (57.5, rounded down).
+  for(float right : {7.125f, 7.1875f}) {
+    c.clear();
+    c.draw(GE::Sprites, {{0, 0, 0xff00'ff00, 0, 0, 1}, {0, 0, 0xff00'ff00, right, 4, -1}});
+    CHECK(c.pixel(3, 1), 0x0000'ff00);  //the right half: the left corner's fog, none
+    CHECK(c.pixel(2, 1), 0x0000'00ff);  //the left half: the right corner's, all
+  }
   c.clear();  //the distance is the view's: the view moved 0.5 back makes z 0's fog (0 - 0.5 + 1) * 0.5, 64 of 255
   c.ge.view[11] = f24(-0.5f);
   c.draw(GE::Sprites, {{0, 0, 0xff00'ff00, 0, 0, 0}, {0, 0, 0xff00'ff00, 4, 4, 0}});

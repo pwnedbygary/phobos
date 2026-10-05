@@ -14,6 +14,7 @@ namespace allegrex_test::psp {
 
 constexpr u32 VertexData = 0x0896'0000, Texture = 0x0898'0000, Palette = 0x089a'0000;
 constexpr u32 VRAM = Memory::VRAMBase;
+constexpr u32 DepthSeen = Memory::VRAMBase + 3 * Memory::VRAMSize;  //VRAM's fourth copy: depth as the GE has it
 
 //A through-mode vertex: float texture coordinates, 8888 color, float position (vertex type 0x80019f).
 struct V { float u, v; u32 color; float x, y, z; };
@@ -53,7 +54,7 @@ struct Canvas {
     if(format == 3) memory.write(4, VRAM + (y * 16 + x) * 4, value);
     else memory.write(2, VRAM + (y * 16 + x) * 2, value);
   }
-  auto depth(u32 x, u32 y) -> u32 { return memory.read(2, VRAM + 0x1'0000 + (y * 16 + x) * 2); }
+  auto depth(u32 x, u32 y) -> u32 { return memory.read(2, DepthSeen + 0x1'0000 + (y * 16 + x) * 2); }
   //a texture at Texture: width x height texels of format, rows of bufferWidth texels, nearest, replace with alpha
   auto texture(u32 format, u32 width, u32 height, u32 bufferWidth) -> void {
     ge.commands[GE::TextureMappingEnable] = 1;
@@ -236,7 +237,7 @@ static auto drawPixelTests() -> void {
   CHECK(c.pixel(0, 0), 0x12'3459);
   c.ge.commands[GE::ColorTestEnable] = 0;
 
-  c.memory.write(2, VRAM + 0x1'0000, 0x8000);
+  c.memory.write(2, DepthSeen + 0x1'0000, 0x8000);
   c.ge.commands[GE::DepthTestEnable] = 1;
   c.ge.commands[GE::DepthTest] = 4;  //less
   dot(0xff00'0001, 0x8000);

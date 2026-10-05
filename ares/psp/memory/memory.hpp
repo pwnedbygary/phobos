@@ -17,8 +17,8 @@
 //Physical memory:
 //  0x0001'0000-0x0001'3fff  the scratchpad: 16 KiB of fast RAM inside the CPU chip
 //  0x0400'0000-0x041f'ffff  VRAM: 2 MiB of video memory, which the GE draws into and the display shows, seen four
-//                           times in a row up to 0x047f'ffff (on the PSP some of those copies rearrange the bytes
-//                           for the GE's depth buffer, "swizzling"; not emulated yet)
+//                           times in a row up to 0x047f'ffff; the second and fourth copies rearrange it for the
+//                           GE's depth buffer (below)
 //  0x0800'0000-0x09ff'ffff  main RAM: 32 MiB on the PSP-1000 (64 MiB, to 0x0bff'ffff, on later models). The
 //                           kernel owns the first 8 MiB; games get the rest, from 0x0880'0000
 //  0x1c00'0000-0x1fff'ffff  hardware registers and the boot ROM: nothing there yet, as the HLE kernel answers for
@@ -27,6 +27,19 @@
 //
 //The bytes are kept in the host's memory as the PSP sees them, little-endian, so a word is read by copying four
 //bytes (Phobos's hosts, ARM64 and x86-64, are little-endian too).
+//
+//VRAM's copies (measured on a PSP, docs/psp-core.md, round 3's depth-layout files). The first and third copies show
+//VRAM as it is. The other two rearrange it in 32-byte pieces: the second reaches the byte at its offset with bits 6
+//and 13 flipped; the fourth first turns the offset's bits 5-9 round by one place (bit 9 down to bit 5, bits 5-8 up
+//to 6-9), then flips the same two. The GE reaches its depth buffer as the fourth copy shows it, so for a depth buffer
+//512 pixels wide (as games have it), pixel (x, y)'s depth is, in 16-bit steps from the buffer's start:
+//  - through the fourth copy, at y * 512 + x: in order;
+//  - through the second, at y * 512 + (x >> 4) * 32 + (x & 15): each 16 pixels of a row 32 apart (columns 256-511 go
+//    in the gaps, by these rules; only columns 0-255 were measured);
+//  - through the first and third, as the second but with the pieces swapped in pairs and the rows in eights:
+//    (y ^ 8) * 512 + ((x >> 4) ^ 1) * 32 + (x & 15).
+//That fits every value measured for a buffer 1.5 MiB (0x180000) into VRAM. Whether the rules go by the address in
+//VRAM (as here) or from the buffer's start differs only for a buffer that doesn't start on 16 KiB.
 
 namespace ares::PlayStationPortable {
 
@@ -52,8 +65,11 @@ struct Memory {
   std::function<auto (u32 address, bool store) -> void> unmapped;
 
   //memory.cpp
+  static auto vramOffset(u32 copy, u32 seen) -> u32;
+  static auto vramSeen(u32 copy, u32 offset) -> u32;
   auto power(u32 ramSize = 32_MiB) -> void;
   auto pointer(u32 address, u32 size = 1) -> u8*;
+  auto reaches(u32 address, u32 size) -> bool;
   auto read(u32 size, u32 address) -> u32;
   auto write(u32 size, u32 address, u32 data) -> void;
   auto changed(u32 address, u32 size) -> void;
