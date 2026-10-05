@@ -166,6 +166,8 @@ static auto stateFields() -> void {
   u32 callback = a.call("sceKernelCreateCallback", {a.string("callback"), 0x0880'7000, 0x42});
   k.memoryStickCallbacks = {callback};
   k.allocate(0x1000, 0, 0, "block");
+  u32 fixedID = a.call("sceKernelCreateFpl", {a.string("fpl"), 2, 0, 16, 2, 0});
+  u32 variableID = a.call("sceKernelCreateVpl", {a.string("vpl"), 2, 0, 0x100, 0});
   u32 file = a.call("sceIoOpen", {a.string("ms0:/A.TXT"), 0x0001, 0});
   u32 other = a.call("sceIoOpen", {a.string("ms0:/B.TXT"), 0x0001, 0});
   u32 folder = a.call("sceIoDopen", {a.string("ms0:/LIST")});
@@ -259,6 +261,8 @@ static auto stateFields() -> void {
   auto& c = k.controller;
   auto& l = k.geLists[list];
   auto& gc = k.geCallbacks[3];
+  auto& fixedPool = k.pools[fixedID];
+  auto& variablePool = k.pools[variableID];
   std::vector<std::pair<std::string, std::function<void()>>> more = {
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
@@ -325,6 +329,19 @@ static auto stateFields() -> void {
     {"source lengths", [&] { k.audio.source.lengths[1] = 17; }},
     {"source finishAt", [&] { k.audio.source.finishAt = 1; }},
     {"source completion", [&] { k.audio.source.completion = true; }},
+    {"subInterrupt function", [&] { k.subInterrupts[1][3].function = 0x0880'3000; }},
+    {"subInterrupt argument", [&] { k.subInterrupts[1][3].argument = 1; }},
+    {"subInterrupt gp", [&] { k.subInterrupts[0][3].gp = 4; }},
+    {"subInterrupt enabled", [&] { k.subInterrupts[0][3].enabled = true; }},
+    {"dialog kind", [&] { k.dialog.kind = 2; }}, {"dialog status", [&] { k.dialog.status = 3; }},
+    {"dialog next", [&] { k.dialog.next = 2; }}, {"dialog changeAt", [&] { k.dialog.changeAt = 5; }},
+    {"dialog parameters", [&] { k.dialog.parameters = 0x0880'0000; }},
+    {"utilityModules", [&] { k.utilityModules.push_back(0x301); }},
+    {"pool name", [&] { fixedPool.name += "x"; }}, {"pool attributes", [&] { fixedPool.attributes ^= 1; }},
+    {"pool variable", [&] { fixedPool.variable = true; }}, {"pool block", [&] { fixedPool.block ^= 1; }},
+    {"pool address", [&] { fixedPool.address ^= 4; }}, {"pool size", [&] { fixedPool.size ^= 4; }},
+    {"pool blockSize", [&] { fixedPool.blockSize ^= 4; }}, {"pool used", [&] { fixedPool.used[1] = 1; }},
+    {"pool pieces", [&] { variablePool.pieces[variablePool.address] = 16; }},
     //files: the host file opened again as another, for writing too; the other host file counted as the disc's; the
     //disc's file a folder, read a sector at a time
     {"file path", [&] { host.path = "ms0:/B.TXT"; }},
@@ -448,6 +465,7 @@ static auto stateFields() -> void {
   refuses("the mixer started later than now", [&] { k.audio.mixStart = k.cycles + 1; });
   refuses("three buffers on the SRC channel", [&] { k.audio.source.queued = 3; });
   refuses("an SRC channel at 0 Hz", [&] { k.audio.source.frequency = 0; });
+  refuses("a pool under another's ID", [&] { k.pools.begin()->second.uid ^= 1; });
   //a host folder's names as no listing makes them: reading it would join them to its place on the host
   refuses("a folder name reaching out of its folder", [&] { k.files[folder].entries.push_back("../../etc"); });
   refuses("a folder name that's a whole path", [&] { k.files[folder].entries.push_back("/etc"); });

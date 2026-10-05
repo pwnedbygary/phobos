@@ -337,11 +337,91 @@ static auto vblankTiming() -> void {
   CHECK(Kernel::VblankCycles / Kernel::LineCycles, 286);
 }
 
+//A vertical blank handler (sub-interrupt 2): called at each blank with (2, its argument) and the global pointer it
+//was registered with, while enabled, not while interrupts are held off (it runs once they're let back on), and no
+//more once released. Its semaphore wakes a thread that waits on nothing else (time goes on for the handler). Then
+//the refusals, in their order.
+static auto vblankHandler() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    constexpr u32 Count = R + 0x10, Semaphore = R + 0x14, Seen = R + 0x40;
+    Assembler handler{m, 0x0880'3000};
+    handler.li(t0, Count); handler.put(lw(t1, 0, t0)); handler.put(addiu(t1, t1, 1)); handler.put(sw(t1, 0, t0));
+    handler.li(t0, Seen); handler.put(sw(a0, 0, t0)); handler.put(sw(a1, 4, t0)); handler.put(sw(gp, 8, t0));
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp));
+    handler.li(t0, Semaphore); handler.put(lw(a0, 0, t0)); handler.li(a1, 1);
+    handler.call("sceKernelSignalSema");
+    handler.put(lw(ra, 12, sp)); handler.put(addiu(sp, sp, 16));
+    handler.put(jr(ra));
+    handler.put(nop);
+
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("s")); main.li(a1, 0); main.li(a2, 0); main.li(a3, 100); main.li(t0, 0);
+    main.call("sceKernelCreateSema");
+    main.li(t0, Semaphore); main.put(sw(v0, 0, t0));
+    main.li(gp, 0x0889'0000);  //the global pointer the handler gets
+    main.li(a0, 30); main.li(a1, 2); main.li(a2, 0x0880'3000); main.li(a3, 0x42);
+    main.call("sceKernelRegisterSubIntrHandler");
+    main.li(t0, R); main.put(sw(v0, 0, t0));
+    main.li(gp, 0);
+    main.li(a0, 30); main.li(a1, 2);
+    main.call("sceKernelEnableSubIntr");
+    for(u32 n = 0; n < 3; n++) {  //three blanks, each waking main through the semaphore alone
+      main.li(t0, Semaphore); main.put(lw(a0, 0, t0)); main.li(a1, 1); main.li(a2, 0);
+      main.call("sceKernelWaitSema");
+    }
+    main.li(t0, Count); main.put(lw(t1, 0, t0)); main.li(t0, R); main.put(sw(t1, 4, t0));
+    //held off across a blank: nothing; let back on: it runs
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s0, v0, zero));
+    main.li(a0, 20000);
+    main.call("sceKernelDelayThread");
+    main.li(t0, Count); main.put(lw(t1, 0, t0)); main.li(t0, R); main.put(sw(t1, 8, t0));
+    main.put(addu(a0, s0, zero));
+    main.call("sceKernelCpuResumeIntr");
+    main.li(t0, Count); main.put(lw(t1, 0, t0)); main.li(t0, R); main.put(sw(t1, 12, t0));
+    main.li(a0, 30); main.li(a1, 2);
+    main.call("sceKernelReleaseSubIntrHandler");
+    main.li(a0, 40000);
+    main.call("sceKernelDelayThread");
+    main.li(t0, Count); main.put(lw(t1, 0, t0)); main.li(t0, R); main.put(sw(t1, 0x20, t0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.system.memory.read(4, R), 0);
+    CHECK(m.system.memory.read(4, R + 4), 3);
+    CHECK(m.system.memory.read(4, R + 8), 3);    //held off
+    CHECK(m.system.memory.read(4, R + 12), 4);   //let back on: the blank that came meanwhile
+    CHECK(m.system.memory.read(4, R + 0x20), 4);  //released
+    CHECK(m.system.memory.read(4, Seen), 2);
+    CHECK(m.system.memory.read(4, Seen + 4), 0x42);
+    CHECK(m.system.memory.read(4, Seen + 8), 0x0889'0000);
+    CHECK(m.notes.size(), 0);
+  }
+  KernelMachine m;
+  auto registers = [&](u32 interrupt, u32 sub) {
+    return m.call("sceKernelRegisterSubIntrHandler", {interrupt, sub, 0x0880'3000, 0});
+  };
+  CHECK(registers(67, 0), Kernel::ErrorIllegalInterruptCode);
+  CHECK(registers(8, 0), Kernel::ErrorHandlerNotFound);       //no handler on the PSP for it
+  CHECK(registers(4, 0), Kernel::ErrorIllegalInterruptCode);  //the kernel's alone
+  CHECK(registers(30, 32), Kernel::ErrorIllegalInterruptCode);
+  CHECK(registers(30, 19), Kernel::ErrorHandlerFound);        //held by the display driver
+  CHECK(registers(30, 16), Kernel::ErrorIllegalInterruptCode);
+  CHECK(registers(30, 15), 0);
+  CHECK(registers(30, 15), Kernel::ErrorHandlerFound);
+  CHECK(registers(25, 0), 0);
+  CHECK(m.call("sceKernelReleaseSubIntrHandler", {30, 14}), Kernel::ErrorHandlerNotFound);
+  CHECK(m.call("sceKernelReleaseSubIntrHandler", {30, 15}), 0);
+  CHECK(m.call("sceKernelEnableSubIntr", {30, 33}), Kernel::ErrorIllegalInterruptCode);
+  CHECK(m.call("sceKernelDisableSubIntr", {25, 0}), 0);
+}
+
 auto callbackTests() -> Tests {
   return {
     {"callbacks in waits", runInWaits}, {"callbacks and waits going on", waitsGoOn},
     {"callbacks by priority", byPriority}, {"callbacks called directly", callbackCalls},
-    {"display vblank timing", vblankTiming},
+    {"display vblank timing", vblankTiming}, {"interrupts vblank handler", vblankHandler},
   };
 }
 

@@ -174,6 +174,12 @@ auto Kernel::serialize(serializer& s) -> bool {
     s(semaphore.initial);
   });
   map(lwMutexes, [&](u32& workArea) { s(workArea); });
+  map(pools, [&](Pool& pool) {
+    s(pool.uid); text(pool.name); s(pool.attributes); s(pool.variable); s(pool.block); s(pool.address);
+    s(pool.size); s(pool.blockSize);
+    vector(pool.used, [&](u8& used) { s(used); });
+    map(pool.pieces, [&](u32& length) { s(length); });
+  });
   map(eventFlags, [&](EventFlag& flag) {
     s(flag.uid); text(flag.name); s(flag.attributes); s(flag.initial); s(flag.pattern);
   });
@@ -200,11 +206,15 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(source.reserved); s(source.sampleCount); s(source.frequency); s(source.volume); s(source.queued);
   s(source.lengths); s(source.finishAt); s(source.completion);
   check(source.queued <= 2 && source.frequency >= 8'000 && source.frequency <= 48'000);
+  //the utilities: the dialog, and the modules loaded
+  s(dialog.kind); s(dialog.status); s(dialog.next); s(dialog.changeAt); s(dialog.parameters);
+  vector(utilityModules, [&](u32& module) { s(module); });
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);
     for(auto& [uid, semaphore] : semaphores) check(uid < nextUID && semaphore.uid == uid);
     for(auto& [uid, workArea] : lwMutexes) check(uid < nextUID);
+    for(auto& [uid, pool] : pools) check(uid < nextUID && pool.uid == uid && pool.block < nextUID);
     for(auto& [uid, flag] : eventFlags) check(uid < nextUID && flag.uid == uid);
     for(auto& [uid, callback] : callbacks) check(uid < nextUID && callback.uid == uid);
     for(auto& block : blocks) check(block.uid < nextUID);
@@ -271,6 +281,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(interrupting); s(interruptsEnabled); s(rescheduleAfter);
   context(interrupted);
   s(interruptedHalted); s(callResumesGe);
+  for(auto& set : subInterrupts) {
+    for(auto& handler : set) { s(handler.function); s(handler.argument); s(handler.gp); s(handler.enabled); }
+  }
 
   //the GE driver. Each list's stack is no deeper than it allows (under 256: geEnqueue), the GE's own CALLs, in a
   //list's registers or kept on its stack, go two deep at most (GE::Registers), and a list running or done has run:

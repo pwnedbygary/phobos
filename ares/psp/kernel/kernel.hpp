@@ -53,7 +53,13 @@ struct GE;
 struct Kernel {
   //Error codes: pspsdk's pspkerror.h, and those it lacks (the lightweight mutex's, the allocation type's, files',
   //the GE driver's) from uOFW's errors.h.
+  static constexpr u32 ErrorError                 = 0x8002'0001;
   static constexpr u32 ErrorUnknownUID            = 0x8002'00cb;
+  static constexpr u32 ErrorIllegalPermission     = 0x8002'00d1;
+  static constexpr u32 ErrorUnknownVpl            = 0x8002'019c;
+  static constexpr u32 ErrorUnknownFpl            = 0x8002'019d;
+  static constexpr u32 ErrorIllegalMemoryBlock    = 0x8002'01b6;
+  static constexpr u32 ErrorIllegalMemorySize     = 0x8002'01b7;
   static constexpr u32 ErrorIllegalArgument       = 0x8002'00d2;
   static constexpr u32 ErrorIllegalAddress        = 0x8002'00d3;
   static constexpr u32 ErrorIllegalPartition      = 0x8002'00d6;
@@ -61,6 +67,9 @@ struct Kernel {
   static constexpr u32 ErrorIllegalAlignmentSize  = 0x8002'00e4;  //an aligned block's alignment not a power of two
   static constexpr u32 ErrorNotYetLinked          = 0x8002'013a;  //a function the kernel doesn't have
   static constexpr u32 ErrorIllegalContext        = 0x8002'0064;  //waiting, from an interrupt handler
+  static constexpr u32 ErrorIllegalInterruptCode  = 0x8002'0065;
+  static constexpr u32 ErrorHandlerFound          = 0x8002'0067;
+  static constexpr u32 ErrorHandlerNotFound       = 0x8002'0068;
   static constexpr u32 ErrorIllegalAttribute      = 0x8002'0191;
   static constexpr u32 ErrorIllegalMode           = 0x8002'0195;
   static constexpr u32 ErrorUnknownEventFlag      = 0x8002'019a;
@@ -202,6 +211,7 @@ struct Kernel {
   enum class Status : u32 { Running = 1, Ready = 2, Waiting = 4, Dormant = 16 };  //the PSP's numbers
   enum class Wait : u32 {
     None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd, Audio,
+    Fpl, Vpl,
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -489,6 +499,17 @@ struct Kernel {
   auto mayWait() -> bool;
   auto sceKernelCpuSuspendIntr() -> void;
   auto sceKernelCpuResumeIntr() -> void;
+  struct SubInterrupt {
+    u32 function = 0, argument = 0, gp = 0;
+    bool enabled = false;
+  };
+  SubInterrupt subInterrupts[2][32];  //the GE's (interrupt 25) and the vertical blank's (30)
+  auto vblankInterrupt() -> void;
+  auto vblankHandlers() const -> bool;
+  auto sceKernelRegisterSubIntrHandler() -> void;
+  auto sceKernelReleaseSubIntrHandler() -> void;
+  auto sceKernelEnableSubIntr() -> void;
+  auto sceKernelDisableSubIntr() -> void;
 
   //events.cpp: event flags, and callbacks
   struct EventFlag {
@@ -604,6 +625,47 @@ struct Kernel {
   auto sceGeSaveContext() -> void;
   auto sceGeRestoreContext() -> void;
 
+  //pools.cpp: memory pools a program hands out itself, in blocks of one size (FPL) or of any (VPL)
+  struct Pool {
+    u32 uid;
+    std::string name;
+    u32 attributes = 0;
+    bool variable = false;
+    u32 block = 0;             //its memory, a block of the user partition
+    u32 address = 0, size = 0; //what it hands out from
+    u32 blockSize = 0;         //a fixed pool's blocks' size
+    std::vector<u8> used;      //a fixed pool's blocks handed out
+    std::map<u32, u32> pieces; //a variable pool's pieces handed out: where each starts (its header), how long
+  };
+  std::map<u32, Pool> pools;
+  auto createPool(bool variable) -> void;
+  auto poolTake(Pool& pool, u32 size) -> u32;
+  auto poolFree(const Pool& pool) const -> u32;
+  auto poolWaiters(const Pool& pool) -> std::vector<Thread*>;
+  auto poolWake(Pool& pool) -> void;
+  auto poolAllocate(bool variable, bool callbacks) -> void;
+  auto poolTryAllocate(bool variable) -> void;
+  auto poolRelease(bool variable) -> void;
+  auto poolDelete(bool variable) -> void;
+  auto poolCancel(bool variable) -> void;
+  auto poolStatus(bool variable) -> void;
+  auto sceKernelCreateFpl() -> void;
+  auto sceKernelDeleteFpl() -> void;
+  auto sceKernelAllocateFpl() -> void;
+  auto sceKernelAllocateFplCB() -> void;
+  auto sceKernelTryAllocateFpl() -> void;
+  auto sceKernelFreeFpl() -> void;
+  auto sceKernelCancelFpl() -> void;
+  auto sceKernelReferFplStatus() -> void;
+  auto sceKernelCreateVpl() -> void;
+  auto sceKernelDeleteVpl() -> void;
+  auto sceKernelAllocateVpl() -> void;
+  auto sceKernelAllocateVplCB() -> void;
+  auto sceKernelTryAllocateVpl() -> void;
+  auto sceKernelFreeVpl() -> void;
+  auto sceKernelCancelVpl() -> void;
+  auto sceKernelReferVplStatus() -> void;
+
   //audio.cpp: sound output's channels (their timing; the samples aren't played yet)
   struct Audio {
     struct Channel {
@@ -658,6 +720,54 @@ struct Kernel {
   auto sceAudioSRCChReserve() -> void;
   auto sceAudioSRCOutputBlocking() -> void;
   auto sceAudioSRCChRelease() -> void;
+
+  //utility.cpp: the system's dialogs, one at a time, and the optional modules loaded
+  struct Dialog {
+    u32 kind = 0;          //the last started (0: none yet)
+    u32 status = 0;        //0 none, 1 starting, 2 running, 3 finished, 4 closing
+    u32 next = 0;          //the status it goes to at changeAt (0: no change coming)
+    u64 changeAt = 0;
+    u32 parameters = 0;    //where its parameters are
+  } dialog;
+  std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
+  auto dialogDue() -> void;
+  auto dialogStart(u32 kind) -> void;
+  auto dialogStatus(u32 kind) -> void;
+  auto dialogUpdate(u32 kind) -> void;
+  auto dialogShutdown(u32 kind) -> void;
+  static auto hexWord(u32 value) -> std::string;
+  auto saveFolder(const std::string& game, const std::string& save) -> std::string;
+  auto savedata(u32 parameters) -> u32;
+  auto sceUtilitySavedataInitStart() -> void;
+  auto sceUtilitySavedataGetStatus() -> void;
+  auto sceUtilitySavedataUpdate() -> void;
+  auto sceUtilitySavedataShutdownStart() -> void;
+  auto sceUtilityMsgDialogInitStart() -> void;
+  auto sceUtilityMsgDialogGetStatus() -> void;
+  auto sceUtilityMsgDialogUpdate() -> void;
+  auto sceUtilityMsgDialogShutdownStart() -> void;
+  auto sceUtilityOskInitStart() -> void;
+  auto sceUtilityOskGetStatus() -> void;
+  auto sceUtilityOskUpdate() -> void;
+  auto sceUtilityOskShutdownStart() -> void;
+  auto sceUtilityNetconfInitStart() -> void;
+  auto sceUtilityNetconfGetStatus() -> void;
+  auto sceUtilityNetconfUpdate() -> void;
+  auto sceUtilityNetconfShutdownStart() -> void;
+  auto sceUtilityGameSharingInitStart() -> void;
+  auto sceUtilityGameSharingGetStatus() -> void;
+  auto sceUtilityGameSharingUpdate() -> void;
+  auto sceUtilityGameSharingShutdownStart() -> void;
+  auto sceUtilityHtmlViewerInitStart() -> void;
+  auto sceUtilityHtmlViewerGetStatus() -> void;
+  auto sceUtilityHtmlViewerUpdate() -> void;
+  auto sceUtilityHtmlViewerShutdownStart() -> void;
+  auto sceUtilityLoadModule() -> void;
+  auto sceUtilityUnloadModule() -> void;
+  auto sceUtilityLoadNetModule() -> void;
+  auto sceUtilityUnloadNetModule() -> void;
+  auto sceUtilityGetSystemParamString() -> void;
+  auto sceUtilitySetSystemParamString() -> void;
 
   //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
   struct Power {

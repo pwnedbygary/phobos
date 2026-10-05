@@ -292,6 +292,10 @@ auto Kernel::resumeWait(Thread& thread) -> void {
   case Wait::Umd:     //for any of these bits of the drive's state
     if(thread.waitCount & umdState()) ready(thread, 0);
     break;
+  case Wait::Fpl: case Wait::Vpl:
+    if(auto found = pools.find(thread.waitID); found != pools.end()) poolWake(found->second);
+    else ready(thread, ErrorWaitDeleted);
+    break;
   default:            //a delay whose time isn't up
     break;
   }

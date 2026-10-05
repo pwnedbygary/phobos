@@ -69,3 +69,83 @@ auto Kernel::sceKernelCpuResumeIntr() -> void {
   interruptsEnabled = arg(0) != 0;
   result(0);
 }
+
+//Handlers a program registers for an interrupt's sub-interrupts (InterruptManager): of those a program may use, the
+//vertical blank's (interrupt 30; its sub-interrupts 0-15, the rest the kernel's) and the GE's (25). Each enabled one
+//is called at its interrupt as fn(sub-interrupt, argument), with the global pointer it was registered with, the way
+//calls into the program go (above). The vertical blank's run at each blank, in their numbers' order; nothing here
+//raises the GE's yet (its driver calls the program's GE callbacks itself). The rules, and the errors in their order,
+//are PPSSPP's reading of interruptman.prx (from tests on a PSP).
+
+//Which of the two a number is (0 the GE's, 1 the vertical blank's), or -1: the PSP has handlers for some other
+//interrupts, but none a program may add to (for those it says ILLEGAL_INTRCODE), and none for the rest (NOTFOUND).
+static auto subInterruptSet(u32 interrupt, u32& error) -> s32 {
+  if(interrupt >= 67) return error = Kernel::ErrorIllegalInterruptCode, -1;
+  if(interrupt == 25) return 0;
+  if(interrupt == 30) return 1;
+  static constexpr u8 KernelOnly[] = {4, 6, 21, 7, 10, 12, 15, 16, 17, 18, 19, 20, 22, 23, 24, 26, 31, 36, 50, 56,
+                                      57, 58, 59, 60, 61, 65};
+  bool kernels = std::find(std::begin(KernelOnly), std::end(KernelOnly), interrupt) != std::end(KernelOnly);
+  error = kernels ? Kernel::ErrorIllegalInterruptCode : Kernel::ErrorHandlerNotFound;
+  return -1;
+}
+
+//(interrupt, sub-interrupt, handler, argument)
+auto Kernel::sceKernelRegisterSubIntrHandler() -> void {
+  u32 interrupt = arg(0), sub = arg(1), error = 0;
+  s32 set = subInterruptSet(interrupt, error);
+  if(set < 0) return result(error);
+  if(sub >= 32) return result(ErrorIllegalInterruptCode);
+  if(interrupt == 30 && ((sub >= 18 && sub <= 20) || (sub >= 24 && sub <= 26))) return result(ErrorHandlerFound);
+  if(interrupt == 30 && sub >= 16) return result(ErrorIllegalInterruptCode);
+  auto& handler = subInterrupts[set][sub];
+  if(handler.function) return result(ErrorHandlerFound);
+  handler.function = arg(2);
+  handler.argument = arg(3);
+  handler.gp = cpu.ipu.r[28];
+  result(0);
+}
+
+//(interrupt, sub-interrupt): the handler goes, and its sub-interrupt with it.
+auto Kernel::sceKernelReleaseSubIntrHandler() -> void {
+  u32 interrupt = arg(0), sub = arg(1), error = 0;
+  s32 set = subInterruptSet(interrupt, error);
+  if(set < 0) return result(error);
+  if(sub >= 32) return result(ErrorIllegalInterruptCode);
+  if(interrupt == 30 && sub >= 16) return result(ErrorHandlerNotFound);
+  auto& handler = subInterrupts[set][sub];
+  if(!handler.function) return result(ErrorHandlerNotFound);
+  handler = {};
+  result(0);
+}
+
+//(interrupt, sub-interrupt): lets its handler be called (even before one's registered: it's called once there is).
+auto Kernel::sceKernelEnableSubIntr() -> void {
+  u32 interrupt = arg(0), sub = arg(1), error = 0;
+  s32 set = subInterruptSet(interrupt, error);
+  if(set < 0 || sub >= 32) return result(ErrorIllegalInterruptCode);
+  subInterrupts[set][sub].enabled = true;
+  result(0);
+}
+
+auto Kernel::sceKernelDisableSubIntr() -> void {
+  u32 interrupt = arg(0), sub = arg(1), error = 0;
+  s32 set = subInterruptSet(interrupt, error);
+  if(set < 0 || sub >= 32) return result(ErrorIllegalInterruptCode);
+  subInterrupts[set][sub].enabled = false;
+  result(0);
+}
+
+//The vertical blank's handlers, called as it starts.
+auto Kernel::vblankInterrupt() -> void {
+  for(u32 sub = 0; sub < 32; sub++) {
+    auto& handler = subInterrupts[1][sub];
+    if(handler.enabled && handler.function) queueCall(handler.function, handler.gp, sub, handler.argument, 0);
+  }
+}
+
+//Whether any vertical blank handler will be called: time goes on for it while every thread waits.
+auto Kernel::vblankHandlers() const -> bool {
+  for(auto& handler : subInterrupts[1]) if(handler.enabled && handler.function) return true;
+  return false;
+}

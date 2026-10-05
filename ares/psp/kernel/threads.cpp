@@ -177,6 +177,7 @@ auto Kernel::events() -> void {
     for(auto& [uid, thread] : threads) {
       if(thread->status == Status::Waiting && thread->wait == Wait::Vblank) ready(*thread, 0), woke = true;
     }
+    vblankInterrupt();
     if(!controller.cycle && sampleController()) woke = true;
   }
   while(controller.cycle && cycles >= controller.nextSample) {  //a sampling cycle's timer
@@ -212,7 +213,7 @@ auto Kernel::untilNextEvent() const -> u64 {
 //go each time round, so even a display list that never ends lets the frame end.
 auto Kernel::idle(u64 end) -> bool {
   if(interrupting || (!calls.empty() && interruptsEnabled)) return true;
-  bool timed = geBusy;
+  bool timed = geBusy || vblankHandlers();
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
     if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;
@@ -326,12 +327,15 @@ auto Kernel::sceKernelReferThreadStatus() -> void {
   for(u32 offset = 4; offset < 36 && offset < size; offset++) {
     memory.write(1, info + offset, offset - 4 < thread->name.size() ? u8(thread->name[offset - 4]) : 0);
   }
-  u32 waitType = 0;  //the PSP's numbers: 1 sleep, 2 delay, 3 semaphore, 9 thread end
+  u32 waitType = 0;  //the PSP's numbers: 1 sleep, 2 delay, 3 semaphore, 4 event flag, 6 VPL, 7 FPL, 9 thread end
   if(thread->status == Status::Waiting) {
     switch(thread->wait) {
     case Wait::Sleep: waitType = 1; break;
     case Wait::Delay: waitType = 2; break;
     case Wait::Semaphore: waitType = 3; break;
+    case Wait::EventFlag: waitType = 4; break;
+    case Wait::Vpl: waitType = 6; break;
+    case Wait::Fpl: waitType = 7; break;
     case Wait::ThreadEnd: waitType = 9; break;
     default: break;
     }

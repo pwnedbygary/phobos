@@ -52,6 +52,8 @@ auto kernelTests() -> Tests;
 auto callbackTests() -> Tests;
 auto powerTests() -> Tests;
 auto audioTests() -> Tests;
+auto utilityTests() -> Tests;
+auto poolTests() -> Tests;
 auto fileTests() -> Tests;
 auto geTests() -> Tests;
 auto drawTests() -> Tests;
