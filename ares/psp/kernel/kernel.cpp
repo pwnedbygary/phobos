@@ -387,7 +387,9 @@ auto Kernel::power() -> void {
   interruptsEnabled = true;
   rescheduleAfter = false;
   callResumesGe = false;
-  for(auto& set : subInterrupts) for(auto& handler : set) handler = {};
+  for(auto& handler : vblankSubs) handler = {};
+  for(auto& handler : geSubs) handler = {};
+  vblankPending = false;
   eventFlags.clear();
   pools.clear();
   callbacks.clear();

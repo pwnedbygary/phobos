@@ -311,30 +311,37 @@ static auto stateFields() -> void {
     {"power cpu", [&] { k.powerState.cpu = 333; }}, {"power bus", [&] { k.powerState.bus = 166; }},
     {"power volatileLocked", [&] { k.powerState.volatileLocked = true; }},
     {"semaphore initial", [&] { sema.initial ^= 1; }}, {"thread suspended", [&] { t.suspended = true; }},
+    //sound: channel 3 halfway through a buffer, the DMA running; the SRC channel with both buffers armed
     {"audio reserved", [&] { k.audio.channels[3].reserved = true; }},
     {"audio sampleCount", [&] { k.audio.channels[3].sampleCount = 64; }},
     {"audio format", [&] { k.audio.channels[3].format = 0x10; }},
     {"audio leftVolume", [&] { k.audio.channels[3].leftVolume = 1; }},
     {"audio rightVolume", [&] { k.audio.channels[3].rightVolume = 1; }},
-    {"audio address", [&] { k.audio.channels[3].address = 0x0880'0000; }},
+    {"audio buffer", [&] { k.audio.channels[3].buffer = 0x0880'0000; }},
+    {"audio length", [&] { k.audio.channels[3].length = 128; }},
     {"audio remaining", [&] { k.audio.channels[3].remaining = 64; }},
-    {"audio waiting", [&] { k.audio.channels[3].waiting = u32(two); }},
-    {"audio waitingAddress", [&] { k.audio.channels[3].waitingAddress = 4; }},
-    {"audio waitingLeft", [&] { k.audio.channels[3].waitingLeft = 1; }},
-    {"audio waitingRight", [&] { k.audio.channels[3].waitingRight = 1; }},
-    {"audio mixing", [&] { k.audio.mixing = true; }}, {"audio mixStart", [&] { k.audio.mixStart = 1; }},
-    {"audio blocks", [&] { k.audio.blocks = 7; }},
-    {"source reserved", [&] { k.audio.source.reserved = true; }},
-    {"source sampleCount", [&] { k.audio.source.sampleCount = 17; }},
-    {"source frequency", [&] { k.audio.source.frequency = 8'000; }},
-    {"source volume", [&] { k.audio.source.volume = 1; }}, {"source queued", [&] { k.audio.source.queued = 2; }},
-    {"source lengths", [&] { k.audio.source.lengths[1] = 17; }},
-    {"source finishAt", [&] { k.audio.source.finishAt = 1; }},
-    {"source completion", [&] { k.audio.source.completion = true; }},
-    {"subInterrupt function", [&] { k.subInterrupts[1][3].function = 0x0880'3000; }},
-    {"subInterrupt argument", [&] { k.subInterrupts[1][3].argument = 1; }},
-    {"subInterrupt gp", [&] { k.subInterrupts[0][3].gp = 4; }},
-    {"subInterrupt enabled", [&] { k.subInterrupts[0][3].enabled = true; }},
+    {"dma running", [&] { k.audio.dma.running = true; }},
+    {"dma nextBlock", [&] { k.audio.dma.nextBlock = k.cycles + 1000; }},
+    {"dma fraction", [&] { k.audio.dma.fraction = 7; }},
+    {"src reserved", [&] { k.audio.src.reserved = true; }},
+    {"src sampleCount", [&] { k.audio.src.sampleCount = 17; }},
+    {"src rate", [&] { k.audio.src.rate = 8'000; }},
+    {"src buffer address", [&] { k.audio.src.buffers[0].address = 0x0880'1000; }},
+    {"src buffer sampleCount", [&] { k.audio.src.buffers[0].sampleCount = 17; }},
+    {"src buffer volume", [&] { k.audio.src.buffers[0].volume = 1; }},
+    {"src second buffer", [&] { k.audio.src.buffers[1] = {0x0880'2000, 18, 2}; }},
+    {"src armed", [&] { k.audio.src.armed = 2; }},
+    {"src retireAt", [&] { k.audio.src.retireAt = k.cycles + 1000; }},
+    {"src completion", [&] { k.audio.src.completion = true; }},
+    {"vblank handler function", [&] { k.vblankSubs[3].function = 0x0880'3000; }},
+    {"vblank handler argument", [&] { k.vblankSubs[3].argument = 1; }},
+    {"vblank handler gp", [&] { k.vblankSubs[3].gp = 4; }},
+    {"vblank handler enabled", [&] { k.vblankSubs[3].enabled = true; }},
+    {"GE handler function", [&] { k.geSubs[31].function = 0x0880'3100; }},
+    {"GE handler argument", [&] { k.geSubs[31].argument = 1; }},
+    {"GE handler gp", [&] { k.geSubs[31].gp = 4; }},
+    {"GE handler enabled", [&] { k.geSubs[31].enabled = true; }},
+    {"vblankPending", [&] { k.vblankPending = true; }},
     {"dialog kind", [&] { k.dialog.kind = 2; }}, {"dialog status", [&] { k.dialog.status = 3; }},
     {"dialog next", [&] { k.dialog.next = 2; }}, {"dialog changeAt", [&] { k.dialog.changeAt = 5; }},
     {"dialog parameters", [&] { k.dialog.parameters = 0x0880'0000; }},
@@ -476,11 +483,42 @@ static auto stateFields() -> void {
   });
   refuses("a block's ID not handed out yet", [&] { k.blocks.back().uid = k.nextUID; });
   refuses("a thread's callback not handed out yet", [&] { k.threads.at(one)->callbackID = k.nextUID; });
-  refuses("an audio channel's waiter not handed out yet", [&] { k.audio.channels[0].waiting = k.nextUID; });
-  refuses("the mixer's blocks not counted afresh", [&] { k.audio.blocks = 49; });
-  refuses("the mixer started later than now", [&] { k.audio.mixStart = k.cycles + 1; });
-  refuses("three buffers on the SRC channel", [&] { k.audio.source.queued = 3; });
-  refuses("an SRC channel at 0 Hz", [&] { k.audio.source.frequency = 0; });
+  refuses("a buffer in a slot with the DMA stopped", [&] { k.audio.dma.running = false; });
+  refuses("a mixer channel's count not a multiple of 64", [&] { k.audio.channels[3].sampleCount = 100; });
+  refuses("a slot with more left than its buffer holds", [&] { k.audio.channels[3].remaining = 192; });
+  refuses("a slot holding a buffer of 0 samples", [&] { k.audio.channels[3].length = 0; });
+  refuses("a mixer volume past 0xFFFF", [&] { k.audio.channels[3].leftVolume = 0x10000; });
+  refuses("a format neither stereo nor mono", [&] { k.audio.channels[3].format = 0x20; });
+  refuses("the mixer's next block over a block away", [&] {
+    k.audio.dma.nextBlock = k.cycles + Kernel::Audio::BlockCycles + 2;
+  });
+  refuses("the mixer's next block a frame overdue", [&] { k.audio.dma.nextBlock = k.cycles - Kernel::VblankCycles; });
+  refuses("a block's fraction of 49 49ths", [&] { k.audio.dma.fraction = 49; });
+  refuses("three buffers on the SRC channel", [&] { k.audio.src.armed = 3; });
+  refuses("an SRC channel at 0 Hz", [&] { k.audio.src.rate = 0; });
+  refuses("an SRC rate it doesn't take", [&] { k.audio.src.rate = 36'000; });
+  refuses("SRC buffers armed with the channel released", [&] { k.audio.src.reserved = false; });
+  refuses("an SRC buffer of 16 samples", [&] { k.audio.src.buffers[1].sampleCount = 16; });
+  refuses("an SRC buffer retiring after its own time", [&] {
+    k.audio.src.retireAt = k.cycles + k.srcDuration(k.audio.src.buffers[0].sampleCount) + 1;
+  });
+  //(each refusal loads the machine again, threads and all: they're looked up afresh)
+  auto waitsOnAudio = [&](Kernel::Thread& waiter, u32 id) {
+    waiter.status = Kernel::Status::Waiting, waiter.wait = Kernel::Wait::Audio, waiter.waitID = id;
+  };
+  refuses("a thread waiting on a mixer channel with nothing in its slot", [&] {
+    waitsOnAudio(*k.threads.at(one), 0);
+  });
+  refuses("two threads waiting on one mixer channel", [&] {
+    for(auto& [uid, waiter] : k.threads) waitsOnAudio(*waiter, 3);
+  });
+  refuses("a thread waiting for an SRC buffer with only one armed", [&] {
+    k.audio.src.armed = 1;
+    waitsOnAudio(*k.threads.at(one), Kernel::Audio::WaitSrc);
+  });
+  refuses("a vertical blank handler on sub-interrupt 18, the display driver's", [&] {
+    k.vblankSubs[18].function = 0x0880'3000;
+  });
   refuses("a pool under another's ID", [&] { k.pools.begin()->second.uid ^= 1; });
   //pools as no machine leaves them (giving a fixed pool's block back divides by its block size; handing out a
   //variable pool's room trusts its pieces to be inside it): each found afresh, as each load makes the pools anew

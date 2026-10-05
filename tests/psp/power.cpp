@@ -258,6 +258,115 @@ static auto threadStatus() -> void {
   CHECK(m.call("sceKernelChangeCurrentThreadAttr", {0, 0x8000'0000}), Kernel::ErrorIllegalAttribute);
 }
 
+//Priorities, as pspautotests' threads/threads/change found them on a PSP: 0x08 to 0x77 for a user thread (7, 0x78
+//and -1 refused), 0 for the caller's own; a thread not started can't be changed. A thread put level with the caller
+//doesn't take over, but the caller changing its own priority, even to what it was, gives way to it. Started again,
+//a thread is back at the priority it was made with.
+static auto threadPriorities() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    Assembler worker{m, 0x0880'2000};
+    worker.print("worker\n");
+    worker.call("sceKernelExitThread");
+
+    Assembler main{m, 0x0880'1000};
+    main.li(s1, R);
+    auto change = [&](u32 priority, u32 offset) {  //the worker's (its ID in s0)
+      main.put(addu(a0, s0, zero)); main.li(a1, priority);
+      main.call("sceKernelChangeThreadPriority");
+      main.put(sw(v0, offset, s1));
+    };
+    auto refer = [&](u32 info) {
+      main.li(t0, info); main.li(t1, 104); main.put(sw(t1, 0, t0));
+      main.put(addu(a0, s0, zero)); main.li(a1, info);
+      main.call("sceKernelReferThreadStatus");
+    };
+    auto start = [&] {
+      main.put(addu(a0, s0, zero)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelStartThread");
+    };
+    main.li(a0, m.string("worker")); main.li(a1, 0x0880'2000); main.li(a2, 0x30); main.li(a3, 0x1000);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(s0, v0, zero));
+    change(0x20, 0x00);  //not started
+    start();             //below main: it waits
+    change(0x07, 0x04);
+    change(0x78, 0x08);
+    change(0xffff'ffff, 0x0c);
+    change(0, 0x10);     //main's: level with main, it waits still
+    refer(R + 0x100);
+    main.print("main\n");
+    main.li(a0, 0); main.li(a1, 0x20);
+    main.call("sceKernelChangeThreadPriority");  //main's own, to what it was: the worker runs
+    main.put(sw(v0, 0x14, s1));
+    main.print("main again\n");
+    start();             //back at 0x30: it waits
+    refer(R + 0x200);
+    change(0x08, 0x18);  //above main: it runs at once
+    main.print("main last\n");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.output == "main\nworker\nmain again\nworker\nmain last\n", true);
+    if(m.output != "main\nworker\nmain again\nworker\nmain last\n") std::printf("  output: [%s]\n", m.output.c_str());
+    CHECK(m.system.memory.read(4, R + 0x00), Kernel::ErrorDormant);
+    for(u32 offset : {0x04u, 0x08u, 0x0cu}) CHECK(m.system.memory.read(4, R + offset), Kernel::ErrorIllegalPriority);
+    for(u32 offset : {0x10u, 0x14u, 0x18u}) CHECK(m.system.memory.read(4, R + offset), 0);
+    CHECK(m.system.memory.read(4, R + 0x100 + 64), 0x20);  //its current priority: main's
+    CHECK(m.system.memory.read(4, R + 0x200 + 60), 0x30);  //its first
+    CHECK(m.system.memory.read(4, R + 0x200 + 64), 0x30);  //and its current, once started again
+    CHECK(m.notes.size(), 0);
+  }
+}
+
+//How much of a stack has never been used, as pspautotests' threads/threads/stackfree measured it on a PSP: threads
+//with 4 KiB stacks, each making its frame as the PSP's compiler made them there (the return address at its foot,
+//just above the locals) and asking about itself. A 16-byte frame leaves 0xea0 free; a 1 KiB array of zeros below
+//the return address, 0xaa0; the same array of 0xff bytes, 0xea0 again (they look like the stack's fill).
+static auto stackFree() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto thread = [&](u32 entry, u32 locals, u32 fill, u32 result) {
+      Assembler a{m, entry};
+      a.put(addiu(sp, sp, -s32(locals + 16)));
+      a.put(sw(ra, locals, sp));
+      if(locals) {  //the locals filled, a word at a time
+        a.li(t2, fill * 0x0101'0101);
+        a.put(addu(t0, sp, zero));
+        a.put(addiu(t1, sp, locals));
+        u32 loop = a.here();
+        a.put(sw(t2, 0, t0));
+        a.put(addiu(t0, t0, 4));
+        a.put(bne(t0, t1, int32_t(loop - (a.here() + 4)) / 4));
+        a.put(nop);
+      }
+      a.li(a0, 0);
+      a.call("sceKernelGetThreadStackFreeSize");
+      a.li(t0, result); a.put(sw(v0, 0, t0));
+      a.call("sceKernelExitThread");
+    };
+    thread(0x0880'2000, 0, 0, R);
+    thread(0x0880'2400, 0x400, 0x00, R + 4);
+    thread(0x0880'2800, 0x400, 0xff, R + 8);
+    Assembler main{m, 0x0880'1000};
+    for(u32 entry : {0x0880'2000u, 0x0880'2400u, 0x0880'2800u}) {
+      main.li(a0, m.string("stack")); main.li(a1, entry); main.li(a2, 0x10); main.li(a3, 0x1000);
+      main.li(t0, 0); main.li(t1, 0);
+      main.call("sceKernelCreateThread");
+      main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelStartThread");  //above main: it runs now
+    }
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.system.memory.read(4, R), 0xea0);
+    CHECK(m.system.memory.read(4, R + 4), 0xaa0);
+    CHECK(m.system.memory.read(4, R + 8), 0xea0);
+    CHECK(m.notes.size(), 0);
+  }
+}
+
 //Clocks and dates: a date as a tick (microseconds since year 1), leap days, dates that can't be; ticks compared;
 //a 64-bit count of microseconds split into seconds and microseconds, from memory and from registers.
 static auto clocks() -> void {
@@ -331,6 +440,7 @@ auto powerTests() -> Tests {
     {"power callbacks", powerCallbacks}, {"power clocks", powerClocks}, {"power volatile memory", volatileMemory},
     {"kernel thread control", threadControl}, {"kernel thread status", threadStatus}, {"kernel clocks", clocks},
     {"kernel mersenne twister", mersenneTwister}, {"kernel odds and ends", oddsAndEnds},
+    {"kernel thread priorities", threadPriorities}, {"kernel thread stack free", stackFree},
   };
 }
 

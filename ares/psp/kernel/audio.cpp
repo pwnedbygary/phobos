@@ -1,135 +1,224 @@
-//Sound output (sceAudio): eight channels a game reserves and hands buffers of 16-bit samples to, which the PSP's
-//audio driver mixes and plays at 44.1 kHz, and one more channel, the SRC channel (sceAudioOutput2 and sceAudioSRC),
-//that plays at a rate of its own.
+//Sound output: the audio driver (sceAudio) as a program sees it. What each call accepts, refuses and returns, and how
+//long it takes, follow pspautotests' audio and intr tests (programs whose results were recorded on a PSP, firmware
+//6.xx) and pspsdk's pspaudio.h, by way of a behavior specification written from them for this code.
 //
-//Only the timing is here so far: the samples aren't played, but each buffer takes as long as it would to play, and
-//a game waiting to hand over the next one waits that long, which is how most games pace their sound (and some their
-//whole game). The driver's behavior, as PPSSPP's notes describe it from tests on the PSP:
-//  - A channel holds one buffer at a time, with nothing queued behind it. The driver reads it straight from the
-//    game's memory as it plays, 64 samples at a time for every channel at once (a block, 64/44100 of a second),
-//    while any channel plays. The first block is taken as the first buffer arrives, before the call that handed it
-//    over returns.
-//  - Handing over a buffer while the channel's last one still plays fails (BUSY) with sceAudioOutput; with
-//    sceAudioOutputBlocking the thread waits for it to finish, then hands it over. One thread may wait per channel; a
-//    second is told BUSY. Either returns the channel's sample count once the buffer is taken.
-//  - The SRC channel holds two buffers, played one after the other; handing over a third fails. Its blocking output
-//    returns once a buffer has finished playing since the last one did (the first after an idle spell at once).
-//What isn't played yet: the samples themselves (the speakers get silence), volumes, mono and stereo alike.
+//The mixer channels: eight, numbered 0-7. A program reserves one with a sample count (a multiple of 64, from 64 to
+//65472) and a format (pairs of 16-bit samples, left and right, or single 16-bit samples, mono). A channel holds one
+//buffer at a time, in its "slot": where the buffer is, and how many of its samples haven't been taken yet. Nothing
+//is copied as a buffer is handed over: the mixer's DMA reads the program's memory as it plays, taking a block of 64
+//samples from every channel with a buffer at each block boundary, every 64/44100 s (about 1451 microseconds), mono
+//as fast as stereo. The first buffer handed over while the DMA is idle starts it, and its first block is taken there
+//and then (the mixer outranks every thread); a buffer handed over while it runs waits for the next boundary. Once a
+//boundary has taken the last samples there were, the DMA runs on for one more block, while that block is heard, and
+//then stops: a buffer handed over before then is taken at the next boundary, one after it starts the DMA again.
+//
+//A blocking output into a busy slot waits until the slot's buffer has been taken, then hands its own over and
+//returns. One thread may wait so on a channel; another is told BUSY at once. So in a steady stream one buffer plays
+//while the next is held by its waiting thread, and each output returns one buffer's time after the one before:
+//that's what paces games' sound threads. 64-sample buffers are paced the same way, a block each: of a run of them
+//handed over one after another from idle, the first is taken as it's handed over, the second goes into the free slot,
+//and each from the third on waits for a boundary, so K of them take K - 2 blocks' time.
+//
+//The SRC channel: one more output beside the mixer, reached by two families of calls (sceAudioOutput2*, and
+//sceAudioSRC* with a rate of its own), with two slots ("armed" buffers, played one after the other) and a completion
+//flag. An output arms its buffer and then waits for a completion: one pending lets it return at once (starting from
+//idle makes one), else it returns when the buffer playing has finished. A buffer's transfer takes its samples' time
+//at the channel's rate; the next one armed carries straight on.
+//
+//The samples aren't mixed yet: the system's sound stream plays silence (System::run()). What a mixer needs is here,
+//at the moments the PSP's takes it: mixerBlock() is where each channel's block of 64 samples is taken (at buffer, so
+//many samples in, in its format, at its volumes), and srcRetire() is where an SRC buffer has been played. Mixing them
+//into a queue for the system's stream to play from comes next.
+//
+//Not here: sceAudioOneshotOutput, input and routing, sceAudioSetFrequency; and the time the calls themselves take on
+//a PSP (an output starting the DMA spends 100 microseconds to a millisecond, an SRC output over 100): system
+//functions take no time here. The PSP's driver leaves a channel marked as waited on for good when a wait for it is
+//refused (an output into a busy channel from an interrupt handler); that isn't copied: the output is refused, and
+//the channel left as it was.
 
-namespace {
-  constexpr u32 AudioSampleRate = 44'100;
-  constexpr u32 AudioBlock = 64;                 //samples a channel gives the mixer at a time
-  constexpr u32 AudioStereo = 0x00, AudioMono = 0x10;  //pspaudio.h's PSP_AUDIO_FORMAT_*
-  constexpr u32 AudioSource = 8;                 //the SRC channel's number among the waits
-  //A block lasts 64 / 44100 s, 483265.3 of the CPU's cycles; 49 blocks are a whole number of them (23680000).
-  constexpr u32 AudioBlocksWhole = 49;
+static constexpr u32 AudioStereo = 0x00, AudioMono = 0x10;
+
+//A mixer channel's sample count: a multiple of 64, from 64 to 65472.
+static auto mixerSamplesValid(u32 samples) -> bool {
+  return samples >= 64 && samples <= 65472 && samples % 64 == 0;
 }
 
-//When block number `block` (counting from the mixer's start) is mixed.
-auto Kernel::audioBlockAt(u64 block) const -> u64 {
-  return audio.mixStart + block * AudioBlock * CPUFrequency / AudioSampleRate;
+//The SRC channel's: 17 to 4111.
+static auto srcSamplesValid(u32 samples) -> bool {
+  return samples >= 17 && samples <= 4111;
 }
 
-//Hands a channel a buffer (address, volumes; a negative volume leaves the channel's as it was): its sample count, or
-//why not. With nothing playing, the mixer starts and takes the buffer's first block at once. A buffer at address 0 is
-//taken but never plays (it counts as a buffer's worth of samples left, as on the PSP).
-auto Kernel::audioOutput(u32 number, u32 address, s32 left, s32 right) -> u32 {
+//The SRC channel's rates; 0 means the output's own, 44.1 kHz.
+static auto srcRateValid(u32 rate) -> bool {
+  for(u32 valid : {0u, 8'000u, 11'025u, 12'000u, 16'000u, 22'050u, 24'000u, 32'000u, 44'100u, 48'000u}) {
+    if(rate == valid) return true;
+  }
+  return false;
+}
+
+//The thread waiting on a channel (0-7), or on the SRC channel (Audio::WaitSrc, Audio::WaitSrcDrain), if one is. Its
+//output's arguments wait with it: the buffer to hand over and its volumes (see Thread's waitPointer, waitCount and
+//waitMode).
+auto Kernel::audioWaiter(u32 waitID) -> Thread* {
+  for(auto& [uid, thread] : threads) {
+    if(thread->status == Status::Waiting && thread->wait == Wait::Audio && thread->waitID == waitID) {
+      return thread.get();
+    }
+  }
+  return nullptr;
+}
+
+//Whether the calling thread may wait for a channel: 0 if it may, else the error its output returns instead. From an
+//interrupt handler, ILLEGAL_CONTEXT; with interrupts held off (sceKernelCpuSuspendIntr), CAN_NOT_WAIT, as
+//pspautotests' intr/waits found. Only a call that has to wait is refused so: one that can finish at once does so
+//whatever the context. (With no thread running at all, which only a test calling directly can arrange, there's no
+//one to wait either.)
+auto Kernel::audioWaitRefused() const -> u32 {
+  if(interrupting) return ErrorIllegalContext;
+  if(!interruptsEnabled || !current) return ErrorCanNotWait;
+  return 0;
+}
+
+//A buffer goes into the free slot of channel number, with the volumes it came with (a negative one leaves that side
+//as it was): they're the channel's from this buffer on. Its samples are all still to take. A null buffer puts nothing
+//in the slot, so nothing plays and the slot stays free, but its count is set all the same (sceAudioGetChannelRestLen
+//tells it). A real buffer starts the DMA if it's idle, and its first block is taken now, as block 0 of the run; while
+//the DMA runs, the buffer waits for the next boundary like any other.
+auto Kernel::handOver(u32 number, u32 buffer, s32 left, s32 right) -> void {
   auto& channel = audio.channels[number];
-  if(!channel.reserved) return ErrorAudioChannelNotInitialized;
-  if(channel.address) return ErrorAudioChannelBusy;
-  channel.remaining = channel.sampleCount;
   if(left >= 0) channel.leftVolume = left;
   if(right >= 0) channel.rightVolume = right;
-  channel.address = address;
-  if(address && !audio.mixing) {
-    audio.mixing = true;
-    audio.mixStart = cycles;
-    audio.blocks = 0;
-    mixAudio();
-  }
-  return channel.sampleCount;
+  channel.buffer = buffer;
+  channel.length = channel.remaining = channel.sampleCount;
+  if(!buffer || audio.dma.running) return;
+  audio.dma.running = true;
+  audio.dma.nextBlock = cycles;
+  audio.dma.fraction = 0;
+  mixerBlock();
 }
 
-//A block: 64 samples from every channel playing. A channel whose buffer runs out is free again: a thread waiting to
-//hand it the next one does now, and stops waiting. When none plays any more, the mixer stops.
-auto Kernel::mixAudio() -> void {
-  audio.blocks++;
-  bool playing = false;
+//A block boundary, now: the DMA takes the next 64 samples from every channel with a buffer. That's where they'd be
+//mixed for the speakers: 64 samples from buffer + (length - remaining) samples in (4 bytes each in stereo, 2 in
+//mono), scaled by the channel's volumes (not yet: see the top). A buffer whose last samples go leaves its slot free,
+//and a thread waiting on the channel hands its own buffer over then (to be taken from the next boundary on) and
+//returns with the channel's sample count. A boundary with nothing to take stops the DMA: the block the one before
+//took has been heard. Returns whether a thread woke.
+auto Kernel::mixerBlock() -> bool {
+  bool took = false, woke = false;
   for(u32 number = 0; number < 8; number++) {
     auto& channel = audio.channels[number];
-    if(!channel.address) continue;
-    u32 count = std::min(channel.remaining, AudioBlock);
-    channel.address += count * (channel.format == AudioMono ? 2 : 4);
-    channel.remaining -= count;
-    if(channel.remaining) { playing = true; continue; }
-    channel.address = 0;
-    auto waiter = threads.find(channel.waiting);
-    channel.waiting = 0;
-    if(waiter == threads.end() || waiter->second->status != Status::Waiting) continue;
-    auto& thread = *waiter->second;
-    if(thread.wait != Wait::Audio || thread.waitID != number) continue;
-    ready(thread, audioOutput(number, channel.waitingAddress, channel.waitingLeft, channel.waitingRight));
-    playing |= channel.address != 0;
+    if(!channel.buffer) continue;
+    took = true;
+    channel.remaining = channel.remaining > 64 ? channel.remaining - 64 : 0;
+    if(channel.remaining) continue;
+    channel.buffer = 0;
+    if(auto thread = audioWaiter(number)) {
+      handOver(number, thread->waitPointer, s32(thread->waitCount), s32(thread->waitMode));
+      ready(*thread, channel.sampleCount);
+      woke = true;
+    }
   }
-  if(!playing) audio.mixing = false;
-  if(audio.blocks == AudioBlocksWhole) {  //start counting again from a whole number of cycles, as they'd overflow
-    audio.mixStart = audioBlockAt(AudioBlocksWhole);
-    audio.blocks = 0;
+  if(!took) {
+    audio.dma.running = false;
+    return woke;
   }
+  auto& dma = audio.dma;
+  dma.fraction += Audio::BlockFraction;
+  dma.nextBlock += Audio::BlockCycles + dma.fraction / 49;
+  dma.fraction %= 49;
+  return woke;
 }
 
-//The SRC channel's first buffer is done: the next plays on, and the oldest thread waiting is told, or else the next
-//to output finds it done already.
-auto Kernel::sourceFinished() -> void {
-  auto& source = audio.source;
-  source.queued--;
-  source.lengths[0] = source.lengths[1];
-  if(source.queued) source.finishAt += u64(source.lengths[0]) * CPUFrequency / source.frequency;
-  Thread* oldest = nullptr;
-  for(auto& [uid, thread] : threads) {
-    if(thread->status != Status::Waiting || thread->wait != Wait::Audio || thread->waitID != AudioSource) continue;
-    if(!oldest || thread->readySince < oldest->readySince) oldest = thread.get();
+//The four mixer outputs, once each call's own volume rule has passed (below): (channel, buffer, left and right
+//volumes, negative for the channel's own). Then, in this order: the channel's number (INVALID_CHANNEL), its
+//reservation (NOT_INIT, from any context), the slot. A free slot takes the buffer, and the call returns the
+//channel's sample count at once, without waiting for it to play. A busy slot turns a non-blocking output away (BUSY).
+//A blocking one waits until the slot's buffer has been taken, then hands its own over and returns; unless another
+//thread waits on the channel already (BUSY at once: one waiter per channel), or this one can't wait
+//(audioWaitRefused()). A null buffer goes the same way: on a busy channel, a blocking one is how a program waits for
+//it to drain.
+auto Kernel::mixerOutput(u32 number, u32 buffer, s32 left, s32 right, bool blocking) -> void {
+  if(number >= 8) return result(ErrorAudioInvalidChannel);
+  auto& channel = audio.channels[number];
+  if(!channel.reserved) return result(ErrorAudioChannelNotInitialized);
+  if(!channel.buffer) {  //(a thread only waits while the slot is busy)
+    handOver(number, buffer, left, right);
+    return result(channel.sampleCount);
   }
-  if(oldest) ready(*oldest, oldest->waitCount);
-  else source.completion = true;
+  if(!blocking || audioWaiter(number)) return result(ErrorAudioChannelBusy);
+  if(auto refused = audioWaitRefused()) return result(refused);
+  current->waitPointer = buffer;
+  current->waitCount = u32(left);
+  current->waitMode = u32(right);
+  block(Wait::Audio, number, 0);
 }
 
-//What's due: the mixer's blocks, the SRC channel's buffers ending. True if a thread woke.
-auto Kernel::audioEvents() -> bool {
+//How long the SRC channel takes to play `samples` at its rate, in cycles: rounded up, so never faster than a PSP.
+auto Kernel::srcDuration(u32 samples) const -> u64 {
+  return (u64(samples) * CPUFrequency + audio.src.rate - 1) / audio.src.rate;
+}
+
+//The SRC channel's first armed buffer has been transferred: its slot is free, and the second, if there is one, plays
+//on from here, at once. That's a completion: it wakes the thread waiting for one, or stays pending for the next
+//output to take. Once nothing is armed, the threads waiting for the channel to drain return as well. (The PSP
+//retires a buffer as its transfer ends, about 100 microseconds before its end is heard; nothing is heard here yet.)
+//Returns whether a thread woke.
+auto Kernel::srcRetire() -> bool {
+  auto& src = audio.src;
+  src.buffers[0] = src.buffers[1];
+  src.buffers[1] = {};
+  src.armed--;
+  if(src.armed) src.retireAt += srcDuration(src.buffers[0].sampleCount);
   bool woke = false;
-  while(audio.mixing && cycles >= audioBlockAt(audio.blocks)) {
-    auto before = readySequence;
-    mixAudio();
-    woke |= readySequence != before;
+  if(auto thread = audioWaiter(Audio::WaitSrc)) {
+    ready(*thread, thread->waitCount);
+    woke = true;
+  } else {
+    src.completion = true;
   }
-  while(audio.source.queued && cycles >= audio.source.finishAt) {
-    auto before = readySequence;
-    sourceFinished();
-    woke |= readySequence != before;
+  if(src.armed) return woke;
+  while(auto thread = audioWaiter(Audio::WaitSrcDrain)) {
+    ready(*thread, 0);
+    woke = true;
   }
   return woke;
 }
 
-//The next audio event's cycle, or none (~0).
+//What has come due by now, in the order it came: the mixer's block boundaries and the SRC channel's buffers being
+//retired. Returns whether a thread woke.
+auto Kernel::audioEvents() -> bool {
+  bool woke = false;
+  while(true) {
+    u64 block = audio.dma.running ? audio.dma.nextBlock : ~0ull;
+    u64 retire = audio.src.armed ? audio.src.retireAt : ~0ull;
+    if(std::min(block, retire) > cycles) return woke;
+    if(block <= retire ? mixerBlock() : srcRetire()) woke = true;
+  }
+}
+
+//When the next of them is due (never: ~0).
 auto Kernel::nextAudioEvent() const -> u64 {
-  u64 next = ~0ull;
-  if(audio.mixing) next = audioBlockAt(audio.blocks);
-  if(audio.source.queued) next = std::min(next, audio.source.finishAt);
+  u64 next = audio.dma.running ? audio.dma.nextBlock : ~0ull;
+  if(audio.src.armed) next = std::min(next, audio.src.retireAt);
   return next;
 }
 
-//(channel 0-7, or -1 for the highest free one; samples per buffer, 64 to 65472 in steps of 64; format: 0x00 stereo,
-//0x10 mono): the channel reserved.
+//(channel, sample count, format): reserves a mixer channel and returns its number. A negative channel asks for the
+//highest free one, free meaning neither reserved nor still playing a buffer it was released with. Checked in this
+//order: the search (NO_CHANNELS), the number (8 and up: INVALID_CHANNEL), a reservation already (INVALID_CHANNEL
+//too), the sample count (INVALID_SIZE), the format (INVALID_FORMAT). The volumes start at 0. A channel asked for by
+//number may still be playing out a buffer: only its reservation counts, and an output to it is BUSY till that's done.
 auto Kernel::sceAudioChReserve() -> void {
   s32 number = s32(arg(0));
   u32 samples = arg(1), format = arg(2);
   if(number < 0) {
-    number = 7;
-    while(number >= 0 && (audio.channels[number].sampleCount || audio.channels[number].address)) number--;
+    for(number = 7; number >= 0; number--) {
+      if(!audio.channels[number].reserved && !audio.channels[number].buffer) break;
+    }
     if(number < 0) return result(ErrorAudioNoChannels);
   }
   if(number >= 8 || audio.channels[number].reserved) return result(ErrorAudioInvalidChannel);
-  if(samples & 63 || !samples || samples > 65536 - 64) return result(ErrorAudioSampleCount);
+  if(!mixerSamplesValid(samples)) return result(ErrorAudioSampleCount);
   if(format != AudioStereo && format != AudioMono) return result(ErrorAudioInvalidFormat);
   auto& channel = audio.channels[number];
   channel.reserved = true;
@@ -139,194 +228,191 @@ auto Kernel::sceAudioChReserve() -> void {
   result(number);
 }
 
-//(channel): free again (a buffer still playing plays on). Not while a thread waits on it.
+//(channel): the reservation ends; a buffer in the slot plays out. Not while a thread waits on the channel (BUSY).
 auto Kernel::sceAudioChRelease() -> void {
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  auto& channel = audio.channels[arg(0)];
+  u32 number = arg(0);
+  if(number >= 8) return result(ErrorAudioInvalidChannel);
+  auto& channel = audio.channels[number];
   if(!channel.reserved) return result(ErrorAudioChannelNotReserved);
-  if(channel.waiting) return result(ErrorAudioChannelBusy);
+  if(audioWaiter(number)) return result(ErrorAudioChannelBusy);
   channel.reserved = false;
-  channel.sampleCount = 0;
   result(0);
 }
 
-//Hands over a buffer, waiting for the channel's last one to finish first.
-auto Kernel::audioOutputBlocking(u32 number, u32 address, s32 left, s32 right) -> void {
-  u32 taken = audioOutput(number, address, left, right);
-  if(taken != ErrorAudioChannelBusy) return result(taken);
-  auto& channel = audio.channels[number];
-  if(channel.waiting || !current) return result(ErrorAudioChannelBusy);
-  if(!mayWait()) return;
-  channel.waiting = current->uid;
-  channel.waitingAddress = address;
-  channel.waitingLeft = left;
-  channel.waitingRight = right;
-  result(channel.sampleCount);
-  block(Wait::Audio, number, 0);
+//(channel, volume, buffer): one volume for both sides, 0 to 0xFFFF. Above that is refused (INVALID_VOLUME) before
+//anything else is looked at; a negative one (compared signed: 0x80000000 is negative) keeps the channel's volumes.
+auto Kernel::sceAudioOutput() -> void {
+  s32 volume = s32(arg(1));
+  if(volume > 0xffff) return result(ErrorAudioInvalidVolume);
+  mixerOutput(arg(0), arg(2), volume, volume, false);
 }
 
-//(channel, volume 0-0xffff for both sides, buffer)
 auto Kernel::sceAudioOutputBlocking() -> void {
-  if(s32(arg(1)) > 0xffff) return result(ErrorAudioInvalidVolume);
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  audioOutputBlocking(arg(0), arg(2), s32(arg(1)), s32(arg(1)));
+  s32 volume = s32(arg(1));
+  if(volume > 0xffff) return result(ErrorAudioInvalidVolume);
+  mixerOutput(arg(0), arg(2), volume, volume, true);
 }
 
-//(channel, left volume, right volume, buffer): here the volumes are checked as unsigned (PPSSPP's notes).
+//(channel, left volume, right volume, buffer): each side as sceAudioOutput's volume.
+auto Kernel::sceAudioOutputPanned() -> void {
+  s32 left = s32(arg(1)), right = s32(arg(2));
+  if(left > 0xffff || right > 0xffff) return result(ErrorAudioInvalidVolume);
+  mixerOutput(arg(0), arg(3), left, right, false);
+}
+
+//(channel, left volume, right volume, buffer): stricter than the others: the two volumes ORed together must be
+//0xFFFF at most, so a negative one is refused too.
 auto Kernel::sceAudioOutputPannedBlocking() -> void {
   if((arg(1) | arg(2)) > 0xffff) return result(ErrorAudioInvalidVolume);
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  audioOutputBlocking(arg(0), arg(3), s32(arg(1)), s32(arg(2)));
+  mixerOutput(arg(0), arg(3), s32(arg(1)), s32(arg(2)), true);
 }
 
-//(channel, volume, buffer): without waiting.
-auto Kernel::sceAudioOutput() -> void {
-  if(s32(arg(1)) > 0xffff) return result(ErrorAudioInvalidVolume);
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  result(audioOutput(arg(0), arg(2), s32(arg(1)), s32(arg(1))));
-}
-
-auto Kernel::sceAudioOutputPanned() -> void {
-  if(s32(arg(1)) > 0xffff || s32(arg(2)) > 0xffff) return result(ErrorAudioInvalidVolume);
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  result(audioOutput(arg(0), arg(3), s32(arg(1)), s32(arg(2))));
-}
-
-//(channel): the samples still to play: the buffer's left, and a waiting thread's whole buffer. The two functions
-//differ only for a buffer at address 0, which the second doesn't count.
+//(channel): the samples still to play: what the slot has left (or the count a null buffer set), plus a whole buffer
+//if a thread waits to hand one over. The reservation isn't looked at: an idle channel has 0.
 auto Kernel::sceAudioGetChannelRestLen() -> void {
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  auto& channel = audio.channels[arg(0)];
-  result(channel.remaining + (channel.waiting ? channel.sampleCount : 0));
+  u32 number = arg(0);
+  if(number >= 8) return result(ErrorAudioInvalidChannel);
+  auto& channel = audio.channels[number];
+  result(channel.remaining + (audioWaiter(number) ? channel.sampleCount : 0));
 }
 
+//(channel): the same, except that what the slot has left counts only for a real buffer: after a null one, 0.
 auto Kernel::sceAudioGetChannelRestLength() -> void {
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  auto& channel = audio.channels[arg(0)];
-  result((channel.address ? channel.remaining : 0) + (channel.waiting ? channel.sampleCount : 0));
+  u32 number = arg(0);
+  if(number >= 8) return result(ErrorAudioInvalidChannel);
+  auto& channel = audio.channels[number];
+  result((channel.buffer ? channel.remaining : 0) + (audioWaiter(number) ? channel.sampleCount : 0));
 }
 
-//(channel, samples per buffer from now on)
+//(channel, sample count): the count of the buffers handed over from now on. Checked in this order: the channel's
+//number, the count (INVALID_SIZE, even for a channel not reserved), a thread waiting (BUSY), the reservation
+//(NOT_INIT, not NOT_RESERVED).
 auto Kernel::sceAudioSetChannelDataLen() -> void {
-  u32 samples = arg(1);
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  if(samples & 63 || !samples || samples > 65536 - 64) return result(ErrorAudioSampleCount);
-  auto& channel = audio.channels[arg(0)];
-  if(channel.waiting) return result(ErrorAudioChannelBusy);
+  u32 number = arg(0), samples = arg(1);
+  if(number >= 8) return result(ErrorAudioInvalidChannel);
+  if(!mixerSamplesValid(samples)) return result(ErrorAudioSampleCount);
+  if(audioWaiter(number)) return result(ErrorAudioChannelBusy);
+  auto& channel = audio.channels[number];
   if(!channel.reserved) return result(ErrorAudioChannelNotInitialized);
   channel.sampleCount = samples;
   result(0);
 }
 
-//(channel, format): not while a buffer plays or a thread waits.
+//(channel, format): stereo or mono from the next buffer on. Not while a buffer is in the slot or a thread waits
+//(BUSY, checked before the reservation, NOT_RESERVED); then the format (INVALID_FORMAT).
 auto Kernel::sceAudioChangeChannelConfig() -> void {
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  auto& channel = audio.channels[arg(0)];
-  if(channel.waiting || channel.address) return result(ErrorAudioChannelBusy);
+  u32 number = arg(0), format = arg(1);
+  if(number >= 8) return result(ErrorAudioInvalidChannel);
+  auto& channel = audio.channels[number];
+  if(channel.buffer || audioWaiter(number)) return result(ErrorAudioChannelBusy);
   if(!channel.reserved) return result(ErrorAudioChannelNotReserved);
-  if(arg(1) != AudioStereo && arg(1) != AudioMono) return result(ErrorAudioInvalidFormat);
-  channel.format = arg(1);
+  if(format != AudioStereo && format != AudioMono) return result(ErrorAudioInvalidFormat);
+  channel.format = format;
   result(0);
 }
 
-//(channel, left volume, right volume): a negative one is left as it was.
+//(channel, left volume, right volume): a side above 0xFFFF is refused (INVALID_VOLUME), before the channel's number
+//is looked at; a negative side is left as it is. Neither the reservation nor a thread waiting matters.
 auto Kernel::sceAudioChangeChannelVolume() -> void {
   s32 left = s32(arg(1)), right = s32(arg(2));
   if(left > 0xffff || right > 0xffff) return result(ErrorAudioInvalidVolume);
-  if(arg(0) >= 8) return result(ErrorAudioInvalidChannel);
-  if(left >= 0) audio.channels[arg(0)].leftVolume = left;
-  if(right >= 0) audio.channels[arg(0)].rightVolume = right;
+  u32 number = arg(0);
+  if(number >= 8) return result(ErrorAudioInvalidChannel);
+  auto& channel = audio.channels[number];
+  if(left >= 0) channel.leftVolume = left;
+  if(right >= 0) channel.rightVolume = right;
   result(0);
 }
 
-//The SRC channel. Reserving it: (samples per buffer, 17 to 4111; the top bit ignored), at 44.1 kHz in stereo; or
-//(samples, rate: 0 for 44.1 kHz or one of the nine it takes, format: 2, stereo, alone).
-auto Kernel::sourceReserve(u32 samples, u32 frequency) -> void {
-  auto& source = audio.source;
+//Reserving the SRC channel (sample count, rate, channels), for either family: sceAudioOutput2Reserve(n) is
+//sceAudioSRCChReserve(n, 44100, 2). Checked in this order: 4 channels (a "not supported" code of its own), any other
+//number but 2 (INVALID_SIZE), the sample count with its top bit ignored (17-4111, else INVALID_SIZE), the rate
+//(INVALID_FREQUENCY; no bit is ignored there), and the channel reserved already, by either family
+//(ALREADY_RESERVED). Reserving it doesn't take a mixer channel, nor does it need one.
+auto Kernel::srcReserve(u32 samples, u32 rate, u32 channels) -> void {
+  auto& src = audio.src;
+  if(channels == 4) return result(ErrorNotImplemented);
+  if(channels != 2) return result(ErrorInvalidSize);
   samples &= 0x7fff'ffff;
-  if(samples < 17 || samples > 4111) return result(ErrorInvalidSize);
-  if(source.reserved) return result(ErrorAudioChannelAlreadyReserved);
-  source = {};
-  source.reserved = true;
-  source.sampleCount = samples;
-  source.frequency = frequency ? frequency : AudioSampleRate;
+  if(!srcSamplesValid(samples)) return result(ErrorInvalidSize);
+  if(!srcRateValid(rate)) return result(ErrorAudioInvalidFrequency);
+  if(src.reserved) return result(ErrorAudioChannelAlreadyReserved);
+  src.reserved = true;
+  src.sampleCount = samples;
+  src.rate = rate ? rate : 44'100;
+  src.completion = false;
   result(0);
 }
 
-auto Kernel::sceAudioOutput2Reserve() -> void {
-  sourceReserve(arg(0), 0);
-}
-
-auto Kernel::sceAudioSRCChReserve() -> void {
-  u32 frequency = arg(1), format = arg(2);
-  static constexpr u32 Rates[] = {44'100, 22'050, 11'025, 48'000, 32'000, 24'000, 16'000, 12'000, 8'000};
-  if(format == 4) return result(ErrorNotImplemented);
-  if(format != 2) return result(ErrorInvalidSize);
-  u32 samples = arg(0) & 0x7fff'ffff;
-  if(samples < 17 || samples > 4111) return result(ErrorInvalidSize);
-  if(frequency && std::find(std::begin(Rates), std::end(Rates), frequency) == std::end(Rates)) {
-    return result(ErrorAudioInvalidFrequency);
-  }
-  sourceReserve(samples, frequency);
-}
-
-//Releasing it: not while it plays. It leaves a buffer's end behind it, which the next output after reserving it again
-//finds (PPSSPP's notes).
-auto Kernel::sourceRelease() -> void {
-  auto& source = audio.source;
-  if(!source.reserved) return result(ErrorAudioChannelNotReserved);
-  if(source.queued) return result(ErrorAudioChannelAlreadyReserved);
-  source = {};
-  source.completion = true;
+//Releasing it, by either family's call, whichever reserved it, from any thread: refused while a buffer is armed
+//(ALREADY_RESERVED), not put off until it has played. A program drains the channel first, with a null output.
+auto Kernel::srcRelease() -> void {
+  auto& src = audio.src;
+  if(!src.reserved) return result(ErrorAudioChannelNotReserved);
+  if(src.armed) return result(ErrorAudioChannelAlreadyReserved);
+  src.reserved = false;
   result(0);
 }
 
-auto Kernel::sceAudioOutput2Release() -> void { sourceRelease(); }
-auto Kernel::sceAudioSRCChRelease() -> void { sourceRelease(); }
-
-//(volume up to 0xfffff, buffer): queues the buffer if there's room (two at most), then waits for a buffer to finish
-//(at once if one has since the last wait, or if this one started the channel). A buffer at address 0 only waits.
-auto Kernel::sourceOutput(u32 volume, u32 address) -> void {
-  auto& source = audio.source;
-  if(volume > 0xf'ffff) return result(ErrorAudioInvalidVolume);
-  if(!source.reserved) return result(ErrorAudioChannelNotReserved);
-  if(source.queued == 2) return result(ErrorAudioChannelBusy);
-  u32 taken = 0;
-  if(address) {
-    source.volume = volume;
-    if(!source.queued) {
-      source.completion = true;  //starting to play counts as a buffer done, so the first output doesn't wait
-      source.finishAt = cycles + u64(source.sampleCount) * CPUFrequency / source.frequency;
-    }
-    source.lengths[source.queued++] = source.sampleCount;
-    taken = source.sampleCount;
-  } else if(!source.queued) {
-    return result(0);
+//(volume, buffer), for either family. The volume first: 0 to 0xFFFFF, a negative one refused (INVALID_VOLUME); then
+//the reservation (NOT_RESERVED); then, with both slots armed, BUSY at once, whoever else waits. Otherwise a real
+//buffer is armed in the free slot, with the channel's sample count as it is now (sceAudioOutput2ChangeLength's later
+//changes are for later buffers), playing at once if nothing was; and the call waits for a completion. One pending is
+//taken and the call returns at once (starting from idle makes one, so the first output after a pause doesn't wait);
+//else it returns as the buffer playing finishes, one buffer's time in a steady stream. It returns the sample count
+//its buffer was armed with.
+//
+//A null buffer arms nothing and returns 0: at once if nothing is armed, else once everything armed has played.
+//
+//A call that would wait from an interrupt handler or with interrupts held off returns the wait's error instead
+//(pspautotests' intr/waits), even with a completion pending, which stays pending; but its buffer stays armed, and
+//plays.
+auto Kernel::srcOutput() -> void {
+  auto& src = audio.src;
+  s32 volume = s32(arg(0));
+  u32 buffer = arg(1);
+  if(volume < 0 || volume > 0xf'ffff) return result(ErrorAudioInvalidVolume);
+  if(!src.reserved) return result(ErrorAudioChannelNotReserved);
+  if(src.armed == 2) return result(ErrorAudioChannelBusy);
+  if(!buffer) {
+    if(!src.armed) return result(0);
+    if(auto refused = audioWaitRefused()) return result(refused);
+    return block(Wait::Audio, Audio::WaitSrcDrain, 0);
   }
-  if(interrupting) return result(ErrorIllegalContext);
-  if(source.completion || !current) {
-    source.completion = false;
-    return result(taken);
+  if(!src.armed) {
+    src.retireAt = cycles + srcDuration(src.sampleCount);
+    src.completion = true;
   }
-  result(taken);
-  current->waitCount = taken;  //what it returns once woken
-  current->readySince = ++readySequence;
-  block(Wait::Audio, AudioSource, 0);
+  src.buffers[src.armed++] = {buffer, src.sampleCount, u32(volume)};
+  if(auto refused = audioWaitRefused()) return result(refused);
+  if(src.completion) {
+    src.completion = false;
+    return result(src.sampleCount);
+  }
+  current->waitCount = src.sampleCount;
+  block(Wait::Audio, Audio::WaitSrc, 0);
 }
 
-auto Kernel::sceAudioOutput2OutputBlocking() -> void { sourceOutput(arg(0), arg(1)); }
-auto Kernel::sceAudioSRCOutputBlocking() -> void { sourceOutput(arg(0), arg(1)); }
+auto Kernel::sceAudioOutput2Reserve() -> void { srcReserve(arg(0), 44'100, 2); }
+auto Kernel::sceAudioSRCChReserve() -> void { srcReserve(arg(0), arg(1), arg(2)); }
+auto Kernel::sceAudioOutput2Release() -> void { srcRelease(); }
+auto Kernel::sceAudioSRCChRelease() -> void { srcRelease(); }
+auto Kernel::sceAudioOutput2OutputBlocking() -> void { srcOutput(); }
+auto Kernel::sceAudioSRCOutputBlocking() -> void { srcOutput(); }
 
-//(samples per buffer from now on): the buffers queued keep their lengths.
-auto Kernel::sceAudioOutput2ChangeLength() -> void {
-  if(arg(0) - 17 >= 0xfff) return result(ErrorAudioSampleCount);
-  if(!audio.source.reserved) return result(ErrorAudioChannelNotReserved);
-  audio.source.sampleCount = arg(0);
-  result(0);
-}
-
-//The samples queued, counted in buffers of the present length.
+//The samples still to play: each armed buffer counts as the channel's sample count as it is now, however far it has
+//played (so after sceAudioOutput2ChangeLength(64), a 4096-sample buffer still playing counts 64).
 auto Kernel::sceAudioOutput2GetRestSample() -> void {
-  if(!audio.source.reserved) return result(ErrorAudioChannelNotReserved);
-  result(audio.source.queued * audio.source.sampleCount);
+  if(!audio.src.reserved) return result(ErrorAudioChannelNotReserved);
+  result(audio.src.armed * audio.src.sampleCount);
+}
+
+//(sample count): the count of the buffers handed over from now on, 17 to 4111 (else INVALID_SIZE, the mixer's code,
+//checked before the reservation); the buffers armed already play out at their own.
+auto Kernel::sceAudioOutput2ChangeLength() -> void {
+  u32 samples = arg(0);
+  if(!srcSamplesValid(samples)) return result(ErrorAudioSampleCount);
+  if(!audio.src.reserved) return result(ErrorAudioChannelNotReserved);
+  audio.src.sampleCount = samples;
+  result(0);
 }

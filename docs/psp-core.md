@@ -1336,7 +1336,10 @@ the Street Fighter III 3rd Strike port load from the user's CHDs and run their o
 they asked for next, as a scratch host runner (never committed: the system as `tests/psp/ares` builds it, booting a
 CHD, tracing every system call, dumping frames) showed it, function by function. Behavior comes from pspsdk's
 headers and from PPSSPP's reading of the PSP (its tests on the hardware, pspautotests), which the code cites where it
-depends on it; our own code.
+depends on it; our own code. Sound output, the sub-interrupt handlers (with the vertical blank's dispatch),
+sceKernelChangeThreadPriority and sceKernelGetThreadStackFreeSize were then rewritten clean-room, from a behavior
+specification drawn from pspautotests' recorded results and pspsdk alone, without reading any emulator's code or
+the code they replace.
 
 - **NIDs that aren't their names' hashes.** Sony gave some later functions random NIDs, so the kernel can list a
   function by the NID games import (`addNID` in kernel.cpp): sceKernelSetCompiledSdkVersion370 and its siblings for
@@ -1368,19 +1371,48 @@ depends on it; our own code.
 - **The display** (display.cpp): sceDisplayWaitVblankStartCB, WaitVblank (not waiting, returning 1, inside the
   vertical blank, which lasts 0.77 ms as pspautotests measured), IsVblank, GetCurrentHcount (lines of 525 dots at
   9 MHz, counted from the blank's start).
-- **Interrupt handlers** (interrupts.cpp): sceKernelRegisterSubIntrHandler, ReleaseSubIntrHandler, EnableSubIntr,
-  DisableSubIntr for the vertical blank's sub-interrupts 0-15 (the rest are the kernel's) and the GE's (accepted;
-  nothing raises them yet), with interruptman.prx's errors in PPSSPP's order. The vertical blank's run at each blank
-  as calls into the program (part 9), with the global pointer they were registered with; time goes on for them
-  while every thread waits. Lumines' main task waited on its handler.
-- **Sound output's timing** (audio.cpp). The eight channels (reserve, release, blocking and non-blocking outputs,
-  panned or not, rest lengths, data length, format, volume) and the SRC channel (sceAudioOutput2*, sceAudioSRC*), as
-  the PSP's driver behaves by PPSSPP's notes from tests: a channel holds one buffer, read 64 samples at a time for
-  every channel (a block each 64/44100 s) while any plays, the first block taken as the first buffer arrives; a
-  blocking output waits until the channel's buffer has played (one waiter per channel; a second is told BUSY); the
-  SRC channel queues two buffers and returns once one has finished. **The samples aren't played yet: the speakers
-  get silence**, and volumes and formats do nothing; but every buffer takes its playing time, which is what paces
-  the games' sound threads (Lumines' spun at full speed without it, starving its game).
+- **Interrupt handlers** (interrupts.cpp): sceKernelRegisterSubIntrHandler, ReleaseSubIntrHandler, EnableSubIntr
+  and DisableSubIntr, written (clean-room, from a behavior specification) after pspautotests' intr/registersub,
+  intr/releasesub and intr/enablesub, whose results were recorded on a PSP (firmware 6.61, under PSPLink), and
+  pspsdk's pspintrman.h. A program may register only on the GE's interrupt (25) and the vertical blank's (30). The
+  other numbers below 67 are restated in a table in numeric order, as three kinds: no handler (NOTFOUND_HANDLER for
+  both calls), a handler without sub-interrupts (7, 10, 12, 15-20, 22-24, 26, 31, 36, 50, 56-61, 65: ILLEGAL_INTRCODE
+  for both), and sub-interrupts the kernel keeps (4, 6, 21: registering is ILLEGAL_INTRCODE, releasing finds nothing,
+  NOTFOUND_HANDLER); 67 and up are illegal. On the vertical blank, sub-interrupts 0-15 are the program's, the display
+  driver holds 18-20 and 24-26 (FOUND_HANDLER), the rest up to 31 are illegal to register and not found to release.
+  A null handler takes no place. Enabling and disabling look at the numbers alone, so a sub-interrupt enabled before
+  its handler is registered runs; releasing disables it. The vertical blank's handlers run at each blank, by number,
+  as calls into the program (part 9), with (their number, their argument) and the global pointer they were
+  registered with; time goes on for them while every thread waits (Lumines' main task waits on its handler). While
+  they can't run (interrupts held off, or another call running), the blank stays pending, once, as the PSP's
+  interrupt controller keeps an interrupt: however many blanks go by, each handler runs once when they can. (A
+  review had found the previous code queueing a call for every blank held off: 600 after 600.) Untested on a PSP:
+  the GE's sub-interrupts beyond 0 (all 32 are the program's here), and enabling on interrupts other than 30.
+- **Sound output** (audio.cpp), rewritten clean-room from a behavior specification drawn from pspautotests' audio/*
+  and intr/waits results (recorded on a PSP) and pspsdk's pspaudio.h. The eight mixer channels: reserving (-1 or any
+  negative number for the highest free channel, one released but still playing out passed over), releasing (refused
+  while a thread waits; a buffer in the slot plays out), blocking and non-blocking outputs, panned or not, each with
+  its own volume rule (a negative volume keeps the channel's, except for the panned blocking output, which refuses
+  it), the two rest lengths (sceAudioGetChannelRestLen counting a null buffer's count, RestLength not), the data
+  length, format and volume changes, each call's errors in the order the tests show. A channel holds one buffer,
+  which the mixer's DMA reads a block of 64 samples at a time from every channel with one, every 64/44100 s (exact
+  to the cycle: a block is 483,265 and 15/49 cycles). The first buffer to an idle DMA loses its first block at once;
+  one joining a running DMA waits for the next boundary; after the last samples the DMA runs one more block, then
+  stops. A blocking output into a busy channel waits until its buffer has been taken (one waiter per channel; a
+  second is told BUSY at once), so a stream of blocking outputs returns a buffer's time apart, and 64-sample ones a
+  block apart: 100 of them take 98 blocks, about 142 ms, never less (the previous code didn't pace them at all). A
+  blocking null buffer is how a program waits for a channel to drain. The SRC channel (sceAudioOutput2* and
+  sceAudioSRC*, one channel reached two ways, at 8-48 kHz or 0 for 44.1): two buffers armed at most, transferred one
+  after the other at its rate; an output arms its buffer and waits for a completion (one pending returns at once, and
+  starting from idle makes one), so a steady stream returns a buffer apart; a null output waits until everything
+  armed has played; releasing is refused while anything is armed. From an interrupt handler or with interrupts held
+  off, an output that would have to wait gets ILLEGAL_CONTEXT or CAN_NOT_WAIT (an SRC output's buffer stays armed and
+  plays). **The samples aren't mixed yet: the speakers get silence**, but every buffer takes its playing time, which
+  is what paces the games' sound threads (Lumines' spun at full speed without it, starving its game). The mixer takes
+  each block where a mixer would read it (its address, format and volumes are at hand), so mixing into the system's
+  stream comes next. Not done: sceAudioOneshotOutput, input, sceAudioSetFrequency, and the time the calls themselves
+  take on a PSP (100 µs to 1 ms for an output that starts the DMA); the driver's defect that leaves a channel marked
+  as waited on for good after a refused wait isn't copied.
 - **Power** (power.cpp): the battery (on the charger, full), callbacks for the power switch (16 slots), the clocks
   as games set them and read them back (floats in f0; changing the PLL makes the caller wait as PPSSPP measured: 150
   ms, 16.6 between 266 and 333 MHz). The CPU's time still counts 333 MHz cycles, one per instruction, whatever is
@@ -1408,20 +1440,25 @@ depends on it; our own code.
   save's PARAM.SFO and icons, and drawing the dialogs. A message dialog is answered Yes at once (its text noted); the
   keyboard, network settings, game sharing and the browser are cancelled. sceUtilityLoadModule (and the net module
   versions) marks the optional libraries the HLE provides loaded.
-- **Threads and clocks**: sceKernelChangeThreadPriority, GetThreadExitStatus, TerminateThread,
-  TerminateDeleteThread, Suspend/ResumeThread (a suspended thread isn't scheduled whatever its state),
-  ChangeCurrentThreadAttr, GetThreadStackFreeSize (new stacks are filled with 0xff and the thread's ID written at
-  their bottom, as on a PSP), ReferSemaStatus, the profilers (a retail PSP has none), SysClock2USec(Wide),
-  sceKernelLibcClock, sceRtcGetTick and CompareTick, the Mersenne Twister in the program's memory, sceKernelPrintf,
-  sceDmacMemcpy, the WLAN switch (off), sceImposeSetLanguageMode, and sceKernelStopUnloadSelfModuleWithStatus, which
-  ends the program (a C++ abort ends there).
+- **Threads and clocks**: sceKernelChangeThreadPriority (0x08-0x77, 0 for the caller's own, a dormant thread
+  refused; the thread goes to the back of its new priority's line, so the caller gives way to its equals; a thread
+  started again is back at its first priority: pspautotests' threads/threads/change), GetThreadExitStatus,
+  TerminateThread, TerminateDeleteThread, Suspend/ResumeThread (a suspended thread isn't scheduled whatever its
+  state), ChangeCurrentThreadAttr, GetThreadStackFreeSize (new stacks are filled with 0xff and the thread's ID written
+  at their bottom, as on a PSP; the 0xff bytes are counted up from 16 bytes above the bottom, which gives
+  threads/threads/stackfree's 0xea0 and 0xaa0), ReferSemaStatus, the profilers (a retail PSP has none),
+  SysClock2USec(Wide), sceKernelLibcClock, sceRtcGetTick and CompareTick, the Mersenne Twister in the program's
+  memory, sceKernelPrintf, sceDmacMemcpy, the WLAN switch (off), sceImposeSetLanguageMode, and
+  sceKernelStopUnloadSelfModuleWithStatus, which ends the program (a C++ abort ends there).
 - **Save states** carry all of it; the state fields test has every new field, and refuses what no machine could
-  hold (a callback, a waiter or a pool ID not handed out yet, the mixer's count past 49 blocks or started in the
-  future, three buffers on the SRC channel, an SRC rate of 0, and pools that don't hold together: a fixed pool's
-  blocks of 0 bytes, which giving one back divided by, or not adding up to its size, or with pieces; a variable pool
-  with a block size or blocks; a pool outside its block, or whose block isn't there; pieces outside their pool,
-  empty or overlapping). The kernel's layout changed (threads, semaphores, callbacks), so states are version 2: one
-  of version 1 is refused by its header before anything is touched.
+  hold (a callback, a waiter or a pool ID not handed out yet; a buffer in a slot with the DMA stopped, more left of
+  it than it holds, the next block over a block away; three buffers on the SRC channel, a rate it doesn't take, one
+  retiring after its own time; a thread waiting on a channel that nothing will wake; a handler on a sub-interrupt
+  the display driver holds; and pools that don't hold together: a fixed pool's blocks of 0 bytes, which giving one
+  back divided by, or not adding up to its size, or with pieces; a variable pool with a block size or blocks; a pool
+  outside its block, or whose block isn't there; pieces outside their pool, empty or overlapping). The kernel's
+  layout changed (threads, semaphores, callbacks, sound), so states are version 2: one of version 1 is refused by its
+  header before anything is touched.
 
 What the games do now, on the host (the frames are the runner's PNGs, kept outside the repository):
 
@@ -1446,27 +1483,39 @@ file functions (sceIoReadAsync, WaitAsync, PollAsync, ChangeAsyncPriority...), m
 port and Brave Story import them), the module manager's loading (with decryption, another branch's work), and
 playing the sound.
 
-Tests (`tests/psp/run-tests.sh`, 128 groups; `tests/psp/ares` 199 checks): `kernel.cpp` (aligned blocks, the user
-partition from a PBP's and a disc's PARAM.SFO, SDK versions, the self-unload), and new files, programs run on both
-engines: `callbacks.cpp` (callbacks in waits, waits going on after them, seven kinds of CB wait that end at once
+Tests (`tests/psp/run-tests.sh`, 136 groups; `tests/psp/ares` 199 checks): `kernel.cpp` (aligned blocks, the
+user partition from a PBP's and a disc's PARAM.SFO, SDK versions, the self-unload), and new files, programs run on
+both engines: `callbacks.cpp` (callbacks in waits, waits going on after them, seven kinds of CB wait that end at once
 running the callbacks notified first, by priority, called directly, the vertical blank's timing, a vertical blank
-handler held off and released), `power.cpp` (power callbacks, clocks, volatile memory, thread control, stack fill,
-clocks and dates against known values: MT19937's 10000th number, ticks of known dates), `audio.cpp` (channels, the
-blocking outputs returning after 0, 15, 31 and 47 blocks, the SRC channel's queue), `utility.cpp` (a save made,
-loaded, sized, listed, erased and deleted; names reaching out of the save's folder or the stick, among them each
-the review found, and links to elsewhere, refused with nothing touched, in a stick folder inside the test's own so
-any escape shows; buffers outside the program's memory; links that loop, in the sizes and list modes; dialogs;
-modules), `pools.cpp` (fixed and variable pools, waits, timeouts, deletion, a block size of 0 given a block back).
-`states.cpp` refuses 13 kinds of pool that don't hold together, and `tests/psp/ares` a version 1 state. A broken
-version that never resumed a wait after its callbacks failed 18 checks of `callbacks.cpp`. The review's fixes each
-failed their tests first: the savedata groups (a load read the file beside the stick and /etc/hosts, a save wrote
-over homebrew, deletes took PSP/ and the stick), the waits ending at once (no callback ran), a free from a pool with
-blocks of 0 bytes (the undefined-behavior sanitizer's division by zero), the 13 pool states (loaded), the version 1
-state (loaded).
+handler held off and released, ten seconds of blanks held off delivered once, every interrupt and sub-interrupt
+number intr/registersub and intr/releasesub tried, null handlers, enabling), `power.cpp` (power callbacks, clocks,
+volatile memory, thread control, stack fill, priorities as threads/threads/change has them, the free stack sizes of
+threads/threads/stackfree, clocks and dates against known values: MT19937's 10000th number, ticks of known dates),
+`audio.cpp` (channels, the blocking outputs returning after 0, 15, 31 and 47 blocks, the SRC channel's queue, 100
+blocking 64-sample outputs taking 98 blocks, the mixer's timeline (a second channel not read early, the extra block,
+a channel playing out after its release), draining, waits refused in a handler and with interrupts held off),
+`utility.cpp` (a save made, loaded, sized, listed, erased and deleted; names reaching out of the save's folder or the
+stick, among them each the review found, and links to elsewhere, refused with nothing touched, in a stick folder
+inside the test's own so any escape shows; buffers outside the program's memory; links that loop, in the sizes and
+list modes; dialogs; modules), `pools.cpp` (fixed and variable pools, waits, timeouts, deletion, a block size of 0
+given a block back). `states.cpp` refuses 13 kinds of pool that don't hold together, and `tests/psp/ares` a version
+1 state. A broken version that never resumed a wait after its callbacks failed 18 checks of `callbacks.cpp`. The
+review's fixes each failed their tests first: the savedata groups (a load read the file beside the stick and
+/etc/hosts, a save wrote over homebrew, deletes took PSP/ and the stick), the waits ending at once (no callback ran),
+a free from a pool with blocks of 0 bytes (the undefined-behavior sanitizer's division by zero), the 13 pool states
+(loaded), the version 1 state (loaded); and an unpaced mixer and a queued call per held-off blank failed the pacing
+and delivery tests.
 
 Uncertain: the vertical blank's exact length (0.77 ms from a measurement of a wait's end), the hcount's origin;
 whether the PSP notifies a power callback as it's registered (PPSSPP's reading); the VPL's placement; the dialogs'
 timings; the CPU clock not slowing at 222 MHz; the errors taken from PPSSPP's tables where pspsdk has none; which
 group of errors the savedata modes after 11 report from (the bad parameters follow the groups their other errors
 already came from); and whether a CB wait that ends at once runs its callbacks before or after taking what it waited
-for (here, after).
+for (here, after). For sound and interrupts: the 64-sample pacing (K outputs taking K - 2 blocks) follows from the
+measured block model, but only its first two outputs were timed on a PSP (intr/waits); which of a mixer output's
+volume and channel checks comes first, and an SRC output's volume and reservation; a null SRC output on two armed
+buffers (BUSY here; intr/waits' later results show only that it doesn't wait for them); the volumes after reserving
+(0) and the volume scale (0x8000 full, pspsdk's PSP_AUDIO_VOLUME_MAX) for when the samples are mixed; how long a null
+buffer's count stays; the interrupt kinds, recorded once under PSPLink; and which of a bad priority and a bad thread
+sceKernelChangeThreadPriority checks first. Other waits (sceKernelDelayThread and the rest) don't refuse yet with
+interrupts held off, as intr/waits shows a PSP does: only sound's do.

@@ -1,7 +1,8 @@
 //Saving and loading the kernel, for save states: the program (its module, and its imports in the order its syscall
 //codes count them), its threads (each one's registers while it isn't running, and what it waits for), the
-//semaphores, mutexes, event flags and callbacks, the memory handed out, the open files and folders, the controller's
-//samples, the display, the calls into the program, the GE driver's lists, and the clock.
+//semaphores, mutexes, event flags and callbacks, the memory handed out, sound output's channels, the open files and
+//folders, the controller's samples, the display, the calls into the program and the interrupt handlers, the GE
+//driver's lists, and the clock.
 //
 //Open files are saved by their PSP paths: on loading, a host file is opened again where the devices are then, at
 //the position it had (one that's gone since is dropped, and the program's next use of it fails as for any bad file).
@@ -212,19 +213,59 @@ auto Kernel::serialize(serializer& s) -> bool {
   vector(blocks, [&](Block& block) { s(block.uid); text(block.name); s(block.address); s(block.size); });
   s(largeMemory); s(sdkVersion); s(compilerVersion);
   s(powerState.callbacks); s(powerState.pll); s(powerState.cpu); s(powerState.bus); s(powerState.volatileLocked);
-  //sound output: the mixer's blocks counted afresh every 49 (audioBlockAt()), from a start that has come; the SRC
-  //channel's queue two deep at most, at a rate it can divide by
+  //sound output (audio.cpp). A mixer channel's counts are those of buffers (multiples of 64, 65472 at most), its
+  //volumes 0xFFFF at most, its format stereo or mono. A buffer in a slot is being played, so the DMA runs, its next
+  //block no more than a block away (nor overdue by a frame: events() catches up). The SRC channel arms two buffers at
+  //most, only while it's reserved, at a rate it takes, the first one's transfer ending within its own time.
+  bool playing = false;
   for(auto& c : audio.channels) {
-    s(c.reserved); s(c.sampleCount); s(c.format); s(c.leftVolume); s(c.rightVolume); s(c.address); s(c.remaining);
-    s(c.waiting); s(c.waitingAddress); s(c.waitingLeft); s(c.waitingRight);
-    check(c.waiting < nextUID);
+    s(c.reserved); s(c.sampleCount); s(c.format); s(c.leftVolume); s(c.rightVolume);
+    s(c.buffer); s(c.length); s(c.remaining);
+    check(c.sampleCount % 64 == 0 && c.sampleCount <= 65472 && (c.format == 0x00 || c.format == 0x10));
+    check(c.leftVolume <= 0xffff && c.rightVolume <= 0xffff && c.remaining % 64 == 0 && c.remaining <= 65472);
+    check(!c.reserved || mixerSamplesValid(c.sampleCount));
+    check(!c.buffer || (mixerSamplesValid(c.length) && c.remaining && c.remaining <= c.length));
+    if(c.buffer) playing = true;
   }
-  s(audio.mixing); s(audio.mixStart); s(audio.blocks);
-  check(audio.blocks < 49 && audio.mixStart <= cycles);
-  auto& source = audio.source;
-  s(source.reserved); s(source.sampleCount); s(source.frequency); s(source.volume); s(source.queued);
-  s(source.lengths); s(source.finishAt); s(source.completion);
-  check(source.queued <= 2 && source.frequency >= 8'000 && source.frequency <= 48'000);
+  auto& dma = audio.dma;
+  s(dma.running); s(dma.nextBlock); s(dma.fraction);
+  check(dma.fraction < 49 && (!playing || dma.running));
+  check(!dma.running || (dma.nextBlock > cycles ? dma.nextBlock - cycles <= Audio::BlockCycles + 1
+                                                : cycles - dma.nextBlock < VblankCycles));
+  auto& src = audio.src;
+  s(src.reserved); s(src.sampleCount); s(src.rate);
+  for(auto& buffer : src.buffers) { s(buffer.address); s(buffer.sampleCount); s(buffer.volume); }
+  s(src.armed); s(src.retireAt); s(src.completion);
+  bool rate = src.rate && srcRateValid(src.rate);  //0 isn't one: reserving makes it 44100
+  check(rate && src.armed <= 2 && (!src.armed || src.reserved));
+  check(src.reserved ? srcSamplesValid(src.sampleCount) : !src.sampleCount || srcSamplesValid(src.sampleCount));
+  for(u32 n = 0; n < std::min(src.armed, 2u); n++) {
+    auto& buffer = src.buffers[n];
+    check(buffer.address && srcSamplesValid(buffer.sampleCount) && buffer.volume <= 0xf'ffff);
+  }
+  if(src.armed && rate) {
+    u64 duration = srcDuration(src.buffers[0].sampleCount);
+    check(src.retireAt > cycles ? src.retireAt - cycles <= duration : cycles - src.retireAt < VblankCycles);
+  }
+  //threads waiting on sound: on a mixer channel, one at most, while its slot is busy (it's given the slot as the
+  //buffer there is used up); on the SRC channel, one at most waiting for a completion, while both buffers are armed
+  //(only a buffer retiring wakes it), and any waiting for it to drain while one is
+  if(s.reading()) {
+    bool waited[8] = {}, srcWaited = false;
+    for(auto& [uid, t] : threads) {
+      if(t->wait != Wait::Audio) continue;
+      check(t->status == Status::Waiting);
+      if(t->waitID < 8) {
+        check(audio.channels[t->waitID].buffer && !waited[t->waitID]);
+        waited[t->waitID] = true;
+      } else if(t->waitID == Audio::WaitSrc) {
+        check(src.armed == 2 && !srcWaited);
+        srcWaited = true;
+      } else {
+        check(t->waitID == Audio::WaitSrcDrain && src.armed);
+      }
+    }
+  }
   //the utilities: the dialog, and the modules loaded
   s(dialog.kind); s(dialog.status); s(dialog.next); s(dialog.changeAt); s(dialog.parameters);
   vector(utilityModules, [&](u32& module) { s(module); });
@@ -302,9 +343,16 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(interrupting); s(interruptsEnabled); s(rescheduleAfter);
   context(interrupted);
   s(interruptedHalted); s(callResumesGe);
-  for(auto& set : subInterrupts) {
-    for(auto& handler : set) { s(handler.function); s(handler.argument); s(handler.gp); s(handler.enabled); }
+  //sub-interrupt handlers (none on the vertical blank's 16-31: a program can't register those), and a vertical
+  //blank held off
+  for(auto* set : {vblankSubs, geSubs}) {
+    for(u32 sub = 0; sub < 32; sub++) {
+      auto& handler = set[sub];
+      s(handler.function); s(handler.argument); s(handler.gp); s(handler.enabled);
+      check(set != vblankSubs || sub < 16 || !handler.function);
+    }
   }
+  s(vblankPending);
 
   //the GE driver. Each list's stack is no deeper than it allows (under 256: geEnqueue), the GE's own CALLs, in a
   //list's registers or kept on its stack, go two deep at most (GE::Registers), and a list running or done has run:

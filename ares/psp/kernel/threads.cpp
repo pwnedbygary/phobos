@@ -42,8 +42,10 @@ auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 
 //Sets a dormant thread going from its entry point: fresh registers, the stack pointer at the top of its stack, the
 //argument (argumentLength bytes at argumentPointer) copied just below it, with a0 its length and a1 where it is. ra
 //points at the trampoline, so returning from the entry function ends the thread. The caller has checked that the
-//argument is readable and fits (argumentFits()).
+//argument is readable and fits (argumentFits()). It starts at the priority it was made with, whatever its last run
+//changed it to (pspautotests' threads/threads/change: started again, a thread is back at its first priority).
 auto Kernel::startThread(Thread& thread, u32 argumentLength, u32 argumentPointer) -> void {
+  thread.priority = thread.initialPriority;
   auto& c = thread.context;
   c = {};
   c.pc = thread.entry;
@@ -632,20 +634,27 @@ auto Kernel::sceKernelReferSemaStatus() -> void {
   result(0);
 }
 
-//(thread or 0, priority or 0 for the caller's own): a running thread of lower priority than another ready one gives
-//way to it at once. A dormant thread, and priorities outside 8-119, are refused (PPSSPP's reading of the PSP).
+//(thread, priority): a new priority for a thread, as pspautotests' threads/threads/change found it on a PSP. A user
+//thread's priorities run from 0x08 to 0x77 (those above and below are the kernel's: ILLEGAL_PRIORITY), and 0 stands
+//for the caller's own; thread 0 is the caller. A thread not started yet, or ended, can't be changed (DORMANT); one
+//ready, waiting or suspended can. The thread goes to the back of its new priority's line: one that's ready goes in
+//behind those ready already, and so does the caller, which so gives way to any other thread of its priority (even
+//when its priority doesn't change). A thread that ends up above the caller's takes over at once. The test doesn't
+//show which comes first, a bad priority or a bad thread: the priority is checked first here.
 auto Kernel::sceKernelChangeThreadPriority() -> void {
   u32 priority = arg(1);
-  if(!priority && current) priority = current->priority;
+  if(priority == 0 && current) priority = current->priority;
+  if(priority < 0x08 || priority > 0x77) return result(ErrorIllegalPriority);
   auto thread = findThread(arg(0));
   if(!thread) return result(ErrorUnknownThread);
   if(thread->status == Status::Dormant) return result(ErrorDormant);
-  if(priority < 0x08 || priority > 0x77) return result(ErrorIllegalPriority);
   thread->priority = priority;
   result(0);
-  //to the back of its new priority's queue, as on the PSP; the caller may have to give way now
-  if(thread->status == Status::Ready || thread->status == Status::Running) thread->readySince = ++readySequence;
-  if(thread == current && current->status == Status::Running) current->status = Status::Ready;
+  //a thread waiting keeps its place: for a semaphore, readySince is its place in that queue
+  if(thread->status == Status::Ready || thread->status == Status::Running) {
+    thread->status = Status::Ready;  //the caller included: reschedule() picks between it and the rest afresh
+    thread->readySince = ++readySequence;
+  }
   reschedule();
 }
 
@@ -710,14 +719,20 @@ auto Kernel::sceKernelChangeCurrentThreadAttr() -> void {
   result(0);
 }
 
-//(thread or 0): how much of its stack it has never touched: the 0xff bytes it was filled with, counted from its
-//bottom past the 16 bytes holding its ID, in whole words.
+//(thread): how much of a thread's stack it has never used; thread 0 is the caller. A new stack is filled with 0xff
+//bytes (createThread()), so counting up from its bottom, the bytes still 0xff were never written, and the first one
+//that isn't ends the count. The bottom 16 bytes, where the thread's ID is, aren't counted: on a PSP (pspautotests'
+//threads/threads/stackfree), a thread whose 4 KiB stack had gone 0x150 bytes deep has 0xea0 free, one that had gone
+//0x550 deep 0xaa0. A stack that wasn't filled (PSP_THREAD_ATTR_NO_FILLSTACK) is counted the same way, through
+//whatever was in that memory before: there, nothing.
 auto Kernel::sceKernelGetThreadStackFreeSize() -> void {
   auto thread = findThread(arg(0));
   if(!thread) return result(ErrorUnknownThread);
-  u32 free = 0;
-  while(0x10 + free < thread->stackSize && memory.read(1, thread->stackBlock + 0x10 + free) == 0xff) free++;
-  result(free & ~3u);
+  if(thread->stackSize <= 16) return result(0);
+  std::vector<u8> stack(thread->stackSize);
+  memory.copyOut(stack.data(), thread->stackBlock, thread->stackSize);
+  auto written = std::find_if(stack.begin() + 16, stack.end(), [](u8 byte) { return byte != 0xff; });
+  result(u32(written - stack.begin()) - 16);
 }
 
 //The profiler's figures for a thread, or for all (sceKernelReferThreadProfiler, sceKernelReferGlobalProfiler): only

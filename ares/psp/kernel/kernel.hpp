@@ -67,6 +67,7 @@ struct Kernel {
   static constexpr u32 ErrorIllegalAlignmentSize  = 0x8002'00e4;  //an aligned block's alignment not a power of two
   static constexpr u32 ErrorNotYetLinked          = 0x8002'013a;  //a function the kernel doesn't have
   static constexpr u32 ErrorIllegalContext        = 0x8002'0064;  //waiting, from an interrupt handler
+  static constexpr u32 ErrorCanNotWait            = 0x8002'01a7;  //waiting, with interrupts held off
   static constexpr u32 ErrorIllegalInterruptCode  = 0x8002'0065;
   static constexpr u32 ErrorHandlerFound          = 0x8002'0067;
   static constexpr u32 ErrorHandlerNotFound       = 0x8002'0068;
@@ -226,10 +227,12 @@ struct Kernel {
     Status status = Status::Dormant;
     Context context{};
     Wait wait = Wait::None;
-    u32 waitID = 0;        //the semaphore, mutex, thread, event flag or display list waited for
-    u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs
-    u32 waitMode = 0;      //an event flag wait's mode
-    u32 waitPointer = 0;   //where an event flag wait puts the bits it saw
+    u32 waitID = 0;        //the semaphore, mutex, thread, event flag or display list waited for; the sound channel
+                           //(0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC channel's)
+    u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs; a mixer
+                           //output's left volume; the samples an SRC output's buffer was armed with
+    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume
+    u32 waitPointer = 0;   //where an event flag wait puts the bits it saw; the buffer a mixer output hands over
     u64 wakeAt = 0;        //for a delay or timeout: the cycle to wake at (0: none)
     u32 timeoutPointer = 0;
     u64 readySince = 0;    //to keep first-come order among equal priorities
@@ -499,11 +502,18 @@ struct Kernel {
   auto mayWait() -> bool;
   auto sceKernelCpuSuspendIntr() -> void;
   auto sceKernelCpuResumeIntr() -> void;
-  struct SubInterrupt {
-    u32 function = 0, argument = 0, gp = 0;
-    bool enabled = false;
+  //Sub-interrupt handlers: the program's functions an interrupt calls, 32 to an interrupt, on the two interrupts a
+  //program may use: the vertical blank's (30), called at each blank, and the GE's (25), which nothing raises yet.
+  struct SubHandler {
+    u32 function = 0;      //0: none registered
+    u32 argument = 0;      //what it's called with, after its number
+    u32 gp = 0;            //the global pointer it was registered with
+    bool enabled = false;  //sceKernelEnableSubIntr's say: registering leaves it as it is, releasing clears it
   };
-  SubInterrupt subInterrupts[2][32];  //the GE's (interrupt 25) and the vertical blank's (30)
+  SubHandler vblankSubs[32], geSubs[32];
+  bool vblankPending = false;  //a vertical blank came while its handlers couldn't run: they run once, when they can
+  auto subHandlers(u32 interrupt) -> SubHandler*;
+  auto queueVblankHandlers() -> void;
   auto vblankInterrupt() -> void;
   auto vblankHandlers() const -> bool;
   auto sceKernelRegisterSubIntrHandler() -> void;
@@ -667,41 +677,53 @@ struct Kernel {
   auto sceKernelCancelVpl() -> void;
   auto sceKernelReferVplStatus() -> void;
 
-  //audio.cpp: sound output's channels (their timing; the samples aren't played yet)
+  //audio.cpp: sound output. Eight mixer channels holding a buffer each, read a block of 64 samples at a time by the
+  //mixer's DMA; and the SRC channel (sceAudioOutput2*, sceAudioSRC*), a ninth output at a rate of its own, with two
+  //buffers armed at most. Their timing is the PSP's; the samples aren't mixed into the system's sound yet.
   struct Audio {
+    //A block, 64 samples at 44.1 kHz, isn't a whole number of the CPU's cycles at 333 MHz: it's 483,265 and 15/49.
+    static constexpr u64 BlockCycles = CPUFrequency * 64 / 44'100;
+    static constexpr u32 BlockFraction = CPUFrequency * 64 * 49 / 44'100 % 49;
+    static_assert((BlockCycles * 49 + BlockFraction) * 44'100 == CPUFrequency * 64 * 49);
+    static constexpr u32 WaitSrc = 8, WaitSrcDrain = 9;  //waitIDs on the SRC channel (0-7: the mixer channels)
     struct Channel {
       bool reserved = false;
-      u32 sampleCount = 0;            //samples in each buffer handed over
+      u32 sampleCount = 0;            //samples in each buffer handed over: a multiple of 64, from 64 to 65472
       u32 format = 0;                 //0x00 stereo, 0x10 mono
       u32 leftVolume = 0, rightVolume = 0;
-      u32 address = 0;                //the buffer playing, where the next block comes from (0: none)
-      u32 remaining = 0;              //its samples still to play
-      u32 waiting = 0;                //the thread waiting to hand over the next (0: none)
-      u32 waitingAddress = 0;
-      s32 waitingLeft = 0, waitingRight = 0;
+      u32 buffer = 0;                 //the slot: the buffer in it (0: the slot is free)
+      u32 length = 0;                 //its samples
+      u32 remaining = 0;              //how many of them the DMA hasn't taken yet (a null buffer sets this too)
     } channels[8];
-    bool mixing = false;              //the mixer runs: a block of 64 samples from each channel every 64/44100 s
-    u64 mixStart = 0;                 //when its blocks are counted from
-    u64 blocks = 0;                   //blocks mixed since (under 49: then it counts from there)
-    struct Source {                   //the SRC channel: two buffers queued at most, played one after the other
+    struct Dma {                      //the mixer's: a block from every channel with a buffer, every 64/44100 s
+      bool running = false;
+      u64 nextBlock = 0;              //when it takes the next block
+      u32 fraction = 0;               //and how far past that cycle the block really comes, in 49ths of one
+    } dma;
+    struct SrcChannel {
       bool reserved = false;
-      u32 sampleCount = 0, frequency = 44'100, volume = 0;
-      u32 queued = 0;
-      u32 lengths[2] = {};            //the queued buffers' samples
-      u64 finishAt = 0;               //when the first queued finishes
-      bool completion = false;        //a buffer finished (or playing started) since the last output took one
-    } source;
+      u32 sampleCount = 0;            //samples in each buffer handed over: 17 to 4111
+      u32 rate = 44'100;              //its samples a second
+      struct Buffer {
+        u32 address = 0, sampleCount = 0, volume = 0;
+      } buffers[2];                   //the buffers armed: the first plays, the second follows it
+      u32 armed = 0;                  //how many there are
+      u64 retireAt = 0;               //when the first one's transfer ends
+      bool completion = false;        //a completion no output has taken yet
+    } src;
   } audio;
-  auto audioBlockAt(u64 block) const -> u64;
-  auto audioOutput(u32 number, u32 address, s32 left, s32 right) -> u32;
-  auto audioOutputBlocking(u32 number, u32 address, s32 left, s32 right) -> void;
-  auto mixAudio() -> void;
-  auto sourceFinished() -> void;
+  auto audioWaiter(u32 waitID) -> Thread*;
+  auto audioWaitRefused() const -> u32;
+  auto handOver(u32 number, u32 buffer, s32 left, s32 right) -> void;
+  auto mixerBlock() -> bool;
+  auto mixerOutput(u32 number, u32 buffer, s32 left, s32 right, bool blocking) -> void;
+  auto srcDuration(u32 samples) const -> u64;
+  auto srcRetire() -> bool;
+  auto srcReserve(u32 samples, u32 rate, u32 channels) -> void;
+  auto srcRelease() -> void;
+  auto srcOutput() -> void;
   auto audioEvents() -> bool;
   auto nextAudioEvent() const -> u64;
-  auto sourceReserve(u32 samples, u32 frequency) -> void;
-  auto sourceRelease() -> void;
-  auto sourceOutput(u32 volume, u32 address) -> void;
   auto sceAudioChReserve() -> void;
   auto sceAudioChRelease() -> void;
   auto sceAudioOutputBlocking() -> void;
