@@ -1,22 +1,29 @@
 //Calls into the program. Now and then the kernel has to run one of the program's own functions: the GE's callbacks,
-//when a display list finishes or signals (later, interrupt handlers the program registers). The PSP runs them as
-//interrupt handlers, and so does this: the thread running is set aside exactly as it was (or the idle CPU, if none
-//is), the function runs on the kernel's interrupt stack with its arguments in a0-a2, the global pointer it was
+//when a display list finishes or signals, and the sub-interrupt handlers the program registers (below). The PSP runs
+//them as interrupt handlers, and so does this: the thread running is set aside exactly as it was (or the idle CPU, if
+//none is), the function runs on the kernel's interrupt stack with its arguments in a0-a2, the global pointer it was
 //registered with, and ra pointing at a trampoline; when it returns there, the CPU is put back and the thread carries
 //on, none the wiser. Calls that come meanwhile wait their turn.
 //
 //A call starts when it can: at the end of the system function that caused it (the result already in v0), or as the
 //kernel's loop goes round. Not while one is running, and not while the program holds interrupts off
 //(sceKernelCpuSuspendIntr). A handler may call system functions but not wait in one (the PSP says
-//ILLEGAL_CONTEXT); a thread it wakes runs once it has returned. (The PSP passes handlers (id, argument, list) this way:
-//uOFW's sceKernelCallSubIntrHandler.)
+//ILLEGAL_CONTEXT); a thread it wakes runs once it has returned. (The PSP passes handlers (id, argument, list) this
+//way: uOFW's sceKernelCallSubIntrHandler.)
 
 auto Kernel::queueCall(u32 function, u32 gp, u32 a0, u32 a1, u32 a2, bool resumesGe) -> void {
   calls.push_back({function, gp, {a0, a1, a2}, resumesGe});
 }
 
+//The next call starts, if one may: none is running and interrupts aren't held off. A vertical blank held off till
+//now comes first: its handlers join the queue, once however many blanks went by (vblankInterrupt()).
 auto Kernel::startCall() -> void {
-  if(interrupting || !interruptsEnabled || calls.empty()) return;
+  if(interrupting || !interruptsEnabled) return;
+  if(vblankPending) {
+    vblankPending = false;
+    queueVblankHandlers();
+  }
+  if(calls.empty()) return;
   auto call = calls.front();
   calls.pop_front();
   save(interrupted);
@@ -70,82 +77,152 @@ auto Kernel::sceKernelCpuResumeIntr() -> void {
   result(0);
 }
 
-//Handlers a program registers for an interrupt's sub-interrupts (InterruptManager): of those a program may use, the
-//vertical blank's (interrupt 30; its sub-interrupts 0-15, the rest the kernel's) and the GE's (25). Each enabled one
-//is called at its interrupt as fn(sub-interrupt, argument), with the global pointer it was registered with, the way
-//calls into the program go (above). The vertical blank's run at each blank, in their numbers' order; nothing here
-//raises the GE's yet (its driver calls the program's GE callbacks itself). The rules, and the errors in their order,
-//are PPSSPP's reading of interruptman.prx (from tests on a PSP).
+//Sub-interrupt handlers. A PSP interrupt's own handler may share the interrupt out among sub-interrupts, numbered
+//from 0, each with a handler and an argument of its own. A program may hang its handlers on two interrupts alone: the
+//GE's (25) and the vertical blank's (30). The rest, below 67 (the PSP's interrupt numbers stop there), are of three
+//kinds, which decide the errors registering and releasing get there. pspautotests' intr/registersub and
+//intr/releasesub recorded them on a PSP (firmware 6.61, under PSPLink, whose own drivers may have a hand in which
+//interrupts have handlers), and the table restates them by number; the names are pspsdk's (pspintrman.h).
+enum class SubInterrupts : u8 {
+  None,     //no handler at all: nothing to register on or release (NOTFOUND_HANDLER)
+  Single,   //a handler without sub-interrupts: every sub number is out of range (ILLEGAL_INTRCODE)
+  Kernel,   //sub-interrupts of the kernel's: registering is refused (ILLEGAL_INTRCODE), releasing finds none of the
+            //program's (NOTFOUND_HANDLER)
+  Program,  //the GE's and the vertical blank's
+};
 
-//Which of the two a number is (0 the GE's, 1 the vertical blank's), or -1: the PSP has handlers for some other
-//interrupts, but none a program may add to (for those it says ILLEGAL_INTRCODE), and none for the rest (NOTFOUND).
-static auto subInterruptSet(u32 interrupt, u32& error) -> s32 {
-  if(interrupt >= 67) return error = Kernel::ErrorIllegalInterruptCode, -1;
-  if(interrupt == 25) return 0;
-  if(interrupt == 30) return 1;
-  static constexpr u8 KernelOnly[] = {4, 6, 21, 7, 10, 12, 15, 16, 17, 18, 19, 20, 22, 23, 24, 26, 31, 36, 50, 56,
-                                      57, 58, 59, 60, 61, 65};
-  bool kernels = std::find(std::begin(KernelOnly), std::end(KernelOnly), interrupt) != std::end(KernelOnly);
-  error = kernels ? Kernel::ErrorIllegalInterruptCode : Kernel::ErrorHandlerNotFound;
-  return -1;
+//Interrupts 0-66 by number, ten to a line: n none, s single, k the kernel's, p the program's.
+static constexpr char subInterruptTable[] =
+  "nnnnknksnn"  // 0- 9: 4 GPIO, 5 ATA, 6 UMD, 7 memory stick, 8 WLAN
+  "snsnnsssss"  //10-19: 10 audio, 12 I2C, 14 SIRCS, 15-18 the system timers, 19 a thread interrupt
+  "skssspsnnn"  //20-29: 20 NAND, 21 DMACplus, 22-23 DMA, 24 MEMLMD, 25 the GE
+  "psnnnnsnnn"  //30-39: 30 the vertical blank, 31 MECODEC, 36 the headphone remote
+  "nnnnnnnnnn"  //40-49
+  "snnnnnssss"  //50-59
+  "ssnnnsn";    //60-66: 60-61 memory stick, 65 a thread interrupt, 66 the interrupt manager's
+static_assert(sizeof(subInterruptTable) == 67 + 1);
+
+static auto subInterruptKind(u32 interrupt) -> SubInterrupts {
+  switch(subInterruptTable[interrupt]) {
+  case 's': return SubInterrupts::Single;
+  case 'k': return SubInterrupts::Kernel;
+  case 'p': return SubInterrupts::Program;
+  default:  return SubInterrupts::None;
+  }
 }
 
-//(interrupt, sub-interrupt, handler, argument)
+//The program's 32 sub-interrupts on an interrupt it may use (the vertical blank's or the GE's); null for any other.
+auto Kernel::subHandlers(u32 interrupt) -> SubHandler* {
+  if(interrupt == 30) return vblankSubs;
+  if(interrupt == 25) return geSubs;
+  return nullptr;
+}
+
+//On the vertical blank's interrupt, the program's sub-interrupts are 0-15. Of the rest, the display driver holds
+//18-20 and 24-26 (registering there finds a handler already: FOUND_HANDLER), and 16, 17, 21-23 and 27-31 can't be
+//registered at all (ILLEGAL_INTRCODE). The GE's were only tried at 0 (accepted): all 32 are the program's here.
+static auto vblankSubHeld(u32 sub) -> bool {
+  return (sub >= 18 && sub <= 20) || (sub >= 24 && sub <= 26);
+}
+
+//(interrupt, sub-interrupt, handler, argument): the handler is called (sub-interrupt, argument) when the interrupt
+//comes, with the caller's global pointer, once it's enabled (sceKernelEnableSubIntr, before or after). Numbers are
+//unsigned (-1 is huge). Checked in this order: the interrupt (67 and up: ILLEGAL_INTRCODE; then its kind), the
+//sub-interrupt (32 and up: ILLEGAL_INTRCODE; then the vertical blank's own rules), a handler there already
+//(FOUND_HANDLER). A null handler takes no place: registering one where there's none returns 0 and leaves it empty,
+//and a real one may be registered after it; over a real one, it finds that one (FOUND_HANDLER), like any other.
 auto Kernel::sceKernelRegisterSubIntrHandler() -> void {
-  u32 interrupt = arg(0), sub = arg(1), error = 0;
-  s32 set = subInterruptSet(interrupt, error);
-  if(set < 0) return result(error);
+  u32 interrupt = arg(0), sub = arg(1), function = arg(2), argument = arg(3);
+  if(interrupt >= 67) return result(ErrorIllegalInterruptCode);
+  switch(subInterruptKind(interrupt)) {
+  case SubInterrupts::None: return result(ErrorHandlerNotFound);
+  case SubInterrupts::Single: case SubInterrupts::Kernel: return result(ErrorIllegalInterruptCode);
+  case SubInterrupts::Program: break;
+  }
   if(sub >= 32) return result(ErrorIllegalInterruptCode);
-  if(interrupt == 30 && ((sub >= 18 && sub <= 20) || (sub >= 24 && sub <= 26))) return result(ErrorHandlerFound);
-  if(interrupt == 30 && sub >= 16) return result(ErrorIllegalInterruptCode);
-  auto& handler = subInterrupts[set][sub];
+  if(interrupt == 30 && sub >= 16) return result(vblankSubHeld(sub) ? ErrorHandlerFound : ErrorIllegalInterruptCode);
+  auto& handler = subHandlers(interrupt)[sub];
   if(handler.function) return result(ErrorHandlerFound);
-  handler.function = arg(2);
-  handler.argument = arg(3);
-  handler.gp = cpu.ipu.r[28];
+  if(function) {
+    handler.function = function;
+    handler.argument = argument;
+    handler.gp = cpu.ipu.r[28];
+  }
   result(0);
 }
 
-//(interrupt, sub-interrupt): the handler goes, and its sub-interrupt with it.
+//(interrupt, sub-interrupt): the program's handler there goes, and the sub-interrupt is disabled with it: registered
+//again, it doesn't run until it's enabled again. The interrupt is checked as for registering, except that the
+//kernel's sub-interrupts (4, 6, 21) have none of the program's to release (NOTFOUND_HANDLER); then the sub-interrupt
+//(32 and up: ILLEGAL_INTRCODE), and whether the program has a handler there (NOTFOUND_HANDLER, as on the vertical
+//blank's 16-31, which can't have one).
 auto Kernel::sceKernelReleaseSubIntrHandler() -> void {
-  u32 interrupt = arg(0), sub = arg(1), error = 0;
-  s32 set = subInterruptSet(interrupt, error);
-  if(set < 0) return result(error);
+  u32 interrupt = arg(0), sub = arg(1);
+  if(interrupt >= 67) return result(ErrorIllegalInterruptCode);
+  switch(subInterruptKind(interrupt)) {
+  case SubInterrupts::None: case SubInterrupts::Kernel: return result(ErrorHandlerNotFound);
+  case SubInterrupts::Single: return result(ErrorIllegalInterruptCode);
+  case SubInterrupts::Program: break;
+  }
   if(sub >= 32) return result(ErrorIllegalInterruptCode);
-  if(interrupt == 30 && sub >= 16) return result(ErrorHandlerNotFound);
-  auto& handler = subInterrupts[set][sub];
+  auto& handler = subHandlers(interrupt)[sub];
   if(!handler.function) return result(ErrorHandlerNotFound);
   handler = {};
   result(0);
 }
 
-//(interrupt, sub-interrupt): lets its handler be called (even before one's registered: it's called once there is).
+//(interrupt, sub-interrupt), enabled or disabled: its handler runs when the interrupt comes only while it's enabled.
+//Registered or not makes no difference: enabling first and registering after works (pspautotests' intr/enablesub),
+//and either call on a sub-interrupt with no handler returns 0. An interrupt of 67 and up, or a sub-interrupt of 32
+//and up, is refused (ILLEGAL_INTRCODE). Interrupts other than the vertical blank's weren't tried on a PSP: here an
+//interrupt with no handler gets NOTFOUND_HANDLER, one without sub-interrupts ILLEGAL_INTRCODE, and the kernel's
+//sub-interrupts 0, leaving them as they are.
+static auto subInterruptRefused(u32 interrupt, u32 sub) -> u32 {
+  if(interrupt >= 67) return Kernel::ErrorIllegalInterruptCode;
+  switch(subInterruptKind(interrupt)) {
+  case SubInterrupts::None: return Kernel::ErrorHandlerNotFound;
+  case SubInterrupts::Single: return Kernel::ErrorIllegalInterruptCode;
+  case SubInterrupts::Kernel: case SubInterrupts::Program: break;
+  }
+  return sub >= 32 ? Kernel::ErrorIllegalInterruptCode : 0;
+}
+
 auto Kernel::sceKernelEnableSubIntr() -> void {
-  u32 interrupt = arg(0), sub = arg(1), error = 0;
-  s32 set = subInterruptSet(interrupt, error);
-  if(set < 0 || sub >= 32) return result(ErrorIllegalInterruptCode);
-  subInterrupts[set][sub].enabled = true;
+  if(auto refused = subInterruptRefused(arg(0), arg(1))) return result(refused);
+  if(auto handlers = subHandlers(arg(0))) handlers[arg(1)].enabled = true;
   result(0);
 }
 
 auto Kernel::sceKernelDisableSubIntr() -> void {
-  u32 interrupt = arg(0), sub = arg(1), error = 0;
-  s32 set = subInterruptSet(interrupt, error);
-  if(set < 0 || sub >= 32) return result(ErrorIllegalInterruptCode);
-  subInterrupts[set][sub].enabled = false;
+  if(auto refused = subInterruptRefused(arg(0), arg(1))) return result(refused);
+  if(auto handlers = subHandlers(arg(0))) handlers[arg(1)].enabled = false;
   result(0);
 }
 
-//The vertical blank's handlers, called as it starts.
+//A vertical blank's interrupt (events() at each blank). Its handlers run as calls into the program, now; but while
+//they can't (interrupts held off, or a call running), the interrupt waits, as the PSP's interrupt controller keeps
+//an interrupt pending: once. More blanks meanwhile add nothing to it, and when it's let through, each handler then
+//registered and enabled runs once: a program that held interrupts off for 600 blanks gets one call of each, not 600.
 auto Kernel::vblankInterrupt() -> void {
+  if(interrupting || !interruptsEnabled) {
+    vblankPending = true;
+    return;
+  }
+  queueVblankHandlers();
+}
+
+//The vertical blank's handlers join the calls into the program: each registered and enabled one, by its number,
+//called (its number, its argument) with the global pointer it was registered with.
+auto Kernel::queueVblankHandlers() -> void {
   for(u32 sub = 0; sub < 32; sub++) {
-    auto& handler = subInterrupts[1][sub];
-    if(handler.enabled && handler.function) queueCall(handler.function, handler.gp, sub, handler.argument, 0);
+    auto& handler = vblankSubs[sub];
+    if(handler.function && handler.enabled) queueCall(handler.function, handler.gp, sub, handler.argument, 0);
   }
 }
 
-//Whether any vertical blank handler will be called: time goes on for it while every thread waits.
+//Whether a handler runs at the vertical blanks to come: then the threads waiting on what it does aren't stuck (time
+//goes on for it while every thread waits).
 auto Kernel::vblankHandlers() const -> bool {
-  for(auto& handler : subInterrupts[1]) if(handler.enabled && handler.function) return true;
+  for(auto& handler : vblankSubs) if(handler.function && handler.enabled) return true;
   return false;
 }

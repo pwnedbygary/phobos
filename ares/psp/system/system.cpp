@@ -48,6 +48,7 @@ auto System::run() -> void {
   }
   screen->frame();
 
+  //silence: the kernel's mixer takes its channels' blocks at the PSP's pace, but doesn't mix them yet (audio.cpp)
   soundOwed += 44'100.0 * 1001 / 60'000;
   while(soundOwed >= 1) {
     stream->frame(0.0, 0.0);

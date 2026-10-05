@@ -417,11 +417,154 @@ static auto vblankHandler() -> void {
   CHECK(m.call("sceKernelDisableSubIntr", {25, 0}), 0);
 }
 
+//Interrupts held off for ten seconds, about 600 vertical blanks: nothing piles up meanwhile, and when they're let
+//back on, the handler runs once for all of them (as the PSP's interrupt controller keeps an interrupt pending, not a
+//count). By a program; then called directly, to see the queue itself: with two handlers, the first runs as
+//interrupts come back on, and the second alone waits its turn.
+static auto heldOffOnce() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    constexpr u32 Count = R + 0x10;
+    Assembler handler{m, 0x0880'3000};  //counts its calls
+    handler.li(t0, Count); handler.put(lw(t1, 0, t0)); handler.put(addiu(t1, t1, 1)); handler.put(sw(t1, 0, t0));
+    handler.put(jr(ra));
+    handler.put(nop);
+
+    Assembler main{m, 0x0880'1000};
+    auto count = [&](u32 offset) {  //the handler's calls so far, written down
+      main.li(t0, Count); main.put(lw(t1, 0, t0)); main.li(t0, R + offset); main.put(sw(t1, 0, t0));
+    };
+    main.li(a0, 30); main.li(a1, 2); main.li(a2, 0x0880'3000); main.li(a3, 0);
+    main.call("sceKernelRegisterSubIntrHandler");
+    main.li(a0, 30); main.li(a1, 2);
+    main.call("sceKernelEnableSubIntr");
+    main.call("sceDisplayWaitVblankStart");  //a blank: the handler runs once
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s0, v0, zero));
+    count(0);
+    main.li(a0, 10'000'000);
+    main.call("sceKernelDelayThread");       //blank after blank, held off
+    count(4);
+    main.put(addu(a0, s0, zero));
+    main.call("sceKernelCpuResumeIntr");     //as this returns, the handler runs: once
+    count(8);
+    main.call("sceDisplayGetVcount");
+    main.li(t0, R); main.put(sw(v0, 12, t0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency * 11);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.system.memory.read(4, R), 1);
+    CHECK(m.system.memory.read(4, R + 4), 1);
+    CHECK(m.system.memory.read(4, R + 8), 2);
+    CHECK(m.system.memory.read(4, R + 12), 600);  //blanks since power on: the first, then 599 held off
+    CHECK(m.kernel.calls.size(), 0);
+    CHECK(m.notes.size(), 0);
+  }
+  KernelMachine d;
+  CHECK(d.call("sceKernelRegisterSubIntrHandler", {30, 0, 0x0880'3000, 1}), 0);
+  CHECK(d.call("sceKernelRegisterSubIntrHandler", {30, 5, 0x0880'3100, 2}), 0);
+  CHECK(d.call("sceKernelEnableSubIntr", {30, 0}), 0);
+  CHECK(d.call("sceKernelEnableSubIntr", {30, 5}), 0);
+  CHECK(d.call("sceKernelCpuSuspendIntr", {}), 1);
+  d.kernel.cycles = 600 * Kernel::VblankCycles;
+  d.kernel.events();
+  CHECK(d.kernel.vblanks, 600);
+  CHECK(d.kernel.calls.size(), 0);
+  CHECK(d.kernel.vblankPending, true);
+  CHECK(d.call("sceKernelCpuResumeIntr", {1}), 0);
+  CHECK(d.kernel.vblankPending, false);
+  CHECK(d.kernel.interrupting, true);
+  CHECK(d.system.ipu.pc, 0x0880'3000);
+  CHECK(d.system.ipu.r[4], 0);  //(its number, its argument)
+  CHECK(d.system.ipu.r[5], 1);
+  CHECK(d.kernel.calls.size(), 1);
+  if(d.kernel.calls.size() == 1) {
+    CHECK(d.kernel.calls[0].function, 0x0880'3100);
+    CHECK(d.kernel.calls[0].arguments[0], 5);
+    CHECK(d.kernel.calls[0].arguments[1], 2);
+  }
+}
+
+//Which interrupts and sub-interrupts a program may hang handlers on: every number pspautotests' intr/registersub and
+//intr/releasesub tried on a PSP, registered then released (-2 to 69 with sub-interrupt 0; the vertical blank's
+//sub-interrupts -2 to 69); null handlers; enabling and disabling (intr/enablesub), which look at the numbers alone.
+//Called directly; then a vertical blank queues what's registered and enabled, in the order of its numbers.
+static auto interruptTable() -> void {
+  KernelMachine m;
+  constexpr u32 Illegal = Kernel::ErrorIllegalInterruptCode, Found = Kernel::ErrorHandlerFound;
+  constexpr u32 NotFound = Kernel::ErrorHandlerNotFound, Handler = 0x0880'3000;
+  auto registers = [&](u32 interrupt, u32 sub, u32 function) {
+    return m.call("sceKernelRegisterSubIntrHandler", {interrupt, sub, function, 0xdead'beef});
+  };
+  auto releases = [&](u32 interrupt, u32 sub) { return m.call("sceKernelReleaseSubIntrHandler", {interrupt, sub}); };
+  auto enables = [&](u32 interrupt, u32 sub) { return m.call("sceKernelEnableSubIntr", {interrupt, sub}); };
+  auto disables = [&](u32 interrupt, u32 sub) { return m.call("sceKernelDisableSubIntr", {interrupt, sub}); };
+  auto single = [](s32 interrupt) {  //handlers without sub-interrupts
+    for(s32 n : {7, 10, 12, 15, 16, 17, 18, 19, 20, 22, 23, 24, 26, 31, 36, 50, 56, 57, 58, 59, 60, 61, 65}) {
+      if(interrupt == n) return true;
+    }
+    return false;
+  };
+  for(s32 interrupt = -2; interrupt < 70; interrupt++) {
+    u32 registered = NotFound, released = NotFound;  //no handler at all
+    if(interrupt < 0 || interrupt >= 67 || single(interrupt)) registered = released = Illegal;
+    else if(interrupt == 25 || interrupt == 30) registered = released = 0;
+    else if(interrupt == 4 || interrupt == 6 || interrupt == 21) registered = Illegal;  //the kernel's
+    auto number = std::to_string(interrupt);
+    check(__LINE__, ("register on " + number).c_str(), registers(u32(interrupt), 0, Handler), registered);
+    check(__LINE__, ("release on " + number).c_str(), releases(u32(interrupt), 0), released);
+  }
+  for(s32 sub = -2; sub < 70; sub++) {
+    u32 registered = Illegal, released = NotFound;
+    if(sub < 0 || sub >= 32) released = Illegal;
+    else if(sub < 16) registered = released = 0;
+    else if((sub >= 18 && sub <= 20) || (sub >= 24 && sub <= 26)) registered = Found;  //the display driver's
+    auto number = std::to_string(sub);
+    check(__LINE__, ("register sub " + number).c_str(), registers(30, u32(sub), Handler), registered);
+    check(__LINE__, ("release sub " + number).c_str(), releases(30, u32(sub)), released);
+  }
+  CHECK(registers(30, 1, 0), 0);  //a null handler takes no place
+  CHECK(registers(30, 1, 0), 0);
+  CHECK(releases(30, 1), NotFound);
+  CHECK(registers(30, 1, Handler), 0);
+  CHECK(registers(30, 1, Handler), Found);
+  CHECK(registers(30, 1, 0), Found);
+  CHECK(releases(30, 1), 0);
+  CHECK(releases(30, 1), NotFound);
+  CHECK(enables(70, 1), Illegal);
+  CHECK(enables(30, 70), Illegal);
+  CHECK(disables(70, 1), Illegal);
+  CHECK(disables(30, 70), Illegal);
+  CHECK(registers(30, 1, Handler), 0);
+  CHECK(enables(30, 1), 0);
+  CHECK(enables(30, 1), 0);
+  CHECK(disables(30, 3), 0);  //no handler there: 0 all the same
+  CHECK(disables(30, 3), 0);
+  CHECK(enables(30, 2), 0);   //enabled first, registered after: it runs
+  CHECK(registers(30, 2, Handler + 0x100), 0);
+  CHECK(enables(30, 3), 0);   //enabled with no handler: nothing runs
+  CHECK(registers(30, 4, Handler + 0x200), 0);
+  CHECK(enables(30, 4), 0);   //released while enabled, registered again: disabled
+  CHECK(releases(30, 4), 0);
+  CHECK(registers(30, 4, Handler + 0x200), 0);
+  m.kernel.cycles = Kernel::VblankCycles;
+  m.kernel.events();
+  CHECK(m.kernel.calls.size(), 2);
+  if(m.kernel.calls.size() == 2) {
+    CHECK(m.kernel.calls[0].function, Handler);
+    CHECK(m.kernel.calls[0].arguments[0], 1);
+    CHECK(m.kernel.calls[0].arguments[1], 0xdead'beef);
+    CHECK(m.kernel.calls[1].function, Handler + 0x100);
+    CHECK(m.kernel.calls[1].arguments[0], 2);
+  }
+}
+
 auto callbackTests() -> Tests {
   return {
     {"callbacks in waits", runInWaits}, {"callbacks and waits going on", waitsGoOn},
     {"callbacks by priority", byPriority}, {"callbacks called directly", callbackCalls},
     {"display vblank timing", vblankTiming}, {"interrupts vblank handler", vblankHandler},
+    {"interrupts held off, delivered once", heldOffOnce}, {"interrupts numbers", interruptTable},
   };
 }
 
