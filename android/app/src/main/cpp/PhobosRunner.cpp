@@ -3181,6 +3181,18 @@ else if (port->type() == "Keyboard") {
       directory::create(copyFolder);
     }
     string loadPath = directPath;
+    // A PSP disc image (a gigabyte or two) isn't copied: mia's PSP medium reads it through the app's descriptor, if
+    // that's a file (a provider may hand over a pipe, which only copying reads). An image is told by the URI's
+    // extension or, for a URI that doesn't end in its name, the game's.
+    string nameExtension;
+    if (auto dot = romName.findPrevious(romName.size(), ".")) nameExtension = romName.slice(*dot + 1).downcase();
+    bool discImage = extension == "iso" || extension == "cso" || nameExtension == "iso" || nameExtension == "cso";
+    struct stat romStat;
+    if (!loadPath && systemName == "PlayStation Portable" && discImage
+        && fstat(romFd, &romStat) == 0 && S_ISREG(romStat.st_mode)) {
+      loadPath = string{"/proc/self/fd/", romFd};
+      LOGI("PSP: reading the disc image through its descriptor");
+    }
     if (!loadPath) {
       string tempPath = string{copyFolder, "/", tempFname, ".", extension};
 
@@ -3318,7 +3330,7 @@ else if (port->type() == "Keyboard") {
             if (identifiedSystem == "Nintendo 64") aresExt = "z64";
             if (identifiedSystem == "Mega 32X") aresExt = "32x";
             if (identifiedSystem == "PlayStation Portable") {
-                // mia's PSP medium goes by the extension: an EBOOT.PBP starts "\0PBP", an ELF "\x7fELF".
+                // The extracted copy is named for what it is: an EBOOT.PBP starts "\0PBP", an ELF "\x7fELF".
                 if (romBuffer.size() >= 4 && memcmp(romBuffer.data(), "\0PBP", 4) == 0) aresExt = "pbp";
                 if (romBuffer.size() >= 4 && memcmp(romBuffer.data(), "\x7f" "ELF", 4) == 0) aresExt = "elf";
             }

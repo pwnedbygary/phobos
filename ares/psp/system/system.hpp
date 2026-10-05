@@ -3,9 +3,9 @@
 //together and run a frame at a time.
 //
 //The game: the front end puts a medium in the "UMD Drive": a homebrew program (EBOOT.PBP, an ELF or a PRX) or a disc
-//image (ISO or CSO; not read yet). A program's own folder stands for the disc it would come on (disc0: and umd0:), so
-//it finds the files beside it; or, if the program is on the memory stick already, it runs from there (ms0:), as on a
-//PSP. The memory stick, ms0:, is a folder the front end gives (option "Memory Stick").
+//image (ISO or CSO), which goes in the drive as disc0: and umd0:. A program's own folder stands for the disc it would
+//come on, so it finds the files beside it; or, if the program is on the memory stick already, it runs from there
+//(ms0:), as on a PSP. The memory stick, ms0:, is a folder the front end gives (option "Memory Stick").
 //
 //The model: a PSP-2000/3000, with 64 MiB of RAM (PSP-1000s have 32), set to English with X as the button that
 //confirms.
@@ -70,6 +70,7 @@ private:
   auto connect() -> void;
   auto disconnect() -> void;
   auto startProgram() -> void;
+  auto startDisc(std::shared_ptr<vfs::file> fp) -> void;
   auto report(bool problem, const std::string& text) -> void;
 };
 

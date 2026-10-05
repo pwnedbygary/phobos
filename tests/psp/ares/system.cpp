@@ -6,17 +6,20 @@
 //which controls are held, as Phobos's Android runner does for real.
 //
 //The checks that run a program need the test programs (tools/psp-test-programs): PSP_TEST_PROGRAMS names the folder
-//holding hello.elf. Without it, those checks are skipped.
+//holding hello.elf and disc.elf. Without it, those checks are skipped.
 #include <psp/psp.hpp>
+#include "../disc-image.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <thread>
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace ares { Platform* platform = nullptr; }
@@ -256,6 +259,147 @@ auto programOnTheMemoryStick(const fs::path& programs) -> void {
   root->unload();
 }
 
+//FNV-1a, the fingerprint the disc program prints of what it read.
+auto fingerprint(const std::vector<std::uint8_t>& bytes, size_t offset, size_t size) -> std::string {
+  u32 hash = 2166136261u;
+  for(size_t n = offset; n < offset + size; n++) hash = (hash ^ bytes[n]) * 16777619u;
+  char text[16];
+  snprintf(text, sizeof(text), "%08x", hash);
+  return text;
+}
+
+//A disc image in the drive, as an ISO and as a CSO: its program (tools/psp-test-programs' disc) boots from it and
+//reads it every way games do, printing what it found, which must be what the image holds. A shop-bought game's
+//encrypted program doesn't start (it isn't read yet); a plain BOOT.BIN beside it does.
+auto discImage(const fs::path& programs) -> void {
+  std::printf("a disc image in the drive: its program boots and reads it\n");
+  std::ifstream stream(programs / "disc.elf", std::ios::binary);
+  std::vector<std::uint8_t> program((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+  if(!CHECK(!program.empty(), "disc.elf is among the test programs")) return;
+  std::vector<std::uint8_t> data(3 * 2048 + 1000);
+  for(size_t n = 0; n < data.size(); n++) data[n] = u8(n * 7 + n / 251);
+  auto image = disc_image::makeIso({
+    {"PSP_GAME/PARAM.SFO", std::vector<std::uint8_t>(64, 1)},
+    {"PSP_GAME/SYSDIR/EBOOT.BIN", program},
+    {"PSP_GAME/USRDIR/DATA.BIN", data},
+    {"UMD_DATA.BIN", std::vector<std::uint8_t>(16, 2)},
+  });
+  std::string expected = "medium 1\nactivate 0\nwait 0\ndrive 32\n"
+    "data " + std::to_string(data.size()) + " " + fingerprint(data, 0, data.size()) + "\n"
+    "ioctl 0\nstat " + std::to_string(data.size()) + " 216d 1\n"
+    "lbn 4096 " + fingerprint(data, 0, 4096) + "\n"
+    "umd0 1 " + fingerprint(data, 0, 2048) + "\n"
+    "entry PARAM.SFO\nentry SYSDIR/\nentry USRDIR/\n"
+    "relative 1\nwrite 8001b004\n";
+  struct Format { const char* name; std::vector<std::uint8_t> bytes; };
+  for(auto& [name, bytes] : {Format{"disc.iso", image.bytes}, Format{"disc.cso", disc_image::makeCso(image.bytes)}}) {
+    //from a file on the host, as mia's medium gives it (mapped into memory)
+    auto file = scratch / name;
+    std::ofstream(file, std::ios::binary).write((const char*)bytes.data(), bytes.size());
+    host.game = std::make_shared<vfs::directory>();
+    host.game->setAttribute("location", file.string().c_str());
+    host.game->append(name, vfs::disk::open(file.string().c_str(), vfs::read));
+    Node::System root;
+    if(!CHECK(start(root), std::string{"the PSP starts with "} + name + " in the drive")) continue;
+    CHECK(psp.kernel.disc != nullptr && !psp.kernel.devices.count("disc0"), "the image is the disc");
+    CHECK(psp.kernel.workingDirectory == "disc0:/PSP_GAME/SYSDIR", "it starts in its folder on the disc");
+    std::string printed;
+    runToExit(root, printed);
+    CHECK(psp.kernel.exited, "the disc's program runs to its end");
+    if(!CHECK(printed == expected, std::string{"it reads "} + name + " as it is")) {
+      std::printf("    printed:\n%s    expected:\n%s", printed.c_str(), expected.c_str());
+    }
+    root->unload();
+  }
+
+  //a truncated image that cuts its program short (here, only padding after it): it still boots
+  {
+    auto padded = program;
+    padded.resize(program.size() + 8192, 0);
+    auto bytes = disc_image::makeIso({
+      {"PSP_GAME/USRDIR/DATA.BIN", data},
+      {"PSP_GAME/SYSDIR/EBOOT.BIN", padded},
+    }).bytes;
+    bytes.resize(bytes.size() - 4096);
+    host.game = std::make_shared<vfs::directory>();
+    host.game->append("disc.iso", vfs::memory::open({bytes.data(), bytes.size()}));
+    Node::System root;
+    if(CHECK(start(root), "the PSP starts with a truncated disc in the drive")) {
+      CHECK(!psp.kernel.threads.empty(), "the program cut short starts");
+      root->unload();
+    }
+  }
+
+  //encrypted, alone, then with a blank BOOT.BIN beside it, then with a plain one
+  std::vector<std::uint8_t> encrypted(256, 0);
+  memcpy(encrypted.data(), "~PSP", 4);
+  for(u32 kind : {0u, 1u, 2u}) {
+    bool boot = kind == 2;
+    std::vector<disc_image::File> files = {{"PSP_GAME/SYSDIR/EBOOT.BIN", encrypted}};
+    if(kind == 1) files.push_back({"PSP_GAME/SYSDIR/BOOT.BIN", std::vector<std::uint8_t>(4096, 0)});
+    if(kind == 2) files.push_back({"PSP_GAME/SYSDIR/BOOT.BIN", program});
+    auto bytes = disc_image::makeIso(files).bytes;
+    host.game = std::make_shared<vfs::directory>();
+    host.game->append("disc.iso", vfs::memory::open({bytes.data(), bytes.size()}));
+    Node::System root;
+    if(!CHECK(start(root), "the PSP starts with an encrypted disc in the drive")) continue;
+    CHECK(psp.kernel.threads.empty() != boot, boot ? "BOOT.BIN starts" : "the encrypted program doesn't start");
+    if(boot) CHECK(psp.kernel.workingDirectory == "disc0:/PSP_GAME/SYSDIR", "BOOT.BIN starts from its folder");
+    root->unload();
+  }
+}
+
+//nall's vfs::descriptor, which mia's PSP medium reads a disc image through when Android hands it over as an open
+//descriptor ("/proc/self/fd/N"): the file's bytes, mapped into memory or read a piece at a time; zeros past the end;
+//still readable after the descriptor it was given is closed; nothing for a bad descriptor or a folder. Then a disc
+//booted through one, unmapped, so the system reads the image a piece at a time.
+auto descriptorFiles(const fs::path& programs) -> void {
+  std::printf("files read through a descriptor\n");
+  std::vector<std::uint8_t> bytes(10000);
+  for(size_t n = 0; n < bytes.size(); n++) bytes[n] = u8(n * 13 + n / 97);
+  auto path = scratch / "descriptor.bin";
+  std::ofstream(path, std::ios::binary).write((const char*)bytes.data(), bytes.size());
+  for(bool map : {true, false}) {
+    int given = ::open(path.string().c_str(), O_RDONLY);
+    auto file = vfs::descriptor::open(given, map);
+    ::close(given);
+    if(!CHECK(file && file->size() == bytes.size(), "it opens, its size the file's")) continue;
+    CHECK((file->data() != nullptr) == map, map ? "mapped into memory" : "not mapped");
+    std::vector<std::uint8_t> out(100);
+    file->seek(5000);
+    file->read({out.data(), out.size()});
+    CHECK(std::equal(out.begin(), out.end(), bytes.begin() + 5000), "it reads the file's bytes");
+    file->seek(9990);
+    file->read({out.data(), 20});
+    bool zeros = std::all_of(out.begin() + 10, out.begin() + 20, [](u8 byte) { return byte == 0; });
+    CHECK(std::equal(out.begin(), out.begin() + 10, bytes.begin() + 9990) && zeros, "zeros past the end");
+    CHECK(file->offset() == 10010, "the position moves past the end too");
+  }
+  CHECK(!vfs::descriptor::open(-1), "no file for a bad descriptor");
+  int folder = ::open(scratch.string().c_str(), O_RDONLY);
+  CHECK(!vfs::descriptor::open(folder), "no file for a folder");
+  ::close(folder);
+
+  std::ifstream stream(programs / "disc.elf", std::ios::binary);
+  std::vector<std::uint8_t> program((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+  auto image = disc_image::makeIso({{"PSP_GAME/SYSDIR/EBOOT.BIN", program},
+                                    {"PSP_GAME/USRDIR/DATA.BIN", std::vector<std::uint8_t>(7144, 3)}});
+  auto disc = scratch / "descriptor.iso";
+  std::ofstream(disc, std::ios::binary).write((const char*)image.bytes.data(), image.bytes.size());
+  int given = ::open(disc.string().c_str(), O_RDONLY);
+  host.game = std::make_shared<vfs::directory>();
+  host.game->append("disc.iso", vfs::descriptor::open(given, false));
+  ::close(given);
+  Node::System root;
+  if(CHECK(start(root), "the PSP starts with a disc read through a descriptor")) {
+    std::string printed;
+    runToExit(root, printed);
+    CHECK(printed.find("data 7144 ") != std::string::npos && printed.find("relative 1") != std::string::npos,
+      "its program reads it");
+    root->unload();
+  }
+}
+
 //Where the host gives no memory that code may run from, the recompiler turns itself off, and the interpreter runs
 //the program instead. (Asking for no code memory at all stands for that: the host refuses the mapping.)
 auto noCodeMemory(const fs::path& programs) -> void {
@@ -295,6 +439,8 @@ auto main() -> int {
       programOnTheMemoryStick(fs::path{programs});
     }
     noCodeMemory(fs::path{programs});
+    discImage(fs::path{programs});
+    descriptorFiles(fs::path{programs});
   } else {
     std::printf("PSP_TEST_PROGRAMS isn't set (or has no hello.elf): the checks that run a program are skipped\n");
   }

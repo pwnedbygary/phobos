@@ -108,6 +108,7 @@ auto System::unload() -> void {
   //the host), its threads, its 64 MiB of memory and the compiled code. power() makes them all again.
   kernel.power();
   kernel.devices.clear();
+  kernel.disc.reset();
   memory.scratchpad = {};
   memory.vram = {};
   memory.ram = {};
@@ -165,6 +166,7 @@ auto System::power(bool reset) -> void {
   //The devices are the system's to give: the memory stick here, the disc in startProgram(); none left from the game
   //before.
   kernel.devices.clear();
+  kernel.disc.reset();
   if(memoryStick) {
     //A memory stick as a PSP formats it: games keep their saves in PSP/SAVEDATA, homebrew lives in PSP/GAME.
     std::error_code error;
@@ -178,7 +180,7 @@ auto System::power(bool reset) -> void {
 }
 
 //The game: a program from the game's pak, started with the path a PSP would give it (the program's folder on the
-//memory stick if it's there, else its folder as the disc), or a disc image (not read yet).
+//memory stick if it's there, else its folder as the disc), or a disc image (startDisc()).
 auto System::startProgram() -> void {
   if(!gamePak) return report(true, "no game in the UMD drive");
   for(auto name : {"program.pbp", "program.elf", "program.prx"}) {
@@ -209,8 +211,52 @@ auto System::startProgram() -> void {
     }
     return;
   }
-  if(gamePak->read("disc.iso") || gamePak->read("disc.cso")) return report(true, "disc images aren't read yet");
+  for(auto name : {"disc.iso", "disc.cso"}) {
+    if(auto fp = gamePak->read(name)) return startDisc(fp);
+  }
   report(true, "the game has no program in it");
+}
+
+//A disc image: it goes in the drive (disc0:, umd0:), and its program starts, PSP_GAME/SYSDIR/EBOOT.BIN. A shop-bought
+//game's is encrypted ("~PSP" at its start), which isn't read yet; a plain BOOT.BIN beside it stands in for it if
+//there's one (a few early games have one; most have none, or an empty or blank one). Only an ELF or an EBOOT.PBP is
+//started. A truncated image may cut its program short: it's read as far as the image goes (PPSSPP lets such games
+//boot, as truncated images are common), and no further than 64 MiB.
+auto System::startDisc(std::shared_ptr<vfs::file> fp) -> void {
+  auto image = std::make_shared<Disc>();
+  auto read = [fp](u64 offset, void* data, u64 size) -> u64 {
+    if(offset >= fp->size()) return 0;
+    size = std::min<u64>(size, fp->size() - offset);
+    if(auto bytes = fp->data()) {  //the whole image mapped into memory: read straight from it
+      memcpy(data, bytes + offset, size);
+    } else {
+      fp->seek(offset);
+      fp->read({(u8*)data, size});
+    }
+    return size;
+  };
+  std::string problem;
+  if(!image->open(read, fp->size(), problem)) return report(true, "can't read the disc: " + problem);
+  kernel.disc = image;
+  bool encrypted = false;
+  for(auto name : {"EBOOT.BIN", "BOOT.BIN"}) {
+    Disc::Entry entry;
+    if(!image->find({"PSP_GAME", "SYSDIR", name}, entry) || entry.folder || entry.size < 4) continue;
+    u64 start = u64(entry.sector) * Disc::SectorSize;
+    if(start >= image->size()) continue;  //a damaged record: nothing of it is on the disc
+    u64 size = std::min<u64>({entry.size, image->size() - start, 64_MiB});
+    u8 magic[4];
+    if(size < 4 || !image->read(start, 4, magic)) continue;
+    if(!memcmp(magic, "~PSP", 4)) encrypted = true;
+    if(memcmp(magic, "\x7f" "ELF", 4) && memcmp(magic, "\0PBP", 4)) continue;
+    std::vector<u8> program(size);
+    if(!image->read(start, size, program.data())) continue;
+    if(!kernel.start(program.data(), program.size(), std::string{"disc0:/PSP_GAME/SYSDIR/"} + name, problem)) {
+      report(true, "can't start the game: " + problem);
+    }
+    return;
+  }
+  report(true, encrypted ? "the game's program is encrypted, which isn't read yet" : "the disc has no program");
 }
 
 //What the program writes, and the kernel's notes: to the log (on Android, logcat's "PSP" tag).

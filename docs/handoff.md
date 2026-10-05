@@ -742,6 +742,32 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: disc images (ISO and CSO), the disc's files and the drive — 2026-10-05
+
+Branch `cursor/psp-umd-2b67`, stacked on `cursor/psp-app-2b67` (for stack #106). The PSP's disc as an image: an ISO
+or CSO reader with the ISO 9660 file system (`ares/psp/kernel/disc.cpp`), disc0: on it in the kernel's file calls
+(paths, `sce_lbn` sector runs) and umd0: as the whole disc, sceIoIoctl and sceIoDevctl (the disc's, and the memory
+stick's), sceUmdUser, and booting PSP_GAME/SYSDIR/EBOOT.BIN (or a plain BOOT.BIN when EBOOT.BIN is encrypted). In the
+app, .iso and .cso are back, and a disc image the app can't read by path is read through its descriptor instead of
+copied (mia's medium, `/proc/self/fd/<n>`, through `nall::vfs::descriptor`, new). docs/psp-core.md, part 14,
+describes it. Behavior from PPSSPP's notes on the hardware (the ioctl and devctl codes, the drive's states and
+timeouts, `sce_lbn` paths, umd0:), our own code.
+- **Review:** a general-purpose reviewer (one medium finding: `sce_lbn` numbers are always hexadecimal; thirteen
+  low: maxcso's padded last block, a failed block left cached, a damaged index able to ask for 186 GB, umd0: with a
+  path after it, read-only opens that create, "." and ".." and short names in disc listings, the 1-microsecond
+  timeout, trimmed images, a blank BOOT.BIN, the runner's descriptor route for a pipe, pread's EINTR, a test that
+  never ran, wording; all fixed), then a fresh reviewer's delta review (nine low: `sce_lbn` runs with slashes and
+  their status, a program cut short by a truncated image refused, a damaged folder size read whole, the status of a
+  device's top, umd0:'s sizes in sectors, the spare status words, two ioctl errors, an untested kernel path, two
+  stale comments, the descriptor route for a URI without the game's name; all fixed).
+- **Checks:** `tests/psp/disc.cpp` (new: four groups; ISO and CSO images made by `tests/psp/disc-image.hpp`), the
+  parts' 90 groups, `tests/psp/ares` (127 checks: the new `disc` program booted from an ISO and a CSO reads every
+  path right; `vfs::descriptor`), the app's unit tests; thirteen broken versions each failed (six only after tests
+  were tightened). On the RP6: the `disc` program from an ISO and a CSO printed what the host expects, and cube runs
+  from a CSO at 60 frames a second. The descriptor route ran on the host only (the RP6's app reads the SD card by
+  path, and the shell can't hand the app a document).
+- **Left on the RP6:** our test images and programs in the app's own `files/psp-test` folder (no games).
+
 ## PSP in the app: the core as an ares system, in Phobos's Android app — 2026-10-05
 
 Branch `cursor/psp-app-2b67`, stacked on `cursor/psp-flash0-dump-2b67` (for stack #106). At the user's request ("the

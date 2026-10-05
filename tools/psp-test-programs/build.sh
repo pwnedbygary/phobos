@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-#Builds the PSP core's test programs with pspdev's toolchain (the phobos-linux container has it in /opt/pspdev)
-#into a folder, for PSP_TEST_PROGRAMS (see tests/psp/loader.cpp): hello.elf (a static executable), hello.prx (a
+#Builds the PSP core's test programs with pspdev's toolchain (the phobos-linux container has it in /opt/pspdev) into
+#a folder, for PSP_TEST_PROGRAMS (see tests/psp/loader.cpp): hello.elf (a static executable), hello.prx (a
 #relocatable module) and EBOOT.PBP (holding the static one); system.elf, which uses files and the controls
-#(tests/psp/files.cpp); gu.elf, which drives the GE through pspsdk's GU library, and pspsdk's own GU samples "copy",
-#"blit", "clut", "blend", "doublelist", "cube", "celshading" and "envmap" (copy.elf and so on, from the toolchain's
-#samples; tests/psp/ge.cpp and draw.cpp); pspmeasure.elf, tools/psp-measure's program (tests/psp/measure.cpp).
-#They're built from source each time, so no binary goes in the repository.
+#(tests/psp/files.cpp); disc.elf, which reads the disc image it's booted from (tests/psp/ares); gu.elf, which drives
+#the GE through pspsdk's GU library, and pspsdk's own GU samples "copy", "blit", "clut", "blend", "doublelist",
+#"cube", "celshading" and "envmap" (copy.elf and so on, from the toolchain's samples; tests/psp/ge.cpp and
+#draw.cpp); pspmeasure.elf, tools/psp-measure's program (tests/psp/measure.cpp). They're built from source each
+#time, so no binary goes in the repository.
 #usage: tools/psp-test-programs/build.sh <output folder>
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -27,6 +28,10 @@ cp -r "$HERE/system" "$WORK/system"
 make -C "$WORK/system" >/dev/null
 cp "$WORK/system/system.elf" "$OUT/"
 
+cp -r "$HERE/disc" "$WORK/disc"
+make -C "$WORK/disc" >/dev/null
+cp "$WORK/disc/disc.elf" "$OUT/"
+
 cp -r "$HERE/gu" "$WORK/gu"
 make -C "$WORK/gu" >/dev/null
 cp "$WORK/gu/gu.elf" "$OUT/"
@@ -44,4 +49,4 @@ for sample in copy blit clut blend doublelist cube celshading envmap; do
   make -C "$WORK/samples/$sample" >/dev/null
   cp "$WORK/samples/$sample/$sample.elf" "$OUT/"
 done
-echo "built hello.elf, hello.prx, EBOOT.PBP, system.elf, gu.elf, the GU samples and pspmeasure.elf in $OUT"
+echo "built hello.elf, hello.prx, EBOOT.PBP, system.elf, disc.elf, gu.elf, the GU samples and pspmeasure.elf in $OUT"

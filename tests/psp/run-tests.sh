@@ -17,10 +17,11 @@ SANITIZE=${SANITIZE-$DEFAULT_SANITIZE -fno-sanitize-recover=all}
 #interpreter's per-instruction and the GE's per-pixel functions make hundreds of times slower; its other checks stay.
 export ASAN_OPTIONS=${ASAN_OPTIONS-detect_stack_use_after_return=0}
 SYSROOT=()
-LIBRARIES=(-lpthread -ldl)
+#zlib packs the disc tests' CSO images (disc-image.hpp)
+LIBRARIES=(-lpthread -ldl -lz)
 if [[ $(uname) == Darwin ]]; then
   if SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null); then SYSROOT=(-isysroot "$SDK"); fi
-  LIBRARIES=(-framework CoreFoundation)
+  LIBRARIES=(-framework CoreFoundation -lz)
 fi
 DEFINES=(-DBUILD_DEBUG -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1)
 INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty")
@@ -43,8 +44,8 @@ fi
 $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" \
   -include "$ROOT/tests/allegrex/prelude.hpp" "$ROOT/ares/psp/cpu/allegrex.cpp" "$ROOT/ares/psp/memory/memory.cpp" \
   "$ROOT/ares/psp/kernel/loader.cpp" "$ROOT/ares/psp/kernel/kernel.cpp" "$ROOT/ares/psp/ge/ge.cpp" \
-  "$HERE/main.cpp" "$HERE/memory.cpp" "$HERE/loader.cpp" "$HERE/kernel.cpp" "$HERE/files.cpp" "$HERE/ge.cpp" \
-  "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/measure.cpp" \
+  "$HERE/main.cpp" "$HERE/memory.cpp" "$HERE/loader.cpp" "$HERE/kernel.cpp" "$HERE/files.cpp" "$HERE/disc.cpp" \
+  "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/measure.cpp" \
   "$NALL" "$SLJIT" "$ALLOCATOR" \
   "${LIBRARIES[@]}" -o "$OUT/psp"
 "$OUT/psp"

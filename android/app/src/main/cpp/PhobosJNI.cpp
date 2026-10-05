@@ -34,8 +34,8 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"Mega CD", {"cue", "chd", "iso"}},
     {"Mega CD 32X", {"cue", "chd", "iso"}},
     {"PlayStation", {"cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"}},
-    // No disc images (iso, cso): the core can't read them yet. No .prx: mostly modules beside an EBOOT.PBP.
-    {"PlayStation Portable", {"pbp", "elf"}},
+    // No .prx: mostly modules beside an EBOOT.PBP, not programs.
+    {"PlayStation Portable", {"iso", "cso", "pbp", "elf"}},
     {"Neo Geo", {"ng", "neo"}},
     {"Neo Geo CD", {"ngc", "cue", "chd", "iso", "bin", "zip"}},
     {"Neo Geo Pocket", {"ngp", "nap"}},

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "loader.hpp"
+#include "disc.hpp"
 #include "../ge/ge.hpp"
 
 //The HLE kernel: Phobos's own version of the PSP's operating system, as far as a game can see it.
@@ -73,6 +74,7 @@ struct Kernel {
   static constexpr u32 ErrorUnknownSemaphore      = 0x8002'0199;
   static constexpr u32 ErrorNotDormant            = 0x8002'01a4;
   static constexpr u32 ErrorWaitTimeout           = 0x8002'01a8;
+  static constexpr u32 ErrorWaitCancelled         = 0x8002'01a9;
   static constexpr u32 ErrorSemaphoreZero         = 0x8002'01ad;
   static constexpr u32 ErrorSemaphoreOverflow     = 0x8002'01ae;
   static constexpr u32 ErrorEventFlagMulti        = 0x8002'01b0;  //a second thread waiting where only one may
@@ -107,6 +109,11 @@ struct Kernel {
   static constexpr u32 ErrorIsDirectory           = 0x8001'0015;
   static constexpr u32 ErrorInvalidArgument       = 0x8001'0016;
   static constexpr u32 ErrorDirectoryNotEmpty     = 0x8001'005a;
+  static constexpr u32 ErrorReadOnly              = 0x8001'001e;  //writing to the disc
+  static constexpr u32 ErrorFunctionNotSupported  = 0x8001'b000;  //an ioctl or devctl the device doesn't have
+  static constexpr u32 ErrorInvalidFileSize       = 0x8001'b003;  //seeking umd0: past the disc
+  static constexpr u32 ErrorInvalidFlag           = 0x8001'b004;  //opening a file on the disc to write it
+  static constexpr u32 ErrorDevctlBadParameters   = 0x8022'0081;  //a devctl's buffers too small or misplaced
 
   static constexpr u64 CPUFrequency = 333'000'000;                   //cycles a second
   static constexpr u64 VblankCycles = CPUFrequency * 1001 / 60'000;  //59.94 frames a second
@@ -167,7 +174,9 @@ struct Kernel {
     u32 vpr[128], pfxs, pfxt, pfxd, cc;
   };
   enum class Status : u32 { Running = 1, Ready = 2, Waiting = 4, Dormant = 16 };  //the PSP's numbers
-  enum class Wait : u32 { None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw };
+  enum class Wait : u32 {
+    None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd,
+  };
   struct Thread {
     u32 uid;
     std::string name;
@@ -258,7 +267,8 @@ struct Kernel {
   auto sceKernelMaxFreeMemSize() -> void;
   auto sceKernelTotalFreeMemSize() -> void;
 
-  //io.cpp: files and folders on the host folders standing for the PSP's devices; standard input, output and error
+  //io.cpp: files and folders on the host folders standing for the PSP's devices, or on the disc in the drive;
+  //standard input, output and error
   struct OpenFile {
     std::string path;      //the PSP's name for it, normalized
     std::string host;
@@ -268,14 +278,30 @@ struct Kernel {
     std::unique_ptr<std::fstream> stream;
     std::vector<std::string> entries;  //a folder's names, handed out one at a time
     u32 nextEntry = 0;
+    //on the disc: where it starts and how long it is. With `sectors` (through umd0:, the whole disc), positions and
+    //sizes count sectors rather than bytes.
+    bool onDisc = false, sectors = false;
+    u32 sector = 0;
+    u64 size = 0;
+    std::vector<Disc::Entry> discEntries;  //a folder on the disc's entries, beside their names
   };
   std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
+  std::shared_ptr<Disc> disc;  //the disc image in the drive (disc0: and umd0:, unless a host folder stands for it)
   std::map<u32, OpenFile> files;
   u32 nextFile = 3;  //after standard input, output and error
   std::string workingDirectory;
+  std::vector<u32> memoryStickCallbacks;  //callbacks the program registered for the memory stick going in and out
   auto mount(const std::string& device, const std::string& folder) -> void;
+  auto split(const std::string& path, std::string& device, std::string& rest) const -> bool;
+  auto onDisc(const std::string& path) const -> bool;
   auto resolve(const std::string& path, std::string& host, std::string& normalized) -> u32;
+  auto resolveOnDisc(const std::string& path, Disc::Entry& entry, std::string& normalized,
+                     std::vector<std::string>& names) -> u32;
   auto writeStat(u32 address, const std::string& host) -> void;
+  auto writeStat(u32 address, const Disc::Entry& entry) -> void;
+  auto openOnDisc(const std::string& path, u32 flags) -> u32;
+  auto runOnDisc(const std::string& path, u32& first, u64& bytes) const -> bool;
+  auto readFile(u32 file, u32 data, u32 size) -> u32;
   auto seek(u32 file, s64 offset, u32 whence, u64& position) -> u32;
   auto sceKernelStdin() -> void;
   auto sceKernelStdout() -> void;
@@ -295,6 +321,28 @@ struct Kernel {
   auto sceIoDopen() -> void;
   auto sceIoDread() -> void;
   auto sceIoDclose() -> void;
+  auto sceIoIoctl() -> void;
+  auto sceIoDevctl() -> void;
+
+  //umd.cpp: the disc drive
+  static constexpr u32 UmdNotPresent = 0x01, UmdPresent = 0x02, UmdChanged = 0x04, UmdNotReady = 0x08,
+                       UmdReady = 0x10, UmdReadable = 0x20;
+  u32 umdCallback = 0;  //the callback the program registered for the drive's changes
+  auto umdState() const -> u32;
+  auto umdWait(u32 stat, u32 timeout, bool callbacks) -> void;
+  auto sceUmdCheckMedium() -> void;
+  auto sceUmdActivate() -> void;
+  auto sceUmdDeactivate() -> void;
+  auto sceUmdGetDriveStat() -> void;
+  auto sceUmdWaitDriveStat() -> void;
+  auto sceUmdWaitDriveStatWithTimer() -> void;
+  auto sceUmdWaitDriveStatCB() -> void;
+  auto sceUmdCancelWaitDriveStat() -> void;
+  auto sceUmdGetErrorStat() -> void;
+  auto sceUmdGetDiscInfo() -> void;
+  auto sceUmdRegisterUMDCallBack() -> void;
+  auto sceUmdUnRegisterUMDCallBack() -> void;
+  auto sceUmdReplacePermit() -> void;
 
   //ctrl.cpp: the buttons and the analog stick
   struct Controller {

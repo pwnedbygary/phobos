@@ -9,7 +9,9 @@ namespace ares::PlayStationPortable {
 #include "interrupts.cpp"
 #include "events.cpp"
 #include "sysmem.cpp"
+#include "disc.cpp"
 #include "io.cpp"
+#include "umd.cpp"
 #include "ctrl.cpp"
 #include "display.cpp"
 #include "ge.cpp"
@@ -92,6 +94,22 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("IoFileMgrForUser",  "sceIoDopen",                    &Kernel::sceIoDopen);
   add("IoFileMgrForUser",  "sceIoDread",                    &Kernel::sceIoDread);
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
+  add("IoFileMgrForUser",  "sceIoIoctl",                    &Kernel::sceIoIoctl);
+  add("IoFileMgrForUser",  "sceIoDevctl",                   &Kernel::sceIoDevctl);
+  add("sceUmdUser",        "sceUmdCheckMedium",             &Kernel::sceUmdCheckMedium);
+  add("sceUmdUser",        "sceUmdActivate",                &Kernel::sceUmdActivate);
+  add("sceUmdUser",        "sceUmdDeactivate",              &Kernel::sceUmdDeactivate);
+  add("sceUmdUser",        "sceUmdGetDriveStat",            &Kernel::sceUmdGetDriveStat);
+  add("sceUmdUser",        "sceUmdWaitDriveStat",           &Kernel::sceUmdWaitDriveStat);
+  add("sceUmdUser",        "sceUmdWaitDriveStatWithTimer",  &Kernel::sceUmdWaitDriveStatWithTimer);
+  add("sceUmdUser",        "sceUmdWaitDriveStatCB",         &Kernel::sceUmdWaitDriveStatCB);
+  add("sceUmdUser",        "sceUmdCancelWaitDriveStat",     &Kernel::sceUmdCancelWaitDriveStat);
+  add("sceUmdUser",        "sceUmdGetErrorStat",            &Kernel::sceUmdGetErrorStat);
+  add("sceUmdUser",        "sceUmdGetDiscInfo",             &Kernel::sceUmdGetDiscInfo);
+  add("sceUmdUser",        "sceUmdRegisterUMDCallBack",     &Kernel::sceUmdRegisterUMDCallBack);
+  add("sceUmdUser",        "sceUmdUnRegisterUMDCallBack",   &Kernel::sceUmdUnRegisterUMDCallBack);
+  add("sceUmdUser",        "sceUmdReplacePermit",           &Kernel::sceUmdReplacePermit);
+  add("sceUmdUser",        "sceUmdReplaceProhibit",         &Kernel::sceUmdReplacePermit);
   add("sceCtrl",           "sceCtrlSetSamplingCycle",       &Kernel::sceCtrlSetSamplingCycle);
   add("sceCtrl",           "sceCtrlGetSamplingCycle",       &Kernel::sceCtrlGetSamplingCycle);
   add("sceCtrl",           "sceCtrlSetSamplingMode",        &Kernel::sceCtrlSetSamplingMode);
@@ -197,6 +215,8 @@ auto Kernel::power() -> void {
   eventFlags.clear();
   callbacks.clear();
   exitCallback = 0;
+  memoryStickCallbacks.clear();
+  umdCallback = 0;
   ge.power();  //the GE starts afresh with the program, its driver too
   for(auto& list : geLists) list = {};
   geQueue.clear();
