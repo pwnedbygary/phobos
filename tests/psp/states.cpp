@@ -300,6 +300,31 @@ static auto stateFields() -> void {
     {"block address", [&] { block.address ^= 0x100; }}, {"block size", [&] { block.size ^= 0x100; }},
     {"largeMemory", [&] { k.largeMemory = true; }}, {"sdkVersion", [&] { k.sdkVersion ^= 1; }},
     {"compilerVersion", [&] { k.compilerVersion ^= 1; }},
+    {"power callbacks", [&] { k.powerState.callbacks[5] = callback; }},
+    {"power pll", [&] { k.powerState.pll = 333; }},
+    {"power cpu", [&] { k.powerState.cpu = 333; }}, {"power bus", [&] { k.powerState.bus = 166; }},
+    {"power volatileLocked", [&] { k.powerState.volatileLocked = true; }},
+    {"semaphore initial", [&] { sema.initial ^= 1; }}, {"thread suspended", [&] { t.suspended = true; }},
+    {"audio reserved", [&] { k.audio.channels[3].reserved = true; }},
+    {"audio sampleCount", [&] { k.audio.channels[3].sampleCount = 64; }},
+    {"audio format", [&] { k.audio.channels[3].format = 0x10; }},
+    {"audio leftVolume", [&] { k.audio.channels[3].leftVolume = 1; }},
+    {"audio rightVolume", [&] { k.audio.channels[3].rightVolume = 1; }},
+    {"audio address", [&] { k.audio.channels[3].address = 0x0880'0000; }},
+    {"audio remaining", [&] { k.audio.channels[3].remaining = 64; }},
+    {"audio waiting", [&] { k.audio.channels[3].waiting = u32(two); }},
+    {"audio waitingAddress", [&] { k.audio.channels[3].waitingAddress = 4; }},
+    {"audio waitingLeft", [&] { k.audio.channels[3].waitingLeft = 1; }},
+    {"audio waitingRight", [&] { k.audio.channels[3].waitingRight = 1; }},
+    {"audio mixing", [&] { k.audio.mixing = true; }}, {"audio mixStart", [&] { k.audio.mixStart = 1; }},
+    {"audio blocks", [&] { k.audio.blocks = 7; }},
+    {"source reserved", [&] { k.audio.source.reserved = true; }},
+    {"source sampleCount", [&] { k.audio.source.sampleCount = 17; }},
+    {"source frequency", [&] { k.audio.source.frequency = 8'000; }},
+    {"source volume", [&] { k.audio.source.volume = 1; }}, {"source queued", [&] { k.audio.source.queued = 2; }},
+    {"source lengths", [&] { k.audio.source.lengths[1] = 17; }},
+    {"source finishAt", [&] { k.audio.source.finishAt = 1; }},
+    {"source completion", [&] { k.audio.source.completion = true; }},
     //files: the host file opened again as another, for writing too; the other host file counted as the disc's; the
     //disc's file a folder, read a sector at a time
     {"file path", [&] { host.path = "ms0:/B.TXT"; }},
@@ -418,6 +443,11 @@ static auto stateFields() -> void {
   });
   refuses("a block's ID not handed out yet", [&] { k.blocks.back().uid = k.nextUID; });
   refuses("a thread's callback not handed out yet", [&] { k.threads.at(one)->callbackID = k.nextUID; });
+  refuses("an audio channel's waiter not handed out yet", [&] { k.audio.channels[0].waiting = k.nextUID; });
+  refuses("the mixer's blocks not counted afresh", [&] { k.audio.blocks = 49; });
+  refuses("the mixer started later than now", [&] { k.audio.mixStart = k.cycles + 1; });
+  refuses("three buffers on the SRC channel", [&] { k.audio.source.queued = 3; });
+  refuses("an SRC channel at 0 Hz", [&] { k.audio.source.frequency = 0; });
   //a host folder's names as no listing makes them: reading it would join them to its place on the host
   refuses("a folder name reaching out of its folder", [&] { k.files[folder].entries.push_back("../../etc"); });
   refuses("a folder name that's a whole path", [&] { k.files[folder].entries.push_back("/etc"); });

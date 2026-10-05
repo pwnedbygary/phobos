@@ -139,6 +139,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
     check(t.callbackID < nextUID);
+    s(t.suspended);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
     check(t.wait != Wait::Controller || (t.waitCount & 0x7fff'ffff) < 64);
   };
@@ -170,6 +171,7 @@ auto Kernel::serialize(serializer& s) -> bool {
   //the kernel's objects
   map(semaphores, [&](Semaphore& semaphore) {
     s(semaphore.uid); text(semaphore.name); s(semaphore.attributes); s(semaphore.count); s(semaphore.maximum);
+    s(semaphore.initial);
   });
   map(lwMutexes, [&](u32& workArea) { s(workArea); });
   map(eventFlags, [&](EventFlag& flag) {
@@ -184,6 +186,20 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(umdCallback);
   vector(blocks, [&](Block& block) { s(block.uid); text(block.name); s(block.address); s(block.size); });
   s(largeMemory); s(sdkVersion); s(compilerVersion);
+  s(powerState.callbacks); s(powerState.pll); s(powerState.cpu); s(powerState.bus); s(powerState.volatileLocked);
+  //sound output: the mixer's blocks counted afresh every 49 (audioBlockAt()), from a start that has come; the SRC
+  //channel's queue two deep at most, at a rate it can divide by
+  for(auto& c : audio.channels) {
+    s(c.reserved); s(c.sampleCount); s(c.format); s(c.leftVolume); s(c.rightVolume); s(c.address); s(c.remaining);
+    s(c.waiting); s(c.waitingAddress); s(c.waitingLeft); s(c.waitingRight);
+    check(c.waiting < nextUID);
+  }
+  s(audio.mixing); s(audio.mixStart); s(audio.blocks);
+  check(audio.blocks < 49 && audio.mixStart <= cycles);
+  auto& source = audio.source;
+  s(source.reserved); s(source.sampleCount); s(source.frequency); s(source.volume); s(source.queued);
+  s(source.lengths); s(source.finishAt); s(source.completion);
+  check(source.queued <= 2 && source.frequency >= 8'000 && source.frequency <= 48'000);
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);

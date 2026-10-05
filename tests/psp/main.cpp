@@ -8,6 +8,8 @@ int main() {
   for(auto& test : loaderTests()) tests.push_back(test);
   for(auto& test : kernelTests()) tests.push_back(test);
   for(auto& test : callbackTests()) tests.push_back(test);
+  for(auto& test : powerTests()) tests.push_back(test);
+  for(auto& test : audioTests()) tests.push_back(test);
   for(auto& test : fileTests()) tests.push_back(test);
   for(auto& test : discTests()) tests.push_back(test);
   for(auto& test : discFormatTests()) tests.push_back(test);

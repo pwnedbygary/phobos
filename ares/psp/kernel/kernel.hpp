@@ -91,10 +91,13 @@ struct Kernel {
   static constexpr u32 ErrorLwMutexUnderflow      = 0x8002'01ce;
   static constexpr u32 ErrorLwMutexRecursion      = 0x8002'01cf;
   //uOFW's errors.h
+  static constexpr u32 ErrorNotImplemented        = 0x8000'0003;
   static constexpr u32 ErrorNotSupported          = 0x8000'0004;
   static constexpr u32 ErrorAlready               = 0x8000'0020;
   static constexpr u32 ErrorBusy                  = 0x8000'0021;
   static constexpr u32 ErrorOutOfMemory           = 0x8000'0022;
+  static constexpr u32 ErrorPrivilegeRequired     = 0x8000'0023;
+  static constexpr u32 ErrorNotFound              = 0x8000'0025;
   static constexpr u32 ErrorInvalidID             = 0x8000'0100;
   static constexpr u32 ErrorInvalidIndex          = 0x8000'0102;
   static constexpr u32 ErrorInvalidPointer        = 0x8000'0103;
@@ -116,6 +119,23 @@ struct Kernel {
   static constexpr u32 ErrorInvalidFileSize       = 0x8001'b003;  //seeking umd0: past the disc
   static constexpr u32 ErrorInvalidFlag           = 0x8001'b004;  //opening a file on the disc to write it
   static constexpr u32 ErrorDevctlBadParameters   = 0x8022'0081;  //a devctl's buffers too small or misplaced
+  static constexpr u32 ErrorVolatileMemoryInUse   = 0x802b'0200;  //the volatile memory lent already
+  //sceAudio's (uOFW's errors.h)
+  static constexpr u32 ErrorAudioChannelNotInitialized  = 0x8026'0001;
+  static constexpr u32 ErrorAudioChannelBusy            = 0x8026'0002;
+  static constexpr u32 ErrorAudioInvalidChannel         = 0x8026'0003;
+  static constexpr u32 ErrorAudioNoChannels             = 0x8026'0005;
+  static constexpr u32 ErrorAudioSampleCount            = 0x8026'0006;  //not a multiple of 64, or out of range
+  static constexpr u32 ErrorAudioInvalidFormat          = 0x8026'0007;
+  static constexpr u32 ErrorAudioChannelNotReserved     = 0x8026'0008;
+  static constexpr u32 ErrorAudioInvalidFrequency       = 0x8026'000a;
+  static constexpr u32 ErrorAudioInvalidVolume          = 0x8026'000b;
+  static constexpr u32 ErrorAudioChannelAlreadyReserved = 0x8026'8002;
+  //pspkerror.h's, for threads
+  static constexpr u32 ErrorDormant               = 0x8002'01a2;
+  static constexpr u32 ErrorSuspended             = 0x8002'01a3;
+  static constexpr u32 ErrorNotSuspended          = 0x8002'01a5;
+  static constexpr u32 ErrorThreadTerminated      = 0x8002'01ac;
 
   static constexpr u64 CPUFrequency = 333'000'000;                   //cycles a second
   static constexpr u64 VblankCycles = CPUFrequency * 1001 / 60'000;  //59.94 frames a second
@@ -181,7 +201,7 @@ struct Kernel {
   };
   enum class Status : u32 { Running = 1, Ready = 2, Waiting = 4, Dormant = 16 };  //the PSP's numbers
   enum class Wait : u32 {
-    None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd,
+    None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd, Audio,
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -210,12 +230,14 @@ struct Kernel {
     u32 callbackID = 0;        //which
     Context beforeCallback{};  //the thread as its callbacks found it: in its wait, or in sceKernelCheckCallback
     WaitState waitBeforeCallback;
+    bool suspended = false;    //another thread suspended it: it doesn't run, whatever its state, until resumed
   };
   struct Semaphore {
     u32 uid;
     std::string name;
     u32 attributes;
     s32 count, maximum;
+    s32 initial = 0;
   };
   std::map<u32, std::unique_ptr<Thread>> threads;
   std::map<u32, Semaphore> semaphores;
@@ -268,6 +290,16 @@ struct Kernel {
   auto sceKernelWaitSema() -> void;
   auto sceKernelWaitSemaCB() -> void;
   auto sceKernelPollSema() -> void;
+  auto sceKernelReferSemaStatus() -> void;
+  auto sceKernelChangeThreadPriority() -> void;
+  auto sceKernelGetThreadExitStatus() -> void;
+  auto sceKernelTerminateThread() -> void;
+  auto sceKernelTerminateDeleteThread() -> void;
+  auto sceKernelSuspendThread() -> void;
+  auto sceKernelResumeThread() -> void;
+  auto sceKernelChangeCurrentThreadAttr() -> void;
+  auto sceKernelGetThreadStackFreeSize() -> void;
+  auto sceKernelReferThreadProfiler() -> void;
   auto sceKernelCreateLwMutex() -> void;
   auto sceKernelDeleteLwMutex() -> void;
   auto sceKernelLockLwMutex() -> void;
@@ -572,9 +604,109 @@ struct Kernel {
   auto sceGeSaveContext() -> void;
   auto sceGeRestoreContext() -> void;
 
+  //audio.cpp: sound output's channels (their timing; the samples aren't played yet)
+  struct Audio {
+    struct Channel {
+      bool reserved = false;
+      u32 sampleCount = 0;            //samples in each buffer handed over
+      u32 format = 0;                 //0x00 stereo, 0x10 mono
+      u32 leftVolume = 0, rightVolume = 0;
+      u32 address = 0;                //the buffer playing, where the next block comes from (0: none)
+      u32 remaining = 0;              //its samples still to play
+      u32 waiting = 0;                //the thread waiting to hand over the next (0: none)
+      u32 waitingAddress = 0;
+      s32 waitingLeft = 0, waitingRight = 0;
+    } channels[8];
+    bool mixing = false;              //the mixer runs: a block of 64 samples from each channel every 64/44100 s
+    u64 mixStart = 0;                 //when its blocks are counted from
+    u64 blocks = 0;                   //blocks mixed since (under 49: then it counts from there)
+    struct Source {                   //the SRC channel: two buffers queued at most, played one after the other
+      bool reserved = false;
+      u32 sampleCount = 0, frequency = 44'100, volume = 0;
+      u32 queued = 0;
+      u32 lengths[2] = {};            //the queued buffers' samples
+      u64 finishAt = 0;               //when the first queued finishes
+      bool completion = false;        //a buffer finished (or playing started) since the last output took one
+    } source;
+  } audio;
+  auto audioBlockAt(u64 block) const -> u64;
+  auto audioOutput(u32 number, u32 address, s32 left, s32 right) -> u32;
+  auto audioOutputBlocking(u32 number, u32 address, s32 left, s32 right) -> void;
+  auto mixAudio() -> void;
+  auto sourceFinished() -> void;
+  auto audioEvents() -> bool;
+  auto nextAudioEvent() const -> u64;
+  auto sourceReserve(u32 samples, u32 frequency) -> void;
+  auto sourceRelease() -> void;
+  auto sourceOutput(u32 volume, u32 address) -> void;
+  auto sceAudioChReserve() -> void;
+  auto sceAudioChRelease() -> void;
+  auto sceAudioOutputBlocking() -> void;
+  auto sceAudioOutputPannedBlocking() -> void;
+  auto sceAudioOutput() -> void;
+  auto sceAudioOutputPanned() -> void;
+  auto sceAudioGetChannelRestLen() -> void;
+  auto sceAudioGetChannelRestLength() -> void;
+  auto sceAudioSetChannelDataLen() -> void;
+  auto sceAudioChangeChannelConfig() -> void;
+  auto sceAudioChangeChannelVolume() -> void;
+  auto sceAudioOutput2Reserve() -> void;
+  auto sceAudioOutput2OutputBlocking() -> void;
+  auto sceAudioOutput2ChangeLength() -> void;
+  auto sceAudioOutput2GetRestSample() -> void;
+  auto sceAudioOutput2Release() -> void;
+  auto sceAudioSRCChReserve() -> void;
+  auto sceAudioSRCOutputBlocking() -> void;
+  auto sceAudioSRCChRelease() -> void;
+
+  //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
+  struct Power {
+    u32 callbacks[16] = {};       //the callbacks registered in each slot (0: none)
+    u32 pll = 222, cpu = 222, bus = 111;  //the clocks asked for, in MHz (a PSP starts at these)
+    bool volatileLocked = false;  //the volatile memory is lent to the game
+  } powerState;
+  auto resultFloat(float value) -> void;
+  auto scePowerRegisterCallback() -> void;
+  auto scePowerUnregisterCallback() -> void;
+  auto scePowerIsPowerOnline() -> void;
+  auto scePowerIsBatteryExist() -> void;
+  auto scePowerIsBatteryCharging() -> void;
+  auto scePowerGetBatteryChargingStatus() -> void;
+  auto scePowerIsLowBattery() -> void;
+  auto scePowerGetBatteryLifePercent() -> void;
+  auto scePowerGetBatteryLifeTime() -> void;
+  auto scePowerTick() -> void;
+  auto scePowerSetClockFrequency() -> void;
+  auto scePowerSetCpuClockFrequency() -> void;
+  auto scePowerSetBusClockFrequency() -> void;
+  auto scePowerGetCpuClockFrequency() -> void;
+  auto scePowerGetBusClockFrequency() -> void;
+  auto scePowerGetPllClockFrequencyInt() -> void;
+  auto scePowerGetCpuClockFrequencyFloat() -> void;
+  auto scePowerGetBusClockFrequencyFloat() -> void;
+  auto scePowerGetPllClockFrequencyFloat() -> void;
+  auto sceKernelPowerTick() -> void;
+  auto sceKernelPowerLock() -> void;
+  auto sceKernelPowerUnlock() -> void;
+  auto sceKernelVolatileMemTryLock() -> void;
+  auto sceKernelVolatileMemUnlock() -> void;
+
   //system.cpp: leaving, clocks, and the odds and ends a C library's start-up asks for
   u64 startTime = 0;  //the date when the PSP started, in microseconds since 1970
   auto result64(u64 value) -> void;
+  auto sceKernelLibcClock() -> void;
+  auto sceKernelSysClock2USec() -> void;
+  auto sceKernelSysClock2USecWide() -> void;
+  auto sceRtcGetTick() -> void;
+  auto sceRtcCompareTick() -> void;
+  auto sceKernelUtilsMt19937Init() -> void;
+  auto sceKernelUtilsMt19937UInt() -> void;
+  auto sceKernelPrintf() -> void;
+  auto sceKernelSetGPO() -> void;
+  auto sceWlanGetSwitchState() -> void;
+  auto sceWlanGetEtherAddr() -> void;
+  auto sceImposeSetLanguageMode() -> void;
+  auto sceDmacMemcpy() -> void;
   auto sceKernelExitGame() -> void;
   auto sceKernelSelfStopUnloadModule() -> void;
   auto sceKernelStopUnloadSelfModuleWithStatus() -> void;

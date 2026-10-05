@@ -12,7 +12,9 @@ auto Kernel::newUID() -> u32 {
   return nextUID <= LastUID ? nextUID++ : 0;
 }
 
-//A new thread, dormant until started: its stack comes from the top of the user partition, as the PSP takes it.
+//A new thread, dormant until started: its stack comes from the top of the user partition, as the PSP takes it. The
+//PSP fills a new stack with 0xff bytes (what sceKernelGetThreadStackFreeSize counts) and writes the thread's ID at
+//its bottom, unless the thread's attributes say not to (PSP_THREAD_ATTR_NO_FILLSTACK, 0x100000; PPSSPP's notes).
 auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 stackSize, u32 attributes, u32 gp) -> s32 {
   if(priority < 0x01 || priority > 0x7f) return ErrorIllegalPriority;
   if(stackSize < 0x200) return ErrorIllegalStackSize;
@@ -20,6 +22,10 @@ auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 
   if(!block) return ErrorNoMemory;
   u32 uid = newUID();
   if(!uid) return release(block->uid), ErrorNoMemory;
+  if(!(attributes & 0x0010'0000)) {
+    memory.fill(block->address, 0xff, block->size);
+    memory.write(4, block->address, uid);
+  }
   auto thread = std::make_unique<Thread>();
   thread->uid = uid;
   thread->name = name;
@@ -128,7 +134,7 @@ auto Kernel::reschedule() -> void {
   }
   Thread* best = nullptr;
   for(auto& [uid, thread] : threads) {
-    if(thread->status != Status::Ready) continue;
+    if(thread->status != Status::Ready || thread->suspended) continue;
     if(!best || thread->priority < best->priority
     || (thread->priority == best->priority && thread->readySince < best->readySince)) best = thread.get();
   }
@@ -177,6 +183,7 @@ auto Kernel::events() -> void {
     controller.nextSample += u64(controller.cycle) * (CPUFrequency / 1'000'000);
     if(sampleController()) woke = true;
   }
+  if(audioEvents()) woke = true;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting || !thread->wakeAt || cycles < thread->wakeAt) continue;
     if(thread->wait == Wait::LwMutex) {  //it stops waiting: the mutex has one waiter fewer
@@ -191,7 +198,7 @@ auto Kernel::events() -> void {
 
 //How many cycles until the next thing that's due (at most until the next vertical blank).
 auto Kernel::untilNextEvent() const -> u64 {
-  u64 next = nextVblank;
+  u64 next = std::min(nextVblank, nextAudioEvent());
   if(controller.cycle) next = std::min(next, controller.nextSample);
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
@@ -209,6 +216,7 @@ auto Kernel::idle(u64 end) -> bool {
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
     if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;
+    if(thread->wait == Wait::Audio) timed = true;  //a buffer playing ends it
   }
   if(!timed) {
     if(!stuck) {
@@ -328,8 +336,10 @@ auto Kernel::sceKernelReferThreadStatus() -> void {
     default: break;
     }
   }
+  u32 status = u32(thread->status);  //suspended: 8, with its waiting (4) kept, but not its readiness (2)
+  if(thread->suspended) status = (thread->status == Status::Ready ? 0 : status) | 8;
   put(36, thread->attributes);
-  put(40, u32(thread->status));
+  put(40, status);
   put(44, thread->entry);
   put(48, thread->stackBlock);
   put(52, thread->stackSize);
@@ -409,7 +419,7 @@ auto Kernel::sceKernelCreateSema() -> void {
   if(initial < 0 || maximum <= 0 || initial > maximum) return result(ErrorIllegalCount);
   u32 uid = newUID();
   if(!uid) return result(ErrorNoMemory);
-  semaphores[uid] = {uid, memory.readString(arg(0), 31), arg(1), initial, maximum};
+  semaphores[uid] = {uid, memory.readString(arg(0), 31), arg(1), initial, maximum, initial};
   result(uid);
 }
 
@@ -595,4 +605,116 @@ auto Kernel::sceKernelUnlockLwMutex() -> void {
 //The low 32 bits of the time since power on, in microseconds.
 auto Kernel::sceKernelGetSystemTimeLow() -> void {
   result(u32(cycles / (CPUFrequency / 1'000'000)));
+}
+
+//(semaphore, info): a SceKernelSemaInfo (pspthreadman.h) as far as the size in its first word: name, attributes,
+//initial, current and largest count, how many threads wait.
+auto Kernel::sceKernelReferSemaStatus() -> void {
+  auto found = semaphores.find(arg(0));
+  if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
+  auto& semaphore = found->second;
+  u32 info = arg(1), size = memory.read(4, info), waiting = 0;
+  for(auto& [uid, thread] : threads) {
+    waiting += thread->status == Status::Waiting && thread->wait == Wait::Semaphore && thread->waitID == arg(0);
+  }
+  for(u32 offset = 4; offset < 36 && offset < size; offset++) {
+    memory.write(1, info + offset, offset - 4 < semaphore.name.size() ? u8(semaphore.name[offset - 4]) : 0);
+  }
+  u32 words[] = {semaphore.attributes, u32(semaphore.initial), u32(semaphore.count), u32(semaphore.maximum), waiting};
+  for(u32 n = 0; n < 5; n++) if(36 + n * 4 + 4 <= size) memory.write(4, info + 36 + n * 4, words[n]);
+  result(0);
+}
+
+//(thread or 0, priority or 0 for the caller's own): a running thread of lower priority than another ready one gives
+//way to it at once. A dormant thread, and priorities outside 8-119, are refused (PPSSPP's reading of the PSP).
+auto Kernel::sceKernelChangeThreadPriority() -> void {
+  u32 priority = arg(1);
+  if(!priority && current) priority = current->priority;
+  auto thread = findThread(arg(0));
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status == Status::Dormant) return result(ErrorDormant);
+  if(priority < 0x08 || priority > 0x77) return result(ErrorIllegalPriority);
+  thread->priority = priority;
+  result(0);
+  //to the back of its new priority's queue, as on the PSP; the caller may have to give way now
+  if(thread->status == Status::Ready || thread->status == Status::Running) thread->readySince = ++readySequence;
+  if(thread == current && current->status == Status::Running) current->status = Status::Ready;
+  reschedule();
+}
+
+//(thread): what a dormant thread ended with; one still going has none yet.
+auto Kernel::sceKernelGetThreadExitStatus() -> void {
+  auto thread = findThread(arg(0));
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status != Status::Dormant) return result(ErrorNotDormant);
+  result(u32(thread->exitStatus));
+}
+
+//(thread): ends another thread, wherever it is, as if it had exited (those waiting for its end are told it was
+//terminated); not the caller.
+auto Kernel::sceKernelTerminateThread() -> void {
+  auto thread = findThread(arg(0));
+  if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status == Status::Dormant) return result(ErrorDormant);
+  endThread(*thread, s32(ErrorThreadTerminated));
+  thread->suspended = false;
+  result(0);
+  reschedule();
+}
+
+//(thread): ends another thread and deletes it.
+auto Kernel::sceKernelTerminateDeleteThread() -> void {
+  auto thread = findThread(arg(0));
+  if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status != Status::Dormant) endThread(*thread, s32(ErrorThreadTerminated));
+  deleteThread(*thread);
+  result(0);
+  reschedule();
+}
+
+//(thread): it stops being scheduled until resumed, whatever its state (a wait goes on meanwhile); not the caller.
+auto Kernel::sceKernelSuspendThread() -> void {
+  auto thread = findThread(arg(0));
+  if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status == Status::Dormant) return result(ErrorDormant);
+  if(thread->suspended) return result(ErrorSuspended);
+  thread->suspended = true;
+  result(0);
+}
+
+auto Kernel::sceKernelResumeThread() -> void {
+  auto thread = findThread(arg(0));
+  if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);
+  if(!thread) return result(ErrorUnknownThread);
+  if(!thread->suspended) return result(ErrorNotSuspended);
+  thread->suspended = false;
+  result(0);
+  reschedule();
+}
+
+//(attributes to clear, attributes to set) on the calling thread: only the VFPU's (0x4000) may change (PPSSPP's
+//notes).
+auto Kernel::sceKernelChangeCurrentThreadAttr() -> void {
+  if((arg(0) | arg(1)) & ~0x4000u) return result(ErrorIllegalAttribute);
+  if(current) current->attributes = (current->attributes & ~arg(0)) | arg(1);
+  result(0);
+}
+
+//(thread or 0): how much of its stack it has never touched: the 0xff bytes it was filled with, counted from its
+//bottom past the 16 bytes holding its ID, in whole words.
+auto Kernel::sceKernelGetThreadStackFreeSize() -> void {
+  auto thread = findThread(arg(0));
+  if(!thread) return result(ErrorUnknownThread);
+  u32 free = 0;
+  while(0x10 + free < thread->stackSize && memory.read(1, thread->stackBlock + 0x10 + free) == 0xff) free++;
+  result(free & ~3u);
+}
+
+//The profiler's figures for a thread, or for all (sceKernelReferThreadProfiler, sceKernelReferGlobalProfiler): only
+//development PSPs keep them; a retail one has none to give.
+auto Kernel::sceKernelReferThreadProfiler() -> void {
+  result(0);
 }
