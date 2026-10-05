@@ -13,7 +13,8 @@ measurements on `cursor/psp-3d-measure-2b67`; part 12, lighting, on `cursor/psp-
 whole feature to be stacked and merged at once (GitHub stack #106).
 Part 13, the PSP in Phobos (an ares system, mia's medium, the Android app's entry), is on `cursor/psp-app-2b67`:
 homebrew runs in the app on the RP6. Part 14, disc images (ISO and CSO, the disc's files, the drive), is on
-`cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`.
+`cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`. Part 18, decryption, is on
+`cursor/psp-decrypt-2b67`.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -345,8 +346,8 @@ relocatable modules (PRX, type `0xffa0`, linked as if at 0). Games and newer hom
   library name) has `module_start` (NID `0xd632acdb`) and `module_info` (`0xf01d73a7`).
 - **Refused, with the reason**: anything that isn't a MIPS ELF program, a segment that runs past the file or doesn't
   fit in memory, an unknown relocation type or segment number, packed relocations, no module info, tables pointing
-  outside memory, and encrypted programs (`~PSP`), named by the module and encryption type their header gives in the
-  clear.
+  outside memory, and encrypted programs (`~PSP`) that can't be decrypted. (An encrypted program is decrypted first,
+  and the ELF inside it loaded: part 18.)
 
 Sources: pspsdk's headers (`psploadcore.h`, `pspmoduleinfo.h`, `pspimport.s`) for the tables, its `psp-prxgen` for
 how pspdev writes a PRX's relocations, the PSP Developer Wiki's "PRX File Format" (which the user saved for us when
@@ -1084,10 +1085,10 @@ documented (the ioctl and devctl codes, the drive's states and timeouts, `sce_lb
   microseconds 240 (but 240 for 1 too when the wait lets callbacks run). The disc's kind is a game's; a callback for
   the drive's changes is kept (none come).
 - **Booting a disc** (`ares/psp/system`): the image goes in the drive, and PSP_GAME/SYSDIR/EBOOT.BIN starts, from
-  `disc0:/PSP_GAME/SYSDIR`. A shop-bought game's is encrypted ("~PSP"), which isn't read yet (the next part); a
-  plain BOOT.BIN beside it stands in when there is one. Only an ELF or an EBOOT.PBP is started, so a blank BOOT.BIN
-  is passed over. A truncated image that cuts its program short still boots it, read as far as the image goes (no
-  further than 64 MiB), as PPSSPP lets truncated images boot.
+  `disc0:/PSP_GAME/SYSDIR`. A shop-bought game's is encrypted ("~PSP"), and decrypted first (part 18); a plain
+  BOOT.BIN beside it stands in only when it can't start. Only an ELF, an EBOOT.PBP or an encrypted program is started,
+  so a blank BOOT.BIN is passed over. A truncated image that cuts its program short still boots it, read as far as
+  the image goes (no further than 64 MiB), as PPSSPP lets truncated images boot.
 - **In the app**: the PSP takes .iso and .cso again. A disc image Phobos can't read where it is (told by its URI's
   extension, or for a URI that doesn't end in its name, the game's) isn't copied into its cache (a gigabyte or two):
   the runner hands mia the app's descriptor as `/proc/self/fd/<n>` (if it's a file; anything else is copied), and
@@ -1324,3 +1325,118 @@ Tests:
   DAX, a JSO and CHDs (hunks of one sector and of four), as from the ISO and the CSO; a CD's CHD, and one needing its
   parent, isn't taken as the disc. Its script builds libchdr as the app does.
 - The app's `LaunchSystemsTest`: .zso, .dax and .jso go to the PSP alone; a .chd by its folder.
+
+## Part 18: decryption
+
+`ares/psp/kernel/aes.cpp`, `kirk.cpp`, `keys.cpp` and `decrypt.cpp` (declared in `crypto.hpp`): a shop-bought game's
+programs come encrypted (a disc's EBOOT.BIN, and most PRXs it loads), in Sony's `~PSP` format, and the kernel
+decrypts them with the published keys before loading them, as the PSP's own kernel does with its crypto chip, KIRK.
+Written from the PSP Developer Wiki's "Kirk", "Keys" and "PRX File Format" pages (as the Wayback Machine keeps them),
+FIPS-197 and FIPS 180-1. Where the wiki stops (how each type of `~PSP` file hides KIRK's header), PPSSPP's
+decrypter was read to learn the steps, which are set down below in our own words; the code was written from this
+description.
+
+- **AES-128** (FIPS-197), one block at a time or a run of them with ECB or CBC, each way. nall has none. The S-box is
+  made from its definition (reciprocals in GF(2^8), then the affine transformation) rather than typed out.
+- **SHA-1** (FIPS 180-1), moved out of `Kernel::nid()`, which takes its digest's first four bytes.
+- **KIRK** is given a command number, an input that starts with the command's header, and an output; it answers 0 or
+  an error number (the wiki's). Three of its commands:
+  - **1, decrypt private**: a 0x90-byte header, a padding, then data. The header's first 16 bytes are the data's AES
+    key, encrypted (one block) with KIRK's command 1 key; 0x60 holds 1 (the command), 0x64 whether the header is
+    signed with a CMAC (0) or ECDSA (1), 0x70 the data's size and 0x74 the padding's. The data is AES-128-CBC with a
+    zero IV. The PSP checks the signature first; Phobos doesn't (an ECDSA one would take Sony's private key to make,
+    so no test could, and the `~PSP` file's own check below already tells a damaged one).
+  - **7, decrypt static**: a 0x14-byte header (0x00: 5, the mode for decrypting; 0x0c: the keyseed; 0x10: the data's
+    size), then data in AES-128-CBC with a zero IV under KIRK's key 4 + keyseed (the wiki lists them by keyseed). A
+    PSP changes the keys of keyseeds 0x20-0x2f and 0x6c-0x7b with its own fuse ID: they're refused, and no tag uses
+    them.
+  - **0xb**: the SHA-1 digest of the data after a 4-byte size.
+- **The `~PSP` header**, 0x150 bytes, then the encrypted program. In the clear: 0x00 "~PSP"; 0x04 the module's
+  attributes; 0x06 bit 0, the program is compressed (bits 8-11 say how: 0 gzip, 1 "2RLZ", 2 "KL4E"); 0x0a the
+  module's name (28 bytes); 0x28 the program's size once decrypted and unpacked; 0x2c the file's size; 0x7c the
+  decryption mode (1 a kernel module, 4 a user module, 9 a game disc's EBOOT.BIN, ...). From 0x80 to 0x150: the
+  pieces of KIRK command 1's header, hidden, the tag at 0xd0, and a SHA-1 digest to check them by. Where each piece
+  is depends on the type.
+- **The tag** names the key. A table (`keys.cpp`) gives for each tag a key (144 bytes for the first years' tags, 16
+  for later ones), the keyseed for KIRK command 7, and the type: the steps that rebuild KIRK's header. The keys are
+  the wiki's; which tag goes with which key, keyseed and type is PPSSPP's tables', checked against the wiki's list of
+  types by tag (read from the PSP's own `mesg_led` module) and against the user's games. A tag listed twice (a kernel
+  module's 0x00000000 and 0x4467415d, with a 144-byte and a 16-byte key) is tried both ways: the check says which.
+- **Type 0** (a 144-byte key; the first games): KIRK's header is stored in two pieces, its first 0x40 bytes at
+  0x110-0x150 and its last 0x50 at 0x80-0xd0 (so the data's size and padding are at 0xb0 and 0xb4, in the clear).
+  The check: the SHA-1 digest of the key's first 0x14 bytes, 0xe8-0x110, the header's two pieces in order and the
+  file's first 0x80 bytes must be the 20 bytes at 0xd4. Then the header's first 0x70 bytes are XORed with the key's
+  bytes 0x14-0x84, decrypted with KIRK command 7 under the tag's keyseed, and XORed with the key's bytes 0x20-0x90.
+- **Type 1**: type 0 behind one more lock: before anything else, the 0xa0 bytes made of 0xe0-0x150 then 0x80-0xb0
+  are decrypted with KIRK command 7 and put back where they were.
+- **Type 2** (a 16-byte key): the key is first spread into a 0x90-byte pad: nine copies of it, copy n with its first
+  byte replaced by n, decrypted together with KIRK command 7. KIRK's header has its first 0x40 bytes stored at
+  0x80-0xb0 and 0xc0-0xd0, and its 0x70-0x80 (the sizes, in the clear) at 0xb0-0xc0; the rest isn't stored: zeros,
+  but 1 at 0x60. The 0x60 bytes made of 0x140-0x150, 0x12c-0x140, 0x80-0xb0 and 0xc0-0xcc are decrypted with KIRK
+  command 7 and put back. The check: 0xd4-0x10c holds zeros, and the SHA-1 digest of the tag, the pad's first 0x10
+  bytes, 0xd4-0x12c, 0x140-0x150, the header's 0x40 stored bytes (0x80-0xb0, 0xc0-0xd0), 0xb0-0xc0 and the file's
+  first 0x80 bytes must be the 20 bytes at 0x12c. Then the header's first 0x40 bytes are XORed with the pad's bytes
+  0x10-0x50, decrypted with KIRK command 7, and XORed with the pad's 0x50-0x90.
+- **Type 6**: type 2 signed with ECDSA, the signature's last 0x20 bytes at 0x10c-0x12c, where type 2 has zeros: both
+  are hashed alike, and one routine reads the two. (KIRK's header is then in its ECDSA form, which only the signature
+  check reads.)
+- **Type 5**: type 2 with a 16-byte XOR key of the tag's own: first, the 0x50 bytes made of 0x80-0xb0, 0xc0-0xd0 and
+  0x12c-0x13c are XORed with it (over and over) and decrypted with KIRK command 7; then the 0x60 bytes type 2
+  decrypts are XORed with it just before they are. 0xd4 may hold anything (0xd5-0x12c holds zeros), and the digest
+  counts 0xd4-0x12c as zeros. (A PSN game's programs mix a second key, from its license, into the pad and the first
+  step; a disc's never do.)
+- **The program**: KIRK command 1 on the rebuilt header, the file's first 0x80 bytes as its padding (0x74 must say
+  0x80) and the file from 0x150 as its data. If the header says compressed with gzip (RFC 1952), the data is
+  unpacked with nall's inflate, and must come to the size at 0x28, with gzip's own CRC-32 and size right.
+- **Not read**: the other types (3, 4 and 7 to 10: DRM, demos and applications, updates kept on the memory stick, and
+  the firmware's types 9 and 10), tags whose key the wiki hasn't published, and the "2RLZ" and "KL4E" packings
+  (KL4E packs the 880-byte splash screen module, OPNSSMP.BIN, some discs carry for the PSP's menu): each is refused,
+  saying which.
+- **Where**: the loader (`Loader::load()`) decrypts an encrypted program before reading it as an ELF, so whatever
+  loads a program (the kernel's `load()` and `start()`, an EBOOT.PBP's DATA.PSP) takes one, and refuses one it can't
+  decrypt with the decrypter's reason (the module's name, its tag, and why). A disc's EBOOT.BIN starts decrypted; a
+  plain BOOT.BIN beside it only when EBOOT.BIN can't start, and the system reports why EBOOT.BIN couldn't ("its tag
+  names a key Phobos doesn't have", say), whether or not BOOT.BIN then does. Each program is tried with the kernel's
+  `load()`, so one that fails leaves nothing behind. AES decrypts about 46 MB a second on the Mac (-O2): a game's
+  5 MB EBOOT.BIN takes a tenth of a second.
+
+Checked against the user's games (CHDs read in place on the Mac with a scratch tool built on these files, nothing
+decrypted kept): every EBOOT.BIN and every module on the disc decrypts at the first key its tag names, into a MIPS ELF
+whose program headers lie inside it:
+- Lumines: EBOOT.BIN tag 0x08000000 (type 0); its four kernel modules, tag 0 (type 0, three packed with gzip).
+- Burnout Legends, GTA Liberty City Stories, Midnight Club 3 (v2.02), SOCOM Fireteam Bravo, Snoopy vs. the Red
+  Baron: EBOOT.BIN tag 0xc0cb167c (type 1); Burnout's seven and Snoopy's nine kernel modules, tag 0 (type 0, mostly
+  gzip), and Snoopy's rinit.prx, 0x03000000 (type 0, gzip); SOCOM's five kernel modules, 0x4467415d (type 1, its
+  144-byte key), and its libatrac3plus and mpeg, 0x3ace4dce (type 1).
+- Gunhound EX and Peace Walker (v2.00): EBOOT.BIN tag 0xd91613f0 (type 2); Gunhound's a static executable.
+- Refused, as described: each disc's firmware updater (UPDATE/EBOOT.BIN, tag 0x02000000, a VSH module's, left out of
+  the table) and Gunhound's and Peace Walker's OPNSSMP.BIN (tag 0x457b0cf0, type 2: it unlocks, but is packed with
+  KL4E).
+
+Tests:
+- `tests/psp/crypto.cpp`, four groups: "crypto aes" (FIPS-197's examples, NIST SP 800-38A's ECB and CBC ones, each
+  way; a thousand chained blocks, whose last OpenSSL gave; a partial last block left alone); "crypto sha-1" (FIPS
+  180-1's examples, a NID, command 0xb and its refusals); "crypto kirk static" (data encrypted as command 4 does comes
+  back under every keyseed not made per console, in place too; per-console and missing keyseeds, other modes, no
+  data, data not in whole blocks, inputs and outputs too small: refused); "crypto kirk private" (data encrypted as
+  Sony's tools do, in whole blocks or not, with and without padding, CMAC or ECDSA headers, in place too; another
+  command, no data, too small an output, an input cut short, huge sizes and paddings: refused).
+- `tests/psp/decrypt.cpp`, five groups, on programs encrypted by `tests/psp/encrypt.hpp`, which runs part 18's steps
+  backwards with the core's AES, SHA-1 and tables: "decrypt types" (a PRX under tags of types 0, 1, 2, 5 and 6, with
+  and without gzip, a signature's end of zeros and not, and the two keys of a tag listed twice: decrypted exactly,
+  then loaded and run on both engines); "decrypt every tag" (each tag in the tables round-trips; none names a keyseed
+  made per console); "decrypt refusals" (not a ~PSP file; cut short at every length of its header, and in its
+  program; an unknown tag, and another tag's; every byte of the header damaged, for a tag of each type: refused, but
+  for type 5's 0xd4, which nothing reads; the program said to be elsewhere, or bigger than the file; 2RLZ, KL4E and
+  an unknown packing); "decrypt packing" (gzip's stream, CRC and size damaged, a stream cut short, a name that never
+  ends, not deflate, a wrong size in the ~PSP header: refused; a header with every optional field: read; a damaged
+  program comes out different, as the PSP's signature over it isn't checked, unless it's packed); "decrypt kernel
+  loads" (the kernel loads an encrypted program, and refuses one with an unknown tag with the decrypter's reason,
+  leaving nothing behind). The loader's refusals pass on the decrypter's reasons.
+- `tests/psp/ares` (220 checks): the disc program encrypted under tags of types 1 and 2 (the second packed with gzip),
+  a plain BOOT.BIN beside it: EBOOT.BIN starts and reads its disc exactly as the plain one does. One cut short, and
+  one whose tag names no key: alone, beside a blank BOOT.BIN, and beside a plain one, which starts; each time the
+  system reports why EBOOT.BIN couldn't, and whether BOOT.BIN started instead.
+- Broken versions each failed a test: type 6's signature left out of the digest, type 1's extra lock skipped, gzip's
+  CRC unchecked, KIRK command 1's partial last block chained from the IV, type 5's zeros unchecked, and only the
+  first key of a tag listed twice tried.

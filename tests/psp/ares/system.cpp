@@ -9,6 +9,7 @@
 //holding hello.elf and disc.elf. Without it, those checks are skipped.
 #include <psp/psp.hpp>
 #include "../disc-formats.hpp"
+#include "../encrypt.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -115,6 +116,22 @@ auto startPath() -> std::string {
   char path[256] = {};
   psp.memory.copyOut(path, ares::PlayStationPortable::Kernel::Trampoline + 0x100, sizeof(path) - 1);
   return path;
+}
+
+//What the system reports while something runs: on the host it writes its reports to standard error, which is sent to
+//a file for the while.
+auto reports(const std::function<void()>& run) -> std::string {
+  auto path = scratch / "reports.txt";
+  std::fflush(stderr);
+  int saved = ::dup(2), file = ::open(path.string().c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  ::dup2(file, 2);
+  ::close(file);
+  run();
+  std::fflush(stderr);
+  ::dup2(saved, 2);
+  ::close(saved);
+  std::ifstream stream(path);
+  return std::string((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
 }
 
 auto names() -> void {
@@ -270,8 +287,9 @@ auto fingerprint(const std::vector<std::uint8_t>& bytes, size_t offset, size_t s
 //A disc image in the drive, as an ISO and in each compressed form (CSO, CSO version 2, ZSO, DAX, JSO, and CHD in
 //hunks of one sector and of four): its program (tools/psp-test-programs' disc) boots from it and reads it every way
 //games do, printing what it found, which must be what the image holds. A CD's CHD, or one holding only its
-//differences from another, isn't taken as the disc. A shop-bought game's encrypted program doesn't start (it isn't
-//read yet); a plain BOOT.BIN beside it does.
+//differences from another, isn't taken as the disc. The program encrypted, as a shop-bought game's EBOOT.BIN is,
+//boots and reads its disc the same, rather than a plain BOOT.BIN beside it; one that can't be decrypted doesn't
+//start, saying why, and a plain BOOT.BIN beside it starts instead.
 auto discImage(const fs::path& programs) -> void {
   std::printf("a disc image in the drive: its program boots and reads it\n");
   std::ifstream stream(programs / "disc.elf", std::ios::binary);
@@ -353,22 +371,60 @@ auto discImage(const fs::path& programs) -> void {
     }
   }
 
-  //encrypted, alone, then with a blank BOOT.BIN beside it, then with a plain one
-  std::vector<std::uint8_t> encrypted(256, 0);
-  memcpy(encrypted.data(), "~PSP", 4);
-  for(u32 kind : {0u, 1u, 2u}) {
-    bool boot = kind == 2;
-    std::vector<disc_image::File> files = {{"PSP_GAME/SYSDIR/EBOOT.BIN", encrypted}};
-    if(kind == 1) files.push_back({"PSP_GAME/SYSDIR/BOOT.BIN", std::vector<std::uint8_t>(4096, 0)});
-    if(kind == 2) files.push_back({"PSP_GAME/SYSDIR/BOOT.BIN", program});
-    auto bytes = disc_image::makeIso(files).bytes;
+  //the program encrypted as Sony's tools encrypt a game's (../encrypt.hpp), under a tag with a 144-byte key (type 1)
+  //and one with a 16-byte key (type 2), the second packed with gzip, a plain BOOT.BIN beside it: EBOOT.BIN starts
+  for(u32 tag : {0xc0cb'167cu, 0xd916'13f0u}) {
+    psp_encrypt::Options options;
+    options.tag = tag;
+    options.gzip = tag == 0xd916'13f0;
+    auto bytes = disc_image::makeIso({
+      {"PSP_GAME/PARAM.SFO", std::vector<std::uint8_t>(64, 1)},
+      {"PSP_GAME/SYSDIR/BOOT.BIN", program},
+      {"PSP_GAME/SYSDIR/EBOOT.BIN", psp_encrypt::encrypt(program, options)},
+      {"PSP_GAME/USRDIR/DATA.BIN", data},
+      {"UMD_DATA.BIN", std::vector<std::uint8_t>(16, 2)},
+    }).bytes;
     host.game = std::make_shared<vfs::directory>();
     host.game->append("disc.iso", vfs::memory::open({bytes.data(), bytes.size()}));
     Node::System root;
-    if(!CHECK(start(root), "the PSP starts with an encrypted disc in the drive")) continue;
-    CHECK(psp.kernel.threads.empty() != boot, boot ? "BOOT.BIN starts" : "the encrypted program doesn't start");
-    if(boot) CHECK(psp.kernel.workingDirectory == "disc0:/PSP_GAME/SYSDIR", "BOOT.BIN starts from its folder");
+    if(!CHECK(start(root), "the PSP starts with an encrypted program on its disc")) continue;
+    CHECK(startPath() == "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN", "the encrypted EBOOT.BIN starts, not BOOT.BIN");
+    std::string printed;
+    runToExit(root, printed);
+    if(!CHECK(printed == expected, "decrypted, it reads its disc as it is")) {
+      std::printf("    printed:\n%s    expected:\n%s", printed.c_str(), expected.c_str());
+    }
     root->unload();
+  }
+
+  //programs that can't be decrypted: one cut short, one whose tag names no key Phobos has; alone, then with a blank
+  //BOOT.BIN beside it, then with a plain one, which starts; each time the reason is reported
+  std::vector<std::uint8_t> cutShort(256, 0);
+  memcpy(cutShort.data(), "~PSP", 4);
+  auto unknownTag = psp_encrypt::encrypt(program);
+  psp_encrypt::put32(unknownTag.data() + 0xd0, 0x1234'5678);
+  for(auto& [encrypted, why] : {std::pair{cutShort, "cut short in its header"},
+                                std::pair{unknownTag, "tag 0x12345678) whose tag names a key Phobos doesn't have"}}) {
+    for(u32 kind : {0u, 1u, 2u}) {
+      bool boot = kind == 2;
+      std::vector<disc_image::File> files = {{"PSP_GAME/SYSDIR/EBOOT.BIN", encrypted}};
+      if(kind == 1) files.push_back({"PSP_GAME/SYSDIR/BOOT.BIN", std::vector<std::uint8_t>(4096, 0)});
+      if(kind == 2) files.push_back({"PSP_GAME/SYSDIR/BOOT.BIN", program});
+      auto bytes = disc_image::makeIso(files).bytes;
+      host.game = std::make_shared<vfs::directory>();
+      host.game->append("disc.iso", vfs::memory::open({bytes.data(), bytes.size()}));
+      Node::System root;
+      bool started = false;
+      auto reported = reports([&] { started = start(root); });
+      if(!CHECK(started, "the PSP starts with an encrypted disc in the drive")) continue;
+      CHECK(psp.kernel.threads.empty() != boot, boot ? "BOOT.BIN starts" : "the encrypted program doesn't start");
+      if(boot) CHECK(psp.kernel.workingDirectory == "disc0:/PSP_GAME/SYSDIR", "BOOT.BIN starts from its folder");
+      CHECK(reported.find("EBOOT.BIN: an encrypted program") != std::string::npos &&
+            reported.find(why) != std::string::npos, "why EBOOT.BIN can't start is reported");
+      CHECK((reported.find("BOOT.BIN starts instead") != std::string::npos) == boot,
+            boot ? "and that BOOT.BIN starts instead" : "and nothing starts instead");
+      root->unload();
+    }
   }
 }
 

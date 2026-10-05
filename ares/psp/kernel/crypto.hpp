@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <string>
+#include <vector>
 
 //The PSP's cryptography, as far as loading a shop-bought game needs it.
 //
@@ -9,7 +11,8 @@
 //with the keys published on the PSP Developer Wiki (docs/psp-core.md, part 18, describes all of it):
 //  - aes.cpp: AES-128, the cipher everything here is built on;
 //  - kirk.cpp: the KIRK engine's commands that decrypting a program needs, and SHA-1;
-//  - keys.cpp: the keys.
+//  - keys.cpp: the keys, and which a ~PSP file's tag names;
+//  - decrypt.cpp: the ~PSP format retail programs come in.
 
 namespace ares::PlayStationPortable {
 
@@ -58,10 +61,31 @@ namespace Kirk {
   auto decryptInPlace(u8* data, u32 size, u8 keyseed) -> bool;  //command 7 on data without its header
 }
 
+//What a ~PSP file's tag names: a key, KIRK command 7's keyseed, and the type, the steps that rebuild KIRK command
+//1's header from the ~PSP header with them (decrypt.cpp). Two kinds, by the key's size.
+struct PadTag {  //types 0 and 1
+  u32 tag, type;
+  u8 keyseed;
+  const u32* pad;  //the 144-byte key, as 36 words whose bytes, low byte first, make it
+};
+struct SeedTag {  //types 2, 5 and 6
+  u32 tag, type;
+  u8 keyseed;
+  const u8* seed;               //the 16-byte key
+  const u8* xorKey = nullptr;   //type 5's: 16 bytes XORed in
+};
+
 //The keys (keys.cpp, which says where they come from).
 namespace Keys {
   extern const u8 kirk1[16];       //KIRK command 1's
   extern const u8 kirk7[128][16];  //KIRK commands 4 and 7's, by keyseed
+  extern const std::vector<PadTag> padTags;
+  extern const std::vector<SeedTag> seedTags;
 }
+
+//A ~PSP file (decrypt.cpp): whether data is one (it starts with "~PSP"), and the program in it, decrypted and
+//unpacked: an ELF, ready for the loader. Returns why it can't be, or nothing when it is.
+auto encryptedProgram(const u8* data, u64 size) -> bool;
+auto decryptProgram(const u8* data, u64 size, std::vector<u8>& program) -> std::string;
 
 }

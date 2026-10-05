@@ -21,8 +21,10 @@
 //    answers it and returns straight to the caller.
 //  - the exports: what the program offers others, at least module_start, where it begins.
 //
-//Not yet: encrypted programs (retail games, "~PSP"; phase 7), the newer packed relocation format some retail
-//modules use (PT_PSP_REL2), and imports of variables from other modules.
+//A retail game's programs come encrypted ("~PSP"): the loader has them decrypted first (decrypt.cpp).
+//
+//Not yet: the newer packed relocation format some retail modules use (PT_PSP_REL2), and imports of variables from
+//other modules.
 
 namespace ares::PlayStationPortable {
 

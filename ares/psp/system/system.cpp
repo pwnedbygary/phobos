@@ -218,11 +218,7 @@ auto System::startProgram() -> void {
   report(true, "the game has no program in it");
 }
 
-//A disc image: it goes in the drive (disc0:, umd0:), and its program starts, PSP_GAME/SYSDIR/EBOOT.BIN. A shop-bought
-//game's is encrypted ("~PSP" at its start), which isn't read yet; a plain BOOT.BIN beside it stands in for it if
-//there's one (a few early games have one; most have none, or an empty or blank one). Only an ELF or an EBOOT.PBP is
-//started. A truncated image may cut its program short: it's read as far as the image goes (PPSSPP lets such games
-//boot, as truncated images are common), and no further than 64 MiB.
+//A disc image: it goes in the drive (disc0:, umd0:), and its program starts (startDiscProgram()).
 auto System::startDisc(std::shared_ptr<vfs::file> fp) -> void {
   auto image = std::make_shared<Disc>();
   std::string problem;
@@ -269,11 +265,16 @@ auto System::startDisc(std::shared_ptr<vfs::file> fp) -> void {
   startDiscProgram(image);
 }
 
-//The disc in the drive, and its program started.
+//The disc in the drive, and its program started: PSP_GAME/SYSDIR/EBOOT.BIN, decrypted first when it's encrypted
+//("~PSP" at its start), as a shop-bought game's is. A plain BOOT.BIN beside it (a few early games have one; most
+//have none, or an empty or blank one) starts only if EBOOT.BIN can't: its tag names a key Phobos doesn't have, say,
+//which is reported. Only an ELF, an EBOOT.PBP or an encrypted program is started. A truncated image may cut its
+//program short: it's read as far as the image goes (PPSSPP lets such games boot, as truncated images are common),
+//and no further than 64 MiB. A program that can't start leaves nothing behind (Kernel::load()), so the next is
+//tried on a machine as fresh.
 auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
-  std::string problem;
   kernel.disc = image;
-  bool encrypted = false;
+  std::string problems;  //why each program found couldn't start
   for(auto name : {"EBOOT.BIN", "BOOT.BIN"}) {
     Disc::Entry entry;
     if(!image->find({"PSP_GAME", "SYSDIR", name}, entry) || entry.folder || entry.size < 4) continue;
@@ -282,17 +283,18 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
     u64 size = std::min<u64>({entry.size, image->size() - start, 64_MiB});
     u8 magic[4];
     if(size < 4 || !image->read(start, 4, magic)) continue;
-    if(!memcmp(magic, "~PSP", 4)) encrypted = true;
-    if(memcmp(magic, "\x7f" "ELF", 4) && memcmp(magic, "\0PBP", 4)) continue;
+    if(memcmp(magic, "~PSP", 4) && memcmp(magic, "\x7f" "ELF", 4) && memcmp(magic, "\0PBP", 4)) continue;
     std::vector<u8> program(size);
     if(!image->read(start, size, program.data())) continue;
-    programHash = hash(program);
-    if(!kernel.start(program.data(), program.size(), std::string{"disc0:/PSP_GAME/SYSDIR/"} + name, problem)) {
-      report(true, "can't start the game: " + problem);
+    std::string problem;
+    if(kernel.load(program.data(), program.size(), std::string{"disc0:/PSP_GAME/SYSDIR/"} + name, problem)) {
+      programHash = hash(program);
+      if(!problems.empty()) report(true, "can't start " + problems + "; " + name + " starts instead");
+      return;
     }
-    return;
+    problems += (problems.empty() ? "" : "; ") + std::string{name} + ": " + problem;
   }
-  report(true, encrypted ? "the game's program is encrypted, which isn't read yet" : "the disc has no program");
+  report(true, problems.empty() ? "the disc has no program" : "can't start the game: " + problems);
 }
 
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a

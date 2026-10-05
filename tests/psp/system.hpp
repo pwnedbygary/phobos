@@ -58,5 +58,6 @@ auto discTests() -> Tests;
 auto discFormatTests() -> Tests;
 auto stateTests() -> Tests;
 auto cryptoTests() -> Tests;
+auto decryptTests() -> Tests;
 
 }

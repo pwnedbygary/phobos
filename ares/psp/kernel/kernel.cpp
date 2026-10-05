@@ -12,6 +12,7 @@ namespace ares::PlayStationPortable {
 #include "aes.cpp"
 #include "keys.cpp"
 #include "kirk.cpp"
+#include "decrypt.cpp"
 #include "unpack.cpp"
 #include "disc.cpp"
 #include "io.cpp"
