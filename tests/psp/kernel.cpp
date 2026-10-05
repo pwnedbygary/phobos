@@ -206,8 +206,8 @@ static auto parameters(const std::vector<std::pair<std::string, u32>>& numbers) 
   return sfo.data;
 }
 
-//How much RAM a program gets on a 64 MiB machine: the 24 MiB from 0x08800000 to 0x0a000000, as a PSP-1000's user
-//partition (its first thread's stack at its top), unless its PARAM.SFO asks for all of it (MEMSIZE 1): in its
+//How much RAM a program gets on the PSP-2000/3000 emulated, with 64 MiB: a user partition of 24 MiB, 0x08800000 to
+//0x0a000000 (its first thread's stack at its top), unless its PARAM.SFO asks for all of it (MEMSIZE 1): in its
 //EBOOT.PBP, or for a program on the disc in the drive, on the disc. A number other than 1, or none, is no.
 static auto userPartition() -> void {
   ElfBuilder elf;

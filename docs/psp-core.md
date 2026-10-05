@@ -15,7 +15,7 @@ Part 13, the PSP in Phobos (an ares system, mia's medium, the Android app's entr
 homebrew runs in the app on the RP6. Part 14, disc images (ISO and CSO, the disc's files, the drive), is on
 `cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`. Part 17, the functions the retail games that
 now start ask for (callbacks, sound output's timing, power, interrupt handlers, memory pools, the system's dialogs and
-saves), is on `cursor/psp-retail-load-2b67`.
+saves), is on `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67`.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -1329,7 +1329,8 @@ Tests:
 
 ## Part 17: the functions retail games ask for
 
-On branch `cursor/psp-retail-load-2b67`, after part 16's "one block for a program's memory" (2026-10-05). Lumines,
+On branch `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67` and its "one block for a program's
+memory" (2026-10-05). Lumines,
 Space Invaders Extreme, Brave Story: New Traveler, GTA: Sindacco Chronicles (a GTA LCS mod with a plain EBOOT) and
 the Street Fighter III 3rd Strike port load from the user's CHDs and run their own code; this part gives them what
 they asked for next, as a scratch host runner (never committed: the system as `tests/psp/ares` builds it, booting a
@@ -1345,11 +1346,12 @@ depends on it; our own code.
 - **Memory** (sysmem.cpp). sceKernelAllocPartitionMemory's aligned types: 3, the lowest place starting on a multiple
   of an alignment (the fifth argument, a power of two), and 4, the highest; Sony's SDK makes its heaps with them,
   and refusing them was Space Invaders Extreme's C++ abort and Brave Story's "can't allocate memory". The type is
-  checked first, then the alignment, then the partition. The user partition is a PSP-1000's 24 MiB (0x08800000 to
-  0x0a000000), the first thread's stack at its top as on a PSP, unless the program's PARAM.SFO (its EBOOT.PBP's, or
-  the disc's PSP_GAME/PARAM.SFO) asks for all of RAM with MEMSIZE 1, as the Street Fighter III port does; the
-  shop-bought games don't. Lumines' 23 MiB program leaves it about 1 MiB, in which it makes its threads and a 64 KiB
-  block, as on a PSP. The SDK and compiler versions a program's start-up code sets are kept to be read back.
+  checked first, then the alignment, then the partition. The PSP-2000/3000 emulated has 64 MiB, but gives a program
+  a user partition of 24 MiB (0x08800000 to 0x0a000000, as much as a PSP-1000's 32 MiB leaves), the first thread's
+  stack at its top as on a PSP, unless the program's PARAM.SFO (its EBOOT.PBP's, or the disc's PSP_GAME/PARAM.SFO)
+  asks for all of RAM with MEMSIZE 1, as the Street Fighter III port does; the shop-bought games don't. Lumines'
+  23 MiB program leaves it about 1 MiB, in which it makes its threads and a 64 KiB block, as on a PSP. The SDK and
+  compiler versions a program's start-up code sets are kept to be read back.
 - **Callbacks** (events.cpp). A thread's callbacks, once notified (sceKernelNotifyCallback, or the system: the power
   switch's are told of the battery as they're registered), run on that thread when it waits in a function whose
   name ends in CB (sceKernelSleepThreadCB, DelayThreadCB, WaitSemaCB, WaitEventFlagCB, WaitThreadEndCB,
@@ -1357,7 +1359,12 @@ depends on it; our own code.
   priority: it's made ready with its wait kept, its registers and wait are put aside, each callback runs on its stack
   as fn(times notified, the last word, its argument), one returning non-zero is deleted, and the thread goes back
   into its wait, which ends at once if its time ran out (the clock doesn't stop for callbacks) or what it waited for
-  came or was deleted meanwhile. Callbacks may wait themselves. A thread's callbacks go with it.
+  came or was deleted meanwhile. Callbacks may wait themselves. A thread's callbacks go with it. A CB function that
+  needn't wait, what it waits for being there already (a semaphore's count, a wakeup that came first, an event flag's
+  bits, a pool's room, a thread that has ended, the drive ready, sceDisplayWaitVblankCB inside the blank), still runs
+  the callbacks notified by then: they run at once, as sceKernelCheckCallback's do, and the function returns what it
+  got when they're done (it skipped them; a wait made to wait for them instead could time out in a long callback
+  after getting what it asked for, and sceDisplayWaitVblankCB's 1 would become a wait for the next blank).
 - **The display** (display.cpp): sceDisplayWaitVblankStartCB, WaitVblank (not waiting, returning 1, inside the
   vertical blank, which lasts 0.77 ms as pspautotests measured), IsVblank, GetCurrentHcount (lines of 525 dots at
   9 MHz, counted from the blank's start).
@@ -1382,12 +1389,23 @@ depends on it; our own code.
 - **Memory pools** (pools.cpp): fixed (FPL) and variable (VPL), created from the user partition, handing out the
   lowest free block or place (a VPL keeps 32 bytes for itself and 8 before each piece, as the PSP's do; how the PSP
   chooses places isn't known here, so free sizes may differ), threads waiting in order or by priority, timeouts,
-  deletion and cancelling.
+  deletion and cancelling. Creation's refusals and their order, and a VPL too small to hold anything made 4 KiB, are
+  what pspautotests' threads/fpl and threads/vpl tests expect.
 - **The system's dialogs** (utility.cpp): one at a time, their statuses (starting, running, finished, closing) with
   PPSSPP's timings. Saves are real: a folder per save in the memory stick's PSP/SAVEDATA (`<game><save>`) holding the
   data file the game hands over, loaded back, sized (the stick's free space, 1 GiB, the save's size), listed and
-  deleted; a load with none says so (the PSP's "no data"). Not yet: the encryption a PSP applies, the save's
-  PARAM.SFO and icons, and drawing the dialogs. A message dialog is answered Yes at once (its text noted); the
+  deleted (modes 6, 7, 9, 10 and 21 take the save's folder; erasing, 19 and 20, the data file named alone); a load
+  with none says so (the PSP's "no data"). The names become a folder and a file on the host, so the game's (which
+  can't be empty), the save's (a list's first too) and the data file's must each be one plain name ending inside its
+  field (13, 20 and 13 bytes): not "." or "..", no '/', '\', ':' or control character. The save's folder must then
+  be one of SAVEDATA's own and its file one of the folder's, links followed (one leading elsewhere is no save): the
+  memory stick's own check only kept paths on the stick, so a game's name of "" or ".." had a delete take every save
+  or PSP/ with its homebrew, and a data file's name could read /etc/hosts. The buffer must be in the program's memory
+  as far as what's copied (a save from nowhere wrote zeros); a load reads no more than the buffer takes and tells
+  how much it read. Anything else is refused as the mode's group's bad parameter (0x80110308 for loads, 0x80110388
+  saves, 0x80110348 deletes, 0x801103c8 sizes, 0x80110328 the rest), before anything is touched, and nothing throws
+  (the sizes and list modes read folders through the host's error codes). Not yet: the encryption a PSP applies, the
+  save's PARAM.SFO and icons, and drawing the dialogs. A message dialog is answered Yes at once (its text noted); the
   keyboard, network settings, game sharing and the browser are cancelled. sceUtilityLoadModule (and the net module
   versions) marks the optional libraries the HLE provides loaded.
 - **Threads and clocks**: sceKernelChangeThreadPriority, GetThreadExitStatus, TerminateThread,
@@ -1399,7 +1417,11 @@ depends on it; our own code.
   ends the program (a C++ abort ends there).
 - **Save states** carry all of it; the state fields test has every new field, and refuses what no machine could
   hold (a callback, a waiter or a pool ID not handed out yet, the mixer's count past 49 blocks or started in the
-  future, three buffers on the SRC channel, an SRC rate of 0).
+  future, three buffers on the SRC channel, an SRC rate of 0, and pools that don't hold together: a fixed pool's
+  blocks of 0 bytes, which giving one back divided by, or not adding up to its size, or with pieces; a variable pool
+  with a block size or blocks; a pool outside its block, or whose block isn't there; pieces outside their pool,
+  empty or overlapping). The kernel's layout changed (threads, semaphores, callbacks), so states are version 2: one
+  of version 1 is refused by its header before anything is touched.
 
 What the games do now, on the host (the frames are the runner's PNGs, kept outside the repository):
 
@@ -1424,16 +1446,27 @@ file functions (sceIoReadAsync, WaitAsync, PollAsync, ChangeAsyncPriority...), m
 port and Brave Story import them), the module manager's loading (with decryption, another branch's work), and
 playing the sound.
 
-Tests (`tests/psp/run-tests.sh`, 123 groups; `tests/psp/ares` 195 checks): `kernel.cpp` (aligned blocks, the user
+Tests (`tests/psp/run-tests.sh`, 128 groups; `tests/psp/ares` 199 checks): `kernel.cpp` (aligned blocks, the user
 partition from a PBP's and a disc's PARAM.SFO, SDK versions, the self-unload), and new files, programs run on both
-engines: `callbacks.cpp` (callbacks in waits, waits going on after them, by priority, called directly, the vertical
-blank's timing, a vertical blank handler held off and released), `power.cpp` (power callbacks, clocks, volatile
-memory, thread control, stack fill, clocks and dates against known values: MT19937's 10000th number, ticks of
-known dates), `audio.cpp` (channels, the blocking outputs returning after 0, 15, 31 and 47 blocks, the SRC
-channel's queue), `utility.cpp` (a save made, loaded, sized, listed and deleted; dialogs; modules), `pools.cpp`
-(fixed and variable pools, waits, timeouts, deletion). A broken version that never resumed a wait after its
-callbacks failed 18 checks of `callbacks.cpp`.
+engines: `callbacks.cpp` (callbacks in waits, waits going on after them, seven kinds of CB wait that end at once
+running the callbacks notified first, by priority, called directly, the vertical blank's timing, a vertical blank
+handler held off and released), `power.cpp` (power callbacks, clocks, volatile memory, thread control, stack fill,
+clocks and dates against known values: MT19937's 10000th number, ticks of known dates), `audio.cpp` (channels, the
+blocking outputs returning after 0, 15, 31 and 47 blocks, the SRC channel's queue), `utility.cpp` (a save made,
+loaded, sized, listed, erased and deleted; names reaching out of the save's folder or the stick, among them each
+the review found, and links to elsewhere, refused with nothing touched, in a stick folder inside the test's own so
+any escape shows; buffers outside the program's memory; links that loop, in the sizes and list modes; dialogs;
+modules), `pools.cpp` (fixed and variable pools, waits, timeouts, deletion, a block size of 0 given a block back).
+`states.cpp` refuses 13 kinds of pool that don't hold together, and `tests/psp/ares` a version 1 state. A broken
+version that never resumed a wait after its callbacks failed 18 checks of `callbacks.cpp`. The review's fixes each
+failed their tests first: the savedata groups (a load read the file beside the stick and /etc/hosts, a save wrote
+over homebrew, deletes took PSP/ and the stick), the waits ending at once (no callback ran), a free from a pool with
+blocks of 0 bytes (the undefined-behavior sanitizer's division by zero), the 13 pool states (loaded), the version 1
+state (loaded).
 
 Uncertain: the vertical blank's exact length (0.77 ms from a measurement of a wait's end), the hcount's origin;
 whether the PSP notifies a power callback as it's registered (PPSSPP's reading); the VPL's placement; the dialogs'
-timings; the CPU clock not slowing at 222 MHz; and the errors taken from PPSSPP's tables where pspsdk has none.
+timings; the CPU clock not slowing at 222 MHz; the errors taken from PPSSPP's tables where pspsdk has none; which
+group of errors the savedata modes after 11 report from (the bad parameters follow the groups their other errors
+already came from); and whether a CB wait that ends at once runs its callbacks before or after taking what it waited
+for (here, after).

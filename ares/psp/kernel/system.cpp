@@ -86,7 +86,8 @@ auto Kernel::sceRtcGetTickResolution() -> void {
 }
 
 //The days from 0001-01-01 to the given date, in the Gregorian calendar carried back (as the PSP's ticks count):
-//years shifted to start in March, so a leap day falls at a year's end.
+//years shifted to start in March, so a leap day falls at a year's end. This is Howard Hinnant's days_from_civil, from
+//his public "chrono-Compatible Low-Level Date Algorithms", counting from year 1 where his counts from 1970.
 static auto daysFromYearOne(s64 year, u32 month, u32 day) -> s64 {
   year -= month <= 2;
   s64 era = (year >= 0 ? year : year - 399) / 400;

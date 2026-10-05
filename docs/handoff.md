@@ -744,17 +744,26 @@ the details; the user chose a data tape per game in its save folder.
 
 ## PSP core: the functions retail games ask for — 2026-10-05
 
-Branch `cursor/psp-retail-load-2b67`, on top of the entry below. The HLE kernel gains what Lumines, Space Invaders
-Extreme, Brave Story, GTA: Sindacco Chronicles and the Street Fighter III port asked for next, found with a scratch
-host runner (never committed) that boots a CHD, traces every system call and dumps frames: SDK version setters
-(explicit NIDs for those whose NIDs aren't their names' hashes), aligned partition blocks (the C++ abort and the
-"can't allocate memory"), a PSP-1000's 24 MiB user partition unless PARAM.SFO's MEMSIZE asks for more, callbacks
-that run in *CB waits, the vertical blank's functions and interrupt handlers, sound output's channels with the
-driver's timing (silence for now), power, memory pools, the system's dialogs with real saves on the memory stick,
-optional modules, and thread and clock odds and ends; all in save states. docs/psp-core.md, part 17, describes it and
-what each game does now.
+Branch `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67` (the entry below). The HLE kernel gains
+what Lumines, Space Invaders Extreme, Brave Story, GTA: Sindacco Chronicles and the Street Fighter III port asked for
+next, found with a scratch host runner (never committed) that boots a CHD, traces every system call and dumps frames:
+SDK version setters (explicit NIDs for those whose NIDs aren't their names' hashes), aligned partition blocks (the
+C++ abort and the "can't allocate memory"), the 24 MiB user partition the emulated 64 MiB PSP-2000/3000 gives a
+program unless PARAM.SFO's MEMSIZE is 1, callbacks that run in *CB waits, the vertical blank's functions and interrupt
+handlers, sound output's channels with the driver's timing (silence for now), power, memory pools, the system's
+dialogs with real saves on the memory stick, optional modules, and thread and clock odds and ends; all in save
+states. docs/psp-core.md, part 17, describes it and what each game does now.
 - **Checks:** the parts' 123 groups with both sanitizers (new files: callbacks, power, audio, utility, pools);
   `tests/psp/ares` 195 checks. A broken version (waits not resumed after callbacks) failed 18 checks.
+- **Review fixes:** a save's game, save and data file names were joined to the host's paths unchecked (only climbing
+  above the memory stick was stopped): a reviewer read /etc/hosts into the program's memory, and a delete with the
+  game "" took every save, with ".." PSP/ and its homebrew, with "../.." the memory stick folder itself. Each name
+  must now be one plain name, the save's folder one of SAVEDATA's own and its file one of the folder's, links
+  followed; the buffer must be in the program's memory; ERASE takes the data file alone; the sizes and list modes no
+  longer throw. Pools loaded from a state are checked (a fixed pool with blocks of 0 bytes divided by zero on a
+  free, which is guarded too); a CB wait that needn't wait runs the callbacks already notified; states are version
+  2; the docs' user partition is the PSP-2000/3000's; pools.cpp cites pspautotests and the RTC dates credit Howard
+  Hinnant's algorithm. Each fix has a test that failed before it (the parts' groups: 128; `tests/psp/ares`: 199).
 - **On the host:** Lumines reaches its title screen and menu (and writes its save); the Street Fighter III port its
   title screen at 60 frames a second; Space Invaders Extreme and GTA wait on the module manager (sceKernelLoadModule,
   sceKernelLoadModuleByID: another branch's work); Brave Story stops after sceSas fails. Next: sceSas, asynchronous
