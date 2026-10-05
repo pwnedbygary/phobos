@@ -14,6 +14,7 @@
 
 #include "loader.hpp"
 #include "disc.hpp"
+#include "crypto.hpp"
 #include "../ge/ge.hpp"
 
 //The HLE kernel: Phobos's own version of the PSP's operating system, as far as a game can see it.
