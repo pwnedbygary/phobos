@@ -9,8 +9,10 @@
 //another kind was started last is the wrong type. The answers given here, with nothing drawn on the screen yet:
 //  - Saving and loading (savedata): a save is a folder on the memory stick, PSP/SAVEDATA/<game name><save name>,
 //    holding its data file. Loading reads the file into the program's buffer, or says there's no save; saving writes
-//    it; the sizes and list modes tell the memory stick's free space and what saves there are. The PSP encrypts the
-//    data file and writes a PARAM.SFO and icons beside it: not done yet (the files are only Phobos's to read).
+//    it; the sizes and list modes tell the memory stick's free space and what saves there are; deleting a save takes
+//    its folder, erasing its data file alone. Names that would lead out of the save's folder, and buffers outside the
+//    program's memory, are refused. The PSP encrypts the data file and writes a PARAM.SFO and icons beside it: not
+//    done yet (the files are only Phobos's to read).
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
 //  - The keyboard, network settings, game sharing, the web browser: cancelled, as if the player backed out.
 //
@@ -28,6 +30,10 @@ namespace {
   constexpr u32 ModuleBadID = 0x8011'1101, ModuleLoaded = 0x8011'1102, ModuleNotLoaded = 0x8011'1103;
   constexpr u32 SavedataLoadNoData = 0x8011'0307, SavedataReadNoData = 0x8011'0327, SavedataSizesNoData = 0x8011'03c7;
   constexpr u32 SavedataDeleteNoData = 0x8011'0347, SavedataSaveAccess = 0x8011'0385;
+  //and each group's bad parameter, 8 into it (the same table)
+  constexpr u32 SavedataLoadParameter = 0x8011'0308, SavedataReadParameter = 0x8011'0328;
+  constexpr u32 SavedataDeleteParameter = 0x8011'0348, SavedataSaveParameter = 0x8011'0388;
+  constexpr u32 SavedataSizesParameter = 0x8011'03c8;
   constexpr u32 DialogCancelled = 1;  //a dialog's result when the player backs out
   //how long a dialog takes to start and to close, in microseconds (PPSSPP's)
   auto dialogTimes(u32 kind, u32& start, u32& close) -> void {
@@ -37,6 +43,26 @@ namespace {
   }
   //the memory stick's free space as saves report it: 1 GiB, in 32 KiB clusters
   constexpr u32 StickCluster = 32_KiB, StickFreeClusters = 32'768;
+
+  //What a savedata mode says of parameters it can't take: the bad parameter of the group its other errors come from.
+  auto savedataRefusal(u32 mode) -> u32 {
+    switch(mode) {
+    case 0: case 2: case 4: return SavedataLoadParameter;
+    case 1: case 3: case 5: case 13: case 14: case 17: case 18: return SavedataSaveParameter;
+    case 6: case 7: case 9: case 10: case 19: case 20: case 21: return SavedataDeleteParameter;
+    case 8: return SavedataSizesParameter;
+    default: return SavedataReadParameter;  //reading, and the list, files and size modes
+    }
+  }
+
+  //Whether a name a program gives a save (its game's, its own, its data file's) is one plain name, ending inside its
+  //field with room for its NUL: not empty, not "." or "..", with no '/', '\' or ':' (separators, or a drive, to some
+  //hosts) and no control character. Each is joined to a folder on the host, where a path would lead elsewhere.
+  auto plainName(const std::string& name, u32 field) -> bool {
+    if(name.empty() || name.size() >= field || name == "." || name == "..") return false;
+    if(name.find_first_of("/\\:") != std::string::npos) return false;
+    return std::none_of(name.begin(), name.end(), [](char c) { return u8(c) < 0x20; });
+  }
 }
 
 //A pending status change that's due happens.
@@ -108,11 +134,19 @@ auto Kernel::hexWord(u32 value) -> std::string {
   return text;
 }
 
-//A save's folder on the host ("ms0:/PSP/SAVEDATA/<game name><save name>"), or nothing if there's no memory stick.
-auto Kernel::saveFolder(const std::string& game, const std::string& save) -> std::string {
-  std::string host, normalized;
-  if(resolve("ms0:/PSP/SAVEDATA/" + game + save, host, normalized)) return {};
-  return host;
+//Where a save is on the host: its folder, ms0:/PSP/SAVEDATA/<folder> (the game's name and the save's), or given a
+//data file's name, that file in it; nothing if there's no memory stick. resolve() keeps a path inside the memory
+//stick; a save's must also be where a save belongs, links followed: the folder one of SAVEDATA's own (never SAVEDATA
+//itself, nor anything above it), the file one of the folder's own. A path leading anywhere else is nothing too.
+auto Kernel::savePath(const std::string& folder, const std::string& file) -> std::string {
+  namespace fs = std::filesystem;
+  std::string saves, host, normalized;
+  if(resolve("ms0:/PSP/SAVEDATA", saves, normalized)) return {};
+  if(resolve("ms0:/PSP/SAVEDATA/" + folder, host, normalized) || fs::path(host).parent_path() != saves) return {};
+  if(file.empty()) return host;
+  std::string inside = host;
+  if(resolve("ms0:/PSP/SAVEDATA/" + folder + "/" + file, host, normalized)) return {};
+  return fs::path(host).parent_path() == inside ? host : std::string{};
 }
 
 //Does what a SceUtilitySavedataParam (psputility_savedata.h) asks, by its mode; the dialog's result. The layout: the
@@ -120,41 +154,57 @@ auto Kernel::saveFolder(const std::string& game, const std::string& save) -> std
 //names at 96, the data file's name at 100 (13), its buffer at 116, the buffer's size at 120 and the data's at 124,
 //then from 1488 where to put the sizes mode's answers (free space, the save's size, what saving would take), and from
 //1524 the list mode's.
+//
+//The names become a folder and a file on the host: each must be a plain name (plainName(); the game's can't be left
+//out, the save's can), and the paths where a save belongs (savePath()). The buffer must be in the program's memory as
+//far as what's copied in or out, which memory's size bounds: a load reads no more than the buffer takes. What isn't
+//so is refused as a bad parameter, before anything is made, read or deleted.
 auto Kernel::savedata(u32 p) -> u32 {
+  namespace fs = std::filesystem;
   u32 mode = memory.read(4, p + 48);
   std::string game = memory.readString(p + 60, 13), save = memory.readString(p + 76, 20);
   std::string fileName = memory.readString(p + 100, 13);
   u32 buffer = memory.read(4, p + 116), bufferSize = memory.read(4, p + 120), dataSize = memory.read(4, p + 124);
+  u32 refused = savedataRefusal(mode);
+  std::error_code error;
+  if(mode == 11) return savedataList(p, game);  //(the game's name only picks the folders listed)
   if((mode == 4 || mode == 5) && save.empty() && memory.read(4, p + 96)) {  //from a list: its first name
     save = memory.readString(memory.read(4, p + 96), 20);
+    if(save.empty()) return refused;
   }
-  std::string folder = saveFolder(game, save);
-  namespace fs = std::filesystem;
-  std::error_code error;
+  if(!plainName(game, 13) || (!save.empty() && !plainName(save, 20))) return refused;
+  bool filed = mode <= 5 || (mode >= 13 && mode <= 20);  //the modes that read, write or erase the data file
+  if(filed && !fileName.empty() && !plainName(fileName, 13)) return refused;
+  std::string folder = savePath(game + save);
+  std::string file = filed && !fileName.empty() ? savePath(game + save, fileName) : std::string{};
   bool exists = !folder.empty() && fs::is_directory(folder, error);
-  auto fileOf = [&](const std::string& name) { return (fs::path(folder) / name).string(); };
   switch(mode) {
   case 0: case 2: case 4: case 15: case 16: {  //load (auto, chosen, from a list), read (secure or not)
-    bool read = mode >= 15;
-    if(!exists || fileName.empty() || !fs::is_regular_file(fileOf(fileName), error)) {
-      return read ? SavedataReadNoData : SavedataLoadNoData;
-    }
-    std::ifstream file(fileOf(fileName), std::ios::binary);
-    std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    u32 count = std::min<u64>(bytes.size(), bufferSize);
-    if(buffer && count) memory.copyIn(buffer, bytes.data(), count);
-    memory.write(4, p + 124, count);
+    u32 none = mode >= 15 ? SavedataReadNoData : SavedataLoadNoData;
+    if(!exists || file.empty() || !fs::is_regular_file(file, error)) return none;
+    u64 size = fs::file_size(file, error);
+    if(error) return none;
+    u32 count = std::min<u64>(size, bufferSize);
+    if(count && !memory.reaches(buffer, count)) return refused;
+    std::vector<u8> bytes(count);
+    std::ifstream stream(file, std::ios::binary);
+    stream.read((char*)bytes.data(), count);
+    count = stream.gcount();
+    memory.copyIn(buffer, bytes.data(), count);
+    memory.write(4, p + 124, count);  //what it read
     return 0;
   }
   case 1: case 3: case 5: case 13: case 14: case 17: case 18: {  //save (auto, chosen, to a list), make, write
-    if(folder.empty()) return SavedataSaveAccess;
+    u32 size = std::min(dataSize, bufferSize);
+    if(folder.empty() || (!fileName.empty() && file.empty())) return SavedataSaveAccess;
+    if(!fileName.empty() && size && !memory.reaches(buffer, size)) return refused;
     fs::create_directories(folder, error);
     if(fileName.empty()) return 0;
-    std::vector<u8> bytes(std::min(dataSize, bufferSize));
-    if(buffer && !bytes.empty()) memory.copyOut(bytes.data(), buffer, bytes.size());
-    std::ofstream file(fileOf(fileName), std::ios::binary | std::ios::trunc);
-    file.write((const char*)bytes.data(), bytes.size());
-    return file ? 0 : SavedataSaveAccess;
+    std::vector<u8> bytes(size);
+    memory.copyOut(bytes.data(), buffer, size);
+    std::ofstream stream(file, std::ios::binary | std::ios::trunc);
+    stream.write((const char*)bytes.data(), size);
+    return stream ? 0 : SavedataSaveAccess;
   }
   case 8: {  //sizes: the memory stick's free space; the save's own size, if there's one; what saving takes
     u32 free = memory.read(4, p + 1488), used = memory.read(4, p + 1492), needed = memory.read(4, p + 1496);
@@ -165,9 +215,11 @@ auto Kernel::savedata(u32 p) -> u32 {
       memory.copyIn(free + 12, "1 GB\0\0\0", 8);
     }
     u64 bytes = 0;
-    if(exists) {
-      for(auto& entry : fs::directory_iterator(folder, error)) {
-        if(entry.is_regular_file()) bytes += entry.file_size();
+    if(exists) {  //its files' sizes, as far as the host can tell them (nothing here throws)
+      for(fs::directory_iterator at(folder, error), end; !error && at != end; at.increment(error)) {
+        std::error_code unread;
+        u64 size = at->is_regular_file(unread) ? at->file_size(unread) : 0;
+        if(!unread) bytes += size;
       }
     }
     auto usage = [&](u32 at, u64 size) {  //clusters, KiB, as text, then in 32 KiB steps: the same here
@@ -187,37 +239,51 @@ auto Kernel::savedata(u32 p) -> u32 {
     if(needed) usage(needed, std::max(dataSize, 1u));
     return exists ? 0 : SavedataSizesNoData;
   }
-  case 11: {  //list: the game's saves (SceUtilitySavedataIdListInfo: most to list, how many listed, entries)
-    u32 list = memory.read(4, p + 1524);
-    if(!list) return 0;
-    u32 most = memory.read(4, list), entries = memory.read(4, list + 8), count = 0;
-    std::string stick = saveFolder("", "");
-    if(!stick.empty()) {
-      std::vector<std::string> names;
-      for(auto& entry : fs::directory_iterator(stick, error)) {
-        auto name = entry.path().filename().string();
-        if(entry.is_directory() && name.compare(0, game.size(), game) == 0) names.push_back(name);
-      }
-      std::sort(names.begin(), names.end());
-      for(auto& name : names) {
-        if(count == most) break;
-        u32 at = entries + count++ * 72;  //its mode, three dates (16 bytes each), then its name (20)
-        memory.fill(at, 0, 72);
-        memory.write(4, at, 0x11ff);    //a folder
-        memory.copyIn(at + 52, name.c_str() + game.size(), std::min<u32>(name.size() - game.size() + 1, 20));
-      }
-    }
-    memory.write(4, list + 4, count);
-    return 0;
-  }
-  case 6: case 7: case 9: case 10: case 19: case 20: case 21: {  //deleting: the save goes
+  case 6: case 7: case 9: case 10: case 21: {  //deleting a save: its folder goes, with all it holds
     if(!exists) return SavedataDeleteNoData;
     fs::remove_all(folder, error);
+    return 0;
+  }
+  case 19: case 20: {  //erasing (secure or not): the data file named goes, and nothing else (none named, nothing)
+    if(!exists) return SavedataDeleteNoData;
+    if(fileName.empty()) return 0;
+    if(file.empty() || !fs::is_regular_file(file, error)) return SavedataDeleteNoData;
+    fs::remove(file, error);
     return 0;
   }
   default:  //the files mode, the sizes of others: nothing to tell
     return exists ? 0 : SavedataReadNoData;
   }
+}
+
+//The list mode (savedata()'s 11): the game's saves, its folders in SAVEDATA whose names start with the game's, into
+//a SceUtilitySavedataIdListInfo (from 1524: the most to list, how many were listed, the entries). Only the names are
+//read, as far as the host can tell them (nothing here throws).
+auto Kernel::savedataList(u32 p, const std::string& game) -> u32 {
+  namespace fs = std::filesystem;
+  u32 list = memory.read(4, p + 1524);
+  if(!list) return 0;
+  u32 most = memory.read(4, list), entries = memory.read(4, list + 8), count = 0;
+  std::string saves, normalized;
+  if(!resolve("ms0:/PSP/SAVEDATA", saves, normalized)) {
+    std::vector<std::string> names;
+    std::error_code error;
+    for(fs::directory_iterator at(saves, error), end; !error && at != end; at.increment(error)) {
+      std::error_code unread;
+      auto name = at->path().filename().string();
+      if(at->is_directory(unread) && name.compare(0, game.size(), game) == 0) names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    for(auto& name : names) {
+      if(count == most) break;
+      u32 at = entries + count++ * 72;  //its mode, three dates (16 bytes each), then its name (20)
+      memory.fill(at, 0, 72);
+      memory.write(4, at, 0x11ff);    //a folder
+      memory.copyIn(at + 52, name.c_str() + game.size(), std::min<u32>(name.size() - game.size() + 1, 20));
+    }
+  }
+  memory.write(4, list + 4, count);
+  return 0;
 }
 
 auto Kernel::sceUtilitySavedataInitStart() -> void { dialogStart(DialogSavedata); }

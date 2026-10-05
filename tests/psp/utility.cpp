@@ -1,7 +1,7 @@
 //The system's utilities (ares/psp/kernel/utility.cpp): a dialog's statuses and their timing, saves made, loaded,
-//sized, listed and deleted in a memory stick folder, a message answered yes, other dialogs cancelled, the wrong
-//type and the wrong status refused; optional modules loaded and unloaded; the nickname. Called directly, the clock
-//moved on by hand.
+//sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
+//the program's memory refused), a message answered yes, other dialogs cancelled, the wrong type and the wrong status
+//refused; optional modules loaded and unloaded; the nickname. Called directly, the clock moved on by hand.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -27,6 +27,12 @@ auto saveParameters(KernelMachine& m, u32 mode, const char* game, const char* sa
   m.system.memory.write(4, Parameters + 1524, List);
   m.system.memory.write(4, List, 10);
   m.system.memory.write(4, List + 8, Entries);
+}
+
+//The data file's name in the parameters (its field is 13 bytes: a name as long has no NUL in it).
+auto fileName(KernelMachine& m, const char* name) -> void {
+  m.system.memory.fill(Parameters + 100, 0, 16);
+  m.system.memory.copyIn(Parameters + 100, name, strlen(name));
 }
 
 //A whole savedata dialog: started, running after 200 ms, its work done by an update, closed 2 ms after it's shut
@@ -92,6 +98,186 @@ static auto savedata() -> void {
   CHECK(runSave(m), 0x8011'0347);
 }
 
+//A save's names become a folder and a file on the host, so each must be one plain name, and the save's paths must be
+//where a save belongs. Each of these reached elsewhere (a load read /etc/hosts into the program's memory; a delete
+//with no game's name took every save, with ".." the memory stick's PSP folder, homebrew and all, with "../.." the
+//memory stick itself; a save as the game "../GAME/HB" wrote over homebrew) and is refused now, as a bad parameter in
+//the mode's own group of errors, with nothing on the memory stick or beside it touched; a save folder or data file
+//that's a link to elsewhere is as if it weren't there. Names that are plain, if odd, still save.
+static auto savedataNames() -> void {
+  HostFolder outer;  //the memory stick is a folder in it, so a name reaching out of the stick lands in it
+  outer.put("stick/PSP/GAME/HB/EBOOT.PBP", "homebrew");
+  outer.put("stick/PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN", "saved");
+  outer.put("stick/PSP/X", "on the stick");
+  outer.put("X", "beside the stick");
+  namespace fs = std::filesystem;
+  auto savedata = outer.path / "stick/PSP/SAVEDATA";
+  fs::create_directory_symlink(outer.path / "stick/PSP/GAME", savedata / "LINKSAVE");
+  fs::create_directories(savedata / "ULUS99999SLOT1");
+  fs::create_symlink(outer.path / "stick/PSP/GAME/HB/EBOOT.PBP", savedata / "ULUS99999SLOT1/DATA.BIN");
+  fs::create_directories(savedata / "ULUS99999SLOT2");
+  fs::create_symlink(outer.path / "X", savedata / "ULUS99999SLOT2/DATA.BIN");
+  KernelMachine m;
+  m.kernel.mount("ms0", (outer.path / "stick").string());
+  auto untouched = [&] {
+    return outer.get("stick/PSP/GAME/HB/EBOOT.PBP") == "homebrew" && outer.get("stick/PSP/X") == "on the stick"
+        && outer.get("stick/PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN") == "saved" && outer.get("X") == "beside the stick";
+  };
+  auto refused = [&](u32 mode, const char* game, const char* save, const char* file, u32 error) {
+    saveParameters(m, mode, game, save, 5);
+    fileName(m, file);
+    m.system.memory.copyIn(Buffer, "data!", 5);
+    m.system.memory.fill(Buffer + 5, 0, 32);
+    check(__LINE__, (std::string(game) + "|" + save + "|" + file).c_str(), runSave(m), error);
+    check(__LINE__, "nothing read in", m.system.memory.readString(Buffer, 32) == "data!", true);
+    check(__LINE__, "nothing touched", untouched(), true);
+  };
+  //the data file's name
+  refused(0, "ULUS99999", "SLOT0", "../../../../X", 0x8011'0308);  //as long as its field
+  refused(2, "ULUS99999", "SLOT0", "../../X", 0x8011'0308);
+  refused(16, "ULUS99999", "SLOT0", "/etc/hosts", 0x8011'0328);
+  refused(15, "ULUS99999", "SLOT0", "..", 0x8011'0328);
+  refused(1, "ULUS99999", "SLOT0", "..\\..\\X", 0x8011'0388);
+  refused(3, "ULUS99999", "SLOT0", "C:X", 0x8011'0388);
+  refused(20, "ULUS99999", "SLOT0", "../DATA.BIN", 0x8011'0348);
+  //data files that are links leading out of their folders, into the stick and out of it: as if not there
+  refused(1, "ULUS99999", "SLOT1", "DATA.BIN", 0x8011'0385);
+  refused(0, "ULUS99999", "SLOT1", "DATA.BIN", 0x8011'0307);
+  refused(0, "ULUS99999", "SLOT2", "DATA.BIN", 0x8011'0307);
+  refused(20, "ULUS99999", "SLOT2", "DATA.BIN", 0x8011'0347);
+  CHECK(fs::is_symlink(savedata / "ULUS99999SLOT2/DATA.BIN"), true);
+  //the game's and the save's names, the save's from a list too
+  refused(1, "../GAME/HB", "", "EBOOT.PBP", 0x8011'0388);
+  saveParameters(m, 5, "ULUS99999", "", 5);  //a save to a list's first name
+  fileName(m, "EBOOT.PBP");
+  m.system.memory.copyIn(Buffer + 0x100, "/../../GAME/HB", 15);
+  m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+  CHECK(runSave(m), 0x8011'0388);
+  CHECK(untouched(), true);
+  m.system.memory.write(1, Buffer + 0x100, 0);  //the list's first name empty
+  saveParameters(m, 4, "ULUS99999", "", 5);
+  m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
+  CHECK(runSave(m), 0x8011'0308);
+  refused(8, "ULUS99999", ".", "", 0x8011'03c8);
+  refused(12, "ULUS99999SLOT0", "..", "", 0x8011'0328);
+  refused(0, "ULUS999999999", "SLOT0", "DATA.BIN", 0x8011'0308);  //a game's name as long as its field
+  refused(0, "ULUS99999", "SLOT0SLOT0SLOT0SLOT0", "DATA.BIN", 0x8011'0308);  //and a save's
+  //plain names, if odd, still save and load
+  m.system.memory.copyIn(Buffer, "odd", 3);
+  saveParameters(m, 1, "ULUS99999", "SLOT 1.<>", 3);
+  fileName(m, "ABCDEFGH.BIN");
+  CHECK(runSave(m), 0);
+  CHECK(outer.get("stick/PSP/SAVEDATA/ULUS99999SLOT 1.<>/ABCDEFGH.BIN") == "odd", true);
+  m.system.memory.fill(Buffer, 0, 8);
+  saveParameters(m, 0, "ULUS99999", "SLOT 1.<>", 0);
+  fileName(m, "ABCDEFGH.BIN");
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.readString(Buffer, 8) == "odd", true);
+  //deleting: with no game's name, "..", a save's name climbing out (either slash), "../..", and a save folder that's
+  //a link leading out of SAVEDATA (as if not there)
+  refused(10, "LINK", "SAVE", "", 0x8011'0347);
+  CHECK(fs::exists(outer.path / "stick/PSP/GAME/HB"), true);
+  refused(10, "", "", "", 0x8011'0348);
+  refused(10, "..", "", "", 0x8011'0348);
+  refused(6, "ULUS99999", "/../..", "", 0x8011'0348);
+  refused(7, "ULUS99999", "SLOT0\\..\\..", "", 0x8011'0348);
+  refused(9, "../..", "", "", 0x8011'0348);
+}
+
+//The program's buffer must be in its memory as far as what's copied in or out: a save from memory that isn't there
+//(which wrote a file of zeros, of up to 4 GiB) or that runs past RAM's end, and a load or a read into such memory
+//(which said it had read the file), are refused before anything is made or read. A load reads no more than the
+//buffer takes, and tells how much it read.
+static auto savedataBuffers() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  constexpr u32 RAMEnd = 0x0a00'0000;  //the test machine's 32 MiB
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 0x1000);
+  m.system.memory.write(4, Parameters + 116, 0);  //nothing there
+  CHECK(runSave(m), 0x8011'0388);
+  saveParameters(m, 17, "ULUS99999", "SLOT0", 0x1000);
+  m.system.memory.write(4, Parameters + 116, RAMEnd - 0x800);
+  CHECK(runSave(m), 0x8011'0388);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 0xffff'ffff);  //4 GiB from nothing
+  m.system.memory.write(4, Parameters + 116, 0);
+  m.system.memory.write(4, Parameters + 120, 0xffff'ffff);
+  CHECK(runSave(m), 0x8011'0388);
+  CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT0"), false);
+  m.system.memory.copyIn(Buffer, "0123456789abcdef", 16);
+  saveParameters(m, 1, "ULUS99999", "SLOT0", 16);
+  CHECK(runSave(m), 0);
+  saveParameters(m, 0, "ULUS99999", "SLOT0", 0);
+  m.system.memory.write(4, Parameters + 116, 0);
+  CHECK(runSave(m), 0x8011'0308);
+  CHECK(m.system.memory.read(4, Parameters + 124), 0);  //nothing said to be read
+  saveParameters(m, 16, "ULUS99999", "SLOT0", 0);
+  m.system.memory.write(4, Parameters + 116, RAMEnd - 8);
+  CHECK(runSave(m), 0x8011'0328);
+  CHECK(m.system.memory.read(4, Parameters + 124), 0);
+  saveParameters(m, 2, "ULUS99999", "SLOT0", 0);  //into 10 bytes: 10 read
+  m.system.memory.write(4, Parameters + 120, 10);
+  m.system.memory.fill(Buffer, 0, 16);
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.read(4, Parameters + 124), 10);
+  CHECK(m.system.memory.readString(Buffer, 16) == "0123456789", true);
+  saveParameters(m, 2, "ULUS99999", "SLOT0", 0);  //into the last 16 bytes of RAM: all of it
+  m.system.memory.write(4, Parameters + 116, RAMEnd - 16);
+  CHECK(runSave(m), 0);
+  CHECK(m.system.memory.read(4, Parameters + 124), 16);
+  CHECK(m.system.memory.readString(RAMEnd - 16, 16) == "0123456789abcdef", true);
+}
+
+//The sizes and list modes read the memory stick without throwing: a link that loops (the host can't follow it) in a
+//save's folder counts nothing, and one in SAVEDATA lists nothing.
+static auto savedataLoops() -> void {
+  HostFolder stick;
+  stick.put("PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN", std::string(100, 'x'));
+  std::filesystem::create_symlink("LOOP", stick.path / "PSP/SAVEDATA/ULUS99999SLOT0/LOOP");
+  std::filesystem::create_symlink("ULUS99999LOOP", stick.path / "PSP/SAVEDATA/ULUS99999LOOP");
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto run = [&](u32 mode, const char* save) {
+    saveParameters(m, mode, "ULUS99999", save, 0);
+    try { return runSave(m); } catch(const std::exception&) { m.kernel.dialog.status = 0; return 0xffff'ffffu; }
+  };
+  CHECK(run(8, "SLOT0"), 0);
+  CHECK(m.system.memory.read(4, Used + 36), 1);  //DATA.BIN's 100 bytes: a cluster
+  CHECK(run(11, ""), 0);
+  CHECK(m.system.memory.read(4, List + 4), 1);  //SLOT0 alone
+  CHECK(m.system.memory.readString(Entries + 52, 20) == "SLOT0", true);
+}
+
+//Erasing (modes 19 and 20) takes the data file named and nothing else, and with none named, nothing; one that isn't
+//there is no data. Deleting a save (modes 6, 7, 9, 10 and 21) takes its folder and all it holds.
+static auto savedataErase() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto folder = stick.path / "PSP/SAVEDATA/ULUS99999SLOT0";
+  for(u32 mode : {19u, 20u}) {
+    stick.put("PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN", "data");
+    stick.put("PSP/SAVEDATA/ULUS99999SLOT0/OTHER.BIN", "other");
+    saveParameters(m, mode, "ULUS99999", "SLOT0", 0);  //DATA.BIN
+    CHECK(runSave(m), 0);
+    CHECK(std::filesystem::exists(folder / "DATA.BIN"), false);
+    CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/OTHER.BIN") == "other", true);
+    saveParameters(m, mode, "ULUS99999", "SLOT0", 0);
+    CHECK(runSave(m), 0x8011'0347);
+    saveParameters(m, mode, "ULUS99999", "SLOT0", 0);
+    fileName(m, "");
+    CHECK(runSave(m), 0);
+    CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT0/OTHER.BIN") == "other", true);
+  }
+  for(u32 mode : {6u, 7u, 9u, 10u, 21u}) {
+    stick.put("PSP/SAVEDATA/ULUS99999SLOT0/DATA.BIN", "data");
+    saveParameters(m, mode, "ULUS99999", "SLOT0", 0);
+    CHECK(runSave(m), 0);
+    CHECK(std::filesystem::exists(folder), false);
+    CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA"), true);
+  }
+}
+
 //The other dialogs: a message answered yes at once (noted); the keyboard and network settings cancelled; one at a
 //time; asked about as another kind, the wrong type; shut down before finishing, the wrong status.
 static auto dialogs() -> void {
@@ -147,7 +333,11 @@ static auto modules() -> void {
 }
 
 auto utilityTests() -> Tests {
-  return {{"utility savedata", savedata}, {"utility dialogs", dialogs}, {"utility modules", modules}};
+  return {
+    {"utility savedata", savedata}, {"utility savedata names", savedataNames},
+    {"utility savedata buffers", savedataBuffers}, {"utility savedata loops", savedataLoops},
+    {"utility savedata erase", savedataErase}, {"utility dialogs", dialogs}, {"utility modules", modules},
+  };
 }
 
 }

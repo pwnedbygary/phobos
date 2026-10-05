@@ -736,8 +736,9 @@ struct Kernel {
   auto dialogUpdate(u32 kind) -> void;
   auto dialogShutdown(u32 kind) -> void;
   static auto hexWord(u32 value) -> std::string;
-  auto saveFolder(const std::string& game, const std::string& save) -> std::string;
+  auto savePath(const std::string& folder, const std::string& file = {}) -> std::string;
   auto savedata(u32 parameters) -> u32;
+  auto savedataList(u32 parameters, const std::string& game) -> u32;
   auto sceUtilitySavedataInitStart() -> void;
   auto sceUtilitySavedataGetStatus() -> void;
   auto sceUtilitySavedataUpdate() -> void;
