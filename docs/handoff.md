@@ -742,6 +742,43 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: CHD, CSO v2, ZSO, DAX and JSO disc images — 2026-10-05
+
+Branch `cursor/psp-disc-formats-2b67`, stacked on `cursor/psp-states-2b67` (for stack #106). The PSP reads CHDs (the
+user keeps PSP games as CHDs) and the scene's other compressed forms of an ISO: CSO version 2, ZSO, DAX and JSO, with
+LZ4 and LZO decoders of our own (`ares/psp/kernel/unpack.cpp`). nall's CHD reader (`nall/nall/decode/chd.hpp`), which
+read only CDs and only by name, now reads a DVD's CHD too (chdman `createdvd`) and can read through a function, so the
+PSP reads a CHD through the app's descriptor, never copied; the CD systems' path is as it was (`vfs::cdrom` refuses a
+DVD's CHD). mia and the app take .zso, .dax, .jso and .chd for the PSP; the PSP's discs aren't gathered into
+multi-disc sets. docs/psp-core.md, part 16, describes it.
+- **Review:** a general-purpose reviewer (one medium: ZSO and CSO version 2 images written with an index shift pad
+  their blocks, as maxcso's description allows, and LZ4's unpacking read the padding as more sequences and failed;
+  two low: a damaged DAX could claim millions of uncompressed areas, a huge table and a scan long enough to look like
+  a hang, and the message for a CD's CHD never reached the app, mia refusing the file first; all fixed: LZ4 ends once
+  the block is whole, DAX's areas must fit the disc and become a table of frames, and the runner passes a medium's
+  reason to the app's "Game Didn't Start"). The twelfth review of the save states branch (one low, wording) is fixed
+  here too.
+- **Checks:** the parts' 97 groups with both sanitizers (new: "disc formats", "disc formats damaged", "unpackers");
+  `tests/psp/ares` (195 checks: every form boots the disc program, which reads its disc exactly; a CD's CHD and one
+  needing its parent refused; its script builds libchdr); the app's unit tests (`LaunchSystemsTest`: .zso, .dax, .jso
+  to the PSP alone, a .chd by its folder). Broken versions each failed a test (CSO v2's stored blocks, LZO's 3-byte
+  match distance and its H bit, LZ4's distance 0 and its padding read as a sequence, DAX's uncompressed areas and
+  areas adding up past the disc, JSO's short last block, and a DVD sector's place in its hunk).
+- **On the RP6** (build 104643, launched by file URI from the SD card's `ROMs/psp`): all eight of the user's CHDs
+  tried opened and read, up to 1.2 GB (Ace Combat - Joint Assault). Street Fighter III 3rd Strike's port starts from
+  its CHD and runs at 60 frames a second (it asks for sound and utility functions that aren't written yet). Peace
+  Walker, Gunhound EX, WipEout's collection and Ace Combat's EBOOT.BINs are encrypted, and say so. Lumines, Space
+  Invaders Extreme, Brave Story and GTA Sindacco Chronicles have plain BOOT.BINs (PRXs), which the loader refuses:
+  each segment takes its own block rounded to 256 bytes, and Lumines' data segment starts 8 bytes after its code ends,
+  inside the code's last block. Next branch: one block for the whole module, then the HLE functions those games ask
+  for. Also next: "no threads left to run" is logged every frame once a program has stopped. Build 104644 (the
+  review's fixes): a CD's CHD (made on the host) launched as a PSP game shows "It's a CD's CHD. A PSP game's CHD is
+  made from its ISO with chdman createdvd." in "Game Didn't Start"; Street Fighter III and Lumines as before.
+- **Not checked:** DAX, JSO and ZSO images made by their own tools (the test's are made to the formats'
+  descriptions, and the unpackers checked against minilzo's and lz4's own output); a CHD made with zstd hunks (the
+  user's use zlib, LZMA, Huffman and FLAC); a CHD read through a descriptor on the RP6 (the app could read the SD
+  card's paths, so it read them by name, as with part 14's images).
+
 ## PSP core: save states — 2026-10-05
 
 Branch `cursor/psp-states-2b67`, stacked on `cursor/psp-umd-2b67` (for stack #106). Save states for the PSP: each part
@@ -786,7 +823,8 @@ use the address sanitizer on macOS too.
   this branch: left as it was, see "Known"), the temporary note left behind when a save is called off, and two
   handoff lines; the rest fixed), a ninth (three low: a save whose screen went away still logged as a failed
   auto-save, a leftover variable, and "Not checked"; all fixed), a tenth and an eleventh (two low each, all wording;
-  fixed).
+  fixed), and a twelfth (one low: two messages about a save cut short blamed a screen going away, where only the
+  activity finishing cuts one short; fixed on the disc formats branch).
 - **Checks:** the parts' 94 groups with both sanitizers (new: "state fields", where each of 212 fields reaches the
   state and comes back and 54 values no machine could hold are refused; "kernel states"; "kernel ids run out"; "ge
   endless list", with four kinds of list that never end, a thread that wakes often, and callbacks), `tests/psp/ares`

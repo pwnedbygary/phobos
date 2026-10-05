@@ -55,6 +55,7 @@ auto drawTests() -> Tests;
 auto draw3dTests() -> Tests;
 auto measureTests() -> Tests;
 auto discTests() -> Tests;
+auto discFormatTests() -> Tests;
 auto stateTests() -> Tests;
 
 }

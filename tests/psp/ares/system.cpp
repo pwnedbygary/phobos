@@ -8,7 +8,7 @@
 //The checks that run a program need the test programs (tools/psp-test-programs): PSP_TEST_PROGRAMS names the folder
 //holding hello.elf and disc.elf. Without it, those checks are skipped.
 #include <psp/psp.hpp>
-#include "../disc-image.hpp"
+#include "../disc-formats.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -267,9 +267,11 @@ auto fingerprint(const std::vector<std::uint8_t>& bytes, size_t offset, size_t s
   return text;
 }
 
-//A disc image in the drive, as an ISO and as a CSO: its program (tools/psp-test-programs' disc) boots from it and
-//reads it every way games do, printing what it found, which must be what the image holds. A shop-bought game's
-//encrypted program doesn't start (it isn't read yet); a plain BOOT.BIN beside it does.
+//A disc image in the drive, as an ISO and in each compressed form (CSO, CSO version 2, ZSO, DAX, JSO, and CHD in
+//hunks of one sector and of four): its program (tools/psp-test-programs' disc) boots from it and reads it every way
+//games do, printing what it found, which must be what the image holds. A CD's CHD, or one holding only its
+//differences from another, isn't taken as the disc. A shop-bought game's encrypted program doesn't start (it isn't
+//read yet); a plain BOOT.BIN beside it does.
 auto discImage(const fs::path& programs) -> void {
   std::printf("a disc image in the drive: its program boots and reads it\n");
   std::ifstream stream(programs / "disc.elf", std::ios::binary);
@@ -291,7 +293,17 @@ auto discImage(const fs::path& programs) -> void {
     "entry PARAM.SFO\nentry SYSDIR/\nentry USRDIR/\n"
     "relative 1\nwrite 8001b004\n";
   struct Format { const char* name; std::vector<std::uint8_t> bytes; };
-  for(auto& [name, bytes] : {Format{"disc.iso", image.bytes}, Format{"disc.cso", disc_image::makeCso(image.bytes)}}) {
+  std::vector<Format> formats = {
+    {"disc.iso", image.bytes},
+    {"disc.cso", disc_image::makeCso(image.bytes)},
+    {"disc.cso", disc_image::makeCso2(image.bytes)},
+    {"disc.zso", disc_image::makeZso(image.bytes)},
+    {"disc.dax", disc_image::makeDax(image.bytes, {{0, 1}})},
+    {"disc.jso", disc_image::makeJso(image.bytes, 2048, true)},
+    {"disc.chd", disc_image::makeChd(image.bytes)},
+    {"disc.chd", disc_image::makeChd(image.bytes, 8192)},
+  };
+  for(auto& [name, bytes] : formats) {
     //from a file on the host, as mia's medium gives it (mapped into memory)
     auto file = scratch / name;
     std::ofstream(file, std::ios::binary).write((const char*)bytes.data(), bytes.size());
@@ -308,6 +320,18 @@ auto discImage(const fs::path& programs) -> void {
     if(!CHECK(printed == expected, std::string{"it reads "} + name + " as it is")) {
       std::printf("    printed:\n%s    expected:\n%s", printed.c_str(), expected.c_str());
     }
+    root->unload();
+  }
+
+  //a CD's CHD (2448-byte units), and a CHD whose parent's SHA-1 is set: neither is the disc
+  for(u32 kind : {0u, 1u}) {
+    auto bytes = disc_image::makeChd(image.bytes, kind ? 2048 : 2448 * 8, kind ? 2048 : 2448);
+    if(kind) bytes[104] = 1;
+    host.game = std::make_shared<vfs::directory>();
+    host.game->append("disc.chd", vfs::memory::open({bytes.data(), bytes.size()}));
+    Node::System root;
+    start(root);
+    CHECK(psp.kernel.disc == nullptr, kind ? "a CHD needing its parent isn't the disc" : "a CD's isn't the disc");
     root->unload();
   }
 

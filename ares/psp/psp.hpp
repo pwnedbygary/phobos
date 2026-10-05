@@ -6,8 +6,11 @@
 #include <sljit.h>
 #include <nall/recompiler/generic/generic.hpp>  //the CPU's recompiler is built on it
 
-//Builds that read CD images bring in libchdr, whose MIN and MAX are macros; the Allegrex has instructions by those
-//names.
+//A disc image in MAME's CHD form is read with nall's reader of them (through libchdr), in builds that have it.
+//libchdr's MIN and MAX are macros, and the Allegrex has instructions by those names.
+#if defined(ARES_ENABLE_CHD)
+  #include <nall/decode/chd.hpp>
+#endif
 #undef MIN
 #undef MAX
 

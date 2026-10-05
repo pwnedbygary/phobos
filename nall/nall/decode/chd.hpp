@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+#include <memory>
 #include <nall/file.hpp>
 #include <nall/maybe.hpp>
 #include <nall/string.hpp>
@@ -9,6 +11,10 @@
 
 namespace nall::Decode {
 
+//A disc image in MAME's CHD form ("compressed hunks of data"), read with libchdr: the disc cut into hunks, each
+//packed on its own. Two kinds of disc: a CD's (chdman createcd), its tracks listed in the image's metadata and each
+//sector stored as a 2352-byte frame and 96 bytes of subchannel data; or a DVD's (chdman createdvd), as a PSP's UMD
+//is stored, no tracks, just 2048-byte sectors one after another.
 struct CHD {
   ~CHD();
   struct Index {
@@ -30,18 +36,41 @@ struct CHD {
     maybe<s32> postgap;
   };
 
+  //Reads size bytes from offset in the image into data; returns how many it got.
+  using Reader = std::function<u64 (u64 offset, void* data, u64 size)>;
+
   auto load(const string& location) -> bool;
+  //An image read through a reader rather than opened by its name: a file a front end holds open, as Android's file
+  //picker hands over a descriptor whose file the app may have no permission to open again by its path.
+  auto load(Reader reader, u64 size) -> bool;
+  //A CD's frame at a disc address (2352 bytes, or 2048 in a MODE1 track), or a DVD's 2048-byte sector; empty if it
+  //isn't on the disc, or (a DVD's) its hunk is damaged.
   auto read(u32 sector) const -> std::vector<u8>;
   auto sectorCount() const -> u32;
+  auto dvd() const -> bool { return isDVD; }
 
-  std::vector<Track> tracks;
+  std::vector<Track> tracks;  //a CD's
+  string error;               //why load() failed
 private:
+  auto loadHeader() -> bool;
+
+  //what load(reader, size) was given, and where libchdr's next read starts: kept apart from the CHD so its address,
+  //which libchdr holds, stays put even if the CHD is moved
+  struct Source {
+    Reader reader;
+    u64 size = 0;
+    u64 position = 0;
+  };
+
   file_buffer fp;
+  std::unique_ptr<Source> source;
   chd_file* chd = nullptr;
   static constexpr int chd_sector_size = 2352 + 96;
   size_t chd_hunk_size;
   mutable std::vector<u8> chd_hunk_buffer;
   mutable int chd_current_hunk = -1;
+  bool isDVD = false;
+  u64 dvdBytes = 0;  //a DVD's size: its "logical" bytes, up to which the hunks hold the disc
 };
 
 inline CHD::~CHD() {
@@ -53,20 +82,73 @@ inline CHD::~CHD() {
 inline auto CHD::load(const string& location) -> bool {
   fp = file::open(location, file::mode::read);
   if(!fp) {
+    error = "the file can't be opened";
     print("CHD: Failed to open ", location, "\n");
     return false;
   }
 
   chd_error err = chd_open_file(fp.handle(), CHD_OPEN_READ, nullptr, &chd);
   if (err != CHDERR_NONE) {
+    chd = nullptr;
+    error = chd_error_string(err);
     print("CHD: Failed to open ", location, ": ", chd_error_string(err), "\n");
     return false;
   }
+  return loadHeader();
+}
 
+inline auto CHD::load(Reader reader, u64 size) -> bool {
+  source = std::make_unique<Source>(Source{std::move(reader), size});
+  //libchdr's way into the file: its size, reads from where the last seek left off, and seeks. Closing is left to
+  //whoever holds the file.
+  static const core_file_callbacks callbacks = {
+    [](void* argp) -> uint64_t { return ((Source*)argp)->size; },
+    [](void* buffer, size_t size, size_t count, void* argp) -> size_t {
+      auto& source = *(Source*)argp;
+      if(!size || count > ~size_t(0) / size || source.position >= source.size) return 0;
+      u64 wanted = std::min<u64>(u64(size) * count, source.size - source.position);
+      u64 got = source.reader(source.position, buffer, wanted);
+      source.position += got;
+      return got / size;
+    },
+    [](void*) -> int { return 0; },
+    [](void* argp, int64_t offset, int whence) -> int {
+      auto& source = *(Source*)argp;
+      s64 base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? s64(source.position) : s64(source.size);
+      if(offset < -base) return -1;
+      source.position = u64(base + offset);
+      return 0;
+    },
+  };
+  chd_error err = chd_open_core_file_callbacks(&callbacks, source.get(), CHD_OPEN_READ, nullptr, &chd);
+  if(err != CHDERR_NONE) {
+    chd = nullptr;
+    error = err == CHDERR_REQUIRES_PARENT ? "it only holds its differences from another CHD" : chd_error_string(err);
+    print("CHD: Failed to open: ", error, "\n");
+    return false;
+  }
+  return loadHeader();
+}
+
+//What the image holds: a DVD's hunks of whole sectors, or a CD's frames in the tracks its metadata lists.
+inline auto CHD::loadHeader() -> bool {
   const chd_header* header = chd_get_header(chd);
   chd_hunk_size = header->hunkbytes;
 
+  if (header->unitbytes == 2048) {
+    if (!chd_hunk_size || chd_hunk_size % 2048 || u64(header->totalhunks) * chd_hunk_size < header->logicalbytes) {
+      error = "its hunks don't hold whole sectors of the disc";
+      print("CHD: a DVD's hunk size (", chd_hunk_size, ") doesn't hold its sectors\n");
+      return false;
+    }
+    isDVD = true;
+    dvdBytes = header->logicalbytes;
+    chd_hunk_buffer.resize(chd_hunk_size);
+    return true;
+  }
+
   if ((chd_hunk_size % chd_sector_size) != 0) {
+    error = "its hunks don't hold whole frames of a CD";
     print("CHD: hunk size (", chd_hunk_size, ") is not a multiple of ", chd_sector_size, "\n");
     return false;
   }
@@ -74,6 +156,7 @@ inline auto CHD::load(const string& location) -> bool {
   chd_hunk_buffer.resize(chd_hunk_size);
   u32 disc_lba = 0;
   u32 chd_lba = 0;
+  chd_error err;
 
   // Fetch track structure
   while(true) {
@@ -196,6 +279,19 @@ inline auto CHD::load(const string& location) -> bool {
 }
 
 inline auto CHD::read(u32 sector) const -> std::vector<u8> {
+  if (isDVD) {
+    u64 offset = u64(sector) * 2048;
+    if (offset >= dvdBytes) return {};
+    int hunk = int(offset / chd_hunk_size);
+    if (hunk != chd_current_hunk) {
+      chd_current_hunk = -1;  //whatever happens below, the buffer won't hold the hunk it held
+      if (chd_read(chd, hunk, chd_hunk_buffer.data()) != CHDERR_NONE) return {};
+      chd_current_hunk = hunk;
+    }
+    auto start = chd_hunk_buffer.begin() + offset % chd_hunk_size;
+    return {start, start + 2048};
+  }
+
   // Convert LBA in CD-ROM to LBA in CHD
   for(auto& track : tracks) {
     for(auto& index : track.indices) {
@@ -241,6 +337,7 @@ inline auto CHD::read(u32 sector) const -> std::vector<u8> {
 }
 
 inline auto CHD::sectorCount() const -> u32 {
+  if (isDVD) return u32((dvdBytes + 2047) / 2048);
   u32 count = 0;
   for(auto& track : tracks) count += track.sectorCount();
   return count;

@@ -240,7 +240,7 @@ private:
 #if defined(ARES_ENABLE_CHD)
   auto loadChd(const string& location) -> bool {
     auto chd = std::make_shared<Decode::CHD>();
-    if(!chd->load(location)) return false;
+    if(!chd->load(location) || chd->dvd()) return false;  //a DVD's image isn't a CD's
 
     CD::Session session;
     session.leadIn.lba = -(CD::LeadInSectors + CD::Track1Pregap);

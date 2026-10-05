@@ -1,50 +1,41 @@
 //The disc image reader and the ISO 9660 file system on it (disc.hpp describes both).
 
+static auto little16(const u8* p) -> u32 { return p[0] | p[1] << 8; }
 static auto little32(const u8* p) -> u32 { return p[0] | p[1] << 8 | p[2] << 16 | u32(p[3]) << 24; }
 
-//Opens an image: a CSO if it starts with "CISO", else an ISO, which must have a volume descriptor at sector 16.
+//Deflate, as raw (a CSO's), or wrapped in zlib's 2-byte header with a checksum after (a DAX's, and a JSO's that uses
+//zlib), which is skipped: the header names deflate (its low four bits 8), checks itself (as a 16-bit number, a
+//multiple of 31) and has no preset dictionary (bit 0x20), which no image uses. Fills out (room bytes) with at least
+//wanted; false if the packed bytes are damaged or end short.
+static auto inflate(const u8* in, u32 size, u8* out, u32 room, u32 wanted, bool wrapped) -> bool {
+  if(wrapped) {
+    if(size < 2 || (in[0] & 0x0f) != 8 || (in[0] << 8 | in[1]) % 31 || (in[1] & 0x20)) return false;
+    in += 2, size -= 2;
+  }
+  u32 unpacked = room, consumed = size;
+  auto source = const_cast<u8*>(in);  //puff only reads it
+  return nall::Decode::puff::puff(out, &unpacked, source, &consumed) == 0 && unpacked >= wanted;
+}
+
+//Opens an image: a compressed one by what it starts with ("CISO", "ZISO", "DAX", "JISO"), else an ISO; whichever,
+//the disc must have a volume descriptor at sector 16.
 auto Disc::open(Reader reader, u64 imageSize, std::string& error) -> bool {
   this->reader = reader;
-  compressed = false;
+  format = Format::ISO;
   cachedBlock = -1;
   index.clear();
-  u8 header[24] = {};
-  if(imageSize >= 24 && reader(0, header, 24) == 24 && !memcmp(header, "CISO", 4)) {
-    compressed = true;
-    discSize = u64(little32(header + 8)) | u64(little32(header + 12)) << 32;
-    blockSize = little32(header + 16);
-    version = header[20];
-    alignment = header[21];
-    if(!blockSize || blockSize % SectorSize || blockSize > 1_MiB || alignment > 31) {
-      error = "the CSO's header is damaged";
-      return false;
-    }
-    u64 blocks = (discSize + blockSize - 1) / blockSize;
-    if(24 + 4 * (blocks + 1) > imageSize) {  //the index must fit in the file
-      error = "the CSO's index is cut short";
-      return false;
-    }
-    index.resize(blocks + 1);
-    if(reader(24, index.data(), index.size() * 4) != index.size() * 4) {
-      error = "the CSO's index is cut short";
-      return false;
-    }
-    for(auto& entry : index) entry = little32((const u8*)&entry);  //as stored: little-endian, whatever the host's
-    //each block starts where the one before it ends, and the last ends inside the file
-    for(u64 n = 0; n + 1 < index.size(); n++) {
-      if((index[n + 1] & 0x7fff'ffff) < (index[n] & 0x7fff'ffff)) {
-        error = "the CSO's index is damaged";
-        return false;
-      }
-    }
-    if(u64(index.back() & 0x7fff'ffff) << alignment > imageSize) {
-      error = "the CSO's index is damaged";
-      return false;
-    }
-    block.resize(blockSize);
-  } else {
-    discSize = imageSize;
-  }
+  sizes.clear();
+  plainFrames.clear();
+  u8 header[48] = {};
+  u64 got = reader(0, header, std::min<u64>(imageSize, sizeof(header)));
+  bool opened = true;
+  bool cso = !memcmp(header, "CISO", 4) || !memcmp(header, "ZISO", 4);
+  if(got >= 24 && cso) opened = openCSO(header, imageSize, error);
+  else if(got >= 32 && !memcmp(header, "DAX\0", 4)) opened = openDAX(header, imageSize, error);
+  else if(got >= 48 && !memcmp(header, "JISO", 4)) opened = openJSO(header, imageSize, error);
+  else discSize = imageSize;
+  if(!opened) return false;
+  if(format != Format::ISO) block.resize(blockSize);
   sectorCount = u32(std::min<u64>(discSize / SectorSize, 0xffff'ffff));
 
   u8 descriptor[SectorSize];
@@ -60,28 +51,190 @@ auto Disc::open(Reader reader, u64 imageSize, std::string& error) -> bool {
   return true;
 }
 
-//Unpacks a CSO block into `block`.
+//A CSO's (or a ZSO's) header and index: each block's start, the last entry where the data ends. Each block starts
+//where the one before it ends, and the last ends inside the file.
+auto Disc::openCSO(const u8* header, u64 imageSize, std::string& error) -> bool {
+  format = !memcmp(header, "ZISO", 4) ? Format::ZSO : Format::CSO;
+  std::string kind = format == Format::ZSO ? "ZSO" : "CSO";
+  discSize = u64(little32(header + 8)) | u64(little32(header + 12)) << 32;
+  blockSize = little32(header + 16);
+  version = header[20];
+  alignment = header[21];
+  if(!blockSize || blockSize % SectorSize || blockSize > 1_MiB || alignment > 31) {
+    error = "the " + kind + "'s header is damaged";
+    return false;
+  }
+  u64 blocks = (discSize + blockSize - 1) / blockSize;
+  if(24 + 4 * (blocks + 1) > imageSize) {  //the index must fit in the file
+    error = "the " + kind + "'s index is cut short";
+    return false;
+  }
+  index.resize(blocks + 1);
+  if(reader(24, index.data(), index.size() * 4) != index.size() * 4) {
+    error = "the " + kind + "'s index is cut short";
+    return false;
+  }
+  for(auto& entry : index) entry = little32((const u8*)&entry);  //as stored: little-endian, whatever the host's
+  for(u64 n = 0; n + 1 < index.size(); n++) {
+    if((index[n + 1] & 0x7fff'ffff) < (index[n] & 0x7fff'ffff)) {
+      error = "the " + kind + "'s index is damaged";
+      return false;
+    }
+  }
+  if(u64(index.back() & 0x7fff'ffff) << alignment > imageSize) {
+    error = "the " + kind + "'s index is damaged";
+    return false;
+  }
+  return true;
+}
+
+//A DAX's tables: each 8 KiB frame's start (32 bits) and packed size (16 bits), then, from version 1, the areas left
+//uncompressed (each its first frame and how many frames). Every frame lies inside the file, and the areas inside the
+//disc, no more frames in all than it has (so a damaged count can't ask for a huge table, or a long time to read it).
+auto Disc::openDAX(const u8* header, u64 imageSize, std::string& error) -> bool {
+  format = Format::DAX;
+  blockSize = 0x2000;
+  discSize = little32(header + 4);
+  u32 daxVersion = little32(header + 8), areas = daxVersion >= 1 ? little32(header + 12) : 0;
+  u64 frames = (discSize + blockSize - 1) / blockSize;
+  if(areas > frames) {
+    error = "the DAX's uncompressed areas are damaged";
+    return false;
+  }
+  u64 tables = 6 * frames + 8 * u64(areas);
+  if(32 + tables > imageSize) {
+    error = "the DAX's tables are cut short";
+    return false;
+  }
+  std::vector<u8> table(tables);
+  if(reader(32, table.data(), tables) != tables) {
+    error = "the DAX's tables are cut short";
+    return false;
+  }
+  index.resize(frames);
+  sizes.resize(frames);
+  for(u64 n = 0; n < frames; n++) index[n] = little32(&table[4 * n]), sizes[n] = little16(&table[4 * frames + 2 * n]);
+  plainFrames.assign(frames, false);
+  u64 plain = 0;
+  for(u64 n = 0; n < areas; n++) {
+    u64 first = little32(&table[6 * frames + 8 * n]), count = little32(&table[6 * frames + 8 * n + 4]);
+    plain += count;
+    if(first + count > frames || plain > frames) {
+      error = "the DAX's uncompressed areas are damaged";
+      return false;
+    }
+    for(u64 frame = first; frame < first + count; frame++) plainFrames[frame] = true;
+  }
+  for(u64 n = 0; n < frames; n++) {
+    u64 stored = plainFrame(u32(n)) ? std::min<u64>(blockSize, discSize - n * blockSize) : sizes[n];
+    if(index[n] + stored > imageSize) {
+      error = "the DAX's index is damaged";
+      return false;
+    }
+  }
+  return true;
+}
+
+auto Disc::plainFrame(u32 number) const -> bool {
+  return number < plainFrames.size() && plainFrames[number];
+}
+
+//A JSO's header and index: each block's start, and one more for the end. A block that takes a whole block's room
+//(or, the last, the rest of the disc) is stored as it is; the others are packed with LZO or zlib, the header says
+//which. Block headers (a JSO tool's option) aren't read.
+auto Disc::openJSO(const u8* header, u64 imageSize, std::string& error) -> bool {
+  format = Format::JSO;
+  blockSize = little16(header + 6);
+  discSize = little32(header + 12);
+  if(!blockSize || blockSize % SectorSize || header[10] > 1) {
+    error = "the JSO's header is damaged";
+    return false;
+  }
+  if(header[8]) {
+    error = "the JSO has block headers, which aren't read yet";
+    return false;
+  }
+  lzo = header[10] == 0;
+  u64 blocks = (discSize + blockSize - 1) / blockSize;
+  if(48 + 4 * (blocks + 1) > imageSize) {
+    error = "the JSO's index is cut short";
+    return false;
+  }
+  index.resize(blocks + 1);
+  if(reader(48, index.data(), index.size() * 4) != index.size() * 4) {
+    error = "the JSO's index is cut short";
+    return false;
+  }
+  for(auto& entry : index) entry = little32((const u8*)&entry);
+  for(u64 n = 0; n + 1 < index.size(); n++) {
+    if(index[n + 1] < index[n] || index[n + 1] - index[n] > blockSize) {
+      error = "the JSO's index is damaged";
+      return false;
+    }
+  }
+  if(index.back() > imageSize) {
+    error = "the JSO's index is damaged";
+    return false;
+  }
+  return true;
+}
+
+//Unpacks a compressed image's block into `block`.
 auto Disc::readBlock(u32 number) -> bool {
   if(s64(number) == cachedBlock) return true;
   cachedBlock = -1;  //whatever happens below, `block` won't hold the block it held
-  if(number + 1 >= index.size()) return false;
-  u64 start = u64(index[number] & 0x7fff'ffff) << alignment;
-  u64 end = u64(index[number + 1] & 0x7fff'ffff) << alignment;
-  u64 stored = end - start;  //open() saw that the entries never go back
-  if(stored > blockSize + (1ull << alignment)) return false;  //no block takes more than its room and the padding
+  if(u64(number) * blockSize >= discSize) return false;
   //the last block may hold less than a whole block of the disc
   u32 wanted = u32(std::min<u64>(blockSize, discSize - u64(number) * blockSize));
-  bool plain = version >= 2 ? stored >= blockSize : (index[number] & 0x8000'0000);
-  if(version >= 2 && !plain && (index[number] & 0x8000'0000)) return false;  //LZ4: not read here
-  if(plain) {
-    if(reader(start, block.data(), wanted) != wanted) return false;
+  enum class Packing { Stored, Deflate, Zlib, ZlibOrDeflate, LZ4, LZO } packing = Packing::Stored;
+  u64 start = 0, stored = 0;
+  if(format == Format::CSO || format == Format::ZSO) {
+    if(number + 1 >= index.size()) return false;
+    start = u64(index[number] & 0x7fff'ffff) << alignment;
+    stored = (u64(index[number + 1] & 0x7fff'ffff) << alignment) - start;  //open() saw that it never goes back
+    if(stored > blockSize + (1ull << alignment)) return false;  //no block takes more than its room and the padding
+    bool flag = index[number] & 0x8000'0000;
+    if(format == Format::ZSO) packing = flag ? Packing::Stored : Packing::LZ4;
+    else if(version >= 2) packing = stored >= blockSize ? Packing::Stored : flag ? Packing::LZ4 : Packing::Deflate;
+    else packing = flag ? Packing::Stored : Packing::Deflate;
+  } else if(format == Format::DAX) {
+    if(number >= index.size()) return false;
+    start = index[number];
+    packing = plainFrame(number) ? Packing::Stored : Packing::Zlib;
+    stored = sizes[number];
+  } else if(format == Format::JSO) {
+    if(number + 1 >= index.size()) return false;
+    start = index[number];
+    stored = index[number + 1] - index[number];
+    packing = stored == blockSize ? Packing::Stored : lzo ? Packing::LZO : Packing::ZlibOrDeflate;
   } else {
-    packed.resize(stored);
-    if(reader(start, packed.data(), stored) != stored) return false;
-    u32 unpacked = blockSize, consumed = u32(stored);
-    if(nall::Decode::puff::puff(block.data(), &unpacked, packed.data(), &consumed) != 0) return false;
-    if(unpacked < wanted) return false;  //it ended short
+    return false;
   }
+  if(packing == Packing::Stored) {
+    if(reader(start, block.data(), wanted) != wanted) return false;
+    cachedBlock = number;
+    return true;
+  }
+  packed.resize(stored);
+  if(reader(start, packed.data(), stored) != stored) return false;
+  bool unpacked = false;
+  auto inflated = [&](bool wrapped) {
+    return inflate(packed.data(), u32(stored), block.data(), blockSize, wanted, wrapped);
+  };
+  switch(packing) {
+  case Packing::Deflate: unpacked = inflated(false); break;
+  case Packing::Zlib: unpacked = inflated(true); break;
+  case Packing::ZlibOrDeflate: unpacked = inflated(true) || inflated(false); break;  //a JSO's: tools differ
+  case Packing::LZ4: unpacked = unpackLZ4(packed.data(), u32(stored), block.data(), blockSize) >= wanted; break;
+  case Packing::LZO: unpacked = unpackLZO(packed.data(), u32(stored), block.data(), blockSize) >= wanted; break;
+  case Packing::Stored: break;
+  }
+  //a JSO's last block, shorter than the rest, may be stored as it is at its own length
+  if(!unpacked && format == Format::JSO && stored == wanted) {
+    memcpy(block.data(), packed.data(), wanted);
+    unpacked = true;
+  }
+  if(!unpacked) return false;
   cachedBlock = number;
   return true;
 }
@@ -89,7 +242,7 @@ auto Disc::readBlock(u32 number) -> bool {
 //Bytes from the disc as unpacked.
 auto Disc::readImage(u64 offset, u64 size, u8* data) -> bool {
   if(offset > discSize || size > discSize - offset) return false;
-  if(!compressed) return reader(offset, data, size) == size;
+  if(format == Format::ISO) return reader(offset, data, size) == size;
   while(size) {
     u32 number = u32(offset / blockSize), within = u32(offset % blockSize);
     if(!readBlock(number)) return false;

@@ -725,7 +725,7 @@ class MainViewModel(
             try {
                 performSaveState(sysName, romName, AUTO_STATE_SLOT, quiet = true)
             } catch (e: CancellationException) {
-                Log.i("Phobos", "Auto-save: its screen went away during the save; its message may not have shown")
+                Log.i("Phobos", "Auto-save: the activity finished during the save; its message may not have shown")
             } catch (e: Exception) {
                 Log.e("Phobos", "Auto-save failed: ${e.message}")
             }
@@ -934,8 +934,8 @@ class MainViewModel(
                 true
             }
         } catch (e: CancellationException) {
-            // The screen went away during the save; the cancel takes effect here, once the state is written: the save
-            // stands, and at most its message is lost.
+            // The activity finished during the save; the cancel takes effect here, once the state is written: the
+            // save stands, and at most its message is lost.
             throw e
         } catch (e: Exception) {
             Log.e("Phobos", "Failed to sync state to SAF: ${e.message}")
@@ -2445,8 +2445,9 @@ class MainViewModel(
     fun scanRoms(context: Context, systemName: String, directoryUris: List<Uri>) {
         viewModelScope.launch {
             val extensions = PhobosCore.getSystemExtensions(systemName)
-            // CD systems also list .m3u playlists, which gather a game's discs.
-            val discSystem = "cue" in extensions || "chd" in extensions
+            // CD systems also list .m3u playlists, which gather a game's discs. (The PSP takes CHDs too, but its
+            // discs can't be swapped yet, so each is listed on its own.)
+            val discSystem = systemName != LaunchSystems.PSP && ("cue" in extensions || "chd" in extensions)
             val foundRoms = withContext(Dispatchers.IO) {
                 val result = mutableListOf<RomFile>()
                 directoryUris.forEach { uri ->
@@ -2873,7 +2874,8 @@ class MainViewModel(
                             if (ngBiosPresent) _neoGeoRomLoadFailed.value = effectiveSystem
                             else _biosRequired.value = effectiveSystem
                         } else {
-                            _gameLoadFailed.value = GameLoadFailed(effectiveSystem, rom.name)
+                            _gameLoadFailed.value =
+                                GameLoadFailed(effectiveSystem, rom.name, PhobosCore.loadProblem().ifEmpty { null })
                         }
                     }
                 } else {
