@@ -121,7 +121,8 @@ auto Kernel::poolAllocate(bool variable, bool callbacks) -> void {
   if(poolWaiters(pool).empty()) {  //(those already waiting come first)
     if(u32 address = poolTake(pool, size)) {
       memory.write(4, pointer, address);
-      return result(0);
+      result(0);
+      return callbacksOnReturn(callbacks);
     }
   }
   result(0);

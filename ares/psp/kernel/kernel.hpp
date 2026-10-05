@@ -534,6 +534,7 @@ struct Kernel {
   auto notifyCallback(u32 uid, u32 argument) -> bool;
   auto pendingCallback(const Thread& thread) -> Callback*;
   auto wakeForCallbacks(Thread& thread) -> void;
+  auto callbacksOnReturn(bool callbacks) -> void;
   auto runCallbacks(Thread& thread) -> void;
   auto callNextCallback(Thread& thread) -> bool;
   auto callbackReturned() -> void;

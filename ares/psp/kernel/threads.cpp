@@ -379,7 +379,7 @@ auto Kernel::sleep(bool callbacks) -> void {
   result(0);
   if(current && current->wakeupCount) {
     current->wakeupCount--;
-    return;
+    return callbacksOnReturn(callbacks);
   }
   block(Wait::Sleep, 0, 0, 0, callbacks);
 }
@@ -405,7 +405,10 @@ auto Kernel::waitThreadEnd(bool callbacks) -> void {
   if(!mayWait()) return;
   auto thread = findThread(arg(0));
   if(!thread || arg(0) == 0) return result(ErrorUnknownThread);
-  if(thread->status == Status::Dormant) return result(u32(thread->exitStatus));
+  if(thread->status == Status::Dormant) {
+    result(u32(thread->exitStatus));
+    return callbacksOnReturn(callbacks);
+  }
   result(0);
   block(Wait::ThreadEnd, thread->uid, timeout(arg(1)), arg(1), callbacks);
 }
@@ -478,7 +481,7 @@ auto Kernel::waitSemaphore(bool callbacks) -> void {
   result(0);
   if(semaphore.count >= count) {
     semaphore.count -= count;
-    return;
+    return callbacksOnReturn(callbacks);
   }
   current->waitCount = count;
   current->readySince = ++readySequence;  //its place in the queue

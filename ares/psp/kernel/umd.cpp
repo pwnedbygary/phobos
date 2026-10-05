@@ -17,7 +17,10 @@ auto Kernel::umdState() const -> u32 {
 auto Kernel::umdWait(u32 stat, u32 timeout, bool callbacks) -> void {
   constexpr u32 Waitable = UmdNotPresent | UmdPresent | UmdNotReady | UmdReady | UmdReadable;  //not "changed"
   if(!(stat & Waitable)) return result(ErrorInvalidArgument);
-  if(stat & umdState()) return result(0);
+  if(stat & umdState()) {
+    result(0);
+    return callbacksOnReturn(callbacks);
+  }
   if(timeout == 1 && !callbacks) timeout = 25;
   else if(timeout && timeout <= 209) timeout = 240;
   result(0);

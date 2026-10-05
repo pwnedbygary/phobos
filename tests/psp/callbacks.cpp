@@ -211,6 +211,93 @@ static auto waitsGoOn() -> void {
   }
 }
 
+//A wait that lets callbacks run but needn't wait, what it waits for being there already, still runs the callbacks
+//notified by then, and returns what it got once they're done: a semaphore's count there (taken: none left after), a
+//wakeup that came first, an event flag's bits set, a fixed pool's free block, a thread that has ended (its exit
+//status), the drive ready, and the vertical blank it's in (1).
+static auto waitsAtOnce() -> void {
+  for(bool recompile : {false, true}) {
+    HostFolder disc;
+    KernelMachine m;
+    m.kernel.mount("disc0", disc.path.string());  //a folder standing for the disc: the drive is ready
+    loggingCallback(m, 0x0880'3000);
+    Assembler ender{m, 0x0880'2000};
+    ender.li(a0, 0x55);
+    ender.call("sceKernelExitThread");
+
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelCreateCallback");
+    main.li(t0, R); main.put(sw(v0, 0, t0));
+    auto notify = [&](u32 word) {
+      main.li(t0, R); main.put(lw(a0, 0, t0)); main.li(a1, word);
+      main.call("sceKernelNotifyCallback");
+    };
+    //what wait n returned, at R + 0x20 + 4n, and how many words the callbacks had logged by then, at R + 0x60 + 4n
+    auto record = [&](u32 n) {
+      main.li(t0, R + 0x20 + n * 4); main.put(sw(v0, 0, t0));
+      main.li(t0, R); main.put(lw(t1, 8, t0)); main.li(t0, R + 0x60 + n * 4); main.put(sw(t1, 0, t0));
+    };
+    main.li(a0, m.string("s")); main.li(a1, 0); main.li(a2, 1); main.li(a3, 1); main.li(t0, 0);
+    main.call("sceKernelCreateSema");
+    main.put(addu(s1, v0, zero));
+    notify(1);
+    main.put(addu(a0, s1, zero)); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceKernelWaitSemaCB");
+    record(1);
+    main.put(addu(a0, s1, zero)); main.li(a1, 1);
+    main.call("sceKernelPollSema");
+    main.li(t0, R + 0x40); main.put(sw(v0, 0, t0));
+    main.call("sceKernelGetThreadId");
+    main.put(addu(a0, v0, zero));
+    main.call("sceKernelWakeupThread");
+    notify(2);
+    main.call("sceKernelSleepThreadCB");
+    record(2);
+    main.li(a0, m.string("f")); main.li(a1, 0); main.li(a2, 1); main.li(a3, 0);
+    main.call("sceKernelCreateEventFlag");
+    main.put(addu(s1, v0, zero));
+    notify(3);
+    main.put(addu(a0, s1, zero)); main.li(a1, 1); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+    main.call("sceKernelWaitEventFlagCB");
+    record(3);
+    main.li(a0, m.string("p")); main.li(a1, 2); main.li(a2, 0); main.li(a3, 16); main.li(t0, 1); main.li(t1, 0);
+    main.call("sceKernelCreateFpl");
+    main.put(addu(s1, v0, zero));
+    notify(4);
+    main.put(addu(a0, s1, zero)); main.li(a1, R + 0x44); main.li(a2, 0);
+    main.call("sceKernelAllocateFplCB");
+    record(4);
+    startThread(main, m, "ender", 0x0880'2000, 0x10);  //it runs and ends at once, its priority the higher
+    notify(5);
+    main.put(addu(a0, s0, zero)); main.li(a1, 0);
+    main.call("sceKernelWaitThreadEndCB");
+    record(5);
+    notify(6);
+    main.li(a0, Kernel::UmdReadable); main.li(a1, 0);
+    main.call("sceUmdWaitDriveStatCB");
+    record(6);
+    main.call("sceDisplayWaitVblankStart");
+    notify(7);
+    main.call("sceDisplayWaitVblankCB");
+    record(7);
+    main.call("sceKernelExitGame");
+
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    std::vector<u32> results, words;
+    for(u32 n = 1; n <= 7; n++) results.push_back(m.system.memory.read(4, R + 0x20 + n * 4));
+    for(u32 n = 1; n <= 7; n++) words.push_back(m.system.memory.read(4, R + 0x60 + n * 4));
+    CHECK(results == std::vector<u32>({0, 0, 0, 0, 0x55, 0, 1}), true);
+    CHECK(words == std::vector<u32>({2, 4, 6, 8, 10, 12, 14}), true);  //each wait's callback ran before it returned
+    CHECK(logged(m) == std::vector<u32>({1, 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7}), true);
+    CHECK(m.system.memory.read(4, R + 0x40), Kernel::ErrorSemaphoreZero);  //the wait took the count
+    CHECK(m.system.memory.read(4, R + 0x44) >= Kernel::UserMemory, true);  //the pool's block
+    CHECK(m.notes.size(), 0);
+    for(auto& note : m.notes) std::printf("  note: %s\n", note.c_str());
+  }
+}
+
 //A callback notified for a thread of lower priority waiting where it may run doesn't run until the notifying thread
 //waits; one notified for a thread waiting where callbacks can't run waits for the next CB wait; a check from inside a
 //callback is refused.
@@ -420,6 +507,7 @@ static auto vblankHandler() -> void {
 auto callbackTests() -> Tests {
   return {
     {"callbacks in waits", runInWaits}, {"callbacks and waits going on", waitsGoOn},
+    {"callbacks in waits ending at once", waitsAtOnce},
     {"callbacks by priority", byPriority}, {"callbacks called directly", callbackCalls},
     {"display vblank timing", vblankTiming}, {"interrupts vblank handler", vblankHandler},
   };

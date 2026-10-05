@@ -61,7 +61,10 @@ auto Kernel::sceDisplayWaitVblank() -> void {
 }
 
 auto Kernel::sceDisplayWaitVblankCB() -> void {
-  if(inVblank()) return result(1);
+  if(inVblank()) {
+    result(1);
+    return callbacksOnReturn(true);
+  }
   waitVblank(true);
 }
 

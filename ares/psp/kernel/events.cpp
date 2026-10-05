@@ -15,7 +15,8 @@
 //its wait), the callback runs on its stack as fn(count, word, its own argument), and once it returns, the next one
 //notified runs, then the thread goes back into its wait, which may have ended meanwhile (its time ran out: the clock
 //doesn't stop for callbacks; what it waited for came, or was deleted). A callback that returns anything but 0 is
-//deleted. (As PPSSPP's reading of the PSP has it, from pspautotests' threads/callbacks.)
+//deleted. (As PPSSPP's reading of the PSP has it, from pspautotests' threads/callbacks.) A CB function that needn't
+//wait at all still runs the callbacks notified by then before it returns (callbacksOnReturn()).
 
 static auto flagMatches(u32 pattern, u32 bits, u32 mode) -> bool {
   return mode & 1 ? (pattern & bits) != 0 : (pattern & bits) == bits;
@@ -115,7 +116,8 @@ auto Kernel::waitEventFlag(bool callbacks) -> void {
   if(flagMatches(flag->pattern, bits, mode)) {
     if(seen) memory.write(4, seen, flag->pattern);
     flag->pattern = flagCleared(flag->pattern, bits, mode);
-    return result(0);
+    result(0);
+    return callbacksOnReturn(callbacks);
   }
   if(timeoutPointer && !memory.read(4, timeoutPointer)) return result(ErrorWaitTimeout);
   result(0);
@@ -191,6 +193,16 @@ auto Kernel::wakeForCallbacks(Thread& thread) -> void {
   if(thread.status != Status::Waiting || !thread.callbacks || thread.inCallback || !pendingCallback(thread)) return;
   thread.status = Status::Ready;
   thread.readySince = ++readySequence;
+}
+
+//A wait where callbacks may run that ends at once, what it waits for being there already (a semaphore's count, a
+//wakeup that came first...), still runs the callbacks notified by then, as waiting would have. They run now, as
+//sceKernelCheckCallback's do, and the function returns what it got (its result already in v0) once they're done:
+//what it took is kept, and no timeout can run out meanwhile, as it could if the thread waited after all. Not inside
+//a callback (the next runs when it returns), nor in an interrupt handler.
+auto Kernel::callbacksOnReturn(bool callbacks) -> void {
+  if(!callbacks || interrupting || !current || current->inCallback || !pendingCallback(*current)) return;
+  runCallbacks(*current);
 }
 
 //The thread (its registers in the CPU) runs its notified callbacks: its registers and its wait are put aside as they
