@@ -22,10 +22,13 @@
 //With LIGHT_MODE 1 the shine is kept apart, as a second color added after texturing (so a dark texture doesn't dull
 //it); otherwise it's added in. Each channel ends held to 0-255.
 //
-//The arithmetic is the GE's (as PPSSPP reads it, from tests on the PSP): an 8-bit color c counts as 2c + 1, so that
-//white times white is white; two colors multiply and shift down 10 bits; a light's share counts 512ths, rounded up
-//(times the two colors, then down 19 bits). "To the power of" is the GE's own quick approximation, exact at powers of
-//two and a little low between them, and the coefficient keeps only the top four bits of its fraction.
+//The arithmetic is the GE's: an 8-bit color c counts as 2c + 1, so that white times white is white; two colors
+//multiply and shift down 10 bits; a light's share counts 256ths, rounded up (times the two colors, then down 18
+//bits). "To the power of" is the GE's own quick approximation, exact at powers of two and a little low between them,
+//and the coefficient keeps only the top four bits of its fraction. (As PPSSPP reads it from tests on the PSP, but for
+//the share, which PPSSPP counts in 512ths, rounded up and one more: the PSP's own pictures settled 256ths, round 3's
+//lighting files in docs/psp-core.md. Rounding up at a whole 256th is assumed, no measured share landing on one; and
+//a few products come out a level lower on the PSP than this, unexplained.)
 //
 //Environment mapping (TEXTURE_MAP_MODE 2) takes texture coordinates from two lights (TEXTURE_SHADE_MAPPING bits 0-1
 //for u, 8-9 for v), lit or not: (the cosine between the normal and the direction to that light, or with a shining
@@ -34,12 +37,13 @@
 //A color's channel n (0 red, 1 green, 2 blue, 3 alpha) as the GE multiplies it: 2c + 1.
 static auto factor(u32 color, u32 n) -> s32 { return s32(color >> n * 8 & 0xff) * 2 + 1; }
 
-//A light's share in 512ths, rounded up (and one more), at most 512. A spotlight's can be below 0 (its power of a
-//cosine below 0 stays below 0), which darkens; it can't be below -1 (here -512).
+//A light's share in 256ths, rounded up, at most 256. A spotlight's can be below 0 (its power of a cosine below 0
+//stays below 0), which darkens; it can't be below -1 (here -256). (The darkening is PPSSPP's reading, carried over to
+//256ths: not measured.)
 static auto share(float amount) -> s32 {
-  float value = std::ceil(512 * amount + 1);
+  float value = std::ceil(256 * amount);
   if(std::isnan(value)) return 0;
-  return value < 512 ? s32(std::max(value, -512.0f)) : 512;
+  return value < 256 ? s32(std::max(value, -256.0f)) : 256;
 }
 
 //The GE's x to the power e for x above 0: 2 to the e × log2(x), with log2 and its inverse each taken as straight
@@ -125,7 +129,7 @@ auto GE::light(Vertex& vertex, const float world[3], const float normal[3], cons
   s32 sum[4], shine[4] = {};
   for(u32 n = 0; n < 4; n++) sum[n] = channel(t.materialEmissive, n) + (factor(ambient, n) * factor(t.ambientLight, n) >> 10);
   auto add = [](s32* total, u32 lightColor, u32 materialColor, s32 share) {
-    for(u32 n = 0; n < 4; n++) total[n] += factor(lightColor, n) * factor(materialColor, n) * share >> 19;
+    for(u32 n = 0; n < 4; n++) total[n] += factor(lightColor, n) * factor(materialColor, n) * share >> 18;
   };
   for(auto& light : t.lights) {
     if(!light.enabled) continue;
