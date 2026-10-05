@@ -34,6 +34,8 @@ Nothing is in the app yet.
   and a setting can load Sony's own library modules from the user's firmware where running them is easier than
   reimplementing them (the system fonts in `flash0:/font`, the audio codec libraries, perhaps video playback).
   The decryption keys can't come from there: they are in the PSP's crypto hardware, not in the firmware files.
+  [`tools/psp-flash0-dump`](../tools/psp-flash0-dump/README.md) copies flash0's files from the user's PSP to its
+  memory stick (2026-10-04, at the user's request); the copies stay on the user's devices, never in the repository.
 - **A recompiler from the start, the interpreter as its fallback.** Speed and accuracy are the project's aims, so
   the CPU gets a dynamic recompiler (dynarec) early rather than as a late optimization. The interpreter stays: it is
   the reference the recompiler is tested against, and runs whatever the recompiler doesn't handle. The recompiler's
