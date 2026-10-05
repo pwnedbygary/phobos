@@ -11,7 +11,8 @@ constexpr u32 R = KernelMachine::Results;
 
 //A fixed pool of three 100-byte blocks (aligned to 4: 100 apiece): handed out lowest first; a fourth tried fails,
 //waited for wakes when one comes back (getting that one); one not handed out can't be given back. Its status. A
-//variable pool: pieces 8 bytes past their headers, rounded to 8, the lowest place that fits; too big refused.
+//variable pool: pieces 8 bytes past their headers, rounded to 8, the lowest place that fits; too big refused. A
+//fixed pool's blocks of 0 bytes (only a damaged state could make them) refuse a block given back.
 static auto poolCalls() -> void {
   KernelMachine m;
   u32 name = m.string("pool");
@@ -72,6 +73,10 @@ static auto poolCalls() -> void {
   CHECK(m.call("sceKernelTryAllocateFpl", {variable, R}), Kernel::ErrorUnknownFpl);  //not a fixed one
   u32 tiny = m.call("sceKernelCreateVpl", {name, 2, 0, 0x30, 0});  //too small: made 4 KiB
   CHECK(m.kernel.pools[tiny].size, 0x1000 - 0x20);
+  //a fixed pool whose blocks are 0 bytes, as only a damaged state could make one (and loading it is refused):
+  //giving a block back is refused rather than divided by 0
+  m.kernel.pools[fixed].blockSize = 0;
+  CHECK(m.call("sceKernelFreeFpl", {fixed, base + 100}), Kernel::ErrorIllegalMemoryBlock);
 }
 
 //Threads waiting for a fixed pool's one block: the first to come gets it when it comes back, then the next; one with

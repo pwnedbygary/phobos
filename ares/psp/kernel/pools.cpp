@@ -6,7 +6,10 @@
 //A fixed pool's blocks are its block size rounded up to its alignment (4 bytes, or what its options say), one after
 //another; the lowest free one is handed out. A variable pool keeps its first 32 bytes for itself and 8 before each
 //piece it hands out (as the PSP's do), pieces rounded up to 8 bytes, the lowest place that fits taken. How the PSP
-//chooses places isn't known here (PPSSPP models its headers more closely): the free size reported may differ.
+//chooses places isn't known here: the free size reported may differ from a PSP's.
+//
+//What creating a pool refuses, and in what order, is what pspautotests' threads/fpl and threads/vpl tests expect
+//(their expected output was recorded on a PSP).
 
 namespace {
   constexpr u32 PoolPriority = 0x100;   //waiters are served by priority, not in the order they came
@@ -15,8 +18,8 @@ namespace {
 }
 
 //(name, partition, attributes, size, then for a fixed pool how many blocks, then options): the pool's memory taken
-//from the user partition. The checks, in PPSSPP's order: the partition (1-6; 2 and 6 the user's), the attributes,
-//the sizes.
+//from the user partition. The checks, in the order pspautotests' threads/fpl and threads/vpl expect: the partition
+//(1-6; 2 and 6 the user's), the attributes, the sizes.
 auto Kernel::createPool(bool variable) -> void {
   u32 partition = arg(1), attributes = arg(2), size = arg(3), count = variable ? 1 : arg(4);
   u32 options = variable ? arg(4) : arg(5);
@@ -29,7 +32,7 @@ auto Kernel::createPool(bool variable) -> void {
   if(!variable && options && memory.read(4, options) >= 8) alignment = memory.read(4, options + 4);
   if(!alignment || alignment & (alignment - 1) || alignment > 0x1000) return result(ErrorIllegalArgument);
   u64 blockSize = (u64(size) + alignment - 1) & ~u64(alignment - 1);
-  if(variable && size <= 0x30) size = 0x1000;  //too small to hold anything: the PSP makes it 4 KiB (PPSSPP's notes)
+  if(variable && size <= 0x30) size = 0x1000;  //too small to hold anything: made 4 KiB (pspautotests' threads/vpl)
   u64 total = variable ? (u64(size) + 7) & ~7ull : blockSize * count;
   if(total >= 0x8000'0000) return result(ErrorNoMemory);
   auto block = allocate(total, attributes & PoolHighMemory ? 1 : 0, 0, "pool: " + memory.readString(arg(0), 31));
@@ -152,10 +155,10 @@ auto Kernel::poolRelease(bool variable) -> void {
   auto& pool = found->second;
   u32 address = arg(1);
   if(!variable) {
-    u32 offset = address - pool.address, n = pool.blockSize ? offset / pool.blockSize : 0;
-    if(address < pool.address || offset % pool.blockSize || n >= pool.used.size() || !pool.used[n]) {
-      return result(ErrorIllegalMemoryBlock);
-    }
+    //(a block size of 0 can't be made, nor loaded from a state, but nothing here divides by it either way)
+    if(!pool.blockSize || address < pool.address) return result(ErrorIllegalMemoryBlock);
+    u32 offset = address - pool.address, n = offset / pool.blockSize;
+    if(offset % pool.blockSize || n >= pool.used.size() || !pool.used[n]) return result(ErrorIllegalMemoryBlock);
     pool.used[n] = 0;
   } else {
     auto piece = pool.pieces.find(address - PieceHeader);

@@ -10,10 +10,11 @@
 //
 //Loading checks what it reads. Only a machine like this one makes states, so a value none could have (a position
 //past the end of what it's a position in, a list the GE driver can't have queued, a display mode there isn't, a clock
-//that would take hours to catch up) means the state is damaged, and it's refused. Lists have no limits of their own:
-//their items are read one at a time, and a list that claims more than the rest of the state holds runs out of state
-//part way, and is refused then. Nothing is made room for in advance, so however damaged a count, what loading takes
-//in memory stays a small multiple of the state's own size (an item takes a few times its bytes in the state).
+//that would take hours to catch up, a memory pool that doesn't hold together) means the state is damaged, and it's
+//refused. Lists have no limits of their own: their items are read one at a time, and a list that claims more than
+//the rest of the state holds runs out of state part way, and is refused then. Nothing is made room for in advance, so
+//however damaged a count, what loading takes in memory stays a small multiple of the state's own size (an item takes
+//a few times its bytes in the state).
 
 //Text: its length, then its characters. A length past the rest of the state can't be real.
 static auto serializeText(serializer& s, u32 end, std::string& text, bool& valid) -> void {
@@ -44,6 +45,24 @@ static auto listed(const std::vector<std::string>& names, const std::string& nor
     auto& name = names[n];
     if(name.empty() || name == "." || name == "..") return false;
     if(name.find_first_of(std::string{"/\\:\0", 4}) != std::string::npos) return false;
+  }
+  return true;
+}
+
+//A pool as only making and using it leaves it, which what it hands out relies on: a fixed pool's blocks, of its block
+//size (never 0: giving a block back divides by it), adding up to its size, with no pieces; a variable pool with no
+//block size and no blocks; either inside the block of the user partition it was made from, which must be there; a
+//variable pool's pieces inside it, none empty, each after the last (handing out room trusts the gaps between them).
+static auto poolHolds(const Kernel::Pool& pool, const std::vector<Kernel::Block>& blocks) -> bool {
+  if(pool.variable ? pool.blockSize || !pool.used.empty()
+     : !pool.blockSize || !pool.pieces.empty() || u64(pool.used.size()) * pool.blockSize != pool.size) return false;
+  auto block = std::find_if(blocks.begin(), blocks.end(), [&](auto& b) { return b.uid == pool.block; });
+  u64 end = u64(pool.address) + pool.size;
+  if(block == blocks.end() || pool.address < block->address || end > u64(block->address) + block->size) return false;
+  u64 at = pool.address;
+  for(auto& [start, length] : pool.pieces) {
+    if(start < at || !length || start + u64(length) > end) return false;
+    at = start + u64(length);
   }
   return true;
 }
@@ -214,7 +233,9 @@ auto Kernel::serialize(serializer& s) -> bool {
     for(auto& [uid, t] : threads) check(uid < nextUID);
     for(auto& [uid, semaphore] : semaphores) check(uid < nextUID && semaphore.uid == uid);
     for(auto& [uid, workArea] : lwMutexes) check(uid < nextUID);
-    for(auto& [uid, pool] : pools) check(uid < nextUID && pool.uid == uid && pool.block < nextUID);
+    for(auto& [uid, pool] : pools) {
+      check(uid < nextUID && pool.uid == uid && pool.block < nextUID && poolHolds(pool, blocks));
+    }
     for(auto& [uid, flag] : eventFlags) check(uid < nextUID && flag.uid == uid);
     for(auto& [uid, callback] : callbacks) check(uid < nextUID && callback.uid == uid);
     for(auto& block : blocks) check(block.uid < nextUID);

@@ -168,6 +168,7 @@ static auto stateFields() -> void {
   k.allocate(0x1000, 0, 0, "block");
   u32 fixedID = a.call("sceKernelCreateFpl", {a.string("fpl"), 2, 0, 16, 2, 0});
   u32 variableID = a.call("sceKernelCreateVpl", {a.string("vpl"), 2, 0, 0x100, 0});
+  u32 spareID = a.call("sceKernelCreateFpl", {a.string("spare"), 2, 0, 16, 1, 0});
   u32 file = a.call("sceIoOpen", {a.string("ms0:/A.TXT"), 0x0001, 0});
   u32 other = a.call("sceIoOpen", {a.string("ms0:/B.TXT"), 0x0001, 0});
   u32 folder = a.call("sceIoDopen", {a.string("ms0:/LIST")});
@@ -263,6 +264,7 @@ static auto stateFields() -> void {
   auto& gc = k.geCallbacks[3];
   auto& fixedPool = k.pools[fixedID];
   auto& variablePool = k.pools[variableID];
+  auto& sparePool = k.pools[spareID];
   std::vector<std::pair<std::string, std::function<void()>>> more = {
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
@@ -337,10 +339,24 @@ static auto stateFields() -> void {
     {"dialog next", [&] { k.dialog.next = 2; }}, {"dialog changeAt", [&] { k.dialog.changeAt = 5; }},
     {"dialog parameters", [&] { k.dialog.parameters = 0x0880'0000; }},
     {"utilityModules", [&] { k.utilityModules.push_back(0x301); }},
+    //(each pool as a machine could leave it, which loading checks: the spare made a variable pool whole, the fixed
+    //pool's block renumbered with it, its blocks halved and doubled)
     {"pool name", [&] { fixedPool.name += "x"; }}, {"pool attributes", [&] { fixedPool.attributes ^= 1; }},
-    {"pool variable", [&] { fixedPool.variable = true; }}, {"pool block", [&] { fixedPool.block ^= 1; }},
-    {"pool address", [&] { fixedPool.address ^= 4; }}, {"pool size", [&] { fixedPool.size ^= 4; }},
-    {"pool blockSize", [&] { fixedPool.blockSize ^= 4; }}, {"pool used", [&] { fixedPool.used[1] = 1; }},
+    {"pool variable", [&] {
+      sparePool.variable = true;
+      sparePool.blockSize = 0;
+      sparePool.used.clear();
+    }},
+    {"pool block", [&] {
+      for(auto& b : k.blocks) if(b.uid == fixedPool.block) b.uid = k.nextUID;
+      fixedPool.block = k.nextUID++;
+    }},
+    {"pool address", [&] { fixedPool.address ^= 4; }}, {"pool size", [&] { variablePool.size -= 8; }},
+    {"pool blockSize", [&] {
+      fixedPool.blockSize /= 2;
+      fixedPool.used.resize(fixedPool.used.size() * 2);
+    }},
+    {"pool used", [&] { fixedPool.used[1] = 1; }},
     {"pool pieces", [&] { variablePool.pieces[variablePool.address] = 16; }},
     //files: the host file opened again as another, for writing too; the other host file counted as the disc's; the
     //disc's file a folder, read a sector at a time
@@ -466,6 +482,30 @@ static auto stateFields() -> void {
   refuses("three buffers on the SRC channel", [&] { k.audio.source.queued = 3; });
   refuses("an SRC channel at 0 Hz", [&] { k.audio.source.frequency = 0; });
   refuses("a pool under another's ID", [&] { k.pools.begin()->second.uid ^= 1; });
+  //pools as no machine leaves them (giving a fixed pool's block back divides by its block size; handing out a
+  //variable pool's room trusts its pieces to be inside it): each found afresh, as each load makes the pools anew
+  auto fixedOne = [&]() -> Kernel::Pool& { return k.pools.at(fixedID); };
+  auto variableOne = [&]() -> Kernel::Pool& { return k.pools.at(variableID); };
+  refuses("a fixed pool's blocks of 0 bytes", [&] { fixedOne().blockSize = 0; });
+  refuses("a fixed pool's blocks not adding up to it", [&] { fixedOne().used.push_back(0); });
+  refuses("a fixed pool with pieces", [&] { fixedOne().pieces[fixedOne().address] = 16; });
+  refuses("a variable pool with a block size", [&] { variableOne().blockSize = 16; });
+  refuses("a variable pool with blocks", [&] { variableOne().used.push_back(0); });
+  refuses("a pool whose block isn't there", [&] { fixedOne().block = semaphore; });
+  refuses("a pool starting before its block", [&] { fixedOne().address -= 0x100; });
+  refuses("a pool ending past its block", [&] { variableOne().size += 0x100; });
+  refuses("a piece before its pool", [&] { variableOne().pieces[variableOne().address - 16] = 16; });
+  refuses("a piece past its pool's end", [&] {
+    auto& pool = variableOne();
+    pool.pieces[pool.address + pool.size - 8] = 16;
+  });
+  refuses("pieces overlapping", [&] {
+    auto& pool = variableOne();
+    pool.pieces[pool.address + 16] = 16;
+    pool.pieces[pool.address + 24] = 16;
+  });
+  refuses("a piece wrapping round", [&] { variableOne().pieces[variableOne().address + 16] = 0xffff'fff0; });
+  refuses("a piece of no bytes", [&] { variableOne().pieces[variableOne().address] = 0; });
   //a host folder's names as no listing makes them: reading it would join them to its place on the host
   refuses("a folder name reaching out of its folder", [&] { k.files[folder].entries.push_back("../../etc"); });
   refuses("a folder name that's a whole path", [&] { k.files[folder].entries.push_back("/etc"); });
