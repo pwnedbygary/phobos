@@ -21,6 +21,7 @@ namespace ares::PlayStationPortable {
 #include "display.cpp"
 #include "ge.cpp"
 #include "system.cpp"
+#include "modules.cpp"
 #include "serialization.cpp"
 
 Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory), ge(ge) {
@@ -149,6 +150,15 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("LoadExecForUser",   "sceKernelExitGame",             &Kernel::sceKernelExitGame);
   add("LoadExecForUser",   "sceKernelRegisterExitCallback", &Kernel::sceKernelRegisterExitCallback);
   add("ModuleMgrForUser",  "sceKernelSelfStopUnloadModule", &Kernel::sceKernelSelfStopUnloadModule);
+  add("ModuleMgrForUser",  "sceKernelLoadModule",           &Kernel::sceKernelLoadModule);
+  add("ModuleMgrForUser",  "sceKernelLoadModuleByID",       &Kernel::sceKernelLoadModuleByID);
+  add("ModuleMgrForUser",  "sceKernelStartModule",          &Kernel::sceKernelStartModule);
+  add("ModuleMgrForUser",  "sceKernelStopModule",           &Kernel::sceKernelStopModule);
+  add("ModuleMgrForUser",  "sceKernelUnloadModule",         &Kernel::sceKernelUnloadModule);
+  add("ModuleMgrForUser",  "sceKernelGetModuleIdByAddress", &Kernel::sceKernelGetModuleIdByAddress);
+  add("ModuleMgrForUser",  "sceKernelGetModuleId",          &Kernel::sceKernelGetModuleId);
+  add("ModuleMgrForUser",  "sceKernelGetModuleIdList",      &Kernel::sceKernelGetModuleIdList);
+  add("ModuleMgrForUser",  "sceKernelQueryModuleInfo",      &Kernel::sceKernelQueryModuleInfo);
   add("sceUtility",        "sceUtilityGetSystemParamInt",   &Kernel::sceUtilityGetSystemParamInt);
   //newlib's sockets: no network yet, so every call fails
   add("sceNetInet",        "sceNetInetClose",               &Kernel::sceNetInetUnavailable);
@@ -169,6 +179,8 @@ auto Kernel::nid(const std::string& name) -> u32 {
 //at zero. The memory map must have been powered first: the trampoline goes into kernel memory.
 auto Kernel::power() -> void {
   module = {};
+  modules.clear();
+  programUID = 0;
   exited = false;
   stuck = false;
   cycles = 0;
@@ -214,6 +226,8 @@ auto Kernel::power() -> void {
   memory.write(4, Trampoline + 4, 0x0000'000d);                  //break: never reached
   memory.write(4, Trampoline + 8, CallReturnCode << 6 | 0x0c);  //syscall: a call into the program returned
   memory.write(4, Trampoline + 12, 0x0000'000d);
+  memory.write(4, Trampoline + 16, ModuleReturnCode << 6 | 0x0c);  //syscall: a module_start or module_stop returned
+  memory.write(4, Trampoline + 20, 0x0000'000d);
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
@@ -262,6 +276,7 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     }
   }
   for(auto& skipped : module.skipped) note("the loader left out " + skipped);
+  programUID = newUID();  //the program is a module too, the first
 
   cpu.power(module.entry);
   if(auto folder = programFolder(path); !folder.empty()) workingDirectory = folder;  //relative paths start there
@@ -330,6 +345,10 @@ auto Kernel::syscall(u32 code) -> bool {
   }
   if(code == CallReturnCode) {
     callReturned();
+    return true;
+  }
+  if(code == ModuleReturnCode) {
+    moduleReturned();
     return true;
   }
   if(code < FirstImportCode || code - FirstImportCode >= imports.size()) {

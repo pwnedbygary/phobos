@@ -13,8 +13,8 @@ measurements on `cursor/psp-3d-measure-2b67`; part 12, lighting, on `cursor/psp-
 whole feature to be stacked and merged at once (GitHub stack #106).
 Part 13, the PSP in Phobos (an ares system, mia's medium, the Android app's entry), is on `cursor/psp-app-2b67`:
 homebrew runs in the app on the RP6. Part 14, disc images (ISO and CSO, the disc's files, the drive), is on
-`cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`. Part 18, decryption, is on
-`cursor/psp-decrypt-2b67`.
+`cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`. Parts 18 and 19, decryption and loading
+modules, are on `cursor/psp-decrypt-2b67`.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -1392,13 +1392,15 @@ description.
   the firmware's types 9 and 10), tags whose key the wiki hasn't published, and the "2RLZ" and "KL4E" packings
   (KL4E packs the 880-byte splash screen module, OPNSSMP.BIN, some discs carry for the PSP's menu): each is refused,
   saying which.
+- **A "~SCE" header** comes before the ~PSP one in some programs (64 bytes, its own length at 4; GTA Liberty City
+  Stories' modules have one, seen in the game's files): nothing in it is needed, and it's passed over.
 - **Where**: the loader (`Loader::load()`) decrypts an encrypted program before reading it as an ELF, so whatever
-  loads a program (the kernel's `load()` and `start()`, an EBOOT.PBP's DATA.PSP) takes one, and refuses one it can't
-  decrypt with the decrypter's reason (the module's name, its tag, and why). A disc's EBOOT.BIN starts decrypted; a
-  plain BOOT.BIN beside it only when EBOOT.BIN can't start, and the system reports why EBOOT.BIN couldn't ("its tag
-  names a key Phobos doesn't have", say), whether or not BOOT.BIN then does. Each program is tried with the kernel's
-  `load()`, so one that fails leaves nothing behind. AES decrypts about 46 MB a second on the Mac (-O2): a game's
-  5 MB EBOOT.BIN takes a tenth of a second.
+  loads a program (the kernel's `load()` and `start()`, an EBOOT.PBP's DATA.PSP, a module, part 19) takes one, and
+  refuses one it can't decrypt with the decrypter's reason (the module's name, its tag, and why). A disc's EBOOT.BIN
+  starts decrypted; a plain BOOT.BIN beside it only when EBOOT.BIN can't start, and the system reports why EBOOT.BIN
+  couldn't ("its tag names a key Phobos doesn't have", say), whether or not BOOT.BIN then does. Each program is tried
+  with the kernel's `load()`, so one that fails leaves nothing behind. AES decrypts about 46 MB a second on the Mac
+  (-O2): a game's 5 MB EBOOT.BIN takes a tenth of a second.
 
 Checked against the user's games (CHDs read in place on the Mac with a scratch tool built on these files, nothing
 decrypted kept): every EBOOT.BIN and every module on the disc decrypts at the first key its tag names, into a MIPS ELF
@@ -1440,3 +1442,82 @@ Tests:
 - Broken versions each failed a test: type 6's signature left out of the digest, type 1's extra lock skipped, gzip's
   CRC unchecked, KIRK command 1's partial last block chained from the IV, type 5's zeros unchecked, and only the
   first key of a tag listed twice tried.
+
+## Part 19: modules
+
+`ares/psp/kernel/modules.cpp` (ModuleMgrForUser): the modules (PRXs) a program loads besides itself, from the disc
+or the memory stick. The functions, their arguments and errors are pspsdk's (`pspmodulemgr.h`, `pspkerror.h`);
+PPSSPP's module manager was read for how games use them (Sony's modules loaded beside a game, a "~SCE" header before
+a module); our own code.
+
+- **Loading** (`sceKernelLoadModule(path, flags, options)`): the file is read whole, from the disc by its path or as
+  a run of sectors (`sce_lbn...`, as games name modules too), or from a host folder standing for a device.
+  `sceKernelLoadModuleByID(file, flags, options)` reads one from a file already open, from where it's been seeked
+  to, as games keep modules in archives of their own: an encrypted one is as long as its ~PSP header says, a plain one
+  runs to the file's end (16 MiB at most). An encrypted module is decrypted (part 18). A PRX goes into a block of the
+  user partition, the lowest free place, a static module where it was linked; the loader relocates it there and
+  reads its imports and exports. Its ID comes back.
+- **Sony's modules are stood in for**, not run. Early games carried Sony's libraries for sound, video and the network
+  (sceSAScore, sceATRAC3plus_Library, sceMpeg_library, sceNet_Library, and kernel drivers such as
+  sceAudiocodec_Driver), which run on top of Sony's kernel and its hardware; the HLE kernel answers their functions
+  itself. They're told by their names, "sce" or "Sce" first as all Sony's are, or by being kernel modules (attribute
+  0x1000), which a game's own never are; an encrypted one's name is in its ~PSP header, in the clear, so it needn't
+  even be decrypted. A stand-in has an ID and a name, nothing in memory, and starts and stops at once.
+- **Linking**: after each load and unload, every module's imports (the program's too) are linked to the functions
+  loaded modules export in their libraries. An import the HLE kernel has no function for, which a module exports,
+  becomes `j address; nop` in place of the kernel's syscall (the caller's `jal` left `ra` pointing back at it, so the
+  function returns straight there); every other import is the kernel's syscall, so a stub linked to a module since
+  unloaded goes back to the kernel. A stub already right isn't written again, as that would throw away the code
+  compiled around it. Variables imported from other modules aren't linked yet.
+- **Starting and stopping** (`sceKernelStartModule` and `sceKernelStopModule(module, argument size, argument, where
+  to put the result, options)`): the module's `module_start` (or `module_stop`), exported for itself (NIDs
+  0xd632acdb and 0xcee8593c), runs on a thread made for it, its argument copied onto the thread's stack, with the
+  options' stack size, priority and attributes when they give them (else 256 KiB, 0x20, and user mode with the VFPU,
+  as the program's first thread has). It returns to a third syscall in the kernel's trampoline, which ends and
+  deletes its thread, as the PSP's module manager deletes the thread it made. The calling thread waits meanwhile, and
+  then gets the module's ID, the function's result written where it asked. A module without the function starts (or
+  stops) at once.
+- **Unloading** (`sceKernelUnloadModule`): a module never started, or stopped; its memory goes back to the user
+  partition, and stubs linked to it go back to the kernel.
+- **IDs**: the program is a module too, its ID handed out once it's loaded. `sceKernelGetModuleIdByAddress` gives the
+  module holding an address, in any of memory's windows; `sceKernelGetModuleId` the caller's (the module holding the
+  code that called, else the program's); `sceKernelGetModuleIdList` all of them, the program's first.
+  `sceKernelQueryModuleInfo` fills a SceKernelModuleInfo as far as its size says: segments, entry, gp, attributes,
+  version, name. The loader keeps each segment's size in memory but not its file and zeroed parts, so the text is the
+  first segment, the data the others, and the bss 0.
+- **Refused**, with pspkerror.h's errors: a file that isn't there, or a folder (the file system's errors); what isn't
+  a module (illegal object); an encrypted module that can't be decrypted (unsupported PRX type, and the decrypter's
+  reason noted); no room (no memory); an unknown ID; starting a module twice; stopping one not started, or stopped
+  already; unloading one that's running.
+- **States** carry the loaded modules (each one's ID, file, whether it's a stand-in, its memory block, its status,
+  the thread running its function, and its module as the program's is saved) and the program's ID. The state's
+  version is now 2, so a state made before is refused rather than misread.
+
+Checked against the user's games (the system run on the Mac on their CHDs, nothing kept): Burnout Legends loads
+fourteen modules from its disc by path (seven kernel drivers, encrypted, and seven libraries, not), each Sony's and
+stood in for, and runs on further than before (its GE ran twice the commands in its first 300 frames); GTA
+Liberty City Stories loads three by `sceKernelLoadModuleByID` from runs of sectors, each behind a ~SCE header
+(sceAudiocodec_Driver, sceATRAC3plus_Library, sceSAScore), stood in for; Gunhound EX finds its module's ID by address
+and as the caller's. Each game then stops at other functions the HLE kernel doesn't have yet (fixed-size memory
+pools, the power library, the SDK version calls).
+
+Tests (`tests/psp/modules.cpp`, five groups, on PRXs built in the test: TESTLIB exports a library's function and has a
+module_start and a module_stop; TESTUSER imports the function):
+- "modules start and link": a program on both engines loads both from the memory stick, the second encrypted;
+  starts the first (its result comes back), then the second with an argument (it sees the argument; its import
+  reaches the first's function); stops the first and unloads it: the second's stub goes back to the kernel, the
+  first's memory to the user partition, and each function's thread is gone once it returned.
+- "modules linking": a module loaded before what it imports is linked once that comes; loaded from the disc by path
+  and as a run of sectors.
+- "modules stand-ins": Sony's modules, one encrypted under a tag Phobos has no key for, one a kernel module, one plain
+  and named "Sce...": IDs and nothing in memory, started and stopped at once; `sceKernelLoadModuleByID` from inside
+  an archive, behind ~SCE headers: a stand-in, and a module loaded for real.
+- "modules identities": by address (in another window too), the caller's, the list, the information (only as far as
+  its size says).
+- "modules refusals": each refusal above; a module that can't fit leaves nothing behind.
+- "state fields" changes each new field and refuses a module under another's ID, IDs not handed out yet (the
+  module's, its block's, its thread's, the program's) and a status there isn't; "decrypt kernel loads" loads a
+  program behind a ~SCE header.
+- Broken versions each failed a test: imports never linked to exports, module_start's result written wrong, an
+  unloaded module's stubs left linked, Sony's modules loaded like any other, module_start's thread kept, a loaded
+  module's own fields left out of states, and ~SCE headers not passed over.

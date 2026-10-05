@@ -217,6 +217,13 @@ static auto kernelLoads() -> void {
   CHECK(m.kernel.load(file.data(), file.size(), "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN", error), true);
   CHECK(m.kernel.module.name == "DECRYPTED", true);
   CHECK(m.kernel.threads.size(), 1);
+  //after another header of Sony's ("~SCE", its length at 4), as some programs come
+  std::vector<u8> wrapped(0x40, 0);
+  memcpy(wrapped.data(), "~SCE", 4);
+  psp_encrypt::put32(wrapped.data() + 4, 0x40);
+  wrapped.insert(wrapped.end(), file.begin(), file.end());
+  CHECK(m.kernel.load(wrapped.data(), wrapped.size(), "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN", error), true);
+  CHECK(m.kernel.module.name == "DECRYPTED", true);
   psp_encrypt::put32(file.data() + 0xd0, 0x0bad'0bad);
   CHECK(m.kernel.load(file.data(), file.size(), "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN", error), false);
   CHECK(contains(error, "whose tag names a key Phobos doesn't have"), true);

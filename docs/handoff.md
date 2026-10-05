@@ -742,6 +742,31 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: retail programs decrypted, and modules loaded — 2026-10-05
+
+Branch `cursor/psp-decrypt-2b67`, stacked on `cursor/psp-retail-load-2b67` (commit `08b08ab64`; for stack #106),
+worked in its own worktree because another worker had uncommitted changes in the main checkout. Shop-bought games'
+programs are decrypted: AES-128 (`ares/psp/kernel/aes.cpp`), the KIRK engine's commands 1, 7 and 0xb
+(`kirk.cpp`, SHA-1 moved there from `Kernel::nid()`), the published keys and the table of tags (`keys.cpp`), and the
+`~PSP` format's types 0, 1, 2, 5 and 6 with gzip unpacking (`decrypt.cpp`), written from docs/psp-core.md's new part
+18. The loader decrypts before reading an ELF, and a disc's EBOOT.BIN starts decrypted, BOOT.BIN only when it can't
+(the reason reported). Modules load from the disc and the memory stick (`modules.cpp`, part 19: ModuleMgrForUser's
+load, load by ID, start, stop, unload, the IDs and information), linked to each other's exports, module_start run on
+its own thread; Sony's modules that games carry are stood in for by the HLE kernel. The state's version is now 2.
+- **Checks:** the parts' 112 groups with both sanitizers (new: four "crypto", five "decrypt", five "modules"; "state
+  fields" and "loader refusals" extended); `tests/psp/ares` (220 checks: the disc program encrypted as EBOOT.BIN
+  boots and reads its disc; undecryptable ones report why, and a plain BOOT.BIN starts instead). Broken versions each
+  failed a test (listed in parts 18 and 19).
+- **Against the user's games** (CHDs pulled read-only from the RP6 to /tmp on the Mac; nothing kept or committed):
+  every EBOOT.BIN and module on Lumines, Burnout Legends, GTA Liberty City Stories, Midnight Club 3, SOCOM Fireteam
+  Bravo, Snoopy vs. the Red Baron, Gunhound EX and Peace Walker decrypts into a sane MIPS ELF (tags 0x08000000 type 0,
+  0xc0cb167c type 1, 0xd91613f0 type 2; modules 0x00000000, 0x03000000, 0x4467415d, 0x3ace4dce), except the
+  firmware updaters (tag 0x02000000, not in the table) and two splash modules packed with KL4E. Run through the system
+  on the Mac, all eight start their EBOOT.BIN and run their own code to HLE functions not written yet; Burnout loads
+  its fourteen modules and GTA its three (by ID, behind ~SCE headers), all stood in for.
+- **Not checked:** the RP6 (the app wasn't built); types 5 and 6 and the module manager on a real game's own module
+  (none of these games carry one: every module on them is Sony's).
+
 ## PSP core: one block for a program's memory; "nothing will run" noted once — 2026-10-05
 
 Branch `cursor/psp-retail-load-2b67`, stacked on `cursor/psp-disc-formats-2b67` (for stack #106). The loader gave

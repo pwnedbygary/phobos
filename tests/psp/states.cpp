@@ -156,6 +156,14 @@ static auto stateFields() -> void {
   k.module.imports = {{"Lib", 0x1111, 0x0880'5000}};
   k.module.exports = {{"Lib", 0x2222, 0x0880'6000, false}};
   k.module.skipped = {"left out"};
+  k.programUID = k.newUID();
+  u32 moduleID = k.newUID();
+  auto& loaded = k.modules[moduleID];
+  loaded.uid = moduleID;
+  loaded.path = "ms0:/A.PRX";
+  loaded.block = k.programUID;  //any ID handed out
+  loaded.module.name = "LOADED";
+  loaded.module.segments = {{0x0881'0000, 0x100}};
   a.stub("sceKernelDelayThread");
   s32 one = k.createThread("one", 0x0880'1000, 0x20, 0x1000, 0, 0);
   s32 two = k.createThread("two", 0x0880'2000, 0x30, 0x1000, 0, 0);
@@ -232,6 +240,12 @@ static auto stateFields() -> void {
     {"import reported", [&] { k.imports[0].reported = true; }},
     {"exited", [&] { k.exited = true; }}, {"cycles", [&] { k.cycles += 3 * Kernel::VblankCycles + 12345; }},
     {"nextUID", [&] { k.nextUID += 7; }}, {"startTime", [&] { k.startTime += 7; }},
+    //the modules it loaded
+    {"programUID", [&] { k.programUID = moduleID; }}, {"loaded path", [&] { loaded.path += "x"; }},
+    {"loaded standIn", [&] { loaded.standIn = true; }}, {"loaded block", [&] { loaded.block = moduleID; }},
+    {"loaded status", [&] { loaded.status = Kernel::ModuleStatus::Stopped; }},
+    {"loaded thread", [&] { loaded.thread = moduleID; }}, {"loaded module", [&] { loaded.module.name += "x"; }},
+    {"loaded segment", [&] { loaded.module.segments[0].size ^= 4; }},
   };
   //a thread's every field, and its registers. Each change leaves a value a fresh machine doesn't have, so that one
   //coming back wrong (as a fresh machine's) shows.
@@ -403,6 +417,16 @@ static auto stateFields() -> void {
     k.callbacks[k.nextUID] = copy;
   });
   refuses("a block's ID not handed out yet", [&] { k.blocks.back().uid = k.nextUID; });
+  refuses("a module under another's ID", [&] { k.modules.begin()->second.uid ^= 1; });
+  refuses("a module's ID not handed out yet", [&] {
+    auto copy = k.modules.begin()->second;
+    copy.uid = k.nextUID;
+    k.modules[k.nextUID] = copy;
+  });
+  refuses("a module's block not handed out yet", [&] { k.modules.begin()->second.block = k.nextUID; });
+  refuses("a module's thread not handed out yet", [&] { k.modules.begin()->second.thread = k.nextUID; });
+  refuses("a module status there isn't", [&] { k.modules.begin()->second.status = Kernel::ModuleStatus(9); });
+  refuses("the program's ID not handed out yet", [&] { k.programUID = k.nextUID; });
   //a host folder's names as no listing makes them: reading it would join them to its place on the host
   refuses("a folder name reaching out of its folder", [&] { k.files[folder].entries.push_back("../../etc"); });
   refuses("a folder name that's a whole path", [&] { k.files[folder].entries.push_back("/etc"); });

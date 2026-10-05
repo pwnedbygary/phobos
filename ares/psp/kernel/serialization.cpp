@@ -1,7 +1,7 @@
-//Saving and loading the kernel, for save states: the program (its module, and its imports in the order its syscall
-//codes count them), its threads (each one's registers while it isn't running, and what it waits for), the
-//semaphores, mutexes, event flags and callbacks, the memory handed out, the open files and folders, the controller's
-//samples, the display, the calls into the program, the GE driver's lists, and the clock.
+//Saving and loading the kernel, for save states: the program (its module, the modules it loaded, and its imports in
+//the order its syscall codes count them), its threads (each one's registers while it isn't running, and what it
+//waits for), the semaphores, mutexes, event flags and callbacks, the memory handed out, the open files and folders,
+//the controller's samples, the display, the calls into the program, the GE driver's lists, and the clock.
 //
 //Open files are saved by their PSP paths: on loading, a host file is opened again where the devices are then, at
 //the position it had (one that's gone since is dropped, and the program's next use of it fails as for any bad file).
@@ -94,19 +94,28 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
   };
 
-  //the program
-  text(module.name);
-  s(module.attributes);
-  s(module.version);
-  s(module.relocatable);
-  s(module.base);
-  s(module.entry);
-  s(module.gp);
-  s(module.moduleInfo);
-  vector(module.segments, [&](Module::Segment& segment) { s(segment.address); s(segment.size); });
-  vector(module.imports, [&](Module::Import& i) { text(i.library); s(i.nid); s(i.stub); });
-  vector(module.exports, [&](Module::Export& e) { text(e.library); s(e.nid); s(e.address); s(e.variable); });
-  vector(module.skipped, [&](std::string& skipped) { text(skipped); });
+  //the program, and the modules it loaded (modules.cpp)
+  auto moduleFields = [&](Module& m) {
+    text(m.name);
+    s(m.attributes);
+    s(m.version);
+    s(m.relocatable);
+    s(m.base);
+    s(m.entry);
+    s(m.gp);
+    s(m.moduleInfo);
+    vector(m.segments, [&](Module::Segment& segment) { s(segment.address); s(segment.size); });
+    vector(m.imports, [&](Module::Import& i) { text(i.library); s(i.nid); s(i.stub); });
+    vector(m.exports, [&](Module::Export& e) { text(e.library); s(e.nid); s(e.address); s(e.variable); });
+    vector(m.skipped, [&](std::string& skipped) { text(skipped); });
+  };
+  moduleFields(module);
+  s(programUID);
+  map(modules, [&](LoadedModule& m) {
+    s(m.uid); text(m.path); s(m.standIn); s(m.block); s(m.status); s(m.thread);
+    moduleFields(m.module);
+    check(m.status <= ModuleStatus::Stopped);
+  });
   //imports: the syscall codes in the program's memory count them in this order
   vector(imports, [&](Import& i) {
     text(i.library);
@@ -185,6 +194,8 @@ auto Kernel::serialize(serializer& s) -> bool {
     for(auto& [uid, flag] : eventFlags) check(uid < nextUID && flag.uid == uid);
     for(auto& [uid, callback] : callbacks) check(uid < nextUID && callback.uid == uid);
     for(auto& block : blocks) check(block.uid < nextUID);
+    for(auto& [uid, m] : modules) check(uid < nextUID && m.uid == uid && m.block < nextUID && m.thread < nextUID);
+    check(programUID < nextUID);
   }
 
   //open files and folders. Nothing on the disc is open for writing (openOnDisc() refuses it), and a folder on the

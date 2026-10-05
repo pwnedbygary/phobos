@@ -84,8 +84,10 @@ namespace Keys {
 }
 
 //A ~PSP file (decrypt.cpp): whether data is one (it starts with "~PSP"), and the program in it, decrypted and
-//unpacked: an ELF, ready for the loader. Returns why it can't be, or nothing when it is.
+//unpacked: an ELF, ready for the loader. Returns why it can't be, or nothing when it is. unwrapProgram() passes over
+//a "~SCE" header some have before their own.
 auto encryptedProgram(const u8* data, u64 size) -> bool;
 auto decryptProgram(const u8* data, u64 size, std::vector<u8>& program) -> std::string;
+auto unwrapProgram(const u8*& data, u64& size) -> void;
 
 }

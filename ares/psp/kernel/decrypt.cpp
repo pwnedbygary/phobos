@@ -145,6 +145,14 @@ auto encryptedProgram(const u8* data, u64 size) -> bool {
   return size >= 4 && !memcmp(data, "~PSP", 4);
 }
 
+//Some programs come with another header of Sony's before their ~PSP one: "~SCE", its own length at 4 (64 bytes in
+//GTA Liberty City Stories' modules). Nothing in it is needed: it's passed over.
+auto unwrapProgram(const u8*& data, u64& size) -> void {
+  if(size < 8 || memcmp(data, "~SCE", 4)) return;
+  u32 length = LockedHeader::word(data + 4);
+  if(length >= 8 && length <= size) data += length, size -= length;
+}
+
 //The program in a ~PSP file: its header unlocked with the key its tag names (each, for a tag listed twice, until one
 //checks out), then KIRK command 1 on the rebuilt header, the file's first 0x80 bytes (the padding the header asks
 //for) and the file from 0x150 (the program), then unpacked if the header (0x06) says it was packed.

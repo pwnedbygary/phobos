@@ -56,6 +56,7 @@ struct Loader {
 
   //loader.cpp
   static auto programInPBP(const u8* data, u64 size, u64& offset, u64& length) -> bool;
+  static auto extent(const u8* data, u64 size, u32& low, u32& high, bool& relocatable) -> bool;
   static auto load(Memory& memory, const u8* data, u64 size, u32 base, const ImportCode& importCode, Module& module)
     -> std::string;
 };

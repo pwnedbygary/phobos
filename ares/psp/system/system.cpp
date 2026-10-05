@@ -283,7 +283,9 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
     u64 size = std::min<u64>({entry.size, image->size() - start, 64_MiB});
     u8 magic[4];
     if(size < 4 || !image->read(start, 4, magic)) continue;
-    if(memcmp(magic, "~PSP", 4) && memcmp(magic, "\x7f" "ELF", 4) && memcmp(magic, "\0PBP", 4)) continue;
+    bool runnable = !memcmp(magic, "~PSP", 4) || !memcmp(magic, "~SCE", 4) || !memcmp(magic, "\x7f" "ELF", 4) ||
+                    !memcmp(magic, "\0PBP", 4);
+    if(!runnable) continue;
     std::vector<u8> program(size);
     if(!image->read(start, size, program.data())) continue;
     std::string problem;
@@ -301,7 +303,7 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 1;
+static constexpr u32 StateVersion = 2;  //2: the kernel's state holds the modules the program loaded
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
