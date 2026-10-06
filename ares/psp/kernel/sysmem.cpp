@@ -126,12 +126,13 @@ auto Kernel::programBlockAt() const -> u32 {
   return low;
 }
 
-//Whether the kernel holds a block for something: a thread's stack, a memory pool, a module, or the program itself.
-//The rest are blocks the program asked for.
+//Whether the kernel holds a block for something: a thread's stack, a memory pool, a message pipe's buffer, a module,
+//or the program itself. The rest are blocks the program asked for.
 auto Kernel::blockHeld(const Block& block) const -> bool {
   if(u32 program = programBlockAt(); program && block.address == program) return true;
   for(auto& [uid, thread] : threads) if(thread->stackBlock == block.address) return true;
   for(auto& [uid, pool] : pools) if(pool.block == block.uid) return true;
+  for(auto& [uid, pipe] : pipes) if(pipe.block == block.uid) return true;
   for(auto& [uid, loaded] : modules) if(loaded.block == block.uid) return true;
   return false;
 }

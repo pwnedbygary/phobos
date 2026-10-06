@@ -192,6 +192,8 @@ static auto stateFields() -> void {
   u32 fixedID = a.call("sceKernelCreateFpl", {a.string("fpl"), 2, 0, 16, 2, 0});
   u32 variableID = a.call("sceKernelCreateVpl", {a.string("vpl"), 2, 0, 0x100, 0});
   u32 spareID = a.call("sceKernelCreateFpl", {a.string("spare"), 2, 0, 16, 1, 0});
+  u32 pipeID = a.call("sceKernelCreateMsgPipe", {a.string("pipe"), 2, 0, 0x100, 0});
+  u32 mailboxID = a.call("sceKernelCreateMbx", {a.string("box"), 0, 0});
   u32 file = a.call("sceIoOpen", {a.string("ms0:/A.TXT"), 0x0001, 0});
   u32 other = a.call("sceIoOpen", {a.string("ms0:/B.TXT"), 0x0001, 0});
   u32 folder = a.call("sceIoDopen", {a.string("ms0:/LIST")});
@@ -298,7 +300,22 @@ static auto stateFields() -> void {
   auto& fixedPool = k.pools[fixedID];
   auto& variablePool = k.pools[variableID];
   auto& sparePool = k.pools[spareID];
+  auto& sasVoice = k.sas.voices[3];
+  auto& pipe = k.pipes[pipeID];
+  auto& mailbox = k.mailboxes[mailboxID];
   std::vector<std::pair<std::string, std::function<void()>>> more = {
+    //a message pipe, its buffer moved to a block of its own and halved, holding bytes; a mailbox holding a packet
+    {"pipe name", [&] { pipe.name += "x"; }}, {"pipe attributes", [&] { pipe.attributes ^= 1; }},
+    {"pipe block and address", [&] {
+      auto block = k.allocate(0x100, 0, 0, "another pipe buffer");
+      pipe.block = block->uid, pipe.address = block->address;
+    }},
+    {"pipe size", [&] { pipe.size = 0x80; }}, {"pipe start", [&] { pipe.start = 5; }},
+    {"pipe used", [&] { pipe.used = 7; }},
+    {"mailbox name", [&] { mailbox.name += "x"; }}, {"mailbox attributes", [&] { mailbox.attributes ^= 1; }},
+    {"mailbox messages", [&] { mailbox.messages.push_back(0x0880'1000); }},
+    {"atracIDs", [&] { k.atracIDs = 5; }}, {"dispatchSuspended", [&] { k.dispatchSuspended = true; }},
+    {"fontResolution", [&] { k.fontResolution[1] = 144.0f; }},
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
     //(a stack is a block of its own, of its size: thread one's shrinks with its block, then moves to the spare)
@@ -321,6 +338,9 @@ static auto stateFields() -> void {
     {"wait before callback timeoutPointer", [&] { t.waitBeforeCallback.timeoutPointer ^= 4; }},
     {"wait before callback wakeAt", [&] { t.waitBeforeCallback.wakeAt ^= 1; }},
     {"wait before callback callbacks", [&] { t.waitBeforeCallback.callbacks = true; }},
+    {"thread waitDone", [&] { t.waitDone ^= 1; }}, {"thread waitResult", [&] { t.waitResult ^= 4; }},
+    {"wait before callback done", [&] { t.waitBeforeCallback.done ^= 1; }},
+    {"wait before callback resultPointer", [&] { t.waitBeforeCallback.resultPointer ^= 4; }},
     {"the thread running", [&] { k.current = k.threads[two].get(); }},
     {"readySequence", [&] { k.readySequence += 7; }}, {"nextVblank", [&] { k.nextVblank = k.cycles + 1000; }},
     {"vblanks", [&] { k.vblanks += 7; }},
@@ -400,11 +420,44 @@ static auto stateFields() -> void {
     }},
     {"pool used", [&] { fixedPool.used[1] = 1; }},
     {"pool pieces", [&] { variablePool.pieces[variablePool.address] = 16; }},
+    //sceSas: its settings, and voice 3 made a VAG voice, keyed on and released
+    {"sas initialized", [&] { k.sas.initialized = true; }}, {"sas core", [&] { k.sas.core = 0x0890'4000; }},
+    {"sas grain", [&] { k.sas.grain = 64; }}, {"sas voiceCount", [&] { k.sas.voiceCount = 16; }},
+    {"sas outputMode", [&] { k.sas.outputMode = 1; }}, {"sas paused", [&] { k.sas.paused ^= 2; }},
+    {"sas endFlags", [&] { k.sas.endFlags ^= 4; }}, {"sas effectType", [&] { k.sas.effectType = 3; }},
+    {"sas effectDelay", [&] { k.sas.effectDelay = 5; }}, {"sas effectFeedback", [&] { k.sas.effectFeedback = 6; }},
+    {"sas effectLeft", [&] { k.sas.effectLeft = 7; }}, {"sas effectRight", [&] { k.sas.effectRight = 8; }},
+    {"sas effectDry", [&] { k.sas.effectDry = 1; }}, {"sas effectWet", [&] { k.sas.effectWet = 1; }},
+    {"sas voice source", [&] { sasVoice.source = Kernel::Sas::Source::Vag; sasVoice.size = 0x100; }},
+    {"sas voice address", [&] { sasVoice.address ^= 0x40; }}, {"sas voice size", [&] { sasVoice.size = 0x200; }},
+    {"sas voice loop", [&] { sasVoice.loop = 1; }}, {"sas voice pitch", [&] { sasVoice.pitch = 0x2000; }},
+    {"sas voice volumes", [&] { sasVoice.volumes[2] = -5; }}, {"sas voice rates", [&] { sasVoice.rates[1] = 77; }},
+    {"sas voice curves", [&] { sasVoice.curves[3] = 3; }},
+    {"sas voice sustainLevel", [&] { sasVoice.sustainLevel = 0x1234; }},
+    {"sas voice playing", [&] { sasVoice.playing = true; }}, {"sas voice on", [&] { sasVoice.on = true; }},
+    {"sas voice phase", [&] { sasVoice.phase = Kernel::Sas::Phase::Release; }},
+    {"sas voice height", [&] { sasVoice.height = 0x100; }}, {"sas voice delay", [&] { sasVoice.delay = 5; }},
+    {"sas voice position", [&] { sasVoice.position = 0x5000; }},
+    {"sas voice loopBlock", [&] { sasVoice.loopBlock = 2; }},
     //files: the host file opened again as another, for writing too; the other host file counted as the disc's; the
     //disc's file a folder, read a sector at a time
     {"file path", [&] { host.path = "ms0:/B.TXT"; }},
     {"file flags", [&] { host.flags |= 0x0002; }},  //PSP_O_WRONLY
     {"file position", [&] { host.position = 5; }}, {"file onDisc", [&] { k.files[other].onDisc = true; }},
+    //its asynchronous request: one done, its result not taken; the other file closed asynchronously, its
+    //descriptor kept for the result
+    {"file async", [&] { host.async = Kernel::OpenFile::Async::Done; }},
+    {"file asyncDoneAt", [&] { host.asyncDoneAt = k.cycles + 1000; }},
+    {"file asyncResult", [&] { host.asyncResult = 0xffff'ffff'8002'0323ull; }},
+    {"file asyncCallback", [&] { host.asyncCallback = callback; }},
+    {"file asyncArgument", [&] { host.asyncArgument = 0x55; }},
+    {"file resultOnly", [&] {
+      auto& closed = k.files[other];
+      closed.resultOnly = true;
+      closed.flags = 0;
+      closed.async = Kernel::OpenFile::Async::Pending;
+      closed.asyncDoneAt = k.cycles + 2000;
+    }},
     {"folder entries", [&] { hostFolder.entries[2] += "x"; }},  //".", "..", then "ONE"
     {"folder nextEntry", [&] { hostFolder.nextEntry = 1; }},
     {"disc file folder", [&] { onDisc.folder = true; }}, {"disc file sectors", [&] { onDisc.sectors = true; }},
@@ -488,6 +541,32 @@ static auto stateFields() -> void {
   refuses("a thread running that isn't there", [&] { k.current = &ghost; });
   refuses("a disc folder's names without their entries", [&] { k.files[discFolder].discEntries.pop_back(); });
   refuses("a disc file open for writing", [&] { k.files[discFile].flags |= 0x0002; });
+  //files' asynchronous requests as no machine has them: a state there isn't, one on a folder, one due further off
+  //than any request takes, a descriptor kept for a result it hasn't got, or open for reading; a thread waiting on a
+  //file with no request
+  using Async = Kernel::OpenFile::Async;
+  refuses("an asynchronous request state there isn't", [&] { k.files[file].async = Async(3); });
+  refuses("an asynchronous request on a folder", [&] { k.files[folder].async = Async::Done; });
+  refuses("an asynchronous request due in over a minute", [&] {
+    k.files[discFile].async = Async::Pending;
+    k.files[discFile].asyncDoneAt = k.cycles + 61 * Kernel::CPUFrequency;
+  });
+  refuses("an asynchronous request a frame overdue", [&] {
+    k.files[discFile].async = Async::Pending;
+    k.files[discFile].asyncDoneAt = k.cycles - Kernel::VblankCycles;
+  });
+  refuses("a descriptor for a result it hasn't got", [&] { k.files[other].async = Async::None; });
+  refuses("a descriptor for a result, open for reading", [&] { k.files[other].flags = 0x0001; });
+  refuses("an asynchronous callback not handed out yet", [&] { k.files[file].asyncCallback = k.nextUID; });
+  refuses("a thread waiting on a file with no request", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Async, thread.waitID = discFile;
+  });
+  refuses("a thread waiting on a file whose request is done (nothing would wake it)", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Async, thread.waitID = file;
+  });
+  refuses("a wait there isn't", [&] { k.threads.at(two)->wait = Kernel::Wait(99); });
   refuses("a file number handed out twice", [&] { k.nextFile = discFolder; });
   refuses("an ID handed out twice", [&] { k.nextUID = u32(one); });
   refuses("a semaphore under another's ID", [&] { k.semaphores.begin()->second.uid ^= 1; });
@@ -572,6 +651,79 @@ static auto stateFields() -> void {
   });
   refuses("a vertical blank handler on sub-interrupt 18, the display driver's", [&] {
     k.vblankSubs[18].function = 0x0880'3000;
+  });
+  //message pipes and mailboxes as their functions never leave them
+  auto pipeOne = [&]() -> Kernel::MessagePipe& { return k.pipes.at(pipeID); };
+  refuses("a pipe under another's ID", [&] { pipeOne().uid ^= 1; });
+  refuses("a pipe's ID not handed out yet", [&] {
+    auto copy = pipeOne();
+    copy.uid = k.nextUID, copy.block = 0, copy.address = 0, copy.size = 0, copy.start = copy.used = 0;
+    k.pipes[k.nextUID] = copy;
+  });
+  refuses("a pipe holding more than its buffer", [&] { pipeOne().used = pipeOne().size + 1; });
+  refuses("a pipe's ring starting past its buffer", [&] { pipeOne().start = pipeOne().size; });
+  refuses("a pipe without a buffer holding bytes", [&] {
+    pipeOne().block = 0, pipeOne().address = 0, pipeOne().size = 0;
+  });
+  refuses("a pipe's buffer not at its block", [&] { pipeOne().address += 0x10; });
+  refuses("a pipe's buffer bigger than its block", [&] { pipeOne().size = 0x200; });
+  refuses("a pipe's block a pool's", [&] {
+    auto& pool = k.pools.at(fixedID);
+    auto block = std::find_if(k.blocks.begin(), k.blocks.end(), [&](auto& b) { return b.uid == pool.block; });
+    pipeOne().block = block->uid, pipeOne().address = block->address, pipeOne().size = 16, pipeOne().start = 0;
+    pipeOne().used = 0;
+  });
+  refuses("a mailbox's packet queued twice", [&] { k.mailboxes.at(mailboxID).messages.push_back(0x0880'1000); });
+  refuses("a mailbox's packet where there's no memory", [&] { k.mailboxes.at(mailboxID).messages.push_back(16); });
+  refuses("a thread waiting on a pipe that isn't there", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::PipeSend, thread.waitID = semaphore;
+  });
+  refuses("a thread waiting on a pipe for more than its buffer", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::PipeReceive, thread.waitID = pipeID;
+    thread.waitCount = 0x81, thread.waitDone = 0;
+  });
+  refuses("a thread waiting on a pipe having moved it all", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::PipeReceive, thread.waitID = pipeID;
+    thread.waitCount = 0x10, thread.waitDone = 0x10;
+  });
+  refuses("a thread waiting on a pipe with no memory behind its buffer", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::PipeReceive, thread.waitID = pipeID;
+    thread.waitPointer = 0x10, thread.waitCount = 0x10, thread.waitDone = 0;
+  });
+  refuses("a thread whose callback runs, back to a pipe with no memory behind the rest of its message", [&] {
+    auto& thread = *k.threads.at(two);
+    auto& before = thread.waitBeforeCallback;
+    before.wait = Kernel::Wait::PipeSend, before.id = pipeID;
+    before.pointer = 0x0a00'0000 - 0x10, before.count = 0x40, before.done = 0x8;
+  });
+  refuses("a thread waiting on a mailbox that isn't there", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Mailbox, thread.waitID = semaphore;
+  });
+  refuses("ATRAC IDs past six", [&] { k.atracIDs = 0x40; });
+  refuses("a font resolution of 0", [&] { k.fontResolution[0] = 0; });
+  //sceSas as its functions never leave it
+  using Sas = Kernel::Sas;
+  refuses("a sas grain it doesn't take", [&] { k.sas.grain = 0x5c; });
+  refuses("sas voices past 32", [&] { k.sas.voiceCount = 33; });
+  refuses("a sas effect type there isn't", [&] { k.sas.effectType = 9; });
+  refuses("a sas voice on that isn't playing", [&] { k.sas.voices[3].playing = false; });
+  refuses("a sas envelope over the top", [&] { k.sas.voices[3].height = 0x4000'0001; });
+  refuses("a sas curve there isn't", [&] { k.sas.voices[3].curves[0] = 6; });
+  refuses("a sas phase there isn't", [&] { k.sas.voices[3].phase = Sas::Phase(4); });
+  refuses("a sas voice waiting longer than 32 samples", [&] { k.sas.voices[3].delay = 33; });
+  refuses("a sas VAG voice of 8 bytes", [&] { k.sas.voices[3].size = 8; });
+  refuses("a sas PCM voice past its samples", [&] {
+    auto& voice = k.sas.voices[3];
+    voice.source = Sas::Source::Pcm, voice.size = 16, voice.loop = -1, voice.position = 16 << 12;
+  });
+  refuses("a sas PCM voice looping past its samples", [&] {
+    auto& voice = k.sas.voices[3];
+    voice.source = Sas::Source::Pcm, voice.size = 16, voice.loop = 16, voice.position = 0;
   });
   refuses("a pool under another's ID", [&] { k.pools.begin()->second.uid ^= 1; });
   //pools as no machine leaves them (giving a fixed pool's block back divides by its block size; handing out a

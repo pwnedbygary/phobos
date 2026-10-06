@@ -16,12 +16,19 @@ namespace ares::PlayStationPortable {
 #include "unpack.cpp"
 #include "disc.cpp"
 #include "io.cpp"
+#include "async.cpp"
 #include "umd.cpp"
 #include "ctrl.cpp"
 #include "display.cpp"
 #include "ge.cpp"
 #include "pools.cpp"
+#include "messages.cpp"
 #include "audio.cpp"
+#include "sas.cpp"
+#include "mpeg.cpp"
+#include "atrac.cpp"
+#include "net.cpp"
+#include "font.cpp"
 #include "utility.cpp"
 #include "power.cpp"
 #include "system.cpp"
@@ -66,6 +73,10 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("ThreadManForUser",  "sceKernelChangeCurrentThreadAttr", &Kernel::sceKernelChangeCurrentThreadAttr);
   add("ThreadManForUser",  "sceKernelGetThreadStackFreeSize", &Kernel::sceKernelGetThreadStackFreeSize);
   add("ThreadManForUser",  "sceKernelReferThreadProfiler",  &Kernel::sceKernelReferThreadProfiler);
+  add("ThreadManForUser",  "sceKernelGetThreadCurrentPriority", &Kernel::sceKernelGetThreadCurrentPriority);
+  add("ThreadManForUser",  "sceKernelRotateThreadReadyQueue", &Kernel::sceKernelRotateThreadReadyQueue);
+  add("ThreadManForUser",  "sceKernelSuspendDispatchThread", &Kernel::sceKernelSuspendDispatchThread);
+  add("ThreadManForUser",  "sceKernelResumeDispatchThread", &Kernel::sceKernelResumeDispatchThread);
   add("ThreadManForUser",  "sceKernelReferGlobalProfiler",  &Kernel::sceKernelReferThreadProfiler);
   add("ThreadManForUser",  "sceKernelCreateFpl",            &Kernel::sceKernelCreateFpl);
   add("ThreadManForUser",  "sceKernelDeleteFpl",            &Kernel::sceKernelDeleteFpl);
@@ -83,6 +94,24 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("ThreadManForUser",  "sceKernelFreeVpl",              &Kernel::sceKernelFreeVpl);
   add("ThreadManForUser",  "sceKernelCancelVpl",            &Kernel::sceKernelCancelVpl);
   add("ThreadManForUser",  "sceKernelReferVplStatus",       &Kernel::sceKernelReferVplStatus);
+  add("ThreadManForUser",  "sceKernelCreateMsgPipe",        &Kernel::sceKernelCreateMsgPipe);
+  add("ThreadManForUser",  "sceKernelDeleteMsgPipe",        &Kernel::sceKernelDeleteMsgPipe);
+  add("ThreadManForUser",  "sceKernelSendMsgPipe",          &Kernel::sceKernelSendMsgPipe);
+  add("ThreadManForUser",  "sceKernelSendMsgPipeCB",        &Kernel::sceKernelSendMsgPipeCB);
+  add("ThreadManForUser",  "sceKernelTrySendMsgPipe",       &Kernel::sceKernelTrySendMsgPipe);
+  add("ThreadManForUser",  "sceKernelReceiveMsgPipe",       &Kernel::sceKernelReceiveMsgPipe);
+  add("ThreadManForUser",  "sceKernelReceiveMsgPipeCB",     &Kernel::sceKernelReceiveMsgPipeCB);
+  add("ThreadManForUser",  "sceKernelTryReceiveMsgPipe",    &Kernel::sceKernelTryReceiveMsgPipe);
+  add("ThreadManForUser",  "sceKernelCancelMsgPipe",        &Kernel::sceKernelCancelMsgPipe);
+  add("ThreadManForUser",  "sceKernelReferMsgPipeStatus",   &Kernel::sceKernelReferMsgPipeStatus);
+  add("ThreadManForUser",  "sceKernelCreateMbx",            &Kernel::sceKernelCreateMbx);
+  add("ThreadManForUser",  "sceKernelDeleteMbx",            &Kernel::sceKernelDeleteMbx);
+  add("ThreadManForUser",  "sceKernelSendMbx",              &Kernel::sceKernelSendMbx);
+  add("ThreadManForUser",  "sceKernelReceiveMbx",           &Kernel::sceKernelReceiveMbx);
+  add("ThreadManForUser",  "sceKernelReceiveMbxCB",         &Kernel::sceKernelReceiveMbxCB);
+  add("ThreadManForUser",  "sceKernelPollMbx",              &Kernel::sceKernelPollMbx);
+  add("ThreadManForUser",  "sceKernelCancelReceiveMbx",     &Kernel::sceKernelCancelReceiveMbx);
+  add("ThreadManForUser",  "sceKernelReferMbxStatus",       &Kernel::sceKernelReferMbxStatus);
   add("ThreadManForUser",  "sceKernelSysClock2USec",        &Kernel::sceKernelSysClock2USec);
   add("ThreadManForUser",  "sceKernelSysClock2USecWide",    &Kernel::sceKernelSysClock2USecWide);
   add("ThreadManForUser",  "sceKernelCreateLwMutex",        &Kernel::sceKernelCreateLwMutex);
@@ -109,8 +138,12 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("Kernel_Library",    "sceKernelLockLwMutex",          &Kernel::sceKernelLockLwMutex);
   add("Kernel_Library",    "sceKernelTryLockLwMutex",       &Kernel::sceKernelTryLockLwMutex);
   add("Kernel_Library",    "sceKernelUnlockLwMutex",        &Kernel::sceKernelUnlockLwMutex);
+  add("Kernel_Library",    "sceKernelLockLwMutexCB",        &Kernel::sceKernelLockLwMutexCB);
   add("Kernel_Library",    "sceKernelCpuSuspendIntr",       &Kernel::sceKernelCpuSuspendIntr);
   add("Kernel_Library",    "sceKernelCpuResumeIntr",        &Kernel::sceKernelCpuResumeIntr);
+  add("Kernel_Library",    "sceKernelIsCpuIntrEnable",      &Kernel::sceKernelIsCpuIntrEnable);
+  add("Kernel_Library",    "sceKernelMemset",               &Kernel::sceKernelMemset);
+  add("Kernel_Library",    "sceKernelMemcpy",               &Kernel::sceKernelMemcpy);
   add("InterruptManager",  "sceKernelRegisterSubIntrHandler", &Kernel::sceKernelRegisterSubIntrHandler);
   add("InterruptManager",  "sceKernelReleaseSubIntrHandler", &Kernel::sceKernelReleaseSubIntrHandler);
   add("InterruptManager",  "sceKernelEnableSubIntr",        &Kernel::sceKernelEnableSubIntr);
@@ -121,6 +154,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("UtilsForUser",      "sceKernelUtilsMt19937Init",     &Kernel::sceKernelUtilsMt19937Init);
   add("UtilsForUser",      "sceKernelUtilsMt19937UInt",     &Kernel::sceKernelUtilsMt19937UInt);
   add("UtilsForUser",      "sceKernelSetGPO",               &Kernel::sceKernelSetGPO);
+  add("UtilsForUser",      "sceKernelGetGPI",               &Kernel::sceKernelGetGPI);
   //the CPU's caches: an emulator has none to write back or throw away
   add("UtilsForUser",      "sceKernelDcacheWritebackAll",   &Kernel::sceKernelCacheUnneeded);
   add("UtilsForUser",      "sceKernelDcacheWritebackRange", &Kernel::sceKernelCacheUnneeded);
@@ -133,6 +167,12 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceRtc",            "sceRtcGetTickResolution",       &Kernel::sceRtcGetTickResolution);
   add("sceRtc",            "sceRtcGetTick",                 &Kernel::sceRtcGetTick);
   add("sceRtc",            "sceRtcCompareTick",             &Kernel::sceRtcCompareTick);
+  add("sceRtc",            "sceRtcGetCurrentClock",         &Kernel::sceRtcGetCurrentClock);
+  add("sceRtc",            "sceRtcGetCurrentClockLocalTime", &Kernel::sceRtcGetCurrentClockLocalTime);
+  add("sceRtc",            "sceRtcGetTime_t",               &Kernel::sceRtcGetTime_t);
+  add("sceRtc",            "sceRtcGetDosTime",              &Kernel::sceRtcGetDosTime);
+  add("sceRtc",            "sceRtcSetDosTime",              &Kernel::sceRtcSetDosTime);
+  add("sceOpenPSID",       "sceOpenPSIDGetOpenPSID",        &Kernel::sceOpenPSIDGetOpenPSID);
   add("SysMemUserForUser", "sceKernelPrintf",               &Kernel::sceKernelPrintf);
   add("scePower",          "scePowerRegisterCallback",      &Kernel::scePowerRegisterCallback);
   add("scePower",          "scePowerUnregisterCallback",    &Kernel::scePowerUnregisterCallback);
@@ -146,6 +186,10 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("scePower",          "scePowerGetBatteryLifeTime",    &Kernel::scePowerGetBatteryLifeTime);
   add("scePower",          "scePowerTick",                  &Kernel::scePowerTick);
   add("scePower",          "scePowerSetClockFrequency",     &Kernel::scePowerSetClockFrequency);
+  //later SDKs' scePowerSetClockFrequency, under NIDs of their own: Gunhound EX calls the first with (333, 333, 166),
+  //Peace Walker the second
+  addNID("scePower",       "scePower_469989AD",             0x4699'89ad, &Kernel::scePowerSetClockFrequency);
+  addNID("scePower",       "scePower_EBD177D6",             0xebd1'77d6, &Kernel::scePowerSetClockFrequency);
   add("scePower",          "scePowerSetCpuClockFrequency",  &Kernel::scePowerSetCpuClockFrequency);
   add("scePower",          "scePowerSetBusClockFrequency",  &Kernel::scePowerSetBusClockFrequency);
   add("scePower",          "scePowerGetCpuClockFrequency",  &Kernel::scePowerGetCpuClockFrequency);
@@ -175,6 +219,39 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceAudio",          "sceAudioSRCChReserve",          &Kernel::sceAudioSRCChReserve);
   add("sceAudio",          "sceAudioSRCOutputBlocking",     &Kernel::sceAudioSRCOutputBlocking);
   add("sceAudio",          "sceAudioSRCChRelease",          &Kernel::sceAudioSRCChRelease);
+  add("sceSasCore",        "__sceSasInit",                  &Kernel::__sceSasInit);
+  add("sceSasCore",        "__sceSasCore",                  &Kernel::__sceSasCore);
+  add("sceSasCore",        "__sceSasCoreWithMix",           &Kernel::__sceSasCoreWithMix);
+  add("sceSasCore",        "__sceSasGetEndFlag",            &Kernel::__sceSasGetEndFlag);
+  add("sceSasCore",        "__sceSasSetVolume",             &Kernel::__sceSasSetVolume);
+  add("sceSasCore",        "__sceSasSetPitch",              &Kernel::__sceSasSetPitch);
+  add("sceSasCore",        "__sceSasSetVoice",              &Kernel::__sceSasSetVoice);
+  add("sceSasCore",        "__sceSasSetVoicePCM",           &Kernel::__sceSasSetVoicePCM);
+  add("sceSasCore",        "__sceSasSetNoise",              &Kernel::__sceSasSetNoise);
+  add("sceSasCore",        "__sceSasSetTrianglarWave",      &Kernel::__sceSasSetTrianglarWave);
+  add("sceSasCore",        "__sceSasSetTriangularWave",     &Kernel::__sceSasSetTrianglarWave);
+  add("sceSasCore",        "__sceSasSetSteepWave",          &Kernel::__sceSasSetSteepWave);
+  add("sceSasCore",        "__sceSasSetVoiceATRAC3",        &Kernel::__sceSasSetVoiceATRAC3);
+  add("sceSasCore",        "__sceSasConcatenateATRAC3",     &Kernel::__sceSasConcatenateATRAC3);
+  add("sceSasCore",        "__sceSasUnsetATRAC3",           &Kernel::__sceSasUnsetATRAC3);
+  add("sceSasCore",        "__sceSasSetADSR",               &Kernel::__sceSasSetADSR);
+  add("sceSasCore",        "__sceSasSetADSRmode",           &Kernel::__sceSasSetADSRmode);
+  add("sceSasCore",        "__sceSasSetSimpleADSR",         &Kernel::__sceSasSetSimpleADSR);
+  add("sceSasCore",        "__sceSasSetSL",                 &Kernel::__sceSasSetSL);
+  add("sceSasCore",        "__sceSasGetEnvelopeHeight",     &Kernel::__sceSasGetEnvelopeHeight);
+  add("sceSasCore",        "__sceSasGetAllEnvelopeHeights", &Kernel::__sceSasGetAllEnvelopeHeights);
+  add("sceSasCore",        "__sceSasSetKeyOn",              &Kernel::__sceSasSetKeyOn);
+  add("sceSasCore",        "__sceSasSetKeyOff",             &Kernel::__sceSasSetKeyOff);
+  add("sceSasCore",        "__sceSasSetPause",              &Kernel::__sceSasSetPause);
+  add("sceSasCore",        "__sceSasGetPauseFlag",          &Kernel::__sceSasGetPauseFlag);
+  add("sceSasCore",        "__sceSasGetGrain",              &Kernel::__sceSasGetGrain);
+  add("sceSasCore",        "__sceSasSetGrain",              &Kernel::__sceSasSetGrain);
+  add("sceSasCore",        "__sceSasGetOutputmode",         &Kernel::__sceSasGetOutputmode);
+  add("sceSasCore",        "__sceSasSetOutputmode",         &Kernel::__sceSasSetOutputmode);
+  add("sceSasCore",        "__sceSasRevType",               &Kernel::__sceSasRevType);
+  add("sceSasCore",        "__sceSasRevParam",              &Kernel::__sceSasRevParam);
+  add("sceSasCore",        "__sceSasRevEVOL",               &Kernel::__sceSasRevEVOL);
+  add("sceSasCore",        "__sceSasRevVON",                &Kernel::__sceSasRevVON);
   add("sceSuspendForUser", "sceKernelPowerTick",            &Kernel::sceKernelPowerTick);
   add("sceSuspendForUser", "sceKernelPowerLock",            &Kernel::sceKernelPowerLock);
   add("sceSuspendForUser", "sceKernelPowerUnlock",          &Kernel::sceKernelPowerUnlock);
@@ -231,6 +308,19 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
   add("IoFileMgrForUser",  "sceIoIoctl",                    &Kernel::sceIoIoctl);
   add("IoFileMgrForUser",  "sceIoDevctl",                   &Kernel::sceIoDevctl);
+  add("IoFileMgrForUser",  "sceIoOpenAsync",                &Kernel::sceIoOpenAsync);
+  add("IoFileMgrForUser",  "sceIoCloseAsync",               &Kernel::sceIoCloseAsync);
+  add("IoFileMgrForUser",  "sceIoReadAsync",                &Kernel::sceIoReadAsync);
+  add("IoFileMgrForUser",  "sceIoWriteAsync",               &Kernel::sceIoWriteAsync);
+  add("IoFileMgrForUser",  "sceIoLseekAsync",               &Kernel::sceIoLseekAsync);
+  add("IoFileMgrForUser",  "sceIoLseek32Async",             &Kernel::sceIoLseek32Async);
+  add("IoFileMgrForUser",  "sceIoIoctlAsync",               &Kernel::sceIoIoctlAsync);
+  add("IoFileMgrForUser",  "sceIoPollAsync",                &Kernel::sceIoPollAsync);
+  add("IoFileMgrForUser",  "sceIoWaitAsync",                &Kernel::sceIoWaitAsync);
+  add("IoFileMgrForUser",  "sceIoWaitAsyncCB",              &Kernel::sceIoWaitAsyncCB);
+  add("IoFileMgrForUser",  "sceIoGetAsyncStat",             &Kernel::sceIoGetAsyncStat);
+  add("IoFileMgrForUser",  "sceIoChangeAsyncPriority",      &Kernel::sceIoChangeAsyncPriority);
+  add("IoFileMgrForUser",  "sceIoSetAsyncCallback",         &Kernel::sceIoSetAsyncCallback);
   add("sceUmdUser",        "sceUmdCheckMedium",             &Kernel::sceUmdCheckMedium);
   add("sceUmdUser",        "sceUmdActivate",                &Kernel::sceUmdActivate);
   add("sceUmdUser",        "sceUmdDeactivate",              &Kernel::sceUmdDeactivate);
@@ -265,6 +355,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceDisplay",        "sceDisplayIsVblank",            &Kernel::sceDisplayIsVblank);
   add("sceDisplay",        "sceDisplayGetCurrentHcount",    &Kernel::sceDisplayGetCurrentHcount);
   add("sceDisplay",        "sceDisplayGetVcount",           &Kernel::sceDisplayGetVcount);
+  add("sceDisplay",        "sceDisplayGetAccumulatedHcount", &Kernel::sceDisplayGetAccumulatedHcount);
+  add("sceDisplay",        "sceDisplayGetFramePerSec",      &Kernel::sceDisplayGetFramePerSec);
   add("sceGe_user",        "sceGeEdramGetAddr",             &Kernel::sceGeEdramGetAddr);
   add("sceGe_user",        "sceGeEdramGetSize",             &Kernel::sceGeEdramGetSize);
   add("sceGe_user",        "sceGeListEnQueue",              &Kernel::sceGeListEnQueue);
@@ -325,11 +417,133 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceUtility",        "sceUtilityHtmlViewerGetStatus", &Kernel::sceUtilityHtmlViewerGetStatus);
   add("sceUtility",        "sceUtilityHtmlViewerUpdate",    &Kernel::sceUtilityHtmlViewerUpdate);
   add("sceUtility",        "sceUtilityHtmlViewerShutdownStart", &Kernel::sceUtilityHtmlViewerShutdownStart);
+  add("sceUtility",        "sceUtilityLoadAvModule",        &Kernel::sceUtilityLoadAvModule);
+  add("sceUtility",        "sceUtilityUnloadAvModule",      &Kernel::sceUtilityUnloadAvModule);
   //newlib's sockets: no network yet, so every call fails
-  add("sceNetInet",        "sceNetInetClose",               &Kernel::sceNetInetUnavailable);
-  add("sceNetInet",        "sceNetInetRecv",                &Kernel::sceNetInetUnavailable);
-  add("sceNetInet",        "sceNetInetSend",                &Kernel::sceNetInetUnavailable);
-  add("sceNetInet",        "sceNetInetGetErrno",            &Kernel::sceNetInetUnavailable);
+  for(auto name : {"sceNetInetClose", "sceNetInetRecv", "sceNetInetSend", "sceNetInetGetErrno", "sceNetInetSocket",
+                   "sceNetInetBind", "sceNetInetConnect", "sceNetInetListen", "sceNetInetAccept", "sceNetInetSendto",
+                   "sceNetInetRecvfrom", "sceNetInetSetsockopt", "sceNetInetGetsockopt", "sceNetInetGetsockname",
+                   "sceNetInetGetpeername", "sceNetInetShutdown", "sceNetInetPoll"}) {
+    add("sceNetInet", name, &Kernel::sceNetInetUnavailable);
+  }
+  //the network libraries with the wireless LAN switched off (net.cpp): started and stopped, nothing reached
+  for(auto [library, name] : std::initializer_list<std::pair<const char*, const char*>>{
+      {"sceNet", "sceNetInit"}, {"sceNet", "sceNetTerm"}, {"sceNet", "sceNetFreeThreadinfo"},
+      {"sceNet", "sceNetThreadAbort"}, {"sceNetAdhoc", "sceNetAdhocInit"}, {"sceNetAdhoc", "sceNetAdhocTerm"},
+      {"sceNetAdhocctl", "sceNetAdhocctlInit"}, {"sceNetAdhocctl", "sceNetAdhocctlTerm"},
+      {"sceNetAdhocctl", "sceNetAdhocctlDisconnect"}, {"sceNetAdhocctl", "sceNetAdhocctlExitGameMode"},
+      {"sceNetAdhocctl", "sceNetAdhocctlAddHandler"}, {"sceNetAdhocctl", "sceNetAdhocctlDelHandler"},
+      {"sceNetAdhocMatching", "sceNetAdhocMatchingInit"}, {"sceNetAdhocMatching", "sceNetAdhocMatchingTerm"},
+      {"sceNetInet", "sceNetInetInit"}, {"sceNetInet", "sceNetInetTerm"},
+      {"sceNetResolver", "sceNetResolverInit"}, {"sceNetResolver", "sceNetResolverTerm"},
+      {"sceNetApctl", "sceNetApctlInit"}, {"sceNetApctl", "sceNetApctlTerm"},
+      {"sceNetApctl", "sceNetApctlDisconnect"}, {"sceNetApctl", "sceNetApctlAddHandler"},
+      {"sceNetApctl", "sceNetApctlDelHandler"}}) {
+    add(library, name, &Kernel::sceNetDone);
+  }
+  for(auto [library, name] : std::initializer_list<std::pair<const char*, const char*>>{
+      {"sceNetAdhoc", "sceNetAdhocPdpCreate"}, {"sceNetAdhoc", "sceNetAdhocPdpDelete"},
+      {"sceNetAdhoc", "sceNetAdhocPdpSend"}, {"sceNetAdhoc", "sceNetAdhocPdpRecv"},
+      {"sceNetAdhoc", "sceNetAdhocPtpOpen"}, {"sceNetAdhoc", "sceNetAdhocPtpConnect"},
+      {"sceNetAdhoc", "sceNetAdhocPtpListen"}, {"sceNetAdhoc", "sceNetAdhocPtpAccept"},
+      {"sceNetAdhoc", "sceNetAdhocPtpSend"}, {"sceNetAdhoc", "sceNetAdhocPtpRecv"},
+      {"sceNetAdhoc", "sceNetAdhocPtpFlush"}, {"sceNetAdhoc", "sceNetAdhocPtpClose"},
+      {"sceNetAdhocctl", "sceNetAdhocctlConnect"}, {"sceNetAdhocctl", "sceNetAdhocctlCreate"},
+      {"sceNetAdhocctl", "sceNetAdhocctlJoin"}, {"sceNetAdhocctl", "sceNetAdhocctlScan"},
+      {"sceNetAdhocctl", "sceNetAdhocctlCreateEnterGameMode"}, {"sceNetAdhocctl", "sceNetAdhocctlJoinEnterGameMode"},
+      {"sceNetAdhocctl", "sceNetAdhocctlGetParameter"}, {"sceNetAdhocctl", "sceNetAdhocctlGetAdhocId"},
+      {"sceNetAdhocMatching", "sceNetAdhocMatchingCreate"}, {"sceNetAdhocMatching", "sceNetAdhocMatchingStart"},
+      {"sceNetAdhocMatching", "sceNetAdhocMatchingStop"}, {"sceNetAdhocMatching", "sceNetAdhocMatchingDelete"},
+      {"sceNetAdhocMatching", "sceNetAdhocMatchingSelectTarget"},
+      {"sceNetAdhocMatching", "sceNetAdhocMatchingCancelTarget"},
+      {"sceNetAdhocMatching", "sceNetAdhocMatchingSendData"},
+      {"sceNetResolver", "sceNetResolverCreate"}, {"sceNetResolver", "sceNetResolverStartNtoA"},
+      {"sceNetResolver", "sceNetResolverStop"}, {"sceNetResolver", "sceNetResolverDelete"},
+      {"sceNetApctl", "sceNetApctlConnect"}, {"sceNetApctl", "sceNetApctlGetInfo"}}) {
+    add(library, name, &Kernel::sceNetUnavailable);
+  }
+  add("sceNet",            "sceNetGetLocalEtherAddr",       &Kernel::sceNetGetLocalEtherAddr);
+  add("sceNet",            "sceNetEtherNtostr",             &Kernel::sceNetEtherNtostr);
+  add("sceNet",            "sceNetEtherStrton",             &Kernel::sceNetEtherStrton);
+  add("sceNetAdhocctl",    "sceNetAdhocctlGetState",        &Kernel::sceNetAdhocctlGetState);
+  add("sceNetApctl",       "sceNetApctlGetState",           &Kernel::sceNetAdhocctlGetState);
+  add("sceNetAdhoc",       "sceNetAdhocGetPdpStat",         &Kernel::sceNetEmptyList);
+  add("sceNetAdhoc",       "sceNetAdhocGetPtpStat",         &Kernel::sceNetEmptyList);
+  add("sceNetAdhocctl",    "sceNetAdhocctlGetScanInfo",     &Kernel::sceNetEmptyList);
+  add("sceNetAdhocctl",    "sceNetAdhocctlGetPeerList",     &Kernel::sceNetEmptyList);
+  //movies (mpeg.cpp) and ATRAC3plus streams (atrac.cpp), set up but never played
+  add("sceMpeg",           "sceMpegInit",                   &Kernel::sceMpegInit);
+  add("sceMpeg",           "sceMpegFinish",                 &Kernel::sceMpegFinish);
+  add("sceMpeg",           "sceMpegRingbufferQueryMemSize", &Kernel::sceMpegRingbufferQueryMemSize);
+  add("sceMpeg",           "sceMpegQueryMemSize",           &Kernel::sceMpegQueryMemSize);
+  add("sceMpeg",           "sceMpegRingbufferConstruct",    &Kernel::sceMpegRingbufferConstruct);
+  add("sceMpeg",           "sceMpegRingbufferDestruct",     &Kernel::sceMpegRingbufferDestruct);
+  add("sceMpeg",           "sceMpegRingbufferAvailableSize", &Kernel::sceMpegRingbufferAvailableSize);
+  add("sceMpeg",           "sceMpegRingbufferPut",          &Kernel::sceMpegRingbufferPut);
+  add("sceMpeg",           "sceMpegCreate",                 &Kernel::sceMpegCreate);
+  add("sceMpeg",           "sceMpegDelete",                 &Kernel::sceMpegDelete);
+  add("sceMpeg",           "sceMpegQueryStreamOffset",      &Kernel::sceMpegQueryStreamOffset);
+  add("sceMpeg",           "sceMpegQueryStreamSize",        &Kernel::sceMpegQueryStreamSize);
+  add("sceMpeg",           "sceMpegRegistStream",           &Kernel::sceMpegRegistStream);
+  add("sceMpeg",           "sceMpegUnRegistStream",         &Kernel::sceMpegUnRegistStream);
+  add("sceMpeg",           "sceMpegMallocAvcEsBuf",         &Kernel::sceMpegMallocAvcEsBuf);
+  add("sceMpeg",           "sceMpegFreeAvcEsBuf",           &Kernel::sceMpegFreeAvcEsBuf);
+  add("sceMpeg",           "sceMpegInitAu",                 &Kernel::sceMpegInitAu);
+  add("sceMpeg",           "sceMpegFlushAllStream",         &Kernel::sceMpegFlushAllStream);
+  add("sceMpeg",           "sceMpegFlushStream",            &Kernel::sceMpegFlushStream);
+  add("sceMpeg",           "sceMpegGetAvcAu",               &Kernel::sceMpegGetAvcAu);
+  add("sceMpeg",           "sceMpegGetAtracAu",             &Kernel::sceMpegGetAtracAu);
+  add("sceMpeg",           "sceMpegGetPcmAu",               &Kernel::sceMpegGetPcmAu);
+  add("sceMpeg",           "sceMpegAvcDecodeMode",          &Kernel::sceMpegAvcDecodeMode);
+  add("sceMpeg",           "sceMpegChangeGetAuMode",        &Kernel::sceMpegChangeGetAuMode);
+  add("sceMpeg",           "sceMpegQueryAtracEsSize",       &Kernel::sceMpegQueryAtracEsSize);
+  add("sceMpeg",           "sceMpegAvcDecode",              &Kernel::sceMpegAvcDecode);
+  add("sceMpeg",           "sceMpegAvcDecodeStop",          &Kernel::sceMpegAvcDecodeStop);
+  add("sceMpeg",           "sceMpegAvcDecodeFlush",         &Kernel::sceMpegAvcDecodeFlush);
+  add("sceMpeg",           "sceMpegAvcQueryYCbCrSize",      &Kernel::sceMpegAvcQueryYCbCrSize);
+  add("sceMpeg",           "sceMpegAvcInitYCbCr",           &Kernel::sceMpegAvcInitYCbCr);
+  add("sceMpeg",           "sceMpegAvcDecodeYCbCr",         &Kernel::sceMpegAvcDecodeYCbCr);
+  add("sceMpeg",           "sceMpegAvcDecodeStopYCbCr",     &Kernel::sceMpegAvcDecodeStopYCbCr);
+  add("sceMpeg",           "sceMpegAvcCsc",                 &Kernel::sceMpegAvcCsc);
+  add("sceMpeg",           "sceMpegAtracDecode",            &Kernel::sceMpegAtracDecode);
+  add("sceMpeg",           "sceMpegGetAvcEsAu",             &Kernel::sceMpegGetAvcAu);
+  //the system's fonts, none installed (font.cpp)
+  add("sceLibFont",        "sceFontNewLib",                 &Kernel::sceFontNewLib);
+  add("sceLibFont",        "sceFontDoneLib",                &Kernel::sceFontDone);
+  add("sceLibFont",        "sceFontClose",                  &Kernel::sceFontDone);
+  add("sceLibFont",        "sceFontFlush",                  &Kernel::sceFontDone);
+  add("sceLibFont",        "sceFontSetAltCharacterCode",    &Kernel::sceFontDone);
+  add("sceLibFont",        "sceFontGetNumFontList",         &Kernel::sceFontGetNumFontList);
+  add("sceLibFont",        "sceFontGetFontList",            &Kernel::sceFontGetFontList);
+  add("sceLibFont",        "sceFontFindOptimumFont",        &Kernel::sceFontFindOptimumFont);
+  add("sceLibFont",        "sceFontFindFont",               &Kernel::sceFontFindOptimumFont);
+  add("sceLibFont",        "sceFontOpen",                   &Kernel::sceFontOpen);
+  add("sceLibFont",        "sceFontOpenUserMemory",         &Kernel::sceFontOpen);
+  add("sceLibFont",        "sceFontOpenUserFile",           &Kernel::sceFontOpen);
+  for(auto name : {"sceFontGetFontInfo", "sceFontGetFontInfoByIndexNumber", "sceFontGetCharInfo",
+                   "sceFontGetCharImageRect", "sceFontGetCharGlyphImage", "sceFontGetCharGlyphImage_Clip"}) {
+    add("sceLibFont", name, &Kernel::sceFontNoFont);
+  }
+  add("sceLibFont",        "sceFontSetResolution",          &Kernel::sceFontSetResolution);
+  add("sceLibFont",        "sceFontPointToPixelH",          &Kernel::sceFontPointToPixelH);
+  add("sceLibFont",        "sceFontPointToPixelV",          &Kernel::sceFontPointToPixelV);
+  add("sceLibFont",        "sceFontPixelToPointH",          &Kernel::sceFontPixelToPointH);
+  add("sceLibFont",        "sceFontPixelToPointV",          &Kernel::sceFontPixelToPointV);
+  add("sceAtrac3plus",     "sceAtracGetAtracID",            &Kernel::sceAtracGetAtracID);
+  add("sceAtrac3plus",     "sceAtracReleaseAtracID",        &Kernel::sceAtracReleaseAtracID);
+  add("sceAtrac3plus",     "sceAtracReinit",                &Kernel::sceAtracReinit);
+  add("sceAtrac3plus",     "sceAtracSetDataAndGetID",       &Kernel::sceAtracSetDataAndGetID);
+  add("sceAtrac3plus",     "sceAtracSetHalfwayBufferAndGetID", &Kernel::sceAtracSetDataAndGetID);
+  add("sceAtrac3plus",     "sceAtracSetData",               &Kernel::sceAtracSetData);
+  add("sceAtrac3plus",     "sceAtracSetHalfwayBuffer",      &Kernel::sceAtracSetData);
+  for(auto name : {"sceAtracDecodeData", "sceAtracGetRemainFrame", "sceAtracGetStreamDataInfo",
+                   "sceAtracAddStreamData", "sceAtracGetSoundSample", "sceAtracGetNextDecodePosition",
+                   "sceAtracGetBufferInfoForReseting", "sceAtracResetPlayPosition", "sceAtracGetChannel",
+                   "sceAtracGetMaxSample", "sceAtracGetNextSample", "sceAtracSetLoopNum", "sceAtracGetLoopStatus",
+                   "sceAtracGetBitrate", "sceAtracGetOutputChannel", "sceAtracGetSecondBufferInfo",
+                   "sceAtracSetSecondBuffer", "sceAtracIsSecondBufferNeeded", "sceAtracGetInternalErrorInfo"}) {
+    add("sceAtrac3plus", name, &Kernel::sceAtracNoStream);
+  }
   cpu.syscallHook = [this](u32 code) { return syscall(code); };
   ge.log = [this](const std::string& text) { note("GE: " + text); };
 }
@@ -364,6 +578,10 @@ auto Kernel::power() -> void {
   compilerVersion = 0;
   powerState = {};
   audio = {};
+  sas = {};
+  atracIDs = 0;
+  dispatchSuspended = false;
+  fontResolution[0] = fontResolution[1] = 128.0f;
   dialog = {};
   utilityModules.clear();
   files.clear();
@@ -381,6 +599,8 @@ auto Kernel::power() -> void {
   vblankPending = false;
   eventFlags.clear();
   pools.clear();
+  pipes.clear();
+  mailboxes.clear();
   callbacks.clear();
   exitCallback = 0;
   memoryStickCallbacks.clear();

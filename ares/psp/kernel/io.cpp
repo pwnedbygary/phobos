@@ -286,39 +286,47 @@ auto Kernel::sceKernelStdin() -> void { result(StandardInput); }
 auto Kernel::sceKernelStdout() -> void { result(StandardOutput); }
 auto Kernel::sceKernelStderr() -> void { result(StandardError); }
 
-//(path, flags, mode): a file's descriptor. Flags (PSP_O_*) say whether it's read, written or both; whether it's
-//created if missing, emptied, or only created if it isn't there already; and whether writes go to its end.
-auto Kernel::sceIoOpen() -> void {
-  std::string path = memory.readString(arg(0), 1024), host, normalized;
-  u32 flags = arg(1);
-  if(onDisc(path)) return result(openOnDisc(path, flags));
-  if(u32 error = resolve(path, host, normalized)) return result(error);
+//Opens a file (path, flags): its descriptor, or an error. Flags (PSP_O_*) say whether it's read, written or both;
+//whether it's created if missing, emptied, or only created if it isn't there already; and whether writes go to its
+//end. sceIoOpen, and sceIoOpenAsync (async.cpp).
+auto Kernel::openFile(const std::string& path, u32 flags) -> u32 {
+  std::string host, normalized;
+  if(onDisc(path)) return openOnDisc(path, flags);
+  if(u32 error = resolve(path, host, normalized)) return error;
   bool read = flags & OpenRead, write = flags & OpenWrite;
-  if(!read && !write) return result(ErrorInvalidArgument);
+  if(!read && !write) return ErrorInvalidArgument;
   std::error_code error;
   bool exists = std::filesystem::exists(host, error);
-  if(exists && std::filesystem::is_directory(host, error)) return result(ErrorIsDirectory);
-  if(exists && (flags & OpenCreate) && (flags & OpenExclusive)) return result(ErrorFileExists);
-  if(!exists && !(write && (flags & OpenCreate))) return result(ErrorFileNotFound);
+  if(exists && std::filesystem::is_directory(host, error)) return ErrorIsDirectory;
+  if(exists && (flags & OpenCreate) && (flags & OpenExclusive)) return ErrorFileExists;
+  if(!exists && !(write && (flags & OpenCreate))) return ErrorFileNotFound;
   auto mode = std::ios::binary | std::ios::in;
   if(write) mode |= std::ios::out;
   if(write && (!exists || (flags & OpenTruncate))) mode |= std::ios::trunc;  //made, or emptied
-  if(nextFile > LastUID) return result(ErrorTooManyFiles);  //before the file is made or emptied
+  if(nextFile > LastUID) return ErrorTooManyFiles;  //before the file is made or emptied
   auto stream = std::make_unique<std::fstream>(host, mode);
-  if(!stream->is_open()) return result(ErrorNoPermission);
+  if(!stream->is_open()) return ErrorNoPermission;
   u32 file = newFile();
   auto& open = files[file];
   open.path = normalized;
   open.host = host;
   open.flags = flags;
   open.stream = std::move(stream);
-  result(file);
+  return file;
 }
 
+//(path, flags, mode): a file's descriptor.
+auto Kernel::sceIoOpen() -> void {
+  result(openFile(memory.readString(arg(0), 1024), arg(1)));
+}
+
+//(file): closed, unless an asynchronous request on it is still under way (ASYNC_BUSY). A descriptor kept only for
+//an asynchronous request's result goes too, its result never taken.
 auto Kernel::sceIoClose() -> void {
   if(arg(0) <= StandardError) return result(0);
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder) return result(ErrorBadFile);
+  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
   files.erase(found);
   result(0);
 }
@@ -359,25 +367,25 @@ auto Kernel::readFile(u32 file, u32 data, u32 size) -> u32 {
 
 //(file, data, size): how many bytes were read (fewer at the end of the file).
 auto Kernel::sceIoRead() -> void {
+  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
   result(readFile(arg(0), arg(1), arg(2)));
 }
 
-//(file, data, size): how many bytes were written.
-auto Kernel::sceIoWrite() -> void {
-  u32 file = arg(0), data = arg(1), size = arg(2);
+//Writes from the program's memory to an open file (file, data, size): how many bytes were written, or an error.
+auto Kernel::writeFile(u32 file, u32 data, u32 size) -> u32 {
   if(file == StandardOutput || file == StandardError) {
     size = std::min<u32>(size, 64_KiB);
     std::string text(size, '\0');
-    if(!memory.copyOut(text.data(), data, size)) return result(ErrorIllegalAddress);
+    if(!memory.copyOut(text.data(), data, size)) return ErrorIllegalAddress;
     if(output) output(text);
-    return result(size);
+    return size;
   }
   auto found = files.find(file);
-  if(found == files.end()) return result(ErrorBadFile);
+  if(found == files.end()) return ErrorBadFile;
   auto& open = found->second;
   //only a host file opened for writing: nothing on the disc can be written
-  if(open.folder || open.onDisc || !(open.flags & OpenWrite)) return result(ErrorBadFile);
-  if(size && !memory.reaches(data, size)) return result(ErrorIllegalAddress);
+  if(open.folder || open.onDisc || !(open.flags & OpenWrite)) return ErrorBadFile;
+  if(size && !memory.reaches(data, size)) return ErrorIllegalAddress;
   std::vector<char> buffer(size);
   memory.copyOut(buffer.data(), data, size);
   open.stream->clear();
@@ -385,15 +393,21 @@ auto Kernel::sceIoWrite() -> void {
   else open.stream->seekp(std::streamoff(open.position));
   open.stream->write(buffer.data(), size);
   open.stream->flush();
-  if(!*open.stream) return result(ErrorIOError);
+  if(!*open.stream) return ErrorIOError;
   open.position = u64(open.stream->tellp());
-  result(size);
+  return size;
+}
+
+//(file, data, size): how many bytes were written.
+auto Kernel::sceIoWrite() -> void {
+  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
+  result(writeFile(arg(0), arg(1), arg(2)));
 }
 
 //Moves a file's position: from its start (whence 0), where it is (1), or its end (2). Returns where it is now.
 auto Kernel::seek(u32 file, s64 offset, u32 whence, u64& position) -> u32 {
   auto found = files.find(file);
-  if(found == files.end() || found->second.folder) return ErrorBadFile;
+  if(found == files.end() || found->second.folder || found->second.resultOnly) return ErrorBadFile;
   auto& open = found->second;
   s64 size = s64(open.size);
   if(!open.onDisc) {
@@ -412,7 +426,7 @@ auto Kernel::seek(u32 file, s64 offset, u32 whence, u64& position) -> u32 {
 //64-bit argument in an even-odd pair of registers, so the offset skips a1 (psp-gcc's own calls do exactly this).
 auto Kernel::sceIoLseek() -> void {
   u64 position = 0;
-  u32 error = seek(arg(0), s64(u64(arg(3)) << 32 | arg(2)), arg(4), position);
+  u32 error = asyncBusy(arg(0)) ? ErrorAsyncBusy : seek(arg(0), s64(u64(arg(3)) << 32 | arg(2)), arg(4), position);
   cpu.ipu.r[3] = error ? 0xffff'ffff : u32(position >> 32);
   result(error ? error : u32(position));
 }
@@ -420,7 +434,7 @@ auto Kernel::sceIoLseek() -> void {
 //(file, 32-bit offset, whence): the new position.
 auto Kernel::sceIoLseek32() -> void {
   u64 position = 0;
-  u32 error = seek(arg(0), s32(arg(1)), arg(2), position);
+  u32 error = asyncBusy(arg(0)) ? ErrorAsyncBusy : seek(arg(0), s32(arg(1)), arg(2), position);
   result(error ? error : u32(position));
 }
 
@@ -621,48 +635,54 @@ auto Kernel::sceIoDclose() -> void {
   result(0);
 }
 
-//(file, command, in, in length, out, out length): a request a file's device answers rather than reading or writing.
-//A file on the disc answers those PPSSPP's notes on the hardware describe (games use them to find where a file
-//starts on the disc and read it by sector); anything else, and any other device's file, isn't supported.
-auto Kernel::sceIoIoctl() -> void {
-  u32 file = arg(0), command = arg(1), in = arg(2), inLength = arg(3), out = arg(4), outLength = arg(5);
+//A request a file's device answers rather than reading or writing (file, command, in, in length, out, out length):
+//its result, and how many bytes it put in out (moved: an asynchronous request takes the time of moving them). A file
+//on the disc answers those PPSSPP's notes on the hardware describe (games use them to find where a file starts on
+//the disc and read it by sector); anything else, and any other device's file, isn't supported. sceIoIoctl, and
+//sceIoIoctlAsync (async.cpp).
+auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength, u64* moved) -> u32 {
+  u64 unused;
+  if(!moved) moved = &unused;
+  *moved = 0;
   auto found = files.find(file);
-  if(found == files.end() || found->second.folder) return result(ErrorBadFile);
+  if(found == files.end() || found->second.folder || found->second.resultOnly) return ErrorBadFile;
   auto& open = found->second;
-  if(!open.onDisc) return result(ErrorFunctionNotSupported);
-  auto writeOut = [&](u32 size, auto&& write) {
-    if(outLength < size || !memory.reaches(out, size)) return result(ErrorInvalidArgument);
+  if(!open.onDisc) return ErrorFunctionNotSupported;
+  auto writeOut = [&](u32 size, auto&& write) -> u32 {
+    if(outLength < size || !memory.reaches(out, size)) return ErrorInvalidArgument;
     write();
-    result(0);
+    *moved = size;
+    return 0;
   };
   //a seek's request: a 64-bit offset, a word nobody knows, and where from (as sceIoLseek's whence). Not before the
   //start, nor past the end (unlike sceIoLseek): that fails with `outside`.
-  auto seekBy = [&](u32 outside) {
-    if(inLength < 4 || !memory.reaches(in, 16)) return result(ErrorInvalidArgument);
+  auto seekBy = [&](u32 outside) -> u32 {
+    if(inLength < 4 || !memory.reaches(in, 16)) return ErrorInvalidArgument;
     s64 offset = s64(u64(memory.read(4, in + 4)) << 32 | memory.read(4, in));
     u32 whence = memory.read(4, in + 12);
     s64 base = whence == 0 ? 0 : whence == 1 ? s64(open.position) : whence == 2 ? s64(open.size) : -1;
-    if(base < 0 || base + offset < 0 || base + offset > s64(open.size)) return result(outside);
+    if(base < 0 || base + offset < 0 || base + offset > s64(open.size)) return outside;
     open.position = u64(base + offset);
-    result(0);
+    return 0;
   };
   switch(command) {
   case 0x0102'0001:  //the disc's volume descriptor (sector 16)
-    if(open.sectors) return result(ErrorFunctionNotSupported);
+    if(open.sectors) return ErrorFunctionNotSupported;
     return writeOut(Disc::SectorSize, [&] {
       u8 sector[Disc::SectorSize];
       if(disc->readSectors(16, 1, sector)) memory.copyIn(out, sector, Disc::SectorSize);
     });
   case 0x0102'0002: {  //the disc's path table (its folders, listed apart), as the volume descriptor places it
-    if(open.sectors) return result(ErrorFunctionNotSupported);
+    if(open.sectors) return ErrorFunctionNotSupported;
     u8 descriptor[Disc::SectorSize];
-    if(!disc->readSectors(16, 1, descriptor)) return result(ErrorIOError);
+    if(!disc->readSectors(16, 1, descriptor)) return ErrorIOError;
     u32 size = little32(descriptor + 132), first = little32(descriptor + 140);
-    if(outLength < size || !memory.reaches(out, size)) return result(ErrorInvalidArgument);
+    if(outLength < size || !memory.reaches(out, size)) return ErrorInvalidArgument;
     std::vector<u8> table(size);
-    if(!disc->read(u64(first) * Disc::SectorSize, size, table.data())) return result(ErrorIOError);
+    if(!disc->read(u64(first) * Disc::SectorSize, size, table.data())) return ErrorIOError;
     memory.copyIn(out, table.data(), size);
-    return result(0);
+    *moved = size;
+    return 0;
   }
   case 0x0102'0003:  //the disc's sector size
     return writeOut(4, [&] { memory.write(4, out, Disc::SectorSize); });
@@ -673,23 +693,32 @@ auto Kernel::sceIoIoctl() -> void {
   case 0x0102'0006:  //the file's first sector
     return writeOut(4, [&] { memory.write(4, out, open.sector); });
   case 0x0102'0007:  //the file's size (umd0:'s in sectors, as all its sizes are)
-    if(!memory.reaches(out, 8) || out & 3) return result(ErrorInvalidArgument);
+    if(!memory.reaches(out, 8) || out & 3) return ErrorInvalidArgument;
     memory.write(4, out, u32(open.size));
     memory.write(4, out + 4, u32(open.size >> 32));
-    return result(0);
+    *moved = 8;
+    return 0;
   case 0x0103'0008:  //read from the file (in: how many bytes)
   case 0x01f3'0003: {  //read whole sectors from umd0: (in: how many, at least one)
-    if(inLength < 4 || !memory.reaches(in, 4)) return result(ErrorInvalidArgument);
+    if(inLength < 4 || !memory.reaches(in, 4)) return ErrorInvalidArgument;
     u32 size = memory.read(4, in);
-    if(size > outLength || (command == 0x01f3'0003 && !size)) return result(ErrorInvalidArgument);
-    return result(readFile(file, out, size));
+    if(size > outLength || (command == 0x01f3'0003 && !size)) return ErrorInvalidArgument;
+    u32 got = readFile(file, out, size);
+    if(s32(got) > 0) *moved = u64(got) * (open.sectors ? Disc::SectorSize : 1);
+    return got;
   }
   case 0x01d2'0001:  //where umd0:'s position is, in sectors
     return writeOut(4, [&] { memory.write(4, out, u32(open.position)); });
   case 0x01f1'00a6:  //seek in umd0:, in sectors
     return seekBy(ErrorInvalidFileSize);
   }
-  result(ErrorFunctionNotSupported);
+  return ErrorFunctionNotSupported;
+}
+
+//(file, command, in, in length, out, out length)
+auto Kernel::sceIoIoctl() -> void {
+  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
+  result(ioctl(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5)));
 }
 
 //(device, command, in, in length, out, out length): a request to a whole device. The disc drive's and the memory

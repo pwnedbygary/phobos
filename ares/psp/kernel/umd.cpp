@@ -13,10 +13,11 @@ auto Kernel::umdState() const -> u32 {
 
 //Waits for any of stat's bits in the drive's state; timeout in microseconds, 0 for none. The PSP takes a timeout of
 //1 microsecond as 25, and any other of at most 209 as 240; the wait that runs callbacks has no 25 (PPSSPP's
-//measurements).
+//measurements). Bits it can't wait for are refused ahead of whether the thread may wait, as intr/waits recorded.
 auto Kernel::umdWait(u32 stat, u32 timeout, bool callbacks) -> void {
   constexpr u32 Waitable = UmdNotPresent | UmdPresent | UmdNotReady | UmdReady | UmdReadable;  //not "changed"
   if(!(stat & Waitable)) return result(ErrorInvalidArgument);
+  if(!mayWait()) return;
   if(stat & umdState()) {
     result(0);
     return callbacksOnReturn(callbacks);

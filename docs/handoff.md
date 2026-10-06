@@ -868,6 +868,52 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: more functions games ask for — 2026-10-05
+
+Branch `cursor/psp-hle-games2-2b67`, on top of `cursor/psp-hle-games-2b67` (#145, the entry below). What the RP6 run
+had the owner's games asking for, written from pspsdk's headers, pspautotests' tests and their recorded results, and
+the games' behavior on a scratch host runner (never committed); no other emulator's code read. docs/psp-core.md,
+part 20, describes it: files' asynchronous requests (done after the time the UMD drive or the memory stick takes,
+polled or waited for, CB waits running callbacks), a silent sceSasCore (voices' envelopes and ends as recorded, no
+mixing), message pipes and mailboxes, sceMpeg set up but finding no movie it can play (games skip them),
+sceAtrac3plus refusing every stream, the network libraries with the WLAN switch off, sceLibFont with no fonts
+installed, and sceRtc, sceOpenPSID, display, thread, Kernel_Library, power and utility odds and ends. Peace Walker
+found two faults: a free lightweight mutex's CB lock ran a callback (it never enters the kernel on a PSP), and
+threads' kernel area at the top of the stack wasn't zeroed. States are version 5.
+- **On the host** (1800-2400 frames each; frames in `/tmp/hle2-runner/out`, not in the repository): Lumines to its
+  gameplay demo; Burnout Legends, Burnout Dominator and Midnight Club 3 to their titles and, with Start, their
+  profile menus; SOCOM past its "no data" screen to its credits; Snoopy to its "no save file" warning (it had
+  exited); Space Invaders Extreme to its title (first time); Peace Walker to its title screen (no system-font text);
+  GTA Liberty City Stories, Vice City Stories and Sindacco Chronicles past their movies to their loading screens,
+  where they stop at about 85% (the main thread waits for a queue to drain, polling an event flag: not traced
+  further); Gunhound EX past its logo to a black screen (likely its system-font text); Brave Story on its Game
+  Republic logo, reading slowly; the Street Fighter III port as before.
+- **Next**: what GTA's loading waits for; Brave Story's logo; sceLibFont from the owner's flash0 fonts; mixing
+  sceSas and sceAudio into the speakers; ATRAC3plus and the movies' decoders.
+- **Checks**: the parts' 180 groups with both sanitizers (new files: async, sas, messages, media; "state fields"
+  changing every new field and refusing 36 more states); `tests/psp/ares` 236 checks (a version 4 state refused).
+  Broken versions each failed their tests (requests done at once; a sender out of line; transfers' counts unwritten;
+  sceSas's 32-sample start dropped; the kernel area left as 0xff).
+- **Review:** a general-purpose reviewer; the clean-room spot check found every file independent; three medium and
+  six low findings, all fixed (each with a test that failed before it) or recorded. Medium: a pipe without a buffer
+  copied direct transfers through a host buffer sized by the guest's counts before any address check (1 GiB moved on
+  a 32 MiB machine): messages and buffers need memory behind them all (ILLEGAL_ADDR), bytes go memory to memory, and
+  loading checks each pipe waiter's rest; a send or receive with callbacks ran the callbacks of the higher-priority
+  thread it woke: the caller's start first now; __sceSasSetVoicePCM left a voice past fewer samples, the machine's
+  own state refused: it's brought inside them. Low: two threads waiting on one request, or a CB wait whose callback
+  polled the result, left a thread waiting for good: every waiter ends now (the first to wait with the result, the
+  rest NOASYNC), and loading checks only threads really waiting; sceIoIoctlAsync timed by the output's length (due
+  in 52 minutes): by the bytes moved now; sceFontSetResolution kept 1e10 and infinities: refused now, NaN too
+  (INVALID_VALUE); with dispatching held off, waits were refused only after a lightweight mutex's waiter count or a
+  pipe's bytes changed, and rotating switched threads: waits are refused first (as pspautotests' intr/waits
+  recorded), rotating keeps the CPU; a lightweight mutex deleted while its waiter's callbacks ran left the waiter for
+  good: its wait ends deleted. Recorded, not changed: which of pipe attributes 0x100 and 0x1000 orders senders
+  (pspsdk names neither). Every group of this branch now ends with a save, load and save giving the same state.
+  Checks: 188 groups (eight new), `tests/psp/ares` 236; the state's layout is unchanged (version 5).
+- **On the RP6** (build 104649): Space Invaders Extreme reaches its title screen at 60 fps; Peace Walker reaches its
+  title scene but drawn garbled (striped) and at 9.5 fps (16%), a GE drawing and speed problem to look into; Burnout
+  Legends, Midnight Club 3, SOCOM and Lumines ran with no missing functions noted.
+
 ## PSP core: the functions retail games ask for — 2026-10-05
 
 Branch `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67` (two entries below), and since then of

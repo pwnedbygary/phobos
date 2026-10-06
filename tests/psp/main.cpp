@@ -10,9 +10,13 @@ int main() {
   for(auto& test : callbackTests()) tests.push_back(test);
   for(auto& test : powerTests()) tests.push_back(test);
   for(auto& test : audioTests()) tests.push_back(test);
+  for(auto& test : sasTests()) tests.push_back(test);
   for(auto& test : utilityTests()) tests.push_back(test);
   for(auto& test : poolTests()) tests.push_back(test);
+  for(auto& test : messageTests()) tests.push_back(test);
+  for(auto& test : mediaTests()) tests.push_back(test);
   for(auto& test : fileTests()) tests.push_back(test);
+  for(auto& test : asyncTests()) tests.push_back(test);
   for(auto& test : discTests()) tests.push_back(test);
   for(auto& test : discFormatTests()) tests.push_back(test);
   for(auto& test : cryptoTests()) tests.push_back(test);

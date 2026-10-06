@@ -65,5 +65,9 @@ auto stateTests() -> Tests;
 auto cryptoTests() -> Tests;
 auto decryptTests() -> Tests;
 auto moduleTests() -> Tests;
+auto asyncTests() -> Tests;
+auto sasTests() -> Tests;
+auto messageTests() -> Tests;
+auto mediaTests() -> Tests;
 
 }
