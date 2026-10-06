@@ -194,10 +194,24 @@ auto Kernel::events() -> void {
       memory.write(4, thread->waitID + 12, memory.read(4, thread->waitID + 12) - 1);
     }
     if(thread->wait == Wait::EventFlag) eventFlagTimedOut(*thread);
-    ready(*thread, thread->wait == Wait::Delay ? 0 : ErrorWaitTimeout);
+    Wait wait = thread->wait;
+    ready(*thread, wait == Wait::Delay ? 0 : ErrorWaitTimeout);
+    waiterLeft(wait, thread->waitID);
     woke = true;
   }
   if(woke) reschedule();
+}
+
+//A thread waiting for a semaphore's count or a memory pool's room stopped waiting without being served (its time
+//ran out, or it ended): both serve their waiters in order, one that doesn't fit holding up those behind it, so with
+//it gone, those behind it that fit are served now, as they would have been had it never come.
+auto Kernel::waiterLeft(Wait wait, u32 id) -> void {
+  if(wait == Wait::Semaphore) {
+    if(auto found = semaphores.find(id); found != semaphores.end()) signalSemaphores(found->second);
+  }
+  if(wait == Wait::Fpl || wait == Wait::Vpl) {
+    if(auto found = pools.find(id); found != pools.end()) poolWake(found->second);
+  }
 }
 
 //How many cycles until the next thing that's due (at most until the next vertical blank).
@@ -236,17 +250,23 @@ auto Kernel::idle(u64 end) -> bool {
 
 //A thread's run is over (status: what it returned, or passed to the exit function): it's dormant again, and the
 //threads waiting for its end are told how it ended, as are those waiting for a module whose module_start or
-//module_stop it ran (modules.cpp).
+//module_stop it ran (modules.cpp). A thread ended in a wait (terminated), or in a callback that put its wait aside,
+//leaves that wait unserved (waiterLeft()).
 auto Kernel::endThread(Thread& thread, s32 status) -> void {
+  Wait wait = thread.wait;
+  WaitState before = thread.waitBeforeCallback;
   thread.status = Status::Dormant;
   thread.wait = Wait::None;
   thread.callbacks = thread.inCallback = false;
+  thread.waitBeforeCallback = {};
   thread.exitStatus = status;
   for(auto& [uid, other] : threads) {
     if(other->status == Status::Waiting && other->wait == Wait::ThreadEnd && other->waitID == thread.uid) {
       ready(*other, u32(status));
     }
   }
+  waiterLeft(wait, thread.waitID);
+  waiterLeft(before.wait, before.id);
   moduleThreadEnded(thread, status);
 }
 
@@ -457,7 +477,7 @@ auto Kernel::sceKernelDeleteSema() -> void {
 }
 
 //Hands the semaphore's count to the threads waiting on it, the longest-waiting first, while there's enough for the
-//next one.
+//next one: as it's signalled, and as a waiter leaves without its count (waiterLeft()).
 auto Kernel::signalSemaphores(Semaphore& semaphore) -> void {
   while(true) {
     Thread* next = nullptr;

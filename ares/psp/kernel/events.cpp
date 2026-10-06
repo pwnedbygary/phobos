@@ -280,7 +280,9 @@ auto Kernel::backFromCallbacks(Thread& thread) -> void {
 auto Kernel::resumeWait(Thread& thread) -> void {
   if(thread.wakeAt && cycles >= thread.wakeAt) {
     if(thread.wait == Wait::EventFlag) eventFlagTimedOut(thread);
-    return ready(thread, thread.wait == Wait::Delay ? 0 : ErrorWaitTimeout);
+    Wait wait = thread.wait;
+    ready(thread, wait == Wait::Delay ? 0 : ErrorWaitTimeout);
+    return waiterLeft(wait, thread.waitID);
   }
   switch(thread.wait) {
   case Wait::Sleep:

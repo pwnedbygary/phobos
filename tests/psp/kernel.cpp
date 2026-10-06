@@ -124,6 +124,88 @@ static auto waiting() -> void {
   }
 }
 
+//A semaphore's waiters are served in order, one wanting more than the count holding up those behind it; so when the
+//one in front leaves without its count, those behind it that fit are served then. A semaphore with none: A waits
+//for 5 (2 ms at most) and B behind it for 1, and 3 are signalled, which A can't take; A's time runs out and B takes
+//1. A second semaphore: A2 waits for 5 and B2 behind it for 1, 3 are signalled, and main terminates and deletes A2:
+//B2 takes 1. (They waited till their semaphore was deleted, the count left at 3.)
+static auto semaphoreWaitersLeave() -> void {
+  constexpr u32 R = KernelMachine::Results;
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    constexpr u32 Semaphores = R + 0x10, Timeout = R + 0x18, Info = R + 0x100;
+    auto waiter = [&](u32 entry, u32 n, u32 count, bool timed, u32 result) {  //on semaphore n, writing its result
+      Assembler w{m, entry};
+      w.li(t0, Semaphores + n * 4); w.put(lw(a0, 0, t0)); w.li(a1, count); w.li(a2, timed ? Timeout : 0);
+      w.call("sceKernelWaitSema");
+      w.li(t0, result); w.put(sw(v0, 0, t0));
+      w.call("sceKernelExitThread");
+    };
+    waiter(0x0880'2000, 0, 5, true, R + 0x20);   //A
+    waiter(0x0880'2100, 0, 1, false, R + 0x24);  //B
+    waiter(0x0880'2200, 1, 5, false, R + 0x28);  //A2
+    waiter(0x0880'2300, 1, 1, false, R + 0x2c);  //B2
+    Assembler main{m, 0x0880'1000};
+    auto start = [&](u32 entry) {  //below main's priority: it runs while main waits (its ID left in s1)
+      main.li(a0, m.string("waiter")); main.li(a1, entry); main.li(a2, 0x30); main.li(a3, 0x1000);
+      main.li(t0, 0); main.li(t1, 0);
+      main.call("sceKernelCreateThread");
+      main.put(addu(s1, v0, zero));
+      main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelStartThread");
+    };
+    auto delay = [&](u32 microseconds) { main.li(a0, microseconds); main.call("sceKernelDelayThread"); };
+    auto signal = [&](u32 n, u32 count) {
+      main.li(t0, Semaphores + n * 4); main.put(lw(a0, 0, t0)); main.li(a1, count);
+      main.call("sceKernelSignalSema");
+    };
+    auto count = [&](u32 n, u32 offset) {  //the semaphore's count, written down
+      main.li(t0, Info); main.li(t1, 56); main.put(sw(t1, 0, t0));
+      main.li(t0, Semaphores + n * 4); main.put(lw(a0, 0, t0)); main.li(a1, Info);
+      main.call("sceKernelReferSemaStatus");
+      main.li(t0, Info); main.put(lw(t1, 44, t0)); main.li(t0, R + offset); main.put(sw(t1, 0, t0));
+    };
+    for(u32 n = 0; n < 2; n++) {
+      main.li(a0, m.string("sema")); main.li(a1, 0); main.li(a2, 0); main.li(a3, 10); main.li(t0, 0);
+      main.call("sceKernelCreateSema");
+      main.li(t0, Semaphores + n * 4); main.put(sw(v0, 0, t0));
+    }
+    main.li(t0, Timeout); main.li(t1, 2000); main.put(sw(t1, 0, t0));
+    start(0x0880'2000);
+    start(0x0880'2100);
+    delay(1000);  //A waits, B behind it
+    signal(0, 3);
+    delay(5000);  //A's 2 ms run out
+    count(0, 0x30);
+    start(0x0880'2200);
+    main.put(addu(s2, s1, zero));
+    start(0x0880'2300);
+    delay(1000);  //A2 waits, B2 behind it
+    signal(1, 3);
+    main.put(addu(a0, s2, zero));
+    main.call("sceKernelTerminateDeleteThread");
+    main.li(t0, R + 0x34); main.put(sw(v0, 0, t0));
+    delay(1000);
+    count(1, 0x38);
+    for(u32 n = 0; n < 2; n++) {  //whoever still waits is told its semaphore is gone
+      main.li(t0, Semaphores + n * 4); main.put(lw(a0, 0, t0));
+      main.call("sceKernelDeleteSema");
+    }
+    delay(1000);
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    auto result = [&](u32 offset) { return m.system.memory.read(4, R + offset); };
+    CHECK(result(0x20), Kernel::ErrorWaitTimeout);
+    CHECK(result(0x24), 0);
+    CHECK(result(0x30), 2);
+    CHECK(result(0x2c), 0);
+    CHECK(result(0x34), 0);
+    CHECK(result(0x38), 2);
+    CHECK(m.notes.size(), 0);
+  }
+}
+
 //The user partition: the lowest place, the highest, at an address; what's left; freeing, but not a block the kernel
 //holds (a thread's stack, a memory pool's), which would leave its owner in memory handed out again: the machine's
 //state, which checks each owner's block, still loads.
@@ -544,6 +626,7 @@ static auto hello() -> void {
 auto kernelTests() -> Tests {
   return {
     {"kernel nids", nids}, {"kernel threads", threads}, {"kernel waiting", waiting},
+    {"kernel semaphores served past waiters that left", semaphoreWaitersLeave},
     {"kernel partitions", partitions}, {"kernel aligned blocks", alignedBlocks},
     {"kernel user partition", userPartition}, {"kernel sdk versions", sdkVersions},
     {"kernel start arguments", startArguments},

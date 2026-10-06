@@ -97,8 +97,8 @@ auto Kernel::poolWaiters(const Pool& pool) -> std::vector<Thread*> {
   return waiters;
 }
 
-//Room came back: the waiters get it in their order, while there's enough for the next (the PSP serves them in order:
-//one that doesn't fit holds up those behind it).
+//Room came back, or a waiter left without it (waiterLeft()): the waiters get it in their order, while there's enough
+//for the next (the PSP serves them in order: one that doesn't fit holds up those behind it).
 auto Kernel::poolWake(Pool& pool) -> void {
   for(auto thread : poolWaiters(pool)) {
     u32 address = poolTake(pool, thread->waitCount);

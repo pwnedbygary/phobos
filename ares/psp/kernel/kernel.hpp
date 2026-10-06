@@ -283,6 +283,7 @@ struct Kernel {
   auto reschedule() -> void;
   auto switchTo(Thread* thread) -> void;
   auto events() -> void;
+  auto waiterLeft(Wait wait, u32 id) -> void;
   auto idle(u64 end) -> bool;
   auto untilNextEvent() const -> u64;
   auto endThread(Thread& thread, s32 status) -> void;

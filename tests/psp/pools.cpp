@@ -1,6 +1,7 @@
 //Memory pools (ares/psp/kernel/pools.cpp): fixed pools handing out their lowest free block, variable pools pieces
-//of any size with their headers, threads waiting for room in their order and woken as it comes back, timeouts,
-//deletion and cancelling ending waits, the statuses, and the refusals. Programs run on both engines.
+//of any size with their headers, threads waiting for room in their order and woken as it comes back or as the one
+//in front leaves, timeouts, deletion and cancelling ending waits, the statuses, and the refusals. Programs run on
+//both engines.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -137,8 +138,83 @@ static auto poolWaits() -> void {
   }
 }
 
+//A variable pool's waiters are served in order, one that doesn't fit holding up those behind it; so when the one in
+//front leaves without being served, those behind it that fit get their room then, not at the next piece given back.
+//Main holds all but 0xd8 bytes of a pool: A waits for 0x100 bytes (2 ms at most) and B behind it for 0x40, and A's
+//time runs out; in a second pool, A2 waits for 0x100 and B2 behind it for 0x40, and main terminates A2. B and B2 get
+//their pieces as A and A2 go (they waited till their pool was deleted).
+static auto poolWaitersLeave() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    constexpr u32 Pools = R + 0x10, Timeout = R + 0x18;
+    //a waiter on pool n: allocates size bytes (2 ms at most, if timed), then writes down its result, after the
+    //piece's address
+    auto waiter = [&](u32 entry, u32 n, u32 size, bool timed, u32 result) {
+      Assembler w{m, entry};
+      w.li(t0, Pools + n * 4); w.put(lw(a0, 0, t0));
+      w.li(a1, size); w.li(a2, result + 4); w.li(a3, timed ? Timeout : 0);
+      w.call("sceKernelAllocateVpl");
+      w.li(t0, result); w.put(sw(v0, 0, t0));
+      w.call("sceKernelExitThread");
+    };
+    waiter(0x0880'2000, 0, 0x100, true, R + 0x20);   //A
+    waiter(0x0880'2100, 0, 0x40, false, R + 0x28);   //B
+    waiter(0x0880'2200, 1, 0x100, false, R + 0x30);  //A2
+    waiter(0x0880'2300, 1, 0x40, false, R + 0x38);   //B2
+    Assembler main{m, 0x0880'1000};
+    auto start = [&](u32 entry) {  //below main's priority: it runs while main waits (its ID left in s1)
+      main.li(a0, m.string("waiter")); main.li(a1, entry); main.li(a2, 0x30); main.li(a3, 0x1000);
+      main.li(t0, 0); main.li(t1, 0);
+      main.call("sceKernelCreateThread");
+      main.put(addu(s1, v0, zero));
+      main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelStartThread");
+    };
+    auto delay = [&](u32 microseconds) { main.li(a0, microseconds); main.call("sceKernelDelayThread"); };
+    for(u32 n = 0; n < 2; n++) {  //each pool's 0xfe0 bytes but 0xd8 held by main (0xf00 and its header)
+      main.li(a0, m.string("vpl")); main.li(a1, 2); main.li(a2, 0); main.li(a3, 0x1000); main.li(t0, 0);
+      main.call("sceKernelCreateVpl");
+      main.li(t0, Pools + n * 4); main.put(sw(v0, 0, t0));
+      main.put(addu(a0, v0, zero)); main.li(a1, 0xf00); main.li(a2, R + n * 4);
+      main.call("sceKernelTryAllocateVpl");
+    }
+    main.li(t0, Timeout); main.li(t1, 2000); main.put(sw(t1, 0, t0));
+    start(0x0880'2000);
+    start(0x0880'2100);
+    delay(1000);  //A waits, B behind it
+    delay(5000);  //A's 2 ms run out
+    start(0x0880'2200);
+    main.put(addu(s2, s1, zero));
+    start(0x0880'2300);
+    delay(1000);  //A2 waits, B2 behind it
+    main.put(addu(a0, s2, zero));
+    main.call("sceKernelTerminateThread");
+    main.li(t0, R + 0x40); main.put(sw(v0, 0, t0));
+    delay(1000);
+    for(u32 n = 0; n < 2; n++) {  //whoever still waits is told its pool is gone
+      main.li(t0, Pools + n * 4); main.put(lw(a0, 0, t0));
+      main.call("sceKernelDeleteVpl");
+    }
+    delay(1000);
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    auto result = [&](u32 offset) { return m.system.memory.read(4, R + offset); };
+    CHECK(result(0x20), Kernel::ErrorWaitTimeout);
+    CHECK(result(0x28), 0);
+    CHECK(result(0x2c), result(0x00) + 0xf08);  //past main's piece and its header
+    CHECK(result(0x38), 0);
+    CHECK(result(0x3c), result(0x04) + 0xf08);
+    CHECK(result(0x40), 0);
+    CHECK(m.notes.size(), 0);
+  }
+}
+
 auto poolTests() -> Tests {
-  return {{"pools called directly", poolCalls}, {"pools waited for", poolWaits}};
+  return {
+    {"pools called directly", poolCalls}, {"pools waited for", poolWaits},
+    {"pools served past waiters that left", poolWaitersLeave},
+  };
 }
 
 }
