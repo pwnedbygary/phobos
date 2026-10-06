@@ -22,8 +22,11 @@
 //The SRC channel: one more output beside the mixer, reached by two families of calls (sceAudioOutput2*, and
 //sceAudioSRC* with a rate of its own), with two slots ("armed" buffers, played one after the other) and a completion
 //flag. An output arms its buffer and then waits for a completion: one pending lets it return at once (starting from
-//idle makes one), else it returns when the buffer playing has finished. A buffer's transfer takes its samples' time
-//at the channel's rate; the next one armed carries straight on.
+//idle makes one), else it returns when the buffer playing has finished. A buffer plays for its samples' time at the
+//channel's rate; the next one armed carries straight on. Its slot frees as its transfer ends, about 100
+//microseconds before its last samples are heard (pspautotests' audio/output2/rest: a 64-sample buffer, 1451
+//microseconds long, reads as gone after "13XX"): so the first buffer after an idle stretch retires 100 microseconds
+//short of its length, and each one chained after it a whole buffer later, which keeps a stream's pace.
 //
 //The samples aren't mixed yet: the system's sound stream plays silence (System::run()). What a mixer needs is here,
 //at the moments the PSP's takes it: mixerBlock() is where each channel's block of 64 samples is taken (at buffer, so
@@ -159,10 +162,9 @@ auto Kernel::srcDuration(u32 samples) const -> u64 {
 }
 
 //The SRC channel's first armed buffer has been transferred: its slot is free, and the second, if there is one, plays
-//on from here, at once. That's a completion: it wakes the thread waiting for one, or stays pending for the next
-//output to take. Once nothing is armed, the threads waiting for the channel to drain return as well. (The PSP
-//retires a buffer as its transfer ends, about 100 microseconds before its end is heard; nothing is heard here yet.)
-//Returns whether a thread woke.
+//on from here, at once, retiring a whole buffer later (both 100 microseconds ahead of what's heard: srcOutput()).
+//That's a completion: it wakes the thread waiting for one, or stays pending for the next output to take. Once
+//nothing is armed, the threads waiting for the channel to drain return as well. Returns whether a thread woke.
 auto Kernel::srcRetire() -> bool {
   auto& src = audio.src;
   src.buffers[0] = src.buffers[1];
@@ -357,10 +359,10 @@ auto Kernel::srcRelease() -> void {
 //(volume, buffer), for either family. The volume first: 0 to 0xFFFFF, a negative one refused (INVALID_VOLUME); then
 //the reservation (NOT_RESERVED); then, with both slots armed, BUSY at once, whoever else waits. Otherwise a real
 //buffer is armed in the free slot, with the channel's sample count as it is now (sceAudioOutput2ChangeLength's later
-//changes are for later buffers), playing at once if nothing was; and the call waits for a completion. One pending is
-//taken and the call returns at once (starting from idle makes one, so the first output after a pause doesn't wait);
-//else it returns as the buffer playing finishes, one buffer's time in a steady stream. It returns the sample count
-//its buffer was armed with.
+//changes are for later buffers), playing at once if nothing was, its transfer ending (it retires) 100 microseconds
+//before it's been heard; and the call waits for a completion. One pending is taken and the call returns at once
+//(starting from idle makes one, so the first output after a pause doesn't wait); else it returns as the buffer
+//playing retires, one buffer's time in a steady stream. It returns the sample count its buffer was armed with.
 //
 //A null buffer arms nothing and returns 0: at once if nothing is armed, else once everything armed has played.
 //
@@ -380,7 +382,7 @@ auto Kernel::srcOutput() -> void {
     return block(Wait::Audio, Audio::WaitSrcDrain, 0);
   }
   if(!src.armed) {
-    src.retireAt = cycles + srcDuration(src.sampleCount);
+    src.retireAt = cycles + srcDuration(src.sampleCount) - Audio::SrcLead;
     src.completion = true;
   }
   src.buffers[src.armed++] = {buffer, src.sampleCount, u32(volume)};

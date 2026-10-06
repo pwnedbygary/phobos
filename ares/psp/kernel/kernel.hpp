@@ -703,6 +703,10 @@ struct Kernel {
     static constexpr u32 BlockFraction = CPUFrequency * 64 * 49 / 44'100 % 49;
     static_assert((BlockCycles * 49 + BlockFraction) * 44'100 == CPUFrequency * 64 * 49);
     static constexpr u32 WaitSrc = 8, WaitSrcDrain = 9;  //waitIDs on the SRC channel (0-7: the mixer channels)
+    //An SRC buffer's slot frees as its transfer ends, 100 microseconds before its last samples are heard
+    //(srcOutput()); the shortest buffer, 17 samples at 48 kHz, plays for 354.
+    static constexpr u64 SrcLead = CPUFrequency / 10'000;
+    static_assert(17 * CPUFrequency / 48'000 > SrcLead);
     struct Channel {
       bool reserved = false;
       u32 sampleCount = 0;            //samples in each buffer handed over: a multiple of 64, from 64 to 65472

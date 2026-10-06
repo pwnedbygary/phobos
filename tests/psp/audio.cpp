@@ -1,7 +1,8 @@
 //Sound output's channels (ares/psp/kernel/audio.cpp): reserving and releasing, the refusals, and the timing that
 //paces games: a buffer takes its samples' time to play, 64 at a time, its first 64 taken as it arrives, and a
-//blocking output waits for the channel's last buffer to finish. Programs run on both engines. Expected values are
-//pspautotests' (audio/*, intr/waits: results recorded on a PSP) where they have one.
+//blocking output waits for the channel's last buffer to finish (on the SRC channel, for its transfer to end, 100
+//microseconds before that). Programs run on both engines. Expected values are pspautotests' (audio/*, intr/waits:
+//results recorded on a PSP) where they have one.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -11,6 +12,9 @@ constexpr u32 R = KernelMachine::Results;
 constexpr u32 Buffer = 0x0893'0000;
 //a block of 64 samples at 44.1 kHz, in microseconds
 constexpr double Block = 64.0 * 1'000'000 / 44'100;
+//how long before an SRC buffer has been heard its slot frees, in microseconds: the first after an idle stretch
+//retires this much short of its length, those chained after it a whole buffer later
+constexpr double Lead = 100;
 auto near(u32 measured, double expected) -> bool { return measured >= expected - 2 && measured <= expected + 30; }
 }
 
@@ -111,9 +115,10 @@ static auto blockingTiming() -> void {
 }
 
 //The SRC channel (sceAudioOutput2): two buffers at most, one after the other; a blocking output returns once a
-//buffer has finished since the last (the first at once: starting counts), so outputs return 0, 1 and 2 buffers'
-//time in. While two are queued (the main thread waiting), another thread finds them counted, a third refused, and
-//the channel not releasable; once the main thread is done, one plays. Sizes and rates out of range refused.
+//buffer has retired since the last (the first at once: starting counts), so outputs return 0, 1 and 2 buffers' time
+//in, less the 100 microseconds the transfers run ahead. While two are queued (the main thread waiting), another
+//thread finds them counted, a third refused, and the channel not releasable; once the main thread is done, one
+//plays. Sizes and rates out of range refused.
 static auto sourceChannel() -> void {
   for(bool recompile : {false, true}) {
     KernelMachine m;
@@ -155,8 +160,9 @@ static auto sourceChannel() -> void {
     double buffer = 1024.0 * 1'000'000 / 44'100;
     for(u32 n = 0; n < 3; n++) {
       u32 measured = m.system.memory.read(4, R + n * 4);
-      CHECK(near(measured, n * buffer), true);
-      if(!near(measured, n * buffer)) std::printf("  output %u returned at %u, not %.0f\n", n, measured, n * buffer);
+      double expected = n ? n * buffer - Lead : 0;
+      CHECK(near(measured, expected), true);
+      if(!near(measured, expected)) std::printf("  output %u returned at %u, not %.0f\n", n, measured, expected);
       CHECK(m.system.memory.read(4, R + 0x20 + n * 4), 1024);
     }
     CHECK(m.system.memory.read(4, R + 0x30), 2048);
@@ -308,10 +314,11 @@ static auto mixerTimeline() -> void {
 
 //Draining, by a program. A blocking output of a null buffer: at once on an idle channel; on a busy one, once its
 //buffer has gone (15 blocks after it came), leaving its count as what remains to one rest length and not the other.
-//The SRC channel: a 64-sample buffer retired 1451 microseconds after it's armed, so a release 1 ms on is refused and
-//one 2 ms on isn't; sceAudioOutput2ChangeLength counting an armed buffer at the new length; a null output waiting
-//till everything armed has played, then returning at once; buffers at 48 kHz playing in 2048/48000 s; a rate of 0
-//playing at 44.1 kHz. (pspautotests' audio/blocking/contend, restlen, audio/output2/release, changelength,
+//The SRC channel: a 64-sample buffer retired 1351 microseconds after it's armed (100 short of its 1451, as its
+//transfer ends), so a release 1 ms on is refused and one 2 ms on isn't; sceAudioOutput2ChangeLength counting an
+//armed buffer at the new length; a null output waiting till everything armed has retired, then returning at once;
+//buffers at 48 kHz playing in 2048/48000 s; a rate of 0 playing at 44.1 kHz; each first buffer from idle retiring
+//100 microseconds short. (pspautotests' audio/blocking/contend, restlen, audio/output2/release, changelength,
 //frequency.)
 static auto draining() -> void {
   for(bool recompile : {false, true}) {
@@ -373,11 +380,11 @@ static auto draining() -> void {
     CHECK(m.kernel.exited, true);
     auto result = [&](u32 offset) { return m.system.memory.read(4, R + offset); };
     CHECK(near(result(0x00), 15 * Block), true);
-    CHECK(near(result(0x04), 4096.0 * 1'000'000 / 44'100), true);
-    CHECK(near(result(0x08), 4096.0 * 1'000'000 / 44'100), true);
-    CHECK(near(result(0x0c), 2048.0 * 1'000'000 / 48'000), true);
-    CHECK(near(result(0x10), 2 * 2048.0 * 1'000'000 / 48'000), true);
-    CHECK(near(result(0x14), 2048.0 * 1'000'000 / 44'100), true);
+    CHECK(near(result(0x04), 4096.0 * 1'000'000 / 44'100 - Lead), true);
+    CHECK(near(result(0x08), 4096.0 * 1'000'000 / 44'100 - Lead), true);
+    CHECK(near(result(0x0c), 2048.0 * 1'000'000 / 48'000 - Lead), true);
+    CHECK(near(result(0x10), 2 * 2048.0 * 1'000'000 / 48'000 - Lead), true);
+    CHECK(near(result(0x14), 2048.0 * 1'000'000 / 44'100 - Lead), true);
     u32 expected[] = {
       0, 1024, 1024, 1024, 1024, 0, 0,                                         //0x80-0x98: the mixer channel
       0, 64, Kernel::ErrorAudioChannelAlreadyReserved, Kernel::ErrorAudioChannelAlreadyReserved, 0,
@@ -489,11 +496,71 @@ static auto contexts() -> void {
   }
 }
 
+//pspautotests' audio/output2/rest, as a PSP ran it: reserve 64 samples, hand a buffer over (from idle: at once,
+//0x40), read the rest (0x40), then poll the clock and the rest until it changes, and report the microseconds in
+//hundreds: "13XX" on a PSP, the slot freeing as the transfer ends, 100 microseconds before the buffer's 1451 have
+//been heard; then release, and the rest of a channel not reserved. Through sceAudioOutput2* and sceAudioSRC* alike.
+//The poll waits a microsecond a round where the PSP's spun: here the clock a system function reads moves on between
+//the CPU's runs (each to the next thing due), not with each instruction, so a spinning loop reads it as it was when
+//its run began.
+static auto sourceRest() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    Assembler main{m, 0x0880'1000};
+    main.li(s1, R);
+    for(u32 family = 0; family < 2; family++) {
+      u32 at = family * 0x20;
+      auto store = [&](u32 offset) { main.put(sw(v0, at + offset, s1)); };
+      main.li(a0, 64); main.li(a1, 44'100); main.li(a2, 2);  //(sceAudioOutput2Reserve reads the count alone)
+      main.call(family ? "sceAudioSRCChReserve" : "sceAudioOutput2Reserve");
+      store(0x00);
+      main.li(a0, 0x7fff); main.li(a1, Buffer);
+      main.call(family ? "sceAudioSRCOutputBlocking" : "sceAudioOutput2OutputBlocking");
+      store(0x04);
+      main.call("sceAudioOutput2GetRestSample");
+      store(0x08);
+      main.call("sceKernelGetSystemTimeLow");
+      main.put(addu(s0, v0, zero));
+      u32 loop = main.here();  //a microsecond on, the clock, then the rest, until the rest isn't 0x40
+      main.li(a0, 1);
+      main.call("sceKernelDelayThread");
+      main.call("sceKernelGetSystemTimeLow");
+      main.put(addu(s2, v0, zero));
+      main.call("sceAudioOutput2GetRestSample");
+      main.li(t0, 0x40);
+      main.put(beq(v0, t0, int32_t(loop - (main.here() + 4)) / 4));
+      main.put(nop);
+      store(0x0c);
+      main.put(subu(v0, s2, s0));
+      store(0x10);
+      main.call(family ? "sceAudioSRCChRelease" : "sceAudioOutput2Release");
+      store(0x14);
+      main.call("sceAudioOutput2GetRestSample");
+      store(0x18);
+    }
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    for(u32 at : {0x00u, 0x20u}) {
+      auto result = [&](u32 offset) { return m.system.memory.read(4, R + at + offset); };
+      CHECK(result(0x00), 0);
+      CHECK(result(0x04), 0x40);
+      CHECK(result(0x08), 0x40);
+      CHECK(result(0x0c), 0);
+      CHECK(result(0x10) / 100, 13);  //"Rest (after 13XXus): 00000000"
+      if(result(0x10) / 100 != 13) std::printf("  the rest changed after %u microseconds\n", result(0x10));
+      CHECK(result(0x14), 0);
+      CHECK(result(0x18), Kernel::ErrorAudioChannelNotReserved);
+    }
+    CHECK(m.notes.size(), 0);
+  }
+}
+
 auto audioTests() -> Tests {
   return {
     {"audio channels", channels}, {"audio blocking timing", blockingTiming}, {"audio src channel", sourceChannel},
     {"audio 64-sample pacing", pacing}, {"audio mixer timeline", mixerTimeline}, {"audio draining", draining},
-    {"audio waits refused", contexts},
+    {"audio waits refused", contexts}, {"audio src rest", sourceRest},
   };
 }
 
