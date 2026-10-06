@@ -1865,3 +1865,162 @@ module_start never ran its entry point, and modules' own thread parameters were 
 module_stop ending in `sceKernelExitThread` kept its thread and stack for good; states' modules were checked no
 further than their IDs; and the decrypter's round-trip tests shared its key tables, so the keys' digests are now
 pinned (part 18).
+
+## Part 20: more functions games ask for
+
+On branch `cursor/psp-hle-games2-2b67`, on top of part 17's (`cursor/psp-hle-games-2b67`, #145, itself on parts 18
+and 19's #144). The RP6 run of the whole stack had each of the owner's games stop at a function the kernel didn't
+have; this part gives them those, found game by game with a scratch host runner (never committed: the system as
+`tests/psp/ares` builds it, booting the owner's CHDs, tracing system calls, dumping frames and memory). What each
+function does comes from pspsdk's headers (names, arguments, structures, pspkerror.h's errors), pspautotests' test
+programs and the results they recorded on a PSP, and the games' own behavior; the PSP Developer Wiki has nothing on
+these libraries. No other emulator's code was read. Where a behavior isn't known, the code says what was chosen and
+why (what games accept).
+
+- **Asynchronous file requests** (`async.cpp`): sceIoOpenAsync, CloseAsync, ReadAsync, WriteAsync, LseekAsync,
+  Lseek32Async and IoctlAsync, then sceIoPollAsync, WaitAsync, WaitAsyncCB and GetAsyncStat for the result, plus
+  ChangeAsyncPriority and SetAsyncCallback. A file takes one request at a time. The request is done as it's made (the
+  bytes are in the program's memory at once), but its result (64 bits: what the synchronous call returns, an error
+  sign-extended) is held back for the time the device takes: 100 microseconds plus the bytes at the UMD drive's top
+  rate, 11 Mbit/s (1,375,000 bytes a second), for the disc, or 4 MB a second for the memory stick (or a host folder
+  standing for the disc); the drive's seeks aren't counted. Meanwhile a poll answers 1 and a wait blocks the thread
+  (the kernel's loop treats a request coming due as an event, like a vertical blank); then the result waits on the
+  file for the program to take, a waiting thread taking it at once, and the file's callback is notified (with a CB
+  wait, it runs before the wait takes the result). Every other call on a file with a request under way is refused
+  (ASYNC_BUSY), as is a second request; a poll or wait with nothing to take gets NOASYNC (both pspkerror.h's). An
+  asynchronous open gives its descriptor at once, which is also its result; one that fails leaves a descriptor holding
+  only the error, gone once that's taken, as a file closed asynchronously is. pspautotests has no test of these
+  functions, so all of that is chosen as games accept it: Burnout Legends polls before its first read (NOASYNC); the
+  priority (0x08-0x77, -1 for files to come: Burnout passes 0x65, GTA 0x40, SOCOM 0x13) is checked but not used.
+- **sceSasCore, silent** (`sas.cpp`): every function. Its voices (VAG ADPCM blocks, 16-bit PCM, noise, waves,
+  ATRAC3) keep their parameters, their ADSR envelope's height and where they are in their samples, and end as they
+  would: a VAG voice at a block marked as its end (flags 1, 7, 0x41, 0x87 in audio/sascore/vag; 3 loops when the
+  voice loops, 4 marks where to) or at its data's last byte, read block by block as it gets there (so data a game
+  streams ahead counts); a PCM voice at its last sample unless it loops; any voice when its release reaches 0. The
+  end flags are refreshed by __sceSasCore alone; its buffer gets silence, __sceSasCoreWithMix's is left as it was.
+  What each call takes and refuses is audio/sascore's recordings: __sceSasInit's checks in order (the core 64-byte
+  aligned, a grain of 64-2048 in 64s, 1-32 voices, output mode 0 or 1, 44100 Hz), volumes of -0x1000 to 0x1000,
+  pitches to 0x4000, VAG sizes in 16s (negative ones taken), PCM counts of 1-65536, each envelope phase's curves,
+  keying on and off (INVALID_STATE on, twice, off unkeyed, either paused). The envelope moves a sample at a time,
+  a voice keyed on starting 32 samples into the next grain (keyon: 0x60000 after one grain of 128 at 0x1000); the
+  linear curves, exponent rev (height * rate / 2^32 a sample, rounded up) and linear bent (the rate up to three
+  quarters of the top, inclusive, a quarter above) give adsrcurve's figures exactly; exponent (attack and sustain
+  only) is an approximation. __sceSasSetSimpleADSR's SPU words become rates by formulas worked out from setadsr's
+  table. Lumines, Brave Story and Space Invaders Extreme had stopped or failed their sound at __sceSasInit.
+- **Message pipes and mailboxes** (`messages.cpp`): sceKernelCreateMsgPipe, Delete, Send, SendCB, TrySend, Receive,
+  ReceiveCB, TryReceive, Cancel and ReferMsgPipeStatus; CreateMbx, DeleteMbx, SendMbx, ReceiveMbx, ReceiveMbxCB,
+  PollMbx, CancelReceiveMbx and ReferMbxStatus. A pipe's buffer (any size, none too) is a ring taken from the user
+  partition; a send gives waiting receivers their bytes straight across, then fills the buffer; a receive empties the
+  buffer, then takes from waiting senders straight across, the buffer taking in what the next senders hold. Each
+  waits for its whole message (mode 0) or anything (1), in line: a sender whose message doesn't fit holds up a later
+  small one, and whatever a thread moved is written where it asked however its wait ends (done, timed out,
+  cancelled, deleted). As threads/msgpipe's create, send, receive, trysend, tryreceive and cancel recorded, down to
+  a receiver given half its message by one send timing out with that half. A mailbox queues packets (in order, or by
+  their priority byte with attribute 0x400; threads by priority with 0x100), keeping their first words written as the
+  PSP's ring (threads/mbx: a packet alone points at itself); the queue itself is the kernel's, so a program writing
+  over those words loses nothing (on a PSP it can); a packet sent while queued is refused (0x800201c9, as mbx/send
+  recorded). Not shown by the tests, chosen: which of a bad mode and a bad size comes first; pipe attributes 0x100
+  and 0x1000 lining up receivers and senders by priority, 0x4000 taking the buffer from the partition's top. Peace
+  Walker's file system ("kfs io0" and the rest) runs on them, with the asynchronous requests.
+- **Movies** (`mpeg.cpp`): sceMpeg set up with the sizes video/mpeg recorded (a ringbuffer 0x868 bytes a packet,
+  the library 0x10000; sceMpegRingbufferConstruct filled in as ringbuffer/construct shows, refusing over 4096 packets
+  or a negative size; sceMpegCreate's "LIBMPEG"), then sceMpegQueryStreamOffset can't read any movie's header
+  (0x80610022, construct's error for a value refused) and every stream is empty (sceMpegGetAvcAu: 0x80618001,
+  basic's "no data"; sceMpegAtracDecode 0x807f00fd). Games skip their movies either way: GTA gives the movie up at
+  the header, Burnout Legends and Dominator play on and find it ended at once. With every sceMpeg call missing,
+  Burnout had taken a ringbuffer size of 0x8002013a and crashed writing through a null pointer.
+- **ATRAC3plus** (`atrac.cpp`): sceAtrac3plus's six IDs handed out and back, but every stream refused as one the
+  library can't read (0x80630006, audio/atrac/setdata's for zeroed data), the rest refusing their ID (0x80630005,
+  setdata's for an ID not handed out); none free: 0x80630007. Games go without music: SOCOM prints "snd_stream:
+  couldn't get ATRACID" and carries on.
+- **The network** (`net.cpp`): sceNet, sceNetAdhoc, sceNetAdhocctl, sceNetAdhocMatching, sceNetInet,
+  sceNetResolver and sceNetApctl with the wireless LAN switched off (sceWlanGetSwitchState says so already): the
+  libraries start and stop (their init and term succeed, as setting up the stack needs no radio), and whatever would
+  reach another PSP or an access point fails with NOT_SUPPORTED (uOFW's errors.h; what a PSP returns isn't known
+  here); lists come back empty, the state disconnected. Snoopy vs. the Red Baron left at once when its starts failed;
+  it and Burnout Dominator start them at boot.
+- **Fonts** (`font.cpp`): sceLibFont with no fonts installed, until the owner's flash0 provides the PGF files: the
+  library starts, lists none, finds and opens none (NOT_FOUND written where an error's address is given), a font's
+  details refused; points and pixels convert at 128 dots an inch, or sceFontSetResolution's. Peace Walker and
+  Gunhound EX ask for fonts and draw their text without them.
+- **Odds and ends**: sceRtcGetCurrentClock (a time zone), GetCurrentClockLocalTime (the host's), GetTime_t, and
+  GetDosTime/SetDosTime (rtc/convert's figures: 2107-09-11 24:00 is 4281057280; before 1980 or after 2107, -1);
+  sceOpenPSIDGetOpenPSID (one made-up console: "PHOBOS"); sceDisplayGetAccumulatedHcount (286 lines a frame) and
+  GetFramePerSec (59.94); sceKernelIsCpuIntrEnable; Kernel_Library's sceKernelMemset and sceKernelMemcpy (as memmove);
+  scePower's 0x469989ad and 0xebd177d6, later SDKs' scePowerSetClockFrequency (Gunhound EX calls the first with
+  333, 333, 166, Peace Walker the second); sceKernelGetGPI (no debug switches); sceAtracReinit;
+  sceUtilityLoadAvModule and UnloadAvModule (the modules 0x300-0x307); sceKernelGetThreadCurrentPriority;
+  sceKernelRotateThreadReadyQueue (0 or 0x08-0x77, threads/threads/rotate's refusals); sceKernelSuspendDispatchThread
+  and ResumeDispatchThread (the running thread keeps the CPU, a wait meanwhile refused with CAN_NOT_WAIT; what they
+  return is chosen: 1, then 0, the pair working whichever way the state is read); sceKernelLockLwMutexCB.
+- **Two fixes Peace Walker found.** Its power callback, notified as it's registered (power's recorded run shows the
+  PSP does that), ran inside sceKernelLockLwMutexCB on a free mutex while the game held the lock the callback takes,
+  and deadlocked it. The lightweight mutexes are Kernel_Library's, a user-mode library whose free lock never enters
+  the kernel: such a lock no longer runs callbacks (the CB functions that do enter it still run the callbacks
+  notified, waiting or not, as part 17 has them). Then its C library read a pointer for the thread at k0 + 4 from the
+  0xff a new stack is filled with, and crashed: a thread's top 256 bytes, the kernel's, where k0 points, now start
+  zeroed (the free stack counted from the bottom is unchanged).
+- **States** carry all of it (files' requests, sceSas, pipes and their buffers' blocks, mailboxes, threads'
+  transfers, the ATRAC IDs, dispatch held off, the font resolution), each checked on loading: a request on a folder
+  or due later than any can take (64 MiB from the disc: under a minute), a descriptor for a result it hasn't got, a
+  thread waiting on a file with no request; sceSas settings and voices its functions never leave (a curve or phase
+  there isn't, a PCM voice past its samples, a VAG size not in 16s, a voice on that isn't playing); a pipe's ring
+  past its buffer, its buffer not its block or another's (the one-owner rule now counts pipes), a thread waiting on
+  a pipe for more than it holds; a mailbox's packet queued twice or where there's no memory. A file dropped on
+  loading (gone from the host, or no disc) tells a thread waiting on its request it's a bad file. The layout is
+  version 5: a state of version 1 to 4 is refused by its header.
+
+What the games do now, on the host (frames from the scratch runner, kept outside the repository, under
+`/tmp/hle2-runner/out`):
+
+- **Lumines**: through its title to its gameplay demo ("Use directional buttons to move left or right"), sound
+  initialized (its voices silent); nothing missing in 2400 frames.
+- **Burnout Legends**: past its loading screen (asynchronous reads) and its movie to "PRESS START BUTTON TO
+  CONTINUE"; with Start, its profile screen ("LOAD PROFILE / NEW PROFILE"). Nothing missing.
+- **Burnout Dominator**: "Press START button", then its profile screen ("Load Profile / Create Profile").
+- **Midnight Club 3**: its title ("PRESS START BUTTON"), then "Load Profile / Create Profile / Delete Save Data".
+- **SOCOM Fireteam Bravo**: "No SOCOM Fireteam Bravo Data was found on the Memory Stick Duo"; confirmed, on to its
+  credits ("Developed ..."). No music (ATRAC3plus).
+- **Snoopy vs. the Red Baron**: its "No Snoopy vs. the Red Baron save file found" warning (RETRY / CONTINUE WITHOUT
+  LOADING / CREATE NEW FILE); it had exited at its network starts.
+- **Space Invaders Extreme**: its title screen ("PRESS START BUTTON"), for the first time.
+- **Metal Gear Solid Peace Walker**: its title screen (the logo and Konami's line; its text, drawn with the system's
+  fonts, missing); nothing missing on the way (it had asked for sceKernelGetGPI, sceAtracReinit and scePower
+  0xebd177d6).
+- **GTA Liberty City Stories, Vice City Stories, Sindacco Chronicles**: past their movies (skipped) to their loading
+  screens, the bar at about 85%, where they stay: the main thread waits for a queue of 16-byte entries
+  (0x08e6258c-0x08e62590 in LCS: one left) to drain, polling event flag 0x115; what empties it isn't found yet.
+- **Gunhound EX**: its Dracue logo, then a black screen, drawing (asking for its fonts' details thousands of times);
+  likely text in the system's fonts.
+- **Brave Story**: past __sceSasInit and its asynchronous reads (16 KiB at a time, polled with 1-microsecond delays),
+  on its Game Republic logo for at least 6000 frames, reading slowly; the next step isn't found yet.
+- **Street Fighter III port**: as before (its intro art).
+
+Tests (`tests/psp/run-tests.sh`, 180 groups, both sanitizers; `tests/psp/ares` 236 checks):
+- `async.cpp`: requests called directly (a read's bytes and its result held back exactly 100 microseconds plus its
+  bytes at 4 MB a second, polls before and after, every other call refused meanwhile, seeks, a read past the end, a
+  write refused as its result, an ioctl, a result never taken overwritten, the asynchronous close and failed open
+  and their descriptors, the disc's rate, the priority's and callback's checks); a program waiting (1100
+  microseconds exactly, a worker running meanwhile, the callback run in the CB wait before its result); a state saved
+  while waiting on the disc, and with no disc the waiter told.
+- `sas.cpp`: every refusal above from audio/sascore's recordings; envelopes grain by grain (keyon's, keyoff's,
+  adsrcurve's attack, bent attack and exponent rev decay, exactly); voices ending in a program on both engines (VAG
+  unmarked, VAG looping, PCM at two pitches, PCM looping).
+- `messages.cpp`: create's refusals; sends and receives through the ring (wrapping), ASAP's part, the try
+  functions'; a program with receivers waiting part way and timing out with their half, senders in line, a pipe
+  without a buffer and its deletion; mailboxes in order and by priority, their linked words, waiting threads,
+  cancelling, deleting, a timeout; a state with a receiver waiting part way, carried on in another machine.
+- `media.cpp`: sceMpeg's sizes, ringbuffer and refusals; ATRAC IDs and refusals; the network off; the date, DOS
+  times, the OpenPSID, the line count, the rate, memcpy and memset, the clock setter, the AV modules, the priority
+  refusals; in a program, rotating, the current priority, dispatch held off and resumed, the free lightweight mutex's
+  CB lock not running callbacks; fonts missing; the kernel's 256 bytes zeroed.
+- `states.cpp`'s "state fields" changes every new field and refuses 36 more states (above).
+- Broken versions each failed: requests done at once (the async groups and "state fields"), a sender not waiting in
+  line and transfers' counts not written ("message pipes waited for", "message pipes state"), sceSas's 32-sample
+  start left out ("sas envelopes"), the kernel's 256 bytes left as 0xff ("threads kernel area zeroed").
+
+Uncertain: asynchronous requests' timing and every choice listed with them; the async priority unused; sceSas's
+exponent curve, the reading of VAG flags beyond those recorded, a keyed-on voice with no samples ending at the next
+grain; pipe attributes, mpeg's and the network's error numbers for headers and radios, sceLibFont's errors; the
+dispatch functions' return values; and whether the PSP zeroes the whole of a thread's kernel area (Peace Walker
+needs k0 + 4 zero).

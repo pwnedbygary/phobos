@@ -78,6 +78,10 @@ static auto atracStubs() -> void {
   CHECK(m.call("sceAtracDecodeData", {0, Buffer, R, R + 4, R + 8}), 0x8063'0005);
   CHECK(m.call("sceAtracGetRemainFrame", {0, R}), 0x8063'0005);
   CHECK(m.kernel.atracIDs, 0x37);
+  CHECK(m.call("sceAtracReinit", {4, 1}), Kernel::ErrorBusy);  //IDs handed out
+  for(u32 id : {0u, 1u, 2u, 4u, 5u}) m.call("sceAtracReleaseAtracID", {id});
+  CHECK(m.call("sceAtracReinit", {999, 0}), Kernel::ErrorOutOfMemory);
+  CHECK(m.call("sceAtracReinit", {4, 1}), 0);
   CHECK(m.notes.size(), 0);
 }
 
@@ -181,6 +185,10 @@ static auto oddsAndEnds() -> void {
   m.kernel.syscall(m.kernel.importCode("scePower", 0x4699'89ad));
   CHECK(m.system.ipu.r[2], 0);
   CHECK(m.kernel.powerState.pll == 333 && m.kernel.powerState.cpu == 333 && m.kernel.powerState.bus == 166, true);
+  m.system.ipu.r[4] = 222, m.system.ipu.r[5] = 222, m.system.ipu.r[6] = 111;
+  m.kernel.syscall(m.kernel.importCode("scePower", 0xebd1'77d6));
+  CHECK(m.system.ipu.r[2] == 0 && m.kernel.powerState.cpu == 222, true);
+  CHECK(m.call("sceKernelGetGPI", {}), 0);
   CHECK(m.call("sceUtilityLoadAvModule", {1}), 0);
   CHECK(m.kernel.utilityModules == std::vector<u32>{0x301}, true);
   CHECK(m.call("sceUtilityLoadAvModule", {1}), 0x8011'1102);

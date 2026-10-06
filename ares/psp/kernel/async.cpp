@@ -73,7 +73,8 @@ auto Kernel::asyncTake(u32 file, u32 pointer) -> void {
 //The thread waiting on a file's request, if one is (it's still waiting, not running its callbacks).
 auto Kernel::asyncWaiter(u32 file) -> Thread* {
   for(auto& [uid, thread] : threads) {
-    if(thread->status == Status::Waiting && thread->wait == Wait::Async && thread->waitID == file) return thread.get();
+    if(thread->status != Status::Waiting || thread->wait != Wait::Async) continue;
+    if(thread->waitID == file) return thread.get();
   }
   return nullptr;
 }

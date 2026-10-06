@@ -979,6 +979,7 @@ struct Kernel {
   u32 atracIDs = 0;  //the IDs handed out, a bit each (0-5)
   auto sceAtracGetAtracID() -> void;
   auto sceAtracReleaseAtracID() -> void;
+  auto sceAtracReinit() -> void;
   auto sceAtracSetDataAndGetID() -> void;
   auto sceAtracSetData() -> void;
   auto sceAtracNoStream() -> void;
@@ -1103,6 +1104,7 @@ struct Kernel {
   auto sceKernelUtilsMt19937UInt() -> void;
   auto sceKernelPrintf() -> void;
   auto sceKernelSetGPO() -> void;
+  auto sceKernelGetGPI() -> void;
   auto sceWlanGetSwitchState() -> void;
   auto sceWlanGetEtherAddr() -> void;
   auto sceImposeSetLanguageMode() -> void;

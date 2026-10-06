@@ -194,8 +194,9 @@ static auto asyncWaits() -> void {
     main.call("sceKernelExitGame");
     m.runProgram(0x0880'1000, recompile);
     CHECK(m.kernel.exited, true);
-    CHECK(m.output == "worker\nmain woke\ncallback\ncallback\nmain woke again\n", true);
-    if(m.output != "worker\nmain woke\ncallback\ncallback\nmain woke again\n") std::printf("  [%s]\n", m.output.c_str());
+    std::string expected = "worker\nmain woke\ncallback\ncallback\nmain woke again\n";
+    CHECK(m.output == expected, true);
+    if(m.output != expected) std::printf("  [%s]\n", m.output.c_str());
     CHECK(word(m, R + 4) - word(m, R), 1100);
     CHECK(result64(m, R + 0x10), 4000);
     CHECK(result64(m, R + 0x18), 4000);

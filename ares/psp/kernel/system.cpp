@@ -226,6 +226,11 @@ auto Kernel::sceKernelSetGPO() -> void {
   result(0);
 }
 
+//The debug switches some PSPs have: none set (Peace Walker reads them).
+auto Kernel::sceKernelGetGPI() -> void {
+  result(0);
+}
+
 //The wireless LAN: its switch is off (0), and its address is a made-up one (a locally administered MAC).
 auto Kernel::sceWlanGetSwitchState() -> void {
   result(0);

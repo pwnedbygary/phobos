@@ -21,12 +21,12 @@
 //  reaches its target, the next going on from the following sample (adsrcurve: an attack of 0x1000000 at a grain of
 //  64 reaches the top 32 samples into its second grain and decays by 32 at rate 1 to 0x3fffffe0).
 //- The curves (pspsdk's names): linear increase adds the rate, linear decrease takes it away, direct sets the height
-//  to it; exponent rev takes away height * rate / 2^32 a sample, rounded up, so it always reaches 0 (adsrcurve's decay:
-//  0x40000000 to 0x3f01f557, 0x3e07db13, 0x3d11a192 grain by grain at 0x100000, and 1 a sample at rates 1-4, 2 at
-//  5-8, exactly); linear bent adds the rate up to three quarters of the top (that reached, once more) and a quarter
-//  of it above (adsrcurve's 0x100000 bends to 0x308c0000, then reaches the top at 0x3fffffdd, exactly). Exponent,
-//  which only the attack and sustain take, adds 0x4000 plus a quarter of the rate scaled by what's left to the top:
-//  an approximation of adsrcurve's figures, close to them but not exact.
+//  to it; exponent rev takes away height * rate / 2^32 a sample, rounded up, so it always reaches 0 (adsrcurve's
+//  decay: 0x40000000 to 0x3f01f557, 0x3e07db13, 0x3d11a192 grain by grain at 0x100000, and 1 a sample at rates 1-4,
+//  2 at 5-8, exactly); linear bent adds the rate up to three quarters of the top (that reached, once more) and a
+//  quarter of it above (adsrcurve's 0x100000 bends to 0x308c0000, then reaches the top at 0x3fffffdd, exactly).
+//  Exponent, which only the attack and sustain take, adds 0x4000 plus a quarter of the rate scaled by what's left to
+//  the top: an approximation of adsrcurve's figures, close to them but not exact.
 //- __sceSasSetSimpleADSR's two words, a PlayStation SPU's ADSR registers, give rates by the formulas worked out from
 //  setadsr's table (see sasRate()).
 //- The end flags are refreshed only by __sceSasCore (pspsdk's note); a voice keyed on twice, or keyed off when it
@@ -331,13 +331,13 @@ auto Kernel::__sceSasSetADSRmode() -> void {
 }
 
 //(core, voice, first word, second word): the whole envelope from a PlayStation SPU's two ADSR words, as
-//audio/sascore/setadsr's table gives it. The first: the sustain level in bits 0-3 ((level + 1) * 0x4000000), the decay
-//rate in 4-7 (0x80000000 >> rate, the top for 0; exponent rev), the attack rate in 8-14 (sasRate()), and bit 15 a bent
-//attack rather than a linear one. The second: the release rate in bits 0-4 and bit 5 an exponent rev release rather
-//than a linear one (linear: 1 << (28 - rate) as the PSP's 5-bit shift takes it, 1 if that's negative; exponential:
-//0x80000000 >> rate, the top for 0; 0x1f never moves either way), the sustain rate in 6-12 and its curve in 14-15
-//(linear increase, linear decrease, bent, exponent rev, which steps a quarter as far: sasRate(rate, 24)). Bit 13
-//isn't one: set, the call is refused (ADSR_MODE).
+//audio/sascore/setadsr's table gives it. The first: the sustain level in bits 0-3 ((level + 1) * 0x4000000), the
+//decay rate in 4-7 (0x80000000 >> rate, the top for 0; exponent rev), the attack rate in 8-14 (sasRate()), and bit
+//15 a bent attack rather than a linear one. The second: the release rate in bits 0-4 and bit 5 an exponent rev
+//release rather than a linear one (linear: 1 << (28 - rate) as the PSP's 5-bit shift takes it, 1 if that's
+//negative; exponential: 0x80000000 >> rate, the top for 0; 0x1f never moves either way), the sustain rate in 6-12
+//and its curve in 14-15 (linear increase, linear decrease, bent, exponent rev, which steps a quarter as far:
+//sasRate(rate, 24)). Bit 13 isn't one: set, the call is refused (ADSR_MODE).
 auto Kernel::__sceSasSetSimpleADSR() -> void {
   auto voice = sasVoice(arg(1));
   if(!voice) return;

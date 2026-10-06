@@ -31,6 +31,15 @@ auto Kernel::sceAtracReleaseAtracID() -> void {
   result(0);
 }
 
+//(ATRAC3plus IDs, ATRAC3 IDs): how the six are shared between the two codecs. Refused while any is handed out
+//(BUSY), or asking for more than there are (0x80000022), as audio/atrac/setdata recorded; IDs here serve either
+//codec, so nothing else changes.
+auto Kernel::sceAtracReinit() -> void {
+  if(atracIDs) return result(ErrorBusy);
+  if(s32(arg(0)) > s32(AtracIDs) || s32(arg(1)) > s32(AtracIDs)) return result(ErrorOutOfMemory);
+  result(0);
+}
+
 //(buffer, size): no stream the library can read, so no ID.
 auto Kernel::sceAtracSetDataAndGetID() -> void {
   result(AtracErrorBadData);

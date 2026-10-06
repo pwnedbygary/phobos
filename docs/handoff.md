@@ -742,6 +742,33 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: more functions games ask for — 2026-10-05
+
+Branch `cursor/psp-hle-games2-2b67`, on top of `cursor/psp-hle-games-2b67` (#145, the entry below). What the RP6 run
+had the owner's games asking for, written from pspsdk's headers, pspautotests' tests and their recorded results, and
+the games' behavior on a scratch host runner (never committed); no other emulator's code read. docs/psp-core.md,
+part 20, describes it: files' asynchronous requests (done after the time the UMD drive or the memory stick takes,
+polled or waited for, CB waits running callbacks), a silent sceSasCore (voices' envelopes and ends as recorded, no
+mixing), message pipes and mailboxes, sceMpeg set up but finding no movie it can play (games skip them),
+sceAtrac3plus refusing every stream, the network libraries with the WLAN switch off, sceLibFont with no fonts
+installed, and sceRtc, sceOpenPSID, display, thread, Kernel_Library, power and utility odds and ends. Peace Walker
+found two faults: a free lightweight mutex's CB lock ran a callback (it never enters the kernel on a PSP), and
+threads' kernel area at the top of the stack wasn't zeroed. States are version 5.
+- **On the host** (1800-2400 frames each; frames in `/tmp/hle2-runner/out`, not in the repository): Lumines to its
+  gameplay demo; Burnout Legends, Burnout Dominator and Midnight Club 3 to their titles and, with Start, their
+  profile menus; SOCOM past its "no data" screen to its credits; Snoopy to its "no save file" warning (it had
+  exited); Space Invaders Extreme to its title (first time); Peace Walker to its title screen (no system-font text);
+  GTA Liberty City Stories, Vice City Stories and Sindacco Chronicles past their movies to their loading screens,
+  where they stop at about 85% (the main thread waits for a queue to drain, polling an event flag: not traced
+  further); Gunhound EX past its logo to a black screen (likely its system-font text); Brave Story on its Game
+  Republic logo, reading slowly; the Street Fighter III port as before.
+- **Next**: what GTA's loading waits for; Brave Story's logo; sceLibFont from the owner's flash0 fonts; mixing
+  sceSas and sceAudio into the speakers; ATRAC3plus and the movies' decoders.
+- **Checks**: the parts' 180 groups with both sanitizers (new files: async, sas, messages, media; "state fields"
+  changing every new field and refusing 36 more states); `tests/psp/ares` 236 checks (a version 4 state refused).
+  Broken versions each failed their tests (requests done at once; a sender out of line; transfers' counts unwritten;
+  sceSas's 32-sample start dropped; the kernel area left as 0xff). Not checked on the RP6.
+
 ## PSP core: the functions retail games ask for — 2026-10-05
 
 Branch `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67` (two entries below), and since then of

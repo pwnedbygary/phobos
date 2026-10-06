@@ -154,6 +154,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("UtilsForUser",      "sceKernelUtilsMt19937Init",     &Kernel::sceKernelUtilsMt19937Init);
   add("UtilsForUser",      "sceKernelUtilsMt19937UInt",     &Kernel::sceKernelUtilsMt19937UInt);
   add("UtilsForUser",      "sceKernelSetGPO",               &Kernel::sceKernelSetGPO);
+  add("UtilsForUser",      "sceKernelGetGPI",               &Kernel::sceKernelGetGPI);
   //the CPU's caches: an emulator has none to write back or throw away
   add("UtilsForUser",      "sceKernelDcacheWritebackAll",   &Kernel::sceKernelCacheUnneeded);
   add("UtilsForUser",      "sceKernelDcacheWritebackRange", &Kernel::sceKernelCacheUnneeded);
@@ -185,8 +186,10 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("scePower",          "scePowerGetBatteryLifeTime",    &Kernel::scePowerGetBatteryLifeTime);
   add("scePower",          "scePowerTick",                  &Kernel::scePowerTick);
   add("scePower",          "scePowerSetClockFrequency",     &Kernel::scePowerSetClockFrequency);
-  //later SDKs' scePowerSetClockFrequency, under a NID of its own: Gunhound EX calls it with (333, 333, 166)
+  //later SDKs' scePowerSetClockFrequency, under NIDs of their own: Gunhound EX calls the first with (333, 333, 166),
+  //Peace Walker the second
   addNID("scePower",       "scePower_469989AD",             0x4699'89ad, &Kernel::scePowerSetClockFrequency);
+  addNID("scePower",       "scePower_EBD177D6",             0xebd1'77d6, &Kernel::scePowerSetClockFrequency);
   add("scePower",          "scePowerSetCpuClockFrequency",  &Kernel::scePowerSetCpuClockFrequency);
   add("scePower",          "scePowerSetBusClockFrequency",  &Kernel::scePowerSetBusClockFrequency);
   add("scePower",          "scePowerGetCpuClockFrequency",  &Kernel::scePowerGetCpuClockFrequency);
@@ -528,6 +531,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceLibFont",        "sceFontPixelToPointV",          &Kernel::sceFontPixelToPointV);
   add("sceAtrac3plus",     "sceAtracGetAtracID",            &Kernel::sceAtracGetAtracID);
   add("sceAtrac3plus",     "sceAtracReleaseAtracID",        &Kernel::sceAtracReleaseAtracID);
+  add("sceAtrac3plus",     "sceAtracReinit",                &Kernel::sceAtracReinit);
   add("sceAtrac3plus",     "sceAtracSetDataAndGetID",       &Kernel::sceAtracSetDataAndGetID);
   add("sceAtrac3plus",     "sceAtracSetHalfwayBufferAndGetID", &Kernel::sceAtracSetDataAndGetID);
   add("sceAtrac3plus",     "sceAtracSetData",               &Kernel::sceAtracSetData);
