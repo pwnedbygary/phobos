@@ -13,10 +13,11 @@ mkdir -p "$OUT/obj"
 CC=${CC:-cc}
 CXX=${CXX:-c++}
 SYSROOT=()
-LIBRARIES=(-lpthread -ldl)
+#zlib packs the CSO images (../disc-image.hpp)
+LIBRARIES=(-lpthread -ldl -lz)
 if [[ $(uname) == Darwin ]]; then
   if SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null); then SYSROOT=(-isysroot "$SDK"); fi
-  LIBRARIES=(-framework CoreFoundation)
+  LIBRARIES=(-framework CoreFoundation -lz)
 fi
 #One build mode for every file: nall's headers pick debug when none is given, and sljit's own C file, without them,
 #would then disagree with the rest about SLJIT_DEBUG (sljitConfigPre.h), and so about its compiler's layout.

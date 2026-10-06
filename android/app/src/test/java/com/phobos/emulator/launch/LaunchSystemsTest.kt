@@ -30,7 +30,7 @@ class LaunchSystemsTest {
         "Mega CD" to listOf("cue", "chd", "iso"),
         "Mega CD 32X" to listOf("cue", "chd", "iso"),
         "PlayStation" to listOf("cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"),
-        "PlayStation Portable" to listOf("pbp", "elf"),
+        "PlayStation Portable" to listOf("iso", "cso", "pbp", "elf"),
         "Neo Geo" to listOf("ng", "neo"),
         "Neo Geo CD" to listOf("ngc", "cue", "chd", "iso", "bin", "zip"),
         "Neo Geo Pocket" to listOf("ngp", "nap"),
@@ -93,10 +93,12 @@ class LaunchSystemsTest {
 
     @Test fun pspGamesGoToThePsp() {
         assertEquals("PlayStation Portable", LaunchSystems.systemForName("psp"))
-        assertEquals(found("PlayStation Portable"), resolve("EBOOT.PBP", hint = "psp"))
-        // Only the PSP takes an ELF.
+        assertEquals(found("PlayStation Portable"), resolve("Game.iso", hint = "psp"))
+        // Only the PSP takes a CSO or an ELF.
+        assertEquals(found("PlayStation Portable"), resolve("Game.cso"))
         assertEquals(found("PlayStation Portable"), resolve("Cube.elf"))
-        // An EBOOT.PBP goes by its folder: the PlayStation takes .pbp too.
+        // An ISO or an EBOOT.PBP goes by its folder: the PlayStation takes both too.
+        assertEquals(found("PlayStation Portable"), resolve("Game.iso", "$root/ROMs/psp/Game.iso"))
         assertEquals(found("PlayStation Portable"), resolve("EBOOT.PBP", "$root/ROMs/psp/Cube/EBOOT.PBP"))
         assertEquals(found("PlayStation"), resolve("Game.pbp", "$root/ROMs/psx/Game.pbp"))
         assertEquals(Match.Ask(listOf("PlayStation", "PlayStation Portable")), resolve("Game.pbp"))

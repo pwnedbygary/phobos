@@ -21,6 +21,7 @@ against, and none of its code is in Phobos.
 |---|---|---|
 | `hello/` | Prints a line and leaves. Even that uses some 45 system functions from 11 libraries, as pspsdk's start-up code and the C library set themselves up: a first test of the loader and the HLE kernel. Built three ways: as an ELF, a PRX and an EBOOT.PBP. | `tests/psp/loader.cpp`, `kernel.cpp` |
 | `system/` | Writes a file and reads it back, reads one the host put there, lists the folder, then waits for a button and reports the analog stick, all through the C library. | `tests/psp/files.cpp` |
+| `disc/` | Booted from a disc image the test makes, reads it every way games do: a file by its path, its status and first sector, a run of sectors by number (`sce_lbn`), `umd0:` a sector at a time, a folder's listing, a relative path; and waits for the drive first. | `tests/psp/ares` |
 | `gu/` | Drives the GE through pspsdk's GU library: clears the screen, has its signal and finish callbacks called, calls one display list from another, copies a picture into VRAM. | `tests/psp/ge.cpp` |
 | pspsdk's samples | `copy`, `blit`, `clut`, `blend`, `doublelist`, `cube`, `celshading` and `envmap`, from the toolchain's own examples: copying pictures, textures, palettes, blending, 3D, lighting, environment mapping. | `tests/psp/ge.cpp`, `draw.cpp` |
 | `pspmeasure.elf` | [tools/psp-measure](../psp-measure/README.md)'s program, run in the core: its menu, and its GE tests to compare with a real PSP's results. | `tests/psp/measure.cpp` |

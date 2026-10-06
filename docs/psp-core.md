@@ -12,7 +12,8 @@ controller on a PSP, on `cursor/psp-ge-measure-2b67`; part 11, drawing in 3D, on
 measurements on `cursor/psp-3d-measure-2b67`; part 12, lighting, on `cursor/psp-lighting-2b67`. The user asked for the
 whole feature to be stacked and merged at once (GitHub stack #106).
 Part 13, the PSP in Phobos (an ares system, mia's medium, the Android app's entry), is on `cursor/psp-app-2b67`:
-homebrew runs in the app on the RP6.
+homebrew runs in the app on the RP6. Part 14, disc images (ISO and CSO, the disc's files, the drive), is on
+`cursor/psp-umd-2b67`.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -984,11 +985,10 @@ PSP medium (`mia/medium/playstation-portable.cpp`); and the Android app's entry 
 - **The model**, the user's choices: a PSP-2000/3000 with 64 MiB, English, X confirms.
 - **The game**: mia's medium takes an EBOOT.PBP, ELF or PRX (as `program.pbp`, `.elf` or `.prx`), recognized by its
   contents, since PlayStation games share .pbp: a PBP isn't a PlayStation game converted to run on a PSP (CATEGORY
-  "ME" in its PARAM.SFO), an ELF or PRX is for MIPS. It recognizes ISO and CSO images too (an ISO says "PSP GAME" in
-  its volume descriptor, a CSO starts "CISO"), so they aren't taken for another system's, but refuses to load them
-  until the core reads them (the next part). A PBP's title comes from its PARAM.SFO. A program starts with the path a
-  PSP would give it: from the memory stick (`ms0:/PSP/GAME/...`) when it's in the memory stick folder already, else
-  from its own folder, which stands for its disc (disc0:, also called umd0:).
+  "ME" in its PARAM.SFO), an ELF or PRX is for MIPS; and ISO and CSO images (part 14). A PBP's title comes from its
+  PARAM.SFO. A program starts with the path a PSP would give it: from the memory stick (`ms0:/PSP/GAME/...`) when it's
+  in the memory stick folder already, else from its own folder, which stands for its disc (disc0:, also called
+  umd0:).
 - **The memory stick**: a host folder (option "Memory Stick"), formatted as a PSP formats one (PSP/GAME,
   PSP/SAVEDATA). The devices are the system's to give at each power-on: none is left from the game before.
 - **Unloading** frees the machine until the next game: the files the program left open, its threads, its memory, the
@@ -1034,3 +1034,97 @@ The app's unit tests check the PSP's launch names and extensions, its touch layo
 mapping reads them, one shoulder each side, the stick) and its icon.
 
 Next: ISO and CSO images (disc0: and umd0: from the image, sceUmd), save states, sceAudio.
+
+## Part 14: the disc
+
+`ares/psp/kernel/disc.hpp` and `disc.cpp`, the disc's paths in `io.cpp`, and `umd.cpp`: a UMD as an image of it, its
+files through the kernel, and the drive. Behavior from PPSSPP's notes on the hardware where the PSP's own isn't
+documented (the ioctl and devctl codes, the drive's states and timeouts, `sce_lbn` paths); our own code.
+
+- **The image**: an ISO, the disc's 2048-byte sectors one after another, or a CSO, the same compressed a block at a
+  time: a 24-byte header, an index of where each block starts, each block deflated or stored as it is (version 1
+  marks stored blocks with the index entry's top bit; version 2 by their taking a whole block's room; encoders pad
+  the last block out to a whole one). An index that doesn't fit the file, goes backwards or points past the file's
+  end is refused before anything is read through it. CSO version 2's LZ4 blocks aren't read. A trimmed ISO, ending
+  part way into its last sector, still reads to its last byte. The image is read as the game asks, never copied: on
+  the host from the file mapped into memory; on Android, when the app has no path it can read, through the
+  descriptor it was given.
+- **ISO 9660**: the volume descriptor at sector 16 gives the root folder; a folder is a run of directory records
+  (where each file starts, its size, whether it's a folder, its date, its name), found whatever their case. A
+  damaged record ends its folder, and no folder is read past 256 sectors or the disc's end, so a damaged folder size
+  can't have every lookup read the whole disc.
+- **disc0:**, the disc's file system: files opened by path, read only (opening to write fails with ErrorInvalidFlag;
+  the other flags, creating or emptying, are let be; removing or making anything fails with ErrorReadOnly), read,
+  seeked. A file's status gives its size, a read-only mode, the recording date, and its first sector in
+  st_private[0], where games look for it. Folders list the disc's order, with no "." or "..", and no short (8.3)
+  names. Games also read the disc by sector numbers: `sce_lbn<first sector>_size<bytes>`, both numbers hexadecimal
+  with or without "0x", anything after them ignored (slashes too: "sce_lbn10/_size800" is one), opens that run of
+  the disc, and its status is a file that size starting there. A host folder standing for the disc (a homebrew
+  program's own) comes first.
+- **umd0:** (and umd1:, umd:) is the whole disc whatever the path after it, its positions and sizes counted in
+  sectors (its status and its size through an ioctl too); its listing is empty.
+- **Requests** (sceIoIoctl, sceIoDevctl): a disc file's first sector, size, position, seek (not past its end),
+  reads, the volume descriptor, the path table, the sector size; umd0:'s reads (at least one sector) and seeks in
+  sectors, a seek past the disc failing with ErrorInvalidFileSize. The drive: a game disc, the region matching, its
+  last sector, anything asked to be read ahead done at once. The memory stick: in, formatted, writable, up to 1 GiB
+  free (games add sizes up in 32 bits), callbacks for it going in and out kept (it never does). Anything else isn't
+  supported. On every device, the status of a device's top ("ms0:/") is refused, and a status leaves its last five
+  words (st_private, all six off the disc) as the program had them, as the PSP does.
+- **The drive** (sceUmdUser): a disc present, ready and readable from the start, as games expect; activating it
+  checks its mode and the name "disc0:". A thread waiting for a state the drive isn't in waits until its timeout or
+  for good, unless the wait is cancelled; the PSP makes a timeout of 1 microsecond 25, and any other of at most 209
+  microseconds 240 (but 240 for 1 too when the wait lets callbacks run). The disc's kind is a game's; a callback for
+  the drive's changes is kept (none come).
+- **Booting a disc** (`ares/psp/system`): the image goes in the drive, and PSP_GAME/SYSDIR/EBOOT.BIN starts, from
+  `disc0:/PSP_GAME/SYSDIR`. A shop-bought game's is encrypted ("~PSP"), which isn't read yet (the next part); a
+  plain BOOT.BIN beside it stands in when there is one. Only an ELF or an EBOOT.PBP is started, so a blank BOOT.BIN
+  is passed over. A truncated image that cuts its program short still boots it, read as far as the image goes (no
+  further than 64 MiB), as PPSSPP lets truncated images boot.
+- **In the app**: the PSP takes .iso and .cso again. A disc image Phobos can't read where it is (told by its URI's
+  extension, or for a URI that doesn't end in its name, the game's) isn't copied into its cache (a gigabyte or two):
+  the runner hands mia the app's descriptor as `/proc/self/fd/<n>` (if it's a file; anything else is copied), and
+  mia's medium reads it through that descriptor (`nall::vfs::descriptor`, new: its own copy of the descriptor, the
+  file mapped into memory where the system allows, else read a piece at a time) rather than opening the name again,
+  which the system may refuse. What a medium is comes from its contents (a PRX by its name), so a name with no
+  extension does.
+
+Tests:
+- `tests/psp/disc.cpp` (four groups) builds disc images itself (`tests/psp/disc-image.hpp`: an ISO 9660 writer, and a
+  CSO packer with zlib that pads the last block as maxcso does), and checks:
+  - the reader on an ISO and on three CSOs (small blocks; 16 KiB blocks with the index shifted; version 2): its size,
+    a path found whatever its case, sizes, dates, contents, reads across blocks, folders' order, an empty file, a path
+    through a file, reading past the end; images ending part way into a 16 KiB block, in both versions; and damaged
+    or odd images: no volume descriptor, no block size, an index cut short, one shifted past the file, one going
+    backwards, a block whose stream starts well and then turns invalid (and the block read before it still reading
+    right afterwards), a trimmed ISO (its last file and a run over its last part sector, through the kernel too), a
+    damaged record ending its folder (a good one in the folder's next sector not listed), and a folder record
+    claiming 4 GB over 512 sectors of good records (read no further than 256);
+  - files through the kernel: reading, seeking, refusals to write, a read-only open with other flags, status (the
+    spare words left, devices' tops refused), listings (and short names left alone), relative paths, runs of sectors
+    in five spellings (slashes among them) and with no digits, a run's status, runs past the disc's end, umd0: as the
+    whole disc (opened with a path after it too, its status, its listing, no working folder there), a host folder
+    first;
+  - every ioctl and devctl above (umd0:'s size in sectors, a seek past it, a read of no sectors), and the
+    unsupported;
+  - the drive: its state with and without a disc, activation, the disc's kind, callbacks, and a thread's waits: at
+    once, until a timeout of 100 microseconds (240), of 1 (25 alone, 240 with callbacks), and for good until
+    cancelled, on both engines.
+- `tests/psp/ares` boots `tools/psp-test-programs`' new `disc` program from an ISO and from a CSO the test makes,
+  through the system as Phobos runs it: every line it prints (the drive's state, a file's fingerprint, the ioctl's
+  sector, its status, an `sce_lbn` run, umd0:, a listing, a relative path, the refusal to write) matches what the
+  image holds. A program cut short by a truncated image still boots. An encrypted EBOOT.BIN alone doesn't start, nor
+  with a blank BOOT.BIN beside it; with a plain one, BOOT.BIN does. It also checks `vfs::descriptor` (mapped and not,
+  zeros past the end, still readable after the descriptor it was given closes, nothing for a bad descriptor or a
+  folder) and boots a disc read through one, unmapped (127 checks).
+- Thirteen broken versions each failed: a version 1 CSO's stored blocks taken for deflated ones, umd0: counted in
+  bytes, the first sector left out of a file's status, short drive timeouts left as given, a folder's own records
+  listed, runs read past the disc's end, `sce_lbn` numbers read as decimal, a failed block left in the cache, short
+  names written for the disc, read-only opens that create refused, folders read past 256 sectors, and damaged
+  records skipped, or ending only their sector, rather than ending their folder. Six got through the first tests
+  (the buffer still held what a read should have put there; no run went past the end; the bad block failed before
+  writing anything; the damaged folder was on a disc too small to show any of its three), which were tightened until
+  they failed.
+
+On the RP6 (2026-10-05): the `disc` program booted from an ISO and from a CSO printed exactly what the host test
+expects, and pspsdk's cube runs from a CSO at 60 frames a second. The app could read the SD card's paths there, so
+the descriptor route ran on the host only: Android wouldn't let the shell hand the app a document to force it.
