@@ -1,7 +1,9 @@
 #pragma once
 #include <ares/ares.hpp>
 #include <array>
+#if defined(__ANDROID__)
 #include <jni.h>
+#endif
 
 namespace ares {
   using namespace nall;
@@ -132,7 +134,9 @@ namespace ares {
   auto laserdiscSides() -> std::vector<string>;
   // Puts [side] of the LaserActive disc in the tray, or takes the disc out for ""; false without one.
   auto setLaserdiscSide(const char* side) -> bool;
+#if defined(__ANDROID__)
   auto setSurface(JNIEnv* env, jobject surface) -> void;
+#endif
   auto getNewLogs() -> std::vector<LogEntry>;
   auto isFirstFrameRendered() -> bool;
   auto setInput(f32 lx, f32 ly, f32 rx, f32 ry, s32 buttons) -> void;
