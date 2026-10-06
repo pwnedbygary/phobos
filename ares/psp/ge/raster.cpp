@@ -108,12 +108,21 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
   auto& r = job.triangle;
   auto& look = *job.look;
   auto& p = look.pixel;
-  //edge k at (x, y), in sixteenths: a[k] * x + b[k] * y + c[k]; edge 0 runs from corner 1 to 2, 1 from 2 to 0, 2 from
-  //0 to 1, and a pixel's blending weights are the three at its middle
-  s64 a[3], b[3], c[3];
+  //Edge k, the one facing corner k (from corner k + 1 to corner k + 2), at (x, y) in sixteenths:
+  //a[k] * x + b[k] * y + c[k]. It's zero along the edge's line and grows toward corner k, the triangle's inside (the
+  //corners are turned so), and at a pixel's middle it's the pixel's blending weight for corner k.
+  //The triangle covers the pixels at whose middles every edge's function is at least its least[k]. The functions are
+  //whole numbers there (positions are whole sixteenths), so the test is exact. least[k] settles a middle exactly on
+  //edge k's line (a function of 0): two triangles sharing an edge see it from either side, one's function the
+  //other's turned round, and only one of them may draw a pixel there, or it would be drawn twice. The usual
+  //convention gives it to the triangle whose left edge it is (its inside to the edge's right: a > 0) or, for a level
+  //edge, whose top edge it is (its inside below: a = 0, b > 0): least 0 there, so 0 counts; 1 on right and bottom
+  //edges, which the other triangle draws. The edge's direction alone decides, so no division is needed.
+  s64 a[3], b[3], c[3], least[3];
   for(u32 k = 0; k < 3; k++) {
     u32 from = (k + 1) % 3, to = (k + 2) % 3;
     a[k] = r.y[from] - r.y[to], b[k] = r.x[to] - r.x[from], c[k] = r.y[to] * r.x[from] - r.x[to] * r.y[from];
+    least[k] = a[k] > 0 || (a[k] == 0 && b[k] > 0) ? 0 : 1;
   }
   bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
   bool blended = !r.flat, shining = !r.flat && r.shines;
@@ -132,12 +141,12 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
   for(s32 y = std::max(job.firstY, fromY); y <= std::min(job.lastY, toY); y++) {
     s64 sampleY = s64(y) * 16 + 8;
     s64 sampleX = s64(job.firstX) * 16 + 8;
-    //the row's pixels inside: where every edge's function plus its bias is at least zero
+    //the row's pixels inside: where every edge's function is at least its least
     s64 start = job.firstX, stop = job.lastX;
     s64 w[3];
     for(u32 k = 0; k < 3; k++) {
       w[k] = a[k] * sampleX + b[k] * sampleY + c[k];
-      s64 have = w[k] + r.bias[k], step = a[k] * 16;  //at the first column, and from one column to the next
+      s64 have = w[k] - least[k], step = a[k] * 16;  //how far past its least at the first column; column to column
       if(step > 0 && have < 0) start = std::max(start, job.firstX + (-have + step - 1) / step);
       if(step < 0) stop = have < 0 ? -1 : std::min(stop, job.firstX + have / -step);
       if(step == 0 && have < 0) stop = -1;

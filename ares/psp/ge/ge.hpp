@@ -267,7 +267,6 @@ struct GE {
     } sprite;
     struct Triangle {
       s64 x[3], y[3];                  //the corners (sixteenths), turned clockwise
-      s64 bias[3];                     //-1 for an edge whose pixels are its neighbour's
       float total;                     //twice its area
       bool flat, shines, perspective;
       u32 flatColor, flatSpecular;

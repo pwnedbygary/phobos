@@ -399,6 +399,24 @@ static auto drawTriangles() -> void {
   for(u32 y = 0; y < 4; y++) for(u32 x = 0; x < 8; x++) column &= (shared.pixel(x, y) & 0xff) == 1;
   CHECK(column, true);
 
+  //a sliver sharing an edge with a wider triangle on its right: the edge, from (0.5, 0.5) to (2.5, 20.5), runs
+  //through pixel (1, 10)'s middle, and the sliver's third corner is half a sixteenth of a pixel left of it (at
+  //(1.5, 10.8125), where the edge is at x = 1.53125), so it's the sliver's right edge and the wider one's left: the
+  //pixel is the wider one's, drawn once (working out where the edge is with a division cut short took the corner for
+  //being on it, and drew the pixel twice)
+  Canvas sliver;
+  sliver.ge.commands[GE::AlphaBlendEnable] = 1;
+  sliver.ge.commands[GE::BlendMode] = 10 | 10 << 4;
+  sliver.ge.commands[GE::BlendFixedA] = 0xff'ffff;
+  sliver.ge.commands[GE::BlendFixedB] = 0xff'ffff;
+  sliver.draw(GE::Triangles, {{0, 0, 0xff01'0101, 0.5f, 0.5f, 0}, {0, 0, 0xff01'0101, 2.5f, 20.5f, 0},
+                              {0, 0, 0xff01'0101, 1.5f, 10.8125f, 0}, {0, 0, 0xff01'0101, 0.5f, 0.5f, 0},
+                              {0, 0, 0xff01'0101, 3.5f, 10.5f, 0}, {0, 0, 0xff01'0101, 2.5f, 20.5f, 0}});
+  CHECK(sliver.pixel(1, 10) & 0xff, 1u);
+  bool atMostOnce = true;
+  for(u32 y = 0; y < 21; y++) for(u32 x = 0; x < 4; x++) atMostOnce &= (sliver.pixel(x, y) & 0xff) <= 1;
+  CHECK(atMostOnce, true);
+
   Canvas dots;
   dots.draw(GE::Points, {{0, 0, 0xff12'3456, 3.5f, 2.9f, 0}});
   CHECK(dots.pixel(3, 2), 0x12'3456);

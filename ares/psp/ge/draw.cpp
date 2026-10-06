@@ -309,19 +309,11 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
   if(area == 0) return;
   if(facing && (area > 0) != (facing > 0)) return;
   if(area < 0) std::swap(p[1], p[2]), area = -area;  //the same corners, turned the way the edges are worked out for
-  //Whether the edge from-to is a right edge or a flat bottom one (the other corner left of or above it): a pixel
-  //exactly on such an edge isn't drawn.
-  auto rightOrBottom = [](const Corner& other, const Corner& from, const Corner& to) {
-    if(from.y == to.y) return other.y < from.y;
-    return other.x < from.x + (to.x - from.x) * (other.y - from.y) / (to.y - from.y);
-  };
+  //(which pixels on its edges it draws: triangleRows(), raster.cpp)
   Job job{};
   job.kind = Job::Kind::Triangle;
   job.look = &look;
   auto& r = job.triangle;
-  r.bias[0] = rightOrBottom(p[0], p[1], p[2]) ? -1 : 0;
-  r.bias[1] = rightOrBottom(p[1], p[2], p[0]) ? -1 : 0;
-  r.bias[2] = rightOrBottom(p[2], p[0], p[1]) ? -1 : 0;
   s64 minX = std::min({p[0].x, p[1].x, p[2].x}), maxX = std::max({p[0].x, p[1].x, p[2].x});
   s64 minY = std::min({p[0].y, p[1].y, p[2].y}), maxY = std::max({p[0].y, p[1].y, p[2].y});
   job.firstX = std::max<s32>(floorDivide(s32(minX) - 8 + 15, 16), pixel.left);
