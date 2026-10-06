@@ -1416,13 +1416,17 @@ whose program headers lie inside it:
   KL4E).
 
 Tests:
-- `tests/psp/crypto.cpp`, four groups: "crypto aes" (FIPS-197's examples, NIST SP 800-38A's ECB and CBC ones, each
+- `tests/psp/crypto.cpp`, five groups: "crypto aes" (FIPS-197's examples, NIST SP 800-38A's ECB and CBC ones, each
   way; a thousand chained blocks, whose last OpenSSL gave; a partial last block left alone); "crypto sha-1" (FIPS
   180-1's examples, a NID, command 0xb and its refusals); "crypto kirk static" (data encrypted as command 4 does comes
   back under every keyseed not made per console, in place too; per-console and missing keyseeds, other modes, no
   data, data not in whole blocks, inputs and outputs too small: refused); "crypto kirk private" (data encrypted as
   Sony's tools do, in whole blocks or not, with and without padding, CMAC or ECDSA headers, in place too; another
-  command, no data, too small an output, an input cut short, huge sizes and paddings: refused).
+  command, no data, too small an output, an input cut short, huge sizes and paddings: refused); "crypto keys" (the
+  keys' SHA-1 digests, pinned: KIRK command 1's key, commands 4 and 7's 128 as one run and the eleven the tags use
+  one at a time, and each tag's key, a 144-byte one as its words' bytes, with its type and keyseed, and type 5's XOR
+  key. They were worked out from `keys.cpp` once a reviewer had checked its bytes against the wiki's "Keys" page:
+  the round trips encrypt with the very tables they test, so a key typed wrong would still pass them).
 - `tests/psp/decrypt.cpp`, five groups, on programs encrypted by `tests/psp/encrypt.hpp`, which runs part 18's steps
   backwards with the core's AES, SHA-1 and tables: "decrypt types" (a PRX under tags of types 0, 1, 2, 5 and 6, with
   and without gzip, a signature's end of zeros and not, and the two keys of a tag listed twice: decrypted exactly,
@@ -1441,7 +1445,8 @@ Tests:
   system reports why EBOOT.BIN couldn't, and whether BOOT.BIN started instead.
 - Broken versions each failed a test: type 6's signature left out of the digest, type 1's extra lock skipped, gzip's
   CRC unchecked, KIRK command 1's partial last block chained from the IV, type 5's zeros unchecked, and only the
-  first key of a tag listed twice tried.
+  first key of a tag listed twice tried. A byte changed in a tag's key and in a keyseed's key failed only "crypto
+  keys": every round trip still passed.
 
 ## Part 19: modules
 
