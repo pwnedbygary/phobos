@@ -24,10 +24,11 @@ namespace {
   constexpr u32 MpegErrorValue = 0x8061'0022, MpegErrorNoData = 0x8061'8001;
   constexpr u32 RingbufferPacketMemory = 0x868, PacketSize = 2048;
   //A ringbuffer's fields (SceMpegRingbuffer2 in video/mpeg's shared.h): its packets, the next to read and to write
-  //(places in the ring, from 0), how many hold data, the packets' memory, the callback and its argument, the library
-  //using it, and the global pointer the callback runs with.
+  //(places in the ring, from 0), how many hold data, the packets' memory, the callback and its argument, and the
+  //library using it. (SceMpegRingbuffer2 has a global pointer after them, which Construct writes; pspsdk's
+  //SceMpegRingbuffer, 44 bytes, ends before it, so nothing reads it.)
   constexpr u32 RingPackets = 0, RingRead = 4, RingWritten = 8, RingFilled = 12, RingData = 20, RingCallback = 24,
-                RingArgument = 28, RingLibrary = 40, RingGp = 44;
+                RingArgument = 28, RingLibrary = 40;
   //The library's memory, where the handle points (its "LIBMPEG"): the ringbuffer it reads (where shared.h's
   //SceMpegBufferHeader has it), then, past the fields shared.h names, the library's own state, as Sony's keeps its
   //own there: the bytes of video already taken from the ring's first packet, whether the decoder holds a picture
@@ -92,15 +93,19 @@ auto Kernel::sceMpegRingbufferAvailableSize() -> void {
 //packets (where they go, how many, its argument): as many as asked for, no more than available and free, a run at a
 //time that stops at the ring's end; and asked again for what's left as long as it gives some (at its file's end
 //basic's gave 9 of 24, and was asked for the other 15). Put returns how many it gave. The callback runs on the
-//calling thread, which may wait in it (basic's read a file), with the ringbuffer's global pointer and a stack below
-//the caller's, returning to the trampoline's seventh syscall (mpegReturned()). Not from an interrupt handler, nor a
-//thread already feeding one: nothing is put in.
+//calling thread, which may wait in it (basic's read a file), with the caller's global pointer and a stack below the
+//caller's, returning to the trampoline's seventh syscall (mpegReturned()). Not from an interrupt handler, nor a
+//thread already feeding one: nothing is put in. Nor into a ring whose fields, the game's to write, couldn't be a
+//ring's (no packets or more than 4096, the next to write not among them, more holding data than there are), as
+//sceMpegGetAvcAu takes nothing from one; else its callback could be asked for more than a ring's 4096 packets.
 auto Kernel::sceMpegRingbufferPut() -> void {
   u32 ringbuffer = arg(0);
   if(!memory.reaches(ringbuffer, 48)) return result(ErrorInvalidPointer);
-  s32 room = s32(memory.read(4, ringbuffer + RingPackets)) - s32(memory.read(4, ringbuffer + RingFilled));
-  s32 wanted = std::min({s32(arg(1)), s32(arg(2)), room});
+  u32 packets = memory.read(4, ringbuffer + RingPackets), written = memory.read(4, ringbuffer + RingWritten);
+  u32 filled = memory.read(4, ringbuffer + RingFilled);
   result(0);
+  if(!packets || packets > 4096 || written >= packets || filled > packets) return;
+  s32 wanted = std::min({s32(arg(1)), s32(arg(2)), s32(packets - filled)});
   if(wanted <= 0 || !memory.read(4, ringbuffer + RingCallback)) return;
   if(!current || interrupting || mpegCalls.count(current->uid)) return;
   MpegCall call;
@@ -122,7 +127,9 @@ auto Kernel::mpegNext(MpegCall& call) -> void {
   cpu.ipu.r[4] = at;
   cpu.ipu.r[5] = run;
   cpu.ipu.r[6] = memory.read(4, ringbuffer + RingArgument);
-  cpu.ipu.r[28] = memory.read(4, ringbuffer + RingGp);
+  //the caller's global pointer, not the word at 44 that pspautotests' SceMpegRingbuffer2 keeps Construct's in (in
+  //every case seen the same): pspsdk's SceMpegRingbuffer is 44 bytes, the word after it someone else's
+  cpu.ipu.r[28] = call.caller.gpr[28];
   cpu.ipu.r[29] = (call.caller.gpr[29] - 0x40) & ~15u;
   cpu.ipu.r[31] = Trampoline + 40;
   cpu.ipu.pc = memory.read(4, ringbuffer + RingCallback);
