@@ -705,6 +705,59 @@ static auto interruptTable() -> void {
   }
 }
 
+//Held off, the running thread keeps the CPU even as it puts itself back in line: main, holding interrupts (or
+//dispatching) off, rotates its own priority's line with a thread of its priority ready, or lowers its own priority
+//below a ready thread's. It runs on (its A, then its B), interrupts still off in there (on, with only dispatching
+//held off), and the other thread runs (its P) once main lets it: as main resumes, when it's better than main by
+//then, or when main waits, when it's an equal (the rotation held off isn't made up for). (Each had switched threads
+//there, the switch turning interrupts on: "APB", but for a rotation with dispatching held off, which kept the CPU
+//already.)
+static auto heldOffYield(bool recompile, bool dispatch, bool viaPriority) -> void {
+  KernelMachine m;
+  auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+  auto mark = [&](Assembler& a, char c) {  //a byte at R + 0x80 on, their count at R + 0x7c
+    a.li(t0, R + 0x7c); a.put(lw(t1, 0, t0)); a.put(addu(t2, t1, t0)); a.li(t3, u8(c)); a.put(sb(t3, 4, t2));
+    a.put(addiu(t1, t1, 1)); a.put(sw(t1, 0, t0));
+  };
+  Assembler peer{m, 0x0880'2000};
+  mark(peer, 'P');
+  peer.call("sceKernelExitThread");
+  Assembler main{m, 0x0880'1000};
+  startThread(main, m, "peer", 0x0880'2000, viaPriority ? 0x28 : 0x20);  //ready: it doesn't run yet
+  main.call(dispatch ? "sceKernelSuspendDispatchThread" : "sceKernelCpuSuspendIntr");
+  main.put(addu(s1, v0, zero));
+  mark(main, 'A');
+  if(viaPriority) {
+    main.li(a0, 0); main.li(a1, 0x30);
+    main.call("sceKernelChangeThreadPriority");
+  } else {
+    main.li(a0, 0);
+    main.call("sceKernelRotateThreadReadyQueue");
+  }
+  store(main, 0x20);
+  main.call("sceKernelIsCpuIntrEnable");
+  store(main, 0x24);
+  mark(main, 'B');
+  main.put(addu(a0, s1, zero));
+  main.call(dispatch ? "sceKernelResumeDispatchThread" : "sceKernelCpuResumeIntr");
+  main.li(a0, 100);
+  main.call("sceKernelDelayThread");
+  main.call("sceKernelExitGame");
+  m.runProgram(0x0880'1000, recompile);
+  std::string order = m.system.memory.readString(R + 0x80, 8);
+  CHECK(m.kernel.exited, true);
+  CHECK(order == "ABP", true);
+  if(order != "ABP") {
+    std::printf("  [%s] %s with %s held off: %s\n", recompile ? "recompiler" : "interpreter",
+                viaPriority ? "lowering its priority" : "rotating its line", dispatch ? "dispatching" : "interrupts",
+                order.c_str());
+  }
+  CHECK(word(m, R + 0x20), 0);
+  CHECK(word(m, R + 0x24), dispatch ? 1 : 0);
+  CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
+}
+
 //With interrupts held off nothing takes the CPU from the running thread: a better thread whose delay ends meanwhile
 //runs once they're back on, as sceKernelCpuResumeIntr returns (main's M, the thread's T, main's R), with interrupts
 //on of its own, its next delay not refused. Every function that waits is refused meanwhile, CAN_NOT_WAIT ahead of
@@ -712,7 +765,8 @@ static auto interruptTable() -> void {
 //counting (intr/mfic). A state saved with the better thread ready and main spinning loads into another machine, which
 //makes the same state and carries on alike. (A better thread whose sound buffer ended in there had taken the CPU
 //with interrupts still off: Brave Story's sound thread, every blocking output refused, spun at the top priority for
-//good.) On both engines.
+//good.) Nor does the holder lose the CPU rotating its own line or lowering its own priority (heldOffYield()). On
+//both engines.
 static auto heldOffKeepsCpu() -> void {
   for(bool recompile : {false, true}) {
     KernelMachine m;
@@ -792,6 +846,9 @@ static auto heldOffKeepsCpu() -> void {
     }
     CHECK(m.notes.size(), 0);
     CHECK(roundTrip(m), true);
+    for(bool dispatch : {false, true}) {
+      for(bool viaPriority : {false, true}) heldOffYield(recompile, dispatch, viaPriority);
+    }
   }
 }
 

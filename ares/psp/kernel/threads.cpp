@@ -140,14 +140,20 @@ auto Kernel::timeout(u32 pointer) const -> u64 {
 
 //Picks the thread to run: the ready one with the highest priority (the lowest number), the one ready the longest
 //among equals. The running thread keeps the CPU unless one with a strictly higher priority is ready, and keeps it
-//whatever is ready while it holds interrupts or dispatching off. During a call into the program the choice waits
-//until it's over.
+//whatever is ready while it holds interrupts or dispatching off, even when it has just put itself back in line
+//(rotating its own priority's line, or changing its own priority, which make it ready): it stays running, and gives
+//way only once switching is allowed again, to a thread better than it then. During a call into the program the
+//choice waits until it's over.
 auto Kernel::reschedule() -> void {
   if(interrupting) {
     rescheduleAfter = true;
     return;
   }
-  if((dispatchSuspended || !interruptsEnabled) && current && current->status == Status::Running) return;
+  if((dispatchSuspended || !interruptsEnabled) && current
+  && (current->status == Status::Running || current->status == Status::Ready)) {
+    current->status = Status::Running;
+    return;
+  }
   Thread* best = nullptr;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Ready || thread->suspended) continue;
@@ -720,8 +726,9 @@ auto Kernel::sceKernelReferSemaStatus() -> void {
 //for the caller's own; thread 0 is the caller. A thread not started yet, or ended, can't be changed (DORMANT); one
 //ready, waiting or suspended can. The thread goes to the back of its new priority's line: one that's ready goes in
 //behind those ready already, and so does the caller, which so gives way to any other thread of its priority (even
-//when its priority doesn't change). A thread that ends up above the caller's takes over at once. The test doesn't
-//show which comes first, a bad priority or a bad thread: the priority is checked first here.
+//when its priority doesn't change). A thread that ends up above the caller's takes over at once. With interrupts or
+//dispatching held off the caller keeps the CPU all the same (reschedule()), its new priority counting once they're
+//back. The test doesn't show which comes first, a bad priority or a bad thread: the priority is checked first here.
 auto Kernel::sceKernelChangeThreadPriority() -> void {
   u32 priority = arg(1);
   if(priority == 0 && current) priority = current->priority;
@@ -833,16 +840,15 @@ auto Kernel::sceKernelGetThreadCurrentPriority() -> void {
 }
 
 //(priority, 0 for the caller's): the first thread ready at that priority goes to the back of its line; at the
-//caller's own, the caller does, giving way to its equals, unless dispatching is held off: then it keeps the CPU. A
-//user thread's priorities (0x08-0x77) and 0 are taken, anything else is ILLEGAL_PRIORITY, as pspautotests'
-//threads/threads/rotate recorded.
+//caller's own, the caller does, giving way to its equals, unless interrupts or dispatching are held off: then it
+//keeps the CPU (reschedule()). A user thread's priorities (0x08-0x77) and 0 are taken, anything else is
+//ILLEGAL_PRIORITY, as pspautotests' threads/threads/rotate recorded.
 auto Kernel::sceKernelRotateThreadReadyQueue() -> void {
   u32 priority = arg(0);
   if(priority == 0 && current) priority = current->priority;
   if(priority < 0x08 || priority > 0x77) return result(ErrorIllegalPriority);
   result(0);
   if(current && current->status == Status::Running && current->priority == priority) {
-    if(dispatchSuspended) return;
     current->status = Status::Ready;  //reschedule() picks between it and its equals afresh
     current->readySince = ++readySequence;
     return reschedule();
