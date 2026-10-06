@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <set>
 
 namespace allegrex_test::psp {
@@ -451,12 +452,13 @@ static auto doublelistSample() -> void {
   for(auto& note : m.notes) std::printf("  note: %s\n", note.c_str());
 }
 
-//pspsdk's "clut" and "blend": a palette texture (the palette turned a step each frame) drawn over the screen,
-//filtered; "blend" blends it as its first mode says. Run for about a second of the PSP's time, they must have drawn
-//the texture; with PSP_PICTURES set to a folder, the pictures a frame before, at and a frame after the second are
-//saved there (name-0.ppm and on) for tools/psp-test-programs/compare-ppsspp.sh to compare with PPSSPP's software
-//renderer after its second (whose start-up takes a different time, so the frames may be one apart).
-static auto paletteSample(const std::string& name) -> void {
+//A pspsdk sample run for about a second of the PSP's time: it must still be running, and have drawn more than its
+//clear color (many shades of it); looksRight(pixels) looks closer. With PSP_PICTURES set to a folder, the pictures a frame
+//before, at and a frame after the second are saved there (name-0.ppm and on) for
+//tools/psp-test-programs/compare-ppsspp.sh to compare with PPSSPP's software renderer after its second (whose
+//start-up takes a different time, so the frames may be one apart).
+static auto sampleAfterASecond(const std::string& name, std::function<bool (const std::vector<u32>&)> looksRight = {})
+  -> void {
   auto program = testProgram((name + ".elf").c_str());
   if(program.empty()) return;
   KernelMachine m;
@@ -470,7 +472,8 @@ static auto paletteSample(const std::string& name) -> void {
     std::vector<u32> pixels;
     m.kernel.picture(pixels);
     std::set<u32> colors(pixels.begin(), pixels.end());
-    CHECK(colors.size() > 64, true);  //not just the clear color: the texture is there, in many shades
+    CHECK(colors.size() > 64, true);
+    if(looksRight) CHECK(looksRight(pixels), true);
     if(const char* folder = std::getenv("PSP_PICTURES")) {
       std::ofstream file(std::string(folder) + "/" + name + "-" + std::to_string(frame) + ".ppm", std::ios::binary);
       file << "P6\n480 272\n255\n";
@@ -480,8 +483,19 @@ static auto paletteSample(const std::string& name) -> void {
   for(auto& note : m.notes) std::printf("  note: %s\n", note.c_str());
 }
 
-static auto clutSample() -> void { paletteSample("clut"); }
-static auto blendSample() -> void { paletteSample("blend"); }
+//pspsdk's "clut" and "blend": a palette texture (the palette turned a step each frame) drawn over the screen,
+//filtered; "blend" blends it as its first mode says.
+static auto clutSample() -> void { sampleAfterASecond("clut"); }
+static auto blendSample() -> void { sampleAfterASecond("blend"); }
+
+//pspsdk's "cube": a textured cube turning in 3D, in perspective, its back faces culled and the rest depth-tested,
+//over a clear color (0x554433). The cube covers the screen's middle, and not its corners.
+static auto cubeSample() -> void {
+  sampleAfterASecond("cube", [](const std::vector<u32>& pixels) {
+    u32 background = 0xff55'4433;
+    return pixels[136 * 480 + 240] != background && pixels[0] == background && pixels[271 * 480 + 479] == background;
+  });
+}
 
 auto drawTests() -> Tests {
   return {
@@ -490,7 +504,7 @@ auto drawTests() -> Tests {
     {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles},
     {"draw ambient and filters", drawAmbientAndFilters},
     {"blit sample", blitSample}, {"doublelist sample", doublelistSample}, {"clut sample", clutSample},
-    {"blend sample", blendSample},
+    {"blend sample", blendSample}, {"cube sample", cubeSample},
   };
 }
 

@@ -7,6 +7,7 @@ namespace ares::PlayStationPortable {
 #include "vertex.cpp"
 #include "texture.cpp"
 #include "pixel.cpp"
+#include "transform.cpp"
 #include "draw.cpp"
 #include "transfer.cpp"
 
@@ -33,7 +34,7 @@ auto GE::note(const std::string& text) -> void {
 }
 
 //A command's floating-point argument: the top 24 bits of a 32-bit float (the GU library drops the fraction's lowest
-//eight bits to fit it in).
+//eight bits to fit it in). A whole command word does as well: the shift pushes its command byte out.
 auto GE::float24(u32 argument) -> float {
   u32 bits = argument << 8;
   float value;

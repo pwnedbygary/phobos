@@ -1,6 +1,7 @@
 //Drawing: PRIM's vertices become primitives, and the pixels each covers go through the pixel pipeline (pixel.cpp),
-//textured (texture.cpp) if TEXTURE_MAPPING_ENABLE says so. So far in 2D only: through mode, where positions are
-//already pixels (with four fraction bits: the GE works in sixteenths of a pixel) and texture coordinates are texels.
+//textured (texture.cpp) if TEXTURE_MAPPING_ENABLE says so. In through mode (2D) positions are already pixels (with
+//four fraction bits: the GE works in sixteenths of a pixel) and texture coordinates are texels; in 3D, transform.cpp
+//first puts the vertices on the screen, and cuts triangles at the near plane.
 //
 //  - Sprites: a rectangle between each pair of vertices, in the second's color and depth. It covers the pixels whose
 //    middles are inside, both edges included. Texture coordinates run from one vertex's to the other's, across with
@@ -9,11 +10,17 @@
 //  - Triangles (each three vertices, or a strip, or a fan): the pixels whose sample points (7/16 of a pixel in from
 //    their top left) are inside, those on an edge counting only on left and top edges, so triangles sharing an edge
 //    don't both draw it. Color, depth and texture coordinates are blended across from the corners, or with flat
-//    shading (SHADE_MODE 0) the color is the last vertex's.
+//    shading (SHADE_MODE 0) the color is the last vertex's. In 3D the texture coordinates are blended as the
+//    perspective has them (as u/w and 1/w, then divided, so a texture on a floor shrinks into the distance); colors
+//    and depth aren't, nor is the fog.
+//  - Culling (CULL_FACE_ENABLE, not in clear mode): with CULL 1 only triangles whose corners run clockwise on the
+//    screen are drawn, with 0 only those running counterclockwise (pspsdk's sceGuFrontFace(GU_CW) sets 1). Every
+//    other triangle of a strip runs the other way round, so for those it's the other way.
 //  - Points: the pixel each vertex is in.
 //A vertex without a color takes the material's ambient color (AMBIENT_COLOR, AMBIENT_ALPHA).
 //(These rules, the sample points and the corner order's quarter turn among them, are as PPSSPP's software renderer
-//has them, which its authors checked against tests on the PSP. Not yet: lines, and 3D.)
+//has them, which its authors checked against tests on the PSP. Not yet: lines, lighting, and PRIM's kind 7, which
+//goes on with the last primitive's vertices.)
 
 auto GE::primitive(u32 kind, u32 count) -> void {
   auto format = vertexFormat();
@@ -28,33 +35,61 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   //the next PRIM carries on where this one stopped: after its indices if it had them, else after its vertices
   if(format.indexFormat) indexAddress += count * (format.indexFormat == 2 ? 2 : 1);
   else vertexAddress += count * format.size;
-  if(!format.through) return note("drawing in 3D (not through mode) isn't emulated yet");
+  if(kind == 7) return note("PRIM's kind 7 (going on with the last primitive's vertices) isn't emulated yet");
+  if(!format.positionFormat) return;  //vertices without positions draw nothing (as PPSSPP has it)
 
   auto pixel = pixelState();
+  pixel.depthRange = !format.through;
+  pixel.fog = !format.through && !pixel.clear && (commands[FogEnable] & 1);
   Sampler texture = sampler();
   Sampler* textured = (commands[TextureMappingEnable] & 1) && !pixel.clear ? &texture : nullptr;
+  Transform t{};
+  if(!format.through) {
+    t = transformState();
+    t.weights = format.weightFormat ? format.weights : 0;
+    t.textureWidth = texture.width, t.textureHeight = texture.height;
+    if(commands[LightingEnable] & 1) note("lighting isn't emulated yet: vertices keep their own colors");
+    for(auto& vertex : vertices) transform(vertex, t);
+  }
+  s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
+  auto drawTriangle = [&](const Vertex& a, const Vertex& b, const Vertex& c, s32 facing) {
+    if(format.through) triangle(pixel, textured, a, b, c, facing, false);
+    else clipTriangle(pixel, textured, t, a, b, c, facing);
+  };
   switch(kind) {
   case Points:
-    for(auto& vertex : vertices) point(pixel, textured, vertex);
+    for(auto& vertex : vertices) {
+      if(!vertex.outside) point(pixel, textured, vertex);
+    }
     break;
   case Lines:
   case LineStrip:
     note("lines aren't drawn yet");
     break;
   case Triangles:
-    for(u32 n = 0; n + 2 < count; n += 3) triangle(pixel, textured, vertices[n], vertices[n + 1], vertices[n + 2]);
+    for(u32 n = 0; n + 2 < count; n += 3) drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], facing);
     break;
   case TriangleStrip:
-    for(u32 n = 0; n + 2 < count; n++) triangle(pixel, textured, vertices[n], vertices[n + 1], vertices[n + 2]);
+    for(u32 n = 0; n + 2 < count; n++) drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], n & 1 ? -facing : facing);
     break;
   case TriangleFan:
-    for(u32 n = 1; n + 1 < count; n++) triangle(pixel, textured, vertices[0], vertices[n], vertices[n + 1]);
+    for(u32 n = 1; n + 1 < count; n++) drawTriangle(vertices[0], vertices[n], vertices[n + 1], facing);
     break;
   case Sprites:
-    for(u32 n = 0; n + 1 < count; n += 2) rectangle(pixel, textured, vertices[n], vertices[n + 1]);
+    for(u32 n = 0; n + 1 < count; n += 2) {
+      if(!format.through && outOfSight(t.depthClamp, {&vertices[n], &vertices[n + 1]})) continue;
+      rectangle(pixel, textured, vertices[n], vertices[n + 1]);
+    }
     break;
   }
   if(pixel.high >= pixel.low) memory.changed(Memory::VRAMBase + pixel.low, pixel.high - pixel.low + 4);
+}
+
+//The fog at a pixel, 0-255, from its 0-1: rounded down, 1 or more giving 255 (as PPSSPP has it).
+static auto fogAmount(float fog) -> u32 {
+  if(std::signbit(fog)) return 0;
+  if(!(fog < 1)) return 255;
+  return u32(fog * 256);
 }
 
 //A screen position in pixels as the GE holds it, in sixteenths. Wild values (from garbage vertices) are held to the
@@ -67,9 +102,9 @@ static auto fixed(float position) -> s32 {
 static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 
 //A pixel's color: the vertex color, through the texture if there is one, then into the pixel pipeline.
-auto GE::shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, float u, float v) -> void {
+auto GE::shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, float u, float v, u32 fog) -> void {
   if(texture) color = textureFunction(color, sample(*texture, u, v));
-  drawPixel(pixel, x, y, z, color);
+  drawPixel(pixel, x, y, z, color, fog);
 }
 
 //The filter for a primitive: TEXTURE_FILTER's for enlarging if a texel covers a pixel or more, else its for shrinking
@@ -91,22 +126,27 @@ auto GE::rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, cons
     texture->linear = chooseFilter(commands[TextureFilter], across);
   }
   u32 z = u32(std::clamp(to.z, 0.0f, 65535.0f));
+  u32 fog = fogAmount(to.fog);  //in 3D, the second vertex's (PPSSPP splits it across the middle; not done here)
   for(s32 y = firstY; y <= lastY; y++) {
     float down = float(y * 16 + 8 - y0) / float(y1 - y0);  //from the first vertex's y to the second's
     for(s32 x = firstX; x <= lastX; x++) {
       float along = float(x * 16 + 8 - x0) / float(x1 - x0);
       float u = turned ? from.u + down * (to.u - from.u) : from.u + along * (to.u - from.u);
       float v = turned ? from.v + along * (to.v - from.v) : from.v + down * (to.v - from.v);
-      shade(pixel, texture, x, y, z, to.color, u, v);
+      shade(pixel, texture, x, y, z, to.color, u, v, fog);
     }
   }
 }
 
-auto GE::triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c) -> void {
+//A triangle. facing: 0 draws it either way round; 1 only if its corners run clockwise on the screen (y down), -1
+//only counterclockwise. perspective: 3D, its texture coordinates blended as the perspective has them.
+auto GE::triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
+                  bool perspective) -> void {
   struct Corner { s64 x, y; const Vertex* vertex; };
   Corner p[3] = {{fixed(a.x), fixed(a.y), &a}, {fixed(b.x), fixed(b.y), &b}, {fixed(c.x), fixed(c.y), &c}};
-  s64 area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x);
+  s64 area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x);  //above 0: clockwise
   if(area == 0) return;
+  if(facing && (area > 0) != (facing > 0)) return;
   if(area < 0) std::swap(p[1], p[2]), area = -area;  //the same corners, turned the way the edges are worked out for
   //An edge's function: positive on the triangle's side of it, zero on it.
   auto edge = [](const Corner& from, const Corner& to, s64 x, s64 y) {
@@ -156,7 +196,16 @@ auto GE::triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Ve
         }
       }
       u32 z = u32(std::clamp(blend(va.z, vb.z, vc.z), 0.0f, 65535.0f));
-      shade(pixel, texture, x, y, z, color, blend(va.u, vb.u, vc.u), blend(va.v, vb.v, vc.v));
+      float u = 0, v = 0;
+      if(texture && perspective) {
+        float ka = float(w0) / va.clip[3], kb = float(w1) / vb.clip[3], kc = float(w2) / vc.clip[3];
+        float divisor = ka * va.q + kb * vb.q + kc * vc.q;
+        u = (ka * va.u + kb * vb.u + kc * vc.u) / divisor;
+        v = (ka * va.v + kb * vb.v + kc * vc.v) / divisor;
+      } else if(texture) {
+        u = blend(va.u, vb.u, vc.u), v = blend(va.v, vb.v, vc.v);
+      }
+      shade(pixel, texture, x, y, z, color, u, v, fogAmount(blend(va.fog, vb.fog, vc.fog)));
     }
   }
 }
@@ -165,5 +214,5 @@ auto GE::point(PixelState& pixel, Sampler* texture, const Vertex& at) -> void {
   s32 x = fixed(at.x) >> 4, y = fixed(at.y) >> 4;
   if(x < pixel.left || x > pixel.right || y < pixel.top || y > pixel.bottom) return;
   if(texture) texture->linear = chooseFilter(commands[TextureFilter], 1.0f);
-  shade(pixel, texture, x, y, u32(std::clamp(at.z, 0.0f, 65535.0f)), at.color, at.u, at.v);
+  shade(pixel, texture, x, y, u32(std::clamp(at.z, 0.0f, 65535.0f)), at.color, at.u, at.v, fogAmount(at.fog));
 }

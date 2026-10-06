@@ -96,7 +96,9 @@ auto GE::sample(const Sampler& t, float u, float v) -> u32 {
     s32 last = std::min<s32>(size, 512) - 1;
     return clamp ? std::clamp(c, 0, last) : c & last;
   };
-  auto held = [](float value) { return std::clamp(value, -65536.0f, 65536.0f); };  //wild coordinates, from garbage
+  auto held = [](float value) {  //wild coordinates, from garbage (or none at all, from a division by zero)
+    return std::isnan(value) ? 0.0f : std::clamp(value, -65536.0f, 65536.0f);
+  };
   if(!t.linear) {
     s32 x = s32(std::floor(held(u))), y = s32(std::floor(held(v)));
     return texel(t, inside(x, t.width, t.clampU), inside(y, t.height, t.clampV));

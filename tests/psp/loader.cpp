@@ -366,7 +366,7 @@ static auto refused() -> void {
 //pspdev's hello world, when PSP_TEST_PROGRAMS points at it: its static executable, its PRX, and its EBOOT.PBP.
 static auto realPrograms() -> void {
   const char* folder = std::getenv("PSP_TEST_PROGRAMS");
-  if(!folder) return;
+  if(!folder || !*folder) return;
   auto read = [&](const char* name) {
     std::ifstream file(std::string(folder) + "/" + name, std::ios::binary);
     return std::vector<u8>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());

@@ -3,9 +3,9 @@
 #into a folder, for PSP_TEST_PROGRAMS (see tests/psp/loader.cpp): hello.elf (a static executable), hello.prx (a
 #relocatable module) and EBOOT.PBP (holding the static one); system.elf, which uses files and the controls
 #(tests/psp/files.cpp); gu.elf, which drives the GE through pspsdk's GU library, and pspsdk's own GU samples "copy",
-#"blit", "clut", "blend" and "doublelist" (copy.elf and so on, from the toolchain's samples) (tests/psp/ge.cpp and
-#draw.cpp); gemeasure.elf, tools/psp-ge-measure's program (tests/psp/measure.cpp). They're built from source each
-#time, so no binary goes in the repository.
+#"blit", "clut", "blend", "doublelist" and "cube" (copy.elf and so on, from the toolchain's samples)
+#(tests/psp/ge.cpp and draw.cpp); gemeasure.elf, tools/psp-ge-measure's program (tests/psp/measure.cpp). They're
+#built from source each time, so no binary goes in the repository.
 #usage: tools/psp-test-programs/build.sh <output folder>
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -38,7 +38,7 @@ cp "$WORK/gemeasure/gemeasure.elf" "$OUT/"
 SAMPLES="$(psp-config --pspsdk-path)/samples/gu"
 mkdir "$WORK/samples"
 cp -r "$SAMPLES/common" "$WORK/samples/"
-for sample in copy blit clut blend doublelist; do
+for sample in copy blit clut blend doublelist cube; do
   cp -r "$SAMPLES/$sample" "$WORK/samples/"
   make -C "$WORK/samples/$sample" >/dev/null
   cp "$WORK/samples/$sample/$sample.elf" "$OUT/"

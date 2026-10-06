@@ -295,7 +295,7 @@ static auto vblank() -> void {
 //pspdev's hello world, as a static executable, a PRX and an EBOOT.PBP: it sets up the debug screen, draws a line
 //and prints it, and leaves.
 static auto hello() -> void {
-  const char* folder = std::getenv("PSP_TEST_PROGRAMS");
+  const char* folder = testPrograms();
   if(!folder) return;
   for(const char* name : {"hello.elf", "hello.prx", "EBOOT.PBP"}) {
     for(bool recompile : {false, true}) {
