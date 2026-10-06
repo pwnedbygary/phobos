@@ -771,10 +771,22 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
   return ErrorFunctionNotSupported;
 }
 
-//(file, command, in, in length, out, out length)
+//(file, command, in, in length, out, out length). A read (0x01030008, or 0x01f30003's sectors) is a read as
+//sceIoRead's is: refused where the thread can't wait before anything moves, a bad file refused first, and then
+//waiting for the time its bytes take the drive (fileWait()). The other requests are answered at once.
 auto Kernel::sceIoIoctl() -> void {
-  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
-  result(ioctl(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5)));
+  u32 file = arg(0), command = arg(1);
+  if(asyncBusy(file)) return result(ErrorAsyncBusy);
+  auto found = files.find(file);
+  bool read = command == 0x0103'0008 || command == 0x01f3'0003;
+  if(!read || found == files.end() || found->second.folder || found->second.resultOnly || !found->second.onDisc
+  || !(found->second.flags & OpenRead)) {
+    return result(ioctl(file, command, arg(2), arg(3), arg(4), arg(5)));
+  }
+  if(u32 error = fileWaitRefused()) return result(error);
+  u64 moved = 0;
+  u32 got = ioctl(file, command, arg(2), arg(3), arg(4), arg(5), &moved);
+  fileWait(file, got, true, moved);
 }
 
 //(device, command, in, in length, out, out length): a request to a whole device. The disc drive's and the memory
