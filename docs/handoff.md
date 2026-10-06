@@ -448,6 +448,96 @@ N64/PS1 picture and save-state previews; the tap-to-show top bar is replaced by 
 on-screen menu button at the user's request ([touch controls](touch-controls.md)).
 Local builds for performance numbers must use NDK 28.2 (the CI toolchain).
 
+## Desktop builds — 2026-10-02
+
+Branch `cursor/desktop-phobos-2b67` ([PR #97](https://github.com/pwnedbygary/phobos/pull/97)),
+at the user's request: Phobos for Linux (AppImage + .zsync), Windows (Phobos.exe) and macOS
+(universal Phobos.app), alongside the Android app. The first cut was
+`cursor/desktop-phobos-ports-a292` ([PR #80](https://github.com/pwnedbygary/phobos/pull/80));
+see "Rebased onto master" below.
+
+- Build: `CMakeLists.txt` builds the cores, mia and the runner as `phobos_core`. Android links it
+  into `libphobos_android.so` with the old flags and libadrenotools; elsewhere it links into the
+  `phobos` program with SDL 3.2.30 (FetchContent, static). sljit and libco pick the CPU from the
+  compiler instead of ARM64 being hardcoded. Presets: `linux-x64`, `windows-x64` (MSYS2 UCRT64),
+  `windows-x64-cross` (MinGW-w64 from Linux), `macos-universal`.
+- Runner: ANativeWindow, AAudio and the adrenotools loader moved unchanged behind
+  `PhobosHost.hpp` into `PhobosHostAndroid.cpp`; `desktop/PhobosHostDesktop.cpp` is the SDL
+  version. Desktop Vulkan comes from `libvulkan.so.1`, `vulkan-1.dll` or the bundled MoltenVK.
+  Thread affinity, the thread id and the WFE wait stay Android-only. Also changed for both:
+  without an audio device the runner discards samples and retries every five seconds (it used to
+  retry on every core write), and PS1 memory cards are written through stdio.
+- Assets: the APK's `assets/System` (boot ROMs) and `assets/Database` ship beside the desktop
+  program, and it copies missing files into its data folder at start, as `extractAssets()` does.
+- Shell (`desktop/`): a placeholder UI in SDL's debug font: library (disc sets, cue/m3u, folder
+  names decide shared extensions), pause menu (states, reset, fast-forward, mute, disc change, N64
+  options, PS1 analog, fullscreen), ZX Spectrum and MSX keyboards, rumble, firmware matched as
+  `MainViewModel.scanFirmware()` matches it, `settings.ini`.
+- Packaging: `scripts/package-linux-appimage.sh`, `scripts/package-windows.sh`,
+  `scripts/package-macos-app.sh`; CI in `.github/workflows/desktop.yml`.
+
+Checks run (2026-10-02, Linux x86-64 VM, no GPU, no sound card, no controller):
+- Linux: GCC 13.3, CMake 3.28.3: `cmake --preset linux-x64 && cmake --build build/linux-x64`
+  builds. Blargg's `cpu_instrs.gb` passes all tests at 59.8 FPS; library, pause menu, save and
+  load state, and quit to library work (driven with xdotool).
+- AppImage: `scripts/package-linux-appimage.sh build/linux-x64` writes the AppImage (7.5 MB) and
+  its .zsync. Run from outside the tree with an empty data folder, it installs System/Database
+  and runs the same test.
+- Windows: MinGW-w64 GCC 13 (posix), `cmake --preset windows-x64-cross`. `scripts/package-windows.sh`
+  confirms Phobos.exe imports only Windows' own DLLs. Under Wine 9.0 it runs the same test at
+  59.8 FPS.
+- macOS: GitHub Actions run 37071950243 (macos-latest) built and packaged the app; `lipo -archs`:
+  x86_64 arm64; MoltenVK 1.4.2 bundled; signed ad hoc.
+- Android: JDK 21, AGP 9.3.2, NDK 28.2.13676358, CMake 3.22.1:
+  `./gradlew :app:assembleLegacyDebug :app:testModernDebugUnitTest` succeeds, 211 tests pass,
+  and all 85 JNI functions are exported. lld's `--why-extract` shows the archive members the
+  static link leaves out are unused (Saturn stub, unused CPUs and ymfm chips, parallel-RDP's WSI).
+
+Not checked: any device or real desktop hardware; Nintendo 64 on desktop (no GPU here; MoltenVK
+untested); audio output; gamepads and rumble; the independent review that
+[development-process.md](development-process.md) requires before commit (the PR is a draft for it).
+
+Next: UI parity with the Android app (the user's direction); N64 on real desktop GPUs, including
+MoltenVK; MSVC/clang-cl is not supported (the runner's threads use pthreads; MinGW provides them).
+
+Rebased onto master (2026-10-03, the user's choice): #80's 11 commits replayed in order on master
+with `git cherry-pick -x`, authors kept, in a new PR; #80 is closed. The two conflicts were next to
+code master added: the LaserActive side functions in `PhobosRunner.cpp/.hpp`, just ahead of the
+`setSurface` that #80 limits to Android, and plan item 7's "Parked" note. Master's runner code since
+#80's base calls nothing Android-only, so the desktop build takes it unchanged. On top of that:
+- The independent review of #80 (Bugbot, posted on #80) found that a game dropped on a running one
+  skipped the key and rumble reset. The same path had a worse problem: `launch()` set the runner's
+  per-game keys (memory card key, ROM path) before `initialize()`, which only then unloads the
+  running game, so its battery save, PS1 memory cards and MSX data tape were written under the new
+  game's name (over the new game's own saves when both are for the same system). `launch()` now
+  unloads the running game first through `unloadGame()`, the teardown `quitGame()` did, without
+  quitting a frontend's session. If the new game then fails to start, the library shows instead of
+  the stopped game. Android isn't affected: `startLoad()` unloads before every load.
+- The packages carried no license notices. They now ship LICENSE, and COPYING once the relicense lands: in the
+  AppImage's `usr/share/doc/phobos`, beside Phobos.exe as `.txt` files, and in Phobos.app's Resources. Phobos.app
+  also gets MoltenVK's Apache-2.0 license, from MoltenVK's release archive. Still missing: the notice for
+  winpthreads, which Phobos.exe links statically.
+- Not on desktop yet (part of UI parity): the systems added since #80's base (Mega LD, PC Engine LD,
+  Pocket Challenge V2) aren't in `desktop/Library.cpp`'s table, and the LaserActive BIOSes aren't in
+  `desktop/Firmware.cpp`'s copies of the app's firmware maps. The desktop also lacks the app's
+  request for an MSX BIOS with BASIC before a tape starts (`msxFirmwareMissing()`), the MSX tape
+  deck and data tape controls, and LaserActive side changes.
+
+Checks run (2026-10-03, Mac M1 + Retroid Pocket 6 `49016109`):
+- macOS arm64, native rather than the universal preset (Apple clang 17, CMake 4.4.3, Xcode's macOS
+  15.4 SDK; SDL 3.2.30 needs CMake 3.24 or later on macOS, so the Android SDK's 3.22.1 can't
+  configure it): builds. Two homemade 16 KiB MSX cartridges run on the bundled C-BIOS at 60 FPS,
+  with sound through SDL. Handing the second one to the running program (`open -a` on a throwaway
+  app bundle, which SDL delivers as a drop) writes the first game's saves under its own name
+  ("[Blue]") and starts the second. A build of #80's `main.cpp` wrote them as "[Red]".
+- `scripts/package-macos-app.sh` on that build: Phobos.app holds LICENSE and LICENSE-MoltenVK (and COPYING, with
+  one in place), its ad hoc signature verifies, and at start it loads the bundled MoltenVK. No N64 game was run.
+- Android: `./gradlew testModernDebugUnitTest assembleModernRelease` succeeds; the 240 tests pass,
+  and all 92 JNI functions the build compiles are exported. On the RP6, an MSX cartridge paused,
+  resumed and quit: AAudio stopped, restarted, and stayed open for the next game, which played
+  sound. Sub-Terrania, Mario Tennis (Turnip through adrenotools) and Ape Escape ran at 60 FPS with
+  sound, as they did in the boot pass on master.
+
 ## Touch controls overhaul and performance scan — 2026-09-24 (in progress)
 
 Status: **implemented on branch `feature/touch-controls-perf-2026-09` (base
@@ -716,6 +806,42 @@ source, rate wording) — fixed in this tree before commit.
 2. A CI build (NDK 28.2) before release.
 3. Publish (push) the branch only when authorized.
 
+## MSX game in one cartridge slot — 2026-10-03
+
+Branch `cursor/msx-one-cartridge-v2-2b67` (#99's commit, rebased onto master after the desktop and licensing PRs
+merged). The plan row "MSX game in one cartridge slot" has the details: an MSX
+cartridge game was connected to the Expansion Slot as well as the Cartridge Slot, so the BIOS found a second copy;
+`connectDevices` now leaves the Expansion Slot empty, as ares's own frontend does. A state holds the board of each
+slot with a cartridge in, so MSX states move to v135 and older ones are refused (the review's finding: they would
+have loaded misaligned).
+
+- **Checks run:** the modern release builds, 240 host tests pass. On the RP6, a probe cartridge written for the test
+  printed "S1 S1 S2" and held before the change, and now prints "S1 S1" before the BIOS goes on to BASIC. The log
+  lists one cartridge port instead of two. A state saved to slot 0 loaded back. The probe, its states and its save
+  folder were removed afterwards.
+- **Version code:** the RP6 has the desktop branch's build number (104601, 11 commits ahead of master), and Android
+  refuses downgrades on this user build, so this test build was given the same number (`-PversionCode=104601`).
+  The in-app updater couldn't install master's nightlies there until master passed 104601, which the desktop PR's
+  merge did.
+- **Seen, fixed separately:** in 40-column text (SCREEN 0), each row's first character showed again at the right
+  edge (branch `cursor/msx-text-columns-2b67`).
+
+## Phobos's own code under GPL-3.0-or-later — 2026-10-03
+
+Branch `cursor/gpl-own-code-v2-2b67`, for the user to merge: #94's commit, rebased onto master after #95 and #96
+merged. It follows their answers of 2026-10-03: the work-email commits are cleared, and the firmware stays, so no
+GPL code from elsewhere comes in.
+
+- LICENSE opens with a Phobos notice (© 2026 Phobos Team, as the About screen has it): Phobos's own code under
+  GPL-3.0-or-later, each component under its own license, and the firmware ares ships outside the GPL. COPYING is
+  the GPL's text from gnu.org (SHA-256 `3972dc97…`, the published file); the build appends it to the APK's notices
+  as their last one. The README gains a License section, and the Licenses and About screens say what's under the GPL.
+- **Checks run:** the modern release builds, 241 host tests pass on master (`LicenseNoticesTest` now expects Phobos
+  then ares and the GPL grant, and checks that COPYING is GPL v3 without a notice rule in it), and the APK's notices
+  open on Phobos's and end with the GPL. On the RP6, with #94's build, Settings → About → Open-source licenses opened
+  on Phobos's notice first, then ares, and ended with GNU GENERAL PUBLIC LICENSE.
+- **Not checked:** the legacy APK on a device.
+
 ## MSX tape saving — 2026-10-03
 
 Branch `cursor/msx-tape-saving-2b67`, stacked on `cursor/n64-hack-notes-2b67`. The plan row "MSX tape saving" has
@@ -790,6 +916,17 @@ B3313 v1.0.2 Hotfix 3 stops at boot" and "F-Zero ZX Overdrive's picture" have wh
 v1.0.2 boots into RAM and spins taking exceptions, and Overdrive runs but its scanned-out framebuffer stays black.
 On the RP6, N64 Debug Logging was switched on and Asynchronous RDP off for the runs, then both were set back
 (logging off, Asynchronous RDP on); Phobos was force-stopped after each run, so no auto state was written.
+
+## MSX 40-column text — 2026-10-03
+
+Branch `cursor/msx-text-columns-2b67`. The plan row "MSX 40-column text" has the details: ares's TMS9918 and V9938
+drew text mode across the whole line, so each row's first character showed again at the right edge; the 40 columns
+now sit between eight-pixel borders.
+
+- **Checks run:** the modern release builds. On the RP6, with the user's MSX BIOS and a cartridge written for the
+  test that returns at once, BASIC's screen showed the stray column before and doesn't now. The test cartridge and
+  the empty save folder it left were removed afterwards.
+- **Not checked:** an SG-1000, SC-3000 or ColecoVision program in text mode (same code), an MSX2.
 
 ## Cleanups — 2026-10-03
 
