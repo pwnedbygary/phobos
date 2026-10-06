@@ -1,19 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
+   What Android 12 and later take of the app's data to the cloud and to a new device: everything but the firmware
+   folder, which holds copies of the user's own firmware (the PSP's fonts from their PSP's flash0), and firmware never
+   leaves the user's devices through Phobos. After a restore the fonts are imported again: by themselves from
+   Download/FLASH0DUMP where the app can read it, else from Settings.
    See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="firmware/" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="file" path="firmware/" />
     </device-transfer>
-    -->
 </data-extraction-rules>

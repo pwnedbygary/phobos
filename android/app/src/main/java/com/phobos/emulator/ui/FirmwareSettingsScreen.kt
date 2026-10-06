@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.FirmwareIds
 import com.phobos.emulator.util.FirmwareStatus
+import com.phobos.emulator.util.PspFonts
 
 data class FirmwareInfo(
     val emulator: String,
@@ -229,10 +230,12 @@ fun FirmwareRow(info: FirmwareInfo, path: String, status: FirmwareStatus?, onCli
 
 /**
  * The PSP's system fonts, from the user's own PSP: tapping picks the font folder of their flash0 dump (or the dump,
- * or its flash0), whose .pgf files the app copies into its own files. [count] is how many of the eighteen it holds.
+ * or its flash0), whose .pgf files the app copies into its own files. [held] is how many of the eighteen it holds,
+ * and whether they were found by themselves in Download/FLASH0DUMP rather than picked.
  */
 @Composable
-fun PspFontsRow(count: Int, onClick: () -> Unit) {
+fun PspFontsRow(held: PspFonts.Held, onClick: () -> Unit) {
+    val count = held.count
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -244,7 +247,11 @@ fun PspFontsRow(count: Int, onClick: () -> Unit) {
         RowText("PSP fonts (from your PSP's flash0)", Modifier.weight(1.5f))
         RowText("World", Modifier.weight(1f))
         RowText(
-            if (count == 0) "(unset): pick flash0's font folder" else "$count of 18 fonts copied",
+            when {
+                count == 0 -> "(unset): pick flash0's font folder"
+                held.found -> "$count of 18 fonts, found in ${PspFonts.DUMP_FOLDER}"
+                else -> "$count of 18 fonts copied"
+            },
             Modifier.weight(3f),
             color = if (count == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
         )
