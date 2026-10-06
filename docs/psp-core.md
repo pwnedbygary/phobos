@@ -4,8 +4,9 @@
 instructions) with host tests, is on branch `cursor/psp-core-2b67`; part 2, the recompiler, on
 `cursor/psp-recompiler-2b67` on top of it; part 3, the VFPU, on `cursor/psp-vfpu-ares-2b67` on top of that; part 4,
 compiled loads and stores straight to RAM, on `cursor/psp-fastmem-2b67`; the VFPU's measurements on a real PSP
-after it; part 5, the memory map, on `cursor/psp-memory-2b67`; part 6, the loader, on `cursor/psp-loader-2b67`.
-The user asked for the whole feature to be stacked and merged at once. Nothing is in the app yet.
+after it; part 5, the memory map, on `cursor/psp-memory-2b67`; part 6, the loader, on `cursor/psp-loader-2b67`;
+part 7, the first HLE functions, on `cursor/psp-hle-2b67`, which run pspdev's hello world from start to end on the
+host. The user asked for the whole feature to be stacked and merged at once. Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -126,7 +127,8 @@ branch not taken, `nor` without the not, delay-slot instructions given the wrong
 2. The recompiler, with differential tests against the interpreter (part 2; its later steps are listed above).
 3. The VFPU: registers, prefixes, instructions, tested against the pspdev documentation's descriptions (part 3).
 4. Memory map (part 5); loading an unencrypted `EBOOT.PBP`, ELF or PRX (part 6); the first HLE functions (module
-   start, threads, display, controls, files); a homebrew test program run on the host.
+   start, threads, display, memory, standard output) and a homebrew test program run on the host (part 7); then
+   controls and files.
 5. The GE: display lists, a software rasterizer (2D first), the display.
 6. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
 7. Retail executables: `~PSP` decryption.
@@ -298,3 +300,51 @@ Three broken versions (no carry, `jal` targets not moved, a `lui` adjusted twice
 mistakes Bugbot's review found in the first version (a `lui` left waiting when its lower half came as a 16-bit
 relocation; packed relocations not noticed when sections were kept). `tools/psp-test-programs/build.sh <folder>` builds a real hello world
 (static, PRX and EBOOT) with pspdev's toolchain; with `PSP_TEST_PROGRAMS=<folder>` the tests load those too.
+
+## Part 7: the first HLE functions
+
+`ares/psp/kernel/kernel.cpp` (with `threads.cpp`, `sysmem.cpp`, `io.cpp`, `display.cpp`, `system.cpp`): Phobos's own
+version of the PSP's operating system, as far as a program sees it. The loader asks it for a syscall code per import
+(`importCode()`); the CPU passes each syscall to `syscall()`, which runs the function, a member named after it
+(`sceKernelCreateThread()`), with the arguments in a0-a3 and t0-t3 and the result in v0.
+
+- **NIDs are worked out from names**: a function's NID is the first four bytes of the SHA-1 hash of its name, as a
+  little-endian word (`nid()`, SHA-1 written from FIPS 180-1, as nall has none). All 46 imports of pspdev's hello
+  world matched names in pspsdk's headers that way, so the functions are listed by name, with no table of numbers
+  copied from anywhere. A function the kernel doesn't have is noted once and returns
+  `SCE_KERNEL_ERROR_LIBRARY_NOT_YET_LINKED`.
+- **Threads**: each has its own registers (integer, FPU, VFPU), put aside while another runs. The ready thread with
+  the highest priority runs, the one ready longest among equals; one that's woken with a higher priority takes over.
+  A thread's entry function returns to a trampoline in kernel memory (`syscall` with the kernel's own code), which
+  ends it. A function that makes its thread wait sets its result when the thread wakes.
+- **Time**: cycles at 333 MHz, one per instruction; the vertical blank 59.94 times a second. When every thread waits,
+  the clock jumps to the next delay, timeout or blank; if none is coming, the kernel says every thread waits on
+  another, and stops.
+- **The program**: `load()` starts afresh, as the PSP does when a game is chosen (whatever an earlier program left,
+  having exited included, goes; a load that fails leaves nothing behind either). It takes a PBP or an ELF, puts a PRX
+  at the start of the user partition, reserves the program's memory exactly where it is (or refuses a program whose
+  segments overlap), and starts its first thread at the entry
+  point with the path as its argument (argv[0]), its `gp`, a 256 KiB stack, and the top 256 bytes of the stack as
+  the kernel's area (`k0`). A thread's start argument must fit on its stack and be readable, or starting it fails;
+  the program's path may be up to 4 KiB.
+- **Functions** (54): threads (create, start, exit, delete, delay, sleep and wakeup, wait for an end, status),
+  semaphores, lightweight mutexes (their state in the program's own memory, `SceLwMutexWorkarea`), the clock, the
+  user partition's memory (blocks from the lowest place, the highest or an address, 256-byte aligned; stacks from the
+  top), standard input, output and error (output goes to `output()`), the display's frame buffer and vertical blank,
+  the GE's memory, leaving the program, system settings (English, cross confirms), and failing network calls.
+  Files come next: until then opening one says it isn't there.
+
+Error codes come from pspsdk's `pspkerror.h`, and those it lacks (the lightweight mutex's, the allocation type's,
+file not found) from uOFW's `errors.h`.
+
+Tests (`tests/psp/kernel.cpp`): NIDs; two programs written in the test, run on both engines: threads that start,
+preempt, delay and wait for each other's end, and a semaphore, a mutex held across threads, and sleep and wakeup,
+each checked by what they print and leave in memory; the user partition; start arguments; the program's memory; a
+program run to its exit, loaded again and run again; unknown functions; the vertical blank and the clock. Four broken versions (priorities inverted, results lost on
+waking, a SHA-1 constant off by one, threads not ending at their return) each failed them, as did the first
+version's mistakes the reviews found: a start argument copied past its stack, or from an unreadable address,
+without an error; the program's memory reserved elsewhere when its own place was taken; and a second program loaded
+after one exited running nothing, with a failed load leaving memory reserved; and the program's path passed to its
+first thread unchecked. With `PSP_TEST_PROGRAMS`, pspdev's hello world runs from start to end
+as a static executable, a PRX and an EBOOT on both engines: it prints `hello from a PSP program 42`, draws it on the
+debug screen (pixels lit in the frame buffer it gave the display) and leaves.
