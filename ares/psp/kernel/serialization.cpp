@@ -381,7 +381,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   check(display.mode == 0 && display.width == 480 && display.height == 272);
 
   //calls into the program
-  vector(calls, [&](Call& call) { s(call.function); s(call.gp); s(call.arguments); s(call.resumesGe); });
+  vector(calls, [&](Call& call) {
+    s(call.function); s(call.gp); s(call.arguments); s(call.resumesGe); s(call.vblank);
+  });
   s(interrupting); s(interruptsEnabled); s(rescheduleAfter);
   context(interrupted);
   s(interruptedHalted); s(callResumesGe);

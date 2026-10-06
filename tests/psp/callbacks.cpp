@@ -572,6 +572,45 @@ static auto heldOffOnce() -> void {
   }
 }
 
+//Vertical blank handlers that take longer than a frame: two of 20 ms each, called directly, the clock moved on by
+//hand to each blank and each return. A blank that comes while the last blank's handlers are still queued or running
+//waits, once, so they run back to back, about 50 times each in 120 frames, and the queue never holds more than one
+//blank's two. (The old code queued both again whenever a call returned, a blank always pending by then: 97 calls
+//waited by frame 120, all of them saved in states.)
+static auto longHandlers() -> void {
+  KernelMachine d;
+  for(u32 sub : {0u, 1u}) {
+    CHECK(d.call("sceKernelRegisterSubIntrHandler", {30, sub, 0x0880'3000 + sub * 0x100, 0}), 0);
+    CHECK(d.call("sceKernelEnableSubIntr", {30, sub}), 0);
+  }
+  constexpr u64 Length = Kernel::CPUFrequency / 50;  //20 ms
+  u64 returnsAt = 0;
+  u32 ran[2] = {}, most = 0;
+  auto started = [&] {  //a handler may have taken the CPU just now: it returns 20 ms on
+    if(!d.kernel.interrupting) return;
+    ran[d.system.ipu.r[4] & 1]++;  //(its number, its argument)
+    returnsAt = d.kernel.cycles + Length;
+  };
+  while(d.kernel.vblanks < 120) {
+    bool returning = d.kernel.interrupting && returnsAt <= d.kernel.nextVblank;
+    d.kernel.cycles = returning ? returnsAt : d.kernel.nextVblank;
+    if(returning) {
+      d.kernel.callReturned();  //and the next call waiting starts
+      started();
+    }
+    d.kernel.events();
+    most = std::max<u32>(most, d.kernel.calls.size());
+    if(!d.kernel.interrupting) {
+      d.kernel.startCall();
+      started();
+    }
+  }
+  CHECK(most, 2);
+  CHECK(ran[0] >= 49 && ran[0] <= 50 && ran[1] >= 49 && ran[1] <= 50, true);
+  if(ran[0] < 49 || ran[0] > 50 || ran[1] < 49 || ran[1] > 50) std::printf("  ran %u and %u times\n", ran[0], ran[1]);
+  CHECK(d.kernel.vblankPending, true);
+}
+
 //Which interrupts and sub-interrupts a program may hang handlers on: every number pspautotests' intr/registersub and
 //intr/releasesub tried on a PSP, registered then released (-2 to 69 with sub-interrupt 0; the vertical blank's
 //sub-interrupts -2 to 69); null handlers; enabling and disabling (intr/enablesub), which look at the numbers alone.
@@ -652,7 +691,8 @@ auto callbackTests() -> Tests {
     {"callbacks in waits ending at once", waitsAtOnce},
     {"callbacks by priority", byPriority}, {"callbacks called directly", callbackCalls},
     {"display vblank timing", vblankTiming}, {"interrupts vblank handler", vblankHandler},
-    {"interrupts held off, delivered once", heldOffOnce}, {"interrupts numbers", interruptTable},
+    {"interrupts held off, delivered once", heldOffOnce}, {"interrupts handlers longer than a frame", longHandlers},
+    {"interrupts numbers", interruptTable},
   };
 }
 

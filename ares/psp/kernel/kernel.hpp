@@ -501,7 +501,8 @@ struct Kernel {
   struct Call {
     u32 function, gp;
     u32 arguments[3];
-    bool resumesGe;  //the GE waits for it (a SIGNAL that suspends the list)
+    bool resumesGe;       //the GE waits for it (a SIGNAL that suspends the list)
+    bool vblank = false;  //a vertical blank's handler
   };
   std::deque<Call> calls;       //waiting their turn
   bool interrupting = false;    //one is running
@@ -528,6 +529,7 @@ struct Kernel {
   bool vblankPending = false;  //a vertical blank came while its handlers couldn't run: they run once, when they can
   auto subHandlers(u32 interrupt) -> SubHandler*;
   auto queueVblankHandlers() -> void;
+  auto vblankQueued() const -> bool;
   auto vblankInterrupt() -> void;
   auto vblankHandlers() const -> bool;
   auto sceKernelRegisterSubIntrHandler() -> void;

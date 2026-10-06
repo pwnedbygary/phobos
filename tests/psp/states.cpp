@@ -432,7 +432,7 @@ static auto stateFields() -> void {
     //calls into the program
     {"call function", [&] { k.calls[0].function ^= 4; }}, {"call gp", [&] { k.calls[0].gp ^= 4; }},
     {"call arguments", [&] { k.calls[0].arguments[2] ^= 1; }},
-    {"call resumesGe", [&] { k.calls[0].resumesGe = true; }},
+    {"call resumesGe", [&] { k.calls[0].resumesGe = true; }}, {"call vblank", [&] { k.calls[0].vblank = true; }},
     {"interrupting", [&] { k.interrupting = true; }}, {"interruptsEnabled", [&] { k.interruptsEnabled = false; }},
     {"rescheduleAfter", [&] { k.rescheduleAfter = true; }},
     {"interruptedHalted", [&] { k.interruptedHalted = true; }},

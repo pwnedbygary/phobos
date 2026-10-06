@@ -16,10 +16,11 @@ auto Kernel::queueCall(u32 function, u32 gp, u32 a0, u32 a1, u32 a2, bool resume
 }
 
 //The next call starts, if one may: none is running and interrupts aren't held off. A vertical blank held off till
-//now comes first: its handlers join the queue, once however many blanks went by (vblankInterrupt()).
+//now comes first: its handlers join the queue, once however many blanks went by (vblankInterrupt()); unless the
+//last blank's still wait their turn there, when it stays pending.
 auto Kernel::startCall() -> void {
   if(interrupting || !interruptsEnabled) return;
-  if(vblankPending) {
+  if(vblankPending && !vblankQueued()) {
     vblankPending = false;
     queueVblankHandlers();
   }
@@ -200,11 +201,13 @@ auto Kernel::sceKernelDisableSubIntr() -> void {
 }
 
 //A vertical blank's interrupt (events() at each blank). Its handlers run as calls into the program, now; but while
-//they can't (interrupts held off, or a call running), the interrupt waits, as the PSP's interrupt controller keeps
-//an interrupt pending: once. More blanks meanwhile add nothing to it, and when it's let through, each handler then
-//registered and enabled runs once: a program that held interrupts off for 600 blanks gets one call of each, not 600.
+//they can't (interrupts held off, a call running, or the last blank's handlers still waiting their turn), the
+//interrupt waits, as the PSP's interrupt controller keeps an interrupt pending: once. More blanks meanwhile add
+//nothing to it, and when it's let through, each handler then registered and enabled runs once: a program that held
+//interrupts off for 600 blanks gets one call of each, not 600, and handlers that take longer than a frame run back
+//to back, the queue never holding more than one blank's.
 auto Kernel::vblankInterrupt() -> void {
-  if(interrupting || !interruptsEnabled) {
+  if(interrupting || !interruptsEnabled || vblankQueued()) {
     vblankPending = true;
     return;
   }
@@ -216,8 +219,14 @@ auto Kernel::vblankInterrupt() -> void {
 auto Kernel::queueVblankHandlers() -> void {
   for(u32 sub = 0; sub < 32; sub++) {
     auto& handler = vblankSubs[sub];
-    if(handler.function && handler.enabled) queueCall(handler.function, handler.gp, sub, handler.argument, 0);
+    if(!handler.function || !handler.enabled) continue;
+    calls.push_back({handler.function, handler.gp, {sub, handler.argument, 0}, false, true});
   }
+}
+
+//Whether a vertical blank's handlers wait their turn among the calls into the program.
+auto Kernel::vblankQueued() const -> bool {
+  return std::any_of(calls.begin(), calls.end(), [](const Call& call) { return call.vblank; });
 }
 
 //Whether a handler runs at the vertical blanks to come: then the threads waiting on what it does aren't stuck (time
