@@ -12,139 +12,107 @@ object PlatformGlyphs {
     val bySlug: Map<String, List<String>> = mapOf(
         "atari2600" to art(
             """
-            ...XXXXXXXXXXXXXXXX...
-            ..XSXSXSXWWWWWXSXSXSX.
-            .XSXSXSXXWSSSWXXSXSXSX
-            XSXSXSXSXWWWWWXSXSXSXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXAXXAXXXXXXXXXXXAXXAX
-            AAAAAAAAAAAAAAAAAAAAAA
-            ASAAASAAASAAASAAASAAAS
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXX
+            XAAAAAAAAAAAAAAX
+            XXXXXXXXXXXXXXXX
+            XSSXXSSXXSSXXSSX
+            XXXXXXXXXXXXXXXX
             """,
         ),
         "colecovision" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXXXXXXWWWWWWWWWWX
-            XWWWWWWWXXXWSSSWWSSSWX
-            XWSSSSSWXXXWSASWWSASWX
-            XWWWWWWWXXXWSSSWWSSSWX
-            XXXXXXXXXXXWSASWWSASWX
-            XXAXXXXXXXXWSSSWWSSSWX
-            XXXXXXXXXXXWWWWWWWWWWX
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXX
+            XWWWWWWWWWWWWWWX
+            XWWWWWWWWWWWWWWX
+            XXXXXXXXXXXXXXXX
+            XAASAXXXXXXAASAX
+            XAASAXXXXXXAASAX
+            XXXXXXXXXXXXXXXX
             """,
         ),
         "nes" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXWWWWWWWWWWWWWWWWWWXX
-            XXWSSSSSSSSSSSSSSSSWXX
-            XXWSSSSSSSSSSSSSSSSWXX
-            XXWWWWWWWWWWWWWWWWWWXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XSSSSSSSSSSSSSSSSSSSSX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXAAXAAXXWWXXWWXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXX
+            XWWWXXSSSSXXWWWX
+            XWWWWWWWWWWWWWWX
+            XXXXXXXXXXXXXXXX
+            XSSXXXXXXXXXXSSX
+            XXXXXXXXXXXXXXXX
             """,
         ),
         "snes" to art(
             """
-            ...XXXXXXXXXXXXXXXX...
-            .XXXXXXXXXXXXXXXXXXXX.
-            XXXAXXXWWWWWWWWXXXAXXX
-            XXXAXXXWSSSSSSWXXXAXXX
-            XXXXXXXWWWWWWWWXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            SSSSSSSSSSSSSSSSSSSSSS
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXWWXWWXXXXXXXXXAXAXAX
-            XXXXXXXXXXXXXXXXXXXXXX
-            .XXXXXXXXXXXXXXXXXXXX.
-            ...XXXXXXXXXXXXXXXX...
+            XXXXXXXXXXXXXXXX
+            XWWWWWWWWWWWWWWX
+            XWWWWWWWWWWWWWWX
+            XWWWWXXAXAXAXAXX
+            XWWWWXXAXAXAXAXX
+            XXXXXXXXXXXXXXXX
             """,
         ),
         "sgb" to art(
             """
-            .......XXXXXXXX.......
-            .......XWWWWWWX.......
-            .......XWSSSSWX.......
-            ..XXXXXXXXXXXXXXXXXX..
-            .XXXXXXXXXXXXXXXXXXXX.
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXWWWWWWWWWWWWWWWWXXX
-            XXXWAAAAAAAAAAAAAAWXXX
-            XXXWWWWWWWWWWWWWWWWXXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            .....XXXXXX.....
+            .....XSSSSX.....
+            .....XXXXXX.....
+            XXXXXXXXXXXXXXXX
+            XWWWWWWWWWWWWWWX
+            XWWWWSSSSSSWWWWX
+            XWWWWSSSSSSWWWWX
+            XWWWWWWWWWWWWWWX
+            XXXXXXXXXXXXXXXX
             """,
         ),
         "arcade" to art(
             """
-            .XXXXXXXXXXXX.
-            .XAAAAAAAAAAX.
-            .XXXXXXXXXXXX.
-            .XXWWWWWWWWXX.
-            .XXWSSSSSSWXX.
-            .XXWSSSSSSWXX.
-            .XXWWWWWWWWXX.
-            XXXXXXXXXXXXXX
-            XXAXXXXXXAXAXX
-            XXXXXXXXXXXXXX
-            .XXXXXXXXXXXX.
-            .XXXXWWWWXXXX.
-            .XXXXWAAWXXXX.
-            .XXXXWWWWXXXX.
-            .XXXXXXXXXXXX.
+            ....XXXXXXXXXX....
+            ....XAAAAAAAAX....
+            ....XXXXXXXXXX....
+            ....XXWWWWWWXX....
+            ....XXWSSSSWXX....
+            ....XXWSSSSWXX....
+            ....XXWWWWWWXX....
+            ....XXXXXXXXXX....
+            ...XXAXXXXXAXXX...
+            ...XXXXXXXXXXXX...
+            ...XXXXXXXXXXXX...
+            ...XXXXWWWWXXXX...
+            ...XXXXWAAWXXXX...
+            ...XXXXWWWWXXXX...
+            ...XXXXXXXXXXXX...
             """,
         ),
         "laseractive" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXAXAXXXXXXXXXXXWWWWXX
-            XXXXXXXXXXXXXXXXWAAWXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            .XXXXXXXXXXXXXXXXXXXX.
-            .XXXXXWWWWWWWWWWXXXXX.
-            .XXXWWSSSSSSSSSSWWXXX.
-            .XXXWSSSSSSXSSSSSWXXX.
-            .XXXWWSSSSSSSSSSWWXXX.
-            .XXXXXWWWWWWWWWWXXXXX.
+            XXXXXXXXXXXXXXXX
+            XWWWWWWWWWWWWWWX
+            XWWSSSSSSSSWWWAX
+            XWWSSSSSSSSWWWAX
+            XWWSSSSSSSSWWWAX
+            XWWWWWWWWWWWWWWX
+            XXXXXXXXXXXXXXXX
             """,
         ),
         "pceld" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XAAAAAAAAAAAAAAAWWWWXX
-            XXXXXXXXXXXXXXXXWSSWXX
-            XXXXXXXXXXXXXXXXWWWWXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            .XXXXXXXXXXXXXXXXXXXX.
-            .XXXXXWWWWWWWWWWXXXXX.
-            .XXXWWSSSSSSSSSSWWXXX.
-            .XXXWSSSSSSXSSSSSWXXX.
-            .XXXWWSSSSSSSSSSWWXXX.
-            .XXXXXWWWWWWWWWWXXXXX.
+            XXXXXXXXXXXXXXXXXX
+            XWWWWWWWWWWWWWWWWX
+            XWWWXXXXXXXXXXWWWX
+            XWWWXXXXXXXXXXWWWX
+            XWWWWWWWWWWWWWWWWX
+            XXXXXXXXXXXXXXXXXX
             """,
         ),
         "n64" to art(
             """
-            .......XXXXXXXX.......
-            ......XXXXXXXXXX......
-            ......XXWWWWWWXX......
-            ...XXXXXWSSSSWXXXXX...
-            .XXXXXXXWWWWWWXXXXXXX.
-            XXXAXXXXXXXXXXXXXXAXXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXWWXXWWXXXXXXWWXXWWXX
-            .XXXXXXXXXXXXXXXXXXXX.
-            ..XXXXXXXXXXXXXXXXXX..
+            ......XXXX......
+            ....XXSSSSXX....
+            ..XXXXXXXXXXXX..
+            XXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXX
+            XXSSXXXSSXXXSSXX
+            XXXXXXXXXXXXXXXX
             """,
         ),
         "gb" to art(
@@ -161,288 +129,298 @@ object PlatformGlyphs {
             XWWWXXXXXAXX
             XXWXXXXXAXXX
             XXXXXXXXXXXX
-            XXXXWXWXXXXX
             XXXXXXXXXXX.
             XXXXXXXXXX..
             """,
         ),
         "gbc" to art(
             """
-            .XXXXXXXXXX.
-            XXAAAAAAAAXX
-            XXWWWWWWWWXX
-            XXWSSSSSSWXX
-            XXWSSSSSSWXX
-            XXWWWWWWWWXX
-            XXXXXXXXXXXX
-            XXWXXXXXXAXX
-            XWWWXXXXAXXX
-            XXWXXXXXXXXX
-            XXXXWXWXXXXX
-            .XXXXXXXXXX.
+            .XXXXXXXXXXXX.
+            XAAAAAAAAAAAAX
+            XAWWWWWWWWWWXA
+            XAWSSSSSSSSWXA
+            XAWSSSSSSSSWXA
+            XAWWWWWWWWWWXA
+            XAXXXXXXXXXXAX
+            XAAXXXXXXXXAAX
+            XAAAXXXXXXAAAX
+            XAAXXXXXXXXAAX
+            XAXXWXWXXXXXAX
+            XXXXXXXXXXXXXX
+            XXXXXXXXXXXXX.
             """,
         ),
         "gba" to art(
             """
-            .XXXXX..........XXXXX.
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXWWWWWWWWWWXXXXXX
-            XXWXXXWSSSSSSSSWXXXXXX
-            XWWWXXWSSSSSSSSWXXAXXX
-            XXWXXXWSSSSSSSSWXAXXXX
-            XXXXXXWWWWWWWWWWXXXXXX
-            .XXXXXXXXXXXXXXXXXXXX.
-            ...XXXXXXXXXXXXXXXX...
+            XXXXX..........XXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXWWWWWWWWWWXXXX
+            XXWXXXWSSSSSSSSWXXXX
+            XWWWXXWSSSSSSSSWXXAX
+            XXWXXXWSSSSSSSSWXXXX
+            XXXXXXWWWWWWWWWWXXXX
+            XXXXXXXXXXXXXXXXXXXX
             """,
         ),
         "sms" to art(
             """
-            ....XXXXXXXXXXXXXXXXXX
-            ...XXXXXXWWWWWWWXXXXXX
-            ..XXXXXXXWSSSSSWXXXXXX
-            .XXXXXXXXWWWWWWWXXXXXX
-            XAAAAAAAAAAAAAAAAAAAAX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXWWWWWWXXXXXXXXXAXAXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            ....................
+            ....................
+            ....XXXXSSSSXXXXXXXX
+            ...XXXXWWWWWWWXXXXXX
+            ..XXXXXWWWWWWWXXXXXX
+            .XXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXAXXXXXXXXXXXXXAXXX
+            XXXXXXXXXXXXXXXXXXXX
             """,
         ),
         "genesis" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXXXWWWWWWXXXXXXXX
-            XXXXXXWWSSSSSSWWXXXXXX
-            XXAXXWSSWWWWWWSSWXXXXX
-            XXAXXWSSWSSSSWSSWXXAXX
-            XXXXXWSSWWWWWWSSWXXAXX
-            XXXXXXWWSSSSSSWWXXXXXX
-            XXXXXXXXWWWWWWXXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXWWXWWXXXXXXXXXXAAAXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXX
+            XXXXXXWWWWWWXXXXXX
+            XXXXWWWWWWWWXXXXXX
+            XXXWWWWSSSSWWXXXXX
+            XXXWWWSSSSSSWXXXXX
+            XXXWWWSSSSSSWXXXXX
+            XXXWWWWSSSSWWXXXXX
+            XXXXWWWWWWWWXXXXXX
+            XXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXX
             """,
         ),
         "sega32" to art(
             """
-            ......XXXXXXXXXX......
-            ....XXAAAAAAAAAAXX....
-            ...XAAAAAAAAAAAAAAX...
-            ...XXXXXXXXXXXXXXXX...
-            .......XXXXXXXX.......
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXWWSSSSSSSSWWXXXXX
-            XXAXWSSWWWWWWWWSSWXXXX
-            XXXXXWWSSSSSSSSWWXXAXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXWWXWWXXXXXXXXXXAAAXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            ......XXXXXXXX......
+            ....XXAAAAAAAAXX....
+            ...XAAAAAAAAAAAAX...
+            ...XXXXXXXXXXXXXXX..
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXWWWWWWWWXXXXXXX
+            XXXXXWWSSSSSSWWXXXXX
+            XXXXXWWSSSSSSWWXXXXX
+            XXXXXWWWWWWWWXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
             """,
         ),
         "gamegear" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXWWWWWWWWWWXXXXXX
-            XXXXXXWSSSSSSSSWXXXXXX
-            XXWXXXWSSSSSSSSWXXXXXX
-            XWWWXXWSSSSSSSSWXXXAXX
-            XXWXXXWSSSSSSSSWXXAXXX
-            XXXXXXWSSSSSSSSWXXXXXX
-            XXXXXXWWWWWWWWWWXAXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXWWWWWWWWXXXXXX
+            XXWXXXWSSSSSSSSWXXXX
+            XWWWXXWSSSSSSSSWXXAX
+            XXWXXXWSSSSSSSSWXXXX
+            XXXXXXWAAAAAAAAXXXXX
+            XXXXXXXXXXXXXXXXXXXX
             """,
         ),
         "segacd" to art(
             """
-            .XXXXXXXXXXXXXXXXXXXX.
-            .XXXXXXWWWWWWWWXXXXXX.
-            .XXAXWWSSSSSSSSWWXXXX.
-            .XXXXXXWWWWWWWWXXXXXX.
-            .XXXXXXXXXXXXXXXXXXXX.
-            ......................
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXWWWWWWWWWWWWWWWWWWXX
-            XXXXXXXXXXXXXXXXXXXAXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            ........XXXXXXXX....
+            ........XWWWWWWX....
+            ........XXXXXXXX....
+            ..XXXXXXXXXXXXXXXX..
+            ..XWWWSSSSSSSSWWWXXX
+            ..XWWSSSSSSSSSSWWXXX
+            ..XWWWSSSSSSSSWWWXXX
+            ..XWWWWWWWWWWWWWWXXX
+            ..XXXXXXXXXXXXXXXX..
             """,
         ),
         "psx" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXXXXXXXWWWWWXXXXX
-            XXAXXAXXXXXWSSSSSWXXXX
-            XXXXXXXXXXWSSSSSSSWXXX
-            XXXXXXXXXXWSSSXSSSWXXX
-            XXXXXXXXXXWSSSSSSSWXXX
-            XXXXXXXXXXXWSSSSSWXXXX
-            XXXXXXXXXXXXWWWWWXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
-            SSSSSSSSSSSSSSSSSSSSSS
-            XXWWXWWXXXXXXXXXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXWWWWWXXX
+            XXXXXXXXXXXSSSSSSXXX
+            XXAXXAXXXXSSSSSSSSXX
+            XXXXXXXXXXSSSSSSSSXX
+            XXXXXXXXXXSSSSSSSSXX
+            XXXXXXXXXXXSSSSSSXXX
+            XXXXXXXXXXXXWWWWWXXX
+            XXXXXXXXXXXXXXXXXXXX
+            SSSSSSSSSSSSSSSSSSSS
+            XXXXXXXXXXXXXXXXXXXX
             """,
         ),
         "neogeomvs" to art(
             """
-            .................XX...
-            ................XAAX..
-            ................XAAX..
-            .................XX...
-            XXXXXXXXXXXXXX...XX...
-            XXXXXXXXXXXXXX...XX...
-            XXWWWWWWWWWWXX.XXXXXXX
-            XXWSSSSSSSSWXX.XXXXXXX
-            XXWWWWWWWWWWXX.XXAAAAX
-            XXXXXXXXXXXXXX.XXXXXXX
-            XAAAAAAAAAAAAX.XXXXXXX
-            XXXXXXXXXXXXXX........
+            ...XXXXXXXXXXXXXXXX...
+            ...XAAAAAAAAAAAAAAX...
+            ...XXXXXXXXXXXXXXXX...
+            ...XXXXXXXXXXXXXXXX...
+            ...XXWWWWWWWWWWWWXXX..
+            ...XXWSSSSSSSSSSWXXX..
+            ...XXWSSSSSSSSSSWXXX..
+            ...XXWWWWWWWWWWWWXXX..
+            ...XXXXXXXXXXXXXXXX...
+            ...XXXXXXXXXXXXXXXX...
+            ...XXXXXXXXXXXXXXXX...
+            ...XXXXXXXXXXXXXXXX...
             """,
         ),
         "neo-geo-cd" to art(
             """
-            .................XX...
-            ................XAAX..
-            ................XAAX..
-            .................XX...
-            XXXXXXXXXXXXXX...XX...
-            XXXXWWWWWWXXXX...XX...
-            XXXWSSSSSSWXXX.XXXXXXX
-            XXXWSSXXSSWXXX.XXXXXXX
-            XXXWSSSSSSWXXX.XXAAAAX
-            XXXXWWWWWWXXXX.XXXXXXX
-            XAAAAAAAAAAAAX.XXXXXXX
-            XXXXXXXXXXXXXX........
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXWWWWWWXXXXXXWWXX
+            XXXXWWWWWWXXXXXXWWXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXWWSSSSSSSSWWXXX
+            XXXXXWWSSSSSSSSWWXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
             """,
         ),
         "neo-geo-pocket" to art(
             """
-            ...XXXXXXXXXXXXXXXX...
-            .XXXXXXXXXXXXXXXXXXXX.
-            XXXXXXWWWWWWWWWWXXXXXX
-            XXWWXXWSSSSSSSSWXXXXXX
-            XWSSWXWSSSSSSSSWXXAXXX
-            XWSSWXWSSSSSSSSWXAXXXX
-            XXWWXXWWWWWWWWWWXXXXXX
-            .XXXXXXXXXXXXXXXXXXXX.
-            ...XXXXXXXXXXXXXXXX...
+            ...XXXXXXXXXXXXXX...
+            .XXXXXXXXXXXXXXXXXX.
+            XXXXXXWWWWWWWWXXXXXX
+            XXWWXXWSSSSSSSSWXXXX
+            XWSSWXWSSSSSSSSWXXAX
+            XWSSWXWSSSSSSSSWXAXX
+            XXWWXXWWWWWWWWXXXXXX
+            .XXXXXXXXXXXXXXXXXX.
+            ...XXXXXXXXXXXXXX...
             """,
         ),
         "neo-geo-pocket-color" to art(
             """
-            ...XXXXXXXXXXXXXXXX...
-            .XXAAAXXXXXXXXXXAAAXX.
-            XXXXXXWWWWWWWWWWXXXXXX
-            XXWWXXWSSSSSSSSWXXXXXX
-            XWAAWXWSSSSSSSSWXXAXXX
-            XWAAWXWSSSSSSSSWXAXXXX
-            XXWWXXWWWWWWWWWWXXXXXX
-            .XXXXXXXXXXXXXXXXXXXX.
-            ...XXXXXXXXXXXXXXXX...
+            ...XXXXXXXXXXXXXX...
+            .XXAAAXXXXXXXXAAAXX.
+            XXXXXXWWWWWWWWXXXXXX
+            XXWWXXWSSSSSSSSWXXXX
+            XWAAWXWSSSSSSSSWXXAX
+            XWAAWXWSSSSSSSSWXAXX
+            XXWWXXWWWWWWWWXXXXXX
+            .XXXXXXXXXXXXXXXXXX.
+            ...XXXXXXXXXXXXXX...
             """,
         ),
         "zx-spectrum" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XWSWSWSWSWSWSWSWSWSWXX
-            XXWSWSWSWSWSWSWSWSWSWX
-            XWSWSWSWSWSWSWSWSWSWXX
-            XXWSWSWSWSWSWSWXXXXAAX
-            XXXXWSWSWSWSWXXXXXAAXX
-            XXXXXXXXXXXXXXXXAAXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XWSWSWSWSWSWSWSWSWSX
+            XWSWSWSWSWSWSWSWSWSX
+            XWSWSWSWSWSWSWSWSWSX
+            XXXXWSWSWSWSWXXXXAAX
+            XXXXXXXXXXXXXXXXXAAX
+            XXXXXXXXXXXXXXXXXAAX
+            XXXXXXXXXXXXXXXXXXXX
             """,
         ),
         "pce" to art(
             """
-            .XXXXXXXXXXXXXX.
             XXXXXXXXXXXXXXXX
-            XXWWWWWWWWWWWWXX
-            XXXXXXXXXXXXXXXX
+            XWWWWWWWWWWWWWWX
             XAAAAAAAAAAAAAAX
             XXXXWWWWWWWWXXXX
-            XXAXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXX
             XXXXXXXXXXXXXXXX
             """,
         ),
         "pcecd" to art(
             """
-            ..XXXXXXX..XXXXXXXXXXX
-            .XXXXXXXXX.XXXWWWWWXXX
-            .XXAAAAAXX.XXWSSSSSWXX
-            .XXWWWWWXX.XWSSSXSSSWX
-            XXXXXXXXXXXXXWSSSSSWXX
-            XXXXXXXXXXXXXXWWWWWXXX
-            XXAXXXXXXXXXXXXXXXXAXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXX
+            XWWWWWWWWWWWWWWWWX
+            XWWWSSSSSSSSWWWWAX
+            XWWWSSSSSSSSWWWWAX
+            XWWWWWWWWWWWWWWWWX
+            XXXXXXXXXXXXXXXXXX
             """,
         ),
         "supergrafx" to art(
             """
-            ....XXXXXXXXXXXXXX....
-            ..XXXXXXXXXXXXXXXXXX..
-            .XXXWWWWWWWWWWWWWWXXX.
-            XXXXXXXXXXXXXXXXXXXXXX
-            XAAAAAAAAAAAAAAAAAAAAX
-            XXXXXXXWWWWWWWWXXXXXXX
-            XXAXXXXXXXXXXXXXXXXAXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            ....XXXXXXXXXXXX....
+            ..XXXXXXXXXXXXXXXX..
+            .XXXXXXXXXXXXXXXXXX.
+            XXXXXXXXXXXXXXXXXXXX
+            XAAAAAAAAAAAAAAAAAAX
+            XXXXXXXXXXXXXXXXXXXX
             """,
         ),
         "wonderswan" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXWWWWWWWWWWXXXXXX
-            XXXWXXWSSSSSSSSWXXXXXX
-            XXWXWXWSSSSSSSSWXXXAXX
-            XXXWXXWSSSSSSSSWXXAXXX
-            XXXXXXWWWWWWWWWWXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXX
+            XXXXXXXXXX
+            XXSSSSSSXX
+            XXSSSSSSXX
+            XXSSSSSSXX
+            XXSSSSSSXX
+            XXXXXXXXXX
+            XAXXXXXXXA
+            XXXXXXXXXX
+            XXXXXXXXXX
+            .XXXXXXXX.
+            ..XXXXXX..
+            ...XXXX...
+            ....XX....
+            ..........
             """,
         ),
         "wonderswan-color" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXWWWWWWWWWWXXXXXX
-            XXXAXXWSSSSSSSSWXXXXXX
-            XXAXAXWSSSSSSSSWXXXAXX
-            XXXAXXWSSSSSSSSWXXAXXX
-            XXXXXXWWWWWWWWWWXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXX
+            XAAAAAAAAAAX
+            XASSSSSSSSXA
+            XASSSSSSSSXA
+            XASSSSSSSSXA
+            XASSSSSSSSXA
+            XAXXXXXXXXAX
+            XAAXXXXXXXAX
+            XAXXXXXXXXAX
+            XAXXXXXXXXAX
+            .XXXXXXXXXX.
+            ..XXXXXXXX..
+            ...XXXXXX...
+            ....XXXX....
             """,
         ),
         "pcv2" to art(
             """
-            .XXXXXXXXXXXXXXXXXXXX.
-            XXXXXXWWWWWWWWWWXXXXXX
-            XXXAXXWSSSSSSSSWXXAXXX
-            XXAAAXWSSSSSSSSWXAXAXX
-            XXXAXXWSSSSSSSSWXXAXXX
-            XXXXXXWWWWWWWWWWXXXXXX
-            .XXXXXXXXXXXXXXXXXXXX.
+            XXXXXXXXXXXX
+            XWWWWWWWWWWX
+            XWWSSSSSSSWX
+            XWWSSSSSSSWX
+            XWWSSSSSSSWX
+            XWWWWWWWWWWX
+            XWWWWWWWWWWX
+            XWWWWWWWWAAX
+            XWWWWWWWWAAX
+            XWWWWWWWWWWX
+            XXXXXXXXXXXX
+            XXXXXXXXXXXX
             """,
         ),
         "msx" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXXXXXWWWWWWWWXXXXXXXX
-            XAAAAAXXXXXXXXXXXXXXXX
-            XWSWSWSWSWSWSWSWSWSWXX
-            XXWSWSWSWSWSWSWSWSWSWX
-            XWSWSWSWSWSWSWSWSWSWXX
-            XXXXXWWWWWWWWWWXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            ..............XXXX..
+            XXXXXXXXXXXXXXXXXXXX
+            XWWWWWWWWWWWWWWWWWWX
+            XWSWSWSWSWSWSWSWSWSX
+            XWSWSWSWSWSWSWSWSWSX
+            XWWWWWWWWWWWWWWWWWWX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
+            XXXXXXXXXXXXXXXXXXXX
             """,
         ),
         "msx2" to art(
             """
-            XXXXXXXXXXXXXXXXXXXXXX
-            XXWWWWWWXXXXXXWWWWWWXX
-            XAAAAAXXXXXXXXXXAAAAAX
-            XWSWSWSWSWSWSWSWSWSWXX
-            XXWSWSWSWSWSWSWSWSWSWX
-            XWSWSWSWSWSWSWSWSWSWXX
-            XXXXXWWWWWWWWWWXXXXXXX
-            XXXXXXXXXXXXXXXXXXXXXX
+            ....XXXXXXXXXXXX....
+            ..XXXXXXXXXXXXXXXX..
+            .XXXXXXXXXXXXXXXXXX.
+            XXXXXXXXXXXXXXXXXXXX
+            XWSWSWSWSWSWSWSWSWSX
+            XWSWSWSWSWSWSWSWSWSX
+            XWWWWWWWWWWWWWWWWWWX
+            XXXXXXXXXXXXXXXXXAAX
+            XXXXXXXXXXXXXXXXXAAX
             """,
         ),
     )

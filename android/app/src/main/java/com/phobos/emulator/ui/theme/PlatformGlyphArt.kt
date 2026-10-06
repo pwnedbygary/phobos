@@ -50,6 +50,9 @@ private fun DrawScope.drawGlyph(
     val artWidth = columns * cell
     val artHeight = rows.size * cell
     val origin = Offset((size.width - artWidth) / 2f, (size.height - artHeight) / 2f)
+    if (style == PlatformGlyphStyle.PHOBOS || style == PlatformGlyphStyle.PIXEL) {
+        drawShadow(rows, origin, cell, style, ink)
+    }
     rows.forEachIndexed { row, cells ->
         cells.forEachIndexed { column, kind ->
             if (kind == '.') return@forEachIndexed
@@ -72,13 +75,33 @@ private fun DrawScope.drawGlyph(
                         cornerRadius = CornerRadius(cell * 0.22f),
                     )
                 }
-                PlatformGlyphStyle.MANGA -> drawMangaCell(kind, topLeft, cell, color, ink)
+                PlatformGlyphStyle.MANGA -> drawMangaCell(
+                    kind,
+                    topLeft,
+                    cell,
+                    color,
+                    ink,
+                    cellAt(rows, row - 1, column),
+                    cellAt(rows, row + 1, column),
+                    cellAt(rows, row, column - 1),
+                    cellAt(rows, row, column + 1),
+                )
             }
         }
     }
 }
 
-private fun DrawScope.drawMangaCell(kind: Char, topLeft: Offset, cell: Float, color: Color, ink: Color) {
+private fun DrawScope.drawMangaCell(
+    kind: Char,
+    topLeft: Offset,
+    cell: Float,
+    color: Color,
+    ink: Color,
+    above: Char,
+    below: Char,
+    left: Char,
+    right: Char,
+) {
     val cellSize = Size(cell, cell)
     when (kind) {
         'X' -> drawRect(ink, topLeft, cellSize)
@@ -92,6 +115,51 @@ private fun DrawScope.drawMangaCell(kind: Char, topLeft: Offset, cell: Float, co
             drawRect(ink, topLeft, cellSize, style = Stroke(cell * 0.11f))
         }
     }
+    val edge = cell * 0.14f
+    val half = edge / 2f
+    if (above == '.') drawLine(ink, topLeft + Offset(0f, half), topLeft + Offset(cell, half), edge)
+    if (below == '.') drawLine(ink, topLeft + Offset(0f, cell - half), topLeft + Offset(cell, cell - half), edge)
+    if (left == '.') drawLine(ink, topLeft + Offset(half, 0f), topLeft + Offset(half, cell), edge)
+    if (right == '.') drawLine(ink, topLeft + Offset(cell - half, 0f), topLeft + Offset(cell - half, cell), edge)
+}
+
+/** Offset copy of the silhouette behind the cells, for the PHOBOS and PIXEL packs. */
+private fun DrawScope.drawShadow(
+    rows: List<String>,
+    origin: Offset,
+    cell: Float,
+    style: PlatformGlyphStyle,
+    ink: Color,
+) {
+    val hard = style == PlatformGlyphStyle.PIXEL
+    val shift = cell * (if (hard) 0.25f else 0.16f)
+    val alpha = if (hard) 0.34f else 0.18f
+    val shadow = ink.copy(alpha = alpha)
+    rows.forEachIndexed { row, cells ->
+        cells.forEachIndexed { column, kind ->
+            if (kind == '.') return@forEachIndexed
+            val topLeft = origin + Offset(column * cell + shift, row * cell + shift)
+            if (hard) {
+                drawRect(shadow, topLeft, Size(cell, cell))
+            } else {
+                val inset = cell * 0.06f
+                drawRoundRect(
+                    color = shadow,
+                    topLeft = topLeft + Offset(inset, inset),
+                    size = Size(cell - inset * 2, cell - inset * 2),
+                    cornerRadius = CornerRadius(cell * 0.22f),
+                )
+            }
+        }
+    }
+}
+
+/** Cell at [row]/[column], or `.` outside the drawing. */
+private fun cellAt(rows: List<String>, row: Int, column: Int): Char {
+    if (row < 0 || row >= rows.size) return '.'
+    val line = rows[row]
+    if (column < 0 || column >= line.length) return '.'
+    return line[column]
 }
 
 private fun DrawScope.drawPhobosMark(ink: Color, accent: Color) {

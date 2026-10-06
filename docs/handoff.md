@@ -896,6 +896,29 @@ silhouettes, with Phobos becoming the default pack only if they approve it, so S
 - **Not checked:** the Phobos pack on the device (switching packs would have changed the user's setting while they
   were using the device; the contact sheets show it).
 
+## Platform tiles, third pass — 2026-10-06
+
+Same branch `cursor/platform-tiles-2b67`, still for the user to approve; Systematic stays the default. The
+user liked the Systematic pack and asked for the other three overhauled, so the second-pass glyphs went
+through a third pass: the confusable pairs (LaserActive against PC Engine LD, Game Gear against WonderSwan
+against Neo Geo Pocket, ZX Spectrum against MSX and MSX2) and the boxy glyphs (NES, SNES, Super Game Boy,
+ColecoVision, 2600, PlayStation) were reshaped into recognizable console outlines rather than filled
+rectangles.
+
+- `PlatformGlyphs.kt`: all 31 glyphs redrawn as outlines of the real consoles on the same 22x15 grid
+  (body, screen recess, accents), so each reads as its console at a glance.
+- `PlatformGlyphArt.kt`: each pack gets its own look on top of the shared grids — Phobos draws a soft
+  drop shadow under the body, Pixel a hard offset shadow, Manga a bold contour on the outside edges.
+- **Checks run:** a harness kept outside the repository parses the art blocks from the real file, applies
+  the same centring as `art()`, and re-derives the four test invariants (slug coverage, one 22x15 grid,
+  cells only in `.XWSA`, no two glyphs under four cells apart): pass. Contact-sheet previews of all
+  31 glyphs came from the same harness.
+- **Not checked:** the Kotlin does not compile-check here — the Gradle wrapper needs the Android SDK
+  (absent at `.local/android-sdk`) and the `libadrenotools` submodule (deliberately not initialized in
+  this worktree, to keep it isolated from the other LLM's checkout), and no kotlinc was obtainable
+  (the Kotlin repository publishes no GitHub release assets). The device check of the Phobos pack
+  still waits for the user.
+
 ## Boot pass of every game on the RP6 — 2026-10-03
 
 Docs only (branch `cursor/boot-pass-notes-2b67`, stacked on `cursor/load-failures-m3u-2b67`). With the build of that
