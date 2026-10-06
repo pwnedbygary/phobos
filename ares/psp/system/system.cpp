@@ -212,7 +212,7 @@ auto System::startProgram() -> void {
     }
     return;
   }
-  for(auto name : {"disc.iso", "disc.cso"}) {
+  for(auto name : {"disc.iso", "disc.cso", "disc.zso", "disc.dax", "disc.jso", "disc.chd"}) {
     if(auto fp = gamePak->read(name)) return startDisc(fp);
   }
   report(true, "the game has no program in it");
@@ -225,6 +225,7 @@ auto System::startProgram() -> void {
 //boot, as truncated images are common), and no further than 64 MiB.
 auto System::startDisc(std::shared_ptr<vfs::file> fp) -> void {
   auto image = std::make_shared<Disc>();
+  std::string problem;
   auto read = [fp](u64 offset, void* data, u64 size) -> u64 {
     if(offset >= fp->size()) return 0;
     size = std::min<u64>(size, fp->size() - offset);
@@ -236,8 +237,41 @@ auto System::startDisc(std::shared_ptr<vfs::file> fp) -> void {
     }
     return size;
   };
-  std::string problem;
+  //a CHD: its sectors come unpacked from its hunks (nall's Decode::CHD), and the disc reads them as an ISO's bytes
+  u8 magic[8] = {};
+  if(read(0, magic, sizeof(magic)) == sizeof(magic) && !memcmp(magic, "MComprHD", 8)) {
+    #if defined(ARES_ENABLE_CHD)
+    auto chd = std::make_shared<Decode::CHD>();
+    if(!chd->load(read, fp->size())) {
+      return report(true, std::string{"can't read the disc: the CHD can't be read: "} + chd->error.data());
+    }
+    if(!chd->dvd()) return report(true, "can't read the disc: the CHD is a CD's; a UMD's is made with createdvd");
+    auto sectors = [chd](u64 offset, void* data, u64 size) -> u64 {
+      u64 done = 0;
+      while(done < size) {
+        u64 at = offset + done;
+        auto sector = chd->read(u32(at / Disc::SectorSize));
+        if(sector.size() != Disc::SectorSize) break;  //past the end, or a damaged hunk
+        u64 count = std::min<u64>(size - done, Disc::SectorSize - at % Disc::SectorSize);
+        memcpy((u8*)data + done, sector.data() + at % Disc::SectorSize, count);
+        done += count;
+      }
+      return done;
+    };
+    u64 size = u64(chd->sectorCount()) * Disc::SectorSize;
+    if(!image->open(sectors, size, problem)) return report(true, "can't read the disc: " + problem);
+    return startDiscProgram(image);
+    #else
+    return report(true, "can't read the disc: this build doesn't read CHD images");
+    #endif
+  }
   if(!image->open(read, fp->size(), problem)) return report(true, "can't read the disc: " + problem);
+  startDiscProgram(image);
+}
+
+//The disc in the drive, and its program started.
+auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
+  std::string problem;
   kernel.disc = image;
   bool encrypted = false;
   for(auto name : {"EBOOT.BIN", "BOOT.BIN"}) {

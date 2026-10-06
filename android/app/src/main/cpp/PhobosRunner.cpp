@@ -163,6 +163,8 @@ namespace ares {
   // per-game save files on disk (saves/<System>/<RomName>.save.ram etc.) so
   // different games never overwrite each other's saves.
   static string currentRomBase;
+  // Why the last load failed, when the game's medium said (lastLoadProblem()); empty otherwise.
+  static string loadProblem;
 
   // ── Dedicated audio thread + ring buffer ────────────────────────────────
   // The emulation thread NEVER blocks on AAudioStream_write, and never does
@@ -3056,6 +3058,7 @@ else if (port->type() == "Keyboard") {
     currentRomBase = romName;
     if (auto dot = currentRomBase.findPrevious(currentRomBase.size(), ".")) currentRomBase = currentRomBase.slice(0, *dot);
     if (currentRomBase.size() == 0) currentRomBase = "rom";
+    loadProblem = "";
     unloadSystem();
 
     std::unique_lock<std::recursive_mutex> lock(systemMutex);
@@ -3118,7 +3121,10 @@ else if (port->type() == "Keyboard") {
     // extension or, for a URI that doesn't end in its name, the game's.
     string nameExtension;
     if (auto dot = romName.findPrevious(romName.size(), ".")) nameExtension = romName.slice(*dot + 1).downcase();
-    bool discImage = extension == "iso" || extension == "cso" || nameExtension == "iso" || nameExtension == "cso";
+    auto isDiscImage = [](const string& e) {
+      return e == "iso" || e == "cso" || e == "zso" || e == "dax" || e == "jso" || e == "chd";
+    };
+    bool discImage = isDiscImage(extension) || isDiscImage(nameExtension);
     struct stat romStat;
     if (!loadPath && systemName == "PlayStation Portable" && discImage
         && fstat(romFd, &romStat) == 0 && S_ISREG(romStat.st_mode)) {
@@ -3402,7 +3408,8 @@ else if (port->type() == "Keyboard") {
 
     auto loadResult = currentMedium->load(loadPath);
     if (loadResult != successful) {
-        LOGE("MIA: Failed to load medium for %s at %s (Result: %d)", (const char*)identifiedSystem, (const char*)loadPath, (s32)loadResult.result);
+        LOGE("MIA: Failed to load medium for %s at %s (Result: %d) %s", (const char*)identifiedSystem, (const char*)loadPath, (s32)loadResult.result, (const char*)loadResult.info);
+        loadProblem = loadResult.info;
         return false;
     }
     LOGI("MIA: Successfully loaded medium %s", (const char*)loadPath);
@@ -4599,6 +4606,10 @@ else if (port->type() == "Keyboard") {
   auto setNativeLibraryDir(const char* path) -> void { nativeLibraryDir = path ? (string)path : ""; LOGI("Native library dir set: %s", (const char*)nativeLibraryDir); }
   auto setFirmwarePath(const char* path) -> void { LOGI("Firmware path set: %s", path ? path : ""); }
   auto mapFirmwareFile(const char* name, const char* path) -> void { firmwareMap[name] = path ? (string)path : ""; LOGI("Firmware mapped: %s -> %s", name, (const char*)path); }
+  auto lastLoadProblem() -> string {
+    return loadProblem;
+  }
+
   auto missingFirmware(const char* system) -> std::vector<string> {
     std::vector<string> missing;
     string name = system ? system : "";

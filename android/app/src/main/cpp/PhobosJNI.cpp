@@ -35,7 +35,7 @@ static std::map<string, std::vector<string>> systemExtensions = {
     {"Mega CD 32X", {"cue", "chd", "iso"}},
     {"PlayStation", {"cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"}},
     // No .prx: mostly modules beside an EBOOT.PBP, not programs.
-    {"PlayStation Portable", {"iso", "cso", "pbp", "elf"}},
+    {"PlayStation Portable", {"iso", "cso", "zso", "dax", "jso", "chd", "pbp", "elf"}},
     {"Neo Geo", {"ng", "neo"}},
     {"Neo Geo CD", {"ngc", "cue", "chd", "iso", "bin", "zip"}},
     {"Neo Geo Pocket", {"ngp", "nap"}},
@@ -83,6 +83,11 @@ Java_com_phobos_emulator_PhobosCore_loadRom(JNIEnv* env, jobject, jstring system
     if (nativeRomName[0]) env->ReleaseStringUTFChars(romName, nativeRomName);
 
     return success ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_phobos_emulator_PhobosCore_loadProblem(JNIEnv* env, jobject) {
+    return env->NewStringUTF((const char*)ares::lastLoadProblem());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

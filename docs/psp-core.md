@@ -1043,13 +1043,13 @@ files through the kernel, and the drive. Behavior from PPSSPP's notes on the har
 documented (the ioctl and devctl codes, the drive's states and timeouts, `sce_lbn` paths); our own code.
 
 - **The image**: an ISO, the disc's 2048-byte sectors one after another, or a CSO, the same compressed a block at a
-  time: a 24-byte header, an index of where each block starts, each block deflated or stored as it is (version 1
-  marks stored blocks with the index entry's top bit; version 2 by their taking a whole block's room; encoders pad
-  the last block out to a whole one). An index that doesn't fit the file, goes backwards or points past the file's
-  end is refused before anything is read through it. CSO version 2's LZ4 blocks aren't read. A trimmed ISO, ending
-  part way into its last sector, still reads to its last byte. The image is read as the game asks, never copied: on
-  the host from the file mapped into memory; on Android, when the app has no path it can read, through the
-  descriptor it was given.
+  time: a 24-byte header, an index of where each block starts, each block deflated or stored as it is (version 1 marks
+  stored blocks with the index entry's top bit; version 2 by their taking a whole block's room; encoders pad the last
+  block out to a whole one). An index that doesn't fit the file, goes backwards or points past the file's end is
+  refused before anything is read through it. (CSO version 2's LZ4 blocks, and the scene's other forms, are part
+  16's.) A trimmed ISO, ending part way into its last sector, still reads to its last byte. The image is read as the
+  game asks, never copied: on the host from the file mapped into memory; on Android, when the app has no path it can
+  read, through the descriptor it was given.
 - **ISO 9660**: the volume descriptor at sector 16 gives the root folder; a folder is a run of directory records
   (where each file starts, its size, whether it's a folder, its date, its name), found whatever their case. A
   damaged record ends its folder, and no folder is read past 256 sectors or the disc's end, so a damaged folder size
@@ -1255,3 +1255,65 @@ Tests:
 - The app's `LaunchSystemsTest`: an `EBOOT.PBP` takes its folder's name, and any other file, or an `EBOOT.PBP` whose
   folder can't be told, keeps its own; a launch's folder from its path, its document's ID, or another app's URI that
   ends in the file's name (nothing from a URI whose path is IDs).
+
+## Part 16: more disc image forms
+
+`ares/psp/kernel/disc.cpp` and `unpack.cpp` read the PSP scene's other compressed forms of an ISO, and nall's CHD
+reader (`nall/nall/decode/chd.hpp`) now reads a DVD's CHD, as PSP games are kept in, which the system hands the disc
+as an ISO's bytes. The formats as their tools write them (maxcso's description of CSO version 2 and ZSO; lz4's of its
+block format; Linux's `lzo.rst` of LZO1X, there being no specification), cross-checked against the reference packers;
+our own code.
+
+- **CSO version 2**: version 1's layout, but a block that takes a whole block's room is stored as it is, and the
+  index entry's top bit marks a block packed with LZ4 rather than deflate.
+- **ZSO** ("ZISO"): version 1's layout, its blocks LZ4-packed (the top bit: stored as it is). With an index shift,
+  a CSO's or a ZSO's blocks start at multiples of its power of two, each padded out to the next with any byte (NUL;
+  ziso writes 'X'): LZ4's unpacking ends once the block is whole, leaving the padding alone, as maxcso's own does.
+- **DAX**: a 32-byte header ("DAX\0", the disc's size, the version, how many areas are left uncompressed), each 8 KiB
+  frame's start and packed size, and (from version 1) the areas left uncompressed; a frame is zlib's (deflate, with
+  its 2-byte header and checksum), or as it is inside an uncompressed area. Every frame must lie inside the file, and
+  the areas inside the disc, adding up to no more frames than it has, so a damaged count can't ask for a huge table
+  or a long time to go through it.
+- **JSO** ("JISO"): a 48-byte header (the block size, whether blocks have headers, the packing, LZO or zlib), then
+  each block's start and one for the end. A block that takes a whole block's room is stored; zlib's blocks are read as
+  zlib's or as raw deflate, as tools differ; a short last block stored at its own length is read too. Block headers
+  (an option of the JSO tool) aren't read: such an image is refused saying so.
+- **The unpackers** (`unpack.cpp`): LZ4's block format, and LZO1X as minilzo writes it. Each fills an output of a
+  known size and checks every length and distance against both buffers, so damaged bytes can't make it read or write
+  outside them; a block that unpacks short of its size fails its read.
+- **CHD**: nall's reader, which read CD images (the PlayStation's, the Mega CD's, ...) opened by name, also reads a
+  DVD's now (chdman `createdvd`: 2048-byte units, no tracks), and can read an image through a function rather than
+  open it by name: the PSP's disc is read through the file mia's medium gives, on Android the app's descriptor, so a
+  game of a gigabyte or two is read a hunk at a time, never copied. A DVD's damaged hunk reads as nothing (the read
+  fails), not as the last hunk's bytes. A CD's CHD is refused as a PSP disc, saying a PSP game's is made with
+  `createdvd` (mia says so, and the app's "Game Didn't Start" shows it: the runner passes on what a medium says when
+  it refuses a game, `PhobosCore.loadProblem()`), and one that only holds its differences from a parent CHD is refused
+  saying so; nall's CD reader (`vfs::cdrom`, the CD systems') refuses a DVD's, as it did. CHDs are read in builds with
+  `ARES_ENABLE_CHD`, as all Phobos's are; others say they don't read them.
+- **mia and the app**: mia's PSP medium tells each by what it starts with ("ZISO", "DAX", "JISO"; a CHD by
+  "MComprHD" and, in version 5's header, its 2048-byte units), as `disc.zso`, `disc.dax`, `disc.jso` or `disc.chd`.
+  The app takes .zso, .dax, .jso and .chd for the PSP, read through the descriptor like an ISO. A .chd goes to the
+  PSP by its folder (or the launching app's hint), as the CD systems take CHDs too. The PSP's discs aren't gathered
+  into multi-disc sets, as the CD systems' are: they can't be swapped yet.
+
+Tests:
+- `tests/psp/disc-formats.cpp`, three groups. "disc formats": a disc whose blocks pack every way (noise, stored as it
+  is; text; zeros; noise repeated 20 KiB on), made into CSO version 2 (2 and 8 KiB blocks; aligned to 4 bytes with
+  NUL padding and to 64 with 'X'), ZSO (2 and 8 KiB; padded the same two ways), DAX
+  (with and without uncompressed areas) and JSO (LZO in 2 and 32 KiB blocks, zlib, raw deflate in 8 KiB blocks, LZO
+  and zlib with a short last block stored), each read back byte for byte the same as the ISO; and each image holds
+  blocks of every packing it's meant to test. "disc formats damaged": a CSO version 2 LZ4 block that runs past its
+  end, a DAX frame whose zlib header is wrong and a JSO block whose LZO end is damaged fail their reads while the
+  other blocks read; a ZSO index going back, a DAX cut short in its tables, with a frame past the file's end, with
+  more uncompressed areas than frames, an area past the last frame or areas adding up past the disc, and a JSO with
+  block headers, an unknown packing or a block bigger than a block are refused, each with its message.
+  "unpackers": blocks minilzo 2.06 and the lz4 tool (1.10, `-12`) packed from three inputs (2 KiB; 40000 bytes with
+  matches 16 to 32 KiB back; 50000 with one 32 to 48 KiB back) in `tests/psp/unpack-vectors.hpp`, and two LZO streams
+  written by hand for the 2-byte and 2 to 3 KiB matches minilzo's packing of them doesn't use (minilzo's own unpacker
+  unpacks them the same), unpacked exactly, and an LZ4 block with NUL or 'X' padding after it too; cut short at every
+  length, never all of the block; into one byte too little room, nothing; matches before the start, LZ4's distance
+  of 0, and counts past the output refused.
+- `tests/psp/ares` (195 checks): the disc program boots and reads its disc exactly from a CSO version 2, a ZSO, a
+  DAX, a JSO and CHDs (hunks of one sector and of four), as from the ISO and the CSO; a CD's CHD, and one needing its
+  parent, isn't taken as the disc. Its script builds libchdr as the app does.
+- The app's `LaunchSystemsTest`: .zso, .dax and .jso go to the PSP alone; a .chd by its folder.

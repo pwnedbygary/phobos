@@ -30,7 +30,7 @@ class LaunchSystemsTest {
         "Mega CD" to listOf("cue", "chd", "iso"),
         "Mega CD 32X" to listOf("cue", "chd", "iso"),
         "PlayStation" to listOf("cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"),
-        "PlayStation Portable" to listOf("iso", "cso", "pbp", "elf"),
+        "PlayStation Portable" to listOf("iso", "cso", "zso", "dax", "jso", "chd", "pbp", "elf"),
         "Neo Geo" to listOf("ng", "neo"),
         "Neo Geo CD" to listOf("ngc", "cue", "chd", "iso", "bin", "zip"),
         "Neo Geo Pocket" to listOf("ngp", "nap"),
@@ -94,9 +94,13 @@ class LaunchSystemsTest {
     @Test fun pspGamesGoToThePsp() {
         assertEquals("PlayStation Portable", LaunchSystems.systemForName("psp"))
         assertEquals(found("PlayStation Portable"), resolve("Game.iso", hint = "psp"))
-        // Only the PSP takes a CSO or an ELF.
-        assertEquals(found("PlayStation Portable"), resolve("Game.cso"))
-        assertEquals(found("PlayStation Portable"), resolve("Cube.elf"))
+        // Only the PSP takes a CSO, ZSO, DAX or JSO, or an ELF.
+        listOf("Game.cso", "Game.zso", "Game.dax", "Game.jso", "Cube.elf").forEach {
+            assertEquals(it, found("PlayStation Portable"), resolve(it))
+        }
+        // A CHD goes by its folder, as the CD systems take CHDs too.
+        assertEquals(found("PlayStation Portable"), resolve("Game.chd", "$root/ROMs/psp/Game.chd"))
+        assertEquals(found("PlayStation"), resolve("Game.chd", "$root/ROMs/psx/Game.chd"))
         // An ISO or an EBOOT.PBP goes by its folder: the PlayStation takes both too.
         assertEquals(found("PlayStation Portable"), resolve("Game.iso", "$root/ROMs/psp/Game.iso"))
         assertEquals(found("PlayStation Portable"), resolve("EBOOT.PBP", "$root/ROMs/psp/Cube/EBOOT.PBP"))

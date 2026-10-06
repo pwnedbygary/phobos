@@ -9,6 +9,7 @@ namespace ares::PlayStationPortable {
 #include "interrupts.cpp"
 #include "events.cpp"
 #include "sysmem.cpp"
+#include "unpack.cpp"
 #include "disc.cpp"
 #include "io.cpp"
 #include "umd.cpp"

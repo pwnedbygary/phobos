@@ -74,6 +74,7 @@ private:
   auto disconnect() -> void;
   auto startProgram() -> void;
   auto startDisc(std::shared_ptr<vfs::file> fp) -> void;
+  auto startDiscProgram(std::shared_ptr<Disc> image) -> void;
   static auto hash(std::span<const u8> bytes) -> u64;
   auto snapshot() -> serializer;
   auto header(serializer& s) -> bool;

@@ -11,6 +11,8 @@ object PhobosCore {
     external fun enumerateSystems(): List<String>
     external fun getSystemExtensions(systemName: String): List<String>
     external fun loadRom(systemName: String, uriString: String, romName: String): Boolean
+    /** Why the last [loadRom] failed, when the game's medium said (a sentence for the player); empty otherwise. */
+    external fun loadProblem(): String
     external fun loadSecondaryRom(systemName: String, uriString: String): Boolean
     external fun unloadSystem()
     external fun setEmulationRunning(running: Boolean)

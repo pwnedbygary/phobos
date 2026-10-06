@@ -13,7 +13,7 @@ mkdir -p "$OUT/obj"
 CC=${CC:-cc}
 CXX=${CXX:-c++}
 SYSROOT=()
-#zlib packs the CSO images (../disc-image.hpp)
+#zlib packs the compressed images (../disc-image.hpp, ../disc-formats.hpp)
 LIBRARIES=(-lpthread -ldl -lz)
 if [[ $(uname) == Darwin ]]; then
   if SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null); then SYSROOT=(-isysroot "$SDK"); fi
@@ -21,10 +21,12 @@ if [[ $(uname) == Darwin ]]; then
 fi
 #One build mode for every file: nall's headers pick debug when none is given, and sljit's own C file, without them,
 #would then disagree with the rest about SLJIT_DEBUG (sljitConfigPre.h), and so about its compiler's layout.
-DEFINES=(-DBUILD_DEBUG -DCORE_PSP -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1)
+#ARES_ENABLE_CHD: CHD disc images are read with libchdr, as Phobos's builds read them
+DEFINES=(-DBUILD_DEBUG -DCORE_PSP -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1 -DARES_ENABLE_CHD)
 #as system headers: ares's aren't written for -Wall, and the test itself is built with it
+CHDR=$ROOT/thirdparty/libchdr
 INCLUDES=(-isystem "$ROOT" -isystem "$ROOT/nall" -isystem "$ROOT/nall/nall" -isystem "$ROOT/libco"
-  -isystem "$ROOT/ares" -isystem "$ROOT/thirdparty")
+  -isystem "$ROOT/ares" -isystem "$ROOT/thirdparty" -isystem "$CHDR/include")
 CXXFLAGS=(-std=c++20 -O1 -g "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}")
 
 compile() {  #source object [always]
@@ -45,6 +47,15 @@ if [[ ! -f $OUT/obj/sljit.o || $ROOT/thirdparty/sljit/sljit_src/sljitLir.c -nt $
   $CC -O1 "${SYSROOT[@]}" "${DEFINES[@]}" -I"$ROOT/thirdparty" -c "$ROOT/thirdparty/sljit/sljit_src/sljitLir.c" \
     -o "$OUT/obj/sljit.o"
 fi
+#libchdr, and the zlib, LZMA and zstd decoders it carries
+for source in "$CHDR"/src/libchdr_*.c "$CHDR/deps/lzma-25.01/src/LzmaDec.c" "$CHDR/deps/miniz-3.1.1/miniz.c" \
+  "$CHDR/deps/zstd-1.5.7/zstddeclib.c"; do
+  object=$OUT/obj/chdr-$(basename "$source" .c).o
+  if [[ ! -f $object || $source -nt $object ]]; then
+    echo "  CC  $(basename "$source")"
+    $CC -O1 -w "${SYSROOT[@]}" -I"$CHDR/include" -I"$CHDR/deps/zstd-1.5.7" -c "$source" -o "$object"
+  fi
+done
 if [[ ! -f $OUT/obj/libco.o ]]; then
   echo "  CC  libco.c"
   $CC -O1 -w "${SYSROOT[@]}" -I"$ROOT/libco" -c "$ROOT/libco/libco.c" -o "$OUT/obj/libco.o"
