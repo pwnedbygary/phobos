@@ -104,6 +104,16 @@ class LaunchSystemsTest {
         assertEquals(Match.Ask(listOf("PlayStation", "PlayStation Portable")), resolve("Game.pbp"))
     }
 
+    @Test fun pspProgramsInAnEbootTakeTheirFoldersName() {
+        assertEquals("Cube.pbp", LaunchSystems.pspProgramName("EBOOT.PBP", "Cube"))
+        assertEquals("Cube.pbp", LaunchSystems.pspProgramName("eboot.pbp", "Cube"))
+        // Any other file keeps its name, as does an EBOOT.PBP whose folder can't be told.
+        assertEquals("Game.pbp", LaunchSystems.pspProgramName("Game.pbp", "Cube"))
+        assertEquals("Game.iso", LaunchSystems.pspProgramName("Game.iso", "psp"))
+        assertEquals("EBOOT.PBP", LaunchSystems.pspProgramName("EBOOT.PBP", null))
+        assertEquals("EBOOT.PBP", LaunchSystems.pspProgramName("EBOOT.PBP", ""))
+    }
+
     @Test fun theFrontendsHintComesFirst() {
         assertEquals(found("Game Boy Color"), resolve("Tetris.gb", "$root/ROMs/gb/Tetris.gb", hint = "gbc"))
         assertEquals(found("PlayStation"), resolve("Game.cue", hint = "psx"))
@@ -265,6 +275,26 @@ class LaunchSystemsTest {
         assertEquals("/storage/EBFF-F6C0/ROMs/x.gb", path("file", null, listOf("storage", "EBFF-F6C0", "ROMs", "x.gb"), "/storage/EBFF-F6C0/ROMs/x.gb"))
         assertEquals("$root/ROMs/x.gb", path(null, null, emptyList(), "$root/ROMs/x.gb"))
         assertNull(path("https", "example.com", listOf("x.gb"), "/x.gb"))
+    }
+
+    @Test fun aLaunchsFolderIsTheOneHoldingItsFile() {
+        fun folder(scheme: String?, authority: String?, segments: List<String>, path: String?) =
+            LaunchSystems.parentFolderName(scheme, authority, segments, path, root, "EBOOT.PBP")
+        val saf = "com.android.externalstorage.documents"
+        val cube = listOf("sdcard", "ROMs", "psp", "Cube", "EBOOT.PBP")
+        assertEquals("Cube", folder("file", null, cube, "/sdcard/ROMs/psp/Cube/EBOOT.PBP"))
+        val tree = listOf("tree", "primary:ROMs", "document", "primary:ROMs/psp/Cube/EBOOT.PBP")
+        assertEquals("Cube", folder("content", saf, tree, null))
+        // Another document provider's ID that reads as a path, and another app's provider by its URI's own path.
+        val document = listOf("document", "root:Games/Cube/EBOOT.PBP")
+        assertEquals("Cube", folder("content", "some.documents", document, null))
+        val provided = listOf("files", "Cube", "EBOOT.PBP")
+        assertEquals("Cube", folder("content", "some.fileprovider", provided, "/files/Cube/EBOOT.PBP"))
+        // A document whose ID is only a number says nothing, nor does a provider whose path is IDs.
+        assertNull(folder("content", "com.android.providers.downloads.documents", listOf("document", "msf:42"), null))
+        assertNull(folder("content", "media", listOf("external", "file", "123"), "/external/file/123"))
+        assertNull(folder("content", "downloads", listOf("public_downloads", "42"), "/public_downloads/42"))
+        assertNull(folder("https", "example.com", listOf("Cube", "EBOOT.PBP"), "/Cube/EBOOT.PBP"))
     }
 
     @Test fun folderNamesAreTheNearestParents() {

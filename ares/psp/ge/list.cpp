@@ -5,13 +5,20 @@ static auto matrixData(u32* matrix, u32 size, u32& index, u32 argument) -> void 
   if(index < size) matrix[index++] = argument;
 }
 
-//Runs commands from list.address until something stops it (the stall address, an END, a fault) or budget commands
-//have run (Busy: call again to go on). Every command's word is kept, whatever the command.
 auto GE::run(u64 budget) -> Stop {
-  for(; budget; budget--) {
+  u64 ran = 0;
+  return run(budget, ran);
+}
+
+//Runs commands from list.address until something stops it (the stall address, an END, a fault) or budget commands
+//have run (Busy: call again to go on); ran says how many did, the one that stopped it among them. Every command's
+//word is kept, whatever the command.
+auto GE::run(u64 budget, u64& ran) -> Stop {
+  for(ran = 0; ran < budget;) {
     if(list.stall && list.address == list.stall) return Stop::Stalled;
     u32 at = list.address;
     u32 word = memory.read(4, at);
+    ran++;
     list.address = (at + 4) & 0x0fff'ffff;
     u32 command = word >> 24, argument = word & 0xff'ffff;
     commands[command] = word;

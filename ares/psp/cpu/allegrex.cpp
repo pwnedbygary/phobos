@@ -11,6 +11,7 @@ namespace ares::PlayStationPortable {
 #include "recompiler.cpp"
 #include "recompiler-ipu.cpp"
 #include "recompiler-memory.cpp"
+#include "serialization.cpp"
 
 //Clears every register and starts the program at entry (the game's entry point, as the loader finds it).
 auto Allegrex::power(u32 entry) -> void {

@@ -33,11 +33,12 @@ auto Kernel::allocate(u32 size, u32 type, u32 address, const std::string& name) 
       if(candidate < to && to - candidate >= size) { start = candidate; found = true; break; }
     }
   }
-  if(!found) return nullptr;
+  u32 uid = found ? newUID() : 0;
+  if(!uid) return nullptr;
   auto place = std::lower_bound(blocks.begin(), blocks.end(), start, [](const Block& block, u32 address) {
     return block.address < address;
   });
-  return &*blocks.insert(place, {nextUID++, name, start, size});
+  return &*blocks.insert(place, {uid, name, start, size});
 }
 
 auto Kernel::release(u32 uid) -> bool {

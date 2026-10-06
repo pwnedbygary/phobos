@@ -13,7 +13,7 @@ measurements on `cursor/psp-3d-measure-2b67`; part 12, lighting, on `cursor/psp-
 whole feature to be stacked and merged at once (GitHub stack #106).
 Part 13, the PSP in Phobos (an ares system, mia's medium, the Android app's entry), is on `cursor/psp-app-2b67`:
 homebrew runs in the app on the RP6. Part 14, disc images (ISO and CSO, the disc's files, the drive), is on
-`cursor/psp-umd-2b67`.
+`cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -166,8 +166,9 @@ conversions give 0x80000000 for negative numbers out of range and -infinity; FIR
 starts with FCSR 0x00000e00. FCSR's exception flags, enables and causes are kept but not set or acted on: on a PSP
 the enabled ones end the program, which no working game does. See psp-vfpu-measurements.md.)
 
-Tests: `tests/allegrex/run-tests.sh` (14 groups, with the undefined-behavior sanitizer; on Linux the address
-sanitizer too, which the PSP Core Tests workflow runs for changes to `ares/psp/`, nall or ares's types).
+Tests: `tests/allegrex/run-tests.sh` (14 groups, with the undefined-behavior and address sanitizers; until part 15
+the address sanitizer ran on Linux only, as its runtime hung at start on macOS then. The PSP Core Tests workflow runs
+them for changes to `ares/psp/`, nall or ares's types).
 `harness.hpp` holds the test machine (a CPU over 64 KiB of RAM) and the instruction encoders.
 
 ## Part 3: the VFPU
@@ -997,8 +998,7 @@ PSP medium (`mia/medium/playstation-portable.cpp`); and the Android app's entry 
   that code may run from, the recompiler turns itself off and the interpreter runs everything. (nall's
   `memory::map()` now returns null when `mmap` fails, as its callers expect; it passed `MAP_FAILED` on.)
 - **A crash**: an exception nothing handles is reported once, and the game ends there.
-- **States**: not yet. A state holds nothing, and Phobos's runner refuses to save an empty one (for any core); the
-  app leaves states out of the PSP's menu and doesn't auto-save it on quitting.
+- **States**: part 15.
 
 In the Android app: the system "PlayStation Portable" with .pbp and .elf (an EBOOT.PBP goes by its Library folder,
 as the PlayStation takes .pbp too; other apps' "psp" names it; disc images wait for the core to read them, and .prx
@@ -1024,7 +1024,8 @@ standing in for the front end (93 checks):
 - hello.elf in the drive, on the recompiler (which must have compiled code) and on the interpreter: the memory stick
   formatted, ms0: and disc0: mounted, the program starting in its disc's folder as `disc0:/hello.elf`, printing its
   line and leaving; the frame the front end gets is the display's frame buffer pixel for pixel; each button its own
-  bit as the system hands the controls to the kernel; the stick's corner and middle; an empty state;
+  bit as the system hands the controls to the kernel; the stick's corner and middle; an empty state (a check part
+  15 replaced with its own);
 - a program on the memory stick: it starts as `ms0:/PSP/GAME/HELLO/hello.elf`, with no disc left from the game
   before; in the memory stick's top folder, as `ms0:/hello.elf`;
 - no memory for compiled code (the host refusing it): the recompiler turns itself off and hello runs all the same.
@@ -1128,3 +1129,129 @@ Tests:
 On the RP6 (2026-10-05): the `disc` program booted from an ISO and from a CSO printed exactly what the host test
 expects, and pspsdk's cube runs from a CSO at 60 frames a second. The app could read the SD card's paths there, so
 the descriptor route ran on the host only: Android wouldn't let the shell hand the app a document to force it.
+
+## Part 15: save states
+
+`serialize()` in each part (`ares/psp/cpu/serialization.cpp`, `memory/memory.cpp`, `ge/ge.cpp`,
+`kernel/serialization.cpp`) and `System::serialize()`/`unserialize()`: everything the PSP was doing, to carry on from
+exactly there.
+
+- **What a state holds**: a header (a signature, "PSPS"; the version of its layout; RAM's size; and the program it
+  was made with, an FNV-1a hash of the program's bytes as it started, from the game's folder or its disc), all of
+  which must be the machine's, as another game's memory, threads and files mean nothing to this one; then memory,
+  the CPU, the GE and the kernel.
+- **Memory**: the scratchpad, VRAM and RAM, 4 KiB at a time, each piece's bytes only if it holds anything but zeros:
+  games leave much of their 64 MiB untouched. Cube's state is about 1.6 MB, most of it VRAM (its two frame buffers
+  and its depth buffer).
+- **The CPU**: every register a program can see, and whether it's halted. Compiled code isn't saved: the recompiler
+  starts afresh after a load.
+- **The GE**: its commands' last words (each draw works its state out from them), the palette, the list it's running,
+  where its vertices and indices are, the matrices, and what its next END means.
+- **The kernel**: the program (its module, and its imports in the order its syscall codes count them, each found
+  again in the kernel's table by its NID); its threads, each one's registers while it isn't running and what it
+  waits for; the semaphores, mutexes, event flags, callbacks and memory handed out; the controller's samples; the
+  display; the calls into the program; the GE driver's lists and the commands the GE has left in the frame; the
+  clock. Open files are saved by their PSP paths and
+  opened again on loading, where the devices are then, at the position they had; one gone from the host since is
+  dropped (the program's next use of it fails as for any bad file), as is a file on the disc when no disc image is
+  in the drive. Not saved: the devices and the disc (the system gives them, the same game's), and the kernel's table
+  of functions.
+- **A bad state**: one that isn't this machine's or this program's is refused before anything is touched. Otherwise
+  loading checks what it reads, and refuses a state that ends part way or holds what no machine could:
+  - a place past the end of the controller's ring of 64 samples; a display mode but the LCD's 480x272;
+  - the GE's CALLs more than two deep (in the GE, in a display list or on its stack); a list's stack deeper than the
+    list allows; display lists the driver couldn't have queued as they are (each list in the queue or free, once, as
+    its state says; one running or completed that never started; the GE running or finishing one that isn't queued,
+    or finishing one that hasn't completed);
+  - a disc folder's names without their entries; a file on the disc open for writing; a host folder's names as no
+    listing of it makes them ("." and ".." first, but not at a device's top, then single names a PSP path can name,
+    with no '/', '\', ':' or NUL: reading the folder joins each to its place on the host, so a path, or ".." at the
+    top, would reach outside the device's folder);
+  - an ID or a file number at or past the next one to be handed out, or a map's key that isn't its object's ID; IDs
+    or file numbers counted past 2^31 (they're positive 32-bit numbers, and stop short of that: newUID(), newFile());
+    a running thread that isn't there;
+  - what would hang the machine, or keep it busy for hours: a sound frame or more owed, a clock past a century, the
+    next vertical blank more than a frame ahead or a frame or more behind, a sampling cycle sceCtrlSetSamplingCycle
+    refuses or its next sample more than a cycle ahead or a frame or more behind, a wait for 64 controller samples or
+    more.
+
+  The machine is then put back from a state of itself made first, its open files kept just as they were (a file the
+  program removed or renamed while it had it open couldn't be opened again by its path); should even that fail, the
+  game starts afresh rather than run on from half of each. Lists have no limits of their own: their items are read
+  one at a time, and a list that claims more than the rest of the state holds runs out of state part way. So no list
+  the machine can make is too long to load, and however damaged a count, what loading takes in memory stays a small
+  multiple of the state's own size (an item takes a few times its bytes in the state).
+- **A program that has ended** (by leaving, or by crashing) makes no state: there's nothing to carry on from, and a
+  state of it would only bring back where it stopped. The app saves states through `PhobosCore.trySaveState()`, which
+  holds the core paused from its look to its write, waits two seconds at most for the frame to end (as unloading does
+  before abandoning a stuck core), and says when there's no state to save: the auto-save as the game quits passes over
+  that without a word, rather than tell the player the save failed, or wait for ever on a core that's stuck, while a
+  save the player asks for (into any slot, Auto too) says it failed.
+- **In the app**: Save, Load, the state hotkeys and Auto-Save State work for the PSP as for any system (part 13's
+  stand-in, which left them out, is gone). States go by the game's name, and homebrew comes as an `EBOOT.PBP` in a
+  folder named after it, so a PSP program in an `EBOOT.PBP` takes its folder's name, in the Library and when another
+  app launches it (`Cube/EBOOT.PBP` is "Cube.pbp"; the folder comes from the file's path, its storage document's ID,
+  or the launch URI's own path where that ends in the file's name): each program's states are its own. One whose
+  folder can't be told (a document whose ID is only a number, a provider whose paths are numbers) stays
+  "EBOOT.PBP". PlayStation games that come as an `EBOOT.PBP` keep their names, and with
+  them their memory cards and states.
+- **Found on the way**: restoring the GE's state from the program's buffer (`sceGeRestoreContext`, and a list's own
+  context as it ends) let a buffer the program had written over set the GE three CALLs deep, past its two return
+  slots. It's held at two now. Two places that trusted what only a damaged state could break now check: writing to a
+  file refuses one on the disc, and taking a display list out of the queue leaves one that isn't there alone. A
+  display list that never ends held everything up: with no thread to run, `Kernel::idle()` let the GE run again and
+  again without time passing, and a list that stopped every few commands (at SIGNALs that jump, or SYNCs and
+  FINISHes) got a fresh million commands at each stop, as it did each time a thread woke. Now the GE runs a million
+  commands a frame at most, however many goes it has and however often it stops (each vertical blank gives it
+  another million), time goes on while it works, and a list that SIGNALs for a callback over and over has the GE wait
+  while one still waits its turn or runs (the PSP takes the GE's next interrupt only once the last one's handler has
+  returned), so the calls into the program can't pile up. (The budget counts commands, not what they draw: a list
+  that draws big primitives over and over can still make a frame slow to end, until the GE's timing counts its drawing
+  too.) IDs and file numbers, which counted up without end, stop
+  short of 2^31: what would need another fails, out of memory or with too many files open, rather than hand out one in
+  use. And a folder's listing leaves out host names no PSP path can name ('\' or ':' in them), which made the
+  machine's own states unloadable.
+
+Tests:
+- `tests/psp/ares` (163 checks): cube saved after 30 frames and loaded carries on exactly as it did (each of 20
+  frames' picture, time and program counter, then RAM and VRAM), on the recompiler and the interpreter, and in a
+  fresh session of the same game; its state holds the memory that's used and little else; a state with the wrong
+  signature, one cut 4 KiB short (the kernel's lists run out of state), one cut 4 bytes short (only its end shows
+  it) and one owing endless sound are refused, every byte of the machine's state as it was, and a file the program
+  had open, removed from the host since, still open and reading; another program (pspsdk's blend) refuses cube's
+  state, and is as it was; hello, once it has left, makes no state; cube booted from a disc image takes its state
+  back, and a disc holding another program refuses it. It also passes built with the address sanitizer.
+- `tests/psp/states.cpp`, three groups. "kernel states" takes the kernel's part from one machine to another: open
+  files coming back at their positions and reading the host file as it is then, one deleted from the host dropped,
+  a disc file and a folder half listed coming back, a semaphore, an event flag, a block of memory and a thread (its
+  registers, its global pointer, its name), new descriptors going on from the old; a list and a text longer than the
+  rest of the state refused; a disc file dropped where no disc image is in the drive (none, or a host folder standing
+  for disc0:); host names with '\' or ':' left out of a listing. "state fields": a machine with one of everything has
+  each of 212 fields (the CPU's, the GE's and the
+  kernel's) changed in turn, each change leaving a value a fresh machine doesn't have, and each must change the
+  state; the state, every field changed, then loads into a fresh machine, which must make the very same state; last,
+  54 values no machine could hold are refused one at a time, the machine as it was after each (among them each kind
+  of object's ID past the next to be handed out, IDs counted past 2^31, and folder names reaching outside their
+  folder). "kernel ids run out": at 2^31, objects and files can't be made, on the memory stick or the disc (a
+  thread's stack goes again), a file that would be made or emptied is left alone, and the machine, every ID and file
+  number handed out, still saves and loads. "ge endless list" (in `tests/psp/ge.cpp`): lists that never end (a JUMP
+  back, a SIGNAL that jumps back, SYNCs and FINISHes over and over, a dot drawn over and over), with no thread to run,
+  still let the frame end, each vertical blank giving the GE its million commands; with a thread waking every 10
+  microseconds, a frame still runs a million GE commands at most; one SIGNALing for a
+  callback over and over keeps two calls waiting at most; and a callback that moves the stall address on finds the
+  list waiting at the next SIGNAL.
+- Broken versions each failed: a field left out, a check left out (the display's mode, the list a finish belongs
+  to, a thread's ID, the folder names, ".." among them, '\' in them, IDs counted past 2^31), the bounds made one too
+  tight for a machine that has handed out every ID or file number, the disc's file opened with no number left, the
+  end check, the sound check, the disc program's hash, the open files put back after a refused load, the rule against
+  states of a program that has ended, the listing that left out unnameable names, the callbacks' bound (with a
+  callback waiting, and with one running), the clock held still for an endless display list and the GE's budget
+  renewed at every stop (the test's alarm stops each, saying why), the GE's budget renewed at every go rather than
+  every frame, or never renewed, or left out of the state, or unchecked, and the running thread left pointing at a
+  thread already freed. The address sanitizer catches that
+  last one: both test scripts (`tests/allegrex`, `tests/psp`) now build with it on macOS too, as on Linux, since its
+  runtime no longer hangs at
+  start there.
+- The app's `LaunchSystemsTest`: an `EBOOT.PBP` takes its folder's name, and any other file, or an `EBOOT.PBP` whose
+  folder can't be told, keeps its own; a launch's folder from its path, its document's ID, or another app's URI that
+  ends in the file's name (nothing from a URI whose path is IDs).

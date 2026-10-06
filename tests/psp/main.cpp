@@ -9,6 +9,7 @@ int main() {
   for(auto& test : kernelTests()) tests.push_back(test);
   for(auto& test : fileTests()) tests.push_back(test);
   for(auto& test : discTests()) tests.push_back(test);
+  for(auto& test : stateTests()) tests.push_back(test);
   for(auto& test : geTests()) tests.push_back(test);
   for(auto& test : drawTests()) tests.push_back(test);
   for(auto& test : draw3dTests()) tests.push_back(test);

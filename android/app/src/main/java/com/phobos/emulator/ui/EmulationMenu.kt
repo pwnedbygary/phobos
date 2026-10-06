@@ -196,7 +196,6 @@ fun EmulationMenu(
                     LazyColumn(modifier = Modifier.weight(1f), state = menuListState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         item {
                             QuickActions(
-                                states = MainViewModel.hasStates(systemName),
                                 canLoad = slotPreview != null,
                                 touchControlsShown = settings.showTouchControls,
                                 discLabel = discLabel,
@@ -214,9 +213,7 @@ fun EmulationMenu(
                                 onReset = { viewModel.resetSystem(); onResume() },
                             )
                         }
-                        if (MainViewModel.hasStates(systemName)) {
-                            item { SaveStateSection(viewModel, settings, systemName, romName, currentSlot, slotPreview) }
-                        }
+                        item { SaveStateSection(viewModel, settings, systemName, romName, currentSlot, slotPreview) }
                         if (supportsFastBoot(systemName)) {
                             item {
                                 MenuSection("Boot Options") {
@@ -277,15 +274,13 @@ private fun supportsFastBoot(systemName: String): Boolean =
 
 @Composable
 private fun QuickActions(
-    states: Boolean, canLoad: Boolean, touchControlsShown: Boolean, discLabel: String?,
+    canLoad: Boolean, touchControlsShown: Boolean, discLabel: String?,
     onSave: () -> Unit, onLoad: () -> Unit, onScreenshot: () -> Unit,
     onToggleTouchControls: () -> Unit, onDisc: () -> Unit, onReset: () -> Unit,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (states) {
-            QuickAction(Icons.Default.Save, "Save", onSave, Modifier.weight(1f))
-            QuickAction(Icons.Default.Download, "Load", onLoad, Modifier.weight(1f), enabled = canLoad)
-        }
+        QuickAction(Icons.Default.Save, "Save", onSave, Modifier.weight(1f))
+        QuickAction(Icons.Default.Download, "Load", onLoad, Modifier.weight(1f), enabled = canLoad)
         QuickAction(Icons.Default.CameraAlt, "Shot", onScreenshot, Modifier.weight(1f))
         QuickAction(
             if (touchControlsShown) Icons.Default.TouchApp else Icons.Default.DoNotTouch,

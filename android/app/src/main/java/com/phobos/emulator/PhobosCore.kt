@@ -51,6 +51,11 @@ object PhobosCore {
     external fun setMuteAudio(muted: Boolean)
     external fun setShader(path: String): Boolean
     external fun saveState(path: String): Boolean
+    /**
+     * Saves a state to [path]: 1, or 0 when there's none to save (a game that ended by itself, such as a PSP program
+     * that left, or a core stuck in a frame for two seconds), or -1 when it couldn't be written.
+     */
+    external fun trySaveState(path: String): Int
     external fun loadState(path: String): Boolean
     /** The loaded game's battery saves, one "name\tsize\tpath" entry each (N64: save.eeprom, save.ram, save.flash, save.pak). */
     external fun getSaveFiles(): Array<String>

@@ -11,6 +11,8 @@ object LaunchSystems {
     private const val ZX = "ZX Spectrum"
     private const val ZX_128 = "ZX Spectrum 128"
 
+    const val PSP = "PlayStation Portable"
+
     /**
      * Names frontends use for each system, normalized: Phobos's own names, Argosy's platform slugs, ES-DE's
      * system names and Daijisho's platform short names (Daijisho calls the Master System "master" and has one
@@ -180,9 +182,45 @@ object LaunchSystems {
         return base.isNotEmpty() && path.startsWith("$base/")
     }
 
+    /**
+     * The name of the folder holding the file [fileName] a launch URI points at, when it can be told: from where it
+     * is on shared storage ([filesystemPath]), from a storage document's ID ("primary:ROMs/psp/Cube/EBOOT.PBP"), or,
+     * for another app's provider, from the URI's own path when that ends in the file's name
+     * (content://some.provider/files/Cube/EBOOT.PBP); null when nothing says, as for a document whose ID is only a
+     * number, or a provider whose path is IDs (content://media/external/file/123).
+     */
+    fun parentFolderName(
+        scheme: String?, authority: String?, pathSegments: List<String>, path: String?, primaryRoot: String,
+        fileName: String,
+    ): String? {
+        filesystemPath(scheme, authority, pathSegments, path, primaryRoot)?.let {
+            return folderNames(it, levels = 1).firstOrNull()
+        }
+        if (scheme != "content") return null
+        val documentId = when {
+            pathSegments.size >= 4 && pathSegments[0] == "tree" && pathSegments[2] == "document" -> pathSegments[3]
+            pathSegments.size >= 2 && (pathSegments[0] == "document" || pathSegments[0] == "tree") -> pathSegments[1]
+            else -> return pathSegments.takeIf { it.lastOrNull().equals(fileName, ignoreCase = true) }
+                ?.dropLast(1)?.lastOrNull()
+        }
+        val relative = documentId.substringAfter(':', "")
+        return if ('/' in relative) folderNames(relative, levels = 1).firstOrNull() else null
+    }
+
     /** Names of the folders above the file at [path], nearest first, at most [levels]. */
     fun folderNames(path: String, levels: Int = 3): List<String> =
         path.trimEnd('/').split('/').dropLast(1).filter { it.isNotEmpty() }.takeLast(levels).reversed()
+
+    /**
+     * What Phobos calls a PSP program, from its file's [fileName] and the [folderName] it sits in. Homebrew comes
+     * as an EBOOT.PBP in a folder named after the program ("Cube/EBOOT.PBP"), and states and other per-game
+     * files go by the name, so every program would share them: an EBOOT.PBP takes its folder's name instead
+     * ("Cube.pbp"), keeping the extension the core and the launch go by. Only for the PSP: PlayStation games
+     * that come as an EBOOT.PBP keep their name, and with it their memory cards and states.
+     */
+    fun pspProgramName(fileName: String, folderName: String?): String =
+        if (fileName.equals("EBOOT.PBP", ignoreCase = true) && !folderName.isNullOrBlank()) "$folderName.pbp"
+        else fileName
 
     // ── Storage paths and document IDs ──────────────────────────────────────────────────────────────
 

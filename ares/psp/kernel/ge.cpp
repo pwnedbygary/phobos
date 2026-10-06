@@ -40,13 +40,24 @@ auto Kernel::geStalled() const -> bool {
 }
 
 //The GE runs its list as far as it goes: to the stall address, or through FINISHes and SIGNALs (dealt with as the
-//driver does) to the end of the queue. A list that runs a million commands without stopping is left to go on as the
-//CPU runs (Kernel::run()). One the GE gave up on (a bare END, a fault, a SIGNAL the driver can't do) stays in the
-//queue as running, and whoever waits for it waits on: the PSP's driver never hears the end of such a list either.
+//driver does) to the end of the queue. A million commands a frame, however many goes it has and however often they
+//stop it: past that, the list is left to go on in the next frame (each vertical blank gives it another million), so
+//no list (one that jumps back to itself, or signals over and over) holds the frame up for long. (The budget counts
+//commands, not what they draw: one that draws big primitives over and over can still make the frame slow to end.)
+//One the GE gave up on (a bare END, a fault, a SIGNAL the driver can't do) stays in the queue as running, and whoever
+//waits for it waits on: the PSP's driver never hears the end of such a list either.
 auto Kernel::geRun() -> void {
   geBusy = false;
   while(geRunning >= 0 && !geSuspended) {
-    switch(ge.run(GeBudget)) {
+    if(!geLeft) {
+      geBusy = true;
+      return;
+    }
+    u64 ran = 0;
+    auto stop = ge.run(geLeft, ran);
+    geLeft -= ran;
+    geCommands += ran;
+    switch(stop) {
     case GE::Stop::Stalled:  return;
     case GE::Stop::Busy:     geBusy = true; return;
     case GE::Stop::Finished: geFinished(); break;
@@ -75,9 +86,12 @@ auto Kernel::geCall(GeList& list, bool finish, u32 id, bool suspends) -> bool {
   return true;
 }
 
-//Out of the queue and free for the next list; whoever waits for it to finish is told it has.
+//Out of the queue and free for the next list; whoever waits for it to finish is told it has. A list that isn't in
+//the queue is left as it is.
 auto Kernel::geRemove(u32 index) -> void {
-  geQueue.erase(std::find(geQueue.begin(), geQueue.end(), index));
+  auto at = std::find(geQueue.begin(), geQueue.end(), index);
+  if(at == geQueue.end()) return;
+  geQueue.erase(at);
   geFree.push_back(index);
   geWake(Wait::GeList, index);
 }
@@ -169,8 +183,10 @@ auto Kernel::geSignaled() -> void {
   case 0x01:  //the callback runs, then the GE goes on
     geCall(list, false, signal & 0xffff, true);
     return;
-  case 0x02:  //the GE goes on, and the callback runs
-    geCall(list, false, signal & 0xffff);
+  case 0x02:  //the GE goes on, and the callback runs; but should another callback wait its turn or run still, the GE
+              //waits for this one too: the PSP takes the GE's next interrupt only once the last one's handler has
+              //returned, so the callbacks can't pile up
+    geCall(list, false, signal & 0xffff, interrupting || !calls.empty());
     return;
   case 0x03:  //paused at the next FINISH
     list.state = GeList::State::Paused;
@@ -243,7 +259,8 @@ auto Kernel::geRestoreContext(u32 address) -> void {
   for(u32& element : ge.projection) element = get();
   for(u32& element : ge.textureMatrix) element = get();
   for(u32* index : {&ge.boneIndex, &ge.worldIndex, &ge.viewIndex, &ge.projectionIndex, &ge.textureIndex}) *index = get();
-  ge.list.address = get(); ge.list.stall = get(); ge.list.offset = get(); ge.list.depth = get() & 3;
+  //the GE has room for two CALLs: a buffer the program has written over can't make it more
+  ge.list.address = get(); ge.list.stall = get(); ge.list.offset = get(); ge.list.depth = std::min(get(), 2u);
   for(u32 n : {0, 1}) ge.list.returnAddress[n] = get(), ge.list.returnOffset[n] = get();
   ge.vertexAddress = get(); ge.indexAddress = get();
 }

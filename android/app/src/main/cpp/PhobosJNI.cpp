@@ -183,6 +183,14 @@ Java_com_phobos_emulator_PhobosCore_saveState(JNIEnv* env, jobject, jstring path
     return success ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_com_phobos_emulator_PhobosCore_trySaveState(JNIEnv* env, jobject, jstring path) {
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    int result = ares::trySaveState(nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+    return result;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_phobos_emulator_PhobosCore_loadState(JNIEnv* env, jobject, jstring path) {
     const char* nativePath = env->GetStringUTFChars(path, 0);

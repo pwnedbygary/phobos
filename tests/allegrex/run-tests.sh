@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-#Builds and runs the Allegrex tests (ares/psp/cpu) on the host, with the undefined-behavior sanitizer, and on Linux
-#the address sanitizer too (its runtime can hang at start on a macOS newer than the toolchain). Every test runs on
-#the interpreter and again on the recompiler.
+#Builds and runs the Allegrex tests (ares/psp/cpu) on the host, with the undefined-behavior and address sanitizers.
+#Should the address sanitizer's runtime hang at start (as it once did on a macOS newer than its toolchain),
+#SANITIZE="-fsanitize=undefined -fno-sanitize-recover=all" leaves it out. Every test runs on the interpreter and
+#again on the recompiler.
 #The CPU is built against nall, ares's types and sljit alone (prelude.hpp), not the rest of ares. Everything is
 #built with BUILD_DEBUG, which also turns on sljit's own checks of how it's called; sljit's C file and the C++
 #files must agree on that, as it changes the layout of sljit's structures.
@@ -14,8 +15,7 @@ mkdir -p "$OUT"
 
 CC=${CC:-cc}
 CXX=${CXX:-c++}
-if [[ $(uname) == Darwin ]]; then DEFAULT_SANITIZE="-fsanitize=undefined"; else DEFAULT_SANITIZE="-fsanitize=address,undefined"; fi
-SANITIZE=${SANITIZE-$DEFAULT_SANITIZE -fno-sanitize-recover=all}
+SANITIZE=${SANITIZE--fsanitize=address,undefined -fno-sanitize-recover=all}
 SYSROOT=()
 LIBRARIES=(-lpthread -ldl)
 #the Command Line Tools linker can be older than the newest SDK next to it

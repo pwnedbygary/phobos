@@ -68,6 +68,7 @@ struct Memory {
   static auto vramOffset(u32 copy, u32 seen) -> u32;
   static auto vramSeen(u32 copy, u32 offset) -> u32;
   auto power(u32 ramSize = 32_MiB) -> void;
+  auto serialize(serializer& s) -> void;
   auto pointer(u32 address, u32 size = 1) -> u8*;
   auto reaches(u32 address, u32 size) -> bool;
   auto read(u32 size, u32 address) -> u32;
