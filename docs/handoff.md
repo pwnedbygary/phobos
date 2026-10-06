@@ -781,11 +781,12 @@ describes it. Reverb is a pass-through (no reverb added); noise, waves and sas's
   taken past the clock (what doesn't fit is left out at the far end); loading wants the SRC channel 7 frames ahead at
   most. Part 17's output2 results still hold ("audio src rest" and "audio draining" now pause a millisecond where
   the PSP's own runs print lines); the usual two-buffer stream is unchanged (same frames and return times at eight
-  sizes and rates). Low: no test pinned the standard VAG ending (a block marked 1, then `00 07 77 77...`). New groups:
-  "audio src drained between buffers" (30 s at 1024/44.1 kHz and 4096/48 kHz: lead bounded, every frame taken and as
-  the buffers make it, states round-trip), "audio output kept from a channel ahead", "sas vag endings" (the flag-1
-  ending, 3 ending a voice that doesn't loop, a loop back to a 4); "state fields" tries the new bounds. Checks: 200
-  groups, `tests/psp/ares` 250; the state's layout is unchanged (version 6).
+  sizes and rates), and the 40 s captures of Space Invaders Extreme (SRC channel), the Street Fighter III port and
+  Lumines are bit-identical to the old code's. Low: no test pinned the standard VAG ending (a block marked 1, then
+  `00 07 77 77...`). New groups: "audio src drained between buffers" (30 s at 1024/44.1 kHz and 4096/48 kHz: lead
+  bounded, every frame taken and as the buffers make it, states round-trip), "audio output kept from a channel
+  ahead", "sas vag endings" (the flag-1 ending, 3 ending a voice that doesn't loop, a loop back to a 4); "state
+  fields" tries the new bounds. Checks: 200 groups, `tests/psp/ares` 250; the state's layout is unchanged (version 6).
 - **Next**: an ATRAC3+ decoder (Burnout's, SOCOM's and Invaders' music), sas reverb, noise and waves; the RP6 run.
 
 ## PSP core: more functions games ask for — 2026-10-05

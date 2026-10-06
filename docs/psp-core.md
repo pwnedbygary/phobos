@@ -2239,8 +2239,9 @@ of the mixer's frames not taken; and the old loading refused a state the machine
 with each of three readings broken: a block marked 1 not ending its voice (the 28-sample burst heard), a 3 not ending
 a voice that doesn't loop, a 4 not marking the loop's start (the groups before it passed all three). The usual
 two-buffer stream makes the same frames and return times as before at eight sizes and rates (a scratch harness, not
-committed, run on the old code and the new). The tree passes 200 groups and 250 checks; the layout is unchanged
-(version 6).
+committed, run on the old code and the new), and the scratch runner's 40 s captures of Space Invaders Extreme (sas
+into the SRC channel), the Street Fighter III port and Lumines are the old code's bit for bit. The tree passes 200
+groups and 250 checks; the layout is unchanged (version 6).
 
 Uncertain: everything listed as chosen above; whether sceAudio's mixer rounds a sample times a volume down (as
 here) or towards zero, and clamps once, as the sums are taken (here), or after each channel it adds (which differs
