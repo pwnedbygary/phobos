@@ -208,11 +208,18 @@ auto Kernel::events() -> void {
     }
     if(thread->wait == Wait::EventFlag) eventFlagTimedOut(*thread);
     Wait wait = thread->wait;
-    ready(*thread, wait == Wait::Delay ? 0 : ErrorWaitTimeout);
+    ready(*thread, timeUp(*thread));
     waiterLeft(wait, thread->waitID);
     woke = true;
   }
   if(woke) reschedule();
+}
+
+//What a wait whose time is up returns: a delay, 0; a synchronous read or write, its result; any other, a timeout.
+auto Kernel::timeUp(const Thread& thread) const -> u32 {
+  if(thread.wait == Wait::Delay) return 0;
+  if(thread.wait == Wait::File) return thread.waitCount;
+  return ErrorWaitTimeout;
 }
 
 //A thread waiting for a semaphore's count or a memory pool's room stopped waiting without being served (its time

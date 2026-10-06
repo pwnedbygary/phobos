@@ -2,8 +2,9 @@
 //time the file's device takes, then polled or waited for; the refusals while one is under way; the descriptor an
 //asynchronous open or close leaves for its result; callbacks notified as requests are done, and run in CB waits;
 //two threads waiting on one request, and a callback taking the result its thread waits for; an ioctl's time; and a
-//state saved while a thread waits for a request. Each group's machine, saved at its end, loads into another that
-//makes the same state. Programs run on both engines.
+//state saved while a thread waits for a request. Synchronous reads and writes (io.cpp) wait the same time, and are
+//refused where a thread can't wait. Each group's machine, saved at its end, loads into another that makes the same
+//state. Programs run on both engines.
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
 
@@ -403,10 +404,168 @@ static auto asyncState() -> void {
   }
 }
 
+//Synchronous reads and writes wait for their device, taking an asynchronous request's time (io.cpp): the main thread
+//reading 4000 bytes from the memory stick waits 1100 microseconds, a worker of a lower priority running meanwhile; a
+//write of 1000 bytes there, 350; 2750 bytes from the disc, 2100 (1,375,000 bytes a second), and 11 of umd0:'s sectors
+//16484. A read whose bytes can't go where it's told fails at once. Refused before anything moves, with interrupts or
+//dispatching held off (CAN_NOT_WAIT) and in a vertical blank's handler (ILLEGAL_CONTEXT), a bad file refused first,
+//as pspautotests' intr/waits recorded; standard output is written at once whatever the context. On both engines.
+static auto syncWaits() -> void {
+  HostFolder stick;
+  stick.put("DATA.BIN", text(10000));
+  auto image = disc_image::makeIso({{"DISC.BIN", std::vector<u8>(8192, 3)}});
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.kernel.mount("ms0", stick.path.string());
+    m.kernel.disc = discFrom(image.bytes);
+    auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+    auto time = [&](Assembler& a, u32 offset) { a.call("sceKernelGetSystemTimeLow"); store(a, offset); };
+    auto io = [&](Assembler& a, const char* name, u32 file, u32 data, u32 size, u32 offset) {
+      a.put(addu(a0, file, zero)); a.li(a1, data); a.li(a2, size);
+      a.call(name);
+      store(a, offset);
+    };
+    Assembler handler{m, 0x0880'3000};  //a vertical blank's: a read and a write of good files, a read of a bad one
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp));
+    handler.li(t0, R + 0x100); handler.put(lw(s5, 0, t0)); handler.put(lw(s6, 4, t0)); handler.li(s7, 63);
+    io(handler, "sceIoRead", s5, Buffer + 0x100, 4, 0x50);
+    io(handler, "sceIoRead", s7, Buffer + 0x100, 4, 0x54);
+    io(handler, "sceIoWrite", s6, Buffer + 0x100, 4, 0x58);
+    handler.put(lw(ra, 12, sp)); handler.put(addiu(sp, sp, 16));
+    handler.li(v0, 0); handler.put(jr(ra)); handler.put(nop);
+    Assembler worker{m, 0x0880'2000};
+    time(worker, 0x80);
+    worker.print("worker\n");
+    worker.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    auto open = [&](const char* path, u32 flags, u32 into) {
+      main.li(a0, m.string(path)); main.li(a1, flags); main.li(a2, 0777);
+      main.call("sceIoOpen");
+      main.put(addu(into, v0, zero));
+    };
+    open("ms0:/DATA.BIN", 0x0001, s0);
+    open("ms0:/OUT.BIN", 0x0202, s1);  //PSP_O_WRONLY | PSP_O_CREAT
+    open("disc0:/DISC.BIN", 0x0001, s2);
+    open("umd0:", 0x0001, s3);
+    main.li(t0, R + 0x100); main.put(sw(s0, 0, t0)); main.put(sw(s1, 4, t0));
+    main.li(s7, 63);
+    main.li(a0, m.string("worker")); main.li(a1, 0x0880'2000); main.li(a2, 0x30); main.li(a3, 0x1000);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");
+    time(main, 0x00); io(main, "sceIoRead", s0, Buffer, 4000, 0x20); time(main, 0x04);
+    main.print("main read\n");
+    time(main, 0x08); io(main, "sceIoWrite", s1, Buffer, 1000, 0x24); time(main, 0x0c);
+    time(main, 0x10); io(main, "sceIoRead", s2, Buffer, 2750, 0x28); time(main, 0x14);
+    time(main, 0x18); io(main, "sceIoRead", s3, Buffer + 0x1000, 11, 0x2c); time(main, 0x1c);
+    time(main, 0x60); io(main, "sceIoRead", s0, 0x10, 4, 0x30); time(main, 0x64);  //nowhere to put them
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s4, v0, zero));
+    io(main, "sceIoRead", s0, Buffer, 4, 0x34);
+    io(main, "sceIoRead", s7, Buffer, 4, 0x38);
+    io(main, "sceIoWrite", s1, Buffer, 4, 0x3c);
+    main.print("held off\n");
+    main.put(addu(a0, s4, zero));
+    main.call("sceKernelCpuResumeIntr");
+    main.call("sceKernelSuspendDispatchThread");
+    main.put(addu(s4, v0, zero));
+    io(main, "sceIoRead", s0, Buffer, 4, 0x40);
+    io(main, "sceIoWrite", s1, Buffer, 4, 0x44);
+    main.put(addu(a0, s4, zero));
+    main.call("sceKernelResumeDispatchThread");
+    io(main, "sceIoRead", s0, Buffer, 4, 0x48);  //where the first read left it: nothing refused moved it
+    main.li(a0, 30); main.li(a1, 0); main.li(a2, 0x0880'3000); main.li(a3, 0);
+    main.call("sceKernelRegisterSubIntrHandler");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelEnableSubIntr");
+    main.call("sceDisplayWaitVblankStart");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelReleaseSubIntrHandler");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    std::string expected = "worker\nmain read\nheld off\n";
+    CHECK(m.output == expected, true);
+    if(m.output != expected) std::printf("  [%s]\n", m.output.c_str());
+    auto took = [&](u32 from, u32 microseconds) {  //(the instructions around the calls add under a microsecond)
+      u32 elapsed = word(m, R + from + 4) - word(m, R + from);
+      return elapsed == microseconds || elapsed == microseconds + 1;
+    };
+    CHECK(word(m, R + 0x20) == 4000 && took(0x00, 1100), true);
+    CHECK(word(m, R + 0x80) >= word(m, R) && word(m, R + 0x80) < word(m, R + 4), true);  //the worker meanwhile
+    CHECK(word(m, R + 0x24) == 1000 && took(0x08, 350), true);
+    CHECK(stick.get("OUT.BIN") == text(1000), true);
+    CHECK(word(m, R + 0x28) == 2750 && took(0x10, 2100), true);
+    CHECK(word(m, R + 0x2c) == 11 && took(0x18, 16484), true);
+    CHECK(word(m, R + 0x30) == Kernel::ErrorIllegalAddress && took(0x60, 0), true);
+    CHECK(word(m, R + 0x34), Kernel::ErrorCanNotWait);
+    CHECK(word(m, R + 0x38), Kernel::ErrorBadFile);
+    CHECK(word(m, R + 0x3c), Kernel::ErrorCanNotWait);
+    CHECK(word(m, R + 0x40), Kernel::ErrorCanNotWait);
+    CHECK(word(m, R + 0x44), Kernel::ErrorCanNotWait);
+    CHECK(word(m, R + 0x48), 4);
+    CHECK(m.system.memory.readString(Buffer, 4) == "wxyz", true);  //bytes 4000 to 4003
+    CHECK(word(m, R + 0x50), Kernel::ErrorIllegalContext);
+    CHECK(word(m, R + 0x54), Kernel::ErrorBadFile);
+    CHECK(word(m, R + 0x58), Kernel::ErrorIllegalContext);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m, [&](KernelMachine& n) {
+      n.kernel.mount("ms0", stick.path.string());
+      n.kernel.disc = discFrom(image.bytes);
+    }), true);
+  }
+}
+
+//A state saved while the main thread waits in a read of 64 KiB from the disc (its bytes in memory already) loads
+//into another machine, which makes the same state and carries on as the first does: the read returns 65536 at the
+//same moment, 100 microseconds and its bytes at the disc's rate after it began. With no disc in the drive the file
+//is dropped, but the read, done already, still returns its count. On both engines.
+static auto syncWaitState() -> void {
+  auto image = disc_image::makeIso({{"DISC.BIN", std::vector<u8>(65536, 3)}});
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.kernel.disc = discFrom(image.bytes);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("disc0:/DISC.BIN")); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceIoOpen");
+    main.put(addu(a0, v0, zero)); main.li(a1, Buffer); main.li(a2, 65536);
+    main.call("sceIoRead");
+    main.li(t0, R); main.put(sw(v0, 0x20, t0));
+    main.call("sceKernelGetSystemTimeLow");
+    main.li(t0, R); main.put(sw(v0, 0x24, t0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency / 100);  //10 ms of the read's 48
+    CHECK(m.kernel.exited, false);
+    auto& waiting = *m.kernel.threads.begin()->second;
+    CHECK(waiting.status == Kernel::Status::Waiting && waiting.wait == Kernel::Wait::File, true);
+    CHECK(m.system.memory.read(1, Buffer + 65535), 3);
+    auto state = saveState(m);
+    KernelMachine n;
+    n.system.recompiler.enabled = recompile;
+    n.kernel.disc = discFrom(image.bytes);
+    CHECK(loadState(n, state), true);
+    CHECK(saveState(n) == state, true);
+    KernelMachine without;
+    without.system.recompiler.enabled = recompile;
+    CHECK(loadState(without, state), true);
+    for(auto* each : {&m, &n, &without}) {
+      each->kernel.run(Kernel::CPUFrequency / 10);
+      CHECK(each->kernel.exited, true);
+      CHECK(word(*each, R + 0x20), 65536);
+      CHECK(word(*each, R + 0x24), word(m, R + 0x24));
+    }
+    CHECK(word(m, R + 0x24), (100 * Microsecond + 65536 * Kernel::CPUFrequency / 1'375'000) / Microsecond);
+    CHECK(roundTrip(m, [&](KernelMachine& fresh) { fresh.kernel.disc = discFrom(image.bytes); }), true);
+    CHECK(m.notes.size(), 0);
+  }
+}
+
 auto asyncTests() -> Tests {
   return {{"async files called directly", asyncCalls}, {"async files waited for", asyncWaits},
           {"async files two waiters", asyncTwoWaiters}, {"async files callback takes the result", asyncCallbackTakes},
-          {"async files ioctl timing", asyncIoctlTiming}, {"async files state", asyncState}};
+          {"async files ioctl timing", asyncIoctlTiming}, {"async files state", asyncState},
+          {"files synchronous reads wait", syncWaits}, {"files synchronous wait state", syncWaitState}};
 }
 
 }

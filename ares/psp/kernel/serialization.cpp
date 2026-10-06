@@ -168,11 +168,18 @@ auto Kernel::serialize(serializer& s) -> bool {
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
     s(w.done); s(w.resultPointer);
-    check(t.wait <= Wait::Mailbox && w.wait <= Wait::Mailbox);
+    check(t.wait <= Wait::File && w.wait <= Wait::Mailbox);
     check(t.callbackID < nextUID);
     s(t.suspended);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
     check(t.wait != Wait::Controller || (t.waitCount & 0x7fff'ffff) < 64);
+    //a synchronous read or write waits (with no callbacks: neither function's name ends in CB) for its device, due
+    //within the longest a request can take (64 MiB from the disc: under a minute), nor overdue by a frame
+    if(t.wait == Wait::File) {
+      u64 due = t.wakeAt;
+      check(t.status == Status::Waiting && !t.callbacks && due);
+      check(due > cycles ? due - cycles <= asyncDuration(true, 64_MiB) : cycles - due < VblankCycles);
+    }
   };
   if(s.writing()) {
     for(auto& [uid, t] : threads) thread(*t);

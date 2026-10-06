@@ -365,10 +365,42 @@ auto Kernel::readFile(u32 file, u32 data, u32 size) -> u32 {
   return got;
 }
 
-//(file, data, size): how many bytes were read (fewer at the end of the file).
+//A synchronous read or write waits for its file's device, as on a PSP: pspautotests' intr/waits recorded sceIoRead
+//and sceIoWrite on a memory stick file refused in an interrupt handler (ILLEGAL_CONTEXT) and with interrupts or
+//dispatching held off (CAN_NOT_WAIT), as functions that wait are, a bad file being refused first. 0 if the calling
+//thread may wait, else the error the call is refused with. (Outside a handler with no thread running, as when a test
+//calls the kernel itself, there's no one to wait: the call is done at once.)
+auto Kernel::fileWaitRefused() const -> u32 {
+  if(interrupting) return ErrorIllegalContext;
+  if(current && (!interruptsEnabled || dispatchSuspended)) return ErrorCanNotWait;
+  return 0;
+}
+
+//A synchronous read or write is done as it's made (its bytes move now), as an asynchronous request is (async.cpp),
+//and the calling thread then waits the time the same request would take its device (asyncDuration()), other
+//threads running meanwhile, before it returns value. GTA's disc streaming counts on that: its streaming thread calls
+//a request's callback as its last read ends, and the callback drops the request unless the thread that made it, of
+//a lower priority, has run meanwhile to note it. An error returns at once.
+auto Kernel::fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void {
+  result(value);
+  if(!current || s32(value) < 0) return;
+  current->waitCount = value;
+  block(Wait::File, file, cycles + asyncDuration(onDisc, bytes));
+}
+
+//(file, data, size): how many bytes were read (fewer at the end of the file), once its device has taken their time.
+//Standard input has nothing to read, at once.
 auto Kernel::sceIoRead() -> void {
-  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
-  result(readFile(arg(0), arg(1), arg(2)));
+  u32 file = arg(0);
+  if(asyncBusy(file)) return result(ErrorAsyncBusy);
+  auto found = files.find(file);
+  if(found == files.end() || found->second.folder || !(found->second.flags & OpenRead)) {
+    return result(readFile(file, arg(1), arg(2)));
+  }
+  if(u32 error = fileWaitRefused()) return result(error);
+  u32 got = readFile(file, arg(1), arg(2));
+  auto& open = found->second;
+  fileWait(file, got, open.onDisc, s32(got) < 0 ? 0 : u64(got) * (open.sectors ? Disc::SectorSize : 1));
 }
 
 //Writes from the program's memory to an open file (file, data, size): how many bytes were written, or an error.
@@ -398,10 +430,18 @@ auto Kernel::writeFile(u32 file, u32 data, u32 size) -> u32 {
   return size;
 }
 
-//(file, data, size): how many bytes were written.
+//(file, data, size): how many bytes were written, once the device has taken their time. Standard output and error
+//take none.
 auto Kernel::sceIoWrite() -> void {
-  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
-  result(writeFile(arg(0), arg(1), arg(2)));
+  u32 file = arg(0);
+  if(asyncBusy(file)) return result(ErrorAsyncBusy);
+  auto found = files.find(file);
+  if(found == files.end() || found->second.folder || found->second.onDisc || !(found->second.flags & OpenWrite)) {
+    return result(writeFile(file, arg(1), arg(2)));
+  }
+  if(u32 error = fileWaitRefused()) return result(error);
+  u32 wrote = writeFile(file, arg(1), arg(2));
+  fileWait(file, wrote, false, s32(wrote) < 0 ? 0 : wrote);
 }
 
 //Moves a file's position: from its start (whence 0), where it is (1), or its end (2). Returns where it is now.

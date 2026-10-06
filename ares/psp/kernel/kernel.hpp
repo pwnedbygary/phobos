@@ -233,6 +233,7 @@ struct Kernel {
   enum class Wait : u32 {
     None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd, Audio,
     Fpl, Vpl, Module, Async, PipeSend, PipeReceive, Mailbox,
+    File,  //a synchronous read or write, for the time its file's device takes (io.cpp)
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -250,10 +251,11 @@ struct Kernel {
     Wait wait = Wait::None;
     u32 waitID = 0;        //the semaphore, mutex, thread, event flag, display list, module, message pipe or mailbox
                            //waited for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the
-                           //SRC channel's); the file whose asynchronous request is waited for
+                           //SRC channel's); the file whose asynchronous request is waited for, or that a synchronous
+                           //read or write went to
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs; a mixer
                            //output's left volume; the samples an SRC output's buffer was armed with; the bytes a
-                           //message pipe's send or receive asked for
+                           //message pipe's send or receive asked for; what a synchronous read or write returns
     u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode
     u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
                            //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
@@ -298,6 +300,7 @@ struct Kernel {
   auto reschedule() -> void;
   auto switchTo(Thread* thread) -> void;
   auto events() -> void;
+  auto timeUp(const Thread& thread) const -> u32;
   auto waiterLeft(Wait wait, u32 id) -> void;
   auto idle(u64 end) -> bool;
   auto untilNextEvent() const -> u64;
@@ -428,6 +431,8 @@ struct Kernel {
   auto openFile(const std::string& path, u32 flags) -> u32;
   auto readFile(u32 file, u32 data, u32 size) -> u32;
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
+  auto fileWaitRefused() const -> u32;
+  auto fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void;
   auto seek(u32 file, s64 offset, u32 whence, u64& position) -> u32;
   auto ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength, u64* moved = nullptr) -> u32;
   auto sceKernelStdin() -> void;
