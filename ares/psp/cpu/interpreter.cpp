@@ -30,6 +30,16 @@
 #define IMMu16 u16(OPCODE)
 #define IMMu26 u32(OPCODE & 0x03ff'ffff)
 
+//The VFPU's fields: three 7-bit register numbers, and the operand size (1 to 4 lanes) from bits 7 and 15. Its
+//loads and stores keep the register number's top bits in the low bits of the offset, which is a multiple of four.
+#define VD   u8(OPCODE & 0x7f)
+#define VS   u8(OPCODE >>  8 & 0x7f)
+#define VT   u8(OPCODE >> 16 & 0x7f)
+#define VN   u32(1 + (OPCODE >> 7 & 1) + 2 * (OPCODE >> 15 & 1))
+#define VTS  u8((OPCODE >> 16 & 31) | (OPCODE & 3) << 5)
+#define VTQ  u8((OPCODE >> 16 & 31) | (OPCODE & 1) << 5)
+#define IMMv s16(OPCODE & 0xfffc)
+
 auto Allegrex::decoderEXECUTE() -> void {
   switch(OPCODE >> 26) {
   jp(0x00, SPECIAL);
@@ -50,10 +60,15 @@ auto Allegrex::decoderEXECUTE() -> void {
   op(0x0f, LUI, RT, IMMu16);
   jp(0x10, SCC);
   jp(0x11, FPU);
+  jp(0x12, COP2);
   op(0x14, BEQL, RS, RT, IMMi16);
   op(0x15, BNEL, RS, RT, IMMi16);
   op(0x16, BLEZL, RS, IMMi16);
   op(0x17, BGTZL, RS, IMMi16);
+  //VFPU instructions use up the prefixes once they've run (see VFPU in allegrex.hpp)
+  case 0x18: decoderVFPU0(); return vfpuPrefixesUsed();
+  case 0x19: decoderVFPU1(); return vfpuPrefixesUsed();
+  case 0x1b: decoderVFPU3(); return vfpuPrefixesUsed();
   jp(0x1c, SPECIAL2);
   jp(0x1f, SPECIAL3);
   op(0x20, LB, RT, RS, IMMi16);
@@ -71,11 +86,29 @@ auto Allegrex::decoderEXECUTE() -> void {
   op(0x2f, CACHE);
   op(0x30, LL, RT, RS, IMMi16);
   op(0x31, LWC1, FT, RS, IMMi16);
+  op(0x32, LVS, VTS, RS, IMMv);
+  case 0x34:
+    //vmfvc and vmtvc move control registers, the prefixes among them, and leave the prefixes alone (as PPSSPP
+    //has them; pspdev's documentation doesn't say)
+    if(OPCODE >> 16 == 0xd050) return VMFVC(VD, u8(OPCODE >> 8 & 0x7f));
+    if(OPCODE >> 16 == 0xd051) return VMTVC(u8(OPCODE & 0x7f), VS);
+    decoderVFPU4();
+    return vfpuPrefixesUsed();
+  case 0x35:  //lvl.q, or lvr.q when bit 1 is set
+    if(OPCODE & 2) return LVRQ(VTQ, RS, IMMv);
+    return LVLQ(VTQ, RS, IMMv);
+  op(0x36, LVQ, VTQ, RS, IMMv);
+  jp(0x37, VFPU5);  //the prefix instructions, which set the prefixes rather than use them up
   op(0x38, SC, RT, RS, IMMi16);
   op(0x39, SWC1, FT, RS, IMMi16);
+  op(0x3a, SVS, VTS, RS, IMMv);
+  case 0x3c: decoderVFPU6(); return vfpuPrefixesUsed();
+  case 0x3d:  //svl.q, or svr.q when bit 1 is set
+    if(OPCODE & 2) return SVRQ(VTQ, RS, IMMv);
+    return SVLQ(VTQ, RS, IMMv);
+  op(0x3e, SVQ, VTQ, RS, IMMv);
+  jp(0x3f, VFPU7);  //vnop, vsync and vflush, which see to the prefixes themselves
   }
-  //Everything else isn't an instruction yet: the VFPU's opcodes (0x12, 0x18-0x1b, 0x32-0x37, 0x3a-0x3f) come with
-  //the VFPU.
   INVALID();
 }
 
@@ -214,6 +247,171 @@ auto Allegrex::decoderFPU() -> void {
   INVALID();
 }
 
+//Coprocessor 2 transfers: moves between the integer and VFPU registers, and the VFPU's branches.
+auto Allegrex::decoderCOP2() -> void {
+  switch(RSn) {
+  case 0x03:  //mfv, or mfvc for the control registers (numbers from 128)
+    if(OPCODE & 0x80) return MFVC(RT, OPCODE & 0x7f);
+    return MFV(RT, OPCODE & 0x7f);
+  case 0x07:  //mtv, or mtvc
+    if(OPCODE & 0x80) return MTVC(RT, OPCODE & 0x7f);
+    return MTV(RT, OPCODE & 0x7f);
+  op(0x08, BV, OPCODE.bit(16), OPCODE.bit(17), u8(OPCODE >> 18 & 7), IMMi16);  //bit 16: on true; bit 17: likely
+  }
+  INVALID();
+}
+
+//The VFPU's groups pick their instruction from bits 23-25, and within some groups from other fields.
+auto Allegrex::decoderVFPU0() -> void {
+  switch(OPCODE >> 23 & 7) {
+  op(0, VADD, VD, VS, VT, VN);
+  op(1, VSUB, VD, VS, VT, VN);
+  op(2, VSBN, VD, VS, VT, VN);
+  op(7, VDIV, VD, VS, VT, VN);
+  }
+  INVALID();
+}
+
+auto Allegrex::decoderVFPU1() -> void {
+  switch(OPCODE >> 23 & 7) {
+  op(0, VMUL, VD, VS, VT, VN);
+  op(1, VDOT, VD, VS, VT, VN);
+  op(2, VSCL, VD, VS, VT, VN);
+  op(4, VHDP, VD, VS, VT, VN);
+  op(5, VCRS, VD, VS, VT, VN);
+  op(6, VDET, VD, VS, VT, VN);
+  }
+  INVALID();
+}
+
+auto Allegrex::decoderVFPU3() -> void {
+  switch(OPCODE >> 23 & 7) {
+  op(0, VCMP, u8(OPCODE & 15), VS, VT, VN);  //the condition sits where rd would
+  op(2, VMIN, VD, VS, VT, VN);
+  op(3, VMAX, VD, VS, VT, VN);
+  op(5, VSCMP, VD, VS, VT, VN);
+  op(6, VSGE, VD, VS, VT, VN);
+  op(7, VSLT, VD, VS, VT, VN);
+  }
+  INVALID();
+}
+
+//Mostly instructions with one operand, which the rt field picks; also the conversions to and from integers.
+auto Allegrex::decoderVFPU4() -> void {
+  if(OPCODE >> 24 == 0xd3) return VWBN(VD, VS, VN, u8(OPCODE >> 16));
+  switch(OPCODE >> 23 & 7) {
+  case 0: break;
+  case 4: return VF2I(VD, VS, VN, u8(OPCODE >> 16 & 31), OPCODE >> 21 & 3);  //vf2in, vf2iz, vf2iu, vf2id
+  case 5:
+    if((OPCODE >> 21 & 3) == 0) return VI2F(VD, VS, VN, u8(OPCODE >> 16 & 31));
+    if((OPCODE >> 20 & 7) == 2) return VCMOV(VD, VS, VN, OPCODE.bit(19), u8(OPCODE >> 16 & 7));  //vcmovt, vcmovf
+    return INVALID();
+  default: return INVALID();
+  }
+  if(VT >= 0x60) return VCST(VD, VN, VT & 31);
+  switch(VT) {
+  op(0x00, VMOV, VD, VS, VN);
+  op(0x01, VABS, VD, VS, VN);
+  op(0x02, VNEG, VD, VS, VN);
+  op(0x03, VIDT, VD, VN);
+  op(0x04, VSAT0, VD, VS, VN);
+  op(0x05, VSAT1, VD, VS, VN);
+  op(0x06, VZERO, VD, VN);
+  op(0x07, VONE, VD, VN);
+  op(0x10, VRCP, VD, VS, VN);
+  op(0x11, VRSQ, VD, VS, VN);
+  op(0x12, VSIN, VD, VS, VN);
+  op(0x13, VCOS, VD, VS, VN);
+  op(0x14, VEXP2, VD, VS, VN);
+  op(0x15, VLOG2, VD, VS, VN);
+  op(0x16, VSQRT, VD, VS, VN);
+  op(0x17, VASIN, VD, VS, VN);
+  op(0x18, VNRCP, VD, VS, VN);
+  op(0x1a, VNSIN, VD, VS, VN);
+  op(0x1c, VREXP2, VD, VS, VN);
+  op(0x20, VRNDS, VS, VN);
+  op(0x21, VRNDI, VD, VN);
+  op(0x22, VRNDF, VD, VN, 0x3f80'0000u);  //vrndf1: from 1 up to 2
+  op(0x23, VRNDF, VD, VN, 0x4000'0000u);  //vrndf2: from 2 up to 4
+  op(0x32, VF2H, VD, VS, VN);
+  op(0x33, VH2F, VD, VS, VN);
+  op(0x36, VSBZ, VD, VS, VN);
+  op(0x37, VLGB, VD, VS, VN);
+  op(0x38, VUC2I, VD, VS, VN);
+  op(0x39, VC2I, VD, VS, VN);
+  op(0x3a, VUS2I, VD, VS, VN);
+  op(0x3b, VS2I, VD, VS, VN);
+  op(0x3c, VI2UC, VD, VS, VN);
+  op(0x3d, VI2C, VD, VS, VN);
+  op(0x3e, VI2US, VD, VS, VN);
+  op(0x3f, VI2S, VD, VS, VN);
+  op(0x40, VSRT, VD, VS, VN, 1);
+  op(0x41, VSRT, VD, VS, VN, 2);
+  op(0x42, VBFY1, VD, VS, VN);
+  op(0x43, VBFY2, VD, VS, VN);
+  op(0x44, VOCP, VD, VS, VN);
+  op(0x45, VSOCP, VD, VS, VN);
+  op(0x46, VFAD, VD, VS, VN);
+  op(0x47, VAVG, VD, VS, VN);
+  op(0x48, VSRT, VD, VS, VN, 3);
+  op(0x49, VSRT, VD, VS, VN, 4);
+  op(0x4a, VSGN, VD, VS, VN);
+  op(0x59, VT4444, VD, VS, VN);
+  op(0x5a, VT5551, VD, VS, VN);
+  op(0x5b, VT5650, VD, VS, VN);
+  }
+  INVALID();
+}
+
+//vpfxs, vpfxt, vpfxd, and viim and vfim, which keep their destination in the rt field.
+auto Allegrex::decoderVFPU5() -> void {
+  switch(OPCODE >> 24 & 3) {
+  op(0, VPFXS, OPCODE & 0xf'ffff);
+  op(1, VPFXT, OPCODE & 0xf'ffff);
+  op(2, VPFXD, OPCODE & 0xfff);
+  case 3:
+    if(OPCODE.bit(23)) return VFIM(VT, IMMu16);
+    return VIIM(VT, IMMi16);
+  }
+}
+
+//The matrix instructions, and a few others with two operands.
+auto Allegrex::decoderVFPU6() -> void {
+  switch(OPCODE >> 23 & 7) {
+  op(0, VMMUL, VD, VS, VT, VN);
+  case 1: case 2: case 3: {
+    //vtfm2-4 when the size field matches the matrix's size (2 to 4), vhtfm2-4 when it's one less
+    u32 matrix = (OPCODE >> 23 & 7) + 1;
+    if(VN == matrix) return VTFM(VD, VS, VT, matrix);
+    if(VN == matrix - 1) return VHTFM(VD, VS, VT, matrix);
+    return INVALID();
+  }
+  op(4, VMSCL, VD, VS, VT, VN);
+  case 5:
+    if(VN == 3) return VCRSP(VD, VS, VT, VN);
+    if(VN == 4) return VQMUL(VD, VS, VT, VN);
+    return INVALID();
+  case 7:
+    if((OPCODE >> 21 & 3) == 1) return VROT(VD, VS, VN, u8(OPCODE >> 16 & 31));
+    switch(VT) {
+    op(0x00, VMMOV, VD, VS, VN);
+    op(0x03, VMIDT, VD, VN);
+    op(0x06, VMZERO, VD, VN);
+    op(0x07, VMONE, VD, VN);
+    }
+    return INVALID();
+  }
+  INVALID();
+}
+
+auto Allegrex::decoderVFPU7() -> void {
+  switch(OPCODE) {
+  case 0xffff'0000: return VNOP();
+  case 0xffff'0320: case 0xffff'040d: return VSYNC();  //vsync, vflush
+  }
+  INVALID();
+}
+
 auto Allegrex::INVALID() -> void {
   exception(Exception::ReservedInstruction);
 }
@@ -234,3 +432,10 @@ auto Allegrex::INVALID() -> void {
 #undef IMMi16
 #undef IMMu16
 #undef IMMu26
+#undef VD
+#undef VS
+#undef VT
+#undef VN
+#undef VTS
+#undef VTQ
+#undef IMMv

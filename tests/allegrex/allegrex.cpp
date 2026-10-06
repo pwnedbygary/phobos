@@ -360,9 +360,9 @@ auto exceptions() -> void {
   breakpoint.run({break_});
   CHECK(breakpoint.exceptions.empty() ? 0 : (uint32_t)breakpoint.exceptions[0].first, (uint32_t)Exception::Breakpoint);
 
-  Machine vfpu;
-  vfpu.run({0xd8000000});  // lv.q: the VFPU isn't there yet
-  CHECK(vfpu.exceptions.empty() ? 0 : (uint32_t)vfpu.exceptions[0].first, (uint32_t)Exception::ReservedInstruction);
+  Machine cop3;
+  cop3.run({0x4c000000});  // coprocessor 3, which the Allegrex doesn't have
+  CHECK(cop3.exceptions.empty() ? 0 : (uint32_t)cop3.exceptions[0].first, (uint32_t)Exception::ReservedInstruction);
 }
 
 auto fpuArithmetic() -> void {
@@ -596,6 +596,14 @@ auto matchesInterpreter() -> void {
     }
   };
 
+  // VFPU encodings: an operation with three 7-bit registers and a size of 1 to 4 lanes, and a VFPU branch
+  auto vfpuOp = [](uint32_t opcode, uint32_t size, uint32_t rd, uint32_t rs, uint32_t rt) -> uint32_t {
+    return opcode << 23 | rt << 16 | (size >= 3) << 15 | rs << 8 | (size == 2 || size == 4) << 7 | rd;
+  };
+  auto bv = [](uint32_t kind, uint32_t bit, int32_t offset) -> uint32_t {
+    return 0x49000000u | bit << 18 | kind << 16 | ((uint32_t)offset & 0xffff);
+  };
+
   constexpr uint32_t Length = 40, Programs = 500;
   uint32_t mismatches = 0;
   for(uint32_t program = 0; program < Programs; program++) {
@@ -613,7 +621,8 @@ auto matchesInterpreter() -> void {
       if(branch) {
         int32_t offset = 1 + random(std::min<uint32_t>(8, Length - index - 1));
         uint32_t target = Base + (index + 1 + offset) * 4;
-        switch(random(20)) {
+        switch(random(21)) {
+        case 20: code.push_back(bv(random(4), random(6), offset)); break;  // bvf, bvt, bvfl, bvtl
         case  0: code.push_back(beq(s, t, offset)); break;
         case  1: code.push_back(bne(s, t, offset)); break;
         case  2: code.push_back(blez(s, offset)); break;
@@ -643,7 +652,8 @@ auto matchesInterpreter() -> void {
       uint32_t halfOffset = random(128) * 2 + (random(30) ? 0 : 1);
       uint32_t byteOffset = random(256);
       uint32_t word = 0;
-      switch(random(50)) {
+      uint32_t vd = random(128), vs = random(128), vt = random(128), size = 1 + random(4);
+      switch(random(56)) {
       case  0: word = addiu(d, s, immediate); break;
       case  1: word = slti(d, s, immediate); break;
       case  2: word = sltiu(d, s, immediate); break;
@@ -699,13 +709,38 @@ auto matchesInterpreter() -> void {
       case 47: word = fop(random(3), random(32), random(32), random(32)); break;  // add.s, sub.s, mul.s
       case 48: word = cvtsw(random(32), random(32)); break;
       case 49: word = ccond(random(16), random(32), random(32)); break;
+      // the VFPU, which the recompiler also leaves to the interpreter
+      case 50: {
+        const uint32_t operations[] = {0xc0, 0xc1, 0xc7, 0xc8, 0xc9, 0xca, 0xda, 0xdb, 0xde, 0xdf};  // vadd ... vslt
+        word = vfpuOp(operations[random(10)], size, vd, vs, vt);
+        break;
+      }
+      case 51: word = vfpuOp(0xd8, size, random(16), vs, vt); break;  // vcmp
+      case 52: {
+        const uint32_t codes[] = {0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x07, 0x10, 0x16, 0x44, 0x4a};  // vmov ... vsgn
+        word = vfpuOp(0x1a0, size, vd, vs, codes[random(11)]);
+        break;
+      }
+      case 53: word = random(3) == 2 ? 0xde000000u | random(0x1000) : (0xdc000000u | random(2) << 24 | random(0x100000)); break;
+      case 54: {  // mtv, mfv, and the control registers (128 and up) with mtvc and mfvc
+        uint32_t reg = random(4) ? vd : 128 + random(4);
+        word = random(2) ? 0x48e00000u | t << 16 | reg : 0x48600000u | d << 16 | reg;
+        break;
+      }
+      case 55: {  // lv.s, sv.s
+        uint32_t offset = random(64) * 4 + (random(30) ? 0 : 1 + random(3));
+        word = (random(2) ? 0x32u : 0x3au) << 26 | s7 << 21 | (vd & 31) << 16 | (offset & 0xfffc) | (vd >> 5 & 3);
+        break;
+      }
       }
       code.push_back(word);
     }
 
-    uint32_t registers[32], floats[32], data[64];
+    uint32_t registers[32], floats[32], vectors[128], data[64];
     for(auto& r : registers) r = value();
     for(auto& f : floats) f = value();
+    for(auto& v : vectors) v = value();
+    uint32_t cc = random(64);
     for(auto& d : data) d = next();
     uint32_t hi = value(), lo = value(), csr = random(4) | random(2) << 23 | random(2) << 24;
     auto setup = [&](Allegrex& c) {
@@ -716,6 +751,8 @@ auto matchesInterpreter() -> void {
       c.ipu.lo = lo;
       for(uint32_t n = 0; n < 32; n++) c.fpu.r[n] = floats[n];
       c.fpu.csr = csr;
+      for(uint32_t n = 0; n < 128; n++) c.vfpu.r[n] = vectors[n];
+      c.vfpu.cc = cc;
     };
     Machine interpreter, recompiler;
     interpreter.recompile = false;
@@ -740,6 +777,11 @@ auto matchesInterpreter() -> void {
     differs("pd", 0, a.ipu.pd, b.ipu.pd);
     for(uint32_t n = 0; n < 32; n++) differs("f", n, a.fpu.r[n], b.fpu.r[n]);
     differs("fcr31", 0, a.fpu.csr, b.fpu.csr);
+    for(uint32_t n = 0; n < 128; n++) differs("v", n, a.vfpu.r[n], b.vfpu.r[n]);
+    differs("pfxs", 0, a.vfpu.pfxs, b.vfpu.pfxs);
+    differs("pfxt", 0, a.vfpu.pfxt, b.vfpu.pfxt);
+    differs("pfxd", 0, a.vfpu.pfxd, b.vfpu.pfxd);
+    differs("vfpu cc", 0, a.vfpu.cc, b.vfpu.cc);
     differs("badvaddr", 0, a.scc.r[8], b.scc.r[8]);
     differs("halted", 0, a.scc.halted, b.scc.halted);
     differs("exceptions", 0, interpreter.exceptions.size(), recompiler.exceptions.size());
@@ -772,6 +814,7 @@ int main() {
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system}, {"recompiler", recompilerCases},
   };
+  for(auto& test : vfpuTests()) tests.push_back(test);
   int groups = 0;
   for(bool recompiler : {false, true}) {
     useRecompiler = recompiler;

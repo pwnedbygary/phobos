@@ -2,7 +2,8 @@
 
 **Status (2026-10-03):** started, at the user's request. Part 1, the Allegrex CPU's interpreter (integer and FPU
 instructions) with host tests, is on branch `cursor/psp-core-2b67`; part 2, the recompiler, on
-`cursor/psp-recompiler-2b67` on top of it. Nothing is in the app yet.
+`cursor/psp-recompiler-2b67` on top of it; part 3, the VFPU, on `cursor/psp-vfpu-ares-2b67` on top of that. Nothing
+is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -108,7 +109,7 @@ branch not taken, `nor` without the not, delay-slot instructions given the wrong
 
 1. The Allegrex's integer and FPU instructions in the interpreter, host tests (part 1).
 2. The recompiler, with differential tests against the interpreter (part 2; its later steps are listed above).
-3. The VFPU: registers, prefixes, instructions, tested against the pspdev documentation's examples.
+3. The VFPU: registers, prefixes, instructions, tested against the pspdev documentation's descriptions (part 3).
 4. Memory map; loading an unencrypted `EBOOT.PBP`, ELF or PRX; the first HLE functions (module start, threads,
    display, controls, files); a homebrew test program run on the host.
 5. The GE: display lists, a software rasterizer (2D first), the display.
@@ -135,3 +136,26 @@ nearest is used), and conversions of NaN or out-of-range values (0x7fffffff, MIP
 Tests: `tests/allegrex/run-tests.sh` (14 groups, with the undefined-behavior sanitizer; on Linux the address
 sanitizer too, which the PSP Core Tests workflow runs for changes to `ares/psp/`, nall or ares's types).
 `harness.hpp` holds the test machine (a CPU over 64 KiB of RAM) and the instruction encoders.
+
+## Part 3: the VFPU
+
+`ares/psp/cpu/interpreter-vfpu.cpp`, with its decoder tables in `interpreter.cpp`: all of the VFPU's instructions,
+one function each, named after their mnemonics. The register file is eight 4x4 matrices of floats; a 7-bit
+register number names a single, a row or column vector (pair, triple, quad) or a matrix, by the operand size
+(`vfpuLine()`, `vfpuSquare()`). Source prefixes swizzle, take absolute values, negate or substitute constants;
+the destination prefix saturates or masks; every VFPU instruction but the prefix ones uses them up. Denormals
+count as zero both ways, and only round-to-nearest exists. The recompiler runs the VFPU through the interpreter
+for now (its branches included), as it does the FPU.
+
+Not checked against hardware: the transcendental functions (computed in double precision; the hardware
+approximates, so the last bits can differ), the random number generator (undocumented; a xorshift stands in,
+seeded by `vrnds`), `vwbn` (implemented from its description; no test), and what reserved size combinations do
+(they raise ReservedInstruction, and leave the prefixes). Which instructions use up the prefixes: every VFPU
+arithmetic instruction, and `vnop`, as pspdev's documentation says (PPSSPP keeps them through `vnop`, but the
+documentation rests on tests on hardware); not `vsync`, `vflush`, `vmfvc` and `vmtvc`, which the documentation
+doesn't cover, as in PPSSPP; nor the loads, stores and moves to integer registers.
+
+Tests: `tests/allegrex/vfpu.cpp`, ten groups (addressing, arithmetic, prefixes, products, comparisons,
+conversions, functions, matrices, moves, and more instructions worked out by hand from the descriptions), run on
+both engines; the generated programs that compare the engines include VFPU instructions and its branches, and
+compare its registers, prefixes and condition codes.
