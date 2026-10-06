@@ -37,7 +37,12 @@
 #endif
 
 GE::~GE() {
+  //The machine is going: drawing still going on is finished, but its owner's page table may be gone already, so
+  //nothing is put back into it; and memory, which outlives the GE, hears from it no more.
+  memory.vramGuard = nullptr;
   setThreads(1);
+  memory.finishDrawing = nullptr;
+  memory.watchedWritten = nullptr;
 }
 
 //count threads draw from now on: the GE's own and count - 1 workers.
@@ -213,7 +218,7 @@ auto GE::settle() -> void {
   }
   if(memory.vramBusy) {
     memory.vramBusy = false;
-    memory.vramGuard(false);
+    if(memory.vramGuard) memory.vramGuard(false);
     for(auto& pages : memory.busyPages) pages = 0;
   }
 }
