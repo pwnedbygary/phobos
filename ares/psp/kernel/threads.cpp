@@ -121,7 +121,7 @@ auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
 auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer, bool callbacks) -> void {
   if(!current) return;
   if(interrupting) return result(ErrorIllegalContext);
-  if(dispatchSuspended) return result(ErrorCanNotWait);
+  if(dispatchSuspended || !interruptsEnabled) return result(ErrorCanNotWait);
   current->status = Status::Waiting;
   current->wait = wait;
   current->waitID = id;
@@ -139,14 +139,15 @@ auto Kernel::timeout(u32 pointer) const -> u64 {
 }
 
 //Picks the thread to run: the ready one with the highest priority (the lowest number), the one ready the longest
-//among equals. The running thread keeps the CPU unless one with a strictly higher priority is ready. During a call
-//into the program the choice waits until it's over.
+//among equals. The running thread keeps the CPU unless one with a strictly higher priority is ready, and keeps it
+//whatever is ready while it holds interrupts or dispatching off. During a call into the program the choice waits
+//until it's over.
 auto Kernel::reschedule() -> void {
   if(interrupting) {
     rescheduleAfter = true;
     return;
   }
-  if(dispatchSuspended && current && current->status == Status::Running) return;  //it keeps the CPU
+  if((dispatchSuspended || !interruptsEnabled) && current && current->status == Status::Running) return;
   Thread* best = nullptr;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Ready || thread->suspended) continue;
@@ -162,7 +163,9 @@ auto Kernel::reschedule() -> void {
 }
 
 //Puts the running thread's registers aside and loads next's (none: the CPU idles until a thread is ready). A thread
-//still in its wait was made ready only to run its callbacks (wakeForCallbacks()): they start now.
+//still in its wait was made ready only to run its callbacks (wakeForCallbacks()): they start now. Another thread
+//taking the CPU, or none, has interrupts on: only the thread that held them off loses them (it can't lose the CPU
+//meanwhile unless it ends).
 auto Kernel::switchTo(Thread* next) -> void {
   if(current && current == next) {  //it's already in the CPU
     next->status = Status::Running;
@@ -170,6 +173,7 @@ auto Kernel::switchTo(Thread* next) -> void {
   } else {
     if(current) save(current->context);
     current = next;
+    interruptsEnabled = true;
     if(!next) {
       cpu.scc.halted = 1;
       return;
