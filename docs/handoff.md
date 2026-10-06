@@ -868,6 +868,46 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the VFPU's tiny products and round 3's prefix rules — 2026-10-04
+
+Branch `cursor/psp-vfpu-round3-fixes-2b67`, stacked on `cursor/psp-fpu-measured-2b67` (for stack #106). From round
+3's VFPU data (ares/psp/cpu/interpreter-vfpu.cpp; the recompiler hands VFPU instructions to the interpreter):
+- Tiny results: `vfpuBits()` rounds a result to 24 bits as if exponents went on below 2^-126, then flushes it to a
+  zero of its sign if it's still below, judged on the bits (an x87 FPU can keep a float wider). `vmul`, `vscl`,
+  `vmscl` and `vcrs` hand it their exact products (doubles), `vdiv` its quotient to 53 bits (assumed to round the
+  same way; not measured), instead of float results the host had already rounded as denormals.
+- The math functions (`vrsq`, `vsqrt`, `vsin`, `vcos`, `vasin`, `vexp2`, `vlog2`, `vnrcp`, `vnsin`, `vrexp2`) take
+  prefixes as `vrcp` does: `vrcp`'s code became the template `vfpuLastLaneFirst()`. The negating three ignore the
+  negate setting.
+- The adders (`vdot`, `vhdp`, `vfad`, `vavg`) add up all four lanes whatever the size, each read through its own
+  prefix lane (`vfpuReadFour()`), leaving out a lane whose swizzle names a lane past the size (`outsideLanes()`, now
+  over four lanes). The independent review found this (my first version zeroed only the lanes within the size and
+  wrongly wrote that the data contradicted zeroing in `vfad` and `vavg`).
+- `vavg`'s t prefix only negates; the sum is divided by the size (weighing by the constant 1/3 fit round 2's
+  `vavg.t` worse). Found by fitting a weight per lane against every run, with a scratch tool outside the repository.
+- A swizzle past the size gives 0 in `vf2i`'s, `vi2f`'s and `vbfy1`'s lane, a 0 half float in `vf2h`, and in `vh2f`
+  a 0 that the negate setting makes -0 before it's split.
+- Left open, documented in psp-vfpu-measurements.md: 32 of the second recorder list's 284 entries (`vavg` where its
+  terms cancel, `vcmp`, `vcrs`, `vcrsp`, `vdet`, `vsocp`), all from its part built for swizzles past the size.
+  Reading such lanes as 0 in every instruction was tried: it fixed `vh2f` and some `vf2h` and `vbfy1` entries (kept,
+  per instruction) and made others worse.
+- **Checks:** compare.sh: the second recorder list went from 36 exact (and 7 rounding only) to 198 (and 54), round 2's
+  from 1157 to 1158 exact (its `vscl` entry; 49 rounding only, as before), `vmul-tiny` from 85.35% to 100%; every
+  other row is unchanged. The measured group replays `vmul-tiny` (all 262144 results); the edge group gains a
+  tiny-products case, a tiny-quotient case (the assumption above), and twenty recorded runs, one per rule (each math
+  function's last lane, the three ignored negates, `vavg`'s t prefix, the adders' four lanes, and the stray lanes of
+  `vdot`, `vhdp`, `vf2iz`, `vi2f`, `vh2f`, `vf2h` and `vbfy1`). Allegrex tests 56 groups, 0 failures, on arm64 and
+  x86_64 (Rosetta); PSP tests 85, 0 failures. 22 mutations, each undoing one rule, fail them on both engines (the
+  tiny-products one fails the replay too). One run of the suite, just before the mutations, failed the `vbfy1` case
+  with the value the core gave before its rule, though the source had the rule; every run since (the 22 mutation
+  builds and the full runs after them) passed. The reviewer found that case's code path deterministic; the likeliest
+  cause is an overlapping build replacing the test binary, which every run links at the same path
+  (`${TMPDIR:-/tmp}/phobos-allegrex-tests/allegrex`), so runs side by side need a `TMPDIR` each. Review: a
+  general-purpose reviewer (two medium findings: the adders' four lanes, which it found by experiment, and recorded
+  runs too few to guard every rule; four low: `vdiv`'s tiny quotients, `vavg`'s weight 1/3, the flush judged with a
+  float compare, the edge test's header; all fixed), then delta reviews (two low, on the docs, fixed) ending with no
+  findings.
+
 ## PSP core: the FPU as the PSP measured it — 2026-10-04
 
 Branch `cursor/psp-fpu-measured-2b67`, stacked on `cursor/psp-measured-r3-2b67` (for stack #106). From round 3's

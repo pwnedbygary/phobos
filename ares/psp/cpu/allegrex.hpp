@@ -320,6 +320,7 @@ struct Allegrex {
   auto vfpuLine(u8 reg, u32 size) const -> std::array<u8, 4>;
   auto vfpuSquare(u8 reg, u32 size) const -> std::array<u8, 16>;
   auto vfpuRead(u8 reg, u32 size, u32 prefix) const -> Vector;
+  auto vfpuReadFour(u8 reg, u32 size, u32 prefix) const -> Vector;
   auto vfpuWrite(u8 reg, u32 size, const Vector& value, u32 prefix) -> void;
   auto vfpuReadMatrix(u8 reg, u32 size) const -> Matrix;
   auto vfpuWriteMatrix(u8 reg, u32 size, const Matrix& value) -> void;
@@ -331,6 +332,7 @@ struct Allegrex {
   template<typename F> auto vfpuUnary(u8 vd, u8 vs, u32 size, F function, NaNSign sign = NaNSign::Unknown) -> void;
   template<typename F> auto vfpuBinary(u8 vd, u8 vs, u8 vt, u32 size, F function, NaNSign sign = NaNSign::Unknown) -> void;
   template<typename F> auto vfpuUnaryBits(u8 vd, u8 vs, u32 size, F function) -> void;
+  template<typename F> auto vfpuLastLaneFirst(u8 vd, u8 vs, u32 size, F function, bool negating = false) -> void;
 
   auto BV(bool value, bool likely, u8 bit, s16 imm) -> void;
   auto LVLQ(u8 vt, cu32& rs, s16 imm) -> void;

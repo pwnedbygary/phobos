@@ -10,7 +10,8 @@
 //PSP sometimes gives one unit less than the core (its spread-out results, and every 1024th result from 1/2 up to
 //2). vdot's file is kept for when the core sums its products as the PSP does. From round 2: div and divu on 8192
 //pairs, dividing by zero included. From rounds 2 and 3: the FPU's conversions and arithmetic in each rounding mode,
-//on every kind of input (fpu-convert, fpu-arith) and on zeros and normal numbers (the -safe files), and FIR.
+//on every kind of input (fpu-convert, fpu-arith) and on zeros and normal numbers (the -safe files), and FIR. From
+//round 3: vmul on products a sliver below the smallest normal number (vmul-tiny).
 
 #include "harness.hpp"
 
@@ -133,6 +134,30 @@ static auto measuredSweep(const char* name, uint32_t instruction, uint32_t first
   CHECK(exact, hardware.size());
 }
 
+//vmul-tiny.bin (round 3): vmul.q on products a sliver below 2^-126, the smallest normal number: 2^-126 (1 - j² 2^-46)
+//for j from 1 to 4096. One draw from the generator (seed 41) per lane, lane 0 first: j = 1 + its low 12 bits, s =
+//0x3f800000 - 2j with the draw's bit 31 for its sign, t = 0x00800000 + j with bit 30 for its sign. s was in C000, t
+//in C010, the result in C020.
+static auto measuredTinyProducts() -> void {
+  auto hardware = loadMeasured("vmul-tiny.bin");
+  CHECK(hardware.size(), 1u << 18);
+  if(hardware.size() != 1u << 18) return;
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  uint32_t state = 41, exact = 0;
+  for(uint32_t quad = 0; quad < hardware.size() / 4; quad++) {
+    for(uint32_t lane = 0; lane < 4; lane++) {
+      uint32_t draw = state = state * 1664525u + 1013904223u, j = 1 + (draw & 4095);
+      v[32 * lane] = (draw & 0x8000'0000) | (0x3f80'0000 - 2 * j);
+      v[1 + 32 * lane] = (draw << 1 & 0x8000'0000) | (0x0080'0000 + j);
+    }
+    m.cpu.execute(Base, 0x64018082);  //vmul.q C020, C000, C010
+    for(uint32_t lane = 0; lane < 4; lane++) exact += hardware[quad * 4 + lane] == v[2 + 32 * lane];
+  }
+  CHECK(exact, hardware.size());
+}
+
 //ipu-divide.bin (round 2): per pair, a and b, then div's lo and hi, then divu's lo and hi. The first 1024 pairs are
 //32 chosen numbers each with each (zero, the most negative number and -1 among them), the rest spread out.
 static auto measuredDivide() -> void {
@@ -239,6 +264,7 @@ auto measured() -> void {
   auto belowFour = [](uint32_t x) { return x < 0x4080'0000 || x >= 0x7f80'0000; };  //all but positive x >= 4
   measuredFunction("vlog2-spread-16k.bin", 0xd0158081, 7, belowFour);
   measuredSweep("vlog2-half-2-1k.bin", 0xd0158081, 0x3f00'0000);
+  measuredTinyProducts();
   measuredDivide();
   uint32_t upper = measuredFpuState();
   measuredConvert("fpu-convert.bin", upper);
