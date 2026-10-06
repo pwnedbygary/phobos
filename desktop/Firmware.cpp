@@ -175,10 +175,19 @@ static auto isPspFont(const std::string& fileName) -> bool {
   return false;
 }
 
+// What's in `folder`, stepped through without exceptions: a share that goes away part way gives what was read.
+static auto entriesOf(const fs::path& folder) -> std::vector<fs::directory_entry> {
+  std::vector<fs::directory_entry> entries;
+  std::error_code error;
+  fs::directory_iterator entry(folder, fs::directory_options::skip_permission_denied, error);
+  for (; !error && entry != fs::directory_iterator(); entry.increment(error)) entries.push_back(*entry);
+  return entries;
+}
+
 // The folder named `name` in `folder`, whatever its case; empty when there's none.
 static auto childFolder(const fs::path& folder, const std::string& name) -> fs::path {
   std::error_code error;
-  for (auto& entry : fs::directory_iterator(folder, fs::directory_options::skip_permission_denied, error)) {
+  for (auto& entry : entriesOf(folder)) {
     if (entry.is_directory(error) && lowercase(fromPath(entry.path().filename())) == name) return entry.path();
   }
   return {};
@@ -192,7 +201,7 @@ auto pspFontFolder(const std::string& picked) -> std::string {
   for (auto& folder : folders) {
     if (folder.empty()) continue;
     std::error_code error;
-    for (auto& entry : fs::directory_iterator(folder, fs::directory_options::skip_permission_denied, error)) {
+    for (auto& entry : entriesOf(folder)) {
       if (entry.is_regular_file(error) && isPspFont(fromPath(entry.path().filename()))) return fromPath(folder);
     }
   }
@@ -206,7 +215,7 @@ auto pspFontCount(const std::string& folder) -> int {
   std::error_code error;
   std::set<std::string> names;
   if (folder.empty()) return 0;
-  for (auto& entry : fs::directory_iterator(toPath(folder), fs::directory_options::skip_permission_denied, error)) {
+  for (auto& entry : entriesOf(toPath(folder))) {
     auto name = fromPath(entry.path().filename());
     if (!entry.is_regular_file(error) || !isPspFont(name)) continue;
     auto size = entry.file_size(error);

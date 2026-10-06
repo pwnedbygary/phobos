@@ -94,6 +94,7 @@ private:
   auto toggleFullscreen() -> void;
   auto menuItems() -> std::vector<MenuItem>;
   auto pspMenuItems(std::vector<MenuItem>& items) -> void;
+  auto setPspFonts(const std::string& picked) -> std::string;
   auto handleKey(const SDL_KeyboardEvent& key) -> void;
   auto update() -> void;
   auto render() -> void;
@@ -113,6 +114,9 @@ private:
   std::uint64_t frameSerial = 0;
   // The whole multiple the runner was last told to draw the PSP's picture at (0: not yet told).
   int pictureMultiple = 0;
+  // The PSP fonts' item, worked out as the setting is applied or changed: the folder may be a slow or vanished share,
+  // which the menu, drawn each frame, mustn't list.
+  std::string pspFontsHeld = "none";
 
   Settings settings;
   Input input;
@@ -282,7 +286,7 @@ auto Shell::applySettings() -> void {
   // The PSP's memory stick (a folder picked, else the one all games share in the saves folder, as on Android), the
   // user's own system fonts (none unless a folder is picked) and its drawing threads (0: all cores but one).
   ares::setPspMemoryStickPath(settings.text("psp.memoryStick").c_str());
-  ares::setPspFontsPath(pspFontFolder(settings.text("psp.fonts")).c_str());
+  setPspFonts(settings.text("psp.fonts"));
   ares::setPspDrawingThreads(settings.number("psp.drawingThreads", 0));
 }
 
@@ -314,11 +318,9 @@ auto Shell::picked(Pick pick, const std::string& folder) -> void {
     rescan();
     return;
   case Pick::PspFonts: {
-    auto fonts = pspFontFolder(folder);
-    if (fonts.empty()) return show("No PSP fonts (jpn0, ltn0-ltn15, kr0.pgf) in that folder");
+    if (pspFontFolder(folder).empty()) return show("No PSP fonts (jpn0, ltn0-ltn15, kr0.pgf) in that folder");
     settings.setText("psp.fonts", folder);
-    ares::setPspFontsPath(fonts.c_str());
-    return show(std::to_string(pspFontCount(fonts)) + " of the PSP's 18 fonts: they're read as a game starts");
+    return show(setPspFonts(folder) + " of the PSP's 18 fonts: they're read as a game starts");
   }
   case Pick::PspMemoryStick:
     settings.setText("psp.memoryStick", folder);
@@ -516,15 +518,23 @@ auto Shell::menuItems() -> std::vector<MenuItem> {
   return items;
 }
 
+// Gives the runner the fonts in (or under) the folder picked, and keeps how many there are for the menu ("12 of 18",
+// "none"); returns the count.
+auto Shell::setPspFonts(const std::string& picked) -> std::string {
+  auto fonts = pspFontFolder(picked);
+  ares::setPspFontsPath(fonts.c_str());
+  auto count = std::to_string(pspFontCount(fonts));
+  pspFontsHeld = fonts.empty() ? std::string("none") : count + " of 18";
+  return count;
+}
+
 // The PSP's settings, taken as a game starts. A picks a folder for the fonts or the memory stick; left or right
 // goes back to none, or to the shared memory stick.
 auto Shell::pspMenuItems(std::vector<MenuItem>& items) -> void {
-  auto fonts = pspFontFolder(settings.text("psp.fonts"));
-  auto held = fonts.empty() ? std::string("none") : std::to_string(pspFontCount(fonts)) + " of 18";
-  items.push_back({"PSP fonts: " + held + " (next start)", [this](int d) {
+  items.push_back({"PSP fonts: " + pspFontsHeld + " (next start)", [this](int d) {
     if (d == 0) return chooseFolder(Pick::PspFonts);
     settings.setText("psp.fonts", "");
-    ares::setPspFontsPath("");
+    setPspFonts("");
   }});
   auto stick = settings.text("psp.memoryStick");
   auto stickName = stick.empty() ? std::string("shared") : fromPath(toPath(stick).filename());
