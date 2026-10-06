@@ -57,12 +57,13 @@ struct GE;
 //ARES_ENABLE_FFMPEG decode them with FFmpeg's LGPL decoders, and builds without have none, where the libraries refuse
 //the streams as they did before there were decoders.
 struct AudioDecoder {
-  enum class Codec : u32 { Atrac3, Atrac3plus, Mp3, Aac };
+  enum class Codec : u32 { Atrac3, Atrac3plus, Mp3 };
   struct Format {
+    static constexpr u32 MaxExtra = 64;  //the most of extra a file keeps (and a state holds)
     Codec codec = Codec::Atrac3plus;
     u32 channels = 2;        //the samples a frame decodes to, per sample
     u32 rate = 44'100;       //samples a second
-    u32 frameBytes = 0;      //an ATRAC frame's size (the file's block alignment); MP3 and AAC frames say theirs
+    u32 frameBytes = 0;      //an ATRAC frame's size (the file's block alignment); MP3 frames say theirs
     std::vector<u8> extra;   //the codec's own parameters from the container (a RIFF fmt chunk's last bytes)
   };
   virtual ~AudioDecoder() = default;
@@ -74,6 +75,9 @@ struct AudioDecoder {
 };
 
 struct VideoDecoder {
+  //The widest and tallest picture a movie shows (and a state holds): more than the PSP's (480 by 272) and UMD
+  //Video's (720 by 480); the decoder makes none larger than this squared, and larger ones either way are passed over.
+  static constexpr u32 MaxSide = 1024;
   //A picture in 8-bit Y, Cb and Cr planes, the colour ones half its size each way (4:2:0).
   struct Picture {
     u32 width = 0, height = 0;
@@ -1042,6 +1046,8 @@ struct Kernel {
     std::vector<u8> held, shown;   //the picture the decoder holds back, and the one it gave last (4:2:0)
     u32 heldWidth = 0, heldHeight = 0, shownWidth = 0, shownHeight = 0;
     bool keyframe = false; //a decoder made afresh (after a state was loaded): pictures wait for a key frame
+    std::vector<u8> soundLast;  //the last sound frame decoded (less its header): a decoder made afresh is primed
+                                //with it
     std::unique_ptr<VideoDecoder> video;   //not saved: made afresh
     std::unique_ptr<AudioDecoder> sound;   //not saved: made afresh
   };

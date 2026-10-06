@@ -80,12 +80,38 @@ namespace {
     }
   }
 
-  //Whether an access unit holds an H.264 key frame (an IDR slice, NAL unit 5).
+  //Whether an access unit's picture is one a decoder can start from: one with an IDR slice (H.264's NAL unit 5), or
+  //whose slices (NAL unit 1) are all I or SI slices (a movie may start the pictures after its first from an I
+  //picture that isn't an IDR one). A slice's type is its header's second number (Exp-Golomb coded, after the first
+  //macroblock's): 2 or 7 for I, 4 or 9 for SI; read past the emulation prevention bytes (a 3 after two zeros).
   auto keyframe(const std::vector<u8>& unit) -> bool {
+    bool slices = false;
     for(u64 at = 0; at + 4 <= unit.size(); at++) {
-      if(!unit[at] && !unit[at + 1] && unit[at + 2] == 1 && (unit[at + 3] & 0x1f) == 5) return true;
+      if(unit[at] || unit[at + 1] || unit[at + 2] != 1) continue;
+      u32 type = unit[at + 3] & 0x1f;
+      if(type == 5) return true;
+      if(type != 1) continue;
+      u64 bits = 0;
+      u32 count = 0, zeros = 0, used = 0;
+      for(u64 n = at + 4; n < unit.size() && count < 64; n++) {
+        if(zeros >= 2 && unit[n] == 3) { zeros = 0; continue; }
+        zeros = unit[n] ? 0 : zeros + 1;
+        bits |= u64(unit[n]) << (56 - count);
+        count += 8;
+      }
+      auto number = [&]() -> s64 {
+        u32 lead = 0;
+        while(used + lead < count && !(bits >> (63 - used - lead) & 1)) lead++;
+        if(used + 2 * lead + 1 > count) return -1;
+        u64 code = bits << (used + lead) >> (63 - lead);
+        used += 2 * lead + 1;
+        return code - 1;
+      };
+      s64 first = number(), slice = number();
+      if(first < 0 || slice < 0 || (slice % 5 != 2 && slice % 5 != 4)) return false;
+      slices = true;
     }
-    return false;
+    return slices;
   }
 
   //A picture's planes, packed one after another: Y, then Cb and Cr at half its size each way.
@@ -228,12 +254,13 @@ auto Kernel::mpegLibrary(u32 handle) -> u32 {
 
 //(handle, data, size, ringbuffer, frame width, mode, DDR top): the library set up in the memory given, its handle
 //written first, which points at its "LIBMPEG" signature there (video/mpeg/basic shows it), the ringbuffer it reads
-//from noted on both sides, and its own state cleared.
+//from noted on both sides, and its own state cleared, with what the Media Engine held for a library there before.
 auto Kernel::sceMpegCreate() -> void {
   u32 handle = arg(0), data = arg(1), size = arg(2), ringbuffer = arg(3);
   if(size < LibraryMemory) return result(ErrorNoMemory);
   if(!memory.reaches(handle, 4) || !memory.reaches(data, LibraryMemory)) return result(ErrorInvalidPointer);
   u32 library = data + LibraryOffset;
+  mpegStreams.erase(library);
   for(u32 offset = 0; offset < LibraryState; offset += 4) memory.write(4, library + offset, 0);
   memory.copyIn(library, "LIBMPEG", 8);
   memory.write(4, library + LibraryRingbuffer, ringbuffer);
@@ -307,6 +334,7 @@ auto Kernel::sceMpegFlushAllStream() -> void {
       stream.audioTaken = 0;
       stream.audioTime = stream.audioCarry = NoTime;
       stream.held.clear();
+      stream.soundLast.clear();
       if(stream.video) stream.video->reset();
       if(stream.sound) stream.sound->reset();
     }
@@ -512,8 +540,8 @@ auto Kernel::mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 f
                          u32 height) -> void {
   u32 pictureWidth = stream.shownWidth, pictureHeight = stream.shownHeight;
   if(stream.shown.empty() || x >= pictureWidth || y >= pictureHeight || !frameWidth) return;
-  if(!width || x + width > pictureWidth) width = pictureWidth - x;
-  if(!height || y + height > pictureHeight) height = pictureHeight - y;
+  if(!width || width > pictureWidth - x) width = pictureWidth - x;
+  if(!height || height > pictureHeight - y) height = pictureHeight - y;
   u32 format = memory.read(4, library + LibraryPixels);
   format = format ? format - 1 : 3;
   u32 bytes = format == 3 ? 4 : 2;
@@ -548,7 +576,8 @@ auto Kernel::mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 f
 //0, as video/mpeg/basic recorded), and a picture from the second on, the decoder holding one back (basic's first
 //gave none): where to put whether one came gets 1 then, else 0. The picture that comes is the one decoded the time
 //before, converted into pixels (when given: sceMpegAvcDecode's buffer, frameWidth wide) and kept for sceMpegAvcCsc.
-//A decoder made afresh after a state was loaded shows no new picture until a key frame.
+//A decoder made afresh after a state was loaded shows no new picture until one it can start from (keyframe()). A
+//picture larger than a state holds (VideoDecoder::MaxSide either way) is passed over.
 auto Kernel::mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWidth) -> void {
   u32 library = mpegLibrary(handle);
   bool came = false, decoded = false;
@@ -562,8 +591,9 @@ auto Kernel::mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWid
     if(stream.video && !stream.unit.empty()) {
       if(stream.keyframe && keyframe(stream.unit)) stream.keyframe = false;
       decoded = true;
-      if(stream.video->decode(stream.unit.data(), stream.unit.size()) && !stream.keyframe) {
-        auto& picture = stream.video->picture();
+      auto& picture = stream.video->picture();
+      if(stream.video->decode(stream.unit.data(), stream.unit.size()) && !stream.keyframe && picture.width
+         && picture.height && picture.width <= VideoDecoder::MaxSide && picture.height <= VideoDecoder::MaxSide) {
         packPicture(picture, stream.held);
         stream.heldWidth = picture.width;
         stream.heldHeight = picture.height;
@@ -666,7 +696,8 @@ auto Kernel::sceMpegAvcCsc() -> void {
 
 //(handle, access unit, buffer, initialized): the sound access unit's ATRAC3plus frame decoded into 2048 stereo
 //16-bit samples (mono doubled), 0x2000 bytes; the access unit used up. With none: 0x807f00fd, as video/mpeg/basic
-//recorded for its movie, which has no sound. A frame that won't decode gives silence.
+//recorded for its movie, which has no sound. A frame that won't decode gives silence. A decoder made afresh (after
+//a state was loaded) is primed first with the frame decoded last, as atrac.cpp's are.
 auto Kernel::sceMpegAtracDecode() -> void {
   u32 library = mpegLibrary(arg(0)), au = arg(1), output = arg(2);
   if(!library || !memory.reaches(au, 24) || !audioDecoders) return result(0x807f'00fd);
@@ -685,10 +716,14 @@ auto Kernel::sceMpegAtracDecode() -> void {
     format.channels = channels;
     format.frameBytes = frameBytes;
     stream.sound = audioDecoders(format);
+    if(stream.sound && !stream.soundLast.empty()) {
+      stream.sound->decode(stream.soundLast.data(), stream.soundLast.size(), samples.data(), 2048);
+    }
   }
   s32 made = -1;
   if(stream.sound && unit[0] == 0x0f && unit[1] == 0xd0 && 8 + frameBytes <= bytes) {
     made = stream.sound->decode(unit.data() + 8, frameBytes, samples.data(), 2048);
+    stream.soundLast.assign(unit.begin() + 8, unit.begin() + 8 + frameBytes);
   }
   for(s32 n = 0; n < std::min(made, 2048); n++) {
     out[n * 2] = samples[n * channels];

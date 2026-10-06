@@ -34,7 +34,6 @@ struct FFmpegAudio : AudioDecoder {
     if(format.codec == Codec::Atrac3) id = AV_CODEC_ID_ATRAC3;
     if(format.codec == Codec::Atrac3plus) id = AV_CODEC_ID_ATRAC3P;
     if(format.codec == Codec::Mp3) id = AV_CODEC_ID_MP3;
-    if(format.codec == Codec::Aac) id = AV_CODEC_ID_AAC;
     auto codec = avcodec_find_decoder(id);
     if(!codec || !(context = avcodec_alloc_context3(codec))) return false;
     channels = format.channels;
@@ -114,6 +113,7 @@ struct FFmpegVideo : VideoDecoder {
     auto codec = avcodec_find_decoder(AV_CODEC_ID_H264);
     if(!codec || !(context = avcodec_alloc_context3(codec))) return false;
     context->thread_count = 1;
+    context->max_pixels = s64(MaxSide) * MaxSide;
     if(avcodec_open2(context, codec, nullptr) < 0) return false;
     packet = av_packet_alloc();
     frame = av_frame_alloc();
@@ -121,14 +121,16 @@ struct FFmpegVideo : VideoDecoder {
     return packet && frame && shown;
   }
 
-  //The last picture out of the decoder, in 8-bit 4:2:0 (what the PSP's movies are; any other kind is passed over).
+  //The last picture out of the decoder, in 8-bit 4:2:0 (what the PSP's movies are; any other kind, or one larger
+  //than MaxSide either way, is passed over).
   auto decode(const u8* data, u32 size) -> bool override {
     packet->data = padded(room, data, size);
     packet->size = size;
     if(avcodec_send_packet(context, packet) < 0) return false;
     bool came = false;
     while(avcodec_receive_frame(context, frame) >= 0) {
-      if(frame->format != AV_PIX_FMT_YUV420P && frame->format != AV_PIX_FMT_YUVJ420P) {
+      if((frame->format != AV_PIX_FMT_YUV420P && frame->format != AV_PIX_FMT_YUVJ420P) || frame->width <= 0
+         || frame->height <= 0 || u32(frame->width) > MaxSide || u32(frame->height) > MaxSide) {
         av_frame_unref(frame);
         continue;
       }

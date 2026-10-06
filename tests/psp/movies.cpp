@@ -9,6 +9,7 @@
 namespace allegrex_test::psp {
 
 using ares::PlayStationPortable::AudioDecoder;
+using ares::PlayStationPortable::VideoDecoder;
 
 namespace {
 constexpr u32 R = KernelMachine::Results;
@@ -192,6 +193,59 @@ struct StandIn : AudioDecoder {
   }
   auto reset() -> void override {}
 };
+
+//Gives a picture of width by height for each access unit, its luma 16 plus its row's number (plus how many it
+//decoded before), its colours grey.
+struct PictureStandIn : VideoDecoder {
+  u32 width = 32, height = 32, decoded = 0;
+  std::vector<u8> planes[3];
+  Picture shown;
+  auto decode(const u8*, u32) -> bool override {
+    u32 half = (width + 1) / 2, halfHeight = (height + 1) / 2;
+    planes[0].resize(width * height);
+    for(u32 y = 0; y < height; y++) memset(planes[0].data() + y * width, 16 + (y + decoded) % 200, width);
+    planes[1].assign(half * halfHeight, 128), planes[2].assign(half * halfHeight, 128);
+    shown.width = width, shown.height = height;
+    for(u32 n = 0; n < 3; n++) shown.planes[n] = planes[n].data(), shown.strides[n] = n ? half : width;
+    decoded++;
+    return true;
+  }
+  auto picture() const -> const Picture& override { return shown; }
+  auto reset() -> void override {}
+};
+
+auto pictures(KernelMachine& m, u32 width = 32, u32 height = 32) -> void {
+  m.kernel.videoDecoders = [width, height]() -> std::unique_ptr<VideoDecoder> {
+    auto decoder = std::make_unique<PictureStandIn>();
+    decoder->width = width, decoder->height = height;
+    return decoder;
+  };
+}
+
+//An access unit of slices of these types (H.264's slice_type: 2 or 7 an I slice, 5 a P one; in NAL units of type
+//5, IDR, or 1), each just its header's first numbers (its first macroblock first): what keyframe() reads.
+auto slices(u32 type, const std::vector<u32>& kinds, u32 firstMacroblock = 0) -> std::vector<u8> {
+  std::vector<u8> unit = {0, 0, 0, 1, 0x09, 0x10};
+  for(u32 kind : kinds) {
+    Bits slice;
+    slice.ue(firstMacroblock); slice.ue(kind); slice.ue(0);
+    slice.trailing();
+    auto part = nal(type, slice.bytes);
+    unit.insert(unit.end(), part.begin(), part.end());
+  }
+  return unit;
+}
+
+//A movie's packets put into the ring by hand, as the callback would leave them (no thread to call it from).
+auto putIn(KernelMachine& m, const std::vector<u8>& bytes) -> void {
+  u32 packets = (bytes.size() - 2048) / 2048;
+  m.system.memory.copyIn(RingData, bytes.data() + 2048, packets * 2048);
+  m.system.memory.write(4, Ring + 4, 0);
+  m.system.memory.write(4, Ring + 8, packets);
+  m.system.memory.write(4, Ring + 12, packets);
+}
+
+constexpr u32 LibraryAt = Library + 0x30;  //the library's memory, where its handle points
 }
 
 //The header (video/mpeg/basic): the stream's offset and size, its big-endian words 8 and 12; a header that isn't
@@ -348,9 +402,156 @@ static auto mpegSound() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//sceMpegAvcCsc's part reaching past the picture (32 by 32, a stand-in's) is cut to it, however large: from row 1,
+//0xffffffff rows tall, gives the 31 rows left (as 32-bit sums, 1 + 0xffffffff passed for 0, and the conversion read
+//on past the picture); from column 1, 0xffffffff wide, the 31 columns left (where it made a row of 4 GiB).
+static auto mpegConversionPart() -> void {
+  KernelMachine m;
+  pictures(m);
+  setUp(m, movie({slices(5, {7}), slices(5, {7}), slices(5, {7})}));
+  program(m, 2, true);
+  m.runProgram(0x0880'0000, false);
+  CHECK(word(m, R + 0x204), 1);
+  auto grey = [](u32 y) {
+    u32 v = std::clamp((298 * (s32(y) - 16) + 128) >> 8, 0, 255);
+    return v | v << 8 | v << 16;
+  };
+  for(u32 n = 0; n < 4; n++) m.system.memory.write(4, Range + n * 4, std::array<u32, 4>{0, 1, 0, ~0u}[n]);
+  m.system.memory.fill(Pixels, 0xdd, 64 * 40 * 4);
+  CHECK(m.call("sceMpegAvcCsc", {Handle, 0, Range, 64, Pixels}), 0);
+  CHECK(word(m, Pixels) == (0xff00'0000 | grey(17)) && word(m, Pixels + 31 * 4) == (0xff00'0000 | grey(17)), true);
+  CHECK(word(m, Pixels + 30 * 256) == (0xff00'0000 | grey(47)) && word(m, Pixels + 31 * 256) == 0xdddd'dddd, true);
+  for(u32 n = 0; n < 4; n++) m.system.memory.write(4, Range + n * 4, std::array<u32, 4>{1, 0, ~0u, 0}[n]);
+  m.system.memory.fill(Pixels, 0xdd, 64 * 40 * 4);
+  CHECK(m.call("sceMpegAvcCsc", {Handle, 0, Range, 64, Pixels}), 0);
+  CHECK(word(m, Pixels + 30 * 4) == (0xff00'0000 | grey(16)) && word(m, Pixels + 31 * 4) == 0xdddd'dddd, true);
+  CHECK(word(m, Pixels + 31 * 256) == (0xff00'0000 | grey(47)) && word(m, Pixels + 32 * 256) == 0xdddd'dddd, true);
+}
+
+//Pictures larger than a state holds (VideoDecoder::MaxSide, 1024, either way) are passed over, and the states saved
+//meanwhile load; 1024 by 1024 is kept. With FFmpeg too: its pictures 1040 wide passed over, the next kept.
+static auto mpegPictureSizes() -> void {
+  for(auto [width, height, kept] : {std::tuple{1040u, 16u, false}, {16u, 1040u, false}, {1024u, 1024u, true}}) {
+    KernelMachine m;
+    pictures(m, width, height);
+    setUp(m, movie({slices(5, {7}), slices(5, {7}), slices(5, {7})}));
+    program(m, 2, true);
+    m.runProgram(0x0880'0000, false);
+    auto& stream = m.kernel.mpegStreams[LibraryAt];
+    CHECK(word(m, R + 0x204) == 1 && stream.shown.empty() == !kept && stream.held.empty() == !kept, true);
+    if(kept) CHECK(stream.shownWidth == 1024 && stream.shownHeight == 1024, true);
+    CHECK(roundTrip(m), true);
+  }
+  KernelMachine probe;
+  if(!probe.kernel.videoDecoders) return;
+  std::vector<Colour> grey = {{128, 128, 128}};
+  KernelMachine m;
+  setUp(m, movie({picture(65, 1, grey, 0), picture(2, 2, grey, 1), picture(2, 2, grey, 0)}));
+  program(m, 2, true);
+  m.runProgram(0x0880'0000, false);
+  auto& stream = m.kernel.mpegStreams[LibraryAt];
+  CHECK(stream.shown.empty() && stream.heldWidth == 32 && stream.heldHeight == 32, true);
+  CHECK(roundTrip(m), true);
+}
+
+//sceMpegCreate starts the library afresh, over what the Media Engine held for a library there before: the sound
+//queued and handed out, its time stamps and its decoder. A movie played again from the same memory (the ring
+//refilled from its start, sceMpegDelete never called) gives its first sound frame again, at its own time stamp,
+//through a decoder of its own.
+static auto mpegCreateAfresh() -> void {
+  KernelMachine m;
+  auto log = std::make_shared<std::vector<u32>>();
+  u32 made = 0;
+  m.kernel.audioDecoders = [log, &made](const AudioDecoder::Format&) -> std::unique_ptr<AudioDecoder> {
+    made++;
+    auto decoder = std::make_unique<StandIn>();
+    decoder->log = log;
+    return decoder;
+  };
+  auto bytes = movie({}, 3);
+  setUp(m, bytes);
+  constexpr u32 SoundAu = R + 0x300;
+  for(u32 time : {0u, 1u}) {
+    if(time) m.call("sceMpegCreate", {Handle, Library, 0x10000, Ring, 512, 0, 0});
+    m.call("sceMpegInitAu", {Handle, EsBuffer, SoundAu});
+    putIn(m, bytes);
+    CHECK(m.call("sceMpegGetAtracAu", {Handle, 0x1700, SoundAu, R + 0x380}), 0);
+    CHECK(word(m, SoundAu + 4) == 90000 && m.system.memory.read(1, EsBuffer + 8) == 0x40, true);
+    CHECK(m.call("sceMpegAtracDecode", {Handle, SoundAu, Sound, 1}), 0);
+  }
+  CHECK(made == 2 && *log == std::vector<u32>({0x40, 0x40}), true);
+}
+
+//After a state is loaded: the movie's sound decoder, made afresh, is primed with the frame decoded last (and the
+//PCM matches the machine that went on); pictures wait for one a decoder can start from: not a P picture, nor one
+//with a P slice among its I slices, but an I picture that isn't an IDR one (its header read past an emulation
+//prevention byte: its first macroblock 2^22 - 1, coded 00 00 02...).
+static auto mpegAfterState() -> void {
+  auto log = std::make_shared<std::vector<u32>>();
+  auto sound = [log](KernelMachine& k) {
+    k.kernel.audioDecoders = [log](const AudioDecoder::Format&) -> std::unique_ptr<AudioDecoder> {
+      auto decoder = std::make_unique<StandIn>();
+      decoder->log = log;
+      return decoder;
+    };
+  };
+  KernelMachine m;
+  sound(m);
+  auto bytes = movie({}, 3);
+  setUp(m, bytes);
+  constexpr u32 SoundAu = R + 0x300;
+  m.call("sceMpegInitAu", {Handle, EsBuffer, SoundAu});
+  putIn(m, bytes);
+  auto frame = [&](KernelMachine& k) {
+    CHECK(k.call("sceMpegGetAtracAu", {Handle, 0x1700, SoundAu, R + 0x380}), 0);
+    CHECK(k.call("sceMpegAtracDecode", {Handle, SoundAu, Sound, 1}), 0);
+  };
+  frame(m), frame(m);
+  auto state = saveState(m);
+  KernelMachine fresh;
+  sound(fresh);
+  CHECK(loadState(fresh, state), true);
+  log->clear();
+  frame(fresh);
+  CHECK(*log == std::vector<u32>({0x41, 0x42}), true);
+  std::vector<u8> after(0x2000), went(0x2000);
+  fresh.system.memory.copyOut(after.data(), Sound, after.size());
+  frame(m);
+  m.system.memory.copyOut(went.data(), Sound, went.size());
+  CHECK(after == went, true);
+  CHECK(saveState(m) == saveState(fresh), true);
+  //the pictures
+  KernelMachine v;
+  pictures(v);
+  auto units = movie({slices(5, {7}), slices(1, {5}), slices(1, {5}), slices(1, {7, 5}),
+                      slices(1, {2}, (1 << 22) - 1), slices(1, {5}), slices(1, {5})});
+  setUp(v, units);
+  putIn(v, units);
+  auto picture = [&](KernelMachine& k) {
+    CHECK(k.call("sceMpegGetAvcAu", {Handle, 0x12c0, Au, R + 0xc0}), 0);
+    CHECK(k.call("sceMpegAvcDecodeYCbCr", {Handle, Au, Mode + 8, Got}), 0);
+  };
+  picture(v), picture(v);
+  KernelMachine loaded;
+  pictures(loaded);
+  CHECK(loadState(loaded, saveState(v)), true);
+  auto& stream = loaded.kernel.mpegStreams[LibraryAt];
+  CHECK(stream.keyframe && stream.held.size() && stream.held[0] == 17, true);
+  picture(loaded);
+  CHECK(stream.keyframe && stream.held[0] == 17, true);  //a P picture
+  picture(loaded);
+  CHECK(stream.keyframe && stream.held[0] == 17, true);  //an I slice and a P slice
+  picture(loaded);
+  CHECK(!stream.keyframe && stream.held[0] == 18, true);  //I slices, not IDR: its decoder's second picture
+  picture(loaded);
+  CHECK(!stream.keyframe && stream.held[0] == 19, true);
+}
+
 auto movieTests() -> Tests {
   return {{"mpeg header", mpegHeader}, {"mpeg pictures decoded", mpegPictures},
-          {"mpeg pictures converted", mpegConversion}, {"mpeg sound access units", mpegSound}};
+          {"mpeg pictures converted", mpegConversion}, {"mpeg sound access units", mpegSound},
+          {"mpeg csc part past the picture", mpegConversionPart}, {"mpeg picture sizes", mpegPictureSizes},
+          {"mpeg create afresh", mpegCreateAfresh}, {"mpeg after a state", mpegAfterState}};
 }
 
 }

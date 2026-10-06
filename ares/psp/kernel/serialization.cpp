@@ -397,7 +397,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(a.channels >= 1 && a.channels <= 2);
     check(a.outputChannels == 2 || (a.outputChannels == 1 && a.channels == 1));
     check(a.dataOff <= a.fileDataEnd && a.firstValidSample <= u64(a.endSample) + 1);
-    check(a.extra.size() <= 64 && (a.recent.empty() || a.recent.size() == a.frameBytes));
+    check(a.extra.size() <= AudioDecoder::Format::MaxExtra && (a.recent.empty() || a.recent.size() == a.frameBytes));
     check(a.framesToSkip <= 2 && a.curBuffer <= 2 && (!a.curBuffer || a.state == 6) && a.loopNum >= -1);
     check(a.curBuffer < 2 || a.ended);
     check(a.looped || (!a.loopStart && !a.loopEnd && a.state <= 4));
@@ -490,21 +490,25 @@ auto Kernel::serialize(serializer& s) -> bool {
   //what each library's Media Engine holds (mpeg.cpp): the access unit to decode next (no more than a ring of 4096
   //packets holds), sound kept from freed packets (1 MiB at most) with its time stamps (within it, in order), the
   //sound handed out from the ring's packets, the last sound access unit's time stamp and the one carried over, and
-  //the pictures held back and shown (4:2:0, as many bytes as their sizes take, up to 4096 by 4096). The decoders
-  //aren't saved: made afresh, they show no new picture until a key frame. A library is in memory.
+  //the pictures held back and shown (4:2:0, as many bytes as their sizes take, up to the most a movie shows each
+  //way, VideoDecoder::MaxSide), and the last sound frame decoded (of a frame's size: at most 0x840 bytes, less its
+  //header). The decoders aren't saved: made afresh, the sound's is primed with that frame, the pictures' shows no
+  //new picture until one it can start from. A library is in memory.
   map(mpegStreams, [&](MpegStream& m) {
     bytes(m.unit); bytes(m.audio);
     vector(m.audioStamps, [&](std::pair<u32, u64>& stamp) { s(stamp.first); s(stamp.second); });
     s(m.audioTaken); s(m.audioTime); s(m.audioCarry);
     bytes(m.held); s(m.heldWidth); s(m.heldHeight); bytes(m.shown); s(m.shownWidth); s(m.shownHeight);
+    bytes(m.soundLast);
     if(s.reading()) m.video.reset(), m.sound.reset(), m.keyframe = true;
     check(m.unit.size() <= 4096 * 2048 && m.audio.size() <= 1_MiB && m.audioTaken <= 4096 * 2048);
+    check(m.soundLast.size() <= 0x840 - 8 && !(m.soundLast.size() % 8));
     for(u32 n = 0; n < m.audioStamps.size(); n++) {
       check(m.audioStamps[n].first <= m.audio.size() && (!n || m.audioStamps[n - 1].first <= m.audioStamps[n].first));
     }
     auto picture = [&](const std::vector<u8>& planes, u32 width, u32 height) {
       if(planes.empty()) return true;
-      return width && height && width <= 4096 && height <= 4096 &&
+      return width && height && width <= VideoDecoder::MaxSide && height <= VideoDecoder::MaxSide &&
              planes.size() == width * height + 2 * ((width + 1) / 2) * ((height + 1) / 2);
     };
     check(picture(m.held, m.heldWidth, m.heldHeight) && picture(m.shown, m.shownWidth, m.shownHeight));

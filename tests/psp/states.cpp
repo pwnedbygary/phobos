@@ -264,6 +264,7 @@ static auto stateFields() -> void {
   movie.unit = {0, 0, 1, 9}, movie.audio = {1, 2, 3, 4}, movie.audioStamps = {{2, 90000}}, movie.audioTaken = 10;
   movie.audioTime = 1000, movie.audioCarry = 2000, movie.held.assign(384, 0x80), movie.heldWidth = 16;
   movie.heldHeight = 16, movie.shown = movie.held, movie.shownWidth = movie.shownHeight = 16;
+  movie.soundLast.assign(376, 0x33);
   std::vector<std::pair<std::string, std::function<void()>>> changes = {
     //the CPU
     {"ipu.r", [&] { cpu.ipu.r[9] ^= 0x1234; }}, {"ipu.lo", [&] { cpu.ipu.lo ^= 1; }},
@@ -653,6 +654,7 @@ static auto stateFields() -> void {
     {"mpeg stream shown", [&] { movie.shown[0] ^= 1; }},
     {"mpeg stream shown size", [&] { movie.shown.resize(32 * 16 * 3 / 2), movie.shownWidth = 32; }},
     {"mpeg stream shown height", [&] { movie.shown.resize(32 * 32 * 3 / 2), movie.shownHeight = 32; }},
+    {"mpeg stream soundLast", [&] { movie.soundLast[0] ^= 1; }},
   };
   changes.insert(changes.end(), more.begin(), more.end());
   changes.insert(changes.end(), codecs.begin(), codecs.end());
@@ -933,6 +935,7 @@ static auto stateFields() -> void {
   refuses("an ATRAC stream's ring past its buffer", [&] { atracOne().lapEnd = atracOne().bufferByte + 376; });
   refuses("an ATRAC stream written more than a time round ahead", [&] { atracOne().writeLap += 2; });
   refuses("an ATRAC frame kept of another size", [&] { atracOne().recent.resize(100); });
+  refuses("ATRAC fmt extras past what a file keeps", [&] { atracOne().extra.resize(65); });
   refuses("ATRAC contexts in no block", [&] { k.atracContexts = 0x0880'0010; });
   refuses("an mp3 stream's ring past its buffer", [&] { k.mp3s[0].readPos = k.mp3s[0].bufferSize; });
   refuses("an mp3 stream at 48 kHz", [&] { k.mp3s[0].initialized = true, k.mp3s[0].rate = 48000; });
@@ -942,6 +945,12 @@ static auto stateFields() -> void {
     k.mpegStreams.begin()->second.audioStamps = {{3, 1}, {1, 2}};
   });
   refuses("a movie library nowhere", [&] { k.mpegStreams[0x7000'0000] = {}; });
+  refuses("a movie picture wider than a movie's", [&] {
+    auto& stream = k.mpegStreams.begin()->second;
+    stream.held.assign(1040 * 16 + 2 * 520 * 8, 0x80), stream.heldWidth = 1040, stream.heldHeight = 16;
+  });
+  refuses("a movie sound frame of no frame's size", [&] { k.mpegStreams.begin()->second.soundLast.resize(377); });
+  refuses("a movie sound frame past a sound unit's", [&] { k.mpegStreams.begin()->second.soundLast.resize(0x840); });
 
   refuses("a font resolution of 0", [&] { k.fontResolution[0] = 0; });
   //the font library as it never leaves itself (each looked up afresh: every load makes them anew); then a state of

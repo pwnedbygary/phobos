@@ -159,8 +159,9 @@ auto Kernel::atracParse(Atrac& a, u32 buffer, u32 size) -> u32 {
   bool format = false, fact = false;
   u32 factSamples = 0, factOffset = 0, smplStart = 0, smplEnd = 0, dataSize = 0, rate = 0;
   a.looped = false;
-  for(u32 at = 12;;) {
-    if(u64(at) + 8 > size) return format ? AtracErrorTooSmall : AtracErrorUnknownFormat;
+  //(the chunks walked in 64 bits: a chunk's length, up to 4 GiB, always takes the walk on past it)
+  for(u64 at = 12;;) {
+    if(at + 8 > size) return format ? AtracErrorTooSmall : AtracErrorUnknownFormat;
     u32 id = word(at), length = word(at + 4), body = at + 8;
     if(id == 0x2074'6d66) {  //"fmt "
       u32 tag = half(body), extraSize = length >= 18 ? half(body + 16) : 0;
@@ -174,7 +175,9 @@ auto Kernel::atracParse(Atrac& a, u32 buffer, u32 size) -> u32 {
       else if(plus) a.codec = AtracPlus, extraStart = body + 40;
       else return AtracErrorUnknownFormat;
       a.extra.clear();
-      for(u32 n = extraStart; n < extraEnd; n++) a.extra.push_back(byte(n));
+      for(u32 n = extraStart; n < extraEnd && a.extra.size() < AudioDecoder::Format::MaxExtra; n++) {
+        a.extra.push_back(byte(n));
+      }
       format = true;
     } else if(id == 0x7463'6166) {  //"fact"
       factSamples = word(body);
@@ -191,7 +194,7 @@ auto Kernel::atracParse(Atrac& a, u32 buffer, u32 size) -> u32 {
       dataSize = length;
       break;
     }
-    at = body + length + (length & 1);
+    at = u64(body) + length + (length & 1);
   }
   if(!format || !a.frameBytes || a.channels < 1 || a.channels > 2) return AtracErrorUnknownFormat;
   bool plus = a.codec == AtracPlus;
@@ -200,11 +203,15 @@ auto Kernel::atracParse(Atrac& a, u32 buffer, u32 size) -> u32 {
   //ATRAC3 takes its decoding from the frame size and joint stereo alone: frames of 0xc0 bytes not in joint stereo
   //are mono, as LocoRoco 2 streams its house music under a two-channel header (audio/atrac/c0mono)
   a.monoFrames = !plus && a.frameBytes == 0xc0 && a.extra.size() >= 8 && !a.extra[6];
-  u64 frames = dataSize / a.frameBytes;
-  u32 offset = factOffset ? factOffset : a.frameSamples;
-  if(!fact) factSamples = frames * a.frameSamples > u64(offset) + a.delay ? frames * a.frameSamples - offset - a.delay
-                                                                          : 0;
-  if(u64(factSamples) + offset + a.delay > frames * a.frameSamples) return AtracErrorBadParameters;
+  //(counted in 64 bits: a file whose data's end, or whose samples' or loop's, a 32-bit count can't hold is refused)
+  u64 frames = dataSize / a.frameBytes, samples = frames * a.frameSamples;
+  u64 offset = factOffset ? factOffset : a.frameSamples, heard = factSamples;
+  if(!fact) heard = samples > offset + a.delay ? samples - offset - a.delay : 0;
+  if(heard + offset + a.delay > samples) return AtracErrorBadParameters;
+  if(u64(a.dataOff) + dataSize > 0xffff'ffff) return AtracErrorBadParameters;
+  if(heard + offset + a.delay > 0xffff'ffff) return AtracErrorBadParameters;
+  if(a.looped && u64(std::max(smplStart, smplEnd)) + a.delay > 0xffff'ffff) return AtracErrorBadParameters;
+  factSamples = heard;
   a.fileDataEnd = a.dataOff + dataSize;
   a.firstValidSample = offset + a.delay;
   a.endSample = a.firstValidSample + factSamples - 1;

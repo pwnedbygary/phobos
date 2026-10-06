@@ -461,6 +461,44 @@ static auto atracStates() -> void {
   CHECK(word(whole, Samples) == word(loaded, Samples), true);
 }
 
+//Headers whose sizes don't fit: a 256-byte file whose first chunk's length (0xfffffff8) would take a 32-bit walk
+//back to where it was, for ever, is refused as unreadable (no chunk after it); data whose end is past 4 GiB, or
+//whose samples a 32-bit count can't hold, is refused as the samples check refuses (0x80630008). An ATRAC3 file with
+//100 bytes of fmt extras keeps the first 64 (what a state holds), and saves.
+static auto atracHeaderSizes() -> void {
+  Machine m;
+  std::vector<u8> junk(256, 0);
+  auto put32 = [](std::vector<u8>& bytes, u32 at, u32 value) {
+    for(u32 n = 0; n < 4; n++) bytes[at + n] = value >> n * 8;
+  };
+  memcpy(junk.data(), "RIFF", 4), put32(junk, 4, 248), memcpy(junk.data() + 8, "WAVEJUNK", 8);
+  put32(junk, 16, 0xffff'fff8);
+  m.system.memory.copyIn(File, junk.data(), junk.size());
+  CHECK(m.call("sceAtracSetDataAndGetID", {File, 256}), 0x8063'0006);
+  auto at3 = file();
+  put32(at3, 92, 0xffff'ffc0);  //the data chunk's length: from 0x60, it ends at 0x1'0000'0020
+  m.system.memory.copyIn(File, at3.data(), at3.size());
+  CHECK(m.call("sceAtracSetDataAndGetID", {File, u32(at3.size())}), 0x8063'0008);
+  auto unfacted = file();
+  memcpy(unfacted.data() + 72, "junk", 4);  //the fact chunk passed over: the samples counted from the data's
+  put32(unfacted, 92, 0xffff'ff00 - 0x60);
+  m.system.memory.copyIn(File, unfacted.data(), unfacted.size());
+  CHECK(m.call("sceAtracSetDataAndGetID", {File, u32(unfacted.size())}), 0x8063'0008);
+  std::vector<u8> classic(12 + 8 + 118 + 8 + 10 * 384, 0);
+  memcpy(classic.data(), "RIFF", 4), put32(classic, 4, classic.size() - 8), memcpy(classic.data() + 8, "WAVEfmt ", 8);
+  put32(classic, 16, 118);
+  for(auto [at, value] : {std::pair{20u, 0x0002'0270u}, {24, 44100}, {28, 16537}, {32, 384}, {36, 100}}) {
+    put32(classic, at, value);
+  }
+  for(u32 n = 0; n < 100; n++) classic[38 + n] = n;
+  memcpy(classic.data() + 138, "data", 4), put32(classic, 142, 10 * 384);
+  m.system.memory.copyIn(File, classic.data(), classic.size());
+  u32 id = m.call("sceAtracSetDataAndGetID", {File, u32(classic.size())});
+  CHECK(s32(id) >= 0, true);
+  if(s32(id) >= 0) CHECK(m.kernel.atracs[id].extra.size() == 64 && m.kernel.atracs[id].extra[63] == 63, true);
+  CHECK(roundTrip(m), true);
+}
+
 //With FFmpeg's decoders and pspautotests' sample.at3 (PSP_AUTOTESTS: its checkout), decoded as audio/atrac/decode
 //recorded: 1680 samples, then 2048 a decode, the last 61, 122 decodes, sound in them (not silence, not clipped).
 static auto atracFFmpeg() -> void {
@@ -492,7 +530,7 @@ auto atracTests() -> Tests {
   return {{"atrac ids", atracIDs}, {"atrac setting", atracSetting}, {"atrac whole file", atracWholeFile},
           {"atrac halfway", atracHalfway}, {"atrac streamed", atracStreamed}, {"atrac looped", atracLooped},
           {"atrac second buffer", atracSecondBuffer}, {"atrac reset", atracReset}, {"atrac bad frame", atracBadFrame},
-          {"atrac states", atracStates}, {"atrac ffmpeg", atracFFmpeg}};
+          {"atrac states", atracStates}, {"atrac header sizes", atracHeaderSizes}, {"atrac ffmpeg", atracFFmpeg}};
 }
 
 }
