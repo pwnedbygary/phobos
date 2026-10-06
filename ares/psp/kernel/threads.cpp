@@ -90,12 +90,17 @@ auto Kernel::restore(const Context& c) -> void {
   cpu.vfpu.pfxs = c.pfxs; cpu.vfpu.pfxt = c.pfxt; cpu.vfpu.pfxd = c.pfxd; cpu.vfpu.cc = c.cc;
 }
 
-//A thread may run again; returnValue is what the function it waited in returns (its v0).
+//A thread may run again; returnValue is what the function it waited in returns (its v0). A message pipe's send or
+//receive tells how many bytes it moved, however its wait ends (messages.cpp).
 auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
   if(thread.timeoutPointer) {  //what's left of its timeout, in microseconds (none, if it ran out)
     u64 left = thread.wakeAt > cycles ? (thread.wakeAt - cycles) / (CPUFrequency / 1'000'000) : 0;
     memory.write(4, thread.timeoutPointer, returnValue == ErrorWaitTimeout ? 0 : u32(left));
     thread.timeoutPointer = 0;
+  }
+  if((thread.wait == Wait::PipeSend || thread.wait == Wait::PipeReceive) && thread.waitResult) {
+    memory.write(4, thread.waitResult, thread.waitDone);
+    thread.waitResult = 0;
   }
   thread.status = Status::Ready;
   thread.wait = Wait::None;
@@ -111,6 +116,7 @@ auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
 auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer, bool callbacks) -> void {
   if(!current) return;
   if(interrupting) return result(ErrorIllegalContext);
+  if(dispatchSuspended) return result(ErrorCanNotWait);  //no other thread could run meanwhile
   current->status = Status::Waiting;
   current->wait = wait;
   current->waitID = id;
@@ -135,6 +141,7 @@ auto Kernel::reschedule() -> void {
     rescheduleAfter = true;
     return;
   }
+  if(dispatchSuspended && current && current->status == Status::Running) return;  //it keeps the CPU
   Thread* best = nullptr;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Ready || thread->suspended) continue;
@@ -212,6 +219,10 @@ auto Kernel::waiterLeft(Wait wait, u32 id) -> void {
   }
   if(wait == Wait::Fpl || wait == Wait::Vpl) {
     if(auto found = pools.find(id); found != pools.end()) poolWake(found->second);
+  }
+  //a message pipe's waiters are in line too (messages.cpp)
+  if(wait == Wait::PipeSend || wait == Wait::PipeReceive) {
+    if(auto found = pipes.find(id); found != pipes.end()) pipeServe(found->second);
   }
 }
 
@@ -362,13 +373,17 @@ auto Kernel::sceKernelReferThreadStatus() -> void {
   for(u32 offset = 4; offset < 36 && offset < size; offset++) {
     memory.write(1, info + offset, offset - 4 < thread->name.size() ? u8(thread->name[offset - 4]) : 0);
   }
-  u32 waitType = 0;  //the PSP's numbers: 1 sleep, 2 delay, 3 semaphore, 4 event flag, 6 VPL, 7 FPL, 9 thread end
+  //the PSP's numbers: 1 sleep, 2 delay, 3 semaphore, 4 event flag, 5 mailbox, 6 VPL, 7 FPL, 8 message pipe, 9 thread
+  //end
+  u32 waitType = 0;
   if(thread->status == Status::Waiting) {
     switch(thread->wait) {
     case Wait::Sleep: waitType = 1; break;
     case Wait::Delay: waitType = 2; break;
     case Wait::Semaphore: waitType = 3; break;
     case Wait::EventFlag: waitType = 4; break;
+    case Wait::Mailbox: waitType = 5; break;
+    case Wait::PipeSend: case Wait::PipeReceive: waitType = 8; break;
     case Wait::Vpl: waitType = 6; break;
     case Wait::Fpl: waitType = 7; break;
     case Wait::ThreadEnd: waitType = 9; break;
@@ -574,7 +589,8 @@ auto Kernel::sceKernelDeleteLwMutex() -> void {
   reschedule();
 }
 
-auto Kernel::sceKernelLockLwMutex() -> void {
+//(work area, count, timeout); with callbacks, the thread's callbacks run while it waits.
+auto Kernel::lockLwMutex(bool callbacks) -> void {
   if(!mayWait()) return;
   u32 workArea = arg(0), count = arg(1), timeout = arg(2);
   if(!lwMutexes.count(memory.read(4, workArea + 16))) return result(ErrorLwMutexNotFound);
@@ -584,18 +600,26 @@ auto Kernel::sceKernelLockLwMutex() -> void {
   if(!level) {
     memory.write(4, workArea, count);
     memory.write(4, workArea + 4, current->uid);
-    return;
+    return callbacksOnReturn(callbacks);
   }
   if(owner == current->uid) {
     if(!(attributes & 0x200)) return result(ErrorLwMutexRecursion);
     memory.write(4, workArea, level + count);
-    return;
+    return callbacksOnReturn(callbacks);
   }
   memory.write(4, workArea + 12, memory.read(4, workArea + 12) + 1);
   current->waitCount = count;
   current->readySince = ++readySequence;
   block(Wait::LwMutex, workArea,
-        timeout ? cycles + u64(memory.read(4, timeout)) * (CPUFrequency / 1'000'000) : 0, timeout);
+        timeout ? cycles + u64(memory.read(4, timeout)) * (CPUFrequency / 1'000'000) : 0, timeout, callbacks);
+}
+
+auto Kernel::sceKernelLockLwMutex() -> void {
+  lockLwMutex(false);
+}
+
+auto Kernel::sceKernelLockLwMutexCB() -> void {
+  lockLwMutex(true);
 }
 
 auto Kernel::sceKernelTryLockLwMutex() -> void {
@@ -777,4 +801,51 @@ auto Kernel::sceKernelGetThreadStackFreeSize() -> void {
 //development PSPs keep them; a retail one has none to give.
 auto Kernel::sceKernelReferThreadProfiler() -> void {
   result(0);
+}
+
+//The calling thread's priority now.
+auto Kernel::sceKernelGetThreadCurrentPriority() -> void {
+  result(current ? current->priority : ErrorIllegalThread);
+}
+
+//(priority, 0 for the caller's): the first thread ready at that priority goes to the back of its line; at the
+//caller's own, the caller does, giving way to its equals. A user thread's priorities (0x08-0x77) and 0 are taken,
+//anything else is ILLEGAL_PRIORITY, as pspautotests' threads/threads/rotate recorded.
+auto Kernel::sceKernelRotateThreadReadyQueue() -> void {
+  u32 priority = arg(0);
+  if(priority == 0 && current) priority = current->priority;
+  if(priority < 0x08 || priority > 0x77) return result(ErrorIllegalPriority);
+  result(0);
+  if(current && current->status == Status::Running && current->priority == priority) {
+    current->status = Status::Ready;  //reschedule() picks between it and its equals afresh
+    current->readySince = ++readySequence;
+    return reschedule();
+  }
+  Thread* first = nullptr;
+  for(auto& [uid, thread] : threads) {
+    if(thread->status != Status::Ready || thread->priority != priority) continue;
+    if(!first || thread->readySince < first->readySince) first = thread.get();
+  }
+  if(first) first->readySince = ++readySequence;
+}
+
+//Holds off switching threads: the running thread keeps the CPU, whatever becomes ready, until it resumes dispatching
+//(a short critical section: SOCOM Fireteam Bravo's sound code takes one). Returns the state to resume with: 1 if
+//switching was allowed, 0 if it was held off already. From an interrupt handler, ILLEGAL_CONTEXT. A thread that
+//would wait meanwhile is refused (CAN_NOT_WAIT, as with interrupts held off: block()). pspsdk's pspthreadman.h
+//names the functions; what they return is chosen (the pair works whichever way the state is read).
+auto Kernel::sceKernelSuspendDispatchThread() -> void {
+  if(interrupting) return result(ErrorIllegalContext);
+  result(dispatchSuspended ? 0 : 1);
+  dispatchSuspended = true;
+}
+
+//(state): switching allowed again if the state says it was (1), and whichever thread should run now does.
+auto Kernel::sceKernelResumeDispatchThread() -> void {
+  if(interrupting) return result(ErrorIllegalContext);
+  result(0);
+  if(arg(0)) {
+    dispatchSuspended = false;
+    reschedule();
+  }
 }

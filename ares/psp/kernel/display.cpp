@@ -77,6 +77,16 @@ auto Kernel::sceDisplayGetCurrentHcount() -> void {
   result(u32((cycles - (nextVblank - VblankCycles)) / LineCycles));
 }
 
+//The lines the display has gone through since power on: 286 a frame, and those of this one.
+auto Kernel::sceDisplayGetAccumulatedHcount() -> void {
+  result(u32(vblanks * 286 + (cycles - (nextVblank - VblankCycles)) / LineCycles));
+}
+
+//The display's frame rate, a float: 59.94.
+auto Kernel::sceDisplayGetFramePerSec() -> void {
+  resultFloat(59.94f);
+}
+
 //How many vertical blanks since power on.
 auto Kernel::sceDisplayGetVcount() -> void {
   result(vblanks);

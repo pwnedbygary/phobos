@@ -211,6 +211,21 @@ auto Kernel::serialize(serializer& s) -> bool {
     vector(pool.used, [&](u8& used) { s(used); });
     map(pool.pieces, [&](u32& length) { s(length); });
   });
+  //message pipes: the ring inside the buffer (none: an empty pipe with no block); mailboxes: their packets queued
+  //once each, in memory there is
+  map(pipes, [&](MessagePipe& pipe) {
+    s(pipe.uid); text(pipe.name); s(pipe.attributes); s(pipe.block); s(pipe.address); s(pipe.size);
+    s(pipe.start); s(pipe.used);
+    check(pipe.size ? pipe.start < pipe.size && pipe.used <= pipe.size && pipe.block
+                    : !pipe.start && !pipe.used && !pipe.block && !pipe.address);
+  });
+  map(mailboxes, [&](Mailbox& mailbox) {
+    s(mailbox.uid); text(mailbox.name); s(mailbox.attributes);
+    vector(mailbox.messages, [&](u32& packet) { s(packet); check(memory.reaches(packet, 8)); });
+    std::vector<u32> sorted(mailbox.messages.begin(), mailbox.messages.end());
+    std::sort(sorted.begin(), sorted.end());
+    check(std::adjacent_find(sorted.begin(), sorted.end()) == sorted.end());
+  });
   map(eventFlags, [&](EventFlag& flag) {
     s(flag.uid); text(flag.name); s(flag.attributes); s(flag.initial); s(flag.pattern);
   });
@@ -301,6 +316,9 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
     if(v.source == Sas::Source::Vag) check(v.size && !(v.size & 15) && (v.loop == 0 || v.loop == 1));
   }
+  //sceAtrac3plus's IDs handed out (six of them), and threads' dispatching held off
+  s(atracIDs); s(dispatchSuspended);
+  check(atracIDs < 1u << 6);
   //the utilities: the dialog, and the modules loaded
   s(dialog.kind); s(dialog.status); s(dialog.next); s(dialog.changeAt); s(dialog.parameters);
   vector(utilityModules, [&](u32& module) { s(module); });
@@ -314,6 +332,26 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
     for(auto& [uid, flag] : eventFlags) check(uid < nextUID && flag.uid == uid);
     for(auto& [uid, callback] : callbacks) check(uid < nextUID && callback.uid == uid);
+    for(auto& [uid, pipe] : pipes) {
+      check(uid < nextUID && pipe.uid == uid && pipe.block < nextUID);
+      auto block = std::find_if(blocks.begin(), blocks.end(), [&](auto& b) { return b.uid == pipe.block; });
+      check(!pipe.block || (block != blocks.end() && block->address == pipe.address && block->size >= pipe.size));
+    }
+    for(auto& [uid, mailbox] : mailboxes) check(uid < nextUID && mailbox.uid == uid);
+    //a thread waiting on a message pipe waits on one there is, for no more than its buffer holds (a pipe without one
+    //takes any size), having moved less than all of it; one waiting on a mailbox, on one there is
+    for(auto& [uid, t] : threads) {
+      for(auto [wait, id, count, done] : {std::tuple{t->wait, t->waitID, t->waitCount, t->waitDone},
+            std::tuple{t->waitBeforeCallback.wait, t->waitBeforeCallback.id, t->waitBeforeCallback.count,
+                       t->waitBeforeCallback.done}}) {
+        if(wait == Wait::PipeSend || wait == Wait::PipeReceive) {
+          auto pipe = pipes.find(id);
+          check(pipe != pipes.end() && done < count && count < 0x8000'0000
+                && (!pipe->second.size || count <= pipe->second.size));
+        }
+        if(wait == Wait::Mailbox) check(mailboxes.count(id));
+      }
+    }
     check(programUID < nextUID);
     //A module isn't the program. It has a thread exactly while its module_start or module_stop runs, and that thread
     //is there. A stand-in has nothing in memory; another module has a block of the user partition, or none.
@@ -344,6 +382,7 @@ auto Kernel::serialize(serializer& s) -> bool {
       check(t.stackSize >= 0x200 && own(stack));
     }
     for(auto& [uid, pool] : pools) owned(pool.block);
+    for(auto& [uid, pipe] : pipes) if(pipe.block) check(owned(pipe.block));
     for(auto& [uid, m] : modules) check(!m.block || owned(m.block));
     if(u32 program = programBlockAt()) check(own([&](const Block& b) { return b.address == program; }));
     for(u32 claims : owners) check(claims <= 1);

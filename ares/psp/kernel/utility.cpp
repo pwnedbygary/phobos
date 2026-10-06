@@ -350,6 +350,20 @@ auto Kernel::sceUtilityUnloadNetModule() -> void {
   sceUtilityUnloadModule();
 }
 
+//(sound or video module 0-7: psputility_avmodules.h's PSP_AV_MODULE_*), the older way to load them: as the modules
+//0x300-0x307.
+auto Kernel::sceUtilityLoadAvModule() -> void {
+  if(arg(0) > 7) return result(ModuleBadID);
+  cpu.ipu.r[4] = 0x300 + arg(0);
+  sceUtilityLoadModule();
+}
+
+auto Kernel::sceUtilityUnloadAvModule() -> void {
+  if(arg(0) > 7) return result(ModuleBadID);
+  cpu.ipu.r[4] = 0x300 + arg(0);
+  sceUtilityUnloadModule();
+}
+
 //(which, where, its size): the system's text settings: the player's nickname (1) is "PSP". Others aren't known.
 auto Kernel::sceUtilityGetSystemParamString() -> void {
   if(arg(0) != 1) return result(UtilityBadParameterID);

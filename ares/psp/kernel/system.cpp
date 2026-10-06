@@ -257,3 +257,71 @@ auto Kernel::sceDmacMemcpy() -> void {
 auto Kernel::sceKernelCacheUnneeded() -> void {
   result(0);
 }
+
+//A ScePspDateTime (psprtc.h: year, month, day, hour, minute and second as 16-bit numbers, then microseconds) at an
+//address, from microseconds since 1970: in UTC, or in the host's time zone (local). False if it can't be written.
+auto Kernel::writeDate(u32 address, u64 microseconds, bool local) -> bool {
+  if(!memory.reaches(address, 16)) return false;
+  std::time_t seconds = std::time_t(microseconds / 1'000'000);
+  std::tm when{};
+  if(!(local ? localtime_r(&seconds, &when) : gmtime_r(&seconds, &when))) return false;
+  u16 fields[6] = {u16(when.tm_year + 1900), u16(when.tm_mon + 1), u16(when.tm_mday), u16(when.tm_hour),
+                   u16(when.tm_min), u16(when.tm_sec)};
+  for(u32 n = 0; n < 6; n++) memory.write(2, address + n * 2, fields[n]);
+  memory.write(4, address + 12, u32(microseconds % 1'000'000));
+  return true;
+}
+
+//(where to put the date, the time zone in minutes east of UTC): the date and time now, in that time zone.
+auto Kernel::sceRtcGetCurrentClock() -> void {
+  s64 now = s64(startTime + cycles / (CPUFrequency / 1'000'000)) + s64(s32(arg(1))) * 60'000'000;
+  result(writeDate(arg(0), u64(std::max<s64>(now, 0)), false) ? 0 : ErrorInvalidPointer);
+}
+
+//(where to put the date): the date and time now, the player's (the host's time zone).
+auto Kernel::sceRtcGetCurrentClockLocalTime() -> void {
+  u64 now = startTime + cycles / (CPUFrequency / 1'000'000);
+  result(writeDate(arg(0), now, true) ? 0 : ErrorInvalidPointer);
+}
+
+//(date, where to put a time_t): the date as seconds since 1970.
+auto Kernel::sceRtcGetTime_t() -> void {
+  u32 date = arg(0);
+  s64 days = daysFromYearOne(memory.read(2, date), memory.read(2, date + 2), memory.read(2, date + 4))
+           - daysFromYearOne(1970, 1, 1);
+  s64 seconds = days * 86'400 + memory.read(2, date + 6) * 3'600 + memory.read(2, date + 8) * 60
+              + memory.read(2, date + 10);
+  if(arg(1)) memory.write(4, arg(1), u32(seconds));
+  result(0);
+}
+
+//(where to put it): the console's OpenPSID, 16 bytes a PSP keeps for each console (pspopenpsid.h's PspOpenPSID);
+//every Phobos PSP is the same made-up console: "PHOBOS" after a two-byte header, its last byte 1.
+auto Kernel::sceOpenPSIDGetOpenPSID() -> void {
+  static constexpr u8 PSID[16] = {0x10, 0x02, 'P', 'H', 'O', 'B', 'O', 'S', 0, 0, 0, 0, 0, 0, 0, 1};
+  if(!memory.copyIn(arg(0), PSID, 16)) return result(ErrorInvalidPointer);
+  result(0);
+}
+
+//Whether calls into the program (interrupts) are let through now: sceKernelCpuSuspendIntr holds them off.
+auto Kernel::sceKernelIsCpuIntrEnable() -> void {
+  result(interruptsEnabled);
+}
+
+//(destination, byte, size): the C library's memset, done by the kernel; returns the destination.
+auto Kernel::sceKernelMemset() -> void {
+  u32 destination = arg(0), size = arg(2);
+  if(size && memory.reaches(destination, size)) memory.fill(destination, u8(arg(1)), size);
+  result(destination);
+}
+
+//(destination, source, size): memcpy, overlapping as memmove may; returns the destination.
+auto Kernel::sceKernelMemcpy() -> void {
+  u32 destination = arg(0), source = arg(1), size = arg(2);
+  if(size && memory.reaches(destination, size) && memory.reaches(source, size)) {
+    std::vector<u8> bytes(size);
+    memory.copyOut(bytes.data(), source, size);
+    memory.copyIn(destination, bytes.data(), size);
+  }
+  result(destination);
+}

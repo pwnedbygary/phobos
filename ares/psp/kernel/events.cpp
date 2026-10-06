@@ -283,6 +283,9 @@ auto Kernel::backFromCallbacks(Thread& thread) -> void {
 auto Kernel::resumeWait(Thread& thread) -> void {
   if(thread.wakeAt && cycles >= thread.wakeAt) {
     if(thread.wait == Wait::EventFlag) eventFlagTimedOut(thread);
+    if(thread.wait == Wait::LwMutex) {  //the mutex has one waiter fewer
+      memory.write(4, thread.waitID + 12, memory.read(4, thread.waitID + 12) - 1);
+    }
     Wait wait = thread.wait;
     ready(thread, wait == Wait::Delay ? 0 : ErrorWaitTimeout);
     return waiterLeft(wait, thread.waitID);
@@ -312,6 +315,22 @@ auto Kernel::resumeWait(Thread& thread) -> void {
   case Wait::Fpl: case Wait::Vpl:
     if(auto found = pools.find(thread.waitID); found != pools.end()) poolWake(found->second);
     else ready(thread, ErrorWaitDeleted);
+    break;
+  case Wait::LwMutex:  //unlocked meanwhile: it goes to the thread waiting longest, which may be this one
+    if(!memory.read(4, thread.waitID)) unlockLwMutex(thread.waitID);
+    break;
+  case Wait::PipeSend: case Wait::PipeReceive:
+    if(auto found = pipes.find(thread.waitID); found != pipes.end()) pipeServe(found->second);
+    else ready(thread, ErrorWaitDeleted);
+    break;
+  case Wait::Mailbox:  //a packet queued meanwhile is its, if it's first in line
+    if(auto found = mailboxes.find(thread.waitID); found == mailboxes.end()) ready(thread, ErrorWaitDeleted);
+    else if(auto& mailbox = found->second; !mailbox.messages.empty() && mailboxWaiters(mailbox).front() == &thread) {
+      if(thread.waitPointer) memory.write(4, thread.waitPointer, mailbox.messages.front());
+      mailbox.messages.pop_front();
+      mailboxLink(mailbox);
+      ready(thread, 0);
+    }
     break;
   case Wait::Async:   //a file's request done meanwhile (its callback was what ran): its result is taken now
     if(auto found = files.find(thread.waitID); found == files.end()) ready(thread, ErrorBadFile);

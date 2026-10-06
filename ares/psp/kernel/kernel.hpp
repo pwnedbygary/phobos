@@ -101,6 +101,13 @@ struct Kernel {
   static constexpr u32 ErrorLwMutexUnlocked       = 0x8002'01cc;
   static constexpr u32 ErrorLwMutexUnderflow      = 0x8002'01ce;
   static constexpr u32 ErrorLwMutexRecursion      = 0x8002'01cf;
+  static constexpr u32 ErrorUnknownMailbox        = 0x8002'019b;
+  static constexpr u32 ErrorUnknownMessagePipe    = 0x8002'019e;
+  static constexpr u32 ErrorMailboxEmpty          = 0x8002'01b2;  //a poll that finds no message
+  static constexpr u32 ErrorPipeFull              = 0x8002'01b3;  //a try that can't send
+  static constexpr u32 ErrorPipeEmpty             = 0x8002'01b4;  //a try that can't receive
+  static constexpr u32 ErrorIllegalSize           = 0x8002'01bc;
+  static constexpr u32 ErrorMessageQueued         = 0x8002'01c9;  //a mailbox's packet sent again while queued
   //uOFW's errors.h
   static constexpr u32 ErrorNotImplemented        = 0x8000'0003;
   static constexpr u32 ErrorNotSupported          = 0x8000'0004;
@@ -334,9 +341,16 @@ struct Kernel {
   auto sceKernelChangeCurrentThreadAttr() -> void;
   auto sceKernelGetThreadStackFreeSize() -> void;
   auto sceKernelReferThreadProfiler() -> void;
+  auto sceKernelGetThreadCurrentPriority() -> void;
+  auto sceKernelRotateThreadReadyQueue() -> void;
+  bool dispatchSuspended = false;  //sceKernelSuspendDispatchThread: the running thread keeps the CPU
+  auto sceKernelSuspendDispatchThread() -> void;
+  auto sceKernelResumeDispatchThread() -> void;
   auto sceKernelCreateLwMutex() -> void;
   auto sceKernelDeleteLwMutex() -> void;
+  auto lockLwMutex(bool callbacks) -> void;
   auto sceKernelLockLwMutex() -> void;
+  auto sceKernelLockLwMutexCB() -> void;
   auto sceKernelTryLockLwMutex() -> void;
   auto sceKernelUnlockLwMutex() -> void;
   auto sceKernelGetSystemTimeLow() -> void;
@@ -539,6 +553,8 @@ struct Kernel {
   auto sceDisplayWaitVblankCB() -> void;
   auto sceDisplayIsVblank() -> void;
   auto sceDisplayGetCurrentHcount() -> void;
+  auto sceDisplayGetAccumulatedHcount() -> void;
+  auto sceDisplayGetFramePerSec() -> void;
   auto sceDisplayGetVcount() -> void;
   auto picture(std::vector<u32>& pixels) -> void;
 
@@ -809,6 +825,52 @@ struct Kernel {
   auto sceAudioSRCOutputBlocking() -> void;
   auto sceAudioSRCChRelease() -> void;
 
+  //messages.cpp: message pipes (bytes from thread to thread, through a buffer or straight across) and mailboxes
+  //(packets the program keeps in its own memory, handed over by address)
+  struct MessagePipe {
+    u32 uid;
+    std::string name;
+    u32 attributes = 0;
+    u32 block = 0;              //its buffer's block of the user partition (0: no buffer)
+    u32 address = 0, size = 0;  //the buffer
+    u32 start = 0, used = 0;    //a ring: where its oldest byte is, and how many it holds
+  };
+  struct Mailbox {
+    u32 uid;
+    std::string name;
+    u32 attributes = 0;
+    std::deque<u32> messages;   //the packets queued, the next to be received first
+  };
+  std::map<u32, MessagePipe> pipes;
+  std::map<u32, Mailbox> mailboxes;
+  auto pipeWaiters(const MessagePipe& pipe, Wait wait) -> std::vector<Thread*>;
+  auto pipeMove(MessagePipe& pipe, u32 address, u32 bytes, bool in) -> void;
+  auto pipeServe(MessagePipe& pipe) -> void;
+  auto pipeFor(u32 uid, u32 size, u32 mode) -> MessagePipe*;
+  auto pipeSend(bool wait, bool callbacks) -> void;
+  auto pipeReceive(bool wait, bool callbacks) -> void;
+  auto mailboxWaiters(const Mailbox& mailbox) -> std::vector<Thread*>;
+  auto mailboxLink(const Mailbox& mailbox) -> void;
+  auto mailboxReceive(bool callbacks) -> void;
+  auto sceKernelCreateMsgPipe() -> void;
+  auto sceKernelDeleteMsgPipe() -> void;
+  auto sceKernelSendMsgPipe() -> void;
+  auto sceKernelSendMsgPipeCB() -> void;
+  auto sceKernelTrySendMsgPipe() -> void;
+  auto sceKernelReceiveMsgPipe() -> void;
+  auto sceKernelReceiveMsgPipeCB() -> void;
+  auto sceKernelTryReceiveMsgPipe() -> void;
+  auto sceKernelCancelMsgPipe() -> void;
+  auto sceKernelReferMsgPipeStatus() -> void;
+  auto sceKernelCreateMbx() -> void;
+  auto sceKernelDeleteMbx() -> void;
+  auto sceKernelSendMbx() -> void;
+  auto sceKernelReceiveMbx() -> void;
+  auto sceKernelReceiveMbxCB() -> void;
+  auto sceKernelPollMbx() -> void;
+  auto sceKernelCancelReceiveMbx() -> void;
+  auto sceKernelReferMbxStatus() -> void;
+
   //sas.cpp: sceSasCore, the sound library's software synthesizer, silent for now: its voices keep their parameters,
   //envelopes and places in their samples, and end as they would, but nothing is mixed
   struct Sas {
@@ -877,6 +939,59 @@ struct Kernel {
   auto __sceSasRevEVOL() -> void;
   auto __sceSasRevVON() -> void;
 
+  //mpeg.cpp: sceMpeg, movies set up but never played (no video decoder yet), so games skip them
+  auto sceMpegInit() -> void;
+  auto sceMpegFinish() -> void;
+  auto sceMpegRingbufferQueryMemSize() -> void;
+  auto sceMpegQueryMemSize() -> void;
+  auto sceMpegRingbufferConstruct() -> void;
+  auto sceMpegRingbufferDestruct() -> void;
+  auto sceMpegRingbufferAvailableSize() -> void;
+  auto sceMpegRingbufferPut() -> void;
+  auto sceMpegCreate() -> void;
+  auto sceMpegDelete() -> void;
+  auto sceMpegQueryStreamOffset() -> void;
+  auto sceMpegQueryStreamSize() -> void;
+  auto sceMpegRegistStream() -> void;
+  auto sceMpegUnRegistStream() -> void;
+  auto sceMpegMallocAvcEsBuf() -> void;
+  auto sceMpegFreeAvcEsBuf() -> void;
+  auto sceMpegInitAu() -> void;
+  auto sceMpegFlushAllStream() -> void;
+  auto sceMpegFlushStream() -> void;
+  auto sceMpegGetAvcAu() -> void;
+  auto sceMpegGetAtracAu() -> void;
+  auto sceMpegGetPcmAu() -> void;
+  auto sceMpegAvcDecodeMode() -> void;
+  auto sceMpegChangeGetAuMode() -> void;
+  auto sceMpegQueryAtracEsSize() -> void;
+  auto sceMpegAvcDecode() -> void;
+  auto sceMpegAvcDecodeStop() -> void;
+  auto sceMpegAvcDecodeFlush() -> void;
+  auto sceMpegAvcQueryYCbCrSize() -> void;
+  auto sceMpegAvcInitYCbCr() -> void;
+  auto sceMpegAvcDecodeYCbCr() -> void;
+  auto sceMpegAvcDecodeStopYCbCr() -> void;
+  auto sceMpegAvcCsc() -> void;
+  auto sceMpegAtracDecode() -> void;
+
+  //atrac.cpp: sceAtrac3plus, every stream refused as unreadable (no decoder yet), so games go without music
+  u32 atracIDs = 0;  //the IDs handed out, a bit each (0-5)
+  auto sceAtracGetAtracID() -> void;
+  auto sceAtracReleaseAtracID() -> void;
+  auto sceAtracSetDataAndGetID() -> void;
+  auto sceAtracSetData() -> void;
+  auto sceAtracNoStream() -> void;
+
+  //net.cpp: the network libraries, with the wireless LAN switched off
+  auto sceNetDone() -> void;
+  auto sceNetUnavailable() -> void;
+  auto sceNetGetLocalEtherAddr() -> void;
+  auto sceNetEtherNtostr() -> void;
+  auto sceNetEtherStrton() -> void;
+  auto sceNetAdhocctlGetState() -> void;
+  auto sceNetEmptyList() -> void;
+
   //utility.cpp: the system's dialogs, one at a time, and the optional modules loaded
   struct Dialog {
     u32 kind = 0;          //the last started (0: none yet)
@@ -923,6 +1038,8 @@ struct Kernel {
   auto sceUtilityUnloadModule() -> void;
   auto sceUtilityLoadNetModule() -> void;
   auto sceUtilityUnloadNetModule() -> void;
+  auto sceUtilityLoadAvModule() -> void;
+  auto sceUtilityUnloadAvModule() -> void;
   auto sceUtilityGetSystemParamString() -> void;
   auto sceUtilitySetSystemParamString() -> void;
 
@@ -986,6 +1103,14 @@ struct Kernel {
   auto sceRtcGetCurrentTick() -> void;
   auto sceRtcGetTickResolution() -> void;
   auto sceKernelCacheUnneeded() -> void;
+  auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
+  auto sceRtcGetCurrentClock() -> void;
+  auto sceRtcGetCurrentClockLocalTime() -> void;
+  auto sceRtcGetTime_t() -> void;
+  auto sceOpenPSIDGetOpenPSID() -> void;
+  auto sceKernelIsCpuIntrEnable() -> void;
+  auto sceKernelMemset() -> void;
+  auto sceKernelMemcpy() -> void;
 
   //modules.cpp: the modules (PRXs) a program loads besides itself
   //(Unloading: its module_stop runs as it unloads itself, and it goes once that ends)

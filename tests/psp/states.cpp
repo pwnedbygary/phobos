@@ -192,6 +192,8 @@ static auto stateFields() -> void {
   u32 fixedID = a.call("sceKernelCreateFpl", {a.string("fpl"), 2, 0, 16, 2, 0});
   u32 variableID = a.call("sceKernelCreateVpl", {a.string("vpl"), 2, 0, 0x100, 0});
   u32 spareID = a.call("sceKernelCreateFpl", {a.string("spare"), 2, 0, 16, 1, 0});
+  u32 pipeID = a.call("sceKernelCreateMsgPipe", {a.string("pipe"), 2, 0, 0x100, 0});
+  u32 mailboxID = a.call("sceKernelCreateMbx", {a.string("box"), 0, 0});
   u32 file = a.call("sceIoOpen", {a.string("ms0:/A.TXT"), 0x0001, 0});
   u32 other = a.call("sceIoOpen", {a.string("ms0:/B.TXT"), 0x0001, 0});
   u32 folder = a.call("sceIoDopen", {a.string("ms0:/LIST")});
@@ -299,7 +301,20 @@ static auto stateFields() -> void {
   auto& variablePool = k.pools[variableID];
   auto& sparePool = k.pools[spareID];
   auto& sasVoice = k.sas.voices[3];
+  auto& pipe = k.pipes[pipeID];
+  auto& mailbox = k.mailboxes[mailboxID];
   std::vector<std::pair<std::string, std::function<void()>>> more = {
+    //a message pipe, its buffer moved to a block of its own and halved, holding bytes; a mailbox holding a packet
+    {"pipe name", [&] { pipe.name += "x"; }}, {"pipe attributes", [&] { pipe.attributes ^= 1; }},
+    {"pipe block and address", [&] {
+      auto block = k.allocate(0x100, 0, 0, "another pipe buffer");
+      pipe.block = block->uid, pipe.address = block->address;
+    }},
+    {"pipe size", [&] { pipe.size = 0x80; }}, {"pipe start", [&] { pipe.start = 5; }},
+    {"pipe used", [&] { pipe.used = 7; }},
+    {"mailbox name", [&] { mailbox.name += "x"; }}, {"mailbox attributes", [&] { mailbox.attributes ^= 1; }},
+    {"mailbox messages", [&] { mailbox.messages.push_back(0x0880'1000); }},
+    {"atracIDs", [&] { k.atracIDs = 5; }}, {"dispatchSuspended", [&] { k.dispatchSuspended = true; }},
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
     //(a stack is a block of its own, of its size: thread one's shrinks with its block, then moves to the spare)
@@ -632,6 +647,48 @@ static auto stateFields() -> void {
   refuses("a vertical blank handler on sub-interrupt 18, the display driver's", [&] {
     k.vblankSubs[18].function = 0x0880'3000;
   });
+  //message pipes and mailboxes as their functions never leave them
+  auto pipeOne = [&]() -> Kernel::MessagePipe& { return k.pipes.at(pipeID); };
+  refuses("a pipe under another's ID", [&] { pipeOne().uid ^= 1; });
+  refuses("a pipe's ID not handed out yet", [&] {
+    auto copy = pipeOne();
+    copy.uid = k.nextUID, copy.block = 0, copy.address = 0, copy.size = 0, copy.start = copy.used = 0;
+    k.pipes[k.nextUID] = copy;
+  });
+  refuses("a pipe holding more than its buffer", [&] { pipeOne().used = pipeOne().size + 1; });
+  refuses("a pipe's ring starting past its buffer", [&] { pipeOne().start = pipeOne().size; });
+  refuses("a pipe without a buffer holding bytes", [&] {
+    pipeOne().block = 0, pipeOne().address = 0, pipeOne().size = 0;
+  });
+  refuses("a pipe's buffer not at its block", [&] { pipeOne().address += 0x10; });
+  refuses("a pipe's buffer bigger than its block", [&] { pipeOne().size = 0x200; });
+  refuses("a pipe's block a pool's", [&] {
+    auto& pool = k.pools.at(fixedID);
+    auto block = std::find_if(k.blocks.begin(), k.blocks.end(), [&](auto& b) { return b.uid == pool.block; });
+    pipeOne().block = block->uid, pipeOne().address = block->address, pipeOne().size = 16, pipeOne().start = 0;
+    pipeOne().used = 0;
+  });
+  refuses("a mailbox's packet queued twice", [&] { k.mailboxes.at(mailboxID).messages.push_back(0x0880'1000); });
+  refuses("a mailbox's packet where there's no memory", [&] { k.mailboxes.at(mailboxID).messages.push_back(16); });
+  refuses("a thread waiting on a pipe that isn't there", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::PipeSend, thread.waitID = semaphore;
+  });
+  refuses("a thread waiting on a pipe for more than its buffer", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::PipeReceive, thread.waitID = pipeID;
+    thread.waitCount = 0x81, thread.waitDone = 0;
+  });
+  refuses("a thread waiting on a pipe having moved it all", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::PipeReceive, thread.waitID = pipeID;
+    thread.waitCount = 0x10, thread.waitDone = 0x10;
+  });
+  refuses("a thread waiting on a mailbox that isn't there", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Mailbox, thread.waitID = semaphore;
+  });
+  refuses("ATRAC IDs past six", [&] { k.atracIDs = 0x40; });
   //sceSas as its functions never leave it
   using Sas = Kernel::Sas;
   refuses("a sas grain it doesn't take", [&] { k.sas.grain = 0x5c; });
