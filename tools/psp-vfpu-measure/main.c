@@ -536,7 +536,8 @@ static int measureDivide(void) {
 }
 
 //The FPU under a rounding mode (FCSR bits 0-1: 0 nearest, 1 toward zero, 2 up, 3 down), set just for the one
-//instruction. Everything else in FCSR is cleared for it (so no exception can be enabled), and put back after.
+//instruction. Its flags, enables and causes (bits 2-17) are cleared for it, so no exception can be enabled; the
+//bits above (flush to zero among them) stay as they were. All of FCSR is put back after.
 static unsigned int fcsrFor(unsigned int mode) {
   unsigned int fcsr;
   __asm__ volatile("cfc1 %0, $31\n" : "=r"(fcsr));

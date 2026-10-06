@@ -868,6 +868,26 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the user's measurements, round 2 and the GE — 2026-10-04
+
+Branch `cursor/psp-measured-2b67`, stacked on `cursor/psp-vfpu-awake-2b67` (for stack #106). The user ran VFPU
+rounds 1 and 2 and the GE program on their PSP; the raw results are in `.local/psp-measure-2026-10-04/` (not in the
+repository), their SHA-256 and manifests in `tests/allegrex/measured/` (`SHA256SUMS2`, `manifest2.txt`, `ops.txt`)
+and `tests/psp/measured/`. Findings written up in docs/psp-vfpu-measurements.md ("Round 2") and docs/psp-core.md
+("Results from the user's PSP"):
+- round 1 repeats byte for byte; `vh2f`/`vf2h` exact; division by zero's results (the core's `divu` LO is wrong);
+  both FPU tests switched the PSP off twice and were given up on (likely special inputs; a probe is next);
+- the recorder: 963 of 1216 entries match. The core reads matrix operands the other way round (`vmmul` gives
+  M000 × M100 where the core gives M100 × M000; `vtfm`/`vhtfm` dot columns, the core rows), the most important fix;
+  then NaN results, kept denormals, NaNs in comparisons, some prefixes (6 entries where the core leaves a lane
+  unwritten), and rounding; `vlog2` above 4 and the adders now have the data for their fits;
+- the GE: 40 of 63 picture files identical (blending, texture functions, dithering, stencil, formats), the controller
+  as uOFW reads it; of the 23 that differ, 21 differ from PPSSPP's software renderer at the same pixels: coverage,
+  the rounding onto the screen (PPSSPP's +0.375 is wrong), interpolation, the filter, lighting's rounding by a level,
+  and a depth buffer laid out differently in VRAM. Sprite edges measured: columns at 9/16, rows top 8/16, bottom 9/16.
+
+Next: the fixes, one at a time against these files, the matrix orientation first.
+
 ## PSP core: the VFPU measurement keeps the PSP awake — 2026-10-04
 
 Branch `cursor/psp-vfpu-awake-2b67`, stacked on `cursor/psp-lighting-2b67` (for stack #106). The user's first round-2

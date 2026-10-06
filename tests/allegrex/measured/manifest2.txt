@@ -1,0 +1,25 @@
+psp-vfpu-measure round 2
+firmware devkit version 06060110
+spread-out inputs: state = state * 1664525 + 1013904223 from the seed, taking each new state
+vlog2-4-8.bin: 8388608 results; vlog2.q of 0x40800000 + k, k < 2^23 (from 4 up to 8)
+vlog2-16-32.bin: 8388608 results; vlog2.q of 0x41800000 + k, k < 2^23 (from 16 up to 32)
+vlog2-256-512.bin: 8388608 results; vlog2.q of 0x43800000 + k, k < 2^23 (from 2^8 up to 2^9)
+vlog2-2p16.bin: 8388608 results; vlog2.q of 0x47800000 + k, k < 2^23 (from 2^16 up to 2^17)
+vlog2-2p32.bin: 8388608 results; vlog2.q of 0x4f800000 + k, k < 2^23 (from 2^32 up to 2^33)
+vlog2-2p64.bin: 8388608 results; vlog2.q of 0x5f800000 + k, k < 2^23 (from 2^64 up to 2^65)
+vdot-one.bin: 262144 results; vdot.q, seed 31: one product (dotOne)
+vdot-two.bin: 1048576 results; vdot.q, seed 32: two products (dotTwo)
+vdot-close.bin: 1048576 results; vdot.q, seed 33: four products of similar size (dotClose)
+vdot-short.bin: 262144 results; vdot.q, seed 34: exact products of 8-bit significands (dotShort)
+vhdp-close.bin: 262144 results; vhdp.q, seed 35: as vdot-close (dotClose)
+vfad-close.bin: 1048576 results; vfad.q, seed 36: four numbers of similar size (sumClose)
+vfad-two.bin: 262144 results; vfad.q, seed 37: two numbers, the rest zero (sumTwo)
+vavg-close.bin: 262144 results; vavg.q, seed 38: as vfad-close (sumClose)
+the adding tests draw each result's inputs lane 0 first, s then t (see main.c: dotOne, dotTwo, dotClose, dotShort, sumClose, sumTwo); one result per quad or pair of quads
+vh2f-all.bin: vh2f.s of (2j + 1) << 16 | 2j for j < 32768: per j, lanes 0 and 1
+vf2h-spread.bin: vf2h.q of spread-out quads, seed 22: per quad, result lanes 0 and 1
+ipu-divide.bin: per pair (32 chosen numbers each with each, then the generator from 21): a, b, div lo, div hi, divu lo, divu hi
+fpu-convert.bin: per input (32 specials, then mixed() from 23): x, then for FCSR rounding modes 0-3: cvt.w.s, round.w.s, trunc.w.s, ceil.w.s, floor.w.s
+fpu-arith.bin: per pair (mixed() from 24): a, b, then for rounding modes 0-3: add.s, sub.s, mul.s, div.s, sqrt.s of a
+ops.bin: the instruction recorder (main.c, measureOps; ops.txt lists its entries)
+<name>.stopped: a test that didn't finish twice (the PSP stopped during it), given up on: what it wrote
