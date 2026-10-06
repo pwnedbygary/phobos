@@ -1,5 +1,6 @@
-//[Phobos] v134: the tape's samples are left out and the PPI's port C is kept, so older states don't load.
-static const string SerializerVersion = "v134";
+//[Phobos] v135: the Expansion Slot is left empty, and a state holds the board of each slot with a cartridge in,
+//so states from when the game was in both slots don't load. v134 left out the tape's samples and kept port C.
+static const string SerializerVersion = "v135";
 
 auto System::serialize(bool synchronize) -> serializer {
   if(synchronize) scheduler.enter(Scheduler::Mode::Synchronize);
