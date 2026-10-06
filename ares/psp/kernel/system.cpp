@@ -269,7 +269,12 @@ auto Kernel::writeDate(u32 address, u64 microseconds, bool local) -> bool {
   if(!memory.reaches(address, 16)) return false;
   std::time_t seconds = std::time_t(microseconds / 1'000'000);
   std::tm when{};
+  #if defined(PLATFORM_WINDOWS)
+  //Windows' thread-safe pair: the arguments the other way round, 0 for success
+  if(local ? localtime_s(&when, &seconds) : gmtime_s(&when, &seconds)) return false;
+  #else
   if(!(local ? localtime_r(&seconds, &when) : gmtime_r(&seconds, &when))) return false;
+  #endif
   u16 fields[6] = {u16(when.tm_year + 1900), u16(when.tm_mon + 1), u16(when.tm_mday), u16(when.tm_hour),
                    u16(when.tm_min), u16(when.tm_sec)};
   for(u32 n = 0; n < 6; n++) memory.write(2, address + n * 2, fields[n]);
