@@ -179,15 +179,24 @@ auto Kernel::sceKernelUtilsMt19937UInt() -> void {
   result(y);
 }
 
-//(format, ...): the kernel's printf, to the program's output: %d, %i, %u, %x, %X, %p, %c, %s and %%, with a width
-//(zeros first to pad with zeros); a long's l is skipped, a 64-bit number isn't read.
+//(format, ...): the kernel's printf, to the program's output: %d, %i, %u, %x, %X, %p, %c, %s and %%, with flags ('-'
+//to pad on the right, '0' to pad a number with zeros) and a width; a long's l is skipped, a 64-bit number isn't read.
+//A field is never wider than its room, 63 characters for a number and 63 past a string's text, where it was always
+//cut: the width is cut to that before the field is made, as snprintf pads a field to its full width before cutting
+//it (two fields 400,000,000 wide took 129 ms, and a format full of fields 2e9 wide would hold the thread a minute).
 auto Kernel::sceKernelPrintf() -> void {
   std::string format = memory.readString(arg(0), 4_KiB), text;
   u32 next = 1;
   for(size_t n = 0; n < format.size(); n++) {
     if(format[n] != '%' || n + 1 == format.size()) { text += format[n]; continue; }
-    std::string spec = "%";
-    while(++n < format.size() && strchr("0123456789-", format[n])) spec += format[n];
+    size_t start = n;
+    std::string flags;
+    while(++n < format.size() && (format[n] == '-' || format[n] == '0')) flags += format[n];
+    u32 width = 0;
+    for(; n < format.size() && format[n] >= '0' && format[n] <= '9'; n++) {
+      width = std::min<u32>(width * 10 + (format[n] - '0'), 4_KiB);  //(past 4 KiB is past any field's room)
+    }
+    std::string spec = format.substr(start, n - start);  //as written, for a conversion there isn't
     while(n < format.size() && format[n] == 'l') n++;
     if(n == format.size()) break;
     char kind = format[n], piece[64];
@@ -195,14 +204,16 @@ auto Kernel::sceKernelPrintf() -> void {
     if(kind == '%') text += '%';
     else if(kind == 's') {
       std::string string = memory.readString(value, 1_KiB);
-      std::vector<char> padded(string.size() + 64);
-      std::snprintf(padded.data(), padded.size(), (spec + "s").c_str(), string.c_str());
-      text += padded.data();
+      u32 wide = std::min<u32>(width, string.size() + 63);
+      std::string pad(wide > string.size() ? wide - string.size() : 0, ' ');
+      text += flags.find('-') == std::string::npos ? pad + string : string + pad;
     }
     else if(kind == 'c') text += char(value);
     else if(strchr("diuxXp", kind)) {
       if(kind == 'p') kind = 'x';
-      std::snprintf(piece, sizeof(piece), (spec + kind).c_str(), kind == 'd' || kind == 'i' ? s32(value) : value);
+      width = std::min<u32>(width, sizeof(piece) - 1);
+      std::string cut = "%" + flags + (width ? std::to_string(width) : "") + kind;
+      std::snprintf(piece, sizeof(piece), cut.c_str(), kind == 'd' || kind == 'i' ? s32(value) : value);
       text += piece;
     } else text += spec + kind;
   }

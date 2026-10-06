@@ -426,14 +426,33 @@ static auto mersenneTwister() -> void {
   CHECK(value, 4'123'659'995u);
 }
 
-//The kernel's printf, to the program's output; a DMA copy (nothing, or memory that isn't there, refused); the
-//wireless LAN's switch off and its address made up.
+//The kernel's printf, to the program's output: with widths far past a field's room (a number's 63 characters, 63
+//past a string's text) too, each field cut to its room at once (snprintf padded each to its full 2e9 first: these
+//ten took minutes, built with the sanitizers), and a run of 20 digits taken as one more such width. A DMA copy
+//(nothing, or memory that isn't there, refused); the wireless LAN's switch off and its address made up.
 static auto oddsAndEnds() -> void {
   KernelMachine m;
   u32 format = m.string("%s=%d %5x|%-3u|%03X%c %p 100%%\n");
   m.call("sceKernelPrintf", {format, m.string("n"), u32(-7), 0xab, 4, 0x1f, 'z', 0x0880'0000});
   CHECK(m.output == "n=-7    ab|4  |01Fz 8800000 100%\n", true);
   if(m.output != "n=-7    ab|4  |01Fz 8800000 100%\n") std::printf("  printf: [%s]\n", m.output.c_str());
+  std::string wide, expected;
+  for(u32 n = 1; n <= 8; n++) {  //seven arguments, then 0
+    wide += "%2000000000d|";
+    expected += std::string(62, ' ') + char('0' + n % 8) + "|";
+  }
+  wide += "%-2000000000s|%2000000000x";  //a string at 0, which is nothing; 0
+  expected += std::string(63, ' ') + "|" + std::string(62, ' ') + "0";
+  m.output.clear();
+  auto start = std::chrono::steady_clock::now();
+  m.call("sceKernelPrintf", {m.string(wide), 1, 2, 3, 4, 5, 6, 7});
+  CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(250), true);
+  CHECK(m.output == expected, true);
+  if(m.output == expected) {  //(not before: snprintf, given that width, would leave the field unwritten)
+    m.output.clear();
+    m.call("sceKernelPrintf", {m.string("%-99999999999999999999d|"), 5});
+    CHECK(m.output == "5" + std::string(62, ' ') + "|", true);
+  }
   m.system.memory.copyIn(R, "abcdefgh", 8);
   CHECK(m.call("sceDmacMemcpy", {R + 0x100, R, 8}), 0);
   CHECK(m.system.memory.readString(R + 0x100, 8) == "abcdefgh", true);
