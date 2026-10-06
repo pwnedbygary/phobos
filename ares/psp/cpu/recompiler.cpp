@@ -15,10 +15,13 @@
 //Throws away every compiled block and starts the code memory afresh.
 auto Allegrex::Recompiler::reset() -> void {
   sections.clear();
+  writePages.clear();
   if(!enabled) return;
   if(!allocator) allocator.resize(32_MiB, bump_allocator::executable);
   allocator.release();
   sections.resize(SectionCount);
+  writePages.resize(SectionCount);
+  if(self.pages) std::copy(self.pages, self.pages + SectionCount, writePages.begin());
 }
 
 //Memory changed at address, so code compiled from there may be stale: its whole section goes, and is compiled
@@ -26,7 +29,9 @@ auto Allegrex::Recompiler::reset() -> void {
 //write, the CPU's and also the ones it doesn't make (DMA, or the HLE kernel loading a module).
 auto Allegrex::Recompiler::invalidate(u32 address) -> void {
   if(sections.empty()) return;
-  sections[(address & 0x1fff'ffff) / SectionSize].reset();
+  u32 index = (address & 0x1fff'ffff) / SectionSize;
+  sections[index].reset();
+  if(self.pages) writePages[index] = self.pages[index];  //no code there now: stores may go straight to it again
 }
 
 auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
@@ -35,6 +40,7 @@ auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
   u32 last = ((address + size - 1) & 0x1fff'ffff) / SectionSize;
   for(u32 index = first;; index = (index + 1) % SectionCount) {
     sections[index].reset();
+    if(self.pages) writePages[index] = self.pages[index];
     if(index == last) break;
   }
 }
@@ -60,7 +66,8 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
   //Out of room for new code: start over. (Done before anything below holds on to a section.)
   if(allocator.available() < 1_MiB) reset();
 
-  auto& section = sections[(address & 0x1fff'ffff) / SectionSize];
+  u32 index = (address & 0x1fff'ffff) / SectionSize;
+  auto& section = sections[index];
   //Code compiled through another mirror of this memory knows the wrong addresses (the return addresses it stores,
   //where its jumps go), so that section starts afresh. Games run their code through one mirror, so this doesn't
   //happen back and forth.
@@ -69,7 +76,10 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
     section->mirror = address >> 29;
   }
   auto& code = section->blocks[address % SectionSize / 4];
-  if(!code) code = emit(address);
+  if(!code) {
+    code = emit(address);
+    writePages[index] = nullptr;  //this page holds compiled code now, so stores to it must go through write()
+  }
   return code;
 }
 
@@ -94,14 +104,16 @@ auto Allegrex::Recompiler::emit(u32 address) -> u8* {
         count++;
         u32 delaySlot = self.read(Word, address);
         //(A branch in a delay slot has no defined meaning on MIPS; the interpreter's is used.)
-        if(isBranch(delaySlot) || !emitInstruction(delaySlot)) emitInterpreter(address, delaySlot, count, true);
+        if(isBranch(delaySlot) || !emitInstruction(address, delaySlot, count, true)) {
+          emitInterpreter(address, delaySlot, count, true);
+        }
       } else {
         emitInterpreter(address, instruction, count, false);
       }
       break;
     }
 
-    if(emitInstruction(instruction)) {
+    if(emitInstruction(address, instruction, count, false)) {
       pcStored = false;
     } else {
       emitInterpreter(address, instruction, count, false);

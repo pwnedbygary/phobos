@@ -43,6 +43,13 @@ struct Allegrex {
   virtual auto read(u32 size, u32 address) -> u32 = 0;
   virtual auto write(u32 size, u32 address, u32 data) -> void = 0;
 
+  //The page table, also set up by the owner: for each 4 KiB page of physical memory (the address's low 29 bits),
+  //where that page is in the host's memory, or nullptr for memory the owner handles in read() and write() (such as
+  //hardware registers). Compiled code loads and stores straight through it, skipping read() and write(), so it
+  //may only list plain memory, laid out as the PSP sees it (little-endian). Without it, compiled code calls the
+  //interpreter for every load and store. Changing it later needs a recompiler.reset().
+  u8** pages = nullptr;
+
   //Why the CPU stopped a program. The numbers are the ones MIPS uses in its Cause register.
   enum class Exception : u32 {
     AddressLoad         =  4,  //an instruction fetch or load from an address that isn't aligned to its size
@@ -453,16 +460,25 @@ struct Allegrex {
     auto endsBlock(u32 instruction) const -> bool;
 
     //recompiler-ipu.cpp
-    auto emitInstruction(u32 instruction) -> bool;
+    auto emitInstruction(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
     auto emitSPECIAL(u32 instruction) -> bool;
     auto emitBranch(u32 address, u32 instruction, u32 count) -> bool;
     auto emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void;
     auto emitJump(u32 target) -> void;
 
+    //recompiler-memory.cpp
+    auto emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitMemory(u32 address, u32 instruction, u32 count, bool delaySlot, bool store, u32 alignment, s16 offset,
+                    const std::function<void ()>& access) -> void;
+
     bool enabled = false;
     u32 executed = 0;  //how many instructions the last block ran: each block sets it as it leaves
     bump_allocator allocator;
     std::vector<std::unique_ptr<Section>> sections;
+
+    //The page table compiled stores use: the CPU's (pages above), except that pages holding compiled code are
+    //left out, so stores there go through write() instead, whose owner then drops that code (invalidate()).
+    std::vector<u8*> writePages;
   } recompiler{*this};
 };
 

@@ -5,6 +5,7 @@
 
 #include "harness.hpp"
 
+#include <chrono>
 #include <string>
 
 //Inside the harness's namespace, so register names like s1 win over ares's integer types of the same name.
@@ -562,6 +563,21 @@ auto recompilerCases() -> void {
   CHECK(mirrors.gpr(s1), Base + 0x4c);
   CHECK(mirrors.gpr(s0), 0x40000000 | (Base + 0x4c));
 
+  // Loads and stores: compiled ones reach RAM through the page table without write(), and the page left out of it
+  // through write(); both give the same results as the interpreter.
+  Machine memory;
+  memory.run({lui(s0, Data >> 16), ori(s0, s0, Data & 0xffff), lui(s1, Unmapped >> 16), ori(s1, s1, Unmapped & 0xffff),
+              sw(t0, 0, s0), sh(t0, 6, s0), sb(t0, 9, s0), lw(t1, 0, s0), lhu(t2, 6, s0), lb(t3, 9, s0),
+              sw(t0, 0, s1), lw(t4, 0, s1), lh(t5, 2, s1)},
+             [](Allegrex& s) { s.ipu.r[t0] = 0x89abcdef; });
+  CHECK(memory.gpr(t1), 0x89abcdef);
+  CHECK(memory.gpr(t2), 0xcdef);
+  CHECK(memory.gpr(t3), 0xffffffef);
+  CHECK(memory.gpr(t4), 0x89abcdef);
+  CHECK(memory.gpr(t5), 0xffff89ab);
+  CHECK(memory.ram.read32(Data + 4) >> 16, 0xcdef);
+  CHECK(memory.cpu.writes, memory.recompile ? 1 : 4);  // on the recompiler, only the store to the unmapped page
+
   // An exception in the middle of a block: what ran before it stays done, nothing after it runs, pc is past it.
   Machine fault;
   fault.run({addiu(s0, zero, 1), lw(t0, 1, zero), addiu(s1, zero, 1)});
@@ -570,6 +586,33 @@ auto recompilerCases() -> void {
   CHECK(fault.exceptions.size(), 1);
   CHECK(fault.cpu.ipu.pc, Base + 8);
   CHECK(fault.cpu.scc.r[8], 1);
+}
+
+// Not a test: with ALLEGREX_BENCHMARK set, times a loop of loads, stores and arithmetic on the interpreter, on the
+// recompiler without a page table (its loads and stores call the interpreter), and on the recompiler. For numbers
+// that mean something, build without the sanitizers: SANITIZE= ALLEGREX_BENCHMARK=1 tests/allegrex/run-tests.sh
+auto benchmark() -> void {
+  constexpr uint64_t Instructions = 50'000'000;
+  const char* names[] = {"interpreter", "recompiler without a page table", "recompiler"};
+  for(uint32_t engine : {0, 1, 2}) {
+    bool recompile = engine > 0;
+    Machine m;
+    if(engine == 1) m.cpu.pages = nullptr;
+    uint32_t address = Base;
+    for(uint32_t word : {lw(t0, 0, s0), addiu(t0, t0, 1), sw(t0, 0, s0), addu(t1, t1, t0), sll(t2, t1, 3),
+                         xor_(t3, t2, t1), andi(t4, t3, 0xff), lbu(t5, 5, s0), sltu(t6, t4, t5),
+                         beq(zero, zero, -10), addiu(t7, t7, 1)}) {
+      m.ram.write32(address, word);
+      address += 4;
+    }
+    m.cpu.recompiler.enabled = recompile;
+    m.cpu.power(Base);
+    m.cpu.ipu.r[s0] = Data;
+    auto start = std::chrono::steady_clock::now();
+    uint64_t executed = m.cpu.run(Instructions);
+    std::chrono::duration<double> seconds = std::chrono::steady_clock::now() - start;
+    std::printf("%s: %.0f million instructions a second\n", names[engine], executed / seconds.count() / 1e6);
+  }
 }
 
 // Random programs, each run by the interpreter and by the recompiler, which must end in exactly the same state.
@@ -647,10 +690,12 @@ auto matchesInterpreter() -> void {
         continue;
       }
 
-      // memory: the 256 bytes of data at s7, aligned, and now and then not
-      uint32_t wordOffset = random(64) * 4 + (random(30) ? 0 : 1 + random(3));
-      uint32_t halfOffset = random(128) * 2 + (random(30) ? 0 : 1);
-      uint32_t byteOffset = random(256);
+      // memory: 256 bytes of data at s7, or at s7 + 0x1000, the page left out of the page table (so compiled code
+      // reaches it through read() and write()); aligned, and now and then not
+      uint32_t region = random(4) ? 0 : 0x1000;
+      uint32_t wordOffset = region + random(64) * 4 + (random(30) ? 0 : 1 + random(3));
+      uint32_t halfOffset = region + random(128) * 2 + (random(30) ? 0 : 1);
+      uint32_t byteOffset = region + random(256);
       uint32_t word = 0;
       uint32_t vd = random(128), vs = random(128), vt = random(128), size = 1 + random(4);
       switch(random(56)) {
@@ -728,7 +773,7 @@ auto matchesInterpreter() -> void {
         break;
       }
       case 55: {  // lv.s, sv.s
-        uint32_t offset = random(64) * 4 + (random(30) ? 0 : 1 + random(3));
+        uint32_t offset = wordOffset;
         word = (random(2) ? 0x32u : 0x3au) << 26 | s7 << 21 | (vd & 31) << 16 | (offset & 0xfffc) | (vd >> 5 & 3);
         break;
       }
@@ -736,7 +781,7 @@ auto matchesInterpreter() -> void {
       code.push_back(word);
     }
 
-    uint32_t registers[32], floats[32], vectors[128], data[64];
+    uint32_t registers[32], floats[32], vectors[128], data[128];
     for(auto& r : registers) r = value();
     for(auto& f : floats) f = value();
     for(auto& v : vectors) v = value();
@@ -757,9 +802,10 @@ auto matchesInterpreter() -> void {
     Machine interpreter, recompiler;
     interpreter.recompile = false;
     recompiler.recompile = true;
-    for(uint32_t n = 0; n < 64; n++) {
-      interpreter.ram.write32(Data + n * 4, data[n]);
-      recompiler.ram.write32(Data + n * 4, data[n]);
+    for(uint32_t n = 0; n < 128; n++) {
+      uint32_t address = n < 64 ? Data + n * 4 : Unmapped + (n - 64) * 4;
+      interpreter.ram.write32(address, data[n]);
+      recompiler.ram.write32(address, data[n]);
     }
     interpreter.run(code, setup);
     recompiler.run(code, setup);
@@ -808,6 +854,10 @@ auto matchesInterpreter() -> void {
 
 int main() {
   using namespace allegrex_test;
+  if(std::getenv("ALLEGREX_BENCHMARK")) {
+    benchmark();
+    return 0;
+  }
   Tests tests = {
     {"alu", alu}, {"shifts", shifts}, {"allegrex bits", allegrexBits}, {"multiply/divide", multiplyDivide},
     {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"branches", branches}, {"syscalls", syscalls},
