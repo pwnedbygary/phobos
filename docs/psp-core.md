@@ -1180,6 +1180,9 @@ exactly there.
   - an ID or a file number at or past the next one to be handed out, or a map's key that isn't its object's ID; IDs
     or file numbers counted past 2^31 (they're positive 32-bit numbers, and stop short of that: newUID(), newFile());
     a running thread that isn't there;
+  - memory as the kernel never hands it out (since part 17's final review): a block outside the user partition, a
+    thread's stack that isn't a block of its own, of its size, or a block two owners claim (threads' stacks, memory
+    pools, modules and the program);
   - what would hang the machine, or keep it busy for hours: a sound frame or more owed, a clock past a century, the
     next vertical blank more than a frame ahead or a frame or more behind, a sampling cycle sceCtrlSetSamplingCycle
     refuses or its next sample more than a cycle ahead or a frame or more behind, a wait for 64 controller samples or
@@ -1388,8 +1391,12 @@ the code they replace.
   registered with; time goes on for them while every thread waits (Lumines' main task waits on its handler). While
   they can't run (interrupts held off, or another call running), the blank stays pending, once, as the PSP's
   interrupt controller keeps an interrupt: however many blanks go by, each handler runs once when they can. (A
-  review had found the previous code queueing a call for every blank held off: 600 after 600.) Untested on a PSP:
-  the GE's sub-interrupts beyond 0 (all 32 are the program's here), and enabling on interrupts other than 30.
+  review had found the previous code queueing a call for every blank held off: 600 after 600.) It stays pending too
+  while the last blank's handlers still wait their turn or run (each call says whether it's a vertical blank's), so
+  handlers slower than a frame run back to back, the queue never holding more than one blank's: the final review
+  found two 20 ms handlers queued again at every return, 97 calls waiting by frame 120, all of them saved in states.
+  Untested on a PSP: the GE's sub-interrupts beyond 0 (all 32 are the program's here), and enabling on interrupts
+  other than 30.
 - **Sound output** (audio.cpp), rewritten clean-room from a behavior specification drawn from pspautotests' audio/*
   and intr/waits results (recorded on a PSP) and pspsdk's pspaudio.h. The eight mixer channels: reserving (-1 or any
   negative number for the highest free channel, one released but still playing out passed over), releasing (refused
@@ -1407,7 +1414,11 @@ the code they replace.
   sceAudioSRC*, one channel reached two ways, at 8-48 kHz or 0 for 44.1): two buffers armed at most, transferred one
   after the other at its rate; an output arms its buffer and waits for a completion (one pending returns at once, and
   starting from idle makes one), so a steady stream returns a buffer apart; a null output waits until everything
-  armed has played; releasing is refused while anything is armed. From an interrupt handler or with interrupts held
+  armed has played; releasing is refused while anything is armed. A buffer's slot frees as its transfer ends, 100 µs
+  before it has been heard (the behavior specification's 8.4; pspautotests' audio/output2/rest has a 64-sample
+  buffer, 1451 µs long, read as gone after "13XX µs"): the first buffer after an idle stretch retires 100 µs short of
+  its length, and each one chained after it a whole buffer later, so the stream's pace and audio/output2/release's
+  results (still armed 1 ms on, released 2 ms on) are as they were. From an interrupt handler or with interrupts held
   off, an output that would have to wait gets ILLEGAL_CONTEXT or CAN_NOT_WAIT (an SRC output's buffer stays armed and
   plays). **The samples aren't mixed yet: the speakers get silence**, but every buffer takes its playing time, which
   is what paces the games' sound threads (Lumines' spun at full speed without it, starving its game). The mixer takes
@@ -1424,7 +1435,10 @@ the code they replace.
   lowest free block or place (a VPL keeps 32 bytes for itself and 8 before each piece, as the PSP's do; how the PSP
   chooses places isn't known here, so free sizes may differ), threads waiting in order or by priority, timeouts,
   deletion and cancelling. Creation's refusals and their order, and a VPL too small to hold anything made 4 KiB, are
-  what pspautotests' threads/fpl and threads/vpl tests expect.
+  what pspautotests' threads/fpl and threads/vpl tests expect. A waiter that leaves without being served (its
+  timeout runs out, or it's terminated, or it ends in a callback that put its wait aside) has the pool serve those
+  behind it then, as semaphores do theirs (`waiterLeft()`, since the final review): one that didn't fit had held
+  them up, and they waited for the next piece given back.
 - **The system's dialogs** (utility.cpp): one at a time, their statuses (starting, running, finished, closing) with
   PPSSPP's timings. Saves are real: a folder per save in the memory stick's PSP/SAVEDATA (`<game><save>`) holding the
   data file the game hands over, loaded back, sized (the stick's free space, 1 GiB, the save's size), listed and
@@ -1448,9 +1462,12 @@ the code they replace.
   TerminateThread, TerminateDeleteThread, Suspend/ResumeThread (a suspended thread isn't scheduled whatever its
   state), ChangeCurrentThreadAttr, GetThreadStackFreeSize (new stacks are filled with 0xff and the thread's ID written
   at their bottom, as on a PSP; the 0xff bytes are counted up from 16 bytes above the bottom, which gives
-  threads/threads/stackfree's 0xea0 and 0xaa0), ReferSemaStatus, the profilers (a retail PSP has none),
+  threads/threads/stackfree's 0xea0 and 0xaa0, counted in place rather than in a copy of the whole stack, which a
+  damaged state's 4 GiB stack had made 4 GiB), ReferSemaStatus, the profilers (a retail PSP has none),
   SysClock2USec(Wide), sceKernelLibcClock, sceRtcGetTick and CompareTick, the Mersenne Twister in the program's
-  memory, sceKernelPrintf, sceDmacMemcpy, the WLAN switch (off), sceImposeSetLanguageMode, and
+  memory, sceKernelPrintf (a field never wider than its room, 63 characters for a number and 63 past a string's
+  text, the width cut to that before snprintf sees it, which pads a field in full before cutting it: two fields
+  400,000,000 wide took 129 ms), sceDmacMemcpy, the WLAN switch (off), sceImposeSetLanguageMode, and
   sceKernelStopUnloadSelfModuleWithStatus, which ends the program when the program calls it (a C++ abort ends
   there); called from a module, it unloads that module, as part 19's sceKernelSelfStopUnloadModule does.
 - **Save states** carry all of it; the state fields test has every new field, and refuses what no machine could
@@ -1459,10 +1476,17 @@ the code they replace.
   retiring after its own time; a thread waiting on a channel that nothing will wake; a handler on a sub-interrupt
   the display driver holds; and pools that don't hold together: a fixed pool's blocks of 0 bytes, which giving one
   back divided by, or not adding up to its size, or with pieces; a variable pool with a block size or blocks; a pool
-  outside its block, or whose block isn't there; pieces outside their pool, empty or overlapping). The kernel's
+  outside its block, or whose block isn't there; pieces outside their pool, empty or overlapping). Since the final
+  review, memory as the kernel hands it out too: every block inside the user partition; each thread's stack a block
+  of its own, of its size (0x200 bytes at least); and every block one owner at most among threads' stacks, pools,
+  modules and the program (whose block is the one `start()` gives it, at its first segment's 256-byte step, and must
+  be there), so two pools on one block, or a pool inside a stack or the program's block, are refused.
+  `sceKernelFreePartitionMemory` refuses a block the kernel holds for one of those (ILLEGAL_PERMISSION), as freeing
+  it would leave its owner in memory handed out again, and the machine's own state then unloadable. The kernel's
   layout changed (threads, semaphores, callbacks, sound), so states became version 2 on this branch: one of version
   1 is refused by its header before anything is touched. They're version 3 since parts 18 and 19 merged, as their
-  branch had made a version 2 of its own.
+  branch had made a version 2 of its own, and version 4 since the final review (each call into the program says
+  whether it's a vertical blank's handler).
 
 What the games do now, on the host (the frames are the runner's PNGs, kept outside the repository):
 
@@ -1523,7 +1547,10 @@ buffers (BUSY here; intr/waits' later results show only that it doesn't wait for
 (0) and the volume scale (0x8000 full, pspsdk's PSP_AUDIO_VOLUME_MAX) for when the samples are mixed; how long a null
 buffer's count stays; the interrupt kinds, recorded once under PSPLink; and which of a bad priority and a bad thread
 sceKernelChangeThreadPriority checks first. Other waits (sceKernelDelayThread and the rest) don't refuse yet with
-interrupts held off, as intr/waits shows a PSP does: only sound's do.
+interrupts held off, as intr/waits shows a PSP does: only sound's do. Since the final review: the SRC channel's
+100 µs (the specification's "about 100 µs", from a result bucketed as "13XX"), and whether the buffers chained after
+the first keep it (here they do, so a stream's pace is a buffer's length); and what sceKernelFreePartitionMemory
+says of a block the kernel holds (ILLEGAL_PERMISSION here, not tried on a PSP).
 
 Merged with parts 18 and 19 (`cursor/psp-decrypt-2b67`, #144), which now sit under this part. Each branch had made
 the state's layout version 2, its own way, so the merged layout is version 3, and a state of version 1 or 2 is
@@ -1540,6 +1567,40 @@ the program calling it leaves) and "modules terminated threads" (both functions,
 `tests/psp/modules.cpp`, the pool's block in "state fields", and a version 2 state in `tests/psp/ares`. The merged
 tree passes its 158 groups and 228 checks; with the old sceKernelStopUnloadSelfModuleWithStatus, its options taken
 from the fourth argument, sceKernelTerminateThread not deleting, or no check of the pool's block, the new tests fail.
+
+Review (the final one): a general-purpose reviewer of the merged branch found one medium and five low findings, all
+fixed, each with a test that failed before its fix; the merge, the clean-room code and the savedata fixes checked
+out. The medium: states took each thread's stack size and address unchecked, and sceKernelGetThreadStackFreeSize
+copied the whole stack out of guest memory at each call (a state with a 0xfffff000-byte stack loaded, and the call
+would have allocated 4 GiB): the stack is read in place now, and loading checks stacks and blocks (save states,
+above). The lows: a pool's or semaphore's waiter leaving unserved left those behind it blocked (memory pools); a
+pending vertical blank queued its handlers again while the last blank's still waited (interrupt handlers); a pool's
+block was checked against nothing but the pool, so two pools on one block, or a pool inside a stack or the
+program's block, loaded (save states); the SRC channel's buffers retired at their full length, where a PSP's slot
+frees about 100 µs earlier (sound output); and sceKernelPrintf handed any width to snprintf, which padded a field
+2e9 characters wide in full before cutting it (threads and clocks). Tests: "kernel semaphores served past waiters
+that left", "pools served past waiters that left", "interrupts handlers longer than a frame" (two 20 ms handlers
+over 120 frames: two calls queued at most, where the old rule reached 100) and "audio src rest" (audio/output2/rest's
+timing, 13XX µs on both families) are new; "state fields" refuses 10 more states (thread stacks that aren't blocks
+of their own and their size, a 4 GiB stack with its block, a block below the partition, two owners for a block, the
+program's block missing) and changes the calls' new flag; "kernel thread status" (a 4 GiB stack answered in under
+100 ms), "kernel partitions" and "kernel program memory" (held blocks not freed, the state still loading), "kernel
+odds and ends" (ten fields 2e9 wide printed at once, each cut to its room), "audio src channel" and "audio draining"
+(the earlier retires) check the rest; `tests/psp/ares` refuses a version 3 state. The tree passes 162 groups and 232
+checks. Found on the way, not changed: a program spinning on the clock (sceKernelGetSystemTime and its siblings)
+sees it move only between the CPU's runs, each to the next thing due, not with each instruction, so the rest test's
+loop waits a microsecond a round where the PSP's spun.
+
+On the RP6 (build 104648, the whole stack, launched from the user's CHDs): all nine of the user's priority games
+tried now decrypt and start. SOCOM Fireteam Bravo reaches its own "No SOCOM Fireteam Bravo Data was found on the
+Memory Stick Duo" screen at 60 frames a second (then asks for sceAtrac3plus); Burnout Legends reaches its LOADING
+screen (asks for sceIoChangeAsyncPriority, sceIoPollAsync, sceIoReadAsync); Lumines runs to its log-in menus at about
+40 frames a second (asks for sceSasCore); GTA Vice City Stories and Liberty City Stories, and Midnight Club 3, ask
+for sceMpeg (video) and the asynchronous file functions; Peace Walker asks for sceRtc e7c27d1b, sceOpenPSID,
+sceDisplay 210eab3a and message pipes (ThreadManForUser 7c0dc2a0 and 74829b76); Burnout Dominator and Snoopy vs. the
+Red Baron ask for the asynchronous file functions and ad-hoc networking (sceNet*); Gunhound EX asks for sceLibFont
+and scePower 469989ad. Next: the asynchronous file functions, a silent sceSas, message pipes, sceMpeg stubs that let
+games skip their videos, and networking reported off.
 
 ## Part 18: decryption
 
@@ -1740,7 +1801,8 @@ a module); our own code.
   state made before is refused rather than misread. Loading checks each module as part 15 checks the rest: under its
   own ID, not the program's; a thread exactly while its `module_start` or `module_stop` runs, and one that's there;
   no block for a stand-in, and for another module a block of the user partition, or none, but never a thread's
-  stack, a memory pool's block (part 17's pools, since the merge) or another module's block.
+  stack, a memory pool's block (part 17's pools, since the merge) or another module's block (since part 17's final
+  review, one rule for every block: one owner at most, the program's block among them).
 
 Checked against the user's games (the system run on the Mac on their CHDs, nothing kept): Burnout Legends loads
 fourteen modules from its disc by path (seven kernel drivers, encrypted, and seven libraries, not), each Sony's and
