@@ -37,7 +37,7 @@ again exactly as the program did, so nothing has to be computed on the PSP.
 |---|---|
 | `main.c`, `Makefile` | The PSP program. |
 | `ops.py`, `ops.h` | `ops.py` writes `ops.h`, the instruction recorder's list. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
-| `compare.sh`, `compare.cpp` | Checks the core against a folder of results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place). Works on either round's files. |
+| `compare.sh`, `compare.cpp` | Checks the core against a folder of results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other). Works on either round's files. |
 | `fit.py` | Fits the model behind the maths functions (128 segments of integer coefficients per function) from the results alone, and checks it reproduces every recorded value. It gave the core's `vfpu-segments.hpp`. Needs numpy. |
 
 ## Building and running

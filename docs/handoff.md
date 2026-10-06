@@ -868,6 +868,27 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the VFPU's NaNs, denormals and comparisons, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-vfpu-nans-2b67`, stacked on `cursor/psp-vfpu-fixes-2b67` (for stack #106). Rules worked out from
+the recorder's inputs and checked on every recorded run (docs/psp-vfpu-measurements.md, round 2), all in
+ares/psp/cpu/interpreter-vfpu.cpp:
+- `vfpuOrder`: how `vmin`, `vmax`, `vsrt1`-`vsrt4`, `vsgn` and `vscmp` order values (sign and magnitude, denormals
+  as zero, a NaN past the infinity of its sign); they give back the lanes' own bits. Ties: t's lane for `vmin` and
+  `vmax`; for the sorts, the pair's first lane in both (vsrt1, vsrt2) or its second (vsrt3, vsrt4).
+- `vsat0`/`vsat1` keep NaNs and in-range lanes (denormals too; vsat0 zeroes a set sign bit); `vmov` copies bits;
+  `vsbz` leaves denormals; `vlgb` of a NaN moves its low byte up 16 bits (7 of 7 recorded).
+- The VFPU's NaN for `vavg`, `vbfy1`/`vbfy2`, `vcrs` (product sign), `vcrsp`, `vdet`, `vfad`, `vhdp`, `vhtfm`,
+  `vmmul`, `vmscl` and `vscl` (product sign), `vocp`, `vqmul`, `vsocp`, `vtfm`; an infinity's sine and cosine are
+  NaN (vsin, vcos, vnsin, vrot).
+- compare.cpp counts each recorder entry's differing words by kind, and says how many entries differ only by
+  rounding. The recorder: 1129 of 1216 entries match (963 before), 38 more only by the adders' rounding; the rest
+  are prefixed entries.
+- docs: the published finding that `vsgn`/`vscmp` see denormals was wrong (it's NaNs); corrected.
+
+Checks: Allegrex tests 56 groups (a `vfpu edges` case for each rule, interpreter and recompiler); PSP system tests;
+mutations of `vfpuOrder`'s denormal rule, vsrt3's tie and the sine of infinity each fail the tests.
+
 ## PSP core: the VFPU's matrices and divu by zero, as the PSP measured them — 2026-10-04
 
 Branch `cursor/psp-vfpu-fixes-2b67`, stacked on `cursor/psp-measured-2b67` (for stack #106). The first two fixes

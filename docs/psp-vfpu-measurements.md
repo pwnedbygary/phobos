@@ -210,14 +210,29 @@ least one.
     `vbfy2`, `vfad`, `vavg`, `vmmul`, `vhtfm4` and 20 prefixed entries. In 57 it gives a number: `vrot` (46
     entries), `vsin`, `vcos` and `vnsin` of an infinity, `vsocp` of a NaN, `vtfm3` and `vtfm4` with a NaN in the
     matrix (some of the matrix ones may be the orientation above), and one prefixed entry. Round 1's rule ("the VFPU
-    never passes a NaN through") holds for all of them, and an infinity has no sine or cosine.
+    never passes a NaN through") holds for all of them, and an infinity has no sine or cosine. The sign, checked on
+    every NaN recorded: the product of the two inputs' signs for `vscl`, `vmscl` and `vcrs` (as for `vmul`), the
+    input's for `vsin`, its opposite for `vnsin`, positive for all the others.
   - **Denormals kept:** in 59 entries the PSP keeps a denormal's bits where the core flushes it to zero: moves
-    (`vmov`), `vmin`, `vmax`, `vsat0`, `vsat1`, `vsrt2`, `vsrt3`, and prefixed instructions. Arithmetic flushes
-    denormals (round 1); moving, comparing and clamping evidently don't. Likewise `vsgn` and `vscmp` see a denormal
-    (±1 where the core gives 0), and `vsbz` leaves one as it is (the core gives 1.mantissa).
-  - **NaNs in comparisons:** `vsat0` and `vsat1` pass a NaN through unchanged, as a move would; `vmin`, `vsrt1` and
-    `vsrt4` take a negative NaN as smaller than any number (as if comparing the bits), where the core picks the
-    number; `vlgb` of a NaN gives another NaN (`0xffd20000` for `0xfffffa52`).
+    (`vmov`), `vmin`, `vmax`, `vsat0`, `vsat1`, the sorts, and prefixed instructions. Arithmetic flushes denormals
+    (round 1); moving, comparing and clamping evidently don't. `vsbz` leaves one as it is too (the core gave
+    1.mantissa).
+  - **NaNs in comparisons, and how the comparisons order:** `vmin`, `vmax`, the sorts (`vsrt1` to `vsrt4`), `vsgn`
+    and `vscmp` all order values the same way, every recorded run agreeing: as numbers, but with denormals counting
+    as zero (and -0 as +0) and a NaN past the infinity of its sign. That's the order of the bits as a sign and a
+    magnitude, the denormals squashed to zero. They give back the lanes themselves, so a denormal that wins comes out
+    as it went in. On a tie (two zeros or denormals), `vmin` and `vmax` give t's lane, and the sorts, working out
+    each lane of a pair on its own, give both lanes the same one: the pair's first for `vsrt1` and `vsrt2`, its
+    second for `vsrt3` and `vsrt4` (so two different denormals can come out as one, twice). `vsgn` and `vscmp`
+    therefore give a NaN its sign (±1, where the core gave 0), and a denormal 0, as the core did: an earlier version
+    of this page had them seeing denormals, which the inputs in `ops.bin` don't bear out. `vsat0` and `vsat1` pass a
+    NaN through unchanged and keep what's already in range; `vsat0` makes anything with its sign bit set 0, -0 and
+    negative denormals included. `vlgb` of a NaN gives a NaN of the same sign with the input's low byte moved up 16
+    bits (`0xffd20000` for `0xfffffa52`; all 7 recorded).
+  - **Fixed:** the core follows all of the above now (`vfpuOrder` and the instructions in
+    `ares/psp/cpu/interpreter-vfpu.cpp`), with a test of each rule (`vfpu edges` in `tests/allegrex/vfpu.cpp`). The
+    recorder then matches in 1129 of its 1216 entries, and 38 more differ only by the adders' rounding; what's left
+    is the prefixed entries and the adders.
   - **Prefixes:** 123 of the differing entries are the random prefix combinations; in 6 of them the core leaves a lane
     unwritten that the PSP writes (on `vrcp.q` with source and destination prefixes), so the core applies some
     prefixes differently from the hardware.
@@ -226,9 +241,9 @@ least one.
 
 ## Next
 
-- From round 2, in this order (the matrix operands' orientation and `divu`'s LO by zero are done): NaN results, kept
-  denormals and NaNs in comparisons, across the instructions above; the prefix differences (one entry at a time,
-  against `ops.bin`); then `vlog2` above 4, and the adders' model.
+- From round 2 (the matrix operands' orientation, `divu`'s LO by zero, the NaN results, kept denormals and the
+  comparisons' order are done): the prefix differences (one entry at a time, against `ops.bin`); then `vlog2` above
+  4, and the adders' model.
 - The FPU: a probe that tries one kind of value at a time, to find what the PSP refuses; then the FPU tests without
   them.
 

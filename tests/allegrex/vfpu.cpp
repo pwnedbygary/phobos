@@ -588,12 +588,87 @@ auto random() -> void {
   CHECK(masked.cpu.vfpu.r[S(3, 1, 0)], bits(7.0f));                      //masked
 }
 
+//What a PSP does with NaNs, infinities and denormals where the instructions above don't show it, from the second
+//round of measurements (docs/psp-vfpu-measurements.md, round 2); most values are from the recorder's runs. Each
+//case is one instruction word as pspdev's assembler encoded it for the recorder (tests/allegrex/measured/ops.txt),
+//on C000 (s) and C100 (t, S100 being its first lane), the result read from C200, whose unwritten lanes keep their
+//0xdead marks.
+auto edges() -> void {
+  using Quad = std::array<uint32_t, 4>;
+  constexpr uint32_t mark = 0xdead0000, one = 0x3f80'0000, minusOne = 0xbf80'0000, nan = 0x7f80'0001;
+  struct Case { const char* name; uint32_t word; Quad s, t, d; };
+  const Case cases[] = {
+    //vmin and vmax: a NaN is past the infinity of its sign; two denormals, or a denormal and a zero, tie, which
+    //gives t's lane; the lane comes out bits and all.
+    {"vmin.q", 0x6d048088, {0x00009879, 0x404179e6, 0x7aa84a08, 0x80000000},
+     {0x0000e999, 0xffffb986, 0x4119caa8, 0x00001ec1}, {0x0000e999, 0xffffb986, 0x4119caa8, 0x00001ec1}},
+    {"vmax.q", 0x6d848088, {0x00009879, 0x404179e6, 0x7aa84a08, 0x80000000},
+     {0x0000e999, 0xffffb986, 0x4119caa8, 0x00001ec1}, {0x0000e999, 0x404179e6, 0x7aa84a08, 0x00001ec1}},
+    {"vmax.q, infinities", 0x6d848088, {0x7f800000, 0x7fc00000, 0xff800000, 0x00000000},
+     {0x7f800001, 0x7f800000, 0xffffffff, 0x80000000}, {0x7f800001, 0x7fc00000, 0xff800000, 0x80000000}},
+    //The clamps keep a NaN and what's in range, denormals too; vsat0 makes a set sign bit 0.
+    {"vsat0.q", 0xd0048088, {0x7fffffff, 0x0000eca3, 0x807fffff, 0x80000000}, {}, {0x7fffffff, 0x0000eca3, 0, 0}},
+    {"vsat1.q", 0xd0058088, {0xffffd267, 0xff800000, 0x807fffff, 0x3f800001}, {},
+     {0xffffd267, minusOne, 0x807fffff, one}},
+    //The sorts: on a tie both lanes of the pair get the same one, the first for vsrt1 and 2, the second for 3 and 4.
+    {"vsrt1.q", 0xd0408088, {0x0000a160, 0x00003192, 0x00005a94, 0x41a824e6}, {},
+     {0x0000a160, 0x0000a160, 0x00005a94, 0x41a824e6}},
+    {"vsrt2.q", 0xd0418088, {0x000056d2, 0x0000f1d4, 0x0000fe26, 0x00009848}, {},
+     {0x000056d2, 0x0000f1d4, 0x0000f1d4, 0x000056d2}},
+    {"vsrt3.q", 0xd0488088, {0xbe9d2995, 0xbb9a288f, 0x00005399, 0x00005533}, {},
+     {0xbb9a288f, 0xbe9d2995, 0x00005533, 0x00005533}},
+    {"vsrt4.q", 0xd0498088, {0x00006657, 0x80000000, 0x3e55cb7b, 0x0000b165}, {},
+     {0x0000b165, 0x3e55cb7b, 0x80000000, 0x0000b165}},
+    //vsgn and vscmp order values as vmin and vmax do: a NaN has a sign, a denormal is zero.
+    {"vsgn.q", 0xd04a8088, {0x7fc00000, 0xffffd267, 0x0000c379, 0x80000000}, {}, {one, minusOne, 0, 0}},
+    {"vscmp.q", 0x6e848088, {0x7fc00000, 0x0000655b, 0xff800000, 0x3f800000},
+     {0x7f800000, 0x0000577b, 0xffc00000, 0x3f800000}, {one, 0, one, 0}},
+    //vmov copies bits; vsbz leaves a denormal alone; vlgb of a NaN moves its low byte up.
+    {"vmov.q", 0xd0008088, {0x00002879, 0x7f800001, 0x80000001, one}, {}, {0x00002879, 0x7f800001, 0x80000001, one}},
+    {"vsbz.s, denormal", 0xd0360008, {0x0000629e}, {}, {0x0000629e, mark | 1, mark | 2, mark | 3}},
+    {"vsbz.s", 0xd0360008, {0x40490fdb}, {}, {0x3fc90fdb, mark | 1, mark | 2, mark | 3}},
+    {"vlgb.s, NaN", 0xd0370008, {0xfffffa52}, {}, {0xffd20000, mark | 1, mark | 2, mark | 3}},
+    {"vlgb.s, its NaN", 0xd0370008, {0x7f800001}, {}, {0x7f810000, mark | 1, mark | 2, mark | 3}},
+    {"vlgb.s", 0xd0370008, {0x41c7d163}, {}, {0x40800000, mark | 1, mark | 2, mark | 3}},
+    {"vlgb.s, denormal", 0xd0370008, {0x0000c9a0}, {}, {0xff800000, mark | 1, mark | 2, mark | 3}},
+    //The VFPU's own NaN: the sign of the product for vscl, vmscl and vcrs; positive for the others.
+    {"vscl.q", 0x65048088, {0x7fc00000, one, 0xffc00000, 0x40000000}, {minusOne},
+     {nan | 0x8000'0000, minusOne, nan, 0xc0000000}},
+    {"vmscl.q", 0xf2048088, {0x7fc00000, one, 0xffc00000, 0x40000000}, {minusOne},
+     {nan | 0x8000'0000, minusOne, nan, 0xc0000000}},
+    {"vcrs.t", 0x66848008, {0x40000000, 0xffc00000, 0x40400000}, {minusOne, 0x40a00000, 0x40800000},
+     {nan | 0x8000'0000, 0xc0400000, 0x41200000, mark | 3}},
+    {"vocp.q", 0xd0448088, {0xffc00000, 0x3e800000, 0x7f800001, 0}, {}, {nan, 0x3f400000, nan, one}},
+    {"vsocp.p", 0xd0450088, {0xffc00000, 0x3e800000}, {}, {nan, nan, 0x3f400000, 0x3e800000}},
+    {"vfad.q", 0xd0468088, {one, 0xffc00000, 0x40000000, 0x40400000}, {}, {nan, mark | 1, mark | 2, mark | 3}},
+    {"vbfy1.q", 0xd0428088, {0xffc00000, one, 0x40000000, one}, {}, {nan, nan, 0x40400000, one}},
+    {"vhdp.q", 0x66048088, {one, 0x40000000, 0x40400000, 0}, {0xffc00000, one, one, one}, {nan, mark | 1, mark | 2, mark | 3}},
+    {"vdet.p", 0x67040088, {0xffc00000, one}, {one, one}, {nan, mark | 1, mark | 2, mark | 3}},
+    //An infinity has no sine or cosine: the NaN takes the sign vsin, vcos and vnsin give a NaN.
+    {"vsin.q", 0xd0128088, {0x7f800000, 0xff800000, 0xffc00000, 0}, {}, {nan, nan | 0x8000'0000, nan | 0x8000'0000, 0}},
+    {"vcos.q", 0xd0138088, {0x7f800000, 0xff800000, 0, 0}, {}, {nan, nan, one, one}},
+    {"vnsin.q", 0xd01a8088, {0x7f800000, 0xff800000, 0x7f800000, 0xff800000}, {},
+     {nan | 0x8000'0000, nan, nan | 0x8000'0000, nan}},
+  };
+  for(auto& c : cases) {
+    Machine m;
+    m.run({c.word}, [&](Allegrex& s) {
+      for(uint32_t k = 0; k < 4; k++) {
+        s.vfpu.r[32 * k] = c.s[k];
+        s.vfpu.r[4 + 32 * k] = c.t[k];
+        s.vfpu.r[8 + 32 * k] = mark | k;
+      }
+    });
+    for(uint32_t k = 0; k < 4; k++) check(__LINE__, c.name, m.cpu.vfpu.r[8 + 32 * k], c.d[k]);
+  }
+}
+
 auto vfpuTests() -> Tests {
   return {
     {"vfpu addressing", addressing}, {"vfpu arithmetic", arithmetic}, {"vfpu prefixes", prefixes},
     {"vfpu products", products}, {"vfpu comparisons", comparisons}, {"vfpu conversions", conversions},
     {"vfpu functions", functions}, {"vfpu matrices", matrices}, {"vfpu moves", moves}, {"vfpu more", more},
-    {"vfpu random", random},
+    {"vfpu random", random}, {"vfpu edges", edges},
   };
 }
 

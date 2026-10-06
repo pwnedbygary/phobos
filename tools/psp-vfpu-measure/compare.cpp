@@ -347,10 +347,29 @@ static auto compareFpuArithmetic(const std::string& folder, Records& records) ->
   }
 }
 
+//What kind of difference one result word is, for the recorder's summary: a lane the core didn't write (it still
+//holds its marker), a NaN on either side, a denormal on either side, rounding (two numbers of the same sign at most
+//4 ulps apart), or anything else.
+enum Difference : uint32_t { Unwritten, NaNs, Denormals, Rounding, Other, Kinds };
+static const char* KindNames[Kinds] = {"unwritten", "NaN", "denormal", "rounding", "other"};
+static auto kindOf(uint32_t theirs, uint32_t ours) -> Difference {
+  auto nan = [](uint32_t x) { return (x & 0x7f80'0000) == 0x7f80'0000 && (x & 0x007f'ffff) != 0; };
+  auto denormal = [](uint32_t x) { return (x & 0x7f80'0000) == 0 && (x & 0x007f'ffff) != 0; };
+  auto finite = [](uint32_t x) { return (x & 0x7f80'0000) != 0x7f80'0000; };
+  if((ours & 0xffff'0000) == 0xdead'0000 && (theirs & 0xffff'0000) != 0xdead'0000) return Unwritten;
+  if(nan(theirs) || nan(ours)) return NaNs;
+  if(denormal(theirs) || denormal(ours)) return Denormals;
+  if((theirs ^ ours) >> 31 == 0 && finite(theirs) && finite(ours)) {
+    if((theirs > ours ? theirs - ours : ours - theirs) <= 4) return Rounding;
+  }
+  return Other;
+}
+
 //ops.bin, the instruction recorder (main.c, measureOps): per entry, its words, then per run matrices 0 and 1, the
 //condition codes as set, as read back, and after, and matrix 2 after. Each run is replayed from the condition
 //codes as the PSP read them back, matrix 2 holding the same markers, and the prefixes as after any instruction
-//that used them up; an entry matches when matrix 2 and the condition codes do, in every run.
+//that used them up; an entry matches when matrix 2 and the condition codes do, in every run. For the others, the
+//differing words are counted by kind (condition codes that differ count as other).
 static auto compareOps(const std::string& folder) -> void {
   if(!present(folder + "/ops.bin")) return;
   auto w = load(folder + "/ops.bin");
@@ -366,12 +385,13 @@ static auto compareOps(const std::string& folder) -> void {
   m.cpu.power(Base);
   auto& vfpu = m.cpu.vfpu;
   size_t n = 4;
-  uint32_t exactEntries = 0, recorded = 0;
-  std::printf("\n| entry | instruction | runs that differ | first difference (PSP, Phobos) |\n| --- | --- | --- | --- |\n");
+  uint32_t exactEntries = 0, roundingEntries = 0, recorded = 0;
+  std::printf("\n| entry | instruction | runs that differ | differing words by kind | first difference (PSP, Phobos) |\n"
+              "| --- | --- | --- | --- | --- |\n");
   for(uint32_t e = 0; e < entries && n + 5 + runs * 51 <= w.size(); e++, recorded++) {
     uint32_t count = w[n], words[4] = {w[n + 1], w[n + 2], w[n + 3], w[n + 4]};
     n += 5;
-    uint32_t differ = 0;
+    uint32_t differ = 0, kinds[Kinds] = {};
     std::string first;
     for(uint32_t run = 0; run < runs; run++, n += 51) {
       const uint32_t* m0 = &w[n];
@@ -390,19 +410,24 @@ static auto compareOps(const std::string& folder) -> void {
       vfpu.pfxd = 0;
       for(uint32_t i = 0; i < count; i++) m.cpu.execute(Base + 4 * i, words[i]);
       std::string difference;
-      for(uint32_t c = 0; c < 4 && difference.empty(); c++) {
-        for(uint32_t r = 0; r < 4 && difference.empty(); r++) {
+      for(uint32_t c = 0; c < 4; c++) {
+        for(uint32_t r = 0; r < 4; r++) {
           uint32_t ours = vfpu.r[r * 32 + 8 + c], theirs = m2[c * 4 + r];
           if(ours == theirs) continue;
+          kinds[kindOf(theirs, ours)]++;
+          if(!difference.empty()) continue;
           char text[96];
           std::snprintf(text, sizeof(text), "run %u, row %u column %u: %08x, %08x", run, r, c, theirs, ours);
           difference = text;
         }
       }
-      if(difference.empty() && (vfpu.cc & 0x3f) != (after & 0x3f)) {
-        char text[96];
-        std::snprintf(text, sizeof(text), "run %u, condition codes: %02x, %02x", run, after & 0x3f, vfpu.cc & 0x3f);
-        difference = text;
+      if((vfpu.cc & 0x3f) != (after & 0x3f)) {
+        kinds[Other]++;
+        if(difference.empty()) {
+          char text[96];
+          std::snprintf(text, sizeof(text), "run %u, condition codes: %02x, %02x", run, after & 0x3f, vfpu.cc & 0x3f);
+          difference = text;
+        }
       }
       if(!difference.empty()) {
         differ++;
@@ -410,10 +435,19 @@ static auto compareOps(const std::string& folder) -> void {
       }
     }
     if(!differ) { exactEntries++; continue; }
-    std::printf("| %u | %s | %u of %u | %s |\n", e, names.count(e) ? names[e].c_str() : "?", differ, runs, first.c_str());
+    std::string byKind;
+    for(uint32_t k = 0; k < Kinds; k++) {
+      if(!kinds[k]) continue;
+      if(!byKind.empty()) byKind += ", ";
+      byKind += std::string(KindNames[k]) + " " + std::to_string(kinds[k]);
+    }
+    if(kinds[Rounding] && kinds[Rounding] == kinds[Unwritten] + kinds[NaNs] + kinds[Denormals] + kinds[Rounding] +
+                                                kinds[Other]) roundingEntries++;
+    std::printf("| %u | %s | %u of %u | %s | %s |\n", e, names.count(e) ? names[e].c_str() : "?", differ, runs,
+                byKind.c_str(), first.c_str());
   }
-  std::printf("\nops: %u of %u recorded entries match in every run (%u entries in the file)\n", exactEntries, recorded,
-              entries);
+  std::printf("\nops: %u of %u recorded entries match in every run, and %u more differ only by rounding (%u entries in "
+              "the file)\n", exactEntries, recorded, roundingEntries, entries);
 }
 
 //vrnd.bin: the RCX registers at start and 256 draws; then per seed: the seed, the RCX registers after vrnds.s,
