@@ -868,6 +868,46 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: retail programs decrypted, and modules loaded — 2026-10-05
+
+Branch `cursor/psp-decrypt-2b67`, stacked on `cursor/psp-retail-load-2b67` (commit `08b08ab64`; for stack #106),
+worked in its own worktree because another worker had uncommitted changes in the main checkout. Shop-bought games'
+programs are decrypted: AES-128 (`ares/psp/kernel/aes.cpp`), the KIRK engine's commands 1, 7 and 0xb
+(`kirk.cpp`, SHA-1 moved there from `Kernel::nid()`), the published keys and the table of tags (`keys.cpp`), and the
+`~PSP` format's types 0, 1, 2, 5 and 6 with gzip unpacking (`decrypt.cpp`), written from docs/psp-core.md's new part
+18. The loader decrypts before reading an ELF, and a disc's EBOOT.BIN starts decrypted, BOOT.BIN only when it can't
+(the reason reported). Modules load from the disc and the memory stick (`modules.cpp`, part 19: ModuleMgrForUser's
+load, load by ID, start, stop, unload, the IDs and information), linked to each other's exports and the program's,
+module_start run on its own thread; Sony's modules that games carry are stood in for by the HLE kernel. The state's
+version is now 2.
+- **Checks:** the parts' 118 groups with both sanitizers (new: five "crypto", five "decrypt", ten "modules"; "state
+  fields" and "loader refusals" extended); `tests/psp/ares` (220 checks: the disc program encrypted as EBOOT.BIN
+  boots and reads its disc; undecryptable ones report why, and a plain BOOT.BIN starts instead). Broken versions each
+  failed a test (listed in parts 18 and 19).
+- **Review:** a general-purpose reviewer found the code an independent implementation in a clean-room audit, plus two
+  medium and five low findings, all fixed (parts 18 and 19 say how; each fix's test failed before it):
+  `sceKernelLoadModuleByID` refuses a ~PSP size under 0x150 or over 64 MiB, and reads of an open file ask the host
+  for no more than the file has left (a 4 KiB file had asked for 4 GiB); a module unloading itself ends its calling
+  thread, runs its module_stop and goes, the program running on (it ended the game); the program's exports are
+  offered to modules' imports; a module without a module_start runs its entry point, and modules' own thread
+  parameters are read; a module_start or module_stop ending in `sceKernelExitThread` has its thread deleted; states'
+  modules are checked (thread, block, ID); the keys' SHA-1 digests are pinned in `tests/psp/crypto.cpp`. The
+  self-unloading is `Kernel::unloadSelf(exit status, argument size, argument, options)`: when
+  `cursor/psp-hle-games-2b67` merges, its `sceKernelStopUnloadSelfModuleWithStatus` (0x8f2df740, which Gunhound EX
+  calls) should call it too, `unloadSelf(arg(0), arg(1), arg(2), arg(4))`, rather than end the program, and its
+  `sceKernelTerminateThread` should delete a thread `madeForModule()` as `sceKernelExitThread` now does.
+- **Against the user's games** (CHDs pulled read-only from the RP6 to /tmp on the Mac; nothing kept or committed):
+  every EBOOT.BIN and module on Lumines, Burnout Legends, GTA Liberty City Stories, Midnight Club 3, SOCOM Fireteam
+  Bravo, Snoopy vs. the Red Baron, Gunhound EX and Peace Walker decrypts into a sane MIPS ELF (tags 0x08000000 type 0,
+  0xc0cb167c type 1, 0xd91613f0 type 2; modules 0x00000000, 0x03000000, 0x4467415d, 0x3ace4dce), except the
+  firmware updaters (tag 0x02000000, not in the table) and two splash modules packed with KL4E. Run through the system
+  on the Mac, all eight start their EBOOT.BIN and run their own code to HLE functions not written yet; Burnout loads
+  its fourteen modules and GTA its three (by ID, behind ~SCE headers), all stood in for, as they still do with the
+  review's fixes.
+- **Not checked:** the RP6 (the app wasn't built); types 5 and 6 and the module manager on a real game's own module
+  (none of these games carry one: every module on them is Sony's), so a module unloading itself only on the tests'
+  modules (Splinter Cell Essentials, which does it, isn't among the user's games).
+
 ## PSP core: one block for a program's memory; "nothing will run" noted once — 2026-10-05
 
 Branch `cursor/psp-retail-load-2b67`, stacked on `cursor/psp-disc-formats-2b67` (for stack #106). The loader gave

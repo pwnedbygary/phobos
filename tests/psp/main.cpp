@@ -10,6 +10,9 @@ int main() {
   for(auto& test : fileTests()) tests.push_back(test);
   for(auto& test : discTests()) tests.push_back(test);
   for(auto& test : discFormatTests()) tests.push_back(test);
+  for(auto& test : cryptoTests()) tests.push_back(test);
+  for(auto& test : decryptTests()) tests.push_back(test);
+  for(auto& test : moduleTests()) tests.push_back(test);
   for(auto& test : stateTests()) tests.push_back(test);
   for(auto& test : geTests()) tests.push_back(test);
   for(auto& test : drawTests()) tests.push_back(test);

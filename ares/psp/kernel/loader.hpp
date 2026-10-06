@@ -21,8 +21,10 @@
 //    answers it and returns straight to the caller.
 //  - the exports: what the program offers others, at least module_start, where it begins.
 //
-//Not yet: encrypted programs (retail games, "~PSP"; phase 7), the newer packed relocation format some retail
-//modules use (PT_PSP_REL2), and imports of variables from other modules.
+//A retail game's programs come encrypted ("~PSP"): the loader has them decrypted first (decrypt.cpp).
+//
+//Not yet: the newer packed relocation format some retail modules use (PT_PSP_REL2), and imports of variables from
+//other modules.
 
 namespace ares::PlayStationPortable {
 
@@ -54,6 +56,7 @@ struct Loader {
 
   //loader.cpp
   static auto programInPBP(const u8* data, u64 size, u64& offset, u64& length) -> bool;
+  static auto extent(const u8* data, u64 size, u32& low, u32& high, bool& relocatable) -> bool;
   static auto load(Memory& memory, const u8* data, u64 size, u32 base, const ImportCode& importCode, Module& module)
     -> std::string;
 };

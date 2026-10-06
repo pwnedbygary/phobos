@@ -1,4 +1,5 @@
 #include "loader.hpp"
+#include "crypto.hpp"
 #include "../memory/memory.hpp"
 
 namespace ares::PlayStationPortable {
@@ -60,22 +61,41 @@ auto Loader::programInPBP(const u8* data, u64 size, u64& offset, u64& length) ->
   return true;
 }
 
+//The addresses an ELF program's segments take, from the first to the end of the last, as it was linked (a PRX's
+//count from 0), and whether it's a PRX: what the kernel needs to find room for a module before loading it. False if
+//it isn't a MIPS ELF program, or has nothing to load.
+auto Loader::extent(const u8* data, u64 size, u32& low, u32& high, bool& relocatable) -> bool {
+  File file{data, size};
+  if(!file.has(0, HeaderSize) || file.read32(0) != 0x464c'457f || data[4] != 1 || data[5] != 1) return false;
+  u32 type = file.read16(16), table = file.read32(28), count = file.read16(44);
+  if(file.read16(18) != ElfMIPS || (type != ElfExecutable && type != ElfPRX)) return false;
+  if(file.read16(42) != SegmentEntrySize || !file.has(table, u64(count) * SegmentEntrySize)) return false;
+  u64 lowest = ~0ull, highest = 0;
+  for(u32 n = 0; n < count; n++) {
+    u64 at = table + u64(n) * SegmentEntrySize;
+    if(file.read32(at) != SegmentLoad) continue;
+    u64 address = file.read32(at + 8);
+    lowest = std::min(lowest, address);
+    highest = std::max(highest, address + file.read32(at + 20));
+  }
+  if(highest <= lowest || highest > 0xffff'ffff) return false;
+  low = lowest, high = highest, relocatable = type == ElfPRX;
+  return true;
+}
+
 //Puts the program in data into memory: a PRX at base, a static executable where it was linked to go. Patches every
 //import's stub to "jr ra; syscall importCode(library, nid)". Returns why it couldn't, or nothing when it did.
 auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const ImportCode& importCode, Module& module)
   -> std::string {
   module = {};
-  File file{data, size};
-  //An encrypted program (a retail game's, "~PSP"): its 336-byte header says in the clear what it is (the PSP
-  //Developer Wiki's "PRX File Format"): the module's name at 0x0a, 28 bytes, and how it was encrypted at 0x7c (4: a
-  //module from a game disc, 9: a game disc's EBOOT.BIN, 13: a demo, 25: a game patch...).
-  if(file.has(0, 4) && data[0] == '~' && data[1] == 'P' && data[2] == 'S' && data[3] == 'P') {
-    std::string name;
-    for(u64 at = 0x0a; at < 0x0a + 0x1c && file.has(at, 1) && data[at]; at++) name.push_back(char(data[at]));
-    std::string encryption = file.has(0x7c, 1) ? std::to_string(data[0x7c]) : "unknown";
-    return "an encrypted program (~PSP: module \"" + name + "\", encryption type " + encryption +
-           "); decrypting retail games isn't done yet";
+  //An encrypted program (a retail game's, "~PSP") is decrypted first (decrypt.cpp), and the ELF inside it loaded.
+  std::vector<u8> decrypted;
+  unwrapProgram(data, size);
+  if(encryptedProgram(data, size)) {
+    if(auto why = decryptProgram(data, size, decrypted); !why.empty()) return why;
+    data = decrypted.data(), size = decrypted.size();
   }
+  File file{data, size};
   if(!file.has(0, HeaderSize) || file.read32(0) != 0x464c'457f) return "not an ELF file";
   if(data[4] != 1 || data[5] != 1) return "not a 32-bit little-endian ELF file";
   u32 type = file.read16(16), machine = file.read16(18);
