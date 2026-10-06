@@ -6,8 +6,9 @@ instructions) with host tests, is on branch `cursor/psp-core-2b67`; part 2, the 
 compiled loads and stores straight to RAM, on `cursor/psp-fastmem-2b67`; the VFPU's measurements on a real PSP
 after it; part 5, the memory map, on `cursor/psp-memory-2b67`; part 6, the loader, on `cursor/psp-loader-2b67`;
 part 7, the first HLE functions, on `cursor/psp-hle-2b67`, which run pspdev's hello world from start to end on the
-host; part 8, files and controls, on `cursor/psp-files-2b67`. The user asked for the whole feature to be stacked and
-merged at once (GitHub stack #106). Nothing is in the app yet.
+host; part 8, files and controls, on `cursor/psp-files-2b67`; part 9, the GE's display lists, on
+`cursor/psp-ge-2b67`. The user asked for the whole feature to be stacked and merged at once (GitHub stack #106).
+Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -130,7 +131,8 @@ branch not taken, `nor` without the not, delay-slot instructions given the wrong
 4. Memory map (part 5); loading an unencrypted `EBOOT.PBP`, ELF or PRX (part 6); the first HLE functions (module
    start, threads, display, memory, standard output) and a homebrew test program run on the host (part 7); files
    and controls (part 8).
-5. The GE: display lists, a software rasterizer (2D first), the display.
+5. The GE: display lists, clearing and block transfers, and the picture (part 9); a software rasterizer, 2D first,
+   then 3D.
 6. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
 7. Retail executables: `~PSP` decryption.
 8. Audio (`sceAudio`, then ATRAC3+ and MP3), video (PSMF), the optional firmware modules.
@@ -409,3 +411,76 @@ buffer reads wait only when no sample is new (always waiting would have halved t
 frame after the vertical blank), so the controller was reworked to match it. One claim, that
 `sceIoLseek`'s 64-bit offset comes in a1 and a2, was wrong: psp-gcc's own calls put it in a2 and a3 (EABI aligns it
 to an even register pair) and `whence` in t0, and the system program's `fseek` through newlib confirms it.
+
+## Part 9: the GE's display lists
+
+`ares/psp/ge/` (the GE) and `ares/psp/kernel/ge.cpp` (its driver), with the kernel pieces they needed.
+
+- **The GE** reads display lists by itself: 32-bit commands, the top 8 bits saying which, the low 24 its argument.
+  It keeps each command's last word (what `sceGeGetCmd` reads), the matrices (each element a float's top 24 bits, as
+  `sceGeGetMtx` hands them back) and its list registers: where it is, where it must stop (the stall address, which the
+  program moves on as it writes), the offset, and two levels of CALL. JUMP, CALL and the vertex and index addresses
+  take BASE's top four bits and add the offset (ORIGIN, OFFSET_ADDR); the next PRIM carries on where the last left
+  off. FINISH or SIGNAL, then END, stop it for the driver; a third CALL or a stray RET faults. Commands come from
+  pspsdk's GU library (BSD), which writes them, and the registers from uOFW's reading of the driver.
+- **Vertices** (`vertex.cpp`): every layout the vertex type describes (weights, texture coordinates, color, normal,
+  position; 8-bit, 16-bit or float; indices; morph targets counted in the size), each part at a multiple of its own
+  size. Through mode (2D) keeps positions in pixels, depth unsigned. Not yet: morphing (the first target is used).
+- **Drawn so far**: clearing (a sprite in clear mode fills its rectangle, inside the scissor and the drawing region,
+  writing color, alpha (where the stencil lives) and depth as CLEAR_MODE says, in each frame buffer format), and block
+  transfers (rectangles of 16- or 32-bit pixels between images, `sceGuCopyImage`). The rest of drawing (textures,
+  blending and the tests, triangles, 3D) comes next.
+- **The driver** (sceGe_user), following uOFW's reading of the PSP's own: a queue of up to 64 lists, at its end or
+  (paused, for `sceGeContinue`) its front; lists freed are reused oldest first, as the PSP's free list does; stall
+  addresses; `sceGeListSync` and `sceGeDrawSync`, their states and their waits; finish and signal callbacks (a
+  finish callback runs before the next list starts, and before anyone waiting is told);
+  SIGNALs that suspend the GE until their callback returns (so it can rewrite the list ahead), let it go on, pause it
+  at the next FINISH, stop the next FINISH ending the list, or jump, call and return using the list's own stack;
+  saving and restoring the GE's state, in Phobos's own layout in the program's 2 KiB. Not yet: `sceGeBreak`, the
+  debugger's breakpoints, SIGNALs that patch texture or CLUT addresses, and what uOFW shows differs for programs
+  built with SDKs before 2.0.
+- **Calls into the program** (`kernel/interrupts.cpp`): the GE's callbacks run as the PSP runs interrupt handlers,
+  on top of whatever thread is running (or none): its registers are put aside, the function runs on the kernel's
+  interrupt stack with (id, argument, list) and the global pointer it was registered with, and returns through a
+  trampoline that puts them back. A call starts at the end of the system function that caused it, or as the kernel's
+  loop goes round; not during another, nor while the program holds interrupts off (`sceKernelCpuSuspendIntr`). A
+  handler can't wait (`ILLEGAL_CONTEXT`, as on the PSP); a thread it wakes runs once it returns.
+- **The kernel also gained** event flags (all or any bits, clearing, one waiter or several, first come or by
+  priority, timeouts; the order errors are checked in, and when the bits are told, as pspautotests' results from a PSP
+  show), callbacks as far as registering an exit callback, the clocks (`sceKernelGetSystemTimeWide`,
+  `gettimeofday`, `time`, `sceRtc`'s ticks; the date the host's when the program started), and the cache functions,
+  which have nothing to do.
+- **The picture**: `Kernel::picture()` gives the frame buffer the program set, as the screen shows it, in 8888.
+
+PPSSPP was consulted for what no public source says: the masks on the frame buffer's and transfers' addresses and
+widths (which it has from tests on the PSP), how the offset joins BASE in an address, and through mode's unsigned
+depth. Worth measuring on the PSP: which pixels a sprite with fractional corners covers, and those masks.
+
+Tests (`tests/psp/ge.cpp`): lists written in the test, run by the GE alone (registers and matrices, moving about with
+CALL, RET, JUMP, ORIGIN and OFFSET_ADDR, stopping at the stall address and at END, running out of budget), vertex
+layouts and values, clearing in each format with each mask, transfers of both sizes; the driver called directly
+(queue, sync states, stall moves, freed lists' order, errors, 64 lists at most, BASE kept from one list to the next,
+saving and restoring the GE's state, 16 callbacks at most); programs written in the test, on both engines where they differ, whose callbacks note how they
+were called and in what order, whose SIGNAL callback rewrites the list (suspended: it takes; not: too late), whose
+finish callback rewrites the list queued next, whose callback tries to wait and wakes a thread, with interrupts held off and let back on, and whose list pauses and is
+continued; event flags polled (the bits told on failing, errors in order, a zero timeout), and waited on by several
+threads and by two on a flag for one, timing out and deleted under a waiter; the picture in each format. With
+`PSP_TEST_PROGRAMS`: `tools/psp-test-programs/gu` drives the GE through pspsdk's GU library (clear, a signal and its
+callback, a called list, FINISH with an id and its callback, a copy), and pspsdk's own sample `copy` (built from the
+toolchain's samples, not kept here) runs until both its frame buffers hold its picture, the depth buffer cleared.
+Twenty-six broken versions each failed them (the offset ignored or not restored at a RET, ORIGIN a word late, the
+stall address ignored, vertex parts not aligned, through mode's depth signed, the first vertex's color, no scissor,
+alpha always cleared, transfer widths not in eights, freed lists reused newest first, SUSPEND not waiting, callbacks
+told the list's start, calls ignoring interrupts held off, rescheduling during a call, CLEAR clearing everything, two
+waiters on a flag for one, 5650's green read as five bits, the PAUSE callback given the whole SIGNAL word, a failed
+poll or a timed-out or deleted wait not told the bits, a zero timeout waiting, the flag looked up before the bits,
+BASE cleared for a list that starts after another, the next list run before the finish callback).
+
+Bugbot's reviews, read in full: the PAUSE callback was given the whole SIGNAL word (the driver keeps only its 16-bit
+id: fixed); a failed poll shouldn't tell the bits (pspautotests' results from a PSP say it does, and showed the check
+order and the timeout, deletion and zero-timeout cases, now done too); a list enqueued at the head un-pauses the one it
+displaces, and a list the GE gave up on leaves its waiters waiting (both as uOFW's reading of the PSP's driver has
+them; the code now says so); a list starting after another had BASE cleared (the driver restores BASE by running the
+word it saved as a command, and a list that never ran saved 0, a NOP: fixed, with a test); the next list ran before
+the last one's finish callback (the PSP's driver calls it first: fixed, with a test whose callback rewrites the next
+list).
