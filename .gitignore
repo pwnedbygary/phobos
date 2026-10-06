@@ -16,9 +16,11 @@
 !/thirdparty
 !/tools
 !/android
+!/desktop
 !/docs
 !/GNUMakefile
 !/LICENSE
+!/COPYING
 !/README.md
 !.editorconfig
 !.gitignore
