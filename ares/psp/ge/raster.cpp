@@ -10,8 +10,8 @@
 //A pixel's color: the vertex color, through the texture if there is one, plus lighting's shine when it's kept apart
 //(each channel held to 255), then into the pixel pipeline.
 template<u32 Format>
-auto GE::shadeAs(const Look& look, bool linear, s32 x, s32 y, u32 z, u32 color, u32 specular, float u, float v,
-                 u32 fog) -> void {
+alwaysinline auto GE::shadeAs(const Look& look, bool linear, s32 x, s32 y, u32 z, u32 color, u32 specular, float u,
+                              float v, u32 fog) -> void {
   if(look.textured) color = combine(look, color, sampleWith(look.texture, linear, u, v));
   if(specular) {
     color = pack(channel(color, 0) + channel(specular, 0), channel(color, 1) + channel(specular, 1),
@@ -27,23 +27,41 @@ auto GE::spriteRows(const Job& job, s32 fromY, s32 toY) -> void {
   auto& s = job.sprite;
   auto& look = *job.look;
   s32 firstY = std::max(job.firstY, fromY), lastY = std::min(job.lastY, toY);
-  if(s.divided) {
+  auto fogAt = [&](s32 x) { return x * 16 + 8 + 1 >= s.middle ? s.rightFog : s.leftFog; };
+  if(s.divided && look.textured) {
+    //Across x, 1 / w and the coordinate across x go from the left corner's to the right one's: a column's are its
+    //own, as is the texel its coordinate across falls in; down y, the coordinate down y over w is a row's own. What's
+    //left for each pixel is that over the column's 1 / w.
+    auto& t = look.texture;
+    struct Column { f64 inverse; TexelAxis across; };
+    Column columns[1024];
+    for(s32 x = job.firstX; x <= job.lastX; x++) {
+      f64 alongX = f64(x * 16 + 8 - s.left) / (s.right - s.left);
+      f64 inverse = s.leftInverse + (s.rightInverse - s.leftInverse) * alongX;
+      float acrossX = (s.leftAcross + (s.rightAcross - s.leftAcross) * alongX) / inverse;
+      columns[x - job.firstX] = {inverse, s.turned ? texelAxis(acrossX, t.height, t.clampV, job.linear)
+                                                   : texelAxis(acrossX, t.width, t.clampU, job.linear)};
+    }
     for(s32 y = firstY; y <= lastY; y++) {
+      f64 alongY = f64(y * 16 + 8 - s.top) / (s.bottom - s.top);
+      f64 downOverW = s.topDown + (s.bottomDown - s.topDown) * alongY;
       for(s32 x = job.firstX; x <= job.lastX; x++) {
-        s32 sampleX = x * 16 + 8, sampleY = y * 16 + 8;
-        f64 alongX = f64(sampleX - s.left) / (s.right - s.left), alongY = f64(sampleY - s.top) / (s.bottom - s.top);
-        f64 inverse = s.leftInverse + (s.rightInverse - s.leftInverse) * alongX;
-        f64 acrossX = (s.leftAcross + (s.rightAcross - s.leftAcross) * alongX) / inverse;
-        f64 downY = (s.topDown + (s.bottomDown - s.topDown) * alongY) / inverse;
-        float u = s.turned ? downY : acrossX;
-        float v = s.turned ? acrossX : downY;
-        u32 fog = sampleX + 1 >= s.middle ? s.rightFog : s.leftFog;
-        shadeAs<Format>(look, job.linear, x, y, s.z, s.color, s.specular, u, v, fog);
+        auto& column = columns[x - job.firstX];
+        float downY = downOverW / column.inverse;
+        TexelAxis down = s.turned ? texelAxis(downY, t.width, t.clampU, job.linear)
+                                  : texelAxis(downY, t.height, t.clampV, job.linear);
+        const TexelAxis& u = s.turned ? down : column.across;
+        const TexelAxis& v = s.turned ? column.across : down;
+        u32 color = combine(look, s.color, job.linear ? filtered(t, u, v) : fetch(t, u.first, v.first));
+        if(s.specular) {
+          color = pack(channel(color, 0) + channel(s.specular, 0), channel(color, 1) + channel(s.specular, 1),
+                       channel(color, 2) + channel(s.specular, 2), channel(color, 3));
+        }
+        drawPixelAs<Format>(look.pixel, x, y, s.z, color, fogAt(x));
       }
     }
     return;
   }
-  auto fogAt = [&](s32 x) { return x * 16 + 8 + 1 >= s.middle ? s.rightFog : s.leftFog; };
   if(!look.textured) {
     u32 color = s.color;
     if(s.specular) {

@@ -130,9 +130,10 @@ auto GE::pixelState() const -> PixelState {
 }
 
 //A pixel at (x, y), inside the scissor rectangle, with depth z, color (8888, each channel 0-255) and fog (0-255), in
-//a frame buffer of Format (p.format).
+//a frame buffer of Format (p.format). (Its arithmetic is whole numbers throughout, none of them below zero where a
+//division becomes a shift.)
 template<u32 Format>
-auto GE::drawPixelAs(const PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fog) -> void {
+alwaysinline auto GE::drawPixelAs(const PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fog) -> void {
   if(p.depthRange && (z < p.minDepth || z > p.maxDepth)) return;
   constexpr u32 bytes = Format == 3 ? 4 : 2;
   //Both offsets wrap within VRAM and stay multiples of their pixel's size (the buffers start on 16 bytes, VRAM's size
@@ -144,16 +145,16 @@ auto GE::drawPixelAs(const PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fo
   };
   u8* vram = memory.vram.data();
   u32 old;
-  if constexpr(bytes == 4) old = vram[at] | vram[at + 1] << 8 | vram[at + 2] << 16 | u32(vram[at + 3]) << 24;
-  else old = vram[at] | vram[at + 1] << 8;
+  if constexpr(bytes == 4) std::memcpy(&old, vram + at, 4);
+  else { u16 half; std::memcpy(&half, vram + at, 2); old = half; }
   auto writeDepth = [&] {
     u32 offset = depthAt();
     vram[offset] = z, vram[offset + 1] = z >> 8;
   };
   auto write = [&](u32 value, u32 keep) {  //keep: bits of the old pixel that stay
     u32 pixel = (narrowPixel(value, Format) & ~keep) | (old & keep);
-    vram[at] = pixel, vram[at + 1] = pixel >> 8;
-    if constexpr(bytes == 4) vram[at + 2] = pixel >> 16, vram[at + 3] = pixel >> 24;
+    if constexpr(bytes == 4) std::memcpy(vram + at, &pixel, 4);
+    else { u16 half = pixel; std::memcpy(vram + at, &half, 2); }
   };
   constexpr u32 colorBits = Format == 0 ? 0xffff : Format == 1 ? 0x7fff : Format == 2 ? 0x0fff : 0x00ff'ffff;
   constexpr u32 stencilBits = (Format == 3 ? 0xffff'ffff : 0xffff) & ~colorBits;
@@ -168,7 +169,7 @@ auto GE::drawPixelAs(const PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fo
   if(p.fog) {
     u32 fogged = color & 0xff00'0000;
     for(u32 n = 0; n < 3; n++) {
-      fogged |= u32((channel(color, n) * s32(fog) + channel(p.fogColor, n) * s32(255 - fog) + 255) / 256) << n * 8;
+      fogged |= u32((channel(color, n) * s32(fog) + channel(p.fogColor, n) * s32(255 - fog) + 255) >> 8) << n * 8;
     }
     color = fogged;
   }
@@ -201,26 +202,30 @@ auto GE::drawPixelAs(const PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fo
   s32 rgb[3];
   for(u32 n = 0; n < 3; n++) rgb[n] = channel(color, n);
   if(p.blend) {
+    //each channel's factor for the source (the pixel's color) and for the destination (the frame buffer's)
     s32 sourceAlpha = alpha, destinationAlpha = oldColor >> 24;
-    auto factor = [&](u32 which, u32 n, bool source) -> s32 {
+    auto factors = [&](u32 which, u32 other, u32 fixed, s32* factor) {
       switch(which) {
-      case 0: return channel(source ? oldColor : color, n);        //the other's color
-      case 1: return 255 - channel(source ? oldColor : color, n);
-      case 2: return sourceAlpha;
-      case 3: return 255 - sourceAlpha;
-      case 4: return destinationAlpha;
-      case 5: return 255 - destinationAlpha;
-      case 6: return 2 * sourceAlpha;
-      case 7: return 255 - std::min(2 * sourceAlpha, 255);
-      case 8: return 2 * destinationAlpha;
-      case 9: return 255 - std::min(2 * destinationAlpha, 255);
+      case 0: for(u32 n = 0; n < 3; n++) factor[n] = channel(other, n); return;  //the other's color
+      case 1: for(u32 n = 0; n < 3; n++) factor[n] = 255 - channel(other, n); return;
+      case 2: factor[0] = factor[1] = factor[2] = sourceAlpha; return;
+      case 3: factor[0] = factor[1] = factor[2] = 255 - sourceAlpha; return;
+      case 4: factor[0] = factor[1] = factor[2] = destinationAlpha; return;
+      case 5: factor[0] = factor[1] = factor[2] = 255 - destinationAlpha; return;
+      case 6: factor[0] = factor[1] = factor[2] = 2 * sourceAlpha; return;
+      case 7: factor[0] = factor[1] = factor[2] = 255 - std::min(2 * sourceAlpha, 255); return;
+      case 8: factor[0] = factor[1] = factor[2] = 2 * destinationAlpha; return;
+      case 9: factor[0] = factor[1] = factor[2] = 255 - std::min(2 * destinationAlpha, 255); return;
       }
-      return channel(source ? p.fixedA : p.fixedB, n);  //10-15: fixed
+      for(u32 n = 0; n < 3; n++) factor[n] = channel(fixed, n);  //10-15: fixed
     };
+    s32 sourceFactor[3], destinationFactor[3];
+    factors(p.blendSource, oldColor, p.fixedA, sourceFactor);
+    factors(p.blendDestination, color, p.fixedB, destinationFactor);
     for(u32 n = 0; n < 3; n++) {
       s32 s = channel(color, n), d = channel(oldColor, n);
-      s32 sourceTerm = (s * 2 + 1) * (factor(p.blendSource, n, true) * 2 + 1) / 1024;
-      s32 destinationTerm = (d * 2 + 1) * (factor(p.blendDestination, n, false) * 2 + 1) / 1024;
+      s32 sourceTerm = (s * 2 + 1) * (sourceFactor[n] * 2 + 1) >> 10;
+      s32 destinationTerm = (d * 2 + 1) * (destinationFactor[n] * 2 + 1) >> 10;
       switch(p.blendOperation) {
       case 0:  rgb[n] = sourceTerm + destinationTerm; break;
       case 1:  rgb[n] = sourceTerm - destinationTerm; break;

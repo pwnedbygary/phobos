@@ -287,7 +287,7 @@ auto GE::sample(const Sampler& t, float u, float v) -> u32 {
 //between (first, second) and how far from the first to the second, in sixteenths (fraction; filtered), each already
 //inside the texture (repeated or held at the edge). size and clamp: the texture's width and TEXTURE_WRAP's bit for u,
 //or its height and bit for v.
-auto GE::texelAxis(float coordinate, u32 size, bool clamp, bool linear) -> TexelAxis {
+alwaysinline auto GE::texelAxis(float coordinate, u32 size, bool clamp, bool linear) -> TexelAxis {
   auto inside = [&](s32 c) -> s32 {
     s32 last = std::min<s32>(size, 512) - 1;
     return clamp ? std::clamp(c, 0, last) : c & last;
@@ -300,25 +300,28 @@ auto GE::texelAxis(float coordinate, u32 size, bool clamp, bool linear) -> Texel
 }
 
 //The texel at (x, y), inside the texture: decoded already, or read from memory.
-auto GE::fetch(const Sampler& t, s32 x, s32 y) -> u32 {
+alwaysinline auto GE::fetch(const Sampler& t, s32 x, s32 y) -> u32 {
   return t.decoded ? t.decoded[y * t.decodedWidth + x] : texel(t, x, y);
 }
 
 //The four texels around (u, v) blended: the top two, then the bottom two, then those two results, each step dropping
-//its fraction.
-auto GE::filtered(const Sampler& t, TexelAxis u, TexelAxis v) -> u32 {
-  u32 topLeft = fetch(t, u.first, v.first), topRight = fetch(t, u.second, v.first);
-  u32 bottomLeft = fetch(t, u.first, v.second), bottomRight = fetch(t, u.second, v.second);
-  s32 mixed[4];
-  for(u32 n = 0; n < 4; n++) {
-    s32 upper = (channel(topLeft, n) * (16 - u.fraction) + channel(topRight, n) * u.fraction) >> 4;
-    s32 lower = (channel(bottomLeft, n) * (16 - u.fraction) + channel(bottomRight, n) * u.fraction) >> 4;
-    mixed[n] = (upper * (16 - v.fraction) + lower * v.fraction) >> 4;
-  }
-  return pack(mixed[0], mixed[1], mixed[2], mixed[3]);
+//its fraction. The four channels go side by side, each in 16 bits of one number: a channel times sixteenths stays
+//below 4096, so none spills into the next, and each shift's spill from the next is masked off.
+alwaysinline auto GE::filtered(const Sampler& t, TexelAxis u, TexelAxis v) -> u32 {
+  auto spread = [](u32 c) -> u64 {
+    return (c & 0xff) | u64(c & 0xff00) << 8 | u64(c & 0xff'0000) << 16 | u64(c & 0xff00'0000) << 24;
+  };
+  constexpr u64 Channels = 0x00ff'00ff'00ff'00ff;
+  u64 topLeft = spread(fetch(t, u.first, v.first)), topRight = spread(fetch(t, u.second, v.first));
+  u64 bottomLeft = spread(fetch(t, u.first, v.second)), bottomRight = spread(fetch(t, u.second, v.second));
+  u64 across = u.fraction, down = v.fraction;
+  u64 upper = (topLeft * (16 - across) + topRight * across) >> 4 & Channels;
+  u64 lower = (bottomLeft * (16 - across) + bottomRight * across) >> 4 & Channels;
+  u64 mixed = (upper * (16 - down) + lower * down) >> 4 & Channels;
+  return u32(mixed & 0xff) | u32(mixed >> 8 & 0xff00) | u32(mixed >> 16 & 0xff'0000) | u32(mixed >> 24 & 0xff00'0000);
 }
 
-auto GE::sampleWith(const Sampler& t, bool linear, float u, float v) -> u32 {
+alwaysinline auto GE::sampleWith(const Sampler& t, bool linear, float u, float v) -> u32 {
   auto across = texelAxis(u, t.width, t.clampU, linear), down = texelAxis(v, t.height, t.clampV, linear);
   return linear ? filtered(t, across, down) : fetch(t, across.first, down.first);
 }
@@ -329,24 +332,35 @@ auto GE::sampleWith(const Sampler& t, bool linear, float u, float v) -> u32 {
 //  TEXTURE_ENVIRONMENT_COLOR; replace Cv = Ct; add Cv = Cf+Ct. Alpha is Af, or with the texture's alpha At*Af (At
 //  for replace; decal keeps Af).
 //The PSP's rounding: products are (Cf+1)*Ct/256, except blend's, which rounds up.
-static auto textureFunctionWith(u32 function, bool withAlpha, bool doubled, u32 environment, u32 color, u32 texel)
-  -> u32 {
+static alwaysinline auto textureFunctionWith(u32 function, bool withAlpha, bool doubled, u32 environment, u32 color,
+                                             u32 texel) -> u32 {
   s32 fragmentAlpha = channel(color, 3), texelAlpha = channel(texel, 3);
-  s32 modulatedAlpha = withAlpha ? (fragmentAlpha + 1) * texelAlpha / 256 : fragmentAlpha;
-  s32 out[3], alpha = modulatedAlpha;
-  for(u32 n = 0; n < 3; n++) {
-    s32 f = channel(color, n), t = channel(texel, n);
-    switch(function) {
-    case 0: out[n] = (f + 1) * t * (doubled ? 2 : 1) / 256; break;
-    case 1:
-      out[n] = withAlpha ? ((f + 1) * (255 - texelAlpha) + (t + 1) * texelAlpha) / (doubled ? 128 : 256)
-                         : t * (doubled ? 2 : 1);
-      alpha = fragmentAlpha;
-      break;
-    case 2: out[n] = ((255 - t) * f + t * channel(environment, n) + 255) / (doubled ? 128 : 256); break;
-    case 3: out[n] = t * (doubled ? 2 : 1); alpha = withAlpha ? texelAlpha : fragmentAlpha; break;
-    default: out[n] = (f + t) * (doubled ? 2 : 1); break;  //add (and 5-7, which act as add)
+  s32 modulatedAlpha = withAlpha ? (fragmentAlpha + 1) * texelAlpha >> 8 : fragmentAlpha;
+  s32 out[3], alpha = modulatedAlpha, twice = doubled ? 2 : 1, down = doubled ? 7 : 8;  //(none of it below zero)
+  switch(function) {
+  case 0:
+    for(u32 n = 0; n < 3; n++) out[n] = (channel(color, n) + 1) * channel(texel, n) * twice >> 8;
+    break;
+  case 1:
+    for(u32 n = 0; n < 3; n++) {
+      s32 f = channel(color, n), t = channel(texel, n);
+      out[n] = withAlpha ? ((f + 1) * (255 - texelAlpha) + (t + 1) * texelAlpha) >> down : t * twice;
     }
+    alpha = fragmentAlpha;
+    break;
+  case 2:
+    for(u32 n = 0; n < 3; n++) {
+      s32 f = channel(color, n), t = channel(texel, n);
+      out[n] = ((255 - t) * f + t * channel(environment, n) + 255) >> down;
+    }
+    break;
+  case 3:
+    for(u32 n = 0; n < 3; n++) out[n] = channel(texel, n) * twice;
+    alpha = withAlpha ? texelAlpha : fragmentAlpha;
+    break;
+  default:  //add (and 5-7, which act as add)
+    for(u32 n = 0; n < 3; n++) out[n] = (channel(color, n) + channel(texel, n)) * twice;
+    break;
   }
   return pack(out[0], out[1], out[2], alpha);
 }
@@ -358,6 +372,6 @@ auto GE::textureFunction(u32 color, u32 texel) const -> u32 {
 }
 
 //The texture function as a primitive's Look took it from the commands.
-auto GE::combine(const Look& look, u32 color, u32 texel) const -> u32 {
+alwaysinline auto GE::combine(const Look& look, u32 color, u32 texel) const -> u32 {
   return textureFunctionWith(look.function, look.withAlpha, look.doubled, look.environment, color, texel);
 }
