@@ -870,8 +870,8 @@ the details; the user chose a data tape per game in its save folder.
 
 ## PSP core: the PSP in the desktop program, with FFmpeg on Linux, macOS and Windows — 2026-10-06
 
-Branch `cursor/psp-desktop-2b67`, on top of `cursor/psp-codecs-2b67` (the entry below), not pushed. docs/psp-core.md,
-part 27, describes it. Original front-end code in the desktop program's style; no PPSSPP or JPCSP source read.
+Branch `cursor/psp-desktop-2b67`, on top of `cursor/psp-codecs-2b67` (the entry below); pushed by the owner with #153
+merged in as 8501415c7; the review's fixes on top are local, not pushed. docs/psp-core.md, part 27, describes it. Original front-end code in the desktop program's style; no PPSSPP or JPCSP source read.
 - **Library**: PSP games from a `psp` folder or any folder: the PSP's extensions (iso, cso, zso, dax, jso, chd, pbp,
   elf); `.iso`, `.chd` and `.pbp`, shared with the PlayStation, are the PSP's when mia's PSP medium takes them (the
   runner's new `ares::isPspGame`, which reads the file's head: "PSP GAME" ISOs, DVD CHDs, EBOOT.PBPs not of category
@@ -904,8 +904,15 @@ part 27, describes it. Original front-end code in the desktop program's style; n
   beside the Linux libraries found them by `$ORIGIN`. Full builds and packages are CI's.
 - **Tests**: tests/psp 259 groups, tests/psp/ares 282 checks, the app's 264 unit tests, none failed; modern release
   APK built (23,604,918 bytes).
-- **Not checked**: a real gamepad, real PSP fonts, a PlayStation CHD in the library, the whole program on Linux and
-  Windows (MSYS2's native FFmpeg build and linuxdeploy are first exercised by CI).
+- **Review and CI fixes** (CI on 8501415c7 failed only at Linux's AppImage): linuxdeploy now runs with the build
+  folder on `LD_LIBRARY_PATH` (it couldn't find libavutil for libavcodec), and the script checks both libraries are
+  files in `usr/lib` that the program and each other find by run path (checked in an x86-64 Docker container with a
+  stand-in program: the AppImage's copy found ATRAC3plus); `LICENSE` gains the MinGW-w64 runtime and winpthreads
+  notice (in LicenseNoticesTest's list, and a test of its texts); the PSP fonts label is counted when the setting
+  changes, not twice a frame; `build.sh`'s stale-lock takeover is atomic (a `takeover` mkdir inside the lock;
+  8 builds at once, 3 rounds, one takeover each). Burnout Legends again at 60 on the Mac; the app's 265 unit tests.
+- **Not checked**: a real gamepad, real PSP fonts, a PlayStation CHD in the library, the whole program run on Linux
+  and Windows, and the fixed AppImage step in CI's whole build (next push).
 
 ## PSP core: music and movies through FFmpeg — 2026-10-06
 

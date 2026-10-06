@@ -3297,8 +3297,10 @@ pause menu's PSP items while a PSP game runs, each "(next start)", since the cor
   back to it.
 - `psp.fonts`: the user's own system fonts, none by default. The folder picked may be the fonts' own, one holding
   `font`, or a flash0 dump's root holding `flash0/font` (any case): `pspFontFolder` finds the first holding one of
-  the 18 fonts (`jpn0`, `ltn0`-`ltn15`, `kr0.pgf`); the item shows how many of them it holds ("12 of 18"). A folder
-  with none is refused with a message.
+  the 18 fonts (`jpn0`, `ltn0`-`ltn15`, `kr0.pgf`); the item shows how many of them it holds ("12 of 18"), counted
+  as the setting is applied or changed (`setPspFonts`), not as the menu is drawn, and the folders are stepped through
+  without exceptions, so a slow or vanished share can't stall or stop the menu. A folder with none is refused with a
+  message.
 - `psp.drawingThreads`: Auto (0: all cores but one), 1, 2, 4, 6 or 8, the app's choices.
 A game that doesn't start shows the medium's sentence (`lastLoadProblem`) where there is one.
 
@@ -3336,8 +3338,12 @@ its run path is `$ORIGIN` on Linux and `@executable_path` on macOS, and Windows 
 Any other cross build stops at configure, saying so.
 
 **The packages** (`scripts/package-*.sh`), each with the two libraries as files of their own that can be replaced:
-- Linux: the AppImage's `usr/lib`, passed to linuxdeploy; the script checks that each FFmpeg library the program
-  needs (its `readelf -d`) is there by that name.
+- Linux: the AppImage's `usr/lib`, passed to linuxdeploy with the build folder on `LD_LIBRARY_PATH` (linuxdeploy
+  looks for libavcodec's own dependency, libavutil, on the system's search path, and stopped at "Could not find
+  dependency: libavutil.so.61" without it); linuxdeploy gives the libraries the run path `$ORIGIN` and the program
+  `$ORIGIN/../lib`. The script checks that each FFmpeg library the program needs (its `readelf -d`) is a file of its
+  own in `usr/lib` by that name, and that the program and each of those libraries would find every FFmpeg library
+  they need through their run paths.
 - macOS: Phobos.app's `Contents/Frameworks`, the program's run path changed to `@executable_path/../Frameworks`; the
   script checks each library holds every architecture the program does, signs them (with the app's Developer ID,
   or ad hoc) and prints their architectures.
@@ -3349,6 +3355,12 @@ Any other cross build stops at configure, saying so.
 - `LICENSE`'s FFmpeg notice names the four packages' files and how to swap each (the AppImage extracted and run or
   packed again, the app signed again, the DLLs replaced), and that the releases carry the tarball beside the desktop
   builds too. `.gitattributes` keeps shell scripts' line ends LF, since bash runs them on Windows too.
+- The Windows build links the MinGW-w64 runtime and winpthreads into Phobos.exe and FFmpeg's DLLs (Phobos.exe did
+  before this part; avutil-61.dll does since its `-static`): `LICENSE`'s "MinGW-w64 runtime and winpthreads" notice
+  carries the runtime's `COPYING.MinGW-w64-runtime.txt` (its ZPL 2.1 overall notice, getopt's, gdtoa's, the math
+  library's, musl's MIT parts) and winpthreads' `COPYING` (MIT, and Lockless Inc.'s BSD part), as the mingw-w64
+  project ships them; GCC's runtime libraries need none (the GCC Runtime Library Exception). `LicenseNoticesTest`
+  expects it and checks both texts are there.
 
 **Checked on the host Mac** (Apple silicon, macOS; the desktop program built Release; games run with the user's data
 folder redirected to a scratch one by `CFFIXED_USER_HOME`; keys sent through System Events; pictures by F8, under
@@ -3381,8 +3393,26 @@ folder redirected to a scratch one by `CFFIXED_USER_HOME`; keys sent through Sys
 Not checked, or left:
 - A real gamepad (none at hand), real PSP fonts (scratch files of their names only), a PlayStation CHD beside the
   PSP's, and a PlayStation game in the library (made-up files only).
-- The desktop program built whole, packaged and run on Linux and Windows: CI's jobs do the first two; MSYS2's
-  native FFmpeg build (`--target-os=mingw32` under UCRT64) and linuxdeploy's handling of the two libraries are seen
-  first there.
+- The desktop program built whole and run on Linux and Windows (CI builds and packages it; on 8501415c7 its macOS
+  and Windows jobs passed, MSYS2's native FFmpeg build among them, and Linux's stopped in linuxdeploy, fixed below).
+  The fixed AppImage step is checked in Docker with a stand-in program, not yet by CI's whole build.
 - Discs can't be changed on the PSP (its games are listed one by one); the desktop's library shows no PSP icons or
   PARAM.SFO titles (the file's name is the title, as for every system).
+
+**After review and CI** (the branch pushed by the owner with #153 merged in as 8501415c7; CI's Android, PSP Core
+Tests, macOS and Windows jobs passed; LGPL compliance checked on the macOS and Windows artifacts):
+- High: the AppImage step failed in linuxdeploy (libavutil not found as libavcodec's dependency). Fixed by
+  `LD_LIBRARY_PATH` and checked further (above). In an x86-64 Ubuntu 24.04 container (emulated on the host Mac; the
+  tools and the AppImage unpacked from their squashfs, since an emulated AppImage can't read itself), the real script
+  packaged a stand-in `phobos` linked to FFmpeg's `host` build as CMake links it: both libraries in `usr/lib` as
+  files, run paths `$ORIGIN` and `$ORIGIN/../lib`, and the AppImage's program, run from elsewhere, loaded them from
+  its own `usr/lib` and found the ATRAC3plus decoder.
+- Low: the MinGW-w64 runtime and winpthreads notice (above) was missing.
+- Low: the PSP settings menu listed the fonts folder twice a frame for its label; it's counted once, by
+  `setPspFonts`, as settings are applied and as the folder is picked or cleared.
+- Info: `build.sh`'s stale-lock takeover re-checked the owner and then removed the lock, so two waiting builds
+  could both remove it (the second removing the first's new lock). A takeover now first makes `takeover` inside the
+  lock (`mkdir`, which only one can), re-checks the same dead owner, then removes it; the losers wait. Eight builds
+  at once against a planted dead lock, three rounds: one takeover each, never more than one inside.
+- Checked again: Burnout Legends on the host Mac at 60, the fonts folder set (its count in the menu) and cleared
+  from the menu; the app's 265 unit tests, none failed.
