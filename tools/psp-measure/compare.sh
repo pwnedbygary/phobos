@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #Builds compare.cpp against the PSP core (as tests/allegrex/run-tests.sh builds the tests, but optimized and
-#without sanitizers) and runs it on a folder of psp-vfpu-measure results.
-#usage: tools/psp-vfpu-measure/compare.sh <results folder>
+#without sanitizers) and runs it on a folder of psp-measure's VFPU and FPU results (results/vfpu).
+#usage: tools/psp-measure/compare.sh <results folder> (its vfpu/ when it has one, so results/ or results/vfpu)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -27,4 +27,6 @@ $CXX -std=c++20 -O1 "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" -c "$ROOT/t
 $CXX -std=c++20 -O2 -Wall -Wextra "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" -include "$TESTS/prelude.hpp" \
   "$ROOT/ares/psp/cpu/allegrex.cpp" "$HERE/compare.cpp" "$OUT/nall.o" "$OUT/sljit.o" "$OUT/allocator.o" \
   "${LIBRARIES[@]}" -o "$OUT/compare"
-"$OUT/compare" "$1"
+FOLDER=$1
+[[ -d "$1/vfpu" ]] && FOLDER="$1/vfpu"
+"$OUT/compare" "$FOLDER"

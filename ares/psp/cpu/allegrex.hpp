@@ -300,7 +300,7 @@ struct Allegrex {
   struct Matrix { u32 element[16]; };
 
   //The VFPU never passes a NaN through: whatever went in, a NaN result is always 0x7f800001 with a sign that
-  //depends on the instruction (measured on a PSP with tools/psp-vfpu-measure). Unknown leaves the host's NaN, for
+  //depends on the instruction (measured on a PSP with tools/psp-measure). Unknown leaves the host's NaN, for
   //instructions not measured yet.
   enum class NaNSign : u32 {
     Unknown,   //not measured: the host's NaN

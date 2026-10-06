@@ -868,6 +868,42 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP tools: one measuring program, with a menu — 2026-10-04
+
+Branch `cursor/psp-measure-menu-2b67`, stacked on `cursor/psp-vfpu-round3-2b67` (for stack #106). At the user's
+request the two measuring programs are one, `tools/psp-measure` (moved with git mv: tools/psp-vfpu-measure's main.c
+is vfpu.c, tools/psp-ge-measure's is ge.c, the host tools came along), and it no longer leaves after a round:
+- main.c: a menu (up and down pick a line, X runs it) of every round of both: round 3's VFPU and FPU tests, the FPU
+  probes, round 2's VFPU and FPU tests, round 2's GE tests, round 1; start afresh; leave. After a round, X goes back
+  to the menu.
+- Start afresh asks first, then renames `results` to `results-1` (or the next number free) and starts an empty one:
+  every test runs again, nothing is deleted.
+- results.c: the results folder and each test's file as the VFPU program had them (`.part` renamed to `.bin`, one
+  more try after a stop, then `.stopped`), now for the GE's tests too, which are skipped once done. Files go to
+  `results/vfpu` and `results/ge` (both programs wrote a `manifest.txt`).
+- The SMOKE build runs round 3's VFPU and FPU tests, the probes and the GE's tests (PPSSPPHeadless with
+  `-i --graphics=software`); its files are the two old programs', byte for byte, but for the manifests' wording and
+  `controller-timing.bin` (measured times; the same reads waited).
+- What round 1 and round 3 record "as found" (the generator's state, FCSR) is taken when the program starts
+  (`vfpuStart`): round 1's `vrnd` runs only while the generator is still as it started (otherwise it says to start
+  the program again and skips that test), and `fpu-state.bin` holds FCSR from the start.
+- tests/psp/measure.cpp ("psp measure") drives the menu in the core: GE round 2, start afresh, again (the same
+  pictures as the first time), a third time (nothing rewritten), the probes, leave; still 52 of 63 pictures as the
+  PSP's. build.sh builds pspmeasure.elf.
+- Paths updated in the docs and comments; the committed manifests (the old programs wrote them) and older entries
+  here keep the old names. compare.sh and fit.py take the results folder or its `vfpu/`.
+- **Checks:** `make` and `make SMOKE=1` with `-Wall`, no warnings; the SMOKE build in PPSSPPHeadless against the old
+  programs' SMOKE files (as above); `tools/psp-test-programs/build.sh`, then `PSP_TEST_PROGRAMS=/tmp/psp-programs
+  PSP_GE_RESULTS=.local/psp-measure-2026-10-04/ge tests/psp/run-tests.sh`: 85 groups, 0 failures, 52 of 63 pictures
+  as the PSP's (unchanged); ops.py regenerates ops.h and ops3.h byte for byte. Review: a general-purpose reviewer (one
+  medium finding, the "as found" state above; eight low ones, all fixed), then delta reviews (one more low finding,
+  the round 1 note's wording, fixed; then no findings).
+- **Not checked:** the menu, `choose()` and starting afresh (a directory renamed with `sceIoRename`) on a PSP or in
+  PPSSPP (the SMOKE build skips the menu); they've run only in this core's HLE, whose rename is
+  `std::filesystem::rename`.
+Docker Desktop wedged part way (`docker exec` and `docker cp` hung on the shared folder); quitting and reopening it
+fixed that, with the container and its files intact.
+
 ## PSP tools: the VFPU measurement's third round and the FPU probes — 2026-10-04
 
 Branch `cursor/psp-vfpu-round3-2b67`, stacked on `cursor/psp-ge-filter-2b67` (for stack #106). tools/psp-vfpu-measure

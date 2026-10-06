@@ -1,61 +1,37 @@
-//psp-vfpu-measure: records what a real PSP's VFPU computes, so Phobos's PSP core can be made to match it exactly
-//(see docs/psp-core.md, "Part 3: the VFPU", and docs/psp-vfpu-measurements.md).
+//psp-measure's VFPU and FPU tests: what a real PSP's VFPU computes (and its FPU, where round 2 found questions), so
+//Phobos's PSP core can be made to match it exactly (see docs/psp-core.md, "Part 3: the VFPU", and
+//docs/psp-vfpu-measurements.md).
 //
-//It works in rounds, picked when it starts, each writing its own files:
-//- Round 1 (O): the VFPU's math functions over every input of the range each one reduces its argument to, plus a
+//They come in rounds, each picked from the menu (main.c) and writing its own files into results/vfpu:
+//- Round 1: the VFPU's math functions over every input of the range each one reduces its argument to, plus a
 //  million inputs spread over all of them, the random number generator from a range of seeds, and some arithmetic
 //  on spread-out inputs. About 450 MB.
-//- Round 2 (X): what round 1 couldn't settle. vlog2 over whole binades above 4; dot products, sums and averages
-//  built to show how the VFPU adds several numbers; every half float through vh2f, and a million floats through
-//  vf2h; the integer divide, and the FPU's conversions and rounding modes; and the instruction recorder, which runs
+//- Round 2: what round 1 couldn't settle. vlog2 over whole binades above 4; dot products, sums and averages built
+//  to show how the VFPU adds several numbers; every half float through vh2f, and a million floats through vf2h;
+//  the integer divide, and the FPU's conversions and rounding modes; and the instruction recorder, which runs
 //  every VFPU instruction pspdev's assembler knows (ops.h) on random register states. About 230 MB.
-//- Round 3 (square): what round 2 left open. The FPU's conversions and arithmetic on inputs it's safe with (round
-//  2's FPU tests stopped the PSP), FCSR as a program finds it, products just below the smallest normal number,
-//  and a second recorder list (ops3.h): the math functions with prefixes, swizzles past an operand's size in the
+//- Round 3: what round 2 left open. The FPU's conversions and arithmetic on inputs it's safe with (round 2's FPU
+//  tests stopped the PSP), FCSR as a program finds it, products just below the smallest normal number, and a
+//  second recorder list (ops3.h): the math functions with prefixes, swizzles past an operand's size in the
 //  instructions that don't work lane by lane, vavg and vfad with t prefixes. About 6 MB.
-//- The FPU probes (triangle): the FPU on one value at a time of the kinds that may stop the PSP. Each probe that
-//  does is given up on at the next start, which goes on with the next probe.
-//It computes nothing itself: the files only hold what the hardware gave (and for the smaller tests, the inputs),
-//and the host works out the rest.
-//
-//Build with pspdev's toolchain (https://github.com/pspdev/pspdev): make, which gives EBOOT.PBP.
-//Run: copy EBOOT.PBP to a folder under PSP/GAME on the memory stick (say PSP/GAME/VFPUMEASURE) and start it from
-//the XMB; it needs custom firmware that runs homebrew. Results go to results/ beside EBOOT.PBP: one file per
-//test, raw little-endian 32-bit words in the order each test describes below, plus manifest.txt (round 1),
-//manifest2.txt (round 2) or manifest3.txt (round 3 and the probes). A test whose file exists is skipped, so a round
-//can be stopped and started again. A test that didn't finish runs once more; if it doesn't finish that time either,
-//the next start gives up on it (see begin; a probe gets one try), so a test that stops the PSP can't hold up the
-//rest. Each test's line on the screen says when it's running, and the program keeps telling the PSP it's busy, so
-//the power-save timer doesn't put it to sleep.
+//- The FPU probes: the FPU on one value at a time of the kinds that may stop the PSP. Each probe that does is given
+//  up on at the next start, which goes on with the next probe.
+//They compute nothing themselves: the files only hold what the hardware gave (and for the smaller tests, the
+//inputs), and the host works out the rest. Each file is raw little-endian 32-bit words in the order its test
+//describes below, and manifest.txt (round 1), manifest2.txt (round 2) or manifest3.txt (round 3 and the probes)
+//says how each file's inputs are made. How a round can be stopped and started again, and gives up on a test that
+//stops the PSP, is results.c's.
 
-#include <pspkernel.h>
-#include <pspdebug.h>
-#include <pspctrl.h>
-#include <psppower.h>
+#include "measure.h"
 #include <psputils.h>
 #include <string.h>
 #include <stdio.h>
-
-PSP_MODULE_INFO("VFPUMEASURE", PSP_MODULE_USER, 1, 0);
-PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
-
-#define print pspDebugScreenPrintf
-
-//make SMOKE=1 builds a quick version for trying the program in an emulator before a PSP runs it (PPSSPP's
-//PPSSPPHeadless, which has no buttons to press): it runs round 3 and the probes straight away, with its big tests cut
-//short, and leaves when done. Its results say nothing about a PSP.
-#ifdef SMOKE
-enum { Shrink = 8 };
-#else
-enum { Shrink = 0 };
-#endif
 
 //Four 32-bit words, aligned for the VFPU's quad loads and stores (lv.q, sv.q).
 typedef struct { unsigned int lane[4]; } __attribute__((aligned(16))) Quad;
 
 enum { ChunkQuads = 16384 };  //how many quads are worked on and written at a time (256 KiB)
 static Quad inputS[ChunkQuads], inputT[ChunkQuads], output[ChunkQuads];
-static char folder[256];
 
 //The spread-out inputs come from this linear congruential generator, which the host repeats to know what they
 //were: state = state * 1664525 + 1013904223, starting from each test's seed.
@@ -130,7 +106,7 @@ typedef unsigned int (*Input)(const Test* test, unsigned int k, unsigned int* st
 typedef void (*Fill)(Quad* s, Quad* t, unsigned int* state);
 
 struct Test {
-  const char* name;    //results/<name>.bin
+  const char* name;    //results/vfpu/<name>.bin
   void (*run)(const Quad*, const Quad*, Quad*, int);
   Input input;         //the inputs, and for two-input instructions the first of each pair, the second following it
   unsigned int count;  //how many results: one per input lane, or for reductions one per quad (or pair of quads)
@@ -293,107 +269,7 @@ static const Test tests3[] = {
    "vmul.q, seed 41: products a sliver below the smallest normal number (tinyProducts)", 0, tinyProducts, 0},
 };
 
-static int exists(const char* path) {
-  SceIoStat status;
-  return sceIoGetstat(path, &status) >= 0;
-}
-
-//Tells the PSP it's in use, so its power-save timer (Auto Sleep, Backlight Auto-Off) starts over: a long round with
-//nothing pressed would otherwise be put to sleep part way.
-static void awake(void) { scePowerTick(PSP_POWER_TICK_ALL); }
-
-static int mark(const char* path) {
-  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
-  if(file < 0) return 0;
-  sceIoClose(file);
-  return 1;
-}
-
-//A test's file is written as results/<name>.part and renamed to .bin once complete, so a stopped test leaves no
-//.bin behind and runs again next time. If its .part is there when it starts, the last run didn't finish it (the PSP
-//stopped, or was stopped, during it): it runs once more, with <name>.again marking that; and if it doesn't finish
-//then either, the next start gives up on it, renaming what it wrote to <name>.stopped, and the round goes on
-//without it. A probe (retry 0) isn't run again: one stop and the next start gives up on it.
-typedef struct {
-  char done[320], part[320], again[320];
-  SceUID file;
-  int line;
-} Output;
-
-static int beginTrying(Output* out, const char* name, int retry) {
-  char stopped[320];
-  snprintf(out->done, sizeof(out->done), "%s/%s.bin", folder, name);
-  snprintf(out->part, sizeof(out->part), "%s/%s.part", folder, name);
-  snprintf(out->again, sizeof(out->again), "%s/%s.again", folder, name);
-  snprintf(stopped, sizeof(stopped), "%s/%s.stopped", folder, name);
-  awake();
-  if(exists(out->done)) {
-    print("%-14s already done\n", name);
-    return 0;
-  }
-  if(exists(stopped)) {
-    print("%-14s given up on (it stopped the PSP)\n", name);
-    return 0;
-  }
-  int retrying = exists(out->part);
-  if(retrying && (!retry || exists(out->again))) {
-    sceIoRename(out->part, stopped);
-    sceIoRemove(out->again);
-    print("%-14s stopped the PSP%s: given up on\n", name, retry ? " twice" : "");
-    return 0;
-  }
-  out->file = sceIoOpen(out->part, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
-  if(out->file < 0) {
-    print("%-14s can't write %s\n", name, out->part);
-    return -1;
-  }
-  if(retrying) {  //marked only once it's really running again, so a file that can't be written costs no retry
-    if(!mark(out->again)) {  //unmarked, a test that stops the PSP every time would never be given up on
-      sceIoClose(out->file);
-      print("%-14s can't write %s (memory stick full?)\n", name, out->again);
-      return -1;
-    }
-    print("%-14s didn't finish last time: once more\n", name);
-  }
-  out->line = pspDebugScreenGetY();
-  print("%-14s running", name);
-  return 1;
-}
-
-static int begin(Output* out, const char* name) { return beginTrying(out, name, 1); }
-
-static int writeOut(Output* out, const char* name, const void* data, int bytes) {
-  awake();  //every chunk a long test writes (256 KiB), so no stretch of work goes without telling the PSP
-  if(sceIoWrite(out->file, data, bytes) == bytes) return 1;
-  print("%-14s write failed (memory stick full?)\n", name);
-  sceIoClose(out->file);
-  //a failed write isn't the PSP stopping: with no .part (or .again) left, the next start runs the test afresh
-  sceIoRemove(out->part);
-  sceIoRemove(out->again);
-  return 0;
-}
-
-static void progress(Output* out, const char* name, unsigned int done, unsigned int total) {
-  awake();
-  pspDebugScreenSetXY(0, out->line);
-  print("%-14s %3u%%   ", name, (unsigned int)(100ull * done / total));
-}
-
-static int finish(Output* out, const char* name) {
-  sceIoClose(out->file);
-  if(sceIoRename(out->part, out->done) < 0) {
-    print("%-14s can't rename %s (memory stick?)\n", name, out->part);
-    sceIoRemove(out->part);  //not the PSP stopping either: the next start runs the test afresh
-    sceIoRemove(out->again);
-    return 0;
-  }
-  sceIoRemove(out->again);
-  pspDebugScreenSetXY(0, out->line);
-  print("%-14s done   \n", name);
-  return 1;
-}
-
-//Runs one test into its file.
+//Runs one test into its file (results.c: begin, writeOut, finish).
 static int measure(const Test* test) {
   Output out;
   int started = begin(&out, test->name);
@@ -440,13 +316,26 @@ static void seedWith(unsigned int seed) {
   __asm__ volatile("mtv %0, S100\n" "vrnds.s S100\n" :: "r"(seed));
 }
 
+//The generator's state and FCSR as the program found them when it started (vfpuStart, before any round could
+//change them): round 1 records the generator from where it starts, round 3 FCSR as the program found it.
+static unsigned int startState[8], startFcsr;
+
 //The random number generator: its state at start, and its numbers before any seed; then for 64 seeds, the
 //state right after vrnds.s and 4096 draws with vrndi.s; then for one seed, 1024 draws with vrndi.q, whose lanes
-//are filled in their own order.
+//are filled in their own order. The first part needs the generator as the program started: once this test has
+//drawn or seeded (round 1 already run since the program started), it waits for the next start.
 static int measureRandom(void) {
   Output out;
   int started = begin(&out, "vrnd");
   if(started <= 0) return started == 0;
+  unsigned int now[8];
+  readState(now);
+  if(memcmp(now, startState, sizeof(now))) {
+    drop(&out);
+    pspDebugScreenSetXY(0, out.line);
+    print("%-26s skipped: start the program again first\n", "vrnd");
+    return 1;
+  }
   static Quad words[1 + 64 * (2 + 1024) + 1024];  //enough for every part below
   unsigned int* w = &words[0].lane[0];
   unsigned int n = 0;
@@ -487,13 +376,13 @@ static int measureHalves(void) {
   Output out;
   int started = begin(&out, "vh2f-all");
   if(started <= 0) return started == 0;
-  static unsigned int results[65536] __attribute__((aligned(16)));
+  static unsigned int halves[65536] __attribute__((aligned(16)));
   for(unsigned int j = 0; j < 32768; j++) {
     unsigned int word = (2 * j + 1) << 16 | 2 * j;
     __asm__ volatile("mtv %2, S000\n" "vh2f.s C010, S000\n" "sv.s S010, %0\n" "sv.s S011, %1\n"
-                     : "=m"(results[2 * j]), "=m"(results[2 * j + 1]) : "r"(word) : "memory");
+                     : "=m"(halves[2 * j]), "=m"(halves[2 * j + 1]) : "r"(word) : "memory");
   }
-  if(!writeOut(&out, "vh2f-all", results, sizeof(results))) return 0;
+  if(!writeOut(&out, "vh2f-all", halves, sizeof(halves))) return 0;
   return finish(&out, "vh2f-all");
 }
 
@@ -732,23 +621,25 @@ static void safeArithmeticInput(int i, unsigned int* state, unsigned int* a, uns
 static int measureConvertSafe(void) { return measureConvertFrom("fpu-convert-safe", 43, safeConvertInput); }
 static int measureArithmeticSafe(void) { return measureArithmeticFrom("fpu-arith-safe", 44, safeArithmeticInput, 1); }
 
-//Round 3: FCSR (FPU control register 31) as a program finds it, and FIR (register 0, which says what FPU it is).
-//FCSR's bit 24, flush to zero, decides what the FPU does with denormals.
+//Round 3: FCSR (FPU control register 31) as the program found it when it started, and FIR (register 0, which says
+//what FPU it is). FCSR's bit 24, flush to zero, decides what the FPU does with denormals; nothing in the program
+//changes it, so it's also the bit the tests after this one run with.
 static int measureFpuState(void) {
   Output out;
   int started = begin(&out, "fpu-state");
   if(started <= 0) return started == 0;
-  unsigned int w[2];
-  __asm__ volatile("cfc1 %0, $31\n" "cfc1 %1, $0\n" : "=r"(w[0]), "=r"(w[1]));
+  unsigned int w[2] = {startFcsr, 0};
+  __asm__ volatile("cfc1 %0, $0\n" : "=r"(w[1]));
   if(!writeOut(&out, "fpu-state", w, sizeof(w))) return 0;
   return finish(&out, "fpu-state");
 }
 
-//The FPU probes (triangle): one value at a time of the kinds round 2's FPU tests started with, to find which stop
-//the PSP. Each probe runs one instruction once, in rounding mode 0 with FCSR's flags, enables and causes cleared and
-//flush to zero (bit 24) off, unless the probe turns it on (the -fs ones), and writes its inputs, its result, and
-//FCSR after it (whose cause and flag bits say what happened). A probe that stops the PSP isn't tried again: the next start gives up on it (its .stopped file
-//says which it was) and goes on with the next. They're in order from the least likely to stop the PSP to the most.
+//The FPU probes (a choice of their own on the menu): one value at a time of the kinds round 2's FPU tests started
+//with, to find which stop the PSP. Each probe runs one instruction once, in rounding mode 0 with FCSR's flags,
+//enables and causes cleared and flush to zero (bit 24) off, unless the probe turns it on (the -fs ones), and writes
+//its inputs, its result, and FCSR after it (whose cause and flag bits say what happened). A probe that stops the PSP
+//isn't tried again: the next start gives up on it (its .stopped file says which it was) and goes on with the next.
+//They're in order from the least likely to stop the PSP to the most.
 //NaNs are in MIPS's encoding, the other way round from most processors': a quiet NaN has its top fraction bit
 //(22) clear (0x7fbfffff, or the VFPU's own 0x7f800001), a signaling one has it set (0x7fc00000).
 #define FPU_PROBE(name, instruction) \
@@ -913,7 +804,8 @@ static void writeManifest(int round, const Test* list, unsigned int count) {
   SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
   if(file < 0) return;
   snprintf(text, sizeof(text),
-    "psp-vfpu-measure round %d\nfirmware devkit version %08x\n"
+    "psp-measure's VFPU and FPU tests (tools/psp-measure/vfpu.c in Phobos), round %d\n"
+    "firmware devkit version %08x\n"
     "spread-out inputs: state = state * 1664525 + 1013904223 from the seed, taking each new state\n",
     round, sceKernelDevkitVersion());
   writeLine(file, text);
@@ -928,16 +820,18 @@ static void writeManifest(int round, const Test* list, unsigned int count) {
       "0x12345678, 256 vrndi.q (4 words each, lane 0 first)\n");
   } else if(round == 3) {
     writeLine(file,
-      "vmul-tiny's inputs (main.c: tinyProducts): one draw per lane, lane 0 first; j = 1 + its low 12 bits, s = "
+      "vmul-tiny's inputs (vfpu.c: tinyProducts): one draw per lane, lane 0 first; j = 1 + its low 12 bits, s = "
       "0x3f800000 - 2j with the draw's bit 31 for its sign, t = 0x00800000 + j with bit 30 for its sign\n"
-      "fpu-state.bin: FCSR (FPU control register 31) as the program found it, then FIR (control register 0)\n"
-      "fpu-convert-safe.bin: as fpu-convert.bin, for 4096 safe inputs (main.c: safeConvertInput, seed 43): x, then "
+      "fpu-state.bin: FCSR (FPU control register 31) as the program found it when it started, then FIR (control "
+      "register 0)\n"
+      "fpu-convert-safe.bin: as fpu-convert.bin, for 4096 safe inputs (vfpu.c: safeConvertInput, seed 43): x, then "
       "for FCSR rounding modes 0-3: cvt.w.s, round.w.s, trunc.w.s, ceil.w.s, floor.w.s\n"
-      "fpu-arith-safe.bin: as fpu-arith.bin, for 4096 safe pairs (main.c: safeArithmeticInput, seed 44): a, b, then "
+      "fpu-arith-safe.bin: as fpu-arith.bin, for 4096 safe pairs (vfpu.c: safeArithmeticInput, seed 44): a, b, then "
       "for rounding modes 0-3: add.s, sub.s, mul.s, div.s, and sqrt.s of a's size (its sign bit cleared)\n"
       "ops3.bin: the instruction recorder (as ops.bin) for ops3.h's entries, from seed 0x30000 + entry; ops3.txt "
       "lists them\n"
-      "the FPU probes (triangle), <name>.bin for each below: a, b, the result, and FCSR after the instruction; run "
+      "the FPU probes (a menu choice of their own), <name>.bin for each below: a, b, the result, and FCSR after "
+      "the instruction; run "
       "once in rounding mode 0, FCSR's flags, enables and causes cleared, flush to zero (bit 24) off but where set:\n");
     for(unsigned int i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
       snprintf(text, sizeof(text), "  %s: %s\n", probes[i].name, probes[i].about);
@@ -946,7 +840,7 @@ static void writeManifest(int round, const Test* list, unsigned int count) {
     writeLine(file, "<name>.stopped: a test that stopped the PSP (twice, or once for a probe), given up on\n");
   } else {
     writeLine(file,
-      "the adding tests draw each result's inputs lane 0 first, s then t (see main.c: dotOne, dotTwo, dotClose, "
+      "the adding tests draw each result's inputs lane 0 first, s then t (see vfpu.c: dotOne, dotTwo, dotClose, "
       "dotShort, sumClose, sumTwo); one result per quad or pair of quads\n"
       "vh2f-all.bin: vh2f.s of (2j + 1) << 16 | 2j for j < 32768: per j, lanes 0 and 1\n"
       "vf2h-spread.bin: vf2h.q of spread-out quads, seed 22: per quad, result lanes 0 and 1\n"
@@ -956,40 +850,23 @@ static void writeManifest(int round, const Test* list, unsigned int count) {
       "round.w.s, trunc.w.s, ceil.w.s, floor.w.s\n"
       "fpu-arith.bin: per pair (mixed() from 24): a, b, then for rounding modes 0-3: add.s, sub.s, mul.s, div.s, "
       "sqrt.s of a\n"
-      "ops.bin: the instruction recorder (main.c, measureOps; ops.txt lists its entries)\n"
+      "ops.bin: the instruction recorder (vfpu.c, measureOps; ops.txt lists its entries)\n"
       "<name>.stopped: a test that didn't finish twice (the PSP stopped during it), given up on: what it wrote\n");
   }
   sceIoClose(file);
 }
 
-int main(int argc, char** argv) {
-  pspDebugScreenInit();
-  print("psp-vfpu-measure: what this PSP's VFPU computes\n\n");
-  print("Square: round 3 (the third measurements, about 6 MB)\n");
-  print("Triangle: the FPU probes. Any of them may switch the PSP off: if one\n"
-        "  does, start this again and choose the probes again; it gives up on\n"
-        "  that one and goes on with the next.\n");
-  print("X: round 2 (the second measurements again, about 230 MB)\n");
-  print("O: round 1 (the first measurements again, about 450 MB)\n\n");
-  SceCtrlData pad;
-  int round = Shrink ? 3 : 0;  //4: the probes
-  while(!round) {
-    sceCtrlReadBufferPositive(&pad, 1);
-    if(pad.Buttons & PSP_CTRL_SQUARE) round = 3;
-    if(pad.Buttons & PSP_CTRL_TRIANGLE) round = 4;
-    if(pad.Buttons & PSP_CTRL_CROSS) round = 2;
-    if(pad.Buttons & PSP_CTRL_CIRCLE) round = 1;
-  }
+//---- the rounds
 
-  //results/ beside EBOOT.PBP
-  strncpy(folder, argc > 0 ? argv[0] : "ms0:/PSP/GAME/VFPUMEASURE/EBOOT.PBP", sizeof(folder) - 16);
-  char* slash = strrchr(folder, '/');
-  if(slash) *slash = 0;
-  strcat(folder, "/results");
-  sceIoMkdir(folder, 0777);
-  if(round == 4) print("the FPU probes, writing to %s\n\n", folder);
-  else print("round %d, writing to %s\n\n", round, folder);
+//main.c calls this first, before any round could draw from the generator or change FCSR.
+void vfpuStart(void) {
+  readState(startState);
+  __asm__ volatile("cfc1 %0, $31\n" : "=r"(startFcsr));
+}
 
+//Runs a round (4: the probes) into results/vfpu. Returns 0 if it had to stop (a file it couldn't write).
+int vfpuRound(int round) {
+  useFolder("vfpu");
   int ok = 1;
   if(round == 1) {
     writeManifest(1, tests, sizeof(tests) / sizeof(tests[0]));
@@ -1005,7 +882,7 @@ int main(int argc, char** argv) {
       if(ok) ok = measureArithmeticSafe();
       if(ok) ok = measureOps3();
     }
-    if(round == 4 || Shrink) {  //the quick version for emulators tries the probes too
+    if(round == 4) {
       for(unsigned int i = 0; ok && i < sizeof(probes) / sizeof(probes[0]); i++) ok = measureProbe(&probes[i]);
     }
   } else {
@@ -1019,18 +896,5 @@ int main(int argc, char** argv) {
     if(ok) ok = measureConvert();     //last: the FPU on not-a-numbers, infinities and the smallest numbers,
     if(ok) ok = measureArithmetic();  //never run on a PSP before (a run once stopped about here)
   }
-
-  print(ok ? "\nAll done. Press X to leave.\n" : "\nStopped. Press X to leave.\n");
-  if(Shrink) {
-    sceKernelExitGame();
-    return 0;
-  }
-  do {
-    sceCtrlReadBufferPositive(&pad, 1);
-  } while(pad.Buttons & PSP_CTRL_CROSS);  //let go of an X that started round 2 first
-  do {
-    sceCtrlReadBufferPositive(&pad, 1);
-  } while(!(pad.Buttons & PSP_CTRL_CROSS));
-  sceKernelExitGame();
-  return 0;
+  return ok;
 }

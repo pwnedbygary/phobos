@@ -2,9 +2,9 @@
 
 What a real PSP's vector unit (the VFPU) computes, recorded so Phobos's PSP core can match it exactly, and shared
 so anyone can check it or build on it. Recorded on the user's PSP (firmware 6.61; the program reported devkit version
-`06060110`) with [`tools/psp-vfpu-measure`](../tools/psp-vfpu-measure/main.c): round 1 on 2026-10-03, round 2 on
-2026-10-04 (below, with round 1 run again), and compared with the core by
-[`tools/psp-vfpu-measure/compare.sh`](../tools/psp-vfpu-measure/compare.sh).
+`06060110`) with `tools/psp-vfpu-measure` (since 2026-10-04 the VFPU and FPU half of
+[`tools/psp-measure`](../tools/psp-measure/vfpu.c)): round 1 on 2026-10-03, round 2 on 2026-10-04 (below, with
+round 1 run again), and compared with the core by [`tools/psp-measure/compare.sh`](../tools/psp-measure/compare.sh).
 
 ## What was recorded
 
@@ -91,7 +91,7 @@ The random number generator: all 263,944 words match (the start, 64 seeds of 409
 - **They're one quadratic interpolator, and our own data pins it down.** The structure published about the
   hardware (PPSSPP's write-up of fp64's work: 128 segments per function, a linear term over the index's low 16
   bits and a squared term over their top 10, results truncated to 22 bits) fits our measurements exactly, and
-  [`tools/psp-vfpu-measure/fit.py`](../tools/psp-vfpu-measure/fit.py) finds every segment's integers from them:
+  [`tools/psp-measure/fit.py`](../tools/psp-measure/fit.py) finds every segment's integers from them:
   `vrcp`, `vrsq`, `vsqrt`, `vexp2`, `vcos`, `vasin` and `vlog2`, each of their 2^23 results reproduced, with one
   scale (Q = 9) for all. The core uses those tables (`ares/psp/cpu/vfpu-segments.hpp`), not PPSSPP's.
 - **Some functions are others read differently.** `vsqrt` and `vrsq` ignore their input's lowest bit (pairs of
@@ -270,8 +270,8 @@ least one.
 - The FPU: a probe that tries one kind of value at a time, to find what the PSP refuses; then the FPU tests without
   them.
 
-Both are ready as round 3 (square) and the FPU probes (triangle) of `tools/psp-vfpu-measure` (its
-[README](../tools/psp-vfpu-measure/README.md) says what each holds): the FPU on safe inputs and FCSR as a program
+Both are ready as round 3 and the FPU probes, each a line of [`tools/psp-measure`](../tools/psp-measure/README.md)'s
+menu (its README says what each holds): the FPU on safe inputs and FCSR as a program
 finds it, products a sliver below the smallest normal number that tell rounding first from flushing first
 (`vmul-tiny`), a second recorder list of 284 entries (`ops3.h`), and seventeen probes, each run once, given up on if
 it stops the PSP.
@@ -281,9 +281,10 @@ the tables.
 
 ## Reproducing
 
-1. Build the program with pspdev's toolchain (`make` in `tools/psp-vfpu-measure`), copy `EBOOT.PBP` to
-   `PSP/GAME/VFPUMEASURE/` on a PSP with custom firmware, and run it, pressing O for round 1 (about 450 MB), X for
-   round 2 (about 240 MB), square for round 3 (about 6 MB) or triangle for the FPU probes. It writes `results/`
-   beside itself, and can be started again: finished tests are skipped, a test that stops the PSP twice is given up
-   on, and so is a probe that stops it once (see its [README](../tools/psp-vfpu-measure/README.md)).
-2. `tools/psp-vfpu-measure/compare.sh <results folder>` prints the tables above for that data.
+1. Build the program with pspdev's toolchain (`make` in `tools/psp-measure`), copy `EBOOT.PBP` to
+   `PSP/GAME/PSPMEASURE/` on a PSP with custom firmware, and run it, choosing round 1 (about 450 MB), round 2 (about
+   230 MB), round 3 (about 6 MB) or the FPU probes from its menu. It writes `results/vfpu` beside itself, and a round
+   can be started again: finished tests are skipped, a test that stops the PSP twice is given up on, and so is a
+   probe that stops it once. Starting afresh keeps the old results under another name (see its
+   [README](../tools/psp-measure/README.md)).
+2. `tools/psp-measure/compare.sh <results folder>/vfpu` prints the tables above for that data.
