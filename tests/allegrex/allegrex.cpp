@@ -877,11 +877,13 @@ int main() {
       groups++;
     }
   }
-  currentTest = "recompiler matches interpreter";
-  int before = failures;
-  matchesInterpreter();
-  std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
-  groups++;
+  for(auto& [name, run] : Tests{{"recompiler matches interpreter", matchesInterpreter}, {"measured on a PSP", measured}}) {
+    currentTest = name;
+    int before = failures;
+    run();
+    std::printf("%s %s\n", failures == before ? "pass" : "FAIL", currentTest);
+    groups++;
+  }
   std::printf("%d groups, %d failure%s\n", groups, failures, failures == 1 ? "" : "s");
   return failures ? 1 : 0;
 }

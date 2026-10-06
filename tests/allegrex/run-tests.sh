@@ -26,6 +26,14 @@ fi
 DEFINES=(-DBUILD_DEBUG -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1)
 INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty")
 
+#Results measured on a real PSP (measured.cpp), unpacked once.
+MEASURED="$OUT/measured"
+mkdir -p "$MEASURED"
+for packed in "$HERE"/measured/*.xz; do
+  unpacked="$MEASURED/$(basename "$packed" .xz)"
+  if [[ ! -f $unpacked || $packed -nt $unpacked ]]; then xz -dc "$packed" > "$unpacked"; fi
+done
+
 #nall and sljit change rarely and take the longest to build, so they're built once and kept.
 NALL="$OUT/nall-debug.o"
 if [[ ! -f $NALL || $ROOT/nall/nall/nall.cpp -nt $NALL ]]; then
@@ -42,6 +50,6 @@ fi
 
 # shellcheck disable=SC2086
 $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" \
-  -include "$HERE/prelude.hpp" "$ROOT/ares/psp/cpu/allegrex.cpp" "$HERE/allegrex.cpp" "$HERE/vfpu.cpp" "$NALL" "$SLJIT" "$ALLOCATOR" \
+  -include "$HERE/prelude.hpp" "$ROOT/ares/psp/cpu/allegrex.cpp" "$HERE/allegrex.cpp" "$HERE/vfpu.cpp" "$HERE/measured.cpp" "$NALL" "$SLJIT" "$ALLOCATOR" \
   "${LIBRARIES[@]}" -o "$OUT/allegrex"
-"$OUT/allegrex"
+ALLEGREX_MEASURED="$MEASURED" "$OUT/allegrex"
