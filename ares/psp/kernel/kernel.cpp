@@ -35,7 +35,8 @@ namespace ares::PlayStationPortable {
 #include "modules.cpp"
 #include "serialization.cpp"
 
-Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory), ge(ge) {
+Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
+: cpu(cpu), memory(memory), ge(ge), interruptsEnabled(cpu.scc.interrupts) {
   auto add = [&](const char* library, const char* name, auto (Kernel::*handler)() -> void) {
     functions.push_back({library, name, handler, nid(name)});
   };
@@ -141,6 +142,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("Kernel_Library",    "sceKernelLockLwMutexCB",        &Kernel::sceKernelLockLwMutexCB);
   add("Kernel_Library",    "sceKernelCpuSuspendIntr",       &Kernel::sceKernelCpuSuspendIntr);
   add("Kernel_Library",    "sceKernelCpuResumeIntr",        &Kernel::sceKernelCpuResumeIntr);
+  add("Kernel_Library",    "sceKernelCpuResumeIntrWithSync", &Kernel::sceKernelCpuResumeIntr);
   add("Kernel_Library",    "sceKernelIsCpuIntrEnable",      &Kernel::sceKernelIsCpuIntrEnable);
   add("Kernel_Library",    "sceKernelMemset",               &Kernel::sceKernelMemset);
   add("Kernel_Library",    "sceKernelMemcpy",               &Kernel::sceKernelMemcpy);

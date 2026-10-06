@@ -383,7 +383,8 @@ auto Kernel::sceOpenPSIDGetOpenPSID() -> void {
   result(0);
 }
 
-//Whether calls into the program (interrupts) are let through now: sceKernelCpuSuspendIntr holds them off.
+//Whether calls into the program (interrupts) are let through now: the CPU's interrupt flag, which
+//sceKernelCpuSuspendIntr (or the program's own mtic) clears.
 auto Kernel::sceKernelIsCpuIntrEnable() -> void {
   result(interruptsEnabled);
 }

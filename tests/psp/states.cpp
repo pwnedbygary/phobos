@@ -487,8 +487,7 @@ static auto stateFields() -> void {
     {"call function", [&] { k.calls[0].function ^= 4; }}, {"call gp", [&] { k.calls[0].gp ^= 4; }},
     {"call arguments", [&] { k.calls[0].arguments[2] ^= 1; }},
     {"call resumesGe", [&] { k.calls[0].resumesGe = true; }}, {"call vblank", [&] { k.calls[0].vblank = true; }},
-    {"interrupting", [&] { k.interrupting = true; }}, {"interruptsEnabled", [&] { k.interruptsEnabled = false; }},
-    {"rescheduleAfter", [&] { k.rescheduleAfter = true; }},
+    {"interrupting", [&] { k.interrupting = true; }}, {"rescheduleAfter", [&] { k.rescheduleAfter = true; }},
     {"interruptedHalted", [&] { k.interruptedHalted = true; }},
     {"callResumesGe", [&] { k.callResumesGe = true; }},
     //the GE driver: the first list paused, the second finishing
@@ -539,6 +538,7 @@ static auto stateFields() -> void {
   refuses("the GE three CALLs deep", [&] { ge.list.depth = 3; });
   refuses("an END that means nothing", [&] { ge.pending = GE::Stop::Stalled; });
   refuses("a thread running that isn't there", [&] { k.current = &ghost; });
+  refuses("an interrupt flag but 0 or 1", [&] { cpu.scc.interrupts = 2; });
   refuses("a disc folder's names without their entries", [&] { k.files[discFolder].discEntries.pop_back(); });
   refuses("a disc file open for writing", [&] { k.files[discFile].flags |= 0x0002; });
   //files' asynchronous requests as no machine has them: a state there isn't, one on a folder, one due further off

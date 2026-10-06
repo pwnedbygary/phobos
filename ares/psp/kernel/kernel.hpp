@@ -574,7 +574,8 @@ struct Kernel {
   };
   std::deque<Call> calls;       //waiting their turn
   bool interrupting = false;    //one is running
-  bool interruptsEnabled = true;  //sceKernelCpuSuspendIntr holds calls back until sceKernelCpuResumeIntr
+  u32& interruptsEnabled;       //the CPU's interrupt flag (mfic and mtic's, cpu.scc.interrupts): 1 on, 0 held off
+                                //(sceKernelCpuSuspendIntr), calls held back and the CPU kept for the running thread
   bool rescheduleAfter = false;   //a thread woke during the call: pick who runs once it's over
   Context interrupted{};        //the CPU as the call found it
   bool interruptedHalted = false;

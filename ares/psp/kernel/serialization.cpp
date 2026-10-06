@@ -497,11 +497,13 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(display.frameBuffer); s(display.bufferWidth); s(display.pixelFormat);
   check(display.mode == 0 && display.width == 480 && display.height == 272);
 
-  //calls into the program
+  //calls into the program. The interrupt flag is the CPU's (its state, loaded before this, has it): on or held off,
+  //1 or 0, as mtic and the kernel leave it
   vector(calls, [&](Call& call) {
     s(call.function); s(call.gp); s(call.arguments); s(call.resumesGe); s(call.vblank);
   });
-  s(interrupting); s(interruptsEnabled); s(rescheduleAfter);
+  check(interruptsEnabled <= 1);
+  s(interrupting); s(rescheduleAfter);
   context(interrupted);
   s(interruptedHalted); s(callResumesGe);
   //sub-interrupt handlers (none on the vertical blank's 16-31: a program can't register those), and a vertical

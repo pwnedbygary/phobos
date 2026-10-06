@@ -494,12 +494,24 @@ auto fpuMemory() -> void {
 }
 
 auto system() -> void {
-  // mtic sets the interrupt state and mfic reads it back; halt stops the CPU where it is.
+  // mtic sets the interrupt flag and mfic reads it back; halt stops the CPU where it is.
   Machine m;
-  m.run({0x70020026, 0x70080024}, [](Allegrex& s) { s.ipu.r[2] = 1; });  // mtic $2,$0; mfic $8,$0
-  CHECK(m.cpu.scc.interrupts, 1);
-  CHECK(m.gpr(8), 1);
+  m.run({0x70020026, 0x70080024}, [](Allegrex& s) { s.ipu.r[2] = 0; });  // mtic $2,$0; mfic $8,$0
+  CHECK(m.cpu.scc.interrupts, 0);
+  CHECK(m.gpr(8), 0);
   CHECK(m.cpu.ipu.pc, Base + 12);  // past the halt
+
+  // The flag is on as a program starts, and mtic keeps the lowest bit of what it's given alone, as pspautotests'
+  // intr/mfic recorded on a PSP (mtic of 2 and of 0x80000000 read back 0).
+  Machine flag;
+  flag.run({mfic(t0), mtic(t1), mfic(t2), mtic(t3), mfic(t4), mtic(t5), mfic(t6)}, [](Allegrex& s) {
+    s.ipu.r[t1] = 2, s.ipu.r[t3] = 3, s.ipu.r[t5] = 0x80000000;
+  });
+  CHECK(flag.gpr(t0), 1);
+  CHECK(flag.gpr(t2), 0);
+  CHECK(flag.gpr(t4), 1);
+  CHECK(flag.gpr(t6), 0);
+  CHECK(flag.cpu.scc.interrupts, 0);
 
   Machine atomic;
   atomic.run({lui(s0, Data >> 16), ori(s0, s0, Data & 0xffff), ll(t0, 0, s0), addiu(t0, t0, 1), sc(t0, 0, s0),

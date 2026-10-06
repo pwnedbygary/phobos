@@ -564,9 +564,10 @@ auto states(const fs::path& programs) -> void {
     //states of the layouts before this one (the header's second word): version 1, before part 17's threads,
     //semaphores and callbacks and part 19's modules; version 2, which part 17's branch and parts 18 and 19's each
     //laid out their own way; version 3, before calls into the program said which are the vertical blank's
-    //handlers; version 4, before files' asynchronous requests, sceSas, message pipes and mailboxes. Each is refused
-    //by its header, before anything is touched (even the compiled code, which any load throws away).
-    for(u8 version : {1, 2, 3, 4}) {
+    //handlers; version 4, before files' asynchronous requests, sceSas, message pipes and mailboxes; version 5,
+    //before interrupts held off kept the CPU and their flag was the CPU's alone. Each is refused by its header,
+    //before anything is touched (even the compiled code, which any load throws away).
+    for(u8 version : {1, 2, 3, 4, 5}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};

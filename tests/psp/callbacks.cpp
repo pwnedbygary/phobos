@@ -898,6 +898,83 @@ static auto handlerLeavesInterruptsOff() -> void {
   }
 }
 
+//One interrupt flag: the CPU's, which mfic reads and mtic sets, and the kernel's functions too, as pspautotests'
+//intr/mfic recorded on a PSP (its sequence, each value as it printed it): on as a program starts; held off and back
+//on by sceKernelCpuSuspendIntr and ResumeIntr, mfic seeing each; mtic of 0 and of 1 seen by sceKernelIsCpuIntrEnable
+//and sceKernelCpuSuspendIntr; mtic of 2 and of 0x80000000 off, the lowest bit alone counting, as for
+//sceKernelCpuResumeIntr of 2. The kernel goes by an mtic of 0 as by its own function: a delay is refused, and a
+//better thread whose delay ends while main spins doesn't take the CPU until sceKernelCpuResumeIntrWithSync (listed
+//as sceKernelCpuResumeIntr) turns them back on (main's M, the thread's T, main's R). (The CPU's flag had been apart
+//from the kernel's, read 0 as a program started, and kept whatever mtic wrote.) On both engines.
+static auto interruptFlag() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+    auto mark = [&](Assembler& a, char c) {  //a byte at R + 0x80 on, their count at R + 0x7c
+      a.li(t0, R + 0x7c); a.put(lw(t1, 0, t0)); a.put(addu(t2, t1, t0)); a.li(t3, u8(c)); a.put(sb(t3, 4, t2));
+      a.put(addiu(t1, t1, 1)); a.put(sw(t1, 0, t0));
+    };
+    Assembler better{m, 0x0880'2000};
+    better.li(a0, 1000);
+    better.call("sceKernelDelayThread");
+    mark(better, 'T');
+    better.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    u32 next = 0;
+    auto result = [&] { store(main, next++ * 4); };  //v0 into the next result
+    auto flag = [&] { main.put(mfic(v0)); result(); };
+    auto set = [&](u32 value) { main.li(t1, value); main.put(mtic(t1)); };
+    auto call = [&](const char* name, u32 argument) { main.li(a0, argument); main.call(name); };
+    flag();
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s1, v0, zero));
+    flag();
+    main.put(addu(a0, s1, zero));
+    main.call("sceKernelCpuResumeIntr");
+    flag();
+    set(0);
+    flag();
+    main.call("sceKernelIsCpuIntrEnable"); result();
+    main.call("sceKernelCpuSuspendIntr"); result();
+    set(1);
+    flag();
+    main.call("sceKernelIsCpuIntrEnable"); result();
+    set(0); set(2);
+    flag();
+    set(0); set(0x8000'0000);
+    flag();
+    main.call("sceKernelCpuSuspendIntr"); result();
+    call("sceKernelCpuResumeIntr", 1);
+    flag();
+    call("sceKernelCpuResumeIntr", 2);
+    flag();
+    call("sceKernelCpuResumeIntr", 1);
+    set(0);
+    call("sceKernelDelayThread", 100); result();
+    call("sceKernelCpuResumeIntrWithSync", 1); result();
+    flag();
+    startThread(main, m, "better", 0x0880'2000, 0x10);  //it runs at once, and delays
+    set(0);
+    spin(main, 3000);  //the better thread's delay ends meanwhile
+    mark(main, 'M');
+    call("sceKernelCpuResumeIntrWithSync", 1);
+    mark(main, 'R');
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    //intr/mfic's thirteen, then the refused delay, the resume's 0 and the flag after it
+    u32 expected[] = {1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, Kernel::ErrorCanNotWait, 0, 1};
+    for(u32 n = 0; n < 16; n++) {
+      check(__LINE__, ("result " + std::to_string(n)).c_str(), word(m, R + n * 4), expected[n]);
+    }
+    std::string order = m.system.memory.readString(R + 0x80, 8);
+    CHECK(order == "MTR", true);
+    if(order != "MTR") std::printf("  [%s] %s\n", recompile ? "recompiler" : "interpreter", order.c_str());
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
 auto callbackTests() -> Tests {
   return {
     {"callbacks in waits", runInWaits}, {"callbacks and waits going on", waitsGoOn},
@@ -907,6 +984,7 @@ auto callbackTests() -> Tests {
     {"interrupts held off, delivered once", heldOffOnce}, {"interrupts handlers longer than a frame", longHandlers},
     {"interrupts numbers", interruptTable}, {"interrupts held off keep the CPU", heldOffKeepsCpu},
     {"interrupts back on after a handler", handlerLeavesInterruptsOff},
+    {"interrupts one flag, mfic's and the kernel's", interruptFlag},
   };
 }
 

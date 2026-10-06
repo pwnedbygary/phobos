@@ -76,13 +76,18 @@ auto Kernel::mayWait() -> bool {
 }
 
 //Interrupts held off (sceKernelCpuSuspendIntr): the CPU's own interrupt flag, which user code reads and sets with
-//mfic and mtic, as pspautotests' intr/mfic recorded (only its lowest bit counts: resuming with 2 leaves them off).
-//With no interrupt, nothing can take the CPU from the running thread: the vertical blank's handlers and the GE's
-//callbacks wait, and so do threads whose waits end meanwhile (reschedule()), as the timer's and the sound DMA's
-//interrupts are what would have woken them. Nor may the thread wait itself (mayWait()). So the flag goes with the
-//thread that cleared it: a thread taking the CPU runs with its own, which is on (switchTo()). Brave Story holds
+//mfic and mtic, as pspautotests' intr/mfic recorded (1 as a program starts; only its lowest bit counts: resuming
+//with 2 leaves them off). interruptsEnabled is that very flag (cpu.scc.interrupts), so the program's own mfic and
+//mtic and these functions see and set the same one. With no interrupt, nothing can take the CPU from the running
+//thread: the vertical blank's handlers and the GE's callbacks wait, and so do threads whose waits end meanwhile
+//(reschedule()), as the timer's and the sound DMA's interrupts are what would have woken them. Nor may the thread
+//wait itself (mayWait()). So the flag goes with the thread that cleared it: a thread taking the CPU runs with its
+//own, which is on (switchTo()), and a handler's comes back on as it returns (callReturned()). Brave Story holds
 //interrupts off around its own lock; its sound thread, taking the CPU as a buffer ended in there, found them off,
-//every blocking output refused, and spun for good at the top priority.
+//every blocking output refused, and spun for good at the top priority. Turned back on by the program's own mtic
+//rather than by sceKernelCpuResumeIntr, what waited comes at the kernel's next look, not at once: the calls held
+//back as its next system call ends or the next thing comes due, a better thread made ready meanwhile at the
+//scheduler's next pick (the next thread woken, or the holder's next wait).
 
 //Holds interrupts off, returning whether they were on before (what ResumeIntr takes back).
 auto Kernel::sceKernelCpuSuspendIntr() -> void {
@@ -91,7 +96,8 @@ auto Kernel::sceKernelCpuSuspendIntr() -> void {
 }
 
 //Turns interrupts back on, or keeps them off, as the flag says. Back on, what waited for them comes now: the calls
-//into the program held back, then the thread the scheduler picks.
+//into the program held back, then the thread the scheduler picks. (Kernel_Library's sceKernelCpuResumeIntrWithSync
+//is listed as this.)
 auto Kernel::sceKernelCpuResumeIntr() -> void {
   bool was = interruptsEnabled;
   interruptsEnabled = arg(0) & 1;

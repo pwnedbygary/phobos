@@ -106,8 +106,9 @@ struct Allegrex {
 
   //Coprocessor 0 (system control). HLE runs the game in user mode, which barely touches it: its registers are
   //kept so mfc0 and mtc0 work, and the bad address of the last alignment error goes in register 8 (BadVAddr).
-  //interrupts is what mfic reads and mtic sets; halted is set by the halt instruction, which waits for an
-  //interrupt (the HLE kernel wakes the CPU when it has something to run).
+  //interrupts is the interrupt flag, which mfic reads and mtic sets: 1 with interrupts on, as a program starts, 0
+  //with them held off (the HLE kernel's flag too: its sceKernelCpuSuspendIntr and ResumeIntr set it). halted is set
+  //by the halt instruction, which waits for an interrupt (the HLE kernel wakes the CPU when it has something to run).
   struct SCC {
     u32 r[32];
     u32 interrupts;
