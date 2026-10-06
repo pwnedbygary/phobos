@@ -1,0 +1,30 @@
+name: PSP Core Tests
+
+# The PSP core (ares/psp) isn't in the app yet; its parts are tested on the host, here with the address and
+# undefined-behavior sanitizers.
+
+on:
+  push:
+    branches: [ master ]
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', '.github/workflows/psp-core.yml' ]
+  pull_request:
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', '.github/workflows/psp-core.yml' ]
+  workflow_dispatch:
+
+concurrency:
+  group: psp-core-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  allegrex:
+    name: Allegrex CPU tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run the tests
+        run: tests/allegrex/run-tests.sh
