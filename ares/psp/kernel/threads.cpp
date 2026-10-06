@@ -41,10 +41,11 @@ auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 
 
 //Sets a dormant thread going from its entry point: fresh registers, the stack pointer at the top of its stack, the
 //argument (argumentLength bytes at argumentPointer) copied just below it, with a0 its length and a1 where it is. ra
-//points at the trampoline, so returning from the entry function ends the thread. The caller has checked that the
-//argument is readable and fits (argumentFits()). It starts at the priority it was made with, whatever its last run
-//changed it to (pspautotests' threads/threads/change: started again, a thread is back at its first priority).
-auto Kernel::startThread(Thread& thread, u32 argumentLength, u32 argumentPointer) -> void {
+//points at the trampoline (returnAddress: its first syscall, or the third for a module's module_start), so
+//returning from the entry function ends the thread. The caller has checked that the argument is readable and fits
+//(argumentFits()). It starts at the priority it was made with, whatever its last run changed it to (pspautotests'
+//threads/threads/change: started again, a thread is back at its first priority).
+auto Kernel::startThread(Thread& thread, u32 argumentLength, u32 argumentPointer, u32 returnAddress) -> void {
   thread.priority = thread.initialPriority;
   auto& c = thread.context;
   c = {};
@@ -64,7 +65,7 @@ auto Kernel::startThread(Thread& thread, u32 argumentLength, u32 argumentPointer
   }
   c.gpr[29] = (sp - 0x40) & ~15u;
   c.gpr[28] = thread.gp;
-  c.gpr[31] = Trampoline;
+  c.gpr[31] = returnAddress;
   c.gpr[26] = thread.stackBlock + thread.stackSize - 0x100;  //k0: the thread's kernel area
   thread.wakeupCount = 0;
   ready(thread, 0);
@@ -234,7 +235,8 @@ auto Kernel::idle(u64 end) -> bool {
 }
 
 //A thread's run is over (status: what it returned, or passed to the exit function): it's dormant again, and the
-//threads waiting for its end are told how it ended.
+//threads waiting for its end are told how it ended, as are those waiting for a module whose module_start or
+//module_stop it ran (modules.cpp).
 auto Kernel::endThread(Thread& thread, s32 status) -> void {
   thread.status = Status::Dormant;
   thread.wait = Wait::None;
@@ -245,6 +247,7 @@ auto Kernel::endThread(Thread& thread, s32 status) -> void {
       ready(*other, u32(status));
     }
   }
+  moduleThreadEnded(thread, status);
 }
 
 //The trampoline's syscall: the running thread's entry function returned (with its result in v0).
@@ -279,9 +282,17 @@ auto Kernel::sceKernelStartThread() -> void {
   startThread(*thread, length, pointer);
 }
 
+//The calling thread ends. One made to run a module's module_start or module_stop is deleted too, as
+//sceKernelExitDeleteThread does: the PSP's module manager deletes the thread it made, however that ends.
 auto Kernel::sceKernelExitThread() -> void {
   if(!current) return;
-  endThread(*current, s32(arg(0)));
+  Thread* thread = current;
+  bool made = madeForModule(thread->uid);
+  endThread(*thread, s32(arg(0)));
+  if(made) {
+    current = nullptr;  //nothing to save: the thread is gone
+    deleteThread(*thread);
+  }
   reschedule();
 }
 
@@ -667,19 +678,23 @@ auto Kernel::sceKernelGetThreadExitStatus() -> void {
 }
 
 //(thread): ends another thread, wherever it is, as if it had exited (those waiting for its end are told it was
-//terminated); not the caller.
+//terminated); not the caller. One made to run a module's module_start or module_stop is deleted too, as
+//sceKernelExitThread deletes it: the PSP's module manager deletes the thread it made, however that ends.
 auto Kernel::sceKernelTerminateThread() -> void {
   auto thread = findThread(arg(0));
   if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);
   if(!thread) return result(ErrorUnknownThread);
   if(thread->status == Status::Dormant) return result(ErrorDormant);
+  bool made = madeForModule(thread->uid);
   endThread(*thread, s32(ErrorThreadTerminated));
   thread->suspended = false;
+  if(made) deleteThread(*thread);
   result(0);
   reschedule();
 }
 
-//(thread): ends another thread and deletes it.
+//(thread): ends another thread and deletes it (a module's module_start or module_stop thread too, its module told
+//as when it exits).
 auto Kernel::sceKernelTerminateDeleteThread() -> void {
   auto thread = findThread(arg(0));
   if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);

@@ -9,6 +9,10 @@ namespace ares::PlayStationPortable {
 #include "interrupts.cpp"
 #include "events.cpp"
 #include "sysmem.cpp"
+#include "aes.cpp"
+#include "keys.cpp"
+#include "kirk.cpp"
+#include "decrypt.cpp"
 #include "unpack.cpp"
 #include "disc.cpp"
 #include "io.cpp"
@@ -21,6 +25,7 @@ namespace ares::PlayStationPortable {
 #include "utility.cpp"
 #include "power.cpp"
 #include "system.cpp"
+#include "modules.cpp"
 #include "serialization.cpp"
 
 Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory), ge(ge) {
@@ -280,6 +285,15 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("ModuleMgrForUser",  "sceKernelSelfStopUnloadModule", &Kernel::sceKernelSelfStopUnloadModule);
   addNID("ModuleMgrForUser", "sceKernelStopUnloadSelfModuleWithStatus", 0x8f2d'f740,
          &Kernel::sceKernelStopUnloadSelfModuleWithStatus);
+  add("ModuleMgrForUser",  "sceKernelLoadModule",           &Kernel::sceKernelLoadModule);
+  add("ModuleMgrForUser",  "sceKernelLoadModuleByID",       &Kernel::sceKernelLoadModuleByID);
+  add("ModuleMgrForUser",  "sceKernelStartModule",          &Kernel::sceKernelStartModule);
+  add("ModuleMgrForUser",  "sceKernelStopModule",           &Kernel::sceKernelStopModule);
+  add("ModuleMgrForUser",  "sceKernelUnloadModule",         &Kernel::sceKernelUnloadModule);
+  add("ModuleMgrForUser",  "sceKernelGetModuleIdByAddress", &Kernel::sceKernelGetModuleIdByAddress);
+  add("ModuleMgrForUser",  "sceKernelGetModuleId",          &Kernel::sceKernelGetModuleId);
+  add("ModuleMgrForUser",  "sceKernelGetModuleIdList",      &Kernel::sceKernelGetModuleIdList);
+  add("ModuleMgrForUser",  "sceKernelQueryModuleInfo",      &Kernel::sceKernelQueryModuleInfo);
   add("sceUtility",        "sceUtilityGetSystemParamInt",   &Kernel::sceUtilityGetSystemParamInt);
   add("sceUtility",        "sceUtilityGetSystemParamString", &Kernel::sceUtilityGetSystemParamString);
   add("sceUtility",        "sceUtilitySetSystemParamString", &Kernel::sceUtilitySetSystemParamString);
@@ -320,43 +334,18 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   ge.log = [this](const std::string& text) { note("GE: " + text); };
 }
 
-//A function's NID: the first four bytes of the SHA-1 hash of its name, as a little-endian word. SHA-1 as FIPS
-//180-1 defines it: the message padded to a multiple of 64 bytes (a 1 bit, zeros, then its length in bits), each
-//64-byte chunk stirred into five words through 80 rounds.
+//A function's NID: the first four bytes of the SHA-1 digest of its name (kirk.cpp), as a little-endian word.
 auto Kernel::nid(const std::string& name) -> u32 {
-  std::vector<u8> message(name.begin(), name.end());
-  u64 bits = u64(message.size()) * 8;
-  message.push_back(0x80);
-  while(message.size() % 64 != 56) message.push_back(0);
-  for(s32 shift = 56; shift >= 0; shift -= 8) message.push_back(u8(bits >> shift));
-  u32 hash[5] = {0x6745'2301, 0xefcd'ab89, 0x98ba'dcfe, 0x1032'5476, 0xc3d2'e1f0};
-  for(size_t chunk = 0; chunk < message.size(); chunk += 64) {
-    u32 w[80];
-    for(u32 i = 0; i < 16; i++) {
-      const u8* b = &message[chunk + i * 4];
-      w[i] = u32(b[0]) << 24 | u32(b[1]) << 16 | u32(b[2]) << 8 | u32(b[3]);
-    }
-    for(u32 i = 16; i < 80; i++) w[i] = std::rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
-    u32 a = hash[0], b = hash[1], c = hash[2], d = hash[3], e = hash[4];
-    for(u32 i = 0; i < 80; i++) {
-      u32 f, k;
-      if(i < 20)      f = (b & c) | (~b & d),          k = 0x5a82'7999;
-      else if(i < 40) f = b ^ c ^ d,                   k = 0x6ed9'eba1;
-      else if(i < 60) f = (b & c) | (b & d) | (c & d), k = 0x8f1b'bcdc;
-      else            f = b ^ c ^ d,                   k = 0xca62'c1d6;
-      u32 t = std::rotl(a, 5) + f + e + k + w[i];
-      e = d; d = c; c = std::rotl(b, 30); b = a; a = t;
-    }
-    hash[0] += a; hash[1] += b; hash[2] += c; hash[3] += d; hash[4] += e;
-  }
-  u32 first = hash[0];  //the hash's first four bytes, most significant first; read them as a little-endian word
-  return first >> 24 | (first >> 8 & 0xff00) | (first << 8 & 0xff'0000) | first << 24;
+  auto digest = sha1((const u8*)name.data(), name.size());
+  return digest[0] | digest[1] << 8 | digest[2] << 16 | u32(digest[3]) << 24;
 }
 
 //Back to how the PSP is when it has just started a program's loading: no threads, no memory handed out, the clock
 //at zero. The memory map must have been powered first: the trampoline goes into kernel memory.
 auto Kernel::power() -> void {
   module = {};
+  modules.clear();
+  programUID = 0;
   exited = false;
   stuck = false;
   cycles = 0;
@@ -413,8 +402,10 @@ auto Kernel::power() -> void {
   memory.write(4, Trampoline + 4, 0x0000'000d);                  //break: never reached
   memory.write(4, Trampoline + 8, CallReturnCode << 6 | 0x0c);  //syscall: a call into the program returned
   memory.write(4, Trampoline + 12, 0x0000'000d);
-  memory.write(4, Trampoline + 16, CallbackReturnCode << 6 | 0x0c);  //syscall: a thread's callback returned
+  memory.write(4, Trampoline + 16, ModuleReturnCode << 6 | 0x0c);  //syscall: a module_start or module_stop returned
   memory.write(4, Trampoline + 20, 0x0000'000d);
+  memory.write(4, Trampoline + 24, CallbackReturnCode << 6 | 0x0c);  //syscall: a thread's callback returned
+  memory.write(4, Trampoline + 28, 0x0000'000d);
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
@@ -464,6 +455,7 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     }
   }
   for(auto& skipped : module.skipped) note("the loader left out " + skipped);
+  programUID = newUID();  //the program is a module too, the first
 
   cpu.power(module.entry);
   if(auto folder = programFolder(path); !folder.empty()) workingDirectory = folder;  //relative paths start there
@@ -532,6 +524,10 @@ auto Kernel::syscall(u32 code) -> bool {
   }
   if(code == CallReturnCode) {
     callReturned();
+    return true;
+  }
+  if(code == ModuleReturnCode) {
+    moduleReturned();
     return true;
   }
   if(code == CallbackReturnCode) {

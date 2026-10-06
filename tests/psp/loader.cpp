@@ -286,15 +286,16 @@ static auto refused() -> void {
     return Loader::load(s.memory, file.data(), file.size(), base, {}, module);
   };
   auto contains = [](const std::string& text, const char* part) { return text.find(part) != std::string::npos; };
-  CHECK(contains(why({'~', 'P', 'S', 'P', 0, 0, 0, 0}), "encrypted"), true);
+  //encrypted programs the decrypter refuses (tests/psp/decrypt.cpp tests it): the loader says what it said
+  CHECK(contains(why({'~', 'P', 'S', 'P', 0, 0, 0, 0}), "encrypted program cut short"), true);
   {
-    Bytes encrypted;  //a ~PSP header: the module's name and its encryption type (9: a game disc's EBOOT.BIN)
+    Bytes encrypted;  //a ~PSP header with the module's name, tag 0 and nothing that checks out
     encrypted.putString(0, "~PSP");
     encrypted.putString(0x0a, "TESTGAME");
     encrypted.put8(0x7c, 9);
     encrypted.at(0x150);
     auto message = why(encrypted.data);
-    CHECK(contains(message, "module \"TESTGAME\"") && contains(message, "encryption type 9"), true);
+    CHECK(contains(message, "module \"TESTGAME\"") && contains(message, "doesn't check out"), true);
   }
   CHECK(contains(why({1, 2, 3}), "not an ELF"), true);
   {

@@ -14,6 +14,7 @@
 
 #include "loader.hpp"
 #include "disc.hpp"
+#include "crypto.hpp"
 #include "../ge/ge.hpp"
 
 //The HLE kernel: Phobos's own version of the PSP's operating system, as far as a game can see it.
@@ -146,11 +147,20 @@ struct Kernel {
   static constexpr u32 ErrorSuspended             = 0x8002'01a3;
   static constexpr u32 ErrorNotSuspended          = 0x8002'01a5;
   static constexpr u32 ErrorThreadTerminated      = 0x8002'01ac;
+  //modules' (pspkerror.h)
+  static constexpr u32 ErrorIllegalObject         = 0x8002'012d;  //not a module, or one the loader refuses
+  static constexpr u32 ErrorUnknownModule         = 0x8002'012e;
+  static constexpr u32 ErrorAlreadyStarted        = 0x8002'0133;
+  static constexpr u32 ErrorNotStarted            = 0x8002'0134;
+  static constexpr u32 ErrorAlreadyStopped        = 0x8002'0135;
+  static constexpr u32 ErrorNotStopped            = 0x8002'0137;
+  static constexpr u32 ErrorUnsupportedPrxType    = 0x8002'0148;  //an encrypted module that can't be decrypted
 
   static constexpr u64 CPUFrequency = 333'000'000;                   //cycles a second
   static constexpr u64 VblankCycles = CPUFrequency * 1001 / 60'000;  //59.94 frames a second
   static constexpr u32 Trampoline = 0x0800'0000;  //kernel memory: where a thread returns to when its entry function
-                                                  //ends (and, 8 bytes on, a call into the program)
+                                                  //ends (8 bytes on, a call into the program; 16 on, a module's
+                                                  //module_start or module_stop; 24 on, a thread's callback)
   static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
 
@@ -201,7 +211,8 @@ struct Kernel {
   };
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
-  static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, CallbackReturnCode = 3, FirstImportCode = 0x1000;
+  static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4;
+  static constexpr u32 FirstImportCode = 0x1000;
 
   //threads.cpp
   struct Context {  //a thread's registers while another runs
@@ -212,7 +223,7 @@ struct Kernel {
   enum class Status : u32 { Running = 1, Ready = 2, Waiting = 4, Dormant = 16 };  //the PSP's numbers
   enum class Wait : u32 {
     None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd, Audio,
-    Fpl, Vpl,
+    Fpl, Vpl, Module,
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -227,12 +238,13 @@ struct Kernel {
     Status status = Status::Dormant;
     Context context{};
     Wait wait = Wait::None;
-    u32 waitID = 0;        //the semaphore, mutex, thread, event flag or display list waited for; the sound channel
-                           //(0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC channel's)
+    u32 waitID = 0;        //the semaphore, mutex, thread, event flag, display list or module waited for; the sound
+                           //channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC channel's)
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs; a mixer
                            //output's left volume; the samples an SRC output's buffer was armed with
     u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume
-    u32 waitPointer = 0;   //where an event flag wait puts the bits it saw; the buffer a mixer output hands over
+    u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, and a module wait the function's result;
+                           //the buffer a mixer output hands over
     u64 wakeAt = 0;        //for a delay or timeout: the cycle to wake at (0: none)
     u32 timeoutPointer = 0;
     u64 readySince = 0;    //to keep first-come order among equal priorities
@@ -261,7 +273,7 @@ struct Kernel {
   u32 vblanks = 0;
 
   auto createThread(const std::string& name, u32 entry, u32 priority, u32 stackSize, u32 attributes, u32 gp) -> s32;
-  auto startThread(Thread& thread, u32 argumentLength, u32 argumentPointer) -> void;
+  auto startThread(Thread& thread, u32 argumentLength, u32 argumentPointer, u32 returnAddress = Trampoline) -> void;
   auto argumentFits(const Thread& thread, u32 length) const -> bool;
   auto save(Context& context) -> void;
   auto restore(const Context& context) -> void;
@@ -853,6 +865,45 @@ struct Kernel {
   auto sceRtcGetCurrentTick() -> void;
   auto sceRtcGetTickResolution() -> void;
   auto sceKernelCacheUnneeded() -> void;
+
+  //modules.cpp: the modules (PRXs) a program loads besides itself
+  //(Unloading: its module_stop runs as it unloads itself, and it goes once that ends)
+  enum class ModuleStatus : u32 { Loaded, Starting, Started, Stopping, Stopped, Unloading };
+  struct LoadedModule {
+    u32 uid = 0;
+    std::string path;      //the file it was loaded from
+    bool standIn = false;  //one of Sony's, which the HLE kernel stands in for: nothing of it is in memory
+    u32 block = 0;         //the memory block it was loaded into (its ID), or 0
+    ModuleStatus status = ModuleStatus::Loaded;
+    u32 thread = 0;        //the thread running its module_start or module_stop
+    Module module;         //what the loader found (for a stand-in, its name and attributes)
+  };
+  std::map<u32, LoadedModule> modules;
+  u32 programUID = 0;      //the program's own module ID
+  auto readWhole(const std::string& path, std::vector<u8>& data) -> u32;
+  auto readOpenFile(OpenFile& open, u64 size, std::vector<u8>& data) -> u32;
+  auto loadModule(const std::vector<u8>& file, const std::string& path) -> u32;
+  auto standIn(const std::string& name, u32 attributes, const std::string& path) -> u32;
+  auto unloadModule(u32 uid) -> void;
+  auto unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -> void;
+  auto linkImports() -> void;
+  auto moduleAt(u32 address) const -> u32;
+  auto moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32;
+  auto makeModuleThread(const LoadedModule& loaded, u32 entry, u32 parameters, u32 length, u32 argument,
+                        u32 options) -> s32;
+  auto madeForModule(u32 thread) const -> bool;
+  auto runModuleFunction(LoadedModule& loaded, u32 nid, ModuleStatus during) -> void;
+  auto moduleThreadEnded(Thread& thread, s32 status) -> void;
+  auto moduleReturned() -> void;
+  auto sceKernelLoadModule() -> void;
+  auto sceKernelLoadModuleByID() -> void;
+  auto sceKernelStartModule() -> void;
+  auto sceKernelStopModule() -> void;
+  auto sceKernelUnloadModule() -> void;
+  auto sceKernelGetModuleIdByAddress() -> void;
+  auto sceKernelGetModuleId() -> void;
+  auto sceKernelGetModuleIdList() -> void;
+  auto sceKernelQueryModuleInfo() -> void;
 };
 
 }

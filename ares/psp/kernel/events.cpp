@@ -221,8 +221,8 @@ auto Kernel::runCallbacks(Thread& thread) -> void {
 }
 
 //Starts the thread's next notified callback, on its stack below where it was: fn(how many times it was notified, the
-//last notification's word, its own argument), returning to the trampoline, and so to callbackReturned(). Its count
-//starts again from 0. False if none is notified.
+//last notification's word, its own argument), returning to the trampoline's fourth syscall, and so to
+//callbackReturned(). Its count starts again from 0. False if none is notified.
 auto Kernel::callNextCallback(Thread& thread) -> bool {
   auto callback = pendingCallback(thread);
   if(!callback) return false;
@@ -233,14 +233,14 @@ auto Kernel::callNextCallback(Thread& thread) -> bool {
   cpu.ipu.r[6] = callback->argument;
   callback->notifyCount = callback->notifyArg = 0;
   cpu.ipu.r[29] = (thread.beforeCallback.gpr[29] - 0x40) & ~15u;
-  cpu.ipu.r[31] = Trampoline + 16;
+  cpu.ipu.r[31] = Trampoline + 24;
   cpu.ipu.pc = callback->function;
   cpu.ipu.pd = callback->function + 4;
   return true;
 }
 
-//The trampoline's syscall: the running thread's callback returned (its result in v0). Anything but 0 deletes it. The
-//next one notified runs; when none is left, the thread is put back as its callbacks found it.
+//The trampoline's fourth syscall: the running thread's callback returned (its result in v0). Anything but 0 deletes
+//it. The next one notified runs; when none is left, the thread is put back as its callbacks found it.
 auto Kernel::callbackReturned() -> void {
   if(!current || !current->inCallback) return;
   auto& thread = *current;

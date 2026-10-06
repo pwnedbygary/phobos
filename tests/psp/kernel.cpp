@@ -265,7 +265,7 @@ static auto userPartition() -> void {
 
 //The SDK and compiler versions a program's start-up code tells the system, through the first SDK's function and
 //one of its siblings for later ones (whose NIDs aren't their names' hashes), read back; and a later SDK's way of
-//unloading itself, which ends the program.
+//unloading itself, which ends the program when the program calls it (modules.cpp has a module calling it).
 static auto sdkVersions() -> void {
   KernelMachine m;
   CHECK(m.call("sceKernelGetCompiledSdkVersion", {}), 0);

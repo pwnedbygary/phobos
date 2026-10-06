@@ -6,18 +6,17 @@ auto Kernel::sceKernelExitGame() -> void {
   switchTo(nullptr);
 }
 
-//(exit status, argument size, argument): the module stops and unloads itself, which for a program on its own is
-//the same as leaving.
+//(exit status, argument size, argument): the module holding the code that called stops and unloads itself, its
+//calling thread ending (modules.cpp, unloadSelf()); the program doing it is leaving.
 auto Kernel::sceKernelSelfStopUnloadModule() -> void {
-  exited = true;
-  switchTo(nullptr);
+  unloadSelf(s32(arg(0)), arg(1), arg(2), 0);
 }
 
-//(exit status, argument size, argument, where to put module_stop's status, options): the same, as later SDKs'
-//start-up code calls it (a C++ program's abort() ends here too). The program has no module_stop to run: it's over.
+//(exit status, argument size, argument, where to put module_stop's status, options): the same, as later SDKs' code
+//calls it (Gunhound EX does; a C++ program's abort() ends here too), the options going to module_stop's thread; the
+//program calling it is leaving. module_stop's status isn't written: nothing waits for it (unloadSelf()).
 auto Kernel::sceKernelStopUnloadSelfModuleWithStatus() -> void {
-  exited = true;
-  switchTo(nullptr);
+  unloadSelf(s32(arg(0)), arg(1), arg(2), arg(4));
 }
 
 //(which setting, where to put it): the system's settings (psputility_sysparam.h). Language 1 is English; button
