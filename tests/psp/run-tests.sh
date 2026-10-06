@@ -23,6 +23,14 @@ if [[ $(uname) == Darwin ]]; then
 fi
 DEFINES=(-DBUILD_DEBUG -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1)
 INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty")
+#FFmpeg's decoders (docs/psp-core.md, part 26), built once for the host by thirdparty/ffmpeg/build.sh and kept;
+#PSP_FFMPEG=0 builds without them, as the core is without its define (no decoders: the libraries refuse streams).
+if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
+  FFMPEG=$("$ROOT/thirdparty/ffmpeg/build.sh" host | tail -1)
+  DEFINES+=(-DARES_ENABLE_FFMPEG)
+  INCLUDES+=(-isystem "$FFMPEG/include")
+  LIBRARIES+=(-L"$FFMPEG/lib" -lavcodec -lavutil -Wl,-rpath,"$FFMPEG/lib")
+fi
 
 #nall and sljit change rarely and take the longest to build, so they're built once and kept.
 NALL="$OUT/nall-debug.o"

@@ -6,9 +6,9 @@ name: PSP Core Tests
 on:
   push:
     branches: [ master ]
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
   pull_request:
-    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', '.github/workflows/psp-core.yml' ]
+    paths: [ 'ares/psp/**', 'ares/ares/types.hpp', 'nall/**', 'tests/allegrex/**', 'tests/psp/**', 'thirdparty/ffmpeg/**', '.github/workflows/psp-core.yml' ]
   workflow_dispatch:
 
 concurrency:
@@ -35,6 +35,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-host-${{ runner.os }}-${{ hashFiles('thirdparty/ffmpeg/build.sh') }}
 
       - name: Run the tests
         run: tests/psp/run-tests.sh

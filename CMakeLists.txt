@@ -289,6 +289,39 @@ find_library(dl-lib dl)
 
 target_link_libraries(phobos_android ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} adrenotools)
 
+# FFmpeg's LGPL decoders for the PSP's music and movies (docs/psp-core.md, part 26): built from the official release
+# by thirdparty/ffmpeg/build.sh (once, then kept in its cache) and linked as the shared libraries libavcodec.so and
+# libavutil.so, which the APK carries beside Phobos's own library, as the LGPL asks. -DPHOBOS_FFMPEG=OFF builds
+# without them: the PSP then has no music or movies, as before.
+option(PHOBOS_FFMPEG "Decode the PSP's music and movies with FFmpeg's LGPL decoders" ON)
+if(PHOBOS_FFMPEG)
+  set(FFMPEG_BUILD ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ffmpeg/build.sh)
+  set(FFMPEG_NDK ${CMAKE_ANDROID_NDK})
+  if(NOT FFMPEG_NDK)
+    set(FFMPEG_NDK ${ANDROID_NDK})
+  endif()
+  execute_process(
+    COMMAND bash ${FFMPEG_BUILD} android ${FFMPEG_NDK} ${ANDROID_PLATFORM_LEVEL}
+    OUTPUT_VARIABLE FFMPEG_OUTPUT
+    RESULT_VARIABLE FFMPEG_RESULT
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT FFMPEG_RESULT EQUAL 0)
+    message(FATAL_ERROR "FFmpeg didn't build (above); -DPHOBOS_FFMPEG=OFF builds Phobos without it")
+  endif()
+  string(REGEX REPLACE ".*\n" "" FFMPEG_DIR "${FFMPEG_OUTPUT}")
+  foreach(FFMPEG_LIBRARY avcodec avutil)
+    add_library(${FFMPEG_LIBRARY} SHARED IMPORTED)
+    set_target_properties(${FFMPEG_LIBRARY} PROPERTIES IMPORTED_LOCATION ${FFMPEG_DIR}/lib/lib${FFMPEG_LIBRARY}.so)
+  endforeach()
+  # Built again should the cache have gone since CMake ran (a no-op otherwise).
+  add_custom_target(ffmpeg COMMAND bash ${FFMPEG_BUILD} android ${FFMPEG_NDK} ${ANDROID_PLATFORM_LEVEL} > /dev/null
+    BYPRODUCTS ${FFMPEG_DIR}/lib/libavcodec.so ${FFMPEG_DIR}/lib/libavutil.so)
+  add_dependencies(phobos_android ffmpeg)
+  target_include_directories(phobos_android SYSTEM PRIVATE ${FFMPEG_DIR}/include)
+  target_compile_definitions(phobos_android PRIVATE ARES_ENABLE_FFMPEG)
+  target_link_libraries(phobos_android avcodec avutil)
+endif()
+
 # Objects are ThinLTO bitcode (-flto=thin above). Without LTO flags on the link
 # line lld still runs ThinLTO, but its backend defaults to -O2.
 target_link_options(phobos_android PRIVATE -flto=thin -O3)
