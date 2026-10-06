@@ -124,7 +124,9 @@ static auto waiting() -> void {
   }
 }
 
-//The user partition: the lowest place, the highest, at an address; what's left; freeing.
+//The user partition: the lowest place, the highest, at an address; what's left; freeing, but not a block the kernel
+//holds (a thread's stack, a memory pool's), which would leave its owner in memory handed out again: the machine's
+//state, which checks each owner's block, still loads.
 static auto partitions() -> void {
   KernelMachine m;
   u32 name = m.string("block");
@@ -150,6 +152,17 @@ static auto partitions() -> void {
   CHECK(m.call("sceKernelGetBlockHeadAddr", {taken}), 0x0890'0100);
   u32 unaligned = m.call("sceKernelAllocPartitionMemory", {2, name, 2, 0x10, 0x08a0'0001});
   CHECK(m.call("sceKernelGetBlockHeadAddr", {unaligned}), 0x08a0'0100);
+  s32 thread = m.kernel.createThread("held", 0x0880'1000, 0x20, 0x1000, 0, 0);
+  u32 stack = 0, pool = m.call("sceKernelCreateFpl", {name, 2, 0, 16, 1, 0});
+  for(auto& block : m.kernel.blocks) if(block.address == m.kernel.threads[thread]->stackBlock) stack = block.uid;
+  CHECK(m.call("sceKernelFreePartitionMemory", {stack}), Kernel::ErrorIllegalPermission);
+  CHECK(m.call("sceKernelFreePartitionMemory", {m.kernel.pools[pool].block}), Kernel::ErrorIllegalPermission);
+  CHECK(m.call("sceKernelGetBlockHeadAddr", {stack}), m.kernel.threads[thread]->stackBlock);
+  serializer state;
+  CHECK(m.kernel.serialize(state), true);
+  KernelMachine n;
+  serializer load{state.data(), state.size()};
+  CHECK(n.kernel.serialize(load), true);
 }
 
 //Blocks starting on a multiple of an alignment (types 3 and 4, as Sony's SDK's heaps ask for them): the lowest such

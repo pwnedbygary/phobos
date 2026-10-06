@@ -4,6 +4,8 @@
 //threads take turns.
 #include "kernel-machine.hpp"
 
+#include <chrono>
+
 namespace allegrex_test::psp {
 
 namespace {
@@ -226,7 +228,9 @@ static auto threadControl() -> void {
 }
 
 //A new thread's stack: filled with 0xff past its ID at the bottom (all of it free but those 16 bytes, until it
-//runs), unless its attributes say not to; a semaphore's status; the attribute only the VFPU's may change.
+//runs), unless its attributes say not to, and read where it is: a stack of 4 GiB, as a state could once load, is
+//answered at once (it was copied out whole first), with nothing past RAM to count. A semaphore's status; the
+//attribute only the VFPU's may change.
 static auto threadStatus() -> void {
   KernelMachine m;
   s32 filled = m.kernel.createThread("filled", 0x0880'1000, 0x20, 0x1000, 0, 0);
@@ -239,6 +243,11 @@ static auto threadStatus() -> void {
   m.system.memory.write(4, thread.stackBlock + 0x800, 0);  //touched half way up
   CHECK(m.call("sceKernelGetThreadStackFreeSize", {u32(filled)}), 0x800 - 0x10);
   CHECK(m.call("sceKernelGetThreadStackFreeSize", {0x7777}), Kernel::ErrorUnknownThread);
+  thread.stackSize = 0xffff'f000;
+  auto start = std::chrono::steady_clock::now();
+  CHECK(m.call("sceKernelGetThreadStackFreeSize", {u32(filled)}), 0);
+  CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(100), true);
+  thread.stackSize = 0x1000;
   u32 semaphore = m.call("sceKernelCreateSema", {m.string("status"), 0x100, 2, 9, 0});
   m.call("sceKernelPollSema", {semaphore, 1});
   m.system.memory.write(4, R, 52);

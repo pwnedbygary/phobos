@@ -739,15 +739,16 @@ auto Kernel::sceKernelChangeCurrentThreadAttr() -> void {
 //that isn't ends the count. The bottom 16 bytes, where the thread's ID is, aren't counted: on a PSP (pspautotests'
 //threads/threads/stackfree), a thread whose 4 KiB stack had gone 0x150 bytes deep has 0xea0 free, one that had gone
 //0x550 deep 0xaa0. A stack that wasn't filled (PSP_THREAD_ATTR_NO_FILLSTACK) is counted the same way, through
-//whatever was in that memory before: there, nothing.
+//whatever was in that memory before: there, nothing. The stack is read where it is, in RAM (a block of the user
+//partition), not copied out first.
 auto Kernel::sceKernelGetThreadStackFreeSize() -> void {
   auto thread = findThread(arg(0));
   if(!thread) return result(ErrorUnknownThread);
-  if(thread->stackSize <= 16) return result(0);
-  std::vector<u8> stack(thread->stackSize);
-  memory.copyOut(stack.data(), thread->stackBlock, thread->stackSize);
-  auto written = std::find_if(stack.begin() + 16, stack.end(), [](u8 byte) { return byte != 0xff; });
-  result(u32(written - stack.begin()) - 16);
+  u32 unused = 0;
+  if(const u8* stack = memory.pointer(thread->stackBlock, thread->stackSize)) {
+    while(16 + unused < thread->stackSize && stack[16 + unused] == 0xff) unused++;
+  }
+  result(unused);
 }
 
 //The profiler's figures for a thread, or for all (sceKernelReferThreadProfiler, sceKernelReferGlobalProfiler): only

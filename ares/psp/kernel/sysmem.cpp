@@ -116,8 +116,23 @@ auto Kernel::sceKernelAllocPartitionMemory() -> void {
   result(block ? block->uid : ErrorAllocationFailed);
 }
 
+//Whether the kernel holds a block for something of its own: a thread's stack, a memory pool, or a module. The rest
+//are blocks the program asked for.
+auto Kernel::blockHeld(const Block& block) const -> bool {
+  for(auto& [uid, thread] : threads) if(thread->stackBlock == block.address) return true;
+  for(auto& [uid, pool] : pools) if(pool.block == block.uid) return true;
+  for(auto& [uid, loaded] : modules) if(loaded.block == block.uid) return true;
+  return false;
+}
+
+//(block): one the program asked for goes back to the partition. One the kernel holds isn't the program's to free
+//(ILLEGAL_PERMISSION; not tried on a PSP): its owner would be left in memory handed out again.
 auto Kernel::sceKernelFreePartitionMemory() -> void {
-  result(release(arg(0)) ? 0 : ErrorUnknownUID);
+  auto block = std::find_if(blocks.begin(), blocks.end(), [&](auto& b) { return b.uid == arg(0); });
+  if(block == blocks.end()) return result(ErrorUnknownUID);
+  if(blockHeld(*block)) return result(ErrorIllegalPermission);
+  blocks.erase(block);
+  result(0);
 }
 
 auto Kernel::sceKernelGetBlockHeadAddr() -> void {

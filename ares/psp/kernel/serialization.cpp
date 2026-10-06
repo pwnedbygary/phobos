@@ -11,11 +11,11 @@
 //
 //Loading checks what it reads. Only a machine like this one makes states, so a value none could have (a position
 //past the end of what it's a position in, a list the GE driver can't have queued, a display mode there isn't, a clock
-//that would take hours to catch up, a memory pool that doesn't hold together) means the state is damaged, and it's
-//refused. Lists have no limits of their own: their items are read one at a time, and a list that claims more than
-//the rest of the state holds runs out of state part way, and is refused then. Nothing is made room for in advance, so
-//however damaged a count, what loading takes in memory stays a small multiple of the state's own size (an item takes
-//a few times its bytes in the state).
+//that would take hours to catch up, a memory pool that doesn't hold together, a thread's stack that isn't a block of
+//its own) means the state is damaged, and it's refused. Lists have no limits of their own: their items are read one
+//at a time, and a list that claims more than the rest of the state holds runs out of state part way, and is refused
+//then. Nothing is made room for in advance, so however damaged a count, what loading takes in memory stays a small
+//multiple of the state's own size (an item takes a few times its bytes in the state).
 
 //Text: its length, then its characters. A length past the rest of the state can't be real.
 static auto serializeText(serializer& s, u32 end, std::string& text, bool& valid) -> void {
@@ -288,7 +288,22 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
     for(auto& [uid, flag] : eventFlags) check(uid < nextUID && flag.uid == uid);
     for(auto& [uid, callback] : callbacks) check(uid < nextUID && callback.uid == uid);
-    for(auto& block : blocks) check(block.uid < nextUID);
+    //Blocks lie inside the user partition, as allocate() hands them out. A thread's stack is a block of its own, of
+    //its size (createThread() makes it, 0x200 bytes at least), which sceKernelGetThreadStackFreeSize reads in place.
+    for(auto& block : blocks) {
+      check(block.uid < nextUID && block.address >= UserMemory && u64(block.address) + block.size <= userEnd());
+    }
+    std::vector<u32> owners(blocks.size());  //how many claim each block
+    auto own = [&](auto&& matches) {  //the first block that matches gains an owner; false if none does
+      for(u32 n = 0; n < blocks.size(); n++) if(matches(blocks[n])) return owners[n]++, true;
+      return false;
+    };
+    for(auto& entry : threads) {
+      auto& t = *entry.second;
+      auto stack = [&](const Block& b) { return b.address == t.stackBlock && b.size == t.stackSize; };
+      check(t.stackSize >= 0x200 && own(stack));
+    }
+    for(u32 claims : owners) check(claims <= 1);
     check(programUID < nextUID);
     //A module isn't the program. It has a thread exactly while its module_start or module_stop runs, and that thread
     //is there. A stand-in has nothing in memory; another module has a block of the user partition, or none, but

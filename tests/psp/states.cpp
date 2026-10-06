@@ -186,7 +186,8 @@ static auto stateFields() -> void {
   u32 flag = a.call("sceKernelCreateEventFlag", {a.string("flag"), 0, 3, 0});
   u32 callback = a.call("sceKernelCreateCallback", {a.string("callback"), 0x0880'7000, 0x42});
   k.memoryStickCallbacks = {callback};
-  k.allocate(0x1000, 0, 0, "block");
+  u32 plainBlock = k.allocate(0x1000, 0, 0, "block")->uid;
+  u32 spareStack = k.allocate(0xf00, 0, 0, "spare stack")->address;  //what thread one's stack moves to below
   u32 fixedID = a.call("sceKernelCreateFpl", {a.string("fpl"), 2, 0, 16, 2, 0});
   u32 variableID = a.call("sceKernelCreateVpl", {a.string("vpl"), 2, 0, 0x100, 0});
   u32 spareID = a.call("sceKernelCreateFpl", {a.string("spare"), 2, 0, 16, 1, 0});
@@ -282,7 +283,10 @@ static auto stateFields() -> void {
   auto& sema = k.semaphores[semaphore];
   auto& eventFlag = k.eventFlags[flag];
   auto& cb = k.callbacks[callback];
-  auto& block = k.blocks.back();
+  auto& block = *std::find_if(k.blocks.begin(), k.blocks.end(), [&](auto& b) { return b.uid == plainBlock; });
+  auto stackOf = [&](const Kernel::Thread& thread) -> Kernel::Block& {  //a thread's stack's block, found afresh
+    return *std::find_if(k.blocks.begin(), k.blocks.end(), [&](auto& b) { return b.address == thread.stackBlock; });
+  };
   auto& host = k.files[file];
   auto& hostFolder = k.files[folder];
   auto& onDisc = k.files[discFile];
@@ -296,7 +300,9 @@ static auto stateFields() -> void {
   std::vector<std::pair<std::string, std::function<void()>>> more = {
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
-    {"thread stackSize", [&] { t.stackSize ^= 0x100; }}, {"thread stackBlock", [&] { t.stackBlock ^= 1; }},
+    //(a stack is a block of its own, of its size: thread one's shrinks with its block, then moves to the spare)
+    {"thread stackSize", [&] { stackOf(t).size = t.stackSize = 0xf00; }},
+    {"thread stackBlock", [&] { t.stackBlock = spareStack; }},
     {"thread attributes", [&] { t.attributes ^= 1; }}, {"thread gp", [&] { t.gp ^= 4; }},
     {"thread status", [&] { t.status = Kernel::Status::Ready; }},
     {"thread wait", [&] { t.wait = Kernel::Wait::Sleep; }}, {"thread waitID", [&] { t.waitID ^= 1; }},
@@ -330,7 +336,7 @@ static auto stateFields() -> void {
     {"callback notifyArg", [&] { cb.notifyArg ^= 1; }},
     {"exitCallback", [&] { k.exitCallback ^= 1; }}, {"memoryStickCallbacks", [&] { k.memoryStickCallbacks[0] ^= 1; }},
     {"umdCallback", [&] { k.umdCallback ^= 1; }},
-    {"block uid", [&] { block.uid ^= 1; }}, {"block name", [&] { block.name += "x"; }},
+    {"block uid", [&] { block.uid = k.nextUID++; }}, {"block name", [&] { block.name += "x"; }},
     {"block address", [&] { block.address ^= 0x100; }}, {"block size", [&] { block.size ^= 0x100; }},
     {"largeMemory", [&] { k.largeMemory = true; }}, {"sdkVersion", [&] { k.sdkVersion ^= 1; }},
     {"compilerVersion", [&] { k.compilerVersion ^= 1; }},
@@ -511,6 +517,25 @@ static auto stateFields() -> void {
   });
   refuses("a block's ID not handed out yet", [&] { k.blocks.back().uid = k.nextUID; });
   refuses("a thread's callback not handed out yet", [&] { k.threads.at(one)->callbackID = k.nextUID; });
+  //threads' stacks as no machine has them: not a block, not its block's size, or under 0x200 bytes; two threads on
+  //one; one of 4 GiB, its block too (sceKernelGetThreadStackFreeSize made room for it all); and a block below the
+  //user partition
+  refuses("a thread's stack that isn't a block", [&] { k.threads.at(one)->stackBlock += 0x100; });
+  refuses("a thread's stack not its block's size", [&] { k.threads.at(one)->stackSize += 0x100; });
+  refuses("a thread's stack of 0x100 bytes", [&] {
+    auto& thread = *k.threads.at(one);
+    stackOf(thread).size = thread.stackSize = 0x100;
+  });
+  refuses("two threads on one stack", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.stackBlock = k.threads.at(one)->stackBlock;
+    thread.stackSize = k.threads.at(one)->stackSize;
+  });
+  refuses("a thread's stack of 4 GiB", [&] {
+    auto& thread = *k.threads.at(one);
+    stackOf(thread).size = thread.stackSize = 0xffff'f000;
+  });
+  refuses("a block below the user partition", [&] { k.blocks.front().address = Kernel::UserMemory - 0x1000; });
   refuses("a buffer in a slot with the DMA stopped", [&] { k.audio.dma.running = false; });
   refuses("a mixer channel's count not a multiple of 64", [&] { k.audio.channels[3].sampleCount = 100; });
   refuses("a slot with more left than its buffer holds", [&] { k.audio.channels[3].remaining = 192; });

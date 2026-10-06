@@ -344,6 +344,7 @@ struct Kernel {
   u32 compilerVersion = 0;    //and the version of the compiler that built it
   auto allocate(u32 size, u32 type, u32 address, const std::string& name) -> Block*;
   auto release(u32 uid) -> bool;
+  auto blockHeld(const Block& block) const -> bool;
   auto userEnd() const -> u32;
   auto largestFree() const -> u32;
   auto programParameters(const u8* data, u64 size, const std::string& path) -> std::vector<u8>;
