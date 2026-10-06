@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
-#Builds FFmpeg's decoders for the PSP's music and movies (docs/psp-core.md, part 26): ATRAC3, ATRAC3plus, MP3 and
-#H.264, as two shared libraries, libavcodec and libavutil, from FFmpeg's official release, unmodified.
+#Builds FFmpeg's decoders for the PSP's music and movies (docs/psp-core.md, parts 26 and 27): ATRAC3, ATRAC3plus, MP3
+#and H.264, as two shared libraries, libavcodec and libavutil, from FFmpeg's official release, unmodified.
 #
 #Licensing: FFmpeg is LGPL 2.1 or later, so long as nothing GPL or non-free goes in, and this enables nothing but the
-#decoders below (no GPL, no non-free, no version 3 upgrade, no external libraries: --disable-autodetect). Phobos's
-#native library links the two as shared libraries, which the APK carries beside it (lib/arm64-v8a/libavcodec.so,
-#libavutil.so), so anyone can build their own from this script, changed as they like, and swap them in: the LGPL's
-#terms for a program that uses a library. The source is the release's own tarball, checked against its SHA-256 (the
-#same as Homebrew's formula for this release records); the notice is in the repository's LICENSE (Settings, About,
-#Open-source licenses in the app).
+#decoders below (no GPL, no non-free, no version 3 upgrade, no external libraries: --disable-autodetect). Phobos links
+#the two as shared libraries, which its packages carry beside it (the APK's lib/arm64-v8a, the AppImage's usr/lib,
+#Phobos.app's Contents/Frameworks, the folder of Phobos.exe), so anyone can build their own from this script, changed
+#as they like, and swap them in: the LGPL's terms for a program that uses a library. The source is the release's own
+#tarball, checked against its SHA-256 (the same as Homebrew's formula for this release records); the notice is in the
+#repository's LICENSE (Settings, About, Open-source licenses in the app; LICENSE in each desktop package).
 #
-#usage: thirdparty/ffmpeg/build.sh host                   (for the host tests and runners: macOS or Linux)
+#usage: thirdparty/ffmpeg/build.sh host                   (the host's own: the tests and runners, and the desktop
+#                                                          program on Linux, and on Windows under MSYS2)
+#       thirdparty/ffmpeg/build.sh macos ARCH...          (the desktop program on macOS: arm64, x86_64 or both, each
+#                                                          built alone, then combined by lipo; for macOS 11 and later,
+#                                                          or $MACOSX_DEPLOYMENT_TARGET)
+#       thirdparty/ffmpeg/build.sh windows TOOL-PREFIX    (the desktop program for Windows, built on Linux with
+#                                                          MinGW-w64's tools: x86_64-w64-mingw32-, and a C
+#                                                          compiler for Linux itself, which configure builds with)
 #       thirdparty/ffmpeg/build.sh android NDK API-LEVEL  (arm64-v8a, with that NDK's clang, as the app's CMake does)
-#       thirdparty/ffmpeg/build.sh --name host | android NDK API-LEVEL   (only print the build's name: CI's cache key)
-#The last line printed is the folder the build was installed in (lib/, include/); the build's own output goes to a
-#log beside it. Builds are kept in $PHOBOS_FFMPEG_CACHE (else .cache/ffmpeg in the repository), each under a name
-#hashed from this script and the compiler, so a build is made once and made again only when one of those changes.
-#It needs bash, make, curl and xz (tar -J), and the network the first time, for the release's tarball. Offline, put
-#the tarball in the cache folder (or name it in $PHOBOS_FFMPEG_TARBALL) and it isn't downloaded.
+#       thirdparty/ffmpeg/build.sh --name TARGET ...      (only print the build's name: CI's cache key)
+#The last line printed is the folder the build was installed in (lib/, include/, and bin/ with Windows's DLLs), as the
+#host names it (D:/... under MSYS2, for CMake); the build's own output goes to a log beside it. Builds are kept in
+#$PHOBOS_FFMPEG_CACHE (else .cache/ffmpeg in the repository), each under a name hashed from this script and the
+#compiler, so a build is made once and made again only when one of those changes. It needs bash, make, curl and xz
+#(tar -J), and the network the first time, for the release's tarball. Offline, put the tarball in the cache folder (or
+#name it in $PHOBOS_FFMPEG_TARBALL) and it isn't downloaded.
 set -euo pipefail
 
 VERSION=9.0.2
@@ -42,14 +50,64 @@ TARGET=${1:-}
 mkdir -p "$CACHE"
 
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+usage() {
+  echo "usage: $0 [--name] host | macos ARCH... | windows TOOL-PREFIX | android NDK API-LEVEL" >&2
+  exit 2
+}
 
+COMBINE=
 case $TARGET in
 host)
-  CC=${CC:-cc}
+  if [[ -z ${CC:-} ]]; then
+    CC=cc
+    if ! command -v cc >/dev/null; then CC=gcc; fi
+  fi
   IDENTITY="host $(uname -sm) $($CC --version 2>&1 | head -1)"
   CROSS=(--cc="$CC")
   #x86's assembly needs nasm; without it the C versions are used (slower, the same output)
-  if [[ $(uname -m) == x86_64 ]] && ! command -v nasm >/dev/null; then CROSS+=(--disable-x86asm); fi
+  if [[ $(uname -m) == x86_64 ]] && ! command -v nasm >/dev/null; then
+    CROSS+=(--disable-x86asm)
+    IDENTITY+=" no nasm"
+  fi
+  #Windows under MSYS2: FFmpeg's configure knows MINGW64's name for the system but not UCRT64's or CLANG64's, so it's
+  #told; and the compiler's own libraries (libgcc, and the winpthreads it needs) are linked into the DLLs statically,
+  #as into Phobos.exe, so their only other needs are Windows's own
+  case $(uname -s) in MINGW*|UCRT*|CLANG*|MSYS*) CROSS+=(--target-os=mingw32 --extra-ldflags=-static);; esac
+  ;;
+macos)
+  shift
+  (($#)) || usage
+  #the desktop program's oldest macOS (CMakePresets.json's deployment target, Phobos.app's LSMinimumSystemVersion)
+  MINIMUM=${MACOSX_DEPLOYMENT_TARGET:-11.0}
+  CC=${CC:-cc}
+  ARCHS="$*"
+  if (($# > 1)); then
+    #each architecture's build, made alone (below) and named in this one's, so a change to any makes this anew
+    COMBINE=1
+    IDENTITY="macos $ARCHS:"
+    for ARCH in $ARCHS; do IDENTITY+=" $(bash "$0" --name macos "$ARCH")"; done
+  else
+    #built for the architecture whichever the Mac is (clang builds for both), and named, as dyld finds it, by the
+    #program's run path (@rpath/libavcodec.63.dylib): Phobos.app's Frameworks, or the build's own folder
+    IDENTITY="macos $ARCHS $MINIMUM $($CC --version 2>&1 | head -1)"
+    CROSS=(--enable-cross-compile --target-os=darwin --arch="$ARCHS"
+      --cc="$CC -arch $ARCHS -mmacosx-version-min=$MINIMUM" --install-name-dir=@rpath)
+    if [[ $ARCHS == x86_64 ]] && ! command -v nasm >/dev/null; then
+      CROSS+=(--disable-x86asm)
+      IDENTITY+=" no nasm"
+    fi
+  fi
+  TARGET=macos-${ARCHS// /-}
+  ;;
+windows)
+  TOOLS=${2:?"the MinGW-w64 tools' prefix (x86_64-w64-mingw32-)"}
+  IDENTITY="windows $TOOLS $(${TOOLS}gcc --version 2>&1 | head -1)"
+  CROSS=(--enable-cross-compile --target-os=mingw32 --arch="${TOOLS%%-*}" --cross-prefix="$TOOLS"
+    --extra-ldflags=-static)
+  if ! command -v nasm >/dev/null; then
+    CROSS+=(--disable-x86asm)
+    IDENTITY+=" no nasm"
+  fi
   ;;
 android)
   NDK=${2:?the NDK folder}
@@ -65,8 +123,7 @@ android)
     --extra-ldflags="-Wl,-z,max-page-size=16384")
   ;;
 *)
-  echo "usage: $0 [--name] host | android NDK API-LEVEL" >&2
-  exit 2
+  usage
   ;;
 esac
 
@@ -83,11 +140,11 @@ DOWNLOAD=
 cleanup() { rm -rf "$LOCK"; if [[ -n $DOWNLOAD ]]; then rm -f "$DOWNLOAD"; fi; }
 for ((wait = 0; ; wait++)); do
   if mkdir "$LOCK" 2>/dev/null; then
-    echo "$$ $(hostname)" > "$LOCK/owner"
+    echo "$$ $(uname -n)" > "$LOCK/owner"
     break
   fi
   OWNER=$(cat "$LOCK/owner" 2>/dev/null || true)
-  if [[ -n $OWNER && ${OWNER#* } == "$(hostname)" ]] && ! ps -p "${OWNER%% *}" >/dev/null 2>&1; then
+  if [[ -n $OWNER && ${OWNER#* } == "$(uname -n)" ]] && ! ps -p "${OWNER%% *}" >/dev/null 2>&1; then
     #(looked at again just before: another build may have taken it over already)
     if [[ $(cat "$LOCK/owner" 2>/dev/null || true) == "$OWNER" ]]; then
       echo "FFmpeg: taking over $LOCK from process ${OWNER%% *}, which has gone" >&2
@@ -107,7 +164,26 @@ trap cleanup EXIT
 #The release's tarball, checked before it's used: downloaded into a file of its own, and kept only if it's the
 #release's (a proxy's or captive portal's page is thrown away, and downloaded once more).
 matches() { [[ $(sha256 "$1" | cut -d' ' -f1) == "$SHA256" ]]; }
-if [[ ! -f $PREFIX/.built ]]; then
+if [[ ! -f $PREFIX/.built && -n $COMBINE ]]; then
+  #Several macOS architectures: each one's build (made now if it isn't yet), their libraries put together into
+  #universal ones, file by file (the links between their names kept); the headers are the same for both.
+  rm -rf "$PREFIX"
+  mkdir -p "$PREFIX/lib"
+  for ARCH in $ARCHS; do bash "$0" macos "$ARCH" >/dev/null; done
+  FIRST=$CACHE/$(bash "$0" --name macos "${ARCHS%% *}")
+  cp -R "$FIRST/include" "$PREFIX/"
+  for LIBRARY in "$FIRST"/lib/*.dylib; do
+    FILE=$(basename "$LIBRARY")
+    if [[ -L $LIBRARY ]]; then
+      cp -P "$LIBRARY" "$PREFIX/lib/$FILE"
+      continue
+    fi
+    set --
+    for ARCH in $ARCHS; do set -- "$@" "$CACHE/$(bash "$0" --name macos "$ARCH")/lib/$FILE"; done
+    lipo -create "$@" -output "$PREFIX/lib/$FILE"
+  done
+  touch "$PREFIX/.built"
+elif [[ ! -f $PREFIX/.built ]]; then
   TARBALL=${PHOBOS_FFMPEG_TARBALL:-$CACHE/ffmpeg-$VERSION.tar.xz}
   if [[ -f $TARBALL ]] && ! matches "$TARBALL"; then
     if [[ -n ${PHOBOS_FFMPEG_TARBALL:-} ]]; then
@@ -152,4 +228,4 @@ if [[ ! -f $PREFIX/.built ]]; then
   rm -rf "$SOURCE"
   touch "$PREFIX/.built"
 fi
-echo "$PREFIX"
+if command -v cygpath >/dev/null; then cygpath -m "$PREFIX"; else echo "$PREFIX"; fi

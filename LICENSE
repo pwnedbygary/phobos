@@ -1834,7 +1834,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ----------------------------------------------------------------------
 
 ----------------------------------------------------------------------
-FFmpeg (libavcodec and libavutil: lib/arm64-v8a/libavcodec.so and libavutil.so in the APK)
+FFmpeg (libavcodec and libavutil: in the APK and beside the desktop program)
 https://ffmpeg.org
 
 This software uses libraries from the FFmpeg project under the LGPLv2.1.
@@ -1854,11 +1854,20 @@ https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz (SHA-256
 thirdparty/ffmpeg/build.sh in Phobos's source, which holds the exact
 configure line: no GPL or non-free parts, nothing but the decoders atrac3,
 atrac3p, mp3float and h264. Phobos's releases carry that tarball beside the
-APKs: it is the libraries' complete source.
-Phobos's own library loads them as shared libraries, so you may build your
-own (changed as you like, with the same interface: libavcodec 63 and
-libavutil 61) and use it in their place: replace the two files in the APK
-and sign it again, or change the script and build Phobos from its source.
+APKs and the desktop builds: it is the libraries' complete source.
+Phobos loads them as shared libraries, so you may build your own (changed
+as you like, with the same interface: libavcodec 63 and libavutil 61) and
+use it in their place, or change the script and build Phobos from its
+source. The two files are:
+- Android: lib/arm64-v8a/libavcodec.so and libavutil.so in the APK
+  (replace them and sign the APK again);
+- Linux: usr/lib/libavcodec.so.63 and libavutil.so.61 in the AppImage
+  (run it with --appimage-extract, replace them, and start AppRun or pack
+  the folder again with appimagetool);
+- macOS: Phobos.app/Contents/Frameworks/libavcodec.63.dylib and
+  libavutil.61.dylib (replace them, then sign the app again, for example
+  codesign --force --deep --sign - Phobos.app);
+- Windows: avcodec-63.dll and avutil-61.dll beside Phobos.exe.
 
 libavcodec includes FFmpeg's versions of the Independent JPEG Group's
 discrete cosine transforms (jrevdct.c, jfdctint.c and jfdctfst.c).

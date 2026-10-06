@@ -2,7 +2,8 @@
 # Packages the Linux x86-64 build as dist/Phobos-<version>-x86_64.AppImage plus its .zsync, the
 # file AppImageUpdate reads to fetch only the changed blocks of a newer release.
 #   scripts/package-linux-appimage.sh [build directory]
-# GPU drivers stay on the host: Phobos opens the system's libvulkan.so.1 at run time.
+# GPU drivers stay on the host: Phobos opens the system's libvulkan.so.1 at run time. FFmpeg's
+# libavcodec and libavutil (the PSP's music and movies), in a build with them, go in usr/lib.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$(cd "${1:-$ROOT/build/linux-x64}" && pwd)"
@@ -34,10 +35,20 @@ cp -R "$BUILD/Database" "$BUILD/System" "$APPDIR/usr/share/phobos/"
 cp "$ROOT/LICENSE" "$APPDIR/usr/share/doc/phobos/"
 if [[ -f "$ROOT/COPYING" ]]; then cp "$ROOT/COPYING" "$APPDIR/usr/share/doc/phobos/"; fi
 cp "$ROOT/ares/ares/resource/icon@2x.png" "$ROOT/build/phobos.png"
+# FFmpeg's libraries sit beside the program in the build (its run path is $ORIGIN, CMakeLists.txt);
+# linuxdeploy puts them in usr/lib, each a file of its own that can be swapped for another build
+# (the LGPL's terms, as LICENSE describes).
+ffmpeg=()
+for library in "$BUILD"/libavcodec.so.* "$BUILD"/libavutil.so.*; do
+  if [[ -f "$library" ]]; then ffmpeg+=(--library "$library"); fi
+done
 "$TOOLS/linuxdeploy-x86_64.AppImage" --appdir "$APPDIR" \
-  --executable "$BUILD/phobos" \
+  --executable "$BUILD/phobos" ${ffmpeg[@]+"${ffmpeg[@]}"} \
   --desktop-file "$ROOT/desktop/linux/phobos.desktop" \
   --icon-file "$ROOT/build/phobos.png"
+for needed in $(readelf -d "$BUILD/phobos" | sed -n 's/.*Shared library: \[\(libav[a-z]*\.so\.[0-9]*\)\]/\1/p'); do
+  test -f "$APPDIR/usr/lib/$needed" || { echo "phobos needs $needed, which isn't in the AppImage's usr/lib" >&2; exit 1; }
+done
 
 rm -f "$OUTPUT" "$OUTPUT.zsync"
 (cd "$DIST" && "$TOOLS/appimagetool-x86_64.AppImage" --no-appstream \
