@@ -713,6 +713,28 @@ auto sound(const fs::path& programs) -> void {
   }
 }
 
+//How many threads draw the GE's pictures (option "GE Threads", taken as the PSP powers on): 0, the default, all the
+//host's cores but one; a count as asked, but no more than twice the host's cores, nor 64, however large.
+auto drawingThreads() -> void {
+  std::printf("the GE's drawing threads\n");
+  host.game.reset();
+  u32 cores = std::thread::hardware_concurrency();
+  u32 most = std::min(cores ? 2 * cores : 64, 64u);
+  struct Case { const char* asked; u32 threads; };
+  for(auto [asked, threads] : {Case{"0", std::max(1u, cores ? cores - 1 : 1)}, Case{"1", 1},
+                               Case{"2", std::min(2u, most)}, Case{"1000", most}, Case{"4294967297", most}}) {
+    PlayStationPortable::option("GE Threads", asked);
+    Node::System root;
+    reports([&] {
+      if(!CHECK(start(root), std::string{"the PSP starts, GE Threads "} + asked)) return;
+      CHECK(psp.ge.drawing.threads == threads, std::string{"GE Threads "} + asked + ": " +
+            std::to_string(psp.ge.drawing.threads) + " threads, not " + std::to_string(threads));
+      root->unload();
+    });
+  }
+  PlayStationPortable::option("GE Threads", "0");
+}
+
 //Where the host gives no memory that code may run from, the recompiler turns itself off, and the interpreter runs
 //the program instead. (Asking for no code memory at all stands for that: the host refuses the mapping.)
 auto noCodeMemory(const fs::path& programs) -> void {
@@ -743,6 +765,7 @@ auto main() -> int {
 
   names();
   nodeTree();
+  drawingThreads();
   if(auto programs = std::getenv("PSP_TEST_PROGRAMS"); programs && fs::exists(fs::path{programs} / "hello.elf")) {
     //on the recompiler (as the front ends run it) and on the interpreter, its fallback
     for(bool recompile : {true, false}) {
