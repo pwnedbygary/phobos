@@ -868,6 +868,34 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP: what the user's PSP measured in round 3 — 2026-10-04
+
+Branch `cursor/psp-measured-r3-2b67`, stacked on `cursor/psp-ge-round3-2b67` (for stack #106). The user ran round 3
+(VFPU and GE), the FPU probes and rounds 1 and 2 again with tools/psp-measure; the results are in
+`.local/psp-measure-2026-10-04-round3/results` (not in the repository). Nothing stopped the PSP, round 2's two FPU
+tests finished this time (why isn't known), and every repeated result file is identical to the earlier sessions'
+(the manifests differ in wording, and `controller-timing.bin`'s times are measured).
+Published: docs/psp-vfpu-measurements.md ("Round 3") and docs/psp-core.md ("Round 3's results"); the SHA-256 of
+every new file (`tests/allegrex/measured/SHA256SUMS3`, `tests/psp/measured/SHA256SUMS3`), both manifests, `ops3.txt`,
+and, packed with xz (360 KB), `fpu-state`, the four FPU files and `vmul-tiny`. Findings, to be fixed next:
+- FPU: FCSR starts as 0x00000e00 (overflow, divide-by-zero, invalid enabled); IEEE 754-2008 NaNs (the core already
+  matches); arithmetic follows the rounding mode (the core rounds to nearest); conversions out of range saturate by
+  sign (the core gives 0x7fffffff for negatives too).
+- VFPU: products rounded to 24 bits, then flushed below 2^-126 (kept up to j = 1448; the core keeps 2^-126 for j
+  from 1449 to 2048 too, and round 2's one `vscl` lane fits); the second recorder list matches in 36 of 284 entries
+  (+7 by rounding).
+- GE: screen positions truncated toward 2048 (here both the viewport's center and the middle of the GE's space;
+  which one counts is still open; fits every cell of `3d-rounding-middle`); a 3D sprite's fog split across its
+  middle as PPSSPP does (the core fogs it all with the second corner's), its texels stepped as u/w, 1/w across x
+  and v/w down y; the depth buffer in order only through VRAM's fourth copy (formulas for the others fit all 16384
+  values); ambient, and plain diffuse with exact cosines, the core's in all but two cells; the rest of lighting and
+  the ramps a level apart in places (lower on the PSP but both ways in the vertical ramps); curves drawn.
+- **Checks:** compare.sh and the host tests (85 groups, 0 failures) on the new files; the reruns compared byte for
+  byte with the first sessions'; the depth formulas and the tiny products' model checked against every value.
+  Review: a general-purpose reviewer checking every claim against the data (13 findings, two high: a 3D sprite's fog
+  is split as PPSSPP does, not left off, and the tiny products are kept up to j = 1448; all fixed), then delta
+  reviews (four low, fixed; then no findings).
+
 ## PSP tools: the GE's third round — 2026-10-04
 
 Branch `cursor/psp-ge-round3-2b67`, stacked on `cursor/psp-measure-menu-2b67` (for stack #106). tools/psp-measure

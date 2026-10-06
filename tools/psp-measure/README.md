@@ -90,8 +90,9 @@ Each round writes its own files into `results/vfpu`, and a `manifest.txt` (round
   mode; and the instruction recorder, which runs every VFPU instruction pspdev's assembler knows (1216 entries) on
   random register states.
 - **Round 3 (about 6 MB):** what round 2 left open.
-  - The FPU's conversions and arithmetic again, on inputs it's safe with. Round 2's FPU tests switched the PSP off,
-    most likely at the NaNs, infinities, denormals and too-big numbers they began with.
+  - The FPU's conversions and arithmetic again, on inputs it's safe with. Round 2's FPU tests had switched the PSP
+    off, and the guess was the NaNs, infinities, denormals and too-big numbers they began with. (Round 3 showed
+    otherwise: no probe stopped the PSP, and round 2's tests finished in the same session.)
   - FCSR, the FPU's control register, as a program finds it. Its flush-to-zero bit decides what denormals do.
   - Products a sliver below the smallest normal number, built to tell three answers apart: all flushed to 0 (too
     small seen before rounding), up to j = 1448 rounded up to it (rounded to 24 bits first), or up to j = 2048
@@ -101,9 +102,9 @@ Each round writes its own files into `results/vfpu`, and a `manifest.txt` (round
     `vfad` with t prefixes.
 - **The FPU probes:** the FPU on one value at a time of the kinds that may switch the PSP off (17 probes:
   infinities, quiet and signaling NaNs, -2^31 and 2^31 as integers, denormals, too-big and too-small results, with
-  flush to zero off, and the denormal ones again with it on). NaNs are in MIPS's encoding, where a quiet NaN has the
-  top fraction bit clear: the other way round from most processors. They're a menu line of their own so that round
-  3 can always finish.
+  flush to zero off, and the denormal ones again with it on). The probes' labels give NaNs in MIPS's older
+  encoding, where a quiet NaN has the top fraction bit clear; the PSP turned out to use IEEE 754-2008's, the other
+  way round. They're a menu line of their own so that round 3 can always finish.
 
 The files hold only what the hardware gave (and, for the smaller tests, the inputs). The host makes every input
 again exactly as the program did, so nothing has to be computed on the PSP.
@@ -118,7 +119,13 @@ The user ran round 1 on 2026-10-03 (firmware 6.61). From it:
 
 The user ran round 2 on 2026-10-04: from it the core's matrices, division by zero, NaNs, denormals, comparisons and
 prefixes now match the PSP, and the recorder matches in 1157 of its 1216 entries (the rest is the adders' rounding).
-Round 3 is ready for the PSP. Results and findings are in
+
+The user ran round 3 later that day, with the probes and rounds 1 and 2 again (every result file identical, byte for
+byte; the manifests differ only in their wording). No probe stopped the PSP, and round 2's FPU tests finished this
+time. From it: FCSR starts with the overflow, divide-by-zero and invalid exceptions enabled; NaNs follow IEEE
+754-2008's encoding; the FPU's arithmetic follows the rounding mode (the core's doesn't yet) and its conversions
+saturate by sign; the VFPU rounds a product to 24 bits before flushing it to 0 below 2^-126; and the second recorder
+list gives the data for the prefix rules still open. Results and findings are in
 [docs/psp-vfpu-measurements.md](../../docs/psp-vfpu-measurements.md). The small result files are kept in
 `tests/allegrex/measured/`, which the tests check the core against; the big tables stay outside the repository.
 
@@ -191,5 +198,12 @@ For round 3, PPSSPP and the core agree on all six lighting cases (the core's lig
 3D sprite at one depth, and the four depth-layout reads (both read VRAM's copies alike). They differ on the ramps,
 the edges near the pixel middle, the wall's texels, and the 3D sprite's fog and texels, where the core now samples
 and steps as round 2 showed the PSP does, or neither is measured yet; and on the curved surfaces, which the core
-doesn't draw. The PSP's files will say which is right. The findings go into
+doesn't draw.
+
+The user's PSP has answered (docs/psp-core.md, "Round 3's results"). The GE truncates screen positions to the
+sixteenth toward 2048 (here both the viewport's center and the middle of its space; which one counts is still open);
+it splits a 3D sprite's fog across the middle as PPSSPP does, and steps its texels a way of its own; ambient light
+and, with exact cosines, plain diffuse are the core's arithmetic in all but two cells (one cosine), while the other
+lighting cases and the color and fog ramps are a level apart in places (lower on the PSP, but both ways in the
+vertical ramps); only VRAM's fourth copy reads the depth buffer in order. The findings go into
 [docs/psp-core.md](../../docs/psp-core.md), under "Measuring the GE and the controller on a PSP".
