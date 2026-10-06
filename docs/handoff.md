@@ -868,6 +868,26 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 2: the recompiler — 2026-10-03
+
+Branch `cursor/psp-recompiler-2b67`, stacked on part 1 (`cursor/psp-core-2b67`), for the user to review. As the user
+directed, the Allegrex gets a recompiler from the start, with the interpreter as its fallback and reference.
+[psp-core.md](psp-core.md#the-recompiler) has the design and what it doesn't do yet.
+
+- **What it is:** `ares/psp/cpu/recompiler.cpp` and `recompiler-ipu.cpp`, on ares's sljit framework like the N64 CPU.
+  The common integer instructions and the branches are native; everything else, including every instruction that
+  can raise an exception, calls the interpreter's own path (`execute()`).
+- **Checks run:** `tests/allegrex/run-tests.sh` runs every test group on both engines, recompiler cases, and 500
+  generated programs that must end in the same state on both; all 31 groups pass on the Mac (ARM64, UBSan) and in
+  the `phobos-linux` container (Ubuntu 24.04 ARM64, GCC 13, ASan and UBSan). sljit's own call checks are on in the
+  tests. Four deliberately broken versions of the recompiler each failed the tests. The x86-64 backend runs first in
+  CI (the PSP Core Tests workflow, on x86-64 runners).
+- **The `phobos-linux` container** (Docker, at the user's suggestion, kept for later Linux checks): Ubuntu 24.04 with
+  GCC 13, CMake and Python, the repository mounted read-only at `/phobos`; run
+  `docker exec phobos-linux bash -c 'cd /phobos && tests/allegrex/run-tests.sh'`. It was created with
+  `--security-opt seccomp=unconfined` because Docker Engine 20.10.8 blocks the `clone3` call Ubuntu 24.04's C
+  library uses (fixed in 20.10.10).
+
 ## PSP core, part 1: the Allegrex CPU — 2026-10-03
 
 Branch `cursor/psp-core-2b67`, for the user to review. The user chose an original PSP core over PPSSPP (whose GPL
