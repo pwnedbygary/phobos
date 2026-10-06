@@ -868,6 +868,18 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 5: the memory map — 2026-10-03
+
+Branch `cursor/psp-memory-2b67`, stacked on `cursor/psp-vfpu-round2-2b67`: `ares/psp/memory/` (the scratchpad,
+VRAM and its four copies, 32 or 64 MiB of main RAM, the four address windows; `written()` for the recompiler,
+`unmapped()` for accesses with nothing behind them; the page table; copies for the loader and HLE). The PSP
+system gets its own test suite, `tests/psp/run-tests.sh` (6 groups, in the PSP Core Tests workflow as a second
+job). Bugbot found that VRAM's copies in the page table let a compiled store through one copy change code compiled
+from another unseen; now only the first copy is listed, and the recompiler interprets code wherever the table has
+nothing (a rule written into the CPU's `pages` comment). Checks: passes on the Mac (UBSan) and in `phobos-linux`
+(GCC 13, ASan and UBSan); four broken versions each failed it; the CPU's 54 groups still pass on both. Next in
+phase 4: the ELF/PRX/PBP loader, then the first HLE functions.
+
 ## PSP core: a second round of VFPU measurements — 2026-10-03
 
 Branch `cursor/psp-vfpu-round2-2b67`, stacked on `cursor/psp-vfpu-exact-2b67`. `tools/psp-vfpu-measure` now asks

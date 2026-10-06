@@ -3,8 +3,9 @@
 **Status (2026-10-03):** started, at the user's request. Part 1, the Allegrex CPU's interpreter (integer and FPU
 instructions) with host tests, is on branch `cursor/psp-core-2b67`; part 2, the recompiler, on
 `cursor/psp-recompiler-2b67` on top of it; part 3, the VFPU, on `cursor/psp-vfpu-ares-2b67` on top of that; part 4,
-compiled loads and stores straight to RAM, on `cursor/psp-fastmem-2b67`. The user asked for the whole feature to be
-stacked and merged at once. Nothing is in the app yet.
+compiled loads and stores straight to RAM, on `cursor/psp-fastmem-2b67`; the VFPU's measurements on a real PSP
+after it; part 5, the memory map, on `cursor/psp-memory-2b67`. The user asked for the whole feature to be stacked
+and merged at once. Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -81,7 +82,8 @@ Part 2 (`ares/psp/cpu/recompiler.cpp`, `recompiler-ipu.cpp`), built on ares's re
   leaves (`pipeline.exception`). The FPU's branches go to the interpreter too, as does a branch in a section's last
   word (whose delay slot is in the next section).
 - **Where blocks can't start**, between a branch and its delay slot (a thread the HLE kernel switched to may have
-  stopped there) or at a misaligned address, the interpreter takes one step.
+  stopped there), at a misaligned address, or in memory the page table leaves out (hardware registers, VRAM's
+  other copies), the interpreter takes one step.
 - **The cache** files blocks by the section they start in, by physical address (the low 29 bits), and remembers
   which mirror they were compiled for: code run through another mirror is compiled afresh, as its return
   addresses differ. When the code memory (32 MiB) runs low, everything is thrown away and compiled again.
@@ -123,8 +125,8 @@ branch not taken, `nor` without the not, delay-slot instructions given the wrong
 1. The Allegrex's integer and FPU instructions in the interpreter, host tests (part 1).
 2. The recompiler, with differential tests against the interpreter (part 2; its later steps are listed above).
 3. The VFPU: registers, prefixes, instructions, tested against the pspdev documentation's descriptions (part 3).
-4. Memory map; loading an unencrypted `EBOOT.PBP`, ELF or PRX; the first HLE functions (module start, threads,
-   display, controls, files); a homebrew test program run on the host.
+4. Memory map (part 5); loading an unencrypted `EBOOT.PBP`, ELF or PRX; the first HLE functions (module start,
+   threads, display, controls, files); a homebrew test program run on the host.
 5. The GE: display lists, a software rasterizer (2D first), the display.
 6. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
 7. Retail executables: `~PSP` decryption.
@@ -223,3 +225,31 @@ The program asks which round to run when it starts: O for that first round, X fo
 `make SMOKE=1` builds a quick version (round 2 straight away, the big tests cut short) for trying the program in
 PPSSPP's PPSSPPHeadless first, which `phobos-linux` has in `/opt/tools/ppsspp`; it says nothing about a PSP.
 `compare.sh` checks whatever files a folder has, from either round.
+
+## Part 5: the memory map
+
+`ares/psp/memory/`: what each address reaches. The Allegrex has no TLB, so the four windows (user, uncached,
+kernel, kernel uncached: an address's top three bits) all reach the same physical memory, the low 29 bits; under
+HLE nothing keeps the game out of the kernel's. Physical memory is the scratchpad (16 KiB at `0x00010000`), VRAM
+(2 MiB at `0x04000000`, seen four times in a row up to `0x047fffff`) and main RAM (32 MiB at `0x08000000`, or 64
+MiB as on later models). Anything else (the hardware registers, the boot ROM) is empty for now: reading gives 0,
+writing goes nowhere, and `unmapped()` is told, since under HLE that means a bug or something not emulated yet.
+The bytes are kept little-endian, as the PSP sees them.
+
+Every change, the CPU's stores and the loader's or HLE functions' copies alike, is reported to `written()`, which
+the CPU's owner points at the recompiler so that code compiled from there is dropped. A change to VRAM is reported
+for all four copies, as they're four physical addresses for the same bytes. `buildPages()` fills the CPU's page
+table for compiled loads and stores, listing VRAM at its first copy only: compiled stores only steer clear of the
+pages holding compiled code, so a second address for the same bytes would let a store change compiled code
+unseen. The other copies go through `read()` and `write()`, and the recompiler interprets code at any address the
+table leaves out. `power()` keeps the buffers while their sizes stay the same, so the table stays valid. `copyIn()`, `copyOut()`, `fill()` and `readString()` serve
+the loader and the HLE functions; a range that crosses an area's end fails rather than running over.
+
+Not yet: VRAM's swizzled copies (the GE's depth buffer seen rearranged), and the hardware registers HLE may still
+need (the GE's, for one).
+
+Tests: `tests/psp/run-tests.sh`, the PSP system's own suite, built like the CPU's with the same sanitizers and run
+by the PSP Core Tests workflow: the windows, each area's edges and what's past them, the hooks, the copies, the page
+table, and the CPU on the memory map on both engines, including code that rewrites a function it already ran, in
+RAM and in VRAM through another copy, both ways. Four deliberately broken versions (stores not reported; VRAM's
+copies not shared; all four copies in the page table; code at unlisted addresses compiled) each failed them.
