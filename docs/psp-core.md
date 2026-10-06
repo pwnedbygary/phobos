@@ -4,8 +4,8 @@
 instructions) with host tests, is on branch `cursor/psp-core-2b67`; part 2, the recompiler, on
 `cursor/psp-recompiler-2b67` on top of it; part 3, the VFPU, on `cursor/psp-vfpu-ares-2b67` on top of that; part 4,
 compiled loads and stores straight to RAM, on `cursor/psp-fastmem-2b67`; the VFPU's measurements on a real PSP
-after it; part 5, the memory map, on `cursor/psp-memory-2b67`. The user asked for the whole feature to be stacked
-and merged at once. Nothing is in the app yet.
+after it; part 5, the memory map, on `cursor/psp-memory-2b67`; part 6, the loader, on `cursor/psp-loader-2b67`.
+The user asked for the whole feature to be stacked and merged at once. Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -125,8 +125,8 @@ branch not taken, `nor` without the not, delay-slot instructions given the wrong
 1. The Allegrex's integer and FPU instructions in the interpreter, host tests (part 1).
 2. The recompiler, with differential tests against the interpreter (part 2; its later steps are listed above).
 3. The VFPU: registers, prefixes, instructions, tested against the pspdev documentation's descriptions (part 3).
-4. Memory map (part 5); loading an unencrypted `EBOOT.PBP`, ELF or PRX; the first HLE functions (module start,
-   threads, display, controls, files); a homebrew test program run on the host.
+4. Memory map (part 5); loading an unencrypted `EBOOT.PBP`, ELF or PRX (part 6); the first HLE functions (module
+   start, threads, display, controls, files); a homebrew test program run on the host.
 5. The GE: display lists, a software rasterizer (2D first), the display.
 6. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
 7. Retail executables: `~PSP` decryption.
@@ -253,3 +253,48 @@ by the PSP Core Tests workflow: the windows, each area's edges and what's past t
 table, and the CPU on the memory map on both engines, including code that rewrites a function it already ran, in
 RAM and in VRAM through another copy, both ways. Four deliberately broken versions (stores not reported; VRAM's
 copies not shared; all four copies in the page table; code at unlisted addresses compiled) each failed them.
+
+## Part 6: the loader
+
+`ares/psp/kernel/loader.cpp`: puts a program in memory, as the PSP's kernel does before starting it. PSP programs
+are MIPS ELF files: static executables (type 2, linked at fixed addresses; pspdev links them at `0x08804000`) and
+relocatable modules (PRX, type `0xffa0`, linked as if at 0). Games and newer homebrew are PRXs, usually inside an
+`EBOOT.PBP`, whose header gives the offsets of its eight parts; the program is the seventh, `DATA.PSP`
+(`programInPBP()`).
+
+- **Segments**: each loadable program header is copied to memory (a PRX's moved to the base the kernel picks) and
+  its zeroed part filled.
+- **Relocations** (PRX only), from the relocation sections (type `0x700000a0`), or the program headers of that type
+  when there are no such sections: a word address for `j`/`jal`, whole pointers, and addresses built by `lui` and an
+  instruction adding a signed lower half, where moving the address may carry into the upper half, so each `lui`
+  waits for the lower half after it (one `lui` can serve several). A plain 16-bit relocation gives the same 16
+  bits and completes a waiting `lui` too, as some retail modules pair them. The info word's segment numbers are program
+  header indexes: the offset counts from the first, and the second's address is added. pspdev's PRXs have a single
+  segment at 0, where adding that segment's address and adding how far it moved agree; retail modules with more
+  segments will settle which is meant (phase 7). The packed form (`0x700000a1`) isn't read yet: a program with it is
+  refused, whatever else it has.
+- **The module info**: its section (`.rodata.sceModuleInfo`), or in a stripped PRX the first program header's
+  physical address, which holds its file offset. Its name, version, attributes, `gp`, and its two tables:
+- **Imports**: per library, the NIDs of the functions called and a stub for each, which becomes `jr ra` with
+  `syscall n` in its delay slot; the kernel picks `n` for each library and NID (`ImportCode`). Variable imports are
+  listed in `skipped`.
+- **Exports**: per library, the NIDs and addresses of its functions and variables; the module's own entry (no
+  library name) has `module_start` (NID `0xd632acdb`) and `module_info` (`0xf01d73a7`).
+- **Refused, with the reason**: anything that isn't a MIPS ELF program, a segment that runs past the file or doesn't
+  fit in memory, an unknown relocation type or segment number, packed relocations, no module info, tables pointing
+  outside memory, and encrypted programs (`~PSP`), named by the module and encryption type their header gives in the
+  clear.
+
+Sources: pspsdk's headers (`psploadcore.h`, `pspmoduleinfo.h`, `pspimport.s`) for the tables, its `psp-prxgen` for
+how pspdev writes a PRX's relocations, the PSP Developer Wiki's "PRX File Format" (which the user saved for us when
+the wiki's bot check blocked fetching it) for the `~PSP` header, and programs built with pspdev's toolchain, read with
+`psp-readelf`.
+
+Tests (`tests/psp/loader.cpp`): programs built in the test by `elf.hpp` (no binaries in the repository): a PRX with
+every relocation type, whose moved code then runs on both engines and builds the right addresses (including one where
+only the move makes the lower half carry, and a `lui` shared by two lower halves); the same PRX stripped of its
+sections; relocations in a program header next to kept sections; a static executable; a PBP; and each refusal.
+Three broken versions (no carry, `jal` targets not moved, a `lui` adjusted twice) each failed them, as did the two
+mistakes Bugbot's review found in the first version (a `lui` left waiting when its lower half came as a 16-bit
+relocation; packed relocations not noticed when sections were kept). `tools/psp-test-programs/build.sh <folder>` builds a real hello world
+(static, PRX and EBOOT) with pspdev's toolchain; with `PSP_TEST_PROGRAMS=<folder>` the tests load those too.
