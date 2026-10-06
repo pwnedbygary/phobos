@@ -2279,7 +2279,8 @@ behavior; no other emulator's code was read.
   its asynchronous twin takes (part 20's 100 microseconds plus the bytes at the device's rate: 1,375,000 bytes a
   second from the disc, 4 MB a second on the memory stick), its bytes moved at once, the thread waiting meanwhile
   (a new wait, Wait::File, returning the call's result as its time is up). Standard input, output and error take
-  no time. Called by a test with no thread running, it's done at once, as before.
+  no time. Called by a test with no thread running, it's done at once, as before. Since the review, sceIoIoctl's two
+  disc reads (0x01030008's bytes, 0x01f30003's sectors of umd0:) are refused and timed the same way.
 - **Interrupts held off keep the CPU** (interrupts.cpp, threads.cpp). sceKernelCpuSuspendIntr is the CPU's own
   interrupt flag (pspautotests' intr/mfic: `mfic v0, $0; mtic zero, $0`, only its lowest bit counting, so resuming
   with 2 leaves interrupts off), so on a PSP nothing can take the CPU from the thread holding them off: the timer's,
@@ -2287,16 +2288,19 @@ behavior; no other emulator's code was read.
   ended took the CPU all the same, with the one global flag still off. Brave Story holds interrupts off around its
   own lock; its sound thread (0x10) took the CPU in there as a buffer ended, found every blocking output refused
   (CAN_NOT_WAIT: interrupts were off), and spun for good at the top priority, starving the game on its logo. Now the
-  running thread keeps the CPU while it holds interrupts off, as with dispatching held off; turned back on, the
-  calls held back run, then the scheduler picks. Every function that waits refuses with interrupts held off
-  (intr/waits recorded each alike with interrupts and with dispatching held off: until now only sound's did). A
-  thread taking the CPU has interrupts on, the flag being its holder's (it can't lose the CPU meanwhile but by
-  ending).
+  running thread keeps the CPU while it holds interrupts off, as with dispatching held off, even as it rotates its
+  own priority's line or changes its own priority (since the review); turned back on, the calls held back run, then
+  the scheduler picks. Every function that waits refuses with interrupts held off (intr/waits recorded each alike
+  with interrupts and with dispatching held off: until now only sound's did). A thread taking the CPU has interrupts
+  on, the flag being its holder's (it can't lose the CPU meanwhile but by ending), and a handler that leaves them off
+  doesn't pass that on (since the review). The kernel's flag is the CPU's own since the review, so the program's own
+  mfic and mtic see and set it: on as a program starts (intr/mfic read 1 first), mtic keeping its lowest bit alone.
 - **The keyboard** (utility.cpp: sceUtilityOsk*) was answered as cancelled. Each field's text is now accepted as it
   stands (UNCHANGED), and an empty field, or one of spaces, gets the console's nickname, "PSP" (CHANGED), as a player
   asked for a name would type one; each as far as the field's room (outtextlength, its NUL among it) and limit
-  (outtextlimit) allow, in UTF-16 (psputility_osk.h). Peace Walker asks for its player's name in an empty field,
-  refuses an empty answer ("Please enter at least 1 characters") and asked again for good.
+  (outtextlimit) allow, in UTF-16 (psputility_osk.h): a limit of 0 is none, and a field with no room gets nothing
+  written (since the review). Peace Walker asks for its player's name in an empty field, refuses an empty answer
+  ("Please enter at least 1 characters") and asked again for good.
 - **Renaming** (io.cpp: sceIoRename), as pspautotests' io/file/rename recorded: the file takes the new path's last
   name and stays in its own folder, whatever folder the new path names ("../t2.txt" from ms0:/PSP renamed to
   "t2a.txt", or to "ms0:/PSP/t3a.txt", lands in ms0:/); a name taken there, the old one itself among them, is
@@ -2324,7 +2328,9 @@ behavior; no other emulator's code was read.
 - **States** carry both new waits (their fields were there already), and loading checks them: a file wait waiting,
   with no callbacks, due within the longest request (64 MiB from the disc, under a minute) and not a frame overdue;
   a volatile wait only while the memory is lent, with no time limit or callbacks; neither put aside for callbacks.
-  The layout is unchanged (version 5).
+  The layout was unchanged, but the review found the interrupt flag's meaning changed under it, and the flag is the
+  CPU's alone since (the kernel keeps no copy, and loading wants it 0 or 1): version 6, a state of version 1 to 5
+  refused; version 7 since part 21 merged (this part's end).
 
 What the games do now, on the host (frames under `/tmp/hle3-runner/final`, outside the repository; the runner's
 saved states under `/tmp/hle3-runner/states` take each back to where it got):
@@ -2369,8 +2375,8 @@ Seen on the way, not changed:
   doesn't show here, is something of the Android build or front end's to look into.
 - Recorded by pspautotests, not done here: a thread started with dispatching held off runs at once
   (dispatchwake's "TMR"; here it waits); sceIoOpen with interrupts or dispatching held off returns -1 and in a
-  handler ILLEGAL_CONTEXT, and __sceSasCore is refused alike (intr/delays; sas.cpp is the sound worker's); the wait
-  timeouts above.
+  handler ILLEGAL_CONTEXT (intr/delays, which records __sceSasCore refused alike: done once part 21's sas.cpp merged,
+  at this part's end); the wait timeouts above.
 
 Tests (`tests/psp/run-tests.sh`: 196 groups, both sanitizers; `tests/psp/ares` 236 checks):
 - `async.cpp`: "files synchronous reads wait" (both engines: a 4000-byte read from the memory stick taking 1100
@@ -2398,7 +2404,35 @@ file open, and of a folder (taken as a file is); the keyboard's answer for an em
 as is accepting each field at once); which of a cross-device rename and a missing file comes first; the delay's
 minimum and its 25 microseconds (fitted to delaylen's figures, rounded to 10 there), and a new thread's first delay,
 which delayzero found can be short; and with interrupts held off, whether a woken thread of higher priority would
-take the CPU from a system call (here, as with dispatching held off, it waits).
+take the CPU from a system call (here, as with dispatching held off, it waits). Since the review: whether a thread
+rotating its own line, or changing its own priority, with interrupts or dispatching held off gives way to its
+equals once they're back (here the rotation is dropped, as part 20 chose for dispatching); what an mtic of the
+program's own that turns interrupts back on lets in at once (here the calls held back come at the kernel's next
+look, a better thread at the scheduler's next pick); and the keyboard's limit of 0 (no limit here).
+
+Review: a general-purpose reviewer of the branch; the clean-room spot check found every area independent; one
+medium and five low findings, all fixed, each with a test that failed before its fix. The medium: a thread holding
+interrupts (or dispatching) off still lost the CPU when it rotated its own priority's line or changed its own
+priority: both make the caller ready, the scheduler kept only a running thread, and the switch turned interrupts
+on, handing the holder's critical section to another thread. reschedule() now keeps the caller running whenever
+they're held off and it's running or ready; it gives way once they're back, to a thread better than it then. The
+lows: a handler that held interrupts off and returned left them off for the thread it had interrupted, every wait
+of its refused (callReturned() turns them back on: calls start only with them on); the keyboard took a limit of 0
+as no characters, the nickname cut to nothing but still CHANGED, and wrote a NUL into a field with no room (0 is no
+limit now, and a roomless field gets nothing); sceIoIoctl's disc reads still took no time and went ahead where a
+thread can't wait (refused and timed as sceIoRead's now); the interrupt flag's meaning had changed under the same
+state version, so a version 5 state holding them off for a thread that wasn't the holder would spin it for good
+(version 6, older ones refused, the flag checked on loading); and mfic and mtic worked on a flag of the CPU's apart
+from the kernel's, reading 0 as a program started where intr/mfic recorded 1 (the kernel's flag is a reference to
+the CPU's now, on at power, mtic keeping its lowest bit as intr/mfic read 2 and 0x80000000 back as 0, and
+Kernel_Library's sceKernelCpuResumeIntrWithSync is listed as sceKernelCpuResumeIntr). New groups: "interrupts back
+on after a handler", and "interrupts one flag, mfic's and the kernel's" (both engines: intr/mfic's thirteen values
+in its order, then a delay refused after an mtic of 0 and a better thread kept out until the resume, "MTR"). Grown:
+"interrupts held off keep the CPU" (the holder rotating and lowering its priority with interrupts and with
+dispatching held off: "ABP", interrupts 0 inside, where the old code gave "APB" and 1), "utility keyboard" (four
+more fields), "files synchronous reads wait" (the ioctl reads, their refusals and an answer still at once), "state
+fields" (a flag of 2 refused; its kernel copy gone from the fields), the CPU tests (the flag on at power, mtic's
+lowest bit), and `tests/psp/ares` (a version 5 state refused). The tree passed 198 groups and 240 checks.
 
 Merged with part 21 (sound, `cursor/psp-sound-2b67`, #147), which now sits under this part. The code merged by
 itself: sound rewrote audio.cpp, sas.cpp and the system's stream, which this part doesn't touch, and its additions
@@ -2408,4 +2442,15 @@ voices' decoders; this part's for the interrupt flag, the CPU's alone, its meani
 version 7 and a state of version 1 to 6 is refused by its header (`tests/psp/ares` tries each); and the docs, part
 21 placed before this one and the handoff's entries newest first. "state fields" has both branches' fields and
 refusals. Sound's blocking outputs already refused where a thread can't wait, as this part's waits do. The merged
-tree passes 210 groups and 254 checks, nothing the merge broke having needed a fix.
+tree passes 210 groups and 254 checks, nothing the merge broke having needed a fix. Then, with sas.cpp merged, this
+part's rule for functions that wait covers it too: __sceSasCore is refused where no thread may wait, as intr/delays
+recorded (ILLEGAL_CONTEXT in a handler, CAN_NOT_WAIT with interrupts or dispatching held off), before the buffer or
+a voice moves; __sceSasCoreWithMix, which waits alike, is taken the same (not recorded; intr/waits has no sas
+call). New group "sas core refused where no thread may wait" (both engines; without the check its six refusals
+returned 0 and its voice ended). The tree passes 211 groups (both sanitizers) and 254 checks. On the host (a
+scratch runner from boot, no buttons pressed, its frames and WAVs outside the repository): GTA Liberty City Stories
+reaches the city by frame 1200, Brave Story its intro past its logos, Burnout Legends "PRESS START BUTTON TO
+CONTINUE", as before; all three silent there (Burnout's title music is ATRAC3+, Brave Story's ATRAC3 data is
+refused, and GTA's sound thread makes its sas grains and blocking outputs at their pace with no voice keyed on).
+The Street Fighter III port's sound is part 21's capture second for second, but starts about 4 s later: its 4.4 MB
+of reads as it boots now take the disc's 3.2 s (this part's synchronous reads).

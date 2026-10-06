@@ -771,7 +771,26 @@ recorded results and the games' behavior; no other emulator's code read:
 - **Checks**: the parts' 196 groups with both sanitizers (eight new: files synchronous reads wait and wait state,
   interrupts held off keep the CPU, utility keyboard, files rename, rtc file times and ticks, power volatile memory
   waited for, kernel thread delays' lengths; "state fields" refuses nine more states); `tests/psp/ares` 236. Broken
-  versions failed the new groups. States stay version 5 (two new waits, no new fields).
+  versions failed the new groups. States stayed version 5 then (two new waits, no new fields); see the review.
+- **Review:** a general-purpose reviewer; the clean-room spot check found every area independent; one medium and
+  five low findings, all fixed, each with a test that failed before it. Medium: a thread holding interrupts (or
+  dispatching) off lost the CPU when it rotated its own line or changed its own priority (both made it ready, and
+  the switch turned interrupts on); it keeps the CPU now, giving way once they're back. Lows: a handler that left
+  interrupts off passed that on to the thread it interrupted (back on as it returns); the keyboard's limit of 0 cut
+  the nickname to nothing and a roomless field got a NUL (0 is no limit; nothing written); sceIoIoctl's disc reads
+  took no time (refused and timed as sceIoRead's); the interrupt flag's meaning changed under state version 5
+  (version 6, older refused, the flag checked); mfic and mtic used a flag apart from the kernel's, reading 0 at the
+  start where intr/mfic recorded 1 (one flag now, the CPU's, on at power, mtic's lowest bit alone;
+  sceKernelCpuResumeIntrWithSync listed as sceKernelCpuResumeIntr). New groups "interrupts back on after a handler"
+  and "interrupts one flag, mfic's and the kernel's"; four groups grown. 198 groups, `tests/psp/ares` 240.
+- **Merged with #147 (sound)**, which this branch now sits on: only the state's version (7, each side having made a
+  6 of its own), the ares test's list of refused versions and the docs clashed; part 21 comes before part 22 in
+  docs/psp-core.md, this entry before sound's. Then `__sceSasCore` (and `__sceSasCoreWithMix`) refuse where no thread
+  may wait, as intr/delays recorded. Checks: 211 groups with both sanitizers, `tests/psp/ares` 254; states are
+  version 7, versions 1-6 refused. On the host from boot (scratch runner, frames and WAVs in
+  `/tmp/stallfix-runner/out`): GTA LCS reaches the city, Brave Story its intro, Burnout Legends its title, as before,
+  all silent there (ATRAC music, no voice keyed on); the Street Fighter III port sounds as part 21's capture, 4 s
+  later (its 4.4 MB of boot reads now take the disc's 3.2 s).
 - **Next**: Dominator's GE path; sceLibFont from flash0 (Peace Walker's and Gunhound's menus); wait timeouts as
   waittimeouts recorded; a thread started with dispatching held off running at once (dispatchwake); the GE's speed.
 
