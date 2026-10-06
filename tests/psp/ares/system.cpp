@@ -1,6 +1,6 @@
 //The PSP as an ares system, as Phobos's front ends meet it (ares/psp/system): the node tree they walk, a homebrew
-//program put in the UMD drive and run a frame at a time, the frame it shows reaching the front end, the controls as
-//the system hands them to the kernel, and the memory stick folder.
+//program put in the UMD drive and run a frame at a time, the frame it shows and the sound it makes reaching the
+//front end, the controls as the system hands them to the kernel, and the memory stick folder.
 //
 //A front end here is TestPlatform: it hands the core the game's files, keeps the frames the core shows, and says
 //which controls are held, as Phobos's Android runner does for real.
@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -54,6 +55,7 @@ struct TestPlatform : ares::Platform {
   std::mutex mutex;                      //frames arrive on the screen's own thread
   std::vector<u32> frame;                //the last one shown, as ARGB
   u32 frameWidth = 0, frameHeight = 0, frames = 0;
+  std::vector<s32> sound;                //the sound the stream hands on, left and right, as 16-bit samples
 
   auto pak(Node::Object node) -> std::shared_ptr<vfs::directory> override {
     if(node->name() == "PlayStation Portable Disc" && game) return game;
@@ -73,6 +75,14 @@ struct TestPlatform : ares::Platform {
     std::string name = (const char*)node->name();
     if(auto button = node->cast<Node::Input::Button>()) button->setValue(held[name] != 0);
     if(auto axis = node->cast<Node::Input::Axis>()) axis->setValue(held[name]);
+  }
+
+  auto audio(Node::Audio::Stream stream) -> void override {
+    while(stream->pending()) {
+      f64 samples[2];
+      stream->read(samples);
+      for(f64 sample : samples) sound.push_back(s32(std::lround(sample * 32768.0)));
+    }
   }
 };
 
@@ -564,9 +574,10 @@ auto states(const fs::path& programs) -> void {
     //states of the layouts before this one (the header's second word): version 1, before part 17's threads,
     //semaphores and callbacks and part 19's modules; version 2, which part 17's branch and parts 18 and 19's each
     //laid out their own way; version 3, before calls into the program said which are the vertical blank's
-    //handlers; version 4, before files' asynchronous requests, sceSas, message pipes and mailboxes. Each is refused
+    //handlers; version 4, before files' asynchronous requests, sceSas, message pipes and mailboxes; version 5,
+    //before sound was heard (the channels' output, the SRC channel's place, VAG voices' decoders). Each is refused
     //by its header, before anything is touched (even the compiled code, which any load throws away).
-    for(u8 version : {1, 2, 3, 4}) {
+    for(u8 version : {1, 2, 3, 4, 5}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};
@@ -640,6 +651,66 @@ auto states(const fs::path& programs) -> void {
   }
 }
 
+//What the speakers get (System::run(), Kernel::audioOutput()): the stream, at the PSP's 44.1 kHz (taken here at
+//44.1 kHz too, where ares's resampler hands each sample on as it is, a sample late), gets 735.7 frames a frame. While
+//cube runs (it makes no sound of its own), a buffer handed to a mixer channel as sceAudioOutputPanned would hand it
+//is heard in it sample for sample, from the frame it's handed over at: its left at 0x8000 as it is, its right at
+//0x4000 halved (rounded down). A program that has ended (hello leaves at once) still gets silence at that rate.
+auto sound(const fs::path& programs) -> void {
+  std::printf("sound reaching the front end\n");
+  PlayStationPortable::option("Recompiler", "true");
+  PlayStationPortable::option("Memory Stick", (scratch / "stick").string().c_str());
+  host.game = programPak(programs / "cube.elf", "program.elf");
+  Node::System root;
+  if(!CHECK(start(root), "the PSP starts with cube.elf")) return;
+  auto stream = root->find<Node::Audio::Stream>("Audio");
+  if(!CHECK((bool)stream, "the stream is there")) return root->unload();
+  stream->setResamplerFrequency(44'100);
+  host.sound.clear();
+  for(u32 n = 0; n < 60; n++) root->run();
+  u64 frames = host.sound.size() / 2;
+  CHECK(frames >= 60 * 735 && frames <= 60 * 736 + 2, "735.7 frames a frame: " + std::to_string(frames) + " in 60");
+  CHECK(std::all_of(host.sound.begin(), host.sound.end(), [](s32 sample) { return !sample; }), "cube is silent");
+  //a ramp of 2048 stereo samples, in a block of its own, handed to channel 0
+  auto& kernel = psp.kernel;
+  auto block = kernel.allocate(2048 * 4, 0, 0, "sound test");
+  if(!CHECK(block != nullptr, "memory for the buffer")) return root->unload();
+  auto ramp = [](u32 n) { return s32(n * 15) - 15000; };
+  for(u32 n = 0; n < 2048; n++) {
+    psp.memory.write(2, block->address + n * 4, u16(ramp(n)));
+    psp.memory.write(2, block->address + n * 4 + 2, u16(ramp(n)));
+  }
+  auto& channel = kernel.audio.channels[0];
+  channel.reserved = true, channel.sampleCount = 2048, channel.format = 0;
+  host.sound.clear();
+  kernel.handOver(0, block->address, 0x8000, 0x4000);
+  for(u32 n = 0; n < 10; n++) root->run();
+  auto& heard = host.sound;
+  u32 at = 0;  //where the ramp starts in what the stream handed on
+  while(at + 2 < heard.size() && !(heard[at] == ramp(0) && heard[at + 2] == ramp(1))) at += 2;
+  bool exact = at + 2048 * 2 <= heard.size();
+  for(u32 n = 0; n < 2048 && exact; n++) {
+    exact = heard[at + n * 2] == ramp(n) && heard[at + n * 2 + 1] == (ramp(n) * 0x4000 >> 15);
+  }
+  CHECK(exact, "a mixer channel's buffer heard sample for sample, its right at half");
+  CHECK(at / 2 < 4, "from the frame it was handed over at: " + std::to_string(at / 2) + " frames on");
+  root->unload();
+
+  host.game = programPak(programs / "hello.elf", "program.elf");
+  if(CHECK(start(root), "the PSP starts with hello")) {
+    root->find<Node::Audio::Stream>("Audio")->setResamplerFrequency(44'100);
+    std::string printed;
+    runToExit(root, printed);
+    host.sound.clear();
+    for(u32 n = 0; n < 60; n++) root->run();
+    frames = host.sound.size() / 2;
+    bool rate = frames >= 60 * 735 && frames <= 60 * 736 + 2;
+    CHECK(psp.kernel.exited && rate, "a program that has ended: 735.7 frames a frame");
+    CHECK(std::all_of(host.sound.begin(), host.sound.end(), [](s32 sample) { return !sample; }), "of silence");
+    root->unload();
+  }
+}
+
 //Where the host gives no memory that code may run from, the recompiler turns itself off, and the interpreter runs
 //the program instead. (Asking for no code memory at all stands for that: the host refuses the mapping.)
 auto noCodeMemory(const fs::path& programs) -> void {
@@ -682,6 +753,7 @@ auto main() -> int {
     discImage(fs::path{programs});
     descriptorFiles(fs::path{programs});
     states(fs::path{programs});
+    sound(fs::path{programs});
   } else {
     std::printf("PSP_TEST_PROGRAMS isn't set (or has no hello.elf): the checks that run a program are skipped\n");
   }

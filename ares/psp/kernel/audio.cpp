@@ -26,12 +26,29 @@
 //channel's rate; the next one armed carries straight on. Its slot frees as its transfer ends, about 100
 //microseconds before its last samples are heard (pspautotests' audio/output2/rest: a 64-sample buffer, 1451
 //microseconds long, reads as gone after "13XX"): so the first buffer after an idle stretch retires 100 microseconds
-//short of its length, and each one chained after it a whole buffer later, which keeps a stream's pace.
+//short of its length, and each one chained after it a whole buffer later, which keeps a stream's pace. A buffer
+//armed after the slots have both freed, but while the last one's final 100 microseconds are still being heard,
+//carries straight on after them too, and retires 100 microseconds before its own end: a whole buffer after the last
+//one's end. So a program that drains the channel (a null output) before each buffer keeps that pace as well, never
+//getting ahead of what's heard.
 //
-//The samples aren't mixed yet: the system's sound stream plays silence (System::run()). What a mixer needs is here,
-//at the moments the PSP's takes it: mixerBlock() is where each channel's block of 64 samples is taken (at buffer, so
-//many samples in, in its format, at its volumes), and srcRetire() is where an SRC buffer has been played. Mixing them
-//into a queue for the system's stream to play from comes next.
+//What the speakers hear. Think of the PSP's sound as a long strip of sound frames, 44,100 a second, each a left and
+//a right sample, numbered from power on (sampleFrame() says which frame is heard at a moment). Every channel adds
+//what it plays to the frames where it's heard, and the system takes the finished frames, those heard by now, a frame
+//of the PSP's at a time (audioOutput(), from System::run()), and hands them to the front end's speakers. The frames
+//not taken yet wait in a ring (Audio::Output).
+//- A mixer channel: each block of 64 samples is heard from the boundary that takes it, for 64 frames. There
+//  (mixerBlock()) the DMA reads the block from the program's memory, multiplies each sample by its side's volume
+//  (pspsdk's PSP_AUDIO_VOLUME_MAX, 0x8000, plays a sample as it is; 0x4000 at half its size; up to 0xFFFF, nearly
+//  twice) and adds it to those frames. A mono sample is heard on both sides, each at its own volume.
+//- The SRC channel plays its buffers at its own rate, 8 to 48 kHz: from the moment the first is armed after an idle
+//  stretch, one after another. Its samples are converted to 44.1 kHz as they're heard (srcRender()): each output
+//  frame falls somewhere between two of the channel's samples, and takes the straight line between them (linear
+//  interpolation). At 22050 Hz every other frame is one of its samples as it is, and the frames between are halfway
+//  between their neighbors, so a buffer fills twice as many frames as it has samples. A buffer is read while it
+//  plays, never after its slot has been handed back (srcRetire() finishes it first).
+//- The frames add up, and the sum is clamped to what a 16-bit sample holds, -32768 to 32767, as the system takes
+//  each one: two loud channels together saturate rather than wrap round into noise.
 //
 //Not here: sceAudioOneshotOutput, input and routing, sceAudioSetFrequency; and the time the calls themselves take on
 //a PSP (an output starting the DMA spends 100 microseconds to a millisecond, an SRC output over 100): system
@@ -57,6 +74,49 @@ static auto srcRateValid(u32 rate) -> bool {
     if(rate == valid) return true;
   }
   return false;
+}
+
+//The output frame heard at a moment: a cycle, and how far past it in 49ths of one (as the mixer's DMA counts its
+//blocks; the same 49 that FrameRate is). Frame n starts at n * 370000 / 49 cycles, so this is the last frame to
+//start by then, worked out in two parts so that no product overflows, whatever the clock.
+auto Kernel::sampleFrame(u64 cycle, u32 fraction) const -> u64 {
+  return cycle / Audio::FrameCycles * Audio::FrameRate
+       + (cycle % Audio::FrameCycles * Audio::FrameRate + fraction) / Audio::FrameCycles;
+}
+
+//The first cycle at which a frame is heard (sampleFrame() turned round): frame * 370000 / 49, rounded up, worked out
+//in two parts too.
+auto Kernel::frameCycle(u64 frame) const -> u64 {
+  return frame / Audio::FrameRate * Audio::FrameCycles
+       + (frame % Audio::FrameRate * Audio::FrameCycles + Audio::FrameRate - 1) / Audio::FrameRate;
+}
+
+//Room in the output for frames up to last (not included), which are about to be added to: returns where the room
+//ends, last or short of it. The ring holds OutputFrames frames from the first the system hasn't taken. The channels
+//add to frames a block ahead of the clock at most (the mixer's 64 from a boundary; the SRC channel's SrcAhead), and
+//room for those is made by dropping the oldest frames, which happens only with no system taking them (the kernel's
+//own tests): the system takes them every frame of the PSP's. Frames further ahead, which only a channel gone wrong
+//would add, take no room from those not taken: what doesn't fit is left out at the far end. So the first frame not
+//taken never passes the clock, and the system gets every frame as the clock reaches it. (A frame the system has
+//taken already can't be added to: callers pass over frames before output.start.)
+auto Kernel::outputRoom(u64 last) -> u64 {
+  auto& output = audio.output;
+  u64 near = std::min(last, sampleFrame(cycles) + 64);
+  if(near > output.start + Audio::OutputFrames) {
+    u64 start = near - Audio::OutputFrames;
+    if(start - output.start >= Audio::OutputFrames) {
+      std::fill(output.samples.begin(), output.samples.end(), 0);
+    } else {
+      for(u64 frame = output.start; frame < start; frame++) {
+        u32 slot = frame % Audio::OutputFrames * 2;
+        output.samples[slot] = output.samples[slot + 1] = 0;
+      }
+    }
+    output.start = start;
+  }
+  last = std::min(last, output.start + Audio::OutputFrames);
+  output.end = std::max({output.end, output.start, last});
+  return last;
 }
 
 //The thread waiting on a channel (0-7), or on the SRC channel (Audio::WaitSrc, Audio::WaitSrcDrain), if one is. Its
@@ -100,18 +160,42 @@ auto Kernel::handOver(u32 number, u32 buffer, s32 left, s32 right) -> void {
   mixerBlock();
 }
 
-//A block boundary, now: the DMA takes the next 64 samples from every channel with a buffer. That's where they'd be
-//mixed for the speakers: 64 samples from buffer + (length - remaining) samples in (4 bytes each in stereo, 2 in
-//mono), scaled by the channel's volumes (not yet: see the top). A buffer whose last samples go leaves its slot free,
-//and a thread waiting on the channel hands its own buffer over then (to be taken from the next boundary on) and
-//returns with the channel's sample count. A boundary with nothing to take stops the DMA: the block the one before
-//took has been heard. Returns whether a thread woke.
+//A channel's next 64 samples, as the DMA takes them: from buffer + (length - remaining) samples in (4 bytes a
+//sample in stereo, its left then its right; 2 in mono), each side multiplied by its volume over 0x8000 (shifted
+//down, so a fraction rounds down, towards minus infinity) and added into block, 64 pairs of left and right. A
+//buffer with no memory behind it plays silence.
+auto Kernel::mixBlock(const Audio::Channel& channel, s32* block) -> void {
+  bool mono = channel.format == AudioMono;
+  u32 bytesPerSample = mono ? 2 : 4, size = 64 * bytesPerSample;
+  u32 address = channel.buffer + (channel.length - channel.remaining) * bytesPerSample;
+  u8 copy[64 * 4];
+  const u8* bytes = memory.pointer(address, size);
+  if(!bytes) {  //(through VRAM's rearranged copies, a piece at a time; or not there at all)
+    if(!memory.copyOut(copy, address, size)) return;
+    bytes = copy;
+  }
+  s32 leftVolume = channel.leftVolume, rightVolume = channel.rightVolume;
+  for(u32 n = 0; n < 64; n++) {
+    const u8* sample = bytes + n * bytesPerSample;
+    s32 left = s16(sample[0] | sample[1] << 8), right = mono ? left : s16(sample[2] | sample[3] << 8);
+    block[n * 2 + 0] += left * leftVolume >> 15;
+    block[n * 2 + 1] += right * rightVolume >> 15;
+  }
+}
+
+//A block boundary, now: the DMA takes the next 64 samples from every channel with a buffer, and they're added to
+//the 64 output frames heard from now (mixBlock()). A buffer whose last samples go leaves its slot free, and a thread
+//waiting on the channel hands its own buffer over then (to be taken from the next boundary on) and returns with the
+//channel's sample count. A boundary with nothing to take stops the DMA: the block the one before took has been
+//heard. Returns whether a thread woke.
 auto Kernel::mixerBlock() -> bool {
   bool took = false, woke = false;
+  s32 block[64 * 2] = {};
   for(u32 number = 0; number < 8; number++) {
     auto& channel = audio.channels[number];
     if(!channel.buffer) continue;
     took = true;
+    mixBlock(channel, block);
     channel.remaining = channel.remaining > 64 ? channel.remaining - 64 : 0;
     if(channel.remaining) continue;
     channel.buffer = 0;
@@ -126,6 +210,13 @@ auto Kernel::mixerBlock() -> bool {
     return woke;
   }
   auto& dma = audio.dma;
+  auto& output = audio.output;
+  u64 first = sampleFrame(dma.nextBlock, dma.fraction), last = outputRoom(first + 64);
+  for(u64 frame = std::max(first, output.start); frame < last; frame++) {
+    u32 slot = frame % Audio::OutputFrames * 2, n = u32(frame - first) * 2;
+    output.samples[slot + 0] += block[n + 0];
+    output.samples[slot + 1] += block[n + 1];
+  }
   dma.fraction += Audio::BlockFraction;
   dma.nextBlock += Audio::BlockCycles + dma.fraction / 49;
   dma.fraction %= 49;
@@ -161,16 +252,76 @@ auto Kernel::srcDuration(u32 samples) const -> u64 {
   return (u64(samples) * CPUFrequency + audio.src.rate - 1) / audio.src.rate;
 }
 
+//The index-th sample of the SRC channel's armed buffers, counting from the first buffer's start on into the second:
+//its left and right (stereo, 16 bits each), and its buffer's volume. Memory that isn't there is silence. False past
+//the samples armed.
+auto Kernel::srcSample(u64 index, s32& left, s32& right, u32& volume) -> bool {
+  auto& src = audio.src;
+  for(u32 n = 0; n < src.armed; n++) {
+    auto& buffer = src.buffers[n];
+    if(index >= buffer.sampleCount) {
+      index -= buffer.sampleCount;
+      continue;
+    }
+    left = right = 0;
+    volume = buffer.volume;
+    if(auto bytes = memory.pointer(buffer.address + u32(index) * 4, 4)) {
+      left = s16(bytes[0] | bytes[1] << 8);
+      right = s16(bytes[2] | bytes[3] << 8);
+    }
+    return true;
+  }
+  return false;
+}
+
+//The SRC channel's samples, converted to the output's 44.1 kHz and added to it, from the frame it got to up to
+//frame until (not included); or with wholeBuffer, until the first armed buffer has been heard to its end, wherever
+//that falls (its slot is about to be handed back: srcRetire()). Where it is in its samples counts in 44100ths of
+//one; each output frame moves it on by the channel's rate (22050 at 22050 Hz: half a sample). A frame between two
+//samples is the straight line between them, weighed by how near it is to each, and scaled by its first sample's
+//buffer's volume (0x8000 plays it as it is, as for the mixer). It stops where the samples armed run out, to go on
+//from there as more come; should the system have taken the frames meanwhile, it goes on from the first it hasn't.
+//(A frame past the output's room, which only a channel far ahead of the clock would reach, is lost: outputRoom().)
+auto Kernel::srcRender(u64 until, bool wholeBuffer) -> void {
+  auto& src = audio.src;
+  auto& output = audio.output;
+  if(!src.armed) return;
+  src.renderedTo = std::max(src.renderedTo, output.start);
+  u64 firstEnd = u64(src.buffers[0].sampleCount) * 44'100;
+  while(wholeBuffer ? src.position < firstEnd : src.renderedTo < until) {
+    u64 index = src.position / 44'100;
+    s64 weight = src.position % 44'100;
+    s32 left, right, nextLeft = 0, nextRight = 0;
+    u32 volume, nextVolume;
+    if(!srcSample(index, left, right, volume)) break;
+    srcSample(index + 1, nextLeft, nextRight, nextVolume);  //(past the samples armed: towards silence)
+    s64 mixedLeft = left + (nextLeft - left) * weight / 44'100;
+    s64 mixedRight = right + (nextRight - right) * weight / 44'100;
+    if(outputRoom(src.renderedTo + 1) > src.renderedTo) {
+      u32 slot = src.renderedTo % Audio::OutputFrames * 2;
+      output.samples[slot + 0] += s32(mixedLeft * volume >> 15);
+      output.samples[slot + 1] += s32(mixedRight * volume >> 15);
+    }
+    src.renderedTo++;
+    src.position += src.rate;
+  }
+}
+
 //The SRC channel's first armed buffer has been transferred: its slot is free, and the second, if there is one, plays
 //on from here, at once, retiring a whole buffer later (both 100 microseconds ahead of what's heard: srcOutput()).
 //That's a completion: it wakes the thread waiting for one, or stays pending for the next output to take. Once
 //nothing is armed, the threads waiting for the channel to drain return as well. Returns whether a thread woke.
+//The buffer's last samples are added to the output first, ahead of the clock by those 100 microseconds, as the
+//program may fill it again from now on.
 auto Kernel::srcRetire() -> bool {
   auto& src = audio.src;
+  srcRender(0, true);
+  src.position -= std::min(src.position, u64(src.buffers[0].sampleCount) * 44'100);
   src.buffers[0] = src.buffers[1];
   src.buffers[1] = {};
   src.armed--;
   if(src.armed) src.retireAt += srcDuration(src.buffers[0].sampleCount);
+  else src.position = 0;
   bool woke = false;
   if(auto thread = audioWaiter(Audio::WaitSrc)) {
     ready(*thread, thread->waitCount);
@@ -203,6 +354,23 @@ auto Kernel::nextAudioEvent() const -> u64 {
   u64 next = audio.dma.running ? audio.dma.nextBlock : ~0ull;
   if(audio.src.armed) next = std::min(next, audio.src.retireAt);
   return next;
+}
+
+//What the speakers get: every output frame heard by now (the kernel's clock), the SRC channel's samples brought up
+//to now first, each frame's sum clamped to 16 bits and appended to frames as a left and a right sample. They're the
+//system's from here, and leave the ring. (Frames a whole ring older than now, which only a machine that hasn't been
+//asked for a long while has, are dropped: there's no room for them.)
+auto Kernel::audioOutput(std::vector<s16>& frames) -> void {
+  auto& output = audio.output;
+  u64 now = sampleFrame(cycles);
+  srcRender(now);
+  outputRoom(now);
+  for(; output.start < now; output.start++) {
+    u32 slot = output.start % Audio::OutputFrames * 2;
+    frames.push_back(s16(std::clamp<s32>(output.samples[slot + 0], -32768, 32767)));
+    frames.push_back(s16(std::clamp<s32>(output.samples[slot + 1], -32768, 32767)));
+    output.samples[slot + 0] = output.samples[slot + 1] = 0;
+  }
 }
 
 //(channel, sample count, format): reserves a mixer channel and returns its number. A negative channel asks for the
@@ -359,10 +527,11 @@ auto Kernel::srcRelease() -> void {
 //(volume, buffer), for either family. The volume first: 0 to 0xFFFFF, a negative one refused (INVALID_VOLUME); then
 //the reservation (NOT_RESERVED); then, with both slots armed, BUSY at once, whoever else waits. Otherwise a real
 //buffer is armed in the free slot, with the channel's sample count as it is now (sceAudioOutput2ChangeLength's later
-//changes are for later buffers), playing at once if nothing was, its transfer ending (it retires) 100 microseconds
-//before it's been heard; and the call waits for a completion. One pending is taken and the call returns at once
-//(starting from idle makes one, so the first output after a pause doesn't wait); else it returns as the buffer
-//playing retires, one buffer's time in a steady stream. It returns the sample count its buffer was armed with.
+//changes are for later buffers), playing at once if nothing was (or, if the last buffer's final samples are still to
+//be heard, straight after them), its transfer ending (it retires) 100 microseconds before it's been heard; and the
+//call waits for a completion. One pending is taken and the call returns at once (starting from idle makes one, so
+//the first output after a pause doesn't wait); else it returns as the buffer playing retires, one buffer's time in a
+//steady stream. It returns the sample count its buffer was armed with.
 //
 //A null buffer arms nothing and returns 0: at once if nothing is armed, else once everything armed has played.
 //
@@ -381,9 +550,13 @@ auto Kernel::srcOutput() -> void {
     if(auto refused = audioWaitRefused()) return result(refused);
     return block(Wait::Audio, Audio::WaitSrcDrain, 0);
   }
-  if(!src.armed) {
-    src.retireAt = cycles + srcDuration(src.sampleCount) - Audio::SrcLead;
+  if(!src.armed) {  //heard from now, or from the last buffer's end if that's still to be heard
+    u64 now = sampleFrame(cycles), heardFrom = cycles;
+    if(src.renderedTo > now) heardFrom = frameCycle(src.renderedTo);
+    else src.renderedTo = now;
+    src.retireAt = heardFrom + srcDuration(src.sampleCount) - Audio::SrcLead;
     src.completion = true;
+    src.position = 0;
   }
   src.buffers[src.armed++] = {buffer, src.sampleCount, u32(volume)};
   if(auto refused = audioWaitRefused()) return result(refused);
