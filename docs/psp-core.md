@@ -593,7 +593,8 @@ second buffer read waits a frame). The three that differ are the PSP's to settle
 
 The 3D cases found one difference that was this core's to fix: a triangle cut at the near plane had 7292 pixels a
 level apart from PPSSPP's, because the cut's corners were blended from the other end of the edge, and their colors'
-256ths rounded the other way (part 11 now blends them from the corner past the plane). An earlier count here, "49 of
+256ths rounded the other way (part 11 then blended them from the corner past the plane, as PPSSPP does; the PSP turned
+out to blend them from the kept corner, so the core does that now: see "Fixed since"). An earlier count here, "49 of
 the 51 files", miscounted: it was 48 of 50, the 51st file being the manifest.
 
 #### Results from the user's PSP (2026-10-04)
@@ -669,10 +670,27 @@ What the data already says:
   `filter-shrink`'s exact step exact. How many bits the step keeps, and which way a step going left or up is cut,
   aren't pinned down by these files.
 
-With these, 49 of the 63 pictures are identical to the PSP's (40 before). Still apart: the filter's weights (by a
-level), lighting's rounding (a level), fog and colors across a clipped triangle (a level), perspective-correct
-texels on the 3D floor (291 pixels, a texel), `3d-rules` (6 pixels), the 3D sprite's fog and texels, and the depth
-buffer's layout.
+- **The filter** blends the top two texels, then the bottom two, then those two results, each step dropping its
+  fraction (ares/psp/ge/texture.cpp), where the core truncated once at the end: all three `filter-magnify` files are
+  the PSP's, every pixel (the 37-pixel one also needs the stepped coordinates above).
+- **A triangle cut at the near plane** has its new corners blended from the kept corner toward the one past the
+  plane (ares/psp/ge/transform.cpp), the other way round from PPSSPP: `3d-clip` goes from 8410 pixels a level apart
+  to 1535.
+
+With these, 52 of the 63 pictures are identical to the PSP's (40 before). Still apart, each by a level or a texel:
+lighting (every light), fog across the 3D floor, colors across the clipped triangle (1535 pixels), perspective-correct
+texels on the 3D floor (291 pixels); and `3d-rules` (6 pixels), the 3D sprite's fog and texels, and the depth
+buffer's layout. These files don't pin the rest down:
+
+- Lighting fits neither PPSSPP's arithmetic (colors as 2c + 1, a share in 512ths rounded up) nor any of the simple
+  alternatives tried (other encodings of the colors, shares in 256ths to 65536ths rounded each way): the best still
+  misses about 60 of the 768 values in `light-diffuse`. The PSP's cosine itself seems to come out a little off, low
+  in some cells and high in others (by up to about 0.3%), as an approximate normalization would; a third round can
+  tell, with normals whose cosines are exact and several material colors.
+- Colors across the clipped triangle and fog across the floor are a level off in scattered pixels, whose values
+  land on or near a whole level: like the texture coordinates' short steps, but stepping the colors the same way (in
+  65536ths or 256ths) doesn't reproduce them. Cases with a single color ramp across a triangle, at several slopes,
+  would show how the GE steps colors.
 
 The open questions above, settled: a sprite edge through pixel middles follows neither the core nor PPSSPP (the rule
 above); a shrunk sprite's texels follow neither, PPSSPP's nearer; a 3D sprite's fog follows neither; the spotlight's
@@ -694,8 +712,9 @@ one at a time, each fix checked against them.
   triangle or sprite with any such vertex (DEPTH_CLIP_ENABLE off) or with all of them past the same end (on); points
   aren't judged by it (as PPSSPP has it). A triangle with every w below zero isn't drawn either.
 - **Clipping**: a triangle is cut at the near plane (z < -w) only, never at the screen's edges (the scissor does
-  those). The new corners are blended in clip space from the corner past the plane (colors in 256ths, which that way
-  round decides) and put on the screen again; with flat shading every piece keeps the last vertex's color.
+  those). The new corners are blended in clip space from the kept corner toward the one past the plane (colors in
+  256ths, which the way round decides: the PSP's way, measured later) and put on the screen again; with flat shading
+  every piece keeps the last vertex's color.
 - **Culling** (CULL_FACE_ENABLE, not in clear mode, through mode too): CULL 1 draws the triangles running clockwise on
   the screen, 0 those running counterclockwise; every other triangle of a strip counts the other way round.
 - **Texture coordinates**: perspective-correct across triangles (blended as u/w and 1/w, then divided); colors, depth

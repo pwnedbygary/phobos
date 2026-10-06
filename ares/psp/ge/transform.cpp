@@ -226,13 +226,13 @@ auto GE::clipTriangle(PixelState& pixel, Sampler* texture, const Transform& t, c
     float fromSide = nearer(from), toSide = nearer(to);
     if(fromSide >= 0) kept[count++] = from;
     if((fromSide >= 0) != (toSide >= 0)) {
-      //blended from the corner past the plane toward the kept one (the way round decides how the colors' 256ths
-      //round; this is PPSSPP's)
+      //blended from the kept corner toward the one past the plane: the way round decides how the colors' 256ths
+      //round, and this is the PSP's (measured, docs/psp-core.md: 3d-clip; PPSSPP goes the other way)
       bool fromPast = fromSide < 0;
       const Vertex& past = fromPast ? from : to;
       const Vertex& kept1 = fromPast ? to : from;
       float pastSide = fromPast ? fromSide : toSide, keptSide = fromPast ? toSide : fromSide;
-      kept[count] = between(past, kept1, pastSide / (pastSide - keptSide));
+      kept[count] = between(kept1, past, keptSide / (keptSide - pastSide));
       project(kept[count++], t, true);
     }
   }

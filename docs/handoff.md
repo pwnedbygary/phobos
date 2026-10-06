@@ -868,6 +868,22 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the GE's filter and near-plane cut, as the PSP measured them — 2026-10-04
+
+Branch `cursor/psp-ge-filter-2b67`, stacked on `cursor/psp-ge-sampling-2b67` (for stack #106). From the user's
+PSP's pictures (docs/psp-core.md, "Fixed since"):
+- the bilinear filter drops the fraction at each step, top pair, bottom pair, then between them (texture.cpp): all
+  three `filter-magnify` files identical; a unit check in "draw filter" (0, 15 / 0, 17 at the middle gives 7, not 8);
+- a triangle cut at the near plane blends its new corners from the kept corner (transform.cpp), as part 11 first
+  had it, not PPSSPP's way: `3d-clip` 8410 pixels apart down to 1535 (no unit test pins the way round: on the
+  tests' small canvas the corners' level of difference doesn't reach a pixel; the measured file shows it);
+- 52 of 63 pictures identical. Tried and taken back: stepping vertex colors like texture coordinates (in 65536ths:
+  no better; in 256ths: worse). Lighting fits no simple arithmetic (best about 60 of 768 values in light-diffuse
+  off); the PSP's cosine looks a little off, as an approximate normalization would. Both written up as cases for the
+  third measuring program.
+
+Checks: PSP system tests 85 groups with the test programs; the measuring program against the PSP's results.
+
 ## PSP core: where the GE samples, as the PSP measured it — 2026-10-04
 
 Branch `cursor/psp-ge-sampling-2b67`, stacked on `cursor/psp-vfpu-prefixes-2b67` (for stack #106). From the GE
