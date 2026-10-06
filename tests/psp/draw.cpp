@@ -673,6 +673,46 @@ static auto drawDecodedTextures() -> void {
   for(u32 x = 0; x < 4; x++) CHECK(c.pixel(x, 2), 0x0001'0101u * (x + 1));
 }
 
+//What's kept of a texture: one copy, of as many rows as any primitive has taken from it. One taking fewer draws from
+//it as it is; one taking more makes it longer (the rows already decoded kept as they are, the rest decoded). Past
+//the cache's budget, the copies used longest ago go first.
+static auto drawDecodedRows() -> void {
+  Canvas c;
+  c.texture(3, 16, 512, 16);
+  for(u32 n = 0; n < 16 * 512; n++) c.memory.write(4, Texture + n * 4, n);
+  auto& entries = c.ge.textures.entries;
+  c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 16, 0}});  //rows 0-15, so 24 kept (2 more, in eights)
+  CHECK(entries.size(), 1u);
+  auto* first = entries.begin()->second.get();
+  CHECK(first->rows, 24u);
+  c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 8, 0, 16, 8, 0}});  //fewer: the same copy
+  CHECK(entries.size(), 1u);
+  CHECK(entries.begin()->second.get() == first, true);
+  c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 100, 0, 16, 16, 0}});  //more: a longer copy, still one
+  CHECK(entries.size(), 1u);
+  CHECK(entries.begin()->second->rows, 104u);
+  CHECK(c.pixel(5, 15), 96u * 16 + 5);  //row 15's v: 15.5 x 6.25 = 96.875
+  CHECK(c.pixel(5, 0), 3u * 16 + 5);     //a row the shorter copy had: 0.5 x 6.25 = 3.125
+  CHECK(c.ge.textures.bytes, 16u * 104 * 4);
+
+  Canvas lru;
+  lru.ge.textures.budget = 3 * 16 * 16 * 4;  //three 16x16 textures
+  auto use = [&](u32 n) {  //the nth of four 16x16 textures, one after another
+    lru.texture(3, 16, 16, 16);
+    lru.ge.commands[GE::TextureAddress0] = (Texture + n * 1024) & 0xff'ffff;
+    lru.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 16, 0}});
+  };
+  auto kept = [&](u32 n) {
+    return std::any_of(lru.ge.textures.entries.begin(), lru.ge.textures.entries.end(),
+                       [&](auto& entry) { return entry.first.address == Texture + n * 1024; });
+  };
+  use(0), use(1), use(2), use(0), use(3);  //the second, unused longest, goes
+  CHECK(kept(0) && !kept(1) && kept(2) && kept(3), true);
+  CHECK(lru.ge.textures.bytes, 3u * 16 * 16 * 4);
+  use(1);  //and is decoded again; the third goes
+  CHECK(kept(0) && kept(1) && !kept(2) && kept(3), true);
+}
+
 //A sprite turned a quarter (corners bottom-left and top-right, so v runs across x) whose left edge is 9/16 into its
 //first column draws that column, sampled at its middle: a sixteenth of a pixel left of the left corner, where v is a
 //sixteenth of a pixel's step past the corner's. From v = 0 that's below 0, which repeats round to the texture's last
@@ -833,6 +873,7 @@ static auto drawDecodedAgainstMemory() -> void {
 auto drawTests() -> Tests {
   return {
     {"draw textures kept decoded", drawDecodedTextures},
+    {"draw textures kept decoded, their rows", drawDecodedRows},
     {"draw turned sprites kept decoded", drawTurnedDecoded},
     {"draw textures kept decoded against memory", drawDecodedAgainstMemory},
     {"draw sprites", drawSprites}, {"draw texture formats", drawTextureFormats}, {"draw filter", drawFilter},
