@@ -5,8 +5,11 @@
 //holding what no machine could (a list longer than the state, a position past its end...) is refused.
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
+#include "font-maker.hpp"
 
 namespace allegrex_test::psp {
+
+using namespace pgf_maker;
 
 using ares::PlayStationPortable::Disc;
 constexpr u32 Buffer = 0x0893'0000;
@@ -141,9 +144,16 @@ static auto stateFields() -> void {
   auto image = disc_image::makeIso({
     {"DATA.BIN", std::vector<u8>(5000, 7)}, {"DIR/ONE.BIN", {1}}, {"DIR/TWO.BIN", {2}},
   });
+  //the system's fonts (two of them), as the system gives them; and font 1's bytes in the program's memory (which
+  //these states leave out), for a font to come from there below
+  FontFolder fonts({0, 1});
+  constexpr u32 fontBytes = 0x0899'0000;
   auto devices = [&](KernelMachine& m) {
     m.kernel.mount("ms0", stick.path.string());
     m.kernel.disc = discOf(image.bytes);
+    m.kernel.fontsFrom(fonts.path.string());
+    auto& bytes = m.kernel.systemFonts[1].pgf->data();
+    m.system.memory.copyIn(fontBytes, bytes.data(), bytes.size());
   };
   KernelMachine a;
   devices(a);
@@ -214,7 +224,25 @@ static auto stateFields() -> void {
   k.geLists[list2].started = true;
   k.geLists[list].started = false;
   k.calls.push_back({0x0880'7000, 0x0880'8000, {1, 2, 3}, false});  //after the calls above: a syscall would start it
-
+  //the font library: a library of two handles, the first holding system font 0 read a piece at a time, the second
+  //held by thread two's call opening system font 1 (two of its nine tables given so far)
+  constexpr u32 fontLibrary = 0x0896'0000;
+  auto& library = k.fontLibraries[fontLibrary];
+  library.address = fontLibrary, library.slots = 2;
+  library.handles = 0x0896'0100, library.data = 0x0896'0200, library.list = 0x0896'0400;
+  library.fonts[0] = 1, library.open[0] = true, library.open[1] = true;
+  auto& openFont = k.openFonts[1];
+  openFont.id = 1, openFont.library = fontLibrary, openFont.references = 1;
+  openFont.hash = k.systemFonts[0].hash, openFont.pgf = k.systemFonts[0].pgf;
+  for(u32 n : range(9)) openFont.blocks.push_back(0x0897'0000 + n * 0x100);
+  k.nextFontID = 2;
+  auto& fontCall = k.fontCalls[two];
+  fontCall.kind = Kernel::FontCall::Open, fontCall.library = fontLibrary, fontCall.errorAt = 0x0896'0800;
+  fontCall.slot = 1, fontCall.userData = 0x55, fontCall.alloc = 0x0880'3800, fontCall.free = 0x0880'3900;
+  for(auto& part : k.systemFonts[1].pgf->parts) fontCall.asks.push_back(part.length);
+  fontCall.got = {0x0898'0000, 0x0898'0100};
+  fontCall.opening.index = 1, fontCall.opening.library = fontLibrary;
+  fontCall.opening.hash = k.systemFonts[1].hash, fontCall.opening.pgf = k.systemFonts[1].pgf;
   std::vector<std::pair<std::string, std::function<void()>>> changes = {
     //the CPU
     {"ipu.r", [&] { cpu.ipu.r[9] ^= 0x1234; }}, {"ipu.lo", [&] { cpu.ipu.lo ^= 1; }},
@@ -283,6 +311,7 @@ static auto stateFields() -> void {
   contextChanges("thread", &t.context);
   contextChanges("interrupted", &k.interrupted);
   contextChanges("before its callback", &t.beforeCallback);
+  contextChanges("a font call's caller", &fontCall.caller);
   auto& sema = k.semaphores[semaphore];
   auto& eventFlag = k.eventFlags[flag];
   auto& cb = k.callbacks[callback];
@@ -316,6 +345,35 @@ static auto stateFields() -> void {
     {"mailbox messages", [&] { mailbox.messages.push_back(0x0880'1000); }},
     {"atracIDs", [&] { k.atracIDs = 5; }}, {"dispatchSuspended", [&] { k.dispatchSuspended = true; }},
     {"fontResolution", [&] { k.fontResolution[1] = 144.0f; }},
+    //the font library: each change leaves what a machine could have (the library grown to four handles, the third
+    //opened on the font too; the font made system font 1, then read whole, then the program's memory's; the call
+    //moved to the fourth handle, then ended, then made a closing's)
+    {"font library slots", [&] { library.slots = 4; }},
+    {"font library handles", [&] { library.handles ^= 0x10; }},
+    {"font library data", [&] { library.data ^= 0x10; }}, {"font library list", [&] { library.list ^= 0x10; }},
+    {"font library fonts", [&] { library.fonts[2] = 1; }},
+    {"font library open", [&] { library.open[2] = true, openFont.references = 2; }},
+    {"font index and hash", [&] { openFont.index = 1, openFont.hash = k.systemFonts[1].hash; }},
+    {"font path", [&] { openFont.path = "ms0:/A.PGF"; }}, {"font address", [&] { openFont.address = 4; }},
+    {"font length", [&] { openFont.length = 8; }},
+    {"font mode", [&] { openFont.mode = 1, openFont.blocks = {0x0897'0000, 0x0897'0100}; }},
+    {"font blocks", [&] { openFont.blocks[0] ^= 0x10; }},
+    {"font source", [&] {
+      openFont.source = 2, openFont.address = fontBytes, openFont.mode = 0, openFont.blocks = {0x0897'0000};
+      openFont.length = k.systemFonts[1].pgf->size();
+    }},
+    {"nextFontID", [&] { k.nextFontID += 7; }},
+    {"font call errorAt", [&] { fontCall.errorAt ^= 4; }}, {"font call slots", [&] { fontCall.slots = 5; }},
+    {"font call userData", [&] { fontCall.userData ^= 1; }}, {"font call alloc", [&] { fontCall.alloc ^= 4; }},
+    {"font call free", [&] { fontCall.free ^= 4; }}, {"font call asks", [&] { fontCall.asks[0] ^= 16; }},
+    {"font call got", [&] { fontCall.got.push_back(0x0898'0200); }},
+    {"font call frees", [&] { fontCall.frees.push_back(0x0898'0300); }},
+    {"font call result", [&] { fontCall.result ^= 1; }}, {"font call error", [&] { fontCall.error ^= 1; }},
+    {"font call opening", [&] { fontCall.opening.index = 0, fontCall.opening.hash = k.systemFonts[0].hash; }},
+    {"font call opening path", [&] { fontCall.opening.path = "x"; }},
+    {"font call slot", [&] { library.open[1] = false, library.open[3] = true, fontCall.slot = 3; }},
+    {"font call ended", [&] { fontCall.ended = true, library.open[3] = false; }},
+    {"font call kind", [&] { fontCall.kind = Kernel::FontCall::Give, fontCall.asks.clear(), fontCall.got.clear(); }},
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
     //(a stack is a block of its own, of its size: thread one's shrinks with its block, then moves to the spare)
@@ -777,6 +835,57 @@ static auto stateFields() -> void {
   });
   refuses("ATRAC IDs past six", [&] { k.atracIDs = 0x40; });
   refuses("a font resolution of 0", [&] { k.fontResolution[0] = 0; });
+  //the font library as it never leaves itself (each looked up afresh: every load makes them anew); then a state of
+  //it in a machine without the system's fonts
+  auto fontLibraryOne = [&]() -> Kernel::FontLibrary& { return k.fontLibraries.at(fontLibrary); };
+  auto fontOne = [&]() -> Kernel::OpenFont& { return k.openFonts.at(1); };
+  refuses("a font library of 10 handles", [&] { fontLibraryOne().slots = 10; });
+  refuses("a font library's handle past its count, open", [&] { fontLibraryOne().open[5] = true; });
+  refuses("a font library under another's address", [&] { fontLibraryOne().address ^= 4; });
+  refuses("a font held by a handle fewer than it counts", [&] { fontOne().references = 3; });
+  refuses("a font no handle holds", [&] { fontLibraryOne().open[0] = fontLibraryOne().open[2] = false; });
+  refuses("a font of memory that isn't a PGF", [&] { fontOne().address += 4; });
+  refuses("a font of the program's memory read whole into it", [&] { fontOne().mode = 1; });
+  auto systemOne = [&]() -> Kernel::OpenFont& {  //the font made system font 1 again, read a piece at a time
+    auto& font = fontOne();
+    font.source = 0, font.index = 1, font.mode = 0, font.hash = k.systemFonts[1].hash, font.blocks.resize(9);
+    return font;
+  };
+  {
+    systemOne();
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
+    CHECK(load(a, state), true);
+  }
+  refuses("a system font that isn't the folder's", [&] { systemOne().hash ^= 1; });
+  refuses("a system font not in the folder", [&] { systemOne().index = 5; });
+  refuses("a font with memory its open didn't ask for", [&] { fontOne().blocks.push_back(0x0897'0400); });
+  refuses("a font of a kind there isn't", [&] { fontOne().source = 3; });
+  refuses("a font's ID not handed out yet", [&] { k.nextFontID = 1; });
+  refuses("an open handle with no font, and no call opening it", [&] {
+    fontLibraryOne().open[1] = true, fontLibraryOne().fonts[1] = 0;
+  });
+  refuses("a font call of a thread that isn't there", [&] {
+    auto call = k.fontCalls.at(two);
+    k.fontCalls.erase(two);
+    k.fontCalls[0x7777] = call;
+  });
+  refuses("a font call of a kind there isn't", [&] { k.fontCalls.at(two).kind = Kernel::FontCall::Kind(7); });
+  refuses("a font call given more than it asked for", [&] { k.fontCalls.at(two).got.push_back(1); });
+  refuses("a font call opening into a handle it doesn't hold", [&] {
+    auto& call = k.fontCalls.at(two);
+    call.kind = Kernel::FontCall::Open, call.ended = false, call.slot = 3;
+    for(auto& part : k.systemFonts[1].pgf->parts) call.asks.push_back(part.length);
+    call.opening.index = 1, call.opening.hash = k.systemFonts[1].hash;
+  });
+  {
+    KernelMachine without;
+    without.kernel.mount("ms0", stick.path.string());
+    without.kernel.disc = discOf(image.bytes);
+    CHECK(load(without, save(a)), false);  //no fonts installed
+    CHECK(load(a, state), true);
+  }
   //sceSas as its functions never leave it
   using Sas = Kernel::Sas;
   refuses("a sas grain it doesn't take", [&] { k.sas.grain = 0x5c; });
