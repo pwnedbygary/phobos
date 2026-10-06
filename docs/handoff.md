@@ -787,6 +787,22 @@ games' behavior).
   loses the bits it borrowed; sceAtrac's low-level and sas modes, sceSas ATRAC3 voices, sceAac and scePsmf are left
   for a game that needs them; Snoopy's movies weren't reached in the runs.
 
+## PSP tests: the test programs and the PSP's GE measurements in the repository — 2026-10-06
+
+Branch `cursor/psp-test-data-2b67`, on top of `cursor/psp-hle-games4-2b67` (#151). At the owner's request, the
+PSP core's built test programs (`tests/psp/programs`: hello, system, disc, gu, pspsdk's GU samples and
+pspmeasure, 13 MB, built from `tools/psp-test-programs` with pspdev on 2026-10-04 and -05, the very files the tests
+have run with) and their PSP's round-3 GE measurements (`tests/psp/measurements/ge-round3`, 90 files, 21 MB, from
+the owner's PSP on firmware 6.61) are kept in the repository, so another machine (and CI) runs every test with no
+PSP toolchain. `tests/psp/run-tests.sh` and `tests/psp/ares/run-tests.sh` use them unless `PSP_TEST_PROGRAMS` or
+`PSP_GE_RESULTS` name other folders (empty: none). The VFPU's measurements (about 670 MB a round) stay with the
+owner, copied where they're needed. Each folder's README says where its files come from (the programs' licenses:
+pspsdk's and newlib's BSD-style ones; their SHA-256) and how to rebuild them; `.gitattributes` marks them binary;
+`docs/development-process.md` records the authorization.
+- **Checks:** both test scripts with no variables set, so with these folders: tests/psp 236 groups (ASan+UBSan;
+  "psp measure" compares pspmeasure's GE results with these), tests/psp/ares 278 checks (the program checks run,
+  none skipped).
+
 ## PSP core: the games further still — 2026-10-06
 
 Branch `cursor/psp-hle-games4-2b67`: `cursor/psp-ge-speed-2b67` (the entry below) with `cursor/psp-fonts-2b67`
@@ -816,11 +832,23 @@ Developer Wiki, the games' own behavior).
   lessons (`snoopy-b`); Gunhound EX Mission 01 (`gun-b`); Brave Story's prologue (`brave-b`); Lumines Challenge
   (`lumines-c`); Space Invaders Extreme's first stage, then END GAME back to its title, its movie stopped
   (`invaders-e`, `invaders-h`). Boots of all twelve checked with the movie change (`*-boot`).
-- **Checks**: `tests/psp/run-tests.sh` 227 groups with both sanitizers, no failures; `tests/psp/ares` 268 checks,
-  none failed (both run on the merge too). New groups "mpeg movie fed and taken apart", "mpeg movie thread waits
-  for its picture", "mpeg ringbuffer callback states", "power volatile memory locked at once" (programs on both
-  engines, state round trips); "state fields" checks a ringbuffer's callback part way through (five refusals).
-  State version 9 (version 8 refused).
+- **Checks**: `tests/psp/run-tests.sh` 236 groups with both sanitizers, no failures; `tests/psp/ares` 278 checks,
+  none failed (both run on the merge too, and after the review's fixes). New groups "mpeg movie fed and taken
+  apart", "mpeg movie thread waits for its picture", "mpeg ringbuffer callback states", "power volatile memory
+  locked at once" (programs on both engines, state round trips), and the review's six below; "state fields" checks
+  a ringbuffer's callback part way through (five refusals). State version 9 (version 8 refused).
+- **Review:** a general-purpose reviewer; the clean-room check found the mpeg code independent; four low findings,
+  all fixed, each with a test that failed before it. sceMpegRingbufferPut trusted the game-written ring (0x7fffffff
+  packets with 0x80000000 filled overflowed, UBSan; 8192 packets or -200 filled had the callback asked for 5000 or
+  4296, and a state saved as it waited was refused by a fresh machine): a ring that couldn't be one is given
+  nothing now, sceMpegGetAvcAu's guard ("mpeg ringbuffer that isn't one given nothing"). The callback's $gp came
+  from ring offset 44, past pspsdk's 44-byte SceMpegRingbuffer: Put's caller's now ("mpeg ringbuffer callback with
+  the caller's global pointer"). Missing groups added: a callback giving more than asked (clamped), one returning
+  an error (Put returns what came before), a feeder terminated asleep in its callback (state round trip), seeded
+  random packs through sceMpegGetAvcAu (read below the packets, filled within them); taking out the clamp, the
+  `gave <= 0` check, or either mpegAbandoned call fails one (deleteThread's only via a loaded state in which a
+  dormant thread still has a feeding: every live thread is ended before it's deleted). The counts here (227 and
+  268) were out of date. State layout unchanged.
 - **Speed** (host Mac, scratch runner, 600 frames of play, GE on 7 threads / 1): Gunhound 213 / 138 fps, Dominator
   193 / 104, Brave Story 168 / 94, Lumines 117 / 44, Burnout Legends 97 / 54, VCS 86 / 40, LCS 78 / 31, Sindacco
   73 / 35, Snoopy 61 / 38, Peace Walker 60 / 33, Midnight Club 3 7.3 / 2.1. Midnight Club 3 racing at night is
@@ -832,6 +860,22 @@ Developer Wiki, the games' own behavior).
   optional install not followed through; movie headers still refused, ATRAC3plus access units never come, and
   sceMpegAvcDecodeStop doesn't hand back the held picture. The codecs (FFmpeg's LGPL decoders, the owner's choice)
   would make movies seen: the access units are there now.
+
+## PSP core: the CI's PSP system tests made green — 2026-10-06
+
+Branch `cursor/psp-ge-speed-2b67` (#150). The workflow `.github/workflows/psp-core.yml` runs `tests/psp/run-tests.sh`
+(the whole test built with `-Wall -Wextra -Werror` and the address and undefined sanitizers, then run); its PSP
+system tests job failed (run 37483407156, exit 1). Two defects in the tests' own code, found one after the other:
+- **What:** `tests/psp/audio.cpp:695` printed the `s64` pair (nall's `int64_t`, a `long int` on this host) with
+  `%lld`, which the compiler's `-Werror=format=` rejects; fixed with `static_cast<long long>`, the repo's own
+  precedent (`ares/n64/vulkan/parallel-rdp/vulkan/query_pool.cpp:212`). `tests/psp/disc-image.hpp:121` copied every
+  file with `std::memcpy` from `file.data.data()`, null for an empty file (the test disc's `EMPTY.BIN`), which UBSan
+  flags as UB; the no-op copy is now skipped.
+- **Checks:** `tests/psp/run-tests.sh` with both sanitizers: 226 groups, 0 failures (before: the build failed at
+  `audio.cpp:695`, then the binary aborted at `disc-image.hpp:121`).
+- **Then:** the same two lines sat in the heads of the open PSP PRs #140-#151 (the memcpy line from #140 on, the
+  `%lld` line from #147 on). Each fix was made where it first appears (#140's memcpy, #147's `%lld`, the same
+  change as here) and every stacked branch merged the one below it, up to #151, so each PR's head carries both.
 
 ## PSP core: the GE made fast, every pixel the same — 2026-10-06
 
