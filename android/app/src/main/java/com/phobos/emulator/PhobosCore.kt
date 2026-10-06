@@ -86,6 +86,10 @@ object PhobosCore {
     external fun setPspMemoryStickPath(path: String)
     /** The PSP's system fonts: the folder of the user's own copies (util/PspFonts.kt), or "" for none. */
     external fun setPspFontsPath(path: String)
+    /** How many threads draw the PSP's pictures (the core's "GE Threads", as a game starts): 0 for Auto. */
+    external fun setPspDrawingThreads(threads: Int)
+    /** The whole multiple native code draws the PSP's picture at (util/PspVideo.kt's pictureMultiple()). */
+    external fun setPictureMultiple(multiple: Int)
     external fun setVulkanCachePath(path: String)
     external fun setNativeLibraryDir(path: String)
     external fun setFirmwarePath(path: String)

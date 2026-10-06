@@ -44,6 +44,7 @@ import kotlin.math.roundToInt
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
+import com.phobos.emulator.util.PspDrawingThreads
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.ui.theme.LegibleText
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
@@ -468,6 +469,18 @@ fun MsxLoadSpeedItem(current: Int, onSelect: (Int) -> Unit) {
         current = current,
         options = LOAD_SPEEDS,
         label = ::loadSpeedLabel,
+        onSelect = onSelect,
+    )
+}
+
+@Composable
+fun PspDrawingThreadsItem(current: Int, onSelect: (Int) -> Unit) {
+    SettingsDropdownItem(
+        title = "PSP Drawing Threads",
+        description = "How many of the device's cores draw a PSP game's pictures. Every choice draws the very same picture; more draw it sooner. Applies when a game starts.",
+        current = PspDrawingThreads.forCore(current),
+        options = PspDrawingThreads.choices,
+        label = PspDrawingThreads::label,
         onSelect = onSelect,
     )
 }
