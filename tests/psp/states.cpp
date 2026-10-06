@@ -386,14 +386,17 @@ static auto stateFields() -> void {
     {"src buffer volume", [&] { k.audio.src.buffers[0].volume = 1; }},
     {"src second buffer", [&] { k.audio.src.buffers[1] = {0x0880'2000, 18, 2}; }},
     {"src armed", [&] { k.audio.src.armed = 2; }},
-    {"src retireAt", [&] { k.audio.src.retireAt = k.cycles + 1000; }},
+    {"src retireAt", [&] {  //as late as a buffer armed now retires: heard from SrcAhead frames on
+      k.audio.src.retireAt = k.cycles + k.frameCycle(Kernel::Audio::SrcAhead) + k.srcDuration(17)
+                           - Kernel::Audio::SrcLead;
+    }},
     {"src completion", [&] { k.audio.src.completion = true; }},
     //what the channels have added to the output and the system hasn't taken: 64 frames from 100 before now, the
-    //first holding a sample; the SRC channel 3 samples into its first buffer, at 10 frames on
+    //first holding a sample; the SRC channel 3 samples into its first buffer, as far ahead of the clock as it gets
     {"output start", [&] { k.audio.output.start = k.audio.output.end = k.sampleFrame(k.cycles) - 100; }},
     {"output end", [&] { k.audio.output.end = k.audio.output.start + 64; }},
     {"output samples", [&] { k.audio.output.samples[k.audio.output.start % Kernel::Audio::OutputFrames * 2] = 5; }},
-    {"src renderedTo", [&] { k.audio.src.renderedTo = k.audio.output.start + 10; }},
+    {"src renderedTo", [&] { k.audio.src.renderedTo = k.sampleFrame(k.cycles) + Kernel::Audio::SrcAhead; }},
     {"src position", [&] { k.audio.src.position = 3 * 44'100; }},
     {"vblank handler function", [&] { k.vblankSubs[3].function = 0x0880'3000; }},
     {"vblank handler argument", [&] { k.vblankSubs[3].argument = 1; }},
@@ -641,12 +644,10 @@ static auto stateFields() -> void {
   refuses("an SRC rate it doesn't take", [&] { k.audio.src.rate = 36'000; });
   refuses("SRC buffers armed with the channel released", [&] { k.audio.src.reserved = false; });
   refuses("an SRC buffer of 16 samples", [&] { k.audio.src.buffers[1].sampleCount = 16; });
-  refuses("an SRC buffer retiring after its own time", [&] {
-    k.audio.src.retireAt = k.cycles + k.srcDuration(k.audio.src.buffers[0].sampleCount) + 1;
-  });
+  refuses("an SRC buffer retiring after its own time from SrcAhead frames on", [&] { k.audio.src.retireAt++; });
   //the output as no machine leaves it: frames ending before they start, more than the ring holds, frames the clock
   //hasn't reached taken, a sum louder than every channel at its loudest; the SRC channel past one beyond its armed
-  //samples, somewhere in samples with none armed, or adding to frames a ring ahead
+  //samples, somewhere in samples with none armed, or adding to frames further ahead than a buffer's lead takes it
   auto& output = k.audio.output;
   refuses("output frames ending before they start", [&] { output.end = output.start - 1; });
   refuses("more output frames than the ring holds", [&] { output.end = output.start + 4097; });
@@ -654,7 +655,8 @@ static auto stateFields() -> void {
   refuses("an output sum past 2^21", [&] { output.samples[output.start % 4096 * 2 + 1] = (1 << 21) + 1; });
   refuses("the SRC channel past its samples", [&] { k.audio.src.position = (17 + 18 + 1) * 44'100; });
   refuses("the SRC channel somewhere with nothing armed", [&] { k.audio.src.armed = 0; });
-  refuses("the SRC channel a ring ahead", [&] { k.audio.src.renderedTo = k.sampleFrame(k.cycles) + 4097; });
+  refuses("the SRC channel more than SrcAhead frames ahead", [&] { k.audio.src.renderedTo++; });
+  refuses("the SRC channel a ring ahead", [&] { k.audio.src.renderedTo = k.sampleFrame(k.cycles) + 4096; });
   //(each refusal loads the machine again, threads and all: they're looked up afresh)
   auto waitsOnAudio = [&](Kernel::Thread& waiter, u32 id) {
     waiter.status = Kernel::Status::Waiting, waiter.wait = Kernel::Wait::Audio, waiter.waitID = id;

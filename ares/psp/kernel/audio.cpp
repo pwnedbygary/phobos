@@ -26,7 +26,11 @@
 //channel's rate; the next one armed carries straight on. Its slot frees as its transfer ends, about 100
 //microseconds before its last samples are heard (pspautotests' audio/output2/rest: a 64-sample buffer, 1451
 //microseconds long, reads as gone after "13XX"): so the first buffer after an idle stretch retires 100 microseconds
-//short of its length, and each one chained after it a whole buffer later, which keeps a stream's pace.
+//short of its length, and each one chained after it a whole buffer later, which keeps a stream's pace. A buffer
+//armed after the slots have both freed, but while the last one's final 100 microseconds are still being heard,
+//carries straight on after them too, and retires 100 microseconds before its own end: a whole buffer after the last
+//one's end. So a program that drains the channel (a null output) before each buffer keeps that pace as well, never
+//getting ahead of what's heard.
 //
 //What the speakers hear. Think of the PSP's sound as a long strip of sound frames, 44,100 a second, each a left and
 //a right sample, numbered from power on (sampleFrame() says which frame is heard at a moment). Every channel adds
@@ -80,15 +84,26 @@ auto Kernel::sampleFrame(u64 cycle, u32 fraction) const -> u64 {
        + (cycle % Audio::FrameCycles * Audio::FrameRate + fraction) / Audio::FrameCycles;
 }
 
-//Room in the output for frames up to last (not included), which are about to be added to. The ring holds
-//OutputFrames frames from the first the system hasn't taken; adding further on drops the oldest. That happens only
-//with no system taking them (the kernel's own tests): the system takes them every frame, and nothing is added more
-//than a block or so ahead of the clock. (A frame the system has taken already can't be added to: callers pass over
-//frames before output.start.)
-auto Kernel::outputRoom(u64 last) -> void {
+//The first cycle at which a frame is heard (sampleFrame() turned round): frame * 370000 / 49, rounded up, worked out
+//in two parts too.
+auto Kernel::frameCycle(u64 frame) const -> u64 {
+  return frame / Audio::FrameRate * Audio::FrameCycles
+       + (frame % Audio::FrameRate * Audio::FrameCycles + Audio::FrameRate - 1) / Audio::FrameRate;
+}
+
+//Room in the output for frames up to last (not included), which are about to be added to: returns where the room
+//ends, last or short of it. The ring holds OutputFrames frames from the first the system hasn't taken. The channels
+//add to frames a block ahead of the clock at most (the mixer's 64 from a boundary; the SRC channel's SrcAhead), and
+//room for those is made by dropping the oldest frames, which happens only with no system taking them (the kernel's
+//own tests): the system takes them every frame of the PSP's. Frames further ahead, which only a channel gone wrong
+//would add, take no room from those not taken: what doesn't fit is left out at the far end. So the first frame not
+//taken never passes the clock, and the system gets every frame as the clock reaches it. (A frame the system has
+//taken already can't be added to: callers pass over frames before output.start.)
+auto Kernel::outputRoom(u64 last) -> u64 {
   auto& output = audio.output;
-  if(last > output.start + Audio::OutputFrames) {
-    u64 start = last - Audio::OutputFrames;
+  u64 near = std::min(last, sampleFrame(cycles) + 64);
+  if(near > output.start + Audio::OutputFrames) {
+    u64 start = near - Audio::OutputFrames;
     if(start - output.start >= Audio::OutputFrames) {
       std::fill(output.samples.begin(), output.samples.end(), 0);
     } else {
@@ -99,7 +114,9 @@ auto Kernel::outputRoom(u64 last) -> void {
     }
     output.start = start;
   }
+  last = std::min(last, output.start + Audio::OutputFrames);
   output.end = std::max({output.end, output.start, last});
+  return last;
 }
 
 //The thread waiting on a channel (0-7), or on the SRC channel (Audio::WaitSrc, Audio::WaitSrcDrain), if one is. Its
@@ -194,9 +211,8 @@ auto Kernel::mixerBlock() -> bool {
   }
   auto& dma = audio.dma;
   auto& output = audio.output;
-  u64 first = sampleFrame(dma.nextBlock, dma.fraction);
-  outputRoom(first + 64);
-  for(u64 frame = std::max(first, output.start); frame < first + 64; frame++) {
+  u64 first = sampleFrame(dma.nextBlock, dma.fraction), last = outputRoom(first + 64);
+  for(u64 frame = std::max(first, output.start); frame < last; frame++) {
     u32 slot = frame % Audio::OutputFrames * 2, n = u32(frame - first) * 2;
     output.samples[slot + 0] += block[n + 0];
     output.samples[slot + 1] += block[n + 1];
@@ -265,6 +281,7 @@ auto Kernel::srcSample(u64 index, s32& left, s32& right, u32& volume) -> bool {
 //samples is the straight line between them, weighed by how near it is to each, and scaled by its first sample's
 //buffer's volume (0x8000 plays it as it is, as for the mixer). It stops where the samples armed run out, to go on
 //from there as more come; should the system have taken the frames meanwhile, it goes on from the first it hasn't.
+//(A frame past the output's room, which only a channel far ahead of the clock would reach, is lost: outputRoom().)
 auto Kernel::srcRender(u64 until, bool wholeBuffer) -> void {
   auto& src = audio.src;
   auto& output = audio.output;
@@ -280,10 +297,11 @@ auto Kernel::srcRender(u64 until, bool wholeBuffer) -> void {
     srcSample(index + 1, nextLeft, nextRight, nextVolume);  //(past the samples armed: towards silence)
     s64 mixedLeft = left + (nextLeft - left) * weight / 44'100;
     s64 mixedRight = right + (nextRight - right) * weight / 44'100;
-    outputRoom(src.renderedTo + 1);
-    u32 slot = src.renderedTo % Audio::OutputFrames * 2;
-    output.samples[slot + 0] += s32(mixedLeft * volume >> 15);
-    output.samples[slot + 1] += s32(mixedRight * volume >> 15);
+    if(outputRoom(src.renderedTo + 1) > src.renderedTo) {
+      u32 slot = src.renderedTo % Audio::OutputFrames * 2;
+      output.samples[slot + 0] += s32(mixedLeft * volume >> 15);
+      output.samples[slot + 1] += s32(mixedRight * volume >> 15);
+    }
     src.renderedTo++;
     src.position += src.rate;
   }
@@ -509,10 +527,11 @@ auto Kernel::srcRelease() -> void {
 //(volume, buffer), for either family. The volume first: 0 to 0xFFFFF, a negative one refused (INVALID_VOLUME); then
 //the reservation (NOT_RESERVED); then, with both slots armed, BUSY at once, whoever else waits. Otherwise a real
 //buffer is armed in the free slot, with the channel's sample count as it is now (sceAudioOutput2ChangeLength's later
-//changes are for later buffers), playing at once if nothing was, its transfer ending (it retires) 100 microseconds
-//before it's been heard; and the call waits for a completion. One pending is taken and the call returns at once
-//(starting from idle makes one, so the first output after a pause doesn't wait); else it returns as the buffer
-//playing retires, one buffer's time in a steady stream. It returns the sample count its buffer was armed with.
+//changes are for later buffers), playing at once if nothing was (or, if the last buffer's final samples are still to
+//be heard, straight after them), its transfer ending (it retires) 100 microseconds before it's been heard; and the
+//call waits for a completion. One pending is taken and the call returns at once (starting from idle makes one, so
+//the first output after a pause doesn't wait); else it returns as the buffer playing retires, one buffer's time in a
+//steady stream. It returns the sample count its buffer was armed with.
 //
 //A null buffer arms nothing and returns 0: at once if nothing is armed, else once everything armed has played.
 //
@@ -531,10 +550,12 @@ auto Kernel::srcOutput() -> void {
     if(auto refused = audioWaitRefused()) return result(refused);
     return block(Wait::Audio, Audio::WaitSrcDrain, 0);
   }
-  if(!src.armed) {  //it's heard from now, after anything the channel played before
-    src.retireAt = cycles + srcDuration(src.sampleCount) - Audio::SrcLead;
+  if(!src.armed) {  //heard from now, or from the last buffer's end if that's still to be heard
+    u64 now = sampleFrame(cycles), heardFrom = cycles;
+    if(src.renderedTo > now) heardFrom = frameCycle(src.renderedTo);
+    else src.renderedTo = now;
+    src.retireAt = heardFrom + srcDuration(src.sampleCount) - Audio::SrcLead;
     src.completion = true;
-    src.renderedTo = std::max(src.renderedTo, sampleFrame(cycles));
     src.position = 0;
   }
   src.buffers[src.armed++] = {buffer, src.sampleCount, u32(volume)};

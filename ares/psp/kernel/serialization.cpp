@@ -242,8 +242,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   //sound output (audio.cpp). A mixer channel's counts are those of buffers (multiples of 64, 65472 at most), its
   //volumes 0xFFFF at most, its format stereo or mono. A buffer in a slot is being played, so the DMA runs, its next
   //block no more than a block away (nor overdue by a frame: events() catches up). The SRC channel arms two buffers at
-  //most, only while it's reserved, at a rate it takes, the first one's transfer ending within its own time. Then the
-  //output the channels make (below).
+  //most, only while it's reserved, at a rate it takes, the first one's transfer ending within its own time from when
+  //it's heard (from now, or straight after the last one, SrcAhead frames on at most). Then the output the channels
+  //make (below).
   bool playing = false;
   for(auto& c : audio.channels) {
     s(c.reserved); s(c.sampleCount); s(c.format); s(c.leftVolume); s(c.rightVolume);
@@ -271,14 +272,14 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(buffer.address && srcSamplesValid(buffer.sampleCount) && buffer.volume <= 0xf'ffff);
   }
   if(src.armed && rate) {
-    u64 duration = srcDuration(src.buffers[0].sampleCount);
-    check(src.retireAt > cycles ? src.retireAt - cycles <= duration : cycles - src.retireAt < VblankCycles);
+    u64 latest = frameCycle(Audio::SrcAhead) + srcDuration(src.buffers[0].sampleCount) - Audio::SrcLead;
+    check(src.retireAt > cycles ? src.retireAt - cycles <= latest : cycles - src.retireAt < VblankCycles);
   }
   //what the channels have added to the output and the system hasn't taken yet: frames from the first not taken
   //(heard by now at the latest) to one past the last added to, a ring's worth at most, each sum no bigger than eight
   //channels and the SRC channel at their loudest make (2^21), so adding to it can't overflow; and where the SRC
-  //channel is in its samples: within a ring of now, and no further than one past the samples armed (none armed: at
-  //their start)
+  //channel is in its samples: no more than SrcAhead frames past now (a buffer is heard to its end as its slot frees,
+  //100 microseconds early), and no further than one past the samples armed (none armed: at their start)
   auto& output = audio.output;
   u64 now = sampleFrame(cycles);
   s(output.start); s(output.end);
@@ -293,7 +294,7 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(src.renderedTo); s(src.position);
   u64 armedSamples = 0;
   for(u32 n = 0; n < std::min(src.armed, 2u); n++) armedSamples += src.buffers[n].sampleCount;
-  check(src.renderedTo <= now + Audio::OutputFrames);
+  check(src.renderedTo <= now + Audio::SrcAhead);
   check(src.armed ? src.position < (armedSamples + 1) * 44'100 : !src.position);
   //threads waiting on sound: on a mixer channel, one at most, while its slot is busy (it's given the slot as the
   //buffer there is used up); on the SRC channel, one at most waiting for a completion, while both buffers are armed

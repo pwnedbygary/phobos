@@ -773,6 +773,12 @@ struct Kernel {
     //(srcOutput()); the shortest buffer, 17 samples at 48 kHz, plays for 354.
     static constexpr u64 SrcLead = CPUFrequency / 10'000;
     static_assert(17 * CPUFrequency / 48'000 > SrcLead);
+    //A buffer is heard to its end in the output as its slot frees (srcRetire()), so the SRC channel adds to frames
+    //ahead of the clock: SrcLead's 4.41 frames, and under two more where its ends fall between frames (it starts at
+    //the frame heard as it's armed, up to a frame before then, and ends on the first frame past its last sample).
+    //SrcAhead at most: SrcLead's frames rounded up, and two.
+    static constexpr u64 SrcAhead = (SrcLead * FrameRate + FrameCycles - 1) / FrameCycles + 2;
+    static_assert(SrcAhead == 7);
     //The output: what the channels play, added up frame by frame where it's heard, until the system takes it (each
     //frame of the PSP's 735.7 sound frames). A ring of OutputFrames frames, frame n in slot n % OutputFrames: far
     //more than a frame's worth, plus the block or so the mixer adds ahead of the clock.
@@ -806,15 +812,17 @@ struct Kernel {
       u32 armed = 0;                  //how many there are
       u64 retireAt = 0;               //when the first one's transfer ends
       bool completion = false;        //a completion no output has taken yet
-      //Its samples converted to the output's 44.1 kHz (srcRender()): the next output frame it adds to, and where
-      //that frame falls in the armed buffers' samples, in 44100ths of a sample from the first buffer's start (past
-      //its end, into the second's). Each output frame moves it on by the channel's rate.
+      //Its samples converted to the output's 44.1 kHz (srcRender()): the next output frame it adds to (SrcAhead
+      //frames past the clock at most), and where that frame falls in the armed buffers' samples, in 44100ths of a
+      //sample from the first buffer's start (past its end, into the second's). Each output frame moves it on by the
+      //channel's rate.
       u64 renderedTo = 0;
       u64 position = 0;
     } src;
   } audio;
   auto sampleFrame(u64 cycle, u32 fraction = 0) const -> u64;
-  auto outputRoom(u64 last) -> void;
+  auto frameCycle(u64 frame) const -> u64;
+  auto outputRoom(u64 last) -> u64;
   auto audioWaiter(u32 waitID) -> Thread*;
   auto audioWaitRefused() const -> u32;
   auto handOver(u32 number, u32 buffer, s32 left, s32 right) -> void;

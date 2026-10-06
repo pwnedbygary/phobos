@@ -342,7 +342,9 @@ static auto mixerTimeline() -> void {
 //armed buffer at the new length; a null output waiting till everything armed has retired, then returning at once;
 //buffers at 48 kHz playing in 2048/48000 s; a rate of 0 playing at 44.1 kHz; each first buffer from idle retiring
 //100 microseconds short. (pspautotests' audio/blocking/contend, restlen, audio/output2/release, changelength,
-//frequency.)
+//frequency.) Each rate is tried after a millisecond's wait, as frequency's prints between them leave on a PSP: the
+//channel drained as its last buffer retires, 100 microseconds before that's been heard, and a buffer armed then
+//would be heard after it ("audio src drained between buffers").
 static auto draining() -> void {
   for(bool recompile : {false, true}) {
     KernelMachine m;
@@ -385,6 +387,7 @@ static auto draining() -> void {
     output("sceAudioSRCOutputBlocking", 0x8000, 0, 0, 0xc8);    //nothing armed: at once
     since(0x08);
     plain("sceAudioSRCChRelease", 0xcc);
+    delay(1000);
     output("sceAudioSRCChReserve", 2048, 48'000, 2, 0xd0);
     clock();
     output("sceAudioSRCOutputBlocking", 0x8000, Buffer, 0, 0xd4);
@@ -393,6 +396,7 @@ static auto draining() -> void {
     output("sceAudioSRCOutputBlocking", 0x8000, 0, 0, 0xdc);
     since(0x10);
     plain("sceAudioSRCChRelease", 0xe0);
+    delay(1000);
     output("sceAudioSRCChReserve", 2048, 0, 2, 0xe4);
     clock();
     output("sceAudioSRCOutputBlocking", 0x8000, Buffer, 0, 0xe8);
@@ -525,7 +529,9 @@ static auto contexts() -> void {
 //been heard; then release, and the rest of a channel not reserved. Through sceAudioOutput2* and sceAudioSRC* alike.
 //The poll waits a microsecond a round where the PSP's spun: here the clock a system function reads moves on between
 //the CPU's runs (each to the next thing due), not with each instruction, so a spinning loop reads it as it was when
-//its run began.
+//its run began. Between the two, the PSP printed four lines, and its calls take 100 microseconds and more each where
+//these take none: a millisecond's wait stands for that, so the second buffer is armed, as there, once the first has
+//been heard to its end (armed in its last 100 microseconds, it would be heard after them, and read as gone at 14XX).
 static auto sourceRest() -> void {
   for(bool recompile : {false, true}) {
     KernelMachine m;
@@ -534,6 +540,7 @@ static auto sourceRest() -> void {
     for(u32 family = 0; family < 2; family++) {
       u32 at = family * 0x20;
       auto store = [&](u32 offset) { main.put(sw(v0, at + offset, s1)); };
+      if(family) { main.li(a0, 1000); main.call("sceKernelDelayThread"); }
       main.li(a0, 64); main.li(a1, 44'100); main.li(a2, 2);  //(sceAudioOutput2Reserve reads the count alone)
       main.call(family ? "sceAudioSRCChReserve" : "sceAudioOutput2Reserve");
       store(0x00);
@@ -758,12 +765,127 @@ static auto outputState() -> void {
   CHECK(std::any_of(after.begin(), after.end(), [](s16 sample) { return sample != 0; }), true);
 }
 
+//A program arming the SRC channel a buffer at a time, draining it (a null output) before arming the next, run as the
+//system runs it: the output taken at the end of each of the PSP's frames (System::run()). Each drain returns as its
+//buffer's slot frees, 100 microseconds before the buffer's last samples are heard, so the next is armed while they
+//still are: it's heard straight after them, from the frame after the last one's end (a buffer armed so starts on a
+//frame: 4096 samples at 48 kHz fill 3764), and retires a buffer later. 30 s of the PSP's time, 1024 samples at
+//44.1 kHz and 4096 at 48 kHz: the channel never adds to frames more than SrcAhead past the clock, looked at as each
+//buffer is armed (it had gone 4.4 frames further with each, into silence for good from 21.9 s at 44.1 kHz, its state
+//refused); every frame the clock reaches is taken, each what the buffers joined end to end make; the drains return
+//a buffer apart; and the state, saved where the channel is furthest ahead and at the end, loads into another machine
+//that makes it again. The usual stream of blocking outputs, two buffers armed and no drain, is as it was: one stream
+//with no seams, its outputs returning a buffer apart (the first at once, the second a buffer less the lead in).
+static auto sourceDrained() -> void {
+  auto sample = [](u64 n) { return std::pair{s32(n % 509) * 60 - 15000, 12000 - s32(n % 311) * 70}; };
+  for(auto [samples, rate] : {std::pair{1024u, 44'100u}, {4096u, 48'000u}}) {
+    for(bool drain : {true, false}) {
+      KernelMachine m;
+      auto& k = m.kernel;
+      putStereo(m, Buffer, samples, sample);
+      Assembler main{m, 0x0880'1000};
+      main.li(a0, samples); main.li(a1, rate); main.li(a2, 2);
+      main.call("sceAudioSRCChReserve");
+      main.li(s1, R);  //where the time each output (or drain) returns at goes
+      u32 loop = main.here();
+      main.li(a0, 0x8000); main.li(a1, Buffer);
+      main.call("sceAudioSRCOutputBlocking");
+      if(drain) { main.li(a0, 0x8000); main.li(a1, 0); main.call("sceAudioSRCOutputBlocking"); }
+      main.call("sceKernelGetSystemTimeLow");
+      main.put(sw(v0, 0, s1)); main.put(addiu(s1, s1, 4));
+      main.put(j(loop)); main.put(nop);
+      m.runProgram(0x0880'1000, false, 0);
+      //output frame f: f % per frames into its buffer (drained: each from a frame of its own), or f into one stream,
+      //between two samples (the last of a buffer drained heads for silence: nothing's armed after it yet)
+      u64 per = (u64(samples) * 44'100 + rate - 1) / rate;
+      auto expected = [&](u64 f) {
+        u64 position = (drain ? f % per : f) * rate, index = position / 44'100;
+        s64 weight = position % 44'100;
+        auto [left, right] = sample(index % samples);
+        auto [nextLeft, nextRight] = drain && index + 1 >= samples ? std::pair{0, 0} : sample((index + 1) % samples);
+        return std::pair{left + (nextLeft - left) * weight / 44'100, right + (nextRight - right) * weight / 44'100};
+      };
+      std::vector<s16> frames;
+      u64 taken = 0, wrong = 0, furthest = 0, saved = 0;
+      bool reloads = true;
+      for(u64 frame = 1; frame <= 60 * 30; frame++) {
+        u64 end = frame * Kernel::VblankCycles;
+        while(k.cycles < end) {  //to just past each buffer's retiring, the program arming the next
+          u64 next = k.nextAudioEvent(), until = next < end ? std::min(end, next + 1000) : end;
+          k.run(std::max(until, k.cycles + 1) - k.cycles);
+          u64 now = k.sampleFrame(k.cycles), lead = k.audio.src.renderedTo > now ? k.audio.src.renderedTo - now : 0;
+          if(lead > furthest && saved++ < 10) reloads = roundTrip(m) && reloads;
+          furthest = std::max(furthest, lead);
+        }
+        frames.clear();
+        k.audioOutput(frames);
+        for(u32 n = 0; n < frames.size(); n += 2, taken++) {
+          auto [left, right] = expected(taken);
+          if(frames[n] != left || frames[n + 1] != right) wrong++;
+        }
+      }
+      //each drain returned as its buffer retired: buffer n from frame n * per; each output (not drained) as the
+      //buffer before it retired, a buffer after the first's lead
+      u64 duration = k.srcDuration(samples), lead = Kernel::Audio::SrcLead, late = 0, returns = 0;
+      for(;; returns++) {
+        u64 at = drain ? (returns ? k.frameCycle(returns * per) : 0) + duration - lead
+                       : returns ? duration - lead + (returns - 1) * duration : 0;
+        if(at + 1000 > k.cycles) break;
+        u32 measured = m.system.memory.read(4, R + returns * 4), micro = u32(at / (Kernel::CPUFrequency / 1'000'000));
+        if(measured < micro || measured > micro + 1) late++;
+      }
+      std::string name = std::to_string(samples) + " samples at " + std::to_string(rate) + (drain ? ", drained" : "");
+      check(__LINE__, (name + ": SrcAhead frames ahead at most").c_str(), furthest <= Kernel::Audio::SrcAhead, true);
+      check(__LINE__, (name + ": every frame taken").c_str(), taken, k.sampleFrame(k.cycles));
+      check(__LINE__, (name + ": the frames the buffers make").c_str(), wrong, 0);
+      check(__LINE__, (name + ": a buffer apart").c_str(), late, 0);
+      check(__LINE__, (name + ": 30 s of returns").c_str(), returns >= 30 * rate / samples - 1, true);
+      check(__LINE__, (name + ": its state furthest ahead").c_str(), reloads, true);
+      check(__LINE__, (name + ": its state at the end").c_str(), roundTrip(m), true);
+      CHECK(m.notes.size(), 0);
+    }
+  }
+}
+
+//The output against a channel far ahead of the clock, as only one gone wrong would be (the SRC channel's place moved
+//on by hand to a ring ahead, which loading refuses): its frames past the ring's room are left out, and the frames
+//not taken yet stay, so a mixer buffer playing meanwhile is taken whole, every frame the clock reaches is taken, and
+//the first not taken is never past the clock. (The ring had moved on past the clock to make room for the channel,
+//dropping the mixer's frames not taken and leaving the system none until the clock caught up.)
+static auto outputKept() -> void {
+  KernelMachine m;
+  auto& k = m.kernel;
+  putStereo(m, Buffer, 1024, [](u32) { return std::pair{1000, -1000}; });
+  putStereo(m, Buffer + 0x1000, 1024, [](u32) { return std::pair{300, 300}; });
+  CHECK(m.call("sceAudioChReserve", {0, 1024, 0}), 0);
+  CHECK(m.call("sceAudioOutput", {0, 0x8000, Buffer}), 1024);
+  CHECK(m.call("sceAudioSRCChReserve", {1024, 0, 2}), 0);
+  CHECK(m.call("sceAudioSRCOutputBlocking", {0x8000, Buffer + 0x1000}), Kernel::ErrorCanNotWait);
+  k.audio.src.renderedTo = Kernel::Audio::OutputFrames;
+  auto frames = heard(m, Kernel::CPUFrequency / 100);  //10 ms: 441 frames
+  CHECK(frames.size(), 441 * 2);
+  k.cycles = k.audio.src.retireAt;  //23.1 ms: the SRC buffer heard to its end, a ring on
+  k.events();
+  CHECK(k.audio.src.armed, 0);
+  CHECK(k.audio.output.start <= k.sampleFrame(k.cycles), true);
+  auto more = heard(m, Kernel::CPUFrequency * 3 / 100);  //30 ms: 882 more
+  frames.insert(frames.end(), more.begin(), more.end());
+  CHECK(frames.size(), 1323 * 2);
+  bool whole = frames.size() == 1323 * 2;
+  for(u32 n = 0; n < 1323 && whole; n++) {
+    if(frames[n * 2] != (n < 1024 ? 1000 : 0) || frames[n * 2 + 1] != (n < 1024 ? -1000 : 0)) whole = false;
+  }
+  CHECK(whole, true);
+  CHECK(k.audio.output.start, k.sampleFrame(k.cycles));
+}
+
 auto audioTests() -> Tests {
   return {
     {"audio channels", channels}, {"audio blocking timing", blockingTiming}, {"audio src channel", sourceChannel},
     {"audio 64-sample pacing", pacing}, {"audio mixer timeline", mixerTimeline}, {"audio draining", draining},
     {"audio waits refused", contexts}, {"audio src rest", sourceRest}, {"audio mixed", mixing},
     {"audio src heard", sourceOutput}, {"audio output in states", outputState},
+    {"audio src drained between buffers", sourceDrained}, {"audio output kept from a channel ahead", outputKept},
   };
 }
 
