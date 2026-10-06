@@ -407,7 +407,9 @@ static auto fileRename() -> void {
   KernelMachine m;
   m.kernel.mount("ms0", stick.path.string());
   m.kernel.disc = discFrom(image.bytes);
-  auto rename = [&](const char* from, const char* to) { return m.call("sceIoRename", {m.string(from), m.string(to)}); };
+  auto rename = [&](const char* from, const char* to) {
+    return m.call("sceIoRename", {m.string(from), m.string(to)});
+  };
   auto there = [&](const char* name) { return std::filesystem::exists(stick.path / name); };
   CHECK(rename("ms0:/t1.txt", "ms0:/t1a.txt"), 0);
   CHECK(there("t1a.txt") && !there("t1.txt"), true);
