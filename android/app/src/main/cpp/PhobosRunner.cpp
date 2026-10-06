@@ -983,6 +983,8 @@ namespace ares {
   static string vulkanCachePath;
   // The folder the user picked for the PSP's memory stick; empty for the shared one in the saves folder.
   static string pspMemoryStickPath;
+  // The PSP's system fonts: the app's copies of the user's own PSP's flash0 fonts; empty for none.
+  static string pspFontsPath;
   static std::map<string, string> firmwareMap;
 
   // The 32X's boot ROMs: Sega's 68000 vector table and the two SH-2 boot ROMs, from the Firmware
@@ -3620,6 +3622,9 @@ else if (port->type() == "Keyboard") {
       if (memoryStick) directory::create(memoryStick);
       LOGI("PSP: memory stick at '%s'", (const char*)memoryStick);
       ::ares::PlayStationPortable::option("Memory Stick", memoryStick);
+      // The system's fonts, read by the core as it powers on; none without them (games print nothing in them).
+      LOGI("PSP: system fonts %s%s", pspFontsPath ? "in " : "not given", (const char*)pspFontsPath);
+      ::ares::PlayStationPortable::option("Fonts", pspFontsPath);
       ::ares::PlayStationPortable::option("Recompiler", "true");
       success = ::ares::PlayStationPortable::load(root, "[Sony] PlayStation Portable");
     } else if (identifiedSystem == "Game Boy Advance") {
@@ -4717,6 +4722,9 @@ else if (port->type() == "Keyboard") {
   }
   auto setPspMemoryStickPath(const char* path) -> void {
     pspMemoryStickPath = path ? (string)path : "";
+  }
+  auto setPspFontsPath(const char* path) -> void {
+    pspFontsPath = path ? (string)path : "";
   }
   auto setVulkanCachePath(const char* path) -> void {
     vulkanCachePath = path ? (string)path : "";

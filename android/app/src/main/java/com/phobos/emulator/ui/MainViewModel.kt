@@ -111,6 +111,7 @@ import com.phobos.emulator.util.N64SaveImportPlan
 import com.phobos.emulator.util.N64SaveKind
 import com.phobos.emulator.util.N64SaveRead
 import com.phobos.emulator.util.N64SaveTransfer
+import com.phobos.emulator.util.PspFonts
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.cueTracks
 import com.phobos.emulator.util.cueWithTracksIn
@@ -2345,6 +2346,45 @@ class MainViewModel(
         }
     }
 
+    /** How many of the PSP's eighteen system fonts the app holds ([PspFonts]), for Settings → Firmware. */
+    private val _pspFonts = MutableStateFlow(0)
+    val pspFonts: StateFlow<Int> = _pspFonts
+
+    fun refreshPspFonts() = viewModelScope.launch(Dispatchers.IO) {
+        _pspFonts.value = PspFonts.installed(PspFonts.folder(context.filesDir))
+    }
+
+    /**
+     * Copies the PSP's fonts from a folder the user picked (their flash0 dump's font folder, its flash0, or the dump
+     * itself: [PspFonts.fontFolder]) into the app's own files, where the PSP core reads them at each load. Picking
+     * another folder later copies its fonts over these.
+     */
+    fun importPspFonts(context: Context, tree: Uri) = viewModelScope.launch(Dispatchers.IO) {
+        val copied = try {
+            val root = DocumentFile.fromTreeUri(context, tree)
+            val children = { folder: DocumentFile ->
+                folder.listFiles().map { Triple(it.name.orEmpty(), it.isDirectory, it) }
+            }
+            val fonts = root?.let { PspFonts.fontFolder(it, children) }
+            val files = fonts?.listFiles().orEmpty().filter { it.isFile && PspFonts.isFont(it.name.orEmpty()) }
+            val sources = files.map { file ->
+                file.name.orEmpty() to { context.contentResolver.openInputStream(file.uri) }
+            }
+            PspFonts.copy(sources, PspFonts.folder(context.filesDir))
+        } catch (e: Exception) {
+            Log.e("Phobos", "PSP fonts: couldn't copy them: ${e.message}")
+            0
+        }
+        val installed = PspFonts.installed(PspFonts.folder(context.filesDir))
+        _pspFonts.value = installed
+        Log.i("Phobos", "PSP fonts: copied $copied, now $installed of 18")
+        withContext(Dispatchers.Main) {
+            val message = if (copied == 0) "No PSP fonts (.pgf files) in that folder"
+                else "Copied $copied PSP font${if (copied == 1) "" else "s"}: $installed of the 18 now"
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
     /**
      * Fills firmware slots from the firmware folder by what each file is, whatever its name: every slot whose
      * file isn't a known-good dump gets one from the folder ([firmwareAssignments]).
@@ -2721,6 +2761,9 @@ class MainViewModel(
             Log.i("Phobos", "Saves path resolved: $savesDir")
             // The PSP's memory stick: the folder the user picked, else native code's shared one under the saves path.
             PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
+            // Its system fonts: the copies the user gave from their own PSP's flash0 (Settings → Firmware), if any.
+            val pspFonts = PspFonts.folder(context.filesDir)
+            PhobosCore.setPspFontsPath(if (PspFonts.installed(pspFonts) > 0) pspFonts.absolutePath else "")
             PhobosCore.setMemoryCardKey(withoutDiscNumber(romTitle(rom.name)))
 
             // Vulkan pipeline cache dir (Task 40): user-configured path, else

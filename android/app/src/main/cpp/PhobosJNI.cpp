@@ -591,6 +591,13 @@ Java_com_phobos_emulator_PhobosCore_setPspMemoryStickPath(JNIEnv* env, jobject, 
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspFontsPath(JNIEnv* env, jobject, jstring path) {
+    const char* nativePath = env->GetStringUTFChars(path, 0);
+    ares::setPspFontsPath(nativePath);
+    env->ReleaseStringUTFChars(path, nativePath);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setMemoryCardKey(JNIEnv* env, jobject, jstring key) {
     const char* nativeKey = env->GetStringUTFChars(key, 0);
     ares::setMemoryCardKey(nativeKey);
