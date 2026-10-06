@@ -40,13 +40,16 @@ auto Kernel::startCall() -> void {
   cpu.scc.halted = 0;
 }
 
-//The trampoline's syscall: the function returned. The CPU goes back as it was; the GE goes on if it was waiting for
-//this; the next call waiting starts, or, if a thread woke meanwhile, the scheduler picks who runs.
+//The trampoline's syscall: the function returned. The CPU goes back as it was, interrupts on as the call found them
+//(calls start only with interrupts on: a handler that held them off and returned doesn't pass that on to the thread
+//it interrupted, as on a PSP, where the interrupted context's state comes back with it); the GE goes on if it was
+//waiting for this; the next call waiting starts, or, if a thread woke meanwhile, the scheduler picks who runs.
 auto Kernel::callReturned() -> void {
   if(!interrupting) return;
   restore(interrupted);
   cpu.scc.halted = interruptedHalted;
   interrupting = false;
+  interruptsEnabled = true;
   if(callResumesGe) {
     callResumesGe = false;
     geSuspended = false;

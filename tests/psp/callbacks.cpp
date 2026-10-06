@@ -852,6 +852,52 @@ static auto heldOffKeepsCpu() -> void {
   }
 }
 
+//A vertical blank's handler that holds interrupts off and returns without turning them back on doesn't leave them off
+//for the thread it interrupted: main, woken by the blank and interrupted by the handler, finds them on, and its next
+//wait for a blank and a delay aren't refused; a worse thread ran while main waited (W). (The old code handed the
+//handler's flag on to main: off, its waits all refused.) On both engines.
+static auto handlerLeavesInterruptsOff() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+    Assembler handler{m, 0x0880'3000};
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp));
+    handler.call("sceKernelCpuSuspendIntr");
+    handler.put(lw(ra, 12, sp)); handler.put(addiu(sp, sp, 16));
+    handler.li(v0, 0); handler.put(jr(ra)); handler.put(nop);
+    Assembler worse{m, 0x0880'2000};
+    worse.li(t0, R + 0x10); worse.li(t1, 'W'); worse.put(sw(t1, 0, t0));
+    worse.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    startThread(main, m, "worse", 0x0880'2000, 0x30);
+    main.li(a0, 30); main.li(a1, 0); main.li(a2, 0x0880'3000); main.li(a3, 0);
+    main.call("sceKernelRegisterSubIntrHandler");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelEnableSubIntr");
+    main.call("sceDisplayWaitVblankStart");
+    store(main, 0x00);
+    main.call("sceKernelIsCpuIntrEnable");
+    store(main, 0x04);
+    main.call("sceDisplayWaitVblankStart");
+    store(main, 0x08);
+    main.li(a0, 1000);
+    main.call("sceKernelDelayThread");
+    store(main, 0x0c);
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelReleaseSubIntrHandler");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(word(m, R + 0x00), 0);
+    CHECK(word(m, R + 0x04), 1);
+    CHECK(word(m, R + 0x08), 0);
+    CHECK(word(m, R + 0x0c), 0);
+    CHECK(word(m, R + 0x10), 'W');
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
 auto callbackTests() -> Tests {
   return {
     {"callbacks in waits", runInWaits}, {"callbacks and waits going on", waitsGoOn},
@@ -860,6 +906,7 @@ auto callbackTests() -> Tests {
     {"display vblank timing", vblankTiming}, {"interrupts vblank handler", vblankHandler},
     {"interrupts held off, delivered once", heldOffOnce}, {"interrupts handlers longer than a frame", longHandlers},
     {"interrupts numbers", interruptTable}, {"interrupts held off keep the CPU", heldOffKeepsCpu},
+    {"interrupts back on after a handler", handlerLeavesInterruptsOff},
   };
 }
 
