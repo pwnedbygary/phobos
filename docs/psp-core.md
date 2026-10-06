@@ -2881,7 +2881,8 @@ states under `/tmp/games4-runner/states`):
   lessons over the town, the radar (`snoopy-b`). **Gunhound EX**: Mission 01 under way, the mech firing, its
   dialogue (`gun-b`). **Brave Story**: the prologue's scenes and talk at the fountain (`brave-b`). **Lumines**:
   Challenge Mode played (`lumines-c`). **Space Invaders Extreme**: Arcade Mode's first stage played, invaders shot
-  (score 400), lives lost, its background black (`invaders-e`).
+  (score 400), lives lost, its background black (`invaders-e`); then the pause menu's END GAME back to its title,
+  the movie stopped on the way (its thread told to end, and ended), which the old loop couldn't have (`invaders-h`).
 
 **Speed in play** (the host Mac, the scratch runner's `-O2` build, 600 frames from each game's state with a button
 held, the GE on 7 threads / on 1): Gunhound EX 213 / 138 frames a second, Burnout Dominator racing 193 / 104, Brave

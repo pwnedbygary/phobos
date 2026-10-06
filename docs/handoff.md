@@ -769,8 +769,8 @@ Developer Wiki, the games' own behavior).
   at the army base (`vcs-d`); Sindacco in Paulie's car to Atlantic Quays (`sind-d`); Burnout Legends lap 2 of 3
   (`burnout-b`); Midnight Club 3 racing (`mc3-a`); SOCOM deployed in its first mission (`socom-d`); Snoopy's flying
   lessons (`snoopy-b`); Gunhound EX Mission 01 (`gun-b`); Brave Story's prologue (`brave-b`); Lumines Challenge
-  (`lumines-c`); Space Invaders Extreme's first stage (`invaders-e`). Boots of all twelve checked with the movie
-  change (`*-boot`).
+  (`lumines-c`); Space Invaders Extreme's first stage, then END GAME back to its title, its movie stopped
+  (`invaders-e`, `invaders-h`). Boots of all twelve checked with the movie change (`*-boot`).
 - **Checks**: `tests/psp/run-tests.sh` 227 groups with both sanitizers, no failures; `tests/psp/ares` 268 checks,
   none failed (both run on the merge too). New groups "mpeg movie fed and taken apart", "mpeg movie thread waits
   for its picture", "mpeg ringbuffer callback states", "power volatile memory locked at once" (programs on both
