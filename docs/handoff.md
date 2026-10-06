@@ -868,6 +868,30 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 12: lighting — 2026-10-04
+
+Branch `cursor/psp-lighting-2b67`, stacked on `cursor/psp-3d-measure-2b67` (for stack #106). `ares/psp/ge/lighting.cpp`:
+- the material (emissive, ambient, diffuse, specular, coefficient; the vertex's color standing in by MATERIAL_COLOR);
+- the ambient light and four lights (directional, point, spot; diffuse, specular, powered), with fading and cones;
+- the GE's arithmetic (2c + 1 colors, shares in 512ths rounded up, its quick power, the coefficient's 4-bit fraction);
+- the shine kept apart and added after texturing (LIGHT_MODE 1);
+- environment mapping's texture coordinates from two lights.
+
+Checks:
+- 84 groups on the Mac (UBSan), with five lighting groups worked out by hand;
+- pspsdk's "celshading" matches PPSSPP's software renderer pixel for pixel, "envmap" within 1 level;
+- 21 broken versions each failed the tests (two only after a case at a cosine of 0.501 was added).
+
+Not yet: lines, mipmaps, curved surfaces, bounding boxes, PRIM kind 7.
+
+A second commit adds five lighting cases to `tools/psp-ge-measure` (diffuse and the shine across the angles, a
+spotlight's direction either way, a point light's fading, environment mapping), all identical to PPSSPP's software
+renderer here; 61 of the program's 64 files now match it. While they were being written, an unfinished set of lighting
+cases appeared in `main.c` from another writer (a Cursor agent worker is registered for this folder). The user said
+nothing else was running, so the two sets were merged into one: the other set's cell helper, its finer angle sweep
+and its resets in `start()`, with these halves and cases. Copies of both versions are kept outside the repository in
+`.local/`. The refreshed EBOOT.PBP replaces the one on the RP6 in `Download/GEMEASURE`.
+
 ## PSP core: measuring 3D on a PSP — 2026-10-04
 
 Branch `cursor/psp-3d-measure-2b67`, stacked on `cursor/psp-3d-2b67` (for stack #106). `tools/psp-ge-measure` gains

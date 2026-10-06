@@ -19,8 +19,8 @@
 //  - Points: the pixel each vertex is in.
 //A vertex without a color takes the material's ambient color (AMBIENT_COLOR, AMBIENT_ALPHA).
 //(These rules, the sample points and the corner order's quarter turn among them, are as PPSSPP's software renderer
-//has them, which its authors checked against tests on the PSP. Not yet: lines, lighting, and PRIM's kind 7, which
-//goes on with the last primitive's vertices.)
+//has them, which its authors checked against tests on the PSP. Not yet: lines, and PRIM's kind 7, which goes on with
+//the last primitive's vertices.)
 
 auto GE::primitive(u32 kind, u32 count) -> void {
   auto format = vertexFormat();
@@ -48,7 +48,7 @@ auto GE::primitive(u32 kind, u32 count) -> void {
     t = transformState();
     t.weights = format.weightFormat ? format.weights : 0;
     t.textureWidth = texture.width, t.textureHeight = texture.height;
-    if(commands[LightingEnable] & 1) note("lighting isn't emulated yet: vertices keep their own colors");
+    t.vertexColor = format.colorFormat != 0;
     for(auto& vertex : vertices) transform(vertex, t);
   }
   s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
@@ -101,9 +101,15 @@ static auto fixed(float position) -> s32 {
 
 static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 
-//A pixel's color: the vertex color, through the texture if there is one, then into the pixel pipeline.
-auto GE::shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, float u, float v, u32 fog) -> void {
+//A pixel's color: the vertex color, through the texture if there is one, plus lighting's shine when it's kept apart
+//(each channel held to 255), then into the pixel pipeline.
+auto GE::shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, u32 specular, float u, float v,
+               u32 fog) -> void {
   if(texture) color = textureFunction(color, sample(*texture, u, v));
+  if(specular) {
+    color = pack(channel(color, 0) + channel(specular, 0), channel(color, 1) + channel(specular, 1),
+                 channel(color, 2) + channel(specular, 2), channel(color, 3));
+  }
   drawPixel(pixel, x, y, z, color, fog);
 }
 
@@ -133,7 +139,7 @@ auto GE::rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, cons
       float along = float(x * 16 + 8 - x0) / float(x1 - x0);
       float u = turned ? from.u + down * (to.u - from.u) : from.u + along * (to.u - from.u);
       float v = turned ? from.v + along * (to.v - from.v) : from.v + down * (to.v - from.v);
-      shade(pixel, texture, x, y, z, to.color, u, v, fog);
+      shade(pixel, texture, x, y, z, to.color, to.specular, u, v, fog);
     }
   }
 }
@@ -169,7 +175,8 @@ auto GE::triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Ve
   s32 lastY = std::min<s32>(floorDivide(s32(maxY) - 7, 16), pixel.bottom);
 
   bool flat = !(commands[ShadeMode] & 1);
-  u32 flatColor = c.color;  //flat shading: the last vertex's color, whichever way the corners were turned
+  u32 flatColor = c.color, flatSpecular = c.specular;  //flat shading: the last vertex's, whichever way the corners turned
+  bool shines = a.specular || b.specular || c.specular;
   if(texture) {
     const Vertex &va = *p[0].vertex, &vb = *p[1].vertex, &vc = *p[2].vertex;
     float texels = std::abs((vb.u - va.u) * (vc.v - va.v) - (vb.v - va.v) * (vc.u - va.u));
@@ -187,14 +194,16 @@ auto GE::triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Ve
       auto blend = [&](float first, float second, float third) {
         return (first * float(w0) + second * float(w1) + third * float(w2)) / total;
       };
-      u32 color = flatColor;
-      if(!flat) {
-        color = 0;
+      auto blendColor = [&](u32 first, u32 second, u32 third) {
+        u32 blended = 0;
         for(u32 n = 0; n < 4; n++) {
-          s32 value = s32(blend(channel(va.color, n), channel(vb.color, n), channel(vc.color, n)));
-          color |= u32(std::clamp(value, 0, 255)) << n * 8;
+          s32 value = s32(blend(channel(first, n), channel(second, n), channel(third, n)));
+          blended |= u32(std::clamp(value, 0, 255)) << n * 8;
         }
-      }
+        return blended;
+      };
+      u32 color = flat ? flatColor : blendColor(va.color, vb.color, vc.color);
+      u32 specular = flat || !shines ? flatSpecular : blendColor(va.specular, vb.specular, vc.specular);
       u32 z = u32(std::clamp(blend(va.z, vb.z, vc.z), 0.0f, 65535.0f));
       float u = 0, v = 0;
       if(texture && perspective) {
@@ -205,7 +214,7 @@ auto GE::triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Ve
       } else if(texture) {
         u = blend(va.u, vb.u, vc.u), v = blend(va.v, vb.v, vc.v);
       }
-      shade(pixel, texture, x, y, z, color, u, v, fogAmount(blend(va.fog, vb.fog, vc.fog)));
+      shade(pixel, texture, x, y, z, color, specular, u, v, fogAmount(blend(va.fog, vb.fog, vc.fog)));
     }
   }
 }
@@ -214,5 +223,6 @@ auto GE::point(PixelState& pixel, Sampler* texture, const Vertex& at) -> void {
   s32 x = fixed(at.x) >> 4, y = fixed(at.y) >> 4;
   if(x < pixel.left || x > pixel.right || y < pixel.top || y > pixel.bottom) return;
   if(texture) texture->linear = chooseFilter(commands[TextureFilter], 1.0f);
-  shade(pixel, texture, x, y, u32(std::clamp(at.z, 0.0f, 65535.0f)), at.color, at.u, at.v, fogAmount(at.fog));
+  shade(pixel, texture, x, y, u32(std::clamp(at.z, 0.0f, 65535.0f)), at.color, at.specular, at.u, at.v,
+        fogAmount(at.fog));
 }

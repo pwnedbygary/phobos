@@ -1,9 +1,10 @@
 //psp-ge-measure: records what a real PSP's GE draws, and how its controller driver times its reads, in the cases where
 //Phobos's PSP core follows PPSSPP's software renderer or uOFW's reading of the firmware rather than measurements of
-//its own (see docs/psp-core.md, parts 8 to 11): blending's and the texture functions' rounding, the texture filter's
+//its own (see docs/psp-core.md, parts 8 to 12): blending's and the texture functions' rounding, the texture filter's
 //weights, which pixels sprites and triangles cover, the sprite corners' quarter turn, dithering, the stencil's steps,
-//and whether the controller's reads wait; and in 3D, perspective-correct texels, the depths and fog written, the
-//GE's rounding onto the screen, the cut at the near plane, which depths stop a primitive, and culling.
+//and whether the controller's reads wait; in 3D, perspective-correct texels, the depths and fog written, the GE's
+//rounding onto the screen, the cut at the near plane, which depths stop a primitive, and culling; and lighting:
+//diffuse and the shine across the angles, a spotlight's cone, a point light's fading, environment mapping.
 //
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/<test>.bin beside EBOOT.PBP: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's
@@ -124,6 +125,9 @@ static void start(int psm) {
   sceGuDisable(GU_FRAGMENT_2X);
   sceGuDisable(GU_TEXTURE_2D);
   sceGuDisable(GU_CULL_FACE);
+  sceGuDisable(GU_LIGHTING);
+  for(int light = 0; light < 4; light++) sceGuDisable(GU_LIGHT0 + light);
+  sceGuTexMapMode(GU_TEXTURE_COORDS, 0, 0);
   sceGuPixelMask(0);
   sceGuShadeModel(GU_SMOOTH);
 }
@@ -611,6 +615,138 @@ static void cull3D(void) {
   saveTarget("3d-cull", 64, 64, 0);
 }
 
+//---- lighting
+
+typedef struct { unsigned int color; float nx, ny, nz, x, y, z; } LitVertex;
+enum { LitVertexType = GU_COLOR_8888 | GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D };
+
+//A list lighting in 3D (identity matrices): light 0 on (start has turned the others off), the material's own colors
+//(not the vertex's), the material and the ambient light black, light 0's colors black and not fading, but for what
+//each case sets.
+static void beginLit(void) {
+  start3D(&identity, 1);
+  sceGuEnable(GU_LIGHTING);
+  sceGuEnable(GU_LIGHT0);
+  sceGuColorMaterial(0);
+  sceGuModelColor(0, 0, 0, 0);
+  sceGuAmbient(0);
+  sceGuLightMode(0);
+  sceGuLightAtt(0, 1, 0, 0);
+  sceGuLightColor(0, GU_AMBIENT, 0);
+  sceGuLightColor(0, GU_DIFFUSE, 0);
+  sceGuLightColor(0, GU_SPECULAR, 0);
+}
+
+//Cells first to first + count - 1 of the target's 256 (16x16 pixels, row by row), each a 3D sprite at z 0 in color
+//whose normal is normal(k, count), k counting from 0 in these cells (unscaled: the GE makes it one long). A sprite
+//takes its second vertex's color, lit there, so each cell shows one lit color.
+static void litCells(int first, int count, unsigned int color, void (*normal)(int k, int count, float* n)) {
+  LitVertex* v = sceGuGetMemory(count * 2 * sizeof(LitVertex));
+  for(int k = 0; k < count; k++) {
+    int cell = first + k;
+    float n[3], x = (cell & 15) * 16, y = (cell >> 4) * 16;
+    normal(k, count, n);
+    v[k * 2] = (LitVertex){color, n[0], n[1], n[2], ndcX(x), ndcY(y), 0};
+    v[k * 2 + 1] = (LitVertex){color, n[0], n[1], n[2], ndcX(x + 16), ndcY(y + 16), 0};
+  }
+  sceGuDrawArray(GU_SPRITES, LitVertexType, count * 2, 0, v);
+}
+//Turning from facing +z (k 0) to edge on (the last k): (k, 0, count - 1 - k).
+static void sweep(int k, int count, float* n) { n[0] = k, n[1] = 0, n[2] = count - 1 - k; }
+//Straight up, +z.
+static void up(int k, int count, float* n) { (void)k, (void)count; n[0] = 0, n[1] = 0, n[2] = 1; }
+//Spread over the half facing +z: the cells' column i and row j leaning (i - 7.5, j less the middle row) against 8 up.
+static void hemisphere(int k, int count, float* n) {
+  n[0] = (k & 15) - 7.5f, n[1] = (k >> 4) - (count / 16 - 1) / 2.0f, n[2] = 8;
+}
+
+//Diffuse: a directional light toward +z, white, the normal turning away across each half: in the top half on a
+//material diffuse of (255, 64, 192); in the bottom half on the vertex's own color, the same, standing for it
+//(MATERIAL_COLOR), which should come out the same.
+static void lightDiffuse(void) {
+  beginLit();
+  ScePspFVector3 toward = {0, 0, 1};
+  sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE, &toward);
+  sceGuLightColor(0, GU_DIFFUSE, 0xffffff);
+  sceGuModelColor(0, 0, 0xc040ff, 0);
+  litCells(0, 128, 0xffffffff, sweep);
+  sceGuModelColor(0, 0, 0, 0);
+  sceGuColorMaterial(GU_DIFFUSE);
+  litCells(128, 128, 0xffc040ff, sweep);
+  finish();
+  saveTarget("light-diffuse", 256, 256, 0);
+}
+
+//The shine: the same light shining (white specular, no diffuse) on a white specular material, the viewer along +z,
+//the normal turning away across each half: the coefficient 2 in the top half, 7 in the bottom (the GE's own quick
+//power, and the coefficient's four bits of fraction).
+static void lightSpecular(void) {
+  beginLit();
+  ScePspFVector3 toward = {0, 0, 1};
+  sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE_AND_SPECULAR, &toward);
+  sceGuLightColor(0, GU_SPECULAR, 0xffffff);
+  sceGuModelColor(0, 0, 0, 0xffffff);
+  sceGuSpecular(2);
+  litCells(0, 128, 0xffffffff, sweep);
+  sceGuSpecular(7);
+  litCells(128, 128, 0xffffffff, sweep);
+  finish();
+  saveTarget("light-specular", 256, 256, 0);
+}
+
+//A spotlight half a unit above the middle (with identity matrices the target spans -1 to 1), white diffuse on white,
+//its cone a cosine of 0.8, exponent 4, the normals up: in the top half pointing along +z, in the bottom along -z
+//(which way the GE takes a spotlight's direction: PPSSPP lights the cone only with +z, toward the light). The spot
+//is over the middle, so each half shows half of its pool.
+static void lightSpot(void) {
+  beginLit();
+  ScePspFVector3 at = {0, 0, 0.5f};
+  sceGuLight(0, GU_SPOTLIGHT, GU_DIFFUSE, &at);
+  sceGuLightColor(0, GU_DIFFUSE, 0xffffff);
+  sceGuModelColor(0, 0, 0xffffff, 0);
+  for(int half = 0; half < 2; half++) {
+    ScePspFVector3 along = {0, 0, half ? -1.0f : 1.0f};
+    sceGuLightSpot(0, &along, 4, 0.8f);
+    litCells(half * 128, 128, 0xffffffff, up);
+  }
+  finish();
+  saveTarget("light-spot", 256, 256, 0);
+}
+
+//A point light a quarter of a unit above the middle, white diffuse on white, fading as 1 / (0.5 + d + 2d²) (all three
+//terms), the normals up: the fading and the cosine together, across the distances.
+static void lightPoint(void) {
+  beginLit();
+  ScePspFVector3 at = {0, 0, 0.25f};
+  sceGuLight(0, GU_POINTLIGHT, GU_DIFFUSE, &at);
+  sceGuLightColor(0, GU_DIFFUSE, 0xffffff);
+  sceGuLightAtt(0, 0.5f, 1, 2);
+  sceGuModelColor(0, 0, 0xffffff, 0);
+  litCells(0, 256, 0xffffffff, up);
+  finish();
+  saveTarget("light-point", 256, 256, 0);
+}
+
+//Environment mapping (lighting off): the texture (texel (x, y) is x | y << 8 | 0x80 << 16), replace; light 0
+//directional toward +x, light 1 toward +y; TEXTURE_SHADE_MAPPING 1, as pspsdk's sceGuTexMapMode(GU_ENVIRONMENT_MAP,
+//0, 1) and its "celshading" sample send it (PPSSPP takes u from light 1 and v from light 0); the normals spread over
+//the half facing +z, in each half. In the bottom half light 0 shines, so its coordinate comes from half way to the
+//viewer.
+static void lightEnvironment(void) {
+  fillTexture(texelXY);
+  start3D(&identity, 1);
+  useTexture(GU_TFX_REPLACE, GU_TCC_RGB);
+  ScePspFVector3 x = {1, 0, 0}, y = {0, 1, 0};
+  sceGuLight(1, GU_DIRECTIONAL, GU_DIFFUSE, &y);
+  sceGuTexMapMode(GU_ENVIRONMENT_MAP, 0, 1);
+  sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE, &x);
+  litCells(0, 128, 0xffffffff, hemisphere);
+  sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE_AND_SPECULAR, &x);
+  litCells(128, 128, 0xffffffff, hemisphere);
+  finish();
+  saveTarget("light-environment", 256, 256, 0);
+}
+
 //The controller's timing, in microseconds: 16 times each, how long a second sceCtrlReadLatch right after one takes;
 //how long sceCtrlReadBufferPositive takes just after a vertical blank; how long a second sceCtrlReadBufferPositive
 //right after one takes. (A wait is about a frame, 16683.)
@@ -654,6 +790,7 @@ static void writeManifest(void) {
     "and dither-5650 frame buffers are 16-bit, in the low half, and 3d-floor-depth is the 16-bit depth buffer).\n"
     "spread(x) = x | (255 - x) << 8 | (x * 7 & 0xff) << 16. Textures are 8888 (texture-*: 16-bit, texel y * 256 + x),\n"
     "nearest, clamped; blends draw the texture with replace and its alpha. 3d-*: drawn through the matrices.\n"
+    "light-*: 256 cells of 16x16 pixels, each a lit 3D sprite showing one lit color (the cases are in main.c).\n"
     "controller-timing.bin: 48 times in microseconds: 16 second sceCtrlReadLatch calls, 16 sceCtrlReadBufferPositive\n"
     "calls just after a vertical blank, 16 second sceCtrlReadBufferPositive calls.\n";
   sceIoWrite(file, text, sizeof(text) - 1);
@@ -735,6 +872,11 @@ int main(int argc, char** argv) {
   clip3D("3d-clip-unclamped", 0);
   rules3D();
   cull3D();
+  lightDiffuse();
+  lightSpecular();
+  lightSpot();
+  lightPoint();
+  lightEnvironment();
   sceGuTerm();
   controllerTiming();
 

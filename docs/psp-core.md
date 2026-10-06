@@ -8,8 +8,9 @@ after it; part 5, the memory map, on `cursor/psp-memory-2b67`; part 6, the loade
 part 7, the first HLE functions, on `cursor/psp-hle-2b67`, which run pspdev's hello world from start to end on the
 host; part 8, files and controls, on `cursor/psp-files-2b67`; part 9, the GE's display lists, on
 `cursor/psp-ge-2b67`; part 10, drawing in 2D, on `cursor/psp-draw-2b67`; the program measuring the GE and the
-controller on a PSP, on `cursor/psp-ge-measure-2b67`; part 11, drawing in 3D, on `cursor/psp-3d-2b67`. The user asked
-for the whole feature to be stacked and merged at once (GitHub stack #106).
+controller on a PSP, on `cursor/psp-ge-measure-2b67`; part 11, drawing in 3D, on `cursor/psp-3d-2b67`, with its
+measurements on `cursor/psp-3d-measure-2b67`; part 12, lighting, on `cursor/psp-lighting-2b67`. The user asked for the
+whole feature to be stacked and merged at once (GitHub stack #106).
 Nothing is in the app yet.
 
 ## Decisions (the user's, 2026-10-03)
@@ -134,7 +135,7 @@ branch not taken, `nor` without the not, delay-slot instructions given the wrong
    start, threads, display, memory, standard output) and a homebrew test program run on the host (part 7); files
    and controls (part 8).
 5. The GE: display lists, clearing and block transfers, and the picture (part 9); drawing in 2D (part 10); 3D
-   (part 11); then lighting, mipmaps, lines, curved surfaces.
+   (part 11); lighting (part 12); then mipmaps, lines, curved surfaces.
 6. In Phobos: the system's entry, ISO and CSO images, a PSP touch layout, saves in a memory stick folder, states.
 7. Retail executables: `~PSP` decryption.
 8. Audio (`sceAudio`, then ATRAC3+ and MP3), video (PSMF), the optional firmware modules.
@@ -538,7 +539,7 @@ turns that one check off (`ASAN_OPTIONS`); the run takes 95 seconds.
 The rules above that came from PPSSPP or uOFW rather than from measurements of our own are what
 `tools/psp-ge-measure` records on a real PSP. Like the VFPU's program it's homebrew built with pspdev's toolchain
 (`make SMOKE=1` builds a version for an emulator, which starts at once and leaves when done). It draws each case into
-VRAM, reads the pixels back as they are and writes them to `results/` beside its EBOOT.PBP: 59 result files and a
+VRAM, reads the pixels back as they are and writes them to `results/` beside its EBOOT.PBP: 64 result files and a
 manifest, about 15 MB, in a few seconds. The cases:
 
 - every blend operation and factor, over every source color and alpha;
@@ -557,12 +558,16 @@ manifest, about 15 MB, in a few seconds. The cases:
   across it; a 3D sprite whose corners lie at different depths, textured and fogged; the GE's rounding onto the
   screen (edges moved in 256ths of a pixel past a sample point); a triangle cut at the near plane, with
   DEPTH_CLIP_ENABLE on and off; which depths stop triangles, points and sprites, with it on and off; and culling
-  either way, in 3D and through mode.
+  either way, in 3D and through mode;
+- lighting (part 12), each case 256 cells of one lit color: diffuse across the angles on a material and on the
+  vertex's color standing for it; the shine across the angles with coefficients 2 and 7; a spotlight's pool with its
+  direction toward the light and away from it (which way the GE takes it); a point light's fading with all three
+  terms; and environment mapping's coordinates over a hemisphere of normals, from a plain light and a shining one.
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in this core (with
 `PSP_TEST_PROGRAMS`), checks that every file is written, and with `PSP_GE_RESULTS` set to a results folder lists what
 differs from it (`PSP_GE_OURS` keeps this core's files for a closer look). Against PPSSPP's software renderer (its
-headless build running the smoke version), 56 of the 59 files match: 55 pictures identical, and the controller's
+headless build running the smoke version), 61 of the 64 files match: 60 pictures identical, and the controller's
 timing agreeing on what waits (a second latch read doesn't, a buffer read after a vertical blank doesn't either, and a
 second buffer read waits a frame). The three that differ are the PSP's to settle:
 
@@ -644,3 +649,56 @@ from the world's z, flat shading after a cut); the tests that now catch them are
 Found on the way: a 3D scene without a depth range set draws nothing, since MIN_Z and MAX_Z are both 0 at power-on
 (games set them with `sceGuDepthRange`). And `PSP_TEST_PROGRAMS` set but empty made the loader's test read a missing
 file and index an empty module (undefined behavior); every test now treats an empty value as unset.
+
+## Part 12: lighting
+
+`ares/psp/ge/lighting.cpp`. With LIGHTING_ENABLE, each vertex's color is worked out once, after the transform, from
+the material and up to four lights. Its normal is first turned into the world by the world matrix (NORMAL_REVERSE
+turns it round), and made one long.
+
+- **The material**: emissive, ambient (with alpha), diffuse and specular colors, and the specular coefficient.
+  MATERIAL_COLOR lets the vertex's own color stand for the ambient, the diffuse or the specular.
+- **The ambient light**, lighting everything evenly, and **four lights**: directional, point or spot; doing ambient
+  and diffuse, those and specular, or a "powered" diffuse (sharpened like the shine). All but directional ones fade
+  with distance; a spotlight lights only its cone (the cutoff), brighter toward the middle (the exponent).
+- **The arithmetic**, as the GE does it: a color c counts as 2c + 1, so white times white is white; two colors
+  multiply and shift down 10 bits; a light's share counts 512ths, rounded up, and three numbers shift down 19. "To the
+  power of" is the GE's quick approximation (exact at powers of two, a little low between them), and the coefficient
+  keeps only the top four bits of its fraction. Each channel ends held to 0-255.
+- **The shine kept apart** (LIGHT_MODE 1): a second color, blended across triangles like the first and added after
+  texturing, so a dark texture doesn't dull it.
+- **Environment mapping** (TEXTURE_MAP_MODE 2): texture coordinates from two lights (TEXTURE_SHADE_MAPPING), lit or
+  not: (the cosine between the normal and the direction to the light + 1) / 2, a shining light's direction taken half
+  way to the viewer's.
+
+The rules are PPSSPP's software renderer's (its lighting, and its notes on the PSP's power function and shade mapping
+from tests on the hardware), for behavior only. The layouts come from pspsdk's `sceGuLight`, `sceGuLightAtt`,
+`sceGuLightColor`, `sceGuLightSpot`, `sceGuLightMode`, `sceGuMaterial`, `sceGuModelColor`, `sceGuSpecular`,
+`sceGuAmbient`, `sceGuColorMaterial` and `sceGuTexMapMode`.
+
+Tests (five more groups in `tests/psp/draw3d.cpp`) work each color out by hand from those rules:
+- the ambient part with emissive, and the vertex's color standing for the ambient (red held to 255);
+- a directional light's diffuse: squarely, at a cosine of 0.8, with a normal not one long, a direction not one long,
+  the light off, from behind, powered, at a cosine where the share's rounding up and its one more show (0.501), and
+  the vertex's color standing for the diffuse;
+- a point light's fading, and a spotlight's cone either way;
+- the shine: the quick power (0.75 squared is 0.5), the coefficient's cut fraction (1.03125 counts as 1), a turned view,
+  and kept apart, added after the texture;
+- environment mapping from two lights, one of them shining.
+
+pspsdk's "celshading" (shaded through environment mapping) matches PPSSPP's software renderer pixel for pixel, and
+"envmap" (lit and environment-mapped) is within 1 level on every pixel (`compare-ppsspp.sh`). Twenty-one broken
+versions each failed the tests, among them:
+- colors without their + 1, the ambient shifted a bit too far;
+- shares rounded down or without their one more;
+- the true power in place of the GE's quick one, the coefficient's whole fraction kept;
+- NORMAL_REVERSE, MATERIAL_COLOR, fading, cones or the powered diffuse ignored;
+- the viewer left out of the half-way direction, or taken from the wrong column;
+- the shine never kept apart, or never added after the texture;
+- environment mapping's u and v swapped, or blind to shining lights;
+- every light on, or lighting without LIGHTING_ENABLE;
+- normals or directions not made one long.
+
+Two of them (the shares) first got through: no case crossed a level by one share, and the cosine of 0.501 now does.
+
+Not yet: lines, mipmaps, curved surfaces (BEZIER, SPLINE), bounding boxes, PRIM's kind 7.

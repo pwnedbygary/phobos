@@ -31,7 +31,8 @@ static const MeasureFile measureFiles[] = {
   {"texels-sprite-stretched", 256, 256}, {"texels-triangles-stretched", 256, 256}, {"3d-floor-texels", 256, 256},
   {"3d-floor-depth", 256, 256}, {"3d-floor-fog", 256, 256}, {"3d-sprite", 256, 256}, {"3d-rounding", 256, 256},
   {"3d-clip", 256, 256}, {"3d-clip-unclamped", 256, 256}, {"3d-rules", 256, 32}, {"3d-cull", 64, 64},
-  {"controller-timing", 48, 1},
+  {"light-diffuse", 256, 256}, {"light-specular", 256, 256}, {"light-spot", 256, 256}, {"light-point", 256, 256},
+  {"light-environment", 256, 256}, {"controller-timing", 48, 1},
 };
 
 static auto readWords(const std::filesystem::path& path) -> std::vector<u32> {

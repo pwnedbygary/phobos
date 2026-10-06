@@ -32,7 +32,10 @@
 //  1: from the texture matrix (4x3), applied to what bits 8-9 pick: the model position, the texture coordinates (and
 //     0), the normal made one long, or the normal as it is. That gives s, t and q, and each pixel's texture
 //     coordinates are s/q and t/q there: "projected", like a slide projector's picture;
-//  2: environment mapping, which comes from lighting (not emulated yet: the vertex's are used, as in 0).
+//  2: environment mapping: from two lights' directions and the vertex's normal (lighting.cpp).
+//
+//Lighting (LIGHTING_ENABLE) then works out each vertex's color (lighting.cpp), from its normal turned into the world
+//by the world matrix (NORMAL_REVERSE turns it round first).
 //
 //Fog: how much of a pixel's color shows rather than FOG_COLOR, from how far in front of the camera it is:
 //(view z + FOG1) * FOG2, held to 0-1 at each pixel (pspsdk's sceGuFog sets FOG1 to the far end and FOG2 to
@@ -92,6 +95,7 @@ auto GE::transformState() const -> Transform {
   } else if(!std::isfinite(t.fogSlope)) {
     t.fogSlope = std::signbit(t.fogSlope) ? -262144.0f : 262144.0f;
   }
+  lightingState(t);
   return t;
 }
 
@@ -113,24 +117,38 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
   times43(t.view, inWorld, inView);
   times44(t.projection, inView, vertex.clip);
   project(vertex, t, false);
+  float normal[3] = {0, 0, 1};  //in the world, one long: for lighting and environment mapping
+  if(t.lighting || t.mapMode == 2) {
+    float turned[3], sign = t.normalReverse ? -1.0f : 1.0f;
+    float own[3] = {vertex.normal[0] * sign, vertex.normal[1] * sign, vertex.normal[2] * sign};
+    turn43(t.world, own, turned);
+    float length = std::sqrt(turned[0] * turned[0] + turned[1] * turned[1] + turned[2] * turned[2]);
+    if(length > 0) {
+      for(u32 k = 0; k < 3; k++) normal[k] = turned[k] / length;
+    }
+  }
 
-  if(t.mapMode == 1) {
+  if(t.mapMode == 2) {
+    vertex.u = shadeCoordinate(t, t.shadeU, inWorld, normal) * t.textureWidth;
+    vertex.v = shadeCoordinate(t, t.shadeV, inWorld, normal) * t.textureHeight;
+  } else if(t.mapMode == 1) {
     float source[3] = {model[0], model[1], model[2]};
     if(t.mapSource == 1) source[0] = vertex.u, source[1] = vertex.v, source[2] = 0;
-    if(t.mapSource >= 2) {
+    if(t.mapSource >= 2) {  //the normal (turned round by NORMAL_REVERSE), made one long or as it is
       float length = t.mapSource == 2 ? std::sqrt(vertex.normal[0] * vertex.normal[0] +
                      vertex.normal[1] * vertex.normal[1] + vertex.normal[2] * vertex.normal[2]) : 1.0f;
+      if(t.normalReverse) length = -length;
       for(u32 k = 0; k < 3; k++) source[k] = vertex.normal[k] / length;
     }
     float stq[3];
     times43(t.textureMatrix, source, stq);
     vertex.u = stq[0] * t.textureWidth, vertex.v = stq[1] * t.textureHeight, vertex.q = stq[2];
   } else {
-    if(t.mapMode == 2) note("environment mapping (TEXTURE_MAP_MODE 2) isn't emulated yet: the vertex's texture coordinates are used");
     vertex.u = (vertex.u * t.textureScale[0] + t.textureOffset[0]) * t.textureWidth;
     vertex.v = (vertex.v * t.textureScale[1] + t.textureOffset[1]) * t.textureHeight;
   }
   if(t.fog) vertex.fog = t.fogForced ? t.fogValue : (inView[2] + t.fogEnd) * t.fogSlope;
+  if(t.lighting) light(vertex, inWorld, normal, t);
 }
 
 //A position in clip space onto the screen: x and y in pixels (whole sixteenths), z the depth, and whether the GE
@@ -178,8 +196,13 @@ static auto between(const GE::Vertex& a, const GE::Vertex& b, float t) -> GE::Ve
   v.q = a.q + (b.q - a.q) * t;
   v.fog = a.fog + (b.fog - a.fog) * t;
   s32 step = t > 0 ? s32(std::min(t, 1.0f) * 256) : 0;  //(a corner that isn't a number makes t none either)
-  v.color = 0;
-  for(u32 n = 0; n < 4; n++) v.color |= u32((channel(a.color, n) * (256 - step) + channel(b.color, n) * step) / 256) << n * 8;
+  auto mix = [&](u32 from, u32 to) {
+    u32 mixed = 0;
+    for(u32 n = 0; n < 4; n++) mixed |= u32((channel(from, n) * (256 - step) + channel(to, n) * step) / 256) << n * 8;
+    return mixed;
+  };
+  v.color = mix(a.color, b.color);
+  v.specular = mix(a.specular, b.specular);
   return v;
 }
 
@@ -217,7 +240,7 @@ auto GE::clipTriangle(PixelState& pixel, Sampler* texture, const Transform& t, c
   for(u32 n = 2; n < count; n++) {
     Vertex last = kept[n];
     if(kept[0].outside || kept[n - 1].outside || last.outside) continue;
-    if(flat) last.color = c.color;
+    if(flat) last.color = c.color, last.specular = c.specular;
     triangle(pixel, texture, kept[0], kept[n - 1], last, facing, true);
   }
 }

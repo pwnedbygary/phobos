@@ -40,7 +40,8 @@ struct GE {
     Nop = 0x00, VertexAddress = 0x01, IndexAddress = 0x02, Primitive = 0x04, Bezier = 0x05, Spline = 0x06,
     BoundingBox = 0x07, Jump = 0x08, ConditionalJump = 0x09, Call = 0x0a, Return = 0x0b, End = 0x0c,
     Signal = 0x0e, Finish = 0x0f, Base = 0x10, VertexType = 0x12, OffsetAddress = 0x13, Origin = 0x14,
-    Region1 = 0x15, Region2 = 0x16, LightingEnable = 0x17, DepthClipEnable = 0x1c, CullFaceEnable = 0x1d,
+    Region1 = 0x15, Region2 = 0x16, LightingEnable = 0x17, LightEnable0 = 0x18, DepthClipEnable = 0x1c,
+    CullFaceEnable = 0x1d,
     TextureMappingEnable = 0x1e, FogEnable = 0x1f, DitherEnable = 0x20, AlphaBlendEnable = 0x21,
     AlphaTestEnable = 0x22, DepthTestEnable = 0x23, StencilTestEnable = 0x24, ColorTestEnable = 0x27,
     LogicOpEnable = 0x28, BoneMatrixNumber = 0x2a, BoneMatrixData = 0x2b, MorphWeight0 = 0x2c,
@@ -49,11 +50,16 @@ struct GE {
     ViewportXScale = 0x42, ViewportYScale = 0x43, ViewportZScale = 0x44, ViewportXCenter = 0x45,
     ViewportYCenter = 0x46, ViewportZCenter = 0x47, TextureScaleU = 0x48, TextureScaleV = 0x49,
     TextureOffsetU = 0x4a, TextureOffsetV = 0x4b, OffsetX = 0x4c, OffsetY = 0x4d,
-    ShadeMode = 0x50, AmbientColor = 0x55, AmbientAlpha = 0x58, Cull = 0x9b,
+    ShadeMode = 0x50, NormalReverse = 0x51, MaterialColor = 0x53, MaterialEmissive = 0x54, AmbientColor = 0x55,
+    MaterialDiffuse = 0x56, MaterialSpecular = 0x57, AmbientAlpha = 0x58, MaterialSpecularCoefficient = 0x5b,
+    AmbientLightColor = 0x5c, AmbientLightAlpha = 0x5d, LightMode = 0x5e, LightType0 = 0x5f, Light0X = 0x63,
+    Light0DirectionX = 0x6f, Light0ConstantAttenuation = 0x7b, Light0ExponentAttenuation = 0x87,
+    Light0CutoffAttenuation = 0x8b, Light0Ambient = 0x8f, Cull = 0x9b,
     FrameBufferPointer = 0x9c, FrameBufferWidth = 0x9d, DepthBufferPointer = 0x9e, DepthBufferWidth = 0x9f,
     TextureAddress0 = 0xa0, TextureBufferWidth0 = 0xa8, ClutAddress = 0xb0, ClutAddressUpper = 0xb1,
     TransferSource = 0xb2, TransferSourceWidth = 0xb3, TransferDestination = 0xb4, TransferDestinationWidth = 0xb5,
-    TextureSize0 = 0xb8, TextureMapMode = 0xc0, TextureMode = 0xc2, TextureFormat = 0xc3, ClutLoad = 0xc4,
+    TextureSize0 = 0xb8, TextureMapMode = 0xc0, TextureShadeMapping = 0xc1, TextureMode = 0xc2, TextureFormat = 0xc3,
+    ClutLoad = 0xc4,
     ClutFormat = 0xc5, TextureFilter = 0xc6, TextureWrap = 0xc7, TextureFunction = 0xc9,
     TextureEnvironmentColor = 0xca, FogEnd = 0xcd, FogSlope = 0xce, FogColor = 0xcf,
     FrameBufferPixelFormat = 0xd2, ClearMode = 0xd3, Scissor1 = 0xd4, Scissor2 = 0xd5, MinZ = 0xd6, MaxZ = 0xd7,
@@ -100,6 +106,7 @@ struct GE {
     float clip[4] = {0, 0, 0, 1};
     float q = 1, fog = 1;
     bool outside = false;
+    u32 specular = 0;  //lighting's shine, when LIGHT_MODE keeps it apart: added after texturing (lighting.cpp)
   };
   //Where each part of a vertex is, in bytes from its start: each part sits at a multiple of its own size, and a
   //vertex's size is a multiple of its largest part's. Formats are the vertex type's fields: 0 for none.
@@ -108,6 +115,13 @@ struct GE {
     bool through;  //2D: positions are screen pixels, used as they are
     u32 weightOffset, textureOffset, colorOffset, normalOffset, positionOffset;
     u32 size;      //one vertex, all its morph targets included
+  };
+
+  //One of the four lights, as its commands set it (lighting.cpp).
+  struct Light {
+    bool enabled, directional, spot, specular, powered;  //specular: it shines; powered: its diffuse is sharpened
+    float position[3], direction[3], attenuation[3], cutoff, exponent;
+    u32 ambient, diffuse, shine;  //its colors (24-bit)
   };
 
   //The 3D settings, gathered once a primitive (transform.cpp): the matrices as floats, the viewport, and the rest.
@@ -121,6 +135,13 @@ struct GE {
     float textureScale[2], textureOffset[2], textureWidth, textureHeight;
     bool fog, fogForced;         //fogForced: FOG1 isn't a number, so every vertex's fog is fogValue
     float fogEnd, fogSlope, fogValue;
+    //lighting (lighting.cpp)
+    bool lighting, separateSpecular, normalReverse, vertexColor;  //vertexColor: the vertex type has a color
+    u32 materialColor;           //MATERIAL_COLOR: bits 0-2, the vertex's color stands for the ambient, diffuse, shine
+    u32 materialEmissive, materialAmbient, materialDiffuse, materialSpecular, ambientLight;
+    float specularPower, viewDirection[3];
+    Light lights[4];
+    u32 shadeU, shadeV;          //TEXTURE_SHADE_MAPPING: the lights environment mapping takes u and v from
   };
 
   //A texture as the commands describe it, gathered once a primitive (texture.cpp).
@@ -178,6 +199,10 @@ struct GE {
   auto readVertex(u32 address, const VertexFormat& format) -> Vertex;
   auto readIndex(u32 n, const VertexFormat& format) -> u32;
 
+  //lighting.cpp
+  auto lightingState(Transform& t) const -> void;
+  auto light(Vertex& vertex, const float world[3], const float normal[3], const Transform& t) const -> void;
+
   //transform.cpp
   auto transformState() const -> Transform;
   auto transform(Vertex& vertex, const Transform& t) -> void;
@@ -191,7 +216,8 @@ struct GE {
   auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                 bool perspective) -> void;
   auto point(PixelState& pixel, Sampler* texture, const Vertex& at) -> void;
-  auto shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, float u, float v, u32 fog) -> void;
+  auto shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, u32 specular, float u, float v,
+             u32 fog) -> void;
 
   //texture.cpp
   auto sampler() const -> Sampler;
