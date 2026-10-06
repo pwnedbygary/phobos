@@ -692,7 +692,7 @@ static auto sourceOutput() -> void {
       left = n % 2 ? (l0 + l1) / 2 : l0, right = n % 2 ? (r0 + r1) / 2 : r0;
     }
     if(frames[n * 2] != left || frames[n * 2 + 1] != right) {
-      std::printf("  frame %u: %d %d, not %lld %lld\n", n, frames[n * 2], frames[n * 2 + 1], left, right);
+      std::printf("  frame %u: %d %d, not %lld %lld\n", n, frames[n * 2], frames[n * 2 + 1], static_cast<long long>(left), static_cast<long long>(right));
       exact = false;
     }
   }

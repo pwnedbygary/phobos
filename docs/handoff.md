@@ -800,6 +800,22 @@ Developer Wiki, the games' own behavior).
   sceMpegAvcDecodeStop doesn't hand back the held picture. The codecs (FFmpeg's LGPL decoders, the owner's choice)
   would make movies seen: the access units are there now.
 
+## PSP core: the CI's PSP system tests made green — 2026-10-06
+
+Branch `cursor/psp-ge-speed-2b67` (#150). The workflow `.github/workflows/psp-core.yml` runs `tests/psp/run-tests.sh`
+(the whole test built with `-Wall -Wextra -Werror` and the address and undefined sanitizers, then run); its PSP
+system tests job failed (run 37483407156, exit 1). Two defects in the tests' own code, found one after the other:
+- **What:** `tests/psp/audio.cpp:695` printed the `s64` pair (nall's `int64_t`, a `long int` on this host) with
+  `%lld`, which the compiler's `-Werror=format=` rejects; fixed with `static_cast<long long>`, the repo's own
+  precedent (`ares/n64/vulkan/parallel-rdp/vulkan/query_pool.cpp:212`). `tests/psp/disc-image.hpp:121` copied every
+  file with `std::memcpy` from `file.data.data()`, null for an empty file (the test disc's `EMPTY.BIN`), which UBSan
+  flags as UB; the no-op copy is now skipped.
+- **Checks:** `tests/psp/run-tests.sh` with both sanitizers: 226 groups, 0 failures (before: the build failed at
+  `audio.cpp:695`, then the binary aborted at `disc-image.hpp:121`).
+- **Then:** the same two lines sat in the heads of the open PSP PRs #140-#151 (the memcpy line from #140 on, the
+  `%lld` line from #147 on). Each fix was made where it first appears (#140's memcpy, #147's `%lld`, the same
+  change as here) and every stacked branch merged the one below it, up to #151, so each PR's head carries both.
+
 ## PSP core: the GE made fast, every pixel the same — 2026-10-06
 
 Branch `cursor/psp-ge-speed-2b67`, on top of `cursor/psp-hle-games3-2b67`, with `cursor/psp-fonts-2b67` (#149, the
