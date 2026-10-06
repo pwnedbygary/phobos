@@ -1,10 +1,10 @@
 //The stubs and odds and ends of docs/psp-core.md's part 20: sceMpeg setting a movie up (mpeg.cpp; since part 25 a
-//movie fed and taken apart into its access units), sceAtrac3plus refusing every stream (atrac.cpp), the network
-//libraries with the wireless LAN off (net.cpp), and the small functions games asked for: the local time, the
-//OpenPSID, the display's line count and rate, the CPU's interrupts and the kernel's memset and memcpy, later SDKs'
-//clock setter, the AV modules, the thread priority functions, holding off dispatch (waits refused before they change
-//anything), and the lightweight mutex's CB lock (and its mutex deleted by its callback). Each group's machine, saved
-//at its end, loads into another that makes the same state. Programs run on both engines.
+//movie fed and taken apart into its access units), the network libraries with the wireless LAN off (net.cpp), and
+//the small functions games asked for: the local time, the OpenPSID, the display's line count and rate, the CPU's
+//interrupts and the kernel's memset and memcpy, later SDKs' clock setter, the AV modules, the thread priority
+//functions, holding off dispatch (waits refused before they change anything), and the lightweight mutex's CB lock
+//(and its mutex deleted by its callback). Each group's machine, saved at its end, loads into another that makes the
+//same state. Programs run on both engines. sceAtrac3plus has atrac.cpp.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -445,32 +445,6 @@ static auto mpegCallbackStates() -> void {
       CHECK(fresh.kernel.mpegCalls.empty() && fresh.notes.empty(), true);
     }
   }
-}
-
-//sceAtrac3plus: its six IDs handed out and given back; no stream taken, on an ID or with one; the rest refuse their
-//ID.
-static auto atracStubs() -> void {
-  KernelMachine m;
-  for(u32 id = 0; id < 6; id++) check(__LINE__, "an ID", m.call("sceAtracGetAtracID", {0x1000}), id);
-  CHECK(m.call("sceAtracGetAtracID", {0x1001}), 0x8063'0007);
-  CHECK(m.call("sceAtracGetAtracID", {0x1002}), Kernel::ErrorInvalidValue);
-  CHECK(m.call("sceAtracReleaseAtracID", {3}), 0);
-  CHECK(m.call("sceAtracReleaseAtracID", {3}), 0x8063'0005);
-  CHECK(m.call("sceAtracReleaseAtracID", {6}), 0x8063'0005);
-  CHECK(m.call("sceAtracGetAtracID", {0x1001}), 3);
-  CHECK(m.call("sceAtracSetDataAndGetID", {Buffer, 0x1000}), 0x8063'0006);
-  CHECK(m.call("sceAtracSetData", {3, Buffer, 0x1000}), 0x8063'0006);
-  m.call("sceAtracReleaseAtracID", {3});
-  CHECK(m.call("sceAtracSetData", {3, Buffer, 0x1000}), 0x8063'0005);
-  CHECK(m.call("sceAtracDecodeData", {0, Buffer, R, R + 4, R + 8}), 0x8063'0005);
-  CHECK(m.call("sceAtracGetRemainFrame", {0, R}), 0x8063'0005);
-  CHECK(m.kernel.atracIDs, 0x37);
-  CHECK(m.call("sceAtracReinit", {4, 1}), Kernel::ErrorBusy);  //IDs handed out
-  for(u32 id : {0u, 1u, 2u, 4u, 5u}) m.call("sceAtracReleaseAtracID", {id});
-  CHECK(m.call("sceAtracReinit", {999, 0}), Kernel::ErrorOutOfMemory);
-  CHECK(m.call("sceAtracReinit", {4, 1}), 0);
-  CHECK(m.notes.size(), 0);
-  CHECK(roundTrip(m), true);
 }
 
 //The network libraries with the switch off: they start and stop, nothing connects, lists are empty, the PSP's own
@@ -964,7 +938,7 @@ auto mediaTests() -> Tests {
   return {{"mpeg stubs", mpegStubs}, {"mpeg movie fed and taken apart", mpegMovie},
           {"mpeg movie thread waits for its picture", mpegMovieThread},
           {"mpeg ringbuffer callback states", mpegCallbackStates},
-          {"atrac stubs", atracStubs}, {"network off", networkOff},
+          {"network off", networkOff},
           {"odds and ends of part 20", oddsAndEnds}, {"rtc file times and ticks", rtcFileTimesAndTicks},
           {"threads odds and ends of part 20", threadOddsAndEnds},
           {"threads dispatching held off", dispatchHeldOff},

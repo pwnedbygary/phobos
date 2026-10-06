@@ -225,10 +225,11 @@ auto Kernel::events() -> void {
   if(woke) reschedule();
 }
 
-//What a wait whose time is up returns: a delay, 0; a synchronous read or write, its result; any other, a timeout.
+//What a wait whose time is up returns: a delay, 0; a synchronous read or write, or a decode, its result; any other, a
+//timeout.
 auto Kernel::timeUp(const Thread& thread) const -> u32 {
   if(thread.wait == Wait::Delay) return 0;
-  if(thread.wait == Wait::File) return thread.waitCount;
+  if(thread.wait == Wait::File || thread.wait == Wait::Codec) return thread.waitCount;
   return ErrorWaitTimeout;
 }
 

@@ -93,6 +93,16 @@ auto Kernel::serialize(serializer& s) -> bool {
       check(s.size() <= end);
     }
   };
+  //bytes: their count, then each; a count past the rest of the state can't be real
+  auto bytes = [&](std::vector<u8>& items) {
+    u32 count = items.size();
+    s(count);
+    if(s.reading()) {
+      if(count > end - std::min(end, s.size())) { valid = false; count = 0; }
+      items.resize(count);
+    }
+    s(std::span<u8>{items.data(), items.size()});
+  };
   //a map by u32 keys: its count, then each key and its value through each()
   auto map = [&](auto& items, auto&& each) {
     u32 count = items.size();
@@ -168,7 +178,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
     s(w.done); s(w.resultPointer);
-    check(t.wait <= Wait::Volatile && w.wait <= Wait::Mailbox);
+    check(t.wait <= Wait::Codec && w.wait <= Wait::Mailbox);
     check(t.callbackID < nextUID);
     s(t.suspended);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
@@ -179,6 +189,12 @@ auto Kernel::serialize(serializer& s) -> bool {
       u64 due = t.wakeAt;
       check(t.status == Status::Waiting && !t.callbacks && due);
       check(due > cycles ? due - cycles <= asyncDuration(true, 64_MiB) : cycles - due < VblankCycles);
+    }
+    //a decode's wait (codec.cpp) is a moment's, with no callbacks: due within a frame, nor overdue by one
+    if(t.wait == Wait::Codec) {
+      u64 due = t.wakeAt;
+      check(t.status == Status::Waiting && !t.callbacks && due);
+      check(due > cycles ? due - cycles <= VblankCycles : cycles - due < VblankCycles);
     }
   };
   if(s.writing()) {
@@ -348,10 +364,62 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
     if(v.source == Sas::Source::Vag) check(v.size && !(v.size & 15) && (v.loop == 0 || v.loop == 1));
   }
-  //sceAtrac3plus's IDs handed out (six of them), threads' dispatching held off, and sceLibFont's resolution (a
-  //positive number, as sceFontSetResolution keeps it)
-  s(atracIDs); s(dispatchSuspended);
-  check(atracIDs < 1u << 6);
+  //sceAtrac3plus (atrac.cpp): how the six IDs are shared, the contexts' memory, and each ID's file and where its
+  //decoding is. The decoder isn't saved: made afresh as the next frame is decoded, primed with the frame decoded last
+  //(recent), as a reset would prime it. An ID is one sceAtracReinit could share out, of its codec; a file's frames,
+  //positions and buffers are what setting it, decoding and adding to it leave: frames of the codec's size and delay,
+  //priming two frames at most, its second buffer only with a loop before its end, a halfway buffer's data within the
+  //file; a stream's ring within its buffer, decoding and the game's bytes no more than a time round apart and the
+  //bytes between them what the ring holds (sceAtracGetStreamDataInfo and sceAtracAddStreamData rely on it). The
+  //contexts' memory, once handed out, is a block of the user partition.
+  s(atracPlusIDs); s(atracClassicIDs); s(atracContexts);
+  check(atracPlusIDs <= 3 && atracClassicIDs <= 6 - 2 * std::min(atracPlusIDs, 3u));
+  for(u32 id : range(6)) {
+    auto& a = atracs[id];
+    s(a.codec); s(a.state); s(a.channels); s(a.outputChannels); s(a.frameBytes); s(a.frameSamples); s(a.delay);
+    s(a.dataOff); s(a.fileDataEnd); s(a.firstValidSample); s(a.endSample); s(a.looped); s(a.loopStart);
+    s(a.loopEnd); s(a.monoFrames);
+    bytes(a.extra);
+    s(a.buffer); s(a.bufferByte); s(a.secondBuffer); s(a.secondBufferByte); s(a.loaded); s(a.decodePos);
+    s(a.curFileOff); s(a.streamOff); s(a.streamDataByte); s(a.framesToSkip); s(a.curBuffer); s(a.secondStreamOff);
+    s(a.loopNum); s(a.ended); s(a.error); s(a.firstEnd); s(a.lapEnd); s(a.readLap); s(a.writeLap); s(a.writeOff);
+    s(a.writeFileOff); s(a.loopsAhead);
+    bytes(a.recent);
+    if(s.reading()) a.decoder.reset();
+    u32 from = a.codec == 0x1000 ? 0 : atracPlusIDs;
+    u32 to = a.codec == 0x1000 ? atracPlusIDs : atracPlusIDs + atracClassicIDs;
+    check(!a.codec || ((a.codec == 0x1000 || a.codec == 0x1001) && id >= from && id < to));
+    check(a.state == 0 || (a.codec && a.state >= 2 && a.state <= 6));
+    if(!a.state) continue;
+    bool plus = a.codec == 0x1000;
+    check(a.frameSamples == (plus ? 2048u : 1024u) && a.delay == (plus ? 368u : 69u) && a.frameBytes);
+    if(!a.frameBytes) continue;  //(refused: what follows divides by it)
+    check(a.channels >= 1 && a.channels <= 2);
+    check(a.outputChannels == 2 || (a.outputChannels == 1 && a.channels == 1));
+    check(a.dataOff <= a.fileDataEnd && a.firstValidSample <= u64(a.endSample) + 1);
+    check(a.extra.size() <= 64 && (a.recent.empty() || a.recent.size() == a.frameBytes));
+    check(a.framesToSkip <= 2 && a.curBuffer <= 2 && (!a.curBuffer || a.state == 6) && a.loopNum >= -1);
+    check(a.curBuffer < 2 || a.ended);
+    check(a.looped || (!a.loopStart && !a.loopEnd && a.state <= 4));
+    if(a.state == 3) check(a.loaded <= a.fileDataEnd && a.fileDataEnd <= a.bufferByte);
+    if(a.curBuffer) check(a.streamDataByte <= a.fileDataEnd);  //(then the second buffer's: the rest of the file)
+    if(a.state < 4) continue;
+    u64 firstLap = a.firstEnd, laps = a.lapEnd;
+    check(laps >= a.frameBytes && laps <= a.bufferByte && firstLap <= a.bufferByte && firstLap >= a.frameBytes);
+    u64 readEnd = a.readLap ? laps : firstLap, writeEnd = a.writeLap ? laps : firstLap;
+    check(a.streamOff < readEnd && a.writeOff < writeEnd && a.writeLap - a.readLap <= 1);
+    u64 ring = a.writeLap == a.readLap ? u64(a.writeOff) - a.streamOff : readEnd - a.streamOff + a.writeOff;
+    check(a.writeLap == a.readLap ? a.writeOff >= a.streamOff : a.writeOff <= a.streamOff);
+    check(a.curBuffer || a.streamDataByte == ring);
+    check(a.loopsAhead <= a.bufferByte / a.frameBytes + 1);
+  }
+  if(s.reading() && atracContexts) {
+    bool found = false;
+    for(auto& block : blocks) found |= block.address == atracContexts && block.size >= 6 * 256;
+    check(found);
+  }
+  //threads' dispatching held off, and sceLibFont's resolution (a positive number, as sceFontSetResolution keeps it)
+  s(dispatchSuspended);
   for(auto& resolution : fontResolution) {
     u32 bits;
     memcpy(&bits, &resolution, 4);
