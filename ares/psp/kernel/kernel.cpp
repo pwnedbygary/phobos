@@ -7,6 +7,7 @@ namespace ares::PlayStationPortable {
 #include "threads.cpp"
 #include "sysmem.cpp"
 #include "io.cpp"
+#include "ctrl.cpp"
 #include "display.cpp"
 #include "system.cpp"
 
@@ -44,16 +45,31 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory) : cpu(cpu), memory(memory) {
   add("StdioForUser",      "sceKernelStdin",                &Kernel::sceKernelStdin);
   add("StdioForUser",      "sceKernelStdout",               &Kernel::sceKernelStdout);
   add("StdioForUser",      "sceKernelStderr",               &Kernel::sceKernelStderr);
-  add("IoFileMgrForUser",  "sceIoWrite",                    &Kernel::sceIoWrite);
-  add("IoFileMgrForUser",  "sceIoRead",                     &Kernel::sceIoRead);
-  add("IoFileMgrForUser",  "sceIoClose",                    &Kernel::sceIoClose);
-  add("IoFileMgrForUser",  "sceIoLseek",                    &Kernel::sceIoLseek);
   add("IoFileMgrForUser",  "sceIoOpen",                     &Kernel::sceIoOpen);
+  add("IoFileMgrForUser",  "sceIoClose",                    &Kernel::sceIoClose);
+  add("IoFileMgrForUser",  "sceIoRead",                     &Kernel::sceIoRead);
+  add("IoFileMgrForUser",  "sceIoWrite",                    &Kernel::sceIoWrite);
+  add("IoFileMgrForUser",  "sceIoLseek",                    &Kernel::sceIoLseek);
+  add("IoFileMgrForUser",  "sceIoLseek32",                  &Kernel::sceIoLseek32);
+  add("IoFileMgrForUser",  "sceIoRemove",                   &Kernel::sceIoRemove);
+  add("IoFileMgrForUser",  "sceIoMkdir",                    &Kernel::sceIoMkdir);
+  add("IoFileMgrForUser",  "sceIoRmdir",                    &Kernel::sceIoRmdir);
+  add("IoFileMgrForUser",  "sceIoRename",                   &Kernel::sceIoRename);
+  add("IoFileMgrForUser",  "sceIoChdir",                    &Kernel::sceIoChdir);
+  add("IoFileMgrForUser",  "sceIoGetstat",                  &Kernel::sceIoGetstat);
   add("IoFileMgrForUser",  "sceIoDopen",                    &Kernel::sceIoDopen);
   add("IoFileMgrForUser",  "sceIoDread",                    &Kernel::sceIoDread);
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
-  add("IoFileMgrForUser",  "sceIoChdir",                    &Kernel::sceIoChdir);
-  add("IoFileMgrForUser",  "sceIoGetstat",                  &Kernel::sceIoGetstat);
+  add("sceCtrl",           "sceCtrlSetSamplingCycle",       &Kernel::sceCtrlSetSamplingCycle);
+  add("sceCtrl",           "sceCtrlGetSamplingCycle",       &Kernel::sceCtrlGetSamplingCycle);
+  add("sceCtrl",           "sceCtrlSetSamplingMode",        &Kernel::sceCtrlSetSamplingMode);
+  add("sceCtrl",           "sceCtrlGetSamplingMode",        &Kernel::sceCtrlGetSamplingMode);
+  add("sceCtrl",           "sceCtrlPeekBufferPositive",     &Kernel::sceCtrlPeekBufferPositive);
+  add("sceCtrl",           "sceCtrlPeekBufferNegative",     &Kernel::sceCtrlPeekBufferNegative);
+  add("sceCtrl",           "sceCtrlReadBufferPositive",     &Kernel::sceCtrlReadBufferPositive);
+  add("sceCtrl",           "sceCtrlReadBufferNegative",     &Kernel::sceCtrlReadBufferNegative);
+  add("sceCtrl",           "sceCtrlPeekLatch",              &Kernel::sceCtrlPeekLatch);
+  add("sceCtrl",           "sceCtrlReadLatch",              &Kernel::sceCtrlReadLatch);
   add("sceDisplay",        "sceDisplaySetMode",             &Kernel::sceDisplaySetMode);
   add("sceDisplay",        "sceDisplaySetFrameBuf",         &Kernel::sceDisplaySetFrameBuf);
   add("sceDisplay",        "sceDisplayGetFrameBuf",         &Kernel::sceDisplayGetFrameBuf);
@@ -121,7 +137,10 @@ auto Kernel::power() -> void {
   nextVblank = VblankCycles;
   vblanks = 0;
   blocks.clear();
+  files.clear();
+  nextFile = 3;
   workingDirectory = "ms0:/";
+  controller = {};
   display = {};
   memory.write(4, Trampoline, ThreadReturnCode << 6 | 0x0c);  //syscall: the thread's entry function returned
   memory.write(4, Trampoline + 4, 0x0000'000d);                //break: never reached
@@ -161,6 +180,7 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
   for(auto& skipped : module.skipped) note("the loader left out " + skipped);
 
   cpu.power(module.entry);
+  if(auto folder = programFolder(path); !folder.empty()) workingDirectory = folder;  //relative paths start there
   u32 pathLength = path.size() + 1;  //the path, with its terminating zero
   if(pathLength > 4_KiB) {
     error = "the program's path is too long";
@@ -181,26 +201,26 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
   return true;
 }
 
-//Runs the program for up to instructions instructions (fewer if it ends, or every thread waits on something that
-//will never come), keeping time and waking threads as their moments come. Returns how many ran.
-auto Kernel::run(u64 instructions) -> u64 {
-  u64 done = 0;
-  while(done < instructions && !exited) {
+//Runs the program for up to budget cycles of the PSP's time (less if it ends, or every thread waits on something that
+//will never come): threads run, and while they all wait, time jumps to the next thing due, waking threads as their
+//moments come. A frame's worth (VblankCycles) is a frame, however much of it the program spent waiting. Returns how
+//many cycles passed.
+auto Kernel::run(u64 budget) -> u64 {
+  u64 start = cycles, end = cycles + budget;
+  while(cycles < end && !exited) {
     if(!current) {
       reschedule();
-      if(!current && !idle()) break;
+      if(!current && !idle(end)) break;
       continue;
     }
-    u64 ran = cpu.run(std::min(instructions - done, std::max<u64>(1, untilNextEvent())));
-    done += ran;
-    cycles += ran;
+    cycles += cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
     if(current && cpu.scc.halted) {  //the CPU stopped by itself: a halt instruction, or an exception nobody handled
       note("the CPU stopped in thread " + current->name);
       break;
     }
     events();
   }
-  return done;
+  return cycles - start;
 }
 
 //The code a library's function gets: the same for every import of the same NID, so a stub works whichever module

@@ -868,6 +868,24 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 8: files and controls — 2026-10-03
+
+Branch `cursor/psp-files-2b67`, stacked on `cursor/psp-hle-2b67` (to be added to GitHub stack #106, which the user
+keeps; the API can't add to stacks). Devices are host folders (`Kernel::mount()`), with paths normalized inside the
+kernel so nothing outside a device's folder can be reached, names found whatever their case, and 15 file and folder
+functions; the controller, following uOFW's ctrl.c, is sampled at each vertical blank or on the program's own
+timer and keeps its last 64 samples (peek, read with how many are new, negative, latch, analog stick, one waiting
+reader). `Kernel::run()` now budgets the PSP's time rather than instructions. A second test program
+(`tools/psp-test-programs/system`) uses files and the controls through newlib and runs from start to end. Checks: 34
+groups on the Mac (UBSan) and in `phobos-linux` (ASan and UBSan, with the real programs); fourteen broken versions
+each failed (the case one on Linux only, macOS's file system ignoring case itself). Reviews (read in full) found
+symlinks leading out of a device's folder, an overflowing controller sample count, the sampling cycle unused (now a
+timer) and backslashed program paths, all fixed; the last found the latch emptied for a second waiting thread, and
+uOFW showed the latch read doesn't wait and buffer reads wait only when nothing is new (always waiting halved the
+speed of a program that waits for the frame and then reads), so the controller was reworked. Their claim about
+`sceIoLseek`'s registers was disproved by psp-gcc's own code (offset in a2/a3, whence in t0). Open for the PSP: does
+a second latch read in one sampling cycle wait (pspsdk's notes) or not (uOFW)? Next: the GE (phase 5).
+
 ## PSP core, part 7: the first HLE functions — 2026-10-03
 
 Branch `cursor/psp-hle-2b67`, stacked on `cursor/psp-loader-2b67`: `ares/psp/kernel/` gets the HLE kernel. NIDs

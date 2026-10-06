@@ -7,6 +7,7 @@ int main() {
   Tests tests = memoryTests();
   for(auto& test : loaderTests()) tests.push_back(test);
   for(auto& test : kernelTests()) tests.push_back(test);
+  for(auto& test : fileTests()) tests.push_back(test);
   for(auto& [name, run] : tests) {
     currentTest = name;
     int before = failures;
