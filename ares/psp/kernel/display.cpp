@@ -1,8 +1,11 @@
 //The display: where the program's frame is in memory and how it's laid out (the screen shows it; the system reads
 //it from here), and the vertical blank, when a new frame starts.
 
-//(mode, width, height)
+//(mode, width, height). The PSP's screen is the only mode (0) and its one size, 480x272: anything else is refused,
+//and the display left as it was (PPSSPP's notes on the hardware).
 auto Kernel::sceDisplaySetMode() -> void {
+  if(arg(0) != 0) return result(ErrorInvalidMode);
+  if(arg(1) != 480 || arg(2) != 272) return result(ErrorInvalidSize);
   display.mode = arg(0);
   display.width = arg(1);
   display.height = arg(2);

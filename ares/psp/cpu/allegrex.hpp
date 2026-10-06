@@ -495,6 +495,7 @@ struct Allegrex {
 
     bool enabled = false;
     u32 executed = 0;  //how many instructions the last block ran: each block sets it as it leaves
+    u32 codeMemory = 32_MiB;  //how much compiled code may fill before it all goes and compiling starts afresh
     bump_allocator allocator;
     std::vector<std::unique_ptr<Section>> sections;
 

@@ -75,6 +75,8 @@ object PhobosCore {
     external fun setSavesPath(path: String)
     /** The folder name for the next game's PS1 memory cards: its name without the disc number. */
     external fun setMemoryCardKey(key: String)
+    /** The PSP's memory stick: a folder the user picked, or "" for the shared one in the saves folder. */
+    external fun setPspMemoryStickPath(path: String)
     external fun setVulkanCachePath(path: String)
     external fun setNativeLibraryDir(path: String)
     external fun setFirmwarePath(path: String)

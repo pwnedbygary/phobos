@@ -30,6 +30,7 @@ namespace Media {
   #include "saturn.cpp"
   #include "supergrafx.cpp"
   #include "playstation.cpp"
+  #include "playstation-portable.cpp"
   #include "sg-1000.cpp"
   #include "sc-3000.cpp"
   #include "super-famicom.cpp"
@@ -76,6 +77,7 @@ auto Medium::create(string name) -> std::shared_ptr<Pak> {
   if(name == "Saturn") return std::make_shared<Media::Saturn>();
   if(name == "SuperGrafx") return std::make_shared<Media::SuperGrafx>();
   if(name == "PlayStation") return std::make_shared<Media::PlayStation>();
+  if(name == "PlayStation Portable") return std::make_shared<Media::PlayStationPortable>();
   if(name == "SG-1000") return std::make_shared<Media::SG1000>();
   if(name == "SC-3000") return std::make_shared<Media::SC3000>();
   if(name == "SC-3000 Tape") return std::make_shared<Media::SC3000Tape>();

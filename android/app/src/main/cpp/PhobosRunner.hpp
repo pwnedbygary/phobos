@@ -108,6 +108,8 @@ namespace ares {
   auto setSavesPath(const char* path) -> void;
   // The folder name for the next game's PS1 memory cards (its name without the disc number).
   auto setMemoryCardKey(const char* key) -> void;
+  // The PSP's memory stick: a folder the user picked, or empty for the shared one in the saves folder.
+  auto setPspMemoryStickPath(const char* path) -> void;
   auto setVulkanCachePath(const char* path) -> void;
   auto setNativeLibraryDir(const char* path) -> void;
   auto setFirmwarePath(const char* path) -> void;

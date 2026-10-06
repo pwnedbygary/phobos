@@ -868,6 +868,33 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP in the app: the core as an ares system, in Phobos's Android app — 2026-10-05
+
+Branch `cursor/psp-app-2b67`, stacked on `cursor/psp-flash0-dump-2b67` (for stack #106). At the user's request ("the
+remainder of the emulator core so that it can be hooked into the Phobos front end"; integration first, homebrew in
+the app before retail games): the PSP as an ares system (`ares/psp/psp.cpp` and `system/`: node tree, frame loop,
+controls, memory stick, the recompiler with the interpreter as fallback), mia's PSP medium and system, and the
+Android app's entry (runner, JNI table, launch names, touch layout, icon, HUD label, a PSP Memory Stick path
+setting). docs/psp-core.md, part 13, describes it.
+- **Found on the way:** libchdr's `MIN`/`MAX` macros (Android's builds read CD images) collide with the Allegrex's
+  instructions, so psp.hpp undefines them; the runner wrote empty states as saved (now refused for any core); the
+  kernel kept the last game's mounts (the system now clears them at power-on); building sljit's C file and the C++
+  with different build modes (sljitConfigPre.h's `SLJIT_DEBUG`) crashed the recompiler in a scratch host build, so
+  the new test builds everything with `BUILD_DEBUG`, as the parts' tests do. nall's `memory::map()` passed `mmap`'s
+  `MAP_FAILED` on as a pointer, so no bump allocator could see a refused mapping: it returns null now.
+- **Review:** a general-purpose reviewer (three medium findings: the recompiler's fallback could never trigger, the
+  `MAP_FAILED` above; every PSP quit would have said "Save Failed!" with Auto-Save State on, so the app now leaves
+  states out for the PSP; ISO and CSO files listed but never run, so they're off the Library until the core reads
+  them; ten low: the machine kept after unloading, a crash logged every frame, sceDisplaySetMode trusting any size,
+  .prx modules in the Library, a copied program's disc being the shared cache, zipped programs refused, tests and
+  docs claiming more than they checked, `ms0:/./` paths, two statements doing nothing, a dated comment; all fixed).
+- **Checks:** `tests/psp/ares/run-tests.sh` (new; 93 checks), the parts' 86 groups, the CPU's 56, and the app's unit
+  tests. On the RP6 (installed with `install -r`, data kept): cube, beginobject, controller and
+  hello at 60 frames a second, from the app's own files folder through a launch intent (`am start` with the `psp`
+  system extra); the memory stick folder was made under the user's saves path. The test programs pushed there
+  (`Android/data/com.phobos.emulator/files/psp-test`) are ours, built from pspsdk's samples.
+- **Not yet:** ISO/CSO images, save states, sceAudio, retail games (decryption, more HLE modules), sceFont.
+
 ## PSP tools: a flash0 dumper for the user's PSP — 2026-10-04
 
 Branch `cursor/psp-flash0-dump-2b67`, stacked on `cursor/psp-ge-lighting-2b67` (for stack #106). At the user's
