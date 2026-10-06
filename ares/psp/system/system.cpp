@@ -16,12 +16,13 @@ auto load(Node::System& node, string name) -> bool {
 //host folder holding the PSP's system fonts (the .pgf files of the owner's own PSP's flash0:/font), none for a PSP
 //without them; "Recompiler", "true" to run the CPU's recompiler (the default) or "false" to run the interpreter
 //alone; "GE Threads", how many threads draw the GE's pictures (ge/threads.cpp), 0 (the default) for one fewer than
-//the host has cores, 1 for the GE's own alone. Every count draws the very same pixels.
+//the host has cores, 1 for the GE's own alone, and no more than twice the host's cores, nor 64 (more would only wait
+//their turn). Every count draws the very same pixels.
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
   if(name == "Recompiler") system.recompile = value.boolean();
-  if(name == "GE Threads") system.geThreads = value.natural();
+  if(name == "GE Threads") system.geThreads = std::min<u64>(value.natural(), System::MostGeThreads);
   return true;
 }
 
@@ -181,8 +182,9 @@ auto System::power(bool reset) -> void {
     kernel.exited = true;
   };
   cpu.recompiler.enabled = recompile;
-  u32 cores = std::thread::hardware_concurrency();
-  ge.setThreads(geThreads ? geThreads : std::max(1u, cores ? cores - 1 : 1));
+  u32 cores = std::thread::hardware_concurrency();  //(0 where the host can't tell)
+  u32 most = std::min(cores ? 2 * cores : MostGeThreads, MostGeThreads);
+  ge.setThreads(geThreads ? std::min(geThreads, most) : std::max(1u, cores ? cores - 1 : 1));
   unmappedReports = 0;
   soundOwed = 0;
   programHash = 0;  //until a program starts

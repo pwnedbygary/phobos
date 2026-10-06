@@ -89,11 +89,25 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   u32 rows = ~0u;
   if(format.through && !vertices.empty()) {
     s32 minX = 65536, maxX = -65536, minY = 65536, maxY = -65536;
-    float minV = 65536, maxV = -65536;
+    f64 minV = 65536, maxV = -65536;
     for(auto& vertex : vertices) {
       minX = std::min(minX, fixed(vertex.x)), maxX = std::max(maxX, fixed(vertex.x));
       minY = std::min(minY, fixed(vertex.y)), maxY = std::max(maxY, fixed(vertex.y));
-      minV = std::min(minV, vertex.v), maxV = std::max(maxV, vertex.v);
+      minV = std::min<f64>(minV, vertex.v), maxV = std::max<f64>(maxV, vertex.v);
+    }
+    //A sprite turned a quarter has v running across x, and its first column's middle may lie a sixteenth of a pixel
+    //left of its left corner (its left edge reaches that much further: rectangle()), where v is a sixteenth of a
+    //pixel's step (|dv| over the corners' distance in sixteenths) past the corner's. Its v's reach widens by that,
+    //and by a 65536th of a texel more, which the rounding of v there and here can't come near.
+    if(kind == Sprites) {
+      for(u32 n = 0; n + 1 < count; n += 2) {
+        auto &from = vertices[n], &to = vertices[n + 1];
+        s32 x0 = fixed(from.x), y0 = fixed(from.y), x1 = fixed(to.x), y1 = fixed(to.y);
+        if(x0 == x1 || y0 == y1 || (x0 < x1) == (y0 < y1)) continue;
+        f64 beyond = std::abs(f64(to.v) - f64(from.v)) / std::abs(x1 - x0) + 1.0 / 65536;
+        minV = std::min(minV, std::min<f64>(from.v, to.v) - beyond);
+        maxV = std::max(maxV, std::max<f64>(from.v, to.v) + beyond);
+      }
     }
     if(kind == Points) {
       region.left = std::max(region.left, minX >> 4), region.right = std::min(region.right, maxX >> 4);
@@ -104,8 +118,8 @@ auto GE::primitive(u32 kind, u32 count) -> void {
       region.top = std::max(region.top, floorDivide(minY - 8 + 15, 16));
       region.bottom = std::min(region.bottom, floorDivide(maxY - 8, 16));
     }
-    //(a sprite's or point's v doesn't leave its vertices', so it repeats round only from below 0, or below a half
-    //when it may be filtered; a triangle's steps may take it a hair past them)
+    //(a sprite's or point's v stays inside that reach, so it repeats round only from below 0, or below a half when
+    //it may be filtered; a triangle's steps may take it a hair past its vertices')
     u32 height = std::min<u32>(texture.height, 512);
     bool filters = commands[TextureFilter] & 0x101;
     float lowest = kind == Sprites || kind == Points ? (filters ? 0.5f : 0.0f) : 2.0f;
@@ -295,19 +309,11 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
   if(area == 0) return;
   if(facing && (area > 0) != (facing > 0)) return;
   if(area < 0) std::swap(p[1], p[2]), area = -area;  //the same corners, turned the way the edges are worked out for
-  //Whether the edge from-to is a right edge or a flat bottom one (the other corner left of or above it): a pixel
-  //exactly on such an edge isn't drawn.
-  auto rightOrBottom = [](const Corner& other, const Corner& from, const Corner& to) {
-    if(from.y == to.y) return other.y < from.y;
-    return other.x < from.x + (to.x - from.x) * (other.y - from.y) / (to.y - from.y);
-  };
+  //(which pixels on its edges it draws: triangleRows(), raster.cpp)
   Job job{};
   job.kind = Job::Kind::Triangle;
   job.look = &look;
   auto& r = job.triangle;
-  r.bias[0] = rightOrBottom(p[0], p[1], p[2]) ? -1 : 0;
-  r.bias[1] = rightOrBottom(p[1], p[2], p[0]) ? -1 : 0;
-  r.bias[2] = rightOrBottom(p[2], p[0], p[1]) ? -1 : 0;
   s64 minX = std::min({p[0].x, p[1].x, p[2].x}), maxX = std::max({p[0].x, p[1].x, p[2].x});
   s64 minY = std::min({p[0].y, p[1].y, p[2].y}), maxY = std::max({p[0].y, p[1].y, p[2].y});
   job.firstX = std::max<s32>(floorDivide(s32(minX) - 8 + 15, 16), pixel.left);

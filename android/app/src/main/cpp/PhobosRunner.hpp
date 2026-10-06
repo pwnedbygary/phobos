@@ -113,6 +113,10 @@ namespace ares {
   auto setPspMemoryStickPath(const char* path) -> void;
   // The PSP's system fonts: the folder holding the user's copies of their PSP's flash0 fonts, or empty for none.
   auto setPspFontsPath(const char* path) -> void;
+  // How many threads draw the PSP's pictures (its core's "GE Threads", as a game starts): 0 for all cores but one.
+  auto setPspDrawingThreads(s32 threads) -> void;
+  // The whole multiple the PSP's picture is drawn at in the window (1 to 4), so the compositor scales it little.
+  auto setPictureMultiple(s32 multiple) -> void;
   auto setVulkanCachePath(const char* path) -> void;
   auto setNativeLibraryDir(const char* path) -> void;
   auto setFirmwarePath(const char* path) -> void;

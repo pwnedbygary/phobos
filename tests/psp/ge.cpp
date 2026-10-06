@@ -764,6 +764,12 @@ static auto displayPicture() -> void {
   memory.write(2, VRAM, 0x0f21);  //4444: alpha ignored
   m.kernel.picture(pixels);
   CHECK(pixels[0], 0xffff'2211);
+  //through VRAM's second copy, whose rows aren't side by side in the host's memory (it rearranges each 16 KiB), a
+  //pixel at a time, as that copy has them
+  m.call("sceDisplaySetFrameBuf", {VRAM + Memory::VRAMSize, 512, 3, 0});
+  memory.write(4, VRAM + Memory::VRAMSize + (5 * 512 + 7) * 4, 0x0044'5566);
+  m.kernel.picture(pixels);
+  CHECK(pixels[5 * 480 + 7], 0xff44'5566);
 
   //The screen's one mode and size; any other is refused, and the picture stays 480x272.
   CHECK(m.call("sceDisplaySetMode", {0, 480, 272}), 0);

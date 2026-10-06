@@ -35,7 +35,8 @@
 //Read from memory as before, texel by texel, are: DXT textures (not emulated yet: texel() notes it as it's used);
 //a texture some of whose bytes have no memory behind them (each such read is reported, as before); and a texture
 //the primitive may draw over itself (its frame buffer or depth buffer and the texture overlap), whose texels then
-//change as the primitive draws, as they do on the PSP.
+//are the pixels it has drawn so far, as this core always drew it, kept so that every pixel stays as it was.
+//Whether a PSP's texture reads see the pixels of the primitive drawing them hasn't been measured.
 
 static constexpr u32 TexelBits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
 
@@ -192,7 +193,7 @@ auto GE::decode(Sampler& t, const PixelState& pixel, const Region& region, u32 r
     if(drawsOver(pixel, first, last, region.left, region.top, region.right, region.bottom)) return {};
   }
   bool indexed = t.format >= 4;
-  TextureKey key{t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), rows, t.swizzled, 0, 0, 0, 0, 0};
+  TextureKey key{t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), t.swizzled, 0, 0, 0, 0, 0};
   if(indexed) key.clutFormat = t.clutFormat, key.clutShift = t.clutShift, key.clutMask = t.clutMask,
               key.clutOffset = t.clutOffset, key.clutHash = clutHash;
   std::shared_ptr<Decoded> entry;
@@ -202,13 +203,24 @@ auto GE::decode(Sampler& t, const PixelState& pixel, const Region& region, u32 r
     if(!std::memcmp(entry->palette.data(), clut, sizeof(clut))) entry->paletteChecked = clutVersion;
     else forget(entry.get()), entry.reset();  //another palette with the same hash: decoded afresh
   }
-  if(!entry) {
+  //A texture is kept once, with as many rows as any primitive has reached: one reaching fewer draws from it as it
+  //is, one reaching more gets a longer copy, the rows kept already copied into it (still as their memory is, or
+  //they'd be gone) and the rest decoded.
+  if(!entry || entry->rows < rows) {
+    auto shorter = std::move(entry);
     drawnFirst(low, high - low);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
     entry = std::make_shared<Decoded>();
     entry->key = key;
-    entry->texels.resize(key.width * key.height);
+    entry->rows = rows;
+    entry->texels.resize(key.width * rows);
+    u32 from = 0;
+    if(shorter) {
+      std::copy(shorter->texels.begin(), shorter->texels.end(), entry->texels.begin());
+      from = shorter->rows;
+      forget(shorter.get());
+    }
     auto decodeWith = [&](const auto& read) {
-      for(u32 v = 0; v < key.height; v++) {
+      for(u32 v = from; v < rows; v++) {
         for(u32 u = 0; u < key.width; u++) entry->texels[v * key.width + u] = texelFrom(t, clut, u, v, read);
       }
     };
@@ -228,19 +240,16 @@ auto GE::decode(Sampler& t, const PixelState& pixel, const Region& region, u32 r
     for(u32 page = entry->firstPage; page <= entry->lastPage; page++) textures.pages[page].push_back(entry.get());
     textures.bytes += entry->texels.size() * 4;
     textures.entries[key] = entry;
-    while(textures.bytes > TextureCacheBudget) {  //too much kept: the ones unused longest go
-      Decoded* oldest = nullptr;
-      for(auto& [other, kept] : textures.entries) {
-        if(kept != entry && (!oldest || kept->used < oldest->used)) oldest = kept.get();
-      }
-      if(!oldest) break;
-      forget(oldest);
-    }
+    entry->place = textures.recent.insert(textures.recent.begin(), entry.get());
+    //too much kept: those unused longest go (this one, the last used, stays even past the budget by itself)
+    while(textures.bytes > textures.budget && textures.recent.size() > 1) forget(textures.recent.back());
+  } else {
+    textures.recent.splice(textures.recent.begin(), textures.recent, entry->place);
   }
-  entry->used = ++textures.clock;
   textures.last = entry;
   t.decoded = entry->texels.data();
   t.decodedWidth = key.width;
+  t.decodedRows = rows;
   return entry;
 }
 
@@ -262,6 +271,7 @@ auto GE::forget(Decoded* entry) -> void {
     if(list.empty()) textures.pages.erase(found);
   }
   textures.bytes -= entry->texels.size() * 4;
+  textures.recent.erase(entry->place);
   if(textures.last.get() == entry) textures.last.reset();
   auto found = textures.entries.find(entry->key);
   //(the last reference but a drawing primitive's: entry may be gone after this)
@@ -271,6 +281,7 @@ auto GE::forget(Decoded* entry) -> void {
 auto GE::dropTextures() -> void {
   textures.entries.clear();
   textures.pages.clear();
+  textures.recent.clear();
   textures.last.reset();
   textures.bytes = 0;
 }
@@ -299,8 +310,10 @@ alwaysinline auto GE::texelAxis(float coordinate, u32 size, bool clamp, bool lin
   return {inside(base >> 8), inside((base >> 8) + 1), base >> 4 & 15};
 }
 
-//The texel at (x, y), inside the texture: decoded already, or read from memory.
+//The texel at (x, y), inside the texture: decoded already, or read from memory. (A row past those draw.cpp worked
+//out the primitive may reach isn't in the decoded copy.)
 alwaysinline auto GE::fetch(const Sampler& t, s32 x, s32 y) -> u32 {
+  assert(!t.decoded || u32(y) < t.decodedRows);
   return t.decoded ? t.decoded[y * t.decodedWidth + x] : texel(t, x, y);
 }
 

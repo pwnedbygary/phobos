@@ -8,6 +8,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -169,6 +170,7 @@ struct GE {
     u32 clutFormat, clutShift, clutMask, clutOffset;
     const u32* decoded;  //its texels already decoded (Decoded), decodedWidth to a row; or none: read from memory
     u32 decodedWidth;
+    u32 decodedRows;     //the rows the primitive may take texels from (draw.cpp), all of them decoded
   };
 
   //A texture decoded: every texel inside it as 8888, exactly as texel() would read it from memory, so that drawing
@@ -176,16 +178,15 @@ struct GE {
   //pixel (texture.cpp). It's good only while the memory it came from stays as it was, so the GE watches those
   //pages (Memory::watch()), and a write to any of them, by anyone, throws it away.
   struct TextureKey {
-    //everything texel() reads for a texel inside the texture; the palette's settings and contents (by its hash)
-    //only for palette indices, 0 otherwise
-    u32 address, bufferWidth, format, width, height, swizzled;  //width, height: the texels kept (at most 512 a side;
-                                                                //rows a primitive may reach, maybe fewer)
+    //everything texel() reads for a texel inside the texture, but how many rows; the palette's settings and
+    //contents (by its hash) only for palette indices, 0 otherwise
+    u32 address, bufferWidth, format, width, swizzled;  //width: the texels kept a row (at most 512)
     u32 clutFormat, clutShift, clutMask, clutOffset;
     u64 clutHash;
     auto operator==(const TextureKey&) const -> bool = default;
     struct Hash {
       auto operator()(const TextureKey& k) const -> size_t {
-        u64 h = k.clutHash ^ u64(k.address) << 32 ^ k.bufferWidth << 20 ^ k.format << 16 ^ k.width << 4 ^ k.height;
+        u64 h = k.clutHash ^ u64(k.address) << 32 ^ k.bufferWidth << 20 ^ k.format << 16 ^ k.width << 4;
         h ^= u64(k.swizzled) << 31 ^ u64(k.clutFormat) << 40 ^ u64(k.clutShift) << 44 ^ u64(k.clutMask) << 50;
         h ^= u64(k.clutOffset) << 58;
         h *= 0x9e37'79b9'7f4a'7c15ull;
@@ -195,19 +196,22 @@ struct GE {
   };
   struct Decoded {
     TextureKey key;
+    u32 rows = 0;             //the texture's rows kept, from its top (at most 512): the most a primitive has reached
     std::vector<u8> palette;  //for palette indices: the palette it was decoded with (clut, all of it)
     u32 paletteChecked = 0;   //the palette's version (clutVersion) last found to be that palette
     u32 firstPage = 0, lastPage = 0;  //the pages it came from (Memory::pagesOf())
-    u64 used = 0;             //when it was last used: past the cache's budget, the oldest go first
-    std::vector<u32> texels;  //key.width x key.height
+    std::list<Decoded*>::iterator place;  //where it is in the cache's list, the last used first
+    std::vector<u32> texels;  //key.width x rows
   };
   struct TextureCache {
     std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
     std::unordered_map<u32, std::vector<Decoded*>> pages;  //the decoded textures that came from each page
+    std::list<Decoded*> recent;                            //all of them, the last used first
     std::shared_ptr<Decoded> last;                         //the last one found, looked at first
-    u64 bytes = 0, clock = 0;
+    u64 bytes = 0;
+    u64 budget = TextureCacheBudget;                       //(tests may make it smaller)
   };
-  static constexpr u64 TextureCacheBudget = 64 << 20;  //the texels kept, in bytes, before the oldest go
+  static constexpr u64 TextureCacheBudget = 64 << 20;  //the texels kept, in bytes, before those unused longest go
 
   //The pixel pipeline's settings, gathered once a primitive (pixel.cpp).
   struct PixelState {
@@ -263,7 +267,6 @@ struct GE {
     } sprite;
     struct Triangle {
       s64 x[3], y[3];                  //the corners (sixteenths), turned clockwise
-      s64 bias[3];                     //-1 for an edge whose pixels are its neighbour's
       float total;                     //twice its area
       bool flat, shines, perspective;
       u32 flatColor, flatSpecular;
