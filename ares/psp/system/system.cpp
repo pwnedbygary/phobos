@@ -12,13 +12,15 @@ auto load(Node::System& node, string name) -> bool {
   return system.load(node, name);
 }
 
-//What the front end tells the core before loading: "Memory Stick", the host folder standing for ms0:; "Recompiler",
-//"true" to run the CPU's recompiler (the default) or "false" to run the interpreter alone; "GE Threads", how many
-//threads draw the GE's pictures (ge/threads.cpp), 0 (the default) for one fewer than the host has cores, 1 for the
-//GE's own alone, and no more than twice the host's cores, nor 64 (more would only wait their turn). Every count
-//draws the very same pixels.
+//What the front end tells the core before loading: "Memory Stick", the host folder standing for ms0:; "Fonts", the
+//host folder holding the PSP's system fonts (the .pgf files of the owner's own PSP's flash0:/font), none for a PSP
+//without them; "Recompiler", "true" to run the CPU's recompiler (the default) or "false" to run the interpreter
+//alone; "GE Threads", how many threads draw the GE's pictures (ge/threads.cpp), 0 (the default) for one fewer than
+//the host has cores, 1 for the GE's own alone, and no more than twice the host's cores, nor 64 (more would only wait
+//their turn). Every count draws the very same pixels.
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
+  if(name == "Fonts") system.fonts = value;
   if(name == "Recompiler") system.recompile = value.boolean();
   if(name == "GE Threads") system.geThreads = std::min<u64>(value.natural(), System::MostGeThreads);
   return true;
@@ -118,6 +120,7 @@ auto System::unload() -> void {
   kernel.power();
   kernel.devices.clear();
   kernel.disc.reset();
+  kernel.systemFonts.clear();
   memory.scratchpad = {};
   memory.vram = {};
   memory.ram = {};
@@ -202,6 +205,8 @@ auto System::power(bool reset) -> void {
   } else {
     report(true, "no memory stick folder: ms0: isn't there");
   }
+  //the system's fonts, read from the owner's folder at each power on, as a PSP has them in its flash
+  kernel.fontsFrom((const char*)fonts);
   startProgram();
 }
 
@@ -328,7 +333,8 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
-//field means: 7 since sound (docs/psp-core.md's part 21) and part 22 merged, each branch having made a version 6 of
+//field means: 8 since the font library holds libraries, open fonts and its calls into the program (part 23); 7 since
+//sound (docs/psp-core.md's part 21) and part 22 merged, each branch having made a version 6 of
 //its own: part 21's as sound came to be heard (the output the channels make, the SRC channel's place in its samples,
 //VAG voices' decoders), part 22's as interrupts held off came to keep the CPU for the thread holding them and their
 //flag became the CPU's alone (mfic and mtic's, on as a program starts), the kernel keeping no copy of it (a version
@@ -340,7 +346,7 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //dialogs), each of which came first on a branch of its own as a version 2, two layouts that differ from each other
 //and from these. A state of any older version is refused by it.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 7;
+static constexpr u32 StateVersion = 8;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.

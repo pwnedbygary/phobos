@@ -48,6 +48,7 @@ struct System {
   Kernel kernel{cpu, memory, ge};
 
   string memoryStick;          //the host folder standing for ms0: (option "Memory Stick")
+  string fonts;                //the host folder with the PSP's system fonts, from the owner's flash0 (option "Fonts")
   bool recompile = true;       //the CPU's recompiler on, the interpreter its fallback (option "Recompiler")
   u32 geThreads = 0;           //how many threads draw (option "GE Threads"): 0 for one fewer than the host's cores
   static constexpr u32 MostGeThreads = 64;  //and at most, nor more than twice the host's cores

@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.FirmwareIds
 import com.phobos.emulator.util.FirmwareStatus
+import com.phobos.emulator.util.PspFonts
 
 data class FirmwareInfo(
     val emulator: String,
@@ -53,6 +54,12 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     var selectedFirmwareKey by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(settings.systemFirmwarePaths) { viewModel.refreshFirmwareStatus(context, settings.systemFirmwarePaths) }
+    val pspFonts by viewModel.pspFonts.collectAsState()
+    LaunchedEffect(Unit) { viewModel.refreshPspFonts() }
+    // The PSP's fonts come as a folder (their flash0's font folder): its .pgf files are copied into the app's own files.
+    val fontsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) viewModel.importPspFonts(context, uri)
+    }
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && selectedFirmwareKey != null) {
@@ -158,6 +165,10 @@ fun FirmwareSettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 }
 
                 LazyColumn(modifier = Modifier.weight(1f)) {
+                    item {
+                        PspFontsRow(pspFonts) { fontsLauncher.launch(null) }
+                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                    }
                     items(firmwareList) { info ->
                         val path = settings.systemFirmwarePaths[info.systemKey] ?: ""
                         FirmwareRow(info, path, status[info.systemKey]) {
@@ -213,6 +224,45 @@ fun FirmwareRow(info: FirmwareInfo, path: String, status: FirmwareStatus?, onCli
                 status == FirmwareStatus.Verified -> MaterialTheme.colorScheme.primary
                 else -> MaterialTheme.colorScheme.error
             }
+        )
+    }
+}
+
+/**
+ * The PSP's system fonts, from the user's own PSP: tapping picks the font folder of their flash0 dump (or the dump,
+ * or its flash0), whose .pgf files the app copies into its own files. [held] is how many of the eighteen it holds,
+ * and whether they were found by themselves in Download/FLASH0DUMP rather than picked.
+ */
+@Composable
+fun PspFontsRow(held: PspFonts.Held, onClick: () -> Unit) {
+    val count = held.count
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RowText("PlayStation Portable", Modifier.weight(2f))
+        RowText("PSP fonts (from your PSP's flash0)", Modifier.weight(1.5f))
+        RowText("World", Modifier.weight(1f))
+        RowText(
+            when {
+                count == 0 -> "(unset): pick flash0's font folder"
+                held.found -> "$count of 18 fonts, found in ${PspFonts.DUMP_FOLDER}"
+                else -> "$count of 18 fonts copied"
+            },
+            Modifier.weight(3f),
+            color = if (count == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
+        )
+        RowText(
+            when (count) {
+                0 -> ""
+                18 -> "Complete"
+                else -> "Partial"
+            },
+            Modifier.weight(1.4f),
+            color = if (count == 18) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
         )
     }
 }

@@ -18,8 +18,10 @@ now start ask for (callbacks, sound output's timing, power, interrupt handlers, 
 saves), is on `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67`; parts 18 and 19, decryption and
 loading modules, are on `cursor/psp-decrypt-2b67` (#144), which `cursor/psp-hle-games-2b67` has since merged.
 Part 21, sound (sceAudio's channels mixed into the system's stream, sceSasCore's voices heard), is on
-`cursor/psp-sound-2b67`, on top of part 20's `cursor/psp-hle-games2-2b67`. Part 24, making the GE fast (part 23 is
-the fonts'), is on `cursor/psp-ge-speed-2b67`, on top of part 22's `cursor/psp-hle-games3-2b67`.
+`cursor/psp-sound-2b67`, on top of part 20's `cursor/psp-hle-games2-2b67`. Part 23, the system fonts (sceLibFont
+drawing the owner's own flash0 fonts), is on `cursor/psp-fonts-2b67`, on top of part 22's
+`cursor/psp-hle-games3-2b67`; part 24, making the GE fast, on `cursor/psp-ge-speed-2b67`, on top of part 22's too,
+with part 23 merged in.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -61,6 +63,15 @@ the fonts'), is on `cursor/psp-ge-speed-2b67`, on top of part 22's `cursor/psp-h
   a Vulkan and an OpenGL renderer as options for speed, still as accurate as possible. Accuracy is not negotiable in
   the software renderer: it is the reference, and every speedup must draw exactly the pixels it drew before (part
   24).
+- **The owner's choices of 2026-10-06 (night)**:
+  - The GE's drawing threads: by default as many as the device has cores, but one; a setting changes it (part 24:
+    the app's PSP setting "Drawing threads").
+  - The system fonts: found by themselves in the device's `Download/FLASH0DUMP` (the dumper's folder) where it's
+    there, plus Settings' picker for any other folder; never in a backup (part 23).
+  - Game music and movies (ATRAC3+, MP3, the PSP's video): through FFmpeg's LGPL decoders, built in an
+    LGPL-compliant way.
+  - The order from here: after the fonts and speed, the stuck games further (Burnout Dominator's GE hang, Peace
+    Walker after its install, the GTAs into play), then the codecs, then later the Vulkan and OpenGL renderers.
 
 ## Sources
 
@@ -1030,9 +1041,9 @@ entries that matched "PlayStation" anywhere in a name (the disc button, the Dual
 On the RP6 (2026-10-05): pspsdk's cube, beginobject and controller samples and the hello program run at 60 frames a
 second (cube's frame takes about 8 ms of the 16.7), the controller sample sees a button pressed, and the memory stick
 folder is made beside the saves. pspsdk's font sample stays black: sceLibFont, the PSP's font library (it reads
-flash0's fonts), isn't there yet. A program started from another app's intent is read where it is when the app can
-read the path; otherwise Phobos copies it into its cache first, as it does every game, so a program's own files
-beside it aren't there.
+flash0's fonts), isn't there yet (part 23 adds it). A program started from another app's intent is read where it is
+when the app can read the path; otherwise Phobos copies it into its cache first, as it does every game, so a
+program's own files beside it aren't there.
 
 Tests: `tests/psp/ares/run-tests.sh` builds the whole core as Phobos does, with ares's node tree and a test platform
 standing in for the front end (93 checks):
@@ -1960,7 +1971,8 @@ why (what games accept).
   library starts, lists none, finds and opens none (NOT_FOUND written where an error's address is given), a font's
   details refused; points and pixels convert at 128 dots an inch, or sceFontSetResolution's (above 0 and below 10^9;
   anything else, not-a-number too, refused with uOFW's INVALID_VALUE, pspfont.h giving the library no errors). Peace
-  Walker and Gunhound EX ask for fonts and draw their text without them.
+  Walker and Gunhound EX ask for fonts and draw their text without them. (Part 23 reads the owner's fonts; this
+  stays the library for a PSP without them.)
 - **Odds and ends**: sceRtcGetCurrentClock (a time zone), GetCurrentClockLocalTime (the host's), GetTime_t, and
   GetDosTime/SetDosTime (rtc/convert's figures: 2107-09-11 24:00 is 4281057280; before 1980 or after 2107, -1);
   sceOpenPSIDGetOpenPSID (one made-up console: "PHOBOS"); sceDisplayGetAccumulatedHcount (286 lines a frame) and
@@ -2459,6 +2471,186 @@ CONTINUE", as before; all three silent there (Burnout's title music is ATRAC3+, 
 refused, and GTA's sound thread makes its sas grains and blocking outputs at their pace with no voice keyed on).
 The Street Fighter III port's sound is part 21's capture second for second, but starts about 4 s later: its 4.4 MB
 of reads as it boots now take the disc's 3.2 s (this part's synchronous reads).
+
+## Part 23: the system fonts
+
+On branch `cursor/psp-fonts-2b67`, on top of part 22's `cursor/psp-hle-games3-2b67`. Games that print with the
+PSP's own fonts now show their text. Those fonts are the PGF files in flash0:/font, part of Sony's firmware, which
+Phobos never has: they come from the owner's own PSP (a flash0 dump, such as `tools/psp-flash0-dump` makes). The app
+copies them into its own files, from the dump's folder in the device's Download folder by itself, or from a folder
+the owner picks, and the core reads them from there as the PSP powers on. Nothing of Sony's is in the repository,
+the APK, a commit or a backup: the tests make fonts of their own. Without the fonts, sceLibFont is part 20's
+stand-in, which starts and finds none, as before.
+
+Sources: the owner's eighteen fonts (firmware 6.61), read field by field with scratch scripts outside the repository
+until every glyph and shadow in them decoded to exactly its record's length; pspautotests' font programs (tests/font:
+newlib, fontlist, open, openfile, openmem, optimum, find, fontinfo, fontinfobyindex, charinfo, shadowinfo, the glyph
+images whole, clipped and at fractions of a pixel, the image rectangles, altcharcode, resolution, fonttest) and the
+results they recorded on a PSP; pspautotests' libfont.h and vitasdk's libpgf headers (the PS Vita's font library is
+the same one) for the structures and errors. No other emulator's code was read: PPSSPP and JPCSP each have a PGF
+reader, and neither was opened.
+
+- **The PGF reader** (`pgf.hpp`, `pgf.cpp`; the header's comment explains the format and its RLE in plain words). A
+  PGF holds one font at one size: a header, four tables of measurements (dimensions, x and y adjustments, advances,
+  each entry two numbers in 64ths of a pixel), a shadow map, the Korean font's lists of code ranges (revision 3), a
+  character map from Unicode codes to glyph numbers, the glyphs' pointers, and the glyphs. All but the header are
+  packed: a number takes as many bits as the font says, lowest bit first. A glyph's record gives its picture's size
+  and place, says which measurements are table entries and which are written out, names its shadow, and holds its
+  picture: 16 shades a pixel, row by row or column by column, run-length encoded (a nibble below 8 repeats the next
+  one that many times plus one; 8 or more is followed by 16 minus it shades as they are). A composite (a Korean
+  syllable) names up to three glyphs drawn at their own places instead. A shadow, a blurred picture drawn under a
+  character, is carried in the record of the character the shadow map names. The fonts are the user's files, so
+  nothing in them is trusted: opening checks the header and that every table lies inside the file, and each glyph is
+  checked as it's read (its record inside the file, its table entries in their tables), so a damaged glyph is missing
+  on its own and the rest still draw.
+- **The library** (`font.cpp`, rewritten): sceFontNewLib and DoneLib; GetNumFontList, GetFontList and
+  GetFontInfoByIndexNumber; FindOptimumFont and FindFont; Open (a system font), OpenUserFile (a game's PGF file, read
+  whole or a piece at a time), OpenUserMemory and Close; GetFontInfo; GetCharInfo, GetCharImageRect,
+  GetCharGlyphImage and GetCharGlyphImage_Clip, and the same four of a character's shadow; SetAltCharacterCode;
+  Flush; SetResolution and the four conversions between points and pixels.
+- **It works in the game's memory, as Sony's does**: libfont is a user module the game carries, and sceFontNewLib's
+  parameters name the game's own alloc and free. The library asks them for every block it keeps, in the sizes and
+  order newlib and open recorded: its own 76 bytes (the library handle, which games read and write), the handles
+  (76 bytes each, up to 9), their data (560 each), the list of fonts (168 bytes each); for a system font its nine
+  tables; for a file read whole, the file, then a 12-byte record; for a font in the game's memory, the record. A
+  font already open in the library is shared and asks for nothing. Close gives an open font's blocks back in the
+  order recorded, DoneLib each font's, then its own. The calls are made as callbacks are (events.cpp): the thread
+  that called the library runs the game's function on its own stack, returning to a new trampoline syscall (the
+  sixth), and the library carries on from there. An alloc that gives nothing ends the call: what was given goes
+  back, and the call fails out of memory, as newlib recorded.
+- **Finding**: the eighteen fonts are listed in the PSP's order (jpn0, ltn0 to ltn15, kr0), each with its family,
+  style, language and country. FindOptimumFont gives, of the fonts with the most matches to what the style asks for
+  (size, family, style, sub-style, language, region, country, name, file name), the one nearest the size asked for
+  (the first of those as near), else the last of them, and font 0 for a style that matches none and gives no size;
+  FindFont gives the first font with everything asked for, the size exactly, or -1. The size asked for is the
+  smaller of the two (across and down) at the style's resolution, or the library's, measured in points at the font's
+  own; a height alone asks for 0, as both recorded.
+- **Measuring**: GetFontInfo is the header's biggest measurements (as written and in pixels), the widest and tallest
+  picture, the glyph and shadow counts (shadows 0 for a font read into memory, as fontinfo recorded), the font's
+  style and 4 bits a pixel. A character's info is its picture's size and place and its measurements: the ascender is
+  its y adjustment across, the descender that less its height (charinfo). A code below the font's first gives an
+  empty glyph; one the font hasn't got, the alternative character ('_' to start with, kept in the library, as
+  altcharcode recorded); a missing alternative, an empty glyph. A shadow has its character's measurements and its own
+  picture and place (shadowinfo).
+- **Drawing**: the picture is added into the game's buffer, each pixel up to the brightest (never erasing), in the
+  two formats that draw: 4 bits a pixel, the left one in the low nibble, and a byte a pixel (shade n as 17n). The
+  other three (4 bits the other way round, 24 and 32 bits) leave the buffer untouched, as charglyphimagexfrac
+  recorded. A position's fraction of a pixel across shares each pixel with the next column, which gets its shade
+  times the fraction over 64, rounded down; the fraction down is dropped (charglyphimagexfrac). Every write keeps to
+  the buffer, the clip rectangle (_Clip's, its width and height taken as unsigned) and the memory there is.
+- **Resolution**: SetResolution keeps each library's resolution in it (where games read it), refusing 0, negatives,
+  minus infinity and not-a-number; the conversions use the library's, as resolution recorded.
+
+The rest of Phobos:
+- **The core's option** `option("Fonts", folder)` (`system.cpp`): the host folder holding the fonts. As the PSP
+  powers on, `fontsFrom()` reads the eighteen by name, any case, each whole, checked and remembered by a hash, and
+  none bigger than 4 MiB (the biggest of the PSP's, jpn0.pgf, is 1.5 MB); one missing, damaged or too big keeps its
+  place (opening it fails, and a note says which), and with none the stand-in stays.
+- **In the app** (`PspFonts.kt`): the copies are in the app's own files, `firmware/PlayStation Portable/font`, and
+  the runner hands that folder to the core as a game loads (`setPspFontsPath`), or nothing when it's empty. They
+  come two ways, each copying only the eighteen, by name (any case), of 1 byte to 4 MiB each, every one through a
+  file beside it renamed over the old copy once whole; a font that can't be copied (unreadable, empty, too big,
+  whatever goes wrong) is left out on its own, its part copy removed, and named.
+  - **By themselves**: at the app's start, before a PSP game loads and as Settings, Firmware opens, while the app
+    has fewer than the eighteen, it looks in the device's `Download/FLASH0DUMP` (the dumper's folder: its
+    `flash0/font`, its `font`, or the folder itself) and copies those it hasn't got; with all eighteen it reads
+    nothing outside its own files. The app has no access to all files: Android lets it read there through a folder
+    grant that covers it (as it reads games in place, through the folders picked for them), or where the device's
+    own Android allows it without one (the RP6 does: below), and a font there must open, not only be listed. Where
+    the app can't read there, nothing happens and the picker remains. The row then says "N of 18 fonts, found in
+    Download/FLASH0DUMP".
+  - **Picked**: Settings, Firmware, the row "PSP fonts (from your PSP's flash0)" picks a folder (the system's folder
+    picker): flash0's `font` folder, or the dump or flash0 folder above it. The row says how many of the eighteen
+    are there ("N of 18 fonts copied"), and the picker's message names the fonts it couldn't copy, apart from
+    finding none.
+- **Never in a backup**: Android's backups, to the cloud and from device to device, leave the app's `firmware/`
+  folder out (`res/xml/backup_rules.xml`, `data_extraction_rules.xml`), so the copies never leave the device through
+  Phobos. After a restore the fonts are imported again: by themselves while they're in Download/FLASH0DUMP and the
+  app can read it there, else with the picker.
+- **States** (version 8; 1 to 7 refused): the libraries, the fonts open in them (where each came from and its hash,
+  not its bytes) and any call into the game part way through. Loading reads each font again from where it came from
+  (the system's from the folder, a file of the game's whole, a font in memory from the game's memory) and refuses the
+  state if one is missing or differs, as it does every handle, count and call that doesn't add up.
+
+What the games do now, on the host with the owner's fonts (frames under `/tmp/fonts-runner/final`, outside the
+repository):
+- **Gunhound EX**: its save notice (nine lines of Japanese in jpn0: the game saves, needs 160 KB, saves by itself,
+  and loads only as it starts), which was a black screen, then NOW LOADING and its logos as before.
+- **Metal Gear Solid Peace Walker**: "Checking Memory Stick™", the disclaimer on Militaires Sans Frontières (its
+  accented letters too), its player's name ("PSP / Is this name OK?" with CANCEL and OK), the control scheme and its
+  BUTTON CONFIG, and the DATA INSTALL screen and "Installing... (Progress: 6%)", which part 22 had to guess its way
+  through: the game's own pictures showed, but none of its words.
+- On the RP6, the settings row was given the dump's own folder (`Download/FLASH0DUMP`), found `flash0/font` in it
+  and copied the eighteen; the games weren't started there.
+- On the RP6 again, with the review's fixes (installed over the app, data kept, the picker's grant on the dump's
+  folder gone with the update): at start the app found all eighteen it had copied and looked for nothing ("all 18
+  here, none looked for"); as Settings, Firmware opened, the row said "18 of 18 fonts copied", Complete, and the
+  dump's folder was found by itself and read without any grant ("18 in
+  /storage/emulated/0/Download/FLASH0DUMP/flash0/font, readable": the app has no storage permission there, and the
+  files are a file manager's, not media, so the RP6's own Android allows it). The automatic copy itself wasn't seen
+  there: the app already had all eighteen, which nothing may remove on the device; the host's tests copy them.
+
+Tests (`tests/psp/run-tests.sh`: 221 groups, both sanitizers; `tests/psp/ares`: 264 checks):
+- `font-maker.hpp` builds PGFs from scratch (glyphs by rows and columns, table entries and written-out
+  measurements, shadows, revision 3's ranges and composites), and the eighteen system fonts as stand-ins: each a few
+  glyphs, its sizes and names as the PSP's list has them, font 1 drawing the 'A' pspautotests' ltn0.pgf (made from
+  Liberation Sans) drew on a PSP.
+- `font.cpp`: "pgf read back" (every field and picture), "pgf damaged" (every length the file can be cut to, and a
+  thousand random bytes changed, under both sanitizers: refused or read, never past the file), "fonts memory" (every
+  block's size and order, the library's fields, too many fonts, the order blocks go back, an alloc that fails at each
+  step), "fonts found" (every case optimum and find recorded), "fonts measured" (fontinfo's, charinfo's and
+  shadowinfo's values), "fonts drawn" (the recorded rows at 10.5 and 10 63/64 pixels, both formats that draw, the
+  three that don't, adding up, lines of 0 and 1 byte, the clip cases), "fonts of the program's own" (files read
+  whole and a piece at a time, fonts in memory; a file opened by a path relative to the working folder, loaded into
+  a fresh machine; a font in memory opened with -1, read no further than 8 MiB, and opened again where it's open
+  without its memory read again), "fonts resolution", "fonts states" (saved part way through the game's alloc at
+  three points, loaded into another machine, carrying on; refused without the fonts or with a different kr0; a call
+  opening a font of the game's memory, refused as read whole) and "fonts folder" (a font over 4 MiB not read).
+- `states.cpp`'s "state fields": a library with an open font and a call part way through, each field changed, and
+  eighteen states refused (too many handles, a handle past the count, counts that don't add up, a font nobody
+  holds, memory that isn't a PGF, a font of the game's memory read whole, a font that differs, a call on a thread
+  that isn't there, a machine without the fonts, and so on).
+- `tests/psp/ares`: the option (no fonts without it; with it, the eighteen places, one read, one missing; none kept
+  once the game unloads), and a version 7 state refused.
+- The app: `PspFontsTest` (only the eighteen are fonts, any case; 1 byte to 4 MiB, as the size says and as the copy
+  finds it; any failure kept to its own font, its part copy removed, the rest copied; the picker's message telling
+  failures apart from none found; the folder found from flash0 or the dump above it; and, with fake storage, the
+  dump's fonts found by themselves in `flash0/font` or `font`, only those missing copied, nothing read with all
+  eighteen, nothing from a dump the app can't read, the found mark taken away by a pick).
+- Broken versions each failed: the fraction's share rounded up, pixels stored rather than added, blocks given back in
+  another order, the optimum's ties, a font's hash not checked on loading, columns read as rows, the list's count
+  not capped, the descender, a call's blocks not saved, the fraction down kept, codes below the first not empty, and
+  table entries not checked (found by the address sanitizer).
+
+Review: a general-purpose reviewer; the clean-room spot check found `pgf.cpp` and `font.cpp` independent. One medium
+and four low findings, all fixed, each with a test that failed before the fix; the state's layout didn't change (still
+version 8).
+- Medium: a state could say a font of the game's memory was read whole into it (mode 1), which
+  sceFontOpenUserMemory never makes. Loaded, a call part way through opening one ended as a whole file's open does,
+  writing its record through a second block it never asked for (the address sanitizer's heap overflow). Such a state
+  is refused now, and an open's ending asks where the font came from before its mode.
+- Low: a game's font file opened by a path relative to its working folder (after sceIoChdir) was kept as given, and
+  loading reads fonts again before it puts the working folder back, so a fresh session refused the state. The path
+  is kept whole as the font opens.
+- Low: a font in memory given a length past its end (openmem's -1) was copied to the end of RAM at every open and
+  every state loaded. 8 MiB at most are read now, and one the library has open at that address is shared without
+  its memory being read again.
+- Low: the picker copied any .pgf, whatever its name or size, and one file it couldn't read stopped the rest and
+  was reported as no fonts there. Now: the eighteen by name only, 1 byte to 4 MiB each, every failure kept to its
+  own file (its part copy removed) and told apart from finding none; and the core doesn't read a font file over
+  4 MiB.
+- Low: Android's backups took the copied fonts along (the rules excluded nothing); the firmware folder is left out
+  of them now.
+
+Uncertain: a shadow's flags are reported as the file has them (the PSP gave other values for the same font: what
+they mean isn't known); the Korean font's country (3 is a guess); codes kept for composites' parts aren't looked up
+on their own; where a composite's parts overlap, their shades add; what's in a font's 12-byte record, and the order
+of a file's two blocks; a file opened a piece at a time is read through the kernel's files, not the game's own
+callbacks (so a game reading its fonts from an archive of its own wouldn't find them); drawing asks the game for no
+memory (a PSP borrows two blocks a font till it closes); a closed handle answers while its font stays open, and a
+second close is refused; the order blocks of a font opened from a file or memory go back in; the library refusing
+calls made from an interrupt handler or with no thread; codes below the first giving nothing, where a PSP might
+draw something for control codes.
 
 ## Part 24: making the GE fast
 

@@ -772,6 +772,80 @@ Decisions. Original code; no PPSSPP or JPCSP source read.
 - **Next:** setting up for less and drawing bands as primitives arrive (the GE's thread is GTA's and Burnout's
   longest path now), SIMD four pixels at a time, the GPU renderers.
 
+## PSP core: the system fonts — 2026-10-06
+
+Branch `cursor/psp-fonts-2b67`, on top of `cursor/psp-hle-games3-2b67` (the entry below), not pushed.
+docs/psp-core.md, part 23, describes it. sceLibFont draws the PSP's own fonts (the PGF files of flash0:/font) where
+part 20's stand-in found none, so games that print with them show their text. Written from the owner's own fonts
+(read field by field with scratch scripts) and pspautotests' font programs and the results they recorded on a PSP;
+no other emulator's code read (PPSSPP's and JPCSP's PGF readers weren't opened).
+- **How the user gives Phobos the fonts**: they're Sony's firmware, never in the repository, the APK, a commit or
+  a backup. Copy them from your own PSP with `tools/psp-flash0-dump` (it leaves `PSP/GAME/FLASH0DUMP/flash0/` on
+  the memory stick) and put the `FLASH0DUMP` folder in the device's Download folder: while the app has fewer than
+  the eighteen, it finds them there by itself (at start, before a PSP game loads, and as Settings, Firmware opens)
+  and copies those it hasn't got, where Android lets it read there (a folder grant that covers it, or a device that
+  allows it, as the RP6 does). Otherwise, or from any other folder: Settings, Firmware, "PSP fonts (from your PSP's
+  flash0)", and pick `flash0/font` (or `flash0`, or the `FLASH0DUMP` folder: the font folder is found inside).
+  Either way only the eighteen by name (any case), 1 byte to 4 MiB each, go into the app's own files
+  (`firmware/PlayStation Portable/font`), and the row says how many are there and whether they were found by
+  themselves ("found in Download/FLASH0DUMP") or picked ("copied"); picking again replaces them. The runner hands
+  that folder to the core as a PSP game loads (core option "Fonts"); with none there the library is the stand-in.
+  Android's backups leave the app's `firmware/` folder out, so after a restore the fonts are imported again
+  (by themselves if they're still in Download/FLASH0DUMP and readable there).
+- **What's there**: a PGF reader (`ares/psp/kernel/pgf.cpp`: header, tables, character maps, glyphs, run-length
+  pictures by rows and columns, shadows, the Korean font's composites; every offset and size checked against the
+  file, a damaged glyph missing on its own); the library (`font.cpp`): NewLib/DoneLib, the font list, FindOptimumFont
+  and FindFont, Open, OpenUserFile, OpenUserMemory, Close, GetFontInfo(ByIndexNumber), character and shadow info,
+  image rectangles and glyph images (whole and clipped, the 4- and 8-bit formats drawing, fractions of a pixel across
+  shared as recorded), the alternative character, SetResolution and the four conversions. The game's alloc and free
+  are called for every block, in the sizes and order recorded, the calling thread running them as callbacks run.
+- **States**: version 8 (1 to 7 refused): libraries, open fonts and calls part way through saved and checked;
+  fonts read again from where they came from on loading, the state refused if one is missing or differs.
+- **On the host** with the owner's fonts (frames in `/tmp/fonts-runner/final`, not in the repository): Gunhound EX's
+  save notice in Japanese (a black screen before); Peace Walker's "Checking Memory Stick™", its MSF disclaimer, its
+  player's name ("Is this name OK?"), control scheme, BUTTON CONFIG, DATA INSTALL and "Installing... (Progress: N%)",
+  all of which had shown none of their words.
+- **Checks**: `tests/psp/run-tests.sh` 221 groups with both sanitizers (ten new: "pgf read back", "pgf damaged",
+  "fonts memory", "fonts found", "fonts measured", "fonts drawn", "fonts of the program's own", "fonts resolution",
+  "fonts states", "fonts folder"; "state fields" refuses seventeen more states); `tests/psp/ares` 264 checks (the
+  option; a version 7 state refused); the app's unit tests (251, `PspFontsTest` new) and the modern release build.
+  Twelve broken versions each failed a test. On the RP6: the build installed over the app (data kept); the new row,
+  given `Download/FLASH0DUMP`, found `flash0/font` and copied the eighteen ("18 of 18 fonts copied", Complete). No
+  game was started there (quitting would have written its auto state).
+- **Review:** a general-purpose reviewer; the clean-room spot check found `pgf.cpp` and `font.cpp` independent; one
+  medium and four low findings, all fixed, each with a test that failed before it. Medium: a state could say a font
+  of the game's memory was read whole (mode 1), which sceFontOpenUserMemory never makes, and a call part way through
+  opening one then ended as a whole file's open, writing through a block it never asked for (the address
+  sanitizer's heap overflow); refused now, and an open's ending asks where the font came from before its mode.
+  Lows: a game's font file opened by a path relative to its working folder was kept as given and read again on
+  loading before the working folder was back, so a fresh session refused the state (kept whole now); a font in
+  memory given a length past its end (-1) was copied to the end of RAM at every open and state load (8 MiB at most
+  now, and one open at that address shared without reading memory again); the picker copied any .pgf of any size,
+  and one unreadable file stopped the rest and was reported as none found (the eighteen by name, 1 byte to 4 MiB,
+  each failure kept to its file, its part copy removed, and named apart from none found; the core skips a font
+  file over 4 MiB); Android's backups took the copies (the firmware folder is left out now: `backup_rules.xml`,
+  `data_extraction_rules.xml`, cloud and device transfer). The state's layout didn't change: still version 8.
+  Then the owner's choice of the same night: the fonts found by themselves in Download/FLASH0DUMP, as above.
+- **Checks after the review**: `tests/psp/run-tests.sh` 221 groups with both sanitizers (checks added to "fonts of
+  the program's own", "fonts states" and "fonts folder"; "state fields" refuses eighteen states); `tests/psp/ares`
+  264 checks; the app's unit tests 259 (`PspFontsTest` 15: the eighteen by name and size, failures kept apart and
+  reported, and the dump found by itself in fake storage, only missing fonts copied, nothing read with all eighteen
+  or from a folder the app can't read) and the modern release build. On the RP6 (installed over the app, data
+  kept; the picker's grant on the dump's folder gone with the update): at start "all 18 here, none looked for"; as
+  Settings, Firmware opened, the row "18 of 18 fonts copied", Complete, and the dump's folder found by itself and
+  readable without any grant ("18 in /storage/emulated/0/Download/FLASH0DUMP/flash0/font, readable": the app has no
+  storage permission and the files are a file manager's, so the RP6's own Android allows it). The automatic copy
+  itself wasn't seen there, since the app already had all eighteen and nothing may delete them on the device; the
+  host tests cover it. No game was started.
+- **Uncertain**: shadow flags reported raw (the PSP's differ: their meaning isn't known); kr0's country; a game's
+  font file opened a piece at a time is read through the kernel's files, not the game's callbacks; drawing borrows
+  no memory from the game; the order of a few frees; see part 23's list. Whether other devices let the app read
+  Download/FLASH0DUMP without a grant as the RP6 does (stock Android doesn't, for another app's files).
+- **Next**: try more games that use the system fonts; Peace Walker's and Gunhound's text on the device. Then, as
+  the owner chose, after the GE's speed (another branch's): the stuck games further (Dominator's GE hang, Peace
+  Walker after its install, the GTAs into play), then the codecs (FFmpeg's LGPL decoders), then the Vulkan and
+  OpenGL renderers (docs/psp-core.md, Decisions).
+
 ## PSP core: the games, further — 2026-10-06
 
 Branch `cursor/psp-hle-games3-2b67`, on top of `cursor/psp-hle-games2-2b67` (#146) and, merged since, of

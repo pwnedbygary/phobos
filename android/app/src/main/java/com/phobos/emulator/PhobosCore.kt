@@ -84,6 +84,8 @@ object PhobosCore {
     external fun setMemoryCardKey(key: String)
     /** The PSP's memory stick: a folder the user picked, or "" for the shared one in the saves folder. */
     external fun setPspMemoryStickPath(path: String)
+    /** The PSP's system fonts: the folder of the user's own copies (util/PspFonts.kt), or "" for none. */
+    external fun setPspFontsPath(path: String)
     external fun setVulkanCachePath(path: String)
     external fun setNativeLibraryDir(path: String)
     external fun setFirmwarePath(path: String)
