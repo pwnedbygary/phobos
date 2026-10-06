@@ -24,7 +24,7 @@ drawing the owner's own flash0 fonts), is on `cursor/psp-fonts-2b67`, on top of 
 too, with part 23 merged in. Part 25, the games further still (Burnout Dominator's GE hang explained, movies fed and
 taken apart so that Space Invaders Extreme plays), is on `cursor/psp-hle-games4-2b67`, part 24's with part 23's
 merged in. Part 26, music and movies (FFmpeg's LGPL decoders under sceAtrac3plus, sceMp3 and sceMpeg), is on
-`cursor/psp-codecs-2b67`, on top of part 25's.
+`cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`: part 25's, with master merged in).
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -3042,7 +3042,9 @@ checks, the state layout unchanged (version 9).
 
 ## Part 26: music and movies
 
-On branch `cursor/psp-codecs-2b67`, on top of part 25's `cursor/psp-hle-games4-2b67`, not pushed. The owner's choice
+On branch `cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`, part 25's games with the test
+programs and GE measurements in the repository, which carries master's desktop build and the GPL-3.0-or-later
+license), not pushed. The owner's choice
 (2026-10-06, night): the games' music (ATRAC3, ATRAC3plus, MP3) and movies (the PSP's H.264) through FFmpeg's LGPL
 decoders, built in an LGPL-compliant way. Sources: pspsdk's headers (`pspatrac3.h`, `pspmp3.h`, `pspmpeg.h`),
 pspautotests' audio/atrac, audio/mp3 and video/mpeg programs and the results they recorded on a PSP (the programs
@@ -3055,30 +3057,39 @@ release tarball (`https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz`, its SHA-256 
 `8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e`). The script holds the whole configure line:
 `--disable-gpl --disable-nonfree --disable-version3 --disable-programs --disable-doc --disable-everything
 --disable-autodetect --disable-network`, no libavformat, libavfilter, libavdevice, libswscale or libswresample, and
-nothing enabled but the decoders `atrac3`, `atrac3al`, `atrac3p`, `atrac3pal`, `mp3float`, `aac` and `h264`; no
-parsers or demuxers (the libraries take the PSP's containers apart themselves, as part 25 does, and convert samples
-and pixels themselves). The result is two shared libraries, libavcodec (63) and libavutil (61).
+nothing enabled but the decoders the libraries open, `atrac3`, `atrac3p`, `mp3float` and `h264`; no parsers or
+demuxers (the libraries take the PSP's containers apart themselves, as part 25 does, and convert samples and pixels
+themselves). The result is two shared libraries, libavcodec (63) and libavutil (61).
 - Targets: `host` (the tests and runners: macOS here) and `android NDK API` (arm64-v8a with that NDK's clang, the
-  app's minSdk 26, 16 KiB pages). Each build is kept under `.cache/ffmpeg` (or `$PHOBOS_FFMPEG_CACHE`), named by a
-  hash of the script and the compiler, so it's made once; a lock lets the two flavors configure at once; offline, the
-  tarball in the cache (or `$PHOBOS_FFMPEG_TARBALL`) is used. Nothing of FFmpeg is committed.
+  app's minSdk 26, 16 KiB pages); `--name` before them prints only the build's name. Each build is kept under
+  `.cache/ffmpeg` (or `$PHOBOS_FFMPEG_CACHE`), named by a hash of the script and the compiler, so it's made once. A
+  lock lets the two flavors configure at once; it records its build's process and host, and a lock whose process is
+  gone is taken over. The tarball is downloaded into a file of its own and kept only if its hash is right; a wrong
+  one is thrown away and downloaded once more, and if that fails too the script says where to put the tarball by
+  hand or how to build without FFmpeg. Offline, the tarball in the cache (or `$PHOBOS_FFMPEG_TARBALL`) is used. It
+  needs bash, make, curl and xz, and the network the first time. Nothing of FFmpeg is committed.
 - The app: the root `CMakeLists.txt` (option `PHOBOS_FFMPEG`, on) runs the script as it configures for Android,
-  imports the two libraries, defines `ARES_ENABLE_FFMPEG` for the core and links them; Gradle packs them into the APK
+  imports the two libraries, defines `ARES_ENABLE_FFMPEG` for the core (`phobos_core`, the static library both the
+  app's and the desktop program's builds link) and links them into `phobos_android`; Gradle packs them into the APK
   beside Phobos's library (`lib/arm64-v8a/libavcodec.so`, `libavutil.so`), so `./gradlew :app:assembleModernRelease`
-  builds FFmpeg the first time and reuses it after. Off, or in a build without the define, the core has no decoders
-  and the libraries refuse streams as before this part.
+  builds FFmpeg the first time and reuses it after. `-Pphobos.ffmpeg=OFF` passes `-DPHOBOS_FFMPEG=OFF` through
+  Gradle (the README's build section says so). Off, in a build without the define, or in the desktop program (built
+  without FFmpeg for now), the core has no decoders and the libraries refuse streams as before this part.
 - The tests: `tests/psp/run-tests.sh` and `tests/psp/ares/run-tests.sh` build the host FFmpeg and define
-  `ARES_ENABLE_FFMPEG` unless `PSP_FFMPEG=0`. CI caches both builds (`android.yml` keyed on the script and the NDK,
-  `psp-core.yml` on the script) and stages the tarball into `android/dist`, published beside the APKs.
+  `ARES_ENABLE_FFMPEG` unless `PSP_FFMPEG=0`. CI caches both builds, keyed on the build's own name (`--name`: the
+  script and the NDK's revision, or the system and the compiler), so a runner's new compiler makes a new build that's
+  kept in turn, and stages the tarball into `android/dist`, published beside the APKs.
 - The LGPL: FFmpeg's libraries are linked dynamically and ship as separate files that can be replaced by a build of
   the user's own (same interface); their complete source (the tarball) goes out with every release, and the script
   says how they were built. `LICENSE` (the app's Settings, About, Open-source licenses) carries FFmpeg's notice ("This
   software uses libraries from the FFmpeg project under the LGPLv2.1"), who owns it, where its source comes from, the
-  hash, the configure script, how to swap the libraries, and the LGPL 2.1's full text; the About screen says it too.
-  `LicenseNoticesTest` checks the notice, the license text, the version and hash against the script, and that
-  nothing turns GPL on.
-- The APK: 23,741,990 bytes, against 22,520,961 for part 25's build, 1.22 MB (5.4%) more: FFmpeg's two libraries are
-  1,177,949 bytes of it compressed (2,750,512 installed), the core's new code 32 KB.
+  hash, the configure script, how to swap the libraries, the Independent JPEG Group's credit (libavcodec holds
+  FFmpeg's versions of its DCTs, which H.264's error concealment pulls in; FFmpeg's `LICENSE.md` asks for it), and
+  the LGPL 2.1's full text; the About screen says it too. `LicenseNoticesTest` checks the notice, the license text,
+  the version and hash against the script, the IJG's credit, the decoders built, and that nothing turns GPL on.
+- The APK: 23,604,722 bytes, against 22,574,705 for the same branch built with `-Pphobos.ffmpeg=OFF`: 1.03 MB (4.6%)
+  more for FFmpeg's two libraries (2,507,776 bytes installed). (The first build, with the three decoders the review
+  dropped, was 23,741,990, against 22,520,961 for part 25's.)
 
 **The decoders** (`codec.cpp`): the libraries hand an `AudioDecoder` one frame (16-bit samples out, the channels
 interleaved) and a `VideoDecoder` one access unit (a 4:2:0 picture out); the kernel's `audioDecoders` and
@@ -3144,10 +3155,18 @@ done).
 
 **States**: version 10 (9 refused). Saved: the ATRAC IDs' files, positions, rings and the frame decoded last; the MP3
 handles' streams and rings; what each movie library's Media Engine holds (the next access unit, kept sound with its
-time stamps, the held and shown pictures). The decoders aren't saved but made afresh as they're next needed: ATRAC's
-primed with the frame decoded last (as a reset primes it), MP3's from the next frame (whose borrowed bits from the
-frame before are lost: a moment's noise at most), a movie's showing no new picture until a key frame. Loading checks
-each as setting, decoding and feeding leave it, and a decode's wait (due within a frame, no callbacks).
+time stamps, the held and shown pictures, the sound frame decoded last). The decoders aren't saved but made afresh as
+they're next needed: ATRAC's and the movie sound's primed with the frame decoded last (as a reset primes it), MP3's
+from the next frame (whose borrowed bits from the frame before are lost: a moment's noise at most), a movie's showing
+no new picture until one it can start from: an IDR picture, or one whose slices are all I slices (a movie may start
+later stretches from I pictures that aren't IDR ones). Loading checks each as setting, decoding and feeding leave it,
+and a decode's wait (due within a frame, no callbacks). The limits are the runtime's own, in one place each: a
+picture at most `VideoDecoder::MaxSide` (1024) either way, which the H.264 decoder is held to (`max_pixels`) and
+larger pictures are passed over by; a file's fmt extras at most `AudioDecoder::Format::MaxExtra` (64) bytes, the rest
+not kept. In Liberty City Stories, a state saved in its "Rockstar Games Presents" movie (frame 1100) and loaded gave
+the same frames as the run that went on from frame 1260 (black until the movie's next picture to start from, where
+the run that went on shows the title fading in) and the same sound, second by second; Burnout Legends' menu movie
+the same from frame 1440.
 
 What the games do now (the host, the scratch runner from boot, frames and WAVs under `/tmp/codecs-runner/out`; RMS
 and peak per channel over the capture; pitch checked by comparing the strongest frequencies of the game's output
@@ -3175,24 +3194,70 @@ sceMpegAvcCsc's conversion alone 400. Altogether 1.9% of the game's time in Libe
 Burnout Legends' (music and movie at once). On the RP6, Burnout Legends' opening movie and its profile screen over
 the menus' movie ran at 60 frames a second (the HUD's CPU 72% and 54%), with no decoding errors in the app's log.
 
-Tests (`tests/psp/run-tests.sh`: 248 groups with both sanitizers, and without FFmpeg; `tests/psp/ares`: 282 checks,
-with and without):
+Tests (`tests/psp/run-tests.sh`: 259 groups with both sanitizers, and without FFmpeg, #152's six media groups among
+them; `tests/psp/ares`: 282 checks, with and without; the app's unit tests, 264):
 - `atrac.cpp` (new, a stand-in decoder that numbers frames, on files made in sample.at3's shape so the recorded
   numbers apply): "atrac ids", "setting", "whole file", "halfway", "streamed", "looped", "second buffer", "reset",
   "bad frame", "states" (a state part way through a looping stream carries on alike, the decoder primed; a reset
-  straight after a load); "atrac ffmpeg" decodes sample.at3 with FFmpeg when `PSP_AUTOTESTS` names a pspautotests
-  checkout (never committed: it isn't ours).
+  straight after a load), "header sizes" (the review's: below); "atrac ffmpeg" decodes sample.at3 with FFmpeg when
+  `PSP_AUTOTESTS` names a pspautotests checkout (never committed: it isn't ours).
 - `mp3.cpp` (new, made-up 128 kbps frames, padded as an encoder pads them): "mp3 handles", "mp3 stream" (as
   audio/mp3/stream recorded), "mp3 loops" (and a reset by frame, decoding after a load), "mp3 ffmpeg" (sample.mp3).
 - `movies.cpp` (new): "mpeg header"; "mpeg pictures decoded" (an H.264 stream made here of I_PCM macroblocks, whose
   colours are exact, in a made-up PSMF movie: each picture one decode late, its pixels BT.601's, both engines, the
   held picture in a state); "mpeg pictures converted" (sceMpegAvcCsc's part, and all four pixel formats); "mpeg
-  sound access units" (frames out of private stream 1 with their time stamps, through a stand-in decoder).
-- `states.cpp`: "state fields" changes each field of an ATRAC ID streaming, an MP3 handle and a movie library, and
-  refuses IDs outside their codec's, a state there isn't, rings past their buffers, MP3 streams at 48 kHz, pictures of
-  the wrong size, sound stamps out of order, and decodes' waits due in a second or with callbacks.
+  sound access units" (frames out of private stream 1 with their time stamps, through a stand-in decoder); and the
+  review's (below, through a stand-in picture decoder too, so they run without FFmpeg): "mpeg csc part past the
+  picture", "mpeg picture sizes", "mpeg create afresh", "mpeg after a state".
+- `states.cpp`: "state fields" changes each field of an ATRAC ID streaming, an MP3 handle and a movie library (the
+  last sound frame among them), and refuses IDs outside their codec's, a state there isn't, rings past their
+  buffers, MP3 streams at 48 kHz, fmt extras past 64 bytes, pictures of the wrong size or wider than 1024, sound
+  frames of no frame's size, sound stamps out of order, and decodes' waits due in a second or with callbacks.
 - `loader.cpp`: GPREL16 relocations load (the global pointer moves with the module: pspautotests' newer programs have
   them); `tests/psp/ares`: a state of version 9 refused.
+
+**The review** (an independent one of the branch, 2026-10-06: no PPSSPP code found re-expressed, the LGPL handling
+sound but for one credit) found two high-severity bugs and five low ones, each fixed with a test that fails without
+its fix (checked by building the tests with each fix taken out again):
+- **High: sceMpegAvcCsc's part overflowed.** The clamp added the part's left and width (top and height) in 32 bits,
+  so a part of (0, 1, 0, 0xffffffff) wrapped to a small sum, kept its height and read on past the host's picture (a
+  heap over-read, the host's memory written into the game's as pixels); (1, 0, 0xffffffff, 0) made a row of 4 GiB.
+  It now compares a width with what's left of the picture (`width > pictureWidth - x`), as the height. "mpeg csc part
+  past the picture" converts both parts (31 rows, 31 columns); without the fix, AddressSanitizer stops it with the
+  heap-buffer-overflow.
+- **High: atracParse could loop for ever.** A chunk's length moved the walk in 32 bits, so 0xfffffff8 took it back
+  where it was. The walk is in 64 bits now, so it always moves on and leaves at the file's end; the data's end and
+  the sample counts (fact's, or the data's own, and the loop's) are worked out in 64 bits, and what a 32-bit count
+  can't hold is refused with the samples check's 0x80630008. "atrac header sizes" sets the review's 256-byte file
+  (refused as unreadable; without the fix the test never ends) and two files whose data or samples pass 4 GiB.
+- **Low, licensing: the IJG's credit.** Added to FFmpeg's notice in `LICENSE`, and checked by `LicenseNoticesTest`;
+  FFmpeg's error concealment is kept.
+- **Low: sceMpegCreate kept the last movie's Media Engine.** A library made again where one was, without
+  sceMpegDelete, gave the old movie's queued sound, skipped as much of the new one's as the old had taken, and timed
+  its frames from the old movie's. Create now starts afresh; "mpeg create afresh" plays a movie's first sound frame
+  twice, through two decoders.
+- **Low: the runtime made what a state load refuses.** Pictures had no limit (FFmpeg's own is 268 megapixels, packed
+  twice), and loading took 4096 by 4096; fmt extras were kept to 64 KiB, and loading took 64 bytes. Both now have one
+  limit, used by both (above): 1024 each way (more than UMD Video's 720 by 480), and 64 bytes. "mpeg picture sizes"
+  passes over pictures 1040 wide or tall (and FFmpeg's), keeps 1024 by 1024, and saves; "atrac header sizes" keeps
+  64 of 100 extra bytes and saves.
+- **Low: after a load, the movie's sound restarted unprimed, and pictures waited for an IDR one.** The last sound
+  frame is in the state now, and primes the new decoder; pictures also start again from an I picture that isn't an
+  IDR one (keyframe() reads each slice's type). "mpeg after a state" checks both (a P picture, and one with a P
+  slice among its I slices, still waiting). In the games, Liberty City Stories and Burnout Legends carry on after a
+  load mid-movie (above), the same without the I-picture rule: their movies start again from IDR pictures.
+- **Low: building.** The download is checked before it's kept, and tried once more (above); the lock is taken over
+  from a build that's gone; `-Pphobos.ffmpeg=OFF` turns FFmpeg off from Gradle; the README lists the requirements,
+  the switch and `PHOBOS_FFMPEG_TARBALL`; CI's cache keys are the build's own names. Checked with a copy of the
+  script pointed at a file that isn't the tarball (thrown away, tried again, then the guidance), a lock held by a
+  process that's gone (taken over) and by a running one (waited for), a bad tarball named in `PHOBOS_FFMPEG_TARBALL`
+  (refused), and an APK built with `-Pphobos.ffmpeg=OFF`.
+- **Minor: the decoders nothing opens** (aac, atrac3al, atrac3pal) are no longer built; `LICENSE`'s notice lists the
+  four that are, and `LicenseNoticesTest` checks the list against the script's.
+
+With the fixes, on the RP6 (the modern release APK installed over the last, data kept): Liberty City Stories' logo
+movies and Space Invaders Extreme's title screen (its music, on the host) at 60 frames a second, the sound's stream
+steady in both (no underruns after the start; not listened to), nothing about decoding in the app's log.
 
 Seen on the way, not changed:
 - Burnout Legends' title clips 0.34% of its samples: the game's mix of music and effects, summed by the game; a PSP's
