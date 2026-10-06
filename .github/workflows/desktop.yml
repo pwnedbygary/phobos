@@ -1,0 +1,195 @@
+name: Desktop Build
+
+# Builds the desktop program from CMakeLists.txt for master, version tags and pull requests: a
+# Linux x86-64 AppImage with its .zsync, a Windows x64 Phobos.exe and a universal macOS
+# Phobos.app. A version tag attaches them to that tag's GitHub Release, where the AppImage's
+# update information looks for the .zsync. The Android APKs stay on android.yml.
+
+# Branches build through their pull requests; a push trigger for them too would run every
+# commit twice.
+on:
+  push:
+    branches: [ master ]
+    tags: [ '*' ]
+  pull_request:
+  workflow_dispatch:
+
+# A newer commit replaces its branch's run in progress.
+concurrency:
+  group: desktop-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux AppImage
+    # The oldest supported runner, so the AppImage runs on distributions with an older glibc.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ ninja-build pkg-config file \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
+            libdrm-dev libgbm-dev libegl1-mesa-dev libgl1-mesa-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev \
+            libgtk-3-dev
+          pip install --user cmake==3.31.6
+
+      - name: Build
+        run: |
+          cmake --preset linux-x64
+          cmake --build build/linux-x64
+
+      - name: Package AppImage and zsync
+        run: bash scripts/package-linux-appimage.sh build/linux-x64
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: phobos-linux-x86_64
+          path: |
+            dist/*.AppImage
+            dist/*.AppImage.zsync
+          if-no-files-found: error
+
+  windows:
+    name: Windows Phobos.exe
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Set up MSYS2 (UCRT64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+
+      - name: Build
+        run: |
+          cmake --preset windows-x64
+          cmake --build build/windows-x64
+
+      - name: Package Phobos.exe
+        run: bash scripts/package-windows.sh build/windows-x64
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: phobos-windows-x64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS Phobos.app
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Build
+        run: |
+          cmake --preset macos-universal
+          cmake --build build/macos-universal
+
+      # Developer ID signing and notarization run only when the repository has these secrets.
+      - name: Import signing certificate
+        id: signing
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.MACOS_NOTARIZATION_APPLE_ID }}
+          MACOS_NOTARIZATION_TEAMID: ${{ secrets.MACOS_NOTARIZATION_TEAMID }}
+          MACOS_NOTARIZATION_PWD: ${{ secrets.MACOS_NOTARIZATION_PWD }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE" ] || [ -z "$MACOS_CERTIFICATE_NAME" ]; then
+            echo "No signing certificate; Phobos.app is signed ad hoc"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/phobos-signing.keychain-db"
+          password="$(uuidgen)"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "certificate=$MACOS_CERTIFICATE_NAME" >> "$GITHUB_OUTPUT"
+          if [ -n "$MACOS_NOTARIZATION_APPLE_ID" ] && [ -n "$MACOS_NOTARIZATION_TEAMID" ] && [ -n "$MACOS_NOTARIZATION_PWD" ]; then
+            xcrun notarytool store-credentials phobos-notary --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+              --team-id "$MACOS_NOTARIZATION_TEAMID" --password "$MACOS_NOTARIZATION_PWD" --keychain "$keychain"
+            echo "notary=phobos-notary" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package Phobos.app
+        env:
+          MACOS_CERTIFICATE_NAME: ${{ steps.signing.outputs.certificate }}
+          NOTARY_KEYCHAIN_PROFILE: ${{ steps.signing.outputs.notary }}
+        run: bash scripts/package-macos-app.sh build/macos-universal
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: phobos-macos-universal
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Attach to the GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # android.yml creates the release for the tag; wait for it, so both workflows don't race to
+      # create it, and create it only if it never appears.
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          for attempt in $(seq 1 40); do
+            gh release view "$TAG" > /dev/null 2>&1 && break
+            sleep 30
+          done
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --generate-notes --title "$TAG"
+          gh release upload "$TAG" dist/* --clobber
