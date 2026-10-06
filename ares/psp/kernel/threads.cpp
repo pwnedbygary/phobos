@@ -188,6 +188,7 @@ auto Kernel::events() -> void {
     if(sampleController()) woke = true;
   }
   if(audioEvents()) woke = true;
+  if(asyncEvents()) woke = true;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting || !thread->wakeAt || cycles < thread->wakeAt) continue;
     if(thread->wait == Wait::LwMutex) {  //it stops waiting: the mutex has one waiter fewer
@@ -216,7 +217,7 @@ auto Kernel::waiterLeft(Wait wait, u32 id) -> void {
 
 //How many cycles until the next thing that's due (at most until the next vertical blank).
 auto Kernel::untilNextEvent() const -> u64 {
-  u64 next = std::min(nextVblank, nextAudioEvent());
+  u64 next = std::min({nextVblank, nextAudioEvent(), nextAsyncEvent()});
   if(controller.cycle) next = std::min(next, controller.nextSample);
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
@@ -230,7 +231,8 @@ auto Kernel::untilNextEvent() const -> u64 {
 //go each time round, so even a display list that never ends lets the frame end.
 auto Kernel::idle(u64 end) -> bool {
   if(interrupting || (!calls.empty() && interruptsEnabled)) return true;
-  bool timed = geBusy || vblankHandlers();
+  //(a file's asynchronous request being done may wake a thread: one waiting for it, or through its callback)
+  bool timed = geBusy || vblankHandlers() || nextAsyncEvent() != ~0ull;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
     if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;

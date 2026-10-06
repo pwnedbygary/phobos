@@ -161,12 +161,14 @@ auto Kernel::serialize(serializer& s) -> bool {
     s(t.entry); s(t.priority); s(t.initialPriority); s(t.stackSize); s(t.stackBlock); s(t.attributes); s(t.gp);
     s(t.status);
     context(t.context);
-    s(t.wait); s(t.waitID); s(t.waitCount); s(t.waitMode); s(t.waitPointer);
+    s(t.wait); s(t.waitID); s(t.waitCount); s(t.waitMode); s(t.waitPointer); s(t.waitDone); s(t.waitResult);
     s(t.wakeAt); s(t.timeoutPointer); s(t.readySince); s(t.exitStatus); s(t.wakeupCount);
     s(t.callbacks); s(t.inCallback); s(t.callbackID);
     context(t.beforeCallback);
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
+    s(w.done); s(w.resultPointer);
+    check(t.wait <= Wait::Mailbox && w.wait <= Wait::Mailbox);
     check(t.callbackID < nextUID);
     s(t.suspended);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
@@ -275,6 +277,30 @@ auto Kernel::serialize(serializer& s) -> bool {
       }
     }
   }
+  //sceSas (sas.cpp): its settings as its functions take them, and each voice's. A voice keyed on is playing; one
+  //waits at most its 32 samples to start; its envelope is within 0 and the top, its phase and curves ones there are;
+  //a PCM voice's samples and loop are as __sceSasSetVoicePCM takes them, and it's inside them; a VAG voice's size is
+  //a multiple of 16 (not 0). (Walking a VAG voice's blocks reads memory a block at a time, and stops at its size or
+  //at memory that isn't there, so its place needs no bound.)
+  s(sas.initialized); s(sas.core); s(sas.grain); s(sas.voiceCount); s(sas.outputMode); s(sas.paused);
+  s(sas.endFlags); s(sas.effectType); s(sas.effectDelay); s(sas.effectFeedback); s(sas.effectLeft);
+  s(sas.effectRight); s(sas.effectDry); s(sas.effectWet);
+  check(sasGrainValid(sas.grain) && sas.voiceCount >= 1 && sas.voiceCount <= 32 && sas.outputMode <= 1);
+  check(sas.effectType >= -1 && sas.effectType <= 8 && sas.effectDelay <= 128 && sas.effectFeedback <= 128);
+  check(sas.effectLeft <= 0x1000 && sas.effectRight <= 0x1000 && sas.effectDry <= 1 && sas.effectWet <= 1);
+  for(auto& v : sas.voices) {
+    s(v.source); s(v.address); s(v.size); s(v.loop); s(v.pitch); s(v.volumes); s(v.rates); s(v.curves);
+    s(v.sustainLevel); s(v.on); s(v.playing); s(v.phase); s(v.height); s(v.delay); s(v.position); s(v.loopBlock);
+    check(v.source <= Sas::Source::Atrac && v.phase <= Sas::Phase::Release && v.pitch <= 0x4000);
+    check(v.height >= 0 && v.height <= 0x4000'0000 && v.delay <= 32 && (!v.on || v.playing));
+    for(u32 n = 0; n < 4; n++) check(v.curves[n] <= 5 && v.rates[n] >= 0 && v.volumes[n] >= -0x1000
+                                     && v.volumes[n] <= 0x1000);
+    if(v.source == Sas::Source::Pcm) {
+      check(v.size >= 1 && v.size <= 0x10000 && v.loop >= -1 && v.loop < s32(v.size));
+      check(v.position < u64(v.size) << 12);
+    }
+    if(v.source == Sas::Source::Vag) check(v.size && !(v.size & 15) && (v.loop == 0 || v.loop == 1));
+  }
   //the utilities: the dialog, and the modules loaded
   s(dialog.kind); s(dialog.status); s(dialog.next); s(dialog.changeAt); s(dialog.parameters);
   vector(utilityModules, [&](u32& module) { s(module); });
@@ -325,8 +351,11 @@ auto Kernel::serialize(serializer& s) -> bool {
 
   //open files and folders. Nothing on the disc is open for writing (openOnDisc() refuses it), and a folder on the
   //disc keeps each of its names' entries, one for one: reading the folder hands out both. Files are numbered counting
-  //up from nextFile, as IDs are.
+  //up from nextFile, as IDs are. An asynchronous request is on a file, not a folder, its state one there is, and one
+  //under way is due within the longest any request can take (64 MiB, the most of the program's memory one can move,
+  //from the disc: under a minute), nor overdue by a frame; a descriptor kept for a result alone has one to give.
   auto entry = [&](Disc::Entry& e) { text(e.name); s(e.sector); s(e.size); s(e.folder); s(e.date); };
+  u64 longest = asyncDuration(true, 64_MiB);
   map(files, [&](OpenFile& open) {
     text(open.path);
     s(open.folder); s(open.flags); s(open.position);
@@ -334,20 +363,42 @@ auto Kernel::serialize(serializer& s) -> bool {
     s(open.nextEntry);
     s(open.onDisc); s(open.sectors); s(open.sector); s(open.size);
     vector(open.discEntries, entry);
+    s(open.async); s(open.asyncDoneAt); s(open.asyncResult); s(open.asyncCallback); s(open.asyncArgument);
+    s(open.resultOnly);
     check(!open.onDisc || !(open.flags & OpenWrite));
     check(!open.onDisc || !open.folder || open.discEntries.size() == open.entries.size());
+    check(open.async <= OpenFile::Async::Done && open.asyncCallback < nextUID);
+    check(open.async == OpenFile::Async::None || !open.folder);
+    check(!open.resultOnly || (open.async != OpenFile::Async::None && !open.flags));
+    if(open.async == OpenFile::Async::Pending) {
+      u64 due = open.asyncDoneAt;
+      check(due > cycles ? due - cycles <= longest : cycles - due < VblankCycles);
+    }
   });
   s(nextFile);
   check(nextFile >= 3 && nextFile <= LastUID + 1);  //after standard input, output and error; short of 2^31
   if(s.reading()) for(auto& [file, open] : files) check(file < nextFile);
+  //a thread waiting on a file's request (or that was, its callbacks running) waits on a file that has one
+  if(s.reading()) {
+    for(auto& [uid, t] : threads) {
+      for(auto [wait, id] : {std::pair{t->wait, t->waitID}, std::pair{t->waitBeforeCallback.wait,
+                                                                      t->waitBeforeCallback.id}}) {
+        if(wait != Wait::Async) continue;
+        auto found = files.find(id);
+        check(found != files.end() && found->second.async != OpenFile::Async::None);
+      }
+    }
+  }
   text(workingDirectory);
   if(s.reading() && valid) {
     //files and folders opened again, where the devices are now: a host file reopened, and one on the disc kept only
-    //while a disc image is in the drive (onDisc())
+    //while a disc image is in the drive (onDisc()). A descriptor kept for a request's result alone has nothing to
+    //open, and stays.
     for(auto at = files.begin(); at != files.end();) {
       auto& open = at->second;
       bool kept = disc && !devices.count("disc0");
-      if(!open.onDisc) {
+      if(open.resultOnly) kept = true;
+      else if(!open.onDisc) {
         std::string normalized;
         kept = !resolve(open.path, open.host, normalized);
         if(kept && open.folder) check(listed(open.entries, normalized));
@@ -359,6 +410,11 @@ auto Kernel::serialize(serializer& s) -> bool {
         }
       }
       at = kept ? std::next(at) : files.erase(at);
+    }
+    //a thread waiting on a file's request that was dropped is told, as for any bad file (a callback's thread is,
+    //back from its callbacks: resumeWait())
+    for(auto& [uid, t] : threads) {
+      if(t->status == Status::Waiting && t->wait == Wait::Async && !files.count(t->waitID)) ready(*t, ErrorBadFile);
     }
   }
 

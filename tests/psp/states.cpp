@@ -298,6 +298,7 @@ static auto stateFields() -> void {
   auto& fixedPool = k.pools[fixedID];
   auto& variablePool = k.pools[variableID];
   auto& sparePool = k.pools[spareID];
+  auto& sasVoice = k.sas.voices[3];
   std::vector<std::pair<std::string, std::function<void()>>> more = {
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
@@ -321,6 +322,9 @@ static auto stateFields() -> void {
     {"wait before callback timeoutPointer", [&] { t.waitBeforeCallback.timeoutPointer ^= 4; }},
     {"wait before callback wakeAt", [&] { t.waitBeforeCallback.wakeAt ^= 1; }},
     {"wait before callback callbacks", [&] { t.waitBeforeCallback.callbacks = true; }},
+    {"thread waitDone", [&] { t.waitDone ^= 1; }}, {"thread waitResult", [&] { t.waitResult ^= 4; }},
+    {"wait before callback done", [&] { t.waitBeforeCallback.done ^= 1; }},
+    {"wait before callback resultPointer", [&] { t.waitBeforeCallback.resultPointer ^= 4; }},
     {"the thread running", [&] { k.current = k.threads[two].get(); }},
     {"readySequence", [&] { k.readySequence += 7; }}, {"nextVblank", [&] { k.nextVblank = k.cycles + 1000; }},
     {"vblanks", [&] { k.vblanks += 7; }},
@@ -400,11 +404,44 @@ static auto stateFields() -> void {
     }},
     {"pool used", [&] { fixedPool.used[1] = 1; }},
     {"pool pieces", [&] { variablePool.pieces[variablePool.address] = 16; }},
+    //sceSas: its settings, and voice 3 made a VAG voice, keyed on and released
+    {"sas initialized", [&] { k.sas.initialized = true; }}, {"sas core", [&] { k.sas.core = 0x0890'4000; }},
+    {"sas grain", [&] { k.sas.grain = 64; }}, {"sas voiceCount", [&] { k.sas.voiceCount = 16; }},
+    {"sas outputMode", [&] { k.sas.outputMode = 1; }}, {"sas paused", [&] { k.sas.paused ^= 2; }},
+    {"sas endFlags", [&] { k.sas.endFlags ^= 4; }}, {"sas effectType", [&] { k.sas.effectType = 3; }},
+    {"sas effectDelay", [&] { k.sas.effectDelay = 5; }}, {"sas effectFeedback", [&] { k.sas.effectFeedback = 6; }},
+    {"sas effectLeft", [&] { k.sas.effectLeft = 7; }}, {"sas effectRight", [&] { k.sas.effectRight = 8; }},
+    {"sas effectDry", [&] { k.sas.effectDry = 1; }}, {"sas effectWet", [&] { k.sas.effectWet = 1; }},
+    {"sas voice source", [&] { sasVoice.source = Kernel::Sas::Source::Vag; sasVoice.size = 0x100; }},
+    {"sas voice address", [&] { sasVoice.address ^= 0x40; }}, {"sas voice size", [&] { sasVoice.size = 0x200; }},
+    {"sas voice loop", [&] { sasVoice.loop = 1; }}, {"sas voice pitch", [&] { sasVoice.pitch = 0x2000; }},
+    {"sas voice volumes", [&] { sasVoice.volumes[2] = -5; }}, {"sas voice rates", [&] { sasVoice.rates[1] = 77; }},
+    {"sas voice curves", [&] { sasVoice.curves[3] = 3; }},
+    {"sas voice sustainLevel", [&] { sasVoice.sustainLevel = 0x1234; }},
+    {"sas voice playing", [&] { sasVoice.playing = true; }}, {"sas voice on", [&] { sasVoice.on = true; }},
+    {"sas voice phase", [&] { sasVoice.phase = Kernel::Sas::Phase::Release; }},
+    {"sas voice height", [&] { sasVoice.height = 0x100; }}, {"sas voice delay", [&] { sasVoice.delay = 5; }},
+    {"sas voice position", [&] { sasVoice.position = 0x5000; }},
+    {"sas voice loopBlock", [&] { sasVoice.loopBlock = 2; }},
     //files: the host file opened again as another, for writing too; the other host file counted as the disc's; the
     //disc's file a folder, read a sector at a time
     {"file path", [&] { host.path = "ms0:/B.TXT"; }},
     {"file flags", [&] { host.flags |= 0x0002; }},  //PSP_O_WRONLY
     {"file position", [&] { host.position = 5; }}, {"file onDisc", [&] { k.files[other].onDisc = true; }},
+    //its asynchronous request: one done, its result not taken; the other file closed asynchronously, its
+    //descriptor kept for the result
+    {"file async", [&] { host.async = Kernel::OpenFile::Async::Done; }},
+    {"file asyncDoneAt", [&] { host.asyncDoneAt = k.cycles + 1000; }},
+    {"file asyncResult", [&] { host.asyncResult = 0xffff'ffff'8002'0323ull; }},
+    {"file asyncCallback", [&] { host.asyncCallback = callback; }},
+    {"file asyncArgument", [&] { host.asyncArgument = 0x55; }},
+    {"file resultOnly", [&] {
+      auto& closed = k.files[other];
+      closed.resultOnly = true;
+      closed.flags = 0;
+      closed.async = Kernel::OpenFile::Async::Pending;
+      closed.asyncDoneAt = k.cycles + 2000;
+    }},
     {"folder entries", [&] { hostFolder.entries[2] += "x"; }},  //".", "..", then "ONE"
     {"folder nextEntry", [&] { hostFolder.nextEntry = 1; }},
     {"disc file folder", [&] { onDisc.folder = true; }}, {"disc file sectors", [&] { onDisc.sectors = true; }},
@@ -488,6 +525,28 @@ static auto stateFields() -> void {
   refuses("a thread running that isn't there", [&] { k.current = &ghost; });
   refuses("a disc folder's names without their entries", [&] { k.files[discFolder].discEntries.pop_back(); });
   refuses("a disc file open for writing", [&] { k.files[discFile].flags |= 0x0002; });
+  //files' asynchronous requests as no machine has them: a state there isn't, one on a folder, one due further off
+  //than any request takes, a descriptor kept for a result it hasn't got, or open for reading; a thread waiting on a
+  //file with no request
+  using Async = Kernel::OpenFile::Async;
+  refuses("an asynchronous request state there isn't", [&] { k.files[file].async = Async(3); });
+  refuses("an asynchronous request on a folder", [&] { k.files[folder].async = Async::Done; });
+  refuses("an asynchronous request due in over a minute", [&] {
+    k.files[discFile].async = Async::Pending;
+    k.files[discFile].asyncDoneAt = k.cycles + 61 * Kernel::CPUFrequency;
+  });
+  refuses("an asynchronous request a frame overdue", [&] {
+    k.files[discFile].async = Async::Pending;
+    k.files[discFile].asyncDoneAt = k.cycles - Kernel::VblankCycles;
+  });
+  refuses("a descriptor for a result it hasn't got", [&] { k.files[other].async = Async::None; });
+  refuses("a descriptor for a result, open for reading", [&] { k.files[other].flags = 0x0001; });
+  refuses("an asynchronous callback not handed out yet", [&] { k.files[file].asyncCallback = k.nextUID; });
+  refuses("a thread waiting on a file with no request", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Async, thread.waitID = discFile;
+  });
+  refuses("a wait there isn't", [&] { k.threads.at(two)->wait = Kernel::Wait(99); });
   refuses("a file number handed out twice", [&] { k.nextFile = discFolder; });
   refuses("an ID handed out twice", [&] { k.nextUID = u32(one); });
   refuses("a semaphore under another's ID", [&] { k.semaphores.begin()->second.uid ^= 1; });
@@ -572,6 +631,25 @@ static auto stateFields() -> void {
   });
   refuses("a vertical blank handler on sub-interrupt 18, the display driver's", [&] {
     k.vblankSubs[18].function = 0x0880'3000;
+  });
+  //sceSas as its functions never leave it
+  using Sas = Kernel::Sas;
+  refuses("a sas grain it doesn't take", [&] { k.sas.grain = 0x5c; });
+  refuses("sas voices past 32", [&] { k.sas.voiceCount = 33; });
+  refuses("a sas effect type there isn't", [&] { k.sas.effectType = 9; });
+  refuses("a sas voice on that isn't playing", [&] { k.sas.voices[3].playing = false; });
+  refuses("a sas envelope over the top", [&] { k.sas.voices[3].height = 0x4000'0001; });
+  refuses("a sas curve there isn't", [&] { k.sas.voices[3].curves[0] = 6; });
+  refuses("a sas phase there isn't", [&] { k.sas.voices[3].phase = Sas::Phase(4); });
+  refuses("a sas voice waiting longer than 32 samples", [&] { k.sas.voices[3].delay = 33; });
+  refuses("a sas VAG voice of 8 bytes", [&] { k.sas.voices[3].size = 8; });
+  refuses("a sas PCM voice past its samples", [&] {
+    auto& voice = k.sas.voices[3];
+    voice.source = Sas::Source::Pcm, voice.size = 16, voice.loop = -1, voice.position = 16 << 12;
+  });
+  refuses("a sas PCM voice looping past its samples", [&] {
+    auto& voice = k.sas.voices[3];
+    voice.source = Sas::Source::Pcm, voice.size = 16, voice.loop = 16, voice.position = 0;
   });
   refuses("a pool under another's ID", [&] { k.pools.begin()->second.uid ^= 1; });
   //pools as no machine leaves them (giving a fixed pool's block back divides by its block size; handing out a

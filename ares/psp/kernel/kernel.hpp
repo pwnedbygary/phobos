@@ -130,6 +130,8 @@ struct Kernel {
   static constexpr u32 ErrorInvalidFileSize       = 0x8001'b003;  //seeking umd0: past the disc
   static constexpr u32 ErrorInvalidFlag           = 0x8001'b004;  //opening a file on the disc to write it
   static constexpr u32 ErrorDevctlBadParameters   = 0x8022'0081;  //a devctl's buffers too small or misplaced
+  static constexpr u32 ErrorAsyncBusy             = 0x8002'0329;  //a file's asynchronous request still under way
+  static constexpr u32 ErrorNoAsync               = 0x8002'032a;  //no asynchronous request to wait for or poll
   static constexpr u32 ErrorVolatileMemoryInUse   = 0x802b'0200;  //the volatile memory lent already
   //sceAudio's (uOFW's errors.h)
   static constexpr u32 ErrorAudioChannelNotInitialized  = 0x8026'0001;
@@ -223,13 +225,14 @@ struct Kernel {
   enum class Status : u32 { Running = 1, Ready = 2, Waiting = 4, Dormant = 16 };  //the PSP's numbers
   enum class Wait : u32 {
     None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd, Audio,
-    Fpl, Vpl, Module,
+    Fpl, Vpl, Module, Async, PipeSend, PipeReceive, Mailbox,
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
     u32 id = 0, count = 0, mode = 0, pointer = 0, timeoutPointer = 0;
     u64 wakeAt = 0;
     bool callbacks = false;
+    u32 done = 0, resultPointer = 0;
   };
   struct Thread {
     u32 uid;
@@ -238,13 +241,18 @@ struct Kernel {
     Status status = Status::Dormant;
     Context context{};
     Wait wait = Wait::None;
-    u32 waitID = 0;        //the semaphore, mutex, thread, event flag, display list or module waited for; the sound
-                           //channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC channel's)
+    u32 waitID = 0;        //the semaphore, mutex, thread, event flag, display list, module, message pipe or mailbox
+                           //waited for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the
+                           //SRC channel's); the file whose asynchronous request is waited for
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs; a mixer
-                           //output's left volume; the samples an SRC output's buffer was armed with
-    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume
-    u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, and a module wait the function's result;
-                           //the buffer a mixer output hands over
+                           //output's left volume; the samples an SRC output's buffer was armed with; the bytes a
+                           //message pipe's send or receive asked for
+    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode
+    u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
+                           //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
+                           //output hands over, or a message pipe's send or receive reads or fills
+    u32 waitDone = 0;      //the bytes a message pipe's send or receive has moved so far
+    u32 waitResult = 0;    //where a message pipe's send or receive puts how many it moved
     u64 wakeAt = 0;        //for a delay or timeout: the cycle to wake at (0: none)
     u32 timeoutPointer = 0;
     u64 readySince = 0;    //to keep first-come order among equal priorities
@@ -377,6 +385,14 @@ struct Kernel {
     u32 sector = 0;
     u64 size = 0;
     std::vector<Disc::Entry> discEntries;  //a folder on the disc's entries, beside their names
+    //Its asynchronous request (async.cpp): none; one under way, done at asyncDoneAt; or one done whose result the
+    //program hasn't taken yet. The result is 64 bits: a count, a position, or an error (sign-extended).
+    enum class Async : u32 { None, Pending, Done } async = Async::None;
+    u64 asyncDoneAt = 0;
+    u64 asyncResult = 0;
+    u32 asyncCallback = 0, asyncArgument = 0;  //sceIoSetAsyncCallback's: notified as each request is done
+    bool resultOnly = false;  //nothing is open (an asynchronous close, or an asynchronous open that failed): the
+                              //descriptor stays only to hand over its request's result
   };
   std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
   std::shared_ptr<Disc> disc;  //the disc image in the drive (disc0: and umd0:, unless a host folder stands for it)
@@ -395,8 +411,11 @@ struct Kernel {
   auto writeStat(u32 address, const Disc::Entry& entry) -> void;
   auto openOnDisc(const std::string& path, u32 flags) -> u32;
   auto runOnDisc(const std::string& path, u32& first, u64& bytes) const -> bool;
+  auto openFile(const std::string& path, u32 flags) -> u32;
   auto readFile(u32 file, u32 data, u32 size) -> u32;
+  auto writeFile(u32 file, u32 data, u32 size) -> u32;
   auto seek(u32 file, s64 offset, u32 whence, u64& position) -> u32;
+  auto ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength) -> u32;
   auto sceKernelStdin() -> void;
   auto sceKernelStdout() -> void;
   auto sceKernelStderr() -> void;
@@ -417,6 +436,31 @@ struct Kernel {
   auto sceIoDclose() -> void;
   auto sceIoIoctl() -> void;
   auto sceIoDevctl() -> void;
+
+  //async.cpp: files' asynchronous requests, done after the time their device takes
+  auto asyncBusy(u32 file) const -> bool;
+  auto asyncDuration(bool onDisc, u64 bytes) const -> u64;
+  auto asyncIssue(u32 file) -> OpenFile*;
+  auto asyncStart(OpenFile& open, s64 result, u64 bytes) -> void;
+  auto asyncTake(u32 file, u32 pointer) -> void;
+  auto asyncWaiter(u32 file) -> Thread*;
+  auto asyncPoll(u32 file, u32 pointer) -> void;
+  auto asyncWait(u32 file, u32 pointer, bool callbacks) -> void;
+  auto asyncEvents() -> bool;
+  auto nextAsyncEvent() const -> u64;
+  auto sceIoOpenAsync() -> void;
+  auto sceIoCloseAsync() -> void;
+  auto sceIoReadAsync() -> void;
+  auto sceIoWriteAsync() -> void;
+  auto sceIoLseekAsync() -> void;
+  auto sceIoLseek32Async() -> void;
+  auto sceIoIoctlAsync() -> void;
+  auto sceIoPollAsync() -> void;
+  auto sceIoWaitAsync() -> void;
+  auto sceIoWaitAsyncCB() -> void;
+  auto sceIoGetAsyncStat() -> void;
+  auto sceIoChangeAsyncPriority() -> void;
+  auto sceIoSetAsyncCallback() -> void;
 
   //umd.cpp: the disc drive
   static constexpr u32 UmdNotPresent = 0x01, UmdPresent = 0x02, UmdChanged = 0x04, UmdNotReady = 0x08,
@@ -764,6 +808,74 @@ struct Kernel {
   auto sceAudioSRCChReserve() -> void;
   auto sceAudioSRCOutputBlocking() -> void;
   auto sceAudioSRCChRelease() -> void;
+
+  //sas.cpp: sceSasCore, the sound library's software synthesizer, silent for now: its voices keep their parameters,
+  //envelopes and places in their samples, and end as they would, but nothing is mixed
+  struct Sas {
+    enum class Source : u32 { None, Vag, Noise, Triangle, Steep, Pcm, Atrac };  //pspautotests' sascore.h's numbers
+    enum class Phase : u32 { Attack, Decay, Sustain, Release };
+    struct Voice {
+      Source source = Source::None;
+      u32 address = 0;             //its samples (VAG's ADPCM blocks, 16-bit PCM)
+      u32 size = 0;                //VAG's bytes, or PCM's samples
+      s32 loop = 0;                //VAG: whether its loop marks loop (0 or 1); PCM: where it loops to (-1: never)
+      u32 pitch = 0x1000;          //samples taken per sample made, in 4096ths
+      s32 volumes[4] = {0x1000, 0x1000, 0x1000, 0x1000};  //left, right, and the effect's left and right
+      s32 rates[4] = {};           //attack, decay, sustain, release: each phase's rate
+      u32 curves[4] = {0, 1, 0, 1};  //and its curve (pspsdk's PSP_SAS_ADSR_CURVE_MODE_*)
+      s32 sustainLevel = 0;
+      bool on = false;             //keyed on, not keyed off (nor ended by itself)
+      bool playing = false;        //not ended: its end flag clear from the next __sceSasCore on
+      Phase phase = Phase::Attack;
+      s32 height = 0;              //the envelope, 0 to 0x40000000
+      u32 delay = 0;               //samples still to go before a voice keyed on starts
+      u64 position = 0;            //where it is in its samples, in 4096ths of a sample
+      u32 loopBlock = 0;           //VAG: the block its loop goes back to
+    } voices[32];
+    bool initialized = false;
+    u32 core = 0;                  //the SasCore it was initialized in
+    u32 grain = 256, voiceCount = 32, outputMode = 0;
+    u32 paused = 0;                //the voices paused, a bit each
+    u32 endFlags = ~0u;            //the voices ended, a bit each, as the last __sceSasCore left them
+    s32 effectType = -1;
+    u32 effectDelay = 0, effectFeedback = 0, effectLeft = 0, effectRight = 0, effectDry = 0, effectWet = 0;
+  } sas;
+  auto sasVoice(u32 number) -> Sas::Voice*;
+  auto sasEnvelope(Sas::Voice& voice) -> void;
+  auto sasAdvance(Sas::Voice& voice, u32 samples) -> void;
+  auto sasMix(bool mix) -> void;
+  auto __sceSasInit() -> void;
+  auto __sceSasCore() -> void;
+  auto __sceSasCoreWithMix() -> void;
+  auto __sceSasGetEndFlag() -> void;
+  auto __sceSasSetVolume() -> void;
+  auto __sceSasSetPitch() -> void;
+  auto __sceSasSetVoice() -> void;
+  auto __sceSasSetVoicePCM() -> void;
+  auto __sceSasSetNoise() -> void;
+  auto __sceSasSetTrianglarWave() -> void;
+  auto __sceSasSetSteepWave() -> void;
+  auto __sceSasSetVoiceATRAC3() -> void;
+  auto __sceSasConcatenateATRAC3() -> void;
+  auto __sceSasUnsetATRAC3() -> void;
+  auto __sceSasSetADSR() -> void;
+  auto __sceSasSetADSRmode() -> void;
+  auto __sceSasSetSimpleADSR() -> void;
+  auto __sceSasSetSL() -> void;
+  auto __sceSasGetEnvelopeHeight() -> void;
+  auto __sceSasGetAllEnvelopeHeights() -> void;
+  auto __sceSasSetKeyOn() -> void;
+  auto __sceSasSetKeyOff() -> void;
+  auto __sceSasSetPause() -> void;
+  auto __sceSasGetPauseFlag() -> void;
+  auto __sceSasGetGrain() -> void;
+  auto __sceSasSetGrain() -> void;
+  auto __sceSasGetOutputmode() -> void;
+  auto __sceSasSetOutputmode() -> void;
+  auto __sceSasRevType() -> void;
+  auto __sceSasRevParam() -> void;
+  auto __sceSasRevEVOL() -> void;
+  auto __sceSasRevVON() -> void;
 
   //utility.cpp: the system's dialogs, one at a time, and the optional modules loaded
   struct Dialog {

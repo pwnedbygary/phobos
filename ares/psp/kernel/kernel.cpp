@@ -16,12 +16,14 @@ namespace ares::PlayStationPortable {
 #include "unpack.cpp"
 #include "disc.cpp"
 #include "io.cpp"
+#include "async.cpp"
 #include "umd.cpp"
 #include "ctrl.cpp"
 #include "display.cpp"
 #include "ge.cpp"
 #include "pools.cpp"
 #include "audio.cpp"
+#include "sas.cpp"
 #include "utility.cpp"
 #include "power.cpp"
 #include "system.cpp"
@@ -175,6 +177,39 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceAudio",          "sceAudioSRCChReserve",          &Kernel::sceAudioSRCChReserve);
   add("sceAudio",          "sceAudioSRCOutputBlocking",     &Kernel::sceAudioSRCOutputBlocking);
   add("sceAudio",          "sceAudioSRCChRelease",          &Kernel::sceAudioSRCChRelease);
+  add("sceSasCore",        "__sceSasInit",                  &Kernel::__sceSasInit);
+  add("sceSasCore",        "__sceSasCore",                  &Kernel::__sceSasCore);
+  add("sceSasCore",        "__sceSasCoreWithMix",           &Kernel::__sceSasCoreWithMix);
+  add("sceSasCore",        "__sceSasGetEndFlag",            &Kernel::__sceSasGetEndFlag);
+  add("sceSasCore",        "__sceSasSetVolume",             &Kernel::__sceSasSetVolume);
+  add("sceSasCore",        "__sceSasSetPitch",              &Kernel::__sceSasSetPitch);
+  add("sceSasCore",        "__sceSasSetVoice",              &Kernel::__sceSasSetVoice);
+  add("sceSasCore",        "__sceSasSetVoicePCM",           &Kernel::__sceSasSetVoicePCM);
+  add("sceSasCore",        "__sceSasSetNoise",              &Kernel::__sceSasSetNoise);
+  add("sceSasCore",        "__sceSasSetTrianglarWave",      &Kernel::__sceSasSetTrianglarWave);
+  add("sceSasCore",        "__sceSasSetTriangularWave",     &Kernel::__sceSasSetTrianglarWave);
+  add("sceSasCore",        "__sceSasSetSteepWave",          &Kernel::__sceSasSetSteepWave);
+  add("sceSasCore",        "__sceSasSetVoiceATRAC3",        &Kernel::__sceSasSetVoiceATRAC3);
+  add("sceSasCore",        "__sceSasConcatenateATRAC3",     &Kernel::__sceSasConcatenateATRAC3);
+  add("sceSasCore",        "__sceSasUnsetATRAC3",           &Kernel::__sceSasUnsetATRAC3);
+  add("sceSasCore",        "__sceSasSetADSR",               &Kernel::__sceSasSetADSR);
+  add("sceSasCore",        "__sceSasSetADSRmode",           &Kernel::__sceSasSetADSRmode);
+  add("sceSasCore",        "__sceSasSetSimpleADSR",         &Kernel::__sceSasSetSimpleADSR);
+  add("sceSasCore",        "__sceSasSetSL",                 &Kernel::__sceSasSetSL);
+  add("sceSasCore",        "__sceSasGetEnvelopeHeight",     &Kernel::__sceSasGetEnvelopeHeight);
+  add("sceSasCore",        "__sceSasGetAllEnvelopeHeights", &Kernel::__sceSasGetAllEnvelopeHeights);
+  add("sceSasCore",        "__sceSasSetKeyOn",              &Kernel::__sceSasSetKeyOn);
+  add("sceSasCore",        "__sceSasSetKeyOff",             &Kernel::__sceSasSetKeyOff);
+  add("sceSasCore",        "__sceSasSetPause",              &Kernel::__sceSasSetPause);
+  add("sceSasCore",        "__sceSasGetPauseFlag",          &Kernel::__sceSasGetPauseFlag);
+  add("sceSasCore",        "__sceSasGetGrain",              &Kernel::__sceSasGetGrain);
+  add("sceSasCore",        "__sceSasSetGrain",              &Kernel::__sceSasSetGrain);
+  add("sceSasCore",        "__sceSasGetOutputmode",         &Kernel::__sceSasGetOutputmode);
+  add("sceSasCore",        "__sceSasSetOutputmode",         &Kernel::__sceSasSetOutputmode);
+  add("sceSasCore",        "__sceSasRevType",               &Kernel::__sceSasRevType);
+  add("sceSasCore",        "__sceSasRevParam",              &Kernel::__sceSasRevParam);
+  add("sceSasCore",        "__sceSasRevEVOL",               &Kernel::__sceSasRevEVOL);
+  add("sceSasCore",        "__sceSasRevVON",                &Kernel::__sceSasRevVON);
   add("sceSuspendForUser", "sceKernelPowerTick",            &Kernel::sceKernelPowerTick);
   add("sceSuspendForUser", "sceKernelPowerLock",            &Kernel::sceKernelPowerLock);
   add("sceSuspendForUser", "sceKernelPowerUnlock",          &Kernel::sceKernelPowerUnlock);
@@ -231,6 +266,19 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
   add("IoFileMgrForUser",  "sceIoIoctl",                    &Kernel::sceIoIoctl);
   add("IoFileMgrForUser",  "sceIoDevctl",                   &Kernel::sceIoDevctl);
+  add("IoFileMgrForUser",  "sceIoOpenAsync",                &Kernel::sceIoOpenAsync);
+  add("IoFileMgrForUser",  "sceIoCloseAsync",               &Kernel::sceIoCloseAsync);
+  add("IoFileMgrForUser",  "sceIoReadAsync",                &Kernel::sceIoReadAsync);
+  add("IoFileMgrForUser",  "sceIoWriteAsync",               &Kernel::sceIoWriteAsync);
+  add("IoFileMgrForUser",  "sceIoLseekAsync",               &Kernel::sceIoLseekAsync);
+  add("IoFileMgrForUser",  "sceIoLseek32Async",             &Kernel::sceIoLseek32Async);
+  add("IoFileMgrForUser",  "sceIoIoctlAsync",               &Kernel::sceIoIoctlAsync);
+  add("IoFileMgrForUser",  "sceIoPollAsync",                &Kernel::sceIoPollAsync);
+  add("IoFileMgrForUser",  "sceIoWaitAsync",                &Kernel::sceIoWaitAsync);
+  add("IoFileMgrForUser",  "sceIoWaitAsyncCB",              &Kernel::sceIoWaitAsyncCB);
+  add("IoFileMgrForUser",  "sceIoGetAsyncStat",             &Kernel::sceIoGetAsyncStat);
+  add("IoFileMgrForUser",  "sceIoChangeAsyncPriority",      &Kernel::sceIoChangeAsyncPriority);
+  add("IoFileMgrForUser",  "sceIoSetAsyncCallback",         &Kernel::sceIoSetAsyncCallback);
   add("sceUmdUser",        "sceUmdCheckMedium",             &Kernel::sceUmdCheckMedium);
   add("sceUmdUser",        "sceUmdActivate",                &Kernel::sceUmdActivate);
   add("sceUmdUser",        "sceUmdDeactivate",              &Kernel::sceUmdDeactivate);
@@ -364,6 +412,7 @@ auto Kernel::power() -> void {
   compilerVersion = 0;
   powerState = {};
   audio = {};
+  sas = {};
   dialog = {};
   utilityModules.clear();
   files.clear();

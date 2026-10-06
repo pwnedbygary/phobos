@@ -211,7 +211,8 @@ auto Kernel::callbacksOnReturn(bool callbacks) -> void {
 auto Kernel::runCallbacks(Thread& thread) -> void {
   save(thread.beforeCallback);
   thread.waitBeforeCallback = {thread.wait, thread.waitID, thread.waitCount, thread.waitMode, thread.waitPointer,
-                               thread.timeoutPointer, thread.wakeAt, thread.callbacks};
+                               thread.timeoutPointer, thread.wakeAt, thread.callbacks, thread.waitDone,
+                               thread.waitResult};
   thread.wait = Wait::None;  //while its callbacks run, it isn't waiting: they may wait themselves
   thread.wakeAt = 0;
   thread.timeoutPointer = 0;
@@ -262,6 +263,8 @@ auto Kernel::backFromCallbacks(Thread& thread) -> void {
   thread.timeoutPointer = before.timeoutPointer;
   thread.wakeAt = before.wakeAt;
   thread.callbacks = before.callbacks;
+  thread.waitDone = before.done;
+  thread.waitResult = before.resultPointer;
   before = {};
   if(thread.wait == Wait::None) {
     restore(thread.beforeCallback);
@@ -309,6 +312,14 @@ auto Kernel::resumeWait(Thread& thread) -> void {
   case Wait::Fpl: case Wait::Vpl:
     if(auto found = pools.find(thread.waitID); found != pools.end()) poolWake(found->second);
     else ready(thread, ErrorWaitDeleted);
+    break;
+  case Wait::Async:   //a file's request done meanwhile (its callback was what ran): its result is taken now
+    if(auto found = files.find(thread.waitID); found == files.end()) ready(thread, ErrorBadFile);
+    else if(found->second.async == OpenFile::Async::Done) {
+      u32 file = thread.waitID, pointer = thread.waitPointer;
+      ready(thread, 0);
+      asyncTake(file, pointer);
+    }
     break;
   default:            //a delay whose time isn't up
     break;
