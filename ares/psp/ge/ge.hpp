@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -214,9 +215,57 @@ struct GE {
     s32 ditherMatrix[16];
     u32 logic, writeMask;  //writeMask: the frame buffer bits not to touch (MASK_COLOR, MASK_ALPHA)
     s32 left, top, right, bottom;  //the scissor rectangle and drawing region, inclusive
-    u32 low, high;  //the frame buffer bytes touched, for reporting the change
     bool depthRange, fog;  //3D only: the depth range test (MIN_Z to MAX_Z), and fog (FOG_ENABLE, not in clear mode)
     u32 minDepth, maxDepth, fogColor;
+  };
+
+  //What a primitive is drawn with, shared by the jobs it makes: the pixel pipeline's settings, and the texture
+  //with the texture function's (or none), all taken from the commands as the primitive met them.
+  struct Look {
+    PixelState pixel;
+    bool textured = false;
+    Sampler texture{};       //its filter (linear) is each job's own
+    u32 function = 0, environment = 0;  //TEXTURE_FUNCTION's bits 0-2, and TEXTURE_ENVIRONMENT_COLOR
+    bool withAlpha = false, doubled = false;
+    std::shared_ptr<Decoded> decoded;  //its texels, kept while a job may draw with them
+  };
+
+  //A primitive set up for drawing (draw.cpp): everything about it worked out once, so that any of its rows can be
+  //drawn on its own (raster.cpp), the same pixels with the same arithmetic as drawing it all at once would. Each
+  //kind keeps what its pixels are worked out from.
+  struct Job {
+    enum class Kind : u32 { Sprite, Triangle, Point } kind;
+    const Look* look;
+    s32 firstX, lastX, firstY, lastY;  //the pixels it may cover, inside the scissor rectangle
+    bool linear;                       //textured: filtered (TEXTURE_FILTER's choice for its size)
+    struct Sprite {
+      u32 z, color, specular, leftFog, rightFog;
+      s32 middle;                      //(sixteenths) where the fog's halves meet
+      bool turned, divided;            //divided: 3D, texture coordinates across the perspective
+      //2D: the coordinate running across x (u, or v when turned) and the one running down y, each from where it
+      //starts (in sixteenths), by a step a pixel
+      f64 columnFirst, columnStep, rowFirst, rowStep;
+      s32 columnStart, rowStart;
+      //3D: the corners' sixteenths, 1 / w across x, the coordinate across x over w, the one down y over w
+      s32 left, right, top, bottom;
+      f64 leftInverse, rightInverse, leftAcross, rightAcross, topDown, bottomDown;
+    } sprite;
+    struct Triangle {
+      s64 x[3], y[3];                  //the corners (sixteenths), turned clockwise
+      s64 bias[3];                     //-1 for an edge whose pixels are its neighbour's
+      float total;                     //twice its area
+      bool flat, shines, perspective;
+      u32 flatColor, flatSpecular;
+      u32 color[3], specular[3];
+      float z[3], fog[3], u[3], v[3], q[3], w[3];
+      f64 uStart, uAcross, uDown, vStart, vAcross, vDown;  //2D texture coordinates, stepped from (startX, startY)
+      s64 startX, startY;
+    } triangle;
+    struct Point {
+      s32 x, y;
+      u32 z, color, specular, fog;
+      float u, v;
+    } point;
   };
 
   Memory& memory;
@@ -261,23 +310,40 @@ struct GE {
   auto transformState() const -> Transform;
   auto transform(Vertex& vertex, const Transform& t) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
-  auto clipTriangle(PixelState& pixel, Sampler* texture, const Transform& t, const Vertex& a, const Vertex& b,
-                    const Vertex& c, s32 facing) -> void;
+  auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
+                    s32 facing) -> void;
 
   //draw.cpp
+  auto lookFor(const PixelState& pixel, const Sampler* texture) const -> Look;
   auto primitive(u32 kind, u32 count) -> void;
+  auto submit(const Job& job) -> void;
+  auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
+  auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
+    -> void;
+  auto point(const Look& look, const Vertex& at) -> void;
   auto rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                 bool perspective) -> void;
-  auto point(PixelState& pixel, Sampler* texture, const Vertex& at) -> void;
-  auto shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, u32 specular, float u, float v,
-             u32 fog) -> void;
+
+  //raster.cpp
+  template<u32 Format> auto shadeAs(const Look& look, bool linear, s32 x, s32 y, u32 z, u32 color, u32 specular,
+                                    float u, float v, u32 fog) -> void;
+  template<u32 Format> auto spriteRows(const Job& job, s32 fromY, s32 toY) -> void;
+  template<u32 Format> auto triangleRows(const Job& job, s32 fromY, s32 toY) -> void;
+  template<u32 Format> auto rasterizeAs(const Job& job, s32 fromY, s32 toY) -> void;
+  auto rasterize(const Job& job, s32 fromY, s32 toY) -> void;
 
   //texture.cpp
   auto sampler() const -> Sampler;
   auto texel(const Sampler& texture, s32 u, s32 v) -> u32;
   auto sample(const Sampler& texture, float u, float v) -> u32;
+  auto sampleWith(const Sampler& texture, bool linear, float u, float v) -> u32;
+  struct TexelAxis { s32 first, second, fraction; };
+  static auto texelAxis(float coordinate, u32 size, bool clamp, bool linear) -> TexelAxis;
+  auto fetch(const Sampler& texture, s32 x, s32 y) -> u32;
+  auto filtered(const Sampler& texture, TexelAxis u, TexelAxis v) -> u32;
   auto textureFunction(u32 color, u32 texel) const -> u32;
+  auto combine(const Look& look, u32 color, u32 texel) const -> u32;
   auto loadClut() -> void;
   auto paletteChanged() -> void;
   auto textureBytes(const Sampler& texture, u32& low, u32& high) const -> void;
@@ -289,10 +355,14 @@ struct GE {
 
   //pixel.cpp
   auto pixelState() const -> PixelState;
-  auto drawPixel(PixelState& pixel, s32 x, s32 y, u32 z, u32 color, u32 fog = 255) -> void;
+  template<u32 Format> auto drawPixelAs(const PixelState& pixel, s32 x, s32 y, u32 z, u32 color, u32 fog) -> void;
 
   //transfer.cpp
   auto transfer() -> void;
+
+  //The bytes of VRAM the primitive being drawn may draw over (draw.cpp): its frame buffer's, and its depth buffer's.
+  struct Touched { u32 low = ~0u, high = 0; };
+  std::array<Touched, 2> touched;
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
   std::set<std::string> noted;

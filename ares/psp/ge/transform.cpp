@@ -214,12 +214,12 @@ static auto between(const GE::Vertex& a, const GE::Vertex& b, float t) -> GE::Ve
 
 //A triangle in 3D: dropped if out of sight, else cut along the near plane where it reaches past it, and drawn.
 //facing: as for triangle(). With flat shading every piece takes the last vertex's color.
-auto GE::clipTriangle(PixelState& pixel, Sampler* texture, const Transform& t, const Vertex& a, const Vertex& b,
-                      const Vertex& c, s32 facing) -> void {
+auto GE::clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
+                      s32 facing) -> void {
   if(outOfSight(t.depthClamp, {&a, &b, &c})) return;
   if(a.clip[3] < 0 && b.clip[3] < 0 && c.clip[3] < 0) return;
   auto nearer = [](const Vertex& v) { return v.clip[2] + v.clip[3]; };  //below zero: nearer than the near plane
-  if(nearer(a) >= 0 && nearer(b) >= 0 && nearer(c) >= 0) return triangle(pixel, texture, a, b, c, facing, true);
+  if(nearer(a) >= 0 && nearer(b) >= 0 && nearer(c) >= 0) return triangle(look, a, b, c, facing, true);
 
   //Walk round the edges, keeping each corner on the far side of the plane and making one wherever an edge crosses
   //it: a triangle cut by a plane leaves three or four corners, drawn as a fan of triangles from the first.
@@ -247,6 +247,6 @@ auto GE::clipTriangle(PixelState& pixel, Sampler* texture, const Transform& t, c
     Vertex last = kept[n];
     if(kept[0].outside || kept[n - 1].outside || last.outside) continue;
     if(flat) last.color = c.color, last.specular = c.specular;
-    triangle(pixel, texture, kept[0], kept[n - 1], last, facing, true);
+    triangle(look, kept[0], kept[n - 1], last, facing, true);
   }
 }

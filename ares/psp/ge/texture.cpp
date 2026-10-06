@@ -277,32 +277,48 @@ auto GE::dropTextures() -> void {
 //middles are nearest, weighted by sixteenths: the top two blended, then the bottom two, then those two results, each
 //step dropping its fraction (measured on a PSP, docs/psp-core.md: every pixel of the three filter-magnify files).
 auto GE::sample(const Sampler& t, float u, float v) -> u32 {
-  auto inside = [](s32 c, u32 size, bool clamp) -> s32 {
+  return sampleWith(t, t.linear, u, v);
+}
+
+//As sample(), filtered as linear says.
+//A texture coordinate as sampling takes it: the texel it's in (first; nearest), or the two whose middles it lies
+//between (first, second) and how far from the first to the second, in sixteenths (fraction; filtered), each already
+//inside the texture (repeated or held at the edge). size and clamp: the texture's width and TEXTURE_WRAP's bit for u,
+//or its height and bit for v.
+auto GE::texelAxis(float coordinate, u32 size, bool clamp, bool linear) -> TexelAxis {
+  auto inside = [&](s32 c) -> s32 {
     s32 last = std::min<s32>(size, 512) - 1;
     return clamp ? std::clamp(c, 0, last) : c & last;
   };
-  auto held = [](float value) {  //wild coordinates, from garbage (or none at all, from a division by zero)
-    return std::isnan(value) ? 0.0f : std::clamp(value, -65536.0f, 65536.0f);
-  };
-  auto fetch = [&](s32 x, s32 y) -> u32 { return t.decoded ? t.decoded[y * t.decodedWidth + x] : texel(t, x, y); };
-  if(!t.linear) {
-    s32 x = s32(std::floor(held(u))), y = s32(std::floor(held(v)));
-    return fetch(inside(x, t.width, t.clampU), inside(y, t.height, t.clampV));
-  }
-  s32 baseU = s32(std::floor(held(u) * 256)) - 128, baseV = s32(std::floor(held(v) * 256)) - 128;
-  s32 fractionU = baseU >> 4 & 15, fractionV = baseV >> 4 & 15;
-  s32 x0 = baseU >> 8, y0 = baseV >> 8;
-  s32 left = inside(x0, t.width, t.clampU), right = inside(x0 + 1, t.width, t.clampU);
-  s32 top = inside(y0, t.height, t.clampV), bottom = inside(y0 + 1, t.height, t.clampV);
-  u32 topLeft = fetch(left, top), topRight = fetch(right, top);
-  u32 bottomLeft = fetch(left, bottom), bottomRight = fetch(right, bottom);
+  //wild coordinates, from garbage (or none at all, from a division by zero)
+  float held = std::isnan(coordinate) ? 0.0f : std::clamp(coordinate, -65536.0f, 65536.0f);
+  if(!linear) return {inside(s32(std::floor(held))), 0, 0};
+  s32 base = s32(std::floor(held * 256)) - 128;
+  return {inside(base >> 8), inside((base >> 8) + 1), base >> 4 & 15};
+}
+
+//The texel at (x, y), inside the texture: decoded already, or read from memory.
+auto GE::fetch(const Sampler& t, s32 x, s32 y) -> u32 {
+  return t.decoded ? t.decoded[y * t.decodedWidth + x] : texel(t, x, y);
+}
+
+//The four texels around (u, v) blended: the top two, then the bottom two, then those two results, each step dropping
+//its fraction.
+auto GE::filtered(const Sampler& t, TexelAxis u, TexelAxis v) -> u32 {
+  u32 topLeft = fetch(t, u.first, v.first), topRight = fetch(t, u.second, v.first);
+  u32 bottomLeft = fetch(t, u.first, v.second), bottomRight = fetch(t, u.second, v.second);
   s32 mixed[4];
   for(u32 n = 0; n < 4; n++) {
-    s32 upper = (channel(topLeft, n) * (16 - fractionU) + channel(topRight, n) * fractionU) >> 4;
-    s32 lower = (channel(bottomLeft, n) * (16 - fractionU) + channel(bottomRight, n) * fractionU) >> 4;
-    mixed[n] = (upper * (16 - fractionV) + lower * fractionV) >> 4;
+    s32 upper = (channel(topLeft, n) * (16 - u.fraction) + channel(topRight, n) * u.fraction) >> 4;
+    s32 lower = (channel(bottomLeft, n) * (16 - u.fraction) + channel(bottomRight, n) * u.fraction) >> 4;
+    mixed[n] = (upper * (16 - v.fraction) + lower * v.fraction) >> 4;
   }
   return pack(mixed[0], mixed[1], mixed[2], mixed[3]);
+}
+
+auto GE::sampleWith(const Sampler& t, bool linear, float u, float v) -> u32 {
+  auto across = texelAxis(u, t.width, t.clampU, linear), down = texelAxis(v, t.height, t.clampV, linear);
+  return linear ? filtered(t, across, down) : fetch(t, across.first, down.first);
 }
 
 //How the texture's color (Ct) and the pixel's own (Cf) combine (TEXTURE_FUNCTION: bits 0-2 which, bit 8 whether the
@@ -311,10 +327,8 @@ auto GE::sample(const Sampler& t, float u, float v) -> u32 {
 //  TEXTURE_ENVIRONMENT_COLOR; replace Cv = Ct; add Cv = Cf+Ct. Alpha is Af, or with the texture's alpha At*Af (At
 //  for replace; decal keeps Af).
 //The PSP's rounding: products are (Cf+1)*Ct/256, except blend's, which rounds up.
-auto GE::textureFunction(u32 color, u32 texel) const -> u32 {
-  u32 function = commands[TextureFunction] & 7;
-  bool withAlpha = commands[TextureFunction] >> 8 & 1, doubled = commands[TextureFunction] >> 16 & 1;
-  u32 environment = commands[TextureEnvironmentColor];
+static auto textureFunctionWith(u32 function, bool withAlpha, bool doubled, u32 environment, u32 color, u32 texel)
+  -> u32 {
   s32 fragmentAlpha = channel(color, 3), texelAlpha = channel(texel, 3);
   s32 modulatedAlpha = withAlpha ? (fragmentAlpha + 1) * texelAlpha / 256 : fragmentAlpha;
   s32 out[3], alpha = modulatedAlpha;
@@ -333,4 +347,15 @@ auto GE::textureFunction(u32 color, u32 texel) const -> u32 {
     }
   }
   return pack(out[0], out[1], out[2], alpha);
+}
+
+auto GE::textureFunction(u32 color, u32 texel) const -> u32 {
+  u32 function = commands[TextureFunction] & 7;
+  bool withAlpha = commands[TextureFunction] >> 8 & 1, doubled = commands[TextureFunction] >> 16 & 1;
+  return textureFunctionWith(function, withAlpha, doubled, commands[TextureEnvironmentColor], color, texel);
+}
+
+//The texture function as a primitive's Look took it from the commands.
+auto GE::combine(const Look& look, u32 color, u32 texel) const -> u32 {
+  return textureFunctionWith(look.function, look.withAlpha, look.doubled, look.environment, color, texel);
 }

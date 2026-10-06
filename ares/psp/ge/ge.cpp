@@ -10,6 +10,7 @@ namespace ares::PlayStationPortable {
 #include "lighting.cpp"
 #include "transform.cpp"
 #include "draw.cpp"
+#include "raster.cpp"
 #include "transfer.cpp"
 
 //The GE watches the pages of the textures it keeps decoded (texture.cpp), and hears of their changes here.

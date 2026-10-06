@@ -123,39 +123,41 @@ auto GE::pixelState() const -> PixelState {
   p.top    = std::max(scissor1 >> 10 & 0x3ff, region1 >> 10 & 0x3ff);
   p.right  = std::min(scissor2 & 0x3ff, region2 & 0x3ff);
   p.bottom = std::min(scissor2 >> 10 & 0x3ff, region2 >> 10 & 0x3ff);
-  p.low = ~0u, p.high = 0;
   p.minDepth = commands[MinZ] & 0xffff;
   p.maxDepth = commands[MaxZ] & 0xffff;
   p.fogColor = commands[FogColor] & 0xff'ffff;
   return p;  //depthRange and fog: the primitive says (3D only)
 }
 
-//A pixel at (x, y), inside the scissor rectangle, with depth z, color (8888, each channel 0-255) and fog (0-255).
-auto GE::drawPixel(PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fog) -> void {
+//A pixel at (x, y), inside the scissor rectangle, with depth z, color (8888, each channel 0-255) and fog (0-255), in
+//a frame buffer of Format (p.format).
+template<u32 Format>
+auto GE::drawPixelAs(const PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fog) -> void {
   if(p.depthRange && (z < p.minDepth || z > p.maxDepth)) return;
-  u32 bytes = p.format == 3 ? 4 : 2;
+  constexpr u32 bytes = Format == 3 ? 4 : 2;
   //Both offsets wrap within VRAM and stay multiples of their pixel's size (the buffers start on 16 bytes, VRAM's size
   //is a power of two), so no pixel runs past VRAM's end. The GE reaches its depth buffer as VRAM's fourth copy shows
   //it, so in VRAM itself (and through the first copy) the depth buffer's pieces are rearranged (memory.hpp).
   u32 at = (p.frameBuffer + (y * p.stride + x) * bytes) & (Memory::VRAMSize - 1);
-  u32 depthAt = Memory::vramOffset(3, (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
+  auto depthAt = [&] {
+    return Memory::vramOffset(3, (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
+  };
   u8* vram = memory.vram.data();
-  u32 old = 0, oldDepth = vram[depthAt] | vram[depthAt + 1] << 8;
-  std::memcpy(&old, vram + at, bytes);
-  u32 oldColor = widenPixel(old, p.format);
-  auto touch = [&](u32 offset) { p.low = std::min(p.low, offset); p.high = std::max(p.high, offset); };
+  u32 old;
+  if constexpr(bytes == 4) old = vram[at] | vram[at + 1] << 8 | vram[at + 2] << 16 | u32(vram[at + 3]) << 24;
+  else old = vram[at] | vram[at + 1] << 8;
   auto writeDepth = [&] {
-    vram[depthAt] = z, vram[depthAt + 1] = z >> 8;
-    touch(depthAt);
+    u32 offset = depthAt();
+    vram[offset] = z, vram[offset + 1] = z >> 8;
   };
   auto write = [&](u32 value, u32 keep) {  //keep: bits of the old pixel that stay
-    u32 pixel = (narrowPixel(value, p.format) & ~keep) | (old & keep);
-    std::memcpy(vram + at, &pixel, bytes);
-    touch(at);
+    u32 pixel = (narrowPixel(value, Format) & ~keep) | (old & keep);
+    vram[at] = pixel, vram[at + 1] = pixel >> 8;
+    if constexpr(bytes == 4) vram[at + 2] = pixel >> 16, vram[at + 3] = pixel >> 24;
   };
-  u32 colorBits = p.format == 0 ? 0xffff : p.format == 1 ? 0x7fff : p.format == 2 ? 0x0fff : 0x00ff'ffff;
-  u32 stencilBits = (p.format == 3 ? 0xffff'ffff : 0xffff) & ~colorBits;
-  u32 stencil = oldColor >> 24;
+  constexpr u32 colorBits = Format == 0 ? 0xffff : Format == 1 ? 0x7fff : Format == 2 ? 0x0fff : 0x00ff'ffff;
+  constexpr u32 stencilBits = (Format == 3 ? 0xffff'ffff : 0xffff) & ~colorBits;
+  u32 stencil = widenPixel(old, Format) >> 24;
 
   if(p.clear) {  //the vertex's alpha goes in as the stencil
     if(p.clearDepth) writeDepth();
@@ -174,20 +176,28 @@ auto GE::drawPixel(PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fog) -> vo
     bool equal = (color & p.colorMask) == (p.colorReference & p.colorMask);
     if(p.colorFunction == 0 || (p.colorFunction == 2) != equal) return;
   }
-  bool depthPasses = !p.depthTest || passes(p.depthFunction, z, oldDepth);
+  bool depthPasses = true;
+  if(p.depthTest) {
+    u32 offset = depthAt();
+    depthPasses = passes(p.depthFunction, z, vram[offset] | vram[offset + 1] << 8);
+  }
   if(p.stencilTest) {
     u32 reference = p.stencilReference;
     u32 operation = p.stencilPass;
     bool drop = false;
-    if(!passes(p.stencilFunction, reference & p.stencilMask, stencil & p.stencilMask)) operation = p.stencilFail, drop = true;
-    else if(!depthPasses) operation = p.stencilDepthFail, drop = true;
-    stencil = stencilOperation(operation, p.format, reference, stencil);
+    if(!passes(p.stencilFunction, reference & p.stencilMask, stencil & p.stencilMask)) {
+      operation = p.stencilFail, drop = true;
+    } else if(!depthPasses) {
+      operation = p.stencilDepthFail, drop = true;
+    }
+    stencil = stencilOperation(operation, Format, reference, stencil);
     if(drop) return write(stencil << 24, p.writeMask | colorBits);
   } else if(!depthPasses) {
     return;
   }
   if(p.depthWrite) writeDepth();
 
+  u32 oldColor = p.blend || p.logicOp ? widenPixel(old, Format) : 0;
   s32 rgb[3];
   for(u32 n = 0; n < 3; n++) rgb[n] = channel(color, n);
   if(p.blend) {
