@@ -742,6 +742,45 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the system fonts — 2026-10-06
+
+Branch `cursor/psp-fonts-2b67`, on top of `cursor/psp-hle-games3-2b67` (the entry below), not pushed.
+docs/psp-core.md, part 23, describes it. sceLibFont draws the PSP's own fonts (the PGF files of flash0:/font) where
+part 20's stand-in found none, so games that print with them show their text. Written from the owner's own fonts
+(read field by field with scratch scripts) and pspautotests' font programs and the results they recorded on a PSP;
+no other emulator's code read (PPSSPP's and JPCSP's PGF readers weren't opened).
+- **How the user gives Phobos the fonts**: they're Sony's firmware, never in the repository, the APK or a commit.
+  Copy them from your own PSP with `tools/psp-flash0-dump` (it leaves `PSP/GAME/FLASH0DUMP/flash0/` on the memory
+  stick), put that folder on the device, then in Phobos: Settings, Firmware, "PSP fonts (from your PSP's flash0)",
+  and pick `flash0/font` (or `flash0`, or the `FLASH0DUMP` folder: the font folder is found inside). Its .pgf files
+  are copied into the app's own files (`firmware/PlayStation Portable/font`) and the row says how many of the
+  eighteen are there; picking again replaces them. The runner hands that folder to the core as a PSP game loads
+  (core option "Fonts"); with none there the library is the stand-in, as before.
+- **What's there**: a PGF reader (`ares/psp/kernel/pgf.cpp`: header, tables, character maps, glyphs, run-length
+  pictures by rows and columns, shadows, the Korean font's composites; every offset and size checked against the
+  file, a damaged glyph missing on its own); the library (`font.cpp`): NewLib/DoneLib, the font list, FindOptimumFont
+  and FindFont, Open, OpenUserFile, OpenUserMemory, Close, GetFontInfo(ByIndexNumber), character and shadow info,
+  image rectangles and glyph images (whole and clipped, the 4- and 8-bit formats drawing, fractions of a pixel across
+  shared as recorded), the alternative character, SetResolution and the four conversions. The game's alloc and free
+  are called for every block, in the sizes and order recorded, the calling thread running them as callbacks run.
+- **States**: version 8 (1 to 7 refused): libraries, open fonts and calls part way through saved and checked;
+  fonts read again from where they came from on loading, the state refused if one is missing or differs.
+- **On the host** with the owner's fonts (frames in `/tmp/fonts-runner/final`, not in the repository): Gunhound EX's
+  save notice in Japanese (a black screen before); Peace Walker's "Checking Memory Stick™", its MSF disclaimer, its
+  player's name ("Is this name OK?"), control scheme, BUTTON CONFIG, DATA INSTALL and "Installing... (Progress: N%)",
+  all of which had shown none of their words.
+- **Checks**: `tests/psp/run-tests.sh` 221 groups with both sanitizers (ten new: "pgf read back", "pgf damaged",
+  "fonts memory", "fonts found", "fonts measured", "fonts drawn", "fonts of the program's own", "fonts resolution",
+  "fonts states", "fonts folder"; "state fields" refuses seventeen more states); `tests/psp/ares` 264 checks (the
+  option; a version 7 state refused); the app's unit tests (251, `PspFontsTest` new) and the modern release build.
+  Twelve broken versions each failed a test. On the RP6: the build installed over the app (data kept); the new row,
+  given `Download/FLASH0DUMP`, found `flash0/font` and copied the eighteen ("18 of 18 fonts copied", Complete). No
+  game was started there (quitting would have written its auto state).
+- **Uncertain**: shadow flags reported raw (the PSP's differ: their meaning isn't known); kr0's country; a game's
+  font file opened a piece at a time is read through the kernel's files, not the game's callbacks; drawing borrows
+  no memory from the game; the order of a few frees; see part 23's list.
+- **Next**: try more games that use the system fonts; Peace Walker's and Gunhound's text on the device.
+
 ## PSP core: the games, further — 2026-10-06
 
 Branch `cursor/psp-hle-games3-2b67`, on top of `cursor/psp-hle-games2-2b67` (#146) and, merged since, of
