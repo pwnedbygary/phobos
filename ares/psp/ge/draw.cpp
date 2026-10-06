@@ -38,6 +38,8 @@ static auto fixed(float position) -> s32 {
   return s32(position * 16);
 }
 
+static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
+
 //The settings a primitive is drawn with: these pipeline and texture settings, with the commands' texture function.
 auto GE::lookFor(const PixelState& pixel, const Sampler* texture) const -> Look {
   Look look;
@@ -77,23 +79,44 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   Sampler texture = sampler();
   bool textured = (commands[TextureMappingEnable] & 1) && !pixel.clear;
   Look look = lookFor(pixel, textured ? &texture : nullptr);
-  if(textured) {
-    //where it may draw: inside the scissor rectangle, and in 2D around its vertices (a pixel more each way)
-    s32 left = pixel.left, top = pixel.top, right = pixel.right, bottom = pixel.bottom;
-    if(format.through && !vertices.empty()) {
-      s32 minX = 65536, maxX = -65536, minY = 65536, maxY = -65536;
-      for(auto& vertex : vertices) {
-        minX = std::min(minX, fixed(vertex.x)), maxX = std::max(maxX, fixed(vertex.x));
-        minY = std::min(minY, fixed(vertex.y)), maxY = std::max(maxY, fixed(vertex.y));
-      }
-      left = std::max(left, (minX >> 4) - 1), right = std::min(right, (maxX >> 4) + 1);
-      top = std::max(top, (minY >> 4) - 1), bottom = std::min(bottom, (maxY >> 4) + 1);
+  //Where it may draw: inside the scissor rectangle, and in 2D, where its vertices' sprites, triangles or points can
+  //reach (the pixels rectangle(), triangle() and point() would cover between its outermost vertices); and in 2D,
+  //the rows of its texture it can take texels from: those its vertices' v reach, two more for the filter and
+  //stepping (in eights), when nothing can repeat round to the far end (below), or v is held at the top. A texture
+  //of more rows is often a picture of fewer (a frame buffer of 272), the rest maybe where this one draws.
+  Region region{pixel.left, pixel.top, pixel.right, pixel.bottom};
+  u32 rows = ~0u;
+  if(format.through && !vertices.empty()) {
+    s32 minX = 65536, maxX = -65536, minY = 65536, maxY = -65536;
+    float minV = 65536, maxV = -65536;
+    for(auto& vertex : vertices) {
+      minX = std::min(minX, fixed(vertex.x)), maxX = std::max(maxX, fixed(vertex.x));
+      minY = std::min(minY, fixed(vertex.y)), maxY = std::max(maxY, fixed(vertex.y));
+      minV = std::min(minV, vertex.v), maxV = std::max(maxV, vertex.v);
     }
-    look.decoded = decode(look.texture, pixel, left, top, right, bottom);
+    if(kind == Points) {
+      region.left = std::max(region.left, minX >> 4), region.right = std::min(region.right, maxX >> 4);
+      region.top = std::max(region.top, minY >> 4), region.bottom = std::min(region.bottom, maxY >> 4);
+    } else {
+      region.left = std::max(region.left, floorDivide(minX - 9 + 15, 16));
+      region.right = std::min(region.right, floorDivide(maxX - 8, 16));
+      region.top = std::max(region.top, floorDivide(minY - 8 + 15, 16));
+      region.bottom = std::min(region.bottom, floorDivide(maxY - 8, 16));
+    }
+    //(a sprite's or point's v doesn't leave its vertices', so it repeats round only from below 0, or below a half
+    //when it may be filtered; a triangle's steps may take it a hair past them)
+    u32 height = std::min<u32>(texture.height, 512);
+    bool filters = commands[TextureFilter] & 0x101;
+    float lowest = kind == Sprites || kind == Points ? (filters ? 0.5f : 0.0f) : 2.0f;
+    if((minV >= lowest || texture.clampV) && maxV + 2 < height) {
+      u32 reach = maxV + 2 > 0 ? u32(maxV + 2) : 0;  //(all of them below the top, held at it)
+      rows = std::min<u32>((reach + 8) & ~7u, height);
+    }
   }
+  if(textured) look.decoded = decode(look.texture, pixel, region, rows);
   //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
   //texture read from memory as it's drawn (texture.cpp) has it drawn at once.
-  drawing.recording = !(look.textured && !look.texture.decoded) && defer(pixel);
+  drawing.recording = !(look.textured && !look.texture.decoded) && defer(pixel, region);
   if(!drawing.recording) flush();
   const Look& drawn = drawing.recording ? drawing.looks.emplace_back(std::move(look)) : look;
   Transform t{};
@@ -179,8 +202,6 @@ static auto fogAmount(float fog) -> u32 {
   if(!(fog < 1)) return 255;
   return u32(fog * 256);
 }
-
-static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 
 //The filter for a primitive: TEXTURE_FILTER's for enlarging if a texel covers a pixel or more, else its for shrinking
 //(of which the mipmap kinds, 4-7, filter as their bit 0 says: mipmaps aren't emulated yet).

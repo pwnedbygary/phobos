@@ -138,15 +138,15 @@ auto GE::pendingOver(u32 address, u32 size) const -> bool {
   return false;
 }
 
-//Whether a primitive drawn with these settings may wait in the batch (see the top of this file): drawing the batch in
-//bands must come out as drawing its primitives one after another would. So no two pixels in different rows may share
-//a byte: inside the batch's area (every primitive's scissor rectangle together), one row of its frame buffer mustn't
-//reach the next, nor run round VRAM's end; likewise its depth buffer's, if any of them reaches it; and the frame and
-//depth buffers mustn't overlap. A primitive into another render target than the batch's, or that would break that,
-//has the batch drawn first; one that breaks it by itself is drawn at once.
-auto GE::defer(const PixelState& p) -> bool {
+//Whether a primitive drawn with these settings, inside region, may wait in the batch (see the top of this file):
+//drawing the batch in bands must come out as drawing its primitives one after another would. So no two pixels in
+//different rows may share a byte: inside the batch's area (every primitive's region together), one row of its frame
+//buffer mustn't reach the next, nor run round VRAM's end; likewise its depth buffer's, if any of them reaches it;
+//and the frame and depth buffers mustn't overlap. A primitive into another render target than the batch's, or that
+//would break that, has the batch drawn first; one that breaks it by itself is drawn at once.
+auto GE::defer(const PixelState& p, const Region& region) -> bool {
   if(!drawing.deferring || drawing.workers.empty()) return false;
-  if(p.left > p.right || p.top > p.bottom) return true;  //draws nothing
+  if(region.left > region.right || region.top > region.bottom) return true;  //draws nothing
   auto fits = [&](s32 left, s32 right, s32 top, s32 bottom, bool depth) {
     u32 bytes = p.format == 3 ? 4 : 2, columns = right - left;  //(less one)
     u32 colorLow = p.frameBuffer + (top * p.stride + left) * bytes;
@@ -162,8 +162,8 @@ auto GE::defer(const PixelState& p) -> bool {
   if(drawing.targeted) {
     bool same = p.frameBuffer == drawing.frameBuffer && p.stride == drawing.stride && p.format == drawing.format &&
                 p.depthBuffer == drawing.depthBuffer && p.depthStride == drawing.depthStride;
-    s32 left = std::min(drawing.left, p.left), right = std::max(drawing.right, p.right);
-    s32 top = std::min(drawing.upper, p.top), bottom = std::max(drawing.lower, p.bottom);
+    s32 left = std::min(drawing.left, region.left), right = std::max(drawing.right, region.right);
+    s32 top = std::min(drawing.upper, region.top), bottom = std::max(drawing.lower, region.bottom);
     if(same && fits(left, right, top, bottom, drawing.depth || depth)) {
       drawing.left = left, drawing.right = right, drawing.upper = top, drawing.lower = bottom;
       drawing.depth |= depth;
@@ -171,11 +171,11 @@ auto GE::defer(const PixelState& p) -> bool {
     }
     flush();
   }
-  if(!fits(p.left, p.right, p.top, p.bottom, depth)) return false;
+  if(!fits(region.left, region.right, region.top, region.bottom, depth)) return false;
   drawing.targeted = true;
   drawing.frameBuffer = p.frameBuffer, drawing.stride = p.stride, drawing.format = p.format;
   drawing.depthBuffer = p.depthBuffer, drawing.depthStride = p.depthStride;
-  drawing.left = p.left, drawing.right = p.right, drawing.upper = p.top, drawing.lower = p.bottom;
+  drawing.left = region.left, drawing.right = region.right, drawing.upper = region.top, drawing.lower = region.bottom;
   drawing.depth = depth;
   return true;
 }

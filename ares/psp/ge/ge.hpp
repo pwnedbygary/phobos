@@ -178,7 +178,8 @@ struct GE {
   struct TextureKey {
     //everything texel() reads for a texel inside the texture; the palette's settings and contents (by its hash)
     //only for palette indices, 0 otherwise
-    u32 address, bufferWidth, format, width, height, swizzled;  //width, height: the texels kept, at most 512 a side
+    u32 address, bufferWidth, format, width, height, swizzled;  //width, height: the texels kept (at most 512 a side;
+                                                                //rows a primitive may reach, maybe fewer)
     u32 clutFormat, clutShift, clutMask, clutOffset;
     u64 clutHash;
     auto operator==(const TextureKey&) const -> bool = default;
@@ -224,6 +225,9 @@ struct GE {
     bool depthRange, fog;  //3D only: the depth range test (MIN_Z to MAX_Z), and fog (FOG_ENABLE, not in clear mode)
     u32 minDepth, maxDepth, fogColor;
   };
+
+  //Where a primitive may draw (draw.cpp): pixels inside left-right and top-bottom (inclusive).
+  struct Region { s32 left, top, right, bottom; };
 
   //What a primitive is drawn with, shared by the jobs it makes: the pixel pipeline's settings, and the texture
   //with the texture function's (or none), all taken from the commands as the primitive met them.
@@ -353,8 +357,8 @@ struct GE {
   auto combine(const Look& look, u32 color, u32 texel) const -> u32;
   auto loadClut() -> void;
   auto paletteChanged() -> void;
-  auto textureBytes(const Sampler& texture, u32& low, u32& high) const -> void;
-  auto decode(Sampler& texture, const PixelState& pixel, s32 left, s32 top, s32 right, s32 bottom)
+  auto textureBytes(const Sampler& texture, u32 rows, u32& low, u32& high) const -> void;
+  auto decode(Sampler& texture, const PixelState& pixel, const Region& region, u32 rows)
     -> std::shared_ptr<Decoded>;
   auto textureWritten(u32 page) -> void;
   auto forget(Decoded* entry) -> void;
@@ -371,7 +375,7 @@ struct GE {
   auto setThreads(u32 count) -> void;
   auto flush() -> void;
   auto pendingOver(u32 address, u32 size) const -> bool;
-  auto defer(const PixelState& pixel) -> bool;
+  auto defer(const PixelState& pixel, const Region& region) -> bool;
   auto record(const Job& job) -> void;
   auto drawBands() -> void;
   auto worker() -> void;

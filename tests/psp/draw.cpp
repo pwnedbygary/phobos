@@ -639,6 +639,27 @@ static auto drawDecodedTextures() -> void {
     CHECK(drawn(1), 0x0030'0001u);
   }
 
+  //A texture of 512 rows whose picture is 16 (as a frame buffer of 272 rows is drawn with as one of 512): drawn into
+  //its rows 400 on, a sprite taking texels from its first 16 keeps it decoded (only the rows it reaches count);
+  //drawn into its row 8 on, it's read from memory as the sprite draws, rows it has drawn among them.
+  {
+    Canvas tall;
+    tall.texture(3, 16, 512, 16);
+    tall.ge.commands[GE::TextureAddress0] = 0x4'0000;
+    tall.ge.commands[GE::TextureBufferWidth0] = 0x04 << 16 | 16;
+    for(u32 n = 0; n < 16 * 16; n++) tall.memory.write(4, VRAM + 0x4'0000 + n * 4, 0x0050'0000 + n);
+    tall.ge.commands[GE::FrameBufferPointer] = 0x4'0000 + 400 * 64;
+    tall.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 16, 0}});
+    CHECK(tall.ge.textures.entries.size(), 1u);
+    CHECK(tall.memory.read(4, VRAM + 0x4'0000 + (400 + 5) * 64 + 9 * 4), 0x0050'0000u + 5 * 16 + 9);
+    tall.ge.dropTextures();
+    tall.ge.commands[GE::FrameBufferPointer] = 0x4'0000 + 8 * 64;
+    tall.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 8, 0}});
+    CHECK(tall.ge.textures.entries.size(), 0u);
+    //(its row 4 takes texels from row 9, its own row 1, which took them from row 3)
+    CHECK(tall.memory.read(4, VRAM + 0x4'0000 + (8 + 4) * 64 + 3 * 4), 0x0050'0000u + 3 * 16 + 3);
+  }
+
   //drawing over its own texture (the frame buffer): row 2 takes row 1 as this sprite has just drawn it
   Canvas c;
   for(u32 x = 0; x < 4; x++) c.setPixel(x, 0, 0x0001'0101 * (x + 1)), c.setPixel(x, 1, 0x0012'3456);

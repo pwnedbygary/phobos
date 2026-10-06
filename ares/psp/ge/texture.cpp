@@ -122,10 +122,10 @@ auto GE::texel(const Sampler& t, s32 u, s32 v) -> u32 {
   return texelFrom(t, clut, u, v, [&](u32 size, u32 at) { return memory.read(size, at); });
 }
 
-//The bytes texel() reads for every texel inside the texture: from low up to (not including) high. For a swizzled
-//texture, a little past them at most (the last block's whole width and height).
-auto GE::textureBytes(const Sampler& t, u32& low, u32& high) const -> void {
-  u32 width = std::min<u32>(t.width, 512), height = std::min<u32>(t.height, 512);
+//The bytes texel() reads for every texel inside the texture's first rows: from low up to (not including) high. For
+//a swizzled texture, a little past them at most (the last block's whole width and height).
+auto GE::textureBytes(const Sampler& t, u32 rows, u32& low, u32& high) const -> void {
+  u32 width = std::min<u32>(t.width, 512), height = rows;
   u32 bits = TexelBits[t.format], rowBytes = t.bufferWidth * bits / 8, lastByte = (width - 1) * bits / 8;
   u32 size = t.format < 3 || t.format == 6 ? 2 : t.format == 3 || t.format == 7 ? 4 : 1;  //the last read's
   u32 last = !t.swizzled ? (height - 1) * rowBytes + lastByte
@@ -179,20 +179,20 @@ static auto drawsOver(const GE::PixelState& p, u32 first, u32 last, s32 left, s3
 
 //The texture decoded, found in the cache or decoded now (and its texels pointed to by texture.decoded): kept by the
 //caller while it draws, as the cache may let it go meanwhile. None, with texture.decoded none too, where it's read
-//from memory as before (see the top of this file). left-right and top-bottom: where the primitive may draw.
-auto GE::decode(Sampler& t, const PixelState& pixel, s32 left, s32 top, s32 right, s32 bottom)
-  -> std::shared_ptr<Decoded> {
+//from memory as before (see the top of this file). region: where the primitive may draw; rows: how many of the
+//texture's rows it may take texels from (all of them, past its height).
+auto GE::decode(Sampler& t, const PixelState& pixel, const Region& region, u32 rows) -> std::shared_ptr<Decoded> {
   t.decoded = nullptr;
   if(t.format >= 8 || !memory.canWatch()) return {};
+  rows = std::min({rows, t.height, 512u});
   u32 low, high;
-  textureBytes(t, low, high);
+  textureBytes(t, rows, low, high);
   if(!memory.reaches(low, high - low)) return {};
   if(u32 first, last; vramSpan(low, high - low, first, last)) {
-    if(drawsOver(pixel, first, last, left, top, right, bottom)) return {};
+    if(drawsOver(pixel, first, last, region.left, region.top, region.right, region.bottom)) return {};
   }
   bool indexed = t.format >= 4;
-  TextureKey key{t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), std::min<u32>(t.height, 512),
-                 t.swizzled, 0, 0, 0, 0, 0};
+  TextureKey key{t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), rows, t.swizzled, 0, 0, 0, 0, 0};
   if(indexed) key.clutFormat = t.clutFormat, key.clutShift = t.clutShift, key.clutMask = t.clutMask,
               key.clutOffset = t.clutOffset, key.clutHash = clutHash;
   std::shared_ptr<Decoded> entry;
