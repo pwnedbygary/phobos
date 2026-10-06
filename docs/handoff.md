@@ -742,6 +742,36 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the GE made fast, every pixel the same — 2026-10-06
+
+Branch `cursor/psp-ge-speed-2b67`, on top of `cursor/psp-hle-games3-2b67` (the entry below), not pushed.
+docs/psp-core.md, part 24, describes it (part 23 is the fonts' worker's); the owner's decision (the software
+renderer as fast as possible and exactly as accurate, the reference; Vulkan and OpenGL renderers later) is in its
+Decisions. Original code; no PPSSPP or JPCSP source read.
+- **What:** textures kept decoded, dropped the moment their memory changes (the GE watches their pages; the CPU's
+  compiled stores keep off watched pages); primitives set up once as jobs and drawn row by row with the very same
+  arithmetic; drawn in bands of 8 rows by several threads, each band in the list's order (option "GE Threads": 0,
+  the default, one fewer than the host's cores; 1, as before); in 2D, regions and texture rows exact; a leaner pixel
+  pipeline, texture function and filter; drawing going on while the CPU runs and the next batch is set up, nobody
+  seeing it half drawn (`Memory::pointer()`, states and power wait for the VRAM pages it uses, the CPU's page tables
+  lose them meanwhile); cheaper vertex reads and screen picture.
+- **Speed** (host M1, the Android build's flags, 300 frames a scene, before -> after with 7 threads): GTA LCS in the
+  city 20.4 -> 83.4 fps (4.1x), Peace Walker's title 13.5 -> 129.8 (9.6x), Lumines' demo 31.3 -> 192.8 (6.2x),
+  Burnout Legends racing 26.8 -> 85.9 (3.2x), Midnight Club 3 racing 6.2 -> 27.9 (4.5x), Gunhound EX 123 -> 229
+  (1.9x); single-threaded 1.4-2.1x.
+- **Same pixels:** every frame's picture and VRAM (and RAM at the end) in the six scenes identical to the old core's
+  with 1, 2, 4, 7 and 8 threads and on the interpreter; a scratch differential fuzzer against the old GE (thousands
+  of random lists, every setting; 1, 4 and 8 threads; with the address, undefined-behavior and thread sanitizers);
+  the parts' 213 groups (the PSP's measured results unchanged) with both sanitizers and under ThreadSanitizer, the
+  ares system's 254 checks. New groups "draw textures kept decoded" and "ge drawn on several threads"; 16 broken
+  versions each failed them.
+- **Peace Walker's stripes:** not the core's. Built with the NDK's clang 19 and the device's flags as a static
+  Android executable in a Linux arm64 container, it draws every frame as the host does (the title and from boot);
+  the undefined-behavior sanitizer finds nothing in the core. Left: the front end's presentation (the title is
+  one-pixel lines, which 3.97x scaling bands), or a state the device reached. Not tried on the device (in use).
+- **Next:** setting up for less and drawing bands as primitives arrive (the GE's thread is GTA's and Burnout's
+  longest path now), SIMD four pixels at a time, the GPU renderers.
+
 ## PSP core: the games, further — 2026-10-06
 
 Branch `cursor/psp-hle-games3-2b67`, on top of `cursor/psp-hle-games2-2b67` (#146) and, merged since, of

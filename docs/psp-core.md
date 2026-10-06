@@ -18,7 +18,8 @@ now start ask for (callbacks, sound output's timing, power, interrupt handlers, 
 saves), is on `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67`; parts 18 and 19, decryption and
 loading modules, are on `cursor/psp-decrypt-2b67` (#144), which `cursor/psp-hle-games-2b67` has since merged.
 Part 21, sound (sceAudio's channels mixed into the system's stream, sceSasCore's voices heard), is on
-`cursor/psp-sound-2b67`, on top of part 20's `cursor/psp-hle-games2-2b67`.
+`cursor/psp-sound-2b67`, on top of part 20's `cursor/psp-hle-games2-2b67`. Part 24, making the GE fast (part 23 is
+the fonts'), is on `cursor/psp-ge-speed-2b67`, on top of part 22's `cursor/psp-hle-games3-2b67`.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -56,6 +57,13 @@ Part 21, sound (sceAudio's channels mixed into the system's stream, sceSasCore's
   sceSas), then sceFont from the user's own flash0 fonts. The user's games to test against first: GTA Vice City
   Stories and Liberty City Stories, Metal Gear Solid: Peace Walker, Burnout Legends and Dominator, Lumines, Midnight
   Club 3, SOCOM: Fireteam Bravo, Snoopy vs. the Red Baron and Gunhound EX (kept as CHDs on the RP6's SD card).
+- **The GE's renderers** (2026-10-06): make the software renderer as fast as humanly possible first; later add both
+  a Vulkan and an OpenGL renderer as options for speed, still as accurate as possible. Accuracy is not negotiable in
+  the software renderer: it is the reference, and every speedup must draw exactly the pixels it drew before (part
+  24).
+- **The GE's renderers** (2026-10-06): make the software renderer as fast as it can be first; later add both a
+  Vulkan and an OpenGL renderer as options for speed, still as accurate as they can be. Accuracy isn't negotiable in
+  the software renderer: it's the reference, and every speedup must draw the very same pixels (part 24).
 
 ## Sources
 
@@ -2454,3 +2462,146 @@ CONTINUE", as before; all three silent there (Burnout's title music is ATRAC3+, 
 refused, and GTA's sound thread makes its sas grains and blocking outputs at their pace with no voice keyed on).
 The Street Fighter III port's sound is part 21's capture second for second, but starts about 4 s later: its 4.4 MB
 of reads as it boots now take the disc's 3.2 s (this part's synchronous reads).
+
+## Part 24: making the GE fast
+
+On branch `cursor/psp-ge-speed-2b67`, on top of part 22's `cursor/psp-hle-games3-2b67` (part 23 is the fonts'). The
+owner's decision (2026-10-06, in Decisions): the software renderer as fast as humanly possible first, the GPU
+renderers later; the software renderer is the reference, so it must draw exactly the pixels it drew before. On the
+RP6, GTA Liberty City Stories drew at 17.7 frames a second, Peace Walker's title at 9.5, one core busy and the rest
+idle; on the host a profile put nearly all of Peace Walker's time in the GE's drawing.
+
+**Where the time went** (`sample` on the host, the core built with the Android build's flags: `-O3 -flto=thin
+-ftree-vectorize -funroll-loops -fno-math-errno -fno-trapping-math`): looking texels up (`texel()`, `Memory::read()`,
+`sample()`, widening 16-bit colors) took 47-58% of the time in five of the six scenes below (Gunhound 26%), the
+pixel pipeline (`drawPixel()`) 17-38%, triangle and sprite loops most of the rest; the CPU's recompiled code, the
+kernel and setting primitives up a few percent. A scene's frame is mostly one long run of the GE: GTA, Peace Walker,
+Lumines, Burnout and Midnight Club 3 draw all of their pixels in runs of 200,000 pixels or more (one or two a frame),
+Gunhound 54% (in 53 runs a frame). They draw a lot: Midnight Club 3 2.7 million pixels a frame (21 screens), Peace
+Walker 1.8 million.
+
+**What was done**, each step measured and proved identical before the next (ares/psp/ge):
+
+1. **Textures kept decoded** (texture.cpp). A texture is decoded once into 8888 texels, each exactly what `texel()`
+   reads (one routine for both), and drawing takes a texel in one step. The copy is good only while its memory stays
+   as it was, so the GE watches the pages it came from (memory.hpp: `watch()`; `changed()` reports a write to a
+   watched page, as do power and a state loaded), and the CPU's compiled stores keep off watched pages as they keep
+   off pages holding compiled code (`Allegrex::watched`, `recompiler.protect()`), so they go through `write()` too.
+   A palette texture is kept per palette (its hash, checked byte for byte). Read from memory as before: DXT, a
+   texture not wholly in memory (its reads still reported), and a primitive that may draw over its own texture.
+2. **Primitives set up once, drawn row by row** (draw.cpp, raster.cpp). Setting a primitive up works out everything
+   that doesn't change from pixel to pixel into a Job; drawing works each pixel out from it with the same operations
+   on the same numbers in the same order, so any rows can be drawn on their own. Meanwhile: a triangle's rows found
+   by division and its edges stepped by adding (whole numbers), values worked out only where the pipeline uses them,
+   a 2D sprite's texel coordinates once a column and once a row, and the pixel pipeline once for each frame buffer
+   format.
+3. **Several threads, in bands of rows** (threads.cpp). While the GE runs a list, primitives wait in a batch; the
+   batch is cut into bands of 8 rows, which the GE's thread and its workers take in turn, each band drawing every job
+   that reaches it in the list's order. A pixel is only ever drawn by its band, so every pixel is drawn exactly as
+   one after another would draw it. A batch keeps to one render target, and to an area where no two pixels in
+   different rows share a byte (frame and depth buffers apart, rows not reaching each other); anything else is drawn
+   by itself, in order. Option "GE Threads" (system.cpp): how many threads draw; 0, the default, one fewer than the
+   host's cores; 1, the GE's own alone, every primitive drawn at once as before. Workers may run on any core: the
+   Android front end pins the emulation thread to the fastest, and threads start on their maker's cores.
+4. **In 2D, where a primitive draws and which texture rows it reaches, exactly** (draw.cpp): its region is the
+   pixels its sprites, triangles or points can cover between its outermost vertices, not the scissor rectangle; its
+   texture's rows those its vertices' v reach, when nothing repeats round. Midnight Club 3 drew 247,000 pixels a frame
+   by themselves (a 512-row texture whose picture is a frame buffer's 272, a render target narrower than its
+   scissor); 22,000 now, all drawing over their own textures.
+5. **A leaner pixel pipeline, texture function and filter** (pixel.cpp, texture.cpp): the frame buffer read and
+   written at its own size, the blend factors and the texture function chosen once a pixel instead of once a channel,
+   the filter's four channels blended side by side in 16 bits each of one 64-bit number (none can spill into the
+   next), divisions of numbers never below zero by powers of two as shifts, all inline in the loops; a 3D sprite's
+   perspective worked out once a column and once a row, one division left a pixel.
+6. **Drawing goes on while the CPU runs** (threads.cpp, memory.hpp): a batch, once done (the list stops, or the
+   render target changes), is drawn by the workers while the GE's thread goes on, setting up the next batch in the
+   other of two (drawn after the first, in order), or running the CPU. Nobody sees it half drawn: `Memory::pointer()`
+   (behind every read, write and copy, the screen's picture among them), states and power wait for it when they
+   touch the VRAM pages it draws over or reads, and the CPU's owner takes those pages out of the CPU's page tables
+   meanwhile (`Memory::vramGuard`), so compiled loads and stores go through `pointer()` too. The next list, and
+   whatever the GE's own thread reads from those pages (a texture, a palette, vertices, the list), wait as well. A
+   machine without a guard draws a list's batches before `run()` returns, as before.
+7. **Setting up for less** (vertex.cpp, display.cpp): a vertex read through one host pointer when its bytes lie side
+   by side, its vertices kept in one vector, and the screen's picture read a row at a time.
+
+**Measured** on the host (Apple M1, 4 fast and 4 slow cores), the core built with the Android build's flags,
+300 frames from a state in each scene (scratch runner and states in `/tmp`, never committed), host frames a second:
+
+| scene | before | after: 1 thread | after: 7 threads | speedup |
+| --- | --- | --- | --- | --- |
+| GTA Liberty City Stories, in the city | 20.4 | 33.5 | 83.4 | 4.1x |
+| Peace Walker's title | 13.5 | 29.0 | 129.8 | 9.6x |
+| Lumines' demo | 31.3 | 57.7 | 192.8 | 6.2x |
+| Burnout Legends, racing | 26.8 | 42.2 | 85.9 | 3.2x |
+| Midnight Club 3, racing | 6.2 | 11.4 | 27.9 | 4.5x |
+| Gunhound EX, in a mission | 123.2 | 167.4 | 229.1 | 1.9x |
+
+Before and after were run in turn, best of three, picture hashes only (so drawing may go on across frames, as in the
+app). By step (a busy machine, other work sharing it, so within about 10%): textures kept decoded took GTA from 19.7
+to 25.2, Peace Walker 12.9 to 17.9, Lumines 29.4 to 42.4, Burnout 25.9 to 32.4, Midnight Club 5.8 to 7.8; jobs, to
+28.9, 20.6, 47.0, 35.6, 9.2 (Gunhound 113 to 146); threads (7), to 68.9, 72.3, 158.7, 73.0, 20.8 (Gunhound 211), and
+with 1, 2 and 4 threads GTA drew 28.0, 39.9 and 63.4, Peace Walker 21.4, 39.9 and 59.7, Midnight Club 9.6, 14.4 and
+18.4; exact 2D regions, Midnight Club 20.4 to 22.5; the leaner pipeline, single-threaded, GTA 28.8 to 31.6, Peace
+Walker 21.0 to 27.7, Lumines 49.2 to 54.4, Burnout 36.9 to 39.2, Midnight Club 9.9 to 10.6; drawing while the CPU
+runs, Peace Walker 108 to 131, Lumines 173 to 181. In a 4-core Linux arm64 container (Docker on the same M1), the
+core built for Android with the NDK and run as a static executable: Peace Walker 27.7 frames a second with 1 thread,
+73.0 with 3; GTA 33.8 and 62.8.
+
+**How it's known to draw the same pixels:**
+
+- The six scenes record a hash of every frame's picture and of all of VRAM, and of RAM at the end; with 1, 2, 4, 7
+  and 8 threads, and on the interpreter, every hash is the old core's.
+- A differential fuzzer (scratch, never committed) links the old GE beside the new and feeds both the same random
+  display lists into identical memories: every pixel pipeline setting, every texture format with palettes,
+  swizzling, filtering, wrapping, both texture coordinate kinds, lighting, morphing and skinning, 3D with clipping,
+  points, sprites and triangles, render to texture and drawing over its own texture, transfers, palettes loaded
+  from VRAM, writes between lists; then compares every byte of VRAM and RAM. Thousands of cases at a time, at 1, 4
+  and 8 threads, batches shared however small and drawn past the list's end; with the address, undefined-behavior
+  and thread sanitizers. Deliberately broken versions (a texture function off by one for one input, a triangle edge
+  rule changed for one sixteenth, invalidation missing, the feedback check missing, a band's rows off by one...)
+  failed it within seconds.
+- The parts' tests (213 groups, the measured comparisons with the owner's PSP among them, unchanged) with the
+  address and undefined-behavior sanitizers, and under ThreadSanitizer; the ares system's 254 checks.
+- New groups: "draw textures kept decoded" (a texture drawn again after its memory changes, by the CPU's compiled and
+  interpreted stores, after the recompiler starts afresh and while compiled code keeps running, by a write, copy and
+  fill from outside the CPU, the GE drawing into it, a block transfer; its palette changing and coming back; a state
+  loaded; drawing over its own texture; a 512-row texture used for its first 16 kept decoded, and read as drawn where
+  the sprite draws over the rows it reads); "ge drawn on several threads" (a frame's worth of primitives with render
+  to texture, a transfer, a palette and a texture of pixels just drawn, render targets a row apart, drawing over its
+  own texture and a 16-bit frame buffer, the same at 1, 2, 4 and 8 threads; stopped part way, the CPU reading what's
+  drawn and a state carried on in another machine; the CPU's compiled store and load landing after drawing still
+  going on). Broken versions each failed them: compiled stores reaching a watched page, a fresh recompiler making
+  watched pages writable, writes not heard, a loaded state's memory taken for the old, feedback not seen, palette
+  changes not seen, the row limit gone; the list's end not waiting, transfers, palettes and textures before what they
+  read, another render target in a batch, bands not waited for, a band's rows off by one, `pointer()` not waiting,
+  the page tables keeping VRAM.
+
+**The arithmetic's own platform dependence**, found on the way: the GE's float sums, such as a triangle's blended
+colors `(a * w0 + b * w1 + c * w2) / total`, are fused into multiply-adds by clang on ARM64 (Apple's and the NDK's
+alike), but not on x86-64 without FMA, so the two kinds of host already round some pixels differently. The rewrite
+keeps every float expression's form (only whole values hoisted, no product split from its sum), so each compiler
+fuses exactly as before; the integer arithmetic (filter, texture function, blending, fog) is free to be rewritten,
+and was. ARM64, the RP6 and the host Mac, is the reference.
+
+**Peace Walker's stripes on the handheld** don't come from the core's arithmetic under the device's compiler: the
+core built with the NDK's clang (r28.2, clang 19, as AGP 9.3's default NDK) and the Android flags, the "modern"
+flavor's `-march=armv8.2-a+fp16+dotprod` included, as a static Android executable run in a Linux arm64 container,
+draws every frame identical to the host's, 300 from the title's state and 1801 from boot (RAM at the end differs
+between any two boots, the host's clock in it, and between two host boots alike). Under the undefined-behavior
+sanitizer, at `-O3`, the six scenes run with nothing reported in the core (libchdr's bit reader shifts into an int's
+sign bit, reported, and outside it). So the stripes come after the core: how the front end presents the picture
+(the title is a picture of one-pixel horizontal lines, which scaling 272 rows to the screen's 1080, near 3.97 times,
+turns into uneven bands), a frame handed over while still being written, or a state the device reached that these
+runs don't. Not tried: the device itself (the owner was using it).
+
+**What's still slow, and next:**
+
+- The GE's thread: setting primitives up (vertices, transforms, clipping, jobs) and the CPU's own work are now the
+  longest path in GTA and Burnout; a batch that needs the last batch's picture (post effects) waits for it. Next:
+  cheaper setup (vertices decoded a batch at a time, jobs smaller), and drawing a batch's bands as its primitives
+  arrive instead of when it's done.
+- The pixel loops: a triangle's color, depth, fog and perspective (several divisions a pixel) and the filter work a
+  pixel at a time; four pixels at a time with SIMD (the same per-lane arithmetic) is next for Peace Walker, Midnight
+  Club and Lumines, which are bound by drawing.
+- Drawing over its own texture (Midnight Club's 22,000 pixels a frame, some post effects) stays one thread, in order.
+- The Vulkan and OpenGL renderers (the owner's decision), measured against this one.
