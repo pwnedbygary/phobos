@@ -249,7 +249,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   //sound output (audio.cpp). A mixer channel's counts are those of buffers (multiples of 64, 65472 at most), its
   //volumes 0xFFFF at most, its format stereo or mono. A buffer in a slot is being played, so the DMA runs, its next
   //block no more than a block away (nor overdue by a frame: events() catches up). The SRC channel arms two buffers at
-  //most, only while it's reserved, at a rate it takes, the first one's transfer ending within its own time.
+  //most, only while it's reserved, at a rate it takes, the first one's transfer ending within its own time from when
+  //it's heard (from now, or straight after the last one, SrcAhead frames on at most). Then the output the channels
+  //make (below).
   bool playing = false;
   for(auto& c : audio.channels) {
     s(c.reserved); s(c.sampleCount); s(c.format); s(c.leftVolume); s(c.rightVolume);
@@ -277,9 +279,30 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(buffer.address && srcSamplesValid(buffer.sampleCount) && buffer.volume <= 0xf'ffff);
   }
   if(src.armed && rate) {
-    u64 duration = srcDuration(src.buffers[0].sampleCount);
-    check(src.retireAt > cycles ? src.retireAt - cycles <= duration : cycles - src.retireAt < VblankCycles);
+    u64 latest = frameCycle(Audio::SrcAhead) + srcDuration(src.buffers[0].sampleCount) - Audio::SrcLead;
+    check(src.retireAt > cycles ? src.retireAt - cycles <= latest : cycles - src.retireAt < VblankCycles);
   }
+  //what the channels have added to the output and the system hasn't taken yet: frames from the first not taken
+  //(heard by now at the latest) to one past the last added to, a ring's worth at most, each sum no bigger than eight
+  //channels and the SRC channel at their loudest make (2^21), so adding to it can't overflow; and where the SRC
+  //channel is in its samples: no more than SrcAhead frames past now (a buffer is heard to its end as its slot frees,
+  //100 microseconds early), and no further than one past the samples armed (none armed: at their start)
+  auto& output = audio.output;
+  u64 now = sampleFrame(cycles);
+  s(output.start); s(output.end);
+  bool frames = output.start <= output.end && output.end - output.start <= Audio::OutputFrames;
+  check(frames && output.start <= now && output.end <= now + Audio::OutputFrames);
+  if(s.reading()) output.samples.assign(Audio::OutputFrames * 2, 0);
+  for(u64 frame = output.start; frame < output.end && frames && valid; frame++) {
+    u32 slot = frame % Audio::OutputFrames * 2;
+    s(output.samples[slot]); s(output.samples[slot + 1]);
+    for(s32 sum : {output.samples[slot], output.samples[slot + 1]}) check(sum >= -(1 << 21) && sum <= 1 << 21);
+  }
+  s(src.renderedTo); s(src.position);
+  u64 armedSamples = 0;
+  for(u32 n = 0; n < std::min(src.armed, 2u); n++) armedSamples += src.buffers[n].sampleCount;
+  check(src.renderedTo <= now + Audio::SrcAhead);
+  check(src.armed ? src.position < (armedSamples + 1) * 44'100 : !src.position);
   //threads waiting on sound: on a mixer channel, one at most, while its slot is busy (it's given the slot as the
   //buffer there is used up); on the SRC channel, one at most waiting for a completion, while both buffers are armed
   //(only a buffer retiring wakes it), and any waiting for it to drain while one is
@@ -303,7 +326,8 @@ auto Kernel::serialize(serializer& s) -> bool {
   //waits at most its 32 samples to start; its envelope is within 0 and the top, its phase and curves ones there are;
   //a PCM voice's samples and loop are as __sceSasSetVoicePCM takes them, and it's inside them; a VAG voice's size is
   //a multiple of 16 (not 0). (Walking a VAG voice's blocks reads memory a block at a time, and stops at its size or
-  //at memory that isn't there, so its place needs no bound.)
+  //at memory that isn't there, so its place needs no bound; nor do the samples its decoder last made, any 16-bit
+  //ones being samples it could make.)
   s(sas.initialized); s(sas.core); s(sas.grain); s(sas.voiceCount); s(sas.outputMode); s(sas.paused);
   s(sas.endFlags); s(sas.effectType); s(sas.effectDelay); s(sas.effectFeedback); s(sas.effectLeft);
   s(sas.effectRight); s(sas.effectDry); s(sas.effectWet);
@@ -313,6 +337,7 @@ auto Kernel::serialize(serializer& s) -> bool {
   for(auto& v : sas.voices) {
     s(v.source); s(v.address); s(v.size); s(v.loop); s(v.pitch); s(v.volumes); s(v.rates); s(v.curves);
     s(v.sustainLevel); s(v.on); s(v.playing); s(v.phase); s(v.height); s(v.delay); s(v.position); s(v.loopBlock);
+    s(v.decoded); s(v.started);
     check(v.source <= Sas::Source::Atrac && v.phase <= Sas::Phase::Release && v.pitch <= 0x4000);
     check(v.height >= 0 && v.height <= 0x4000'0000 && v.delay <= 32 && (!v.on || v.playing));
     for(u32 n = 0; n < 4; n++) check(v.curves[n] <= 5 && v.rates[n] >= 0 && v.volumes[n] >= -0x1000

@@ -744,8 +744,9 @@ the details; the user chose a data tape per game in its save folder.
 
 ## PSP core: the games, further — 2026-10-06
 
-Branch `cursor/psp-hle-games3-2b67`, on top of `cursor/psp-hle-games2-2b67` (#146, the entry below), not pushed.
-docs/psp-core.md, part 22, describes it (part 21 is the sound worker's). The stalls part 20 couldn't explain, traced
+Branch `cursor/psp-hle-games3-2b67`, on top of `cursor/psp-hle-games2-2b67` (#146) and, merged since, of
+`cursor/psp-sound-2b67` (#147, the entry below, itself on #146), not pushed. docs/psp-core.md, part 22, describes it
+(part 21, the sound worker's, describes #147; part 22's end, the merge). The stalls part 20 couldn't explain, traced
 with the scratch host runner (never committed; now with write and read watchpoints, symbols for llvm-objdump over
 memory dumps, saved states at menus, the stick, a memory stick folder per run) and fixed from pspautotests'
 recorded results and the games' behavior; no other emulator's code read:
@@ -773,6 +774,53 @@ recorded results and the games' behavior; no other emulator's code read:
   versions failed the new groups. States stay version 5 (two new waits, no new fields).
 - **Next**: Dominator's GE path; sceLibFont from flash0 (Peace Walker's and Gunhound's menus); wait timeouts as
   waittimeouts recorded; a thread started with dispatching held off running at once (dispatchwake); the GE's speed.
+
+## PSP core: sound — 2026-10-06
+
+Branch `cursor/psp-sound-2b67`, on top of `cursor/psp-hle-games2-2b67` (the entry below). Games are heard:
+sceAudio's eight mixer channels and its SRC channel are added up into the system's 44.1 kHz stream where the DMA
+timing model hears them (volumes over 0x8000, mono on both sides, the SRC rates converted by linear interpolation,
+sums clamped to 16 bits), and sceSasCore's VAG and PCM voices sound: the SPU's ADPCM decoded, pitches interpolated,
+the recorded envelope, volumes and dry/wet sums, written in stereo or multichannel's four planes, or mixed into the
+game's buffer. Written from pspsdk, pspautotests' audio/sascore programs and their recorded results (reproduced
+sample for sample), psx-spx and part 17's specification; no PPSSPP or JPCSP code read. docs/psp-core.md, part 21,
+describes it. Reverb is a pass-through (no reverb added); noise, waves and sas's ATRAC3 voices stay silent.
+- **Found in the recordings**: VAG's guess rounds down (no half added, unlike psx-spx's SPU); filters 5-15 read past
+  the PSP's table; VAG samples are heard a sample late, PCM's at their place; multichannel is four planes;
+  __sceSasCoreWithMix scales the buffer by its volumes and refuses multichannel (0x80000004); dry is on from
+  __sceSasInit; and end marks are whole bytes (music.vag's header flags 0x41/0x75 play on), which changed part 20's
+  `& 7` reading (0x41 and 0x87 no longer end a voice).
+- **On the host** (a scratch runner writing the stream to WAVs, never committed; 40 s each, measured per second):
+  Lumines' demo stage from 25 s (sas effects and a music voice, -18 to -34 dBFS, peak 19255); the Street Fighter III
+  port from the start (four sceAudio channels, -17.5 to -31 dBFS, peak 23517, 44.1 kHz pacing); Space Invaders
+  Extreme's effects (sas into the SRC channel, peak 7999); Burnout Legends and SOCOM silent at their titles (ATRAC3+
+  music) and their menus' sas effects after Start (peaks 8006, 9979). Nothing clipped in any; sound added no
+  measurable time (Lumines' 2400 frames in 48-50 s either way).
+- **States**: version 6 (the output not yet taken, the SRC channel's place, VAG decoders), each checked on loading;
+  versions 1-5 refused.
+- **Checks**: the parts' 197 groups with both sanitizers (nine new: "audio mixed", "audio src heard", "audio output
+  in states", "sas vag as recorded", "sas vag decoded", "sas pcm heard", "sas output modes", "sas voices mixed", "sas
+  voices in states"; "state fields" with the new fields and 7 more refusals); `tests/psp/ares` 250 checks (a
+  version 5 state refused; the stream heard: a mixer buffer sample for sample, 735.7 frames a frame). Eleven broken
+  versions each failed (VAG's guess with a half added, part 20's `& 7`, no VAG lag, the envelope after its step, dry
+  off, multichannel interleaved, the mixer's volume rounded towards zero, no clamp, the SRC channel's nearest sample,
+  its place left out of states, the old silent stream).
+- **Review:** a general-purpose reviewer; the clean-room spot check found the code independent; one medium and one
+  low finding, both fixed, each with a test that failed before it. Medium: an SRC buffer armed once the slots had
+  freed, while the last one's final 100 µs were still to be heard, was timed from the moment it was armed but heard
+  after them, so a program draining the channel before each buffer drifted 4.4 frames ahead per buffer: silence for
+  good from 21.9 s (1024 samples at 44.1 kHz) and states the loader refused. Such a buffer is now timed from where
+  it's heard (it retires a whole buffer after the last one's end); the output's ring never moves its first frame not
+  taken past the clock (what doesn't fit is left out at the far end); loading wants the SRC channel 7 frames ahead at
+  most. Part 17's output2 results still hold ("audio src rest" and "audio draining" now pause a millisecond where
+  the PSP's own runs print lines); the usual two-buffer stream is unchanged (same frames and return times at eight
+  sizes and rates), and the 40 s captures of Space Invaders Extreme (SRC channel), the Street Fighter III port and
+  Lumines are bit-identical to the old code's. Low: no test pinned the standard VAG ending (a block marked 1, then
+  `00 07 77 77...`). New groups: "audio src drained between buffers" (30 s at 1024/44.1 kHz and 4096/48 kHz: lead
+  bounded, every frame taken and as the buffers make it, states round-trip), "audio output kept from a channel
+  ahead", "sas vag endings" (the flag-1 ending, 3 ending a voice that doesn't loop, a loop back to a 4); "state
+  fields" tries the new bounds. Checks: 200 groups, `tests/psp/ares` 250; the state's layout is unchanged (version 6).
+- **Next**: an ATRAC3+ decoder (Burnout's, SOCOM's and Invaders' music), sas reverb, noise and waves; the RP6 run.
 
 ## PSP core: more functions games ask for — 2026-10-05
 

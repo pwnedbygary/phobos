@@ -386,8 +386,18 @@ static auto stateFields() -> void {
     {"src buffer volume", [&] { k.audio.src.buffers[0].volume = 1; }},
     {"src second buffer", [&] { k.audio.src.buffers[1] = {0x0880'2000, 18, 2}; }},
     {"src armed", [&] { k.audio.src.armed = 2; }},
-    {"src retireAt", [&] { k.audio.src.retireAt = k.cycles + 1000; }},
+    {"src retireAt", [&] {  //as late as a buffer armed now retires: heard from SrcAhead frames on
+      k.audio.src.retireAt = k.cycles + k.frameCycle(Kernel::Audio::SrcAhead) + k.srcDuration(17)
+                           - Kernel::Audio::SrcLead;
+    }},
     {"src completion", [&] { k.audio.src.completion = true; }},
+    //what the channels have added to the output and the system hasn't taken: 64 frames from 100 before now, the
+    //first holding a sample; the SRC channel 3 samples into its first buffer, as far ahead of the clock as it gets
+    {"output start", [&] { k.audio.output.start = k.audio.output.end = k.sampleFrame(k.cycles) - 100; }},
+    {"output end", [&] { k.audio.output.end = k.audio.output.start + 64; }},
+    {"output samples", [&] { k.audio.output.samples[k.audio.output.start % Kernel::Audio::OutputFrames * 2] = 5; }},
+    {"src renderedTo", [&] { k.audio.src.renderedTo = k.sampleFrame(k.cycles) + Kernel::Audio::SrcAhead; }},
+    {"src position", [&] { k.audio.src.position = 3 * 44'100; }},
     {"vblank handler function", [&] { k.vblankSubs[3].function = 0x0880'3000; }},
     {"vblank handler argument", [&] { k.vblankSubs[3].argument = 1; }},
     {"vblank handler gp", [&] { k.vblankSubs[3].gp = 4; }},
@@ -427,7 +437,7 @@ static auto stateFields() -> void {
     {"sas endFlags", [&] { k.sas.endFlags ^= 4; }}, {"sas effectType", [&] { k.sas.effectType = 3; }},
     {"sas effectDelay", [&] { k.sas.effectDelay = 5; }}, {"sas effectFeedback", [&] { k.sas.effectFeedback = 6; }},
     {"sas effectLeft", [&] { k.sas.effectLeft = 7; }}, {"sas effectRight", [&] { k.sas.effectRight = 8; }},
-    {"sas effectDry", [&] { k.sas.effectDry = 1; }}, {"sas effectWet", [&] { k.sas.effectWet = 1; }},
+    {"sas effectDry", [&] { k.sas.effectDry = 0; }}, {"sas effectWet", [&] { k.sas.effectWet = 1; }},
     {"sas voice source", [&] { sasVoice.source = Kernel::Sas::Source::Vag; sasVoice.size = 0x100; }},
     {"sas voice address", [&] { sasVoice.address ^= 0x40; }}, {"sas voice size", [&] { sasVoice.size = 0x200; }},
     {"sas voice loop", [&] { sasVoice.loop = 1; }}, {"sas voice pitch", [&] { sasVoice.pitch = 0x2000; }},
@@ -439,6 +449,8 @@ static auto stateFields() -> void {
     {"sas voice height", [&] { sasVoice.height = 0x100; }}, {"sas voice delay", [&] { sasVoice.delay = 5; }},
     {"sas voice position", [&] { sasVoice.position = 0x5000; }},
     {"sas voice loopBlock", [&] { sasVoice.loopBlock = 2; }},
+    {"sas voice decoded", [&] { sasVoice.decoded[0] = -1234; }},
+    {"sas voice started", [&] { sasVoice.started = true; }},
     //files: the host file opened again as another, for writing too; the other host file counted as the disc's; the
     //disc's file a folder, read a sector at a time
     {"file path", [&] { host.path = "ms0:/B.TXT"; }},
@@ -681,9 +693,19 @@ static auto stateFields() -> void {
   refuses("an SRC rate it doesn't take", [&] { k.audio.src.rate = 36'000; });
   refuses("SRC buffers armed with the channel released", [&] { k.audio.src.reserved = false; });
   refuses("an SRC buffer of 16 samples", [&] { k.audio.src.buffers[1].sampleCount = 16; });
-  refuses("an SRC buffer retiring after its own time", [&] {
-    k.audio.src.retireAt = k.cycles + k.srcDuration(k.audio.src.buffers[0].sampleCount) + 1;
-  });
+  refuses("an SRC buffer retiring after its own time from SrcAhead frames on", [&] { k.audio.src.retireAt++; });
+  //the output as no machine leaves it: frames ending before they start, more than the ring holds, frames the clock
+  //hasn't reached taken, a sum louder than every channel at its loudest; the SRC channel past one beyond its armed
+  //samples, somewhere in samples with none armed, or adding to frames further ahead than a buffer's lead takes it
+  auto& output = k.audio.output;
+  refuses("output frames ending before they start", [&] { output.end = output.start - 1; });
+  refuses("more output frames than the ring holds", [&] { output.end = output.start + 4097; });
+  refuses("output taken past the clock", [&] { output.start = output.end = k.sampleFrame(k.cycles) + 1; });
+  refuses("an output sum past 2^21", [&] { output.samples[output.start % 4096 * 2 + 1] = (1 << 21) + 1; });
+  refuses("the SRC channel past its samples", [&] { k.audio.src.position = (17 + 18 + 1) * 44'100; });
+  refuses("the SRC channel somewhere with nothing armed", [&] { k.audio.src.armed = 0; });
+  refuses("the SRC channel more than SrcAhead frames ahead", [&] { k.audio.src.renderedTo++; });
+  refuses("the SRC channel a ring ahead", [&] { k.audio.src.renderedTo = k.sampleFrame(k.cycles) + 4096; });
   //(each refusal loads the machine again, threads and all: they're looked up afresh)
   auto waitsOnAudio = [&](Kernel::Thread& waiter, u32 id) {
     waiter.status = Kernel::Status::Waiting, waiter.wait = Kernel::Wait::Audio, waiter.waitID = id;

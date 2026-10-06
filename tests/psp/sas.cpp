@@ -1,8 +1,9 @@
-//sceSasCore (ares/psp/kernel/sas.cpp), silent: what its functions take and refuse, as pspautotests' audio/sascore
-//recorded on a PSP; envelopes grain by grain against the same recordings; voices ending as their samples run out or
-//their release comes down to 0, and the end flags refreshed by __sceSasCore; in a program on both engines too; and
-//playing voices given new samples. Each group's machine, saved at its end, loads into another that makes the same
-//state.
+//sceSasCore (ares/psp/kernel/sas.cpp): what its functions take and refuse, as pspautotests' audio/sascore recorded
+//on a PSP; envelopes grain by grain against the same recordings; voices ending as their samples run out or their
+//release comes down to 0, and the end flags refreshed by __sceSasCore; in a program on both engines too; playing
+//voices given new samples; and what the voices sound like: VAG blocks decoded to the samples the format's
+//definition gives and the PSP recorded, PCM voices at their pitches, volumes, envelopes, the output modes, mixing
+//into the game's buffer. Each group's machine, saved at its end, loads into another that makes the same state.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -16,6 +17,23 @@ constexpr u32 ErrorState = 0x8042'0016, ErrorVolume = 0x8042'0018, ErrorAdsr = 0
 
 //The curves, as pspsdk names them.
 enum : u32 { Increase = 0, Decrease = 1, Bent = 2, ExponentRev = 3, Exponent = 4, Direct = 5 };
+
+//The grain written at Out: frame n's left and right (stereo), or the n-th 16-bit sample (multichannel's planes).
+auto left(KernelMachine& m, u32 frame) -> u16 { return m.system.memory.read(2, Out + frame * 4); }
+auto right(KernelMachine& m, u32 frame) -> u16 { return m.system.memory.read(2, Out + frame * 4 + 2); }
+auto plane(KernelMachine& m, u32 n) -> u16 { return m.system.memory.read(2, Out + n * 2); }
+
+//audio/sascore's setup for a voice heard at once: its attack reaching the top in one sample, and its decay, sustain
+//and release holding it there (direct, at the top)
+auto loud(KernelMachine& m, u32 voice) -> void {
+  m.call("__sceSasSetADSRmode", {Core, voice, 15, Increase, Direct, Direct, Direct});
+  m.call("__sceSasSetADSR", {Core, voice, 15, 0x4000'0000, 0x4000'0000, 0x4000'0000, 0x4000'0000});
+}
+
+//audio/sascore's PCM samples: (short)(65535 - n), so -1, -2, -3...
+auto pcmSamples(KernelMachine& m, u32 address, u32 count) -> void {
+  for(u32 n = 0; n < count; n++) m.system.memory.write(2, address + n * 2, u16(65535 - n));
+}
 }
 
 //What each function takes and refuses, as audio/sascore's tests recorded: __sceSasInit's checks in their order;
@@ -246,7 +264,8 @@ static auto sasEnvelopes() -> void {
   m.call("__sceSasSetKeyOff", {Core, 0});
   core();
   CHECK(height() == 0 && m.call("__sceSasGetEndFlag", {Core}) == 0xffff'ffff, true);
-  //the buffer: a grain of silence, stereo; mixing leaves it as it was
+  //the buffer: a grain of the voices, stereo (silence: every voice has ended); mixing adds them to what it holds, at
+  //volumes 0x1000 (as it is)
   m.system.memory.fill(Out, 0x55, 64 * 4 + 4);
   core();
   CHECK(m.system.memory.read(4, Out) == 0 && m.system.memory.read(4, Out + 63 * 4) == 0, true);
@@ -339,9 +358,380 @@ static auto sasNewSamples() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//pspautotests' audio/sascore/vag, as a PSP played it: 16 blocks, block n's first byte (filter << 4) | n, its flags 0
+//for the first and the byte given for the rest, its samples' 4 bits 3, 2, 3, 3, 3, 4, 3, 5... (bytes (j << 4) | 3);
+//keyed on at grain 512 with the attack reaching the top at once, and frames 32-39 written: silence, then the first
+//seven samples decoded, a sample late. Every filter 0-15 with flags 0, then filter 0 with flags 3 (loops: still
+//playing), 7, 0x41, 1 and 0x87 (the data runs out in the grain either way). The figures are vag.expected's.
+static auto sasVagRecorded() -> void {
+  KernelMachine m;
+  constexpr u32 Data = Samples + 0x8000;
+  m.call("__sceSasInit", {Core, 128, 32, 1, 44100});
+  auto play = [&](u32 filter, u32 flags) {
+    for(u32 block = 0; block < 16; block++) {
+      m.system.memory.write(1, Data + block * 16 + 0, filter << 4 | block);
+      m.system.memory.write(1, Data + block * 16 + 1, block ? flags : 0);
+      for(u32 j = 2; j < 16; j++) m.system.memory.write(1, Data + block * 16 + j, j << 4 | 3);
+    }
+    m.call("__sceSasSetKeyOff", {Core, 0});
+    loud(m, 0);
+    m.call("__sceSasSetGrain", {Core, 512});
+    m.call("__sceSasSetOutputmode", {Core, 0});
+    m.call("__sceSasSetVoice", {Core, 0, Data, 0x100, 1});
+    m.call("__sceSasSetKeyOn", {Core, 0});
+    m.system.memory.fill(Out, 0xdd, 512 * 4);
+    CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+  };
+  using Frames = std::array<u16, 8>;
+  Frames zero = {0, 0x3000, 0x2000, 0x3000, 0x3000, 0x3000, 0x4000, 0x3000};
+  std::array<Frames, 16> recorded = {{
+    zero,
+    {0, 0x3000, 0x4d00, 0x7830, 0x7fff, 0x7fff, 0x7fff, 0x7fff},
+    {0, 0x3000, 0x7640, 0x7fff, 0x7fff, 0x7fff, 0x7fff, 0x7fff},
+    {0, 0x3000, 0x6980, 0x7fff, 0x7fff, 0x7fff, 0x7fff, 0x7fff},
+    {0, 0x3000, 0x7b80, 0x7fff, 0x7fff, 0x7fff, 0x7fff, 0x7fff},
+    zero,
+    zero,
+    {0, 0x3000, 0x4700, 0x69b0, 0x7fff, 0x7fff, 0x7fff, 0x7fff},
+    {0, 0x3000, 0x4940, 0x6d73, 0x7fff, 0x7fff, 0x7fff, 0x7fff},
+    {0, 0x3000, 0x4d00, 0x1a70, 0xb265, 0xb39b, 0x7fff, 0x7fff},
+    zero,
+    {0, 0x3000, 0x2000, 0xebc0, 0x0280, 0x4ccb, 0x3c72, 0xc2cf},
+    zero,
+    {0, 0x3000, 0x2180, 0x8f0c, 0xbb68, 0x7fff, 0x7fff, 0x8000},
+    {0, 0x3000, 0x7dc0, 0x7fff, 0x7fff, 0x7fff, 0x7fff, 0x7fff},
+    {0, 0x3000, 0x2000, 0xbec0, 0xe480, 0x7fff, 0x7fff, 0x8000},
+  }};
+  for(u32 filter = 0; filter < 16; filter++) {
+    play(filter, 0);
+    std::string name = "filter " + std::to_string(filter);
+    for(u32 n = 0; n < 8; n++) {
+      check(__LINE__, (name + "'s left").c_str(), left(m, 32 + n), recorded[filter][n]);
+      check(__LINE__, (name + "'s right").c_str(), right(m, 32 + n), recorded[filter][n]);
+    }
+    CHECK(m.call("__sceSasGetEndFlag", {Core}), 0xffff'ffff);
+  }
+  for(auto [flags, ended] : {std::pair{0x03u, 0xffff'fffeu}, {0x07, 0xffff'ffff}, {0x41, 0xffff'ffff},
+                             {0x01, 0xffff'ffff}, {0x87, 0xffff'ffff}}) {
+    play(0, flags);
+    for(u32 n = 0; n < 8; n++) check(__LINE__, "a flagged block's samples", left(m, 32 + n), zero[n]);
+    check(__LINE__, "a flagged block's end", m.call("__sceSasGetEndFlag", {Core}), ended);
+  }
+  CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
+}
+
+//VAG blocks decoded to the samples the format's definition gives (the SPU's ADPCM, as psx-spx describes it, with the
+//PSP's guess rounded down), worked out by hand. Each voice plays two blocks at pitch 0x1000, heard at once (frame
+//32 silence, then each sample a frame late: block 1's first sample at frame 61). Block 0 (filter 0: no guess) sets
+//the two samples block 1 guesses from, its last two.
+//- shift 0, 4 bits 7, -8, 1, -1: 28672, -32768, 4096, -4096 (each times 4096); its last two 4096 and 8192;
+//- then filter 1 (60/64 of the last), shift 12 (corrections as they are), 4 bits 0, 3, 0: 8192 * 60 / 64 = 7680;
+//  3 + 7680 * 60 / 64 = 7203; 7203 * 60 / 64 = 6752.8, rounded down: 6752;
+//- after -7 (shift 12), filter 1's guess -420 / 64 = -6.56 rounds down to -7 (not up to -6);
+//- after -4096 and 4096, filter 2 (115/64 of the last less 52/64 of the one before): 4096 * 115 + 4096 * 52 =
+//  684032, / 64 = 10688; with 4 bits -8: -8 + (10688 * 115 - 4096 * 52) / 64 = -8 + 15877 = 15869;
+//- after 0 and 28672, filter 4 (122/64, 60/64) and a shift of 13 (as 9: 4096 >> 9 = 8 for a 1): 8 + 28672 * 122 /
+//  64 = 54664, kept within 16 bits: 32767;
+//- shifts 13 and 15 act as 9: 1 is 8, -1 is -8, 7 is 56.
+//The block marked as the end (flags 7) ends the voice: its last sample, a frame late, isn't heard (frame 88 on is
+//silence). A loop: blocks 0-2 starting with 4096, 8192 and 12288 (filter 0, the rest 0), block 1 marked where the
+//loop starts (6), block 2 its end (3): after block 2, block 1 again (frame 117: 8192). A block whose flags byte is
+//0x41 goes on (music.vag's header, read as blocks, has it, and played on in audio/sascore/vag's recording).
+static auto sasVagDecoded() -> void {
+  struct Case { std::vector<std::pair<u32, u32>> nibbles0, nibbles1; u8 header0, header1; u8 flags1;
+                std::vector<std::pair<u32, s32>> heard; };
+  std::vector<Case> cases = {
+    {{{0, 7}, {1, 8}, {2, 1}, {3, 15}, {26, 1}, {27, 2}}, {{1, 3}}, 0x00, 0x1c, 7,
+     {{32, 0}, {33, 28672}, {34, -32768}, {35, 4096}, {36, -4096}, {37, 0}, {58, 0}, {59, 4096}, {60, 8192},
+      {61, 7680}, {62, 7203}, {63, 6752}, {88, 0}}},
+    {{{27, 9}}, {}, 0x0c, 0x1c, 7, {{60, -7}, {61, -7}, {62, -7}}},
+    {{{26, 15}, {27, 1}}, {{1, 8}}, 0x00, 0x2c, 7, {{59, -4096}, {60, 4096}, {61, 10688}, {62, 15869}}},
+    {{{27, 7}}, {{0, 1}}, 0x00, 0x4d, 7, {{60, 28672}, {61, 32767}, {62, 32767}}},
+    {{}, {{0, 1}, {1, 15}, {2, 7}}, 0x00, 0x0d, 7, {{61, 8}, {62, -8}, {63, 56}}},
+    {{}, {{0, 1}, {1, 15}, {2, 7}}, 0x00, 0x0f, 0x41, {{61, 8}, {62, -8}, {63, 56}, {89, 0}}},
+  };
+  for(auto& c : cases) {
+    KernelMachine m;
+    auto put = [&](u32 block, u8 header, u8 flags, const std::vector<std::pair<u32, u32>>& nibbles) {
+      u32 at = Samples + block * 16;
+      m.system.memory.write(1, at, header);
+      m.system.memory.write(1, at + 1, flags);
+      for(auto [index, bits] : nibbles) {
+        u32 byte = m.system.memory.read(1, at + 2 + index / 2);
+        m.system.memory.write(1, at + 2 + index / 2, byte | bits << (index & 1) * 4);
+      }
+    };
+    put(0, c.header0, 0, c.nibbles0);
+    put(1, c.header1, c.flags1, c.nibbles1);
+    m.call("__sceSasInit", {Core, 128, 32, 0, 44100});
+    loud(m, 0);
+    m.call("__sceSasSetVoice", {Core, 0, Samples, c.flags1 == 7 ? 32u : 64u, 0});
+    m.call("__sceSasSetKeyOn", {Core, 0});
+    CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+    for(auto [frame, sample] : c.heard) {
+      check(__LINE__, ("frame " + std::to_string(frame) + "'s left").c_str(), left(m, frame), u16(sample));
+      check(__LINE__, ("frame " + std::to_string(frame) + "'s right").c_str(), right(m, frame), u16(sample));
+    }
+    CHECK(m.call("__sceSasGetEndFlag", {Core}) & 1, c.flags1 == 7 ? 1 : 0);
+    CHECK(roundTrip(m), true);
+  }
+
+  KernelMachine m;  //the loop
+  for(u32 block = 0; block < 3; block++) {
+    m.system.memory.write(1, Samples + block * 16 + 1, block == 1 ? 6 : block == 2 ? 3 : 0);
+    m.system.memory.write(1, Samples + block * 16 + 2, block + 1);
+  }
+  m.call("__sceSasInit", {Core, 128, 32, 0, 44100});
+  loud(m, 0);
+  m.call("__sceSasSetVoice", {Core, 0, Samples, 48, 1});
+  m.call("__sceSasSetKeyOn", {Core, 0});
+  CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+  for(auto [frame, sample] : {std::pair{33u, 4096}, {34, 0}, {61, 8192}, {89, 12288}, {116, 0}, {117, 8192}}) {
+    check(__LINE__, ("loop frame " + std::to_string(frame)).c_str(), left(m, frame), u16(sample));
+  }
+  CHECK(m.call("__sceSasGetEndFlag", {Core}) & 1, 0);
+  CHECK(roundTrip(m), true);
+}
+
+//VAG endings as VAG files have them (pspautotests' test.vag among them): the data's last block marked 1, then a
+//block of its own, 00 07 77 77..., which would sound as 28 samples of 28672. The voice ends at the end of the block
+//marked 1, its last sample, a frame late, unheard (frame 88 on is silence), the end flag set by that grain and
+//nothing heard in the next: the block after it never plays. A block marked 3 ends a voice that doesn't loop, as 1
+//does; on one that loops, it takes the voice back to the block marked 4, where the loop starts. Blocks 0, 1 and 2
+//hold 4096s, 8192s and 12288s (filter 0, shift 0, every 4 bits 1, 2 or 3), heard from frame 33, 28 frames each.
+static auto sasVagEndings() -> void {
+  struct Span { u32 from, to; s32 sample; };
+  struct Case { const char* name; u8 flags1, flags2, bits2; u32 loop; std::vector<Span> heard; bool ended; };
+  std::vector<Case> cases = {
+    {"a block marked 1, then 00 07 77 77...", 1, 7, 7, 0, {{32, 32, 0}, {33, 60, 4096}, {61, 87, 8192}, {88, 127, 0}},
+     true},
+    {"a block marked 3, not looping", 3, 0, 3, 0, {{32, 32, 0}, {33, 60, 4096}, {61, 87, 8192}, {88, 127, 0}}, true},
+    {"a loop back to the block marked 4", 4, 3, 3, 1,
+     {{32, 32, 0}, {33, 60, 4096}, {61, 88, 8192}, {89, 116, 12288}, {117, 127, 8192}}, false},
+  };
+  for(auto& c : cases) {
+    KernelMachine m;
+    u8 flags[] = {0, c.flags1, c.flags2}, bits[] = {1, 2, c.bits2};
+    for(u32 block = 0; block < 3; block++) {
+      m.system.memory.write(1, Samples + block * 16, 0x00);
+      m.system.memory.write(1, Samples + block * 16 + 1, flags[block]);
+      for(u32 n = 2; n < 16; n++) m.system.memory.write(1, Samples + block * 16 + n, bits[block] << 4 | bits[block]);
+    }
+    m.call("__sceSasInit", {Core, 128, 32, 0, 44100});
+    loud(m, 0);
+    m.call("__sceSasSetVoice", {Core, 0, Samples, 48, c.loop});
+    m.call("__sceSasSetKeyOn", {Core, 0});
+    CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+    std::string name = c.name;
+    u32 wrong = 0;
+    for(auto [from, to, sample] : c.heard) {
+      for(u32 frame = from; frame <= to; frame++) {
+        if(left(m, frame) == u16(sample) && right(m, frame) == u16(sample)) continue;
+        if(!wrong++) std::printf("  %s: frame %u is %d, not %d\n", c.name, frame, s16(left(m, frame)), sample);
+      }
+    }
+    check(__LINE__, (name + ": the frames heard").c_str(), wrong, 0);
+    check(__LINE__, (name + ": its end flag").c_str(), m.call("__sceSasGetEndFlag", {Core}) & 1, c.ended);
+    if(c.ended) {
+      CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+      bool silent = true;
+      for(u32 frame = 0; frame < 128; frame++) if(left(m, frame) || right(m, frame)) silent = false;
+      check(__LINE__, (name + ": the next grain silent").c_str(), silent, true);
+    }
+    CHECK(roundTrip(m), true);
+  }
+}
+
+//PCM voices heard. pspautotests' audio/sascore/pcm, as a PSP played it: 256 samples (-1, -2, -3...), keyed on at
+//grain 512, frame 0x20 silence (the envelope's 0 as it starts), 0x11e the 254th sample, 0x120 the loop's first (from
+//0: -1; from 254: -255) or, not looping, silence and the voice ended. Then, as chosen (no recording): at pitch
+//0x2000 every other sample; at 0x800 each sample then the point halfway to the next (a ramp of 60s: 30s between).
+static auto sasPcmHeard() -> void {
+  KernelMachine m;
+  pcmSamples(m, Samples, 0x2000);
+  m.call("__sceSasInit", {Core, 128, 32, 1, 44100});
+  for(auto [loop, at120, ended] : {std::tuple{0u, 0xffffu, 0xffff'fffeu}, {254, 0xff01, 0xffff'fffe},
+                                   {u32(-1), 0, 0xffff'ffff}}) {
+    m.call("__sceSasSetKeyOff", {Core, 0});
+    loud(m, 0);
+    m.call("__sceSasSetGrain", {Core, 512});
+    m.call("__sceSasSetOutputmode", {Core, 0});
+    m.call("__sceSasSetVoicePCM", {Core, 0, Samples, 256, loop});
+    m.call("__sceSasSetKeyOn", {Core, 0});
+    m.system.memory.fill(Out, 0xdd, 512 * 4);
+    CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+    CHECK(left(m, 0x20) == 0 && right(m, 0x20) == 0, true);
+    CHECK(left(m, 0x11e) == 0xff01 && right(m, 0x11e) == 0xff01, true);
+    check(__LINE__, "frame 0x120", left(m, 0x120), at120);
+    check(__LINE__, "frame 0x120's right", right(m, 0x120), at120);
+    check(__LINE__, "the end flags", m.call("__sceSasGetEndFlag", {Core}), ended);
+  }
+  //every sample at 0x1000 (frame 32 + n is sample n, past the silent first)
+  bool exact = true;
+  for(u32 n = 1; n < 256; n++) if(left(m, 32 + n) != u16(65535 - n)) exact = false;
+  CHECK(exact, true);
+  CHECK(roundTrip(m), true);
+
+  KernelMachine p;
+  for(u32 n = 0; n < 512; n++) p.system.memory.write(2, Samples + n * 2, n * 60);
+  p.call("__sceSasInit", {Core, 256, 32, 0, 44100});
+  for(u32 pitch : {0x2000u, 0x800u}) {
+    p.call("__sceSasSetKeyOff", {Core, 0});
+    loud(p, 0);
+    p.call("__sceSasSetPitch", {Core, 0, pitch});
+    p.call("__sceSasSetVoicePCM", {Core, 0, Samples, 512, u32(-1)});
+    p.call("__sceSasSetKeyOn", {Core, 0});
+    CHECK(p.call("__sceSasCore", {Core, Out}), 0);
+    exact = true;
+    for(u32 n = 1; n < 224; n++) if(left(p, 32 + n) != (pitch == 0x2000 ? n * 120 : n * 30)) exact = false;
+    check(__LINE__, pitch == 0x2000 ? "pitch 0x2000" : "pitch 0x800", exact, true);
+  }
+  CHECK(roundTrip(p), true);
+}
+
+//pspautotests' audio/sascore/outputmode, as a PSP played it: a PCM voice (-1, -2, -3...) at volumes 0x1000, 0xC00
+//(dry), 0x800 and 0x400 (to the effect), heard dry and wet, the effect's volumes 0. Stereo: frames 0x20-0x22 are 0,
+//-2 and -3 on the left, the right three quarters of them rounded down (0, -2, -3), frames 0x120-0x122 the loop's -1,
+//-2, -3, and past the grain the buffer as it was. Multichannel: four planes of 512, dry left, dry right, wet left,
+//wet right, the 32nd sample of each at the four volumes (-33 whole, three quarters, half, a quarter: -33, -25, -17,
+//-9) from 16-bit sample 64 of its plane on. __sceSasCoreWithMix with volumes 0 and 0 in stereo: the buffer's 0xdddd
+//gone, the voice alone; in multichannel refused (0x80000004), the buffer untouched, the voice still playing. The
+//figures are outputmode.expected's.
+static auto sasOutputModes() -> void {
+  KernelMachine m;
+  pcmSamples(m, Samples, 0x2000);
+  m.call("__sceSasInit", {Core, 128, 32, 1, 44100});
+  auto play = [&](u32 mode, bool mix) {
+    m.call("__sceSasSetKeyOff", {Core, 0});
+    loud(m, 0);
+    m.call("__sceSasRevVON", {Core, 1, 1});
+    m.call("__sceSasRevEVOL", {Core, 0, 0});
+    m.call("__sceSasRevParam", {Core, 0, 0});
+    m.call("__sceSasRevType", {Core, 0});
+    m.call("__sceSasSetVolume", {Core, 0, 0x1000, 0x0c00, 0x0800, 0x0400});
+    m.call("__sceSasSetGrain", {Core, 512});
+    m.call("__sceSasSetOutputmode", {Core, mode});
+    m.call("__sceSasSetVoicePCM", {Core, 0, Samples, 256, 0});
+    m.call("__sceSasSetKeyOn", {Core, 0});
+    m.system.memory.fill(Out, 0xdd, 4096 * 4);
+    return mix ? m.call("__sceSasCoreWithMix", {Core, Out, 0, 0}) : m.call("__sceSasCore", {Core, Out});
+  };
+  //(printed as audio/sascore printed them: 16-bit samples 2i and 2i + 1, for i = 0x20-0x22, 0x120-0x122...)
+  auto pairs = [&](std::vector<std::pair<u16, u16>> expected) {
+    u32 at[] = {0x20, 0x21, 0x22, 0x120, 0x121, 0x122, 0x220, 0x221, 0x222, 0x320, 0x321, 0x322};
+    for(u32 n = 0; n < 12; n++) {
+      check(__LINE__, ("pair " + Kernel::hexWord(at[n])).c_str(), plane(m, at[n] * 2), expected[n].first);
+      check(__LINE__, ("pair " + Kernel::hexWord(at[n])).c_str(), plane(m, at[n] * 2 + 1), expected[n].second);
+    }
+  };
+  std::vector<std::pair<u16, u16>> stereo = {{0, 0}, {0xfffe, 0xfffe}, {0xfffd, 0xfffd}, {0xffff, 0xffff},
+    {0xfffe, 0xfffe}, {0xfffd, 0xfffd}, {0xdddd, 0xdddd}, {0xdddd, 0xdddd}, {0xdddd, 0xdddd}, {0xdddd, 0xdddd},
+    {0xdddd, 0xdddd}, {0xdddd, 0xdddd}};
+  CHECK(play(0, false), 0);
+  pairs(stereo);
+  CHECK(play(1, false), 0);
+  pairs({{0xffdf, 0xffde}, {0xffdd, 0xffdc}, {0xffdb, 0xffda}, {0xffe7, 0xffe6}, {0xffe5, 0xffe5}, {0xffe4, 0xffe3},
+         {0xffef, 0xffef}, {0xffee, 0xffee}, {0xffed, 0xffed}, {0xfff7, 0xfff7}, {0xfff7, 0xfff7}, {0xfff6, 0xfff6}});
+  CHECK(play(0, true), 0);
+  pairs(stereo);
+  CHECK(m.call("__sceSasGetEndFlag", {Core}), 0xffff'fffe);
+  CHECK(play(1, true), 0x8000'0004);
+  pairs(std::vector<std::pair<u16, u16>>(12, {0xdddd, 0xdddd}));
+  CHECK(m.call("__sceSasGetEndFlag", {Core}), 0xffff'fffe);
+  CHECK(roundTrip(m), true);
+}
+
+//Voices mixed, as chosen where no recording shows it. Two voices add up, clamped to 16 bits (30000 and 30000:
+//32767); a negative volume turns a voice upside down; an envelope half way up halves a sample, rounded down (-101:
+//-51); a paused voice is silent. The dry sound off (__sceSasRevVON(0, ...)) leaves silence; the wet sound alone,
+//through an effect (type 4), passes through at the effect's volumes (0x800 and 0x1000) after the voice's effect
+//volumes (0x1000 and 0x800): a 1000 is 500 on both sides; with no effect chosen (type -1), silence.
+//__sceSasCoreWithMix at 0x800 halves what the buffer held before adding the voices.
+static auto sasMixed() -> void {
+  KernelMachine m;
+  for(u32 n = 0; n < 256; n++) {
+    m.system.memory.write(2, Samples + n * 2, 30000);
+    m.system.memory.write(2, Samples + 0x1000 + n * 2, u16(-101));
+    m.system.memory.write(2, Samples + 0x2000 + n * 2, 1000);
+  }
+  m.call("__sceSasInit", {Core, 64, 32, 0, 44100});
+  for(u32 voice : {0u, 1u}) {
+    loud(m, voice);
+    m.call("__sceSasSetVoicePCM", {Core, voice, Samples, 256, 0});
+    m.call("__sceSasSetKeyOn", {Core, voice});
+  }
+  m.call("__sceSasSetVolume", {Core, 1, 0x1000, u32(-0x1000), 0, 0});
+  CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+  CHECK(left(m, 40) == 32767 && right(m, 40) == 0, true);  //30000 + 30000; 30000 - 30000
+  m.call("__sceSasSetPause", {Core, 2, 1});
+  CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+  CHECK(left(m, 10) == 30000 && right(m, 10) == 30000, true);
+  //voice 2 alone (0 and 1 paused from here on), its attack reaching half way in one sample, the top in the next
+  m.call("__sceSasSetPause", {Core, 3, 1});
+  m.call("__sceSasSetADSRmode", {Core, 2, 15, Increase, Direct, Direct, Direct});
+  m.call("__sceSasSetADSR", {Core, 2, 15, 0x2000'0000, 0x4000'0000, 0x4000'0000, 0x4000'0000});
+  m.call("__sceSasSetVoicePCM", {Core, 2, Samples + 0x1000, 256, 0});
+  m.call("__sceSasSetKeyOn", {Core, 2});
+  CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+  CHECK(left(m, 32) == 0 && left(m, 33) == u16(-51) && left(m, 34) == u16(-101), true);
+  m.call("__sceSasSetVoicePCM", {Core, 2, Samples + 0x2000, 256, 0});
+  m.call("__sceSasRevVON", {Core, 0, 0});
+  CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+  CHECK(left(m, 5) == 0 && right(m, 5) == 0, true);
+  m.call("__sceSasRevVON", {Core, 0, 1});
+  m.call("__sceSasRevType", {Core, 4});
+  m.call("__sceSasRevEVOL", {Core, 0x800, 0x1000});
+  m.call("__sceSasSetVolume", {Core, 2, 0x1000, 0x1000, 0x1000, 0x800});
+  CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+  CHECK(left(m, 5) == 500 && right(m, 5) == 500, true);
+  m.call("__sceSasRevType", {Core, u32(-1)});
+  CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+  CHECK(left(m, 5) == 0 && right(m, 5) == 0, true);
+  m.call("__sceSasRevVON", {Core, 1, 0});
+  for(u32 n = 0; n < 64; n++) m.system.memory.write(4, Out + n * 4, 0xc000'4000);  //16384 left, -16384 right
+  CHECK(m.call("__sceSasCoreWithMix", {Core, Out, 0x800, 0x1000}), 0);
+  CHECK(left(m, 5) == 8192 + 1000 && right(m, 5) == u16(-16384 + 1000), true);
+  CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
+}
+
+//A VAG voice part way through a block and a PCM voice part way between samples (pitch 0x1234), saved after a grain,
+//load into another machine that makes the same state, and both machines make the same next grains.
+static auto sasVoicesInStates() -> void {
+  KernelMachine m;
+  for(u32 n = 0; n < 0x400; n++) m.system.memory.write(1, Samples + n, u8(n * 37 + 11));  //blocks of noise...
+  for(u32 block = 0; block < 64; block++) m.system.memory.write(1, Samples + block * 16 + 1, 0);  //...unflagged
+  for(u32 n = 0; n < 1000; n++) m.system.memory.write(2, Samples + 0x1000 + n * 2, u16(n * 61));
+  m.call("__sceSasInit", {Core, 192, 32, 0, 44100});
+  for(u32 voice : {0u, 1u}) loud(m, voice);
+  m.call("__sceSasSetVoice", {Core, 0, Samples, 0x400, 0});
+  m.call("__sceSasSetVoicePCM", {Core, 1, Samples + 0x1000, 1000, 0});
+  m.call("__sceSasSetPitch", {Core, 1, 0x1234});
+  m.call("__sceSasSetPitch", {Core, 0, 0x0c00});
+  for(u32 voice : {0u, 1u}) m.call("__sceSasSetKeyOn", {Core, voice});
+  CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+  auto state = saveState(m);
+  KernelMachine n;
+  CHECK(loadState(n, state), true);
+  CHECK(saveState(n) == state, true);
+  for(u32 grain = 0; grain < 3; grain++) {
+    CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+    CHECK(n.call("__sceSasCore", {Core, Out}), 0);
+    std::vector<u8> first(192 * 4), second(192 * 4);
+    m.system.memory.copyOut(first.data(), Out, 192 * 4);
+    n.system.memory.copyOut(second.data(), Out, 192 * 4);
+    CHECK(first == second, true);
+    CHECK(std::any_of(first.begin(), first.end(), [](u8 byte) { return byte; }), true);
+  }
+}
+
 auto sasTests() -> Tests {
   return {{"sas settings", sasSettings}, {"sas envelopes", sasEnvelopes}, {"sas voices end", sasVoicesEnd},
-          {"sas voices given new samples", sasNewSamples}};
+          {"sas voices given new samples", sasNewSamples}, {"sas vag as recorded", sasVagRecorded},
+          {"sas vag decoded", sasVagDecoded}, {"sas vag endings", sasVagEndings}, {"sas pcm heard", sasPcmHeard},
+          {"sas output modes", sasOutputModes}, {"sas voices mixed", sasMixed},
+          {"sas voices in states", sasVoicesInStates}};
 }
 
 }

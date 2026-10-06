@@ -11,8 +11,8 @@
 //confirms.
 //
 //Time: each run() is one frame of the PSP's, 1/59.94 of a second. The controls are read, the kernel runs the game for
-//that long, then the frame the game shows goes to the screen and the frame's sound to the speakers (silence for now:
-//the kernel's sound channels keep the PSP's time, but their samples aren't mixed into the stream yet: audio.cpp).
+//that long, then the frame the game shows goes to the screen and the frame's sound, as the kernel's sound channels
+//made it (audio.cpp), to the speakers.
 struct System {
   Node::System node;
   Node::Video::Screen screen;
@@ -65,6 +65,7 @@ struct System {
 private:
   std::vector<u8*> pageTable;  //the CPU's view of memory, page by page (Memory::buildPages)
   std::vector<u32> pixels;     //the frame the game shows
+  std::vector<s16> sound;      //the frame's sound, left and right samples side by side (Kernel::audioOutput())
   f64 soundOwed = 0;           //sound frames due to the speakers: 44100 a second, so 735.7 a frame
   u32 unmappedReports = 0;     //accesses to nothing, reported (the first few only)
   u64 programHash = 0;         //the program that started (hash()): states carry it, to load into it alone
