@@ -116,9 +116,20 @@ auto Kernel::sceKernelAllocPartitionMemory() -> void {
   result(block ? block->uid : ErrorAllocationFailed);
 }
 
-//Whether the kernel holds a block for something of its own: a thread's stack, a memory pool, or a module. The rest
-//are blocks the program asked for.
+//Where the program's block starts: start() gives the program one block, from its first segment's 256-byte step to
+//the end of its last. 0 when it has no memory of its own (no segment with any bytes).
+auto Kernel::programBlockAt() const -> u32 {
+  u32 low = 0;
+  for(auto& segment : module.segments) {
+    if(segment.size && (!low || (segment.address & ~255u) < low)) low = segment.address & ~255u;
+  }
+  return low;
+}
+
+//Whether the kernel holds a block for something: a thread's stack, a memory pool, a module, or the program itself.
+//The rest are blocks the program asked for.
 auto Kernel::blockHeld(const Block& block) const -> bool {
+  if(u32 program = programBlockAt(); program && block.address == program) return true;
   for(auto& [uid, thread] : threads) if(thread->stackBlock == block.address) return true;
   for(auto& [uid, pool] : pools) if(pool.block == block.uid) return true;
   for(auto& [uid, loaded] : modules) if(loaded.block == block.uid) return true;

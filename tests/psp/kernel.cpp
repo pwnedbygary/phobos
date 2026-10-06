@@ -413,8 +413,8 @@ static auto startArguments() -> void {
 
 //load() reserves the program's memory exactly where the program is, one block for all its segments (two may share a
 //256-byte step, as a PRX's data starts right after its code, whatever order they're listed in, an empty one among
-//them), or refuses a program whose segments overlap, or whose memory can't be reserved where it is (outside the user
-//partition), leaving nothing of it behind.
+//them), which the program can't free, or refuses a program whose segments overlap, or whose memory can't be reserved
+//where it is (outside the user partition), leaving nothing of it behind.
 static auto programMemory() -> void {
   ElfBuilder elf;
   elf.type = 2;
@@ -430,9 +430,10 @@ static auto programMemory() -> void {
     KernelMachine m;
     std::string error;
     CHECK(m.kernel.load(file.data(), file.size(), "ms0:/OVERLAP.ELF", error), true);
-    bool reserved = false;
-    for(auto& block : m.kernel.blocks) reserved |= block.address == 0x0880'4000;
-    CHECK(reserved, true);
+    u32 reserved = 0;
+    for(auto& block : m.kernel.blocks) if(block.address == 0x0880'4000) reserved = block.uid;
+    CHECK(reserved != 0, true);
+    CHECK(m.call("sceKernelFreePartitionMemory", {reserved}), Kernel::ErrorIllegalPermission);  //not the program's
   }
   for(bool reversed : {false, true}) {
     //code 0x1238 bytes long, and data starting 8 bytes after it, in the code's last 256-byte step (as Lumines' is),

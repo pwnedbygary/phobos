@@ -153,6 +153,7 @@ static auto stateFields() -> void {
 
   //one of everything
   k.module.segments = {{0x0880'4000, 0x100}};
+  u32 programBlock = k.allocate(0x100, 2, 0x0880'4000, "program")->uid;  //where start() would put it
   k.module.imports = {{"Lib", 0x1111, 0x0880'5000}};
   k.module.exports = {{"Lib", 0x2222, 0x0880'6000, false}};
   k.module.skipped = {"left out"};
@@ -626,6 +627,19 @@ static auto stateFields() -> void {
   });
   refuses("a module's block that's a memory pool's", [&] { k.modules.at(moduleID).block = fixedOne().block; });
   refuses("a block two modules have", [&] { k.modules.at(sonyID).block = k.modules.at(moduleID).block; });
+  //and each block one owner at most, a pool's too: two pools on one block, a pool inside a thread's stack, or inside
+  //the program's block (each pool inside the block it names, as poolHolds() wants); and the program's block there
+  auto movePool = [&](Kernel::Pool& pool, const Kernel::Block& to, u32 offset) {
+    pool.block = to.uid;
+    pool.address = to.address + offset;
+  };
+  auto blockOf = [&](u32 uid) -> Kernel::Block& {
+    return *std::find_if(k.blocks.begin(), k.blocks.end(), [&](auto& b) { return b.uid == uid; });
+  };
+  refuses("two pools on one block", [&] { movePool(k.pools.at(spareID), blockOf(fixedOne().block), 0x80); });
+  refuses("a pool inside a thread's stack", [&] { movePool(fixedOne(), stackOf(*k.threads.at(two)), 0); });
+  refuses("a pool inside the program's block", [&] { movePool(fixedOne(), blockOf(programBlock), 0); });
+  refuses("the program's block not there", [&] { k.module.segments[0].address += 0x1000; });
   refuses("a stand-in with a block", [&] {
     k.modules.at(sonyID).standIn = true;
     k.modules.at(sonyID).block = moduleBlock;  //no other module's, since the module moved to the spare block
