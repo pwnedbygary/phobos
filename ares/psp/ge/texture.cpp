@@ -21,6 +21,21 @@
 //(How texels are addressed, repeated and filtered, and the texture functions' arithmetic, are as PPSSPP's software
 //renderer has them, which its authors checked against tests on the PSP. Mipmaps, DXT and 3D's texture coordinates come
 //later.)
+//
+//Decoded textures. Looking a texel up the way the GE stores it takes a lot of steps: find the memory, unswizzle the
+//address, read it, widen a 16-bit color or look an index up in the palette. Drawing does that four times a pixel
+//when it filters, and the same texels over and over, so a texture is decoded once into a plain picture of 8888
+//texels (decode()), each exactly what texel() would read, and drawing takes each texel from there in one step. The
+//copy is good only while the memory it came from stays as it was: the GE watches those pages (Memory::watch()),
+//and whoever writes any of them (the CPU, an HLE function, the GE drawing or copying, a state loaded) throws the
+//copy away (textureWritten()), to be decoded afresh when next drawn with. The palette is part of what a texture of
+//indices looks like: its copy is kept for the palette it was decoded with, found again by the palette's hash and
+//checked byte for byte whenever the palette has changed since (clutVersion).
+//
+//Read from memory as before, texel by texel, are: DXT textures (not emulated yet: texel() notes it as it's used);
+//a texture some of whose bytes have no memory behind them (each such read is reported, as before); and a texture
+//the primitive may draw over itself (its frame buffer or depth buffer and the texture overlap), whose texels then
+//change as the primitive draws, as they do on the PSP.
 
 static constexpr u32 TexelBits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
 
@@ -61,25 +76,34 @@ auto GE::sampler() const -> Sampler {
 auto GE::loadClut() -> void {
   u32 address = (commands[ClutAddress] & 0xff'fff0) | (commands[ClutAddressUpper] << 8 & 0x0f00'0000);
   u32 bytes = std::min<u32>((commands[ClutLoad] & 0x3f) * 32, sizeof(clut));
+  u8 before[sizeof(clut)];
+  std::memcpy(before, clut, sizeof(clut));
   if(!memory.copyOut(clut, address, bytes)) {
     for(u32 n = 0; n < bytes; n++) clut[n] = memory.read(1, address + n);
   }
+  if(std::memcmp(before, clut, sizeof(clut))) paletteChanged();
 }
 
-//The texel at (u, v), already inside the texture, as 8888.
-auto GE::texel(const Sampler& t, s32 u, s32 v) -> u32 {
-  if(t.format >= 8) {
-    note("compressed (DXT) textures aren't emulated yet");
-    return 0;
-  }
+//The palette's contents changed: a new hash and version, by which decoded textures of indices find theirs.
+auto GE::paletteChanged() -> void {
+  u64 hash = 0xcbf2'9ce4'8422'2325;
+  for(u8 byte : clut) hash = (hash ^ byte) * 0x100'0000'01b3;
+  clutHash = hash;
+  clutVersion++;
+}
+
+//The texel at (u, v), already inside the texture, as 8888, from clut and read(size, address): texel() reads memory
+//as the CPU would, decode() reads the very same bytes straight from where they are in the host's memory.
+template<typename Read>
+static auto texelFrom(const GE::Sampler& t, const u8* clut, s32 u, s32 v, const Read& read) -> u32 {
   u32 bits = TexelBits[t.format], rowBytes = t.bufferWidth * bits / 8, byte = u32(u) * bits / 8, offset;
   if(!t.swizzled) offset = v * rowBytes + byte;
   else offset = (v / 8 * (rowBytes / 16) + byte / 16) * 128 + v % 8 * 16 + byte % 16;
   u32 at = t.address + offset;
-  if(t.format < 3) return widen16(memory.read(2, at), t.format);
-  if(t.format == 3) return memory.read(4, at);
-  u32 index = t.format == 4 ? memory.read(1, at) >> (u & 1) * 4 & 15
-            : t.format == 5 ? memory.read(1, at) : memory.read(t.format == 6 ? 2 : 4, at);
+  if(t.format < 3) return widen16(read(2, at), t.format);
+  if(t.format == 3) return read(4, at);
+  u32 index = t.format == 4 ? read(1, at) >> (u & 1) * 4 & 15
+            : t.format == 5 ? read(1, at) : read(t.format == 6 ? 2 : 4, at);
   u32 entry = ((index >> t.clutShift) & t.clutMask) | (t.clutOffset & (t.clutFormat == 3 ? 0xff : 0x1ff));
   if(t.clutFormat == 3) {
     entry &= 0xff;
@@ -87,6 +111,166 @@ auto GE::texel(const Sampler& t, s32 u, s32 v) -> u32 {
   }
   entry &= 0x1ff;
   return widen16(clut[entry * 2] | clut[entry * 2 + 1] << 8, t.clutFormat);
+}
+
+auto GE::texel(const Sampler& t, s32 u, s32 v) -> u32 {
+  if(t.format >= 8) {
+    note("compressed (DXT) textures aren't emulated yet");
+    return 0;
+  }
+  return texelFrom(t, clut, u, v, [&](u32 size, u32 at) { return memory.read(size, at); });
+}
+
+//The bytes texel() reads for every texel inside the texture: from low up to (not including) high. For a swizzled
+//texture, a little past them at most (the last block's whole width and height).
+auto GE::textureBytes(const Sampler& t, u32& low, u32& high) const -> void {
+  u32 width = std::min<u32>(t.width, 512), height = std::min<u32>(t.height, 512);
+  u32 bits = TexelBits[t.format], rowBytes = t.bufferWidth * bits / 8, lastByte = (width - 1) * bits / 8;
+  u32 size = t.format < 3 || t.format == 6 ? 2 : t.format == 3 || t.format == 7 ? 4 : 1;  //the last read's
+  u32 last = !t.swizzled ? (height - 1) * rowBytes + lastByte
+           : ((height - 1) / 8 * (rowBytes / 16) + lastByte / 16) * 128 + 7 * 16 + 15;
+  low = t.address;
+  high = t.address + last + size;
+}
+
+//Where in VRAM's 2 MiB the size bytes from address are, first to last (inclusive): false if they aren't in VRAM.
+//Through the copies that rearrange each 16 KiB (memory.hpp), every 16 KiB the range touches.
+static auto vramSpan(u32 address, u32 size, u32& first, u32& last) -> bool {
+  u32 physical = address & 0x1fff'ffff;
+  if(!size || physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return false;
+  u32 copy = (physical - Memory::VRAMBase) / Memory::VRAMSize;
+  u32 seen = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  first = seen, last = std::min<u32>(seen + std::min<u32>(size, Memory::VRAMSize), Memory::VRAMSize) - 1;
+  if(copy & 1) first &= ~0x3fffu, last |= 0x3fff;
+  return true;
+}
+
+//Whether a primitive drawing with these settings, its pixels inside left-right and top-bottom (in the scissor
+//rectangle), may write anywhere in VRAM from first to last (inclusive): those pixels' bytes in its frame buffer,
+//row by row (a texture in the unused columns right of the picture isn't drawn over), and its depth buffer's, when
+//it writes depth (as a whole: the GE reaches it with each 16 KiB rearranged, memory.hpp).
+static auto drawsOver(const GE::PixelState& p, u32 first, u32 last, s32 left, s32 top, s32 right, s32 bottom)
+  -> bool {
+  if(left > right || top > bottom) return false;
+  auto overlaps = [&](u32 from, u32 to, bool depth) {  //from VRAM offset from to to, before wrapping at its end
+    if(to - from >= Memory::VRAMSize - 1) return true;
+    from &= Memory::VRAMSize - 1, to &= Memory::VRAMSize - 1;
+    if(depth) from &= ~0x3fffu, to |= 0x3fff;
+    if(from > to) return first <= to || last >= from;  //wrapped round VRAM's end
+    return first <= to && last >= from;
+  };
+  u32 bytes = p.format == 3 ? 4 : 2, rowBytes = p.stride * bytes;
+  u32 from = p.frameBuffer + (top * p.stride + left) * bytes;
+  u32 to = p.frameBuffer + (bottom * p.stride + right) * bytes;
+  if(overlaps(from, to + bytes - 1, false)) {
+    //the rows' span reaches the bytes: whether a row does. (Where the span wraps round VRAM's end, it counts.)
+    if(to + bytes - 1 >= Memory::VRAMSize || !rowBytes) return true;
+    u32 segment = (right - left + 1) * bytes;  //a row's bytes, from its first pixel's
+    u32 lowest = first >= segment - 1 + from ? (first - (segment - 1) - from) / rowBytes : 0;
+    for(u32 row = lowest; row <= u32(bottom - top) && from + row * rowBytes <= last; row++) {
+      if(from + row * rowBytes + segment - 1 >= first) return true;
+    }
+  }
+  bool depth = p.clear ? p.clearDepth : p.depthWrite;
+  from = p.depthBuffer + (top * p.depthStride + left) * 2;
+  return depth && overlaps(from, p.depthBuffer + (bottom * p.depthStride + right) * 2 + 1, true);
+}
+
+//The texture decoded, found in the cache or decoded now (and its texels pointed to by texture.decoded): kept by the
+//caller while it draws, as the cache may let it go meanwhile. None, with texture.decoded none too, where it's read
+//from memory as before (see the top of this file). left-right and top-bottom: where the primitive may draw.
+auto GE::decode(Sampler& t, const PixelState& pixel, s32 left, s32 top, s32 right, s32 bottom)
+  -> std::shared_ptr<Decoded> {
+  t.decoded = nullptr;
+  if(t.format >= 8 || !memory.canWatch()) return {};
+  u32 low, high;
+  textureBytes(t, low, high);
+  if(!memory.reaches(low, high - low)) return {};
+  if(u32 first, last; vramSpan(low, high - low, first, last)) {
+    if(drawsOver(pixel, first, last, left, top, right, bottom)) return {};
+  }
+  bool indexed = t.format >= 4;
+  TextureKey key{t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), std::min<u32>(t.height, 512),
+                 t.swizzled, 0, 0, 0, 0, 0};
+  if(indexed) key.clutFormat = t.clutFormat, key.clutShift = t.clutShift, key.clutMask = t.clutMask,
+              key.clutOffset = t.clutOffset, key.clutHash = clutHash;
+  std::shared_ptr<Decoded> entry;
+  if(textures.last && textures.last->key == key) entry = textures.last;
+  else if(auto found = textures.entries.find(key); found != textures.entries.end()) entry = found->second;
+  if(entry && indexed && entry->paletteChecked != clutVersion) {
+    if(!std::memcmp(entry->palette.data(), clut, sizeof(clut))) entry->paletteChecked = clutVersion;
+    else forget(entry.get()), entry.reset();  //another palette with the same hash: decoded afresh
+  }
+  if(!entry) {
+    entry = std::make_shared<Decoded>();
+    entry->key = key;
+    entry->texels.resize(key.width * key.height);
+    auto decodeWith = [&](const auto& read) {
+      for(u32 v = 0; v < key.height; v++) {
+        for(u32 u = 0; u < key.width; u++) entry->texels[v * key.width + u] = texelFrom(t, clut, u, v, read);
+      }
+    };
+    if(const u8* base = memory.pointer(low, high - low)) {
+      decodeWith([&](u32 size, u32 at) -> u32 {
+        const u8* bytes = base + (at - low);
+        if(size == 1) return bytes[0];
+        if(size == 2) return bytes[0] | bytes[1] << 8;
+        return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | u32(bytes[3]) << 24;
+      });
+    } else {  //through VRAM's copies that rearrange it
+      decodeWith([&](u32 size, u32 at) { return memory.read(size, at); });
+    }
+    if(indexed) entry->palette.assign(clut, clut + sizeof(clut)), entry->paletteChecked = clutVersion;
+    memory.pagesOf(low, high - low, entry->firstPage, entry->lastPage);
+    memory.watch(low, high - low);
+    for(u32 page = entry->firstPage; page <= entry->lastPage; page++) textures.pages[page].push_back(entry.get());
+    textures.bytes += entry->texels.size() * 4;
+    textures.entries[key] = entry;
+    while(textures.bytes > TextureCacheBudget) {  //too much kept: the ones unused longest go
+      Decoded* oldest = nullptr;
+      for(auto& [other, kept] : textures.entries) {
+        if(kept != entry && (!oldest || kept->used < oldest->used)) oldest = kept.get();
+      }
+      if(!oldest) break;
+      forget(oldest);
+    }
+  }
+  entry->used = ++textures.clock;
+  textures.last = entry;
+  t.decoded = entry->texels.data();
+  t.decodedWidth = key.width;
+  return entry;
+}
+
+//Memory::watchedWritten(): the page changed, so every texture decoded from it goes.
+auto GE::textureWritten(u32 page) -> void {
+  auto found = textures.pages.find(page);
+  if(found == textures.pages.end()) return;
+  auto stale = found->second;  //(forget() edits the lists)
+  for(auto* entry : stale) forget(entry);
+}
+
+//A decoded texture out of the cache (a primitive drawing with it keeps it until it's done).
+auto GE::forget(Decoded* entry) -> void {
+  for(u32 page = entry->firstPage; page <= entry->lastPage; page++) {
+    auto found = textures.pages.find(page);
+    if(found == textures.pages.end()) continue;
+    auto& list = found->second;
+    list.erase(std::remove(list.begin(), list.end(), entry), list.end());
+    if(list.empty()) textures.pages.erase(found);
+  }
+  textures.bytes -= entry->texels.size() * 4;
+  if(textures.last.get() == entry) textures.last.reset();
+  auto found = textures.entries.find(entry->key);
+  //(the last reference but a drawing primitive's: entry may be gone after this)
+  if(found != textures.entries.end() && found->second.get() == entry) textures.entries.erase(found);
+}
+
+auto GE::dropTextures() -> void {
+  textures.entries.clear();
+  textures.pages.clear();
+  textures.last.reset();
+  textures.bytes = 0;
 }
 
 //The texture at (u, v), in texels (a texel's middle is at +0.5): the texel there, or, filtered, the four whose
@@ -100,17 +284,18 @@ auto GE::sample(const Sampler& t, float u, float v) -> u32 {
   auto held = [](float value) {  //wild coordinates, from garbage (or none at all, from a division by zero)
     return std::isnan(value) ? 0.0f : std::clamp(value, -65536.0f, 65536.0f);
   };
+  auto fetch = [&](s32 x, s32 y) -> u32 { return t.decoded ? t.decoded[y * t.decodedWidth + x] : texel(t, x, y); };
   if(!t.linear) {
     s32 x = s32(std::floor(held(u))), y = s32(std::floor(held(v)));
-    return texel(t, inside(x, t.width, t.clampU), inside(y, t.height, t.clampV));
+    return fetch(inside(x, t.width, t.clampU), inside(y, t.height, t.clampV));
   }
   s32 baseU = s32(std::floor(held(u) * 256)) - 128, baseV = s32(std::floor(held(v) * 256)) - 128;
   s32 fractionU = baseU >> 4 & 15, fractionV = baseV >> 4 & 15;
   s32 x0 = baseU >> 8, y0 = baseV >> 8;
   s32 left = inside(x0, t.width, t.clampU), right = inside(x0 + 1, t.width, t.clampU);
   s32 top = inside(y0, t.height, t.clampV), bottom = inside(y0 + 1, t.height, t.clampV);
-  u32 topLeft = texel(t, left, top), topRight = texel(t, right, top);
-  u32 bottomLeft = texel(t, left, bottom), bottomRight = texel(t, right, bottom);
+  u32 topLeft = fetch(left, top), topRight = fetch(right, top);
+  u32 bottomLeft = fetch(left, bottom), bottomRight = fetch(right, bottom);
   s32 mixed[4];
   for(u32 n = 0; n < 4; n++) {
     s32 upper = (channel(topLeft, n) * (16 - fractionU) + channel(topRight, n) * fractionU) >> 4;

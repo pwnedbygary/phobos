@@ -24,6 +24,8 @@ struct System : Allegrex {
     memory.power(ramSize);
     memory.buildPages(table);
     pages = table.data();
+    watched = memory.watched.data();
+    memory.watching = [this](u32 page) { recompiler.protect(page); };
     memory.written = [this](u32 address, u32 size) { recompiler.invalidateRange(address, size); };
     memory.unmapped = [this](u32 address, bool store) { unmapped.push_back({address, store}); };
     exceptionHook = [this](Exception exception, u32 address) {

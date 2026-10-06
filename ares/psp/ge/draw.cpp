@@ -24,6 +24,13 @@
 //tools/psp-measure), where PPSSPP's software renderer, which the rest follows, has triangles sampled 7/16 in. Not
 //yet: lines, and PRIM's kind 7, which goes on with the last primitive's vertices.)
 
+//A screen position in pixels as the GE holds it, in sixteenths. Wild values (from garbage vertices) are held to the
+//GE's range.
+static auto fixed(float position) -> s32 {
+  if(!(position >= -4096 && position <= 4096)) position = position > 0 ? 4096 : -4096;
+  return s32(position * 16);
+}
+
 auto GE::primitive(u32 kind, u32 count) -> void {
   auto format = vertexFormat();
   u32 ambient = (commands[AmbientColor] & 0xff'ffff) | (commands[AmbientAlpha] & 0xff) << 24;
@@ -45,6 +52,21 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   pixel.fog = !format.through && !pixel.clear && (commands[FogEnable] & 1);
   Sampler texture = sampler();
   Sampler* textured = (commands[TextureMappingEnable] & 1) && !pixel.clear ? &texture : nullptr;
+  std::shared_ptr<Decoded> decoded;  //its texels, kept while this primitive draws (texture.cpp)
+  if(textured) {
+    //where it may draw: inside the scissor rectangle, and in 2D around its vertices (a pixel more each way)
+    s32 left = pixel.left, top = pixel.top, right = pixel.right, bottom = pixel.bottom;
+    if(format.through && !vertices.empty()) {
+      s32 minX = 65536, maxX = -65536, minY = 65536, maxY = -65536;
+      for(auto& vertex : vertices) {
+        minX = std::min(minX, fixed(vertex.x)), maxX = std::max(maxX, fixed(vertex.x));
+        minY = std::min(minY, fixed(vertex.y)), maxY = std::max(maxY, fixed(vertex.y));
+      }
+      left = std::max(left, (minX >> 4) - 1), right = std::min(right, (maxX >> 4) + 1);
+      top = std::max(top, (minY >> 4) - 1), bottom = std::min(bottom, (maxY >> 4) + 1);
+    }
+    decoded = decode(texture, pixel, left, top, right, bottom);
+  }
   Transform t{};
   if(!format.through) {
     t = transformState();
@@ -92,13 +114,6 @@ static auto fogAmount(float fog) -> u32 {
   if(std::signbit(fog)) return 0;
   if(!(fog < 1)) return 255;
   return u32(fog * 256);
-}
-
-//A screen position in pixels as the GE holds it, in sixteenths. Wild values (from garbage vertices) are held to the
-//GE's range.
-static auto fixed(float position) -> s32 {
-  if(!(position >= -4096 && position <= 4096)) position = position > 0 ? 4096 : -4096;
-  return s32(position * 16);
 }
 
 static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }

@@ -545,8 +545,114 @@ static auto torusSample(const std::string& name, u32 background) -> void {
 static auto celshadingSample() -> void { torusSample("celshading", 0xffff'ffff); }
 static auto envmapSample() -> void { torusSample("envmap", 0xff55'4433); }
 
+//Textures kept decoded (texture.cpp): drawn again after its memory changed, a texture shows the change, whoever made
+//it (the CPU's stores, compiled and interpreted, after the recompiler started afresh; a write, copy or fill from
+//outside the CPU; the GE drawing into it; a block transfer), and the palette it's drawn with; loading a state drops
+//what was kept; and a primitive drawing over its own texture reads it as it draws.
+static auto drawDecodedTextures() -> void {
+  constexpr u32 Code = 0x0890'0000;
+  for(bool recompile : {false, true}) {
+    Canvas c;
+    c.texture(3, 4, 4, 4);
+    for(u32 n = 0; n < 16; n++) c.memory.write(4, Texture + n * 4, 0x0010'2030 + n);
+    auto drawn = [&](u32 n) {  //the texture drawn 1:1 at the top left: its texel n as it lands (alpha: the stencil)
+      c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {4, 4, 0, 4, 4, 0}});
+      return c.pixel(n % 4, n / 4);
+    };
+    CHECK(drawn(5), 0x0010'2035u);
+    CHECK(c.ge.textures.entries.size(), 1u);  //kept decoded, as the rest of this test needs
+    c.s.runProgram(Code, {lui(t0, Texture >> 16), ori(t0, t0, 20), lui(t1, 0x55), ori(t1, t1, 0x6677), sw(t1, 0, t0)},
+                   recompile);
+    CHECK(drawn(5), 0x0055'6677u);
+    //compiled code that ran before the texture was decoded runs again (no fresh start between): its store is seen
+    std::vector<u32> increment = {lui(t0, Texture >> 16), ori(t0, t0, 44), lw(t1, 0, t0), addiu(t1, t1, 1),
+                                  sw(t1, 0, t0)};
+    c.s.runProgram(Code + 0x100, increment, recompile);
+    CHECK(drawn(11), 0x0010'203cu);
+    c.s.ipu.pc = Code + 0x100, c.s.ipu.pd = Code + 0x104, c.s.scc.halted = 0;
+    c.s.run(1000);
+    CHECK(drawn(11), 0x0010'203du);
+    c.memory.write(4, Texture + 24, 0x00aa'bbcc);
+    CHECK(drawn(6), 0x00aa'bbccu);
+    u32 word = 0x0012'3456;
+    c.memory.copyIn(Texture + 28, &word, 4);
+    CHECK(drawn(7), 0x0012'3456u);
+    c.memory.fill(Texture + 32, 0x11, 3);
+    CHECK(drawn(8), 0x0011'1111u);
+    CHECK(drawn(9), 0x0010'2039u);
+
+    //the GE drawing into a texture in VRAM, and copying into it
+    c.ge.commands[GE::TextureAddress0] = 0x4000;
+    c.ge.commands[GE::TextureBufferWidth0] = 0x04 << 16 | 4;
+    for(u32 n = 0; n < 16; n++) c.memory.write(4, VRAM + 0x4000 + n * 4, 0x0020'0000 + n);
+    CHECK(drawn(10), 0x0020'000au);
+    c.ge.commands[GE::FrameBufferPointer] = 0x4000;
+    c.ge.commands[GE::FrameBufferWidth] = 4;
+    c.ge.commands[GE::TextureMappingEnable] = 0;
+    c.draw(GE::Sprites, {{0, 0, 0, 2, 2, 0}, {0, 0, 0x0040'5060, 4, 3, 0}});  //texels 10 and 11
+    c.ge.commands[GE::FrameBufferPointer] = 0;
+    c.ge.commands[GE::FrameBufferWidth] = 16;
+    c.ge.commands[GE::TextureMappingEnable] = 1;
+    CHECK(drawn(10), 0x0040'5060u);
+    CHECK(drawn(9), 0x0020'0009u);
+    c.memory.write(4, Texture + 64, 0x0077'0011);
+    c.ge.commands[GE::TransferSource] = (Texture + 64) & 0xff'ffff;
+    c.ge.commands[GE::TransferSourceWidth] = (Texture >> 24) << 16 | 8;
+    c.ge.commands[GE::TransferDestination] = 0x4000 + 12 * 4;
+    c.ge.commands[GE::TransferDestinationWidth] = 0x04 << 16 | 8;
+    c.ge.commands[GE::TransferSourcePosition] = 0;
+    c.ge.commands[GE::TransferDestinationPosition] = 0;
+    c.ge.commands[GE::TransferSize] = 0;  //one pixel
+    c.ge.commands[GE::TransferStart] = 1;
+    c.ge.transfer();
+    CHECK(drawn(12), 0x0077'0011u);
+    CHECK(drawn(13), 0x0020'000du);
+
+    //the palette: another, then the first again (found again by its hash, checked byte for byte)
+    c.texture(5, 4, 4, 16);
+    for(u32 n = 0; n < 16; n++) c.memory.write(1, Texture + n / 4 * 16 + n % 4, n);
+    c.ge.commands[GE::ClutAddress] = Palette & 0xff'ffff;
+    c.ge.commands[GE::ClutAddressUpper] = (Palette >> 8) & 0xf'0000;
+    c.ge.commands[GE::ClutFormat] = 3 | 0xff << 8;
+    c.ge.commands[GE::ClutLoad] = 2;  //16 entries of 4 bytes
+    auto palette = [&](u32 base) {
+      for(u32 n = 0; n < 16; n++) c.memory.write(4, Palette + n * 4, base + n);
+      c.ge.loadClut();
+    };
+    palette(0x0030'0000);
+    CHECK(drawn(3), 0x0030'0003u);
+    palette(0x0031'0000);
+    CHECK(drawn(3), 0x0031'0003u);
+    palette(0x0030'0000);
+    CHECK(drawn(4), 0x0030'0004u);
+    CHECK(c.ge.textures.entries.size(), 3u);  //the 8888 one in VRAM, and the indices with each palette
+
+    //a state loaded: the memory as it was then, and nothing kept from after
+    serializer saved;
+    c.memory.serialize(saved);
+    c.ge.serialize(saved);
+    c.memory.write(1, Texture + 1, 9);
+    CHECK(drawn(1), 0x0030'0009u);
+    serializer loading{saved.data(), saved.size()};
+    c.memory.serialize(loading);
+    c.ge.serialize(loading);
+    CHECK(drawn(1), 0x0030'0001u);
+  }
+
+  //drawing over its own texture (the frame buffer): row 2 takes row 1 as this sprite has just drawn it
+  Canvas c;
+  for(u32 x = 0; x < 4; x++) c.setPixel(x, 0, 0x0001'0101 * (x + 1)), c.setPixel(x, 1, 0x0012'3456);
+  c.texture(3, 16, 16, 16);
+  c.ge.commands[GE::TextureAddress0] = 0;
+  c.ge.commands[GE::TextureBufferWidth0] = 0x04 << 16 | 16;
+  c.draw(GE::Sprites, {{0, 0, 0, 0, 1, 0}, {4, 2, 0, 4, 3, 0}});
+  for(u32 x = 0; x < 4; x++) CHECK(c.pixel(x, 1), 0x0001'0101u * (x + 1));
+  for(u32 x = 0; x < 4; x++) CHECK(c.pixel(x, 2), 0x0001'0101u * (x + 1));
+}
+
 auto drawTests() -> Tests {
   return {
+    {"draw textures kept decoded", drawDecodedTextures},
     {"draw sprites", drawSprites}, {"draw texture formats", drawTextureFormats}, {"draw filter", drawFilter},
     {"draw texture functions", drawTextureFunctions}, {"draw pixel tests", drawPixelTests}, {"draw blending", drawBlending},
     {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles},

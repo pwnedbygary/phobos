@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 //The GE (the "graphics engine"): the PSP's graphics chip.
@@ -158,7 +160,46 @@ struct GE {
     u32 address, bufferWidth, width, height, format;  //bufferWidth: texels from one row to the next
     bool swizzled, clampU, clampV, linear;
     u32 clutFormat, clutShift, clutMask, clutOffset;
+    const u32* decoded;  //its texels already decoded (Decoded), decodedWidth to a row; or none: read from memory
+    u32 decodedWidth;
   };
+
+  //A texture decoded: every texel inside it as 8888, exactly as texel() would read it from memory, so that drawing
+  //looks each up in one step instead of reading memory, unswizzling, widening and looking up the palette at every
+  //pixel (texture.cpp). It's good only while the memory it came from stays as it was, so the GE watches those
+  //pages (Memory::watch()), and a write to any of them, by anyone, throws it away.
+  struct TextureKey {
+    //everything texel() reads for a texel inside the texture; the palette's settings and contents (by its hash)
+    //only for palette indices, 0 otherwise
+    u32 address, bufferWidth, format, width, height, swizzled;  //width, height: the texels kept, at most 512 a side
+    u32 clutFormat, clutShift, clutMask, clutOffset;
+    u64 clutHash;
+    auto operator==(const TextureKey&) const -> bool = default;
+    struct Hash {
+      auto operator()(const TextureKey& k) const -> size_t {
+        u64 h = k.clutHash ^ u64(k.address) << 32 ^ k.bufferWidth << 20 ^ k.format << 16 ^ k.width << 4 ^ k.height;
+        h ^= u64(k.swizzled) << 31 ^ u64(k.clutFormat) << 40 ^ u64(k.clutShift) << 44 ^ u64(k.clutMask) << 50;
+        h ^= u64(k.clutOffset) << 58;
+        h *= 0x9e37'79b9'7f4a'7c15ull;
+        return size_t(h ^ h >> 29);
+      }
+    };
+  };
+  struct Decoded {
+    TextureKey key;
+    std::vector<u8> palette;  //for palette indices: the palette it was decoded with (clut, all of it)
+    u32 paletteChecked = 0;   //the palette's version (clutVersion) last found to be that palette
+    u32 firstPage = 0, lastPage = 0;  //the pages it came from (Memory::pagesOf())
+    u64 used = 0;             //when it was last used: past the cache's budget, the oldest go first
+    std::vector<u32> texels;  //key.width x key.height
+  };
+  struct TextureCache {
+    std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
+    std::unordered_map<u32, std::vector<Decoded*>> pages;  //the decoded textures that came from each page
+    std::shared_ptr<Decoded> last;                         //the last one found, looked at first
+    u64 bytes = 0, clock = 0;
+  };
+  static constexpr u64 TextureCacheBudget = 64 << 20;  //the texels kept, in bytes, before the oldest go
 
   //The pixel pipeline's settings, gathered once a primitive (pixel.cpp).
   struct PixelState {
@@ -181,6 +222,9 @@ struct GE {
   Memory& memory;
   u32 commands[256] = {};  //each command's last word
   u8 clut[1024] = {};      //the palette, as CLUT_LOAD copied it in: textures read it from here, not from memory
+  u64 clutHash = 0;        //its contents' hash, and a version that goes up whenever they change
+  u32 clutVersion = 0;
+  TextureCache textures;   //textures kept decoded (texture.cpp)
   Registers list;
   u32 vertexAddress = 0, indexAddress = 0;  //where the next vertex and index are read
   u32 signalWord = 0, finishWord = 0, endWord = 0;  //what made run() stop: the SIGNAL or FINISH before it, and the END
@@ -192,9 +236,8 @@ struct GE {
   //What's worth reporting: a command or mode not emulated yet, a list that went wrong. Each is reported once.
   std::function<auto (const std::string& text) -> void> log;
 
-  GE(Memory& memory) : memory(memory) {}
-
   //ge.cpp
+  GE(Memory& memory);
   auto power() -> void;
   auto note(const std::string& text) -> void;
   auto serialize(serializer& s) -> bool;
@@ -236,6 +279,13 @@ struct GE {
   auto sample(const Sampler& texture, float u, float v) -> u32;
   auto textureFunction(u32 color, u32 texel) const -> u32;
   auto loadClut() -> void;
+  auto paletteChanged() -> void;
+  auto textureBytes(const Sampler& texture, u32& low, u32& high) const -> void;
+  auto decode(Sampler& texture, const PixelState& pixel, s32 left, s32 top, s32 right, s32 bottom)
+    -> std::shared_ptr<Decoded>;
+  auto textureWritten(u32 page) -> void;
+  auto forget(Decoded* entry) -> void;
+  auto dropTextures() -> void;
 
   //pixel.cpp
   auto pixelState() const -> PixelState;

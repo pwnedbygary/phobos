@@ -64,10 +64,30 @@ struct Memory {
   //hardware not emulated yet, so it's worth reporting.
   std::function<auto (u32 address, bool store) -> void> unmapped;
 
+  //Watched pages: memory someone must hear about the moment it's written. The GE keeps textures decoded (ge/
+  //texture.cpp), and a decoded copy is only good until its bytes change, by whoever changes them: the CPU, an HLE
+  //function, the GE drawing or copying. So the GE watches the pages its textures come from. One byte per 4 KiB
+  //page, numbered by the address's low 29 bits as the CPU's page table numbers them (VRAM by where its bytes are:
+  //its first copy's pages). changed() tells watchedWritten() of each watched page a change touches, and stops
+  //watching it.
+  //
+  //The CPU's compiled stores skip write() and changed() (they go straight through the page table), so whoever
+  //owns the CPU sets watching(), which watch() calls for each newly watched page: the owner then sends compiled
+  //stores to that page through write() from then on, as it does for pages holding compiled code. Without
+  //watching() nobody promises that, and the GE keeps nothing decoded (canWatch()).
+  std::vector<u8> watched;
+  u32 watchedPages = 0;  //how many are watched: none, and changed() needn't look
+  std::function<auto (u32 page) -> void> watching;
+  std::function<auto (u32 page) -> void> watchedWritten;
+
   //memory.cpp
   static auto vramOffset(u32 copy, u32 seen) -> u32;
   static auto vramSeen(u32 copy, u32 offset) -> u32;
   auto power(u32 ramSize = 32_MiB) -> void;
+  auto canWatch() const -> bool { return (bool)watching && !watched.empty(); }
+  auto watch(u32 address, u32 size) -> void;
+  auto unwatchAll() -> void;
+  auto pagesOf(u32 address, u32 size, u32& first, u32& last) const -> bool;
   auto serialize(serializer& s) -> void;
   auto pointer(u32 address, u32 size = 1) -> u8*;
   auto reaches(u32 address, u32 size) -> bool;

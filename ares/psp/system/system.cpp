@@ -117,8 +117,10 @@ auto System::unload() -> void {
   memory.scratchpad = {};
   memory.vram = {};
   memory.ram = {};
+  memory.watched = {};
   pageTable = {};
   cpu.pages = nullptr;
+  cpu.watched = nullptr;
   cpu.recompiler.sections.clear();
   cpu.recompiler.sections.shrink_to_fit();
   cpu.recompiler.writePages.clear();
@@ -149,6 +151,8 @@ auto System::power(bool reset) -> void {
   memory.power(64_MiB);
   memory.buildPages(pageTable);
   cpu.pages = pageTable.data();
+  cpu.watched = memory.watched.data();
+  memory.watching = [this](u32 page) { cpu.recompiler.protect(page); };
   memory.written = [this](u32 address, u32 size) { cpu.recompiler.invalidateRange(address, size); };
   memory.unmapped = [this](u32 address, bool store) {
     //Under HLE nothing should reach these; a game that does is reported, but only so often.
