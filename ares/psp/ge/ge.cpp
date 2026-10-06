@@ -11,6 +11,7 @@ namespace ares::PlayStationPortable {
 #include "transform.cpp"
 #include "draw.cpp"
 #include "raster.cpp"
+#include "threads.cpp"
 #include "transfer.cpp"
 
 //The GE watches the pages of the textures it keeps decoded (texture.cpp), and hears of their changes here.
@@ -33,6 +34,7 @@ auto GE::power() -> void {
   boneIndex = worldIndex = viewIndex = projectionIndex = textureIndex = 0;
   pending = Stop::Ended;
   noted.clear();
+  flush();
   dropTextures();
   paletteChanged();
 }
@@ -57,6 +59,7 @@ auto GE::float24(u32 argument) -> float {
 //Loading returns false for what no GE could hold: CALLs more than two deep, or an END that means anything but the
 //end, a FINISH or a SIGNAL.
 auto GE::serialize(serializer& s) -> bool {
+  flush();  //(nothing waits outside run(), but a state is always of finished drawing)
   s(commands);
   s(clut);
   if(s.reading()) dropTextures(), paletteChanged();

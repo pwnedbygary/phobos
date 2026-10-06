@@ -57,8 +57,12 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   std::vector<Vertex> vertices;
   vertices.reserve(count);
   for(u32 n = 0; n < count; n++) {
+    //(indices and vertices in VRAM that primitives waiting to be drawn draw over: they're drawn first, threads.cpp)
+    if(format.indexFormat && pendingOver(indexAddress + n * format.indexFormat, format.indexFormat)) flush();
     u32 index = format.indexFormat ? readIndex(n, format) : n;
-    vertices.push_back(readVertex(vertexAddress + index * format.size, format));
+    u32 address = vertexAddress + index * format.size;
+    if(pendingOver(address, format.size)) flush();
+    vertices.push_back(readVertex(address, format));
     if(!format.colorFormat) vertices.back().color = ambient;
   }
   //the next PRIM carries on where this one stopped: after its indices if it had them, else after its vertices
@@ -87,6 +91,11 @@ auto GE::primitive(u32 kind, u32 count) -> void {
     }
     look.decoded = decode(look.texture, pixel, left, top, right, bottom);
   }
+  //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
+  //texture read from memory as it's drawn (texture.cpp) has it drawn at once.
+  drawing.recording = !(look.textured && !look.texture.decoded) && defer(pixel);
+  if(!drawing.recording) flush();
+  const Look& drawn = drawing.recording ? drawing.looks.emplace_back(std::move(look)) : look;
   Transform t{};
   if(!format.through) {
     t = transformState();
@@ -97,14 +106,14 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   }
   s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   auto drawTriangle = [&](const Vertex& a, const Vertex& b, const Vertex& c, s32 facing) {
-    if(format.through) triangle(look, a, b, c, facing, false);
-    else clipTriangle(look, t, a, b, c, facing);
+    if(format.through) triangle(drawn, a, b, c, facing, false);
+    else clipTriangle(drawn, t, a, b, c, facing);
   };
   touched = {};
   switch(kind) {
   case Points:
     for(auto& vertex : vertices) {
-      if(!vertex.outside) point(look, vertex);
+      if(!vertex.outside) point(drawn, vertex);
     }
     break;
   case Lines:
@@ -125,14 +134,18 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   case Sprites:
     for(u32 n = 0; n + 1 < count; n += 2) {
       if(!format.through && outOfSight(t.depthClamp, {&vertices[n], &vertices[n + 1]})) continue;
-      rectangle(look, vertices[n], vertices[n + 1], !format.through);
+      rectangle(drawn, vertices[n], vertices[n + 1], !format.through);
     }
     break;
   }
-  //what it may have drawn over, for whoever keeps a copy of memory (the recompiler, decoded textures)
+  //what it may have drawn over (or will, once the batch is drawn), for whoever keeps a copy of memory (the
+  //recompiler, decoded textures), and for the batch
   for(auto& range : touched) {
-    if(range.high >= range.low) memory.changed(Memory::VRAMBase + range.low, range.high - range.low + 1);
+    if(range.high < range.low) continue;
+    memory.changed(Memory::VRAMBase + range.low, range.high - range.low + 1);
+    if(drawing.recording) for(u32 page = range.low >> 12; page <= range.high >> 12; page++) drawing.pending.set(page);
   }
+  drawing.recording = false;
 }
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth
@@ -156,7 +169,8 @@ auto GE::submit(const Job& job) -> void {
     note(1, p.depthBuffer + (job.firstY * p.depthStride + job.firstX) * 2,
          p.depthBuffer + (job.lastY * p.depthStride + job.lastX) * 2 + 1, true);
   }
-  rasterize(job, job.firstY, job.lastY);
+  if(drawing.recording) record(job);
+  else rasterize(job, job.firstY, job.lastY);
 }
 
 //The fog at a pixel, 0-255, from its 0-1: rounded down, 1 or more giving 255 (as PPSSPP has it).

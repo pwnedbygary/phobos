@@ -49,6 +49,7 @@ struct System {
 
   string memoryStick;          //the host folder standing for ms0: (option "Memory Stick")
   bool recompile = true;       //the CPU's recompiler on, the interpreter its fallback (option "Recompiler")
+  u32 geThreads = 0;           //how many threads draw (option "GE Threads"): 0 for one fewer than the host's cores
 
   auto name() const -> string { return "PlayStation Portable"; }
 

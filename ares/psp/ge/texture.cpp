@@ -76,6 +76,7 @@ auto GE::sampler() const -> Sampler {
 auto GE::loadClut() -> void {
   u32 address = (commands[ClutAddress] & 0xff'fff0) | (commands[ClutAddressUpper] << 8 & 0x0f00'0000);
   u32 bytes = std::min<u32>((commands[ClutLoad] & 0x3f) * 32, sizeof(clut));
+  if(pendingOver(address, bytes)) flush();  //from VRAM primitives waiting to be drawn draw over (threads.cpp)
   u8 before[sizeof(clut)];
   std::memcpy(before, clut, sizeof(clut));
   if(!memory.copyOut(clut, address, bytes)) {
@@ -202,6 +203,7 @@ auto GE::decode(Sampler& t, const PixelState& pixel, s32 left, s32 top, s32 righ
     else forget(entry.get()), entry.reset();  //another palette with the same hash: decoded afresh
   }
   if(!entry) {
+    if(pendingOver(low, high - low)) flush();  //from VRAM primitives waiting to be drawn draw over (threads.cpp)
     entry = std::make_shared<Decoded>();
     entry->key = key;
     entry->texels.resize(key.width * key.height);

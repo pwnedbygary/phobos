@@ -939,11 +939,149 @@ static auto geEndless() -> void {
   alarm(0);
 }
 
+//Drawing on several threads (ge/threads.cpp). A frame's worth of primitives: sprites and triangles, flat, blended
+//across, textured from RAM and blended over what's there, depth-tested; a picture drawn off the screen, then drawn
+//with as a texture (render to texture); a block transfer of drawn pixels; a palette loaded from pixels just drawn; a
+//sprite drawing over its own texture (drawn at once, in order); and a 16-bit frame buffer. It comes out the same,
+//every byte of VRAM, with 1, 2, 4 and 8 threads, with batches shared out however small. Stopped at its stall address
+//part way, what came before is drawn (what the CPU reads then); and a state saved there carries on, in another
+//machine, to the same picture.
+static auto geThreads() -> void {
+  constexpr u32 Texture = 0x0898'0000, Offscreen = 0x15'4000;  //(the off-screen picture: VRAM offset)
+  u32 stall = 0;
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 64 * 64; n++) memory.write(4, Texture + n * 4, 0x8000'0000 | (n * 0x0305'0709 & 0xff'ffff));
+    ListWriter list{memory, ListA};
+    u32 vertex = Vertices;
+    struct V { float u, v; u32 color; float x, y, z; };
+    auto put = [&](u32 kind, std::initializer_list<V> vertices) {
+      list.to(GE::VertexAddress, vertex);
+      for(auto& v : vertices) {
+        for(float value : {v.u, v.v}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+        memory.write(4, vertex, v.color), vertex += 4;
+        for(float value : {v.x, v.y, v.z}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+      }
+      list.put(GE::Primitive, kind << 16 | vertices.size());
+    };
+    auto target = [&](u32 address, u32 width, u32 format) {
+      list.put(GE::FrameBufferPointer, address), list.put(GE::FrameBufferWidth, width);
+      list.put(GE::FrameBufferPixelFormat, format);
+    };
+    target(0, 512, 3);
+    list.put(GE::DepthBufferPointer, 0x11'0000), list.put(GE::DepthBufferWidth, 512);
+    list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+    list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+    list.put(GE::ClearMode, 1 | 7 << 8);
+    put(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {0, 0, 0xff20'3040, 480, 272, 0}});
+    list.put(GE::ClearMode, 0);
+    list.put(GE::DepthTestEnable, 1), list.put(GE::DepthTest, 7);  //greater or equal
+    for(u32 n = 0; n < 24; n++) {
+      float x = n * 19 % 440, y = n * 37 % 240, z = n * 2000.0f;
+      put(GE::Triangles, {{0, 0, 0xff00'00ff + n * 0x0a00, x, y, z}, {0, 0, 0xff00'ff00, x + 60, y + 9, z},
+                          {0, 0, 0xffff'0000, x + 21, y + 40, z}});
+    }
+    list.put(GE::TextureMappingEnable, 1), list.to(GE::TextureAddress0, Texture);
+    list.put(GE::TextureBufferWidth0, (Texture >> 24) << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
+    list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 0 | 1 << 8);
+    list.put(GE::TextureFilter, 1 | 1 << 8);
+    list.put(GE::AlphaBlendEnable, 1), list.put(GE::BlendMode, 2 | 3 << 4);
+    for(u32 n = 0; n < 12; n++) {
+      float x = n * 53 % 400, y = n * 29 % 200;
+      put(GE::Sprites, {{0, 0, 0, x, y, 30000}, {64, 64, 0xc0ff'ffff, x + 77, y + 51, 30000}});
+    }
+    stall = list.address;
+    //drawn into, then drawn with, in the same render target: the texture decoded once the first is drawn
+    list.put(GE::TextureMappingEnable, 0), list.put(GE::AlphaBlendEnable, 0), list.put(GE::DepthTestEnable, 0);
+    put(GE::Sprites, {{0, 0, 0, 400, 200, 0}, {0, 0, 0xff11'7799, 464, 264, 0}});
+    list.put(GE::TextureMappingEnable, 1), list.put(GE::TextureAddress0, (200 * 512 + 400) * 4);
+    list.put(GE::TextureBufferWidth0, 0x04 << 16 | 512), list.put(GE::TextureFunction, 3);
+    put(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {64, 64, 0, 64, 64, 0}});
+    //a picture off the screen, then drawn with
+    target(Offscreen, 64, 3);
+    list.put(GE::TextureMappingEnable, 0);
+    for(u32 n = 0; n < 8; n++) {
+      put(GE::Sprites, {{0, 0, 0, n * 8.0f, 0, 0}, {0, 0, 0xff00'0000 + n * 0x20'2020, n * 8.0f + 8, 64, 0}});
+    }
+    target(0, 512, 3);
+    list.put(GE::TextureMappingEnable, 1), list.put(GE::TextureAddress0, Offscreen);
+    list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64);
+    put(GE::Sprites, {{0, 0, 0, 100, 100, 0}, {64, 64, 0, 228, 164, 0}});
+    //that copied, before it's drawn over any more
+    list.put(GE::TransferSource, 0), list.put(GE::TransferSourceWidth, 0x04 << 16 | 512);
+    list.put(GE::TransferSourcePosition, 100 | 100 << 10);
+    list.put(GE::TransferDestination, 0x1d'0000), list.put(GE::TransferDestinationWidth, 0x04 << 16 | 512);
+    list.put(GE::TransferSize, 63 | 31 << 10), list.put(GE::TransferStart, 1);
+    //a palette loaded from pixels just drawn
+    list.put(GE::TextureMappingEnable, 0);
+    put(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {0, 0, 0xff44'88cc, 16, 1, 0}});
+    list.put(GE::ClutAddress, 0), list.put(GE::ClutAddressUpper, 0x04 << 16), list.put(GE::ClutLoad, 2);
+    list.put(GE::ClutFormat, 3 | 0x0f << 8);
+    list.put(GE::TextureMappingEnable, 1);
+    list.to(GE::TextureAddress0, Texture), list.put(GE::TextureBufferWidth0, (Texture >> 24) << 16 | 64);
+    list.put(GE::TextureFormat, 5);
+    put(GE::Sprites, {{0, 0, 0, 300, 20, 0}, {64, 64, 0, 364, 84, 0}});
+    //a sprite drawing over its own texture: the frame buffer
+    list.put(GE::TextureFormat, 3), list.put(GE::TextureAddress0, 0);
+    list.put(GE::TextureBufferWidth0, 0x04 << 16 | 512);
+    list.put(GE::TextureSize0, 9 << 8 | 9);
+    put(GE::Sprites, {{10, 10, 0, 20, 30, 0}, {110, 60, 0, 120, 80, 0}});
+    //two render targets a row apart: one's row 8 is the other's 7
+    list.put(GE::TextureMappingEnable, 0);
+    put(GE::Sprites, {{0, 0, 0, 300, 0, 0}, {0, 0, 0xff00'ff00, 340, 20, 0}});
+    target(0x800, 512, 3);
+    put(GE::Sprites, {{0, 0, 0, 310, 0, 0}, {0, 0, 0xffff'00ff, 350, 20, 0}});
+    //a 16-bit frame buffer
+    target(0x18'0000, 512, 1);
+    for(u32 n = 0; n < 6; n++) {
+      put(GE::Triangles, {{0, 0, 0xffff'ffff, n * 70.0f, 0, 0}, {0, 0, 0x8000'00ff, n * 70.0f + 70, 90, 0},
+                          {0, 0, 0x0000'ff00, n * 70.0f, 120, 0}});
+    }
+    list.put(GE::Finish), list.put(GE::End);
+  };
+  auto drawn = [&](u32 threads, u64 shared, bool stalled) {
+    KernelMachine m;
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = shared;
+    build(m.system.memory);
+    m.call("sceGeListEnQueue", {ListA, stalled ? stall : 0, 0xffff'ffff, 0});
+    return m.system.memory.vram;
+  };
+  auto whole = drawn(1, 8192, false), half = drawn(1, 8192, true);
+  CHECK(whole != half, true);
+  for(u32 threads : {2u, 4u, 8u}) {
+    for(u64 shared : {u64(0), u64(8192)}) {
+      CHECK(drawn(threads, shared, false) == whole, true);
+      CHECK(drawn(threads, shared, true) == half, true);
+    }
+  }
+  //stopped part way: the CPU reads what's drawn; a state saved there, loaded into another machine, carries on
+  KernelMachine m;
+  m.system.ge.setThreads(4);
+  m.system.ge.drawing.shared = 0;
+  build(m.system.memory);
+  u32 id = m.call("sceGeListEnQueue", {ListA, stall, 0xffff'ffff, 0});
+  u32 at = (100 * 512 + 50) * 4, pixel = half[at] | half[at + 1] << 8 | half[at + 2] << 16 | u32(half[at + 3]) << 24;
+  CHECK(m.system.memory.read(4, VRAM + at), pixel);
+  serializer saved;
+  m.system.memory.serialize(saved), m.system.serialize(saved);
+  m.system.ge.serialize(saved), m.kernel.serialize(saved);
+  KernelMachine n;
+  n.system.ge.setThreads(8);
+  n.system.ge.drawing.shared = 0;
+  serializer loading{saved.data(), saved.size()};
+  n.system.memory.serialize(loading), n.system.serialize(loading);
+  CHECK(n.system.ge.serialize(loading), true);
+  CHECK(n.kernel.serialize(loading), true);
+  CHECK(n.system.memory.vram == half, true);
+  CHECK(n.call("sceGeListUpdateStallAddr", {id, 0}), 0);
+  CHECK(n.system.memory.vram == whole, true);
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
     {"ge clear", geClear}, {"ge transfer", geTransfer}, {"ge driver", geDriver}, {"ge base kept", geBaseKept},
-    {"ge saved state", geSaved}, {"ge endless list", geEndless},
+    {"ge saved state", geSaved}, {"ge endless list", geEndless}, {"ge drawn on several threads", geThreads},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause},
     {"ge calls and threads", geCallsAndThreads},
