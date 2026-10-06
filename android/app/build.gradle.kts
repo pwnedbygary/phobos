@@ -120,11 +120,16 @@ android {
 }
 
 // The repository's LICENSE, with every third-party notice, ships in the APK as
-// assets/licenses/LICENSE.txt for Settings → About → Open-source licenses.
+// assets/licenses/LICENSE.txt for Settings → About → Open-source licenses, with
+// the GPL's text from COPYING as its last notice.
 abstract class CopyLicenseNotices : DefaultTask() {
     @get:InputFile
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val license: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val copying: RegularFileProperty
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -133,7 +138,10 @@ abstract class CopyLicenseNotices : DefaultTask() {
     fun copy() {
         val dir = outputDir.get().asFile.resolve("licenses")
         dir.mkdirs()
-        license.get().asFile.copyTo(dir.resolve("LICENSE.txt"), overwrite = true)
+        val rule = "-".repeat(70)
+        val notices = license.get().asFile.readText().trimEnd() + "\n\n$rule\n" +
+            copying.get().asFile.readText().trimEnd() + "\n$rule\n"
+        dir.resolve("LICENSE.txt").writeText(notices)
     }
 }
 
@@ -141,6 +149,7 @@ androidComponents {
     onVariants { variant ->
         val copyNotices = tasks.register<CopyLicenseNotices>("copy${variant.name.replaceFirstChar { it.uppercase() }}LicenseNotices") {
             license.set(rootProject.file("../LICENSE"))
+            copying.set(rootProject.file("../COPYING"))
         }
         variant.sources.assets?.addGeneratedSourceDirectory(copyNotices, CopyLicenseNotices::outputDir)
     }
