@@ -129,6 +129,6 @@ the full data; `fit.py <results> ares/psp/cpu/vfpu-segments.hpp` regenerates the
 ## Reproducing
 
 1. Build the program with pspdev's toolchain (`make` in `tools/psp-vfpu-measure`), copy `EBOOT.PBP` to
-   `PSP/GAME/VFPUMEASURE/` on a PSP with custom firmware, and run it; it writes `results/` beside itself (about 450
-   MB; resumable).
+   `PSP/GAME/VFPUMEASURE/` on a PSP with custom firmware, and run it, pressing O for this first round; it writes
+   `results/` beside itself (about 450 MB; resumable). X runs the second round (see psp-core.md).
 2. `tools/psp-vfpu-measure/compare.sh <results folder>` prints the table above for that data.

@@ -2,6 +2,9 @@
 TARGET = vfpumeasure
 OBJS = main.o
 CFLAGS = -O2 -G0 -Wall
+ifdef SMOKE
+CFLAGS += -DSMOKE  #a quick version for an emulator (see main.c)
+endif
 ASFLAGS = $(CFLAGS)
 LIBS =
 

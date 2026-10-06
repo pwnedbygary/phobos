@@ -4,15 +4,23 @@
 //usage: tools/psp-vfpu-measure/compare.sh <results folder>
 //
 //For each test it reports how many results match exactly, and for the others how far off they are in units in
-//the last place (ulps: how many representable floats apart the two results are), plus a few examples.
+//the last place (ulps: how many representable floats apart the two results are), plus a few examples. Tests whose
+//files aren't in the folder are left out, so a folder from either round (or both) works.
 
 #include "../../tests/allegrex/harness.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <sstream>
 #include <string>
 
 namespace allegrex_test {
+
+static auto present(const std::string& path) -> bool {
+  return bool(std::ifstream(path, std::ios::binary));
+}
 
 static auto load(const std::string& path) -> std::vector<uint32_t> {
   std::ifstream file(path, std::ios::binary);
@@ -31,17 +39,65 @@ struct Generator {
   auto next() -> uint32_t { return state = state * 1664525u + 1013904223u; }
 };
 
-enum class Inputs { FromOne, FromHalf, Fixed23, Spread };
-enum class Kind { Unary, Binary, Dot };
+enum class Inputs { FromOne, FromHalf, Fixed23, Spread, Sweep };
+enum class Kind { Unary, Binary, Dot, Sum };  //Sum: one result from a quad (vfad, vavg)
+enum class Fill { None, DotOne, DotTwo, DotClose, DotShort, SumClose, SumTwo };
 
-static auto input(Inputs inputs, uint32_t k, Generator& generator) -> uint32_t {
+static auto input(Inputs inputs, uint32_t k, Generator& generator, uint32_t first) -> uint32_t {
   switch(inputs) {
   case Inputs::FromOne: return 0x3f800000u + k;
   case Inputs::FromHalf: return 0x3f000000u + k;
   case Inputs::Fixed23: return bits((float)k / 8388608.0f);
   case Inputs::Spread: return generator.next();
+  case Inputs::Sweep: return first + k;
   }
   return 0;
+}
+
+//The PSP program's inputs for the tests built to show how several numbers are added (main.c: dotOne and the
+//rest), drawn in the same order.
+static auto ranged(Generator& g, uint32_t low, uint32_t width) -> uint32_t {
+  uint32_t w = g.next();
+  return (w & 0x807fffffu) | (low + (w >> 23 & ((1u << width) - 1))) << 23;
+}
+
+static auto twoLanes(Generator& g, uint32_t& j, uint32_t& k) -> void {
+  uint32_t a = g.next() >> 30;
+  uint32_t b = (a + 1 + g.next() % 3) & 3;
+  j = std::min(a, b);
+  k = std::max(a, b);
+}
+
+static auto fill(Fill kind, uint32_t s[4], uint32_t t[4], Generator& g) -> void {
+  uint32_t j = 0, k = 0;
+  switch(kind) {
+  case Fill::None: return;
+  case Fill::DotOne:
+    j = g.next() >> 30;
+    for(uint32_t i = 0; i < 4; i++) s[i] = ranged(g, 112, 5);
+    for(uint32_t i = 0; i < 4; i++) t[i] = i == j ? ranged(g, 112, 5) : 0;
+    return;
+  case Fill::DotTwo:
+    twoLanes(g, j, k);
+    for(uint32_t i = 0; i < 4; i++) s[i] = ranged(g, 112, 5);
+    for(uint32_t i = 0; i < 4; i++) t[i] = i == j || i == k ? ranged(g, 112, 5) : 0;
+    return;
+  case Fill::DotClose:
+    for(uint32_t i = 0; i < 4; i++) s[i] = ranged(g, 125, 2);
+    for(uint32_t i = 0; i < 4; i++) t[i] = ranged(g, 125, 2);
+    return;
+  case Fill::DotShort:
+    for(uint32_t i = 0; i < 4; i++) s[i] = ranged(g, 120, 4) & 0xffff0000u;
+    for(uint32_t i = 0; i < 4; i++) t[i] = ranged(g, 120, 4) & 0xffff0000u;
+    return;
+  case Fill::SumClose:
+    for(uint32_t i = 0; i < 4; i++) s[i] = ranged(g, 124, 3);
+    return;
+  case Fill::SumTwo:
+    twoLanes(g, j, k);
+    for(uint32_t i = 0; i < 4; i++) s[i] = i == j || i == k ? ranged(g, 112, 5) : 0;
+    return;
+  }
 }
 
 struct Test {
@@ -51,6 +107,8 @@ struct Test {
   Inputs inputs;
   uint32_t count;
   uint32_t seed;
+  uint32_t first = 0;      //Inputs::Sweep's first input
+  Fill fill = Fill::None;  //instead of inputs
 };
 
 static const Test tests[] = {
@@ -79,6 +137,21 @@ static const Test tests[] = {
   {"vmul-spread",   0x64018082, Kind::Binary, Inputs::Spread, 1u << 18, 14},
   {"vdiv-spread",   0x63818082, Kind::Binary, Inputs::Spread, 1u << 18, 15},
   {"vdot-spread",   0x64818082, Kind::Dot,    Inputs::Spread, 1u << 18, 16},
+  //round 2
+  {"vlog2-4-8",     0xd0158081, Kind::Unary, Inputs::Sweep, 1u << 23, 0, 0x40800000},
+  {"vlog2-16-32",   0xd0158081, Kind::Unary, Inputs::Sweep, 1u << 23, 0, 0x41800000},
+  {"vlog2-256-512", 0xd0158081, Kind::Unary, Inputs::Sweep, 1u << 23, 0, 0x43800000},
+  {"vlog2-2p16",    0xd0158081, Kind::Unary, Inputs::Sweep, 1u << 23, 0, 0x47800000},
+  {"vlog2-2p32",    0xd0158081, Kind::Unary, Inputs::Sweep, 1u << 23, 0, 0x4f800000},
+  {"vlog2-2p64",    0xd0158081, Kind::Unary, Inputs::Sweep, 1u << 23, 0, 0x5f800000},
+  {"vdot-one",      0x64818082, Kind::Dot, Inputs::Spread, 1u << 18, 31, 0, Fill::DotOne},
+  {"vdot-two",      0x64818082, Kind::Dot, Inputs::Spread, 1u << 20, 32, 0, Fill::DotTwo},
+  {"vdot-close",    0x64818082, Kind::Dot, Inputs::Spread, 1u << 20, 33, 0, Fill::DotClose},
+  {"vdot-short",    0x64818082, Kind::Dot, Inputs::Spread, 1u << 18, 34, 0, Fill::DotShort},
+  {"vhdp-close",    0x66018082, Kind::Dot, Inputs::Spread, 1u << 18, 35, 0, Fill::DotClose},
+  {"vfad-close",    0xd0468082, Kind::Sum, Inputs::Spread, 1u << 20, 36, 0, Fill::SumClose},
+  {"vfad-two",      0xd0468082, Kind::Sum, Inputs::Spread, 1u << 18, 37, 0, Fill::SumTwo},
+  {"vavg-close",    0xd0478082, Kind::Sum, Inputs::Spread, 1u << 18, 38, 0, Fill::SumClose},
 };
 
 //Where the PSP program kept its operands: quad columns of matrix 0 (C000, C010, C020), and S020 for vdot.
@@ -114,24 +187,36 @@ struct Stats {
   }
 };
 
+static auto report(const char* name, const Stats& stats) -> void {
+  std::printf("| %s | %llu | %llu (%.2f%%) | %llu | %s |\n", name, (unsigned long long)stats.total,
+              (unsigned long long)stats.exact, stats.total ? 100.0 * stats.exact / stats.total : 0.0,
+              (unsigned long long)stats.maxUlps, stats.examples.empty() ? "" : stats.examples[0].c_str());
+  for(size_t i = 1; i < stats.examples.size(); i++) std::printf("|  |  |  |  | %s |\n", stats.examples[i].c_str());
+  if(stats.nans) std::printf("|  |  | (%llu more where both are NaN, with different bits) |  |  |\n", (unsigned long long)stats.nans);
+}
+
 static auto compare(const std::string& folder, const Test& test) -> void {
+  if(!present(folder + "/" + test.name + ".bin")) return;
   auto hardware = load(folder + "/" + test.name + ".bin");
-  uint32_t results = test.count;
-  if(hardware.size() != results) {
-    std::printf("| %s | missing or short (%zu of %u words) | | | |\n", test.name, hardware.size(), results);
-    return;
-  }
+  //a shorter file (the PSP program's quick version for emulators, make SMOKE=1) is checked as far as it goes
+  uint32_t results = std::min<uint32_t>(test.count, hardware.size());
+  if(test.kind == Kind::Unary || test.kind == Kind::Binary) results &= ~3u;
+  if(results < test.count) std::printf("| %s | (partial: %u of %u results) | | | |\n", test.name, results, test.count);
   Machine m;
   m.cpu.power(Base);
   auto& v = m.cpu.vfpu.r;
   Generator generator{test.seed};
   Stats stats;
   uint32_t k = 0;
-  if(test.kind == Kind::Dot) {
+  if(test.kind == Kind::Dot || test.kind == Kind::Sum) {
     for(uint32_t i = 0; i < results; i++) {
-      uint32_t s[4], t[4];
-      for(uint32_t lane = 0; lane < 4; lane++) s[lane] = input(test.inputs, k++, generator);
-      for(uint32_t lane = 0; lane < 4; lane++) t[lane] = input(test.inputs, k++, generator);
+      uint32_t s[4] = {}, t[4] = {};
+      if(test.fill != Fill::None) {
+        fill(test.fill, s, t, generator);
+      } else {
+        for(uint32_t lane = 0; lane < 4; lane++) s[lane] = input(test.inputs, k++, generator, test.first);
+        for(uint32_t lane = 0; lane < 4; lane++) t[lane] = input(test.inputs, k++, generator, test.first);
+      }
       for(uint32_t lane = 0; lane < 4; lane++) v[ColumnS[lane]] = s[lane], v[ColumnT[lane]] = t[lane];
       m.cpu.execute(Base, test.instruction);
       stats.add(s[0], hardware[i], v[ColumnD[0]]);
@@ -139,19 +224,196 @@ static auto compare(const std::string& folder, const Test& test) -> void {
   } else {
     for(uint32_t quad = 0; quad < results / 4; quad++) {
       uint32_t s[4], t[4] = {};
-      for(uint32_t lane = 0; lane < 4; lane++) s[lane] = input(test.inputs, k++, generator);
-      if(test.kind == Kind::Binary) for(uint32_t lane = 0; lane < 4; lane++) t[lane] = input(test.inputs, k++, generator);
+      for(uint32_t lane = 0; lane < 4; lane++) s[lane] = input(test.inputs, k++, generator, test.first);
+      if(test.kind == Kind::Binary) for(uint32_t lane = 0; lane < 4; lane++) t[lane] = input(test.inputs, k++, generator, test.first);
       for(uint32_t lane = 0; lane < 4; lane++) v[ColumnS[lane]] = s[lane], v[ColumnT[lane]] = t[lane];
       m.cpu.execute(Base, test.instruction);
       const uint32_t* out = test.kind == Kind::Binary ? ColumnD : ColumnT;
       for(uint32_t lane = 0; lane < 4; lane++) stats.add(s[lane], hardware[quad * 4 + lane], v[out[lane]]);
     }
   }
-  std::printf("| %s | %llu | %llu (%.2f%%) | %llu | %s |\n", test.name, (unsigned long long)stats.total,
-              (unsigned long long)stats.exact, 100.0 * stats.exact / stats.total, (unsigned long long)stats.maxUlps,
-              stats.examples.empty() ? "" : stats.examples[0].c_str());
-  for(size_t i = 1; i < stats.examples.size(); i++) std::printf("|  |  |  |  | %s |\n", stats.examples[i].c_str());
-  if(stats.nans) std::printf("|  |  | (%llu more where both are NaN, with different bits) |  |  |\n", (unsigned long long)stats.nans);
+  report(test.name, stats);
+}
+
+//vh2f-all.bin: vh2f.s of (2j + 1) << 16 | 2j for every j below 32768, lanes 0 and 1 (S010 and S011).
+static auto compareHalves(const std::string& folder) -> void {
+  if(!present(folder + "/vh2f-all.bin")) return;
+  auto hardware = load(folder + "/vh2f-all.bin");
+  if(hardware.size() != 65536) return (void)std::printf("| vh2f-all | short | | | |\n");
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  Stats stats;
+  for(uint32_t j = 0; j < 32768; j++) {
+    v[0] = (2 * j + 1) << 16 | 2 * j;
+    m.cpu.execute(Base, 0xd0330001);  //vh2f.s C010, S000
+    stats.add(2 * j, hardware[2 * j], v[1]);
+    stats.add(2 * j + 1, hardware[2 * j + 1], v[33]);
+  }
+  report("vh2f-all", stats);
+}
+
+//vf2h-spread.bin: vf2h.q of spread-out quads (seed 22) in C000, result lanes 0 and 1 (S010 and S011).
+static auto compareFloatsToHalves(const std::string& folder) -> void {
+  if(!present(folder + "/vf2h-spread.bin")) return;
+  auto hardware = load(folder + "/vf2h-spread.bin");
+  uint32_t quads = std::min<uint32_t>(1u << 18, hardware.size() / 2);
+  Machine m;
+  m.cpu.power(Base);
+  auto& v = m.cpu.vfpu.r;
+  Generator generator{22};
+  Stats stats;
+  for(uint32_t quad = 0; quad < quads; quad++) {
+    for(uint32_t lane = 0; lane < 4; lane++) v[ColumnS[lane]] = generator.next();
+    m.cpu.execute(Base, 0xd0328081);  //vf2h.q C010, C000
+    stats.add(v[0], hardware[2 * quad], v[1]);
+    stats.add(v[32], hardware[2 * quad + 1], v[33]);
+  }
+  report("vf2h-spread", stats);
+}
+
+//Records that carry their own inputs: integer division and the FPU in each rounding mode. Each instruction (and
+//mode) gets its own row.
+struct Records {
+  std::map<std::string, Stats> rows;
+  std::vector<std::string> order;
+  auto add(const std::string& row, uint32_t input, uint32_t hardware, uint32_t ours) -> void {
+    if(!rows.count(row)) order.push_back(row);
+    rows[row].add(input, hardware, ours);
+  }
+  auto print() -> void {
+    for(auto& row : order) report(row.c_str(), rows[row]);
+  }
+};
+
+static auto compareDivide(const std::string& folder, Records& records) -> void {
+  if(!present(folder + "/ipu-divide.bin")) return;
+  auto w = load(folder + "/ipu-divide.bin");
+  Machine m;
+  m.cpu.power(Base);
+  auto& cpu = m.cpu;
+  for(size_t n = 0; n + 6 <= w.size(); n += 6) {
+    cpu.ipu.r[4] = w[n];
+    cpu.ipu.r[5] = w[n + 1];
+    cpu.execute(Base, 0x0085001a);  //div a0, a1
+    records.add("div lo", w[n], w[n + 2], cpu.ipu.lo);
+    records.add("div hi", w[n], w[n + 3], cpu.ipu.hi);
+    cpu.execute(Base, 0x0085001b);  //divu a0, a1
+    records.add("divu lo", w[n], w[n + 4], cpu.ipu.lo);
+    records.add("divu hi", w[n], w[n + 5], cpu.ipu.hi);
+  }
+}
+
+static const char* const ModeNames[4] = {"nearest", "toward zero", "up", "down"};
+
+static auto compareConvert(const std::string& folder, Records& records) -> void {
+  if(!present(folder + "/fpu-convert.bin")) return;
+  auto w = load(folder + "/fpu-convert.bin");
+  static const uint32_t instructions[5] = {0x460000a4, 0x4600008c, 0x4600008d, 0x4600008e, 0x4600008f};
+  static const char* const names[5] = {"cvt.w.s", "round.w.s", "trunc.w.s", "ceil.w.s", "floor.w.s"};
+  Machine m;
+  m.cpu.power(Base);
+  auto& cpu = m.cpu;
+  for(size_t n = 0; n + 21 <= w.size(); n += 21) {
+    for(uint32_t mode = 0; mode < 4; mode++) {
+      for(uint32_t i = 0; i < 5; i++) {
+        cpu.fpu.csr = mode;
+        cpu.fpu.r[0] = w[n];
+        cpu.execute(Base, instructions[i]);  //$f2 from $f0
+        records.add(std::string(names[i]) + " (" + ModeNames[mode] + ")", w[n], w[n + 1 + mode * 5 + i], cpu.fpu.r[2]);
+      }
+    }
+  }
+}
+
+static auto compareFpuArithmetic(const std::string& folder, Records& records) -> void {
+  if(!present(folder + "/fpu-arith.bin")) return;
+  auto w = load(folder + "/fpu-arith.bin");
+  static const uint32_t instructions[5] = {0x46010080, 0x46010081, 0x46010082, 0x46010083, 0x46000084};
+  static const char* const names[5] = {"add.s", "sub.s", "mul.s", "div.s", "sqrt.s"};
+  Machine m;
+  m.cpu.power(Base);
+  auto& cpu = m.cpu;
+  for(size_t n = 0; n + 22 <= w.size(); n += 22) {
+    for(uint32_t mode = 0; mode < 4; mode++) {
+      for(uint32_t i = 0; i < 5; i++) {
+        cpu.fpu.csr = mode;
+        cpu.fpu.r[0] = w[n];
+        cpu.fpu.r[1] = w[n + 1];
+        cpu.execute(Base, instructions[i]);  //$f2 from $f0 (and $f1)
+        records.add(std::string(names[i]) + " (" + ModeNames[mode] + ")", w[n], w[n + 2 + mode * 5 + i], cpu.fpu.r[2]);
+      }
+    }
+  }
+}
+
+//ops.bin, the instruction recorder (main.c, measureOps): per entry, its words, then per run matrices 0 and 1, the
+//condition codes as set, as read back, and after, and matrix 2 after. Each run is replayed from the condition
+//codes as the PSP read them back, matrix 2 holding the same markers, and the prefixes as after any instruction
+//that used them up; an entry matches when matrix 2 and the condition codes do, in every run.
+static auto compareOps(const std::string& folder) -> void {
+  if(!present(folder + "/ops.bin")) return;
+  auto w = load(folder + "/ops.bin");
+  if(w.size() < 4 || w[0] != 0x53504f56) return (void)std::printf("ops.bin: not a recorder file\n");
+  uint32_t entries = w[2], runs = w[3];
+  std::map<uint32_t, std::string> names;
+  std::ifstream list(folder + "/ops.txt");
+  for(std::string line; std::getline(list, line);) {
+    auto colon = line.find(": ", line.find(')'));
+    if(colon != std::string::npos) names[std::stoul(line)] = line.substr(colon + 2);
+  }
+  Machine m;
+  m.cpu.power(Base);
+  auto& vfpu = m.cpu.vfpu;
+  size_t n = 4;
+  uint32_t exactEntries = 0, recorded = 0;
+  std::printf("\n| entry | instruction | runs that differ | first difference (PSP, Phobos) |\n| --- | --- | --- | --- |\n");
+  for(uint32_t e = 0; e < entries && n + 5 + runs * 51 <= w.size(); e++, recorded++) {
+    uint32_t count = w[n], words[4] = {w[n + 1], w[n + 2], w[n + 3], w[n + 4]};
+    n += 5;
+    uint32_t differ = 0;
+    std::string first;
+    for(uint32_t run = 0; run < runs; run++, n += 51) {
+      const uint32_t* m0 = &w[n];
+      const uint32_t* m1 = &w[n + 16];
+      uint32_t before = w[n + 33], after = w[n + 34];
+      const uint32_t* m2 = &w[n + 35];
+      for(uint32_t c = 0; c < 4; c++) {
+        for(uint32_t r = 0; r < 4; r++) {
+          vfpu.r[r * 32 + c] = m0[c * 4 + r];
+          vfpu.r[r * 32 + 4 + c] = m1[c * 4 + r];
+          vfpu.r[r * 32 + 8 + c] = 0xdead0000 | c << 4 | r;
+        }
+      }
+      vfpu.cc = before;
+      vfpu.pfxs = vfpu.pfxt = 0xe4;  //the identity prefixes (PrefixIdentity), as after any instruction that used them
+      vfpu.pfxd = 0;
+      for(uint32_t i = 0; i < count; i++) m.cpu.execute(Base + 4 * i, words[i]);
+      std::string difference;
+      for(uint32_t c = 0; c < 4 && difference.empty(); c++) {
+        for(uint32_t r = 0; r < 4 && difference.empty(); r++) {
+          uint32_t ours = vfpu.r[r * 32 + 8 + c], theirs = m2[c * 4 + r];
+          if(ours == theirs) continue;
+          char text[96];
+          std::snprintf(text, sizeof(text), "run %u, row %u column %u: %08x, %08x", run, r, c, theirs, ours);
+          difference = text;
+        }
+      }
+      if(difference.empty() && (vfpu.cc & 0x3f) != (after & 0x3f)) {
+        char text[96];
+        std::snprintf(text, sizeof(text), "run %u, condition codes: %02x, %02x", run, after & 0x3f, vfpu.cc & 0x3f);
+        difference = text;
+      }
+      if(!difference.empty()) {
+        differ++;
+        if(first.empty()) first = difference;
+      }
+    }
+    if(!differ) { exactEntries++; continue; }
+    std::printf("| %u | %s | %u of %u | %s |\n", e, names.count(e) ? names[e].c_str() : "?", differ, runs, first.c_str());
+  }
+  std::printf("\nops: %u of %u recorded entries match in every run (%u entries in the file)\n", exactEntries, recorded,
+              entries);
 }
 
 //vrnd.bin: the RCX registers at start and 256 draws; then per seed: the seed, the RCX registers after vrnds.s,
@@ -217,7 +479,17 @@ int main(int argc, char** argv) {
   std::printf("| test | results | exact | worst (ulps) | examples (input -> results) |\n");
   std::printf("| --- | --- | --- | --- | --- |\n");
   for(auto& test : tests) compare(folder, test);
-  std::printf("\n");
-  compareRandom(folder);
+  compareHalves(folder);
+  compareFloatsToHalves(folder);
+  Records records;
+  compareDivide(folder, records);
+  compareConvert(folder, records);
+  compareFpuArithmetic(folder, records);
+  records.print();
+  if(present(folder + "/vrnd.bin")) {
+    std::printf("\n");
+    compareRandom(folder);
+  }
+  compareOps(folder);
   return 0;
 }
