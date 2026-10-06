@@ -134,8 +134,9 @@ auto Kernel::dialogShutdown(u32 kind) -> void {
 //goes into its output, its result UNCHANGED (0). A field holding nothing but spaces gets the console's nickname,
 //"PSP", as a player asked for a name would type one, its result CHANGED (2): Peace Walker, asking for its player's
 //name in an empty field, refused an empty answer ("at least 1 characters") and asked again for good. The text is
-//UTF-16, as far as the field's room (outtextlength, its NUL among it) and limit (outtextlimit) allow. Returns the
-//common part's result: 0.
+//UTF-16, as far as the field's room (outtextlength, its NUL among it) and limit (outtextlimit) allow: a limit of 0
+//is none (taken as no characters, it cut the nickname to nothing, still saying CHANGED), and a field with no room
+//gets nothing written, not even its NUL. Returns the common part's result: 0.
 auto Kernel::keyboard(u32 parameters) -> u32 {
   static constexpr u32 FieldSize = 52, MostFields = 16, MostText = 1024;  //(pspsdk gives no limits: bounds of ours)
   u32 count = memory.read(4, parameters + 48), fields = memory.read(4, parameters + 52);
@@ -152,8 +153,10 @@ auto Kernel::keyboard(u32 parameters) -> u32 {
     }
     bool blank = std::all_of(text.begin(), text.end(), [](u16 character) { return character == ' '; });
     if(blank) text = {'P', 'S', 'P'};
-    text.resize(std::min<u64>(text.size(), std::min<u64>(limit, room ? room - 1 : 0)));
-    if(output && memory.reaches(output, (text.size() + 1) * 2)) {
+    u64 most = room ? room - 1 : 0;
+    if(limit) most = std::min<u64>(most, limit);
+    text.resize(std::min<u64>(text.size(), most));
+    if(room && output && memory.reaches(output, (text.size() + 1) * 2)) {
       for(u32 at = 0; at < text.size(); at++) memory.write(2, output + at * 2, text[at]);
       memory.write(2, output + text.size() * 2, 0);
     }
