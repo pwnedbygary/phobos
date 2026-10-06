@@ -134,6 +134,28 @@ auto Kernel::sceKernelPowerUnlock() -> void {
   result(arg(0) ? ErrorInvalidMode : 0);
 }
 
+//(type 0, where to put its address, where to put its size): borrows the volatile memory, waiting while it's lent,
+//those waiting served in the order they came: pspautotests' power/volatile/lock recorded three threads of priorities
+//0x31, 0x33 and 0x32 served in that order. As lock recorded, a type but 0 is refused with the outputs left alone;
+//else the address and size are written first, and a thread that may not wait (in an interrupt handler, with
+//interrupts or dispatching held off) is refused without borrowing, whether the memory is lent or not. (No thread
+//running, as when a test calls the kernel itself: lent already, it's refused as TryLock refuses.) Burnout Dominator
+//borrows it so.
+auto Kernel::sceKernelVolatileMemLock() -> void {
+  if(arg(0)) return result(ErrorInvalidMode);
+  if(arg(1)) memory.write(4, arg(1), 0x0840'0000);
+  if(arg(2)) memory.write(4, arg(2), 0x0040'0000);
+  if(!mayWait()) return;
+  if(!powerState.volatileLocked) {
+    powerState.volatileLocked = true;
+    return result(0);
+  }
+  if(!current) return result(ErrorVolatileMemoryInUse);
+  result(0);
+  current->readySince = ++readySequence;  //its place in line
+  block(Wait::Volatile, 0, 0);
+}
+
 //(type 0, where to put its address, where to put its size): borrows the volatile memory, or fails at once if it's
 //lent already (ErrorVolatileMemoryInUse).
 auto Kernel::sceKernelVolatileMemTryLock() -> void {
@@ -145,10 +167,21 @@ auto Kernel::sceKernelVolatileMemTryLock() -> void {
   result(0);
 }
 
-//(type 0): gives it back. Giving back what isn't lent is refused as a semaphore's overflow is (PPSSPP's notes).
+//(type 0): gives it back; a thread waiting for it, the first to have come, borrows it then. Giving back what isn't
+//lent is refused as a semaphore's overflow is (pspautotests' power/volatile/lock recorded it).
 auto Kernel::sceKernelVolatileMemUnlock() -> void {
   if(arg(0)) return result(ErrorInvalidMode);
   if(!powerState.volatileLocked) return result(ErrorSemaphoreOverflow);
-  powerState.volatileLocked = false;
   result(0);
+  Thread* next = nullptr;
+  for(auto& [uid, thread] : threads) {
+    if(thread->status != Status::Waiting || thread->wait != Wait::Volatile) continue;
+    if(!next || thread->readySince < next->readySince) next = thread.get();
+  }
+  if(!next) {
+    powerState.volatileLocked = false;
+    return;
+  }
+  ready(*next, 0);
+  reschedule();
 }

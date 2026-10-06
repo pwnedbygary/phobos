@@ -589,6 +589,28 @@ static auto stateFields() -> void {
   refuses("a synchronous read in a thread that isn't waiting", [&] {
     readWait(k.cycles + 1000).status = Kernel::Status::Ready;
   });
+  //a thread waits for the volatile memory while it's lent (giving it back wakes it), with no time limit or callbacks
+  auto volatileWait = [&]() -> Kernel::Thread& {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Volatile;
+    k.powerState.volatileLocked = true;
+    return thread;
+  };
+  {
+    volatileWait();
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
+    CHECK(load(a, state), true);
+  }
+  refuses("a thread waiting for the volatile memory, not lent", [&] {
+    volatileWait();
+    k.powerState.volatileLocked = false;
+  });
+  refuses("a thread waiting for the volatile memory with a time limit", [&] {
+    volatileWait().wakeAt = k.cycles + 1000;
+  });
+  refuses("a thread waiting for the volatile memory with callbacks", [&] { volatileWait().callbacks = true; });
   refuses("a synchronous read put aside for callbacks", [&] {
     auto& thread = readWait(k.cycles + 1000);
     thread.waitBeforeCallback = {Kernel::Wait::File, discFile, 16, 0, 0, 0, k.cycles + 1000, false, 0, 0};

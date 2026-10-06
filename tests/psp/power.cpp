@@ -128,6 +128,116 @@ static auto volatileMemory() -> void {
   CHECK(m.call("sceKernelPowerTick", {0}), 0);
 }
 
+//The volatile memory waited for, as pspautotests' power/volatile/lock recorded: three threads of priorities 0x31,
+//0x33 and 0x32 wait for it while main has it, and are served in the order they came, each giving it back as it's
+//done (main's M, then 1, 2, 3); a type but 0 refused, the outputs left alone; with interrupts held off, and in an
+//interrupt handler, refused without borrowing (CAN_NOT_WAIT, ILLEGAL_CONTEXT), the address and size written all the
+//same, giving back afterwards refused as nothing's lent. A state saved while the three wait loads into another
+//machine, which makes the same state and carries on alike. On both engines.
+static auto volatileWaits() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+    auto mark = [&](Assembler& a, char c) {  //a byte at R + 0x104 on, their count at R + 0x100
+      a.li(t0, R + 0x100); a.put(lw(t1, 0, t0)); a.put(addu(t2, t1, t0)); a.li(t3, u8(c)); a.put(sb(t3, 4, t2));
+      a.put(addiu(t1, t1, 1)); a.put(sw(t1, 0, t0));
+    };
+    auto lock = [&](Assembler& a, u32 type, u32 outputs, u32 offset) {
+      a.li(a0, type); a.li(a1, R + outputs); a.li(a2, R + outputs + 4);
+      a.call("sceKernelVolatileMemLock");
+      store(a, offset);
+    };
+    for(u32 n = 0; n < 3; n++) {  //waiter n: borrows it, marks its number, gives it back
+      Assembler waiter{m, 0x0880'2000 + n * 0x100};
+      lock(waiter, 0, 0x40 + n * 8, 0x20 + n * 4);
+      mark(waiter, char('1' + n));
+      waiter.li(a0, 0);
+      waiter.call("sceKernelVolatileMemUnlock");
+      waiter.call("sceKernelExitThread");
+    }
+    Assembler handler{m, 0x0880'3000};  //a vertical blank's
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp));
+    lock(handler, 0, 0x90, 0x10);
+    handler.put(lw(ra, 12, sp)); handler.put(addiu(sp, sp, 16));
+    handler.li(v0, 0); handler.put(jr(ra)); handler.put(nop);
+    for(u32 offset : {0x80u, 0x84u, 0x88u, 0x8cu, 0x90u, 0x94u}) m.system.memory.write(4, R + offset, 0x1337);
+    Assembler main{m, 0x0880'1000};
+    lock(main, 1, 0x80, 0x00);
+    main.li(a0, 0); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelVolatileMemTryLock");
+    for(u32 priority : {0x31u, 0x33u, 0x32u}) {  //each begins waiting as main delays
+      u32 n = priority == 0x31 ? 0 : priority == 0x33 ? 1 : 2;
+      main.li(a0, m.string("waiter")); main.li(a1, 0x0880'2000 + n * 0x100); main.li(a2, priority);
+      main.li(a3, 0x1000); main.li(t0, 0); main.li(t1, 0);
+      main.call("sceKernelCreateThread");
+      main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelStartThread");
+      main.li(a0, 1000);
+      main.call("sceKernelDelayThread");
+    }
+    main.li(a0, 5000);
+    main.call("sceKernelDelayThread");
+    mark(main, 'M');
+    main.li(a0, 0);
+    main.call("sceKernelVolatileMemUnlock");
+    store(main, 0x04);
+    main.li(a0, 10000);
+    main.call("sceKernelDelayThread");
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s0, v0, zero));
+    lock(main, 0, 0x88, 0x08);
+    main.put(addu(a0, s0, zero));
+    main.call("sceKernelCpuResumeIntr");
+    main.li(a0, 0);
+    main.call("sceKernelVolatileMemUnlock");
+    store(main, 0x0c);
+    main.li(a0, 30); main.li(a1, 0); main.li(a2, 0x0880'3000); main.li(a3, 0);
+    main.call("sceKernelRegisterSubIntrHandler");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelEnableSubIntr");
+    main.call("sceDisplayWaitVblankStart");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelReleaseSubIntrHandler");
+    main.li(a0, 0);
+    main.call("sceKernelVolatileMemUnlock");
+    store(main, 0x14);
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency * 4 / 1000);  //4 ms: the three wait
+    u32 waiting = 0;
+    for(auto& [uid, thread] : m.kernel.threads) if(thread->wait == Kernel::Wait::Volatile) waiting++;
+    CHECK(waiting, 3);
+    auto state = saveState(m);
+    KernelMachine n;
+    n.system.recompiler.enabled = recompile;
+    CHECK(loadState(n, state), true);
+    CHECK(saveState(n) == state, true);
+    for(auto* each : {&m, &n}) {
+      each->kernel.run(Kernel::CPUFrequency / 10);
+      auto word = [&](u32 offset) { return each->system.memory.read(4, R + offset); };
+      CHECK(each->kernel.exited, true);
+      CHECK(each->system.memory.readString(R + 0x104, 8) == "M123", true);
+      CHECK(word(0x00), Kernel::ErrorInvalidMode);
+      CHECK(word(0x80) == 0x1337 && word(0x84) == 0x1337, true);  //left alone
+      for(u32 waiter = 0; waiter < 3; waiter++) {
+        CHECK(word(0x20 + waiter * 4), 0);
+        CHECK(word(0x40 + waiter * 8) == 0x0840'0000 && word(0x44 + waiter * 8) == 0x0040'0000, true);
+      }
+      CHECK(word(0x04), 0);
+      CHECK(word(0x08), Kernel::ErrorCanNotWait);
+      CHECK(word(0x88) == 0x0840'0000 && word(0x8c) == 0x0040'0000, true);
+      CHECK(word(0x0c), Kernel::ErrorSemaphoreOverflow);  //not lent: the refused lock took nothing
+      CHECK(word(0x10), Kernel::ErrorIllegalContext);
+      CHECK(word(0x90) == 0x0840'0000 && word(0x94) == 0x0040'0000, true);
+      CHECK(word(0x14), Kernel::ErrorSemaphoreOverflow);
+    }
+    if(m.system.memory.readString(R + 0x104, 8) != "M123") {
+      std::printf("  [%s]\n", m.system.memory.readString(R + 0x104, 8).c_str());
+    }
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
 //Threads: another one's priority changed (one of higher priority than the caller's takes over at once), suspended
 //(it doesn't run however ready, until resumed), ended by another (its waiter told so), its exit status read only
 //once it has ended; the caller can't do these to itself.
@@ -466,6 +576,7 @@ static auto oddsAndEnds() -> void {
 auto powerTests() -> Tests {
   return {
     {"power callbacks", powerCallbacks}, {"power clocks", powerClocks}, {"power volatile memory", volatileMemory},
+    {"power volatile memory waited for", volatileWaits},
     {"kernel thread control", threadControl}, {"kernel thread status", threadStatus}, {"kernel clocks", clocks},
     {"kernel mersenne twister", mersenneTwister}, {"kernel odds and ends", oddsAndEnds},
     {"kernel thread priorities", threadPriorities}, {"kernel thread stack free", stackFree},

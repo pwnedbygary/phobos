@@ -522,9 +522,64 @@ static auto kernelArea() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//Dates as Win32 file times, and ticks as dates, as pspautotests' rtc/convert recorded: 100-nanosecond steps since
+//1601 (2005-11-31 13:01:00 and 1 microsecond, a day past November's end, is 127779156600000010; 1601-01-01 is 0);
+//dates before 1601, a zeroed one among them, 0 and INVALID_VALUE; no place for the result, INVALID_VALUE, nothing
+//written. A tick of 835072 is 0001-01-01 and 835072 microseconds, 62135596800000000 is 1970-01-01, and a date's tick
+//(2012-09-20, a leap day, the last microsecond of 1999, the last of 9999) comes back as that date, over another.
+static auto rtcFileTimesAndTicks() -> void {
+  KernelMachine m;
+  auto put = [&](u32 at, std::array<u32, 7> fields) {
+    for(u32 n = 0; n < 6; n++) m.system.memory.write(2, at + n * 2, fields[n]);
+    m.system.memory.write(4, at + 12, fields[6]);
+  };
+  auto date = [&](u32 at) {
+    std::array<u32, 7> fields;
+    for(u32 n = 0; n < 6; n++) fields[n] = m.system.memory.read(2, at + n * 2);
+    fields[6] = word(m, at + 12);
+    return fields;
+  };
+  auto wide = [&](u32 at) { return word(m, at) | u64(word(m, at + 4)) << 32; };
+  auto setWide = [&](u32 at, u64 value) {
+    m.system.memory.write(4, at, u32(value));
+    m.system.memory.write(4, at + 4, u32(value >> 32));
+  };
+  auto fileTime = [&](std::array<u32, 7> fields, u32 expected, u64 time) {
+    put(R, fields);
+    setWide(R + 0x20, u64(-1337));
+    check(__LINE__, "a file time's result", m.call("sceRtcGetWin32FileTime", {R, R + 0x20}), expected);
+    check(__LINE__, "a file time", wide(R + 0x20), time);
+  };
+  put(R, {1600, 1, 1, 0, 0, 0, 0});
+  CHECK(m.call("sceRtcGetWin32FileTime", {R, 0}), Kernel::ErrorInvalidValue);
+  fileTime({0, 0, 0, 0, 0, 0, 0}, Kernel::ErrorInvalidValue, 0);
+  fileTime({2005, 11, 31, 13, 1, 0, 1}, 0, 127'779'156'600'000'010ull);
+  fileTime({1601, 1, 1, 0, 0, 0, 0}, 0, 0);
+  fileTime({1600, 1, 1, 0, 0, 0, 0}, Kernel::ErrorInvalidValue, 0);
+  fileTime({1, 1, 1, 0, 0, 0, 0}, Kernel::ErrorInvalidValue, 0);
+  auto ticked = [&](u64 tick, std::array<u32, 7> expected) {
+    setWide(R + 0x20, tick);
+    put(R + 0x40, {2010, 9, 20, 7, 12, 15, 500});
+    check(__LINE__, "a tick's result", m.call("sceRtcSetTick", {R + 0x40, R + 0x20}), 0);
+    check(__LINE__, "a tick's date", date(R + 0x40) == expected, true);
+  };
+  ticked(835'072, {1, 1, 1, 0, 0, 0, 835'072});
+  ticked(62'135'596'800'000'000ull, {1970, 1, 1, 0, 0, 0, 0});
+  for(auto fields : {std::array<u32, 7>{2012, 9, 20, 7, 12, 15, 500}, {2000, 2, 29, 12, 0, 0, 0},
+                     {1999, 12, 31, 23, 59, 59, 999'999}, {9999, 12, 31, 23, 59, 59, 999'999}}) {
+    put(R, fields);
+    CHECK(m.call("sceRtcGetTick", {R, R + 0x20}), 0);
+    ticked(wide(R + 0x20), fields);
+  }
+  CHECK(m.call("sceRtcSetTick", {0, R + 0x20}), Kernel::ErrorInvalidPointer);
+  CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
+}
+
 auto mediaTests() -> Tests {
   return {{"mpeg stubs", mpegStubs}, {"atrac stubs", atracStubs}, {"network off", networkOff},
-          {"odds and ends of part 20", oddsAndEnds}, {"threads odds and ends of part 20", threadOddsAndEnds},
+          {"odds and ends of part 20", oddsAndEnds}, {"rtc file times and ticks", rtcFileTimesAndTicks},
+          {"threads odds and ends of part 20", threadOddsAndEnds},
           {"threads dispatching held off", dispatchHeldOff},
           {"threads lightweight mutex deleted in a callback", lwMutexDeletedInCallback},
           {"fonts missing", fontsMissing}, {"threads kernel area zeroed", kernelArea}};

@@ -14,7 +14,8 @@
 //    program's memory, are refused. The PSP encrypts the data file and writes a PARAM.SFO and icons beside it: not
 //    done yet (the files are only Phobos's to read).
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
-//  - The keyboard, network settings, game sharing, the web browser: cancelled, as if the player backed out.
+//  - The keyboard: each field's text accepted as it is, an empty one given the console's nickname (keyboard()).
+//  - Network settings, game sharing, the web browser: cancelled, as if the player backed out.
 //
 //Modules: games load the system's optional libraries (sound codecs, network, ...) before using them. Their functions
 //are the HLE kernel's own, so loading one just marks it loaded (a second load, or unloading one that isn't, fails as
@@ -108,6 +109,7 @@ auto Kernel::dialogUpdate(u32 kind) -> void {
       memory.write(4, dialog.parameters + 576, 1);  //the button pressed: Yes (or OK)
       answer = 0;
     }
+    if(kind == DialogKeyboard) answer = keyboard(dialog.parameters);
     memory.write(4, dialog.parameters + 28, answer);  //the common part's result
     dialog.status = DialogFinished;
   }
@@ -125,6 +127,39 @@ auto Kernel::dialogShutdown(u32 kind) -> void {
   dialog.next = DialogNone;
   dialog.changeAt = cycles + u64(close) * (CPUFrequency / 1'000'000);
   result(0);
+}
+
+//The keyboard (psputility_osk.h's SceUtilityOskParams: the common part, then how many fields and where their
+//SceUtilityOskData are), answered as a player accepting each field's text at once would: what the field started with
+//goes into its output, its result UNCHANGED (0). A field holding nothing but spaces gets the console's nickname,
+//"PSP", as a player asked for a name would type one, its result CHANGED (2): Peace Walker, asking for its player's
+//name in an empty field, refused an empty answer ("at least 1 characters") and asked again for good. The text is
+//UTF-16, as far as the field's room (outtextlength, its NUL among it) and limit (outtextlimit) allow. Returns the
+//common part's result: 0.
+auto Kernel::keyboard(u32 parameters) -> u32 {
+  static constexpr u32 FieldSize = 52, MostFields = 16, MostText = 1024;  //(pspsdk gives no limits: bounds of ours)
+  u32 count = memory.read(4, parameters + 48), fields = memory.read(4, parameters + 52);
+  for(u32 n = 0; n < std::min(count, MostFields); n++) {
+    u32 field = fields + n * FieldSize;
+    if(!memory.reaches(field, FieldSize)) break;
+    u32 initial = memory.read(4, field + 32), room = memory.read(4, field + 36), output = memory.read(4, field + 40);
+    u32 limit = memory.read(4, field + 48);
+    std::vector<u16> text;
+    for(u32 at = initial; initial && text.size() < MostText && memory.reaches(at, 2); at += 2) {
+      u16 character = memory.read(2, at);
+      if(!character) break;
+      text.push_back(character);
+    }
+    bool blank = std::all_of(text.begin(), text.end(), [](u16 character) { return character == ' '; });
+    if(blank) text = {'P', 'S', 'P'};
+    text.resize(std::min<u64>(text.size(), std::min<u64>(limit, room ? room - 1 : 0)));
+    if(output && memory.reaches(output, (text.size() + 1) * 2)) {
+      for(u32 at = 0; at < text.size(); at++) memory.write(2, output + at * 2, text[at]);
+      memory.write(2, output + text.size() * 2, 0);
+    }
+    memory.write(4, field + 44, blank ? 2 : 0);
+  }
+  return 0;
 }
 
 //A word as eight hexadecimal digits.

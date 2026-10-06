@@ -172,6 +172,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceRtc",            "sceRtcGetTime_t",               &Kernel::sceRtcGetTime_t);
   add("sceRtc",            "sceRtcGetDosTime",              &Kernel::sceRtcGetDosTime);
   add("sceRtc",            "sceRtcSetDosTime",              &Kernel::sceRtcSetDosTime);
+  add("sceRtc",            "sceRtcGetWin32FileTime",        &Kernel::sceRtcGetWin32FileTime);
+  add("sceRtc",            "sceRtcSetTick",                 &Kernel::sceRtcSetTick);
   add("sceOpenPSID",       "sceOpenPSIDGetOpenPSID",        &Kernel::sceOpenPSIDGetOpenPSID);
   add("SysMemUserForUser", "sceKernelPrintf",               &Kernel::sceKernelPrintf);
   add("scePower",          "scePowerRegisterCallback",      &Kernel::scePowerRegisterCallback);
@@ -255,6 +257,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceSuspendForUser", "sceKernelPowerTick",            &Kernel::sceKernelPowerTick);
   add("sceSuspendForUser", "sceKernelPowerLock",            &Kernel::sceKernelPowerLock);
   add("sceSuspendForUser", "sceKernelPowerUnlock",          &Kernel::sceKernelPowerUnlock);
+  add("sceSuspendForUser", "sceKernelVolatileMemLock",      &Kernel::sceKernelVolatileMemLock);
   add("sceSuspendForUser", "sceKernelVolatileMemTryLock",   &Kernel::sceKernelVolatileMemTryLock);
   add("sceSuspendForUser", "sceKernelVolatileMemUnlock",    &Kernel::sceKernelVolatileMemUnlock);
   add("sceWlanDrv",        "sceWlanGetSwitchState",         &Kernel::sceWlanGetSwitchState);

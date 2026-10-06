@@ -97,6 +97,20 @@ static auto daysFromYearOne(s64 year, u32 month, u32 day) -> s64 {
   return era * 146'097 + dayOfEra - 306;  //day 0 of era 0 is 0000-03-01, 306 days before 0001-01-01
 }
 
+//The other way: the date a count of days from 0001-01-01 falls on, by Howard Hinnant's civil_from_days, from the same
+//public algorithms.
+static auto dateFromYearOne(s64 days, s64& year, u32& month, u32& day) -> void {
+  s64 shifted = days + 306;  //days since 0000-03-01
+  s64 era = (shifted >= 0 ? shifted : shifted - 146'096) / 146'097;
+  u32 dayOfEra = u32(shifted - era * 146'097);
+  u32 yearOfEra = (dayOfEra - dayOfEra / 1'460 + dayOfEra / 36'524 - dayOfEra / 146'096) / 365;
+  u32 dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100);
+  u32 monthOfYear = (5 * dayOfYear + 2) / 153;  //March 0 ... February 11
+  day = dayOfYear - (153 * monthOfYear + 2) / 5 + 1;
+  month = monthOfYear < 10 ? monthOfYear + 3 : monthOfYear - 9;
+  year = yearOfEra + era * 400 + (month <= 2);
+}
+
 //(date, where to put its tick): a ScePspDateTime (psprtc.h: year, month, day, hour, minute, second as 16-bit numbers,
 //then microseconds) as a tick, microseconds since 0001-01-01. A date that can't be is refused.
 auto Kernel::sceRtcGetTick() -> void {
@@ -113,6 +127,23 @@ auto Kernel::sceRtcGetTick() -> void {
   u64 tick = seconds * 1'000'000 + microsecond;
   memory.write(4, arg(1), u32(tick));
   memory.write(4, arg(1) + 4, u32(tick >> 32));
+  result(0);
+}
+
+//(where to put the date, its tick): the tick as a date, as pspautotests' rtc/convert recorded (835072 is 0001-01-01
+//and 835072 microseconds; 62135596800000000 is 1970-01-01; a date's tick comes back as the date). Peace Walker asks.
+auto Kernel::sceRtcSetTick() -> void {
+  u32 date = arg(0), pointer = arg(1);
+  if(!memory.reaches(date, 16) || !memory.reaches(pointer, 8)) return result(ErrorInvalidPointer);
+  u64 tick = memory.read(4, pointer) | u64(memory.read(4, pointer + 4)) << 32;
+  u64 seconds = tick / 1'000'000;
+  s64 year;
+  u32 month, day;
+  dateFromYearOne(s64(seconds / 86'400), year, month, day);
+  u16 fields[6] = {u16(year), u16(month), u16(day), u16(seconds / 3'600 % 24), u16(seconds / 60 % 60),
+                   u16(seconds % 60)};
+  for(u32 n = 0; n < 6; n++) memory.write(2, date + n * 2, fields[n]);
+  memory.write(4, date + 12, u32(tick % 1'000'000));
   result(0);
 }
 
@@ -321,6 +352,27 @@ auto Kernel::sceRtcSetDosTime() -> void {
   for(u32 n = 0; n < 6; n++) memory.write(2, date + n * 2, fields[n]);
   memory.write(4, date + 12, 0);
   result(0);
+}
+
+//(date, where to put a Win32 file time): the date as Windows' files keep times, in 100-nanosecond steps since
+//1601-01-01. As pspautotests' rtc/convert recorded: no place to put it, INVALID_VALUE; a date before 1601 (a zeroed
+//one among them) gives 0 and INVALID_VALUE; a day past its month's end counts on into the next (2005-11-31 13:01:00
+//and 1 microsecond is 127779156600000010, December's first). Midnight Club 3 asks for it as it makes a profile.
+auto Kernel::sceRtcGetWin32FileTime() -> void {
+  u32 date = arg(0), pointer = arg(1);
+  if(!pointer) return result(ErrorInvalidValue);
+  u32 year = memory.read(2, date);
+  u64 time = 0;
+  if(year >= 1601) {
+    s64 days = daysFromYearOne(year, memory.read(2, date + 2), memory.read(2, date + 4))
+             - daysFromYearOne(1601, 1, 1);
+    s64 seconds = days * 86'400 + memory.read(2, date + 6) * 3'600 + memory.read(2, date + 8) * 60
+                + memory.read(2, date + 10);
+    time = (u64(seconds) * 1'000'000 + memory.read(4, date + 12)) * 10;
+  }
+  memory.write(4, pointer, u32(time));
+  memory.write(4, pointer + 4, u32(time >> 32));
+  result(year >= 1601 ? 0 : ErrorInvalidValue);
 }
 
 //(where to put it): the console's OpenPSID, 16 bytes a PSP keeps for each console (pspopenpsid.h's PspOpenPSID);

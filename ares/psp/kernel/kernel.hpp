@@ -234,6 +234,7 @@ struct Kernel {
     None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd, Audio,
     Fpl, Vpl, Module, Async, PipeSend, PipeReceive, Mailbox,
     File,  //a synchronous read or write, for the time its file's device takes (io.cpp)
+    Volatile,  //the volatile memory, lent to another (power.cpp)
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -1030,6 +1031,7 @@ struct Kernel {
   auto dialogStatus(u32 kind) -> void;
   auto dialogUpdate(u32 kind) -> void;
   auto dialogShutdown(u32 kind) -> void;
+  auto keyboard(u32 parameters) -> u32;
   static auto hexWord(u32 value) -> std::string;
   auto savePath(const std::string& folder, const std::string& file = {}) -> std::string;
   auto savedata(u32 parameters) -> u32;
@@ -1096,6 +1098,7 @@ struct Kernel {
   auto sceKernelPowerTick() -> void;
   auto sceKernelPowerLock() -> void;
   auto sceKernelPowerUnlock() -> void;
+  auto sceKernelVolatileMemLock() -> void;
   auto sceKernelVolatileMemTryLock() -> void;
   auto sceKernelVolatileMemUnlock() -> void;
 
@@ -1134,6 +1137,8 @@ struct Kernel {
   auto sceRtcGetTime_t() -> void;
   auto sceRtcGetDosTime() -> void;
   auto sceRtcSetDosTime() -> void;
+  auto sceRtcGetWin32FileTime() -> void;
+  auto sceRtcSetTick() -> void;
   auto sceOpenPSIDGetOpenPSID() -> void;
   auto sceKernelIsCpuIntrEnable() -> void;
   auto sceKernelMemset() -> void;

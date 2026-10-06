@@ -168,7 +168,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
     s(w.done); s(w.resultPointer);
-    check(t.wait <= Wait::File && w.wait <= Wait::Mailbox);
+    check(t.wait <= Wait::Volatile && w.wait <= Wait::Mailbox);
     check(t.callbackID < nextUID);
     s(t.suspended);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
@@ -369,6 +369,12 @@ auto Kernel::serialize(serializer& s) -> bool {
         }
         if(wait == Wait::Mailbox) check(mailboxes.count(id));
       }
+    }
+    //a thread waiting for the volatile memory waits while it's lent (giving it back is what wakes it), with no time
+    //limit and no callbacks (no function that waits for it runs them)
+    for(auto& [uid, t] : threads) {
+      if(t->wait != Wait::Volatile) continue;
+      check(t->status == Status::Waiting && !t->callbacks && !t->wakeAt && powerState.volatileLocked);
     }
     check(programUID < nextUID);
     //A module isn't the program. It has a thread exactly while its module_start or module_stop runs, and that thread

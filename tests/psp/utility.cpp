@@ -1,7 +1,8 @@
 //The system's utilities (ares/psp/kernel/utility.cpp): a dialog's statuses and their timing, saves made, loaded,
 //sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
-//the program's memory refused), a message answered yes, other dialogs cancelled, the wrong type and the wrong status
-//refused; optional modules loaded and unloaded; the nickname. Called directly, the clock moved on by hand.
+//the program's memory refused), a message answered yes, the keyboard's fields accepted (an empty one given the
+//nickname), network settings cancelled, the wrong type and the wrong status refused; optional modules loaded and
+//unloaded; the nickname. Called directly, the clock moved on by hand.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -278,8 +279,8 @@ static auto savedataErase() -> void {
   }
 }
 
-//The other dialogs: a message answered yes at once (noted); the keyboard and network settings cancelled; one at a
-//time; asked about as another kind, the wrong type; shut down before finishing, the wrong status.
+//The other dialogs: a message answered yes at once (noted); network settings cancelled; one at a time; asked about
+//as another kind, the wrong type; shut down before finishing, the wrong status.
 static auto dialogs() -> void {
   KernelMachine m;
   u64 millisecond = Kernel::CPUFrequency / 1000;
@@ -300,17 +301,75 @@ static auto dialogs() -> void {
   CHECK(m.call("sceUtilityMsgDialogShutdownStart", {}), 0);
   m.kernel.cycles += 26 * millisecond;
   CHECK(m.call("sceUtilityMsgDialogGetStatus", {}), 0);
-  for(auto [start, update, status] : {std::tuple{"sceUtilityNetconfInitStart", "sceUtilityNetconfUpdate",
-        "sceUtilityNetconfGetStatus"}, std::tuple{"sceUtilityOskInitStart", "sceUtilityOskUpdate",
-        "sceUtilityOskGetStatus"}}) {
-    m.system.memory.fill(Parameters, 0, 580);
-    CHECK(m.call(start, {Parameters}), 0);
-    m.kernel.cycles += 300 * millisecond;
-    CHECK(m.call(update, {1}), 0);
-    CHECK(m.call(status, {}), 3);
-    CHECK(m.system.memory.read(4, Parameters + 28), 1);  //cancelled
-    m.kernel.dialog.status = 0;  //closed (as if shut down)
-  }
+  m.system.memory.fill(Parameters, 0, 580);
+  CHECK(m.call("sceUtilityNetconfInitStart", {Parameters}), 0);
+  m.kernel.cycles += 300 * millisecond;
+  CHECK(m.call("sceUtilityNetconfUpdate", {1}), 0);
+  CHECK(m.call("sceUtilityNetconfGetStatus", {}), 3);
+  CHECK(m.system.memory.read(4, Parameters + 28), 1);  //cancelled
+}
+
+//The keyboard: each field's text accepted as it is (UNCHANGED), an empty field or one of spaces given the console's
+//nickname (CHANGED), each as far as its room (its NUL among it) and its limit allow; a field with nowhere to put its
+//text still has its result; the common part's result is 0. (Peace Walker, its keyboard cancelled, asked for its
+//player's name again and again.)
+static auto keyboard() -> void {
+  KernelMachine m;
+  u64 millisecond = Kernel::CPUFrequency / 1000;
+  constexpr u32 Fields = Buffer, Texts = Buffer + 0x400;
+  auto write16 = [&](u32 at, const std::u16string& text) {
+    for(u32 n = 0; n < text.size(); n++) m.system.memory.write(2, at + n * 2, text[n]);
+    m.system.memory.write(2, at + text.size() * 2, 0);
+  };
+  auto read16 = [&](u32 at) {
+    std::u16string text;
+    for(u16 c; (c = m.system.memory.read(2, at)) && text.size() < 64; at += 2) text.push_back(c);
+    return text;
+  };
+  auto field = [&](u32 n, const std::u16string& initial, u32 room, u32 limit, bool output = true) {
+    u32 at = Fields + n * 52, in = Texts + n * 0x100, out = in + 0x80;
+    m.system.memory.fill(at, 0, 52);
+    write16(in, initial);
+    m.system.memory.fill(out, 0xcc, 0x40);  //(so a missing NUL shows)
+    m.system.memory.write(4, at + 32, in);
+    m.system.memory.write(4, at + 36, room);
+    m.system.memory.write(4, at + 40, output ? out : 0);
+    m.system.memory.write(4, at + 44, 0x77);
+    m.system.memory.write(4, at + 48, limit);
+  };
+  auto answer = [&](u32 n) { return read16(Texts + n * 0x100 + 0x80); };
+  auto result = [&](u32 n) { return m.system.memory.read(4, Fields + n * 52 + 44); };
+  m.system.memory.fill(Parameters, 0, 64);
+  m.system.memory.write(4, Parameters, 64);
+  m.system.memory.write(4, Parameters + 48, 6);
+  m.system.memory.write(4, Parameters + 52, Fields);
+  field(0, u"Snake", 0x200, 15);
+  field(1, u"", 0x200, 15);
+  field(2, u"   ", 0x200, 15);
+  field(3, u"Big Boss", 0x200, 3);
+  field(4, u"", 2, 15);
+  field(5, u"X", 0x200, 15, false);
+  auto advance = [&](u64 cycles) {  //(the kernel catching up with the vertical blanks, as a state wants)
+    m.kernel.cycles += cycles;
+    m.kernel.events();
+  };
+  CHECK(m.call("sceUtilityOskInitStart", {Parameters}), 0);
+  advance(300 * millisecond);
+  CHECK(m.call("sceUtilityOskGetStatus", {}), 2);
+  CHECK(m.call("sceUtilityOskUpdate", {1}), 0);
+  CHECK(m.call("sceUtilityOskGetStatus", {}), 3);
+  CHECK(m.system.memory.read(4, Parameters + 28), 0);
+  CHECK(answer(0) == u"Snake" && result(0) == 0, true);
+  CHECK(answer(1) == u"PSP" && result(1) == 2, true);
+  CHECK(answer(2) == u"PSP" && result(2) == 2, true);
+  CHECK(answer(3) == u"Big" && result(3) == 0, true);
+  CHECK(answer(4) == u"P" && result(4) == 2, true);
+  CHECK(m.system.memory.read(2, Texts + 5 * 0x100 + 0x80) == 0xcccc && result(5) == 0, true);
+  CHECK(m.call("sceUtilityOskShutdownStart", {}), 0);
+  advance(40 * millisecond);
+  CHECK(m.call("sceUtilityOskGetStatus", {}), 0);
+  CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), numbers that aren't a
@@ -336,7 +395,8 @@ auto utilityTests() -> Tests {
   return {
     {"utility savedata", savedata}, {"utility savedata names", savedataNames},
     {"utility savedata buffers", savedataBuffers}, {"utility savedata loops", savedataLoops},
-    {"utility savedata erase", savedataErase}, {"utility dialogs", dialogs}, {"utility modules", modules},
+    {"utility savedata erase", savedataErase}, {"utility dialogs", dialogs}, {"utility keyboard", keyboard},
+    {"utility modules", modules},
   };
 }
 
