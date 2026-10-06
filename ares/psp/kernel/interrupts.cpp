@@ -60,11 +60,15 @@ auto Kernel::callReturned() -> void {
   }
 }
 
-//For a function that may wait: false, with the error for the result, during a call into the program.
+//For a function that may wait, before anything else it does: false, with the error for the result, during a call
+//into the program (ILLEGAL_CONTEXT), or with dispatching held off (CAN_NOT_WAIT: no other thread could run
+//meanwhile). pspautotests' intr/waits found a PSP refusing so whether the call would have had to wait or not (a free
+//lightweight mutex, an event flag's bits set already, a thread that has ended), and before looking at what it waits
+//on (an ID that isn't one); the few arguments it checks ahead of that, its callers check first.
 auto Kernel::mayWait() -> bool {
-  if(!interrupting) return true;
-  result(ErrorIllegalContext);
-  return false;
+  if(interrupting) return result(ErrorIllegalContext), false;
+  if(dispatchSuspended) return result(ErrorCanNotWait), false;
+  return true;
 }
 
 //Holds calls into the program back, returning whether they were let through before (what ResumeIntr takes back).

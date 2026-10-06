@@ -429,7 +429,7 @@ struct Kernel {
   auto readFile(u32 file, u32 data, u32 size) -> u32;
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
   auto seek(u32 file, s64 offset, u32 whence, u64& position) -> u32;
-  auto ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength) -> u32;
+  auto ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength, u64* moved = nullptr) -> u32;
   auto sceKernelStdin() -> void;
   auto sceKernelStdout() -> void;
   auto sceKernelStderr() -> void;
@@ -457,7 +457,8 @@ struct Kernel {
   auto asyncIssue(u32 file) -> OpenFile*;
   auto asyncStart(OpenFile& open, s64 result, u64 bytes) -> void;
   auto asyncTake(u32 file, u32 pointer) -> void;
-  auto asyncWaiter(u32 file) -> Thread*;
+  auto asyncWaiters(u32 file) -> std::vector<Thread*>;
+  auto asyncResume(Thread& thread) -> bool;
   auto asyncPoll(u32 file, u32 pointer) -> void;
   auto asyncWait(u32 file, u32 pointer, bool callbacks) -> void;
   auto asyncEvents() -> bool;
@@ -844,9 +845,10 @@ struct Kernel {
   std::map<u32, MessagePipe> pipes;
   std::map<u32, Mailbox> mailboxes;
   auto pipeWaiters(const MessagePipe& pipe, Wait wait) -> std::vector<Thread*>;
+  auto pipeCopy(u32 to, u32 from, u32 bytes) -> void;
   auto pipeMove(MessagePipe& pipe, u32 address, u32 bytes, bool in) -> void;
   auto pipeServe(MessagePipe& pipe) -> void;
-  auto pipeFor(u32 uid, u32 size, u32 mode) -> MessagePipe*;
+  auto pipeFor(u32 uid, u32 address, u32 size, u32 mode, bool wait) -> MessagePipe*;
   auto pipeSend(bool wait, bool callbacks) -> void;
   auto pipeReceive(bool wait, bool callbacks) -> void;
   auto mailboxWaiters(const Mailbox& mailbox) -> std::vector<Thread*>;

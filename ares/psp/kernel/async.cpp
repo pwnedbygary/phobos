@@ -6,9 +6,10 @@
 //program's memory, the position moves), but its result is held back until the time the file's device would have
 //taken has passed: until then a poll finds it under way (1) and a wait blocks the thread. Once the time is up
 //(asyncEvents()), the result waits on the file until the program takes it, with sceIoPollAsync, sceIoWaitAsync,
-//sceIoWaitAsyncCB or sceIoGetAsyncStat; a thread waiting already takes it then and there, and a callback set with
-//sceIoSetAsyncCallback is notified. The result is 64 bits (SceInt64): what the synchronous function would have
-//returned, an error sign-extended so that games testing it for a negative number see one.
+//sceIoWaitAsyncCB or sceIoGetAsyncStat; a thread waiting already takes it then and there (of several, the first to
+//begin waiting; the others are told there's none), and a callback set with sceIoSetAsyncCallback is notified. The
+//result is 64 bits (SceInt64): what the synchronous function would have returned, an error sign-extended so that
+//games testing it for a negative number see one.
 //
 //What's known and what's chosen. pspsdk's pspiofilemgr.h gives the functions and their arguments, and pspkerror.h
 //the errors: ASYNC_BUSY for a file whose request is still under way, NOASYNC for one with no request to wait for.
@@ -70,18 +71,38 @@ auto Kernel::asyncTake(u32 file, u32 pointer) -> void {
   if(open.resultOnly) files.erase(found);
 }
 
-//The thread waiting on a file's request, if one is (it's still waiting, not running its callbacks).
-auto Kernel::asyncWaiter(u32 file) -> Thread* {
+//The threads waiting on a file's request (still waiting, not running their callbacks), in the order they began.
+auto Kernel::asyncWaiters(u32 file) -> std::vector<Thread*> {
+  std::vector<Thread*> waiters;
   for(auto& [uid, thread] : threads) {
-    if(thread->status != Status::Waiting || thread->wait != Wait::Async) continue;
-    if(thread->waitID == file) return thread.get();
+    if(thread->status == Status::Waiting && thread->wait == Wait::Async && thread->waitID == file) {
+      waiters.push_back(thread.get());
+    }
   }
-  return nullptr;
+  std::sort(waiters.begin(), waiters.end(), [](Thread* a, Thread* b) { return a->readySince < b->readySince; });
+  return waiters;
 }
 
-//Requests whose time is up are done: each file's callback is notified, and a thread waiting on it takes the result
-//and runs on. A thread waiting where its callbacks may run, whose callback that is, runs the callback first and
-//takes the result after it (resumeWait()). Returns whether a thread woke.
+//A thread's wait on a file's request ends as the file now has it: a request done, the thread takes its result (0);
+//none left to take (another thread waiting took it, or the thread's own callback did, polling), NOASYNC; the file
+//gone (its descriptor went with the result it was kept for, or it was closed), a bad file. Each is what a wait begun
+//then would be told: pspautotests' intr/waits recorded NOASYNC for a wait on a request whose result had been taken.
+//A request still under way goes on being waited for: false.
+auto Kernel::asyncResume(Thread& thread) -> bool {
+  u32 file = thread.waitID, pointer = thread.waitPointer;
+  auto found = files.find(file);
+  if(found == files.end()) return ready(thread, ErrorBadFile), true;
+  if(found->second.async == OpenFile::Async::Pending) return false;
+  if(found->second.async == OpenFile::Async::None) return ready(thread, ErrorNoAsync), true;
+  ready(thread, 0);
+  asyncTake(file, pointer);
+  return true;
+}
+
+//Requests whose time is up are done: each file's callback is notified, and every thread waiting on it runs on, the
+//first to have begun waiting taking the result, any others finding none (asyncResume()). A thread waiting where its
+//callbacks may run, whose callback that is, runs the callback first and ends its wait after it (resumeWait()).
+//Returns whether a thread woke.
 auto Kernel::asyncEvents() -> bool {
   bool woke = false;
   std::vector<u32> done;
@@ -92,12 +113,7 @@ auto Kernel::asyncEvents() -> bool {
     auto& open = files[file];
     open.async = OpenFile::Async::Done;
     if(open.asyncCallback && notifyCallback(open.asyncCallback, open.asyncArgument)) woke = true;
-    if(auto thread = asyncWaiter(file)) {
-      u32 pointer = thread->waitPointer;
-      ready(*thread, 0);
-      asyncTake(file, pointer);
-      woke = true;
-    }
+    for(auto thread : asyncWaiters(file)) woke = asyncResume(*thread) || woke;
   }
   return woke;
 }
@@ -190,13 +206,15 @@ auto Kernel::sceIoLseek32Async() -> void {
 }
 
 //(file, command, in, in length, out, out length): answered as sceIoIoctl answers; the result is what it returns. A
-//request that fills its output takes the time of moving that much.
+//request takes the time of moving what it put in its output, not of the output's length, which a game may give as
+//anything (0xffffffff had made a 4-byte answer due in 52 minutes).
 auto Kernel::sceIoIoctlAsync() -> void {
   u32 file = arg(0);
   auto open = asyncIssue(file);
   if(!open) return;
-  u32 answer = ioctl(file, arg(1), arg(2), arg(3), arg(4), arg(5));
-  asyncStart(*open, s32(answer), s32(answer) < 0 ? 0 : arg(5));
+  u64 moved = 0;
+  u32 answer = ioctl(file, arg(1), arg(2), arg(3), arg(4), arg(5), &moved);
+  asyncStart(*open, s32(answer), moved);
   result(0);
 }
 
@@ -216,12 +234,14 @@ auto Kernel::sceIoPollAsync() -> void {
 }
 
 //Waits for a file's request (file, where to put its result; with callbacks, running the thread's callbacks as
-//they're notified): 0 and the result once it's done, at once if it is.
+//they're notified): 0 and the result once it's done, at once if it is. A bad file, and one with no request, are
+//refused ahead of whether the thread may wait, as intr/waits recorded (a bad file in an interrupt handler, no request
+//with dispatching held off).
 auto Kernel::asyncWait(u32 file, u32 pointer, bool callbacks) -> void {
-  if(!mayWait()) return;
   auto found = files.find(file);
   if(found == files.end() || found->second.folder) return result(ErrorBadFile);
   if(found->second.async == OpenFile::Async::None) return result(ErrorNoAsync);
+  if(!mayWait()) return;
   result(0);
   if(found->second.async == OpenFile::Async::Done) {
     asyncTake(file, pointer);
@@ -229,6 +249,7 @@ auto Kernel::asyncWait(u32 file, u32 pointer, bool callbacks) -> void {
   }
   if(!current) return;
   current->waitPointer = pointer;
+  current->readySince = ++readySequence;  //its place among those waiting on the file
   block(Wait::Async, file, 0, 0, callbacks);
 }
 

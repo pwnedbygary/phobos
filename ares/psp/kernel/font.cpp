@@ -53,11 +53,17 @@ auto Kernel::sceFontNoFont() -> void {
   result(ErrorNotFound);
 }
 
-//(library, horizontal and vertical resolution, floats in f12 and f13): the dots an inch the library works in.
+//(library, horizontal and vertical resolution, floats in f12 and f13): the dots an inch the library works in. Each
+//must be above 0 and below 10^9 (a state holds no more: no screen comes near it); anything else, not-a-number and
+//the infinities too, is refused and the resolution kept. pspsdk's pspfont.h gives sceLibFont no errors, so the
+//refusal is uOFW's errors.h's INVALID_VALUE, as scePower's clocks and sceCtrl's sampling cycle refuse theirs.
 auto Kernel::sceFontSetResolution() -> void {
-  memcpy(&fontResolution[0], &cpu.fpu.r[12], 4);
-  memcpy(&fontResolution[1], &cpu.fpu.r[13], 4);
-  if(!(fontResolution[0] > 0) || !(fontResolution[1] > 0)) fontResolution[0] = fontResolution[1] = 128.0f;
+  float resolution[2];
+  memcpy(&resolution[0], &cpu.fpu.r[12], 4);
+  memcpy(&resolution[1], &cpu.fpu.r[13], 4);
+  for(float value : resolution) if(!(value > 0 && value < 1e9f)) return result(ErrorInvalidValue);
+  fontResolution[0] = resolution[0];
+  fontResolution[1] = resolution[1];
   result(0);
 }
 

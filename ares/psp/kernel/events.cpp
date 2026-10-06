@@ -28,6 +28,11 @@ static auto flagCleared(u32 pattern, u32 bits, u32 mode) -> u32 {
   return pattern;
 }
 
+//AND or OR, and CLEAR or CLEARALL or neither.
+static auto flagModeValid(u32 mode) -> bool {
+  return !(mode & ~0x31u) && (mode & 0x30) != 0x30;
+}
+
 //The threads waiting on the flag, in the order they're served.
 auto Kernel::eventFlagWaiters(const EventFlag& flag) -> std::vector<Thread*> {
   std::vector<Thread*> waiters;
@@ -97,7 +102,7 @@ auto Kernel::sceKernelClearEventFlag() -> void {
 //What waiting and polling check before anything else, in order: the mode, that some bits are asked for, the flag,
 //and, on a flag for one, that no other thread is waiting. Null, with the error for the result, if one fails.
 auto Kernel::eventFlagFor(u32 uid, u32 bits, u32 mode) -> EventFlag* {
-  if((mode & ~0x31u) || (mode & 0x30) == 0x30) return result(ErrorIllegalMode), nullptr;
+  if(!flagModeValid(mode)) return result(ErrorIllegalMode), nullptr;
   if(!bits) return result(ErrorEventFlagPattern), nullptr;
   auto found = eventFlags.find(uid);
   if(found == eventFlags.end()) return result(ErrorUnknownEventFlag), nullptr;
@@ -107,10 +112,12 @@ auto Kernel::eventFlagFor(u32 uid, u32 bits, u32 mode) -> EventFlag* {
 }
 
 //(flag, bits, mode, where to put the bits seen, timeout): at once if the bits are there, else waits for them. A
-//timeout of 0 gives up at once, without telling the bits.
+//timeout of 0 gives up at once, without telling the bits. A bad mode is refused ahead of dispatching held off, but
+//not of an interrupt handler (intr/waits: ILLEGAL_MODE with dispatching held off, ILLEGAL_CONTEXT in a handler).
 auto Kernel::waitEventFlag(bool callbacks) -> void {
-  if(!mayWait()) return;
   u32 bits = arg(1), mode = arg(2), seen = arg(3), timeoutPointer = arg(4);
+  if(!interrupting && !flagModeValid(mode)) return result(ErrorIllegalMode);
+  if(!mayWait()) return;
   auto flag = eventFlagFor(arg(0), bits, mode);
   if(!flag) return;
   if(flagMatches(flag->pattern, bits, mode)) {
@@ -316,8 +323,10 @@ auto Kernel::resumeWait(Thread& thread) -> void {
     if(auto found = pools.find(thread.waitID); found != pools.end()) poolWake(found->second);
     else ready(thread, ErrorWaitDeleted);
     break;
-  case Wait::LwMutex:  //unlocked meanwhile: it goes to the thread waiting longest, which may be this one
-    if(!memory.read(4, thread.waitID)) unlockLwMutex(thread.waitID);
+  case Wait::LwMutex:  //deleted meanwhile (the ID in its work area gone); or unlocked: it goes to the thread waiting
+                       //longest, which may be this one
+    if(!lwMutexes.count(memory.read(4, thread.waitID + 16))) ready(thread, ErrorWaitDeleted);
+    else if(!memory.read(4, thread.waitID)) unlockLwMutex(thread.waitID);
     break;
   case Wait::PipeSend: case Wait::PipeReceive:
     if(auto found = pipes.find(thread.waitID); found != pipes.end()) pipeServe(found->second);
@@ -332,13 +341,9 @@ auto Kernel::resumeWait(Thread& thread) -> void {
       ready(thread, 0);
     }
     break;
-  case Wait::Async:   //a file's request done meanwhile (its callback was what ran): its result is taken now
-    if(auto found = files.find(thread.waitID); found == files.end()) ready(thread, ErrorBadFile);
-    else if(found->second.async == OpenFile::Async::Done) {
-      u32 file = thread.waitID, pointer = thread.waitPointer;
-      ready(thread, 0);
-      asyncTake(file, pointer);
-    }
+  case Wait::Async:   //a file's request done meanwhile (its callback was what ran): its result is taken now, or
+                      //found taken already (the callback may have polled it) or gone with its file
+    asyncResume(thread);
     break;
   default:            //a delay whose time isn't up
     break;

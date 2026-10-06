@@ -72,13 +72,13 @@ auto Kernel::audioWaiter(u32 waitID) -> Thread* {
 }
 
 //Whether the calling thread may wait for a channel: 0 if it may, else the error its output returns instead. From an
-//interrupt handler, ILLEGAL_CONTEXT; with interrupts held off (sceKernelCpuSuspendIntr), CAN_NOT_WAIT, as
-//pspautotests' intr/waits found. Only a call that has to wait is refused so: one that can finish at once does so
-//whatever the context. (With no thread running at all, which only a test calling directly can arrange, there's no
-//one to wait either.)
+//interrupt handler, ILLEGAL_CONTEXT; with interrupts held off (sceKernelCpuSuspendIntr), or dispatching
+//(sceKernelSuspendDispatchThread), CAN_NOT_WAIT, as pspautotests' intr/waits found. Only a call that has to wait is
+//refused so: one that can finish at once does so whatever the context. (With no thread running at all, which only a
+//test calling directly can arrange, there's no one to wait either.)
 auto Kernel::audioWaitRefused() const -> u32 {
   if(interrupting) return ErrorIllegalContext;
-  if(!interruptsEnabled || !current) return ErrorCanNotWait;
+  if(!interruptsEnabled || dispatchSuspended || !current) return ErrorCanNotWait;
   return 0;
 }
 

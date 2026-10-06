@@ -1,6 +1,8 @@
 //sceSasCore (ares/psp/kernel/sas.cpp), silent: what its functions take and refuse, as pspautotests' audio/sascore
 //recorded on a PSP; envelopes grain by grain against the same recordings; voices ending as their samples run out or
-//their release comes down to 0, and the end flags refreshed by __sceSasCore; in a program on both engines too.
+//their release comes down to 0, and the end flags refreshed by __sceSasCore; in a program on both engines too; and
+//playing voices given new samples. Each group's machine, saved at its end, loads into another that makes the same
+//state.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -161,6 +163,7 @@ static auto sasSettings() -> void {
     check(__LINE__, "the pause flags", m.call("__sceSasGetPauseFlag", {Core}), flags);
   }
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //Envelopes grain by grain, as audio/sascore recorded them: keyed on, a voice starts 32 samples into the next grain
@@ -253,6 +256,7 @@ static auto sasEnvelopes() -> void {
   CHECK(m.system.memory.read(4, Out), 0x5555'5555);
   CHECK(m.call("__sceSasCore", {Core, 0}), ErrorAddress);
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //A program keys voices on and makes grains (256 samples), writing down the end flags after each: a VAG voice of four
@@ -296,11 +300,48 @@ static auto sasVoicesEnd() -> void {
     CHECK(m.system.memory.read(4, R + 4), others | 1 << 0 | 1 << 2 | 1 << 3);
     CHECK(m.system.memory.read(4, R + 8), others | 1 << 0 | 1 << 2 | 1 << 3);
     CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
   }
 }
 
+//Playing voices given new samples: three PCM voices 2016 samples into 65536; given 100 samples, the first goes on
+//from its last and ends at the next grain; given 300 looping from 100, the second goes on from where its loop would
+//have taken it; given VAG data, the third starts from its beginning, as does a VAG voice then given PCM samples. The
+//machine's state, saved after each change, loads into another machine and makes the same state (the first voice,
+//left past its samples, had made the machine's own state refused).
+static auto sasNewSamples() -> void {
+  KernelMachine m;
+  auto& voices = m.kernel.sas.voices;
+  auto core = [&] { CHECK(m.call("__sceSasCore", {Core, Out}), 0); };
+  m.call("__sceSasInit", {Core, 256, 32, 0, 44100});
+  for(u32 voice : {0u, 1u, 2u}) {
+    m.call("__sceSasSetVoicePCM", {Core, voice, Samples, 0x10000, u32(-1)});
+    m.call("__sceSasSetKeyOn", {Core, voice});
+  }
+  for(u32 n = 0; n < 8; n++) core();
+  CHECK(voices[0].position, u64(8 * 256 - 32) << 12);
+  CHECK(m.call("__sceSasSetVoicePCM", {Core, 0, Samples, 100, u32(-1)}), 0);
+  CHECK(voices[0].position, (u64(100) << 12) - 1);
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("__sceSasSetVoicePCM", {Core, 1, Samples, 300, 100}), 0);
+  CHECK(voices[1].position, u64(100 + (2016 - 300) % 200) << 12);
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("__sceSasSetVoice", {Core, 2, Samples, 0x1000, 0}), 0);
+  CHECK(voices[2].position, 0);
+  CHECK(roundTrip(m), true);
+  core();
+  CHECK(m.call("__sceSasGetEndFlag", {Core}) & 7, 1);  //the first ended; the second loops, the third plays on
+  CHECK(voices[1].position, u64(100 + (216 + 256 - 300) % 200) << 12);
+  CHECK(voices[2].position, u64(256) << 12);
+  CHECK(m.call("__sceSasSetVoicePCM", {Core, 2, Samples, 200, u32(-1)}), 0);
+  CHECK(voices[2].position, 0);
+  CHECK(roundTrip(m), true);
+  CHECK(m.notes.size(), 0);
+}
+
 auto sasTests() -> Tests {
-  return {{"sas settings", sasSettings}, {"sas envelopes", sasEnvelopes}, {"sas voices end", sasVoicesEnd}};
+  return {{"sas settings", sasSettings}, {"sas envelopes", sasEnvelopes}, {"sas voices end", sasVoicesEnd},
+          {"sas voices given new samples", sasNewSamples}};
 }
 
 }

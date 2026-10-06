@@ -224,13 +224,15 @@ auto Kernel::__sceSasSetPitch() -> void {
 
 //(core, voice, VAG data, its size, loop): the voice plays VAG ADPCM blocks. The size a multiple of 16, not 0 (a
 //negative one is taken, as audio/sascore/vag found: the data then runs until its end mark); loop 0 or 1. A voice
-//playing goes on from where it is, in the new data.
+//playing VAG already goes on from where it is, in the new data (past its end, it ends as it next moves on); one that
+//played other samples starts from the new data's beginning, its loop too, as where it was means nothing in them.
 auto Kernel::__sceSasSetVoice() -> void {
   auto voice = sasVoice(arg(1));
   if(!voice) return;
   s32 size = s32(arg(3)), loop = s32(arg(4));
   if(!size || size & 15) return result(SasErrorSize);
   if(loop != 0 && loop != 1) return result(SasErrorLoop);
+  if(voice->source != Sas::Source::Vag) voice->position = 0, voice->loopBlock = 0;
   voice->source = Sas::Source::Vag;
   voice->address = arg(2);
   voice->size = u32(size);
@@ -239,17 +241,28 @@ auto Kernel::__sceSasSetVoice() -> void {
 }
 
 //(core, voice, PCM data, samples, loop start): 16-bit mono samples, 1 to 65536 of them, looping from the start given
-//(below the count; a negative one plays once).
+//(below the count; a negative one plays once). A voice playing PCM already goes on from where it is, in the new
+//samples; one that played others starts from their beginning. Where it is must be inside them: past their end, a
+//voice that loops goes on from where its loop would have taken it, and one that doesn't from its last sample, so
+//that it ends as it next moves on, as it would have (a state of it then loads).
 auto Kernel::__sceSasSetVoicePCM() -> void {
   auto voice = sasVoice(arg(1));
   if(!voice) return;
   s32 samples = s32(arg(3)), loop = s32(arg(4));
   if(samples <= 0 || samples > 0x10000) return result(SasErrorPcmSize);
   if(loop >= samples) return result(SasErrorLoop);
+  if(voice->source != Sas::Source::Pcm) voice->position = 0;
   voice->source = Sas::Source::Pcm;
   voice->address = arg(2);
   voice->size = u32(samples);
   voice->loop = loop < 0 ? -1 : loop;
+  voice->loopBlock = 0;  //(VAG's)
+  u64 end = u64(voice->size) << 12;
+  if(voice->position >= end && voice->loop < 0) voice->position = end - 1;
+  if(voice->position >= end) {
+    u64 start = u64(voice->loop) << 12;
+    voice->position = start + (voice->position - end) % (end - start);
+  }
   result(0);
 }
 

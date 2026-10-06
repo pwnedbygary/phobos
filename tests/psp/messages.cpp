@@ -1,8 +1,9 @@
 //Message pipes and mailboxes (ares/psp/kernel/messages.cpp): what their functions take and refuse, as pspautotests'
 //threads/msgpipe and threads/mbx recorded on a PSP; bytes through a pipe's ring and straight across between threads
-//waiting part way, timing out with what they moved, held up in line; packets queued in order or by priority, linked
-//in the program's memory, handed to waiting threads; and a state saved with a thread waiting part way. Programs run
-//on both engines.
+//waiting part way, timing out with what they moved, held up in line; memory behind messages; the caller's callbacks
+//run as a send or receive returns, not those of the thread it woke; packets queued in order or by priority, linked
+//in the program's memory, handed to waiting threads; and a state saved with a thread waiting part way. Each group's
+//machine, saved at its end, loads into another that makes the same state. Programs run on both engines.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -126,6 +127,7 @@ static auto pipeCalls() -> void {
   CHECK(m.call("sceKernelTrySendMsgPipe", {bare, Data, 0, 0, R}), 0);
   CHECK(m.call("sceKernelTryReceiveMsgPipe", {bare, Out, 0x10, 0, R}), Kernel::ErrorPipeEmpty);
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //Threads waiting part way, as threads/msgpipe's send and receive tests recorded. Two receivers wait on an empty pipe
@@ -204,6 +206,188 @@ static auto pipeWaits() -> void {
     CHECK((pair(R + 0x68) == std::pair{Kernel::ErrorWaitDeleted, 0x80u}), true);
     CHECK(m.notes.size(), 0);
     for(auto& note : m.notes) std::printf("  note: %s\n", note.c_str());
+    CHECK(roundTrip(m), true);
+  }
+}
+
+//Memory behind messages, which threads/msgpipe never tried going without: a send or receive whose message or buffer
+//runs past memory is refused (ILLEGAL_ADDR) and moves nothing, after the size checks threads/msgpipe recorded; a null
+//message of no bytes is taken. In a program, on a pipe without a buffer: a receiver and a sender of 1 GiB at address
+//0x10, each refused at once (a 32 MiB machine had copied the 1 GiB through as much of the host's memory); messages of
+//0x3001 bytes straight across each way, and one into VRAM's second copy (which rearranges its bytes); and a receiver
+//back from its callback finding a sender waiting, which hands it its message straight across. On both engines.
+static auto pipeMemory() -> void {
+  {
+    KernelMachine m;
+    u32 name = m.string("pipe");
+    u32 pipe = m.call("sceKernelCreateMsgPipe", {name, 2, 0, 0x100, 0});
+    u32 bare = m.call("sceKernelCreateMsgPipe", {name, 2, 0, 0, 0});
+    constexpr u32 Nowhere = 0x10, End = 0x0a00'0000;  //nothing at 0x10; RAM's end in a 32 MiB machine
+    auto transfer = [&](const char* function, u32 id, u32 address, u32 size) {
+      m.system.memory.write(4, R, 1337);
+      return m.call(function, {id, address, size, 0, R});
+    };
+    CHECK(transfer("sceKernelTrySendMsgPipe", pipe, Nowhere, 0x20), Kernel::ErrorIllegalAddress);
+    CHECK(transfer("sceKernelTrySendMsgPipe", pipe, End - 0x10, 0x20), Kernel::ErrorIllegalAddress);
+    CHECK(word(m, R), 1337);
+    CHECK(status(m, pipe)[1], 0x100);  //nothing went in
+    CHECK(transfer("sceKernelTrySendMsgPipe", pipe, Nowhere, 0x101), Kernel::ErrorIllegalSize);
+    CHECK(transfer("sceKernelTrySendMsgPipe", pipe, 0, 0), 0);
+    CHECK(transfer("sceKernelTrySendMsgPipe", pipe, End - 0x10, 0x10), 0);  //up to RAM's end
+    CHECK(transfer("sceKernelTryReceiveMsgPipe", pipe, Nowhere, 0x10), Kernel::ErrorIllegalAddress);
+    CHECK(transfer("sceKernelTryReceiveMsgPipe", pipe, End - 8, 0x10), Kernel::ErrorIllegalAddress);
+    CHECK(status(m, pipe)[1], 0xf0);  //the 0x10 bytes still there
+    CHECK(transfer("sceKernelTryReceiveMsgPipe", bare, Nowhere, 0x100), Kernel::ErrorIllegalAddress);
+    CHECK(transfer("sceKernelTrySendMsgPipe", bare, Nowhere, 0x4000'0000), Kernel::ErrorIllegalAddress);
+    CHECK(word(m, R), 1337);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+  constexpr u32 Vram = 0x0420'1000;  //VRAM's second copy
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    for(u32 n = 0; n < 0x4000; n++) m.system.memory.write(1, Data + n, u8(n * 13 + 1));
+    m.system.memory.write(4, R + 0x24, 0x1337);
+    m.system.memory.write(4, R + 0x44, 0x1337);
+    Assembler callback{m, 0x0880'3000};  //waits 2 ms, as main sends meanwhile
+    callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp));
+    callback.li(a0, 2000); callback.call("sceKernelDelayThread");
+    callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+    callback.li(v0, 0); callback.put(jr(ra)); callback.put(nop);
+    //a thread that sends or receives size bytes at address on the pipe in R + 0x10, then writes down its result at
+    //`at` and how many bytes moved at at + 4; with callbacks, it makes one first, its ID in R + 0x18
+    auto transfer = [&](u32 entry, bool send, u32 address, u32 size, u32 at, bool callbacks = false) {
+      Assembler a{m, entry};
+      if(callbacks) {
+        a.li(a0, m.string("cb")); a.li(a1, 0x0880'3000); a.li(a2, 0);
+        a.call("sceKernelCreateCallback");
+        a.li(t0, R + 0x18); a.put(sw(v0, 0, t0));
+      }
+      a.li(t0, R + 0x10); a.put(lw(a0, 0, t0));
+      a.li(a1, address); a.li(a2, size); a.li(a3, 0); a.li(t0, at + 4); a.li(t1, 0);
+      if(send) a.call("sceKernelSendMsgPipe");
+      else a.call(callbacks ? "sceKernelReceiveMsgPipeCB" : "sceKernelReceiveMsgPipe");
+      a.li(t0, at); a.put(sw(v0, 0, t0));
+      a.call("sceKernelExitThread");
+    };
+    transfer(0x0880'2000, false, 0x10, 0x4000'0000, R + 0x20);
+    transfer(0x0880'2100, false, Out + 3, 0x3001, R + 0x28);
+    transfer(0x0880'2200, true, Data + 1, 0x3001, R + 0x30);
+    transfer(0x0880'2300, false, Vram + 1, 0x101, R + 0x38);
+    transfer(0x0880'2400, false, Out + 0xc000, 0x80, R + 0x68, true);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("pipe")); main.li(a1, 2); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+    main.call("sceKernelCreateMsgPipe");
+    main.li(t0, R + 0x10); main.put(sw(v0, 0, t0));
+    auto mainTransfer = [&](bool send, u32 address, u32 size, u32 at) {
+      main.li(t0, R + 0x10); main.put(lw(a0, 0, t0));
+      main.li(a1, address); main.li(a2, size); main.li(a3, 0); main.li(t0, at + 4); main.li(t1, 0);
+      main.call(send ? "sceKernelSendMsgPipe" : "sceKernelReceiveMsgPipe");
+      main.li(t0, at); main.put(sw(v0, 0, t0));
+    };
+    start(main, m, 0x0880'2000);  //1 GiB at 0x10, each way
+    delay(main, 1000);
+    mainTransfer(true, 0x10, 0x4000'0000, R + 0x40);
+    start(main, m, 0x0880'2100);  //a receiver of 0x3001 waits, a send hands it them
+    delay(main, 1000);
+    mainTransfer(true, Data + 1, 0x3001, R + 0x48);
+    start(main, m, 0x0880'2200);  //a sender of 0x3001 waits, a receive takes them
+    delay(main, 1000);
+    mainTransfer(false, Out + 0x8000 + 5, 0x3001, R + 0x50);
+    start(main, m, 0x0880'2300);  //a receiver into VRAM's second copy
+    delay(main, 1000);
+    mainTransfer(true, Data, 0x101, R + 0x58);
+    start(main, m, 0x0880'2400);  //a receiver with callbacks
+    delay(main, 1000);
+    main.li(t0, R + 0x18); main.put(lw(a0, 0, t0)); main.li(a1, 0);
+    main.call("sceKernelNotifyCallback");
+    delay(main, 500);  //its callback runs, waiting 2 ms
+    mainTransfer(true, Data, 0x80, R + 0x60);  //no receiver waiting meanwhile: the send waits
+    delay(main, 1000);
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    auto pair = [&](u32 at) { return std::pair{word(m, at), word(m, at + 4)}; };
+    CHECK((pair(R + 0x20) == std::pair{Kernel::ErrorIllegalAddress, 0x1337u}), true);
+    CHECK((pair(R + 0x40) == std::pair{Kernel::ErrorIllegalAddress, 0x1337u}), true);
+    auto same = [&](u32 at, u32 from, u32 size) {
+      for(u32 n = 0; n < size; n++) {
+        if(m.system.memory.read(1, at + n) != m.system.memory.read(1, from + n)) return false;
+      }
+      return true;
+    };
+    CHECK((pair(R + 0x28) == std::pair{0u, 0x3001u}) && (pair(R + 0x48) == std::pair{0u, 0x3001u}), true);
+    CHECK(same(Out + 3, Data + 1, 0x3001), true);
+    CHECK((pair(R + 0x30) == std::pair{0u, 0x3001u}) && (pair(R + 0x50) == std::pair{0u, 0x3001u}), true);
+    CHECK(same(Out + 0x8000 + 5, Data + 1, 0x3001), true);
+    CHECK((pair(R + 0x38) == std::pair{0u, 0x101u}) && (pair(R + 0x58) == std::pair{0u, 0x101u}), true);
+    CHECK(same(Vram + 1, Data, 0x101), true);
+    CHECK((pair(R + 0x60) == std::pair{0u, 0x80u}) && (pair(R + 0x68) == std::pair{0u, 0x80u}), true);
+    CHECK(same(Out + 0xc000, Data, 0x80), true);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
+//A send with callbacks that needn't wait wakes a receiver of higher priority waiting without them, which has a
+//callback notified: the receiver takes over at once, its callback not run (it didn't wait where callbacks may run),
+//and the sender's own callback runs as the send returns, once the sender has the CPU again. Then the same for a
+//receive with callbacks waking a sender. (The callbacks run on return had been those of whichever thread was
+//running by then: the woken one's.) On both engines.
+static auto pipeCallbacksOnReturn() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto callback = [&](u32 entry, const std::string& text) {
+      Assembler a{m, entry};
+      a.put(addiu(sp, sp, -16)); a.put(sw(ra, 12, sp));
+      a.print(text);
+      a.put(lw(ra, 12, sp)); a.put(addiu(sp, sp, 16));
+      a.li(v0, 0); a.put(jr(ra)); a.put(nop);
+    };
+    callback(0x0880'3000, "main's callback\n");
+    callback(0x0880'3100, "worker's callback\n");
+    //a worker with a callback notified, then sending or receiving on the pipe in R + 0x10, waiting without callbacks
+    auto worker = [&](u32 entry, bool send, u32 size) {
+      Assembler a{m, entry};
+      a.li(a0, m.string("cb")); a.li(a1, 0x0880'3100); a.li(a2, 0);
+      a.call("sceKernelCreateCallback");
+      a.put(addu(a0, v0, zero)); a.li(a1, 0);
+      a.call("sceKernelNotifyCallback");
+      a.li(t0, R + 0x10); a.put(lw(a0, 0, t0));
+      a.li(a1, send ? Data : Out); a.li(a2, size); a.li(a3, 0); a.li(t0, 0); a.li(t1, 0);
+      a.call(send ? "sceKernelSendMsgPipe" : "sceKernelReceiveMsgPipe");
+      a.print(send ? "worker sent\n" : "worker received\n");
+      a.call("sceKernelExitThread");
+    };
+    worker(0x0880'2000, false, 4);
+    worker(0x0880'2200, true, 8);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelCreateCallback");
+    main.put(addu(s1, v0, zero));
+    for(bool send : {true, false}) {
+      main.li(a0, m.string("pipe")); main.li(a1, 2); main.li(a2, 0); main.li(a3, send ? 0x100 : 0); main.li(t0, 0);
+      main.call("sceKernelCreateMsgPipe");
+      main.li(t0, R + 0x10); main.put(sw(v0, 0, t0));
+      start(main, m, send ? 0x0880'2000 : 0x0880'2200, 0x10);  //it runs at once, and waits
+      main.put(addu(a0, s1, zero)); main.li(a1, 0);
+      main.call("sceKernelNotifyCallback");
+      main.li(t0, R + 0x10); main.put(lw(a0, 0, t0));
+      main.li(a1, send ? Data : Out); main.li(a2, send ? 4 : 8); main.li(a3, 0); main.li(t0, 0); main.li(t1, 0);
+      main.call(send ? "sceKernelSendMsgPipeCB" : "sceKernelReceiveMsgPipeCB");
+      main.li(t0, R); main.put(sw(v0, send ? 0 : 4, t0));
+      main.print(send ? "main sent\n" : "main received\n");
+    }
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    std::string expected = "worker received\nmain's callback\nmain sent\n"
+                           "worker sent\nmain's callback\nmain received\n";
+    CHECK(m.output == expected, true);
+    if(m.output != expected) std::printf("  [%s]\n", m.output.c_str());
+    CHECK(word(m, R) == 0 && word(m, R + 4) == 0, true);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
   }
 }
 
@@ -254,6 +438,7 @@ static auto mailboxCalls() -> void {
   CHECK(m.call("sceKernelDeleteMbx", {plain}), 0);
   CHECK(m.call("sceKernelPollMbx", {plain, R}), Kernel::ErrorUnknownMailbox);
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //Threads waiting on a mailbox: a send hands the packet to the first, in the order they came; a receive with a
@@ -312,24 +497,8 @@ static auto mailboxWaits() -> void {
     CHECK(word(m, R + 0x48), Kernel::ErrorWaitTimeout);
     CHECK(word(m, R + 0x14), 0);
     CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
   }
-}
-
-static auto save(KernelMachine& m) -> std::vector<u8> {
-  serializer s;
-  m.system.memory.serialize(s);
-  m.system.serialize(s);
-  m.system.ge.serialize(s);
-  m.kernel.serialize(s);
-  return {s.data(), s.data() + s.size()};
-}
-
-static auto load(KernelMachine& m, const std::vector<u8>& state) -> bool {
-  serializer s{state.data(), u32(state.size())};
-  m.system.memory.serialize(s);
-  m.system.serialize(s);
-  bool valid = m.system.ge.serialize(s);
-  return m.kernel.serialize(s) && valid;
 }
 
 //A state saved while a receiver waits part way on a pipe without a buffer (0x80 of 0x100 moved) loads into another
@@ -362,24 +531,26 @@ static auto pipeState() -> void {
     main.call("sceKernelExitGame");
     m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency / 100);
     CHECK(m.kernel.exited, false);
-    auto state = save(m);
+    auto state = saveState(m);
     KernelMachine n;
     n.system.recompiler.enabled = recompile;
-    CHECK(load(n, state), true);
-    CHECK(save(n) == state, true);
+    CHECK(loadState(n, state), true);
+    CHECK(saveState(n) == state, true);
     for(auto* each : {&m, &n}) {
       each->kernel.run(Kernel::CPUFrequency / 10);
       CHECK(each->kernel.exited, true);
       CHECK(word(*each, R + 0x20) == 0 && word(*each, R + 0x24) == 0x100, true);
       CHECK(each->system.memory.read(1, Out + 0xff), 0xff);
+      CHECK(roundTrip(*each), true);
     }
   }
 }
 
 auto messageTests() -> Tests {
   return {{"message pipes called directly", pipeCalls}, {"message pipes waited for", pipeWaits},
-          {"mailboxes called directly", mailboxCalls}, {"mailboxes waited for", mailboxWaits},
-          {"message pipes state", pipeState}};
+          {"message pipes memory", pipeMemory}, {"message pipes callbacks on return", pipeCallbacksOnReturn},
+          {"mailboxes called directly", mailboxCalls},
+          {"mailboxes waited for", mailboxWaits}, {"message pipes state", pipeState}};
 }
 
 }

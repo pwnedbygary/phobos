@@ -17,8 +17,12 @@
 //but 0 or 1 (ILLEGAL_MODE), a message bigger than a buffer the pipe has (ILLEGAL_SIZE; a pipe without one takes any
 //size, straight across), and on creating: no name (NO_MEMORY, as recorded), the partition as memory pools check it,
 //attributes outside 0x51ff, a buffer the partition hasn't room for. Not shown by them, and chosen: which comes first
-//of a bad mode and a bad size; that attribute 0x100 lines receivers up by priority and 0x1000 senders (as event
-//flags' 0x100 does waiters), and 0x4000 takes the buffer from the top of the partition (as memory pools').
+//of a bad mode and a bad size; a message or buffer without memory behind all of it refused (ILLEGAL_ADDR), after
+//the rest (send's test of a null message with a length is left out of threads/msgpipe, so what a PSP does with one
+//isn't known; without the check, a pipe with no buffer would move however many bytes a count asked for); that
+//attribute 0x100 lines receivers up by priority and 0x1000 senders (as event flags' 0x100 does waiters: pspsdk's
+//pspthreadman.h names no pipe attributes), and 0x4000 takes the buffer from the top of the partition (as memory
+//pools').
 //
 //A mailbox hands over packets: the program's own memory, starting with a SceKernelMsgPacket (pspthreadman.h: the
 //next packet's address, which the kernel writes, and a priority byte). A send gives the packet to the first thread
@@ -51,6 +55,19 @@ auto Kernel::pipeWaiters(const MessagePipe& pipe, Wait wait) -> std::vector<Thre
     return a->readySince < b->readySince;
   });
   return waiters;
+}
+
+//Bytes straight from a sender's message into a receiver's buffer: one move where both lie side by side in the host's
+//memory, else a byte at a time (through VRAM's copies that rearrange it). Both were found to have memory behind them
+//as their send and receive began (pipeFor()), so nothing is made room for, however many bytes go.
+auto Kernel::pipeCopy(u32 to, u32 from, u32 bytes) -> void {
+  u8* target = memory.pointer(to, bytes);
+  u8* source = memory.pointer(from, bytes);
+  if(target && source) {
+    std::memmove(target, source, bytes);
+    return memory.changed(to, bytes);
+  }
+  for(u32 n = 0; n < bytes; n++) memory.write(1, to + n, memory.read(1, from + n));
 }
 
 //Bytes into the pipe's buffer from the program's memory (in), or out of it into the program's memory: the caller
@@ -87,9 +104,7 @@ auto Kernel::pipeServe(MessagePipe& pipe) -> void {
     if(!receivers.empty() && !senders.empty()) {
       auto receiver = receivers.front(), sender = senders.front();
       u32 bytes = std::min(receiver->waitCount - receiver->waitDone, sender->waitCount - sender->waitDone);
-      std::vector<u8> copy(bytes);
-      memory.copyOut(copy.data(), sender->waitPointer + sender->waitDone, bytes);
-      memory.copyIn(receiver->waitPointer + receiver->waitDone, copy.data(), bytes);
+      pipeCopy(receiver->waitPointer + receiver->waitDone, sender->waitPointer + sender->waitDone, bytes);
       receiver->waitDone += bytes, sender->waitDone += bytes;
       if(finished(receiver)) ready(*receiver, 0);
       if(finished(sender)) ready(*sender, 0);
@@ -108,14 +123,19 @@ auto Kernel::pipeServe(MessagePipe& pipe) -> void {
   }
 }
 
-//What a send or receive checks first, in order: the pipe, the size (negative: ILLEGAL_ADDR), the mode, a message
-//bigger than the pipe's buffer. Null, with the error for the result, if one fails.
-auto Kernel::pipeFor(u32 uid, u32 size, u32 mode) -> MessagePipe* {
+//What a send or receive checks first, in order: the size (negative: ILLEGAL_ADDR); for one that would wait, whether
+//it may (mayWait(): pspautotests' intr/waits recorded the size refused ahead of that, and an unknown pipe after it);
+//the pipe, the mode, a message bigger than the pipe's buffer, then memory behind all of the message or buffer at
+//address (ILLEGAL_ADDR): last, so that a message too big for the pipe's buffer is refused as threads/msgpipe recorded
+//(0x40000000 bytes: ILLEGAL_SIZE). Null, with the error for the result, if one fails.
+auto Kernel::pipeFor(u32 uid, u32 address, u32 size, u32 mode, bool wait) -> MessagePipe* {
+  if(size & 0x8000'0000) return result(ErrorIllegalAddress), nullptr;
+  if(wait && !mayWait()) return nullptr;
   auto found = pipes.find(uid);
   if(found == pipes.end()) return result(ErrorUnknownMessagePipe), nullptr;
-  if(size & 0x8000'0000) return result(ErrorIllegalAddress), nullptr;
   if(mode > PipeAsap) return result(ErrorIllegalMode), nullptr;
   if(found->second.size && size > found->second.size) return result(ErrorIllegalSize), nullptr;
+  if(size && !memory.reaches(address, size)) return result(ErrorIllegalAddress), nullptr;
   return &found->second;
 }
 
@@ -162,18 +182,15 @@ auto Kernel::sceKernelDeleteMsgPipe() -> void {
 //into the buffer, and, if it can't all go (or with ASAP, none of it), a wait for the rest. A sender behind others
 //waiting waits behind them.
 auto Kernel::pipeSend(bool wait, bool callbacks) -> void {
-  if(wait && !mayWait()) return;
   u32 message = arg(1), size = arg(2), mode = arg(3), sent = arg(4), timeoutPointer = arg(5);
-  auto pipe = pipeFor(arg(0), size, mode);
+  auto pipe = pipeFor(arg(0), message, size, mode, wait);
   if(!pipe) return;
   u32 done = 0;
   if(pipeWaiters(*pipe, Wait::PipeSend).empty()) {
     for(auto receiver : pipeWaiters(*pipe, Wait::PipeReceive)) {
       if(done == size) break;
       u32 bytes = std::min(size - done, receiver->waitCount - receiver->waitDone);
-      std::vector<u8> copy(bytes);
-      memory.copyOut(copy.data(), message + done, bytes);
-      memory.copyIn(receiver->waitPointer + receiver->waitDone, copy.data(), bytes);
+      pipeCopy(receiver->waitPointer + receiver->waitDone, message + done, bytes);
       done += bytes, receiver->waitDone += bytes;
       if(receiver->waitDone == receiver->waitCount || (receiver->waitMode == PipeAsap && receiver->waitDone)) {
         ready(*receiver, 0);
@@ -187,8 +204,8 @@ auto Kernel::pipeSend(bool wait, bool callbacks) -> void {
   if(done == size || (mode == PipeAsap && done)) {
     if(sent) memory.write(4, sent, done);
     result(0);
-    reschedule();
-    return callbacksOnReturn(callbacks);
+    callbacksOnReturn(callbacks);  //the caller's, before a receiver it woke takes over (current would be that one)
+    return reschedule();
   }
   if(!wait) {
     if(mode == PipeAsap && sent) memory.write(4, sent, 0);  //as trysend recorded: told nothing went
@@ -212,9 +229,8 @@ auto Kernel::pipeSend(bool wait, bool callbacks) -> void {
 //the waiting senders (the buffer then taking in what the next senders have, as it has room), and, if it isn't all
 //there (or with ASAP, none of it), a wait for the rest. A receiver behind others waiting waits behind them.
 auto Kernel::pipeReceive(bool wait, bool callbacks) -> void {
-  if(wait && !mayWait()) return;
   u32 buffer = arg(1), size = arg(2), mode = arg(3), got = arg(4), timeoutPointer = arg(5);
-  auto pipe = pipeFor(arg(0), size, mode);
+  auto pipe = pipeFor(arg(0), buffer, size, mode, wait);
   if(!pipe) return;
   u32 done = 0;
   if(pipeWaiters(*pipe, Wait::PipeReceive).empty()) {
@@ -223,9 +239,7 @@ auto Kernel::pipeReceive(bool wait, bool callbacks) -> void {
     for(auto sender : pipeWaiters(*pipe, Wait::PipeSend)) {
       if(done == size) break;
       u32 bytes = std::min(size - done, sender->waitCount - sender->waitDone);
-      std::vector<u8> copy(bytes);
-      memory.copyOut(copy.data(), sender->waitPointer + sender->waitDone, bytes);
-      memory.copyIn(buffer + done, copy.data(), bytes);
+      pipeCopy(buffer + done, sender->waitPointer + sender->waitDone, bytes);
       done += bytes, sender->waitDone += bytes;
       if(sender->waitDone == sender->waitCount || sender->waitMode == PipeAsap) ready(*sender, 0);
     }
@@ -234,8 +248,8 @@ auto Kernel::pipeReceive(bool wait, bool callbacks) -> void {
   if(done == size || (mode == PipeAsap && done)) {
     if(got) memory.write(4, got, done);
     result(0);
-    reschedule();
-    return callbacksOnReturn(callbacks);
+    callbacksOnReturn(callbacks);  //the caller's, before a sender it woke takes over (current would be that one)
+    return reschedule();
   }
   if(!wait) {
     if(mode == PipeAsap && got) memory.write(4, got, 0);

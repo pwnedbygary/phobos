@@ -66,6 +66,34 @@ struct KernelMachine {
   }
 };
 
+//The machine's state as the system saves it (memory, the CPU, the GE and the kernel); and loaded into a machine,
+//false if it's refused.
+inline auto saveState(KernelMachine& m) -> std::vector<u8> {
+  serializer s;
+  m.system.memory.serialize(s);
+  m.system.serialize(s);
+  m.system.ge.serialize(s);
+  m.kernel.serialize(s);
+  return {s.data(), s.data() + s.size()};
+}
+
+inline auto loadState(KernelMachine& m, const std::vector<u8>& state) -> bool {
+  serializer s{state.data(), u32(state.size())};
+  m.system.memory.serialize(s);
+  m.system.serialize(s);
+  bool valid = m.system.ge.serialize(s);
+  return m.kernel.serialize(s) && valid;
+}
+
+//A save, a load and a save: the machine's state loads into a fresh machine with as much memory (prepare() gives it
+//what the system would, the same devices and disc), which makes the very same state. False if it doesn't.
+inline auto roundTrip(KernelMachine& m, const std::function<void(KernelMachine&)>& prepare = {}) -> bool {
+  auto state = saveState(m);
+  KernelMachine fresh(u32(m.system.memory.ram.size()));
+  if(prepare) prepare(fresh);
+  return loadState(fresh, state) && saveState(fresh) == state;
+}
+
 //Writes a program a word at a time; calls go through the machine's stubs.
 struct Assembler {
   KernelMachine& m;

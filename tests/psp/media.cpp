@@ -2,7 +2,9 @@
 //(mpeg.cpp), sceAtrac3plus refusing every stream (atrac.cpp), the network libraries with the wireless LAN off
 //(net.cpp), and the small functions games asked for: the local time, the OpenPSID, the display's line count and
 //rate, the CPU's interrupts and the kernel's memset and memcpy, later SDKs' clock setter, the AV modules, the
-//thread priority functions, holding off dispatch, and the lightweight mutex's CB lock. Programs run on both engines.
+//thread priority functions, holding off dispatch (waits refused before they change anything), and the lightweight
+//mutex's CB lock (and its mutex deleted by its callback). Each group's machine, saved at its end, loads into another
+//that makes the same state. Programs run on both engines.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -58,6 +60,7 @@ static auto mpegStubs() -> void {
     check(__LINE__, name, m.call(name, {Handle, 1, 480, 272, Buffer}), 0);
   }
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //sceAtrac3plus: its six IDs handed out and given back; no stream taken, on an ID or with one; the rest refuse their
@@ -83,6 +86,7 @@ static auto atracStubs() -> void {
   CHECK(m.call("sceAtracReinit", {999, 0}), Kernel::ErrorOutOfMemory);
   CHECK(m.call("sceAtracReinit", {4, 1}), 0);
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //The network libraries with the switch off: they start and stop, nothing connects, lists are empty, the PSP's own
@@ -115,6 +119,7 @@ static auto networkOff() -> void {
   CHECK(word(m, R + 0x60) == 0x4d3c'2b1a && m.system.memory.read(2, R + 0x64) == 0x6f5e, true);
   CHECK(m.call("sceNetInetSocket", {2, 1, 0}), 0xffff'ffff);
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //The small functions: the date now (UTC, in a time zone, the host's local time), a date as a time_t, the OpenPSID,
@@ -200,6 +205,7 @@ static auto oddsAndEnds() -> void {
   }
   for(u32 priority : {8u, 0x77u}) CHECK(m.call("sceKernelRotateThreadReadyQueue", {priority}), 0);
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //Threads: a thread of the caller's priority runs when the caller rotates its line, and the caller reads its priority;
@@ -269,11 +275,189 @@ static auto threadOddsAndEnds() -> void {
     CHECK(word(m, R + 12), 0);
     CHECK(m.kernel.dispatchSuspended, false);
     CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
+//With dispatching held off, functions that wait are refused before they change anything (CAN_NOT_WAIT), whether
+//they'd have had to wait or not, as pspautotests' intr/waits recorded: a lightweight mutex another thread holds (its
+//count of waiters left at 0) and a free one (left free); a receive that would take a pipe's buffer and wait for more
+//(the buffer left full, no count written), a send that would hand a waiting receiver part of its message (the
+//receiver left waiting for all of it); an event flag wait whose bits are set already (left set). A negative pipe size
+//and a bad event flag mode are still refused as such, ahead of that. Rotating the caller's line leaves it the CPU: a
+//thread of its priority runs only once the caller waits, after dispatching resumed. (The refusals came only as a
+//thread would block, after the waiter count, the pipe's bytes and the flag's bits had changed; and rotating switched
+//threads.) On both engines.
+static auto dispatchHeldOff() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    constexpr u32 Held = R + 0x200, Free = R + 0x220, Out = 0x0894'0000;
+    m.system.memory.write(4, R + 0x48, 0x1337);
+    m.system.memory.write(4, R + 0x50, 0x1337);
+    m.system.memory.write(4, R + 0x70, 0x1337);
+    Assembler worker{m, 0x0880'2000};  //holds the first mutex
+    worker.li(a0, Held); worker.li(a1, 1); worker.li(a2, 0);
+    worker.call("sceKernelLockLwMutex");
+    worker.call("sceKernelSleepThread");
+    Assembler receiver{m, 0x0880'2100};  //waits for 0x10 bytes on the pipe without a buffer
+    receiver.li(t0, R + 0x14); receiver.put(lw(a0, 0, t0)); receiver.li(a1, Out + 0x100); receiver.li(a2, 0x10);
+    receiver.li(a3, 0); receiver.li(t0, R + 0x74); receiver.li(t1, 0);
+    receiver.call("sceKernelReceiveMsgPipe");
+    receiver.li(t0, R); receiver.put(sw(v0, 0x70, t0));
+    receiver.call("sceKernelExitThread");
+    Assembler other{m, 0x0880'2200};  //of main's priority
+    other.print("other ran\n");
+    other.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    auto start = [&](u32 entry, u32 priority) {
+      main.li(a0, m.string("thread")); main.li(a1, entry); main.li(a2, priority); main.li(a3, 0x1000);
+      main.li(t0, 0); main.li(t1, 0);
+      main.call("sceKernelCreateThread");
+      main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelStartThread");
+    };
+    auto store = [&](u32 offset) { main.li(t0, R); main.put(sw(v0, offset, t0)); };
+    for(u32 work : {Held, Free}) {
+      main.li(a0, work); main.li(a1, m.string("lw")); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+      main.call("sceKernelCreateLwMutex");
+    }
+    for(u32 size : {0x10u, 0u}) {
+      main.li(a0, m.string("pipe")); main.li(a1, 2); main.li(a2, 0); main.li(a3, size); main.li(t0, 0);
+      main.call("sceKernelCreateMsgPipe");
+      store(size ? 0x10 : 0x14);
+    }
+    main.li(t0, R + 0x10); main.put(lw(a0, 0, t0)); main.li(a1, Buffer); main.li(a2, 0x10); main.li(a3, 0);
+    main.li(t0, 0);
+    main.call("sceKernelTrySendMsgPipe");  //the buffer full
+    main.li(a0, m.string("flag")); main.li(a1, 0); main.li(a2, 1); main.li(a3, 0);
+    main.call("sceKernelCreateEventFlag");
+    store(0x18);
+    start(0x0880'2000, 0x30);
+    start(0x0880'2100, 0x30);
+    main.li(a0, 1000); main.call("sceKernelDelayThread");  //the mutex held, the receiver waiting
+    start(0x0880'2200, 0x20);
+    main.call("sceKernelSuspendDispatchThread");
+    main.put(addu(s0, v0, zero));
+    for(auto [work, offset] : {std::pair{Held, 0x40u}, {Free, 0x64u}}) {
+      main.li(a0, work); main.li(a1, 1); main.li(a2, 0);
+      main.call("sceKernelLockLwMutex");
+      store(offset);
+    }
+    auto pipeCall = [&](const char* function, u32 pipe, u32 address, u32 size, u32 counted) {
+      main.li(t0, pipe); main.put(lw(a0, 0, t0)); main.li(a1, address); main.li(a2, size); main.li(a3, 0);
+      main.li(t0, counted); main.li(t1, 0);
+      main.call(function);
+    };
+    pipeCall("sceKernelReceiveMsgPipe", R + 0x10, Out, 0x20, R + 0x48);
+    store(0x44);
+    pipeCall("sceKernelSendMsgPipe", R + 0x14, Buffer, 0x20, R + 0x50);
+    store(0x4c);
+    pipeCall("sceKernelSendMsgPipe", R + 0x14, Buffer, u32(-1), 0);
+    store(0x54);
+    for(auto [mode, offset] : {std::pair{0xffu, 0x58u}, {0x20u, 0x5cu}}) {  //a bad mode; AND, clearing
+      main.li(t0, R + 0x18); main.put(lw(a0, 0, t0)); main.li(a1, 1); main.li(a2, mode); main.li(a3, 0);
+      main.li(t0, 0);
+      main.call("sceKernelWaitEventFlag");
+      store(offset);
+    }
+    main.li(a0, 0);
+    main.call("sceKernelRotateThreadReadyQueue");
+    store(0x60);
+    main.print("main rotated\n");
+    main.put(addu(a0, s0, zero));
+    main.call("sceKernelResumeDispatchThread");
+    main.print("main resumed\n");
+    main.li(a0, 1000); main.call("sceKernelDelayThread");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    std::string expected = "main rotated\nmain resumed\nother ran\n";
+    CHECK(m.output == expected, true);
+    if(m.output != expected) std::printf("  [%s]\n", m.output.c_str());
+    CHECK(word(m, R + 0x40), Kernel::ErrorCanNotWait);
+    CHECK(word(m, Held) == 1 && word(m, Held + 12) == 0, true);  //held by the worker, nobody waiting
+    CHECK(word(m, R + 0x64), Kernel::ErrorCanNotWait);
+    CHECK(word(m, Free), 0);
+    CHECK(word(m, R + 0x44) == Kernel::ErrorCanNotWait && word(m, R + 0x48) == 0x1337, true);
+    CHECK(m.kernel.pipes.at(word(m, R + 0x10)).used, 0x10);
+    CHECK(word(m, R + 0x4c) == Kernel::ErrorCanNotWait && word(m, R + 0x50) == 0x1337, true);
+    CHECK(word(m, R + 0x70), 0x1337);  //the receiver still waits, with nothing
+    bool waiting = false;
+    for(auto& [uid, thread] : m.kernel.threads) {
+      if(thread->wait == Kernel::Wait::PipeReceive) waiting = thread->waitDone == 0;
+    }
+    CHECK(waiting, true);
+    CHECK(word(m, R + 0x54), Kernel::ErrorIllegalAddress);
+    CHECK(word(m, R + 0x58), Kernel::ErrorIllegalMode);
+    CHECK(word(m, R + 0x5c), Kernel::ErrorCanNotWait);
+    CHECK(m.kernel.eventFlags.at(word(m, R + 0x18)).pattern, 1);
+    CHECK(word(m, R + 0x60), 0);
+    CHECK(m.kernel.dispatchSuspended, false);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
+//A thread waiting with callbacks for a lightweight mutex another holds runs its callback, which deletes the mutex:
+//back from it, the wait ends, deleted (the wait had gone on for good, as the mutex's deleting found no thread
+//waiting). The holder's unlock then finds no mutex. On both engines.
+static auto lwMutexDeletedInCallback() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    constexpr u32 Work = R + 0x200;
+    Assembler callback{m, 0x0880'3000};
+    callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp));
+    callback.li(a0, Work);
+    callback.call("sceKernelDeleteLwMutex");
+    callback.li(t0, R); callback.put(sw(v0, 0x68, t0));
+    callback.print("callback deleted it\n");
+    callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+    callback.li(v0, 0); callback.put(jr(ra)); callback.put(nop);
+    Assembler worker{m, 0x0880'2000};  //holds the mutex, then notifies main's callback
+    worker.li(a0, Work); worker.li(a1, 1); worker.li(a2, 0);
+    worker.call("sceKernelLockLwMutex");
+    worker.li(a0, 2000); worker.call("sceKernelDelayThread");
+    worker.li(t0, R + 0x100); worker.put(lw(a0, 0, t0)); worker.li(a1, 1);
+    worker.call("sceKernelNotifyCallback");
+    worker.li(a0, 2000); worker.call("sceKernelDelayThread");
+    worker.li(a0, Work); worker.li(a1, 1);
+    worker.call("sceKernelUnlockLwMutex");
+    worker.li(t0, R); worker.put(sw(v0, 0x60, t0));
+    worker.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelCreateCallback");
+    main.li(t0, R + 0x100); main.put(sw(v0, 0, t0));
+    main.li(a0, Work); main.li(a1, m.string("lw")); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+    main.call("sceKernelCreateLwMutex");
+    main.li(a0, m.string("worker")); main.li(a1, 0x0880'2000); main.li(a2, 0x10); main.li(a3, 0x1000);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");  //it runs at once, and holds the mutex
+    main.li(a0, Work); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceKernelLockLwMutexCB");
+    main.li(t0, R); main.put(sw(v0, 0x64, t0));
+    main.print("main's lock returned\n");
+    main.li(a0, 3000); main.call("sceKernelDelayThread");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    std::string expected = "callback deleted it\nmain's lock returned\n";
+    CHECK(m.output == expected, true);
+    if(m.output != expected) std::printf("  [%s]\n", m.output.c_str());
+    CHECK(word(m, R + 0x68), 0);
+    CHECK(word(m, R + 0x64), Kernel::ErrorWaitDeleted);
+    CHECK(word(m, R + 0x60), Kernel::ErrorLwMutexNotFound);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
   }
 }
 
 //sceLibFont with no fonts installed: the library starts, lists none, finds and opens none (the error written where
-//asked), a font's details refused; points and pixels at 128 dots an inch, then at a resolution set.
+//asked), a font's details refused; points and pixels at 128 dots an inch, then at a resolution set. Resolutions a
+//state couldn't hold (0 or less, 10^9 or more, not a number) are refused, the last one kept (sceFontSetResolution
+//had kept 1e10 and the infinities, and the machine's own state was refused).
 static auto fontsMissing() -> void {
   KernelMachine m;
   m.system.memory.write(4, R, 0x1337);
@@ -302,9 +486,23 @@ static auto fontsMissing() -> void {
   memcpy(&m.system.fpu.r[13], &resolution, 4);
   CHECK(m.call("sceFontSetResolution", {library}), 0);
   CHECK(scale("sceFontPointToPixelV", 72.0f) == 144.0f, true);
+  auto setResolution = [&](float horizontal, float vertical) {
+    memcpy(&m.system.fpu.r[12], &horizontal, 4);
+    memcpy(&m.system.fpu.r[13], &vertical, 4);
+    return m.call("sceFontSetResolution", {library});
+  };
+  float infinity = std::numeric_limits<float>::infinity(), nan = std::numeric_limits<float>::quiet_NaN();
+  for(auto [horizontal, vertical] : {std::pair{1e10f, 144.0f}, {144.0f, infinity}, {nan, 144.0f}, {144.0f, 0.0f},
+                                     {-1.0f, 144.0f}, {1e9f, 144.0f}, {144.0f, -infinity}}) {
+    check(__LINE__, "a resolution refused", setResolution(horizontal, vertical), Kernel::ErrorInvalidValue);
+  }
+  CHECK(m.kernel.fontResolution[0] == 144.0f && m.kernel.fontResolution[1] == 144.0f, true);
+  CHECK(setResolution(5e8f, 72.0f), 0);
+  CHECK(scale("sceFontPointToPixelV", 72.0f) == 72.0f, true);
   CHECK(m.call("sceFontClose", {0}), 0);
   CHECK(m.call("sceFontDoneLib", {library}), 0);
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
 }
 
 //A thread starts with the kernel's 256 bytes at the top of its stack zeroed (k0 points at them), the rest of a new
@@ -321,11 +519,14 @@ static auto kernelArea() -> void {
   for(u32 at = top - 0x100; at < top; at += 4) zeroed = zeroed && word(m, at) == 0;
   CHECK(zeroed, true);
   CHECK(word(m, top - 0x104) == 0xffff'ffff && word(m, thread.stackBlock + 16) == 0xffff'ffff, true);
+  CHECK(roundTrip(m), true);
 }
 
 auto mediaTests() -> Tests {
   return {{"mpeg stubs", mpegStubs}, {"atrac stubs", atracStubs}, {"network off", networkOff},
           {"odds and ends of part 20", oddsAndEnds}, {"threads odds and ends of part 20", threadOddsAndEnds},
+          {"threads dispatching held off", dispatchHeldOff},
+          {"threads lightweight mutex deleted in a callback", lwMutexDeletedInCallback},
           {"fonts missing", fontsMissing}, {"threads kernel area zeroed", kernelArea}};
 }
 

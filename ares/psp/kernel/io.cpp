@@ -636,10 +636,14 @@ auto Kernel::sceIoDclose() -> void {
 }
 
 //A request a file's device answers rather than reading or writing (file, command, in, in length, out, out length):
-//its result. A file on the disc answers those PPSSPP's notes on the hardware describe (games use them to find where
-//a file starts on the disc and read it by sector); anything else, and any other device's file, isn't supported.
-//sceIoIoctl, and sceIoIoctlAsync (async.cpp).
-auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength) -> u32 {
+//its result, and how many bytes it put in out (moved: an asynchronous request takes the time of moving them). A file
+//on the disc answers those PPSSPP's notes on the hardware describe (games use them to find where a file starts on
+//the disc and read it by sector); anything else, and any other device's file, isn't supported. sceIoIoctl, and
+//sceIoIoctlAsync (async.cpp).
+auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength, u64* moved) -> u32 {
+  u64 unused;
+  if(!moved) moved = &unused;
+  *moved = 0;
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || found->second.resultOnly) return ErrorBadFile;
   auto& open = found->second;
@@ -647,6 +651,7 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
   auto writeOut = [&](u32 size, auto&& write) -> u32 {
     if(outLength < size || !memory.reaches(out, size)) return ErrorInvalidArgument;
     write();
+    *moved = size;
     return 0;
   };
   //a seek's request: a 64-bit offset, a word nobody knows, and where from (as sceIoLseek's whence). Not before the
@@ -676,6 +681,7 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     std::vector<u8> table(size);
     if(!disc->read(u64(first) * Disc::SectorSize, size, table.data())) return ErrorIOError;
     memory.copyIn(out, table.data(), size);
+    *moved = size;
     return 0;
   }
   case 0x0102'0003:  //the disc's sector size
@@ -690,13 +696,16 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     if(!memory.reaches(out, 8) || out & 3) return ErrorInvalidArgument;
     memory.write(4, out, u32(open.size));
     memory.write(4, out + 4, u32(open.size >> 32));
+    *moved = 8;
     return 0;
   case 0x0103'0008:  //read from the file (in: how many bytes)
   case 0x01f3'0003: {  //read whole sectors from umd0: (in: how many, at least one)
     if(inLength < 4 || !memory.reaches(in, 4)) return ErrorInvalidArgument;
     u32 size = memory.read(4, in);
     if(size > outLength || (command == 0x01f3'0003 && !size)) return ErrorInvalidArgument;
-    return readFile(file, out, size);
+    u32 got = readFile(file, out, size);
+    if(s32(got) > 0) *moved = u64(got) * (open.sectors ? Disc::SectorSize : 1);
+    return got;
   }
   case 0x01d2'0001:  //where umd0:'s position is, in sectors
     return writeOut(4, [&] { memory.write(4, out, u32(open.position)); });

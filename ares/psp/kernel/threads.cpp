@@ -116,11 +116,12 @@ auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
 //The calling thread waits for something: for wakeAt (a cycle, 0 for no time limit) at the latest. Another thread
 //runs meanwhile. With callbacks (the functions whose names end in CB), the thread's callbacks run when they're
 //notified, the wait going on after them (events.cpp); one notified already runs at once. (Functions that wait check
-//mayWait() first: a call into the program can't wait.)
+//mayWait() first, before they change anything: a call into the program can't wait, nor a thread with dispatching
+//held off. The same checks here are a last guard.)
 auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer, bool callbacks) -> void {
   if(!current) return;
   if(interrupting) return result(ErrorIllegalContext);
-  if(dispatchSuspended) return result(ErrorCanNotWait);  //no other thread could run meanwhile
+  if(dispatchSuspended) return result(ErrorCanNotWait);
   current->status = Status::Waiting;
   current->wait = wait;
   current->waitID = id;
@@ -816,14 +817,16 @@ auto Kernel::sceKernelGetThreadCurrentPriority() -> void {
 }
 
 //(priority, 0 for the caller's): the first thread ready at that priority goes to the back of its line; at the
-//caller's own, the caller does, giving way to its equals. A user thread's priorities (0x08-0x77) and 0 are taken,
-//anything else is ILLEGAL_PRIORITY, as pspautotests' threads/threads/rotate recorded.
+//caller's own, the caller does, giving way to its equals, unless dispatching is held off: then it keeps the CPU. A
+//user thread's priorities (0x08-0x77) and 0 are taken, anything else is ILLEGAL_PRIORITY, as pspautotests'
+//threads/threads/rotate recorded.
 auto Kernel::sceKernelRotateThreadReadyQueue() -> void {
   u32 priority = arg(0);
   if(priority == 0 && current) priority = current->priority;
   if(priority < 0x08 || priority > 0x77) return result(ErrorIllegalPriority);
   result(0);
   if(current && current->status == Status::Running && current->priority == priority) {
+    if(dispatchSuspended) return;
     current->status = Status::Ready;  //reschedule() picks between it and its equals afresh
     current->readySince = ++readySequence;
     return reschedule();
@@ -838,9 +841,10 @@ auto Kernel::sceKernelRotateThreadReadyQueue() -> void {
 
 //Holds off switching threads: the running thread keeps the CPU, whatever becomes ready, until it resumes dispatching
 //(a short critical section: SOCOM Fireteam Bravo's sound code takes one). Returns the state to resume with: 1 if
-//switching was allowed, 0 if it was held off already. From an interrupt handler, ILLEGAL_CONTEXT. A thread that
-//would wait meanwhile is refused (CAN_NOT_WAIT, as with interrupts held off: block()). pspsdk's pspthreadman.h
-//names the functions; what they return is chosen (the pair works whichever way the state is read).
+//switching was allowed, 0 if it was held off already. From an interrupt handler, ILLEGAL_CONTEXT. A function that
+//waits is refused meanwhile, before it does anything (CAN_NOT_WAIT, as intr/waits recorded: mayWait()), and
+//rotating the caller's line leaves it the CPU. pspsdk's pspthreadman.h names the functions; what they return is
+//chosen (the pair works whichever way the state is read).
 auto Kernel::sceKernelSuspendDispatchThread() -> void {
   if(interrupting) return result(ErrorIllegalContext);
   result(dispatchSuspended ? 0 : 1);

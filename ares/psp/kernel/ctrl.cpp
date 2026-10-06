@@ -116,11 +116,12 @@ auto Kernel::peekController(bool negative) -> void {
 
 //(data, count): the samples since the last read, at once if there are any (a program that waits for the vertical
 //blank and then reads finds that frame's sample there), else after waiting for the next. Only one thread may wait:
-//the PSP waits on an event flag made for a single waiter, so a second is refused.
+//the PSP waits on an event flag made for a single waiter, so a second is refused. A bad count is refused ahead of
+//whether the thread may wait (intr/waits recorded it so in an interrupt handler and with dispatching held off).
 auto Kernel::readController(bool negative) -> void {
-  if(!mayWait()) return;
   u32 address = arg(0), count = sampleCount(arg(1));
   if(count >= 64) return result(ErrorInvalidSize);
+  if(!mayWait()) return;
   if(count && !memory.reaches(address, count * 16)) return result(ErrorIllegalAddress);
   if(controller.unread) return result(readSamples(address, count, negative));
   for(auto& [uid, thread] : threads) {

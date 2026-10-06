@@ -347,15 +347,18 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
     for(auto& [uid, mailbox] : mailboxes) check(uid < nextUID && mailbox.uid == uid);
     //a thread waiting on a message pipe waits on one there is, for no more than its buffer holds (a pipe without one
-    //takes any size), having moved less than all of it; one waiting on a mailbox, on one there is
+    //takes any size), having moved less than all of it, with memory behind the rest of its message or buffer (the
+    //bytes go straight to it or from it: pipeFor() checked it all); one waiting on a mailbox, on one there is
     for(auto& [uid, t] : threads) {
-      for(auto [wait, id, count, done] : {std::tuple{t->wait, t->waitID, t->waitCount, t->waitDone},
-            std::tuple{t->waitBeforeCallback.wait, t->waitBeforeCallback.id, t->waitBeforeCallback.count,
-                       t->waitBeforeCallback.done}}) {
+      auto& w = t->waitBeforeCallback;
+      for(auto [wait, id, pointer, count, done] : {std::tuple{t->wait, t->waitID, t->waitPointer, t->waitCount,
+                                                               t->waitDone},
+                                                    std::tuple{w.wait, w.id, w.pointer, w.count, w.done}}) {
         if(wait == Wait::PipeSend || wait == Wait::PipeReceive) {
           auto pipe = pipes.find(id);
           check(pipe != pipes.end() && done < count && count < 0x8000'0000
-                && (!pipe->second.size || count <= pipe->second.size));
+                && (!pipe->second.size || count <= pipe->second.size)
+                && memory.reaches(pointer + done, count - done));
         }
         if(wait == Wait::Mailbox) check(mailboxes.count(id));
       }
@@ -425,15 +428,14 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(nextFile);
   check(nextFile >= 3 && nextFile <= LastUID + 1);  //after standard input, output and error; short of 2^31
   if(s.reading()) for(auto& [file, open] : files) check(file < nextFile);
-  //a thread waiting on a file's request (or that was, its callbacks running) waits on a file that has one
+  //a thread waiting on a file's request waits on a file whose request is under way: only its end wakes it. (One
+  //made ready to run its callbacks, or running them with its wait put aside, ends that wait as it finds the file
+  //once they're done, whatever has become of it: resumeWait().)
   if(s.reading()) {
     for(auto& [uid, t] : threads) {
-      for(auto [wait, id] : {std::pair{t->wait, t->waitID}, std::pair{t->waitBeforeCallback.wait,
-                                                                      t->waitBeforeCallback.id}}) {
-        if(wait != Wait::Async) continue;
-        auto found = files.find(id);
-        check(found != files.end() && found->second.async != OpenFile::Async::None);
-      }
+      if(t->status != Status::Waiting || t->wait != Wait::Async) continue;
+      auto found = files.find(t->waitID);
+      check(found != files.end() && found->second.async == OpenFile::Async::Pending);
     }
   }
   text(workingDirectory);

@@ -562,6 +562,10 @@ static auto stateFields() -> void {
     auto& thread = *k.threads.at(two);
     thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Async, thread.waitID = discFile;
   });
+  refuses("a thread waiting on a file whose request is done (nothing would wake it)", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Async, thread.waitID = file;
+  });
   refuses("a wait there isn't", [&] { k.threads.at(two)->wait = Kernel::Wait(99); });
   refuses("a file number handed out twice", [&] { k.nextFile = discFolder; });
   refuses("an ID handed out twice", [&] { k.nextUID = u32(one); });
@@ -684,6 +688,17 @@ static auto stateFields() -> void {
     auto& thread = *k.threads.at(two);
     thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::PipeReceive, thread.waitID = pipeID;
     thread.waitCount = 0x10, thread.waitDone = 0x10;
+  });
+  refuses("a thread waiting on a pipe with no memory behind its buffer", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::PipeReceive, thread.waitID = pipeID;
+    thread.waitPointer = 0x10, thread.waitCount = 0x10, thread.waitDone = 0;
+  });
+  refuses("a thread whose callback runs, back to a pipe with no memory behind the rest of its message", [&] {
+    auto& thread = *k.threads.at(two);
+    auto& before = thread.waitBeforeCallback;
+    before.wait = Kernel::Wait::PipeSend, before.id = pipeID;
+    before.pointer = 0x0a00'0000 - 0x10, before.count = 0x40, before.done = 0x8;
   });
   refuses("a thread waiting on a mailbox that isn't there", [&] {
     auto& thread = *k.threads.at(two);

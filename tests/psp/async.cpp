@@ -1,7 +1,9 @@
 //Files' asynchronous requests (ares/psp/kernel/async.cpp): each done as it's made but its result held back for the
 //time the file's device takes, then polled or waited for; the refusals while one is under way; the descriptor an
 //asynchronous open or close leaves for its result; callbacks notified as requests are done, and run in CB waits;
-//and a state saved while a thread waits for a request. Programs run on both engines.
+//two threads waiting on one request, and a callback taking the result its thread waits for; an ioctl's time; and a
+//state saved while a thread waits for a request. Each group's machine, saved at its end, loads into another that
+//makes the same state. Programs run on both engines.
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
 
@@ -139,6 +141,10 @@ static auto asyncCalls() -> void {
   CHECK(m.call("sceIoSetAsyncCallback", {0x7777, 0, 0}), Kernel::ErrorBadFile);
   CHECK(m.call("sceIoSetAsyncCallback", {disc, 0, 0}), 0);
   CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m, [&](KernelMachine& n) {
+    n.kernel.mount("ms0", stick.path.string());
+    n.kernel.disc = discFrom(image.bytes);
+  }), true);
 }
 
 //A program waits for its requests: the first wait blocks the main thread (a worker runs meanwhile) for exactly the
@@ -206,25 +212,148 @@ static auto asyncWaits() -> void {
     CHECK(word(m, R + 0x40) == 1 && word(m, R + 0x44) == 0x55 && word(m, R + 0x48) == 1 && word(m, R + 0x4c) == 0x55,
           true);
     CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m, [&](KernelMachine& n) { n.kernel.mount("ms0", stick.path.string()); }), true);
   }
 }
 
-//The machine's state as the system saves it (memory, the CPU, the GE and the kernel), and loaded into another.
-static auto save(KernelMachine& m) -> std::vector<u8> {
-  serializer s;
-  m.system.memory.serialize(s);
-  m.system.serialize(s);
-  m.system.ge.serialize(s);
-  m.kernel.serialize(s);
-  return {s.data(), s.data() + s.size()};
+//Two threads wait on one file's request: as it's done, both run on, the first to have begun waiting with the result,
+//the other told there's none left (NOASYNC, as a wait begun then would be), its result's place untouched. (Only the
+//first had woken: the other waited for good, and the machine's state was refused.) On both engines.
+static auto asyncTwoWaiters() -> void {
+  HostFolder stick;
+  stick.put("DATA.BIN", text(10000));
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.kernel.mount("ms0", stick.path.string());
+    m.system.memory.write(4, R + 0x18, 0x1337);
+    m.system.memory.write(4, R + 0x1c, 0x1337);
+    Assembler worker{m, 0x0880'2000};
+    worker.li(t0, R + 0x100); worker.put(lw(a0, 0, t0)); worker.li(a1, R + 0x18);
+    worker.call("sceIoWaitAsync");
+    worker.li(t0, R); worker.put(sw(v0, 0x28, t0));
+    worker.print("worker woke\n");
+    worker.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("ms0:/DATA.BIN")); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceIoOpen");
+    main.put(addu(s0, v0, zero));
+    main.li(t0, R + 0x100); main.put(sw(s0, 0, t0));
+    main.put(addu(a0, s0, zero)); main.li(a1, Buffer); main.li(a2, 4000);
+    main.call("sceIoReadAsync");
+    main.li(a0, m.string("worker")); main.li(a1, 0x0880'2000); main.li(a2, 0x30); main.li(a3, 0x1000);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");
+    main.put(addu(a0, s0, zero)); main.li(a1, R + 0x10);
+    main.call("sceIoWaitAsync");  //the worker begins waiting after it
+    main.li(t0, R); main.put(sw(v0, 0x20, t0));
+    main.print("main woke\n");
+    main.li(a0, 1000);
+    main.call("sceKernelDelayThread");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.output == "main woke\nworker woke\n", true);
+    if(m.output != "main woke\nworker woke\n") std::printf("  [%s]\n", m.output.c_str());
+    CHECK(word(m, R + 0x20) == 0 && result64(m, R + 0x10) == 4000, true);
+    CHECK(word(m, R + 0x28), Kernel::ErrorNoAsync);
+    CHECK(word(m, R + 0x18) == 0x1337 && word(m, R + 0x1c) == 0x1337, true);
+    CHECK(roundTrip(m, [&](KernelMachine& n) { n.kernel.mount("ms0", stick.path.string()); }), true);
+    CHECK(m.notes.size(), 0);
+  }
 }
 
-static auto load(KernelMachine& m, const std::vector<u8>& state) -> bool {
-  serializer s{state.data(), u32(state.size())};
-  m.system.memory.serialize(s);
-  m.system.serialize(s);
-  bool valid = m.system.ge.serialize(s);
-  return m.kernel.serialize(s) && valid;
+//The file's callback, run as the main thread waits in sceIoWaitAsyncCB, takes the request's result itself, polling,
+//then waits a millisecond: the main thread's wait, once the callback has returned, ends with none left (NOASYNC). A
+//state saved while the callback waits (its thread's wait on the file put aside, the file with no request) loads into
+//another machine, which makes the same state, and both carry on alike. (The wait had gone on for good, and the state
+//was refused.) On both engines.
+static auto asyncCallbackTakes() -> void {
+  HostFolder stick;
+  stick.put("DATA.BIN", text(10000));
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.kernel.mount("ms0", stick.path.string());
+    m.system.memory.write(4, R + 0x10, 0x1337);
+    Assembler callback{m, 0x0880'3000};
+    callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp));
+    callback.li(t0, R + 0x100); callback.put(lw(a0, 0, t0)); callback.li(a1, R + 0x30);
+    callback.call("sceIoPollAsync");
+    callback.li(t0, R); callback.put(sw(v0, 0x38, t0));
+    callback.li(a0, 1000);
+    callback.call("sceKernelDelayThread");
+    callback.print("callback polled\n");
+    callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+    callback.li(v0, 0); callback.put(jr(ra)); callback.put(nop);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelCreateCallback");
+    main.put(addu(s1, v0, zero));
+    main.li(a0, m.string("ms0:/DATA.BIN")); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceIoOpen");
+    main.put(addu(s0, v0, zero));
+    main.li(t0, R + 0x100); main.put(sw(s0, 0, t0));
+    main.put(addu(a0, s0, zero)); main.put(addu(a1, s1, zero)); main.li(a2, 0);
+    main.call("sceIoSetAsyncCallback");
+    main.put(addu(a0, s0, zero)); main.li(a1, Buffer); main.li(a2, 4000);
+    main.call("sceIoReadAsync");
+    main.put(addu(a0, s0, zero)); main.li(a1, R + 0x10);
+    main.call("sceIoWaitAsyncCB");
+    main.li(t0, R); main.put(sw(v0, 0x20, t0));
+    main.print("main woke\n");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency * 15 / 10'000);  //1.5 ms: the callback waits
+    CHECK(m.kernel.exited, false);
+    CHECK(m.kernel.files.at(word(m, R + 0x100)).async == Kernel::OpenFile::Async::None, true);
+    auto state = saveState(m);
+    KernelMachine n;
+    n.system.recompiler.enabled = recompile;
+    n.kernel.mount("ms0", stick.path.string());
+    CHECK(loadState(n, state), true);
+    CHECK(saveState(n) == state, true);
+    for(auto* each : {&m, &n}) {
+      each->kernel.run(Kernel::CPUFrequency / 100);
+      CHECK(each->kernel.exited, true);
+      CHECK(each->output == "callback polled\nmain woke\n", true);
+      CHECK(word(*each, R + 0x38) == 0 && result64(*each, R + 0x30) == 4000, true);
+      CHECK(word(*each, R + 0x20), Kernel::ErrorNoAsync);
+      CHECK(word(*each, R + 0x10), 0x1337);
+    }
+    if(m.output != "callback polled\nmain woke\n") std::printf("  [%s]\n", m.output.c_str());
+    CHECK(m.notes.size(), 0);
+  }
+}
+
+//An asynchronous ioctl takes the time of what it put in its output, whatever the output's length: the disc file's
+//first sector (4 bytes) with a length of 0xffffffff is due 100 microseconds and 4 bytes at the disc's rate on, a
+//read of 2048 bytes through an ioctl 100 microseconds and its 2048 bytes on, and the machine's state, saved with each
+//under way, loads. (The length had made the first due in 52 minutes, which no state allows: the machine's own was
+//refused.)
+static auto asyncIoctlTiming() -> void {
+  auto image = disc_image::makeIso({{"DISC.BIN", std::vector<u8>(8192, 7)}});
+  KernelMachine m;
+  m.kernel.disc = discFrom(image.bytes);
+  auto prepare = [&](KernelMachine& n) { n.kernel.disc = discFrom(image.bytes); };
+  u32 disc = m.call("sceIoOpen", {m.string("disc0:/DISC.BIN"), 0x0001, 0});
+  u64 start = m.kernel.cycles;
+  CHECK(m.call("sceIoIoctlAsync", {disc, 0x0102'0006, 0, 0, R + 8, 0xffff'ffff}), 0);
+  CHECK(word(m, R + 8), m.kernel.files[disc].sector);
+  CHECK(m.kernel.files[disc].asyncDoneAt - start, 100 * Microsecond + 4 * Kernel::CPUFrequency / 1'375'000);
+  CHECK(roundTrip(m, prepare), true);
+  advance(m, m.kernel.files[disc].asyncDoneAt);
+  CHECK(m.call("sceIoPollAsync", {disc, R}), 0);
+  CHECK(result64(m, R), 0);
+  m.system.memory.write(4, R + 0x10, 2048);
+  start = m.kernel.cycles;
+  CHECK(m.call("sceIoIoctlAsync", {disc, 0x0103'0008, R + 0x10, 4, Buffer, 0xffff'ffff}), 0);
+  CHECK(m.kernel.files[disc].asyncDoneAt - start, 100 * Microsecond + 2048 * Kernel::CPUFrequency / 1'375'000);
+  CHECK(roundTrip(m, prepare), true);
+  advance(m, m.kernel.files[disc].asyncDoneAt);
+  CHECK(m.call("sceIoPollAsync", {disc, R}), 0);
+  CHECK(result64(m, R), 2048);
+  CHECK(m.system.memory.read(1, Buffer + 2047), 7);
+  CHECK(m.notes.size(), 0);
 }
 
 //A state saved while the main thread waits for a read from the disc loads into another machine, which makes the same
@@ -249,12 +378,12 @@ static auto asyncState() -> void {
     main.call("sceKernelExitGame");
     m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency / 100);  //10 ms of the read's 48
     CHECK(m.kernel.exited, false);
-    auto state = save(m);
+    auto state = saveState(m);
     KernelMachine n;
     n.system.recompiler.enabled = recompile;
     n.kernel.disc = discFrom(image.bytes);
-    CHECK(load(n, state), true);
-    CHECK(save(n) == state, true);
+    CHECK(loadState(n, state), true);
+    CHECK(saveState(n) == state, true);
     for(auto* each : {&m, &n}) {
       each->kernel.run(Kernel::CPUFrequency / 10);
       CHECK(each->kernel.exited, true);
@@ -265,16 +394,19 @@ static auto asyncState() -> void {
     CHECK(word(m, R + 0x24), (100 * Microsecond + 65536 * Kernel::CPUFrequency / 1'375'000) / Microsecond);
     KernelMachine without;  //no disc: the file's dropped, and the waiting thread is told
     without.system.recompiler.enabled = recompile;
-    CHECK(load(without, state), true);
+    CHECK(loadState(without, state), true);
     without.kernel.run(Kernel::CPUFrequency / 10);
     CHECK(without.kernel.exited, true);
     CHECK(word(without, R + 0x20), Kernel::ErrorBadFile);
+    CHECK(roundTrip(m, [&](KernelMachine& fresh) { fresh.kernel.disc = discFrom(image.bytes); }), true);
+    CHECK(roundTrip(without), true);
   }
 }
 
 auto asyncTests() -> Tests {
   return {{"async files called directly", asyncCalls}, {"async files waited for", asyncWaits},
-          {"async files state", asyncState}};
+          {"async files two waiters", asyncTwoWaiters}, {"async files callback takes the result", asyncCallbackTakes},
+          {"async files ioctl timing", asyncIoctlTiming}, {"async files state", asyncState}};
 }
 
 }
