@@ -128,6 +128,50 @@ static auto volatileMemory() -> void {
   CHECK(m.call("sceKernelPowerTick", {0}), 0);
 }
 
+//The volatile memory locked as Burnout Dominator locks it as its first race loads (docs/psp-core.md's part 25): a
+//thread's sceKernelVolatileMemLock (type 0) with nothing holding the memory returns 0 at once, a worse thread not
+//running meanwhile, its address (0x08400000) and size (4 MiB) written; the memory there holds what's written; it's
+//given back. (A state saved before the function was there had the game take its race's buffers from addresses
+//without their top bits, and its GE spend each frame on a display list it couldn't finish.) On both engines, and the
+//state round trip.
+static auto volatileLockedAtOnce() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    Assembler worse{m, 0x0880'2000};
+    worse.print("worse\n");
+    worse.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("worse")); main.li(a1, 0x0880'2000); main.li(a2, 0x30); main.li(a3, 0x1000);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");
+    main.li(a0, 0); main.li(a1, R + 4); main.li(a2, R + 8);
+    main.call("sceKernelVolatileMemLock");
+    main.li(t0, R); main.put(sw(v0, 0, t0));
+    main.print("locked\n");
+    main.li(t0, R); main.put(lw(t1, 4, t0)); main.li(t2, 0x1234'5678); main.put(sw(t2, 0x100, t1));
+    main.put(lw(t3, 0x100, t1)); main.put(sw(t3, 12, t0));
+    main.li(a0, 0);
+    main.call("sceKernelVolatileMemUnlock");
+    main.li(t0, R); main.put(sw(v0, 16, t0));
+    main.li(a0, 1000);
+    main.call("sceKernelDelayThread");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.output == "locked\nworse\n", true);
+    CHECK(m.system.memory.read(4, R), 0);
+    CHECK(m.system.memory.read(4, R + 4), 0x0840'0000);
+    CHECK(m.system.memory.read(4, R + 8), 0x0040'0000);
+    CHECK(m.system.memory.read(4, R + 12), 0x1234'5678);
+    CHECK(m.system.memory.read(4, R + 16), 0);
+    CHECK(m.kernel.powerState.volatileLocked, false);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
 //The volatile memory waited for, as pspautotests' power/volatile/lock recorded: three threads of priorities 0x31,
 //0x33 and 0x32 wait for it while main has it, and are served in the order they came, each giving it back as it's
 //done (main's M, then 1, 2, 3); a type but 0 refused, the outputs left alone; with interrupts held off, and in an
@@ -632,7 +676,8 @@ static auto oddsAndEnds() -> void {
 auto powerTests() -> Tests {
   return {
     {"power callbacks", powerCallbacks}, {"power clocks", powerClocks}, {"power volatile memory", volatileMemory},
-    {"power volatile memory waited for", volatileWaits}, {"kernel thread delays' lengths", delayLengths},
+    {"power volatile memory waited for", volatileWaits},
+    {"power volatile memory locked at once", volatileLockedAtOnce}, {"kernel thread delays' lengths", delayLengths},
     {"kernel thread control", threadControl}, {"kernel thread status", threadStatus}, {"kernel clocks", clocks},
     {"kernel mersenne twister", mersenneTwister}, {"kernel odds and ends", oddsAndEnds},
     {"kernel thread priorities", threadPriorities}, {"kernel thread stack free", stackFree},
