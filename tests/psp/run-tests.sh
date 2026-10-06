@@ -2,7 +2,7 @@
 #Builds and runs the PSP system's tests (ares/psp beyond the CPU) on the host, as tests/allegrex/run-tests.sh does
 #the CPU's: against nall, ares's types and sljit alone, with the undefined-behavior and address sanitizers.
 #usage: tests/psp/run-tests.sh   (SANITIZE= turns the sanitizers off; PSP_TEST_PROGRAMS: see loader.cpp;
-#PSP_AUTOTESTS: a pspautotests checkout, whose sample file atrac.cpp decodes with FFmpeg)
+#PSP_AUTOTESTS: a pspautotests checkout, whose sample files atrac.cpp and mp3.cpp decode with FFmpeg)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -53,7 +53,7 @@ $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINE
   "$ROOT/ares/psp/kernel/loader.cpp" "$ROOT/ares/psp/kernel/kernel.cpp" "$ROOT/ares/psp/ge/ge.cpp" \
   "$HERE/main.cpp" "$HERE/memory.cpp" "$HERE/loader.cpp" "$HERE/kernel.cpp" "$HERE/callbacks.cpp" "$HERE/power.cpp" \
   "$HERE/audio.cpp" "$HERE/sas.cpp" "$HERE/utility.cpp" "$HERE/pools.cpp" "$HERE/messages.cpp" "$HERE/media.cpp" \
-  "$HERE/atrac.cpp" "$HERE/font.cpp" \
+  "$HERE/atrac.cpp" "$HERE/mp3.cpp" "$HERE/font.cpp" \
   "$HERE/files.cpp" "$HERE/async.cpp" "$HERE/disc.cpp" \
   "$HERE/disc-formats.cpp" "$HERE/crypto.cpp" "$HERE/decrypt.cpp" "$HERE/modules.cpp" \
   "$HERE/states.cpp" "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/measure.cpp" \

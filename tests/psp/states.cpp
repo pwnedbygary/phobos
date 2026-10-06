@@ -246,8 +246,8 @@ static auto stateFields() -> void {
   //thread one feeding a ringbuffer, its callback asked for 3 of the 5 packets left, 2 given already
   auto& mpegCall = k.mpegCalls[one];
   mpegCall.ringbuffer = 0x0896'1000, mpegCall.left = 5, mpegCall.asked = 3, mpegCall.put = 2;
-  //sceAtrac3plus's ID 0 streaming sample.at3's shape through a 0x4500-byte ring, two frames in; the contexts'
-  //memory a block
+  //sceAtrac3plus's ID 0 streaming sample.at3's shape through a 0x4500-byte ring, two frames in; sceMp3's handle 0
+  //part way through its stream; the contexts' memory a block
   auto& at = k.atracs[0];
   at.codec = 0x1000, at.state = 4, at.channels = at.outputChannels = 2, at.frameBytes = 376, at.frameSamples = 2048;
   at.delay = 368, at.dataOff = 0x60, at.fileDataEnd = 0xb508, at.firstValidSample = 2416, at.endSample = 249916;
@@ -255,6 +255,11 @@ static auto stateFields() -> void {
   at.curFileOff = 0x350, at.streamOff = 0x350, at.writeOff = 0x4000, at.streamDataByte = 0x4000 - 0x350;
   at.firstEnd = 0x43f0, at.lapEnd = 0x4390, at.writeFileOff = 0x4000, at.recent.assign(376, 0x5a);
   u32 contexts = k.allocate(6 * 256, 1, 0, "atrac contexts")->address;
+  auto& mp = k.mp3s[0];
+  mp.reserved = mp.initialized = true, mp.end = 0x10000, mp.buffer = 0x0897'8000, mp.bufferSize = 8192;
+  mp.pcm = 0x0897'a000, mp.pcmSize = 9216, mp.filePos = 0x1a40, mp.readFilePos = 0x200, mp.readPos = 0x200;
+  mp.writePos = mp.writeLimit = 0x1a40, mp.available = 0x1840, mp.rate = 44100, mp.bitrate = 128, mp.channels = 2;
+  mp.version = 3, mp.frames = 100, mp.sumDecoded = 1152;
   std::vector<std::pair<std::string, std::function<void()>>> changes = {
     //the CPU
     {"ipu.r", [&] { cpu.ipu.r[9] ^= 0x1234; }}, {"ipu.lo", [&] { cpu.ipu.lo ^= 1; }},
@@ -598,7 +603,7 @@ static auto stateFields() -> void {
     {"geLeft", [&] { k.geLeft = 12345; }},
   };
   //the codecs (part 26): each change leaves what a machine could have (ID 1, by then ATRAC3's, handed out; the stream
-  //looping before its end, then gone on into its second buffer, then ended)
+  //looping before its end, then gone on into its second buffer, then ended; the mp3 handle uninitialized last)
   std::vector<std::pair<std::string, std::function<void()>>> codecs = {
     {"atrac codec", [&] { k.atracs[1].codec = 0x1001; }}, {"atrac channels", [&] { at.channels = 1; }},
     {"atrac outputChannels", [&] { at.outputChannels = 1; }},
@@ -621,6 +626,18 @@ static auto stateFields() -> void {
     {"atrac laps", [&] { at.readLap = 1, at.writeLap = 1; }}, {"atrac writeOff", [&] { at.writeOff += 8; }},
     {"atrac writeFileOff", [&] { at.writeFileOff += 8; }}, {"atrac loopsAhead", [&] { at.loopsAhead = 1; }},
     {"atrac recent", [&] { at.recent[0] ^= 1; }}, {"atrac contexts", [&] { k.atracContexts = contexts; }},
+    {"mp3 reserved", [&] { k.mp3s[1].reserved = true; }}, {"mp3 loopSet", [&] { mp.loopSet = true; }},
+    {"mp3 start", [&] { mp.start = 0x10; }}, {"mp3 end", [&] { mp.end = 0x20000; }},
+    {"mp3 buffer", [&] { mp.buffer ^= 0x40; }}, {"mp3 bufferSize", [&] { mp.bufferSize = 16384; }},
+    {"mp3 pcm", [&] { mp.pcm ^= 0x40; }}, {"mp3 pcmSize", [&] { mp.pcmSize = 2 * 9216; }},
+    {"mp3 filePos", [&] { mp.filePos += 4; }}, {"mp3 readFilePos", [&] { mp.readFilePos += 4; }},
+    {"mp3 readPos", [&] { mp.readPos += 4; }}, {"mp3 writePos", [&] { mp.writePos += 4; }},
+    {"mp3 writeLimit", [&] { mp.writeLimit += 4; }}, {"mp3 available", [&] { mp.available -= 4; }},
+    {"mp3 pcmHalf", [&] { mp.pcmHalf = 1; }}, {"mp3 loopNum", [&] { mp.loopNum = 3; }},
+    {"mp3 sumDecoded", [&] { mp.sumDecoded += 1152; }}, {"mp3 version", [&] { mp.version = 2; }},
+    {"mp3 bitrate", [&] { mp.bitrate = 64; }}, {"mp3 channels", [&] { mp.channels = 1; }},
+    {"mp3 frames", [&] { mp.frames += 1; }}, {"mp3 initialized", [&] { mp.initialized = false, mp.rate = 48000; }},
+    {"mp3Terminated", [&] { k.mp3Terminated = true; }},
   };
   changes.insert(changes.end(), more.begin(), more.end());
   changes.insert(changes.end(), codecs.begin(), codecs.end());
@@ -902,6 +919,9 @@ static auto stateFields() -> void {
   refuses("an ATRAC stream written more than a time round ahead", [&] { atracOne().writeLap += 2; });
   refuses("an ATRAC frame kept of another size", [&] { atracOne().recent.resize(100); });
   refuses("ATRAC contexts in no block", [&] { k.atracContexts = 0x0880'0010; });
+  refuses("an mp3 stream's ring past its buffer", [&] { k.mp3s[0].readPos = k.mp3s[0].bufferSize; });
+  refuses("an mp3 stream at 48 kHz", [&] { k.mp3s[0].initialized = true, k.mp3s[0].rate = 48000; });
+  refuses("an mp3 handle initialized without buffers", [&] { k.mp3s[1].initialized = true; });
 
   refuses("a font resolution of 0", [&] { k.fontResolution[0] = 0; });
   //the font library as it never leaves itself (each looked up afresh: every load makes them anew); then a state of

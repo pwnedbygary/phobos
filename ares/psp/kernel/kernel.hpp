@@ -1177,6 +1177,48 @@ struct Kernel {
   auto sceAtracSetSecondBuffer() -> void;
   auto _sceAtracGetContextAddress() -> void;
 
+  //mp3.cpp: sceMp3, MP3 streams fed through a buffer and decoded a frame a call
+  struct Mp3 {
+    bool reserved = false, initialized = false;
+    bool loopSet = false;       //sceMp3SetLoopNum came before sceMp3Init, which then keeps its count
+    u64 start = 0, end = 0;     //where the stream lies in its file
+    u32 buffer = 0, bufferSize = 0, pcm = 0, pcmSize = 0;
+    u64 filePos = 0;            //where in the file the game's next bytes come from
+    u64 readFilePos = 0;        //and where the next frame decoded lies
+    u32 readPos = 0, writePos = 0, writeLimit = 0;  //in the buffer's ring: the next frame, the next bytes, and the
+                                                    //end of the half being filled
+    u32 available = 0;          //bytes in the ring not decoded yet
+    u32 pcmHalf = 0;            //the sample buffer's half the next frame goes to
+    s32 loopNum = -1;
+    u32 sumDecoded = 0, version = 0, rate = 0, channels = 0, bitrate = 0, frames = 0;
+    std::unique_ptr<AudioDecoder> decoder;  //not saved: made afresh after a state is loaded
+  };
+  Mp3 mp3s[2];
+  bool mp3Terminated = false;   //sceMp3TermResource: no handles until sceMp3InitResource
+  auto mp3Find(u32 handle, u32 notReserved = 0x8067'1102) -> Mp3*;
+  auto mp3Writable(Mp3& mp3) -> u32;
+  auto mp3Frame(Mp3& mp3, std::vector<u8>& frame) -> bool;
+  auto sceMp3InitResource() -> void;
+  auto sceMp3TermResource() -> void;
+  auto sceMp3ReserveMp3Handle() -> void;
+  auto sceMp3ReleaseMp3Handle() -> void;
+  auto sceMp3GetInfoToAddStreamData() -> void;
+  auto sceMp3NotifyAddStreamData() -> void;
+  auto sceMp3CheckStreamDataNeeded() -> void;
+  auto sceMp3Init() -> void;
+  auto sceMp3Decode() -> void;
+  auto sceMp3SetLoopNum() -> void;
+  auto sceMp3GetLoopNum() -> void;
+  auto sceMp3GetSumDecodedSample() -> void;
+  auto sceMp3GetMaxOutputSample() -> void;
+  auto sceMp3GetSamplingRate() -> void;
+  auto sceMp3GetBitRate() -> void;
+  auto sceMp3GetMp3ChannelNum() -> void;
+  auto sceMp3GetFrameNum() -> void;
+  auto sceMp3GetMPEGVersion() -> void;
+  auto sceMp3ResetPlayPosition() -> void;
+  auto sceMp3ResetPlayPositionByFrame() -> void;
+
   //font.cpp (and pgf.cpp): sceLibFont, the system's font library, drawing the PSP's own fonts (the owner's, from
   //their PSP's flash0: a host folder the system gives, fontsFrom()) and the PGFs games carry
   struct SystemFont {

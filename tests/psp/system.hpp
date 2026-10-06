@@ -80,6 +80,7 @@ auto sasTests() -> Tests;
 auto messageTests() -> Tests;
 auto mediaTests() -> Tests;
 auto atracTests() -> Tests;
+auto mp3Tests() -> Tests;
 auto fontTests() -> Tests;
 
 }

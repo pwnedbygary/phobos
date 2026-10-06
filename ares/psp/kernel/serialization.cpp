@@ -418,6 +418,24 @@ auto Kernel::serialize(serializer& s) -> bool {
     for(auto& block : blocks) found |= block.address == atracContexts && block.size >= 6 * 256;
     check(found);
   }
+  //sceMp3 (mp3.cpp): the two handles, each stream's place in its file and its buffers' rings. The decoder isn't
+  //saved: made afresh (the frame after a load may be heard short of the bits it borrowed from the frames before).
+  //A handle's buffers are as reserving one checks them; its ring's places within the buffer's area, the bytes in it
+  //no more than it holds, the file's places within the stream.
+  s(mp3Terminated);
+  for(auto& m : mp3s) {
+    s(m.reserved); s(m.initialized); s(m.loopSet); s(m.start); s(m.end); s(m.buffer); s(m.bufferSize); s(m.pcm);
+    s(m.pcmSize); s(m.filePos); s(m.readFilePos); s(m.readPos); s(m.writePos); s(m.writeLimit); s(m.available);
+    s(m.pcmHalf); s(m.loopNum); s(m.sumDecoded); s(m.version); s(m.rate); s(m.channels); s(m.bitrate); s(m.frames);
+    if(s.reading()) m.decoder.reset();
+    check(m.reserved || (!m.initialized && !m.bufferSize));
+    if(!m.bufferSize) { check(!m.initialized); continue; }
+    u32 area = m.bufferSize - std::min<u32>(m.bufferSize, 1472);
+    check(m.bufferSize >= 8192 && m.bufferSize < 0x8000'0000u && m.pcmSize >= 9216 && m.pcmSize < 0x8000'0000u);
+    check(m.start < m.end && m.readPos < area && m.writePos <= area && m.writeLimit <= area && m.available <= area);
+    check(m.filePos <= m.end && m.readFilePos <= m.end && m.pcmHalf <= 1 && m.loopNum >= -1);
+    check(!m.initialized || (m.rate == 44100 && m.bitrate && m.bitrate <= 320 && m.channels >= 1 && m.channels <= 2));
+  }
   //threads' dispatching held off, and sceLibFont's resolution (a positive number, as sceFontSetResolution keeps it)
   s(dispatchSuspended);
   for(auto& resolution : fontResolution) {

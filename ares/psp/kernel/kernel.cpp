@@ -38,6 +38,7 @@ namespace ares::PlayStationPortable {
 #include "codec.cpp"
 #include "mpeg.cpp"
 #include "atrac.cpp"
+#include "mp3.cpp"
 #include "net.cpp"
 #include "pgf.cpp"
 #include "font.cpp"
@@ -586,6 +587,25 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceAtrac3plus",     "sceAtracGetSecondBufferInfo",   &Kernel::sceAtracGetSecondBufferInfo);
   add("sceAtrac3plus",     "sceAtracSetSecondBuffer",       &Kernel::sceAtracSetSecondBuffer);
   add("sceAtrac3plus",     "_sceAtracGetContextAddress",    &Kernel::_sceAtracGetContextAddress);
+  for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
+        {"sceMp3InitResource", &Kernel::sceMp3InitResource}, {"sceMp3TermResource", &Kernel::sceMp3TermResource},
+        {"sceMp3ReserveMp3Handle", &Kernel::sceMp3ReserveMp3Handle},
+        {"sceMp3ReleaseMp3Handle", &Kernel::sceMp3ReleaseMp3Handle},
+        {"sceMp3GetInfoToAddStreamData", &Kernel::sceMp3GetInfoToAddStreamData},
+        {"sceMp3NotifyAddStreamData", &Kernel::sceMp3NotifyAddStreamData},
+        {"sceMp3CheckStreamDataNeeded", &Kernel::sceMp3CheckStreamDataNeeded}, {"sceMp3Init", &Kernel::sceMp3Init},
+        {"sceMp3Decode", &Kernel::sceMp3Decode}, {"sceMp3SetLoopNum", &Kernel::sceMp3SetLoopNum},
+        {"sceMp3GetLoopNum", &Kernel::sceMp3GetLoopNum},
+        {"sceMp3GetSumDecodedSample", &Kernel::sceMp3GetSumDecodedSample},
+        {"sceMp3GetMaxOutputSample", &Kernel::sceMp3GetMaxOutputSample},
+        {"sceMp3GetSamplingRate", &Kernel::sceMp3GetSamplingRate}, {"sceMp3GetBitRate", &Kernel::sceMp3GetBitRate},
+        {"sceMp3GetMp3ChannelNum", &Kernel::sceMp3GetMp3ChannelNum},
+        {"sceMp3GetFrameNum", &Kernel::sceMp3GetFrameNum},
+        {"sceMp3GetMPEGVersion", &Kernel::sceMp3GetMPEGVersion},
+        {"sceMp3ResetPlayPosition", &Kernel::sceMp3ResetPlayPosition},
+        {"sceMp3ResetPlayPositionByFrame", &Kernel::sceMp3ResetPlayPositionByFrame}}) {
+    add("sceMp3", name, handler);
+  }
   codecDecoders(*this);
   cpu.syscallHook = [this](u32 code) { return syscall(code); };
   ge.log = [this](const std::string& text) { note("GE: " + text); };
@@ -626,6 +646,8 @@ auto Kernel::power() -> void {
   for(auto& atrac : atracs) atrac = {};
   atracPlusIDs = atracClassicIDs = 2;
   atracContexts = 0;
+  for(auto& mp3 : mp3s) mp3 = {};
+  mp3Terminated = false;
   dispatchSuspended = false;
   fontResolution[0] = fontResolution[1] = 128.0f;
   fontLibraries.clear();

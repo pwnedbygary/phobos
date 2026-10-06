@@ -333,7 +333,7 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
-//field means: 10 since sceAtrac3plus decodes, keeping its streams' places (part 26); 9 since
+//field means: 10 since sceAtrac3plus and sceMp3 decode, keeping their streams' places (part 26); 9 since
 //sceMpegRingbufferPut calls a ringbuffer's callback, part way through when a state is saved (part 25); 8 since the
 //font library holds libraries, open fonts and its calls into the program (part 23); 7 since
 //sound (docs/psp-core.md's part 21) and part 22 merged, each branch having made a version 6 of

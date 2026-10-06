@@ -16,6 +16,7 @@ int main() {
   for(auto& test : messageTests()) tests.push_back(test);
   for(auto& test : mediaTests()) tests.push_back(test);
   for(auto& test : atracTests()) tests.push_back(test);
+  for(auto& test : mp3Tests()) tests.push_back(test);
   for(auto& test : fontTests()) tests.push_back(test);
   for(auto& test : fileTests()) tests.push_back(test);
   for(auto& test : asyncTests()) tests.push_back(test);
