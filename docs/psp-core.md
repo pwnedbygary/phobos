@@ -24,7 +24,9 @@ drawing the owner's own flash0 fonts), is on `cursor/psp-fonts-2b67`, on top of 
 too, with part 23 merged in. Part 25, the games further still (Burnout Dominator's GE hang explained, movies fed and
 taken apart so that Space Invaders Extreme plays), is on `cursor/psp-hle-games4-2b67`, part 24's with part 23's
 merged in. Part 26, music and movies (FFmpeg's LGPL decoders under sceAtrac3plus, sceMp3 and sceMpeg), is on
-`cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`: part 25's, with master merged in).
+`cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`: part 25's, with master merged in). Part 27,
+the PSP in the desktop program (its library, settings, controls and picture, and FFmpeg built for Linux, macOS and
+Windows), is on `cursor/psp-desktop-2b67`, on top of part 26's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -3265,3 +3267,122 @@ Seen on the way, not changed:
 - The Media Engine's rounding of the colour conversion, and how long its decodes take, aren't measured.
 - Midnight Club 3's San Diego logo shows in stripes for a moment (frame 600): taken for the movie's own wipe.
 - Snoopy vs. the Red Baron's movies weren't seen: the run's presses stayed at its autosave notice.
+
+## Part 27: the PSP in the desktop program
+
+On branch `cursor/psp-desktop-2b67`, on top of part 26's `cursor/psp-codecs-2b67`, not pushed. The owner's request
+(2026-10-06): PSP games playable in the desktop program (`desktop/`, SDL3) on Linux, macOS and Windows, as in the
+Android app, with FFmpeg's decoders built and shipped for each, LGPL-compliant as on Android. The desktop program
+already linked the PSP core (`phobos_core` carries every system); what it lacked was the PSP in its library, the
+PSP's settings, its stick on the keyboard, its picture drawn sharply, and FFmpeg.
+
+**The library** (`desktop/Library.cpp`): the PSP's extensions, as the app lists them (`iso`, `cso`, `zso`, `dax`,
+`jso`, `chd`, `pbp`, `elf`), and folders named `psp` or `playstationportable`. The PlayStation's games share `.iso`,
+`.chd` and `.pbp` with the PSP's, so a file with one of those is the PSP's when mia's PSP medium takes it, wherever
+it is: the runner's new `ares::isPspGame(path)` asks the medium, which reads only the file's head (an ISO whose
+primary volume descriptor's system is "PSP GAME", a CHD of a DVD, 2048-byte units, an EBOOT.PBP whose PARAM.SFO's
+category isn't "ME", the PlayStation's games sold for the PSP; an ELF for MIPS). A file it doesn't take goes by the
+folder rules as before (a `psp` folder still names the PSP, whose medium then says what's wrong as the game starts:
+"It's a CD's CHD..."); else `.chd`, `.iso` and `.pbp` are the PlayStation's. As in the app, an EBOOT.PBP goes by its
+folder's name (`Cube/EBOOT.PBP` is "Cube", `pspProgramName`, a copy of LaunchSystems'), which is also the name the
+runner keys its saves and states by, and the PSP's discs are each listed alone (no disc swapping yet). Checked by a
+scratch program that prints the scan (not kept): a PSP CHD, a made-up PSP ISO, a homebrew EBOOT.PBP and an ELF were
+the PSP's; a made-up PlayStation ISO and a PlayStation EBOOT (category "ME") the PlayStation's.
+
+**Starting a game** (`desktop/main.cpp`): the runner gets the file's own path (`setRomPath`), so the medium reads it
+in place (the app's `/proc/self/fd` path isn't involved). Before each start, three settings (`settings.ini`, the
+pause menu's PSP items while a PSP game runs, each "(next start)", since the core reads them as it powers on):
+- `psp.memoryStick`: a folder picked in the system's dialog; empty (the default) is the runner's shared one,
+  `<saves>/PlayStation Portable/Memory Stick` (the desktop's data folder's `saves`), as on Android. Left or right goes
+  back to it.
+- `psp.fonts`: the user's own system fonts, none by default. The folder picked may be the fonts' own, one holding
+  `font`, or a flash0 dump's root holding `flash0/font` (any case): `pspFontFolder` finds the first holding one of
+  the 18 fonts (`jpn0`, `ltn0`-`ltn15`, `kr0.pgf`); the item shows how many of them it holds ("12 of 18"). A folder
+  with none is refused with a message.
+- `psp.drawingThreads`: Auto (0: all cores but one), 1, 2, 4, 6 or 8, the app's choices.
+A game that doesn't start shows the medium's sentence (`lastLoadProblem`) where there is one.
+
+**Controls** (`desktop/Input.cpp`): the desktop's pad bits are the runner's, which maps the PSP's buttons by
+position: Cross the south button (A on an Xbox pad, Cross on a DualShock), Circle east, Square west, Triangle north,
+L and R the shoulders, Start and Select (Back), the D-pad, and the left stick the PSP's analog stick. On the
+keyboard: the arrows, X Cross, Z Circle, S Square, A Triangle, Q and W the L and R buttons, Enter Start, right Shift
+Select, and now I, J, K and L the left stick, pushed all the way (the PSP's, and the N64's and a DualShock's), held
+unless a pad's stick is pushed further. F5 and F9 save and load a state, F12 or Escape opens the menu, Tab
+fast-forwards, F11 is fullscreen, and F8 (new, and the menu's "Screenshot") saves the core's frame as a PNG,
+`screenshots/<system>/<title> (n).png` in the data folder, as the app's screenshot does. A real pad wasn't at hand:
+the gamepad's buttons are SDL's positional ones, as for every other system.
+
+**The picture**: the PSP's 480x272 is drawn by the runner at a whole multiple of its size (`setPictureMultiple`), the
+one nearest the window's height (1 to 4, as the app picks it), each pixel repeated, then scaled the rest of the way
+by the GPU's bilinear filter: the one-pixel lines of the PSP's text and HUD stay even, without nearest-pixel
+scaling's uneven rows. The other systems are scaled by nearest pixels as before.
+
+**FFmpeg on the desktop** (`thirdparty/ffmpeg/build.sh`, `CMakeLists.txt`): the build is the same, unmodified 9.0.2
+with the same four decoders, for three more targets, which the desktop branch of CMakeLists.txt picks by itself:
+- `host` on Linux (the system's cc, with nasm for x86's assembly, else none: `--disable-x86asm`) and on Windows
+  under MSYS2 UCRT64 (FFmpeg's configure doesn't know MSYS2's system name, so it's told `--target-os=mingw32`; its
+  own Windows threads, and the compiler's libgcc and winpthreads linked in statically, as into Phobos.exe: the two
+  DLLs need nothing but each other and Windows's own).
+- `macos ARCH...`: each architecture cross-built by Apple's clang (`-arch`, for macOS 11 or the deployment target
+  CMake is given), its libraries named `@rpath/libavcodec.63.dylib`; for more than one, each is built, then the
+  libraries are put together by `lipo` (the universal app's arm64 and x86_64).
+- `windows TOOL-PREFIX`: from Linux with MinGW-w64 (`desktop/windows/mingw-w64-x86_64.cmake`), which also needs a C
+  compiler for Linux itself, for configure's own checks.
+CMake runs it as it configures (as for Android), links `phobos` with the two libraries (Windows: their import
+libraries), defines `ARES_ENABLE_FFMPEG` for the core, and copies the two files the program loads beside it in the
+build folder (`libavcodec.so.63`, `libavcodec.63.dylib`, `avcodec-63.dll`, and libavutil's), where it finds them:
+its run path is `$ORIGIN` on Linux and `@executable_path` on macOS, and Windows looks beside the program.
+`-DPHOBOS_FFMPEG=OFF` builds without them, the PSP then silent in its music and movies as before part 26.
+Any other cross build stops at configure, saying so.
+
+**The packages** (`scripts/package-*.sh`), each with the two libraries as files of their own that can be replaced:
+- Linux: the AppImage's `usr/lib`, passed to linuxdeploy; the script checks that each FFmpeg library the program
+  needs (its `readelf -d`) is there by that name.
+- macOS: Phobos.app's `Contents/Frameworks`, the program's run path changed to `@executable_path/../Frameworks`; the
+  script checks each library holds every architecture the program does, signs them (with the app's Developer ID,
+  or ad hoc) and prints their architectures.
+- Windows: the zip, beside Phobos.exe; the script checks Phobos.exe's imports are Windows's own or the two DLLs,
+  and the DLLs' imports Windows's own or each other.
+- CI (`.github/workflows/desktop.yml`): each job installs what FFmpeg's build needs (nasm, curl, xz; make and diffutils
+  in MSYS2), caches `.cache/ffmpeg` under the build's own name (`build.sh --name`), and uploads FFmpeg's tarball
+  with its package; a tag's release gets it with the rest (the same file the APKs' job uploads, replaced by itself).
+- `LICENSE`'s FFmpeg notice names the four packages' files and how to swap each (the AppImage extracted and run or
+  packed again, the app signed again, the DLLs replaced), and that the releases carry the tarball beside the desktop
+  builds too. `.gitattributes` keeps shell scripts' line ends LF, since bash runs them on Windows too.
+
+**Checked on the host Mac** (Apple silicon, macOS; the desktop program built Release; games run with the user's data
+folder redirected to a scratch one by `CFFIXED_USER_HOME`; keys sent through System Events; pictures by F8, under
+`/tmp/psp-desktop-out/shots`):
+- **Burnout Legends**: the title over its menu movie (FFmpeg's), the soundtrack's song shown ("Emanuel, The Hey
+  Man!"), a profile made with the D-pad, Cross, Triangle and Square (the name screen's pages), saved to the shared
+  memory stick (`PSP/SAVEDATA/ULUS10025SAVE000`), the main menu, a single event: racing, Cross held to 67 mph, at 60
+  frames a second. A state saved (F5) on the name screen and loaded (F9) after moving on brought it back; the pause
+  menu paused the core and took its screenshot.
+- **GTA Liberty City Stories**: Start and Cross through its menus to a new game: the opening cutscene, then Toni in
+  the street by his car, at 60.
+- **Midnight Club 3**: its title movie and "Load Profile / Create Profile / Delete Save Data" over the city; 60 in
+  its movies, 25 in that menu (the core's own speed there, part 25: filling its pixels).
+- **Space Invaders Extreme**: to its name entry, at 60. **Lumines**: its title, at 60.
+- The universal app (`scripts/package-macos-app.sh` on a `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` build): Phobos
+  and both libraries x86_64 and arm64, signed ad hoc; Burnout Legends' title over its movie at 60 from the app, both
+  natively and under Rosetta (x86_64), the libraries loaded from `Contents/Frameworks` in both. A copy of the app with
+  libavcodec replaced by another build (arm64 only) and signed again ran the same.
+- Windows and Linux, in Docker on the host (2 GB, too little for the whole core at once; the full builds and their
+  packages are CI's): MinGW-w64 13 (posix) from Ubuntu 24.04, FFmpeg by `build.sh windows x86_64-w64-mingw32-` as
+  CMake runs it; the desktop sources and the runner compiled; a program linked with the two import libraries, as
+  Phobos.exe is, went through `package-windows.sh`'s checks into its zip. The first build's avutil-61.dll needed
+  libwinpthread-1.dll (the posix toolchain's libgcc uses it), which the script refused; linked `-static` now, the
+  DLLs need only KERNEL32, msvcrt (UCRT under MSYS2) and bcrypt, and each other. Linux: Ubuntu 24.04 on arm64,
+  FFmpeg by `host`, `libavcodec.so.63` and `libavutil.so.61` needing only libc, libm and each other; the same
+  sources compiled; a program beside the two, run path `$ORIGIN`, found them and FFmpeg's ATRAC3plus decoder.
+- Tests: `tests/psp/run-tests.sh` 259 groups, none failed; `tests/psp/ares` 282 checks, none failed; the app's 264
+  unit tests (`LicenseNoticesTest` on the new notice among them) and its modern release APK (23,604,918 bytes).
+
+Not checked, or left:
+- A real gamepad (none at hand), real PSP fonts (scratch files of their names only), a PlayStation CHD beside the
+  PSP's, and a PlayStation game in the library (made-up files only).
+- The desktop program built whole, packaged and run on Linux and Windows: CI's jobs do the first two; MSYS2's
+  native FFmpeg build (`--target-os=mingw32` under UCRT64) and linuxdeploy's handling of the two libraries are seen
+  first there.
+- Discs can't be changed on the PSP (its games are listed one by one); the desktop's library shows no PSP icons or
+  PARAM.SFO titles (the file's name is the title, as for every system).
