@@ -424,11 +424,16 @@ auto Kernel::sceKernelReferThreadStatus() -> void {
   result(0);
 }
 
-//Waits for a number of microseconds (and, with callbacks, runs the thread's callbacks as they're notified).
+//Waits for a number of microseconds (and, with callbacks, runs the thread's callbacks as they're notified), as long
+//as a PSP takes: its thread manager wakes a thread no sooner than about 205 microseconds on, and waking it takes
+//about 25 more. pspautotests' threads/scheduling/delaylen recorded every delay from 1 to 209 microseconds taking
+//about 230, and longer ones about 25 more than asked (220 about 250, 300 about 330, 1000 about 1030), CB or not. A
+//delay of 0 gives the CPU up for a moment, no more (delayzero: it returns at once, or lets a worse thread in).
 auto Kernel::delay(u32 microseconds, bool callbacks) -> void {
   if(!mayWait()) return;
   result(0);
-  block(Wait::Delay, 0, cycles + std::max<u64>(1, u64(microseconds) * (CPUFrequency / 1'000'000)), 0, callbacks);
+  u64 length = microseconds ? std::max<u64>(microseconds, 205) + 25 : 0;
+  block(Wait::Delay, 0, cycles + std::max<u64>(1, length * (CPUFrequency / 1'000'000)), 0, callbacks);
 }
 
 auto Kernel::sceKernelDelayThread() -> void {

@@ -238,6 +238,62 @@ static auto volatileWaits() -> void {
   }
 }
 
+//Delays as long as a PSP's, as pspautotests' threads/scheduling/delaylen recorded (rounded to 10 microseconds there):
+//every delay from 1 to 209 microseconds about 230, longer ones about 25 more than asked (here 205 at least, plus 25),
+//CB or not; a delay of 0 at once; and a worse thread runs during a delay of 1 (delayzero: "spinner runs almost
+//always"). (Delays of 1 microsecond had made Brave Story's polling threads wake 230 times as often as on a PSP.) On
+//both engines.
+static auto delayLengths() -> void {
+  static constexpr u32 Delays[] = {1, 100, 209, 210, 220, 300, 1000};
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    Assembler spinner{m, 0x0880'2000};  //counts as fast as it can
+    u32 loop = spinner.here();
+    spinner.li(t0, R + 0x90); spinner.put(lw(t1, 0, t0)); spinner.put(addiu(t1, t1, 1)); spinner.put(sw(t1, 0, t0));
+    spinner.put(beq(zero, zero, int32_t(loop - (spinner.here() + 4)) / 4)); spinner.put(nop);
+    Assembler main{m, 0x0880'1000};
+    auto timed = [&](const char* function, u32 delay, u32 offset) {  //(t1 - t0 at offset)
+      main.call("sceKernelGetSystemTimeLow");
+      main.put(addu(s0, v0, zero));
+      main.li(a0, delay);
+      main.call(function);
+      main.call("sceKernelGetSystemTimeLow");
+      main.put(subu(v0, v0, s0));
+      main.li(t0, R + offset); main.put(sw(v0, 0, t0));
+    };
+    for(u32 n = 0; n < 7; n++) {
+      timed("sceKernelDelayThread", Delays[n], n * 4);
+      timed("sceKernelDelayThreadCB", Delays[n], 0x40 + n * 4);
+    }
+    timed("sceKernelDelayThread", 0, 0x80);
+    main.li(a0, m.string("spinner")); main.li(a1, 0x0880'2000); main.li(a2, 0x30); main.li(a3, 0x1000);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(s1, v0, zero));
+    main.put(addu(a0, s1, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");
+    main.li(a0, 1);
+    main.call("sceKernelDelayThread");
+    main.li(t0, R + 0x90); main.put(lw(t1, 0, t0)); main.li(t0, R + 0x94); main.put(sw(t1, 0, t0));
+    main.put(addu(a0, s1, zero));
+    main.call("sceKernelTerminateDeleteThread");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    auto word = [&](u32 offset) { return m.system.memory.read(4, R + offset); };
+    for(u32 n = 0; n < 7; n++) {
+      u32 expected = std::max(Delays[n], 205u) + 25;  //(the instructions around the calls add under a microsecond)
+      check(__LINE__, "a delay's length", word(n * 4) == expected || word(n * 4) == expected + 1, true);
+      check(__LINE__, "a CB delay's length", word(0x40 + n * 4) == expected || word(0x40 + n * 4) == expected + 1,
+            true);
+    }
+    CHECK(word(0x80) <= 1, true);
+    CHECK(word(0x94) > 0, true);  //the spinner ran meanwhile
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
 //Threads: another one's priority changed (one of higher priority than the caller's takes over at once), suspended
 //(it doesn't run however ready, until resumed), ended by another (its waiter told so), its exit status read only
 //once it has ended; the caller can't do these to itself.
@@ -576,7 +632,7 @@ static auto oddsAndEnds() -> void {
 auto powerTests() -> Tests {
   return {
     {"power callbacks", powerCallbacks}, {"power clocks", powerClocks}, {"power volatile memory", volatileMemory},
-    {"power volatile memory waited for", volatileWaits},
+    {"power volatile memory waited for", volatileWaits}, {"kernel thread delays' lengths", delayLengths},
     {"kernel thread control", threadControl}, {"kernel thread status", threadStatus}, {"kernel clocks", clocks},
     {"kernel mersenne twister", mersenneTwister}, {"kernel odds and ends", oddsAndEnds},
     {"kernel thread priorities", threadPriorities}, {"kernel thread stack free", stackFree},
