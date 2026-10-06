@@ -5,7 +5,7 @@
 //
 //For each test it reports how many results match exactly, and for the others how far off they are in units in
 //the last place (ulps: how many representable floats apart the two results are), plus a few examples. Tests whose
-//files aren't in the folder are left out, so a folder from either round (or both) works.
+//files aren't in the folder are left out, so a folder from any round (or several) works.
 
 #include "../../tests/allegrex/harness.hpp"
 
@@ -41,7 +41,7 @@ struct Generator {
 
 enum class Inputs { FromOne, FromHalf, Fixed23, Spread, Sweep };
 enum class Kind { Unary, Binary, Dot, Sum };  //Sum: one result from a quad (vfad, vavg)
-enum class Fill { None, DotOne, DotTwo, DotClose, DotShort, SumClose, SumTwo };
+enum class Fill { None, DotOne, DotTwo, DotClose, DotShort, SumClose, SumTwo, Tiny };
 
 static auto input(Inputs inputs, uint32_t k, Generator& generator, uint32_t first) -> uint32_t {
   switch(inputs) {
@@ -96,6 +96,13 @@ static auto fill(Fill kind, uint32_t s[4], uint32_t t[4], Generator& g) -> void 
   case Fill::SumTwo:
     twoLanes(g, j, k);
     for(uint32_t i = 0; i < 4; i++) s[i] = i == j || i == k ? ranged(g, 112, 5) : 0;
+    return;
+  case Fill::Tiny:  //round 3: s = 1 - j 2^-23 and t = 2^-126 (1 + j 2^-23), j from 1 to 4096 and the signs per lane
+    for(uint32_t i = 0; i < 4; i++) {
+      uint32_t w = g.next(), n = 1 + (w & 4095);
+      s[i] = (w & 0x80000000u) | (0x3f800000u - 2 * n);
+      t[i] = (w << 1 & 0x80000000u) | (0x00800000u + n);
+    }
     return;
   }
 }
@@ -152,6 +159,8 @@ static const Test tests[] = {
   {"vfad-close",    0xd0468082, Kind::Sum, Inputs::Spread, 1u << 20, 36, 0, Fill::SumClose},
   {"vfad-two",      0xd0468082, Kind::Sum, Inputs::Spread, 1u << 18, 37, 0, Fill::SumTwo},
   {"vavg-close",    0xd0478082, Kind::Sum, Inputs::Spread, 1u << 18, 38, 0, Fill::SumClose},
+  //round 3
+  {"vmul-tiny",     0x64018082, Kind::Binary, Inputs::Spread, 1u << 18, 41, 0, Fill::Tiny},
 };
 
 //Where the PSP program kept its operands: quad columns of matrix 0 (C000, C010, C020), and S020 for vdot.
@@ -224,8 +233,14 @@ static auto compare(const std::string& folder, const Test& test) -> void {
   } else {
     for(uint32_t quad = 0; quad < results / 4; quad++) {
       uint32_t s[4], t[4] = {};
-      for(uint32_t lane = 0; lane < 4; lane++) s[lane] = input(test.inputs, k++, generator, test.first);
-      if(test.kind == Kind::Binary) for(uint32_t lane = 0; lane < 4; lane++) t[lane] = input(test.inputs, k++, generator, test.first);
+      if(test.fill != Fill::None) {
+        fill(test.fill, s, t, generator);
+      } else {
+        for(uint32_t lane = 0; lane < 4; lane++) s[lane] = input(test.inputs, k++, generator, test.first);
+        if(test.kind == Kind::Binary) {
+          for(uint32_t lane = 0; lane < 4; lane++) t[lane] = input(test.inputs, k++, generator, test.first);
+        }
+      }
       for(uint32_t lane = 0; lane < 4; lane++) v[ColumnS[lane]] = s[lane], v[ColumnT[lane]] = t[lane];
       m.cpu.execute(Base, test.instruction);
       const uint32_t* out = test.kind == Kind::Binary ? ColumnD : ColumnT;
@@ -306,9 +321,13 @@ static auto compareDivide(const std::string& folder, Records& records) -> void {
 
 static const char* const ModeNames[4] = {"nearest", "toward zero", "up", "down"};
 
-static auto compareConvert(const std::string& folder, Records& records) -> void {
-  if(!present(folder + "/fpu-convert.bin")) return;
-  auto w = load(folder + "/fpu-convert.bin");
+//fpu-convert.bin (round 2) or fpu-convert-safe.bin (round 3): per input, x, then for each rounding mode the five
+//conversions. upper is FCSR's bits above the causes as the PSP program found them (fpu-state.bin; flush to zero
+//among them), which it kept for every instruction. label starts each row's name (round 3's say "safe").
+static auto compareConvert(const std::string& folder, const std::string& name, uint32_t upper,
+                           const std::string& label, Records& records) -> void {
+  if(!present(folder + "/" + name + ".bin")) return;
+  auto w = load(folder + "/" + name + ".bin");
   static const uint32_t instructions[5] = {0x460000a4, 0x4600008c, 0x4600008d, 0x4600008e, 0x4600008f};
   static const char* const names[5] = {"cvt.w.s", "round.w.s", "trunc.w.s", "ceil.w.s", "floor.w.s"};
   Machine m;
@@ -317,18 +336,21 @@ static auto compareConvert(const std::string& folder, Records& records) -> void 
   for(size_t n = 0; n + 21 <= w.size(); n += 21) {
     for(uint32_t mode = 0; mode < 4; mode++) {
       for(uint32_t i = 0; i < 5; i++) {
-        cpu.fpu.csr = mode;
+        cpu.fpu.csr = upper | mode;
         cpu.fpu.r[0] = w[n];
         cpu.execute(Base, instructions[i]);  //$f2 from $f0
-        records.add(std::string(names[i]) + " (" + ModeNames[mode] + ")", w[n], w[n + 1 + mode * 5 + i], cpu.fpu.r[2]);
+        records.add(label + names[i] + " (" + ModeNames[mode] + ")", w[n], w[n + 1 + mode * 5 + i], cpu.fpu.r[2]);
       }
     }
   }
 }
 
-static auto compareFpuArithmetic(const std::string& folder, Records& records) -> void {
-  if(!present(folder + "/fpu-arith.bin")) return;
-  auto w = load(folder + "/fpu-arith.bin");
+//fpu-arith.bin (round 2) or fpu-arith-safe.bin (round 3, whose square roots are of a's size: absolute): per pair,
+//a and b, then for each rounding mode the five operations. upper and label as for compareConvert.
+static auto compareFpuArithmetic(const std::string& folder, const std::string& name, bool absolute, uint32_t upper,
+                                 const std::string& label, Records& records) -> void {
+  if(!present(folder + "/" + name + ".bin")) return;
+  auto w = load(folder + "/" + name + ".bin");
   static const uint32_t instructions[5] = {0x46010080, 0x46010081, 0x46010082, 0x46010083, 0x46000084};
   static const char* const names[5] = {"add.s", "sub.s", "mul.s", "div.s", "sqrt.s"};
   Machine m;
@@ -337,13 +359,54 @@ static auto compareFpuArithmetic(const std::string& folder, Records& records) ->
   for(size_t n = 0; n + 22 <= w.size(); n += 22) {
     for(uint32_t mode = 0; mode < 4; mode++) {
       for(uint32_t i = 0; i < 5; i++) {
-        cpu.fpu.csr = mode;
-        cpu.fpu.r[0] = w[n];
+        cpu.fpu.csr = upper | mode;
+        cpu.fpu.r[0] = i == 4 && absolute ? w[n] & 0x7fffffff : w[n];
         cpu.fpu.r[1] = w[n + 1];
         cpu.execute(Base, instructions[i]);  //$f2 from $f0 (and $f1)
-        records.add(std::string(names[i]) + " (" + ModeNames[mode] + ")", w[n], w[n + 2 + mode * 5 + i], cpu.fpu.r[2]);
+        records.add(label + names[i] + " (" + ModeNames[mode] + ")", w[n], w[n + 2 + mode * 5 + i], cpu.fpu.r[2]);
       }
     }
+  }
+}
+
+//Round 3: FCSR and FIR as the PSP program found them, and each FPU probe (probe-*.bin: a, b, the result, FCSR after
+//it; a .stopped file instead when the probe stopped the PSP), its result beside the core's.
+static auto reportFpu(const std::string& folder) -> void {
+  if(present(folder + "/fpu-state.bin")) {
+    auto w = load(folder + "/fpu-state.bin");
+    if(w.size() >= 2) std::printf("\nFCSR as the program found it: %08x (flush to zero %s); FIR %08x\n", w[0],
+                                  w[0] >> 24 & 1 ? "on" : "off", w[1]);
+  }
+  struct Probe { const char* name; uint32_t instruction; };
+  static const Probe probes[] = {  //as main.c's probes, in its order: add.s, mul.s, div.s, sqrt.s, cvt.w.s
+    {"probe-div-zero", 0x46010083}, {"probe-mul-big", 0x46010082}, {"probe-sqrt-negative", 0x46000084},
+    {"probe-add-infinity", 0x46010080}, {"probe-add-qnan", 0x46010080}, {"probe-add-snan", 0x46010080},
+    {"probe-cvt-minus-2p31", 0x460000a4}, {"probe-cvt-infinity", 0x460000a4}, {"probe-cvt-qnan", 0x460000a4},
+    {"probe-cvt-snan", 0x460000a4}, {"probe-cvt-2p31", 0x460000a4}, {"probe-mul-tiny", 0x46010082},
+    {"probe-add-denormal", 0x46010080}, {"probe-cvt-denormal", 0x460000a4}, {"probe-add-denormal-fs", 0x46010080},
+    {"probe-mul-tiny-fs", 0x46010082}, {"probe-cvt-denormal-fs", 0x460000a4},
+  };
+  bool header = false;
+  for(auto& probe : probes) {
+    std::string path = folder + "/" + probe.name;
+    //a probe that stopped the PSP on the last start still has its .part: the next start renames it .stopped
+    bool stopped = present(path + ".stopped") || present(path + ".part"), done = present(path + ".bin");
+    if(!stopped && !done) continue;
+    if(!header) std::printf("\n| probe | a, b | PSP result, FCSR after | Phobos result |\n| --- | --- | --- | --- |\n");
+    header = true;
+    if(!done) {
+      std::printf("| %s | | stopped the PSP | |\n", probe.name);
+      continue;
+    }
+    auto w = load(path + ".bin");
+    if(w.size() < 4) continue;
+    Machine m;
+    m.cpu.power(Base);
+    m.cpu.fpu.csr = w[3] & ~0x3ffffu;  //FCSR as the probe ran: the PSP's own bits above the causes (and the probe's), mode 0
+    m.cpu.fpu.r[0] = w[0];
+    m.cpu.fpu.r[1] = w[1];
+    m.cpu.execute(Base, probe.instruction);  //$f2 from $f0 (and $f1)
+    std::printf("| %s | %08x, %08x | %08x, %08x | %08x |\n", probe.name, w[0], w[1], w[2], w[3], m.cpu.fpu.r[2]);
   }
 }
 
@@ -365,18 +428,18 @@ static auto kindOf(uint32_t theirs, uint32_t ours) -> Difference {
   return Other;
 }
 
-//ops.bin, the instruction recorder (main.c, measureOps): per entry, its words, then per run matrices 0 and 1, the
-//condition codes as set, as read back, and after, and matrix 2 after. Each run is replayed from the condition
-//codes as the PSP read them back, matrix 2 holding the same markers, and the prefixes as after any instruction
-//that used them up; an entry matches when matrix 2 and the condition codes do, in every run. For the others, the
-//differing words are counted by kind (condition codes that differ count as other).
-static auto compareOps(const std::string& folder) -> void {
-  if(!present(folder + "/ops.bin")) return;
-  auto w = load(folder + "/ops.bin");
-  if(w.size() < 4 || w[0] != 0x53504f56) return (void)std::printf("ops.bin: not a recorder file\n");
+//ops.bin or ops3.bin, the instruction recorder (main.c, measureOpsFrom): per entry, its words, then per run
+//matrices 0 and 1, the condition codes as set, as read back, and after, and matrix 2 after. Each run is replayed
+//from the condition codes as the PSP read them back, matrix 2 holding the same markers, and the prefixes as after
+//any instruction that used them up; an entry matches when matrix 2 and the condition codes do, in every run. For
+//the others, the differing words are counted by kind (condition codes that differ count as other).
+static auto compareOps(const std::string& folder, const std::string& name) -> void {
+  if(!present(folder + "/" + name + ".bin")) return;
+  auto w = load(folder + "/" + name + ".bin");
+  if(w.size() < 4 || w[0] != 0x53504f56) return (void)std::printf("%s.bin: not a recorder file\n", name.c_str());
   uint32_t entries = w[2], runs = w[3];
   std::map<uint32_t, std::string> names;
-  std::ifstream list(folder + "/ops.txt");
+  std::ifstream list(folder + "/" + name + ".txt");
   for(std::string line; std::getline(list, line);) {
     auto colon = line.find(": ", line.find(')'));
     if(colon != std::string::npos) names[std::stoul(line)] = line.substr(colon + 2);
@@ -446,8 +509,8 @@ static auto compareOps(const std::string& folder) -> void {
     std::printf("| %u | %s | %u of %u | %s | %s |\n", e, names.count(e) ? names[e].c_str() : "?", differ, runs,
                 byKind.c_str(), first.c_str());
   }
-  std::printf("\nops: %u of %u recorded entries match in every run, and %u more differ only by rounding (%u entries in "
-              "the file)\n", exactEntries, recorded, roundingEntries, entries);
+  std::printf("\n%s: %u of %u recorded entries match in every run, and %u more differ only by rounding (%u entries in "
+              "the file)\n", name.c_str(), exactEntries, recorded, roundingEntries, entries);
 }
 
 //vrnd.bin: the RCX registers at start and 256 draws; then per seed: the seed, the RCX registers after vrnds.s,
@@ -516,14 +579,26 @@ int main(int argc, char** argv) {
   compareHalves(folder);
   compareFloatsToHalves(folder);
   Records records;
+  //FCSR's bits above the causes as the PSP program found them (round 3's fpu-state.bin), kept for every FPU test
+  uint32_t upper = 0;
+  if(present(folder + "/fpu-state.bin")) {
+    auto state = load(folder + "/fpu-state.bin");
+    if(!state.empty()) upper = state[0] & ~0x3ffffu;
+  }
   compareDivide(folder, records);
-  compareConvert(folder, records);
-  compareFpuArithmetic(folder, records);
+  compareConvert(folder, "fpu-convert", upper, "", records);
+  compareFpuArithmetic(folder, "fpu-arith", false, upper, "", records);
   records.print();
+  Records safe;  //round 3's, in rows of their own, named "safe ..."
+  compareConvert(folder, "fpu-convert-safe", upper, "safe ", safe);
+  compareFpuArithmetic(folder, "fpu-arith-safe", true, upper, "safe ", safe);
+  safe.print();
+  reportFpu(folder);
   if(present(folder + "/vrnd.bin")) {
     std::printf("\n");
     compareRandom(folder);
   }
-  compareOps(folder);
+  compareOps(folder, "ops");
+  compareOps(folder, "ops3");
   return 0;
 }

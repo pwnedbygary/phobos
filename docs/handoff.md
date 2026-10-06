@@ -868,6 +868,28 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP tools: the VFPU measurement's third round and the FPU probes — 2026-10-04
+
+Branch `cursor/psp-vfpu-round3-2b67`, stacked on `cursor/psp-ge-filter-2b67` (for stack #106). tools/psp-vfpu-measure
+gets round 3 (square) and the FPU probes (triangle), for the user's PSP:
+- `fpu-convert-safe`, `fpu-arith-safe`: round 2's FPU tests on inputs that can't stop the PSP (no NaNs, infinities,
+  denormals, too-big or too-small results); `fpu-state`: FCSR and FIR as a program finds them;
+- `vmul-tiny`: products a sliver below the smallest normal number, 2^-126 (1 - j^2 2^-46), telling three answers
+  apart: all 0 (flushed before rounding), 2^-126 up to j = 1448 (rounded to 24 bits, then flushed), or up to j =
+  2048 (rounded as IEEE denormals, then flushed: the core today);
+- `ops3.bin`: a second recorder list (ops.py's `entries3`, 284 entries, `ops3.h`): the math functions with prefixes,
+  swizzles past the size in instructions that don't work lane by lane, vavg and vfad with t prefixes. ops.h is
+  unchanged (its own seed);
+- seventeen FPU probes, one value each, run once with flush to zero off (the three -fs ones with it on): a probe that
+  stops the PSP is given up on at the next start (`beginTrying` with no retry). NaNs in MIPS's encoding (quiet: top
+  fraction bit clear).
+Reviews: Bugbot (three passes) and a general-purpose reviewer with a strict findings-only answer, which found what
+Bugbot didn't (-2^31 in the safe inputs, mislabeled NaNs, tiny products that couldn't answer their question, an
+unchecked rename, stale docs). From now on that reviewer gives the independent review docs/development-process.md
+asks for (with delta reviews after edits); Bugbot is an optional second opinion, read in full.
+compare.cpp reads all of it (`reportFpu` for the state and the probes). Built with pspdev; the SMOKE build runs to
+the end in PPSSPPHeadless with `-i` (its ARM64 JIT asserts on an ops3 entry: PPSSPP's bug, not the program's).
+
 ## PSP core: the GE's filter and near-plane cut, as the PSP measured them — 2026-10-04
 
 Branch `cursor/psp-ge-filter-2b67`, stacked on `cursor/psp-ge-sampling-2b67` (for stack #106). From the user's
