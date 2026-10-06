@@ -4,28 +4,8 @@
 
 #include <cstdlib>
 #include <fstream>
-#include <random>
 
 namespace allegrex_test::psp {
-
-//A fresh host folder for a test, removed when the test ends.
-struct HostFolder {
-  std::filesystem::path path;
-  HostFolder() {
-    std::random_device random;
-    path = std::filesystem::temp_directory_path() / ("phobos-psp-" + std::to_string(random()));
-    std::filesystem::create_directories(path);
-  }
-  ~HostFolder() { std::error_code error; std::filesystem::remove_all(path, error); }
-  auto put(const std::string& name, const std::string& text) -> void {
-    std::filesystem::create_directories((path / name).parent_path());
-    std::ofstream(path / name, std::ios::binary) << text;
-  }
-  auto get(const std::string& name) -> std::string {
-    std::ifstream file(path / name, std::ios::binary);
-    return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-  }
-};
 
 constexpr u32 Buffer = 0x0893'0000;
 

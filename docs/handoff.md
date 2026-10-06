@@ -868,6 +868,20 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: measuring the GE and the controller on a PSP — 2026-10-04
+
+Branch `cursor/psp-ge-measure-2b67`, stacked on `cursor/psp-draw-2b67` (for stack #106). `tools/psp-ge-measure` is a
+homebrew program that records what a real PSP's GE draws where parts 8-10 follow PPSSPP or uOFW instead of our own
+measurements: blending's and the texture functions' rounding, the filter, which pixels sprites and triangles cover,
+dithering, the stencil's steps, the 16-bit formats both ways, texel mapping, and the controller's timing (the latch
+question). 51 files, about 13 MB. `tests/psp/measure.cpp` runs the same program in the core and, with
+`PSP_GE_RESULTS`, lists what differs from a results folder (docs/psp-core.md, "Measuring the GE and the controller on
+a PSP"). Checks: 67 groups on the Mac (UBSan) and in `phobos-linux` (ASan and UBSan) with the programs; against
+PPSSPP's software renderer 49 of 51 files are identical, and the two that differ (a sprite edge exactly through pixel
+middles, a shrunk sprite's texels) are for the PSP to settle. `HostFolder` and `testProgram` moved into
+`tests/psp/kernel-machine.hpp` so the test files share them. The EBOOT.PBP is on the RP6 in `Download/GEMEASURE`
+(SHA-256 58fb9a27…) for the user to run with the VFPU's round 2.
+
 ## PSP core, part 10: drawing in 2D — 2026-10-03
 
 Branch `cursor/psp-draw-2b67`, stacked on `cursor/psp-ge-2b67` (for stack #106). The GE draws in through mode:
