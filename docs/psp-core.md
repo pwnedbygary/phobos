@@ -228,7 +228,17 @@ The program asks which round to run when it starts: O for that first round, X fo
   `ops.h`, from `ops.py`: `vwbn`'s 256 immediates, `vrot`'s 32 placements, every `vcmp` condition and constant,
   and 240 random prefix combinations), each copied into a tiny function and run on 64 random register states,
   recording matrix 2 and the condition codes. A real PSP stops a program at an instruction it doesn't have, which
-  is why only what the assembler accepts is in it, and why it runs last.
+  is why only what the assembler accepts is in it, and why it runs late.
+
+The user's first run of round 2 (2026-10-04) switched the PSP off around the divide step, which itself is safe (its
+`div` is the bare instruction, no divide-by-zero trap after it, as the built program shows). So the program now keeps
+the PSP awake (`scePowerTick` as each test starts and with every chunk it writes, against the power-save timer); each
+test's line says "running" as it starts, so the last line names the test the PSP stopped in; the FPU's conversions
+and arithmetic, never run on a PSP before, come last, after the recorder; and a test that didn't finish runs once
+more, then, if it stops again, is given up on: its `.part` becomes `<name>.stopped` and the round goes on without it.
+A write that fails doesn't count as the PSP stopping, and a retry whose marker (`<name>.again`) can't be written
+stops the round and says so rather than running unmarked. The results are unchanged: in PPSSPPHeadless the new
+version's files are the old one's, byte for byte.
 
 `make SMOKE=1` builds a quick version (round 2 straight away, the big tests cut short) for trying the program in
 PPSSPP's PPSSPPHeadless first, which `phobos-linux` has in `/opt/tools/ppsspp`; it says nothing about a PSP.

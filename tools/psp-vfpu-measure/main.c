@@ -16,11 +16,15 @@
 //Run: copy EBOOT.PBP to a folder under PSP/GAME on the memory stick (say PSP/GAME/VFPUMEASURE) and start it from
 //the XMB; it needs custom firmware that runs homebrew. Results go to results/ beside EBOOT.PBP: one file per
 //test, raw little-endian 32-bit words in the order each test describes below, plus manifest.txt (round 1) or
-//manifest2.txt (round 2). A test whose file exists is skipped, so a round can be stopped and started again.
+//manifest2.txt (round 2). A test whose file exists is skipped, so a round can be stopped and started again. A test
+//that didn't finish runs once more; if it doesn't finish that time either, the next start gives up on it (see
+//begin), so a test that stops the PSP can't hold up the rest. Each test's line on the screen says when it's
+//running, and the program keeps telling the PSP it's busy, so the power-save timer doesn't put it to sleep.
 
 #include <pspkernel.h>
 #include <pspdebug.h>
 #include <pspctrl.h>
+#include <psppower.h>
 #include <psputils.h>
 #include <string.h>
 #include <stdio.h>
@@ -266,44 +270,89 @@ static int exists(const char* path) {
   return sceIoGetstat(path, &status) >= 0;
 }
 
+//Tells the PSP it's in use, so its power-save timer (Auto Sleep, Backlight Auto-Off) starts over: a long round with
+//nothing pressed would otherwise be put to sleep part way.
+static void awake(void) { scePowerTick(PSP_POWER_TICK_ALL); }
+
+static int mark(const char* path) {
+  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if(file < 0) return 0;
+  sceIoClose(file);
+  return 1;
+}
+
 //A test's file is written as results/<name>.part and renamed to .bin once complete, so a stopped test leaves no
-//.bin behind and runs again next time.
+//.bin behind and runs again next time. If its .part is there when it starts, the last run didn't finish it (the PSP
+//stopped, or was stopped, during it): it runs once more, with <name>.again marking that; and if it doesn't finish
+//then either, the next start gives up on it, renaming what it wrote to <name>.stopped, and the round goes on
+//without it.
 typedef struct {
-  char done[320], part[320];
+  char done[320], part[320], again[320];
   SceUID file;
   int line;
 } Output;
 
 static int begin(Output* out, const char* name) {
+  char stopped[320];
   snprintf(out->done, sizeof(out->done), "%s/%s.bin", folder, name);
   snprintf(out->part, sizeof(out->part), "%s/%s.part", folder, name);
+  snprintf(out->again, sizeof(out->again), "%s/%s.again", folder, name);
+  snprintf(stopped, sizeof(stopped), "%s/%s.stopped", folder, name);
+  awake();
   if(exists(out->done)) {
     print("%-14s already done\n", name);
     return 0;
   }
+  if(exists(stopped)) {
+    print("%-14s given up on (it stopped twice)\n", name);
+    return 0;
+  }
+  int retrying = exists(out->part);
+  if(retrying && exists(out->again)) {
+    sceIoRename(out->part, stopped);
+    sceIoRemove(out->again);
+    print("%-14s stopped twice: given up on\n", name);
+    return 0;
+  }
   out->file = sceIoOpen(out->part, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if(out->file < 0) {
+    print("%-14s can't write %s\n", name, out->part);
+    return -1;
+  }
+  if(retrying) {  //marked only once it's really running again, so a file that can't be written costs no retry
+    if(!mark(out->again)) {  //unmarked, a test that stops the PSP every time would never be given up on
+      sceIoClose(out->file);
+      print("%-14s can't write %s (memory stick full?)\n", name, out->again);
+      return -1;
+    }
+    print("%-14s didn't finish last time: once more\n", name);
+  }
   out->line = pspDebugScreenGetY();
-  if(out->file < 0) print("%-14s can't write %s\n", name, out->part);
-  return out->file >= 0 ? 1 : -1;
+  print("%-14s running", name);
+  return 1;
 }
 
 static int writeOut(Output* out, const char* name, const void* data, int bytes) {
+  awake();  //every chunk a long test writes (256 KiB), so no stretch of work goes without telling the PSP
   if(sceIoWrite(out->file, data, bytes) == bytes) return 1;
   print("%-14s write failed (memory stick full?)\n", name);
   sceIoClose(out->file);
+  sceIoRemove(out->again);  //a failed write isn't the PSP stopping: the next start tries it again, not giving up
   return 0;
 }
 
 static void progress(Output* out, const char* name, unsigned int done, unsigned int total) {
+  awake();
   pspDebugScreenSetXY(0, out->line);
-  print("%-14s %3u%%", name, (unsigned int)(100ull * done / total));
+  print("%-14s %3u%%   ", name, (unsigned int)(100ull * done / total));
 }
 
 static int finish(Output* out, const char* name) {
   sceIoClose(out->file);
   sceIoRename(out->part, out->done);
+  sceIoRemove(out->again);
   pspDebugScreenSetXY(0, out->line);
-  print("%-14s done\n", name);
+  print("%-14s done   \n", name);
   return 1;
 }
 
@@ -614,6 +663,7 @@ static int measureOps(void) {
   static Quad m0[4], m1[4], m2[4];
   for(int e = 0; e < OP_COUNT; e++) {
     const Op* op = &ops[e];
+    awake();
     pspDebugScreenSetXY(0, out.line);
     print("ops %4d/%d %-40.40s", e + 1, OP_COUNT, op->text);
     int n = 0;
@@ -691,7 +741,8 @@ static void writeManifest(int round, const Test* list, unsigned int count) {
       "round.w.s, trunc.w.s, ceil.w.s, floor.w.s\n"
       "fpu-arith.bin: per pair (mixed() from 24): a, b, then for rounding modes 0-3: add.s, sub.s, mul.s, div.s, "
       "sqrt.s of a\n"
-      "ops.bin: the instruction recorder (main.c, measureOps; ops.txt lists its entries)\n");
+      "ops.bin: the instruction recorder (main.c, measureOps; ops.txt lists its entries)\n"
+      "<name>.stopped: a test that didn't finish twice (the PSP stopped during it), given up on: what it wrote\n");
   }
   sceIoClose(file);
 }
@@ -729,9 +780,9 @@ int main(int argc, char** argv) {
     if(ok) ok = measureHalves();
     if(ok) ok = measureFloatsToHalves();
     if(ok) ok = measureDivide();
-    if(ok) ok = measureConvert();
-    if(ok) ok = measureArithmetic();
-    if(ok) ok = measureOps();  //last: if an instruction stops the program, everything else is already saved
+    if(ok) ok = measureOps();  //late: if an instruction stops the program, the rest is already saved
+    if(ok) ok = measureConvert();     //last: the FPU on not-a-numbers, infinities and the smallest numbers,
+    if(ok) ok = measureArithmetic();  //never run on a PSP before (a run once stopped about here)
   }
 
   print(ok ? "\nAll done. Press X to leave.\n" : "\nStopped. Press X to leave.\n");
