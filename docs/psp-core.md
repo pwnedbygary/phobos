@@ -2097,7 +2097,10 @@ timing; no other emulator's code was read.
   then (`Kernel::audioOutput()`, from `System::run()`), each sum clamped to 16 bits, and hands them to the ares
   stream; silence makes up any the kernel's clock didn't reach (the program ended, or nothing will run again). The
   stream runs at the PSP's own 44.1 kHz, so the core resamples nothing: ares converts it to the host's rate. Frames
-  not taken yet wait in a ring of 4096 (the mixer adds a block or so ahead of the clock).
+  not taken yet wait in a ring of 4096 (the mixer adds a block or so ahead of the clock). Room for frames within a
+  block of the clock is made by dropping the oldest, which only happens with no system taking them (the kernel's
+  tests); frames further ahead, which no channel adds, never push out frames not taken, and the first frame not taken
+  never passes the clock: what doesn't fit is left out at the far end (`outputRoom()`).
 - **The mixer channels.** At each block boundary of part 17's timing model, the DMA reads the next 64 samples of
   every channel with a buffer and adds them to the 64 frames heard from there: each sample times its side's volume
   over 0x8000 (pspsdk's PSP_AUDIO_VOLUME_MAX: as it is; 0x4000 half; up to 0xFFFF, nearly double), rounded down; a
@@ -2107,7 +2110,14 @@ timing; no other emulator's code was read.
   and takes the straight line between them (linear interpolation), at its buffer's volume (0x8000 as it is): at
   22050 Hz a buffer fills twice as many frames as it has samples, every other one a sample as it is, the ones
   between halfway. A buffer is read while it plays (as the frames are taken), and finished before its slot is handed
-  back to the program (part 17's 100 microseconds before it's heard: its last samples are added that far ahead).
+  back to the program (part 17's 100 microseconds before it's heard: its last samples are added that far ahead). A
+  buffer armed once both slots have freed, while the last one's final 100 microseconds are still to be heard (a
+  program draining the channel with a null output before each buffer arms its next just then), is heard straight
+  after them, from the frame after the last one's end, and retires 100 microseconds before its own end: a whole
+  buffer after the last one's end, as a buffer chained behind another does. It starts on that frame, so at rates
+  other than 44.1 kHz it leaves out the fraction of a frame the last one ended on (4096 samples at 48 kHz fill 3764
+  frames, not 3763.2). The channel so adds to frames 7 at most ahead of the clock (`SrcAhead`: the 100 microseconds'
+  4.41 frames rounded up, and two for where a buffer's ends fall between frames).
 - **sceSasCore's voices** (`sas.cpp`), a grain sample by sample, for each voice playing and not paused:
   - Its sample where it is. A PCM voice's are 16-bit numbers in memory. A VAG voice's come packed as the
     PlayStation SPU's ADPCM: 16-byte blocks of 28 samples, 4 bits each. Four bits can't hold a sample, so they hold
@@ -2154,8 +2164,9 @@ timing; no other emulator's code was read.
   their loudest make, 2^21, so adding to it can't overflow), the SRC channel's place in its samples and the frame it
   adds to next, and each VAG voice's decoder (the two samples before its place, and whether it has started). Loading
   refuses frames ending before they start, more than a ring, frames taken past the clock, a sum past 2^21, the SRC
-  channel past its samples, somewhere with none armed, or a ring ahead. The layout is version 6: a state of version 1
-  to 5 is refused by its header.
+  channel past its samples, somewhere with none armed, or more than 7 frames ahead of the clock (`SrcAhead`), and an
+  SRC buffer retiring later than one armed now could (heard from 7 frames on). The layout is version 6: a state of
+  version 1 to 5 is refused by its header.
 
 What the games sound like on the host (the scratch runner writing the system's stream to a WAV, 40 s each, kept
 outside the repository; per second: RMS in dBFS, peak, clipped samples, zero crossings, the strongest frequency):
@@ -2198,8 +2209,44 @@ Tests (`tests/psp/run-tests.sh`, 197 groups, both sanitizers; `tests/psp/ares` 2
   SRC channel's nearest sample for the straight line, and its place left out of states ("state fields"); and the
   system's silent stream of before (`tests/psp/ares`).
 
+Review: a general-purpose reviewer of the branch; the clean-room spot check found the code independent; one medium
+and one low finding, both fixed, each with a test that failed before its fix. The medium: the SRC channel drifted
+without bound. A buffer armed once the slots had freed was timed as heard from that moment, but its frames went
+after the last buffer's, still to be heard for the 100 microseconds that buffer had retired early: a program
+draining the channel before each buffer (an output, then a null output, in a loop) put each buffer 4.4 frames
+further ahead of the clock, until the output's ring, making room, moved its first frame not taken past the clock
+(with 1024-sample buffers at 44.1 kHz, silence for good on every channel from 21.9 s, and a state the machine's own
+loading refused). Such a buffer is now timed from where it's heard, straight after the last one, so it retires a
+whole buffer after the last one's end (the SRC channel, above); the ring never moves its first frame not taken past
+the clock, leaving out what doesn't fit at its far end instead (the output, above); and loading wants the channel
+7 frames ahead at most (states, above). Part 17's output2 results still hold: "audio src rest" and "audio draining"
+now wait a millisecond where their programs armed a buffer in the last one's final 100 microseconds (on a PSP their
+pspautotests runs print lines there, and its calls take over 100 microseconds each), so each first buffer from idle
+retires 100 microseconds short as before: 13XX on both families, the release refused 1 ms on and done 2 ms on, the
+drained 4096 samples, the 48 kHz and rate 0 buffers. The low: no test pinned the standard VAG ending, a block marked
+1 and then a block of its own, 00 07 77 77..., which would sound as 28 samples of 28672 should the voice reach it.
+New groups: "audio src drained between buffers" (the drain-and-arm loop for 30 s, 1024 samples at 44.1 kHz and 4096
+at 48 kHz: never more than 7 frames ahead, every frame taken, each what the buffers joined end to end make, the
+drains a buffer apart, the state saved where the channel is furthest ahead and at the end loading and saving the
+same; the usual two-buffer stream as before), "audio output kept from a channel ahead" (a channel moved on by hand to
+a ring ahead: a mixer buffer playing meanwhile taken whole, the first frame not taken never past the clock), "sas
+vag endings" (the block marked 1 and the 00 07 77 77 block after it: silence and the voice's end right after the
+first, nothing in the next grain; a block marked 3 ending a voice that doesn't loop; a loop going back to a block
+marked 4); "state fields" now has the SRC channel 7 frames ahead and retiring as late as it can, and refuses a frame
+further and a cycle later. Before the fixes, the drained loop lost 344,038 of 1,324,323 frames at 44.1 kHz in its
+30 s, its state at the end refused, and the drains came 100 microseconds early at both rates; the ring dropped 583
+of the mixer's frames not taken; and the old loading refused a state the machine now leaves. The sas group failed
+with each of three readings broken: a block marked 1 not ending its voice (the 28-sample burst heard), a 3 not ending
+a voice that doesn't loop, a 4 not marking the loop's start (the groups before it passed all three). The usual
+two-buffer stream makes the same frames and return times as before at eight sizes and rates (a scratch harness, not
+committed, run on the old code and the new). The tree passes 200 groups and 250 checks; the layout is unchanged
+(version 6).
+
 Uncertain: everything listed as chosen above; whether sceAudio's mixer rounds a sample times a volume down (as
 here) or towards zero, and clamps once, as the sums are taken (here), or after each channel it adds (which differs
 where loud channels of opposite sign meet); which sample of a VAG voice its last block's lag leaves unheard as it
 ends (here its data's last); and how the PSP's interpolation shapes pitches other than 0x1000 (audio/sascore's
-pitch test prints no samples).
+pitch test prints no samples). Since the review: whether an SRC buffer armed in the last one's final 100
+microseconds is heard straight after it (here it is: its transfer ends 100 microseconds before what's heard, as part
+17's specification has every buffer's; no recording arms one then), and whether the PSP's converter keeps its place
+across such a join (here the buffer starts on a frame).

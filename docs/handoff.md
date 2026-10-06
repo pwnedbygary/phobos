@@ -772,6 +772,20 @@ describes it. Reverb is a pass-through (no reverb added); noise, waves and sas's
   versions each failed (VAG's guess with a half added, part 20's `& 7`, no VAG lag, the envelope after its step, dry
   off, multichannel interleaved, the mixer's volume rounded towards zero, no clamp, the SRC channel's nearest sample,
   its place left out of states, the old silent stream).
+- **Review:** a general-purpose reviewer; the clean-room spot check found the code independent; one medium and one
+  low finding, both fixed, each with a test that failed before it. Medium: an SRC buffer armed once the slots had
+  freed, while the last one's final 100 µs were still to be heard, was timed from the moment it was armed but heard
+  after them, so a program draining the channel before each buffer drifted 4.4 frames ahead per buffer: silence for
+  good from 21.9 s (1024 samples at 44.1 kHz) and states the loader refused. Such a buffer is now timed from where
+  it's heard (it retires a whole buffer after the last one's end); the output's ring never moves its first frame not
+  taken past the clock (what doesn't fit is left out at the far end); loading wants the SRC channel 7 frames ahead at
+  most. Part 17's output2 results still hold ("audio src rest" and "audio draining" now pause a millisecond where
+  the PSP's own runs print lines); the usual two-buffer stream is unchanged (same frames and return times at eight
+  sizes and rates). Low: no test pinned the standard VAG ending (a block marked 1, then `00 07 77 77...`). New groups:
+  "audio src drained between buffers" (30 s at 1024/44.1 kHz and 4096/48 kHz: lead bounded, every frame taken and as
+  the buffers make it, states round-trip), "audio output kept from a channel ahead", "sas vag endings" (the flag-1
+  ending, 3 ending a voice that doesn't loop, a loop back to a 4); "state fields" tries the new bounds. Checks: 200
+  groups, `tests/psp/ares` 250; the state's layout is unchanged (version 6).
 - **Next**: an ATRAC3+ decoder (Burnout's, SOCOM's and Invaders' music), sas reverb, noise and waves; the RP6 run.
 
 ## PSP core: more functions games ask for — 2026-10-05
