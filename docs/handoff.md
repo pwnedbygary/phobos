@@ -868,6 +868,15 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: measuring 3D on a PSP — 2026-10-04
+
+Branch `cursor/psp-3d-measure-2b67`, stacked on `cursor/psp-3d-2b67` (for stack #106). `tools/psp-ge-measure` gains
+nine 3D cases (perspective texels, depths and fog on a receding floor; a 3D sprite; the screen rounding; the near
+plane's cut with DEPTH_CLIP_ENABLE on and off; which depths stop triangles, points and sprites; culling). Against
+PPSSPP's software renderer 56 of the 59 files match; the three that differ are for the PSP to settle (docs/psp-core.md).
+The cases found a rounding difference in part 11's clipping, fixed there (a second commit on `cursor/psp-3d-2b67`).
+The updated EBOOT.PBP replaces the one on the RP6 in `Download/GEMEASURE`.
+
 ## PSP core, part 11: drawing in 3D — 2026-10-04
 
 Branch `cursor/psp-3d-2b67`, stacked on `cursor/psp-ge-measure-2b67` (for stack #106). The GE draws outside through
@@ -898,10 +907,11 @@ dithering, the stencil's steps, the 16-bit formats both ways, texel mapping, and
 question). 51 files, about 13 MB. `tests/psp/measure.cpp` runs the same program in the core and, with
 `PSP_GE_RESULTS`, lists what differs from a results folder (docs/psp-core.md, "Measuring the GE and the controller on
 a PSP"). Checks: 67 groups on the Mac (UBSan) and in `phobos-linux` (ASan and UBSan) with the programs; against
-PPSSPP's software renderer 49 of 51 files are identical, and the two that differ (a sprite edge exactly through pixel
-middles, a shrunk sprite's texels) are for the PSP to settle. `HostFolder` and `testProgram` moved into
-`tests/psp/kernel-machine.hpp` so the test files share them. The EBOOT.PBP is on the RP6 in `Download/GEMEASURE`
-(SHA-256 58fb9a27…) for the user to run with the VFPU's round 2.
+PPSSPP's software renderer 48 of the 50 result files match (first written here as "49 of 51", counting the
+manifest), and the two that differ (a sprite edge exactly through pixel middles, a shrunk sprite's texels) are for the
+PSP to settle. `HostFolder` and `testProgram` moved into `tests/psp/kernel-machine.hpp` so the test files share them.
+The EBOOT.PBP went to the RP6 in `Download/GEMEASURE` for the user to run with the VFPU's round 2 (since replaced by
+the version with 3D cases, above).
 
 ## PSP core, part 10: drawing in 2D — 2026-10-03
 

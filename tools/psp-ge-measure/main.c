@@ -1,8 +1,9 @@
 //psp-ge-measure: records what a real PSP's GE draws, and how its controller driver times its reads, in the cases where
 //Phobos's PSP core follows PPSSPP's software renderer or uOFW's reading of the firmware rather than measurements of
-//its own (see docs/psp-core.md, parts 8 to 10): blending's and the texture functions' rounding, the texture filter's
+//its own (see docs/psp-core.md, parts 8 to 11): blending's and the texture functions' rounding, the texture filter's
 //weights, which pixels sprites and triangles cover, the sprite corners' quarter turn, dithering, the stencil's steps,
-//and whether the controller's reads wait.
+//and whether the controller's reads wait; and in 3D, perspective-correct texels, the depths and fog written, the
+//GE's rounding onto the screen, the cut at the near plane, which depths stop a primitive, and culling.
 //
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/<test>.bin beside EBOOT.PBP: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's
@@ -11,7 +12,7 @@
 //
 //Build with pspdev's toolchain (https://github.com/pspdev/pspdev): make, which gives EBOOT.PBP. Run: copy it to a
 //folder under PSP/GAME on the memory stick (say PSP/GAME/GEMEASURE), start it from the XMB (custom firmware that runs
-//homebrew), press X. It takes a few seconds and writes about 13 MB.
+//homebrew), press X. It takes a few seconds and writes about 15 MB.
 
 #include <pspkernel.h>
 #include <pspdisplay.h>
@@ -405,6 +406,211 @@ static void stencil(const char* name, int psm, int operation) {
   saveTarget(name, 256, 256, 1);
 }
 
+//---- 3D
+
+enum { FloatVertexType3D = GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D };
+static ScePspFMatrix4 identity = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
+//A perspective lens (near 0.5, far 10): w = -z, so something twice as far away is drawn half the size.
+static ScePspFMatrix4 lens = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, -1.10526316f, -1}, {0, 0, -1.05263158f, 0}};
+
+//The target's pixel (x, y) as the position that lands on it in 3D with identity matrices (x and y from -1 to 1
+//across the 256 pixels, y up).
+static float ndcX(float x) { return (x - 128) / 128; }
+static float ndcY(float y) { return (128 - y) / 128; }
+
+static void fillDepth(unsigned short value) {
+  for(int y = 0; y < 256; y++) {
+    for(int x = 0; x < 256; x++) VRAM16[Depth / 2 + y * Stride + x] = value;
+  }
+}
+
+static void saveDepth(const char* name) {
+  for(int y = 0; y < 256; y++) {
+    for(int x = 0; x < 256; x++) pixels[y * 256 + x] = VRAM16[Depth / 2 + y * Stride + x];
+  }
+  writeFile(name, pixels, 256 * 256 * 4);
+  print("%-22s done\n", name);
+}
+
+//A list drawing in 3D into the target (8888): world and view the identity, the projection as given; the viewport
+//putting x and y from -1 to 1 onto the target's 256x256 pixels (y up) and pspsdk's usual depth range,
+//sceGuDepthRange(65535, 0) (z / w from -1 to 1 becoming depth 65535 to 0); every pixel passing the depth test and
+//writing its depth; DEPTH_CLIP_ENABLE (GU_CLIP_PLANES) as asked. start3D clears the target and its depths first.
+static void begin3D(ScePspFMatrix4* projection, int depthClamp) {
+  start(GU_PSM_8888);
+  sceGuOffset(2048 - 128, 2048 - 128);
+  sceGuViewport(2048, 2048, 256, 256);
+  sceGuDepthRange(65535, 0);
+  if(depthClamp) sceGuEnable(GU_CLIP_PLANES);
+  else sceGuDisable(GU_CLIP_PLANES);
+  sceGuSetMatrix(GU_PROJECTION, projection);
+  sceGuSetMatrix(GU_VIEW, &identity);
+  sceGuSetMatrix(GU_MODEL, &identity);
+  sceGuEnable(GU_DEPTH_TEST);
+  sceGuDepthFunc(GU_ALWAYS);
+  sceGuDepthMask(GU_FALSE);
+  sceGuDisable(GU_FOG);
+}
+static void start3D(ScePspFMatrix4* projection, int depthClamp) {
+  fillTarget(zero, 0);
+  fillDepth(0);
+  begin3D(projection, depthClamp);
+}
+
+//A floor receding under the lens from z -1 to z -4, the texture (texel (x, y) is x | y << 8 | 0x80 << 16) across it
+//from its near edge (v 0) to its far one (v 1). what 0: the texel each pixel takes, perspective and all; 1: the
+//depths written (16-bit, in the low half); 2: in white with fog (near 1, far 4, blue): the fog across it.
+static void floor3D(const char* name, int what) {
+  fillTexture(texelXY);
+  start3D(&lens, 1);
+  if(what == 0) useTexture(GU_TFX_REPLACE, GU_TCC_RGB);
+  if(what == 2) {
+    sceGuEnable(GU_FOG);
+    sceGuFog(1, 4, 0xff0000);
+  }
+  FloatVertex* v = sceGuGetMemory(6 * sizeof(FloatVertex));
+  v[0] = (FloatVertex){0, 0, 0xffffffff, -1, -1, -1};
+  v[1] = (FloatVertex){1, 0, 0xffffffff, 1, -1, -1};
+  v[2] = (FloatVertex){0, 1, 0xffffffff, -1, -1, -4};
+  v[3] = (FloatVertex){1, 0, 0xffffffff, 1, -1, -1};
+  v[4] = (FloatVertex){1, 1, 0xffffffff, 1, -1, -4};
+  v[5] = (FloatVertex){0, 1, 0xffffffff, -1, -1, -4};
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 6, 0, v);
+  finish();
+  if(what == 1) saveDepth(name);
+  else saveTarget(name, 256, 256, 0);
+}
+
+//A 3D sprite under the lens from a near corner (z -1, top left) to a far one (z -4, bottom right), textured as the
+//floor and fogged as it (near 1, far 4, blue): how a sprite whose corners lie at different depths takes its texels
+//and its fog.
+static void sprite3D(void) {
+  fillTexture(texelXY);
+  start3D(&lens, 1);
+  useTexture(GU_TFX_MODULATE, GU_TCC_RGB);
+  sceGuEnable(GU_FOG);
+  sceGuFog(1, 4, 0xff0000);
+  FloatVertex* v = sceGuGetMemory(2 * sizeof(FloatVertex));
+  v[0] = (FloatVertex){0, 0, 0xffffffff, -0.9f, 0.9f, -1};
+  v[1] = (FloatVertex){1, 1, 0xffffffff, 0.9f, -0.8f, -4};  //at w 4: x 0.225, y -0.2 on the screen
+  sceGuDrawArray(GU_SPRITES, FloatVertexType3D, 2, 0, v);
+  finish();
+  saveTarget("3d-sprite", 256, 256, 0);
+}
+
+//The GE's rounding onto the screen, through the matrices (identity) and the viewport: in cell (i, j), a square of two
+//triangles whose left edge lies i 256ths of a pixel past the sample point of the cell's pixel (4, 4) (7/16 in), and
+//whose top edge j 256ths below it. That pixel is drawn while both edges still round to the sample point.
+static void rounding3D(void) {
+  start3D(&identity, 1);
+  FloatVertex* vertices = sceGuGetMemory(256 * 6 * sizeof(FloatVertex));
+  for(int cell = 0; cell < 256; cell++) {
+    float x = (cell & 15) * 16, y = (cell >> 4) * 16;
+    float left = ndcX(x + 4 + 7 / 16.0f + (cell & 15) / 256.0f), top = ndcY(y + 4 + 7 / 16.0f + (cell >> 4) / 256.0f);
+    float right = ndcX(x + 12), bottom = ndcY(y + 12);
+    FloatVertex* v = vertices + cell * 6;
+    v[0] = (FloatVertex){0, 0, 0xffffffff, left, top, 0};
+    v[1] = (FloatVertex){0, 0, 0xffffffff, right, top, 0};
+    v[2] = (FloatVertex){0, 0, 0xffffffff, left, bottom, 0};
+    v[3] = (FloatVertex){0, 0, 0xffffffff, right, top, 0};
+    v[4] = (FloatVertex){0, 0, 0xffffffff, right, bottom, 0};
+    v[5] = (FloatVertex){0, 0, 0xffffffff, left, bottom, 0};
+  }
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 256 * 6, 0, vertices);
+  finish();
+  saveTarget("3d-rounding", 256, 256, 0);
+}
+
+//The near plane: with identity matrices it's z = -1. A triangle with corners red and green at z 0 and blue at z -3
+//reaches past it, so it's cut a third of the way to the blue corner: where, and the colors the cut leaves. With
+//DEPTH_CLIP_ENABLE off, the blue corner's z / w of -3 should drop it instead.
+static void clip3D(const char* name, int depthClamp) {
+  start3D(&identity, depthClamp);
+  FloatVertex* v = sceGuGetMemory(3 * sizeof(FloatVertex));
+  v[0] = (FloatVertex){0, 0, 0xff0000ff, ndcX(16), ndcY(16), 0};
+  v[1] = (FloatVertex){0, 0, 0xff00ff00, ndcX(240), ndcY(16), 0};
+  v[2] = (FloatVertex){0, 0, 0xffff0000, ndcX(128), ndcY(240), -3};
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 3, 0, v);
+  finish();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Which depths stop a primitive being drawn: in row 0 with DEPTH_CLIP_ENABLE on, in row 1 off, one 16x16 cell per case
+//(identity matrices, so z / w is z; depth = 32767 - 32768 z): a triangle with its corners at the z values below, a
+//point (at the cell's middle) or a 3D sprite.
+static const float ruleDepths[16][3] = {
+  {0, 0, 0}, {1.5f, 0, 0}, {1.5f, 1.5f, 1.5f}, {-1.5f, 0, 0}, {-1.5f, -1.5f, -1.5f}, {1.00002f, 0, 0},
+  {1.00004f, 0, 0}, {0.99f, 0.99f, 0.99f}, {1.5f}, {-1.5f}, {0}, {1.5f, 0}, {1.5f, 1.5f}, {1, 0, 0}, {1, 1, 1},
+  {0.5f, 0.5f, 0.5f},
+};
+static void rules3D(void) {
+  fillTarget(zero, 0);
+  fillDepth(0);
+  for(int row = 0; row < 2; row++) {
+    begin3D(&identity, row == 0);
+    for(int k = 0; k < 16; k++) {
+      float x = k * 16, y = row * 16;
+      const float* z = ruleDepths[k];
+      FloatVertex* v = sceGuGetMemory(3 * sizeof(FloatVertex));
+      if(k >= 8 && k <= 10) {
+        v[0] = (FloatVertex){0, 0, 0xffffffff, ndcX(x + 8.5f), ndcY(y + 8.5f), z[0]};
+        sceGuDrawArray(GU_POINTS, FloatVertexType3D, 1, 0, v);
+      } else if(k == 11 || k == 12) {
+        v[0] = (FloatVertex){0, 0, 0xffffffff, ndcX(x + 2), ndcY(y + 2), z[0]};
+        v[1] = (FloatVertex){0, 0, 0xffffffff, ndcX(x + 14), ndcY(y + 14), z[1]};
+        sceGuDrawArray(GU_SPRITES, FloatVertexType3D, 2, 0, v);
+      } else {
+        v[0] = (FloatVertex){0, 0, 0xffffffff, ndcX(x + 2), ndcY(y + 2), z[0]};
+        v[1] = (FloatVertex){0, 0, 0xffffffff, ndcX(x + 14), ndcY(y + 2), z[1]};
+        v[2] = (FloatVertex){0, 0, 0xffffffff, ndcX(x + 2), ndcY(y + 14), z[2]};
+        sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 3, 0, v);
+      }
+    }
+    finish();
+  }
+  saveTarget("3d-rules", 256, 32, 0);
+}
+
+//Culling: row 0 with sceGuFrontFace(GU_CW), row 1 with GU_CCW, in 3D; rows 2 and 3 the same in through mode. In each
+//row: a triangle running clockwise on the screen, one running counterclockwise, and a strip of two (the first
+//clockwise).
+static void cull3D(void) {
+  fillTarget(zero, 0);
+  for(int row = 0; row < 4; row++) {
+    int through = row >= 2;
+    if(through) start(GU_PSM_8888);
+    else {
+      start(GU_PSM_8888);
+      sceGuOffset(2048 - 128, 2048 - 128);
+      sceGuViewport(2048, 2048, 256, 256);
+      sceGuDepthRange(65535, 0);
+      sceGuSetMatrix(GU_PROJECTION, &identity);
+      sceGuSetMatrix(GU_VIEW, &identity);
+      sceGuSetMatrix(GU_MODEL, &identity);
+    }
+    sceGuEnable(GU_CULL_FACE);
+    sceGuFrontFace(row & 1 ? GU_CCW : GU_CW);
+    float y = row * 16;
+    float corners[3][4][2] = {
+      {{2, y + 2}, {14, y + 2}, {2, y + 14}},                    //clockwise on the screen (y down)
+      {{18, y + 2}, {18, y + 14}, {30, y + 2}},                  //counterclockwise
+      {{34, y + 2}, {46, y + 2}, {34, y + 14}, {46, y + 14}},    //a strip: clockwise, then its second the other way
+    };
+    for(int shape = 0; shape < 3; shape++) {
+      int count = shape == 2 ? 4 : 3;
+      FloatVertex* v = sceGuGetMemory(4 * sizeof(FloatVertex));
+      for(int n = 0; n < count; n++) {
+        float px = corners[shape][n][0], py = corners[shape][n][1];
+        v[n] = (FloatVertex){0, 0, 0xffffffff, through ? px : ndcX(px), through ? py : ndcY(py), 0};
+      }
+      sceGuDrawArray(shape == 2 ? GU_TRIANGLE_STRIP : GU_TRIANGLES, through ? FloatVertexType : FloatVertexType3D,
+                     count, 0, v);
+    }
+    finish();
+  }
+  saveTarget("3d-cull", 64, 64, 0);
+}
+
 //The controller's timing, in microseconds: 16 times each, how long a second sceCtrlReadLatch right after one takes;
 //how long sceCtrlReadBufferPositive takes just after a vertical blank; how long a second sceCtrlReadBufferPositive
 //right after one takes. (A wait is about a frame, 16683.)
@@ -444,9 +650,10 @@ static void writeManifest(void) {
   static const char text[] =
     "psp-ge-measure (tools/psp-ge-measure/main.c in Phobos says what each test draws): each .bin but\n"
     "controller-timing.bin is the target's pixels after one test, a little-endian 32-bit word each, row by row\n"
-    "(256x256 but filter-* 64x64 and sprite-corners 32x8; the stencil-*, narrow-* and dither-5650 frame buffers are\n"
-    "16-bit, in the low half). spread(x) = x | (255 - x) << 8 | (x * 7 & 0xff) << 16. Textures are 8888 (texture-*:\n"
-    "16-bit, texel y * 256 + x), nearest, clamped; blends draw the texture with replace and its alpha.\n"
+    "(256x256 but filter-* 64x64, sprite-corners 32x8, 3d-rules 256x32 and 3d-cull 64x64; the stencil-*, narrow-*\n"
+    "and dither-5650 frame buffers are 16-bit, in the low half, and 3d-floor-depth is the 16-bit depth buffer).\n"
+    "spread(x) = x | (255 - x) << 8 | (x * 7 & 0xff) << 16. Textures are 8888 (texture-*: 16-bit, texel y * 256 + x),\n"
+    "nearest, clamped; blends draw the texture with replace and its alpha. 3d-*: drawn through the matrices.\n"
     "controller-timing.bin: 48 times in microseconds: 16 second sceCtrlReadLatch calls, 16 sceCtrlReadBufferPositive\n"
     "calls just after a vertical blank, 16 second sceCtrlReadBufferPositive calls.\n";
   sceIoWrite(file, text, sizeof(text) - 1);
@@ -458,7 +665,7 @@ int main(int argc, char** argv) {
   print("psp-ge-measure: what this PSP's GE draws, and its controller's timing\n\n");
   SceCtrlData pad;
   if(!Smoke) {
-    print("Press X to start (about 13 MB is written).\n\n");
+    print("Press X to start (about 15 MB is written).\n\n");
     do sceCtrlReadBufferPositive(&pad, 1); while(!(pad.Buttons & PSP_CTRL_CROSS));
   }
   strncpy(folder, argc > 0 ? argv[0] : "ms0:/PSP/GAME/GEMEASURE/EBOOT.PBP", sizeof(folder) - 16);
@@ -519,6 +726,15 @@ int main(int argc, char** argv) {
   texelMapping("texels-triangles-shrunk", 1, 240, 256);
   texelMapping("texels-sprite-stretched", 0, 256, 200);
   texelMapping("texels-triangles-stretched", 1, 256, 200);
+  floor3D("3d-floor-texels", 0);
+  floor3D("3d-floor-depth", 1);
+  floor3D("3d-floor-fog", 2);
+  sprite3D();
+  rounding3D();
+  clip3D("3d-clip", 1);
+  clip3D("3d-clip-unclamped", 0);
+  rules3D();
+  cull3D();
   sceGuTerm();
   controllerTiming();
 
