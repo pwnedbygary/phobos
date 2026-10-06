@@ -6,11 +6,10 @@ auto Kernel::sceKernelExitGame() -> void {
   switchTo(nullptr);
 }
 
-//(exit status, argument size, argument): the module stops and unloads itself, which for a program on its own is
-//the same as leaving.
+//(exit status, argument size, argument): the module holding the code that called stops and unloads itself, its
+//calling thread ending (modules.cpp, unloadSelf()); the program doing it is leaving.
 auto Kernel::sceKernelSelfStopUnloadModule() -> void {
-  exited = true;
-  switchTo(nullptr);
+  unloadSelf(s32(arg(0)), arg(1), arg(2), 0);
 }
 
 //(which setting, where to put it): the system's settings (psputility_sysparam.h). Language 1 is English; button

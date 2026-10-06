@@ -1458,10 +1458,13 @@ a module); our own code.
 - **Loading** (`sceKernelLoadModule(path, flags, options)`): the file is read whole, from the disc by its path or as
   a run of sectors (`sce_lbn...`, as games name modules too), or from a host folder standing for a device.
   `sceKernelLoadModuleByID(file, flags, options)` reads one from a file already open, from where it's been seeked
-  to, as games keep modules in archives of their own: an encrypted one is as long as its ~PSP header says, a plain one
-  runs to the file's end (16 MiB at most). An encrypted module is decrypted (part 18). A PRX goes into a block of the
-  user partition, the lowest free place, a static module where it was linked; the loader relocates it there and
-  reads its imports and exports. Its ID comes back.
+  to, as games keep modules in archives of their own: an encrypted one is as long as its ~PSP header says (one said
+  to be shorter than that header, or longer than 64 MiB, the PSP's memory, is refused as an illegal object, the file
+  left where it was), a plain one runs to the file's end (16 MiB at most). Reading an open file asks the host for no
+  more than the file has left, and 64 MiB at most, so a size a damaged header claims costs nothing (a 4 KiB file
+  whose header claimed 0xfffffff0 bytes had 4 GiB asked for, which on Android would end the app). An encrypted
+  module is decrypted (part 18). A PRX goes into a block of the user partition, the lowest free place, a static module
+  where it was linked; the loader relocates it there and reads its imports and exports. Its ID comes back.
 - **Sony's modules are stood in for**, not run. Early games carried Sony's libraries for sound, video and the network
   (sceSAScore, sceATRAC3plus_Library, sceMpeg_library, sceNet_Library, and kernel drivers such as
   sceAudiocodec_Driver), which run on top of Sony's kernel and its hardware; the HLE kernel answers their functions
@@ -1469,21 +1472,42 @@ a module); our own code.
   0x1000), which a game's own never are; an encrypted one's name is in its ~PSP header, in the clear, so it needn't
   even be decrypted. A stand-in has an ID and a name, nothing in memory, and starts and stops at once.
 - **Linking**: after each load and unload, every module's imports (the program's too) are linked to the functions
-  loaded modules export in their libraries. An import the HLE kernel has no function for, which a module exports,
-  becomes `j address; nop` in place of the kernel's syscall (the caller's `jal` left `ra` pointing back at it, so the
-  function returns straight there); every other import is the kernel's syscall, so a stub linked to a module since
-  unloaded goes back to the kernel. A stub already right isn't written again, as that would throw away the code
-  compiled around it. Variables imported from other modules aren't linked yet.
+  the program and loaded modules export in their libraries (a game's module may import from its EBOOT.BIN). An
+  import the HLE kernel has no function for, which one of them exports, becomes `j address; nop` in place of the
+  kernel's syscall (the caller's `jal` left `ra` pointing back at it, so the function returns straight there); every
+  other import is the kernel's syscall, so a stub linked to a module since unloaded goes back to the kernel. A stub
+  already right isn't written again, as that would throw away the code compiled around it. Variables imported from
+  other modules aren't linked yet.
 - **Starting and stopping** (`sceKernelStartModule` and `sceKernelStopModule(module, argument size, argument, where
   to put the result, options)`): the module's `module_start` (or `module_stop`), exported for itself (NIDs
-  0xd632acdb and 0xcee8593c), runs on a thread made for it, its argument copied onto the thread's stack, with the
-  options' stack size, priority and attributes when they give them (else 256 KiB, 0x20, and user mode with the VFPU,
-  as the program's first thread has). It returns to a third syscall in the kernel's trampoline, which ends and
-  deletes its thread, as the PSP's module manager deletes the thread it made. The calling thread waits meanwhile, and
-  then gets the module's ID, the function's result written where it asked. A module without the function starts (or
-  stops) at once.
+  0xd632acdb and 0xcee8593c); a module that exports no `module_start` starts at its ELF header's entry point, where
+  its code begins, when that's in the module (an entry of 0, or outside it, means there's nothing to run). It runs on
+  a thread made for it, its argument copied onto the thread's stack. The thread has the program's first thread's
+  priority, stack size and attributes (0x20, 256 KiB, user mode with the VFPU) unless the module's own thread
+  parameters give others, or the caller's options do (SceKernelSMOption's stack size, priority and attributes), a 0
+  in either leaving the value as it was. The parameters are variables a module exports for itself,
+  `module_start_thread_parameter` and `module_stop_thread_parameter` (NIDs 0x0f7c276c and 0xcf0cc697): how many
+  values follow (Sony's SDK writes 3), then the priority, the stack size and the attributes, as pspsdk's SceModule
+  keeps them for each function's thread and uOFW's SceModuleEntryThread lays them out. The function returns to a
+  third syscall in the kernel's trampoline, which ends and deletes its thread; one that ends with
+  `sceKernelExitThread` instead is deleted all the same, as the PSP's module manager deletes the thread it made
+  however it ends. The calling thread waits meanwhile, and then gets the module's ID, the function's result (or its
+  exit status) written where it asked. A module without the function starts (or stops) at once.
 - **Unloading** (`sceKernelUnloadModule`): a module never started, or stopped; its memory goes back to the user
   partition, and stubs linked to it go back to the kernel.
+- **Unloading itself** (`sceKernelSelfStopUnloadModule(exit status, argument size, argument)`, through
+  `Kernel::unloadSelf()`, there for the other functions that do the same, such as later SDKs'
+  `sceKernelStopUnloadSelfModuleWithStatus`): the module is the one holding the code that called (`ra` points back
+  into it). The calling thread ends with the exit status (threads waiting for its end are
+  given it) and is deleted, as the code it would return to is going. If the module is running, its `module_stop`
+  then runs with the argument on a thread of its own, as `sceKernelStopModule` would run it, and the module goes once
+  that ends (its status says it's unloading meanwhile); one that isn't running, or has no `module_stop`, goes at
+  once. Called from its `module_start`, the thread that started the module gets its ID, the exit status as the
+  result. Nothing waits for `module_stop`'s result: the thread that asked is gone. Refused while another thread runs
+  the module's `module_start` or `module_stop` (not stopped), and from a call into the program, which runs on top of
+  whichever thread was running. The program itself, or code no module holds, unloading itself is the program
+  leaving, as it was for every caller before (Splinter Cell Essentials, by PPSSPP's notes, unloads a module of its
+  own this way as play starts and ends, which ended the game).
 - **IDs**: the program is a module too, its ID handed out once it's loaded. `sceKernelGetModuleIdByAddress` gives the
   module holding an address, in any of memory's windows; `sceKernelGetModuleId` the caller's (the module holding the
   code that called, else the program's); `sceKernelGetModuleIdList` all of them, the program's first.
@@ -1491,12 +1515,15 @@ a module); our own code.
   version, name. The loader keeps each segment's size in memory but not its file and zeroed parts, so the text is the
   first segment, the data the others, and the bss 0.
 - **Refused**, with pspkerror.h's errors: a file that isn't there, or a folder (the file system's errors); what isn't
-  a module (illegal object); an encrypted module that can't be decrypted (unsupported PRX type, and the decrypter's
-  reason noted); no room (no memory); an unknown ID; starting a module twice; stopping one not started, or stopped
-  already; unloading one that's running.
+  a module, or a ~PSP header's size no module has (illegal object); an encrypted module that can't be decrypted
+  (unsupported PRX type, and the decrypter's reason noted); no room (no memory); an unknown ID; starting a module
+  twice; stopping one not started, or stopped already; unloading one that's running.
 - **States** carry the loaded modules (each one's ID, file, whether it's a stand-in, its memory block, its status,
   the thread running its function, and its module as the program's is saved) and the program's ID. The state's
-  version is now 2, so a state made before is refused rather than misread.
+  version is now 2, so a state made before is refused rather than misread. Loading checks each module as part 15
+  checks the rest: under its own ID, not the program's; a thread exactly while its `module_start` or `module_stop`
+  runs, and one that's there; no block for a stand-in, and for another module a block of the user partition, or
+  none, but never a thread's stack or another module's block.
 
 Checked against the user's games (the system run on the Mac on their CHDs, nothing kept): Burnout Legends loads
 fourteen modules from its disc by path (seven kernel drivers, encrypted, and seven libraries, not), each Sony's and
@@ -1506,23 +1533,55 @@ Liberty City Stories loads three by `sceKernelLoadModuleByID` from runs of secto
 and as the caller's. Each game then stops at other functions the HLE kernel doesn't have yet (fixed-size memory
 pools, the power library, the SDK version calls).
 
-Tests (`tests/psp/modules.cpp`, five groups, on PRXs built in the test: TESTLIB exports a library's function and has a
+Tests (`tests/psp/modules.cpp`, ten groups, on PRXs built in the test: TESTLIB exports a library's function and has a
 module_start and a module_stop; TESTUSER imports the function):
 - "modules start and link": a program on both engines loads both from the memory stick, the second encrypted;
   starts the first (its result comes back), then the second with an argument (it sees the argument; its import
   reaches the first's function); stops the first and unloads it: the second's stub goes back to the kernel, the
   first's memory to the user partition, and each function's thread is gone once it returned.
 - "modules linking": a module loaded before what it imports is linked once that comes; loaded from the disc by path
-  and as a run of sectors.
+  and as a run of sectors; a module importing from a library the program exports is linked to it.
 - "modules stand-ins": Sony's modules, one encrypted under a tag Phobos has no key for, one a kernel module, one plain
   and named "Sce...": IDs and nothing in memory, started and stopped at once; `sceKernelLoadModuleByID` from inside
   an archive, behind ~SCE headers: a stand-in, and a module loaded for real.
 - "modules identities": by address (in another window too), the caller's, the list, the information (only as far as
   its size says).
 - "modules refusals": each refusal above; a module that can't fit leaves nothing behind.
+- "modules sizes": `sceKernelLoadModuleByID` on a 4 KiB file whose ~PSP header claims 0x14f bytes, 64 MiB and one,
+  or 0xfffffff0: refused, nothing left behind; reading an open file, a 4 KiB file asked for 16 MiB from 96 bytes in
+  gives its 4000 bytes, with room made for no more, and a file of 64 MiB and 4 KiB (with nothing written in it, so it
+  takes no room on the host) gives 64 MiB.
+- "modules unload themselves" (TESTSELF's quit() calls `sceKernelSelfStopUnloadModule(1, 4, argument)`): a thread
+  calling it is deleted and the thread waiting for its end gets 1; module_stop runs with the argument; the module and
+  its memory are gone and the rest runs on, on both engines. Its module_start being quit() itself: the thread that
+  started it gets its ID and 1. Refused while its module_start sleeps on another thread. The program, or code in no
+  module, calling it leaves.
+- "modules exit threads": module_start and module_stop ending with `sceKernelExitThread(5)` and `(6)`: the caller
+  gets 5 and 6 as their results, and both threads and their stacks are gone, on both engines.
+- "modules entry points": a module without a module_start runs its ELF entry point when that's in it, and starts at
+  once when it isn't; a module's thread parameters (three for module_start, two for module_stop) make its functions'
+  threads, the options going over them but for their zeros.
+- "modules state": a state saved while module_start waits in a delay (its caller waiting for it) loads into a fresh
+  machine, which saves the very same state, and both machines carry on alike to the program's end: module_start's
+  result reaches its caller, its thread is gone. On both engines.
 - "state fields" changes each new field and refuses a module under another's ID, IDs not handed out yet (the
-  module's, its block's, its thread's, the program's) and a status there isn't; "decrypt kernel loads" loads a
-  program behind a ~SCE header.
+  module's, its block's, its thread's, the program's) and a status there isn't; and (its module now in a block of
+  its own, its module_start on a thread, one of Sony's beside it) a module under the program's ID, with a thread
+  while none of its functions runs, without one while one does, with a thread that isn't there, a block that isn't
+  one, a thread's stack as its block, a block two modules have, and a stand-in with a block. "decrypt kernel loads"
+  loads a program behind a ~SCE header.
 - Broken versions each failed a test: imports never linked to exports, module_start's result written wrong, an
   unloaded module's stubs left linked, Sony's modules loaded like any other, module_start's thread kept, a loaded
-  module's own fields left out of states, and ~SCE headers not passed over.
+  module's own fields left out of states, and ~SCE headers not passed over. The review's fixes below were each tested
+  first: before them, the new checks failed 52 times over in "modules linking", "modules sizes", "modules unload
+  themselves", "modules exit threads", "modules entry points" and "state fields"; with them, all pass.
+
+Review: a general-purpose reviewer found parts 18 and 19's code an independent implementation in a clean-room audit,
+and two medium and five low findings, all fixed (from pspsdk's and uOFW's headers and the reviewer's notes, without
+PPSSPP's code): `sceKernelLoadModuleByID` took the module's size from an unchecked ~PSP header and made room for it
+before reading (bounded now, with every read of an open file); a module unloading itself ended the game (now it
+goes, and the program runs on); the program's exports weren't offered to modules' imports; a module without a
+module_start never ran its entry point, and modules' own thread parameters were ignored; a module_start or
+module_stop ending in `sceKernelExitThread` kept its thread and stack for good; states' modules were checked no
+further than their IDs; and the decrypter's round-trip tests shared its key tables, so the keys' digests are now
+pinned (part 18).

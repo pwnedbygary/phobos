@@ -258,9 +258,17 @@ auto Kernel::sceKernelStartThread() -> void {
   startThread(*thread, length, pointer);
 }
 
+//The calling thread ends. One made to run a module's module_start or module_stop is deleted too, as
+//sceKernelExitDeleteThread does: the PSP's module manager deletes the thread it made, however that ends.
 auto Kernel::sceKernelExitThread() -> void {
   if(!current) return;
-  endThread(*current, s32(arg(0)));
+  Thread* thread = current;
+  bool made = madeForModule(thread->uid);
+  endThread(*thread, s32(arg(0)));
+  if(made) {
+    current = nullptr;  //nothing to save: the thread is gone
+    discardThread(*thread);
+  }
   reschedule();
 }
 

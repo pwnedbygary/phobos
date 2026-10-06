@@ -157,16 +157,29 @@ static auto stateFields() -> void {
   k.module.exports = {{"Lib", 0x2222, 0x0880'6000, false}};
   k.module.skipped = {"left out"};
   k.programUID = k.newUID();
-  u32 moduleID = k.newUID();
+  u32 otherProgramID = k.newUID();  //what the program's ID changes to below
+  //a module loaded into a block of its own, its module_start running on thread one; and one of Sony's, stood in
+  //for (started at once, nothing of it in memory)
+  u32 moduleID = k.newUID(), sonyID = k.newUID();
+  u32 moduleBlock = k.allocate(0x1000, 0, 0, "ms0:/A.PRX")->uid;
+  u32 spareBlock = k.allocate(0x1000, 0, 0, "spare")->uid;  //what the module's block changes to below
   auto& loaded = k.modules[moduleID];
   loaded.uid = moduleID;
   loaded.path = "ms0:/A.PRX";
-  loaded.block = k.programUID;  //any ID handed out
+  loaded.block = moduleBlock;
   loaded.module.name = "LOADED";
   loaded.module.segments = {{0x0881'0000, 0x100}};
+  auto& sony = k.modules[sonyID];
+  sony.uid = sonyID;
+  sony.path = "ms0:/SAS.PRX";
+  sony.standIn = true;
+  sony.status = Kernel::ModuleStatus::Started;
+  sony.module.name = "sceSAScore";
   a.stub("sceKernelDelayThread");
   s32 one = k.createThread("one", 0x0880'1000, 0x20, 0x1000, 0, 0);
   s32 two = k.createThread("two", 0x0880'2000, 0x30, 0x1000, 0, 0);
+  loaded.status = Kernel::ModuleStatus::Starting;
+  loaded.thread = one;
   k.current = k.threads[one].get();
   u32 semaphore = a.call("sceKernelCreateSema", {a.string("sema"), 0, 1, 5, 0});
   k.lwMutexes[k.nextUID++] = 0x0880'9000;
@@ -240,11 +253,12 @@ static auto stateFields() -> void {
     {"import reported", [&] { k.imports[0].reported = true; }},
     {"exited", [&] { k.exited = true; }}, {"cycles", [&] { k.cycles += 3 * Kernel::VblankCycles + 12345; }},
     {"nextUID", [&] { k.nextUID += 7; }}, {"startTime", [&] { k.startTime += 7; }},
-    //the modules it loaded
-    {"programUID", [&] { k.programUID = moduleID; }}, {"loaded path", [&] { loaded.path += "x"; }},
-    {"loaded standIn", [&] { loaded.standIn = true; }}, {"loaded block", [&] { loaded.block = moduleID; }},
-    {"loaded status", [&] { loaded.status = Kernel::ModuleStatus::Stopped; }},
-    {"loaded thread", [&] { loaded.thread = moduleID; }}, {"loaded module", [&] { loaded.module.name += "x"; }},
+    //the modules it loaded: each change leaves a module a machine could have (Sony's taken for a module of the
+    //game's with nothing in memory, the module's module_stop running on thread two)
+    {"programUID", [&] { k.programUID = otherProgramID; }}, {"loaded path", [&] { loaded.path += "x"; }},
+    {"loaded standIn", [&] { sony.standIn = false; }}, {"loaded block", [&] { loaded.block = spareBlock; }},
+    {"loaded status", [&] { loaded.status = Kernel::ModuleStatus::Stopping; }},
+    {"loaded thread", [&] { loaded.thread = two; }}, {"loaded module", [&] { loaded.module.name += "x"; }},
     {"loaded segment", [&] { loaded.module.segments[0].size ^= 4; }},
   };
   //a thread's every field, and its registers. Each change leaves a value a fresh machine doesn't have, so that one
@@ -427,6 +441,28 @@ static auto stateFields() -> void {
   refuses("a module's thread not handed out yet", [&] { k.modules.begin()->second.thread = k.nextUID; });
   refuses("a module status there isn't", [&] { k.modules.begin()->second.status = Kernel::ModuleStatus(9); });
   refuses("the program's ID not handed out yet", [&] { k.programUID = k.nextUID; });
+  //a module as no machine has one: under the program's ID; with a thread while none of its functions runs, or
+  //without one while one does, or a thread that isn't there; a block that isn't one, a thread's stack, another
+  //module's, or any block at all for one of Sony's
+  refuses("a module under the program's ID", [&] {
+    auto copy = k.modules.at(sonyID);
+    copy.uid = k.programUID;
+    k.modules[k.programUID] = copy;
+  });
+  refuses("a module's thread while it isn't starting or stopping", [&] {
+    k.modules.at(moduleID).status = Kernel::ModuleStatus::Started;
+  });
+  refuses("a module stopping with no thread", [&] { k.modules.at(moduleID).thread = 0; });
+  refuses("a module's thread that isn't there", [&] { k.modules.at(moduleID).thread = semaphore; });
+  refuses("a module's block that isn't a block", [&] { k.modules.at(moduleID).block = semaphore; });
+  refuses("a module's block that's a thread's stack", [&] {
+    for(auto& b : k.blocks) if(b.address == k.threads.at(two)->stackBlock) k.modules.at(moduleID).block = b.uid;
+  });
+  refuses("a block two modules have", [&] { k.modules.at(sonyID).block = k.modules.at(moduleID).block; });
+  refuses("a stand-in with a block", [&] {
+    k.modules.at(sonyID).standIn = true;
+    k.modules.at(sonyID).block = moduleBlock;  //no other module's, since the module moved to the spare block
+  });
   //a host folder's names as no listing makes them: reading it would join them to its place on the host
   refuses("a folder name reaching out of its folder", [&] { k.files[folder].entries.push_back("../../etc"); });
   refuses("a folder name that's a whole path", [&] { k.files[folder].entries.push_back("/etc"); });

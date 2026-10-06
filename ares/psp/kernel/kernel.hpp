@@ -544,7 +544,8 @@ struct Kernel {
   auto sceKernelCacheUnneeded() -> void;
 
   //modules.cpp: the modules (PRXs) a program loads besides itself
-  enum class ModuleStatus : u32 { Loaded, Starting, Started, Stopping, Stopped };
+  //(Unloading: its module_stop runs as it unloads itself, and it goes once that ends)
+  enum class ModuleStatus : u32 { Loaded, Starting, Started, Stopping, Stopped, Unloading };
   struct LoadedModule {
     u32 uid = 0;
     std::string path;      //the file it was loaded from
@@ -560,8 +561,14 @@ struct Kernel {
   auto readOpenFile(OpenFile& open, u64 size, std::vector<u8>& data) -> u32;
   auto loadModule(const std::vector<u8>& file, const std::string& path) -> u32;
   auto standIn(const std::string& name, u32 attributes, const std::string& path) -> u32;
+  auto unloadModule(u32 uid) -> void;
+  auto unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -> void;
   auto linkImports() -> void;
   auto moduleAt(u32 address) const -> u32;
+  auto moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32;
+  auto makeModuleThread(const LoadedModule& loaded, u32 entry, u32 parameters, u32 length, u32 argument,
+                        u32 options) -> s32;
+  auto madeForModule(u32 thread) const -> bool;
   auto runModuleFunction(LoadedModule& loaded, u32 nid, ModuleStatus during) -> void;
   auto moduleThreadEnded(Thread& thread, s32 status) -> void;
   auto moduleReturned() -> void;

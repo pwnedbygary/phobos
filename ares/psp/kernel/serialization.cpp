@@ -114,7 +114,7 @@ auto Kernel::serialize(serializer& s) -> bool {
   map(modules, [&](LoadedModule& m) {
     s(m.uid); text(m.path); s(m.standIn); s(m.block); s(m.status); s(m.thread);
     moduleFields(m.module);
-    check(m.status <= ModuleStatus::Stopped);
+    check(m.status <= ModuleStatus::Unloading);
   });
   //imports: the syscall codes in the program's memory count them in this order
   vector(imports, [&](Import& i) {
@@ -194,8 +194,23 @@ auto Kernel::serialize(serializer& s) -> bool {
     for(auto& [uid, flag] : eventFlags) check(uid < nextUID && flag.uid == uid);
     for(auto& [uid, callback] : callbacks) check(uid < nextUID && callback.uid == uid);
     for(auto& block : blocks) check(block.uid < nextUID);
-    for(auto& [uid, m] : modules) check(uid < nextUID && m.uid == uid && m.block < nextUID && m.thread < nextUID);
     check(programUID < nextUID);
+    //A module isn't the program. It has a thread exactly while its module_start or module_stop runs, and that thread
+    //is there. A stand-in has nothing in memory; another module has a block of the user partition, or none, but
+    //never a thread's stack or another module's block.
+    for(auto& [uid, m] : modules) {
+      check(uid < nextUID && m.uid == uid && uid != programUID);
+      bool running = m.status == ModuleStatus::Starting || m.status == ModuleStatus::Stopping
+                  || m.status == ModuleStatus::Unloading;
+      check(running == (m.thread != 0) && (!m.thread || threads.count(m.thread)));
+      check(!m.standIn || !m.block);
+      if(!m.block) continue;
+      const Block* owned = nullptr;
+      for(auto& block : blocks) if(block.uid == m.block) owned = &block;
+      check(owned != nullptr);
+      for(auto& [id, t] : threads) check(!owned || t->stackBlock != owned->address);
+      for(auto& [other, o] : modules) check(other == uid || o.block != m.block);
+    }
   }
 
   //open files and folders. Nothing on the disc is open for writing (openOnDisc() refuses it), and a folder on the
