@@ -315,6 +315,7 @@ static auto stateFields() -> void {
     {"mailbox name", [&] { mailbox.name += "x"; }}, {"mailbox attributes", [&] { mailbox.attributes ^= 1; }},
     {"mailbox messages", [&] { mailbox.messages.push_back(0x0880'1000); }},
     {"atracIDs", [&] { k.atracIDs = 5; }}, {"dispatchSuspended", [&] { k.dispatchSuspended = true; }},
+    {"fontResolution", [&] { k.fontResolution[1] = 144.0f; }},
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
     //(a stack is a block of its own, of its size: thread one's shrinks with its block, then moves to the spare)
@@ -689,6 +690,7 @@ static auto stateFields() -> void {
     thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Mailbox, thread.waitID = semaphore;
   });
   refuses("ATRAC IDs past six", [&] { k.atracIDs = 0x40; });
+  refuses("a font resolution of 0", [&] { k.fontResolution[0] = 0; });
   //sceSas as its functions never leave it
   using Sas = Kernel::Sas;
   refuses("a sas grain it doesn't take", [&] { k.sas.grain = 0x5c; });

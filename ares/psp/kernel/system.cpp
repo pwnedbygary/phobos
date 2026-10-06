@@ -295,6 +295,29 @@ auto Kernel::sceRtcGetTime_t() -> void {
   result(0);
 }
 
+//(date, where to put a DOS time): the date as FAT keeps one: years since 1980 in bits 25-31, the month in 21-24, the
+//day in 16-20, the hour in 11-15, the minute in 5-10, half the seconds in 0-4. Years before 1980 or after 2107 don't
+//fit: -1. As pspautotests' rtc/convert recorded (an hour of 24 goes in as it is).
+auto Kernel::sceRtcGetDosTime() -> void {
+  u32 date = arg(0), year = memory.read(2, date);
+  if(year < 1980 || year > 2107) return result(0xffff'ffff);
+  u32 time = (year - 1980) << 25 | memory.read(2, date + 2) << 21 | memory.read(2, date + 4) << 16
+           | memory.read(2, date + 6) << 11 | memory.read(2, date + 8) << 5 | memory.read(2, date + 10) >> 1;
+  if(arg(1)) memory.write(4, arg(1), time);
+  result(0);
+}
+
+//(where to put the date, DOS time): the other way, its microseconds 0.
+auto Kernel::sceRtcSetDosTime() -> void {
+  u32 date = arg(0), time = arg(1);
+  if(!memory.reaches(date, 16)) return result(ErrorInvalidPointer);
+  u16 fields[6] = {u16(1980 + (time >> 25)), u16(time >> 21 & 15), u16(time >> 16 & 31), u16(time >> 11 & 31),
+                   u16(time >> 5 & 63), u16((time & 31) * 2)};
+  for(u32 n = 0; n < 6; n++) memory.write(2, date + n * 2, fields[n]);
+  memory.write(4, date + 12, 0);
+  result(0);
+}
+
 //(where to put it): the console's OpenPSID, 16 bytes a PSP keeps for each console (pspopenpsid.h's PspOpenPSID);
 //every Phobos PSP is the same made-up console: "PHOBOS" after a two-byte header, its last byte 1.
 auto Kernel::sceOpenPSIDGetOpenPSID() -> void {

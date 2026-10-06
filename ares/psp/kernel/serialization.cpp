@@ -316,9 +316,17 @@ auto Kernel::serialize(serializer& s) -> bool {
     }
     if(v.source == Sas::Source::Vag) check(v.size && !(v.size & 15) && (v.loop == 0 || v.loop == 1));
   }
-  //sceAtrac3plus's IDs handed out (six of them), and threads' dispatching held off
+  //sceAtrac3plus's IDs handed out (six of them), threads' dispatching held off, and sceLibFont's resolution (a
+  //positive number, as sceFontSetResolution keeps it)
   s(atracIDs); s(dispatchSuspended);
   check(atracIDs < 1u << 6);
+  for(auto& resolution : fontResolution) {
+    u32 bits;
+    memcpy(&bits, &resolution, 4);
+    s(bits);
+    memcpy(&resolution, &bits, 4);
+    check(resolution > 0 && resolution < 1e9f);
+  }
   //the utilities: the dialog, and the modules loaded
   s(dialog.kind); s(dialog.status); s(dialog.next); s(dialog.changeAt); s(dialog.parameters);
   vector(utilityModules, [&](u32& module) { s(module); });

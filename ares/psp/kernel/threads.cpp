@@ -54,7 +54,11 @@ auto Kernel::startThread(Thread& thread, u32 argumentLength, u32 argumentPointer
   c.pfxs = c.pfxt = 0xe4;  //the VFPU's prefixes doing nothing
   c.fcsr = 0x0000'0e00;    //FCSR as a PSP program finds it (measured): rounding to the nearest, traps for overflow,
                            //dividing by zero and invalid operations enabled (see interpreter-fpu.cpp)
-  u32 sp = thread.stackBlock + thread.stackSize - 0x100;  //the top 256 bytes are the kernel's, as on the PSP
+  //The top 256 bytes are the kernel's, as on the PSP (k0 points at them), and start zeroed: Peace Walker's C library
+  //reads a pointer of its own for the thread at k0 + 4, falling back on a global one when it's 0, and the 0xff bytes
+  //a new stack is filled with crashed it.
+  u32 sp = thread.stackBlock + thread.stackSize - 0x100;
+  memory.fill(sp, 0, 0x100);
   if(argumentPointer && argumentLength) {
     sp = (sp - argumentLength) & ~15u;
     std::vector<u8> argument(argumentLength);
@@ -589,7 +593,10 @@ auto Kernel::sceKernelDeleteLwMutex() -> void {
   reschedule();
 }
 
-//(work area, count, timeout); with callbacks, the thread's callbacks run while it waits.
+//(work area, count, timeout); with callbacks, the thread's callbacks run while it waits. Only while it waits: the
+//lightweight mutexes are Kernel_Library's, a user-mode library, whose lock takes a free (or its own) mutex without
+//entering the kernel, so no callback can run there. Peace Walker counts on that: it locks one while holding a lock
+//its power callback takes, and running the callback (notified as it was registered) there deadlocked it.
 auto Kernel::lockLwMutex(bool callbacks) -> void {
   if(!mayWait()) return;
   u32 workArea = arg(0), count = arg(1), timeout = arg(2);
@@ -600,12 +607,12 @@ auto Kernel::lockLwMutex(bool callbacks) -> void {
   if(!level) {
     memory.write(4, workArea, count);
     memory.write(4, workArea + 4, current->uid);
-    return callbacksOnReturn(callbacks);
+    return;
   }
   if(owner == current->uid) {
     if(!(attributes & 0x200)) return result(ErrorLwMutexRecursion);
     memory.write(4, workArea, level + count);
-    return callbacksOnReturn(callbacks);
+    return;
   }
   memory.write(4, workArea + 12, memory.read(4, workArea + 12) + 1);
   current->waitCount = count;

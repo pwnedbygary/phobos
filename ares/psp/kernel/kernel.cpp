@@ -28,6 +28,7 @@ namespace ares::PlayStationPortable {
 #include "mpeg.cpp"
 #include "atrac.cpp"
 #include "net.cpp"
+#include "font.cpp"
 #include "utility.cpp"
 #include "power.cpp"
 #include "system.cpp"
@@ -168,6 +169,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceRtc",            "sceRtcGetCurrentClock",         &Kernel::sceRtcGetCurrentClock);
   add("sceRtc",            "sceRtcGetCurrentClockLocalTime", &Kernel::sceRtcGetCurrentClockLocalTime);
   add("sceRtc",            "sceRtcGetTime_t",               &Kernel::sceRtcGetTime_t);
+  add("sceRtc",            "sceRtcGetDosTime",              &Kernel::sceRtcGetDosTime);
+  add("sceRtc",            "sceRtcSetDosTime",              &Kernel::sceRtcSetDosTime);
   add("sceOpenPSID",       "sceOpenPSIDGetOpenPSID",        &Kernel::sceOpenPSIDGetOpenPSID);
   add("SysMemUserForUser", "sceKernelPrintf",               &Kernel::sceKernelPrintf);
   add("scePower",          "scePowerRegisterCallback",      &Kernel::scePowerRegisterCallback);
@@ -501,6 +504,28 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge) : cpu(cpu), memory(memory)
   add("sceMpeg",           "sceMpegAvcCsc",                 &Kernel::sceMpegAvcCsc);
   add("sceMpeg",           "sceMpegAtracDecode",            &Kernel::sceMpegAtracDecode);
   add("sceMpeg",           "sceMpegGetAvcEsAu",             &Kernel::sceMpegGetAvcAu);
+  //the system's fonts, none installed (font.cpp)
+  add("sceLibFont",        "sceFontNewLib",                 &Kernel::sceFontNewLib);
+  add("sceLibFont",        "sceFontDoneLib",                &Kernel::sceFontDone);
+  add("sceLibFont",        "sceFontClose",                  &Kernel::sceFontDone);
+  add("sceLibFont",        "sceFontFlush",                  &Kernel::sceFontDone);
+  add("sceLibFont",        "sceFontSetAltCharacterCode",    &Kernel::sceFontDone);
+  add("sceLibFont",        "sceFontGetNumFontList",         &Kernel::sceFontGetNumFontList);
+  add("sceLibFont",        "sceFontGetFontList",            &Kernel::sceFontGetFontList);
+  add("sceLibFont",        "sceFontFindOptimumFont",        &Kernel::sceFontFindOptimumFont);
+  add("sceLibFont",        "sceFontFindFont",               &Kernel::sceFontFindOptimumFont);
+  add("sceLibFont",        "sceFontOpen",                   &Kernel::sceFontOpen);
+  add("sceLibFont",        "sceFontOpenUserMemory",         &Kernel::sceFontOpen);
+  add("sceLibFont",        "sceFontOpenUserFile",           &Kernel::sceFontOpen);
+  for(auto name : {"sceFontGetFontInfo", "sceFontGetFontInfoByIndexNumber", "sceFontGetCharInfo",
+                   "sceFontGetCharImageRect", "sceFontGetCharGlyphImage", "sceFontGetCharGlyphImage_Clip"}) {
+    add("sceLibFont", name, &Kernel::sceFontNoFont);
+  }
+  add("sceLibFont",        "sceFontSetResolution",          &Kernel::sceFontSetResolution);
+  add("sceLibFont",        "sceFontPointToPixelH",          &Kernel::sceFontPointToPixelH);
+  add("sceLibFont",        "sceFontPointToPixelV",          &Kernel::sceFontPointToPixelV);
+  add("sceLibFont",        "sceFontPixelToPointH",          &Kernel::sceFontPixelToPointH);
+  add("sceLibFont",        "sceFontPixelToPointV",          &Kernel::sceFontPixelToPointV);
   add("sceAtrac3plus",     "sceAtracGetAtracID",            &Kernel::sceAtracGetAtracID);
   add("sceAtrac3plus",     "sceAtracReleaseAtracID",        &Kernel::sceAtracReleaseAtracID);
   add("sceAtrac3plus",     "sceAtracSetDataAndGetID",       &Kernel::sceAtracSetDataAndGetID);
@@ -552,6 +577,7 @@ auto Kernel::power() -> void {
   sas = {};
   atracIDs = 0;
   dispatchSuspended = false;
+  fontResolution[0] = fontResolution[1] = 128.0f;
   dialog = {};
   utilityModules.clear();
   files.clear();

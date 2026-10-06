@@ -143,6 +143,21 @@ static auto oddsAndEnds() -> void {
   }
   CHECK(m.call("sceRtcGetTime_t", {R + 0x20, R + 0x40}), 0);
   CHECK(word(m, R + 0x40), 946'684'801);
+  //DOS times, as rtc/convert recorded: 2107-09-11 24:00:00 is 4281057280; 1979 and 2108 don't fit
+  for(auto [address, value] : {std::pair{0u, 2107u}, {2, 9}, {4, 11}, {6, 24}, {8, 0}, {10, 0}}) {
+    m.system.memory.write(2, R + 0x20 + address, value);
+  }
+  CHECK(m.call("sceRtcGetDosTime", {R + 0x20, R + 0x40}), 0);
+  CHECK(word(m, R + 0x40), 4'281'057'280u);
+  m.system.memory.write(2, R + 0x20, 1979);
+  CHECK(m.call("sceRtcGetDosTime", {R + 0x20, R + 0x40}), 0xffff'ffff);
+  m.system.memory.write(2, R + 0x20, 2108);
+  CHECK(m.call("sceRtcGetDosTime", {R + 0x20, R + 0x40}), 0xffff'ffff);
+  for(auto [time, expected] : {std::pair{100u, std::array<u32, 7>{1980, 0, 0, 0, 3, 8, 0}},
+                               {10'000'000u, std::array<u32, 7>{1980, 4, 24, 18, 52, 0, 0}}}) {
+    CHECK(m.call("sceRtcSetDosTime", {R + 0x60, time}), 0);
+    check(__LINE__, "a DOS time's date", date(R + 0x60) == expected, true);
+  }
   CHECK(m.call("sceOpenPSIDGetOpenPSID", {R + 0x50}), 0);
   CHECK(m.system.memory.readString(R + 0x52, 6) == "PHOBOS" && m.system.memory.read(1, R + 0x5f) == 1, true);
   m.kernel.vblanks = 3;
@@ -181,8 +196,8 @@ static auto oddsAndEnds() -> void {
 
 //Threads: a thread of the caller's priority runs when the caller rotates its line, and the caller reads its priority;
 //with dispatch held off, a higher-priority thread started doesn't run, and a wait is refused, until dispatch is
-//resumed, when it runs at once; a lightweight mutex locked with callbacks runs those notified first. On both
-//engines.
+//resumed, when it runs at once; a free lightweight mutex locked with callbacks doesn't run the one notified (it
+//never enters the kernel), sceKernelCheckCallback then does. On both engines.
 static auto threadOddsAndEnds() -> void {
   for(bool recompile : {false, true}) {
     KernelMachine m;
@@ -233,10 +248,11 @@ static auto threadOddsAndEnds() -> void {
     main.call("sceKernelLockLwMutexCB");
     main.li(t0, R); main.put(sw(v0, 12, t0));
     main.print("locked\n");
+    main.call("sceKernelCheckCallback");
     main.call("sceKernelExitGame");
     m.runProgram(0x0880'1000, recompile);
     CHECK(m.kernel.exited, true);
-    std::string expected = "main\nequal\nrotated\nheld\nhigh\nresumed\ncallback\nlocked\n";
+    std::string expected = "main\nequal\nrotated\nheld\nhigh\nresumed\nlocked\ncallback\n";
     CHECK(m.output == expected, true);
     if(m.output != expected) std::printf("  [%s]\n", m.output.c_str());
     CHECK(word(m, R), 0x20);
@@ -248,9 +264,61 @@ static auto threadOddsAndEnds() -> void {
   }
 }
 
+//sceLibFont with no fonts installed: the library starts, lists none, finds and opens none (the error written where
+//asked), a font's details refused; points and pixels at 128 dots an inch, then at a resolution set.
+static auto fontsMissing() -> void {
+  KernelMachine m;
+  m.system.memory.write(4, R, 0x1337);
+  u32 library = m.call("sceFontNewLib", {Buffer, R});
+  CHECK(library != 0 && word(m, R) == 0, true);
+  CHECK(m.call("sceFontGetNumFontList", {library, R}), 0);
+  CHECK(m.call("sceFontFindOptimumFont", {library, Buffer, R}), 0xffff'ffff);
+  CHECK(word(m, R), Kernel::ErrorNotFound);
+  m.system.memory.write(4, R, 0);
+  CHECK(m.call("sceFontOpen", {library, 0, 0, R}), 0);
+  CHECK(word(m, R), Kernel::ErrorNotFound);
+  CHECK(m.call("sceFontGetFontInfo", {0, Buffer}), Kernel::ErrorNotFound);
+  CHECK(m.call("sceFontGetCharInfo", {0, 'A', Buffer}), Kernel::ErrorNotFound);
+  auto scale = [&](const char* name, float value) {
+    u32 bits;
+    memcpy(&bits, &value, 4);
+    m.system.fpu.r[12] = bits;
+    m.call(name, {library, R});
+    memcpy(&value, &m.system.fpu.r[0], 4);
+    return value;
+  };
+  CHECK(scale("sceFontPointToPixelH", 72.0f) == 128.0f, true);
+  CHECK(scale("sceFontPixelToPointV", 128.0f) == 72.0f, true);
+  float resolution = 144.0f;
+  memcpy(&m.system.fpu.r[12], &resolution, 4);
+  memcpy(&m.system.fpu.r[13], &resolution, 4);
+  CHECK(m.call("sceFontSetResolution", {library}), 0);
+  CHECK(scale("sceFontPointToPixelV", 72.0f) == 144.0f, true);
+  CHECK(m.call("sceFontClose", {0}), 0);
+  CHECK(m.call("sceFontDoneLib", {library}), 0);
+  CHECK(m.notes.size(), 0);
+}
+
+//A thread starts with the kernel's 256 bytes at the top of its stack zeroed (k0 points at them), the rest of a new
+//stack filled with 0xff as before.
+static auto kernelArea() -> void {
+  KernelMachine m;
+  s32 uid = m.kernel.createThread("t", 0x0880'1000, 0x20, 0x1000, 0, 0);
+  auto& thread = *m.kernel.threads[uid];
+  u32 top = thread.stackBlock + thread.stackSize;
+  CHECK(word(m, top - 0x100), 0xffff'ffff);
+  m.kernel.startThread(thread, 0, 0);
+  CHECK(thread.context.gpr[26], top - 0x100);
+  bool zeroed = true;
+  for(u32 at = top - 0x100; at < top; at += 4) zeroed = zeroed && word(m, at) == 0;
+  CHECK(zeroed, true);
+  CHECK(word(m, top - 0x104) == 0xffff'ffff && word(m, thread.stackBlock + 16) == 0xffff'ffff, true);
+}
+
 auto mediaTests() -> Tests {
   return {{"mpeg stubs", mpegStubs}, {"atrac stubs", atracStubs}, {"network off", networkOff},
-          {"odds and ends of part 20", oddsAndEnds}, {"threads odds and ends of part 20", threadOddsAndEnds}};
+          {"odds and ends of part 20", oddsAndEnds}, {"threads odds and ends of part 20", threadOddsAndEnds},
+          {"fonts missing", fontsMissing}, {"threads kernel area zeroed", kernelArea}};
 }
 
 }

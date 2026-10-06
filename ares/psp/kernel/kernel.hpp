@@ -983,6 +983,22 @@ struct Kernel {
   auto sceAtracSetData() -> void;
   auto sceAtracNoStream() -> void;
 
+  //font.cpp: sceLibFont, with no fonts installed (the PSP's own come from flash0, which Phobos hasn't got yet)
+  float fontResolution[2] = {128.0f, 128.0f};  //dots an inch, across and down
+  auto fontScale(bool toPixels, u32 axis) -> void;
+  auto sceFontNewLib() -> void;
+  auto sceFontDone() -> void;
+  auto sceFontGetNumFontList() -> void;
+  auto sceFontGetFontList() -> void;
+  auto sceFontFindOptimumFont() -> void;
+  auto sceFontOpen() -> void;
+  auto sceFontNoFont() -> void;
+  auto sceFontSetResolution() -> void;
+  auto sceFontPointToPixelH() -> void;
+  auto sceFontPointToPixelV() -> void;
+  auto sceFontPixelToPointH() -> void;
+  auto sceFontPixelToPointV() -> void;
+
   //net.cpp: the network libraries, with the wireless LAN switched off
   auto sceNetDone() -> void;
   auto sceNetUnavailable() -> void;
@@ -1107,6 +1123,8 @@ struct Kernel {
   auto sceRtcGetCurrentClock() -> void;
   auto sceRtcGetCurrentClockLocalTime() -> void;
   auto sceRtcGetTime_t() -> void;
+  auto sceRtcGetDosTime() -> void;
+  auto sceRtcSetDosTime() -> void;
   auto sceOpenPSIDGetOpenPSID() -> void;
   auto sceKernelIsCpuIntrEnable() -> void;
   auto sceKernelMemset() -> void;
