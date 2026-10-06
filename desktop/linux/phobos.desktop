@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Phobos
+Comment=Controller-driven multi-system emulator
+Exec=phobos
+Icon=phobos
+Type=Application
+Categories=Game;Emulator;
+Terminal=false
