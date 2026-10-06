@@ -503,11 +503,14 @@ list).
 `ares/psp/ge/`: `draw.cpp` (primitives), `texture.cpp`, `pixel.cpp` (the pixel pipeline). Through mode, where
 positions are pixels (in sixteenths) and texture coordinates texels.
 
-- **Primitives**: sprites (rectangles between pairs of vertices, covering the pixels whose middles are inside, both
-  edges included; the second vertex's color and depth; corners bottom-left and top-right turn the texture a quarter),
-  triangles, strips and fans (sample points 7/16 into each pixel; pixels exactly on right or bottom edges left to the
-  neighbour; colors, depth and texture coordinates blended across, or the last vertex's color with flat shading), and
-  points. A vertex without a color takes the material's ambient color. Not yet: lines, and 3D.
+- **Primitives**: sprites (rectangles between pairs of vertices, covering the pixels whose middles are inside, the
+  left and top edges included, the right and bottom ones not, and the left edge reaching a sixteenth further left;
+  the second vertex's color and depth; corners bottom-left and top-right turn the texture a quarter), triangles,
+  strips and fans (sampled at each pixel's middle; pixels exactly on right or bottom edges left to the neighbour;
+  colors, depth and texture coordinates blended across, or the last vertex's color with flat shading), and points. A
+  vertex without a color takes the material's ambient color. Not yet: lines, and 3D. (The edges and sample points
+  are as the user's PSP drew them, measured after this part, which first had PPSSPP's: see "Results from the
+  user's PSP".)
 - **Textures**: 5650, 5551, 4444, 8888, and 4-, 8-, 16- and 32-bit palette indices (the palette copied into the GE's
   own 1 KiB by CLUT_LOAD, its index shifted, masked and offset); swizzled storage (pspsdk's layout: blocks 16 bytes by
   8 rows); repeat or clamp each way; nearest or filtered (four texels by sixteenths, half a texel in), chosen by
@@ -640,7 +643,7 @@ What the data already says:
   draws the pixel in all 256 cells, with its left and top edges up to 15/256 of a pixel past the sample point the
   program assumed (7/16 in), where that rounding drops it from 10/256. Either the GE truncates positions to the
   sixteenth, or its sample point is further into the pixel than 7/16 (as the sprites' are); a case with edges
-  past 8/16 will tell which.
+  past 8/16 will tell which. The triangle coverage settles it: see below.
 - **The spotlight's direction is toward the light**, as PPSSPP reads it: the pool has the same shape on the PSP, the
   differences only a level of rounding.
 - **The depth buffer doesn't read back in the order the program assumed:** none of the floor's 15264 depths match,
@@ -649,6 +652,27 @@ What the data already says:
   so this file needs that layout worked out before it says anything about depths.
 - **With DEPTH_CLIP_ENABLE off, a triangle reaching past the near plane isn't drawn at all**, as the core has it
   (`3d-clip-unclamped` is empty on both).
+
+**Fixed since, from the same files** (ares/psp/ge/draw.cpp):
+
+- **Triangles are sampled at the pixel's middle,** not 7/16 in as PPSSPP has it: with the middle and the usual rule
+  for edges (left and top drawn, right and bottom not), all 256 cells of `coverage-triangles` come out as the
+  PSP's, every pixel, where 7/16 left 567 pixels apart. That also explains `3d-rounding` (the edges it moves stay
+  short of the middle), so the rounding onto the screen can stay as it is until a case tells it apart. Colors,
+  depth and texture coordinates are blended at the middle too, which makes `gouraud` identical.
+- **Sprites** follow the same rule at the middle (left and top edges drawn, right and bottom not), but with the left
+  edge reaching a sixteenth further left, as measured.
+- **Texture coordinates are stepped from the primitive's leftmost corner** (the topmost of two; a sprite's top
+  left), by a step per pixel cut short to a 65536th of a texel when it isn't exact: so a coordinate that should
+  land exactly on a texel boundary falls just short of it, on that corner's side. That reproduces every pixel of
+  all four `texels-*` files (256 texels over 240 pixels lands on boundaries; 200 over 256 never does) and keeps
+  `filter-shrink`'s exact step exact. How many bits the step keeps, and which way a step going left or up is cut,
+  aren't pinned down by these files.
+
+With these, 49 of the 63 pictures are identical to the PSP's (40 before). Still apart: the filter's weights (by a
+level), lighting's rounding (a level), fog and colors across a clipped triangle (a level), perspective-correct
+texels on the 3D floor (291 pixels, a texel), `3d-rules` (6 pixels), the 3D sprite's fog and texels, and the depth
+buffer's layout.
 
 The open questions above, settled: a sprite edge through pixel middles follows neither the core nor PPSSPP (the rule
 above); a shrunk sprite's texels follow neither, PPSSPP's nearer; a 3D sprite's fog follows neither; the spotlight's

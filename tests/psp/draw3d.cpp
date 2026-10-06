@@ -161,8 +161,8 @@ static auto draw3dOutside() -> void {
 //The near plane (z < -w, here z < -1): a triangle reaching past it is cut along it, and only the rest drawn. Corners
 //(2, 2) red and (14, 2) green at z 0, (8, 14) blue at z -4: the edges to the third cross the plane a quarter of the
 //way along, at y = 5, so rows 2-4 are drawn and none below. The corners the cut makes take the colors a quarter of
-//the way along too, so the colors are as the whole triangle's would be: at pixel (8, 4), sample point
-//(8.4375, 4.4375), the corners' weights are 0.362, 0.435 and 0.203: red 92, green 110, blue 51. With
+//the way along too, so the colors are as the whole triangle's would be: at pixel (8, 4), sample point (8.5, 4.5),
+//the corners' weights are 0.354, 0.4375 and 0.208: red 90, green 111, blue 53. With
 //DEPTH_CLIP_ENABLE off, the third corner's z / w (-4) drops the whole triangle instead. A triangle with every w below
 //zero isn't drawn.
 static auto draw3dClipping() -> void {
@@ -174,13 +174,13 @@ static auto draw3dClipping() -> void {
   draw();
   CHECK(c.pixel(8, 2) != 0, true);
   CHECK(c.pixel(8, 4) != 0, true);
-  CHECK(c.pixel(3, 4) != 0, true);    //sample point x 3.4375: inside the cut edge, which runs from x 2 to 3.5
+  CHECK(c.pixel(3, 4) != 0, true);    //sample point x 3.5: inside the cut edge, which runs from x 2 to 3.5 (3.25 there)
   CHECK(c.pixel(8, 5), 0);
   CHECK(c.pixel(8, 8), 0);
   CHECK(c.depth(8, 4) < 2000, true);  //nearer than z 0, further than the plane
   u32 color = c.pixel(8, 4);
   auto near = [](u32 value, u32 expected) { return value + 1 >= expected && value <= expected + 1; };
-  CHECK(near(color & 0xff, 92) && near(color >> 8 & 0xff, 110) && near(color >> 16 & 0xff, 51), true);
+  CHECK(near(color & 0xff, 90) && near(color >> 8 & 0xff, 111) && near(color >> 16 & 0xff, 53), true);
   c.ge.commands[GE::ShadeMode] = 0;   //flat: every piece takes the last vertex's color, blue
   draw();
   CHECK(c.pixel(8, 4), 0x00ff'0000);
@@ -285,7 +285,7 @@ static auto draw3dFog() -> void {
   c.ge.commands[GE::VertexType] = 0x19f;
   c.clear();
   c.draw(GE::Triangles, {{0, 0, 0xff00'ff00, 0, 0, 1}, {0, 0, 0xff00'ff00, 16, 0, -1}, {0, 0, 0xff00'ff00, 0, 16, 1}});
-  CHECK(c.pixel(7, 0), u32((255 * 137 + 255) / 256) << 8 | u32((255 * 118 + 255) / 256));
+  CHECK(c.pixel(7, 0), u32((255 * 136 + 255) / 256) << 8 | u32((255 * 119 + 255) / 256));  //at (7.5, 0.5)
   c.clear();  //the distance is the view's: the view moved 0.5 back makes z 0's fog (0 - 0.5 + 1) * 0.5, 64 of 255
   c.ge.view[11] = f24(-0.5f);
   c.draw(GE::Sprites, {{0, 0, 0xff00'ff00, 0, 0, 0}, {0, 0, 0xff00'ff00, 4, 4, 0}});

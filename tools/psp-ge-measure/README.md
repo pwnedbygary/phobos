@@ -51,6 +51,11 @@ ones that differ are the questions for the PSP:
 - and, in a file that does match, which way a spotlight's direction points (PPSSPP's reading has it point toward the
   light, which is unusual).
 
+The user's PSP has answered these and more (docs/psp-core.md, "Results from the user's PSP"). Sprites and triangles
+are sampled at each pixel's middle, a sprite's left edge reaching a sixteenth further left. Texture coordinates are
+stepped from a primitive's leftmost corner. The spotlight points toward the light, as PPSSPP reads it. With the
+core fixed to match, 49 of the 63 pictures are identical to the PSP's.
+
 ## Building and running
 
 1. Build with pspdev's toolchain (the `phobos-linux` container has it in `/opt/pspdev`): `make` gives `EBOOT.PBP`;
