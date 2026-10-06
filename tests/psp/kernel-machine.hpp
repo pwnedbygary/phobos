@@ -25,7 +25,7 @@ struct KernelMachine {
   std::vector<std::string> stubbed;
   u32 nextString = Strings;
 
-  KernelMachine() {
+  KernelMachine(u32 ramSize = 32_MiB) : system(ramSize) {
     kernel.output = [this](const std::string& text) { output += text; };
     kernel.log = [this](const std::string& text) { notes.push_back(text); };
     kernel.power();
@@ -97,6 +97,19 @@ struct HostFolder {
     return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   }
 };
+
+//A disc image in the drive, read from bytes in memory.
+inline auto discFrom(const std::vector<u8>& bytes) -> std::shared_ptr<ares::PlayStationPortable::Disc> {
+  auto disc = std::make_shared<ares::PlayStationPortable::Disc>();
+  auto data = std::make_shared<std::vector<u8>>(bytes);
+  std::string error;
+  disc->open([data](u64 offset, void* out, u64 size) -> u64 {
+    size = offset < data->size() ? std::min<u64>(size, data->size() - offset) : 0;
+    memcpy(out, data->data() + offset, size);
+    return size;
+  }, bytes.size(), error);
+  return disc;
+}
 
 //The folder PSP_TEST_PROGRAMS names (see tools/psp-test-programs/build.sh), or null when it isn't set (or is empty).
 inline auto testPrograms() -> const char* {

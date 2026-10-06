@@ -1,10 +1,10 @@
 //Modules a program loads (ares/psp/kernel/modules.cpp): PRXs built here, plain and encrypted (encrypt.hpp), loaded
 //from the memory stick and the disc by a program running on both engines: module_start and module_stop run on
-//threads of their own while the caller waits (however they end, their threads go), one module's imports reach the
-//functions another (or the program) exports, unloading sends them back to the kernel; a module unloads itself;
-//what runs as module_start, and on what thread; Sony's modules are stood in for; the module IDs and information;
-//refusals, and sizes a damaged header claims; and a state saved while a module_start runs carries on as the machine
-//did.
+//threads of their own while the caller waits (however they end, terminated too, their threads go), one module's
+//imports reach the functions another (or the program) exports, unloading sends them back to the kernel; a module
+//unloads itself, either way the SDKs have it; what runs as module_start, and on what thread; Sony's modules are
+//stood in for; the module IDs and information; refusals, and sizes a damaged header claims; and a state saved while
+//a module_start runs carries on as the machine did.
 #include "kernel-machine.hpp"
 #include "encrypt.hpp"
 #include "disc-image.hpp"
@@ -15,7 +15,8 @@ using ares::PlayStationPortable::Disc;
 
 static constexpr u32 Results = KernelMachine::Results;
 static constexpr u32 AddNID = 0x1122'3344;      //TestLib's add(a, b)
-static constexpr u32 QuitNID = 0x5e1f'0001;     //SelfLib's quit()
+static constexpr u32 QuitNID = 0x5e1f'0001;     //SelfLib's quit(), and StatusLib's
+static constexpr u32 StopUnloadSelfWithStatusNID = 0x8f2d'f740;  //not its name's hash (kernel.cpp's addNID)
 static constexpr u32 ProgramNID = 0x9a0c'0001;  //a function the program exports in ProgLib
 //the variables a module exports for itself that set its module_start's and its module_stop's threads (the names'
 //NIDs: module_start_thread_parameter, module_stop_thread_parameter)
@@ -192,6 +193,35 @@ static auto selfModule(SelfStart how) -> TestModule {
     callStub(m, 0x3c8);
     m.code.push_back(halt);  //never woken
   }
+  return m;
+}
+
+//"TESTSTATUS": StatusLib's quit() unloads the module it's in as later SDKs do,
+//sceKernelStopUnloadSelfModuleWithStatus(1, 4, Results + 0x30, Results + 0x40, options), and if that's refused
+//writes what it said at Results + 0x34 and returns. module_stop writes 0x5709 at Results + 0x20, the length of its
+//argument at Results + 0x24 and the argument's first word at Results + 0x28, then has its own thread's information
+//put at info (sceKernelReferThreadStatus). module_start returns at once.
+static auto statusModule(u32 options, u32 info) -> TestModule {
+  TestModule m;
+  m.name = "TESTSTATUS";
+  m.imports = {{"ModuleMgrForUser", StopUnloadSelfWithStatusNID},
+               {"ThreadManForUser", Kernel::nid("sceKernelReferThreadStatus")}};
+  m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), addiu(a0, zero, 1), addiu(a1, zero, 4),
+            lui(a2, (Results + 0x30) >> 16), ori(a2, a2, (Results + 0x30) & 0xffff),
+            lui(a3, (Results + 0x40) >> 16), ori(a3, a3, (Results + 0x40) & 0xffff), lui(t0, options >> 16)};
+  callStub(m, 0x3c0, ori(t0, t0, options & 0xffff));
+  m.code.insert(m.code.end(), {lui(t1, Results >> 16), ori(t1, t1, Results & 0xffff), sw(v0, 0x34, t1),
+                               lw(ra, 12, sp), jr(ra), addiu(sp, sp, 16)});
+  m.exports = {{"StatusLib", {{QuitNID, 0}}}};
+  m.stop = m.code.size() * 4;
+  m.code.insert(m.code.end(), {addiu(sp, sp, -16), sw(ra, 12, sp)});
+  store(m.code, Results + 0x20, 0x5709);
+  m.code.insert(m.code.end(), {sw(a0, 4, t9), lw(t0, 0, a1), sw(t0, 8, t9), addiu(a0, zero, 0),
+                               lui(a1, info >> 16)});
+  callStub(m, 0x3c8, ori(a1, a1, info & 0xffff));
+  m.code.insert(m.code.end(), {lw(ra, 12, sp), addiu(sp, sp, 16), jr(ra), addiu(v0, zero, 0)});
+  m.start = m.code.size() * 4;
+  m.code.insert(m.code.end(), {jr(ra), addiu(v0, zero, 0)});
   return m;
 }
 
@@ -661,6 +691,132 @@ static auto unloadThemselves() -> void {
   }
 }
 
+//A module unloads itself as later SDKs do (sceKernelStopUnloadSelfModuleWithStatus, known by its NID alone): as with
+//sceKernelSelfStopUnloadModule, the thread that asked ends and is deleted, the one waiting for it given its exit
+//status; module_stop runs with the argument, on a thread the options (the fifth argument) make; the module and its
+//memory go, and the program runs on to its own end. The program itself (or code no module holds) calling it leaves.
+static auto unloadWithStatus() -> void {
+  constexpr u32 Options = Results + 0x180, Info = Results + 0x1a0;
+  HostFolder stick;
+  put(stick, "STATUS.PRX", statusModule(Options, Info).build());
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    machine(m);
+    m.system.recompiler.enabled = recompile;
+    m.kernel.mount("ms0", stick.path.string());
+    u32 uid = m.call("sceKernelLoadModule", {m.string("ms0:/STATUS.PRX"), 0, 0});
+    CHECK(m.kernel.modules.count(uid), 1);
+    if(!m.kernel.modules.count(uid)) continue;
+    m.call("sceKernelStartModule", {uid, 0, 0, 0, 0});
+    m.kernel.run(Kernel::VblankCycles);
+    CHECK(m.kernel.modules[uid].status == Kernel::ModuleStatus::Started, true);
+    m.system.memory.write(Allegrex::Word, Results + 0x30, 0x4152'4731);
+    u32 at = Options;  //SceKernelSMOption: its size, a partition, then the thread's stack size, priority, attributes
+    for(u32 value : {20u, 0u, 0x3000u, 0x31u, 0u}) m.system.memory.write(Allegrex::Word, at, value), at += 4;
+    m.system.memory.write(Allegrex::Word, Info, 104);  //SceKernelThreadInfo's size
+    u32 quit = 0;
+    for(auto& e : m.kernel.modules[uid].module.exports) if(e.nid == QuitNID) quit = e.address;
+    s32 quitter = m.kernel.createThread("quitter", quit, 0x20, 0x1000, 0, 0);
+    //the program waits for quit()'s thread to end, gives module_stop (below it) a millisecond, and leaves
+    Assembler program{m, 0x0880'1000};
+    program.li(s0, Results);
+    program.li(a0, quitter); program.li(a1, 0);
+    program.call("sceKernelWaitThreadEnd");
+    program.put(sw(v0, 0x38, s0));
+    program.li(a0, 1000);
+    program.call("sceKernelDelayThread");
+    program.li(t0, 0x600d);
+    program.put(sw(t0, 0x3c, s0));
+    program.call("sceKernelExitGame");
+    s32 waits = m.kernel.createThread("main", 0x0880'1000, 0x10, 0x1000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[waits], 0, 0);
+    m.kernel.startThread(*m.kernel.threads[quitter], 0, 0);
+    m.kernel.run(Kernel::VblankCycles);
+    CHECK(m.kernel.exited, true);
+    CHECK(word(m.system, Results + 0x3c), 0x600d);  //the program's own end, after the module had gone
+    CHECK(word(m.system, Results + 0x38), 1);
+    CHECK(word(m.system, Results + 0x34), 0);       //quit() never returned
+    CHECK(word(m.system, Results + 0x20), 0x5709);
+    CHECK(word(m.system, Results + 0x24), 4);
+    CHECK(word(m.system, Results + 0x28), 0x4152'4731);
+    CHECK(word(m.system, Info + 52), 0x3000);       //module_stop's thread: the options' stack size and priority
+    CHECK(word(m.system, Info + 64), 0x31);
+    CHECK(m.kernel.modules.count(uid), 0);
+    bool kept = std::any_of(m.kernel.blocks.begin(), m.kernel.blocks.end(), [](auto& block) {
+      return block.name == "ms0:/STATUS.PRX" || block.name == "stack: TESTSTATUS";
+    });
+    CHECK(kept, false);
+    CHECK(m.kernel.threads.count(quitter), 0);
+    CHECK(m.kernel.threads.size(), 1);  //the program's: quit()'s thread and module_stop's are gone
+  }
+
+  for(bool program : {false, true}) {
+    KernelMachine m;
+    if(program) {
+      m.kernel.programUID = m.kernel.newUID();
+      m.kernel.module.segments = {{0x0880'1000, 0x1000}};
+    }
+    u32 stub = KernelMachine::Stubs + 0x800;  //a stub of its own, for a function known by its NID alone
+    m.system.memory.write(Allegrex::Word, stub, jr(ra));
+    m.system.memory.write(Allegrex::Word, stub + 4,
+                          syscall(m.kernel.importCode("ModuleMgrForUser", StopUnloadSelfWithStatusNID)));
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, 1); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+    main.put(jal(stub));
+    main.put(nop);
+    main.print("never\n");
+    m.runProgram(0x0880'1000, false);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.output.empty(), true);
+  }
+}
+
+//A thread terminating another's module_start (sceKernelTerminateThread, or TerminateDeleteThread), as it sleeps: the
+//thread is deleted, as when it exits, so neither it nor its stack stays; the module counts as started, and the thread
+//that started it is given its ID, with the termination as module_start's result. On both engines.
+static auto terminatedThreads() -> void {
+  HostFolder stick;
+  put(stick, "SLEEPS.PRX", selfModule(SelfStart::Sleeps).build());
+  for(auto function : {"sceKernelTerminateThread", "sceKernelTerminateDeleteThread"}) {
+    for(bool recompile : {false, true}) {
+      KernelMachine m;
+      machine(m);
+      m.kernel.mount("ms0", stick.path.string());
+      u32 uid = m.call("sceKernelLoadModule", {m.string("ms0:/SLEEPS.PRX"), 0, 0});
+      CHECK(m.kernel.modules.count(uid), 1);
+      if(!m.kernel.modules.count(uid)) continue;
+      Assembler main{m, 0x0880'1000};
+      main.li(s0, Results);
+      main.li(a0, uid); main.li(a1, 0); main.li(a2, 0); main.li(a3, Results + 0x40); main.li(t0, 0);
+      main.call("sceKernelStartModule");
+      main.put(sw(v0, 0x44, s0));
+      main.call("sceKernelSleepThread");
+      m.runProgram(0x0880'1000, recompile, Kernel::VblankCycles);
+      u32 thread = m.kernel.modules[uid].thread;
+      CHECK(m.kernel.modules[uid].status == Kernel::ModuleStatus::Starting && m.kernel.threads.count(thread), true);
+      Assembler killer{m, 0x0880'2000};
+      killer.li(s0, Results);
+      killer.li(a0, thread);
+      killer.call(function);
+      killer.put(sw(v0, 0x48, s0));
+      killer.call("sceKernelSleepThread");
+      s32 kills = m.kernel.createThread("killer", 0x0880'2000, 0x30, 0x1000, 0, 0);
+      m.kernel.startThread(*m.kernel.threads[kills], 0, 0);
+      m.kernel.run(Kernel::VblankCycles);
+      CHECK(word(m.system, Results + 0x48), 0);
+      CHECK(m.kernel.threads.count(thread), 0);
+      bool stack = std::any_of(m.kernel.blocks.begin(), m.kernel.blocks.end(), [](auto& block) {
+        return block.name == "stack: TESTSELF";
+      });
+      CHECK(stack, false);
+      CHECK(m.kernel.modules[uid].status == Kernel::ModuleStatus::Started && !m.kernel.modules[uid].thread, true);
+      CHECK(word(m.system, Results + 0x44), uid);
+      CHECK(word(m.system, Results + 0x40), Kernel::ErrorThreadTerminated);
+      CHECK(m.kernel.threads.size(), 2);  //the program's and the killer's, both asleep
+    }
+  }
+}
+
 //module_start and module_stop that end with sceKernelExitThread rather than returning: the caller gets each one's
 //exit status as its result, and their threads go all the same, their stacks back to the user partition.
 static auto exitThreads() -> void {
@@ -826,7 +982,8 @@ auto moduleTests() -> Tests {
   return {
     {"modules start and link", startAndLink}, {"modules linking", linking}, {"modules stand-ins", standIns},
     {"modules identities", identities}, {"modules refusals", refusals}, {"modules sizes", sizes},
-    {"modules unload themselves", unloadThemselves}, {"modules exit threads", exitThreads},
+    {"modules unload themselves", unloadThemselves}, {"modules unload with a status", unloadWithStatus},
+    {"modules exit threads", exitThreads}, {"modules terminated threads", terminatedThreads},
     {"modules entry points", entryPoints}, {"modules state", stateWhileStarting},
   };
 }

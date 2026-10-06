@@ -28,11 +28,53 @@ auto Kernel::sceDisplayGetFrameBuf() -> void {
   result(0);
 }
 
-//Waits for the next vertical blank.
-auto Kernel::sceDisplayWaitVblankStart() -> void {
+//The display's timing (PPSSPP's notes on the hardware): a frame is 286 lines of 525 dots at 9 MHz, 59.94 a second,
+//of which 272 lines are shown. The vertical blank starts each frame (the kernel's nextVblank is when the next starts)
+//and lasts about 0.77 ms (pspautotests' display/vblanklen measured 730 to 770 microseconds from the end of a wait).
+
+//Whether the display is in its vertical blank now.
+auto Kernel::inVblank() const -> bool {
+  return cycles - (nextVblank - VblankCycles) < VblankLength;
+}
+
+//Waits for the next vertical blank to start (and, with callbacks, runs the thread's callbacks meanwhile). Its count
+//as the wait starts goes with it: callbacks that run across the blank end the wait when they're done (resumeWait()).
+auto Kernel::waitVblank(bool callbacks) -> void {
   if(!mayWait()) return;
   result(0);
-  block(Wait::Vblank, 0, 0);
+  if(current) current->waitCount = vblanks;
+  block(Wait::Vblank, 0, 0, 0, callbacks);
+}
+
+auto Kernel::sceDisplayWaitVblankStart() -> void {
+  waitVblank(false);
+}
+
+auto Kernel::sceDisplayWaitVblankStartCB() -> void {
+  waitVblank(true);
+}
+
+//Waits for the vertical blank: not at all if it's in it now (returning 1), else until the next starts (0).
+auto Kernel::sceDisplayWaitVblank() -> void {
+  if(inVblank()) return result(1);
+  waitVblank(false);
+}
+
+auto Kernel::sceDisplayWaitVblankCB() -> void {
+  if(inVblank()) {
+    result(1);
+    return callbacksOnReturn(true);
+  }
+  waitVblank(true);
+}
+
+auto Kernel::sceDisplayIsVblank() -> void {
+  result(inVblank());
+}
+
+//The line the display is on, counted from the start of the vertical blank (as the PSP counts: up to 14 inside it).
+auto Kernel::sceDisplayGetCurrentHcount() -> void {
+  result(u32((cycles - (nextVblank - VblankCycles)) / LineCycles));
 }
 
 //How many vertical blanks since power on.

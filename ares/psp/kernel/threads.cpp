@@ -12,7 +12,9 @@ auto Kernel::newUID() -> u32 {
   return nextUID <= LastUID ? nextUID++ : 0;
 }
 
-//A new thread, dormant until started: its stack comes from the top of the user partition, as the PSP takes it.
+//A new thread, dormant until started: its stack comes from the top of the user partition, as the PSP takes it. The
+//PSP fills a new stack with 0xff bytes (what sceKernelGetThreadStackFreeSize counts) and writes the thread's ID at
+//its bottom, unless the thread's attributes say not to (PSP_THREAD_ATTR_NO_FILLSTACK, 0x100000; PPSSPP's notes).
 auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 stackSize, u32 attributes, u32 gp) -> s32 {
   if(priority < 0x01 || priority > 0x7f) return ErrorIllegalPriority;
   if(stackSize < 0x200) return ErrorIllegalStackSize;
@@ -20,6 +22,10 @@ auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 
   if(!block) return ErrorNoMemory;
   u32 uid = newUID();
   if(!uid) return release(block->uid), ErrorNoMemory;
+  if(!(attributes & 0x0010'0000)) {
+    memory.fill(block->address, 0xff, block->size);
+    memory.write(4, block->address, uid);
+  }
   auto thread = std::make_unique<Thread>();
   thread->uid = uid;
   thread->name = name;
@@ -37,8 +43,10 @@ auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 
 //argument (argumentLength bytes at argumentPointer) copied just below it, with a0 its length and a1 where it is. ra
 //points at the trampoline (returnAddress: its first syscall, or the third for a module's module_start), so
 //returning from the entry function ends the thread. The caller has checked that the argument is readable and fits
-//(argumentFits()).
+//(argumentFits()). It starts at the priority it was made with, whatever its last run changed it to (pspautotests'
+//threads/threads/change: started again, a thread is back at its first priority).
 auto Kernel::startThread(Thread& thread, u32 argumentLength, u32 argumentPointer, u32 returnAddress) -> void {
+  thread.priority = thread.initialPriority;
   auto& c = thread.context;
   c = {};
   c.pc = thread.entry;
@@ -97,8 +105,10 @@ auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
 }
 
 //The calling thread waits for something: for wakeAt (a cycle, 0 for no time limit) at the latest. Another thread
-//runs meanwhile. (Functions that wait check mayWait() first: a call into the program can't wait.)
-auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer) -> void {
+//runs meanwhile. With callbacks (the functions whose names end in CB), the thread's callbacks run when they're
+//notified, the wait going on after them (events.cpp); one notified already runs at once. (Functions that wait check
+//mayWait() first: a call into the program can't wait.)
+auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer, bool callbacks) -> void {
   if(!current) return;
   if(interrupting) return result(ErrorIllegalContext);
   current->status = Status::Waiting;
@@ -106,7 +116,15 @@ auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer) -> void {
   current->waitID = id;
   current->wakeAt = wakeAt;
   current->timeoutPointer = timeoutPointer;
+  current->callbacks = callbacks;
+  if(callbacks) wakeForCallbacks(*current);
   reschedule();
+}
+
+//When a wait with a timeout gives up: the timeout's microseconds (a word at pointer) from now, as a cycle; 0, no
+//time limit, if there's no pointer.
+auto Kernel::timeout(u32 pointer) const -> u64 {
+  return pointer ? cycles + u64(memory.read(4, pointer)) * (CPUFrequency / 1'000'000) : 0;
 }
 
 //Picks the thread to run: the ready one with the highest priority (the lowest number), the one ready the longest
@@ -119,7 +137,7 @@ auto Kernel::reschedule() -> void {
   }
   Thread* best = nullptr;
   for(auto& [uid, thread] : threads) {
-    if(thread->status != Status::Ready) continue;
+    if(thread->status != Status::Ready || thread->suspended) continue;
     if(!best || thread->priority < best->priority
     || (thread->priority == best->priority && thread->readySince < best->readySince)) best = thread.get();
   }
@@ -131,22 +149,24 @@ auto Kernel::reschedule() -> void {
   switchTo(best);
 }
 
-//Puts the running thread's registers aside and loads next's (none: the CPU idles until a thread is ready).
+//Puts the running thread's registers aside and loads next's (none: the CPU idles until a thread is ready). A thread
+//still in its wait was made ready only to run its callbacks (wakeForCallbacks()): they start now.
 auto Kernel::switchTo(Thread* next) -> void {
   if(current && current == next) {  //it's already in the CPU
     next->status = Status::Running;
     cpu.scc.halted = 0;
-    return;
+  } else {
+    if(current) save(current->context);
+    current = next;
+    if(!next) {
+      cpu.scc.halted = 1;
+      return;
+    }
+    restore(next->context);
+    next->status = Status::Running;
+    cpu.scc.halted = 0;
   }
-  if(current) save(current->context);
-  current = next;
-  if(!next) {
-    cpu.scc.halted = 1;
-    return;
-  }
-  restore(next->context);
-  next->status = Status::Running;
-  cpu.scc.halted = 0;
+  if(next->wait != Wait::None) runCallbacks(*next);
 }
 
 //What's due by now: vertical blanks, delays ending, timeouts running out. A thread woken with a higher priority than
@@ -160,27 +180,43 @@ auto Kernel::events() -> void {
     for(auto& [uid, thread] : threads) {
       if(thread->status == Status::Waiting && thread->wait == Wait::Vblank) ready(*thread, 0), woke = true;
     }
+    vblankInterrupt();
     if(!controller.cycle && sampleController()) woke = true;
   }
   while(controller.cycle && cycles >= controller.nextSample) {  //a sampling cycle's timer
     controller.nextSample += u64(controller.cycle) * (CPUFrequency / 1'000'000);
     if(sampleController()) woke = true;
   }
+  if(audioEvents()) woke = true;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting || !thread->wakeAt || cycles < thread->wakeAt) continue;
     if(thread->wait == Wait::LwMutex) {  //it stops waiting: the mutex has one waiter fewer
       memory.write(4, thread->waitID + 12, memory.read(4, thread->waitID + 12) - 1);
     }
     if(thread->wait == Wait::EventFlag) eventFlagTimedOut(*thread);
-    ready(*thread, thread->wait == Wait::Delay ? 0 : ErrorWaitTimeout);
+    Wait wait = thread->wait;
+    ready(*thread, wait == Wait::Delay ? 0 : ErrorWaitTimeout);
+    waiterLeft(wait, thread->waitID);
     woke = true;
   }
   if(woke) reschedule();
 }
 
+//A thread waiting for a semaphore's count or a memory pool's room stopped waiting without being served (its time
+//ran out, or it ended): both serve their waiters in order, one that doesn't fit holding up those behind it, so with
+//it gone, those behind it that fit are served now, as they would have been had it never come.
+auto Kernel::waiterLeft(Wait wait, u32 id) -> void {
+  if(wait == Wait::Semaphore) {
+    if(auto found = semaphores.find(id); found != semaphores.end()) signalSemaphores(found->second);
+  }
+  if(wait == Wait::Fpl || wait == Wait::Vpl) {
+    if(auto found = pools.find(id); found != pools.end()) poolWake(found->second);
+  }
+}
+
 //How many cycles until the next thing that's due (at most until the next vertical blank).
 auto Kernel::untilNextEvent() const -> u64 {
-  u64 next = nextVblank;
+  u64 next = std::min(nextVblank, nextAudioEvent());
   if(controller.cycle) next = std::min(next, controller.nextSample);
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
@@ -194,10 +230,11 @@ auto Kernel::untilNextEvent() const -> u64 {
 //go each time round, so even a display list that never ends lets the frame end.
 auto Kernel::idle(u64 end) -> bool {
   if(interrupting || (!calls.empty() && interruptsEnabled)) return true;
-  bool timed = geBusy;
+  bool timed = geBusy || vblankHandlers();
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
     if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;
+    if(thread->wait == Wait::Audio) timed = true;  //a buffer playing ends it
   }
   if(!timed) {
     if(!stuck) {
@@ -213,16 +250,23 @@ auto Kernel::idle(u64 end) -> bool {
 
 //A thread's run is over (status: what it returned, or passed to the exit function): it's dormant again, and the
 //threads waiting for its end are told how it ended, as are those waiting for a module whose module_start or
-//module_stop it ran (modules.cpp).
+//module_stop it ran (modules.cpp). A thread ended in a wait (terminated), or in a callback that put its wait aside,
+//leaves that wait unserved (waiterLeft()).
 auto Kernel::endThread(Thread& thread, s32 status) -> void {
+  Wait wait = thread.wait;
+  WaitState before = thread.waitBeforeCallback;
   thread.status = Status::Dormant;
   thread.wait = Wait::None;
+  thread.callbacks = thread.inCallback = false;
+  thread.waitBeforeCallback = {};
   thread.exitStatus = status;
   for(auto& [uid, other] : threads) {
     if(other->status == Status::Waiting && other->wait == Wait::ThreadEnd && other->waitID == thread.uid) {
       ready(*other, u32(status));
     }
   }
+  waiterLeft(wait, thread.waitID);
+  waiterLeft(before.wait, before.id);
   moduleThreadEnded(thread, status);
 }
 
@@ -267,21 +311,28 @@ auto Kernel::sceKernelExitThread() -> void {
   endThread(*thread, s32(arg(0)));
   if(made) {
     current = nullptr;  //nothing to save: the thread is gone
-    discardThread(*thread);
+    deleteThread(*thread);
   }
   reschedule();
 }
 
-//The calling thread ends and is deleted at once: its stack goes back to the user partition.
+//A thread is gone: its stack goes back to the user partition, and its callbacks go with it (they could only ever run
+//on it).
+auto Kernel::deleteThread(Thread& thread) -> void {
+  u32 uid = thread.uid;
+  for(auto& block : blocks) {
+    if(block.address == thread.stackBlock) { release(block.uid); break; }
+  }
+  std::erase_if(callbacks, [&](auto& item) { return item.second.thread == uid; });
+  if(current == &thread) current = nullptr;  //nothing to save
+  threads.erase(uid);
+}
+
+//The calling thread ends and is deleted at once.
 auto Kernel::sceKernelExitDeleteThread() -> void {
   if(!current) return;
-  Thread* thread = current;
-  endThread(*thread, s32(arg(0)));
-  current = nullptr;  //nothing to save: the thread is gone
-  for(auto& block : blocks) {
-    if(block.address == thread->stackBlock) { release(block.uid); break; }
-  }
-  threads.erase(thread->uid);
+  endThread(*current, s32(arg(0)));
+  deleteThread(*current);
   reschedule();
 }
 
@@ -290,10 +341,7 @@ auto Kernel::sceKernelDeleteThread() -> void {
   if(!thread || arg(0) == 0) return result(ErrorUnknownThread);
   if(thread == current) return result(ErrorIllegalThread);
   if(thread->status != Status::Dormant) return result(ErrorNotDormant);
-  for(auto& block : blocks) {
-    if(block.address == thread->stackBlock) { release(block.uid); break; }
-  }
-  threads.erase(thread->uid);
+  deleteThread(*thread);
   result(0);
 }
 
@@ -312,18 +360,23 @@ auto Kernel::sceKernelReferThreadStatus() -> void {
   for(u32 offset = 4; offset < 36 && offset < size; offset++) {
     memory.write(1, info + offset, offset - 4 < thread->name.size() ? u8(thread->name[offset - 4]) : 0);
   }
-  u32 waitType = 0;  //the PSP's numbers: 1 sleep, 2 delay, 3 semaphore, 9 thread end
+  u32 waitType = 0;  //the PSP's numbers: 1 sleep, 2 delay, 3 semaphore, 4 event flag, 6 VPL, 7 FPL, 9 thread end
   if(thread->status == Status::Waiting) {
     switch(thread->wait) {
     case Wait::Sleep: waitType = 1; break;
     case Wait::Delay: waitType = 2; break;
     case Wait::Semaphore: waitType = 3; break;
+    case Wait::EventFlag: waitType = 4; break;
+    case Wait::Vpl: waitType = 6; break;
+    case Wait::Fpl: waitType = 7; break;
     case Wait::ThreadEnd: waitType = 9; break;
     default: break;
     }
   }
+  u32 status = u32(thread->status);  //suspended: 8, with its waiting (4) kept, but not its readiness (2)
+  if(thread->suspended) status = (thread->status == Status::Ready ? 0 : status) | 8;
   put(36, thread->attributes);
-  put(40, u32(thread->status));
+  put(40, status);
   put(44, thread->entry);
   put(48, thread->stackBlock);
   put(52, thread->stackSize);
@@ -338,21 +391,34 @@ auto Kernel::sceKernelReferThreadStatus() -> void {
   result(0);
 }
 
-auto Kernel::sceKernelDelayThread() -> void {
+//Waits for a number of microseconds (and, with callbacks, runs the thread's callbacks as they're notified).
+auto Kernel::delay(u32 microseconds, bool callbacks) -> void {
   if(!mayWait()) return;
   result(0);
-  block(Wait::Delay, 0, cycles + std::max<u64>(1, u64(arg(0)) * (CPUFrequency / 1'000'000)));
+  block(Wait::Delay, 0, cycles + std::max<u64>(1, u64(microseconds) * (CPUFrequency / 1'000'000)), 0, callbacks);
+}
+
+auto Kernel::sceKernelDelayThread() -> void {
+  delay(arg(0), false);
+}
+
+auto Kernel::sceKernelDelayThreadCB() -> void {
+  delay(arg(0), true);
 }
 
 //Sleeps until another thread wakes it, unless a wakeup already came while it was awake.
-auto Kernel::sceKernelSleepThread() -> void {
+auto Kernel::sleep(bool callbacks) -> void {
   if(!mayWait()) return;
   result(0);
   if(current && current->wakeupCount) {
     current->wakeupCount--;
-    return;
+    return callbacksOnReturn(callbacks);
   }
-  block(Wait::Sleep, 0, 0);
+  block(Wait::Sleep, 0, 0, 0, callbacks);
+}
+
+auto Kernel::sceKernelSleepThread() -> void {
+  sleep(false);
 }
 
 auto Kernel::sceKernelWakeupThread() -> void {
@@ -367,15 +433,25 @@ auto Kernel::sceKernelWakeupThread() -> void {
   }
 }
 
-auto Kernel::sceKernelWaitThreadEnd() -> void {
+//(thread, timeout): waits for the thread to end, and returns what it ended with.
+auto Kernel::waitThreadEnd(bool callbacks) -> void {
   if(!mayWait()) return;
   auto thread = findThread(arg(0));
   if(!thread || arg(0) == 0) return result(ErrorUnknownThread);
-  if(thread->status == Status::Dormant) return result(u32(thread->exitStatus));
-  u32 timeout = arg(1);
+  if(thread->status == Status::Dormant) {
+    result(u32(thread->exitStatus));
+    return callbacksOnReturn(callbacks);
+  }
   result(0);
-  block(Wait::ThreadEnd, thread->uid, timeout ? cycles + u64(memory.read(4, timeout)) * (CPUFrequency / 1'000'000) : 0,
-        timeout);
+  block(Wait::ThreadEnd, thread->uid, timeout(arg(1)), arg(1), callbacks);
+}
+
+auto Kernel::sceKernelWaitThreadEnd() -> void {
+  waitThreadEnd(false);
+}
+
+auto Kernel::sceKernelWaitThreadEndCB() -> void {
+  waitThreadEnd(true);
 }
 
 auto Kernel::sceKernelCreateSema() -> void {
@@ -383,7 +459,7 @@ auto Kernel::sceKernelCreateSema() -> void {
   if(initial < 0 || maximum <= 0 || initial > maximum) return result(ErrorIllegalCount);
   u32 uid = newUID();
   if(!uid) return result(ErrorNoMemory);
-  semaphores[uid] = {uid, memory.readString(arg(0), 31), arg(1), initial, maximum};
+  semaphores[uid] = {uid, memory.readString(arg(0), 31), arg(1), initial, maximum, initial};
   result(uid);
 }
 
@@ -401,7 +477,7 @@ auto Kernel::sceKernelDeleteSema() -> void {
 }
 
 //Hands the semaphore's count to the threads waiting on it, the longest-waiting first, while there's enough for the
-//next one.
+//next one: as it's signalled, and as a waiter leaves without its count (waiterLeft()).
 auto Kernel::signalSemaphores(Semaphore& semaphore) -> void {
   while(true) {
     Thread* next = nullptr;
@@ -427,7 +503,8 @@ auto Kernel::sceKernelSignalSema() -> void {
   reschedule();
 }
 
-auto Kernel::sceKernelWaitSema() -> void {
+//(semaphore, count, timeout)
+auto Kernel::waitSemaphore(bool callbacks) -> void {
   if(!mayWait()) return;
   auto found = semaphores.find(arg(0));
   if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
@@ -437,13 +514,19 @@ auto Kernel::sceKernelWaitSema() -> void {
   result(0);
   if(semaphore.count >= count) {
     semaphore.count -= count;
-    return;
+    return callbacksOnReturn(callbacks);
   }
-  u32 timeout = arg(2);
   current->waitCount = count;
   current->readySince = ++readySequence;  //its place in the queue
-  block(Wait::Semaphore, semaphore.uid,
-        timeout ? cycles + u64(memory.read(4, timeout)) * (CPUFrequency / 1'000'000) : 0, timeout);
+  block(Wait::Semaphore, semaphore.uid, timeout(arg(2)), arg(2), callbacks);
+}
+
+auto Kernel::sceKernelWaitSema() -> void {
+  waitSemaphore(false);
+}
+
+auto Kernel::sceKernelWaitSemaCB() -> void {
+  waitSemaphore(true);
 }
 
 auto Kernel::sceKernelPollSema() -> void {
@@ -562,4 +645,134 @@ auto Kernel::sceKernelUnlockLwMutex() -> void {
 //The low 32 bits of the time since power on, in microseconds.
 auto Kernel::sceKernelGetSystemTimeLow() -> void {
   result(u32(cycles / (CPUFrequency / 1'000'000)));
+}
+
+//(semaphore, info): a SceKernelSemaInfo (pspthreadman.h) as far as the size in its first word: name, attributes,
+//initial, current and largest count, how many threads wait.
+auto Kernel::sceKernelReferSemaStatus() -> void {
+  auto found = semaphores.find(arg(0));
+  if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
+  auto& semaphore = found->second;
+  u32 info = arg(1), size = memory.read(4, info), waiting = 0;
+  for(auto& [uid, thread] : threads) {
+    waiting += thread->status == Status::Waiting && thread->wait == Wait::Semaphore && thread->waitID == arg(0);
+  }
+  for(u32 offset = 4; offset < 36 && offset < size; offset++) {
+    memory.write(1, info + offset, offset - 4 < semaphore.name.size() ? u8(semaphore.name[offset - 4]) : 0);
+  }
+  u32 words[] = {semaphore.attributes, u32(semaphore.initial), u32(semaphore.count), u32(semaphore.maximum), waiting};
+  for(u32 n = 0; n < 5; n++) if(36 + n * 4 + 4 <= size) memory.write(4, info + 36 + n * 4, words[n]);
+  result(0);
+}
+
+//(thread, priority): a new priority for a thread, as pspautotests' threads/threads/change found it on a PSP. A user
+//thread's priorities run from 0x08 to 0x77 (those above and below are the kernel's: ILLEGAL_PRIORITY), and 0 stands
+//for the caller's own; thread 0 is the caller. A thread not started yet, or ended, can't be changed (DORMANT); one
+//ready, waiting or suspended can. The thread goes to the back of its new priority's line: one that's ready goes in
+//behind those ready already, and so does the caller, which so gives way to any other thread of its priority (even
+//when its priority doesn't change). A thread that ends up above the caller's takes over at once. The test doesn't
+//show which comes first, a bad priority or a bad thread: the priority is checked first here.
+auto Kernel::sceKernelChangeThreadPriority() -> void {
+  u32 priority = arg(1);
+  if(priority == 0 && current) priority = current->priority;
+  if(priority < 0x08 || priority > 0x77) return result(ErrorIllegalPriority);
+  auto thread = findThread(arg(0));
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status == Status::Dormant) return result(ErrorDormant);
+  thread->priority = priority;
+  result(0);
+  //a thread waiting keeps its place: for a semaphore, readySince is its place in that queue
+  if(thread->status == Status::Ready || thread->status == Status::Running) {
+    thread->status = Status::Ready;  //the caller included: reschedule() picks between it and the rest afresh
+    thread->readySince = ++readySequence;
+  }
+  reschedule();
+}
+
+//(thread): what a dormant thread ended with; one still going has none yet.
+auto Kernel::sceKernelGetThreadExitStatus() -> void {
+  auto thread = findThread(arg(0));
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status != Status::Dormant) return result(ErrorNotDormant);
+  result(u32(thread->exitStatus));
+}
+
+//(thread): ends another thread, wherever it is, as if it had exited (those waiting for its end are told it was
+//terminated); not the caller. One made to run a module's module_start or module_stop is deleted too, as
+//sceKernelExitThread deletes it: the PSP's module manager deletes the thread it made, however that ends.
+auto Kernel::sceKernelTerminateThread() -> void {
+  auto thread = findThread(arg(0));
+  if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status == Status::Dormant) return result(ErrorDormant);
+  bool made = madeForModule(thread->uid);
+  endThread(*thread, s32(ErrorThreadTerminated));
+  thread->suspended = false;
+  if(made) deleteThread(*thread);
+  result(0);
+  reschedule();
+}
+
+//(thread): ends another thread and deletes it (a module's module_start or module_stop thread too, its module told
+//as when it exits).
+auto Kernel::sceKernelTerminateDeleteThread() -> void {
+  auto thread = findThread(arg(0));
+  if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status != Status::Dormant) endThread(*thread, s32(ErrorThreadTerminated));
+  deleteThread(*thread);
+  result(0);
+  reschedule();
+}
+
+//(thread): it stops being scheduled until resumed, whatever its state (a wait goes on meanwhile); not the caller.
+auto Kernel::sceKernelSuspendThread() -> void {
+  auto thread = findThread(arg(0));
+  if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);
+  if(!thread) return result(ErrorUnknownThread);
+  if(thread->status == Status::Dormant) return result(ErrorDormant);
+  if(thread->suspended) return result(ErrorSuspended);
+  thread->suspended = true;
+  result(0);
+}
+
+auto Kernel::sceKernelResumeThread() -> void {
+  auto thread = findThread(arg(0));
+  if(arg(0) == 0 || thread == current) return result(ErrorIllegalThread);
+  if(!thread) return result(ErrorUnknownThread);
+  if(!thread->suspended) return result(ErrorNotSuspended);
+  thread->suspended = false;
+  result(0);
+  reschedule();
+}
+
+//(attributes to clear, attributes to set) on the calling thread: only the VFPU's (0x4000) may change (PPSSPP's
+//notes).
+auto Kernel::sceKernelChangeCurrentThreadAttr() -> void {
+  if((arg(0) | arg(1)) & ~0x4000u) return result(ErrorIllegalAttribute);
+  if(current) current->attributes = (current->attributes & ~arg(0)) | arg(1);
+  result(0);
+}
+
+//(thread): how much of a thread's stack it has never used; thread 0 is the caller. A new stack is filled with 0xff
+//bytes (createThread()), so counting up from its bottom, the bytes still 0xff were never written, and the first one
+//that isn't ends the count. The bottom 16 bytes, where the thread's ID is, aren't counted: on a PSP (pspautotests'
+//threads/threads/stackfree), a thread whose 4 KiB stack had gone 0x150 bytes deep has 0xea0 free, one that had gone
+//0x550 deep 0xaa0. A stack that wasn't filled (PSP_THREAD_ATTR_NO_FILLSTACK) is counted the same way, through
+//whatever was in that memory before: there, nothing. The stack is read where it is, in RAM (a block of the user
+//partition), not copied out first.
+auto Kernel::sceKernelGetThreadStackFreeSize() -> void {
+  auto thread = findThread(arg(0));
+  if(!thread) return result(ErrorUnknownThread);
+  u32 unused = 0;
+  if(const u8* stack = memory.pointer(thread->stackBlock, thread->stackSize)) {
+    while(16 + unused < thread->stackSize && stack[16 + unused] == 0xff) unused++;
+  }
+  result(unused);
+}
+
+//The profiler's figures for a thread, or for all (sceKernelReferThreadProfiler, sceKernelReferGlobalProfiler): only
+//development PSPs keep them; a retail one has none to give.
+auto Kernel::sceKernelReferThreadProfiler() -> void {
+  result(0);
 }

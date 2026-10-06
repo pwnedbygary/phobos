@@ -54,13 +54,24 @@ struct GE;
 struct Kernel {
   //Error codes: pspsdk's pspkerror.h, and those it lacks (the lightweight mutex's, the allocation type's, files',
   //the GE driver's) from uOFW's errors.h.
+  static constexpr u32 ErrorError                 = 0x8002'0001;
   static constexpr u32 ErrorUnknownUID            = 0x8002'00cb;
+  static constexpr u32 ErrorIllegalPermission     = 0x8002'00d1;
+  static constexpr u32 ErrorUnknownVpl            = 0x8002'019c;
+  static constexpr u32 ErrorUnknownFpl            = 0x8002'019d;
+  static constexpr u32 ErrorIllegalMemoryBlock    = 0x8002'01b6;
+  static constexpr u32 ErrorIllegalMemorySize     = 0x8002'01b7;
   static constexpr u32 ErrorIllegalArgument       = 0x8002'00d2;
   static constexpr u32 ErrorIllegalAddress        = 0x8002'00d3;
   static constexpr u32 ErrorIllegalPartition      = 0x8002'00d6;
   static constexpr u32 ErrorAllocationFailed      = 0x8002'00d9;
+  static constexpr u32 ErrorIllegalAlignmentSize  = 0x8002'00e4;  //an aligned block's alignment not a power of two
   static constexpr u32 ErrorNotYetLinked          = 0x8002'013a;  //a function the kernel doesn't have
   static constexpr u32 ErrorIllegalContext        = 0x8002'0064;  //waiting, from an interrupt handler
+  static constexpr u32 ErrorCanNotWait            = 0x8002'01a7;  //waiting, with interrupts held off
+  static constexpr u32 ErrorIllegalInterruptCode  = 0x8002'0065;
+  static constexpr u32 ErrorHandlerFound          = 0x8002'0067;
+  static constexpr u32 ErrorHandlerNotFound       = 0x8002'0068;
   static constexpr u32 ErrorIllegalAttribute      = 0x8002'0191;
   static constexpr u32 ErrorIllegalMode           = 0x8002'0195;
   static constexpr u32 ErrorUnknownEventFlag      = 0x8002'019a;
@@ -91,10 +102,13 @@ struct Kernel {
   static constexpr u32 ErrorLwMutexUnderflow      = 0x8002'01ce;
   static constexpr u32 ErrorLwMutexRecursion      = 0x8002'01cf;
   //uOFW's errors.h
+  static constexpr u32 ErrorNotImplemented        = 0x8000'0003;
   static constexpr u32 ErrorNotSupported          = 0x8000'0004;
   static constexpr u32 ErrorAlready               = 0x8000'0020;
   static constexpr u32 ErrorBusy                  = 0x8000'0021;
   static constexpr u32 ErrorOutOfMemory           = 0x8000'0022;
+  static constexpr u32 ErrorPrivilegeRequired     = 0x8000'0023;
+  static constexpr u32 ErrorNotFound              = 0x8000'0025;
   static constexpr u32 ErrorInvalidID             = 0x8000'0100;
   static constexpr u32 ErrorInvalidIndex          = 0x8000'0102;
   static constexpr u32 ErrorInvalidPointer        = 0x8000'0103;
@@ -116,6 +130,23 @@ struct Kernel {
   static constexpr u32 ErrorInvalidFileSize       = 0x8001'b003;  //seeking umd0: past the disc
   static constexpr u32 ErrorInvalidFlag           = 0x8001'b004;  //opening a file on the disc to write it
   static constexpr u32 ErrorDevctlBadParameters   = 0x8022'0081;  //a devctl's buffers too small or misplaced
+  static constexpr u32 ErrorVolatileMemoryInUse   = 0x802b'0200;  //the volatile memory lent already
+  //sceAudio's (uOFW's errors.h)
+  static constexpr u32 ErrorAudioChannelNotInitialized  = 0x8026'0001;
+  static constexpr u32 ErrorAudioChannelBusy            = 0x8026'0002;
+  static constexpr u32 ErrorAudioInvalidChannel         = 0x8026'0003;
+  static constexpr u32 ErrorAudioNoChannels             = 0x8026'0005;
+  static constexpr u32 ErrorAudioSampleCount            = 0x8026'0006;  //not a multiple of 64, or out of range
+  static constexpr u32 ErrorAudioInvalidFormat          = 0x8026'0007;
+  static constexpr u32 ErrorAudioChannelNotReserved     = 0x8026'0008;
+  static constexpr u32 ErrorAudioInvalidFrequency       = 0x8026'000a;
+  static constexpr u32 ErrorAudioInvalidVolume          = 0x8026'000b;
+  static constexpr u32 ErrorAudioChannelAlreadyReserved = 0x8026'8002;
+  //pspkerror.h's, for threads
+  static constexpr u32 ErrorDormant               = 0x8002'01a2;
+  static constexpr u32 ErrorSuspended             = 0x8002'01a3;
+  static constexpr u32 ErrorNotSuspended          = 0x8002'01a5;
+  static constexpr u32 ErrorThreadTerminated      = 0x8002'01ac;
   //modules' (pspkerror.h)
   static constexpr u32 ErrorIllegalObject         = 0x8002'012d;  //not a module, or one the loader refuses
   static constexpr u32 ErrorUnknownModule         = 0x8002'012e;
@@ -129,7 +160,7 @@ struct Kernel {
   static constexpr u64 VblankCycles = CPUFrequency * 1001 / 60'000;  //59.94 frames a second
   static constexpr u32 Trampoline = 0x0800'0000;  //kernel memory: where a thread returns to when its entry function
                                                   //ends (8 bytes on, a call into the program; 16 on, a module's
-                                                  //module_start or module_stop)
+                                                  //module_start or module_stop; 24 on, a thread's callback)
   static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
 
@@ -180,7 +211,8 @@ struct Kernel {
   };
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
-  static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, FirstImportCode = 0x1000;
+  static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4;
+  static constexpr u32 FirstImportCode = 0x1000;
 
   //threads.cpp
   struct Context {  //a thread's registers while another runs
@@ -190,7 +222,14 @@ struct Kernel {
   };
   enum class Status : u32 { Running = 1, Ready = 2, Waiting = 4, Dormant = 16 };  //the PSP's numbers
   enum class Wait : u32 {
-    None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd, Module,
+    None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd, Audio,
+    Fpl, Vpl, Module,
+  };
+  struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
+    Wait wait = Wait::None;
+    u32 id = 0, count = 0, mode = 0, pointer = 0, timeoutPointer = 0;
+    u64 wakeAt = 0;
+    bool callbacks = false;
   };
   struct Thread {
     u32 uid;
@@ -199,21 +238,31 @@ struct Kernel {
     Status status = Status::Dormant;
     Context context{};
     Wait wait = Wait::None;
-    u32 waitID = 0;        //the semaphore, mutex, thread, event flag or display list waited for
-    u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs
-    u32 waitMode = 0;      //an event flag wait's mode
-    u32 waitPointer = 0;   //where an event flag wait puts the bits it saw
+    u32 waitID = 0;        //the semaphore, mutex, thread, event flag, display list or module waited for; the sound
+                           //channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC channel's)
+    u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs; a mixer
+                           //output's left volume; the samples an SRC output's buffer was armed with
+    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume
+    u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, and a module wait the function's result;
+                           //the buffer a mixer output hands over
     u64 wakeAt = 0;        //for a delay or timeout: the cycle to wake at (0: none)
     u32 timeoutPointer = 0;
     u64 readySince = 0;    //to keep first-come order among equal priorities
     s32 exitStatus = 0;
     u32 wakeupCount = 0;
+    bool callbacks = false;    //its wait lets its callbacks run (it called a function whose name ends in CB)
+    bool inCallback = false;   //it's running one of them, its own registers and wait put aside till they're done
+    u32 callbackID = 0;        //which
+    Context beforeCallback{};  //the thread as its callbacks found it: in its wait, or in sceKernelCheckCallback
+    WaitState waitBeforeCallback;
+    bool suspended = false;    //another thread suspended it: it doesn't run, whatever its state, until resumed
   };
   struct Semaphore {
     u32 uid;
     std::string name;
     u32 attributes;
     s32 count, maximum;
+    s32 initial = 0;
   };
   std::map<u32, std::unique_ptr<Thread>> threads;
   std::map<u32, Semaphore> semaphores;
@@ -229,10 +278,12 @@ struct Kernel {
   auto save(Context& context) -> void;
   auto restore(const Context& context) -> void;
   auto ready(Thread& thread, u32 returnValue) -> void;
-  auto block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer = 0) -> void;
+  auto block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer = 0, bool callbacks = false) -> void;
+  auto timeout(u32 pointer) const -> u64;
   auto reschedule() -> void;
   auto switchTo(Thread* thread) -> void;
   auto events() -> void;
+  auto waiterLeft(Wait wait, u32 id) -> void;
   auto idle(u64 end) -> bool;
   auto untilNextEvent() const -> u64;
   auto endThread(Thread& thread, s32 status) -> void;
@@ -240,6 +291,11 @@ struct Kernel {
   auto signalSemaphores(Semaphore& semaphore) -> void;
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
+  auto deleteThread(Thread& thread) -> void;
+  auto delay(u32 microseconds, bool callbacks) -> void;
+  auto sleep(bool callbacks) -> void;
+  auto waitThreadEnd(bool callbacks) -> void;
+  auto waitSemaphore(bool callbacks) -> void;
 
   auto sceKernelCreateThread() -> void;
   auto sceKernelStartThread() -> void;
@@ -249,14 +305,27 @@ struct Kernel {
   auto sceKernelGetThreadId() -> void;
   auto sceKernelReferThreadStatus() -> void;
   auto sceKernelDelayThread() -> void;
+  auto sceKernelDelayThreadCB() -> void;
   auto sceKernelSleepThread() -> void;
   auto sceKernelWakeupThread() -> void;
   auto sceKernelWaitThreadEnd() -> void;
+  auto sceKernelWaitThreadEndCB() -> void;
   auto sceKernelCreateSema() -> void;
   auto sceKernelDeleteSema() -> void;
   auto sceKernelSignalSema() -> void;
   auto sceKernelWaitSema() -> void;
+  auto sceKernelWaitSemaCB() -> void;
   auto sceKernelPollSema() -> void;
+  auto sceKernelReferSemaStatus() -> void;
+  auto sceKernelChangeThreadPriority() -> void;
+  auto sceKernelGetThreadExitStatus() -> void;
+  auto sceKernelTerminateThread() -> void;
+  auto sceKernelTerminateDeleteThread() -> void;
+  auto sceKernelSuspendThread() -> void;
+  auto sceKernelResumeThread() -> void;
+  auto sceKernelChangeCurrentThreadAttr() -> void;
+  auto sceKernelGetThreadStackFreeSize() -> void;
+  auto sceKernelReferThreadProfiler() -> void;
   auto sceKernelCreateLwMutex() -> void;
   auto sceKernelDeleteLwMutex() -> void;
   auto sceKernelLockLwMutex() -> void;
@@ -264,23 +333,32 @@ struct Kernel {
   auto sceKernelUnlockLwMutex() -> void;
   auto sceKernelGetSystemTimeLow() -> void;
 
-  //sysmem.cpp: the user partition's memory, handed out in blocks
+  //sysmem.cpp: the user partition's memory, handed out in blocks; and what a program tells the system about itself
   struct Block {
     u32 uid;
     std::string name;
     u32 address, size;
   };
   std::vector<Block> blocks;  //by address
+  bool largeMemory = false;   //the program asked for all of RAM (its PARAM.SFO's MEMSIZE): see userEnd()
+  u32 sdkVersion = 0;         //the SDK the program was built with, as its start-up code tells the system
+  u32 compilerVersion = 0;    //and the version of the compiler that built it
   auto allocate(u32 size, u32 type, u32 address, const std::string& name) -> Block*;
   auto release(u32 uid) -> bool;
+  auto programBlockAt() const -> u32;
+  auto blockHeld(const Block& block) const -> bool;
   auto userEnd() const -> u32;
   auto largestFree() const -> u32;
+  auto programParameters(const u8* data, u64 size, const std::string& path) -> std::vector<u8>;
 
   auto sceKernelAllocPartitionMemory() -> void;
   auto sceKernelFreePartitionMemory() -> void;
   auto sceKernelGetBlockHeadAddr() -> void;
   auto sceKernelMaxFreeMemSize() -> void;
   auto sceKernelTotalFreeMemSize() -> void;
+  auto sceKernelSetCompiledSdkVersion() -> void;
+  auto sceKernelGetCompiledSdkVersion() -> void;
+  auto sceKernelSetCompilerVersion() -> void;
 
   //io.cpp: files and folders on the host folders standing for the PSP's devices, or on the disc in the drive;
   //standard input, output and error
@@ -404,10 +482,19 @@ struct Kernel {
     u32 mode = 0, width = 480, height = 272;
     u32 frameBuffer = 0, bufferWidth = 0, pixelFormat = 0;
   } display;
+  static constexpr u64 LineCycles = CPUFrequency * 525 / 9'000'000;  //a line: 525 dots at 9 MHz (286 to a frame)
+  static constexpr u64 VblankLength = CPUFrequency * 77 / 100'000;    //the vertical blank lasts 0.77 ms
+  auto inVblank() const -> bool;
+  auto waitVblank(bool callbacks) -> void;
   auto sceDisplaySetMode() -> void;
   auto sceDisplaySetFrameBuf() -> void;
   auto sceDisplayGetFrameBuf() -> void;
   auto sceDisplayWaitVblankStart() -> void;
+  auto sceDisplayWaitVblankStartCB() -> void;
+  auto sceDisplayWaitVblank() -> void;
+  auto sceDisplayWaitVblankCB() -> void;
+  auto sceDisplayIsVblank() -> void;
+  auto sceDisplayGetCurrentHcount() -> void;
   auto sceDisplayGetVcount() -> void;
   auto picture(std::vector<u32>& pixels) -> void;
 
@@ -415,7 +502,8 @@ struct Kernel {
   struct Call {
     u32 function, gp;
     u32 arguments[3];
-    bool resumesGe;  //the GE waits for it (a SIGNAL that suspends the list)
+    bool resumesGe;       //the GE waits for it (a SIGNAL that suspends the list)
+    bool vblank = false;  //a vertical blank's handler
   };
   std::deque<Call> calls;       //waiting their turn
   bool interrupting = false;    //one is running
@@ -430,6 +518,25 @@ struct Kernel {
   auto mayWait() -> bool;
   auto sceKernelCpuSuspendIntr() -> void;
   auto sceKernelCpuResumeIntr() -> void;
+  //Sub-interrupt handlers: the program's functions an interrupt calls, 32 to an interrupt, on the two interrupts a
+  //program may use: the vertical blank's (30), called at each blank, and the GE's (25), which nothing raises yet.
+  struct SubHandler {
+    u32 function = 0;      //0: none registered
+    u32 argument = 0;      //what it's called with, after its number
+    u32 gp = 0;            //the global pointer it was registered with
+    bool enabled = false;  //sceKernelEnableSubIntr's say: registering leaves it as it is, releasing clears it
+  };
+  SubHandler vblankSubs[32], geSubs[32];
+  bool vblankPending = false;  //a vertical blank came while its handlers couldn't run: they run once, when they can
+  auto subHandlers(u32 interrupt) -> SubHandler*;
+  auto queueVblankHandlers() -> void;
+  auto vblankQueued() const -> bool;
+  auto vblankInterrupt() -> void;
+  auto vblankHandlers() const -> bool;
+  auto sceKernelRegisterSubIntrHandler() -> void;
+  auto sceKernelReleaseSubIntrHandler() -> void;
+  auto sceKernelEnableSubIntr() -> void;
+  auto sceKernelDisableSubIntr() -> void;
 
   //events.cpp: event flags, and callbacks
   struct EventFlag {
@@ -441,6 +548,7 @@ struct Kernel {
     u32 uid;
     std::string name;
     u32 function, argument, thread;
+    u32 notifyCount = 0, notifyArg = 0;  //times it was notified since it last ran, and the last notification's word
   };
   std::map<u32, EventFlag> eventFlags;
   std::map<u32, Callback> callbacks;
@@ -448,15 +556,32 @@ struct Kernel {
   auto eventFlagWaiters(const EventFlag& flag) -> std::vector<Thread*>;
   auto eventFlagFor(u32 uid, u32 bits, u32 mode) -> EventFlag*;
   auto eventFlagTimedOut(Thread& thread) -> void;
+  auto wakeEventFlagWaiters(EventFlag& flag) -> void;
+  auto waitEventFlag(bool callbacks) -> void;
+  auto notifyCallback(u32 uid, u32 argument) -> bool;
+  auto pendingCallback(const Thread& thread) -> Callback*;
+  auto wakeForCallbacks(Thread& thread) -> void;
+  auto callbacksOnReturn(bool callbacks) -> void;
+  auto runCallbacks(Thread& thread) -> void;
+  auto callNextCallback(Thread& thread) -> bool;
+  auto callbackReturned() -> void;
+  auto backFromCallbacks(Thread& thread) -> void;
+  auto resumeWait(Thread& thread) -> void;
+  auto deleteCallback(u32 uid) -> bool;
   auto sceKernelCreateEventFlag() -> void;
   auto sceKernelDeleteEventFlag() -> void;
   auto sceKernelSetEventFlag() -> void;
   auto sceKernelClearEventFlag() -> void;
   auto sceKernelWaitEventFlag() -> void;
+  auto sceKernelWaitEventFlagCB() -> void;
   auto sceKernelPollEventFlag() -> void;
   auto sceKernelReferEventFlagStatus() -> void;
   auto sceKernelCreateCallback() -> void;
   auto sceKernelDeleteCallback() -> void;
+  auto sceKernelNotifyCallback() -> void;
+  auto sceKernelCancelCallback() -> void;
+  auto sceKernelGetCallbackCount() -> void;
+  auto sceKernelReferCallbackStatus() -> void;
   auto sceKernelRegisterExitCallback() -> void;
   auto sceKernelSleepThreadCB() -> void;
   auto sceKernelCheckCallback() -> void;
@@ -528,11 +653,218 @@ struct Kernel {
   auto sceGeSaveContext() -> void;
   auto sceGeRestoreContext() -> void;
 
+  //pools.cpp: memory pools a program hands out itself, in blocks of one size (FPL) or of any (VPL)
+  struct Pool {
+    u32 uid;
+    std::string name;
+    u32 attributes = 0;
+    bool variable = false;
+    u32 block = 0;             //its memory, a block of the user partition
+    u32 address = 0, size = 0; //what it hands out from
+    u32 blockSize = 0;         //a fixed pool's blocks' size
+    std::vector<u8> used;      //a fixed pool's blocks handed out
+    std::map<u32, u32> pieces; //a variable pool's pieces handed out: where each starts (its header), how long
+  };
+  std::map<u32, Pool> pools;
+  auto createPool(bool variable) -> void;
+  auto poolTake(Pool& pool, u32 size) -> u32;
+  auto poolFree(const Pool& pool) const -> u32;
+  auto poolWaiters(const Pool& pool) -> std::vector<Thread*>;
+  auto poolWake(Pool& pool) -> void;
+  auto poolAllocate(bool variable, bool callbacks) -> void;
+  auto poolTryAllocate(bool variable) -> void;
+  auto poolRelease(bool variable) -> void;
+  auto poolDelete(bool variable) -> void;
+  auto poolCancel(bool variable) -> void;
+  auto poolStatus(bool variable) -> void;
+  auto sceKernelCreateFpl() -> void;
+  auto sceKernelDeleteFpl() -> void;
+  auto sceKernelAllocateFpl() -> void;
+  auto sceKernelAllocateFplCB() -> void;
+  auto sceKernelTryAllocateFpl() -> void;
+  auto sceKernelFreeFpl() -> void;
+  auto sceKernelCancelFpl() -> void;
+  auto sceKernelReferFplStatus() -> void;
+  auto sceKernelCreateVpl() -> void;
+  auto sceKernelDeleteVpl() -> void;
+  auto sceKernelAllocateVpl() -> void;
+  auto sceKernelAllocateVplCB() -> void;
+  auto sceKernelTryAllocateVpl() -> void;
+  auto sceKernelFreeVpl() -> void;
+  auto sceKernelCancelVpl() -> void;
+  auto sceKernelReferVplStatus() -> void;
+
+  //audio.cpp: sound output. Eight mixer channels holding a buffer each, read a block of 64 samples at a time by the
+  //mixer's DMA; and the SRC channel (sceAudioOutput2*, sceAudioSRC*), a ninth output at a rate of its own, with two
+  //buffers armed at most. Their timing is the PSP's; the samples aren't mixed into the system's sound yet.
+  struct Audio {
+    //A block, 64 samples at 44.1 kHz, isn't a whole number of the CPU's cycles at 333 MHz: it's 483,265 and 15/49.
+    static constexpr u64 BlockCycles = CPUFrequency * 64 / 44'100;
+    static constexpr u32 BlockFraction = CPUFrequency * 64 * 49 / 44'100 % 49;
+    static_assert((BlockCycles * 49 + BlockFraction) * 44'100 == CPUFrequency * 64 * 49);
+    static constexpr u32 WaitSrc = 8, WaitSrcDrain = 9;  //waitIDs on the SRC channel (0-7: the mixer channels)
+    //An SRC buffer's slot frees as its transfer ends, 100 microseconds before its last samples are heard
+    //(srcOutput()); the shortest buffer, 17 samples at 48 kHz, plays for 354.
+    static constexpr u64 SrcLead = CPUFrequency / 10'000;
+    static_assert(17 * CPUFrequency / 48'000 > SrcLead);
+    struct Channel {
+      bool reserved = false;
+      u32 sampleCount = 0;            //samples in each buffer handed over: a multiple of 64, from 64 to 65472
+      u32 format = 0;                 //0x00 stereo, 0x10 mono
+      u32 leftVolume = 0, rightVolume = 0;
+      u32 buffer = 0;                 //the slot: the buffer in it (0: the slot is free)
+      u32 length = 0;                 //its samples
+      u32 remaining = 0;              //how many of them the DMA hasn't taken yet (a null buffer sets this too)
+    } channels[8];
+    struct Dma {                      //the mixer's: a block from every channel with a buffer, every 64/44100 s
+      bool running = false;
+      u64 nextBlock = 0;              //when it takes the next block
+      u32 fraction = 0;               //and how far past that cycle the block really comes, in 49ths of one
+    } dma;
+    struct SrcChannel {
+      bool reserved = false;
+      u32 sampleCount = 0;            //samples in each buffer handed over: 17 to 4111
+      u32 rate = 44'100;              //its samples a second
+      struct Buffer {
+        u32 address = 0, sampleCount = 0, volume = 0;
+      } buffers[2];                   //the buffers armed: the first plays, the second follows it
+      u32 armed = 0;                  //how many there are
+      u64 retireAt = 0;               //when the first one's transfer ends
+      bool completion = false;        //a completion no output has taken yet
+    } src;
+  } audio;
+  auto audioWaiter(u32 waitID) -> Thread*;
+  auto audioWaitRefused() const -> u32;
+  auto handOver(u32 number, u32 buffer, s32 left, s32 right) -> void;
+  auto mixerBlock() -> bool;
+  auto mixerOutput(u32 number, u32 buffer, s32 left, s32 right, bool blocking) -> void;
+  auto srcDuration(u32 samples) const -> u64;
+  auto srcRetire() -> bool;
+  auto srcReserve(u32 samples, u32 rate, u32 channels) -> void;
+  auto srcRelease() -> void;
+  auto srcOutput() -> void;
+  auto audioEvents() -> bool;
+  auto nextAudioEvent() const -> u64;
+  auto sceAudioChReserve() -> void;
+  auto sceAudioChRelease() -> void;
+  auto sceAudioOutputBlocking() -> void;
+  auto sceAudioOutputPannedBlocking() -> void;
+  auto sceAudioOutput() -> void;
+  auto sceAudioOutputPanned() -> void;
+  auto sceAudioGetChannelRestLen() -> void;
+  auto sceAudioGetChannelRestLength() -> void;
+  auto sceAudioSetChannelDataLen() -> void;
+  auto sceAudioChangeChannelConfig() -> void;
+  auto sceAudioChangeChannelVolume() -> void;
+  auto sceAudioOutput2Reserve() -> void;
+  auto sceAudioOutput2OutputBlocking() -> void;
+  auto sceAudioOutput2ChangeLength() -> void;
+  auto sceAudioOutput2GetRestSample() -> void;
+  auto sceAudioOutput2Release() -> void;
+  auto sceAudioSRCChReserve() -> void;
+  auto sceAudioSRCOutputBlocking() -> void;
+  auto sceAudioSRCChRelease() -> void;
+
+  //utility.cpp: the system's dialogs, one at a time, and the optional modules loaded
+  struct Dialog {
+    u32 kind = 0;          //the last started (0: none yet)
+    u32 status = 0;        //0 none, 1 starting, 2 running, 3 finished, 4 closing
+    u32 next = 0;          //the status it goes to at changeAt (0: no change coming)
+    u64 changeAt = 0;
+    u32 parameters = 0;    //where its parameters are
+  } dialog;
+  std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
+  auto dialogDue() -> void;
+  auto dialogStart(u32 kind) -> void;
+  auto dialogStatus(u32 kind) -> void;
+  auto dialogUpdate(u32 kind) -> void;
+  auto dialogShutdown(u32 kind) -> void;
+  static auto hexWord(u32 value) -> std::string;
+  auto savePath(const std::string& folder, const std::string& file = {}) -> std::string;
+  auto savedata(u32 parameters) -> u32;
+  auto savedataList(u32 parameters, const std::string& game) -> u32;
+  auto sceUtilitySavedataInitStart() -> void;
+  auto sceUtilitySavedataGetStatus() -> void;
+  auto sceUtilitySavedataUpdate() -> void;
+  auto sceUtilitySavedataShutdownStart() -> void;
+  auto sceUtilityMsgDialogInitStart() -> void;
+  auto sceUtilityMsgDialogGetStatus() -> void;
+  auto sceUtilityMsgDialogUpdate() -> void;
+  auto sceUtilityMsgDialogShutdownStart() -> void;
+  auto sceUtilityOskInitStart() -> void;
+  auto sceUtilityOskGetStatus() -> void;
+  auto sceUtilityOskUpdate() -> void;
+  auto sceUtilityOskShutdownStart() -> void;
+  auto sceUtilityNetconfInitStart() -> void;
+  auto sceUtilityNetconfGetStatus() -> void;
+  auto sceUtilityNetconfUpdate() -> void;
+  auto sceUtilityNetconfShutdownStart() -> void;
+  auto sceUtilityGameSharingInitStart() -> void;
+  auto sceUtilityGameSharingGetStatus() -> void;
+  auto sceUtilityGameSharingUpdate() -> void;
+  auto sceUtilityGameSharingShutdownStart() -> void;
+  auto sceUtilityHtmlViewerInitStart() -> void;
+  auto sceUtilityHtmlViewerGetStatus() -> void;
+  auto sceUtilityHtmlViewerUpdate() -> void;
+  auto sceUtilityHtmlViewerShutdownStart() -> void;
+  auto sceUtilityLoadModule() -> void;
+  auto sceUtilityUnloadModule() -> void;
+  auto sceUtilityLoadNetModule() -> void;
+  auto sceUtilityUnloadNetModule() -> void;
+  auto sceUtilityGetSystemParamString() -> void;
+  auto sceUtilitySetSystemParamString() -> void;
+
+  //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
+  struct Power {
+    u32 callbacks[16] = {};       //the callbacks registered in each slot (0: none)
+    u32 pll = 222, cpu = 222, bus = 111;  //the clocks asked for, in MHz (a PSP starts at these)
+    bool volatileLocked = false;  //the volatile memory is lent to the game
+  } powerState;
+  auto resultFloat(float value) -> void;
+  auto scePowerRegisterCallback() -> void;
+  auto scePowerUnregisterCallback() -> void;
+  auto scePowerIsPowerOnline() -> void;
+  auto scePowerIsBatteryExist() -> void;
+  auto scePowerIsBatteryCharging() -> void;
+  auto scePowerGetBatteryChargingStatus() -> void;
+  auto scePowerIsLowBattery() -> void;
+  auto scePowerGetBatteryLifePercent() -> void;
+  auto scePowerGetBatteryLifeTime() -> void;
+  auto scePowerTick() -> void;
+  auto scePowerSetClockFrequency() -> void;
+  auto scePowerSetCpuClockFrequency() -> void;
+  auto scePowerSetBusClockFrequency() -> void;
+  auto scePowerGetCpuClockFrequency() -> void;
+  auto scePowerGetBusClockFrequency() -> void;
+  auto scePowerGetPllClockFrequencyInt() -> void;
+  auto scePowerGetCpuClockFrequencyFloat() -> void;
+  auto scePowerGetBusClockFrequencyFloat() -> void;
+  auto scePowerGetPllClockFrequencyFloat() -> void;
+  auto sceKernelPowerTick() -> void;
+  auto sceKernelPowerLock() -> void;
+  auto sceKernelPowerUnlock() -> void;
+  auto sceKernelVolatileMemTryLock() -> void;
+  auto sceKernelVolatileMemUnlock() -> void;
+
   //system.cpp: leaving, clocks, and the odds and ends a C library's start-up asks for
   u64 startTime = 0;  //the date when the PSP started, in microseconds since 1970
   auto result64(u64 value) -> void;
+  auto sceKernelLibcClock() -> void;
+  auto sceKernelSysClock2USec() -> void;
+  auto sceKernelSysClock2USecWide() -> void;
+  auto sceRtcGetTick() -> void;
+  auto sceRtcCompareTick() -> void;
+  auto sceKernelUtilsMt19937Init() -> void;
+  auto sceKernelUtilsMt19937UInt() -> void;
+  auto sceKernelPrintf() -> void;
+  auto sceKernelSetGPO() -> void;
+  auto sceWlanGetSwitchState() -> void;
+  auto sceWlanGetEtherAddr() -> void;
+  auto sceImposeSetLanguageMode() -> void;
+  auto sceDmacMemcpy() -> void;
   auto sceKernelExitGame() -> void;
   auto sceKernelSelfStopUnloadModule() -> void;
+  auto sceKernelStopUnloadSelfModuleWithStatus() -> void;
   auto sceUtilityGetSystemParamInt() -> void;
   auto sceNetInetUnavailable() -> void;
   auto sceKernelGetSystemTimeWide() -> void;
@@ -572,7 +904,6 @@ struct Kernel {
   auto runModuleFunction(LoadedModule& loaded, u32 nid, ModuleStatus during) -> void;
   auto moduleThreadEnded(Thread& thread, s32 status) -> void;
   auto moduleReturned() -> void;
-  auto discardThread(Thread& thread) -> void;
   auto sceKernelLoadModule() -> void;
   auto sceKernelLoadModuleByID() -> void;
   auto sceKernelStartModule() -> void;

@@ -13,8 +13,10 @@ measurements on `cursor/psp-3d-measure-2b67`; part 12, lighting, on `cursor/psp-
 whole feature to be stacked and merged at once (GitHub stack #106).
 Part 13, the PSP in Phobos (an ares system, mia's medium, the Android app's entry), is on `cursor/psp-app-2b67`:
 homebrew runs in the app on the RP6. Part 14, disc images (ISO and CSO, the disc's files, the drive), is on
-`cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`. Parts 18 and 19, decryption and loading
-modules, are on `cursor/psp-decrypt-2b67`.
+`cursor/psp-umd-2b67`; part 15, save states, on `cursor/psp-states-2b67`. Part 17, the functions the retail games that
+now start ask for (callbacks, sound output's timing, power, interrupt handlers, memory pools, the system's dialogs and
+saves), is on `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67`; parts 18 and 19, decryption and
+loading modules, are on `cursor/psp-decrypt-2b67` (#144), which `cursor/psp-hle-games-2b67` has since merged.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -1178,6 +1180,9 @@ exactly there.
   - an ID or a file number at or past the next one to be handed out, or a map's key that isn't its object's ID; IDs
     or file numbers counted past 2^31 (they're positive 32-bit numbers, and stop short of that: newUID(), newFile());
     a running thread that isn't there;
+  - memory as the kernel never hands it out (since part 17's final review): a block outside the user partition, a
+    thread's stack that isn't a block of its own, of its size, or a block two owners claim (threads' stacks, memory
+    pools, modules and the program);
   - what would hang the machine, or keep it busy for hours: a sound frame or more owed, a clock past a century, the
     next vertical blank more than a frame ahead or a frame or more behind, a sampling cycle sceCtrlSetSamplingCycle
     refuses or its next sample more than a cycle ahead or a frame or more behind, a wait for 64 controller samples or
@@ -1235,7 +1240,7 @@ Tests:
   registers, its global pointer, its name), new descriptors going on from the old; a list and a text longer than the
   rest of the state refused; a disc file dropped where no disc image is in the drive (none, or a host folder standing
   for disc0:); host names with '\' or ':' left out of a listing. "state fields": a machine with one of everything has
-  each of 212 fields (the CPU's, the GE's and the
+  each of its fields (212 then, more with parts 17's and 19's; the CPU's, the GE's and the
   kernel's) changed in turn, each change leaving a value a fresh machine doesn't have, and each must change the
   state; the state, every field changed, then loads into a fresh machine, which must make the very same state; last,
   54 values no machine could hold are refused one at a time, the machine as it was after each (among them each kind
@@ -1325,6 +1330,277 @@ Tests:
   DAX, a JSO and CHDs (hunks of one sector and of four), as from the ISO and the CSO; a CD's CHD, and one needing its
   parent, isn't taken as the disc. Its script builds libchdr as the app does.
 - The app's `LaunchSystemsTest`: .zso, .dax and .jso go to the PSP alone; a .chd by its folder.
+
+## Part 17: the functions retail games ask for
+
+On branch `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67` and its "one block for a program's
+memory" (2026-10-05), and since then of parts 18 and 19 (`cursor/psp-decrypt-2b67`, #144), merged in: see the end
+of this part. Lumines,
+Space Invaders Extreme, Brave Story: New Traveler, GTA: Sindacco Chronicles (a GTA LCS mod with a plain EBOOT) and
+the Street Fighter III 3rd Strike port load from the user's CHDs and run their own code; this part gives them what
+they asked for next, as a scratch host runner (never committed: the system as `tests/psp/ares` builds it, booting a
+CHD, tracing every system call, dumping frames) showed it, function by function. Behavior comes from pspsdk's
+headers and from PPSSPP's reading of the PSP (its tests on the hardware, pspautotests), which the code cites where it
+depends on it; our own code. Sound output, the sub-interrupt handlers (with the vertical blank's dispatch),
+sceKernelChangeThreadPriority and sceKernelGetThreadStackFreeSize were then rewritten clean-room, from a behavior
+specification drawn from pspautotests' recorded results and pspsdk alone, without reading any emulator's code or
+the code they replace.
+
+- **NIDs that aren't their names' hashes.** Sony gave some later functions random NIDs, so the kernel can list a
+  function by the NID games import (`addNID` in kernel.cpp): sceKernelSetCompiledSdkVersion370 and its siblings for
+  later SDKs (342061e5...), sceKernelStopUnloadSelfModuleWithStatus (8f2df740), under the names the homebrew scene
+  gave them. Every other new function is listed by name, and each name's hash was checked against the NIDs the
+  games import.
+- **Memory** (sysmem.cpp). sceKernelAllocPartitionMemory's aligned types: 3, the lowest place starting on a multiple
+  of an alignment (the fifth argument, a power of two), and 4, the highest; Sony's SDK makes its heaps with them,
+  and refusing them was Space Invaders Extreme's C++ abort and Brave Story's "can't allocate memory". The type is
+  checked first, then the alignment, then the partition. The PSP-2000/3000 emulated has 64 MiB, but gives a program
+  a user partition of 24 MiB (0x08800000 to 0x0a000000, as much as a PSP-1000's 32 MiB leaves), the first thread's
+  stack at its top as on a PSP, unless the program's PARAM.SFO (its EBOOT.PBP's, or the disc's PSP_GAME/PARAM.SFO)
+  asks for all of RAM with MEMSIZE 1, as the Street Fighter III port does; the shop-bought games don't. Lumines'
+  23 MiB program leaves it about 1 MiB, in which it makes its threads and a 64 KiB block, as on a PSP. The SDK and
+  compiler versions a program's start-up code sets are kept to be read back.
+- **Callbacks** (events.cpp). A thread's callbacks, once notified (sceKernelNotifyCallback, or the system: the power
+  switch's are told of the battery as they're registered), run on that thread when it waits in a function whose
+  name ends in CB (sceKernelSleepThreadCB, DelayThreadCB, WaitSemaCB, WaitEventFlagCB, WaitThreadEndCB,
+  sceDisplayWaitVblankStartCB, sceUmdWaitDriveStatCB, AllocateFplCB/VplCB) or calls sceKernelCheckCallback, by its
+  priority: it's made ready with its wait kept, its registers and wait are put aside, each callback runs on its stack
+  as fn(times notified, the last word, its argument), one returning non-zero is deleted, and the thread goes back
+  into its wait, which ends at once if its time ran out (the clock doesn't stop for callbacks) or what it waited for
+  came or was deleted meanwhile. Callbacks may wait themselves. A thread's callbacks go with it. A CB function that
+  needn't wait, what it waits for being there already (a semaphore's count, a wakeup that came first, an event flag's
+  bits, a pool's room, a thread that has ended, the drive ready, sceDisplayWaitVblankCB inside the blank), still runs
+  the callbacks notified by then: they run at once, as sceKernelCheckCallback's do, and the function returns what it
+  got when they're done (it skipped them; a wait made to wait for them instead could time out in a long callback
+  after getting what it asked for, and sceDisplayWaitVblankCB's 1 would become a wait for the next blank).
+- **The display** (display.cpp): sceDisplayWaitVblankStartCB, WaitVblank (not waiting, returning 1, inside the
+  vertical blank, which lasts 0.77 ms as pspautotests measured), IsVblank, GetCurrentHcount (lines of 525 dots at
+  9 MHz, counted from the blank's start).
+- **Interrupt handlers** (interrupts.cpp): sceKernelRegisterSubIntrHandler, ReleaseSubIntrHandler, EnableSubIntr
+  and DisableSubIntr, written (clean-room, from a behavior specification) after pspautotests' intr/registersub,
+  intr/releasesub and intr/enablesub, whose results were recorded on a PSP (firmware 6.61, under PSPLink), and
+  pspsdk's pspintrman.h. A program may register only on the GE's interrupt (25) and the vertical blank's (30). The
+  other numbers below 67 are restated in a table in numeric order, as three kinds: no handler (NOTFOUND_HANDLER for
+  both calls), a handler without sub-interrupts (7, 10, 12, 15-20, 22-24, 26, 31, 36, 50, 56-61, 65: ILLEGAL_INTRCODE
+  for both), and sub-interrupts the kernel keeps (4, 6, 21: registering is ILLEGAL_INTRCODE, releasing finds nothing,
+  NOTFOUND_HANDLER); 67 and up are illegal. On the vertical blank, sub-interrupts 0-15 are the program's, the display
+  driver holds 18-20 and 24-26 (FOUND_HANDLER), the rest up to 31 are illegal to register and not found to release.
+  A null handler takes no place. Enabling and disabling look at the numbers alone, so a sub-interrupt enabled before
+  its handler is registered runs; releasing disables it. The vertical blank's handlers run at each blank, by number,
+  as calls into the program (part 9), with (their number, their argument) and the global pointer they were
+  registered with; time goes on for them while every thread waits (Lumines' main task waits on its handler). While
+  they can't run (interrupts held off, or another call running), the blank stays pending, once, as the PSP's
+  interrupt controller keeps an interrupt: however many blanks go by, each handler runs once when they can. (A
+  review had found the previous code queueing a call for every blank held off: 600 after 600.) It stays pending too
+  while the last blank's handlers still wait their turn or run (each call says whether it's a vertical blank's), so
+  handlers slower than a frame run back to back, the queue never holding more than one blank's: the final review
+  found two 20 ms handlers queued again at every return, 97 calls waiting by frame 120, all of them saved in states.
+  Untested on a PSP: the GE's sub-interrupts beyond 0 (all 32 are the program's here), and enabling on interrupts
+  other than 30.
+- **Sound output** (audio.cpp), rewritten clean-room from a behavior specification drawn from pspautotests' audio/*
+  and intr/waits results (recorded on a PSP) and pspsdk's pspaudio.h. The eight mixer channels: reserving (-1 or any
+  negative number for the highest free channel, one released but still playing out passed over), releasing (refused
+  while a thread waits; a buffer in the slot plays out), blocking and non-blocking outputs, panned or not, each with
+  its own volume rule (a negative volume keeps the channel's, except for the panned blocking output, which refuses
+  it), the two rest lengths (sceAudioGetChannelRestLen counting a null buffer's count, RestLength not), the data
+  length, format and volume changes, each call's errors in the order the tests show. A channel holds one buffer,
+  which the mixer's DMA reads a block of 64 samples at a time from every channel with one, every 64/44100 s (exact
+  to the cycle: a block is 483,265 and 15/49 cycles). The first buffer to an idle DMA loses its first block at once;
+  one joining a running DMA waits for the next boundary; after the last samples the DMA runs one more block, then
+  stops. A blocking output into a busy channel waits until its buffer has been taken (one waiter per channel; a
+  second is told BUSY at once), so a stream of blocking outputs returns a buffer's time apart, and 64-sample ones a
+  block apart: 100 of them take 98 blocks, about 142 ms, never less (the previous code didn't pace them at all). A
+  blocking null buffer is how a program waits for a channel to drain. The SRC channel (sceAudioOutput2* and
+  sceAudioSRC*, one channel reached two ways, at 8-48 kHz or 0 for 44.1): two buffers armed at most, transferred one
+  after the other at its rate; an output arms its buffer and waits for a completion (one pending returns at once, and
+  starting from idle makes one), so a steady stream returns a buffer apart; a null output waits until everything
+  armed has played; releasing is refused while anything is armed. A buffer's slot frees as its transfer ends, 100 µs
+  before it has been heard (the behavior specification's 8.4; pspautotests' audio/output2/rest has a 64-sample
+  buffer, 1451 µs long, read as gone after "13XX µs"): the first buffer after an idle stretch retires 100 µs short of
+  its length, and each one chained after it a whole buffer later, so the stream's pace and audio/output2/release's
+  results (still armed 1 ms on, released 2 ms on) are as they were. From an interrupt handler or with interrupts held
+  off, an output that would have to wait gets ILLEGAL_CONTEXT or CAN_NOT_WAIT (an SRC output's buffer stays armed and
+  plays). **The samples aren't mixed yet: the speakers get silence**, but every buffer takes its playing time, which
+  is what paces the games' sound threads (Lumines' spun at full speed without it, starving its game). The mixer takes
+  each block where a mixer would read it (its address, format and volumes are at hand), so mixing into the system's
+  stream comes next. Not done: sceAudioOneshotOutput, input, sceAudioSetFrequency, and the time the calls themselves
+  take on a PSP (100 µs to 1 ms for an output that starts the DMA); the driver's defect that leaves a channel marked
+  as waited on for good after a refused wait isn't copied.
+- **Power** (power.cpp): the battery (on the charger, full), callbacks for the power switch (16 slots), the clocks
+  as games set them and read them back (floats in f0; changing the PLL makes the caller wait as PPSSPP measured: 150
+  ms, 16.6 between 266 and 333 MHz). The CPU's time still counts 333 MHz cycles, one per instruction, whatever is
+  asked: a game at 222 MHz gets its work done faster than a PSP would (it waits for the vertical blank anyway).
+  sceSuspendForUser's power tick and locks, and the volatile memory (0x08400000, 4 MiB) lent once at a time.
+- **Memory pools** (pools.cpp): fixed (FPL) and variable (VPL), created from the user partition, handing out the
+  lowest free block or place (a VPL keeps 32 bytes for itself and 8 before each piece, as the PSP's do; how the PSP
+  chooses places isn't known here, so free sizes may differ), threads waiting in order or by priority, timeouts,
+  deletion and cancelling. Creation's refusals and their order, and a VPL too small to hold anything made 4 KiB, are
+  what pspautotests' threads/fpl and threads/vpl tests expect. A waiter that leaves without being served (its
+  timeout runs out, or it's terminated, or it ends in a callback that put its wait aside) has the pool serve those
+  behind it then, as semaphores do theirs (`waiterLeft()`, since the final review): one that didn't fit had held
+  them up, and they waited for the next piece given back.
+- **The system's dialogs** (utility.cpp): one at a time, their statuses (starting, running, finished, closing) with
+  PPSSPP's timings. Saves are real: a folder per save in the memory stick's PSP/SAVEDATA (`<game><save>`) holding the
+  data file the game hands over, loaded back, sized (the stick's free space, 1 GiB, the save's size), listed and
+  deleted (modes 6, 7, 9, 10 and 21 take the save's folder; erasing, 19 and 20, the data file named alone); a load
+  with none says so (the PSP's "no data"). The names become a folder and a file on the host, so the game's (which
+  can't be empty), the save's (a list's first too) and the data file's must each be one plain name ending inside its
+  field (13, 20 and 13 bytes): not "." or "..", no '/', '\', ':' or control character. The save's folder must then
+  be one of SAVEDATA's own and its file one of the folder's, links followed (one leading elsewhere is no save): the
+  memory stick's own check only kept paths on the stick, so a game's name of "" or ".." had a delete take every save
+  or PSP/ with its homebrew, and a data file's name could read /etc/hosts. The buffer must be in the program's memory
+  as far as what's copied (a save from nowhere wrote zeros); a load reads no more than the buffer takes and tells
+  how much it read. Anything else is refused as the mode's group's bad parameter (0x80110308 for loads, 0x80110388
+  saves, 0x80110348 deletes, 0x801103c8 sizes, 0x80110328 the rest), before anything is touched, and nothing throws
+  (the sizes and list modes read folders through the host's error codes). Not yet: the encryption a PSP applies, the
+  save's PARAM.SFO and icons, and drawing the dialogs. A message dialog is answered Yes at once (its text noted); the
+  keyboard, network settings, game sharing and the browser are cancelled. sceUtilityLoadModule (and the net module
+  versions) marks the optional libraries the HLE provides loaded.
+- **Threads and clocks**: sceKernelChangeThreadPriority (0x08-0x77, 0 for the caller's own, a dormant thread
+  refused; the thread goes to the back of its new priority's line, so the caller gives way to its equals; a thread
+  started again is back at its first priority: pspautotests' threads/threads/change), GetThreadExitStatus,
+  TerminateThread, TerminateDeleteThread, Suspend/ResumeThread (a suspended thread isn't scheduled whatever its
+  state), ChangeCurrentThreadAttr, GetThreadStackFreeSize (new stacks are filled with 0xff and the thread's ID written
+  at their bottom, as on a PSP; the 0xff bytes are counted up from 16 bytes above the bottom, which gives
+  threads/threads/stackfree's 0xea0 and 0xaa0, counted in place rather than in a copy of the whole stack, which a
+  damaged state's 4 GiB stack had made 4 GiB), ReferSemaStatus, the profilers (a retail PSP has none),
+  SysClock2USec(Wide), sceKernelLibcClock, sceRtcGetTick and CompareTick, the Mersenne Twister in the program's
+  memory, sceKernelPrintf (a field never wider than its room, 63 characters for a number and 63 past a string's
+  text, the width cut to that before snprintf sees it, which pads a field in full before cutting it: two fields
+  400,000,000 wide took 129 ms), sceDmacMemcpy, the WLAN switch (off), sceImposeSetLanguageMode, and
+  sceKernelStopUnloadSelfModuleWithStatus, which ends the program when the program calls it (a C++ abort ends
+  there); called from a module, it unloads that module, as part 19's sceKernelSelfStopUnloadModule does.
+- **Save states** carry all of it; the state fields test has every new field, and refuses what no machine could
+  hold (a callback, a waiter or a pool ID not handed out yet; a buffer in a slot with the DMA stopped, more left of
+  it than it holds, the next block over a block away; three buffers on the SRC channel, a rate it doesn't take, one
+  retiring after its own time; a thread waiting on a channel that nothing will wake; a handler on a sub-interrupt
+  the display driver holds; and pools that don't hold together: a fixed pool's blocks of 0 bytes, which giving one
+  back divided by, or not adding up to its size, or with pieces; a variable pool with a block size or blocks; a pool
+  outside its block, or whose block isn't there; pieces outside their pool, empty or overlapping). Since the final
+  review, memory as the kernel hands it out too: every block inside the user partition; each thread's stack a block
+  of its own, of its size (0x200 bytes at least); and every block one owner at most among threads' stacks, pools,
+  modules and the program (whose block is the one `start()` gives it, at its first segment's 256-byte step, and must
+  be there), so two pools on one block, or a pool inside a stack or the program's block, are refused.
+  `sceKernelFreePartitionMemory` refuses a block the kernel holds for one of those (ILLEGAL_PERMISSION), as freeing
+  it would leave its owner in memory handed out again, and the machine's own state then unloadable. The kernel's
+  layout changed (threads, semaphores, callbacks, sound), so states became version 2 on this branch: one of version
+  1 is refused by its header before anything is touched. They're version 3 since parts 18 and 19 merged, as their
+  branch had made a version 2 of its own, and version 4 since the final review (each call into the program says
+  whether it's a vertical blank's handler).
+
+What the games do now, on the host (the frames are the runner's PNGs, kept outside the repository):
+
+- **Lumines**: the Bandai logo, then its title screen ("PRESS START BUTTON", writing its save,
+  `PSP/SAVEDATA/ULUS10002LUMINES`); with Start and Cross pressed it reaches its menu. Still asking for: sceSasCore
+  (its music and effects; __sceSasInit fails and it carries on), sceKernelLoadModule for its own kernel modules
+  (network and sound, from `USRDIR/kmodule`; it prints "False" and carries on).
+- **Street Fighter III 3rd Strike (port)**: the CAPCOM logo, its intro art, and its title screen ("PRESS START
+  BUTTON") at 60 frames a second, four sound threads paced by their channels; no function missing in 1200 frames.
+- **Space Invaders Extreme**: its heap allocated, the utility modules loaded, its channels reserved; __sceSasInit
+  fails, and it then retries sceKernelLoadModule (a module of its own on the disc) in a loop for good: the module
+  manager's, part 19's, merged since (the game hasn't been run with it).
+- **Brave Story**: its graphics library starts ("SGX system initialize"), then __sceSasInit fails ("failed to
+  initialize SAS"), a load from address 8 follows (a pointer that sound would have set), and it asks for
+  sceIoReadAsync; the screen stays black.
+- **GTA: Sindacco Chronicles**: past its power callbacks, it retries sceKernelLoadModuleByID every half second for
+  `USRDIR/PRX2_6_0/KMOD/AUDIOCODEC.PRX`, one of Sony's library modules (encrypted), which the module manager must
+  recognize as provided by the HLE (part 19's stands in for Sony's modules; not run with this game yet); also
+  sceIoChangeAsyncPriority and the asynchronous file functions after it.
+
+Next: sceSasCore (a silent one first, voices ending as they're keyed, then the real synthesizer), the asynchronous
+file functions (sceIoReadAsync, WaitAsync, PollAsync, ChangeAsyncPriority...), message pipes and mailboxes (the
+port and Brave Story import them), and playing the sound. (The module manager's loading, with decryption, is parts
+18 and 19, merged since.)
+
+Tests (`tests/psp/run-tests.sh`, 136 groups; `tests/psp/ares` 199 checks): `kernel.cpp` (aligned blocks, the
+user partition from a PBP's and a disc's PARAM.SFO, SDK versions, the self-unload), and new files, programs run on
+both engines: `callbacks.cpp` (callbacks in waits, waits going on after them, seven kinds of CB wait that end at once
+running the callbacks notified first, by priority, called directly, the vertical blank's timing, a vertical blank
+handler held off and released, ten seconds of blanks held off delivered once, every interrupt and sub-interrupt
+number intr/registersub and intr/releasesub tried, null handlers, enabling), `power.cpp` (power callbacks, clocks,
+volatile memory, thread control, stack fill, priorities as threads/threads/change has them, the free stack sizes of
+threads/threads/stackfree, clocks and dates against known values: MT19937's 10000th number, ticks of known dates),
+`audio.cpp` (channels, the blocking outputs returning after 0, 15, 31 and 47 blocks, the SRC channel's queue, 100
+blocking 64-sample outputs taking 98 blocks, the mixer's timeline (a second channel not read early, the extra block,
+a channel playing out after its release), draining, waits refused in a handler and with interrupts held off),
+`utility.cpp` (a save made, loaded, sized, listed, erased and deleted; names reaching out of the save's folder or the
+stick, among them each the review found, and links to elsewhere, refused with nothing touched, in a stick folder
+inside the test's own so any escape shows; buffers outside the program's memory; links that loop, in the sizes and
+list modes; dialogs; modules), `pools.cpp` (fixed and variable pools, waits, timeouts, deletion, a block size of 0
+given a block back). `states.cpp` refuses 13 kinds of pool that don't hold together, and `tests/psp/ares` a version
+1 state. A broken version that never resumed a wait after its callbacks failed 18 checks of `callbacks.cpp`. The
+review's fixes each failed their tests first: the savedata groups (a load read the file beside the stick and
+/etc/hosts, a save wrote over homebrew, deletes took PSP/ and the stick), the waits ending at once (no callback ran),
+a free from a pool with blocks of 0 bytes (the undefined-behavior sanitizer's division by zero), the 13 pool states
+(loaded), the version 1 state (loaded); and an unpaced mixer and a queued call per held-off blank failed the pacing
+and delivery tests.
+
+Uncertain: the vertical blank's exact length (0.77 ms from a measurement of a wait's end), the hcount's origin;
+whether the PSP notifies a power callback as it's registered (PPSSPP's reading); the VPL's placement; the dialogs'
+timings; the CPU clock not slowing at 222 MHz; the errors taken from PPSSPP's tables where pspsdk has none; which
+group of errors the savedata modes after 11 report from (the bad parameters follow the groups their other errors
+already came from); and whether a CB wait that ends at once runs its callbacks before or after taking what it waited
+for (here, after). For sound and interrupts: the 64-sample pacing (K outputs taking K - 2 blocks) follows from the
+measured block model, but only its first two outputs were timed on a PSP (intr/waits); which of a mixer output's
+volume and channel checks comes first, and an SRC output's volume and reservation; a null SRC output on two armed
+buffers (BUSY here; intr/waits' later results show only that it doesn't wait for them); the volumes after reserving
+(0) and the volume scale (0x8000 full, pspsdk's PSP_AUDIO_VOLUME_MAX) for when the samples are mixed; how long a null
+buffer's count stays; the interrupt kinds, recorded once under PSPLink; and which of a bad priority and a bad thread
+sceKernelChangeThreadPriority checks first. Other waits (sceKernelDelayThread and the rest) don't refuse yet with
+interrupts held off, as intr/waits shows a PSP does: only sound's do. Since the final review: the SRC channel's
+100 µs (the specification's "about 100 µs", from a result bucketed as "13XX"), and whether the buffers chained after
+the first keep it (here they do, so a stream's pace is a buffer's length); and what sceKernelFreePartitionMemory
+says of a block the kernel holds (ILLEGAL_PERMISSION here, not tried on a PSP).
+
+Merged with parts 18 and 19 (`cursor/psp-decrypt-2b67`, #144), which now sit under this part. Each branch had made
+the state's layout version 2, its own way, so the merged layout is version 3, and a state of version 1 or 2 is
+refused by its header. sceKernelStopUnloadSelfModuleWithStatus calls part 19's `Kernel::unloadSelf()` with its exit
+status, argument and options (its fifth argument; the fourth, where module_stop's status would go, isn't written, as
+nothing waits for it): a module calling it (Gunhound EX does) stops and unloads itself and the program runs on; the
+program calling it still ends. sceKernelTerminateThread deletes a thread running a module's module_start or
+module_stop, as sceKernelExitThread does since part 19 (TerminateDeleteThread deleted it already), so neither it nor
+its stack is left behind. Part 19's thread deletion became this part's `deleteThread()`, so a module's thread takes
+its callbacks with it as any thread does; a callback returns to the trampoline's fourth syscall, as part 19 took the
+third for module_start and module_stop; and a state with a module whose block is a memory pool's is refused. Tests:
+"modules unload with a status" (both engines; the options' stack size and priority reach module_stop's thread, and
+the program calling it leaves) and "modules terminated threads" (both functions, both engines) in
+`tests/psp/modules.cpp`, the pool's block in "state fields", and a version 2 state in `tests/psp/ares`. The merged
+tree passes its 158 groups and 228 checks; with the old sceKernelStopUnloadSelfModuleWithStatus, its options taken
+from the fourth argument, sceKernelTerminateThread not deleting, or no check of the pool's block, the new tests fail.
+
+Review (the final one): a general-purpose reviewer of the merged branch found one medium and five low findings, all
+fixed, each with a test that failed before its fix; the merge, the clean-room code and the savedata fixes checked
+out. The medium: states took each thread's stack size and address unchecked, and sceKernelGetThreadStackFreeSize
+copied the whole stack out of guest memory at each call (a state with a 0xfffff000-byte stack loaded, and the call
+would have allocated 4 GiB): the stack is read in place now, and loading checks stacks and blocks (save states,
+above). The lows: a pool's or semaphore's waiter leaving unserved left those behind it blocked (memory pools); a
+pending vertical blank queued its handlers again while the last blank's still waited (interrupt handlers); a pool's
+block was checked against nothing but the pool, so two pools on one block, or a pool inside a stack or the
+program's block, loaded (save states); the SRC channel's buffers retired at their full length, where a PSP's slot
+frees about 100 µs earlier (sound output); and sceKernelPrintf handed any width to snprintf, which padded a field
+2e9 characters wide in full before cutting it (threads and clocks). Tests: "kernel semaphores served past waiters
+that left", "pools served past waiters that left", "interrupts handlers longer than a frame" (two 20 ms handlers
+over 120 frames: two calls queued at most, where the old rule reached 100) and "audio src rest" (audio/output2/rest's
+timing, 13XX µs on both families) are new; "state fields" refuses 10 more states (thread stacks that aren't blocks
+of their own and their size, a 4 GiB stack with its block, a block below the partition, two owners for a block, the
+program's block missing) and changes the calls' new flag; "kernel thread status" (a 4 GiB stack answered in under
+100 ms), "kernel partitions" and "kernel program memory" (held blocks not freed, the state still loading), "kernel
+odds and ends" (ten fields 2e9 wide printed at once, each cut to its room), "audio src channel" and "audio draining"
+(the earlier retires) check the rest; `tests/psp/ares` refuses a version 3 state. The tree passes 162 groups and 232
+checks. Found on the way, not changed: a program spinning on the clock (sceKernelGetSystemTime and its siblings)
+sees it move only between the CPU's runs, each to the next thing due, not with each instruction, so the rest test's
+loop waits a microsecond a round where the PSP's spun.
+
+On the RP6 (the whole stack, launched from the user's CHDs): all ten of the user's priority games now start (nine
+tried with build 104648, decrypting their programs; Lumines with build 104647). SOCOM Fireteam Bravo reaches its own
+"No SOCOM Fireteam Bravo Data was found on the Memory Stick Duo" screen at 60 frames a second (then asks for
+sceAtrac3plus); Burnout Legends reaches its LOADING screen (asks for sceIoChangeAsyncPriority, sceIoPollAsync,
+sceIoReadAsync); Lumines runs to its log-in menus at about 40 frames a second (asks for sceSasCore); GTA Vice City
+Stories and Liberty City Stories, and Midnight Club 3, ask for sceMpeg (video) and the asynchronous file functions;
+Peace Walker asks for sceRtc e7c27d1b, sceOpenPSID, sceDisplay 210eab3a and message pipes (ThreadManForUser 7c0dc2a0
+and 74829b76); Burnout Dominator and Snoopy vs. the Red Baron ask for the asynchronous file functions and ad-hoc
+networking (sceNet*); Gunhound EX asks for sceLibFont and scePower 469989ad. Next: the asynchronous file functions, a
+silent sceSas, message pipes, sceMpeg stubs that let games skip their videos, and networking reported off.
 
 ## Part 18: decryption
 
@@ -1490,14 +1766,15 @@ a module); our own code.
   values follow (Sony's SDK writes 3), then the priority, the stack size and the attributes, as pspsdk's SceModule
   keeps them for each function's thread and uOFW's SceModuleEntryThread lays them out. The function returns to a
   third syscall in the kernel's trampoline, which ends and deletes its thread; one that ends with
-  `sceKernelExitThread` instead is deleted all the same, as the PSP's module manager deletes the thread it made
+  `sceKernelExitThread` instead, or that another thread terminates (part 17's `sceKernelTerminateThread` and
+  `sceKernelTerminateDeleteThread`), is deleted all the same, as the PSP's module manager deletes the thread it made
   however it ends. The calling thread waits meanwhile, and then gets the module's ID, the function's result (or its
   exit status) written where it asked. A module without the function starts (or stops) at once.
 - **Unloading** (`sceKernelUnloadModule`): a module never started, or stopped; its memory goes back to the user
   partition, and stubs linked to it go back to the kernel.
 - **Unloading itself** (`sceKernelSelfStopUnloadModule(exit status, argument size, argument)`, through
-  `Kernel::unloadSelf()`, there for the other functions that do the same, such as later SDKs'
-  `sceKernelStopUnloadSelfModuleWithStatus`): the module is the one holding the code that called (`ra` points back
+  `Kernel::unloadSelf()`, which later SDKs' `sceKernelStopUnloadSelfModuleWithStatus` (part 17; its options go to
+  `module_stop`'s thread) calls too): the module is the one holding the code that called (`ra` points back
   into it). The calling thread ends with the exit status (threads waiting for its end are
   given it) and is deleted, as the code it would return to is going. If the module is running, its `module_stop`
   then runs with the argument on a thread of its own, as `sceKernelStopModule` would run it, and the module goes once
@@ -1520,18 +1797,20 @@ a module); our own code.
   twice; stopping one not started, or stopped already; unloading one that's running.
 - **States** carry the loaded modules (each one's ID, file, whether it's a stand-in, its memory block, its status,
   the thread running its function, and its module as the program's is saved) and the program's ID. The state's
-  version is now 2, so a state made before is refused rather than misread. Loading checks each module as part 15
-  checks the rest: under its own ID, not the program's; a thread exactly while its `module_start` or `module_stop`
-  runs, and one that's there; no block for a stand-in, and for another module a block of the user partition, or
-  none, but never a thread's stack or another module's block.
+  version went to 2 with them, and is 3 since part 17's branch, which had a version 2 of its own, merged them: a
+  state made before is refused rather than misread. Loading checks each module as part 15 checks the rest: under its
+  own ID, not the program's; a thread exactly while its `module_start` or `module_stop` runs, and one that's there;
+  no block for a stand-in, and for another module a block of the user partition, or none, but never a thread's
+  stack, a memory pool's block (part 17's pools, since the merge) or another module's block (since part 17's final
+  review, one rule for every block: one owner at most, the program's block among them).
 
 Checked against the user's games (the system run on the Mac on their CHDs, nothing kept): Burnout Legends loads
 fourteen modules from its disc by path (seven kernel drivers, encrypted, and seven libraries, not), each Sony's and
 stood in for, and runs on further than before (its GE ran twice the commands in its first 300 frames); GTA
 Liberty City Stories loads three by `sceKernelLoadModuleByID` from runs of sectors, each behind a ~SCE header
 (sceAudiocodec_Driver, sceATRAC3plus_Library, sceSAScore), stood in for; Gunhound EX finds its module's ID by address
-and as the caller's. Each game then stops at other functions the HLE kernel doesn't have yet (fixed-size memory
-pools, the power library, the SDK version calls).
+and as the caller's. Each game then stops at other functions the HLE kernel didn't have yet (fixed-size memory
+pools, the power library, the SDK version calls: part 17's, merged since).
 
 Tests (`tests/psp/modules.cpp`, ten groups, on PRXs built in the test: TESTLIB exports a library's function and has a
 module_start and a module_stop; TESTUSER imports the function):
@@ -1568,7 +1847,8 @@ module_start and a module_stop; TESTUSER imports the function):
   module's, its block's, its thread's, the program's) and a status there isn't; and (its module now in a block of
   its own, its module_start on a thread, one of Sony's beside it) a module under the program's ID, with a thread
   while none of its functions runs, without one while one does, with a thread that isn't there, a block that isn't
-  one, a thread's stack as its block, a block two modules have, and a stand-in with a block. "decrypt kernel loads"
+  one, a thread's stack as its block, a memory pool's block as its block (since the merge with part 17), a block two
+  modules have, and a stand-in with a block. "decrypt kernel loads"
   loads a program behind a ~SCE header.
 - Broken versions each failed a test: imports never linked to exports, module_start's result written wrong, an
   unloaded module's stubs left linked, Sony's modules loaded like any other, module_start's thread kept, a loaded

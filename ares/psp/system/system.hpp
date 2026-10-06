@@ -12,7 +12,7 @@
 //
 //Time: each run() is one frame of the PSP's, 1/59.94 of a second. The controls are read, the kernel runs the game for
 //that long, then the frame the game shows goes to the screen and the frame's sound to the speakers (silence for now:
-//sceAudio comes later).
+//the kernel's sound channels keep the PSP's time, but their samples aren't mixed into the stream yet: audio.cpp).
 struct System {
   Node::System node;
   Node::Video::Screen screen;

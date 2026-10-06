@@ -153,6 +153,7 @@ static auto stateFields() -> void {
 
   //one of everything
   k.module.segments = {{0x0880'4000, 0x100}};
+  u32 programBlock = k.allocate(0x100, 2, 0x0880'4000, "program")->uid;  //where start() would put it
   k.module.imports = {{"Lib", 0x1111, 0x0880'5000}};
   k.module.exports = {{"Lib", 0x2222, 0x0880'6000, false}};
   k.module.skipped = {"left out"};
@@ -186,7 +187,11 @@ static auto stateFields() -> void {
   u32 flag = a.call("sceKernelCreateEventFlag", {a.string("flag"), 0, 3, 0});
   u32 callback = a.call("sceKernelCreateCallback", {a.string("callback"), 0x0880'7000, 0x42});
   k.memoryStickCallbacks = {callback};
-  k.allocate(0x1000, 0, 0, "block");
+  u32 plainBlock = k.allocate(0x1000, 0, 0, "block")->uid;
+  u32 spareStack = k.allocate(0xf00, 0, 0, "spare stack")->address;  //what thread one's stack moves to below
+  u32 fixedID = a.call("sceKernelCreateFpl", {a.string("fpl"), 2, 0, 16, 2, 0});
+  u32 variableID = a.call("sceKernelCreateVpl", {a.string("vpl"), 2, 0, 0x100, 0});
+  u32 spareID = a.call("sceKernelCreateFpl", {a.string("spare"), 2, 0, 16, 1, 0});
   u32 file = a.call("sceIoOpen", {a.string("ms0:/A.TXT"), 0x0001, 0});
   u32 other = a.call("sceIoOpen", {a.string("ms0:/B.TXT"), 0x0001, 0});
   u32 folder = a.call("sceIoDopen", {a.string("ms0:/LIST")});
@@ -275,10 +280,14 @@ static auto stateFields() -> void {
   };
   contextChanges("thread", &t.context);
   contextChanges("interrupted", &k.interrupted);
+  contextChanges("before its callback", &t.beforeCallback);
   auto& sema = k.semaphores[semaphore];
   auto& eventFlag = k.eventFlags[flag];
   auto& cb = k.callbacks[callback];
-  auto& block = k.blocks.back();
+  auto& block = *std::find_if(k.blocks.begin(), k.blocks.end(), [&](auto& b) { return b.uid == plainBlock; });
+  auto stackOf = [&](const Kernel::Thread& thread) -> Kernel::Block& {  //a thread's stack's block, found afresh
+    return *std::find_if(k.blocks.begin(), k.blocks.end(), [&](auto& b) { return b.address == thread.stackBlock; });
+  };
   auto& host = k.files[file];
   auto& hostFolder = k.files[folder];
   auto& onDisc = k.files[discFile];
@@ -286,10 +295,15 @@ static auto stateFields() -> void {
   auto& c = k.controller;
   auto& l = k.geLists[list];
   auto& gc = k.geCallbacks[3];
+  auto& fixedPool = k.pools[fixedID];
+  auto& variablePool = k.pools[variableID];
+  auto& sparePool = k.pools[spareID];
   std::vector<std::pair<std::string, std::function<void()>>> more = {
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
-    {"thread stackSize", [&] { t.stackSize ^= 0x100; }}, {"thread stackBlock", [&] { t.stackBlock ^= 1; }},
+    //(a stack is a block of its own, of its size: thread one's shrinks with its block, then moves to the spare)
+    {"thread stackSize", [&] { stackOf(t).size = t.stackSize = 0xf00; }},
+    {"thread stackBlock", [&] { t.stackBlock = spareStack; }},
     {"thread attributes", [&] { t.attributes ^= 1; }}, {"thread gp", [&] { t.gp ^= 4; }},
     {"thread status", [&] { t.status = Kernel::Status::Ready; }},
     {"thread wait", [&] { t.wait = Kernel::Wait::Sleep; }}, {"thread waitID", [&] { t.waitID ^= 1; }},
@@ -297,6 +311,16 @@ static auto stateFields() -> void {
     {"thread waitPointer", [&] { t.waitPointer ^= 4; }}, {"thread wakeAt", [&] { t.wakeAt ^= 1; }},
     {"thread timeoutPointer", [&] { t.timeoutPointer ^= 4; }}, {"thread readySince", [&] { t.readySince ^= 1; }},
     {"thread exitStatus", [&] { t.exitStatus ^= 1; }}, {"thread wakeupCount", [&] { t.wakeupCount ^= 1; }},
+    {"thread callbacks", [&] { t.callbacks = true; }}, {"thread inCallback", [&] { t.inCallback = true; }},
+    {"thread callbackID", [&] { t.callbackID = callback; }},
+    {"wait before callback", [&] { t.waitBeforeCallback.wait = Kernel::Wait::Sleep; }},
+    {"wait before callback id", [&] { t.waitBeforeCallback.id ^= 1; }},
+    {"wait before callback count", [&] { t.waitBeforeCallback.count ^= 1; }},
+    {"wait before callback mode", [&] { t.waitBeforeCallback.mode ^= 1; }},
+    {"wait before callback pointer", [&] { t.waitBeforeCallback.pointer ^= 4; }},
+    {"wait before callback timeoutPointer", [&] { t.waitBeforeCallback.timeoutPointer ^= 4; }},
+    {"wait before callback wakeAt", [&] { t.waitBeforeCallback.wakeAt ^= 1; }},
+    {"wait before callback callbacks", [&] { t.waitBeforeCallback.callbacks = true; }},
     {"the thread running", [&] { k.current = k.threads[two].get(); }},
     {"readySequence", [&] { k.readySequence += 7; }}, {"nextVblank", [&] { k.nextVblank = k.cycles + 1000; }},
     {"vblanks", [&] { k.vblanks += 7; }},
@@ -309,11 +333,73 @@ static auto stateFields() -> void {
     {"event flag initial", [&] { eventFlag.initial ^= 1; }}, {"event flag pattern", [&] { eventFlag.pattern ^= 1; }},
     {"callback name", [&] { cb.name += "x"; }},
     {"callback function", [&] { cb.function ^= 4; }}, {"callback argument", [&] { cb.argument ^= 1; }},
-    {"callback thread", [&] { cb.thread ^= 1; }},
+    {"callback thread", [&] { cb.thread ^= 1; }}, {"callback notifyCount", [&] { cb.notifyCount ^= 1; }},
+    {"callback notifyArg", [&] { cb.notifyArg ^= 1; }},
     {"exitCallback", [&] { k.exitCallback ^= 1; }}, {"memoryStickCallbacks", [&] { k.memoryStickCallbacks[0] ^= 1; }},
     {"umdCallback", [&] { k.umdCallback ^= 1; }},
-    {"block uid", [&] { block.uid ^= 1; }}, {"block name", [&] { block.name += "x"; }},
+    {"block uid", [&] { block.uid = k.nextUID++; }}, {"block name", [&] { block.name += "x"; }},
     {"block address", [&] { block.address ^= 0x100; }}, {"block size", [&] { block.size ^= 0x100; }},
+    {"largeMemory", [&] { k.largeMemory = true; }}, {"sdkVersion", [&] { k.sdkVersion ^= 1; }},
+    {"compilerVersion", [&] { k.compilerVersion ^= 1; }},
+    {"power callbacks", [&] { k.powerState.callbacks[5] = callback; }},
+    {"power pll", [&] { k.powerState.pll = 333; }},
+    {"power cpu", [&] { k.powerState.cpu = 333; }}, {"power bus", [&] { k.powerState.bus = 166; }},
+    {"power volatileLocked", [&] { k.powerState.volatileLocked = true; }},
+    {"semaphore initial", [&] { sema.initial ^= 1; }}, {"thread suspended", [&] { t.suspended = true; }},
+    //sound: channel 3 halfway through a buffer, the DMA running; the SRC channel with both buffers armed
+    {"audio reserved", [&] { k.audio.channels[3].reserved = true; }},
+    {"audio sampleCount", [&] { k.audio.channels[3].sampleCount = 64; }},
+    {"audio format", [&] { k.audio.channels[3].format = 0x10; }},
+    {"audio leftVolume", [&] { k.audio.channels[3].leftVolume = 1; }},
+    {"audio rightVolume", [&] { k.audio.channels[3].rightVolume = 1; }},
+    {"audio buffer", [&] { k.audio.channels[3].buffer = 0x0880'0000; }},
+    {"audio length", [&] { k.audio.channels[3].length = 128; }},
+    {"audio remaining", [&] { k.audio.channels[3].remaining = 64; }},
+    {"dma running", [&] { k.audio.dma.running = true; }},
+    {"dma nextBlock", [&] { k.audio.dma.nextBlock = k.cycles + 1000; }},
+    {"dma fraction", [&] { k.audio.dma.fraction = 7; }},
+    {"src reserved", [&] { k.audio.src.reserved = true; }},
+    {"src sampleCount", [&] { k.audio.src.sampleCount = 17; }},
+    {"src rate", [&] { k.audio.src.rate = 8'000; }},
+    {"src buffer address", [&] { k.audio.src.buffers[0].address = 0x0880'1000; }},
+    {"src buffer sampleCount", [&] { k.audio.src.buffers[0].sampleCount = 17; }},
+    {"src buffer volume", [&] { k.audio.src.buffers[0].volume = 1; }},
+    {"src second buffer", [&] { k.audio.src.buffers[1] = {0x0880'2000, 18, 2}; }},
+    {"src armed", [&] { k.audio.src.armed = 2; }},
+    {"src retireAt", [&] { k.audio.src.retireAt = k.cycles + 1000; }},
+    {"src completion", [&] { k.audio.src.completion = true; }},
+    {"vblank handler function", [&] { k.vblankSubs[3].function = 0x0880'3000; }},
+    {"vblank handler argument", [&] { k.vblankSubs[3].argument = 1; }},
+    {"vblank handler gp", [&] { k.vblankSubs[3].gp = 4; }},
+    {"vblank handler enabled", [&] { k.vblankSubs[3].enabled = true; }},
+    {"GE handler function", [&] { k.geSubs[31].function = 0x0880'3100; }},
+    {"GE handler argument", [&] { k.geSubs[31].argument = 1; }},
+    {"GE handler gp", [&] { k.geSubs[31].gp = 4; }},
+    {"GE handler enabled", [&] { k.geSubs[31].enabled = true; }},
+    {"vblankPending", [&] { k.vblankPending = true; }},
+    {"dialog kind", [&] { k.dialog.kind = 2; }}, {"dialog status", [&] { k.dialog.status = 3; }},
+    {"dialog next", [&] { k.dialog.next = 2; }}, {"dialog changeAt", [&] { k.dialog.changeAt = 5; }},
+    {"dialog parameters", [&] { k.dialog.parameters = 0x0880'0000; }},
+    {"utilityModules", [&] { k.utilityModules.push_back(0x301); }},
+    //(each pool as a machine could leave it, which loading checks: the spare made a variable pool whole, the fixed
+    //pool's block renumbered with it, its blocks halved and doubled)
+    {"pool name", [&] { fixedPool.name += "x"; }}, {"pool attributes", [&] { fixedPool.attributes ^= 1; }},
+    {"pool variable", [&] {
+      sparePool.variable = true;
+      sparePool.blockSize = 0;
+      sparePool.used.clear();
+    }},
+    {"pool block", [&] {
+      for(auto& b : k.blocks) if(b.uid == fixedPool.block) b.uid = k.nextUID;
+      fixedPool.block = k.nextUID++;
+    }},
+    {"pool address", [&] { fixedPool.address ^= 4; }}, {"pool size", [&] { variablePool.size -= 8; }},
+    {"pool blockSize", [&] {
+      fixedPool.blockSize /= 2;
+      fixedPool.used.resize(fixedPool.used.size() * 2);
+    }},
+    {"pool used", [&] { fixedPool.used[1] = 1; }},
+    {"pool pieces", [&] { variablePool.pieces[variablePool.address] = 16; }},
     //files: the host file opened again as another, for writing too; the other host file counted as the disc's; the
     //disc's file a folder, read a sector at a time
     {"file path", [&] { host.path = "ms0:/B.TXT"; }},
@@ -347,7 +433,7 @@ static auto stateFields() -> void {
     //calls into the program
     {"call function", [&] { k.calls[0].function ^= 4; }}, {"call gp", [&] { k.calls[0].gp ^= 4; }},
     {"call arguments", [&] { k.calls[0].arguments[2] ^= 1; }},
-    {"call resumesGe", [&] { k.calls[0].resumesGe = true; }},
+    {"call resumesGe", [&] { k.calls[0].resumesGe = true; }}, {"call vblank", [&] { k.calls[0].vblank = true; }},
     {"interrupting", [&] { k.interrupting = true; }}, {"interruptsEnabled", [&] { k.interruptsEnabled = false; }},
     {"rescheduleAfter", [&] { k.rescheduleAfter = true; }},
     {"interruptedHalted", [&] { k.interruptedHalted = true; }},
@@ -431,6 +517,87 @@ static auto stateFields() -> void {
     k.callbacks[k.nextUID] = copy;
   });
   refuses("a block's ID not handed out yet", [&] { k.blocks.back().uid = k.nextUID; });
+  refuses("a thread's callback not handed out yet", [&] { k.threads.at(one)->callbackID = k.nextUID; });
+  //threads' stacks as no machine has them: not a block, not its block's size, or under 0x200 bytes; two threads on
+  //one; one of 4 GiB, its block too (sceKernelGetThreadStackFreeSize made room for it all); and a block below the
+  //user partition
+  refuses("a thread's stack that isn't a block", [&] { k.threads.at(one)->stackBlock += 0x100; });
+  refuses("a thread's stack not its block's size", [&] { k.threads.at(one)->stackSize += 0x100; });
+  refuses("a thread's stack of 0x100 bytes", [&] {
+    auto& thread = *k.threads.at(one);
+    stackOf(thread).size = thread.stackSize = 0x100;
+  });
+  refuses("two threads on one stack", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.stackBlock = k.threads.at(one)->stackBlock;
+    thread.stackSize = k.threads.at(one)->stackSize;
+  });
+  refuses("a thread's stack of 4 GiB", [&] {
+    auto& thread = *k.threads.at(one);
+    stackOf(thread).size = thread.stackSize = 0xffff'f000;
+  });
+  refuses("a block below the user partition", [&] { k.blocks.front().address = Kernel::UserMemory - 0x1000; });
+  refuses("a buffer in a slot with the DMA stopped", [&] { k.audio.dma.running = false; });
+  refuses("a mixer channel's count not a multiple of 64", [&] { k.audio.channels[3].sampleCount = 100; });
+  refuses("a slot with more left than its buffer holds", [&] { k.audio.channels[3].remaining = 192; });
+  refuses("a slot holding a buffer of 0 samples", [&] { k.audio.channels[3].length = 0; });
+  refuses("a mixer volume past 0xFFFF", [&] { k.audio.channels[3].leftVolume = 0x10000; });
+  refuses("a format neither stereo nor mono", [&] { k.audio.channels[3].format = 0x20; });
+  refuses("the mixer's next block over a block away", [&] {
+    k.audio.dma.nextBlock = k.cycles + Kernel::Audio::BlockCycles + 2;
+  });
+  refuses("the mixer's next block a frame overdue", [&] { k.audio.dma.nextBlock = k.cycles - Kernel::VblankCycles; });
+  refuses("a block's fraction of 49 49ths", [&] { k.audio.dma.fraction = 49; });
+  refuses("three buffers on the SRC channel", [&] { k.audio.src.armed = 3; });
+  refuses("an SRC channel at 0 Hz", [&] { k.audio.src.rate = 0; });
+  refuses("an SRC rate it doesn't take", [&] { k.audio.src.rate = 36'000; });
+  refuses("SRC buffers armed with the channel released", [&] { k.audio.src.reserved = false; });
+  refuses("an SRC buffer of 16 samples", [&] { k.audio.src.buffers[1].sampleCount = 16; });
+  refuses("an SRC buffer retiring after its own time", [&] {
+    k.audio.src.retireAt = k.cycles + k.srcDuration(k.audio.src.buffers[0].sampleCount) + 1;
+  });
+  //(each refusal loads the machine again, threads and all: they're looked up afresh)
+  auto waitsOnAudio = [&](Kernel::Thread& waiter, u32 id) {
+    waiter.status = Kernel::Status::Waiting, waiter.wait = Kernel::Wait::Audio, waiter.waitID = id;
+  };
+  refuses("a thread waiting on a mixer channel with nothing in its slot", [&] {
+    waitsOnAudio(*k.threads.at(one), 0);
+  });
+  refuses("two threads waiting on one mixer channel", [&] {
+    for(auto& [uid, waiter] : k.threads) waitsOnAudio(*waiter, 3);
+  });
+  refuses("a thread waiting for an SRC buffer with only one armed", [&] {
+    k.audio.src.armed = 1;
+    waitsOnAudio(*k.threads.at(one), Kernel::Audio::WaitSrc);
+  });
+  refuses("a vertical blank handler on sub-interrupt 18, the display driver's", [&] {
+    k.vblankSubs[18].function = 0x0880'3000;
+  });
+  refuses("a pool under another's ID", [&] { k.pools.begin()->second.uid ^= 1; });
+  //pools as no machine leaves them (giving a fixed pool's block back divides by its block size; handing out a
+  //variable pool's room trusts its pieces to be inside it): each found afresh, as each load makes the pools anew
+  auto fixedOne = [&]() -> Kernel::Pool& { return k.pools.at(fixedID); };
+  auto variableOne = [&]() -> Kernel::Pool& { return k.pools.at(variableID); };
+  refuses("a fixed pool's blocks of 0 bytes", [&] { fixedOne().blockSize = 0; });
+  refuses("a fixed pool's blocks not adding up to it", [&] { fixedOne().used.push_back(0); });
+  refuses("a fixed pool with pieces", [&] { fixedOne().pieces[fixedOne().address] = 16; });
+  refuses("a variable pool with a block size", [&] { variableOne().blockSize = 16; });
+  refuses("a variable pool with blocks", [&] { variableOne().used.push_back(0); });
+  refuses("a pool whose block isn't there", [&] { fixedOne().block = semaphore; });
+  refuses("a pool starting before its block", [&] { fixedOne().address -= 0x100; });
+  refuses("a pool ending past its block", [&] { variableOne().size += 0x100; });
+  refuses("a piece before its pool", [&] { variableOne().pieces[variableOne().address - 16] = 16; });
+  refuses("a piece past its pool's end", [&] {
+    auto& pool = variableOne();
+    pool.pieces[pool.address + pool.size - 8] = 16;
+  });
+  refuses("pieces overlapping", [&] {
+    auto& pool = variableOne();
+    pool.pieces[pool.address + 16] = 16;
+    pool.pieces[pool.address + 24] = 16;
+  });
+  refuses("a piece wrapping round", [&] { variableOne().pieces[variableOne().address + 16] = 0xffff'fff0; });
+  refuses("a piece of no bytes", [&] { variableOne().pieces[variableOne().address] = 0; });
   refuses("a module under another's ID", [&] { k.modules.begin()->second.uid ^= 1; });
   refuses("a module's ID not handed out yet", [&] {
     auto copy = k.modules.begin()->second;
@@ -442,8 +609,8 @@ static auto stateFields() -> void {
   refuses("a module status there isn't", [&] { k.modules.begin()->second.status = Kernel::ModuleStatus(9); });
   refuses("the program's ID not handed out yet", [&] { k.programUID = k.nextUID; });
   //a module as no machine has one: under the program's ID; with a thread while none of its functions runs, or
-  //without one while one does, or a thread that isn't there; a block that isn't one, a thread's stack, another
-  //module's, or any block at all for one of Sony's
+  //without one while one does, or a thread that isn't there; a block that isn't one, a thread's stack, a memory
+  //pool's, another module's, or any block at all for one of Sony's
   refuses("a module under the program's ID", [&] {
     auto copy = k.modules.at(sonyID);
     copy.uid = k.programUID;
@@ -458,7 +625,21 @@ static auto stateFields() -> void {
   refuses("a module's block that's a thread's stack", [&] {
     for(auto& b : k.blocks) if(b.address == k.threads.at(two)->stackBlock) k.modules.at(moduleID).block = b.uid;
   });
+  refuses("a module's block that's a memory pool's", [&] { k.modules.at(moduleID).block = fixedOne().block; });
   refuses("a block two modules have", [&] { k.modules.at(sonyID).block = k.modules.at(moduleID).block; });
+  //and each block one owner at most, a pool's too: two pools on one block, a pool inside a thread's stack, or inside
+  //the program's block (each pool inside the block it names, as poolHolds() wants); and the program's block there
+  auto movePool = [&](Kernel::Pool& pool, const Kernel::Block& to, u32 offset) {
+    pool.block = to.uid;
+    pool.address = to.address + offset;
+  };
+  auto blockOf = [&](u32 uid) -> Kernel::Block& {
+    return *std::find_if(k.blocks.begin(), k.blocks.end(), [&](auto& b) { return b.uid == uid; });
+  };
+  refuses("two pools on one block", [&] { movePool(k.pools.at(spareID), blockOf(fixedOne().block), 0x80); });
+  refuses("a pool inside a thread's stack", [&] { movePool(fixedOne(), stackOf(*k.threads.at(two)), 0); });
+  refuses("a pool inside the program's block", [&] { movePool(fixedOne(), blockOf(programBlock), 0); });
+  refuses("the program's block not there", [&] { k.module.segments[0].address += 0x1000; });
   refuses("a stand-in with a block", [&] {
     k.modules.at(sonyID).standIn = true;
     k.modules.at(sonyID).block = moduleBlock;  //no other module's, since the module moved to the spare block

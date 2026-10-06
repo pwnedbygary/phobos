@@ -868,6 +868,67 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the functions retail games ask for — 2026-10-05
+
+Branch `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67` (two entries below), and since then of
+#144 (`cursor/psp-decrypt-2b67`, the entry below), merged in. The HLE kernel gains
+what Lumines, Space Invaders Extreme, Brave Story, GTA: Sindacco Chronicles and the Street Fighter III port asked for
+next, found with a scratch host runner (never committed) that boots a CHD, traces every system call and dumps frames:
+SDK version setters (explicit NIDs for those whose NIDs aren't their names' hashes), aligned partition blocks (the
+C++ abort and the "can't allocate memory"), the 24 MiB user partition the emulated 64 MiB PSP-2000/3000 gives a
+program unless PARAM.SFO's MEMSIZE is 1, callbacks that run in *CB waits, the vertical blank's functions and interrupt
+handlers, sound output's channels with the driver's timing (silence for now), power, memory pools, the system's
+dialogs with real saves on the memory stick, optional modules, and thread and clock odds and ends; all in save
+states. docs/psp-core.md, part 17, describes it and what each game does now.
+- **Checks:** the parts' 123 groups with both sanitizers (new files: callbacks, power, audio, utility, pools);
+  `tests/psp/ares` 195 checks. A broken version (waits not resumed after callbacks) failed 18 checks.
+- **Review fixes:** a save's game, save and data file names were joined to the host's paths unchecked (only climbing
+  above the memory stick was stopped): a reviewer read /etc/hosts into the program's memory, and a delete with the
+  game "" took every save, with ".." PSP/ and its homebrew, with "../.." the memory stick folder itself. Each name
+  must now be one plain name, the save's folder one of SAVEDATA's own and its file one of the folder's, links
+  followed; the buffer must be in the program's memory; ERASE takes the data file alone; the sizes and list modes no
+  longer throw. Pools loaded from a state are checked (a fixed pool with blocks of 0 bytes divided by zero on a
+  free, which is guarded too); a CB wait that needn't wait runs the callbacks already notified; states are version
+  2; the docs' user partition is the PSP-2000/3000's; pools.cpp cites pspautotests and the RTC dates credit Howard
+  Hinnant's algorithm. Each fix has a test that failed before it (the parts' groups: 128; `tests/psp/ares`: 199).
+- **On the host:** Lumines reaches its title screen and menu (and writes its save); the Street Fighter III port its
+  title screen at 60 frames a second; Space Invaders Extreme and GTA wait on the module manager (sceKernelLoadModule,
+  sceKernelLoadModuleByID: another branch's work); Brave Story stops after sceSas fails. Next: sceSas, asynchronous
+  file functions, message pipes and mailboxes. Not checked on the RP6 then (build 104648's results are below).
+- **Merged with #144** (the entry below), which now sits under this branch: states are version 3 (each branch's
+  version 2 had a layout of its own; both, and version 1, are refused by the header).
+  `sceKernelStopUnloadSelfModuleWithStatus` calls `unloadSelf(arg(0), arg(1), arg(2), arg(4))`, so a module calling
+  it unloads itself and the game goes on (the program calling it still ends), and `sceKernelTerminateThread` deletes
+  a module's module_start or module_stop thread as `sceKernelExitThread` does. Also: callbacks return to the
+  trampoline's fourth syscall (#144 took the third), #144's thread deletion is this branch's `deleteThread()`, and
+  states refuse a module whose block is a pool's. Checks: 158 groups (new: "modules unload with a status",
+  "modules terminated threads"), `tests/psp/ares` 228; part 17's last paragraph has the rest.
+- **Review:** a general-purpose reviewer of the merged branch: one medium and five low findings, all fixed, each
+  in its own commit with a test that failed before it; the merge, the clean-room code and the savedata fixes checked
+  out. Medium: states took thread stacks unchecked, and sceKernelGetThreadStackFreeSize copied the whole stack per
+  call (a state's 0xfffff000-byte stack would have cost 4 GiB): the stack is read in place, and loading wants each
+  stack a block of its own, of its size, and every block inside the user partition. Low: a pool's or semaphore's
+  waiter leaving unserved (timeout, termination) now has those behind it served (`waiterLeft()`); a vertical blank
+  stays pending while the last one's handlers are queued or running (two 20 ms handlers had 97 calls queued by
+  frame 120, saved in states); every block one owner at most among threads' stacks, pools, modules and the program
+  (two pools on a block, or a pool in a stack or the program's block, loaded); the SRC channel's first buffer from
+  idle retires 100 µs short of its length, as pspautotests' audio/output2/rest recorded ("13XX µs", where this read
+  1452); sceKernelPrintf cuts a width to the field's room before snprintf (two fields 400,000,000 wide took 129 ms).
+  sceKernelFreePartitionMemory refuses blocks the kernel holds, so the machine's own states stay loadable. States
+  are version 4 (each call into the program marks a vertical blank's handler). Checks: 162 groups (new: "kernel
+  semaphores served past waiters that left", "pools served past waiters that left", "interrupts handlers longer
+  than a frame", "audio src rest"), `tests/psp/ares` 232 (a version 3 state refused). Found on the way, not changed:
+  a program spinning on the clock sees it move only between the CPU's runs (each to the next thing due).
+- **On the RP6** (the whole stack, launched from the user's CHDs): all ten of the user's priority games now start
+  (nine tried with build 104648, decrypting their programs; Lumines with build 104647). SOCOM Fireteam Bravo reaches
+  its own "No SOCOM Fireteam Bravo Data was found on the Memory Stick Duo" screen at 60 fps (then asks for
+  sceAtrac3plus); Burnout Legends reaches its LOADING screen (asks for sceIoChangeAsyncPriority, sceIoPollAsync,
+  sceIoReadAsync); Lumines runs to its log-in menus at about 40 fps (asks for sceSasCore); GTA Vice City Stories and
+  Liberty City Stories, and Midnight Club 3, ask for sceMpeg (video) and async I/O; Peace Walker asks for sceRtc
+  e7c27d1b, sceOpenPSID, sceDisplay 210eab3a and message pipes (ThreadManForUser 7c0dc2a0/74829b76); Burnout Dominator
+  and Snoopy ask for async I/O and ad-hoc networking (sceNet*); Gunhound EX asks for sceLibFont and scePower 469989ad.
+  Next: async I/O, a silent sceSas, message pipes, sceMpeg stubs that let games skip videos, networking reported off.
+
 ## PSP core: retail programs decrypted, and modules loaded — 2026-10-05
 
 Branch `cursor/psp-decrypt-2b67`, stacked on `cursor/psp-retail-load-2b67` (commit `08b08ab64`; for stack #106),

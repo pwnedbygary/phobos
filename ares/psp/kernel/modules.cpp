@@ -235,7 +235,7 @@ auto Kernel::makeModuleThread(const LoadedModule& loaded, u32 entry, u32 paramet
   s32 made = createThread(loaded.module.name, entry, priority, stackSize, attributes, loaded.module.gp);
   if(made < 0) return made;
   if(argument && length && !argumentFits(*threads[made], length)) {
-    discardThread(*threads[made]);
+    deleteThread(*threads[made]);
     return ErrorIllegalArgument;
   }
   return made;
@@ -345,7 +345,7 @@ auto Kernel::unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -
       unloadModule(uid);
     }
   }
-  if(caller) discardThread(*caller);
+  if(caller) deleteThread(*caller);
   reschedule();
 }
 
@@ -356,17 +356,8 @@ auto Kernel::moduleReturned() -> void {
   Thread* thread = current;
   endThread(*thread, s32(cpu.ipu.r[2]));
   current = nullptr;  //nothing to save: the thread is gone
-  discardThread(*thread);
+  deleteThread(*thread);
   reschedule();
-}
-
-//A thread done with: its stack goes back to the user partition, and it's gone.
-auto Kernel::discardThread(Thread& thread) -> void {
-  for(auto& block : blocks) {
-    if(block.address == thread.stackBlock) { release(block.uid); break; }
-  }
-  u32 uid = thread.uid;  //erasing it ends the thread, its ID with it
-  threads.erase(uid);
 }
 
 //(path, flags, options): a module loaded from a file; its ID, or why it couldn't be loaded.
