@@ -1838,7 +1838,7 @@ FFmpeg (libavcodec and libavutil: lib/arm64-v8a/libavcodec.so and libavutil.so i
 https://ffmpeg.org
 
 This software uses libraries from the FFmpeg project under the LGPLv2.1.
-Phobos's PSP core decodes games' ATRAC3, ATRAC3plus, MP3 and AAC sound and
+Phobos's PSP core decodes games' ATRAC3, ATRAC3plus and MP3 sound and
 their H.264 movies with them. Phobos does not own FFmpeg: it is copyright
 the FFmpeg developers (https://ffmpeg.org/, see its CREDITS), and is free
 software; you can redistribute it and/or modify it under the terms of the
@@ -1853,12 +1853,16 @@ https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz (SHA-256
 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e), by
 thirdparty/ffmpeg/build.sh in Phobos's source, which holds the exact
 configure line: no GPL or non-free parts, nothing but the decoders atrac3,
-atrac3al, atrac3p, atrac3pal, mp3float, aac and h264. Phobos's releases
-carry that tarball beside the APKs: it is the libraries' complete source.
+atrac3p, mp3float and h264. Phobos's releases carry that tarball beside the
+APKs: it is the libraries' complete source.
 Phobos's own library loads them as shared libraries, so you may build your
 own (changed as you like, with the same interface: libavcodec 63 and
 libavutil 61) and use it in their place: replace the two files in the APK
 and sign it again, or change the script and build Phobos from its source.
+
+libavcodec includes FFmpeg's versions of the Independent JPEG Group's
+discrete cosine transforms (jrevdct.c, jfdctint.c and jfdctfst.c).
+This software is based in part on the work of the Independent JPEG Group.
 
                   GNU LESSER GENERAL PUBLIC LICENSE
                        Version 2.1, February 1999

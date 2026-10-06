@@ -36,12 +36,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept
+      # FFmpeg's decoders for the host (thirdparty/ffmpeg/build.sh, run by the test script), built once and kept:
+      # keyed on the build's own name (the script, the system and the compiler), so a runner's new compiler makes a
+      # new build that's kept in turn
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(thirdparty/ffmpeg/build.sh --name host)" >> "$GITHUB_OUTPUT"
+
       - name: Cache FFmpeg
         uses: actions/cache@v4
         with:
           path: .cache/ffmpeg
-          key: ffmpeg-host-${{ runner.os }}-${{ hashFiles('thirdparty/ffmpeg/build.sh') }}
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-host-
 
       - name: Run the tests
         run: tests/psp/run-tests.sh

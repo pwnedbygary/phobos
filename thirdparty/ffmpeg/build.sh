@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-#Builds FFmpeg's decoders for the PSP's music and movies (docs/psp-core.md, part 26): ATRAC3, ATRAC3plus, MP3, AAC
-#and H.264, as two shared libraries, libavcodec and libavutil, from FFmpeg's official release, unmodified.
+#Builds FFmpeg's decoders for the PSP's music and movies (docs/psp-core.md, part 26): ATRAC3, ATRAC3plus, MP3 and
+#H.264, as two shared libraries, libavcodec and libavutil, from FFmpeg's official release, unmodified.
 #
 #Licensing: FFmpeg is LGPL 2.1 or later, so long as nothing GPL or non-free goes in, and this enables nothing but the
 #decoders below (no GPL, no non-free, no version 3 upgrade, no external libraries: --disable-autodetect). Phobos's
@@ -12,29 +12,32 @@
 #
 #usage: thirdparty/ffmpeg/build.sh host                   (for the host tests and runners: macOS or Linux)
 #       thirdparty/ffmpeg/build.sh android NDK API-LEVEL  (arm64-v8a, with that NDK's clang, as the app's CMake does)
+#       thirdparty/ffmpeg/build.sh --name host | android NDK API-LEVEL   (only print the build's name: CI's cache key)
 #The last line printed is the folder the build was installed in (lib/, include/); the build's own output goes to a
 #log beside it. Builds are kept in $PHOBOS_FFMPEG_CACHE (else .cache/ffmpeg in the repository), each under a name
 #hashed from this script and the compiler, so a build is made once and made again only when one of those changes.
-#Offline, put the tarball in the cache folder (or name it in $PHOBOS_FFMPEG_TARBALL) and it isn't downloaded.
+#It needs bash, make, curl and xz (tar -J), and the network the first time, for the release's tarball. Offline, put
+#the tarball in the cache folder (or name it in $PHOBOS_FFMPEG_TARBALL) and it isn't downloaded.
 set -euo pipefail
 
 VERSION=9.0.2
 SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 URL=https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz
-#Decoders: atrac3 and atrac3al (ATRAC3 and its "AL" variant), atrac3p and atrac3pal (ATRAC3plus), mp3float (MP3),
-#aac and h264. No parsers, demuxers or other libraries: Phobos takes the PSP's containers apart itself, and converts
-#samples and pixels itself.
+#Decoders: atrac3 (ATRAC3), atrac3p (ATRAC3plus), mp3float (MP3) and h264: what the libraries open. No parsers,
+#demuxers or other libraries: Phobos takes the PSP's containers apart itself, and converts samples and pixels itself.
 CONFIGURE=(
   --disable-gpl --disable-nonfree --disable-version3
   --disable-programs --disable-doc --disable-everything --disable-autodetect --disable-network
   --disable-avdevice --disable-avformat --disable-avfilter --disable-swscale --disable-swresample
   --enable-shared --disable-static --enable-pic
-  --enable-decoder=atrac3,atrac3al,atrac3p,atrac3pal,mp3float,aac,h264
+  --enable-decoder=atrac3,atrac3p,mp3float,h264
 )
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 CACHE=${PHOBOS_FFMPEG_CACHE:-$ROOT/.cache/ffmpeg}
+NAME_ONLY=
+if [[ ${1:-} == --name ]]; then NAME_ONLY=1; shift; fi
 TARGET=${1:-}
 mkdir -p "$CACHE"
 
@@ -62,39 +65,78 @@ android)
     --extra-ldflags="-Wl,-z,max-page-size=16384")
   ;;
 *)
-  echo "usage: $0 host | android NDK API-LEVEL" >&2
+  echo "usage: $0 [--name] host | android NDK API-LEVEL" >&2
   exit 2
   ;;
 esac
 
 KEY=$( (cat "$0"; echo "$IDENTITY") | sha256 | cut -c1-12)
 NAME=$TARGET-$VERSION-$KEY
+if [[ -n $NAME_ONLY ]]; then echo "$NAME"; exit 0; fi
 PREFIX=$CACHE/$NAME
 LOG=$CACHE/$NAME.log
 
-#Two builds of the app (its flavors) may configure at once: one builds, the other waits for it.
+#Two builds of the app (its flavors) may configure at once: one builds, the other waits for it. The lock holds its
+#build's process ID and host; a lock whose process is gone (a build killed part way) is taken over.
 LOCK=$CACHE/$NAME.lock
+DOWNLOAD=
+cleanup() { rm -rf "$LOCK"; if [[ -n $DOWNLOAD ]]; then rm -f "$DOWNLOAD"; fi; }
 for ((wait = 0; ; wait++)); do
-  if mkdir "$LOCK" 2>/dev/null; then break; fi
+  if mkdir "$LOCK" 2>/dev/null; then
+    echo "$$ $(hostname)" > "$LOCK/owner"
+    break
+  fi
+  OWNER=$(cat "$LOCK/owner" 2>/dev/null || true)
+  if [[ -n $OWNER && ${OWNER#* } == "$(hostname)" ]] && ! ps -p "${OWNER%% *}" >/dev/null 2>&1; then
+    #(looked at again just before: another build may have taken it over already)
+    if [[ $(cat "$LOCK/owner" 2>/dev/null || true) == "$OWNER" ]]; then
+      echo "FFmpeg: taking over $LOCK from process ${OWNER%% *}, which has gone" >&2
+      rm -rf "$LOCK"
+    fi
+    continue
+  fi
   if ((wait > 1800)); then
-    echo "FFmpeg: $LOCK has been held for 30 minutes; remove it if no build is running" >&2
+    echo "FFmpeg: $LOCK has been held for 30 minutes (by ${OWNER:-no process recorded}); remove it if no build" \
+         "is running" >&2
     exit 1
   fi
   sleep 1
 done
-trap 'rm -rf "$LOCK"' EXIT
+trap cleanup EXIT
 
+#The release's tarball, checked before it's used: downloaded into a file of its own, and kept only if it's the
+#release's (a proxy's or captive portal's page is thrown away, and downloaded once more).
+matches() { [[ $(sha256 "$1" | cut -d' ' -f1) == "$SHA256" ]]; }
 if [[ ! -f $PREFIX/.built ]]; then
   TARBALL=${PHOBOS_FFMPEG_TARBALL:-$CACHE/ffmpeg-$VERSION.tar.xz}
-  if [[ ! -f $TARBALL ]]; then
+  if [[ -f $TARBALL ]] && ! matches "$TARBALL"; then
+    if [[ -n ${PHOBOS_FFMPEG_TARBALL:-} ]]; then
+      echo "FFmpeg: $TARBALL (PHOBOS_FFMPEG_TARBALL) isn't FFmpeg $VERSION's release: its SHA-256 isn't $SHA256" >&2
+      exit 1
+    fi
+    echo "FFmpeg: $TARBALL isn't FFmpeg $VERSION's release; downloading it again" >&2
+    rm -f "$TARBALL"
+  fi
+  for ((attempt = 1; ; attempt++)); do
+    if [[ -f $TARBALL ]]; then break; fi
+    DOWNLOAD=$(mktemp "$CACHE/ffmpeg-$VERSION.download.XXXXXX")
     echo "FFmpeg: downloading $URL" >&2
-    curl -fsSL --retry 3 -o "$TARBALL.part" "$URL"
-    mv "$TARBALL.part" "$TARBALL"
-  fi
-  if [[ $(sha256 "$TARBALL" | cut -d' ' -f1) != "$SHA256" ]]; then
-    echo "FFmpeg: $TARBALL isn't FFmpeg $VERSION's release (its SHA-256 differs from $SHA256)" >&2
-    exit 1
-  fi
+    if curl -fsSL --retry 3 -o "$DOWNLOAD" "$URL" && matches "$DOWNLOAD"; then
+      mv "$DOWNLOAD" "$TARBALL"
+      DOWNLOAD=
+      break
+    fi
+    rm -f "$DOWNLOAD"
+    DOWNLOAD=
+    if ((attempt == 2)); then
+      echo "FFmpeg: couldn't download FFmpeg $VERSION's release from $URL (no network, or what came wasn't it)." >&2
+      echo "  Download it some other way, check its SHA-256 is $SHA256, and put it at $TARBALL" >&2
+      echo "  (or name it in PHOBOS_FFMPEG_TARBALL); or build without FFmpeg: -Pphobos.ffmpeg=OFF for Gradle," >&2
+      echo "  -DPHOBOS_FFMPEG=OFF for CMake, PSP_FFMPEG=0 for the PSP tests." >&2
+      exit 1
+    fi
+    echo "FFmpeg: the download wasn't FFmpeg $VERSION's release (its SHA-256 isn't $SHA256); trying once more" >&2
+  done
   SOURCE=$CACHE/$NAME.source
   rm -rf "$SOURCE" "$PREFIX"
   mkdir -p "$SOURCE"

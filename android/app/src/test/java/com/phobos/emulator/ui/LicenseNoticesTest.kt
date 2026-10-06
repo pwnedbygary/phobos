@@ -43,6 +43,14 @@ class LicenseNoticesTest {
         assertTrue("the notice names the release built", ffmpeg.text.contains("ffmpeg-$version.tar.xz"))
         assertTrue("the notice gives its hash", ffmpeg.text.replace("\n", " ").contains(sha256))
         assertTrue("no GPL parts", build.contains("--disable-gpl") && !build.contains("--enable-gpl"))
+        val flat = ffmpeg.text.replace(Regex("\\s+"), " ")
+        assertTrue(
+            "the IJG's credit (FFmpeg's LICENSE.md asks for it)",
+            flat.contains("This software is based in part on the work of the Independent JPEG Group."),
+        )
+        val decoders = Regex("--enable-decoder=(\\S+)").find(build)!!.groupValues[1].split(",")
+        assertEquals(listOf("atrac3", "atrac3p", "mp3float", "h264"), decoders)
+        assertTrue("the notice lists the decoders built", flat.contains("the decoders atrac3, atrac3p, mp3float and h264."))
     }
 
     @Test fun copyingIsTheGplVersion3() {

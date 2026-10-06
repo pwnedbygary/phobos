@@ -36,6 +36,8 @@ android {
                 cppFlags += "-std=c++20"
                 arguments += "-DCMAKE_BUILD_TYPE=Release"
                 arguments += "-DANDROID_ARM_NEON=TRUE"
+                // -Pphobos.ffmpeg=OFF builds without FFmpeg (offline, with no tarball): the PSP has no music or movies.
+                arguments += "-DPHOBOS_FFMPEG=${findProperty("phobos.ffmpeg") ?: "ON"}"
             }
         }
 

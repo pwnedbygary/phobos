@@ -78,12 +78,18 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       # FFmpeg's decoders for the PSP (thirdparty/ffmpeg/build.sh, run by CMake): built from FFmpeg's release
-      # once, then kept, as is the release's tarball.
+      # once, then kept, as is the release's tarball. Keyed on the build's own name (the script and the NDK's
+      # revision, API level 26: minSdk), so a new NDK makes a new build that's kept in turn.
+      - name: Name the FFmpeg build
+        id: ffmpeg
+        run: echo "name=$(thirdparty/ffmpeg/build.sh --name android "$ANDROID_SDK_ROOT/ndk/28.2.13676358" 26)" >> "$GITHUB_OUTPUT"
+
       - name: Cache FFmpeg
         uses: actions/cache@v4
         with:
           path: .cache/ffmpeg
-          key: ffmpeg-${{ runner.os }}-${{ hashFiles('thirdparty/ffmpeg/build.sh') }}-ndk28
+          key: ffmpeg-${{ runner.os }}-${{ steps.ffmpeg.outputs.name }}
+          restore-keys: ffmpeg-${{ runner.os }}-android-
 
       # assembleRelease = assembleLegacyRelease + assembleModernRelease.
       # CMake builds the native lib (ares fork + libadrenotools) for arm64-v8a.
