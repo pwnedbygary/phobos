@@ -868,6 +868,34 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: one block for a program's memory; "nothing will run" noted once — 2026-10-05
+
+Branch `cursor/psp-retail-load-2b67`, stacked on `cursor/psp-disc-formats-2b67` (for stack #106). The loader gave
+each of a program's segments a block of its own, rounded to 256 bytes, so a retail PRX whose data starts right after
+its code (Lumines': 8 bytes after, inside the code's last 256-byte step) was refused as overlapping memory already
+handed out. A program now gets one block from its first segment to the end of its last, as the PSP's loader gives a
+module one; segments whose bytes overlap are still refused, with a message of their own. And the kernel's note that
+nothing will run again (no threads left, or every one waiting on another) comes once rather than every frame (the
+RP6's log had 500 a launch), and again only after something has run since. The user's choices of what comes next are
+in docs/psp-core.md's decisions: decryption and module loading, then HLE functions, sound, and sceFont; and their
+games to test against first.
+- **Review:** a general-purpose reviewer (no bugs; three low test gaps: the refusal of a block that can't go where
+  the program is had lost its test, the segments' sorting and the empty ones passed over had none, nor the note's
+  reset on a fresh start; all three tests added, each checked by the reviewer against a broken copy).
+- **Checks:** the parts' 98 groups with both sanitizers ("kernel program memory": a program whose data starts 8
+  bytes after its code, in the code's last 256-byte step, loads into one block covering both, which the old code
+  refused, with the data listed first or last and an empty segment among them; a program linked into kernel memory
+  refused, as no block can go there; overlapping segments refused with their own message; new "kernel stuck note":
+  with no threads, two runs note it once, after a thread has run and gone once more, and after a fresh start again).
+- **On the RP6** (build 104645): Lumines, Space Invaders Extreme, Brave Story and GTA Sindacco Chronicles now load
+  from their CHDs and run their own code, stopping at functions the HLE kernel doesn't have yet: Lumines at
+  sceDisplayWaitVblankStartCB; Space Invaders Extreme at SysMemUserForUser's SDK version calls, then a C++ runtime
+  abort and ModuleMgrForUser 8f2df740; Brave Story at the SDK version calls, sceUtilityLoadModule, then its graphics
+  library's "can't allocate memory (1056)", a load from address 8, and ThreadManForUser's message pipes and
+  variable pools (c07bb470, d979e9bf, 68da9e36) and InterruptManager ca04a2b9; GTA Sindacco Chronicles at the SDK
+  version calls, sceIoChangeAsyncPriority, ModuleMgrForUser b7f46618 and scePowerRegisterCallback. Those are the
+  HLE work after decryption.
+
 ## PSP core: CHD, CSO v2, ZSO, DAX and JSO disc images — 2026-10-05
 
 Branch `cursor/psp-disc-formats-2b67`, stacked on `cursor/psp-states-2b67` (for stack #106). The PSP reads CHDs (the

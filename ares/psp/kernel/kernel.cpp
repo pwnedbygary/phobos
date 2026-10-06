@@ -193,6 +193,7 @@ auto Kernel::nid(const std::string& name) -> u32 {
 auto Kernel::power() -> void {
   module = {};
   exited = false;
+  stuck = false;
   cycles = 0;
   nextUID = 0x100;
   imports.clear();
@@ -261,10 +262,24 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     return importCode(library, nid);
   }, module);
   if(!error.empty()) return false;
-  for(auto& segment : module.segments) {
-    u32 start = segment.address & ~255u;  //blocks start on 256 bytes: round down, and keep the segment's end inside
-    auto block = allocate(segment.address + segment.size - start, 2, start, module.name);
-    if(!block || block->address != start) {  //it must be exactly where the program is
+  //The program's memory: one block from its first segment to the end of its last, as the PSP's loader gives a module
+  //one. Segments may share a 256-byte step (blocks start on one: Lumines' data starts 8 bytes after its code ends),
+  //but not bytes.
+  auto parts = module.segments;
+  std::sort(parts.begin(), parts.end(), [](auto& a, auto& b) { return a.address < b.address; });
+  u32 low = ~0u, high = 0;
+  for(auto& segment : parts) {
+    if(!segment.size) continue;
+    if(segment.address < high) {
+      error = "the program's segments overlap each other";
+      return false;
+    }
+    low = std::min(low, segment.address & ~255u);
+    high = segment.address + segment.size;  //the loader saw that each fits in memory
+  }
+  if(high) {
+    auto block = allocate(high - low, 2, low, module.name);
+    if(!block || block->address != low) {  //it must be exactly where the program is
       error = "the program's memory overlaps memory already handed out";
       return false;
     }
@@ -307,6 +322,7 @@ auto Kernel::run(u64 budget) -> u64 {
       if(!current && !idle(end)) break;
       continue;
     }
+    stuck = false;  //something runs: should nothing run again later, that's worth a note again
     cycles += cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
     if((current || interrupting) && cpu.scc.halted) {  //it stopped by itself: a halt, or an exception nobody handled
       note(interrupting ? "the CPU stopped in a call into the program" : "the CPU stopped in thread " + current->name);

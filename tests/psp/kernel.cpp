@@ -170,8 +170,10 @@ static auto startArguments() -> void {
   CHECK(u32(m.system.fpu.csr), 0x0000'0e00);  //FCSR as a PSP program finds it (measured, round 3)
 }
 
-//load() reserves the program's memory exactly where the program is, or refuses a program whose segments overlap,
-//leaving nothing of it behind.
+//load() reserves the program's memory exactly where the program is, one block for all its segments (two may share a
+//256-byte step, as a PRX's data starts right after its code, whatever order they're listed in, an empty one among
+//them), or refuses a program whose segments overlap, or whose memory can't be reserved where it is (outside the user
+//partition), leaving nothing of it behind.
 static auto programMemory() -> void {
   ElfBuilder elf;
   elf.type = 2;
@@ -191,6 +193,43 @@ static auto programMemory() -> void {
     for(auto& block : m.kernel.blocks) reserved |= block.address == 0x0880'4000;
     CHECK(reserved, true);
   }
+  for(bool reversed : {false, true}) {
+    //code 0x1238 bytes long, and data starting 8 bytes after it, in the code's last 256-byte step (as Lumines' is),
+    //listed after the code or before it; and an empty segment inside the code
+    auto sharing = elf;
+    sharing.segments[0].bytes.at(0x1238);
+    ElfBuilder::Segment data;
+    data.address = 0x0880'5240;
+    data.bytes.at(0x40);
+    data.memorySize = 0x2000;
+    sharing.segments.insert(reversed ? sharing.segments.begin() : sharing.segments.end(), data);
+    ElfBuilder::Segment empty;
+    empty.address = 0x0880'4080;
+    sharing.segments.push_back(empty);
+    auto file = sharing.build();
+    KernelMachine m;
+    std::string error;
+    CHECK(m.kernel.load(file.data(), file.size(), "ms0:/SHARING.ELF", error), true);
+    if(!error.empty()) std::printf("  %s\n", error.c_str());
+    u32 covering = 0;
+    for(auto& block : m.kernel.blocks) {
+      if(block.address == 0x0880'4000 && block.address + block.size >= 0x0880'7240) covering++;
+    }
+    CHECK(covering, 1);
+  }
+  {
+    //linked into kernel memory (which the loader can write): no block can be reserved there
+    auto kernelSide = elf;
+    kernelSide.entry = 0x0804'0000;
+    kernelSide.segments[0].address = 0x0804'0000;
+    kernelSide.sections[0].address = 0x0804'0000;
+    auto file = kernelSide.build();
+    KernelMachine m;
+    std::string error;
+    CHECK(m.kernel.load(file.data(), file.size(), "ms0:/KERNEL.ELF", error), false);
+    CHECK(error == "the program's memory overlaps memory already handed out", true);
+    CHECK(m.kernel.blocks.size(), 0);
+  }
   {
     ElfBuilder::Segment second;  //a second segment inside the first
     second.address = 0x0880'4080;
@@ -200,7 +239,7 @@ static auto programMemory() -> void {
     KernelMachine m;
     std::string error;
     CHECK(m.kernel.load(overlapping.data(), overlapping.size(), "ms0:/OVERLAP.ELF", error), false);
-    CHECK(error.find("overlaps") != std::string::npos, true);
+    CHECK(error == "the program's segments overlap each other", true);
     CHECK(m.kernel.blocks.size(), 0);  //the first segment's reservation went too
     CHECK(m.kernel.threads.size(), 0);
   }
@@ -270,6 +309,24 @@ static auto unknownFunctions() -> void {
   CHECK(m.kernel.syscall(0x0f'ffff), false);
 }
 
+//With nothing left to run, the kernel says so once, not every frame; once more when a thread has run since and
+//nothing can run again; and again after a fresh start.
+static auto stuckNote() -> void {
+  KernelMachine m;
+  auto noted = [&] { return std::count(m.notes.begin(), m.notes.end(), std::string{"no threads left to run"}); };
+  m.kernel.run(Kernel::VblankCycles);
+  m.kernel.run(Kernel::VblankCycles);
+  CHECK(noted(), 1);
+  Assembler main{m, 0x0880'1000};
+  main.call("sceKernelExitDeleteThread");
+  m.runProgram(0x0880'1000, false, Kernel::VblankCycles);
+  m.kernel.run(Kernel::VblankCycles);
+  CHECK(noted(), 2);
+  m.kernel.power();  //a fresh start: the note comes again
+  m.kernel.run(Kernel::VblankCycles);
+  CHECK(noted(), 3);
+}
+
 //Waiting for the vertical blank: twice, and the count and the clock say so.
 static auto vblank() -> void {
   for(bool recompile : {false, true}) {
@@ -330,7 +387,7 @@ auto kernelTests() -> Tests {
     {"kernel nids", nids}, {"kernel threads", threads}, {"kernel waiting", waiting},
     {"kernel partitions", partitions}, {"kernel start arguments", startArguments},
     {"kernel program memory", programMemory}, {"kernel reload", reload}, {"kernel unknown functions", unknownFunctions},
-    {"kernel vblank", vblank},
+    {"kernel vblank", vblank}, {"kernel stuck note", stuckNote},
     {"kernel hello world", hello},
   };
 }

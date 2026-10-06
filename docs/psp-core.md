@@ -46,6 +46,11 @@ homebrew runs in the app on the RP6. Part 14, disc images (ISO and CSO, the disc
   members, `auto f() -> T`, one function per instruction named after its mnemonic, decoder tables built with
   macros as in ares's PS1 and N64 cores. Everything important is explained in plain language in the comments, for
   someone who has never seen a MIPS CPU.
+- **What comes next** (2026-10-05): decryption and module loading (KIRK, the `~PSP` header, the published keys
+  committed as PPSSPP does, at the user's word), then the HLE functions games ask for, then sound (sceAudio, then
+  sceSas), then sceFont from the user's own flash0 fonts. The user's games to test against first: GTA Vice City
+  Stories and Liberty City Stories, Metal Gear Solid: Peace Walker, Burnout Legends and Dominator, Lumines, Midnight
+  Club 3, SOCOM: Fireteam Bravo, Snoopy vs. the Red Baron and Gunhound EX (kept as CHDs on the RP6's SD card).
 
 ## Sources
 
@@ -378,8 +383,10 @@ version of the PSP's operating system, as far as a program sees it. The loader a
   another, and stops.
 - **The program**: `load()` starts afresh, as the PSP does when a game is chosen (whatever an earlier program left,
   having exited included, goes; a load that fails leaves nothing behind either). It takes a PBP or an ELF, puts a PRX
-  at the start of the user partition, reserves the program's memory exactly where it is (or refuses a program whose
-  segments overlap), and starts its first thread at the entry
+  at the start of the user partition, reserves the program's memory exactly where it is, one block from its first
+  segment to the end of its last as the PSP's loader gives a module (two segments may share a 256-byte step, as a
+  retail PRX's data starts right after its code; a program whose segments overlap is refused), and starts its first
+  thread at the entry
   point with the path as its argument (argv[0]), its `gp`, a 256 KiB stack, and the top 256 bytes of the stack as
   the kernel's area (`k0`). A thread's start argument must fit on its stack and be readable, or starting it fails;
   the program's path may be up to 4 KiB.
