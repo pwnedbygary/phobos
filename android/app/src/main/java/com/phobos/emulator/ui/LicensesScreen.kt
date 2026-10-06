@@ -54,7 +54,7 @@ internal fun parseLicenseNotices(license: String): List<LicenseNotice> {
     }
 }
 
-/** Settings → About → Open-source licenses: the notices of ares and every component Phobos uses, from the LICENSE in the APK. */
+/** Settings → About → Open-source licenses: Phobos's notice, those of ares and every component it uses, and the GPL's text, from the LICENSE in the APK. */
 @Composable
 fun LicensesScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -77,7 +77,7 @@ fun LicensesScreen(onBack: () -> Unit) {
                     text = if (loaded.isEmpty()) {
                         "This build is missing its license notices. They're in the LICENSE file of Phobos's source code, at github.com/pwnedbygary/phobos."
                     } else {
-                        "Phobos is based on ares and uses the components below, each under the license shown. Its source code is at github.com/pwnedbygary/phobos."
+                        "Phobos's own code is under the GNU General Public License, version 3 or later. It's based on ares and uses the components below, each under the license shown. Its source code is at github.com/pwnedbygary/phobos."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
