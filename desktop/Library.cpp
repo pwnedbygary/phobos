@@ -1,5 +1,6 @@
 #include "Library.hpp"
 #include "Platform.hpp"
+#include "PhobosRunner.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -39,6 +40,7 @@ static const std::vector<std::pair<std::string, std::vector<std::string>>> syste
   {"Mega CD", {"cue", "chd", "iso"}},
   {"Mega CD 32X", {"cue", "chd", "iso"}},
   {"PlayStation", {"cue", "chd", "exe", "ps-exe", "pbp", "iso", "mdf", "img"}},
+  {"PlayStation Portable", {"iso", "cso", "zso", "dax", "jso", "chd", "pbp", "elf"}},
   {"Neo Geo", {"ng", "neo", "zip"}},
   {"Neo Geo CD", {"ngc", "cue", "chd", "iso", "bin", "zip"}},
   {"Neo Geo Pocket", {"ngp", "nap"}},
@@ -63,6 +65,7 @@ static const std::map<std::string, std::string> sharedExtensionDefaults = {
   {"cue", "PlayStation"},
   {"chd", "PlayStation"},
   {"iso", "PlayStation"},
+  {"pbp", "PlayStation"},
   {"zip", "Auto"},
   {"wav", "ZX Spectrum"},
   {"tzx", "ZX Spectrum"},
@@ -92,6 +95,7 @@ static const std::map<std::string, std::string> folderSystems = {
   {"megacd", "Mega CD"}, {"segacd", "Mega CD"}, {"mcd", "Mega CD"},
   {"megacd32x", "Mega CD 32X"}, {"segacd32x", "Mega CD 32X"},
   {"psx", "PlayStation"}, {"ps1", "PlayStation"}, {"playstation", "PlayStation"},
+  {"psp", "PlayStation Portable"}, {"playstationportable", "PlayStation Portable"},
   {"neogeo", "Neo Geo"}, {"mvs", "Neo Geo"}, {"aes", "Neo Geo"},
   {"neogeocd", "Neo Geo CD"}, {"ngcd", "Neo Geo CD"},
   {"ngp", "Neo Geo Pocket"}, {"neogeopocket", "Neo Geo Pocket"},
@@ -136,6 +140,11 @@ static auto systemFor(const fs::path& file, const fs::path& root) -> std::option
   if (extension == "m3u") return std::nullopt;
   auto systems = systemsFor(extension);
   if (systems.empty()) return std::nullopt;
+  // The PlayStation's games share .iso, .chd and .pbp with the PSP's, which the PSP's medium tells by what's in them:
+  // those are the PSP's wherever they are. Others go by the rules below, where only a psp folder still names the PSP
+  // (whose medium then says what the file is when it's started).
+  bool psp = std::find(systems.begin(), systems.end(), "PlayStation Portable") != systems.end();
+  if (psp && systems.size() > 1 && ares::isPspGame(fromPath(file).c_str())) return "PlayStation Portable";
   for (auto folder = file.parent_path(); !folder.empty(); folder = folder.parent_path()) {
     if (auto named = folderSystem(folder)) {
       if (std::find(systems.begin(), systems.end(), *named) != systems.end()) return *named;
@@ -151,6 +160,18 @@ auto romTitle(const std::string& fileName) -> std::string {
   static const std::regex extension(R"(\.[A-Za-z0-9]{1,5}$)");
   auto title = std::regex_replace(fileName, extension, "");
   return title.empty() ? fileName : title;
+}
+
+auto pspProgramName(const std::string& fileName, const std::string& folderName) -> std::string {
+  if (lower(fileName) != "eboot.pbp" || folderName.find_first_not_of(" \t") == std::string::npos) return fileName;
+  return folderName + ".pbp";
+}
+
+// A game's title: its file's name without the extension, or for a PSP program in an EBOOT.PBP, its folder's name.
+static auto titleOf(const fs::path& file, const std::string& system) -> std::string {
+  auto name = fromPath(file.filename());
+  if (system == "PlayStation Portable") name = pspProgramName(name, fromPath(file.parent_path().filename()));
+  return romTitle(name);
 }
 
 auto withoutDiscNumber(const std::string& title) -> std::string {
@@ -259,7 +280,8 @@ auto scanLibrary(const std::string& folder) -> std::vector<Game> {
     auto system = systemFor(file, root);
     if (!system) continue;
     auto name = fromPath(file.filename());
-    if (int disc = discNumber(name)) {
+    // (the PSP can't change discs yet, so its are each listed on their own, as in the Android app)
+    if (int disc = *system == "PlayStation Portable" ? 0 : discNumber(name)) {
       auto set = std::make_tuple(file.parent_path(), lower(withoutDiscNumber(romTitle(name))), extensionOf(file));
       discSets[set].push_back({disc, file});
     } else {
@@ -278,7 +300,7 @@ auto scanLibrary(const std::string& folder) -> std::vector<Game> {
     games.push_back(game);
   }
   for (auto& [file, system] : singles) {
-    games.push_back({romTitle(fromPath(file.filename())), system, {fromPath(file)}});
+    games.push_back({titleOf(file, system), system, {fromPath(file)}});
   }
 
   std::sort(games.begin(), games.end(), [](const Game& a, const Game& b) {
@@ -304,7 +326,7 @@ auto gameForFile(const std::string& file) -> std::optional<Game> {
   }
   auto system = systemFor(path, path.parent_path());
   if (!system) return std::nullopt;
-  return Game{romTitle(fromPath(path.filename())), *system, {fromPath(path)}};
+  return Game{titleOf(path, *system), *system, {fromPath(path)}};
 }
 
 }

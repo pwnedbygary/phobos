@@ -15,8 +15,9 @@ struct Game {
 };
 
 // The games in `folder` and the two levels of folders inside it, sorted by title. A folder
-// named after a system (psx, megacd, msx, neogeo...) decides between systems that share an
-// extension; cue sheets and .m3u playlists hide the files they list.
+// named after a system (psx, psp, megacd, msx, neogeo...) decides between systems that share an
+// extension, but PSP games are told from the PlayStation's by what's in them; cue sheets and
+// .m3u playlists hide the files they list.
 auto scanLibrary(const std::string& folder) -> std::vector<Game>;
 
 // The game a single file is (for `phobos <file>` from a frontend); its folder's name can
@@ -26,5 +27,8 @@ auto gameForFile(const std::string& file) -> std::optional<Game>;
 // Copies of the Android app's RomNames.kt helpers.
 auto romTitle(const std::string& fileName) -> std::string;
 auto withoutDiscNumber(const std::string& title) -> std::string;
+// A copy of the app's LaunchSystems.pspProgramName(): a PSP program in an EBOOT.PBP goes by its
+// folder's name ("Cube/EBOOT.PBP" is "Cube.pbp"), so homebrew doesn't share one name and its states.
+auto pspProgramName(const std::string& fileName, const std::string& folderName) -> std::string;
 
 }
