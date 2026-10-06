@@ -771,11 +771,23 @@ Developer Wiki, the games' own behavior).
   lessons (`snoopy-b`); Gunhound EX Mission 01 (`gun-b`); Brave Story's prologue (`brave-b`); Lumines Challenge
   (`lumines-c`); Space Invaders Extreme's first stage, then END GAME back to its title, its movie stopped
   (`invaders-e`, `invaders-h`). Boots of all twelve checked with the movie change (`*-boot`).
-- **Checks**: `tests/psp/run-tests.sh` 227 groups with both sanitizers, no failures; `tests/psp/ares` 268 checks,
-  none failed (both run on the merge too). New groups "mpeg movie fed and taken apart", "mpeg movie thread waits
-  for its picture", "mpeg ringbuffer callback states", "power volatile memory locked at once" (programs on both
-  engines, state round trips); "state fields" checks a ringbuffer's callback part way through (five refusals).
-  State version 9 (version 8 refused).
+- **Checks**: `tests/psp/run-tests.sh` 236 groups with both sanitizers, no failures; `tests/psp/ares` 278 checks,
+  none failed (both run on the merge too, and after the review's fixes). New groups "mpeg movie fed and taken
+  apart", "mpeg movie thread waits for its picture", "mpeg ringbuffer callback states", "power volatile memory
+  locked at once" (programs on both engines, state round trips), and the review's six below; "state fields" checks
+  a ringbuffer's callback part way through (five refusals). State version 9 (version 8 refused).
+- **Review:** a general-purpose reviewer; the clean-room check found the mpeg code independent; four low findings,
+  all fixed, each with a test that failed before it. sceMpegRingbufferPut trusted the game-written ring (0x7fffffff
+  packets with 0x80000000 filled overflowed, UBSan; 8192 packets or -200 filled had the callback asked for 5000 or
+  4296, and a state saved as it waited was refused by a fresh machine): a ring that couldn't be one is given
+  nothing now, sceMpegGetAvcAu's guard ("mpeg ringbuffer that isn't one given nothing"). The callback's $gp came
+  from ring offset 44, past pspsdk's 44-byte SceMpegRingbuffer: Put's caller's now ("mpeg ringbuffer callback with
+  the caller's global pointer"). Missing groups added: a callback giving more than asked (clamped), one returning
+  an error (Put returns what came before), a feeder terminated asleep in its callback (state round trip), seeded
+  random packs through sceMpegGetAvcAu (read below the packets, filled within them); taking out the clamp, the
+  `gave <= 0` check, or either mpegAbandoned call fails one (deleteThread's only via a loaded state in which a
+  dormant thread still has a feeding: every live thread is ended before it's deleted). The counts here (227 and
+  268) were out of date. State layout unchanged.
 - **Speed** (host Mac, scratch runner, 600 frames of play, GE on 7 threads / 1): Gunhound 213 / 138 fps, Dominator
   193 / 104, Brave Story 168 / 94, Lumines 117 / 44, Burnout Legends 97 / 54, VCS 86 / 40, LCS 78 / 31, Sindacco
   73 / 35, Snoopy 61 / 38, Peace Walker 60 / 33, Midnight Club 3 7.3 / 2.1. Midnight Club 3 racing at night is

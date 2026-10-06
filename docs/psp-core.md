@@ -2942,6 +2942,11 @@ calls filtered by name, and builds with one function taken out, to show what its
   picture, and asks it of each, before the stage starts. The library's own state (the video taken from the ring's
   first packet, the picture held back, the file having ended) is kept in the memory the game gave it, where Sony's
   library keeps its own.
+- **The ring as games keep it**: the callback runs with the global pointer of Put's caller. pspautotests'
+  SceMpegRingbuffer2 keeps the one Construct found at offset 44, but pspsdk's SceMpegRingbuffer is 44 bytes, the
+  word after it the game's own (in every case seen, the word at 44 and the caller's are the same). And a ring whose
+  fields, the game's to write, couldn't be a ring's (no packets or more than 4096, the next to write not among them,
+  more holding data than there are) is given nothing, as sceMpegGetAvcAu takes nothing from one.
 - **Who it changes**: only games that play on after the refused header and whose callback gives packets. The GTAs,
   Midnight Club 3 and Snoopy give their movies up at the header as before; Burnout Legends and Dominator play on,
   but their callbacks give nothing (they set their file up only once the header is read), so their movies end at
@@ -2997,7 +3002,7 @@ Seen on the way, not changed:
 - Movies: sceMpegQueryStreamOffset still refuses every header (games that check skip their movies); the sound's
   access units never come; sceMpegAvcDecodeStop doesn't give back the picture the decoder held.
 
-Tests (`tests/psp/run-tests.sh`: 227 groups, both sanitizers; `tests/psp/ares` 268 checks):
+Tests (`tests/psp/run-tests.sh`: 236 groups, both sanitizers; `tests/psp/ares` 278 checks):
 - `media.cpp`: "mpeg movie fed and taken apart" (both engines: a made-up PSMF movie of twelve access units, three
   with time stamps, one past 32 bits, through a ring of 16 packets fed 3 at a time, against the rules basic recorded:
   the callback's calls, the free packets, each access unit's size and time stamps, the pictures, the last access
@@ -3010,3 +3015,24 @@ Tests (`tests/psp/run-tests.sh`: 227 groups, both sanitizers; `tests/psp/ares` 2
   thread that isn't there, one asking for nothing or for more than it has left, one past a ring's packets, and one
   feeding a ringbuffer nowhere.
 - `tests/psp/ares`: a state of version 8 refused, as the seven before it.
+
+Review: a general-purpose reviewer of the branch; the clean-room check found the mpeg code independent; four low
+findings, all fixed, each with a test that failed before its fix. sceMpegRingbufferPut trusted the ring's fields,
+the game's to write: 0x7fffffff packets with 0x80000000 holding data overflowed its signed subtraction, and 8192
+packets, or -200 holding data, had the callback asked for 5000 or 4296 packets, more than a state holds, so a state
+saved as it waited was refused by a fresh machine (and a run's size in bytes could wrap). Such a ring is given
+nothing now (above), what's free counted unsigned; "mpeg ringbuffer that isn't one given nothing" saves each such
+ring's machine where its callback would have waited and loads it in a fresh one. The callback's global pointer came
+from the ring's offset 44, past pspsdk's 44-byte SceMpegRingbuffer: it's the caller's now ("mpeg ringbuffer callback
+with the caller's global pointer": someone else's word after a 44-byte ring). Groups were missing for a callback
+that returns more than it was asked for ("mpeg ringbuffer callback giving more than asked": what it was asked for
+counts), one that returns an error ("mpeg ringbuffer callback returning an error": Put returns what the calls before
+it gave, as after a callback that gives none; what a PSP's Put returns then isn't recorded), a feeder thread
+terminated as it sleeps in its callback ("mpeg ringbuffer feeder terminated in its callback", a state saved as it
+sleeps carried on in a fresh machine), and random packs ("mpeg random packs taken apart": from a seed, the next
+packet to read stays among the ring's, those holding data no more than it has, and Put gives what its callback's
+calls gave). Taking out the clamp on what a callback returns, the check for none or an error, or endThread's or
+deleteThread's dropping of a thread's feeding fails one of them (deleteThread's only through a state the loader
+takes in which a dormant thread still has a feeding: every other thread is ended before it's deleted). And the
+counts given here and in the handoff (227 groups, 268 checks) were out of date. The tree passes 236 groups and 278
+checks, the state layout unchanged (version 9).
