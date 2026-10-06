@@ -742,6 +742,51 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: music and movies through FFmpeg — 2026-10-06
+
+Branch `cursor/psp-codecs-2b67`, on top of `cursor/psp-hle-games4-2b67` (the entry below), not pushed: commits
+fffd26303 (FFmpeg's build), c0f2625e4 (sceAtrac3plus), 332015eaa (sceMp3), e772d44a2 (movies) and the docs.
+docs/psp-core.md, part 26, describes it. Original code; no PPSSPP or JPCSP source read (pspsdk, pspautotests'
+programs and recorded results, the PSP Developer Wiki, public container formats, FFmpeg's API documentation, the
+games' behavior).
+- **Licensing setup (the owner's choice: FFmpeg's LGPL decoders).** `thirdparty/ffmpeg/build.sh` downloads FFmpeg
+  9.0.2's official tarball, checks its SHA-256, and builds it unmodified with `--disable-gpl --disable-nonfree
+  --disable-version3 --disable-everything --disable-autodetect` and only the decoders atrac3, atrac3al, atrac3p,
+  atrac3pal, mp3float, aac and h264, as two shared libraries (libavcodec, libavutil); no FFmpeg binary or source is
+  committed. The root CMakeLists.txt (option `PHOBOS_FFMPEG`, on) builds it for arm64-v8a with the NDK, cached in
+  `.cache/ffmpeg`, defines `ARES_ENABLE_FFMPEG` and links it; the APK carries the two `.so` files beside Phobos's, so
+  they can be replaced (the LGPL's relinking terms). CI caches the build and puts the tarball in `android/dist` to be
+  published with each release (the complete corresponding source). `LICENSE` (Settings, About, Open-source licenses)
+  has FFmpeg's notice, origin, hash, build script, how to swap the libraries and the LGPL 2.1 text; the About screen
+  says "This software uses libraries from the FFmpeg project under the LGPLv2.1"; `LicenseNoticesTest` (3 tests)
+  checks it all against the script. Without the define (`PSP_FFMPEG=0` for the host tests) the core builds with no
+  decoders, the streams refused as before.
+- **APK**: 23,741,990 bytes against part 25's 22,520,961: +1.22 MB (5.4%), FFmpeg's libraries 1.18 MB of it.
+- **Decoded**: ATRAC3 and ATRAC3plus (sceAtrac3plus: whole, halfway and streamed files, loops, the second buffer,
+  resets, every query; pspautotests' atrac programs match but for the low-level and sas modes), MP3 (sceMp3: both
+  handles, its buffers' halves, loops, resets; no game of the owner's uses it), movies (the PSMF header read; H.264
+  pictures by sceMpegAvcDecode or sceMpegAvcDecodeYCbCr plus sceMpegAvcCsc, converted by BT.601 into the game's pixel
+  format; their ATRAC3plus sound by sceMpegGetAtracAu and sceMpegAtracDecode). AAC's decoder is built but sceAac,
+  scePsmf(Player) and sceSas's ATRAC3 voices aren't done: no game of the owner's imports them but Peace Walker four
+  scePsmf functions, not seen called.
+- **Heard and seen** (host, from boot; WAVs and frames under `/tmp/codecs-runner/out`; pitch checked against the
+  decoded streams, matching): Burnout Legends' EA movie, FMV and title over its movie, music -11.8 dBFS (0.34% of
+  samples clipped in the game's own mix); Dominator's logo movies and title over its movie (-18.4 dBFS); the GTAs'
+  and Midnight Club 3's logo, title and credits movies with sound (-15 to -18 dBFS, next to no clipping); Space
+  Invaders Extreme's music (-15.9 dBFS at its title, -10.6 in its stage) and its stage's background movie, black
+  before; SOCOM's menu music (-29.4 dBFS) and Brave Story's (-25.8).
+- **CPU** (host): 90 microseconds an ATRAC3plus frame (0.2% of a core a stream), 600 a movie picture decoded and
+  converted (1.8% at 30 a second); 1.9-2.8% of the game's time in movie scenes. On the RP6: Burnout Legends' opening
+  movie and its profile screen over the menus' movie at 60 fps (HUD CPU 72%, 54%), no decoding errors in the log.
+- **Checks**: `tests/psp/run-tests.sh` 248 groups with both sanitizers, no failures (new: atrac.cpp's 11, mp3.cpp's
+  4, movies.cpp's 4; state fields and refusals for all three; real FFmpeg decodes of pspautotests' sample.at3 and
+  sample.mp3 with `PSP_AUTOTESTS`); `tests/psp/ares` 282 checks, none failed; both again with `PSP_FFMPEG=0`. State
+  version 10 (9 refused); decoders are made afresh after a load.
+- **Uncertain / next**: the decode wait (300 microseconds) is chosen, not measured; the Media Engine's colour
+  rounding isn't measured; a PSP's mixer may or may not clip Burnout's title as much; MP3's first frame after a load
+  loses the bits it borrowed; sceAtrac's low-level and sas modes, sceSas ATRAC3 voices, sceAac and scePsmf are left
+  for a game that needs them; Snoopy's movies weren't reached in the runs.
+
 ## PSP core: the games further still — 2026-10-06
 
 Branch `cursor/psp-hle-games4-2b67`: `cursor/psp-ge-speed-2b67` (the entry below) with `cursor/psp-fonts-2b67`
