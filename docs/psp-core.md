@@ -61,9 +61,6 @@ the fonts'), is on `cursor/psp-ge-speed-2b67`, on top of part 22's `cursor/psp-h
   a Vulkan and an OpenGL renderer as options for speed, still as accurate as possible. Accuracy is not negotiable in
   the software renderer: it is the reference, and every speedup must draw exactly the pixels it drew before (part
   24).
-- **The GE's renderers** (2026-10-06): make the software renderer as fast as it can be first; later add both a
-  Vulkan and an OpenGL renderer as options for speed, still as accurate as they can be. Accuracy isn't negotiable in
-  the software renderer: it's the reference, and every speedup must draw the very same pixels (part 24).
 
 ## Sources
 

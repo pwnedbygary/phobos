@@ -35,7 +35,8 @@
 //Read from memory as before, texel by texel, are: DXT textures (not emulated yet: texel() notes it as it's used);
 //a texture some of whose bytes have no memory behind them (each such read is reported, as before); and a texture
 //the primitive may draw over itself (its frame buffer or depth buffer and the texture overlap), whose texels then
-//change as the primitive draws, as they do on the PSP.
+//are the pixels it has drawn so far, as this core always drew it, kept so that every pixel stays as it was.
+//Whether a PSP's texture reads see the pixels of the primitive drawing them hasn't been measured.
 
 static constexpr u32 TexelBits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
 
