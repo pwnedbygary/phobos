@@ -20,7 +20,9 @@ auto V9938::Background::run(n8 x, n8 y) -> void {
 }
 
 auto V9938::Background::text1(n8 hoffset, n8 voffset) -> void {
-  i32 x = hoffset;
+  // [Phobos] 40 columns of six pixels between eight-pixel borders, as on the TMS9918.
+  if(hoffset < 8 || hoffset >= 248) return;
+  i32 x = hoffset - 8;
 
   n14 nameAddress = (voffset.bit(3,7) * 40) + (x / 6);
   nameAddress.bit(10,16) = io.nameTableAddress.bit(10,16);
