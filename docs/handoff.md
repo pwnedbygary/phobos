@@ -793,15 +793,15 @@ states. docs/psp-core.md, part 17, describes it and what each game does now.
   semaphores served past waiters that left", "pools served past waiters that left", "interrupts handlers longer
   than a frame", "audio src rest"), `tests/psp/ares` 232 (a version 3 state refused). Found on the way, not changed:
   a program spinning on the clock sees it move only between the CPU's runs (each to the next thing due).
-- **On the RP6** (build 104648, the whole stack, launched from the user's CHDs): all nine of the user's priority
-  games tried now decrypt and start. SOCOM Fireteam Bravo reaches its own "No SOCOM Fireteam Bravo Data was found
-  on the Memory Stick Duo" screen at 60 fps (then asks for sceAtrac3plus); Burnout Legends reaches its LOADING screen
-  (asks for sceIoChangeAsyncPriority, sceIoPollAsync, sceIoReadAsync); Lumines runs to its log-in menus at about 40
-  fps (asks for sceSasCore); GTA Vice City Stories and Liberty City Stories, and Midnight Club 3, ask for sceMpeg
-  (video) and async I/O; Peace Walker asks for sceRtc e7c27d1b, sceOpenPSID, sceDisplay 210eab3a and message pipes
-  (ThreadManForUser 7c0dc2a0/74829b76); Burnout Dominator and Snoopy ask for async I/O and ad-hoc networking
-  (sceNet*); Gunhound EX asks for sceLibFont and scePower 469989ad. Next: async I/O, a silent sceSas, message pipes,
-  sceMpeg stubs that let games skip videos, networking reported off.
+- **On the RP6** (the whole stack, launched from the user's CHDs): all ten of the user's priority games now start
+  (nine tried with build 104648, decrypting their programs; Lumines with build 104647). SOCOM Fireteam Bravo reaches
+  its own "No SOCOM Fireteam Bravo Data was found on the Memory Stick Duo" screen at 60 fps (then asks for
+  sceAtrac3plus); Burnout Legends reaches its LOADING screen (asks for sceIoChangeAsyncPriority, sceIoPollAsync,
+  sceIoReadAsync); Lumines runs to its log-in menus at about 40 fps (asks for sceSasCore); GTA Vice City Stories and
+  Liberty City Stories, and Midnight Club 3, ask for sceMpeg (video) and async I/O; Peace Walker asks for sceRtc
+  e7c27d1b, sceOpenPSID, sceDisplay 210eab3a and message pipes (ThreadManForUser 7c0dc2a0/74829b76); Burnout Dominator
+  and Snoopy ask for async I/O and ad-hoc networking (sceNet*); Gunhound EX asks for sceLibFont and scePower 469989ad.
+  Next: async I/O, a silent sceSas, message pipes, sceMpeg stubs that let games skip videos, networking reported off.
 
 ## PSP core: retail programs decrypted, and modules loaded — 2026-10-05
 

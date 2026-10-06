@@ -1591,16 +1591,16 @@ checks. Found on the way, not changed: a program spinning on the clock (sceKerne
 sees it move only between the CPU's runs, each to the next thing due, not with each instruction, so the rest test's
 loop waits a microsecond a round where the PSP's spun.
 
-On the RP6 (build 104648, the whole stack, launched from the user's CHDs): all nine of the user's priority games
-tried now decrypt and start. SOCOM Fireteam Bravo reaches its own "No SOCOM Fireteam Bravo Data was found on the
-Memory Stick Duo" screen at 60 frames a second (then asks for sceAtrac3plus); Burnout Legends reaches its LOADING
-screen (asks for sceIoChangeAsyncPriority, sceIoPollAsync, sceIoReadAsync); Lumines runs to its log-in menus at about
-40 frames a second (asks for sceSasCore); GTA Vice City Stories and Liberty City Stories, and Midnight Club 3, ask
-for sceMpeg (video) and the asynchronous file functions; Peace Walker asks for sceRtc e7c27d1b, sceOpenPSID,
-sceDisplay 210eab3a and message pipes (ThreadManForUser 7c0dc2a0 and 74829b76); Burnout Dominator and Snoopy vs. the
-Red Baron ask for the asynchronous file functions and ad-hoc networking (sceNet*); Gunhound EX asks for sceLibFont
-and scePower 469989ad. Next: the asynchronous file functions, a silent sceSas, message pipes, sceMpeg stubs that let
-games skip their videos, and networking reported off.
+On the RP6 (the whole stack, launched from the user's CHDs): all ten of the user's priority games now start (nine
+tried with build 104648, decrypting their programs; Lumines with build 104647). SOCOM Fireteam Bravo reaches its own
+"No SOCOM Fireteam Bravo Data was found on the Memory Stick Duo" screen at 60 frames a second (then asks for
+sceAtrac3plus); Burnout Legends reaches its LOADING screen (asks for sceIoChangeAsyncPriority, sceIoPollAsync,
+sceIoReadAsync); Lumines runs to its log-in menus at about 40 frames a second (asks for sceSasCore); GTA Vice City
+Stories and Liberty City Stories, and Midnight Club 3, ask for sceMpeg (video) and the asynchronous file functions;
+Peace Walker asks for sceRtc e7c27d1b, sceOpenPSID, sceDisplay 210eab3a and message pipes (ThreadManForUser 7c0dc2a0
+and 74829b76); Burnout Dominator and Snoopy vs. the Red Baron ask for the asynchronous file functions and ad-hoc
+networking (sceNet*); Gunhound EX asks for sceLibFont and scePower 469989ad. Next: the asynchronous file functions, a
+silent sceSas, message pipes, sceMpeg stubs that let games skip their videos, and networking reported off.
 
 ## Part 18: decryption
 
