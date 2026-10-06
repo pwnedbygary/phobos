@@ -494,6 +494,55 @@ static auto sasVagDecoded() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//VAG endings as VAG files have them (pspautotests' test.vag among them): the data's last block marked 1, then a
+//block of its own, 00 07 77 77..., which would sound as 28 samples of 28672. The voice ends at the end of the block
+//marked 1, its last sample, a frame late, unheard (frame 88 on is silence), the end flag set by that grain and
+//nothing heard in the next: the block after it never plays. A block marked 3 ends a voice that doesn't loop, as 1
+//does; on one that loops, it takes the voice back to the block marked 4, where the loop starts. Blocks 0, 1 and 2
+//hold 4096s, 8192s and 12288s (filter 0, shift 0, every 4 bits 1, 2 or 3), heard from frame 33, 28 frames each.
+static auto sasVagEndings() -> void {
+  struct Span { u32 from, to; s32 sample; };
+  struct Case { const char* name; u8 flags1, flags2, bits2; u32 loop; std::vector<Span> heard; bool ended; };
+  std::vector<Case> cases = {
+    {"a block marked 1, then 00 07 77 77...", 1, 7, 7, 0, {{32, 32, 0}, {33, 60, 4096}, {61, 87, 8192}, {88, 127, 0}},
+     true},
+    {"a block marked 3, not looping", 3, 0, 3, 0, {{32, 32, 0}, {33, 60, 4096}, {61, 87, 8192}, {88, 127, 0}}, true},
+    {"a loop back to the block marked 4", 4, 3, 3, 1,
+     {{32, 32, 0}, {33, 60, 4096}, {61, 88, 8192}, {89, 116, 12288}, {117, 127, 8192}}, false},
+  };
+  for(auto& c : cases) {
+    KernelMachine m;
+    u8 flags[] = {0, c.flags1, c.flags2}, bits[] = {1, 2, c.bits2};
+    for(u32 block = 0; block < 3; block++) {
+      m.system.memory.write(1, Samples + block * 16, 0x00);
+      m.system.memory.write(1, Samples + block * 16 + 1, flags[block]);
+      for(u32 n = 2; n < 16; n++) m.system.memory.write(1, Samples + block * 16 + n, bits[block] << 4 | bits[block]);
+    }
+    m.call("__sceSasInit", {Core, 128, 32, 0, 44100});
+    loud(m, 0);
+    m.call("__sceSasSetVoice", {Core, 0, Samples, 48, c.loop});
+    m.call("__sceSasSetKeyOn", {Core, 0});
+    CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+    std::string name = c.name;
+    u32 wrong = 0;
+    for(auto [from, to, sample] : c.heard) {
+      for(u32 frame = from; frame <= to; frame++) {
+        if(left(m, frame) == u16(sample) && right(m, frame) == u16(sample)) continue;
+        if(!wrong++) std::printf("  %s: frame %u is %d, not %d\n", c.name, frame, s16(left(m, frame)), sample);
+      }
+    }
+    check(__LINE__, (name + ": the frames heard").c_str(), wrong, 0);
+    check(__LINE__, (name + ": its end flag").c_str(), m.call("__sceSasGetEndFlag", {Core}) & 1, c.ended);
+    if(c.ended) {
+      CHECK(m.call("__sceSasCore", {Core, Out}), 0);
+      bool silent = true;
+      for(u32 frame = 0; frame < 128; frame++) if(left(m, frame) || right(m, frame)) silent = false;
+      check(__LINE__, (name + ": the next grain silent").c_str(), silent, true);
+    }
+    CHECK(roundTrip(m), true);
+  }
+}
+
 //PCM voices heard. pspautotests' audio/sascore/pcm, as a PSP played it: 256 samples (-1, -2, -3...), keyed on at
 //grain 512, frame 0x20 silence (the envelope's 0 as it starts), 0x11e the 254th sample, 0x120 the loop's first (from
 //0: -1; from 254: -255) or, not looping, silence and the voice ended. Then, as chosen (no recording): at pitch
@@ -680,8 +729,9 @@ static auto sasVoicesInStates() -> void {
 auto sasTests() -> Tests {
   return {{"sas settings", sasSettings}, {"sas envelopes", sasEnvelopes}, {"sas voices end", sasVoicesEnd},
           {"sas voices given new samples", sasNewSamples}, {"sas vag as recorded", sasVagRecorded},
-          {"sas vag decoded", sasVagDecoded}, {"sas pcm heard", sasPcmHeard}, {"sas output modes", sasOutputModes},
-          {"sas voices mixed", sasMixed}, {"sas voices in states", sasVoicesInStates}};
+          {"sas vag decoded", sasVagDecoded}, {"sas vag endings", sasVagEndings}, {"sas pcm heard", sasPcmHeard},
+          {"sas output modes", sasOutputModes}, {"sas voices mixed", sasMixed},
+          {"sas voices in states", sasVoicesInStates}};
 }
 
 }
