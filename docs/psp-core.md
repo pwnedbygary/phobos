@@ -2654,7 +2654,8 @@ draw something for control codes.
 
 ## Part 24: making the GE fast
 
-On branch `cursor/psp-ge-speed-2b67`, on top of part 22's `cursor/psp-hle-games3-2b67` (part 23 is the fonts'). The
+On branch `cursor/psp-ge-speed-2b67`, on top of part 22's `cursor/psp-hle-games3-2b67`, with part 23 (the fonts',
+`cursor/psp-fonts-2b67`) merged underneath since: see "The review, and since" at the end of this part. The
 owner's decision (2026-10-06, in Decisions): the software renderer as fast as humanly possible first, the GPU
 renderers later; the software renderer is the reference, so it must draw exactly the pixels it drew before. On the
 RP6, GTA Liberty City Stories drew at 17.7 frames a second, Peace Walker's title at 9.5, one core busy and the rest
@@ -2690,13 +2691,15 @@ Walker 1.8 million.
    one after another would draw it. A batch keeps to one render target, and to an area where no two pixels in
    different rows share a byte (frame and depth buffers apart, rows not reaching each other); anything else is drawn
    by itself, in order. Option "GE Threads" (system.cpp): how many threads draw; 0, the default, one fewer than the
-   host's cores; 1, the GE's own alone, every primitive drawn at once as before. Workers may run on any core: the
-   Android front end pins the emulation thread to the fastest, and threads start on their maker's cores.
+   host's cores; 1, the GE's own alone, every primitive drawn at once as before; no more than twice the host's cores,
+   nor 64 (since the review). In the app it's Settings' "PSP Drawing Threads" (below). Workers may run on any core:
+   the Android front end pins the emulation thread to the fastest, and threads start on their maker's cores.
 4. **In 2D, where a primitive draws and which texture rows it reaches, exactly** (draw.cpp): its region is the
    pixels its sprites, triangles or points can cover between its outermost vertices, not the scissor rectangle; its
-   texture's rows those its vertices' v reach, when nothing repeats round. Midnight Club 3 drew 247,000 pixels a frame
-   by themselves (a 512-row texture whose picture is a frame buffer's 272, a render target narrower than its
-   scissor); 22,000 now, all drawing over their own textures.
+   texture's rows those its vertices' v reach (a sprite turned a quarter a little further, since the review), when
+   nothing repeats round. Midnight Club 3 drew 247,000 pixels a frame by themselves (a 512-row texture whose picture
+   is a frame buffer's 272, a render target narrower than its scissor); 22,000 now, all drawing over their own
+   textures.
 5. **A leaner pixel pipeline, texture function and filter** (pixel.cpp, texture.cpp): the frame buffer read and
    written at its own size, the blend factors and the texture function chosen once a pixel instead of once a channel,
    the filter's four channels blended side by side in 16 bits each of one 64-bit number (none can spill into the
@@ -2739,7 +2742,8 @@ core built for Android with the NDK and run as a static executable: Peace Walker
 **How it's known to draw the same pixels:**
 
 - The six scenes record a hash of every frame's picture and of all of VRAM, and of RAM at the end; with 1, 2, 4, 7
-  and 8 threads, and on the interpreter, every hash is the old core's.
+  and 8 threads, and on the interpreter, every hash is the old core's (and with the review's fixes; the edge rule
+  rewritten since changes a few pixels of slivers in three of them, as told at the end).
 - A differential fuzzer (scratch, never committed) links the old GE beside the new and feeds both the same random
   display lists into identical memories: every pixel pipeline setting, every texture format with palettes,
   swizzling, filtering, wrapping, both texture coordinate kinds, lighting, morphing and skinning, 3D with clipping,
@@ -2781,7 +2785,92 @@ sanitizer, at `-O3`, the six scenes run with nothing reported in the core (libch
 sign bit, reported, and outside it). So the stripes come after the core: how the front end presents the picture
 (the title is a picture of one-pixel horizontal lines, which scaling 272 rows to the screen's 1080, near 3.97 times,
 turns into uneven bands), a frame handed over while still being written, or a state the device reached that these
-runs don't. Not tried: the device itself (the owner was using it).
+runs don't. Since then, on the RP6, it was the presentation: see "The review, and since".
+
+**The review, and since.** A general-purpose reviewer of the branch: the clean-room spot check found the new code
+original; one medium and four low findings, all fixed, each with a test that failed before its fix; and a function
+from before this part, found to mirror an older open-source rasterizer almost token for token, rewritten clean-room.
+
+- Medium: a sprite turned a quarter (corners bottom-left and top-right, so v runs across x) whose left edge is 9/16
+  into its first column takes that column's v at its middle, a sixteenth of a pixel left of the left corner: a
+  sixteenth of a pixel's step past the corner's v. The rows a 2D primitive reaches (draw.cpp) took the vertices' v
+  alone, so such a column could take texels from rows the decoded copy didn't hold: below 0, repeated round to the
+  last row (the reviewer's 16x256 texture, corners (0.5625, 8, v 0) and (8.5625, 0, v 8): the address sanitizer saw
+  a read 15 KB past a 1 KiB copy, and 24 pixels came out unlike memory's), or more than the two rows' margin past
+  the highest v when v falls over 32 texels a pixel to the right. Each turned pair now widens the reach by |dv| over
+  the corners' distance in sixteenths (and a 65536th of a texel for rounding), and fetch() asserts in debug builds
+  that no row past a primitive's reach is taken from its decoded copy. New groups: "draw turned sprites kept
+  decoded" (the reviewer's three cases and a steep one, against memory), and "draw textures kept decoded against
+  memory", 4000 random 2D primitives (sprites upright, turned and mirrored, triangles, strips, fans and points, their
+  corners on any sixteenth and often 9/16 in; every texture format but DXT, with palettes, swizzled or not, up to 512
+  rows, repeating or clamped, filtered or not, coordinates inside, on texel boundaries, outside and steep; textures in
+  VRAM where the primitives draw, and drawn again after their memory changed) drawn by a machine keeping textures
+  decoded and by one without `watching()`, which decodes nothing, pixel for pixel. Comparing thread counts couldn't
+  catch this: every count draws from the same copy. Before the fix it found 249 of the 4000 apart; it also failed
+  broken versions (`drawsOver()` never true, invalidation missing, the triangles' margin of two rows dropped, the
+  turned widening dropped), and 800,000 cases on sixteen more seeds pass.
+- Low: the screen's picture (display.cpp) formed `bytesOf + x * bytes` before testing bytesOf, which is null for a
+  frame buffer seen through VRAM's second copy: null plus an offset, undefined behavior. The pointer is now formed
+  only where there is one ("display picture" shows such a frame buffer).
+- Low: the decoded textures' key held the rows reached, so each count decoded the texture again from its first row
+  and was kept beside the others, and going over the budget scanned every copy. Now a texture is kept once, as many
+  rows as any primitive has reached: one reaching fewer draws from it as it is, one reaching more gets a longer copy
+  (the rows kept already copied into it, the rest decoded); a write to any page it came from drops it, as before; a
+  list, the last used first, gives the one unused longest ("draw textures kept decoded, their rows").
+- Low: "GE Threads" was taken as given (1000 made 1000 threads; 2^32 + 1 narrowed to 1). It's held to twice the
+  host's cores (64 where it can't tell) and to 64 now; 0 is still all the cores but one (tests/psp/ares: "the GE's
+  drawing threads").
+- Low: Decisions had the renderers' decision twice (one kept), and texture.cpp said a primitive drawing over its
+  own texture sees it change as it draws "as on the PSP", which wasn't measured (it says what's known now).
+
+**Which pixels on a triangle's edges it draws, rewritten clean-room** (raster.cpp). A triangle covers the pixels at
+whose middles each edge's function is at least its least: the functions are whole numbers there, so the test is
+exact; and a middle exactly on an edge goes, by the usual top-left convention, to the triangle whose left edge it is
+(its inside to the edge's right) or, for a level edge, whose top edge it is (its inside below): least 0 there, 1 on
+right and bottom edges, which the triangle on the other side draws. The edge's direction alone decides, with no
+division. The old code worked out where the edge was at the third corner's height with a division cut short toward
+zero, and for a sliver whose third corner lay less than a sixteenth of a pixel left of an edge running down to the
+right, it took that right edge for a left one and drew its pixels too (never fewer). Before and after: the
+comparison with the owner's PSP is the same, line for line, in all 87 files (coverage-triangles, shared-edges,
+3d-rules, 3d-cull among them), and every draw and draw3d group passes, so the measurements don't tell the two apart.
+The six scenes: Peace Walker, Lumines and Gunhound identical; GTA Liberty City Stories differs in 24 of its 300
+frames, Burnout Legends in 54, Midnight Club 3 in 38, each frame by itself (the next ones the same again) and by 1
+to 4 pixels (sampled: 1 to 3 by up to 2 levels in GTA, 1 by 28 and by 42 in Burnout, 2 to 4 by up to 8 in Midnight
+Club): pixels exactly on slivers' right edges, which the old code drew as well as the neighbour did. A new case in
+"draw triangles", a sliver sharing an edge with a wider triangle to its right, the edge through a pixel's middle and
+the sliver's third corner half a sixteenth left of it, draws that pixel once; the old code drew it twice. The
+measurements show the convention for ordinary triangles (each pixel of a shared edge drawn once, as shared-edges
+has it), and only the exact test keeps it for slivers, so it's kept. Where slivers meet on a PSP isn't measured.
+
+**Merged with part 23** (the fonts, `cursor/psp-fonts-2b67`), which now sits underneath. Only system.cpp's
+options and the docs clashed; the state's layout changed on the fonts' side alone, so it stays version 8.
+
+**In the app**: Settings, Emulation, Performance, "PSP Drawing Threads": Auto (all the device's cores but one, the
+owner's default), 1, 2, 4, 6 or 8, handed to the core as "GE Threads" as a game loads (`PspDrawingThreads` in
+util/PspVideo.kt, PhobosRunner.cpp); the log says what it handed over.
+
+**Peace Walker's stripes were the presentation.** On the RP6 the app handed Android each 480x272 frame as a window
+buffer of that size, and the compositor scaled it to the view, 1906x1080 sideways (3.97 times), bilinearly: the
+screenshot's rows step smoothly from one to the next, where nearest-neighbour would repeat each row 3 or 4 times.
+Each of the title's one-pixel lines became a soft band, its strength drifting as its middle fell on or between the
+screen's rows, which looked striped. The PSP's picture now goes into the window at the whole multiple of its size
+nearest the view's, each pixel repeated (4 times sideways: 1920x1088, which the compositor makes 0.993 as big; 2
+times upright; with the aspect setting "Integer Scaled", exactly the view's size), so the compositor's own scaling is
+slight: each line is 3 even rows and a blended one, sharp, all down the screen ("sharp bilinear"; util/PspVideo.kt's
+`pictureMultiple()`, and PhobosRunner's `video()` for PSP frames alone). "Integer Scaled" (the pause menu's aspect
+setting) gives even lines too, 3 times as big (1440x816) and smaller on the screen. Screenshots before and after,
+outside the repository: `/tmp/gefix-device/pw-before.png`, `pw-after-25s.png` (the same moment of the title) and
+their crops in `crops/`.
+
+**On the RP6** (installed over the app, data kept; each game launched from its CHD, a screenshot of the performance
+overlay after about 40 seconds, then stopped), frames a second before (the fonts' build, without this part) and
+after: Peace Walker's title 10.6 -> 60.0 (also 60 at 15, 25 and 35 seconds), GTA Liberty City Stories in the city
+16.6 -> 60.0, Lumines' demo 24.0 -> 59.9, Burnout Legends' title 60 -> 60 (it stays on its title without a press, so
+it says little). Before tonight's work: GTA 17.7 and Peace Walker 9.5 (this part's opening), Lumines about 40.
+
+Checks: tests/psp 226 groups with the address and undefined-behavior sanitizers (the comparison with the owner's PSP
+the same, line for line), and under ThreadSanitizer, nothing reported; tests/psp/ares 274 checks; the app's 262
+unit tests, and its release build.
 
 **What's still slow, and next:**
 
