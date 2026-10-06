@@ -145,7 +145,7 @@ Round 1 was run again in the same session: all 26 of its result files came out i
 
 **In the repository:** [`tests/allegrex/measured/`](../tests/allegrex/measured/) has `manifest2.txt`, `ops.txt` (the
 recorder's entries) and the SHA-256 of all 18 files (`SHA256SUMS2`). The files themselves are kept outside the
-repository, like round 1's big files.
+repository, like round 1's big files, but for `ipu-divide.bin` (packed with xz, 100 KB), which the host tests replay.
 
 ### Results
 
@@ -179,7 +179,8 @@ least one.
 - **`vh2f` and `vf2h` are exactly what the core does:** every half float, and every one of the million floats.
 - **Division by zero doesn't trap, and gives fixed results:** `div` gives LO -1 for a dividend of 0 or more and +1
   for a negative one, `divu` gives LO 0x0000ffff for a dividend below 0x10000 and 0xffffffff otherwise; HI is the
-  dividend for both. The core has `divu`'s LO always 0xffffffff, which is the 11 differences above.
+  dividend for both. The core had `divu`'s LO always 0xffffffff, which is the 11 differences above; it follows the
+  PSP now, and the host tests replay all 8192 pairs.
 - **The FPU stops the PSP on some inputs.** `fpu-convert` (`cvt.w.s`, `round.w.s`, `trunc.w.s`, `ceil.w.s` and
   `floor.w.s` in each rounding mode) and `fpu-arith` (`add.s`, `sub.s`, `mul.s`, `div.s`, `sqrt.s`) each switched
   the PSP off twice, at 333 MHz and at the "auto" clock alike, and neither wrote a result. Both start with special
@@ -201,8 +202,9 @@ least one.
     gives M100 × M000. `vtfm` and `vhtfm` dot each column of the matrix with the vector, where the core dots each
     row. All of the PSP's finite results fit these (up to rounding). Both are what the core would give if it read
     matrix operands the other way round (bit 5, transposed, taken the opposite way), which changes nothing for moves
-    and element-wise instructions: the first fix to try. These entries differ in 59 to 64 of their 64 runs, and as
-    games transform vertices with `vtfm`, they matter most.
+    and element-wise instructions. These entries differed in 59 to 64 of their 64 runs, and as games transform
+    vertices with `vtfm`, they mattered most. **Fixed:** the core computes all three as the PSP does now, and every
+    run without a NaN or infinity among its inputs matches, up to the adders' rounding.
   - **NaN results:** in 100 entries the PSP gives its own NaN (`0x7f800001`, or `0xff800001`) where the core doesn't.
     In 43 the core passes another NaN through: `vocp`, `vscl`, `vmscl`, `vhdp`, `vdet`, `vcrs`, `vqmul`, `vbfy1`,
     `vbfy2`, `vfad`, `vavg`, `vmmul`, `vhtfm4` and 20 prefixed entries. In 57 it gives a number: `vrot` (46
@@ -224,9 +226,9 @@ least one.
 
 ## Next
 
-- From round 2, in this order: the matrix operands' orientation (`vmmul`, `vtfm`, `vhtfm`); `divu`'s LO by zero; NaN
-  results, kept denormals and NaNs in comparisons, across the instructions above; the prefix differences (one entry
-  at a time, against `ops.bin`); then `vlog2` above 4, and the adders' model.
+- From round 2, in this order (the matrix operands' orientation and `divu`'s LO by zero are done): NaN results, kept
+  denormals and NaNs in comparisons, across the instructions above; the prefix differences (one entry at a time,
+  against `ops.bin`); then `vlog2` above 4, and the adders' model.
 - The FPU: a probe that tries one kind of value at a time, to find what the PSP refuses; then the FPU tests without
   them.
 

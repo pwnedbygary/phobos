@@ -800,15 +800,15 @@ auto Allegrex::VHDP(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
 
-//vhtfm2-4: vtfm for a point one lane short, as if its missing last lane were 1, so each result also gets the
-//matrix row's last element. The size is the matrix's.
+//vhtfm2-4: vtfm for a point one lane short, as if its missing last lane were 1, so each result also gets the last
+//element of the matrix's column. The size is the matrix's.
 auto Allegrex::VHTFM(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto m = vfpuReadMatrix(vs, size);
   auto t = vfpuRead(vt, size - 1, PrefixIdentity);
   Vector d{};
   for(u32 i : range(size)) {
-    f64 sum = vfpuFloat(m.element[size * i + size - 1]);
-    for(u32 k : range(size - 1)) sum += (f64)vfpuFloat(m.element[size * i + k]) * vfpuFloat(t.lane[k]);
+    f64 sum = vfpuFloat(m.element[size * (size - 1) + i]);
+    for(u32 k : range(size - 1)) sum += (f64)vfpuFloat(m.element[size * k + i]) * vfpuFloat(t.lane[k]);
     d.lane[i] = vfpuBits(sum);
   }
   vfpuWrite(vd, size, d, 0);
@@ -914,8 +914,10 @@ auto Allegrex::VMMOV(u8 vd, u8 vs, u32 size) -> void {
   vfpuWriteMatrix(vd, size, vfpuReadMatrix(vs, size));
 }
 
-//vmmul: a matrix multiplication in the order pspdev's documentation gives: rd[r][c] = the sum over k of
-//rs[c][k] * rt[r][k]. (With rs transposed, as compilers write it, that's the usual product.)
+//vmmul: a matrix multiplication, rd[r][c] = the sum over k of rs[k][r] * rt[k][c]: rs turned on its side (its
+//columns taken as rows) times rt. That's what a PSP does (measured, docs/psp-vfpu-measurements.md, round 2; not the
+//order pspdev's documentation gives), and why pspdev's assembler sets rs's transpose bit itself: written
+//"vmmul.q M200, M000, M100", it multiplies M000 by M100, the C registers being the matrices' columns.
 auto Allegrex::VMMUL(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   if(size == 1) return INVALID();
   auto s = vfpuReadMatrix(vs, size);
@@ -924,7 +926,7 @@ auto Allegrex::VMMUL(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   for(u32 r : range(size)) {
     for(u32 c : range(size)) {
       f64 sum = 0;
-      for(u32 k : range(size)) sum += (f64)vfpuFloat(s.element[c * size + k]) * vfpuFloat(t.element[r * size + k]);
+      for(u32 k : range(size)) sum += (f64)vfpuFloat(s.element[k * size + r]) * vfpuFloat(t.element[k * size + c]);
       d.element[r * size + c] = vfpuBits(sum);
     }
   }
@@ -1230,15 +1232,17 @@ auto Allegrex::VT5650(u8 vd, u8 vs, u32 size) -> void {
   vfpuWrite(vd, 2, d, vfpu.pfxd);
 }
 
-//vtfm2-4: a vector transformed by a matrix: each result lane is a row of the matrix dotted with rt. This is how
-//vertices are moved, rotated and projected. The size is the matrix's.
+//vtfm2-4: a vector transformed by a matrix: result lane i is the matrix's column i (its C register) dotted with rt,
+//as a PSP does it (measured, docs/psp-vfpu-measurements.md, round 2). So a matrix whose columns are in C registers
+//transforms by its transpose, and naming it transposed (E000 for M000) gives the usual matrix-times-vector. This is
+//how vertices are moved, rotated and projected. The size is the matrix's.
 auto Allegrex::VTFM(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto m = vfpuReadMatrix(vs, size);
   auto t = vfpuRead(vt, size, PrefixIdentity);
   Vector d{};
   for(u32 i : range(size)) {
     f64 sum = 0;
-    for(u32 k : range(size)) sum += (f64)vfpuFloat(m.element[size * i + k]) * vfpuFloat(t.lane[k]);
+    for(u32 k : range(size)) sum += (f64)vfpuFloat(m.element[size * k + i]) * vfpuFloat(t.lane[k]);
     d.lane[i] = vfpuBits(sum);
   }
   vfpuWrite(vd, size, d, 0);

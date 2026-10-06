@@ -133,13 +133,15 @@ auto multiplyDivide() -> void {
   CHECK(d.gpr(s3), 1);
 
   Machine zeroDivisor;
-  zeroDivisor.run({div_(t0, zero), mflo(s0), mfhi(s1), div_(t1, zero), mflo(s2), divu(t0, zero), mflo(s3), mfhi(s4)},
-                  [](Allegrex& s) { s.ipu.r[t0] = 5; s.ipu.r[t1] = (uint32_t)-5; });
+  zeroDivisor.run({div_(t0, zero), mflo(s0), mfhi(s1), div_(t1, zero), mflo(s2), divu(t0, zero), mflo(s3), mfhi(s4),
+                   divu(t2, zero), mflo(s5)},
+                  [](Allegrex& s) { s.ipu.r[t0] = 5; s.ipu.r[t1] = (uint32_t)-5; s.ipu.r[t2] = 0x10000; });
   CHECK(zeroDivisor.gpr(s0), 0xffffffff);
   CHECK(zeroDivisor.gpr(s1), 5);
   CHECK(zeroDivisor.gpr(s2), 1);
-  CHECK(zeroDivisor.gpr(s3), 0xffffffff);
+  CHECK(zeroDivisor.gpr(s3), 0x0000ffff);  //divu: 0xffff for a dividend below 0x10000, as a PSP gives
   CHECK(zeroDivisor.gpr(s4), 5);
+  CHECK(zeroDivisor.gpr(s5), 0xffffffff);  //and all ones from 0x10000 up
 
   Machine overflowing;
   overflowing.run({div_(t0, t1), mflo(s0), mfhi(s1)},

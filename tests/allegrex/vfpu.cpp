@@ -315,36 +315,50 @@ auto functions() -> void {
 }
 
 auto matrices() -> void {
-  //vmidt.q gives the identity; vmmul.q follows the documented order, rd[r][c] = sum of rs[c][k] * rt[r][k];
-  //vtfm4 and vhtfm4 transform by a matrix's rows.
+  //vmidt.q gives the identity. vmmul, vtfm and vhtfm as a PSP computes them (measured, docs/psp-vfpu-measurements.md,
+  //round 2): vmmul.q's rd[r][c] = sum of rs[k][r] * rt[k][c], rs turned on its side times rt; vtfm4 and vhtfm4 dot
+  //the matrix's columns with the vector. Matrix 2 isn't symmetric, so the order of the product shows.
+  auto setup = [](Allegrex& s) {
+    for(uint32_t r = 0; r < 4; r++) {
+      for(uint32_t c = 0; c < 4; c++) {
+        s.vfpu.r[4 + c + 32 * r] = bits((float)(r * 4 + c + 1));                    //matrix 1: 1..16 by rows
+        s.vfpu.r[8 + c + 32 * r] = bits(r == c ? 2.0f : c == r + 1 ? 1.0f : 0.0f);   //matrix 2: 2s, 1s right of them
+      }
+    }
+    setQuad(s, Rw(5, 0), {1.0f, 0.0f, 0.0f, 1.0f});
+  };
+  auto m1 = [](uint32_t r, uint32_t c) { return (float)(r * 4 + c + 1); };
   Machine m;
   m.run({alu(Vmatrix, 4, M(0), 0, Vidt), alu(Vmmul, 4, M(3), M(1), M(2)), alu(Vtfm4, 4, Rw(4, 0), M(1), Rw(5, 0)),
          alu(Vtfm4, 3, Rw(4, 1), M(1), Rw(5, 0)), alu(Vmscl, 2, M(6), M(1), S(5, 0, 0)),
          alu(Vmatrix, 3, M(7), 0, Vone), alu(Vmatrix, 2, M(7), 0, Vzero)},
-        [](Allegrex& s) {
-          for(uint32_t r = 0; r < 4; r++) {
-            for(uint32_t c = 0; c < 4; c++) {
-              s.vfpu.r[4 + c + 32 * r] = bits((float)(r * 4 + c + 1));      //matrix 1: 1..16 by rows
-              s.vfpu.r[8 + c + 32 * r] = bits(r == c ? 2.0f : 0.0f);        //matrix 2: twice the identity
-            }
-          }
-          setQuad(s, Rw(5, 0), {1.0f, 0.0f, 0.0f, 1.0f});
-        });
+        setup);
   for(uint32_t r = 0; r < 4; r++) {
     for(uint32_t c = 0; c < 4; c++) {
       CHECK(m.cpu.vfpu.r[c + 32 * r], bits(r == c ? 1.0f : 0.0f));
-      //rd[r][c] = sum over k of m1[c][k] * 2 * id[r][k] = 2 * m1[c][r]
-      CHECK(m.cpu.vfpu.r[12 + c + 32 * r], bits(2.0f * (float)(c * 4 + r + 1)));
+      //rd[r][c] = sum over k of m1[k][r] * m2[k][c] = 2 * m1[c][r] + m1[c - 1][r]
+      CHECK(m.cpu.vfpu.r[12 + c + 32 * r], bits(2.0f * m1(c, r) + (c ? m1(c - 1, r) : 0.0f)));
     }
   }
-  const float transformed[] = {1 + 4, 5 + 8, 9 + 12, 13 + 16};
+  //each lane: a column of matrix 1, (i + 1, i + 5, i + 9, i + 13), dotted with (1, 0, 0, 1)
+  const float transformed[] = {1 + 13, 2 + 14, 3 + 15, 4 + 16};
   for(uint32_t k = 0; k < 4; k++) CHECK(m.cpu.vfpu.r[16 + k], bits(transformed[k]));
-  //vhtfm4 (size field t): rows dotted with (1, 0, 0) plus their last element, the same here
+  //vhtfm4 (size field t): columns dotted with (1, 0, 0) plus their last element, the same here
   for(uint32_t k = 0; k < 4; k++) CHECK(m.cpu.vfpu.r[16 + k + 32], bits(transformed[k]));
   CHECK(m.cpu.vfpu.r[24 + 0], bits(1.0f));   //vmscl.p M600 = M100 * 1
   CHECK(m.cpu.vfpu.r[24 + 1 + 32], bits(6.0f));
   CHECK(m.cpu.vfpu.r[28 + 0], bits(0.0f));   //vmone.t then vmzero.p
   CHECK(m.cpu.vfpu.r[28 + 2 + 64], bits(1.0f));
+
+  //Encoded as pspdev's assembler encodes "vmmul.q M300, M100, M200" (it sets rs's transpose bit), the product is
+  //matrix 1 times matrix 2: rd[r][c] = 2 * m1[r][c] + m1[r][c - 1].
+  Machine product;
+  product.run({alu(Vmmul, 4, M(3), E(1), M(2))}, setup);
+  for(uint32_t r = 0; r < 4; r++) {
+    for(uint32_t c = 0; c < 4; c++) {
+      CHECK(product.cpu.vfpu.r[12 + c + 32 * r], bits(2.0f * m1(r, c) + (c ? m1(r, c - 1) : 0.0f)));
+    }
+  }
 
   //A transposed operand reads columns where the plain one reads rows.
   Machine transposed;
