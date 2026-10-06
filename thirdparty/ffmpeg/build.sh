@@ -134,7 +134,10 @@ PREFIX=$CACHE/$NAME
 LOG=$CACHE/$NAME.log
 
 #Two builds of the app (its flavors) may configure at once: one builds, the other waits for it. The lock holds its
-#build's process ID and host; a lock whose process is gone (a build killed part way) is taken over.
+#build's process ID and host; a lock whose process is gone (a build killed part way) is taken over. Taking over is
+#marked by a folder made in that lock (mkdir: of builds trying at once, one makes it), and the one that made it looks
+#once more that the lock is still the dead build's: a lock made afresh meanwhile (one that took over first, whose
+#owner is alive or not yet written) is left alone, its mark removed.
 LOCK=$CACHE/$NAME.lock
 DOWNLOAD=
 cleanup() { rm -rf "$LOCK"; if [[ -n $DOWNLOAD ]]; then rm -f "$DOWNLOAD"; fi; }
@@ -144,11 +147,13 @@ for ((wait = 0; ; wait++)); do
     break
   fi
   OWNER=$(cat "$LOCK/owner" 2>/dev/null || true)
-  if [[ -n $OWNER && ${OWNER#* } == "$(uname -n)" ]] && ! ps -p "${OWNER%% *}" >/dev/null 2>&1; then
-    #(looked at again just before: another build may have taken it over already)
-    if [[ $(cat "$LOCK/owner" 2>/dev/null || true) == "$OWNER" ]]; then
+  gone() { [[ -n $1 && ${1#* } == "$(uname -n)" ]] && ! ps -p "${1%% *}" >/dev/null 2>&1; }
+  if gone "$OWNER" && mkdir "$LOCK/takeover" 2>/dev/null; then
+    if [[ $(cat "$LOCK/owner" 2>/dev/null || true) == "$OWNER" ]] && gone "$OWNER"; then
       echo "FFmpeg: taking over $LOCK from process ${OWNER%% *}, which has gone" >&2
       rm -rf "$LOCK"
+    else
+      rmdir "$LOCK/takeover" 2>/dev/null || true
     fi
     continue
   fi
