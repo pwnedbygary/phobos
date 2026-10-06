@@ -868,6 +868,37 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP tools: the GE's third round — 2026-10-04
+
+Branch `cursor/psp-ge-round3-2b67`, stacked on `cursor/psp-measure-menu-2b67` (for stack #106). tools/psp-measure
+gets "Round 3: the GE" on its menu (ge.c's round3, about 7 MB into results/ge, `manifest3.txt`), for what round 2
+left open (docs/psp-core.md, "Round 3, ready for the PSP"):
+- lighting with exact cosines, from normals built of Pythagorean triples and quadruples (also scaled by 2, 1/2, 64
+  and 1/64 and turned toward y; the light's direction 1 and 3 long): plain diffuse (`light-cosines`), powered
+  diffuse (`light-powered`: the GE's light kind 2, which `sceGuLight` sends for `GU_POWERED_DIFFUSE`; round 2's
+  diffuse cases were kind 0, as `GU_DIFFUSE` gives, checked in pspsdk's disassembly), and the shine
+  (`light-shine`), at powers 1 and 2; material, light and ambient levels (`light-materials`, `light-colors`,
+  `light-ambient`);
+- `ramp-colors`, `ramp-colors-vertical`, `ramp-colors-3d` (corners between pixels) and `ramp-fog` (w kept at 1):
+  16 slopes each;
+- `3d-rounding-middle` (edges 0 to 15 256ths past the pixel middle: truncated or rounded), `3d-wall-texels`
+  (perspective along x), `3d-sprite-fog`, `3d-sprite-texels`, `3d-sprite-flat`;
+- `bezier-flat`, `bezier-curved`, `bezier-divide-8`, `spline-edges-0`, `spline-edges-3` (the core doesn't draw
+  curves yet);
+- `depth-layout-0` to `-3`: a 256x64 area of depths y * 256 + x, the whole depth buffer (512x256 values) read back
+  through each of VRAM's copies, last in the round.
+
+The host test runs round 3 in the core too (every file written; the curves empty). Against PPSSPP's software
+renderer (the SMOKE build), the core matches on the six lighting cases, the flat sprite and the four depth reads,
+and differs on the ramps, the 3D edges, the wall, the sprite's fog and texels, and the curves.
+- **Checks:** `make` and `make SMOKE=1`, no warnings; the SMOKE build in PPSSPPHeadless writes all 24 round-3 files
+  (and round 2's, unchanged); PSP host tests 85 groups, 0 failures, still 52 of 63 round-2 pictures as the PSP's.
+  Review: a general-purpose reviewer (eight low findings, all fixed: the depth case now sets its own depth range and
+  reads the whole depth buffer, the host test says when the reference lacks a file, `GU_POWERED_DIFFUSE` by name,
+  wording and widths), then delta reviews (one more width finding, fixed; then no findings).
+- **Not checked:** anything on a PSP: that's the user's next session (round 3's VFPU and GE lines, then the
+  probes).
+
 ## PSP tools: one measuring program, with a menu — 2026-10-04
 
 Branch `cursor/psp-measure-menu-2b67`, stacked on `cursor/psp-vfpu-round3-2b67` (for stack #106). At the user's

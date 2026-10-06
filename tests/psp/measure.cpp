@@ -1,10 +1,10 @@
 //tools/psp-measure's program (see its main.c) in Phobos's core, driven through its menu as a person would. With
 //PSP_TEST_PROGRAMS holding pspmeasure.elf, its GE tests must run to the end and write every file, start afresh (the
-//first files kept in results-1), run again and draw the same, skip what's done on a third run, and the FPU probes
-//must run; then it must leave. With PSP_GE_RESULTS set to the results folder (results/ge) a real PSP (or another
-//emulator) wrote, each file is compared with that folder's, and what differs is listed rather than failed: finding
-//it is what the program is for. PSP_GE_OURS, when set, is a folder this core's files are copied to, for a closer
-//look.
+//first files kept in results-1), run again and draw the same, and skip what's done on a third run; the GE's round
+//3 and the FPU probes must write theirs; then it must leave. With PSP_GE_RESULTS set to the results folder
+//(results/ge) a real PSP (or another emulator) wrote, each file is compared with that folder's, and what differs is
+//listed rather than failed: finding it is what the program is for. PSP_GE_OURS, when set, is a folder this core's
+//files are copied to, for a closer look.
 #include "kernel-machine.hpp"
 
 #include <cstdlib>
@@ -36,6 +36,18 @@ static const MeasureFile measureFiles[] = {
   {"3d-clip", 256, 256}, {"3d-clip-unclamped", 256, 256}, {"3d-rules", 256, 32}, {"3d-cull", 64, 64},
   {"light-diffuse", 256, 256}, {"light-specular", 256, 256}, {"light-spot", 256, 256}, {"light-point", 256, 256},
   {"light-environment", 256, 256}, {"controller-timing", 48, 1},
+};
+
+//Round 3's (the depth-layout-* files are the whole 512x256 depth buffer, read through VRAM's four copies).
+static const MeasureFile measureFiles3[] = {
+  {"light-cosines", 256, 256}, {"light-powered", 256, 256}, {"light-shine", 256, 256},
+  {"light-materials", 256, 256}, {"light-colors", 256, 256}, {"light-ambient", 256, 256},
+  {"ramp-colors", 256, 256}, {"ramp-colors-vertical", 256, 256}, {"ramp-colors-3d", 256, 256},
+  {"ramp-fog", 256, 256}, {"3d-rounding-middle", 256, 256}, {"3d-wall-texels", 256, 256},
+  {"3d-sprite-fog", 256, 256}, {"3d-sprite-texels", 256, 256}, {"3d-sprite-flat", 256, 256},
+  {"bezier-flat", 256, 256}, {"bezier-curved", 256, 256}, {"bezier-divide-8", 256, 256},
+  {"spline-edges-0", 256, 256}, {"spline-edges-3", 256, 256}, {"depth-layout-0", 512, 256},
+  {"depth-layout-1", 512, 256}, {"depth-layout-2", 512, 256}, {"depth-layout-3", 512, 256},
 };
 
 static auto readWords(const std::filesystem::path& path) -> std::vector<u32> {
@@ -93,7 +105,7 @@ static const char* probeFiles[] = {
 };
 
 //The menu's lines (tools/psp-measure/main.c), counted from the top, and the buttons that move through it.
-enum : u32 { ProbesLine = 1, GeRound2Line = 3, AfreshLine = 5, LeaveLine = 6 };
+enum : u32 { GeRound3Line = 1, ProbesLine = 2, GeRound2Line = 4, AfreshLine = 6, LeaveLine = 7 };
 enum : u32 { Up = 0x0010, Down = 0x0040, Cross = 0x4000 };
 
 //Presses buttons as a person would, times over: let go for ten frames (the program waits for every button to be let
@@ -155,8 +167,13 @@ static auto pspMeasure() -> void {
   waitFor(m, 120, [] { return false; });
   CHECK(std::filesystem::last_write_time(results / "blend-source.bin") == written, true);
   press(m, Cross);
+  //the GE's round 3 (the curved surfaces stay empty: the core doesn't draw them yet)
+  move(m, GeRound2Line, GeRound3Line);
+  press(m, Cross);
+  CHECK(waitFor(m, 3000, exists(results / "depth-layout-3.bin")), true);
+  press(m, Cross);
   //the FPU probes
-  move(m, GeRound2Line, ProbesLine);
+  move(m, GeRound3Line, ProbesLine);
   press(m, Cross);
   CHECK(waitFor(m, 600, exists(vfpu / "probe-cvt-denormal-fs.bin")), true);
   press(m, Cross);
@@ -168,17 +185,33 @@ static auto pspMeasure() -> void {
   const char* reference = std::getenv("PSP_GE_RESULTS");
   const char* copy = std::getenv("PSP_GE_OURS");
   if(copy) std::filesystem::create_directories(copy);
+  //each file against the reference's; one the reference lacks is said to be missing (one given up on there, say),
+  //but for round 3's when the reference has none of round 3 (its manifest3.txt), as a PSP that hasn't run it
+  bool referenceRound3 = reference && std::filesystem::exists(std::filesystem::path(reference) / "manifest3.txt");
+  auto look = [&](const MeasureFile& file, const std::vector<u32>& ours, bool expected) {
+    std::string name = std::string(file.name) + ".bin";
+    if(reference && std::filesystem::exists(std::filesystem::path(reference) / name)) {
+      describe(file, ours, readWords(std::filesystem::path(reference) / name));
+    } else if(reference && expected) {
+      std::printf("  %-24s not in the reference\n", file.name);
+    }
+    if(copy && std::filesystem::exists(results / name)) {
+      std::filesystem::copy_file(results / name, std::filesystem::path(copy) / name,
+                                 std::filesystem::copy_options::overwrite_existing);
+    }
+  };
   for(auto& file : measureFiles) {
     std::string name = std::string(file.name) + ".bin";
     auto ours = readWords(results / name);
     CHECK(ours.size(), file.width * file.height);
     //the second run drew what the first did (but the controller's timing, which is measured)
     if(file.height > 1) CHECK(readWords(kept / name) == ours, true);
-    if(reference) describe(file, ours, readWords(std::filesystem::path(reference) / name));
-    if(copy && std::filesystem::exists(results / name)) {
-      std::filesystem::copy_file(results / name, std::filesystem::path(copy) / name,
-                                 std::filesystem::copy_options::overwrite_existing);
-    }
+    look(file, ours, true);
+  }
+  for(auto& file : measureFiles3) {
+    auto ours = readWords(results / (std::string(file.name) + ".bin"));
+    CHECK(ours.size(), file.width * file.height);
+    look(file, ours, referenceRound3);
   }
   for(auto name : probeFiles) CHECK(readWords(vfpu / (std::string(name) + ".bin")).size(), 4);
 
