@@ -3,7 +3,8 @@
 //release comes down to 0, and the end flags refreshed by __sceSasCore; in a program on both engines too; playing
 //voices given new samples; and what the voices sound like: VAG blocks decoded to the samples the format's
 //definition gives and the PSP recorded, PCM voices at their pitches, volumes, envelopes, the output modes, mixing
-//into the game's buffer. Each group's machine, saved at its end, loads into another that makes the same state.
+//into the game's buffer; and grains refused where a thread can't wait. Each group's machine, saved at its end, loads
+//into another that makes the same state.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -318,6 +319,62 @@ static auto sasVoicesEnd() -> void {
     CHECK(m.system.memory.read(4, R), others | 1 << 0 | 1 << 3);
     CHECK(m.system.memory.read(4, R + 4), others | 1 << 0 | 1 << 2 | 1 << 3);
     CHECK(m.system.memory.read(4, R + 8), others | 1 << 0 | 1 << 2 | 1 << 3);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
+//A grain where a thread can't wait is refused, as pspautotests' intr/delays recorded __sceSasCore on a PSP: with
+//interrupts held off and with dispatching held off, CAN_NOT_WAIT, and in a vertical blank's handler, ILLEGAL_CONTEXT;
+//__sceSasCoreWithMix alike. Nothing moves: the PCM voice keyed on is where one grain made after them all leaves it,
+//224 of its 300 samples in (after the 32 it waits), still playing. (The grains had been made: seven of them, which
+//ended it in the second.) On both engines.
+static auto sasRefusedWhereNoWait() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto call = [&](Assembler& a, const char* name, std::initializer_list<u32> arguments, u32 into = 0) {
+      u32 n = 0;
+      for(u32 value : arguments) a.li(n < 4 ? a0 + n : t0 + n - 4, value), n++;
+      a.call(name);
+      if(!into) return;
+      a.li(t0, into);
+      a.put(sw(v0, 0, t0));
+    };
+    Assembler handler{m, 0x0880'3000};
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp));
+    call(handler, "__sceSasCore", {Core, Out}, R + 0x10);
+    call(handler, "__sceSasCoreWithMix", {Core, Out, 0x1000, 0x1000}, R + 0x14);
+    handler.put(lw(ra, 12, sp)); handler.put(addiu(sp, sp, 16));
+    handler.li(v0, 0); handler.put(jr(ra)); handler.put(nop);
+    Assembler main{m, 0x0880'1000};
+    call(main, "__sceSasInit", {Core, 256, 32, 0, 44100});
+    call(main, "__sceSasSetVoicePCM", {Core, 0, Samples, 300, u32(-1)});
+    call(main, "__sceSasSetADSR", {Core, 0, 15, 0x1000, 0, 0, 0});
+    call(main, "__sceSasSetKeyOn", {Core, 0});
+    for(bool dispatch : {false, true}) {
+      main.call(dispatch ? "sceKernelSuspendDispatchThread" : "sceKernelCpuSuspendIntr");
+      main.put(addu(s1, v0, zero));
+      call(main, "__sceSasCore", {Core, Out}, R + dispatch * 8);
+      call(main, "__sceSasCoreWithMix", {Core, Out, 0x1000, 0x1000}, R + dispatch * 8 + 4);
+      main.put(addu(a0, s1, zero));
+      main.call(dispatch ? "sceKernelResumeDispatchThread" : "sceKernelCpuResumeIntr");
+    }
+    call(main, "sceKernelRegisterSubIntrHandler", {30, 0, 0x0880'3000, 0});
+    call(main, "sceKernelEnableSubIntr", {30, 0});
+    main.call("sceDisplayWaitVblankStart");
+    call(main, "sceKernelReleaseSubIntrHandler", {30, 0});
+    call(main, "__sceSasCore", {Core, Out}, R + 0x18);
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    for(u32 offset : {0x00u, 0x04u, 0x08u, 0x0cu}) {
+      CHECK(m.system.memory.read(4, R + offset), Kernel::ErrorCanNotWait);
+    }
+    CHECK(m.system.memory.read(4, R + 0x10), Kernel::ErrorIllegalContext);
+    CHECK(m.system.memory.read(4, R + 0x14), Kernel::ErrorIllegalContext);
+    CHECK(m.system.memory.read(4, R + 0x18), 0);
+    CHECK(m.kernel.sas.voices[0].playing, true);
+    CHECK(m.kernel.sas.voices[0].position, u64(224) << 12);
     CHECK(m.notes.size(), 0);
     CHECK(roundTrip(m), true);
   }
@@ -731,7 +788,8 @@ auto sasTests() -> Tests {
           {"sas voices given new samples", sasNewSamples}, {"sas vag as recorded", sasVagRecorded},
           {"sas vag decoded", sasVagDecoded}, {"sas vag endings", sasVagEndings}, {"sas pcm heard", sasPcmHeard},
           {"sas output modes", sasOutputModes}, {"sas voices mixed", sasMixed},
-          {"sas voices in states", sasVoicesInStates}};
+          {"sas voices in states", sasVoicesInStates},
+          {"sas core refused where no thread may wait", sasRefusedWhereNoWait}};
 }
 
 }
