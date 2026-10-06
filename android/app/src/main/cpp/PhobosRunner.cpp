@@ -1,20 +1,26 @@
 #include "PhobosRunner.hpp"
-#include "vfs_android.hpp"
+#include "PhobosHost.hpp"
 #include <mia/mia.hpp>
 #include <android/log.h>
-#include <android/native_window.h>
+#if defined(__ANDROID__)
+#include "vfs_android.hpp"
 #include <android/native_window_jni.h>
-#include <aaudio/AAudio.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <arm_neon.h>
-#include <pthread.h>
-#include <sched.h>
 #include <sys/auxv.h>
 #if defined(__aarch64__)
 #include <asm/hwcap.h>
 #endif
-#include <dlfcn.h>
+#endif
+#include <fcntl.h>
+#include <unistd.h>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+#include <pthread.h>
+#include <sched.h>
+#if defined(_WIN32)
+#include <io.h>
+#include <filesystem>
+#endif
 #include <mutex>
 #include <memory>
 #include <thread>
@@ -48,7 +54,6 @@
 #include <ws/ws.hpp>
 
 #include <nall/encode/png.hpp>
-#include <adrenotools/driver.h>
 
 using namespace nall;
 using namespace nall::primitives;
@@ -152,9 +157,7 @@ namespace ares {
   static bool msxDataTapeIn = false;
   static u64 msxGameTapePosition = 0;
   static std::atomic<bool> firstFrameRendered{false};
-  static ANativeWindow* nativeWindow = nullptr;
-  static AAudioStream* audioStream = nullptr;
-  // audioStream != nullptr, readable without audioMutex (audio() runs per sample).
+  // The host's audio device is open; readable without audioMutex (audio() runs per sample).
   static std::atomic<bool> audioStreamOpen{false};
   // Base name (no extension) of the currently loaded ROM — used to key the
   // per-game save files on disk (saves/<System>/<RomName>.save.ram etc.) so
@@ -236,21 +239,20 @@ namespace ares {
       }
       if (chunk.empty()) continue;
 
-      AAudioStream* stream = nullptr;
+      bool open;
       {
         std::lock_guard<std::mutex> lock(audioMutex);
-        stream = audioStream;
+        open = phobos::host::audioOpen();
       }
       // Paused/closed: drop queued audio so stale samples never pop on resume.
-      if (!stream || isPausedAtomic.load()) continue;
+      if (!open || isPausedAtomic.load()) continue;
 
       s32 total = (s32)chunk.size() / 2;
       s32 written = 0;
-      // Blocking write is fine here (dedicated thread); 20ms cap per call so
-      // a wedged stream can't hang the thread forever.
+      // Blocking write is fine here (dedicated thread); the host caps each call
+      // at 20ms so a wedged stream can't hang the thread forever.
       while (written < total) {
-        s32 result = AAudioStream_write(stream, chunk.data() + written * 2,
-            total - written, 20'000'000);
+        s32 result = phobos::host::writeAudio(chunk.data() + written * 2, total - written);
         if (result > 0) written += result;
         else break; // stream stopped or error: drop the remainder
       }
@@ -260,11 +262,7 @@ namespace ares {
       auto diagElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(nowDiag - diagStart).count();
       if (diagElapsed >= 1000) {
         diagStart = nowDiag;
-        s64 xruns = 0;
-        if (stream) {
-          s64 count = AAudioStream_getXRunCount(stream);
-          if (count >= 0) xruns = count;
-        }
+        s64 xruns = phobos::host::audioUnderruns();
         s64 newXruns = xruns - lastXruns;
         lastXruns = xruns;
         LOGI("AudioDiag: ring=%zu/%zu (%.0f%%) xruns+%lld (total %lld) trim=%+.3f%%",
@@ -900,7 +898,7 @@ namespace ares {
   // used for N64, whose frames take a large share of the frame period.
   static auto waitUntil(std::chrono::steady_clock::time_point deadline, bool spin) -> void {
     if (!spin) return std::this_thread::sleep_until(deadline);
-    #if defined(__aarch64__)
+    #if defined(__aarch64__) && defined(__ANDROID__)
     // WFE clock-gates the core while the thread keeps running, so Android still sees a busy core.
     // Only the kernel's timer event stream (every 100 us) guarantees a wake-up; the last 200 us spin.
     static const bool eventStream = (getauxval(AT_HWCAP) & HWCAP_EVTSTRM) != 0;
@@ -1184,12 +1182,23 @@ namespace ares {
     directory::create(ps1MemoryCardDir);
     string path = {ps1MemoryCardDir, ps1MemoryCardFile(port)};
     string temp = {path, ".tmp"};
-    s32 fd = ::open((const char*)temp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return false;
-    bool ok = ::write(fd, data.data(), data.size()) == (ssize_t)data.size();
-    ok = ::fsync(fd) == 0 && ok;
-    ::close(fd);
-    if (!ok || ::rename((const char*)temp, (const char*)path) != 0) {
+    FILE* file = fopen((const char*)temp, "wb");
+    if (!file) return false;
+    bool ok = fwrite(data.data(), 1, data.size(), file) == data.size();
+    ok = fflush(file) == 0 && ok;
+    #if defined(_WIN32)
+    ok = _commit(_fileno(file)) == 0 && ok;
+    fclose(file);
+    // rename() refuses to replace an existing file on Windows; std::filesystem::rename replaces it.
+    std::error_code error;
+    if (ok) std::filesystem::rename((const char*)temp, (const char*)path, error);
+    ok = ok && !error;
+    #else
+    ok = fsync(fileno(file)) == 0 && ok;
+    fclose(file);
+    ok = ok && ::rename((const char*)temp, (const char*)path) == 0;
+    #endif
+    if (!ok) {
       ::unlink((const char*)temp);
       LOGE("Saves: couldn't write PS1 memory card %u (%s)", port + 1, (const char*)path);
       return false;
@@ -1288,9 +1297,8 @@ namespace ares {
   static std::vector<std::pair<pthread_t, std::shared_ptr<std::atomic<bool>>>> zombieThreads;
 
   auto emulationLoop(u32 generation) -> void {
-    #if defined(ANDROID)
+    #if defined(__ANDROID__)
     setpriority(PRIO_PROCESS, 0, -10);
-    #endif
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     s32 num_cores = sysconf(_SC_NPROCESSORS_CONF);
@@ -1303,6 +1311,7 @@ namespace ares {
     for (s32 cpu : fastestCpus(num_cores)) CPU_SET(cpu, &fastestSet);
     if (CPU_COUNT(&fastestSet) == 0) fastestSet = cpuset;
     bool pinnedToFastest = false;
+    #endif
     u32 slowFrames = 0;
     s64 longestFrameIntervalUs = 0;
 
@@ -1316,7 +1325,10 @@ namespace ares {
     // last loader read.
     u32 loadBoostFrames = 0;
     s32 loadBoostSpeed = 1;
+    // Only the Android HUD reads it, to sample this thread's CPU time from /proc.
+    #if defined(__ANDROID__)
     emuThreadTid.store((s32)gettid(), std::memory_order_relaxed);
+    #endif
     // HUD history is per thread: the abandon and 64DD-reload paths replace the
     // thread without going through unloadSystem()'s clean-path reset.
     emuThreadCore.store(-1, std::memory_order_relaxed);
@@ -1359,11 +1371,13 @@ namespace ares {
         // Re-applied every frame: Android resets thread affinity whenever it moves the
         // app between cpusets. The call fails (EINVAL) while the SoC keeps the fastest
         // core paused under light load (Qualcomm core control), leaving the scheduler's choice.
+        #if defined(__ANDROID__)
         bool pinFastest = pinFastestCore.load(std::memory_order_relaxed);
         if (pinFastest) sched_setaffinity(0, sizeof(cpu_set_t), &fastestSet);
         else if (pinnedToFastest) sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
         pinnedToFastest = pinFastest;
         emuThreadCore.store((s32)sched_getcpu(), std::memory_order_relaxed);
+        #endif
         {
             std::lock_guard<std::recursive_mutex> lock(*runMutex);
             if (localRoot) {
@@ -1661,13 +1675,20 @@ namespace ares {
     auto cookie = std::make_shared<EmuThreadCookie>();
     cookie->generation = gen;
     currentEmuThreadCookie = cookie;
-    pthread_create(&emuThread, nullptr, [](void* arg) -> void* {
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    #if !defined(__ANDROID__)
+    // The N64 CPU runs on this thread's own stack, and macOS gives new threads only 512 KiB.
+    pthread_attr_setstacksize(&attributes, 8 * 1024 * 1024);
+    #endif
+    pthread_create(&emuThread, &attributes, [](void* arg) -> void* {
         std::unique_ptr<EmuThreadCookie> cookie((EmuThreadCookie*)arg);
         emulationLoop(cookie->generation);
         cookie->exited->store(true, std::memory_order_release);
         emuThreadRunning = false;
         return nullptr;
     }, new EmuThreadCookie(*cookie));
+    pthread_attr_destroy(&attributes);
     currentEmuThread.store(emuThread);
   }
 
@@ -1904,7 +1925,7 @@ namespace ares {
       // cannot become a zombie like the emu thread.
 
       lock_guard<std::mutex> lock(windowMutex);
-      if (!nativeWindow) return;
+      if (!phobos::host::surfaceReady()) return;
 
       if (!firstFrameRendered) firstFrameRendered = true;
 
@@ -1938,12 +1959,11 @@ namespace ares {
       static double hintedFrameRate = 0.0;
       double contentRate = refreshRateAtomic.load();
       if (windowChanged || std::abs(contentRate - hintedFrameRate) > 0.5) {
-          setWindowFrameRate(nativeWindow, contentRate);
+          phobos::host::hintFrameRate(contentRate);
           hintedFrameRate = contentRate;
       }
 
       if (windowChanged || targetW != bufferWidth || targetH != bufferHeight) {
-          ANativeWindow_setBuffersGeometry(nativeWindow, (s32)targetW, (s32)targetH, WINDOW_FORMAT_RGBA_8888);
           bufferWidth = targetW;
           bufferHeight = targetH;
           currentWidth = width;
@@ -1951,16 +1971,12 @@ namespace ares {
           windowChanged = false;
       }
 
-      ANativeWindow_Buffer buffer;
-      if (ANativeWindow_lock(nativeWindow, &buffer, nullptr) != 0) return;
-      if ((u32)buffer.width < targetW || (u32)buffer.height < targetH) {
-          // The geometry request did not take effect; writing would overrun the buffer.
-          ANativeWindow_unlockAndPost(nativeWindow);
-          bufferWidth = 0;
-          return;
-      }
-      auto* dest = (u32*)buffer.bits;
-      u32 destStride = (u32)buffer.stride;
+      phobos::host::Frame frame;
+      auto locked = phobos::host::lockFrame(targetW, targetH, frame);
+      if (locked == phobos::host::LockResult::Rejected) bufferWidth = 0;
+      if (locked != phobos::host::LockResult::Locked) return;
+      auto* dest = frame.pixels;
+      u32 destStride = frame.stride;
 
       if (presentScanout) {
           presentN64Scanout(dest, destStride, width, height);
@@ -1987,44 +2003,7 @@ namespace ares {
               }
           }
       }
-      ANativeWindow_unlockAndPost(nativeWindow);
-    }
-
-    // Ask the compositor for a display mode near the game's rate. Looked up at run time
-    // since minSdk is 26. On the RP6, FIXED_SOURCE + the two-arg (seamless-only) call
-    // registered a 60 Hz override but left the panel at 120 Hz; Mupen's Parallel profile
-    // votes DEFAULT and the panel does switch. Prefer WithChangeStrategy(ALWAYS) so a
-    // non-seamless mode change is still allowed, and snap near-60 NTSC rates to 60 Hz so
-    // the vote matches a supported mode exactly. Java also sets preferredDisplayModeId.
-    static auto setWindowFrameRate(ANativeWindow* window, double rate) -> void {
-      using SetFrameRate = int32_t (*)(ANativeWindow*, float, int8_t);
-      using SetFrameRateWithStrategy = int32_t (*)(ANativeWindow*, float, int8_t, int8_t);
-      static auto symbols = [] {
-        struct {
-          SetFrameRateWithStrategy withStrategy;
-          SetFrameRate setFrameRate;
-        } s{};
-        void* android = dlopen("libandroid.so", RTLD_NOW);
-        if (android) {
-          s.withStrategy = (SetFrameRateWithStrategy)dlsym(android, "ANativeWindow_setFrameRateWithChangeStrategy");
-          s.setFrameRate = (SetFrameRate)dlsym(android, "ANativeWindow_setFrameRate");
-        }
-        return s;
-      }();
-      if (!window || rate <= 0.0) return;
-      float request = (float)rate;
-      // Progressive N64 (~59.826) and 59.94 NTSC: match the panel's 60 Hz mode.
-      if (std::abs(rate - 60.0) < 1.5 || std::abs(rate - 59.94) < 1.5) request = 60.0f;
-      // DEFAULT (0) + ALWAYS (1): see ANATIVEWINDOW_FRAME_RATE_* / CHANGE_FRAME_RATE_*.
-      int32_t result = -1;
-      if (symbols.withStrategy) {
-        result = symbols.withStrategy(window, request, /*DEFAULT*/ 0, /*ALWAYS*/ 1);
-      } else if (symbols.setFrameRate) {
-        result = symbols.setFrameRate(window, request, /*DEFAULT*/ 0);
-      } else {
-        return;
-      }
-      LOGI("Window frame rate %.3f Hz requested as %.3f (%d)", rate, request, result);
+      phobos::host::unlockFrame();
     }
 
     // Copies the N64 Vulkan scanout (RGBA bytes) into the window, forcing alpha.
@@ -2124,40 +2103,25 @@ namespace ares {
       if (pthread_self() != currentEmuThread.load()) return;
 
       if (!audioStreamOpen.load(std::memory_order_acquire)) {
-        std::unique_lock<std::mutex> lock(audioMutex);
-        if (!audioStream) {
-          AAudioStreamBuilder* builder;
-          AAudio_createStreamBuilder(&builder);
-          AAudioStreamBuilder_setSampleRate(builder, 48000);
-          AAudioStreamBuilder_setChannelCount(builder, 2);
-          AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
-          AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-          AAudioStreamBuilder_openStream(builder, &audioStream);
-          AAudioStreamBuilder_delete(builder);
-          if (audioStream) {
-            // 32 bursts (~6144 frames at 48k = ~128ms): holds several frames
-            // of output and rides out short stalls without underrunning.
-            s32 burst = AAudioStream_getFramesPerBurst(audioStream);
-            s32 bufferFrames = burst * 32;
-            AAudioStream_setBufferSizeInFrames(audioStream, bufferFrames);
-            // Prime with silence so the first emulated frames have headroom.
-            std::vector<f32> silence((size_t)bufferFrames * 2, 0.0f);
-            s64 written = 0;
-            while (written < bufferFrames) {
-                s32 n = AAudioStream_write(audioStream, silence.data() + written * 2,
-                    (s32)(bufferFrames - written), 0);
-                if (n <= 0) break;
-                written += n;
-            }
-            AAudioStream_requestStart(audioStream);
-          }
+        // Without an audio device (a desktop can have none) this would retry on every core
+        // write; try again every few seconds and discard the samples until then.
+        static s64 nextOpenAttemptMs = 0;
+        if (steadyMs() >= nextOpenAttemptMs) {
+          std::unique_lock<std::mutex> lock(audioMutex);
+          bool open = phobos::host::openAudio();
+          audioStreamOpen.store(open, std::memory_order_release);
+          if (!open) nextOpenAttemptMs = steadyMs() + 5000;
         }
-        audioStreamOpen.store(audioStream != nullptr, std::memory_order_release);
+        if (!audioStreamOpen.load(std::memory_order_acquire)) {
+          f64 discarded[2];
+          while (stream->pending()) stream->read(discarded);
+          return;
+        }
       }
       // Restart the audio thread if it was stopped (unloadSystem stops it).
-      // This MUST be outside the `if (!audioStream)` block: with stream-reuse
-      // across loads, audioStream stays non-null, so the open block (which
-      // used to spawn the thread) is skipped — without this, the audio thread
+      // This MUST be outside the open block: the host's audio device stays
+      // open across loads, so the open block (which used to spawn the
+      // thread) is skipped — without this, the audio thread
       // never restarts → NO SOUND in any core after the first load (regression
       // 2026-08-14).
       if (!audioThreadRunning.load()) {
@@ -2701,7 +2665,7 @@ namespace ares {
     // (0xffffffffbfc00000, 60fps, 0.00ms frame time, never enters the game).
     resetRequestedAtomic.store(false);
 
-    // Stop the audio thread FIRST (it may be mid-write to audioStream),
+    // Stop the audio thread FIRST (it may be mid-write to the audio device),
     // then stop/close the stream. Leaving the stream draining while the menu
     // shows causes continuous underruns → pops on every exit and load.
     if (audioThreadRunning.load()) {
@@ -2800,19 +2764,9 @@ namespace ares {
       // 0x80 on a fresh load after a quit).
       {
         std::lock_guard<std::mutex> lock(audioMutex);
-        if (audioStream) {
-          AAudioStream* oldStream = audioStream;
-          AAudioStream_requestStop(oldStream);
-          AAudioStream_close(oldStream);
-          audioStream = nullptr;
+        if (phobos::host::audioOpen()) {
+          phobos::host::closeAudio();
           audioStreamOpen.store(false, std::memory_order_release);
-          // Bounded wait for AAudio teardown (dispatch thread exit).
-          constexpr int kMaxWaitMs = 300;
-          for (int i = 0; i < kMaxWaitMs; i += 10) {
-            aaudio_stream_state_t st = AAudioStream_getState(oldStream);
-            if (st == AAUDIO_STREAM_STATE_UNINITIALIZED || st == AAUDIO_STREAM_STATE_CLOSED) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-          }
         }
       }
       // Park the stuck thread as a zombie so the next N64 load joins it
@@ -2962,6 +2916,9 @@ namespace ares {
         // scanning the slots for one would read a board built around nothing.
         if (port->type() == "Cartridge" && port->family().beginsWith("MSX") && currentMedium && currentMedium->pak
             && currentMedium->pak->attribute("tape").boolean()) continue;
+        // The MSX's second slot stays empty, as ares leaves it: connected there too, the game would be a second
+        // cartridge for the BIOS to find. (MSX states are v135 since: a state holds each connected slot's board.)
+        if (port->type() == "Cartridge" && port->family().beginsWith("MSX") && port->name() == "Expansion Slot") continue;
         // The N64DD "Disk Drive" port has type "Floppy Disk"; connecting it
         // mounts the .ndd disk medium (returned by pak() for the
         // "Nintendo 64DD Disk" node).
@@ -3119,37 +3076,12 @@ else if (port->type() == "Keyboard") {
 
     if (customDriverPath) {
         LOGI("adrenotools: Attempting load. NativeLibDir: %s, DriverPath: %s, RedirectDir: %s", (const char*)nativeLibraryDir, (const char*)customDriverPath, (const char*)tempFilePath);
-
-        maybe<u32> lastSlash = customDriverPath.findPrevious(customDriverPath.size(), "/");
-        string driverDir = lastSlash ? customDriverPath.slice(0, *lastSlash + 1) : "";
-        string driverFile = lastSlash ? customDriverPath.slice(*lastSlash + 1) : customDriverPath;
-
-        // HACK: Some drivers expect libvulkan.so.1, but Android only provides libvulkan.so
-        string libVulkan1 = string{tempFilePath, "/libvulkan.so.1"};
-        if (access((const char*)libVulkan1, F_OK) == -1) {
-            symlink("/system/lib64/libvulkan.so", (const char*)libVulkan1);
-            LOGI("adrenotools: Created symlink libvulkan.so.1 -> /system/lib64/libvulkan.so");
-        }
-
-        // Flags: CUSTOM (1) | FILE_REDIRECT (2) = 3
-        void* vulkanModule = adrenotools_open_libvulkan(RTLD_NOW, 3, nullptr, (const char*)nativeLibraryDir, (const char*)driverDir, (const char*)driverFile, (const char*)tempFilePath, nullptr);
-
-        if (vulkanModule) {
-            auto gipa = (PFN_vkGetInstanceProcAddr)dlsym(vulkanModule, "vkGetInstanceProcAddr");
-            if (gipa) {
-                LOGI("adrenotools: Successfully resolved vkGetInstanceProcAddr");
-                ::Vulkan::Context::init_loader(gipa, true);
-            } else {
-                LOGE("adrenotools: Failed to resolve vkGetInstanceProcAddr from custom driver! dlerror: %s", dlerror());
-                ::Vulkan::Context::init_loader(nullptr, true);
-            }
-        } else {
-            LOGE("adrenotools: Failed to load custom driver! dlerror: %s", dlerror());
-            ::Vulkan::Context::init_loader(nullptr, true);
+        if (!phobos::host::loadVulkan(customDriverPath, nativeLibraryDir, tempFilePath)) {
+            LOGE("adrenotools: Failed to load custom driver; using the system Vulkan driver");
         }
     } else {
         LOGI("Environment: Using system default Vulkan driver");
-        ::Vulkan::Context::init_loader(nullptr, true);
+        phobos::host::loadVulkan(nullptr, nativeLibraryDir, tempFilePath);
     }
 
     string directPath = romPath;
@@ -3993,19 +3925,8 @@ else if (port->type() == "Keyboard") {
     // new samples (underrun pops in the pause menu); restart it on resume.
     // The audio thread checks isPausedAtomic and drops queued samples while
     // paused, so stale audio never plays on resume.
-    // Only requestStart if not already starting/started — calling it on an
-    // already-starting stream returns -895 and can desync the clock.
     std::lock_guard<std::mutex> lock(audioMutex);
-    if (audioStream) {
-      if (paused) {
-        AAudioStream_requestStop(audioStream);
-      } else {
-        aaudio_stream_state_t state = AAudioStream_getState(audioStream);
-        if (state != AAUDIO_STREAM_STATE_STARTING && state != AAUDIO_STREAM_STATE_STARTED) {
-          AAudioStream_requestStart(audioStream);
-        }
-      }
-    }
+    phobos::host::pauseAudio(paused);
     LOGI("Emulation %s", paused ? "paused" : "resumed");
   }
   auto setFastForward(bool enabled) -> void { fastForwardAtomic = enabled; LOGI("Fast forward %s", enabled ? "enabled" : "disabled"); }
@@ -5001,16 +4922,15 @@ else if (port->type() == "Keyboard") {
     return true;
   }
 
+#if defined(__ANDROID__)
   auto setSurface(JNIEnv* env, jobject surface) -> void {
     lock_guard<std::mutex> lock(windowMutex);
-    LOGI("PhobosSurface: setSurface called. Old=%p, New=%p", nativeWindow, surface);
-    if (nativeWindow) ANativeWindow_release(nativeWindow);
-    nativeWindow = surface ? ANativeWindow_fromSurface(env, surface) : nullptr;
-    if (nativeWindow) {
-        LOGI("PhobosSurface: New ANativeWindow acquired: %p", nativeWindow);
-    }
+    ANativeWindow* window = surface ? ANativeWindow_fromSurface(env, surface) : nullptr;
+    LOGI("PhobosSurface: setSurface called. New=%p", window);
+    phobos::host::setWindow(window);
     windowChanged = true;
   }
+#endif
   auto getNewLogs() -> std::vector<LogEntry> {
     lock_guard<mutex> lock(logMutex);
     std::vector<LogEntry> logs;
