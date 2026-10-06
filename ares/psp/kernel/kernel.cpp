@@ -655,6 +655,7 @@ auto Kernel::power() -> void {
   fontCalls.clear();
   nextFontID = 1;
   mpegCalls.clear();
+  mpegStreams.clear();
   dialog = {};
   utilityModules.clear();
   files.clear();

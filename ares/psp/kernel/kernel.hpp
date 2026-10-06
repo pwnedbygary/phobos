@@ -1030,8 +1030,22 @@ struct Kernel {
   auto __sceSasRevEVOL() -> void;
   auto __sceSasRevVON() -> void;
 
-  //mpeg.cpp: sceMpeg, movies fed and taken apart into their pictures' access units, but never shown (no video
-  //decoder yet)
+  //mpeg.cpp: sceMpeg, movies fed, taken apart into their pictures' and sound's access units, and decoded
+  struct MpegStream {      //what a library holds beyond its memory (the PSP's Media Engine's): by its address
+    std::vector<u8> unit;  //the picture access unit sceMpegGetAvcAu took last, for the next decode
+    std::vector<u8> audio; //sound from packets freed for the pictures before it was asked for
+    std::vector<std::pair<u32, u64>> audioStamps;  //where PES time stamps fall in it, and the stamps
+    u32 audioTaken = 0;    //sound bytes handed out from the packets still in the ring, from its first
+    u64 audioTime = ~0ull; //the last sound access unit's time stamp (-1: none yet)
+    u64 audioCarry = ~0ull;  //a time stamp for the next sound access unit, its PES packet having started inside
+                             //the last one (-1: none)
+    std::vector<u8> held, shown;   //the picture the decoder holds back, and the one it gave last (4:2:0)
+    u32 heldWidth = 0, heldHeight = 0, shownWidth = 0, shownHeight = 0;
+    bool keyframe = false; //a decoder made afresh (after a state was loaded): pictures wait for a key frame
+    std::unique_ptr<VideoDecoder> video;   //not saved: made afresh
+    std::unique_ptr<AudioDecoder> sound;   //not saved: made afresh
+  };
+  std::map<u32, MpegStream> mpegStreams;
   struct MpegCall {        //sceMpegRingbufferPut part way through, calling the ringbuffer's own callback
     Context caller{};      //the thread where it called Put: put back as Put returns
     u32 ringbuffer = 0;    //the ringbuffer being fed
@@ -1045,7 +1059,9 @@ struct Kernel {
   auto mpegFinish(MpegCall& call) -> void;
   auto mpegAbandoned(u32 thread) -> void;
   auto mpegLibrary(u32 handle) -> u32;
-  auto mpegDecoded(u32 handle, u32 au, u32 frame) -> void;
+  auto mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWidth) -> void;
+  auto mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 frameWidth, u32 x, u32 y, u32 width,
+                   u32 height) -> void;
   auto sceMpegInit() -> void;
   auto sceMpegFinish() -> void;
   auto sceMpegRingbufferQueryMemSize() -> void;

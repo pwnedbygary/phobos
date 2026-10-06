@@ -247,7 +247,7 @@ static auto stateFields() -> void {
   auto& mpegCall = k.mpegCalls[one];
   mpegCall.ringbuffer = 0x0896'1000, mpegCall.left = 5, mpegCall.asked = 3, mpegCall.put = 2;
   //sceAtrac3plus's ID 0 streaming sample.at3's shape through a 0x4500-byte ring, two frames in; sceMp3's handle 0
-  //part way through its stream; the contexts' memory a block
+  //part way through its stream; a movie library's pictures, sound and access unit; the contexts' memory a block
   auto& at = k.atracs[0];
   at.codec = 0x1000, at.state = 4, at.channels = at.outputChannels = 2, at.frameBytes = 376, at.frameSamples = 2048;
   at.delay = 368, at.dataOff = 0x60, at.fileDataEnd = 0xb508, at.firstValidSample = 2416, at.endSample = 249916;
@@ -260,6 +260,10 @@ static auto stateFields() -> void {
   mp.pcm = 0x0897'a000, mp.pcmSize = 9216, mp.filePos = 0x1a40, mp.readFilePos = 0x200, mp.readPos = 0x200;
   mp.writePos = mp.writeLimit = 0x1a40, mp.available = 0x1840, mp.rate = 44100, mp.bitrate = 128, mp.channels = 2;
   mp.version = 3, mp.frames = 100, mp.sumDecoded = 1152;
+  auto& movie = k.mpegStreams[0x0896'8000];
+  movie.unit = {0, 0, 1, 9}, movie.audio = {1, 2, 3, 4}, movie.audioStamps = {{2, 90000}}, movie.audioTaken = 10;
+  movie.audioTime = 1000, movie.audioCarry = 2000, movie.held.assign(384, 0x80), movie.heldWidth = 16;
+  movie.heldHeight = 16, movie.shown = movie.held, movie.shownWidth = movie.shownHeight = 16;
   std::vector<std::pair<std::string, std::function<void()>>> changes = {
     //the CPU
     {"ipu.r", [&] { cpu.ipu.r[9] ^= 0x1234; }}, {"ipu.lo", [&] { cpu.ipu.lo ^= 1; }},
@@ -638,6 +642,17 @@ static auto stateFields() -> void {
     {"mp3 bitrate", [&] { mp.bitrate = 64; }}, {"mp3 channels", [&] { mp.channels = 1; }},
     {"mp3 frames", [&] { mp.frames += 1; }}, {"mp3 initialized", [&] { mp.initialized = false, mp.rate = 48000; }},
     {"mp3Terminated", [&] { k.mp3Terminated = true; }},
+    {"mpeg stream library", [&] { k.mpegStreams[0x0896'9000] = {}; }},
+    {"mpeg stream unit", [&] { movie.unit.push_back(5); }}, {"mpeg stream audio", [&] { movie.audio.push_back(5); }},
+    {"mpeg stream audioStamps", [&] { movie.audioStamps.push_back({4, 93000}); }},
+    {"mpeg stream audioTaken", [&] { movie.audioTaken += 4; }},
+    {"mpeg stream audioTime", [&] { movie.audioTime += 1; }},
+    {"mpeg stream audioCarry", [&] { movie.audioCarry += 1; }}, {"mpeg stream held", [&] { movie.held[0] ^= 1; }},
+    {"mpeg stream held size", [&] { movie.held.resize(32 * 16 * 3 / 2), movie.heldWidth = 32; }},
+    {"mpeg stream held height", [&] { movie.held.resize(32 * 32 * 3 / 2), movie.heldHeight = 32; }},
+    {"mpeg stream shown", [&] { movie.shown[0] ^= 1; }},
+    {"mpeg stream shown size", [&] { movie.shown.resize(32 * 16 * 3 / 2), movie.shownWidth = 32; }},
+    {"mpeg stream shown height", [&] { movie.shown.resize(32 * 32 * 3 / 2), movie.shownHeight = 32; }},
   };
   changes.insert(changes.end(), more.begin(), more.end());
   changes.insert(changes.end(), codecs.begin(), codecs.end());
@@ -922,6 +937,11 @@ static auto stateFields() -> void {
   refuses("an mp3 stream's ring past its buffer", [&] { k.mp3s[0].readPos = k.mp3s[0].bufferSize; });
   refuses("an mp3 stream at 48 kHz", [&] { k.mp3s[0].initialized = true, k.mp3s[0].rate = 48000; });
   refuses("an mp3 handle initialized without buffers", [&] { k.mp3s[1].initialized = true; });
+  refuses("a movie picture of the wrong size", [&] { k.mpegStreams.begin()->second.held.push_back(0); });
+  refuses("a movie's sound stamps out of order", [&] {
+    k.mpegStreams.begin()->second.audioStamps = {{3, 1}, {1, 2}};
+  });
+  refuses("a movie library nowhere", [&] { k.mpegStreams[0x7000'0000] = {}; });
 
   refuses("a font resolution of 0", [&] { k.fontResolution[0] = 0; });
   //the font library as it never leaves itself (each looked up afresh: every load makes them anew); then a state of

@@ -487,6 +487,31 @@ auto Kernel::serialize(serializer& s) -> bool {
   if(s.reading()) {
     for(auto& [thread, call] : mpegCalls) check(threads.count(thread));
   }
+  //what each library's Media Engine holds (mpeg.cpp): the access unit to decode next (no more than a ring of 4096
+  //packets holds), sound kept from freed packets (1 MiB at most) with its time stamps (within it, in order), the
+  //sound handed out from the ring's packets, the last sound access unit's time stamp and the one carried over, and
+  //the pictures held back and shown (4:2:0, as many bytes as their sizes take, up to 4096 by 4096). The decoders
+  //aren't saved: made afresh, they show no new picture until a key frame. A library is in memory.
+  map(mpegStreams, [&](MpegStream& m) {
+    bytes(m.unit); bytes(m.audio);
+    vector(m.audioStamps, [&](std::pair<u32, u64>& stamp) { s(stamp.first); s(stamp.second); });
+    s(m.audioTaken); s(m.audioTime); s(m.audioCarry);
+    bytes(m.held); s(m.heldWidth); s(m.heldHeight); bytes(m.shown); s(m.shownWidth); s(m.shownHeight);
+    if(s.reading()) m.video.reset(), m.sound.reset(), m.keyframe = true;
+    check(m.unit.size() <= 4096 * 2048 && m.audio.size() <= 1_MiB && m.audioTaken <= 4096 * 2048);
+    for(u32 n = 0; n < m.audioStamps.size(); n++) {
+      check(m.audioStamps[n].first <= m.audio.size() && (!n || m.audioStamps[n - 1].first <= m.audioStamps[n].first));
+    }
+    auto picture = [&](const std::vector<u8>& planes, u32 width, u32 height) {
+      if(planes.empty()) return true;
+      return width && height && width <= 4096 && height <= 4096 &&
+             planes.size() == width * height + 2 * ((width + 1) / 2) * ((height + 1) / 2);
+    };
+    check(picture(m.held, m.heldWidth, m.heldHeight) && picture(m.shown, m.shownWidth, m.shownHeight));
+  });
+  if(s.reading()) {
+    for(auto& [library, stream] : mpegStreams) check(memory.reaches(library, 0x800));
+  }
   if(s.reading() && valid) {
     check((fontLibraries.empty() && openFonts.empty() && fontCalls.empty()) || fontsInstalled());
     for(auto& [address, library] : fontLibraries) {
