@@ -2189,8 +2189,14 @@ Tests (`tests/psp/run-tests.sh`, 197 groups, both sanitizers; `tests/psp/ares` 2
   a PCM voice part way: saved, loaded, the same next grains).
 - `states.cpp`'s "state fields" changes every new field and refuses 7 more states (above); `tests/psp/ares` refuses a
   version 5 state.
+- Broken versions each failed: VAG's guess with a half added (vag's recorded filter 9, 0xb39c for 0xb39b, and a
+  hand-worked sample), part 20's flags `& 7` (the 0x41 block ended its voice), VAG heard without its lag (every
+  recorded VAG sample), the envelope applied after its step (pcm's and outputmode's recorded samples), dry off from
+  __sceSasInit, multichannel's planes interleaved, the mixer's volume rounded towards zero, the sums unclamped, the
+  SRC channel's nearest sample for the straight line, and its place left out of states ("state fields").
 
 Uncertain: everything listed as chosen above; whether sceAudio's mixer rounds a sample times a volume down (as
-here) or towards zero, and clamps as it adds or once at the end (the same unless channels overflow 32 bits, which
-they can't); which sample of a VAG voice its last block's lag leaves unheard as it ends (here its data's last); and
-how the PSP's interpolation shapes pitches other than 0x1000 (audio/sascore's pitch test prints no samples).
+here) or towards zero, and clamps once, as the sums are taken (here), or after each channel it adds (which differs
+where loud channels of opposite sign meet); which sample of a VAG voice its last block's lag leaves unheard as it
+ends (here its data's last); and how the PSP's interpolation shapes pitches other than 0x1000 (audio/sascore's
+pitch test prints no samples).
