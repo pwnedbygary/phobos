@@ -118,7 +118,7 @@ inline auto makeIso(const std::vector<File>& files) -> Image {
       used += record(p + used, name, image.sectors[path], sizes[path], isFolder);
     }
   }
-  for(auto& file : files) std::memcpy(at(image.sectors[file.path]), file.data.data(), file.data.size());
+  for(auto& file : files) if(!file.data.empty()) std::memcpy(at(image.sectors[file.path]), file.data.data(), file.data.size());
 
   //the path table: each folder's name, first sector and parent's number in the table (counting from 1)
   std::uint8_t* table = at(18);
