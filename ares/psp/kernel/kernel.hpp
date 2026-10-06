@@ -126,7 +126,7 @@ struct Kernel {
   static constexpr u32 ErrorIOError               = 0x8001'0005;
   static constexpr u32 ErrorNoPermission          = 0x8001'000d;
   static constexpr u32 ErrorFileExists            = 0x8001'0011;
-  static constexpr u32 ErrorCrossDevice           = 0x8001'0012;
+  static constexpr u32 ErrorCrossDevice           = 0x8002'0322;  //pspkerror.h's XDEV: a rename to another device
   static constexpr u32 ErrorDeviceNotFound        = 0x8001'0013;
   static constexpr u32 ErrorNotDirectory          = 0x8001'0014;
   static constexpr u32 ErrorIsDirectory           = 0x8001'0015;

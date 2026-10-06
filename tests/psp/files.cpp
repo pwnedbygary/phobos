@@ -1,6 +1,7 @@
 //Files and controls (ares/psp/kernel io.cpp and ctrl.cpp): the memory stick as a temporary host folder, and the
 //buttons and stick as the system sets them; with PSP_TEST_PROGRAMS, a real program that uses both through newlib.
 #include "kernel-machine.hpp"
+#include "disc-image.hpp"
 
 #include <cstdlib>
 #include <fstream>
@@ -391,9 +392,56 @@ static auto systemProgram() -> void {
   }
 }
 
+//Renaming, as pspautotests' io/file/rename recorded: the file takes the new path's last name in its own folder,
+//whatever folder that path names (from ms0:/PSP, "../t2.txt" renamed to "t2a.txt", or "../t3.txt" to
+//"ms0:/PSP/t3a.txt", lands in ms0:/); a name taken already, the old one itself among them, FILE_EXISTS (so a new path
+//into a folder that isn't there finds the old file's own name taken); another device XDEV; an old file or folder that
+//isn't there FILE_NOT_FOUND; wildcards INVALID_ARGUMENT. And Peace Walker's: its working folder on the disc, a
+//temporary file on the memory stick renamed to a bare "TDLSFILE.SYS" stays beside it (it was refused as read-only).
+static auto fileRename() -> void {
+  HostFolder stick;
+  for(const char* name : {"t1.txt", "t2.txt", "t3.txt", "PSP/keep", "PSP/SAVEDATA/GAME/TEMP0000.PW0"}) {
+    stick.put(name, name);
+  }
+  auto image = disc_image::makeIso({{"PSP_GAME/USRDIR/DATA.BIN", {1, 2, 3}}});
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  m.kernel.disc = discFrom(image.bytes);
+  auto rename = [&](const char* from, const char* to) { return m.call("sceIoRename", {m.string(from), m.string(to)}); };
+  auto there = [&](const char* name) { return std::filesystem::exists(stick.path / name); };
+  CHECK(rename("ms0:/t1.txt", "ms0:/t1a.txt"), 0);
+  CHECK(there("t1a.txt") && !there("t1.txt"), true);
+  CHECK(rename("ms0:/t1a.txt", "ms0:/t2.txt"), Kernel::ErrorFileExists);
+  CHECK(m.call("sceIoChdir", {m.string("ms0:/PSP")}), 0);
+  CHECK(rename("../t2.txt", "t2a.txt"), 0);
+  CHECK(there("t2a.txt") && !there("PSP/t2a.txt"), true);  //its own folder, not the working one
+  CHECK(rename("../t3.txt", "ms0:/PSP/t3a.txt"), 0);
+  CHECK(there("t3a.txt") && !there("PSP/t3a.txt"), true);  //nor the one the new path names
+  stick.put("t1.txt", "again");
+  stick.put("t2.txt", "again");
+  CHECK(rename("ms0:/t1.txt", "host0:/t1.txt"), Kernel::ErrorCrossDevice);
+  CHECK(rename("ms0:/t2.txt", "ms0:/NOT_THERE/t2.txt"), Kernel::ErrorFileExists);
+  CHECK(rename("ms0:/NOT_THERE/t3.txt", "ms0:/t3.txt"), Kernel::ErrorFileNotFound);
+  CHECK(rename("ms0:/t3.txt", "ms0:/t3b.txt"), Kernel::ErrorFileNotFound);
+  CHECK(rename("ms0:/t1.txt", "ms0:/t1.txt"), Kernel::ErrorFileExists);
+  CHECK(rename("ms0:/t*.txt", "ms0:/t1b.txt"), Kernel::ErrorInvalidArgument);
+  CHECK(rename("ms0:/t1.txt", "ms0:/t*.txt"), Kernel::ErrorInvalidArgument);
+  CHECK(rename("ms0:/t?.txt", "ms0:/t?.txt"), Kernel::ErrorInvalidArgument);
+  CHECK(stick.get("t1.txt") == "again" && stick.get("t2.txt") == "again", true);  //nothing refused moved
+  CHECK(m.call("sceIoChdir", {m.string("disc0:/PSP_GAME/USRDIR")}), 0);
+  CHECK(rename("ms0:/PSP/SAVEDATA/GAME/TEMP0000.PW0", "TDLSFILE.SYS"), 0);
+  CHECK(there("PSP/SAVEDATA/GAME/TDLSFILE.SYS") && !there("PSP/SAVEDATA/GAME/TEMP0000.PW0"), true);
+  CHECK(rename("disc0:/PSP_GAME/USRDIR/DATA.BIN", "OTHER.BIN"), Kernel::ErrorReadOnly);
+  CHECK(roundTrip(m, [&](KernelMachine& n) {
+    n.kernel.mount("ms0", stick.path.string());
+    n.kernel.disc = discFrom(image.bytes);
+  }), true);
+}
+
 auto fileTests() -> Tests {
   return {
     {"files basics", fileBasics}, {"files folders", fileFolders}, {"files containment", fileContainment},
+    {"files rename", fileRename},
     {"files short names", fileShortNames}, {"controller peek", controllerPeek}, {"controller latch", controllerLatch},
     {"controller new samples", controllerReadNew}, {"controller cycle", controllerCycle},
     {"controller read", controllerRead}, {"controller two readers", controllerTwoReaders},

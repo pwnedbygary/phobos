@@ -508,17 +508,33 @@ auto Kernel::sceIoRmdir() -> void {
   result(std::filesystem::remove(host, error) ? 0 : ErrorNoPermission);
 }
 
-//(old path, new path): both on the same device; the new name mustn't be taken.
+//(old path, new path): the file takes the new path's last name and stays in its own folder, whatever folder the new
+//path names, as pspautotests' io/file/rename recorded: "../a.txt" from ms0:/PSP renamed to "b.txt", or to
+//"ms0:/PSP/b.txt", is ms0:/b.txt. So a name taken already there is refused (FILE_EXISTS), the old name itself among
+//them, and so is the new path's folder not being there no matter. Wildcards ('*', '?') in either path are refused
+//(INVALID_ARGUMENT), a new path on another device too (XDEV), then an old file that isn't there (FILE_NOT_FOUND).
+//Peace Walker installs its data so, writing a temporary file and renaming it to "TDLSFILE.SYS" (which had been
+//looked for in the working folder, on the disc, and refused as read-only).
 auto Kernel::sceIoRename() -> void {
   std::string from = memory.readString(arg(0), 1024), to = memory.readString(arg(1), 1024);
-  if(onDisc(from) || onDisc(to)) return result(ErrorReadOnly);
-  std::string oldHost, oldPath, newHost, newPath;
+  if((from + to).find_first_of("*?") != std::string::npos) return result(ErrorInvalidArgument);
+  auto deviceOf = [&](const std::string& path) {
+    std::string device, rest;
+    return split(path, device, rest) ? deviceName(device) : std::string{};
+  };
+  if(to.find(':') != std::string::npos && deviceOf(to) != deviceOf(from)) return result(ErrorCrossDevice);
+  if(onDisc(from)) return result(ErrorReadOnly);
+  std::string oldHost, oldPath;
   if(u32 error = resolve(from, oldHost, oldPath)) return result(error);
-  if(u32 error = resolve(to, newHost, newPath)) return result(error);
-  if(oldPath.substr(0, oldPath.find(':')) != newPath.substr(0, newPath.find(':'))) return result(ErrorCrossDevice);
   std::error_code error;
   if(!std::filesystem::exists(oldHost, error)) return result(ErrorFileNotFound);
-  if(std::filesystem::exists(newHost, error) && !sameName(oldPath, newPath)) return result(ErrorFileExists);
+  std::string name = to.substr(to.find_last_of("/\\:") == std::string::npos ? 0 : to.find_last_of("/\\:") + 1);
+  if(name.empty() || name == "." || name == "..") return result(ErrorInvalidArgument);
+  std::string newHost, newPath;
+  if(u32 error = resolve(oldPath.substr(0, oldPath.find_last_of('/') + 1) + name, newHost, newPath)) {
+    return result(error);
+  }
+  if(std::filesystem::exists(newHost, error)) return result(ErrorFileExists);
   std::filesystem::rename(oldHost, newHost, error);
   result(error ? ErrorNoPermission : 0);
 }
