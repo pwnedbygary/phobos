@@ -870,8 +870,10 @@ the details; the user chose a data tape per game in its save folder.
 
 ## PSP core: the PSP in the desktop program, with FFmpeg on Linux, macOS and Windows — 2026-10-06
 
-Branch `cursor/psp-desktop-2b67`, on top of `cursor/psp-codecs-2b67` (the entry below); pushed by the owner with #153
-merged in as 8501415c7; the review's fixes on top are local, not pushed. docs/psp-core.md, part 27, describes it. Original front-end code in the desktop program's style; no PPSSPP or JPCSP source read.
+Branch `cursor/psp-desktop-2b67` (#154), on top of `cursor/psp-codecs-2b67` (#153, the entry below), with #153
+merged in as 8501415c7 and the review's fixes on top; CI's desktop build then passed on Linux, macOS and Windows,
+packages included (run 37544580853). docs/psp-core.md, part 27, describes it. Original front-end code in the desktop
+program's style; no PPSSPP or JPCSP source read.
 - **Library**: PSP games from a `psp` folder or any folder: the PSP's extensions (iso, cso, zso, dax, jso, chd, pbp,
   elf); `.iso`, `.chd` and `.pbp`, shared with the PlayStation, are the PSP's when mia's PSP medium takes them (the
   runner's new `ares::isPspGame`, which reads the file's head: "PSP GAME" ISOs, DVD CHDs, EBOOT.PBPs not of category
@@ -917,7 +919,7 @@ merged in as 8501415c7; the review's fixes on top are local, not pushed. docs/ps
 ## PSP core: music and movies through FFmpeg — 2026-10-06
 
 Branch `cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`, the entry below, which carries
-master's desktop build and the GPL-3.0-or-later license), not pushed: commits fffd26303 (FFmpeg's build), c0f2625e4
+master's desktop build and the GPL-3.0-or-later license), PR #153: commits fffd26303 (FFmpeg's build), c0f2625e4
 (sceAtrac3plus), 332015eaa (sceMp3), e772d44a2 (movies) and the docs; then the merges of #152 and master, and the
 review's fixes. docs/psp-core.md, part 26, describes it. Original code; no PPSSPP or JPCSP source read (pspsdk,
 pspautotests' programs and recorded results, the PSP Developer Wiki, public container formats, FFmpeg's API

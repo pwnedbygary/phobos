@@ -3046,7 +3046,7 @@ checks, the state layout unchanged (version 9).
 
 On branch `cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`, part 25's games with the test
 programs and GE measurements in the repository, which carries master's desktop build and the GPL-3.0-or-later
-license), not pushed. The owner's choice
+license), PR #153. The owner's choice
 (2026-10-06, night): the games' music (ATRAC3, ATRAC3plus, MP3) and movies (the PSP's H.264) through FFmpeg's LGPL
 decoders, built in an LGPL-compliant way. Sources: pspsdk's headers (`pspatrac3.h`, `pspmp3.h`, `pspmpeg.h`),
 pspautotests' audio/atrac, audio/mp3 and video/mpeg programs and the results they recorded on a PSP (the programs
@@ -3270,7 +3270,7 @@ Seen on the way, not changed:
 
 ## Part 27: the PSP in the desktop program
 
-On branch `cursor/psp-desktop-2b67`, on top of part 26's `cursor/psp-codecs-2b67`, not pushed. The owner's request
+On branch `cursor/psp-desktop-2b67` (#154), on top of part 26's `cursor/psp-codecs-2b67` (#153). The owner's request
 (2026-10-06): PSP games playable in the desktop program (`desktop/`, SDL3) on Linux, macOS and Windows, as in the
 Android app, with FFmpeg's decoders built and shipped for each, LGPL-compliant as on Android. The desktop program
 already linked the PSP core (`phobos_core` carries every system); what it lacked was the PSP in its library, the
@@ -3395,11 +3395,12 @@ Not checked, or left:
   PSP's, and a PlayStation game in the library (made-up files only).
 - The desktop program built whole and run on Linux and Windows (CI builds and packages it; on 8501415c7 its macOS
   and Windows jobs passed, MSYS2's native FFmpeg build among them, and Linux's stopped in linuxdeploy, fixed below).
-  The fixed AppImage step is checked in Docker with a stand-in program, not yet by CI's whole build.
+  After the fixes, CI's whole build packaged all three, the AppImage included (run 37544580853); neither the
+  Linux nor the Windows program has been run.
 - Discs can't be changed on the PSP (its games are listed one by one); the desktop's library shows no PSP icons or
   PARAM.SFO titles (the file's name is the title, as for every system).
 
-**After review and CI** (the branch pushed by the owner with #153 merged in as 8501415c7; CI's Android, PSP Core
+**After review and CI** (the branch pushed with #153 merged in as 8501415c7; CI's Android, PSP Core
 Tests, macOS and Windows jobs passed; LGPL compliance checked on the macOS and Windows artifacts):
 - High: the AppImage step failed in linuxdeploy (libavutil not found as libavcodec's dependency). Fixed by
   `LD_LIBRARY_PATH` and checked further (above). In an x86-64 Ubuntu 24.04 container (emulated on the host Mac; the
