@@ -5,12 +5,15 @@ namespace ares::PlayStationPortable {
 
 #include "list.cpp"
 #include "vertex.cpp"
+#include "texture.cpp"
+#include "pixel.cpp"
 #include "draw.cpp"
 #include "transfer.cpp"
 
 //As the GE is when the PSP starts: every command's word zero, no list.
 auto GE::power() -> void {
   for(auto& command : commands) command = 0;
+  for(auto& byte : clut) byte = 0;
   list = {};
   vertexAddress = indexAddress = 0;
   signalWord = finishWord = endWord = 0;

@@ -868,6 +868,19 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core, part 10: drawing in 2D — 2026-10-03
+
+Branch `cursor/psp-draw-2b67`, stacked on `cursor/psp-ge-2b67` (for stack #106). The GE draws in through mode:
+sprites (with the corner order's quarter turn), triangles, strips, fans and points; textures in every format but DXT,
+with the palette, swizzling, repeat and clamp, nearest and filtered; the texture functions; the whole pixel pipeline
+(alpha, color, stencil and depth tests, blending, dithering, logic operations, masks). Arithmetic as PPSSPP's software
+renderer has it (checked by its authors on PSPs). Checks: 66 groups on the Mac (UBSan) and in `phobos-linux`; pspsdk's
+"blit" (three ways) and "doublelist" pixel-exact; `tools/psp-test-programs/compare-ppsspp.sh` puts "blend" within 2
+levels of PPSSPP's software renderer everywhere and "clut" on 99.94% of pixels; fifteen broken versions each failed.
+The test script now turns off the address sanitizer's stack-use-after-return check, which made the per-pixel code
+hundreds of times slower (95 seconds instead of 18 minutes in the container).
+Not yet: lines, DXT, mipmaps, 3D. Next: 3D (transforms, clipping, lighting).
+
 ## PSP core, part 9: the GE's display lists — 2026-10-03
 
 Branch `cursor/psp-ge-2b67`, stacked on `cursor/psp-files-2b67` (for GitHub stack #106, which the user keeps). The GE
