@@ -1,2 +1,9 @@
 # When archiving, export a version file containing tag/commit information
 cmake/common/.archive-version.json export-subst
+
+# The PSP core's test programs and a real PSP's measurements (tests/psp/programs, tests/psp/measurements): binary
+# files, kept as they are, never diffed or converted
+tests/psp/programs/*.elf binary
+tests/psp/programs/*.prx binary
+tests/psp/programs/*.PBP binary
+tests/psp/measurements/**/*.bin binary

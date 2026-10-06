@@ -5,6 +5,8 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
+#the test programs kept in the repository, unless named otherwise (empty: none)
+export PSP_TEST_PROGRAMS=${PSP_TEST_PROGRAMS-$ROOT/tests/psp/programs}
 #ares and nall change rarely and take the longest to build, so their objects are kept and rebuilt when their top
 #source is newer; a fresh TMPDIR rebuilds everything (after editing headers they include, say).
 OUT=${TMPDIR:-/tmp}/phobos-psp-ares-tests

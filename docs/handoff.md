@@ -742,6 +742,22 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP tests: the test programs and the PSP's GE measurements in the repository — 2026-10-06
+
+Branch `cursor/psp-test-data-2b67`, on top of `cursor/psp-hle-games4-2b67` (#151). At the owner's request, the
+PSP core's built test programs (`tests/psp/programs`: hello, system, disc, gu, pspsdk's GU samples and
+pspmeasure, 13 MB, built from `tools/psp-test-programs` with pspdev on 2026-10-04 and -05, the very files the tests
+have run with) and their PSP's round-3 GE measurements (`tests/psp/measurements/ge-round3`, 90 files, 21 MB, from
+the owner's PSP on firmware 6.61) are kept in the repository, so another machine (and CI) runs every test with no
+PSP toolchain. `tests/psp/run-tests.sh` and `tests/psp/ares/run-tests.sh` use them unless `PSP_TEST_PROGRAMS` or
+`PSP_GE_RESULTS` name other folders (empty: none). The VFPU's measurements (about 670 MB a round) stay with the
+owner, copied where they're needed. Each folder's README says where its files come from (the programs' licenses:
+pspsdk's and newlib's BSD-style ones; their SHA-256) and how to rebuild them; `.gitattributes` marks them binary;
+`docs/development-process.md` records the authorization.
+- **Checks:** both test scripts with no variables set, so with these folders: tests/psp 236 groups (ASan+UBSan;
+  "psp measure" compares pspmeasure's GE results with these), tests/psp/ares 278 checks (the program checks run,
+  none skipped).
+
 ## PSP core: the games further still — 2026-10-06
 
 Branch `cursor/psp-hle-games4-2b67`: `cursor/psp-ge-speed-2b67` (the entry below) with `cursor/psp-fonts-2b67`

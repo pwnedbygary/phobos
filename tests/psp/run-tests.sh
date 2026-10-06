@@ -5,6 +5,9 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
+#the test programs and a real PSP's measurements kept in the repository, unless named otherwise (empty: none)
+export PSP_TEST_PROGRAMS=${PSP_TEST_PROGRAMS-$ROOT/tests/psp/programs}
+export PSP_GE_RESULTS=${PSP_GE_RESULTS-$ROOT/tests/psp/measurements/ge-round3}
 OUT=${TMPDIR:-/tmp}/phobos-psp-tests
 mkdir -p "$OUT"
 
