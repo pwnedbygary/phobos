@@ -490,28 +490,45 @@ auto Allegrex::vfpuNaN(u32 result, NaNSign sign, u32 s, u32 t) const -> u32 {
   }
 }
 
+//The lanes whose source prefix takes a lane past the operand's size (lane 2 of a pair, say; a constant doesn't
+//count). On a PSP such a lane's result is 0, whatever the instruction would have made of it (measured,
+//docs/psp-vfpu-measurements.md, round 2, on vmov, vadd and vrcp); the instructions that work lane by lane
+//follow that.
+static auto outsideLanes(u32 prefix, u32 size) -> u32 {
+  u32 lanes = 0;
+  for(u32 i : range(size)) {
+    if(!(prefix >> (12 + i) & 1) && (prefix >> (2 * i) & 3) >= size) lanes |= 1 << i;
+  }
+  return lanes;
+}
+
 template<typename F> auto Allegrex::vfpuUnary(u8 vd, u8 vs, u32 size, F function, NaNSign sign) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
+  u32 outside = outsideLanes(vfpu.pfxs, size);
   Vector d{};
-  for(u32 i : range(size)) d.lane[i] = vfpuNaN(vfpuBits(function(vfpuFloat(s.lane[i]))), sign, s.lane[i]);
+  for(u32 i : range(size)) {
+    d.lane[i] = outside >> i & 1 ? 0 : vfpuNaN(vfpuBits(function(vfpuFloat(s.lane[i]))), sign, s.lane[i]);
+  }
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
 //For functions that work on a lane's bits directly (the exact math functions above).
 template<typename F> auto Allegrex::vfpuUnaryBits(u8 vd, u8 vs, u32 size, F function) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
+  u32 outside = outsideLanes(vfpu.pfxs, size);
   Vector d{};
-  for(u32 i : range(size)) d.lane[i] = function(s.lane[i]);
+  for(u32 i : range(size)) d.lane[i] = outside >> i & 1 ? 0 : function(s.lane[i]);
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
 template<typename F> auto Allegrex::vfpuBinary(u8 vd, u8 vs, u8 vt, u32 size, F function, NaNSign sign) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
   auto t = vfpuRead(vt, size, vfpu.pfxt);
+  u32 outside = outsideLanes(vfpu.pfxs, size) | outsideLanes(vfpu.pfxt, size);
   Vector d{};
   for(u32 i : range(size)) {
     u32 result = vfpuBits(function(vfpuFloat(s.lane[i]), vfpuFloat(t.lane[i])));
-    d.lane[i] = vfpuNaN(result, sign, s.lane[i], t.lane[i]);
+    d.lane[i] = outside >> i & 1 ? 0 : vfpuNaN(result, sign, s.lane[i], t.lane[i]);
   }
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
@@ -608,7 +625,8 @@ auto Allegrex::SVS(u8 vt, cu32& rs, s16 imm) -> void {
 //vabs and vneg clear or flip the sign bit, and touch nothing else (not even a denormal).
 auto Allegrex::VABS(u8 vd, u8 vs, u32 size) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
-  for(u32 i : range(size)) s.lane[i] &= 0x7fff'ffff;
+  u32 outside = outsideLanes(vfpu.pfxs, size);
+  for(u32 i : range(size)) s.lane[i] = outside >> i & 1 ? 0 : s.lane[i] & 0x7fff'ffff;
   vfpuWrite(vd, size, s, vfpu.pfxd);
 }
 
@@ -778,11 +796,16 @@ auto Allegrex::VF2I(u8 vd, u8 vs, u32 size, u8 scale, u32 mode) -> void {
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
+//On a PSP vfad is a dot product of rs with constants that its t prefix chooses: the prefix is forced to constants
+//in every lane (constant bit set, swizzle 1), keeping its absolute and negate bits. So each lane is weighed by 1,
+//or 1/3 where the t prefix sets the absolute bit, negated where it sets negate (measured,
+//docs/psp-vfpu-measurements.md, round 2).
 auto Allegrex::VFAD(u8 vd, u8 vs, u32 size) -> void {
   if(size == 1) return INVALID();
   auto s = vfpuRead(vs, size, vfpu.pfxs);
+  auto t = vfpuRead(vs, size, (vfpu.pfxt & 0x000f'0f00) | 0xf055);
   f64 sum = 0;
-  for(u32 i : range(size)) sum += vfpuFloat(s.lane[i]);
+  for(u32 i : range(size)) sum += (f64)vfpuFloat(s.lane[i]) * vfpuFloat(t.lane[i]);
   Vector d{{vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0)}};
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
@@ -806,12 +829,16 @@ auto Allegrex::VH2F(u8 vd, u8 vs, u32 size) -> void {
 }
 
 //vhdp: a "homogeneous" dot product, whose last term is rt's last lane on its own: sx * tx + sy * ty + ... + tw.
-//That's how a point (x, y, z, 1) is dotted with a row of a transformation matrix.
+//That's how a point (x, y, z, 1) is dotted with a row of a transformation matrix. On a PSP it's a dot product whose
+//s prefix is forced to a constant in the last lane (constant bit set, swizzle 1), keeping that lane's absolute and
+//negate bits: 1, or 1/3 with the absolute bit, negated with the negate bit (measured, docs/psp-vfpu-measurements.md,
+//round 2).
 auto Allegrex::VHDP(u8 vd, u8 vs, u8 vt, u32 size) -> void {
-  auto s = vfpuRead(vs, size, vfpu.pfxs);
+  u32 last = size - 1;
+  auto s = vfpuRead(vs, size, (vfpu.pfxs & ~(3u << (2 * last))) | 1u << (2 * last) | 1u << (12 + last));
   auto t = vfpuRead(vt, size, vfpu.pfxt);
-  f64 sum = vfpuFloat(t.lane[size - 1]);
-  for(u32 i : range(size - 1)) sum += (f64)vfpuFloat(s.lane[i]) * vfpuFloat(t.lane[i]);
+  f64 sum = 0;
+  for(u32 i : range(size)) sum += (f64)vfpuFloat(s.lane[i]) * vfpuFloat(t.lane[i]);
   Vector d{{vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0)}};
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
@@ -914,8 +941,11 @@ auto Allegrex::VLOG2(u8 vd, u8 vs, u32 size) -> void {
 auto Allegrex::VMAX(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
   auto t = vfpuRead(vt, size, vfpu.pfxt);
+  u32 outside = outsideLanes(vfpu.pfxs, size) | outsideLanes(vfpu.pfxt, size);
   Vector d{};
-  for(u32 i : range(size)) d.lane[i] = vfpuOrder(s.lane[i]) > vfpuOrder(t.lane[i]) ? s.lane[i] : t.lane[i];
+  for(u32 i : range(size)) {
+    d.lane[i] = outside >> i & 1 ? 0 : vfpuOrder(s.lane[i]) > vfpuOrder(t.lane[i]) ? s.lane[i] : t.lane[i];
+  }
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
@@ -935,8 +965,11 @@ auto Allegrex::VMIDT(u8 vd, u32 size) -> void {
 auto Allegrex::VMIN(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
   auto t = vfpuRead(vt, size, vfpu.pfxt);
+  u32 outside = outsideLanes(vfpu.pfxs, size) | outsideLanes(vfpu.pfxt, size);
   Vector d{};
-  for(u32 i : range(size)) d.lane[i] = vfpuOrder(s.lane[i]) < vfpuOrder(t.lane[i]) ? s.lane[i] : t.lane[i];
+  for(u32 i : range(size)) {
+    d.lane[i] = outside >> i & 1 ? 0 : vfpuOrder(s.lane[i]) < vfpuOrder(t.lane[i]) ? s.lane[i] : t.lane[i];
+  }
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
 
@@ -1004,7 +1037,8 @@ auto Allegrex::VMZERO(u8 vd, u32 size) -> void {
 
 auto Allegrex::VNEG(u8 vd, u8 vs, u32 size) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
-  for(u32 i : range(size)) s.lane[i] ^= 0x8000'0000;
+  u32 outside = outsideLanes(vfpu.pfxs, size);
+  for(u32 i : range(size)) s.lane[i] = outside >> i & 1 ? 0 : s.lane[i] ^ 0x8000'0000;
   vfpuWrite(vd, size, s, vfpu.pfxd);
 }
 
@@ -1064,9 +1098,22 @@ auto Allegrex::VQMUL(u8 vd, u8 vs, u8 vt, u32) -> void {
   vfpuWrite(vd, 4, d, vfpu.pfxd);
 }
 
-//1/x
+//1/x. A PSP works vrcp out a lane at a time from the last lane back, and only that first step sees the prefixes,
+//with lane 0's settings, as vrndi does: the other lanes take their inputs as they are, and are written unclamped and
+//unmasked (measured, docs/psp-vfpu-measurements.md, round 2: every prefixed vrcp.q the recorder ran). The last
+//lane's step has its own input alone, so lane 0's source setting gives a constant if it names one, that input with
+//a swizzle of 0 (not seen unmasked yet), and 0 for the result if it names another lane. Whether the other math
+//functions take prefixes this way isn't measured; they use them as the rest of the VFPU does.
 auto Allegrex::VRCP(u8 vd, u8 vs, u32 size) -> void {
-  vfpuUnaryBits(vd, vs, size, vfpuReciprocal);
+  auto index = vfpuLine(vs, size);
+  u32 last = size - 1, prefix = vfpu.pfxs;
+  Vector d{};
+  for(u32 i : range(last)) d.lane[i] = vfpuReciprocal(vfpu.r[index[i]]);
+  u32 swizzle = prefix & 3, absolute = prefix >> 8 & 1, negate = (prefix >> 16 & 1) << 31;
+  if(prefix >> 12 & 1) d.lane[last] = vfpuReciprocal(PrefixConstants[swizzle | absolute << 2] ^ negate);
+  else if(swizzle) d.lane[last] = 0;
+  else d.lane[last] = vfpuReciprocal((absolute ? vfpu.r[index[last]] & 0x7fff'ffff : vfpu.r[index[last]]) ^ negate);
+  vfpuWrite(vd, size, d, (vfpu.pfxd & 0x100) << last | (vfpu.pfxd & 3) << (2 * last));
 }
 
 //2 to the power of -x
@@ -1172,14 +1219,19 @@ auto Allegrex::VSBZ(u8 vd, u8 vs, u32) -> void {
   vfpuWrite(vd, 1, d, vfpu.pfxd);
 }
 
-//vscl: rs times rt's single value.
+//vscl: rs times rt's single value. On a PSP it's a lane by lane product whose t prefix is forced to take rt in
+//every lane (its swizzle ignored), so the prefix's other settings still apply lane by lane: a constant (picked by
+//the absolute bit alone), the absolute value, negation (measured, docs/psp-vfpu-measurements.md, round 2).
 auto Allegrex::VSCL(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
-  u32 scale = vfpuRead(vt, 1, vfpu.pfxt).lane[0];
+  u32 scale = vfpu.r[vfpuLine(vt, 1)[0]], outside = outsideLanes(vfpu.pfxs, size);
   Vector d{};
   for(u32 i : range(size)) {
-    u32 product = vfpuBits(vfpuFloat(s.lane[i]) * vfpuFloat(scale));
-    d.lane[i] = vfpuNaN(product, NaNSign::Product, s.lane[i], scale);
+    u32 absolute = vfpu.pfxt >> (8 + i) & 1;
+    u32 t = vfpu.pfxt >> (12 + i) & 1 ? PrefixConstants[absolute << 2] : absolute ? scale & 0x7fff'ffff : scale;
+    if(vfpu.pfxt >> (16 + i) & 1) t ^= 0x8000'0000;
+    u32 product = vfpuBits(vfpuFloat(s.lane[i]) * vfpuFloat(t));
+    d.lane[i] = outside >> i & 1 ? 0 : vfpuNaN(product, NaNSign::Product, s.lane[i], t);
   }
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
@@ -1189,10 +1241,11 @@ auto Allegrex::VSCL(u8 vd, u8 vs, u8 vt, u32 size) -> void {
 auto Allegrex::VSCMP(u8 vd, u8 vs, u8 vt, u32 size) -> void {
   auto s = vfpuRead(vs, size, vfpu.pfxs);
   auto t = vfpuRead(vt, size, vfpu.pfxt);
+  u32 outside = outsideLanes(vfpu.pfxs, size) | outsideLanes(vfpu.pfxt, size);
   Vector d{};
   for(u32 i : range(size)) {
     s64 a = vfpuOrder(s.lane[i]), b = vfpuOrder(t.lane[i]);
-    d.lane[i] = a > b ? One : a < b ? One | 0x8000'0000 : 0;
+    d.lane[i] = outside >> i & 1 ? 0 : a > b ? One : a < b ? One | 0x8000'0000 : 0;
   }
   vfpuWrite(vd, size, d, vfpu.pfxd);
 }
