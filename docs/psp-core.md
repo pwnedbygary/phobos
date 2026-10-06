@@ -1883,11 +1883,14 @@ why (what games accept).
   bytes are in the program's memory at once), but its result (64 bits: what the synchronous call returns, an error
   sign-extended) is held back for the time the device takes: 100 microseconds plus the bytes at the UMD drive's top
   rate, 11 Mbit/s (1,375,000 bytes a second), for the disc, or 4 MB a second for the memory stick (or a host folder
-  standing for the disc); the drive's seeks aren't counted. Meanwhile a poll answers 1 and a wait blocks the thread
-  (the kernel's loop treats a request coming due as an event, like a vertical blank); then the result waits on the
-  file for the program to take, a waiting thread taking it at once, and the file's callback is notified (with a CB
-  wait, it runs before the wait takes the result). Every other call on a file with a request under way is refused
-  (ASYNC_BUSY), as is a second request; a poll or wait with nothing to take gets NOASYNC (both pspkerror.h's). An
+  standing for the disc); the drive's seeks aren't counted; an ioctl takes the time of what it put in its output.
+  Meanwhile a poll answers 1 and a wait blocks the thread (the kernel's loop treats a request coming due as an event,
+  like a vertical blank); then the result waits on the file for the program to take, the threads waiting ending
+  their waits at once (the first to begin waiting takes it, any others finding none), and the file's callback is
+  notified (with a CB wait, it runs before the wait ends: should it take the result itself, polling, the wait finds
+  none). Every other call on a file with a request under way is refused (ASYNC_BUSY), as is a second request; a
+  poll or wait with nothing to take gets NOASYNC (both pspkerror.h's; intr/waits recorded NOASYNC for a wait on a
+  request whose result had been taken, so a wait that ends finding none is told that too). An
   asynchronous open gives its descriptor at once, which is also its result; one that fails leaves a descriptor holding
   only the error, gone once that's taken, as a file closed asynchronously is. pspautotests has no test of these
   functions, so all of that is chosen as games accept it: Burnout Legends polls before its first read (NOASYNC); the
@@ -1906,7 +1909,10 @@ why (what games accept).
   linear curves, exponent rev (height * rate / 2^32 a sample, rounded up) and linear bent (the rate up to three
   quarters of the top, inclusive, a quarter above) give adsrcurve's figures exactly; exponent (attack and sustain
   only) is an approximation. __sceSasSetSimpleADSR's SPU words become rates by formulas worked out from setadsr's
-  table. Lumines, Brave Story and Space Invaders Extreme had stopped or failed their sound at __sceSasInit.
+  table. A playing voice given new samples of its kind goes on from where it is, a PCM voice brought inside them
+  (past their end, to where its loop would have taken it, or else to its last sample, ending as the next grain moves
+  it on); given samples of another kind, it starts from their beginning. Lumines, Brave Story and Space Invaders
+  Extreme had stopped or failed their sound at __sceSasInit.
 - **Message pipes and mailboxes** (`messages.cpp`): sceKernelCreateMsgPipe, Delete, Send, SendCB, TrySend, Receive,
   ReceiveCB, TryReceive, Cancel and ReferMsgPipeStatus; CreateMbx, DeleteMbx, SendMbx, ReceiveMbx, ReceiveMbxCB,
   PollMbx, CancelReceiveMbx and ReferMbxStatus. A pipe's buffer (any size, none too) is a ring taken from the user
@@ -1919,9 +1925,13 @@ why (what games accept).
   their priority byte with attribute 0x400; threads by priority with 0x100), keeping their first words written as the
   PSP's ring (threads/mbx: a packet alone points at itself); the queue itself is the kernel's, so a program writing
   over those words loses nothing (on a PSP it can); a packet sent while queued is refused (0x800201c9, as mbx/send
-  recorded). Not shown by the tests, chosen: which of a bad mode and a bad size comes first; pipe attributes 0x100
-  and 0x1000 lining up receivers and senders by priority, 0x4000 taking the buffer from the partition's top. Peace
-  Walker's file system ("kfs io0" and the rest) runs on them, with the asynchronous requests.
+  recorded). Not shown by the tests, chosen: which of a bad mode and a bad size comes first; a message or buffer
+  without memory behind all of it refused (ILLEGAL_ADDR), after the checks recorded (msgpipe/send leaves its null
+  message with a length out), so bytes go straight across from memory to memory, one move each, with no copy of their
+  own; pipe attributes 0x100 and 0x1000 lining up receivers and senders by priority, 0x4000 taking the buffer from
+  the partition's top. A send or receive with callbacks that needn't wait runs the caller's callbacks as it returns,
+  once the caller has the CPU again, not those of a thread it woke. Peace Walker's file system ("kfs io0" and the
+  rest) runs on them, with the asynchronous requests.
 - **Movies** (`mpeg.cpp`): sceMpeg set up with the sizes video/mpeg recorded (a ringbuffer 0x868 bytes a packet,
   the library 0x10000; sceMpegRingbufferConstruct filled in as ringbuffer/construct shows, refusing over 4096 packets
   or a negative size; sceMpegCreate's "LIBMPEG"), then sceMpegQueryStreamOffset can't read any movie's header
@@ -1941,8 +1951,9 @@ why (what games accept).
   it and Burnout Dominator start them at boot.
 - **Fonts** (`font.cpp`): sceLibFont with no fonts installed, until the owner's flash0 provides the PGF files: the
   library starts, lists none, finds and opens none (NOT_FOUND written where an error's address is given), a font's
-  details refused; points and pixels convert at 128 dots an inch, or sceFontSetResolution's. Peace Walker and
-  Gunhound EX ask for fonts and draw their text without them.
+  details refused; points and pixels convert at 128 dots an inch, or sceFontSetResolution's (above 0 and below 10^9;
+  anything else, not-a-number too, refused with uOFW's INVALID_VALUE, pspfont.h giving the library no errors). Peace
+  Walker and Gunhound EX ask for fonts and draw their text without them.
 - **Odds and ends**: sceRtcGetCurrentClock (a time zone), GetCurrentClockLocalTime (the host's), GetTime_t, and
   GetDosTime/SetDosTime (rtc/convert's figures: 2107-09-11 24:00 is 4281057280; before 1980 or after 2107, -1);
   sceOpenPSIDGetOpenPSID (one made-up console: "PHOBOS"); sceDisplayGetAccumulatedHcount (286 lines a frame) and
@@ -1951,8 +1962,13 @@ why (what games accept).
   333, 333, 166, Peace Walker the second); sceKernelGetGPI (no debug switches); sceAtracReinit;
   sceUtilityLoadAvModule and UnloadAvModule (the modules 0x300-0x307); sceKernelGetThreadCurrentPriority;
   sceKernelRotateThreadReadyQueue (0 or 0x08-0x77, threads/threads/rotate's refusals); sceKernelSuspendDispatchThread
-  and ResumeDispatchThread (the running thread keeps the CPU, a wait meanwhile refused with CAN_NOT_WAIT; what they
-  return is chosen: 1, then 0, the pair working whichever way the state is read); sceKernelLockLwMutexCB.
+  and ResumeDispatchThread (the running thread keeps the CPU, rotating its own line too; what they return is chosen:
+  1, then 0, the pair working whichever way the state is read); sceKernelLockLwMutexCB. With dispatching held off, a
+  function that waits is refused (CAN_NOT_WAIT) before it changes anything, whether it would have had to wait or not,
+  as pspautotests' intr/waits recorded (a free lightweight mutex, an event flag's bits set already, a thread that has
+  ended, the drive ready); only the arguments that test shows checked ahead of that come first (a pipe's negative
+  size, an event flag's mode, a controller read's count, a file and its request, the drive's state bits). Sound's
+  blocking outputs are refused as with interrupts held off (a mixer output only when it would have to wait).
 - **Two fixes Peace Walker found.** Its power callback, notified as it's registered (power's recorded run shows the
   PSP does that), ran inside sceKernelLockLwMutexCB on a free mutex while the game held the lock the callback takes,
   and deadlocked it. The lightweight mutexes are Kernel_Library's, a user-mode library whose free lock never enters
@@ -1963,12 +1979,13 @@ why (what games accept).
 - **States** carry all of it (files' requests, sceSas, pipes and their buffers' blocks, mailboxes, threads'
   transfers, the ATRAC IDs, dispatch held off, the font resolution), each checked on loading: a request on a folder
   or due later than any can take (64 MiB from the disc: under a minute), a descriptor for a result it hasn't got, a
-  thread waiting on a file with no request; sceSas settings and voices its functions never leave (a curve or phase
-  there isn't, a PCM voice past its samples, a VAG size not in 16s, a voice on that isn't playing); a pipe's ring
-  past its buffer, its buffer not its block or another's (the one-owner rule now counts pipes), a thread waiting on
-  a pipe for more than it holds; a mailbox's packet queued twice or where there's no memory. A file dropped on
-  loading (gone from the host, or no disc) tells a thread waiting on its request it's a bad file. The layout is
-  version 5: a state of version 1 to 4 is refused by its header.
+  thread waiting on a file whose request isn't under way (one whose callbacks run ends its wait as it then finds the
+  file); sceSas settings and voices its functions never leave (a curve or phase there isn't, a PCM voice past its
+  samples, a VAG size not in 16s, a voice on that isn't playing); a pipe's ring past its buffer, its buffer not its
+  block or another's (the one-owner rule now counts pipes), a thread waiting on a pipe for more than it holds, or
+  with no memory behind the rest of its message; a mailbox's packet queued twice or where there's no memory. A file
+  dropped on loading (gone from the host, or no disc) tells a thread waiting on its request it's a bad file. The
+  layout is version 5: a state of version 1 to 4 is refused by its header.
 
 What the games do now, on the host (frames from the scratch runner, kept outside the repository, under
 `/tmp/hle2-runner/out`):
@@ -2019,8 +2036,46 @@ Tests (`tests/psp/run-tests.sh`, 180 groups, both sanitizers; `tests/psp/ares` 2
   line and transfers' counts not written ("message pipes waited for", "message pipes state"), sceSas's 32-sample
   start left out ("sas envelopes"), the kernel's 256 bytes left as 0xff ("threads kernel area zeroed").
 
-Uncertain: asynchronous requests' timing and every choice listed with them; the async priority unused; sceSas's
-exponent curve, the reading of VAG flags beyond those recorded, a keyed-on voice with no samples ending at the next
-grain; pipe attributes, mpeg's and the network's error numbers for headers and radios, sceLibFont's errors; the
-dispatch functions' return values; and whether the PSP zeroes the whole of a thread's kernel area (Peace Walker
-needs k0 + 4 zero).
+Review: a general-purpose reviewer of the branch; the clean-room spot check found every file independent; three
+medium and six low findings, all fixed (each with a test that failed before its fix) or recorded. The mediums: a
+pipe without a buffer copied a direct transfer through a host buffer as big as the counts asked, before any address
+check (a 32 MiB machine moved 1 GiB, the host's memory growing by as much): a message or buffer must now have memory
+behind all of it, bytes go straight across from memory to memory, and loading wants memory behind the rest of each
+pipe waiter's message; a send or receive with callbacks that woke a thread of higher priority ran that thread's
+notified callbacks (it was current by then), though it waited without them: the caller's start first now;
+__sceSasSetVoicePCM left a voice given fewer samples past them, a state the machine's own loading refused: it's
+brought inside them (and __sceSasSetVoice starts a voice that played other samples from the new data's beginning).
+The lows: two threads waiting on one request (only the first woke), and a CB wait whose callback took the result by
+polling, each left a thread waiting for good and the state refused: every waiter's wait ends now, and loading wants
+only a thread actually waiting to find its request under way; sceIoIoctlAsync timed its result by the output's
+length (0xffffffff: due in 52 minutes, the state refused), by the bytes it put there now; sceFontSetResolution kept
+1e10 and the infinities, which loading refuses, and now refuses them (and NaN) itself; with dispatching held off,
+waits were refused only as they'd block, after a lightweight mutex's waiter count had gone up or a pipe's bytes had
+moved, and rotating the caller's line switched threads: waits are refused first now, as intr/waits recorded, and
+rotating leaves the caller the CPU; a thread back from its callbacks to a lightweight mutex deleted meanwhile waited
+for good, and its wait ends deleted now. The sixth, whether pipe attribute 0x100 lines up receivers and 0x1000
+senders or the other way round, stays as it was: pspsdk's pspthreadman.h names no pipe attributes (its
+sceKernelCreateMsgPipe's attr is "Set to 0?"), so it's among the uncertainties below. Each of this branch's test
+groups now ends with its machine saved, loaded into another and saved again, the two states the same, which would
+have caught the sceSas, request and font findings. New groups: "message pipes memory", "message pipes callbacks on
+return", "async files two waiters", "async files callback takes the result" (a state saved as the callback waits,
+carried on in another machine), "async files ioctl timing", "sas voices given new samples", "threads dispatching
+held off", "threads lightweight mutex deleted in a callback"; "fonts missing" tries the resolutions refused, and
+"state fields" refuses three more states (a pipe waiter with no memory behind its buffer, or behind the rest of its
+message as its callbacks run; a thread waiting on a request already done). The tree passes 188 groups and 236
+checks, the layout unchanged (version 5).
+
+On the RP6 (build 104649, the whole stack from the user's CHDs): Space Invaders Extreme reaches its title screen at
+60 frames a second; Peace Walker reaches its title scene, but drawn garbled (striped) and at 9.5 frames a second
+(16%), a GE drawing and speed problem to look into; Burnout Legends, Midnight Club 3, SOCOM and Lumines ran with no
+missing functions noted.
+
+Uncertain: asynchronous requests' timing and every choice listed with them; the async priority unused; which of
+several threads waiting on one request takes its result (the first to begin waiting), and NOASYNC for the others
+and for a wait whose callback took the result (intr/waits recorded it for a wait begun after the result was taken);
+sceSas's exponent curve, the reading of VAG flags beyond those recorded, a keyed-on voice with no samples ending at
+the next grain, and where a voice given new samples goes on from; pipe attributes (pspsdk names none: 0x100 and
+0x1000 may order senders and receivers the other way round), and where a pipe's missing memory is checked; mpeg's
+and the network's error numbers for headers and radios, sceLibFont's errors (INVALID_VALUE for a resolution among
+them); the dispatch functions' return values, and a rotation of the caller's line with dispatching held off (no
+change here); and whether the PSP zeroes the whole of a thread's kernel area (Peace Walker needs k0 + 4 zero).

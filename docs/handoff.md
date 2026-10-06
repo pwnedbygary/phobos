@@ -767,7 +767,26 @@ threads' kernel area at the top of the stack wasn't zeroed. States are version 5
 - **Checks**: the parts' 180 groups with both sanitizers (new files: async, sas, messages, media; "state fields"
   changing every new field and refusing 36 more states); `tests/psp/ares` 236 checks (a version 4 state refused).
   Broken versions each failed their tests (requests done at once; a sender out of line; transfers' counts unwritten;
-  sceSas's 32-sample start dropped; the kernel area left as 0xff). Not checked on the RP6.
+  sceSas's 32-sample start dropped; the kernel area left as 0xff).
+- **Review:** a general-purpose reviewer; the clean-room spot check found every file independent; three medium and
+  six low findings, all fixed (each with a test that failed before it) or recorded. Medium: a pipe without a buffer
+  copied direct transfers through a host buffer sized by the guest's counts before any address check (1 GiB moved on
+  a 32 MiB machine): messages and buffers need memory behind them all (ILLEGAL_ADDR), bytes go memory to memory, and
+  loading checks each pipe waiter's rest; a send or receive with callbacks ran the callbacks of the higher-priority
+  thread it woke: the caller's start first now; __sceSasSetVoicePCM left a voice past fewer samples, the machine's
+  own state refused: it's brought inside them. Low: two threads waiting on one request, or a CB wait whose callback
+  polled the result, left a thread waiting for good: every waiter ends now (the first to wait with the result, the
+  rest NOASYNC), and loading checks only threads really waiting; sceIoIoctlAsync timed by the output's length (due
+  in 52 minutes): by the bytes moved now; sceFontSetResolution kept 1e10 and infinities: refused now, NaN too
+  (INVALID_VALUE); with dispatching held off, waits were refused only after a lightweight mutex's waiter count or a
+  pipe's bytes changed, and rotating switched threads: waits are refused first (as pspautotests' intr/waits
+  recorded), rotating keeps the CPU; a lightweight mutex deleted while its waiter's callbacks ran left the waiter for
+  good: its wait ends deleted. Recorded, not changed: which of pipe attributes 0x100 and 0x1000 orders senders
+  (pspsdk names neither). Every group of this branch now ends with a save, load and save giving the same state.
+  Checks: 188 groups (eight new), `tests/psp/ares` 236; the state's layout is unchanged (version 5).
+- **On the RP6** (build 104649): Space Invaders Extreme reaches its title screen at 60 fps; Peace Walker reaches its
+  title scene but drawn garbled (striped) and at 9.5 fps (16%), a GE drawing and speed problem to look into; Burnout
+  Legends, Midnight Club 3, SOCOM and Lumines ran with no missing functions noted.
 
 ## PSP core: the functions retail games ask for — 2026-10-05
 
