@@ -2171,7 +2171,7 @@ outside the repository; per second: RMS in dBFS, peak, clipped samples, zero cro
   their menus' effects through sas (Burnout's at pitch 0x800, SOCOM's at 0x1000): peaks 8006 and 9979, -29 to -51
   dBFS, nothing clipped.
 
-Tests (`tests/psp/run-tests.sh`, 197 groups, both sanitizers; `tests/psp/ares` 240 checks):
+Tests (`tests/psp/run-tests.sh`, 197 groups, both sanitizers; `tests/psp/ares` 250 checks):
 - `audio.cpp`: "audio mixed" (a stereo buffer at 0x8000 and 0x4000 heard frame by frame, rounded down; mono at two
   volumes, and at 0xFFFF clamped at both ends; two channels adding up and clamping, the second joining the running
   DMA heard from frame 64; a buffer handed over 1 ms on heard from frame 44; a null buffer silent), "audio src heard"
@@ -2188,12 +2188,15 @@ Tests (`tests/psp/run-tests.sh`, 197 groups, both sanitizers; `tests/psp/ares` 2
   voice, dry off, the wet sound through an effect and with none, mixing at 0x800), "sas voices in states" (a VAG and
   a PCM voice part way: saved, loaded, the same next grains).
 - `states.cpp`'s "state fields" changes every new field and refuses 7 more states (above); `tests/psp/ares` refuses a
-  version 5 state.
+  version 5 state, and hears the system's stream (taken at 44.1 kHz, where ares's resampler hands samples on as they
+  are): 735.7 frames a frame, cube silent, a buffer handed to a mixer channel as cube runs heard sample for sample
+  from the frame it was handed over at (its right at half), and silence at that rate once hello has ended.
 - Broken versions each failed: VAG's guess with a half added (vag's recorded filter 9, 0xb39c for 0xb39b, and a
   hand-worked sample), part 20's flags `& 7` (the 0x41 block ended its voice), VAG heard without its lag (every
   recorded VAG sample), the envelope applied after its step (pcm's and outputmode's recorded samples), dry off from
   __sceSasInit, multichannel's planes interleaved, the mixer's volume rounded towards zero, the sums unclamped, the
-  SRC channel's nearest sample for the straight line, and its place left out of states ("state fields").
+  SRC channel's nearest sample for the straight line, and its place left out of states ("state fields"); and the
+  system's silent stream of before (`tests/psp/ares`).
 
 Uncertain: everything listed as chosen above; whether sceAudio's mixer rounds a sample times a volume down (as
 here) or towards zero, and clamps once, as the sums are taken (here), or after each channel it adds (which differs

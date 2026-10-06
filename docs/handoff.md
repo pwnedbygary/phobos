@@ -767,10 +767,11 @@ describes it. Reverb is a pass-through (no reverb added); noise, waves and sas's
   versions 1-5 refused.
 - **Checks**: the parts' 197 groups with both sanitizers (nine new: "audio mixed", "audio src heard", "audio output
   in states", "sas vag as recorded", "sas vag decoded", "sas pcm heard", "sas output modes", "sas voices mixed", "sas
-  voices in states"; "state fields" with the new fields and 7 more refusals); `tests/psp/ares` 240 checks (a
-  version 5 state refused). Ten broken versions each failed (VAG's guess with a half added, part 20's `& 7`, no VAG
-  lag, the envelope after its step, dry off, multichannel interleaved, the mixer's volume rounded towards zero, no
-  clamp, the SRC channel's nearest sample, its place left out of states).
+  voices in states"; "state fields" with the new fields and 7 more refusals); `tests/psp/ares` 250 checks (a
+  version 5 state refused; the stream heard: a mixer buffer sample for sample, 735.7 frames a frame). Eleven broken
+  versions each failed (VAG's guess with a half added, part 20's `& 7`, no VAG lag, the envelope after its step, dry
+  off, multichannel interleaved, the mixer's volume rounded towards zero, no clamp, the SRC channel's nearest sample,
+  its place left out of states, the old silent stream).
 - **Next**: an ATRAC3+ decoder (Burnout's, SOCOM's and Invaders' music), sas reverb, noise and waves; the RP6 run.
 
 ## PSP core: more functions games ask for — 2026-10-05
