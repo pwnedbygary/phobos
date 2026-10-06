@@ -103,7 +103,7 @@ fun AboutScreen(viewModel: MainViewModel, onBack: () -> Unit, onOpenLicenses: ()
             SettingsCategory("Licenses") {
                 SettingsClickableItem(
                     title = "Open-source licenses",
-                    description = "Phobos is based on ares (© 2004–2025 ares team, Near et al., ISC license) and uses open-source components under their own licenses",
+                    description = "Phobos's own code is under the GPL, version 3 or later. It's based on ares (© 2004–2025 ares team, Near et al., ISC license) and uses open-source components under their own licenses",
                     onClick = onOpenLicenses,
                     icon = Icons.Rounded.Description,
                 )
