@@ -1,4 +1,28 @@
 ----------------------------------------------------------------------
+Phobos
+
+Copyright (c) 2026 Phobos Team
+
+Phobos's own code (the Android app, its native runner, and the changes
+Phobos makes to the components below) is free software: you can
+redistribute it and/or modify it under the terms of the GNU General
+Public License as published by the Free Software Foundation, either
+version 3 of the License, or (at your option) any later version. The
+License's text is in COPYING, and is the last notice in the app's list.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+General Public License for more details.
+
+Each component below keeps its own license. The console firmware that
+ares ships, compiled into the native library and in the APK's System
+folder, is not covered by the GPL or by any license that allows its
+redistribution. Phobos includes it as upstream ares does, and it is not
+part of the work the GPL covers.
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
 ares
 
 Copyright (c) 2004-2025 ares team, Near et al

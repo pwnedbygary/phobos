@@ -20,7 +20,9 @@ class LicenseNoticesTest {
     @Test fun theRepositoryLicenseCoversWhatPhobosShips() {
         val notices = parseLicenseNotices(File("../../LICENSE").readText())
         val titles = notices.map { it.title }
-        assertEquals("ares", titles.first())
+        assertEquals(listOf("Phobos", "ares"), titles.take(2))
+        val phobos = notices.first().text.replace(Regex("\\s+"), " ")
+        assertTrue(phobos.contains("either version 3 of the License, or (at your option) any later version"))
         assertEquals(titles.size, titles.toSet().size)
         assertTrue(notices.all { it.text.isNotBlank() })
         val expected = listOf(
@@ -41,5 +43,13 @@ class LicenseNoticesTest {
         assertTrue("the notice names the release built", ffmpeg.text.contains("ffmpeg-$version.tar.xz"))
         assertTrue("the notice gives its hash", ffmpeg.text.replace("\n", " ").contains(sha256))
         assertTrue("no GPL parts", build.contains("--disable-gpl") && !build.contains("--enable-gpl"))
+    }
+
+    @Test fun copyingIsTheGplVersion3() {
+        val gpl = File("../../COPYING").readText()
+        assertTrue(gpl.trimStart().startsWith("GNU GENERAL PUBLIC LICENSE"))
+        assertTrue(gpl.contains("Version 3, 29 June 2007"))
+        // The APK appends it to LICENSE as one notice.
+        assertTrue(gpl.lines().none { it == rule })
     }
 }

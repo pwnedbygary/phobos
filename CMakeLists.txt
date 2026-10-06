@@ -1,10 +1,43 @@
 cmake_minimum_required(VERSION 3.22)
-project(phobos)
+project(phobos LANGUAGES C CXX)
 
-add_compile_definitions(BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY SLJIT_CONFIG_ARM_64=1 SLJIT_HAVE_CONFIG_PRE=1 SLJIT_HAVE_CONFIG_POST=1 SLJIT_DEBUG=0 ARES_ENABLE_ZIP ARES_ENABLE_CHD CORE_A26 CORE_CV CORE_FC CORE_GB CORE_GBA CORE_MD CORE_MS CORE_MSX CORE_N64 CORE_NG CORE_NGP CORE_PCE CORE_PS1 CORE_PSP CORE_SATURN CORE_SFC CORE_SG CORE_SPEC CORE_WS PHOBOS_TAPE_SPEED PROFILE_PERFORMANCE)
-add_compile_options(-w -O3 -flto=thin -ftree-vectorize -funroll-loops -fno-math-errno -fno-trapping-math)
+# Android builds libphobos_android.so for the Gradle app. Everywhere else this builds the
+# desktop program, phobos, which runs the same cores and runner under SDL.
+set(PHOBOS_DEFINITIONS BUILD_RELEASE VULKAN VK_NO_PROTOTYPES MIA_LIBRARY SLJIT_HAVE_CONFIG_PRE=1 SLJIT_HAVE_CONFIG_POST=1 SLJIT_DEBUG=0 ARES_ENABLE_ZIP ARES_ENABLE_CHD CORE_A26 CORE_CV CORE_FC CORE_GB CORE_GBA CORE_MD CORE_MS CORE_MSX CORE_N64 CORE_NG CORE_NGP CORE_PCE CORE_PS1 CORE_PSP CORE_SATURN CORE_SFC CORE_SG CORE_SPEC CORE_WS PHOBOS_TAPE_SPEED PROFILE_PERFORMANCE)
 
-add_subdirectory(thirdparty/libadrenotools)
+if(ANDROID)
+  add_compile_definitions(${PHOBOS_DEFINITIONS} SLJIT_CONFIG_ARM_64=1)
+  add_compile_options(-w -O3 -flto=thin -ftree-vectorize -funroll-loops -fno-math-errno -fno-trapping-math)
+  add_subdirectory(thirdparty/libadrenotools)
+else()
+  # SDL is configured before the core's definitions and include paths exist, so it builds
+  # with its own: the core's VULKAN macro breaks SDL's GPU driver table.
+  include(FetchContent)
+  FetchContent_Declare(SDL3
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    GIT_TAG release-3.2.30
+    GIT_SHALLOW TRUE)
+  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+  set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+  set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(SDL3)
+
+  set(CMAKE_CXX_STANDARD 20)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  add_compile_definitions(${PHOBOS_DEFINITIONS})
+  add_compile_options(-w)
+  # sljit picks its target from the compiler (x86-64 or ARM64). On x86-64 the N64 RSP's
+  # vector unit uses SSE4.1 when the compiler may emit it, and a scalar path otherwise.
+  if(APPLE)
+    add_compile_options("SHELL:-Xarch_x86_64 -msse4.1")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    add_compile_options(-msse4.1)
+  endif()
+  # desktop/compat/android/log.h stands in for the NDK's logging header.
+  include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/desktop/compat)
+endif()
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -84,11 +117,10 @@ set(OTHER_SOURCES
     nall/nall/nall.cpp
     nall/nall/gdb/server.cpp
     mia/mia.cpp
-    libco/aarch64.c
+    libco/libco.c
     thirdparty/volk/volk.c
     thirdparty/GLFW/glfw_stub.cpp
     android/app/src/main/cpp/PhobosRunner.cpp
-    android/app/src/main/cpp/PhobosJNI.cpp
     ares/ares/android_globals.cpp
     ares/pce/vdp-performance/vdp.cpp
     thirdparty/libchdr/src/libchdr_bitstream.c
@@ -236,7 +268,7 @@ string(APPEND MIA_RESOURCE_CODE "}\n}\n")
 file(CONFIGURE OUTPUT "${MIA_RESOURCE_CPP}" CONTENT "${MIA_RESOURCE_CODE}" @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${MIA_RESOURCE_INPUTS})
 
-add_library(phobos_android SHARED
+add_library(phobos_core STATIC
     ${ARES_SOURCES}
     ${OTHER_SOURCES}
     ${MIA_RESOURCE_CPP}
@@ -278,55 +310,105 @@ set(ARES_ALL_SOURCES
 
 set_property(SOURCE ${ARES_ALL_SOURCES} PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ares/ares/ares.hpp")
 
-find_library(log-lib log)
-find_library(android-lib android)
-find_library(aaudio-lib aaudio)
-find_library(vulkan-lib vulkan)
-find_library(egl-lib EGL)
-find_library(gles-lib GLESv3)
-find_library(z-lib z)
-find_library(dl-lib dl)
+if(ANDROID)
+  add_library(phobos_android SHARED
+      android/app/src/main/cpp/PhobosJNI.cpp
+      android/app/src/main/cpp/PhobosHostAndroid.cpp
+  )
 
-target_link_libraries(phobos_android ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} adrenotools)
+  find_library(log-lib log)
+  find_library(android-lib android)
+  find_library(aaudio-lib aaudio)
+  find_library(vulkan-lib vulkan)
+  find_library(egl-lib EGL)
+  find_library(gles-lib GLESv3)
+  find_library(z-lib z)
+  find_library(dl-lib dl)
 
-# FFmpeg's LGPL decoders for the PSP's music and movies (docs/psp-core.md, part 26): built from the official release
-# by thirdparty/ffmpeg/build.sh (once, then kept in its cache) and linked as the shared libraries libavcodec.so and
-# libavutil.so, which the APK carries beside Phobos's own library, as the LGPL asks. -DPHOBOS_FFMPEG=OFF builds
-# without them: the PSP then has no music or movies, as before.
-option(PHOBOS_FFMPEG "Decode the PSP's music and movies with FFmpeg's LGPL decoders" ON)
-if(PHOBOS_FFMPEG)
-  set(FFMPEG_BUILD ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ffmpeg/build.sh)
-  set(FFMPEG_NDK ${CMAKE_ANDROID_NDK})
-  if(NOT FFMPEG_NDK)
-    set(FFMPEG_NDK ${ANDROID_NDK})
+  target_link_libraries(phobos_android PRIVATE phobos_core ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} adrenotools)
+
+  # FFmpeg's LGPL decoders for the PSP's music and movies (docs/psp-core.md, part 26): built from the official
+  # release by thirdparty/ffmpeg/build.sh (once, then kept in its cache) and linked as the shared libraries
+  # libavcodec.so and libavutil.so, which the APK carries beside Phobos's own library, as the LGPL asks.
+  # -DPHOBOS_FFMPEG=OFF builds without them: the PSP then has no music or movies, as before (as on the desktop).
+  option(PHOBOS_FFMPEG "Decode the PSP's music and movies with FFmpeg's LGPL decoders" ON)
+  if(PHOBOS_FFMPEG)
+    set(FFMPEG_BUILD ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ffmpeg/build.sh)
+    set(FFMPEG_NDK ${CMAKE_ANDROID_NDK})
+    if(NOT FFMPEG_NDK)
+      set(FFMPEG_NDK ${ANDROID_NDK})
+    endif()
+    execute_process(
+      COMMAND bash ${FFMPEG_BUILD} android ${FFMPEG_NDK} ${ANDROID_PLATFORM_LEVEL}
+      OUTPUT_VARIABLE FFMPEG_OUTPUT
+      RESULT_VARIABLE FFMPEG_RESULT
+      OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT FFMPEG_RESULT EQUAL 0)
+      message(FATAL_ERROR "FFmpeg didn't build (above); -DPHOBOS_FFMPEG=OFF builds Phobos without it")
+    endif()
+    string(REGEX REPLACE ".*\n" "" FFMPEG_DIR "${FFMPEG_OUTPUT}")
+    foreach(FFMPEG_LIBRARY avcodec avutil)
+      add_library(${FFMPEG_LIBRARY} SHARED IMPORTED)
+      set_target_properties(${FFMPEG_LIBRARY} PROPERTIES IMPORTED_LOCATION ${FFMPEG_DIR}/lib/lib${FFMPEG_LIBRARY}.so)
+    endforeach()
+    # Built again should the cache have gone since CMake ran (a no-op otherwise).
+    add_custom_target(ffmpeg COMMAND bash ${FFMPEG_BUILD} android ${FFMPEG_NDK} ${ANDROID_PLATFORM_LEVEL} > /dev/null
+      BYPRODUCTS ${FFMPEG_DIR}/lib/libavcodec.so ${FFMPEG_DIR}/lib/libavutil.so)
+    add_dependencies(phobos_core ffmpeg)
+    target_include_directories(phobos_core SYSTEM PRIVATE ${FFMPEG_DIR}/include)
+    target_compile_definitions(phobos_core PRIVATE ARES_ENABLE_FFMPEG)
+    target_link_libraries(phobos_android PRIVATE avcodec avutil)
   endif()
-  execute_process(
-    COMMAND bash ${FFMPEG_BUILD} android ${FFMPEG_NDK} ${ANDROID_PLATFORM_LEVEL}
-    OUTPUT_VARIABLE FFMPEG_OUTPUT
-    RESULT_VARIABLE FFMPEG_RESULT
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-  if(NOT FFMPEG_RESULT EQUAL 0)
-    message(FATAL_ERROR "FFmpeg didn't build (above); -DPHOBOS_FFMPEG=OFF builds Phobos without it")
+
+  # Objects are ThinLTO bitcode (-flto=thin above). Without LTO flags on the link
+  # line lld still runs ThinLTO, but its backend defaults to -O2.
+  target_link_options(phobos_android PRIVATE -flto=thin -O3)
+
+  # Only the JNIEXPORT entry points need to be visible outside the library.
+  # Hidden symbols let internal calls and global accesses skip the PLT and GOT.
+  # Not global: libadrenotools' hook libraries export their entry points by default.
+  target_compile_options(phobos_core PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+  target_compile_options(phobos_android PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+else()
+  # Cores call __android_log_print without including <android/log.h>.
+  target_compile_options(phobos_core PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/desktop/compat/android/log.h>")
+
+  add_executable(phobos
+      desktop/main.cpp
+      desktop/PhobosHostDesktop.cpp
+      desktop/Firmware.cpp
+      desktop/Input.cpp
+      desktop/Library.cpp
+      desktop/Settings.cpp
+  )
+  find_package(Threads REQUIRED)
+  target_link_libraries(phobos PRIVATE phobos_core SDL3::SDL3-static Threads::Threads ${CMAKE_DL_LIBS})
+  # The boot ROMs and game databases the Android app ships as assets, beside the program; it
+  # copies them into its data folder at start, as the app's extractAssets() does.
+  add_custom_command(TARGET phobos POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/Database $<TARGET_FILE_DIR:phobos>/Database
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/android/app/src/main/assets/System $<TARGET_FILE_DIR:phobos>/System)
+  if(WIN32)
+    # The icon is made from the PNG at configure time when Python is around; without it the
+    # executable just has no icon.
+    set(PHOBOS_ICON_RESOURCE "")
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_FOUND)
+      execute_process(
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/desktop/windows/make-ico.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/ares/ares/resource/icon@2x.png ${CMAKE_CURRENT_BINARY_DIR}/phobos.ico
+        RESULT_VARIABLE PHOBOS_ICON_RESULT)
+      if(PHOBOS_ICON_RESULT EQUAL 0)
+        set(PHOBOS_ICON_RESOURCE "1 ICON \"${CMAKE_CURRENT_BINARY_DIR}/phobos.ico\"")
+      endif()
+    endif()
+    configure_file(desktop/windows/phobos.rc.in ${CMAKE_CURRENT_BINARY_DIR}/phobos.rc @ONLY)
+    # Phobos.exe needs nothing beside it: the C++ runtime and winpthreads link in statically,
+    # and Vulkan is loaded at run time from the driver's vulkan-1.dll.
+    target_sources(phobos PRIVATE desktop/PlatformWindows.cpp ${CMAKE_CURRENT_BINARY_DIR}/phobos.rc)
+    target_link_options(phobos PRIVATE -static $<$<CONFIG:Release>:-s>)
+    # nall's registry helpers use shlwapi; its gdb server, Winsock.
+    target_link_libraries(phobos PRIVATE shlwapi ws2_32)
+    set_target_properties(phobos PROPERTIES WIN32_EXECUTABLE ON OUTPUT_NAME Phobos)
   endif()
-  string(REGEX REPLACE ".*\n" "" FFMPEG_DIR "${FFMPEG_OUTPUT}")
-  foreach(FFMPEG_LIBRARY avcodec avutil)
-    add_library(${FFMPEG_LIBRARY} SHARED IMPORTED)
-    set_target_properties(${FFMPEG_LIBRARY} PROPERTIES IMPORTED_LOCATION ${FFMPEG_DIR}/lib/lib${FFMPEG_LIBRARY}.so)
-  endforeach()
-  # Built again should the cache have gone since CMake ran (a no-op otherwise).
-  add_custom_target(ffmpeg COMMAND bash ${FFMPEG_BUILD} android ${FFMPEG_NDK} ${ANDROID_PLATFORM_LEVEL} > /dev/null
-    BYPRODUCTS ${FFMPEG_DIR}/lib/libavcodec.so ${FFMPEG_DIR}/lib/libavutil.so)
-  add_dependencies(phobos_android ffmpeg)
-  target_include_directories(phobos_android SYSTEM PRIVATE ${FFMPEG_DIR}/include)
-  target_compile_definitions(phobos_android PRIVATE ARES_ENABLE_FFMPEG)
-  target_link_libraries(phobos_android avcodec avutil)
 endif()
-
-# Objects are ThinLTO bitcode (-flto=thin above). Without LTO flags on the link
-# line lld still runs ThinLTO, but its backend defaults to -O2.
-target_link_options(phobos_android PRIVATE -flto=thin -O3)
-
-# Only the JNIEXPORT entry points need to be visible outside the library.
-# Hidden symbols let internal calls and global accesses skip the PLT and GOT.
-# Not global: libadrenotools' hook libraries export their entry points by default.
-target_compile_options(phobos_android PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
