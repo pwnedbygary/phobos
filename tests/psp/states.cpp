@@ -845,6 +845,7 @@ static auto stateFields() -> void {
   refuses("a font held by a handle fewer than it counts", [&] { fontOne().references = 3; });
   refuses("a font no handle holds", [&] { fontLibraryOne().open[0] = fontLibraryOne().open[2] = false; });
   refuses("a font of memory that isn't a PGF", [&] { fontOne().address += 4; });
+  refuses("a font of the program's memory read whole into it", [&] { fontOne().mode = 1; });
   auto systemOne = [&]() -> Kernel::OpenFont& {  //the font made system font 1 again, read a piece at a time
     auto& font = fontOne();
     font.source = 0, font.index = 1, font.mode = 0, font.hash = k.systemFonts[1].hash, font.blocks.resize(9);

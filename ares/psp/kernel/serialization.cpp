@@ -363,7 +363,8 @@ auto Kernel::serialize(serializer& s) -> bool {
   //through. A font's bytes aren't in the state: they're read again from where they came from (fontReload()), and a
   //system font or a file must be the very one it was. A library has 9 handles at most; an open one holds a font of
   //its own library, or none yet while a call opening one goes on; a font counts the handles holding it, and its
-  //memory is what its kind of open asked for; a call is a living thread's, part way through what its kind does.
+  //memory is what its kind of open asked for (a font of the program's memory is read where it is: never whole into
+  //it, which only a system font or a file can be); a call is a living thread's, part way through what its kind does.
   map(fontLibraries, [&](FontLibrary& library) {
     s(library.address); s(library.slots); s(library.handles); s(library.data); s(library.list);
     s(library.fonts); s(library.open);
@@ -374,7 +375,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     s(font.mode); s(font.references);
     vector(font.blocks, [&](u32& block) { s(block); });
     s(font.hash);
-    check(font.source <= 2 && font.mode <= 1 && font.blocks.size() <= 9);
+    check(font.source <= 2 && font.mode <= 1 && (font.source != 2 || font.mode == 0) && font.blocks.size() <= 9);
   };
   map(openFonts, fontFields);
   s(nextFontID);

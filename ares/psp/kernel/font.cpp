@@ -43,6 +43,10 @@ namespace {
   constexpr u32 HandleSize = 76, HandleDataSize = 560, MemoryFontSize = 12, MaxFonts = 9;
   constexpr u32 StyleSize = 0xa8, InfoSize = 0x105, CharInfoSize = 0x3c;
 
+  //The most read of a font: a system font's file (the biggest of the PSP's, jpn0.pgf, is 1.5 MB), and of the game's
+  //memory for a font held there (fontMemory()).
+  constexpr u32 FontFileMost = 4_MiB, MemoryFontMost = 8_MiB;
+
   //The PSP's eighteen fonts, in the order its libfont lists them (pspautotests' fontlist recorded jpn0 first, and
   //open each one's memory, which the owner's files match font for font; find and optimum recorded which comes first
   //for each family and style), and what the list says of each beyond its file: family (1 sans-serif, 2 serif),
@@ -78,9 +82,9 @@ namespace {
   }
 }
 
-//The system fonts from a host folder: the eighteen by name, whatever their case there, each read and checked whole.
-//One missing or damaged keeps its place in the list, and can't be opened (sceFontOpen says which); with none at all
-//the library is the stand-in.
+//The system fonts from a host folder: the eighteen by name, whatever their case there, each read and checked whole,
+//one bigger than FontFileMost not read at all. One missing or damaged keeps its place in the list, and can't be
+//opened (sceFontOpen says which); with none at all the library is the stand-in.
 auto Kernel::fontsFrom(const std::string& folder) -> void {
   systemFonts.clear();
   if(folder.empty()) return;
@@ -96,14 +100,21 @@ auto Kernel::fontsFrom(const std::string& folder) -> void {
     SystemFont font;
     font.file = entry.file;
     if(auto at = found.find(entry.file); at != found.end()) {
-      std::ifstream file(at->second, std::ios::binary);
-      std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-      font.hash = fontHash(bytes);
       font.present = true;
-      auto pgf = std::make_shared<PGF>();
-      std::string problem;
-      if(pgf->open(std::move(bytes), problem)) font.pgf = pgf;
-      else note(std::string{"fonts: "} + entry.file + " can't be read: " + problem);
+      std::error_code sizeError;
+      u64 size = std::filesystem::file_size(at->second, sizeError);
+      if(sizeError || size > FontFileMost) {
+        note(std::string{"fonts: "} + entry.file + " isn't read: " +
+             (sizeError ? "it isn't a file" : "it's bigger than any of the PSP's fonts"));
+      } else {
+        std::ifstream file(at->second, std::ios::binary);
+        std::vector<u8> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        font.hash = fontHash(bytes);
+        auto pgf = std::make_shared<PGF>();
+        std::string problem;
+        if(pgf->open(std::move(bytes), problem)) font.pgf = pgf;
+        else note(std::string{"fonts: "} + entry.file + " can't be read: " + problem);
+      }
     }
     if(!font.pgf) missing += std::string{missing.empty() ? "" : ", "} + entry.file;
     systemFonts.push_back(std::move(font));
@@ -381,18 +392,19 @@ auto Kernel::fontEnd(FontCall& call) -> void {
     }
     auto& font = call.opening;
     auto& bytes = font.pgf->data();
-    if(font.mode == 1) {
+    if(font.source == 2) {
+      //a font of the program's memory, read where it is (whatever its mode: it asked for the record alone)
+      u32 record[3] = {font.address, font.length, 0};
+      for(u32 n : range(3)) {
+        if(memory.reaches(call.got[0] + n * 4, 4)) memory.write(4, call.got[0] + n * 4, record[n]);
+      }
+    } else if(font.mode == 1) {
       //the whole file in the program's memory, and a small record of where (what's in it is a guess: the place, the
       //length and a position)
       memory.copyIn(call.got[0], bytes.data(), bytes.size());
       u32 record[3] = {call.got[0], u32(bytes.size()), 0};
       for(u32 n : range(3)) {
         if(memory.reaches(call.got[1] + n * 4, 4)) memory.write(4, call.got[1] + n * 4, record[n]);
-      }
-    } else if(font.source == 2) {
-      u32 record[3] = {font.address, font.length, 0};
-      for(u32 n : range(3)) {
-        if(memory.reaches(call.got[0] + n * 4, 4)) memory.write(4, call.got[0] + n * 4, record[n]);
       }
     } else {
       //the tables, read into the blocks as they are in the file (pspautotests' openfile: read straight into them)
@@ -438,7 +450,7 @@ static auto fontAsks(const PGF& pgf, u32 mode, u32 source) -> std::vector<u32> {
 //Opens a font for library (the opens' common part, past their own checks): a font the library has loaded already
 //gets another handle, nothing asked for (pspautotests: "While open: OK (allocated 0)"); else the font is loaded into
 //memory the game gives. Each open takes one of the library's handles, numFonts of them (TOO_MANY_OPEN_FONTS when
-//they're all open, as with four open of four).
+//they're all open, as with four open of four). Only a font the library hasn't loaded needs its glyphs (pgf) given.
 auto Kernel::fontOpen(FontLibrary& library, OpenFont font, u32 errorAt) -> void {
   auto refuse = [&](u32 error) {
     if(errorAt && memory.reaches(errorAt, 4)) memory.write(4, errorAt, error);
@@ -482,11 +494,13 @@ auto Kernel::fontCallable(u32 function) -> bool {
   return function && !(function & 3) && memory.reaches(function, 4);
 }
 
-//Copies the game's memory from address, length bytes or as far as RAM goes: a font it holds there.
+//Copies the game's memory from address, length bytes, as far as RAM goes and no more than MemoryFontMost: a font it
+//holds there. Games may give a length far past the font's end (pspautotests' openmem opened one with -1), which
+//would otherwise copy the rest of RAM at every open and every state loaded.
 auto Kernel::fontMemory(u32 address, u32 length) -> std::vector<u8> {
   u32 physical = address & 0x1fff'ffff;
   if(physical < Memory::RAMBase || physical - Memory::RAMBase >= memory.ram.size()) return {};
-  length = std::min<u64>(length, memory.ram.size() - (physical - Memory::RAMBase));
+  length = std::min<u64>({length, memory.ram.size() - (physical - Memory::RAMBase), MemoryFontMost});
   std::vector<u8> bytes(length);
   memory.copyOut(bytes.data(), address, length);
   return bytes;
@@ -616,7 +630,7 @@ auto Kernel::sceFontOpen() -> void {
 
 //(library, a PGF in the game's memory, its length, where to put an error): a font the game holds, read where it is.
 //Its length counts as unsigned (pspautotests' openmem: -1 and longer than the font open), but 0 doesn't, nor does no
-//memory (INVALID_PARAMETER).
+//memory (INVALID_PARAMETER). Of a length past the font's end, 8 MiB at most are read (fontMemory()).
 auto Kernel::sceFontOpenUserMemory() -> void {
   if(!fontsInstalled()) return standInOpen(arg(3));
   auto library = fontLibraryAt(arg(0));
@@ -627,21 +641,29 @@ auto Kernel::sceFontOpenUserMemory() -> void {
   };
   if(!library) return refuse(FontInvalidLibrary);
   if(!address || !length) return refuse(FontInvalidParameter);
-  auto pgf = std::make_shared<PGF>();
-  std::string problem;
-  if(!pgf->open(fontMemory(address, length), problem)) return refuse(FontInvalidData);
   OpenFont font;
   font.source = 2;
   font.address = address;
   font.length = length;
-  font.pgf = pgf;
+  //one the library has open at that address already is shared as it is (fontOpen()): its memory isn't read again
+  bool loaded = false;
+  for(auto& [id, open] : openFonts) {
+    if(open.library == library->address && open.source == 2 && open.address == address) loaded = true;
+  }
+  if(!loaded) {
+    auto pgf = std::make_shared<PGF>();
+    std::string problem;
+    if(!pgf->open(fontMemory(address, length), problem)) return refuse(FontInvalidData);
+    font.pgf = pgf;
+  }
   fontOpen(*library, std::move(font), errorAt);
 }
 
 //(library, a file's path, mode, where to put an error): a PGF file of the game's. Mode 1 reads it whole into the
 //game's memory; mode 0 (any other) needs the library's open, close, read and seek callbacks set (INVALID_PARAMETER
 //without any of them: pspautotests' openfile), which a PSP reads the file through, a piece at a time. Here it's read
-//through the kernel's files either way (see the top of this file). A file that isn't there: HANDLER_OPEN_FAILED.
+//through the kernel's files either way (see the top of this file). A file that isn't there: HANDLER_OPEN_FAILED. A
+//path relative to the working folder (sceIoChdir's) is kept whole.
 auto Kernel::sceFontOpenUserFile() -> void {
   if(!fontsInstalled()) return standInOpen(arg(3));
   auto library = fontLibraryAt(arg(0));
@@ -660,6 +682,11 @@ auto Kernel::sceFontOpenUserFile() -> void {
   OpenFont font;
   font.source = 1;
   font.path = memory.readString(path, 255);
+  //kept by its whole path: a path with no device goes on from the working folder (as split() reads it), which a
+  //state puts back only after its fonts have been read again (fontReload())
+  if(font.path.find(':') == std::string::npos && workingDirectory.find(':') != std::string::npos) {
+    font.path = workingDirectory + "/" + font.path;
+  }
   font.mode = mode;
   std::vector<u8> bytes;
   if(readWhole(font.path, bytes)) return refuse(FontOpenFailed);

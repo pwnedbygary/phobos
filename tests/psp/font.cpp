@@ -806,6 +806,49 @@ static auto fontsOwn() -> void {
   KernelMachine fresh;
   prepare(fresh);
   CHECK(loadState(fresh, state), false);
+  stick.put("font.pgf", std::string(bytes.begin(), bytes.end()));
+
+  //A file opened by a path relative to the working folder (sceIoChdir's) is kept by its whole path: a state's fonts
+  //are read again before the state's working folder is put back, and a fresh machine's is the memory stick's top.
+  {
+    FontMachine g(folder);
+    stick.put("FONTS/A.PGF", std::string(bytes.begin(), bytes.end()));
+    g.m.kernel.mount("ms0", stick.path.string());
+    CHECK(g.m.call("sceIoChdir", {g.m.string("ms0:/FONTS")}), 0);
+    u32 relative = viaProgram(g.m, "sceFontOpenUserFile", {g.library, g.m.string("A.PGF"), 1, Error});
+    CHECK(relative != 0 && word(g.m, Error) == 0, true);
+    CHECK(g.m.kernel.openFonts.size() == 1 && g.m.kernel.openFonts.begin()->second.path == "ms0:/FONTS/A.PGF", true);
+    KernelMachine other;
+    prepare(other);
+    CHECK(other.kernel.workingDirectory == "ms0:/" && loadState(other, saveState(g.m)), true);
+    CHECK(roundTrip(g.m, prepare), true);
+  }
+
+  //A font in memory given a length past its end (openmem's -1) is read 8 MiB at most, not to the end of RAM, as it
+  //opens and as a state brings it back; opened again where the library has it open, it's shared without its memory
+  //being read again (here written over since).
+  {
+    FontMachine g(folder);
+    g.m.system.memory.copyIn(0x0896'0000, bytes.data(), bytes.size());
+    u32 first = viaProgram(g.m, "sceFontOpenUserMemory", {g.library, 0x0896'0000, ~0u, Error});
+    CHECK(first != 0 && word(g.m, Error) == 0, true);
+    auto read = [](KernelMachine& k) {
+      u64 most = 0;
+      for(auto& [id, font] : k.kernel.openFonts) if(font.pgf) most = std::max<u64>(most, font.pgf->size());
+      return most;
+    };
+    CHECK(read(g.m) >= bytes.size() && read(g.m) <= 8_MiB, true);
+    CHECK(g.m.call("sceFontGetCharInfo", {first, 'B', Buffer}), 0);
+    CHECK(word(g.m, Buffer + 0x10), 303);
+    KernelMachine other;
+    prepare(other);
+    CHECK(loadState(other, saveState(g.m)), true);
+    CHECK(read(other) >= bytes.size() && read(other) <= 8_MiB, true);
+    g.m.system.memory.fill(0x0896'0000, 0xee, bytes.size());
+    u32 before = word(g.m, Log);
+    u32 again = viaProgram(g.m, "sceFontOpenUserMemory", {g.library, 0x0896'0000, ~0u, Error});
+    CHECK(again != 0 && again != first && word(g.m, Error) == 0 && word(g.m, Log) == before, true);
+  }
 }
 
 //The resolution and conversions, as pspautotests' resolution recorded them: 128 dots an inch to start; above 0
@@ -924,6 +967,49 @@ static auto fontsStates() -> void {
   CHECK(loadState(with, state), true);
   CHECK(with.call("sceFontGetCharInfo", {font, 'B', Buffer}), 0);
   CHECK(word(with, Buffer + 0x10), 305);
+
+  //A call opening a font of the program's memory, waiting in the program's alloc: such a font is read where it is,
+  //never whole into memory (mode 1, a file's or a system font's), so a state saying it is is refused. (Loaded, its
+  //call ran on into the ending of a font read whole, which writes the record into a second block it never asked for.)
+  KernelMachine m;
+  prepare(m);
+  memoryFunctions(m);
+  auto bytes = systemFont(1).build();
+  m.system.memory.copyIn(0x0896'0000, bytes.data(), bytes.size());
+  Assembler a{m, Code};
+  a.li(a0, parameters(m, 4));
+  a.li(a1, Error);
+  a.call("sceFontNewLib");
+  a.put(addu(s0, v0, zero));
+  a.li(t0, SlowAlloc);
+  a.put(sw(t0, 0x0c, s0));  //the library's alloc, the slow one from here on
+  a.put(addu(a0, s0, zero));
+  a.li(a1, 0x0896'0000);
+  a.li(a2, u32(bytes.size()));
+  a.li(a3, Error);
+  a.call("sceFontOpenUserMemory");
+  a.li(t9, Answer);
+  a.put(sw(v0, 0, t9));
+  a.call("sceKernelExitThread");
+  m.system.recompiler.enabled = false;
+  m.system.power(Code);
+  s32 uid = m.kernel.createThread("main", Code, 0x20, 0x4000, 0, 0);
+  m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+  auto waiting = [&] {
+    return m.kernel.fontCalls.size() == 1 && m.kernel.fontCalls.begin()->second.kind == Kernel::FontCall::Open;
+  };
+  for(u32 step = 0; step < 1000 && !waiting(); step++) m.kernel.run(Kernel::CPUFrequency / 100'000);
+  CHECK(waiting(), true);
+  if(!waiting()) return;
+  auto& call = m.kernel.fontCalls.begin()->second;
+  CHECK(call.opening.source == 2 && call.opening.mode == 0 && !call.ended && call.got.empty(), true);
+  KernelMachine fresh;
+  prepare(fresh);
+  CHECK(loadState(fresh, saveState(m)), true);
+  call.opening.mode = 1;
+  KernelMachine damaged;
+  prepare(damaged);
+  CHECK(loadState(damaged, saveState(m)), false);
 }
 
 //Without the owner's fonts (no folder, an empty one, or one of other files) the library is the stand-in ("fonts
@@ -953,6 +1039,20 @@ static auto fontsFolder() -> void {
   CHECK(word(f.m, Error), 0x8046'0003);
   CHECK(viaProgram(f.m, "sceFontOpen", {0, 1, 0, Error}), 0);
   CHECK(word(f.m, Error), 0x8046'0002);
+  //a file bigger than any of the PSP's fonts (over 4 MiB) isn't read, even one that is a font
+  FontFolder big({1});
+  auto font = systemFont(5).build();
+  font.resize(4_MiB + 1);
+  big.put("ltn4.pgf", std::string(font.begin(), font.end()));
+  KernelMachine large;
+  large.kernel.fontsFrom(big.path.string());
+  CHECK(large.kernel.systemFonts.size(), 18);
+  if(large.kernel.systemFonts.size() != 18) return;
+  CHECK(large.kernel.systemFonts[5].present && !large.kernel.systemFonts[5].pgf, true);
+  CHECK(large.kernel.systemFonts[1].pgf != nullptr, true);
+  bool noted = false;
+  for(auto& note : large.notes) noted |= note.find("ltn4.pgf") != std::string::npos;
+  CHECK(noted, true);
 }
 
 auto fontTests() -> Tests {
