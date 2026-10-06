@@ -3270,7 +3270,7 @@ Seen on the way, not changed:
 
 ## Part 27: the PSP in the desktop program
 
-On branch `cursor/psp-desktop-2b67` (#154), on top of part 26's `cursor/psp-codecs-2b67` (#153). The owner's request
+On branch `cursor/psp-desktop-2b67` (#155), on top of part 26's `cursor/psp-codecs-2b67` (#153). The owner's request
 (2026-10-06): PSP games playable in the desktop program (`desktop/`, SDL3) on Linux, macOS and Windows, as in the
 Android app, with FFmpeg's decoders built and shipped for each, LGPL-compliant as on Android. The desktop program
 already linked the PSP core (`phobos_core` carries every system); what it lacked was the PSP in its library, the

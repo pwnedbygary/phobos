@@ -870,7 +870,7 @@ the details; the user chose a data tape per game in its save folder.
 
 ## PSP core: the PSP in the desktop program, with FFmpeg on Linux, macOS and Windows — 2026-10-06
 
-Branch `cursor/psp-desktop-2b67` (#154), on top of `cursor/psp-codecs-2b67` (#153, the entry below), with #153
+Branch `cursor/psp-desktop-2b67` (#155), on top of `cursor/psp-codecs-2b67` (#153, the entry below), with #153
 merged in as 8501415c7 and the review's fixes on top; CI's desktop build then passed on Linux, macOS and Windows,
 packages included (run 37544580853). docs/psp-core.md, part 27, describes it. Original front-end code in the desktop
 program's style; no PPSSPP or JPCSP source read.
