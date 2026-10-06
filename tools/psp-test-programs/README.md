@@ -48,7 +48,7 @@ it skips them. With `PSP_PICTURES` set to a folder, the samples' pictures are sa
 ## What they show so far
 
 - `blit` and `doublelist` draw their pictures pixel for pixel.
-- `celshading` is identical to PPSSPP's software renderer.
-- `cube` and `envmap` are within 1 level of it on every pixel, and `blend` within 2.
-- `clut` is within 2 levels on 99.94% of pixels (the rest sit where filtering rounds at a boundary, which the two
-  emulators handle differently).
+- Against PPSSPP's software renderer, after the core took the PSP's measured rules where PPSSPP's differ (round 3's
+  fixes): within 2 levels on 99.88% of `blend`'s pixels, 99.64% of `clut`'s, 99.44% of `cube`'s, 99.10% of
+  `celshading`'s and 98.42% of `envmap`'s. (Before those rules, `celshading` was identical, `cube` and `envmap`
+  within 1 level and `blend` within 2 on every pixel, and `clut` within 2 on 99.94%.)

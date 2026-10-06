@@ -573,7 +573,9 @@ texture drawn as one sprite, from its swizzled copy, and in strips, the buttons 
 (the same through sent lists) leave the picture they must, pixel for pixel; "clut" and "blend" run and draw.
 `tools/psp-test-programs/compare-ppsspp.sh` compares those two with PPSSPP's software renderer after the same second:
 "blend" within 2 levels on every pixel (mean 0.01), "clut" on 99.94% (the rest, up to 13 levels, sit where the filter
-rounds at a boundary, which the two step to differently). Fifteen broken versions each failed the tests (among them
+rounds at a boundary, which the two step to differently). That was before the core took the PSP's measured rules
+where PPSSPP's differ ("Measuring the GE..."); with round 3's fixes, "blend" is within 2 levels on 99.88% of its
+pixels and "clut" on 99.64%, at most 17 and 16 levels apart. Fifteen broken versions each failed the tests (among them
 the texture functions' and blending's rounding, the filter's half texel, swizzled rows, the palette's shift, sprites
 never turning, edges all inclusive, 4444's stencil counting by ones, the alpha test the wrong way round, the depth
 mask ignored, the dither matrix unsigned, no ambient color, the stencil overwritten by alpha, flat shading taking
@@ -727,7 +729,10 @@ buffer's layout. These files don't pin the rest down:
   in some cells and high in others (by up to about 0.3%), as an approximate normalization would; round 3 (below)
   can tell, with normals whose cosines are exact and several material colors. (These cases were plain diffuse,
   the GE's light kind 0: pspsdk's `sceGuLight` turns `GU_DIFFUSE` into kind 0, and only `GU_POWERED_DIFFUSE` (8)
-  into kind 2, the powered diffuse.)
+  into kind 2, the powered diffuse.) Round 3's exact cosines settled the share: 256ths (see "Round 3's results").
+  What's left of `light-diffuse` isn't the cosines after all: its white channel matches the PSP in every cell, so the
+  shares are right, and the rest is in the 64 and 192 channels, a few products a level lower on the PSP, as in
+  `light-materials`.
 - Colors across the clipped triangle and fog across the floor are a level off in scattered pixels, whose values
   land on or near a whole level: like the texture coordinates' short steps, but stepping the colors the same way (in
   65536ths or 256ths) doesn't reproduce them. Cases with a single color ramp across a triangle, at several slopes,
@@ -775,9 +780,8 @@ repository. Against the core (`tests/psp/measure.cpp` with `PSP_GE_RESULTS`):
   has it.
 - **`light-cosines` is identical but for 2 of its 256 cells:** with exact cosines and white light on white, plain
   diffuse is the core's arithmetic, but for the cosine 7/25 (twice), where 255 × 0.28 = 71.4 comes out 71 on the PSP
-  and 72 in the core. So round 2's white-light cases (the shine, the spotlight, the point light) were apart mostly
-  for their cosines, which the PSP works out a little differently from inexact normals; `light-diffuse`, on the
-  material (255, 64, 192), for its cosines and its color arithmetic both, as `light-materials` shows.
+  and 72 in the core. (That read round 2's white-light cases as apart mostly for their cosines; the share in 256ths,
+  found since, makes round 2's shine identical and takes most of the spotlight's and the point light's away.)
 - **`light-powered` and `light-shine` differ in 15 cells each, `light-materials` and `light-colors` in 61 each:**
   every one a level lower on the PSP, where the core's arithmetic (PPSSPP's) rounds up.
 - **The ramps:** `ramp-colors`, `ramp-colors-vertical`, `ramp-colors-3d` and `ramp-fog` are a level apart in 1359 to
@@ -816,6 +820,17 @@ identical: `3d-rounding-middle`, `3d-sprite-fog`, `3d-sprite-flat` and all four 
 `3d-sprite-texels` is 72 pixels a level apart. Round 2's files gained too: `3d-sprite` from 10152 pixels apart to 53
 (a level each), `3d-floor-depth`, read at the first copy, from 17424 (by up to 255) to 1388 (by 1), and `3d-clip` from
 1535 to 1512. Every other file is as it was.
+
+**And the lighting's share** counts 256ths, not PPSSPP's 512ths and one more: fitted to the values with normals
+(a, 0, b), whose cosines are exact (`light-cosines` rows 0 and 8, and all of `light-materials` and `light-colors`):
+1620 of 1632 channel values. No offset to the rounding fits the last 12: two cases (level 32 at a cosine of 56/65,
+64 at 72/97), each in six cells of either file, one channel each, a level lower on the PSP. No measured share lands
+on a whole 256th, so rounding up there (rather than down and one more) is assumed (PPSSPP's rule gives the same
+results at the whole 256ths the tests use, 0.5 and 0.75). Now identical: `light-cosines`, `light-powered`,
+`light-shine`, and round 2's `light-specular`. `light-materials` and `light-colors` are 1536 pixels apart (were
+15616); round 2's `light-diffuse` 12288 (was 28160), in its 64 and 192 channels at shares its white channel
+confirms, as `light-materials`' 12; `light-point` 9728 (was 30720) and `light-spot` 768 (was 2560), whose normals
+are exact but not the direction to the light, nor its fading or spot; all a level each.
 
 ## Part 11: drawing in 3D
 
@@ -872,8 +887,9 @@ puts a model's x and y on the screen's pixels. They cover:
 - both texture coordinate modes, morphing and skinning.
 
 pspsdk's "cube" sample (a textured cube turning in perspective, its back faces culled, depth-tested) runs, and its
-picture is within 1 level of PPSSPP's software renderer on every pixel (`compare-ppsspp.sh`). Twenty-six broken
-versions each failed the tests, among them:
+picture was within 1 level of PPSSPP's software renderer on every pixel (`compare-ppsspp.sh`); with the PSP's
+measured rules since, 99.44% of its pixels are within 2 levels (mean 0.09). Twenty-six broken versions each failed
+the tests, among them:
 - the rounding without its 0.375, the depth clamp's rules swapped or dropped, a 3D sprite left unchecked;
 - no clipping, or the cut's colors not blended;
 - texture coordinates blended straight in 3D;
@@ -901,35 +917,39 @@ turns it round), and made one long.
   and diffuse, those and specular, or a "powered" diffuse (sharpened like the shine). All but directional ones fade
   with distance; a spotlight lights only its cone (the cutoff), brighter toward the middle (the exponent).
 - **The arithmetic**, as the GE does it: a color c counts as 2c + 1, so white times white is white; two colors
-  multiply and shift down 10 bits; a light's share counts 512ths, rounded up, and three numbers shift down 19. "To the
-  power of" is the GE's quick approximation (exact at powers of two, a little low between them), and the coefficient
-  keeps only the top four bits of its fraction. Each channel ends held to 0-255.
+  multiply and shift down 10 bits; a light's share counts 256ths, rounded up, and three numbers shift down 18 (the
+  256ths measured in round 3, where PPSSPP has 512ths and one more; rounding up at a whole 256th assumed; a few
+  products still come out a level lower on the PSP, unexplained). "To the power of" is the GE's quick approximation
+  (exact at powers of two, a little low between them), and the coefficient keeps only the top four bits of its
+  fraction. Each channel ends held to 0-255.
 - **The shine kept apart** (LIGHT_MODE 1): a second color, blended across triangles like the first and added after
   texturing, so a dark texture doesn't dull it.
 - **Environment mapping** (TEXTURE_MAP_MODE 2): texture coordinates from two lights (TEXTURE_SHADE_MAPPING), lit or
   not: (the cosine between the normal and the direction to the light + 1) / 2, a shining light's direction taken half
   way to the viewer's.
 
-The rules are PPSSPP's software renderer's (its lighting, and its notes on the PSP's power function and shade mapping
-from tests on the hardware), for behavior only. The layouts come from pspsdk's `sceGuLight`, `sceGuLightAtt`,
-`sceGuLightColor`, `sceGuLightSpot`, `sceGuLightMode`, `sceGuMaterial`, `sceGuModelColor`, `sceGuSpecular`,
-`sceGuAmbient`, `sceGuColorMaterial` and `sceGuTexMapMode`.
+The rules are PPSSPP's software renderer's (its lighting, and its notes on the PSP's power function and shade
+mapping from tests on the hardware), for behavior only, but for the share's 256ths, which the PSP showed. The
+layouts come from pspsdk's `sceGuLight`, `sceGuLightAtt`, `sceGuLightColor`, `sceGuLightSpot`, `sceGuLightMode`,
+`sceGuMaterial`, `sceGuModelColor`, `sceGuSpecular`, `sceGuAmbient`, `sceGuColorMaterial` and `sceGuTexMapMode`.
 
 Tests (five more groups in `tests/psp/draw3d.cpp`) work each color out by hand from those rules:
 - the ambient part with emissive, and the vertex's color standing for the ambient (red held to 255);
 - a directional light's diffuse: squarely, at a cosine of 0.8, with a normal not one long, a direction not one long,
-  the light off, from behind, powered, at a cosine where the share's rounding up and its one more show (0.501), and
-  the vertex's color standing for the diffuse;
-- a point light's fading, and a spotlight's cone either way;
+  the light off, from behind, powered, at a cosine where the share's rounding up shows (0.501), at two where 256ths
+  and PPSSPP's 512ths differ (0.28 on white, red 32 at 0.8), and the vertex's color standing for the diffuse;
+- a point light's fading, a spotlight's cone either way, and a spotlight darkening past its direction (cutoff -1);
 - the shine: the quick power (0.75 squared is 0.5), the coefficient's cut fraction (1.03125 counts as 1), a turned view,
   and kept apart, added after the texture;
 - environment mapping from two lights, one of them shining.
 
-pspsdk's "celshading" (shaded through environment mapping) matches PPSSPP's software renderer pixel for pixel, and
-"envmap" (lit and environment-mapped) is within 1 level on every pixel (`compare-ppsspp.sh`). Twenty-one broken
-versions each failed the tests, among them:
+pspsdk's "celshading" (shaded through environment mapping) matched PPSSPP's software renderer pixel for pixel, and
+"envmap" (lit and environment-mapped) was within 1 level on every pixel (`compare-ppsspp.sh`); with the PSP's
+measured rules since, 99.10% and 98.42% of their pixels are within 2 levels (the lighting's 256ths leave both
+percentages as they were). Twenty-one broken versions each failed the tests, among them:
 - colors without their + 1, the ambient shifted a bit too far;
-- shares rounded down or without their one more;
+- shares rounded down or without their one more (the core had 512ths then; now rounded down or to the nearest, or
+  with PPSSPP's one more);
 - the true power in place of the GE's quick one, the coefficient's whole fraction kept;
 - NORMAL_REVERSE, MATERIAL_COLOR, fading, cones or the powered diffuse ignored;
 - the viewer left out of the half-way direction, or taken from the wrong column;
@@ -939,5 +959,6 @@ versions each failed the tests, among them:
 - normals or directions not made one long.
 
 Two of them (the shares) first got through: no case crossed a level by one share, and the cosine of 0.501 now does.
+PPSSPP's 512ths, which the core had until round 3, fail them too.
 
 Not yet: lines, mipmaps, curved surfaces (BEZIER, SPLINE), bounding boxes, PRIM's kind 7.

@@ -868,6 +868,34 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: lighting's share in 256ths, as the PSP measured it — 2026-10-04
+
+Branch `cursor/psp-ge-lighting-2b67`, stacked on `cursor/psp-ge-round3-fixes-2b67` (for stack #106). From round 3's
+lighting files (exact cosines, several material and light colors): a light's share counts 256ths, and the two colors
+times the share shift down 18 bits (ge/lighting.cpp `share()` and `light()`), where PPSSPP (and the core) had
+512ths, rounded up and one more, shifted 19. Fitted with a scratch script outside the repository against the values
+with normals (a, 0, b) (`light-cosines` rows 0 and 8, all of `light-materials` and `light-colors`): 1620 of 1632
+(PPSSPP's: 1494); no constant offset to the rounding fits the last 12 (two cases, level 32 at a cosine of 56/65 and
+64 at 72/97, in six cells of each file, a level lower on the PSP). No measured share lands on a whole 256th, so
+rounding up there (rather than down and one more; PPSSPP's rule agrees at the tests' 0.5 and 0.75) is assumed;
+negative (darkening) shares are PPSSPP's reading carried over to 256ths, unmeasured, and now subtract 256 for a full
+one (255 before).
+- **Checks:** against the PSP's files: `light-cosines`, `light-powered`, `light-shine` and round 2's `light-specular`
+  now identical; `light-materials` and `light-colors` 1536 pixels apart (were 15616); round 2's `light-diffuse`
+  12288 (was 28160; the rest in its 64 and 192 channels at shares its white channel confirms, as `light-materials`'
+  12), `light-point` 9728 (was 30720), `light-spot` 768 (was 2560), all a level each; every other file unchanged.
+  Unit tests: the lighting tests' hand-worked values restated in 256ths (all unchanged), plus two cases where the
+  rules differ (cosine 0.28 on white: 71; red 32 at 0.8: 25), which PPSSPP's rule fails, and a darkening spotlight.
+  PSP tests 86 groups, 0 failures, on arm64 and x86_64 (Rosetta).
+- Also refreshed: the comparisons with PPSSPP's software renderer in psp-core.md and the test programs' README,
+  stale since the core took the PSP's measured rules (`compare-ppsspp.sh` in the container now: within 2 levels on
+  99.88% of `blend`'s pixels, 99.64% of `clut`'s, 99.44% of `cube`'s, 99.10% of `celshading`'s, 98.42% of
+  `envmap`'s; the same with this change and without it, and at #135 the 3D ones were a little further). Review: a
+  general-purpose reviewer (one medium finding: what's left of `light-diffuse`, `light-point` and `light-spot`
+  blamed on cosines the data clears; six low: the misfits' count, "rounded up" and negative shares stated as
+  measured, the broken-versions list, a percentage's wording, wrapping; all fixed), then delta reviews (three low
+  and one cosmetic, on the docs, fixed) ending with no findings.
+
 ## PSP core: the GE's rounding, 3D sprites and depth layout, as the PSP measured them — 2026-10-04
 
 Branch `cursor/psp-ge-round3-fixes-2b67`, stacked on `cursor/psp-vfpu-round3-fixes-2b67` (for stack #106). From
