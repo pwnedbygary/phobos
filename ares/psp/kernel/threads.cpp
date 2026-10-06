@@ -237,7 +237,7 @@ auto Kernel::sceKernelStartThread() -> void {
   u32 length = arg(1), pointer = arg(2);
   if(pointer && length) {
     if(!argumentFits(*thread, length)) return result(ErrorIllegalArgument);
-    if(!memory.pointer(pointer, length)) return result(ErrorIllegalAddress);
+    if(!memory.reaches(pointer, length)) return result(ErrorIllegalAddress);
   }
   result(0);
   startThread(*thread, length, pointer);

@@ -2,6 +2,21 @@
 
 namespace ares::PlayStationPortable {
 
+//Where in VRAM an offset seen through copy 0-3 is (see memory.hpp), and the reverse: the offset through that copy
+//that sees a byte of VRAM. Each keeps an offset in its 16 KiB.
+auto Memory::vramOffset(u32 copy, u32 seen) -> u32 {
+  if(!(copy & 1)) return seen;
+  if(copy == 3) seen = (seen & ~0x3e0u) | (seen >> 9 & 1) << 5 | (seen >> 5 & 15) << 6;
+  return seen ^ 0x2040;
+}
+
+auto Memory::vramSeen(u32 copy, u32 offset) -> u32 {
+  if(!(copy & 1)) return offset;
+  offset ^= 0x2040;
+  if(copy == 3) offset = (offset & ~0x3e0u) | (offset >> 5 & 1) << 9 | (offset >> 6 & 15) << 5;
+  return offset;
+}
+
 //Clears memory, sized for the model: 32 MiB of main RAM for the PSP-1000, 64 MiB for later models. The buffers are
 //only made again when a size changes, so a page table built from them stays valid across power().
 auto Memory::power(u32 ramSize) -> void {
@@ -15,7 +30,7 @@ auto Memory::power(u32 ramSize) -> void {
 }
 
 //Where the size bytes from address are in the host's memory, or nullptr if any of them has nothing behind it (or
-//they run past the end of an area).
+//they run past the end of an area, or past a 32-byte piece of VRAM's second or fourth copy, which rearrange them).
 auto Memory::pointer(u32 address, u32 size) -> u8* {
   u32 physical = address & 0x1fff'ffff;
   if(physical >= RAMBase && physical - RAMBase < ram.size()) {
@@ -23,7 +38,11 @@ auto Memory::pointer(u32 address, u32 size) -> u8* {
     return size <= ram.size() - offset ? &ram[offset] : nullptr;
   }
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
-    u32 offset = (physical - VRAMBase) % VRAMSize;
+    u32 copy = (physical - VRAMBase) / VRAMSize, offset = (physical - VRAMBase) % VRAMSize;
+    if(copy & 1) {
+      if((offset & 31) + size > 32) return nullptr;
+      offset = vramOffset(copy, offset);
+    }
     return size <= VRAMSize - offset ? &vram[offset] : nullptr;
   }
   if(physical >= ScratchpadBase && physical - ScratchpadBase < ScratchpadSize) {
@@ -33,9 +52,27 @@ auto Memory::pointer(u32 address, u32 size) -> u8* {
   return nullptr;
 }
 
-//The CPU's loads: size is 1, 2 or 4 bytes, and the CPU has already checked that the address is aligned to it.
+//Whether the size bytes from address all have something behind them, inside one area (one copy of VRAM): what an HLE
+//function checks a game's buffer against before copying in or out. (pointer() also wants the bytes side by side in
+//the host's memory, which a range through VRAM's second or fourth copy isn't.)
+auto Memory::reaches(u32 address, u32 size) -> bool {
+  u32 physical = address & 0x1fff'ffff;
+  if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
+    return size <= VRAMSize - (physical - VRAMBase) % VRAMSize;
+  }
+  return pointer(address, size) != nullptr;
+}
+
+//The CPU's loads: size is 1, 2 or 4 bytes, and the CPU has already checked that the address is aligned to it. HLE
+//functions use them too, at whatever address a game gave, so an access can cross a 32-byte piece of VRAM's second or
+//fourth copy: that one goes a byte at a time.
 auto Memory::read(u32 size, u32 address) -> u32 {
   u8* bytes = pointer(address, size);
+  if(!bytes && size > 1 && reaches(address, size)) {
+    u32 value = 0;
+    for(u32 n = 0; n < size; n++) value |= read(1, address + n) << 8 * n;
+    return value;
+  }
   if(!bytes) {
     if(unmapped) unmapped(address, false);
     return 0;
@@ -47,9 +84,13 @@ auto Memory::read(u32 size, u32 address) -> u32 {
   return word;
 }
 
-//The CPU's stores, as aligned as its loads.
+//The CPU's stores, as aligned as its loads (and HLE functions', likewise a byte at a time across such a piece).
 auto Memory::write(u32 size, u32 address, u32 data) -> void {
   u8* bytes = pointer(address, size);
+  if(!bytes && size > 1 && reaches(address, size)) {
+    for(u32 n = 0; n < size; n++) write(1, address + n, data >> 8 * n);
+    return;
+  }
   if(!bytes) {
     if(unmapped) unmapped(address, true);
     return;
@@ -61,16 +102,45 @@ auto Memory::write(u32 size, u32 address, u32 data) -> void {
 }
 
 //Tells written() about a change. VRAM's four copies are four physical addresses for the same bytes, so a change
-//through one is a change to all of them, and code compiled from any copy must go.
+//through one is a change to all of them, and code compiled from any copy must go. Inside one 32-byte piece each copy
+//sees the change in one place; a longer one, through a copy that rearranges pieces or seen through one, is reported
+//as every 16 KiB it touches (where the rearranging keeps it).
 auto Memory::changed(u32 address, u32 size) -> void {
   if(!written) return;
   u32 physical = address & 0x1fff'ffff;
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
-    u32 offset = (physical - VRAMBase) % VRAMSize;
-    for(u32 copy = 0; copy < VRAMWindow; copy += VRAMSize) written(VRAMBase + copy + offset, size);
+    u32 from = (physical - VRAMBase) / VRAMSize, seen = (physical - VRAMBase) % VRAMSize;
+    if((seen & 31) + size <= 32) {
+      u32 offset = vramOffset(from, seen);
+      for(u32 copy = 0; copy < 4; copy++) written(VRAMBase + copy * VRAMSize + vramSeen(copy, offset), size);
+      return;
+    }
+    u32 first = seen & ~0x3fffu, last = std::min<u32>(seen + size + 0x3fff, VRAMSize) & ~0x3fffu;
+    for(u32 copy = 0; copy < 4; copy++) {
+      if((copy | from) & 1) written(VRAMBase + copy * VRAMSize + first, last - first);
+      else written(VRAMBase + copy * VRAMSize + seen, size);
+    }
     return;
   }
   written(address, size);
+}
+
+//The host's bytes behind size bytes from address, for the copies below: one piece, or up to 32 bytes at a time
+//through VRAM's second and fourth copies (which rearrange 32-byte pieces). use(bytes, done, count) for each; nothing
+//is used, and false returned, if any of the bytes has nothing behind it.
+static auto pieces(Memory& memory, u32 address, u32 size, const std::function<void(u8*, u32, u32)>& use) -> bool {
+  if(!memory.reaches(address, size)) return false;
+  u32 physical = address & 0x1fff'ffff, offset = physical - Memory::VRAMBase;
+  if(physical < Memory::VRAMBase || offset >= Memory::VRAMWindow || !(offset / Memory::VRAMSize & 1)) {
+    use(memory.pointer(address, size), 0, size);
+    return true;
+  }
+  for(u32 done = 0; done < size;) {
+    u32 count = std::min(size - done, 32 - (address + done) % 32);
+    use(memory.pointer(address + done, count), done, count);
+    done += count;
+  }
+  return true;
 }
 
 //Fills the CPU's page table (Allegrex::pages): one entry per 4 KiB of physical memory, pointing at that page in
@@ -88,26 +158,22 @@ auto Memory::buildPages(std::vector<u8*>& table) -> void {
 //the range isn't all inside one area (so a game passing a bad buffer gets an error, not a crash).
 auto Memory::copyIn(u32 address, const void* data, u32 size) -> bool {
   if(!size) return true;
-  u8* bytes = pointer(address, size);
-  if(!bytes) return false;
-  std::memcpy(bytes, data, size);
+  auto in = [&](u8* bytes, u32 done, u32 count) { std::memcpy(bytes, (const u8*)data + done, count); };
+  if(!pieces(*this, address, size, in)) return false;
   changed(address, size);
   return true;
 }
 
 auto Memory::copyOut(void* data, u32 address, u32 size) -> bool {
   if(!size) return true;
-  u8* bytes = pointer(address, size);
-  if(!bytes) return false;
-  std::memcpy(data, bytes, size);
-  return true;
+  auto out = [&](u8* bytes, u32 done, u32 count) { std::memcpy((u8*)data + done, bytes, count); };
+  return pieces(*this, address, size, out);
 }
 
 auto Memory::fill(u32 address, u8 value, u32 size) -> bool {
   if(!size) return true;
-  u8* bytes = pointer(address, size);
-  if(!bytes) return false;
-  std::memset(bytes, value, size);
+  auto set = [&](u8* bytes, u32, u32 count) { std::memset(bytes, value, count); };
+  if(!pieces(*this, address, size, set)) return false;
   changed(address, size);
   return true;
 }

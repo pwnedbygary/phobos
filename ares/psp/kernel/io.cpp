@@ -184,7 +184,7 @@ auto Kernel::sceIoRead() -> void {
   if(file == StandardInput) return result(0);  //nothing to read
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || !(found->second.flags & OpenRead)) return result(ErrorBadFile);
-  if(size && !memory.pointer(data, size)) return result(ErrorIllegalAddress);
+  if(size && !memory.reaches(data, size)) return result(ErrorIllegalAddress);
   auto& open = found->second;
   std::vector<char> buffer(size);
   open.stream->clear();
@@ -209,7 +209,7 @@ auto Kernel::sceIoWrite() -> void {
   }
   auto found = files.find(file);
   if(found == files.end() || found->second.folder || !(found->second.flags & OpenWrite)) return result(ErrorBadFile);
-  if(size && !memory.pointer(data, size)) return result(ErrorIllegalAddress);
+  if(size && !memory.reaches(data, size)) return result(ErrorIllegalAddress);
   auto& open = found->second;
   std::vector<char> buffer(size);
   memory.copyOut(buffer.data(), data, size);
@@ -311,7 +311,7 @@ auto Kernel::sceIoGetstat() -> void {
   if(u32 error = resolve(memory.readString(arg(0), 1024), host, normalized)) return result(error);
   std::error_code error;
   if(!std::filesystem::exists(host, error)) return result(ErrorFileNotFound);
-  if(!memory.pointer(arg(1), 88)) return result(ErrorIllegalAddress);
+  if(!memory.reaches(arg(1), 88)) return result(ErrorIllegalAddress);
   writeStat(arg(1), host);
   result(0);
 }
@@ -352,7 +352,7 @@ auto Kernel::sceIoDread() -> void {
   if(found == files.end() || !found->second.folder) return result(ErrorBadFile);
   auto& open = found->second;
   u32 entry = arg(1);
-  if(!memory.pointer(entry, 352)) return result(ErrorIllegalAddress);
+  if(!memory.reaches(entry, 352)) return result(ErrorIllegalAddress);
   if(open.nextEntry >= open.entries.size()) return result(0);
   std::string name = open.entries[open.nextEntry++];
   std::filesystem::path host = open.host;
@@ -361,7 +361,7 @@ auto Kernel::sceIoDread() -> void {
   writeStat(entry, host.string());
   memory.fill(entry + 88, 0, 256);
   memory.copyIn(entry + 88, name.c_str(), std::min<size_t>(name.size(), 255));
-  if(u32 extra = memory.read(4, entry + 344); extra && memory.pointer(extra, 1044)) {
+  if(u32 extra = memory.read(4, entry + 344); extra && memory.reaches(extra, 1044)) {
     std::string base = name, extension;  //an 8.3 short name: up to eight letters, a dot, up to three, in capitals
     if(auto dot = name.rfind('.'); dot != std::string::npos && dot > 0) base = name.substr(0, dot), extension = name.substr(dot + 1);
     std::string shortName = base.substr(0, 8) + (extension.empty() ? "" : "." + extension.substr(0, 3));

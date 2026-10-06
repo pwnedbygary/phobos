@@ -7,7 +7,8 @@
 //    middles are inside, the left and top edges included and the right and bottom ones not, its left edge reaching a
 //    sixteenth further left. Texture coordinates run from one vertex's to the other's, across with x and down with
 //    y; but if the corners are bottom-left and top-right (in either order), the texture is turned a quarter: its
-//    coordinates run down with x and across with y.
+//    coordinates run down with x and across with y. In 3D the texture coordinates follow the perspective, and the
+//    fog is split at the middle column (see rectangle()).
 //  - Triangles (each three vertices, or a strip, or a fan): the pixels whose middles are inside, those on an edge
 //    counting only on left and top edges, so triangles sharing an edge don't both draw it. Color, depth and texture
 //    coordinates are blended across from the corners at each pixel's middle, or with flat
@@ -79,7 +80,7 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   case Sprites:
     for(u32 n = 0; n + 1 < count; n += 2) {
       if(!format.through && outOfSight(t.depthClamp, {&vertices[n], &vertices[n + 1]})) continue;
-      rectangle(pixel, textured, vertices[n], vertices[n + 1]);
+      rectangle(pixel, textured, vertices[n], vertices[n + 1], !format.through);
     }
     break;
   }
@@ -127,7 +128,21 @@ static auto chooseFilter(u32 filter, float texelsPerPixel) -> bool {
 //and which way a step going down (to the left or up) is cut, aren't pinned down; this fits every measurement.
 static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536; }
 
-auto GE::rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to) -> void {
+//perspective: 3D. A 3D sprite is drawn as a PSP draws it (measured, docs/psp-core.md, round 3's 3d-sprite-fog and
+//3d-sprite-texels, a sprite from a near corner at the top left to a far one at the bottom right):
+//  - Its fog is split at the middle column between its corners, and each half takes the fog of the corner on the
+//    other side: there the left half took the far corner's fog. Only that order was measured (the first corner at
+//    the top left); PPSSPP's software renderer splits it this way whichever corner comes first, and so does this.
+//    Where the middle falls to the sixteenth isn't measured either (the case allows anywhere in a column): here it's
+//    halfway, rounded down, and the right half's left edge reaches a sixteenth further left, as any sprite's does,
+//    so a column on the middle is the right half's.
+//  - Its texture coordinates follow the perspective: across x, u / w and 1 / w go from the left corner's to the right
+//    corner's; down y, v / w goes from the top corner's to the bottom one's; and each pixel takes (u / w) / (1 / w)
+//    and (v / w) / (1 / w). That's within a texel of every pixel measured; how a PSP steps and rounds them isn't
+//    pinned down. A turned sprite isn't measured: its coordinate running across x is taken as u is, the one running
+//    down y as v is.
+auto GE::rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to,
+                   bool perspective) -> void {
   s32 x0 = fixed(from.x), y0 = fixed(from.y), x1 = fixed(to.x), y1 = fixed(to.y);
   if(x0 == x1 || y0 == y1) return;
   s32 left = std::min(x0, x1), right = std::max(x0, x1), top = std::min(y0, y1), bottom = std::max(y0, y1);
@@ -144,17 +159,41 @@ auto GE::rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, cons
     texture->linear = chooseFilter(commands[TextureFilter], across);
   }
   u32 z = u32(std::clamp(to.z, 0.0f, 65535.0f));
-  u32 fog = fogAmount(to.fog);  //in 3D, the second vertex's (PPSSPP splits it across the middle; not done here)
-  //texture coordinates at each pixel's middle, stepped from the left (or top) edge's towards the other's
+  const Vertex& leftCorner = x0 < x1 ? from : to;
+  const Vertex& rightCorner = x0 < x1 ? to : from;
+  u32 leftFog = fogAmount(rightCorner.fog), rightFog = fogAmount(leftCorner.fog);  //the halves' fog (3D only)
+  s32 middle = left + (right - left) / 2;
+  //In 2D, texture coordinates at each pixel's middle, stepped from the left (or top) edge's towards the other's.
   auto across = [](f64 first, f64 second, s32 at, s32 start, s32 end) -> float {
     if(start > end) std::swap(first, second), std::swap(start, end);
     return first + f64(at - start) / 16 * shortStep(16 * (second - first) / f64(end - start));
   };
+  //In 3D, the coordinate running across x (u, or v when turned) and the one running down y, each over w at the
+  //corners; and 1 / w, which runs across x. A corner with no w in front of the camera falls back on 2D's way.
+  bool divided = perspective && from.clip[3] > 0 && to.clip[3] > 0;
+  const Vertex& topCorner = y0 < y1 ? from : to;
+  const Vertex& bottomCorner = y0 < y1 ? to : from;
+  f64 leftInverse = 1.0 / leftCorner.clip[3], rightInverse = 1.0 / rightCorner.clip[3];
+  f64 leftAcross = (turned ? leftCorner.v : leftCorner.u) * leftInverse;
+  f64 rightAcross = (turned ? rightCorner.v : rightCorner.u) * rightInverse;
+  f64 topDown = (turned ? topCorner.u : topCorner.v) / topCorner.clip[3];
+  f64 bottomDown = (turned ? bottomCorner.u : bottomCorner.v) / bottomCorner.clip[3];
   for(s32 y = firstY; y <= lastY; y++) {
     for(s32 x = firstX; x <= lastX; x++) {
       s32 sampleX = x * 16 + 8, sampleY = y * 16 + 8;
-      float u = turned ? across(from.u, to.u, sampleY, y0, y1) : across(from.u, to.u, sampleX, x0, x1);
-      float v = turned ? across(from.v, to.v, sampleX, x0, x1) : across(from.v, to.v, sampleY, y0, y1);
+      float u, v;
+      if(divided) {
+        f64 alongX = f64(sampleX - left) / (right - left), alongY = f64(sampleY - top) / (bottom - top);
+        f64 inverse = leftInverse + (rightInverse - leftInverse) * alongX;
+        f64 acrossX = (leftAcross + (rightAcross - leftAcross) * alongX) / inverse;
+        f64 downY = (topDown + (bottomDown - topDown) * alongY) / inverse;
+        u = turned ? downY : acrossX;
+        v = turned ? acrossX : downY;
+      } else {
+        u = turned ? across(from.u, to.u, sampleY, y0, y1) : across(from.u, to.u, sampleX, x0, x1);
+        v = turned ? across(from.v, to.v, sampleX, x0, x1) : across(from.v, to.v, sampleY, y0, y1);
+      }
+      u32 fog = sampleX + 1 >= middle ? rightFog : leftFog;
       shade(pixel, texture, x, y, z, to.color, to.specular, u, v, fog);
     }
   }

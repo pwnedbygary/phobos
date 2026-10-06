@@ -280,25 +280,32 @@ HLE nothing keeps the game out of the kernel's. Physical memory is the scratchpa
 (2 MiB at `0x04000000`, seen four times in a row up to `0x047fffff`) and main RAM (32 MiB at `0x08000000`, or 64
 MiB as on later models). Anything else (the hardware registers, the boot ROM) is empty for now: reading gives 0,
 writing goes nowhere, and `unmapped()` is told, since under HLE that means a bug or something not emulated yet.
-The bytes are kept little-endian, as the PSP sees them.
+The bytes are kept little-endian, as the PSP sees them. VRAM's first and third copies show it as it is; the second
+and fourth rearrange it in 32-byte pieces, for the GE's depth buffer, which the GE itself reaches as the fourth copy
+shows it, in order (`vramOffset()`, `vramSeen()`; measured: see "Round 3's results").
 
 Every change, the CPU's stores and the loader's or HLE functions' copies alike, is reported to `written()`, which
 the CPU's owner points at the recompiler so that code compiled from there is dropped. A change to VRAM is reported
-for all four copies, as they're four physical addresses for the same bytes. `buildPages()` fills the CPU's page
-table for compiled loads and stores, listing VRAM at its first copy only: compiled stores only steer clear of the
-pages holding compiled code, so a second address for the same bytes would let a store change compiled code
-unseen. The other copies go through `read()` and `write()`, and the recompiler interprets code at any address the
-table leaves out. `power()` keeps the buffers while their sizes stay the same, so the table stays valid. `copyIn()`, `copyOut()`, `fill()` and `readString()` serve
-the loader and the HLE functions; a range that crosses an area's end fails rather than running over.
+for all four copies, as they're four physical addresses for the same bytes, each where that copy sees it (past one
+32-byte piece, every 16 KiB it touches wherever a rearranging copy is either side: the rearranging stays inside
+those 16 KiB). `buildPages()` fills the CPU's page table for compiled loads and stores, listing VRAM at its first
+copy only: compiled stores only steer clear of the pages holding compiled code, so a second address for the same
+bytes would let a store change compiled code unseen. The other copies go through `read()` and `write()`, and the
+recompiler interprets code at any address the table leaves out. `power()` keeps the buffers while their sizes stay
+the same, so the table stays valid. `copyIn()`, `copyOut()`, `fill()` and `readString()` serve the loader and the
+HLE functions, piece by piece through the rearranging copies; a range that crosses an area's end fails rather than
+running over.
 
-Not yet: VRAM's swizzled copies (the GE's depth buffer seen rearranged), and the hardware registers HLE may still
-need (the GE's, for one).
+Not yet: the hardware registers HLE may still need (the GE's, for one).
 
 Tests: `tests/psp/run-tests.sh`, the PSP system's own suite, built like the CPU's with the same sanitizers and run
 by the PSP Core Tests workflow: the windows, each area's edges and what's past them, the hooks, the copies, the page
 table, and the CPU on the memory map on both engines, including code that rewrites a function it already ran, in
-RAM and in VRAM through another copy, both ways. Four deliberately broken versions (stores not reported; VRAM's
-copies not shared; all four copies in the page table; code at unlisted addresses compiled) each failed them.
+RAM and in VRAM through another copy, both ways; and VRAM's rearranging copies, each way the other's reverse and the
+depth buffer seen through them as the PSP showed it. Four deliberately broken versions (stores not reported; VRAM's
+copies not shared; all four copies in the page table; code at unlisted addresses compiled) each failed them, and four
+more of the copies (none rearranging, the fourth like the second, bulk copies in one piece, changes reported at one
+offset) failed them too.
 
 ## Part 6: the loader
 
@@ -620,7 +627,7 @@ second buffer read waits a frame). The three that differ are the PSP's to settle
   pixel's middle, PPSSPP at 7/16 in, as for triangles;
 - the 3D sprite's fog (10152 pixels): this core takes the second corner's fog for the whole sprite, while PPSSPP
   splits it across the sprite's middle (which, its comments say, seems to be the way). (Since measured: the PSP
-  splits it as PPSSPP does; see "Round 3's results".)
+  splits it as PPSSPP does, and the core does now; see "Round 3's results".)
 
 The 3D cases found one difference that was this core's to fix: a triangle cut at the near plane had 7292 pixels a
 level apart from PPSSPP's, because the cut's corners were blended from the other end of the edge, and their colors'
@@ -671,7 +678,7 @@ What the data already says:
   edges counting, and PPSSPP nearly so. The PSP draws a column while the left edge is at most 9/16 into it, and
   from the right edge being 9/16 into it; a row while the top edge is at most 8/16 into it (as the core has it), and
   from the bottom edge being 9/16 into it. The same in all 16 cells of each offset.
-- **3D positions aren't rounded up the way PPSSPP has it** (+0.375 of a sixteenth, which the core copies): the PSP
+- **3D positions aren't rounded up the way PPSSPP has it** (+0.375 of a sixteenth, which the core copied): the PSP
   draws the pixel in all 256 cells, with its left and top edges up to 15/256 of a pixel past the sample point the
   program assumed (7/16 in), where that rounding drops it from 10/256. Either the GE truncates positions to the
   sixteenth, or its sample point is further into the pixel than 7/16 (as the sprites' are); a case with edges
@@ -779,7 +786,7 @@ repository. Against the core (`tests/psp/measure.cpp` with `PSP_GE_RESULTS`):
   coordinate 2048 to the sixteenth, toward 2048. Left of and above it, an edge a few 256ths past a pixel's middle is
   moved further past it, so the pixel isn't drawn; right of and below it, the edge comes back onto the middle, so the
   pixel is (left and top edges counting). Every one of the 256 cells of both pixels the case watches fits; rounding
-  to the nearest sixteenth, or up from 0.625 of one (PPSSPP, and the core now), doesn't. Here 2048 is also the
+  to the nearest sixteenth, or up from 0.625 of one (PPSSPP, and the core then), doesn't. Here 2048 is also the
   viewport's center and the middle of the GE's 4096-wide space: a case with another viewport center would tell which
   the GE truncates toward.
 - **`3d-wall-texels`:** 307 pixels a texel apart, like the floor's 291 (perspective-correct texels).
@@ -802,6 +809,14 @@ repository. Against the core (`tests/psp/measure.cpp` with `PSP_GE_RESULTS`):
 
 Against PPSSPP's software renderer, the PSP agrees only on `light-ambient`, `3d-sprite-fog` and `depth-layout-3`.
 
+**Fixed since, in the core:** the rounding onto the screen (toward 2048), 3D sprites (the fog's halves; texels as
+measured), and the depth buffer's layout, as VRAM's copies rearranging it (memory.hpp: in address bits, the second
+copy flips bits 6 and 13, and the fourth first turns bits 5-9 round by one; columns 256-511 land in the gaps). Now
+identical: `3d-rounding-middle`, `3d-sprite-fog`, `3d-sprite-flat` and all four `depth-layout` files;
+`3d-sprite-texels` is 72 pixels a level apart. Round 2's files gained too: `3d-sprite` from 10152 pixels apart to 53
+(a level each), `3d-floor-depth`, read at the first copy, from 17424 (by up to 255) to 1388 (by 1), and `3d-clip` from
+1535 to 1512. Every other file is as it was.
+
 ## Part 11: drawing in 3D
 
 `ares/psp/ge/transform.cpp`, and 3D paths in `vertex.cpp`, `draw.cpp` and `pixel.cpp`. Outside through mode:
@@ -810,8 +825,8 @@ Against PPSSPP's software renderer, the PSP agrees only on `light-ambient`, `3d-
   each weighted by its MORPH_WEIGHT. With skinning (a vertex type with weights), its position and normal go through
   the bone matrices its weights pick, and the results are added up, weighted.
 - **The transform**: the world, view and projection matrices in turn (each element the float its 24-bit DATA word
-  holds), then the viewport and the screen offset, rounded to the sixteenth as the GE rounds (up from 0.625 of one;
-  the PSP turned out to truncate toward screen coordinate 2048: see "Round 3's results").
+  holds), then the viewport and the screen offset, rounded to the sixteenth as the GE rounds: a position's distance
+  from screen coordinate 2048 cut toward 2048 (measured: see "Round 3's results").
 - **What isn't drawn**: a primitive with a vertex off the 4096x4096 screen. Depths outside 0-65535 are held to that
   range with DEPTH_CLIP_ENABLE on, and count as off the screen with it off. A z / w past 1 (by 2^-15) drops a
   triangle or sprite with any such vertex (DEPTH_CLIP_ENABLE off) or with all of them past the same end (on); points
@@ -829,17 +844,20 @@ Against PPSSPP's software renderer, the PSP agrees only on `light-ambient`, `3d-
   (color × f + fog color × (255 − f) + 255) / 256. A FOG1 or FOG2 that isn't a number to a float is a huge number to
   the GE.
 - **The depth range test** (MIN_Z to MAX_Z), in 3D only, clear mode included.
-- **Sprites in 3D**: both corners transformed and checked by the same rules, then drawn as in 2D, with the second
-  corner's fog.
+- **Sprites in 3D**: both corners transformed and checked by the same rules, then drawn as in 2D but for two things:
+  the texture coordinates follow the perspective (u / w and 1 / w across x, v / w down y, then divided: measured), and
+  the fog is split at the middle column, each half taking the fog of the corner on the other side (measured with the
+  first corner at the top left; either order, and where the middle falls to the sixteenth, as PPSSPP has it).
 
 Not yet: lighting (noted; vertices keep their colors), environment mapping (which comes from lighting), PRIM's kind 7
 (going on with the last primitive's vertices), lines, mipmaps, curved surfaces. Nor these smaller details:
 - a 3D sprite's texture projection (its q is ignored);
-- the fog PPSSPP splits across a 3D sprite;
 - the texture coordinates and normal PPSSPP lets a vertex without them keep from the last one read.
 
-The rules are PPSSPP's software renderer's, for behavior only. The commands' layouts come from pspsdk's GU library:
-`sceGuSetMatrix`'s element order, `sceGuViewport`, `sceGuDepthRange`, `sceGuFog` and `sceGuFrontFace`.
+The rules are PPSSPP's software renderer's, for behavior only, but for what the PSP was measured doing (the
+rounding, 3D sprites, the cut's colors, and more since: see "Measuring the GE..."). The commands' layouts come from
+pspsdk's GU library: `sceGuSetMatrix`'s element order, `sceGuViewport`, `sceGuDepthRange`, `sceGuFog` and
+`sceGuFrontFace`.
 
 Tests (`tests/psp/draw3d.cpp`) are worked out by hand on a scene where every matrix is the identity and the viewport
 puts a model's x and y on the screen's pixels. They cover:
@@ -848,8 +866,8 @@ puts a model's x and y on the screen's pixels. They cover:
   zero on its own;
 - a triangle cut at the near plane, the rows and colors it leaves, and flat shading's color on every piece;
 - culling either way, strips, clear mode and through mode;
-- perspective-correct texture coordinates, with q;
-- fog's rounding, its blending across a triangle, and its distance being the view's;
+- perspective-correct texture coordinates, with q, and across a 3D sprite;
+- fog's rounding, its blending across a triangle, its distance being the view's, and a 3D sprite's halves;
 - the depth range test;
 - both texture coordinate modes, morphing and skinning.
 

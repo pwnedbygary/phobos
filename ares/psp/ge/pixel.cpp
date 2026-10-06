@@ -135,9 +135,10 @@ auto GE::drawPixel(PixelState& p, s32 x, s32 y, u32 z, u32 color, u32 fog) -> vo
   if(p.depthRange && (z < p.minDepth || z > p.maxDepth)) return;
   u32 bytes = p.format == 3 ? 4 : 2;
   //Both offsets wrap within VRAM and stay multiples of their pixel's size (the buffers start on 16 bytes, VRAM's size
-  //is a power of two), so no pixel runs past VRAM's end.
+  //is a power of two), so no pixel runs past VRAM's end. The GE reaches its depth buffer as VRAM's fourth copy shows
+  //it, so in VRAM itself (and through the first copy) the depth buffer's pieces are rearranged (memory.hpp).
   u32 at = (p.frameBuffer + (y * p.stride + x) * bytes) & (Memory::VRAMSize - 1);
-  u32 depthAt = (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1);
+  u32 depthAt = Memory::vramOffset(3, (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
   u8* vram = memory.vram.data();
   u32 old = 0, oldDepth = vram[depthAt] | vram[depthAt + 1] << 8;
   std::memcpy(&old, vram + at, bytes);

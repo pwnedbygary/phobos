@@ -220,7 +220,9 @@ static auto geClear() -> void {
   };
   auto pixel32 = [&](u32 x, u32 y) { return memory.read(4, VRAM + (y * 16 + x) * 4); };
   auto pixel16 = [&](u32 x, u32 y) { return memory.read(2, VRAM + (y * 16 + x) * 2); };
-  auto depth = [&](u32 x, u32 y) { return memory.read(2, VRAM + 0x1'0000 + (y * 16 + x) * 2); };
+  auto depth = [&](u32 x, u32 y) {  //as the GE has it: through VRAM's fourth copy
+    return memory.read(2, VRAM + 3 * Memory::VRAMSize + 0x1'0000 + (y * 16 + x) * 2);
+  };
 
   clear(3, 0x501);  //8888, color and depth: alpha (the stencil) is left alone
   CHECK(pixel32(2, 1), 0x00bb'ccdd);

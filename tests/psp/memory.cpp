@@ -33,7 +33,17 @@ static auto areas() -> void {
   CHECK(roundTrip(0x09ff'fffc, 6), 6);
   CHECK(s.unmapped.size(), 0);
   s.memory.write(Allegrex::Word, 0x0400'0010, 0xcafe'f00d);
-  for(u32 copy : {0x0420'0010u, 0x0440'0010u, 0x0460'0010u}) CHECK(s.memory.read(Allegrex::Word, copy), 0xcafe'f00d);
+  //the third copy shows VRAM as it is; the second and fourth rearrange it (memory.hpp), so see the word elsewhere
+  CHECK(s.memory.read(Allegrex::Word, 0x0440'0010), 0xcafe'f00d);
+  CHECK(s.memory.read(Allegrex::Word, 0x0420'2050), 0xcafe'f00d);  //offset bits 6 and 13 flipped
+  CHECK(s.memory.read(Allegrex::Word, 0x0460'2030), 0xcafe'f00d);  //bits 5-9 turned round by one, then those two
+  CHECK(s.memory.read(Allegrex::Word, 0x0420'0010), 0);
+  //an HLE function's word at a game's unaligned address, across one of those pieces: a byte at a time, each where the
+  //fourth copy puts it (offsets 0x1e-0x21 at 0x205e, 0x205f, 0x2000 and 0x2001)
+  s.memory.write(Allegrex::Word, 0x0460'001e, 0x4433'2211);
+  CHECK(s.memory.read(Allegrex::Word, 0x0460'001e), 0x4433'2211);
+  CHECK(s.memory.read(Allegrex::Half, 0x0400'205e), 0x2211);
+  CHECK(s.memory.read(Allegrex::Half, 0x0400'2000), 0x4433);
 
   //nothing behind these: reads give 0, writes go nowhere, and unmapped() hears of each
   for(u32 address : {0x0000'0000u, 0x0000'fffcu, 0x0001'4000u, 0x0480'0000u, 0x0a00'0000u, 0x1c00'0000u, 0x1fc0'0000u}) {
@@ -58,8 +68,9 @@ static auto areas() -> void {
   CHECK(big.unmapped.size(), 1);
 }
 
-//written() hears of every change, whoever makes it, with its address and size; VRAM's for all four copies.
-//Reading tells it nothing.
+//written() hears of every change, whoever makes it, with its address and size; VRAM's for all four copies, where
+//each sees it (a longer change through a copy that rearranges VRAM: every 16 KiB it touches). Reading tells it
+//nothing.
 static auto written() -> void {
   System s;
   std::vector<std::pair<u32, u32>> changes;
@@ -79,10 +90,28 @@ static auto written() -> void {
   }
   changes.clear();
   s.memory.write(Allegrex::Word, 0x4440'0020, 9);  //VRAM's third copy, uncached
+  const u32 seen[4] = {0x0400'0020, 0x0420'2060, 0x0440'0020, 0x0460'2220};
   CHECK(changes.size(), 4);
   for(u32 i = 0; i < changes.size() && i < 4; i++) {
-    CHECK(changes[i].first, 0x0400'0020 + i * 0x20'0000);
+    CHECK(changes[i].first, seen[i]);
     CHECK(changes[i].second, 4);
+  }
+  changes.clear();
+  s.memory.fill(0x0460'4010, 7, 64);  //through the fourth copy, across 32-byte pieces
+  CHECK(changes.size(), 4);
+  for(u32 i = 0; i < changes.size() && i < 4; i++) {
+    CHECK(changes[i].first, 0x0400'4000 + i * 0x20'0000);
+    CHECK(changes[i].second, 0x4000);
+  }
+  changes.clear();
+  s.memory.fill(0x0400'4010, 7, 64);  //through the first: the third copy sees it there too, the others in 16 KiB
+  const std::pair<u32, u32> reported[4] = {
+    {0x0400'4010, 64}, {0x0420'4000, 0x4000}, {0x0440'4010, 64}, {0x0460'4000, 0x4000},
+  };
+  CHECK(changes.size(), 4);
+  for(u32 i = 0; i < changes.size() && i < 4; i++) {
+    CHECK(changes[i].first, reported[i].first);
+    CHECK(changes[i].second, reported[i].second);
   }
   changes.clear();
   u8 out[12];
@@ -117,6 +146,15 @@ static auto bulk() -> void {
   CHECK(s.memory.copyOut(out, 0x4001'3ff8, 8), true);
   CHECK(out[7], 8);
   CHECK(s.memory.copyIn(0x0880'0000, data, 0), true);  //nothing to copy is fine anywhere
+
+  //through VRAM's fourth copy, piece by piece (it rearranges 32-byte pieces): back the same way, rearranged in VRAM
+  u8 many[100], back[100] = {};
+  for(u32 n = 0; n < 100; n++) many[n] = n + 1;
+  CHECK(s.memory.copyIn(0x0460'0010, many, 100), true);
+  CHECK(s.memory.copyOut(back, 0x0460'0010, 100), true);
+  CHECK(std::memcmp(many, back, 100) == 0, true);
+  CHECK(s.memory.read(Allegrex::Byte, 0x0400'2050), 1);  //the first byte, where the fourth copy's offset 0x10 is
+  CHECK(s.memory.copyIn(0x047f'fff0, many, 32), false);  //past the fourth copy's end
 }
 
 //The page table: each area's pages point at its bytes (VRAM's at its first copy only), the rest at nothing; and
@@ -161,7 +199,7 @@ static auto cpu() -> void {
       lw(v1, 0x10, s2),               //v1 = 0x1234
       sh(t0, 2, s3),
       lui(t1, 0x0400),
-      lw(a0, 0, t1),                  //a0 = 0x12340000, through the first copy
+      lw(a0, 0x2040, t1),             //a0 = 0x12340000, through the first copy (memory.hpp: bits 6 and 13)
       lui(t2, 0x0a00),
       lw(a1, 0, t2),                  //nothing there: a1 = 0
     }, recompile);
@@ -192,8 +230,9 @@ static auto cpu() -> void {
 
     //The same function in VRAM, rewritten through another copy: compiled from the first copy and rewritten
     //through the second (a store through write(), reported for every copy), then the other way around (code in
-    //the second copy is interpreted, so a compiled store through the first can't leave it stale).
-    for(auto [runAt, writeAt] : {std::pair{0x0400'0100u, 0x0420'0100u}, std::pair{0x0420'0100u, 0x0400'0100u}}) {
+    //the second copy is interpreted, so a compiled store through the first can't leave it stale). The second copy
+    //sees VRAM's offset 0x100 at 0x2140 (memory.hpp).
+    for(auto [runAt, writeAt] : {std::pair{0x0400'0100u, 0x0420'2140u}, std::pair{0x0420'0100u, 0x0400'2140u}}) {
       System v;
       v.memory.write(Allegrex::Word, runAt + 0, addiu(v0, zero, 1));
       v.memory.write(Allegrex::Word, runAt + 4, jr(ra));
@@ -214,10 +253,37 @@ static auto cpu() -> void {
   }
 }
 
+//VRAM's copies (memory.hpp): each way there and back is the other's reverse, keeps an offset's 16 KiB and its low
+//five bits, and the GE's depth buffer is seen through them as a PSP showed it (round 3's depth-layout files: a buffer
+//512 pixels wide at 0x18'0000, columns 0-255 drawn).
+static auto vramCopies() -> void {
+  u32 mismatched = 0;
+  for(u32 copy = 0; copy < 4; copy++) {
+    for(u32 offset = 0; offset < Memory::VRAMSize; offset++) {
+      u32 there = Memory::vramOffset(copy, offset);
+      bool good = Memory::vramSeen(copy, there) == offset && (there & ~0x3fe0u) == (offset & ~0x3fe0u);
+      mismatched += !good;
+    }
+  }
+  CHECK(mismatched, 0);
+  u32 wrong = 0;
+  for(u32 y = 0; y < 64; y++) {
+    for(u32 x = 0; x < 256; x++) {
+      u32 inOrder = 0x18'0000 + (y * 512 + x) * 2;  //where the GE has pixel (x, y): the fourth copy's view
+      u32 there = Memory::vramOffset(3, inOrder);
+      //the first and third copies' view, then the second's and the fourth's
+      wrong += there != 0x18'0000 + ((y ^ 8) * 512 + ((x >> 4) ^ 1) * 32 + (x & 15)) * 2;
+      wrong += Memory::vramSeen(1, there) != 0x18'0000 + (y * 512 + (x >> 4) * 32 + (x & 15)) * 2;
+      wrong += Memory::vramSeen(3, there) != inOrder;
+    }
+  }
+  CHECK(wrong, 0);
+}
+
 auto memoryTests() -> Tests {
   return {
     {"memory windows", windows}, {"memory areas", areas}, {"memory written", written}, {"memory bulk", bulk},
-    {"memory page table", pageTable}, {"memory and the cpu", cpu},
+    {"memory page table", pageTable}, {"memory and the cpu", cpu}, {"memory vram copies", vramCopies},
   };
 }
 

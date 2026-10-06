@@ -12,8 +12,9 @@
 //Dividing by w gives perspective (the further away, the smaller), and the viewport turns the result into the
 //screen's pixels and a depth: screen x = x / w * VIEWPORT_X_SCALE + VIEWPORT_X_CENTER, likewise y and z. The screen
 //is 4096 pixels square, and OFFSET_X and OFFSET_Y (in sixteenths of a pixel) say where the frame buffer's top left
-//sits on it. The GE keeps positions in sixteenths: drawing x = screen x * 16 + 0.375 - OFFSET_X, cut to a whole
-//sixteenth (toward zero).
+//sits on it. The GE keeps positions in sixteenths: it cuts a position's distance from screen coordinate 2048 (the
+//middle of the 4096) to a whole sixteenth, toward 2048, so a position left of the middle moves right and one right of
+//it moves left; drawing x = that - OFFSET_X.
 //
 //What the GE won't draw:
 //  - a primitive with a vertex off the screen's 4096x4096 pixels, at all;
@@ -41,8 +42,10 @@
 //(view z + FOG1) * FOG2, held to 0-1 at each pixel (pspsdk's sceGuFog sets FOG1 to the far end and FOG2 to
 //1 / (far - near), so it's 1 at the near end and 0 at the far one).
 //
-//(The rounding, the range checks, the near plane and the other rules here are as PPSSPP's software renderer has
-//them, which its authors checked against tests on the PSP.)
+//(The rounding onto the screen was measured on a PSP (docs/psp-core.md, round 3's 3d-rounding-middle; 2048 was also
+//the viewport's center there, so which of the two the GE cuts toward isn't settled); the screen's edges follow from
+//it (unmeasured, and a hair from PPSSPP's). The depth checks, the near plane and the other rules here are as
+//PPSSPP's software renderer has them, which its authors checked against tests on the PSP.)
 
 static constexpr float OutsideDepth = 1.000030517578125f;  //z / w this far or further from 0: outside the depths
 
@@ -158,17 +161,20 @@ auto GE::project(Vertex& v, const Transform& t, bool clipped) const -> void {
   float x = v.clip[0] * t.scale[0] / w + t.center[0];
   float y = v.clip[1] * t.scale[1] / w + t.center[1];
   float z = v.clip[2] * t.scale[2] / w + t.center[2];
-  constexpr float Edge = 4095 + 15.5f / 16;  //the screen's last sixteenth, rounding as the GE rounds
-  bool offScreen = !(x >= 0 && y >= 0 && x < Edge && y < Edge);  //not a number counts as off it
+  //The position the GE holds, in sixteenths of its 4096-pixel screen: the distance from 2048 cut toward 2048 (in
+  //doubles, where a float's distance is exact). Off the screen is outside 0-65535 once cut, so a sixteenth or more
+  //left of (or above) 0, or 4096 or more: that follows from the rounding, as no case measured the edges.
+  auto cut = [](float position) -> f64 { return 32768 + std::trunc((f64(position) - 2048) * 16); };
+  f64 cutX = cut(x), cutY = cut(y);
+  bool offScreen = !(cutX >= 0 && cutX < 65536 && cutY >= 0 && cutY < 65536);  //not a number counts as off it
   if(t.depthClamp) v.outside = offScreen && (clipped || v.clip[2] > -w);
   else v.outside = offScreen || !(z >= 0 && z < 65536);
-  //A whole number of sixteenths, toward zero; wild positions (from a vertex that won't be drawn) are left at 0.
-  auto sixteenths = [](float position, float offset) -> float {
-    float value = position * 16 + 0.375f - offset;
-    return std::abs(value) < 1e9f ? float(s32(value)) / 16 : 0.0f;
+  //Then from the frame buffer's top left, in pixels; wild positions (from a vertex that won't be drawn) stay at 0.
+  auto pixels = [](f64 position, float offset) -> float {
+    return std::abs(position) < 1e9 ? float((position - offset) / 16) : 0.0f;
   };
-  v.x = sixteenths(x, t.offsetX);
-  v.y = sixteenths(y, t.offsetY);
+  v.x = pixels(cutX, t.offsetX);
+  v.y = pixels(cutY, t.offsetY);
   v.z = z > 0 ? std::min(z, 65535.0f) : 0.0f;  //with DEPTH_CLIP_ENABLE off, a depth outside isn't drawn anyway
 }
 
