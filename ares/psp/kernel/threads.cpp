@@ -304,6 +304,7 @@ auto Kernel::endThread(Thread& thread, s32 status) -> void {
   waiterLeft(before.wait, before.id);
   moduleThreadEnded(thread, status);
   fontAbandoned(thread.uid);
+  mpegAbandoned(thread.uid);
 }
 
 //The trampoline's syscall: the running thread's entry function returned (with its result in v0).
@@ -361,6 +362,7 @@ auto Kernel::deleteThread(Thread& thread) -> void {
   }
   std::erase_if(callbacks, [&](auto& item) { return item.second.thread == uid; });
   fontAbandoned(uid);
+  mpegAbandoned(uid);
   if(current == &thread) current = nullptr;  //nothing to save
   threads.erase(uid);
 }

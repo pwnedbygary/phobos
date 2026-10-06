@@ -392,6 +392,15 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(call.slots <= MaxFonts && call.asks.size() <= 9 && call.got.size() <= call.asks.size());
     check(call.frees.size() <= MaxFonts * 9 + 4);
   });
+  //a ringbuffer being fed, its callback running: it asked for a run of what's left (at most a ring's 4096 packets)
+  map(mpegCalls, [&](MpegCall& call) {
+    context(call.caller); s(call.ringbuffer); s(call.left); s(call.asked); s(call.put);
+    check(call.left <= 4096 && call.asked >= 1 && call.asked <= call.left && call.put <= 4096 - call.left);
+    check(memory.reaches(call.ringbuffer, 48));
+  });
+  if(s.reading()) {
+    for(auto& [thread, call] : mpegCalls) check(threads.count(thread));
+  }
   if(s.reading() && valid) {
     check((fontLibraries.empty() && openFonts.empty() && fontCalls.empty()) || fontsInstalled());
     for(auto& [address, library] : fontLibraries) {
