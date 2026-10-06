@@ -89,11 +89,25 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   u32 rows = ~0u;
   if(format.through && !vertices.empty()) {
     s32 minX = 65536, maxX = -65536, minY = 65536, maxY = -65536;
-    float minV = 65536, maxV = -65536;
+    f64 minV = 65536, maxV = -65536;
     for(auto& vertex : vertices) {
       minX = std::min(minX, fixed(vertex.x)), maxX = std::max(maxX, fixed(vertex.x));
       minY = std::min(minY, fixed(vertex.y)), maxY = std::max(maxY, fixed(vertex.y));
-      minV = std::min(minV, vertex.v), maxV = std::max(maxV, vertex.v);
+      minV = std::min<f64>(minV, vertex.v), maxV = std::max<f64>(maxV, vertex.v);
+    }
+    //A sprite turned a quarter has v running across x, and its first column's middle may lie a sixteenth of a pixel
+    //left of its left corner (its left edge reaches that much further: rectangle()), where v is a sixteenth of a
+    //pixel's step (|dv| over the corners' distance in sixteenths) past the corner's. Its v's reach widens by that,
+    //and by a 65536th of a texel more, which the rounding of v there and here can't come near.
+    if(kind == Sprites) {
+      for(u32 n = 0; n + 1 < count; n += 2) {
+        auto &from = vertices[n], &to = vertices[n + 1];
+        s32 x0 = fixed(from.x), y0 = fixed(from.y), x1 = fixed(to.x), y1 = fixed(to.y);
+        if(x0 == x1 || y0 == y1 || (x0 < x1) == (y0 < y1)) continue;
+        f64 beyond = std::abs(f64(to.v) - f64(from.v)) / std::abs(x1 - x0) + 1.0 / 65536;
+        minV = std::min(minV, std::min<f64>(from.v, to.v) - beyond);
+        maxV = std::max(maxV, std::max<f64>(from.v, to.v) + beyond);
+      }
     }
     if(kind == Points) {
       region.left = std::max(region.left, minX >> 4), region.right = std::min(region.right, maxX >> 4);
@@ -104,8 +118,8 @@ auto GE::primitive(u32 kind, u32 count) -> void {
       region.top = std::max(region.top, floorDivide(minY - 8 + 15, 16));
       region.bottom = std::min(region.bottom, floorDivide(maxY - 8, 16));
     }
-    //(a sprite's or point's v doesn't leave its vertices', so it repeats round only from below 0, or below a half
-    //when it may be filtered; a triangle's steps may take it a hair past them)
+    //(a sprite's or point's v stays inside that reach, so it repeats round only from below 0, or below a half when
+    //it may be filtered; a triangle's steps may take it a hair past its vertices')
     u32 height = std::min<u32>(texture.height, 512);
     bool filters = commands[TextureFilter] & 0x101;
     float lowest = kind == Sprites || kind == Points ? (filters ? 0.5f : 0.0f) : 2.0f;

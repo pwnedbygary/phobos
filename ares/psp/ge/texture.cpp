@@ -241,6 +241,7 @@ auto GE::decode(Sampler& t, const PixelState& pixel, const Region& region, u32 r
   textures.last = entry;
   t.decoded = entry->texels.data();
   t.decodedWidth = key.width;
+  t.decodedRows = rows;
   return entry;
 }
 
@@ -299,8 +300,10 @@ alwaysinline auto GE::texelAxis(float coordinate, u32 size, bool clamp, bool lin
   return {inside(base >> 8), inside((base >> 8) + 1), base >> 4 & 15};
 }
 
-//The texel at (x, y), inside the texture: decoded already, or read from memory.
+//The texel at (x, y), inside the texture: decoded already, or read from memory. (A row past those draw.cpp worked
+//out the primitive may reach isn't in the decoded copy.)
 alwaysinline auto GE::fetch(const Sampler& t, s32 x, s32 y) -> u32 {
+  assert(!t.decoded || u32(y) < t.decodedRows);
   return t.decoded ? t.decoded[y * t.decodedWidth + x] : texel(t, x, y);
 }
 

@@ -169,6 +169,7 @@ struct GE {
     u32 clutFormat, clutShift, clutMask, clutOffset;
     const u32* decoded;  //its texels already decoded (Decoded), decodedWidth to a row; or none: read from memory
     u32 decodedWidth;
+    u32 decodedRows;     //the rows the primitive may take texels from (draw.cpp), all of them decoded
   };
 
   //A texture decoded: every texel inside it as 8888, exactly as texel() would read it from memory, so that drawing

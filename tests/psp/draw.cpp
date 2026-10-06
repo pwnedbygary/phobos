@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <functional>
+#include <random>
 #include <set>
 
 namespace allegrex_test::psp {
@@ -36,7 +37,8 @@ struct Canvas {
     ge.commands[GE::VertexType] = 0x80'019f;
     ge.commands[GE::ShadeMode] = 1;
   }
-  auto draw(u32 kind, std::initializer_list<V> vertices) -> void {
+  auto draw(u32 kind, std::initializer_list<V> vertices) -> void { draw(kind, std::vector<V>(vertices)); }
+  auto draw(u32 kind, const std::vector<V>& vertices) -> void {
     u32 at = VertexData;
     for(auto& vertex : vertices) {
       for(float value : {vertex.u, vertex.v}) memory.write(4, at, bits(value)), at += 4;
@@ -671,9 +673,168 @@ static auto drawDecodedTextures() -> void {
   for(u32 x = 0; x < 4; x++) CHECK(c.pixel(x, 2), 0x0001'0101u * (x + 1));
 }
 
+//A sprite turned a quarter (corners bottom-left and top-right, so v runs across x) whose left edge is 9/16 into its
+//first column draws that column, sampled at its middle: a sixteenth of a pixel left of the left corner, where v is a
+//sixteenth of a pixel's step past the corner's. From v = 0 that's below 0, which repeats round to the texture's last
+//row; falling 100 texels a pixel to the right, it's 6 rows past the highest v. Kept decoded, the texture must give
+//those rows as memory does (draw.cpp's rows a primitive reaches).
+static auto drawTurnedDecoded() -> void {
+  struct Case { u32 width, height, filter; float leftV, rightV, rightX; };
+  for(auto [width, height, filter, leftV, rightV, rightX] :
+      {Case{16, 256, 0, 0, 8, 8.5625f}, Case{1, 16, 0, 0, 4, 8.5625f}, Case{16, 256, 0x101, 0.5f, 8.5f, 8.5625f},
+       Case{16, 512, 0, 300, 200, 1.5625f}}) {
+    std::vector<u32> drawn[2];
+    for(bool decoding : {false, true}) {
+      Canvas c;
+      if(!decoding) c.memory.watching = nullptr;  //nothing kept decoded (Memory::canWatch())
+      u32 bufferWidth = std::max(width, 4u);
+      c.texture(3, width, height, bufferWidth);
+      c.ge.commands[GE::TextureFilter] = filter;
+      for(u32 v = 0; v < height; v++) {
+        for(u32 u = 0; u < bufferWidth; u++) c.memory.write(4, Texture + (v * bufferWidth + u) * 4, v << 8 | u);
+      }
+      c.draw(GE::Sprites, {{0, leftV, 0, 0.5625f, 8, 0}, {float(width), rightV, 0, rightX, 0, 0}});
+      for(u32 y = 0; y < 8; y++) for(u32 x = 0; x < 9; x++) drawn[decoding].push_back(c.pixel(x, y));
+      if(decoding) CHECK(c.ge.textures.entries.size(), 1u);
+    }
+    CHECK(drawn[1] == drawn[0], true);
+    if(height == 256 && !filter) CHECK(drawn[1][0], 255u << 8 | 15);  //column 0, row 0: texel (15, 255)
+  }
+}
+
+//Textures kept decoded against textures read from memory texel by texel, as the GE read them before it kept any (a
+//machine without watching() decodes nothing: Memory::canWatch()): the same random 2D primitives drawn by both must
+//come out the same, pixel for pixel. (Comparing thread counts can't catch a mistake in what's kept: every count
+//draws from the same copy.) The primitives: sprites (upright, turned and mirrored), triangles, strips, fans and
+//points, their corners on any sixteenth, left ones often 9/16 into a pixel; their textures of every format but DXT,
+//with palettes, swizzled or not, up to 512 rows, repeating or held at the edges, filtered or not, their coordinates
+//inside, on and around texel boundaries, outside and steep; some textures in VRAM where the primitives draw, some
+//drawn with again after their memory changed.
+static auto drawDecodedAgainstMemory() -> void {
+  constexpr u32 Area = 0x0900'0000, AreaSize = 1 << 20;  //random bytes: the textures and palettes in RAM
+  constexpr u32 Width = 64, Height = 48;                  //the frame buffer, at VRAM's start
+  constexpr u32 Bits[8] = {16, 16, 16, 32, 4, 8, 16, 32}, Filters[4] = {0, 1, 0x100, 0x101};
+  constexpr u32 Kinds[9] = {GE::Sprites, GE::Sprites, GE::Sprites, GE::Sprites, GE::Triangles, GE::Triangles,
+                            GE::TriangleStrip, GE::TriangleFan, GE::Points};
+  std::mt19937 random{20261006};
+  auto below = [&](u32 n) { return u32(random() % n); };
+  auto chance = [&](u32 percent) -> u32 { return below(100) < percent; };
+  //(each value taken from it in a statement of its own, so every compiler takes them in the same order)
+  auto position = [&](u32 extent) {  //pixels, on a sixteenth, a few past either end, often 9/16 into one
+    s32 whole = s32(below(extent + 8)) - 4;
+    u32 sixteenths = chance(25) ? 9 : below(16);
+    return whole + sixteenths / 16.0f;
+  };
+  auto coordinate = [&](u32 size) -> float {  //in texels: inside, around the edges, outside, far, anywhere
+    constexpr float Low[4] = {0, 0.5f, 1.0f / 16, -1.0f / 16}, High[3] = {0, 0.5f, 1.0f / 16};
+    switch(below(6)) {
+    case 0: return below(size * 16 + 1) / 16.0f;
+    case 1: return Low[below(4)];
+    case 2: return size - High[below(3)];
+    case 3: return (s32(below(size * 64)) - s32(size * 32)) / 16.0f;
+    case 4: return s32(below(1200)) - 400;
+    default: return below(1 << 20) / float(1 << 20) * size;
+    }
+  };
+  Canvas kept, read;
+  read.memory.watching = nullptr;
+  std::vector<u8> bytes(AreaSize);
+  for(auto& byte : bytes) byte = random();
+  for(Canvas* c : {&kept, &read}) {
+    c->memory.copyIn(Area, bytes.data(), AreaSize);
+    c->ge.commands[GE::FrameBufferWidth] = Width;
+  }
+  u32 format = 0, width = 1, height = 1, bufferWidth = 4, address = Area, span = 16, differing = 0;
+  for(u32 n = 0; n < 4000; n++) {
+    std::vector<std::pair<u32, u32>> commands;  //for both machines
+    auto set = [&](u32 command, u32 value) { commands.push_back({command, value}); };
+    if(n && chance(30)) {  //the last texture again, maybe changed
+      for(u32 count = chance(50) ? 1 + below(4) : 0; count; count--) {
+        u32 at = address + below(span) / 4 * 4;
+        u32 value = random();
+        for(Canvas* c : {&kept, &read}) c->memory.write(4, at, value);
+      }
+    } else {
+      format = below(8);
+      u32 widthBits = below(8);
+      u32 heightBits = below(10);
+      while(widthBits + heightBits > 14) (widthBits > heightBits ? widthBits : heightBits)--;
+      width = 1 << widthBits, height = 1 << heightBits;
+      u32 least = 128 / Bits[format];  //(a row of at least 16 bytes)
+      u32 more = chance(20) ? below(4) : 0;
+      bufferWidth = (std::max(width, least) + least - 1) / least * least + more * least;
+      span = bufferWidth * Bits[format] / 8 * ((height + 7) / 8 * 8);
+      if(chance(20)) address = VRAM + below(Width * Height * 4 / 16) * 16;  //where the primitives draw
+      else address = Area + below((AreaSize - span) / 16) * 16;
+      set(GE::TextureAddress0, address & 0xff'fff0);
+      set(GE::TextureBufferWidth0, (address >> 24 & 0xf) << 16 | bufferWidth);
+      set(GE::TextureSize0, heightBits << 8 | widthBits);
+      set(GE::TextureFormat, format);
+      set(GE::TextureMode, chance(30));
+    }
+    set(GE::TextureMappingEnable, 1);
+    u32 clampU = chance(50);
+    set(GE::TextureWrap, clampU | chance(50) << 8);
+    set(GE::TextureFilter, Filters[below(4)]);
+    u32 function = below(5);
+    u32 withAlpha = chance(50);
+    set(GE::TextureFunction, function | withAlpha << 8 | chance(20) << 16);
+    set(GE::TextureEnvironmentColor, random() & 0xff'ffff);
+    set(GE::FrameBufferPixelFormat, chance(80) ? 3 : below(3));
+    u32 left = chance(30) ? below(16) : 0;
+    u32 top = chance(30) ? below(16) : 0;
+    set(GE::Scissor1, left | top << 10);
+    u32 right = Width - 1, bottom = Height - 1;
+    if(chance(30)) right = left + below(Width - left), bottom = top + below(Height - top);
+    set(GE::Scissor2, right | bottom << 10);
+    if(format >= 4) {
+      u32 palette = Area + below((AreaSize - 1024) / 16) * 16;
+      set(GE::ClutAddress, palette & 0xff'fff0);
+      set(GE::ClutAddressUpper, palette >> 8 & 0xf'0000);
+      u32 clutFormat = below(4);
+      u32 shift = below(32);
+      u32 mask = chance(70) ? 0xff : below(256);
+      set(GE::ClutFormat, clutFormat | shift << 2 | mask << 8 | below(32) << 16);
+      set(GE::ClutLoad, 1 + below(32));
+    }
+    for(Canvas* c : {&kept, &read}) {
+      for(auto [command, value] : commands) c->ge.commands[command] = value;
+      if(format >= 4) c->ge.loadClut();
+    }
+
+    u32 kind = Kinds[below(9)];
+    u32 count = kind == GE::Sprites ? 2 * (1 + below(3)) : kind == GE::Triangles ? 3 * (1 + below(2))
+              : kind == GE::Points ? 1 + below(4) : 4 + below(2);
+    std::vector<V> vertices;
+    for(u32 k = 0; k < count; k++) {  //(a braced list's values are taken in order)
+      vertices.push_back({coordinate(width), coordinate(height), u32(random()), position(Width), position(Height),
+                          0});
+    }
+    if(kind == GE::Sprites && chance(40)) {  //turned, its left corner 9/16 into a pixel, its v whole, steep or not
+      V &from = vertices[0], &to = vertices[1];
+      from.x = s32(below(Width)) - 4 + 9 / 16.0f;
+      u32 across = 1 + below(12);
+      to.x = from.x + across + below(16) / 16.0f;
+      to.y = position(Height);
+      from.y = to.y + 1 + below(12);
+      from.v = s32(below(height + 2)) - 1;
+      s32 reach = chance(30) ? 400 : 20;
+      to.v = from.v + s32(below(2 * reach)) - reach;
+    }
+    for(Canvas* c : {&kept, &read}) c->draw(kind, vertices);
+    if(std::memcmp(kept.memory.vram.data(), read.memory.vram.data(), 0x1'0000) && !differing++) {
+      std::printf("  case %u: format %u, %ux%u (rows of %u) at %08x, primitive %u of %u vertices, differs\n", n,
+                  format, width, height, bufferWidth, address, kind, count);
+    }
+  }
+  CHECK(differing, 0u);
+}
+
 auto drawTests() -> Tests {
   return {
     {"draw textures kept decoded", drawDecodedTextures},
+    {"draw turned sprites kept decoded", drawTurnedDecoded},
+    {"draw textures kept decoded against memory", drawDecodedAgainstMemory},
     {"draw sprites", drawSprites}, {"draw texture formats", drawTextureFormats}, {"draw filter", drawFilter},
     {"draw texture functions", drawTextureFunctions}, {"draw pixel tests", drawPixelTests}, {"draw blending", drawBlending},
     {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles},
