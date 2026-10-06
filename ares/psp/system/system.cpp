@@ -48,12 +48,17 @@ auto System::run() -> void {
   }
   screen->frame();
 
-  //silence: the kernel's mixer takes its channels' blocks at the PSP's pace, but doesn't mix them yet (audio.cpp)
+  //The sound: the speakers are owed 735.7 frames a frame, the PSP's 44.1 kHz (the stream runs at that rate, and
+  //ares converts it to the host's). They get every frame the kernel's channels have made up to its clock
+  //(audio.cpp), then silence for any its clock didn't reach: the program ended, or nothing will run again. Its clock
+  //may run a few cycles past the frame (the CPU finishes the block it's in), which owes nothing more.
   soundOwed += 44'100.0 * 1001 / 60'000;
-  while(soundOwed >= 1) {
-    stream->frame(0.0, 0.0);
-    soundOwed -= 1;
-  }
+  sound.clear();
+  kernel.audioOutput(sound);
+  for(u32 n = 0; n + 1 < sound.size(); n += 2) stream->frame(sound[n] / 32768.0, sound[n + 1] / 32768.0);
+  soundOwed -= f64(sound.size() / 2);
+  for(; soundOwed >= 1; soundOwed -= 1) stream->frame(0.0, 0.0);
+  soundOwed = std::max(soundOwed, 0.0);
 }
 
 auto System::load(Node::System& root, string name) -> bool {
@@ -120,6 +125,7 @@ auto System::unload() -> void {
   cpu.recompiler.writePages.shrink_to_fit();
   cpu.recompiler.allocator.reset();
   pixels = {};
+  sound = {};
   if(screen) {
     screen->quit();  //stops the screen's video thread
     node->remove(screen);
@@ -302,7 +308,9 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
-//machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes: 5 since
+//machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes: 6 since
+//sound is heard (the output the channels make, the SRC channel's place in its samples, VAG voices' decoders:
+//docs/psp-core.md's part 21); 5 since
 //the kernel holds files' asynchronous requests, sceSas, message pipes, mailboxes and the other functions of
 //docs/psp-core.md's part 20 (and threads' message pipe transfers); 4 since
 //each call into the program says whether it's a vertical blank's handler; 3 when the kernel came to hold both the
@@ -310,7 +318,7 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //dialogs), each of which came first on a branch of its own as a version 2, two layouts that differ from each other
 //and from these. A state of any older version is refused by it.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 5;
+static constexpr u32 StateVersion = 6;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.

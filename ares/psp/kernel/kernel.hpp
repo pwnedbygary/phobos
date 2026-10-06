@@ -757,17 +757,31 @@ struct Kernel {
 
   //audio.cpp: sound output. Eight mixer channels holding a buffer each, read a block of 64 samples at a time by the
   //mixer's DMA; and the SRC channel (sceAudioOutput2*, sceAudioSRC*), a ninth output at a rate of its own, with two
-  //buffers armed at most. Their timing is the PSP's; the samples aren't mixed into the system's sound yet.
+  //buffers armed at most. Their timing is the PSP's, and what they play is added up, as it's heard, in the output
+  //the system hands to the speakers.
   struct Audio {
     //A block, 64 samples at 44.1 kHz, isn't a whole number of the CPU's cycles at 333 MHz: it's 483,265 and 15/49.
     static constexpr u64 BlockCycles = CPUFrequency * 64 / 44'100;
     static constexpr u32 BlockFraction = CPUFrequency * 64 * 49 / 44'100 % 49;
     static_assert((BlockCycles * 49 + BlockFraction) * 44'100 == CPUFrequency * 64 * 49);
+    //Sound frames (a left and a right sample) are counted from power on, 44,100 a second: frame n is heard at cycle
+    //n * CPUFrequency / 44100, which is n * FrameCycles / FrameRate with the fraction cut down (370000 / 49).
+    static constexpr u64 FrameCycles = 370'000, FrameRate = 49;
+    static_assert(FrameCycles * 44'100 == CPUFrequency * FrameRate);
     static constexpr u32 WaitSrc = 8, WaitSrcDrain = 9;  //waitIDs on the SRC channel (0-7: the mixer channels)
     //An SRC buffer's slot frees as its transfer ends, 100 microseconds before its last samples are heard
     //(srcOutput()); the shortest buffer, 17 samples at 48 kHz, plays for 354.
     static constexpr u64 SrcLead = CPUFrequency / 10'000;
     static_assert(17 * CPUFrequency / 48'000 > SrcLead);
+    //The output: what the channels play, added up frame by frame where it's heard, until the system takes it (each
+    //frame of the PSP's 735.7 sound frames). A ring of OutputFrames frames, frame n in slot n % OutputFrames: far
+    //more than a frame's worth, plus the block or so the mixer adds ahead of the clock.
+    static constexpr u32 OutputFrames = 4096;
+    struct Output {
+      std::vector<s32> samples;       //left and right, side by side, OutputFrames pairs (power() makes them)
+      u64 start = 0;                  //the first frame the system hasn't taken: the ring holds start onwards
+      u64 end = 0;                    //one past the last frame anything was added to (start, if nothing was)
+    } output;
     struct Channel {
       bool reserved = false;
       u32 sampleCount = 0;            //samples in each buffer handed over: a multiple of 64, from 64 to 65472
@@ -792,15 +806,26 @@ struct Kernel {
       u32 armed = 0;                  //how many there are
       u64 retireAt = 0;               //when the first one's transfer ends
       bool completion = false;        //a completion no output has taken yet
+      //Its samples converted to the output's 44.1 kHz (srcRender()): the next output frame it adds to, and where
+      //that frame falls in the armed buffers' samples, in 44100ths of a sample from the first buffer's start (past
+      //its end, into the second's). Each output frame moves it on by the channel's rate.
+      u64 renderedTo = 0;
+      u64 position = 0;
     } src;
   } audio;
+  auto sampleFrame(u64 cycle, u32 fraction = 0) const -> u64;
+  auto outputRoom(u64 last) -> void;
   auto audioWaiter(u32 waitID) -> Thread*;
   auto audioWaitRefused() const -> u32;
   auto handOver(u32 number, u32 buffer, s32 left, s32 right) -> void;
+  auto mixBlock(const Audio::Channel& channel, s32* block) -> void;
   auto mixerBlock() -> bool;
   auto mixerOutput(u32 number, u32 buffer, s32 left, s32 right, bool blocking) -> void;
   auto srcDuration(u32 samples) const -> u64;
+  auto srcSample(u64 index, s32& left, s32& right, u32& volume) -> bool;
+  auto srcRender(u64 until, bool wholeBuffer = false) -> void;
   auto srcRetire() -> bool;
+  auto audioOutput(std::vector<s16>& frames) -> void;
   auto srcReserve(u32 samples, u32 rate, u32 channels) -> void;
   auto srcRelease() -> void;
   auto srcOutput() -> void;
@@ -873,8 +898,9 @@ struct Kernel {
   auto sceKernelCancelReceiveMbx() -> void;
   auto sceKernelReferMbxStatus() -> void;
 
-  //sas.cpp: sceSasCore, the sound library's software synthesizer, silent for now: its voices keep their parameters,
-  //envelopes and places in their samples, and end as they would, but nothing is mixed
+  //sas.cpp: sceSasCore, the sound library's software synthesizer: VAG (ADPCM) and PCM voices at their pitches,
+  //under their envelopes, mixed into the grain the game asks for (noise, waves and ATRAC3 voices stay silent, and the
+  //effect adds no reverb)
   struct Sas {
     enum class Source : u32 { None, Vag, Noise, Triangle, Steep, Pcm, Atrac };  //pspautotests' sascore.h's numbers
     enum class Phase : u32 { Attack, Decay, Sustain, Release };
@@ -895,6 +921,8 @@ struct Kernel {
       u32 delay = 0;               //samples still to go before a voice keyed on starts
       u64 position = 0;            //where it is in its samples, in 4096ths of a sample
       u32 loopBlock = 0;           //VAG: the block its loop goes back to
+      s16 decoded[2] = {};         //VAG: the samples decoded before its place and at it (the decoder's history)
+      bool started = false;        //VAG: whether decoded[1] is the sample at its place yet (not once keyed on)
     } voices[32];
     bool initialized = false;
     u32 core = 0;                  //the SasCore it was initialized in
@@ -902,11 +930,17 @@ struct Kernel {
     u32 paused = 0;                //the voices paused, a bit each
     u32 endFlags = ~0u;            //the voices ended, a bit each, as the last __sceSasCore left them
     s32 effectType = -1;
-    u32 effectDelay = 0, effectFeedback = 0, effectLeft = 0, effectRight = 0, effectDry = 0, effectWet = 0;
+    u32 effectDelay = 0, effectFeedback = 0, effectLeft = 0, effectRight = 0;
+    u32 effectDry = 1, effectWet = 0;  //whether the voices are heard as they are, and through the effect
   } sas;
+  std::vector<s32> sasSums;        //a grain's dry and wet sums as it's made (working room, not saved)
+  std::vector<s16> sasSamples;     //and the 16-bit samples it writes
   auto sasVoice(u32 number) -> Sas::Voice*;
   auto sasEnvelope(Sas::Voice& voice) -> void;
-  auto sasAdvance(Sas::Voice& voice, u32 samples) -> void;
+  auto sasBlock(Sas::Voice& voice, u32 block, u8* bytes) -> bool;
+  auto sasNext(Sas::Voice& voice, u8* bytes) -> bool;
+  auto sasSample(const Sas::Voice& voice) -> s32;
+  auto sasGrain(Sas::Voice& voice, u32 from, s32* sums) -> void;
   auto sasMix(bool mix) -> void;
   auto __sceSasInit() -> void;
   auto __sceSasCore() -> void;

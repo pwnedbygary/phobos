@@ -16,6 +16,29 @@ constexpr double Block = 64.0 * 1'000'000 / 44'100;
 //retires this much short of its length, those chained after it a whole buffer later
 constexpr double Lead = 100;
 auto near(u32 measured, double expected) -> bool { return measured >= expected - 2 && measured <= expected + 30; }
+
+//a / b rounded down (towards minus infinity), as a sample times a volume over full is defined to round
+auto floorDiv(s64 a, s64 b) -> s64 { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+//a 16-bit sample's range
+auto clamp16(s64 value) -> s64 { return std::clamp<s64>(value, -32768, 32767); }
+
+//Moves the clock on to a cycle, lets what's due happen, and takes the output frames heard by then.
+auto heard(KernelMachine& m, u64 cycle) -> std::vector<s16> {
+  m.kernel.cycles = cycle;
+  m.kernel.events();
+  std::vector<s16> frames;
+  m.kernel.audioOutput(frames);
+  return frames;
+}
+
+//Writes stereo 16-bit pairs (left, right) from address on, sample n made by each(n).
+auto putStereo(KernelMachine& m, u32 address, u32 count, const std::function<std::pair<s32, s32>(u32)>& each) {
+  for(u32 n = 0; n < count; n++) {
+    auto [left, right] = each(n);
+    m.system.memory.write(2, address + n * 4, u16(left));
+    m.system.memory.write(2, address + n * 4 + 2, u16(right));
+  }
+}
 }
 
 //Reserving: the highest free channel for -1, a count that's a multiple of 64 from 64 to 65472, stereo or mono; a
@@ -556,11 +579,191 @@ static auto sourceRest() -> void {
   }
 }
 
+//What a mixer channel plays, as heard. A stereo buffer handed over at cycle 0 starts the DMA there: its blocks fill
+//output frames 0 on, each sample times its side's volume over 0x8000, rounded down (0x8000 as it is, 0x4000 at half:
+//-1 becomes -1); then silence. A mono buffer is heard on both sides, each at its own volume; at 0xFFFF, nearly
+//doubled, clamped to 16 bits at both ends. Two channels add up (10000 and 5000 are 15000), clamped too (30000 and
+//30000 are 32767, -30000 and -30000 -32768). A channel handed a buffer while the DMA runs is heard from the next
+//boundary (frame 64); one started later starts where it's handed over (1 ms on: frame 44, 44.1 rounded down). A null
+//buffer plays nothing.
+static auto mixing() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  putStereo(m, Buffer, 128, [](u32 n) { return std::pair{s32(n) * 100, -s32(n) * 50 - 1}; });
+  CHECK(m.call("sceAudioChReserve", {0, 128, 0}), 0);
+  CHECK(m.call("sceAudioOutputPanned", {0, 0x8000, 0x4000, Buffer}), 128);
+  auto frames = heard(m, Kernel::CPUFrequency / 100);  //10 ms: 441 frames
+  CHECK(frames.size(), 441 * 2);
+  bool exact = frames.size() == 441 * 2;
+  for(u32 n = 0; n < 441 && exact; n++) {
+    s64 left = n < 128 ? n * 100 : 0, right = n < 128 ? floorDiv((-s64(n) * 50 - 1) * 0x4000, 0x8000) : 0;
+    if(frames[n * 2] != left || frames[n * 2 + 1] != right) exact = false;
+  }
+  CHECK(exact, true);
+  if(frames.size()) CHECK(frames[1], -1);
+
+  //mono at 0x8000 and 0x2000; then, the DMA stopped, again at 0xFFFF from the frame it's handed over at (441)
+  KernelMachine o;
+  auto mono = [](u32 n) { return s64(n) * 600 - 19000; };
+  for(u32 n = 0; n < 64; n++) o.system.memory.write(2, Buffer + n * 2, u16(mono(n)));
+  CHECK(o.call("sceAudioChReserve", {1, 64, 0x10}), 1);
+  CHECK(o.call("sceAudioOutputPanned", {1, 0x8000, 0x2000, Buffer}), 64);
+  frames = heard(o, Kernel::CPUFrequency / 100);
+  exact = frames.size() == 441 * 2;
+  for(u32 n = 0; n < 64 && exact; n++) {
+    if(frames[n * 2] != mono(n) || frames[n * 2 + 1] != floorDiv(mono(n) * 0x2000, 0x8000)) exact = false;
+  }
+  CHECK(exact, true);
+  CHECK(o.call("sceAudioOutputPanned", {1, 0xffff, 0xffff, Buffer}), 64);
+  frames = heard(o, Kernel::CPUFrequency / 50);
+  exact = frames.size() == 441 * 2;
+  for(u32 n = 0; n < 64 && exact; n++) {
+    s64 loud = clamp16(floorDiv(mono(n) * 0xffff, 0x8000));
+    if(frames[n * 2] != loud || frames[n * 2 + 1] != loud) exact = false;
+  }
+  CHECK(exact, true);
+  if(frames.size() == 441 * 2) CHECK(frames[0] == -32768 && frames[63 * 2] == 32767 && frames[64 * 2] == 0, true);
+
+  //two channels: 0 with three blocks (30000, 10000, 30000), 1 with two (5000, 30000) joining the running DMA
+  KernelMachine t;
+  putStereo(t, Buffer, 192, [](u32 n) { s32 v = n / 64 == 1 ? 10000 : 30000; return std::pair{v, -v}; });
+  putStereo(t, Buffer + 0x1000, 128, [](u32 n) { s32 v = n < 64 ? 5000 : 30000; return std::pair{v, -v}; });
+  CHECK(t.call("sceAudioChReserve", {0, 192, 0}), 0);
+  CHECK(t.call("sceAudioChReserve", {1, 128, 0}), 1);
+  CHECK(t.call("sceAudioOutput", {0, 0x8000, Buffer}), 192);
+  CHECK(t.call("sceAudioOutput", {1, 0x8000, Buffer + 0x1000}), 128);
+  frames = heard(t, Kernel::CPUFrequency / 100);
+  CHECK(frames.size(), 441 * 2);
+  if(frames.size() == 441 * 2) {
+    for(auto [frame, left] : {std::pair{0, 30000}, {63, 30000}, {64, 15000}, {127, 15000}, {128, 32767},
+                              {191, 32767}, {192, 0}}) {
+      check(__LINE__, "a sum's left", frames[frame * 2], left);
+      check(__LINE__, "a sum's right", frames[frame * 2 + 1], left == 32767 ? -32768 : -left);
+    }
+  }
+
+  //a buffer handed over 1 ms on starts at frame 44; a null buffer plays nothing
+  KernelMachine l;
+  putStereo(l, Buffer, 64, [](u32) { return std::pair{1000, 2000}; });
+  CHECK(l.call("sceAudioChReserve", {0, 64, 0}), 0);
+  CHECK(l.call("sceAudioChReserve", {1, 64, 0}), 1);
+  CHECK(l.call("sceAudioOutput", {1, 0x8000, 0}), 64);
+  l.kernel.cycles = Kernel::CPUFrequency / 1000;
+  CHECK(l.call("sceAudioOutput", {0, 0x8000, Buffer}), 64);
+  frames = heard(l, Kernel::CPUFrequency / 100);
+  CHECK(frames.size(), 441 * 2);
+  if(frames.size() == 441 * 2) {
+    CHECK(frames[43 * 2] == 0 && frames[44 * 2] == 1000 && frames[44 * 2 + 1] == 2000, true);
+    CHECK(frames[107 * 2] == 1000 && frames[108 * 2] == 0, true);
+  }
+  CHECK(roundTrip(m), true);
+  CHECK(memory.read(2, Buffer + 4), 100);  //(the buffer is read, never written)
+}
+
+//The SRC channel's samples converted to 44.1 kHz. At 22050 Hz a buffer of 64 fills 128 frames from where it's armed:
+//its samples as they are on the even frames, halfway between neighbors on the odd ones, the last halfway to silence
+//(nothing armed after it). At 44100 Hz a frame a sample; at 48000 Hz, 480 samples fill 441 frames, a ramp staying a
+//ramp (within a step of its line); a volume of 0x4000 halves them. Two buffers armed one after the other play on
+//without a gap, the first's last frame halfway to the second's first sample. The mixer and the SRC channel add up.
+//(Called directly, with no thread to wait, an SRC output can't wait for its completion: CAN_NOT_WAIT, as from an
+//interrupt handler, its buffer armed and played all the same.)
+static auto sourceOutput() -> void {
+  auto source = [](u32 n) { return std::pair{s32(n % 64) * 900 - 28000, 30000 - s32(n % 64) * 800}; };
+  KernelMachine m;
+  putStereo(m, Buffer, 64, source);
+  CHECK(m.call("sceAudioSRCChReserve", {64, 22'050, 2}), 0);
+  CHECK(m.call("sceAudioSRCOutputBlocking", {0x8000, Buffer}), Kernel::ErrorCanNotWait);
+  auto frames = heard(m, Kernel::CPUFrequency / 100);
+  CHECK(frames.size(), 441 * 2);
+  CHECK(m.kernel.audio.src.armed, 0);  //retired: heard to its end
+  bool exact = frames.size() == 441 * 2;
+  for(u32 n = 0; n < 441 && exact; n++) {
+    s64 left = 0, right = 0;
+    if(n < 128) {
+      auto [l0, r0] = source(n / 2);
+      auto [l1, r1] = n / 2 + 1 < 64 ? source(n / 2 + 1) : std::pair{0, 0};
+      left = n % 2 ? (l0 + l1) / 2 : l0, right = n % 2 ? (r0 + r1) / 2 : r0;
+    }
+    if(frames[n * 2] != left || frames[n * 2 + 1] != right) {
+      std::printf("  frame %u: %d %d, not %lld %lld\n", n, frames[n * 2], frames[n * 2 + 1], left, right);
+      exact = false;
+    }
+  }
+  CHECK(exact, true);
+
+  KernelMachine f;  //44.1 kHz: a frame a sample, at half volume
+  putStereo(f, Buffer, 100, source);
+  CHECK(f.call("sceAudioSRCChReserve", {100, 0, 2}), 0);
+  CHECK(f.call("sceAudioSRCOutputBlocking", {0x4000, Buffer}), Kernel::ErrorCanNotWait);
+  frames = heard(f, Kernel::CPUFrequency / 100);
+  exact = frames.size() == 441 * 2;
+  for(u32 n = 0; n < 441 && exact; n++) {
+    auto [left, right] = n < 100 ? source(n) : std::pair{0, 0};
+    if(frames[n * 2] != floorDiv(left, 2) || frames[n * 2 + 1] != floorDiv(right, 2)) exact = false;
+  }
+  CHECK(exact, true);
+
+  KernelMachine h;  //48 kHz: 480 samples, 441 frames, a ramp still
+  putStereo(h, Buffer, 480, [](u32 n) { return std::pair{s32(n) * 50, -s32(n) * 50}; });
+  CHECK(h.call("sceAudioSRCChReserve", {480, 48'000, 2}), 0);
+  CHECK(h.call("sceAudioSRCOutputBlocking", {0x8000, Buffer}), Kernel::ErrorCanNotWait);
+  frames = heard(h, Kernel::CPUFrequency / 50);
+  exact = frames.size() == 882 * 2;
+  for(u32 n = 0; n < 882 && exact; n++) {
+    double line = n < 441 ? n * 48'000.0 / 44'100 * 50 : 0;
+    if(std::abs(frames[n * 2] - line) > 1 || std::abs(frames[n * 2 + 1] + line) > 1) exact = false;
+  }
+  CHECK(exact, true);
+
+  //two buffers at 22050, the second armed as the first plays, and a mixer channel beside them
+  KernelMachine c;
+  putStereo(c, Buffer, 64, [](u32) { return std::pair{1000, -1000}; });
+  putStereo(c, Buffer + 0x1000, 64, [](u32) { return std::pair{3000, -3000}; });
+  putStereo(c, Buffer + 0x2000, 256, [](u32) { return std::pair{5, 7}; });
+  CHECK(c.call("sceAudioSRCChReserve", {64, 22'050, 2}), 0);
+  CHECK(c.call("sceAudioSRCOutputBlocking", {0x8000, Buffer}), Kernel::ErrorCanNotWait);
+  CHECK(c.call("sceAudioSRCOutputBlocking", {0x8000, Buffer + 0x1000}), Kernel::ErrorCanNotWait);
+  CHECK(c.call("sceAudioChReserve", {0, 256, 0}), 0);
+  CHECK(c.call("sceAudioOutput", {0, 0x8000, Buffer + 0x2000}), 256);
+  frames = heard(c, Kernel::CPUFrequency / 100);
+  CHECK(frames.size(), 441 * 2);
+  if(frames.size() == 441 * 2) {
+    CHECK(frames[0] == 1005 && frames[1] == -993, true);
+    CHECK(frames[126 * 2] == 1005 && frames[127 * 2] == 2005, true);  //the first's last frame: halfway to 3000
+    CHECK(frames[128 * 2] == 3005 && frames[255 * 2] == 1505, true);  //the second's last: halfway to silence
+    CHECK(frames[256 * 2] == 0 && frames[256 * 2 + 1] == 0, true);
+  }
+  CHECK(roundTrip(m), true);
+  CHECK(roundTrip(c), true);
+}
+
+//The output carried in a state: a machine part way through a mixer buffer and an SRC buffer, saved, loads into
+//another that makes the same state; both then play on to the same frames.
+static auto outputState() -> void {
+  KernelMachine m;
+  putStereo(m, Buffer, 1024, [](u32 n) { return std::pair{s32(n % 300) * 90, -s32(n % 200) * 70}; });
+  CHECK(m.call("sceAudioChReserve", {0, 1024, 0}), 0);
+  CHECK(m.call("sceAudioOutput", {0, 0x7000, Buffer}), 1024);
+  CHECK(m.call("sceAudioSRCChReserve", {1024, 11'025, 2}), 0);
+  CHECK(m.call("sceAudioSRCOutputBlocking", {0x9000, Buffer}), Kernel::ErrorCanNotWait);
+  auto before = heard(m, Kernel::CPUFrequency / 200 + 12345);  //5 ms and some: part way through both
+  CHECK(before.size() > 200, true);
+  auto state = saveState(m);
+  KernelMachine n;
+  CHECK(loadState(n, state), true);
+  CHECK(saveState(n) == state, true);
+  auto after = heard(m, Kernel::CPUFrequency / 10);
+  CHECK(heard(n, Kernel::CPUFrequency / 10) == after, true);
+  CHECK(after.size() > 4000, true);
+  CHECK(std::any_of(after.begin(), after.end(), [](s16 sample) { return sample != 0; }), true);
+}
+
 auto audioTests() -> Tests {
   return {
     {"audio channels", channels}, {"audio blocking timing", blockingTiming}, {"audio src channel", sourceChannel},
     {"audio 64-sample pacing", pacing}, {"audio mixer timeline", mixerTimeline}, {"audio draining", draining},
-    {"audio waits refused", contexts}, {"audio src rest", sourceRest},
+    {"audio waits refused", contexts}, {"audio src rest", sourceRest}, {"audio mixed", mixing},
+    {"audio src heard", sourceOutput}, {"audio output in states", outputState},
   };
 }
 

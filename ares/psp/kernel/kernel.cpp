@@ -578,6 +578,7 @@ auto Kernel::power() -> void {
   compilerVersion = 0;
   powerState = {};
   audio = {};
+  audio.output.samples.assign(Audio::OutputFrames * 2, 0);
   sas = {};
   atracIDs = 0;
   dispatchSuspended = false;

@@ -17,6 +17,8 @@ homebrew runs in the app on the RP6. Part 14, disc images (ISO and CSO, the disc
 now start ask for (callbacks, sound output's timing, power, interrupt handlers, memory pools, the system's dialogs and
 saves), is on `cursor/psp-hle-games-2b67`, on top of `cursor/psp-retail-load-2b67`; parts 18 and 19, decryption and
 loading modules, are on `cursor/psp-decrypt-2b67` (#144), which `cursor/psp-hle-games-2b67` has since merged.
+Part 21, sound (sceAudio's channels mixed into the system's stream, sceSasCore's voices heard), is on
+`cursor/psp-sound-2b67`, on top of part 20's `cursor/psp-hle-games2-2b67`.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -2079,3 +2081,116 @@ the next grain, and where a voice given new samples goes on from; pipe attribute
 and the network's error numbers for headers and radios, sceLibFont's errors (INVALID_VALUE for a resolution among
 them); the dispatch functions' return values, and a rotation of the caller's line with dispatching held off (no
 change here); and whether the PSP zeroes the whole of a thread's kernel area (Peace Walker needs k0 + 4 zero).
+
+## Part 21: sound
+
+On branch `cursor/psp-sound-2b67`, on top of part 20's (`cursor/psp-hle-games2-2b67`). Games are heard: what
+sceAudio's channels play goes into the system's sound stream, and sceSasCore's voices make sound. Written from
+pspsdk's pspaudio.h (PSP_AUDIO_VOLUME_MAX), pspautotests' audio/sascore programs and the results they recorded on a
+PSP (their samples, reproduced exactly), the notes in that suite's sascore.h on a SasCore's fields as a PSP leaves
+them, psx-spx's description of the PlayStation SPU's ADPCM, and part 17's behavior specification of sceAudio's
+timing; no other emulator's code was read.
+
+- **The output** (`audio.cpp`). Think of the sound as a strip of frames, a left and a right sample each, 44,100 a
+  second from power on: frame n is heard at cycle n * 370000 / 49 (`sampleFrame()`). Every channel adds what it
+  plays to the frames where it's heard. At the end of each frame of the PSP's, the system takes the frames heard by
+  then (`Kernel::audioOutput()`, from `System::run()`), each sum clamped to 16 bits, and hands them to the ares
+  stream; silence makes up any the kernel's clock didn't reach (the program ended, or nothing will run again). The
+  stream runs at the PSP's own 44.1 kHz, so the core resamples nothing: ares converts it to the host's rate. Frames
+  not taken yet wait in a ring of 4096 (the mixer adds a block or so ahead of the clock).
+- **The mixer channels.** At each block boundary of part 17's timing model, the DMA reads the next 64 samples of
+  every channel with a buffer and adds them to the 64 frames heard from there: each sample times its side's volume
+  over 0x8000 (pspsdk's PSP_AUDIO_VOLUME_MAX: as it is; 0x4000 half; up to 0xFFFF, nearly double), rounded down; a
+  mono sample on both sides, each at its own volume. A buffer with no memory behind it is silence.
+- **The SRC channel** (sceAudioOutput2, sceAudioSRC). Its buffers are heard one after another from the moment the
+  first is armed after an idle stretch, at its rate. Each output frame falls somewhere between two of its samples
+  and takes the straight line between them (linear interpolation), at its buffer's volume (0x8000 as it is): at
+  22050 Hz a buffer fills twice as many frames as it has samples, every other one a sample as it is, the ones
+  between halfway. A buffer is read while it plays (as the frames are taken), and finished before its slot is handed
+  back to the program (part 17's 100 microseconds before it's heard: its last samples are added that far ahead).
+- **sceSasCore's voices** (`sas.cpp`), a grain sample by sample, for each voice playing and not paused:
+  - Its sample where it is. A PCM voice's are 16-bit numbers in memory. A VAG voice's come packed as the
+    PlayStation SPU's ADPCM: 16-byte blocks of 28 samples, 4 bits each. Four bits can't hold a sample, so they hold
+    a correction: the decoder guesses each sample from the two before it (the last times the filter's first
+    coefficient, less the one before times its second, over 64), and adds the 4 bits times 4096 shifted right by the
+    block's shift (big corrections for loud passages, small for quiet). A block's first byte picks the filter and the
+    shift, its second holds flags (where a loop starts and ends, where the data ends). Samples are decoded in turn as
+    the voice moves on, across blocks and round its loop.
+  - Its pitch (0x1000 a sample per sample made, its samples at 44.1 kHz; 0x2000 two, an octave up): where it is
+    counts in 4096ths of a sample, and between two samples the one made is the straight line between them.
+  - Its envelope, the ADSR height part 20 tracks (unchanged), multiplied in as it is before this sample's step; its
+    volumes over 0x1000, rounded down: left and right make its dry sound, the effect's left and right its wet sound.
+  - The grain is written clamped to 16 bits: in stereo (output mode 0) as left and right pairs, the dry sums when the
+    voices are heard dry (on from __sceSasInit) plus, when they're heard through the effect and one is chosen, the
+    wet sums at the effect's volumes; in multichannel (mode 1) as four planes of a grain each (dry left, dry right,
+    wet left, wet right) for the game to mix. __sceSasCoreWithMix adds the voices to what the game's buffer holds,
+    that scaled by its own left and right volumes first.
+- **What the recordings fix, and this follows exactly** (audio/sascore's .expected files): VAG's guess rounds down,
+  with no half added as psx-spx's SPU adds one (vag's music.vag samples 0x2d4b and 0x2cb4 only come out so);
+  filters 5-15 read past the PSP's table of five into what follows it (vag's predict_nr 5-15: filter 7 guesses with
+  52 and 0, 9 with 60 and 125, 13 with 2 and 216...); a VAG voice's samples are heard a sample late, where a PCM
+  voice's are heard at its place (vag: silence then the first sample decoded; pcm: the 254th sample as the 254th
+  made); the first sample after a key-on is silent (the envelope's 0); the four multichannel planes and the volumes'
+  rounding (outputmode: 0x1000, 0xC00, 0x800, 0x400 give -33, -25, -17 and -9 of a -33); __sceSasCoreWithMix's
+  volumes scaling the buffer (0 and 0 leave the voices alone) and its refusing multichannel (NOT_SUPPORTED,
+  0x80000004, the buffer untouched); dry sound with no __sceSasRevVON (pcm, outputmode; sascore.h found its flags 1,
+  dry, in a fresh SasCore, and the effect's volumes 0); and VAG's end marks read as whole bytes: music.vag's header,
+  played as blocks, has flags 0x41 and 0x75 and plays on, where part 20's `& 7` would have ended it at its first
+  block.
+- **Chosen, as no recording shows it**: the straight line between samples (at pitches other than 0x1000, and the
+  SRC channel's rates); the envelope's and volumes' rounding between the recorded values (each multiplication
+  rounded down); shifts 13-15 as 9, as psx-spx says of the SPU; VAG flag bytes 1 and 7 ending the voice, 3 looping
+  (or ending, not looping), 4 and 6 marking the loop's start, every other byte going on (0x87 too, which part 20 had
+  ending); paused voices silent; the effect passing the wet sound through unchanged, and none with no effect chosen
+  (type -1); and the mixer's and SRC channel's volume law (times the volume over 0x8000, as part 17's specification
+  assumed).
+- **Not done**: reverb, echo and delay (__sceSasRevType and its fellows keep their settings; the wet sound passes
+  through as it is, which none of the games tried turns on); noise, triangle and steep waves (silent, their
+  parameters kept); ATRAC3 voices in sas (silent: no decoder yet); sceAudioOneshotOutput and the rest part 17 lists.
+- **Cheap**: no allocation per sample or per frame (the ring is made at power-on, a grain's sums reuse their room);
+  a grain leaves out the planes it won't write (the wet pair, as most games have the wet sound off). On the host the
+  scratch runner ran Lumines' 2400 frames in 48-50 s with sound as without.
+- **States**: the output not taken yet (its frames, at most a ring's worth, each sum within what the channels at
+  their loudest make, 2^21, so adding to it can't overflow), the SRC channel's place in its samples and the frame it
+  adds to next, and each VAG voice's decoder (the two samples before its place, and whether it has started). Loading
+  refuses frames ending before they start, more than a ring, frames taken past the clock, a sum past 2^21, the SRC
+  channel past its samples, somewhere with none armed, or a ring ahead. The layout is version 6: a state of version 1
+  to 5 is refused by its header.
+
+What the games sound like on the host (the scratch runner writing the system's stream to a WAV, 40 s each, kept
+outside the repository; per second: RMS in dBFS, peak, clipped samples, zero crossings, the strongest frequency):
+- **Lumines** (sas): silent through its logos and title screen (the game keys no voice there), then its demo stage
+  from 25 s: effects (VAGs whose headers say 44.1 kHz, played at pitch 0x1000) and a music segment voice, -18 to -34
+  dBFS a second, peak 19255, nothing clipped; the spectrogram shows regular beats.
+- **Street Fighter III port** (four stereo sceAudio channels of 1024 samples at 0x8000, each from a thread of its
+  own): heard from the start, a tonal jingle (harmonics) for 8 s, then its title music, -17.5 to -31 dBFS, peak 23517,
+  nothing clipped; its 6900 outputs in 40 s are 44.1 kHz's pace exactly.
+- **Space Invaders Extreme** (sas through __sceSasCoreWithMix into the SRC channel at 44.1 kHz): its effects, 9 of
+  40 seconds, -19 to -27 dBFS, peak 7999, nothing clipped; its music is ATRAC3+ (no decoder: silent).
+- **Burnout Legends** and **SOCOM**: silent at their titles, whose music is ATRAC3+; with Start (and Cross) pressed,
+  their menus' effects through sas (Burnout's at pitch 0x800, SOCOM's at 0x1000): peaks 8006 and 9979, -29 to -51
+  dBFS, nothing clipped.
+
+Tests (`tests/psp/run-tests.sh`, 197 groups, both sanitizers; `tests/psp/ares` 240 checks):
+- `audio.cpp`: "audio mixed" (a stereo buffer at 0x8000 and 0x4000 heard frame by frame, rounded down; mono at two
+  volumes, and at 0xFFFF clamped at both ends; two channels adding up and clamping, the second joining the running
+  DMA heard from frame 64; a buffer handed over 1 ms on heard from frame 44; a null buffer silent), "audio src heard"
+  (22050 Hz: 64 samples fill 128 frames, as they are and halfway between; 44.1 kHz at half volume; 480 samples at
+  48 kHz fill 441 frames, a ramp staying a ramp; two buffers back to back with a mixer channel beside them), "audio
+  output in states" (part way through a mixer buffer and an SRC buffer: saved, loaded, the same state, the same
+  frames after).
+- `sas.cpp`: "sas vag as recorded" (vag.expected's filters 0-15 and five flag bytes, sample for sample), "sas vag
+  decoded" (blocks worked out by hand from the format's definition: corrections at shifts 0 and 12, filters 1, 2 and
+  4 with a negative guess rounding down and a clamp, shifts 13 and 15 as 9, the end mark, a loop, a 0x41 block going
+  on), "sas pcm heard" (pcm.expected's frames and end flags for three loops; every sample at 0x1000; 0x2000 and
+  0x800), "sas output modes" (outputmode.expected's twelve pairs in stereo, multichannel, stereo mixing and refused
+  multichannel mixing), "sas voices mixed" (two voices clamped, an inverted volume, a half-way envelope, a paused
+  voice, dry off, the wet sound through an effect and with none, mixing at 0x800), "sas voices in states" (a VAG and
+  a PCM voice part way: saved, loaded, the same next grains).
+- `states.cpp`'s "state fields" changes every new field and refuses 7 more states (above); `tests/psp/ares` refuses a
+  version 5 state.
+
+Uncertain: everything listed as chosen above; whether sceAudio's mixer rounds a sample times a volume down (as
+here) or towards zero, and clamps as it adds or once at the end (the same unless channels overflow 32 bits, which
+they can't); which sample of a VAG voice its last block's lag leaves unheard as it ends (here its data's last); and
+how the PSP's interpolation shapes pitches other than 0x1000 (audio/sascore's pitch test prints no samples).
