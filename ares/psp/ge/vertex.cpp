@@ -45,11 +45,13 @@ auto GE::vertexFormat() const -> VertexFormat {
   return f;
 }
 
-//A number of format (8-bit, 16-bit or float) at address, as a float: signed or not as asked.
-static auto readNumber(Memory& memory, u32 address, u32 format, bool isSigned) -> float {
-  if(format == 1) return isSigned ? float(s8(memory.read(1, address))) : float(memory.read(1, address));
-  if(format == 2) return isSigned ? float(s16(memory.read(2, address))) : float(memory.read(2, address));
-  u32 bits = memory.read(4, address);
+//A number of format (8-bit, 16-bit or float) at address, as a float: signed or not as asked. read(size, address)
+//reads memory (readVertex() says how).
+template<typename Read>
+static auto readNumber(const Read& read, u32 address, u32 format, bool isSigned) -> float {
+  if(format == 1) return isSigned ? float(s8(read(1, address))) : float(read(1, address));
+  if(format == 2) return isSigned ? float(s16(read(2, address))) : float(read(2, address));
+  u32 bits = read(4, address);
   float value;
   std::memcpy(&value, &bits, sizeof(value));
   return value;
@@ -58,9 +60,10 @@ static auto readNumber(Memory& memory, u32 address, u32 format, bool isSigned) -
 //A color in one of the vertex formats, as 8888 with red in the low byte. Narrow fields widen by repeating their top
 //bits, so the brightest value stays the brightest (31 becomes 255, not 248).
 static auto widen(u32 value, u32 bits) -> u32 { return value << (8 - bits) | value >> (2 * bits - 8); }
-static auto readColor(Memory& memory, u32 address, u32 format) -> u32 {
-  if(format == 7) return memory.read(4, address);
-  u32 c = memory.read(2, address), r, g, b, a;
+template<typename Read>
+static auto readColor(const Read& read, u32 address, u32 format) -> u32 {
+  if(format == 7) return read(4, address);
+  u32 c = read(2, address), r, g, b, a;
   if(format == 4) r = widen(c & 31, 5), g = widen(c >> 5 & 63, 6), b = widen(c >> 11 & 31, 5), a = 255;
   else if(format == 5) r = widen(c & 31, 5), g = widen(c >> 5 & 31, 5), b = widen(c >> 10 & 31, 5), a = c >> 15 ? 255 : 0;
   else r = widen(c & 15, 4), g = widen(c >> 4 & 15, 4), b = widen(c >> 8 & 15, 4), a = widen(c >> 12, 4);
@@ -77,7 +80,8 @@ static auto unit(u32 format, bool through) -> float {
 //One morph target of the vertex at address (or the vertex itself, with none). Positions are signed, except a
 //through-mode depth, which runs 0-65535 (that 8- and 16-bit depths are unsigned in through mode is as PPSSPP has it);
 //texture coordinates and weights are unsigned; normals signed.
-static auto readTarget(Memory& memory, u32 address, const GE::VertexFormat& f) -> GE::Vertex {
+template<typename Read>
+static auto readTarget(const Read& memory, u32 address, const GE::VertexFormat& f) -> GE::Vertex {
   GE::Vertex vertex;
   if(f.weightFormat) {
     float scale = unit(f.weightFormat, f.through);
@@ -112,8 +116,22 @@ static auto readTarget(Memory& memory, u32 address, const GE::VertexFormat& f) -
 
 //The vertex at address. With morph targets (a vertex type with more than one) it's their sum, each part of each
 //target weighted by its MORPH_WEIGHT; colors channel by channel, cut to whole numbers and held to 0-255 (as PPSSPP
-//has it).
+//has it). Its bytes are read straight from where they are in the host's memory when they're all in one place there
+//(the same bytes memory.read() would give), else through memory.read() one number at a time.
 auto GE::readVertex(u32 address, const VertexFormat& f) -> Vertex {
+  if(const u8* base = f.size ? memory.pointer(address, f.size) : nullptr) {
+    return readVertexWith([&](u32 size, u32 at) -> u32 {
+      const u8* bytes = base + (at - address);
+      if(size == 1) return bytes[0];
+      if(size == 2) return bytes[0] | bytes[1] << 8;
+      return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | u32(bytes[3]) << 24;
+    }, address, f);
+  }
+  return readVertexWith([&](u32 size, u32 at) { return memory.read(size, at); }, address, f);
+}
+
+template<typename Read>
+auto GE::readVertexWith(const Read& memory, u32 address, const VertexFormat& f) -> Vertex {
   if(f.morphs == 1) return readTarget(memory, address, f);
   Vertex sum;
   float color[4] = {};

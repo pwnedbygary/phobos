@@ -17,6 +17,7 @@ namespace ares::PlayStationPortable {
 //The GE watches the pages of the textures it keeps decoded (texture.cpp), and hears of their changes here.
 GE::GE(Memory& memory) : memory(memory) {
   memory.watchedWritten = [this](u32 page) { textureWritten(page); };
+  memory.finishDrawing = [this] { settle(); };  //(threads.cpp)
 }
 
 //As the GE is when the PSP starts: every command's word zero, no list.

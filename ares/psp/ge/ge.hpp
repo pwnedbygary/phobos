@@ -228,6 +228,7 @@ struct GE {
 
   //Where a primitive may draw (draw.cpp): pixels inside left-right and top-bottom (inclusive).
   struct Region { s32 left, top, right, bottom; };
+  struct Batch;  //(threads.cpp)
 
   //What a primitive is drawn with, shared by the jobs it makes: the pixel pipeline's settings, and the texture
   //with the texture function's (or none), all taken from the commands as the primitive met them.
@@ -311,6 +312,7 @@ struct GE {
   //vertex.cpp
   auto vertexFormat() const -> VertexFormat;
   auto readVertex(u32 address, const VertexFormat& format) -> Vertex;
+  template<typename Read> auto readVertexWith(const Read& read, u32 address, const VertexFormat& format) -> Vertex;
   auto readIndex(u32 n, const VertexFormat& format) -> u32;
 
   //lighting.cpp
@@ -374,11 +376,18 @@ struct GE {
   //threads.cpp
   auto setThreads(u32 count) -> void;
   auto flush() -> void;
-  auto pendingOver(u32 address, u32 size) const -> bool;
+  auto launch(bool returning) -> void;
+  auto startBands(Batch& batch) -> void;
+  auto drew(Batch& batch) -> bool;
+  auto settle() -> void;
+  auto clearBatch(Batch& batch) -> void;
+  auto drawnFirst(u32 address, u32 size) -> void;
   auto defer(const PixelState& pixel, const Region& region) -> bool;
   auto record(const Job& job) -> void;
-  auto drawBands() -> void;
+  auto drawBands(Batch& batch) -> void;
   auto worker() -> void;
+
+  std::vector<Vertex> primitiveVertices;  //the primitive being drawn's (draw.cpp)
 
   //The bytes of VRAM the primitive being drawn may draw over (draw.cpp): its frame buffer's, and its depth buffer's.
   struct Touched { u32 low = ~0u, high = 0; };
@@ -388,11 +397,8 @@ struct GE {
 
   //Drawing on several threads (threads.cpp). While the GE runs a list, the primitives it meets wait in a batch,
   //set up, and are drawn together, in bands of rows shared out among the threads, before anything could see them.
-  struct Drawing {
-    u32 threads = 1;          //how many threads draw ('GE Threads'): 1, each primitive at once on the GE's own
-    bool deferring = false;   //run() is running: primitives wait in the batch
-    bool recording = false;   //the primitive being set up waits in the batch
-    std::deque<Look> looks;   //the batch: its primitives' settings, and their jobs in order
+  struct Batch {
+    std::deque<Look> looks;   //its primitives' settings, and their jobs in order
     std::vector<Job> jobs;
     u64 work = 0;             //its pixels, roughly (its jobs' boxes)
     s32 top = 0, bottom = -1;           //its rows
@@ -400,16 +406,26 @@ struct GE {
     u32 frameBuffer = 0, stride = 0, format = 0, depthBuffer = 0, depthStride = 0;
     s32 left = 0, right = 0, upper = 0, lower = 0;  //its area: its primitives' scissor rectangles together
     bool depth = false;                 //some of them reach the depth buffer
-    std::bitset<VRAMPages> pending;  //VRAM's 4 KiB pages it may draw over
+    std::bitset<VRAMPages> pending;     //VRAM's 4 KiB pages it may draw over
+    bool launched = false;              //handed to the workers: being drawn, or next once the one before is done
+    u32 users = 0;                      //threads drawing its bands now (under the mutex)
+    u32 bands = 0;
+    std::atomic<u32> nextBand{0}, bandsLeft{0};
+  };
+  struct Drawing {
+    u32 threads = 1;          //how many threads draw ('GE Threads'): 1, each primitive at once on the GE's own
+    bool deferring = false;   //run() is running: primitives wait in the batch
+    bool recording = false;   //the primitive being set up waits in the batch
+    Batch batches[2];         //one waiting for its primitives, the other maybe still being drawn
+    Batch* batch = &batches[0];         //the one primitives go into
+    Batch* drawn = nullptr;             //the one the workers draw (under the mutex)
+    Batch* queued = nullptr;            //the one to draw once that's done (under the mutex)
 
     std::vector<std::thread> workers;   //the threads besides the GE's own
     std::mutex mutex;
     std::condition_variable wake, finished;
-    u64 round = 0;            //each batch drawn is a round, which the workers wake for
-    u32 active = 0;           //workers drawing a round
+    u64 round = 0;            //goes up as each batch starts being drawn, which the workers wake for
     bool quit = false;
-    std::atomic<u32> nextBand{0}, bandsLeft{0};
-    u32 bands = 0;
     u64 shared = 8192;        //a batch with fewer pixels is drawn on the GE's thread alone (tests may make it 0)
   } drawing;
   static constexpr s32 BandRows = 8;  //the rows in a band

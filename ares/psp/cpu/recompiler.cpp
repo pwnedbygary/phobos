@@ -58,7 +58,7 @@ auto Allegrex::Recompiler::protect(u32 page) -> void {
 //Compiled stores may go straight to page index again, unless it holds compiled code (block() takes it out again as
 //it compiles there) or the owner watches it.
 auto Allegrex::Recompiler::writable(u32 index) -> void {
-  if(!self.pages) return;
+  if(!self.pages || index >= writePages.size()) return;
   writePages[index] = self.watched && self.watched[index] ? nullptr : self.pages[index];
 }
 

@@ -54,16 +54,17 @@ auto GE::lookFor(const PixelState& pixel, const Sampler* texture) const -> Look 
 }
 
 auto GE::primitive(u32 kind, u32 count) -> void {
+  if(!drawing.deferring) settle();  //(called by itself, outside run(): what the last list left being drawn first)
   auto format = vertexFormat();
   u32 ambient = (commands[AmbientColor] & 0xff'ffff) | (commands[AmbientAlpha] & 0xff) << 24;
-  std::vector<Vertex> vertices;
-  vertices.reserve(count);
+  auto& vertices = primitiveVertices;  //(kept from one primitive to the next, with room for them)
+  vertices.clear();
   for(u32 n = 0; n < count; n++) {
     //(indices and vertices in VRAM that primitives waiting to be drawn draw over: they're drawn first, threads.cpp)
-    if(format.indexFormat && pendingOver(indexAddress + n * format.indexFormat, format.indexFormat)) flush();
+    if(format.indexFormat) drawnFirst(indexAddress + n * format.indexFormat, format.indexFormat);
     u32 index = format.indexFormat ? readIndex(n, format) : n;
     u32 address = vertexAddress + index * format.size;
-    if(pendingOver(address, format.size)) flush();
+    drawnFirst(address, format.size);
     vertices.push_back(readVertex(address, format));
     if(!format.colorFormat) vertices.back().color = ambient;
   }
@@ -118,7 +119,7 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   //texture read from memory as it's drawn (texture.cpp) has it drawn at once.
   drawing.recording = !(look.textured && !look.texture.decoded) && defer(pixel, region);
   if(!drawing.recording) flush();
-  const Look& drawn = drawing.recording ? drawing.looks.emplace_back(std::move(look)) : look;
+  const Look& drawn = drawing.recording ? drawing.batch->looks.emplace_back(std::move(look)) : look;
   Transform t{};
   if(!format.through) {
     t = transformState();
@@ -166,13 +167,15 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   for(auto& range : touched) {
     if(range.high < range.low) continue;
     memory.changed(Memory::VRAMBase + range.low, range.high - range.low + 1);
-    if(drawing.recording) for(u32 page = range.low >> 12; page <= range.high >> 12; page++) drawing.pending.set(page);
+    if(drawing.recording) {
+      for(u32 page = range.low >> 12; page <= range.high >> 12; page++) drawing.batch->pending.set(page);
+    }
   }
   drawing.recording = false;
 }
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth
-//buffer's, by the 16 KiB the GE rearranges each in, where it writes depth), for primitive() to report.
+//buffer's, by the 16 KiB the GE rearranges each in, where it tests depth), for primitive() to report.
 auto GE::submit(const Job& job) -> void {
   if(job.firstX > job.lastX || job.firstY > job.lastY) return;
   auto& p = job.look->pixel;
@@ -188,7 +191,7 @@ auto GE::submit(const Job& job) -> void {
   u32 bytes = p.format == 3 ? 4 : 2;
   note(0, p.frameBuffer + (job.firstY * p.stride + job.firstX) * bytes,
        p.frameBuffer + (job.lastY * p.stride + job.lastX) * bytes + bytes - 1, false);
-  if(p.clear ? p.clearDepth : p.depthWrite) {
+  if(p.clear ? p.clearDepth : p.depthTest) {  //(reading it as well: the batch's own while it waits, threads.cpp)
     note(1, p.depthBuffer + (job.firstY * p.depthStride + job.firstX) * 2,
          p.depthBuffer + (job.lastY * p.depthStride + job.lastX) * 2 + 1, true);
   }

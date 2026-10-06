@@ -945,7 +945,8 @@ static auto geEndless() -> void {
 //sprite drawing over its own texture (drawn at once, in order); and a 16-bit frame buffer. It comes out the same,
 //every byte of VRAM, with 1, 2, 4 and 8 threads, with batches shared out however small. Stopped at its stall address
 //part way, what came before is drawn (what the CPU reads then); and a state saved there carries on, in another
-//machine, to the same picture.
+//machine, to the same picture. Its last primitives still being drawn as the CPU runs on, the CPU's compiled stores
+//and loads find them drawn.
 static auto geThreads() -> void {
   constexpr u32 Texture = 0x0898'0000, Offscreen = 0x15'4000;  //(the off-screen picture: VRAM offset)
   u32 stall = 0;
@@ -1036,6 +1037,11 @@ static auto geThreads() -> void {
       put(GE::Triangles, {{0, 0, 0xffff'ffff, n * 70.0f, 0, 0}, {0, 0, 0x8000'00ff, n * 70.0f + 70, 90, 0},
                           {0, 0, 0x0000'ff00, n * 70.0f, 120, 0}});
     }
+    //and much more of it, taking a while to draw, the bottom rows last
+    list.put(GE::TextureMappingEnable, 1), list.to(GE::TextureAddress0, Texture);
+    list.put(GE::TextureBufferWidth0, (Texture >> 24) << 16 | 64), list.put(GE::TextureFormat, 3);
+    list.put(GE::TextureSize0, 6 << 8 | 6), list.put(GE::TextureFunction, 0 | 1 << 8);
+    for(u32 n = 0; n < 6; n++) put(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {64 + n * 3.0f, 64, 0x80ff'ffff, 480, 272, 0}});
     list.put(GE::Finish), list.put(GE::End);
   };
   auto drawn = [&](u32 threads, u64 shared, bool stalled) {
@@ -1044,6 +1050,7 @@ static auto geThreads() -> void {
     m.system.ge.drawing.shared = shared;
     build(m.system.memory);
     m.call("sceGeListEnQueue", {ListA, stalled ? stall : 0, 0xffff'ffff, 0});
+    m.system.ge.settle();  //(its last primitives may still be being drawn: VRAM itself is looked at here)
     return m.system.memory.vram;
   };
   auto whole = drawn(1, 8192, false), half = drawn(1, 8192, true);
@@ -1074,7 +1081,27 @@ static auto geThreads() -> void {
   CHECK(n.kernel.serialize(loading), true);
   CHECK(n.system.memory.vram == half, true);
   CHECK(n.call("sceGeListUpdateStallAddr", {id, 0}), 0);
+  n.system.ge.settle();
   CHECK(n.system.memory.vram == whole, true);
+
+  //the CPU's compiled code just after the list, its last primitives still being drawn: a store into a pixel they
+  //draw lands after them, and a load sees them drawn
+  for(bool recompile : {true, false}) {
+    KernelMachine c;
+    c.system.ge.setThreads(4);
+    c.system.ge.drawing.shared = 0;
+    build(c.system.memory);
+    c.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    CHECK(c.system.ge.drawing.batches[0].launched || c.system.ge.drawing.batches[1].launched, true);
+    u32 stored = VRAM + 0x18'0000 + (260 * 512 + 400) * 2, loaded = VRAM + 0x18'0000 + (250 * 512 + 300) * 2;
+    c.system.runProgram(0x0890'0000, {lui(t0, stored >> 16), ori(t0, t0, stored & 0xffff), ori(t1, zero, 0x1234),
+                                      sh(t1, 0, t0), lui(t0, loaded >> 16), ori(t0, t0, loaded & 0xffff),
+                                      lhu(t2, 0, t0), lui(t3, 0x0892), sw(t2, 0, t3)}, recompile);
+    CHECK(c.system.memory.read(2, stored), 0x1234u);
+    u32 at = loaded - VRAM;
+    CHECK(c.system.memory.read(4, 0x0892'0000), u32(whole[at] | whole[at + 1] << 8));
+    CHECK(c.system.ge.drawing.batches[0].launched || c.system.ge.drawing.batches[1].launched, false);
+  }
 }
 
 auto geTests() -> Tests {

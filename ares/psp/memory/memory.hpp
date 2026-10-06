@@ -80,6 +80,18 @@ struct Memory {
   std::function<auto (u32 page) -> void> watching;
   std::function<auto (u32 page) -> void> watchedWritten;
 
+  //VRAM while the GE's workers still draw into it (ge/threads.cpp: a list's last primitives go on being drawn while
+  //the CPU runs on): the pages they draw over (busyPages, of VRAM's 512) are theirs, and anyone else touching one
+  //(pointer(), behind every read, write and copy) first waits for them to finish (finishDrawing(), the GE's), as do
+  //serialize() and power(). The CPU's compiled loads and stores reach VRAM through its page table instead, so the GE
+  //only lets drawing go on that way when the CPU's owner has set vramGuard(), which takes the busy pages out of the
+  //CPU's page tables (busy) and puts them back (not).
+  bool vramBusy = false;
+  u64 busyPages[VRAMSize / PageSize / 64] = {};
+  std::function<auto () -> void> finishDrawing;
+  std::function<auto (bool busy) -> void> vramGuard;
+  auto vramPageBusy(u32 page) const -> bool { return busyPages[page >> 6] >> (page & 63) & 1; }
+
   //memory.cpp
   static auto vramOffset(u32 copy, u32 seen) -> u32;
   static auto vramSeen(u32 copy, u32 offset) -> u32;

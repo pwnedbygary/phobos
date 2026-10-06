@@ -26,6 +26,14 @@ struct System : Allegrex {
     pages = table.data();
     watched = memory.watched.data();
     memory.watching = [this](u32 page) { recompiler.protect(page); };
+    memory.vramGuard = [this](bool busy) {
+      for(u32 offset = 0; offset < Memory::VRAMSize; offset += Memory::PageSize) {
+        if(!memory.vramPageBusy(offset / Memory::PageSize)) continue;
+        u32 page = (Memory::VRAMBase + offset) / Memory::PageSize;
+        table[page] = busy ? nullptr : &memory.vram[offset];
+        recompiler.writable(page);
+      }
+    };
     memory.written = [this](u32 address, u32 size) { recompiler.invalidateRange(address, size); };
     memory.unmapped = [this](u32 address, bool store) { unmapped.push_back({address, store}); };
     exceptionHook = [this](Exception exception, u32 address) {

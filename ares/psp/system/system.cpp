@@ -156,6 +156,14 @@ auto System::power(bool reset) -> void {
   cpu.pages = pageTable.data();
   cpu.watched = memory.watched.data();
   memory.watching = [this](u32 page) { cpu.recompiler.protect(page); };
+  memory.vramGuard = [this](bool busy) {  //(the pages the GE's workers draw over: memory.hpp)
+    for(u32 offset = 0; offset < Memory::VRAMSize; offset += Memory::PageSize) {
+      if(!memory.vramPageBusy(offset / Memory::PageSize)) continue;
+      u32 page = (Memory::VRAMBase + offset) / Memory::PageSize;
+      pageTable[page] = busy ? nullptr : &memory.vram[offset];
+      cpu.recompiler.writable(page);
+    }
+  };
   memory.written = [this](u32 address, u32 size) { cpu.recompiler.invalidateRange(address, size); };
   memory.unmapped = [this](u32 address, bool store) {
     //Under HLE nothing should reach these; a game that does is reported, but only so often.

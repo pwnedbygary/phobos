@@ -20,6 +20,7 @@ auto Memory::vramSeen(u32 copy, u32 offset) -> u32 {
 //Clears memory, sized for the model: 32 MiB of main RAM for the PSP-1000, 64 MiB for later models. The buffers are
 //only made again when a size changes, so a page table built from them stays valid across power().
 auto Memory::power(u32 ramSize) -> void {
+  if(vramBusy) finishDrawing();
   unwatchAll();
   auto clear = [](std::vector<u8>& bytes, u32 size) {
     if(bytes.size() != size) bytes.assign(size, 0);
@@ -81,6 +82,7 @@ auto Memory::unwatchAll() -> void {
 //that RAM is the size it was). Each goes 4 KiB at a time: a byte saying whether the piece holds anything but zeros,
 //then its bytes if it does, since games leave much of their 64 MiB untouched and a state needn't carry it.
 auto Memory::serialize(serializer& s) -> void {
+  if(vramBusy) finishDrawing();
   if(s.reading()) unwatchAll();
   for(auto* area : {&scratchpad, &vram, &ram}) {
     for(u32 at = 0; at < area->size(); at += 4_KiB) {
@@ -102,6 +104,13 @@ auto Memory::pointer(u32 address, u32 size) -> u8* {
     return size <= ram.size() - offset ? &ram[offset] : nullptr;
   }
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
+    if(vramBusy) {  //(the first and third copies: the page; the others: the 16 KiB they rearrange, its four pages)
+      u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
+      if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
+      for(u32 page = seen / PageSize; page <= last / PageSize; page++) {
+        if(vramPageBusy(page)) { finishDrawing(); break; }
+      }
+    }
     u32 copy = (physical - VRAMBase) / VRAMSize, offset = (physical - VRAMBase) % VRAMSize;
     if(copy & 1) {
       if((offset & 31) + size > 32) return nullptr;
