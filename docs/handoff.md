@@ -868,6 +868,41 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: VFPU log2 exact below 4 — 2026-10-03
+
+A third commit on `cursor/psp-vfpu-exact-2b67`. `vlog2`'s table is fixed point (units of 2^-24 over [1, 2)),
+which the same interpolator fits; the core adds the exponent as a whole number and truncates to 22 bits after the
+point and 23 significant bits. Below 1 the PSP takes a cheaper path, found from the full sweep: a straight line
+per segment (the table's first value cut to 17 bits after the point, its slope missing its low 9 bits, no squared
+term) and the magnitude truncated to 15 bits after the point, whatever its size; `fit.py` checks it against all
+2^23 results below 1. Exact on all 16.8 million results from 1/2 up to 2 and on every spread-out input below 4;
+from 4 up about half are one unit high (88.35% of the spread-out set overall), which needs whole binades above 4
+from a second round of measurements. The measured group replays vlog2's spread-out sample (inputs below 4) and
+every 1024th result from 1/2 up to 2.
+
+## PSP core: VFPU sine and cosine exact — 2026-10-03
+
+A second commit on `cursor/psp-vfpu-exact-2b67`: the table behind `vsin` and `vcos` turned out to be cosine's (sine
+is it read backwards), which fits the same interpolator; very large arguments wrap as the hardware's 5-bit shift
+does (a shift of exactly 32, 64 or 96 gives 0). `vsin`, `vcos`, `vnsin` and `vrot` now use it: exact on every
+full-range and spread-out input. Ten math instructions are exact; `vlog2` and `vdot` remain. Checks: 54 groups pass
+on the Mac and in `phobos-linux`; the measured group replays the first 16384 results of each of the ten.
+
+## PSP core: seven VFPU math functions exact — 2026-10-03
+
+Branch `cursor/psp-vfpu-exact-2b67`, stacked on the measurements. `tools/psp-vfpu-measure/fit.py` fits the
+quadratic interpolator published about the hardware to the user's PSP's results, and the core now computes `vrcp`,
+`vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2` and `vasin` with those coefficients (`ares/psp/cpu/vfpu-segments.hpp`,
+generated): exact on all of their full-range results and on a million spread-out inputs each.
+
+- **Found on the way:** `vsqrt`/`vrsq` ignore the input's lowest bit; `vrexp2` reads `vexp2`'s table backwards,
+  as `vexp2` does for negative inputs; `vcos` is `vsin` backwards; `vsqrt(-0)` is +0; `vsin` is fixed point and
+  doesn't fit the model yet (nor does `vlog2`).
+- **Checks run:** `tests/allegrex/run-tests.sh`, all 54 groups pass on the Mac (UBSan, which caught an
+  out-of-range shift in the first version) and in `phobos-linux`; the measured group now also replays the first
+  16384 spread-out results of each of the seven (0.2 MB). `compare.sh` on the full data: the table in
+  psp-vfpu-measurements.md.
+
 ## PSP core: the VFPU against the user's PSP — 2026-10-03
 
 Branch `cursor/psp-vfpu-measured-2b67`, stacked on the measurement program. The user ran it (firmware 6.61) and
