@@ -154,9 +154,13 @@ ReservedInstruction until part 2.
 
 Not checked against hardware: the result of dividing by zero (it gives what MIPS cores commonly do: `lo` = −1 or 1
 by the dividend's sign, `hi` = the dividend), FPU arithmetic in rounding modes other than nearest (the host's
-nearest is used), and conversions of NaN or out-of-range values (0x7fffffff, MIPS's default). (Since measured:
-division by zero in round 2; in round 3, the PSP's arithmetic follows each rounding mode, and its conversions give
-0x80000000 for negative numbers out of range and -infinity. See psp-vfpu-measurements.md.)
+nearest is used), and conversions of NaN or out-of-range values (0x7fffffff, MIPS's default). (Since measured, and
+followed now: division by zero in round 2; in round 3, the arithmetic rounds as FCSR's mode says, the host's
+rounding switched for the one operation when it isn't the nearest (`cvt.s.w` too, as MIPS documents, though no round
+measured it); the NaN an operation gives is picked as the PSP's is, not left to the host, as x86 hosts differ;
+conversions give 0x80000000 for negative numbers out of range and -infinity; FIR reads 0x00003351; and a thread
+starts with FCSR 0x00000e00. FCSR's exception flags, enables and causes are kept but not set or acted on: on a PSP
+the enabled ones end the program, which no working game does. See psp-vfpu-measurements.md.)
 
 Tests: `tests/allegrex/run-tests.sh` (14 groups, with the undefined-behavior sanitizer; on Linux the address
 sanitizer too, which the PSP Core Tests workflow runs for changes to `ares/psp/`, nall or ares's types).

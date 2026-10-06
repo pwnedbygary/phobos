@@ -2,6 +2,7 @@
 
 #include <array>
 #include <bit>
+#include <cfenv>
 #include <cmath>
 #include <limits>
 
@@ -94,8 +95,9 @@ struct Allegrex {
   } ipu;
 
   //The FPU (coprocessor 1): 32 single-precision registers, kept as raw bit patterns so that moving a value never
-  //changes a single bit of it, and its control/status register (FCR31): the rounding mode (bits 0-1), the result of
-  //the last comparison (bit 23) and flush-to-zero (bit 24).
+  //changes a single bit of it, and its control/status register (FCR31): the rounding mode (bits 0-1), the exceptions'
+  //flags, enables and causes (bits 2-17, kept but not acted on), the result of the last comparison (bit 23) and
+  //flush-to-zero (bit 24).
   struct FPU {
     u32 r[32];
     n32 csr;
@@ -242,6 +244,8 @@ struct Allegrex {
   auto setF(u32 index, f32 value) -> void;
   auto flushed(f32 value) const -> f32;
   auto toWord(f32 value, u32 mode) const -> u32;
+  template<typename Value, typename Operation> auto rounded(Operation operation, Value s, Value t) const -> f32;
+  auto setArithmetic(u8 fd, f32 value, u32 s, u32 t) -> void;
 
   auto FABS(u8 fd, u8 fs) -> void;
   auto FADD(u8 fd, u8 fs, u8 ft) -> void;

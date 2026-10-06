@@ -347,6 +347,12 @@ the -fs ones). The core's results already match:
 - **Conversions out of range:** `cvt`, `round`, `trunc`, `ceil` and `floor.w.s` give 0x7fffffff for large positive
   numbers, infinity and NaNs (raising invalid, the probes show), and 0x80000000 for large negative numbers and
   -infinity, where the core gives 0x7fffffff.
+- **Fixed since, in the core (the FPU findings above):** its arithmetic rounds as FCSR's mode says (the host's
+  rounding switched for the one operation when it isn't the nearest; `cvt.s.w` too, as MIPS documents, unmeasured);
+  the NaN an operation gives is picked as the PSP's is (the first signaling NaN made quiet, else the first quiet one,
+  else 0x7fc00000), since x86 hosts give others; its conversions saturate by sign; FIR reads 0x00003351; and a thread
+  starts with FCSR 0x00000e00. All four FPU files now match in every result, every mode, on ARM and x86 hosts alike
+  (the host tests replay them). FCSR's exception bits are still kept but not set or acted on.
 - **Tiny products:** the VFPU rounds a product to 24 bits first, as if exponents had no lower limit, then flushes
   it to 0 if it's below 2^-126. Of the products 2^-126 (1 - j² 2^-46), those up to j = 1448 round to 2^-126 and are
   kept, and the rest are 0 (35.35% of the inputs, every one as measured). The core rounds as IEEE's denormals would
@@ -360,9 +366,10 @@ the -fs ones). The core's results already match:
 
 - From round 2: `vlog2` above 4, and the adders' model (`vdot`, `vhdp`, `vfad`, `vavg`, `vcrsp`, `vdet`, `vqmul` and
   the matrix products).
-- From round 3: the FPU's rounding modes, its conversions out of range and FCSR's starting value; the VFPU's tiny
-  products; and the second recorder list's rules. The GE's round 3 is in [psp-core.md](psp-core.md) ("Round 3's
-  results").
+- From round 3: the VFPU's tiny products, and the second recorder list's rules (the FPU's are done). The GE's round
+  3 is in [psp-core.md](psp-core.md) ("Round 3's results").
+- For a next round: flush to zero in the directed rounding modes (MIPS documents the smallest normal number when
+  rounding toward it; the core gives 0 in every mode), and `cvt.s.w` in each mode.
 
 `compare.sh` shows the progress against the full data; `fit.py <results> ares/psp/cpu/vfpu-segments.hpp` regenerates
 the tables.

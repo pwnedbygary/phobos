@@ -36,6 +36,8 @@ auto Kernel::startThread(Thread& thread, u32 argumentLength, u32 argumentPointer
   c.pc = thread.entry;
   c.pd = thread.entry + 4;
   c.pfxs = c.pfxt = 0xe4;  //the VFPU's prefixes doing nothing
+  c.fcsr = 0x0000'0e00;    //FCSR as a PSP program finds it (measured): rounding to the nearest, traps for overflow,
+                           //dividing by zero and invalid operations enabled (see interpreter-fpu.cpp)
   u32 sp = thread.stackBlock + thread.stackSize - 0x100;  //the top 256 bytes are the kernel's, as on the PSP
   if(argumentPointer && argumentLength) {
     sp = (sp - argumentLength) & ~15u;

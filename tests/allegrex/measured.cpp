@@ -9,7 +9,8 @@
 //vcos, vasin: the *-spread-16k files, which start the full *-spread files); and vlog2, except from 4 up, where the
 //PSP sometimes gives one unit less than the core (its spread-out results, and every 1024th result from 1/2 up to
 //2). vdot's file is kept for when the core sums its products as the PSP does. From round 2: div and divu on 8192
-//pairs, dividing by zero included.
+//pairs, dividing by zero included. From rounds 2 and 3: the FPU's conversions and arithmetic in each rounding mode,
+//on every kind of input (fpu-convert, fpu-arith) and on zeros and normal numbers (the -safe files), and FIR.
 
 #include "harness.hpp"
 
@@ -153,6 +154,67 @@ static auto measuredDivide() -> void {
   CHECK(exact, 8192u);
 }
 
+//fpu-state.bin (round 3): FCSR as the PSP program found it, then FIR, which cfc1 reads from control register 0.
+//Returns FCSR's bits above the exception bits (flush to zero among them), which the FPU tests kept for every
+//instruction.
+static auto measuredFpuState() -> uint32_t {
+  auto state = loadMeasured("fpu-state.bin");
+  CHECK(state.size(), 2);
+  if(state.size() != 2) return 0;
+  Machine m;
+  m.run({cfc1(t0, 0)});
+  CHECK(m.gpr(t0), state[1]);
+  return state[0] & ~0x3ffffu;
+}
+
+//fpu-convert.bin (round 2: every kind of input, NaNs and numbers past the integers' range among them) and
+//fpu-convert-safe.bin (round 3: zeros and normal numbers): per input, x, then for each rounding mode cvt.w.s,
+//round.w.s, trunc.w.s, ceil.w.s and floor.w.s.
+static auto measuredConvert(const char* name, uint32_t upper) -> void {
+  auto hardware = loadMeasured(name);
+  CHECK(hardware.size(), 4096u * 21);
+  if(hardware.size() != 4096u * 21) return;
+  static const uint32_t instructions[5] = {0x460000a4, 0x4600008c, 0x4600008d, 0x4600008e, 0x4600008f};  //$f2 from $f0
+  Machine m;
+  m.cpu.power(Base);
+  uint32_t exact = 0;
+  for(size_t n = 0; n < hardware.size(); n += 21) {
+    for(uint32_t mode = 0; mode < 4; mode++) {
+      for(uint32_t i = 0; i < 5; i++) {
+        m.cpu.fpu.csr = upper | mode;
+        m.cpu.fpu.r[0] = hardware[n];
+        m.cpu.execute(Base, instructions[i]);
+        exact += m.cpu.fpu.r[2] == hardware[n + 1 + mode * 5 + i];
+      }
+    }
+  }
+  CHECK(exact, 4096u * 20);
+}
+
+//fpu-arith.bin (round 2) and fpu-arith-safe.bin (round 3, whose square roots are of a's size: absolute): per pair,
+//a and b, then for each rounding mode add.s, sub.s, mul.s, div.s, and sqrt.s of a.
+static auto measuredFpuArithmetic(const char* name, bool absolute, uint32_t upper) -> void {
+  auto hardware = loadMeasured(name);
+  CHECK(hardware.size(), 4096u * 22);
+  if(hardware.size() != 4096u * 22) return;
+  static const uint32_t instructions[5] = {0x46010080, 0x46010081, 0x46010082, 0x46010083, 0x46000084};  //$f2
+  Machine m;
+  m.cpu.power(Base);
+  uint32_t exact = 0;
+  for(size_t n = 0; n < hardware.size(); n += 22) {
+    for(uint32_t mode = 0; mode < 4; mode++) {
+      for(uint32_t i = 0; i < 5; i++) {
+        m.cpu.fpu.csr = upper | mode;
+        m.cpu.fpu.r[0] = i == 4 && absolute ? hardware[n] & 0x7fff'ffff : hardware[n];
+        m.cpu.fpu.r[1] = hardware[n + 1];
+        m.cpu.execute(Base, instructions[i]);  //from $f0 (and $f1)
+        exact += m.cpu.fpu.r[2] == hardware[n + 2 + mode * 5 + i];
+      }
+    }
+  }
+  CHECK(exact, 4096u * 20);
+}
+
 auto measured() -> void {
   if(!std::getenv("ALLEGREX_MEASURED")) {
     std::printf("(no ALLEGREX_MEASURED folder: run-tests.sh sets it)\n");
@@ -178,6 +240,11 @@ auto measured() -> void {
   measuredFunction("vlog2-spread-16k.bin", 0xd0158081, 7, belowFour);
   measuredSweep("vlog2-half-2-1k.bin", 0xd0158081, 0x3f00'0000);
   measuredDivide();
+  uint32_t upper = measuredFpuState();
+  measuredConvert("fpu-convert.bin", upper);
+  measuredConvert("fpu-convert-safe.bin", upper);
+  measuredFpuArithmetic("fpu-arith.bin", false, upper);
+  measuredFpuArithmetic("fpu-arith-safe.bin", true, upper);
 }
 
 }

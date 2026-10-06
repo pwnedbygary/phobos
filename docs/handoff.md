@@ -868,6 +868,29 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the FPU as the PSP measured it — 2026-10-04
+
+Branch `cursor/psp-fpu-measured-2b67`, stacked on `cursor/psp-measured-r3-2b67` (for stack #106). From round 3's
+FPU data (ares/psp/cpu/interpreter-fpu.cpp; the recompiler hands FPU instructions to the interpreter):
+- `add.s`, `sub.s`, `mul.s`, `div.s` and `sqrt.s` round as FCSR's mode says, and `cvt.s.w` too (as MIPS documents;
+  not measured): `rounded()` switches the host's rounding (`fesetround`) for the one operation when the mode isn't
+  the nearest, with the inputs and result in volatile variables so the compiler keeps the arithmetic between the
+  switches; the nearest costs nothing extra.
+- Their NaNs are picked as the PSP's (`pickNaN`: the first signaling input made quiet, else the first quiet one,
+  else 0x7fc00000): x86 hosts give 0xffc00000 for invalid operations and pass on their first operand, which failed
+  the replay on x86 (found in review; checked under Rosetta).
+- The conversions out of range saturate by sign: 0x80000000 for negative numbers and -infinity (0x7fffffff for the
+  rest and NaNs, as before).
+- `cfc1` from register 0 (FIR) reads 0x00003351; a thread starts with FCSR 0x00000e00 (kernel/threads.cpp).
+- FCSR's exception flags, enables and causes stay kept but unused (documented: the PSP's enabled ones end a program).
+- **Checks:** the measured group now also replays `fpu-convert`, `fpu-convert-safe`, `fpu-arith` and
+  `fpu-arith-safe` (all 4 x 81920 results, every mode, now exact) and FIR; unit tests for each mode (1 + 2^-30,
+  1 - 1, 1/3, 2^24 + 1) and the negative conversion; a kernel test for the starting FCSR. Allegrex tests 56 groups,
+  0 failures, on arm64 and on x86_64 (Rosetta); PSP tests 85, 0 failures; mutations (the old negative conversion,
+  the mode ignored) fail them on both engines. compare.sh's 80 FPU rows all 100%. Not measured: flush to zero in the
+  directed modes, `cvt.s.w`'s rounding. Review: a general-purpose reviewer (one high finding, the x86 NaNs, which it
+  reproduced with GCC on amd64 and clang under Rosetta; four low; all fixed), then a delta review with no findings.
+
 ## PSP: what the user's PSP measured in round 3 — 2026-10-04
 
 Branch `cursor/psp-measured-r3-2b67`, stacked on `cursor/psp-ge-round3-2b67` (for stack #106). The user ran round 3
