@@ -868,6 +868,24 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP tools: a flash0 dumper for the user's PSP — 2026-10-04
+
+Branch `cursor/psp-flash0-dump-2b67`, stacked on `cursor/psp-ge-lighting-2b67` (for stack #106). At the user's
+request (they'll provide their PSP's firmware files this way, for the fonts sceFont reads and the optional firmware
+modules): `tools/psp-flash0-dump`, a homebrew program that walks flash0 and copies every file to `flash0/` beside its
+EBOOT.PBP, with `SHA256SUMS` (checkable with `shasum -a 256 -c`) and `failed.txt`; it also tries the raw image
+(`lflash0:0,0`), which user-mode homebrew is expected to be refused (PPSSPP refuses it with 0x80020321). SHA-256 is
+our own, from FIPS 180-4. The dump is the user's copyrighted firmware: it stays on their devices, never committed.
+- **Checks:** the SHA-256 code matches `shasum -a 256` on the empty input, "abc", sizes around each padding boundary
+  and a megabyte fed in uneven pieces. The `SMOKE=1` build in PPSSPP's headless build copied a 23-file sample tree
+  (PPSSPP's own fonts, nested folders, an empty file, exact and multi-piece sizes) with every copy verifying against
+  `SHA256SUMS`; PPSSPP's virtual flash0 can't list its folders, hence the sample. Both builds compile without
+  warnings. The release EBOOT.PBP (SHA-256 960b2db7dbc6ebbab6b929b3f2f5fc5003be75377b820a0febfd52e96ced3647) is in
+  `.local/psp-flash0-dump` and on the RP6 at `Download/FLASH0DUMP/EBOOT.PBP`; it hasn't run on a PSP yet. Review: a
+  general-purpose reviewer (seven low findings: the root folder made with a trailing slash, a listing error ending
+  the walk silently, unchecked writes to SHA256SUMS and failed.txt, no `make clean` note, flash0 said to hold the
+  settings, a button-wait comment, the image cap overshooting; all fixed), then a delta review with no findings.
+
 ## PSP core: lighting's share in 256ths, as the PSP measured it — 2026-10-04
 
 Branch `cursor/psp-ge-lighting-2b67`, stacked on `cursor/psp-ge-round3-fixes-2b67` (for stack #106). From round 3's
