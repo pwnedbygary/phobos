@@ -25,6 +25,28 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the GPU renderer's speed, stage 3 so far — 2026-10-07
+
+Branch `cursor/psp-gpu-speed-2b67`, on top of `cursor/psp-gpu-vulkan-2b67` (#163). docs/psp-core.md part 35;
+docs/psp-gpu-renderers.md's "Speed", "Upscaling" and the owner's decisions (the target: full speed on the RP6 with
+headroom for upscaling; upscaling as an internal resolution factor, exact at 1x).
+- **Commits**: `3a81b0782` (batches drawn on a renderer thread), `23cd00c19` (no waits per run, a ring of three
+  slots, VRAM pages kept on the GPU between finishes, lines and 3D sprites on the GPU, exact binning, drawing in
+  rounds), `a1d1d6efa` (jobs gathered 32 at a time, bounds before exact arithmetic, whole-number division where
+  `fma()` isn't fused).
+- **Exact everywhere**: tests/psp 313 groups, tests/psp/ares 298 checks, the GPU tests on the RP6, the six scenes 0
+  pixels and 0 VRAM bytes apart on the M1 and the RP6.
+- **Speed**: the M1's GPU renderer about the one-thread software renderer's speed (Peace Walker's title 1.5 times
+  it); the RP6's 6 to 11 frames a second in the 3D games against 21 to 51 for software. Far from the target.
+- **Costs measured** (GPU timestamps, Adreno): a fixed 12-16 ms a frame (every tile of every run), coverage 11,
+  the rest drawing; the CPU waits at 2.5-10 finishes a frame. Exactness costs the M1 under 1 ms; on the Adreno the
+  bounds took Liberty City Stories from 67 to 49 ms.
+- **Next**: textures and transfers on the GPU and finishing only what's read; tiles with jobs only, fewer runs, a
+  coarse bin level; 32-bit edges; occupancy. Proposals for the owner (changing the software renderer, needing
+  `psp measure`): no fused multiply-adds on the host; fixed-point interpolation if the PSP does that.
+- Scratch benchmark tools live outside the repository (`/tmp/psp-gpu-bench`); the scene `lcs-city` is Liberty City
+  Stories at a park's edge, not a street.
+
 ## PSP core: the GPU renderers designed, and a Vulkan prototype — 2026-10-07
 
 Branch `cursor/psp-gpu-vulkan-2b67`, on top of `cursor/psp-ge-curves-2b67` (#162, part 33).

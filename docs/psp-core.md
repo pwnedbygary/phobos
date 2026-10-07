@@ -4882,3 +4882,79 @@ gap and four smaller things:
 the GPU from its own VRAM; VRAM kept on the GPU, read back on demand through the drawing threads' protocol, the GPU
 working while the CPU runs on; then the OpenGL backend over the same shaders; then the setting ("PSP Renderer:
 Software / Vulkan / OpenGL", Software the default) with a fallback and a start-up self-test.
+
+## Part 35: the GPU renderer's speed, stage 3 so far
+
+On branch `cursor/psp-gpu-speed-2b67`, on top of part 34's `cursor/psp-gpu-vulkan-2b67` (#163). The owner's
+direction (the design's "owner's decisions"): speed first; the target is full speed in every game on the RP6 at the
+PSP's resolution with large headroom, enough for an internal resolution factor later (upscaling, designed in
+[`docs/psp-gpu-renderers.md`](psp-gpu-renderers.md), not built). Exact as before: the software renderer's pixels,
+byte for byte. Original code; paraLLEl-RDP only as an approach.
+
+**What moved** (commits `3a81b0782`, `23cd00c19`, `a1d1d6efa`):
+- **No waiting per run.** Batches are launched to a thread of the GE's own, which hands them to the GPU while the
+  GE's thread goes on; runs go into a ring of three slots (records, bins, parameters, a fence each). A batch's
+  pages are owed while the GPU has them, so everything that read VRAM through the drawing threads' protocol still
+  waits for exactly what it reads. `Renderer::finish()` is the one waiting point: everything submitted, and every
+  page the GPU drew over copied back. A batch still on the GPU is held, and if the device is lost every job since
+  the last finish is drawn again by the software renderer, in order (`lose()`), said once (`tell()`).
+- **VRAM kept on the GPU between runs**: a page the GPU drew is the GPU's (`owned`) and isn't copied up again; it
+  comes back at the next finish.
+- **Lines** as points (`GE::linePixels()`, `lineRows()`'s own computation, shared), and **textured 3D sprites**,
+  whose down axis (a double divided per pixel) the CPU works out by the software renderer's expressions into a
+  table. The GPU now draws every job in the six benchmark scenes.
+- **Binning** a thread a job, with an exact test of each triangle edge against the tile (the 64-bit sums the
+  rasterizer uses). **Drawing in rounds**: each pixel finds which of 32 staged jobs reach it, then each round shares
+  the pixels' next jobs out among the tile's 256 threads, keeping each pixel's order. A tile's jobs are **gathered**
+  32 at a time across its bin's words.
+- **Bounds before exact arithmetic**: colors, depth, fog and perspective texture coordinates worked out the GPU's
+  way with a strict bound against the host's float; where the whole number they become (a level, a depth, a fog
+  amount, a texel or filter sixteenth, all from functions that never go down) is the same at both ends, it's the
+  host's; elsewhere the exact way runs. And where the GPU's `fma()` isn't fused, the division's correction in whole
+  numbers (the significands' remainder is exact in 64 bits). The design's "Exactness" has the bounds' derivation.
+
+**Not done** of stage 3: textures, palettes and transfers on the GPU (textures are still the software renderer's
+decoded copies), finishing only the pages read, a coarse bin level, 32-bit edges, upscaling.
+
+**Results.** Every comparison exact: tests/psp 313 groups and tests/psp/ares 298 checks, none failed; the GPU tests
+on the RP6's Adreno 740 (65,536 cases of each operation exact with the built `fma()`; 2,500 random batches, 0 of 6.4
+million pixels apart); the six scenes 0 pixels and 0 VRAM bytes apart on the M1 (30 frames each) and the RP6. Each
+scene's disc and its PARAM.SFO were checked, and its picture looked at: Midnight Club 3: Dub Edition (ULUS10021)
+night race and profile menu; GTA: Liberty City Stories (ULUS10041) at the park's edge (not a street, despite the
+scene's name `lcs-city`) and in the woods; Metal Gear Solid: Peace Walker (ULUS10509) title; Lumines (ULUS10002)
+demo. Host frames a second, 300 frames, software on 1 and 7 threads, then the GPU:
+
+| Scene | M1 | RP6 |
+|---|---|---|
+| Midnight Club 3, night race | 23.8, 45.1, 26.1 | 21.1, 23.9, 6.0 |
+| Midnight Club 3, profile menu | 24.2, 50.6, 26.3 | 23.5, 26.1, 7.5 |
+| Liberty City Stories, park edge | 38.0, 80.9, 38.9 | 36.9, 49.0, 10.8 |
+| Liberty City Stories, woods | 38.1, 111.6, 39.1 | 38.4, 50.7, 11.5 |
+| Peace Walker, title | 103.9, 414.3, 150.8 | 66.0, 224.9, 49.9 |
+| Lumines, demo | 112.6, 262.5, 113.0 | 90.9, 122.6, 33.1 |
+
+Before this part the RP6's GPU renderer drew 1.3 to 2.2 frames a second in the 3D games. The M1 ran with other
+work on the machine (load about 3.4), so its software figures are low by an unknown amount. Far from the target:
+the RP6's GPU is slower than its one-thread software renderer.
+
+**Where the time goes** (GPU timestamps; the design's "Speed" has the table): on the Adreno, Liberty City Stories
+spends 49 ms of GPU time a frame (67 before the bounds), of which 12.5 is fixed (binning, staging, barriers, VRAM's
+words; paid by every tile of every run) and 11 is coverage; Midnight Club 3 85 ms (15.7 fixed, 11.6 coverage). On
+the M1, 22 and 25 ms, the exactness under a millisecond (its `fma()` is fused). The Adreno's raster shader is 27,266
+instructions with 18% of the shader processors busy: latency and occupancy, not arithmetic. The CPU waits 10 times
+a frame in Midnight Club 3 (2.5 in Liberty City Stories), most likely where the CPU's decoded textures need a render
+target's pages, so CPU and GPU hardly overlap.
+
+**Tried and dropped** (each exact, each slower or no better on the Adreno): a second pass for pixels the bounds
+leave uncertain (in several forms: deferred lists, a ring, a single call site for the exact way); the exact way's
+loops not unrolled (11k instructions instead of 27k, slower); staging all of a tile's words at once; staging jobs in
+a separate step; a stepped division; sorted chains of jobs; a packed filter (gain within noise).
+
+**Proposed, not done** (the design's "Speed"): the software renderer without fused multiply-adds (the GPUs then need
+no built `fma()`, worth about a third of the Adreno's time before the bounds, and ARM64 and x86-64 would agree);
+interpolation in fixed point if measurements show the PSP does that; reciprocals per primitive. Each changes the
+software renderer's pixels and needs `psp measure` against the owner's PSP first.
+
+**Next**: textures and transfers on the GPU, and finishing only what's read (so CPU and GPU overlap); dispatching
+only tiles with jobs, fewer and larger runs, a coarse bin level; 32-bit edges; occupancy (registers, workgroup
+shape). Then upscaling.

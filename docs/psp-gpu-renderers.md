@@ -64,17 +64,20 @@ fog and texture coordinates there, texturing (texels, filtering, the texture fun
 
 ## The shaders (`ares/psp/ge/gpu/shaders`)
 
-- `bin.comp`: for each tile of 16x16 pixels, which of the batch's jobs reach it: a bit a job, 32 to a word, from the
-  box each job may cover. (A later stage refines this, e.g. a triangle's edges against the tile's corners, and a
-  coarser level for batches of thousands of jobs.)
-- `raster.comp`: a workgroup a tile, a thread two pixels side by side. Each thread reads its pixels' frame buffer
-  and depth buffer words once, takes the tile's jobs in the list's order (the set bits, lowest first), works each
-  pixel out as `raster.cpp` does (sprites, triangles, points), textures it (`texture.glsl`) and puts it through the
-  pipeline (`pixel.glsl`), keeping the words in registers, and writes them once at the end. Two pixels to a thread
-  because 16-bit pixels and depths come two to a 32-bit word, and a word must be one thread's: the batch's rule that
-  no two pixels in different rows share a byte (`defer()`) makes each word one pair's, except where a row's last
-  pixel and the next row's first share one (a frame buffer exactly as wide as the area drawn), whose halves are
-  written with atomic operations.
+- `bin.comp`: for each tile of 16x16 pixels, which of the batch's jobs reach it: a bit a job, 32 to a word. A thread
+  a job sets its bit (`atomicOr`) in every tile its box touches, a triangle only where none of its edges excludes
+  the whole tile (the edge function at the tile's corner where it's largest, in the same 64-bit sums `raster.comp`
+  uses, so exact). (Stage 3; a coarser level for batches of thousands of jobs is still to come.)
+- `raster.comp`: a workgroup a tile. It gathers the tile's jobs from its bin 32 at a time, in order, and stages
+  what deciding coverage needs in shared memory; each pixel finds which of the 32 reach it; then the pixels are
+  drawn in rounds, each round sharing the pixels' next jobs (a pixel and its job) out among the 256 threads, so a
+  pixel's jobs are drawn in the list's order while threads aren't idle on a small triangle's tile. Each pixel is
+  worked out as `raster.cpp` does (sprites, triangles, points), textured (`texture.glsl`) and put through the
+  pipeline (`pixel.glsl`), its values held in shared memory meanwhile and written to VRAM once at the end. (The
+  prototype had a thread two pixels, each taking every job of the tile in turn.) 16-bit pixels and depths come two
+  to a 32-bit word: a pair in the same tile is written whole by its even pixel's thread; a pixel whose neighbour
+  isn't drawn (the area's edge, or a row's last pixel sharing a word with the next row's first in a frame buffer
+  exactly as wide as the area) changes only its half, with atomic operations.
 - `exact.glsl`: the arithmetic that makes the floats come out as the CPU's (below).
 - `common.glsl`: the buffers and the records' layout. A batch goes to the GPU as records: its looks (the pixel
   pipeline's and texture's settings: 32 words), its jobs (64 words: the job's numbers as `draw.cpp` set them up) and
@@ -131,7 +134,27 @@ the CPU rounds it:
   operands (0 wrong on both GPUs, to the ends of the floats). Where the host's quotient is below the normal floats,
   what's drawn depends only on its sign and whether it's zero (a texel axis's floor, a depth, fog, a level), so the
   GPU gives 2^-100 of its sign, or zero where the host's rounds to zero. Without `divide()`, 13,194 of the random
-  batches' 6.4 million pixels are apart on the M1.
+  batches' 6.4 million pixels are apart on the M1. Where the GPU's `fma()` isn't fused (the Adreno), the correction
+  is done in whole numbers instead (stage 3): with X, Y and Q the 24-bit significands of the dividend, divisor and
+  quotient, the remainder X·2^(23-e) - Q·Y is an exact 64-bit whole number, and each step of Q by one moves it by
+  Y, so the nearest Q (the even one on a tie) is a few comparisons away. Near a power of two, where the quotient's
+  unit changes, or if four steps don't settle it, the `fma()` way decides.
+- **Bounds before exactness** (stage 3). Most blended floats only matter as the whole number they become: a color's
+  level (truncated, held to 0-255), a depth (`depthOf()`), fog's amount (`fogAmount()`), the texel or the filter's
+  sixteenth a texture coordinate falls in (the floor of it, or of 256 times it). Each of those never goes down as
+  the float goes up. So the GPU first works the float out its own way (its products and sums rounded to the nearest,
+  as Vulkan requires; its division within Vulkan's 2.5 units), with a bound on how far that can be from the host's
+  float; where the whole number is the same at both ends of the bound, it's the host's too, and the exact way
+  (dozens of steps for each built `fma()` and corrected division) runs only where the ends fall apart. The bounds
+  are counted in roundings (u = 2^-24 of a value): a blend of three products over a total, by the host and by the
+  GPU, differ by at most u·(10·p/total + 6·|quotient|), with p the products' magnitudes; the shaders use 2^-20 of
+  p/total + |quotient|. A perspective coordinate (three quotients, three products over a divisor that is itself
+  such a sum) gets 2^-18 of its products' magnitudes over the divisor plus |coordinate|·(the divisor's own
+  magnitudes over it, plus 1), and only where the divisor is at least 2^-10 of its magnitudes and between 2^-120 and
+  2^120 (so that its own error is small beside it and the division keeps its 2.5 units). 2^-100 more on every
+  bound covers results below the normal floats, which a GPU may flush. A value or bound that isn't a finite number
+  goes the exact way. Taking the uncertain pixels out to a second pass was tried and was slower every way: on the
+  Adreno an extra pass a round costs more than the exact path's divergence saves.
 - **Conversions**: 64-bit edge functions to floats rounded to the nearest (ties to even) by hand; floats to whole
   numbers held as ARM64 holds them; floor() of numbers below the normal floats (which GPUs may take for zero) as the
   CPU takes them; tests for numbers that aren't numbers done on their bits, since a GPU may assume floats always are.
@@ -148,10 +171,12 @@ the CPU rounds it:
 
 **Where exactness can't be guaranteed, or isn't yet:**
 - A 3D sprite's texture coordinates divide two doubles at every pixel (`raster.cpp`: the coordinate down y over the
-  column's 1/w). The prototype leaves those sprites to the software renderer. Planned: the quotient's floor in 256ths
-  is all that matters, which a float-float division settles except within a hair of a boundary, where an exact
-  comparison of whole numbers (the doubles' mantissas multiplied out) decides.
-- Lines aren't ported yet (the same arithmetic as triangles with two weights; next).
+  column's 1/w). Since stage 3 the CPU works that axis out per pixel with the software renderer's own expressions,
+  a table the shader reads (`SpriteDivided`); the GPU does the rest of the sprite. Exact by construction, and cheap
+  (a sprite's few hundred values). A float-float division with an exact whole-number check at boundaries would
+  move it to the GPU, if it ever shows in a profile.
+- Lines are drawn by the GPU as points: `GE::linePixels()` is `lineRows()`'s own computation, shared, so each point
+  carries the very values the software renderer gives that pixel.
 - A texture a primitive draws over while reading it: the software renderer reads texels as it draws (texture.cpp),
   an order only one thread can follow; such primitives stay the software renderer's.
 - **Numbers below the normal floats.** GPUs may flush them to zero: the M1 (MoltenVK) and the Adreno 740 both do,
@@ -245,6 +270,16 @@ those copies live.
   read-back is a fence and a cache's worth of copying, no bus. Discrete GPUs (desktops) would copy through a staging
   buffer.
 
+**Where stage 3 has got to.** The GPU no longer waits after each run: runs go into a ring of three slots (records,
+bins and parameters each its own, a fence each) and the renderer goes on; batches are drawn on a thread of the GE's
+own (`GE::launch()`), so the GE's thread sets up the next meanwhile. A page the GPU draws over is the GPU's
+(`owned`) and the GE's owed pages make whatever reads it (transfers, `Memory::pointer()`, the display) wait, as for
+the drawing threads. But the waiting point is coarse: `Renderer::finish()` waits for everything submitted and
+copies every owned page back, and the GE calls it at each settle, including where the CPU's decoded textures need a
+render target's pages. Midnight Club 3 finishes 10 times a frame, Liberty City Stories 2.5, Lumines 3.3. Not done
+yet: textures, palettes and block transfers on the GPU (textures are still the software renderer's decoded copies,
+uploaded), and finishing only the pages someone reads. Those are what makes VRAM truly resident.
+
 **Texture and render-target caches.** There is no render-target cache in the PC emulators' sense: the GPU keeps the
 PSP's own VRAM with its own layouts and formats, so a frame buffer is a texture by being where it is. Textures are
 decoded on use from the PSP's bytes in every format (5650, 5551, 4444, 8888; palette indices of 4, 8, 16 and 32 bits
@@ -298,27 +333,124 @@ rasterizer and texture units. At the PSP's resolution that's still small: Midnig
 pixels a frame, 170 million a second at 60 frames; at even a thousand instructions a pixel that's under a fifth of an
 Adreno 740's or an M1's arithmetic.
 
-The prototype isn't fast: it waits for the GPU after every run of jobs. On the M1 (host frames a second, the same 300
-frames from the same state; the software renderer on 1 and 7 drawing threads, then the GPU renderer): Lumines' demo
-92.6, 165.2, 112.9; Peace Walker's title 87.9, 260.2, 77.5 (four fifths of its jobs, textured 3D sprites, still
-drawn by the CPU); Midnight Club 3 at night 17.4, 25.1, 14.4; Liberty City Stories in the woods 29.6, 62.7, 26.4.
-About the one-thread software renderer's speed. Copying VRAM's pages and the records costs 0.2-0.4 ms a frame; the
-rest is the GPU's time and the waits (7-25 ms a frame): one submission and wait per run of jobs (up to nine a frame
-in Midnight Club 3), and kernels in which every thread of a tile looks at every job of the tile. The stages below
-take those away: the GPU working while the CPU runs on, binning that sends a tile only the jobs that cover it, and
-edge functions in 32 bits where a job's fit.
+The prototype wasn't fast: it waited for the GPU after every run of jobs. On the M1 (host frames a second, the same
+300 frames from the same state; the software renderer on 1 and 7 drawing threads, then the GPU renderer): Lumines'
+demo 92.6, 165.2, 112.9; Peace Walker's title 87.9, 260.2, 77.5; Midnight Club 3 at night 17.4, 25.1, 14.4;
+Liberty City Stories in the woods 29.6, 62.7, 26.4.
+
+**Stage 3 so far** (part 35): no waits per run, the GPU drawing beside the GE, VRAM kept on the GPU between runs,
+lines and 3D sprites on the GPU, exact binning, drawing in rounds, a tile's jobs gathered 32 at a time, bounds
+before exact arithmetic. Every scene below is 0 pixels and 0 VRAM bytes apart from the software renderer. Host
+frames a second, 300 frames, software on 1 and 7 threads, then the GPU:
+
+| Scene (game) | M1 | RP6 |
+|---|---|---|
+| Midnight Club 3, night race | 23.8, 45.1, 26.1 | 21.1, 23.9, 6.0 |
+| Midnight Club 3, profile menu | 24.2, 50.6, 26.3 | 23.5, 26.1, 7.5 |
+| Liberty City Stories, park edge | 38.0, 80.9, 38.9 | 36.9, 49.0, 10.8 |
+| Liberty City Stories, woods | 38.1, 111.6, 39.1 | 38.4, 50.7, 11.5 |
+| Peace Walker, title | 103.9, 414.3, 150.8 | 66.0, 224.9, 49.9 |
+| Lumines, demo | 112.6, 262.5, 113.0 | 90.9, 122.6, 33.1 |
+
+(On the RP6 before stage 3 the GPU drew 1.3 to 2.2 frames a second in the 3D games.) The M1 is now at or above the
+one-thread software renderer everywhere, and the RP6 far below it: the target (full speed with headroom on the
+RP6) is a long way off.
+
+**Where the GPU's time goes** (GPU timestamps around each run; ms of GPU time a frame; "fixed" is with every job
+skipped at the pixel and no coverage computed, so binning, staging, the rounds' barriers and VRAM's reads and
+writes; "coverage" adds which staged jobs reach each pixel, the 64-bit edge functions included):
+
+| | Adreno 740, LCS park edge | Adreno 740, MC3 race | M1, LCS park edge | M1, MC3 race |
+|---|---|---|---|---|
+| all of it (before part 35's shaders) | 67 | 87-92 | | |
+| all of it, now | 49.3 | 85.4 | 22.4 | 24.8 |
+| fixed | 12.5 | 15.7 | 6.0 | 8.7 |
+| coverage | 11 | 11.6 | 1.9 | 5.3 |
+| what fma() built from adds costs (before) | 22 | 10 | 0 (fused) | 0 |
+| what the corrected division costs | 19.5 (before) | 8 (before) | 0.4 | 0.9 |
+
+- **Synchronous waits and VRAM round trips.** The CPU's wait at each finish shows as "waiting": on the RP6, 77.5 ms
+  a frame in Midnight Club 3 and 44.3 in Liberty City Stories (on the M1, 17 and 13.6). That's mostly the GPU's own
+  time, waited for 10 and 2.5 times a frame, so the CPU and the GPU barely overlap. Copying pages and records costs
+  2.6 and 1.4 ms a frame on the RP6 (0.4 and 0.2 on the M1). Finishing less often needs textures on the GPU and
+  finishing only the pages that are read.
+- **Every thread checking every job.** Exact binning sends a tile only the jobs whose box and edges reach it, and
+  the gathering stages them 32 at a time, but each pixel still tests all 32 (coverage, 11 ms on the Adreno), and the
+  fixed part (12-16 ms) is paid by every tile of every run whether it has jobs or not: a run dispatches the whole
+  area's tiles (510 at 480x272), and Midnight Club 3 has 10 runs a frame. A coarse bin level, compact per-tile job
+  lists, and dispatching only tiles with jobs are the next steps.
+- **The cost of exactness.** On the M1 (fused `fma()`, fast division) it's under a millisecond. On the Adreno it was
+  most of the drawing: the built `fma()` (Boldo and Melquiond's, a dozen operations for each) and the division's
+  correction. The bounds and the whole-number division took Liberty City Stories from 67 to 49 ms. Midnight Club 3
+  gained little: its perspective coordinates are often uncertain under the bound (a 256th of a texel is a few
+  roundings at coordinates of hundreds of texels), so the exact way still runs. The 64-bit edges weren't measured
+  apart; they're inside coverage's 11 ms and the drawing.
+- **The Adreno's shader** (`VK_KHR_pipeline_executable_properties`): `raster.comp` compiles to 27,266 instructions,
+  27 registers and some scratch memory, and the driver reports 18% of the shader processors busy (with a fused
+  `fma()`: 15,198 instructions, 25%). It's bound by latency and occupancy, not arithmetic. Making it small (loops
+  not unrolled, 11k instructions) made it slower, as did a second pass for uncertain pixels, a single call site for
+  the exact arithmetic, and staging all of a tile's words at once.
+
+**Bit-exact formulations that could run natively** (for the next part):
+- 32-bit edge functions for jobs whose box is small enough that every edge value and step fits 32 bits (decided per
+  job on the CPU from `draw.cpp`'s own numbers; most of a game's triangles are a few dozen pixels across).
+- Hoisting per-primitive work out of the pixel: each corner's 1/w and the weights' total are per triangle, not per
+  pixel; but the software renderer divides at every pixel, so hoisting would change its rounding (below).
+- Fewer, larger runs and only tiles with jobs dispatched; a smaller workgroup or two pixels a thread for occupancy.
+
+**Changes to the software renderer worth proposing** (not made: each changes its pixels and would have to be checked
+against the owner's PSP with `psp measure` first):
+- **No fused multiply-add on the host** (raster.cpp compiled with `-ffp-contract=off`, or the blend written so the
+  compiler can't fuse it). The GPUs would then need no `fma()` at all (each product rounded, as every GPU does
+  natively), so the built `fma()` goes, and ARM64 and x86-64 would draw the same pixels. On the Adreno that was worth
+  about 22 ms of 67 in Liberty City Stories. Whether the PSP's pixels are nearer one or the other is for the
+  measurements to say.
+- **Interpolation in fixed point, if that's what the PSP does.** A hardware rasterizer of its day would likely step
+  colors, depth and texture coordinates in fixed point rather than divide floats per pixel. If measurements show
+  that, emulating it would bring the software renderer nearer the PSP and make the GPU's arithmetic whole numbers,
+  exact natively. The largest possible win and the most work: it needs the PSP's interpolation measured first.
+- **Reciprocals per primitive**: 1/w per corner and 1/total per triangle, then multiplications per pixel. Fewer
+  divisions on both sides; it changes pixels slightly, so it also needs `psp measure`.
+
+## Upscaling (designed, not built)
+
+The owner's decision: an internal resolution factor N (2x to 8x and more) inside the same compute renderer, as
+paraLLEl-RDP has one for the N64 (its approach only). At 1x nothing changes and everything stays exact. How it
+fits this renderer:
+- **Two VRAMs.** The PSP's VRAM (2 MiB, what the CPU, transfers, states and the tests see) stays as it is, drawn at
+  1x. Beside it, a scaled VRAM on the GPU: each page that's been a render target has an N×N-times-larger image
+  (color and depth). Drawing at Nx writes the scaled image; the 1x VRAM stays the PSP's view.
+- **Keeping the PSP's view right.** Either the 1x picture is drawn as well (exact, the renderer as it is now; the
+  scaled picture costs N² more on top), or it's made from the scaled one where nobody reads it exactly (cheaper,
+  not exact). The first is the safe default: what the CPU reads, block transfers and save states are always the
+  PSP's own bytes. A page the CPU writes drops its scaled image (it's 1x again, scaled up as a texture when read).
+- **Rasterizing at Nx.** A pixel at Nx is a sub-pixel position in the PSP's 12.4 fixed point: the edge functions
+  and blends are the same expressions, evaluated at (x + i/N, y + j/N). The tile is still 16×16 scaled pixels; the
+  bins cover N² times as many tiles. The bounds and the exact way are unchanged (they don't depend on where the
+  pixel is), so at Nx the arithmetic is still the software renderer's at that point.
+- **Textures from render targets** read the scaled image where one exists (with coordinates scaled by N), else
+  the 1x texels. 2D sprites (menus, text) draw at Nx with their texels' own resolution, so they look as sharp as
+  their textures allow.
+- **Transfers** within VRAM copy the scaled images too (a copy shader at Nx); from RAM they drop them; into RAM
+  they read the 1x bytes.
+- **The display** shows the scaled image of the shown frame buffer where it has one, else the 1x picture scaled.
+- **Cost.** N² times the pixels: 4x is 16 times the work, so it needs the native renderer at a sixteenth of a frame
+  or better. That's why the native speed comes first.
 
 ## The plan
 
 1. **Prototype** (tonight, part 34): the seam, the shaders, the Vulkan backend, the tests; 2D and 3D sprites and
    triangles and points, flat and Gouraud, textured (every format, through the software renderer's decoded copies),
    the whole pixel pipeline; exactness verified on the M1 and on the RP6's Adreno 740.
-2. **Everything on the GPU**: lines; 3D sprites' texels (the exact division of doubles); textures and palettes
-   decoded on the GPU from its VRAM and RAM's pages; block transfers; clears as fills.
+2. **Everything on the GPU**: lines (done, as points); 3D sprites' texels (done, the down axis a table from the
+   CPU); textures and palettes decoded on the GPU from its VRAM and RAM's pages; block transfers; clears as fills.
 3. **Speed**: VRAM resident with pages owned by the CPU or the GPU, read back on demand through the drawing threads'
-   protocol; the GPU drawing while the CPU runs on (records double-buffered, fences instead of waits); several
-   render targets a submission; binning refined (edges against tiles, a coarse level); 32-bit edge functions where a
-   job's fit; measured against the software renderer on the six scenes of part 30, and on the RP6.
+   protocol (owned and owed pages done; finishing only what's read, not yet); the GPU drawing while the CPU runs on
+   (done: a ring of three slots, fences); several render targets a submission; binning refined (edges against
+   tiles done, a coarse level not yet); 32-bit edge functions where a job's fit (not yet); measured against the
+   software renderer on the six scenes of part 30, and on the RP6 (part 35). The target is full speed on the RP6
+   with headroom (the owner's decision below), not only beating the software renderer.
+3a. **Upscaling** (below), once the native speed is there.
 4. **OpenGL**: the GL device (ES 3.2 and 4.3) over the same shaders and tests.
 5. **In Phobos**: the setting, the fallback, presenting, a start-up self-test against the software renderer; the
    games compared on the device too (the tests' samples and random batches already are).
@@ -340,3 +472,11 @@ and the games' frames.
 - **Order:** speed first (stage 3 above: VRAM kept on the GPU, the GPU's work overlapping the CPU's, finer binning,
   with stage 2's textures and transfers on the GPU that it needs), then the OpenGL backend (stage 4) over the same
   shaders.
+- **The target** (later the same day): full speed in every game on the RP6 at the PSP's own resolution, with large
+  headroom, enough for upscaling. Faster than the seven-thread software renderer is a waypoint, not the goal (the
+  owner: the Adreno 740 runs other PSP emulators at many times the PSP's resolution).
+- **Upscaling:** the GPU renderers stay exact at the PSP's resolution and gain an optional internal resolution
+  factor (2x to 8x and more) inside the same compute renderer, as paraLLEl-RDP has for the N64: exact at 1x, the
+  same rules at higher factors; render targets, textures read from render targets, block transfers and the display
+  handled at the scaled size, the PSP's own view of VRAM kept correct. The speed work is to be shaped so that this
+  follows; it's built once the native speed is there.
