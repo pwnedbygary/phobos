@@ -904,6 +904,71 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: music and movies through FFmpeg — 2026-10-06
+
+Branch `cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`, the entry below, which carries
+master's desktop build and the GPL-3.0-or-later license), not pushed: commits fffd26303 (FFmpeg's build), c0f2625e4
+(sceAtrac3plus), 332015eaa (sceMp3), e772d44a2 (movies) and the docs; then the merges of #152 and master, and the
+review's fixes. docs/psp-core.md, part 26, describes it. Original code; no PPSSPP or JPCSP source read (pspsdk,
+pspautotests' programs and recorded results, the PSP Developer Wiki, public container formats, FFmpeg's API
+documentation, the games' behavior).
+- **Licensing setup (the owner's choice: FFmpeg's LGPL decoders).** `thirdparty/ffmpeg/build.sh` downloads FFmpeg
+  9.0.2's official tarball, checks its SHA-256, and builds it unmodified with `--disable-gpl --disable-nonfree
+  --disable-version3 --disable-everything --disable-autodetect` and only the decoders atrac3, atrac3p, mp3float and
+  h264, as two shared libraries (libavcodec, libavutil); no FFmpeg binary or source is committed. The root
+  CMakeLists.txt (option `PHOBOS_FFMPEG`, on; `-Pphobos.ffmpeg=OFF` from Gradle) builds it for arm64-v8a with the
+  NDK, cached in `.cache/ffmpeg`, defines `ARES_ENABLE_FFMPEG` for `phobos_core` and links it into `phobos_android`
+  (the desktop program builds without it for now); the APK carries the two `.so` files beside Phobos's, so they can
+  be replaced (the LGPL's relinking terms). CI caches the build (keyed on the build's own name) and puts the tarball
+  in `android/dist` to be published with each release (the complete corresponding source). `LICENSE` (Settings,
+  About, Open-source licenses) has FFmpeg's notice, origin, hash, build script, how to swap the libraries, the
+  Independent JPEG Group's credit and the LGPL 2.1 text; the About screen says "This software uses libraries from the
+  FFmpeg project under the LGPLv2.1"; `LicenseNoticesTest` checks it all against the script. Without the define
+  (`PSP_FFMPEG=0` for the host tests) the core builds with no decoders, the streams refused as before. The README's
+  build section lists what the build needs (bash, make, curl, xz; the network the first time), the Gradle switch
+  and `PHOBOS_FFMPEG_TARBALL`.
+- **APK**: 23,604,722 bytes against 22,574,705 built with `-Pphobos.ffmpeg=OFF`: +1.03 MB (4.6%) for FFmpeg.
+- **Decoded**: ATRAC3 and ATRAC3plus (sceAtrac3plus: whole, halfway and streamed files, loops, the second buffer,
+  resets, every query; pspautotests' atrac programs match but for the low-level and sas modes), MP3 (sceMp3: both
+  handles, its buffers' halves, loops, resets; no game of the owner's uses it), movies (the PSMF header read; H.264
+  pictures by sceMpegAvcDecode or sceMpegAvcDecodeYCbCr plus sceMpegAvcCsc, converted by BT.601 into the game's pixel
+  format; their ATRAC3plus sound by sceMpegGetAtracAu and sceMpegAtracDecode). sceAac, scePsmf(Player) and sceSas's
+  ATRAC3 voices aren't done: no game of the owner's imports them but Peace Walker four scePsmf functions, not seen
+  called.
+- **Heard and seen** (host, from boot; WAVs and frames under `/tmp/codecs-runner/out`; pitch checked against the
+  decoded streams, matching): Burnout Legends' EA movie, FMV and title over its movie, music -11.8 dBFS (0.34% of
+  samples clipped in the game's own mix); Dominator's logo movies and title over its movie (-18.4 dBFS); the GTAs'
+  and Midnight Club 3's logo, title and credits movies with sound (-15 to -18 dBFS, next to no clipping); Space
+  Invaders Extreme's music (-15.9 dBFS at its title, -10.6 in its stage) and its stage's background movie, black
+  before; SOCOM's menu music (-29.4 dBFS) and Brave Story's (-25.8).
+- **CPU** (host): 90 microseconds an ATRAC3plus frame (0.2% of a core a stream), 600 a movie picture decoded and
+  converted (1.8% at 30 a second); 1.9-2.8% of the game's time in movie scenes. On the RP6: Burnout Legends' opening
+  movie and its profile screen over the menus' movie at 60 fps (HUD CPU 72%, 54%), no decoding errors in the log.
+- **Checks**: `tests/psp/run-tests.sh` 259 groups with both sanitizers, no failures (new: atrac.cpp's 12, mp3.cpp's
+  4, movies.cpp's 8; state fields and refusals for all three; real FFmpeg decodes of pspautotests' sample.at3 and
+  sample.mp3 with `PSP_AUTOTESTS`; #152's six media groups); `tests/psp/ares` 282 checks, none failed; both again
+  with `PSP_FFMPEG=0`; the app's 264 unit tests. State version 10 (9 refused); decoders are made afresh after a load,
+  the sound's primed with the frame decoded last.
+- **The review's findings, fixed** (each with a test that fails without its fix; part 26 has the details):
+  sceMpegAvcCsc's part clamp overflowed in 32 bits (a host heap over-read, or a 4 GiB row): it compares with what's
+  left of the picture now. atracParse looped for ever on a chunk length that wrapped its 32-bit walk: it walks in 64
+  bits, and refuses data or sample counts past 32 bits (0x80630008). The IJG's credit is in FFmpeg's notice.
+  sceMpegCreate starts the Media Engine's state afresh. The runtime's limits are the loader's (pictures at most 1024
+  each way, the H.264 decoder held to it; fmt extras 64 bytes). The movie's last sound frame is saved and primes its
+  decoder after a load, and pictures start again from I pictures that aren't IDR ones too. build.sh checks a download
+  before keeping it and tries once more, takes over a lock whose process is gone, and prints its build's name for
+  CI's cache keys; Gradle has `-Pphobos.ffmpeg=OFF`. The unused decoders aac, atrac3al and atrac3pal are gone.
+- **Loads mid-movie** (host): Liberty City Stories, saved at frame 1100 in its logos movie, gave the same frames as
+  the run that went on from frame 1260 and the same sound; Burnout Legends' menu movie from 1440. Both the same
+  with the old IDR-only rule, so the I-picture rule is checked by its test only.
+- **RP6** (this build, installed over the last): Liberty City Stories' logo movies and Space Invaders Extreme's
+  title screen (its music, on the host) at 60 fps, the sound's stream steady in both (no underruns after the
+  start); not listened to. Force-stopped after.
+- **Uncertain / next**: the decode wait (300 microseconds) is chosen, not measured; the Media Engine's colour
+  rounding isn't measured; a PSP's mixer may or may not clip Burnout's title as much; MP3's first frame after a load
+  loses the bits it borrowed; sceAtrac's low-level and sas modes, sceSas ATRAC3 voices, sceAac and scePsmf are left
+  for a game that needs them; Snoopy's movies weren't reached in the runs.
+
 ## PSP tests: the test programs and the PSP's GE measurements in the repository — 2026-10-06
 
 Branch `cursor/psp-test-data-2b67`, on top of `cursor/psp-hle-games4-2b67` (#151). At the owner's request, the

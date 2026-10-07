@@ -52,6 +52,46 @@ struct Allegrex;
 struct Memory;
 struct GE;
 
+//codec.cpp: the decoders under the PSP's music and movies. The libraries (atrac.cpp, mp3.cpp, mpeg.cpp) take the
+//PSP's containers apart themselves and hand a decoder one frame, or one picture's access unit, at a time; builds with
+//ARES_ENABLE_FFMPEG decode them with FFmpeg's LGPL decoders, and builds without have none, where the libraries refuse
+//the streams as they did before there were decoders.
+struct AudioDecoder {
+  enum class Codec : u32 { Atrac3, Atrac3plus, Mp3 };
+  struct Format {
+    static constexpr u32 MaxExtra = 64;  //the most of extra a file keeps (and a state holds)
+    Codec codec = Codec::Atrac3plus;
+    u32 channels = 2;        //the samples a frame decodes to, per sample
+    u32 rate = 44'100;       //samples a second
+    u32 frameBytes = 0;      //an ATRAC frame's size (the file's block alignment); MP3 frames say theirs
+    std::vector<u8> extra;   //the codec's own parameters from the container (a RIFF fmt chunk's last bytes)
+  };
+  virtual ~AudioDecoder() = default;
+  //One whole frame into 16-bit samples, the channels interleaved, at most room samples a channel: how many a channel
+  //came out, or -1 for a frame that can't be decoded.
+  virtual auto decode(const u8* data, u32 size, s16* samples, u32 room) -> s32 = 0;
+  //Forget the frames before: the next one starts afresh (a jump elsewhere in the stream).
+  virtual auto reset() -> void = 0;
+};
+
+struct VideoDecoder {
+  //The widest and tallest picture a movie shows (and a state holds): more than the PSP's (480 by 272) and UMD
+  //Video's (720 by 480); the decoder makes none larger than this squared, and larger ones either way are passed over.
+  static constexpr u32 MaxSide = 1024;
+  //A picture in 8-bit Y, Cb and Cr planes, the colour ones half its size each way (4:2:0).
+  struct Picture {
+    u32 width = 0, height = 0;
+    const u8* planes[3] = {};
+    u32 strides[3] = {};
+  };
+  virtual ~VideoDecoder() = default;
+  //One H.264 access unit: true if a picture came out of the decoder, which picture() holds until the next decode()
+  //or reset().
+  virtual auto decode(const u8* data, u32 size) -> bool = 0;
+  virtual auto picture() const -> const Picture& = 0;
+  virtual auto reset() -> void = 0;
+};
+
 struct Kernel {
   //Error codes: pspsdk's pspkerror.h, and those it lacks (the lightweight mutex's, the allocation type's, files',
   //the GE driver's) from uOFW's errors.h.
@@ -238,6 +278,7 @@ struct Kernel {
     Fpl, Vpl, Module, Async, PipeSend, PipeReceive, Mailbox,
     File,  //a synchronous read or write, for the time its file's device takes (io.cpp)
     Volatile,  //the volatile memory, lent to another (power.cpp)
+    Codec,     //the Media Engine decoding for it (codec.cpp); the call returns waitCount as it ends
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -993,8 +1034,24 @@ struct Kernel {
   auto __sceSasRevEVOL() -> void;
   auto __sceSasRevVON() -> void;
 
-  //mpeg.cpp: sceMpeg, movies fed and taken apart into their pictures' access units, but never shown (no video
-  //decoder yet)
+  //mpeg.cpp: sceMpeg, movies fed, taken apart into their pictures' and sound's access units, and decoded
+  struct MpegStream {      //what a library holds beyond its memory (the PSP's Media Engine's): by its address
+    std::vector<u8> unit;  //the picture access unit sceMpegGetAvcAu took last, for the next decode
+    std::vector<u8> audio; //sound from packets freed for the pictures before it was asked for
+    std::vector<std::pair<u32, u64>> audioStamps;  //where PES time stamps fall in it, and the stamps
+    u32 audioTaken = 0;    //sound bytes handed out from the packets still in the ring, from its first
+    u64 audioTime = ~0ull; //the last sound access unit's time stamp (-1: none yet)
+    u64 audioCarry = ~0ull;  //a time stamp for the next sound access unit, its PES packet having started inside
+                             //the last one (-1: none)
+    std::vector<u8> held, shown;   //the picture the decoder holds back, and the one it gave last (4:2:0)
+    u32 heldWidth = 0, heldHeight = 0, shownWidth = 0, shownHeight = 0;
+    bool keyframe = false; //a decoder made afresh (after a state was loaded): pictures wait for a key frame
+    std::vector<u8> soundLast;  //the last sound frame decoded (less its header): a decoder made afresh is primed
+                                //with it
+    std::unique_ptr<VideoDecoder> video;   //not saved: made afresh
+    std::unique_ptr<AudioDecoder> sound;   //not saved: made afresh
+  };
+  std::map<u32, MpegStream> mpegStreams;
   struct MpegCall {        //sceMpegRingbufferPut part way through, calling the ringbuffer's own callback
     Context caller{};      //the thread where it called Put: put back as Put returns
     u32 ringbuffer = 0;    //the ringbuffer being fed
@@ -1008,7 +1065,9 @@ struct Kernel {
   auto mpegFinish(MpegCall& call) -> void;
   auto mpegAbandoned(u32 thread) -> void;
   auto mpegLibrary(u32 handle) -> u32;
-  auto mpegDecoded(u32 handle, u32 au, u32 frame) -> void;
+  auto mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWidth) -> void;
+  auto mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 frameWidth, u32 x, u32 y, u32 width,
+                   u32 height) -> void;
   auto sceMpegInit() -> void;
   auto sceMpegFinish() -> void;
   auto sceMpegRingbufferQueryMemSize() -> void;
@@ -1045,14 +1104,142 @@ struct Kernel {
   auto sceMpegAvcCsc() -> void;
   auto sceMpegAtracDecode() -> void;
 
-  //atrac.cpp: sceAtrac3plus, every stream refused as unreadable (no decoder yet), so games go without music
-  u32 atracIDs = 0;  //the IDs handed out, a bit each (0-5)
+  //codec.cpp: the decoders the system makes (FFmpeg's, where the build has them; null otherwise). Tests may put
+  //their own in.
+  std::function<auto (const AudioDecoder::Format& format) -> std::unique_ptr<AudioDecoder>> audioDecoders;
+  std::function<auto () -> std::unique_ptr<VideoDecoder>> videoDecoders;
+  auto codecWait(u32 microseconds) -> void;
+
+  //atrac.cpp: sceAtrac3plus, the library games play their music and long sounds with: ATRAC3 and ATRAC3plus in RIFF
+  //WAVE files, the whole file in one buffer or streamed through a smaller one, decoded a frame a call
+  struct Atrac {
+    u32 codec = 0;              //what the ID was handed out for: 0x1000 ATRAC3plus, 0x1001 ATRAC3; 0 not handed out
+    u32 state = 0;              //its data, in the PSP's numbers: 0 none (the PSP's 1), 2 the whole file in its
+                                //buffer, 3 a buffer that will hold the whole file, filled as the game goes, 4-6 the
+                                //file streamed through a smaller buffer: 4 with no loop, 5 looping at its last frame,
+                                //6 looping before it, a second buffer holding what follows the loop
+    //the file, from its header
+    u32 channels = 0;           //the header's
+    u32 outputChannels = 2;     //what decoding writes a sample: 2, or 1 for the mono output (SetMOut...)
+    u32 frameBytes = 0, frameSamples = 0, delay = 0;
+    u32 dataOff = 0, fileDataEnd = 0;  //where the frames start in the file, and where they end
+    u32 firstValidSample = 0, endSample = 0;  //the first and last samples worth hearing, on the decoder's count
+    bool looped = false;
+    u32 loopStart = 0, loopEnd = 0;    //on the decoder's count, the end the loop's last sample
+    bool monoFrames = false;    //ATRAC3 frames decoded as mono whatever the header's channels (atrac.cpp)
+    std::vector<u8> extra;      //the codec's parameters from the fmt chunk
+    //the buffers
+    u32 buffer = 0, bufferByte = 0, secondBuffer = 0, secondBufferByte = 0;
+    u32 loaded = 0;             //a halfway buffer's bytes of the file so far
+    //where decoding is
+    u32 decodePos = 0;          //the next sample, on the decoder's count
+    u32 curFileOff = 0;         //the next frame's place in the file
+    u32 streamOff = 0;          //and in its buffer
+    u32 streamDataByte = 0;     //the bytes of the stream in the buffer from there on
+    u32 framesToSkip = 0;       //frames to decode unheard before the next one's samples
+    u32 curBuffer = 0;          //1: decoding has gone on into the second buffer (2: and ended there)
+    u32 secondStreamOff = 0;    //where it is there
+    s32 loopNum = 0;            //loops still to play: -1 for ever
+    bool ended = false;         //every sample decoded
+    u32 error = 0;              //the decoder's last error (sceAtracGetInternalErrorInfo)
+    //a streamed file's buffer: a ring of frames, the first time round from where the header put them, after that
+    //from its start (atrac.cpp)
+    u32 firstEnd = 0, lapEnd = 0;      //where the ring ends the first time round, and every time after
+    u32 readLap = 0;            //the times round decoding has wrapped
+    u32 writeLap = 0, writeOff = 0;    //where the game's next bytes go, the times round that has wrapped
+    u32 writeFileOff = 0;       //the place in the file those bytes come from
+    u32 loopsAhead = 0;         //jumps back to the loop's start the game has streamed and decoding hasn't reached
+    std::vector<u8> recent;     //the last frame decoded: the frame a decoder made afresh is primed with
+    std::unique_ptr<AudioDecoder> decoder;  //not saved: made afresh from the stream after a state is loaded
+  };
+  Atrac atracs[6];
+  u32 atracPlusIDs = 2, atracClassicIDs = 2;  //how sceAtracReinit shares the six IDs between the codecs
+  u32 atracContexts = 0;        //the memory _sceAtracGetContextAddress hands out (made the first time it's asked)
+  auto atracFind(u32 id, bool needData = true) -> Atrac*;
+  auto atracParse(Atrac& atrac, u32 buffer, u32 size) -> u32;
+  auto atracSet(u32 id, u32 buffer, u32 readSize, u32 bufferSize, bool mono) -> u32;
+  auto atracFrame(Atrac& atrac, u32& address) -> u32;
+  auto atracConsume(Atrac& atrac) -> void;
+  auto atracDecodeFrame(Atrac& atrac, s16* samples) -> s32;
+  auto atracPrime(Atrac& atrac) -> bool;
+  auto atracRemain(Atrac& atrac) -> s32;
+  auto atracWritable(Atrac& atrac) -> u32;
+  auto atracWriterAt(Atrac& atrac) -> void;
+  auto atracNextSamples(Atrac& atrac) -> u32;
+  auto atracContext(u32 id) -> void;
   auto sceAtracGetAtracID() -> void;
   auto sceAtracReleaseAtracID() -> void;
   auto sceAtracReinit() -> void;
-  auto sceAtracSetDataAndGetID() -> void;
   auto sceAtracSetData() -> void;
-  auto sceAtracNoStream() -> void;
+  auto sceAtracSetDataAndGetID() -> void;
+  auto sceAtracSetHalfwayBuffer() -> void;
+  auto sceAtracSetHalfwayBufferAndGetID() -> void;
+  auto sceAtracSetMOutData() -> void;
+  auto sceAtracSetMOutDataAndGetID() -> void;
+  auto sceAtracSetMOutHalfwayBuffer() -> void;
+  auto sceAtracSetMOutHalfwayBufferAndGetID() -> void;
+  auto sceAtracDecodeData() -> void;
+  auto sceAtracGetRemainFrame() -> void;
+  auto sceAtracGetStreamDataInfo() -> void;
+  auto sceAtracAddStreamData() -> void;
+  auto sceAtracGetNextDecodePosition() -> void;
+  auto sceAtracGetNextSample() -> void;
+  auto sceAtracGetMaxSample() -> void;
+  auto sceAtracGetSoundSample() -> void;
+  auto sceAtracGetChannel() -> void;
+  auto sceAtracGetOutputChannel() -> void;
+  auto sceAtracGetBitrate() -> void;
+  auto sceAtracSetLoopNum() -> void;
+  auto sceAtracGetLoopStatus() -> void;
+  auto sceAtracGetInternalErrorInfo() -> void;
+  auto sceAtracGetBufferInfoForResetting() -> void;
+  auto sceAtracResetPlayPosition() -> void;
+  auto sceAtracIsSecondBufferNeeded() -> void;
+  auto sceAtracGetSecondBufferInfo() -> void;
+  auto sceAtracSetSecondBuffer() -> void;
+  auto _sceAtracGetContextAddress() -> void;
+
+  //mp3.cpp: sceMp3, MP3 streams fed through a buffer and decoded a frame a call
+  struct Mp3 {
+    bool reserved = false, initialized = false;
+    bool loopSet = false;       //sceMp3SetLoopNum came before sceMp3Init, which then keeps its count
+    u64 start = 0, end = 0;     //where the stream lies in its file
+    u32 buffer = 0, bufferSize = 0, pcm = 0, pcmSize = 0;
+    u64 filePos = 0;            //where in the file the game's next bytes come from
+    u64 readFilePos = 0;        //and where the next frame decoded lies
+    u32 readPos = 0, writePos = 0, writeLimit = 0;  //in the buffer's ring: the next frame, the next bytes, and the
+                                                    //end of the half being filled
+    u32 available = 0;          //bytes in the ring not decoded yet
+    u32 pcmHalf = 0;            //the sample buffer's half the next frame goes to
+    s32 loopNum = -1;
+    u32 sumDecoded = 0, version = 0, rate = 0, channels = 0, bitrate = 0, frames = 0;
+    std::unique_ptr<AudioDecoder> decoder;  //not saved: made afresh after a state is loaded
+  };
+  Mp3 mp3s[2];
+  bool mp3Terminated = false;   //sceMp3TermResource: no handles until sceMp3InitResource
+  auto mp3Find(u32 handle, u32 notReserved = 0x8067'1102) -> Mp3*;
+  auto mp3Writable(Mp3& mp3) -> u32;
+  auto mp3Frame(Mp3& mp3, std::vector<u8>& frame) -> bool;
+  auto sceMp3InitResource() -> void;
+  auto sceMp3TermResource() -> void;
+  auto sceMp3ReserveMp3Handle() -> void;
+  auto sceMp3ReleaseMp3Handle() -> void;
+  auto sceMp3GetInfoToAddStreamData() -> void;
+  auto sceMp3NotifyAddStreamData() -> void;
+  auto sceMp3CheckStreamDataNeeded() -> void;
+  auto sceMp3Init() -> void;
+  auto sceMp3Decode() -> void;
+  auto sceMp3SetLoopNum() -> void;
+  auto sceMp3GetLoopNum() -> void;
+  auto sceMp3GetSumDecodedSample() -> void;
+  auto sceMp3GetMaxOutputSample() -> void;
+  auto sceMp3GetSamplingRate() -> void;
+  auto sceMp3GetBitRate() -> void;
+  auto sceMp3GetMp3ChannelNum() -> void;
+  auto sceMp3GetFrameNum() -> void;
+  auto sceMp3GetMPEGVersion() -> void;
+  auto sceMp3ResetPlayPosition() -> void;
+  auto sceMp3ResetPlayPositionByFrame() -> void;
 
   //font.cpp (and pgf.cpp): sceLibFont, the system's font library, drawing the PSP's own fonts (the owner's, from
   //their PSP's flash0: a host folder the system gives, fontsFrom()) and the PGFs games carry

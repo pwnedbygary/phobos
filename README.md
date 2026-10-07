@@ -141,6 +141,16 @@ a JDK 17+, and the `thirdparty/libadrenotools` submodule
 
 APKs land in `app/build/outputs/apk/<flavor>/<type>/`.
 
+The PSP core's music and movies are decoded by FFmpeg's LGPL decoders, which the build makes itself from FFmpeg's
+release with `thirdparty/ffmpeg/build.sh` (a few minutes, once; kept in `.cache/ffmpeg`). That needs bash, make, curl
+and xz, and network access on the first build to download the release's tarball (checked against its SHA-256).
+Offline, put the tarball (`ffmpeg-9.0.2.tar.xz`) in `.cache/ffmpeg`, or name it in `PHOBOS_FFMPEG_TARBALL`, or build
+without FFmpeg, and so without the PSP's music and movies:
+
+```sh
+./gradlew assembleRelease -Pphobos.ffmpeg=OFF
+```
+
 High-level Components
 ---------------------
 

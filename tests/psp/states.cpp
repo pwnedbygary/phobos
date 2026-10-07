@@ -246,6 +246,25 @@ static auto stateFields() -> void {
   //thread one feeding a ringbuffer, its callback asked for 3 of the 5 packets left, 2 given already
   auto& mpegCall = k.mpegCalls[one];
   mpegCall.ringbuffer = 0x0896'1000, mpegCall.left = 5, mpegCall.asked = 3, mpegCall.put = 2;
+  //sceAtrac3plus's ID 0 streaming sample.at3's shape through a 0x4500-byte ring, two frames in; sceMp3's handle 0
+  //part way through its stream; a movie library's pictures, sound and access unit; the contexts' memory a block
+  auto& at = k.atracs[0];
+  at.codec = 0x1000, at.state = 4, at.channels = at.outputChannels = 2, at.frameBytes = 376, at.frameSamples = 2048;
+  at.delay = 368, at.dataOff = 0x60, at.fileDataEnd = 0xb508, at.firstValidSample = 2416, at.endSample = 249916;
+  at.extra = {1, 0, 0x28, 0x2e}, at.buffer = 0x0897'0000, at.bufferByte = 0x4500, at.decodePos = 4096 + 368;
+  at.curFileOff = 0x350, at.streamOff = 0x350, at.writeOff = 0x4000, at.streamDataByte = 0x4000 - 0x350;
+  at.firstEnd = 0x43f0, at.lapEnd = 0x4390, at.writeFileOff = 0x4000, at.recent.assign(376, 0x5a);
+  u32 contexts = k.allocate(6 * 256, 1, 0, "atrac contexts")->address;
+  auto& mp = k.mp3s[0];
+  mp.reserved = mp.initialized = true, mp.end = 0x10000, mp.buffer = 0x0897'8000, mp.bufferSize = 8192;
+  mp.pcm = 0x0897'a000, mp.pcmSize = 9216, mp.filePos = 0x1a40, mp.readFilePos = 0x200, mp.readPos = 0x200;
+  mp.writePos = mp.writeLimit = 0x1a40, mp.available = 0x1840, mp.rate = 44100, mp.bitrate = 128, mp.channels = 2;
+  mp.version = 3, mp.frames = 100, mp.sumDecoded = 1152;
+  auto& movie = k.mpegStreams[0x0896'8000];
+  movie.unit = {0, 0, 1, 9}, movie.audio = {1, 2, 3, 4}, movie.audioStamps = {{2, 90000}}, movie.audioTaken = 10;
+  movie.audioTime = 1000, movie.audioCarry = 2000, movie.held.assign(384, 0x80), movie.heldWidth = 16;
+  movie.heldHeight = 16, movie.shown = movie.held, movie.shownWidth = movie.shownHeight = 16;
+  movie.soundLast.assign(376, 0x33);
   std::vector<std::pair<std::string, std::function<void()>>> changes = {
     //the CPU
     {"ipu.r", [&] { cpu.ipu.r[9] ^= 0x1234; }}, {"ipu.lo", [&] { cpu.ipu.lo ^= 1; }},
@@ -347,7 +366,8 @@ static auto stateFields() -> void {
     {"pipe used", [&] { pipe.used = 7; }},
     {"mailbox name", [&] { mailbox.name += "x"; }}, {"mailbox attributes", [&] { mailbox.attributes ^= 1; }},
     {"mailbox messages", [&] { mailbox.messages.push_back(0x0880'1000); }},
-    {"atracIDs", [&] { k.atracIDs = 5; }}, {"dispatchSuspended", [&] { k.dispatchSuspended = true; }},
+    {"atrac IDs", [&] { k.atracPlusIDs = 1, k.atracClassicIDs = 4; }},
+    {"dispatchSuspended", [&] { k.dispatchSuspended = true; }},
     {"fontResolution", [&] { k.fontResolution[1] = 144.0f; }},
     //the font library: each change leaves what a machine could have (the library grown to four handles, the third
     //opened on the font too; the font made system font 1, then read whole, then the program's memory's; the call
@@ -587,7 +607,57 @@ static auto stateFields() -> void {
     {"geSuspended", [&] { k.geSuspended = true; }}, {"geFinishing", [&] { k.geFinishing = list2; }},
     {"geLeft", [&] { k.geLeft = 12345; }},
   };
+  //the codecs (part 26): each change leaves what a machine could have (ID 1, by then ATRAC3's, handed out; the stream
+  //looping before its end, then gone on into its second buffer, then ended; the mp3 handle uninitialized last)
+  std::vector<std::pair<std::string, std::function<void()>>> codecs = {
+    {"atrac codec", [&] { k.atracs[1].codec = 0x1001; }}, {"atrac channels", [&] { at.channels = 1; }},
+    {"atrac outputChannels", [&] { at.outputChannels = 1; }},
+    {"atrac frameBytes", [&] { at.frameBytes = 188, at.recent.resize(188); }},
+    {"atrac dataOff", [&] { at.dataOff = 0x64; }}, {"atrac fileDataEnd", [&] { at.fileDataEnd = 0xb50c; }},
+    {"atrac firstValidSample", [&] { at.firstValidSample = 2417; }},
+    {"atrac endSample", [&] { at.endSample = 249917; }},
+    {"atrac loop", [&] { at.looped = true, at.loopStart = 3000, at.loopEnd = 200000, at.state = 6; }},
+    {"atrac monoFrames", [&] { at.monoFrames = true; }}, {"atrac extra", [&] { at.extra.push_back(9); }},
+    {"atrac buffer", [&] { at.buffer ^= 0x100; }}, {"atrac bufferByte", [&] { at.bufferByte = 0x4600; }},
+    {"atrac secondBuffer", [&] { at.secondBuffer = 0x0898'0000; }},
+    {"atrac secondBufferByte", [&] { at.secondBufferByte = 0x1000; }}, {"atrac loaded", [&] { at.loaded = 5; }},
+    {"atrac decodePos", [&] { at.decodePos += 7; }}, {"atrac curFileOff", [&] { at.curFileOff += 376; }},
+    {"atrac streamOff", [&] { at.streamOff += 4, at.streamDataByte -= 4; }},
+    {"atrac framesToSkip", [&] { at.framesToSkip = 1; }},
+    {"atrac curBuffer", [&] { at.curBuffer = 1, at.streamDataByte = 1000; }},
+    {"atrac secondStreamOff", [&] { at.secondStreamOff = 376; }}, {"atrac loopNum", [&] { at.loopNum = 2; }},
+    {"atrac ended", [&] { at.ended = true; }}, {"atrac error", [&] { at.error = 0x20b; }},
+    {"atrac firstEnd", [&] { at.firstEnd -= 376; }}, {"atrac lapEnd", [&] { at.lapEnd -= 376; }},
+    {"atrac laps", [&] { at.readLap = 1, at.writeLap = 1; }}, {"atrac writeOff", [&] { at.writeOff += 8; }},
+    {"atrac writeFileOff", [&] { at.writeFileOff += 8; }}, {"atrac loopsAhead", [&] { at.loopsAhead = 1; }},
+    {"atrac recent", [&] { at.recent[0] ^= 1; }}, {"atrac contexts", [&] { k.atracContexts = contexts; }},
+    {"mp3 reserved", [&] { k.mp3s[1].reserved = true; }}, {"mp3 loopSet", [&] { mp.loopSet = true; }},
+    {"mp3 start", [&] { mp.start = 0x10; }}, {"mp3 end", [&] { mp.end = 0x20000; }},
+    {"mp3 buffer", [&] { mp.buffer ^= 0x40; }}, {"mp3 bufferSize", [&] { mp.bufferSize = 16384; }},
+    {"mp3 pcm", [&] { mp.pcm ^= 0x40; }}, {"mp3 pcmSize", [&] { mp.pcmSize = 2 * 9216; }},
+    {"mp3 filePos", [&] { mp.filePos += 4; }}, {"mp3 readFilePos", [&] { mp.readFilePos += 4; }},
+    {"mp3 readPos", [&] { mp.readPos += 4; }}, {"mp3 writePos", [&] { mp.writePos += 4; }},
+    {"mp3 writeLimit", [&] { mp.writeLimit += 4; }}, {"mp3 available", [&] { mp.available -= 4; }},
+    {"mp3 pcmHalf", [&] { mp.pcmHalf = 1; }}, {"mp3 loopNum", [&] { mp.loopNum = 3; }},
+    {"mp3 sumDecoded", [&] { mp.sumDecoded += 1152; }}, {"mp3 version", [&] { mp.version = 2; }},
+    {"mp3 bitrate", [&] { mp.bitrate = 64; }}, {"mp3 channels", [&] { mp.channels = 1; }},
+    {"mp3 frames", [&] { mp.frames += 1; }}, {"mp3 initialized", [&] { mp.initialized = false, mp.rate = 48000; }},
+    {"mp3Terminated", [&] { k.mp3Terminated = true; }},
+    {"mpeg stream library", [&] { k.mpegStreams[0x0896'9000] = {}; }},
+    {"mpeg stream unit", [&] { movie.unit.push_back(5); }}, {"mpeg stream audio", [&] { movie.audio.push_back(5); }},
+    {"mpeg stream audioStamps", [&] { movie.audioStamps.push_back({4, 93000}); }},
+    {"mpeg stream audioTaken", [&] { movie.audioTaken += 4; }},
+    {"mpeg stream audioTime", [&] { movie.audioTime += 1; }},
+    {"mpeg stream audioCarry", [&] { movie.audioCarry += 1; }}, {"mpeg stream held", [&] { movie.held[0] ^= 1; }},
+    {"mpeg stream held size", [&] { movie.held.resize(32 * 16 * 3 / 2), movie.heldWidth = 32; }},
+    {"mpeg stream held height", [&] { movie.held.resize(32 * 32 * 3 / 2), movie.heldHeight = 32; }},
+    {"mpeg stream shown", [&] { movie.shown[0] ^= 1; }},
+    {"mpeg stream shown size", [&] { movie.shown.resize(32 * 16 * 3 / 2), movie.shownWidth = 32; }},
+    {"mpeg stream shown height", [&] { movie.shown.resize(32 * 32 * 3 / 2), movie.shownHeight = 32; }},
+    {"mpeg stream soundLast", [&] { movie.soundLast[0] ^= 1; }},
+  };
   changes.insert(changes.end(), more.begin(), more.end());
+  changes.insert(changes.end(), codecs.begin(), codecs.end());
   for(auto& [field, change] : changes) {
     auto before = save(a);
     change();
@@ -687,6 +757,22 @@ static auto stateFields() -> void {
     volatileWait().wakeAt = k.cycles + 1000;
   });
   refuses("a thread waiting for the volatile memory with callbacks", [&] { volatileWait().callbacks = true; });
+  //a decode waits a moment (codec.cpp), with no callbacks: due within a frame and not a frame overdue
+  auto codecWait = [&](u64 due) -> Kernel::Thread& {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Codec, thread.wakeAt = due;
+    return thread;
+  };
+  {
+    codecWait(k.cycles + 1000);
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
+    CHECK(load(a, state), true);
+  }
+  refuses("a decode's wait due in a second", [&] { codecWait(k.cycles + Kernel::CPUFrequency); });
+  refuses("a decode's wait a frame overdue", [&] { codecWait(k.cycles - Kernel::VblankCycles); });
+  refuses("a decode's wait running callbacks", [&] { codecWait(k.cycles + 1000).callbacks = true; });
   refuses("a synchronous read put aside for callbacks", [&] {
     auto& thread = readWait(k.cycles + 1000);
     thread.waitBeforeCallback = {Kernel::Wait::File, discFile, 16, 0, 0, 0, k.cycles + 1000, false, 0, 0};
@@ -839,7 +925,33 @@ static auto stateFields() -> void {
     auto& thread = *k.threads.at(two);
     thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Mailbox, thread.waitID = semaphore;
   });
-  refuses("ATRAC IDs past six", [&] { k.atracIDs = 0x40; });
+  refuses("ATRAC IDs past six", [&] { k.atracClassicIDs = 5; });
+  auto atracOne = [&]() -> Kernel::Atrac& { return k.atracs[0]; };
+  refuses("an ATRAC ID outside its codec's", [&] { k.atracs[5].codec = 0x1000; });
+  refuses("an ATRAC file of a state there isn't", [&] { atracOne().state = 7; });
+  refuses("an ATRAC file with frames of no size", [&] { atracOne().frameBytes = 0; });
+  refuses("an ATRAC file priming three frames", [&] { atracOne().framesToSkip = 3; });
+  refuses("an ATRAC stream holding other than its ring", [&] { atracOne().curBuffer = 0; });
+  refuses("an ATRAC stream's ring past its buffer", [&] { atracOne().lapEnd = atracOne().bufferByte + 376; });
+  refuses("an ATRAC stream written more than a time round ahead", [&] { atracOne().writeLap += 2; });
+  refuses("an ATRAC frame kept of another size", [&] { atracOne().recent.resize(100); });
+  refuses("ATRAC fmt extras past what a file keeps", [&] { atracOne().extra.resize(65); });
+  refuses("ATRAC contexts in no block", [&] { k.atracContexts = 0x0880'0010; });
+  refuses("an mp3 stream's ring past its buffer", [&] { k.mp3s[0].readPos = k.mp3s[0].bufferSize; });
+  refuses("an mp3 stream at 48 kHz", [&] { k.mp3s[0].initialized = true, k.mp3s[0].rate = 48000; });
+  refuses("an mp3 handle initialized without buffers", [&] { k.mp3s[1].initialized = true; });
+  refuses("a movie picture of the wrong size", [&] { k.mpegStreams.begin()->second.held.push_back(0); });
+  refuses("a movie's sound stamps out of order", [&] {
+    k.mpegStreams.begin()->second.audioStamps = {{3, 1}, {1, 2}};
+  });
+  refuses("a movie library nowhere", [&] { k.mpegStreams[0x7000'0000] = {}; });
+  refuses("a movie picture wider than a movie's", [&] {
+    auto& stream = k.mpegStreams.begin()->second;
+    stream.held.assign(1040 * 16 + 2 * 520 * 8, 0x80), stream.heldWidth = 1040, stream.heldHeight = 16;
+  });
+  refuses("a movie sound frame of no frame's size", [&] { k.mpegStreams.begin()->second.soundLast.resize(377); });
+  refuses("a movie sound frame past a sound unit's", [&] { k.mpegStreams.begin()->second.soundLast.resize(0x840); });
+
   refuses("a font resolution of 0", [&] { k.fontResolution[0] = 0; });
   //the font library as it never leaves itself (each looked up afresh: every load makes them anew); then a state of
   //it in a machine without the system's fonts

@@ -325,9 +325,21 @@ static auto refused() -> void {
   }
   {
     TestProgram program;
-    relocation(program.relocations, 0x2c, 7);  //GPREL16, which pspdev removes
+    relocation(program.relocations, 0x2c, 3);  //REL32, which nothing makes for the PSP
     program.elf.sections.back().bytes = program.relocations;
-    CHECK(contains(why(program.build()), "type 7"), true);
+    CHECK(contains(why(program.build()), "type 3"), true);
+  }
+  {
+    //GPREL16, an offset from the global pointer, which moves with the module (newer toolchains keep them, as
+    //pspautotests' newer programs show): loaded, the word left as it was
+    TestProgram program;
+    relocation(program.relocations, 0x2c, 7);
+    program.elf.sections.back().bytes = program.relocations;
+    System s;
+    Module module;
+    auto file = program.build();
+    CHECK(Loader::load(s.memory, file.data(), file.size(), 0x0890'0000, {}, module).empty(), true);
+    CHECK(s.memory.read(4, 0x0890'002c), halt);
   }
   {
     TestProgram program;

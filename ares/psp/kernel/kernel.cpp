@@ -3,6 +3,16 @@
 #include "../memory/memory.hpp"
 #include "../ge/ge.hpp"
 
+//FFmpeg's decoders, in builds that have them (codec.cpp)
+#if defined(ARES_ENABLE_FFMPEG)
+extern "C" {
+  #include <libavcodec/avcodec.h>
+  #include <libavutil/channel_layout.h>
+  #include <libavutil/log.h>
+  #include <libavutil/mem.h>
+}
+#endif
+
 namespace ares::PlayStationPortable {
 
 #include "threads.cpp"
@@ -25,8 +35,10 @@ namespace ares::PlayStationPortable {
 #include "messages.cpp"
 #include "audio.cpp"
 #include "sas.cpp"
+#include "codec.cpp"
 #include "mpeg.cpp"
 #include "atrac.cpp"
+#include "mp3.cpp"
 #include "net.cpp"
 #include "pgf.cpp"
 #include "font.cpp"
@@ -545,18 +557,56 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceAtrac3plus",     "sceAtracGetAtracID",            &Kernel::sceAtracGetAtracID);
   add("sceAtrac3plus",     "sceAtracReleaseAtracID",        &Kernel::sceAtracReleaseAtracID);
   add("sceAtrac3plus",     "sceAtracReinit",                &Kernel::sceAtracReinit);
-  add("sceAtrac3plus",     "sceAtracSetDataAndGetID",       &Kernel::sceAtracSetDataAndGetID);
-  add("sceAtrac3plus",     "sceAtracSetHalfwayBufferAndGetID", &Kernel::sceAtracSetDataAndGetID);
   add("sceAtrac3plus",     "sceAtracSetData",               &Kernel::sceAtracSetData);
-  add("sceAtrac3plus",     "sceAtracSetHalfwayBuffer",      &Kernel::sceAtracSetData);
-  for(auto name : {"sceAtracDecodeData", "sceAtracGetRemainFrame", "sceAtracGetStreamDataInfo",
-                   "sceAtracAddStreamData", "sceAtracGetSoundSample", "sceAtracGetNextDecodePosition",
-                   "sceAtracGetBufferInfoForReseting", "sceAtracResetPlayPosition", "sceAtracGetChannel",
-                   "sceAtracGetMaxSample", "sceAtracGetNextSample", "sceAtracSetLoopNum", "sceAtracGetLoopStatus",
-                   "sceAtracGetBitrate", "sceAtracGetOutputChannel", "sceAtracGetSecondBufferInfo",
-                   "sceAtracSetSecondBuffer", "sceAtracIsSecondBufferNeeded", "sceAtracGetInternalErrorInfo"}) {
-    add("sceAtrac3plus", name, &Kernel::sceAtracNoStream);
+  add("sceAtrac3plus",     "sceAtracSetDataAndGetID",       &Kernel::sceAtracSetDataAndGetID);
+  add("sceAtrac3plus",     "sceAtracSetHalfwayBuffer",      &Kernel::sceAtracSetHalfwayBuffer);
+  add("sceAtrac3plus",     "sceAtracSetHalfwayBufferAndGetID", &Kernel::sceAtracSetHalfwayBufferAndGetID);
+  add("sceAtrac3plus",     "sceAtracSetMOutData",           &Kernel::sceAtracSetMOutData);
+  add("sceAtrac3plus",     "sceAtracSetMOutDataAndGetID",   &Kernel::sceAtracSetMOutDataAndGetID);
+  add("sceAtrac3plus",     "sceAtracSetMOutHalfwayBuffer",  &Kernel::sceAtracSetMOutHalfwayBuffer);
+  add("sceAtrac3plus",     "sceAtracSetMOutHalfwayBufferAndGetID", &Kernel::sceAtracSetMOutHalfwayBufferAndGetID);
+  add("sceAtrac3plus",     "sceAtracDecodeData",            &Kernel::sceAtracDecodeData);
+  add("sceAtrac3plus",     "sceAtracGetRemainFrame",        &Kernel::sceAtracGetRemainFrame);
+  add("sceAtrac3plus",     "sceAtracGetStreamDataInfo",     &Kernel::sceAtracGetStreamDataInfo);
+  add("sceAtrac3plus",     "sceAtracAddStreamData",         &Kernel::sceAtracAddStreamData);
+  add("sceAtrac3plus",     "sceAtracGetNextDecodePosition", &Kernel::sceAtracGetNextDecodePosition);
+  add("sceAtrac3plus",     "sceAtracGetNextSample",         &Kernel::sceAtracGetNextSample);
+  add("sceAtrac3plus",     "sceAtracGetMaxSample",          &Kernel::sceAtracGetMaxSample);
+  add("sceAtrac3plus",     "sceAtracGetSoundSample",        &Kernel::sceAtracGetSoundSample);
+  add("sceAtrac3plus",     "sceAtracGetChannel",            &Kernel::sceAtracGetChannel);
+  add("sceAtrac3plus",     "sceAtracGetOutputChannel",      &Kernel::sceAtracGetOutputChannel);
+  add("sceAtrac3plus",     "sceAtracGetBitrate",            &Kernel::sceAtracGetBitrate);
+  add("sceAtrac3plus",     "sceAtracSetLoopNum",            &Kernel::sceAtracSetLoopNum);
+  add("sceAtrac3plus",     "sceAtracGetLoopStatus",         &Kernel::sceAtracGetLoopStatus);
+  add("sceAtrac3plus",     "sceAtracGetInternalErrorInfo",  &Kernel::sceAtracGetInternalErrorInfo);
+  //both spellings: games import either (the GTAs the second)
+  add("sceAtrac3plus",     "sceAtracGetBufferInfoForReseting", &Kernel::sceAtracGetBufferInfoForResetting);
+  add("sceAtrac3plus",     "sceAtracGetBufferInfoForResetting", &Kernel::sceAtracGetBufferInfoForResetting);
+  add("sceAtrac3plus",     "sceAtracResetPlayPosition",     &Kernel::sceAtracResetPlayPosition);
+  add("sceAtrac3plus",     "sceAtracIsSecondBufferNeeded",  &Kernel::sceAtracIsSecondBufferNeeded);
+  add("sceAtrac3plus",     "sceAtracGetSecondBufferInfo",   &Kernel::sceAtracGetSecondBufferInfo);
+  add("sceAtrac3plus",     "sceAtracSetSecondBuffer",       &Kernel::sceAtracSetSecondBuffer);
+  add("sceAtrac3plus",     "_sceAtracGetContextAddress",    &Kernel::_sceAtracGetContextAddress);
+  for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
+        {"sceMp3InitResource", &Kernel::sceMp3InitResource}, {"sceMp3TermResource", &Kernel::sceMp3TermResource},
+        {"sceMp3ReserveMp3Handle", &Kernel::sceMp3ReserveMp3Handle},
+        {"sceMp3ReleaseMp3Handle", &Kernel::sceMp3ReleaseMp3Handle},
+        {"sceMp3GetInfoToAddStreamData", &Kernel::sceMp3GetInfoToAddStreamData},
+        {"sceMp3NotifyAddStreamData", &Kernel::sceMp3NotifyAddStreamData},
+        {"sceMp3CheckStreamDataNeeded", &Kernel::sceMp3CheckStreamDataNeeded}, {"sceMp3Init", &Kernel::sceMp3Init},
+        {"sceMp3Decode", &Kernel::sceMp3Decode}, {"sceMp3SetLoopNum", &Kernel::sceMp3SetLoopNum},
+        {"sceMp3GetLoopNum", &Kernel::sceMp3GetLoopNum},
+        {"sceMp3GetSumDecodedSample", &Kernel::sceMp3GetSumDecodedSample},
+        {"sceMp3GetMaxOutputSample", &Kernel::sceMp3GetMaxOutputSample},
+        {"sceMp3GetSamplingRate", &Kernel::sceMp3GetSamplingRate}, {"sceMp3GetBitRate", &Kernel::sceMp3GetBitRate},
+        {"sceMp3GetMp3ChannelNum", &Kernel::sceMp3GetMp3ChannelNum},
+        {"sceMp3GetFrameNum", &Kernel::sceMp3GetFrameNum},
+        {"sceMp3GetMPEGVersion", &Kernel::sceMp3GetMPEGVersion},
+        {"sceMp3ResetPlayPosition", &Kernel::sceMp3ResetPlayPosition},
+        {"sceMp3ResetPlayPositionByFrame", &Kernel::sceMp3ResetPlayPositionByFrame}}) {
+    add("sceMp3", name, handler);
   }
+  codecDecoders(*this);
   cpu.syscallHook = [this](u32 code) { return syscall(code); };
   ge.log = [this](const std::string& text) { note("GE: " + text); };
 }
@@ -593,7 +643,11 @@ auto Kernel::power() -> void {
   audio = {};
   audio.output.samples.assign(Audio::OutputFrames * 2, 0);
   sas = {};
-  atracIDs = 0;
+  for(auto& atrac : atracs) atrac = {};
+  atracPlusIDs = atracClassicIDs = 2;
+  atracContexts = 0;
+  for(auto& mp3 : mp3s) mp3 = {};
+  mp3Terminated = false;
   dispatchSuspended = false;
   fontResolution[0] = fontResolution[1] = 128.0f;
   fontLibraries.clear();
@@ -601,6 +655,7 @@ auto Kernel::power() -> void {
   fontCalls.clear();
   nextFontID = 1;
   mpegCalls.clear();
+  mpegStreams.clear();
   dialog = {};
   utilityModules.clear();
   files.clear();

@@ -28,6 +28,7 @@ enum : u32 {
   Relocation26   = 4,  //the 26-bit target of j or jal (a word address within the current 256 MiB)
   RelocationHi16 = 5,  //the upper half of an address built by lui ...
   RelocationLo16 = 6,  //... and its lower half, in the addiu, ori, lw or sw that follows
+  RelocationGpRel16 = 7,  //a 16-bit offset from the global pointer, which moves with the module: nothing changes
 };
 
 //Reads the file, a little-endian word at a time, refusing to read past its end.
@@ -176,7 +177,7 @@ auto Loader::load(Memory& memory, const u8* data, u64 size, u32 base, const Impo
         if(from >= segments.size() || to >= segments.size()) return "a relocation names a segment that isn't there";
         u32 address = segmentAddress(from) + file.read32(offset + n);
         u32 add = segmentAddress(to);
-        if(kind == RelocationNone) continue;
+        if(kind == RelocationNone || kind == RelocationGpRel16) continue;
         if(!memory.reaches(address, 4)) return "a relocation points outside the program: " + hex(address);
         u32 word = memory.read(4, address);
         switch(kind) {

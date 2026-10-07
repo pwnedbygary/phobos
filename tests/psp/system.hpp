@@ -79,6 +79,9 @@ auto asyncTests() -> Tests;
 auto sasTests() -> Tests;
 auto messageTests() -> Tests;
 auto mediaTests() -> Tests;
+auto atracTests() -> Tests;
+auto mp3Tests() -> Tests;
+auto movieTests() -> Tests;
 auto fontTests() -> Tests;
 
 }

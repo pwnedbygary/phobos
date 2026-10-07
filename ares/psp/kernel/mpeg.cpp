@@ -1,24 +1,26 @@
-//sceMpeg, the library games play their movies with (PSMF files: an MPEG-2 program stream of H.264 video and
-//ATRAC3plus sound). There's no video decoder yet, so no picture is ever shown; but a movie is fed and taken apart as
-//on a PSP, as pspautotests' video/mpeg tests recorded:
+//sceMpeg, the library games play their movies with (PSMF files: a 2 KiB header, then an MPEG-2 program stream of
+//H.264 pictures and ATRAC3plus sound). A movie is fed and taken apart as on a PSP, as pspautotests' video/mpeg tests
+//recorded, and decoded by codec.cpp's decoders (FFmpeg's):
 //- The setting up works with their sizes (a ringbuffer's memory: 0x868 bytes a packet; the library's: 0x10000), so
 //  games make their buffers and threads as they would.
-//- sceMpegQueryStreamOffset, which reads the movie's header, refuses every one (0x80610022, the error
-//  video/mpeg/ringbuffer/construct recorded for a value the library refuses; which a PSP gives for a header it can't
-//  read isn't known here, but games only test it for a negative number). A game that checks gives the movie up: the
-//  GTAs, Midnight Club 3 and Snoopy vs. the Red Baron go on so.
-//- A game that plays on regardless feeds the ringbuffer, which calls the game's own callback for packets of the
-//  movie (sceMpegRingbufferPut), and asks for the video's access units (sceMpegGetAvcAu): each picture's H.264 data
-//  with its time stamps, taken from the packets, which are free again once taken. Both go as video/mpeg/basic
-//  recorded them for its movie, to the byte and the packet. "Decoding" an access unit gives a picture from the second
-//  on (basic's first gave none), but nothing is drawn: the game's buffer is left as it was. Burnout Legends' and
-//  Dominator's callbacks give nothing (their files are set up only once a header is read), so their movies end at
-//  once; Space Invaders Extreme's copies its movie from memory, which now plays, unseen, behind its stages. (With
-//  nothing ever put in, as before, its movie thread, the best priority there, asked for an access unit until one
-//  came, feeding the ringbuffer meanwhile, and kept every other thread from running: it never got past "NOW
-//  LOADING".)
-//- The sound's access units never come (sceMpegGetAtracAu: 0x80618001, the "no data" basic recorded for its movie,
-//  which has no sound; sceMpegAtracDecode: 0x807f00fd).
+//- sceMpegQueryStreamOffset and sceMpegQueryStreamSize read the movie's header: where its stream starts and how long
+//  it is, big-endian words 8 and 12 bytes in (video/mpeg/basic: 0x800 and 0x40800 for its test.pmf). Without
+//  decoders they refuse every header (0x80610022, the error video/mpeg/ringbuffer/construct recorded for a value the
+//  library refuses), as before there were any: games that check then give their movies up.
+//- A game feeds the ringbuffer, which calls the game's own callback for packets of the movie (sceMpegRingbufferPut),
+//  and asks for the pictures' access units (sceMpegGetAvcAu): each picture's H.264 data with its time stamps, taken
+//  from the packets, which are free again once taken. Both go as video/mpeg/basic recorded them for its movie, to the
+//  byte and the packet. Decoding an access unit gives a picture from the second on (basic's first gave none: the
+//  decoder holds one back), the one before, converted into the game's buffer in its pixel format
+//  (sceMpegAvcDecodeMode), or kept for sceMpegAvcCsc to convert (sceMpegAvcDecodeYCbCr).
+//- The sound's access units (sceMpegGetAtracAu) are the ATRAC3plus frames of private stream 1 (each PES packet's data
+//  a 4-byte header, then the stream: frames each behind an 8-byte header of their own, 0x0fd0 and the codec's
+//  parameters, as the owner's games' movies hold them); sound in packets freed for the pictures before it was asked
+//  for is kept. sceMpegAtracDecode decodes one into 2048 stereo samples. With no sound: 0x80618001, the "no data"
+//  basic recorded for its movie, which has none, and sceMpegAtracDecode 0x807f00fd.
+//The library's own state lives in the memory the game gave it, where Sony's keeps its own; what the Media Engine
+//holds (the access unit to decode, sound taken out of freed packets, the pictures) is kept here (mpegStreams).
+//Decoding waits a moment (MpegDecodeMicroseconds), as atrac.cpp's does.
 
 namespace {
   constexpr u32 MpegErrorValue = 0x8061'0022, MpegErrorNoData = 0x8061'8001;
@@ -34,9 +36,12 @@ namespace {
   //own there: the bytes of video already taken from the ring's first packet, whether the decoder holds a picture
   //back, and whether the last feeding came up short (the movie's file ended: its last access unit ends with its
   //data).
-  constexpr u32 LibraryRingbuffer = 0x10, LibraryTaken = 0x700, LibraryHolding = 0x704, LibraryEnded = 0x708;
+  constexpr u32 LibraryRingbuffer = 0x10, LibraryTaken = 0x700, LibraryHolding = 0x704, LibraryEnded = 0x708,
+                LibraryPixels = 0x70c;
   constexpr u32 LibraryMemory = 0x10000, LibraryOffset = 0x30, LibraryState = 0x800;
   constexpr u64 NoTime = ~0ull;
+  constexpr u32 MpegDecodeMicroseconds = 300;  //chosen, as atrac.cpp's
+  constexpr u32 AudioFrameTicks = 4180;        //2048 samples at 44.1 kHz, in the 90 kHz clock's ticks (rounded)
 
   //A time stamp in a PES header: 33 bits in five bytes, with marker bits between.
   auto timeStamp(const u8* bytes) -> u64 {
@@ -51,6 +56,75 @@ namespace {
       }
     }
     return -1;
+  }
+
+  //Whether a packet is an MPEG-2 program stream pack (its header's start code, MPEG-2's marker bits).
+  auto isPack(const u8* packet) -> bool {
+    return !packet[0] && !packet[1] && packet[2] == 1 && packet[3] == 0xba && (packet[4] & 0xc0) == 0x40;
+  }
+
+  //A packet's sound: what its private stream 1 PES packets of the first ATRAC3plus channel (substream 0) carry,
+  //their data less its 4-byte header, and where their time stamps fall in it.
+  auto packetSound(const u8* packet, std::vector<u8>& sound, std::vector<std::pair<u32, u64>>& stamps) -> void {
+    u32 at = 14 + (packet[13] & 7);
+    while(isPack(packet) && at + 6 <= PacketSize && !packet[at] && !packet[at + 1] && packet[at + 2] == 1) {
+      u32 body = at + 6, next = std::min<u32>(body + (packet[at + 4] << 8 | packet[at + 5]), PacketSize);
+      if(packet[at + 3] == 0xbd && body + 3 <= next && (packet[body] & 0xc0) == 0x80) {
+        u32 flags = packet[body + 1], payload = body + 3 + packet[body + 2];
+        if(payload + 4 <= next && !packet[payload]) {
+          if(flags & 0x80 && body + 8 <= payload) stamps.push_back({u32(sound.size()), timeStamp(packet + body + 3)});
+          sound.insert(sound.end(), packet + payload + 4, packet + next);
+        }
+      }
+      at = next;
+    }
+  }
+
+  //Whether an access unit's picture is one a decoder can start from: one with an IDR slice (H.264's NAL unit 5), or
+  //whose slices (NAL unit 1) are all I or SI slices (a movie may start the pictures after its first from an I
+  //picture that isn't an IDR one). A slice's type is its header's second number (Exp-Golomb coded, after the first
+  //macroblock's): 2 or 7 for I, 4 or 9 for SI; read past the emulation prevention bytes (a 3 after two zeros).
+  auto keyframe(const std::vector<u8>& unit) -> bool {
+    bool slices = false;
+    for(u64 at = 0; at + 4 <= unit.size(); at++) {
+      if(unit[at] || unit[at + 1] || unit[at + 2] != 1) continue;
+      u32 type = unit[at + 3] & 0x1f;
+      if(type == 5) return true;
+      if(type != 1) continue;
+      u64 bits = 0;
+      u32 count = 0, zeros = 0, used = 0;
+      for(u64 n = at + 4; n < unit.size() && count < 64; n++) {
+        if(zeros >= 2 && unit[n] == 3) { zeros = 0; continue; }
+        zeros = unit[n] ? 0 : zeros + 1;
+        bits |= u64(unit[n]) << (56 - count);
+        count += 8;
+      }
+      auto number = [&]() -> s64 {
+        u32 lead = 0;
+        while(used + lead < count && !(bits >> (63 - used - lead) & 1)) lead++;
+        if(used + 2 * lead + 1 > count) return -1;
+        u64 code = bits << (used + lead) >> (63 - lead);
+        used += 2 * lead + 1;
+        return code - 1;
+      };
+      s64 first = number(), slice = number();
+      if(first < 0 || slice < 0 || (slice % 5 != 2 && slice % 5 != 4)) return false;
+      slices = true;
+    }
+    return slices;
+  }
+
+  //A picture's planes, packed one after another: Y, then Cb and Cr at half its size each way.
+  auto packPicture(const VideoDecoder::Picture& picture, std::vector<u8>& out) -> void {
+    u32 width = picture.width, height = picture.height, half = (width + 1) / 2, halfHeight = (height + 1) / 2;
+    out.resize(width * height + 2 * half * halfHeight);
+    u8* to = out.data();
+    for(u32 y = 0; y < height; y++, to += width) memcpy(to, picture.planes[0] + y * picture.strides[0], width);
+    for(u32 plane = 1; plane < 3; plane++) {
+      for(u32 y = 0; y < halfHeight; y++, to += half) {
+        memcpy(to, picture.planes[plane] + y * picture.strides[plane], half);
+      }
+    }
   }
 }
 
@@ -180,12 +254,13 @@ auto Kernel::mpegLibrary(u32 handle) -> u32 {
 
 //(handle, data, size, ringbuffer, frame width, mode, DDR top): the library set up in the memory given, its handle
 //written first, which points at its "LIBMPEG" signature there (video/mpeg/basic shows it), the ringbuffer it reads
-//from noted on both sides, and its own state cleared.
+//from noted on both sides, and its own state cleared, with what the Media Engine held for a library there before.
 auto Kernel::sceMpegCreate() -> void {
   u32 handle = arg(0), data = arg(1), size = arg(2), ringbuffer = arg(3);
   if(size < LibraryMemory) return result(ErrorNoMemory);
   if(!memory.reaches(handle, 4) || !memory.reaches(data, LibraryMemory)) return result(ErrorInvalidPointer);
   u32 library = data + LibraryOffset;
+  mpegStreams.erase(library);
   for(u32 offset = 0; offset < LibraryState; offset += 4) memory.write(4, library + offset, 0);
   memory.copyIn(library, "LIBMPEG", 8);
   memory.write(4, library + LibraryRingbuffer, ringbuffer);
@@ -194,20 +269,40 @@ auto Kernel::sceMpegCreate() -> void {
   result(0);
 }
 
-auto Kernel::sceMpegDelete() -> void { result(0); }
+//(handle): what the Media Engine held for the library goes.
+auto Kernel::sceMpegDelete() -> void {
+  if(u32 library = mpegLibrary(arg(0))) mpegStreams.erase(library);
+  result(0);
+}
 
-//(handle, buffer, where to put the offset): the movie's header can't be read: the movie is given up.
+//(handle, the header, where to put the offset): where the movie's stream starts, after its header (a big-endian word
+//8 bytes in); a header that isn't PSMF's, or no decoders to play it with, is refused.
 auto Kernel::sceMpegQueryStreamOffset() -> void {
-  result(MpegErrorValue);
+  u32 header = arg(1);
+  if(!videoDecoders || !memory.reaches(header, 16) || memory.readString(header, 4) != "PSMF") {
+    return result(MpegErrorValue);
+  }
+  u32 offset = memory.read(1, header + 8) << 24 | memory.read(1, header + 9) << 16 | memory.read(1, header + 10) << 8
+             | memory.read(1, header + 11);
+  if(memory.reaches(arg(2), 4)) memory.write(4, arg(2), offset);
+  result(0);
 }
 
-//(buffer, where to put the size): likewise.
+//(the header, where to put the size): the stream's size (the big-endian word 12 bytes in).
 auto Kernel::sceMpegQueryStreamSize() -> void {
-  result(MpegErrorValue);
+  u32 header = arg(0);
+  if(!videoDecoders || !memory.reaches(header, 16) || memory.readString(header, 4) != "PSMF") {
+    return result(MpegErrorValue);
+  }
+  u32 size = memory.read(1, header + 12) << 24 | memory.read(1, header + 13) << 16 | memory.read(1, header + 14) << 8
+           | memory.read(1, header + 15);
+  if(memory.reaches(arg(1), 4)) memory.write(4, arg(1), size);
+  result(0);
 }
 
-//Streams registered (a handle each) and buffers handed out, for the access units to come.
-auto Kernel::sceMpegRegistStream() -> void { result(0x12c0); }
+//Streams registered (a handle each: the pictures' 0x12c0 and the sound's 0x1700, as video/mpeg/basic recorded) and
+//buffers handed out, for the access units to come.
+auto Kernel::sceMpegRegistStream() -> void { result(0x12c0 + 0x440 * std::min(arg(1), 2u)); }
 auto Kernel::sceMpegUnRegistStream() -> void { result(0); }
 auto Kernel::sceMpegMallocAvcEsBuf() -> void { result(1); }
 auto Kernel::sceMpegFreeAvcEsBuf() -> void { result(0); }
@@ -231,6 +326,18 @@ auto Kernel::sceMpegFlushAllStream() -> void {
       memory.write(4, ringbuffer + RingFilled, 0);
     }
     for(u32 offset : {LibraryTaken, LibraryHolding, LibraryEnded}) memory.write(4, library + offset, 0);
+    if(auto found = mpegStreams.find(library); found != mpegStreams.end()) {
+      auto& stream = found->second;
+      stream.unit.clear();
+      stream.audio.clear();
+      stream.audioStamps.clear();
+      stream.audioTaken = 0;
+      stream.audioTime = stream.audioCarry = NoTime;
+      stream.held.clear();
+      stream.soundLast.clear();
+      if(stream.video) stream.video->reset();
+      if(stream.sound) stream.sound->reset();
+    }
   }
   result(0);
 }
@@ -305,15 +412,117 @@ auto Kernel::sceMpegGetAvcAu() -> void {
   if(memory.reaches(arg(3), 4)) memory.write(4, arg(3), 1);
   u32 freed = 0;
   while(freed < ends.size() && ends[freed] <= end) freed++;
+  auto& stream = mpegStreams[library];
+  stream.unit.assign(video.begin() + start, video.begin() + end);
+  //the sound in the packets freed now, not yet handed out, is kept for sceMpegGetAtracAu (at most 1 MiB of it: a
+  //game that never asks for its movie's sound doesn't keep it all)
+  std::vector<u8> sound;
+  std::vector<std::pair<u32, u64>> soundStamps;
+  for(u32 n = 0; n < freed; n++) {
+    memory.copyOut(packet, data + (read + n) % packets * PacketSize, PacketSize);
+    packetSound(packet, sound, soundStamps);
+  }
+  if(sound.size() > stream.audioTaken) {
+    for(auto [at, time] : soundStamps) {
+      if(at < stream.audioTaken) continue;
+      stream.audioStamps.push_back({u32(stream.audio.size() + at - stream.audioTaken), time});
+    }
+    stream.audio.insert(stream.audio.end(), sound.begin() + stream.audioTaken, sound.end());
+    if(stream.audio.size() > 1_MiB) {
+      u32 drop = stream.audio.size() - 1_MiB;
+      stream.audio.erase(stream.audio.begin(), stream.audio.begin() + drop);
+      std::vector<std::pair<u32, u64>> kept;
+      for(auto [at, time] : stream.audioStamps) if(at >= drop) kept.push_back({at - drop, time});
+      stream.audioStamps = kept;
+    }
+  }
+  stream.audioTaken -= std::min<u32>(stream.audioTaken, sound.size());
   memory.write(4, library + LibraryTaken, end - (freed ? ends[freed - 1] : 0));
   memory.write(4, ringbuffer + RingRead, (read + freed) % packets);
   memory.write(4, ringbuffer + RingFilled, filled - freed);
   result(0);
 }
 
-auto Kernel::sceMpegGetAtracAu() -> void { result(MpegErrorNoData); }
+//(handle, stream, access unit, where to put where its data is): the sound's next access unit, an ATRAC3plus frame
+//with its 8-byte header (0x0fd0, then the codec's parameters: the frame's size in 8-byte steps, less one, in the low
+//10 bits, its channels above), copied into the access unit's ES buffer (as big as sceMpegQueryAtracEsSize said):
+//from the sound kept from freed packets first, then from the packets still in the ring (which it doesn't free: the
+//pictures do). Its time stamp is that of the PES packet the frame starts in, else the last one's plus a frame's
+//time. Bytes before a frame's header (a stream joined part way) are passed over. None whole yet: "no data".
+auto Kernel::sceMpegGetAtracAu() -> void {
+  u32 library = mpegLibrary(arg(0)), au = arg(2);
+  if(!library || !audioDecoders) return result(MpegErrorNoData);
+  if(!memory.reaches(au, 24)) return result(ErrorInvalidPointer);
+  auto& stream = mpegStreams[library];
+  std::vector<u8> sound = stream.audio;
+  auto stamps = stream.audioStamps;
+  u32 queued = sound.size();
+  u32 ringbuffer = memory.read(4, library + LibraryRingbuffer);
+  if(memory.reaches(ringbuffer, 48)) {
+    u32 packets = memory.read(4, ringbuffer + RingPackets), read = memory.read(4, ringbuffer + RingRead);
+    u32 filled = memory.read(4, ringbuffer + RingFilled), data = memory.read(4, ringbuffer + RingData);
+    std::vector<u8> ring;
+    std::vector<std::pair<u32, u64>> ringStamps;
+    u8 packet[PacketSize];
+    for(u32 n = 0; packets && packets <= 4096 && filled <= packets && n < filled; n++) {
+      u32 address = data + (read + n) % packets * PacketSize;
+      if(!memory.reaches(address, PacketSize)) break;
+      memory.copyOut(packet, address, PacketSize);
+      packetSound(packet, ring, ringStamps);
+    }
+    if(ring.size() > stream.audioTaken) {
+      for(auto [at, time] : ringStamps) {
+        if(at >= stream.audioTaken) stamps.push_back({queued + at - stream.audioTaken, time});
+      }
+      sound.insert(sound.end(), ring.begin() + stream.audioTaken, ring.end());
+    }
+  }
+  u32 from = 0;
+  while(from + 1 < sound.size() && !(sound[from] == 0x0f && sound[from + 1] == 0xd0)) from++;
+  if(from + 8 > sound.size()) return result(MpegErrorNoData);
+  u32 bytes = 8 + (((sound[from + 2] << 8 | sound[from + 3]) & 0x3ff) + 1) * 8;
+  u32 buffer = memory.read(4, au + 16);
+  if(from + bytes > sound.size() || bytes > 0x840 || !memory.reaches(buffer, bytes)) return result(MpegErrorNoData);
+  //the time stamp of the PES packet the frame is the first to start in: one that starts at or before it (or inside
+  //the frame before, carried over), else the last frame's plus a frame's time
+  u64 time = stream.audioCarry;
+  for(auto [at, stamp] : stamps) if(at <= from) time = stamp;
+  if(time == NoTime) time = stream.audioTime == NoTime ? 0 : stream.audioTime + AudioFrameTicks;
+  stream.audioCarry = NoTime;
+  for(auto [at, stamp] : stamps) if(at > from && at < from + bytes) stream.audioCarry = stamp;
+  memory.copyIn(buffer, sound.data() + from, bytes);
+  u32 words[4] = {u32(time >> 32), u32(time), u32(time >> 32), u32(time)};
+  for(u32 n = 0; n < 4; n++) memory.write(4, au + n * 4, words[n]);
+  memory.write(4, au + 20, bytes);
+  if(memory.reaches(arg(3), 4)) memory.write(4, arg(3), buffer);
+  stream.audioTime = time;
+  u32 used = from + bytes;
+  if(used <= queued) {
+    stream.audio.erase(stream.audio.begin(), stream.audio.begin() + used);
+    std::vector<std::pair<u32, u64>> kept;
+    for(auto [at, stamp] : stream.audioStamps) if(at >= used) kept.push_back({at - used, stamp});
+    stream.audioStamps = kept;
+  } else {
+    stream.audioTaken += used - queued;
+    stream.audio.clear();
+    stream.audioStamps.clear();
+  }
+  result(0);
+}
+
 auto Kernel::sceMpegGetPcmAu() -> void { result(MpegErrorNoData); }
-auto Kernel::sceMpegAvcDecodeMode() -> void { result(0); }
+
+//(handle, mode): the pixel format decoded pictures are converted to (pspsdk's SCE_MPEG_AVC_FORMAT_*: 5650, 5551,
+//4444, or 8888, the default), the mode's second word; -1 leaves it as it is.
+auto Kernel::sceMpegAvcDecodeMode() -> void {
+  u32 library = mpegLibrary(arg(0));
+  if(library && memory.reaches(arg(1), 8)) {
+    u32 format = memory.read(4, arg(1) + 4);
+    if(format <= 3) memory.write(4, library + LibraryPixels, format + 1);
+  }
+  result(0);
+}
+
 auto Kernel::sceMpegChangeGetAuMode() -> void { result(0); }
 
 //(handle, where to put the ES buffer's size, and the output's): ATRAC3plus's, as video/mpeg/basic recorded.
@@ -323,35 +532,111 @@ auto Kernel::sceMpegQueryAtracEsSize() -> void {
   result(0);
 }
 
+//A picture converted into the game's buffer, frameWidth pixels a row, in the library's pixel format: the part of it
+//from (x, y), width by height (0: the rest of it), its colours from the decoder's Y, Cb and Cr by ITU-R BT.601's
+//equations for video's range (Y 16-235, colours 16-240), rounded to the nearest; alpha opaque. (Whether the PSP's
+//Media Engine rounds the same isn't measured.)
+auto Kernel::mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 frameWidth, u32 x, u32 y, u32 width,
+                         u32 height) -> void {
+  u32 pictureWidth = stream.shownWidth, pictureHeight = stream.shownHeight;
+  if(stream.shown.empty() || x >= pictureWidth || y >= pictureHeight || !frameWidth) return;
+  if(!width || width > pictureWidth - x) width = pictureWidth - x;
+  if(!height || height > pictureHeight - y) height = pictureHeight - y;
+  u32 format = memory.read(4, library + LibraryPixels);
+  format = format ? format - 1 : 3;
+  u32 bytes = format == 3 ? 4 : 2;
+  const u8* luma = stream.shown.data();
+  const u8* blue = luma + pictureWidth * pictureHeight;
+  const u8* red = blue + (pictureWidth + 1) / 2 * ((pictureHeight + 1) / 2);
+  u32 half = (pictureWidth + 1) / 2;
+  std::vector<u8> row(width * bytes);
+  for(u32 line = 0; line < height; line++) {
+    u32 address = destination + line * frameWidth * bytes;
+    if(!memory.reaches(address, width * bytes)) break;
+    u32 py = y + line;
+    for(u32 column = 0; column < width; column++) {
+      u32 px = x + column;
+      s32 c = luma[py * pictureWidth + px] - 16;
+      s32 d = blue[py / 2 * half + px / 2] - 128, e = red[py / 2 * half + px / 2] - 128;
+      u32 r = std::clamp((298 * c + 409 * e + 128) >> 8, 0, 255);
+      u32 g = std::clamp((298 * c - 100 * d - 208 * e + 128) >> 8, 0, 255);
+      u32 b = std::clamp((298 * c + 516 * d + 128) >> 8, 0, 255);
+      u32 pixel = 0;
+      if(format == 0) pixel = r >> 3 | (g >> 2) << 5 | (b >> 3) << 11;
+      if(format == 1) pixel = r >> 3 | (g >> 3) << 5 | (b >> 3) << 10 | 0x8000;
+      if(format == 2) pixel = r >> 4 | (g >> 4) << 4 | (b >> 4) << 8 | 0xf000;
+      if(format == 3) pixel = r | g << 8 | b << 16 | 0xff00'0000;
+      for(u32 n = 0; n < bytes; n++) row[column * bytes + n] = pixel >> n * 8;
+    }
+    memory.copyIn(address, row.data(), row.size());
+  }
+}
+
 //A picture decoded from an access unit (sceMpegAvcDecode, sceMpegAvcDecodeYCbCr): the access unit used up (its size
 //0, as video/mpeg/basic recorded), and a picture from the second on, the decoder holding one back (basic's first
-//gave none): where to put whether one came gets 1 then, else 0. No picture is drawn: the buffer is left as it was.
-auto Kernel::mpegDecoded(u32 handle, u32 au, u32 frame) -> void {
+//gave none): where to put whether one came gets 1 then, else 0. The picture that comes is the one decoded the time
+//before, converted into pixels (when given: sceMpegAvcDecode's buffer, frameWidth wide) and kept for sceMpegAvcCsc.
+//A decoder made afresh after a state was loaded shows no new picture until one it can start from (keyframe()). A
+//picture larger than a state holds (VideoDecoder::MaxSide either way) is passed over.
+auto Kernel::mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWidth) -> void {
   u32 library = mpegLibrary(handle);
-  bool came = false;
+  bool came = false, decoded = false;
   if(library && memory.reaches(au, 24) && memory.read(4, au + 20)) {
     came = memory.read(4, library + LibraryHolding);
     memory.write(4, library + LibraryHolding, 1);
     memory.write(4, au + 20, 0);
+    auto& stream = mpegStreams[library];
+    if(came) stream.shown = stream.held, stream.shownWidth = stream.heldWidth, stream.shownHeight = stream.heldHeight;
+    if(!stream.video && videoDecoders) stream.video = videoDecoders();
+    if(stream.video && !stream.unit.empty()) {
+      if(stream.keyframe && keyframe(stream.unit)) stream.keyframe = false;
+      decoded = true;
+      auto& picture = stream.video->picture();
+      if(stream.video->decode(stream.unit.data(), stream.unit.size()) && !stream.keyframe && picture.width
+         && picture.height && picture.width <= VideoDecoder::MaxSide && picture.height <= VideoDecoder::MaxSide) {
+        packPicture(picture, stream.held);
+        stream.heldWidth = picture.width;
+        stream.heldHeight = picture.height;
+      }
+    }
+    if(came && pixels) mpegConvert(stream, library, pixels, frameWidth, 0, 0, 0, 0);
   }
   if(memory.reaches(frame, 4)) memory.write(4, frame, came);
   result(0);
+  if(decoded) codecWait(MpegDecodeMicroseconds);
 }
 
-//(handle, access unit, frame width, buffer, where to put whether a picture came).
+//(handle, access unit, frame width, where the buffer's address is, where to put whether a picture came).
 auto Kernel::sceMpegAvcDecode() -> void {
-  mpegDecoded(arg(0), arg(1), arg(4));
+  u32 pixels = memory.reaches(arg(3), 4) ? memory.read(4, arg(3)) : 0;
+  mpegDecoded(arg(0), arg(1), arg(4), pixels, arg(2));
 }
 
-//(handle, frame width, buffer, where to put its status): nothing left to show.
+//(handle, frame width, where the buffer's address is, where to put its status): the picture the decoder held back,
+//given back at the movie's end: converted, and the status 1; none held, 0.
 auto Kernel::sceMpegAvcDecodeStop() -> void {
-  if(arg(3)) memory.write(4, arg(3), 0);
+  u32 library = mpegLibrary(arg(0));
+  bool held = library && memory.read(4, library + LibraryHolding);
+  if(held) {
+    memory.write(4, library + LibraryHolding, 0);
+    auto& stream = mpegStreams[library];
+    stream.shown = stream.held, stream.shownWidth = stream.heldWidth, stream.shownHeight = stream.heldHeight;
+    u32 pixels = memory.reaches(arg(2), 4) ? memory.read(4, arg(2)) : 0;
+    if(pixels) mpegConvert(stream, library, pixels, arg(1), 0, 0, 0, 0);
+  }
+  if(memory.reaches(arg(3), 4)) memory.write(4, arg(3), held);
   result(0);
 }
 
 //(handle): the decoder emptied: the next picture is held back again.
 auto Kernel::sceMpegAvcDecodeFlush() -> void {
-  if(u32 library = mpegLibrary(arg(0))) memory.write(4, library + LibraryHolding, 0);
+  if(u32 library = mpegLibrary(arg(0))) {
+    memory.write(4, library + LibraryHolding, 0);
+    if(auto found = mpegStreams.find(library); found != mpegStreams.end()) {
+      found->second.held.clear();
+      if(found->second.video) found->second.video->reset();
+    }
+  }
   result(0);
 }
 
@@ -368,14 +653,22 @@ auto Kernel::sceMpegAvcQueryYCbCrSize() -> void {
 //(handle, mode, width, height, buffer): the buffer set up for decoded frames.
 auto Kernel::sceMpegAvcInitYCbCr() -> void { result(0); }
 
-//(handle, access unit, buffer, where to put whether a picture came).
+//(handle, access unit, where the YCbCr buffer's address is, where to put whether a picture came): the picture kept
+//for sceMpegAvcCsc, which converts it (the YCbCr buffer is the Media Engine's to fill: nothing is written there).
 auto Kernel::sceMpegAvcDecodeYCbCr() -> void {
-  mpegDecoded(arg(0), arg(1), arg(3));
+  mpegDecoded(arg(0), arg(1), arg(3), 0, 0);
 }
 
-//(handle, buffer, where to put its status): nothing left to show.
+//(handle, buffer, where to put its status): the held picture given back, as sceMpegAvcDecodeStop does.
 auto Kernel::sceMpegAvcDecodeStopYCbCr() -> void {
-  if(arg(2)) memory.write(4, arg(2), 0);
+  u32 library = mpegLibrary(arg(0));
+  bool held = library && memory.read(4, library + LibraryHolding);
+  if(held) {
+    memory.write(4, library + LibraryHolding, 0);
+    auto& stream = mpegStreams[library];
+    stream.shown = stream.held, stream.shownWidth = stream.heldWidth, stream.shownHeight = stream.heldHeight;
+  }
+  if(memory.reaches(arg(2), 4)) memory.write(4, arg(2), held);
   result(0);
 }
 
@@ -385,10 +678,58 @@ auto Kernel::sceMpegAvcDecodeStopYCbCr() -> void {
 //starts.
 auto Kernel::sceMpegAvcDecodeDetail() -> void { result(0); }
 
-//(handle, YCbCr buffer, range, frame width, destination): a frame converted to pixels: no picture was decoded, the
-//destination is left as it is.
-auto Kernel::sceMpegAvcCsc() -> void { result(0); }
+//(handle, YCbCr buffer, the part to convert, frame width, destination): the picture sceMpegAvcDecodeYCbCr gave last,
+//converted into the destination, frame width pixels a row. The part: four words, its left, top, width and height in
+//pixels (Burnout Legends gives 0, 0, 480, 272); all zeros (Space Invaders Extreme's), or a part past the picture,
+//means the whole picture.
+auto Kernel::sceMpegAvcCsc() -> void {
+  u32 library = mpegLibrary(arg(0)), range = arg(2);
+  if(library) {
+    if(auto found = mpegStreams.find(library); found != mpegStreams.end()) {
+      u32 part[4] = {};
+      if(memory.reaches(range, 16)) for(u32 n = 0; n < 4; n++) part[n] = memory.read(4, range + n * 4);
+      mpegConvert(found->second, library, arg(4), arg(3), part[0], part[1], part[2], part[3]);
+    }
+  }
+  result(0);
+}
 
-//(handle, access unit, buffer, initialized): ATRAC3plus sound from a stream that has none: "no data"'s error, as
-//video/mpeg/basic recorded (0x807f00fd).
-auto Kernel::sceMpegAtracDecode() -> void { result(0x807f'00fd); }
+//(handle, access unit, buffer, initialized): the sound access unit's ATRAC3plus frame decoded into 2048 stereo
+//16-bit samples (mono doubled), 0x2000 bytes; the access unit used up. With none: 0x807f00fd, as video/mpeg/basic
+//recorded for its movie, which has no sound. A frame that won't decode gives silence. A decoder made afresh (after
+//a state was loaded) is primed first with the frame decoded last, as atrac.cpp's are.
+auto Kernel::sceMpegAtracDecode() -> void {
+  u32 library = mpegLibrary(arg(0)), au = arg(1), output = arg(2);
+  if(!library || !memory.reaches(au, 24) || !audioDecoders) return result(0x807f'00fd);
+  u32 bytes = memory.read(4, au + 20), buffer = memory.read(4, au + 16);
+  if(bytes < 8 || bytes > 0x840 || !memory.reaches(buffer, bytes)) return result(0x807f'00fd);
+  std::vector<u8> unit(bytes);
+  memory.copyOut(unit.data(), buffer, bytes);
+  memory.write(4, au + 20, 0);
+  auto& stream = mpegStreams[library];
+  u32 parameters = unit[2] << 8 | unit[3], frameBytes = ((parameters & 0x3ff) + 1) * 8;
+  u32 channels = (parameters >> 10 & 7) == 1 ? 1 : 2;
+  std::vector<s16> samples(2048 * 2), out(2048 * 2);
+  if(!stream.sound) {
+    AudioDecoder::Format format;
+    format.codec = AudioDecoder::Codec::Atrac3plus;
+    format.channels = channels;
+    format.frameBytes = frameBytes;
+    stream.sound = audioDecoders(format);
+    if(stream.sound && !stream.soundLast.empty()) {
+      stream.sound->decode(stream.soundLast.data(), stream.soundLast.size(), samples.data(), 2048);
+    }
+  }
+  s32 made = -1;
+  if(stream.sound && unit[0] == 0x0f && unit[1] == 0xd0 && 8 + frameBytes <= bytes) {
+    made = stream.sound->decode(unit.data() + 8, frameBytes, samples.data(), 2048);
+    stream.soundLast.assign(unit.begin() + 8, unit.begin() + 8 + frameBytes);
+  }
+  for(s32 n = 0; n < std::min(made, 2048); n++) {
+    out[n * 2] = samples[n * channels];
+    out[n * 2 + 1] = samples[n * channels + channels - 1];
+  }
+  if(memory.reaches(output, 0x2000)) memory.copyIn(output, out.data(), 0x2000);
+  result(0);
+  codecWait(MpegDecodeMicroseconds);
+}

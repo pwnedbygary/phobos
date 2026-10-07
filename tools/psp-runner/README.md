@@ -17,6 +17,12 @@ The binary ends up in the build folder, named `psp-runner` (by default
 nall, sljit, libchdr, zlib, libco), the same defines, its objects kept between builds in the
 build folder so a change to one file rebuilds only it.
 
+It also builds in FFmpeg's decoders for the games' music and movies, as the tests and Phobos's
+builds do: `thirdparty/ffmpeg/build.sh host` downloads FFmpeg's release once (it needs curl, xz,
+make and, on x86-64, nasm for speed) and keeps its build in the repository's `.cache/ffmpeg`.
+`PSP_FFMPEG=0 tools/psp-runner/build.sh` builds without them: the games' movies then stay black
+and their ATRAC music silent.
+
 ## Running a game
 
 ```sh
