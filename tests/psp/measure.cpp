@@ -50,14 +50,19 @@ static const MeasureFile measureFiles3[] = {
   {"depth-layout-1", 512, 256}, {"depth-layout-2", 512, 256}, {"depth-layout-3", 512, 256},
 };
 
-//Round 4's (part 29: lines, bounding boxes and DXT textures; lines-depth is depths, read through VRAM's fourth copy).
+//Round 4's (part 29: lines, bounding boxes and DXT textures; part 33: curved surfaces; lines-depth and the curves'
+//-depths files are depths, read through VRAM's fourth copy).
 static const MeasureFile measureFiles4[] = {
   {"lines-shallow", 256, 256}, {"lines-shallow-reversed", 256, 256}, {"lines-steep", 256, 256},
   {"lines-steep-reversed", 256, 256}, {"lines-diagonal", 256, 256}, {"lines-rising", 256, 256},
   {"lines-level", 256, 256}, {"lines-upright", 256, 256}, {"lines-smooth", 256, 256}, {"lines-short", 256, 256},
   {"lines-strips", 256, 256}, {"lines-colors", 256, 256}, {"lines-depth", 256, 256}, {"lines-texels", 256, 256},
   {"lines-3d", 256, 256}, {"bbox", 256, 256}, {"dxt1-colors", 256, 64}, {"dxt3-colors", 256, 64},
-  {"dxt5-colors", 256, 64}, {"dxt-layout", 256, 32},
+  {"dxt5-colors", 256, 64}, {"dxt-layout", 256, 32}, {"curves-bezier", 256, 256}, {"curves-bezier-depths", 256, 256},
+  {"curves-places", 256, 256}, {"curves-spline", 256, 256}, {"curves-spline-depths", 256, 256},
+  {"curves-texels", 256, 256}, {"curves-made-up", 256, 256}, {"curves-lit", 256, 256}, {"curves-culling", 256, 256},
+  {"curves-joins", 256, 256}, {"curves-count", 256, 256}, {"curves-count-128", 256, 256},
+  {"curves-count-200", 256, 256}, {"curves-count-255", 256, 256},
 };
 
 static auto readWords(const std::filesystem::path& path) -> std::vector<u32> {
@@ -177,7 +182,7 @@ static auto pspMeasure() -> void {
   waitFor(m, 120, [] { return false; });
   CHECK(std::filesystem::last_write_time(results / "blend-source.bin") == written, true);
   press(m, Cross);
-  //the GE's round 3 (the curved surfaces stay empty: the core doesn't draw them yet)
+  //the GE's round 3
   move(m, GeRound2Line, GeRound3Line);
   press(m, Cross);
   CHECK(waitFor(m, 3000, exists(results / "depth-layout-3.bin")), true);
@@ -190,7 +195,7 @@ static auto pspMeasure() -> void {
   //the GE's round 4
   move(m, ProbesLine, GeRound4Line);
   press(m, Cross);
-  CHECK(waitFor(m, 3000, exists(results / "dxt-layout.bin")), true);
+  CHECK(waitFor(m, 3000, exists(results / "curves-count-255.bin")), true);
   press(m, Cross);
   //leaving
   move(m, GeRound4Line, LeaveLine);

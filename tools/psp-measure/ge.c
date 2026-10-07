@@ -11,8 +11,9 @@
 //sprite taken apart, curved surfaces, and the depth buffer's layout through VRAM's four copies. Round 4 records what
 //Phobos's core drew by rules of its own in part 29: which pixels lines light (ends at every sixteenth, short lines,
 //strips' joints, anti-aliasing), colors, depth and texels along them, lines in 3D and cut at the near plane; which
-//bounding boxes the GE takes to be in sight; and compressed (DXT) textures' colors, alphas and block order. Each
-//round is picked from the menu (main.c).
+//bounding boxes the GE takes to be in sight; compressed (DXT) textures' colors, alphas and block order; and, in part
+//33, curved surfaces' vertices: where they fall, their colors, depths and texture coordinates, the texture
+//coordinates and normals the GE makes up, culling, and how many. Each round is picked from the menu (main.c).
 //
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/ge/<test>.bin: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's pixels in the
@@ -1659,6 +1660,301 @@ static void dxtLayout(const char* name) {
   saveTarget(name, 256, 32, 0);
 }
 
+//-- curved surfaces' vertices (docs/psp-core.md, part 33)
+
+//A 4x4 grid of control points in a unit square (x right, y down), bowed and twisted, so that its vertices fall
+//between whole pixels; each point's color, depth and texture coordinates chosen so that theirs fall between whole
+//levels and texels too. A spline's 5x5 points (curvesSpline) take a fifth row and column of their own.
+static const float curveGrid[4][4][2] = {
+  {{0, 0}, {0.3125f, -0.0625f}, {0.6875f, 0.0625f}, {1, 0}},
+  {{-0.0625f, 0.3333f}, {0.4375f, 0.25f}, {0.5625f, 0.4167f}, {1.0625f, 0.3125f}},
+  {{0.0625f, 0.6875f}, {0.3125f, 0.75f}, {0.75f, 0.5625f}, {0.9375f, 0.6667f}},
+  {{0, 1}, {0.2917f, 1.0625f}, {0.6875f, 0.9375f}, {1, 1}},
+};
+static unsigned int curveColor(int i, int j) {  //i and j up to 4
+  return 0xff000000u | (i * 50 + j * 9) | (j * 50 + i * 11) << 8 | (255 - i * 30 - j * 25) << 16;
+}
+static float curveDepth(int i, int j) { return 311 + 6007 * i + 7919 * j + 977 * ((i * 3 + j * 5) % 7); }
+
+typedef struct { unsigned int color; float x, y, z; } ColorVertex;
+typedef struct { float x, y, z; } PlainVertex;
+typedef struct { float nx, ny, nz, x, y, z; } NormalVertex;
+enum {
+  ColorVertexType = GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+  ColorVertexType3D = GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+  PlainVertexType3D = GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+  NormalVertexType3D = GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+};
+
+//curveGrid's points in through mode (positions pixels, z the depth itself), size pixels square from (x, y), each in
+//its curveColor and at its curveDepth, texture coordinates u = 75i + 7j + 3.3 and v = 75j + 5i + 1.7 (texels).
+static FloatVertex* curvePoints(float x, float y, float size) {
+  FloatVertex* v = sceGuGetMemory(16 * sizeof(FloatVertex));
+  for(int j = 0; j < 4; j++) {
+    for(int i = 0; i < 4; i++) {
+      v[j * 4 + i] = (FloatVertex){75 * i + 7 * j + 3.3f, 75 * j + 5 * i + 1.7f, curveColor(i, j),
+                                   x + curveGrid[j][i][0] * size, y + curveGrid[j][i][1] * size, curveDepth(i, j)};
+    }
+  }
+  return v;
+}
+
+//The depth buffer's first 256x256 values through VRAM's fourth copy, which reads it in order (round 3's
+//depth-layout-3), as words.
+static void saveDepthInOrder(const char* name) {
+  volatile unsigned short* depths = (volatile unsigned short*)(0x44000000 + 3 * 0x200000 + Depth);
+  for(int y = 0; y < 256; y++) {
+    for(int x = 0; x < 256; x++) pixels[y * 256 + x] = depths[y * Stride + x];
+  }
+  save(name, pixels, 256 * 256 * 4);
+}
+
+//Through mode, drawn as points (each vertex its pixel, in its own color, its depth written: the depth test passing
+//always) over a depth buffer of 0.
+static void startCurvePoints(void) {
+  fillTarget(zero, 0);
+  for(int n = 0; n < Stride * 256; n++) VRAM16[Depth / 2 + n] = 0;
+  start(GU_PSM_8888);
+  sceGuDepthRange(65535, 0);
+  sceGuEnable(GU_DEPTH_TEST);
+  sceGuDepthFunc(GU_ALWAYS);
+  sceGuDepthMask(GU_FALSE);
+  sceGuPatchPrim(GU_POINTS);
+}
+
+//Bezier patches' vertices: in cell k of 4x4 cells of 64 pixels, curveGrid 56 pixels square cut into k + 1 divisions
+//each way (17x17 vertices in the last), as points: their pixels and colors, or (depths) their depths.
+static void curvesBezier(const char* name, int depths) {
+  if(!beginTest(name)) return;
+  startCurvePoints();
+  for(int k = 0; k < 16; k++) {
+    sceGuPatchDivide(k + 1, k + 1);
+    sceGuDrawBezier(FloatVertexType, 4, 4, 0, curvePoints((k & 3) * 64 + 4, (k >> 2) * 64 + 4, 56));
+  }
+  finishList();
+  if(depths) saveDepthInOrder(name);
+  else saveTarget(name, 256, 256, 0);
+}
+
+//Where the vertices fall, to the sixteenth: in cell (i, j) of 16x16 cells of 16 pixels, curveGrid 12 pixels square
+//cut 5 times along u and 3 along v, its control points i sixteenths of a pixel right and j down. A vertex at x lights
+//pixel x + i / 16 rounded down: the cell where it moves to the next pixel tells its sixteenths.
+static void curvesPlaces(const char* name) {
+  if(!beginTest(name)) return;
+  startCurvePoints();
+  sceGuPatchDivide(5, 3);
+  for(int cell = 0; cell < 256; cell++) {
+    float x = (cell & 15) * 16 + 2 + (cell & 15) / 16.0f, y = (cell >> 4) * 16 + 2 + (cell >> 4) / 16.0f;
+    sceGuDrawBezier(FloatVertexType, 4, 4, 0, curvePoints(x, y, 12));
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Splines' vertices: in cell k (4x4 cells of 64 pixels), 5x5 control points (curveGrid's, a fifth row and column a
+//quarter past its end, 40 pixels to its unit), with each pair of end types: along u k & 3 and along v k >> 2
+//(SPLINE's bits: bit 0 the first end); cut 3 times along u and 2 along v, as points: pixels and colors, or depths.
+static void curvesSpline(const char* name, int depths) {
+  if(!beginTest(name)) return;
+  startCurvePoints();
+  sceGuPatchDivide(3, 2);
+  for(int k = 0; k < 16; k++) {
+    FloatVertex* v = sceGuGetMemory(25 * sizeof(FloatVertex));
+    float x0 = (k & 3) * 64 + 6, y0 = (k >> 2) * 64 + 6;
+    for(int j = 0; j < 5; j++) {
+      for(int i = 0; i < 5; i++) {
+        const float* g = curveGrid[j < 4 ? j : 3][i < 4 ? i : 3];
+        float x = g[0] + (i == 4) * 0.25f, y = g[1] + (j == 4) * 0.25f;
+        v[j * 5 + i] = (FloatVertex){0, 0, curveColor(i, j), x0 + x * 40, y0 + y * 40, curveDepth(i, j)};
+      }
+    }
+    sceGuDrawSpline(FloatVertexType, 5, 5, k & 3, k >> 2, 0, v);
+  }
+  finishList();
+  if(depths) saveDepthInOrder(name);
+  else saveTarget(name, 256, 256, 0);
+}
+
+//Texture coordinates at the vertices: curvesBezier's cells, textured (texel (x, y) is x | y << 8 | 0x80 << 16,
+//replace, nearest, clamped), as points: each takes the texel its u and v (texels, in through mode) fall in.
+static void curvesTexels(const char* name) {
+  if(!beginTest(name)) return;
+  fillTexture(texelXY);
+  startCurvePoints();
+  useTexture(GU_TFX_REPLACE, GU_TCC_RGB);
+  for(int k = 0; k < 16; k++) {
+    sceGuPatchDivide(k + 1, k + 1);
+    sceGuDrawBezier(FloatVertexType, 4, 4, 0, curvePoints((k & 3) * 64 + 4, (k >> 2) * 64 + 4, 56));
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Texture coordinates made up for a vertex type without them: in 3D (identity matrices) the texture as curvesTexels',
+//its 256 texels across u's 0 to 1 (TEX_SCALE 1), as points in rows 0-127 and as triangles below. In cell k of 4x2
+//cells of 64 pixels: a flat Bezier patch (k 0), one of 2x2 patches (7x7 points, 1), of 3x1 (10x4, 2); a 5x5 spline
+//with both ends open (3), both closed (4), the first open (5); the first again with TEX_SCALE 0.5 and TEX_OFFSET 0.25
+//(6), and in through mode (7); each cut 4 times per patch or piece. The texels tell whether u runs 0 to 1 across the
+//surface, across each patch, or otherwise.
+static void curvesMadeUp(const char* name) {
+  static const int counts[8][2] = {{4, 4}, {7, 7}, {10, 4}, {5, 5}, {5, 5}, {5, 5}, {4, 4}, {4, 4}};
+  static const int ends[8] = {0, 0, 0, 3, 0, 1, 0, 0};
+  if(!beginTest(name)) return;
+  fillTexture(texelXY);
+  start3D(&identity, 1);
+  useTexture(GU_TFX_REPLACE, GU_TCC_RGB);
+  sceGuDisable(GU_DEPTH_TEST);
+  sceGuPatchDivide(4, 4);
+  for(int half = 0; half < 2; half++) {
+    sceGuPatchPrim(half ? GU_TRIANGLE_STRIP : GU_POINTS);
+    for(int k = 0; k < 8; k++) {
+      int ucount = counts[k][0], vcount = counts[k][1];
+      float x0 = (k & 3) * 64 + 4, y0 = half * 128 + (k >> 2) * 64 + 4;
+      ColorVertex* v = sceGuGetMemory(ucount * vcount * sizeof(ColorVertex));
+      for(int j = 0; j < vcount; j++) {
+        for(int i = 0; i < ucount; i++) {
+          float x = x0 + 56.0f * i / (ucount - 1), y = y0 + 56.0f * j / (vcount - 1);
+          v[j * ucount + i] = (ColorVertex){0xffffffff, k == 7 ? x : ndcX(x), k == 7 ? y : ndcY(y), 0};
+        }
+      }
+      sceGuTexScale(k == 6 ? 0.5f : 1, k == 6 ? 0.5f : 1);
+      sceGuTexOffset(k == 6 ? 0.25f : 0, k == 6 ? 0.25f : 0);
+      if(k == 7) sceGuDrawBezier(ColorVertexType, ucount, vcount, 0, v);
+      else if(k >= 3 && k <= 5) sceGuDrawSpline(ColorVertexType3D, ucount, vcount, ends[k], ends[k], 0, v);
+      else sceGuDrawBezier(ColorVertexType3D, ucount, vcount, 0, v);
+    }
+  }
+  sceGuTexScale(1, 1);
+  sceGuTexOffset(0, 0);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Normals made from a surface's slopes, for a vertex type without them: lit points in 3D (identity matrices; a white
+//directional light and material, diffuse alone), each vertex as bright as the cosine between its normal and the
+//light. In cell k of 4x4 cells of 64 pixels, curveGrid 56 pixels square, its middle points 0.25 toward the camera,
+//cut 6 times each way: the light along +z, +x, +y and -z (k & 3), sceGuPatchFrontFace GU_CW or GU_CCW (k & 4), and
+//(k 8-15) the same with each control point's normal given ((i - 1.5) / 4, (j - 1.5) / 4, 0.8), for comparison.
+static void curvesLit(const char* name) {
+  static const ScePspFVector3 lights[4] = {{0, 0, 1}, {1, 0, 0}, {0, 1, 0}, {0, 0, -1}};
+  if(!beginTest(name)) return;
+  beginLit();
+  sceGuDisable(GU_DEPTH_TEST);
+  sceGuLightColor(0, GU_DIFFUSE, 0xffffff);
+  sceGuModelColor(0, 0, 0xffffff, 0);
+  sceGuPatchPrim(GU_POINTS);
+  sceGuPatchDivide(6, 6);
+  for(int k = 0; k < 16; k++) {
+    sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE, &lights[k & 3]);
+    sceGuPatchFrontFace(k & 4 ? GU_CCW : GU_CW);
+    float x0 = (k & 3) * 64 + 4, y0 = (k >> 2) * 64 + 4;
+    NormalVertex* v = sceGuGetMemory(16 * sizeof(NormalVertex));
+    for(int j = 0; j < 4; j++) {
+      for(int i = 0; i < 4; i++) {
+        float z = (i == 1 || i == 2) && (j == 1 || j == 2) ? 0.25f : 0;
+        v[j * 4 + i] = (NormalVertex){(i - 1.5f) / 4, (j - 1.5f) / 4, 0.8f, ndcX(x0 + curveGrid[j][i][0] * 56),
+                                      ndcY(y0 + curveGrid[j][i][1] * 56), z};
+      }
+    }
+    if(k < 8) {
+      PlainVertex* p = sceGuGetMemory(16 * sizeof(PlainVertex));
+      for(int n = 0; n < 16; n++) p[n] = (PlainVertex){v[n].x, v[n].y, v[n].z};
+      sceGuDrawBezier(PlainVertexType3D, 4, 4, 0, p);
+    } else {
+      sceGuDrawBezier(NormalVertexType3D, 4, 4, 0, v);
+    }
+  }
+  sceGuDisable(GU_LIGHTING);
+  sceGuDisable(GU_LIGHT0);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Culling: in cell k of 4x4 cells of 64 pixels, a flat white patch as triangles (a strip's first triangle running
+//counterclockwise on the screen, x running right along u and y down along v), with GU_CULL_FACE on (k & 1),
+//sceGuFrontFace GU_CCW (k & 2; else GU_CW), GU_PATCH_CULL_FACE on (k & 4) and sceGuPatchFrontFace GU_CCW (k & 8;
+//else GU_CW): which cells are drawn tells which of the four cull a patch's triangles, and which way round.
+static void curvesCulling(const char* name) {
+  if(!beginTest(name)) return;
+  start3D(&identity, 1);
+  sceGuDisable(GU_DEPTH_TEST);
+  sceGuPatchPrim(GU_TRIANGLE_STRIP);
+  sceGuPatchDivide(3, 3);
+  for(int k = 0; k < 16; k++) {
+    if(k & 1) sceGuEnable(GU_CULL_FACE);
+    else sceGuDisable(GU_CULL_FACE);
+    sceGuFrontFace(k & 2 ? GU_CCW : GU_CW);
+    if(k & 4) sceGuEnable(GU_PATCH_CULL_FACE);
+    else sceGuDisable(GU_PATCH_CULL_FACE);
+    sceGuPatchFrontFace(k & 8 ? GU_CCW : GU_CW);
+    float x0 = (k & 3) * 64 + 4, y0 = (k >> 2) * 64 + 4;
+    ColorVertex* v = sceGuGetMemory(16 * sizeof(ColorVertex));
+    for(int j = 0; j < 4; j++) {
+      for(int i = 0; i < 4; i++) v[j * 4 + i] = (ColorVertex){0xffffffff, ndcX(x0 + i * 18), ndcY(y0 + j * 18), 0};
+    }
+    sceGuDrawBezier(ColorVertexType3D, 4, 4, 0, v);
+  }
+  sceGuDisable(GU_CULL_FACE);
+  sceGuDisable(GU_PATCH_CULL_FACE);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Which vertices a surface's strips join across patches, in rows of 16 pixels: a Bezier of 2 patches along u (7x4
+//points, rows 8, 10, 12, 14) and a spline of 5x4 with open ends (the others), cut twice per patch or piece (rows
+//8-11) or 3 times along u and once along v (rows 12-15), as lines (rows 8, 9, 12, 13) or flat-shaded triangles. (Rows
+//0-7 are left empty: these were once in one picture with curves-count's, and kept where they were.)
+static void curvesJoins(const char* name) {
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  for(int row = 8; row < 16; row++) {
+    int spline = row & 1, ucount = spline ? 5 : 7;
+    sceGuPatchPrim(row & 2 ? GU_TRIANGLE_STRIP : GU_LINE_STRIP);
+    sceGuShadeModel(row & 2 ? GU_FLAT : GU_SMOOTH);
+    if(row < 12) sceGuPatchDivide(2, 2);
+    else sceGuPatchDivide(3, 1);
+    ColorVertex* v = sceGuGetMemory(ucount * 4 * sizeof(ColorVertex));
+    for(int j = 0; j < 4; j++) {
+      for(int i = 0; i < ucount; i++) {
+        unsigned int color = 0xff000000u | (40 + i * 30) | (40 + j * 60) << 8 | (row * 12) << 16;
+        v[j * ucount + i] = (ColorVertex){color, 8 + i * 220.0f / (ucount - 1), row * 16 + 1 + j * 14 / 3.0f, 0};
+      }
+    }
+    if(spline) sceGuDrawSpline(ColorVertexType, ucount, 4, 3, 3, 0, v);
+    else sceGuDrawBezier(ColorVertexType, ucount, 4, 0, v);
+  }
+  sceGuShadeModel(GU_SMOOTH);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//How many vertices: in row n of 16 pixels (first to last), a flat patch 240 pixels wide (through mode) cut into
+//divisions[n] along u and once along v, as points added up (each adds 1 to its pixel: blending with fixed factors),
+//its two rows of vertices at y + 4 and y + 12: a row's sum is how many vertices a row of the patch has. Past
+//pspsdk's 64 the GE might stall, so those run last, a few divisions to a test (and a display list) each: a test
+//that stops the PSP twice is given up on alone (beginTest), and the ones before it are already saved.
+static void curvesCount(const char* name, int first, int last) {
+  static const int divisions[8] = {16, 63, 64, 65, 100, 128, 200, 255};
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  sceGuEnable(GU_BLEND);
+  sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xffffff, 0xffffff);
+  sceGuPatchPrim(GU_POINTS);
+  for(int row = first; row <= last; row++) {
+    ColorVertex* v = sceGuGetMemory(16 * sizeof(ColorVertex));
+    for(int j = 0; j < 4; j++) {
+      for(int i = 0; i < 4; i++) v[j * 4 + i] = (ColorVertex){0xff010101, 8 + i * 80, row * 16 + 4 + j * 8 / 3.0f, 0};
+    }
+    sceGuPatchDivide(divisions[row], 1);
+    sceGuDrawBezier(ColorVertexType, 4, 4, 0, v);
+  }
+  sceGuDisable(GU_BLEND);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
 static void writeManifest4(void) {
   char path[320];
   snprintf(path, sizeof(path), "%s/manifest4.txt", folder);
@@ -1671,6 +1967,12 @@ static void writeManifest4(void) {
     "texture's colors at the left, white blended by its alpha from x 128); dxt-layout 256x32.\n"
     "lines-*: lines in through mode (lines-3d through the matrices), in 16x16 cells at every sixteenth of a pixel.\n"
     "bbox: 256 cells, each white if the GE took its bounding box to be in sight (the cases are in ge.c).\n"
+    "curves-*: curved surfaces (BEZIER, SPLINE), mostly drawn as points, a vertex each: curves-bezier and -spline\n"
+    "their pixels and colors, -bezier-depths and -spline-depths the depth buffer's 256x256 values there (low half,\n"
+    "through VRAM's fourth copy); -places the vertices' sixteenths, -texels their texture coordinates, -made-up\n"
+    "texture coordinates a vertex type lacks, -lit normals made from the slopes, -culling, -joins which\n"
+    "vertices strips join, -count how many vertices at 16-65 divisions (-count-128 at 100 and 128, -count-200 and\n"
+    "-count-255 at those).\n"
     "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
   sceIoWrite(file, text, sizeof(text) - 1);
   sceIoClose(file);
@@ -1698,6 +2000,20 @@ static void round4(void) {
   dxtColors("dxt3-colors", GU_PSM_DXT3);
   dxtColors("dxt5-colors", GU_PSM_DXT5);
   dxtLayout("dxt-layout");
+  curvesBezier("curves-bezier", 0);
+  curvesBezier("curves-bezier-depths", 1);
+  curvesPlaces("curves-places");
+  curvesSpline("curves-spline", 0);
+  curvesSpline("curves-spline-depths", 1);
+  curvesTexels("curves-texels");
+  curvesMadeUp("curves-made-up");
+  curvesLit("curves-lit");
+  curvesCulling("curves-culling");
+  curvesJoins("curves-joins");
+  curvesCount("curves-count", 0, 3);
+  curvesCount("curves-count-128", 4, 5);
+  curvesCount("curves-count-200", 6, 6);
+  curvesCount("curves-count-255", 7, 7);
 }
 
 //---- the rounds

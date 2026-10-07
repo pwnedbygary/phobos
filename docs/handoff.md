@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: the GPU renderers designed, and a Vulkan prototype — 2026-10-07
 
-Branch `cursor/psp-gpu-vulkan-2b67`, on top of `cursor/psp-psmf-2b67` (#160, part 31); local only, not pushed.
+Branch `cursor/psp-gpu-vulkan-2b67`, on top of `cursor/psp-ge-curves-2b67` (#162, part 33).
 docs/psp-gpu-renderers.md is the design, docs/psp-core.md's part 34 the prototype. The owner's request: Vulkan and
 OpenGL renderers for speed, as accurate as possible.
 - **The design**: compute shaders doing, for every pixel, exactly what the software renderer does (paraLLEl-RDP's
@@ -62,6 +62,104 @@ OpenGL renderers for speed, as accurate as possible.
   `probe()`'s null check, `hostFuses()`'s note on matching floating-point flags, and `compile.sh --check` comparing
   fresh SPIR-V with `shaders.hpp`. M1, RP6 and Mesa's lavapipe (Docker): all exact again. Checks: tests/psp 295
   groups (ASan, UBSan), tests/psp/ares 294 checks, none failed.
+
+## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
+
+Branch `cursor/psp-ge-curves-2b67`, on top of `cursor/psp-hle-games6-2b67` (#161, part 32; parts 31 and 30, #160
+and #159, underneath). docs/psp-core.md, part 33, describes it.
+- **The GE** (`ares/psp/ge/curves.cpp`): BEZIER and SPLINE drawn, the control points read as PRIM reads vertices;
+  Bézier patches of 4x4 points (3N + 1 a way, the rest left out), cubic B-splines with open or closed ends (SPLINE's
+  bits 16-19), PATCH_DIVISION per patch or piece (0 as 1), PATCH_PRIMITIVE's strips, line strips and points;
+  positions, colors (rounded up), texture coordinates (made up from 0 to 1 when the vertex type has none), normals
+  (from the slopes when it has none, out of PATCH_FACING's front) and weights blended. The vertices then go through
+  `draw.cpp`'s new `drawVertices()`, PRIM's own path (transform, lighting, culling, jobs, threads, four pixels at a
+  time), which PRIM now uses unchanged. More than 131072 vertices aren't drawn (noted). No state change (version 13).
+- **Against the PSP**: pspautotests' gpu/primitives/bezier and spline pictures covered pixel for pixel (points, flat
+  shading's colors, lines, texels exact; smooth gradients within a level); round 3's Bézier patches the same pixels
+  as the owner's PSP, every channel within a level (bezier-curved 1494 pixels apart, from 42624 undrawn), the
+  closed spline but 4 edge pixels. gpu/exact/curves: 2 of 16 checksums (its knife-edge points and depths need the
+  GE's own fixed-point arithmetic, which nothing tried matched). Found and left: the PSP drops points past z / w ±1
+  even with DEPTH_CLIP_ENABLE on (round 2's 3d-rules, and a third checksum), which the core draws; changing it would
+  change more than curves.
+- **The measuring program's round 4** gained fourteen curve cases (vertices' places to the sixteenth, colors, depths,
+  texels, made-up texture coordinates and normals, culling, counts): built in pspdev's Docker image,
+  `tests/psp/programs/pspmeasure.elf` replaced (README checksum); the PSP's EBOOT is outside the repository at
+  `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256 bc6e90b4...e69343f2).
+- **Checked**: tests/psp 297 groups (6 new) with ASan and UBSan, none failing, "psp measure" identical but for round
+  3's curve files; tests/psp/ares 294 checks; 7 broken versions each caught. Games: none of the 22 here (the
+  handheld's 22) drew a curve in 7200 frames (a probe build); Macross Ace Frontier and its sequels aren't here.
+  Scenes without curves (4 scenes from states, 1 and 7 threads, the builds taking turns): every frame's picture the
+  same; speed within the shared Mac's noise (part 33's table).
+- **Left**: the GE's exact arithmetic (round 4 records it), PATCH_CULL_ENABLE, the made-up normals' direction and
+  texture coordinates (chosen), points past z / w ±1, morphing and skinning on control points.
+- **After review** (independent, clean room and bounds confirmed, builds reproduced): round 4's strip joins are
+  `curves-joins`, run before the counts, and the counts past 64 cuts run last, split three ways (`curves-count-128`,
+  `-200`, `-255`), so a GE stall there loses only its own test (34 files, about 8 MB; ELF and EBOOT rebuilt, the
+  SHA-256 above). `GE::patch()` checks its vertex budget before allocating anything, and gives back
+  `patchVertices`' room past 4096 vertices once drawn. Checks as above, none failing.
+
+## PSP core: the next functions games stop at (run status, ID lists, LoadExec, the memory stick) — 2026-10-07
+
+Branch `cursor/psp-hle-games6-2b67`, on top of `cursor/psp-psmf-2b67` (part 31): commit 17ea2d8a0 (code and tests),
+then the docs (9b580b37c), then the re-run's list (code, tests and docs together), the PSMF branch merged in, then
+the review's fixes (#161).
+docs/psp-core.md, part 32, describes it. Sources: pspsdk's headers, pspautotests' programs and the results they
+recorded on a PSP, uOFW's export lists, the games' own calls; no other emulator's code read.
+The owner's re-run of the compatibility report hadn't landed at first; every function the old report names was here.
+- **ThreadManForUser 0xffc36a14, sceKernelReferThreadRunStatus**: the 44-byte run status (status, priority, wait,
+  wakeups) with real run figures, which threads now keep: time on the CPU, interruptions by calls into the program,
+  preemptions by better threads, releases from waits. The full thread status gives them too.
+- **0x94416130 sceKernelGetThreadmanIdList, 0x57cf62dd sceKernelGetThreadmanIdType**: every kind the kernel has
+  objects of (threads, semaphores, event flags, mailboxes, both pools, pipes, callbacks, alarms, virtual timers,
+  both mutexes; threads by state), the refusals as threads/threads/threadmanidlist and threadmanidtype recorded.
+- **LoadExecForUser's sceKernelLoadExec**: WipEout's next stop (its launcher starts each of its games as a program
+  of its own). The program named starts in the caller's place on a cleared machine, with the argument given, and the
+  call never returns, as modules/loadexec/loader recorded. KDebugForKernel's Kprintf, which that test prints with,
+  is sceKernelPrintf's.
+- **The memory stick's room**: Chili Con Carnage's and Ace Combat X's sizes request (the free space alone) was told
+  there was no save, the kernel looking for one by the request's empty save name; the save measured is msData's, as
+  utility/savedata/sizes recorded, and with none the answer is 0. The size mode (22) now answers. One stick told
+  everywhere (the capacity devctl, both modes): 2 GB with 1,792 MiB free, its bytes within 31 bits (games add sizes
+  up in 32-bit words; pspautotests' PSP had 16 GiB free, which would wrap there).
+- **Part 28's recorded differences**: the event flag's and semaphore's status size words (52, 56; every status now
+  copied as far as its size word says); their creates (NULL names, attributes, any semaphore counts); the lightweight
+  mutex's status (both functions, 64 bytes; the work area's holder 0 while free); the thread status's size by SDK
+  (104, or 108 refusing larger after 2.60) and its exit status (DORMANT, then NOT_DORMANT);
+  sceDisplayAdjustAccumulatedHcount (31 bits, from 0x7fffffff to 0). State version 14.
+- **Checked**: tests/psp 296 groups (7 new) with ASan and UBSan and without, tests/psp/ares 298 checks, none failed;
+  12 broken versions each caught. pspautotests: of threads/ and intr/'s 167 recorded programs, 72 printed exactly
+  what the PSP printed before and 83 after; elsewhere 75 and 76 of 192; none worse; modules/loadexec/loader as
+  recorded. Games on this Mac: Ace Combat X from "Checking Memory Stick" for good to its title and attract movie;
+  Chili Con Carnage from "Not enough free space" to its profile menu; WipEout lists its threads and, through its
+  menus, starts WipEout Pure to its title. The 14 others the same pictures (frames 600 to 3000) and sound, Snoopy vs.
+  the Red Baron's screens the same at moments apart (its two NULL-named semaphores now refused, as recorded).
+- **On the RP6** (build 105300): Chili Con Carnage to its main menu with a new profile, Ace Combat X to the first
+  operation's briefing, WipEout Pure started from the collection to its menu's opening, all at 60 fps.
+- **The re-run's list** (PR #158, `local/psp-rerun`: 77 of 266 games stopping at a missing function, from 149; its
+  state column unreliable): sceDisplayWaitVblankStartMulti and its CB form (0x40f1469c, 0x77ed8b3a), as
+  display/vblankmulti recorded; sceKernelCheckThreadStack (0xd13bde95), as threads/threads/stackfree recorded;
+  sceRtcGetAccumulativeTime (0x011f03c1, and Sony's spelling 0x029ca3b3); sceHprmIsHeadphoneExist (0x7e69eda4) and
+  the rest of sceHprm but its callbacks (nothing plugged in); sceNpDrmSetLicenseeKey (0xa1336091) and the user DRM
+  library's other four, with no DRM (keys taken, a game's files read as they are, their size their own). Names from
+  candidate names' NIDs (pspsdk, uOFW). scePower 0xa85880d0 left out: no name, no recording, no game here calls it.
+  The report's per-game table names no functions, so nothing else could be counted across three games. Checked:
+  tests/psp 299 groups (3 new, one extended) with ASan and UBSan and without, tests/psp/ares 298 checks, none
+  failed, 6 broken versions caught; vblankmulti and stackfree now exactly as the PSP printed; the 14 other games
+  and the three above the same pictures and sound (Snoopy's frame 600 and Chili's sound vary run to run anyway).
+  Five games of the device's not here before: Joint Assault quits at utility module 0x308, Killzone's boot program
+  unloading itself ends the game it started, MotorStorm waits on blanks, Ape Escape and Ridge Racer 2 run on.
+- **Left**: threads' attributes as recorded (0x800000ff added), where a preempted thread goes back in line, the
+  blank's timing (display/hcount's lowest and highest lines), thread-local storage pools, the lightweight mutex's
+  other recorded differences, PARAM.SFO in saves and the list mode's pattern, Chili Con Carnage's logo and menu art
+  drawn in broken stripes (a GE matter), the imported-but-uncalled functions part 32 lists, scePower 0xa85880d0,
+  a program unloading itself while a module it started runs on (Killzone), utility module 0x308 (Joint Assault).
+- **After review** (with #160's PSMF fixes and #159's faster GE merged in; the audit found the clean room held and
+  LoadExec sound): the size mode's needed and overwrite figures are now the shortfall past the free space (0 for
+  any save that fits; their text written only then), not the files' whole size; sceKernelSignalSema's limit check
+  adds in 64 bits (0x7fffffff onto a count of 1 had wrapped past it); a thread's time is no longer counted twice
+  when an interrupt's handler ends the game (a state saved after then failed to load). State version 14 still.
+  Checked: tests/psp 302 groups with the sanitizers and without, tests/psp/ares 298 checks, none failed;
+  each fix undone, caught.
 
 ## PSP core: movies through scePsmf and scePsmfPlayer, in a clean room — 2026-10-07
 

@@ -49,9 +49,12 @@ auto Kernel::eventFlagWaiters(const EventFlag& flag) -> std::vector<Thread*> {
   return waiters;
 }
 
-//(name, attributes, initial bits, options)
+//(name, attributes, initial bits, options). As pspautotests' threads/events/create recorded: a NULL name is ERROR;
+//attributes 0x200 (more than one waiter) and the low byte's are taken, 0x100 and any past 0x2ff refused
+//(ILLEGAL_ATTR: 0x100, 0x122, 0x300, 0x900 and 0x1200 were).
 auto Kernel::sceKernelCreateEventFlag() -> void {
-  if(arg(1) & ~0x3ffu) return result(ErrorIllegalAttribute);
+  if(!arg(0)) return result(ErrorError);
+  if(arg(1) & ~0x2ffu) return result(ErrorIllegalAttribute);
   u32 uid = newUID();
   if(!uid) return result(ErrorNoMemory);
   eventFlags[uid] = {uid, memory.readString(arg(0), 31), arg(1), arg(2), arg(2)};
@@ -178,18 +181,20 @@ auto Kernel::sceKernelPollEventFlag() -> void {
   result(0);
 }
 
-//(flag, info): a SceKernelEventFlagInfo (pspthreadman.h): size, name, attributes, initial and current bits, how many
-//threads wait.
+//(flag, info): a SceKernelEventFlagInfo (pspthreadman.h, 52 bytes): size, name, attributes, initial and current
+//bits, how many threads wait; copied as far as its size word says, the size reading back as 52 (report():
+//pspautotests' threads/events/refer).
 auto Kernel::sceKernelReferEventFlagStatus() -> void {
   auto found = eventFlags.find(arg(0));
   if(found == eventFlags.end()) return result(ErrorUnknownEventFlag);
   auto& flag = found->second;
-  u32 info = arg(1);
-  for(u32 n = 0; n < 32; n++) memory.write(1, info + 4 + n, n < flag.name.size() ? u8(flag.name[n]) : 0);
-  memory.write(4, info + 36, flag.attributes);
-  memory.write(4, info + 40, flag.initial);
-  memory.write(4, info + 44, flag.pattern);
-  memory.write(4, info + 48, eventFlagWaiters(flag).size());
+  Report info(52);
+  info.name(4, flag.name);
+  info.word(36, flag.attributes);
+  info.word(40, flag.initial);
+  info.word(44, flag.pattern);
+  info.word(48, eventFlagWaiters(flag).size());
+  report(arg(1), info);
   result(0);
 }
 
@@ -323,8 +328,8 @@ auto Kernel::resumeWait(Thread& thread) -> void {
     if(auto other = threads.find(thread.waitID); other == threads.end()) ready(thread, ErrorWaitDeleted);
     else if(other->second->status == Status::Dormant) ready(thread, u32(other->second->exitStatus));
     break;
-  case Wait::Vblank:  //it waited for the next vertical blank after its count
-    if(vblanks != thread.waitCount) ready(thread, 0);
+  case Wait::Vblank:  //it waited for the blank its count says
+    if(s32(vblanks - thread.waitCount) >= 0) ready(thread, 0);
     break;
   case Wait::Umd:     //for any of these bits of the drive's state
     if(thread.waitCount & umdState()) ready(thread, 0);

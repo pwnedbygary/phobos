@@ -71,11 +71,12 @@ $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINE
   "$ROOT/ares/psp/kernel/loader.cpp" "$ROOT/ares/psp/kernel/kernel.cpp" "$ROOT/ares/psp/ge/ge.cpp" \
   "$HERE/main.cpp" "$HERE/memory.cpp" "$HERE/loader.cpp" "$HERE/kernel.cpp" "$HERE/callbacks.cpp" "$HERE/power.cpp" \
   "$HERE/audio.cpp" "$HERE/sas.cpp" "$HERE/utility.cpp" "$HERE/pools.cpp" "$HERE/messages.cpp" "$HERE/media.cpp" \
-  "$HERE/mutexes.cpp" "$HERE/timers.cpp" \
+  "$HERE/mutexes.cpp" "$HERE/timers.cpp" "$HERE/threadman.cpp" \
   "$HERE/atrac.cpp" "$HERE/mp3.cpp" "$HERE/movies.cpp" "$HERE/psmf.cpp" "$HERE/font.cpp" \
   "$HERE/files.cpp" "$HERE/async.cpp" "$HERE/disc.cpp" \
   "$HERE/disc-formats.cpp" "$HERE/crypto.cpp" "$HERE/decrypt.cpp" "$HERE/modules.cpp" \
-  "$HERE/states.cpp" "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/measure.cpp" \
+  "$HERE/states.cpp" "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/curves.cpp" \
+  "$HERE/measure.cpp" \
   "$ROOT/ares/psp/ge/gpu/gpu.cpp" "$HERE/gpu.cpp" \
   "$NALL" "$SLJIT" "$ALLOCATOR" "$VOLK" \
   "${LIBRARIES[@]}" -o "$OUT/psp"

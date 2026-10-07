@@ -44,9 +44,14 @@ auto Kernel::createThread(const std::string& name, u32 entry, u32 priority, u32 
 //points at the trampoline (returnAddress: its first syscall, or the third for a module's module_start), so
 //returning from the entry function ends the thread. The caller has checked that the argument is readable and fits
 //(argumentFits()). It starts at the priority it was made with, whatever its last run changed it to (pspautotests'
-//threads/threads/change: started again, a thread is back at its first priority).
+//threads/threads/change: started again, a thread is back at its first priority). Its exit status reads NOT_DORMANT
+//until it ends, as a PSP's does (threads/threads/threadend: DORMANT before it first starts, NOT_DORMANT after), and
+//its run figures count from now (chosen: no recording shows a restarted thread's).
 auto Kernel::startThread(Thread& thread, u32 argumentLength, u32 argumentPointer, u32 returnAddress) -> void {
   thread.priority = thread.initialPriority;
+  thread.exitStatus = s32(ErrorNotDormant);
+  thread.runCycles = 0;
+  thread.interruptPreempts = thread.threadPreempts = thread.releases = 0;
   auto& c = thread.context;
   c = {};
   c.pc = thread.entry;
@@ -173,6 +178,7 @@ auto Kernel::reschedule() -> void {
     if(!best || best->priority >= current->priority) return;
     current->status = Status::Ready;
     current->readySince = ++readySequence;
+    current->threadPreempts++;
   }
   switchTo(best);
 }
@@ -180,14 +186,18 @@ auto Kernel::reschedule() -> void {
 //Puts the running thread's registers aside and loads next's (none: the CPU idles until a thread is ready). A thread
 //still in its wait was made ready only to run its callbacks (wakeForCallbacks()): they start now. Another thread
 //taking the CPU, or none, has interrupts on: only the thread that held them off loses them (it can't lose the CPU
-//meanwhile unless it ends).
+//meanwhile unless it ends). The one leaving adds the time it had the CPU to its run figures.
 auto Kernel::switchTo(Thread* next) -> void {
   if(current && current == next) {  //it's already in the CPU
     next->status = Status::Running;
     cpu.scc.halted = 0;
   } else {
-    if(current) save(current->context);
+    if(current) {
+      save(current->context);
+      current->runCycles += cycles - ranSince;
+    }
     current = next;
+    ranSince = cycles;
     interruptsEnabled = true;
     if(!next) {
       cpu.scc.halted = 1;
@@ -209,7 +219,8 @@ auto Kernel::events() -> void {
     vblanks++;
     geLeft = GeBudget;  //the GE's commands for the next frame
     for(auto& [uid, thread] : threads) {
-      if(thread->status == Status::Waiting && thread->wait == Wait::Vblank) ready(*thread, 0), woke = true;
+      if(thread->status != Status::Waiting || thread->wait != Wait::Vblank) continue;
+      if(s32(vblanks - thread->waitCount) >= 0) ready(*thread, 0), woke = true;  //its blank came
     }
     vblankInterrupt();
     if(!controller.cycle && sampleController()) woke = true;
@@ -411,50 +422,195 @@ auto Kernel::sceKernelGetThreadId() -> void {
   result(current ? current->uid : 0);
 }
 
-//Fills a SceKernelThreadInfo (pspthreadman.h) as far as the size its first word gives: name, attributes, status,
-//entry, stack, gp, priorities, what it waits for, wakeup count, exit status.
+//A status structure for the program (the SceKernel...Info structures, pspthreadman.h): its first word is its size,
+//and its first bytes are copied as far as the size the program put in that word says, no further than the whole
+//(0: nothing). pspautotests recorded every status function so (threads/mutex, threads/events/refer,
+//threads/semaphores/refer, threads/lwmutex/refer, threads/threads/refer): whatever size is asked, 1 or 0xffffffff,
+//the size reads back as the structure's (a size of 1 copies its first byte, the rest of the word being 0 already),
+//and a size short of a field leaves it as it was, 82 copying the half of the word at 80 below 82.
+auto Kernel::report(u32 address, const Report& structure) -> void {
+  u32 size = memory.read(4, address);
+  memory.copyIn(address, structure.bytes.data(), std::min<u64>(size, structure.bytes.size()));
+}
+
+//What a thread's status says it is (PspThreadStatus): running 1, ready 2, waiting 4, dormant 16; suspended adds 8,
+//its waiting (4) kept but not its readiness (2).
+auto Kernel::threadStatus(const Thread& thread) const -> u32 {
+  u32 status = u32(thread.status);
+  if(thread.suspended) status = (thread.status == Status::Ready ? 0 : status) | 8;
+  return status;
+}
+
+//What a waiting thread waits for, in the PSP's numbers: 1 sleep, 2 delay, 3 semaphore, 4 event flag, 5 mailbox,
+//6 VPL, 7 FPL, 8 message pipe, 9 thread end; any other wait, or none, 0.
+auto Kernel::threadWaitType(const Thread& thread) const -> u32 {
+  if(thread.status != Status::Waiting) return 0;
+  switch(thread.wait) {
+  case Wait::Sleep: return 1;
+  case Wait::Delay: return 2;
+  case Wait::Semaphore: return 3;
+  case Wait::EventFlag: return 4;
+  case Wait::Mailbox: return 5;
+  case Wait::Vpl: return 6;
+  case Wait::Fpl: return 7;
+  case Wait::PipeSend: case Wait::PipeReceive: return 8;
+  case Wait::ThreadEnd: return 9;
+  default: return 0;
+  }
+}
+
+//The time a thread has had the CPU since it was started, in microseconds (a SceKernelSysClock's unit): what it had
+//as it last left the CPU, and the running thread's time since it got it (a call into the program on top of it
+//counts as the call's, not the thread's).
+auto Kernel::threadRunTime(const Thread& thread) const -> u64 {
+  u64 ran = thread.runCycles;
+  if(&thread == current && !interrupting) ran += cycles - ranSince;
+  return ran / (CPUFrequency / 1'000'000);
+}
+
+//(thread, info): a SceKernelThreadInfo (pspthreadman.h): name, attributes, status, entry, stack, gp, priorities,
+//what it waits for, wakeup count, exit status, and the run figures (as sceKernelReferThreadRunStatus gives them). Its
+//size goes by the SDK the program was built with (sceKernelSetCompiledSdkVersion), as pspautotests'
+//threads/threads/refer recorded: up to 2.60, 104 bytes, and any size asked is taken (report()); after it, 108 (a last
+//word, 0), and a larger size than that refused (ILLEGAL_SIZE), nothing written, 0xffffffff among them.
 auto Kernel::sceKernelReferThreadStatus() -> void {
   auto thread = findThread(arg(0));
   if(!thread) return result(ErrorUnknownThread);
-  u32 info = arg(1);
-  u32 size = memory.read(4, info);
-  auto put = [&](u32 offset, u32 value) { if(offset + 4 <= size) memory.write(4, info + offset, value); };
-  for(u32 offset = 4; offset < 36 && offset < size; offset++) {
-    memory.write(1, info + offset, offset - 4 < thread->name.size() ? u8(thread->name[offset - 4]) : 0);
-  }
-  //the PSP's numbers: 1 sleep, 2 delay, 3 semaphore, 4 event flag, 5 mailbox, 6 VPL, 7 FPL, 8 message pipe, 9 thread
-  //end
-  u32 waitType = 0;
-  if(thread->status == Status::Waiting) {
-    switch(thread->wait) {
-    case Wait::Sleep: waitType = 1; break;
-    case Wait::Delay: waitType = 2; break;
-    case Wait::Semaphore: waitType = 3; break;
-    case Wait::EventFlag: waitType = 4; break;
-    case Wait::Mailbox: waitType = 5; break;
-    case Wait::PipeSend: case Wait::PipeReceive: waitType = 8; break;
-    case Wait::Vpl: waitType = 6; break;
-    case Wait::Fpl: waitType = 7; break;
-    case Wait::ThreadEnd: waitType = 9; break;
-    default: break;
-    }
-  }
-  u32 status = u32(thread->status);  //suspended: 8, with its waiting (4) kept, but not its readiness (2)
-  if(thread->suspended) status = (thread->status == Status::Ready ? 0 : status) | 8;
-  put(36, thread->attributes);
-  put(40, status);
-  put(44, thread->entry);
-  put(48, thread->stackBlock);
-  put(52, thread->stackSize);
-  put(56, thread->gp);
-  put(60, thread->initialPriority);
-  put(64, thread->priority);
-  put(68, waitType);
-  put(72, thread->status == Status::Waiting ? thread->waitID : 0);
-  put(76, thread->wakeupCount);
-  put(80, u32(thread->exitStatus));
-  for(u32 offset = 84; offset < 104; offset += 4) put(offset, 0);  //run clocks, preemption and release counts
+  u32 length = sdkVersion > 0x0206'0010 ? 108 : 104;
+  if(length == 108 && memory.read(4, arg(1)) > length) return result(ErrorIllegalSize);
+  Report info(length);
+  info.name(4, thread->name);
+  info.word(36, thread->attributes);
+  info.word(40, threadStatus(*thread));
+  info.word(44, thread->entry);
+  info.word(48, thread->stackBlock);
+  info.word(52, thread->stackSize);
+  info.word(56, thread->gp);
+  info.word(60, thread->initialPriority);
+  info.word(64, thread->priority);
+  info.word(68, threadWaitType(*thread));
+  info.word(72, thread->status == Status::Waiting ? thread->waitID : 0);
+  info.word(76, thread->wakeupCount);
+  info.word(80, u32(thread->exitStatus));
+  u64 ran = threadRunTime(*thread);
+  info.word(84, u32(ran));
+  info.word(88, u32(ran >> 32));
+  info.word(92, thread->interruptPreempts);
+  info.word(96, thread->threadPreempts);
+  info.word(100, thread->releases);
+  report(arg(1), info);
   result(0);
+}
+
+//(thread, status; 0 for the caller): a SceKernelThreadRunStatus (pspthreadman.h, 44 bytes): the thread's status,
+//current priority, wait type and what it waits for, and wakeup count, as its full status gives them; then its run
+//figures since it was last started: the time it has had the CPU (a SceKernelSysClock, 64 bits of microseconds), how
+//many times a call into the program interrupted it (each interrupt handler, alarm, virtual timer or GE callback that
+//ran on top of it), how many times a better thread took the CPU from it while it could still run, and how many times
+//sceKernelReleaseWaitThread let it go of a wait. Copied as far as its size word says (report()). Ace Combat X's
+//vertical blank handler asks after its main thread every other blank, waking it unless it's running; the size word
+//it passes is whatever its stack held (0 here: nothing written, and it wakes the thread each time, as before).
+//No pspautotests program calls it; chosen: the figures' meanings (pspsdk names them only), counted from a start, and
+//the size rule of every other status function (threads/threads/refer's refusal of large sizes after 2.60 isn't
+//taken on: that structure grew a word with it).
+auto Kernel::sceKernelReferThreadRunStatus() -> void {
+  auto thread = findThread(arg(0));
+  if(!thread) return result(ErrorUnknownThread);
+  Report status(44);
+  status.word(4, threadStatus(*thread));
+  status.word(8, thread->priority);
+  status.word(12, threadWaitType(*thread));
+  status.word(16, thread->status == Status::Waiting ? thread->waitID : 0);
+  status.word(20, thread->wakeupCount);
+  u64 ran = threadRunTime(*thread);
+  status.word(24, u32(ran));
+  status.word(28, u32(ran >> 32));
+  status.word(32, thread->interruptPreempts);
+  status.word(36, thread->threadPreempts);
+  status.word(40, thread->releases);
+  report(arg(1), status);
+  result(0);
+}
+
+//The IDs of the thread manager's objects of a kind, in the order they were made (pspsdk's SceKernelIdListType):
+//1 threads, 2 semaphores, 3 event flags, 4 mailboxes, 5 VPLs, 6 FPLs, 7 message pipes, 8 callbacks, 9 thread event
+//handlers (the kernel has none), 10 alarms, 11 virtual timers, 12 mutexes, 13 lightweight mutexes, 14 thread-local
+//storage pools (none either); and threads by state, 64 sleeping, 65 delaying, 66 suspended (whatever else they're
+//doing), 67 dormant. False for any other kind. pspautotests' threads/threads/threadmanidlist recorded 1-14 and 64-67
+//taken and all else refused, 14 listing such a pool once made; pspsdk names 1-11 and 64-67. Chosen: 12 and 13 as the
+//two kinds of mutex, which came with the same firmware as those pools, in that order.
+auto Kernel::threadmanIDs(u32 type, std::vector<u32>& ids) -> bool {
+  auto all = [&](auto& objects) { for(auto& entry : objects) ids.push_back(entry.first); };
+  auto threadsWhere = [&](auto&& matches) {
+    for(auto& [uid, thread] : threads) if(matches(*thread)) ids.push_back(uid);
+  };
+  auto poolsOf = [&](bool variable) {
+    for(auto& [uid, pool] : pools) if(pool.variable == variable) ids.push_back(uid);
+  };
+  switch(type) {
+  case 1: all(threads); return true;
+  case 2: all(semaphores); return true;
+  case 3: all(eventFlags); return true;
+  case 4: all(mailboxes); return true;
+  case 5: poolsOf(true); return true;
+  case 6: poolsOf(false); return true;
+  case 7: all(pipes); return true;
+  case 8: all(callbacks); return true;
+  case 9: return true;
+  case 10: all(alarms); return true;
+  case 11: all(vtimers); return true;
+  case 12: all(mutexes); return true;
+  case 13: all(lwMutexes); return true;
+  case 14: return true;
+  case 64: threadsWhere([&](const Thread& t) { return t.status == Status::Waiting && t.wait == Wait::Sleep; });
+    return true;
+  case 65: threadsWhere([&](const Thread& t) { return t.status == Status::Waiting && t.wait == Wait::Delay; });
+    return true;
+  case 66: threadsWhere([&](const Thread& t) { return t.suspended; }); return true;
+  case 67: threadsWhere([&](const Thread& t) { return t.status == Status::Dormant; }); return true;
+  }
+  return false;
+}
+
+//(kind, buffer, its size in IDs, where to put how many there are): the IDs of the objects of a kind
+//(threadmanIDs()), as many as the buffer takes, and how many there are in all; it returns how many it wrote. As
+//threads/threads/threadmanidlist recorded: the kind is checked first (ILLEGAL_TYPE), then the size (a negative one
+//ILLEGAL_ADDR), neither writing the count; a size of 0, with or without a buffer, gives the count alone, and the
+//count's pointer may be 0. Its threads made dormant, sleeping, delaying and suspended were listed as such. How many
+//it returns isn't recorded but for a buffer larger than the list, where it's the count: pspsdk says "either 0 or the
+//same as idcount", which is what a buffer of none and a large one give if it's how many were written (chosen), and
+//its own thread utilities ask for the count with a buffer of none, so the count is all there are. A buffer the IDs
+//can't go in is refused (ILLEGAL_ADDR; the test's comment says a PSP crashes on a null one).
+auto Kernel::sceKernelGetThreadmanIdList() -> void {
+  u32 buffer = arg(1), count = arg(3);
+  s32 size = s32(arg(2));
+  std::vector<u32> ids;
+  if(!threadmanIDs(arg(0), ids)) return result(ErrorIllegalType);
+  if(size < 0) return result(ErrorIllegalAddress);
+  u32 written = std::min<u64>(ids.size(), u32(size));
+  if(written && !memory.reaches(buffer, written * 4)) return result(ErrorIllegalAddress);
+  for(u32 n = 0; n < written; n++) memory.write(4, buffer + n * 4, ids[n]);
+  if(count && memory.reaches(count, 4)) memory.write(4, count, ids.size());
+  result(written);
+}
+
+//(ID): the kind of thread manager object an ID is (threadmanIDs()'s numbers, 1 to 13), or ILLEGAL_ARGUMENT for one
+//that isn't any, as threads/threads/threadmanidtype recorded: a thread 1, whatever it's doing; a deleted one, -1, 0,
+//1, a memory block and a module ILLEGAL_ARGUMENT.
+auto Kernel::sceKernelGetThreadmanIdType() -> void {
+  u32 uid = arg(0);
+  if(threads.count(uid)) return result(1);
+  if(semaphores.count(uid)) return result(2);
+  if(eventFlags.count(uid)) return result(3);
+  if(mailboxes.count(uid)) return result(4);
+  if(auto pool = pools.find(uid); pool != pools.end()) return result(pool->second.variable ? 5 : 6);
+  if(pipes.count(uid)) return result(7);
+  if(callbacks.count(uid)) return result(8);
+  if(alarms.count(uid)) return result(10);
+  if(vtimers.count(uid)) return result(11);
+  if(mutexes.count(uid)) return result(12);
+  if(lwMutexes.count(uid)) return result(13);
+  result(ErrorIllegalArgument);
 }
 
 //Waits for a number of microseconds (and, with callbacks, runs the thread's callbacks as they're notified), as long
@@ -526,6 +682,7 @@ auto Kernel::sceKernelReleaseWaitThread() -> void {
   bool waiting = thread.status == Status::Waiting || thread.status == Status::Ready;
   if(!waiting || thread.wait == Wait::None) return result(ErrorNotWait);
   leaveWait(thread, ErrorReleaseWait);
+  thread.releases++;
   result(0);
   reschedule();
 }
@@ -551,9 +708,13 @@ auto Kernel::sceKernelWaitThreadEndCB() -> void {
   waitThreadEnd(true);
 }
 
+//(name, attributes, initial count, largest count, options). As pspautotests' threads/semaphores/create recorded: a
+//NULL name is ERROR, attributes past 0x1ff ILLEGAL_ATTR (0x100, waiters served by priority, is taken), and any counts
+//at all are taken: a negative first count, one above the largest, a negative largest.
 auto Kernel::sceKernelCreateSema() -> void {
   s32 initial = s32(arg(2)), maximum = s32(arg(3));
-  if(initial < 0 || maximum <= 0 || initial > maximum) return result(ErrorIllegalCount);
+  if(!arg(0)) return result(ErrorError);
+  if(arg(1) & ~0x1ffu) return result(ErrorIllegalAttribute);
   u32 uid = newUID();
   if(!uid) return result(ErrorNoMemory);
   semaphores[uid] = {uid, memory.readString(arg(0), 31), arg(1), initial, maximum, initial};
@@ -593,7 +754,8 @@ auto Kernel::sceKernelSignalSema() -> void {
   if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
   auto& semaphore = found->second;
   s32 count = s32(arg(1));
-  if(count <= 0 || semaphore.count + count > semaphore.maximum) return result(ErrorSemaphoreOverflow);
+  //(in 64 bits: a semaphore may hold any count, so the sum can pass what 32 hold)
+  if(count <= 0 || s64(semaphore.count) + count > semaphore.maximum) return result(ErrorSemaphoreOverflow);
   semaphore.count += count;
   result(0);
   signalSemaphores(semaphore);
@@ -663,23 +825,64 @@ auto Kernel::sceKernelCancelSema() -> void {
 }
 
 //Lightweight mutexes keep their state in the program's own memory, in a 32-byte work area (SceLwMutexWorkarea):
-//the lock count, the locking thread (-1 for none), the attributes (0x200: the same thread may lock it again), how
-//many threads wait for it, and its UID. Making one held, locking, trying and unlocking it are a thread's alone
-//(fromThread()), as for the kernel's mutexes.
+//the lock count, the locking thread (0 for none), the attributes (0x100: waiters served by priority; 0x200: the same
+//thread may lock it again), how many threads wait for it, its UID, and three words the PSP zeroes. The kernel keeps
+//its name, attributes and the count it was made with besides, for its status. Making one held, locking, trying and
+//unlocking it are a thread's alone (fromThread()), as for the kernel's mutexes. As pspautotests' threads/lwmutex
+//recorded (create, unlock): a NULL name is ERROR, attributes past 0x3ff ILLEGAL_ATTR, then the count is checked; the
+//work area says thread 0 while it's free, made so or unlocked.
 auto Kernel::sceKernelCreateLwMutex() -> void {
   u32 workArea = arg(0), attributes = arg(2);
   s32 count = s32(arg(3));
+  if(!arg(1)) return result(ErrorError);
+  if(attributes & ~0x3ffu) return result(ErrorIllegalAttribute);
   if(count < 0 || (count > 1 && !(attributes & 0x200))) return result(ErrorIllegalCount);
   if(count && !fromThread()) return;
   u32 uid = newUID();
   if(!uid) return result(ErrorNoMemory);
-  lwMutexes[uid] = workArea;
+  lwMutexes[uid] = {workArea, memory.readString(arg(1), 31), attributes, count};
   memory.write(4, workArea + 0, u32(count));
-  memory.write(4, workArea + 4, count ? current->uid : 0xffff'ffff);
+  memory.write(4, workArea + 4, count ? current->uid : 0);
   memory.write(4, workArea + 8, attributes);
   memory.write(4, workArea + 12, 0);
   memory.write(4, workArea + 16, uid);
+  memory.fill(workArea + 20, 0, 12);
   result(0);
+}
+
+//A lightweight mutex's SceKernelLwMutexInfo (64 bytes: name, attributes, UID, work area, the count it was made with
+//and its count now, the locking thread or -1, how many threads wait), copied as far as its size word says
+//(report()), as pspautotests' threads/lwmutex/refer recorded for both functions; one there isn't is
+//LWMUTEX_NOTFOUND.
+auto Kernel::lwMutexStatus(u32 uid, u32 address) -> void {
+  auto found = lwMutexes.find(uid);
+  if(found == lwMutexes.end()) return result(ErrorLwMutexNotFound);
+  auto& mutex = found->second;
+  u32 count = memory.read(4, mutex.workArea), waiting = 0;
+  for(auto& [id, thread] : threads) {
+    waiting += thread->status == Status::Waiting && thread->wait == Wait::LwMutex && thread->waitID == mutex.workArea;
+  }
+  Report info(64);
+  info.name(4, mutex.name);
+  info.word(36, mutex.attributes);
+  info.word(40, uid);
+  info.word(44, mutex.workArea);
+  info.word(48, mutex.initial);
+  info.word(52, count);
+  info.word(56, count ? memory.read(4, mutex.workArea + 4) : 0xffff'ffff);
+  info.word(60, waiting);
+  report(address, info);
+  result(0);
+}
+
+//(work area, info): the status of the mutex the work area holds the UID of.
+auto Kernel::sceKernelReferLwMutexStatus() -> void {
+  lwMutexStatus(memory.read(4, arg(0) + 16), arg(1));
+}
+
+//(UID, info)
+auto Kernel::sceKernelReferLwMutexStatusByID() -> void {
+  lwMutexStatus(arg(0), arg(1));
 }
 
 auto Kernel::sceKernelDeleteLwMutex() -> void {
@@ -781,7 +984,7 @@ auto Kernel::sceKernelUnlockLwMutex() -> void {
   result(0);
   memory.write(4, workArea, level - count);
   if(level - count) return;
-  memory.write(4, workArea + 4, 0xffff'ffff);
+  memory.write(4, workArea + 4, 0);
   unlockLwMutex(workArea);
   reschedule();
 }
@@ -791,21 +994,25 @@ auto Kernel::sceKernelGetSystemTimeLow() -> void {
   result(u32(cycles / (CPUFrequency / 1'000'000)));
 }
 
-//(semaphore, info): a SceKernelSemaInfo (pspthreadman.h) as far as the size in its first word: name, attributes,
-//initial, current and largest count, how many threads wait.
+//(semaphore, info): a SceKernelSemaInfo (pspthreadman.h, 56 bytes): name, attributes, initial, current and largest
+//count, how many threads wait; copied as far as its size word says, the size reading back as 56 (report():
+//pspautotests' threads/semaphores/refer).
 auto Kernel::sceKernelReferSemaStatus() -> void {
   auto found = semaphores.find(arg(0));
   if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
   auto& semaphore = found->second;
-  u32 info = arg(1), size = memory.read(4, info), waiting = 0;
+  u32 waiting = 0;
   for(auto& [uid, thread] : threads) {
     waiting += thread->status == Status::Waiting && thread->wait == Wait::Semaphore && thread->waitID == arg(0);
   }
-  for(u32 offset = 4; offset < 36 && offset < size; offset++) {
-    memory.write(1, info + offset, offset - 4 < semaphore.name.size() ? u8(semaphore.name[offset - 4]) : 0);
-  }
-  u32 words[] = {semaphore.attributes, u32(semaphore.initial), u32(semaphore.count), u32(semaphore.maximum), waiting};
-  for(u32 n = 0; n < 5; n++) if(36 + n * 4 + 4 <= size) memory.write(4, info + 36 + n * 4, words[n]);
+  Report info(56);
+  info.name(4, semaphore.name);
+  info.word(36, semaphore.attributes);
+  info.word(40, semaphore.initial);
+  info.word(44, semaphore.count);
+  info.word(48, semaphore.maximum);
+  info.word(52, waiting);
+  report(arg(1), info);
   result(0);
 }
 
@@ -834,9 +1041,11 @@ auto Kernel::sceKernelChangeThreadPriority() -> void {
   reschedule();
 }
 
-//(thread): what a dormant thread ended with; one still going has none yet.
+//(thread): what a dormant thread ended with (DORMANT, one never started); one still going has none yet. Thread 0 is
+//no thread here, the caller's own ID asked for (pspautotests' threads/threads/exitstatus: UNKNOWN_THID for 0,
+//NOT_DORMANT for the caller).
 auto Kernel::sceKernelGetThreadExitStatus() -> void {
-  auto thread = findThread(arg(0));
+  auto thread = arg(0) ? findThread(arg(0)) : nullptr;
   if(!thread) return result(ErrorUnknownThread);
   if(thread->status != Status::Dormant) return result(ErrorNotDormant);
   result(u32(thread->exitStatus));
@@ -914,6 +1123,17 @@ auto Kernel::sceKernelGetThreadStackFreeSize() -> void {
     while(16 + unused < thread->stackSize && stack[16 + unused] == 0xff) unused++;
   }
   result(unused);
+}
+
+//How much room is left on the calling thread's stack: from its stack pointer down to the stack's bottom. On a PSP
+//(threads/threads/stackfree), a thread of a 4 KiB stack checking from a function of its own with no room of its own
+//has 0xeb0 left, one holding 1 KiB there 0xab0: the 0x140 a new thread starts below its top (startThread()), the
+//function's 0x10, and 0x400. A stack pointer outside the stack (chosen: an overrun stack, or a call from an
+//interrupt handler, which has no thread's) is 0.
+auto Kernel::sceKernelCheckThreadStack() -> void {
+  if(!current || interrupting) return result(0);
+  u32 sp = cpu.ipu.r[29], bottom = current->stackBlock;
+  result(sp >= bottom && sp - bottom <= current->stackSize ? sp - bottom : 0);
 }
 
 //The profiler's figures for a thread, or for all (sceKernelReferThreadProfiler, sceKernelReferGlobalProfiler): only

@@ -54,8 +54,9 @@ struct GE {
     CullFaceEnable = 0x1d,
     TextureMappingEnable = 0x1e, FogEnable = 0x1f, DitherEnable = 0x20, AlphaBlendEnable = 0x21,
     AlphaTestEnable = 0x22, DepthTestEnable = 0x23, StencilTestEnable = 0x24, AntiAliasEnable = 0x25,
-    ColorTestEnable = 0x27,
+    PatchCullEnable = 0x26, ColorTestEnable = 0x27,
     LogicOpEnable = 0x28, BoneMatrixNumber = 0x2a, BoneMatrixData = 0x2b, MorphWeight0 = 0x2c,
+    PatchDivision = 0x36, PatchPrimitive = 0x37, PatchFacing = 0x38,
     WorldMatrixNumber = 0x3a, WorldMatrixData = 0x3b, ViewMatrixNumber = 0x3c, ViewMatrixData = 0x3d,
     ProjectionMatrixNumber = 0x3e, ProjectionMatrixData = 0x3f, TextureMatrixNumber = 0x40, TextureMatrixData = 0x41,
     ViewportXScale = 0x42, ViewportYScale = 0x43, ViewportZScale = 0x44, ViewportXCenter = 0x45,
@@ -373,6 +374,7 @@ struct GE {
   //draw.cpp
   auto lookFor(const PixelState& pixel, const Sampler* texture) const -> Look;
   auto primitive(u32 kind, u32 count) -> void;
+  auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
   auto submit(Job& job) -> void;
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
@@ -384,6 +386,9 @@ struct GE {
   auto rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                 bool perspective) -> void;
+
+  //curves.cpp
+  auto patch(bool spline, u32 argument) -> void;
 
   //four.cpp
   auto fourFriendly(const Job& job) const -> bool;
@@ -446,7 +451,8 @@ struct GE {
   auto drawBands(Batch& batch) -> void;
   auto worker() -> void;
 
-  std::vector<Vertex> primitiveVertices;  //the primitive being drawn's (draw.cpp)
+  std::vector<Vertex> primitiveVertices;  //the primitive being drawn's (draw.cpp); a curved surface's points
+  std::vector<Vertex> patchVertices;      //the vertices a curved surface is cut into (curves.cpp)
 
   //The bytes of VRAM the primitive being drawn may draw over (draw.cpp): its frame buffer's, and its depth buffer's.
   struct Touched { u32 low = ~0u, high = 0; };

@@ -15,6 +15,7 @@ int main() {
   for(auto& test : poolTests()) tests.push_back(test);
   for(auto& test : messageTests()) tests.push_back(test);
   for(auto& test : mutexTests()) tests.push_back(test);
+  for(auto& test : threadmanTests()) tests.push_back(test);
   for(auto& test : timerTests()) tests.push_back(test);
   for(auto& test : mediaTests()) tests.push_back(test);
   for(auto& test : atracTests()) tests.push_back(test);
@@ -33,6 +34,7 @@ int main() {
   for(auto& test : geTests()) tests.push_back(test);
   for(auto& test : drawTests()) tests.push_back(test);
   for(auto& test : draw3dTests()) tests.push_back(test);
+  for(auto& test : curvesTests()) tests.push_back(test);
   for(auto& test : measureTests()) tests.push_back(test);
   for(auto& test : gpuTests()) tests.push_back(test);
   for(auto& [name, run] : tests) {

@@ -34,8 +34,8 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     case VertexAddress: vertexAddress = relative(argument); break;
     case IndexAddress:  indexAddress = relative(argument); break;
     case Primitive:     primitive(argument >> 16 & 7, argument & 0xffff); break;
-    case Bezier:
-    case Spline:        note("curved surfaces (BEZIER, SPLINE) aren't drawn yet"); break;
+    case Bezier:        patch(false, argument); break;
+    case Spline:        patch(true, argument); break;
     case BoundingBox:   boxOutside = boundingBox(argument & 0xffff); break;
     case ConditionalJump:  //where JUMP would go, if the last BOUNDING_BOX was out of sight (pspsdk's sceGuEndObject)
       if(boxOutside) list.address = relative(argument & ~3u);

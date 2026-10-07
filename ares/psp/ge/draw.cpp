@@ -82,10 +82,17 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   if(!drawing.deferring) settle();  //(called by itself, outside run(): what the last list left being drawn first)
   auto format = vertexFormat();
   readVertices(count, format);
-  auto& vertices = primitiveVertices;
   if(kind == 7) return note("PRIM's kind 7 (going on with the last primitive's vertices) isn't emulated yet");
   if(!format.positionFormat) return;  //vertices without positions draw nothing (as PPSSPP has it)
+  drawVertices(kind, format, primitiveVertices, count);
+}
 
+//Draws vertices (as the vertex type laid them out; 3D ones are transformed here) as primitives of kind: PRIM's, or a
+//curved surface's (curves.cpp), whose rows are strips of strip vertices each, drawn one after another as if each were
+//a PRIM of its own (a strip, or points, of all of them: strip as many as there are).
+auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void {
+  u32 count = vertices.size();
+  strip = std::max(strip, 1u);
   auto pixel = pixelState();
   pixel.depthRange = !format.through;
   pixel.fog = !format.through && !pixel.clear && (commands[FogEnable] & 1);
@@ -177,17 +184,23 @@ auto GE::primitive(u32 kind, u32 count) -> void {
   case Lines:
   case LineStrip:
     if(commands[AntiAliasEnable] & 1) note("anti-aliased lines (ANTI_ALIAS_ENABLE) are drawn aliased");
-    for(u32 n = 0; n + 1 < count; n += kind == Lines ? 2 : 1) {
-      if(format.through) line(drawn, vertices[n], vertices[n + 1], false);
-      else clipLine(drawn, t, vertices[n], vertices[n + 1]);
+    for(u32 first = 0; first < count; first += strip) {
+      u32 end = std::min(first + strip, count);
+      for(u32 n = first; n + 1 < end; n += kind == Lines ? 2 : 1) {
+        if(format.through) line(drawn, vertices[n], vertices[n + 1], false);
+        else clipLine(drawn, t, vertices[n], vertices[n + 1]);
+      }
     }
     break;
   case Triangles:
     for(u32 n = 0; n + 2 < count; n += 3) drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], facing);
     break;
   case TriangleStrip:
-    for(u32 n = 0; n + 2 < count; n++) {
-      drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], n & 1 ? -facing : facing);
+    for(u32 first = 0; first < count; first += strip) {
+      u32 end = std::min(first + strip, count);
+      for(u32 n = first; n + 2 < end; n++) {
+        drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], (n - first) & 1 ? -facing : facing);
+      }
     }
     break;
   case TriangleFan:

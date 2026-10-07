@@ -1,8 +1,9 @@
 //The system's utilities (ares/psp/kernel/utility.cpp): a dialog's statuses and their timing, saves made, loaded,
 //sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
-//the program's memory refused), a message answered yes, the keyboard's fields accepted (an empty one given the
-//nickname), network settings cancelled, the wrong type and the wrong status refused; optional modules loaded and
-//unloaded; the nickname. Called directly, the clock moved on by hand.
+//the program's memory refused), the memory stick's free space told alike everywhere, a message answered yes, the
+//keyboard's fields accepted (an empty one given the nickname), network settings cancelled, the wrong type and the
+//wrong status refused; optional modules loaded and unloaded; the nickname. Called directly, the clock moved on by
+//hand.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -11,13 +12,17 @@ namespace {
 constexpr u32 Parameters = 0x0892'0000, Buffer = 0x0893'0000, Free = 0x0894'0000, Used = 0x0894'0100;
 constexpr u32 Needed = 0x0894'0200, List = 0x0894'0300, Entries = 0x0894'0400;
 
-//A SceUtilitySavedataParam for (mode, game, save, file, the data's size), its answers' structures pointed at.
+//A SceUtilitySavedataParam for (mode, game, save, file, the data's size), its answers' structures pointed at, the
+//sizes mode's save to measure (msData's names) the same save.
 auto saveParameters(KernelMachine& m, u32 mode, const char* game, const char* save, u32 dataSize) -> void {
   m.system.memory.fill(Parameters, 0, 1536);
   m.system.memory.write(4, Parameters, 1536);
   m.system.memory.write(4, Parameters + 48, mode);
   m.system.memory.copyIn(Parameters + 60, game, strlen(game) + 1);
   m.system.memory.copyIn(Parameters + 76, save, strlen(save) + 1);
+  m.system.memory.fill(Used, 0, 64);
+  m.system.memory.copyIn(Used, game, strlen(game) + 1);
+  m.system.memory.copyIn(Used + 16, save, strlen(save) + 1);
   m.system.memory.copyIn(Parameters + 100, "DATA.BIN", 9);
   m.system.memory.write(4, Parameters + 116, Buffer);
   m.system.memory.write(4, Parameters + 120, 0x1000);
@@ -77,13 +82,13 @@ static auto savedata() -> void {
   saveParameters(m, 8, "ULUS99999", "SLOT0", 40000);  //sizes
   CHECK(runSave(m), 0);
   CHECK(m.system.memory.read(4, Free), 32_KiB);
-  CHECK(m.system.memory.read(4, Free + 4), 32768);
-  CHECK(m.system.memory.read(4, Free + 8), 1024 * 1024);
+  CHECK(m.system.memory.read(4, Free + 4), Kernel::StickFreeClusters);
+  CHECK(m.system.memory.read(4, Free + 8), Kernel::StickFreeClusters * 32);
   CHECK(m.system.memory.readString(Free + 12, 8) == "1 GB", true);
   CHECK(m.system.memory.readString(Used + 16, 20) == "SLOT0", true);
-  CHECK(m.system.memory.read(4, Used + 36), 1);    //one cluster used
-  CHECK(m.system.memory.read(4, Needed), 2);       //40000 bytes take two
-  CHECK(m.system.memory.read(4, Needed + 4), 64);
+  CHECK(m.system.memory.read(4, Used + 36), 2);    //one cluster of data, and the folder's
+  CHECK(m.system.memory.read(4, Needed), 4);       //40000 bytes take two, its PARAM.SFO one, the folder one
+  CHECK(m.system.memory.read(4, Needed + 4), 128);
   saveParameters(m, 11, "ULUS99999", "", 0);  //list
   CHECK(runSave(m), 0);
   CHECK(m.system.memory.read(4, List + 4), 1);
@@ -243,7 +248,7 @@ static auto savedataLoops() -> void {
     try { return runSave(m); } catch(const std::exception&) { m.kernel.dialog.status = 0; return 0xffff'ffffu; }
   };
   CHECK(run(8, "SLOT0"), 0);
-  CHECK(m.system.memory.read(4, Used + 36), 1);  //DATA.BIN's 100 bytes: a cluster
+  CHECK(m.system.memory.read(4, Used + 36), 2);  //DATA.BIN's 100 bytes: a cluster, and the folder's
   CHECK(run(11, ""), 0);
   CHECK(m.system.memory.read(4, List + 4), 1);  //SLOT0 alone
   CHECK(m.system.memory.readString(Entries + 52, 20) == "SLOT0", true);
@@ -277,6 +282,118 @@ static auto savedataErase() -> void {
     CHECK(std::filesystem::exists(folder), false);
     CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA"), true);
   }
+}
+
+//The memory stick's free space, the same wherever it's told (a 2 GB stick, mostly empty: io.cpp): the capacity
+//request (clusters, those free, a sector's bytes and a cluster's sectors) and the savedata utility's sizes modes.
+//The sizes mode (8), as utility/savedata/sizes recorded: with the free space alone asked (Chili Con Carnage's and
+//Ace Combat X's request) it answers 0; the save measured is msData's (its own game and save names, the request's save
+//name ignored), its files in clusters and the folder's own (three small files, 4); msData naming none there is no
+//data, the rest still answered; what saving would take counts the data, the icons' and sound's files the request
+//carries, its PARAM.SFO and the folder. The size mode (22), as utility/savedata/getsize recorded: the free space in
+//32 KiB "sectors", and with no files listed nothing else written; with files, what they take in whole clusters past
+//the free space (none for 128 KiB, its text left alone; 256 MiB for a 2 GiB file); not in the smaller structure of
+//before firmware 2.00. Sizes as text in whole units: KB, MB, GB.
+static auto stickSpace() -> void {
+  HostFolder stick;
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  auto& memory = m.system.memory;
+  constexpr u32 In = 0x0895'0000, Out = 0x0895'0100, Sizes = 0x0895'0200, Files = 0x0895'0300;
+  memory.write(4, In, Out);
+  CHECK(m.call("sceIoDevctl", {m.string("ms0:"), 0x0242'5818, In, 4, 0, 0}), 0);
+  std::array<u32, 5> capacity = {61'440, 57'344, 57'344, 512, 64};
+  for(u32 n = 0; n < 5; n++) CHECK(memory.read(4, Out + n * 4), capacity[n]);
+
+  //the free space alone: 0, and the devctl's free clusters
+  saveParameters(m, 8, "ULUS10216", "", 0);
+  memory.write(4, Parameters + 1492, 0);
+  memory.write(4, Parameters + 1496, 0);
+  memory.fill(Used, 0xcc, 64);
+  memory.fill(Needed, 0xcc, 32);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Free), 32_KiB);
+  CHECK(memory.read(4, Free + 4), memory.read(4, Out + 4));
+  CHECK(memory.read(4, Free + 8), 57'344 * 32);
+  CHECK(memory.readString(Free + 12, 8) == "1 GB", true);
+  CHECK(memory.read(4, Used + 36), 0xcccc'cccc);
+  CHECK(memory.read(4, Needed), 0xcccc'cccc);
+
+  //msData naming a save not there: no data, what saving would take still told (16 bytes, and two icons)
+  memory.copyIn(Buffer, "0123456789abcdef", 16);
+  saveParameters(m, 8, "ULUS99999", "ASDF", 16);
+  memory.copyIn(Used + 16, "ABC", 4);
+  memory.write(4, Parameters + 1412, Buffer);  //ICON0: 40000 bytes, two clusters
+  memory.write(4, Parameters + 1420, 40'000);
+  memory.write(4, Parameters + 1444, Buffer);  //PIC1: 70000 bytes, three
+  memory.write(4, Parameters + 1452, 70'000);
+  memory.write(4, Parameters + 1428 + 8, 99'999);  //ICON1's size with no buffer: nothing
+  CHECK(runSave(m), 0x8011'03c7);
+  CHECK(memory.read(4, Free + 4), 57'344);
+  std::array<u32, 2> needed = {1 + 2 + 3 + 2, (1 + 2 + 3 + 2) * 32};
+  CHECK(memory.read(4, Needed), needed[0]);
+  CHECK(memory.read(4, Needed + 4), needed[1]);
+  CHECK(memory.readString(Needed + 8, 8) == "256 KB", true);
+  CHECK(memory.read(4, Needed + 16), needed[1]);
+  CHECK(memory.readString(Needed + 20, 8) == "256 KB", true);
+  //and naming one there: its three files (each under a cluster) and its folder, 4 clusters; 16 bytes of data, 3
+  stick.put("PSP/SAVEDATA/ULUS99999ABC/DATA.BIN", "data");
+  stick.put("PSP/SAVEDATA/ULUS99999ABC/OTHER.BIN", "other");
+  stick.put("PSP/SAVEDATA/ULUS99999ABC/PARAM.SFO", std::string(4096, 's'));
+  saveParameters(m, 8, "ULUS99999", "ASDF", 16);
+  memory.copyIn(Used + 16, "ABC", 4);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Used + 36), 4);
+  CHECK(memory.read(4, Used + 40), 128);
+  CHECK(memory.readString(Used + 44, 8) == "128 KB", true);
+  CHECK(memory.read(4, Needed), 3);
+  CHECK(memory.readString(Needed + 8, 8) == "96 KB", true);
+  saveParameters(m, 8, "ULUS99999", "ABC", 2_MiB);  //2 MiB of data: 66 clusters, 2112 KiB
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Needed + 4), 2112);
+  CHECK(memory.readString(Needed + 8, 8) == "2 MB", true);
+
+  //the size mode: the free space; no files listed, nothing else; two secure files and a normal one, 4 clusters
+  saveParameters(m, 22, "ULUS99999", "ABC", 0);
+  memory.write(4, Parameters + 1532, Sizes);
+  memory.fill(Sizes, 0xcc, 64);
+  memory.write(4, Sizes, 0);
+  memory.write(4, Sizes + 4, 0);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Sizes + 16), 32_KiB);
+  CHECK(memory.read(4, Sizes + 20), 57'344);
+  CHECK(memory.read(4, Sizes + 24), 57'344 * 32);
+  CHECK(memory.readString(Sizes + 28, 8) == "1 GB", true);
+  for(u32 at : {36u, 40u, 48u, 52u}) CHECK(memory.read(4, Sizes + at), 0xcccc'cccc);
+  for(auto [n, size] : {std::pair{0u, 100u}, {1u, 40'000u}, {2u, 32'768u}}) {
+    memory.fill(Files + n * 24, 0, 24);
+    memory.write(4, Files + n * 24, size);
+  }
+  memory.write(4, Sizes, 2);
+  memory.write(4, Sizes + 4, 1);
+  memory.write(4, Sizes + 8, Files);
+  memory.write(4, Sizes + 12, Files + 48);
+  saveParameters(m, 22, "ULUS99999", "NONE", 0);  //(the save needn't be there)
+  memory.write(4, Parameters + 1532, Sizes);
+  memory.fill(Sizes + 36, 0xcc, 24);
+  CHECK(runSave(m), 0);
+  //they take 128 KiB, well within the free space: nothing more needed, new or over a save, the text left alone
+  for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 0);
+  for(u32 at : {40u, 52u}) CHECK(memory.read(4, Sizes + at), 0xcccc'cccc);
+  //a normal file of 2 GiB: 2,097,152 KiB, 262,144 past the 1,835,008 free, in each field and its text
+  memory.write(4, Files + 48, 0x8000'0000);  //(a 64-bit size, low word first)
+  memory.write(4, Files + 52, 0);
+  memory.write(4, Sizes, 0);  //no secure files
+  CHECK(runSave(m), 0);
+  for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 262'144);
+  for(u32 at : {40u, 52u}) CHECK(memory.readString(Sizes + at, 8) == "256 MB", true);
+  //the smaller structure has no size mode's answer
+  memory.fill(Sizes, 0xcc, 64);
+  saveParameters(m, 22, "ULUS99999", "ABC", 0);
+  memory.write(4, Parameters, 1500);
+  memory.write(4, Parameters + 1532, Sizes);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Sizes + 20), 0xcccc'cccc);
 }
 
 //The other dialogs: a message answered yes at once (noted); network settings cancelled; one at a time; asked about
@@ -404,8 +521,8 @@ auto utilityTests() -> Tests {
   return {
     {"utility savedata", savedata}, {"utility savedata names", savedataNames},
     {"utility savedata buffers", savedataBuffers}, {"utility savedata loops", savedataLoops},
-    {"utility savedata erase", savedataErase}, {"utility dialogs", dialogs}, {"utility keyboard", keyboard},
-    {"utility modules", modules},
+    {"utility savedata erase", savedataErase}, {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
+    {"utility keyboard", keyboard}, {"utility modules", modules},
   };
 }
 

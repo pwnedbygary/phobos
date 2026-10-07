@@ -47,5 +47,6 @@ void drop(Output* out);  //closes the file unkept, as if the test hadn't started
 
 void vfpuStart(void);      //first thing when the program starts: what round 1 and round 3 record as found then
 int vfpuRound(int round);  //1-3, or 4 for the FPU probes
-int geRound(int round);    //2: the GE's first tests and the controller's timing; 3: what they left open; 4: part 29's
+int geRound(int round);    //2: the GE's first tests and the controller's timing; 3: what they left open; 4:
+                           //parts 29's and 33's
 void geEnd(void);          //lets the GE go before the program leaves
