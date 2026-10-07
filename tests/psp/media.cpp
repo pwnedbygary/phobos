@@ -1378,8 +1378,88 @@ static auto rtcFileTimesAndTicks() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//Part 28's small functions, called directly: the controller's idle thresholds (-1 to 128 each, either out of range
+//refused with neither kept; read back, null places skipped, a kernel address refused), as ctrl/idle recorded; the
+//GE's translation width (0, 0x200, 0x400, 0x800 or 0x1000, the one there was returned, 0x400 first), as gpu/ge/edram
+//recorded; later SDKs' memory blocks (a name needed, types 0 and 1, options 4 bytes long, sizes in 256-byte steps
+//from the top for type 1, freed by either function, a pointer for any block and 0 for none), as sysmem/memblock
+//recorded; the HOME menu's language and button as set; the battery icon; the firmware version; microseconds as a
+//system clock. A state with each changed loads into another machine, which makes the same state.
+static auto oddsOfPart28() -> void {
+  KernelMachine m;
+  auto words = [&](u32 address) { return std::array<u32, 2>{word(m, address), word(m, address + 4)}; };
+  m.system.memory.write(4, R, 0x55), m.system.memory.write(4, R + 4, 0x55);
+  CHECK(m.call("sceCtrlGetIdleCancelThreshold", {R, R + 4}), 0);
+  CHECK((words(R) == std::array<u32, 2>{0xffff'ffff, 0xffff'ffff}), true);
+  CHECK(m.call("sceCtrlSetIdleCancelThreshold", {128, u32(-1)}), 0);
+  for(auto [reset, back] : {std::pair{-2, 0}, {0, 129}, {-65535, 65536}, {1, 129}}) {
+    CHECK(m.call("sceCtrlSetIdleCancelThreshold", {u32(reset), u32(back)}), Kernel::ErrorInvalidValue);
+  }
+  m.system.memory.write(4, R + 4, 0x55);
+  CHECK(m.call("sceCtrlGetIdleCancelThreshold", {R, 0}), 0);
+  CHECK((words(R) == std::array<u32, 2>{128, 0x55}), true);
+  CHECK(m.call("sceCtrlGetIdleCancelThreshold", {0, R + 4}), 0);
+  CHECK(word(m, R + 4), 0xffff'ffff);
+  CHECK(m.call("sceCtrlGetIdleCancelThreshold", {0xdead'beef, 0xdead'beef}), Kernel::ErrorPrivilegeRequired);
+
+  std::vector<std::pair<u32, u32>> widths = {{0, 0x400}, {0, 0}, {0x200, 0}, {0x400, 0x200}, {0x800, 0x400},
+                                              {0x1000, 0x800}};
+  for(auto [width, was] : widths) CHECK(m.call("sceGeEdramSetAddrTranslation", {width}), was);
+  for(u32 width : {0xffff'ffffu, 1u, 0x100u, 0x1ffu, 0xc00u, 0x1800u, 0x2000u}) {
+    CHECK(m.call("sceGeEdramSetAddrTranslation", {width}), Kernel::ErrorInvalidValue);
+  }
+  CHECK(m.kernel.geTranslation, 0x1000);
+
+  //(the memory block functions are known by their NIDs alone: kernel.cpp's addNID)
+  auto byNID = [&](u32 nid, std::initializer_list<u32> arguments) {
+    u32 n = 0;
+    for(u32 value : arguments) m.system.ipu.r[4 + n++] = value;
+    m.kernel.syscall(m.kernel.importCode("SysMemUserForUser", nid));
+    return m.system.ipu.r[2];
+  };
+  constexpr u32 AllocNID = 0xfe70'7fdf, FreeNID = 0x50f6'1d8a, PointerNID = 0xdb83'a952;
+  u32 name = m.string("block");
+  auto alloc = [&](u32 type, u32 size, u32 options = 0) { return byNID(AllocNID, {name, type, size, options}); };
+  CHECK(byNID(AllocNID, {0, 1, 0x100, 0}), Kernel::ErrorError);
+  for(u32 type : {0xffff'ffffu, 2u, 5u, 0x11u}) CHECK(alloc(type, 0x100), Kernel::ErrorIllegalAllocationType);
+  for(u32 size : {0u, 0xffff'ffffu}) CHECK(alloc(1, size), Kernel::ErrorAllocationFailed);
+  for(u32 optionsSize : {0u, 3u, 5u, 0x100u}) {
+    m.system.memory.write(4, R + 8, optionsSize);
+    CHECK(alloc(1, 0x100, R + 8), Kernel::ErrorIllegalArgument);
+  }
+  m.system.memory.write(4, R + 8, 4);
+  u32 top = alloc(1, 0x100, R + 8), below = alloc(1, 0x1001), low = alloc(0, 0x10);
+  CHECK(byNID(PointerNID, {top, R + 0x10}), 0);
+  CHECK(byNID(PointerNID, {below, R + 0x14}), 0);
+  CHECK(byNID(PointerNID, {low, R + 0x18}), 0);
+  CHECK(word(m, R + 0x10) - word(m, R + 0x14), 0x1100);  //0x1001 in 256-byte steps, just below
+  CHECK(word(m, R + 0x18), Kernel::UserMemory);
+  CHECK(m.call("sceKernelGetBlockHeadAddr", {below}), word(m, R + 0x14));
+  CHECK(m.call("sceKernelFreePartitionMemory", {top}), 0);
+  CHECK(byNID(FreeNID, {below}), 0);
+  CHECK(byNID(FreeNID, {below}), Kernel::ErrorUnknownUID);
+  m.system.memory.write(4, R + 0x14, 0x77);
+  CHECK(byNID(PointerNID, {below, R + 0x14}), 0);  //none: 0, nothing written
+  CHECK(word(m, R + 0x14), 0x77);
+
+  CHECK(m.call("sceImposeGetLanguageMode", {R + 0x20, R + 0x24}), 0);
+  CHECK((words(R + 0x20) == std::array<u32, 2>{1, 1}), true);
+  CHECK(m.call("sceImposeSetLanguageMode", {2, 0}), 0);
+  CHECK(m.call("sceImposeGetLanguageMode", {R + 0x20, R + 0x24}), 0);
+  CHECK((words(R + 0x20) == std::array<u32, 2>{2, 0}), true);
+  CHECK(m.call("sceImposeGetBatteryIconStatus", {R + 0x28, R + 0x2c}), 0);
+  CHECK((words(R + 0x28) == std::array<u32, 2>{0, 3}), true);
+  CHECK(m.call("sceKernelDevkitVersion", {}), 0x0606'0110);
+  CHECK(m.call("sceKernelUSec2SysClock", {123'456, R + 0x30}), 0);
+  CHECK((words(R + 0x30) == std::array<u32, 2>{123'456, 0}), true);
+  m.call("sceKernelUSec2SysClockWide", {0xffff'fffe});
+  CHECK(m.system.ipu.r[2] == 0xffff'fffe && m.system.ipu.r[3] == 0, true);
+  CHECK(roundTrip(m), true);
+}
+
 auto mediaTests() -> Tests {
-  return {{"mpeg stubs", mpegStubs}, {"mpeg movie fed and taken apart", mpegMovie},
+  return {{"part 28's odds and ends", oddsOfPart28},
+          {"mpeg stubs", mpegStubs}, {"mpeg movie fed and taken apart", mpegMovie},
           {"mpeg movie thread waits for its picture", mpegMovieThread},
           {"mpeg ringbuffer callback states", mpegCallbackStates},
           {"mpeg ringbuffer that isn't one given nothing", mpegRingbufferNotARing},

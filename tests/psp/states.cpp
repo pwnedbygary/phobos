@@ -204,6 +204,10 @@ static auto stateFields() -> void {
   u32 spareID = a.call("sceKernelCreateFpl", {a.string("spare"), 2, 0, 16, 1, 0});
   u32 pipeID = a.call("sceKernelCreateMsgPipe", {a.string("pipe"), 2, 0, 0x100, 0});
   u32 mailboxID = a.call("sceKernelCreateMbx", {a.string("box"), 0, 0});
+  //part 28's: a kernel mutex (free, recursive), an alarm, a virtual timer (stopped)
+  u32 mutexID = a.call("sceKernelCreateMutex", {a.string("mutex"), 0x200, 0, 0});
+  u32 alarmID = a.call("sceKernelSetAlarm", {1000, 0x0880'7000, 0x11});
+  u32 vtimerID = a.call("sceKernelCreateVTimer", {a.string("vtimer"), 0});
   u32 file = a.call("sceIoOpen", {a.string("ms0:/A.TXT"), 0x0001, 0});
   u32 other = a.call("sceIoOpen", {a.string("ms0:/B.TXT"), 0x0001, 0});
   u32 folder = a.call("sceIoDopen", {a.string("ms0:/LIST")});
@@ -656,8 +660,38 @@ static auto stateFields() -> void {
     {"mpeg stream shown height", [&] { movie.shown.resize(32 * 32 * 3 / 2), movie.shownHeight = 32; }},
     {"mpeg stream soundLast", [&] { movie.soundLast[0] ^= 1; }},
   };
+  //part 28's: each change leaves what a machine could have (the mutex held twice by thread one, ready by then; the
+  //alarm's handler queued among the calls into the program; the timer started, its handler running in the call that
+  //interrupts by then)
+  auto& mx = k.mutexes[mutexID];
+  auto& al = k.alarms[alarmID];
+  auto& vt = k.vtimers[vtimerID];
+  std::vector<std::pair<std::string, std::function<void()>>> part28 = {
+    {"mutex name", [&] { mx.name += "x"; }}, {"mutex attributes", [&] { mx.attributes ^= 0x100; }},
+    {"mutex initial", [&] { mx.initial = 3; }}, {"mutex count and owner", [&] { mx.count = 2, mx.owner = one; }},
+    {"alarm schedule", [&] { al.schedule += 5; }}, {"alarm earliest", [&] { al.earliest = k.cycles + 10; }},
+    {"alarm handler", [&] { al.handler ^= 4; }}, {"alarm common", [&] { al.common ^= 1; }},
+    {"alarm gp", [&] { al.gp ^= 4; }},
+    {"alarm calling", [&] {
+      al.calling = true;
+      k.calls.push_back({al.handler, al.gp, {al.common, 0, 0, 0}, false, false, Kernel::Call::Alarm, alarmID});
+    }},
+    {"vtimer name", [&] { vt.name += "x"; }}, {"vtimer active", [&] { vt.active = true, vt.base = k.systemTime(); }},
+    {"vtimer base", [&] { vt.base -= 1; }}, {"vtimer elapsed", [&] { vt.elapsed = 77; }},
+    {"vtimer schedule", [&] { vt.schedule = 99; }}, {"vtimer handler", [&] { vt.handler = 0x0880'7100; }},
+    {"vtimer common", [&] { vt.common = 0x22; }}, {"vtimer gp", [&] { vt.gp = 0x0880'7700; }},
+    {"vtimer earliest", [&] { vt.earliest = k.cycles + 20; }},
+    {"the call running a timer's handler", [&] {
+      k.callKind = Kernel::Call::VTimer, k.callID = vtimerID, vt.calling = true;
+    }},
+    {"call fourth argument", [&] { k.calls[0].arguments[3] ^= 1; }},
+    {"controller idleReset", [&] { c.idleReset = 5; }}, {"controller idleBack", [&] { c.idleBack = 0; }},
+    {"geTranslation", [&] { k.geTranslation = 0x800; }},
+    {"imposeLanguage", [&] { k.imposeLanguage = 7; }}, {"imposeButton", [&] { k.imposeButton = 0; }},
+  };
   changes.insert(changes.end(), more.begin(), more.end());
   changes.insert(changes.end(), codecs.begin(), codecs.end());
+  changes.insert(changes.end(), part28.begin(), part28.end());
   for(auto& [field, change] : changes) {
     auto before = save(a);
     change();
@@ -1162,6 +1196,65 @@ static auto stateFields() -> void {
   refuses("the GE running a list out of the queue", [&] { k.geRunning = k.geFree.front(); });
   refuses("the GE running list 64", [&] { k.geRunning = 64; });
   refuses("a list finishing out of the queue", [&] { k.geFinishing = k.geFree.front(); });
+  //part 28's mutexes, alarms, virtual timers, controller and GE as no machine has them; and a thread waiting for the
+  //mutex thread one holds, as a machine has it
+  auto mutexOne = [&]() -> Kernel::Mutex& { return k.mutexes.at(mutexID); };
+  auto waitsForMutex = [&](Kernel::Thread& waiter, u32 count) {
+    waiter.status = Kernel::Status::Waiting, waiter.wait = Kernel::Wait::Mutex, waiter.waitID = mutexID;
+    waiter.waitCount = count;
+  };
+  {
+    waitsForMutex(*k.threads.at(two), 1);
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
+    CHECK(load(a, state), true);
+  }
+  refuses("a mutex under another's ID", [&] { mutexOne().uid ^= 1; });
+  refuses("a mutex's ID not handed out yet", [&] {
+    auto copy = mutexOne();
+    copy.uid = k.nextUID, copy.count = 0, copy.owner = 0;
+    k.mutexes[k.nextUID] = copy;
+  });
+  refuses("a mutex counted with no holder", [&] { mutexOne().owner = 0; });
+  refuses("a mutex held, counted 0", [&] { mutexOne().count = 0; });
+  refuses("a mutex held by a thread there isn't", [&] { mutexOne().owner = 0x7777; });
+  refuses("a mutex held by a thread that has ended", [&] { mutexOne().owner = two; });
+  refuses("a mutex counted twice that isn't recursive", [&] { mutexOne().attributes &= ~0x200u; });
+  refuses("a mutex with attribute 0x400", [&] { mutexOne().attributes |= 0x400; });
+  refuses("a thread waiting for a free mutex", [&] {
+    mutexOne().count = 0, mutexOne().owner = 0;
+    waitsForMutex(*k.threads.at(two), 1);
+  });
+  refuses("a thread waiting for a mutex it holds", [&] { waitsForMutex(*k.threads.at(one), 1); });
+  refuses("a thread waiting for a mutex there isn't", [&] {
+    waitsForMutex(*k.threads.at(two), 1);
+    k.mutexes.erase(mutexID);
+  });
+  refuses("a thread waiting for a mutex with a count of 0", [&] { waitsForMutex(*k.threads.at(two), 0); });
+  auto alarmOne = [&]() -> Kernel::Alarm& { return k.alarms.at(alarmID); };
+  refuses("an alarm under another's ID", [&] { alarmOne().uid ^= 1; });
+  refuses("an alarm's ID not handed out yet", [&] {
+    auto copy = alarmOne();
+    copy.uid = k.nextUID, copy.calling = false;
+    k.alarms[k.nextUID] = copy;
+  });
+  refuses("an alarm with no handler", [&] { alarmOne().handler = 0; });
+  refuses("an alarm going off later than a call can set one", [&] { alarmOne().earliest = k.timerEarliest() + 1; });
+  refuses("an alarm's handler called with no call for it", [&] { k.calls.pop_back(); });
+  refuses("an alarm's handler called twice", [&] { k.calls.push_back(k.calls.back()); });
+  refuses("a timer's call for an alarm there isn't", [&] { k.calls.back().id = 0x7777; });
+  refuses("a call of a kind there isn't", [&] { k.calls.back().kind = 3; });
+  auto vtimerOne = [&]() -> Kernel::VTimer& { return k.vtimers.at(vtimerID); };
+  refuses("a vtimer under another's ID", [&] { vtimerOne().uid ^= 1; });
+  refuses("a vtimer stopped with a base", [&] { vtimerOne().active = false; });
+  refuses("a vtimer started after now", [&] { vtimerOne().base = k.systemTime() + 1; });
+  refuses("a vtimer's handler later than a call can set one", [&] { vtimerOne().earliest = k.timerEarliest() + 1; });
+  refuses("a vtimer's handler called with no call for it", [&] { k.callKind = Kernel::Call::Plain, k.callID = 0; });
+  refuses("a timer's handler running with nothing interrupted", [&] { k.interrupting = false; });
+  refuses("an idle threshold past 128", [&] { k.controller.idleReset = 129; });
+  refuses("an idle threshold below -1", [&] { k.controller.idleBack = -2; });
+  refuses("a translation width sceGeEdramSetAddrTranslation refuses", [&] { k.geTranslation = 0x300; });
   CHECK(save(a) == state, true);
 }
 

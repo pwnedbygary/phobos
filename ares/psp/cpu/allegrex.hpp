@@ -84,6 +84,11 @@ struct Allegrex {
   auto instruction() -> void;
   auto execute(u32 address, u32 instruction) -> u32;
   auto run(u64 instructions) -> u64;
+  //How many instructions the run under way has run so far, as its last block or instruction began: the HLE kernel's
+  //clock catches up to it at each syscall. And how many it runs in all: a syscall may bring that forward, to stop the
+  //run at something it made due sooner (a thread's wait ending, a timer).
+  u64 instructionsRun = 0;
+  u64 runLimit = 0;
 
   //The integer unit: 32 general registers (r0 always reads as zero), hi and lo (where multiply and divide put their
   //results), and the program counter.

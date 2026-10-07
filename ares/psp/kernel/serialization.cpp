@@ -1,8 +1,8 @@
 //Saving and loading the kernel, for save states: the program (its module, the modules it loaded, and its imports in
 //the order its syscall codes count them), its threads (each one's registers while it isn't running, and what it
-//waits for), the semaphores, mutexes, event flags and callbacks, the memory handed out, sound output's channels, the
-//open files and folders, the controller's samples, the display, the calls into the program and the interrupt
-//handlers, the GE driver's lists, and the clock.
+//waits for), the semaphores, mutexes, event flags, callbacks, alarms and virtual timers, the memory handed out, sound
+//output's channels, the open files and folders, the controller's samples, the display, the calls into the program
+//and the interrupt handlers, the GE driver's lists, and the clock.
 //
 //Open files are saved by their PSP paths: on loading, a host file is opened again where the devices are then, at
 //the position it had (one that's gone since is dropped, and the program's next use of it fails as for any bad file).
@@ -178,7 +178,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
     s(w.done); s(w.resultPointer);
-    check(t.wait <= Wait::Codec && w.wait <= Wait::Mailbox);
+    check(t.wait <= Wait::Mutex && (w.wait <= Wait::Mailbox || w.wait == Wait::Mutex));
     check(t.callbackID < nextUID);
     s(t.suspended);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
@@ -228,6 +228,13 @@ auto Kernel::serialize(serializer& s) -> bool {
     s(semaphore.initial);
   });
   map(lwMutexes, [&](u32& workArea) { s(workArea); });
+  //kernel mutexes (mutexes.cpp): held a count of 1 at most unless recursive, and held exactly while counted
+  map(mutexes, [&](Mutex& mutex) {
+    s(mutex.uid); text(mutex.name); s(mutex.attributes); s(mutex.initial); s(mutex.count); s(mutex.owner);
+    check(!(mutex.attributes & ~0xbffu) && mutex.initial >= 0 && mutex.count >= 0);
+    check((mutex.attributes & 0x200) || (mutex.initial <= 1 && mutex.count <= 1));
+    check((mutex.count > 0) == (mutex.owner != 0));
+  });
   map(pools, [&](Pool& pool) {
     s(pool.uid); text(pool.name); s(pool.attributes); s(pool.variable); s(pool.block); s(pool.address);
     s(pool.size); s(pool.blockSize);
@@ -257,6 +264,20 @@ auto Kernel::serialize(serializer& s) -> bool {
     s(callback.notifyCount); s(callback.notifyArg);
   });
   s(exitCallback);
+  //alarms and virtual timers (timers.cpp): an alarm has a handler; a stopped timer has no base, a started one a base
+  //that has come; neither may go off later than a call allows from now (TimerLead), as no call can have set that
+  auto lead = timerEarliest();
+  map(alarms, [&](Alarm& alarm) {
+    s(alarm.uid); s(alarm.schedule); s(alarm.earliest); s(alarm.handler); s(alarm.common); s(alarm.gp);
+    s(alarm.calling);
+    check(alarm.handler && alarm.earliest <= lead);
+  });
+  map(vtimers, [&](VTimer& timer) {
+    s(timer.uid); text(timer.name); s(timer.active); s(timer.base); s(timer.elapsed); s(timer.schedule);
+    s(timer.handler); s(timer.common); s(timer.gp); s(timer.earliest); s(timer.calling);
+    check(timer.active ? timer.base <= systemTime() : !timer.base);
+    check(timer.earliest <= lead);
+  });
   vector(memoryStickCallbacks, [&](u32& callback) { s(callback); });
   s(umdCallback);
   vector(blocks, [&](Block& block) { s(block.uid); text(block.name); s(block.address); s(block.size); });
@@ -551,14 +572,35 @@ auto Kernel::serialize(serializer& s) -> bool {
       if(valid) check(fontReload(font) && call.asks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
     }
   }
-  //the utilities: the dialog, and the modules loaded
+  //the utilities: the dialog, and the modules loaded; the HOME menu's language and button (any the program sets)
   s(dialog.kind); s(dialog.status); s(dialog.next); s(dialog.changeAt); s(dialog.parameters);
   vector(utilityModules, [&](u32& module) { s(module); });
+  s(imposeLanguage); s(imposeButton);
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);
     for(auto& [uid, semaphore] : semaphores) check(uid < nextUID && semaphore.uid == uid);
     for(auto& [uid, workArea] : lwMutexes) check(uid < nextUID);
+    //a mutex is held by a thread there is that hasn't ended (an ending frees what it holds); a thread waiting for
+    //one waits for one held by another thread (a mutex freed goes straight to its next waiter), with a count it takes
+    for(auto& [uid, mutex] : mutexes) {
+      check(uid < nextUID && mutex.uid == uid);
+      if(mutex.owner) {
+        auto owner = threads.find(mutex.owner);
+        check(owner != threads.end() && owner->second->status != Status::Dormant);
+      }
+    }
+    for(auto& [uid, t] : threads) {
+      if(t->status != Status::Waiting || t->wait != Wait::Mutex) continue;
+      auto mutex = mutexes.find(t->waitID);
+      check(mutex != mutexes.end() && mutex->second.count && mutex->second.owner != uid);
+      if(mutex != mutexes.end()) {
+        s32 count = s32(t->waitCount);
+        check(count > 0 && (count == 1 || mutex->second.attributes & 0x200));
+      }
+    }
+    for(auto& [uid, alarm] : alarms) check(uid < nextUID && alarm.uid == uid);
+    for(auto& [uid, timer] : vtimers) check(uid < nextUID && timer.uid == uid);
     for(auto& [uid, pool] : pools) {
       check(uid < nextUID && pool.uid == uid && pool.block < nextUID && poolHolds(pool, blocks));
     }
@@ -703,7 +745,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   for(auto& sample : c.samples) { s(sample.time); s(sample.buttons); s(sample.x); s(sample.y); }
   s(c.next); s(c.unread); s(c.sampled);
   s(c.latch.made); s(c.latch.broken); s(c.latch.held); s(c.latch.released); s(c.latch.samples);
+  s(c.idleReset); s(c.idleBack);
   check(c.next < 64 && c.unread <= 63);
+  check(c.idleReset >= -1 && c.idleReset <= 128 && c.idleBack >= -1 && c.idleBack <= 128);
   //a sampling cycle as sceCtrlSetSamplingCycle allows (none, or 5555 to 20000 microseconds), with the next sample no
   //more than one cycle ahead, nor a frame behind
   u64 period = u64(c.cycle) * (CPUFrequency / 1'000'000);
@@ -717,10 +761,39 @@ auto Kernel::serialize(serializer& s) -> bool {
   //calls into the program. The interrupt flag is the CPU's (its state, loaded before this, has it): on or held off,
   //1 or 0, as mtic and the kernel leave it
   vector(calls, [&](Call& call) {
-    s(call.function); s(call.gp); s(call.arguments); s(call.resumesGe); s(call.vblank);
+    s(call.function); s(call.gp); s(call.arguments); s(call.resumesGe); s(call.vblank); s(call.kind); s(call.id);
+    check(call.kind <= Call::VTimer);
   });
   check(interruptsEnabled <= 1);
   s(interrupting); s(rescheduleAfter);
+  s(callKind); s(callID);
+  check(callKind <= Call::VTimer && (interrupting || callKind == Call::Plain));
+  //a timer marked as having its handler called has exactly one call, waiting its turn or running, and a timer's call
+  //waiting its turn is for a timer there is, so marked (cancelling or deleting a timer drops its call). The one
+  //running may have lost its alarm (cancelled by its own handler).
+  if(s.reading()) {
+    std::vector<std::pair<u32, u32>> pending;  //(kind, timer) of each timer's call, waiting or running
+    for(auto& call : calls) {
+      if(call.kind == Call::Plain) continue;
+      pending.push_back({call.kind, call.id});
+      bool marked = call.kind == Call::Alarm ? alarms.count(call.id) && alarms[call.id].calling
+                                             : vtimers.count(call.id) && vtimers[call.id].calling;
+      check(marked);
+    }
+    if(interrupting && callKind != Call::Plain) {
+      bool there = callKind == Call::Alarm ? alarms.count(callID) : vtimers.count(callID);
+      if(there) {
+        pending.push_back({callKind, callID});
+        check(callKind == Call::Alarm ? alarms[callID].calling : vtimers[callID].calling);
+      }
+    }
+    std::sort(pending.begin(), pending.end());
+    check(std::adjacent_find(pending.begin(), pending.end()) == pending.end());
+    u32 marked = 0;
+    for(auto& [uid, alarm] : alarms) marked += alarm.calling;
+    for(auto& [uid, timer] : vtimers) marked += timer.calling;
+    check(marked == pending.size());
+  }
   context(interrupted);
   s(interruptedHalted); s(callResumesGe);
   //sub-interrupt handlers (none on the vertical blank's 16-31: a program can't register those), and a vertical
@@ -754,6 +827,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(geRunning); s(geBusy); s(geSuspended); s(geFinishing);
   s(geLeft);  //the frame's commands still to run: no more than a frame's (each vertical blank gives it GeBudget)
   check(geLeft <= GeBudget);
+  s(geTranslation);  //a width sceGeEdramSetAddrTranslation takes
+  check(!geTranslation || geTranslation == 0x200 || geTranslation == 0x400 || geTranslation == 0x800
+        || geTranslation == 0x1000);
   if(s.reading() && valid) {
     //Every list is in the queue or free, once. A list queued, running or paused is in the queue (sceGeListDeQueue
     //and geEnded() take it out of there); one never queued is free; a completed one is either (it leaves the queue

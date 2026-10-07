@@ -132,10 +132,19 @@ auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer, bool callb
   reschedule();
 }
 
-//When a wait with a timeout gives up: the timeout's microseconds (a word at pointer) from now, as a cycle; 0, no
-//time limit, if there's no pointer.
-auto Kernel::timeout(u32 pointer) const -> u64 {
-  return pointer ? cycles + u64(memory.read(4, pointer)) * (CPUFrequency / 1'000'000) : 0;
+//The calling thread waits as block() has it, with a timeout (microseconds, a word at pointer; none without one) as
+//long as a PSP's lasts, which pspautotests' threads/scheduling/waittimeouts recorded for every kind of wait alike:
+//max(timeout, 205) + about 35 microseconds from the call, what's left of it written back as the wait ends (0 if it
+//ran out). A very short one times out at once, its time not written back: 1 did, 100 lasted its 240, and the edge
+//between, which the test says moves with the call and from run to run, is taken as 30 here. At once is still a
+//moment's wait (TimeoutLate's), in which other threads run: the PSP's scheduling logs have a thread polling with
+//timeouts of 1 leave room between its polls for a worse one to print a line and make a call.
+auto Kernel::blockTimed(Wait wait, u32 id, u32 pointer, bool callbacks) -> void {
+  if(!pointer) return block(wait, id, 0, 0, callbacks);
+  u64 asked = memory.read(4, pointer);
+  bool atOnce = asked <= TimeoutAtOnce;
+  u64 length = atOnce ? TimeoutLate : std::max(asked, TimeoutLeast) + TimeoutLate;
+  block(wait, id, cycles + length * (CPUFrequency / 1'000'000), atOnce ? 0 : pointer, callbacks);
 }
 
 //Picks the thread to run: the ready one with the highest priority (the lowest number), the one ready the longest
@@ -211,18 +220,25 @@ auto Kernel::events() -> void {
   }
   if(audioEvents()) woke = true;
   if(asyncEvents()) woke = true;
+  timerEvents();  //(an alarm's or a virtual timer's handler joins the calls into the program)
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting || !thread->wakeAt || cycles < thread->wakeAt) continue;
-    if(thread->wait == Wait::LwMutex) {  //it stops waiting: the mutex has one waiter fewer
-      memory.write(4, thread->waitID + 12, memory.read(4, thread->waitID + 12) - 1);
-    }
-    if(thread->wait == Wait::EventFlag) eventFlagTimedOut(*thread);
-    Wait wait = thread->wait;
-    ready(*thread, timeUp(*thread));
-    waiterLeft(wait, thread->waitID);
+    leaveWait(*thread, timeUp(*thread));
     woke = true;
   }
   if(woke) reschedule();
+}
+
+//A thread stops waiting without having been given what it waited for, told value (its time ran out, or another
+//thread let it go: sceKernelReleaseWaitThread): a lightweight mutex counts one waiter fewer, a thread that waited on
+//an event flag is told its bits, and those in line behind it are served as they would have been had it never come
+//(waiterLeft()). (The caller reschedules.)
+auto Kernel::leaveWait(Thread& thread, u32 value) -> void {
+  if(thread.wait == Wait::LwMutex) memory.write(4, thread.waitID + 12, memory.read(4, thread.waitID + 12) - 1);
+  if(thread.wait == Wait::EventFlag) eventFlagTimedOut(thread);
+  Wait wait = thread.wait;
+  ready(thread, value);
+  waiterLeft(wait, thread.waitID);
 }
 
 //What a wait whose time is up returns: a delay, 0; a synchronous read or write, or a decode, its result; any other, a
@@ -251,7 +267,7 @@ auto Kernel::waiterLeft(Wait wait, u32 id) -> void {
 
 //How many cycles until the next thing that's due (at most until the next vertical blank).
 auto Kernel::untilNextEvent() const -> u64 {
-  u64 next = std::min({nextVblank, nextAudioEvent(), nextAsyncEvent()});
+  u64 next = std::min({nextVblank, nextAudioEvent(), nextAsyncEvent(), nextTimerEvent()});
   if(controller.cycle) next = std::min(next, controller.nextSample);
   for(auto& [uid, thread] : threads) {
     if(thread->status == Status::Waiting && thread->wakeAt) next = std::min(next, thread->wakeAt);
@@ -265,8 +281,9 @@ auto Kernel::untilNextEvent() const -> u64 {
 //go each time round, so even a display list that never ends lets the frame end.
 auto Kernel::idle(u64 end) -> bool {
   if(interrupting || (!calls.empty() && interruptsEnabled)) return true;
-  //(a file's asynchronous request being done may wake a thread: one waiting for it, or through its callback)
-  bool timed = geBusy || vblankHandlers() || nextAsyncEvent() != ~0ull;
+  //(a file's asynchronous request being done may wake a thread: one waiting for it, or through its callback; and so
+  //may an alarm's or a virtual timer's handler)
+  bool timed = geBusy || vblankHandlers() || nextAsyncEvent() != ~0ull || nextTimerEvent() != ~0ull;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting) continue;
     if(thread->wakeAt || thread->wait == Wait::Vblank || thread->wait == Wait::Controller) timed = true;
@@ -287,7 +304,7 @@ auto Kernel::idle(u64 end) -> bool {
 //A thread's run is over (status: what it returned, or passed to the exit function): it's dormant again, and the
 //threads waiting for its end are told how it ended, as are those waiting for a module whose module_start or
 //module_stop it ran (modules.cpp). A thread ended in a wait (terminated), or in a callback that put its wait aside,
-//leaves that wait unserved (waiterLeft()).
+//leaves that wait unserved (waiterLeft()). The kernel mutexes it held are free, each going to its next waiter.
 auto Kernel::endThread(Thread& thread, s32 status) -> void {
   Wait wait = thread.wait;
   WaitState before = thread.waitBeforeCallback;
@@ -303,6 +320,7 @@ auto Kernel::endThread(Thread& thread, s32 status) -> void {
   }
   waiterLeft(wait, thread.waitID);
   waiterLeft(before.wait, before.id);
+  mutexesFreed(thread.uid);
   moduleThreadEnded(thread, status);
   fontAbandoned(thread.uid);
   mpegAbandoned(thread.uid);
@@ -385,7 +403,11 @@ auto Kernel::sceKernelDeleteThread() -> void {
   result(0);
 }
 
+//The calling thread's ID. An interrupt handler is no thread: pspautotests' threads/alarm recorded an alarm's handler
+//finding itself neither the thread it interrupted nor the other one (what it got wasn't printed: ILLEGAL_CONTEXT
+//here, as other calls a handler can't make are told).
 auto Kernel::sceKernelGetThreadId() -> void {
+  if(interrupting) return result(ErrorIllegalContext);
   result(current ? current->uid : 0);
 }
 
@@ -482,6 +504,32 @@ auto Kernel::sceKernelWakeupThread() -> void {
   }
 }
 
+//(thread, 0 for the caller): the wakeups that came for it while it was awake are forgotten; returns how many there
+//were (pspsdk's pspthreadman.h: "Cancel a thread that was to be woken with sceKernelWakeupThread").
+auto Kernel::sceKernelCancelWakeupThread() -> void {
+  auto thread = findThread(arg(0));
+  if(!thread) return result(ErrorUnknownThread);
+  result(thread->wakeupCount);
+  thread->wakeupCount = 0;
+}
+
+//(thread): a thread in a wait is let go of it, whatever it waits for, its wait ending as a timeout's does (those in
+//line behind it served) but told RELEASE_WAIT; one made ready to run its callbacks counts as waiting still, one
+//running them doesn't. As pspautotests' threads/threads/release recorded: a delay, a sleep and a semaphore's wait
+//let go, the released thread running at once if it's better than the caller; a thread not waiting (ended, or never
+//started) NOT_WAIT; thread 0 or the caller itself ILLEGAL_THID; one there isn't UNKNOWN_THID.
+auto Kernel::sceKernelReleaseWaitThread() -> void {
+  if(!arg(0) || (current && arg(0) == current->uid)) return result(ErrorIllegalThread);
+  auto found = threads.find(arg(0));
+  if(found == threads.end()) return result(ErrorUnknownThread);
+  auto& thread = *found->second;
+  bool waiting = thread.status == Status::Waiting || thread.status == Status::Ready;
+  if(!waiting || thread.wait == Wait::None) return result(ErrorNotWait);
+  leaveWait(thread, ErrorReleaseWait);
+  result(0);
+  reschedule();
+}
+
 //(thread, timeout): waits for the thread to end, and returns what it ended with.
 auto Kernel::waitThreadEnd(bool callbacks) -> void {
   if(!mayWait()) return;
@@ -492,7 +540,7 @@ auto Kernel::waitThreadEnd(bool callbacks) -> void {
     return callbacksOnReturn(callbacks);
   }
   result(0);
-  block(Wait::ThreadEnd, thread->uid, timeout(arg(1)), arg(1), callbacks);
+  blockTimed(Wait::ThreadEnd, thread->uid, arg(1), callbacks);
 }
 
 auto Kernel::sceKernelWaitThreadEnd() -> void {
@@ -567,7 +615,7 @@ auto Kernel::waitSemaphore(bool callbacks) -> void {
   }
   current->waitCount = count;
   current->readySince = ++readySequence;  //its place in the queue
-  block(Wait::Semaphore, semaphore.uid, timeout(arg(2)), arg(2), callbacks);
+  blockTimed(Wait::Semaphore, semaphore.uid, arg(2), callbacks);
 }
 
 auto Kernel::sceKernelWaitSema() -> void {
@@ -587,6 +635,28 @@ auto Kernel::sceKernelPollSema() -> void {
   if(semaphore.count < count) return result(ErrorSemaphoreZero);
   semaphore.count -= count;
   result(0);
+}
+
+//(semaphore, new count, where to put how many threads waited): every thread waiting on it is told the wait was
+//cancelled (WAIT_CANCEL), and its count becomes the new one, which can't be past its maximum (ILLEGAL_COUNT, nothing
+//written), as pspautotests' threads/semaphores/cancel recorded. A negative count is taken as the count it was made
+//with (the recordings, of a semaphore made with 0, read 0 after it either way).
+auto Kernel::sceKernelCancelSema() -> void {
+  auto found = semaphores.find(arg(0));
+  if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
+  auto& semaphore = found->second;
+  s32 count = s32(arg(1));
+  if(count > semaphore.maximum) return result(ErrorIllegalCount);
+  u32 waiting = 0;
+  for(auto& [uid, thread] : threads) {
+    if(thread->status != Status::Waiting || thread->wait != Wait::Semaphore || thread->waitID != arg(0)) continue;
+    ready(*thread, ErrorWaitCancelled);
+    waiting++;
+  }
+  if(arg(2)) memory.write(4, arg(2), waiting);
+  semaphore.count = count < 0 ? semaphore.initial : count;
+  result(0);
+  reschedule();
 }
 
 //Lightweight mutexes keep their state in the program's own memory, in a 32-byte work area (SceLwMutexWorkarea):
@@ -645,8 +715,7 @@ auto Kernel::lockLwMutex(bool callbacks) -> void {
   memory.write(4, workArea + 12, memory.read(4, workArea + 12) + 1);
   current->waitCount = count;
   current->readySince = ++readySequence;
-  block(Wait::LwMutex, workArea,
-        timeout ? cycles + u64(memory.read(4, timeout)) * (CPUFrequency / 1'000'000) : 0, timeout, callbacks);
+  blockTimed(Wait::LwMutex, workArea, timeout, callbacks);
 }
 
 auto Kernel::sceKernelLockLwMutex() -> void {
@@ -674,12 +743,19 @@ auto Kernel::sceKernelTryLockLwMutex() -> void {
   result(ErrorLwMutexLocked);
 }
 
-//Gives an unlocked mutex to the thread that has waited for it longest.
+//Gives an unlocked mutex to the thread that has waited for it longest, or with attribute 0x100 to the best of them
+//(the longest waiting among equals), as pspautotests' threads/scheduling/mutexhandoff recorded for both kinds of
+//mutex.
 auto Kernel::unlockLwMutex(u32 workArea) -> void {
+  bool byPriority = memory.read(4, workArea + 8) & 0x100;
+  auto before = [&](const Thread& a, const Thread& b) {
+    if(byPriority && a.priority != b.priority) return a.priority < b.priority;
+    return a.readySince < b.readySince;
+  };
   Thread* next = nullptr;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting || thread->wait != Wait::LwMutex || thread->waitID != workArea) continue;
-    if(!next || thread->readySince < next->readySince) next = thread.get();
+    if(!next || before(*thread, *next)) next = thread.get();
   }
   if(!next) return;
   memory.write(4, workArea, next->waitCount);

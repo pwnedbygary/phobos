@@ -14,6 +14,8 @@ int main() {
   for(auto& test : utilityTests()) tests.push_back(test);
   for(auto& test : poolTests()) tests.push_back(test);
   for(auto& test : messageTests()) tests.push_back(test);
+  for(auto& test : mutexTests()) tests.push_back(test);
+  for(auto& test : timerTests()) tests.push_back(test);
   for(auto& test : mediaTests()) tests.push_back(test);
   for(auto& test : atracTests()) tests.push_back(test);
   for(auto& test : mp3Tests()) tests.push_back(test);

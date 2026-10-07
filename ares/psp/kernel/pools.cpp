@@ -129,7 +129,7 @@ auto Kernel::poolAllocate(bool variable, bool callbacks) -> void {
   current->waitCount = size;
   current->waitPointer = pointer;
   current->readySince = ++readySequence;
-  block(variable ? Wait::Vpl : Wait::Fpl, pool.uid, timeout(timeoutPointer), timeoutPointer, callbacks);
+  blockTimed(variable ? Wait::Vpl : Wait::Fpl, pool.uid, timeoutPointer, callbacks);
 }
 
 //(pool, size for a variable one, where to put the address): room at once, or no memory.
