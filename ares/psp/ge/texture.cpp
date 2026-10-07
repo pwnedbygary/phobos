@@ -36,7 +36,8 @@
 //Read from memory as before, texel by texel, are: a texture of a format the PSP doesn't have (11-15: texel() notes it
 //as it's used); a texture some of whose bytes have no memory behind them (each such read is reported); and a texture
 //the primitive may draw over itself (its frame buffer or depth buffer and the texture overlap), whose texels then
-//are the pixels it has drawn so far, as this core always drew it, kept so that every pixel stays as it was.
+//are the pixels it has drawn so far, as this core always drew it, kept so that every pixel stays as it was. Where
+//such a texture's bytes are all in the host's memory side by side, texel() reads them from there (direct()).
 //Whether a PSP's texture reads see the pixels of the primitive drawing them hasn't been measured.
 
 static constexpr u32 TexelBits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
@@ -92,10 +93,21 @@ auto GE::loadClut() -> void {
   if(std::memcmp(before, clut, sizeof(clut))) paletteChanged();
 }
 
-//The palette's contents changed: a new hash and version, by which decoded textures of indices find theirs.
+//The palette's contents changed: a new hash and version, by which decoded textures of indices find theirs. (Only
+//whether two hashes are equal matters, and a decoded texture found by its palette's hash is checked byte for byte
+//against the palette: the hash goes eight bytes at a time, in four lanes side by side, for speed.)
 auto GE::paletteChanged() -> void {
-  u64 hash = 0xcbf2'9ce4'8422'2325;
-  for(u8 byte : clut) hash = (hash ^ byte) * 0x100'0000'01b3;
+  u64 lanes[4] = {0x9e37'79b9'7f4a'7c15, 0xc2b2'ae3d'27d4'eb4f, 0x1656'67b1'9e37'79f9, 0x85eb'ca77'c2b2'ae63};
+  for(u32 n = 0; n < sizeof(clut); n += 32) {
+    for(u32 k = 0; k < 4; k++) {
+      u64 word;
+      std::memcpy(&word, clut + n + k * 8, 8);
+      u64 mixed = lanes[k] ^ word;
+      lanes[k] = (mixed << 23 | mixed >> 41) * 0x9e37'79b9'7f4a'7c15;
+    }
+  }
+  u64 hash = lanes[0];
+  for(u32 k = 1; k < 4; k++) hash = (hash ^ lanes[k]) * 0x100'0000'01b3, hash ^= hash >> 29;
   clutHash = hash;
   clutVersion++;
 }
@@ -163,12 +175,74 @@ static auto texelFrom(const GE::Sampler& t, const u8* clut, s32 u, s32 v, const 
   return widen16(clut[entry * 2] | clut[entry * 2 + 1] << 8, t.clutFormat);
 }
 
+//texelFrom() for rows from up to rows (not including) of a texture of format 0-7, width texels each, whose bytes lie
+//side by side in the host's memory, base being where address low is: into out, each texel exactly as texelFrom()
+//reads it, with what doesn't change along a row worked out once a row, and what a palette's entry becomes once an
+//entry (once an index, for indices of 4 or 8 bits).
+static auto decodeRows(const GE::Sampler& t, const u8* clut, const u8* base, u32 low, u32 width, u32 from, u32 rows,
+                       u32* out) -> void {
+  u32 bits = TexelBits[t.format], rowBytes = t.bufferWidth * bits / 8;
+  const u8* first = base + (t.address - low);
+  u32 limit = t.clutFormat == 3 ? 0xff : 0x1ff, offset = t.clutOffset & limit;
+  u32 entries[512], indices[256];
+  if(t.format >= 4) {
+    for(u32 entry = 0; entry <= limit; entry++) {
+      entries[entry] = t.clutFormat == 3
+        ? clut[entry * 4] | clut[entry * 4 + 1] << 8 | clut[entry * 4 + 2] << 16 | u32(clut[entry * 4 + 3]) << 24
+        : widen16(clut[entry * 2] | clut[entry * 2 + 1] << 8, t.clutFormat);
+    }
+    for(u32 index = 0; index < 256; index++) {
+      indices[index] = entries[(((index >> t.clutShift) & t.clutMask) | offset) & limit];
+    }
+  }
+  for(u32 v = from; v < rows; v++) {
+    //the row's first byte; then a texel's byte, byte, is that far along it, or through a swizzled texture's blocks
+    const u8* row = first + (!t.swizzled ? v * rowBytes : v / 8 * (rowBytes / 16) * 128 + v % 8 * 16);
+    auto at = [&](u32 byte) { return !t.swizzled ? row + byte : row + byte / 16 * 128 + byte % 16; };
+    auto read16 = [&](u32 byte) { u16 value; std::memcpy(&value, at(byte), 2); return u32(value); };
+    auto read32 = [&](u32 byte) { u32 value; std::memcpy(&value, at(byte), 4); return value; };
+    u32* texels = out + v * width;
+    switch(t.format) {
+    case 0: case 1: case 2: for(u32 u = 0; u < width; u++) texels[u] = widen16(read16(u * 2), t.format); break;
+    case 3: for(u32 u = 0; u < width; u++) texels[u] = read32(u * 4); break;
+    case 4: for(u32 u = 0; u < width; u++) texels[u] = indices[*at(u / 2) >> (u & 1) * 4 & 15]; break;
+    case 5: for(u32 u = 0; u < width; u++) texels[u] = indices[*at(u)]; break;
+    case 6: case 7:
+      for(u32 u = 0; u < width; u++) {
+        u32 index = t.format == 6 ? read16(u * 2) : read32(u * 4);
+        texels[u] = entries[(((index >> t.clutShift) & t.clutMask) | offset) & limit];
+      }
+      break;
+    }
+  }
+}
+
 auto GE::texel(const Sampler& t, s32 u, s32 v) -> u32 {
   if(t.format > 10) {
     note("a texture format the PSP doesn't have (11-15): its texels read as 0");
     return 0;
   }
+  if(t.bytes) {  //(the very bytes memory.read() would give: see direct())
+    return texelFrom(t, clut, u, v, [&](u32 size, u32 at) -> u32 {
+      const u8* bytes = t.bytes + (at - t.address);
+      if(size == 1) return bytes[0];
+      if(size == 2) return bytes[0] | bytes[1] << 8;
+      return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | u32(bytes[3]) << 24;
+    });
+  }
   return texelFrom(t, clut, u, v, [&](u32 size, u32 at) { return memory.read(size, at); });
+}
+
+//For a texture read from memory as it's drawn (not decoded: see the top of this file): where all of its bytes are
+//in the host's memory, side by side, or none. Its texels are then read from there, the same bytes memory.read()
+//gives (VRAM's first and third copies, or RAM: nothing rearranged, nothing unmapped to report), without finding the
+//memory again at every texel. Such a primitive is drawn at once, after what waits (threads.cpp), so the bytes are
+//as memory.read() would find them as it draws.
+auto GE::direct(const Sampler& t) -> const u8* {
+  if(t.format > 10) return nullptr;
+  u32 low, high;
+  textureBytes(t, std::min<u32>(t.height, 512), low, high);
+  return memory.pointer(low, high - low);
 }
 
 //The bytes texel() reads for every texel inside the texture's first rows: from low up to (not including) high. For
@@ -279,7 +353,9 @@ auto GE::decode(Sampler& t, const PixelState& pixel, const Region& region, u32 r
         for(u32 u = 0; u < key.width; u++) entry->texels[v * key.width + u] = texelFrom(t, clut, u, v, read);
       }
     };
-    if(const u8* base = memory.pointer(low, high - low)) {
+    if(const u8* base = memory.pointer(low, high - low); base && t.format < 8) {
+      decodeRows(t, clut, base, low, key.width, from, rows, entry->texels.data());
+    } else if(base) {
       decodeWith([&](u32 size, u32 at) -> u32 {
         const u8* bytes = base + (at - low);
         if(size == 1) return bytes[0];

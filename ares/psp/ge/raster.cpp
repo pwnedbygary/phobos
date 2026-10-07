@@ -24,6 +24,7 @@ alwaysinline auto GE::shadeAs(const Look& look, bool linear, s32 x, s32 y, u32 z
 //is worked out once, as far as the texels it falls between; in 3D both follow the perspective at every pixel.
 template<u32 Format>
 auto GE::spriteRows(const Job& job, s32 fromY, s32 toY) -> void {
+  if(job.fours) return spriteFours<Format>(job, fromY, toY);  //(four.cpp: the same pixels, four at a time)
   auto& s = job.sprite;
   auto& look = *job.look;
   s32 firstY = std::max(job.firstY, fromY), lastY = std::min(job.lastY, toY);
@@ -105,6 +106,7 @@ auto GE::spriteRows(const Job& job, s32 fromY, s32 toY) -> void {
 //texture coordinates and fog are blended from is worked out only where the pipeline uses it.
 template<u32 Format>
 auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
+  if(job.fours) return triangleFours<Format>(job, fromY, toY);  //(four.cpp: the same pixels, four at a time)
   auto& r = job.triangle;
   auto& look = *job.look;
   auto& p = look.pixel;
