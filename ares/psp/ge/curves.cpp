@@ -54,6 +54,7 @@
 //vertices that aren't, which the GE doesn't draw (transform.cpp) or holds to its range (draw.cpp).
 
 static constexpr u64 PatchBudget = 1 << 17;    //the most vertices a curved surface is cut into
+static constexpr u64 PatchKept = 1 << 12;      //the most vertices patchVertices keeps room for between surfaces
 static constexpr f64 PatchSlack = 1.0 / 4096;  //how far above a whole level a color may be and still count as it
 
 //Where a surface's vertices fall along one way across it (u or v), each from four control points of its rows (or
@@ -106,6 +107,14 @@ static auto splineStep(const f64* knots, u32 span, f64 t, PatchStep& step) -> vo
 
 //The steps along one way across a surface of count control points: BEZIER's patches, or SPLINE's pieces with these
 //ends (bit 0 the first open, bit 1 the last), each cut into divisions. None if there are too few points for one.
+//How many vertices one way across a surface is cut into (as patchSteps makes them): none for fewer than four
+//control points, else divisions per piece and one more for the far edge.
+static auto patchColumns(bool spline, u32 count, u32 divisions) -> u64 {
+  if(count < 4) return 0;
+  u64 pieces = spline ? count - 3 : (count - 1) / 3;
+  return pieces * divisions + 1;
+}
+
 static auto patchSteps(bool spline, u32 count, u32 ends, u32 divisions, std::vector<PatchStep>& steps) -> void {
   steps.clear();
   if(count < 4) return;
@@ -136,12 +145,13 @@ auto GE::patch(bool spline, u32 argument) -> void {
   if(!format.positionFormat) return;
   u32 divisionsU = std::max(commands[PatchDivision] & 0xff, 1u);
   u32 divisionsV = std::max(commands[PatchDivision] >> 8 & 0xff, 1u);
+  //The budget is checked before anything is worked out, so a surface past it allocates nothing.
+  u64 columns = patchColumns(spline, ucount, divisionsU), rows = patchColumns(spline, vcount, divisionsV);
+  if(!columns || !rows) return;
+  if(columns * rows > PatchBudget) return note("a curved surface cut into more vertices than the core draws");
   std::vector<PatchStep> across, down;
   patchSteps(spline, ucount, spline ? argument >> 16 & 3 : 0, divisionsU, across);
   patchSteps(spline, vcount, spline ? argument >> 18 & 3 : 0, divisionsV, down);
-  if(across.empty() || down.empty()) return;
-  u64 columns = across.size(), rows = down.size();
-  if(columns * rows > PatchBudget) return note("a curved surface cut into more vertices than the core draws");
   if(commands[PatchCullEnable] & 1) note("PATCH_CULL_ENABLE isn't emulated");
 
   //What the vertices need: the parts the vertex type has, and a normal made from the slopes where one is wanted
@@ -200,14 +210,18 @@ auto GE::patch(bool spline, u32 argument) -> void {
   auto& vertices = patchVertices;
   if(kind >= 2) {
     vertices = std::move(grid);
-    return drawVertices(Points, format, vertices, vertices.size());
-  }
-  vertices.clear();
-  for(u32 r = 0; r + 1 < rows; r++) {
-    for(u32 c = 0; c < columns; c++) {
-      vertices.push_back(grid[r * columns + c]);
-      vertices.push_back(grid[(r + 1) * columns + c]);
+    drawVertices(Points, format, vertices, vertices.size());
+  } else {
+    vertices.clear();
+    for(u32 r = 0; r + 1 < rows; r++) {
+      for(u32 c = 0; c < columns; c++) {
+        vertices.push_back(grid[r * columns + c]);
+        vertices.push_back(grid[(r + 1) * columns + c]);
+      }
     }
+    drawVertices(kind == 0 ? TriangleStrip : LineStrip, format, vertices, columns * 2);
   }
-  drawVertices(kind == 0 ? TriangleStrip : LineStrip, format, vertices, columns * 2);
+  //A huge surface's vertices (up to tens of MB at the budget) aren't kept once drawn: drawVertices() is done with
+  //them (what it defers, it copies), and only room for an ordinary surface's stays for the next.
+  if(vertices.capacity() > PatchKept) std::vector<Vertex>().swap(vertices);
 }
