@@ -36,7 +36,8 @@
 //Read from memory as before, texel by texel, are: a texture of a format the PSP doesn't have (11-15: texel() notes it
 //as it's used); a texture some of whose bytes have no memory behind them (each such read is reported); and a texture
 //the primitive may draw over itself (its frame buffer or depth buffer and the texture overlap), whose texels then
-//are the pixels it has drawn so far, as this core always drew it, kept so that every pixel stays as it was.
+//are the pixels it has drawn so far, as this core always drew it, kept so that every pixel stays as it was. Where
+//such a texture's bytes are all in the host's memory side by side, texel() reads them from there (direct()).
 //Whether a PSP's texture reads see the pixels of the primitive drawing them hasn't been measured.
 
 static constexpr u32 TexelBits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
@@ -221,7 +222,27 @@ auto GE::texel(const Sampler& t, s32 u, s32 v) -> u32 {
     note("a texture format the PSP doesn't have (11-15): its texels read as 0");
     return 0;
   }
+  if(t.bytes) {  //(the very bytes memory.read() would give: see direct())
+    return texelFrom(t, clut, u, v, [&](u32 size, u32 at) -> u32 {
+      const u8* bytes = t.bytes + (at - t.address);
+      if(size == 1) return bytes[0];
+      if(size == 2) return bytes[0] | bytes[1] << 8;
+      return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | u32(bytes[3]) << 24;
+    });
+  }
   return texelFrom(t, clut, u, v, [&](u32 size, u32 at) { return memory.read(size, at); });
+}
+
+//For a texture read from memory as it's drawn (not decoded: see the top of this file): where all of its bytes are
+//in the host's memory, side by side, or none. Its texels are then read from there, the same bytes memory.read()
+//gives (VRAM's first and third copies, or RAM: nothing rearranged, nothing unmapped to report), without finding the
+//memory again at every texel. Such a primitive is drawn at once, after what waits (threads.cpp), so the bytes are
+//as memory.read() would find them as it draws.
+auto GE::direct(const Sampler& t) -> const u8* {
+  if(t.format > 10) return nullptr;
+  u32 low, high;
+  textureBytes(t, std::min<u32>(t.height, 512), low, high);
+  return memory.pointer(low, high - low);
 }
 
 //The bytes texel() reads for every texel inside the texture's first rows: from low up to (not including) high. For

@@ -145,7 +145,10 @@ auto GE::primitive(u32 kind, u32 count) -> void {
       rows = std::min<u32>((reach + 8) & ~7u, height);
     }
   }
-  if(textured) look.decoded = decode(look.texture, pixel, region, rows);
+  if(textured) {
+    look.decoded = decode(look.texture, pixel, region, rows);
+    if(!look.texture.decoded) look.texture.bytes = direct(look.texture);
+  }
   //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
   //texture read from memory as it's drawn (texture.cpp) has it drawn at once.
   drawing.recording = !(look.textured && !look.texture.decoded) && defer(pixel, region);

@@ -173,6 +173,7 @@ struct GE {
     const u32* decoded;  //its texels already decoded (Decoded), decodedWidth to a row; or none: read from memory
     u32 decodedWidth;
     u32 decodedRows;     //the rows the primitive may take texels from (draw.cpp), all of them decoded
+    const u8* bytes;     //read from memory: where its bytes are in the host's memory, when they're all there
   };
 
   //A texture decoded: every texel inside it as 8888, exactly as texel() would read it from memory, so that drawing
@@ -403,6 +404,7 @@ struct GE {
   //texture.cpp
   auto sampler() const -> Sampler;
   auto texel(const Sampler& texture, s32 u, s32 v) -> u32;
+  auto direct(const Sampler& texture) -> const u8*;
   auto sample(const Sampler& texture, float u, float v) -> u32;
   auto sampleWith(const Sampler& texture, bool linear, float u, float v) -> u32;
   struct TexelAxis { s32 first, second, fraction; };
