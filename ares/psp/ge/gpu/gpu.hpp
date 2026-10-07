@@ -78,6 +78,7 @@ struct GPU : GE::Renderer {
     u64 lostJobs = 0;   //(drawn by the CPU once the GPU was lost)
     u64 copying = 0, waiting = 0;  //nanoseconds: VRAM's pages and the records copied; the GPU waited for
     u64 finishes = 0;              //times the runs were waited for and VRAM's pages copied back
+    u64 largestRun = 0;            //(jobs)
   } statistics;
 
   std::unique_ptr<Device> device;

@@ -290,7 +290,12 @@ static auto gpuDrawsAsSoftware() -> void {
   }
   u32 batches = 0, differing = 0, pixels = 0, pixelsApart = 0;
   for(u32 batch = 0; batch < 2500; batch++) {
-    u32 format = below(4), count = 1 + below(16);
+    //(now and then thousands of 2D primitives, the batch handed over only at its end: runs of thousands of jobs,
+    //each tile's bin words taken many at a time, as one primitive of thousands of triangles makes; their textures
+    //outside VRAM, which would have the batch launched, and none drawn by the CPU, which would split it)
+    bool large = batch % 625 == 624;
+    u32 format = below(4), count = large ? 3000 : 1 + below(16);
+    hardware.ge.drawing.handOver = large ? ~0u : 4096;
     std::string described;  //(each primitive's kind and settings, said for a batch that differs)
     hardware.ge.drawing.deferring = true;  //(as run() has it: the primitives wait in a batch)
     for(u32 primitive = 0; primitive < count; primitive++) {
@@ -337,7 +342,7 @@ static auto gpuDrawsAsSoftware() -> void {
       if(textured) {
         u32 least = 128 / Bits[textureFormat];
         u32 bufferWidth = std::max(1u << widthBits, least) + (chance(20) ? least * below(4) : 0);
-        u32 address = chance(5) ? VRAM : Area + below((AreaSize - 0x6'0000) / 16) * 16;
+        u32 address = chance(5) && !large ? VRAM : Area + below((AreaSize - 0x6'0000) / 16) * 16;
         set(GE::TextureAddress0, address & 0xff'fff0);
         set(GE::TextureBufferWidth0, (address >> 24 & 0xf) << 16 | bufferWidth);
         set(GE::TextureSize0, heightBits << 8 | widthBits);
@@ -356,7 +361,7 @@ static auto gpuDrawsAsSoftware() -> void {
           set(GE::ClutLoad, 32);
         }
       }
-      bool flat = chance(45);  //2D: through mode
+      bool flat = large || chance(45);  //2D: through mode
       u32 lit = !flat && chance(15);
       set(GE::LightingEnable, lit);
       if(lit) {
@@ -474,8 +479,10 @@ static auto gpuDrawsAsSoftware() -> void {
               (unsigned long long)(after.coordinates2D - before.coordinates2D),
               (unsigned long long)(after.pastRange - before.pastRange),
               (unsigned long long)(after.runs - before.runs));
+  std::printf("  the largest run: %llu jobs\n", (unsigned long long)after.largestRun);
   CHECK(differing, 0u);
   CHECK(software.memory.vram == hardware.memory.vram, true);
+  CHECK(after.largestRun > 256 * 32, true);
   u64 pastRange = after.pastRange - before.pastRange;
   CHECK(gpuJobs > 4 * (cpuJobs - pastRange), true);  //(the wild primitives' triangles aside)
   CHECK(pastRange > 0, true);

@@ -426,6 +426,7 @@ auto GPU::run(GE& ge, const std::bitset<GE::VRAMPages>& pending) -> void {
   p.lookOffset = tables.size(), p.jobOffset = p.lookOffset + looks.size();
   p.jobCount = jobs.size() / JobWords;
   p.wordsPerTile = (p.jobCount + 31) / 32;
+  statistics.largestRun = std::max<u64>(statistics.largestRun, p.jobCount);
   p.tileLeft = left & ~15, p.tileTop = top & ~15;
   p.tilesAcross = (right - p.tileLeft) / 16 + 1, p.tilesDown = (bottom - p.tileTop) / 16 + 1;
   p.areaLeft = left, p.areaTop = top, p.areaRight = right, p.areaBottom = bottom;
