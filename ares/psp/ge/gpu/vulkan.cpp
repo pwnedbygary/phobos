@@ -1,10 +1,11 @@
 //The Vulkan backend: the shaders' SPIR-V (shaders/shaders.hpp) run as compute pipelines, through volk (thirdparty/
 //volk, which loads the system's Vulkan at run time, so nothing links against it). The buffers live in memory both the
 //host and the GPU see (where the GPU has one memory, as phones and Apple's chips do, the GPU's own), mapped for good.
-//Each stage is recorded, submitted and waited for: the prototype is synchronous. A wait that lasts far longer than
-//any run could (two seconds, a minute for a pipeline's first: a shader stuck, a driver that never says the device is
-//lost) marks the device lost, as the driver's
-//VK_ERROR_DEVICE_LOST does, and the software renderer draws everything from then on (GPU::draw()).
+//Runs are recorded and submitted into a ring of slots, and waited for only when a slot comes round again or the GE
+//needs what they drew (finish()); each is timed by the GPU's timestamps where its queue has them (Device::busy). A
+//wait that lasts far longer than any run could (two seconds, a minute for a pipeline's first: a shader stuck, a
+//driver that never says the device is lost) marks the device lost, as the driver's VK_ERROR_DEVICE_LOST does, and
+//the software renderer draws everything from then on (GPU::draw()).
 //
 //Device functions come from a table of this device's own (volkLoadDeviceTable()), not volk's globals, which
 //paraLLEl-RDP's Vulkan (the N64's) uses for its device.
@@ -87,6 +88,9 @@ struct VulkanDevice : GPU::Device {
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
   VkShaderModule modules[3] = {};      //bin, raster, probe
   VkPipeline pipelines[3] = {};
+  //Two timestamps a slot (its run's start and end), where the queue can take them, and a tick's nanoseconds
+  VkQueryPool queries = VK_NULL_HANDLE;
+  f64 tick = 0;
   VkCommandPool commandPool = VK_NULL_HANDLE;
   VkCommandBuffer commands = VK_NULL_HANDLE;  //(the one being recorded: submit())
   bool keepsDenormals = false;  //the shaders run with DenormPreserve 32 (the device has float controls that can)
@@ -102,6 +106,7 @@ struct VulkanDevice : GPU::Device {
       vk.vkDeviceWaitIdle(device);
       for(auto pipeline : pipelines) if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
       for(auto module : modules) if(module) vk.vkDestroyShaderModule(device, module, nullptr);
+      if(queries) vk.vkDestroyQueryPool(device, queries, nullptr);
       release(vramBuffer), release(texelBuffer);
       for(auto& slot : slots) {
         release(slot.records), release(slot.bins), release(slot.parameters);
@@ -173,6 +178,11 @@ struct VulkanDevice : GPU::Device {
     if(waited != VK_SUCCESS) return lost = true, false;
     vk.vkResetFences(device, 1, &slot.fence);
     for(u32 n = 0; n < 3; n++) ran[n] |= slot.pipelines >> n & 1;
+    u64 stamps[2] = {};
+    if(queries && vk.vkGetQueryPoolResults(device, queries, oldest * 2, 2, sizeof(stamps), stamps, 8,
+                                           VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && stamps[1] >= stamps[0]) {
+      busy += u64((stamps[1] - stamps[0]) * tick);
+    }
     slot.busy = false;
     oldest = (oldest + 1) % Slots;
     return true;
@@ -241,11 +251,15 @@ struct VulkanDevice : GPU::Device {
       vkGetPhysicalDeviceQueueFamilyProperties(candidate, &count, nullptr);
       std::vector<VkQueueFamilyProperties> families(count);
       vkGetPhysicalDeviceQueueFamilyProperties(candidate, &count, families.data());
+      u32 stampBits = 0;
       for(u32 n = 0; n < count && !physical; n++) {
-        if(families[n].queueFlags & VK_QUEUE_COMPUTE_BIT) physical = candidate, family = n;
+        if(families[n].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+          physical = candidate, family = n, stampBits = families[n].timestampValidBits;
+        }
       }
       if(physical) {
         deviceName = properties.deviceName;
+        if(stampBits) tick = properties.limits.timestampPeriod;
         break;
       }
     }
@@ -364,6 +378,11 @@ struct VulkanDevice : GPU::Device {
       auto fenceInfo = made<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
       if(vk.vkCreateFence(device, &fenceInfo, nullptr, &slot.fence) != VK_SUCCESS) return error = "no fence", false;
     }
+    if(tick > 0) {  //(no timestamps, no GPU time: not an error)
+      auto queryInfo = made<VkQueryPoolCreateInfo>(VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO);
+      queryInfo.queryType = VK_QUERY_TYPE_TIMESTAMP, queryInfo.queryCount = Slots * 2;
+      if(vk.vkCreateQueryPool(device, &queryInfo, nullptr, &queries) != VK_SUCCESS) queries = VK_NULL_HANDLE;
+    }
     return true;
   }
 
@@ -415,10 +434,16 @@ struct VulkanDevice : GPU::Device {
     auto begin = made<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vk.vkBeginCommandBuffer(commands, &begin);
+    u32 index = slot - slots;
+    if(queries) {  //(the start once everything before has finished: runs queued one behind another counted once)
+      vk.vkCmdResetQueryPool(commands, queries, index * 2, 2);
+      vk.vkCmdWriteTimestamp(commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries, index * 2);
+    }
     barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
     vk.vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &slot->set, 0,
                                nullptr);
     record();
+    if(queries) vk.vkCmdWriteTimestamp(commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries, index * 2 + 1);
     barrier(VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);  //(what the shaders wrote, for the host)
     vk.vkEndCommandBuffer(commands);
     auto submitInfo = made<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);

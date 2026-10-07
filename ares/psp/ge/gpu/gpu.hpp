@@ -56,6 +56,9 @@ struct GPU : GE::Renderer {
     virtual auto records(u32 words) -> u32* = 0;    //the next run's, at least words long (what it held may go)
     virtual auto texels() -> u32* = 0;              //TexelWords long, kept from one run to the next
     virtual auto bins(u32 words) -> u32* = 0;       //the next run's, at least words long (what it held may go)
+    //The GPU's own time spent on runs, in nanoseconds, where it can tell (its timestamps), counted as each run is
+    //waited for: what the design's measurements report
+    u64 busy = 0;
     //the shaders' constants (common.glsl's fused and nativeFma)
     virtual auto configure(bool fused, bool nativeFma) -> bool = 0;
     virtual auto draw(const Parameters& parameters) -> bool = 0;   //bin.comp, then raster.comp: submitted
