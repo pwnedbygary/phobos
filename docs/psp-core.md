@@ -29,9 +29,10 @@ the PSP in the desktop program (its library, settings, controls and picture, and
 Windows), is on `cursor/psp-desktop-2b67`, on top of part 26's. Part 28, the functions 266 games ask for (kernel
 mutexes, alarms, virtual timers, and the clock kept as the PSP keeps it in system calls), is on
 `cursor/psp-hle-games5-2b67`, on top of part 27's. Part 29, the GE features games are missing (lines, bounding
-boxes, compressed DXT textures, sceGeBreak), is on `cursor/psp-ge-features-2b67`, on top of part 28's. Part 31,
-movies through scePsmf and scePsmfPlayer, written in a clean room, is on `cursor/psp-psmf-2b67`, on top of part
-29's (part 30, making the GE faster, is on a branch of its own).
+boxes, compressed DXT textures, sceGeBreak), is on `cursor/psp-ge-features-2b67`, on top of part 28's. Part 30, the
+GE faster again (four pixels at a time, every pixel the same), is on `cursor/psp-ge-speed2-2b67`, on top of part 29's.
+Part 31, movies through scePsmf and scePsmfPlayer, written in a clean room, is on `cursor/psp-psmf-2b67`,
+on top of part 30's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -3839,9 +3840,172 @@ fields" changes the call's kind and refuses a GE callback that's a vertical blan
 the sanitizers, tests/psp/ares 290 checks, none failed. On the RP6, Space Invaders Extreme's title shows its box of
 lines at 60 fps, and Liberty City Stories' intro is unchanged at 60 fps (the owner's check of the build before this).
 
+## Part 30: the GE faster again, four pixels at a time
+
+On branch `cursor/psp-ge-speed2-2b67`, on top of part 29's `cursor/psp-ge-features-2b67` (#157). The owner's priority
+(Decisions, 2026-10-06): the software renderer as fast as humanly possible, every picture exactly as it was; the
+Vulkan and OpenGL renderers come later, apart. After part 24, Midnight Club 3 was still the worst case: its night race
+about 7 frames a second on the host in part 25's -O2 runner, its profile menu 25 in the desktop program, "spent in the
+GE's pixel loops"; on the RP6 the menu drew at 22 and the race at 18. Original code: no PPSSPP or JPCSP source was
+read.
+
+**The scenes.** Six, each from a state of its own (a scratch runner, states and scripts in `/tmp/ge2-bench`, never
+committed; the games are the owner's): Midnight Club 3's night race (a Quick Race downtown, timed with Cross held) and
+its profile menu ("Load Profile / Create Profile / Delete Save Data" over the city); GTA Liberty City Stories' opening
+in the city (part 29's state) and Toni by the car in the woods (play, the HUD up); Peace Walker's title; Lumines'
+demo. Burnout Dominator's race wasn't reached: past its profile and World Tour it loops tutorial movies that neither
+held nor tapped buttons left (part 25 measured its races light on the GE).
+
+**Where the time went.** Instruments' Time Profiler (`xctrace`), each sample's address taken back to its inlined
+functions and source line (`atos -i` on the LTO build's kept object and dSYM), the core built with the Android build's
+flags (`-O3 -flto=thin -ftree-vectorize -funroll-loops -fno-math-errno -fno-trapping-math`), one GE thread:
+- GTA's city: the pixel pipeline (`drawPixelAs`) 24%, a triangle's interpolation 16% (up to eleven float divisions a
+  pixel), looking texels up and filtering 20%, the texture function and its clamps 12%, setting primitives up 6%. Half
+  its pixels are one state: 3D, a filtered 4-bit palette texture modulated and doubled, Gouraud colors, the alpha
+  test, the depth test and write, alpha blending and fog.
+- Peace Walker's title (1.9 million pixels a frame, 3D sprites into a 5551 frame buffer): the pipeline 41% (blending,
+  dithering), the filter 31%.
+- Midnight Club 3's menu: 2.8 million pixels a frame, 31% of them faint additive glows, two thirds of which fail the
+  depth test after their texels were looked up and blended; 17% of the time in primitives drawing over their own
+  texture (post effects), drawn at once on the GE's own thread with every texel through `Memory::read()`. Its race
+  sets up 3,500 primitives, 117,000 vertices and 110,000 triangles a frame, decodes 47 textures (760,000 texels) again
+  a frame (render targets, and textures whose palette changed) and changes the palette about 1,000 times.
+
+**What was done** (`ares/psp/ge`), each step measured, and checked identical before the next:
+1. **Four pixels at a time** (`four.cpp`, new). A triangle's or sprite's row is drawn in fours, four pixels side by
+   side from a column that's a multiple of four, each in a lane of GCC's and Clang's own vector types (NEON on ARM64,
+   SSE on x86-64): the interpolation (colors, depth, fog, perspective-correct texture coordinates, 2D steps in
+   doubles), the texel axes, the four texels (read two at a time where the right one follows the left) and the filter
+   (two channels in each lane's 32 bits, as filtered() has four in 64), the texture function, the depth range, alpha,
+   color and depth tests, fog, blending, dithering, and the writes through MASK_COLOR and MASK_ALPHA. Exact by
+   construction:
+   - Whole numbers: the same operations lane by lane, in 32 bits, none of which overflows.
+   - Floats: the same expressions, written the same way with a vector in every product. Where the host fuses
+     multiply-adds (ARM64), the compiler fuses a product into its sum by the expression's shape, for vectors as for
+     single numbers (checked in the code it makes: fmul, then two fmla, then fdiv, as the scalar code's fmul, fmadd,
+     fmadd, fdiv; on x86-64 neither fuses); a product of two single numbers, made a vector afterwards, wouldn't be
+     fused, so none is written that way. Conversions are the scalar ones lane by lane; where x86-64's four-lane
+     conversion of a number that isn't one differs from its single one (a depth), that lane is said outright.
+   - The order: four pixels read and written at once see what one after another did, as no pixel of a primitive
+     depends on another but through the frame and depth buffers; fourFriendly() takes only jobs whose frame and depth
+     buffers don't overlap, and whose texture is kept decoded.
+   - The depth test comes first, before the texture: without the stencil test, failing any test only drops the pixel.
+   - A four wholly inside its row reads and writes its pixels at once; one reaching past it, only its lanes inside it.
+
+   Points, lines, the stencil test, logic operations and the jobs fourFriendly() turns down are drawn a pixel at a
+   time, as before. `GE::fourPixels` turns the path off, for the test below.
+2. **Textures decoded a row at a time; the palette's hash eight bytes at a time** (texture.cpp): decodeRows() gives
+   each texel exactly as texelFrom() reads it, with a row's start (and a swizzled texture's blocks) worked out once a
+   row and a palette's entries once a texture (once an index for 4- and 8-bit indices). DXT, and textures read through
+   VRAM's rearranging copies, decode as before. The palette's hash only finds decoded textures, each checked byte for
+   byte against the palette, so no picture depends on it.
+3. **Jobs keep only their own kind's numbers; directional lights once a primitive.** A job carried a sprite's, a
+   triangle's, a point's and a line's numbers side by side (584 bytes), all zeroed and copied into the batch; they're
+   a union now (256 bytes). A directional light's way to it, made one long, and the half way between it and the
+   viewer's, are the same at every vertex: lightingState() works them out with the very operations light() used at
+   each.
+4. **A texture read as it's drawn reads its bytes straight from the host's memory** (`direct()`): where all of a
+   primitive's texture's bytes are side by side in the host's memory (VRAM's first and third copies, or RAM: nothing
+   rearranged, nothing unmapped to report), texel() reads them from there, the very bytes `Memory::read()` gave; such
+   a primitive is drawn at once, after what waits.
+5. **A vertex's place past the depths once a vertex** (transform.cpp): outOfSight() divided z by w at every corner of
+   every primitive, a strip's vertex three times; project() now does it once, with the same division.
+
+Tried and dropped: handing a batch to the workers once it holds 2^17 or 2^18 pixels of work, so that they draw while
+the GE's thread sets the rest of the list up (no gain: at seven threads Midnight Club 3's GE thread is busy all the
+time and the drawing threads idle five sixths of it); workers spinning up to 1 ms before sleeping (fewer bands left to
+the GE's thread, 61 to 40 a frame, no faster).
+
+**How it's known to draw the same pixels:**
+- The six scenes, 300 frames from each state: every frame's picture and all of VRAM, and RAM at the end, identical to
+  part 29's at 1 and 7 threads, after each step.
+- The differential fuzzer of part 24 (scratch), brought up to part 29's GE as the reference: thousands of random lists
+  at each step (every pipeline and texture setting, palettes, swizzling, render to texture and drawing over its own
+  texture, 3D with lighting and clipping, lines, transfers), at 1, 3, 4, 6 and 8 threads, batches shared however small
+  and drawn past the list's end; under the address and undefined-behavior sanitizers, and under ThreadSanitizer, which
+  caught the one race the four-pixel path had (step 1's last point, a commit of its own): a row's first or last four
+  wrote back the bytes of its lanes outside the row, which where a frame buffer's rows are barely longer than the area
+  drawn (a stride within three pixels of its width, the area not on a multiple of four) are another row's, maybe
+  another thread's at that moment. No scene drew that way, and the fuzzer's pictures had stayed identical.
+- A new group, "draw3d four pixels at a time against one" (`tests/psp/draw3d.cpp`): 20,000 random primitives (2D and
+  3D in perspective, triangles, strips, fans and sprites, lit now and then with the shine kept apart, often
+  one-colored; random pipeline and texture settings, textures up to 256 a side) drawn by two machines alike but for
+  `fourPixels`, over the same random VRAM; frame and depth buffers compared after each, all of VRAM at the end. Broken
+  versions it fails: the dither's columns turned round, a blend term shifted 9, fog rounded with 254, GEQUAL taken as
+  GREATER, the filter's fraction in eighths, modulation without its + 1, a blended channel held to 254, the products
+  of a color's, the depth's or a texture coordinate's sum taken in another order, a 3D sprite's fog halves split a
+  sixteenth off, the stencil bits not kept, decal's + 1 dropped, 5551's alpha as 254, the clear's depth not written,
+  all four lanes written where some are dropped, the texels read in pairs where they aren't side by side, the fog's
+  sign not tested, a 3D sprite's coordinate down y taken from the wrong lane (19 in all). (A product taken out of a 2D
+  texture coordinate's sum of doubles, so not fused, got through: it shows only where the double's last bit decides
+  the float.) The fuzzer catches those too, and broken palettes and swizzling in decodeRows().
+- tests/psp: 282 groups with the address and undefined-behavior sanitizers, none failing; "psp measure", the
+  comparison with the owner's PSP's round-3 GE measurements, the same as part 29's line for line. tests/psp/ares: 290
+  checks.
+
+**Measured** on the host (Apple M1, 4 fast and 4 slow cores; a security agent kept about two cores busy throughout),
+the core built with the Android build's flags, 300 frames from each scene's state, host frames a second, best of
+three, part 29's and this part's runs taking turns, the picture hashed each frame (drawing may go on across frames, as
+in the app):
+
+| scene | part 29, 1 thread | part 30, 1 thread | part 29, 7 threads | part 30, 7 threads |
+| --- | --- | --- | --- | --- |
+| Midnight Club 3, night race | 11.6 | 27.8 (2.4x) | 26.6 | 40.9 (1.5x) |
+| Midnight Club 3, profile menu | 11.6 | 32.0 (2.8x) | 29.0 | 51.7 (1.8x) |
+| GTA Liberty City Stories, the city | 29.0 | 77.5 (2.7x) | 75.8 | 131.5 (1.7x) |
+| GTA Liberty City Stories, the woods | 20.6 | 47.4 (2.3x) | 60.7 | 108.2 (1.8x) |
+| Peace Walker's title | 29.2 | 106.2 (3.6x) | 135.2 | 487.9 (3.6x) |
+| Lumines' demo | 59.0 | 111.9 (1.9x) | 197.7 | 341.8 (1.7x) |
+
+The pictures of those timed runs are the same frame for frame too, at both thread counts. By step, one thread (other
+work sharing the Mac, so within about 10%): four pixels at a time took the race from 11.6 to 23.8, the menu 11.3 to
+27.7, the city 29.1 to 73.8, the woods 20.6 to 47.7, Peace Walker 29.4 to 96.1, Lumines 51.4 to 63.6; the paired texel
+reads and the two-channel filter, then decodeRows() and the palette's hash, to 27.7, 30.7, 79.1, 50.2, 107.2; reading
+textures drawn over straight from memory, Lumines 63.6 to 114.9 and the menu to 33.4. At seven threads the GE's own
+thread is the limit (below).
+
+**The profile after.** One GE thread, Midnight Club 3's menu: the four-pixel path about 57% (the pipeline 15, the
+interpolation 14, texels and filter 9, the depth first 5, the texture function 2), primitives drawing over their own
+texture 17% before step 4, the CPU's code and the rest of the machine the remainder. Seven threads, its race: the GE's
+own thread is busy all the time and the seven drawing threads together about one sixth of it; on that thread the CPU's
+recompiled code and interpreter take about 40%, setting primitives up 19% (lighting 4, triangles 3, projection 2,
+vertices 2, matrices 2), its share of the drawing 13% (small batches, primitives drawn at once, and helping as it
+waits for a batch whose picture it needs: six such waits a frame, render targets read back as textures), decoding 3%.
+
+**On the RP6** (the app built from this branch installed over part 29's, data kept, and part 29's put back the same
+way for "before"; each game launched from its CHD, "PSP Drawing Threads" on Auto, the performance overlay
+screenshotted and the app's own "Emulation Stats" lines, each second's frames and the emulation's work a frame, taken
+from the log; then force-stopped):
+- Midnight Club 3's profile menu (Start, then Cross past the logos): 21-23 frames a second before, 36-37 after (its
+  work a frame 44-48 ms before, 26-28 after).
+- Its night race (Create Profile, Quick Race, the car at the start line): 17-19 before; 30-34 after over three runs.
+  The device picks the race at random, so they're three courses (downtown, the pier, a circuit) against downtown
+  before.
+- Peace Walker's title, Lumines' demo, Liberty City Stories' intro: 60 before and after. Their work a frame (1-8 ms)
+  is within what the core the emulation's thread lands on and its clock change from run to run (Peace Walker's ran on
+  the fast core at 2.48 GHz before and on a middle one at 1.65-2.32 GHz after: 1.1 ms then, 1.7 now; Lumines 8.4 then,
+  7.1).
+
+In Midnight Club 3 the emulation's thread keeps the fast core 92-99% busy in both builds: as on the host, the GE's own
+thread is the limit there now. Screenshots and the stats in `/tmp/ge2-device`, outside the repository.
+
+**What's left for more speed:**
+- The GE's own thread, now the longest path in Midnight Club 3 and GTA at several threads: the CPU's emulation (its
+  recompiled code and the instructions it hands to the interpreter, FPU and VFPU) is the most of it, outside the GE.
+  In the GE, vertices (117,000 a frame, 72,000 lit) and triangles (110,000) are set up one at a time: transforming and
+  lighting them four at a time, or on the drawing threads, is next; and a GE running beside the CPU rather than inside
+  its calls (the PSP's own is) would take setup off the CPU's thread altogether.
+- Primitives drawing over their own texture are still drawn a pixel at a time on the GE's thread: four at a time is
+  exact where no texel a pixel reads can be one an earlier pixel of the same primitive wrote (a 1:1 copy in place, for
+  one), which can be worked out from the texture's address and coordinates.
+- Waits for render targets read back as textures (six a frame in Midnight Club 3) keep the GE's thread drawing;
+  drawing only the bands the texture comes from would shorten them.
+- In the four-pixel path: 16-bit lanes (eight pixels a vector) for the color arithmetic that fits, triangles' rows
+  stepped instead of divided, and the remaining divisions (a pixel's perspective takes five, its colors four).
+
 ## Part 31: movies through scePsmf and scePsmfPlayer
 
-On branch `cursor/psp-psmf-2b67`, on top of part 29's `cursor/psp-ge-features-2b67` (#157). Games play PSMF movies
+On branch `cursor/psp-psmf-2b67`, on top of part 30's `cursor/psp-ge-speed2-2b67` (#159). Games play PSMF movies
 two ways: with sceMpeg, feeding it the program stream themselves (part 25 and 26), or with Sony's movie player
 library, scePsmfPlayer, which reads a movie's file, decodes it and hands the game pictures and sound; and games of
 the first kind read the movie's header with scePsmf. The two libraries aren't the firmware's: games ship them as
