@@ -504,6 +504,13 @@ struct Allegrex {
     auto emitBranch(u32 address, u32 instruction, u32 count) -> bool;
     auto emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void;
     auto emitJump(u32 target) -> void;
+    auto emitCoprocessorBranch(u32 address, u32 instruction) -> void;
+
+    //recompiler-fpu.cpp
+    auto emitFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitFPUArithmetic(u32 address, u32 instruction, u32 count, bool delaySlot, s32 op) -> void;
+    auto emitFPUCompare(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
+    auto emitCOP2(u32 instruction) -> bool;
 
     //recompiler-memory.cpp
     auto emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;

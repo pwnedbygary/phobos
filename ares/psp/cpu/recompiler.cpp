@@ -116,7 +116,7 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
 //Compiles the block starting at address: instructions up to a branch and its delay slot, or up to the end of the
 //section, or up to one after which compiled code mustn't go on by itself (endsBlock()).
 auto Allegrex::Recompiler::emit(u32 address) -> u8* {
-  beginFunction(1);
+  beginFunction(1, 3, 4, 2);  //(two float registers, for the FPU's native arithmetic: recompiler-fpu.cpp)
   u32 count = 0;          //instructions in the block so far
   bool pcStored = false;  //whether ipu.pc and ipu.pd already say where to go after the last instruction
 
@@ -128,8 +128,11 @@ auto Allegrex::Recompiler::emit(u32 address) -> u8* {
     if(isBranch(instruction)) {
       //A native branch sets pc and pd for its delay slot, which the block then includes. A branch in the last word
       //of a section would need its delay slot from the next one, so the interpreter runs it instead; if it's
-      //taken, pd won't be pc + 4 afterwards, and run() has the interpreter take the delay slot as well.
-      if(!lastInSection && emitBranch(address, instruction, count)) {
+      //taken, pd won't be pc + 4 afterwards, and run() has the interpreter take the delay slot as well. The
+      //coprocessors' branches end the block where the interpreter's did, before their delay slots, likewise.
+      if(instruction >> 26 == 0x11 || instruction >> 26 == 0x12) {
+        emitCoprocessorBranch(address, instruction);
+      } else if(!lastInSection && emitBranch(address, instruction, count)) {
         address += 4;
         count++;
         u32 delaySlot = self.read(Word, address);

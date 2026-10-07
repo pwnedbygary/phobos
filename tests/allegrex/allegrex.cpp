@@ -677,6 +677,22 @@ auto matchesInterpreter() -> void {
     default: return next();
     }
   };
+  // floats at the edges the FPU's native code steps around: zeros, infinities, NaNs (quiet and signaling), the
+  // subnormals and the smallest normal numbers, the edge of what converts to a word, and ordinary numbers
+  auto floatValue = [&]() -> uint32_t {
+    uint32_t sign = random(2) << 31;
+    switch(random(10)) {
+    case 0: return sign;
+    case 1: return sign | 0x7f800000;
+    case 2: return sign | 0x7fc00000 | random(0x400000);
+    case 3: return sign | 0x7f800000 | (1 + random(0x3fffff));
+    case 4: return sign | (random(2) ? 1 + random(0x7fffff) : 0x00800000 + random(0x100));
+    case 5: return sign | (0x4effff00 + random(0x200));
+    case 6: return sign | (0x3f800000 + random(0x800000));
+    case 7: return value();
+    default: return sign | (100 + random(56)) << 23 | random(0x800000);
+    }
+  };
 
   // VFPU encodings: an operation with three 7-bit registers and a size of 1 to 4 lanes, and a VFPU branch
   auto vfpuOp = [](uint32_t opcode, uint32_t size, uint32_t rd, uint32_t rs, uint32_t rt) -> uint32_t {
@@ -686,7 +702,7 @@ auto matchesInterpreter() -> void {
     return 0x49000000u | bit << 18 | kind << 16 | ((uint32_t)offset & 0xffff);
   };
 
-  constexpr uint32_t Length = 40, Programs = 500;
+  constexpr uint32_t Length = 40, Programs = 2000;
   uint32_t mismatches = 0;
   for(uint32_t program = 0; program < Programs; program++) {
     std::vector<uint32_t> code;
@@ -788,10 +804,15 @@ auto matchesInterpreter() -> void {
       case 42: word = sb(t, byteOffset, s7); break;
       case 43: word = random(2) ? lwl(d, byteOffset, s7) : lwr(d, byteOffset, s7); break;
       case 44: word = random(2) ? swl(t, byteOffset, s7) : swr(t, byteOffset, s7); break;
-      case 45: word = mtc1(t, random(32)); break;
+      case 45: word = random(8) ? mtc1(t, random(32)) : ctc1(t, 31); break;  // ctc1: another rounding, or flushing
       case 46: word = mfc1(d, random(32)); break;
-      case 47: word = fop(random(3), random(32), random(32), random(32)); break;  // add.s, sub.s, mul.s
-      case 48: word = cvtsw(random(32), random(32)); break;
+      case 47: word = fop(random(8), random(32), random(32), random(32)); break;  // add.s ... neg.s
+      case 48: {  // cvt.s.w; round, trunc, ceil and floor to words; cvt.w.s
+        uint32_t conversion = random(3);
+        word = conversion == 0 ? cvtsw(random(32), random(32))
+             : conversion == 1 ? fop(0x0c + random(4), random(32), random(32)) : fop(0x24, random(32), random(32));
+        break;
+      }
       case 49: word = ccond(random(16), random(32), random(32)); break;
       // the VFPU, which the recompiler also leaves to the interpreter
       case 50: {
@@ -821,8 +842,8 @@ auto matchesInterpreter() -> void {
     }
 
     uint32_t registers[32], floats[32], vectors[128], data[128];
-    for(auto& r : registers) r = value();
-    for(auto& f : floats) f = value();
+    for(auto& r : registers) r = random(4) ? value() : floatValue();
+    for(auto& f : floats) f = floatValue();
     for(auto& v : vectors) v = value();
     uint32_t cc = random(64);
     for(auto& d : data) d = next();

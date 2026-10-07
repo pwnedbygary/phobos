@@ -29,6 +29,10 @@ auto Allegrex::Recompiler::emitInstruction(u32 address, u32 instruction, u32 cou
 
   case 0x00: return emitSPECIAL(instruction);
 
+  //the FPU, and coprocessor 2's moves (recompiler-fpu.cpp)
+  case 0x11: return emitFPU(address, instruction, count, delaySlot);
+  case 0x12: return emitCOP2(instruction);
+
   //loads and stores (recompiler-memory.cpp)
   case 0x20: case 0x21: case 0x23: case 0x24: case 0x25: case 0x28: case 0x29: case 0x2b:
   case 0x31: case 0x32: case 0x36: case 0x39: case 0x3a: case 0x3e:
@@ -270,7 +274,7 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 //Branches and jumps. Each one decides where the CPU goes after its delay slot and stores that in pc (and pd as the
 //word after it), which is how the interpreter has them while the delay slot runs; recompiler.cpp then compiles the
 //delay slot and ends the block. The decision comes first, before the link or the delay slot can change the
-//registers it depends on. Branches not handled here (the FPU's and the VFPU's) go to the interpreter.
+//registers it depends on. The coprocessors' branches end their block by themselves (emitCoprocessorBranch()).
 auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -> bool {
   //a branch's offset counts instructions from its delay slot
   u32 target = address + 4 + i16 * 4;
@@ -353,6 +357,29 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
 
   }
   return false;
+}
+
+//The coprocessors' branches, BC1F, BC1T, BC1FL and BC1TL on the FPU's condition (FCSR bit 23), and BVF, BVT, BVFL
+//and BVTL on one of the VFPU's condition codes (bits 18-20 pick which); bit 16 branches when it's true, bit 17
+//makes the branch likely. The block ends right after one, as it did when the interpreter ran them: where blocks
+//end is where a run of the CPU may stop (Allegrex::run() checks its limit between blocks), so it decides when
+//interrupts and the HLE kernel's events land, and has to stay as it was for every run to come out the same. So the
+//branch leaves pc and pd as the interpreter's would: pc at the delay slot and pd at the target or past the delay
+//slot, or both past the delay slot for a likely branch not taken; run() then has the interpreter take a delay slot
+//before a taken branch's target, as before.
+auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction) -> void {
+  u32 target = address + 4 + s16(instruction) * 4;
+  if(instruction >> 26 == 0x11) test32(field(&self.fpu.csr), imm(1 << 23), set_z);
+  else test32(field(&self.vfpu.cc), imm(1 << (instruction >> 18 & 7)), set_z);
+  auto taken = jump(instruction >> 16 & 1 ? flag_nz : flag_z);
+  bool likely = instruction >> 17 & 1;
+  mov32(PC, imm(address + (likely ? 8 : 4)));
+  mov32(PD, imm(address + (likely ? 12 : 8)));
+  auto done = jump();
+  setLabel(taken);
+  mov32(PC, imm(address + 4));
+  mov32(PD, imm(target));
+  setLabel(done);
 }
 
 //Finishes a conditional branch, given the jump its "taken" case makes. Either way pc and pd are set for the delay
