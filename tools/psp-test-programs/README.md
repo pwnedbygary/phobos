@@ -10,8 +10,9 @@ list. That checks each piece on its own, but not what happens when a real progra
 runs: the loader taking an ELF, PRX or EBOOT apart; pspsdk's start-up code and its C library calling dozens of
 system functions; files, controls, the GE driver and drawing, all together. These programs supply that.
 
-The repository holds no binaries, and no PSP games or firmware, so the programs are built from source each time,
-with pspdev's free toolchain. pspsdk's own GU samples are well-known real programs whose pictures can be checked.
+The programs are built from source with pspdev's free toolchain. Since 2026-10-06 the built ones are also kept in
+[tests/psp/programs](../../tests/psp/programs/README.md), at the owner's request, so that every checkout and CI runs
+the tests that need them; the repository holds no PSP games or firmware. pspsdk's own GU samples are well-known real programs whose pictures can be checked.
 PPSSPP's software renderer gives an outside reference for the drawing: it's only run as a program to compare
 against, and none of its code is in Phobos.
 
@@ -40,8 +41,9 @@ tools/psp-test-programs/build.sh /tmp/programs
 PSP_TEST_PROGRAMS=/tmp/programs tests/psp/run-tests.sh
 ```
 
-Without `PSP_TEST_PROGRAMS` (or with it empty), the tests that need these programs are skipped; CI has no pspdev, so
-it skips them. With `PSP_PICTURES` set to a folder, the samples' pictures are saved there.
+The test scripts use `tests/psp/programs` unless `PSP_TEST_PROGRAMS` names another folder (empty: none, and the
+tests that need the programs are skipped). When the programs' sources change, rebuild them into `tests/psp/programs`
+in the same commit (its README has a command using pspdev's Docker image). With `PSP_PICTURES` set to a folder, the samples' pictures are saved there.
 
 `compare-ppsspp.sh <programs folder>` needs PPSSPPHeadless, built from PPSSPP's source in the container at
 `/opt/tools/ppsspp` (CMake with `HEADLESS=ON`, `HEADLESS_CROSS=ON`, `LIBRETRO=OFF`, a release build).

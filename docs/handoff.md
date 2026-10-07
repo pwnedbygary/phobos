@@ -25,6 +25,42 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP runner and compatibility report — 2026-10-06
+
+Branch `local/psp-runner`, cut from `origin/cursor/psp-test-data-2b67` (tip
+`de6e6dcb7`). Adds `tools/psp-runner/` (a headless PSP game runner) and
+`docs/psp-compatibility.md` (the compatibility report for 266 games).
+
+- **Runner** (`tools/psp-runner/runner.cpp`): mirrors `tests/psp/ares/system.cpp`'s
+  `TestPlatform` (pak, video, input, audio callbacks) with a CLI, PNG/WAV
+  writers, and an exit summary. `discInfo()` reads the NPID and title from the
+  SFO's `DISC_ID` and `TITLE` fields via `sfoValue()`. `build.sh` reuses the
+  build recipe from `tests/psp/ares/run-tests.sh` (same objects: `psp.cpp`,
+  `android_globals.cpp`, `ares-runtime.cpp`, `nall`, sljit, libchdr, zlib,
+  libco).
+- **Test** (`tests/psp/ares/runner-test.sh`): runs `cube.elf` for 60 frames,
+  checks the summary and PNGs. Passing.
+- **Batch**: all 266 games ran through the runner with
+  `--frames 3600 --press "120:Start,123:Start!,1800:Cross,1803:Cross!"
+  --png-at 60,300,1200,3600 --wav dir/sound.wav --ge-threads 2 --fonts
+  <fonts>`. 3 timeouts (Ys - The Oath in Felghana, God of War - Ghost of
+  Sparta, God of War - Chains of Olympus). PNGs are named by the frame run
+  (the runner waits for the screen to present a new picture after each
+  frame that wants one); 100 games' final frame is `frame-001200.png`
+  (the screen hadn't presented by frame 3600).
+- **Report** (`docs/psp-compatibility.md`): per-game table (title, NPID,
+  fps, state, last note), summary counts, top missing functions, timed-out
+  games, and next missing functions. 149 of 266 games (56 %) hit at least one
+  unimplemented function. Top gaps: `ThreadManForUser` (130+ games),
+  `sceCtrl a7144800` (32), `sceGe_user b77905ea` (17), GE feature emulation
+  (29 games: DXT textures, bounding-box tests, line drawing).
+- **No changes to `ares/psp`** beyond what the tool strictly needs.
+
+Checks: `tests/psp/run-tests.sh` (236 groups, 0 failures),
+`tests/psp/ares/run-tests.sh` (278 checks, 0 failed),
+`tests/psp/ares/runner-test.sh` (passing). Builds clean
+(`-Wall -Wextra -Werror`).
+
 **Active work (2026-09-25):** branch `feature/n64-accuracy-neutral-perf-2026-09`
 ([PR #4](https://github.com/pwnedbygary/phobos/pull/4), commits `c02166932` and `ffe337ceb`).
 Stacked on it: branch `feature/perf-hud-2026-09` ([PR #5](https://github.com/pwnedbygary/phobos/pull/5))
@@ -867,6 +903,22 @@ the details; the user chose a data tape per game in its save folder.
   (the game's tape never started, so nothing was recorded). The same steps by hand and two full scripted runs
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
+
+## PSP tests: the test programs and the PSP's GE measurements in the repository — 2026-10-06
+
+Branch `cursor/psp-test-data-2b67`, on top of `cursor/psp-hle-games4-2b67` (#151). At the owner's request, the
+PSP core's built test programs (`tests/psp/programs`: hello, system, disc, gu, pspsdk's GU samples and
+pspmeasure, 13 MB, built from `tools/psp-test-programs` with pspdev on 2026-10-04 and -05, the very files the tests
+have run with) and their PSP's round-3 GE measurements (`tests/psp/measurements/ge-round3`, 90 files, 21 MB, from
+the owner's PSP on firmware 6.61) are kept in the repository, so another machine (and CI) runs every test with no
+PSP toolchain. `tests/psp/run-tests.sh` and `tests/psp/ares/run-tests.sh` use them unless `PSP_TEST_PROGRAMS` or
+`PSP_GE_RESULTS` name other folders (empty: none). The VFPU's measurements (about 670 MB a round) stay with the
+owner, copied where they're needed. Each folder's README says where its files come from (the programs' licenses:
+pspsdk's and newlib's BSD-style ones; their SHA-256) and how to rebuild them; `.gitattributes` marks them binary;
+`docs/development-process.md` records the authorization.
+- **Checks:** both test scripts with no variables set, so with these folders: tests/psp 236 groups (ASan+UBSan;
+  "psp measure" compares pspmeasure's GE results with these), tests/psp/ares 278 checks (the program checks run,
+  none skipped).
 
 ## PSP core: the games further still — 2026-10-06
 

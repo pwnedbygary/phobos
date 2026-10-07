@@ -1,0 +1,9 @@
+psp-measure's GE tests, round 3 (tools/psp-measure/ge.c in Phobos says what each test draws): each .bin is the
+target's pixels after one test, a little-endian 32-bit word each, row by row, 256x256; but depth-layout-<n>,
+the whole depth buffer, 512x256 16-bit values (in the low half), read through VRAM copy n
+(0x04000000 + n * 0x200000) after each pixel (x, y) of a 256x64 area was given depth y * 256 + x over 0xffff.
+light-*: 16x16 cells of one lit color each; normals with cosines known exactly (Pythagorean triples and
+quadruples), levels 255 254 253 200 192 129 128 127 100 64 63 33 32 16 8 1 (the cases are in ge.c).
+ramp-*: 16 bands, each a ramp of color (or fog) over its own width. 3d-*: drawn through the matrices.
+bezier-*, spline-*: curved surfaces from a 4x4 grid of control points.
+<name>.stopped: a test that stopped the PSP twice, given up on.
