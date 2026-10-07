@@ -68,6 +68,7 @@ auto fileTests() -> Tests;
 auto geTests() -> Tests;
 auto drawTests() -> Tests;
 auto draw3dTests() -> Tests;
+auto curvesTests() -> Tests;
 auto measureTests() -> Tests;
 auto discTests() -> Tests;
 auto discFormatTests() -> Tests;

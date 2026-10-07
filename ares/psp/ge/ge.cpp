@@ -10,6 +10,7 @@ namespace ares::PlayStationPortable {
 #include "lighting.cpp"
 #include "transform.cpp"
 #include "draw.cpp"
+#include "curves.cpp"
 #include "four.cpp"
 #include "raster.cpp"
 #include "threads.cpp"
