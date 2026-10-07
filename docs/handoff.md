@@ -25,6 +25,26 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: a hardware renderer on Vulkan — 2026-10-07
+
+Branch `cursor/psp-gpu-hw-2b67`, on top of `cursor/psp-ge-curves-2b67` (#162). docs/psp-core.md, part 36, and
+docs/psp-gpu-renderers.md (rewritten) describe it. The owner stopped the exact compute renderer (parts 34-35, on
+their own branches) for a PPSSPP-style hardware renderer; PPSSPP's GPU backends informed the design, none of their
+code is used.
+- **The renderer** (`ares/psp/ge/gpu`): the GE transforms, lights, clips and decodes textures as before and hands
+  each PRIM's settings and primitives to `GE::Renderer`; `gpu.cpp` draws them with the GPU's rasterizer, texture
+  units and blending into frame buffers kept on the GPU (read back only when their pages are needed), with render to
+  texture by copies on the GPU, the GE's decoded textures cached, and a pipeline per mix of settings (a fragment
+  shader specialized by 15 constants). `vulkan.cpp` runs it through the host's `vkGetInstanceProcAddr` (custom
+  drivers included; its own tables, volk untouched). Not in the app or the desktop program yet.
+- **Measured** (the six verified scenes, the RP6's Adreno 740): 1.5-2.3 times the seven-thread software renderer
+  (Midnight Club 3's race 37.5 fps against 24.2, Liberty City Stories' woods 94.4 against 54.5). Not exact: 28-65% of
+  pixels identical to the software renderer's, nearly all the rest a level or two apart (blending's rounding). 2D
+  sprites and render to texture are byte for byte, as `tests/psp/gpu.cpp` checks.
+- **Next**: upscaling and presenting from the GPU, then OpenGL, then the app wiring (Settings' "PSP Renderer:
+  Software / Vulkan / OpenGL", Software the default; the host's `vkGetInstanceProcAddr` and `loadVulkan` for the PSP;
+  a sanity check; measuring in the app with the system and a custom driver, none installed or deleted without asking).
+
 ## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
 
 Branch `cursor/psp-ge-curves-2b67`, on top of `cursor/psp-hle-games6-2b67` (#161, part 32; parts 31 and 30, #160
