@@ -131,6 +131,10 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   //Every block has the same prologue (two float registers, for the FPU's native arithmetic: recompiler-fpu.cpp),
   //so the stack frame one block's prologue made serves any other's body, and its epilogue.
   beginFunction(1, 3, 4, 2);
+  //The page tables loads and stores look pages up in (recompiler-memory.cpp), in saved registers S1 and S2: set
+  //here, before the body, and kept by the blocks that go on to each other, which all set them alike.
+  mov64(sreg(1), imm((sljit_sw)self.pages));
+  mov64(sreg(2), imm((sljit_sw)writePages.data()));
   auto bodyLabel = sljit_emit_label(compiler);
   calls = false;
   u32 count = 0;          //instructions in the block so far
@@ -261,8 +265,7 @@ auto Allegrex::Recompiler::emitChain(u32 count) -> void {
   lshr32(reg(1), reg(1), imm(12));
   mov64_u32(reg(1), reg(1));  //reg(1): the page, and the section
   if(self.pages) {
-    mov64(reg(2), imm((sljit_sw)self.pages));
-    mov64(reg(2), mem(SLJIT_MEM2(SLJIT_R2, SLJIT_R1), 3));
+    mov64(reg(2), mem(SLJIT_MEM2(SLJIT_S1, SLJIT_R1), 3));  //(S1: the page table, emit())
     unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R2, 0, SLJIT_IMM, 0));
   }
 
@@ -305,8 +308,7 @@ auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
   }
   u32 index = (target & 0x1fff'ffff) / SectionSize;
   if(self.pages) {
-    mov64(reg(1), field(&self.pages));
-    unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_MEM1(SLJIT_R1), index * sizeof(u8*), SLJIT_IMM, 0));
+    unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_MEM1(SLJIT_S1), index * sizeof(u8*), SLJIT_IMM, 0));
   }
   mov64(reg(1), field(&table));
   mov64(reg(1), mem(reg(1), index * sizeof(Section*)));
