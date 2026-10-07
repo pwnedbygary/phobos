@@ -28,12 +28,14 @@ auto put(KernelMachine& m, u32 address, std::initializer_list<u32> words) -> voi
 }
 
 //A stand-in for the H.264 decoder: a picture for each access unit, its luma the unit's bytes added up (16 to 215),
-//its colour grey: the same unit gives the same picture whichever decoder decodes it.
+//its colour grey: the same unit gives the same picture whichever decoder decodes it. It logs each unit's size.
 struct PictureStandIn : VideoDecoder {
   u32 width = 32, height = 32;
   std::vector<u8> planes[3];
   Picture shown;
+  std::shared_ptr<std::vector<u32>> sizes;
   auto decode(const u8* data, u32 size) -> bool override {
+    if(sizes) sizes->push_back(size);
     u32 sum = 0;
     for(u32 n = 0; n < size; n++) sum += data[n];
     u32 half = (width + 1) / 2, halfHeight = (height + 1) / 2;
@@ -59,8 +61,13 @@ struct SoundStandIn : AudioDecoder {
   auto reset() -> void override {}
 };
 
-auto standIns(KernelMachine& m, std::shared_ptr<std::vector<u32>> log = {}) -> void {
-  m.kernel.videoDecoders = [] { return std::make_unique<PictureStandIn>(); };
+auto standIns(KernelMachine& m, std::shared_ptr<std::vector<u32>> log = {},
+              std::shared_ptr<std::vector<u32>> sizes = {}) -> void {
+  m.kernel.videoDecoders = [sizes] {
+    auto decoder = std::make_unique<PictureStandIn>();
+    decoder->sizes = sizes;
+    return decoder;
+  };
   m.kernel.audioDecoders = [log](const AudioDecoder::Format&) -> std::unique_ptr<AudioDecoder> {
     auto decoder = std::make_unique<SoundStandIn>();
     decoder->log = log;
@@ -95,9 +102,10 @@ struct Player {
   KernelMachine m;
   HostFolder stick;
   std::shared_ptr<std::vector<u32>> sounds = std::make_shared<std::vector<u32>>();
-  Player(const Movie& movie, u32 priority = 0x17) {
-    standIns(m, sounds);
-    auto bytes = movie.bytes();
+  std::shared_ptr<std::vector<u32>> units = std::make_shared<std::vector<u32>>();  //the units' sizes, decoded
+  Player(const Movie& movie, u32 priority = 0x17) : Player(movie.bytes(), priority) {}
+  Player(const std::vector<u8>& bytes, u32 priority = 0x17) {
+    standIns(m, sounds, units);
     stick.put("M.PMF", std::string(bytes.begin(), bytes.end()));
     m.kernel.mount("ms0", stick.path.string());
     put(m, Parameters, {0x0880'0000, 0x30'0000, priority});
@@ -265,6 +273,12 @@ static auto psmfHeaders() -> void {
                    "scePsmfGetEPidWithTimestamp", "scePsmfGetNumberOfPsmfMarks", "scePsmfGetPsmfMark"}) {
     check(__LINE__, name, m.call(name, {Copy, 90000, Out, Out}), 0x8061'5025);
   }
+  //a presentation that ends before it starts: its end taken as its start
+  m.system.memory.copyIn(Header, bytes.data(), 2048);
+  for(u32 n = 0; n < 6; n++) m.system.memory.write(1, Header + 0x5a + n, u8(u64(80000) >> (5 - n) * 8));
+  CHECK(m.call("scePsmfSetPsmf", {Copy, Header}), 0);
+  CHECK(m.call("scePsmfGetPresentationStartTime", {Copy, Out}) == 0 && word(m, Out) == 90000, true);
+  CHECK(m.call("scePsmfGetPresentationEndTime", {Copy, Out}) == 0 && word(m, Out) == 90000, true);
 }
 
 //The player's statuses and the calls each allows, as video/psmfplayer recorded them (its own tables): every function
@@ -741,11 +755,103 @@ static auto psmfPlayerStates() -> void {
   }
 }
 
+//Movies made wrong on purpose (a crafted file): no call may read past what the file holds, or take long over it.
+//- A header whose EP map's entry count times an entry's 10 bytes wraps round to a small size in 32 bits (0x1999999a
+//  entries), read by a program on both engines: no EP map (0x80615025 from the EP functions, nothing written); a map
+//  running one entry past the header is none either, and one filling the header to its last entry is read.
+//- An access unit whose next delimiter never comes (5 MiB with none): cut at 2 MiB, the movie playing on to its next
+//  picture and its end, the video held never much past the cut.
+//- Sound whose frames have lost their headers: passed over as it's read, nothing held of it, the pictures playing on
+//  without sound.
+//- A presentation ending before its start, or less than a picture after it: GetPsmfInfo's time 0, and a movie with an
+//  EP map can't be started in an empty one.
+static auto psmfMalformed() -> void {
+  {
+    Movie movie;
+    movie.streams = {videoStream(0xe0, 32, 32, {0})};
+    for(u32 n = 0; n < 4; n++) movie.units.push_back(unit(n));
+    auto bytes = movie.bytes();
+    constexpr u32 Count = 0x82 + 8, Map = 0x82 + 16;
+    auto count = [&](u32 value) { for(u32 n = 0; n < 4; n++) bytes[Count + n] = value >> (3 - n) * 8; };
+    count(0x1999'999a);
+    for(bool recompile : {false, true}) {
+      KernelMachine m;
+      m.system.memory.copyIn(Header, bytes.data(), 2048);
+      m.system.memory.fill(Out, 0x55, 16);
+      Assembler a{m, 0x0880'0000};
+      a.li(s1, Log);
+      a.li(a0, Structure); a.li(a1, Header); a.call("scePsmfSetPsmf"); a.put(sw(v0, 0, s1));
+      a.li(a0, Structure); a.call("scePsmfGetNumberOfEPentries"); a.put(sw(v0, 4, s1));
+      a.li(a0, Structure); a.call("scePsmfCheckEPmap"); a.put(sw(v0, 8, s1));
+      a.li(a0, Structure); a.li(a1, 1'000'000); a.li(a2, Out); a.call("scePsmfGetEPWithId"); a.put(sw(v0, 12, s1));
+      a.li(a0, Structure); a.li(a1, 0xffff'ffff); a.call("scePsmfGetEPidWithTimestamp"); a.put(sw(v0, 16, s1));
+      a.li(a0, Structure); a.li(a1, 0xffff'ffff); a.li(a2, Out); a.call("scePsmfGetEPWithTimestamp");
+      a.put(sw(v0, 20, s1));
+      a.call("sceKernelExitGame");
+      m.runProgram(0x0880'0000, recompile);
+      CHECK(m.kernel.exited, true);
+      CHECK(word(m, Log) == 0 && word(m, Log + 4) == 0, true);
+      for(u32 n = 2; n < 6; n++) check(__LINE__, "an EP function", word(m, Log + n * 4), 0x8061'5025);
+      CHECK(word(m, Out) == 0x5555'5555 && word(m, Out + 12) == 0x5555'5555, true);  //nothing written
+    }
+    KernelMachine m;
+    for(auto [entries, read] : {std::pair{(2048 - Map) / 10, true}, {(2048 - Map) / 10 + 1, false}}) {
+      count(entries);
+      m.system.memory.copyIn(Header, bytes.data(), 2048);
+      CHECK(m.call("scePsmfSetPsmf", {Structure, Header}), 0);
+      CHECK(m.call("scePsmfGetNumberOfEPentries", {Structure}), read ? entries : 0);
+      CHECK(m.call("scePsmfGetEPidWithTimestamp", {Structure, 0xffff'ffff}), read ? entries - 1 : 0x8061'5025);
+    }
+  }
+  constexpr u32 UnitLimit = 2 * 1024 * 1024;
+  auto play = [](Player& p, u32& held) {  //the pictures' times, to the end
+    std::vector<u32> times;
+    for(u32 n = 0; n < 60 && p.status() == 4; n++) {
+      p.update(), p.update();
+      if(!p.video() && (times.empty() || times.back() != p.time())) times.push_back(p.time());
+      held = std::max<u32>(held, p.m.kernel.psmfPlayer.video.size());
+    }
+    return times;
+  };
+  {
+    Movie movie = standInMovie(3);
+    movie.units[1].resize(movie.units[1].size() + 5 * 1024 * 1024, 0xff);
+    Player p(movie);
+    CHECK(p.playing(), true);
+    u32 held = 0;
+    CHECK(play(p, held) == std::vector<u32>({0, 3003, 6006}), true);
+    CHECK(p.status(), 0x200);
+    CHECK(*p.units == std::vector<u32>({u32(movie.units[0].size()), UnitLimit, u32(movie.units[2].size())}), true);
+    CHECK(held <= UnitLimit + 2048, true);
+  }
+  {
+    auto bytes = standInMovie(6, 3000).bytes();
+    for(u32 at = 2048; at + 2048 <= bytes.size(); at += 2048) if(bytes[at + 17] == 0xbd) bytes[at + 32] = 0;
+    Player p(bytes);
+    CHECK(p.playing(), true);
+    u32 held = 0;
+    CHECK(play(p, held) == std::vector<u32>({0, 3003, 6006, 3 * 3003, 4 * 3003, 5 * 3003}), true);
+    CHECK(p.status() == 0x200 && p.sounds->empty(), true);
+    CHECK(p.m.kernel.psmfPlayer.audio.size() <= 1, true);  //all of it read, none of it held
+  }
+  for(bool mapped : {false, true}) {
+    for(u64 end : {80000u, 91000u}) {
+      auto bytes = standInMovie(4, 0, mapped).bytes();
+      for(u32 n = 0; n < 6; n++) bytes[0x5a + n] = end >> (5 - n) * 8;
+      Player p(bytes);
+      CHECK(p.create() == 0 && p.set() == 0, true);
+      CHECK(p.call("scePsmfPlayerGetPsmfInfo", {Handle, Info}) == 0 && word(p.m, Info) == 0, true);
+      CHECK(p.start(), mapped && end < 90000 ? BadValue : 0);
+    }
+  }
+}
+
 auto psmfTests() -> Tests {
   return {{"psmf headers", psmfHeaders}, {"psmf player statuses", psmfPlayerStatuses},
           {"psmf player playing", psmfPlayerPlaying}, {"psmf player pictures", psmfPlayerPictures},
           {"psmf player sound", psmfPlayerSound}, {"psmf player modes", psmfPlayerModes},
-          {"psmf player files", psmfPlayerFiles}, {"psmf player states", psmfPlayerStates}};
+          {"psmf player files", psmfPlayerFiles}, {"psmf player states", psmfPlayerStates},
+          {"psmf malformed movies", psmfMalformed}};
 }
 
 }
