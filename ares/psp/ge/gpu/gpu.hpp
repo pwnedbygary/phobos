@@ -67,7 +67,8 @@ struct GPU : GE::Renderer {
   std::unique_ptr<Device> device;
   bool fused = false, nativeFma = false;  //what configure() last set (detect() finds them)
   bool denormals = false;  //the GPU keeps numbers below the normal floats as the host does (detect() finds it)
-  //Where the renderer says what went wrong while drawing (once: the GPU lost); stderr's "PSP GPU:" if none.
+  //Where the renderer says what went wrong while drawing (once: the GPU lost); stderr's "PSP GPU:" if none. It may
+  //be called on the GE's renderer thread (the batches are drawn there: ge/threads.cpp).
   std::function<void(const std::string&)> report;
   bool reported = false;
 
@@ -77,6 +78,7 @@ struct GPU : GE::Renderer {
   auto configure(bool fused, bool nativeFma) -> bool;
   auto probe(u32 kind, const std::vector<u32>& cases) -> std::vector<u32>;
   auto draw(GE& ge, GE::Batch& batch) -> void override;
+  auto asynchronous() const -> bool override { return true; }
   static auto hostFuses() -> int;
 
   //vulkan.cpp

@@ -253,6 +253,7 @@ struct GE {
   //Where a primitive may draw (draw.cpp): pixels inside left-right and top-bottom (inclusive).
   struct Region { s32 left, top, right, bottom; };
   struct Batch;  //(threads.cpp)
+  struct Renderer;
 
   //What a primitive is drawn with, shared by the jobs it makes: the pixel pipeline's settings, and the texture
   //with the texture function's (or none), all taken from the commands as the primitive met them.
@@ -450,6 +451,8 @@ struct GE {
   auto record(const Job& job) -> void;
   auto drawBands(Batch& batch) -> void;
   auto worker() -> void;
+  auto rendering(u64 seen) -> void;
+  auto stopRendering() -> void;
 
   std::vector<Vertex> primitiveVertices;  //the primitive being drawn's (draw.cpp); a curved surface's points
   std::vector<Vertex> patchVertices;      //the vertices a curved surface is cut into (curves.cpp)
@@ -476,6 +479,7 @@ struct GE {
     u32 users = 0;                      //threads drawing its bands now (under the mutex)
     u32 bands = 0;
     std::atomic<u32> nextBand{0}, bandsLeft{0};
+    Renderer* renderer = nullptr;  //launched to a renderer: the one drawing it (its thread's: rendering())
   };
   struct Drawing {
     u32 threads = 1;          //how many threads draw ('GE Threads'): 1, each primitive at once on the GE's own
@@ -487,6 +491,7 @@ struct GE {
     Batch* queued = nullptr;            //the one to draw once that's done (under the mutex)
 
     std::vector<std::thread> workers;   //the threads besides the GE's own
+    std::thread renderer;               //the one handing launched batches to an asynchronous renderer
     std::mutex mutex;
     std::condition_variable wake, finished;
     u64 round = 0;            //goes up as each batch starts being drawn, which the workers wake for
@@ -501,9 +506,16 @@ struct GE {
   //memory's VRAM before it returns (those it can't draw itself through rasterize(), here, in their turn). So
   //everything that waits for a batch to be drawn waits for the renderer the same way, and the jobs are the very
   //ones drawing here would draw. Whoever sets it takes it away before it goes.
+  //
+  //An asynchronous renderer (asynchronous(): the GPU's) has batches launched to it as the workers have them
+  //(threads.cpp): its draw() runs on a thread of the GE's own (rendering()), one batch after another, while the GE's
+  //thread goes on; the batch's VRAM pages are busy meanwhile, and everything that waits for the workers waits for it
+  //the same way. Its draw() must then only touch what a worker may (the batch, and the batch's VRAM pages), and
+  //whoever takes it away settles first (settle()).
   struct Renderer {
     virtual ~Renderer() = default;
     virtual auto draw(GE& ge, Batch& batch) -> void = 0;
+    virtual auto asynchronous() const -> bool { return false; }
   };
   Renderer* renderer = nullptr;
 

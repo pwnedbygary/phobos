@@ -29,7 +29,11 @@
 //
 //With 'GE Threads' at 1 nothing waits: each primitive is drawn at once on the GE's thread, as it always was. A batch
 //with fewer pixels than drawing.shared, and nothing being drawn, is drawn on the GE's thread at once, which is
-//quicker than waking the others. With a renderer (GE::Renderer, ge.hpp) batches always form, and it draws each.
+//quicker than waking the others. With a renderer (GE::Renderer, ge.hpp) batches always form, and it draws each:
+//where the batch would be drawn, or, an asynchronous renderer (the GPU's), launched to it as to the workers, every
+//batch however small. Its own thread (rendering()) takes the batch being drawn and has the renderer draw all of it,
+//then the one queued after it; nobody helps with its bands (it has none). So the GE's thread waits for the GPU only
+//where it would wait for the workers.
 
 #if defined(__linux__)
 #include <sched.h>
@@ -41,6 +45,7 @@ GE::~GE() {
   //nothing is put back into it; and memory, which outlives the GE, hears from it no more.
   memory.vramGuard = nullptr;
   setThreads(1);
+  stopRendering();
   memory.finishDrawing = nullptr;
   memory.watchedWritten = nullptr;
 }
@@ -57,6 +62,7 @@ auto GE::setThreads(u32 count) -> void {
   drawing.wake.notify_all();
   for(auto& worker : drawing.workers) worker.join();
   drawing.workers.clear();
+  if(drawing.renderer.joinable()) drawing.renderer.join();  //(started again when next needed: launch())
   drawing.quit = false;
   drawing.threads = count;
   for(u32 n = 1; n < count; n++) drawing.workers.emplace_back([this] { worker(); });
@@ -98,6 +104,46 @@ auto GE::worker() -> void {
   }
 }
 
+//The renderer's thread: it waits for a batch launched to an asynchronous renderer, has the renderer draw it, and
+//waits again. (The workers wake for it too, and find no bands to draw.) seen: the round when it was made, so that a
+//batch started before it ran isn't missed.
+auto GE::rendering(u64 seen) -> void {
+  while(true) {
+    Batch* batch;
+    {
+      std::unique_lock lock(drawing.mutex);
+      drawing.wake.wait(lock, [&] {
+        return drawing.quit || (drawing.drawn && drawing.drawn->renderer && drawing.round != seen);
+      });
+      if(drawing.quit) return;
+      seen = drawing.round;
+      batch = drawing.drawn;
+      batch->users++;
+    }
+    batch->renderer->draw(*this, *batch);
+    batch->bandsLeft.store(0, std::memory_order_release);
+    bool started;
+    {
+      std::lock_guard lock(drawing.mutex);
+      started = drew(*batch);
+    }
+    if(started) drawing.wake.notify_all();
+    drawing.finished.notify_all();
+  }
+}
+
+//The renderer's thread stopped (nothing is launched to it then: settle() first).
+auto GE::stopRendering() -> void {
+  if(!drawing.renderer.joinable()) return;
+  {
+    std::lock_guard lock(drawing.mutex);
+    drawing.quit = true;
+  }
+  drawing.wake.notify_all();
+  drawing.renderer.join();
+  drawing.quit = false;
+}
+
 //Takes bands of the batch until none are left, drawing in each every job that reaches it, in order.
 auto GE::drawBands(Batch& batch) -> void {
   while(true) {
@@ -113,9 +159,9 @@ auto GE::drawBands(Batch& batch) -> void {
 
 //The batch's bands to draw, and the workers due to wake for them (the caller holds the mutex, and wakes them).
 auto GE::startBands(Batch& batch) -> void {
-  batch.bands = (batch.bottom - batch.top + BandRows) / BandRows;
+  batch.bands = batch.renderer ? 0 : (batch.bottom - batch.top + BandRows) / BandRows;
   batch.nextBand.store(0, std::memory_order_relaxed);
-  batch.bandsLeft.store(batch.bands, std::memory_order_relaxed);
+  batch.bandsLeft.store(batch.renderer ? 1 : batch.bands, std::memory_order_relaxed);  //(the renderer's: all of it)
   drawing.drawn = &batch;
   drawing.round++;
 }
@@ -159,13 +205,19 @@ auto GE::launch(bool returning) -> void {
   Batch& batch = *drawing.batch;
   bool busy = drawing.batches[0].launched || drawing.batches[1].launched;
   if(batch.jobs.empty() && !(returning && busy && !memory.vramGuard)) return clearBatch(batch);
-  if(renderer || drawing.workers.empty() || (returning && !memory.vramGuard) ||
-     (batch.work < drawing.shared && !busy)) {
+  bool apart = renderer && renderer->asynchronous();  //(launched to the renderer's thread, however small)
+  if((renderer && !apart) || (!renderer && drawing.workers.empty()) || (returning && !memory.vramGuard) ||
+     (!apart && batch.work < drawing.shared && !busy)) {
     return flush();
+  }
+  if(apart && !drawing.renderer.joinable()) {
+    std::lock_guard lock(drawing.mutex);
+    drawing.renderer = std::thread([this, seen = drawing.round] { rendering(seen); });
   }
   {
     std::lock_guard lock(drawing.mutex);
     batch.launched = true;
+    batch.renderer = apart ? renderer : nullptr;
     if(!drawing.drawn) startBands(batch);
     else drawing.queued = &batch;  //(the other batch, being drawn: two at most)
   }
@@ -234,6 +286,7 @@ auto GE::clearBatch(Batch& batch) -> void {
   batch.targeted = false;
   batch.pending.reset();
   batch.launched = false;
+  batch.renderer = nullptr;
 }
 
 //The size bytes from address are about to be read by the GE's own thread (a texture, a palette, vertices, the list's

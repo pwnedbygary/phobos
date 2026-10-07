@@ -434,7 +434,8 @@ static auto gpuDrawsAsSoftware() -> void {
       described += text;
     }
     hardware.ge.drawing.deferring = false;
-    hardware.ge.launch(true);  //(as run() ends: the batch drawn, by the renderer)
+    hardware.ge.launch(true);  //(as run() ends: the batch launched to the renderer, on its thread)
+    hardware.ge.settle();      //(and waited for, as reading VRAM through memory would)
     batches++;
     u32 bytesPerPixel = format == 3 ? 4 : 2;
     bool apart = false;
@@ -556,6 +557,7 @@ static auto gpuLost() -> void {
   }
   std::mt19937 random{20261009};
   for(u32 batch = 0; batch < 3; batch++) {
+    hardware.ge.settle();  //(as run() starts)
     hardware.ge.drawing.deferring = true;
     for(u32 primitive = 0; primitive < 4; primitive++) {
       u32 color = u32(random());
@@ -577,6 +579,7 @@ static auto gpuLost() -> void {
     hardware.ge.drawing.deferring = false;
     hardware.ge.launch(true);
   }
+  hardware.ge.settle();
   CHECK(software.memory.vram == hardware.memory.vram, true);
   CHECK(pretend.runs, 1u);
   CHECK(reports, 1u);
