@@ -50,8 +50,8 @@ loaded their code and reached their first interactive screen. The 35 movie
 games are playing their intro or a cutscene (the runner is built with
 FFmpeg's decoders, and #153 is included, so movies do draw). The 73 black
 games show a true-black screen: a crash in an unimplemented kernel function,
-a feature of the PSP's own graphics engine (GE) not yet emulated (anti-aliased
-lines, display lists), or the CPU stopping in a game thread. The 13 loading
+a feature of the PSP's own graphics engine (GE) not yet emulated (curved
+surfaces, which #162 adds), or the CPU stopping in a game thread. The 13 loading
 games are stuck on a loading screen.
 
 ## Since de6e6dcb7
@@ -75,9 +75,19 @@ Re-judging every game's reference frame (frame 3600) with one rule—a
 cinematic or text frame is a movie, a true-black frame is black, a bright
 usable UI is a menu, a loading screen is loading—66 games improved
 (black → menu): they now boot to a usable UI where the old code froze.
-22 regressed (menu → black): their GE path now hits an unimplemented
-feature (anti-aliased lines, display lists) that the old code happened
-to avoid. The 35 movie games are dark intro frames the old rule lumped
+22 went from menu to black. Why isn't checked yet; anti-aliased lines
+can't be the cause, since #157 draws them (without anti-aliasing). They
+are: Black Wolves Saga - Last Hope, Blitz - Overtime, Castlevania - The
+Dracula X Chronicles, Crisis Core - Final Fantasy VII, Disney-Pixar Cars -
+Race-O-Rama, Fat Princess Fistful of Cake, Fate Extra CCC, Gitaroo Man
+Lives!, Guilty Gear XX Accent Core Plus, Gungnir, Hexyz Force, Juiced 2 -
+Hot Import Nights, Killzone - Liberation, The King of Fighters - Orochi
+Saga, Macross - Triangle Frontier, Melodie (Prototype), Miami Vice - The
+Game, Midnight Club - L.A. Remix, Pangya Fantasy Golf, Ridge Racer, Super
+Stardust Portable and Toca Race Driver 2. Several last notes point at
+causes worth checking first: a save or message prompt waiting for an
+answer, a failed read, and scePsmfPlayer (which #160 adds). The 35 movie
+games are dark intro frames the old rule lumped
 into black, so the Before column's 155 "black" overstates the old run's
 true-black total.
 

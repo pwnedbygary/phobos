@@ -34,7 +34,8 @@ functions, missing 149→77), and #157 (GE line/box drawing, DXT; no curved
 surfaces, anti-aliased lines drawn without anti-aliasing)—and updates
 `docs/psp-compatibility.md`.
 
-- **Result:** 66 improved (black → menu), 22 regressed (menu → black),
+- **Result:** 66 improved (black → menu), 22 went from menu to black (why
+  isn't checked yet; the report names them),
   35 shifted to movie (dark intro frames the old rule lumped into black,
   so the Before column's 155 "black" overstates the old run's true-black
   total). Menu: 104 → 141. Movie: 35 (new category). Black: 155 → 73.
