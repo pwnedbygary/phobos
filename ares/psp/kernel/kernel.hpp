@@ -295,6 +295,8 @@ struct Kernel {
     Volatile,  //the volatile memory, lent to another (power.cpp)
     Codec,     //the Media Engine decoding for it (codec.cpp); the call returns waitCount as it ends
     Mutex,     //a kernel mutex another thread holds (mutexes.cpp)
+    Psmf,      //the movie player's work (psmfplayer.cpp: opening a movie, a picture, making or deleting the player);
+               //the call returns waitCount as it ends
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -1226,6 +1228,158 @@ struct Kernel {
   auto sceMpegAvcDecodeDetail() -> void;
   auto sceMpegAvcCsc() -> void;
   auto sceMpegAtracDecode() -> void;
+  auto pictureConvert(const std::vector<u8>& planes, u32 pictureWidth, u32 pictureHeight, u32 format, bool opaque,
+                      u32 destination, u32 frameWidth, u32 x, u32 y, u32 width, u32 height) -> void;
+  auto atracUnitDecode(std::unique_ptr<AudioDecoder>& decoder, std::vector<u8>& last, const std::vector<u8>& unit,
+                       std::vector<s16>& out) -> void;
+
+  //psmf.cpp: scePsmf, a PSMF movie's header read for the game, which keeps the header and a structure of its own in
+  //its memory; and the reading of headers the player shares
+  enum : u32 { PsmfAvc = 0, PsmfAtrac = 1, PsmfPcm = 2, PsmfUserData = 3, PsmfAnyAudio = 15 };  //streams' kinds
+  struct PsmfStream {          //an entry of a header's stream table
+    u8 id = 0, privateID = 0;  //its PES stream ID (0xe0 + channel: video; 0xbd: private stream 1) and private ID
+    u32 kind = 0, channel = 0;
+    u32 epOffset = 0, epCount = 0;  //its EP map: where (from the PSMF's start) and how many entries (0: none)
+    u32 width = 0, height = 0;      //a video stream's picture, in pixels
+    u32 channels = 0, rate = 0;     //a sound stream's channel configuration (1 mono, 2 stereo) and rate code
+                                    //(2: 44.1 kHz)
+  };
+  struct PsmfHeader {
+    u32 version = 0;                //its four ASCII digits, as a little-endian word
+    u32 streamOffset = 0, streamSize = 0;
+    u64 startTime = 0, endTime = 0; //the presentation's, in the 90 kHz clock's ticks
+    std::vector<PsmfStream> streams;
+  };
+  struct PsmfEntry { u32 time, pack; u8 first, second; };  //an EP map's: a picture's time, the pack it starts in
+  static auto psmfParse(const u8* bytes, u32 size, PsmfHeader& header) -> bool;
+  static auto psmfEntry(const u8* bytes) -> PsmfEntry;
+  auto psmfRead(u32 address, PsmfHeader& header) -> bool;
+  auto psmfStructure(u32 structure, PsmfHeader& header, u32 notSet) -> u32;
+  auto psmfSelect(u32 structure, const PsmfHeader& header, u32 number) -> void;
+  auto psmfMap(u32 structure, const PsmfHeader& header, u32& at) -> u32;
+  auto psmfCurrent(u32 structure, PsmfHeader& header, u32 kind, PsmfStream& stream) -> u32;
+  auto psmfWriteEntry(u32 at, u32 address) -> void;
+  auto psmfFindEntry(u32 structure, u32 time, u32& at, u32& index) -> u32;
+  auto scePsmfSetPsmf() -> void;
+  auto scePsmfVerifyPsmf() -> void;
+  auto scePsmfQueryStreamOffset() -> void;
+  auto scePsmfQueryStreamSize() -> void;
+  auto scePsmfGetPsmfVersion() -> void;
+  auto scePsmfGetHeaderSize() -> void;
+  auto scePsmfGetStreamSize() -> void;
+  auto scePsmfGetPresentationStartTime() -> void;
+  auto scePsmfGetPresentationEndTime() -> void;
+  auto scePsmfGetNumberOfStreams() -> void;
+  auto scePsmfGetNumberOfSpecificStreams() -> void;
+  auto scePsmfSpecifyStream() -> void;
+  auto scePsmfSpecifyStreamWithStreamType() -> void;
+  auto scePsmfSpecifyStreamWithStreamTypeNumber() -> void;
+  auto scePsmfGetCurrentStreamNumber() -> void;
+  auto scePsmfGetCurrentStreamType() -> void;
+  auto scePsmfGetVideoInfo() -> void;
+  auto scePsmfGetAudioInfo() -> void;
+  auto scePsmfGetNumberOfEPentries() -> void;
+  auto scePsmfCheckEPmap() -> void;
+  auto scePsmfGetEPWithId() -> void;
+  auto scePsmfGetEPWithTimestamp() -> void;
+  auto scePsmfGetEPidWithTimestamp() -> void;
+  auto scePsmfGetNumberOfPsmfMarks() -> void;
+  auto scePsmfGetPsmfMark() -> void;
+
+  //psmfplayer.cpp: scePsmfPlayer, a movie played from its file: read, taken apart and decoded ahead, and handed to
+  //the game a picture and a sound frame at a time, paced by its calls (one player at a time)
+  struct PsmfPicture {
+    std::vector<u8> planes;   //4:2:0, packed one after another (empty: none)
+    u32 width = 0, height = 0;
+    u64 time = 0;             //its presentation time, in absolute ticks
+  };
+  struct PsmfPlayer {
+    u32 status = 0;           //0: no player; else 1 made, 2 a movie set, 4 playing, 0x200 played to its end
+    u32 priority = 0;         //what scePsmfPlayerCreate gave the player's threads
+    u32 tempBuffer = 0, tempSize = 0;  //scePsmfPlayerSetTempBuf's (the file is read without them)
+    bool looping = false;
+    u32 pixelFormat = 3;      //of the pictures handed out: 0 5650, 1 5551, 2 4444, 3 8888
+    s32 mode = 0, speed = 1;  //the play mode (0 play, 1 slow motion, 2 step frame, 3 pause, 4 fast forward, 5 fast
+                              //rewind) and speed
+    s32 videoCodec = -1, videoStream = -1, audioCodec = -1, audioStream = -1;  //as scePsmfPlayerStart chose them
+    //the movie
+    u32 file = 0;             //the descriptor it's read through (files: the game's, as a PSP's library's is)
+    u64 offset = 0;           //where the PSMF begins in its file
+    std::vector<u8> header;   //its header, to where the program stream begins
+    //playing it
+    u8 videoID = 0xe0;        //the PES stream ID of the video stream played
+    s32 audioID = -1;         //the private ID of the ATRAC3plus stream played (-1: no sound)
+    u32 nextPack = 0;         //the program stream's next pack to read
+    std::vector<u8> video, audio;  //the streams' data read and not yet taken (sound less its packets' headers)
+    std::vector<std::pair<u32, u64>> videoStamps, audioStamps;  //where PES time stamps fall in them, and the stamps
+    u64 videoTime = ~0ull, audioTime = ~0ull;  //the last access unit's and sound frame's times (-1: none yet)
+    std::deque<PsmfPicture> pictures;  //decoded, waiting their turn (three at most, as a PSP's decodes ahead)
+    PsmfPicture shown;        //the picture handed out last
+    u32 calls = 0;            //scePsmfPlayerGetVideoData's calls since playing (re)started
+    bool started = false;     //its start-up is over: pictures come
+    u32 due = 0;              //Updates until the next picture is due (0: due; ~0: none, paused)
+    u64 from = 0;             //where playing started (absolute ticks): pictures before it decoded, not handed out
+    bool silence = false;     //the next sound frame decoded comes out silent (the first after a start)
+    bool keyframe = false;    //pictures wait for one a decoder can start from (a decoder made afresh)
+    bool ending = false;      //the movie has ended, for the player's threads to notice once they get the CPU
+    u32 endingAt = 0;         //the vertical blank's count when it ended
+    u32 entry = 0;            //fast forward and rewind: the EP entry shown last
+    std::vector<u8> soundLast;  //the last sound frame decoded (less its header): primes a decoder made afresh
+    std::unique_ptr<VideoDecoder> decoder;   //not saved: made afresh
+    std::unique_ptr<AudioDecoder> sound;     //not saved: made afresh
+    std::vector<u8> chunk;    //the file read ahead (not saved: read again)
+    u32 chunkPack = 0;        //the pack it starts with
+  } psmfPlayer;
+  auto psmfPlayerFor(u32 handle) -> PsmfPlayer*;
+  auto psmfPlayerWait(u32 value, u64 length, bool callbacks = false) -> void;
+  auto psmfPlayerHeader(PsmfHeader& header) const -> bool;
+  auto psmfPlayerOpen(const std::string& path, u64 offset) -> u64;
+  auto psmfPlayerClose() -> void;
+  auto psmfPlayerPack(u32 pack, u8* data) -> bool;
+  auto psmfPlayerRead() -> bool;
+  auto psmfPlayerDone() const -> bool;
+  auto psmfPlayerUnit(std::vector<u8>& unit, u64& time) -> bool;
+  auto psmfPlayerFrame(u32& from, u32& bytes, u64& time) -> bool;
+  auto psmfPlayerDecode() -> bool;
+  auto psmfPlayerReady() -> bool;
+  auto psmfPlayerRestart(u64 time) -> void;
+  auto psmfPlayerAdvance() -> void;
+  auto psmfPlayerEnd() -> void;
+  auto psmfPlayerEnded() -> void;
+  auto psmfPlayerStep() -> void;
+  auto psmfPlayerStreams(u32 kind) -> u32;
+  auto psmfPlayerSelect(u32 kind, u32 number) -> void;
+  auto psmfPlayerSetPsmf(bool offset, bool callbacks) -> void;
+  auto psmfPlayerSelectNext(u32 kind) -> void;
+  auto psmfPlayerSelectSpecific(u32 kind) -> void;
+  auto scePsmfPlayerCreate() -> void;
+  auto scePsmfPlayerDelete() -> void;
+  auto scePsmfPlayerSetTempBuf() -> void;
+  auto scePsmfPlayerSetPsmf() -> void;
+  auto scePsmfPlayerSetPsmfCB() -> void;
+  auto scePsmfPlayerSetPsmfOffset() -> void;
+  auto scePsmfPlayerSetPsmfOffsetCB() -> void;
+  auto scePsmfPlayerReleasePsmf() -> void;
+  auto scePsmfPlayerGetPsmfInfo() -> void;
+  auto scePsmfPlayerConfigPlayer() -> void;
+  auto scePsmfPlayerStart() -> void;
+  auto scePsmfPlayerStop() -> void;
+  auto scePsmfPlayerUpdate() -> void;
+  auto scePsmfPlayerGetVideoData() -> void;
+  auto scePsmfPlayerGetAudioData() -> void;
+  auto scePsmfPlayerGetAudioOutSize() -> void;
+  auto scePsmfPlayerGetCurrentStatus() -> void;
+  auto scePsmfPlayerGetCurrentPts() -> void;
+  auto scePsmfPlayerGetCurrentPlayMode() -> void;
+  auto scePsmfPlayerChangePlayMode() -> void;
+  auto scePsmfPlayerGetCurrentVideoStream() -> void;
+  auto scePsmfPlayerGetCurrentAudioStream() -> void;
+  auto scePsmfPlayerSelectVideo() -> void;
+  auto scePsmfPlayerSelectAudio() -> void;
+  auto scePsmfPlayerSelectSpecificVideo() -> void;
+  auto scePsmfPlayerSelectSpecificAudio() -> void;
+  auto scePsmfPlayerBreak() -> void;
+  auto scePsmfPlayerUnknown() -> void;
 
   //codec.cpp: the decoders the system makes (FFmpeg's, where the build has them; null otherwise). Tests may put
   //their own in.

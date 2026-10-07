@@ -1,10 +1,10 @@
 //Movies decoded (mpeg.cpp, docs/psp-core.md's part 26): the header read, pictures decoded by FFmpeg's H.264 decoder
 //and converted into the game's buffer, and the sound's access units taken out of the stream and decoded. The
-//pictures are a stream made up here, H.264 with every macroblock I_PCM (its samples stored as they are, so what it
-//decodes to is known to the value): a baseline sequence and picture parameter set and an IDR picture an access unit,
-//each behind an access unit delimiter, which sceMpegGetAvcAu cuts on. The sound: ATRAC3plus frames as a PSMF movie's
-//private stream 1 carries them, decoded by a stand-in. Programs feed the movies as video/mpeg/basic did.
-#include "kernel-machine.hpp"
+//pictures are a stream made up (movie-maker.hpp), H.264 with every macroblock I_PCM (its samples stored as they are,
+//so what it decodes to is known to the value): a baseline sequence and picture parameter set and an IDR picture an
+//access unit, each behind an access unit delimiter, which sceMpegGetAvcAu cuts on. The sound: ATRAC3plus frames as a
+//PSMF movie's private stream 1 carries them, decoded by a stand-in. Programs feed the movies as video/mpeg/basic did.
+#include "movie-maker.hpp"
 
 namespace allegrex_test::psp {
 
@@ -18,72 +18,6 @@ constexpr u32 Handle = R + 0x40, Au = R + 0x60, Got = R + 0x84, Place = R + 0x88
 constexpr u32 Pixels = 0x0980'0000, EsBuffer = 0x0990'0000, Sound = 0x09a0'0000, CallbackCode = 0x0880'3000;
 
 auto word(KernelMachine& m, u32 address) -> u32 { return m.system.memory.read(4, address); }
-
-//H.264's bits: unsigned and signed Exp-Golomb codes, plain bits, a NAL unit's emulation prevention.
-struct Bits {
-  std::vector<u8> bytes;
-  u32 bit = 0;
-  auto put(u32 value, u32 count) -> void {
-    while(count--) {
-      if(bit % 8 == 0) bytes.push_back(0);
-      if(value >> count & 1) bytes.back() |= 0x80 >> bit % 8;
-      bit++;
-    }
-  }
-  auto ue(u32 value) -> void {
-    u32 length = 0;
-    while((value + 1) >> (length + 1)) length++;
-    put(0, length);
-    put(value + 1, length + 1);
-  }
-  auto se(s32 value) -> void { ue(value > 0 ? 2 * value - 1 : -2 * value); }
-  auto align() -> void { while(bit % 8) put(0, 1); }
-  auto trailing() -> void { put(1, 1); align(); }
-};
-
-auto nal(u32 type, const std::vector<u8>& payload) -> std::vector<u8> {
-  std::vector<u8> out = {0, 0, 0, 1, u8(3 << 5 | type)};
-  u32 zeros = 0;
-  for(u8 byte : payload) {
-    if(zeros >= 2 && byte <= 3) out.push_back(3), zeros = 0;
-    out.push_back(byte);
-    zeros = byte ? 0 : zeros + 1;
-  }
-  return out;
-}
-
-//A picture of width by height macroblocks, each of one colour (Y, Cb, Cr), as an access unit: delimiter, sequence and
-//picture parameter sets, and an IDR slice of I_PCM macroblocks (deblocking off).
-struct Colour { u8 y, cb, cr; };
-auto picture(u32 width, u32 height, const std::vector<Colour>& colours, u32 idr) -> std::vector<u8> {
-  std::vector<u8> unit = {0, 0, 0, 1, 0x09, 0x10};  //access unit delimiter: an I picture
-  Bits sps;
-  sps.put(66, 8); sps.put(0xc0, 8); sps.put(30, 8);  //baseline, constraint sets 0 and 1, level 3
-  sps.ue(0); sps.ue(0); sps.ue(2); sps.ue(1); sps.put(0, 1);
-  sps.ue(width - 1); sps.ue(height - 1); sps.put(1, 1); sps.put(1, 1); sps.put(0, 1); sps.put(0, 1);
-  sps.trailing();
-  Bits pps;
-  pps.ue(0); pps.ue(0); pps.put(0, 1); pps.put(0, 1); pps.ue(0); pps.ue(0); pps.ue(0); pps.put(0, 1);
-  pps.put(0, 2); pps.se(0); pps.se(0); pps.se(0); pps.put(1, 1); pps.put(0, 1); pps.put(0, 1);
-  pps.trailing();
-  Bits slice;
-  slice.ue(0); slice.ue(7); slice.ue(0); slice.put(0, 4); slice.ue(idr);
-  slice.put(0, 1); slice.put(0, 1);  //no output of prior pictures; not long-term
-  slice.se(0); slice.ue(1);          //QP delta; deblocking off
-  for(u32 mb = 0; mb < width * height; mb++) {
-    slice.ue(25);  //I_PCM
-    slice.align();
-    auto c = colours[mb % colours.size()];
-    for(u32 n = 0; n < 256; n++) slice.put(c.y, 8);
-    for(u32 n = 0; n < 64; n++) slice.put(c.cb, 8);
-    for(u32 n = 0; n < 64; n++) slice.put(c.cr, 8);
-  }
-  slice.trailing();
-  for(auto& part : {nal(7, sps.bytes), nal(8, pps.bytes), nal(5, slice.bytes)}) {
-    unit.insert(unit.end(), part.begin(), part.end());
-  }
-  return unit;
-}
 
 //A PSMF movie of these access units and sound: the 2048-byte header (PSMF0015, the stream's offset and size), then a
 //pack per 2000 bytes of video (stream 0xe0, each pack's PES packet with a time stamp where an access unit starts it),
@@ -220,20 +154,6 @@ auto pictures(KernelMachine& m, u32 width = 32, u32 height = 32) -> void {
     decoder->width = width, decoder->height = height;
     return decoder;
   };
-}
-
-//An access unit of slices of these types (H.264's slice_type: 2 or 7 an I slice, 5 a P one; in NAL units of type
-//5, IDR, or 1), each just its header's first numbers (its first macroblock first): what keyframe() reads.
-auto slices(u32 type, const std::vector<u32>& kinds, u32 firstMacroblock = 0) -> std::vector<u8> {
-  std::vector<u8> unit = {0, 0, 0, 1, 0x09, 0x10};
-  for(u32 kind : kinds) {
-    Bits slice;
-    slice.ue(firstMacroblock); slice.ue(kind); slice.ue(0);
-    slice.trailing();
-    auto part = nal(type, slice.bytes);
-    unit.insert(unit.end(), part.begin(), part.end());
-  }
-  return unit;
 }
 
 //A movie's packets put into the ring by hand, as the callback would leave them (no thread to call it from).

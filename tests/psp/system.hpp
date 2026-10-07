@@ -84,6 +84,7 @@ auto mediaTests() -> Tests;
 auto atracTests() -> Tests;
 auto mp3Tests() -> Tests;
 auto movieTests() -> Tests;
+auto psmfTests() -> Tests;
 auto fontTests() -> Tests;
 
 }

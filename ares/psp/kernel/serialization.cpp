@@ -178,7 +178,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
     s(w.done); s(w.resultPointer);
-    check(t.wait <= Wait::Mutex && (w.wait <= Wait::Mailbox || w.wait == Wait::Mutex));
+    check(t.wait <= Wait::Psmf && (w.wait <= Wait::Mailbox || w.wait == Wait::Mutex || w.wait == Wait::Psmf));
     check(t.callbackID < nextUID);
     s(t.suspended);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
@@ -195,6 +195,14 @@ auto Kernel::serialize(serializer& s) -> bool {
       u64 due = t.wakeAt;
       check(t.status == Status::Waiting && !t.callbacks && due);
       check(due > cycles ? due - cycles <= VblankCycles : cycles - due < VblankCycles);
+    }
+    //the movie player's (psmfplayer.cpp) is due as soon, or as late as reading a movie's header takes (16 MiB at
+    //most, from the disc), with callbacks for the functions whose names end in CB; one put aside while they run is
+    //due likewise (and may be overdue by however long they ran: it ends as they're done)
+    for(auto [wait, due] : {std::pair{t.wait, t.wakeAt}, std::pair{w.wait, w.wakeAt}}) {
+      if(wait != Wait::Psmf) continue;
+      u64 longest = std::max<u64>(VblankCycles, asyncDuration(true, 16_MiB));
+      check(due && (due <= cycles || due - cycles <= longest));
     }
   };
   if(s.writing()) {
@@ -737,6 +745,59 @@ auto Kernel::serialize(serializer& s) -> bool {
     for(auto& [uid, t] : threads) {
       if(t->status == Status::Waiting && t->wait == Wait::Async && !files.count(t->waitID)) ready(*t, ErrorBadFile);
     }
+  }
+
+  //the movie player (psmfplayer.cpp): its status (none, 1, 2, 4, 0x200) and settings (a priority Create takes, a
+  //pixel format and play mode as they're set); its movie, with a status from 2 on, none before (the descriptor it's
+  //read through, a file number handed out: one dropped above, its file gone from the host, ends the movie early as
+  //its reads fail; where the PSMF begins in its file; its header, as long as its program stream's offset says);
+  //where reading is (within the program stream); the streams' data read and not yet taken (no more than the player
+  //holds) with their time stamps (inside them, in order); the pictures decoded (three at most) and the one shown
+  //(4:2:0 of their sizes, up to VideoDecoder::MaxSide each way); the start-up, pacing and end; the last sound frame
+  //decoded (of a frame's size, less its header). The decoders aren't saved: made afresh, the sound's is primed with
+  //that frame, the pictures' passes over pictures until one it can start from.
+  auto& p = psmfPlayer;
+  auto stamps = [&](std::vector<std::pair<u32, u64>>& items, const std::vector<u8>& data) {
+    vector(items, [&](std::pair<u32, u64>& stamp) { s(stamp.first); s(stamp.second); });
+    for(u32 n = 0; n < items.size(); n++) {
+      check(items[n].first <= data.size() && (!n || items[n - 1].first <= items[n].first));
+    }
+  };
+  auto picture = [&](PsmfPicture& picture) {
+    bytes(picture.planes); s(picture.width); s(picture.height); s(picture.time);
+    u32 w = picture.width, h = picture.height;
+    check(picture.planes.empty() || (w && h && w <= VideoDecoder::MaxSide && h <= VideoDecoder::MaxSide
+          && picture.planes.size() == w * h + 2 * ((w + 1) / 2) * ((h + 1) / 2)));
+  };
+  s(p.status); s(p.priority); s(p.tempBuffer); s(p.tempSize); s(p.looping); s(p.pixelFormat);
+  s(p.mode); s(p.speed); s(p.videoCodec); s(p.videoStream); s(p.audioCodec); s(p.audioStream);
+  s(p.file); s(p.offset); bytes(p.header);
+  s(p.videoID); s(p.audioID); s(p.nextPack);
+  bytes(p.video); bytes(p.audio);
+  stamps(p.videoStamps, p.video);
+  stamps(p.audioStamps, p.audio);
+  s(p.videoTime); s(p.audioTime);
+  vector(p.pictures, picture);
+  picture(p.shown);
+  s(p.calls); s(p.started); s(p.due); s(p.from); s(p.silence); s(p.ending); s(p.endingAt); s(p.entry);
+  bytes(p.soundLast);
+  if(s.reading()) {
+    p.decoder.reset(), p.sound.reset();
+    p.chunk.clear(), p.chunkPack = 0;
+    p.keyframe = !p.header.empty();  //(not saved: a decoder made afresh always waits for one)
+  }
+  check(p.status == 0 || p.status == 1 || p.status == 2 || p.status == 4 || p.status == 0x200);
+  check(!p.status || (p.priority >= 16 && p.priority <= 109));
+  check(p.pixelFormat <= 3 && p.mode >= 0 && p.mode <= 5 && (!p.ending || p.status == 4));
+  check(p.file < nextFile && (p.status >= 2) == (p.file != 0) && (p.status >= 2) == !p.header.empty());
+  check(p.video.size() <= 2 * 4_MiB && p.audio.size() <= 2 * 4_MiB && p.pictures.size() <= 3);
+  check(p.soundLast.size() <= 0x840 - 8 && !(p.soundLast.size() % 8) && (p.audioID >= -1 && p.audioID <= 0xff));
+  if(!p.header.empty()) {
+    PsmfHeader header;
+    check(psmfParse(p.header.data(), p.header.size(), header) && header.streamOffset == p.header.size());
+    check(p.nextPack <= header.streamSize / PacketSize);
+  } else {
+    check(!p.nextPack && p.video.empty() && p.audio.empty() && p.pictures.empty() && p.shown.planes.empty());
   }
 
   //the controller: the next sample's place in the ring of 64, and how many since the last read (63 at most)

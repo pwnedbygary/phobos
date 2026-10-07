@@ -14,7 +14,12 @@ enum : u32 {
 
 //Sony's own modules aren't run: the HLE kernel stands in for them, its versions of their functions answering the
 //game's imports of them (sceSAScore's, sceMpeg_library's...). They're told by their names, which all start with
-//"sce" or "Sce", or by being kernel modules (attribute 0x1000), which a game's own modules never are.
+//"sce" or "Sce", or by being kernel modules (attribute 0x1000), which a game's own modules never are. (Peace
+//Walker's psmf.prx and libpsmfplayer.prx are scePsmf_library and scePsmfP_library, stood in for so. The movie
+//player's library goes by other names in some games, libpsmfplayer, psmf_jk, jkPsmfP_library: those are loaded and
+//run as a game's own code, their module_start too; but the kernel's own functions go before a module's exports as
+//imports are linked, so a game's calls to scePsmfPlayer reach the kernel's player whatever its module is called.
+//docs/psp-core.md, part 31.)
 static auto sonyModule(const std::string& name, u32 attributes) -> bool {
   return !name.compare(0, 3, "sce") || !name.compare(0, 3, "Sce") || (attributes & 0x1000);
 }

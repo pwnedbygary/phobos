@@ -63,21 +63,35 @@ namespace {
     return !packet[0] && !packet[1] && packet[2] == 1 && packet[3] == 0xba && (packet[4] & 0xc0) == 0x40;
   }
 
-  //A packet's sound: what its private stream 1 PES packets of the first ATRAC3plus channel (substream 0) carry,
-  //their data less its 4-byte header, and where their time stamps fall in it.
-  auto packetSound(const u8* packet, std::vector<u8>& sound, std::vector<std::pair<u32, u64>>& stamps) -> void {
+  //The PES packets in a pack (its header, then PES packets one after another), each handed to each(stream, payload,
+  //end, presented, decoded): its stream ID, where its data starts and ends in the pack (after its MPEG-2 PES header),
+  //and its time stamps (NoTime where it has none). Packets without an MPEG-2 PES header are passed over; a packet
+  //that isn't a pack has none.
+  template<typename F> auto pesPackets(const u8* packet, F&& each) -> void {
+    if(!isPack(packet)) return;
     u32 at = 14 + (packet[13] & 7);
-    while(isPack(packet) && at + 6 <= PacketSize && !packet[at] && !packet[at + 1] && packet[at + 2] == 1) {
+    while(at + 6 <= PacketSize && !packet[at] && !packet[at + 1] && packet[at + 2] == 1) {
       u32 body = at + 6, next = std::min<u32>(body + (packet[at + 4] << 8 | packet[at + 5]), PacketSize);
-      if(packet[at + 3] == 0xbd && body + 3 <= next && (packet[body] & 0xc0) == 0x80) {
+      if(body + 3 <= next && (packet[body] & 0xc0) == 0x80) {
         u32 flags = packet[body + 1], payload = body + 3 + packet[body + 2];
-        if(payload + 4 <= next && !packet[payload]) {
-          if(flags & 0x80 && body + 8 <= payload) stamps.push_back({u32(sound.size()), timeStamp(packet + body + 3)});
-          sound.insert(sound.end(), packet + payload + 4, packet + next);
+        if(payload <= next) {
+          u64 presented = flags & 0x80 && body + 8 <= payload ? timeStamp(packet + body + 3) : NoTime;
+          u64 decoded = flags & 0x80 && flags & 0x40 && body + 13 <= payload ? timeStamp(packet + body + 8) : NoTime;
+          each(packet[at + 3], payload, next, presented, decoded);
         }
       }
       at = next;
     }
+  }
+
+  //A packet's sound: what its private stream 1 PES packets of the first ATRAC3plus channel (substream 0) carry,
+  //their data less its 4-byte header, and where their time stamps fall in it.
+  auto packetSound(const u8* packet, std::vector<u8>& sound, std::vector<std::pair<u32, u64>>& stamps) -> void {
+    pesPackets(packet, [&](u8 stream, u32 payload, u32 end, u64 presented, u64) {
+      if(stream != 0xbd || payload + 4 > end || packet[payload]) return;
+      if(presented != NoTime) stamps.push_back({u32(sound.size()), presented});
+      sound.insert(sound.end(), packet + payload + 4, packet + end);
+    });
   }
 
   //Whether an access unit's picture is one a decoder can start from: one with an IDR slice (H.264's NAL unit 5), or
@@ -373,22 +387,11 @@ auto Kernel::sceMpegGetAvcAu() -> void {
     u32 address = data + (read + n) % packets * PacketSize;
     if(!memory.reaches(address, PacketSize)) break;
     memory.copyOut(packet, address, PacketSize);
-    u32 at = 14 + (packet[13] & 7);
-    bool pack = !packet[0] && !packet[1] && packet[2] == 1 && packet[3] == 0xba && (packet[4] & 0xc0) == 0x40;
-    while(pack && at + 6 <= PacketSize && !packet[at] && !packet[at + 1] && packet[at + 2] == 1) {
-      u32 body = at + 6, next = std::min<u32>(body + (packet[at + 4] << 8 | packet[at + 5]), PacketSize);
-      if(packet[at + 3] == 0xe0 && body + 3 <= next && (packet[body] & 0xc0) == 0x80) {
-        u32 flags = packet[body + 1], payload = body + 3 + packet[body + 2];
-        if(payload <= next) {
-          if(flags & 0x80 && body + 8 <= payload) {
-            u64 decoded = flags & 0x40 && body + 13 <= payload ? timeStamp(packet + body + 8) : NoTime;
-            stamps.push_back({video.size(), timeStamp(packet + body + 3), decoded});
-          }
-          video.insert(video.end(), packet + payload, packet + next);
-        }
-      }
-      at = next;
-    }
+    pesPackets(packet, [&](u8 id, u32 payload, u32 end, u64 presented, u64 decoded) {
+      if(id != 0xe0) return;
+      if(presented != NoTime) stamps.push_back({video.size(), presented, decoded});
+      video.insert(video.end(), packet + payload, packet + end);
+    });
     ends.push_back(video.size());
     u64 resume = std::max<u64>(taken, std::max<u64>(video.size(), 4) - 4);  //a delimiter may straddle two packets
     if(start < 0) {
@@ -535,24 +538,37 @@ auto Kernel::sceMpegQueryAtracEsSize() -> void {
 //A picture converted into the game's buffer, frameWidth pixels a row, in the library's pixel format: the part of it
 //from (x, y), width by height (0: the rest of it), its colours from the decoder's Y, Cb and Cr by ITU-R BT.601's
 //equations for video's range (Y 16-235, colours 16-240), rounded to the nearest; alpha opaque. (Whether the PSP's
-//Media Engine rounds the same isn't measured.)
+//Media Engine rounds the same isn't measured; nor is sceMpeg's alpha: pspautotests' video/mpeg recordings show no
+//pixel, so it stays opaque, where scePsmfPlayer's pictures have none: psmfplayer.cpp.)
 auto Kernel::mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 frameWidth, u32 x, u32 y, u32 width,
                          u32 height) -> void {
-  u32 pictureWidth = stream.shownWidth, pictureHeight = stream.shownHeight;
-  if(stream.shown.empty() || x >= pictureWidth || y >= pictureHeight || !frameWidth) return;
-  if(!width || width > pictureWidth - x) width = pictureWidth - x;
-  if(!height || height > pictureHeight - y) height = pictureHeight - y;
   u32 format = memory.read(4, library + LibraryPixels);
   format = format ? format - 1 : 3;
+  pictureConvert(stream.shown, stream.shownWidth, stream.shownHeight, format, true, destination, frameWidth, x, y,
+                 width, height);
+}
+
+//A picture (4:2:0 planes packed one after another, as packPicture() leaves them) converted into the game's buffer:
+//the part of it from (x, y), width by height (0: the rest of it), frameWidth pixels a row, in a pixel format (0 5650,
+//1 5551, 2 4444, 3 8888, the GE's), by BT.601's equations for video's range, rounded to the nearest; alpha (and the
+//unused bits of 5551 and 4444) all ones if opaque, else zero. Pixels past the part in each row are left alone.
+auto Kernel::pictureConvert(const std::vector<u8>& planes, u32 pictureWidth, u32 pictureHeight, u32 format,
+                            bool opaque, u32 destination, u32 frameWidth, u32 x, u32 y, u32 width, u32 height)
+  -> void {
+  if(planes.empty() || x >= pictureWidth || y >= pictureHeight || !frameWidth) return;
+  if(!width || width > pictureWidth - x) width = pictureWidth - x;
+  if(!height || height > pictureHeight - y) height = pictureHeight - y;
   u32 bytes = format == 3 ? 4 : 2;
-  const u8* luma = stream.shown.data();
+  u32 alpha = !opaque ? 0 : format == 1 ? 0x8000 : format == 2 ? 0xf000 : format == 3 ? 0xff00'0000 : 0;
+  const u8* luma = planes.data();
   const u8* blue = luma + pictureWidth * pictureHeight;
   const u8* red = blue + (pictureWidth + 1) / 2 * ((pictureHeight + 1) / 2);
   u32 half = (pictureWidth + 1) / 2;
   std::vector<u8> row(width * bytes);
   for(u32 line = 0; line < height; line++) {
-    u32 address = destination + line * frameWidth * bytes;
-    if(!memory.reaches(address, width * bytes)) break;
+    u64 at = destination + u64(line) * frameWidth * bytes;  //(a row past 4 GiB is no row: it doesn't wrap round)
+    u32 address = u32(at);
+    if(at > 0xffff'ffff || !memory.reaches(address, width * bytes)) break;
     u32 py = y + line;
     for(u32 column = 0; column < width; column++) {
       u32 px = x + column;
@@ -561,11 +577,11 @@ auto Kernel::mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 f
       u32 r = std::clamp((298 * c + 409 * e + 128) >> 8, 0, 255);
       u32 g = std::clamp((298 * c - 100 * d - 208 * e + 128) >> 8, 0, 255);
       u32 b = std::clamp((298 * c + 516 * d + 128) >> 8, 0, 255);
-      u32 pixel = 0;
-      if(format == 0) pixel = r >> 3 | (g >> 2) << 5 | (b >> 3) << 11;
-      if(format == 1) pixel = r >> 3 | (g >> 3) << 5 | (b >> 3) << 10 | 0x8000;
-      if(format == 2) pixel = r >> 4 | (g >> 4) << 4 | (b >> 4) << 8 | 0xf000;
-      if(format == 3) pixel = r | g << 8 | b << 16 | 0xff00'0000;
+      u32 pixel = alpha;
+      if(format == 0) pixel |= r >> 3 | (g >> 2) << 5 | (b >> 3) << 11;
+      if(format == 1) pixel |= r >> 3 | (g >> 3) << 5 | (b >> 3) << 10;
+      if(format == 2) pixel |= r >> 4 | (g >> 4) << 4 | (b >> 4) << 8;
+      if(format == 3) pixel |= r | g << 8 | b << 16;
       for(u32 n = 0; n < bytes; n++) row[column * bytes + n] = pixel >> n * 8;
     }
     memory.copyIn(address, row.data(), row.size());
@@ -707,29 +723,39 @@ auto Kernel::sceMpegAtracDecode() -> void {
   memory.copyOut(unit.data(), buffer, bytes);
   memory.write(4, au + 20, 0);
   auto& stream = mpegStreams[library];
+  std::vector<s16> out(2048 * 2);
+  atracUnitDecode(stream.sound, stream.soundLast, unit, out);
+  if(memory.reaches(output, 0x2000)) memory.copyIn(output, out.data(), 0x2000);
+  result(0);
+  codecWait(MpegDecodeMicroseconds);
+}
+
+//A movie's ATRAC3plus frame (its 8-byte header, 0x0fd0 and the codec's parameters, then the frame) decoded into
+//2048 stereo 16-bit samples (mono doubled; silence where it won't decode), through decoder: one is made when there's
+//none, from the frame's parameters, and primed with the frame decoded last (last), as a reset primes one (a state
+//was loaded); last becomes this frame.
+auto Kernel::atracUnitDecode(std::unique_ptr<AudioDecoder>& decoder, std::vector<u8>& last,
+                             const std::vector<u8>& unit, std::vector<s16>& out) -> void {
+  std::fill(out.begin(), out.end(), 0);
+  if(unit.size() < 8 || !audioDecoders) return;
   u32 parameters = unit[2] << 8 | unit[3], frameBytes = ((parameters & 0x3ff) + 1) * 8;
   u32 channels = (parameters >> 10 & 7) == 1 ? 1 : 2;
-  std::vector<s16> samples(2048 * 2), out(2048 * 2);
-  if(!stream.sound) {
+  std::vector<s16> samples(2048 * 2);
+  if(!decoder) {
     AudioDecoder::Format format;
     format.codec = AudioDecoder::Codec::Atrac3plus;
     format.channels = channels;
     format.frameBytes = frameBytes;
-    stream.sound = audioDecoders(format);
-    if(stream.sound && !stream.soundLast.empty()) {
-      stream.sound->decode(stream.soundLast.data(), stream.soundLast.size(), samples.data(), 2048);
-    }
+    decoder = audioDecoders(format);
+    if(decoder && !last.empty()) decoder->decode(last.data(), last.size(), samples.data(), 2048);
   }
   s32 made = -1;
-  if(stream.sound && unit[0] == 0x0f && unit[1] == 0xd0 && 8 + frameBytes <= bytes) {
-    made = stream.sound->decode(unit.data() + 8, frameBytes, samples.data(), 2048);
-    stream.soundLast.assign(unit.begin() + 8, unit.begin() + 8 + frameBytes);
+  if(decoder && unit[0] == 0x0f && unit[1] == 0xd0 && 8 + frameBytes <= unit.size()) {
+    made = decoder->decode(unit.data() + 8, frameBytes, samples.data(), 2048);
+    last.assign(unit.begin() + 8, unit.begin() + 8 + frameBytes);
   }
   for(s32 n = 0; n < std::min(made, 2048); n++) {
     out[n * 2] = samples[n * channels];
     out[n * 2 + 1] = samples[n * channels + channels - 1];
   }
-  if(memory.reaches(output, 0x2000)) memory.copyIn(output, out.data(), 0x2000);
-  result(0);
-  codecWait(MpegDecodeMicroseconds);
 }
