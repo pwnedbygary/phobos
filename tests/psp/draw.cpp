@@ -422,6 +422,225 @@ static auto drawTriangles() -> void {
   CHECK(dots.pixel(3, 2), 0x12'3456);
 }
 
+//Lines (draw.cpp's line()): the pictures pspautotests recorded of them on a PSP (gpu/primitives/lines, linestrip and
+//indices, moved to fit the canvas), and the diamond exit rule's own cases: from a pixel's middle to another's, the
+//first pixel lit and not the last; steep lines; a strip's joint lit once; lines too short to leave a diamond, and one
+//just long enough; scissoring; colors, depth and texture coordinates blended along a line, and flat shading.
+static auto drawLines() -> void {
+  auto lit = [](Canvas& c) {
+    std::set<std::pair<u32, u32>> pixels;
+    for(u32 y = 0; y < 16; y++) for(u32 x = 0; x < 16; x++) if(c.pixel(x, y)) pixels.insert({x, y});
+    return pixels;
+  };
+  using Pixels = std::set<std::pair<u32, u32>>;
+  Canvas c;
+  //lines: (14, 10) to (16, 10) and (24, 10) to (22, 10) lit (14, 10), (15, 10), (22, 10) and (23, 10); a line from
+  //(9.375, 19.125) to (11.25, 19.125) (lines' 8-bit one in 3D, its position worked out) lit (9, 19) and (10, 19)
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 2, 3, 0}, {0, 0, 0xff00'00ff, 4, 3, 0},
+                     {0, 0, 0xff00'00ff, 8, 3, 0}, {0, 0, 0xff00'00ff, 6, 3, 0},
+                     {0, 0, 0xff00'00ff, 1.375f, 9.125f, 0}, {0, 0, 0xff00'00ff, 3.25f, 9.125f, 0}});
+  CHECK(lit(c) == Pixels({{2, 3}, {3, 3}, {6, 3}, {7, 3}, {1, 9}, {2, 9}}), true);
+  //linestrip: (14, 10), (16, 10), (16, 12) lit (14-16, 10) and (16, 11); (24, 12), (24, 10), (22, 10) lit (22-24, 10)
+  //and (24, 11)
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::LineStrip, {{0, 0, 0xff00'00ff, 2, 5, 0}, {0, 0, 0xff00'00ff, 4, 5, 0}, {0, 0, 0xff00'00ff, 4, 7, 0}});
+  c.draw(GE::LineStrip, {{0, 0, 0xff00'00ff, 12, 7, 0}, {0, 0, 0xff00'00ff, 12, 5, 0},
+                         {0, 0, 0xff00'00ff, 10, 5, 0}});
+  CHECK(lit(c) == Pixels({{2, 5}, {3, 5}, {4, 5}, {4, 6}, {10, 5}, {11, 5}, {12, 5}, {12, 6}}), true);
+  //indices: a square's four sides, each drawn from either corner, leave its bottom right corner unlit
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 1, 1, 0}, {0, 0, 0xff00'00ff, 5, 1, 0},
+                     {0, 0, 0xff00'00ff, 5, 5, 0}, {0, 0, 0xff00'00ff, 1, 5, 0},
+                     {0, 0, 0xff00'00ff, 5, 1, 0}, {0, 0, 0xff00'00ff, 5, 5, 0},
+                     {0, 0, 0xff00'00ff, 1, 1, 0}, {0, 0, 0xff00'00ff, 1, 5, 0}});
+  Pixels square;
+  for(u32 n = 1; n <= 4; n++) {
+    square.insert({n, 1}), square.insert({n, 5}), square.insert({1, n}), square.insert({5, n});
+  }
+  square.insert({5, 1});
+  CHECK(lit(c) == square, true);
+
+  //from a pixel's middle to another's: the first lit, the last not, whichever way round; steep likewise. Crossing a
+  //column's middle on the boundary between two rows (at y 1, from (0.5, 0.5) to (4.5, 2.5)), it lights the lower
+  //row; crossing a row's middle between two columns, the right one
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 0.5f, 0.5f, 0}, {0, 0, 0xff00'00ff, 4.5f, 2.5f, 0},
+                     {0, 0, 0xff00'00ff, 14.5f, 2.5f, 0}, {0, 0, 0xff00'00ff, 10.5f, 0.5f, 0},
+                     {0, 0, 0xff00'00ff, 0.5f, 4.5f, 0}, {0, 0, 0xff00'00ff, 2.5f, 8.5f, 0}});
+  CHECK(lit(c) == Pixels({{0, 0}, {1, 1}, {2, 1}, {3, 2}, {14, 2}, {13, 2}, {12, 1}, {11, 1},
+                          {0, 4}, {1, 5}, {1, 6}, {2, 7}}), true);
+  //a strip's joint at a pixel's middle is drawn once (each draw adds 1)
+  Canvas sum;
+  sum.ge.commands[GE::AlphaBlendEnable] = 1;
+  sum.ge.commands[GE::BlendMode] = 10 | 10 << 4;
+  sum.ge.commands[GE::BlendFixedA] = 0xff'ffff;
+  sum.ge.commands[GE::BlendFixedB] = 0xff'ffff;
+  sum.draw(GE::LineStrip, {{0, 0, 0xff01'0101, 0.5f, 3.5f, 0}, {0, 0, 0xff01'0101, 6.5f, 3.5f, 0},
+                           {0, 0, 0xff01'0101, 6.5f, 9.5f, 0}, {0, 0, 0xff01'0101, 1.5f, 4.5f, 0}});
+  bool once = true;
+  for(u32 y = 0; y < 16; y++) for(u32 x = 0; x < 16; x++) once &= (sum.pixel(x, y) & 0xff) <= 1;
+  CHECK(once, true);
+  CHECK(sum.pixel(6, 3) & 0xff, 1u);
+  CHECK(sum.pixel(6, 9) & 0xff, 1u);
+  //too short to leave a diamond (both ends in pixel (2, 2)'s, or neither in any), and just long enough to leave one
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 2.25f, 2.5f, 0}, {0, 0, 0xff00'00ff, 2.75f, 2.5f, 0},
+                     {0, 0, 0xff00'00ff, 6.0f, 6.1875f, 0}, {0, 0, 0xff00'00ff, 6.0625f, 6.1875f, 0},
+                     {0, 0, 0xff00'00ff, 9.5f, 9.5f, 0}, {0, 0, 0xff00'00ff, 10.0625f, 9.5f, 0}});
+  CHECK(lit(c) == Pixels({{9, 9}}), true);
+  //scissored: only the pixels inside
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.ge.commands[GE::Scissor1] = 3 | 1 << 10;
+  c.ge.commands[GE::Scissor2] = 5 | 1 << 10;
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 0, 1, 0}, {0, 0, 0xff00'00ff, 9, 1, 0}});
+  CHECK(lit(c) == Pixels({{3, 1}, {4, 1}, {5, 1}}), true);
+  c.ge.commands[GE::Scissor1] = 0;
+  c.ge.commands[GE::Scissor2] = 1023 << 10 | 1023;
+
+  //blended along the line as at each pixel's middle column: red 255 to 0 over 8 pixels (128 sixteenths), pixel c's
+  //middle 16c + 8 along: (255 * (120 - 16c)) / 128, rounded down; depth likewise, from 1000 to 2000
+  c.memory.fill(VRAM, 0, 0x20000);
+  c.ge.commands[GE::DepthTestEnable] = 1;
+  c.ge.commands[GE::DepthTest] = 1;
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 0, 0.5f, 1000}, {0, 0, 0xffff'0000, 8, 0.5f, 2000}});
+  for(u32 x = 0; x < 8; x++) {
+    u32 red = 255 * (120 - 16 * x) / 128, blue = 255 * (16 * x + 8) / 128;
+    CHECK(c.pixel(x, 0), red | blue << 16);
+    CHECK(c.depth(x, 0), (1000 * (120 - 16 * x) + 2000 * (16 * x + 8)) / 128);
+  }
+  c.ge.commands[GE::DepthTestEnable] = 0;
+  c.ge.commands[GE::ShadeMode] = 0;  //flat: the second vertex's color
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 0, 1.5f, 0}, {0, 0, 0xffff'0000, 8, 1.5f, 0}});
+  CHECK(c.pixel(0, 1), 0x00ff'0000u);
+  CHECK(c.pixel(7, 1), 0x00ff'0000u);
+  c.ge.commands[GE::ShadeMode] = 1;
+  //textured: u from 0 to 8 over 8 pixels takes texel c at pixel c (u at its middle, c + 0.5), v 3 the row
+  c.texture(3, 16, 16, 16);
+  for(u32 n = 0; n < 256; n++) c.memory.write(4, Texture + n * 4, n % 16 | n / 16 << 8 | 0xff00'0000);
+  c.draw(GE::Lines, {{0, 3.5f, 0, 0, 2.5f, 0}, {8, 3.5f, 0, 8, 2.5f, 0}});
+  for(u32 x = 0; x < 8; x++) CHECK(c.pixel(x, 2), x | 3 << 8);
+}
+
+//DXT textures (texture.cpp's dxtTexel()) as pspautotests' gpu/texcolors/dxt1, dxt3 and dxt5 recorded them on a PSP:
+//each case a block's first texel, its color as the program read it back (red in the low byte) and its alpha, from
+//its colors, its first index and its alphas; then the blocks' order in a texture, and a DXT texture kept decoded
+//against one read from memory, and seen again after its memory changes.
+static auto drawDXT() -> void {
+  struct Case { u32 format, first, second, index, alpha, rgb, a; };
+  //alpha: DXT3's first texel's 4 bits; DXT5's alphas (bits 0-15) and the first texel's index (bits 16-18)
+  const Case cases[] = {
+    {8, 0xffff, 0xffff, 0, 0, 0xf8fcf8, 255}, {8, 0xffff, 0xffff, 1, 0, 0xf8fcf8, 255},
+    {8, 0xffff, 0xffff, 2, 0, 0xf8fcf8, 255}, {8, 0xffff, 0xffff, 3, 0, 0x000000, 0},
+    {8, 0xffe3, 0x8410, 0, 0, 0x18fcf8, 255}, {8, 0xffe3, 0x8410, 1, 0, 0x808080, 255},
+    {8, 0xffe3, 0x8410, 2, 0, 0x3ad2d0, 255}, {8, 0xffe3, 0x8410, 3, 0, 0x5da9a8, 255},
+    {8, 0x8410, 0xf85f, 0, 0, 0x808080, 255}, {8, 0x8410, 0xf85f, 1, 0, 0xf808f8, 255},
+    {8, 0x8410, 0xf85f, 2, 0, 0xbc44bc, 255}, {8, 0x8410, 0xf85f, 3, 0, 0x000000, 0},
+    {8, 0x7890, 0x1234, 2, 0, 0x8a2155, 255}, {8, 0x7890, 0x1234, 3, 0, 0x953232, 255},
+    {8, 0x7777, 0x1356, 2, 0, 0xb5c050, 255},
+    {9, 0xffff, 0xffff, 3, 5, 0x000000, 0x50}, {9, 0x7890, 0x1234, 2, 0, 0x8a2155, 0},
+    {9, 0x7890, 0x1234, 3, 15, 0x953232, 0xf0}, {9, 0x8410, 0xf85f, 1, 5, 0xf808f8, 0x50},
+    {10, 0x7777, 0x1356, 2, 0x59e1 | 0 << 16, 0xb5c050, 0xe1},
+    {10, 0x7777, 0x1356, 2, 0x59e1 | 1 << 16, 0xb5c050, 0x59},
+    {10, 0x7777, 0x1356, 2, 0x59e1 | 2 << 16, 0xb5c050, 0xcd},
+    {10, 0x7777, 0x1356, 2, 0x59e1 | 3 << 16, 0xb5c050, 0xba},
+    {10, 0x7777, 0x1356, 2, 0x59e1 | 4 << 16, 0xb5c050, 0xa6},
+    {10, 0x7777, 0x1356, 2, 0x59e1 | 5 << 16, 0xb5c050, 0x93},
+    {10, 0x7777, 0x1356, 2, 0x59e1 | 6 << 16, 0xb5c050, 0x7f},
+    {10, 0x7777, 0x1356, 2, 0x59e1 | 7 << 16, 0xb5c050, 0x6c},
+    {10, 0xffff, 0xffff, 0, 0xff55 | 2 << 16, 0xf8fcf8, 0x77}, {10, 0xffff, 0xffff, 0, 0xff55 | 6 << 16, 0xf8fcf8, 0},
+    {10, 0xffff, 0xffff, 0, 0xff55 | 7 << 16, 0xf8fcf8, 0xff},
+    {10, 0x7890, 0x1234, 2, 0x00ff | 2 << 16, 0x8a2155, 0xda},
+    {10, 0x7890, 0x1234, 2, 0x00ff | 7 << 16, 0x8a2155, 0x24},
+    {10, 0x7890, 0x1234, 2, 0xff00 | 5 << 16, 0x8a2155, 0xcc},
+    {10, 0x7890, 0x1234, 2, 0xfbff | 7 << 16, 0x8a2155, 0xfb},
+    {10, 0x7890, 0x1234, 2, 0xfcff | 2 << 16, 0x8a2155, 0xfe},
+    {10, 0x7890, 0x1234, 2, 0xfcff | 4 << 16, 0x8a2155, 0xfd}, {10, 0x7890, 0x1234, 2, 0xffff | 6 << 16, 0x8a2155, 0},
+  };
+  Canvas c;
+  for(auto& k : cases) {
+    c.texture(k.format, 8, 8, 8);
+    u32 block = k.format == 8 ? 8 : 16;
+    for(u32 n = 0; n < 4; n++) {  //four blocks alike, as the programs have them
+      u32 at = Texture + n * block;
+      c.memory.write(4, at, k.index);  //the first texel's index, every other's 0
+      c.memory.write(2, at + 4, k.first), c.memory.write(2, at + 6, k.second);
+      if(k.format == 9) for(u32 row = 0; row < 4; row++) c.memory.write(2, at + 8 + row * 2, row ? 0 : k.alpha);
+      if(k.format == 10) {
+        c.memory.write(4, at + 8, k.alpha >> 16), c.memory.write(2, at + 12, 0);
+        c.memory.write(1, at + 14, k.alpha & 0xff), c.memory.write(1, at + 15, k.alpha >> 8 & 0xff);
+      }
+    }
+    c.ge.dropTextures();
+    u32 texel = c.ge.texel(c.ge.sampler(), 0, 0);
+    CHECK(texel, k.rgb | k.a << 24);
+  }
+
+  //the blocks' order: a row of blocks after another, TEXTURE_BUFFER_WIDTH0 / 4 blocks to a row (here 8 texels of a
+  //16-wide buffer); block n's first color is n, everything else index 0
+  c.texture(8, 8, 8, 16);
+  for(u32 n = 0; n < 8; n++) {
+    c.memory.write(4, Texture + n * 8, 0);
+    c.memory.write(2, Texture + n * 8 + 4, n << 11), c.memory.write(2, Texture + n * 8 + 6, 0);
+  }
+  for(u32 v : {0u, 5u}) {
+    for(u32 u : {1u, 6u}) CHECK(c.ge.texel(c.ge.sampler(), u, v) & 0xff, (v / 4 * 4 + u / 4) << 3);
+  }
+
+  //drawn kept decoded and drawn read from memory: the same; and after a block changes
+  std::vector<u32> drawn[2];
+  for(bool decoding : {false, true}) {
+    Canvas d;
+    if(!decoding) d.memory.watching = nullptr;
+    for(u32 format : {8u, 9u, 10u}) {
+      d.texture(format, 16, 16, 16);
+      d.ge.commands[GE::TextureFilter] = 1 | 1 << 8;
+      for(u32 n = 0; n < 16 * 16 * 2; n++) d.memory.write(2, Texture + n * 2, n * 0x9e37 ^ n >> 3);
+      d.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 16, 0}});
+      for(u32 n = 0; n < 256; n++) drawn[decoding].push_back(d.pixel(n % 16, n / 16));
+      d.memory.write(4, Texture + 40, 0x1234'5678);
+      d.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 16, 0}});
+      for(u32 n = 0; n < 256; n++) drawn[decoding].push_back(d.pixel(n % 16, n / 16));
+    }
+    if(decoding) CHECK(d.ge.textures.entries.empty(), false);
+  }
+  CHECK(drawn[1] == drawn[0], true);
+}
+
+//Vertices: 8-bit positions in through mode read as 0 (pspautotests' gpu/primitives/points recorded a PSP drawing
+//such points at (0, 0), and its triangles, lines and sprites nothing); 32-bit indices (format 3), of which the GE
+//takes the low 16 bits, the index address moving on 4 bytes for each (gpu/primitives/indices and indices32).
+static auto drawVertexFormats() -> void {
+  Canvas c;
+  c.ge.commands[GE::VertexType] = 0x80'009c;  //8888 color, 8-bit position, through mode
+  u32 at = VertexData;
+  for(u32 n = 0; n < 2; n++) {
+    c.memory.write(4, at, 0xff00'ff00), c.memory.write(1, at + 4, 10 + 2 * n), c.memory.write(1, at + 5, 10);
+    c.memory.write(1, at + 6, 0), at += 8;
+  }
+  c.ge.vertexAddress = VertexData;
+  c.ge.primitive(GE::Points, 2);
+  CHECK(c.pixel(0, 0), 0x00'ff00u);
+  CHECK(c.pixel(10, 10), 0u);
+  CHECK(c.ge.vertexAddress, VertexData + 16);
+
+  Canvas d;
+  d.ge.commands[GE::VertexType] = 0x80'019c | 3 << 11;  //8888 color, float position, 32-bit indices, through mode
+  constexpr u32 Indices = VertexData + 0x1000;
+  for(u32 n = 0; n < 3; n++) {
+    float corner[3][2] = {{1, 1}, {9, 1}, {1, 9}};
+    d.memory.write(4, VertexData + n * 16, 0xff00'00ff);
+    d.memory.write(4, VertexData + n * 16 + 4, Canvas::bits(corner[n][0]));
+    d.memory.write(4, VertexData + n * 16 + 8, Canvas::bits(corner[n][1]));
+    d.memory.write(4, VertexData + n * 16 + 12, 0);
+    d.memory.write(4, Indices + n * 4, 0xffff'0000 + n);  //0, 1, 2 once their top halves go
+  }
+  d.ge.vertexAddress = VertexData;
+  d.ge.indexAddress = Indices;
+  d.ge.primitive(GE::Triangles, 3);
+  CHECK(d.pixel(2, 2), 0x00'00ffu);
+  CHECK(d.ge.indexAddress, Indices + 12);
+}
+
 //A vertex without a color takes the material's ambient color; a texture shrunk onto the screen is filtered as
 //TEXTURE_FILTER's shrinking half says, one enlarged as its other half says.
 static auto drawAmbientAndFilters() -> void {
@@ -764,14 +983,15 @@ static auto drawTurnedDecoded() -> void {
 //machine without watching() decodes nothing: Memory::canWatch()): the same random 2D primitives drawn by both must
 //come out the same, pixel for pixel. (Comparing thread counts can't catch a mistake in what's kept: every count
 //draws from the same copy.) The primitives: sprites (upright, turned and mirrored), triangles, strips, fans and
-//points, their corners on any sixteenth, left ones often 9/16 into a pixel; their textures of every format but DXT,
-//with palettes, swizzled or not, up to 512 rows, repeating or held at the edges, filtered or not, their coordinates
+//points, their corners on any sixteenth, left ones often 9/16 into a pixel; their textures of every format, DXT's
+//too, with palettes, swizzled or not, up to 512 rows, repeating or held at the edges, filtered or not, their
+//coordinates
 //inside, on and around texel boundaries, outside and steep; some textures in VRAM where the primitives draw, some
 //drawn with again after their memory changed.
 static auto drawDecodedAgainstMemory() -> void {
   constexpr u32 Area = 0x0900'0000, AreaSize = 1 << 20;  //random bytes: the textures and palettes in RAM
   constexpr u32 Width = 64, Height = 48;                  //the frame buffer, at VRAM's start
-  constexpr u32 Bits[8] = {16, 16, 16, 32, 4, 8, 16, 32}, Filters[4] = {0, 1, 0x100, 0x101};
+  constexpr u32 Bits[11] = {16, 16, 16, 32, 4, 8, 16, 32, 4, 8, 8}, Filters[4] = {0, 1, 0x100, 0x101};
   constexpr u32 Kinds[9] = {GE::Sprites, GE::Sprites, GE::Sprites, GE::Sprites, GE::Triangles, GE::Triangles,
                             GE::TriangleStrip, GE::TriangleFan, GE::Points};
   std::mt19937 random{20261006};
@@ -813,7 +1033,7 @@ static auto drawDecodedAgainstMemory() -> void {
         for(Canvas* c : {&kept, &read}) c->memory.write(4, at, value);
       }
     } else {
-      format = below(8);
+      format = below(11);
       u32 widthBits = below(8);
       u32 heightBits = below(10);
       while(widthBits + heightBits > 14) (widthBits > heightBits ? widthBits : heightBits)--;
@@ -845,7 +1065,7 @@ static auto drawDecodedAgainstMemory() -> void {
     u32 right = Width - 1, bottom = Height - 1;
     if(chance(30)) right = left + below(Width - left), bottom = top + below(Height - top);
     set(GE::Scissor2, right | bottom << 10);
-    if(format >= 4) {
+    if(format >= 4 && format < 8) {
       u32 palette = Area + below((AreaSize - 1024) / 16) * 16;
       set(GE::ClutAddress, palette & 0xff'fff0);
       set(GE::ClutAddressUpper, palette >> 8 & 0xf'0000);
@@ -857,7 +1077,7 @@ static auto drawDecodedAgainstMemory() -> void {
     }
     for(Canvas* c : {&kept, &read}) {
       for(auto [command, value] : commands) c->ge.commands[command] = value;
-      if(format >= 4) c->ge.loadClut();
+      if(format >= 4 && format < 8) c->ge.loadClut();
     }
 
     u32 kind = Kinds[below(9)];
@@ -898,6 +1118,7 @@ auto drawTests() -> Tests {
     {"draw texture functions", drawTextureFunctions}, {"draw pixel tests", drawPixelTests}, {"draw blending", drawBlending},
     {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles},
     {"draw texel steps", drawTexelSteps}, {"draw ambient and filters", drawAmbientAndFilters},
+    {"draw lines", drawLines}, {"draw DXT textures", drawDXT}, {"draw vertex formats", drawVertexFormats},
     {"blit sample", blitSample}, {"doublelist sample", doublelistSample}, {"clut sample", clutSample},
     {"blend sample", blendSample}, {"cube sample", cubeSample}, {"celshading sample", celshadingSample},
     {"envmap sample", envmapSample},

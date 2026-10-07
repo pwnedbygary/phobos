@@ -881,6 +881,7 @@ struct Kernel {
   auto sceGeSetCallback() -> void;
   auto sceGeUnsetCallback() -> void;
   auto sceGeContinue() -> void;
+  auto sceGeBreak() -> void;
   auto sceGeGetCmd() -> void;
   auto sceGeGetMtx() -> void;
   auto sceGeSaveContext() -> void;

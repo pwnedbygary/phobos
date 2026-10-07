@@ -4,7 +4,7 @@
 //  bits 0-1    texture coordinates: 0 none, 1 8-bit, 2 16-bit, 3 float
 //  bits 2-4    color: 0 none, 4 5650, 5 5551, 6 4444, 7 8888
 //  bits 5-6    normal, bits 7-8 position, bits 9-10 weights: as the texture coordinates
-//  bits 11-12  indices: 0 none (vertices in order), 1 8-bit, 2 16-bit
+//  bits 11-12  indices: 0 none (vertices in order), 1 8-bit, 2 16-bit, 3 32-bit (readIndex())
 //  bits 14-16  how many weights, less one; bits 18-20 how many morph targets, less one
 //  bit 23      through mode: 2D, positions already in screen pixels and nothing transformed
 //With morph targets, a vertex holds each target's parts one after another (the GE blends them: readVertex).
@@ -104,7 +104,9 @@ static auto readTarget(const Read& memory, u32 address, const GE::VertexFormat& 
       vertex.normal[n] = readNumber(memory, address + f.normalOffset + n * size, f.normalFormat, true) * scale;
     }
   }
-  if(f.positionFormat) {
+  //(8-bit positions in through mode read as 0: pspautotests' gpu/primitives programs recorded a PSP drawing their two
+  //points at (0, 0), and nothing of their triangles, lines and sprites; that their depth is 0 too isn't measured)
+  if(f.positionFormat && !(f.through && f.positionFormat == 1)) {
     u32 size = numberSize(f.positionFormat), at = address + f.positionOffset;
     float scale = unit(f.positionFormat, f.through);
     vertex.x = readNumber(memory, at, f.positionFormat, true) * scale;
@@ -151,10 +153,12 @@ auto GE::readVertexWith(const Read& memory, u32 address, const VertexFormat& f) 
   return sum;
 }
 
-//The n-th index of an indexed PRIM: which vertex, counted from the vertex address.
+//The n-th index of an indexed PRIM (or BOUNDING_BOX): which vertex, counted from the vertex address. Format 3, which
+//pspgu.h doesn't name, holds 32-bit indices of which the GE takes the low 16 bits, as pspautotests recorded on a PSP:
+//gpu/primitives/indices drew with them as with the others, indices32 drew 0x10000 as 0 and 0xffff0000 as 0, and
+//gpu/bounding/vertexaddr found the index address moved on 4 bytes for each.
 auto GE::readIndex(u32 n, const VertexFormat& f) -> u32 {
   if(f.indexFormat == 1) return memory.read(1, indexAddress + n);
   if(f.indexFormat == 2) return memory.read(2, indexAddress + n * 2);
-  note("an index format the PSP doesn't have (3): vertices taken in order");
-  return n;
+  return memory.read(4, indexAddress + n * 4) & 0xffff;
 }

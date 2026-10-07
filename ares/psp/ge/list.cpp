@@ -36,8 +36,10 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     case Primitive:     primitive(argument >> 16 & 7, argument & 0xffff); break;
     case Bezier:
     case Spline:        note("curved surfaces (BEZIER, SPLINE) aren't drawn yet"); break;
-    case BoundingBox:   note("bounding box tests aren't emulated yet: every box counts as in sight"); break;
-    case ConditionalJump: break;  //it jumps if the last bounding box was out of sight, which none is yet
+    case BoundingBox:   boxOutside = boundingBox(argument & 0xffff); break;
+    case ConditionalJump:  //where JUMP would go, if the last BOUNDING_BOX was out of sight (pspsdk's sceGuEndObject)
+      if(boxOutside) list.address = relative(argument & ~3u);
+      break;
     case Jump:          list.address = relative(argument & ~3u); break;
     case Call:
       if(list.depth == 2) {

@@ -53,7 +53,8 @@ struct GE {
     Region1 = 0x15, Region2 = 0x16, LightingEnable = 0x17, LightEnable0 = 0x18, DepthClipEnable = 0x1c,
     CullFaceEnable = 0x1d,
     TextureMappingEnable = 0x1e, FogEnable = 0x1f, DitherEnable = 0x20, AlphaBlendEnable = 0x21,
-    AlphaTestEnable = 0x22, DepthTestEnable = 0x23, StencilTestEnable = 0x24, ColorTestEnable = 0x27,
+    AlphaTestEnable = 0x22, DepthTestEnable = 0x23, StencilTestEnable = 0x24, AntiAliasEnable = 0x25,
+    ColorTestEnable = 0x27,
     LogicOpEnable = 0x28, BoneMatrixNumber = 0x2a, BoneMatrixData = 0x2b, MorphWeight0 = 0x2c,
     WorldMatrixNumber = 0x3a, WorldMatrixData = 0x3b, ViewMatrixNumber = 0x3c, ViewMatrixData = 0x3d,
     ProjectionMatrixNumber = 0x3e, ProjectionMatrixData = 0x3f, TextureMatrixNumber = 0x40, TextureMatrixData = 0x41,
@@ -249,7 +250,7 @@ struct GE {
   //drawn on its own (raster.cpp), the same pixels with the same arithmetic as drawing it all at once would. Each
   //kind keeps what its pixels are worked out from.
   struct Job {
-    enum class Kind : u32 { Sprite, Triangle, Point } kind;
+    enum class Kind : u32 { Sprite, Triangle, Point, Line } kind;
     const Look* look;
     s32 firstX, lastX, firstY, lastY;  //the pixels it may cover, inside the scissor rectangle
     bool linear;                       //textured: filtered (TEXTURE_FILTER's choice for its size)
@@ -280,6 +281,19 @@ struct GE {
       u32 z, color, specular, fog;
       float u, v;
     } point;
+    struct Line {
+      //Its ends (sixteenths), the left one first, turned so that x runs along it (steep: more rows than columns,
+      //x and y swapped); the pixels it lights along x, first to last; at each, the one across is y's at the
+      //pixel's middle, rounded down: (y[0] * along + rise * (16x + 8 - x[0])) / (16 * along).
+      s64 x[2], y[2], along, rise;  //along: x[1] - x[0], never 0; rise: y[1] - y[0]
+      bool steep;
+      s32 first, last;
+      bool flat, shines, perspective;
+      u32 flatColor, flatSpecular;
+      u32 color[2], specular[2];
+      float z[2], fog[2], u[2], v[2], q[2], w[2];
+      f64 uStep, vStep;  //2D texture coordinates: a step a pixel along x, from the left end's
+    } line;
   };
 
   Memory& memory;
@@ -290,6 +304,7 @@ struct GE {
   TextureCache textures;   //textures kept decoded (texture.cpp)
   Registers list;
   u32 vertexAddress = 0, indexAddress = 0;  //where the next vertex and index are read
+  bool boxOutside = false;  //the last BOUNDING_BOX was out of sight: BJUMP jumps (list.cpp)
   u32 signalWord = 0, finishWord = 0, endWord = 0;  //what made run() stop: the SIGNAL or FINISH before it, and the END
   //The matrices, as their DATA commands give them: each element a float's top 24 bits (its sign, its exponent and
   //the top 15 bits of its fraction), as sceGeGetMtx hands them back. Bones are eight 4x3 matrices; world, view and
@@ -328,6 +343,8 @@ struct GE {
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
   auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
                     s32 facing) -> void;
+  auto clipLine(const Look& look, const Transform& t, const Vertex& a, const Vertex& b) -> void;
+  auto clipPosition(const Vertex& vertex, const Transform& t, float clip[4]) const -> void;
 
   //draw.cpp
   auto lookFor(const PixelState& pixel, const Sampler* texture) const -> Look;
@@ -337,6 +354,9 @@ struct GE {
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
   auto point(const Look& look, const Vertex& at) -> void;
+  auto line(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
+  auto readVertices(u32 count, const VertexFormat& format) -> void;
+  auto boundingBox(u32 count) -> bool;
   auto rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                 bool perspective) -> void;
@@ -346,6 +366,7 @@ struct GE {
                                     float u, float v, u32 fog) -> void;
   template<u32 Format> auto spriteRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto triangleRows(const Job& job, s32 fromY, s32 toY) -> void;
+  template<u32 Format> auto lineRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto rasterizeAs(const Job& job, s32 fromY, s32 toY) -> void;
   auto rasterize(const Job& job, s32 fromY, s32 toY) -> void;
 

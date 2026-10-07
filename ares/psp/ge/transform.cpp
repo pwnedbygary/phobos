@@ -250,3 +250,42 @@ auto GE::clipTriangle(const Look& look, const Transform& t, const Vertex& a, con
     triangle(look, kept[0], kept[n - 1], last, facing, true);
   }
 }
+
+//A line in 3D: dropped if out of sight, by the rules for a triangle's corners, else cut where it reaches past the
+//near plane (its new end blended from the kept one toward the one past the plane, as a triangle's is), and drawn.
+//With flat shading, a line whose second end is cut away keeps that end's color. (Unmeasured: a PSP's lines were
+//measured in 2D alone, by pspautotests; these rules are its triangles'.)
+auto GE::clipLine(const Look& look, const Transform& t, const Vertex& a, const Vertex& b) -> void {
+  if(outOfSight(t.depthClamp, {&a, &b})) return;
+  if(a.clip[3] < 0 && b.clip[3] < 0) return;
+  float aSide = a.clip[2] + a.clip[3], bSide = b.clip[2] + b.clip[3];  //below zero: nearer than the near plane
+  if(aSide >= 0 && bSide >= 0) return line(look, a, b, true);
+  if(aSide < 0 && bSide < 0) return;
+  bool keepsA = aSide >= 0;
+  float keptSide = keepsA ? aSide : bSide, pastSide = keepsA ? bSide : aSide;
+  Vertex cut = between(keepsA ? a : b, keepsA ? b : a, keptSide / (keptSide - pastSide));
+  project(cut, t, true);
+  if(cut.outside) return;
+  if(!keepsA) return line(look, cut, b, true);
+  if(!(commands[ShadeMode] & 1)) cut.color = b.color, cut.specular = b.specular;
+  line(look, a, cut, true);
+}
+
+//A vertex's position in clip space (x, y, z, w), through the bone matrices its weights pick and the world, view and
+//projection matrices, as transform() takes it (the same operations, so the same numbers).
+auto GE::clipPosition(const Vertex& vertex, const Transform& t, float clip[4]) const -> void {
+  float model[3] = {vertex.x, vertex.y, vertex.z};
+  if(t.weights) {
+    float position[3] = {};
+    for(u32 n = 0; n < t.weights; n++) {
+      float moved[3];
+      times43(t.bones + n * 12, model, moved);
+      for(u32 k = 0; k < 3; k++) position[k] += moved[k] * vertex.weights[n];
+    }
+    for(u32 k = 0; k < 3; k++) model[k] = position[k];
+  }
+  float inWorld[3], inView[3];
+  times43(t.world, model, inWorld);
+  times43(t.view, inWorld, inView);
+  times44(t.projection, inView, clip);
+}

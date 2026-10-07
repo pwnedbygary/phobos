@@ -13,9 +13,10 @@
 //A program sees how its lists are doing with sceGeListSync and sceGeDrawSync, and can wait there for them to finish.
 //The GE's work takes no time, so a list runs as far as it can as soon as it's queued or its stall address moves.
 //
-//What each call does follows uOFW's reading of the PSP's own driver (ge.c, stall.S). Not yet: sceGeBreak, the
-//debugger's breakpoints, SIGNALs that patch texture or CLUT addresses, and what uOFW shows differs for programs built
-//with SDKs before 2.0; a list may be queued twice, as for programs that don't say their SDK's version.
+//What each call does follows uOFW's reading of the PSP's own driver (ge.c, stall.S); sceGeBreak follows what
+//pspautotests' gpu/ge/break and breakwait recorded on a PSP. Not yet: the debugger's breakpoints, SIGNALs that patch
+//texture or CLUT addresses, and what uOFW shows differs for programs built with SDKs before 2.0; a list may be queued
+//twice, as for programs that don't say their SDK's version.
 
 auto Kernel::geIndex(u32 id) const -> s32 {
   u32 index = id - GeListIDs;
@@ -443,6 +444,46 @@ auto Kernel::sceGeContinue() -> void {
   geRunning = index;
   result(0);
   geRun();
+}
+
+//(mode, parameters): stops the GE (pspge.h: "interrupt drawing queue"). As pspautotests' gpu/ge/break and breakwait
+//recorded on a PSP:
+//  - a mode but 0 or 1 is refused (INVALID_MODE), then parameters the program couldn't pass (an address whose 16
+//    bytes reach the kernel's half: PRIV_REQUIRED; none at all is fine; the PSP doesn't look inside them), then an
+//    empty queue (ALREADY);
+//  - mode 0 breaks off the list the GE has, as it is, and returns its ID: it's left paused at the queue's front, and
+//    sceGeContinue takes it up where it was. A list paused already (by a PAUSE signal) is BUSY; so the GE runs no
+//    list then, and sceGeSaveContext works again. (pspge.h has the two modes' results the other way round.)
+//  - mode 1 throws every list away, queued, running or done, and returns 0: the next list enqueued takes the first
+//    ID again (breakwait: "id reused"). Threads waiting for a list or for all drawing aren't woken: they wait on
+//    until a list that ends wakes them (that list's ID, or the queue empty).
+//What the lists thrown away had saved of the GE's state (sceGeListEnQueue's options) isn't put back.
+auto Kernel::sceGeBreak() -> void {
+  u32 mode = arg(0), parameters = arg(1);
+  if(mode > 1) return result(ErrorInvalidMode);
+  if((parameters | (parameters + 16)) & 0x8000'0000) return result(ErrorPrivilegeRequired);
+  if(geQueue.empty()) return result(ErrorAlready);
+  if(mode == 1) {
+    for(auto& list : geLists) list = {};
+    geQueue.clear();
+    geFree.clear();
+    for(u32 index = 0; index < 64; index++) geFree.push_back(index);
+    geRunning = -1;
+    geBusy = false;
+    geSuspended = false;  //(a callback still to return finds nothing to go on with)
+    geFinishing = -1;
+    return result(0);
+  }
+  u32 index = geQueue.front();
+  auto& list = geLists[index];
+  if(list.state == GeList::State::Paused) return result(ErrorBusy);
+  if(list.state != GeList::State::Running || geRunning != s32(index)) return result(ErrorAlready);
+  list.registers = ge.list;
+  list.base = ge.commands[GE::Base];
+  list.state = GeList::State::Paused;
+  geRunning = -1;
+  geBusy = false;
+  result(GeListIDs + index);
 }
 
 //(command): its last word. 0xff is refused, as the PSP's driver does.

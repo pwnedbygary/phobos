@@ -19,10 +19,13 @@
 //    screen are drawn, with 0 only those running counterclockwise (pspsdk's sceGuFrontFace(GU_CW) sets 1). Every
 //    other triangle of a strip runs the other way round, so for those it's the other way.
 //  - Points: the pixel each vertex is in.
+//  - Lines (each two vertices, or a strip): a pixel wide, by the "diamond exit" rule (see line()), colors, depth, fog
+//    and texture coordinates blended along them as across triangles. In 3D they're cut at the near plane too.
 //A vertex without a color takes the material's ambient color (AMBIENT_COLOR, AMBIENT_ALPHA).
 //(Coverage, the sample points and how texture coordinates are stepped were measured on a PSP (docs/psp-core.md,
-//tools/psp-measure), where PPSSPP's software renderer, which the rest follows, has triangles sampled 7/16 in. Not
-//yet: lines, and PRIM's kind 7, which goes on with the last primitive's vertices.)
+//tools/psp-measure), where PPSSPP's software renderer, which the rest follows, has triangles sampled 7/16 in. Lines
+//follow what pspautotests recorded of them on a PSP, the rest of their rule unmeasured (line()). Not yet: PRIM's
+//kind 7, which goes on with the last primitive's vertices.)
 //
 //How it's done: each primitive is first set up (here), and then drawn (raster.cpp). Setting up works out once
 //everything about the primitive that doesn't change from pixel to pixel (which rows and columns it may cover, its
@@ -39,6 +42,7 @@ static auto fixed(float position) -> s32 {
 }
 
 static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
+static auto floorDivide64(s64 value, s64 by) -> s64 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 
 //The settings a primitive is drawn with: these pipeline and texture settings, with the commands' texture function.
 auto GE::lookFor(const PixelState& pixel, const Sampler* texture) const -> Look {
@@ -53,24 +57,32 @@ auto GE::lookFor(const PixelState& pixel, const Sampler* texture) const -> Look 
   return look;
 }
 
-auto GE::primitive(u32 kind, u32 count) -> void {
-  if(!drawing.deferring) settle();  //(called by itself, outside run(): what the last list left being drawn first)
-  auto format = vertexFormat();
+//PRIM's (and BOUNDING_BOX's) count vertices into primitiveVertices, as the vertex type lays them out, from the vertex
+//address or by the indices at the index address; then the next carries on where this one stopped: after its
+//indices if it had them, else after its vertices.
+auto GE::readVertices(u32 count, const VertexFormat& format) -> void {
   u32 ambient = (commands[AmbientColor] & 0xff'ffff) | (commands[AmbientAlpha] & 0xff) << 24;
+  u32 indexBytes = format.indexFormat == 3 ? 4 : format.indexFormat;
   auto& vertices = primitiveVertices;  //(kept from one primitive to the next, with room for them)
   vertices.clear();
   for(u32 n = 0; n < count; n++) {
     //(indices and vertices in VRAM that primitives waiting to be drawn draw over: they're drawn first, threads.cpp)
-    if(format.indexFormat) drawnFirst(indexAddress + n * format.indexFormat, format.indexFormat);
+    if(format.indexFormat) drawnFirst(indexAddress + n * indexBytes, indexBytes);
     u32 index = format.indexFormat ? readIndex(n, format) : n;
     u32 address = vertexAddress + index * format.size;
     drawnFirst(address, format.size);
     vertices.push_back(readVertex(address, format));
     if(!format.colorFormat) vertices.back().color = ambient;
   }
-  //the next PRIM carries on where this one stopped: after its indices if it had them, else after its vertices
-  if(format.indexFormat) indexAddress += count * (format.indexFormat == 2 ? 2 : 1);
+  if(format.indexFormat) indexAddress += count * indexBytes;
   else vertexAddress += count * format.size;
+}
+
+auto GE::primitive(u32 kind, u32 count) -> void {
+  if(!drawing.deferring) settle();  //(called by itself, outside run(): what the last list left being drawn first)
+  auto format = vertexFormat();
+  readVertices(count, format);
+  auto& vertices = primitiveVertices;
   if(kind == 7) return note("PRIM's kind 7 (going on with the last primitive's vertices) isn't emulated yet");
   if(!format.positionFormat) return;  //vertices without positions draw nothing (as PPSSPP has it)
 
@@ -112,6 +124,11 @@ auto GE::primitive(u32 kind, u32 count) -> void {
     if(kind == Points) {
       region.left = std::max(region.left, minX >> 4), region.right = std::min(region.right, maxX >> 4);
       region.top = std::max(region.top, minY >> 4), region.bottom = std::min(region.bottom, maxY >> 4);
+    } else if(kind == Lines || kind == LineStrip) {  //the pixels whose diamonds the lines can reach (line())
+      region.left = std::max(region.left, floorDivide(minX - 1, 16));
+      region.right = std::min(region.right, floorDivide(maxX, 16));
+      region.top = std::max(region.top, floorDivide(minY - 1, 16));
+      region.bottom = std::min(region.bottom, floorDivide(maxY, 16));
     } else {
       region.left = std::max(region.left, floorDivide(minX - 9 + 15, 16));
       region.right = std::min(region.right, floorDivide(maxX - 8, 16));
@@ -156,7 +173,11 @@ auto GE::primitive(u32 kind, u32 count) -> void {
     break;
   case Lines:
   case LineStrip:
-    note("lines aren't drawn yet");
+    if(commands[AntiAliasEnable] & 1) note("anti-aliased lines (ANTI_ALIAS_ENABLE) are drawn aliased");
+    for(u32 n = 0; n + 1 < count; n += kind == Lines ? 2 : 1) {
+      if(format.through) line(drawn, vertices[n], vertices[n + 1], false);
+      else clipLine(drawn, t, vertices[n], vertices[n + 1]);
+    }
     break;
   case Triangles:
     for(u32 n = 0; n + 2 < count; n += 3) drawTriangle(vertices[n], vertices[n + 1], vertices[n + 2], facing);
@@ -371,6 +392,175 @@ auto GE::point(const Look& look, const Vertex& at) -> void {
   if(look.textured) job.linear = chooseFilter(commands[TextureFilter], 1.0f);
   job.point = {x, y, u32(std::clamp(at.z, 0.0f, 65535.0f)), at.color, at.specular, fogAmount(at.fog), at.u, at.v};
   submit(job);
+}
+
+//Whether the line from (ax, ay) to (bx, by) leaves the diamond around (x, y), all in sixteenths: it meets the diamond
+//and doesn't end inside it. Turned 45 degrees the diamond is a square, u = dx + dy and v = dx - dy (dx and dy from
+//its middle) each from -8 to 8, of whose edges all count as inside but u = 8 (the diamond's bottom-right edge, with
+//its bottom and right corners). The line's points are a + t (b - a) for t from 0 to 1; each edge keeps t on one side
+//of a fraction, and the line meets the diamond if some t is left. Exact: the numbers are whole, and fractions are
+//compared by multiplying out (positions are held to the GE's range, so the products fit in 64 bits).
+static auto leavesDiamond(s64 ax, s64 ay, s64 bx, s64 by, s64 x, s64 y) -> bool {
+  s64 ua = ax - x + (ay - y), va = ax - x - (ay - y), ub = bx - x + (by - y), vb = bx - x - (by - y);
+  if(ub >= -8 && ub < 8 && vb >= -8 && vb <= 8) return false;  //it ends inside
+  struct Limit { s64 n, d; bool open; };  //t at n / d (d above 0), the limit itself left out if open
+  Limit low{0, 1, false}, high{1, 1, false};
+  auto below = [](const Limit& p, const Limit& q) { return p.n * q.d < q.n * p.d; };
+  //from + t * step at least limit (or at most it; open: and not equal to it)
+  auto keep = [&](s64 from, s64 step, s64 limit, bool atLeast, bool open) -> bool {
+    if(step == 0) return atLeast ? (open ? from > limit : from >= limit) : (open ? from < limit : from <= limit);
+    Limit at = step > 0 ? Limit{limit - from, step, open} : Limit{from - limit, -step, open};
+    if((step > 0) == atLeast) {  //a limit from below
+      if(below(low, at) || (!below(at, low) && open)) low = at;
+    } else {
+      if(below(at, high) || (!below(high, at) && open)) high = at;
+    }
+    return true;
+  };
+  if(!keep(ua, ub - ua, -8, true, false) || !keep(ua, ub - ua, 8, false, true)) return false;
+  if(!keep(va, vb - va, -8, true, false) || !keep(va, vb - va, 8, false, false)) return false;
+  if(below(low, high)) return true;
+  return !below(high, low) && !low.open && !high.open;
+}
+
+//A line, a pixel wide. Which pixels it lights is the "diamond exit" rule of OpenGL and Direct3D (pspautotests'
+//gpu/exact/lines names it the PSP's), fitted to every picture of lines pspautotests recorded on a PSP
+//(gpu/primitives/lines, linestrip and indices), and otherwise unmeasured (tools/psp-measure's round 4 records it):
+//  - Each pixel has a diamond around its middle: the points less than half a pixel from it, the distance across
+//    and the distance down added. A line lights the pixels whose diamonds it leaves: those it meets and doesn't end
+//    in. So a line a whole pixel long lights one pixel, the first along it and not the last, and in a strip the
+//    pixel holding the point where two lines meet is lit once, by the second.
+//  - Of a diamond's edge, its top and left corners count as inside it, with all of its edges but the bottom-right
+//    one: a level line along the boundary between two rows lights the row below it, and an upright one between two
+//    columns the column right of it, as the PSP drew them (a line from (14, 10) to (16, 10) lights (14, 10) and
+//    (15, 10), one from (24, 10) to (22, 10) lights (22, 10) and (23, 10)).
+//  - Along its longer axis (x for a line as wide as tall), it lights one pixel in each column whose diamond it
+//    passes through: the one in the row it crosses the column's middle in. Near its ends, a column's pixel is lit
+//    only if the line leaves its diamond (leavesDiamond()).
+//Colors, depth, fog and texture coordinates are blended along it as at the point where it crosses the pixel's
+//middle column (its middle row, along y), held to its ends; with flat shading it takes its second vertex's color;
+//in 2D, texture coordinates are stepped from the left (top) end, as for sprites and triangles (shortStep()).
+//pspautotests' gpu/exact/lines checks lines by CRCs of whole pictures, which this rule doesn't meet: the PSP's rule
+//differs somewhere it doesn't say. Anti-aliasing (ANTI_ALIAS_ENABLE) isn't emulated: that program found it changing
+//nothing without blending, and what alpha it gives isn't known.
+auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void {
+  auto& pixel = look.pixel;
+  s64 x0 = fixed(from.x), y0 = fixed(from.y), x1 = fixed(to.x), y1 = fixed(to.y);
+  if(x0 == x1 && y0 == y1) return;  //(it leaves no diamond)
+  //With x and y swapped, the diamond's rule reads the same (its top and left corners swap, and its bottom-left and
+  //top-right edges, all of which count), so a steep line is worked out as a shallow one turned.
+  bool steep = std::abs(y1 - y0) > std::abs(x1 - x0);
+  if(steep) std::swap(x0, y0), std::swap(x1, y1);
+  s64 along = x1 - x0, rise = y1 - y0;
+  auto acrossAt = [&](s64 column) {  //the row in which the line crosses the column's middle
+    s64 n = y0 * along + rise * (column * 16 + 8 - x0), d = along * 16;
+    return d > 0 ? floorDivide64(n, d) : floorDivide64(-n, -d);
+  };
+  //The columns whose diamonds it may meet; it lights those whose diamonds lie wholly between its ends, corners
+  //and all, and of the rest those whose diamonds it leaves. Those it lights follow one after another.
+  s64 left = std::min(x0, x1), right = std::max(x0, x1);
+  s64 first = floorDivide64(left - 1, 16), last = floorDivide64(right, 16);
+  auto lights = [&](s64 column) {
+    s64 middle = column * 16 + 8;
+    if(left < middle - 8 && middle + 8 < right) return true;
+    return leavesDiamond(x0, y0, x1, y1, middle, acrossAt(column) * 16 + 8);
+  };
+  while(first <= last && !lights(first)) first++;
+  while(last >= first && !lights(last)) last--;
+  if(first > last) return;
+  Job job{};
+  job.kind = Job::Kind::Line;
+  job.look = &look;
+  auto& l = job.line;
+  const Vertex* ends[2] = {&from, &to};
+  if(along < 0) std::swap(x0, x1), std::swap(y0, y1), std::swap(ends[0], ends[1]), along = -along, rise = -rise;
+  l.x[0] = x0, l.x[1] = x1, l.y[0] = y0, l.y[1] = y1, l.along = along, l.rise = rise;
+  l.steep = steep;
+  l.first = s32(first), l.last = s32(last);
+  s64 acrossFirst = acrossAt(first), acrossLast = acrossAt(last);
+  s32 lowest = s32(std::min(acrossFirst, acrossLast)), highest = s32(std::max(acrossFirst, acrossLast));
+  s32 firstX = steep ? lowest : l.first, lastX = steep ? highest : l.last;
+  s32 firstY = steep ? l.first : lowest, lastY = steep ? l.last : highest;
+  job.firstX = std::max(firstX, pixel.left), job.lastX = std::min(lastX, pixel.right);
+  job.firstY = std::max(firstY, pixel.top), job.lastY = std::min(lastY, pixel.bottom);
+
+  l.flat = !(commands[ShadeMode] & 1);
+  l.flatColor = to.color, l.flatSpecular = to.specular;  //flat shading: the second vertex's
+  l.shines = from.specular || to.specular;
+  l.perspective = perspective;
+  for(u32 k = 0; k < 2; k++) {
+    auto& v = *ends[k];
+    l.color[k] = v.color, l.specular[k] = v.specular;
+    l.z[k] = v.z, l.fog[k] = v.fog, l.u[k] = v.u, l.v[k] = v.v, l.q[k] = v.q, l.w[k] = v.clip[3];
+  }
+  if(look.textured) {
+    float du = l.u[1] - l.u[0], dv = l.v[1] - l.v[0];
+    job.linear = chooseFilter(commands[TextureFilter], std::sqrt(du * du + dv * dv) / (along / 16.0f));
+    if(!perspective) {
+      l.uStep = shortStep(16 * (f64(l.u[1]) - f64(l.u[0])) / f64(along));
+      l.vStep = shortStep(16 * (f64(l.v[1]) - f64(l.v[0])) / f64(along));
+    }
+  }
+  submit(job);
+}
+
+//BOUNDING_BOX: whether the count vertices at the vertex address (or by the indices at the index address), the corners
+//of a box around what follows in the list, are out of sight, for BJUMP to skip it (pspsdk's sceGuBeginObject and
+//sceGuEndObject). As pspautotests' gpu/bounding programs recorded on a PSP (count, planes, viewport and vertexaddr,
+//every case):
+//  - Each vertex goes through the matrices and onto the screen as one drawn would (its distance from 2048 cut to the
+//    sixteenth), its position held to the GE's 4096 pixels. Across, it's in sight from a pixel left of the left edge
+//    of the scissor rectangle and drawing region to their right edge (one past their last column: the edges in
+//    pixels, so a pixel's width past their last pixel's left edge); likewise down. With DEPTH_CLIP_ENABLE, its z
+//    must also be between -w and w; without it, depth doesn't count, nor do MIN_Z and MAX_Z.
+//  - The vertices are read as PRIM reads them, and the vertex (or index) address moves on past them the same way.
+//  - No vertices (the count is 16 bits) are out of sight. Of more than 256, only those from 512 before the end to
+//    256 before it count: every case of count's fits that, for a reason it doesn't show.
+//Unmeasured: corners out of sight past different edges, which could be a box around the camera, so the box is taken
+//to be out of sight only with every vertex past the same edge; vertices behind the camera (taken where dividing by
+//w puts them); and through mode (positions taken as drawn: a vertex in sight was recorded in sight).
+auto GE::boundingBox(u32 count) -> bool {
+  auto format = vertexFormat();
+  readVertices(count, format);
+  if(!count) return true;
+  enum : u32 { Left = 1, Right = 2, Top = 4, Bottom = 8, Near = 16, Far = 32 };
+  auto pixel = pixelState();
+  s64 left = (pixel.left - 1) * 16, right = (pixel.right + 1) * 16;
+  s64 top = (pixel.top - 1) * 16, bottom = (pixel.bottom + 1) * 16;
+  Transform t{};
+  if(!format.through) {
+    t = transformState();
+    t.weights = format.weightFormat ? format.weights : 0;
+  }
+  //(on the screen in sixteenths, held to it: something not a number at its left or top edge)
+  auto screen = [](float position) -> s64 {
+    f64 cut = 32768 + std::trunc((f64(position) - 2048) * 16);
+    return cut >= 0 ? s64(std::min(cut, 65535.0)) : 0;
+  };
+  u32 past = ~0u;  //the edges every vertex so far is past
+  u32 from = count > 512 ? count - 512 : 0, to = count > 256 ? count - 256 : count;
+  for(u32 n = from; n < to; n++) {
+    auto& vertex = primitiveVertices[n];
+    s64 x, y;
+    u32 edges = 0;
+    if(format.through) {
+      x = fixed(vertex.x), y = fixed(vertex.y);
+    } else {
+      float clip[4];
+      clipPosition(vertex, t, clip);
+      float w = clip[3];
+      x = screen(clip[0] * t.scale[0] / w + t.center[0]) - s64(t.offsetX);
+      y = screen(clip[1] * t.scale[1] / w + t.center[1]) - s64(t.offsetY);
+      if(t.depthClamp && clip[2] < -w) edges |= Near;
+      if(t.depthClamp && clip[2] > w) edges |= Far;
+    }
+    if(x < left) edges |= Left;
+    if(x > right) edges |= Right;
+    if(y < top) edges |= Top;
+    if(y > bottom) edges |= Bottom;
+    past &= edges;
+  }
+  return past != 0;
 }
 
 //One sprite or triangle drawn by itself, with these settings and the commands' texture function: how the tests

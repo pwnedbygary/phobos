@@ -286,6 +286,7 @@ static auto stateFields() -> void {
     {"ge.list.returnAddress", [&] { ge.list.returnAddress[1] ^= 4; }},
     {"ge.list.returnOffset", [&] { ge.list.returnOffset[1] ^= 4; }},
     {"ge.vertexAddress", [&] { ge.vertexAddress ^= 4; }}, {"ge.indexAddress", [&] { ge.indexAddress ^= 4; }},
+    {"ge.boxOutside", [&] { ge.boxOutside = !ge.boxOutside; }},
     {"ge.signalWord", [&] { ge.signalWord ^= 1; }}, {"ge.finishWord", [&] { ge.finishWord ^= 1; }},
     {"ge.endWord", [&] { ge.endWord ^= 1; }}, {"ge.bones", [&] { ge.bones[95] ^= 1; }},
     {"ge.world", [&] { ge.world[11] ^= 1; }}, {"ge.view", [&] { ge.view[11] ^= 1; }},

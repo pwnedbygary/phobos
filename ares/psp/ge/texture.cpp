@@ -2,10 +2,11 @@
 //
 //A texture is an image in memory (RAM or VRAM), as these commands describe it:
 //  TEXTURE_ADDRESS0        where it starts (the address's top bits ride in TEXTURE_BUFFER_WIDTH0's bits 16-19)
-//  TEXTURE_BUFFER_WIDTH0   texels from one row to the next (low 11 bits, rounded down to whole 16 bytes)
+//  TEXTURE_BUFFER_WIDTH0   texels from one row to the next (low 11 bits, rounded down to whole 16 bytes; DXT's to
+//                          whole blocks)
 //  TEXTURE_SIZE0           its size, each side a power of two: bits 0-3 the width's, bits 8-11 the height's
 //  TEXTURE_FORMAT          0 5650, 1 5551, 2 4444, 3 8888; 4-7 indices of 4, 8, 16 or 32 bits into the palette;
-//                          8-10 compressed (DXT1, 3, 5: not yet)
+//                          8-10 compressed: DXT1, DXT3 and DXT5 (dxtTexel(), below)
 //  TEXTURE_MODE bit 0      swizzled: stored in blocks 16 bytes wide and 8 rows high, each block's rows one after
 //                          another, blocks left to right and then down (the layout pspsdk's swizzle code writes), so
 //                          the GE reads a block at a time
@@ -19,8 +20,8 @@
 //(bits 2-6), masked (bits 8-15), then 16 entries per step of offset (bits 16-20) added.
 //
 //(How texels are addressed, repeated and filtered, and the texture functions' arithmetic, are as PPSSPP's software
-//renderer has them, which its authors checked against tests on the PSP. Mipmaps, DXT and 3D's texture coordinates come
-//later.)
+//renderer has them, which its authors checked against tests on the PSP; DXT's texels as pspautotests recorded them on
+//a PSP. Mipmaps come later.)
 //
 //Decoded textures. Looking a texel up the way the GE stores it takes a lot of steps: find the memory, unswizzle the
 //address, read it, widen a 16-bit color or look an index up in the palette. Drawing does that four times a pixel
@@ -32,8 +33,8 @@
 //indices looks like: its copy is kept for the palette it was decoded with, found again by the palette's hash and
 //checked byte for byte whenever the palette has changed since (clutVersion).
 //
-//Read from memory as before, texel by texel, are: DXT textures (not emulated yet: texel() notes it as it's used);
-//a texture some of whose bytes have no memory behind them (each such read is reported, as before); and a texture
+//Read from memory as before, texel by texel, are: a texture of a format the PSP doesn't have (11-15: texel() notes it
+//as it's used); a texture some of whose bytes have no memory behind them (each such read is reported); and a texture
 //the primitive may draw over itself (its frame buffer or depth buffer and the texture overlap), whose texels then
 //are the pixels it has drawn so far, as this core always drew it, kept so that every pixel stays as it was.
 //Whether a PSP's texture reads see the pixels of the primitive drawing them hasn't been measured.
@@ -58,9 +59,14 @@ auto GE::sampler() const -> Sampler {
   Sampler t{};
   t.format = commands[TextureFormat] & 0xf;
   t.address = (commands[TextureAddress0] & 0xff'fff0) | (commands[TextureBufferWidth0] << 8 & 0x0f00'0000);
-  u32 bits = t.format < 8 ? TexelBits[t.format] : 4;
-  u32 width = commands[TextureBufferWidth0] & 0x7ff & ~(128 / bits - 1);
-  t.bufferWidth = width ? width : 128 / bits;  //at least 16 bytes
+  if(t.format < 8) {
+    u32 bits = TexelBits[t.format];
+    u32 width = commands[TextureBufferWidth0] & 0x7ff & ~(128 / bits - 1);
+    t.bufferWidth = width ? width : 128 / bits;  //at least 16 bytes
+  } else {  //DXT: whole blocks of 4 texels (pspautotests' programs give 8 for 8 texels; less isn't measured)
+    u32 width = commands[TextureBufferWidth0] & 0x7fc;
+    t.bufferWidth = width ? width : 4;
+  }
   t.width = 1 << (commands[TextureSize0] & 0xf);
   t.height = 1 << (commands[TextureSize0] >> 8 & 0xf);
   t.swizzled = commands[TextureMode] & 1;
@@ -94,10 +100,52 @@ auto GE::paletteChanged() -> void {
   clutVersion++;
 }
 
+//DXT (TEXTURE_FORMAT 8-10): S3TC's compressed textures, in blocks of 4x4 texels, as pspautotests' gpu/texcolors/dxt1,
+//dxt3 and dxt5 recorded them on a PSP (all 2216 of their results). The blocks go a row after another, bufferWidth / 4
+//to a row, as S3TC's do (that isn't in the recordings, which repeat one block). In a block, unlike S3TC's own layout:
+//  - first the colors (every format), 8 bytes: the texels' 2-bit indices, a byte a row, the leftmost in the low bits;
+//    then two colors of 16 bits, RGB 565 with red in the top bits (unlike the GE's 5650), widened by shifting alone
+//    (31 becomes 248, not 255). With the first above the second (as numbers), index 0 is the first color, 1 the
+//    second, 2 and 3 a third and two thirds of the way ((2a + b) / 3 and (a + 2b) / 3 for each 8-bit channel,
+//    rounded down); otherwise 2 is half way ((a + b) / 2, rounded down) and 3 black, transparent in DXT1;
+//  - DXT3: then each texel's alpha in 4 bits, two bytes a row, the leftmost in the low bits, widened by shifting
+//    alone (15 becomes 240);
+//  - DXT5: then 48 bits of 3-bit indices, the top row's leftmost in the low bits, and two alphas of 8 bits. With the
+//    first above the second, index 0 is the first, 1 the second, and 2-7 six steps between, ((7 - k) * a + k * b) / 7
+//    for k from 1 to 6, rounded down; otherwise 2-5 four steps, ((5 - k) * a + k * b) / 5 for k from 1 to 4, 6 is 0
+//    and 7 255. (The recordings place the first texel's index; the rest are taken in order, as S3TC's are.)
+//TEXTURE_MODE's swizzling is taken not to apply: the blocks are 4 rows high already (unmeasured).
+template<typename Read>
+static auto dxtTexel(const GE::Sampler& t, s32 u, s32 v, const Read& read) -> u32 {
+  u32 blockBytes = t.format == 8 ? 8 : 16, x = u & 3, y = v & 3, texel = y * 4 + x;
+  u32 at = t.address + (u32(v) / 4 * (t.bufferWidth / 4) + u32(u) / 4) * blockBytes;
+  u32 index = read(4, at) >> texel * 2 & 3, colors = read(4, at + 4);
+  u32 first = colors & 0xffff, second = colors >> 16;
+  s32 a[3] = {s32(first >> 11) << 3, s32(first >> 5 & 63) << 2, s32(first & 31) << 3};
+  s32 b[3] = {s32(second >> 11) << 3, s32(second >> 5 & 63) << 2, s32(second & 31) << 3};
+  s32 rgb[3];
+  for(u32 n = 0; n < 3; n++) {
+    if(index < 2) rgb[n] = index ? b[n] : a[n];
+    else if(first > second) rgb[n] = index == 2 ? (2 * a[n] + b[n]) / 3 : (a[n] + 2 * b[n]) / 3;
+    else rgb[n] = index == 2 ? (a[n] + b[n]) / 2 : 0;
+  }
+  u32 alpha = index == 3 && first <= second ? 0 : 255;
+  if(t.format == 9) alpha = (read(2, at + 8 + y * 2) >> x * 4 & 15) << 4;
+  if(t.format == 10) {
+    u32 k = (read(4, at + 8) | u64(read(2, at + 12)) << 32) >> texel * 3 & 7;
+    u32 alphaA = read(1, at + 14), alphaB = read(1, at + 15);
+    if(k < 2) alpha = k ? alphaB : alphaA;
+    else if(alphaA > alphaB) alpha = ((8 - k) * alphaA + (k - 1) * alphaB) / 7;
+    else alpha = k == 6 ? 0 : k == 7 ? 255 : ((6 - k) * alphaA + (k - 1) * alphaB) / 5;
+  }
+  return rgb[0] | rgb[1] << 8 | rgb[2] << 16 | alpha << 24;
+}
+
 //The texel at (u, v), already inside the texture, as 8888, from clut and read(size, address): texel() reads memory
 //as the CPU would, decode() reads the very same bytes straight from where they are in the host's memory.
 template<typename Read>
 static auto texelFrom(const GE::Sampler& t, const u8* clut, s32 u, s32 v, const Read& read) -> u32 {
+  if(t.format >= 8) return dxtTexel(t, u, v, read);
   u32 bits = TexelBits[t.format], rowBytes = t.bufferWidth * bits / 8, byte = u32(u) * bits / 8, offset;
   if(!t.swizzled) offset = v * rowBytes + byte;
   else offset = (v / 8 * (rowBytes / 16) + byte / 16) * 128 + v % 8 * 16 + byte % 16;
@@ -116,17 +164,24 @@ static auto texelFrom(const GE::Sampler& t, const u8* clut, s32 u, s32 v, const 
 }
 
 auto GE::texel(const Sampler& t, s32 u, s32 v) -> u32 {
-  if(t.format >= 8) {
-    note("compressed (DXT) textures aren't emulated yet");
+  if(t.format > 10) {
+    note("a texture format the PSP doesn't have (11-15): its texels read as 0");
     return 0;
   }
   return texelFrom(t, clut, u, v, [&](u32 size, u32 at) { return memory.read(size, at); });
 }
 
 //The bytes texel() reads for every texel inside the texture's first rows: from low up to (not including) high. For
-//a swizzled texture, a little past them at most (the last block's whole width and height).
+//a swizzled texture, a little past them at most (the last block's whole width and height); for DXT, every byte of the
+//blocks up to the last texel's.
 auto GE::textureBytes(const Sampler& t, u32 rows, u32& low, u32& high) const -> void {
   u32 width = std::min<u32>(t.width, 512), height = rows;
+  if(t.format >= 8) {
+    u32 blockBytes = t.format == 8 ? 8 : 16;
+    low = t.address;
+    high = t.address + ((height - 1) / 4 * (t.bufferWidth / 4) + (width - 1) / 4 + 1) * blockBytes;
+    return;
+  }
   u32 bits = TexelBits[t.format], rowBytes = t.bufferWidth * bits / 8, lastByte = (width - 1) * bits / 8;
   u32 size = t.format < 3 || t.format == 6 ? 2 : t.format == 3 || t.format == 7 ? 4 : 1;  //the last read's
   u32 last = !t.swizzled ? (height - 1) * rowBytes + lastByte
@@ -184,7 +239,7 @@ static auto drawsOver(const GE::PixelState& p, u32 first, u32 last, s32 left, s3
 //texture's rows it may take texels from (all of them, past its height).
 auto GE::decode(Sampler& t, const PixelState& pixel, const Region& region, u32 rows) -> std::shared_ptr<Decoded> {
   t.decoded = nullptr;
-  if(t.format >= 8 || !memory.canWatch()) return {};
+  if(t.format > 10 || !memory.canWatch()) return {};
   rows = std::min({rows, t.height, 512u});
   u32 low, high;
   textureBytes(t, rows, low, high);
@@ -192,7 +247,7 @@ auto GE::decode(Sampler& t, const PixelState& pixel, const Region& region, u32 r
   if(u32 first, last; vramSpan(low, high - low, first, last)) {
     if(drawsOver(pixel, first, last, region.left, region.top, region.right, region.bottom)) return {};
   }
-  bool indexed = t.format >= 4;
+  bool indexed = t.format >= 4 && t.format < 8;
   TextureKey key{t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), t.swizzled, 0, 0, 0, 0, 0};
   if(indexed) key.clutFormat = t.clutFormat, key.clutShift = t.clutShift, key.clutMask = t.clutMask,
               key.clutOffset = t.clutOffset, key.clutHash = clutHash;
