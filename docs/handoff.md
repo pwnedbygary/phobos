@@ -868,6 +868,64 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the games further still — 2026-10-06
+
+Branch `cursor/psp-hle-games4-2b67`: `cursor/psp-ge-speed-2b67` (the entry below) with `cursor/psp-fonts-2b67`
+merged in (commit 53fc621b1, both sides kept, state version 8), not pushed. docs/psp-core.md, part 25, describes
+it. Original code; no PPSSPP or JPCSP source read (pspsdk, pspautotests' programs and recorded results, the PSP
+Developer Wiki, the games' own behavior).
+- **Burnout Dominator's GE hang: not the GE's.** Part 22's runner resumed from a state saved before
+  sceKernelVolatileMemLock existed; the game asks for the volatile memory as its first race loads (frame 3908), got
+  NOT_YET_LINKED and no address, and laid its race out from that: textures read from 0x00f79aac, its data over its
+  display lists, and from frame 5496 the GE ran vertex data as commands until a JUMP, relative to an ORIGIN among
+  them, sent it to 0x03c0de64, running zeros every frame. Reproduced exactly with the function taken out of a
+  scratch build (GE trace); with it, and from boot on this branch, the race plays. Test: "power volatile memory
+  locked at once".
+- **Space Invaders Extreme: past "NOW LOADING" into its stages.** Its background movie's thread (the best priority)
+  asked for an access unit, feeding the ringbuffer, in a loop that never waits: with movies that never had any
+  data, it starved every other thread. Movies are now fed and taken apart as pspautotests' video/mpeg/basic
+  recorded (sceMpegRingbufferPut calls the game's callback on its thread; sceMpegGetAvcAu cuts the MPEG-2 program
+  stream's video into access units with their time stamps; packets freed as taken; a picture from the second
+  decoded on; nothing drawn); basic's own movie run through the HLE gave all 180 recorded frames and the callback's
+  181 calls exactly. sceMpegAvcDecodeDetail answers 0 (the game waits for its first picture). Headers are still
+  refused, so the games that check skip their movies as before; Burnout's callbacks give nothing, as before.
+- **Where each game gets now** (frames under `/tmp/games4-runner/out`, states in `/tmp/games4-runner/states`):
+  Dominator racing its first race (`dom-c`); Peace Walker past its install and the optional DATA INSTALL (NO) to
+  the beach training, Snake controllable (`pw-f`, `pw-g`); LCS driving Vincenzo to the safehouse (`lcs-e`); VCS Vic
+  at the army base (`vcs-d`); Sindacco in Paulie's car to Atlantic Quays (`sind-d`); Burnout Legends lap 2 of 3
+  (`burnout-b`); Midnight Club 3 racing (`mc3-a`); SOCOM deployed in its first mission (`socom-d`); Snoopy's flying
+  lessons (`snoopy-b`); Gunhound EX Mission 01 (`gun-b`); Brave Story's prologue (`brave-b`); Lumines Challenge
+  (`lumines-c`); Space Invaders Extreme's first stage, then END GAME back to its title, its movie stopped
+  (`invaders-e`, `invaders-h`). Boots of all twelve checked with the movie change (`*-boot`).
+- **Checks**: `tests/psp/run-tests.sh` 236 groups with both sanitizers, no failures; `tests/psp/ares` 278 checks,
+  none failed (both run on the merge too, and after the review's fixes). New groups "mpeg movie fed and taken
+  apart", "mpeg movie thread waits for its picture", "mpeg ringbuffer callback states", "power volatile memory
+  locked at once" (programs on both engines, state round trips), and the review's six below; "state fields" checks
+  a ringbuffer's callback part way through (five refusals). State version 9 (version 8 refused).
+- **Review:** a general-purpose reviewer; the clean-room check found the mpeg code independent; four low findings,
+  all fixed, each with a test that failed before it. sceMpegRingbufferPut trusted the game-written ring (0x7fffffff
+  packets with 0x80000000 filled overflowed, UBSan; 8192 packets or -200 filled had the callback asked for 5000 or
+  4296, and a state saved as it waited was refused by a fresh machine): a ring that couldn't be one is given
+  nothing now, sceMpegGetAvcAu's guard ("mpeg ringbuffer that isn't one given nothing"). The callback's $gp came
+  from ring offset 44, past pspsdk's 44-byte SceMpegRingbuffer: Put's caller's now ("mpeg ringbuffer callback with
+  the caller's global pointer"). Missing groups added: a callback giving more than asked (clamped), one returning
+  an error (Put returns what came before), a feeder terminated asleep in its callback (state round trip), seeded
+  random packs through sceMpegGetAvcAu (read below the packets, filled within them); taking out the clamp, the
+  `gave <= 0` check, or either mpegAbandoned call fails one (deleteThread's only via a loaded state in which a
+  dormant thread still has a feeding: every live thread is ended before it's deleted). The counts here (227 and
+  268) were out of date. State layout unchanged.
+- **Speed** (host Mac, scratch runner, 600 frames of play, GE on 7 threads / 1): Gunhound 213 / 138 fps, Dominator
+  193 / 104, Brave Story 168 / 94, Lumines 117 / 44, Burnout Legends 97 / 54, VCS 86 / 40, LCS 78 / 31, Sindacco
+  73 / 35, Snoopy 61 / 38, Peace Walker 60 / 33, Midnight Club 3 7.3 / 2.1. Midnight Club 3 racing at night is
+  bound by filling pixels (its 32-bit framebuffer's triangle and sprite loops take nearly all of seven threads):
+  part 24's SIMD and setup work is where its time is.
+- **Uncertain / next**: lines (PRIM 1, 2) aren't drawn (LCS's route, SIE, SOCOM, Dominator): needs a measurement;
+  bounding boxes all in sight; Dominator's race start shows torn dark bands a moment (a bloom pass reading the
+  framebuffer it writes); sceKernelDevkitVersion missing (Peace Walker carries on); Peace Walker's YES to the
+  optional install not followed through; movie headers still refused, ATRAC3plus access units never come, and
+  sceMpegAvcDecodeStop doesn't hand back the held picture. The codecs (FFmpeg's LGPL decoders, the owner's choice)
+  would make movies seen: the access units are there now.
+
 ## PSP core: the CI's PSP system tests made green — 2026-10-06
 
 Branch `cursor/psp-ge-speed-2b67` (#150). The workflow `.github/workflows/psp-core.yml` runs `tests/psp/run-tests.sh`
@@ -880,8 +938,9 @@ system tests job failed (run 37483407156, exit 1). Two defects in the tests' own
   flags as UB; the no-op copy is now skipped.
 - **Checks:** `tests/psp/run-tests.sh` with both sanitizers: 226 groups, 0 failures (before: the build failed at
   `audio.cpp:695`, then the binary aborted at `disc-image.hpp:121`).
-- **Next:** the same two lines sit in the heads of the open PSP PRs #140-#151 (the memcpy line from #140 on, the
-  `%lld` line from #147 on); their CI stays red until each head carries the fixes.
+- **Then:** the same two lines sat in the heads of the open PSP PRs #140-#151 (the memcpy line from #140 on, the
+  `%lld` line from #147 on). Each fix was made where it first appears (#140's memcpy, #147's `%lld`, the same
+  change as here) and every stacked branch merged the one below it, up to #151, so each PR's head carries both.
 
 ## PSP core: the GE made fast, every pixel the same — 2026-10-06
 

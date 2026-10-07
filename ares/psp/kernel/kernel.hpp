@@ -223,7 +223,7 @@ struct Kernel {
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
   static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4,
-                       FontReturnCode = 5;
+                       FontReturnCode = 5, MpegReturnCode = 6;
   static constexpr u32 FirstImportCode = 0x1000;
 
   //threads.cpp
@@ -993,7 +993,22 @@ struct Kernel {
   auto __sceSasRevEVOL() -> void;
   auto __sceSasRevVON() -> void;
 
-  //mpeg.cpp: sceMpeg, movies set up but never played (no video decoder yet), so games skip them
+  //mpeg.cpp: sceMpeg, movies fed and taken apart into their pictures' access units, but never shown (no video
+  //decoder yet)
+  struct MpegCall {        //sceMpegRingbufferPut part way through, calling the ringbuffer's own callback
+    Context caller{};      //the thread where it called Put: put back as Put returns
+    u32 ringbuffer = 0;    //the ringbuffer being fed
+    u32 left = 0;          //packets still to ask for
+    u32 asked = 0;         //packets the callback was asked for just now
+    u32 put = 0;           //packets it gave so far
+  };
+  std::map<u32, MpegCall> mpegCalls;  //by thread
+  auto mpegNext(MpegCall& call) -> void;
+  auto mpegReturned() -> void;
+  auto mpegFinish(MpegCall& call) -> void;
+  auto mpegAbandoned(u32 thread) -> void;
+  auto mpegLibrary(u32 handle) -> u32;
+  auto mpegDecoded(u32 handle, u32 au, u32 frame) -> void;
   auto sceMpegInit() -> void;
   auto sceMpegFinish() -> void;
   auto sceMpegRingbufferQueryMemSize() -> void;
@@ -1026,6 +1041,7 @@ struct Kernel {
   auto sceMpegAvcInitYCbCr() -> void;
   auto sceMpegAvcDecodeYCbCr() -> void;
   auto sceMpegAvcDecodeStopYCbCr() -> void;
+  auto sceMpegAvcDecodeDetail() -> void;
   auto sceMpegAvcCsc() -> void;
   auto sceMpegAtracDecode() -> void;
 

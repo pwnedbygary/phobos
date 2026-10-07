@@ -510,6 +510,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceMpeg",           "sceMpegAvcInitYCbCr",           &Kernel::sceMpegAvcInitYCbCr);
   add("sceMpeg",           "sceMpegAvcDecodeYCbCr",         &Kernel::sceMpegAvcDecodeYCbCr);
   add("sceMpeg",           "sceMpegAvcDecodeStopYCbCr",     &Kernel::sceMpegAvcDecodeStopYCbCr);
+  add("sceMpeg",           "sceMpegAvcDecodeDetail",        &Kernel::sceMpegAvcDecodeDetail);
   add("sceMpeg",           "sceMpegAvcCsc",                 &Kernel::sceMpegAvcCsc);
   add("sceMpeg",           "sceMpegAtracDecode",            &Kernel::sceMpegAtracDecode);
   add("sceMpeg",           "sceMpegGetAvcEsAu",             &Kernel::sceMpegGetAvcAu);
@@ -599,6 +600,7 @@ auto Kernel::power() -> void {
   openFonts.clear();
   fontCalls.clear();
   nextFontID = 1;
+  mpegCalls.clear();
   dialog = {};
   utilityModules.clear();
   files.clear();
@@ -645,6 +647,8 @@ auto Kernel::power() -> void {
   memory.write(4, Trampoline + 28, 0x0000'000d);
   memory.write(4, Trampoline + 32, FontReturnCode << 6 | 0x0c);  //syscall: the font library's call returned
   memory.write(4, Trampoline + 36, 0x0000'000d);
+  memory.write(4, Trampoline + 40, MpegReturnCode << 6 | 0x0c);  //syscall: a ringbuffer's callback returned
+  memory.write(4, Trampoline + 44, 0x0000'000d);
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
@@ -775,6 +779,10 @@ auto Kernel::syscall(u32 code) -> bool {
   }
   if(code == FontReturnCode) {
     fontReturned();
+    return true;
+  }
+  if(code == MpegReturnCode) {
+    mpegReturned();
     return true;
   }
   if(code < FirstImportCode || code - FirstImportCode >= imports.size()) {

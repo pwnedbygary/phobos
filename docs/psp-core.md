@@ -20,8 +20,10 @@ loading modules, are on `cursor/psp-decrypt-2b67` (#144), which `cursor/psp-hle-
 Part 21, sound (sceAudio's channels mixed into the system's stream, sceSasCore's voices heard), is on
 `cursor/psp-sound-2b67`, on top of part 20's `cursor/psp-hle-games2-2b67`. Part 23, the system fonts (sceLibFont
 drawing the owner's own flash0 fonts), is on `cursor/psp-fonts-2b67`, on top of part 22's
-`cursor/psp-hle-games3-2b67`; part 24, making the GE fast, on `cursor/psp-ge-speed-2b67`, on top of part 22's too,
-with part 23 merged in.
+`cursor/psp-hle-games3-2b67`; part 24, making the GE fast, is on `cursor/psp-ge-speed-2b67`, on top of part 22's
+too, with part 23 merged in. Part 25, the games further still (Burnout Dominator's GE hang explained, movies fed and
+taken apart so that Space Invaders Extreme plays), is on `cursor/psp-hle-games4-2b67`, part 24's with part 23's
+merged in.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -2883,3 +2885,154 @@ unit tests, and its release build.
   Club and Lumines, which are bound by drawing.
 - Drawing over its own texture (Midnight Club's 22,000 pixels a frame, some post effects) stays one thread, in order.
 - The Vulkan and OpenGL renderers (the owner's decision), measured against this one.
+
+## Part 25: the games, further still
+
+On branch `cursor/psp-hle-games4-2b67`: part 24's GE made fast (`cursor/psp-ge-speed-2b67`) with part 23's fonts
+(`cursor/psp-fonts-2b67`) merged in, both sides kept (the state version 8, only the fonts having changed the
+layout). The owner's priority (2026-10-06): the games that were stuck, further. Sources as before: pspsdk's headers,
+pspautotests' programs and the results they recorded on a PSP (here video/mpeg's movie, `test.pmf`, frame by
+frame), the PSP Developer Wiki, and the games' own behavior; no other emulator's code was read. The scratch host
+runner (never committed) gained a trace of the GE's commands (a hook in a scratch copy of the tree), the kernel's
+calls filtered by name, and builds with one function taken out, to show what its absence did.
+
+- **Burnout Dominator's GE hang wasn't the GE's.** Part 22's runner had resumed the game from a state saved before
+  sceKernelVolatileMemLock existed. At frame 3908, as its first race loads, the game asks for the volatile memory
+  (the 4 MiB at 0x08400000) to hold the race; the kernel, not having the function, answered NOT_YET_LINKED and wrote
+  no address, and the game laid the race's buffers out from the address it never got. Textures were then read
+  without their top bits (0x00f79aac, where nothing is), and the race's data overlapped its display lists: by the
+  time the GE ran list 0x09e05900 (frame 5496 on), its memory held 16-byte records (vertex data by the look of
+  them, an ORIGIN command every fourth word), which the GE ran as NOPs and ORIGINs until it reached the tail of a
+  real list, whose JUMP, made relative by the last ORIGIN, sent it to 0x03c0de64, where it ran zeros until each
+  frame's million commands were spent, the game waiting in sceGeDrawSync. The lists walked by hand ended cleanly
+  because the GE didn't read what they had been: by the time it ran them, the race's data was written over them
+  (at frame 5300 the same list still ran its 595 commands and ended). Shown with a build that has the function
+  taken out (and a trace of the GE's commands): from a state at frame 2999, with the same presses, it notes the
+  function missing at frame 3908, loads from 0x00f79aac and its neighbours, and from frame 5496 the GE takes that
+  path every frame, the screen black; the same build with the function (part 22's) races (timer running, 113 to 139
+  mph). Nothing in the GE was at fault: an ORIGIN does make a JUMP relative. With this branch the first race plays
+  from boot (frames 6300 to 15000, its timer from 122 seconds down to 47). New group "power volatile memory locked
+  at once" locks the memory as Dominator does (no test had locked it with sceKernelVolatileMemLock while it was
+  free: TryLock, and threads waiting while another held it, were).
+- **Space Invaders Extreme stopped at "NOW LOADING"** (Arcade Mode) because of its stage's background movie. It
+  keeps the movie in memory and plays it on a thread of the best priority (0x11): the game ignores part 20's refused
+  header, makes the thread's event flag with the request already set, and the thread asks for an access unit and,
+  while there's none, feeds the ringbuffer and asks again, never waiting (its callback copies packets from memory,
+  starting over at the movie's end). With nothing ever put in, it kept every other thread from running for good.
+  On a PSP the access units come (and decoding one waits a moment: basic's decodes let another thread run), and the
+  thread then waits for the next request. The same loop would have hung the game at the stage's end too: stopping
+  the movie sets the flag's quit bit and waits for the thread to end, which only the flag's wait sees. And no
+  answer but "no data" could end the loop without breaking Burnout Legends, which asks again at once, for good,
+  after any other error.
+- **So movies are fed and taken apart now, but not shown** (mpeg.cpp), as video/mpeg/basic recorded:
+  sceMpegRingbufferPut calls the ringbuffer's callback on the calling thread (where the packets go, how many, its
+  argument), a run at a time that stops at the ring's end, and again for what's left as long as it gives some (basic's
+  gave 9 of 24 at its file's end and was asked for the other 15); the callback may wait (basic's read a file), and a
+  state saved meanwhile carries it (the trampoline's seventh syscall brings each return back). sceMpegGetAvcAu reads
+  the packets as MPEG-2 program stream packs and takes the video of stream 0xe0 apart into access units, from one
+  access unit delimiter to the next, each coming once the next one's delimiter is in (or, the file having ended,
+  with its data): its size, the time stamps of a PES packet that begins with it (else -1), and the packets whose
+  video it took the last of free again. Decoding one, at once, gives a picture from the second on, the decoder
+  holding one back, and draws nothing. Run through the HLE with basic's own movie, as basic fed it (a scratch
+  harness), all 180 frames came out as recorded: the free packets before and after each feeding, every access
+  unit's size and time stamps, the pictures, and the callback's 181 calls. sceMpegRingbufferAvailableSize counts
+  the free packets, those holding no data (ringbuffer/avail), sceMpegInitAu sets an access unit's buffer and clears
+  the rest (basic's ATRAC3plus one), and sceMpegAvcDecodeDetail (named by pspautotests' imports, nothing of it
+  recorded) answers 0 and leaves the details as they were: Space Invaders Extreme waits for its movie's first
+  picture, and asks it of each, before the stage starts. The library's own state (the video taken from the ring's
+  first packet, the picture held back, the file having ended) is kept in the memory the game gave it, where Sony's
+  library keeps its own.
+- **The ring as games keep it**: the callback runs with the global pointer of Put's caller. pspautotests'
+  SceMpegRingbuffer2 keeps the one Construct found at offset 44, but pspsdk's SceMpegRingbuffer is 44 bytes, the
+  word after it the game's own (in every case seen, the word at 44 and the caller's are the same). And a ring whose
+  fields, the game's to write, couldn't be a ring's (no packets or more than 4096, the next to write not among them,
+  more holding data than there are) is given nothing, as sceMpegGetAvcAu takes nothing from one.
+- **Who it changes**: only games that play on after the refused header and whose callback gives packets. The GTAs,
+  Midnight Club 3 and Snoopy give their movies up at the header as before; Burnout Legends and Dominator play on,
+  but their callbacks give nothing (they set their file up only once the header is read), so their movies end at
+  once as before; Gunhound EX, Brave Story and Lumines ask for none in their first minute. Space Invaders Extreme's
+  movie now plays, unseen, behind its stages.
+- **States**: version 9, a ringbuffer's callback part way through being part of a state (a state of version 8
+  refused); loading checks such a call: a thread that's there, a run of 1 to what's left, no more than a ring's 4096
+  packets, a ringbuffer in memory.
+
+What the games do now, on the host (frames under `/tmp/games4-runner/out`, outside the repository; the runner's
+states under `/tmp/games4-runner/states`):
+
+- **Burnout Dominator**: from boot through its profile and main menu to its first race, racing it (`dom-c`, frames
+  6300 to 15000, the timer running down from 122 seconds to 47, 82 to 139 mph).
+- **Metal Gear Solid Peace Walker**: past its name, its button configuration and its install ("Installing...",
+  which finishes), the optional DATA INSTALL (answered NO), the autosave notice, to its first scene on the beach and
+  the training that follows: Snake under the player's control ("Free Control Time", "Camera Controls", `pw-f`,
+  `pw-g`).
+- **GTA Liberty City Stories**: past its opening into its first mission: Toni driving Vincenzo to the safehouse
+  through the woods and the town's edge, the radar and blips showing (`lcs-e`).
+- **GTA Vice City Stories**: past its opening to Vic at the army base, walking under the player's control (`vcs-d`).
+- **GTA Sindacco Chronicles**: past its difficulty choice and opening into Paulie's car, driven toward Atlantic
+  Quays (`sind-d`).
+- **Burnout Legends**: racing, lap 2 of 3, takedowns (`burnout-b`). **Midnight Club 3**: racing through the city at
+  night, the timer running (`mc3-a`). **SOCOM**: a campaign begun, saved, its first mission's briefing, deployed: the
+  soldier in the Andes, help tips showing (`socom-c`, `socom-d`). **Snoopy vs. the Red Baron**: Marcie's flying
+  lessons over the town, the radar (`snoopy-b`). **Gunhound EX**: Mission 01 under way, the mech firing, its
+  dialogue (`gun-b`). **Brave Story**: the prologue's scenes and talk at the fountain (`brave-b`). **Lumines**:
+  Challenge Mode played (`lumines-c`). **Space Invaders Extreme**: Arcade Mode's first stage played, invaders shot
+  (score 400), lives lost, its background black (`invaders-e`); then the pause menu's END GAME back to its title,
+  the movie stopped on the way (its thread told to end, and ended), which the old loop couldn't have (`invaders-h`).
+
+**Speed in play** (the host Mac, the scratch runner's `-O2` build, 600 frames from each game's state with a button
+held, the GE on 7 threads / on 1): Gunhound EX 213 / 138 frames a second, Burnout Dominator racing 193 / 104, Brave
+Story 168 / 94, Lumines 117 / 44, Burnout Legends racing 97 / 54, GTA Vice City Stories 86 / 40, Liberty City
+Stories driving 78 / 31, Sindacco Chronicles 73 / 35, Snoopy flying 61 / 38, Peace Walker's training 60 / 33,
+Midnight Club 3 racing at night 7.3 / 2.1. So all but Midnight Club 3 keep up with the PSP's 60 on several threads,
+Peace Walker and Snoopy only just. Midnight Club 3 is bound by filling pixels: a profile (macOS `sample`, 10
+seconds) puts nearly all the drawing threads' time in the triangle and sprite loops for its 32-bit framebuffer
+(`triangleRows<3>`, `spriteRows<3>`), spread evenly over the seven; this race at night is heavier than the scene
+part 24 timed (27.9). Part 24's next steps, four pixels at a time with SIMD and cheaper setup, are where its time
+goes.
+
+Seen on the way, not changed:
+- **Lines** (PRIM 1 and 2) aren't drawn: Liberty City Stories (line strips, perhaps its radar's route), Space
+  Invaders Extreme, SOCOM and Dominator draw some. There's no measurement of how the PSP rasterizes them, so none is
+  drawn rather than a guess: one for the next measuring round.
+- **Bounding boxes** (BBOX, BJUMP) all count as in sight: Dominator draws what a PSP would skip; only speed.
+- **Dominator's race start** shows dark bands torn into strips for a moment: a bloom pass draws a framebuffer back
+  onto itself, read as it's written; a PSP's order of reads and writes there isn't measured.
+- sceKernelDevkitVersion (SysMemUserForUser 0x3fc9ae6a) isn't there: Peace Walker and the measuring program ask,
+  and carry on. Peace Walker's YES to the optional install (320 or 880 MB) wasn't followed through.
+- Movies: sceMpegQueryStreamOffset still refuses every header (games that check skip their movies); the sound's
+  access units never come; sceMpegAvcDecodeStop doesn't give back the picture the decoder held.
+
+Tests (`tests/psp/run-tests.sh`: 236 groups, both sanitizers; `tests/psp/ares` 278 checks):
+- `media.cpp`: "mpeg movie fed and taken apart" (both engines: a made-up PSMF movie of twelve access units, three
+  with time stamps, one past 32 bits, through a ring of 16 packets fed 3 at a time, against the rules basic recorded:
+  the callback's calls, the free packets, each access unit's size and time stamps, the pictures, the last access
+  unit once the file has ended, the ring empty at the end; the state round trip); "mpeg movie thread waits for its
+  picture" (both engines: Space Invaders Extreme's movie thread and its main thread waiting for the first picture,
+  then stopping it; with nothing put in, main never ran); "mpeg ringbuffer callback states" (both engines: a state
+  saved at three moments while the callback waits, as a read would, carries on to the same frames and calls).
+- `power.cpp`: "power volatile memory locked at once" (both engines).
+- `states.cpp`: "state fields" changes each field of a ringbuffer's callback part way through, and refuses one of a
+  thread that isn't there, one asking for nothing or for more than it has left, one past a ring's packets, and one
+  feeding a ringbuffer nowhere.
+- `tests/psp/ares`: a state of version 8 refused, as the seven before it.
+
+Review: a general-purpose reviewer of the branch; the clean-room check found the mpeg code independent; four low
+findings, all fixed, each with a test that failed before its fix. sceMpegRingbufferPut trusted the ring's fields,
+the game's to write: 0x7fffffff packets with 0x80000000 holding data overflowed its signed subtraction, and 8192
+packets, or -200 holding data, had the callback asked for 5000 or 4296 packets, more than a state holds, so a state
+saved as it waited was refused by a fresh machine (and a run's size in bytes could wrap). Such a ring is given
+nothing now (above), what's free counted unsigned; "mpeg ringbuffer that isn't one given nothing" saves each such
+ring's machine where its callback would have waited and loads it in a fresh one. The callback's global pointer came
+from the ring's offset 44, past pspsdk's 44-byte SceMpegRingbuffer: it's the caller's now ("mpeg ringbuffer callback
+with the caller's global pointer": someone else's word after a 44-byte ring). Groups were missing for a callback
+that returns more than it was asked for ("mpeg ringbuffer callback giving more than asked": what it was asked for
+counts), one that returns an error ("mpeg ringbuffer callback returning an error": Put returns what the calls before
+it gave, as after a callback that gives none; what a PSP's Put returns then isn't recorded), a feeder thread
+terminated as it sleeps in its callback ("mpeg ringbuffer feeder terminated in its callback", a state saved as it
+sleeps carried on in a fresh machine), and random packs ("mpeg random packs taken apart": from a seed, the next
+packet to read stays among the ring's, those holding data no more than it has, and Put gives what its callback's
+calls gave). Taking out the clamp on what a callback returns, the check for none or an error, or endThread's or
+deleteThread's dropping of a thread's feeding fails one of them (deleteThread's only through a state the loader
+takes in which a dormant thread still has a feeding: every other thread is ended before it's deleted). And the
+counts given here and in the handoff (227 groups, 268 checks) were out of date. The tree passes 236 groups and 278
+checks, the state layout unchanged (version 9).

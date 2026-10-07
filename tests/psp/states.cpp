@@ -243,6 +243,9 @@ static auto stateFields() -> void {
   fontCall.got = {0x0898'0000, 0x0898'0100};
   fontCall.opening.index = 1, fontCall.opening.library = fontLibrary;
   fontCall.opening.hash = k.systemFonts[1].hash, fontCall.opening.pgf = k.systemFonts[1].pgf;
+  //thread one feeding a ringbuffer, its callback asked for 3 of the 5 packets left, 2 given already
+  auto& mpegCall = k.mpegCalls[one];
+  mpegCall.ringbuffer = 0x0896'1000, mpegCall.left = 5, mpegCall.asked = 3, mpegCall.put = 2;
   std::vector<std::pair<std::string, std::function<void()>>> changes = {
     //the CPU
     {"ipu.r", [&] { cpu.ipu.r[9] ^= 0x1234; }}, {"ipu.lo", [&] { cpu.ipu.lo ^= 1; }},
@@ -312,6 +315,7 @@ static auto stateFields() -> void {
   contextChanges("interrupted", &k.interrupted);
   contextChanges("before its callback", &t.beforeCallback);
   contextChanges("a font call's caller", &fontCall.caller);
+  contextChanges("an mpeg call's caller", &mpegCall.caller);
   auto& sema = k.semaphores[semaphore];
   auto& eventFlag = k.eventFlags[flag];
   auto& cb = k.callbacks[callback];
@@ -374,6 +378,8 @@ static auto stateFields() -> void {
     {"font call slot", [&] { library.open[1] = false, library.open[3] = true, fontCall.slot = 3; }},
     {"font call ended", [&] { fontCall.ended = true, library.open[3] = false; }},
     {"font call kind", [&] { fontCall.kind = Kernel::FontCall::Give, fontCall.asks.clear(), fontCall.got.clear(); }},
+    {"mpeg call ringbuffer", [&] { mpegCall.ringbuffer ^= 0x40; }}, {"mpeg call left", [&] { mpegCall.left = 6; }},
+    {"mpeg call asked", [&] { mpegCall.asked = 4; }}, {"mpeg call put", [&] { mpegCall.put = 1; }},
     {"thread name", [&] { t.name += "x"; }}, {"thread entry", [&] { t.entry ^= 4; }},
     {"thread priority", [&] { t.priority ^= 1; }}, {"thread initialPriority", [&] { t.initialPriority ^= 1; }},
     //(a stack is a block of its own, of its size: thread one's shrinks with its block, then moves to the spare)
@@ -872,6 +878,21 @@ static auto stateFields() -> void {
     k.fontCalls[0x7777] = call;
   });
   refuses("a font call of a kind there isn't", [&] { k.fontCalls.at(two).kind = Kernel::FontCall::Kind(7); });
+  refuses("an mpeg call of a thread that isn't there", [&] {
+    auto call = k.mpegCalls.at(one);
+    k.mpegCalls.erase(one);
+    k.mpegCalls[0x7777] = call;
+  });
+  refuses("an mpeg call asking its callback for nothing", [&] { k.mpegCalls.at(one).asked = 0; });
+  refuses("an mpeg call asking for more than it has left", [&] {
+    auto& call = k.mpegCalls.at(one);
+    call.asked = call.left + 1;
+  });
+  refuses("an mpeg call past a ring's packets", [&] {
+    auto& call = k.mpegCalls.at(one);
+    call.put = 4096 - call.left + 1;
+  });
+  refuses("an mpeg call feeding a ringbuffer nowhere", [&] { k.mpegCalls.at(one).ringbuffer = 0x1000; });
   refuses("a font call given more than it asked for", [&] { k.fontCalls.at(two).got.push_back(1); });
   refuses("a font call opening into a handle it doesn't hold", [&] {
     auto& call = k.fontCalls.at(two);
