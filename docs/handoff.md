@@ -868,6 +868,43 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: lines, bounding boxes, DXT textures and sceGeBreak — 2026-10-06
+
+Branch `cursor/psp-ge-features-2b67`, on top of `cursor/psp-hle-games5-2b67` (#156, the entry below): commits
+bb1da6c0a (the GE's code and tests) and 5892da700 (the measuring program's round 4), then the docs; local only, not
+pushed. docs/psp-core.md, part 29, describes it. Written from pspsdk's headers and GU library, pspautotests'
+programs and the results (and screenshots) they recorded on a PSP, public S3TC descriptions and the owner's games;
+no PPSSPP or JPCSP source read.
+- **Lines** (PRIM 1 and 2), in 2D and 3D (cut at the near plane), colors, depth, fog, textures, blending, through
+  the same pipeline, threads and decoded textures: the "diamond exit" rule, its edges fitted to every picture of lines
+  pspautotests recorded (gpu/primitives/lines, linestrip, indices: now pixel for pixel). Not the PSP's in every pixel:
+  gpu/exact/lines' CRCs match neither it nor any variant tried. Anti-aliasing isn't emulated.
+- **Bounding boxes** (BBOX, BJUMP): screen-space, the scissor and region a pixel wider on the left and top, held to
+  the 4096 screen, z against w with DEPTH_CLIP_ENABLE, the count's quirks: every case of pspautotests' gpu/bounding
+  (count, planes, viewport, vertexaddr's results) as the PSP printed them. Out of sight only past one edge for every
+  vertex (chosen). State version 12.
+- **DXT1/3/5**: the PSP's own block layout (colors first, indices then the two 565 colors with red on top, DXT3/5's
+  alpha after), colors widened by shifting, thirds and halves rounded down: all 2216 results of gpu/texcolors/dxt1,
+  dxt3, dxt5. The layout came from those programs and recordings; the blocks' order is S3TC's, taken (no DXT game on
+  this Mac). Kept decoded like other textures.
+- **sceGeBreak**: as gpu/ge/break and breakwait recorded (refusals and their order, mode 0 breaking off the running
+  list for sceGeContinue, mode 1 throwing all away, waiters left waiting).
+- **Also, from pspautotests' pictures**: 8-bit positions in through mode read as 0; index format 3 is 32-bit indices,
+  their low 16 bits taken.
+- **Measuring program, round 4** (lines at every sixteenth, short lines, strips, colors, depth and texels along lines,
+  3D lines, 256 bounding boxes, DXT colors, alphas and block order): built in pspdev's Docker image;
+  `tests/psp/programs/pspmeasure.elf` replaced (hash in its README). The owner's EBOOT.PBP for the PSP is in
+  `/tmp/gef-measure-build/EBOOT.PBP`, not committed. Running it in the core caught a mistake of its own first (memory
+  taken inside an object let the GE reach an unaimed BJUMP).
+- **Checked**: tests/psp 280 groups with ASan and UBSan, tests/psp/ares 290 checks, none failed; the comparison with
+  the owner's PSP (rounds 2 and 3) the same, line for line; 16 broken versions each caught. Speed within a couple of
+  percent either way in six scenes, 1 and 7 threads. Games: Space Invaders Extreme's title gains its line box,
+  Sindacco a line across the sky; Dominator, LCS, SOCOM, Snoopy, VCS, Peace Walker unchanged in the frames captured;
+  pictures in `/tmp/gef-pictures`.
+- **Left**: curved surfaces (Macross); the exact line rule, anti-aliased lines, the DXT block order, boxes past
+  different edges (round 4 will tell); breakwait's wake order; sceGeSaveContext's layout; gpu/exact/coverage's tall
+  triangles; PRIM kind 7.
+
 ## PSP core: kernel mutexes, alarms, virtual timers, and the clock in system calls — 2026-10-06
 
 Branch `cursor/psp-hle-games5-2b67`, on top of `cursor/psp-desktop-2b67` (#155, the entry below): commit 3133b63b2
