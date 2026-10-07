@@ -26,7 +26,9 @@ taken apart so that Space Invaders Extreme plays), is on `cursor/psp-hle-games4-
 merged in. Part 26, music and movies (FFmpeg's LGPL decoders under sceAtrac3plus, sceMp3 and sceMpeg), is on
 `cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`: part 25's, with master merged in). Part 27,
 the PSP in the desktop program (its library, settings, controls and picture, and FFmpeg built for Linux, macOS and
-Windows), is on `cursor/psp-desktop-2b67`, on top of part 26's.
+Windows), is on `cursor/psp-desktop-2b67`, on top of part 26's. Part 28, the functions 266 games ask for (kernel
+mutexes, alarms, virtual timers, and the clock kept as the PSP keeps it in system calls), is on
+`cursor/psp-hle-games5-2b67`, on top of part 27's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -3417,3 +3419,201 @@ Tests, macOS and Windows jobs passed; LGPL compliance checked on the macOS and W
   at once against a planted dead lock, three rounds: one takeover each, never more than one inside.
 - Checked again: Burnout Legends on the host Mac at 60, the fonts folder set (its count in the menu) and cleared
   from the menu; the app's 265 unit tests, none failed.
+
+## Part 28: the functions 266 games ask for
+
+On branch `cursor/psp-hle-games5-2b67`, on top of part 27's `cursor/psp-desktop-2b67` (#155). The owner's agent ran
+266 of the owner's games through a headless runner (`origin/local/psp-runner`'s `tools/psp-runner` and
+`docs/psp-compatibility.md`) and listed the functions they call that the HLE kernel didn't have; this part gives
+them the most-needed ones. Sources: pspsdk's headers (`pspthreadman.h`, `pspctrl.h`, `pspge.h`, `pspsysmem.h`,
+`pspimpose.h`, `pspkerror.h`, the import stubs' names), pspautotests' programs and the results they recorded on a
+PSP (threads/mutex, threads/alarm, threads/vtimers, threads/threads/release, threads/semaphores/cancel,
+threads/events/cancel, threads/scheduling/mutexhandoff, waittimeouts, preemptuser and alarmcosts, ctrl/idle,
+gpu/ge/edram, sysmem/memblock and its `sysmem-imports.S`), and the programs run through the HLE kernel (the scratch
+runner of part 26, which answers their emulator devctl and compares their output with the recordings). No other
+emulator's code was read. Where a recording doesn't show a behavior, the code and this part say what was chosen.
+
+**Kernel mutexes** (`mutexes.cpp`): sceKernelCreateMutex, DeleteMutex, LockMutex, LockMutexCB, TryLockMutex,
+UnlockMutex, CancelMutex and ReferMutexStatus, the kernel's own mutex (the lightweight one keeps its state in the
+program's memory).
+- The thread that locks a free mutex holds it. With the recursive attribute (0x200) its holder may lock it again, the
+  locks counted (to 2^31 - 1: LOCK_OVERFLOW past it), and it's free once unlocked as often; else a count of more than
+  1 is ILLEGAL_COUNT and the holder locking again RECURSIVE_NOT_ALLOWED. Threads finding it held wait first come first
+  served, or by priority with attribute 0x100 (the longest waiting among equals); as it's freed it goes straight to
+  the first, with the count that thread asked for, which runs at once if it's better than the one that freed it. A
+  holder that ends (or is terminated, or deleted) frees what it holds, each mutex going on to its next waiter.
+  Deleting wakes the waiters (WAIT_DELETE), cancelling too (WAIT_CANCEL) with a new count (the caller holding it if
+  it's more than 0). Nobody's priority changes for a mutex (mutexhandoff: no inheritance).
+- The checks' order and errors are the recordings': the mutex before the count, the count before who holds it, a
+  try on another's mutex MUTEX_LOCKED (0x800201c4), unlocking another's or a free one MUTEX_UNLOCKED (c5), more than
+  held UNLOCK_UNDERFLOW (c7), an unknown mutex c3; a NULL name ERROR, attribute 0x400 or any above 0xbff
+  ILLEGAL_ATTR; a lock where no thread may wait refused before anything is looked at (intr/waits). A status is copied
+  as far as the size its first word gives (0 copies nothing; 1 copies the size's first byte, so 56 reads back), the
+  holder -1 when free.
+- Chosen: a negative count to CancelMutex (and CancelSema) is taken as the count it was made with; the recordings
+  only show it making a mutex made free, free. ReferThreadStatus gives a thread waiting on a mutex no wait type (the
+  PSP's number isn't known here).
+- The lightweight mutex now honours its priority attribute too: mutexhandoff recorded both kinds alike ("UBAC",
+  "BACU", "BUCA"), and it had been first come first served whatever the attribute.
+
+**Alarms** (`timers.cpp`): sceKernelSetAlarm, SetSysClockAlarm, CancelAlarm, ReferAlarmStatus. An alarm goes off at
+its time (the system's time plus the microseconds asked, 64 bits wide with the clock: 2^64 - 2 is 2 microseconds
+ago), calling handler(common) as an interrupt handler (a call into the program, interrupts.cpp: on top of whatever
+runs, no waiting, sceKernelGetThreadId telling it it's no thread, the global pointer it was set with). It returns 0 to
+end the alarm (CancelAlarm then finds none, UNKNOWN_ALMID), or the microseconds until it goes off again, counted from
+the moment it was due (set: ten 1000-microsecond calls in 10200 microseconds, the schedule then 11000 on). A NULL
+handler is ILLEGAL_ADDR. A status is copied as far as its size (20). Two things the recordings pin down:
+- A timer a system call sets going doesn't go off sooner than about 215 microseconds after the call (alarmcosts:
+  "it never goes off sooner than about 215us after being set"; set's zero-time alarm hadn't gone off by the next
+  call). What the call itself costs on a PSP (42 to 45 microseconds) isn't counted, as no call's is here, so
+  alarmcosts' handler comes about 215 microseconds after the call began where a PSP's comes about 256 after, and
+  the 50 microseconds a PSP takes to get a woken thread going, and the 72 a running one loses to a handler, aren't
+  there either (alarmcosts and preemptuser still differ for that).
+- An alarm due again by the time its handler returns (its next moment passed already) goes off its microseconds from
+  then, not at once: alarm's handler, due again 100 microseconds on after interrupts had been held off for
+  milliseconds, was called once.
+
+**Virtual timers** (`timers.cpp`): sceKernelCreateVTimer, DeleteVTimer, Start/StopVTimer, Get/SetVTimerTime(Wide),
+GetVTimerBase(Wide), SetVTimerHandler(Wide), CancelVTimerHandler, ReferVTimerStatus. A clock of the program's own,
+running only while it's started (Start answers whether it ran already, Stop whether it was running), its base the
+system's time it was started at (0 while stopped), which may be set to any time (the old one handed back by address,
+or as the wide form's result, -1 for a timer there isn't). Its handler is called when its time reaches the schedule,
+as handler(timer, &schedule, &its time now, common): the two times in kernel memory (`TimerClocks`), and the wide form
+the same way (sethandler: "pspsdk is wrong, they are the same handler"). What it returns moves the schedule on in the
+timer's time; one that has fallen behind is called again at once until it catches up (sethandler's three calls in a
+millisecond); 0 drops the handler and keeps the schedule. A NULL handler drops the handler alone (the schedule and
+common kept, the time not read). The recorded oddities: starting, stopping, setting or cancelling a handler on timer
+0 is ILLEGAL_VTID outside any handler (start, stop, sethandler, cancelhandler), and cancelling its own timer's
+handler is ILLEGAL_VTID in a handler, where timer 0 is merely UNKNOWN_VTID (cancelhandler): taken as one check, a
+timer whose handler is running being the illegal one, which starting, stopping and setting a handler make too
+(chosen: only cancelling is recorded in a handler). Creating and deleting are refused in an interrupt handler
+(ILLEGAL_CONTEXT, before the timer is looked for: vtimers/interrupt), SetVTimerTimeWide answers -1 there; a status is
+copied as far as its size (72). Chosen: setting a running timer's time moves its base to now.
+
+**Threads released and waits cancelled**: sceKernelReleaseWaitThread lets a thread go of whatever it waits in,
+told RELEASE_WAIT, the wait tidied as a timeout's is (a lightweight mutex counting one waiter fewer, those in line
+behind served), the thread running at once if it's better than the caller; its errors as recorded (NOT_WAIT for one
+ended or never started, ILLEGAL_THID for 0 and the caller, UNKNOWN_THID). threads/threads/release recorded a delay,
+a sleep and a semaphore's wait let go; every other wait is taken to go the same way, and (chosen) a thread made
+ready to run its callbacks counts as waiting still, one running them doesn't. ThreadManForUser 0xfccfad26 is
+sceKernelCancelWakeupThread (its name's hash, as pspsdk names it): the wakeups that came for a thread while it was
+awake are forgotten and counted. sceKernelCancelSema and sceKernelCancelEventFlag (which waittypes and the alarm test
+use) wake their waiters with WAIT_CANCEL and set the count or bits, a flag's waiters told the new bits.
+
+**The small ones**: sceCtrlSetIdleCancelThreshold and its getter (-1 to 128 each, kept to be read back: nothing
+dims or sleeps; a kernel address refused, PRIVILEGE_REQUIRED); sceGeEdramSetAddrTranslation (0, 0x200, 0x400, 0x800
+or 0x1000, the width there was returned, 0x400 first; VRAM's swizzled copies keep their starting layout whatever is
+set); later SDKs' sceKernelAllocMemoryBlock, FreeMemoryBlock and GetMemoryBlockPtr, listed by the NIDs games import
+(0xfe707fdf, 0x50f61d8a, 0xdb83a952, as pspautotests' `sysmem-imports.S` names them: not their names' hashes), blocks
+of the user partition like any other (types 0 and 1, options 4 bytes long, a pointer read back as 0 for a block there
+isn't, as recorded); sceImposeGetLanguageMode (what SetLanguageMode set, now kept, else English and the cross
+button, numbered as the system's settings number them: `pspimpose.h` doesn't give the values);
+sceImposeGetBatteryIconStatus (not charging, full: pspsdk names it only, so its two outputs and their values are
+chosen); sceKernelDevkitVersion (0x06060110, firmware 6.61: threads/tls/partition recorded 6.6-something, printing
+the major and minor numbers alone, "firmware 6.06"; the point release is chosen); sceKernelUSec2SysClock and its wide
+form.
+
+**Time as the PSP keeps it in system calls.** Running pspautotests' timer programs showed three things the kernel's
+timekeeping did that a PSP doesn't, each of which the new functions exposed:
+- **The clock stood still between waits.** A system function saw the time the CPU's go began (a go runs to the next
+  thing due, up to a frame), however many instructions the thread had run since: an alarm set was due sooner than
+  asked by however long the thread had been running, and a virtual timer read after the program had spun a while
+  since starting it had run 0. Now the clock catches up at each syscall to the instructions run so far in the go
+  (`Allegrex::instructionsRun`; run() adds the rest), at most a block behind.
+- **What a system function made due waited for the go to end.** A better thread's delay or timeout ending, or a
+  timer's handler, while a worse thread ran on without waiting, waited for the end of its go, a frame at most. Now
+  each syscall brings the go's end forward to the next thing due (`Allegrex::runLimit`), so it comes on time
+  (preemptuser: a better thread's 1000-microsecond delays took 1030 while main spun, where the PSP took 1020 to
+  1030).
+- **Timeouts lasted exactly what they were asked.** pspautotests' waittimeouts recorded every kind of wait alike: a
+  timeout lasts max(timeout, 205) plus about 35 microseconds (what's left written back from that), and a very short
+  one (1) times out "at once", its time not written back. The scheduling logs of the BASIC_SCHED_TEST programs show
+  "at once" is still a moment's wait in which a worse thread gets to print a line and make a call, where a
+  1-microsecond timeout of 333 cycles left it a few instructions. Now the thread manager's waits with timeouts
+  (semaphores, event flags, kernel and lightweight mutexes, message pipes, mailboxes, memory pools, a thread's end)
+  last that long; at once is taken as 30 or less, a 35-microsecond wait (the edge, which the test says moves with
+  the call and from run to run, lies between its 1 and 100). The drive's waits keep their own (part 14).
+- Running the programs through both kernels, before and after this part: of threads/ and intr/'s 167 programs with
+  recordings, 36 matched before and 72 after; of the 192 elsewhere (io, rtc, power, sysmem, ctrl, display, umd,
+  audio, misc, utility, modules, hle, video), 48 before and 55 after. Matching now: all ten threads/mutex programs,
+  scheduling/mutexhandoff and waittimeouts, alarm's alarm, set, cancel and refer, all twelve vtimers programs,
+  threads/release, semaphores' cancel and wait, mbx/receive, callbacks' afterwait, callbacks, cbtimeout and
+  waittypes, ctrl/idle, sysmem/memblock, misc/timeconv (the clock conversions), and gpu/ge/edram (run apart); and
+  with the clock alone ctrl/sampling2, audio/blocking/depth, audio/output2/frequency and rest (which had measured a
+  frame's 16.6 ms where the PSP's 1.3 pass). One line went the other way: msgpipe/trysend's receiver reads 9 ms left
+  where the PSP read 8 (likely the 35 microseconds now on its timeout, the calls in between costing nothing here).
+  display/hcount and vblanklen, which had spun for good on the stopped clock, now run to their end, their figures
+  still off (sceDisplayAdjustAccumulatedHcount missing; the blank 770 microseconds long where the PSP's is 730 to
+  740), so more of their lines differ; video/pmf stalls in both, polling more often now.
+- The test group "interrupts held off, delivered once" had stored its blank count in the word its handler counts
+  in, which went unnoticed while the clock stood still and fails now; it keeps it in a word of its own (the check
+  the same: six blanks or more held off in its 110 ms).
+
+**States**: version 11 (10 refused): the mutexes, alarms and virtual timers; each call into the program's fourth
+argument and whether it's a timer's handler (and which), as the running call's are; the controller's idle
+thresholds, the GE's translation width, the HOME menu's language and button. Loading checks a mutex held exactly
+while counted, by a thread there is that hasn't ended, 1 at most unless recursive, and a thread waiting for one
+waiting for one another thread holds, with a count it takes; an alarm with a handler; a stopped timer with no base, a
+started one's base come; no timer going off later than a call could set it; each timer marked as being called having
+exactly one call waiting or running (the running one may have lost its alarm to its own handler), and every timer's
+call a timer there is; the thresholds and width ones their functions take.
+
+Tests (`tests/psp/run-tests.sh`: 272 groups, with and without the sanitizers; `tests/psp/ares`: 286 checks;
+`tests/allegrex`, the CPU's run loop having changed: 56 groups; none failed):
+- `mutexes.cpp` (new): "mutexes called directly" (create's refusals, counts and holders, overflow, a status's
+  sizes, cancelling, deleting), "mutexes handed on in order" (both engines, both attributes: "UABCDU" and
+  "UBCADU"), "mutexes waits ending" (a recursive mutex half unlocked, a timeout, a waiter terminated, a holder ending,
+  cancel and delete), "mutexes callbacks in a wait", "mutexes state with a waiter" (saved mid-wait, carried on in a
+  fresh machine, what's left of the timeout as the PSP's), "threads released from waits" (six kinds of wait, the
+  refusals, wakeups cancelled), "semaphores and event flags cancelled".
+- `timers.cpp` (new): "alarms called directly" (a status's sizes, 64-bit times, refusals), "alarms going off" (the
+  handler's argument, global pointer and context, 1000 after each moment, 215 for at once, held off and once on
+  coming back, 100 from then), "vtimers called directly", "vtimers' handlers" (the passed handler's three calls, the
+  clocks it's told, the refusals inside it, a stopped timer's handler not called), "timers in states" (saved before
+  they're due, and with a handler's call waiting with interrupts held off, in a fresh machine: the same calls at the
+  same moments).
+- `media.cpp`: "part 28's odds and ends" (the thresholds, widths, memory blocks by their NIDs, the impose
+  functions, the firmware, the clock conversions); `states.cpp`: "state fields" changes each new field, refuses 29
+  more states and loads one more (a thread waiting for a mutex another holds); `tests/psp/ares`: a state of version
+  10 refused.
+- Broken versions each failed: mutexes always first come first served ("mutexes handed on in order"), a thread's
+  ending keeping its mutexes ("mutexes waits ending", "callbacks in a wait", "state with a waiter"), timers without
+  their 215 microseconds ("alarms going off", "vtimers' handlers"), a virtual timer behind its schedule not caught up
+  at once ("vtimers' handlers"), a mutex's holder left out of states ("mutexes called directly", "state with a
+  waiter", "threads released from waits"). Two of those runs then crashed in "state fields", whose refusals take a
+  failed load for granted; the failures came first.
+
+The games (the host Mac; the runner of `origin/local/psp-runner`, built from a scratch copy, with this branch's tree
+and with part 27's, FFmpeg on in both, 3600 frames, Start pressed at frame 120 and cross at 1800): Burnout Legends
+and Dominator, Liberty City and Vice City Stories, Peace Walker, Lumines, Midnight Club 3, SOCOM, Snoopy vs. the Red
+Baron and Gunhound EX reach the same screens in both at frames 1200, 2400 and 3000 (titles, the opening movies and
+credits, SOCOM's and Snoopy's notices that there's no saved game, Lumines' demo), movies and title backgrounds a
+moment apart, and none calls a function the kernel lacks, in either. Five import functions this part adds (Burnout
+Legends and Lumines the alarms, Peace Walker sceKernelReleaseWaitThread and sceKernelCancelWakeupThread, SOCOM the
+battery icon and the EDRAM translation, Snoopy the translation) but don't call them in that minute; the 266 games'
+report counts those that do. Burnout Legends' calls to signal and wait for semaphores in that minute fell from 36
+million each to 11 million, the time between them now counted.
+
+Left, and why:
+- scePsmf and scePsmfPlayer (19 games by the report, the top fifteen's scePsmfPlayer 0x235d8787 in 8 and scePsmf
+  0xc22c8327 in 7): no source to write them from that this part may use. pspsdk has no PSMF header, pspautotests no
+  scePsmf program, and the movie container's own fields (streams, entry points, times) are documented nowhere
+  allowed here; scePsmfPlayer's programs exist, but the player drives part 26's decoders through a playback state
+  machine of its own. A later part.
+- Every other function the report names is here. It counts 34 ThreadManForUser functions games call but names only
+  those eight; the owner's games here import two more the kernel lacks, sceKernelReferThreadRunStatus (Peace Walker)
+  and sceKernelGetThreadmanIdList (SOCOM), and seven import sceGeBreak, none calling them in their first minute. Its
+  GE work (compressed textures, bounding boxes, lines: 29 games) isn't the kernel's.
+- Seen on the way, not changed: event flags' and semaphores' create (a NULL name, attributes) and status (the size
+  word, the same copying rule as the mutex's) differ from threads/events and threads/semaphores' recordings (events'
+  cancel still differs for its status's size word alone); the lightweight mutex's other differences in
+  threads/lwmutex (its status function, its counts' refusals); sceDisplayAdjustAccumulatedHcount; what calls into
+  the kernel and into handlers cost.
+
+Uncertain: the "at once" edge (30) and its 35 microseconds' wait, the timeouts' 35 written back as part of what's
+left; whether the clock's catching up a block behind matters to a program reading it in a tight loop; an alarm due
+again in the past going off from now (from one recording); a negative count to the cancels as the initial count; a
+running timer's base after its time is set; a virtual timer's handler starting, stopping or re-setting its own
+timer; the 215 microseconds taken for virtual timers too (alarmcosts measured alarms); sceKernelGetThreadId's error
+in a handler (threads/alarm shows only that it's no thread's ID); the battery icon's outputs and the impose
+functions' numbers; and the mutex's wait type in a thread's status.
