@@ -4636,6 +4636,11 @@ else if (port->type() == "Keyboard") {
   auto lastLoadProblem() -> string {
     return loadProblem;
   }
+  auto isPspGame(const char* path) -> bool {
+    // The medium only looks: a few bytes of the file's head (an EBOOT.PBP's PARAM.SFO at most), read through a map.
+    auto medium = mia::Medium::create("PlayStation Portable");
+    return path && medium && medium->load(path) == successful;
+  }
 
   auto missingFirmware(const char* system) -> std::vector<string> {
     std::vector<string> missing;

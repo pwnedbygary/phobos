@@ -904,10 +904,58 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the PSP in the desktop program, with FFmpeg on Linux, macOS and Windows — 2026-10-06
+
+Branch `cursor/psp-desktop-2b67` (#155), on top of `cursor/psp-codecs-2b67` (#153, the entry below), with #153
+merged in as 8501415c7 and the review's fixes on top; CI's desktop build then passed on Linux, macOS and Windows,
+packages included (run 37544580853). docs/psp-core.md, part 27, describes it. Original front-end code in the desktop
+program's style; no PPSSPP or JPCSP source read.
+- **Library**: PSP games from a `psp` folder or any folder: the PSP's extensions (iso, cso, zso, dax, jso, chd, pbp,
+  elf); `.iso`, `.chd` and `.pbp`, shared with the PlayStation, are the PSP's when mia's PSP medium takes them (the
+  runner's new `ares::isPspGame`, which reads the file's head: "PSP GAME" ISOs, DVD CHDs, EBOOT.PBPs not of category
+  "ME", MIPS ELFs). An EBOOT.PBP goes by its folder's name, as in the app; PSP discs are listed one by one.
+- **Settings** (pause menu while a PSP game runs, and `settings.ini`; each from the next start): the memory stick (the
+  shared `<saves>/PlayStation Portable/Memory Stick` by default, or a folder picked), the user's fonts (none by
+  default; the folder picked, its `font` or its `flash0/font`, with how many of the 18 it holds), drawing threads
+  (Auto = all cores but one, 1-8). A failed start shows the medium's reason (`lastLoadProblem`).
+- **Controls and picture**: the pad by position (Cross south, Circle east, Square west, Triangle north, L/R, Start,
+  Select, D-pad, left stick); the keyboard's arrows, X/Z/S/A, Q/W, Enter, right Shift, and I/J/K/L now push the left
+  stick. F8 (and the menu's "Screenshot", new) saves the core's frame as a PNG in the data folder's `screenshots`.
+  The picture is drawn at the whole multiple of 480x272 nearest the window (1-4), then scaled bilinearly.
+- **FFmpeg**: `thirdparty/ffmpeg/build.sh` gains `host` for Linux and MSYS2 UCRT64 (`--target-os=mingw32` there),
+  `macos ARCH...` (each architecture, then `lipo`; `@rpath` names; macOS 11+) and `windows TOOL-PREFIX` (MinGW-w64
+  from Linux, which also needs a host C compiler); the desktop branch of CMakeLists.txt runs it, links the two shared
+  libraries, defines `ARES_ENABLE_FFMPEG`, and copies them beside `phobos` (run paths `$ORIGIN`, `@executable_path`).
+  `-DPHOBOS_FFMPEG=OFF` turns it off. The packages carry them as separate files (AppImage `usr/lib`, Phobos.app
+  `Contents/Frameworks`, beside Phobos.exe), each script checking them; desktop.yml installs nasm etc., caches the
+  build by its name and uploads FFmpeg's tarball with each package and to a tag's release. `LICENSE`'s notice says
+  where the libraries are in each package and how to swap them; README mentions the desktop's PSP and the switch.
+- **Checked (host Mac)**: Burnout Legends from boot to racing at 60 fps (menu movie, soundtrack, profile saved to the
+  memory stick, every face button, D-pad, stick, F5/F9 state round trip, the pause menu); Liberty City Stories to
+  play after its opening cutscene at 60; Midnight Club 3's title movie and profile menu (25 fps there, the core's
+  pixel filling); Space Invaders Extreme's name entry and Lumines' title at 60. The universal Phobos.app (arm64 and
+  x86_64, FFmpeg's too) ran Burnout natively and under Rosetta at 60, the libraries from Frameworks; a copy with
+  libavcodec swapped and re-signed ran too. Library scan and font folder rules checked by scratch programs.
+- **Windows and Linux (Docker, targeted: 2 GB is too little for the whole core)**: FFmpeg built by CMake for MinGW-w64
+  and for Linux arm64; the changed sources and the runner compiled for both; a program linked as Phobos.exe is
+  passed `package-windows.sh` (after linking FFmpeg's DLLs `-static`: they had needed libwinpthread-1.dll), and one
+  beside the Linux libraries found them by `$ORIGIN`. Full builds and packages are CI's.
+- **Tests**: tests/psp 259 groups, tests/psp/ares 282 checks, the app's 264 unit tests, none failed; modern release
+  APK built (23,604,918 bytes).
+- **Review and CI fixes** (CI on 8501415c7 failed only at Linux's AppImage): linuxdeploy now runs with the build
+  folder on `LD_LIBRARY_PATH` (it couldn't find libavutil for libavcodec), and the script checks both libraries are
+  files in `usr/lib` that the program and each other find by run path (checked in an x86-64 Docker container with a
+  stand-in program: the AppImage's copy found ATRAC3plus); `LICENSE` gains the MinGW-w64 runtime and winpthreads
+  notice (in LicenseNoticesTest's list, and a test of its texts); the PSP fonts label is counted when the setting
+  changes, not twice a frame; `build.sh`'s stale-lock takeover is atomic (a `takeover` mkdir inside the lock;
+  8 builds at once, 3 rounds, one takeover each). Burnout Legends again at 60 on the Mac; the app's 265 unit tests.
+- **Not checked**: a real gamepad, real PSP fonts, a PlayStation CHD in the library, the whole program run on Linux
+  and Windows, and the fixed AppImage step in CI's whole build (next push).
+
 ## PSP core: music and movies through FFmpeg — 2026-10-06
 
 Branch `cursor/psp-codecs-2b67`, on top of #152 (`cursor/psp-test-data-2b67`, the entry below, which carries
-master's desktop build and the GPL-3.0-or-later license), not pushed: commits fffd26303 (FFmpeg's build), c0f2625e4
+master's desktop build and the GPL-3.0-or-later license), PR #153: commits fffd26303 (FFmpeg's build), c0f2625e4
 (sceAtrac3plus), 332015eaa (sceMp3), e772d44a2 (movies) and the docs; then the merges of #152 and master, and the
 review's fixes. docs/psp-core.md, part 26, describes it. Original code; no PPSSPP or JPCSP source read (pspsdk,
 pspautotests' programs and recorded results, the PSP Developer Wiki, public container formats, FFmpeg's API

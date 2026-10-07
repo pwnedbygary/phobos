@@ -7,3 +7,6 @@ tests/psp/programs/*.elf binary
 tests/psp/programs/*.prx binary
 tests/psp/programs/*.PBP binary
 tests/psp/measurements/**/*.bin binary
+
+# Shell scripts run under bash on Windows too (MSYS2, where CMake builds FFmpeg): kept with LF line ends
+*.sh text eol=lf

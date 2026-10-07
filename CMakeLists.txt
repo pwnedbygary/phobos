@@ -310,6 +310,13 @@ set(ARES_ALL_SOURCES
 
 set_property(SOURCE ${ARES_ALL_SOURCES} PROPERTY COMPILE_OPTIONS "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ares/ares/ares.hpp")
 
+# FFmpeg's LGPL decoders for the PSP's music and movies (docs/psp-core.md, parts 26 and 27): built from the official
+# release by thirdparty/ffmpeg/build.sh (once, then kept in its cache) and linked as the shared libraries libavcodec and
+# libavutil, which each package carries beside Phobos, as the LGPL asks. -DPHOBOS_FFMPEG=OFF builds without them: the
+# PSP then has no music or movies, as before.
+option(PHOBOS_FFMPEG "Decode the PSP's music and movies with FFmpeg's LGPL decoders" ON)
+set(FFMPEG_BUILD ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ffmpeg/build.sh)
+
 if(ANDROID)
   add_library(phobos_android SHARED
       android/app/src/main/cpp/PhobosJNI.cpp
@@ -327,13 +334,9 @@ if(ANDROID)
 
   target_link_libraries(phobos_android PRIVATE phobos_core ${log-lib} ${android-lib} ${aaudio-lib} ${vulkan-lib} ${egl-lib} ${gles-lib} ${z-lib} ${dl-lib} adrenotools)
 
-  # FFmpeg's LGPL decoders for the PSP's music and movies (docs/psp-core.md, part 26): built from the official
-  # release by thirdparty/ffmpeg/build.sh (once, then kept in its cache) and linked as the shared libraries
-  # libavcodec.so and libavutil.so, which the APK carries beside Phobos's own library, as the LGPL asks.
-  # -DPHOBOS_FFMPEG=OFF builds without them: the PSP then has no music or movies, as before (as on the desktop).
-  option(PHOBOS_FFMPEG "Decode the PSP's music and movies with FFmpeg's LGPL decoders" ON)
+  # FFmpeg (above), for arm64-v8a with the NDK: libavcodec.so and libavutil.so, which the APK carries beside Phobos's
+  # own library.
   if(PHOBOS_FFMPEG)
-    set(FFMPEG_BUILD ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ffmpeg/build.sh)
     set(FFMPEG_NDK ${CMAKE_ANDROID_NDK})
     if(NOT FFMPEG_NDK)
       set(FFMPEG_NDK ${ANDROID_NDK})
@@ -403,12 +406,92 @@ else()
       endif()
     endif()
     configure_file(desktop/windows/phobos.rc.in ${CMAKE_CURRENT_BINARY_DIR}/phobos.rc @ONLY)
-    # Phobos.exe needs nothing beside it: the C++ runtime and winpthreads link in statically,
-    # and Vulkan is loaded at run time from the driver's vulkan-1.dll.
+    # Phobos.exe needs nothing beside it but FFmpeg's two DLLs (below): the C++ runtime and
+    # winpthreads link in statically, and Vulkan is loaded at run time from the driver's vulkan-1.dll.
     target_sources(phobos PRIVATE desktop/PlatformWindows.cpp ${CMAKE_CURRENT_BINARY_DIR}/phobos.rc)
     target_link_options(phobos PRIVATE -static $<$<CONFIG:Release>:-s>)
     # nall's registry helpers use shlwapi; its gdb server, Winsock.
     target_link_libraries(phobos PRIVATE shlwapi ws2_32)
     set_target_properties(phobos PROPERTIES WIN32_EXECUTABLE ON OUTPUT_NAME Phobos)
+  endif()
+
+  # FFmpeg (above), for the desktop: the host's own build (Linux; Windows under MSYS2), each of the Mac's architectures
+  # built and combined into universal libraries, or Windows's from Linux with MinGW-w64. The libraries are copied
+  # beside the program, under the names it loads them by (libavcodec.so.63, libavcodec.63.dylib, avcodec-63.dll), and
+  # it looks for them there (its run path is its own folder; Windows looks there first); the packages take them from
+  # there (scripts/package-*.sh).
+  if(PHOBOS_FFMPEG)
+    set(FFMPEG_ENVIRONMENT "")
+    if(APPLE)
+      set(FFMPEG_TARGET macos ${CMAKE_OSX_ARCHITECTURES})
+      if(NOT CMAKE_OSX_ARCHITECTURES)
+        set(FFMPEG_TARGET macos ${CMAKE_SYSTEM_PROCESSOR})
+      endif()
+      if(CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(FFMPEG_ENVIRONMENT MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
+      endif()
+    elseif(WIN32 AND CMAKE_CROSSCOMPILING)
+      # MinGW-w64's tools by the C compiler's name: x86_64-w64-mingw32-gcc-posix's are x86_64-w64-mingw32-.
+      get_filename_component(FFMPEG_COMPILER ${CMAKE_C_COMPILER} NAME)
+      string(REGEX REPLACE "gcc(-posix|-win32)?(\\.exe)?$" "" FFMPEG_TOOLS ${FFMPEG_COMPILER})
+      set(FFMPEG_TARGET windows ${FFMPEG_TOOLS})
+    elseif(CMAKE_CROSSCOMPILING)
+      message(FATAL_ERROR "thirdparty/ffmpeg/build.sh can't build FFmpeg for this target; -DPHOBOS_FFMPEG=OFF builds Phobos without it")
+    else()
+      set(FFMPEG_TARGET host)
+    endif()
+    set(FFMPEG_COMMAND ${CMAKE_COMMAND} -E env ${FFMPEG_ENVIRONMENT} bash ${FFMPEG_BUILD} ${FFMPEG_TARGET})
+    execute_process(
+      COMMAND ${FFMPEG_COMMAND}
+      OUTPUT_VARIABLE FFMPEG_OUTPUT
+      RESULT_VARIABLE FFMPEG_RESULT
+      OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT FFMPEG_RESULT EQUAL 0)
+      message(FATAL_ERROR "FFmpeg didn't build (above); -DPHOBOS_FFMPEG=OFF builds Phobos without it")
+    endif()
+    string(REGEX REPLACE ".*\n" "" FFMPEG_DIR "${FFMPEG_OUTPUT}")
+    # Each library: the file the program links (the shared library, or Windows's import library) and the one it loads.
+    set(FFMPEG_FILES "")
+    foreach(FFMPEG_LIBRARY avcodec avutil)
+      if(WIN32)
+        set(FFMPEG_LINKED ${FFMPEG_DIR}/lib/lib${FFMPEG_LIBRARY}.dll.a)
+        file(GLOB FFMPEG_LOADED ${FFMPEG_DIR}/bin/${FFMPEG_LIBRARY}-*.dll)
+      elseif(APPLE)
+        set(FFMPEG_LINKED ${FFMPEG_DIR}/lib/lib${FFMPEG_LIBRARY}.dylib)
+        file(GLOB FFMPEG_LOADED ${FFMPEG_DIR}/lib/lib${FFMPEG_LIBRARY}.*.dylib)
+        list(FILTER FFMPEG_LOADED INCLUDE REGEX "/lib${FFMPEG_LIBRARY}\\.[0-9]+\\.dylib$")
+      else()
+        set(FFMPEG_LINKED ${FFMPEG_DIR}/lib/lib${FFMPEG_LIBRARY}.so)
+        file(GLOB FFMPEG_LOADED ${FFMPEG_DIR}/lib/lib${FFMPEG_LIBRARY}.so.*)
+        list(FILTER FFMPEG_LOADED INCLUDE REGEX "/lib${FFMPEG_LIBRARY}\\.so\\.[0-9]+$")
+      endif()
+      list(LENGTH FFMPEG_LOADED FFMPEG_COUNT)
+      if(NOT FFMPEG_COUNT EQUAL 1)
+        message(FATAL_ERROR "FFmpeg: ${FFMPEG_DIR} doesn't hold one lib${FFMPEG_LIBRARY} to load (${FFMPEG_LOADED})")
+      endif()
+      add_library(${FFMPEG_LIBRARY} SHARED IMPORTED)
+      if(WIN32)
+        set_target_properties(${FFMPEG_LIBRARY} PROPERTIES IMPORTED_IMPLIB ${FFMPEG_LINKED} IMPORTED_LOCATION ${FFMPEG_LOADED})
+      else()
+        set_target_properties(${FFMPEG_LIBRARY} PROPERTIES IMPORTED_LOCATION ${FFMPEG_LINKED})
+      endif()
+      # (copied from the file the name leads to: on Linux and macOS it's a link to the library's full version)
+      get_filename_component(FFMPEG_NAME ${FFMPEG_LOADED} NAME)
+      get_filename_component(FFMPEG_REAL ${FFMPEG_LOADED} REALPATH)
+      add_custom_command(TARGET phobos POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${FFMPEG_REAL} $<TARGET_FILE_DIR:phobos>/${FFMPEG_NAME})
+      list(APPEND FFMPEG_FILES ${FFMPEG_LINKED} ${FFMPEG_LOADED})
+    endforeach()
+    # Built again should the cache have gone since CMake ran (a no-op otherwise).
+    add_custom_target(ffmpeg COMMAND ${FFMPEG_COMMAND} BYPRODUCTS ${FFMPEG_FILES} VERBATIM)
+    add_dependencies(phobos_core ffmpeg)
+    target_include_directories(phobos_core SYSTEM PRIVATE ${FFMPEG_DIR}/include)
+    target_compile_definitions(phobos_core PRIVATE ARES_ENABLE_FFMPEG)
+    target_link_libraries(phobos PRIVATE avcodec avutil)
+    if(APPLE)
+      set_target_properties(phobos PROPERTIES BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "@executable_path")
+    elseif(NOT WIN32)
+      set_target_properties(phobos PROPERTIES BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "$ORIGIN")
+    endif()
   endif()
 endif()

@@ -28,7 +28,7 @@ class LicenseNoticesTest {
         val expected = listOf(
             "MAME (portions)", "paraLLEl-RDP", "volk", "sse2neon", "miniz", "Zstandard", "libadrenotools",
             "Vulkan-Headers", "puff", "Systematic console icons", "ZX Spectrum", "Android and Kotlin libraries", "C-BIOS",
-            "FFmpeg",
+            "FFmpeg", "MinGW-w64 runtime",
         )
         for (name in expected) assertTrue("no notice for $name", titles.any { it.startsWith(name) })
     }
@@ -51,6 +51,15 @@ class LicenseNoticesTest {
         val decoders = Regex("--enable-decoder=(\\S+)").find(build)!!.groupValues[1].split(",")
         assertEquals(listOf("atrac3", "atrac3p", "mp3float", "h264"), decoders)
         assertTrue("the notice lists the decoders built", flat.contains("the decoders atrac3, atrac3p, mp3float and h264."))
+    }
+
+    @Test fun mingwsNoticeCarriesTheRuntimesAndWinpthreadsTexts() {
+        val mingw = parseLicenseNotices(File("../../LICENSE").readText()).single { it.title.startsWith("MinGW-w64 runtime") }
+        val flat = mingw.text.replace(Regex("\\s+"), " ")
+        assertTrue("the runtime's notices", flat.contains("statically linked against the MinGW-w64 runtime"))
+        assertTrue("its overall (ZPL) notice", flat.contains("Copyright (c) 2009, 2010, 2011, 2012, 2013 by the mingw-w64 project"))
+        assertTrue("winpthreads' (MIT) notice", flat.contains("Copyright (c) 2011 mingw-w64 project"))
+        assertTrue("winpthreads' Lockless part", flat.contains("(C) 2010 Lockless Inc."))
     }
 
     @Test fun copyingIsTheGplVersion3() {

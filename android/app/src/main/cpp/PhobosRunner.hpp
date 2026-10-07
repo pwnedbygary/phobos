@@ -128,6 +128,9 @@ namespace ares {
   auto missingFirmware(const char* system) -> std::vector<string>;
   // Why the last initialize() failed, when the game's medium said (a sentence for the player); empty otherwise.
   auto lastLoadProblem() -> string;
+  // Whether the file at [path] is a PSP game by what's in it, as mia's PSP medium tells (the PlayStation's games share
+  // .iso, .chd and .pbp with the PSP's): an ISO for a "PSP GAME", a DVD's CHD, a PSP program's EBOOT.PBP or ELF.
+  auto isPspGame(const char* path) -> bool;
   auto setCustomDriverPath(const char* path) -> void;
   auto loadSecondaryRom(const char* systemName, const char* uri) -> bool;
   // The sides of the LaserActive disc being played (its .mmi's media, in order); empty for other systems.

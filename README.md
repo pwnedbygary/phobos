@@ -151,6 +151,11 @@ without FFmpeg, and so without the PSP's music and movies:
 ./gradlew assembleRelease -Pphobos.ffmpeg=OFF
 ```
 
+The desktop program (`desktop/`, built with CMake from the repository's root: Linux, macOS and Windows) plays PSP
+games too, from a `psp` folder or any folder (they're told from the PlayStation's by what's in them), and builds
+FFmpeg the same way, for the build's own platform; its two libraries go beside the program. `-DPHOBOS_FFMPEG=OFF`
+builds it without them.
+
 High-level Components
 ---------------------
 

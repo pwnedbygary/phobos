@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <fstream>
 #include <map>
+#include <set>
 #include <span>
 #include <system_error>
 #include <vector>
@@ -157,6 +158,70 @@ auto firmwareName(const std::string& key) -> std::string {
   if (key == "fw_mcd") return "Mega CD BIOS";
   if (key == "fw_sgb") return "Super Game Boy cartridge";
   return key;
+}
+
+static auto lowercase(std::string text) -> std::string {
+  std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+  return text;
+}
+
+// One of the PSP's fonts by its name, whatever its case (PspFonts.NAMES).
+static auto isPspFont(const std::string& fileName) -> bool {
+  auto name = lowercase(fileName);
+  if (name == "jpn0.pgf" || name == "kr0.pgf") return true;
+  for (int n = 0; n < 16; n++) {
+    if (name == "ltn" + std::to_string(n) + ".pgf") return true;
+  }
+  return false;
+}
+
+// What's in `folder`, stepped through without exceptions: a share that goes away part way gives what was read.
+static auto entriesOf(const fs::path& folder) -> std::vector<fs::directory_entry> {
+  std::vector<fs::directory_entry> entries;
+  std::error_code error;
+  fs::directory_iterator entry(folder, fs::directory_options::skip_permission_denied, error);
+  for (; !error && entry != fs::directory_iterator(); entry.increment(error)) entries.push_back(*entry);
+  return entries;
+}
+
+// The folder named `name` in `folder`, whatever its case; empty when there's none.
+static auto childFolder(const fs::path& folder, const std::string& name) -> fs::path {
+  std::error_code error;
+  for (auto& entry : entriesOf(folder)) {
+    if (entry.is_directory(error) && lowercase(fromPath(entry.path().filename())) == name) return entry.path();
+  }
+  return {};
+}
+
+auto pspFontFolder(const std::string& picked) -> std::string {
+  if (picked.empty()) return {};
+  fs::path root = toPath(picked);
+  std::vector<fs::path> folders = {root, childFolder(root, "font")};
+  if (auto flash0 = childFolder(root, "flash0"); !flash0.empty()) folders.push_back(childFolder(flash0, "font"));
+  for (auto& folder : folders) {
+    if (folder.empty()) continue;
+    std::error_code error;
+    for (auto& entry : entriesOf(folder)) {
+      if (entry.is_regular_file(error) && isPspFont(fromPath(entry.path().filename()))) return fromPath(folder);
+    }
+  }
+  return {};
+}
+
+// The biggest file taken for a font: the biggest of the PSP's, jpn0.pgf, is 1.5 MB (PspFonts.MAX_BYTES).
+static constexpr std::uintmax_t largestPspFont = 4 * 1024 * 1024;
+
+auto pspFontCount(const std::string& folder) -> int {
+  std::error_code error;
+  std::set<std::string> names;
+  if (folder.empty()) return 0;
+  for (auto& entry : entriesOf(toPath(folder))) {
+    auto name = fromPath(entry.path().filename());
+    if (!entry.is_regular_file(error) || !isPspFont(name)) continue;
+    auto size = entry.file_size(error);
+    if (!error && size > 0 && size <= largestPspFont) names.insert(lowercase(name));
+  }
+  return (int)names.size();
 }
 
 }
