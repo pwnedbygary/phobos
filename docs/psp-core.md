@@ -3973,7 +3973,8 @@ player's wait due no later than a header's reading could take.
   GetAudioInfo answer from the current stream's entry; the EP map read is the video stream selected last's, its
   positions the pack counts as stored (not bytes), an index past it 0x80615100, the entry for a time the last not
   after it, a time before the start 0x80615500; PCM is private IDs 0x10-0x1f and user data 0x20-0x2f (and anything
-  else); no marks (none seen, their layout unknown).
+  else); no marks (none seen, their layout unknown); an EP map not lying whole inside the header is none, and an end
+  before the start is the start (both after review, below).
 - scePsmfPlayer: Create checks the priority before the size; SetTempBuf checks the status before the size, and the
   size whatever the address; a negative sound stream at Start plays without sound (-1 and -1 reported); Start's
   modes past 5 refused in a full movie too, as are negative times; switching streams (Select*) needs two streams of
@@ -4042,6 +4043,36 @@ fourteen imports scePsmfPlayer (the eight games of the report that call scePsmfP
   function then missing); Ace Combat X and WipEout's collection stop at ThreadManForUser functions not written yet
   (0xffc36a14, 0x94416130), and Ace Combat Joint Assault is black at 50 seconds, as in the report, nothing noted.
   None of the four loads the player's library in that time.
+
+**After review** (commit 617d34e48). An independent audit of this part found the clean room kept (the design
+independent, the account of how it was made accurate) and three faults, each needing a malformed movie, none in the
+owner's games. Its author had read the emulators' sources, so its report wasn't read here: the owner passed on its
+findings in their own words, and the fixes are this part's own.
+- An EP map's size, the header's entry count times 10, was worked out in 32 bits: a count of 0x1999999a came to
+  4 bytes and passed the check that the map is in memory, so scePsmfGetEPWithId copied host memory past it into the
+  game's, and scePsmfGetEPidWithTimestamp walked 429 million entries in one call. The size is now worked out in 64
+  bits, and a map must lie whole inside the header (before its stream's offset), all of it in the game's memory,
+  else there's none; a walk over it reads it once. (The player's own walks already bounded it so.)
+- An access unit whose next delimiter never came grew without limit, the program stream read into it to its end,
+  its end searched for from its start again after every pack (seconds at 8 MiB). A unit is now cut at 2 MiB (H.264's
+  level 3, the most the PSP's decoder takes, keeps a coded picture within 1.5 MB), and the search goes on from where
+  it had got to. The sound had the same fault, found while fixing this one: frames whose headers had gone were
+  searched for from the start after every pack read, and all kept; the bytes passed over are now dropped as they're
+  searched, their last time stamp kept for what follows.
+- A presentation's end before its start made its length negative (GetPsmfInfo's time; Start's check of a start
+  time). The end is now taken as the start when a header is read, scePsmfGetPresentationEndTime's answer too, and
+  GetPsmfInfo gives 0 for a presentation shorter than a picture.
+
+"psmf malformed movies" (new) has each: a program on both engines reading the wrapped map (no map, nothing written),
+a map one entry past the header (none) and one filling it to its last entry (read); a unit of 5 MiB with no
+delimiter after it (cut at 2 MiB, the movie playing on to its next picture and its end, the video held never much
+past the cut); 3000 sound frames without headers (the pictures playing on, none of it held); ends before the start
+and under a picture after it. "psmf headers" checks an end before the start. Each fix undone fails them, but for the
+search going on from where it had got to, which the 2 MiB cut bounds and only time shows (that unit in 537 ms
+searched from its start each time, 5 ms now; the sound's frames in 651 ms, 4 ms now). tests/psp 290 groups with the
+sanitizers, with FFmpeg and without, tests/psp/ares 294 checks both ways, none failed; pspautotests' video/psmfplayer
+gives the same output, byte for byte, as before (19 of 22 as the PSP), on both engines, and video/mpeg's programs
+too; Peace Walker's opening movie, run to frame 9000, gives the same pictures and sound as commit 16f6d257f's.
 
 **Left, and why**:
 - The player meeting a game: the report's eight scePsmfPlayerCreate games are neither on this Mac nor among the

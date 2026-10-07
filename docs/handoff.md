@@ -56,6 +56,11 @@ seen and no emulator's code read.
   stood-in psmf.prx, at 60 fps with its sound running; Chili Con Carnage (not on this Mac) loads psmf.prx too and
   now plays its opening movie and the Eidos logo to a Memory Stick warning (black in the compatibility run). Ace
   Combat X and WipEout stop at ThreadManForUser 0xffc36a14 and 0x94416130; no game tried loads the player's library.
+- **After review** (617d34e48; the audit's findings in the owner's words, its report unread): an EP map's size in 64
+  bits and the map kept inside the header (a wrapped count had copied host memory and walked 429 million entries);
+  an access unit cut at 2 MiB and its end searched for once (it had grown without limit, searched quadratically),
+  and sound frames without headers passed over once; an end before the start taken as the start. New group "psmf
+  malformed movies"; tests/psp 290 groups, tests/psp/ares 294, none failed; pspautotests and Peace Walker unchanged.
 - **Left**: the player meeting a game (the report's 8 player games are neither here nor among the device's games
   tried), LocoRoco 2's GetPsmfInfo variant, PCM sound, marks, the unknown NID 0x340c12cb's real behaviour, the
   start-up's and loops' real timing, and the choices on the specification's uncertainties (part 31 lists them),
