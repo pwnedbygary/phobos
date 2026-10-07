@@ -1,21 +1,50 @@
-//Binning: which of the batch's jobs reach each tile of 16x16 pixels, a bit a job (the box it may cover against the
-//tile's), 32 jobs to a word. raster.comp then takes, for its tile, only the jobs whose bits are set, in order.
-//A workgroup's threads each make one word of one tile: the y of the workgroup is the tile, x the words.
+//Binning: which of the batch's jobs reach each tile of 16x16 pixels, a bit a job, 32 jobs to a word (the bins start
+//cleared: gpu.cpp). raster.comp then takes, for its tile, only the jobs whose bits are set, in order.
+//Each thread is one job, which sets its bit in the bins of the tiles it reaches, so the work is as the tiles each job
+//reaches, not every tile by every job: a small triangle's one or two tiles.
+//
+//A job reaches a tile where its box meets the tile's; a triangle, besides, only where none of its edges has every
+//pixel of that meeting outside it. An edge's function is a sum of x and y each times a whole number (raster.comp's
+//reaches()), so over the pixels of a box it's largest at one corner of it (the right one where a is positive, else
+//the left; the bottom where b is, else the top): if it's below the edge's least there, it is at every pixel, and no
+//pixel of the tile is inside. The same exact sums raster.comp makes, so a tile left out is one where it would have
+//drawn nothing.
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+bool triangleReaches(uint job, int left, int top, int right, int bottom) {
+  uint least = jobWord(job, TriangleLeast);
+  for(uint k = 0u; k < 3u; k++) {
+    uint from = (k + 1u) % 3u;
+    int a = jobInt(job, TriangleA + k), b = jobInt(job, TriangleB + k);
+    int dx = (a > 0 ? right : left) * 16 + 8 - jobInt(job, TriangleX + from);
+    int dy = (b > 0 ? bottom : top) * 16 + 8 - jobInt(job, TriangleY + from);
+    uvec2 edge = wideAdd(wideProduct(a, dx), wideProduct(b, dy));
+    if(wideNegative(edge) || ((least >> k & 1u) != 0u && wideZero(edge))) return false;
+  }
+  return true;
+}
+
 void main() {
-  uint word = gl_GlobalInvocationID.x, tile = gl_WorkGroupID.y;
-  if(word >= parameters.wordsPerTile) return;
-  int left = parameters.tileLeft + int(tile % parameters.tilesAcross) * TileSize;
-  int top = parameters.tileTop + int(tile / parameters.tilesAcross) * TileSize;
-  uint reaching = 0u;
-  for(uint bit = 0u; bit < 32u; bit++) {
-    uint job = word * 32u + bit;
-    if(job >= parameters.jobCount) break;
-    if(jobInt(job, JobLastX) >= left && jobInt(job, JobFirstX) < left + TileSize &&
-       jobInt(job, JobLastY) >= top && jobInt(job, JobFirstY) < top + TileSize) {
-      reaching |= 1u << bit;
+  uint job = gl_GlobalInvocationID.x;
+  if(job >= parameters.jobCount) return;
+  int firstX = max(jobInt(job, JobFirstX), parameters.areaLeft);
+  int lastX = min(jobInt(job, JobLastX), parameters.areaRight);
+  int firstY = max(jobInt(job, JobFirstY), parameters.areaTop);
+  int lastY = min(jobInt(job, JobLastY), parameters.areaBottom);
+  if(firstX > lastX || firstY > lastY) return;
+  bool triangle = (jobWord(job, JobKind) & 0xffu) == 1u;
+  uint word = job >> 5, bit = 1u << (job & 31u);
+  int tileLeft = (firstX - parameters.tileLeft) / TileSize, tileRight = (lastX - parameters.tileLeft) / TileSize;
+  int tileTop = (firstY - parameters.tileTop) / TileSize, tileBottom = (lastY - parameters.tileTop) / TileSize;
+  for(int ty = tileTop; ty <= tileBottom; ty++) {
+    int top = parameters.tileTop + ty * TileSize;
+    for(int tx = tileLeft; tx <= tileRight; tx++) {
+      int left = parameters.tileLeft + tx * TileSize;
+      if(triangle && !triangleReaches(job, max(firstX, left), max(firstY, top), min(lastX, left + TileSize - 1),
+                                      min(lastY, top + TileSize - 1))) {
+        continue;
+      }
+      atomicOr(bins[(uint(ty) * parameters.tilesAcross + uint(tx)) * parameters.wordsPerTile + word], bit);
     }
   }
-  bins[tile * parameters.wordsPerTile + word] = reaching;
 }

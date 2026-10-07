@@ -65,17 +65,30 @@ struct VulkanDevice : GPU::Device {
   u32 family = 0;
   VkPhysicalDeviceMemoryProperties memoryTypes{};
   std::string deviceName;
-  Buffer buffers[Bindings];
+  Buffer vramBuffer, texelBuffer;  //every run's
+  //A run's own: its records, bins and parameters, the descriptor set naming them (with VRAM and the texels), its
+  //commands, and the fence it signals. Runs go round the slots, so the host fills one while the GPU draws the others.
+  struct Slot {
+    Buffer records, bins, parameters;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    bool stale = true;  //a buffer was made again since the set was written
+    VkCommandBuffer commands = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    bool busy = false;   //submitted, not yet waited for
+    bool first = false;  //(a pipeline runs for the first time in it: FirstTimeout)
+    u32 pipelines = 0;   //(those it ran, a bit each)
+  };
+  static constexpr u32 Slots = 3;
+  Slot slots[Slots];
+  u32 next = 0;     //the slot the next run is filled into
+  u32 oldest = 0;   //(the busy slots are oldest, oldest + 1, ..., next - 1, round)
   VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
   VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-  VkDescriptorSet set = VK_NULL_HANDLE;
-  bool setStale = true;  //a buffer was made again since the set was written
   VkShaderModule modules[3] = {};      //bin, raster, probe
   VkPipeline pipelines[3] = {};
   VkCommandPool commandPool = VK_NULL_HANDLE;
-  VkCommandBuffer commands = VK_NULL_HANDLE;
-  VkFence fence = VK_NULL_HANDLE;
+  VkCommandBuffer commands = VK_NULL_HANDLE;  //(the one being recorded: submit())
   bool keepsDenormals = false;  //the shaders run with DenormPreserve 32 (the device has float controls that can)
   bool timedOut = false;  //a run never finished: what it uses may still be in use, so nothing is destroyed
   //How long a run is waited for, in nanoseconds: one takes milliseconds, but a pipeline's first may take seconds, as
@@ -89,8 +102,11 @@ struct VulkanDevice : GPU::Device {
       vk.vkDeviceWaitIdle(device);
       for(auto pipeline : pipelines) if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
       for(auto module : modules) if(module) vk.vkDestroyShaderModule(device, module, nullptr);
-      for(auto& buffer : buffers) release(buffer);
-      if(fence) vk.vkDestroyFence(device, fence, nullptr);
+      release(vramBuffer), release(texelBuffer);
+      for(auto& slot : slots) {
+        release(slot.records), release(slot.bins), release(slot.parameters);
+        if(slot.fence) vk.vkDestroyFence(device, slot.fence, nullptr);
+      }
       if(commandPool) vk.vkDestroyCommandPool(device, commandPool, nullptr);
       if(descriptorPool) vk.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
       if(pipelineLayout) vk.vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -104,7 +120,8 @@ struct VulkanDevice : GPU::Device {
     return "Vulkan: " + deviceName + (keepsDenormals ? " (DenormPreserve)" : "");
   }
 
-  //A buffer of size bytes in memory the host sees (coherent: no flushing), the GPU's own where it can be.
+  //A buffer of size bytes in memory the host sees (coherent: no flushing), the GPU's own where it can be. One a run
+  //submitted may use is never made again (wait() first).
   auto make(Buffer& buffer, VkDeviceSize size, VkBufferUsageFlags usage) -> bool {
     release(buffer);
     auto info = made<VkBufferCreateInfo>(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
@@ -129,7 +146,6 @@ struct VulkanDevice : GPU::Device {
     if(vk.vkBindBufferMemory(device, buffer.buffer, buffer.memory, 0) != VK_SUCCESS) return false;
     if(vk.vkMapMemory(device, buffer.memory, 0, VK_WHOLE_SIZE, 0, &buffer.mapped) != VK_SUCCESS) return false;
     buffer.size = size;
-    setStale = true;
     return true;
   }
   auto release(Buffer& buffer) -> void {
@@ -138,18 +154,55 @@ struct VulkanDevice : GPU::Device {
     buffer = {};
   }
   //A storage buffer at least words long, made again (larger) if it isn't; nullptr if that fails.
-  auto atLeast(Buffer& buffer, u32 words) -> u32* {
+  auto atLeast(Slot& slot, Buffer& buffer, u32 words) -> u32* {
     VkDeviceSize size = std::max<VkDeviceSize>(u64(words) * 4, 16);
-    if(buffer.size < size && !make(buffer, std::max(size, buffer.size * 2), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) {
-      return nullptr;
+    if(buffer.size < size) {
+      if(!make(buffer, std::max(size, buffer.size * 2), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) return nullptr;
+      slot.stale = true;
     }
     return (u32*)buffer.mapped;
   }
 
-  auto vram() -> u8* override { return (u8*)buffers[VRAMBinding].mapped; }
-  auto records(u32 words) -> u32* override { return atLeast(buffers[RecordBinding], words); }
-  auto texels() -> u32* override { return (u32*)buffers[TexelBinding].mapped; }
-  auto bins(u32 words) -> u32* override { return atLeast(buffers[BinBinding], words); }
+  //The oldest busy slot waited for (false: the GPU lost, or the wait failed).
+  auto waitOldest() -> bool {
+    Slot& slot = slots[oldest];
+    if(!slot.busy) return true;
+    VkResult waited = vk.vkWaitForFences(device, 1, &slot.fence, VK_TRUE, slot.first ? FirstTimeout : Timeout);
+    if(waited == VK_TIMEOUT) return lost = timedOut = true, false;  //(the fence still waited on: left as it is)
+    if(waited == VK_ERROR_DEVICE_LOST) return lost = true, false;
+    if(waited != VK_SUCCESS) return lost = true, false;
+    vk.vkResetFences(device, 1, &slot.fence);
+    for(u32 n = 0; n < 3; n++) ran[n] |= slot.pipelines >> n & 1;
+    slot.busy = false;
+    oldest = (oldest + 1) % Slots;
+    return true;
+  }
+  //The next run's slot, free: the runs before it in it waited for (nullptr: the GPU lost).
+  auto free() -> Slot* {
+    if(lost) return nullptr;
+    while(slots[next].busy) {
+      if(!waitOldest()) return nullptr;
+    }
+    return &slots[next];
+  }
+
+  auto vram() -> u8* override { return (u8*)vramBuffer.mapped; }
+  auto records(u32 words) -> u32* override {
+    auto slot = free();
+    return slot ? atLeast(*slot, slot->records, words) : nullptr;
+  }
+  auto texels() -> u32* override { return (u32*)texelBuffer.mapped; }
+  auto bins(u32 words) -> u32* override {
+    auto slot = free();
+    return slot ? atLeast(*slot, slot->bins, words) : nullptr;
+  }
+  auto finish() -> bool override {
+    if(lost) return false;
+    while(slots[oldest].busy) {
+      if(!waitOldest()) return false;
+    }
+    return true;
+  }
 
   auto create(std::string& error) -> bool {
     if(volkInitialize() != VK_SUCCESS) return error = "no Vulkan loader", false;
@@ -238,13 +291,14 @@ struct VulkanDevice : GPU::Device {
     volkLoadDeviceTable(&vk, device);
     vk.vkGetDeviceQueue(device, family, 0, &queue);
 
-    if(!make(buffers[VRAMBinding], Memory::VRAMSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) ||
-       !make(buffers[RecordBinding], 1 << 20, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) ||
-       !make(buffers[TexelBinding], u64(GPU::TexelWords) * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) ||
-       !make(buffers[BinBinding], 1 << 20, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) ||
-       !make(buffers[ParameterBinding], sizeof(GPU::Parameters), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) {
-      return error = "the GPU's buffers weren't made", false;
+    bool buffersMade = make(vramBuffer, Memory::VRAMSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) &&
+                make(texelBuffer, u64(GPU::TexelWords) * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    for(auto& slot : slots) {
+      buffersMade = buffersMade && make(slot.records, 1 << 20, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) &&
+             make(slot.bins, 1 << 20, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) &&
+             make(slot.parameters, sizeof(GPU::Parameters), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     }
+    if(!buffersMade) return error = "the GPU's buffers weren't made", false;
 
     VkDescriptorSetLayoutBinding bindings[Bindings];
     for(u32 n = 0; n < Bindings; n++) {
@@ -261,15 +315,20 @@ struct VulkanDevice : GPU::Device {
     if(vk.vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
       return error = "no pipeline layout", false;
     }
-    VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}};
+    VkDescriptorPoolSize sizes[2] = {
+      {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * Slots}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, Slots}};
     auto poolInfo = made<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
-    poolInfo.maxSets = 1, poolInfo.poolSizeCount = 2, poolInfo.pPoolSizes = sizes;
+    poolInfo.maxSets = Slots, poolInfo.poolSizeCount = 2, poolInfo.pPoolSizes = sizes;
     if(vk.vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
       return error = "no descriptor pool", false;
     }
-    auto setInfo = made<VkDescriptorSetAllocateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
-    setInfo.descriptorPool = descriptorPool, setInfo.descriptorSetCount = 1, setInfo.pSetLayouts = &setLayout;
-    if(vk.vkAllocateDescriptorSets(device, &setInfo, &set) != VK_SUCCESS) return error = "no descriptor set", false;
+    for(auto& slot : slots) {
+      auto setInfo = made<VkDescriptorSetAllocateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+      setInfo.descriptorPool = descriptorPool, setInfo.descriptorSetCount = 1, setInfo.pSetLayouts = &setLayout;
+      if(vk.vkAllocateDescriptorSets(device, &setInfo, &slot.set) != VK_SUCCESS) {
+        return error = "no descriptor set", false;
+      }
+    }
 
     struct Code { const u32* words; size_t size; } codes[3] = {
       {GPUShaders::binSPIRV, sizeof(GPUShaders::binSPIRV)},
@@ -295,20 +354,21 @@ struct VulkanDevice : GPU::Device {
     if(vk.vkCreateCommandPool(device, &commandPoolInfo, nullptr, &commandPool) != VK_SUCCESS) {
       return error = "no command pool", false;
     }
-    auto commandInfo = made<VkCommandBufferAllocateInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
-    commandInfo.commandPool = commandPool, commandInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    commandInfo.commandBufferCount = 1;
-    if(vk.vkAllocateCommandBuffers(device, &commandInfo, &commands) != VK_SUCCESS) {
-      return error = "no command buffer", false;
+    for(auto& slot : slots) {
+      auto commandInfo = made<VkCommandBufferAllocateInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+      commandInfo.commandPool = commandPool, commandInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+      commandInfo.commandBufferCount = 1;
+      if(vk.vkAllocateCommandBuffers(device, &commandInfo, &slot.commands) != VK_SUCCESS) {
+        return error = "no command buffer", false;
+      }
+      auto fenceInfo = made<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+      if(vk.vkCreateFence(device, &fenceInfo, nullptr, &slot.fence) != VK_SUCCESS) return error = "no fence", false;
     }
-    auto fenceInfo = made<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
-    if(vk.vkCreateFence(device, &fenceInfo, nullptr, &fence) != VK_SUCCESS) return error = "no fence", false;
     return true;
   }
 
   auto configure(bool fused, bool nativeFma) -> bool override {
-    if(lost) return false;
-    vk.vkDeviceWaitIdle(device);
+    if(!finish()) return false;
     u32 values[2] = {fused, nativeFma};
     VkSpecializationMapEntry entries[2] = {{0, 0, 4}, {1, 4, 4}};
     VkSpecializationInfo specialization{2, entries, sizeof(values), values};
@@ -326,47 +386,50 @@ struct VulkanDevice : GPU::Device {
     return true;
   }
 
-  //The commands recorded by record(commands), using the pipelines first to last, run, and waited for; the buffers'
-  //bindings written first if a buffer was made again.
+  //The commands recorded by record(commands), using the pipelines first to last, submitted in the next slot (its
+  //descriptor set written first if one of its buffers was made again), and not waited for. The run before it may
+  //still be drawing: what it wrote is made visible to this one's shaders first (barrier()), and what this one's
+  //shaders write to the host once it's done.
   template<typename Record>
   auto submit(const GPU::Parameters& parameters, u32 first, u32 last, const Record& record) -> bool {
-    if(lost) return false;
-    std::memcpy(buffers[ParameterBinding].mapped, &parameters, sizeof(parameters));
-    if(setStale) {
+    auto slot = free();
+    if(!slot) return false;
+    std::memcpy(slot->parameters.mapped, &parameters, sizeof(parameters));
+    if(slot->stale) {
+      Buffer* named[Bindings] = {&vramBuffer, &slot->records, &texelBuffer, &slot->bins, &slot->parameters};
       VkDescriptorBufferInfo infos[Bindings];
       VkWriteDescriptorSet writes[Bindings];
       for(u32 n = 0; n < Bindings; n++) {
-        infos[n] = {buffers[n].buffer, 0, VK_WHOLE_SIZE};
+        infos[n] = {named[n]->buffer, 0, VK_WHOLE_SIZE};
         writes[n] = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-        writes[n].dstSet = set, writes[n].dstBinding = n, writes[n].descriptorCount = 1;
+        writes[n].dstSet = slot->set, writes[n].dstBinding = n, writes[n].descriptorCount = 1;
         writes[n].descriptorType = n == ParameterBinding ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
                                                          : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[n].pBufferInfo = &infos[n];
       }
       vk.vkUpdateDescriptorSets(device, Bindings, writes, 0, nullptr);
-      setStale = false;
+      slot->stale = false;
     }
+    commands = slot->commands;
     vk.vkResetCommandBuffer(commands, 0);
     auto begin = made<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vk.vkBeginCommandBuffer(commands, &begin);
-    vk.vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &set, 0, nullptr);
+    barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    vk.vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &slot->set, 0,
+                               nullptr);
     record();
     barrier(VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);  //(what the shaders wrote, for the host)
     vk.vkEndCommandBuffer(commands);
     auto submitInfo = made<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
     submitInfo.commandBufferCount = 1, submitInfo.pCommandBuffers = &commands;
-    VkResult submitted = vk.vkQueueSubmit(queue, 1, &submitInfo, fence);
+    VkResult submitted = vk.vkQueueSubmit(queue, 1, &submitInfo, slot->fence);
     if(submitted == VK_ERROR_DEVICE_LOST) return lost = true, false;
     if(submitted != VK_SUCCESS) return false;
-    bool warm = true;
-    for(u32 n = first; n <= last; n++) warm &= ran[n];
-    VkResult waited = vk.vkWaitForFences(device, 1, &fence, VK_TRUE, warm ? Timeout : FirstTimeout);
-    if(waited == VK_TIMEOUT) return lost = timedOut = true, false;  //(the fence still waited on: left as it is)
-    if(waited == VK_ERROR_DEVICE_LOST) return lost = true, false;
-    vk.vkResetFences(device, 1, &fence);
-    if(waited != VK_SUCCESS) return false;
-    for(u32 n = first; n <= last; n++) ran[n] = true;
+    slot->busy = true;
+    slot->pipelines = 0, slot->first = false;
+    for(u32 n = first; n <= last; n++) slot->pipelines |= 1 << n, slot->first |= !ran[n];
+    next = (next + 1) % Slots;
     return true;
   }
   auto barrier(VkPipelineStageFlags stage, VkAccessFlags access) -> void {
@@ -379,7 +442,7 @@ struct VulkanDevice : GPU::Device {
   auto draw(const GPU::Parameters& p) -> bool override {
     return submit(p, 0, 1, [&] {
       vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[0]);
-      vk.vkCmdDispatch(commands, (p.wordsPerTile + 63) / 64, p.tilesAcross * p.tilesDown, 1);
+      vk.vkCmdDispatch(commands, (p.jobCount + 63) / 64, 1, 1);
       barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
       vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[1]);
       vk.vkCmdDispatch(commands, p.tilesAcross, p.tilesDown, 1);
@@ -389,7 +452,7 @@ struct VulkanDevice : GPU::Device {
     return submit(p, 2, 2, [&] {
       vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[2]);
       vk.vkCmdDispatch(commands, (p.probeCount + 63) / 64, 1, 1);
-    });
+    }) && finish() && (next = oldest = (next + Slots - 1) % Slots, true);  //(its bins read: its slot next again)
   }
 };
 

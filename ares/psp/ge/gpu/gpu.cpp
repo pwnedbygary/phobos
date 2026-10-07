@@ -31,7 +31,7 @@ namespace Record {
     JobWords = 64,
     JobKind = 0, JobLook = 1, JobFirstX = 2, JobLastX = 3, JobFirstY = 4, JobLastY = 5,
     SpriteZ = 6, SpriteColor = 7, SpriteSpecular = 8, SpriteLeftFog = 9, SpriteRightFog = 10, SpriteMiddle = 11,
-    SpriteTurned = 12, SpriteColumns = 13, SpriteRows = 14,
+    SpriteTurned = 12, SpriteColumns = 13, SpriteRows = 14, SpriteDivided = 15,
     PointX = 6, PointY = 7, PointZ = 8, PointColor = 9, PointSpecular = 10, PointFog = 11, PointU = 12, PointV = 13,
     TriangleX = 6, TriangleY = 9, TriangleA = 12, TriangleB = 15, TriangleLeast = 18, TriangleTotal = 19,
     TriangleFlags = 20, TriangleFlatColor = 21, TriangleFlatSpecular = 22, TriangleColor = 23, TriangleSpecular = 26,
@@ -274,15 +274,38 @@ auto GPU::lookFor(const GE::Look& look) -> u32 {
   return index;
 }
 
-//The job into the run, if the GPU can draw it: its record, and a sprite's texel axes.
-auto GPU::take(const GE::Job& job) -> bool {
+//The job into the run, if the GPU can draw it: its record, and a sprite's texel axes. A line: a point's record for
+//each of its pixels, their values worked out by the software renderer's own code (GE::linePixels()), so that only
+//the texture and the pixel pipeline are the GPU's, as for any point.
+auto GPU::take(GE& ge, const GE::Job& job) -> bool {
   using namespace Record;
   auto& look = *job.look;
-  if(job.kind == GE::Job::Kind::Line) return statistics.lines++, false;
-  if(job.kind == GE::Job::Kind::Sprite && look.textured && job.sprite.divided) {
+  if(look.textured && !look.decoded) return false;  //(only drawn at once, never in a batch: primitive())
+  if(job.kind == GE::Job::Kind::Line) {
+    ge.linePixels(job, job.firstY, job.lastY, linePixels);
+    if(linePixels.empty()) return true;
+    u32 index = lookFor(look);
+    for(auto& pixel : linePixels) {
+      u32 at = jobs.size();
+      jobs.resize(at + JobWords);
+      u32* w = &jobs[at];
+      w[JobKind] = Point | u32(job.linear) << 8, w[JobLook] = index;
+      w[JobFirstX] = w[JobLastX] = w[PointX] = pixel.x;
+      w[JobFirstY] = w[JobLastY] = w[PointY] = pixel.y;
+      w[PointZ] = pixel.z, w[PointColor] = pixel.color, w[PointSpecular] = pixel.specular, w[PointFog] = pixel.fog;
+      w[PointU] = bitsOf(pixel.u), w[PointV] = bitsOf(pixel.v);
+    }
+    taken.push_back(&job);
+    statistics.lines++;
+    if(!target) target = &look.pixel, left = job.firstX, top = job.firstY, right = job.lastX, bottom = job.lastY;
+    left = std::min(left, job.firstX), top = std::min(top, job.firstY);
+    right = std::max(right, job.lastX), bottom = std::max(bottom, job.lastY);
+    return true;
+  }
+  if(job.kind == GE::Job::Kind::Sprite && look.textured && job.sprite.divided &&
+     u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1) > DividedPixels) {
     return statistics.spriteTexels3D++, false;
   }
-  if(look.textured && !look.decoded) return false;  //(only drawn at once, never in a batch: primitive())
   if(job.kind == GE::Job::Kind::Triangle &&
      !exactRange(job.triangle, look.textured && job.triangle.perspective, denormals && nativeFma)) {
     return statistics.pastRange++, false;
@@ -299,7 +322,30 @@ auto GPU::take(const GE::Job& job) -> bool {
     w[SpriteZ] = s.z, w[SpriteColor] = s.color, w[SpriteSpecular] = s.specular;
     w[SpriteLeftFog] = s.leftFog, w[SpriteRightFog] = s.rightFog;
     w[SpriteMiddle] = s.middle, w[SpriteTurned] = s.turned;
-    if(look.textured) {  //(spriteRows()'s columns and rows, each by the very expression it has)
+    if(look.textured && s.divided) {  //(spriteRows()'s columns, and each pixel's coordinate down y, as it has them)
+      std::vector<f64>& inverses = dividedInverses;
+      inverses.clear();
+      w[SpriteDivided] = 1;
+      w[SpriteColumns] = tables.size();
+      for(s32 x = job.firstX; x <= job.lastX; x++) {
+        f64 alongX = f64(x * 16 + 8 - s.left) / (s.right - s.left);
+        f64 inverse = s.leftInverse + (s.rightInverse - s.leftInverse) * alongX;
+        float acrossX = (s.leftAcross + (s.rightAcross - s.leftAcross) * alongX) / inverse;
+        inverses.push_back(inverse);
+        tables.push_back(axisWord(s.turned ? texelAxis(acrossX, t.height, t.clampV, job.linear)
+                                           : texelAxis(acrossX, t.width, t.clampU, job.linear)));
+      }
+      w[SpriteRows] = tables.size();
+      for(s32 y = job.firstY; y <= job.lastY; y++) {
+        f64 alongY = f64(y * 16 + 8 - s.top) / (s.bottom - s.top);
+        f64 downOverW = s.topDown + (s.bottomDown - s.topDown) * alongY;
+        for(s32 x = job.firstX; x <= job.lastX; x++) {
+          float downY = downOverW / inverses[x - job.firstX];
+          tables.push_back(axisWord(s.turned ? texelAxis(downY, t.width, t.clampU, job.linear)
+                                             : texelAxis(downY, t.height, t.clampV, job.linear)));
+        }
+      }
+    } else if(look.textured) {  //(spriteRows()'s columns and rows, each by the very expression it has)
       w[SpriteColumns] = tables.size();
       for(s32 x = job.firstX; x <= job.lastX; x++) {
         float column = s.columnFirst + f64(x * 16 + 8 - s.columnStart) / 16 * s.columnStep;
@@ -364,26 +410,20 @@ auto GPU::take(const GE::Job& job) -> bool {
   return true;
 }
 
-//The run drawn on the GPU: the batch's VRAM pages copied there, the records, the stages run, the pages copied back.
-//(The pages hold every byte its jobs may draw over, as the GE noted them: primitive().)
-auto GPU::finish(GE& ge, GE::Batch& batch) -> void {
+static auto now() -> u64 {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+    .count();
+}
+
+//The run submitted to the GPU: the VRAM pages it may draw over (pending, as the GE noted them: primitive()) copied
+//there, those the GPU doesn't have newer already, and its records; then it's the GPU's, not waited for. Should the
+//GPU not take it, everything it has drawn is finished first, and the run's jobs drawn by the software renderer.
+auto GPU::run(GE& ge, const std::bitset<GE::VRAMPages>& pending) -> void {
   using namespace Record;
   if(jobs.empty()) return;
-  auto now = [] { return u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count()); };
   u64 began = now();
-  u8* vram = device->vram();
-  for(u32 page = 0; page < GE::VRAMPages; page++) {
-    if(batch.pending[page]) std::memcpy(vram + page * 4096, ge.memory.vram.data() + page * 4096, 4096);
-  }
   Parameters p;
   p.lookOffset = tables.size(), p.jobOffset = p.lookOffset + looks.size();
-  u32* records = device->records(p.jobOffset + jobs.size());
-  if(records) {
-    std::memcpy(records, tables.data(), tables.size() * 4);
-    std::memcpy(records + p.lookOffset, looks.data(), looks.size() * 4);
-    std::memcpy(records + p.jobOffset, jobs.data(), jobs.size() * 4);
-  }
   p.jobCount = jobs.size() / JobWords;
   p.wordsPerTile = (p.jobCount + 31) / 32;
   p.tileLeft = left & ~15, p.tileTop = top & ~15;
@@ -391,18 +431,28 @@ auto GPU::finish(GE& ge, GE::Batch& batch) -> void {
   p.areaLeft = left, p.areaTop = top, p.areaRight = right, p.areaBottom = bottom;
   p.frameBuffer = target->frameBuffer, p.stride = target->stride, p.format = target->format;
   p.depthBuffer = target->depthBuffer, p.depthStride = target->depthStride;
-  u64 copied = now();
-  bool drawn = !device->lost && device->bins(p.tilesAcross * p.tilesDown * p.wordsPerTile) && records &&
-               device->draw(p);
-  u64 waited = now();
-  statistics.copying += copied - began, statistics.waiting += waited - copied;
-  if(drawn) {
-    vram = device->vram();
+  u32* records = device->lost ? nullptr : device->records(p.jobOffset + jobs.size());
+  u32 binWords = p.tilesAcross * p.tilesDown * p.wordsPerTile;
+  u32* bins = records ? device->bins(binWords) : nullptr;
+  bool ready = bins;
+  if(ready) {
+    std::memset(bins, 0, binWords * 4);  //(bin.comp sets the bits of the jobs that reach each tile)
+    u8* vram = device->vram();
     for(u32 page = 0; page < GE::VRAMPages; page++) {
-      if(batch.pending[page]) std::memcpy(ge.memory.vram.data() + page * 4096, vram + page * 4096, 4096);
+      if(pending[page] && !owned[page]) std::memcpy(vram + page * 4096, ge.memory.vram.data() + page * 4096, 4096);
     }
-    statistics.copying += now() - waited;
+    std::memcpy(records, tables.data(), tables.size() * 4);
+    std::memcpy(records + p.lookOffset, looks.data(), looks.size() * 4);
+    std::memcpy(records + p.jobOffset, jobs.data(), jobs.size() * 4);
+  }
+  u64 copied = now();
+  statistics.copying += copied - began;
+  if(ready && device->draw(p)) {
+    owned |= pending;
+    drawn.insert(drawn.end(), taken.begin(), taken.end());
   } else {
+    statistics.waiting += now() - copied;
+    finish(ge);
     for(auto job : taken) ge.rasterize(*job, job->firstY, job->lastY);
   }
   statistics.runs++;
@@ -410,39 +460,91 @@ auto GPU::finish(GE& ge, GE::Batch& batch) -> void {
   target = nullptr;
 }
 
-//A batch (GE::Renderer): its jobs in order, runs of those the GPU can draw drawn there, the rest by the software
-//renderer between them, each after what came before it.
-//Once the GPU is lost (Device::lost), every job is the software renderer's, which is said once.
+//Everything submitted waited for, and the pages the GPU drew over copied back to memory's VRAM (GE::Renderer: the
+//GE calls this wherever it needs them). If the GPU was lost meanwhile, the software renderer draws all it was given
+//since it was last finished instead, in order, over memory's pages as they were before.
+auto GPU::finish(GE& ge) -> void {
+  if(drawn.empty() && held.empty()) return;
+  if(!drawn.empty()) {
+    u64 began = now();
+    bool done = device->finish();
+    u64 waited = now();
+    statistics.waiting += waited - began;
+    statistics.finishes++;
+    if(done) {
+      u8* vram = device->vram();
+      for(u32 page = 0; page < GE::VRAMPages; page++) {
+        if(owned[page]) std::memcpy(ge.memory.vram.data() + page * 4096, vram + page * 4096, 4096);
+      }
+      statistics.copying += now() - waited;
+    } else {
+      lose(ge);
+    }
+  }
+  owned.reset();
+  drawn.clear();
+  for(auto& batch : held) batch.jobs.clear(), batch.looks.clear(), spare.push_back(std::move(batch));
+  held.clear();
+}
+
+//The GPU lost: what it was given since it was last finished drawn by the software renderer (finish()), and that
+//said, once.
+auto GPU::lose(GE& ge) -> void {
+  for(auto job : drawn) {
+    ge.rasterize(*job, job->firstY, job->lastY);
+    statistics.gpuJobs--, statistics.cpuJobs++, statistics.lostJobs++;
+  }
+  drawn.clear();
+  tell();
+}
+auto GPU::tell() -> void {
+  if(reported) return;
+  reported = true;
+  std::string text = "the GPU (" + device->name() + ") stopped answering: ";
+  text += "the software renderer draws everything from here on";
+  if(report) report(text);
+  else std::fprintf(stderr, "PSP GPU: %s\n", text.c_str());
+}
+
+//A batch (GE::Renderer): its jobs in order, runs of those the GPU can draw submitted to it, the rest drawn by the
+//software renderer between them, each once everything before it is finished. The batch's jobs and looks are held
+//(swapped for emptied ones) until the GPU is finished, as the GE empties the batch once this returns.
+//Once the GPU is lost (Device::lost), every job is the software renderer's.
 auto GPU::draw(GE& ge, GE::Batch& batch) -> void {
   statistics.batches++;
-  for(auto& job : batch.jobs) {
-    u64 pixels = u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1);
-    if(device->lost) {
-      finish(ge, batch);  //(what was taken before it was lost: drawn by the CPU)
-      if(!reported) {
-        reported = true;
-        std::string text = "the GPU (" + device->name() + ") stopped answering: ";
-        text += "the software renderer draws everything from here on";
-        if(report) report(text);
-        else std::fprintf(stderr, "PSP GPU: %s\n", text.c_str());
-      }
+  if(device->lost) {
+    finish(ge);  //(what was given before it was lost: drawn by the CPU)
+    tell();
+    for(auto& job : batch.jobs) {
       ge.rasterize(job, job.firstY, job.lastY);
-      statistics.cpuJobs++, statistics.cpuPixels += pixels, statistics.lostJobs++;
-      continue;
+      statistics.cpuJobs++, statistics.lostJobs++;
+      statistics.cpuPixels += u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1);
     }
-    if(!fits(*job.look)) {  //the GPU's textures full: the run drawn, and the textures dropped
-      finish(ge, batch);
+    return;
+  }
+  Held current;
+  if(!spare.empty()) current = std::move(spare.back()), spare.pop_back();
+  std::swap(current.jobs, batch.jobs);
+  std::swap(current.looks, batch.looks);  //(a deque's elements stay where they are: the jobs' looks with them)
+  auto pending = batch.pending;
+  for(auto& job : current.jobs) {
+    u64 pixels = u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1);
+    if(!fits(*job.look)) {  //the GPU's textures full: everything drawn, and the textures dropped
+      run(ge, pending);
+      finish(ge);
       slots.clear(), texelsUsed = 0;
     }
-    if(take(job)) {
+    if(take(ge, job)) {
       statistics.gpuJobs++, statistics.gpuPixels += pixels;
       continue;
     }
-    finish(ge, batch);
+    run(ge, pending);
+    finish(ge);
     ge.rasterize(job, job.firstY, job.lastY);
     statistics.cpuJobs++, statistics.cpuPixels += pixels;
   }
-  finish(ge, batch);
+  run(ge, pending);
+  held.push_back(std::move(current));  //(moved, its jobs and looks stay where they are)
 }
 
 }

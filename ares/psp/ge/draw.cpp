@@ -157,7 +157,12 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     if(!look.texture.decoded) look.texture.bytes = direct(look.texture);
   }
   //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
-  //texture read from memory as it's drawn (texture.cpp) has it drawn at once.
+  //texture read from memory as it's drawn (texture.cpp) has it drawn at once. An asynchronous renderer's batch is
+  //launched once it's large enough, between primitives (a job's look is its batch's), so that the GPU draws it
+  //while the list goes on, not only once the list stops.
+  if(drawing.deferring && renderer && renderer->asynchronous() && drawing.batch->jobs.size() >= drawing.handOver) {
+    launch(false);
+  }
   drawing.recording = !(look.textured && !look.texture.decoded) && defer(pixel, region);
   if(!drawing.recording) flush();
   const Look& drawn = drawing.recording ? drawing.batch->looks.emplace_back(std::move(look)) : look;

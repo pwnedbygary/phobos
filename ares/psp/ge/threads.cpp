@@ -183,7 +183,7 @@ auto GE::flush() -> void {
   settle();
   Batch& batch = *drawing.batch;
   if(batch.jobs.empty()) return clearBatch(batch);
-  if(renderer) return renderer->draw(*this, batch), clearBatch(batch);
+  if(renderer) return renderer->draw(*this, batch), renderer->finish(*this), clearBatch(batch);
   if(drawing.workers.empty() || batch.work < drawing.shared) {
     for(auto& job : batch.jobs) rasterize(job, job.firstY, job.lastY);
     return clearBatch(batch);
@@ -218,6 +218,7 @@ auto GE::launch(bool returning) -> void {
     std::lock_guard lock(drawing.mutex);
     batch.launched = true;
     batch.renderer = apart ? renderer : nullptr;
+    if(apart) drawing.owed |= batch.pending;  //(drawn into memory's VRAM only once finished: settle())
     if(!drawing.drawn) startBands(batch);
     else drawing.queued = &batch;  //(the other batch, being drawn: two at most)
   }
@@ -232,27 +233,32 @@ auto GE::launch(bool returning) -> void {
   Batch& other = &batch == &drawing.batches[0] ? drawing.batches[1] : drawing.batches[0];
   drawing.batch = &other;
   if(returning || !other.launched) return;
-  //the other is still being drawn: wait for it to be done with (drawing its bands too) before filling it again
+  reclaim(other);  //(still being drawn: done with before it's filled again)
+}
+
+//A launched batch waited for until it's done with (drawing its bands too), and emptied, to be filled again. VRAM's
+//pages stay busy (settle()): the batch drawn by an asynchronous renderer may not be in memory's VRAM yet.
+auto GE::reclaim(Batch& batch) -> void {
   std::unique_lock lock(drawing.mutex);
-  while(drawing.drawn == &other || drawing.queued == &other || other.users) {
-    if(drawing.drawn == &other && other.nextBand.load(std::memory_order_relaxed) < other.bands) {
-      other.users++;
+  while(drawing.drawn == &batch || drawing.queued == &batch || batch.users) {
+    if(drawing.drawn == &batch && batch.nextBand.load(std::memory_order_relaxed) < batch.bands) {
+      batch.users++;
       lock.unlock();
-      drawBands(other);
+      drawBands(batch);
       lock.lock();
-      if(drew(other)) drawing.wake.notify_all();
+      if(drew(batch)) drawing.wake.notify_all();
       continue;
     }
     drawing.finished.wait(lock);
   }
   lock.unlock();
-  clearBatch(other);
+  clearBatch(batch);
 }
 
 //Waits for every batch handed to the workers (the GE's thread drawing bands too), and empties them: VRAM is
 //anyone's again.
 auto GE::settle() -> void {
-  if(!drawing.batches[0].launched && !drawing.batches[1].launched) return;
+  if(!drawing.batches[0].launched && !drawing.batches[1].launched && drawing.owed.none()) return;
   std::unique_lock lock(drawing.mutex);
   while(drawing.drawn || drawing.queued || drawing.batches[0].users || drawing.batches[1].users) {
     Batch* batch = drawing.drawn;
@@ -269,6 +275,10 @@ auto GE::settle() -> void {
   lock.unlock();
   for(auto& batch : drawing.batches) {
     if(batch.launched) clearBatch(batch);
+  }
+  if(drawing.owed.any()) {  //(what an asynchronous renderer drew, into memory's VRAM)
+    if(renderer) renderer->finish(*this);
+    drawing.owed.reset();
   }
   if(memory.vramBusy) {
     memory.vramBusy = false;
@@ -304,6 +314,9 @@ auto GE::drawnFirst(u32 address, u32 size) -> void {
   if(!drawing.batch->jobs.empty() && over(*drawing.batch)) return flush();
   for(auto& batch : drawing.batches) {
     if(batch.launched && over(batch)) return settle();
+  }
+  for(u32 page = first >> 12; page <= last >> 12; page++) {  //(drawn by a batch done with, the renderer not finished)
+    if(drawing.owed[page]) return settle();
   }
 }
 

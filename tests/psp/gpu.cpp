@@ -466,10 +466,10 @@ static auto gpuDrawsAsSoftware() -> void {
   }
   auto& after = gpu->statistics;
   u64 gpuJobs = after.gpuJobs - before.gpuJobs, cpuJobs = after.cpuJobs - before.cpuJobs;
-  std::printf("  %u batches: %u apart, %u of %u pixels apart; the GPU drew %llu jobs, the CPU %llu (lines %llu, 3D "
-              "sprites' texels %llu, 2D coordinates %llu, past the exact range %llu) in %llu runs\n", batches,
-              differing, pixelsApart, pixels, (unsigned long long)gpuJobs, (unsigned long long)cpuJobs,
-              (unsigned long long)(after.lines - before.lines),
+  std::printf("  %u batches: %u apart, %u of %u pixels apart; the GPU drew %llu jobs (lines as points %llu), the "
+              "CPU %llu (3D sprites' texels %llu, 2D coordinates %llu, past the exact range %llu) in %llu runs\n",
+              batches, differing, pixelsApart, pixels, (unsigned long long)gpuJobs,
+              (unsigned long long)(after.lines - before.lines), (unsigned long long)cpuJobs,
               (unsigned long long)(after.spriteTexels3D - before.spriteTexels3D),
               (unsigned long long)(after.coordinates2D - before.coordinates2D),
               (unsigned long long)(after.pastRange - before.pastRange),
@@ -504,6 +504,7 @@ static auto gpuSamples() -> void {
     for(u32 frame = 0; frame < 90; frame++) {
       software.kernel.run(Kernel::VblankCycles), hardware.kernel.run(Kernel::VblankCycles);
       software.kernel.picture(picture[0]), hardware.kernel.picture(picture[1]);
+      hardware.system.ge.settle();  //(VRAM read as it is, not through memory: what the GPU drew put there first)
       u32 apart = 0;
       for(u32 n = 0; n < picture[0].size() && n < picture[1].size(); n++) apart += picture[0][n] != picture[1][n];
       frames++, framesApart += apart || software.system.memory.vram != hardware.system.memory.vram;
@@ -521,11 +522,12 @@ static auto gpuSamples() -> void {
   }
 }
 
-//A GPU lost at its first run (as the driver's VK_ERROR_DEVICE_LOST, or a run that never ends, has it): the jobs it
-//was given, and every batch after, drawn by the software renderer just the same, nothing more run on it, and the loss
-//said once. A pretend device: no GPU needed.
-static auto gpuLost() -> void {
+//A GPU lost at its first run (as the driver's VK_ERROR_DEVICE_LOST, or a run that never ends, has it), or only
+//once that run, taken, is waited for (late): the jobs it was given, and every batch after, drawn by the software
+//renderer just the same, nothing more run on it, and the loss said once. A pretend device: no GPU needed.
+static auto gpuLost(bool late) -> void {
   struct Lost : GPU::Device {
+    bool late = false;
     std::vector<u8> memory = std::vector<u8>(Memory::VRAMSize);
     std::vector<u32> recordWords, texelWords = std::vector<u32>(GPU::TexelWords), binWords;
     u32 runs = 0;
@@ -537,11 +539,13 @@ static auto gpuLost() -> void {
     auto bins(u32 words) -> u32* override { return binWords.resize(std::max<size_t>(binWords.size(), words)),
                                                    binWords.data(); }
     auto configure(bool, bool) -> bool override { return true; }
-    auto draw(const GPU::Parameters&) -> bool override { return runs++, lost = true, false; }
+    auto draw(const GPU::Parameters&) -> bool override { return runs++, late || (lost = true, false); }
+    auto finish() -> bool override { return lost = true, false; }
     auto probe(const GPU::Parameters&) -> bool override { return false; }
   };
   auto device = std::make_unique<Lost>();
   auto& pretend = *device;
+  pretend.late = late;
   GPU gpu(std::move(device));
   u32 reports = 0;
   gpu.report = [&](const std::string&) { reports++; };
@@ -583,7 +587,7 @@ static auto gpuLost() -> void {
   CHECK(software.memory.vram == hardware.memory.vram, true);
   CHECK(pretend.runs, 1u);
   CHECK(reports, 1u);
-  CHECK(gpu.statistics.lostJobs, u64(8));
+  CHECK(gpu.statistics.lostJobs, u64(late ? 12 : 8));  //(late: the first batch's 4 too, drawn again once lost)
   hardware.ge.renderer = nullptr;
 }
 
@@ -592,7 +596,8 @@ auto gpuTests() -> Tests {
     {"gpu arithmetic against the host", gpuArithmetic},
     {"gpu batches against the software renderer", gpuDrawsAsSoftware},
     {"gpu samples against the software renderer", gpuSamples},
-    {"gpu lost: the software renderer draws instead", gpuLost},
+    {"gpu lost: the software renderer draws instead", [] { gpuLost(false); }},
+    {"gpu lost late: what it was given drawn again", [] { gpuLost(true); }},
   };
 }
 

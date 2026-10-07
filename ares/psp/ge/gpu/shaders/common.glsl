@@ -75,6 +75,7 @@ const uint JobFirstX = 2u, JobLastX = 3u, JobFirstY = 4u, JobLastY = 5u;
 const uint SpriteZ = 6u, SpriteColor = 7u, SpriteSpecular = 8u, SpriteLeftFog = 9u, SpriteRightFog = 10u;
 const uint SpriteMiddle = 11u, SpriteTurned = 12u;
 const uint SpriteColumns = 13u, SpriteRows = 14u;  //where its texel axes are in the records, a word a column (row)
+const uint SpriteDivided = 15u;  //1: 3D, the axes down y a word a pixel (row by row) at SpriteRows
 //a point's
 const uint PointX = 6u, PointY = 7u, PointZ = 8u, PointColor = 9u, PointSpecular = 10u, PointFog = 11u;
 const uint PointU = 12u, PointV = 13u;

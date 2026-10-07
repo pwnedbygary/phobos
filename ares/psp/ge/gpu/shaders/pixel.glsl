@@ -2,28 +2,25 @@
 //throughout): the depth range test, alpha test, fog, color test, stencil and depth tests, the depth written,
 //blending, dithering, the logic operation and the write through the masks.
 //
-//Each thread draws two pixels side by side, the first in an even column (raster.comp), and keeps their frame buffer
-//and depth buffer words here while it draws the batch's jobs, in order: for 16-bit frame buffers and the depth
-//buffer the two pixels share a word, for 8888 each has its own. No other thread touches those words (gpu.cpp sends
-//the GPU only batches the GE has found to be drawable in parallel: no two pixels share a byte), so the words are
-//read once before the first job and written once after the last.
-uint pairColor[2];  //16-bit: both pixels in the first; 8888: one each
-uint pairDepth;     //both pixels' depths
+//A thread draws one pixel with one job at a time (raster.comp's rounds), the pixel's frame buffer and depth buffer
+//values here meanwhile: raster.comp takes them from the tile's, kept in shared memory while the batch's jobs are
+//drawn in order, and puts them back. No two pixels share a byte (gpu.cpp sends the GPU only batches the GE has found
+//to be drawable in parallel), so they're read from VRAM once before the first job and written once after the last
+//(raster.comp puts a 16-bit pair's two halves together then).
+uint pixelColor;  //the frame buffer's value: 16 bits, or 8888's 32
+uint pixelDepth;  //16 bits
 bool colorWritten = false, depthWritten = false;
 
 uint frameBufferFormat;  //the batch's (every job in a batch draws into one frame buffer)
 
-uint readPixel(int lane) {
-  return frameBufferFormat == 3u ? pairColor[lane] : pairColor[0] >> uint(lane * 16) & 0xffffu;
-}
-void writePixel(int lane, uint value) {
-  if(frameBufferFormat == 3u) pairColor[lane] = value;
-  else pairColor[0] = (pairColor[0] & ~(0xffffu << uint(lane * 16))) | (value & 0xffffu) << uint(lane * 16);
+uint readPixel() { return pixelColor; }
+void writePixel(uint value) {
+  pixelColor = frameBufferFormat == 3u ? value : value & 0xffffu;
   colorWritten = true;
 }
-uint readDepth(int lane) { return pairDepth >> uint(lane * 16) & 0xffffu; }
-void writeDepth(int lane, uint z) {
-  pairDepth = (pairDepth & ~(0xffffu << uint(lane * 16))) | (z & 0xffffu) << uint(lane * 16);
+uint readDepth() { return pixelDepth; }
+void writeDepth(uint z) {
+  pixelDepth = z & 0xffffu;
   depthWritten = true;
 }
 
@@ -140,24 +137,24 @@ uint logicOperation(uint operation, uint s, uint d) {
   return 0xffffffu;
 }
 
-//The pixel at (x, y) (the thread's pixel lane), with depth z, color (8888) and fog (0-255), drawn with the look's
+//The pixel at (x, y), with depth z, color (8888) and fog (0-255), drawn with the look's
 //pipeline.
-void drawPixel(uint look, int lane, int x, int y, uint z, uint color, uint fog) {
+void drawPixel(uint look, int x, int y, uint z, uint color, uint fog) {
   uint flags = lookWord(look, LookFlags);
   uint format = frameBufferFormat;
   uint depths = lookWord(look, LookDepths);
   if((flags & FlagDepthRange) != 0u && (z < (depths & 0xffffu) || z > depths >> 16)) return;
-  uint old = readPixel(lane);
+  uint old = readPixel();
   uint colorBits = format == 0u ? 0xffffu : format == 1u ? 0x7fffu : format == 2u ? 0x0fffu : 0x00ffffffu;
   uint stencilBits = (format == 3u ? 0xffffffffu : 0xffffu) & ~colorBits;
   uint writeMask = lookWord(look, LookWriteMask);
   uint stencil = widenPixel(old, format) >> 24;
 
   if((flags & FlagClear) != 0u) {  //the vertex's alpha goes in as the stencil
-    if((flags & FlagClearDepth) != 0u) writeDepth(lane, z);
+    if((flags & FlagClearDepth) != 0u) writeDepth(z);
     uint keep = writeMask | ((flags & FlagClearColor) != 0u ? 0u : colorBits) |
                 ((flags & FlagClearAlpha) != 0u ? 0u : stencilBits);
-    writePixel(lane, (narrowPixel(color, format) & ~keep) | (old & keep));
+    writePixel((narrowPixel(color, format) & ~keep) | (old & keep));
     return;
   }
   int alpha = int(color >> 24);
@@ -183,7 +180,7 @@ void drawPixel(uint look, int lane, int x, int y, uint z, uint color, uint fog) 
   }
   bool depthPasses = true;
   if((flags & FlagDepthTest) != 0u) {
-    depthPasses = passes(lookWord(look, LookDepthTest), int(z), int(readDepth(lane)));
+    depthPasses = passes(lookWord(look, LookDepthTest), int(z), int(readDepth()));
   }
   if((flags & FlagStencilTest) != 0u) {
     uint test = lookWord(look, LookStencil), operations = lookWord(look, LookStencilOps);
@@ -198,13 +195,13 @@ void drawPixel(uint look, int lane, int x, int y, uint z, uint color, uint fog) 
     stencil = stencilOperation(operation, format, reference, stencil);
     if(dropped) {
       uint keep = writeMask | colorBits;
-      writePixel(lane, (narrowPixel(stencil << 24, format) & ~keep) | (old & keep));
+      writePixel((narrowPixel(stencil << 24, format) & ~keep) | (old & keep));
       return;
     }
   } else if(!depthPasses) {
     return;
   }
-  if((flags & FlagDepthWrite) != 0u) writeDepth(lane, z);
+  if((flags & FlagDepthWrite) != 0u) writeDepth(z);
 
   uint oldColor = (flags & (FlagBlend | FlagLogicOp)) != 0u ? widenPixel(old, format) : 0u;
   ivec3 rgb = ivec3(channel(color, 0), channel(color, 1), channel(color, 2));
@@ -233,5 +230,5 @@ void drawPixel(uint look, int lane, int x, int y, uint z, uint color, uint fog) 
     uint value = logicOperation(lookWord(look, LookLogic), result & 0x00ffffffu, oldColor & 0x00ffffffu);
     result = (value & 0x00ffffffu) | (result & 0xff000000u);
   }
-  writePixel(lane, (narrowPixel(result, format) & ~writeMask) | (old & writeMask));
+  writePixel((narrowPixel(result, format) & ~writeMask) | (old & writeMask));
 }

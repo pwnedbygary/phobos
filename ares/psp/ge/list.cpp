@@ -15,7 +15,14 @@ auto GE::run(u64 budget) -> Stop {
 //word is kept, whatever the command. Meanwhile primitives wait to be drawn together (threads.cpp), and as it returns
 //they're drawn, or go on being drawn by the GE's workers while the CPU runs on.
 auto GE::run(u64 budget, u64& ran) -> Stop {
-  settle();  //what the last list left being drawn
+  //What the last list left being drawn, waited for; but an asynchronous renderer's (which only the CPU's owner's
+  //guard lets go on: launch()) only as far as the batch to fill is concerned, its pages left busy and owed, so that
+  //the GPU goes on drawing while list after list is read (VRAM's busy pages, and drawnFirst(), settle when need be).
+  if(renderer && renderer->asynchronous() && memory.vramGuard) {
+    if(drawing.batch->launched) reclaim(*drawing.batch);
+  } else {
+    settle();
+  }
   drawing.deferring = drawing.threads > 1 || renderer;
   struct Drawn {
     GE& ge;

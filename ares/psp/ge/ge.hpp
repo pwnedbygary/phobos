@@ -406,6 +406,8 @@ struct GE {
                                     float u, float v, u32 fog) -> void;
   template<u32 Format> auto spriteRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto triangleRows(const Job& job, s32 fromY, s32 toY) -> void;
+  struct LinePixel { s32 x, y; u32 z, color, specular, fog; float u, v; };
+  auto linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& pixels) -> void;
   template<u32 Format> auto lineRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto rasterizeAs(const Job& job, s32 fromY, s32 toY) -> void;
   auto rasterize(const Job& job, s32 fromY, s32 toY) -> void;
@@ -445,6 +447,7 @@ struct GE {
   auto startBands(Batch& batch) -> void;
   auto drew(Batch& batch) -> bool;
   auto settle() -> void;
+  auto reclaim(Batch& batch) -> void;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;
   auto defer(const PixelState& pixel, const Region& region) -> bool;
@@ -492,11 +495,13 @@ struct GE {
 
     std::vector<std::thread> workers;   //the threads besides the GE's own
     std::thread renderer;               //the one handing launched batches to an asynchronous renderer
+    std::bitset<VRAMPages> owed;        //the pages batches launched to it may draw over, until settled
     std::mutex mutex;
     std::condition_variable wake, finished;
     u64 round = 0;            //goes up as each batch starts being drawn, which the workers wake for
     bool quit = false;
     u64 shared = 8192;        //a batch with fewer pixels is drawn on the GE's thread alone (tests may make it 0)
+    u32 handOver = 4096;      //an asynchronous renderer's batch is launched once it has this many jobs (primitive())
   } drawing;
   static constexpr s32 BandRows = 8;  //the rows in a band
 
@@ -512,9 +517,14 @@ struct GE {
   //thread goes on; the batch's VRAM pages are busy meanwhile, and everything that waits for the workers waits for it
   //the same way. Its draw() must then only touch what a worker may (the batch, and the batch's VRAM pages), and
   //whoever takes it away settles first (settle()).
+  //
+  //An asynchronous renderer's draw() may also return before its pixels are in memory's VRAM (the GPU drawing on):
+  //finish() puts them there, and the GE calls it wherever the batches drawn so far must be done with (settle(), and
+  //after a batch drawn at once: flush()). Until then their pages stay busy, and owed (drawnFirst()).
   struct Renderer {
     virtual ~Renderer() = default;
     virtual auto draw(GE& ge, Batch& batch) -> void = 0;
+    virtual auto finish(GE&) -> void {}
     virtual auto asynchronous() const -> bool { return false; }
   };
   Renderer* renderer = nullptr;
