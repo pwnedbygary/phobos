@@ -780,6 +780,185 @@ static auto draw3dBoundingBoxes() -> void {
   }
 }
 
+//Four pixels at a time (ares/psp/ge/four.cpp) against one at a time: random primitives, 2D and 3D (in perspective,
+//lit now and then with the shine kept apart), triangles, strips, fans and sprites, with random settings of all the
+//pixel pipeline and textures read, drawn by two machines alike but for the four-pixel path, over the same random
+//VRAM (colors, stencils and depths); the frame and depth buffers must come out the same, byte for byte, and in the
+//end all of VRAM. Now and then the settings send a primitive a pixel at a time (the stencil test, a logic operation,
+//the depth buffer on the frame buffer, a texture where it draws), which must be the same too.
+static auto draw3dFours() -> void {
+  constexpr u32 Width = 64, Height = 40, Depth = 0x10'0000, Area = 0x0900'0000, AreaSize = 1 << 20;
+  constexpr u32 Bits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
+  constexpr u32 Kinds[6] = {GE::Triangles, GE::TriangleStrip, GE::TriangleFan, GE::Sprites, GE::Sprites,
+                            GE::Triangles};
+  std::mt19937 random{20261007};
+  //(each value taken from it in a statement of its own, so every compiler takes them in the same order)
+  auto below = [&](u32 n) { return u32(random() % n); };
+  auto chance = [&](u32 percent) -> u32 { return below(100) < percent; };
+  auto real = [&](float low, float high) { return low + (high - low) * float(below(1 << 20)) / float(1 << 20); };
+  //a value of fields taken one after another: each {where it goes, how many values it has}
+  auto fields = [&](std::initializer_list<std::pair<u32, u32>> parts) {
+    u32 value = 0;
+    for(auto [shift, count] : parts) value |= below(count) << shift;
+    return value;
+  };
+  auto mask = [&](u32 percent) { return chance(percent) ? 0xffu : below(256); };  //(all ones, mostly)
+  Scene fours, single;
+  single.ge.fourPixels = false;
+  std::vector<u8> bytes(AreaSize), vram(Memory::VRAMSize);
+  for(auto& byte : bytes) byte = random();
+  for(auto& byte : vram) byte = random();
+  for(Scene* c : {&fours, &single}) {
+    c->memory.copyIn(Area, bytes.data(), AreaSize);
+    c->memory.copyIn(VRAM3D, vram.data(), Memory::VRAMSize);
+    //in perspective, w growing with distance (near 0.5, far 10), onto the 64x40 picture
+    auto& g = c->ge;
+    for(u32 n = 0; n < 16; n++) g.projection[n] = 0;
+    g.projection[0] = g.projection[5] = f24(1), g.projection[10] = f24(-10.5f / 9.5f), g.projection[11] = f24(-1);
+    g.projection[14] = f24(-10.0f / 9.5f);
+    g.commands[GE::ViewportXScale] = f24(28), g.commands[GE::ViewportYScale] = f24(-18);
+    g.commands[GE::ViewportXCenter] = f24(2048 + 32), g.commands[GE::ViewportYCenter] = f24(2048 + 20);
+    g.commands[GE::ViewportZScale] = f24(30000), g.commands[GE::ViewportZCenter] = f24(32000);
+  }
+  u32 differing = 0;
+  for(u32 n = 0; n < 2500 && !differing; n++) {
+    std::vector<std::pair<u32, u32>> commands;  //for both machines
+    auto set = [&](u32 command, u32 value) { commands.push_back({command, value}); };
+    set(GE::FrameBufferWidth, Width);
+    set(GE::FrameBufferPixelFormat, below(4));
+    set(GE::DepthBufferPointer, chance(5) ? 0 : Depth);
+    set(GE::DepthBufferWidth, Width);
+    set(GE::ClearMode, chance(8) ? 1 | below(8) << 8 : 0);
+    set(GE::AlphaTestEnable, chance(40));
+    u32 alphaTest = fields({{0, 8}, {8, 256}});
+    set(GE::AlphaTest, alphaTest | mask(70) << 16);
+    set(GE::DepthTestEnable, chance(60));
+    set(GE::DepthTest, below(8));
+    set(GE::DepthMask, chance(30));
+    set(GE::StencilTestEnable, chance(8));
+    set(GE::StencilTest, fields({{0, 8}, {8, 256}, {16, 256}}));
+    set(GE::StencilOperation, fields({{0, 6}, {8, 6}, {16, 6}}));
+    set(GE::AlphaBlendEnable, chance(50));
+    set(GE::BlendMode, fields({{0, 16}, {4, 16}, {8, 8}}));
+    set(GE::BlendFixedA, random() & 0xff'ffff);
+    set(GE::BlendFixedB, random() & 0xff'ffff);
+    set(GE::DitherEnable, chance(30));
+    for(u32 row = 0; row < 4; row++) set(GE::Dither0 + row, random() & 0xffff);
+    set(GE::ColorTestEnable, chance(15));
+    set(GE::ColorTest, below(4));
+    set(GE::ColorReference, random() & 0xff'ffff);
+    set(GE::ColorTestMask, chance(50) ? 0xff'ffff : random() & 0xff'ffff);
+    set(GE::LogicOpEnable, chance(4));
+    set(GE::LogicOp, below(16));
+    set(GE::MaskColor, chance(80) ? 0 : random() & 0xff'ffff);
+    set(GE::MaskAlpha, chance(80) ? 0 : below(256));
+    set(GE::FogEnable, chance(40));
+    set(GE::FogColor, random() & 0xff'ffff);
+    set(GE::FogEnd, f24(real(-3, 6)));
+    set(GE::FogSlope, f24(real(-2, 4)));
+    set(GE::MinZ, chance(70) ? 0 : below(40000));
+    set(GE::MaxZ, chance(70) ? 0xffff : 20000 + below(45536));
+    u32 left = chance(30) ? below(16) : 0;
+    u32 top = chance(30) ? below(16) : 0;
+    u32 right = chance(30) ? left + below(Width - left) : Width - 1;
+    u32 bottom = chance(30) ? top + below(Height - top) : Height - 1;
+    set(GE::Scissor1, left | top << 10);
+    set(GE::Scissor2, right | bottom << 10);
+    set(GE::ShadeMode, chance(75));
+    u32 textured = chance(70), format = below(8), widthBits = below(8), heightBits = below(8);
+    set(GE::TextureMappingEnable, textured);
+    if(textured) {
+      u32 least = 128 / Bits[format];  //(a row of at least 16 bytes)
+      u32 bufferWidth = std::max(1u << widthBits, least) + (chance(20) ? least * below(4) : 0);
+      u32 address = chance(10) ? VRAM3D : Area + below((AreaSize - 0x10'0000) / 16) * 16;  //(where it draws)
+      set(GE::TextureAddress0, address & 0xff'fff0);
+      set(GE::TextureBufferWidth0, (address >> 24 & 0xf) << 16 | bufferWidth);
+      set(GE::TextureSize0, heightBits << 8 | widthBits);
+      set(GE::TextureFormat, format);
+      set(GE::TextureMode, chance(30));
+      set(GE::TextureWrap, fields({{0, 2}, {8, 2}}));
+      set(GE::TextureFilter, fields({{0, 2}, {8, 2}}));
+      u32 function = fields({{0, 8}, {8, 2}});
+      set(GE::TextureFunction, function | chance(20) << 16);
+      set(GE::TextureEnvironmentColor, random() & 0xff'ffff);
+      if(format >= 4) {
+        u32 palette = Area + below((AreaSize - 1024) / 16) * 16;
+        set(GE::ClutAddress, palette & 0xff'fff0);
+        set(GE::ClutAddressUpper, palette >> 8 & 0xf'0000);
+        u32 shift = below(chance(70) ? 1 : 32);
+        u32 clutFormat = below(4) | shift << 2;
+        clutFormat |= mask(70) << 8;
+        set(GE::ClutFormat, clutFormat | below(32) << 16);
+        set(GE::ClutLoad, 32);
+      }
+    }
+    bool flat = chance(35);  //2D: through mode
+    u32 lit = !flat && chance(15);
+    set(GE::LightingEnable, lit);
+    if(lit) {
+      set(GE::LightMode, chance(70));
+      set(GE::LightEnable0, 1);
+      set(GE::LightType0, below(3));  //directional: ambient and diffuse, those and the shine, or powered
+      for(u32 k = 0; k < 3; k++) set(GE::Light0DirectionX + k, f24(real(-1, 1)));
+      for(u32 k = 0; k < 3; k++) set(GE::Light0Ambient + k, random() & 0xff'ffff);
+      set(GE::MaterialSpecular, random() & 0xff'ffff);
+      set(GE::MaterialDiffuse, random() & 0xff'ffff);
+      set(GE::MaterialColor, below(8));
+      set(GE::MaterialSpecularCoefficient, f24(real(0, 12)));
+    }
+    for(Scene* c : {&fours, &single}) {
+      for(auto [command, value] : commands) c->ge.commands[command] = value;
+      if(textured && format >= 4) c->ge.loadClut();
+    }
+
+    u32 kind = Kinds[below(6)];
+    u32 count = kind == GE::Sprites ? 2 * (1 + below(3)) : kind == GE::Triangles ? 3 * (1 + below(3)) : 4 + below(3);
+    //vertex type 0x1ff (float texture coordinates, 8888 color, float normal, float position), through mode in 2D
+    u32 at = VertexData3D;
+    //(often every vertex of the primitive the same color, white or not: blended, it lands on whole numbers)
+    u32 one = chance(30) ? (chance(50) ? 0xffff'ffff : u32(random())) : 0;
+    for(u32 k = 0; k < count; k++) {
+      float u = flat ? real(-4, float(4 << widthBits)) : real(-0.2f, 1.3f);
+      float v = flat ? real(-4, float(4 << heightBits)) : real(-0.2f, 1.3f);
+      u32 color = one ? one : chance(20) ? 0xffff'ffff : u32(random());
+      float normal[3], position[3];
+      for(auto& value : normal) value = real(-1, 1);
+      if(flat) {
+        float steps = chance(50) ? 16 : 1;  //(on sixteenths, or whole pixels)
+        position[0] = std::round(real(-8, Width + 8) * steps) / steps;
+        position[1] = std::round(real(-8, Height + 8) * 16) / 16;
+        position[2] = real(0, 65535);
+      } else {
+        position[2] = real(-4, -0.6f);
+        position[0] = real(-1.3f, 1.3f) * -position[2];
+        position[1] = real(-1.3f, 1.3f) * -position[2];
+      }
+      for(Scene* c : {&fours, &single}) {
+        u32 to = at;
+        for(float value : {u, v}) c->memory.write(4, to, Scene::bits(value)), to += 4;
+        c->memory.write(4, to, color), to += 4;
+        for(float value : normal) c->memory.write(4, to, Scene::bits(value)), to += 4;
+        for(float value : position) c->memory.write(4, to, Scene::bits(value)), to += 4;
+      }
+      at += 36;
+    }
+    for(Scene* c : {&fours, &single}) {
+      c->ge.commands[GE::VertexType] = 0x1ff | (flat ? 1 << 23 : 0);
+      c->ge.vertexAddress = VertexData3D;
+      c->ge.primitive(kind, count);
+    }
+    auto same = [&](u32 address, u32 size) {
+      return !std::memcmp(fours.memory.vram.data() + address, single.memory.vram.data() + address, size);
+    };
+    if(!same(0, Width * Height * 4) || !same(Depth, 0x4000)) {
+      differing++;
+      std::printf("  case %u: primitive %u of %u vertices (%s), differs\n", n, kind, count, flat ? "2D" : "3D");
+    }
+  }
+  CHECK(differing, 0u);
+  CHECK(fours.memory.vram == single.memory.vram, true);
+}
+
 auto draw3dTests() -> Tests {
   return {
     {"draw3d transform", draw3dTransform}, {"draw3d outside", draw3dOutside}, {"draw3d clipping", draw3dClipping},
@@ -789,6 +968,7 @@ auto draw3dTests() -> Tests {
     {"draw3d lighting diffuse", draw3dLightingDiffuse}, {"draw3d lighting point and spot", draw3dLightingPointAndSpot},
     {"draw3d lighting specular", draw3dLightingSpecular}, {"draw3d environment map", draw3dEnvironmentMap},
     {"draw3d lines", draw3dLines}, {"draw3d bounding boxes", draw3dBoundingBoxes},
+    {"draw3d four pixels at a time against one", draw3dFours},
   };
 }
 

@@ -211,8 +211,9 @@ auto GE::primitive(u32 kind, u32 count) -> void {
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth
 //buffer's, by the 16 KiB the GE rearranges each in, where it tests depth), for primitive() to report.
-auto GE::submit(const Job& job) -> void {
+auto GE::submit(Job& job) -> void {
   if(job.firstX > job.lastX || job.firstY > job.lastY) return;
+  job.fours = fourFriendly(job);
   auto& p = job.look->pixel;
   auto note = [&](u32 which, u32 from, u32 to, bool depth) {  //VRAM offsets, before wrapping at its end
     if(to - from >= Memory::VRAMSize - 1 || (from & ~(Memory::VRAMSize - 1)) != (to & ~(Memory::VRAMSize - 1))) {
