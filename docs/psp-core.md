@@ -3450,9 +3450,16 @@ program's memory).
   ILLEGAL_ATTR; a lock where no thread may wait refused before anything is looked at (intr/waits). A status is copied
   as far as the size its first word gives (0 copies nothing; 1 copies the size's first byte, so 56 reads back), the
   holder -1 when free.
-- Chosen: a negative count to CancelMutex (and CancelSema) is taken as the count it was made with; the recordings
-  only show it making a mutex made free, free. ReferThreadStatus gives a thread waiting on a mutex no wait type (the
-  PSP's number isn't known here).
+- Only a thread may hold one: trying, unlocking, cancelling or making one held (and the lightweight mutex's create
+  held, lock, try and unlock) are refused (ILLEGAL_CONTEXT, before anything else) in an interrupt handler or with no
+  thread running (`Kernel::fromThread()`). Chosen: intr/waits recorded only the locks in a handler; the others would
+  leave a mutex held by nobody, which nothing could unlock and no state could keep, or by the thread interrupted.
+- Chosen: a negative count to CancelMutex (and CancelSema) is taken as the count it was made with.
+  threads/mutex/cancel and threads/semaphores/cancel recorded -1 and -3 accepted on a mutex made free and a
+  semaphore made with 0, which read 0 afterwards: "free" (0) fits as well. A count too big is refused
+  (ILLEGAL_COUNT), a negative one isn't, so it isn't taken as a count; "as it was made" is the meaning that leaves,
+  and the recordings' cases agree with it.
+  ReferThreadStatus gives a thread waiting on a mutex no wait type (the PSP's number isn't known here).
 - The lightweight mutex now honours its priority attribute too: mutexhandoff recorded both kinds alike ("UBAC",
   "BACU", "BUCA"), and it had been first come first served whatever the attribute.
 
@@ -3508,18 +3515,20 @@ set); later SDKs' sceKernelAllocMemoryBlock, FreeMemoryBlock and GetMemoryBlockP
 of the user partition like any other (types 0 and 1, options 4 bytes long, a pointer read back as 0 for a block there
 isn't, as recorded); sceImposeGetLanguageMode (what SetLanguageMode set, now kept, else English and the cross
 button, numbered as the system's settings number them: `pspimpose.h` doesn't give the values);
-sceImposeGetBatteryIconStatus (not charging, full: pspsdk names it only, so its two outputs and their values are
-chosen); sceKernelDevkitVersion (0x06060110, firmware 6.61: threads/tls/partition recorded 6.6-something, printing
-the major and minor numbers alone, "firmware 6.06"; the point release is chosen); sceKernelUSec2SysClock and its wide
-form.
+sceImposeGetBatteryIconStatus (pspsdk names it only, no recording shows it: chosen, the natural answer with no
+battery to show, not charging (0) and a full battery's icon (3, the icon showing up to three bars), as the power
+functions say the battery's full); sceKernelDevkitVersion (0x06060110, firmware 6.61: threads/tls/partition
+recorded 6.6-something, printing the major and minor numbers alone, "firmware 6.06"; the point release is chosen);
+sceKernelUSec2SysClock and its wide form.
 
 **Time as the PSP keeps it in system calls.** Running pspautotests' timer programs showed three things the kernel's
 timekeeping did that a PSP doesn't, each of which the new functions exposed:
 - **The clock stood still between waits.** A system function saw the time the CPU's go began (a go runs to the next
   thing due, up to a frame), however many instructions the thread had run since: an alarm set was due sooner than
   asked by however long the thread had been running, and a virtual timer read after the program had spun a while
-  since starting it had run 0. Now the clock catches up at each syscall to the instructions run so far in the go
-  (`Allegrex::instructionsRun`; run() adds the rest), at most a block behind.
+  since starting it had run 0. Now the clock catches up at each syscall to the instructions run before it in the go
+  (`Allegrex::instructionsBefore()`; run() adds the rest), the same count on both engines: inside a compiled block
+  the recompiler counts the block's instructions before the syscall, which it knows from where the syscall is in it.
 - **What a system function made due waited for the go to end.** A better thread's delay or timeout ending, or a
   timer's handler, while a worse thread ran on without waiting, waited for the end of its go, a frame at most. Now
   each syscall brings the go's end forward to the next thing due (`Allegrex::runLimit`), so it comes on time
@@ -3558,8 +3567,8 @@ started one's base come; no timer going off later than a call could set it; each
 exactly one call waiting or running (the running one may have lost its alarm to its own handler), and every timer's
 call a timer there is; the thresholds and width ones their functions take.
 
-Tests (`tests/psp/run-tests.sh`: 272 groups, with and without the sanitizers; `tests/psp/ares`: 286 checks;
-`tests/allegrex`, the CPU's run loop having changed: 56 groups; none failed):
+Tests (`tests/psp/run-tests.sh`: 272 groups (274 after review, below), with and without the sanitizers;
+`tests/psp/ares`: 286 checks; `tests/allegrex`, the CPU's run loop having changed: 56 groups; none failed):
 - `mutexes.cpp` (new): "mutexes called directly" (create's refusals, counts and holders, overflow, a status's
   sizes, cancelling, deleting), "mutexes handed on in order" (both engines, both attributes: "UABCDU" and
   "UBCADU"), "mutexes waits ending" (a recursive mutex half unlocked, a timeout, a waiter terminated, a holder ending,
@@ -3611,9 +3620,26 @@ Left, and why:
   the kernel and into handlers cost.
 
 Uncertain: the "at once" edge (30) and its 35 microseconds' wait, the timeouts' 35 written back as part of what's
-left; whether the clock's catching up a block behind matters to a program reading it in a tight loop; an alarm due
-again in the past going off from now (from one recording); a negative count to the cancels as the initial count; a
-running timer's base after its time is set; a virtual timer's handler starting, stopping or re-setting its own
-timer; the 215 microseconds taken for virtual timers too (alarmcosts measured alarms); sceKernelGetThreadId's error
-in a handler (threads/alarm shows only that it's no thread's ID); the battery icon's outputs and the impose
-functions' numbers; and the mutex's wait type in a thread's status.
+left; an alarm due again in the past going off from now (from one recording); a negative count to the cancels as
+the initial count; a running timer's base after its time is set; a virtual timer's handler starting, stopping or
+re-setting its own timer; the 215 microseconds taken for virtual timers too (alarmcosts measured alarms);
+sceKernelGetThreadId's error in a handler (threads/alarm shows only that it's no thread's ID); the battery icon's
+outputs and the impose functions' numbers; the mutex's wait type in a thread's status; and the mutex calls refused
+outside a thread besides the locks.
+
+**After review.** Three things changed. A mutex could be left held by nobody: an alarm's (or a virtual timer's, a
+blank's, the GE's) handler trying a free mutex while no thread ran gave it count 1 and holder 0, which no thread
+could lock or unlock and a state saved then couldn't load (its check: held exactly while it has a holder); with a
+thread interrupted, that thread became the holder unknowing. Trying, unlocking and cancelling are now refused in a
+handler or with no thread running, as locking was in a handler, and so is everything else that makes a thread a
+mutex's holder or changes its count (`Kernel::fromThread()`, above). And the engines read the clock up to a block
+apart at a syscall: the recompiler had published its count only as a block ended, so a syscall in a block saw the
+clock as the block began, the interpreter as it came; it now counts the block's instructions before the syscall
+(`instructionsBefore()`: the count each block's call into the interpreter already stores, less the syscall itself).
+Tests: "mutexes outside
+threads" (`mutexes.cpp`, both engines: an alarm's handler calling them with no thread running and interrupting main,
+neither mutex left held, main taking and freeing both after, the state at the end loaded; and called directly with
+no thread) and "the clock inside a block" (`timers.cpp`: the time read after 900 instructions of a block alike on
+both engines); each fails with its fix undone. The comments on the battery icon and on the cancels' negative count
+now say why. tests/psp 274 groups, with and without the sanitizers; tests/psp/ares 286 checks; tests/allegrex 56
+groups; none failed. pspautotests' threads/ and intr/ programs each print what they did before (72 of 167 matching).

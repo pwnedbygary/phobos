@@ -898,6 +898,15 @@ pspsdk's headers and pspautotests' programs and recordings; no PPSSPP or JPCSP s
   owner's games' imports: sceKernelReferThreadRunStatus, sceKernelGetThreadmanIdList, sceGeBreak.
 - **Not checked**: the RP6; the app and the desktop program built whole (the core was built in the runner and the
   tests); a game that calls the new functions (none here does in its first minute).
+- **After review** (the commit after the docs; part 28's "After review"): a mutex tried from an interrupt handler
+  while no thread ran was left held by nobody (no thread could free it, a state saved then wouldn't load), and one
+  tried from a handler that interrupted a thread went to that thread; now trying, unlocking, cancelling and making
+  one held, kernel or lightweight, are refused outside a thread (ILLEGAL_CONTEXT), as locking was in a handler. The
+  recompiler now gives the clock its exact count at a syscall inside a block, so both engines read the same time.
+  The battery icon's and the cancels' negative-count comments say why. tests/psp 274 groups (2 new, each failing
+  with its fix undone) with and without the sanitizers, tests/psp/ares 286 checks, tests/allegrex 56 groups, none
+  failed; pspautotests' threads/ and intr/ unchanged. The reviewer ran this branch's build on the RP6: Peace Walker,
+  GTA LCS and Burnout Dominator at 60 fps, as on #155's.
 
 ## PSP core: the PSP in the desktop program, with FFmpeg on Linux, macOS and Windows — 2026-10-06
 
