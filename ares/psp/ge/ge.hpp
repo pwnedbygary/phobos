@@ -242,6 +242,8 @@ struct GE {
   using u32x4 = u32 __attribute__((vector_size(16)));
   struct Four {
     s32x4 live;       //the lanes still being drawn (all bits set), the others clear
+    s32x4 inside;     //the lanes inside the row (all bits set)
+    bool full;        //all four inside it
     s32x4 z, depth;   //the pixels' depths, and the depth buffer's there (when it's read)
     s32x4 color[4];   //red, green, blue, alpha: 0-255
     s32x4 fog;        //0-255

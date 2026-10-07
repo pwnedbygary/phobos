@@ -19,9 +19,10 @@
 //    only drops the pixel, and the depth test needs only the pixel's depth: testing it first drops the same pixels,
 //    before their texels are looked up for nothing.
 //A row's first and last fours may have lanes outside it. They're worked out and dropped (their texels taken from the
-//texture's first), and their bytes of the frame and depth buffers are written back as they were read: those bytes are
-//in the same row and the same aligned 8 or 16 bytes as the row's own pixels, so on a page the job draws over, which
-//nobody else may touch until it's drawn (threads.cpp), in a row that only this thread draws meanwhile.
+//texture's first), and their bytes of the frame and depth buffers are neither read nor written: where a frame buffer
+//is barely wider than the area drawn, they can be another row's pixels, which another thread may be drawing. A four
+//wholly inside its row reads and writes its four pixels at once, those dropped with the very bytes they had (its own
+//pixels, in its own row, which only this thread draws meanwhile); one that isn't, each lane inside it by itself.
 //What isn't drawn here (points, lines, the stencil test, logic operations, the jobs fourFriendly() turns down) is
 //drawn a pixel at a time, as before.
 
@@ -135,8 +136,9 @@ alwaysinline auto GE::depthFirst(const PixelState& p, s32 x, s32 y, Four& four) 
     //multiple of 8 (the buffer starts on 16 bytes, its rows are multiples of 4 pixels long, the four starts on a
     //multiple of 4), and the rearrangement leaves an offset's low 5 bits as they are (memory.hpp).
     u32 at = Memory::vramOffset(3, (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
-    u16 depths[4];
-    std::memcpy(depths, memory.vram.data() + at, sizeof(depths));
+    u16 depths[4] = {};
+    if(four.full) std::memcpy(depths, memory.vram.data() + at, sizeof(depths));
+    else for(u32 n = 0; n < 4; n++) if(four.inside[n]) std::memcpy(&depths[n], memory.vram.data() + at + n * 2, 2);
     four.depth = GE::s32x4{depths[0], depths[1], depths[2], depths[3]};
     if(!p.clear) four.live &= passesLanes(p.depthFunction, four.z, four.depth);
   }
@@ -256,14 +258,28 @@ alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) 
   //(the four's bytes are side by side and on a multiple of their size: see depthFirst())
   u32 at = (p.frameBuffer + (y * p.stride + x) * bytes) & (Memory::VRAMSize - 1);
   u32x4 old;
-  if constexpr(bytes == 4) std::memcpy(&old, vram + at, 16);
-  else { u16 halves[4]; std::memcpy(halves, vram + at, 8); old = u32x4{halves[0], halves[1], halves[2], halves[3]}; }
+  if(four.full && bytes == 4) {
+    std::memcpy(&old, vram + at, 16);
+  } else if(four.full) {
+    u16 halves[4];
+    std::memcpy(halves, vram + at, 8);
+    old = u32x4{halves[0], halves[1], halves[2], halves[3]};
+  } else {
+    u32 pixels[4] = {};
+    for(u32 n = 0; n < 4; n++) {
+      if(!four.inside[n]) continue;
+      if constexpr(bytes == 4) std::memcpy(&pixels[n], vram + at + n * 4, 4);
+      else { u16 half; std::memcpy(&half, vram + at + n * 2, 2); pixels[n] = half; }
+    }
+    old = u32x4{pixels[0], pixels[1], pixels[2], pixels[3]};
+  }
   auto& color = four.color;
   auto writeDepth = [&] {
     u32 offset = Memory::vramOffset(3, (p.depthBuffer + (y * p.depthStride + x) * 2) & (Memory::VRAMSize - 1));
     s32x4 depth = pickLanes(four.live, four.z, four.depth);
     u16 depths[4] = {u16(depth[0]), u16(depth[1]), u16(depth[2]), u16(depth[3])};
-    std::memcpy(vram + offset, depths, sizeof(depths));
+    if(four.full) std::memcpy(vram + offset, depths, sizeof(depths));
+    else for(u32 n = 0; n < 4; n++) if(four.live[n]) std::memcpy(vram + offset + n * 2, &depths[n], 2);
   };
   //narrowPixel() lane by lane: each channel's top bits
   auto narrow = [&](const s32x4 (&value)[4]) -> u32x4 {
@@ -276,6 +292,12 @@ alwaysinline auto GE::pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) 
   auto write = [&](u32x4 pixel, u32 keep) {
     pixel = (pixel & ~keep) | (old & keep);
     pixel = u32x4(pickLanes(four.live, s32x4(pixel), s32x4(old)));
+    for(u32 n = 0; n < 4 && !four.full; n++) {
+      if(!four.live[n]) continue;
+      if constexpr(bytes == 4) { u32 word = pixel[n]; std::memcpy(vram + at + n * 4, &word, 4); }
+      else { u16 half = pixel[n]; std::memcpy(vram + at + n * 2, &half, 2); }
+    }
+    if(!four.full) return;
     if constexpr(bytes == 4) std::memcpy(vram + at, &pixel, 16);
     else {
       u16 halves[4] = {u16(pixel[0]), u16(pixel[1]), u16(pixel[2]), u16(pixel[3])};
@@ -428,7 +450,8 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
     for(s32 x = firstX; x <= job.lastX; x += 4) {
       Four four;
       s32x4 column = x + Lanes;
-      four.live = (column >= job.firstX) & (column <= job.lastX);
+      four.live = four.inside = (column >= job.firstX) & (column <= job.lastX);
+      four.full = x >= job.firstX && x + 3 <= job.lastX;
       four.z = splatLanes(s.z);
       if(!depthFirst<Format>(p, x, y, four)) continue;
       for(u32 n = 0; n < 4; n++) four.color[n] = baseColor[n];
@@ -514,7 +537,8 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
     for(s32 x = first; x <= stop; x += 4) {
       Four four;
       s32x4 column = x + Lanes;
-      four.live = (column >= s32(start)) & (column <= s32(stop));
+      four.live = four.inside = (column >= s32(start)) & (column <= s32(stop));
+      four.full = x >= start && x + 3 <= stop;
       f32x4 w0 = __builtin_convertvector(edge[0], f32x4);
       f32x4 w1 = __builtin_convertvector(edge[1], f32x4);
       f32x4 w2 = __builtin_convertvector(edge[2], f32x4);
