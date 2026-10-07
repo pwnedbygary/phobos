@@ -39,6 +39,8 @@ namespace ares::PlayStationPortable {
 #include "sas.cpp"
 #include "codec.cpp"
 #include "mpeg.cpp"
+#include "psmf.cpp"
+#include "psmfplayer.cpp"
 #include "atrac.cpp"
 #include "mp3.cpp"
 #include "net.cpp"
@@ -572,6 +574,63 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceMpeg",           "sceMpegAvcCsc",                 &Kernel::sceMpegAvcCsc);
   add("sceMpeg",           "sceMpegAtracDecode",            &Kernel::sceMpegAtracDecode);
   add("sceMpeg",           "sceMpegGetAvcEsAu",             &Kernel::sceMpegGetAvcAu);
+  //movies' headers (psmf.cpp) and the movie player (psmfplayer.cpp), libraries games ship as modules of their own,
+  //which the kernel stands in for
+  for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
+        {"scePsmfSetPsmf", &Kernel::scePsmfSetPsmf}, {"scePsmfVerifyPsmf", &Kernel::scePsmfVerifyPsmf},
+        {"scePsmfQueryStreamOffset", &Kernel::scePsmfQueryStreamOffset},
+        {"scePsmfQueryStreamSize", &Kernel::scePsmfQueryStreamSize},
+        {"scePsmfGetPsmfVersion", &Kernel::scePsmfGetPsmfVersion},
+        {"scePsmfGetHeaderSize", &Kernel::scePsmfGetHeaderSize},
+        {"scePsmfGetStreamSize", &Kernel::scePsmfGetStreamSize},
+        {"scePsmfGetPresentationStartTime", &Kernel::scePsmfGetPresentationStartTime},
+        {"scePsmfGetPresentationEndTime", &Kernel::scePsmfGetPresentationEndTime},
+        {"scePsmfGetNumberOfStreams", &Kernel::scePsmfGetNumberOfStreams},
+        {"scePsmfGetNumberOfSpecificStreams", &Kernel::scePsmfGetNumberOfSpecificStreams},
+        {"scePsmfSpecifyStream", &Kernel::scePsmfSpecifyStream},
+        {"scePsmfSpecifyStreamWithStreamType", &Kernel::scePsmfSpecifyStreamWithStreamType},
+        {"scePsmfSpecifyStreamWithStreamTypeNumber", &Kernel::scePsmfSpecifyStreamWithStreamTypeNumber},
+        {"scePsmfGetCurrentStreamNumber", &Kernel::scePsmfGetCurrentStreamNumber},
+        {"scePsmfGetCurrentStreamType", &Kernel::scePsmfGetCurrentStreamType},
+        {"scePsmfGetVideoInfo", &Kernel::scePsmfGetVideoInfo}, {"scePsmfGetAudioInfo", &Kernel::scePsmfGetAudioInfo},
+        {"scePsmfGetNumberOfEPentries", &Kernel::scePsmfGetNumberOfEPentries},
+        {"scePsmfCheckEPmap", &Kernel::scePsmfCheckEPmap}, {"scePsmfGetEPWithId", &Kernel::scePsmfGetEPWithId},
+        {"scePsmfGetEPWithTimestamp", &Kernel::scePsmfGetEPWithTimestamp},
+        {"scePsmfGetEPidWithTimestamp", &Kernel::scePsmfGetEPidWithTimestamp},
+        {"scePsmfGetNumberOfPsmfMarks", &Kernel::scePsmfGetNumberOfPsmfMarks},
+        {"scePsmfGetPsmfMark", &Kernel::scePsmfGetPsmfMark}}) {
+    add("scePsmf", name, handler);
+  }
+  for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
+        {"scePsmfPlayerCreate", &Kernel::scePsmfPlayerCreate}, {"scePsmfPlayerDelete", &Kernel::scePsmfPlayerDelete},
+        {"scePsmfPlayerSetTempBuf", &Kernel::scePsmfPlayerSetTempBuf},
+        {"scePsmfPlayerSetPsmf", &Kernel::scePsmfPlayerSetPsmf},
+        {"scePsmfPlayerSetPsmfCB", &Kernel::scePsmfPlayerSetPsmfCB},
+        {"scePsmfPlayerSetPsmfOffset", &Kernel::scePsmfPlayerSetPsmfOffset},
+        {"scePsmfPlayerSetPsmfOffsetCB", &Kernel::scePsmfPlayerSetPsmfOffsetCB},
+        {"scePsmfPlayerReleasePsmf", &Kernel::scePsmfPlayerReleasePsmf},
+        {"scePsmfPlayerGetPsmfInfo", &Kernel::scePsmfPlayerGetPsmfInfo},
+        {"scePsmfPlayerConfigPlayer", &Kernel::scePsmfPlayerConfigPlayer},
+        {"scePsmfPlayerStart", &Kernel::scePsmfPlayerStart}, {"scePsmfPlayerStop", &Kernel::scePsmfPlayerStop},
+        {"scePsmfPlayerUpdate", &Kernel::scePsmfPlayerUpdate},
+        {"scePsmfPlayerGetVideoData", &Kernel::scePsmfPlayerGetVideoData},
+        {"scePsmfPlayerGetAudioData", &Kernel::scePsmfPlayerGetAudioData},
+        {"scePsmfPlayerGetAudioOutSize", &Kernel::scePsmfPlayerGetAudioOutSize},
+        {"scePsmfPlayerGetCurrentStatus", &Kernel::scePsmfPlayerGetCurrentStatus},
+        {"scePsmfPlayerGetCurrentPts", &Kernel::scePsmfPlayerGetCurrentPts},
+        {"scePsmfPlayerGetCurrentPlayMode", &Kernel::scePsmfPlayerGetCurrentPlayMode},
+        {"scePsmfPlayerChangePlayMode", &Kernel::scePsmfPlayerChangePlayMode},
+        {"scePsmfPlayerGetCurrentVideoStream", &Kernel::scePsmfPlayerGetCurrentVideoStream},
+        {"scePsmfPlayerGetCurrentAudioStream", &Kernel::scePsmfPlayerGetCurrentAudioStream},
+        {"scePsmfPlayerSelectVideo", &Kernel::scePsmfPlayerSelectVideo},
+        {"scePsmfPlayerSelectAudio", &Kernel::scePsmfPlayerSelectAudio},
+        {"scePsmfPlayerSelectSpecificVideo", &Kernel::scePsmfPlayerSelectSpecificVideo},
+        {"scePsmfPlayerSelectSpecificAudio", &Kernel::scePsmfPlayerSelectSpecificAudio},
+        {"scePsmfPlayerBreak", &Kernel::scePsmfPlayerBreak}}) {
+    add("scePsmfPlayer", name, handler);
+  }
+  //listed by one of the specification's accounts without a name: its NID alone
+  addNID("scePsmfPlayer",  "scePsmfPlayer_340C12CB",        0x340c'12cb, &Kernel::scePsmfPlayerUnknown);
   //the system's fonts (font.cpp)
   add("sceLibFont",        "sceFontNewLib",                 &Kernel::sceFontNewLib);
   add("sceLibFont",        "sceFontDoneLib",                &Kernel::sceFontDoneLib);
@@ -705,6 +764,7 @@ auto Kernel::power() -> void {
   nextFontID = 1;
   mpegCalls.clear();
   mpegStreams.clear();
+  psmfPlayer = {};
   dialog = {};
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;

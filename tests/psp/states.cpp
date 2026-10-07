@@ -6,6 +6,7 @@
 #include "kernel-machine.hpp"
 #include "disc-image.hpp"
 #include "font-maker.hpp"
+#include "movie-maker.hpp"
 
 namespace allegrex_test::psp {
 
@@ -269,6 +270,26 @@ static auto stateFields() -> void {
   movie.audioTime = 1000, movie.audioCarry = 2000, movie.held.assign(384, 0x80), movie.heldWidth = 16;
   movie.heldHeight = 16, movie.shown = movie.held, movie.shownWidth = movie.shownHeight = 16;
   movie.soundLast.assign(376, 0x33);
+  //part 31's movie player, playing a movie of two pictures (B.TXT's descriptor standing for its file): a picture
+  //decoded ahead and one shown, the streams' data read part way with their stamps, the last sound frame decoded
+  Movie made;
+  made.streams = {videoStream(0xe0, 16, 16), soundStream(0)};
+  made.units = {slices(5, {7}), slices(5, {7})};
+  auto madeBytes = made.bytes();
+  auto& player = k.psmfPlayer;
+  player.status = 4, player.priority = 0x17, player.tempBuffer = 0x0890'0000, player.tempSize = 0x1'0000;
+  player.videoCodec = 0, player.videoStream = 0, player.audioCodec = 1, player.audioStream = 0;
+  player.file = other, player.header.assign(madeBytes.begin(), madeBytes.begin() + 0x800);
+  player.audioID = 0, player.nextPack = 1;
+  player.video = {0, 0, 0, 1, 9, 0x10}, player.videoStamps = {{0, 93003}};
+  player.audio = {0x0f, 0xd0, 0x28, 0x2e}, player.audioStamps = {{0, 90000}};
+  player.videoTime = 90000, player.audioTime = 85820;
+  Kernel::PsmfPicture decodedAhead;
+  decodedAhead.planes.assign(384, 0x80), decodedAhead.width = decodedAhead.height = 16, decodedAhead.time = 93003;
+  player.pictures.push_back(decodedAhead);
+  player.shown = decodedAhead, player.shown.time = 90000;
+  player.calls = 3, player.started = true, player.due = 1, player.from = 90000;
+  player.soundLast.assign(376, 0x44);
   std::vector<std::pair<std::string, std::function<void()>>> changes = {
     //the CPU
     {"ipu.r", [&] { cpu.ipu.r[9] ^= 0x1234; }}, {"ipu.lo", [&] { cpu.ipu.lo ^= 1; }},
@@ -661,6 +682,34 @@ static auto stateFields() -> void {
     {"mpeg stream shown size", [&] { movie.shown.resize(32 * 16 * 3 / 2), movie.shownWidth = 32; }},
     {"mpeg stream shown height", [&] { movie.shown.resize(32 * 32 * 3 / 2), movie.shownHeight = 32; }},
     {"mpeg stream soundLast", [&] { movie.soundLast[0] ^= 1; }},
+    {"psmf player priority", [&] { player.priority = 0x30; }},
+    {"psmf player tempBuffer", [&] { player.tempBuffer += 4; }},
+    {"psmf player tempSize", [&] { player.tempSize *= 2; }}, {"psmf player looping", [&] { player.looping = true; }},
+    {"psmf player pixelFormat", [&] { player.pixelFormat = 1; }}, {"psmf player mode", [&] { player.mode = 3; }},
+    {"psmf player speed", [&] { player.speed = 2; }}, {"psmf player videoCodec", [&] { player.videoCodec = -1; }},
+    {"psmf player videoStream", [&] { player.videoStream = 1; }},
+    {"psmf player audioCodec", [&] { player.audioCodec = -1; }},
+    {"psmf player audioStream", [&] { player.audioStream = 1; }}, {"psmf player file", [&] { player.file = file; }},
+    {"psmf player offset", [&] { player.offset = 2048; }},
+    {"psmf player header", [&] { player.header[0x60] ^= 1; }},  //(a byte nothing reads)
+    {"psmf player videoID", [&] { player.videoID = 0xe1; }}, {"psmf player audioID", [&] { player.audioID = 1; }},
+    {"psmf player nextPack", [&] { player.nextPack = 2; }}, {"psmf player video", [&] { player.video.push_back(1); }},
+    {"psmf player audio", [&] { player.audio.push_back(1); }},
+    {"psmf player videoStamps", [&] { player.videoStamps.push_back({6, 96006}); }},
+    {"psmf player audioStamps", [&] { player.audioStamps.push_back({4, 94180}); }},
+    {"psmf player videoTime", [&] { player.videoTime += 1; }},
+    {"psmf player audioTime", [&] { player.audioTime += 1; }},
+    {"psmf player pictures", [&] { player.pictures.push_back(decodedAhead); }},
+    {"psmf player picture", [&] { player.pictures[0].planes[0] ^= 1; }},
+    {"psmf player picture time", [&] { player.pictures[0].time += 1; }},
+    {"psmf player shown", [&] { player.shown.planes[0] ^= 1; }},
+    {"psmf player shown time", [&] { player.shown.time += 1; }},
+    {"psmf player calls", [&] { player.calls += 1; }}, {"psmf player started", [&] { player.started = false; }},
+    {"psmf player due", [&] { player.due = 2; }}, {"psmf player from", [&] { player.from += 3003; }},
+    {"psmf player silence", [&] { player.silence = true; }}, {"psmf player ending", [&] { player.ending = true; }},
+    {"psmf player endingAt", [&] { player.endingAt = 5; }}, {"psmf player entry", [&] { player.entry = 1; }},
+    {"psmf player soundLast", [&] { player.soundLast[0] ^= 1; }},
+    {"psmf player status", [&] { player.status = 0x200, player.ending = false; }},
   };
   //part 28's: each change leaves what a machine could have (the mutex held twice by thread one, ready by then; the
   //alarm's handler queued among the calls into the program; the timer started, its handler running in the call that
@@ -987,6 +1036,46 @@ static auto stateFields() -> void {
   });
   refuses("a movie sound frame of no frame's size", [&] { k.mpegStreams.begin()->second.soundLast.resize(377); });
   refuses("a movie sound frame past a sound unit's", [&] { k.mpegStreams.begin()->second.soundLast.resize(0x840); });
+
+  //the movie player as no machine has it
+  refuses("a player of a status there isn't", [&] { player.status = 3; });
+  refuses("a player of a priority Create refuses", [&] { player.priority = 15; });
+  refuses("a player's pixel format past 8888", [&] { player.pixelFormat = 4; });
+  refuses("a player in a play mode there isn't", [&] { player.mode = 6; });
+  refuses("a player ending but not playing", [&] { player.status = 2, player.ending = true; });
+  refuses("a player playing with no movie", [&] { player.header.clear(); });
+  refuses("a player made, with a movie", [&] { player.status = 1; });
+  refuses("a player's file not handed out yet", [&] { player.file = k.nextFile; });
+  refuses("a player's header that isn't one", [&] { player.header[0] = 'X'; });
+  refuses("a player's header longer than its stream's offset", [&] { player.header.resize(0x900); });
+  refuses("a player read past its stream", [&] { player.nextPack = 3; });
+  refuses("a player's stamps out of order", [&] { player.videoStamps = {{3, 1}, {1, 2}}; });
+  refuses("a player's stamp past its data", [&] { player.audioStamps = {{u32(player.audio.size()) + 1, 1}}; });
+  refuses("a player's picture of the wrong size", [&] { player.pictures[0].planes.push_back(0); });
+  refuses("a player's picture wider than a movie's", [&] {
+    player.shown.planes.assign(1040 * 16 + 2 * 520 * 8, 0x80), player.shown.width = 1040;
+  });
+  refuses("four pictures decoded ahead", [&] { player.pictures.resize(4, decodedAhead); });
+  refuses("a player's sound frame of no frame's size", [&] { player.soundLast.resize(377); });
+  refuses("a player's sound stream past a byte", [&] { player.audioID = 0x100; });
+  refuses("a player's wait with no time", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Psmf, thread.wakeAt = 0;
+  });
+  refuses("a player's wait due in a minute", [&] {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Psmf;
+    thread.wakeAt = k.cycles + 61 * Kernel::CPUFrequency;
+  });
+  {
+    auto& thread = *k.threads.at(two);  //a SetPsmfCB's wait, callbacks running: loads
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Psmf, thread.callbacks = true;
+    thread.wakeAt = k.cycles + 1000;
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);
+    CHECK(load(a, state), true);
+  }
 
   refuses("a font resolution of 0", [&] { k.fontResolution[0] = 0; });
   //the font library as it never leaves itself (each looked up afresh: every load makes them anew); then a state of

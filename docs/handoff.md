@@ -25,6 +25,47 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: movies through scePsmf and scePsmfPlayer, in a clean room — 2026-10-07
+
+Branch `cursor/psp-psmf-2b67`, on top of `cursor/psp-ge-features-2b67` (#157, part 29): commit 18c58f968 (code and
+tests), then the docs; local only, not pushed. docs/psp-core.md, part 31, describes it. Made in a clean room the
+owner approved: a separate agent read other emulators and wrote a facts-only specification (from their behaviour,
+pspautotests' recordings and the movies' headers); this was written from that, from pspautotests' video/psmfplayer
+programs and recordings directly, the movies' own bytes and the games' behaviour, the specification's sources never
+seen and no emulator's code read.
+- **scePsmf** (`kernel/psmf.cpp`, 25 functions): the header, stream table and EP map through the game's 32-byte
+  structure (copies work on their own). Peace Walker's four (SetPsmf, GetNumberOfSpecificStreams, the start and end
+  times) are there.
+- **scePsmfPlayer** (`kernel/psmfplayer.cpp`, 28 functions): one player, its statuses and every refusal the
+  recordings show, the movie read through a game file descriptor and decoded with the existing decoders, start-up on
+  the third GetVideoData, a picture due two Updates after the last, sound kept in step, the end on the second Update
+  after the last picture (or at the caller's next wait when the player's priority is worse), looping, slow motion,
+  pause, step frame, fast forward and rewind, pictures with zero alpha (sceMpeg's stays opaque: no recording shows
+  it). A new wait kind, `Wait::Psmf`. State version 13.
+- **Modules**: no new rule. Peace Walker's psmf.prx and libpsmfplayer.prx are `scePsmf_library` and
+  `scePsmfP_library` (stood in for, as Sony's); the player's other names (libpsmfplayer, psmf_jk, jkPsmfP_library)
+  load as game code, but the kernel's functions win the linking, so their games reach the kernel's player too.
+- **Checked**: pspautotests' video/psmfplayer, 19 of 22 exactly as the PSP printed (basic, configplayer and playmode
+  differ only in the PSP's own addresses, its USB-paced file reading and its data cache; part 31 says how);
+  tests/psp 289 groups (8 new) with ASan and UBSan, with FFmpeg and `PSP_FFMPEG=0`; tests/psp/ares 294 checks both
+  ways; none failed; 11 broken versions each caught. Games: all 14 on this Mac the same pictures at frames 1200,
+  2400 and 3000 and the same sound before and after; Peace Walker now plays its opening movie (all 2368 pictures,
+  with sound) after pressing Cross on its title, where it had given it up at the missing scePsmfSetPsmf. None of the
+  14 uses scePsmfPlayer; the report's 8 player games aren't on this Mac.
+- **On the RP6** (build 105200): Peace Walker plays its opening movie by itself after the Kant quote, through the
+  stood-in psmf.prx, at 60 fps with its sound running; Chili Con Carnage (not on this Mac) loads psmf.prx too and
+  now plays its opening movie and the Eidos logo to a Memory Stick warning (black in the compatibility run). Ace
+  Combat X and WipEout stop at ThreadManForUser 0xffc36a14 and 0x94416130; no game tried loads the player's library.
+- **After review** (617d34e48; the audit's findings in the owner's words, its report unread): an EP map's size in 64
+  bits and the map kept inside the header (a wrapped count had copied host memory and walked 429 million entries);
+  an access unit cut at 2 MiB and its end searched for once (it had grown without limit, searched quadratically),
+  and sound frames without headers passed over once; an end before the start taken as the start. New group "psmf
+  malformed movies"; tests/psp 290 groups, tests/psp/ares 294, none failed; pspautotests and Peace Walker unchanged.
+- **Left**: the player meeting a game (the report's 8 player games are neither here nor among the device's games
+  tried), LocoRoco 2's GetPsmfInfo variant, PCM sound, marks, the unknown NID 0x340c12cb's real behaviour, the
+  start-up's and loops' real timing, and the choices on the specification's uncertainties (part 31 lists them),
+  which a measuring round with a movie that has sound and an EP map would settle.
+
 ## PSP compatibility re-run — 2026-10-07
 
 Branch `local/psp-rerun`, cut from `origin/cursor/psp-ge-features-2b67` (tip

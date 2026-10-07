@@ -31,6 +31,8 @@ mutexes, alarms, virtual timers, and the clock kept as the PSP keeps it in syste
 `cursor/psp-hle-games5-2b67`, on top of part 27's. Part 29, the GE features games are missing (lines, bounding
 boxes, compressed DXT textures, sceGeBreak), is on `cursor/psp-ge-features-2b67`, on top of part 28's. Part 30, the
 GE faster again (four pixels at a time, every pixel the same), is on `cursor/psp-ge-speed2-2b67`, on top of part 29's.
+Part 31, movies through scePsmf and scePsmfPlayer, written in a clean room, is on `cursor/psp-psmf-2b67`,
+on top of part 30's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -4000,3 +4002,250 @@ thread is the limit there now. Screenshots and the stats in `/tmp/ge2-device`, o
   drawing only the bands the texture comes from would shorten them.
 - In the four-pixel path: 16-bit lanes (eight pixels a vector) for the color arithmetic that fits, triangles' rows
   stepped instead of divided, and the remaining divisions (a pixel's perspective takes five, its colors four).
+
+## Part 31: movies through scePsmf and scePsmfPlayer
+
+On branch `cursor/psp-psmf-2b67`, on top of part 30's `cursor/psp-ge-speed2-2b67` (#159). Games play PSMF movies
+two ways: with sceMpeg, feeding it the program stream themselves (part 25 and 26), or with Sony's movie player
+library, scePsmfPlayer, which reads a movie's file, decodes it and hands the game pictures and sound; and games of
+the first kind read the movie's header with scePsmf. The two libraries aren't the firmware's: games ship them as
+modules of their own (`psmf.prx`, `libpsmfplayer.prx`). 19 of the owner's 266 games stopped at them in the
+compatibility run (scePsmfPlayerCreate in 8, scePsmfSetPsmf in 7). This part gives both libraries, their 53
+functions (25 and 28), written in a clean room.
+
+**How it was made.** Part 28 had left these libraries for want of a source this project may use: pspsdk has no PSMF
+header, pspautotests no scePsmf program, and the container's fields are documented nowhere allowed here. With the
+owner's approval (2026-10-07), two agents worked apart. A separate agent read other emulators' code and pspautotests'
+recordings and wrote a facts-only specification of the PSP's behaviour, in its own words, with each fact's source
+(a PSP recording, the movie files, both emulators, one of them): the container, both libraries' functions and
+errors, the player's statuses and timing, and the uncertainties it found. This part was written from that
+specification, from pspautotests' `video/psmfplayer` programs and the results they recorded on a PSP (read directly:
+the strongest evidence), from the movies' own headers and streams (the test movies, and the owner's games' read in
+place), from this repository's code and docs, and from the games' behaviour. The specification's author's sources
+weren't seen here, and no other emulator's code was read, copied, translated or reworded. Where the specification
+lists an uncertainty, the code chooses, says so where it chooses, and follows pspautotests' recordings wherever they
+say anything (the choices are listed below).
+
+**The container** (`kernel/psmf.cpp`'s comment): a header, then an MPEG-2 program stream of 2048-byte packs carrying
+H.264 pictures (stream 0xe0 plus a channel) and ATRAC3plus sound (private stream 1, its packets' data a 4-byte header
+then frames behind 8-byte headers, as part 26 takes them for sceMpeg). The header: "PSMF", a version ("0012" to
+"0015"), where the program stream begins and how long it is (big-endian words at 8 and 12), the presentation's start
+and end in 90 kHz ticks (six bytes each, at 0x54 and 0x5a: 90000, and the last picture's time plus 3003, in every
+movie seen), a stream table (a count at 0x80, then 16-byte entries: the PES stream ID and private ID, where the
+stream's EP map is and how many entries it has, a video stream's size in 16-pixel units, a sound stream's channels
+and rate code), and the EP maps (10-byte entries: a picture's time and the pack its decoding can start from). The
+movies looked at, with a scratch script (not kept): pspautotests' three (144 by 80, 190 pictures, no sound, no EP
+map; `test_streams.pmf`, whose header lists two video and two sound streams and whose packs start 16 bytes late),
+Burnout Legends' `englis30.pmf` (with sound and three EP entries), SOCOM's `c0919.pmf`, and Peace Walker's
+`pw_op_ENG.pmf` and its 16-minute `AD0420_m_c00_c149.pmf` (version 0015, 114 MB, no EP map). All are I and P pictures
+only, and FFmpeg's decoder gives a picture for each access unit, none held back; most access units carry no time
+stamp, and the first sound frames are stamped a little before the presentation's start.
+
+**scePsmf** (`psmf.cpp`): a game loads the header into its memory and sets up a structure of its own over it
+(scePsmfSetPsmf), which every other function takes. The structure is 32 bytes (the size both of the specification's
+accounts write, so a game's structure of either size isn't written past): the version word, 0x800 (the header's
+size, as both accounts report it whatever the stream's offset), the stream's size, two zeros (the grouping period's
+and group's numbers), the current stream's number and the header's address, as the more detailed account lays them
+out, and a word of Phobos's own (the current stream's kind and channel, and the video stream whose EP map is read).
+Everything is in the structure and the header, so a copy of a structure works on its own, with its own current
+stream, as games rely on. The functions: SetPsmf and VerifyPsmf; QueryStreamOffset and QueryStreamSize (from a
+header, unchecked); GetPsmfVersion, GetHeaderSize, GetStreamSize, GetPresentationStartTime and EndTime (absolute,
+as words); GetNumberOfStreams and GetNumberOfSpecificStreams (kinds 0 H.264, 1 ATRAC3plus, 2 PCM, 3 user data, 15
+either kind of sound); SpecifyStream, SpecifyStreamWithStreamType (kind and channel),
+SpecifyStreamWithStreamTypeNumber (the n-th of a kind); GetCurrentStreamNumber and GetCurrentStreamType;
+GetVideoInfo and GetAudioInfo; the EP map's
+GetNumberOfEPentries, CheckEPmap (NID 0x971a3a90 is that spelling's hash, with a small m), GetEPWithId,
+GetEPWithTimestamp and GetEPidWithTimestamp; and the marks' GetNumberOfPsmfMarks and GetPsmfMark.
+
+**scePsmfPlayer** (`psmfplayer.cpp`): one player at a time (a second Create: 0x80618005), its statuses 1 (made), 2
+(a movie set), 4 (playing) and 0x200 (played to its end), each function refusing a handle word of 0, a value no player
+has, and every status its table in the recordings refuses (0x80616001). The handle is the address of a word that
+points at a word holding 0, the shape basic printed of the PSP's (two words of kernel memory beside the trampoline
+here); any copy of it works alike, and Delete zeroes the word it's given. The movie is read through a file
+descriptor of the game's (as a PSP's library opens it through sceIo), from the disc, the memory stick or any device,
+at an offset in its file (SetPsmfOffset), 64 KiB at a time, as far as the header's stream size; the packs are taken
+apart by the PES walker sceMpeg now shares (`pesPackets()`), the pictures decoded by codec.cpp's decoder and the sound
+frames by its ATRAC3plus decoder through the same helper sceMpegAtracDecode now uses (`atracUnitDecode()`), and the
+pictures converted by sceMpeg's BT.601 conversion (`pictureConvert()`). How playing goes, as the recordings show it:
+- Start-up: three pictures decoded ahead (and three sound frames, with sound) before the first comes; one is decoded
+  each GetVideoData call, so the first picture comes on the third (basic: two refused with 0x8061600c, the third gave
+  time 0). Meanwhile GetVideoData gives the picture shown last if there is one (a restart keeps it), else
+  0x8061600c, and GetAudioData nothing.
+- Pacing: Update, meant to come once a vertical blank, counts down toward the next picture: in play mode one is due
+  two Updates after the last was handed out (basic, playmode: 49 pictures in 99 Updates), the count starting again
+  at each (getvideodata and update, three Updates a picture: the end still on the second Update after the last).
+  GetVideoData hands out at most one new picture a call, and writes the current picture into the game's buffer at
+  every call that succeeds (pause, and after the end, the same picture again).
+- Sound: a due picture is held while it's more than two pictures ahead of the next sound frame waiting to be taken,
+  and two pictures are passed over while the sound is more than four ahead (the game's taking of the sound is the
+  clock); the first frame after a start comes out silent; frames more than a frame before the start, or two pictures
+  before the first picture, are dropped. The recordings' movies have no sound: these are the specification's more
+  detailed account. Only ATRAC3plus is played (no movie seen has PCM).
+- The end: everything decoded, the last picture handed out and two Updates since, and the sound all taken; then, not
+  looping, status 0x200, at once when the player's priority (Create's) is better than the calling thread's, else as
+  that thread next waits (getvideodata and update recorded both: during the second Update with 0x17 against the
+  test's 0x20, at the next GetVideoData with 0x28). Here the player has no threads of its own: the end waits for the
+  caller's next call that blocks, or for the next vertical blank, by which the PSP's threads have surely run.
+  Looping, playing starts again from the start in play mode, the status staying 4.
+- Play modes: slow motion a picture every six Updates (playmode: 17 in 99), pause and step frame none, but the
+  picture already due as the mode changed still comes in all three (playmode: one more after switching to pause or
+  step frame). Fast forward and rewind need a movie whose every video stream has an EP map (else 0x80616003, as
+  recorded) and show its entries' pictures, the speed's number of entries on, one each 15, 20 or 25 Updates; rewound
+  to the first entry it plays on from the start, forward past the last ends the movie (the specification's account;
+  no recording, since no test movie has an EP map). Start at a time, in such a movie, begins at the entry at or
+  before it, the pictures before it decoded but not handed out.
+- Calls that block (the recordings' marks): Create, Delete, ReleasePsmf, the SetPsmf functions (the header's reading
+  time on its device, even for a file that isn't there; not when refused for the status or a NULL path; the CB ones
+  with callbacks), and GetVideoData when it succeeds; how long isn't measured (`Wait::Psmf`, a new kind of wait whose
+  call returns its result as it ends).
+- Pictures: as many rows as the picture has, each as many pixels as its width, the buffer width apart (0 for 512, an
+  odd one less its lowest bit, a narrower one 0x800001fe, a negative one 0x80000023, a NULL buffer 0x80000103, as
+  getvideodata recorded), the rest of each row left alone; in the pixel format ConfigPlayer set (8888 at first), with
+  alpha zero in every format: configplayer told the PSP's formats apart by their zero alpha bits.
+
+**sceMpeg's alpha** stays opaque: none of pspautotests' `video/mpeg` programs records a pixel (their results are
+return codes, sizes and addresses), so nothing shows a PSP's sceMpeg giving zero alpha.
+
+**Which modules the HLE stands in for.** As the module manager decides for Sony's modules (part 19): by the module's
+name, "sce" or "Sce" first, or its being a kernel module. Peace Walker's `psmf.prx` and `libpsmfplayer.prx` are
+`scePsmf_library` and `scePsmfP_library` (their ~PSP headers' names), so they're stood in for, as is the
+specification's `scePsmfPlayer`. The names other games give the player's library (`libpsmfplayer`, `psmf_jk`,
+`jkPsmfP_library`) aren't Sony's by that rule: such a module is loaded and run as a game's own code, its module_start
+too; but the kernel's functions go before a module's exports as imports are linked (part 19), so a game's calls to
+scePsmfPlayer reach the kernel's player whatever its library's module is called, and the module's own code sits in
+memory unused. No rule special to these libraries was needed.
+
+**States**: version 13 (12 refused). The player: its status and settings, its movie (the descriptor, the PSMF's place
+in its file, the header), where reading is, the streams' data read and not yet taken with their time stamps, the
+pictures decoded ahead and the one shown, the start-up, pacing and end, and the last sound frame decoded; and threads
+waiting for it. The decoders are made afresh: the sound's primed with that frame, the pictures' passing over pictures
+until one it can start from (an IDR picture, or one of I slices alone: `keyframe()`, as sceMpeg's after a load),
+the pictures decoded ahead shown first. Loading checks a status there is, a priority Create takes, a pixel format and
+play mode as they're set, the movie exactly while its status is 2 or more (a header that is one, as long as its
+stream's offset, and a file number handed out), reading within the stream, stamps inside their data and in order,
+three pictures ahead at most, each of its size and no larger than a movie's, a sound frame of a frame's size, and a
+player's wait due no later than a header's reading could take.
+
+**The choices made where the specification is uncertain** (each also noted in the code):
+- scePsmf: a structure not set up gives 0x80615001 from the functions about streams and 0x80615025 from the rest;
+  SetPsmf refuses a header without "PSMF" (0x80615501), a version word of 0 (0x80615002) and a stream offset of 0
+  (0x806151fe); VerifyPsmf takes the four known versions only (0x80615501) and leaves the 0x100 bytes below the
+  caller's stack pointer zeroed (one game reads a word there a PSP leaves zero); GetPsmfVersion gives the digits as a
+  number (14); SpecifyStream with a number no stream has gives 0x80615100 and leaves no usable selection
+  (0x80615001 then), a search by kind and channel that finds none gives 0 and no current stream (its number
+  0x80615100, its kind and channel those selected before), kind 15 matching either kind of sound; GetVideoInfo and
+  GetAudioInfo answer from the current stream's entry; the EP map read is the video stream selected last's, its
+  positions the pack counts as stored (not bytes), an index past it 0x80615100, the entry for a time the last not
+  after it, a time before the start 0x80615500; PCM is private IDs 0x10-0x1f and user data 0x20-0x2f (and anything
+  else); no marks (none seen, their layout unknown); an EP map not lying whole inside the header is none, and an end
+  before the start is the start (both after review, below).
+- scePsmfPlayer: Create checks the priority before the size; SetTempBuf checks the status before the size, and the
+  size whatever the address; a negative sound stream at Start plays without sound (-1 and -1 reported); Start's
+  modes past 5 refused in a full movie too, as are negative times; switching streams (Select*) needs two streams of
+  the kind whose data the program stream's first 64 packs carry (`test_streams.pmf`, two of each listed and none
+  there, was refused on a PSP); step frame asked for again while in it steps a picture; a restart keeps the picture
+  shown until the next; the movie is played to the header's stream size whatever the library's version; the sound
+  thresholds are the specification's detailed account's; the unknown NID 0x340c12cb returns 0; calls from an
+  interrupt handler aren't refused (one account refused most of them), and don't wait.
+
+**pspautotests' video/psmfplayer** (its 22 programs through the HLE kernel, part 26's scratch runner, host0: mounted
+at the checkout as PSPLink would have it; both engines): 19 print exactly what the PSP printed (create, setpsmf and
+its `[r]`/`[x]` marks of which calls blocked, setpsmfoffset, settempbuf, start, getaudiodata, getaudiooutsize,
+getvideodata, update, break, delete, releasepsmf, stop, selectspecific, selectstream, getcurrentpts,
+getcurrentstatus, getcurrentstream, getpsmfinfo). The other three differ only where the PSP's own circumstances show:
+basic prints the handle's address and the word it points at (the PSP's library block in its user memory);
+configplayer's looping player had restarted far more slowly on the PSP (24024 after 500 calls, re-reading its file
+over PSPLink's USB, where here the second pass is at 171171); and playmode counts the calls that wrote the buffer as
+its CPU's data cache let it see them (51 of 100 on the PSP, every one here), and its four later players took five
+calls longer to start on the PSP than its first (their start time 126126 against 141141), which the same model
+can't give one and not the other. Before this part, every one of them stopped at its first missing function.
+
+**Tests** (`tests/psp/run-tests.sh`: 289 groups with the address and undefined-behavior sanitizers, with FFmpeg
+and with `PSP_FFMPEG=0`; `tests/psp/ares`: 294 checks, both ways; none failed). `movies.cpp`'s made-up H.264 (I_PCM
+pictures, bare slice headers) moved to `movie-maker.hpp`, with a PSMF builder (the whole header, stream table and EP
+maps, packs in time order, a second video or sound stream). `psmf.cpp` (new), its pictures from a stand-in decoder
+whose picture is its access unit's bytes, so it runs without FFmpeg too: "psmf headers" (scePsmf on a header of two
+video streams, one with an EP map, two ATRAC3plus, one PCM and one of user data: the structure, counts, times,
+version, every way of specifying a stream and what's reported, the EP map by index and by time, a copy working on its
+own, VerifyPsmf's zeroed stack, the refusals, a structure not set up); "psmf player statuses" (every function refused
+in every status its table refuses, with no player and a handle of 0; Create's refusals; copies of the handle; the
+transitions; the end on the second Update); "psmf player playing" (a program on both engines, both priorities: two
+refusals, then a picture a round from time 0 with alpha zero, the end during the second Update or at the next
+GetVideoData, the file open through a descriptor, the state round-tripped); "psmf player pictures" (FFmpeg: BT.601's
+colours with alpha zero in all four formats, the buffer widths); "psmf player sound" (the frames in order, the first
+silent, a picture held, two passed over, the end waiting for the sound, a negative sound stream); "psmf player modes"
+(slow motion's 17 in 99, pause, step frame, fast forward and rewind on an EP map, a start part way, looping); "psmf
+player files" (SetPsmfOffset, the disc, every refusal, no decoders, Start's refusals, two streams of each switched
+to, the switch refused where the packs carry none); "psmf player states" (a program saved mid-movie, in GetVideoData's
+wait: loaded, the same state saved, the same pictures to the end; with P pictures, the loaded machine's jumping to the
+next IDR picture). `states.cpp`'s "state fields" changes each of the player's 38 fields, refuses 20 more states and
+loads a thread in SetPsmfCB's wait; `tests/psp/ares` refuses a state of version 12. Eleven broken versions each
+failed them: a picture every Update in play mode, the end without its two Updates, the start-up on the first call,
+opaque alpha, the priority ignored, no wait for a picture to start from after a load, the pacing left out of states,
+no hold for the sound, the first sound frame heard, the EP entry by its exact time only, and pause at once (without
+the picture already due).
+
+**The games** (the host Mac; part 26's scratch runner built from this tree and from part 29's, FFmpeg in both; the
+pictures and sound outside the repository, in `/tmp/psmf-scratch`). Of the fourteen games here, only Peace Walker
+touches these libraries: it ships `psmf.prx` and `libpsmfplayer.prx` and imports four scePsmf functions (SetPsmf,
+GetNumberOfSpecificStreams, GetPresentationStartTime and EndTime), playing its movies through sceMpeg; none of the
+fourteen imports scePsmfPlayer (the eight games of the report that call scePsmfPlayerCreate aren't on this Mac).
+- **Peace Walker**: pressing Cross on its title (frames 3300 and 3900 after the compatibility run's presses), at
+  frame 4341 it loads `psmf.prx` (stood in for), calls SetPsmf, GetNumberOfSpecificStreams twice and the start and
+  end times on `pw_op_ENG.pmf`, and plays its opening through sceMpeg: all 2368 pictures, the cast introduced one by
+  one, to the title card, with its sound (-11.5 to -16 dBFS over its 80 seconds; 0.027% of its samples at full
+  scale, the game's own mix). Before this part, scePsmfSetPsmf wasn't there (0x8002013a): the game gave the movie up
+  after four pictures, the screen black (`pw-movie-after.png` and `pw-movie-before.png`, frame 5400).
+- **All fourteen**, the ten priority games among them, with the compatibility run's presses for 3600 frames, before
+  and after: the same pictures at frames 1200, 2400 and 3000, byte for byte, the same sound, and no function missing
+  in either.
+- **On the RP6** (build 105200 of this tree, installed over the app, its data kept): Peace Walker, no button
+  pressed, plays its opening movie after the Kant quote, a minute in, through `psmf.prx` stood in for (the app's
+  log says so), at 60 frames a second, its sound track running throughout. Of the device's eight games not on this
+  Mac, four were tried for under a minute each: Chili Con Carnage loads `psmf.prx` too and now plays its opening
+  movie and the Eidos logo at 60 frames a second, to a Memory Stick warning (black in the compatibility run, at a
+  function then missing); Ace Combat X and WipEout's collection stop at ThreadManForUser functions not written yet
+  (0xffc36a14, 0x94416130), and Ace Combat Joint Assault is black at 50 seconds, as in the report, nothing noted.
+  None of the four loads the player's library in that time.
+
+**After review** (commit 617d34e48). An independent audit of this part found the clean room kept (the design
+independent, the account of how it was made accurate) and three faults, each needing a malformed movie, none in the
+owner's games. Its author had read the emulators' sources, so its report wasn't read here: the owner passed on its
+findings in their own words, and the fixes are this part's own.
+- An EP map's size, the header's entry count times 10, was worked out in 32 bits: a count of 0x1999999a came to
+  4 bytes and passed the check that the map is in memory, so scePsmfGetEPWithId copied host memory past it into the
+  game's, and scePsmfGetEPidWithTimestamp walked 429 million entries in one call. The size is now worked out in 64
+  bits, and a map must lie whole inside the header (before its stream's offset), all of it in the game's memory,
+  else there's none; a walk over it reads it once. (The player's own walks already bounded it so.)
+- An access unit whose next delimiter never came grew without limit, the program stream read into it to its end,
+  its end searched for from its start again after every pack (seconds at 8 MiB). A unit is now cut at 2 MiB (H.264's
+  level 3, the most the PSP's decoder takes, keeps a coded picture within 1.5 MB), and the search goes on from where
+  it had got to. The sound had the same fault, found while fixing this one: frames whose headers had gone were
+  searched for from the start after every pack read, and all kept; the bytes passed over are now dropped as they're
+  searched, their last time stamp kept for what follows.
+- A presentation's end before its start made its length negative (GetPsmfInfo's time; Start's check of a start
+  time). The end is now taken as the start when a header is read, scePsmfGetPresentationEndTime's answer too, and
+  GetPsmfInfo gives 0 for a presentation shorter than a picture.
+
+"psmf malformed movies" (new) has each: a program on both engines reading the wrapped map (no map, nothing written),
+a map one entry past the header (none) and one filling it to its last entry (read); a unit of 5 MiB with no
+delimiter after it (cut at 2 MiB, the movie playing on to its next picture and its end, the video held never much
+past the cut); 3000 sound frames without headers (the pictures playing on, none of it held); ends before the start
+and under a picture after it. "psmf headers" checks an end before the start. Each fix undone fails them, but for the
+search going on from where it had got to, which the 2 MiB cut bounds and only time shows (that unit in 537 ms
+searched from its start each time, 5 ms now; the sound's frames in 651 ms, 4 ms now). tests/psp 290 groups with the
+sanitizers, with FFmpeg and without, tests/psp/ares 294 checks both ways, none failed; pspautotests' video/psmfplayer
+gives the same output, byte for byte, as before (19 of 22 as the PSP), on both engines, and video/mpeg's programs
+too; Peace Walker's opening movie, run to frame 9000, gives the same pictures and sound as commit 16f6d257f's.
+
+**Left, and why**:
+- The player meeting a game: the report's eight scePsmfPlayerCreate games are neither on this Mac nor among the
+  device's games tried, so the player rests on pspautotests' recordings and the tests alone.
+- LocoRoco 2's library version (SDK 0x03090510), whose GetPsmfInfo takes two more pointers, for the video's width
+  and height: the stood-in module's version isn't kept, and no game on this Mac has it. Nor the older versions that
+  play to the file's end.
+- PCM sound, marks, and the unknown NID's real behaviour: no movie or game here has them.
+- The start-up's and a loop's real lengths, which on a PSP follow its threads' reading and decoding in time; the
+  calls' waits, unmeasured. A round of the measuring program with a movie that has sound and an EP map (a test movie
+  could be made by adding EP entries to `test.pmf`'s header) would settle the sound's thresholds, fast forward and
+  rewind, and scePsmf's uncertain answers.
