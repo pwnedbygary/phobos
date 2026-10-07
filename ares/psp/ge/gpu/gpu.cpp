@@ -261,7 +261,7 @@ auto GPU::lookFor(const GE::Look& look) -> u32 {
     auto& slot = slots[&decoded];
     if(slot.texture.lock() != look.decoded || slot.words != words) {  //(fits() made room)
       slot = {look.decoded, texelsUsed, words};
-      std::memcpy(device->texels() + texelsUsed, decoded.texels.data(), words * 4);
+      if(words) std::memcpy(device->texels() + texelsUsed, decoded.texels.data(), words * 4);
       texelsUsed += words;
     }
     w[LookTexels] = slot.offset;
@@ -380,9 +380,10 @@ auto GPU::finish(GE& ge, GE::Batch& batch) -> void {
   p.lookOffset = tables.size(), p.jobOffset = p.lookOffset + looks.size();
   u32* records = device->records(p.jobOffset + jobs.size());
   if(records) {
-    std::memcpy(records, tables.data(), tables.size() * 4);
-    std::memcpy(records + p.lookOffset, looks.data(), looks.size() * 4);
-    std::memcpy(records + p.jobOffset, jobs.data(), jobs.size() * 4);
+    //(an empty list's data() may be null, which memcpy mustn't be given even for no bytes)
+    if(!tables.empty()) std::memcpy(records, tables.data(), tables.size() * 4);
+    if(!looks.empty()) std::memcpy(records + p.lookOffset, looks.data(), looks.size() * 4);
+    if(!jobs.empty()) std::memcpy(records + p.jobOffset, jobs.data(), jobs.size() * 4);
   }
   p.jobCount = jobs.size() / JobWords;
   p.wordsPerTile = (p.jobCount + 31) / 32;
