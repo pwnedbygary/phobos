@@ -893,9 +893,9 @@ no PPSSPP or JPCSP source read.
   their low 16 bits taken.
 - **Measuring program, round 4** (lines at every sixteenth, short lines, strips, colors, depth and texels along lines,
   3D lines, 256 bounding boxes, DXT colors, alphas and block order): built in pspdev's Docker image;
-  `tests/psp/programs/pspmeasure.elf` replaced (hash in its README). The owner's EBOOT.PBP for the PSP is in
-  `/tmp/gef-measure-build/EBOOT.PBP`, not committed. Running it in the core caught a mistake of its own first (memory
-  taken inside an object let the GE reach an unaimed BJUMP).
+  `tests/psp/programs/pspmeasure.elf` replaced (hash in its README). The owner's EBOOT.PBP for the PSP isn't
+  committed (kept in the owner's `.local/psp-round4/`). Running it in the core caught a mistake of its own first
+  (memory taken inside an object let the GE reach an unaimed BJUMP).
 - **Checked**: tests/psp 280 groups with ASan and UBSan, tests/psp/ares 290 checks, none failed; the comparison with
   the owner's PSP (rounds 2 and 3) the same, line for line; 16 broken versions each caught. Speed within a couple of
   percent either way in six scenes, 1 and 7 threads. Games: Space Invaders Extreme's title gains its line box,
@@ -904,6 +904,13 @@ no PPSSPP or JPCSP source read.
 - **Left**: curved surfaces (Macross); the exact line rule, anti-aliased lines, the DXT block order, boxes past
   different edges (round 4 will tell); breakwait's wake order; sceGeSaveContext's layout; gpu/exact/coverage's tall
   triangles; PRIM kind 7.
+- **After review**: clean room, hostile inputs (ASan) and round 4 in the core all fine. Fixed the one Low finding:
+  sceGeBreak(1) now drops the GE's callbacks waiting their turn and has one running return to no GE (else a stale
+  callback could end the list that took its ID before that list's own callback); unmeasured. GE callbacks are a call
+  kind of their own (`Call::Ge`; state version 12 still). Test "ge break and callbacks", both engines, a state round
+  trip. tests/psp 281 groups, tests/psp/ares 290 checks, none failed. The round-4 EBOOT stays out of the repository
+  (the owner keeps it in `.local/psp-round4/`). RP6: Space Invaders Extreme's title shows its box of lines at 60 fps,
+  GTA LCS's intro unchanged at 60 fps.
 
 ## PSP core: kernel mutexes, alarms, virtual timers, and the clock in system calls — 2026-10-06
 

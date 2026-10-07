@@ -457,7 +457,10 @@ auto Kernel::sceGeContinue() -> void {
 //  - mode 1 throws every list away, queued, running or done, and returns 0: the next list enqueued takes the first
 //    ID again (breakwait: "id reused"). Threads waiting for a list or for all drawing aren't woken: they wait on
 //    until a list that ends wakes them (that list's ID, or the queue empty).
-//What the lists thrown away had saved of the GE's state (sceGeListEnQueue's options) isn't put back.
+//What the lists thrown away had saved of the GE's state (sceGeListEnQueue's options) isn't put back. Their finish and
+//signal callbacks still waiting their turn are dropped, and one running returns to no GE to go on: else they'd be
+//for a list that's gone, or whose ID went to a new list, and one returning would end the new list ahead of its own
+//finish callback. Unmeasured: pspautotests doesn't record whether a PSP drops a pending callback at a break.
 auto Kernel::sceGeBreak() -> void {
   u32 mode = arg(0), parameters = arg(1);
   if(mode > 1) return result(ErrorInvalidMode);
@@ -470,8 +473,10 @@ auto Kernel::sceGeBreak() -> void {
     for(u32 index = 0; index < 64; index++) geFree.push_back(index);
     geRunning = -1;
     geBusy = false;
-    geSuspended = false;  //(a callback still to return finds nothing to go on with)
+    geSuspended = false;
     geFinishing = -1;
+    std::erase_if(calls, [](const Call& call) { return call.kind == Call::Ge; });
+    callResumesGe = false;
     return result(0);
   }
   u32 index = geQueue.front();

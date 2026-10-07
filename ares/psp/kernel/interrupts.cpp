@@ -13,7 +13,7 @@
 //way: uOFW's sceKernelCallSubIntrHandler.)
 
 auto Kernel::queueCall(u32 function, u32 gp, u32 a0, u32 a1, u32 a2, bool resumesGe) -> void {
-  calls.push_back({function, gp, {a0, a1, a2, 0}, resumesGe});
+  calls.push_back({function, gp, {a0, a1, a2, 0}, resumesGe, false, Call::Ge});
 }
 
 //The next call starts, if one may: none is running and interrupts aren't held off. A vertical blank held off till
@@ -56,7 +56,7 @@ auto Kernel::callReturned() -> void {
   cpu.scc.halted = interruptedHalted;
   interrupting = false;
   interruptsEnabled = true;
-  if(callKind != Call::Plain) timerReturned(callKind, callID, returned);
+  if(callKind == Call::Alarm || callKind == Call::VTimer) timerReturned(callKind, callID, returned);
   callKind = Call::Plain;
   callID = 0;
   if(callResumesGe) {

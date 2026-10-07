@@ -762,25 +762,25 @@ auto Kernel::serialize(serializer& s) -> bool {
   //1 or 0, as mtic and the kernel leave it
   vector(calls, [&](Call& call) {
     s(call.function); s(call.gp); s(call.arguments); s(call.resumesGe); s(call.vblank); s(call.kind); s(call.id);
-    check(call.kind <= Call::VTimer);
+    check(call.kind <= Call::Ge && (call.kind != Call::Ge || (!call.vblank && !call.id)));
   });
   check(interruptsEnabled <= 1);
   s(interrupting); s(rescheduleAfter);
   s(callKind); s(callID);
-  check(callKind <= Call::VTimer && (interrupting || callKind == Call::Plain));
+  check(callKind <= Call::Ge && (interrupting || callKind == Call::Plain));
   //a timer marked as having its handler called has exactly one call, waiting its turn or running, and a timer's call
   //waiting its turn is for a timer there is, so marked (cancelling or deleting a timer drops its call). The one
   //running may have lost its alarm (cancelled by its own handler).
   if(s.reading()) {
     std::vector<std::pair<u32, u32>> pending;  //(kind, timer) of each timer's call, waiting or running
     for(auto& call : calls) {
-      if(call.kind == Call::Plain) continue;
+      if(call.kind != Call::Alarm && call.kind != Call::VTimer) continue;
       pending.push_back({call.kind, call.id});
       bool marked = call.kind == Call::Alarm ? alarms.count(call.id) && alarms[call.id].calling
                                              : vtimers.count(call.id) && vtimers[call.id].calling;
       check(marked);
     }
-    if(interrupting && callKind != Call::Plain) {
+    if(interrupting && (callKind == Call::Alarm || callKind == Call::VTimer)) {
       bool there = callKind == Call::Alarm ? alarms.count(callID) : vtimers.count(callID);
       if(there) {
         pending.push_back({callKind, callID});

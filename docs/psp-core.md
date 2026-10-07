@@ -3742,6 +3742,8 @@ ends (one with their list's ID, or the queue left empty). (`pspge.h` has the two
 `break` now prints what the PSP did but for its addresses (the context's layout, as above), and `breakwait` but for
 the order its two waiters wake in as the new list ends (the PSP woke the one waiting for all drawing first; the core
 wakes the list's own first, as it always has). What the lists thrown away saved of the GE's state isn't put back.
+Their finish and signal callbacks still waiting their turn are dropped, and one running returns to no GE to go on
+(after review, below; unmeasured).
 
 **Found on the way, from pspautotests' pictures**, and fixed: 8-bit positions in through mode read as 0 (`points`
 recorded a PSP drawing two such points at (0, 0), `triangles`, `lines`, `linestrip` and `rectangles` nothing of
@@ -3767,8 +3769,8 @@ pspdev's Docker image, and `tests/psp/programs/pspmeasure.elf` replaced (that fo
 the new hash); `tests/psp/measure.cpp` runs round 4 through the menu too and checks its 20 files, to be compared with
 a PSP's once it has run (a `manifest4.txt` in the results tells).
 
-**Tests** (`tests/psp/run-tests.sh`: 280 groups, with the address and undefined-behavior sanitizers; `tests/psp/ares`:
-290 checks; none failed):
+**Tests** (`tests/psp/run-tests.sh`: 280 groups (281 after review, below), with the address and undefined-behavior
+sanitizers; `tests/psp/ares`: 290 checks; none failed):
 - `draw.cpp`: "draw lines" (pspautotests' three pictures, moved to the canvas; ends on pixel middles each way, steep
   ones, the boundary rows and columns; a strip's joints drawn once; lines too short to leave a diamond, and one just
   long enough; scissoring; colors and depth along a line; flat shading; texels along it), "draw DXT textures" (37 of
@@ -3819,3 +3821,18 @@ lines (round 4); the DXT blocks' order, odd buffer widths and swizzling, and wha
 the camera is (round 4); the wake order in breakwait; sceGeSaveContext's layout; `gpu/exact/coverage`'s tall and huge
 triangles; PRIM's kind 7 and vertices sent in the list. The six DXT games and the other line and box games of the
 report aren't on this Mac.
+
+**After review.** The review found the clean room kept (every fact shared with PPSSPP is in pspautotests'
+recordings), hostile lines, boxes and DXT textures clean under the address sanitizer and fast, and round 4 running
+right in the core (143 BJUMPs taken, 113 not, every file written). One thing changed: sceGeBreak(1) left the GE's
+callbacks that were waiting their turn (interrupts held off, or another call running) in the queue, so one ran
+later for a list that was gone or whose ID a new list had, and as it returned ended the new list ahead of that
+list's own finish callback. The GE's callbacks are now a kind of call of their own (`Call::Ge`, in states as the
+kind already was: version 12 still), and a break of everything drops them, and has one that's running return to no
+GE; unmeasured (pspautotests doesn't record a PSP at it), and noted so in `kernel/ge.cpp`. Test: "ge break and
+callbacks" (`ge.cpp`, both engines: the break with the old list's finish callback waiting, then the next list taking
+its ID, its callback alone running, once and first, the list still queued, the state round trip while it waits; and
+the break from a finish callback that enqueues the next list itself); each half fails with its fix undone; "state
+fields" changes the call's kind and refuses a GE callback that's a vertical blank's too. tests/psp 281 groups with
+the sanitizers, tests/psp/ares 290 checks, none failed. On the RP6, Space Invaders Extreme's title shows its box of
+lines at 60 fps, and Liberty City Stories' intro is unchanged at 60 fps (the owner's check of the build before this).
