@@ -28,6 +28,7 @@ namespace ares::PlayStationPortable {
 #include "mpeg.cpp"
 #include "atrac.cpp"
 #include "net.cpp"
+#include "pgf.cpp"
 #include "font.cpp"
 #include "utility.cpp"
 #include "power.cpp"
@@ -512,23 +513,29 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceMpeg",           "sceMpegAvcCsc",                 &Kernel::sceMpegAvcCsc);
   add("sceMpeg",           "sceMpegAtracDecode",            &Kernel::sceMpegAtracDecode);
   add("sceMpeg",           "sceMpegGetAvcEsAu",             &Kernel::sceMpegGetAvcAu);
-  //the system's fonts, none installed (font.cpp)
+  //the system's fonts (font.cpp)
   add("sceLibFont",        "sceFontNewLib",                 &Kernel::sceFontNewLib);
-  add("sceLibFont",        "sceFontDoneLib",                &Kernel::sceFontDone);
-  add("sceLibFont",        "sceFontClose",                  &Kernel::sceFontDone);
-  add("sceLibFont",        "sceFontFlush",                  &Kernel::sceFontDone);
-  add("sceLibFont",        "sceFontSetAltCharacterCode",    &Kernel::sceFontDone);
+  add("sceLibFont",        "sceFontDoneLib",                &Kernel::sceFontDoneLib);
+  add("sceLibFont",        "sceFontClose",                  &Kernel::sceFontClose);
+  add("sceLibFont",        "sceFontFlush",                  &Kernel::sceFontFlush);
+  add("sceLibFont",        "sceFontSetAltCharacterCode",    &Kernel::sceFontSetAltCharacterCode);
   add("sceLibFont",        "sceFontGetNumFontList",         &Kernel::sceFontGetNumFontList);
   add("sceLibFont",        "sceFontGetFontList",            &Kernel::sceFontGetFontList);
+  add("sceLibFont",        "sceFontGetFontInfoByIndexNumber", &Kernel::sceFontGetFontInfoByIndexNumber);
   add("sceLibFont",        "sceFontFindOptimumFont",        &Kernel::sceFontFindOptimumFont);
-  add("sceLibFont",        "sceFontFindFont",               &Kernel::sceFontFindOptimumFont);
+  add("sceLibFont",        "sceFontFindFont",               &Kernel::sceFontFindFont);
   add("sceLibFont",        "sceFontOpen",                   &Kernel::sceFontOpen);
-  add("sceLibFont",        "sceFontOpenUserMemory",         &Kernel::sceFontOpen);
-  add("sceLibFont",        "sceFontOpenUserFile",           &Kernel::sceFontOpen);
-  for(auto name : {"sceFontGetFontInfo", "sceFontGetFontInfoByIndexNumber", "sceFontGetCharInfo",
-                   "sceFontGetCharImageRect", "sceFontGetCharGlyphImage", "sceFontGetCharGlyphImage_Clip"}) {
-    add("sceLibFont", name, &Kernel::sceFontNoFont);
-  }
+  add("sceLibFont",        "sceFontOpenUserMemory",         &Kernel::sceFontOpenUserMemory);
+  add("sceLibFont",        "sceFontOpenUserFile",           &Kernel::sceFontOpenUserFile);
+  add("sceLibFont",        "sceFontGetFontInfo",            &Kernel::sceFontGetFontInfo);
+  add("sceLibFont",        "sceFontGetCharInfo",            &Kernel::sceFontGetCharInfo);
+  add("sceLibFont",        "sceFontGetCharImageRect",       &Kernel::sceFontGetCharImageRect);
+  add("sceLibFont",        "sceFontGetCharGlyphImage",      &Kernel::sceFontGetCharGlyphImage);
+  add("sceLibFont",        "sceFontGetCharGlyphImage_Clip", &Kernel::sceFontGetCharGlyphImage_Clip);
+  add("sceLibFont",        "sceFontGetShadowInfo",          &Kernel::sceFontGetShadowInfo);
+  add("sceLibFont",        "sceFontGetShadowImageRect",     &Kernel::sceFontGetShadowImageRect);
+  add("sceLibFont",        "sceFontGetShadowGlyphImage",    &Kernel::sceFontGetShadowGlyphImage);
+  add("sceLibFont",        "sceFontGetShadowGlyphImage_Clip", &Kernel::sceFontGetShadowGlyphImage_Clip);
   add("sceLibFont",        "sceFontSetResolution",          &Kernel::sceFontSetResolution);
   add("sceLibFont",        "sceFontPointToPixelH",          &Kernel::sceFontPointToPixelH);
   add("sceLibFont",        "sceFontPointToPixelV",          &Kernel::sceFontPointToPixelV);
@@ -588,6 +595,10 @@ auto Kernel::power() -> void {
   atracIDs = 0;
   dispatchSuspended = false;
   fontResolution[0] = fontResolution[1] = 128.0f;
+  fontLibraries.clear();
+  openFonts.clear();
+  fontCalls.clear();
+  nextFontID = 1;
   dialog = {};
   utilityModules.clear();
   files.clear();
@@ -632,6 +643,8 @@ auto Kernel::power() -> void {
   memory.write(4, Trampoline + 20, 0x0000'000d);
   memory.write(4, Trampoline + 24, CallbackReturnCode << 6 | 0x0c);  //syscall: a thread's callback returned
   memory.write(4, Trampoline + 28, 0x0000'000d);
+  memory.write(4, Trampoline + 32, FontReturnCode << 6 | 0x0c);  //syscall: the font library's call returned
+  memory.write(4, Trampoline + 36, 0x0000'000d);
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
@@ -758,6 +771,10 @@ auto Kernel::syscall(u32 code) -> bool {
   }
   if(code == CallbackReturnCode) {
     callbackReturned();
+    return true;
+  }
+  if(code == FontReturnCode) {
+    fontReturned();
     return true;
   }
   if(code < FirstImportCode || code - FirstImportCode >= imports.size()) {

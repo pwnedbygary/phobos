@@ -15,6 +15,7 @@
 #include "loader.hpp"
 #include "disc.hpp"
 #include "crypto.hpp"
+#include "pgf.hpp"
 #include "../ge/ge.hpp"
 
 //The HLE kernel: Phobos's own version of the PSP's operating system, as far as a game can see it.
@@ -169,7 +170,8 @@ struct Kernel {
   static constexpr u64 VblankCycles = CPUFrequency * 1001 / 60'000;  //59.94 frames a second
   static constexpr u32 Trampoline = 0x0800'0000;  //kernel memory: where a thread returns to when its entry function
                                                   //ends (8 bytes on, a call into the program; 16 on, a module's
-                                                  //module_start or module_stop; 24 on, a thread's callback)
+                                                  //module_start or module_stop; 24 on, a thread's callback; 32 on,
+                                                  //the program's alloc or free called by sceLibFont)
   static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
 
@@ -220,7 +222,8 @@ struct Kernel {
   };
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
-  static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4;
+  static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4,
+                       FontReturnCode = 5;
   static constexpr u32 FirstImportCode = 0x1000;
 
   //threads.cpp
@@ -1035,16 +1038,110 @@ struct Kernel {
   auto sceAtracSetData() -> void;
   auto sceAtracNoStream() -> void;
 
-  //font.cpp: sceLibFont, with no fonts installed (the PSP's own come from flash0, which Phobos hasn't got yet)
-  float fontResolution[2] = {128.0f, 128.0f};  //dots an inch, across and down
+  //font.cpp (and pgf.cpp): sceLibFont, the system's font library, drawing the PSP's own fonts (the owner's, from
+  //their PSP's flash0: a host folder the system gives, fontsFrom()) and the PGFs games carry
+  struct SystemFont {
+    std::string file;           //"jpn0.pgf"
+    bool present = false;       //in the folder (and with no pgf, damaged)
+    std::shared_ptr<PGF> pgf;   //null: not there, or damaged
+    u64 hash = 0;               //of its bytes: a state's system fonts must be these
+  };
+  std::vector<SystemFont> systemFonts;  //the PSP's eighteen, in its order: the system's to give, as devices are
+  struct FontLibrary {          //one sceFontNewLib made
+    u32 address = 0;            //its 76 bytes in the program's memory: the handle the program holds
+    u32 slots = 0;              //how many fonts it may have open at once (numFonts, 9 at most)
+    u32 handles = 0, data = 0, list = 0;  //its other memory: the handles (76 bytes each), their data (560 each) and
+                                          //the list of the system's fonts (18 styles)
+    u32 fonts[9] = {};          //each handle's font: the one it last opened (an OpenFont's ID; 0: none yet)
+    bool open[9] = {};          //whether the handle is open (or being opened)
+  };
+  struct OpenFont {             //a font's data, loaded once however many of its library's handles open it
+    u32 id = 0, library = 0;    //its ID, and its library's address
+    u32 source = 0;             //0 a system font, 1 a file of the program's, 2 the program's memory
+    u32 index = 0;              //a system font's place in the list
+    std::string path;           //a file's PSP path
+    u32 address = 0, length = 0;  //the program's memory holding it
+    u32 mode = 0;               //1: read whole into the program's memory (else a piece at a time)
+    u32 references = 0;         //handles holding it open
+    std::vector<u32> blocks;    //the memory it took from the program, given back as its last handle closes
+    u64 hash = 0;               //its bytes' (a system font's or a file's): a state's must be the same
+    std::shared_ptr<PGF> pgf;   //its glyphs (not saved: read again when a state is loaded)
+  };
+  struct FontCall {             //a library function part way through, calling the program's own alloc or free
+    enum Kind : u32 { NewLib = 1, Open, Give };  //Give: only gives memory back (a close, the library done with)
+    u32 kind = 0;
+    Context caller{};           //the thread where it called the library: put back as the function returns
+    u32 library = 0;            //the library (sceFontNewLib's: its parameters)
+    u32 errorAt = 0;            //where its error goes (0: nowhere)
+    u32 slot = 0, slots = 0;    //an open's handle; a new library's number of handles
+    u32 userData = 0, alloc = 0, free = 0;  //the program's functions it calls, and what each is given first
+    std::vector<u32> asks;      //sizes to ask alloc for, in order
+    std::vector<u32> got;       //what alloc gave so far
+    std::vector<u32> frees;     //blocks to give back to free, in order
+    bool ended = false;         //what it makes is made (fontEnd()): what's left is giving back, then returning
+    u32 result = 0, error = 0;  //what it returns, and its error
+    OpenFont opening;           //an open's font, made once its memory has all come
+  };
+  std::map<u32, FontLibrary> fontLibraries;  //by address
+  std::map<u32, OpenFont> openFonts;         //by ID
+  std::map<u32, FontCall> fontCalls;         //by thread
+  u32 nextFontID = 1;
+  float fontResolution[2] = {128.0f, 128.0f};  //the stand-in's dots an inch, across and down (no fonts installed)
+  auto fontsFrom(const std::string& folder) -> void;
+  auto fontsInstalled() const -> bool;
+  auto fontLibraryAt(u32 address) -> FontLibrary*;
+  auto fontHandle(u32 handle, FontLibrary*& library, u32& slot) -> bool;
+  auto fontFor(u32 handle) -> OpenFont*;
+  auto fontCount(u32 library) -> u32;
+  auto fontStyle(u32 address, const PGF& pgf, s32 system) -> void;
+  auto systemFontStyle(u32 address, u32 index) -> void;
+  auto fontGlyph(const OpenFont& font, u32 code, PGF::Glyph& glyph, bool shadow) -> void;
+  auto fontDraw(const PGF::Glyph& glyph, u32 image, s64 clipLeft, s64 clipTop, u64 clipWidth, u64 clipHeight)
+    -> void;
+  auto fontNext(FontCall& call) -> void;
+  auto fontReturned() -> void;
+  auto fontRelease(FontCall& call) -> void;
+  auto fontAbandoned(u32 thread) -> void;
+  auto fontFinish() -> void;
+  auto fontStart(FontCall call) -> bool;
+  auto fontEnd(FontCall& call) -> void;
+  auto fontGiveBack(const OpenFont& font) -> std::vector<u32>;
+  auto fontOpen(FontLibrary& library, OpenFont font, u32 errorAt) -> void;
+  auto fontCallable(u32 function) -> bool;
+  auto fontMemory(u32 address, u32 length) -> std::vector<u8>;
+  auto fontReload(OpenFont& font) -> bool;
+  auto fontFits(u32 library, u32 style, std::vector<u32>& matches, std::vector<float>& distances, bool& sized)
+    -> bool;
+  auto fontCharInfo(const PGF::Glyph& glyph, u32 info) -> void;
+  auto fontCharacter(bool shadow, u32 what) -> void;
   auto fontScale(bool toPixels, u32 axis) -> void;
+  auto standInNewLib() -> void;
+  auto standInCount(u32 errorAt) -> void;
+  auto standInFind(u32 errorAt) -> void;
+  auto standInOpen(u32 errorAt) -> void;
+  auto standInResolution() -> void;
   auto sceFontNewLib() -> void;
-  auto sceFontDone() -> void;
+  auto sceFontDoneLib() -> void;
+  auto sceFontClose() -> void;
+  auto sceFontOpen() -> void;
+  auto sceFontOpenUserMemory() -> void;
+  auto sceFontOpenUserFile() -> void;
   auto sceFontGetNumFontList() -> void;
   auto sceFontGetFontList() -> void;
+  auto sceFontGetFontInfoByIndexNumber() -> void;
   auto sceFontFindOptimumFont() -> void;
-  auto sceFontOpen() -> void;
-  auto sceFontNoFont() -> void;
+  auto sceFontFindFont() -> void;
+  auto sceFontGetFontInfo() -> void;
+  auto sceFontGetCharInfo() -> void;
+  auto sceFontGetCharImageRect() -> void;
+  auto sceFontGetCharGlyphImage() -> void;
+  auto sceFontGetCharGlyphImage_Clip() -> void;
+  auto sceFontGetShadowInfo() -> void;
+  auto sceFontGetShadowImageRect() -> void;
+  auto sceFontGetShadowGlyphImage() -> void;
+  auto sceFontGetShadowGlyphImage_Clip() -> void;
+  auto sceFontFlush() -> void;
+  auto sceFontSetAltCharacterCode() -> void;
   auto sceFontSetResolution() -> void;
   auto sceFontPointToPixelH() -> void;
   auto sceFontPointToPixelV() -> void;

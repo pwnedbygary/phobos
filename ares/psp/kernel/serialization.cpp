@@ -359,6 +359,74 @@ auto Kernel::serialize(serializer& s) -> bool {
     memcpy(&resolution, &bits, 4);
     check(resolution > 0 && resolution < 1e9f);
   }
+  //sceLibFont's libraries (font.cpp), the fonts they have open, and the calls into the program they're part way
+  //through. A font's bytes aren't in the state: they're read again from where they came from (fontReload()), and a
+  //system font or a file must be the very one it was. A library has 9 handles at most; an open one holds a font of
+  //its own library, or none yet while a call opening one goes on; a font counts the handles holding it, and its
+  //memory is what its kind of open asked for (a font of the program's memory is read where it is: never whole into
+  //it, which only a system font or a file can be); a call is a living thread's, part way through what its kind does.
+  map(fontLibraries, [&](FontLibrary& library) {
+    s(library.address); s(library.slots); s(library.handles); s(library.data); s(library.list);
+    s(library.fonts); s(library.open);
+    check(library.slots <= MaxFonts);
+  });
+  auto fontFields = [&](OpenFont& font) {
+    s(font.id); s(font.library); s(font.source); s(font.index); text(font.path); s(font.address); s(font.length);
+    s(font.mode); s(font.references);
+    vector(font.blocks, [&](u32& block) { s(block); });
+    s(font.hash);
+    check(font.source <= 2 && font.mode <= 1 && (font.source != 2 || font.mode == 0) && font.blocks.size() <= 9);
+  };
+  map(openFonts, fontFields);
+  s(nextFontID);
+  check(nextFontID >= 1 && nextFontID <= LastUID + 1);
+  map(fontCalls, [&](FontCall& call) {
+    s(call.kind); context(call.caller); s(call.library); s(call.errorAt); s(call.slot); s(call.slots);
+    s(call.userData); s(call.alloc); s(call.free);
+    vector(call.asks, [&](u32& size) { s(size); });
+    vector(call.got, [&](u32& block) { s(block); });
+    vector(call.frees, [&](u32& block) { s(block); });
+    s(call.ended); s(call.result); s(call.error);
+    fontFields(call.opening);
+    check(call.kind >= FontCall::NewLib && call.kind <= FontCall::Give && call.slot < MaxFonts);
+    check(call.slots <= MaxFonts && call.asks.size() <= 9 && call.got.size() <= call.asks.size());
+    check(call.frees.size() <= MaxFonts * 9 + 4);
+  });
+  if(s.reading() && valid) {
+    check((fontLibraries.empty() && openFonts.empty() && fontCalls.empty()) || fontsInstalled());
+    for(auto& [address, library] : fontLibraries) {
+      check(address && library.address == address);
+      for(u32 n : range(MaxFonts)) {
+        if(n >= library.slots) { check(!library.fonts[n] && !library.open[n]); continue; }
+        auto font = openFonts.find(library.fonts[n]);  //a closed handle's font may have gone
+        if(font != openFonts.end()) check(font->second.library == address);
+        if(!library.open[n] || library.fonts[n]) continue;
+        bool opening = false;  //an open handle with no font yet: a call is opening it
+        for(auto& [thread, call] : fontCalls) {
+          if(call.kind == FontCall::Open && !call.ended && call.library == address && call.slot == n) opening = true;
+        }
+        check(opening);
+      }
+    }
+    for(auto& [id, font] : openFonts) {
+      check(id && font.id == id && id < nextFontID);
+      u32 holders = 0;
+      if(auto library = fontLibraryAt(font.library)) {
+        for(u32 n : range(library->slots)) if(library->open[n] && library->fonts[n] == id) holders++;
+      }
+      check(holders && font.references == holders);
+      if(valid) check(fontReload(font) && font.blocks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
+    }
+    for(auto& [thread, call] : fontCalls) {
+      check(threads.count(thread) && (call.kind != FontCall::NewLib || call.asks.size() == 4));
+      if(call.kind == FontCall::Give) check(call.asks.empty());
+      if(call.kind != FontCall::Open || call.ended || !valid) continue;
+      auto library = fontLibraryAt(call.library);
+      check(library && call.slot < library->slots && library->open[call.slot] && !library->fonts[call.slot]);
+      auto& font = call.opening;
+      if(valid) check(fontReload(font) && call.asks.size() == fontAsks(*font.pgf, font.mode, font.source).size());
+    }
+  }
   //the utilities: the dialog, and the modules loaded
   s(dialog.kind); s(dialog.status); s(dialog.next); s(dialog.changeAt); s(dialog.parameters);
   vector(utilityModules, [&](u32& module) { s(module); });

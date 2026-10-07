@@ -113,6 +113,8 @@ namespace ares {
   auto setMemoryCardKey(const char* key) -> void;
   // The PSP's memory stick: a folder the user picked, or empty for the shared one in the saves folder.
   auto setPspMemoryStickPath(const char* path) -> void;
+  // The PSP's system fonts: the folder holding the user's copies of their PSP's flash0 fonts, or empty for none.
+  auto setPspFontsPath(const char* path) -> void;
   auto setVulkanCachePath(const char* path) -> void;
   auto setNativeLibraryDir(const char* path) -> void;
   auto setFirmwarePath(const char* path) -> void;

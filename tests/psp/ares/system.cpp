@@ -10,6 +10,7 @@
 #include <psp/psp.hpp>
 #include "../disc-formats.hpp"
 #include "../encrypt.hpp"
+#include "../font-maker.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -577,9 +578,10 @@ auto states(const fs::path& programs) -> void {
     //handlers; version 4, before files' asynchronous requests, sceSas, message pipes and mailboxes; version 5,
     //before sound was heard and interrupts held off kept the CPU; version 6, which part 21's branch (the channels'
     //output, the SRC channel's place, VAG voices' decoders) and part 22's (the interrupt flag the CPU's alone, its
-    //meaning changed) each laid out their own way. Each is refused by its header, before anything is touched (even
-    //the compiled code, which any load throws away).
-    for(u8 version : {1, 2, 3, 4, 5, 6}) {
+    //meaning changed) each laid out their own way; version 7, before the font library's libraries, fonts and calls
+    //into the program. Each is refused by its header, before anything is touched (even the compiled code, which any
+    //load throws away).
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};
@@ -732,6 +734,32 @@ auto noCodeMemory(const fs::path& programs) -> void {
   psp.cpu.recompiler.codeMemory = 32_MiB;
 }
 
+//The system's fonts (option "Fonts", the owner's folder of PGF files): none without it; with it, the folder's, read
+//as the PSP powers on, in the list's eighteen places; none kept once the game unloads. (The font library itself is
+//tests/psp's font.cpp.)
+auto systemFonts(const fs::path& programs) -> void {
+  std::printf("the system's fonts from the Fonts option\n");
+  PlayStationPortable::option("Memory Stick", (scratch / "stick").string().c_str());
+  host.game = programPak(programs / "hello.elf", "program.elf");
+  pgf_maker::FontFolder folder({0, 1});
+  Node::System root;
+  PlayStationPortable::option("Fonts", "");
+  if(CHECK(start(root), "the PSP starts without fonts")) {
+    CHECK(!psp.kernel.fontsInstalled() && psp.kernel.systemFonts.empty(), "no fonts without the option");
+    root->unload();
+  }
+  PlayStationPortable::option("Fonts", folder.path.string().c_str());
+  if(CHECK(start(root), "the PSP starts with the fonts")) {
+    auto& fonts = psp.kernel.systemFonts;
+    CHECK(psp.kernel.fontsInstalled() && fonts.size() == 18, "the folder's fonts, in the list's eighteen places");
+    CHECK(fonts.size() == 18 && fonts[1].pgf && fonts[1].pgf->name == "FTT-NewRodin Pro Latin" && !fonts[2].pgf,
+          "ltn0.pgf read, ltn1.pgf missing");
+    root->unload();
+    CHECK(psp.kernel.systemFonts.empty(), "none kept once the game unloads");
+  }
+  PlayStationPortable::option("Fonts", "");
+}
+
 }
 
 auto main() -> int {
@@ -756,6 +784,7 @@ auto main() -> int {
     descriptorFiles(fs::path{programs});
     states(fs::path{programs});
     sound(fs::path{programs});
+    systemFonts(fs::path{programs});
   } else {
     std::printf("PSP_TEST_PROGRAMS isn't set (or has no hello.elf): the checks that run a program are skipped\n");
   }
