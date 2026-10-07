@@ -3,7 +3,9 @@
 //How a block runs: the compiled code is a function that takes the CPU (in sljit's saved register S0) and works on
 //the same registers the interpreter does (ipu.r[], hi, lo), so either can carry on where the other stopped. When
 //a block leaves, ipu.pc and ipu.pd say where the CPU goes next, exactly as if the interpreter had run those
-//instructions, and `executed` says how many ran.
+//instructions, and `executed` says how many ran. A block that ends as blocks usually do goes on to the next
+//block by itself, doing what Allegrex::run() and run() would have done in between, so that every block starts and
+//ends where it always did (emitChain()).
 //
 //An instruction with a native version (recompiler-ipu.cpp) is translated directly. Every other one is compiled as
 //a call to execute(), the interpreter's own path; that includes every instruction that can raise an exception, so
@@ -16,6 +18,8 @@
 auto Allegrex::Recompiler::reset() -> void {
   sections.clear();
   writePages.clear();
+  sectionTable.clear();
+  table = nullptr;
   if(!enabled) return;
   if(!allocator) allocator.resize(codeMemory, bump_allocator::executable);
   if(!allocator) {
@@ -26,16 +30,20 @@ auto Allegrex::Recompiler::reset() -> void {
   allocator.release();
   sections.resize(SectionCount);
   writePages.resize(SectionCount);
+  sectionTable.assign(SectionCount, nullptr);
+  table = sectionTable.data();
   for(u32 index = 0; index < SectionCount; index++) writable(index);
 }
 
 //Memory changed at address, so code compiled from there may be stale: its whole section goes, and is compiled
 //again when it next runs. Whoever writes memory that can hold code calls this: the PSP's memory map for every
-//write, the CPU's and also the ones it doesn't make (DMA, or the HLE kernel loading a module).
+//write, the CPU's and also the ones it doesn't make (DMA, or the HLE kernel loading a module). (A block still
+//running from there runs on to its end, as compiled; no block goes on to one from there after that.)
 auto Allegrex::Recompiler::invalidate(u32 address) -> void {
   if(sections.empty()) return;
   u32 index = (address & 0x1fff'ffff) / SectionSize;
   sections[index].reset();
+  sectionTable[index] = nullptr;
   writable(index);  //no code there now: stores may go straight to it again
 }
 
@@ -45,6 +53,7 @@ auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
   u32 last = ((address + size - 1) & 0x1fff'ffff) / SectionSize;
   for(u32 index = first;; index = (index + 1) % SectionCount) {
     sections[index].reset();
+    sectionTable[index] = nullptr;
     writable(index);
     if(index == last) break;
   }
@@ -104,21 +113,28 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
   if(!section || section->mirror != address >> 29) {
     section = std::make_unique<Section>();
     section->mirror = address >> 29;
+    sectionTable[index] = section.get();
   }
-  auto& code = section->blocks[address % SectionSize / 4];
+  u32 word = address % SectionSize / 4;
+  auto& code = section->blocks[word];
   if(!code) {
-    code = emit(address);
+    code = emit(address, section->bodies[word]);
     writePages[index] = nullptr;  //this page holds compiled code now, so stores to it must go through write()
   }
   return code;
 }
 
 //Compiles the block starting at address: instructions up to a branch and its delay slot, or up to the end of the
-//section, or up to one after which compiled code mustn't go on by itself (endsBlock()).
-auto Allegrex::Recompiler::emit(u32 address) -> u8* {
-  beginFunction(1, 3, 4, 2);  //(two float registers, for the FPU's native arithmetic: recompiler-fpu.cpp)
+//section, or up to one after which compiled code mustn't go on by itself (endsBlock()). Returns the function run()
+//calls, and in body where its own instructions begin, past the prologue, for other blocks to go on to.
+auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
+  //Every block has the same prologue (two float registers, for the FPU's native arithmetic: recompiler-fpu.cpp),
+  //so the stack frame one block's prologue made serves any other's body, and its epilogue.
+  beginFunction(1, 3, 4, 2);
+  auto bodyLabel = sljit_emit_label(compiler);
   u32 count = 0;          //instructions in the block so far
   bool pcStored = false;  //whether ipu.pc and ipu.pd already say where to go after the last instruction
+  bool ended = false;     //it ends at an instruction after which run() and the HLE kernel take over (endsBlock())
 
   while(true) {
     u32 instruction = self.read(Word, address);
@@ -151,7 +167,10 @@ auto Allegrex::Recompiler::emit(u32 address) -> u8* {
     } else {
       emitInterpreter(address, instruction, count, false);
       pcStored = true;
-      if(endsBlock(instruction)) break;
+      if(endsBlock(instruction)) {
+        ended = true;
+        break;
+      }
     }
 
     if(lastInSection) {
@@ -164,13 +183,82 @@ auto Allegrex::Recompiler::emit(u32 address) -> u8* {
     address += 4;
   }
 
-  mov32(field(&executed), imm(count));
-  jumpEpilog();
+  if(ended || !chains) {
+    mov32(field(&executed), imm(count));
+    jumpEpilog();
+  } else {
+    emitChain(count);
+  }
 
+  //(endFunction() as nall has it, but for the body's address, which is only known in between)
   memory::jitprotect(false);
-  auto code = endFunction();
+  auto code = (u8*)sljit_generate_code(compiler, 0, &allocator);
+  body = (u8*)sljit_get_label_addr(bodyLabel);
+  allocator.reserve(sljit_get_generated_code_size(compiler));
+  resetCompiler();
   memory::jitprotect(true);
   return code;
+}
+
+//The end of a block of count instructions, which goes on to the next block itself instead of leaving for run():
+//it does what Allegrex::run(), run() and block() would do next, the same checks in the same state, and leaves for
+//them wherever they would do anything but run the next block that's compiled already. So:
+//  - Allegrex::run()'s round: the block's instructions are counted in instructionsRun, and the run stops when that
+//    reaches its limit (which a syscall may have brought forward) or the CPU has halted;
+//  - run()'s checks: no block starts between a branch and its delay slot (pd isn't pc + 4), at a misaligned pc, or
+//    on a page the page table leaves out (which the CPU's owner may change as the CPU runs: VRAM's pages, while
+//    the GE's workers draw there), so those leave for the interpreter's step, as before;
+//  - block()'s lookup, by the section's table entry (none once its code is dropped: invalidate()), the mirror the
+//    section was compiled for, and the block at pc's word; a block not compiled yet leaves to be compiled.
+//Every block thus starts, and ends, where it always did, and the run stops after exactly the same instructions:
+//where a run stops decides when interrupts and the kernel's events land. What's left undone is only what doesn't
+//change what the program does: run() going round its loop, and block() starting the code memory afresh once it's
+//nearly full (which waits for the next time it compiles). Leaving after having counted the block, it says it ran
+//none more (executed 0).
+auto Allegrex::Recompiler::emitChain(u32 count) -> void {
+  std::vector<sljit_jump*> leave;
+  auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
+  mov64(reg(0), field(&self.instructionsRun));
+  add64(reg(0), reg(0), imm(count));
+  mov64(field(&self.instructionsRun), reg(0));
+  auto limit = field(&self.runLimit);
+  unless(sljit_emit_cmp(compiler, SLJIT_GREATER_EQUAL, SLJIT_R0, 0, limit.fst, limit.snd));
+  mov32_u8(reg(0), field(&self.scc.halted));
+  unless(cmp32_jump(reg(0), imm(0), flag_ne));
+
+  mov32(reg(0), field(&self.ipu.pc));
+  mov32(reg(1), field(&self.ipu.pd));
+  add32(reg(2), reg(0), imm(4));
+  unless(cmp32_jump(reg(1), reg(2), flag_ne));
+  test32(reg(0), imm(3), set_z);
+  unless(jump(flag_nz));
+  and32(reg(1), reg(0), imm(0x1fff'ffff));
+  lshr32(reg(1), reg(1), imm(12));
+  mov64_u32(reg(1), reg(1));  //reg(1): the page, and the section
+  if(self.pages) {
+    mov64(reg(2), imm((sljit_sw)self.pages));
+    mov64(reg(2), mem(SLJIT_MEM2(SLJIT_R2, SLJIT_R1), 3));
+    unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R2, 0, SLJIT_IMM, 0));
+  }
+
+  mov64(reg(2), field(&table));
+  mov64(reg(2), mem(SLJIT_MEM2(SLJIT_R2, SLJIT_R1), 3));
+  unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R2, 0, SLJIT_IMM, 0));
+  mov32(reg(3), mem(reg(2), offsetof(Section, mirror)));
+  lshr32(reg(1), reg(0), imm(29));
+  unless(cmp32_jump(reg(3), reg(1), flag_ne));
+  lshr32(reg(0), reg(0), imm(2));
+  and32(reg(0), reg(0), imm(SectionWords - 1));
+  mov64_u32(reg(0), reg(0));
+  add64(reg(2), reg(2), imm(offsetof(Section, bodies)));
+  mov64(reg(2), mem(SLJIT_MEM2(SLJIT_R2, SLJIT_R0), 3));
+  unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R2, 0, SLJIT_IMM, 0));
+  sljit_emit_ijump(compiler, SLJIT_JUMP, SLJIT_R2, 0);
+
+  auto here = sljit_emit_label(compiler);
+  for(auto jump : leave) sljit_set_label(jump, here);
+  mov32(field(&executed), imm(0));
+  jumpEpilog();
 }
 
 //Compiles one instruction as a call to execute(). Outside a delay slot, pc and pd are set first, as the interpreter

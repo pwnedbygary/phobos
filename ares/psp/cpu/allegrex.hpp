@@ -476,6 +476,7 @@ struct Allegrex {
     struct Section {
       u32 mirror = 0;                 //the top three address bits its blocks were compiled for
       u8* blocks[SectionWords] = {};  //the compiled code starting at each word, or nullptr
+      u8* bodies[SectionWords] = {};  //the same code past its prologue, where blocks go on to each other
     };
 
     //The compiled code finds the CPU's state through sljit's saved register S0, which holds the CPU's address:
@@ -493,7 +494,8 @@ struct Allegrex {
     auto writable(u32 index) -> void;
     auto run() -> u32;
     auto block(u32 address) -> u8*;
-    auto emit(u32 address) -> u8*;
+    auto emit(u32 address, u8*& body) -> u8*;
+    auto emitChain(u32 count) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;
     auto endsBlock(u32 instruction) const -> bool;
@@ -521,13 +523,19 @@ struct Allegrex {
                     const std::function<void ()>& access) -> void;
 
     bool enabled = false;
-    //How many instructions the last block ran: each block sets it as it leaves, and as it calls the interpreter for
-    //one (counting that one), so during that call it says how far the block has got.
+    bool chains = true;  //blocks go on to the next by themselves (emitChain()); tests turn it off to compare
+    //How many instructions the last block ran, not yet counted in instructionsRun: each block sets it as it leaves
+    //for run() (0 when it counted them itself, going on to the next: emitChain()), and as it calls the interpreter
+    //for one (counting that one), so during that call it says how far the block has got.
     u32 executed = 0;
     bool inBlock = false;  //whether compiled code is running (it's what called execute(), if anything did)
     u32 codeMemory = 32_MiB;  //how much compiled code may fill before it all goes and compiling starts afresh
     bump_allocator allocator;
     std::vector<std::unique_ptr<Section>> sections;
+    //The same sections, as plain pointers in a table of their own for compiled code to look the next block up in
+    //(emitChain()): table points at sectionTable's first.
+    std::vector<Section*> sectionTable;
+    Section** table = nullptr;
 
     //The page table compiled stores use: the CPU's (pages above), except that pages holding compiled code are
     //left out, so stores there go through write() instead, whose owner then drops that code (invalidate()); and

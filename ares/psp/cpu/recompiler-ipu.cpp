@@ -553,14 +553,19 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction) -
 
 //Finishes a conditional branch, given the jump its "taken" case makes. Either way pc and pd are set for the delay
 //slot: to the target if taken, to the instruction after the delay slot if not. A likely branch that isn't taken
-//skips its delay slot instead, so the block leaves right there, going on after the delay slot.
+//skips its delay slot instead, so the block ends right there, going on after the delay slot (by itself, as a block
+//ending anywhere else does: emitChain()).
 auto Allegrex::Recompiler::emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void {
   mov32(PC, imm(address + 8));
   mov32(PD, imm(address + 12));
   sljit_jump* done = nullptr;
   if(likely) {
-    mov32(field(&executed), imm(count));
-    jumpEpilog();
+    if(chains) {
+      emitChain(count);
+    } else {
+      mov32(field(&executed), imm(count));
+      jumpEpilog();
+    }
   } else {
     done = jump();
   }

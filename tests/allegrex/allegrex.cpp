@@ -627,6 +627,66 @@ auto recompilerCases() -> void {
   CHECK(fault.cpu.scc.r[8], 1);
 }
 
+// Blocks that go on to the next by themselves (Recompiler::emitChain()) must stop a run after exactly the
+// instructions it stopped after when each block left for run(), as where a run stops decides when interrupts and
+// events land. A loop of blocks (an interpreted instruction, a syscall, a fall into the next section, a call, a
+// likely branch both ways, a store that drops its own section's code, a jump through a register, an FPU branch
+// taken, which ends its block before its delay slot) runs in short runs of 1 to 37 instructions on two recompilers,
+// one chaining and one not: each run must end at the same count, the same pc and pd and the same registers, and
+// each syscall see the same count of instructions before it.
+auto chainedRuns() -> void {
+  if(!useRecompiler) return;
+  constexpr uint32_t Loop = Base + 0xff0, Next = Base + 0x2040, Function = Base + 0x1100;
+  struct Run {
+    Machine m;
+    std::vector<uint64_t> befores;
+  } runs[2];
+  for(uint32_t n = 0; n < 2; n++) {
+    auto& m = runs[n].m;
+    auto& befores = runs[n].befores;
+    auto put = [&](uint32_t address, std::initializer_list<uint32_t> words) {
+      for(uint32_t word : words) m.ram.write32(address, word), address += 4;
+    };
+    put(Base, {addiu(s0, zero, 0), lui(t2, Function >> 16), ori(t2, t2, Function & 0xffff), lw(t1, 0, t2),
+               j(Loop), nop});
+    put(Loop, {addiu(s0, s0, 1), bitrev(t3, s0), syscall(1), addiu(s4, s4, 3)});  // the last word of a section
+    put(Base + 0x1000, {jal(Function), nop, beql(s1, zero, 2), addiu(s2, s2, 1), sw(t1, 0, t2),
+                        lui(t0, Next >> 16), ori(t0, t0, Next & 0xffff), jr(t0), nop});
+    //(the FPU branch is taken every other time round, so its delay slot is also where a block starts)
+    put(Next, {mtc1(s1, 0), ccond(CondEq, 0, 1), bc1(Bc1f, 2), addiu(s5, s5, 1), addiu(s6, s6, 1),
+               slti(t4, s0, 50), bne(t4, zero, -(int32_t)((Next + 28 - Loop) / 4)), nop, halt});
+    put(Function, {addiu(s1, s1, 1), andi(s1, s1, 1), jr(ra), nop});
+    m.cpu.syscallHook = [&m, &befores](u32) -> bool {
+      befores.push_back(m.cpu.instructionsBefore());
+      return true;
+    };
+    m.cpu.recompiler.enabled = true;
+    m.cpu.recompiler.chains = n == 0;
+    m.cpu.power(Base);
+  }
+  auto& chained = runs[0].m.cpu;
+  auto& unchained = runs[1].m.cpu;
+  uint32_t mismatches = 0;
+  for(uint32_t round = 0; round < 2000 && !chained.scc.halted; round++) {
+    uint32_t limit = 1 + round % 37;
+    uint64_t a = chained.run(limit), b = unchained.run(limit);
+    bool same = a == b && chained.ipu.pc == unchained.ipu.pc && chained.ipu.pd == unchained.ipu.pd;
+    for(uint32_t r = 0; r < 32; r++) same = same && chained.ipu.r[r] == unchained.ipu.r[r];
+    if(!same && ++mismatches <= 3) {
+      std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
+                  (unsigned long long)a, (unsigned long long)b, chained.ipu.pc, unchained.ipu.pc);
+    }
+  }
+  CHECK(mismatches, 0);
+  CHECK(chained.scc.halted, 1);
+  CHECK(unchained.scc.halted, 1);
+  CHECK(chained.ipu.r[s0], 50);
+  CHECK(chained.ipu.r[s5], 50);
+  CHECK(chained.ipu.r[s6], 25);
+  CHECK(runs[0].befores == runs[1].befores, 1);
+  CHECK(runs[0].befores.size(), 50);
+}
+
 // Not a test: with ALLEGREX_BENCHMARK set, times a loop of loads, stores and arithmetic on the interpreter, on the
 // recompiler without a page table (its loads and stores call the interpreter), and on the recompiler. For numbers
 // that mean something, build without the sanitizers: SANITIZE= ALLEGREX_BENCHMARK=1 tests/allegrex/run-tests.sh
@@ -926,6 +986,7 @@ int main() {
     {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"branches", branches}, {"syscalls", syscalls},
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system}, {"recompiler", recompilerCases},
+    {"chained runs", chainedRuns},
   };
   for(auto& test : vfpuTests()) tests.push_back(test);
   int groups = 0;
