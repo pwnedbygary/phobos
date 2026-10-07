@@ -574,12 +574,108 @@ static auto cancelWaits() -> void {
   }
 }
 
+//Mutexes outside a thread: an alarm's handler trying, unlocking, cancelling or locking a kernel mutex, or trying or
+//unlocking a lightweight one, is refused (ILLEGAL_CONTEXT), whether it went off with no thread running (main
+//delaying) or interrupted main (spinning): neither mutex is left held, by nobody or by main, and main takes and frees
+//both afterwards; the state saved at the end loads. Called directly with no thread running, the same.
+static auto mutexesOutsideThreads() -> void {
+  constexpr u32 Work = R + 0x80;  //the lightweight mutex's work area
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    Assembler handler{m, 0x0880'3000};
+    handler.put(addiu(sp, sp, -16));
+    handler.put(sw(ra, 12, sp));
+    struct Call { const char* name; bool light; u32 a1, a2; } calls[] = {
+      {"sceKernelTryLockMutex", false, 1, 0}, {"sceKernelUnlockMutex", false, 1, 0},
+      {"sceKernelCancelMutex", false, 1, 0}, {"sceKernelLockMutex", false, 1, 0},
+      {"sceKernelTryLockLwMutex", true, 1, 0}, {"sceKernelUnlockLwMutex", true, 1, 0},
+    };
+    for(auto& call : calls) {
+      if(call.light) handler.li(a0, Work);
+      else mutex(handler);
+      handler.li(a1, call.a1); handler.li(a2, call.a2);
+      handler.call(call.name);
+      noteResult(handler);
+    }
+    handler.put(lw(ra, 12, sp));
+    handler.li(v0, 0);  //not again
+    handler.put(jr(ra));
+    handler.put(addiu(sp, sp, 16));
+
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("mutex")); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0);
+    main.call("sceKernelCreateMutex");
+    main.li(t0, R); main.put(sw(v0, 0, t0));
+    main.li(a0, Work); main.li(a1, m.string("lw")); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
+    main.call("sceKernelCreateLwMutex");
+    auto takeAndFree = [&] {
+      mutex(main); main.li(a1, 1);
+      main.call("sceKernelTryLockMutex");
+      noteResult(main);
+      mutex(main); main.li(a1, 1);
+      main.call("sceKernelUnlockMutex");
+      noteResult(main);
+      main.li(a0, Work); main.li(a1, 1);
+      main.call("sceKernelTryLockLwMutex");
+      noteResult(main);
+      main.li(a0, Work); main.li(a1, 1);
+      main.call("sceKernelUnlockLwMutex");
+      noteResult(main);
+    };
+    main.li(a0, 300); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelSetAlarm");
+    delay(main, 2000);  //no thread runs as it goes off
+    takeAndFree();
+    main.li(a0, 300); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelSetAlarm");
+    main.li(s1, 400'000);  //three instructions a round: some 3.6 ms, so it goes off in here
+    u32 loop = main.here();
+    main.put(addiu(s1, s1, -1));
+    main.put(bne(s1, zero, int32_t(loop - (main.here() + 4)) / 4));
+    main.put(nop);
+    takeAndFree();
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    std::vector<u32> expected;
+    for(u32 round = 0; round < 2; round++) {
+      for(u32 n = 0; n < 6; n++) expected.push_back(Kernel::ErrorIllegalContext);
+      for(u32 n = 0; n < 4; n++) expected.push_back(0);
+    }
+    CHECK(logged(m) == expected, true);
+    u32 uid = word(m, R);
+    CHECK(m.kernel.mutexes[uid].count, 0);
+    CHECK(m.kernel.mutexes[uid].owner, 0);
+    CHECK(word(m, Work), 0);
+    CHECK(word(m, Work + 4), 0xffff'ffff);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+
+  KernelMachine m;  //no thread running
+  u32 name = m.string("mutex");
+  CHECK(m.call("sceKernelCreateMutex", {name, 0, 1, 0}), Kernel::ErrorIllegalContext);
+  CHECK(m.call("sceKernelCreateLwMutex", {Work, name, 0, 1, 0}), Kernel::ErrorIllegalContext);
+  u32 uid = m.call("sceKernelCreateMutex", {name, 0, 0, 0});
+  CHECK(m.call("sceKernelCreateLwMutex", {Work, name, 0, 0, 0}), 0);
+  CHECK(m.call("sceKernelTryLockMutex", {uid, 1}), Kernel::ErrorIllegalContext);
+  CHECK(m.call("sceKernelLockMutex", {uid, 1, 0}), Kernel::ErrorIllegalContext);
+  CHECK(m.call("sceKernelUnlockMutex", {uid, 1}), Kernel::ErrorIllegalContext);
+  CHECK(m.call("sceKernelCancelMutex", {uid, 1, 0}), Kernel::ErrorIllegalContext);
+  CHECK(m.call("sceKernelTryLockLwMutex", {Work, 1}), Kernel::ErrorIllegalContext);
+  CHECK(m.call("sceKernelLockLwMutex", {Work, 1, 0}), Kernel::ErrorIllegalContext);
+  CHECK(m.call("sceKernelUnlockLwMutex", {Work, 1}), Kernel::ErrorIllegalContext);
+  CHECK((status(m, uid) == std::array<u32, 5>{0, 0, 0, 0xffff'ffff, 0}), true);
+  CHECK(word(m, Work), 0);
+  CHECK(roundTrip(m), true);
+}
+
 auto mutexTests() -> Tests {
   return {
     {"mutexes called directly", mutexCalls}, {"mutexes handed on in order", mutexOrder},
     {"mutexes waits ending", mutexWaits}, {"mutexes callbacks in a wait", mutexCallbacks},
     {"mutexes state with a waiter", mutexState}, {"threads released from waits", releaseWaits},
-    {"semaphores and event flags cancelled", cancelWaits},
+    {"semaphores and event flags cancelled", cancelWaits}, {"mutexes outside threads", mutexesOutsideThreads},
   };
 }
 

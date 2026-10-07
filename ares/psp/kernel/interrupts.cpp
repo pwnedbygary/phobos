@@ -84,6 +84,18 @@ auto Kernel::mayWait() -> bool {
   return true;
 }
 
+//For a function that makes the calling thread a mutex's holder, or takes its locks off (trying a lock, unlocking,
+//cancelling to a count, making one held), before anything else it does: false, with ILLEGAL_CONTEXT for the result,
+//in a call into the program, or with no thread running (a test calling directly). There's no thread to hold it: an
+//interrupt handler's lock would leave the mutex held by nobody, which no thread could unlock, or by whatever thread
+//it interrupted, which never took it. pspautotests record only the waiting locks in a handler (intr/waits:
+//ILLEGAL_CONTEXT, before the mutex is looked at); these are refused alike, as the PSP's other thread functions are
+//in a handler (vtimers/interrupt's create and delete).
+auto Kernel::fromThread() -> bool {
+  if(interrupting || !current) return result(ErrorIllegalContext), false;
+  return true;
+}
+
 //Interrupts held off (sceKernelCpuSuspendIntr): the CPU's own interrupt flag, which user code reads and sets with
 //mfic and mtic, as pspautotests' intr/mfic recorded (1 as a program starts; only its lowest bit counts: resuming
 //with 2 leaves them off). interruptsEnabled is that very flag (cpu.scc.interrupts), so the program's own mfic and

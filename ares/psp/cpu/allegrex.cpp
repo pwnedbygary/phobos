@@ -71,4 +71,9 @@ auto Allegrex::run(u64 instructions) -> u64 {
   return instructionsRun;
 }
 
+auto Allegrex::instructionsBefore() const -> u64 {
+  if(recompiler.inBlock) return instructionsRun + recompiler.executed - 1;
+  return instructionsRun;
+}
+
 }

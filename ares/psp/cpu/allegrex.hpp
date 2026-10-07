@@ -84,11 +84,14 @@ struct Allegrex {
   auto instruction() -> void;
   auto execute(u32 address, u32 instruction) -> u32;
   auto run(u64 instructions) -> u64;
-  //How many instructions the run under way has run so far, as its last block or instruction began: the HLE kernel's
-  //clock catches up to it at each syscall. And how many it runs in all: a syscall may bring that forward, to stop the
-  //run at something it made due sooner (a thread's wait ending, a timer).
+  //How many instructions the run under way has run so far, as its last block or instruction began. And how many it
+  //runs in all: a syscall may bring that forward, to stop the run at something it made due sooner (a thread's wait
+  //ending, a timer).
   u64 instructionsRun = 0;
   u64 runLimit = 0;
+  //How many ran before the instruction executing now (the syscall the HLE kernel's clock catches up at), the same
+  //count with either engine: inside a compiled block, the block's instructions before it count too.
+  auto instructionsBefore() const -> u64;
 
   //The integer unit: 32 general registers (r0 always reads as zero), hi and lo (where multiply and divide put their
   //results), and the program counter.
@@ -508,7 +511,10 @@ struct Allegrex {
                     const std::function<void ()>& access) -> void;
 
     bool enabled = false;
-    u32 executed = 0;  //how many instructions the last block ran: each block sets it as it leaves
+    //How many instructions the last block ran: each block sets it as it leaves, and as it calls the interpreter for
+    //one (counting that one), so during that call it says how far the block has got.
+    u32 executed = 0;
+    bool inBlock = false;  //whether compiled code is running (it's what called execute(), if anything did)
     u32 codeMemory = 32_MiB;  //how much compiled code may fill before it all goes and compiling starts afresh
     bump_allocator allocator;
     std::vector<std::unique_ptr<Section>> sections;

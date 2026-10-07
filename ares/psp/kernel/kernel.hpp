@@ -745,6 +745,7 @@ struct Kernel {
   auto startCall() -> void;
   auto callReturned() -> void;
   auto mayWait() -> bool;
+  auto fromThread() -> bool;
   auto sceKernelCpuSuspendIntr() -> void;
   auto sceKernelCpuResumeIntr() -> void;
   //Sub-interrupt handlers: the program's functions an interrupt calls, 32 to an interrupt, on the two interrupts a

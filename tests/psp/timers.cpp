@@ -449,11 +449,39 @@ static auto timerStates() -> void {
   }
 }
 
+//The clock read inside a block: a syscall made straight from the program (not through a stub's jr ra, which would
+//end the block before it) after 900 instructions of its own block reads the same time on both engines, the
+//instructions before it counted alike; 900 at 333 MHz are near 3 microseconds, so a block counted from its start
+//would read earlier.
+static auto clockInBlock() -> void {
+  u32 times[2][2];
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    u32 code = m.kernel.importCode("test", Kernel::nid("sceKernelGetSystemTimeWide"));
+    Assembler main{m, 0x0880'1000};
+    main.put(syscall(code));
+    main.li(t0, R); main.put(sw(v0, 0x10, t0));
+    for(u32 n = 0; n < 900; n++) main.put(addiu(t1, t1, 1));
+    main.put(syscall(code));
+    main.li(t0, R); main.put(sw(v0, 0x14, t0));
+    main.call("sceKernelExitGame");
+    CHECK(main.here() < 0x0880'2000, true);  //one section: nothing ends the second block before its syscall
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    times[recompile][0] = word(m, R + 0x10);
+    times[recompile][1] = word(m, R + 0x14);
+    CHECK(times[recompile][1] - times[recompile][0] >= 2, true);
+    CHECK(roundTrip(m), true);
+  }
+  CHECK(times[0][0], times[1][0]);
+  CHECK(times[0][1], times[1][1]);
+}
+
 auto timerTests() -> Tests {
   return {
     {"alarms called directly", alarmCalls}, {"alarms going off", alarmsGoOff},
     {"vtimers called directly", vtimerCalls}, {"vtimers' handlers", vtimerHandlers},
-    {"timers in states", timerStates},
+    {"timers in states", timerStates}, {"the clock inside a block", clockInBlock},
   };
 }
 

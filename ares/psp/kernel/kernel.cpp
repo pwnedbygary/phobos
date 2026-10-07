@@ -873,10 +873,13 @@ auto Kernel::importCode(const std::string& library, u32 nid) -> u32 {
 //clock first catches up to the instructions the CPU has run so far in this go (run() adds the rest as it ends): a
 //function reading or setting a time between two waits sees the time it's called at, not the time the go began
 //(which a thread running from one wait to the next a whole frame long had seen till then: a timer set 2.5 ms on
-//went off at once, its moment already passed). Then the go ends by whatever the function made due.
+//went off at once, its moment already passed). The count is the instructions before the syscall, which both engines
+//give alike (the recompiler's block as far as it has got), so a program sees the same time with either. Then the go
+//ends by whatever the function made due.
 auto Kernel::syscall(u32 code) -> bool {
-  if(cpu.instructionsRun > counted) cycles += cpu.instructionsRun - counted;
-  counted = cpu.instructionsRun;
+  u64 before = cpu.instructionsBefore();
+  if(before > counted) cycles += before - counted;
+  counted = before;
   bool handled = dispatch(code);
   runUntilNextEvent();
   return handled;
@@ -934,7 +937,7 @@ auto Kernel::dispatch(u32 code) -> bool {
 //the CPU to the end of its go, a frame at most: pspautotests' threads/scheduling/preemptuser had a better thread's
 //1000-microsecond delays take 8 to 17 ms while main spun.)
 auto Kernel::runUntilNextEvent() -> void {
-  u64 limit = cpu.instructionsRun + untilNextEvent();
+  u64 limit = cpu.instructionsBefore() + untilNextEvent();
   if(limit < cpu.runLimit) cpu.runLimit = limit;
 }
 

@@ -60,18 +60,19 @@ auto Kernel::mutexesFreed(u32 thread) -> void {
 
 //(name, attributes, initial count, options): a mutex, free, or held by the calling thread with its initial count.
 //A name is needed (ERROR without one); the attributes may be any of the low twelve bits but 0x400 (ILLEGAL_ATTR
-//otherwise); the count can't be negative, nor more than 1 unless the mutex is recursive (ILLEGAL_COUNT). The options
-//are read for nothing: any size is taken.
+//otherwise); the count can't be negative, nor more than 1 unless the mutex is recursive (ILLEGAL_COUNT); one held
+//needs a thread to hold it (fromThread()). The options are read for nothing: any size is taken.
 auto Kernel::sceKernelCreateMutex() -> void {
   u32 name = arg(0), attributes = arg(1);
   s32 count = s32(arg(2));
   if(!name) return result(ErrorError);
   if(attributes & ~0xbffu) return result(ErrorIllegalAttribute);
   if(count < 0 || (count > 1 && !(attributes & 0x200))) return result(ErrorIllegalCount);
+  if(count && !fromThread()) return;
   u32 uid = newUID();
   if(!uid) return result(ErrorNoMemory);
-  u32 owner = count && current ? current->uid : 0;
-  mutexes[uid] = {uid, memory.readString(name, 31), attributes, count, owner ? count : 0, owner};
+  u32 owner = count ? current->uid : 0;
+  mutexes[uid] = {uid, memory.readString(name, 31), attributes, count, count, owner};
   result(uid);
 }
 
@@ -91,24 +92,22 @@ auto Kernel::sceKernelDeleteMutex() -> void {
 //it again adds to its count if it's recursive (LOCK_OVERFLOW past 2^31 - 1), else is refused
 //(RECURSIVE_NOT_ALLOWED). A timeout of 0 on a mutex another holds gives up at once, its time left as it was.
 auto Kernel::lockMutex(bool callbacks) -> void {
-  if(!mayWait()) return;
+  if(!mayWait() || !fromThread()) return;
   u32 timeoutPointer = arg(2);
   s32 count = s32(arg(1));
   auto found = mutexes.find(arg(0));
   if(found == mutexes.end()) return result(ErrorUnknownMutex);
   auto& mutex = found->second;
   if(!mutexCount(mutex, count)) return result(ErrorIllegalCount);
-  u32 self = current ? current->uid : 0;
-  if(!mutex.count || mutex.owner == self) {
+  if(!mutex.count || mutex.owner == current->uid) {
     if(mutex.count && !(mutex.attributes & 0x200)) return result(ErrorMutexRecursion);
     if(count > 0x7fff'ffff - mutex.count) return result(ErrorMutexOverflow);
     mutex.count += count;
-    mutex.owner = self;
+    mutex.owner = current->uid;
     result(0);
     return callbacksOnReturn(callbacks);
   }
   if(timeoutPointer && !memory.read(4, timeoutPointer)) return result(ErrorWaitTimeout);
-  if(!current) return result(ErrorCanNotWait);  //(no thread to wait: a test calling directly)
   result(0);
   current->waitCount = count;
   current->readySince = ++readySequence;  //its place in the line
@@ -123,32 +122,34 @@ auto Kernel::sceKernelLockMutexCB() -> void {
   lockMutex(true);
 }
 
-//(mutex, count): as locking, but never waits: a mutex another thread holds is refused (MUTEX_LOCKED).
+//(mutex, count): as locking, but never waits: a mutex another thread holds is refused (MUTEX_LOCKED). Only a thread
+//may (fromThread()).
 auto Kernel::sceKernelTryLockMutex() -> void {
+  if(!fromThread()) return;
   s32 count = s32(arg(1));
   auto found = mutexes.find(arg(0));
   if(found == mutexes.end()) return result(ErrorUnknownMutex);
   auto& mutex = found->second;
   if(!mutexCount(mutex, count)) return result(ErrorIllegalCount);
-  u32 self = current ? current->uid : 0;
-  if(mutex.count && mutex.owner != self) return result(ErrorMutexLocked);
+  if(mutex.count && mutex.owner != current->uid) return result(ErrorMutexLocked);
   if(mutex.count && !(mutex.attributes & 0x200)) return result(ErrorMutexRecursion);
   if(count > 0x7fff'ffff - mutex.count) return result(ErrorMutexOverflow);
   mutex.count += count;
-  mutex.owner = self;
+  mutex.owner = current->uid;
   result(0);
 }
 
 //(mutex, count): takes count off the holder's locks; at none, the mutex goes to its next waiter, who runs at once if
 //it's better than the caller. Only the holder may (MUTEX_UNLOCKED for a free mutex or another's), and no more than
-//it holds (UNLOCK_UNDERFLOW). The count is checked before who holds it.
+//it holds (UNLOCK_UNDERFLOW). The count is checked before who holds it. Only a thread may (fromThread()).
 auto Kernel::sceKernelUnlockMutex() -> void {
+  if(!fromThread()) return;
   s32 count = s32(arg(1));
   auto found = mutexes.find(arg(0));
   if(found == mutexes.end()) return result(ErrorUnknownMutex);
   auto& mutex = found->second;
   if(!mutexCount(mutex, count)) return result(ErrorIllegalCount);
-  if(!mutex.count || !current || mutex.owner != current->uid) return result(ErrorMutexUnlocked);
+  if(!mutex.count || mutex.owner != current->uid) return result(ErrorMutexUnlocked);
   if(count > mutex.count) return result(ErrorUnlockUnderflow);
   result(0);
   mutex.count -= count;
@@ -159,10 +160,15 @@ auto Kernel::sceKernelUnlockMutex() -> void {
 }
 
 //(mutex, new count, where to put how many threads waited): every thread waiting for it is told the wait was
-//cancelled (WAIT_CANCEL), and its count becomes the new one: 0 frees it, more makes the caller its holder. A count
-//more than 1 is refused for a mutex that isn't recursive (ILLEGAL_COUNT, nothing written). A negative count is taken
-//as the count the mutex was made with: the recordings only show a mutex made free, which either reading frees.
+//cancelled (WAIT_CANCEL), and its count becomes the new one: 0 frees it, more makes the caller its holder, so only a
+//thread may (fromThread()). A count more than 1 is refused for a mutex that isn't recursive (ILLEGAL_COUNT, nothing
+//written). A negative count is taken as the count the mutex was made with. What threads/mutex/cancel recorded of
+//one: -1 and -3 accepted on a mutex made free, which is free afterwards; that fits "free" as well as "as it was
+//made". The PSP takes a negative count where it refuses one too big (2 for this mutex: ILLEGAL_COUNT), so it isn't
+//read as a count, but as something else to set; going back to the count it was made with is the one such meaning,
+//and for every mutex the recordings cancel it's free too.
 auto Kernel::sceKernelCancelMutex() -> void {
+  if(!fromThread()) return;
   s32 count = s32(arg(1));
   auto found = mutexes.find(arg(0));
   if(found == mutexes.end()) return result(ErrorUnknownMutex);
@@ -172,8 +178,8 @@ auto Kernel::sceKernelCancelMutex() -> void {
   auto waiters = mutexWaiters(mutex);
   if(arg(2)) memory.write(4, arg(2), waiters.size());
   for(auto thread : waiters) ready(*thread, ErrorWaitCancelled);
-  mutex.owner = count && current ? current->uid : 0;
-  mutex.count = mutex.owner ? count : 0;
+  mutex.owner = count ? current->uid : 0;
+  mutex.count = count;
   result(0);
   reschedule();
 }

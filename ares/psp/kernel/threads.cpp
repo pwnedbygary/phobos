@@ -640,7 +640,10 @@ auto Kernel::sceKernelPollSema() -> void {
 //(semaphore, new count, where to put how many threads waited): every thread waiting on it is told the wait was
 //cancelled (WAIT_CANCEL), and its count becomes the new one, which can't be past its maximum (ILLEGAL_COUNT, nothing
 //written), as pspautotests' threads/semaphores/cancel recorded. A negative count is taken as the count it was made
-//with (the recordings, of a semaphore made with 0, read 0 after it either way).
+//with. What the recordings show of one: -1 and -3 accepted on a semaphore made with 0, which reads 0 afterwards;
+//that fits 0 as well as "as it was made". The PSP takes a negative count where it refuses one past the maximum, so
+//it isn't read as a count, but as something else to set; going back to the count it was made with is the one such
+//meaning (and the mutex's cancel takes it the same way).
 auto Kernel::sceKernelCancelSema() -> void {
   auto found = semaphores.find(arg(0));
   if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
@@ -661,16 +664,18 @@ auto Kernel::sceKernelCancelSema() -> void {
 
 //Lightweight mutexes keep their state in the program's own memory, in a 32-byte work area (SceLwMutexWorkarea):
 //the lock count, the locking thread (-1 for none), the attributes (0x200: the same thread may lock it again), how
-//many threads wait for it, and its UID.
+//many threads wait for it, and its UID. Making one held, locking, trying and unlocking it are a thread's alone
+//(fromThread()), as for the kernel's mutexes.
 auto Kernel::sceKernelCreateLwMutex() -> void {
   u32 workArea = arg(0), attributes = arg(2);
   s32 count = s32(arg(3));
   if(count < 0 || (count > 1 && !(attributes & 0x200))) return result(ErrorIllegalCount);
+  if(count && !fromThread()) return;
   u32 uid = newUID();
   if(!uid) return result(ErrorNoMemory);
   lwMutexes[uid] = workArea;
   memory.write(4, workArea + 0, u32(count));
-  memory.write(4, workArea + 4, count && current ? current->uid : 0xffff'ffff);
+  memory.write(4, workArea + 4, count ? current->uid : 0xffff'ffff);
   memory.write(4, workArea + 8, attributes);
   memory.write(4, workArea + 12, 0);
   memory.write(4, workArea + 16, uid);
@@ -696,7 +701,7 @@ auto Kernel::sceKernelDeleteLwMutex() -> void {
 //entering the kernel, so no callback can run there. Peace Walker counts on that: it locks one while holding a lock
 //its power callback takes, and running the callback (notified as it was registered) there deadlocked it.
 auto Kernel::lockLwMutex(bool callbacks) -> void {
-  if(!mayWait()) return;
+  if(!mayWait() || !fromThread()) return;
   u32 workArea = arg(0), count = arg(1), timeout = arg(2);
   if(!lwMutexes.count(memory.read(4, workArea + 16))) return result(ErrorLwMutexNotFound);
   if(s32(count) <= 0) return result(ErrorIllegalCount);
@@ -727,6 +732,7 @@ auto Kernel::sceKernelLockLwMutexCB() -> void {
 }
 
 auto Kernel::sceKernelTryLockLwMutex() -> void {
+  if(!fromThread()) return;
   u32 workArea = arg(0), count = arg(1);
   if(!lwMutexes.count(memory.read(4, workArea + 16))) return result(ErrorLwMutexNotFound);
   if(s32(count) <= 0) return result(ErrorIllegalCount);
@@ -765,6 +771,7 @@ auto Kernel::unlockLwMutex(u32 workArea) -> void {
 }
 
 auto Kernel::sceKernelUnlockLwMutex() -> void {
+  if(!fromThread()) return;
   u32 workArea = arg(0), count = arg(1);
   if(!lwMutexes.count(memory.read(4, workArea + 16))) return result(ErrorLwMutexNotFound);
   if(s32(count) <= 0) return result(ErrorIllegalCount);

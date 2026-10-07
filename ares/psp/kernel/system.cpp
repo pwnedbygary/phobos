@@ -303,9 +303,11 @@ auto Kernel::sceImposeGetLanguageMode() -> void {
   result(0);
 }
 
-//(where to put whether it's charging, where to put the battery icon's state): the battery the power functions tell
-//of, full on the charger and not charging, its icon full (3 here: neither the arguments nor their values are in
-//pspsdk's headers, which name the function only, so these are chosen).
+//(where to put whether it's charging, where to put the battery icon's state): pspsdk's headers name the function
+//only, not its arguments or their values, and no recording shows them, so these are the natural answer with no
+//battery to show: not charging (0), and the icon a full battery's (3, taken as full because the PSP's icon shows up
+//to three bars; that it counts so is a guess). They agree with the power functions here: on the charger, not
+//charging, the battery full.
 auto Kernel::sceImposeGetBatteryIconStatus() -> void {
   if(arg(0)) memory.write(4, arg(0), 0);
   if(arg(1)) memory.write(4, arg(1), 3);
