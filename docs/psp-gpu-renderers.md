@@ -326,19 +326,17 @@ edge functions in 32 bits where a job's fit.
 Every stage keeps the tests' rule: the software renderer's pixels, byte for byte, in the random batches, the samples
 and the games' frames.
 
-## For the owner to decide
+## The owner's decisions (2026-10-07)
 
-- **Whose rounding on x86-64.** The software renderer already draws a few pixels differently on x86-64 desktops
-  than on ARM64 (part 24). The GPU renderer can follow the host it runs on (as now: it matches the software renderer
-  beside it, and the tests can check it there), or always ARM64's (the same pictures on every computer, but then
-  not the x86-64 software renderer's). Making the software renderer itself round as ARM64 everywhere (explicit fused
-  multiply-adds) would settle it, at some cost on x86-64 machines without FMA.
-- **Textures decoded on the GPU or the CPU.** The GPU (stage 2) avoids read-backs of render targets used as
-  textures; the CPU's decoded copies (the prototype's) are exact by construction and cost the CPU's time. The plan
-  is the GPU; this can be settled by measurement.
-- **The default renderer**, once the GPU renderers draw everything: per device, or Software until asked.
-- **"Very nearly exact"**: should a feature whose exact emulation is expensive (3D sprites' doubles) ship on the GPU
-  a hair from exact where the software renderer would be slower, or stay on the software renderer until it's exact?
-  The plan is exact; the question is whether to wait for it.
-- **A self-test at start-up** (a fraction of a second: random jobs drawn both ways, the GPU renderer refused on any
-  difference), as a guard against GPU compilers the tests never met, as Adreno's blend factors were.
+- **Whose rounding on x86-64:** the host's own. The GPU renderer matches the software renderer it runs beside (as
+  now), so on x86-64 desktops it follows x86-64's few different pixels, and the tests check it against that.
+- **Textures decoded on the GPU** (stage 2), so render targets used as textures never come back to the CPU.
+- **The default renderer stays Software** until the user picks a GPU renderer in Settings, even once the GPU
+  renderers draw everything.
+- **Exact before shipping:** a feature whose exact emulation isn't done yet stays on the software renderer until it
+  is (textured 3D sprites, with their doubles, among them); nothing ships on the GPU a hair from exact.
+- **A self-test at start-up:** before a GPU renderer draws a game, a fraction of a second of random jobs drawn both
+  ways; any pixel apart, and the software renderer draws instead (and the app says so once).
+- **Order:** speed first (stage 3 above: VRAM kept on the GPU, the GPU's work overlapping the CPU's, finer binning,
+  with stage 2's textures and transfers on the GPU that it needs), then the OpenGL backend (stage 4) over the same
+  shaders.
