@@ -4823,3 +4823,30 @@ now has to show as broken.
 to the renderer and `loadVulkan` run for the PSP; a start-up sanity check; measured in the app with the system and a
 custom driver). Accuracy: programmable blending where the GPU has it, depth read back, transfers and texture decoding
 on the GPU.
+
+**After review** (an independent review of the branch: no PPSSPP code copied or translated, the design credited; six
+findings, all fixed):
+- GCC's `-Wextra -Werror` rejected two conditionals mixing an enumeration and a `u8` (clang doesn't warn): both arms
+  are `u8` now, and the PSP system tests build and pass with Ubuntu 24.04's g++ 13, as CI's job has it.
+- A PRIM the renderer couldn't take was lost: `targetFor()` refused a frame buffer whose drawing ran past VRAM's end,
+  after the GE had handed the PRIM over. `begin()` now says whether it took the PRIM, and the GE has the software
+  renderer draw a refused one, once the renderer has put back what it drew: no target (the GPU out of room), rows
+  past the target's (past VRAM's end the software renderer's rows run round to VRAM's start, as the PSP's
+  addresses do, which a target can't), a lost GPU, or a texture read from memory as it's drawn (none decoded).
+- Render-to-texture copies were never let go while their target lived (one for each place sampled from, 300 after
+  300 frames in the reviewer's probe), until the GPU's memory or descriptor sets ran out. Now one for each target and
+  size, copied again for another place; at most 32, the one unused longest going for another, and none unused for
+  16,384 PRIMs. Decoded textures the GE has let go are dropped at submits too, not only at finishes.
+- The GPU's depth went stale: the depth buffer's pages weren't watched, so a depth buffer cleared by the CPU or a
+  block transfer was missed, and a color change mid-frame refilled the GPU's depth from memory's older one. The depth
+  buffer is watched now through VRAM's fourth copy, the rows a change may be in (each 16 KiB it touches) are filled
+  again on their own, a color refill leaves the GPU's depth alone, and another depth buffer is filled afresh.
+- A PRIM's recording had no bound (a long line costs six vertices a pixel): it's handed to the GPU within the PRIM
+  once there are 262,144 vertices.
+- The tests shared one renderer between machines without having it forget the one before, so a target kept the last
+  machine's pixels. `GE::setRenderer()` now settles the renderer it replaces and has the new one forget (VRAM's
+  colors and depth), and the tests attach through it; `forget()` drops the depth as well as the colors.
+New tests, one for each of the medium findings: PRIMs refused (past VRAM's end, and a pretend backend that makes no
+targets) drawn by the software renderer, byte for byte; render to texture from 300 places and sizes, its copies kept
+to 32; and the depth buffer following memory (cleared by the CPU between two depth-tested sprites; a color pixel
+written between them not bringing memory's depth back). The design's notes on depth say what's still approximated.

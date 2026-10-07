@@ -44,6 +44,11 @@ code is used.
 - **Next**: upscaling and presenting from the GPU, then OpenGL, then the app wiring (Settings' "PSP Renderer:
   Software / Vulkan / OpenGL", Software the default; the host's `vkGetInstanceProcAddr` and `loadVulkan` for the PSP;
   a sanity check; measuring in the app with the system and a custom driver, none installed or deleted without asking).
+- **After review** (part 36's "After review"): builds with GCC (two conditionals' types); a PRIM the renderer can't
+  take (past VRAM's end, no target, a lost GPU, a texture read from memory) is drawn by the software renderer instead
+  of lost; render-to-texture copies bounded (32, one for each target and size); the depth buffer's pages watched
+  apart from the colors; long PRIMs handed over in pieces; `GE::setRenderer()` has a renderer forget the machine
+  before. Three new tests; the PSP system tests pass on the M1 (sanitized, the GPU groups run) and with g++ 13.
 
 ## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
 

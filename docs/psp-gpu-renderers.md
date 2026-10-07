@@ -122,7 +122,18 @@ where the renderer knows what's written.
 **Filled from memory.** Before a target is first drawn into, the rows a PRIM reaches are filled from memory's VRAM:
 the pixels widened to 8888, the stencil from their alpha, the depth from the depth buffer's bytes. Its bytes are then
 watched (`Memory::watch()`): whoever changes them (the CPU, a block transfer, a texture upload, another target's
-pixels put back) makes it stale, and it's filled afresh before it's next drawn into.
+pixels put back) makes it stale, and its colors and stencil are filled afresh before it's next drawn into. The depth
+buffer's bytes are watched too, through VRAM's fourth copy as the GE sees them, but on their own: a change there (the
+CPU clearing depth, a block transfer, the software renderer's drawing) has the rows it may be in (all of each 16 KiB
+it touches, which the fourth copy rearranges) filled again from memory, and the rest of the GPU's depth kept; a change
+to the colors leaves the GPU's depth alone; and a PRIM with another depth buffer than the target's last fills it
+afresh.
+
+**What the GPU doesn't draw.** A PRIM the renderer can't take is drawn by the software renderer instead, once the
+renderer has put back what it drew (`begin()` says so): no target for its frame buffer (the GPU out of room), rows
+past the target's (a frame buffer near VRAM's end whose drawing runs past it, where the PSP's addresses run round to
+VRAM's start, or past 512 rows), a lost GPU, or a texture the GE reads from memory as it draws (none decoded, which
+the GPU can't sample). Columns past a row's end are cut at the row, as before.
 
 **Owned until needed.** What's drawn stays on the GPU. VRAM's pages under the pixels drawn are the renderer's: busy
 (`Memory::busyPages`), exactly as the drawing threads' batches make them, so anyone touching one (the CPU, the
@@ -130,16 +141,18 @@ display, a texture decode, a block transfer, a save state) first has the rendere
 waited for, each target's drawn rectangle read back, narrowed to its format (the stencil as alpha) and put into
 memory's VRAM, and the pages are memory's again. Decoded textures and the recompiler hear of the change when the pages
 are first owned, as they do of the software renderer's drawing. The depth buffer isn't read back (the GPU's depth
-stays the GPU's; a game that reads depth with the CPU, or samples it as a texture, sees what memory had): PPSSPP
-makes the same choice by default, and it's on the list below.
+stays the GPU's; a game that reads depth with the CPU, or samples it as a texture, sees what memory had; and a PRIM
+the software renderer draws, above, tests against memory's depth): PPSSPP makes the same choice by default, and it's
+on the list below.
 
 **Two targets over the same pages** (a frame buffer drawn as 5650 then 8888, or a smaller buffer inside a larger one):
 before a PRIM draws into, or fills, rows whose pages another target owns, the renderer finishes first, so memory has
 the other's pixels, and the target is filled from them.
 
 **Submitting.** What's recorded is handed to the GPU every 128 commands and at a list's end (`submit()`), not waited
-for, so the GPU draws while the CPU emulates. The backend has three slots, each with its own command buffer, fence and
-staging memory (vertices, uploads), used round. Only `finish()` waits.
+for, so the GPU draws while the CPU emulates; and within a PRIM once it has 262,144 vertices (a long line costs six
+for each pixel it lights), so no PRIM's recording grows without bound. The backend has three slots, each with its own
+command buffer, fence and staging memory (vertices, uploads), used round. Only `finish()` waits.
 
 **Block transfers** go through memory for now: a transfer reading or writing pages the renderer owns finishes it
 first, then copies in memory, and the targets it wrote over are filled afresh. Transfers between targets on the GPU
@@ -153,8 +166,11 @@ them waits for the read back. Instead, before decoding, the GE asks the renderer
 its pages are all one target's (the newest pixels on the GPU), its format is the frame buffer's own (5650, 5551, 4444
 or 8888, not swizzled, not a palette's indices), its row width is the target's, and it starts inside the target. Then
 the GE doesn't decode it, and the renderer copies the part of the target the texture covers into a texture of its own
-on the GPU, in order with the draws, for the PRIM to sample. The copy is kept per target, place and size, and taken
-again only when the target has changed since (each target counts its fills and PRIMs drawn). The shader reads a
+on the GPU, in order with the draws, for the PRIM to sample. One copy is kept for each target and size, and taken
+again when the place is another or the target has changed since (each target counts its fills and PRIMs drawn); the
+draws before sample it as it was, as the GPU runs the commands in order. At most 32 are kept, the one unused longest
+let go for another, and one unused for 16,384 PRIMs goes too, so a game that samples its frame buffer from a place
+that moves each frame doesn't fill the GPU's memory or its descriptor sets. The shader reads a
 16-bit target's texels as its format keeps them (the GPU's 8888 narrowed and widened again), as the GE would read
 them from memory.
 
@@ -172,10 +188,10 @@ In Midnight Club 3's race this took the render passes from 82 a frame to 12-16 a
 
 The GE already keeps decoded copies of the textures it samples (`texture.cpp`: 8888, the palette applied, unswizzled,
 DXT decoded, watched for changes, and decoded again when their bytes or palette change). The renderer puts each on the
-GPU once and keeps it while the GE keeps the copy (a weak pointer: once the GE lets it go, the renderer drops its
-copy at the next finish), and again when the GE's copy grows more rows. So texture decoding stays one piece of CPU
-code for both renderers, and its caching and invalidation are the GE's, measured since part 24. Textures from render
-targets are the copies above.
+GPU once and keeps it while the GE keeps the copy (a weak pointer: once the GE lets it go, the renderer drops its copy
+at the next submit or finish), and again when the GE's copy grows more rows. So texture decoding stays one piece of
+CPU code for both renderers, and its caching and invalidation are the GE's, measured since part 24. Textures from
+render targets are the copies above.
 
 Not yet: decoding on the GPU (palettes and swizzling in a shader), which would also cover textures in a target in a
 format the target isn't (a palette's indices drawn by the GE, rare).
@@ -243,7 +259,12 @@ The software renderer is the reference. Two tools compare against it:
   come out **byte for byte the same** as the software renderer's; a frame buffer drawn and then sampled as a texture
   (the copy taken on the GPU) the same again; pspsdk's samples run by two machines alike but for the renderer, every
   frame's picture compared, with the share of pixels the same and how far apart the rest are printed, and no more than
-  3 channels in 1000 more than 8 levels off; and a GPU that stops answering, with a pretend backend.
+  3 channels in 1000 more than 8 levels off; a GPU that stops answering, with a pretend backend; PRIMs the renderer
+  refuses (a frame buffer whose drawing runs past VRAM's end, and a pretend backend that makes no targets) drawn by
+  the software renderer, the same; render to texture from 300 places and sizes, its copies kept to the bound; and the
+  depth buffer following memory's changes (cleared by the CPU between two depth-tested sprites, and a color pixel
+  written between them not bringing memory's older depth back). Each machine takes the renderer with
+  `GE::setRenderer()`, which has it forget the machine before's VRAM.
 - **A harness for the owner's games** (scratch, never committed; its numbers here): from a scene's state, the same
   frames drawn by the software renderer and then by the GPU renderer, each run unbroken, every frame's picture
   compared: the share of pixels identical, and each differing channel counted as 1-2, 3-8 or more levels apart.
@@ -272,8 +293,11 @@ What differs:
   between them), texels chosen differently where the GPU's interpolated texture coordinates land on the other side of
   a texel's edge from the GE's per-pixel division, and edges where the GPU's rasterization rule and the GE's disagree
   by a pixel. They weren't separated further.
-- **Known approximations**: the depth buffer not read back; textures past a frame buffer's row; partial write masks;
-  absolute-difference blending; logic operations other than clear, set, invert and keep without the GPU's own.
+- **Known approximations**: the depth buffer not read back (so the CPU, a texture or a PRIM the software renderer
+  draws sees memory's depth, not the GPU's); a change to the depth buffer's bytes refills all of each 16 KiB it
+  touches, so the GPU's depth drawn there since is replaced by memory's; a PRIM's pixels past its frame buffer's row
+  end cut at the row; textures past a frame buffer's row; partial write masks; absolute-difference blending; logic
+  operations other than clear, set, invert and keep without the GPU's own.
 
 The pictures look the same to the eye in all six scenes; nothing is missing or misplaced.
 
