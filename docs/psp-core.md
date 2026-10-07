@@ -37,6 +37,8 @@ Part 32, the next functions games stop at (a thread's run status, the thread man
 stick's free space told alike everywhere, and part 28's differences the recordings settle), is on
 `cursor/psp-hle-games6-2b67`, on top of part 31's.
 Part 33, curved surfaces (BEZIER and SPLINE), is on `cursor/psp-ge-curves-2b67`, on top of part 32's.
+Part 34, the GPU renderers' design (docs/psp-gpu-renderers.md) and a Vulkan prototype drawing the software
+renderer's very pixels, is on `cursor/psp-gpu-vulkan-2b67`, on top of part 33's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -4755,3 +4757,128 @@ clean under the sanitizers with hostile surfaces; the ELF and EBOOT built again 
   surfaces, gives back its room once drawn when it holds more than 4096 vertices (PatchKept), where one at the
   budget would have kept about 26 MB (13 MB as points) for the rest of a session. Nothing drawn changes: the same
   checks as above, none failing.
+
+## Part 34: the GPU renderers, designed, and a Vulkan prototype
+
+On branch `cursor/psp-gpu-vulkan-2b67`, on top of part 33's `cursor/psp-ge-curves-2b67` (#162), parts 30 to 32
+underneath. The owner's request (Decisions, 2026-10-06): Vulkan and OpenGL renderers for speed, as accurate as
+possible. [`docs/psp-gpu-renderers.md`](psp-gpu-renderers.md) is the design: compute shaders that do, for every
+pixel, exactly what the software renderer does (paraLLEl-RDP's idea for the N64, none of its code), one set of GLSL
+for Vulkan and OpenGL, the seam in the GE, how VRAM's copies are kept in step, the caches, the backends, the setting,
+speed, the stages, and what the owner should decide. This part is its first stage. Original code: no PPSSPP or JPCSP
+source was read.
+
+**The seam** (`ge.hpp`, `threads.cpp`, `list.cpp`): `GE::Renderer`, a pointer and five lines. With a renderer set,
+every primitive the GE may hold back waits in a batch while a list runs, even with one drawing thread, and wherever a
+batch would be drawn (`flush()`) it's handed to the renderer, which draws its jobs in order into VRAM before
+returning. Everything that waits for drawing (the list's end, render target changes, reads of VRAM the batch draws
+over, transfers, `Memory::pointer()`) waits for it the same way, and the jobs are the very ones the software
+renderer would draw. Without a renderer nothing changes. The display lists, vertices, transform, lighting, clipping
+and setting primitives up stay where they are.
+
+**The prototype** (`ares/psp/ge/gpu`):
+- `gpu.cpp`: a batch's jobs as records for the shaders (its looks: the pipeline's and texture's settings; its jobs:
+  each job's numbers as `draw.cpp` set them up; a 2D sprite's texel axes, a word a column and a row, worked out on
+  the CPU by `spriteRows()`'s own expressions), runs of the jobs it can draw sent to the GPU, the rest drawn by the
+  software renderer (`GE::rasterize()`) in their turn between runs. Each run is synchronous: the batch's VRAM pages
+  copied to the GPU, the stages run, the pages copied back. Textures are the software renderer's decoded copies,
+  kept on the GPU (64 MiB) while those copies live. The GPU draws sprites, triangles and points, 2D and 3D, flat and
+  Gouraud, textured in every format, and the whole pixel pipeline; the software renderer still draws lines, 3D
+  sprites' texels (doubles divided at every pixel), and 2D triangles whose coordinates a double might round.
+- `vulkan.cpp`: the Vulkan backend through volk (loaded at run time; its own device table, so paraLLEl-RDP's
+  globals are untouched), buffers the host and GPU share, compute pipelines with the rounding's constants, MoltenVK's
+  portability enumeration.
+- `shaders/`: `bin.comp` (which jobs reach each 16x16 tile), `raster.comp` (a workgroup a tile, a thread two pixels,
+  their frame and depth buffer words kept in registers across the tile's jobs), `texture.glsl`, `pixel.glsl`,
+  `exact.glsl`, `common.glsl` and `probe.comp`; `compile.sh` makes `shaders.hpp` (SPIR-V for Vulkan, the GLSL as
+  text for OpenGL ES 3.2 and 4.3, both checked) and `--check` compares its recorded hash with the GLSL, which
+  `tests/psp/run-tests.sh` runs, so no build needs a shader compiler.
+
+**Exactness** (the design's "Exactness" says each step): integers ported as they are; 64-bit edge functions as
+32-bit halves; floats rounded step by step as the host rounds them: the host's fused multiply-adds (clang on ARM64
+fuses `c0 * w0` and `c2 * w2` into `c1 * w1`, seen in its output; x86-64 rounds apart: the `fused` constant), an fma
+exact on every GPU (the GPU's own where a probe finds it fused, else Boldo and Melquiond's, built from additions and
+multiplications), division corrected to the nearest from its exact remainder, 64-bit edge functions to floats
+rounded by hand, 2D texture coordinates' doubles as whole numbers over a power of two (exact where no double step
+rounds, which the CPU checks for each job), numbers below the normal floats and NaN handled by their bits, and every
+float `precise` (`NoContraction` on every arithmetic instruction, checked with `spirv-dis`).
+
+**Results.** `tests/psp/gpu.cpp`, three groups, skipped where there's no Vulkan GPU (CI's runners), run on the M1
+through MoltenVK and, built as an Android command-line program pushed with adb, on the RP6's Adreno 740:
+- "gpu arithmetic against the host": 65,536 random cases each of products, sums, fused multiply-adds (the GPU's own
+  and built), divisions, sums of three products, 64-bit numbers to floats, a triangle's blended channel and its
+  level, texel axes, fog and depths, and edge functions: all exact on both GPUs. The GPUs' own operations aren't:
+  the Adreno's `fma()` isn't fused (34% of cases differ from a fused one), so the built one runs there; its division
+  is off in 28% of quotients, the M1's in 31% (MoltenVK's default fast math; exact with it off).
+- "gpu batches against the software renderer": 2,500 random batches of 1-16 primitives (every primitive kind, 2D and
+  3D, lit, every pipeline setting, textures of every format with palettes and swizzling, a frame buffer in each
+  format over random VRAM), drawn both ways: 0 of 6.4 million pixels apart on both GPUs, the depth buffers the same;
+  the GPU drew 29,989 jobs, the software renderer 7,428 (lines and 3D sprites' texels).
+- "gpu samples against the software renderer": pspsdk's cube, blend, clut, blit, celshading, envmap, doublelist and
+  gu, two machines alike but for the renderer, 90 frames each: every frame's picture and all of VRAM the same, on
+  both GPUs, the GPU drawing every job.
+- The owner's games (a scratch runner outside the repository: from boot with presses to a scene, then each frame
+  drawn by both renderers from the same state; a control drawing both with the software renderer is the same too):
+  Lumines' demo, Peace Walker's title and its opening movie, Midnight Club 3's night city, Liberty City Stories in the
+  woods, Space Invaders Extreme's title, Gunhound EX, Burnout Legends, Burnout Dominator, Snoopy vs. the Red Baron,
+  SOCOM, Vice City Stories, Sindacco Chronicles, Street Fighter III 3rd Strike and Brave Story, 20 frames each (30 for
+  Peace Walker's title): 100% of pixels and all of VRAM the same. The GPU drew all but lines (a few a frame in three
+  of them) and textured 3D sprites (four fifths of Peace Walker's title, 72 jobs in Midnight Club 3).
+- Broken versions fail them: VRAM not copied back (6 million pixels apart), x86-64's rounding on the ARM64 host
+  (4,499 pixels), the GPU's own division (13,194 pixels, with MoltenVK's fast math). The first run on the RP6 found
+  89 of the batches apart where every probe was exact: Adreno's compiler got the green and blue of a blend factor
+  ("255 minus the destination's color", made as a vector in a switch) wrong; a channel at a time, it's right. Only
+  running the tests on each GPU finds such bugs; the design proposes a start-up self-test.
+
+**Speed** (the M1, host frames a second, the same 300 frames from one state, the software renderer on 1 and 7
+threads and the GPU renderer): Lumines 92.6, 165.2, 112.9; Peace Walker's title 87.9, 260.2, 77.5; Midnight Club 3
+17.4, 25.1, 14.4; Liberty City Stories 29.6, 62.7, 26.4. The prototype waits for the GPU after every run (one to
+nine a frame), and every thread of a tile looks at every job of the tile; copying VRAM's pages and the records costs
+0.2-0.4 ms a frame of the 7-25 ms spent on the GPU's side. The design's stages 2 and 3 are the way to speed.
+
+**Installed on the Mac for this** (Homebrew): `molten-vk` 1.4.2, `vulkan-loader` and `vulkan-headers` 1.4.363,
+`glslang` 16.6.0 (with `spirv-tools` and `spirv-headers` 1.4.363). The builds don't need any of them; the tests find
+Homebrew's loader on macOS by `DYLD_FALLBACK_LIBRARY_PATH` (`run-tests.sh` sets it), and skip without a GPU.
+
+**Checks**: tests/psp 294 groups with the address and undefined-behavior sanitizers (the GPU groups on the M1),
+tests/psp/ares 294 checks, none failed; the comparison with the owner's PSP ("psp measure") as before.
+
+**After review** (the same day; the design's "Exactness" has the details). The independent review found one real
+gap and four smaller things:
+- **Numbers below the normal floats.** The M1 and the Adreno 740 flush them to zero (neither offers Vulkan's
+  `shaderDenormPreserveFloat32`); the host keeps them; the probes' ranges (2^-40 to 2^40) never went there. The
+  review's cases (`1e-20 * 1e-20`, `divide(1e-39, 3)`, a normal quotient whose correction's remainder was flushed, a
+  blend of -1e-36's coming out -0, so texel 0 where the host has the last) were all real. Now `divide()` divides the
+  significands (read from the bits) and puts the exponents' difference on the result: exact for any operands
+  wherever the host's quotient is a normal float, and 2^-100 of its sign (or zero, as the host's rounds) below,
+  which every user of a quotient takes as the host's value. The sums of three products need their products normal,
+  and the built fma its error terms too, so `take()` leaves to the CPU any triangle with a depth, fog, u, v or q
+  other than 0 outside 2^-40 to 2^40, or a w outside 2^-32 to 2^32 (`exactRange()` works out why that's enough,
+  however the products cancel; the review's 2^-60 to 2^60 isn't, since a near cancellation can still go below).
+  `detect()` probes whether the GPU keeps such numbers; one that does, with a fused `fma()` of its own, needs only
+  the upper bounds and w's. Where a device has float controls with `shaderDenormPreserveFloat32`, its shaders get
+  `DenormPreserve 32` (`SPV_KHR_float_controls`), three instructions put into the SPIR-V as it's loaded
+  (`keepingDenormals()`; checked with `spirv-val`, as neither GPU here offers it).
+- **Tests.** The probes cover every exponent, numbers below the normal floats, zeros and infinities (products and
+  sums below the normal floats, and a zero's sign, which MoltenVK's fast math loses in `0 * -x`, are the GPU's own
+  and only counted where it keeps them; `fmaExact()` and `sum3()` are checked inside 2^-36 to 2^54, the bounds' own
+  range). The random batches now give an eighth of their 3D primitives texture coordinates of one size and sign at
+  every corner (below the normal floats a third of the time) and w scaled by up to 2^48 either way: 512 triangles go
+  to the CPU, and without the bounds one pixel comes out apart on the M1 (that coordinate's texel).
+- **A GPU that stops answering.** A run's fence is waited on for two seconds, not forever (a pipeline's first
+  run, a minute: Mesa's lavapipe compiles the shader then, in five and a half seconds, which the first try at two
+  seconds took for a hang); that, or `VK_ERROR_DEVICE_LOST`, marks the device lost (`Device::lost`), and every job
+  after is the software renderer's, said once (`GPU::report`, else stderr). A new group, "gpu lost", checks it with
+  a pretend device (no GPU needed).
+- `probe()` returns nothing where a buffer can't grow; `hostFuses()` says that `gpu.cpp` must be compiled with the
+  GE's floating-point flags (it finds out how its own file was compiled, raster.cpp is in ge.cpp); and `compile.sh
+  --check`, with glslang around, compiles `shaders.hpp` again and compares it byte for byte (a SPIR-V word edited by
+  hand fails).
+- On the M1 and the RP6: every probe exact over the wider ranges, the 2,500 batches 0 pixels apart, the samples the
+  same, the lost GPU's fallback right. Also on Mesa's lavapipe (a CPU's Vulkan: Ubuntu 24.04 in Docker, clang,
+  `PSP_GPU_ON_CPU=1`), which keeps numbers below the normal floats but has no fused `fma()`: the same.
+
+**Next** (the design's plan): lines and 3D sprites' texels on the GPU; textures, palettes and transfers decoded on
+the GPU from its own VRAM; VRAM kept on the GPU, read back on demand through the drawing threads' protocol, the GPU
+working while the CPU runs on; then the OpenGL backend over the same shaders; then the setting ("PSP Renderer:
+Software / Vulkan / OpenGL", Software the default) with a fallback and a start-up self-test.

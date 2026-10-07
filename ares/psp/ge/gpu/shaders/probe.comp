@@ -1,0 +1,50 @@
+//Probes of the GPU's arithmetic, for the tests (tests/psp/gpu.cpp) and for finding out what a GPU's own fma() does
+//(gpu.cpp). Each case is 8 words of records in and 8 words of bins out, by probeKind:
+//  0: a, b, c (floats) -> a * b, a + c, fma(a, b, c) as the GPU has it, a / b as the GPU has it, fmaExact(a, b, c),
+//     divide(a, b), sum3(a, b, c, c, a, b)
+//  1: a 64-bit whole number (two words) -> wideFloat() of it
+//  2: v0, v1, v2, w0, w1, w2, total (floats) -> blend3(), and truncated() of it
+//  3: a coordinate, a size, clamped, linear -> texelAxis()'s three, fogAmount() of the coordinate, depthOf() of it
+//  4: a, x, b, y (32-bit whole numbers) -> a * x + b * y in 64 bits (an edge function: two words), and whether it's
+//     below zero, and zero
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+  uint index = gl_GlobalInvocationID.x;
+  if(index >= parameters.probeCount) return;
+  uint at = index * 8u;
+  float in0 = uintBitsToFloat(records[at]), in1 = uintBitsToFloat(records[at + 1u]);
+  float in2 = uintBitsToFloat(records[at + 2u]);
+  if(parameters.probeKind == 0u) {
+    precise float product = in0 * in1;
+    precise float sum = in0 + in2;
+    precise float fused = fma(in0, in1, in2);
+    precise float quotient = in0 / in1;
+    bins[at] = floatBitsToUint(product);
+    bins[at + 1u] = floatBitsToUint(sum);
+    bins[at + 2u] = floatBitsToUint(fused);
+    bins[at + 3u] = floatBitsToUint(quotient);
+    bins[at + 4u] = floatBitsToUint(fmaExact(in0, in1, in2));
+    bins[at + 5u] = floatBitsToUint(divide(in0, in1));
+    bins[at + 6u] = floatBitsToUint(sum3(in0, in1, in2, in2, in0, in1));
+  } else if(parameters.probeKind == 1u) {
+    bins[at] = floatBitsToUint(wideFloat(uvec2(records[at], records[at + 1u])));
+  } else if(parameters.probeKind == 2u) {
+    float total = uintBitsToFloat(records[at + 6u]);
+    float w0 = uintBitsToFloat(records[at + 3u]), w1 = uintBitsToFloat(records[at + 4u]);
+    float w2 = uintBitsToFloat(records[at + 5u]);
+    float mixed = blend3(in0, in1, in2, w0, w1, w2, total);
+    bins[at] = floatBitsToUint(mixed);
+    bins[at + 1u] = uint(truncated(mixed));
+  } else if(parameters.probeKind == 4u) {
+    uvec2 edge = wideAdd(wideProduct(int(records[at]), int(records[at + 1u])),
+                         wideProduct(int(records[at + 2u]), int(records[at + 3u])));
+    bins[at] = edge.x, bins[at + 1u] = edge.y;
+    bins[at + 2u] = wideNegative(edge) ? 1u : 0u, bins[at + 3u] = wideZero(edge) ? 1u : 0u;
+  } else {
+    ivec3 axis = texelAxis(in0, records[at + 1u], records[at + 2u] != 0u, records[at + 3u] != 0u);
+    bins[at] = uint(axis.x), bins[at + 1u] = uint(axis.y), bins[at + 2u] = uint(axis.z);
+    bins[at + 3u] = fogAmount(in0);
+    bins[at + 4u] = depthOf(in0);
+  }
+}

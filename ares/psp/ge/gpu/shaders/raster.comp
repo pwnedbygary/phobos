@@ -1,0 +1,176 @@
+//Drawing a batch: each workgroup a tile of 16x16 pixels, each thread two pixels side by side in a row of it, the
+//jobs that reach the tile (bin.comp) taken in the list's order. Each pixel is worked out from its job as
+//ares/psp/ge/raster.cpp works it out (spriteRows(), triangleRows(), a point's shadeAs()), the same operations on the
+//same numbers, then textured (texture.glsl) and drawn (pixel.glsl).
+layout(local_size_x = 8, local_size_y = 16, local_size_z = 1) in;
+
+//The frame buffer's byte (8888's or 16-bit's) for pixel (x, y), and the depth buffer's, as the GE reaches it: VRAM's
+//fourth copy, which rearranges it (ares/psp/memory/memory.hpp: vramOffset(3, ...)).
+uint colorOffset(int x, int y) {
+  uint bytes = parameters.format == 3u ? 4u : 2u;
+  return (parameters.frameBuffer + (uint(y) * parameters.stride + uint(x)) * bytes) & (VRAMSize - 1u);
+}
+uint depthOffset(int x, int y) {
+  uint seen = (parameters.depthBuffer + (uint(y) * parameters.depthStride + uint(x)) * 2u) & (VRAMSize - 1u);
+  seen = (seen & ~0x3e0u) | (seen >> 9 & 1u) << 5 | (seen >> 5 & 15u) << 6;
+  return seen ^ 0x2040u;
+}
+
+//The pixel's color, through the texture if there is one, plus the shine kept apart (raster.cpp's shadeAs())
+void shade(uint look, bool linear, int lane, int x, int y, uint z, uint color, uint specular, float u, float v,
+           uint fog) {
+  if((lookWord(look, LookFlags) & FlagTextured) != 0u) color = combine(look, color, sampleAt(look, linear, u, v));
+  drawPixel(look, lane, x, y, z, addShine(color, specular), fog);
+}
+
+//A sprite's pixel: its color and depth are its own; its texture's axes across x and down y were worked out once a
+//column and once a row on the CPU (gpu.cpp, as spriteRows() works them out); its fog is split at its middle column.
+void drawSprite(uint job, uint look, bool linear, int lane, int x, int y) {
+  uint color = jobWord(job, SpriteColor);
+  if((lookWord(look, LookFlags) & FlagTextured) != 0u) {
+    ivec3 across = unpackAxis(records[jobWord(job, SpriteColumns) + uint(x - jobInt(job, JobFirstX))]);
+    ivec3 down = unpackAxis(records[jobWord(job, SpriteRows) + uint(y - jobInt(job, JobFirstY))]);
+    bool turned = jobWord(job, SpriteTurned) != 0u;
+    uint texel = turned ? sampleAxes(look, linear, down, across) : sampleAxes(look, linear, across, down);
+    color = combine(look, color, texel);
+  }
+  uint fog = x * 16 + 8 + 1 >= jobInt(job, SpriteMiddle) ? jobWord(job, SpriteRightFog) : jobWord(job, SpriteLeftFog);
+  drawPixel(look, lane, x, y, jobWord(job, SpriteZ), addShine(color, jobWord(job, SpriteSpecular)), fog);
+}
+
+//A triangle's three colors (four channels each) blended by the weights (raster.cpp's blendColor())
+uint blendColor(uint job, uint first, float w0, float w1, float w2, float total) {
+  uint c0 = jobWord(job, first), c1 = jobWord(job, first + 1u), c2 = jobWord(job, first + 2u);
+  uint color = 0u;
+  for(int n = 0; n < 4; n++) {
+    float mixed = blend3(float(channel(c0, n)), float(channel(c1, n)), float(channel(c2, n)), w0, w1, w2, total);
+    color |= uint(clamp(truncated(mixed), 0, 255)) << uint(n * 8);
+  }
+  return color;
+}
+float blendValue(uint job, uint first, float w0, float w1, float w2, float total) {
+  return blend3(jobFloat(job, first), jobFloat(job, first + 1u), jobFloat(job, first + 2u), w0, w1, w2, total);
+}
+
+//A 2D triangle's texture coordinate. The software renderer steps it in doubles from the leftmost corner (draw.cpp's
+//shortStep(): steps cut to 65536ths), start + (x - startX) / 16 * across + (y - startY) / 16 * down, then rounds
+//it to a float. gpu.cpp takes only triangles for which that sum is exact in a double (no step of it rounds), and
+//sends it here as whole numbers over a power of two: base + (x - startX) * across + (y - startY) * down, in 64 bits,
+//over 2^shift. Rounded to a float, that's the very float the software renderer gets.
+float wholeCoordinate(uint job, uint base, int shift, int dx, int dy) {
+  uvec2 sum = uvec2(jobWord(job, base), jobWord(job, base + 1u));
+  sum = wideAdd(sum, wideProduct(dx, jobInt(job, base + 2u)));
+  sum = wideAdd(sum, wideProduct(dy, jobInt(job, base + 3u)));
+  return ldexp(wideFloat(sum), -shift);
+}
+
+//A triangle's pixel: inside where every edge's function is at least its least (exact whole numbers, in 64 bits),
+//then blended from the corners by those functions (raster.cpp's triangleRows()).
+void drawTriangle(uint job, uint look, bool linear, int lane, int x, int y) {
+  int sampleX = x * 16 + 8, sampleY = y * 16 + 8;
+  uint least = jobWord(job, TriangleLeast);
+  uvec2 edge[3];
+  for(uint k = 0u; k < 3u; k++) {
+    uint from = (k + 1u) % 3u;
+    int dx = sampleX - jobInt(job, TriangleX + from), dy = sampleY - jobInt(job, TriangleY + from);
+    edge[k] = wideAdd(wideProduct(jobInt(job, TriangleA + k), dx), wideProduct(jobInt(job, TriangleB + k), dy));
+    if(wideNegative(edge[k]) || ((least >> k & 1u) != 0u && wideZero(edge[k]))) return;
+  }
+  precise float w0 = wideFloat(edge[0]);
+  precise float w1 = wideFloat(edge[1]);
+  precise float w2 = wideFloat(edge[2]);
+  precise float total = jobFloat(job, TriangleTotal);
+  uint flags = lookWord(look, LookFlags), kind = jobWord(job, TriangleFlags);
+  bool flatShaded = (kind & 1u) != 0u, shines = (kind & 2u) != 0u, perspective = (kind & 4u) != 0u;
+  uint color = flatShaded ? jobWord(job, TriangleFlatColor) : blendColor(job, TriangleColor, w0, w1, w2, total);
+  uint specular = !flatShaded && shines ? blendColor(job, TriangleSpecular, w0, w1, w2, total)
+                                  : jobWord(job, TriangleFlatSpecular);
+  bool needsZ = (flags & FlagDepthRange) != 0u ||
+                (flags & ((flags & FlagClear) != 0u ? FlagClearDepth : FlagDepthTest)) != 0u;
+  uint z = needsZ ? depthOf(blendValue(job, TriangleZ, w0, w1, w2, total)) : 0u;
+  precise float u = 0.0, v = 0.0;
+  if((flags & FlagTextured) != 0u && perspective) {
+    precise float ka = divide(w0, jobFloat(job, TriangleW));
+    precise float kb = divide(w1, jobFloat(job, TriangleW + 1u));
+    precise float kc = divide(w2, jobFloat(job, TriangleW + 2u));
+    precise float divisor = sum3(ka, kb, kc, jobFloat(job, TriangleQ), jobFloat(job, TriangleQ + 1u),
+                                 jobFloat(job, TriangleQ + 2u));
+    u = divide(sum3(ka, kb, kc, jobFloat(job, TriangleU), jobFloat(job, TriangleU + 1u),
+                    jobFloat(job, TriangleU + 2u)), divisor);
+    v = divide(sum3(ka, kb, kc, jobFloat(job, TriangleV), jobFloat(job, TriangleV + 1u),
+                    jobFloat(job, TriangleV + 2u)), divisor);
+  } else if((flags & FlagTextured) != 0u) {
+    int dx = sampleX - jobInt(job, TriangleStartX), dy = sampleY - jobInt(job, TriangleStartY);
+    uint shifts = jobWord(job, TriangleShifts);
+    u = wholeCoordinate(job, TriangleUBase, int(shifts & 0xffu), dx, dy);
+    v = wholeCoordinate(job, TriangleVBase, int(shifts >> 8 & 0xffu), dx, dy);
+  }
+  uint fog = (flags & FlagFog) != 0u ? fogAmount(blendValue(job, TriangleFog, w0, w1, w2, total)) : 255u;
+  shade(look, linear, lane, x, y, z, color, specular, u, v, fog);
+}
+
+void drawPoint(uint job, uint look, bool linear, int lane, int x, int y) {
+  if(x != jobInt(job, PointX) || y != jobInt(job, PointY)) return;
+  shade(look, linear, lane, x, y, jobWord(job, PointZ), jobWord(job, PointColor), jobWord(job, PointSpecular),
+        jobFloat(job, PointU), jobFloat(job, PointV), jobWord(job, PointFog));
+}
+
+void drawJob(uint job, int lane, int x, int y) {
+  if(x < jobInt(job, JobFirstX) || x > jobInt(job, JobLastX)) return;
+  if(y < jobInt(job, JobFirstY) || y > jobInt(job, JobLastY)) return;
+  uint kind = jobWord(job, JobKind), look = jobWord(job, JobLook);
+  bool linear = (kind >> 8 & 1u) != 0u;
+  if((kind & 0xffu) == 0u) drawSprite(job, look, linear, lane, x, y);
+  else if((kind & 0xffu) == 1u) drawTriangle(job, look, linear, lane, x, y);
+  else drawPoint(job, look, linear, lane, x, y);
+}
+
+//A 16-bit word of which only one half is this thread's: the other may be another's (where a row's last pixel and
+//the next row's first share it), so only this half changes.
+void storeHalf(uint word, uint value, int lane) {
+  uint mask = 0xffffu << uint(lane * 16);
+  atomicAnd(vram[word], ~mask);
+  atomicOr(vram[word], value & mask);
+}
+
+void main() {
+  uint tile = gl_WorkGroupID.y * parameters.tilesAcross + gl_WorkGroupID.x;
+  int x = parameters.tileLeft + int(gl_WorkGroupID.x) * TileSize + int(gl_LocalInvocationID.x) * 2;
+  int y = parameters.tileTop + int(gl_WorkGroupID.y) * TileSize + int(gl_LocalInvocationID.y);
+  bool row = y >= parameters.areaTop && y <= parameters.areaBottom;
+  bool inside[2] = bool[2](row && x >= parameters.areaLeft && x <= parameters.areaRight,
+                           row && x + 1 >= parameters.areaLeft && x + 1 <= parameters.areaRight);
+  if(!inside[0] && !inside[1]) return;
+  frameBufferFormat = parameters.format;
+  bool wide = frameBufferFormat == 3u;
+  uint colorWord[2] = uint[2](colorOffset(x, y) >> 2, colorOffset(x + 1, y) >> 2);
+  uint depthWord = depthOffset(x, y) >> 2;  //(both pixels': the rearrangement keeps an offset's low 5 bits)
+  pairColor[0] = inside[0] || !wide ? vram[colorWord[0]] : 0u;
+  pairColor[1] = inside[1] && wide ? vram[colorWord[1]] : 0u;
+  pairDepth = vram[depthWord];
+
+  for(uint word = 0u; word < parameters.wordsPerTile; word++) {
+    uint jobs = bins[tile * parameters.wordsPerTile + word];
+    while(jobs != 0u) {
+      uint job = word * 32u + uint(findLSB(jobs));
+      jobs &= jobs - 1u;
+      if(inside[0]) drawJob(job, 0, x, y);
+      if(inside[1]) drawJob(job, 1, x + 1, y);
+    }
+  }
+
+  if(colorWritten) {
+    if(wide) {
+      if(inside[0]) vram[colorWord[0]] = pairColor[0];
+      if(inside[1]) vram[colorWord[1]] = pairColor[1];
+    } else if(inside[0] && inside[1]) {
+      vram[colorWord[0]] = pairColor[0];
+    } else {
+      storeHalf(colorWord[0], pairColor[0], inside[0] ? 0 : 1);
+    }
+  }
+  if(depthWritten) {
+    if(inside[0] && inside[1]) vram[depthWord] = pairDepth;
+    else storeHalf(depthWord, pairDepth, inside[0] ? 0 : 1);
+  }
+}

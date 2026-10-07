@@ -495,6 +495,18 @@ struct GE {
   } drawing;
   static constexpr s32 BandRows = 8;  //the rows in a band
 
+  //A renderer drawing the GE's batches in place of its drawing threads (ge/gpu: the GPU renderers), or none. With
+  //one, every primitive the GE may hold back waits in a batch while a list runs, even with one drawing thread, and
+  //wherever a batch would be drawn (flush()) it's handed to the renderer, which draws its jobs, in order, into
+  //memory's VRAM before it returns (those it can't draw itself through rasterize(), here, in their turn). So
+  //everything that waits for a batch to be drawn waits for the renderer the same way, and the jobs are the very
+  //ones drawing here would draw. Whoever sets it takes it away before it goes.
+  struct Renderer {
+    virtual ~Renderer() = default;
+    virtual auto draw(GE& ge, Batch& batch) -> void = 0;
+  };
+  Renderer* renderer = nullptr;
+
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
   std::set<std::string> noted;
 };
