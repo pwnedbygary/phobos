@@ -821,7 +821,7 @@ static auto draw3dFours() -> void {
     g.commands[GE::ViewportZScale] = f24(30000), g.commands[GE::ViewportZCenter] = f24(32000);
   }
   u32 differing = 0;
-  for(u32 n = 0; n < 2500 && !differing; n++) {
+  for(u32 n = 0; n < 20000 && !differing; n++) {
     std::vector<std::pair<u32, u32>> commands;  //for both machines
     auto set = [&](u32 command, u32 value) { commands.push_back({command, value}); };
     set(GE::FrameBufferWidth, Width);
@@ -865,12 +865,12 @@ static auto draw3dFours() -> void {
     set(GE::Scissor1, left | top << 10);
     set(GE::Scissor2, right | bottom << 10);
     set(GE::ShadeMode, chance(75));
-    u32 textured = chance(70), format = below(8), widthBits = below(8), heightBits = below(8);
+    u32 textured = chance(70), format = below(8), widthBits = below(9), heightBits = below(9);
     set(GE::TextureMappingEnable, textured);
     if(textured) {
       u32 least = 128 / Bits[format];  //(a row of at least 16 bytes)
       u32 bufferWidth = std::max(1u << widthBits, least) + (chance(20) ? least * below(4) : 0);
-      u32 address = chance(10) ? VRAM3D : Area + below((AreaSize - 0x10'0000) / 16) * 16;  //(where it draws)
+      u32 address = chance(10) ? VRAM3D : Area + below((AreaSize - 0x6'0000) / 16) * 16;  //(VRAM3D: where it draws)
       set(GE::TextureAddress0, address & 0xff'fff0);
       set(GE::TextureBufferWidth0, (address >> 24 & 0xf) << 16 | bufferWidth);
       set(GE::TextureSize0, heightBits << 8 | widthBits);
