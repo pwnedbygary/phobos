@@ -28,9 +28,8 @@
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //
-//The frames its PNGs name are the frames the screen presented, one after another from the first: the picture a
-//frame's run shows reaches the screen's own thread a step behind, so a PNG named frame 30 is the picture run 29
-//or 30 made.
+//The frames its PNGs name are the frames the runner ran: after a frame's run, the runner waits for the screen's
+//own thread to present a new picture (with a timeout), then writes it as a PNG named by the frame run.
 
 #include <psp/psp.hpp>
 
@@ -143,12 +142,11 @@ auto kind(const fs::path& location, vfs::file& file) -> std::string {
   return {};
 }
 
-//The disc's PARAM.SFO, read off its image: its NPID (the disc's ID). The SFO is a key-value table (a "\0PSF"
-//head, a key table of names, and a value table), and the NPID sits in the value data as a run of two letters
-//then six alphanumeric chars (like ULUS1022 or NPJG00123); the title is left empty, so the runner's report
-//names the game by its file. The image is read the way the system reads one: a CHD's sectors come unpacked
+//The disc's PARAM.SFO, read off its image: its NPID (the disc's ID, like ULUS10025) and its title. The SFO
+//is a key-value table (a "\0PSF" head, a key table of names, and a value table), and sfoValue() reads a
+//value by its key's name. The image is read the way the system reads one: a CHD's sectors come unpacked
 //from its hunks, the rest straight from the file's bytes.
-auto discInfo(const fs::path& file, std::string& npid) -> bool {
+auto discInfo(const fs::path& file, std::string& npid, std::string& title) -> bool {
   auto fp = vfs::disk::open(file.string().c_str(), vfs::read);
   if(!fp) return false;
   auto read = [fp](u64 offset, void* data, u64 size) -> u64 { return readFrom(fp, offset, data, size); };
@@ -186,25 +184,9 @@ auto discInfo(const fs::path& file, std::string& npid) -> bool {
   if(start >= image->size()) return false;
   std::vector<u8> sfo(entry.size);
   if(!image->read(start, entry.size, sfo.data())) return false;
-  if(sfo.size() < 20) return false;
-  auto word = [&](u32 at) -> u32 { return sfo[at] | sfo[at + 1] << 8 | sfo[at + 2] << 16 | (u32)sfo[at + 3] << 24; };
-  u32 values = word(12);  //the value table's offset, from the SFO's head
-  if(values + 8 > sfo.size()) return false;
-  //The NPID, scanned from the value data: two letters, then six alphanumeric chars, not part of a longer run.
-  auto isNpidChar = [](u8 b) { return (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9'); };
-  for(u32 at = values; at + 8 <= sfo.size(); at++) {
-    if(sfo[at] >= 'A' && sfo[at] <= 'Z' && sfo[at + 1] >= 'A' && sfo[at + 1] <= 'Z') {
-      bool ok = true;
-      for(u32 n = 2; n < 8; n++) if(!isNpidChar(sfo[at + n])) { ok = false; break; }
-      bool end = at + 8 >= sfo.size() || !(sfo[at + 8] >= 'A' && sfo[at + 8] <= 'Z');
-      if(ok && end) {
-        for(u32 n = 0; n < 8; n++) npid.push_back((char)sfo[at + n]);
-        break;
-      }
-    }
-  }
-  if(npid.empty()) return false;
-  return true;
+  npid = sfoValue(sfo, "DISC_ID");
+  title = sfoValue(sfo, "TITLE");
+  return !npid.empty();
 }
 
 //The game's pak, as the front end gives it: the file under the name the core looks for, and where it is on the
@@ -315,7 +297,8 @@ auto writeWav(const fs::path& path, const std::vector<s32>& samples) -> bool {
   if(!file) return false;
   file.write((const char*)header.data(), header.size());
   for(s32 sample : samples) {
-    s16 value = s16(sample);
+    //clamp to the 16-bit range: a full-scale +1.0 is 32768, which wraps to -32768
+    s16 value = sample > 32767 ? 32767 : (sample < -32768 ? -32768 : s16(sample));
     file.write((const char*)&value, 2);
   }
   return true;
@@ -344,11 +327,21 @@ auto parsePress(const std::string& item, std::string& problem) -> Press {
     problem = "a press is \"frame:control\", like 120:Start: " + item;
     return press;
   }
-  press.frame = std::stoul(item.substr(0, colon));
+  try {
+    press.frame = std::stoul(item.substr(0, colon));
+  } catch(...) {
+    problem = "a press's frame is a number: " + item;
+    return press;
+  }
   auto control = item.substr(colon + 1);
   if(control.rfind("L-StickX:", 0) == 0 || control.rfind("L-StickY:", 0) == 0) {
     press.name = control.rfind("L-StickX:", 0) == 0 ? "L-Stick X" : "L-Stick Y";
-    press.value = std::stol(control.substr(9));
+    try {
+      press.value = std::stol(control.substr(9));
+    } catch(...) {
+      problem = "a stick's value is a number: " + item;
+      return press;
+    }
   } else if(!control.empty() && control.back() == '!') {
     press.name = control.substr(0, control.size() - 1);
     press.value = 0;
@@ -379,23 +372,17 @@ struct RunnerPlatform : ares::Platform {
     return std::make_shared<vfs::directory>();
   }
 
-  //The frame the screen's own thread presents: kept, and written as a PNG when its number is one asked for. The
-  //writing is outside the lock, each PNG to its own file, so the lock only guards the frame's bytes.
+  //The frame the screen's own thread presents: kept, and counted. The main loop writes a PNG when a frame
+  //asks for one, after waiting for the screen to present a new picture.
   auto video(Node::Video::Screen, const u32* data, u32 pitch, u32 width, u32 height) -> void override {
-    u32 number = 0;
-    {
-      std::lock_guard lock{mutex};
-      if(!running) return;
-      frame.assign(width * height, 0);
-      for(u32 y : range(height)) {
-        for(u32 x : range(width)) frame[y * width + x] = data[y * (pitch / 4) + x];
-      }
-      frameWidth = width, frameHeight = height;
-      number = ++presented;
+    std::lock_guard lock{mutex};
+    if(!running) return;
+    frame.assign(width * height, 0);
+    for(u32 y : range(height)) {
+      for(u32 x : range(width)) frame[y * width + x] = data[y * (pitch / 4) + x];
     }
-    if(pngEvery ? number % pngEvery == 0 : pngAt.count(number)) {
-      writePng(outDir / ("frame-" + numberText(number) + ".png"), frame, frameWidth, frameHeight);
-    }
+    frameWidth = width, frameHeight = height;
+    ++presented;
   }
 
   //The controls, as the system reads them each frame: the buttons by name, the stick by its node's name and value.
@@ -415,6 +402,16 @@ struct RunnerPlatform : ares::Platform {
     }
   }
 };
+
+//A number from an option's value: stoul's exceptions (a non-number, say) end the run with a message.
+auto parseUint(const std::string& text, const std::string& option) -> u32 {
+  try {
+    return std::stoul(text);
+  } catch(...) {
+    std::fprintf(stderr, "%s needs a number: %s\n", option.c_str(), text.c_str());
+    std::exit(1);
+  }
+}
 
 auto main(int argc, char** argv) -> int {
   if(argc < 2) {
@@ -437,25 +434,25 @@ auto main(int argc, char** argv) -> int {
       }
       return argv[i];
     };
-    if(option == "--frames") frames = std::stoul(next());
+    if(option == "--frames") frames = parseUint(next(), option);
     else if(option == "--press") pressItems.push_back(next());
     else if(option == "--script") script = next();
-    else if(option == "--png-every") pngEvery = std::stoul(next());
+    else if(option == "--png-every") pngEvery = parseUint(next(), option);
     else if(option == "--png-at") {
       auto list = next();
       u32 start = 0;
       for(u32 at = 0; at <= list.size(); at++) {
         if(at < list.size() && list[at] != ',') continue;
-        if(at > start) pngAt.insert(std::stoul(list.substr(start, at - start)));
+        if(at > start) pngAt.insert(parseUint(list.substr(start, at - start), option));
         start = at + 1;
       }
     }
     else if(option == "--out") outDir = next();
     else if(option == "--wav") wav = next();
-    else if(option == "--save-state-at") { saveStateAt = std::stoul(next()); saveStateFile = next(); }
+    else if(option == "--save-state-at") { saveStateAt = parseUint(next(), option); saveStateFile = next(); }
     else if(option == "--load-state") loadState = next();
     else if(option == "--interpreter") interpreter = true;
-    else if(option == "--ge-threads") geThreads = std::stoul(next());
+    else if(option == "--ge-threads") geThreads = parseUint(next(), option);
     else if(option == "--memory-stick") memoryStick = next();
     else if(option == "--fonts") fonts = next();
     else if(option[0] == '-' && option[1] == '-') {
@@ -520,13 +517,13 @@ auto main(int argc, char** argv) -> int {
     return 1;
   }
 
-  //The title: a PBP's own (its PARAM.SFO's TITLE), else the file's name; a disc's, from its PARAM.SFO (the
-  //report's region and disc ID with it).
-  std::string title = name == "program.pbp" ? sfoValue(paramSFO(*fp), "TITLE") : game.stem().string();
-  std::string npid;
-  if(name.rfind("disc.", 0) == 0 && discInfo(game, npid)) {
+  //The title: a PBP's own (its PARAM.SFO's TITLE), a disc's from its PARAM.SFO's TITLE, else the file's name.
+  std::string title, npid;
+  if(name == "program.pbp") title = sfoValue(paramSFO(*fp), "TITLE");
+  else if(name.rfind("disc.", 0) == 0 && discInfo(game, npid, title)) {
     std::printf("disc: %s (%s)\n", title.c_str(), npid.c_str());
   }
+  if(title.empty()) title = game.stem().string();
   std::printf("game: %s\n", game.string().c_str());
 
   //The run's scratch, a folder of the runner's own (the memory stick's default): gone with the run.
@@ -604,9 +601,12 @@ auto main(int argc, char** argv) -> int {
     }
   }
 
-  //The frames: the controls in, the game run, the picture and the sound out.
+  //The frames: the controls in, the game run, the picture and the sound out. A PNG is written after the run
+  //of a frame that asks for one: the screen's own thread presents a new picture a step behind the run, so we
+  //wait for it (with a timeout) and number the picture by the frame run, not by the screen's count.
   host.running = true;
   auto start = std::chrono::steady_clock::now();
+  u32 lastPresented = 0;
   for(u32 frame = 1; frame <= frames; frame++) {
     frameNumber = frame;
     for(auto& press : presses) {  //the presses this frame: held from their frame on, released by a "!"
@@ -619,23 +619,31 @@ auto main(int argc, char** argv) -> int {
       file.write((const char*)state.data(), state.size());
     }
     root->run();
-  }
-  //The last frame's picture reaches the screen's own thread after the last run: wait for it, so a PNG asked for
-  //the last frame is written (with a timeout, should the screen stop presenting).
-  {
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while(true) {
-      u32 presented;
+    if(host.pngEvery ? frame % host.pngEvery == 0 : host.pngAt.count(frame)) {
+      auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while(true) {
+        u32 presented;
+        {
+          std::lock_guard lock{host.mutex};
+          presented = host.presented;
+        }
+        if(presented > lastPresented || std::chrono::steady_clock::now() > deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+      lastPresented = host.presented;
+      std::vector<u32> frameData;
+      u32 w, h;
       {
         std::lock_guard lock{host.mutex};
-        presented = host.presented;
+        frameData = host.frame;
+        w = host.frameWidth;
+        h = host.frameHeight;
       }
-      if(presented >= frames || std::chrono::steady_clock::now() > deadline) break;
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      writePng(host.outDir / ("frame-" + numberText(frame) + ".png"), frameData, w, h);
     }
   }
+  auto end = std::chrono::steady_clock::now();  //the speed is the frame loop's, not the screen's catch-up
   host.running = false;
-  auto end = std::chrono::steady_clock::now();
   root->unload();
 
   //The sound, as a WAV.

@@ -33,25 +33,24 @@ Branch `local/psp-runner`, cut from `origin/cursor/psp-test-data-2b67` (tip
 
 - **Runner** (`tools/psp-runner/runner.cpp`): mirrors `tests/psp/ares/system.cpp`'s
   `TestPlatform` (pak, video, input, audio callbacks) with a CLI, PNG/WAV
-  writers, and an exit summary. `discInfo()` extracts the NPID from the SFO's
-  value data (two letters + six alphanumeric chars, starting at `word(12)`);
-  the title is the filename stem (the SFO's TITLE field has non-standard
-  value offsets). `build.sh` reuses the build recipe from
-  `tests/psp/ares/run-tests.sh` (same objects: `psp.cpp`, `android_globals.cpp`,
-  `ares-runtime.cpp`, `nall`, sljit, libchdr, zlib, libco).
+  writers, and an exit summary. `discInfo()` reads the NPID and title from the
+  SFO's `DISC_ID` and `TITLE` fields via `sfoValue()`. `build.sh` reuses the
+  build recipe from `tests/psp/ares/run-tests.sh` (same objects: `psp.cpp`,
+  `android_globals.cpp`, `ares-runtime.cpp`, `nall`, sljit, libchdr, zlib,
+  libco).
 - **Test** (`tests/psp/ares/runner-test.sh`): runs `cube.elf` for 60 frames,
   checks the summary and PNGs. Passing.
 - **Batch**: all 266 games ran through the runner with
   `--frames 3600 --press "120:Start,123:Start!,1800:Cross,1803:Cross!"
-  --png-at 60,300,1200,3600 --wav dir/sound.wav --ge-threads 2 --fonts <fonts>`.
-  3 timeouts (Ys - The Oath in Felghana, God of War - Ghost of Sparta,
-  God of War - Chains of Olympus). 100 games' final PNG was not written
-  (screen-thread race: the 2 s wait for `presented >= frames` is too short
-  for slower games); `frame-001200.png` (20 s in) is used as the reference
-  frame for those.
-- **Report** (`docs/psp-compatibility.md`): per-game table (title, NPID, fps,
-  state, last note), summary counts, top missing functions, timed-out games,
-  and next missing functions. 149 of 266 games (56 %) hit at least one
+  --png-at 60,300,1200,3600 --wav dir/sound.wav --ge-threads 2 --fonts
+  <fonts>`. 3 timeouts (Ys - The Oath in Felghana, God of War - Ghost of
+  Sparta, God of War - Chains of Olympus). PNGs are named by the frame run
+  (the runner waits for the screen to present a new picture after each
+  frame that wants one); 100 games' final frame is `frame-001200.png`
+  (the screen hadn't presented by frame 3600).
+- **Report** (`docs/psp-compatibility.md`): per-game table (title, NPID,
+  fps, state, last note), summary counts, top missing functions, timed-out
+  games, and next missing functions. 149 of 266 games (56 %) hit at least one
   unimplemented function. Top gaps: `ThreadManForUser` (130+ games),
   `sceCtrl a7144800` (32), `sceGe_user b77905ea` (17), GE feature emulation
   (29 games: DXT textures, bounding-box tests, line drawing).
@@ -62,7 +61,7 @@ Checks: `tests/psp/run-tests.sh` (236 groups, 0 failures),
 `tests/psp/ares/runner-test.sh` (passing). Builds clean
 (`-Wall -Wextra -Werror`).
 
-## Active work (2026-09-25) — branch `feature/n64-accuracy-neutral-perf-2026-09`
+**Active work (2026-09-25):** branch `feature/n64-accuracy-neutral-perf-2026-09`
 ([PR #4](https://github.com/pwnedbygary/phobos/pull/4), commits `c02166932` and `ffe337ceb`).
 Stacked on it: branch `feature/perf-hud-2026-09` ([PR #5](https://github.com/pwnedbygary/phobos/pull/5))
 with the MangoHud-style performance HUD (builds, 50 host tests pass, verified on the RP6; see
