@@ -25,6 +25,46 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the next functions games stop at (run status, ID lists, LoadExec, the memory stick) — 2026-10-07
+
+Branch `cursor/psp-hle-games6-2b67`, on top of `cursor/psp-psmf-2b67` (part 31): commit 17ea2d8a0 (code and tests),
+then the docs; local only, not pushed. docs/psp-core.md, part 32, describes it. Sources: pspsdk's headers,
+pspautotests' programs and the results they recorded on a PSP, the games' own calls; no other emulator's code read.
+The owner's re-run of the compatibility report hadn't landed; every function the existing report names was here.
+- **ThreadManForUser 0xffc36a14, sceKernelReferThreadRunStatus**: the 44-byte run status (status, priority, wait,
+  wakeups) with real run figures, which threads now keep: time on the CPU, interruptions by calls into the program,
+  preemptions by better threads, releases from waits. The full thread status gives them too.
+- **0x94416130 sceKernelGetThreadmanIdList, 0x57cf62dd sceKernelGetThreadmanIdType**: every kind the kernel has
+  objects of (threads, semaphores, event flags, mailboxes, both pools, pipes, callbacks, alarms, virtual timers,
+  both mutexes; threads by state), the refusals as threads/threads/threadmanidlist and threadmanidtype recorded.
+- **LoadExecForUser's sceKernelLoadExec**: WipEout's next stop (its launcher starts each of its games as a program
+  of its own). The program named starts in the caller's place on a cleared machine, with the argument given, and the
+  call never returns, as modules/loadexec/loader recorded. KDebugForKernel's Kprintf, which that test prints with,
+  is sceKernelPrintf's.
+- **The memory stick's room**: Chili Con Carnage's and Ace Combat X's sizes request (the free space alone) was told
+  there was no save, the kernel looking for one by the request's empty save name; the save measured is msData's, as
+  utility/savedata/sizes recorded, and with none the answer is 0. The size mode (22) now answers. One stick told
+  everywhere (the capacity devctl, both modes): 2 GB with 1,792 MiB free, its bytes within 31 bits (games add sizes
+  up in 32-bit words; pspautotests' PSP had 16 GiB free, which would wrap there).
+- **Part 28's recorded differences**: the event flag's and semaphore's status size words (52, 56; every status now
+  copied as far as its size word says); their creates (NULL names, attributes, any semaphore counts); the lightweight
+  mutex's status (both functions, 64 bytes; the work area's holder 0 while free); the thread status's size by SDK
+  (104, or 108 refusing larger after 2.60) and its exit status (DORMANT, then NOT_DORMANT);
+  sceDisplayAdjustAccumulatedHcount (31 bits, from 0x7fffffff to 0). State version 14.
+- **Checked**: tests/psp 296 groups (7 new) with ASan and UBSan and without, tests/psp/ares 298 checks, none failed;
+  12 broken versions each caught. pspautotests: of threads/ and intr/'s 167 recorded programs, 72 printed exactly
+  what the PSP printed before and 83 after; elsewhere 75 and 76 of 192; none worse; modules/loadexec/loader as
+  recorded. Games on this Mac: Ace Combat X from "Checking Memory Stick" for good to its title and attract movie;
+  Chili Con Carnage from "Not enough free space" to its profile menu; WipEout lists its threads and, through its
+  menus, starts WipEout Pure to its title. The 14 others the same pictures (frames 600 to 3000) and sound, Snoopy vs.
+  the Red Baron's screens the same at moments apart (its two NULL-named semaphores now refused, as recorded).
+- **On the RP6** (build 105300): Chili Con Carnage to its main menu with a new profile, Ace Combat X to the first
+  operation's briefing, WipEout Pure started from the collection to its menu's opening, all at 60 fps.
+- **Left**: threads' attributes as recorded (0x800000ff added), where a preempted thread goes back in line, the
+  blank's timing (display/hcount's lowest and highest lines), thread-local storage pools, the lightweight mutex's
+  other recorded differences, PARAM.SFO in saves and the list mode's pattern, Chili Con Carnage's logo and menu art
+  drawn in broken stripes (a GE matter), the imported-but-uncalled functions part 32 lists, the report's re-run.
+
 ## PSP core: movies through scePsmf and scePsmfPlayer, in a clean room — 2026-10-07
 
 Branch `cursor/psp-psmf-2b67`, on top of `cursor/psp-ge-features-2b67` (#157, part 29): commit 18c58f968 (code and
