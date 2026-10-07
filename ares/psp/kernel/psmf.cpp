@@ -54,7 +54,9 @@
 //  0x80615001 with no current stream), not from the first video or the last audio entry whatever is selected.
 //- The EP map read is the video stream selected last's. An entry's position is the pack count as the map holds it
 //  (not multiplied into bytes). An index past the map: 0x80615100. A time before the presentation's start:
-//  0x80615500; no EP map: 0x80615025; an entry is the last one whose time isn't after the time asked.
+//  0x80615500; no EP map: 0x80615025; an entry is the last one whose time isn't after the time asked. A map that
+//  doesn't lie whole inside the header, as its stream's offset bounds it, counts as none.
+//- A presentation's end before its start is taken as its start (scePsmfGetPresentationEndTime gives the start).
 //- Marks (named points, UMD Video's chapters): no movie seen has any, and their layout isn't known: none is reported.
 
 namespace {
@@ -103,7 +105,9 @@ auto Kernel::psmfParse(const u8* bytes, u32 size, PsmfHeader& header) -> bool {
   header.streamOffset = bigEndian(bytes + 8, 4);
   header.streamSize = bigEndian(bytes + 12, 4);
   header.startTime = bigEndian(bytes + 0x54, 6);
-  header.endTime = bigEndian(bytes + 0x5a, 6);
+  //an end before the start (no movie seen has one) is taken as the start, an empty presentation, so that no length
+  //worked out from the two (scePsmfPlayer's) comes out negative (chosen)
+  header.endTime = std::max(bigEndian(bytes + 0x5a, 6), header.startTime);
   u32 count = bigEndian(bytes + 0x80, 2);
   if(PsmfTableAt + count * PsmfEntrySize > size) return false;
   header.streams.clear();
@@ -157,13 +161,17 @@ auto Kernel::psmfSelect(u32 structure, const PsmfHeader& header, u32 number) -> 
 }
 
 //The EP map the structure's EP functions read (the video stream selected last's): where it is in memory and how many
-//entries it has, 0 if the stream has none.
+//entries it has, 0 if the stream has none. A map must lie whole inside the header (before its stream's offset), all
+//of it in the game's memory; its size is worked out in 64 bits, so that no entry count, however large, wraps round
+//to a small map. Its entries are then as many as the bytes the game has there hold, and a walk over them is bounded.
 auto Kernel::psmfMap(u32 structure, const PsmfHeader& header, u32& at) -> u32 {
   u32 mapped = memory.read(4, structure + PsmfSelection) >> 16;
   if(mapped >= header.streams.size() || header.streams[mapped].kind != PsmfAvc) return 0;
   auto& stream = header.streams[mapped];
-  at = memory.read(4, structure + PsmfHeaderAt) + stream.epOffset;
-  if(!stream.epOffset || !memory.reaches(at, stream.epCount * PsmfEPEntrySize)) return 0;
+  u32 headerAt = memory.read(4, structure + PsmfHeaderAt);
+  u64 end = u64(stream.epOffset) + u64(stream.epCount) * PsmfEPEntrySize;
+  if(!stream.epOffset || end > header.streamOffset || !memory.reaches(headerAt, end)) return 0;
+  at = headerAt + stream.epOffset;
   return stream.epCount;
 }
 
@@ -410,11 +418,11 @@ auto Kernel::psmfFindEntry(u32 structure, u32 time, u32& at, u32& index) -> u32 
   if(time < header.startTime) return PsmfErrorBeforeStart;
   u32 count = psmfMap(structure, header, at);
   if(!count) return PsmfErrorNotFound;
+  std::vector<u8> map(u64(count) * PsmfEPEntrySize);
+  memory.copyOut(map.data(), at, map.size());
   bool found = false;
   for(u32 n = 0; n < count; n++) {
-    u8 bytes[PsmfEPEntrySize];
-    memory.copyOut(bytes, at + n * PsmfEPEntrySize, PsmfEPEntrySize);
-    if(psmfEntry(bytes).time <= time) found = true, index = n;
+    if(psmfEntry(map.data() + u64(n) * PsmfEPEntrySize).time <= time) found = true, index = n;
   }
   return found ? 0 : PsmfErrorNotFound;
 }

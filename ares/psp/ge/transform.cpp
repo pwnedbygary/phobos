@@ -176,6 +176,9 @@ auto GE::project(Vertex& v, const Transform& t, bool clipped) const -> void {
   v.x = pixels(cutX, t.offsetX);
   v.y = pixels(cutY, t.offsetY);
   v.z = z > 0 ? std::min(z, 65535.0f) : 0.0f;  //with DEPTH_CLIP_ENABLE off, a depth outside isn't drawn anyway
+  //z / w past either end of the depths (outOfSight()): worked out once a vertex, not at each primitive's corner
+  float depth = v.clip[2] / v.clip[3];
+  v.far = depth >= OutsideDepth, v.near = -depth >= OutsideDepth;
 }
 
 //Whether a primitive with these corners isn't drawn because of where they are: one off the screen, or depths
@@ -184,9 +187,7 @@ static auto outOfSight(bool depthClamp, std::initializer_list<const GE::Vertex*>
   u32 far = 0, near = 0;
   for(auto* corner : corners) {
     if(corner->outside) return true;
-    float depth = corner->clip[2] / corner->clip[3];
-    if(depth >= OutsideDepth) far++;
-    if(-depth >= OutsideDepth) near++;
+    far += corner->far, near += corner->near;
   }
   if(!depthClamp) return far + near > 0;
   return far == corners.size() || near == corners.size();

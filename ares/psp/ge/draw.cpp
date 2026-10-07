@@ -145,7 +145,10 @@ auto GE::primitive(u32 kind, u32 count) -> void {
       rows = std::min<u32>((reach + 8) & ~7u, height);
     }
   }
-  if(textured) look.decoded = decode(look.texture, pixel, region, rows);
+  if(textured) {
+    look.decoded = decode(look.texture, pixel, region, rows);
+    if(!look.texture.decoded) look.texture.bytes = direct(look.texture);
+  }
   //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
   //texture read from memory as it's drawn (texture.cpp) has it drawn at once.
   drawing.recording = !(look.textured && !look.texture.decoded) && defer(pixel, region);
@@ -211,8 +214,9 @@ auto GE::primitive(u32 kind, u32 count) -> void {
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth
 //buffer's, by the 16 KiB the GE rearranges each in, where it tests depth), for primitive() to report.
-auto GE::submit(const Job& job) -> void {
+auto GE::submit(Job& job) -> void {
   if(job.firstX > job.lastX || job.firstY > job.lastY) return;
+  job.fours = fourFriendly(job);
   auto& p = job.look->pixel;
   auto note = [&](u32 which, u32 from, u32 to, bool depth) {  //VRAM offsets, before wrapping at its end
     if(to - from >= Memory::VRAMSize - 1 || (from & ~(Memory::VRAMSize - 1)) != (to & ~(Memory::VRAMSize - 1))) {
@@ -289,6 +293,7 @@ auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool 
     float across = std::abs(turned ? to.v - from.v : to.u - from.u) / ((right - left) / 16.0f);
     job.linear = chooseFilter(commands[TextureFilter], across);
   }
+  job.sprite = {};
   auto& s = job.sprite;
   s.z = u32(std::clamp(to.z, 0.0f, 65535.0f));
   s.color = to.color, s.specular = to.specular;
@@ -471,6 +476,7 @@ auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool persp
   Job job{};
   job.kind = Job::Kind::Line;
   job.look = &look;
+  job.line = {};
   auto& l = job.line;
   const Vertex* ends[2] = {&from, &to};
   if(along < 0) std::swap(x0, x1), std::swap(y0, y1), std::swap(ends[0], ends[1]), along = -along, rise = -rise;

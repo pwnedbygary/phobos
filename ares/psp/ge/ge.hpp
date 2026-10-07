@@ -126,6 +126,7 @@ struct GE {
     float clip[4] = {0, 0, 0, 1};
     float q = 1, fog = 1;
     bool outside = false;
+    bool far = false, near = false;  //3D: z / w past 1 (by 2^-15), or past -1: outside the depths (transform.cpp)
     u32 specular = 0;  //lighting's shine, when LIGHT_MODE keeps it apart: added after texturing (lighting.cpp)
   };
   //Where each part of a vertex is, in bytes from its start: each part sits at a multiple of its own size, and a
@@ -142,6 +143,7 @@ struct GE {
     bool enabled, directional, spot, specular, powered;  //specular: it shines; powered: its diffuse is sharpened
     float position[3], direction[3], attenuation[3], cutoff, exponent;
     u32 ambient, diffuse, shine;  //its colors (24-bit)
+    float toLight[3], halfway[3];  //directional: the way to it, and half way to the viewer's, each one long
   };
 
   //The 3D settings, gathered once a primitive (transform.cpp): the matrices as floats, the viewport, and the rest.
@@ -172,6 +174,7 @@ struct GE {
     const u32* decoded;  //its texels already decoded (Decoded), decodedWidth to a row; or none: read from memory
     u32 decodedWidth;
     u32 decodedRows;     //the rows the primitive may take texels from (draw.cpp), all of them decoded
+    const u8* bytes;     //read from memory: where its bytes are in the host's memory, when they're all there
   };
 
   //A texture decoded: every texel inside it as 8888, exactly as texel() would read it from memory, so that drawing
@@ -231,6 +234,21 @@ struct GE {
     u32 minDepth, maxDepth, fogColor;
   };
 
+  //Four pixels side by side in a row, each in a lane of a vector (four.cpp): GCC's and Clang's own vector types,
+  //which they compile to the host's SIMD instructions (NEON on ARM64, SSE on x86-64).
+  using f32x4 = float __attribute__((vector_size(16)));
+  using f64x2 = f64 __attribute__((vector_size(16)));
+  using s32x4 = s32 __attribute__((vector_size(16)));
+  using u32x4 = u32 __attribute__((vector_size(16)));
+  struct Four {
+    s32x4 live;       //the lanes still being drawn (all bits set), the others clear
+    s32x4 inside;     //the lanes inside the row (all bits set)
+    bool full;        //all four inside it
+    s32x4 z, depth;   //the pixels' depths, and the depth buffer's there (when it's read)
+    s32x4 color[4];   //red, green, blue, alpha: 0-255
+    s32x4 fog;        //0-255
+  };
+
   //Where a primitive may draw (draw.cpp): pixels inside left-right and top-bottom (inclusive).
   struct Region { s32 left, top, right, bottom; };
   struct Batch;  //(threads.cpp)
@@ -254,6 +272,8 @@ struct GE {
     const Look* look;
     s32 firstX, lastX, firstY, lastY;  //the pixels it may cover, inside the scissor rectangle
     bool linear;                       //textured: filtered (TEXTURE_FILTER's choice for its size)
+    bool fours;                        //drawn four pixels at a time (four.cpp; submit() decides)
+    //Each kind's own (only the job's kind's is kept: the union below)
     struct Sprite {
       u32 z, color, specular, leftFog, rightFog;
       s32 middle;                      //(sixteenths) where the fog's halves meet
@@ -265,7 +285,7 @@ struct GE {
       //3D: the corners' sixteenths, 1 / w across x, the coordinate across x over w, the one down y over w
       s32 left, right, top, bottom;
       f64 leftInverse, rightInverse, leftAcross, rightAcross, topDown, bottomDown;
-    } sprite;
+    };
     struct Triangle {
       s64 x[3], y[3];                  //the corners (sixteenths), turned clockwise
       float total;                     //twice its area
@@ -275,12 +295,12 @@ struct GE {
       float z[3], fog[3], u[3], v[3], q[3], w[3];
       f64 uStart, uAcross, uDown, vStart, vAcross, vDown;  //2D texture coordinates, stepped from (startX, startY)
       s64 startX, startY;
-    } triangle;
+    };
     struct Point {
       s32 x, y;
       u32 z, color, specular, fog;
       float u, v;
-    } point;
+    };
     struct Line {
       //Its ends (sixteenths), the left one first, turned so that x runs along it (steep: more rows than columns,
       //x and y swapped); the pixels it lights along x, first to last; at each, the one across is y's at the
@@ -293,7 +313,10 @@ struct GE {
       u32 color[2], specular[2];
       float z[2], fog[2], u[2], v[2], q[2], w[2];
       f64 uStep, vStep;  //2D texture coordinates: a step a pixel along x, from the left end's
-    } line;
+    };
+    //The job's kind's, set up afresh by what makes it (draw.cpp): the triangle's first, the largest, so that Job{}
+    //zeroes all of them. (Kept apart, every job would carry, zero and copy all four.)
+    union { Triangle triangle; Sprite sprite; Point point; Line line; };
   };
 
   Memory& memory;
@@ -302,6 +325,7 @@ struct GE {
   u64 clutHash = 0;        //its contents' hash, and a version that goes up whenever they change
   u32 clutVersion = 0;
   TextureCache textures;   //textures kept decoded (texture.cpp)
+  bool fourPixels = true;  //rows drawn four pixels at a time where they may be (four.cpp; tests compare without)
   Registers list;
   u32 vertexAddress = 0, indexAddress = 0;  //where the next vertex and index are read
   bool boxOutside = false;  //the last BOUNDING_BOX was out of sight: BJUMP jumps (list.cpp)
@@ -349,7 +373,7 @@ struct GE {
   //draw.cpp
   auto lookFor(const PixelState& pixel, const Sampler* texture) const -> Look;
   auto primitive(u32 kind, u32 count) -> void;
-  auto submit(const Job& job) -> void;
+  auto submit(Job& job) -> void;
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
@@ -360,6 +384,16 @@ struct GE {
   auto rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                 bool perspective) -> void;
+
+  //four.cpp
+  auto fourFriendly(const Job& job) const -> bool;
+  template<u32 Format> auto depthFirst(const PixelState& p, s32 x, s32 y, Four& four) -> bool;
+  auto texelsFour(const Look& look, bool linear, s32x4 live, const s32x4 (&u)[3], const s32x4 (&v)[3],
+                  s32x4 (&texel)[4]) const -> void;
+  auto combineFour(const Look& look, s32x4 (&color)[4], const s32x4 (&texel)[4]) const -> void;
+  template<u32 Format> auto pixelsFour(const PixelState& p, s32 x, s32 y, Four& four) -> void;
+  template<u32 Format> auto spriteFours(const Job& job, s32 fromY, s32 toY) -> void;
+  template<u32 Format> auto triangleFours(const Job& job, s32 fromY, s32 toY) -> void;
 
   //raster.cpp
   template<u32 Format> auto shadeAs(const Look& look, bool linear, s32 x, s32 y, u32 z, u32 color, u32 specular,
@@ -373,6 +407,7 @@ struct GE {
   //texture.cpp
   auto sampler() const -> Sampler;
   auto texel(const Sampler& texture, s32 u, s32 v) -> u32;
+  auto direct(const Sampler& texture) -> const u8*;
   auto sample(const Sampler& texture, float u, float v) -> u32;
   auto sampleWith(const Sampler& texture, bool linear, float u, float v) -> u32;
   struct TexelAxis { s32 first, second, fraction; };

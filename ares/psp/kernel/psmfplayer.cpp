@@ -89,6 +89,10 @@ namespace {
   constexpr u32 ChunkPacks = 32;        //the file is read 64 KiB at a time
   constexpr u32 SoundReadAhead = 64;    //the packs a call may read looking for sound
   constexpr u32 StreamLimit = 4 * 1024 * 1024;  //data held for a stream not being taken, at most
+  //An access unit's bytes, at most: one growing past it (its next delimiter never coming) is cut there. H.264's level
+  //3, the most the PSP's decoder takes, keeps a coded picture within its 10 Mbit buffer (12 Mbit counting the NAL
+  //units' own bytes, 1.5 MB), so no movie a PSP plays has a picture near this.
+  constexpr u32 UnitLimit = 2 * 1024 * 1024;
 
   auto bigEndian32(const u8* bytes) -> u32 { return bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 | bytes[3]; }
 
@@ -117,6 +121,27 @@ namespace {
     if(from + 8 > sound.size()) return false;
     bytes = 8 + (((sound[from + 2] << 8 | sound[from + 3]) & 0x3ff) + 1) * 8;
     return from + bytes <= sound.size();
+  }
+
+  //The sound's next whole frame from at on, as soundFrame() finds it, with the bytes passed over on the way (from at
+  //to the frame's header, or to the last byte, with no header there) dropped, as no frame can begin in them: so the
+  //next search doesn't go over them again, however many there are. The last time stamp among them stays, at at, as
+  //the time of what follows. The frame (or the search) is then at at.
+  auto soundFrameFrom(std::vector<u8>& sound, std::vector<std::pair<u32, u64>>& stamps, u32 at, u32& from,
+                      u32& bytes) -> bool {
+    bool whole = soundFrame(sound, at, from, bytes);
+    if(from <= at) return whole;
+    u32 passed = from - at;
+    sound.erase(sound.begin() + at, sound.begin() + from);
+    std::vector<std::pair<u32, u64>> kept;
+    for(auto [where, time] : stamps) {
+      if(where <= at || where > from) kept.push_back({where <= at ? where : where - passed, time});
+      else if(!kept.empty() && kept.back().first == at) kept.back().second = time;
+      else kept.push_back({at, time});
+    }
+    stamps = kept;
+    from = at;
+    return whole;
   }
 }
 
@@ -258,31 +283,38 @@ auto Kernel::psmfPlayerDone() const -> bool {
 
 //The video's next access unit, from one access unit delimiter to the next (the last to the stream's end), read in
 //as it's needed, and its time: that of the PES packet it starts in (the last time stamp before it), else the last
-//unit's plus a picture's. False when there's none left.
+//unit's plus a picture's. False when there's none left. A unit is UnitLimit bytes at most (cut there), and the search
+//for its end goes on from where it had got to as each pack comes in, so a unit is read and searched once.
 auto Kernel::psmfPlayerUnit(std::vector<u8>& unit, u64& time) -> bool {
   auto& p = psmfPlayer;
-  while(true) {
-    s64 start = delimiter(p.video, 0), end = start < 0 ? -1 : delimiter(p.video, start + 5);
-    if(start < 0 && p.video.size() > 4) {  //no delimiter: what's before the last bytes can't begin a unit
+  s64 start;
+  while((start = delimiter(p.video, 0)) < 0) {  //no delimiter: what's before the last bytes can't begin a unit
+    if(p.video.size() > 4) {
       u32 drop = p.video.size() - 4;
       dropTaken(p.video, p.videoStamps, drop, drop);
     }
-    bool all = false;
-    if(end < 0 && !psmfPlayerRead()) {
-      if(start < 0) return false;
-      end = p.video.size(), all = true;
-    }
-    if(end < 0 && !all) continue;
-    unit.assign(p.video.begin() + start, p.video.begin() + end);
-    u64 stamp = NoTime;
-    for(auto [at, value] : p.videoStamps) if(at <= start) stamp = value;
-    PsmfHeader header;
-    psmfPlayerHeader(header);
-    time = stamp != NoTime ? stamp : p.videoTime != NoTime ? p.videoTime + PictureTicks : header.startTime;
-    p.videoTime = time;
-    dropTaken(p.video, p.videoStamps, start, end);
-    return true;
+    if(!psmfPlayerRead()) return false;
   }
+  u64 searched = start + 5;
+  s64 end;
+  while((end = delimiter(p.video, searched)) < 0) {
+    if(p.video.size() - start >= UnitLimit) break;
+    searched = std::max<u64>(searched, p.video.size() - 4);  //a delimiter's first bytes may have come already
+    if(!psmfPlayerRead()) {
+      end = p.video.size();
+      break;
+    }
+  }
+  if(end < 0 || end - start > UnitLimit) end = start + UnitLimit;
+  unit.assign(p.video.begin() + start, p.video.begin() + end);
+  u64 stamp = NoTime;
+  for(auto [at, value] : p.videoStamps) if(at <= start) stamp = value;
+  PsmfHeader header;
+  psmfPlayerHeader(header);
+  time = stamp != NoTime ? stamp : p.videoTime != NoTime ? p.videoTime + PictureTicks : header.startTime;
+  p.videoTime = time;
+  dropTaken(p.video, p.videoStamps, start, end);
+  return true;
 }
 
 //Where the sound's next frame is (an 8-byte header, 0x0fd0 and the codec's parameters, then the frame), how long it
@@ -291,7 +323,7 @@ auto Kernel::psmfPlayerUnit(std::vector<u8>& unit, u64& time) -> bool {
 auto Kernel::psmfPlayerFrame(u32& from, u32& bytes, u64& time) -> bool {
   auto& p = psmfPlayer;
   for(u32 reads = 0;; reads++) {
-    if(soundFrame(p.audio, 0, from, bytes)) {
+    if(soundFrameFrom(p.audio, p.audioStamps, 0, from, bytes)) {
       u64 stamp = NoTime;
       for(auto [at, value] : p.audioStamps) if(at <= from) stamp = value;
       PsmfHeader header;
@@ -334,7 +366,7 @@ auto Kernel::psmfPlayerReady() -> bool {
   if(p.audioID < 0) return true;
   while(true) {
     u32 frames = 0, at = 0, from = 0, bytes = 0;
-    while(frames < Ahead && soundFrame(p.audio, at, from, bytes)) frames++, at = from + bytes;
+    while(frames < Ahead && soundFrameFrom(p.audio, p.audioStamps, at, from, bytes)) frames++, at = from + bytes;
     if(frames >= Ahead || p.video.size() > StreamLimit || !psmfPlayerRead()) return true;
   }
 }
@@ -573,9 +605,9 @@ auto Kernel::scePsmfPlayerReleasePsmf() -> void {
 }
 
 //(handle, where to put 20 bytes): the movie described (status 2, 4 or 0x200): its last picture's time, relative to
-//the start (the end less the start less a picture: getpsmfinfo's 567567), how many video, ATRAC3plus and PCM
-//streams the header lists, and the player's version for it: 0 if every video stream has an EP map, else 1 (a
-//"basic" movie, which can't be started part way, fast forwarded or rewound).
+//the start (the end less the start less a picture: getpsmfinfo's 567567; 0 for a shorter one), how many video,
+//ATRAC3plus and PCM streams the header lists, and the player's version for it: 0 if every video stream has an EP
+//map, else 1 (a "basic" movie, which can't be started part way, fast forwarded or rewound).
 auto Kernel::scePsmfPlayerGetPsmfInfo() -> void {
   auto player = psmfPlayerFor(arg(0));
   if(!player || player->status < StatusStandby) return result(PlayerErrorNoPlayer);
@@ -586,7 +618,8 @@ auto Kernel::scePsmfPlayerGetPsmfInfo() -> void {
     video += stream.kind == PsmfAvc, atrac += stream.kind == PsmfAtrac, pcm += stream.kind == PsmfPcm;
     mapped += stream.kind == PsmfAvc && stream.epCount;
   }
-  u32 words[5] = {u32(header.endTime - header.startTime - PictureTicks), video, atrac, pcm,
+  u64 length = header.endTime - header.startTime;  //(never negative: psmfParse())
+  u32 words[5] = {u32(length > PictureTicks ? length - PictureTicks : 0), video, atrac, pcm,
                   video && mapped == video ? 0u : 1u};
   if(memory.reaches(arg(1), 20)) for(u32 n = 0; n < 5; n++) memory.write(4, arg(1) + n * 4, words[n]);
   result(0);
