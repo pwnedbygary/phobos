@@ -61,7 +61,8 @@ static const MeasureFile measureFiles4[] = {
   {"dxt5-colors", 256, 64}, {"dxt-layout", 256, 32}, {"curves-bezier", 256, 256}, {"curves-bezier-depths", 256, 256},
   {"curves-places", 256, 256}, {"curves-spline", 256, 256}, {"curves-spline-depths", 256, 256},
   {"curves-texels", 256, 256}, {"curves-made-up", 256, 256}, {"curves-lit", 256, 256}, {"curves-culling", 256, 256},
-  {"curves-count", 256, 256},
+  {"curves-joins", 256, 256}, {"curves-count", 256, 256}, {"curves-count-128", 256, 256},
+  {"curves-count-200", 256, 256}, {"curves-count-255", 256, 256},
 };
 
 static auto readWords(const std::filesystem::path& path) -> std::vector<u32> {
@@ -194,7 +195,7 @@ static auto pspMeasure() -> void {
   //the GE's round 4
   move(m, ProbesLine, GeRound4Line);
   press(m, Cross);
-  CHECK(waitFor(m, 3000, exists(results / "curves-count.bin")), true);
+  CHECK(waitFor(m, 3000, exists(results / "curves-count-255.bin")), true);
   press(m, Cross);
   //leaving
   move(m, GeRound4Line, LeaveLine);

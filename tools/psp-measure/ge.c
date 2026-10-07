@@ -1900,29 +1900,14 @@ static void curvesCulling(const char* name) {
   saveTarget(name, 256, 256, 0);
 }
 
-//How many vertices: in rows 0-7 of 16 pixels, a flat patch 240 pixels wide (through mode) cut into divisions[row]
-//along u and once along v, as points added up (each adds 1 to its pixel: blending with fixed factors), its two rows
-//of vertices at y + 4 and y + 12: a row's sum is how many vertices a row of the patch has, past pspsdk's 64 too.
-//Rows 8-15: which vertices a surface's strips join across patches, a Bezier of 2 patches along u (7x4 points, rows
-//8, 10, 12, 14) and a spline of 5x4 with open ends (the others), cut twice per patch or piece (rows 8-11) or 3 times
-//along u and once along v (rows 12-15), as lines (rows 8, 9, 12, 13) or flat-shaded triangles.
-static void curvesCount(const char* name) {
-  static const int divisions[8] = {16, 63, 64, 65, 100, 128, 200, 255};
+//Which vertices a surface's strips join across patches, in rows of 16 pixels: a Bezier of 2 patches along u (7x4
+//points, rows 8, 10, 12, 14) and a spline of 5x4 with open ends (the others), cut twice per patch or piece (rows
+//8-11) or 3 times along u and once along v (rows 12-15), as lines (rows 8, 9, 12, 13) or flat-shaded triangles. (Rows
+//0-7 are left empty: these were once in one picture with curves-count's, and kept where they were.)
+static void curvesJoins(const char* name) {
   if(!beginTest(name)) return;
   fillTarget(zero, 0);
   start(GU_PSM_8888);
-  sceGuEnable(GU_BLEND);
-  sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xffffff, 0xffffff);
-  sceGuPatchPrim(GU_POINTS);
-  for(int row = 0; row < 8; row++) {
-    ColorVertex* v = sceGuGetMemory(16 * sizeof(ColorVertex));
-    for(int j = 0; j < 4; j++) {
-      for(int i = 0; i < 4; i++) v[j * 4 + i] = (ColorVertex){0xff010101, 8 + i * 80, row * 16 + 4 + j * 8 / 3.0f, 0};
-    }
-    sceGuPatchDivide(divisions[row], 1);
-    sceGuDrawBezier(ColorVertexType, 4, 4, 0, v);
-  }
-  sceGuDisable(GU_BLEND);
   for(int row = 8; row < 16; row++) {
     int spline = row & 1, ucount = spline ? 5 : 7;
     sceGuPatchPrim(row & 2 ? GU_TRIANGLE_STRIP : GU_LINE_STRIP);
@@ -1944,6 +1929,32 @@ static void curvesCount(const char* name) {
   saveTarget(name, 256, 256, 0);
 }
 
+//How many vertices: in row n of 16 pixels (first to last), a flat patch 240 pixels wide (through mode) cut into
+//divisions[n] along u and once along v, as points added up (each adds 1 to its pixel: blending with fixed factors),
+//its two rows of vertices at y + 4 and y + 12: a row's sum is how many vertices a row of the patch has. Past
+//pspsdk's 64 the GE might stall, so those run last, a few divisions to a test (and a display list) each: a test
+//that stops the PSP twice is given up on alone (beginTest), and the ones before it are already saved.
+static void curvesCount(const char* name, int first, int last) {
+  static const int divisions[8] = {16, 63, 64, 65, 100, 128, 200, 255};
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  sceGuEnable(GU_BLEND);
+  sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xffffff, 0xffffff);
+  sceGuPatchPrim(GU_POINTS);
+  for(int row = first; row <= last; row++) {
+    ColorVertex* v = sceGuGetMemory(16 * sizeof(ColorVertex));
+    for(int j = 0; j < 4; j++) {
+      for(int i = 0; i < 4; i++) v[j * 4 + i] = (ColorVertex){0xff010101, 8 + i * 80, row * 16 + 4 + j * 8 / 3.0f, 0};
+    }
+    sceGuPatchDivide(divisions[row], 1);
+    sceGuDrawBezier(ColorVertexType, 4, 4, 0, v);
+  }
+  sceGuDisable(GU_BLEND);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
 static void writeManifest4(void) {
   char path[320];
   snprintf(path, sizeof(path), "%s/manifest4.txt", folder);
@@ -1959,8 +1970,9 @@ static void writeManifest4(void) {
     "curves-*: curved surfaces (BEZIER, SPLINE), mostly drawn as points, a vertex each: curves-bezier and -spline\n"
     "their pixels and colors, -bezier-depths and -spline-depths the depth buffer's 256x256 values there (low half,\n"
     "through VRAM's fourth copy); -places the vertices' sixteenths, -texels their texture coordinates, -made-up\n"
-    "texture coordinates a vertex type lacks, -lit normals made from the slopes, -culling, -count how many\n"
-    "vertices.\n"
+    "texture coordinates a vertex type lacks, -lit normals made from the slopes, -culling, -joins which\n"
+    "vertices strips join, -count how many vertices at 16-65 divisions (-count-128 at 100 and 128, -count-200 and\n"
+    "-count-255 at those).\n"
     "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
   sceIoWrite(file, text, sizeof(text) - 1);
   sceIoClose(file);
@@ -1997,7 +2009,11 @@ static void round4(void) {
   curvesMadeUp("curves-made-up");
   curvesLit("curves-lit");
   curvesCulling("curves-culling");
-  curvesCount("curves-count");
+  curvesJoins("curves-joins");
+  curvesCount("curves-count", 0, 3);
+  curvesCount("curves-count-128", 4, 5);
+  curvesCount("curves-count-200", 6, 6);
+  curvesCount("curves-count-255", 7, 7);
 }
 
 //---- the rounds
