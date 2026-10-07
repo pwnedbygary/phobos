@@ -142,6 +142,7 @@ struct GE {
     bool enabled, directional, spot, specular, powered;  //specular: it shines; powered: its diffuse is sharpened
     float position[3], direction[3], attenuation[3], cutoff, exponent;
     u32 ambient, diffuse, shine;  //its colors (24-bit)
+    float toLight[3], halfway[3];  //directional: the way to it, and half way to the viewer's, each one long
   };
 
   //The 3D settings, gathered once a primitive (transform.cpp): the matrices as floats, the viewport, and the rest.
@@ -268,6 +269,7 @@ struct GE {
     s32 firstX, lastX, firstY, lastY;  //the pixels it may cover, inside the scissor rectangle
     bool linear;                       //textured: filtered (TEXTURE_FILTER's choice for its size)
     bool fours;                        //drawn four pixels at a time (four.cpp; submit() decides)
+    //Each kind's own (only the job's kind's is kept: the union below)
     struct Sprite {
       u32 z, color, specular, leftFog, rightFog;
       s32 middle;                      //(sixteenths) where the fog's halves meet
@@ -279,7 +281,7 @@ struct GE {
       //3D: the corners' sixteenths, 1 / w across x, the coordinate across x over w, the one down y over w
       s32 left, right, top, bottom;
       f64 leftInverse, rightInverse, leftAcross, rightAcross, topDown, bottomDown;
-    } sprite;
+    };
     struct Triangle {
       s64 x[3], y[3];                  //the corners (sixteenths), turned clockwise
       float total;                     //twice its area
@@ -289,12 +291,12 @@ struct GE {
       float z[3], fog[3], u[3], v[3], q[3], w[3];
       f64 uStart, uAcross, uDown, vStart, vAcross, vDown;  //2D texture coordinates, stepped from (startX, startY)
       s64 startX, startY;
-    } triangle;
+    };
     struct Point {
       s32 x, y;
       u32 z, color, specular, fog;
       float u, v;
-    } point;
+    };
     struct Line {
       //Its ends (sixteenths), the left one first, turned so that x runs along it (steep: more rows than columns,
       //x and y swapped); the pixels it lights along x, first to last; at each, the one across is y's at the
@@ -307,7 +309,10 @@ struct GE {
       u32 color[2], specular[2];
       float z[2], fog[2], u[2], v[2], q[2], w[2];
       f64 uStep, vStep;  //2D texture coordinates: a step a pixel along x, from the left end's
-    } line;
+    };
+    //The job's kind's, set up afresh by what makes it (draw.cpp): the triangle's first, the largest, so that Job{}
+    //zeroes all of them. (Kept apart, every job would carry, zero and copy all four.)
+    union { Triangle triangle; Sprite sprite; Point point; Line line; };
   };
 
   Memory& memory;

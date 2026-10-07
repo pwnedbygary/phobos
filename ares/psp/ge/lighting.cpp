@@ -108,6 +108,12 @@ auto GE::lightingState(Transform& t) const -> void {
       light.attenuation[n] = float24(commands[Light0ConstantAttenuation + index * 3 + n]);
     }
     normalize3(light.direction);
+    //A directional light's way to it, and the half way between that and the viewer's that its shine takes, are the
+    //same at every vertex: worked out here once, as light() would at each (the same operations on the same numbers).
+    for(u32 n = 0; n < 3; n++) light.toLight[n] = light.position[n];
+    normalize3(light.toLight);
+    for(u32 n = 0; n < 3; n++) light.halfway[n] = light.toLight[n] + t.viewDirection[n];
+    normalize3(light.halfway);
     light.cutoff = float24(commands[Light0CutoffAttenuation + index]);
     if(std::isnan(light.cutoff) && std::signbit(light.cutoff)) light.cutoff = 0;
     light.exponent = float24(commands[Light0ExponentAttenuation + index]);
@@ -141,7 +147,7 @@ auto GE::light(Vertex& vertex, const float world[3], const float normal[3], cons
       strength = 1 / (light.attenuation[0] + light.attenuation[1] * distance + light.attenuation[2] * distance * distance);
       strength = strength > 0 ? std::min(strength, 1.0f) : 0.0f;  //(not a number: 0)
     } else {
-      normalize3(toLight);
+      for(u32 n = 0; n < 3; n++) toLight[n] = light.toLight[n];  //(normalize3(toLight), worked out once)
     }
     if(light.spot) {
       float along = dot3(light.direction, toLight);  //the cosine between the spot's direction and the light's
@@ -154,8 +160,11 @@ auto GE::light(Vertex& vertex, const float world[3], const float normal[3], cons
     if(light.powered) facing = lightPower(facing, t.specularPower);
     if(facing > 0) add(sum, light.diffuse, diffuse, share(strength * facing));
     if(light.specular && facing >= 0) {
-      float halfway[3] = {toLight[0] + t.viewDirection[0], toLight[1] + t.viewDirection[1], toLight[2] + t.viewDirection[2]};
-      normalize3(halfway);
+      float halfway[3] = {light.halfway[0], light.halfway[1], light.halfway[2]};
+      if(!light.directional) {
+        for(u32 n = 0; n < 3; n++) halfway[n] = toLight[n] + t.viewDirection[n];
+        normalize3(halfway);
+      }
       float gleam = lightPower(dot3(halfway, normal), t.specularPower);
       if(gleam > 0) add(shine, light.shine, specular, share(strength * gleam));
     }

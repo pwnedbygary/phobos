@@ -290,6 +290,7 @@ auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool 
     float across = std::abs(turned ? to.v - from.v : to.u - from.u) / ((right - left) / 16.0f);
     job.linear = chooseFilter(commands[TextureFilter], across);
   }
+  job.sprite = {};
   auto& s = job.sprite;
   s.z = u32(std::clamp(to.z, 0.0f, 65535.0f));
   s.color = to.color, s.specular = to.specular;
@@ -472,6 +473,7 @@ auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool persp
   Job job{};
   job.kind = Job::Kind::Line;
   job.look = &look;
+  job.line = {};
   auto& l = job.line;
   const Vertex* ends[2] = {&from, &to};
   if(along < 0) std::swap(x0, x1), std::swap(y0, y1), std::swap(ends[0], ends[1]), along = -along, rise = -rise;
