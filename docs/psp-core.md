@@ -4367,9 +4367,9 @@ in whole clusters and its folder's own cluster (sizes: three small files, 4 clus
 file, the icons' and sound's files the request carries, its PARAM.SFO and the folder (sizes: 16 bytes of data and no
 other file, 3). The size mode (22), which wrote nothing at all, now writes the free space in its 32 KiB "sectors"
 (getsize), and with files listed what they'd still need past the free space, in whole clusters, the same newly or
-over a save (chosen, after review: below; getsize listed none, and the rest was left as it was); its answer is 0 whether the save is there or not (chosen: a game asks
-before its first save). Sizes as text are whole units cut down, as recorded ("96 KB", "128 KB", "15 GB" for 16,777,211
-KiB), MB between (chosen).
+over a save (chosen, after review: below; getsize listed none, and the rest was left as it was); its answer is 0
+whether the save is there or not (chosen: a game asks before its first save). Sizes as text are whole units cut
+down, as recorded ("96 KB", "128 KB", "15 GB" for 16,777,211 KiB), MB between (chosen).
 - One stick everywhere (`io.cpp`): the capacity devctl (SceDevInf: 61,440 clusters, 57,344 free, a sector's 512 bytes,
   a cluster's 64 sectors), the sizes mode's msFree and the size mode's: a PSP with a large and mostly empty stick, a
   2 GB one with 1,792 MiB free. The devctl had said up to 1 GiB, all of it free, less where the host's disk had less;
@@ -4567,4 +4567,4 @@ clean room held and sceKernelLoadExec sound, and three things to fix:
   now moves it (`startCall()`). Tested on both engines: a blank's handler calling sceKernelExitGame while main
   spins leaves main with about 16.7 ms, no more than has passed, one interruption, and a state that loads.
 Save states unchanged (version 14). tests/psp 302 groups (one new, two extended) with ASan and UBSan and without,
-tests/psp/ares 298 checks, none failed; each fix undone, its test failed (three broken versions, each caught by its own group).
+tests/psp/ares 298 checks, none failed; each fix undone (three broken versions), its own group failed.

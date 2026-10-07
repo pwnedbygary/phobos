@@ -2,10 +2,10 @@
 //status (sizes, the SDK's rule, exit statuses, the run figures counted as threads run, are interrupted, preempted and
 //released, and a handler ending the game), the lists of the thread manager's objects by kind and an object's kind,
 //the status structures' size words, the lightweight mutex's status, the display's accumulated count of lines
-//adjusted, and blanks waited for by count; as pspautotests' threads/threads (refer, threadend, exitstatus, threadmanidlist, threadmanidtype),
-//threads/events/refer, threads/semaphores/refer, threads/lwmutex (refer, create, unlock), display/hcount and
-//display/vblankmulti recorded on a PSP. Programs run on both engines; each group's machine, saved at its end, loads
-//into another that makes the same state.
+//adjusted, and blanks waited for by count; as pspautotests' threads/threads (refer, threadend, exitstatus,
+//threadmanidlist, threadmanidtype), threads/events/refer, threads/semaphores/refer, threads/lwmutex (refer, create,
+//unlock), display/hcount and display/vblankmulti recorded on a PSP. Programs run on both engines; each group's
+//machine, saved at its end, loads into another that makes the same state.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
