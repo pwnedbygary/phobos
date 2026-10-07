@@ -449,6 +449,16 @@ struct Allegrex {
   auto VWBN(u8 vd, u8 vs, u32 size, u8 scale) -> void;
   auto VZERO(u8 vd, u32 size) -> void;
 
+  //recompiler-vfpu.cpp: the VFPU's common instructions with the prefixes at rest, which compiled code calls with
+  //its operands' registers worked out (four to a word, a byte each)
+  template<u32 Size, u32 Op> auto vfpuRestBinary(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size> auto vfpuRestDot(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size> auto vfpuRestScale(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size> auto vfpuRestCompare(u32 condition, u32 vs, u32 vt) -> void;
+  template<u32 Size, u32 Op> auto vfpuRestBits(u32 vd, u32 vs, u32) -> void;
+  template<u32 Size> auto vfpuRestToFloat(u32 vd, u32 vs, u32 scale) -> void;
+  auto vfpuMatrix(u32 which, u32 registers, u32 size) -> void;
+
   //exceptions.cpp
   auto exception(Exception) -> void;
   auto addressError(Exception, u32 address) -> void;
@@ -517,6 +527,13 @@ struct Allegrex {
     auto emitFPUArithmetic(u32 address, u32 instruction, u32 count, bool delaySlot, s32 op) -> void;
     auto emitFPUCompare(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto emitCOP2(u32 instruction) -> bool;
+
+    //recompiler-vfpu.cpp
+    auto emitVFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitPrefixesBusy() -> sljit_jump*;
+    auto prefixesAfter(u32 instruction) -> void;
+    auto emitMFVC(u32 instruction) -> void;
+    bool prefixesAtRest = false;  //the block being compiled knows the prefixes are at rest here (recompiler-vfpu.cpp)
 
     //recompiler-memory.cpp
     auto emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;

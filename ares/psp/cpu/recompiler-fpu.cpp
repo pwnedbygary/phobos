@@ -145,14 +145,18 @@ auto Allegrex::Recompiler::emitFPUCompare(u32 address, u32 instruction, u32 coun
 }
 
 //Coprocessor 2's moves: MFV and MTV copy a VFPU register's bits to or from an integer register, as the interpreter
-//does, and leave the prefixes alone. MFVC and MTVC (bit 7: a control register) go to the interpreter.
+//does, and leave the prefixes alone; so does MFVC (bit 7: a control register: recompiler-vfpu.cpp). MTVC goes to the
+//interpreter.
 auto Allegrex::Recompiler::emitCOP2(u32 instruction) -> bool {
   u32 vd = instruction & 0x7f;
   switch(instruction >> 21 & 31) {
 
-  //MFV Rt,Vd
+  //MFV Rt,Vd, or MFVC Rt,index
   case 0x03: {
-    if(instruction & 0x80) return false;
+    if(instruction & 0x80) {
+      emitMFVC(instruction);
+      return true;
+    }
     if(!RTn) return true;
     mov32(reg(0), field(&self.vfpu.r[vd]));
     mov32(Rt, reg(0));

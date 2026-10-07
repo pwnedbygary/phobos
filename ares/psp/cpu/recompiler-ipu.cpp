@@ -40,6 +40,13 @@ auto Allegrex::Recompiler::emitInstruction(u32 address, u32 instruction, u32 cou
   case 0x11: return emitFPU(address, instruction, count, delaySlot);
   case 0x12: return emitCOP2(instruction);
 
+  //the VFPU (recompiler-vfpu.cpp)
+  case 0x18: case 0x19: case 0x1b: case 0x34: case 0x3c: case 0x3f:
+    return emitVFPU(address, instruction, count, delaySlot);
+
+  //CACHE: nothing to do, as in the interpreter
+  case 0x2f: return true;
+
   //loads and stores (recompiler-memory.cpp)
   case 0x20: case 0x21: case 0x23: case 0x24: case 0x25: case 0x28: case 0x29: case 0x2b:
   case 0x31: case 0x32: case 0x36: case 0x39: case 0x3a: case 0x3e:

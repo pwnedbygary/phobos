@@ -813,7 +813,7 @@ auto matchesInterpreter() -> void {
       uint32_t byteOffset = region + random(256);
       uint32_t word = 0;
       uint32_t vd = random(128), vs = random(128), vt = random(128), size = 1 + random(4);
-      switch(random(56)) {
+      switch(random(58)) {
       case  0: word = addiu(d, s, immediate); break;
       case  1: word = slti(d, s, immediate); break;
       case  2: word = sltiu(d, s, immediate); break;
@@ -891,7 +891,7 @@ auto matchesInterpreter() -> void {
       }
       case 53: word = random(3) == 2 ? 0xde000000u | random(0x1000) : (0xdc000000u | random(2) << 24 | random(0x100000)); break;
       case 54: {  // mtv, mfv, and the control registers (128 and up) with mtvc and mfvc
-        uint32_t reg = random(4) ? vd : 128 + random(4);
+        uint32_t reg = random(4) ? vd : 128 + random(16);  // (8-15: the random number generator's state)
         word = random(2) ? 0x48e00000u | t << 16 | reg : 0x48600000u | d << 16 | reg;
         break;
       }
@@ -900,6 +900,15 @@ auto matchesInterpreter() -> void {
         word = (random(2) ? 0x32u : 0x3au) << 26 | s7 << 21 | (vd & 31) << 16 | (offset & 0xfffc) | (vd >> 5 & 3);
         break;
       }
+      case 56: {  // vmmul, vtfm2-4 and vhtfm2-4 (as the size matches or not), vi2f
+        const uint32_t operations[] = {0x1e0, 0x1e1, 0x1e2, 0x1e3, 0x1a5};
+        uint32_t operation = operations[random(5)];
+        word = vfpuOp(operation, size, vd, vs, operation == 0x1a5 ? random(32) : vt);
+        break;
+      }
+      case 57:  // vnop, vsync, cache
+        word = random(3) == 0 ? 0xffff0000u : random(2) ? 0xffff0320u : 0xbc000000u | random(0x400000);
+        break;
       }
       code.push_back(word);
     }

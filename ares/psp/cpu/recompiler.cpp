@@ -137,6 +137,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   mov64(sreg(2), imm((sljit_sw)writePages.data()));
   auto bodyLabel = sljit_emit_label(compiler);
   calls = false;
+  prefixesAtRest = false;  //(not known as a block starts: recompiler-vfpu.cpp)
   u32 count = 0;          //instructions in the block so far
   bool pcStored = false;  //whether ipu.pc and ipu.pd already say where to go after the last instruction
   bool ended = false;     //it ends at an instruction after which run() and the HLE kernel take over (endsBlock())
@@ -193,6 +194,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
         break;
       }
     }
+    prefixesAfter(instruction);
 
     if(lastInSection) {
       if(!pcStored) {
