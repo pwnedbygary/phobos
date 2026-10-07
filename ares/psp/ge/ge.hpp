@@ -126,6 +126,7 @@ struct GE {
     float clip[4] = {0, 0, 0, 1};
     float q = 1, fog = 1;
     bool outside = false;
+    bool far = false, near = false;  //3D: z / w past 1 (by 2^-15), or past -1: outside the depths (transform.cpp)
     u32 specular = 0;  //lighting's shine, when LIGHT_MODE keeps it apart: added after texturing (lighting.cpp)
   };
   //Where each part of a vertex is, in bytes from its start: each part sits at a multiple of its own size, and a
