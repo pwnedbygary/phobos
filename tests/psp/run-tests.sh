@@ -29,7 +29,8 @@ DEFINES=(-DBUILD_DEBUG -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1 -DVK
 INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty"
   -isystem "$ROOT/thirdparty/volk" -isystem "$ROOT/thirdparty/Vulkan-Headers/include")
 #The GPU renderer's shaders (ares/psp/ge/gpu/shaders): shaders.hpp must be what its GLSL compiles to (its recorded
-#hash; with glslang around, the GLSL checked as well). Its tests (gpu.cpp) need a Vulkan GPU, and skip without one;
+#hash; with glslang around, compiled again and compared). Its tests (gpu.cpp) need a Vulkan GPU, skipping without
+#one (but for the lost GPU's, which pretends);
 #Vulkan is loaded at run time (volk), on macOS from Homebrew's loader and MoltenVK where they are (brew install
 #vulkan-loader molten-vk), which the system's library paths don't name.
 "$ROOT/ares/psp/ge/gpu/shaders/compile.sh" --check

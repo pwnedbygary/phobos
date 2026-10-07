@@ -110,7 +110,8 @@ float addToOdd(float a, float b) {
 //a * b + c with one rounding, to the nearest (ties to even). The emulation is Boldo and Melquiond's ("Emulation of
 //FMA and correctly rounded sums: proved algorithms using rounding to odd", 2008): the exact product as two floats,
 //the exact sum of its high part and c as two more, the two low parts added rounded to odd, and the last sum rounded
-//to the nearest; exact while nothing overflows or falls below the normal floats, which the GE's values don't.
+//to the nearest; exact while nothing overflows or falls below the normal floats (in sum3(), gpu.cpp's take() sees to
+//that: the floats it takes stay where neither happens).
 float fmaExact(float a, float b, float c) {
   if(nativeFma != 0u) {
     precise float fused = fma(a, b, c);
@@ -127,27 +128,66 @@ float fmaExact(float a, float b, float c) {
   return result;
 }
 
-//a / b rounded to the nearest, ties to the even one, as the host divides. The GPU's quotient is brought within a
+//A finite float other than zero as its significand, 1 to 2, times 2^exponent, read from its bits (so that one below
+//the normal floats, which a GPU may take for zero, is read too).
+float significand(uint bits, out int exponent) {
+  uint magnitude = bits & 0x7fffffffu;
+  if(magnitude < 0x00800000u) {  //below the normal floats: its leading bit moved up to where a normal float's is
+    int shift = 23 - findMSB(magnitude);
+    exponent = -126 - shift;
+    return uintBitsToFloat(0x3f800000u | (magnitude << uint(shift) & 0x007fffffu));
+  }
+  exponent = int(magnitude >> 23) - 127;
+  return uintBitsToFloat(0x3f800000u | (magnitude & 0x007fffffu));
+}
+
+//x / y rounded to the nearest, ties to the even one, for x and y from 1 to 2. The GPU's quotient is brought within a
 //unit in the last place by one step from its remainder; then of it and its two neighbours, the one whose remainder
-//a - q * b is least is the nearest (each such remainder fits a float, so fmaExact() gives it exactly), the even one
-//where two are as near. Zeros, infinities and what isn't a number come out of the GPU's own division as IEEE 754 has
-//them.
-float divide(float a, float b) {
-  precise float q = a / b;
-  if(a == 0.0 || q == 0.0 || !finiteNumber(q) || !finiteNumber(b)) return q;
-  precise float inverse = 1.0 / b;
-  q = fmaExact(fmaExact(-q, b, a), inverse, q);
+//x - q * y is least is the nearest (each such remainder fits a float, so fmaExact() gives it exactly), the even one
+//where two are as near. (Between 1 and 2, every value these steps take is far from the ends of the floats.)
+float quotient(float x, float y) {
+  precise float q = x / y;
+  precise float inverse = 1.0 / y;
+  q = fmaExact(fmaExact(-q, y, x), inverse, q);
   uint bits = floatBitsToUint(q);
   float lower = uintBitsToFloat(bits - 1u), higher = uintBitsToFloat(bits + 1u);
   precise float best = q;
-  precise float least = abs(fmaExact(-q, b, a));
-  precise float lowerLeft = abs(fmaExact(-lower, b, a));
-  precise float higherLeft = abs(fmaExact(-higher, b, a));
+  precise float least = abs(fmaExact(-q, y, x));
+  precise float lowerLeft = abs(fmaExact(-lower, y, x));
+  precise float higherLeft = abs(fmaExact(-higher, y, x));
   if(lowerLeft < least || (lowerLeft == least && (floatBitsToUint(lower) & 1u) == 0u)) {
     best = lower, least = lowerLeft;
   }
   if(higherLeft < least || (higherLeft == least && (floatBitsToUint(higher) & 1u) == 0u)) best = higher;
   return best;
+}
+
+//a / b rounded to the nearest, ties to the even one, as the host divides: the quotient of the significands
+//(quotient()), with the exponents' difference added to its exponent, which leaves its bits as they were wherever the
+//host's quotient is a normal float (rounding to 24 bits comes out the same at any exponent). Below the normal floats,
+//where the host's quotient has fewer bits (and a GPU may flush it to zero), what's drawn depends only on its sign and
+//whether it's zero (as a texture coordinate, a depth, fog, a level: never more than a millionth of a pixel), so it
+//comes out as 2^-100 of its sign, or zero where the host's rounds to zero: where the exact quotient is no more than
+//2^-150, half the least float. Zeros, infinities and what isn't a number come out as IEEE 754 has them.
+float divide(float a, float b) {
+  uint aBits = floatBitsToUint(a), bBits = floatBitsToUint(b);
+  uint sign = (aBits ^ bBits) & 0x80000000u;
+  bool aZero = (aBits & 0x7fffffffu) == 0u, bZero = (bBits & 0x7fffffffu) == 0u;
+  if(notANumber(a) || notANumber(b) || (aZero && bZero) || (!finiteNumber(a) && !finiteNumber(b))) {
+    precise float none = a / b;  //(not a number)
+    return none;
+  }
+  if(!finiteNumber(a) || bZero) return uintBitsToFloat(sign | 0x7f800000u);
+  if(!finiteNumber(b) || aZero) return uintBitsToFloat(sign);
+  int aExponent, bExponent;
+  float x = significand(aBits, aExponent), y = significand(bBits, bExponent);
+  uint bits = floatBitsToUint(quotient(x, y));
+  int apart = aExponent - bExponent;
+  int exponent = int(bits >> 23) - 127 + apart;
+  if(exponent > 127) return uintBitsToFloat(sign | 0x7f800000u);  //(rounded past the largest float)
+  if(exponent >= -126) return uintBitsToFloat(sign | uint(exponent + 127) << 23 | (bits & 0x007fffffu));
+  bool nonzero = apart > -150 || (apart == -150 && x > y);  //(x / y is above 1/2 and below 2)
+  return uintBitsToFloat(sign | (nonzero ? 0x0d800000u : 0u));
 }
 
 //first * w0 + second * w1 + third * w2, rounded as the host's compiler rounds the C++ expression: fused (ARM64,

@@ -2,6 +2,8 @@
 
 #include "../ge.hpp"
 
+#include <functional>
+
 //The GE's GPU renderer (docs/psp-gpu-renderers.md): the software renderer's arithmetic, done on the GPU in compute
 //shaders, so that its pictures are the software renderer's, pixel for pixel, but faster.
 //
@@ -36,6 +38,9 @@ struct GPU : GE::Renderer {
   //read it, and running the stages, each returning once the GPU is done. It knows nothing of the PSP.
   struct Device {
     virtual ~Device() = default;
+    //The GPU stopped answering (a run took far too long, or the driver lost the device): nothing more runs on it,
+    //and the software renderer draws everything from then on.
+    bool lost = false;
     virtual auto name() const -> std::string = 0;
     virtual auto vram() -> u8* = 0;                 //VRAM: 2 MiB
     virtual auto records(u32 words) -> u32* = 0;    //at least words long (what it held may go)
@@ -54,11 +59,17 @@ struct GPU : GE::Renderer {
     u64 gpuJobs = 0, gpuPixels = 0;  //pixels: the jobs' boxes
     u64 cpuJobs = 0, cpuPixels = 0;
     u64 lines = 0, spriteTexels3D = 0, coordinates2D = 0;  //why the CPU drew them
+    u64 pastRange = 0;  //(triangles whose floats leave the range where the GPU's arithmetic is exact: take())
+    u64 lostJobs = 0;   //(drawn by the CPU once the GPU was lost)
     u64 copying = 0, waiting = 0;  //nanoseconds: VRAM's pages and the records copied; the GPU waited for
   } statistics;
 
   std::unique_ptr<Device> device;
   bool fused = false, nativeFma = false;  //what configure() last set (detect() finds them)
+  bool denormals = false;  //the GPU keeps numbers below the normal floats as the host does (detect() finds it)
+  //Where the renderer says what went wrong while drawing (once: the GPU lost); stderr's "PSP GPU:" if none.
+  std::function<void(const std::string&)> report;
+  bool reported = false;
 
   //gpu.cpp
   GPU(std::unique_ptr<Device> device);

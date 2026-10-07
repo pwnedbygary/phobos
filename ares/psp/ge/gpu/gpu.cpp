@@ -49,6 +49,12 @@ GPU::GPU(std::unique_ptr<Device> device) : device(std::move(device)) {}
 //product by itself, the first and third fused into it in turn, as clang does on ARM64), 1; rounds every step apart
 //(x86-64 without FMA), 0; or does something else, -1 (the GPU can't follow it then). The same expression as there,
 //compiled alike, on values where the three ways differ.
+//
+//It finds out how this file was compiled, not raster.cpp, which is compiled with the rest of the GE (ge.cpp
+//includes it): the two must have the same floating-point flags (-ffp-contract, -ffast-math, -march's FMA), or the
+//probe could find one rounding while the software renderer has another. Today they do: clang contracts on ARM64
+//(-ffp-contract=on), x86-64 builds have no FMA instructions to fuse with, GCC's alike. Whatever builds gpu.cpp into
+//the programs (CMake's, Gradle's) must give it the GE's flags.
 auto GPU::hostFuses() -> int {
   volatile float inputs[7] = {255.0f, 254.0f, 253.0f, 16777217.0f * 3, 33554431.0f, 25165823.0f, 3.0f};
   for(u32 attempt = 0; attempt < 4096; attempt++) {
@@ -68,7 +74,8 @@ auto GPU::hostFuses() -> int {
 }
 
 //The device's rounding found out: whether its own fma() is fused (by probe.comp, on products whose rounding before
-//the addition shows), and the host's way (hostFuses()); the shaders made with them.
+//the addition shows), whether it keeps numbers below the normal floats (products, sums and, where it's fused, its
+//fma() that come out there; the host keeps them), and the host's way (hostFuses()); the shaders made with them.
 auto GPU::detect(std::string& error) -> bool {
   int host = hostFuses();
   if(host < 0) return error = "the host's compiler rounds the GE's sums in a way the GPU can't follow", false;
@@ -90,6 +97,24 @@ auto GPU::detect(std::string& error) -> bool {
     fusedEverywhere &= results[n * 8 + 2] == bitsOf(std::fma(a, b, c));
   }
   if(!configure(host, fusedEverywhere)) return error = "the GPU's shaders weren't made", false;
+
+  cases.clear();
+  for(u32 n = 0; n < 64; n++) {  //a, b, c with a * b, a + c and a * b + c below the normal floats (some of each)
+    u32 low = next() >> 12, shift = n % 20;
+    cases.insert(cases.end(), {0x200 + n, 0x3f80'0000, 0x100 + n * 3, 0, 0, 0, 0, 0});  //2^-140 or so, 1, 2^-141
+    cases.insert(cases.end(), {bitsOf(1e-20f) + low, bitsOf(1e-20f) + n, 0x8000'0000 | low >> shift, 0, 0, 0, 0, 0});
+    cases.insert(cases.end(), {0x00c0'0000 + low, 0x3f00'0000, 0x8080'0000 + n, 0, 0, 0, 0, 0});  //(times 1/2)
+  }
+  results = probe(0, cases);
+  if(results.size() != cases.size()) return error = "the GPU's arithmetic couldn't be probed", false;
+  denormals = true;
+  for(u32 n = 0; n < cases.size() / 8; n++) {
+    float a, b, c;
+    std::memcpy(&a, &cases[n * 8], 4), std::memcpy(&b, &cases[n * 8 + 1], 4), std::memcpy(&c, &cases[n * 8 + 2], 4);
+    volatile float product = a * b, sum = a + c;
+    denormals &= results[n * 8] == bitsOf(product) && results[n * 8 + 1] == bitsOf(sum);
+    if(nativeFma) denormals &= results[n * 8 + 2] == bitsOf(std::fma(a, b, c));
+  }
   return true;
 }
 
@@ -101,12 +126,13 @@ auto GPU::configure(bool fused, bool nativeFma) -> bool {
 //probe.comp's cases (8 words each), and its results (8 words each), or none if the GPU failed.
 auto GPU::probe(u32 kind, const std::vector<u32>& cases) -> std::vector<u32> {
   u32 count = cases.size() / 8;
-  std::memcpy(device->records(cases.size()), cases.data(), cases.size() * 4);
-  u32* out = device->bins(cases.size());
+  u32* in = device->records(cases.size());
+  if(!in || !device->bins(cases.size())) return {};  //(a buffer couldn't grow)
+  std::memcpy(in, cases.data(), cases.size() * 4);
   Parameters p;
   p.probeKind = kind, p.probeCount = count;
   if(!device->probe(p)) return {};
-  out = device->bins(cases.size());
+  u32* out = device->bins(cases.size());
   return {out, out + cases.size()};
 }
 
@@ -156,6 +182,32 @@ static auto wholeCoordinate(f64 start, f64 across, f64 down, s64 dxLow, s64 dxHi
   if(std::abs(base) + std::abs(stepAcross) * dx + std::abs(stepDown) * dy >= (s64(1) << 53)) return false;
   out[0] = u32(base), out[1] = u32(u64(base) >> 32), out[2] = u32(s32(stepAcross)), out[3] = u32(s32(stepDown));
   shift = bits;
+  return true;
+}
+
+//Whether a triangle's floats stay where the GPU's arithmetic is the host's, bit for bit. Its divisions are exact for
+//any floats (exact.glsl's divide()); its sums of three products (sum3(): the blends of depth, fog, and in
+//perspective of the texture coordinates) only while no product overflows, nor falls below the normal floats, nor
+//leaves out in rounding less than they can hold (which the GPU's fma(), or the one built where it isn't fused,
+//needs kept). The weights are the edge functions, whole numbers below 2^36, and in perspective those over each
+//corner's w (raster.cpp's), so with every w from 2^-32 to 2^32 the weights are 0 or from 2^-32 to 2^68; with every
+//depth, fog, u, v and q 0 or from 2^-40 to 2^40, each product is 0 or from 2^-72 to 2^108, what its rounding leaves
+//out a multiple of 2^-120 or more, and so every sum (however near its products cancel) 0 or a normal float. Where
+//the GPU keeps numbers below the normal floats as the host does, and has its own fused fma(), those below need no
+//bound; w's do (a weight so small that its quotient fell below the normal floats wouldn't be kept: divide()). Games'
+//floats are well inside: what isn't is the software renderer's to draw.
+static auto exactRange(const GE::Job::Triangle& r, bool perspective, bool keepsBelow) -> bool {
+  float least = keepsBelow ? 0.0f : 0x1p-40f;
+  auto inside = [&](float value) {  //(not for what isn't a number, nor infinity)
+    float magnitude = std::abs(value);
+    return magnitude == 0 || (magnitude >= least && magnitude <= 0x1p40f);
+  };
+  for(u32 k = 0; k < 3; k++) {
+    if(!inside(r.z[k]) || !inside(r.fog[k])) return false;
+    if(!perspective) continue;
+    if(!inside(r.u[k]) || !inside(r.v[k]) || !inside(r.q[k])) return false;
+    if(!(std::abs(r.w[k]) >= 0x1p-32f && std::abs(r.w[k]) <= 0x1p32f)) return false;
+  }
   return true;
 }
 
@@ -231,6 +283,10 @@ auto GPU::take(const GE::Job& job) -> bool {
     return statistics.spriteTexels3D++, false;
   }
   if(look.textured && !look.decoded) return false;  //(only drawn at once, never in a batch: primitive())
+  if(job.kind == GE::Job::Kind::Triangle &&
+     !exactRange(job.triangle, look.textured && job.triangle.perspective, denormals && nativeFma)) {
+    return statistics.pastRange++, false;
+  }
   u32 at = jobs.size();
   jobs.resize(at + JobWords);
   u32* w = &jobs[at];
@@ -336,7 +392,8 @@ auto GPU::finish(GE& ge, GE::Batch& batch) -> void {
   p.frameBuffer = target->frameBuffer, p.stride = target->stride, p.format = target->format;
   p.depthBuffer = target->depthBuffer, p.depthStride = target->depthStride;
   u64 copied = now();
-  bool drawn = device->bins(p.tilesAcross * p.tilesDown * p.wordsPerTile) && records && device->draw(p);
+  bool drawn = !device->lost && device->bins(p.tilesAcross * p.tilesDown * p.wordsPerTile) && records &&
+               device->draw(p);
   u64 waited = now();
   statistics.copying += copied - began, statistics.waiting += waited - copied;
   if(drawn) {
@@ -355,10 +412,24 @@ auto GPU::finish(GE& ge, GE::Batch& batch) -> void {
 
 //A batch (GE::Renderer): its jobs in order, runs of those the GPU can draw drawn there, the rest by the software
 //renderer between them, each after what came before it.
+//Once the GPU is lost (Device::lost), every job is the software renderer's, which is said once.
 auto GPU::draw(GE& ge, GE::Batch& batch) -> void {
   statistics.batches++;
   for(auto& job : batch.jobs) {
     u64 pixels = u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1);
+    if(device->lost) {
+      finish(ge, batch);  //(what was taken before it was lost: drawn by the CPU)
+      if(!reported) {
+        reported = true;
+        std::string text = "the GPU (" + device->name() + ") stopped answering: ";
+        text += "the software renderer draws everything from here on";
+        if(report) report(text);
+        else std::fprintf(stderr, "PSP GPU: %s\n", text.c_str());
+      }
+      ge.rasterize(job, job.firstY, job.lastY);
+      statistics.cpuJobs++, statistics.cpuPixels += pixels, statistics.lostJobs++;
+      continue;
+    }
     if(!fits(*job.look)) {  //the GPU's textures full: the run drawn, and the textures dropped
       finish(ge, batch);
       slots.clear(), texelsUsed = 0;

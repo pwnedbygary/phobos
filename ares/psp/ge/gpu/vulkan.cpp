@@ -1,7 +1,10 @@
 //The Vulkan backend: the shaders' SPIR-V (shaders/shaders.hpp) run as compute pipelines, through volk (thirdparty/
 //volk, which loads the system's Vulkan at run time, so nothing links against it). The buffers live in memory both the
 //host and the GPU see (where the GPU has one memory, as phones and Apple's chips do, the GPU's own), mapped for good.
-//Each stage is recorded, submitted and waited for: the prototype is synchronous.
+//Each stage is recorded, submitted and waited for: the prototype is synchronous. A wait that lasts far longer than
+//any run could (two seconds, a minute for a pipeline's first: a shader stuck, a driver that never says the device is
+//lost) marks the device lost, as the driver's
+//VK_ERROR_DEVICE_LOST does, and the software renderer draws everything from then on (GPU::draw()).
 //
 //Device functions come from a table of this device's own (volkLoadDeviceTable()), not volk's globals, which
 //paraLLEl-RDP's Vulkan (the N64's) uses for its device.
@@ -11,6 +14,38 @@ template<typename T> static auto made(VkStructureType type) -> T {
   T value{};
   value.sType = type;
   return value;
+}
+
+//A shader's SPIR-V with its execution mode DenormPreserve 32 (SPV_KHR_float_controls): numbers below the normal
+//floats kept, as IEEE 754 and the host have them, not flushed to zero. Three instructions, put where SPIR-V's layout
+//has them: the capability after the module's own, the extension right after (extensions follow the capabilities),
+//and the execution mode after the entry point (execution modes follow the entry points; each stage has one). None,
+//should the words not be SPIR-V's instructions.
+static auto keepingDenormals(const u32* words, size_t count) -> std::vector<u32> {
+  enum : u32 { OpExtension = 10, OpEntryPoint = 15, OpExecutionMode = 16, OpCapability = 17 };
+  enum : u32 { CapabilityDenormPreserve = 4464, ExecutionModeDenormPreserve = 4459 };
+  const char extension[] = "SPV_KHR_float_controls";
+  u32 name[(sizeof(extension) + 3) / 4] = {};  //(a string's bytes in order, zeros after: the hosts are little-endian)
+  std::memcpy(name, extension, sizeof(extension));
+  if(count < 5) return {};
+  std::vector<u32> patched(words, words + 5);  //(the header)
+  bool added = false;
+  for(size_t at = 5; at < count;) {
+    u32 length = words[at] >> 16, opcode = words[at] & 0xffff;
+    if(!length || at + length > count) return {};
+    if(opcode != OpCapability && !added) {
+      added = true;
+      patched.insert(patched.end(), {2u << 16 | OpCapability, CapabilityDenormPreserve});
+      patched.push_back(u32(1 + std::size(name)) << 16 | OpExtension);
+      patched.insert(patched.end(), std::begin(name), std::end(name));
+    }
+    patched.insert(patched.end(), words + at, words + at + length);
+    if(opcode == OpEntryPoint) {  //(its id is its second word after the opcode's)
+      patched.insert(patched.end(), {4u << 16 | OpExecutionMode, words[at + 2], ExecutionModeDenormPreserve, 32u});
+    }
+    at += length;
+  }
+  return patched;
 }
 
 struct VulkanDevice : GPU::Device {
@@ -41,8 +76,15 @@ struct VulkanDevice : GPU::Device {
   VkCommandPool commandPool = VK_NULL_HANDLE;
   VkCommandBuffer commands = VK_NULL_HANDLE;
   VkFence fence = VK_NULL_HANDLE;
+  bool keepsDenormals = false;  //the shaders run with DenormPreserve 32 (the device has float controls that can)
+  bool timedOut = false;  //a run never finished: what it uses may still be in use, so nothing is destroyed
+  //How long a run is waited for, in nanoseconds: one takes milliseconds, but a pipeline's first may take seconds, as
+  //a driver may compile its shader only then (Mesa's lavapipe, a CPU's Vulkan: five and a half).
+  static constexpr u64 Timeout = 2'000'000'000, FirstTimeout = 60'000'000'000;
+  bool ran[3] = {};  //each pipeline has run since it was made
 
   ~VulkanDevice() override {
+    if(timedOut) return;  //(left as it is: destroying what the GPU may still use isn't allowed, nor waiting safe)
     if(device) {
       vk.vkDeviceWaitIdle(device);
       for(auto pipeline : pipelines) if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
@@ -58,7 +100,9 @@ struct VulkanDevice : GPU::Device {
     if(instance) vkDestroyInstance(instance, nullptr);
   }
 
-  auto name() const -> std::string override { return "Vulkan: " + deviceName; }
+  auto name() const -> std::string override {
+    return "Vulkan: " + deviceName + (keepsDenormals ? " (DenormPreserve)" : "");
+  }
 
   //A buffer of size bytes in memory the host sees (coherent: no flushing), the GPU's own where it can be.
   auto make(Buffer& buffer, VkDeviceSize size, VkBufferUsageFlags usage) -> bool {
@@ -159,9 +203,26 @@ struct VulkanDevice : GPU::Device {
     extensions.resize(count);
     vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, extensions.data());
     std::vector<const char*> deviceExtensions;
+    bool floatControls = false;
     for(auto& extension : extensions) {  //(a portability implementation's subset must be named when it has one)
       if(!std::strcmp(extension.extensionName, "VK_KHR_portability_subset")) {
         deviceExtensions.push_back("VK_KHR_portability_subset");
+      }
+      floatControls |= !std::strcmp(extension.extensionName, VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
+    }
+    //Whether the shaders can keep numbers below the normal floats (VK_KHR_shader_float_controls, asked through
+    //Vulkan 1.1's properties2). Apple's GPUs through MoltenVK can't say so, and flush them.
+    VkPhysicalDeviceProperties properties;
+    vkGetPhysicalDeviceProperties(physical, &properties);
+    if(floatControls && properties.apiVersion >= VK_API_VERSION_1_1 && vkGetPhysicalDeviceProperties2) {
+      auto controls = made<VkPhysicalDeviceFloatControlsPropertiesKHR>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES_KHR);
+      auto asked = made<VkPhysicalDeviceProperties2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2);
+      asked.pNext = &controls;
+      vkGetPhysicalDeviceProperties2(physical, &asked);
+      if(controls.shaderDenormPreserveFloat32) {
+        deviceExtensions.push_back(VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
+        keepsDenormals = true;
       }
     }
     float priority = 1.0f;
@@ -216,6 +277,12 @@ struct VulkanDevice : GPU::Device {
       {GPUShaders::probeSPIRV, sizeof(GPUShaders::probeSPIRV)},
     };
     for(u32 n = 0; n < 3; n++) {
+      std::vector<u32> kept;
+      if(keepsDenormals) {
+        kept = keepingDenormals(codes[n].words, codes[n].size / 4);
+        if(kept.empty()) return error = "the shaders weren't SPIR-V", false;
+        codes[n] = {kept.data(), kept.size() * 4};
+      }
       auto moduleInfo = made<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
       moduleInfo.codeSize = codes[n].size, moduleInfo.pCode = codes[n].words;
       if(vk.vkCreateShaderModule(device, &moduleInfo, nullptr, &modules[n]) != VK_SUCCESS) {
@@ -240,12 +307,14 @@ struct VulkanDevice : GPU::Device {
   }
 
   auto configure(bool fused, bool nativeFma) -> bool override {
+    if(lost) return false;
     vk.vkDeviceWaitIdle(device);
     u32 values[2] = {fused, nativeFma};
     VkSpecializationMapEntry entries[2] = {{0, 0, 4}, {1, 4, 4}};
     VkSpecializationInfo specialization{2, entries, sizeof(values), values};
     for(u32 n = 0; n < 3; n++) {
       if(pipelines[n]) vk.vkDestroyPipeline(device, pipelines[n], nullptr), pipelines[n] = VK_NULL_HANDLE;
+      ran[n] = false;
       auto info = made<VkComputePipelineCreateInfo>(VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
       info.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT,
                     modules[n], "main", &specialization};
@@ -257,9 +326,11 @@ struct VulkanDevice : GPU::Device {
     return true;
   }
 
-  //The commands recorded by record(commands) run, and waited for; the buffers' bindings written first if a buffer
-  //was made again.
-  template<typename Record> auto submit(const GPU::Parameters& parameters, const Record& record) -> bool {
+  //The commands recorded by record(commands), using the pipelines first to last, run, and waited for; the buffers'
+  //bindings written first if a buffer was made again.
+  template<typename Record>
+  auto submit(const GPU::Parameters& parameters, u32 first, u32 last, const Record& record) -> bool {
+    if(lost) return false;
     std::memcpy(buffers[ParameterBinding].mapped, &parameters, sizeof(parameters));
     if(setStale) {
       VkDescriptorBufferInfo infos[Bindings];
@@ -285,10 +356,18 @@ struct VulkanDevice : GPU::Device {
     vk.vkEndCommandBuffer(commands);
     auto submitInfo = made<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
     submitInfo.commandBufferCount = 1, submitInfo.pCommandBuffers = &commands;
-    if(vk.vkQueueSubmit(queue, 1, &submitInfo, fence) != VK_SUCCESS) return false;
-    bool done = vk.vkWaitForFences(device, 1, &fence, VK_TRUE, ~0ull) == VK_SUCCESS;
+    VkResult submitted = vk.vkQueueSubmit(queue, 1, &submitInfo, fence);
+    if(submitted == VK_ERROR_DEVICE_LOST) return lost = true, false;
+    if(submitted != VK_SUCCESS) return false;
+    bool warm = true;
+    for(u32 n = first; n <= last; n++) warm &= ran[n];
+    VkResult waited = vk.vkWaitForFences(device, 1, &fence, VK_TRUE, warm ? Timeout : FirstTimeout);
+    if(waited == VK_TIMEOUT) return lost = timedOut = true, false;  //(the fence still waited on: left as it is)
+    if(waited == VK_ERROR_DEVICE_LOST) return lost = true, false;
     vk.vkResetFences(device, 1, &fence);
-    return done;
+    if(waited != VK_SUCCESS) return false;
+    for(u32 n = first; n <= last; n++) ran[n] = true;
+    return true;
   }
   auto barrier(VkPipelineStageFlags stage, VkAccessFlags access) -> void {
     auto memory = made<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
@@ -298,7 +377,7 @@ struct VulkanDevice : GPU::Device {
   }
 
   auto draw(const GPU::Parameters& p) -> bool override {
-    return submit(p, [&] {
+    return submit(p, 0, 1, [&] {
       vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[0]);
       vk.vkCmdDispatch(commands, (p.wordsPerTile + 63) / 64, p.tilesAcross * p.tilesDown, 1);
       barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -307,7 +386,7 @@ struct VulkanDevice : GPU::Device {
     });
   }
   auto probe(const GPU::Parameters& p) -> bool override {
-    return submit(p, [&] {
+    return submit(p, 2, 2, [&] {
       vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[2]);
       vk.vkCmdDispatch(commands, (p.probeCount + 63) / 64, 1, 1);
     });

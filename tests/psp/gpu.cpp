@@ -22,9 +22,9 @@ static auto renderer() -> GPU* {
     std::string error = "PSP_GPU=0";
     if(!wanted || std::string(wanted) != "0") gpu = GPU::vulkan(error);
     if(gpu) {
-      std::printf("  on %s; the host's sums %s, the GPU's own fma() %s\n", gpu->device->name().c_str(),
-                  gpu->fused ? "fused (ARM64)" : "rounded step by step",
-                  gpu->nativeFma ? "fused" : "not fused (built)");
+      std::printf("  on %s; the host's sums %s, the GPU's own fma() %s, numbers below the normal floats %s\n",
+                  gpu->device->name().c_str(), gpu->fused ? "fused (ARM64)" : "rounded step by step",
+                  gpu->nativeFma ? "fused" : "not fused (built)", gpu->denormals ? "kept" : "flushed");
     } else {
       std::printf("  skipped: %s\n", error.c_str());
     }
@@ -53,47 +53,88 @@ static auto hostFog(float fog) -> u32 {
 }
 
 //The GPU's exact arithmetic (shaders/exact.glsl) against the host's, on random cases in the ranges the GE uses and
-//past them: products, sums, fused multiply-adds (the GPU's own and built), divisions, sums of three products as the
-//host's compiler rounds them, 64-bit whole numbers to floats, the blend of a triangle's corners, texel axes, fog and
-//depths. Every case must come out the very same bits.
+//past them, to the ends of the floats: products, sums, fused multiply-adds (the GPU's own and built), divisions,
+//sums of three products as the host's compiler rounds them, 64-bit whole numbers to floats, the blend of a
+//triangle's corners, texel axes, fog and depths. Every case must come out the very same bits, but for what the GPU
+//leaves the CPU, or stands in for:
+//  - products and sums below the normal floats, where the GPU doesn't keep those, and a zero's sign (MoltenVK's
+//    fast math has 0 * -x come out +0): they're the GPU's own, and nothing it draws uses them so (depths, fog,
+//    levels and texel axes are the same for either zero);
+//  - fmaExact() and sum3() past 2^-36 to 2^54 (gpu.cpp's take() leaves to the CPU any triangle whose products could
+//    go past what those keep exact), where the GPU doesn't keep numbers below the normal floats with a fused fma();
+//  - a quotient below the normal floats, 2^-100 of its sign on the GPU (divide()), and two not-a-numbers, which
+//    needn't have the same bits.
 static auto gpuArithmetic() -> void {
   auto gpu = renderer();
   if(!gpu) return;
   std::mt19937 random{20261007};
   auto real = [&](float low, float high) { return low + (high - low) * float(random() >> 8) / 16777216.0f; };
-  auto anyFloat = [&] {  //finite, any exponent from 2^-40 to 2^40, either sign
-    u32 bits = (random() & 0x807f'ffff) | (87 + random() % 80) << 23;
-    return floatOf(bits);
+  auto anyFloat = [&] {  //finite, any exponent (below the normal floats too), either sign
+    u32 sign = u32(random()) & 0x8000'0000, fraction = u32(random()) & 0x007f'ffff, exponent = u32(random() % 255);
+    return floatOf(sign | exponent << 23 | fraction);
+  };
+  auto rangeFloat = [&] {  //finite, any exponent from 2^-36 to 2^54, either sign
+    u32 sign = u32(random()) & 0x8000'0000, fraction = u32(random()) & 0x007f'ffff;
+    u32 exponent = u32(91 + random() % 91);
+    return floatOf(sign | exponent << 23 | fraction);
+  };
+  auto below = [](float value) { return value != 0 && std::abs(value) < 0x1p-126f; };
+  auto inside = [](float value) { return value == 0 || (std::abs(value) >= 0x1p-36f && std::abs(value) < 0x1p55f); };
+  auto sameQuotient = [](u32 got, float expected) {
+    if(std::isnan(expected)) return std::isnan(floatOf(got));
+    if(got == bitsOf(expected)) return true;
+    u32 sign = bitsOf(expected) & 0x8000'0000;
+    return expected != 0 && std::abs(expected) <= 0x1p-126f && got == (sign | 0x0d80'0000);
   };
   constexpr u32 Count = 1 << 16;
   //0: a, b, c
   std::vector<u32> cases;
   for(u32 n = 0; n < Count; n++) {
     float a, b, c;
-    switch(n % 4) {
+    switch(n % 5) {
     case 0: a = float(random() % 256), b = float(s32(random() % (1u << 30))), c = float(s64(random()) * 997); break;
-    case 1: a = anyFloat(), b = anyFloat(), c = anyFloat(); break;
+    case 1: a = rangeFloat(), b = rangeFloat(), c = rangeFloat(); break;
     case 2: a = real(1, 2), b = real(1, 2), c = -(a * b) * (1 + real(0, 1.0f / 4096)); break;  //cancelling
-    default: a = real(-65536, 65536), b = real(0.25f, 70000), c = real(-1e6f, 1e6f); break;
+    case 3: a = real(-65536, 65536), b = real(0.25f, 70000), c = real(-1e6f, 1e6f); break;
+    default: {  //anything, now and then a zero or an infinity
+      a = anyFloat(), b = anyFloat(), c = anyFloat();
+      u32 odd = random() % 32;
+      if(odd < 3) (odd == 0 ? a : odd == 1 ? b : c) = random() % 2 ? 0.0f : -0.0f;
+      else if(odd < 5) (odd == 3 ? a : b) = random() % 2 ? INFINITY : -INFINITY;
+      break;
+    }
     }
     cases.insert(cases.end(), {bitsOf(a), bitsOf(b), bitsOf(c), 0, 0, 0, 0, 0});
   }
+  bool keepsBelow = gpu->denormals;
   for(bool native : {gpu->nativeFma, false}) {
     bool wasNative = gpu->nativeFma;
     CHECK(gpu->configure(gpu->fused, native), true);
     auto results = gpu->probe(0, cases);
     CHECK(results.size(), cases.size());
-    u32 wrong[7] = {};
+    u32 wrong[7] = {}, left = 0;
     for(u32 n = 0; n < Count && results.size() == cases.size(); n++) {
       float a = floatOf(cases[n * 8]), b = floatOf(cases[n * 8 + 1]), c = floatOf(cases[n * 8 + 2]);
       volatile float product = a * b, sum = a + c, quotient = a / b;
       float sum3 = a * c + b * a + c * b;  //(as the host's compiler rounds such a sum: raster.cpp's)
       float expected[7] = {product, sum, std::fma(a, b, c), quotient, std::fma(a, b, c), quotient, sum3};
-      for(u32 k : {0u, 1u, 2u, 3u, 4u, 5u, 6u}) wrong[k] += results[n * 8 + k] != bitsOf(expected[k]);
+      auto apart = [&](u32 k) { return results[n * 8 + k] != bitsOf(expected[k]) &&
+                                       !(std::isnan(expected[k]) && std::isnan(floatOf(results[n * 8 + k]))); };
+      bool normal = keepsBelow || !(below(a) || below(b) || below(c));
+      auto zeros = [&](u32 k) { return expected[k] == 0 && floatOf(results[n * 8 + k]) == 0; };
+      if(normal && (keepsBelow || !below(expected[0]))) wrong[0] += apart(0) && !zeros(0);
+      if(normal && (keepsBelow || !below(expected[1]))) wrong[1] += apart(1) && !zeros(1);
+      wrong[2] += apart(2), wrong[3] += apart(3);
+      if((keepsBelow && native) || (inside(a) && inside(b) && inside(c))) {
+        wrong[4] += apart(4), wrong[6] += apart(6);
+      } else {
+        left++;
+      }
+      wrong[5] += !sameQuotient(results[n * 8 + 5], quotient);
     }
     std::printf("  %u cases (fma %s): wrong products %u, sums %u, fmaExact %u, divide %u, sum3 %u (the GPU's own fma "
-                "%u, division %u)\n", Count, native ? "the GPU's" : "built", wrong[0], wrong[1], wrong[4], wrong[5],
-                wrong[6], wrong[2], wrong[3]);
+                "%u, division %u; %u past fmaExact's range)\n", Count, native ? "the GPU's" : "built", wrong[0],
+                wrong[1], wrong[4], wrong[5], wrong[6], wrong[2], wrong[3], left);
     for(u32 k : {0u, 1u, 4u, 5u, 6u}) CHECK(wrong[k], 0u);
     CHECK(gpu->configure(gpu->fused, wasNative), true);
   }
@@ -338,9 +379,19 @@ static auto gpuDrawsAsSoftware() -> void {
                    : kind == GE::Triangles ? 3 * (1 + below(3)) : kind == GE::Points ? 1 + below(6) : 4 + below(3);
       u32 at = Vertices;
       u32 one = chance(30) ? (chance(50) ? 0xffff'ffff : u32(random())) : 0;
+      //Now and then a 3D primitive's floats past the range where the GPU's arithmetic is exact (gpu.cpp's take()
+      //leaves those triangles to the CPU): texture coordinates of one size and sign at every corner, below the
+      //normal floats a third of the time (where the host's blends of them come out below the normal floats too, and
+      //a negative one is in the texture's last column, wrapped); and its w scaled by up to 2^48 either way (its
+      //positions and the projection's last column alike, so that it draws where it would have).
+      bool wild = !flat && chance(8);
+      float scale = wild && chance(50) ? std::ldexp(1.0f, s32(below(97)) - 48) : 1.0f;
+      u32 wildSign = u32(random()) & 0x8000'0000, wildExponent = chance(30) ? 0 : below(201);
+      auto wildFloat = [&] { return floatOf(wildSign | wildExponent << 23 | (u32(random()) & 0x007f'ffff)); };
       for(u32 k = 0; k < vertices; k++) {
         float u = flat ? real(-4, float(4 << widthBits)) : real(-0.2f, 1.3f);
         float v = flat ? real(-4, float(4 << heightBits)) : real(-0.2f, 1.3f);
+        if(wild) u = wildFloat(), v = wildFloat();
         u32 color = one ? one : chance(20) ? 0xffff'ffff : u32(random());
         float normal[3], position[3];
         for(auto& value : normal) value = real(-1, 1);
@@ -353,6 +404,7 @@ static auto gpuDrawsAsSoftware() -> void {
           position[2] = real(-4, -0.6f);
           position[0] = real(-1.3f, 1.3f) * -position[2];
           position[1] = real(-1.3f, 1.3f) * -position[2];
+          for(auto& value : position) value *= scale;
         }
         for(System* s : {&software, &hardware}) {
           u32 to = at;
@@ -366,7 +418,9 @@ static auto gpuDrawsAsSoftware() -> void {
       for(System* s : {&software, &hardware}) {
         s->ge.commands[GE::VertexType] = 0x1ff | (flat ? 1 << 23 : 0);
         s->ge.vertexAddress = Vertices;
+        s->ge.projection[14] = f24(-10.0f / 9.5f * scale);
         s->ge.primitive(kind, vertices);
+        s->ge.projection[14] = f24(-10.0f / 9.5f);
       }
       auto& c = software.ge.commands;
       char text[160];
@@ -412,15 +466,18 @@ static auto gpuDrawsAsSoftware() -> void {
   auto& after = gpu->statistics;
   u64 gpuJobs = after.gpuJobs - before.gpuJobs, cpuJobs = after.cpuJobs - before.cpuJobs;
   std::printf("  %u batches: %u apart, %u of %u pixels apart; the GPU drew %llu jobs, the CPU %llu (lines %llu, 3D "
-              "sprites' texels %llu, 2D coordinates %llu) in %llu runs\n", batches, differing, pixelsApart, pixels,
-              (unsigned long long)gpuJobs, (unsigned long long)cpuJobs,
+              "sprites' texels %llu, 2D coordinates %llu, past the exact range %llu) in %llu runs\n", batches,
+              differing, pixelsApart, pixels, (unsigned long long)gpuJobs, (unsigned long long)cpuJobs,
               (unsigned long long)(after.lines - before.lines),
               (unsigned long long)(after.spriteTexels3D - before.spriteTexels3D),
               (unsigned long long)(after.coordinates2D - before.coordinates2D),
+              (unsigned long long)(after.pastRange - before.pastRange),
               (unsigned long long)(after.runs - before.runs));
   CHECK(differing, 0u);
   CHECK(software.memory.vram == hardware.memory.vram, true);
-  CHECK(gpuJobs > 4 * cpuJobs, true);
+  u64 pastRange = after.pastRange - before.pastRange;
+  CHECK(gpuJobs > 4 * (cpuJobs - pastRange), true);  //(the wild primitives' triangles aside)
+  CHECK(pastRange > 0, true);
   hardware.ge.renderer = nullptr;
 }
 
@@ -463,11 +520,76 @@ static auto gpuSamples() -> void {
   }
 }
 
+//A GPU lost at its first run (as the driver's VK_ERROR_DEVICE_LOST, or a run that never ends, has it): the jobs it
+//was given, and every batch after, drawn by the software renderer just the same, nothing more run on it, and the loss
+//said once. A pretend device: no GPU needed.
+static auto gpuLost() -> void {
+  struct Lost : GPU::Device {
+    std::vector<u8> memory = std::vector<u8>(Memory::VRAMSize);
+    std::vector<u32> recordWords, texelWords = std::vector<u32>(GPU::TexelWords), binWords;
+    u32 runs = 0;
+    auto name() const -> std::string override { return "pretend"; }
+    auto vram() -> u8* override { return memory.data(); }
+    auto records(u32 words) -> u32* override { return recordWords.resize(std::max<size_t>(recordWords.size(), words)),
+                                                      recordWords.data(); }
+    auto texels() -> u32* override { return texelWords.data(); }
+    auto bins(u32 words) -> u32* override { return binWords.resize(std::max<size_t>(binWords.size(), words)),
+                                                   binWords.data(); }
+    auto configure(bool, bool) -> bool override { return true; }
+    auto draw(const GPU::Parameters&) -> bool override { return runs++, lost = true, false; }
+    auto probe(const GPU::Parameters&) -> bool override { return false; }
+  };
+  auto device = std::make_unique<Lost>();
+  auto& pretend = *device;
+  GPU gpu(std::move(device));
+  u32 reports = 0;
+  gpu.report = [&](const std::string&) { reports++; };
+  constexpr u32 Vertices = 0x0896'0000;
+  System software, hardware;
+  hardware.ge.renderer = &gpu;
+  for(System* s : {&software, &hardware}) {
+    auto& c = s->ge.commands;
+    c[GE::FrameBufferPointer] = 0, c[GE::FrameBufferWidth] = 64, c[GE::FrameBufferPixelFormat] = 3;
+    c[GE::Region2] = 1023 << 10 | 1023;
+    c[GE::Scissor2] = 63 | 39 << 10;
+    c[GE::VertexType] = 0x1ff | 1 << 23;  //(as gpuDrawsAsSoftware()'s: u, v, color, normal, position; 2D)
+  }
+  std::mt19937 random{20261009};
+  for(u32 batch = 0; batch < 3; batch++) {
+    hardware.ge.drawing.deferring = true;
+    for(u32 primitive = 0; primitive < 4; primitive++) {
+      u32 color = u32(random());
+      float corners[2][2] = {{float(random() % 48), float(random() % 30)}, {0, 0}};
+      corners[1][0] = corners[0][0] + 1 + random() % 16, corners[1][1] = corners[0][1] + 1 + random() % 10;
+      for(System* s : {&software, &hardware}) {
+        u32 to = Vertices;
+        for(auto& corner : corners) {
+          for(float value : {0.0f, 0.0f}) s->memory.write(4, to, bitsOf(value)), to += 4;
+          s->memory.write(4, to, color), to += 4;
+          for(float value : {0.0f, 0.0f, 1.0f, corner[0], corner[1], 0.0f}) {
+            s->memory.write(4, to, bitsOf(value)), to += 4;
+          }
+        }
+        s->ge.vertexAddress = Vertices;
+        s->ge.primitive(GE::Sprites, 2);
+      }
+    }
+    hardware.ge.drawing.deferring = false;
+    hardware.ge.launch(true);
+  }
+  CHECK(software.memory.vram == hardware.memory.vram, true);
+  CHECK(pretend.runs, 1u);
+  CHECK(reports, 1u);
+  CHECK(gpu.statistics.lostJobs, u64(8));
+  hardware.ge.renderer = nullptr;
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu arithmetic against the host", gpuArithmetic},
     {"gpu batches against the software renderer", gpuDrawsAsSoftware},
     {"gpu samples against the software renderer", gpuSamples},
+    {"gpu lost: the software renderer draws instead", gpuLost},
   };
 }
 
