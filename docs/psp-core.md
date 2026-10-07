@@ -4958,3 +4958,27 @@ software renderer's pixels and needs `psp measure` against the owner's PSP first
 **Next**: textures and transfers on the GPU, and finishing only what's read (so CPU and GPU overlap); dispatching
 only tiles with jobs, fewer and larger runs, a coarse bin level; 32-bit edges; occupancy (registers, workgroup
 shape). Then upscaling.
+
+**The last steps, and the stop** (commits `8472b345a`, `ff99df19a`). The runs are now timed by the GPU's own
+timestamps, both written at the bottom of the pipe: written at its top, a run queued behind another counted the
+other's time too, so the figures above are high (the M1's Liberty City Stories is 17.5 ms a frame, not 22). Timed
+right, on the Adreno (ms a frame, Liberty City Stories and Midnight Club 3): launching the runs with nothing in them
+0.15 and 0.35, binning 1.9 and 3.6, VRAM's words 2.6 and 5.2, gathering and staging 10.9 and 16.9, coverage 23.4
+and 31.8, all of it 75-83 and 97-113. So the fixed costs are small and most of the time is the pixels' own work.
+With the GPU drawing nothing, the host ran Liberty City Stories at 35 frames a second and Midnight Club 3 at 18.5,
+below seven software threads (49 and 24): the CPU's side of the GPU path was a limit as well. Then, each exact:
+- **Specialized shaders** (a pipeline for each class of state in a run): no faster (the heavy runs need 8 of the 10
+  classes and compiled to 25,000 instructions with 18% of the processors busy, like the single shader) and 1.3 to
+  1.7 s to build each. Dropped.
+- **Tiles with jobs only**: the empty tiles are a few in a hundred in five of the six scenes, under 1 ms. Not built.
+  A tile's bin words loaded together into shared memory, and the edges from a tile's corner in 32 bits: no change
+  on the RP6 (75-76 ms a frame against 75-83). Not committed; the tests gained runs of 18,147 jobs.
+- **The software renderer without fused multiply-adds** (`-ffp-contract=off`): tests/psp's 313 groups pass either
+  way and `psp measure`'s comparison with rounds 2 and 3 (`ge-round3`'s 90 files) is identical line for line, so
+  the PSP is matched no better and no worse. The GPU gains nothing on the Adreno or the M1, whose own `fma()` is
+  fused: drawn rounding every step apart, the Adreno took 77 ms a frame in Liberty City Stories (77 fused) and 95 in
+  Midnight Club 3 (99). Not adopted.
+
+The owner then changed the GPU renderers' direction (2026-10-07): a hardware renderer, the GPU's own rasterizer,
+texture units and blending, as accurate as hardware allows, with the software renderer staying the exact mode. This
+compute renderer stops here; part 36 (another branch) is the new one.

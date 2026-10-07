@@ -412,6 +412,11 @@ against the owner's PSP with `psp measure` first):
 - **Reciprocals per primitive**: 1/w per corner and 1/total per triangle, then multiplications per pixel. Fewer
   divisions on both sides; it changes pixels slightly, so it also needs `psp measure`.
 
+**Stopped** (part 35's end): timed by GPU timestamps at the bottom of the pipe, the fixed costs are small and the
+pixels' own work is most of the Adreno's 75-113 ms a frame; specialized shaders, tiles with jobs only and shared
+bin words were no faster; the software renderer without fused multiply-adds matches the PSP identically and speeds
+no GPU up. The owner moved the GPU renderers to the GPU's own rasterizer (2026-10-07).
+
 ## Upscaling (designed, not built)
 
 The owner's decision: an internal resolution factor N (2x to 8x and more) inside the same compute renderer, as

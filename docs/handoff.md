@@ -46,6 +46,12 @@ headroom for upscaling; upscaling as an internal resolution factor, exact at 1x)
   `psp measure`): no fused multiply-adds on the host; fixed-point interpolation if the PSP does that.
 - Scratch benchmark tools live outside the repository (`/tmp/psp-gpu-bench`); the scene `lcs-city` is Liberty City
   Stories at a park's edge, not a street.
+- **Stopped** (the owner's new direction, 2026-10-07: a hardware renderer instead): `8472b345a` times runs by GPU
+  timestamps at the bottom of the pipe (the earlier figures double-counted queued runs; the fixed costs are small,
+  the pixels' work is most of the Adreno's 75-113 ms a frame); `ff99df19a` tests runs of thousands of jobs.
+  Specialized shaders, tiles with jobs only and shared bin words were no faster (not committed). The software
+  renderer without fused multiply-adds matches the PSP identically (`psp measure`, rounds 2 and 3) and speeds no
+  GPU up: not adopted. Part 35's end has the figures.
 
 ## PSP core: the GPU renderers designed, and a Vulkan prototype — 2026-10-07
 
