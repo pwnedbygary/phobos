@@ -868,6 +868,39 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the GE faster again, four pixels at a time — 2026-10-07
+
+Branch `cursor/psp-ge-speed2-2b67`, on top of `cursor/psp-ge-features-2b67` (#157, the entry below): seven commits,
+5a22092a0 to 1e63ea36a, then the docs; local only, not pushed. docs/psp-core.md, part 30, describes it. The owner's
+priority: the software renderer as fast as humanly possible, every picture the same. Original code; no PPSSPP or
+JPCSP source read.
+- **What:** triangles' and sprites' rows drawn four pixels at a time in SIMD lanes (`ares/psp/ge/four.cpp`: GCC's and
+  Clang's vector types, NEON on ARM64, SSE on x86-64), each lane the scalar arithmetic exactly (the same float
+  expressions with a vector in every product, so ARM64's fused multiply-adds fall as before), the depth test before
+  the texture (exact without the stencil test); textures decoded a row at a time and the palette's hash 8 bytes at a
+  time; jobs a union of their kinds (584 to 256 bytes) and directional lights once a primitive; textures read as drawn
+  (drawing over themselves) read straight from the host's memory; a vertex's depth flags once a vertex.
+- **Found by ThreadSanitizer and fixed** (its own commit): a row's partial four wrote back its outside lanes' bytes,
+  another row's where a stride is within three pixels of the width drawn; such fours now touch only their own lanes.
+- **Speed** (host M1, the Android build's flags, 300 frames a scene, best of 3, part 29's and this taking turns; 1 GE
+  thread and 7): MC3 night race 11.6 -> 27.8 and 26.6 -> 40.9 fps, its profile menu 11.6 -> 32.0 and 29.0 -> 51.7, LCS
+  in the city 29.0 -> 77.5 and 75.8 -> 131.5, LCS in the woods 20.6 -> 47.4 and 60.7 -> 108.2, Peace Walker's title
+  29.2 -> 106.2 and 135.2 -> 487.9, Lumines' demo 59.0 -> 111.9 and 197.7 -> 341.8. On the RP6 (part 29's app put back
+  for "before", data kept): MC3's menu 21-23 -> 36-37 fps, its race 17-19 -> 30-34 (the Quick Race differs run to
+  run); Peace Walker, Lumines, LCS's intro 60 -> 60. At 7 threads the GE's own thread is the limit now.
+- **Same pixels:** six scenes (MC3 race and menu, LCS city and woods, Peace Walker's title, Lumines' demo): every
+  frame's picture and VRAM and RAM at the end identical to part 29's at 1 and 7 threads; part 24's differential fuzzer
+  against part 29's GE (thousands of lists, 1-8 threads, ASan/UBSan and TSan); new group "draw3d four pixels at a time
+  against one" (20,000 random primitives, fours on and off; 19 broken versions caught); tests/psp 282 groups with both
+  sanitizers ("psp measure" the same line for line), tests/psp/ares 290 checks.
+- **Dropped:** handing batches over at 2^17-2^18 pixels of work, workers spinning before sleeping (no gain: the GE's
+  own thread is the longest path at 7 threads).
+- **Next:** the GE's thread (the CPU's emulation most of it, then vertex setup: 117,000 vertices a frame in MC3's
+  race), four at a time for textures drawn over themselves where provably safe, shorter waits for render targets read
+  back.
+- Scratch, outside the repository: `/tmp/ge2-bench` (runner, states, scripts, profiles), `/tmp/ge2-fuzz`,
+  `/tmp/ge2-mut` (broken versions), `/tmp/ge2-device` (RP6 screenshots and stats).
+
 ## PSP core: lines, bounding boxes, DXT textures and sceGeBreak — 2026-10-06
 
 Branch `cursor/psp-ge-features-2b67`, on top of `cursor/psp-hle-games5-2b67` (#156, the entry below): commits
