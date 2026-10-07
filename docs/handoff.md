@@ -52,6 +52,16 @@ OpenGL renderers for speed, as accurate as possible.
 - **Checks**: tests/psp 294 groups with ASan and UBSan, tests/psp/ares 294 checks, none failed.
 - **Next**: lines and 3D sprites' texels; textures and transfers on the GPU; VRAM resident with read-back on demand;
   the OpenGL backend; then the setting, Software the default.
+- **After review** (a further commit on the branch; part 34's "After review"): the GPUs flush numbers below the
+  normal floats, which the probes never reached. `divide()` is now exact for any operands (significands divided,
+  exponents added; below the normal floats, 2^-100 of the sign); `take()` leaves triangles whose floats could take
+  the three-product sums below them to the CPU (depth, fog, u, v, q 0 or 2^-40 to 2^40; w 2^-32 to 2^32); a start-up
+  probe finds whether the GPU keeps them; `DenormPreserve 32` where a device offers it. Probes cover every exponent;
+  the random batches have wild coordinates and w. A run's wait is two seconds at most (a pipeline's first, a
+  minute), after which the GPU counts as lost and the CPU draws on (said once; a pretend-device test). Also
+  `probe()`'s null check, `hostFuses()`'s note on matching floating-point flags, and `compile.sh --check` comparing
+  fresh SPIR-V with `shaders.hpp`. M1, RP6 and Mesa's lavapipe (Docker): all exact again. Checks: tests/psp 295
+  groups (ASan, UBSan), tests/psp/ares 294 checks, none failed.
 
 ## PSP core: movies through scePsmf and scePsmfPlayer, in a clean room — 2026-10-07
 

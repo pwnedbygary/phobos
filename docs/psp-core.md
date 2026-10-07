@@ -4336,6 +4336,41 @@ Homebrew's loader on macOS by `DYLD_FALLBACK_LIBRARY_PATH` (`run-tests.sh` sets 
 **Checks**: tests/psp 294 groups with the address and undefined-behavior sanitizers (the GPU groups on the M1),
 tests/psp/ares 294 checks, none failed; the comparison with the owner's PSP ("psp measure") as before.
 
+**After review** (the same day; the design's "Exactness" has the details). The independent review found one real
+gap and four smaller things:
+- **Numbers below the normal floats.** The M1 and the Adreno 740 flush them to zero (neither offers Vulkan's
+  `shaderDenormPreserveFloat32`); the host keeps them; the probes' ranges (2^-40 to 2^40) never went there. The
+  review's cases (`1e-20 * 1e-20`, `divide(1e-39, 3)`, a normal quotient whose correction's remainder was flushed, a
+  blend of -1e-36's coming out -0, so texel 0 where the host has the last) were all real. Now `divide()` divides the
+  significands (read from the bits) and puts the exponents' difference on the result: exact for any operands
+  wherever the host's quotient is a normal float, and 2^-100 of its sign (or zero, as the host's rounds) below,
+  which every user of a quotient takes as the host's value. The sums of three products need their products normal,
+  and the built fma its error terms too, so `take()` leaves to the CPU any triangle with a depth, fog, u, v or q
+  other than 0 outside 2^-40 to 2^40, or a w outside 2^-32 to 2^32 (`exactRange()` works out why that's enough,
+  however the products cancel; the review's 2^-60 to 2^60 isn't, since a near cancellation can still go below).
+  `detect()` probes whether the GPU keeps such numbers; one that does, with a fused `fma()` of its own, needs only
+  the upper bounds and w's. Where a device has float controls with `shaderDenormPreserveFloat32`, its shaders get
+  `DenormPreserve 32` (`SPV_KHR_float_controls`), three instructions put into the SPIR-V as it's loaded
+  (`keepingDenormals()`; checked with `spirv-val`, as neither GPU here offers it).
+- **Tests.** The probes cover every exponent, numbers below the normal floats, zeros and infinities (products and
+  sums below the normal floats, and a zero's sign, which MoltenVK's fast math loses in `0 * -x`, are the GPU's own
+  and only counted where it keeps them; `fmaExact()` and `sum3()` are checked inside 2^-36 to 2^54, the bounds' own
+  range). The random batches now give an eighth of their 3D primitives texture coordinates of one size and sign at
+  every corner (below the normal floats a third of the time) and w scaled by up to 2^48 either way: 512 triangles go
+  to the CPU, and without the bounds one pixel comes out apart on the M1 (that coordinate's texel).
+- **A GPU that stops answering.** A run's fence is waited on for two seconds, not forever (a pipeline's first
+  run, a minute: Mesa's lavapipe compiles the shader then, in five and a half seconds, which the first try at two
+  seconds took for a hang); that, or `VK_ERROR_DEVICE_LOST`, marks the device lost (`Device::lost`), and every job
+  after is the software renderer's, said once (`GPU::report`, else stderr). A new group, "gpu lost", checks it with
+  a pretend device (no GPU needed).
+- `probe()` returns nothing where a buffer can't grow; `hostFuses()` says that `gpu.cpp` must be compiled with the
+  GE's floating-point flags (it finds out how its own file was compiled, raster.cpp is in ge.cpp); and `compile.sh
+  --check`, with glslang around, compiles `shaders.hpp` again and compares it byte for byte (a SPIR-V word edited by
+  hand fails).
+- On the M1 and the RP6: every probe exact over the wider ranges, the 2,500 batches 0 pixels apart, the samples the
+  same, the lost GPU's fallback right. Also on Mesa's lavapipe (a CPU's Vulkan: Ubuntu 24.04 in Docker, clang,
+  `PSP_GPU_ON_CPU=1`), which keeps numbers below the normal floats but has no fused `fma()`: the same.
+
 **Next** (the design's plan): lines and 3D sprites' texels on the GPU; textures, palettes and transfers decoded on
 the GPU from its own VRAM; VRAM kept on the GPU, read back on demand through the drawing threads' protocol, the GPU
 working while the CPU runs on; then the OpenGL backend over the same shaders; then the setting ("PSP Renderer:

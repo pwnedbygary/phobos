@@ -88,7 +88,9 @@ Vulkan, and the same GLSL as text for OpenGL, which the driver compiles when the
 kept in the repository, as paraLLEl-RDP keeps its `slangmosh.hpp`, and records the SHA-256 of the GLSL it came from;
 `compile.sh --check` (which `tests/psp/run-tests.sh` runs, so CI runs it) compares that with the sources as they are,
 needing no compiler, so a change to the GLSL without running `compile.sh` fails the tests. With glslang around, the
-check also compiles the GLSL as Vulkan's, OpenGL ES 3.20's and desktop OpenGL 4.30's compute shaders. Why not compile
+check also compiles the GLSL as Vulkan's, OpenGL ES 3.20's and desktop OpenGL 4.30's compute shaders, makes
+`shaders.hpp` again and compares it with the kept one byte for byte (glslang's output is the same from run to run),
+so a hand edit to the SPIR-V fails too. Why not compile
 at build time: the desktop builds and CI (Ubuntu, MSYS2, macOS) have no shader compiler, and requiring one there for
 one renderer isn't worth it; the Android NDK has `glslc`, but two ways of making the SPIR-V would make two programs.
 Kept SPIR-V is the same on every platform, and reviewable as a diff of the GLSL beside it. OpenGL can't take SPIR-V
@@ -122,9 +124,13 @@ the CPU rounds it:
   ARM64 host, 4,499 of 6.4 million pixels of the random batches come out a level apart.
 - **Division.** Vulkan lets a GPU's division be 2.5 units in the last place off. Measured on 65,536 random quotients:
   the Adreno 740's is off in 28% of them, the M1's (MoltenVK, whose default is fast math) in 31%, and exact only with
-  MoltenVK's fast math turned off. `divide()` takes the GPU's quotient, corrects it once from its exact remainder (an
-  `fma`), then picks, of it and its two neighbours, the one whose remainder is least, the even one on a tie: the
-  correctly rounded quotient, whatever the GPU's division does (0 wrong on both). Without it, 13,194 of the random
+  MoltenVK's fast math turned off. `divide()` divides the two significands (1 to 2, read from the floats' bits, so
+  numbers below the normal floats too): the GPU's quotient, corrected once from its exact remainder (an `fma`), then,
+  of it and its two neighbours, the one whose remainder is least, the even one on a tie. The exponents' difference
+  then goes on the exponent, which leaves the bits the host's wherever its quotient is a normal float, for any
+  operands (0 wrong on both GPUs, to the ends of the floats). Where the host's quotient is below the normal floats,
+  what's drawn depends only on its sign and whether it's zero (a texel axis's floor, a depth, fog, a level), so the
+  GPU gives 2^-100 of its sign, or zero where the host's rounds to zero. Without `divide()`, 13,194 of the random
   batches' 6.4 million pixels are apart on the M1.
 - **Conversions**: 64-bit edge functions to floats rounded to the nearest (ties to even) by hand; floats to whole
   numbers held as ARM64 holds them; floor() of numbers below the normal floats (which GPUs may take for zero) as the
@@ -148,9 +154,19 @@ the CPU rounds it:
 - Lines aren't ported yet (the same arithmetic as triangles with two weights; next).
 - A texture a primitive draws over while reading it: the software renderer reads texels as it draws (texture.cpp),
   an order only one thread can follow; such primitives stay the software renderer's.
-- Numbers below the normal floats: GPUs may flush them to zero (Vulkan's float controls can keep them where a GPU
-  offers that). The GE's values never come near them but in garbage geometry; the probes found the one place it
-  showed (a texel axis's floor) and the shaders handle it.
+- **Numbers below the normal floats.** GPUs may flush them to zero: the M1 (MoltenVK) and the Adreno 740 both do,
+  and neither offers Vulkan's float controls to keep them (`shaderDenormPreserveFloat32`). The host keeps them. A
+  texel axis's floor reads them from the bits; divisions are exact at any size (above). What's left is `sum3()`,
+  the sums of three products: exact only while no product, nor what its rounding leaves out, falls below the normal
+  floats (the built `fma()`'s error-free steps need that too, even on a GPU that keeps them). So `take()` leaves to
+  the software renderer any triangle with a depth, fog, u, v or q other than 0 outside 2^-40 to 2^40, or a w outside
+  2^-32 to 2^32 (`exactRange()`, which works the bounds out: every product is then 0 or at least 2^-72 and every sum
+  0 or a normal float, however near its products cancel). On a GPU that keeps them, found so by a probe at start-up
+  (`detect()`), and whose own `fma()` is fused, only the upper bounds and w's apply. Where a device offers float
+  controls, the shaders run with `DenormPreserve 32` (`SPV_KHR_float_controls`), put into the SPIR-V as it's loaded.
+  Games' floats are far inside the bounds; random batches with coordinates of every size and w scaled by up to
+  2^48 either way draw the same, and without the bounds they don't (one pixel of 6.4 million on the M1: a negative
+  coordinate below the normal floats, the texture's last column on the CPU and its first on the GPU).
 - A host whose compiler fuses in yet another way (GCC's `-ffp-contract=fast` may fuse across statements):
   `hostFuses()` says so and the renderer refuses to start, as the GPU couldn't follow.
 - Hosts differ already: the software renderer on x86-64 draws a few pixels differently from ARM64 (part 24). The GPU
@@ -179,6 +195,19 @@ each, the GPU drawing every job of them. On the M1, fifteen scenes of the owner'
 attract modes, Midnight Club 3's night city, Liberty City Stories in the woods), 20 to 30 frames each: 100% of
 pixels, and all of VRAM, the same, the GPU drawing all but a few hundred jobs (lines, and Peace Walker's and Midnight
 Club 3's textured 3D sprites).
+
+**After review** (the same day). An independent review found the exactness held only for normal floats: the GPUs
+flush numbers below them, and the probes' ranges (2^-40 to 2^40) never reached there. Now: `divide()` works on the
+significands and is exact for any operands; `take()` leaves triangles whose floats could take `sum3()` below the
+normal floats to the CPU (bounds worked out above, tighter than the review's suggested 2^-60 to 2^60, which a near
+cancellation could still get under); a start-up probe finds whether the GPU keeps them, and Vulkan's float controls
+are used where offered; the probes cover every exponent, numbers below the normal floats, zeros and infinities, and
+the random batches have wild coordinates and w. Also: a run's wait is two seconds at most (a minute for a
+pipeline's first), after which the device counts as lost (the software renderer draws on, said once; a test with a
+pretend device checks it); `probe()` checks its buffers; `hostFuses()` says why `gpu.cpp` must be compiled with the
+GE's floating-point flags; and `compile.sh --check` compares freshly compiled SPIR-V with `shaders.hpp`. On the M1
+and the RP6, every probe is exact again and the batches and samples draw the same; so on Mesa's lavapipe (Ubuntu
+24.04 in Docker, clang, `PSP_GPU_ON_CPU`), the one GPU here that keeps numbers below the normal floats.
 
 ## VRAM: the PSP's and the GPU's copies
 
@@ -230,7 +259,11 @@ renderer's decoded copies.
   machine without it just has no GPU renderer. Its device functions come from its own table, not volk's globals,
   which the N64's paraLLEl-RDP uses. Buffers in memory both the host and the GPU see (the GPU's own where it has one
   memory), mapped for good. Specialization constants carry the host's rounding and whether the GPU's `fma()` is
-  fused. On Apple, MoltenVK (Vulkan on Metal) is a "portability" implementation, which the instance asks for.
+  fused. On Apple, MoltenVK (Vulkan on Metal) is a "portability" implementation, which the instance asks for. Each
+  run is waited for at most two seconds (a pipeline's first, a minute: a driver may compile the shader only then,
+  as Mesa's lavapipe does, taking five and a half); a run that takes longer, or the driver's
+  `VK_ERROR_DEVICE_LOST`, marks the device lost (`Device::lost`): the software renderer draws every job from then
+  on, and the renderer says so once (`GPU::report`, which the program points at its log).
 - **OpenGL** (next): OpenGL ES 3.2 on Android (the RP6's Adreno 740 has it), desktop OpenGL 4.3 elsewhere; the same
   four storage buffers and uniform block (`glBindBufferBase`), the GLSL from `shaders.hpp` after its `#version` and
   `#define`s of the constants, `glDispatchCompute`, `glMemoryBarrier`, and fences (`glFenceSync`) to wait. Buffers
