@@ -284,10 +284,13 @@ auto Kernel::savedata(u32 p) -> u32 {
   case 22: {  //the size mode: the memory stick's free space, and what the files the game lists would take
     //(A PspUtilitySavedataSizeInfo at 1532, in the larger structure alone: how many secure and normal files, where
     //each list of them is (a 64-bit size and a 16-byte name each), then the "sector" size, the free sectors, KiB and
-    //their text, and the KiB and text for saving them new and over a save. pspautotests' utility/savedata/getsize
-    //recorded the free space written, a 32 KiB cluster to a sector, and with no files listed the rest left as it
-    //was. Chosen: a listed file takes its size in whole clusters, newly or over a save alike; the answer is 0, the
-    //save being there or not, as a game asks before its first save.)
+    //their text, and the KiB and text still needed beyond the free space to save them new and over a save, as
+    //pspsdk's neededKB and overwriteKB name them. pspautotests' utility/savedata/getsize recorded the free space
+    //written, a 32 KiB cluster to a sector, and with no files listed the rest left as it was. Chosen: a listed file
+    //takes its size in whole clusters, newly or over a save alike; what's needed is what they take past the free
+    //space, 0 for anything a game saves on this stick, its text written only when something is needed (left as it
+    //was otherwise, as the recording leaves what has nothing to say); the answer is 0, the save being there or not,
+    //as a game asks before its first save.)
     u32 info = memory.read(4, p) >= 1536 ? memory.read(4, p + 1532) : 0;
     if(!info || !memory.reaches(info, 60)) return 0;
     memory.write(4, info + 16, StickClusterSize);
@@ -304,11 +307,15 @@ auto Kernel::savedata(u32 p) -> u32 {
       }
     }
     if(files) {
-      u32 kilobytes = std::min<u64>(clusters * (StickClusterSize / 1024), 0x7fff'ffff);
-      memory.write(4, info + 36, kilobytes);
-      stickText(info + 40, kilobytes);
-      memory.write(4, info + 48, kilobytes);
-      stickText(info + 52, kilobytes);
+      u64 kilobytes = clusters * (StickClusterSize / 1024);
+      u64 free = u64(StickFreeClusters) * (StickClusterSize / 1024);
+      u32 shortfall = std::min<u64>(kilobytes > free ? kilobytes - free : 0, 0x7fff'ffff);
+      memory.write(4, info + 36, shortfall);
+      memory.write(4, info + 48, shortfall);
+      if(shortfall) {
+        stickText(info + 40, shortfall);
+        stickText(info + 52, shortfall);
+      }
     }
     return 0;
   }

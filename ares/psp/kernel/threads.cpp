@@ -754,7 +754,8 @@ auto Kernel::sceKernelSignalSema() -> void {
   if(found == semaphores.end()) return result(ErrorUnknownSemaphore);
   auto& semaphore = found->second;
   s32 count = s32(arg(1));
-  if(count <= 0 || semaphore.count + count > semaphore.maximum) return result(ErrorSemaphoreOverflow);
+  //(in 64 bits: a semaphore may hold any count, so the sum can pass what 32 hold)
+  if(count <= 0 || s64(semaphore.count) + count > semaphore.maximum) return result(ErrorSemaphoreOverflow);
   semaphore.count += count;
   result(0);
   signalSemaphores(semaphore);

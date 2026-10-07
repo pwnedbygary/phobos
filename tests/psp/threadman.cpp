@@ -1,8 +1,8 @@
 //The thread manager's reports (ares/psp/kernel/threads.cpp, events.cpp, display.cpp): a thread's status and run
 //status (sizes, the SDK's rule, exit statuses, the run figures counted as threads run, are interrupted, preempted and
-//released), the lists of the thread manager's objects by kind and an object's kind, the status structures' size
-//words, the lightweight mutex's status, the display's accumulated count of lines adjusted, and blanks waited for by
-//count; as pspautotests' threads/threads (refer, threadend, exitstatus, threadmanidlist, threadmanidtype),
+//released, and a handler ending the game), the lists of the thread manager's objects by kind and an object's kind,
+//the status structures' size words, the lightweight mutex's status, the display's accumulated count of lines
+//adjusted, and blanks waited for by count; as pspautotests' threads/threads (refer, threadend, exitstatus, threadmanidlist, threadmanidtype),
 //threads/events/refer, threads/semaphores/refer, threads/lwmutex (refer, create, unlock), display/hcount and
 //display/vblankmulti recorded on a PSP. Programs run on both engines; each group's machine, saved at its end, loads
 //into another that makes the same state.
@@ -210,6 +210,34 @@ static auto runFigures() -> void {
   }
 }
 
+//A vertical blank's handler ending the game while main spins: main's time is counted once, up to the blank (about
+//16.7 ms, no more than has passed), the handler's not counted as its own, and the state saved after loads.
+static auto handlerExits() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    Assembler handler{m, 0x0880'3000};
+    handler.call("sceKernelExitGame");
+    handler.put(jr(ra));
+    handler.put(nop);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, 30); main.li(a1, 0); main.li(a2, 0x0880'3000); main.li(a3, 0);
+    main.call("sceKernelRegisterSubIntrHandler");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelEnableSubIntr");
+    spin(main, 100'000);
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency / 10);
+    CHECK(m.kernel.exited, true);
+    CHECK(m.kernel.threads.size(), 1);
+    auto& thread = *m.kernel.threads.begin()->second;
+    u64 millisecond = Kernel::CPUFrequency / 1000;
+    CHECK(thread.runCycles <= m.kernel.cycles, true);
+    CHECK(thread.runCycles > 16 * millisecond && thread.runCycles < 17 * millisecond, true);
+    CHECK(thread.interruptPreempts, 1);
+    CHECK(roundTrip(m), true);
+  }
+}
+
 //sceKernelGetThreadmanIdList and sceKernelGetThreadmanIdType, as threads/threads/threadmanidlist and threadmanidtype
 //recorded. One object of each kind (two semaphores), each listed by its kind in the order it was made, and threads by
 //state: dormant, sleeping, delaying, suspended (a ready one). Kinds 9 and 14 are taken and list nothing here; 0, 15,
@@ -331,6 +359,14 @@ static auto statusSizes() -> void {
     CHECK(odd < 0x8000'0000 && m.kernel.semaphores[odd].count == initial, true);
     CHECK(m.kernel.semaphores[odd].maximum, maximum);
   }
+  //signalled past its largest by a count whose sum passes 32 bits: refused, the count kept (not wrapped round)
+  u32 nearly = m.call("sceKernelCreateSema", {m.string("nearly"), 0, 1, 2, 0});
+  CHECK(m.call("sceKernelSignalSema", {nearly, 0x7fff'ffff}), Kernel::ErrorSemaphoreOverflow);
+  CHECK(m.kernel.semaphores[nearly].count, 1);
+  u32 full = m.call("sceKernelCreateSema", {m.string("full"), 0, 0x7fff'fffe, 0x7fff'ffff, 0});
+  CHECK(m.call("sceKernelSignalSema", {full, 2}), Kernel::ErrorSemaphoreOverflow);
+  CHECK(m.call("sceKernelSignalSema", {full, 1}), 0);
+  CHECK(m.kernel.semaphores[full].count, 0x7fff'ffff);
   u32 flag = m.call("sceKernelCreateEventFlag", {m.string("flag"), 0x200, 5, 0});
   u32 sema = m.call("sceKernelCreateSema", {m.string("sema"), 0, 1, 3, 0});
   m.system.memory.fill(Work, 0xcc, 32);
@@ -522,6 +558,7 @@ static auto vblankMulti() -> void {
 auto threadmanTests() -> Tests {
   return {
     {"thread status sizes and exit", threadStatusCalls}, {"thread run figures", runFigures},
+    {"a handler ending the game", handlerExits},
     {"threadman ID lists", idLists}, {"status size words and creates", statusSizes},
     {"accumulated hcount adjusted", hcountAdjusted}, {"vertical blanks waited for by count", vblankMulti},
   };

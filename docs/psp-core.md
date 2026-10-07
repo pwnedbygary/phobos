@@ -4366,8 +4366,8 @@ answer is 0. Chosen: msData naming a save not there is SIZES_NO_DATA, the rest s
 in whole clusters and its folder's own cluster (sizes: three small files, 4 clusters); saving would take the data
 file, the icons' and sound's files the request carries, its PARAM.SFO and the folder (sizes: 16 bytes of data and no
 other file, 3). The size mode (22), which wrote nothing at all, now writes the free space in its 32 KiB "sectors"
-(getsize), and with files listed what they take in whole clusters, the same newly or over a save (chosen; getsize
-listed none, and the rest was left as it was); its answer is 0 whether the save is there or not (chosen: a game asks
+(getsize), and with files listed what they'd still need past the free space, in whole clusters, the same newly or
+over a save (chosen, after review: below; getsize listed none, and the rest was left as it was); its answer is 0 whether the save is there or not (chosen: a game asks
 before its first save). Sizes as text are whole units cut down, as recorded ("96 KB", "128 KB", "15 GB" for 16,777,211
 KiB), MB between (chosen).
 - One stick everywhere (`io.cpp`): the capacity devctl (SceDevInf: 61,440 clusters, 57,344 free, a sector's 512 bytes,
@@ -4547,3 +4547,24 @@ what recordings and 32-bit games allow); sceKernelLoadExec's refusals and their 
 (whether a PSP's goes on across it isn't recorded), the user partition cleared, and an argument of none for
 parameters with none; the creates' NULL names refused for a program built with any SDK; the running time's unit
 and start, the stack check's 0 outside a thread, the remote's refusals, and every answer of the DRM functions.
+
+**After review.** An audit of the branch (with part 31's PSMF fixes and part 30's faster GE merged in) found the
+clean room held and sceKernelLoadExec sound, and three things to fix:
+- The size mode (22) with files listed wrote their whole size as `neededKB` and `overwriteKB` (the size info's words
+  at 36 and 48, and their text). pspsdk's names read as what saving needs beyond the free space, so a game that took
+  a nonzero figure for "no room" would refuse its first save, the symptom Chili Con Carnage had in the sizes mode.
+  They're now the shortfall, what the files take in whole clusters less the 1,835,008 KiB free (0 for any save that
+  fits), in KiB, newly or over a save alike. Its text is written only when something is needed and is left as it
+  was otherwise, as getsize recorded what there was nothing to say about left alone (chosen; no recording lists
+  files). Tested: 128 KiB of files need 0 and leave the text; a 2 GiB file needs 262,144 KiB, "256 MB".
+- sceKernelSignalSema added the count to the semaphore's in 32 bits (from before this part). With any count now
+  taken at creation, a semaphore at 1 of 2 signalled with 0x7fffffff wrapped to a negative sum, passed the limit
+  check and took a count near -2^31. The sum is now 64-bit; that signal is SEMA_OVF with the count kept, and a
+  semaphore at 0x7ffffffe of 0x7fffffff takes 1 but not 2.
+- A thread's time on the CPU was counted twice when an interrupt's handler ended the game. The call's start adds
+  the interrupted thread's time without moving when it got the CPU, and the exit's switch away added it again, so
+  a thread could show more time than the clock and a state saved after failed its load check. The call's start
+  now moves it (`startCall()`). Tested on both engines: a blank's handler calling sceKernelExitGame while main
+  spins leaves main with about 16.7 ms, no more than has passed, one interruption, and a state that loads.
+Save states unchanged (version 14). tests/psp 302 groups (one new, two extended) with ASan and UBSan and without,
+tests/psp/ares 298 checks, none failed; each fix undone, its test failed (three broken versions, each caught by its own group).

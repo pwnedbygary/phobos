@@ -291,8 +291,9 @@ static auto savedataErase() -> void {
 //name ignored), its files in clusters and the folder's own (three small files, 4); msData naming none there is no
 //data, the rest still answered; what saving would take counts the data, the icons' and sound's files the request
 //carries, its PARAM.SFO and the folder. The size mode (22), as utility/savedata/getsize recorded: the free space in
-//32 KiB "sectors", and with no files listed nothing else written; with files, what they take in whole clusters; not
-//in the smaller structure of before firmware 2.00. Sizes as text in whole units: KB, MB, GB.
+//32 KiB "sectors", and with no files listed nothing else written; with files, what they take in whole clusters past
+//the free space (none for 128 KiB, its text left alone; 256 MiB for a 2 GiB file); not in the smaller structure of
+//before firmware 2.00. Sizes as text in whole units: KB, MB, GB.
 static auto stickSpace() -> void {
   HostFolder stick;
   KernelMachine m;
@@ -374,11 +375,18 @@ static auto stickSpace() -> void {
   memory.write(4, Sizes + 12, Files + 48);
   saveParameters(m, 22, "ULUS99999", "NONE", 0);  //(the save needn't be there)
   memory.write(4, Parameters + 1532, Sizes);
+  memory.fill(Sizes + 36, 0xcc, 24);
   CHECK(runSave(m), 0);
-  CHECK(memory.read(4, Sizes + 36), 128);
-  CHECK(memory.readString(Sizes + 40, 8) == "128 KB", true);
-  CHECK(memory.read(4, Sizes + 48), 128);
-  CHECK(memory.readString(Sizes + 52, 8) == "128 KB", true);
+  //they take 128 KiB, well within the free space: nothing more needed, new or over a save, the text left alone
+  for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 0);
+  for(u32 at : {40u, 52u}) CHECK(memory.read(4, Sizes + at), 0xcccc'cccc);
+  //a normal file of 2 GiB: 2,097,152 KiB, 262,144 past the 1,835,008 free, in each field and its text
+  memory.write(4, Files + 48, 0x8000'0000);  //(a 64-bit size, low word first)
+  memory.write(4, Files + 52, 0);
+  memory.write(4, Sizes, 0);  //no secure files
+  CHECK(runSave(m), 0);
+  for(u32 at : {36u, 48u}) CHECK(memory.read(4, Sizes + at), 262'144);
+  for(u32 at : {40u, 52u}) CHECK(memory.readString(Sizes + at, 8) == "256 MB", true);
   //the smaller structure has no size mode's answer
   memory.fill(Sizes, 0xcc, 64);
   saveParameters(m, 22, "ULUS99999", "ABC", 0);

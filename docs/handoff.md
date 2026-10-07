@@ -28,7 +28,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP core: the next functions games stop at (run status, ID lists, LoadExec, the memory stick) — 2026-10-07
 
 Branch `cursor/psp-hle-games6-2b67`, on top of `cursor/psp-psmf-2b67` (part 31): commit 17ea2d8a0 (code and tests),
-then the docs (9b580b37c), then the re-run's list (code, tests and docs together); local only, not pushed.
+then the docs (9b580b37c), then the re-run's list (code, tests and docs together), the PSMF branch merged in, then
+the review's fixes; local only, not pushed.
 docs/psp-core.md, part 32, describes it. Sources: pspsdk's headers, pspautotests' programs and the results they
 recorded on a PSP, uOFW's export lists, the games' own calls; no other emulator's code read.
 The owner's re-run of the compatibility report hadn't landed at first; every function the old report names was here.
@@ -79,6 +80,13 @@ The owner's re-run of the compatibility report hadn't landed at first; every fun
   other recorded differences, PARAM.SFO in saves and the list mode's pattern, Chili Con Carnage's logo and menu art
   drawn in broken stripes (a GE matter), the imported-but-uncalled functions part 32 lists, scePower 0xa85880d0,
   a program unloading itself while a module it started runs on (Killzone), utility module 0x308 (Joint Assault).
+- **After review** (with #160's PSMF fixes and #159's faster GE merged in; the audit found the clean room held and
+  LoadExec sound): the size mode's needed and overwrite figures are now the shortfall past the free space (0 for
+  any save that fits; their text written only then), not the files' whole size; sceKernelSignalSema's limit check
+  adds in 64 bits (0x7fffffff onto a count of 1 had wrapped past it); a thread's time is no longer counted twice
+  when an interrupt's handler ends the game (a state saved after then failed to load). State version 14 still.
+  Checked: tests/psp 302 groups with the sanitizers and without, tests/psp/ares 298 checks, none failed;
+  each fix undone, caught.
 
 ## PSP core: movies through scePsmf and scePsmfPlayer, in a clean room — 2026-10-07
 

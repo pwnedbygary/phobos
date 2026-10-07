@@ -32,6 +32,7 @@ auto Kernel::startCall() -> void {
   if(current) {
     current->runCycles += cycles - ranSince;
     current->interruptPreempts++;
+    ranSince = cycles;  //(a handler that ends the game switches away from it, which mustn't count this again)
   }
   save(interrupted);
   interruptedHalted = cpu.scc.halted;
