@@ -28,17 +28,20 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP compatibility re-run — 2026-10-07
 
 Branch `local/psp-rerun`, cut from `origin/cursor/psp-ge-features-2b67` (tip
-`b27f084a5`, PR #157). Re-runs all 266 PSP games against PR #157's GE feature
-emulation (DXT textures, bounding-box tests, line drawing, curved surfaces,
-anti-aliased lines) and updates `docs/psp-compatibility.md`.
+`b27f084a5`, PR #157). Re-runs all 266 PSP games against the three PRs since
+the old run—#153 (music/movies through FFmpeg's decoders), #156 (41 kernel
+functions, missing 149→77), and #157 (GE line/box drawing, DXT; no curved
+surfaces, anti-aliased lines drawn without anti-aliasing)—and updates
+`docs/psp-compatibility.md`.
 
-- **Result:** 123 of 266 games changed state. 66 improved (mostly black →
-  menu), 53 regressed (mostly menu → black), 4 shifted between black and
-  loading. Menu: 104 → 118. Black: 155 → 138. Loading: 4 → 6. Timeout: 3 → 4
-  (The Legend of Nayuta added).
+- **Result:** 66 improved (black → menu), 22 regressed (menu → black),
+  35 shifted to movie (dark intro frames the old rule lumped into black,
+  so the Before column's 155 "black" overstates the old run's true-black
+  total). Menu: 104 → 141. Movie: 35 (new category). Black: 155 → 73.
+  Loading: 4 → 13. Timeout: 3 → 4 (The Legend of Nayuta added).
 - **Missing functions:** 149/266 (56 %) → 77/266 (29 %). The GE functions that
   dominated the old top list (`sceGe_user`, `ThreadManForUser`) are gone; the
-  new top gaps are `scePsmf`/`scePsmfPlayer` (video playback, 40 hits) and
+  new top gaps are `scePsmf`/`scePsmfPlayer` (video playback, 79 hits) and
   `scePspNpDrm_user` (DRM, 13 hits).
 - **Speed:** 172 of 266 games now run above 200 fps (was 166). 8 very slow
   (< 30 fps), down from 13.
