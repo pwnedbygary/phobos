@@ -132,9 +132,14 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   //so the stack frame one block's prologue made serves any other's body, and its epilogue.
   beginFunction(1, 3, 4, 2);
   auto bodyLabel = sljit_emit_label(compiler);
+  calls = false;
   u32 count = 0;          //instructions in the block so far
   bool pcStored = false;  //whether ipu.pc and ipu.pd already say where to go after the last instruction
   bool ended = false;     //it ends at an instruction after which run() and the HLE kernel take over (endsBlock())
+  //Where it goes next, when that's known as it's compiled: one place (next), or either of two (next or other) as a
+  //branch decides; or the block has ended itself (done).
+  enum class Next : u32 { Unknown, Known, Either, Done } going = Next::Unknown;
+  u32 next = 0, other = 0;
 
   while(true) {
     u32 instruction = self.read(Word, address);
@@ -147,14 +152,26 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
       //taken, pd won't be pc + 4 afterwards, and run() has the interpreter take the delay slot as well. The
       //coprocessors' branches end the block where the interpreter's did, before their delay slots, likewise.
       if(instruction >> 26 == 0x11 || instruction >> 26 == 0x12) {
-        emitCoprocessorBranch(address, instruction);
+        emitCoprocessorBranch(address, instruction, count);
+        going = Next::Done;
       } else if(!lastInSection && emitBranch(address, instruction, count)) {
+        u32 branch = address;
         address += 4;
         count++;
         u32 delaySlot = self.read(Word, address);
         //(A branch in a delay slot has no defined meaning on MIPS; the interpreter's is used.)
         if(isBranch(delaySlot) || !emitInstruction(address, delaySlot, count, true)) {
           emitInterpreter(address, delaySlot, count, true);
+        } else if(instruction >> 26 == 0x02 || instruction >> 26 == 0x03) {
+          //(a native delay slot leaves pc and pd as the branch set them: an interpreted one may not, a syscall
+          //switching threads say)
+          going = Next::Known, next = (address & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2;  //j, jal
+        } else if(instruction >> 26 != 0x00) {  //(jr and jalr go where a register says)
+          //a likely branch not taken has left already (emitBranchOutcome()): one past its delay slot is taken
+          u32 op = instruction >> 26;
+          bool likely = (op >= 0x14 && op <= 0x17) || (op == 0x01 && instruction >> 17 & 1);
+          going = likely ? Next::Known : Next::Either;
+          next = branch + 4 + s16(instruction) * 4, other = branch + 8;
         }
       } else {
         emitInterpreter(address, instruction, count, false);
@@ -178,15 +195,23 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
         mov32(field(&self.ipu.pc), imm(address + 4));
         mov32(field(&self.ipu.pd), imm(address + 8));
       }
+      going = Next::Known, next = address + 4;
       break;
     }
     address += 4;
   }
 
-  if(ended || !chains) {
+  if(ended || (!chains && going != Next::Done)) {
     mov32(field(&executed), imm(count));
     jumpEpilog();
-  } else {
+  } else if(going == Next::Known) {
+    emitChainTo(count, next);
+  } else if(going == Next::Either) {
+    auto taken = cmp32_jump(field(&self.ipu.pc), imm(next), flag_eq);
+    emitChainTo(count, other);
+    setLabel(taken);
+    emitChainTo(count, next);
+  } else if(going == Next::Unknown) {
     emitChain(count);
   }
 
@@ -261,10 +286,47 @@ auto Allegrex::Recompiler::emitChain(u32 count) -> void {
   jumpEpilog();
 }
 
+//emitChain() for a block that goes on to target, which the compiled code knows already (pc is target and pd the
+//word after it, as the branch or the end of the section set them): its section and word are worked out here, and
+//of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table. Whether the
+//CPU halted is only looked at if the block called the interpreter, the only way it can halt (an exception leaves
+//before this; a syscall, halt, break or eret ends its block for run()).
+auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
+  std::vector<sljit_jump*> leave;
+  auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
+  mov64(reg(0), field(&self.instructionsRun));
+  add64(reg(0), reg(0), imm(count));
+  mov64(field(&self.instructionsRun), reg(0));
+  auto limit = field(&self.runLimit);
+  unless(sljit_emit_cmp(compiler, SLJIT_GREATER_EQUAL, SLJIT_R0, 0, limit.fst, limit.snd));
+  if(calls) {
+    mov32_u8(reg(0), field(&self.scc.halted));
+    unless(cmp32_jump(reg(0), imm(0), flag_ne));
+  }
+  u32 index = (target & 0x1fff'ffff) / SectionSize;
+  if(self.pages) {
+    mov64(reg(1), field(&self.pages));
+    unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_MEM1(SLJIT_R1), index * sizeof(u8*), SLJIT_IMM, 0));
+  }
+  mov64(reg(1), field(&table));
+  mov64(reg(1), mem(reg(1), index * sizeof(Section*)));
+  unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0));
+  unless(cmp32_jump(mem(reg(1), offsetof(Section, mirror)), imm(target >> 29), flag_ne));
+  mov64(reg(1), mem(reg(1), offsetof(Section, bodies) + target % SectionSize / 4 * sizeof(u8*)));
+  unless(sljit_emit_cmp(compiler, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0));
+  sljit_emit_ijump(compiler, SLJIT_JUMP, SLJIT_R1, 0);
+
+  auto here = sljit_emit_label(compiler);
+  for(auto jump : leave) sljit_set_label(jump, here);
+  mov32(field(&executed), imm(0));
+  jumpEpilog();
+}
+
 //Compiles one instruction as a call to execute(). Outside a delay slot, pc and pd are set first, as the interpreter
 //has them while that instruction runs; in a delay slot, the branch before it has already set them. If the
 //instruction raises an exception, the block leaves right after it.
 auto Allegrex::Recompiler::emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void {
+  calls = true;
   if(!delaySlot) {
     mov32(field(&self.ipu.pc), imm(address + 4));
     mov32(field(&self.ipu.pd), imm(address + 8));

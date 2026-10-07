@@ -496,6 +496,7 @@ struct Allegrex {
     auto block(u32 address) -> u8*;
     auto emit(u32 address, u8*& body) -> u8*;
     auto emitChain(u32 count) -> void;
+    auto emitChainTo(u32 count, u32 target) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;
     auto endsBlock(u32 instruction) const -> bool;
@@ -509,7 +510,7 @@ struct Allegrex {
     auto emitBranch(u32 address, u32 instruction, u32 count) -> bool;
     auto emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void;
     auto emitJump(u32 target) -> void;
-    auto emitCoprocessorBranch(u32 address, u32 instruction) -> void;
+    auto emitCoprocessorBranch(u32 address, u32 instruction, u32 count) -> void;
 
     //recompiler-fpu.cpp
     auto emitFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
@@ -524,6 +525,7 @@ struct Allegrex {
 
     bool enabled = false;
     bool chains = true;  //blocks go on to the next by themselves (emitChain()); tests turn it off to compare
+    bool calls = false;  //the block being compiled calls the interpreter somewhere (emitInterpreter())
     //How many instructions the last block ran, not yet counted in instructionsRun: each block sets it as it leaves
     //for run() (0 when it counted them itself, going on to the next: emitChain()), and as it calls the interpreter
     //for one (counting that one), so during that call it says how far the block has got.

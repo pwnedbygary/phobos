@@ -535,8 +535,8 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
 //interrupts and the HLE kernel's events land, and has to stay as it was for every run to come out the same. So the
 //branch leaves pc and pd as the interpreter's would: pc at the delay slot and pd at the target or past the delay
 //slot, or both past the delay slot for a likely branch not taken; run() then has the interpreter take a delay slot
-//before a taken branch's target, as before.
-auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction) -> void {
+//before a taken branch's target, as before. Not taken, the block goes on to the next by itself (emitChainTo()).
+auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction, u32 count) -> void {
   u32 target = address + 4 + s16(instruction) * 4;
   if(instruction >> 26 == 0x11) test32(field(&self.fpu.csr), imm(1 << 23), set_z);
   else test32(field(&self.vfpu.cc), imm(1 << (instruction >> 18 & 7)), set_z);
@@ -544,11 +544,17 @@ auto Allegrex::Recompiler::emitCoprocessorBranch(u32 address, u32 instruction) -
   bool likely = instruction >> 17 & 1;
   mov32(PC, imm(address + (likely ? 8 : 4)));
   mov32(PD, imm(address + (likely ? 12 : 8)));
-  auto done = jump();
+  if(chains) {
+    emitChainTo(count, address + (likely ? 8 : 4));
+  } else {
+    mov32(field(&executed), imm(count));
+    jumpEpilog();
+  }
   setLabel(taken);
   mov32(PC, imm(address + 4));
   mov32(PD, imm(target));
-  setLabel(done);
+  mov32(field(&executed), imm(count));
+  jumpEpilog();
 }
 
 //Finishes a conditional branch, given the jump its "taken" case makes. Either way pc and pd are set for the delay
@@ -561,7 +567,7 @@ auto Allegrex::Recompiler::emitBranchOutcome(sljit_jump* taken, u32 address, u32
   sljit_jump* done = nullptr;
   if(likely) {
     if(chains) {
-      emitChain(count);
+      emitChainTo(count, address + 8);
     } else {
       mov32(field(&executed), imm(count));
       jumpEpilog();
