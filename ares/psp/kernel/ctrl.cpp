@@ -171,3 +171,28 @@ auto Kernel::sceCtrlGetIdleCancelThreshold() -> void {
   if(back) memory.write(4, back, controller.idleBack);
   result(0);
 }
+
+//sceHprm, the remote on the headphone socket: nothing is plugged in (pspsdk's psphprm.h: the three checks give 1 for
+//plugged in, else 0), so no key is held and its latch is empty. A buffer the answer can't go in is ILLEGAL_ADDR
+//(chosen, as the controller's latch).
+auto Kernel::sceHprmIsHeadphoneExist() -> void { result(0); }
+auto Kernel::sceHprmIsRemoteExist() -> void { result(0); }
+auto Kernel::sceHprmIsMicrophoneExist() -> void { result(0); }
+
+//(where the keys held go)
+auto Kernel::sceHprmPeekCurrentKey() -> void {
+  if(!memory.reaches(arg(0), 4)) return result(ErrorIllegalAddress);
+  memory.write(4, arg(0), 0);
+  result(0);
+}
+
+//(where the latch's four words go): pressed, released, held and not held since the last read, none of each.
+auto Kernel::sceHprmPeekLatch() -> void {
+  if(!memory.reaches(arg(0), 16)) return result(ErrorIllegalAddress);
+  memory.fill(arg(0), 0, 16);
+  result(0);
+}
+
+auto Kernel::sceHprmReadLatch() -> void {
+  sceHprmPeekLatch();
+}

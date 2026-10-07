@@ -647,7 +647,7 @@ static auto mutexesOutsideThreads() -> void {
     CHECK(m.kernel.mutexes[uid].count, 0);
     CHECK(m.kernel.mutexes[uid].owner, 0);
     CHECK(word(m, Work), 0);
-    CHECK(word(m, Work + 4), 0xffff'ffff);
+    CHECK(word(m, Work + 4), 0);
     CHECK(m.notes.size(), 0);
     CHECK(roundTrip(m), true);
   }

@@ -9,10 +9,11 @@
 //another kind was started last is the wrong type. The answers given here, with nothing drawn on the screen yet:
 //  - Saving and loading (savedata): a save is a folder on the memory stick, PSP/SAVEDATA/<game name><save name>,
 //    holding its data file. Loading reads the file into the program's buffer, or says there's no save; saving writes
-//    it; the sizes and list modes tell the memory stick's free space and what saves there are; deleting a save takes
-//    its folder, erasing its data file alone. Names that would lead out of the save's folder, and buffers outside the
-//    program's memory, are refused. The PSP encrypts the data file and writes a PARAM.SFO and icons beside it: not
-//    done yet (the files are only Phobos's to read).
+//    it; the sizes modes tell the memory stick's free space (the stick io.cpp describes), what a save takes and what
+//    saving would take, and the list mode what saves there are; deleting a save takes its folder, erasing its data
+//    file alone. Names that would lead out of the save's folder, and buffers outside the program's memory, are
+//    refused. The PSP encrypts the data file and writes a PARAM.SFO and icons beside it: not done yet (the files are
+//    only Phobos's to read).
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
 //  - The keyboard: each field's text accepted as it is, an empty one given the console's nickname (keyboard()).
 //  - Network settings, game sharing, the web browser: cancelled, as if the player backed out.
@@ -42,9 +43,6 @@ namespace {
     close = kind == DialogSavedata ? 2'000 : kind == DialogMessage ? 26'000 : 40'000;
     if(kind == DialogNetwork) close = 200'000;
   }
-  //the memory stick's free space as saves report it: 1 GiB, in 32 KiB clusters
-  constexpr u32 StickCluster = 32_KiB, StickFreeClusters = 32'768;
-
   //What a savedata mode says of parameters it can't take: the bad parameter of the group its other errors come from.
   auto savedataRefusal(u32 mode) -> u32 {
     switch(mode) {
@@ -188,10 +186,12 @@ auto Kernel::savePath(const std::string& folder, const std::string& file) -> std
 }
 
 //Does what a SceUtilitySavedataParam (psputility_savedata.h) asks, by its mode; the dialog's result. The layout: the
-//common part (48 bytes), the mode at 48, the game's name at 60 (13 bytes), the save's at 76 (20), a list of save
-//names at 96, the data file's name at 100 (13), its buffer at 116, the buffer's size at 120 and the data's at 124,
-//then from 1488 where to put the sizes mode's answers (free space, the save's size, what saving would take), and from
-//1524 the list mode's.
+//common part (48 bytes, its first word the structure's size), the mode at 48, the game's name at 60 (13 bytes), the
+//save's at 76 (20), a list of save names at 96, the data file's name at 100 (13), its buffer at 116, the buffer's
+//size at 120 and the data's at 124, the icons' and sound's files from 1412 (16 bytes each: buffer, its size, the
+//file's size, a word), then from 1488 where to put the sizes mode's answers (free space, a save's size, what saving
+//would take), and in the larger structure of firmware 2.00 on (1536 bytes), from 1524 the list mode's and at 1532
+//the size mode's.
 //
 //The names become a folder and a file on the host: each must be a plain name (plainName(); the game's can't be left
 //out, the save's can), and the paths where a save belongs (savePath()). The buffer must be in the program's memory as
@@ -244,38 +244,80 @@ auto Kernel::savedata(u32 p) -> u32 {
     stream.write((const char*)bytes.data(), size);
     return stream ? 0 : SavedataSaveAccess;
   }
-  case 8: {  //sizes: the memory stick's free space; the save's own size, if there's one; what saving takes
-    u32 free = memory.read(4, p + 1488), used = memory.read(4, p + 1492), needed = memory.read(4, p + 1496);
+  case 8: {  //sizes: the memory stick's free space; a save's own size; what saving this one would take
+    //(SceUtilitySavedataMsFreeInfo, SceUtilitySavedataMsDataInfo and SceUtilitySavedataUsedDataInfo: each where
+    //the game wants it, or 0 for not wanted.) The save measured is the one msData names, by its own game and save
+    //names: pspautotests' utility/savedata/sizes had the request's save name "ASDF", none there, and msData's "ABC",
+    //and got ABC's size and 0. Without msData there's nothing to look for, and the answer is 0 (Chili Con Carnage
+    //and Ace Combat X ask for the free space alone, and had been told there was no save: the first then said there
+    //wasn't room for one, the second waited for good). Chosen: msData naming a save that isn't there is told so
+    //(SIZES_NO_DATA), the rest still answered.
+    u32 free = memory.read(4, p + 1488), data = memory.read(4, p + 1492), needed = memory.read(4, p + 1496);
     if(free) {
-      memory.write(4, free, StickCluster);
+      memory.write(4, free, StickClusterSize);
       memory.write(4, free + 4, StickFreeClusters);
-      memory.write(4, free + 8, StickCluster / 1024 * StickFreeClusters);
-      memory.copyIn(free + 12, "1 GB\0\0\0", 8);
+      memory.write(4, free + 8, StickFreeClusters * (StickClusterSize / 1024));
+      stickText(free + 12, StickFreeClusters * (StickClusterSize / 1024));
     }
-    u64 bytes = 0;
-    if(exists) {  //its files' sizes, as far as the host can tell them (nothing here throws)
-      for(fs::directory_iterator at(folder, error), end; !error && at != end; at.increment(error)) {
-        std::error_code unread;
-        u64 size = at->is_regular_file(unread) ? at->file_size(unread) : 0;
-        if(!unread) bytes += size;
-      }
-    }
-    auto usage = [&](u32 at, u64 size) {  //clusters, KiB, as text, then in 32 KiB steps: the same here
-      u32 clusters = (size + StickCluster - 1) / StickCluster, kilobytes = clusters * (StickCluster / 1024);
-      std::string text = std::to_string(kilobytes) + " KB";
+    auto usage = [&](u32 at, u64 clusters) {  //clusters, KiB, as text, then in 32 KiB steps: the same here
+      u32 kilobytes = clusters * (StickClusterSize / 1024);
       memory.write(4, at, clusters);
       memory.write(4, at + 4, kilobytes);
-      memory.copyIn(at + 8, text.c_str(), std::min<u32>(text.size() + 1, 8));
+      stickText(at + 8, kilobytes);
       memory.write(4, at + 16, kilobytes);
-      memory.copyIn(at + 20, text.c_str(), std::min<u32>(text.size() + 1, 8));
+      stickText(at + 20, kilobytes);
     };
-    if(used) {
-      memory.copyIn(used, game.c_str(), std::min<u32>(game.size() + 1, 13));
-      memory.copyIn(used + 16, save.c_str(), std::min<u32>(save.size() + 1, 20));
-      usage(used + 36, bytes);
+    u32 answer = 0;
+    if(data) {  //(the game's name in 16 bytes, the save's in 20, then where its size goes)
+      std::string other = memory.readString(data, 13), otherSave = memory.readString(data + 16, 20);
+      bool plain = plainName(other, 13) && (otherSave.empty() || plainName(otherSave, 20));
+      std::string otherFolder = plain ? savePath(other + otherSave) : std::string{};
+      if(!otherFolder.empty() && fs::is_directory(otherFolder, error)) {
+        usage(data + 36, savedataClusters(otherFolder));
+      } else {
+        answer = SavedataSizesNoData;
+      }
     }
-    if(needed) usage(needed, std::max(dataSize, 1u));
-    return exists ? 0 : SavedataSizesNoData;
+    if(needed) usage(needed, savedataNeeded(p, dataSize));
+    return answer;
+  }
+  case 22: {  //the size mode: the memory stick's free space, and what the files the game lists would take
+    //(A PspUtilitySavedataSizeInfo at 1532, in the larger structure alone: how many secure and normal files, where
+    //each list of them is (a 64-bit size and a 16-byte name each), then the "sector" size, the free sectors, KiB and
+    //their text, and the KiB and text still needed beyond the free space to save them new and over a save, as
+    //pspsdk's neededKB and overwriteKB name them. pspautotests' utility/savedata/getsize recorded the free space
+    //written, a 32 KiB cluster to a sector, and with no files listed the rest left as it was. Chosen: a listed file
+    //takes its size in whole clusters, newly or over a save alike; what's needed is what they take past the free
+    //space, 0 for anything a game saves on this stick, its text written only when something is needed (left as it
+    //was otherwise, as the recording leaves what has nothing to say); the answer is 0, the save being there or not,
+    //as a game asks before its first save.)
+    u32 info = memory.read(4, p) >= 1536 ? memory.read(4, p + 1532) : 0;
+    if(!info || !memory.reaches(info, 60)) return 0;
+    memory.write(4, info + 16, StickClusterSize);
+    memory.write(4, info + 20, StickFreeClusters);
+    memory.write(4, info + 24, StickFreeClusters * (StickClusterSize / 1024));
+    stickText(info + 28, StickFreeClusters * (StickClusterSize / 1024));
+    u64 clusters = 0;
+    u32 files = 0;
+    for(u32 list : {0u, 1u}) {  //the secure files, then the normal ones
+      u32 count = memory.read(4, info + list * 4), entries = memory.read(4, info + 8 + list * 4);
+      for(u32 n = 0; entries && n < std::min(count, 64u) && memory.reaches(entries + n * 24, 24); n++, files++) {
+        u64 size = memory.read(4, entries + n * 24) | u64(memory.read(4, entries + n * 24 + 4)) << 32;
+        clusters += (size + StickClusterSize - 1) / StickClusterSize;
+      }
+    }
+    if(files) {
+      u64 kilobytes = clusters * (StickClusterSize / 1024);
+      u64 free = u64(StickFreeClusters) * (StickClusterSize / 1024);
+      u32 shortfall = std::min<u64>(kilobytes > free ? kilobytes - free : 0, 0x7fff'ffff);
+      memory.write(4, info + 36, shortfall);
+      memory.write(4, info + 48, shortfall);
+      if(shortfall) {
+        stickText(info + 40, shortfall);
+        stickText(info + 52, shortfall);
+      }
+    }
+    return 0;
   }
   case 6: case 7: case 9: case 10: case 21: {  //deleting a save: its folder goes, with all it holds
     if(!exists) return SavedataDeleteNoData;
@@ -292,6 +334,34 @@ auto Kernel::savedata(u32 p) -> u32 {
   default:  //the files mode, the sizes of others: nothing to tell
     return exists ? 0 : SavedataReadNoData;
   }
+}
+
+//What a save on the memory stick takes, in clusters: each of its files in whole clusters, and the folder's own
+//cluster (pspautotests' utility/savedata/sizes: a save of three small files, 4 clusters). As far as the host can
+//tell (nothing here throws).
+auto Kernel::savedataClusters(const std::string& folder) -> u64 {
+  namespace fs = std::filesystem;
+  u64 clusters = 1;
+  std::error_code error;
+  for(fs::directory_iterator at(folder, error), end; !error && at != end; at.increment(error)) {
+    std::error_code unread;
+    u64 size = at->is_regular_file(unread) ? at->file_size(unread) : 0;
+    if(!unread) clusters += (size + StickClusterSize - 1) / StickClusterSize;
+  }
+  return clusters;
+}
+
+//What saving the request's save would take, in clusters: its data file (dataSize bytes), the icons' and sound's
+//files it carries (their sizes, at 1412 on: ICON0, ICON1, PIC1, SND0), its PARAM.SFO (a cluster) and the folder's
+//own cluster. pspautotests' utility/savedata/sizes: 16 bytes of data and no other file, 3 clusters (96 KB).
+auto Kernel::savedataNeeded(u32 p, u32 dataSize) -> u64 {
+  auto clusters = [](u64 bytes) { return (bytes + StickClusterSize - 1) / StickClusterSize; };
+  u64 total = clusters(dataSize) + 2;
+  for(u32 file = 0; file < 4; file++) {
+    u32 at = p + 1412 + file * 16;
+    if(memory.read(4, at)) total += clusters(memory.read(4, at + 8));
+  }
+  return total;
 }
 
 //The list mode (savedata()'s 11): the game's saves, its folders in SAVEDATA whose names start with the game's, into

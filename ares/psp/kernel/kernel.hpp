@@ -160,6 +160,7 @@ struct Kernel {
   static constexpr u32 ErrorPipeFull              = 0x8002'01b3;  //a try that can't send
   static constexpr u32 ErrorPipeEmpty             = 0x8002'01b4;  //a try that can't receive
   static constexpr u32 ErrorIllegalSize           = 0x8002'01bc;
+  static constexpr u32 ErrorIllegalType           = 0x8002'01bb;  //a kind of object there isn't (pspkerror.h)
   static constexpr u32 ErrorMessageQueued         = 0x8002'01c9;  //a mailbox's packet sent again while queued
   //uOFW's errors.h
   static constexpr u32 ErrorNotImplemented        = 0x8000'0003;
@@ -238,7 +239,8 @@ struct Kernel {
   static auto nid(const std::string& name) -> u32;
   auto power() -> void;
   auto load(const u8* data, u64 size, const std::string& path, std::string& error) -> bool;
-  auto start(const u8* data, u64 size, const std::string& path, std::string& error) -> bool;
+  auto start(const u8* data, u64 size, const std::string& path, std::string& error,
+             const std::vector<u8>* given = nullptr) -> bool;
   auto run(u64 budget) -> u64;
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
@@ -319,7 +321,7 @@ struct Kernel {
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs (the count a mutex is to be held with); the
                            //bits an event flag wait needs; a mixer output's left volume; the samples an SRC output's
                            //buffer was armed with; the bytes a message pipe's send or receive asked for; what a
-                           //synchronous read or write returns
+                           //synchronous read or write returns; the count of vertical blanks a blank's wait ends at
     u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode
     u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
                            //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
@@ -329,7 +331,12 @@ struct Kernel {
     u64 wakeAt = 0;        //for a delay or timeout: the cycle to wake at (0: none)
     u32 timeoutPointer = 0;
     u64 readySince = 0;    //to keep first-come order among equal priorities
-    s32 exitStatus = 0;
+    s32 exitStatus = s32(ErrorDormant);  //what it ended with: DORMANT until it first starts, then NOT_DORMANT
+    //what its status's run figures count, since it was last started (threads.cpp): the cycles it has had the CPU,
+    //the times a call into the program interrupted it and a better thread took the CPU from it, and the times
+    //sceKernelReleaseWaitThread let it go of a wait
+    u64 runCycles = 0;
+    u32 interruptPreempts = 0, threadPreempts = 0, releases = 0;
     u32 wakeupCount = 0;
     bool callbacks = false;    //its wait lets its callbacks run (it called a function whose name ends in CB)
     bool inCallback = false;   //it's running one of them, its own registers and wait put aside till they're done
@@ -345,10 +352,17 @@ struct Kernel {
     s32 count, maximum;
     s32 initial = 0;
   };
+  struct LwMutex {  //a lightweight mutex: its state is in the program's work area; these are for its status
+    u32 workArea = 0;
+    std::string name;
+    u32 attributes = 0;
+    s32 initial = 0;  //the count it was made with
+  };
   std::map<u32, std::unique_ptr<Thread>> threads;
   std::map<u32, Semaphore> semaphores;
-  std::map<u32, u32> lwMutexes;  //uid -> work area address
+  std::map<u32, LwMutex> lwMutexes;
   Thread* current = nullptr;
+  u64 ranSince = 0;  //when the running thread got the CPU, or a call into the program on top of it ended
   u64 readySequence = 0;
   u64 nextVblank = VblankCycles;
   u32 vblanks = 0;
@@ -381,6 +395,20 @@ struct Kernel {
   auto waitThreadEnd(bool callbacks) -> void;
   auto waitSemaphore(bool callbacks) -> void;
 
+  struct Report {  //a status structure built for the program, as report() copies it
+    std::vector<u8> bytes;
+    explicit Report(u32 size) : bytes(size) { word(0, size); }
+    auto word(u32 offset, u32 value) -> void { for(u32 n = 0; n < 4; n++) bytes[offset + n] = value >> n * 8; }
+    auto name(u32 offset, const std::string& text) -> void {  //a 32-byte field, its last byte a NUL
+      std::copy_n(text.begin(), std::min<size_t>(text.size(), 31), bytes.begin() + offset);
+    }
+  };
+  auto report(u32 address, const Report& structure) -> void;
+  auto threadStatus(const Thread& thread) const -> u32;
+  auto threadWaitType(const Thread& thread) const -> u32;
+  auto threadRunTime(const Thread& thread) const -> u64;
+  auto threadmanIDs(u32 type, std::vector<u32>& ids) -> bool;
+
   auto sceKernelCreateThread() -> void;
   auto sceKernelStartThread() -> void;
   auto sceKernelExitThread() -> void;
@@ -388,6 +416,9 @@ struct Kernel {
   auto sceKernelDeleteThread() -> void;
   auto sceKernelGetThreadId() -> void;
   auto sceKernelReferThreadStatus() -> void;
+  auto sceKernelReferThreadRunStatus() -> void;
+  auto sceKernelGetThreadmanIdList() -> void;
+  auto sceKernelGetThreadmanIdType() -> void;
   auto sceKernelDelayThread() -> void;
   auto sceKernelDelayThreadCB() -> void;
   auto sceKernelSleepThread() -> void;
@@ -412,6 +443,7 @@ struct Kernel {
   auto sceKernelResumeThread() -> void;
   auto sceKernelChangeCurrentThreadAttr() -> void;
   auto sceKernelGetThreadStackFreeSize() -> void;
+  auto sceKernelCheckThreadStack() -> void;
   auto sceKernelReferThreadProfiler() -> void;
   auto sceKernelGetThreadCurrentPriority() -> void;
   auto sceKernelRotateThreadReadyQueue() -> void;
@@ -419,6 +451,9 @@ struct Kernel {
   auto sceKernelSuspendDispatchThread() -> void;
   auto sceKernelResumeDispatchThread() -> void;
   auto sceKernelCreateLwMutex() -> void;
+  auto lwMutexStatus(u32 uid, u32 address) -> void;
+  auto sceKernelReferLwMutexStatus() -> void;
+  auto sceKernelReferLwMutexStatusByID() -> void;
   auto sceKernelDeleteLwMutex() -> void;
   auto lockLwMutex(bool callbacks) -> void;
   auto sceKernelLockLwMutex() -> void;
@@ -574,6 +609,10 @@ struct Kernel {
   auto newFile() -> u32;
   std::string workingDirectory;
   std::vector<u32> memoryStickCallbacks;  //callbacks the program registered for the memory stick going in and out
+  //the memory stick's size and free space, as every function that tells them reports them (io.cpp)
+  static constexpr u32 StickSectorSize = 512, StickClusterSize = 32_KiB;
+  static constexpr u32 StickClusters = 61'440, StickFreeClusters = 57'344;
+  auto stickText(u32 at, u64 kilobytes) -> void;
   auto mount(const std::string& device, const std::string& folder) -> void;
   auto split(const std::string& path, std::string& device, std::string& rest) const -> bool;
   auto onDisc(const std::string& path) const -> bool;
@@ -611,6 +650,11 @@ struct Kernel {
   auto sceIoDclose() -> void;
   auto sceIoIoctl() -> void;
   auto sceIoDevctl() -> void;
+  auto sceNpDrmSetLicenseeKey() -> void;
+  auto sceNpDrmClearLicenseeKey() -> void;
+  auto sceNpDrmRenameCheck() -> void;
+  auto sceNpDrmEdataSetupKey() -> void;
+  auto sceNpDrmEdataGetDataSize() -> void;
 
   //async.cpp: files' asynchronous requests, done after the time their device takes
   auto asyncBusy(u32 file) const -> bool;
@@ -698,6 +742,12 @@ struct Kernel {
   auto sceCtrlReadBufferNegative() -> void;
   auto sceCtrlPeekLatch() -> void;
   auto sceCtrlReadLatch() -> void;
+  auto sceHprmIsHeadphoneExist() -> void;
+  auto sceHprmIsRemoteExist() -> void;
+  auto sceHprmIsMicrophoneExist() -> void;
+  auto sceHprmPeekCurrentKey() -> void;
+  auto sceHprmPeekLatch() -> void;
+  auto sceHprmReadLatch() -> void;
   auto sceCtrlSetIdleCancelThreshold() -> void;
   auto sceCtrlGetIdleCancelThreshold() -> void;
 
@@ -705,11 +755,12 @@ struct Kernel {
   struct Display {
     u32 mode = 0, width = 480, height = 272;
     u32 frameBuffer = 0, bufferWidth = 0, pixelFormat = 0;
+    u32 hcountBase = 0;  //what the accumulated count of lines adds (sceDisplayAdjustAccumulatedHcount)
   } display;
   static constexpr u64 LineCycles = CPUFrequency * 525 / 9'000'000;  //a line: 525 dots at 9 MHz (286 to a frame)
   static constexpr u64 VblankLength = CPUFrequency * 77 / 100'000;    //the vertical blank lasts 0.77 ms
   auto inVblank() const -> bool;
-  auto waitVblank(bool callbacks) -> void;
+  auto waitVblank(bool callbacks, u32 count = 1) -> void;
   auto sceDisplaySetMode() -> void;
   auto sceDisplaySetFrameBuf() -> void;
   auto sceDisplayGetFrameBuf() -> void;
@@ -717,9 +768,13 @@ struct Kernel {
   auto sceDisplayWaitVblankStartCB() -> void;
   auto sceDisplayWaitVblank() -> void;
   auto sceDisplayWaitVblankCB() -> void;
+  auto sceDisplayWaitVblankStartMulti() -> void;
+  auto sceDisplayWaitVblankStartMultiCB() -> void;
   auto sceDisplayIsVblank() -> void;
+  auto hcountLines() const -> u32;
   auto sceDisplayGetCurrentHcount() -> void;
   auto sceDisplayGetAccumulatedHcount() -> void;
+  auto sceDisplayAdjustAccumulatedHcount() -> void;
   auto sceDisplayGetFramePerSec() -> void;
   auto sceDisplayGetVcount() -> void;
   auto picture(std::vector<u32>& pixels) -> void;
@@ -1655,6 +1710,8 @@ struct Kernel {
   static auto hexWord(u32 value) -> std::string;
   auto savePath(const std::string& folder, const std::string& file = {}) -> std::string;
   auto savedata(u32 parameters) -> u32;
+  auto savedataClusters(const std::string& folder) -> u64;
+  auto savedataNeeded(u32 parameters, u32 dataSize) -> u64;
   auto savedataList(u32 parameters, const std::string& game) -> u32;
   auto sceUtilitySavedataInitStart() -> void;
   auto sceUtilitySavedataGetStatus() -> void;
@@ -1755,8 +1812,18 @@ struct Kernel {
   auto sceKernelLibcTime() -> void;
   auto sceRtcGetCurrentTick() -> void;
   auto sceRtcGetTickResolution() -> void;
+  auto sceRtcGetAccumulativeTime() -> void;
   auto sceKernelCacheUnneeded() -> void;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
+  struct Exec {  //sceKernelLoadExec's program, put in as the kernel's loop next goes round (never kept in states)
+    bool pending = false;
+    std::string path;
+    std::vector<u8> program;   //decrypted, or a PBP holding it
+    std::vector<u8> argument;  //its first thread's (none, if empty)
+    bool pathArgument = false; //its path as that argument instead, as with no parameters
+  } exec;
+  auto sceKernelLoadExec() -> void;
+  auto loadExec() -> void;
   auto sceRtcGetCurrentClock() -> void;
   auto sceRtcGetCurrentClockLocalTime() -> void;
   auto sceRtcGetTime_t() -> void;

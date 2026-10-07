@@ -37,12 +37,13 @@ auto Kernel::inVblank() const -> bool {
   return cycles - (nextVblank - VblankCycles) < VblankLength;
 }
 
-//Waits for the next vertical blank to start (and, with callbacks, runs the thread's callbacks meanwhile). Its count
-//as the wait starts goes with it: callbacks that run across the blank end the wait when they're done (resumeWait()).
-auto Kernel::waitVblank(bool callbacks) -> void {
+//Waits for the next vertical blank to start, or the count-th from now (and, with callbacks, runs the thread's
+//callbacks meanwhile). The count of blanks it wakes at goes with it: callbacks that run across that blank end the
+//wait when they're done (resumeWait()).
+auto Kernel::waitVblank(bool callbacks, u32 count) -> void {
   if(!mayWait()) return;
   result(0);
-  if(current) current->waitCount = vblanks;
+  if(current) current->waitCount = vblanks + count;
   block(Wait::Vblank, 0, 0, 0, callbacks);
 }
 
@@ -68,18 +69,51 @@ auto Kernel::sceDisplayWaitVblankCB() -> void {
   waitVblank(true);
 }
 
+//(count): waits for the count-th vertical blank to start from now, as pspautotests' display/vblankmulti recorded (3
+//returning at the third, every time); a count of 0 or less is INVALID_VALUE, before the refusals of waiting where
+//nothing may wait (intr/waits). 0x40f1469c is the one without callbacks, 0x77ed8b3a the CB one; vblankmulti's titles
+//have them the other way round, as its own source calls them.
+auto Kernel::sceDisplayWaitVblankStartMulti() -> void {
+  if(s32(arg(0)) <= 0) return result(ErrorInvalidValue);
+  waitVblank(false, arg(0));
+}
+
+auto Kernel::sceDisplayWaitVblankStartMultiCB() -> void {
+  if(s32(arg(0)) <= 0) return result(ErrorInvalidValue);
+  waitVblank(true, arg(0));
+}
+
 auto Kernel::sceDisplayIsVblank() -> void {
   result(inVblank());
 }
 
-//The line the display is on, counted from the start of the vertical blank (as the PSP counts: up to 14 inside it).
-auto Kernel::sceDisplayGetCurrentHcount() -> void {
-  result(u32((cycles - (nextVblank - VblankCycles)) / LineCycles));
+//The lines the display has gone through since this frame's vertical blank started.
+auto Kernel::hcountLines() const -> u32 {
+  return u32((cycles - (nextVblank - VblankCycles)) / LineCycles);
 }
 
-//The lines the display has gone through since power on: 286 a frame, and those of this one.
+//The line the display is on, counted from the start of the vertical blank: pspautotests' display/vblankphase
+//recorded the blank's interrupt at the end of line 285, a handler reading line 0. (display/hcount's lowest line just
+//after a wait for a blank, 1, and highest inside the blank, 14, are a waiting thread getting the CPU some 81
+//microseconds after the interrupt and the blank lasting some 818 from it, as vblankphase measured; here a waiter runs
+//at once and the blank lasts 0.77 ms, so 0 and 13.)
+auto Kernel::sceDisplayGetCurrentHcount() -> void {
+  result(hcountLines());
+}
+
+//The lines the display has gone through since power on: 286 a frame, and those of this one; counted on from where
+//sceDisplayAdjustAccumulatedHcount set it, if it did, and 31 bits wide.
 auto Kernel::sceDisplayGetAccumulatedHcount() -> void {
-  result(u32(vblanks * 286 + (cycles - (nextVblank - VblankCycles)) / LineCycles));
+  result((display.hcountBase + u32(vblanks * 286 + hcountLines())) & 0x7fff'ffff);
+}
+
+//(count): the accumulated count of lines is this now, and counts on from it at the next line. As pspautotests'
+//display/hcount and hcountwrap recorded: a negative count is INVALID_VALUE (0x7fffffff the largest taken), and from
+//0x7fffffff the count goes on to 0 as the next line starts (read straight after setting it, sometimes 0 already).
+auto Kernel::sceDisplayAdjustAccumulatedHcount() -> void {
+  if(s32(arg(0)) < 0) return result(ErrorInvalidValue);
+  display.hcountBase = arg(0) - u32(vblanks * 286 + hcountLines());
+  result(0);
 }
 
 //The display's frame rate, a float: 59.94.

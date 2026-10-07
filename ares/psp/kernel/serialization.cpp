@@ -181,6 +181,9 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(t.wait <= Wait::Psmf && (w.wait <= Wait::Mailbox || w.wait == Wait::Mutex || w.wait == Wait::Psmf));
     check(t.callbackID < nextUID);
     s(t.suspended);
+    //its run figures (threads.cpp): no more time on the CPU than has passed
+    s(t.runCycles); s(t.interruptPreempts); s(t.threadPreempts); s(t.releases);
+    check(t.runCycles <= cycles);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
     check(t.wait != Wait::Controller || (t.waitCount & 0x7fff'ffff) < 64);
     //a synchronous read or write waits (with no callbacks: neither function's name ends in CB) for its device, due
@@ -222,6 +225,8 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(running);
   if(s.reading()) current = running ? findThread(running) : nullptr;
   check(!running || current);
+  s(ranSince);
+  check(ranSince <= cycles);
   s(readySequence);
   s(nextVblank);
   s(vblanks);
@@ -235,7 +240,11 @@ auto Kernel::serialize(serializer& s) -> bool {
     s(semaphore.uid); text(semaphore.name); s(semaphore.attributes); s(semaphore.count); s(semaphore.maximum);
     s(semaphore.initial);
   });
-  map(lwMutexes, [&](u32& workArea) { s(workArea); });
+  //lightweight mutexes: what creating one takes (attributes to 0x3ff, a count of 1 at most unless recursive)
+  map(lwMutexes, [&](LwMutex& mutex) {
+    s(mutex.workArea); text(mutex.name); s(mutex.attributes); s(mutex.initial);
+    check(!(mutex.attributes & ~0x3ffu) && mutex.initial >= 0 && (mutex.initial <= 1 || mutex.attributes & 0x200));
+  });
   //kernel mutexes (mutexes.cpp): held a count of 1 at most unless recursive, and held exactly while counted
   map(mutexes, [&](Mutex& mutex) {
     s(mutex.uid); text(mutex.name); s(mutex.attributes); s(mutex.initial); s(mutex.count); s(mutex.owner);
@@ -588,7 +597,7 @@ auto Kernel::serialize(serializer& s) -> bool {
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);
     for(auto& [uid, semaphore] : semaphores) check(uid < nextUID && semaphore.uid == uid);
-    for(auto& [uid, workArea] : lwMutexes) check(uid < nextUID);
+    for(auto& [uid, mutex] : lwMutexes) check(uid < nextUID);
     //a mutex is held by a thread there is that hasn't ended (an ending frees what it holds); a thread waiting for
     //one waits for one held by another thread (a mutex freed goes straight to its next waiter), with a count it takes
     for(auto& [uid, mutex] : mutexes) {
@@ -816,7 +825,7 @@ auto Kernel::serialize(serializer& s) -> bool {
         (c.nextSample > cycles ? c.nextSample - cycles <= period : cycles - c.nextSample < VblankCycles)));
   //the display: its one mode, 480x272 (sceDisplaySetMode refuses any other)
   s(display.mode); s(display.width); s(display.height);
-  s(display.frameBuffer); s(display.bufferWidth); s(display.pixelFormat);
+  s(display.frameBuffer); s(display.bufferWidth); s(display.pixelFormat); s(display.hcountBase);
   check(display.mode == 0 && display.width == 480 && display.height == 272);
 
   //calls into the program. The interrupt flag is the CPU's (its state, loaded before this, has it): on or held off,
