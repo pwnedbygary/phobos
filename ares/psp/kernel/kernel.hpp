@@ -724,7 +724,8 @@ struct Kernel {
 
   //interrupts.cpp: calls into the program, as interrupt handlers
   struct Call {
-    enum : u32 { Plain, Alarm, VTimer };  //what its return value means: nothing, or when a timer goes off again
+    enum : u32 { Plain, Alarm, VTimer, Ge };  //what its return value means: nothing, or when a timer goes off
+                                               //again; or a GE callback (sceGeBreak drops those)
     u32 function, gp;
     u32 arguments[4];
     bool resumesGe;       //the GE waits for it (a SIGNAL that suspends the list)
@@ -881,6 +882,7 @@ struct Kernel {
   auto sceGeSetCallback() -> void;
   auto sceGeUnsetCallback() -> void;
   auto sceGeContinue() -> void;
+  auto sceGeBreak() -> void;
   auto sceGeGetCmd() -> void;
   auto sceGeGetMtx() -> void;
   auto sceGeSaveContext() -> void;

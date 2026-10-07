@@ -286,6 +286,7 @@ static auto stateFields() -> void {
     {"ge.list.returnAddress", [&] { ge.list.returnAddress[1] ^= 4; }},
     {"ge.list.returnOffset", [&] { ge.list.returnOffset[1] ^= 4; }},
     {"ge.vertexAddress", [&] { ge.vertexAddress ^= 4; }}, {"ge.indexAddress", [&] { ge.indexAddress ^= 4; }},
+    {"ge.boxOutside", [&] { ge.boxOutside = !ge.boxOutside; }},
     {"ge.signalWord", [&] { ge.signalWord ^= 1; }}, {"ge.finishWord", [&] { ge.finishWord ^= 1; }},
     {"ge.endWord", [&] { ge.endWord ^= 1; }}, {"ge.bones", [&] { ge.bones[95] ^= 1; }},
     {"ge.world", [&] { ge.world[11] ^= 1; }}, {"ge.view", [&] { ge.view[11] ^= 1; }},
@@ -587,6 +588,7 @@ static auto stateFields() -> void {
     {"call function", [&] { k.calls[0].function ^= 4; }}, {"call gp", [&] { k.calls[0].gp ^= 4; }},
     {"call arguments", [&] { k.calls[0].arguments[2] ^= 1; }},
     {"call resumesGe", [&] { k.calls[0].resumesGe = true; }}, {"call vblank", [&] { k.calls[0].vblank = true; }},
+    {"call kind", [&] { k.calls[0].vblank = false, k.calls[0].kind = Kernel::Call::Ge; }},
     {"interrupting", [&] { k.interrupting = true; }}, {"rescheduleAfter", [&] { k.rescheduleAfter = true; }},
     {"interruptedHalted", [&] { k.interruptedHalted = true; }},
     {"callResumesGe", [&] { k.callResumesGe = true; }},
@@ -1244,7 +1246,10 @@ static auto stateFields() -> void {
   refuses("an alarm's handler called with no call for it", [&] { k.calls.pop_back(); });
   refuses("an alarm's handler called twice", [&] { k.calls.push_back(k.calls.back()); });
   refuses("a timer's call for an alarm there isn't", [&] { k.calls.back().id = 0x7777; });
-  refuses("a call of a kind there isn't", [&] { k.calls.back().kind = 3; });
+  refuses("a call of a kind there isn't", [&] { k.calls.back().kind = 4; });
+  refuses("a GE callback that's a vertical blank's too", [&] {
+    k.calls.push_back({0x0880'7000, 0x0880'8000, {}, false, true, Kernel::Call::Ge});
+  });
   auto vtimerOne = [&]() -> Kernel::VTimer& { return k.vtimers.at(vtimerID); };
   refuses("a vtimer under another's ID", [&] { vtimerOne().uid ^= 1; });
   refuses("a vtimer stopped with a base", [&] { vtimerOne().active = false; });

@@ -946,7 +946,8 @@ static auto geEndless() -> void {
 }
 
 //Drawing on several threads (ge/threads.cpp). A frame's worth of primitives: sprites and triangles, flat, blended
-//across, textured from RAM and blended over what's there, depth-tested; a picture drawn off the screen, then drawn
+//across, textured from RAM and blended over what's there, depth-tested; lines and a strip; a DXT texture; a bounding
+//box skipping a sprite and one not; a picture drawn off the screen, then drawn
 //with as a texture (render to texture); a block transfer of drawn pixels; a palette loaded from pixels just drawn; a
 //sprite drawing over its own texture (drawn at once, in order); and a 16-bit frame buffer. It comes out the same,
 //every byte of VRAM, with 1, 2, 4 and 8 threads, with batches shared out however small. Stopped at its stall address
@@ -995,6 +996,27 @@ static auto geThreads() -> void {
     for(u32 n = 0; n < 12; n++) {
       float x = n * 53 % 400, y = n * 29 % 200;
       put(GE::Sprites, {{0, 0, 0, x, y, 30000}, {64, 64, 0xc0ff'ffff, x + 77, y + 51, 30000}});
+    }
+    //lines (shallow and steep, a strip, colors and the texture along them), a DXT5 texture, and boxes: one out of
+    //sight skipping a sprite, one in sight not
+    for(u32 n = 0; n < 16; n++) {
+      float x = n * 23 % 400, y = n * 17 % 220;
+      put(GE::Lines, {{0, 0, 0xff00'ff00, x, y, 0}, {64, 64, 0xffff'00ff, x + 70.5f, y + 13.25f, 0},
+                      {0, 0, 0xff00'00ff, x + 3.75f, y + 40.5f, 0}, {64, 0, 0xffff'ffff, x + 9.0625f, y + 2, 0}});
+    }
+    put(GE::LineStrip, {{0, 0, 0xffff'ffff, 10, 250, 0}, {0, 0, 0xff00'0000, 470, 10, 0},
+                        {0, 0, 0xff80'8080, 20.5f, 20.5f, 0}});
+    list.put(GE::TextureFormat, 10);
+    put(GE::Sprites, {{0, 0, 0, 200, 150, 30000}, {64, 64, 0xffff'ffff, 264, 214, 30000}});
+    list.put(GE::TextureFormat, 3);
+    for(float at : {-100.0f, 300.0f}) {
+      list.to(GE::VertexAddress, vertex);
+      for(float value : {0.0f, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+      memory.write(4, vertex, 0), vertex += 4;
+      for(float value : {at, at, 0.0f}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+      list.put(GE::BoundingBox, 1);
+      list.to(GE::ConditionalJump, list.address + 2 * 4 + 3 * 4);  //past the sprite: its BASE, address and PRIM
+      put(GE::Sprites, {{0, 0, 0, 380 + at / 10, 200, 30000}, {64, 64, 0xff40'80ff, 470, 260, 30000}});
     }
     stall = list.address;
     //drawn into, then drawn with, in the same render target: the texture decoded once the first is drawn
@@ -1110,6 +1132,179 @@ static auto geThreads() -> void {
   }
 }
 
+//sceGeBreak, as pspautotests' gpu/ge/break and breakwait recorded on a PSP: the refusals in their order (a mode but 0
+//or 1, parameters reaching the kernel's half of memory, an empty queue); mode 0 breaking off a stalled list, its ID
+//returned, the GE free (sceGeSaveContext works), and sceGeContinue taking it up again; a list paused by a PAUSE
+//signal busy; mode 1 throwing everything away, the next list taking the first ID again, and threads waiting for a
+//list or for all drawing left waiting until a list ends.
+static auto geBreak() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  CHECK(m.call("sceGeBreak", {0, 0}), Kernel::ErrorAlready);
+  CHECK(m.call("sceGeBreak", {1, 0}), Kernel::ErrorAlready);
+  CHECK(m.call("sceGeBreak", {0xffff'ffff, 0}), Kernel::ErrorInvalidMode);
+  CHECK(m.call("sceGeBreak", {2, 0}), Kernel::ErrorInvalidMode);
+  CHECK(m.call("sceGeBreak", {0, ListA}), Kernel::ErrorAlready);
+  CHECK(m.call("sceGeBreak", {0, 0xdead'beef}), Kernel::ErrorPrivilegeRequired);
+  CHECK(m.call("sceGeBreak", {0, 0xffff'ffff}), Kernel::ErrorPrivilegeRequired);
+  CHECK(m.call("sceGeBreak", {0, 0x7fff'fff0}), Kernel::ErrorPrivilegeRequired);
+  CHECK(m.call("sceGeBreak", {0, 0x7fff'ffef}), Kernel::ErrorAlready);
+  CHECK(m.call("sceGeContinue", {}), 0);
+  //break's list: NOP, a PAUSE signal, then a FINISH twice
+  ListWriter list{memory, ListA};
+  list.put(GE::Nop); list.put(GE::Signal, 0x03 << 16); list.put(GE::End);
+  list.put(GE::Nop); list.put(GE::Finish); list.put(GE::End);
+  list.put(GE::Nop); list.put(GE::Finish); list.put(GE::End);
+  u32 id = m.call("sceGeListEnQueue", {ListA, ListA, 0xffff'ffff, 0});  //stalled at its start
+  CHECK(m.call("sceGeSaveContext", {Saved}), 0xffff'ffff);
+  CHECK(m.call("sceGeBreak", {0, 0}), id);
+  CHECK(m.kernel.geRunning, -1);
+  CHECK(m.call("sceGeListSync", {id, 1}), 4);  //(paused: not recorded)
+  CHECK(m.call("sceGeSaveContext", {Saved}), 0);
+  CHECK(m.call("sceGeContinue", {}), 0);
+  CHECK(m.call("sceGeListSync", {id, 1}), 3);  //at its stall address again
+  CHECK(m.call("sceGeBreak", {1, 0}), 0);
+  CHECK(m.call("sceGeListSync", {id, 1}), Kernel::ErrorInvalidID);
+  id = m.call("sceGeListEnQueue", {ListA, ListA + 400, 0xffff'ffff, 0});
+  CHECK(m.call("sceGeListSync", {id, 1}), 4);  //paused at its FINISH by the signal
+  CHECK(m.call("sceGeBreak", {0, 0}), Kernel::ErrorBusy);
+  CHECK(m.call("sceGeContinue", {}), 0);
+  CHECK(m.call("sceGeListSync", {id, 1}), 0);
+  CHECK(m.call("sceGeBreak", {1, 0}), Kernel::ErrorAlready);
+  ListWriter done{memory, ListB};
+  done.put(GE::Nop); done.put(GE::Finish); done.put(GE::End);
+  m.call("sceGeListEnQueue", {ListB, ListB + 400, 0xffff'ffff, 0});
+  CHECK(m.call("sceGeBreak", {0, 0}), Kernel::ErrorAlready);  //finished already
+
+  //breakwait: two threads (better than main) waiting, for a stalled list and for all drawing, stay waiting through a
+  //break of everything; the next list takes the first ID, and as it finishes both wake with 0
+  KernelMachine w;
+  constexpr u32 Woke = KernelMachine::Results;
+  w.system.recompiler.enabled = false;
+  w.system.power(0x0880'1000);
+  for(u32 n : {0u, 1u}) {
+    Assembler waiter{w, 0x0880'1000 + n * 0x100};
+    if(n == 0) waiter.li(a0, Kernel::GeListIDs), waiter.li(a1, 0), waiter.call("sceGeListSync");
+    else waiter.li(a0, 0), waiter.call("sceGeDrawSync");
+    waiter.li(t0, Woke + n * 4); waiter.put(sw(v0, 0, t0));
+    waiter.li(a0, 0); waiter.call("sceKernelExitThread");
+  }
+  ListWriter stalled{w.system.memory, ListA};
+  stalled.put(GE::Finish); stalled.put(GE::End);
+  w.system.memory.write(4, Woke, 0x1234), w.system.memory.write(4, Woke + 4, 0x1234);
+  CHECK(w.call("sceGeListEnQueue", {ListA, ListA, 0xffff'ffff, 0}), Kernel::GeListIDs);
+  for(u32 n : {0u, 1u}) {
+    s32 uid = w.kernel.createThread(n ? "drawWaiter" : "listWaiter", 0x0880'1000 + n * 0x100, 0x10, 0x1000, 0, 0);
+    w.kernel.startThread(*w.kernel.threads[uid], 0, 0);
+  }
+  w.kernel.run(100'000);
+  auto waiting = [&] {
+    u32 count = 0;
+    for(auto& [uid, thread] : w.kernel.threads) count += thread->status == Kernel::Status::Waiting;
+    return count;
+  };
+  CHECK(waiting(), 2u);
+  CHECK(w.call("sceGeBreak", {1, 0}), 0);
+  w.kernel.run(100'000);
+  CHECK(waiting(), 2u);
+  CHECK(w.call("sceGeListSync", {Kernel::GeListIDs, 1}), Kernel::ErrorInvalidID);
+  CHECK(w.call("sceGeDrawSync", {1}), 0);
+  w.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});  //the first ID again: the list waiter's wakes it
+  w.kernel.run(100'000);
+  CHECK(waiting(), 0u);
+  CHECK(w.system.memory.read(4, Woke), 0u);
+  CHECK(w.system.memory.read(4, Woke + 4), 0u);
+}
+
+//sceGeBreak(1) and the GE's callbacks (unmeasured: pspautotests doesn't record a PSP at this). A finish callback
+//waiting its turn (interrupts held off) when the break comes is dropped, so the next list, which takes the same ID,
+//has its own callback run once, first, while that list is still queued; and so does it when the break comes from a
+//finish callback that's running, and enqueues the next list itself. On both engines, the first with the state round
+//trip while the new list's callback waits.
+static auto geBreakCallbacks() -> void {
+  constexpr u32 Gate = KernelMachine::Results + 0x40, Other = KernelMachine::Results + 0x44;
+  for(bool fromCallback : {false, true}) for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    Assembler finish{m, 0x0880'4000};  //notes its id, whether drawing goes on (sceGeDrawSync(1)) and its turn
+    finish.put(addiu(sp, sp, -16)); finish.put(sw(ra, 12, sp)); finish.put(sw(a0, 8, sp));
+    finish.li(a0, 1); finish.call("sceGeDrawSync");
+    finish.put(lw(a0, 8, sp));
+    finish.li(t0, Finished); finish.put(sll(t1, a0, 4)); finish.put(addu(t0, t0, t1));
+    finish.put(sw(a0, 0, t0)); finish.put(sw(v0, 4, t0));
+    finish.li(t1, Turn); finish.put(lw(t2, 0, t1)); finish.put(addiu(t2, t2, 1)); finish.put(sw(t2, 0, t1));
+    finish.put(sw(t2, 8, t0));
+    finish.put(lw(ra, 12, sp)); finish.put(addiu(sp, sp, 16));
+    finish.put(jr(ra));
+    finish.put(nop);
+    Assembler breaker{m, 0x0880'4200};  //breaks everything, then enqueues list B with the other callbacks
+    breaker.put(addiu(sp, sp, -16)); breaker.put(sw(ra, 12, sp));
+    breaker.li(a0, 1); breaker.li(a1, 0); breaker.call("sceGeBreak");
+    breaker.li(t0, KernelMachine::Results); breaker.put(sw(v0, 0, t0));
+    breaker.li(a0, ListB); breaker.li(a1, 0); breaker.li(t0, Other); breaker.put(lw(a2, 0, t0)); breaker.li(a3, 0);
+    breaker.call("sceGeListEnQueue");
+    breaker.li(t0, KernelMachine::Results + 4); breaker.put(sw(v0, 0, t0));
+    breaker.put(lw(ra, 12, sp)); breaker.put(addiu(sp, sp, 16));
+    breaker.put(jr(ra));
+    breaker.put(nop);
+    memory.write(4, Callbacks + 8, 0x0880'4000);
+    memory.write(4, Callbacks + 0x18, 0x0880'4200);
+    ListWriter a{memory, ListA};
+    a.put(GE::Finish, 1); a.put(GE::End);
+    ListWriter b{memory, ListB};
+    b.put(GE::Finish, 2); b.put(GE::End);
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, Callbacks); main.call("sceGeSetCallback");
+    main.li(t0, Other); main.put(sw(v0, 0, t0));
+    main.put(addu(s1, v0, zero));
+    if(fromCallback) main.li(a0, Callbacks + 0x10), main.call("sceGeSetCallback"), main.put(addu(s1, v0, zero));
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s0, v0, zero));
+    main.li(a0, ListA); main.li(a1, 0); main.put(addu(a2, s1, zero)); main.li(a3, 0);
+    main.call("sceGeListEnQueue");  //finishes at once; its callback waits
+    if(!fromCallback) {
+      main.li(a0, 1); main.li(a1, 0); main.call("sceGeBreak");
+      main.li(t0, KernelMachine::Results); main.put(sw(v0, 0, t0));
+      main.li(a0, ListB); main.li(a1, 0); main.put(addu(a2, s1, zero)); main.li(a3, 0);
+      main.call("sceGeListEnQueue");  //the first ID again: finishes too, its callback queued behind
+      main.li(t0, KernelMachine::Results + 4); main.put(sw(v0, 0, t0));
+      u32 wait = main.here();
+      main.li(t0, Gate); main.put(lw(t1, 0, t0));
+      main.put(beq(t1, zero, s32(wait - main.here() - 4) / 4));
+      main.put(nop);
+    }
+    main.put(addu(a0, s0, zero)); main.call("sceKernelCpuResumeIntr");
+    main.li(a0, 0); main.call("sceGeDrawSync");
+    main.li(t0, KernelMachine::Results + 8); main.put(sw(v0, 0, t0));
+    main.call("sceKernelExitGame");
+    m.system.recompiler.enabled = recompile;
+    m.system.power(0x0880'1000);
+    s32 uid = m.kernel.createThread("main", 0x0880'1000, 0x20, 0x4000, 0, 0x0812'3456);
+    m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+    if(!fromCallback) {
+      m.kernel.run(Kernel::VblankCycles);
+      CHECK(m.kernel.calls.size(), 1);
+      if(!m.kernel.calls.empty()) {
+        CHECK(m.kernel.calls[0].kind, Kernel::Call::Ge);
+        CHECK(m.kernel.calls[0].arguments[0], 2);
+      }
+      CHECK(roundTrip(m), true);
+      memory.write(4, Gate, 1);
+    }
+    m.kernel.run(Kernel::VblankCycles * 4);
+    CHECK(m.kernel.exited, true);
+    for(auto& note : m.notes) std::printf("  note: %s\n", note.c_str());
+    CHECK(memory.read(4, KernelMachine::Results), 0);
+    CHECK(memory.read(4, KernelMachine::Results + 4), Kernel::GeListIDs);
+    CHECK(memory.read(4, KernelMachine::Results + 8), 0);
+    CHECK(memory.read(4, Turn), 1);                //list B's callback alone ran,
+    CHECK(memory.read(4, Finished + 32), 2);
+    CHECK(memory.read(4, Finished + 36), 2);       //with list B still drawing
+    CHECK(memory.read(4, Finished + 40), 1);
+    CHECK(memory.read(4, Finished + 16), 0);       //and list A's never
+  }
+}
+
 auto geTests() -> Tests {
   return {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
@@ -1117,7 +1312,8 @@ auto geTests() -> Tests {
     {"ge saved state", geSaved}, {"ge endless list", geEndless}, {"ge drawn on several threads", geThreads},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause},
-    {"ge calls and threads", geCallsAndThreads},
+    {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
+    {"ge break and callbacks", geBreakCallbacks},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
     {"gu program", guProgram}, {"copy sample", copySample},
   };

@@ -26,6 +26,7 @@ auto GE::power() -> void {
   for(auto& byte : clut) byte = 0;
   list = {};
   vertexAddress = indexAddress = 0;
+  boxOutside = false;
   signalWord = finishWord = endWord = 0;
   for(auto& element : bones) element = 0;
   for(auto& element : world) element = 0;
@@ -55,8 +56,9 @@ auto GE::float24(u32 argument) -> float {
 }
 
 //Saving and loading the GE, for save states: its commands' last words (from which every draw works its state out
-//afresh), the palette, the list it's running, where its vertices and indices are, the matrices, and what its next
-//END means. What it noted stays noted; the textures it kept decoded go on loading (memory changed under them).
+//afresh), the palette, the list it's running, where its vertices and indices are, the last bounding box's result
+//(a list may stop at its stall address between BOUNDING_BOX and BJUMP), the matrices, and what its next END means.
+//What it noted stays noted; the textures it kept decoded go on loading (memory changed under them).
 //Loading returns false for what no GE could hold: CALLs more than two deep, or an END that means anything but the
 //end, a FINISH or a SIGNAL.
 auto GE::serialize(serializer& s) -> bool {
@@ -67,6 +69,7 @@ auto GE::serialize(serializer& s) -> bool {
   s(list);
   s(vertexAddress);
   s(indexAddress);
+  s(boxOutside);
   s(signalWord);
   s(finishWord);
   s(endWord);

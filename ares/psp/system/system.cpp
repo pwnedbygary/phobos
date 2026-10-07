@@ -333,7 +333,9 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
-//field means: 11 since the kernel holds mutexes, alarms and virtual timers, calls into the program pass four
+//field means: 12 since the GE keeps its last bounding box's result for BJUMP, and calls into the program say
+//which are the GE's callbacks (part 29); 11 since the kernel holds
+//mutexes, alarms and virtual timers, calls into the program pass four
 //arguments and say whether they're a timer's handler, and the controller's idle thresholds, the GE's translation
 //width and the HOME menu's language are kept (part 28); 10 since sceAtrac3plus, sceMp3 and sceMpeg decode, keeping
 //their streams' places (part 26); 9 since
@@ -351,7 +353,7 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //dialogs), each of which came first on a branch of its own as a version 2, two layouts that differ from each other
 //and from these. A state of any older version is refused by it.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 11;
+static constexpr u32 StateVersion = 12;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.

@@ -431,6 +431,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceGe_user",        "sceGeSetCallback",              &Kernel::sceGeSetCallback);
   add("sceGe_user",        "sceGeUnsetCallback",            &Kernel::sceGeUnsetCallback);
   add("sceGe_user",        "sceGeContinue",                 &Kernel::sceGeContinue);
+  add("sceGe_user",        "sceGeBreak",                    &Kernel::sceGeBreak);
   add("sceGe_user",        "sceGeGetCmd",                   &Kernel::sceGeGetCmd);
   add("sceGe_user",        "sceGeGetMtx",                   &Kernel::sceGeGetMtx);
   add("sceGe_user",        "sceGeSaveContext",              &Kernel::sceGeSaveContext);

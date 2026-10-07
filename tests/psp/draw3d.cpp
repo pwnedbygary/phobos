@@ -572,6 +572,214 @@ static auto draw3dEnvironmentMap() -> void {
   CHECK(litPoint(c, 0.6f, 0.8f, 0) & 0xffff, 14 << 8 | 11);
 }
 
+//Lines in 3D: put on the screen as triangles' corners are, then drawn as in 2D (from (1.5, 2.5) to (9.5, 2.5):
+//columns 1-8), their depth blended along them (2000 to 3000: at column 5, half way, 2500); cut at the near plane
+//where they reach past it (to z -3: a third of the way, at x 5.5, so columns 1-4), the new end's color blended a
+//third of the way in 256ths as a triangle's (255 * 171 / 256 = 170), the colors then along the rest (at column 4,
+//(255 * 16 + 170 * 48) / 64 = 191); with DEPTH_CLIP_ENABLE off, dropped for that z / w; with flat shading, the
+//cut-away end's color; fog blended along them (none at z 1, all at z -1: at column 4's middle, 72 of 128
+//sixteenths along, 0.4375 left); dropped with an end off the screen.
+static auto draw3dLines() -> void {
+  Scene c;
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 1.5f, 2.5f, 0}, {0, 0, 0xff00'00ff, 9.5f, 2.5f, 1}});
+  for(u32 x = 0; x < 16; x++) CHECK(c.pixel(x, 2) != 0, x >= 1 && x <= 8);
+  CHECK(c.depth(1, 2), 2000u);
+  CHECK(c.depth(5, 2), 2500u);
+  c.clear();
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 1.5f, 2.5f, 0}, {0, 0, 0xff00'0000, 13.5f, 2.5f, -3}});
+  for(u32 x = 0; x < 16; x++) CHECK(c.pixel(x, 2) != 0, x >= 1 && x <= 4);
+  CHECK(c.pixel(1, 2), 0x0000'00ffu);
+  CHECK(c.pixel(4, 2), 0x0000'00bfu);
+  c.ge.commands[GE::DepthClipEnable] = 0;
+  c.clear();
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 1.5f, 2.5f, 0}, {0, 0, 0xff00'0000, 13.5f, 2.5f, -3}});
+  CHECK(c.pixel(2, 2), 0u);
+  c.ge.commands[GE::DepthClipEnable] = 1;
+  c.ge.commands[GE::ShadeMode] = 0;
+  c.clear();
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 1.5f, 2.5f, 0}, {0, 0, 0xff00'ff00, 13.5f, 2.5f, -3}});
+  CHECK(c.pixel(1, 2), 0x0000'ff00u);
+  c.ge.commands[GE::ShadeMode] = 1;
+  c.ge.commands[GE::FogEnable] = 1;
+  c.ge.commands[GE::FogEnd] = f24(1);
+  c.ge.commands[GE::FogSlope] = f24(0.5f);
+  c.ge.commands[GE::FogColor] = 0x00'00ff;
+  c.clear();
+  c.draw(GE::Lines, {{0, 0, 0xff00'ff00, 0, 0.5f, 1}, {0, 0, 0xff00'ff00, 8, 0.5f, -1}});
+  u32 f = u32(0.4375f * 256);
+  CHECK(c.pixel(4, 0), u32((255 * f + 255) / 256) << 8 | u32((255 * (255 - f) + 255) / 256));
+  c.ge.commands[GE::FogEnable] = 0;
+  c.clear();
+  c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 1.5f, 2.5f, 0}, {0, 0, 0xff00'00ff, 4096 - 2048, 2.5f, 0}});
+  CHECK(c.pixel(2, 2), 0u);
+}
+
+//Bounding boxes (draw.cpp's boundingBox()), as pspautotests' gpu/bounding programs recorded on a PSP: one vertex at
+//(1, 1, 1) whose clip space position the projection sets, against the 480x272 screen they draw to (viewport 240 and
+//-136 about 2048, offset 2048 - 240 and 2048 - 136, depth -32767 about 32767, every matrix but the projection the
+//identity): planes' x, y, z and w; viewport's scissor, region, viewport and "cull box" cases; count's counts and the
+//vertices that count among many; vertexaddr's addresses moved on. Then through a list: BJUMP jumping (as JUMP,
+//BASE and the offset added) only after a box out of sight, and a list stopped between BOUNDING_BOX and BJUMP, saved
+//and carried on in another machine.
+static auto draw3dBoundingBoxes() -> void {
+  System s;
+  GE& ge = s.ge;
+  auto& c = ge.commands;
+  auto reset = [&] {
+    for(auto& word : c) word = 0;
+    for(auto* m : {ge.world, ge.view, ge.projection}) for(u32 n = 0; n < 16; n++) m[n] = 0;
+    for(u32 n : {0, 4, 8}) ge.world[n] = ge.view[n] = f24(1);
+    for(u32 n : {0, 5, 10, 15}) ge.projection[n] = f24(1);
+    c[GE::ViewportXScale] = f24(240), c[GE::ViewportYScale] = f24(-136), c[GE::ViewportZScale] = f24(-32767);
+    c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32767);
+    c[GE::OffsetX] = (2048 - 240) << 4, c[GE::OffsetY] = (2048 - 136) << 4;
+    c[GE::Scissor2] = 479 | 271 << 10, c[GE::Region2] = 479 | 271 << 10;
+    c[GE::VertexType] = 0x180;  //float position, 3D
+  };
+  auto vertex = [&](u32 n, float x, float y, float z) {
+    for(u32 k : {0u, 1u, 2u}) s.memory.write(4, VertexData3D + n * 12 + k * 4, Scene::bits(k ? k == 1 ? y : z : x));
+  };
+  auto outside = [&](u32 side, float value, bool clamp = true) {  //the projection's x, y, z or w at value
+    ge.projection[side * 5] = f24(value);
+    c[GE::DepthClipEnable] = clamp;
+    vertex(0, 1, 1, 1);
+    ge.vertexAddress = VertexData3D;
+    bool out = ge.boundingBox(1);
+    ge.projection[side * 5] = f24(1);
+    return out;
+  };
+  reset();
+  //planes
+  for(u32 side : {0u, 1u, 2u}) {
+    CHECK(outside(side, -1.01f), true);
+    CHECK(outside(side, -1.0f), false);
+    CHECK(outside(side, 1.0f), false);
+    CHECK(outside(side, 1.01f), true);
+  }
+  CHECK(outside(2, -65535.999f, false), false);
+  CHECK(outside(2, 65535.999f, false), false);
+  CHECK(outside(3, -0.01f), true);
+  CHECK(outside(3, -0.0f), true);
+  CHECK(outside(3, 65535.999f), false);
+  //MIN_Z and MAX_Z don't count; viewport z: past -w or w out of sight with DEPTH_CLIP_ENABLE, in sight without
+  c[GE::MinZ] = c[GE::MaxZ] = 0xffff;
+  CHECK(outside(2, 1.0f), false);
+  c[GE::MinZ] = c[GE::MaxZ] = 0;
+  c[GE::ViewportZScale] = f24(16383);
+  for(float z : {-2.0f, -3.0f, 2.0f, 3.0f}) CHECK(outside(2, z, true) && !outside(2, z, false), true);
+  c[GE::ViewportZScale] = f24(-32767);
+  //the scissor rectangle and the drawing region, each way: x 0 (at -1) and 480 (at 1); y 272 (at -1), 0 (at 1)
+  auto edges = [&](u32 command1, u32 command2) {
+    auto box = [&](u32 left, u32 top, u32 right, u32 bottom) {
+      c[command1] = left | top << 10, c[command2] = right | bottom << 10;
+    };
+    box(240, 0, 479, 271); CHECK(outside(0, -1.0f), true); CHECK(outside(0, 1.0f), false);
+    box(0, 0, 0, 271); CHECK(outside(0, -1.0f), false); CHECK(outside(0, 0.1f), true);
+    box(0, 0, 479, 135); CHECK(outside(1, -1.0f), true); CHECK(outside(1, 1.0f), false);
+    box(0, 136, 479, 271); CHECK(outside(1, -1.0f), false);
+    box(0, 271, 479, 271); CHECK(outside(1, 0.1f), true);
+    box(0, 0, 479, 271);
+  };
+  edges(GE::Scissor1, GE::Scissor2);
+  edges(GE::Region1, GE::Region2);
+  //viewport x (scale 120): at -3, x -120, out of sight; at -2, x 0, in sight though past -w; likewise right
+  c[GE::ViewportXScale] = f24(120);
+  CHECK(outside(0, -3.0f), true); CHECK(outside(0, -2.0f), false);
+  CHECK(outside(0, 3.0f), true); CHECK(outside(0, 2.0f), false);
+  //the cull box: held to the 4096-pixel screen, and a pixel's slack left of the left edge
+  auto cull = [&](float value, float scale, float center, u32 offset) {
+    c[GE::ViewportXScale] = f24(scale), c[GE::ViewportXCenter] = f24(center), c[GE::OffsetX] = offset << 4;
+    bool out = outside(0, value);
+    c[GE::ViewportXScale] = f24(240), c[GE::ViewportXCenter] = f24(2048), c[GE::OffsetX] = (2048 - 240) << 4;
+    return out;
+  };
+  CHECK(cull(-999, 120, 0, 0), false);
+  CHECK(cull(-0.0f, 120, 0, 0), false);
+  CHECK(cull(-2, 1, 2, 2), true);
+  CHECK(cull(-1, 1, 2, 2), false);
+  CHECK(cull(999, 1, 4095, 4095), false);
+  CHECK(cull(1, 1, 4095, 4095), false);
+  CHECK(cull(999, 1, 4095, 3615), true);
+  CHECK(cull(999, 1, 4095, 3616), false);
+
+  //count: 0 (or 0x10000) vertices out of sight; one in sight among many; of 0x101 only the first counts, of
+  //0x1000 only 0xe00-0xeff
+  auto many = [&](u32 count, u32 insideFrom, u32 insideCount) {
+    for(u32 n = 0; n < (count & 0xffff) + 1; n++) {
+      bool in = n >= insideFrom && n < insideFrom + insideCount;
+      vertex(n, in ? 0 : -999, in ? 0 : -999, in ? 0 : -999);
+    }
+    ge.vertexAddress = VertexData3D;
+    return ge.boundingBox(count & 0xffff);
+  };
+  CHECK(many(0, 0, 0), true);
+  CHECK(many(0x10000, 0, 1), true);
+  CHECK(many(0x100, 0xff, 1), false);
+  CHECK(many(0x101, 0x100, 1), true);
+  CHECK(many(0x101, 0, 1), false);
+  CHECK(many(0x101, 1, 0x100), true);
+  CHECK(many(0x1000, 0xe00, 1), false);
+  CHECK(many(0x1000, 0xeff, 1), false);
+  CHECK(many(0x1000, 0xf00, 1), true);
+  CHECK(many(0x1000, 0xdff, 1), true);
+  //vertexaddr: the vertex address moves on as PRIM's would; with indices, the index address (32-bit indices too)
+  vertex(0, 0, 0, 0);
+  for(u32 type : {0x180u, 0x100u, 0x80u, 0x80'0180u, 0x0a1u}) {
+    c[GE::VertexType] = type;
+    ge.vertexAddress = VertexData3D;
+    ge.boundingBox(1);
+    CHECK(ge.vertexAddress - VertexData3D, ge.vertexFormat().size);
+  }
+  for(u32 index : {1u, 2u, 3u}) {
+    c[GE::VertexType] = 0x180 | index << 11;
+    for(u32 n = 0; n < 256; n++) s.memory.write(1, VertexData3D + 0x1000 + n, 0);
+    ge.vertexAddress = VertexData3D, ge.indexAddress = VertexData3D + 0x1000;
+    CHECK(ge.boundingBox(64), false);
+    CHECK(ge.vertexAddress, VertexData3D);
+    CHECK(ge.indexAddress - (VertexData3D + 0x1000), 64 * (index == 3 ? 4 : index));
+  }
+
+  //in a list: AMBIENT_ALPHA 1, BOUNDING_BOX, BJUMP over AMBIENT_ALPHA 2, as pspautotests' programs; the box in and
+  //out of sight; BJUMP's address relative as JUMP's (here to an ORIGIN), and a list stalled before its BJUMP, saved
+  //and loaded into another machine, carrying on as it would have
+  constexpr u32 List = 0x0894'0000;
+  for(bool out : {false, true}) {
+    for(bool stalled : {false, true}) {
+      reset();
+      vertex(0, out ? -999 : 0, 0, 0);
+      u32 at = List;
+      auto put = [&](u32 command, u32 argument = 0) { s.memory.write(4, at, command << 24 | argument), at += 4; };
+      put(GE::Base, VertexData3D >> 8 & 0xf'0000), put(GE::VertexAddress, VertexData3D & 0xff'ffff);
+      put(GE::Base, 0);
+      put(GE::AmbientAlpha, 1);
+      put(GE::Origin);
+      put(GE::BoundingBox, 1);
+      u32 jump = at;
+      put(GE::ConditionalJump, 4 * 4);  //from the ORIGIN, past what follows
+      put(GE::AmbientAlpha, 2);
+      put(GE::End);
+      ge.list = {};
+      ge.list.address = List;
+      if(stalled) ge.list.stall = jump;
+      ge.run(100);
+      if(stalled) {
+        serializer saved;
+        s.memory.serialize(saved);
+        ge.serialize(saved);
+        System other;
+        serializer loading{saved.data(), saved.size()};
+        other.memory.serialize(loading);
+        CHECK(other.ge.serialize(loading), true);
+        other.ge.list.stall = 0;
+        other.ge.run(100);
+        CHECK(other.ge.commands[GE::AmbientAlpha] & 0xff, out ? 1u : 2u);
+      } else {
+        CHECK(ge.commands[GE::AmbientAlpha] & 0xff, out ? 1u : 2u);
+      }
+    }
+  }
+}
+
 auto draw3dTests() -> Tests {
   return {
     {"draw3d transform", draw3dTransform}, {"draw3d outside", draw3dOutside}, {"draw3d clipping", draw3dClipping},
@@ -580,6 +788,7 @@ auto draw3dTests() -> Tests {
     {"draw3d morph and skin", draw3dMorphAndSkin}, {"draw3d lighting ambient", draw3dLightingAmbient},
     {"draw3d lighting diffuse", draw3dLightingDiffuse}, {"draw3d lighting point and spot", draw3dLightingPointAndSpot},
     {"draw3d lighting specular", draw3dLightingSpecular}, {"draw3d environment map", draw3dEnvironmentMap},
+    {"draw3d lines", draw3dLines}, {"draw3d bounding boxes", draw3dBoundingBoxes},
   };
 }
 

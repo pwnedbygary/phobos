@@ -28,7 +28,8 @@ merged in. Part 26, music and movies (FFmpeg's LGPL decoders under sceAtrac3plus
 the PSP in the desktop program (its library, settings, controls and picture, and FFmpeg built for Linux, macOS and
 Windows), is on `cursor/psp-desktop-2b67`, on top of part 26's. Part 28, the functions 266 games ask for (kernel
 mutexes, alarms, virtual timers, and the clock kept as the PSP keeps it in system calls), is on
-`cursor/psp-hle-games5-2b67`, on top of part 27's.
+`cursor/psp-hle-games5-2b67`, on top of part 27's. Part 29, the GE features games are missing (lines, bounding
+boxes, compressed DXT textures, sceGeBreak), is on `cursor/psp-ge-features-2b67`, on top of part 28's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -3643,3 +3644,195 @@ no thread) and "the clock inside a block" (`timers.cpp`: the time read after 900
 both engines); each fails with its fix undone. The comments on the battery icon and on the cancels' negative count
 now say why. tests/psp 274 groups, with and without the sanitizers; tests/psp/ares 286 checks; tests/allegrex 56
 groups; none failed. pspautotests' threads/ and intr/ programs each print what they did before (72 of 167 matching).
+
+## Part 29: lines, bounding boxes and compressed textures
+
+On branch `cursor/psp-ge-features-2b67`, on top of part 28's `cursor/psp-hle-games5-2b67` (#156). The owner's run of
+266 games (`origin/local/psp-runner`'s `docs/psp-compatibility.md`) names the GE features its games stopped at: lines
+aren't drawn (15 games), bounding boxes aren't tested (8), compressed DXT textures (6), curved surfaces (1); and seven
+of the owner's games import sceGeBreak. This part draws lines, tests bounding boxes, decodes DXT textures and adds
+sceGeBreak; curved surfaces are left. Sources: pspsdk's headers and GU library (BSD: `sceGuDrawArray` with `GU_LINES`
+and `GU_LINE_STRIP`, `sceGuBeginObject` and `sceGuEndObject`, `pspgu.h`'s DXT formats, `pspge.h`'s sceGeBreak, its
+`doc/commands.txt`), pspautotests' programs and the results they recorded on a PSP, public descriptions of S3TC, and
+the owner's games. No other emulator's code was read. pspautotests' screenshots (`.expected.bmp`) are a PSP's own
+frame buffer (its `common.c` writes it to `host0:` on hardware); part 28's scratch runner of their programs, given
+their screenshot call (the frame buffer kept, compared with the `.expected.bmp` pixel for pixel), ran the programs
+named below through this core, before and after.
+
+**Lines** (`draw.cpp`'s `line()`, `raster.cpp`'s `lineRows()`, `transform.cpp`'s `clipLine()`):
+- A pixel wide, by the "diamond exit" rule of OpenGL and Direct3D, which pspautotests' `gpu/exact/lines` names as the
+  PSP's. Each pixel has a diamond around its middle, the points less than half a pixel from it counting the distance
+  across plus the distance down; a line lights the pixels whose diamonds it leaves, those it meets and doesn't end
+  in. Of a diamond's edge, its top and left corners count as inside it, with all its edges but the bottom-right
+  one. So a level line along the boundary between two rows lights the row below it, and an upright one the column to
+  its right, as the PSP drew them; a line a whole pixel long lights one pixel, the first along it and not the last,
+  whichever way it runs; and the pixel holding the point where two lines of a strip meet is lit once, by the second.
+  Exact: positions are whole sixteenths, the tests near a line's ends compare fractions multiplied out, and between
+  them the line lights a pixel in each column (row, for a steep line) where it crosses the column's middle.
+- That reproduces every picture of lines pspautotests recorded on a PSP, pixel for pixel: `gpu/primitives/lines` and
+  `linestrip` (now identical, with the 8-bit fix below), and `indices`' lines (what still differs there is PRIM's kind
+  7, not lines). It doesn't reproduce `gpu/exact/lines`, which checks 16 pictures (random lines, ends on pixel
+  middles, edges and corners in every direction, lines shorter than a pixel, colors along lines, anti-aliasing) by
+  their CRCs only: none of them, nor did any of a few hundred variants a scratch model tried against the same CRCs
+  (the diamond's edges counted every way; sampling at the middles along the longer axis, either end counted or not,
+  direction-aware or not; the other coordinate rounded down, to the nearest or up; the slope cut to 6-16 bits; ends
+  snapped to whole pixels). The model's CRCs were checked against a blank picture's (`gpu/exact/coverage`'s
+  zero-area jobs), and the core's way through such programs against that sibling program, whose jobs it matches but
+  for three kinds of triangles (below). So the PSP's rule differs from these somewhere its pictures don't show; round
+  4 of the measuring program records the pixels themselves (below).
+- Colors, depth, fog and texture coordinates are blended along a line as at the point where it crosses the pixel's
+  middle column (row, for a steep line), held to its ends, with the arithmetic triangles use; flat shading takes the
+  second vertex's color; in 2D, texture coordinates are stepped from the left (top) end as for sprites and triangles,
+  in 3D blended for the perspective. Lines go through the same pixel pipeline, as jobs in the GE's bands of rows on
+  its threads, their textures kept decoded. In 3D a line is dropped by the rules for a triangle's corners (an end off
+  the screen, depths outside the range), and cut where it reaches past the near plane (the new end blended from the
+  kept one, as a triangle's; with flat shading, a cut-away second end keeps its color). None of that is measured but
+  2D's pictures. Anti-aliasing (ANTI_ALIAS_ENABLE, `GU_LINE_SMOOTH`) isn't emulated, and noted once: `gpu/exact/lines`
+  shows it changes nothing without blending; what alpha it gives with blending isn't known.
+
+**Bounding boxes** (`draw.cpp`'s `boundingBox()`, `list.cpp`'s BOUNDING_BOX and BJUMP). BOUNDING_BOX tests the count
+vertices at the vertex address (pspsdk's `sceGuBeginObject` gives the corners of a box around what follows), and BJUMP
+then jumps where JUMP would, if the box was out of sight (`sceGuEndObject` aims it past the object). As pspautotests'
+`gpu/bounding` programs recorded on a PSP, every case of `count`, `planes`, `viewport` and `vertexaddr`:
+- Each vertex goes through the matrices and onto the screen as one drawn would (its distance from 2048 cut to the
+  sixteenth), its position held to the GE's 4096 pixels. Across, it's in sight from a pixel left of the left edge of
+  the scissor rectangle and drawing region to their right edge (a pixel's width past their last pixel's left edge);
+  likewise down (`viewport`'s "cull box" cases: a vertex at the screen's edge, its offset 3615 or 3616, settles both
+  the holding and the edges). With DEPTH_CLIP_ENABLE its z must be between -w and w as well; without it, depth
+  doesn't count, nor do MIN_Z and MAX_Z. So a vertex past -w in clip space can be in sight (`viewport`: x -2 lands on
+  pixel 0 with a viewport scale of 120).
+- The vertices are read as PRIM reads them, and the vertex (or index) address moves on past them the same way.
+- No vertices (the count is 16 bits: 0x10000 is none) are out of sight; and of more than 256, only those from 512
+  before the end to 256 before it count. Every case of `count` fits that; it doesn't say why.
+- Unmeasured, and chosen: a box whose corners are out of sight past different edges is in sight (a box around the
+  camera is, so out of sight means every vertex past the same edge, which never drops a box that could be seen);
+  vertices behind the camera are where dividing by w puts them; through mode takes positions as drawn (a vertex in
+  sight was recorded in sight). Round 4 measures these.
+- `count`, `planes` and `viewport` now print what the PSP printed, line for line, and `vertexaddr` too but for the
+  addresses, which it reads out of sceGeSaveContext's buffer (Phobos's own layout; the PSP keeps the vertex and index
+  addresses and the offset in its words 5-7). The result is kept in states, as a list may stop at its stall address
+  between the two commands: version 12 (11 refused).
+
+**DXT textures** (`texture.cpp`'s `dxtTexel()`), TEXTURE_FORMAT 8-10. pspautotests' `gpu/texcolors/dxt1`, `dxt3` and
+`dxt5` recorded a block's first texel on a PSP, color and alpha, for 2216 cases; this core gives every one of them (it
+gave none before). From their recordings and their programs' structures (the layout came from there; none of the six
+DXT games of the report is on this Mac, and none of the fourteen here met a DXT texture in the runs below):
+- A block of 4x4 texels starts with its colors, unlike S3TC's own layout: 4 bytes of 2-bit indices (a row a byte,
+  the leftmost in the low bits), then two 16-bit colors, RGB 565 with red in the top bits (unlike the GE's 5650),
+  widened by shifting alone (31 becomes 248). With the first above the second (as numbers), indices 2 and 3 are a
+  third and two thirds of the way, each 8-bit channel (2a + b) / 3 and (a + 2b) / 3 rounded down; otherwise 2 is half
+  way, rounded down, and 3 black, transparent in DXT1.
+- DXT3 then has each texel's alpha in 4 bits (two bytes a row), widened by shifting alone (15 becomes 240); DXT5 48
+  bits of 3-bit indices, then its two alphas: with the first above the second, six steps between them,
+  ((7 - k) a + k b) / 7 rounded down; otherwise four, ((5 - k) a + k b) / 5, then 0 and 255. Index 3 of a DXT3 or
+  DXT5 block whose colors aren't in order is black, its alpha its own.
+- Taken, not recorded: the blocks go a row after another, TEXTURE_BUFFER_WIDTH0 / 4 to a row (S3TC's order; the
+  recordings repeat one block four times), the buffer width's low two bits ignored; DXT5's indices past the first
+  texel's in order; TEXTURE_MODE's swizzling doesn't apply. Round 4 records the order, odd widths and swizzling.
+- DXT textures are kept decoded like the others (decoded once into 8888, watched, dropped when their memory changes),
+  and read from memory otherwise; a palette never takes part.
+
+**sceGeBreak** (`kernel/ge.cpp`), as pspautotests' `gpu/ge/break` and `breakwait` recorded: a mode but 0 or 1 is
+INVALID_MODE, then parameters whose 16 bytes reach the kernel's half of memory PRIV_REQUIRED (none is fine), then an
+empty queue ALREADY. Mode 0 breaks off the list the GE has and returns its ID: the list is left paused at the
+queue's front (sceGeListSync says 4: chosen), the GE runs nothing (sceGeSaveContext works again), and sceGeContinue
+takes it up where it was; a list paused by a PAUSE signal is BUSY. Mode 1 throws every list away and returns 0; the
+next list takes the first ID again; threads waiting for a list or for all drawing aren't woken, and wake as a list
+ends (one with their list's ID, or the queue left empty). (`pspge.h` has the two modes' results the other way round.)
+`break` now prints what the PSP did but for its addresses (the context's layout, as above), and `breakwait` but for
+the order its two waiters wake in as the new list ends (the PSP woke the one waiting for all drawing first; the core
+wakes the list's own first, as it always has). What the lists thrown away saved of the GE's state isn't put back.
+Their finish and signal callbacks still waiting their turn are dropped, and one running returns to no GE to go on
+(after review, below; unmeasured).
+
+**Found on the way, from pspautotests' pictures**, and fixed: 8-bit positions in through mode read as 0 (`points`
+recorded a PSP drawing two such points at (0, 0), `triangles`, `lines`, `linestrip` and `rectangles` nothing of
+theirs): those five pictures are now identical. Index format 3, which `pspgu.h` doesn't name, holds 32-bit indices of
+which the GE takes the low 16 bits (`indices` drew with them, `indices32` drew 0x10000 and 0xffff0000 as 0,
+`vertexaddr` moved 4 bytes an index): `indices32` now prints what the PSP did. Seen and left: three kinds of
+`gpu/exact/coverage`'s triangles (huge ones, a long edge, tall edges: 7 of its 15 jobs, where the program's comment
+names the PSP's snapping of very tall edges to 4-pixel spans); PRIM's kind 7 and vertices sent in the list
+(`continue`, `immediate`, `indices`' last part); sceGeSaveContext's layout; `vertices/texcoords` and `morph`.
+
+**The measuring program's round 4** (`tools/psp-measure`: the menu's new first line, "Round 4: the GE's lines,
+boxes and DXT", about 4 MB, `manifest4.txt`; `ge.c` says what each draws): lines with both ends at every sixteenth of
+a pixel (shallow, steep, diagonal, rising, level, upright; the first two drawn backwards too; and anti-aliased over
+black), lines shorter than two pixels in 16 directions, strips added up so a pixel lit twice shows 2, colors, depths
+(through VRAM's fourth copy) and texels along lines, lines in 3D with sub-pixel ends and cut at the near plane; 256
+bounding boxes, each filling its cell only if the GE took it to be in sight (around the scissor rectangle's edges by
+sixteenths, past each edge, past different edges at once, past the near and far planes with DEPTH_CLIP_ENABLE on and
+off, behind the camera, in through mode, and random); DXT1, DXT3 and DXT5 textures of 256 random blocks each, colors
+and alphas; and the blocks' order, with buffer widths of 32, 64 and 36 and swizzling on. Running it in this core found
+a mistake in it before any PSP did: memory from `sceGuGetMemory` inside an object lets the GE run up to a BJUMP not
+yet aimed, which then jumped to address 0; the object's memory is now taken before it begins. It was built in
+pspdev's Docker image, and `tests/psp/programs/pspmeasure.elf` replaced (that folder's convention: its README has
+the new hash); `tests/psp/measure.cpp` runs round 4 through the menu too and checks its 20 files, to be compared with
+a PSP's once it has run (a `manifest4.txt` in the results tells).
+
+**Tests** (`tests/psp/run-tests.sh`: 280 groups (281 after review, below), with the address and undefined-behavior
+sanitizers; `tests/psp/ares`: 290 checks; none failed):
+- `draw.cpp`: "draw lines" (pspautotests' three pictures, moved to the canvas; ends on pixel middles each way, steep
+  ones, the boundary rows and columns; a strip's joints drawn once; lines too short to leave a diamond, and one just
+  long enough; scissoring; colors and depth along a line; flat shading; texels along it), "draw DXT textures" (37 of
+  pspautotests' recorded cases, the blocks' order with a wider buffer, each format drawn kept decoded and read from
+  memory, also after its memory changes), "draw vertex formats" (the 8-bit points at (0, 0), 32-bit indices);
+  "draw textures kept decoded against memory" now draws DXT textures too.
+- `draw3d.cpp`: "draw3d lines" (on the screen, depth along it, the near plane's cut and its colors, DEPTH_CLIP_ENABLE
+  off, flat shading, fog, an end off the screen) and "draw3d bounding boxes" (pspautotests' recorded cases of planes,
+  viewport, count and vertexaddr, by `boundingBox()`, then BJUMP in a list, relative to an ORIGIN, both ways, and a
+  list stopped between the two commands, its state carried on in another machine).
+- `ge.cpp`: "ge break" (break's recorded results, and breakwait's waiters), and "ge drawn on several threads", whose
+  frame now has lines, a strip, a DXT texture and two boxes (one skipping a sprite), alike at 1, 2, 4 and 8 threads;
+  `states.cpp`: "state fields" changes the box's result.
+- The comparison with the owner's PSP (rounds 2 and 3, "psp measure") is the same, line for line, before and after.
+- Sixteen broken versions each failed them: a diamond's top corner left out, a line's last pixel lit, flat shading
+  from the first vertex, no cut at the near plane ("draw lines", "draw3d lines"); a box out of sight with any
+  vertex out of sight, without its pixel of slack, with every vertex counted, BJUMP never jumping, the result left
+  out of states ("draw3d bounding boxes", "state fields"); DXT's colors widened by repeating their top bits, its
+  layout S3TC's own, DXT5's sevenths rounded to the nearest ("draw DXT textures"); 32-bit indices kept whole, 8-bit
+  positions read in through mode ("draw vertex formats"); a break of everything freeing its lists to the back of
+  the free list, a paused list broken off ("ge break").
+
+**The games** (the host Mac; `origin/local/psp-runner`'s runner built from scratch copies of this tree and of part
+28's, FFmpeg on in both, the same presses, PNGs at the same frames; pictures in `/tmp/gef-pictures`, outside the
+repository). In the first minute (the compatibility run's presses, Start at frame 120 and cross at 1800), and longer
+for the GTAs (to 9000 frames, cross every 300): Burnout Dominator meets its first line at frame 98, Sindacco
+Chronicles at 781, Space Invaders Extreme at 1113, Liberty City Stories at 7616 (in the city); SOCOM's first bounding
+box comes at frame 8, Snoopy's at 1. None of the fourteen met a DXT texture, curved surface or sceGeBreak call.
+- Space Invaders Extreme's title now has its "PRESS START BUTTON" framed in a box of lines
+  (`sie-title-before-after.png`). In Sindacco Chronicles' city a thin, faint line now crosses the sky
+  (`sindacco-sky-crop-before-after.png`). Burnout Dominator's and Liberty City Stories' frames captured are the same
+  before and after: what they draw with lines isn't in those pictures.
+- SOCOM's and Snoopy's frames are the same (boxes now tested drop nothing that was seen: their menus, and the
+  frames up to 9600 of Snoopy, which these presses kept at its warning about saves); Vice City Stories' and Peace
+  Walker's too (no lines, boxes or DXT met).
+
+**Speed** (the GE's existing work isn't slower): both runners built with -O3 and the Android build's other speed
+flags (no LTO), each from a state of its own of the same scene, 600 frames, best of three, host frames a second, one
+GE thread and seven: Liberty City Stories in the city 22.0 / 22.1 and 70.8 / 69.9; Lumines 57.8 / 58.0 and 197.8 /
+198.3; Peace Walker at frame 3600 336.7 / 337.2 and 1256.2 / 1256.1; Snoopy (boxes tested now) 94.3 / 95.3 and 360.2
+/ 360.9; Sindacco (lines drawn now) 39.8 / 39.7 and 89.4 / 88.0; Space Invaders Extreme's title (its box drawn now)
+263.1 / 260.5 and 942.2 / 953.9. Within a couple of percent, either way; a line job is set up only where there are
+lines.
+
+**Left, and why**: curved surfaces (BEZIER and SPLINE: one game of the report, Macross Ace Frontier; round 3's five
+pictures of the PSP's patches are there to fit them to, a part of their own); the exact line rule and anti-aliased
+lines (round 4); the DXT blocks' order, odd buffer widths and swizzling, and what a box past different edges or behind
+the camera is (round 4); the wake order in breakwait; sceGeSaveContext's layout; `gpu/exact/coverage`'s tall and huge
+triangles; PRIM's kind 7 and vertices sent in the list. The six DXT games and the other line and box games of the
+report aren't on this Mac.
+
+**After review.** The review found the clean room kept (every fact shared with PPSSPP is in pspautotests'
+recordings), hostile lines, boxes and DXT textures clean under the address sanitizer and fast, and round 4 running
+right in the core (143 BJUMPs taken, 113 not, every file written). One thing changed: sceGeBreak(1) left the GE's
+callbacks that were waiting their turn (interrupts held off, or another call running) in the queue, so one ran
+later for a list that was gone or whose ID a new list had, and as it returned ended the new list ahead of that
+list's own finish callback. The GE's callbacks are now a kind of call of their own (`Call::Ge`, in states as the
+kind already was: version 12 still), and a break of everything drops them, and has one that's running return to no
+GE; unmeasured (pspautotests doesn't record a PSP at it), and noted so in `kernel/ge.cpp`. Test: "ge break and
+callbacks" (`ge.cpp`, both engines: the break with the old list's finish callback waiting, then the next list taking
+its ID, its callback alone running, once and first, the list still queued, the state round trip while it waits; and
+the break from a finish callback that enqueues the next list itself); each half fails with its fix undone; "state
+fields" changes the call's kind and refuses a GE callback that's a vertical blank's too. tests/psp 281 groups with
+the sanitizers, tests/psp/ares 290 checks, none failed. On the RP6, Space Invaders Extreme's title shows its box of
+lines at 60 fps, and Liberty City Stories' intro is unchanged at 60 fps (the owner's check of the build before this).

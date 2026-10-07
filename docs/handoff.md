@@ -25,6 +25,37 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP compatibility re-run — 2026-10-07
+
+Branch `local/psp-rerun`, cut from `origin/cursor/psp-ge-features-2b67` (tip
+`b27f084a5`, PR #157). Re-runs all 266 PSP games against the three PRs since
+the old run—#153 (music/movies through FFmpeg's decoders), #156 (41 kernel
+functions, missing 149→77), and #157 (GE line/box drawing, DXT; no curved
+surfaces, anti-aliased lines drawn without anti-aliasing)—and updates
+`docs/psp-compatibility.md`.
+
+- **Result:** 66 improved (black → menu), 22 went from menu to black (why
+  isn't checked yet; the report names them),
+  35 shifted to movie (dark intro frames the old rule lumped into black,
+  so the Before column's 155 "black" overstates the old run's true-black
+  total). Menu: 104 → 141. Movie: 35 (new category). Black: 155 → 73.
+  Loading: 4 → 13. Timeout: 3 → 4 (The Legend of Nayuta added).
+- **Missing functions:** 149/266 (56 %) → 77/266 (29 %). The GE functions that
+  dominated the old top list (`sceGe_user`, `ThreadManForUser`) are gone; the
+  new top gaps are `scePsmf`/`scePsmfPlayer` (video playback, 79 hits) and
+  `scePspNpDrm_user` (DRM, 13 hits).
+- **Speed:** 172 of 266 games now run above 200 fps (was 166). 8 very slow
+  (< 30 fps), down from 13.
+- **Report:** `docs/psp-compatibility.md` updated with the new commit,
+  counts, per-game table, top missing functions, and a "Since de6e6dcb7"
+  section.
+- **No changes to `ares/psp`** beyond what the tool strictly needs.
+
+Checks: `tests/psp/run-tests.sh` (281 groups, 0 failures),
+`tests/psp/ares/run-tests.sh` (290 checks, 0 failed),
+`tests/psp/ares/runner-test.sh` (passing). Builds clean
+(`-Wall -Wextra -Werror`).
+
 ## PSP runner and compatibility report — 2026-10-06
 
 Branch `local/psp-runner`, cut from `origin/cursor/psp-test-data-2b67` (tip
@@ -903,6 +934,50 @@ the details; the user chose a data tape per game in its save folder.
   (the game's tape never started, so nothing was recorded). The same steps by hand and two full scripted runs
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
+
+## PSP core: lines, bounding boxes, DXT textures and sceGeBreak — 2026-10-06
+
+Branch `cursor/psp-ge-features-2b67`, on top of `cursor/psp-hle-games5-2b67` (#156, the entry below): commits
+bb1da6c0a (the GE's code and tests) and 5892da700 (the measuring program's round 4), then the docs; local only, not
+pushed. docs/psp-core.md, part 29, describes it. Written from pspsdk's headers and GU library, pspautotests'
+programs and the results (and screenshots) they recorded on a PSP, public S3TC descriptions and the owner's games;
+no PPSSPP or JPCSP source read.
+- **Lines** (PRIM 1 and 2), in 2D and 3D (cut at the near plane), colors, depth, fog, textures, blending, through
+  the same pipeline, threads and decoded textures: the "diamond exit" rule, its edges fitted to every picture of lines
+  pspautotests recorded (gpu/primitives/lines, linestrip, indices: now pixel for pixel). Not the PSP's in every pixel:
+  gpu/exact/lines' CRCs match neither it nor any variant tried. Anti-aliasing isn't emulated.
+- **Bounding boxes** (BBOX, BJUMP): screen-space, the scissor and region a pixel wider on the left and top, held to
+  the 4096 screen, z against w with DEPTH_CLIP_ENABLE, the count's quirks: every case of pspautotests' gpu/bounding
+  (count, planes, viewport, vertexaddr's results) as the PSP printed them. Out of sight only past one edge for every
+  vertex (chosen). State version 12.
+- **DXT1/3/5**: the PSP's own block layout (colors first, indices then the two 565 colors with red on top, DXT3/5's
+  alpha after), colors widened by shifting, thirds and halves rounded down: all 2216 results of gpu/texcolors/dxt1,
+  dxt3, dxt5. The layout came from those programs and recordings; the blocks' order is S3TC's, taken (no DXT game on
+  this Mac). Kept decoded like other textures.
+- **sceGeBreak**: as gpu/ge/break and breakwait recorded (refusals and their order, mode 0 breaking off the running
+  list for sceGeContinue, mode 1 throwing all away, waiters left waiting).
+- **Also, from pspautotests' pictures**: 8-bit positions in through mode read as 0; index format 3 is 32-bit indices,
+  their low 16 bits taken.
+- **Measuring program, round 4** (lines at every sixteenth, short lines, strips, colors, depth and texels along lines,
+  3D lines, 256 bounding boxes, DXT colors, alphas and block order): built in pspdev's Docker image;
+  `tests/psp/programs/pspmeasure.elf` replaced (hash in its README). The owner's EBOOT.PBP for the PSP isn't
+  committed (kept in the owner's `.local/psp-round4/`). Running it in the core caught a mistake of its own first
+  (memory taken inside an object let the GE reach an unaimed BJUMP).
+- **Checked**: tests/psp 280 groups with ASan and UBSan, tests/psp/ares 290 checks, none failed; the comparison with
+  the owner's PSP (rounds 2 and 3) the same, line for line; 16 broken versions each caught. Speed within a couple of
+  percent either way in six scenes, 1 and 7 threads. Games: Space Invaders Extreme's title gains its line box,
+  Sindacco a line across the sky; Dominator, LCS, SOCOM, Snoopy, VCS, Peace Walker unchanged in the frames captured;
+  pictures in `/tmp/gef-pictures`.
+- **Left**: curved surfaces (Macross); the exact line rule, anti-aliased lines, the DXT block order, boxes past
+  different edges (round 4 will tell); breakwait's wake order; sceGeSaveContext's layout; gpu/exact/coverage's tall
+  triangles; PRIM kind 7.
+- **After review**: clean room, hostile inputs (ASan) and round 4 in the core all fine. Fixed the one Low finding:
+  sceGeBreak(1) now drops the GE's callbacks waiting their turn and has one running return to no GE (else a stale
+  callback could end the list that took its ID before that list's own callback); unmeasured. GE callbacks are a call
+  kind of their own (`Call::Ge`; state version 12 still). Test "ge break and callbacks", both engines, a state round
+  trip. tests/psp 281 groups, tests/psp/ares 290 checks, none failed. The round-4 EBOOT stays out of the repository
+  (the owner keeps it in `.local/psp-round4/`). RP6: Space Invaders Extreme's title shows its box of lines at 60 fps,
+  GTA LCS's intro unchanged at 60 fps.
 
 ## PSP core: kernel mutexes, alarms, virtual timers, and the clock in system calls — 2026-10-06
 

@@ -178,11 +178,71 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
   }
 }
 
+//A line's pixels in rows fromY to toY (draw.cpp's line() says which): along x (y when it's steep) from its first
+//to its last, each in the row (column) where it crosses the pixel's middle. Its colors, depth, fog and texture
+//coordinates are blended from its ends by how far along x that middle is, held to its ends, as a triangle's are
+//from its corners (the same arithmetic, with two weights).
+template<u32 Format>
+auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
+  auto& l = job.line;
+  auto& look = *job.look;
+  auto& p = look.pixel;
+  bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
+  bool shining = !l.flat && l.shines;
+  float colors[2][4], shines[2][4];
+  for(u32 k = 0; k < 2; k++) {
+    for(u32 n = 0; n < 4; n++) colors[k][n] = channel(l.color[k], n), shines[k][n] = channel(l.specular[k], n);
+  }
+  float total = float(l.along);
+  auto blendColor = [&](const float (&value)[2][4], float w0, float w1) {
+    u32 color = 0;
+    for(u32 n = 0; n < 4; n++) {
+      color |= u32(std::clamp(s32((value[0][n] * w0 + value[1][n] * w1) / total), 0, 255)) << n * 8;
+    }
+    return color;
+  };
+  auto acrossAt = [&](s64 column) {
+    return floorDivide64(l.y[0] * l.along + l.rise * (column * 16 + 8 - l.x[0]), l.along * 16);
+  };
+  auto shade = [&](s32 x, s32 y, s64 middle) {  //middle: the pixel's middle along x, in sixteenths
+    s64 s = std::clamp<s64>(middle - l.x[0], 0, l.along);
+    float w0 = float(l.along - s), w1 = float(s);
+    u32 color = l.flat ? l.flatColor : blendColor(colors, w0, w1);
+    u32 specular = shining ? blendColor(shines, w0, w1) : l.flatSpecular;
+    u32 z = needsZ ? u32(std::clamp((l.z[0] * w0 + l.z[1] * w1) / total, 0.0f, 65535.0f)) : 0;
+    float u = 0, v = 0;
+    if(look.textured && l.perspective) {
+      float ka = w0 / l.w[0], kb = w1 / l.w[1];
+      float divisor = ka * l.q[0] + kb * l.q[1];
+      u = (ka * l.u[0] + kb * l.u[1]) / divisor;
+      v = (ka * l.v[0] + kb * l.v[1]) / divisor;
+    } else if(look.textured) {
+      u = l.u[0] + f64(s) / 16 * l.uStep;
+      v = l.v[0] + f64(s) / 16 * l.vStep;
+    }
+    u32 fog = p.fog ? fogAmount((l.fog[0] * w0 + l.fog[1] * w1) / total) : 255;
+    shadeAs<Format>(look, job.linear, x, y, z, color, specular, u, v, fog);
+  };
+  s32 top = std::max(job.firstY, fromY), bottom = std::min(job.lastY, toY);
+  if(!l.steep) {
+    for(s32 x = std::max(l.first, job.firstX); x <= std::min(l.last, job.lastX); x++) {
+      s64 y = acrossAt(x);
+      if(y >= top && y <= bottom) shade(x, s32(y), s64(x) * 16 + 8);
+    }
+  } else {
+    for(s32 y = std::max(l.first, top); y <= std::min(l.last, bottom); y++) {
+      s64 x = acrossAt(y);
+      if(x >= job.firstX && x <= job.lastX) shade(s32(x), y, s64(y) * 16 + 8);
+    }
+  }
+}
+
 template<u32 Format>
 auto GE::rasterizeAs(const Job& job, s32 fromY, s32 toY) -> void {
   switch(job.kind) {
   case Job::Kind::Sprite: return spriteRows<Format>(job, fromY, toY);
   case Job::Kind::Triangle: return triangleRows<Format>(job, fromY, toY);
+  case Job::Kind::Line: return lineRows<Format>(job, fromY, toY);
   case Job::Kind::Point: {
     auto& p = job.point;
     if(p.y < fromY || p.y > toY) return;
