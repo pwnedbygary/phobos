@@ -563,6 +563,8 @@ static auto stackFree() -> void {
       a.li(a0, 0);
       a.call("sceKernelGetThreadStackFreeSize");
       a.li(t0, result); a.put(sw(v0, 0, t0));
+      a.call("sceKernelCheckThreadStack");
+      a.li(t0, result); a.put(sw(v0, 0x10, t0));
       a.call("sceKernelExitThread");
     };
     thread(0x0880'2000, 0, 0, R);
@@ -582,7 +584,40 @@ static auto stackFree() -> void {
     CHECK(m.system.memory.read(4, R), 0xea0);
     CHECK(m.system.memory.read(4, R + 4), 0xaa0);
     CHECK(m.system.memory.read(4, R + 8), 0xea0);
+    //the room left below the stack pointer: 0xeb0 with a frame of 0x10, 0xab0 with 0x400 more, as on a PSP
+    CHECK(m.system.memory.read(4, R + 0x10), 0xeb0);
+    CHECK(m.system.memory.read(4, R + 0x14), 0xab0);
+    CHECK(m.system.memory.read(4, R + 0x18), 0xab0);
     CHECK(m.notes.size(), 0);
+  }
+  KernelMachine m;
+  CHECK(m.call("sceKernelCheckThreadStack", {}), 0);  //no thread calling
+}
+
+//sceHprm with nothing in the headphone socket: no headphones, remote or microphone, no key held, an empty latch, a
+//buffer the answer can't go in refused; and sceRtcGetAccumulativeTime (by both its names) the PSP's time running,
+//in microseconds, 64 bits in v0 and v1.
+static auto remoteAndRunningTime() -> void {
+  KernelMachine m;
+  CHECK(m.call("sceHprmIsHeadphoneExist", {}), 0);
+  CHECK(m.call("sceHprmIsRemoteExist", {}), 0);
+  CHECK(m.call("sceHprmIsMicrophoneExist", {}), 0);
+  m.system.memory.fill(R, 0xcc, 32);
+  CHECK(m.call("sceHprmPeekCurrentKey", {R}), 0);
+  CHECK(m.system.memory.read(4, R), 0);
+  CHECK(m.system.memory.read(4, R + 4), 0xcccc'cccc);
+  for(const char* latch : {"sceHprmPeekLatch", "sceHprmReadLatch"}) {
+    m.system.memory.fill(R, 0xcc, 32);
+    CHECK(m.call(latch, {R}), 0);
+    for(u32 n = 0; n < 4; n++) CHECK(m.system.memory.read(4, R + n * 4), 0);
+    CHECK(m.system.memory.read(4, R + 16), 0xcccc'cccc);
+    CHECK(m.call(latch, {0}), Kernel::ErrorIllegalAddress);
+  }
+  CHECK(m.call("sceHprmPeekCurrentKey", {0}), Kernel::ErrorIllegalAddress);
+  m.kernel.cycles = u64(Kernel::CPUFrequency) * 5'000;  //5,000 seconds: past 32 bits of microseconds
+  for(const char* name : {"sceRtcGetAccumulativeTime", "sceRtcGetAccumlativeTime"}) {
+    CHECK(m.call(name, {}), u32(5'000'000'000ull));
+    CHECK(m.system.ipu.r[3], u32(5'000'000'000ull >> 32));
   }
 }
 
@@ -681,6 +716,7 @@ auto powerTests() -> Tests {
     {"kernel thread control", threadControl}, {"kernel thread status", threadStatus}, {"kernel clocks", clocks},
     {"kernel mersenne twister", mersenneTwister}, {"kernel odds and ends", oddsAndEnds},
     {"kernel thread priorities", threadPriorities}, {"kernel thread stack free", stackFree},
+    {"remote and running time", remoteAndRunningTime},
   };
 }
 

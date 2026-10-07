@@ -219,7 +219,8 @@ auto Kernel::events() -> void {
     vblanks++;
     geLeft = GeBudget;  //the GE's commands for the next frame
     for(auto& [uid, thread] : threads) {
-      if(thread->status == Status::Waiting && thread->wait == Wait::Vblank) ready(*thread, 0), woke = true;
+      if(thread->status != Status::Waiting || thread->wait != Wait::Vblank) continue;
+      if(s32(vblanks - thread->waitCount) >= 0) ready(*thread, 0), woke = true;  //its blank came
     }
     vblankInterrupt();
     if(!controller.cycle && sampleController()) woke = true;
@@ -1121,6 +1122,17 @@ auto Kernel::sceKernelGetThreadStackFreeSize() -> void {
     while(16 + unused < thread->stackSize && stack[16 + unused] == 0xff) unused++;
   }
   result(unused);
+}
+
+//How much room is left on the calling thread's stack: from its stack pointer down to the stack's bottom. On a PSP
+//(threads/threads/stackfree), a thread of a 4 KiB stack checking from a function of its own with no room of its own
+//has 0xeb0 left, one holding 1 KiB there 0xab0: the 0x140 a new thread starts below its top (startThread()), the
+//function's 0x10, and 0x400. A stack pointer outside the stack (chosen: an overrun stack, or a call from an
+//interrupt handler, which has no thread's) is 0.
+auto Kernel::sceKernelCheckThreadStack() -> void {
+  if(!current || interrupting) return result(0);
+  u32 sp = cpu.ipu.r[29], bottom = current->stackBlock;
+  result(sp >= bottom && sp - bottom <= current->stackSize ? sp - bottom : 0);
 }
 
 //The profiler's figures for a thread, or for all (sceKernelReferThreadProfiler, sceKernelReferGlobalProfiler): only

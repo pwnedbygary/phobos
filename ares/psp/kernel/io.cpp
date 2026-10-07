@@ -884,3 +884,36 @@ auto Kernel::sceIoDevctl() -> void {
   }
   result(ErrorFunctionNotSupported);
 }
+
+//scePspNpDrm_user, the DRM of games sold as downloads: a game gives its licensee key (16 bytes) before it opens its
+//own protected files (EDATA, ".PSPEDAT" with a PGD inside, as the PSP Developer Wiki describes them), which the PSP
+//then decrypts as they're read. There is no DRM here: a key is taken and forgotten, and a game's files are read as
+//they are, so a game's plain files work and an encrypted one reads as its encrypted bytes. uOFW's npdrm exports
+//name the user library's five functions; none has a pspautotests program.
+auto Kernel::sceNpDrmSetLicenseeKey() -> void { result(0); }
+auto Kernel::sceNpDrmClearLicenseeKey() -> void { result(0); }
+
+//(name): whether a protected file still has the name it was sold with: always, here.
+auto Kernel::sceNpDrmRenameCheck() -> void { result(0); }
+
+//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE.
+auto Kernel::sceNpDrmEdataSetupKey() -> void {
+  auto found = files.find(arg(0));
+  if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
+  result(0);
+}
+
+//(file): the size of an open file's data: here the file's own size, as nothing is decrypted.
+auto Kernel::sceNpDrmEdataGetDataSize() -> void {
+  auto found = files.find(arg(0));
+  if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
+  auto& open = found->second;
+  u64 size = open.size;
+  if(!open.onDisc) {
+    open.stream->flush();
+    std::error_code error;
+    size = std::filesystem::file_size(open.host, error);
+    if(error) size = 0;
+  }
+  result(u32(std::min<u64>(size, 0x7fff'ffff)));
+}

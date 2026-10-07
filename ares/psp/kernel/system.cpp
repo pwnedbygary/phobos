@@ -155,6 +155,13 @@ auto Kernel::sceRtcGetTickResolution() -> void {
   result(1'000'000);
 }
 
+//The time the PSP has been running, in v0 and v1: here, microseconds since it started, as the system time. uOFW's rtc
+//names 0x011f03c1 and Sony's spelling 0x029ca3b3 (sceRtcGetAccumlativeTime) as one function, its body not yet worked
+//out beyond reading the system time; no pspautotests program calls it (chosen, the unit and what it counts from).
+auto Kernel::sceRtcGetAccumulativeTime() -> void {
+  result64(cycles / (CPUFrequency / 1'000'000));
+}
+
 //The days from 0001-01-01 to the given date, in the Gregorian calendar carried back (as the PSP's ticks count):
 //years shifted to start in March, so a leap day falls at a year's end. This is Howard Hinnant's days_from_civil, from
 //his public "chrono-Compatible Low-Level Date Algorithms", counting from year 1 where his counts from 1970.

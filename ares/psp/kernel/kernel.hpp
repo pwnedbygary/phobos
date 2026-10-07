@@ -321,7 +321,7 @@ struct Kernel {
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs (the count a mutex is to be held with); the
                            //bits an event flag wait needs; a mixer output's left volume; the samples an SRC output's
                            //buffer was armed with; the bytes a message pipe's send or receive asked for; what a
-                           //synchronous read or write returns
+                           //synchronous read or write returns; the count of vertical blanks a blank's wait ends at
     u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode
     u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
                            //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
@@ -443,6 +443,7 @@ struct Kernel {
   auto sceKernelResumeThread() -> void;
   auto sceKernelChangeCurrentThreadAttr() -> void;
   auto sceKernelGetThreadStackFreeSize() -> void;
+  auto sceKernelCheckThreadStack() -> void;
   auto sceKernelReferThreadProfiler() -> void;
   auto sceKernelGetThreadCurrentPriority() -> void;
   auto sceKernelRotateThreadReadyQueue() -> void;
@@ -649,6 +650,11 @@ struct Kernel {
   auto sceIoDclose() -> void;
   auto sceIoIoctl() -> void;
   auto sceIoDevctl() -> void;
+  auto sceNpDrmSetLicenseeKey() -> void;
+  auto sceNpDrmClearLicenseeKey() -> void;
+  auto sceNpDrmRenameCheck() -> void;
+  auto sceNpDrmEdataSetupKey() -> void;
+  auto sceNpDrmEdataGetDataSize() -> void;
 
   //async.cpp: files' asynchronous requests, done after the time their device takes
   auto asyncBusy(u32 file) const -> bool;
@@ -736,6 +742,12 @@ struct Kernel {
   auto sceCtrlReadBufferNegative() -> void;
   auto sceCtrlPeekLatch() -> void;
   auto sceCtrlReadLatch() -> void;
+  auto sceHprmIsHeadphoneExist() -> void;
+  auto sceHprmIsRemoteExist() -> void;
+  auto sceHprmIsMicrophoneExist() -> void;
+  auto sceHprmPeekCurrentKey() -> void;
+  auto sceHprmPeekLatch() -> void;
+  auto sceHprmReadLatch() -> void;
   auto sceCtrlSetIdleCancelThreshold() -> void;
   auto sceCtrlGetIdleCancelThreshold() -> void;
 
@@ -748,7 +760,7 @@ struct Kernel {
   static constexpr u64 LineCycles = CPUFrequency * 525 / 9'000'000;  //a line: 525 dots at 9 MHz (286 to a frame)
   static constexpr u64 VblankLength = CPUFrequency * 77 / 100'000;    //the vertical blank lasts 0.77 ms
   auto inVblank() const -> bool;
-  auto waitVblank(bool callbacks) -> void;
+  auto waitVblank(bool callbacks, u32 count = 1) -> void;
   auto sceDisplaySetMode() -> void;
   auto sceDisplaySetFrameBuf() -> void;
   auto sceDisplayGetFrameBuf() -> void;
@@ -756,6 +768,8 @@ struct Kernel {
   auto sceDisplayWaitVblankStartCB() -> void;
   auto sceDisplayWaitVblank() -> void;
   auto sceDisplayWaitVblankCB() -> void;
+  auto sceDisplayWaitVblankStartMulti() -> void;
+  auto sceDisplayWaitVblankStartMultiCB() -> void;
   auto sceDisplayIsVblank() -> void;
   auto hcountLines() const -> u32;
   auto sceDisplayGetCurrentHcount() -> void;
@@ -1798,6 +1812,7 @@ struct Kernel {
   auto sceKernelLibcTime() -> void;
   auto sceRtcGetCurrentTick() -> void;
   auto sceRtcGetTickResolution() -> void;
+  auto sceRtcGetAccumulativeTime() -> void;
   auto sceKernelCacheUnneeded() -> void;
   auto writeDate(u32 address, u64 microseconds, bool local) -> bool;
   struct Exec {  //sceKernelLoadExec's program, put in as the kernel's loop next goes round (never kept in states)

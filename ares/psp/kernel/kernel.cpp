@@ -122,6 +122,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelResumeThread",         &Kernel::sceKernelResumeThread);
   add("ThreadManForUser",  "sceKernelChangeCurrentThreadAttr", &Kernel::sceKernelChangeCurrentThreadAttr);
   add("ThreadManForUser",  "sceKernelGetThreadStackFreeSize", &Kernel::sceKernelGetThreadStackFreeSize);
+  add("ThreadManForUser",  "sceKernelCheckThreadStack",     &Kernel::sceKernelCheckThreadStack);
   add("ThreadManForUser",  "sceKernelReferThreadProfiler",  &Kernel::sceKernelReferThreadProfiler);
   add("ThreadManForUser",  "sceKernelGetThreadCurrentPriority", &Kernel::sceKernelGetThreadCurrentPriority);
   add("ThreadManForUser",  "sceKernelRotateThreadReadyQueue", &Kernel::sceKernelRotateThreadReadyQueue);
@@ -221,6 +222,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("UtilsForUser",      "sceKernelIcacheInvalidateRange", &Kernel::sceKernelCacheUnneeded);
   add("sceRtc",            "sceRtcGetCurrentTick",          &Kernel::sceRtcGetCurrentTick);
   add("sceRtc",            "sceRtcGetTickResolution",       &Kernel::sceRtcGetTickResolution);
+  add("sceRtc",            "sceRtcGetAccumulativeTime",     &Kernel::sceRtcGetAccumulativeTime);
+  add("sceRtc",            "sceRtcGetAccumlativeTime",      &Kernel::sceRtcGetAccumulativeTime);  //Sony's spelling
   add("sceRtc",            "sceRtcGetTick",                 &Kernel::sceRtcGetTick);
   add("sceRtc",            "sceRtcCompareTick",             &Kernel::sceRtcCompareTick);
   add("sceRtc",            "sceRtcGetCurrentClock",         &Kernel::sceRtcGetCurrentClock);
@@ -377,6 +380,11 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
   add("IoFileMgrForUser",  "sceIoIoctl",                    &Kernel::sceIoIoctl);
   add("IoFileMgrForUser",  "sceIoDevctl",                   &Kernel::sceIoDevctl);
+  add("scePspNpDrm_user",  "sceNpDrmSetLicenseeKey",        &Kernel::sceNpDrmSetLicenseeKey);
+  add("scePspNpDrm_user",  "sceNpDrmClearLicenseeKey",      &Kernel::sceNpDrmClearLicenseeKey);
+  add("scePspNpDrm_user",  "sceNpDrmRenameCheck",           &Kernel::sceNpDrmRenameCheck);
+  add("scePspNpDrm_user",  "sceNpDrmEdataSetupKey",         &Kernel::sceNpDrmEdataSetupKey);
+  add("scePspNpDrm_user",  "sceNpDrmEdataGetDataSize",      &Kernel::sceNpDrmEdataGetDataSize);
   add("IoFileMgrForUser",  "sceIoOpenAsync",                &Kernel::sceIoOpenAsync);
   add("IoFileMgrForUser",  "sceIoCloseAsync",               &Kernel::sceIoCloseAsync);
   add("IoFileMgrForUser",  "sceIoReadAsync",                &Kernel::sceIoReadAsync);
@@ -414,6 +422,12 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceCtrl",           "sceCtrlReadBufferNegative",     &Kernel::sceCtrlReadBufferNegative);
   add("sceCtrl",           "sceCtrlPeekLatch",              &Kernel::sceCtrlPeekLatch);
   add("sceCtrl",           "sceCtrlReadLatch",              &Kernel::sceCtrlReadLatch);
+  add("sceHprm",           "sceHprmIsHeadphoneExist",       &Kernel::sceHprmIsHeadphoneExist);
+  add("sceHprm",           "sceHprmIsRemoteExist",          &Kernel::sceHprmIsRemoteExist);
+  add("sceHprm",           "sceHprmIsMicrophoneExist",      &Kernel::sceHprmIsMicrophoneExist);
+  add("sceHprm",           "sceHprmPeekCurrentKey",         &Kernel::sceHprmPeekCurrentKey);
+  add("sceHprm",           "sceHprmPeekLatch",              &Kernel::sceHprmPeekLatch);
+  add("sceHprm",           "sceHprmReadLatch",              &Kernel::sceHprmReadLatch);
   add("sceCtrl",           "sceCtrlSetIdleCancelThreshold", &Kernel::sceCtrlSetIdleCancelThreshold);
   add("sceCtrl",           "sceCtrlGetIdleCancelThreshold", &Kernel::sceCtrlGetIdleCancelThreshold);
   add("sceDisplay",        "sceDisplaySetMode",             &Kernel::sceDisplaySetMode);
@@ -423,6 +437,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceDisplay",        "sceDisplayWaitVblankStartCB",   &Kernel::sceDisplayWaitVblankStartCB);
   add("sceDisplay",        "sceDisplayWaitVblank",          &Kernel::sceDisplayWaitVblank);
   add("sceDisplay",        "sceDisplayWaitVblankCB",        &Kernel::sceDisplayWaitVblankCB);
+  add("sceDisplay",        "sceDisplayWaitVblankStartMulti", &Kernel::sceDisplayWaitVblankStartMulti);
+  add("sceDisplay",        "sceDisplayWaitVblankStartMultiCB", &Kernel::sceDisplayWaitVblankStartMultiCB);
   add("sceDisplay",        "sceDisplayIsVblank",            &Kernel::sceDisplayIsVblank);
   add("sceDisplay",        "sceDisplayGetCurrentHcount",    &Kernel::sceDisplayGetCurrentHcount);
   add("sceDisplay",        "sceDisplayGetVcount",           &Kernel::sceDisplayGetVcount);

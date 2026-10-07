@@ -440,6 +440,36 @@ static auto fileRename() -> void {
   }), true);
 }
 
+//scePspNpDrm_user without DRM: a licensee key set and cleared, a name checked, and a game's own file on the stick
+//readied and measured while open (its size, as nothing is decrypted), then read as it is; a file not open, or a
+//folder, is BAD_FILE.
+static auto downloadDrm() -> void {
+  HostFolder folder;
+  folder.put("PSP/GAME/NPUH00000/DATA.EDAT", "the game's own data");
+  KernelMachine m;
+  m.kernel.mount("ms0", folder.path.string());
+  m.system.memory.fill(Buffer, 0x5a, 16);
+  CHECK(m.call("sceNpDrmSetLicenseeKey", {Buffer}), 0);
+  CHECK(m.call("sceNpDrmRenameCheck", {m.string("ms0:/PSP/GAME/NPUH00000/DATA.EDAT")}), 0);
+  u32 file = m.call("sceIoOpen", {m.string("ms0:/PSP/GAME/NPUH00000/DATA.EDAT"), 0x0001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {file}), 0);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {file}), 19);
+  CHECK(m.call("sceIoRead", {file, Buffer, 64}), 19);
+  CHECK(readBack(m, 19) == "the game's own data", true);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {file}), 19);  //wherever it's read to
+  CHECK(m.call("sceIoClose", {file}), 0);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {file}), Kernel::ErrorBadFile);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {file}), Kernel::ErrorBadFile);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {0xdead'beef}), Kernel::ErrorBadFile);
+  u32 directory = m.call("sceIoDopen", {m.string("ms0:/PSP/GAME/NPUH00000")});
+  CHECK(directory < 0x8000'0000, true);
+  CHECK(m.call("sceNpDrmEdataSetupKey", {directory}), Kernel::ErrorBadFile);
+  CHECK(m.call("sceNpDrmEdataGetDataSize", {directory}), Kernel::ErrorBadFile);
+  CHECK(m.call("sceNpDrmClearLicenseeKey", {}), 0);
+  CHECK(m.notes.size(), 0);
+}
+
 auto fileTests() -> Tests {
   return {
     {"files basics", fileBasics}, {"files folders", fileFolders}, {"files containment", fileContainment},
@@ -447,7 +477,7 @@ auto fileTests() -> Tests {
     {"files short names", fileShortNames}, {"controller peek", controllerPeek}, {"controller latch", controllerLatch},
     {"controller new samples", controllerReadNew}, {"controller cycle", controllerCycle},
     {"controller read", controllerRead}, {"controller two readers", controllerTwoReaders},
-    {"system program", systemProgram},
+    {"system program", systemProgram}, {"download DRM on a game's own files", downloadDrm},
   };
 }
 

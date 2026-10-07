@@ -37,12 +37,13 @@ auto Kernel::inVblank() const -> bool {
   return cycles - (nextVblank - VblankCycles) < VblankLength;
 }
 
-//Waits for the next vertical blank to start (and, with callbacks, runs the thread's callbacks meanwhile). Its count
-//as the wait starts goes with it: callbacks that run across the blank end the wait when they're done (resumeWait()).
-auto Kernel::waitVblank(bool callbacks) -> void {
+//Waits for the next vertical blank to start, or the count-th from now (and, with callbacks, runs the thread's
+//callbacks meanwhile). The count of blanks it wakes at goes with it: callbacks that run across that blank end the
+//wait when they're done (resumeWait()).
+auto Kernel::waitVblank(bool callbacks, u32 count) -> void {
   if(!mayWait()) return;
   result(0);
-  if(current) current->waitCount = vblanks;
+  if(current) current->waitCount = vblanks + count;
   block(Wait::Vblank, 0, 0, 0, callbacks);
 }
 
@@ -66,6 +67,20 @@ auto Kernel::sceDisplayWaitVblankCB() -> void {
     return callbacksOnReturn(true);
   }
   waitVblank(true);
+}
+
+//(count): waits for the count-th vertical blank to start from now, as pspautotests' display/vblankmulti recorded (3
+//returning at the third, every time); a count of 0 or less is INVALID_VALUE, before the refusals of waiting where
+//nothing may wait (intr/waits). 0x40f1469c is the one without callbacks, 0x77ed8b3a the CB one; vblankmulti's titles
+//have them the other way round, as its own source calls them.
+auto Kernel::sceDisplayWaitVblankStartMulti() -> void {
+  if(s32(arg(0)) <= 0) return result(ErrorInvalidValue);
+  waitVblank(false, arg(0));
+}
+
+auto Kernel::sceDisplayWaitVblankStartMultiCB() -> void {
+  if(s32(arg(0)) <= 0) return result(ErrorInvalidValue);
+  waitVblank(true, arg(0));
 }
 
 auto Kernel::sceDisplayIsVblank() -> void {

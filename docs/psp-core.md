@@ -4071,7 +4071,7 @@ modules/loadexec/loader), and the games' own code and calls, traced with part 26
 Developer Wiki's archived copy has no page on these functions; no other emulator's code was read. Where nothing
 recorded shows a behaviour, the code and this part say what was chosen. The owner's local agent's re-run of the
 compatibility report hadn't landed (no `local/psp-rerun`, no newer `docs/psp-compatibility.md` on part 29's
-branch); every function the existing report names was already here.
+branch); every function the existing report names was already here. (It landed later: the re-run's list, below.)
 
 **sceKernelReferThreadRunStatus** (0xffc36a14, `threads.cpp`): a thread's SceKernelThreadRunStatus, 44 bytes: its
 status, current priority, wait type and what it waits for, and wakeup count, as its full status gives them, then its
@@ -4256,6 +4256,64 @@ title and main menu, a new campaign, and the first operation's briefing, at 60; 
 launcher at 60, and choosing WipEout Pure, which had fallen back to the menu at sceKernelLoadExec, starts it: its
 language selection, the memory stick notice and its menu's opening scene, at 60 (its title, on this Mac, above).
 
+**The re-run's list.** The owner's local agent's re-run of the compatibility report landed afterwards, as an unmerged
+PR (#158, `local/psp-rerun`, run at part 29's `b27f084a5`): games stopping at a missing function fell from 149 to
+77 of 266. Its state column isn't to be trusted (its "regressions" weren't real), but its count of missing functions
+is. Apart from scePsmf and scePsmfPlayer (part 31), its top list is seven functions, named here from candidate
+names' NIDs (pspsdk's import stubs and uOFW's export lists agree on each): scePspNpDrm_user 0xa1336091 (13 games),
+sceRtc 0x011f03c1 (12), sceDisplay 0x77ed8b3a (8) and 0x40f1469c (4), ThreadManForUser 0xd13bde95 (6), sceHprm
+0x7e69eda4 (5) and scePower 0xa85880d0 (4). Its per-game table gives only each game's last line ("not implemented
+yet.." for 35 games), not which function, so no other function could be counted across three games; the five here
+of the owner's device not on this Mac (Ace Combat: Joint Assault, Ape Escape: On the Loose, Killzone: Liberation,
+MotorStorm: Arctic Edge, Ridge Racer 2) import none of the seven.
+- **sceDisplayWaitVblankStartMulti** (0x40f1469c) and **sceDisplayWaitVblankStartMultiCB** (0x77ed8b3a; the report
+  had them the other way round): the count-th vertical blank's start from now, as display/vblankmulti recorded (3
+  from just after a blank: the display's count 0, 3, 6, 9, in the blank each time); 0, -1 and 0x80000000 are
+  INVALID_VALUE, before intr/waits' refusals of waiting in an interrupt handler or with interrupts held off. A blank's
+  wait now keeps the count of blanks it ends at (`Thread::waitCount`, now plus one for the others), which the blank
+  and a callback's end both compare with. A state keeps it as before, the layout unchanged (version 14 still): a
+  state of 17ea2d8a0's saved inside a callback run during a CB blank wait ends that wait a blank early, no more.
+- **sceKernelCheckThreadStack** (0xd13bde95): the room from the calling thread's stack pointer down to its stack's
+  bottom. threads/threads/stackfree recorded 0xeb0 in a 4 KiB stack from a function with a frame of 16 bytes and
+  0xab0 with 1 KiB more: a new thread's stack pointer 0x140 below its top here, as on a PSP, gives the same. Chosen:
+  0 with no thread, in an interrupt handler, or a stack pointer outside the stack.
+- **sceRtcGetAccumulativeTime** (0x011f03c1, and Sony's spelling sceRtcGetAccumlativeTime, 0x029ca3b3, the same
+  function in uOFW's rtc): microseconds since the PSP started, 64 bits in v0 and v1. uOFW hasn't worked out its body
+  beyond reading the system time, and no pspautotests program calls it: the unit and what it counts from are chosen.
+- **sceHprmIsHeadphoneExist** (0x7e69eda4), with the rest of sceHprm but its callbacks: nothing in the headphone
+  socket (pspsdk's psphprm.h: 1 for plugged in, else 0), no remote or microphone, no key held, an empty latch; a
+  buffer the answer can't go in is ILLEGAL_ADDR (chosen, as the controller's latch).
+- **sceNpDrmSetLicenseeKey** (0xa1336091), with the user library's other four (uOFW's npdrm exports): the DRM of
+  games sold as downloads, which give their licensee key before opening their own protected files (EDATA: a
+  ".PSPEDAT" header with a PGD inside, the PSP Developer Wiki's PSP_EDAT and PGD pages say). There's no DRM here,
+  and nothing decrypted: setting and clearing the key, and checking a file's name, answer 0; readying an open
+  file's key answers 0 and its data's size is the file's own; a file not open, or a folder, is BAD_FILE. A game's
+  plain files work so; an encrypted one reads as its encrypted bytes.
+- **scePower 0xa85880d0**: left out. No candidate name hashes to it (pspsdk's lists don't have it, uOFW has no power
+  module, and some 51,000 names built from scePower's words missed), pspautotests imports it unnamed and never calls
+  it, and no game here imports it, so nothing says what it does; answering 0 would be a guess.
+- Checked: tests/psp's new groups (299, three more: "vertical blanks waited for by count", a program on both
+  engines from vblankmulti's pattern with a CB wait and a state saved mid-wait carried on in a fresh machine, and the
+  refusals; "remote and running time"; "download DRM on a game's own files"), the stack check added to "kernel
+  thread stack free" (both engines); none failed with the sanitizers or without; tests/psp/ares 298 checks, none
+  failed. pspautotests:
+  display/vblankmulti and threads/threads/stackfree now print exactly what the PSP printed (64 and 14 lines had
+  differed), intr/waits 98 lines to 74 (none of them the new waits), display/display, vblanklen, power/power and
+  rtc/rtc as before. Broken versions each failed them: the Multi wait ending at the next blank, either one taking
+  any count, and a blank's wait ending at any blank ("vertical blanks waited for by count"); the stack's room less
+  the ID's 16 bytes ("kernel thread stack free"); the running time in 32 bits ("remote and running time"); a file on
+  the stick measured as nothing ("download DRM on a game's own files"). Games: the 14 others on this Mac and the
+  three above the same pictures and sound as at 17ea2d8a0, but Snoopy vs. the Red Baron's picture at frame 600 and
+  Chili Con Carnage's sound, which differ between two runs of that build too. WipEout imports the stack check and
+  Grand Theft Auto: Vice City Stories the running time, and neither calls it in its first minute.
+- Seen in the five games from the owner's device, not changed: Ace Combat: Joint Assault quits on its first frame
+  when sceUtilityLoadModule refuses module 0x308 (past pspsdk's codecs, which end at 0x307; the firmware has a
+  libmp4.prx, sceMp4, but nothing here gives its number); Killzone: Liberation's boot program starts the game's
+  module (KZL.PRX), then unloads itself with sceKernelStopUnloadSelfModuleWithStatus, which ends the whole program
+  here, the program itself being no module the kernel unloads (unloadSelf()), so the game's thread goes with it at
+  frame 571; MotorStorm: Arctic Edge, after setting its callbacks up, waits for a blank every frame and nothing else.
+  Ape Escape: On the Loose and Ridge Racer 2 run on.
+
 **Left, and why**:
 - Threads' attributes as reported: threads/threads/create and refer recorded every thread a program makes with
   0x800000ff added (user mode, and a low byte of ones), and attributes 0x100-0x1000 and 0x8000 refused; not changed
@@ -4277,6 +4335,9 @@ language selection, the memory stick notice and its menu's opening scene, at 60 
   save of the game whatever pattern it's given (Ace Combat X's "USERID_*", Chili Con Carnage's "DATA*").
 - Chili Con Carnage's logo and its main menu's art drawn in broken stripes and triangles, on this Mac and the RP6:
   a drawing matter for the GE's part (another branch is changing `ge/`), not looked into here.
+- scePower 0xa85880d0 (above), and the three games just above: Killzone's the likeliest to go further (a program
+  unloading itself while a module it started runs on should leave that module running), a change to how every
+  program ends, for a part of its own.
 - The functions above imported but not called in a minute; WipEout Pure's and Pulse's races, and Chili Con
   Carnage's and Ace Combat X's play, not tried here; the compatibility report's re-run, when it lands.
 
@@ -4288,4 +4349,5 @@ listed and its 0 for a save not there; msData naming a save not there being SIZE
 and saving's PARAM.SFO cluster beyond the one recording each; sizes as text in MB; the stick's size (a choice within
 what recordings and 32-bit games allow); sceKernelLoadExec's refusals and their codes, the clock starting afresh
 (whether a PSP's goes on across it isn't recorded), the user partition cleared, and an argument of none for
-parameters with none; the creates' NULL names refused for a program built with any SDK.
+parameters with none; the creates' NULL names refused for a program built with any SDK; the running time's unit
+and start, the stack check's 0 outside a thread, the remote's refusals, and every answer of the DRM functions.

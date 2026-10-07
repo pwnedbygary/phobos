@@ -28,9 +28,10 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP core: the next functions games stop at (run status, ID lists, LoadExec, the memory stick) — 2026-10-07
 
 Branch `cursor/psp-hle-games6-2b67`, on top of `cursor/psp-psmf-2b67` (part 31): commit 17ea2d8a0 (code and tests),
-then the docs; local only, not pushed. docs/psp-core.md, part 32, describes it. Sources: pspsdk's headers,
-pspautotests' programs and the results they recorded on a PSP, the games' own calls; no other emulator's code read.
-The owner's re-run of the compatibility report hadn't landed; every function the existing report names was here.
+then the docs (9b580b37c), then the re-run's list (code, tests and docs together); local only, not pushed.
+docs/psp-core.md, part 32, describes it. Sources: pspsdk's headers, pspautotests' programs and the results they
+recorded on a PSP, uOFW's export lists, the games' own calls; no other emulator's code read.
+The owner's re-run of the compatibility report hadn't landed at first; every function the old report names was here.
 - **ThreadManForUser 0xffc36a14, sceKernelReferThreadRunStatus**: the 44-byte run status (status, priority, wait,
   wakeups) with real run figures, which threads now keep: time on the CPU, interruptions by calls into the program,
   preemptions by better threads, releases from waits. The full thread status gives them too.
@@ -60,10 +61,24 @@ The owner's re-run of the compatibility report hadn't landed; every function the
   the Red Baron's screens the same at moments apart (its two NULL-named semaphores now refused, as recorded).
 - **On the RP6** (build 105300): Chili Con Carnage to its main menu with a new profile, Ace Combat X to the first
   operation's briefing, WipEout Pure started from the collection to its menu's opening, all at 60 fps.
+- **The re-run's list** (PR #158, `local/psp-rerun`: 77 of 266 games stopping at a missing function, from 149; its
+  state column unreliable): sceDisplayWaitVblankStartMulti and its CB form (0x40f1469c, 0x77ed8b3a), as
+  display/vblankmulti recorded; sceKernelCheckThreadStack (0xd13bde95), as threads/threads/stackfree recorded;
+  sceRtcGetAccumulativeTime (0x011f03c1, and Sony's spelling 0x029ca3b3); sceHprmIsHeadphoneExist (0x7e69eda4) and
+  the rest of sceHprm but its callbacks (nothing plugged in); sceNpDrmSetLicenseeKey (0xa1336091) and the user DRM
+  library's other four, with no DRM (keys taken, a game's files read as they are, their size their own). Names from
+  candidate names' NIDs (pspsdk, uOFW). scePower 0xa85880d0 left out: no name, no recording, no game here calls it.
+  The report's per-game table names no functions, so nothing else could be counted across three games. Checked:
+  tests/psp 299 groups (3 new, one extended) with ASan and UBSan and without, tests/psp/ares 298 checks, none
+  failed, 6 broken versions caught; vblankmulti and stackfree now exactly as the PSP printed; the 14 other games
+  and the three above the same pictures and sound (Snoopy's frame 600 and Chili's sound vary run to run anyway).
+  Five games of the device's not here before: Joint Assault quits at utility module 0x308, Killzone's boot program
+  unloading itself ends the game it started, MotorStorm waits on blanks, Ape Escape and Ridge Racer 2 run on.
 - **Left**: threads' attributes as recorded (0x800000ff added), where a preempted thread goes back in line, the
   blank's timing (display/hcount's lowest and highest lines), thread-local storage pools, the lightweight mutex's
   other recorded differences, PARAM.SFO in saves and the list mode's pattern, Chili Con Carnage's logo and menu art
-  drawn in broken stripes (a GE matter), the imported-but-uncalled functions part 32 lists, the report's re-run.
+  drawn in broken stripes (a GE matter), the imported-but-uncalled functions part 32 lists, scePower 0xa85880d0,
+  a program unloading itself while a module it started runs on (Killzone), utility module 0x308 (Joint Assault).
 
 ## PSP core: movies through scePsmf and scePsmfPlayer, in a clean room — 2026-10-07
 

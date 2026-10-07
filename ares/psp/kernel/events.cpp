@@ -328,8 +328,8 @@ auto Kernel::resumeWait(Thread& thread) -> void {
     if(auto other = threads.find(thread.waitID); other == threads.end()) ready(thread, ErrorWaitDeleted);
     else if(other->second->status == Status::Dormant) ready(thread, u32(other->second->exitStatus));
     break;
-  case Wait::Vblank:  //it waited for the next vertical blank after its count
-    if(vblanks != thread.waitCount) ready(thread, 0);
+  case Wait::Vblank:  //it waited for the blank its count says
+    if(s32(vblanks - thread.waitCount) >= 0) ready(thread, 0);
     break;
   case Wait::Umd:     //for any of these bits of the drive's state
     if(thread.waitCount & umdState()) ready(thread, 0);

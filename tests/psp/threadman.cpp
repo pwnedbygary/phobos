@@ -1,10 +1,11 @@
 //The thread manager's reports (ares/psp/kernel/threads.cpp, events.cpp, display.cpp): a thread's status and run
 //status (sizes, the SDK's rule, exit statuses, the run figures counted as threads run, are interrupted, preempted and
 //released), the lists of the thread manager's objects by kind and an object's kind, the status structures' size
-//words, the lightweight mutex's status, and the display's accumulated count of lines adjusted; as pspautotests'
-//threads/threads (refer, threadend, exitstatus, threadmanidlist, threadmanidtype), threads/events/refer,
-//threads/semaphores/refer, threads/lwmutex (refer, create, unlock) and display/hcount recorded on a PSP. Programs run
-//on both engines; each group's machine, saved at its end, loads into another that makes the same state.
+//words, the lightweight mutex's status, the display's accumulated count of lines adjusted, and blanks waited for by
+//count; as pspautotests' threads/threads (refer, threadend, exitstatus, threadmanidlist, threadmanidtype),
+//threads/events/refer, threads/semaphores/refer, threads/lwmutex (refer, create, unlock), display/hcount and
+//display/vblankmulti recorded on a PSP. Programs run on both engines; each group's machine, saved at its end, loads
+//into another that makes the same state.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -419,11 +420,110 @@ static auto hcountAdjusted() -> void {
   CHECK(m.call("sceDisplayGetAccumulatedHcount", {}), 1004 + 286);
 }
 
+//sceDisplayWaitVblankStartMulti and its CB form, as display/vblankmulti recorded: from just after a blank, waiting
+//for 3 returns at the third blank's start, every time (the display's count 0, 3, 6, 9), in the blank; counts of 0,
+//-1 and 0x80000000 are INVALID_VALUE at once, the count unmoved. With callbacks, one notified before runs as the
+//wait starts, and the wait goes on to its blank (2 here). The state saved in the second wait, in a fresh machine,
+//carries on to the same results. A thread in an interrupt handler or with interrupts held off is refused waiting
+//(intr/waits), after the count.
+static auto vblankMulti() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    constexpr u32 Handled = R + 0x10;
+    Assembler handler{m, 0x0880'3000};
+    handler.li(t0, Handled); handler.put(lw(t1, 0, t0)); handler.put(addiu(t1, t1, 1)); handler.put(sw(t1, 0, t0));
+    handler.li(v0, 0);
+    handler.put(jr(ra));
+    handler.put(nop);
+    Assembler main{m, 0x0880'1000};
+    main.call("sceDisplayWaitVblankStart");
+    main.li(a0, 750);
+    main.call("sceKernelDelayThread");
+    main.call("sceDisplayGetVcount");
+    main.put(addu(s0, v0, zero));
+    for(u32 n = 0; n < 4; n++) {
+      main.call("sceDisplayGetVcount");
+      main.put(subu(t2, v0, s0));
+      main.li(t0, R + 0x100 + n * 16); main.put(sw(t2, 0, t0));
+      main.li(a0, 3);
+      main.call("sceDisplayWaitVblankStartMulti");
+      main.li(t0, R + 0x100 + n * 16); main.put(sw(v0, 4, t0));
+      main.call("sceDisplayIsVblank");
+      main.li(t0, R + 0x100 + n * 16); main.put(sw(v0, 8, t0));
+    }
+    main.call("sceDisplayGetVcount");
+    main.put(addu(s0, v0, zero));
+    u32 slot = 0;
+    for(const char* function : {"sceDisplayWaitVblankStartMulti", "sceDisplayWaitVblankStartMultiCB"}) {
+      for(u32 count : {0u, 0xffff'ffffu, 0x8000'0000u}) {
+        main.li(a0, count);
+        main.call(function);
+        main.li(t0, R + 0x200 + slot++ * 4); main.put(sw(v0, 0, t0));
+      }
+    }
+    main.call("sceDisplayGetVcount");
+    main.put(subu(t2, v0, s0));
+    main.li(t0, R + 0x240); main.put(sw(t2, 0, t0));
+    main.li(a0, m.string("cb")); main.li(a1, 0x0880'3000); main.li(a2, 0);
+    main.call("sceKernelCreateCallback");
+    main.put(addu(a0, v0, zero)); main.li(a1, 1);
+    main.call("sceKernelNotifyCallback");
+    main.call("sceDisplayGetVcount");
+    main.put(addu(s0, v0, zero));
+    main.li(a0, 2);
+    main.call("sceDisplayWaitVblankStartMultiCB");
+    main.li(t0, R + 0x300); main.put(sw(v0, 0, t0));
+    main.call("sceDisplayGetVcount");
+    main.put(subu(t2, v0, s0));
+    main.li(t0, R + 0x304); main.put(sw(t2, 0, t0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile, Kernel::VblankCycles * 5);  //in the second wait
+    CHECK(m.kernel.exited, false);
+    auto state = saveState(m);
+    KernelMachine n;
+    n.system.recompiler.enabled = recompile;
+    CHECK(loadState(n, state), true);
+    std::vector<std::vector<u32>> results;
+    for(auto* each : {&m, &n}) {
+      each->kernel.run(Kernel::CPUFrequency / 2);
+      CHECK(each->kernel.exited, true);
+      auto at = [&](u32 address) { return word(*each, address); };
+      for(u32 i = 0; i < 4; i++) {
+        CHECK(at(R + 0x100 + i * 16), i * 3);
+        CHECK(at(R + 0x104 + i * 16), 0);
+        CHECK(at(R + 0x108 + i * 16), 1);
+      }
+      for(u32 i = 0; i < 6; i++) CHECK(at(R + 0x200 + i * 4), Kernel::ErrorInvalidValue);
+      CHECK(at(R + 0x240), 0);
+      CHECK(at(R + 0x300), 0);
+      CHECK(at(R + 0x304), 2);
+      CHECK(at(Handled), 1);
+      CHECK(each->notes.size(), 0);
+      CHECK(roundTrip(*each), true);
+      std::vector<u32> words;
+      for(u32 address = R; address < R + 0x310; address += 4) words.push_back(at(address));
+      results.push_back(words);
+    }
+    CHECK(results[0] == results[1], true);
+  }
+  //refused waiting where nothing may wait, but the count first
+  KernelMachine m;
+  caller(m);
+  m.kernel.interrupting = true;
+  CHECK(m.call("sceDisplayWaitVblankStartMulti", {0}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("sceDisplayWaitVblankStartMulti", {1}), Kernel::ErrorIllegalContext);
+  CHECK(m.call("sceDisplayWaitVblankStartMultiCB", {1}), Kernel::ErrorIllegalContext);
+  m.kernel.interrupting = false;
+  m.kernel.interruptsEnabled = false;
+  CHECK(m.call("sceDisplayWaitVblankStartMultiCB", {0}), Kernel::ErrorInvalidValue);
+  CHECK(m.call("sceDisplayWaitVblankStartMulti", {1}), Kernel::ErrorCanNotWait);
+}
+
 auto threadmanTests() -> Tests {
   return {
     {"thread status sizes and exit", threadStatusCalls}, {"thread run figures", runFigures},
     {"threadman ID lists", idLists}, {"status size words and creates", statusSizes},
-    {"accumulated hcount adjusted", hcountAdjusted},
+    {"accumulated hcount adjusted", hcountAdjusted}, {"vertical blanks waited for by count", vblankMulti},
   };
 }
 
