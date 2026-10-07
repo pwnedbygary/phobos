@@ -25,6 +25,37 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
+
+Branch `cursor/psp-ge-curves-2b67`, on top of `cursor/psp-psmf-2b67` (#160, part 31; part 30's GE speed work, #159,
+underneath); local only, not pushed. docs/psp-core.md, part 33, describes it (part 32 is the sibling kernel batch's).
+- **The GE** (`ares/psp/ge/curves.cpp`): BEZIER and SPLINE drawn, the control points read as PRIM reads vertices;
+  Bézier patches of 4x4 points (3N + 1 a way, the rest left out), cubic B-splines with open or closed ends (SPLINE's
+  bits 16-19), PATCH_DIVISION per patch or piece (0 as 1), PATCH_PRIMITIVE's strips, line strips and points;
+  positions, colors (rounded up), texture coordinates (made up from 0 to 1 when the vertex type has none), normals
+  (from the slopes when it has none, out of PATCH_FACING's front) and weights blended. The vertices then go through
+  `draw.cpp`'s new `drawVertices()`, PRIM's own path (transform, lighting, culling, jobs, threads, four pixels at a
+  time), which PRIM now uses unchanged. More than 131072 vertices aren't drawn (noted). No state change (version 13).
+- **Against the PSP**: pspautotests' gpu/primitives/bezier and spline pictures covered pixel for pixel (points, flat
+  shading's colors, lines, texels exact; smooth gradients within a level); round 3's Bézier patches the same pixels
+  as the owner's PSP, every channel within a level (bezier-curved 1494 pixels apart, from 42624 undrawn), the
+  closed spline but 4 edge pixels. gpu/exact/curves: 2 of 16 checksums (its knife-edge points and depths need the
+  GE's own fixed-point arithmetic, which nothing tried matched). Found and left: the PSP drops points past z / w ±1
+  even with DEPTH_CLIP_ENABLE on (round 2's 3d-rules, and a third checksum), which the core draws; changing it would
+  change more than curves.
+- **The measuring program's round 4** gained ten curve cases (vertices' places to the sixteenth, colors, depths,
+  texels, made-up texture coordinates and normals, culling, counts): built in pspdev's Docker image,
+  `tests/psp/programs/pspmeasure.elf` replaced (README checksum); the PSP's EBOOT is outside the repository at
+  `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256 8db865ac...0530a8).
+- **Checked**: tests/psp 297 groups (6 new) with ASan and UBSan, none failing, "psp measure" identical but for round
+  3's curve files; tests/psp/ares 294 checks; 7 broken versions each caught. Games: none of the 22 here (the
+  handheld's 22) drew a curve in 7200 frames (a probe build); Macross Ace Frontier and its sequels aren't here.
+  Scenes without curves (4 scenes from states, 1 and 7 threads, the builds taking turns): every frame's picture the
+  same; speed within the shared Mac's noise (part 33's table).
+- **Left**: the GE's exact arithmetic (round 4 records it), PATCH_CULL_ENABLE, the made-up normals' direction and
+  texture coordinates (chosen), points past z / w ±1, morphing and skinning on control points. Independent review of
+  this branch is still to be done (docs/development-process.md).
+
 ## PSP core: movies through scePsmf and scePsmfPlayer, in a clean room — 2026-10-07
 
 Branch `cursor/psp-psmf-2b67`, on top of `cursor/psp-ge-features-2b67` (#157, part 29): commit 18c58f968 (code and
