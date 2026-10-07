@@ -4337,7 +4337,7 @@ it, as PPSSPP has it), since changing it changes round 2's comparison and every 
 leave as they were; it's one line in `drawVertices()`'s points, for a part of its own.
 
 **The measuring program's round 4** (the menu's first line, now "Round 4: the GE's lines, boxes, DXT and curves",
-about 7 MB) gains ten curve cases, most drawn as points, a vertex each, in through mode, where nothing but the GE's
+about 8 MB) gains fourteen curve cases, most drawn as points, a vertex each, in through mode, where nothing but the GE's
 own tessellation stands between the control points and the pixels (`tools/psp-measure/ge.c`, part 33's section):
 - `curves-bezier`: a bowed, twisted 4x4 grid with colors and depths of its own, cut 1 to 16 times in 16 cells: each
   vertex's pixel and color; `curves-bezier-depths` the depths written there (VRAM's fourth copy): 16 bits of each
@@ -4352,13 +4352,14 @@ own tessellation stands between the control points and the pixels (`tools/psp-me
 - `curves-lit`: normals made from the slopes, lit from +z, +x, +y and -z with either patch front face, beside the same
   patches given normals of their own.
 - `curves-culling`: the 16 combinations of CULL_FACE_ENABLE, CULL, PATCH_CULL_ENABLE and PATCH_FACING.
-- `curves-count`: how many vertices a row has at 16, 63, 64, 65, 100, 128, 200 and 255 cuts (points added up), and
-  which vertices strips join across patches, as lines and flat-shaded triangles.
+- `curves-joins`: which vertices strips join across patches, as lines and flat-shaded triangles.
+- `curves-count`, `-count-128`, `-count-200` and `-count-255`, last: how many vertices a row has (points added up) at
+  16, 63, 64 and 65 cuts, at 100 and 128, at 200, and at 255, each in a display list of its own.
 Built in pspdev's Docker image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`, part 29's), and `tests/psp/programs/
 pspmeasure.elf` replaced as that folder's README asks (its SHA-256 there). The EBOOT.PBP for the PSP is outside the
 repository: `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256
-`8db865ac08c796d56c26d0423ef8d3498da5b8704500e91ef3f61269430530a8`), to be copied to the memory stick's
-`PSP/GAME/PSPMEASURE`. `tests/psp/measure.cpp` runs round 4 to its end and checks its 30 files; the comparison lists
+`bc6e90b4a7b566b734c828eff845069b81b84daaf03beda133f55146e69343f2`), to be copied to the memory stick's
+`PSP/GAME/PSPMEASURE`. `tests/psp/measure.cpp` runs round 4 to its end and checks its 34 files; the comparison lists
 them once a PSP's `manifest4.txt` is in the results.
 
 **Tests** (`tests/psp/curves.cpp`, 6 groups):
@@ -4421,3 +4422,17 @@ same functions: a matter of how the two builds were laid out, not of what they d
 - Points past z / w ±1, which the PSP drops (above): a part of its own, as it changes more than curves.
 - Morphing and skinning on control points (the points morphed as read, the weights blended, each vertex skinned as
   it's transformed: unmeasured), and NORMAL_REVERSE on made-up normals.
+
+**After review.** An independent review found the clean room kept, PRIM's way unchanged, and the curves bounded and
+clean under the sanitizers with hostile surfaces; the ELF and EBOOT built again byte for byte. Two things changed:
+- The measuring program's `curves-count` had the strip-join rows and the cuts past pspsdk's 64 in one display list
+  and one file: had the PSP's GE stalled at 255 cuts, the owner's restart would have given up on the whole test
+  ("stopped twice"), the joins with it. The joins are now `curves-joins`, run before; the counts are split by how
+  far past 64 they go (`curves-count` 16-65, `-count-128`, `-count-200`, `-count-255`), run last, so a stall loses
+  only its own test. Round 4 has 34 files, about 8 MB (the menu says so; the README's list had still said 4 MB).
+  Rebuilt in the same pinned image: `tests/psp/programs/pspmeasure.elf` (its README's SHA-256) and the EBOOT above.
+- `GE::patch()` checks the budget from the counts and divisions before working out a step, so a surface past it
+  allocates nothing (it had made up to about 5 MB of steps each way first); and `patchVertices`, kept between
+  surfaces, gives back its room once drawn when it holds more than 4096 vertices (PatchKept), where one at the
+  budget would have kept about 26 MB (13 MB as points) for the rest of a session. Nothing drawn changes: the same
+  checks as above, none failing.

@@ -43,18 +43,22 @@ underneath); local only, not pushed. docs/psp-core.md, part 33, describes it (pa
   GE's own fixed-point arithmetic, which nothing tried matched). Found and left: the PSP drops points past z / w ±1
   even with DEPTH_CLIP_ENABLE on (round 2's 3d-rules, and a third checksum), which the core draws; changing it would
   change more than curves.
-- **The measuring program's round 4** gained ten curve cases (vertices' places to the sixteenth, colors, depths,
+- **The measuring program's round 4** gained fourteen curve cases (vertices' places to the sixteenth, colors, depths,
   texels, made-up texture coordinates and normals, culling, counts): built in pspdev's Docker image,
   `tests/psp/programs/pspmeasure.elf` replaced (README checksum); the PSP's EBOOT is outside the repository at
-  `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256 8db865ac...0530a8).
+  `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256 bc6e90b4...e69343f2).
 - **Checked**: tests/psp 297 groups (6 new) with ASan and UBSan, none failing, "psp measure" identical but for round
   3's curve files; tests/psp/ares 294 checks; 7 broken versions each caught. Games: none of the 22 here (the
   handheld's 22) drew a curve in 7200 frames (a probe build); Macross Ace Frontier and its sequels aren't here.
   Scenes without curves (4 scenes from states, 1 and 7 threads, the builds taking turns): every frame's picture the
   same; speed within the shared Mac's noise (part 33's table).
 - **Left**: the GE's exact arithmetic (round 4 records it), PATCH_CULL_ENABLE, the made-up normals' direction and
-  texture coordinates (chosen), points past z / w ±1, morphing and skinning on control points. Independent review of
-  this branch is still to be done (docs/development-process.md).
+  texture coordinates (chosen), points past z / w ±1, morphing and skinning on control points.
+- **After review** (independent, clean room and bounds confirmed, builds reproduced): round 4's strip joins are
+  `curves-joins`, run before the counts, and the counts past 64 cuts run last, split three ways (`curves-count-128`,
+  `-200`, `-255`), so a GE stall there loses only its own test (34 files, about 8 MB; ELF and EBOOT rebuilt, the
+  SHA-256 above). `GE::patch()` checks its vertex budget before allocating anything, and gives back
+  `patchVertices`' room past 4096 vertices once drawn. Checks as above, none failing.
 
 ## PSP core: movies through scePsmf and scePsmfPlayer, in a clean room — 2026-10-07
 
