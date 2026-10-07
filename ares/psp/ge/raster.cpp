@@ -183,9 +183,10 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
 //A line's pixels in rows fromY to toY (draw.cpp's line() says which): along x (y when it's steep) from its first
 //to its last, each in the row (column) where it crosses the pixel's middle. Its colors, depth, fog and texture
 //coordinates are blended from its ends by how far along x that middle is, held to its ends, as a triangle's are
-//from its corners (the same arithmetic, with two weights).
-template<u32 Format>
-auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
+//from its corners (the same arithmetic, with two weights). Worked out here, each pixel's values, for whoever draws
+//them: lineRows() here, or the hardware renderer, which draws each as a pixel-sized square (gpu/gpu.cpp).
+auto GE::linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& pixels) -> void {
+  pixels.clear();
   auto& l = job.line;
   auto& look = *job.look;
   auto& p = look.pixel;
@@ -223,7 +224,7 @@ auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
       v = l.v[0] + f64(s) / 16 * l.vStep;
     }
     u32 fog = p.fog ? fogAmount((l.fog[0] * w0 + l.fog[1] * w1) / total) : 255;
-    shadeAs<Format>(look, job.linear, x, y, z, color, specular, u, v, fog);
+    pixels.push_back({x, y, z, color, specular, fog, u, v});
   };
   s32 top = std::max(job.firstY, fromY), bottom = std::min(job.lastY, toY);
   if(!l.steep) {
@@ -236,6 +237,16 @@ auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
       s64 x = acrossAt(y);
       if(x >= job.firstX && x <= job.lastX) shade(s32(x), y, s64(y) * 16 + 8);
     }
+  }
+}
+
+template<u32 Format>
+auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
+  thread_local std::vector<LinePixel> pixels;  //(kept, so that a line seldom allocates; each thread its own)
+  linePixels(job, fromY, toY, pixels);
+  for(auto& pixel : pixels) {
+    shadeAs<Format>(*job.look, job.linear, pixel.x, pixel.y, pixel.z, pixel.color, pixel.specular, pixel.u, pixel.v,
+                    pixel.fog);
   }
 }
 

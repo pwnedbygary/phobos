@@ -16,10 +16,14 @@ namespace ares::PlayStationPortable {
 #include "threads.cpp"
 #include "transfer.cpp"
 
-//The GE watches the pages of the textures it keeps decoded (texture.cpp), and hears of their changes here.
+//The GE watches the pages of the textures it keeps decoded (texture.cpp), and a hardware renderer those of its frame
+//buffers (ge.hpp's Renderer), and hears of their changes here.
 GE::GE(Memory& memory) : memory(memory) {
-  memory.watchedWritten = [this](u32 page) { textureWritten(page); };
-  memory.finishDrawing = [this] { settle(); };  //(threads.cpp)
+  memory.watchedWritten = [this](u32 page) {
+    textureWritten(page);
+    if(renderer) renderer->written(*this, page);
+  };
+  memory.finishDrawing = [this] { settleAll(); };  //(threads.cpp)
 }
 
 //As the GE is when the PSP starts: every command's word zero, no list.
@@ -41,6 +45,7 @@ auto GE::power() -> void {
   flush();
   dropTextures();
   paletteChanged();
+  if(renderer) renderer->forget(*this);
 }
 
 auto GE::note(const std::string& text) -> void {
@@ -67,7 +72,10 @@ auto GE::serialize(serializer& s) -> bool {
   flush();  //(nothing waits outside run(), but a state is always of finished drawing)
   s(commands);
   s(clut);
-  if(s.reading()) dropTextures(), paletteChanged();
+  if(s.reading()) {
+    dropTextures(), paletteChanged();
+    if(renderer) renderer->forget(*this);
+  }
   s(list);
   s(vertexAddress);
   s(indexAddress);
