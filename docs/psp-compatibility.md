@@ -1,7 +1,7 @@
 # PSP Compatibility Report
 
-**Date:** 2026-10-06
-**Tested commit:** `de6e6dcb7` (branch `cursor/psp-test-data-2b67`)
+**Date:** 2026-10-07
+**Tested commit:** `b27f084a5` (branch `cursor/psp-ge-features-2b67`)
 **Games tested:** 266
 **Runner:** `tools/psp-runner/` (headless, 3600 frames, 20 s of input, 4 PNG captures, 1 WAV)
 
@@ -19,88 +19,136 @@ settings:
 
 The runner captures a PNG at frames 60, 300, 1200, and 3600 (each named by
 the frame run, after waiting for the screen to present a new picture), and a
-WAV of the full run. A game is considered to have "booted" if its final
-frame shows a usable UI (title screen, main menu, language select, save
-warning, or profile dialog). A game is in "gameplay" if its final frame
-shows active game content. A game is "black" if its final frame is a black
-screen (movie, loading, crash, or GE failure). Three games timed out at the
-1200 s batch limit and are marked separately.
+WAV of the full run. A game is in "menu" if its final frame shows a usable
+UI (title screen, main menu, language select, save warning, or profile
+dialog). A game is in "movie" if its final frame shows a cinematic,
+intro, or cutscene (dark frame with visual content). A game is in
+"loading" if its final frame shows a loading screen. A game is "black" if
+its final frame is a true-black screen (crash, GE failure, or freeze;
+max brightness ≤ 8). Four games timed out at the 1200 s batch limit and
+are marked separately.
 
 The reference frame for each game is the last frame the runner captured:
-`frame-003600.png` where the screen presented by the last frame (166
-games), else `frame-001200.png` (96 games), else `frame-000060.png` (2
+`frame-003600.png` where the screen presented by the last frame (172
+games), else `frame-001200.png` (88 games), else `frame-000060.png` (2
 timed-out games that were so slow only 60 frames completed in 1200 s).
 
 ## Summary
 
 | Category | Count |
 |---|---|
-| Boots to menu/title (usable UI) | 104 |
-| Black (movie or loading?) | 155 |
-| Stuck loading | 4 |
-| Timed out (killed at 1200 s) | 3 |
+| Boots to menu/title (usable UI) | 141 |
+| Movie (intro/cutscene playing) | 35 |
+| Black (crash, GE failure, or freeze) | 73 |
+| Stuck loading | 13 |
+| Timed out (killed at 1200 s) | 4 |
 | **Total** | **266** |
 
-The 104 games that boot to a usable UI include title screens, main menus,
+The 141 games that boot to a usable UI include title screens, main menus,
 language selects, save-data warnings, and profile dialogs. These games
-loaded their code and reached their first interactive screen. The 155 black
-games show a black screen; at this commit, movies don't draw yet (FFmpeg
-arrives with #153), so a black frame often means a movie or a transition,
-not a freeze. The rest are a crash in an unimplemented kernel function, a
-GE (Direct3D) feature not yet emulated (compressed DXT textures, bounding-box
-tests, line drawing), or the CPU stopping in a game thread. The 4 loading
+loaded their code and reached their first interactive screen. The 35 movie
+games are playing their intro or a cutscene (the runner is built with
+FFmpeg's decoders, and #153 is included, so movies do draw). The 73 black
+games show a true-black screen: a crash in an unimplemented kernel function,
+a feature of the PSP's own graphics engine (GE) not yet emulated (curved
+surfaces, which #162 adds), or the CPU stopping in a game thread. The 13 loading
 games are stuck on a loading screen.
+
+## Since de6e6dcb7
+
+Three PRs sit between the old run and this one: #153 (music and movie
+playback through FFmpeg's decoders), #156 (41 kernel functions, which took
+the missing-function count from 149 to 77), and #157 (GE line and box
+drawing, DXT texture decompression; curved surfaces are not yet emulated,
+and anti-aliased lines are drawn without anti-aliasing). Together they
+shift the compatibility picture substantially:
+
+| Category | Before | After | Change |
+|---|---|---|---|
+| Boots to menu | 104 | 141 | +37 |
+| Movie | — | 35 | new |
+| Black | 155 | 73 | −82 |
+| Stuck loading | 4 | 13 | +9 |
+| Timed out | 3 | 4 | +1 |
+
+Re-judging every game's reference frame (frame 3600) with one rule—a
+cinematic or text frame is a movie, a true-black frame is black, a bright
+usable UI is a menu, a loading screen is loading—66 games improved
+(black → menu): they now boot to a usable UI where the old code froze.
+22 went from menu to black. Why isn't checked yet; anti-aliased lines
+can't be the cause, since #157 draws them (without anti-aliasing). They
+are: Black Wolves Saga - Last Hope, Blitz - Overtime, Castlevania - The
+Dracula X Chronicles, Crisis Core - Final Fantasy VII, Disney-Pixar Cars -
+Race-O-Rama, Fat Princess Fistful of Cake, Fate Extra CCC, Gitaroo Man
+Lives!, Guilty Gear XX Accent Core Plus, Gungnir, Hexyz Force, Juiced 2 -
+Hot Import Nights, Killzone - Liberation, The King of Fighters - Orochi
+Saga, Macross - Triangle Frontier, Melodie (Prototype), Miami Vice - The
+Game, Midnight Club - L.A. Remix, Pangya Fantasy Golf, Ridge Racer, Super
+Stardust Portable and Toca Race Driver 2. Several last notes point at
+causes worth checking first: a save or message prompt waiting for an
+answer, a failed read, and scePsmfPlayer (which #160 adds). The 35 movie
+games are dark intro frames the old rule lumped
+into black, so the Before column's 155 "black" overstates the old run's
+true-black total.
+
+The top missing functions also changed. Before, the gaps were dominated by
+`ThreadManForUser` thread-management functions (34 hits) and `sceCtrl`
+(32 hits). Now the dominant gaps are video-playback functions
+(`scePsmf`/`scePsmfPlayer`, 79 hits across 8 IDs) and DRM
+(`scePspNpDrm_user`, 13 hits). The GE functions that were top gaps before
+(`sceGe_user b77905ea`, 17 hits) no longer appear in the top 15.
 
 ## Speed distribution
 
 | Range | Count |
 |---|---|
-| < 30 fps (very slow) | 13 |
-| 30–60 fps | 15 |
-| 60–200 fps | 72 |
-| > 200 fps | 166 |
+| < 30 fps (very slow) | 8 |
+| 30–60 fps | 19 |
+| 60–200 fps | 63 |
+| > 200 fps | 172 |
 
 These fps are the runner's own: unthrottled, built at `-O1` in `BUILD_DEBUG`
 mode, with 2 GE threads. They are not the app's speed. Most games run well
-above 60 fps (166 of 266 run above 200 fps). The 13 very slow games
+above 60 fps (172 of 266 run above 200 fps). The 8 very slow games
 (< 30 fps) are typically large 3D titles that stress the GE.
 
 ## Top missing functions
 
 The following kernel functions are hit most often across all 266 games.
-149 of 266 games (56 %) hit at least one unimplemented function.
+77 of 266 games (29 %) hit at least one unimplemented function.
 
 | Count | Function |
 |---|---|
-| 34 | `ThreadManForUser 6b30100f` |
-| 32 | `sceCtrl a7144800` |
-| 31 | `ThreadManForUser b7d098c6` |
-| 30 | `ThreadManForUser b011b11f` |
-| 19 | `ThreadManForUser 6652b8ca` |
-| 17 | `sceGe_user b77905ea` |
-| 15 | `SysMemUserForUser fe707fdf` |
-| 11 | `sceImpose 24fd7bcf` |
-| 8 | `ThreadManForUser 20fff560` |
-| 8 | `scePsmfPlayer 235d8787` |
-| 7 | `scePsmf c22c8327` |
-| 6 | `ThreadManForUser 5bf4dd27` |
-| 5 | `ThreadManForUser fccfad26` |
-| 5 | `ThreadManForUser 2c34e053` |
-| 5 | `sceImpose 8c943191` |
+| 20 | `scePsmf c22c8327` |
+| 20 | `scePsmfPlayer 235d8787` |
+| 13 | `scePspNpDrm_user a1336091` |
+| 12 | `sceRtc 011f03c1` |
+| 12 | `scePsmfPlayer 9b71a274` |
+| 8 | `sceDisplay 77ed8b3a` |
+| 7 | `scePsmfPlayer e792cd94` |
+| 6 | `ThreadManForUser d13bde95` |
+| 6 | `scePsmfPlayer 95a84ee5` |
+| 5 | `scePsmf 5b70fcc1` |
+| 5 | `sceHprm 7e69eda4` |
+| 5 | `scePsmfPlayer f8ef08a6` |
+| 4 | `sceDisplay 40f1469c` |
+| 4 | `scePower a85880d0` |
+| 4 | `scePsmfPlayer 3d6d25a9` |
 
-The `ThreadManForUser` entries are thread-management functions (the most
-common gap). `sceCtrl a7144800` is a control/setting function.
-`sceGe_user b77905ea` is a GE (graphics) function. `SysMemUserForUser`
-entries are memory-management functions. `sceImpose` entries are the
-HOME-menu overlay functions (volume, brightness, battery, language).
-`scePsmf`/`scePsmfPlayer` entries are video-playback functions.
+The `scePsmf`/`scePsmfPlayer` entries are video-playback functions (movies
+and cutscenes). `scePspNpDrm_user` is a DRM function. `sceRtc` is a
+real-time clock function. `sceDisplay` entries are display-management
+functions. `ThreadManForUser` entries are thread-management functions.
+`sceHprm` is a high-performance mode function. `scePower` is a
+power-management function.
 
 ## Per-game results
 
 Each row: title, NPID (region-disc), speed (fps), how far it gets, and the
-last note from the runner. "menu" = boots to a usable UI; "black" = black
-screen (movie, loading, crash, or GE failure); "loading" = stuck on a
-loading screen; "timeout" = killed at 1200 s.
+last note from the runner. "menu" = boots to a usable UI; "movie" =
+cinematic/intro/cutscene playing; "black" = true-black screen (crash, GE
+failure, or freeze); "loading" = stuck on a loading screen; "timeout" =
+killed at 1200 s.
 
 Note: the NPID is read from each game's PARAM.SFO `DISC_ID` field. The
 filename stem is the reliable per-game identifier; the NPID is the disc's
@@ -108,281 +156,281 @@ own ID.
 
 | Game | NPID | fps | State | Last note |
 |---|---|---|---|---|
-| 007 - From Russia with Love | ULUS10080 | 354.52 | menu | DISC0:/PSP_GAME/.. |
-| 50 Cent - Bulletproof - G-Unit Edition | ULUS10128 | 134.14 | black | GE: compressed (.. |
-| 7th Dragon 2020 [English v0.91] | NPJH50459 | 1237.55 | black | not implemented .. |
-| 7th Dragon 2020-II [English Patched v0.91] | NPJH50716 | 1254.68 | black | not implemented .. |
-| Ace Combat - Joint Assault | ULUS10511 | 1339.65 | black | not implemented .. |
-| Ace Combat X - Skies of Deception | ULUS10176 | 384.71 | black | not implemented .. |
-| Aces of War [Europe] | ULES00590 | 872.19 | black | fatal error : re.. |
-| Activision Hits Remixed | ULUS10186 | 4.16 | menu | Calling FreeMusi.. |
-| After Burner - Black Falcon | ULUS10244 | 24.01 | loading |  Loading SCE Mod.. |
-| Angus Hates Aliens | NPUZ00374 | 656.43 | black | not implemented .. |
-| Ape Escape Academy | UCUS98619 | 204.98 | menu | disc0:/PSP_GAME/.. |
-| Ape Escape - On the Loose | UCUS98609 | 154.71 | menu | disc0:/PSP_GAME/.. |
-| Archer Maclean's Mercury | ULUS10017 | 533.32 | menu | Memory available.. |
-| Armored Core 3 Portable [True Analogs Mod v1.02] | NPUH10023 | 427.68 | black | sceMpegQueryStre.. |
-| Armored Core - Formula Front International [True Analogs v1.0] | ULJS19001 | 1764.75 | black | the CPU stopped .. |
-| Armored Core Last Raven Portable [True Analogs Mod v1.03] | NPUH10024 | 892.48 | black | sceMpegQueryStre.. |
-| Armored Core Silent Line Portable [True Analogs v1.02] | NPUH10025 | 991.44 | black | the CPU stopped .. |
-| Army of Two - The 40th Day | ULUS10472 | 1619.89 | black | not implemented .. |
-| ATV Offroad Fury - Blazin' Trails | UCUS98603 | 141.51 | menu |  |
-| ATV Offroad Fury Pro | UCUS98648 | 1374.44 | black | the CPU stopped .. |
-| Battle vs. Chess [Europe Proto] | ULES01517 | 35.73 | black | GE: compressed (.. |
-| Black Wolves Saga - Last Hope | ULJM06220 | 1346.23 | menu |  |
-| BlazBlue - Calamity Trigger | ULUS10519 | 362.29 | menu | disc0:/PSP_GAME/.. |
-| BlazBlue - Continuum Shift II | ULUS10579 | 373.92 | menu | disc0:/PSP_GAME/.. |
-| Blitz - Overtime | ULUS10200 | 62.16 | menu | Allocation not a.. |
-| Brandish - The Dark Revenant | NPUH10195 | 3.72 | black | not implemented .. |
-| Brave Story New Traveler | ULUS10279 | 74.25 | menu | *** sgxpsp.c(187.. |
-| Brothers in Arms - D-Day | ULUS10193 | 740.52 | menu |  |
-| Bubble Bobble Evolution | ULUS10143 | 141.54 | menu | Return to game? |
-| Burnout Dominator | ULUS10236 | 148.41 | black | GE: lines aren't.. |
-| Burnout Legends | ULUS10025 | 186.36 | menu | disc0:/PSP_GAME/.. |
-| Castlevania - The Dracula X Chronicles | ULUS10277 | 1142.42 | menu |  |
-| Chili Con Carnage | ULUS10216 | 234.76 | black | not implemented .. |
-| Cladun - This Is An RPG | NPUH10072 | 84.07 | black | not implemented .. |
-| Colin McRae Rally 2005 Plus [Europe] | ULES00111 | 511.96 | menu | HeapCallFail(): .. |
-| Corpse Party - Sweet Sachikos Hysteric Birthday | ULJM06114 | 1088.98 | menu | Utility Savedata.. |
-| Crash Tag Team Racing | ULUS10044 | 919.38 | black | the CPU stopped .. |
-| Crazy Taxi - Fare Wars | ULUS10273 | 642.38 | menu | PSPCI: File cach.. |
-| Crimson Gem Saga | ULUS10400 | 32.30 | black | not implemented .. |
-| Crisis Core - Final Fantasy VII | ULUS10336 | 1392.32 | menu |  |
-| Crush | ULUS10238 | 233.53 | black | the CPU stopped .. |
-| Cube | ULUS10223 | 861.51 | black | not implemented .. |
-| Dante's Inferno | ULUS10469 | 79.28 | black | not implemented .. |
-| Darkstalkers Chronicle - The Chaos Tower | ULUS10005 | 215.60 | menu | disc0:/PSP_GAME/.. |
-| Daxter | UCUS98618 | 83.02 | menu | disc0:/PSP_GAME/.. |
-| Dead Head Fred | ULUS10288 | 58.57 | black | GE: bounding box.. |
-| Dead or Alive - Paradise | ULUS10521 | 19.11 | black | not implemented .. |
-| Dead to Rights - Reckoning | ULUS10023 | 216.20 | loading | Finished loading.. |
-| Death Jr. | ULUS10027 | 1326.99 | black | the CPU stopped .. |
-| Death Jr. II - Root of Evil | ULUS10027 | 9.37 | black | GE: bounding box.. |
-| Def Jam - Fight for NY - The Takeover | ULUS10100 | 3201.61 | black | not implemented .. |
-| Dirt 2 (En,Fr,Es) | ULUS10471 | 181.94 | black | not implemented .. |
-| Disaster Report 3 [English] | ULJS00191 | 1392.00 | black | no threads left .. |
-| Disgaea 2 - Dark Hero Days | ULUS10461 | 683.86 | black | not implemented .. |
-| Disgaea - Afternoon of Darkness | ULUS10308 | 129.66 | black | GE: compressed (.. |
-| Disgaea Infinite | ULUS10522 | 156.03 | black | not implemented .. |
-| Disney-Pixar Cars | UCUS98766 | 342.85 | menu |  |
-| Disney-Pixar Cars 2 | UCUS98766 | 5.07 | black | not implemented .. |
-| Disney-Pixar Cars - Race-O-Rama | ULUS10073 | 121.89 | menu | message dialog (.. |
-| Dissidia 012 - Duodecim Final Fantasy | ULUS10566 | 1395.62 | black | no threads left .. |
-| Dissidia Final Fantasy | ULUS10437 | 321.02 | menu | Please do not re.. |
-| Dragonball Z Shin Budokai | ULUS10234 | 883.97 | menu | PSPCI: Total 5 f.. |
-| Dragonball Z Shin Budokai - Another Road | ULUS10234 | 775.56 | menu | PSPCI: File cach.. |
-| Dragon Ball Z - Tenkaichi Tag Team | ULUS10537 | 1393.21 | black | no threads left .. |
-| Driver 76 | ULUS10235 | 254.27 | black | not implemented .. |
-| Fate Extra CCC [English v1.0] | NPJH50505 | 128.33 | menu |  |
-| Fate Extra Perfect Patch | ULUS10576 | 2400.18 | black | the CPU stopped .. |
-| Fat Princess Fistful of Cake | UCUS98740 | 1390.50 | menu |  |
-| Final Fantasy - 20th Anniversary Edition | ULUS10251 | 912.60 | black | not implemented .. |
-| Final Fantasy II - 20th Anniversary Edition | ULUS10263 | 1723.87 | black | the CPU stopped .. |
-| Final Fantasy III | NPUH10125 | 244.52 | black | not implemented .. |
-| Final Fantasy IV | ULUS10560 | 654.39 | black | not implemented .. |
-| Final Fantasy Tactics - War of the Lions Tweak [v2.52] | ULUS10297 | 772.93 | black | not implemented .. |
-| Final Fantasy Type 0 | NPJH50443 | 198.22 | black | not implemented .. |
-| Full Auto 2 - Battlelines | ULUS10220 | 140.40 | menu |  |
-| Fuuun Shinsengumi Bakumatsu den Portable [japan] | ULJM05561 | 82.93 | black | not implemented .. |
-| Genso Suikoden Tsumugareshi Hyakunen no Toki | NPJH50535 | 2038.63 | black | the CPU stopped .. |
-| Ghostbusters - The Video Game | ULUS10486 | 1387.46 | black | no threads left .. |
-| Ghost in the Shell - Stand Alone Complex | ULUS10020 | 261.96 | menu | disc0:/PSP_GAME/.. |
-| Gitaroo Man Lives! | ULUS10207 | 77.49 | menu | disc0:/PSP_GAME/.. |
-| God Eater 2 [English v2.0 RedArtz] | NPJH50832 | 1390.07 | black | the CPU stopped .. |
+| 007 - From Russia with Love | ULUS10080 | 150.91 | menu | DISC0:/PSP_GAME/USR.. |
+| 50 Cent - Bulletproof - G-Unit Edition | ULUS10128 | 397.14 | menu | FIX1!!! |
+| 7th Dragon 2020 [English v0.91] | NPJH50459 | 3737.93 | black |  |
+| 7th Dragon 2020-II [English Patched v0.91] | NPJH50716 | 3737.82 | black | file sema = 0x109 |
+| Ace Combat - Joint Assault | ULUS10511 | 5344.14 | black |  |
+| Ace Combat X - Skies of Deception | ULUS10176 | 553.02 | loading | not implemented yet.. |
+| Aces of War [Europe] | ULES00590 | 120.83 | movie | sound delay = 0 |
+| Activision Hits Remixed | ULUS10186 | 5.15 | menu | camera active |
+| After Burner - Black Falcon | ULUS10244 | 380.89 | movie | Loading SCE Modules |
+| Angus Hates Aliens | NPUZ00374 | 466.66 | menu |  |
+| Ape Escape Academy | UCUS98619 | 227.24 | menu | disc0:/PSP_GAME/USR.. |
+| Ape Escape - On the Loose | UCUS98609 | 173.00 | menu | disc0:/PSP_GAME/USR.. |
+| Archer Maclean's Mercury | ULUS10017 | 389.01 | menu | Memory available at.. |
+| Armored Core 3 Portable [True Analogs Mod v1.02] | NPUH10023 | 63.59 | movie |  |
+| Armored Core - Formula Front International [True Analogs v1.0] | ULJS19001 | 1697.90 | loading | the CPU stopped in .. |
+| Armored Core Last Raven Portable [True Analogs Mod v1.03] | NPUH10024 | 64.78 | movie |  |
+| Armored Core Silent Line Portable [True Analogs v1.02] | NPUH10025 | 2087.89 | movie | the CPU stopped in .. |
+| Army of Two - The 40th Day | ULUS10472 | 29.64 | movie |  |
+| ATV Offroad Fury - Blazin' Trails | UCUS98603 | 304.38 | menu |  |
+| ATV Offroad Fury Pro | UCUS98648 | 5747.52 | black | the CPU stopped in .. |
+| Battle vs. Chess [Europe Proto] | ULES01517 | 120.15 | menu | message dialog (ans.. |
+| Black Wolves Saga - Last Hope | ULJM06220 | 1256.69 | black |  |
+| BlazBlue - Calamity Trigger | ULUS10519 | 342.41 | menu | disc0:/PSP_GAME/USR.. |
+| BlazBlue - Continuum Shift II | ULUS10579 | 359.00 | menu | disc0:/PSP_GAME/USR.. |
+| Blitz - Overtime | ULUS10200 | 30.23 | black | Allocation not alig.. |
+| Brandish - The Dark Revenant | NPUH10195 | 40.55 | black | not implemented yet.. |
+| Brave Story New Traveler | ULUS10279 | 72.10 | movie | === SGX system init.. |
+| Brothers in Arms - D-Day | ULUS10193 | 1304.56 | menu |  |
+| Bubble Bobble Evolution | ULUS10143 | 222.59 | movie | Return to game? |
+| Burnout Dominator | ULUS10236 | 146.89 | menu | disc0:/sce_lbn65e0_.. |
+| Burnout Legends | ULUS10025 | 185.19 | menu | disc0:/PSP_GAME/USR.. |
+| Castlevania - The Dracula X Chronicles | ULUS10277 | 3262.57 | black |  |
+| Chili Con Carnage | ULUS10216 | 268.39 | menu | not implemented yet.. |
+| Cladun - This Is An RPG | NPUH10072 | 354.04 | menu |  |
+| Colin McRae Rally 2005 Plus [Europe] | ULES00111 | 494.51 | menu | HeapCallFail(): Err.. |
+| Corpse Party - Sweet Sachikos Hysteric Birthday Bash [English 04-29-2026] | ULJM06114 | 1068.19 | menu | Utility Savedata fa.. |
+| Crash Tag Team Racing | ULUS10044 | 1903.75 | black | the CPU stopped in .. |
+| Crazy Taxi - Fare Wars | ULUS10273 | 474.03 | menu | PSPCI: File cache w.. |
+| Crimson Gem Saga | ULUS10400 | 133.59 | menu |  |
+| Crisis Core - Final Fantasy VII | ULUS10336 | 6130.21 | black |  |
+| Crush | ULUS10238 | 16.72 | black | disc0:/PSP_GAME/USR.. |
+| Cube | ULUS10223 | 365.09 | menu | not implemented yet.. |
+| Dante's Inferno | ULUS10469 | 75.73 | black | not implemented yet.. |
+| Darkstalkers Chronicle - The Chaos Tower | ULUS10005 | 232.80 | menu | disc0:/PSP_GAME/USR.. |
+| Daxter | UCUS98618 | 77.88 | menu | disc0:/PSP_GAME/USR.. |
+| Dead Head Fred | ULUS10288 | 769.93 | loading |  |
+| Dead or Alive - Paradise | ULUS10521 | 1096.10 | black | not implemented yet.. |
+| Dead to Rights - Reckoning | ULUS10023 | 208.80 | menu | Finished loading at.. |
+| Death Jr. | ULUS10027 | 5786.00 | black | the CPU stopped in .. |
+| Death Jr. II - Root of Evil | ULUS10157 | 30.75 | black | disc0:/PSP_GAME/USR.. |
+| Def Jam - Fight for NY - The Takeover | ULUS10100 | 3437.46 | black | not implemented yet.. |
+| Dirt 2 (En,Fr,Es) | ULUS10471 | 181.66 | menu |  |
+| Disaster Report 3 [English] | ULJS00191 | 6140.44 | black | no threads left to .. |
+| Disgaea 2 - Dark Hero Days | ULUS10461 | 745.47 | menu | not implemented yet.. |
+| Disgaea - Afternoon of Darkness | ULUS10308 | 228.74 | menu |  |
+| Disgaea Infinite | ULUS10522 | 155.31 | movie | message dialog (ans.. |
+| Disney-Pixar Cars | ULUS10073 | 614.48 | menu |  |
+| Disney-Pixar Cars 2 | UCUS98766 | 4.86 | menu | not implemented yet.. |
+| Disney-Pixar Cars - Race-O-Rama | ULUS10428 | 223.18 | black | message dialog (ans.. |
+| Dissidia 012 - Duodecim Final Fantasy | ULUS10566 | 6154.53 | black | no threads left to .. |
+| Dissidia Final Fantasy | ULUS10437 | 301.55 | menu | Please do not remov.. |
+| Dragonball Z Shin Budokai | ULUS10081 | 242.30 | menu | PSPCI: Total 5 file.. |
+| Dragonball Z Shin Budokai - Another Road | ULUS10234 | 265.11 | movie | PSPCI: File cache w.. |
+| Dragon Ball Z - Tenkaichi Tag Team | ULUS10537 | 6164.55 | black | no threads left to .. |
+| Driver 76 | ULUS10235 | 212.29 | black | not implemented yet.. |
+| Fate Extra CCC [English v1.0] | NPJH50505 | 120.39 | black |  |
+| Fate Extra Perfect Patch | ULUS10576 | 2433.78 | black | the CPU stopped in .. |
+| Fat Princess Fistful of Cake | UCUS98740 | 6116.17 | black |  |
+| Final Fantasy - 20th Anniversary Edition | ULUS10251 | 436.00 | movie |  |
+| Final Fantasy II - 20th Anniversary Edition | ULUS10263 | 1652.54 | black | the CPU stopped in .. |
+| Final Fantasy III | NPUH10125 | 246.93 | movie | not implemented yet.. |
+| Final Fantasy IV | ULUS10560 | 572.49 | movie | not implemented yet.. |
+| Final Fantasy Tactics - War of the Lions Tweak [v2.52] | ULUS10297 | 250.39 | menu |  |
+| Final Fantasy Type 0 | NPJH50443 | 216.50 | menu | not implemented yet.. |
+| Full Auto 2 - Battlelines | ULUS10220 | 134.51 | menu |  |
+| Fuuun Shinsengumi Bakumatsu den Portable [japan] | ULJM05561 | 85.20 | menu | disc0:/PSP_GAME/USR.. |
+| Genso Suikoden Tsumugareshi Hyakunen no Toki | NPJH50535 | 1979.69 | black | the CPU stopped in .. |
+| Ghostbusters - The Video Game | ULUS10486 | 6085.54 | black | no threads left to .. |
+| Ghost in the Shell - Stand Alone Complex | ULUS10020 | 255.88 | menu | disc0:/PSP_GAME/USR.. |
+| Gitaroo Man Lives! | ULUS10207 | 72.73 | black | not implemented yet.. |
+| God Eater 2 [English v2.0 RedArtz] | NPJH50832 | 6123.46 | black | the CPU stopped in .. |
 | God of War - Chains of Olympus | UCUS98653 |  | timeout |  |
 | God of War - Ghost of Sparta | UCUS98737 |  | timeout |  |
-| Gradius Collection | ULUS10103 | 1038.46 | menu | disc0:/PSP_GAME/.. |
-| Grand Knights History | ULJS00394 | 276.33 | black | not implemented .. |
-| Grand Theft Auto - Chinatown Wars | ULUS10490 | 96.19 | black | not implemented .. |
-| Grand Theft Auto - Liberty City Stories | ULUS10041 | 43.89 | black | GE: lines aren't.. |
-| Grand Theft Auto - Sindacco Chronicles [v2.0 English] | ULUS01826 | 52.69 | black | GE: lines aren't.. |
-| Grand Theft Auto - Vice City Stories | ULUS10160 | 61.30 | black | GE: lines aren't.. |
-| Gran Turismo | UCUS98632 | 1388.24 | black | not implemented .. |
-| Growlanser IV - Wayfarer of Time [UNDUB v1.3] [HQ OPED] | ULUS10593 | 1377.47 | black | not implemented .. |
-| Guilty Gear Judgment | ULUS10104 | 215.57 | menu | disc0:/PSP_GAME/.. |
-| Guilty Gear XX Accent Core Plus | ULUS10409 | 152.72 | menu | Would you like t.. |
-| Gungnir | ULUS10592 | 218.35 | menu | POLL SEMA |
-| Gurumin - A Monstrous Adventure | ULUS10228 | 111.91 | black | GE: bounding box.. |
-| Hammerin Hero | ULUS10392 | 77.09 | black | not implemented .. |
-| Harvest Moon - Hero of Leaf Valley | ULUS10458 | 95.60 | menu | psaFileInit()>ps.. |
-| Hexyz Force [UNDUB v1.2b] | ULUS10506 | 912.74 | menu |  |
-| Hot Shots Golf - Open Tee | UCUS98693 | 160.05 | menu | *** sgxpsp.c(158.. |
-| Hot Shots Golf - Open Tee 2 | UCUS98693 | 209.78 | menu | *** sgxpsp.c(209.. |
-| Hot Shots Tennis - Get a Grip | UCUS98701 | 438.13 | black | not implemented .. |
-| Hot Wheels - Ultimate Racing | ULUS10239 | 482.30 | menu | disc0:/PSP_GAME/.. |
-| IL-2 Sturmovik - Birds of Prey | ULUS10476 | 324.26 | black | not implemented .. |
-| Innocent Life - A Futuristic Harvest Moon | ULUS10219 | 445.80 | menu | program end |
-| Jak and Daxter - The Lost Frontier | UCUS98634 | 73.43 | black | not implemented .. |
-| Jeanne d'Arc | UCUS98700 | 1564.24 | black | fatal error : ma.. |
-| Juiced 2 - Hot Import Nights | ULUS10312 | 4.18 | menu | tgIoFillCache wa.. |
-| Juiced - Eliminator | ULUS10090 | 385.25 | menu | disc0:/PSP_GAME/.. |
-| Kenka Bancho - Badass Rumble | ULUS10442 | 1407.60 | black | not implemented .. |
-| Key Of Heaven | UCES00178 | 238.37 | menu | === SGX system i.. |
-| Kidou Senshi Gundam Gundam vs. Gundam NEXT PLUS [English] | NPJH50107 | 159.71 | black | not implemented .. |
-| Killzone - Liberation | UCUS98646 | 831.48 | menu |  |
-| Kingdom Hearts Birth by Sleep Final Mix [English] | ULJM05775 | 342.97 | black | not implemented .. |
-| King of Fighters, The - Orochi Saga | ULUS10360 | 121.17 | menu |  |
-| Kisou Ryouhei Gunhound EX | NPJH50723 | 519.41 | menu |  |
-| Kurohyou 2 [English v1.0] | NPJH50562 | 1391.81 | black | no threads left .. |
-| Kurohyou Ryu ga Gotoku Shinshou [English v1.2 TeamK4L] | NPJH50333 | 55.38 | black | not implemented .. |
-| La Pucelle Ragnarok | ULJS00244 | 2063.38 | menu | Heap: 3454.28 |
-| Last Ranker | ULJM05676 | 1720.61 | menu | disc0:/PSP_GAME/.. |
-| LittleBigPlanet | UCUS98744 | 266.69 | menu | Error: ../../Cod.. |
-| LocoRoco | UCUS98731 | 437.56 | menu | disc0:/PSP_GAME/.. |
-| LocoRoco 2 | UCUS98731 | 310.27 | menu | disc0:/PSP_GAME/.. |
-| Lumines II | ULUS10183 | 1064.33 | black | not implemented .. |
-| Lumines - Puzzle Fusion | ULUS10002 | 101.40 | menu | ----Lumines Task.. |
-| Lunar - Silver Star Harmony | ULUS10482 | 219.17 | menu | disc0:/PSP_GAME/.. |
-| MACH | ULES00565 | 116.93 | menu | Error in sceAtra.. |
-| Macross - Ace Frontier [Japan] | ULJS00158 | 202.34 | black | GE: curved surfa.. |
-| Macross - Triangle Frontier [Japan] | ULJS00321 | 1391.24 | menu |  |
-| Macross - Ultimate Frontier [Japan] | NPJH50050 | 505.68 | black | not implemented .. |
-| Manhunt 2 [Uncensored] | ULUS10280 | 1863.89 | menu | message dialog (.. |
-| MediEvil Resurrection | UCES00006 | 303.99 | menu | System free: 369.. |
-| Mega Man Maverick Hunter X [UNDUB v1.1] | ULUS10068 | 161.01 | black | not implemented .. |
-| Mega Man Powered Up [UNDUB v1.3] | ULUS10091 | 115.38 | black | not implemented .. |
-| Melodie (Prototype) | PETR00010 | 77.05 | menu |  |
-| Me & My Katamari | ULUS10094 | 109.41 | black | GE: lines aren't.. |
-| Mercury Meltdown | ULUS10133 | 74.48 | menu |  |
-| Metal Gear Acid | ULUS10077 | 160.33 | menu | disc0:/PSP_GAME/.. |
-| Metal Gear Acid 2 | ULUS10077 | 394.79 | menu | disc0:/PSP_GAME/.. |
-| Metal Gear Solid - Digital Graphic Novel | ULUS10108 | 1056.63 | black | not implemented .. |
-| Metal Gear Solid - Peace Walker [v2.00] | ULUS10509 | 67.60 | menu | disc0:/PSP_GAME/.. |
-| Metal Gear Solid - Portable Ops | ULUS10202 | 479.82 | black | not implemented .. |
-| Metal Gear Solid - Portable Ops Plus | ULUS10202 | 375.68 | menu | disc0:/PSP_GAME/.. |
-| Metal Slug Anthology | ULUS10154 | 225.18 | black | not implemented .. |
-| Metal Slug XX | ULUS10495 | 166.14 | menu |  |
-| Miami Vice - The Game | ULUS10109 | 84.20 | menu | ** READ FAILED. .. |
-| Micro Machines V4 | ULUS10129 | 481.48 | menu | disc0:/PSP_GAME/.. |
-| Midnight Club 3 - DUB Edition [v2.02] | ULUS10021 | 16.87 | menu | disc0:/PSP_GAME/.. |
-| Midnight Club - L.A. Remix | ULUS10383 | 32.62 | menu | message dialog (.. |
-| ModNation Racers | UCUS98741 | 175.48 | menu | Videoplayer: inv.. |
-| Monster Hunter Portable 3rd [English v6.1.0 Team Maverick One] | ULJM05800 | 644.11 | black | not implemented .. |
-| Monster Hunter Portable 3rd HD | NPJB40001 | 1386.98 | black | no threads left .. |
-| Monster Kingdom Jewel Summoner | ULUS10211 | 72.09 | menu |  |
-| Moto GP | ULUS10153 | 295.27 | menu | message dialog (.. |
-| MotorStorm - Arctic Edge | UCUS98743 | 768.60 | black | the CPU stopped .. |
-| MX vs. ATV - On the Edge | ULUS10071 | 43.74 | menu | disc0:/PSP_GAME/.. |
-| MX vs. ATV Reflex | ULUS10429 | 147.03 | black | not implemented .. |
-| MX vs. ATV Untamed | ULUS10330 | 220.25 | black | not implemented .. |
-| Naruto Shippuden Ultimate Ninja Impact | ULUS10582 | 2832.82 | black | not implemented .. |
-| Need for Speed - Carbon - Own the City | ULUS10114 | 109.91 | black | not implemented .. |
-| Need for Speed - Most Wanted - 5-1-0 | ULUS10036 | 1005.76 | black | GE: a display li.. |
-| Need for Speed - ProStreet | ULUS10331 | 98.22 | black | GE: compressed (.. |
-| Need for Speed - Shift | ULUS10462 | 75.58 | black | GE: lines aren't.. |
-| Need for Speed - Underground Rivals | ULUS10007 | 100.59 | menu | pathname= Global.. |
-| OutRun 2006 - Coast 2 Coast | ULUS10064 | 231.85 | black | not implemented .. |
-| PAC-MAN CE | NPUZ00125 | 14.67 | menu |  |
-| Pac-Man World Rally | ULUS10149 | 364.31 | black | GE: bounding box.. |
-| Pangya Fantasy Golf [Black Screen Fix] | ULUS10438 | 240.70 | menu | ERROR: scePsmfPl.. |
-| PaRappa the Rapper | UCUS98702 | 218.70 | menu |  |
-| Parodius Portable | ULJM05220 | 812.93 | menu | memory stick err.. |
-| Patapon | UCUS98732 | 529.42 | black | GE: lines aren't.. |
-| Patapon 2 | UCUS98732 | 599.39 | black | GE: lines aren't.. |
-| Patapon 3 | UCUS98751 | 1079.22 | black | GE: lines aren't.. |
-| Persona 2 Eternal Punishment | NPJH50581 | 1393.40 | black | the CPU stopped .. |
-| Persona 2 Innocent Sin | ULUS10584 | 98.23 | black | GE: lines aren't.. |
-| Phantom Kingdom | NPJH50451 | 79.79 | black | not implemented .. |
-| PixelJunk Monsters - Deluxe | UCUS98739 | 537.37 | menu |  |
-| Platypus | ULUS10203 | 191.67 | menu | message dialog (.. |
-| Power Stone Collection | ULUS10171 | 237.02 | black | not implemented .. |
-| Pursuit Force | UCUS98640 | 55.60 | menu | disc0:/PSP_GAME/.. |
-| Pursuit Force - Extreme Justice | UCUS98640 | 333.07 | black | GE: lines aren't.. |
-| Ratchet & Clank - Size Matters | UCUS98633 | 1052.65 | black | not implemented .. |
-| Resistance - Retribution | UCUS98668 | 55.84 | black | not implemented .. |
-| Retro City Rampage DX (Europe) | NPEH00170 | 50.26 | menu |  |
-| Ridge Racer | UCES00422 | 484.18 | menu | error in sceAtra.. |
-| Ridge Racer 2 | UCES00422 | 236.69 | menu |  |
-| Riviera - The Promised Land | ULUS10286 | 261.05 | black | not implemented .. |
-| Samurai Dou Portable [English] | ULJS00155 | 1093.40 | black | not implemented .. |
-| Samurai Shodown Anthology | ULUS10401 | 200.77 | menu | message dialog (.. |
-| Seen in Liberty City | ULUS11826 | 30.39 | black | GE: lines aren't.. |
-| Sega Genesis Collection | ULUS10192 | 2986.37 | black | not implemented .. |
-| Sega Rally Revo | ULUS10311 | 2924.79 | black | the CPU stopped .. |
-| Sheperds Crossing | ULUS10499 | 744.96 | black | not implemented .. |
-| Shining Blade [gugule] | NPJH50530 | 1170.66 | black | every thread is .. |
-| Shining Hearts [English] | NPJH50342 | 330.29 | black | not implemented .. |
-| Shining Hearts [English MT v1.2] | NPJH50342 | 324.68 | black | not implemented .. |
-| Shin Megami Tensei - Persona 3 Portable | ULUS10512 | 1914.88 | black | not implemented .. |
-| Shinobido - Tales of the Ninja [Europe] [Undub 2021-06-28] | UCES00421 | 1084.99 | black | not implemented .. |
-| Silent Hill Origins | ULUS10285 | 271.72 | black | not implemented .. |
-| Silent Hill - Shattered Memories | ULUS10450 | 1388.48 | menu |  |
-| Smash Court Tennis 3 | ULUS10269 | 140.15 | menu | message dialog (.. |
-| Snoopy vs. the Red Baron | ULUS10189 | 122.22 | black | GE: bounding box.. |
-| SOCOM - U.S. Navy SEALs - Fireteam Bravo | UCUS98645 | 231.45 | black | snd_stream: coul.. |
-| SOCOM - U.S. Navy SEALs - Fireteam Bravo 2 | UCUS98645 | 137.92 | menu | Compiled against.. |
-| SOCOM - U.S. Navy SEALs - Fireteam Bravo 3 | UCUS98716 | 1098.08 | black | the CPU stopped .. |
-| SOCOM - U.S. Navy SEALs - Tactical Strike | UCUS98649 | 307.46 | black | not implemented .. |
-| Sol Trigger | NPJH50619 | 921.89 | black | not implemented .. |
-| Sonic Rivals | ULUS10323 | 248.65 | black | GE: bounding box.. |
-| Sonic Rivals 2 | ULUS10323 | 72.69 | black | GE: bounding box.. |
-| Soulcalibur - Broken Destiny | ULUS10457 | 1384.33 | black | the CPU stopped .. |
-| Space Invaders Extreme | ULUS10346 | 363.77 | black | GE: lines aren't.. |
-| Spectral Souls | ULUS10076 | 201.05 | menu | effectnum 154 |
-| Split-Second | ULUS10513 | 56.12 | black | not implemented .. |
-| SSX on Tour | ULUS10042 | 2796.67 | black | every thread is .. |
-| Star Ocean - First Departure | ULUS10374 | 80.27 | black | not implemented .. |
-| Star Ocean - Second Evolution | ULUS10375 | 64.17 | black | not implemented .. |
-| Star Soldier | ULJM05026 | 68.69 | black | GE: compressed (.. |
-| Star Trek - Tactical Assault | ULUS10150 | 262.50 | black | the CPU stopped .. |
-| Star Wars - Battlefront - Elite Squadron | ULUS10390 | 61.94 | menu | DISC0:/PSP_GAME/.. |
-| Star Wars - Battlefront II - Remastered Edition [Hack v8] | ULUS10053 | 507.15 | menu | disc0:/PSP_GAME/.. |
-| Star Wars - Battlefront - Renegade Squadron | ULUS10292 | 83.66 | loading | loading took 531.. |
-| Star Wars - The Force Unleashed | ULUS10345 | 45.95 | black | not implemented .. |
-| Street Fighter 3 - 3rd Strike [Port] | UCJS10041 | 307.49 | menu |  |
-| Street Fighter Alpha 3 Max | ULUS10062 | 211.63 | black | not implemented .. |
-| Street Supremacy | ULES00239 | 342.42 | menu | disc0:/PSP_GAME/.. |
-| Super Moneky Ball Adventures | ULES00364 | 4.79 | loading | Game Info: Game .. |
-| Super Stardust Portable | NPUG80221 | 70.63 | menu | a display list E.. |
-| Syphon Filter - Dark Mirror | UCUS98641 | 126.39 | black | not implemented .. |
-| Syphon Filter - Logan's Shadow | UCUS98606 | 41.54 | black | not implemented .. |
-| Tactics Ogre - Let Us Cling Together [One Vision v1.11a] | ULUS10565 | 703.17 | black | not implemented .. |
-| Tales of Eternia | ULES00176 | 166.64 | menu | disc0:/PSP_GAME/.. |
-| Tales of Phantasia Full Voice Edition [English v1.2][QoL] | ULJS00079 | 1169.49 | black | the CPU stopped .. |
-| Tales of Phantasia X [English v1.2] | ULJS00293 | 1393.12 | black | the CPU stopped .. |
-| Tales Of The World - Radiant Mythology 2 [English 31-08] | ULJS00175 | 2678.67 | black | not implemented .. |
-| Tekken 6 | ULUS10466 | 1356.23 | black | no threads left .. |
-| Tekken - Dark Resurrection | ULUS10139 | 735.44 | black | not implemented .. |
-| Tenchu - Shadow Assassins | ULUS10419 | 2438.09 | black | not implemented .. |
-| Tenchu - Time of the Assassins [UNDUB v1.5c] | ULES00277 | 978.43 | black | not implemented .. |
-| The 3rd Birthday | ULUS10567 | 211.37 | black | not implemented .. |
-| The Legend of Heroes I | ULUS10022 | 396.30 | black | the CPU stopped .. |
-| The Legend of Heroes II | ULUS10022 | 1521.70 | black | the CPU stopped .. |
-| The Legend of Heroes III | ULUS10022 | 1719.82 | black | the CPU stopped .. |
-| The Legend of Heroes - Trails From Azure [English v15] | NPJH50473 | 1064.53 | black | every thread is .. |
-| The Legend of Nayuta - Boundless Trails [Addendum v1.08] | NPJH50625 | 350.31 | menu | !Err! mem damage |
-| The Sims 2 | ULUS10296 | 1199.95 | menu | disc0:/sce_lbn0x.. |
-| The Sims 2 - Castaway | ULUS10296 | 100.32 | black | not implemented .. |
-| The Sims 2 - Pets | ULUS10031 | 74.50 | black | not implemented .. |
-| Toca Race Driver 2 | ULES00042 | 78.75 | menu | disc0:/PSP_GAME/.. |
-| Tokobot | ULUS10061 | 644.12 | black | the CPU stopped .. |
-| Tony Hawk's Underground 2 Remix | ULUS10014 | 640.57 | menu | disc0:/PSP_GAME/.. |
-| Twisted Metal Head On | UCUS98601 | 116.89 | black | snd_stream: coul.. |
-| Ultimate Ghosts 'n Goblins | ULUS10105 | 1711.65 | menu | disc0:/PSP_GAME/.. |
-| Umineko no Nakukoro ni Portable [English v1.0] | ULJM05968 | 994.36 | menu |  |
-| Valhalla Knights | ULUS10366 | 3026.96 | menu |  |
-| Valhalla Knights 2 | ULUS10366 | 1391.77 | menu |  |
-| Valkyria Chronicles II | ULUS10515 | 1158.46 | black | every thread is .. |
-| Valkyria Chronicles III [English v1.0.8] | ULUS10515 | 1176.21 | black | every thread is .. |
-| Valkyrie Profile Lennth | ULUS10107 | 70.29 | black | GE: lines aren't.. |
-| Virtua Tennis 3 | ULUS10246 | 115.62 | black | GE: bounding box.. |
-| Virtua Tennis - World Tour | ULUS10037 | 103.42 | black | GE: lines aren't.. |
-| Warriors of the Lost Empire | ULES00924 | 79.82 | menu | disc0:/PSP_GAME/.. |
-| WipEout [Portable Collection v3.0] | WPCE02025 | 241.88 | black | not implemented .. |
-| Ys I and II Chronicles | ULUS10547 | 251.68 | black | not implemented .. |
-| Ys Seven | ULUS10551 | 1079.40 | black | every thread is .. |
-| Ys - The Ark of Napishtim | ULUS10051 | 361.12 | black | GE: compressed (.. |
+| Gradius Collection | ULUS10103 | 2715.66 | loading | disc0:/PSP_GAME/USR.. |
+| Grand Knights History | ULJS00394 | 327.22 | menu |  |
+| Grand Theft Auto - Chinatown Wars | ULUS10490 | 100.89 | menu | not implemented yet.. |
+| Grand Theft Auto - Liberty City Stories | ULUS10041 | 1221.79 | black | disc0:/sce_lbn0x640.. |
+| Grand Theft Auto - Sindacco Chronicles [v2.0 English] | ULUS01826 | 54.54 | menu | disc0:/sce_lbn0xc62.. |
+| Grand Theft Auto - Vice City Stories | ULUS10160 | 1163.38 | black | disc0:/sce_lbn0x667.. |
+| Gran Turismo | UCUS98632 | 61.47 | menu | disc0:/PSP_GAME/USR.. |
+| Growlanser IV - Wayfarer of Time [UNDUB v1.3] [HQ OPED] | ULUS10593 | 1435.25 | black | the CPU stopped in .. |
+| Guilty Gear Judgment | ULUS10104 | 210.27 | menu | disc0:/PSP_GAME/USR.. |
+| Guilty Gear XX Accent Core Plus | ULUS10409 | 970.47 | black | Would you like to s.. |
+| Gungnir | ULUS10592 | 103.06 | black | not implemented yet.. |
+| Gurumin - A Monstrous Adventure | ULUS10228 | 115.78 | menu |  |
+| Hammerin Hero | ULUS10392 | 74.18 | menu | not implemented yet.. |
+| Harvest Moon - Hero of Leaf Valley | ULUS10458 | 94.07 | menu | psaFileInit()>psaFi.. |
+| Hexyz Force [UNDUB v1.2b] | ULUS10506 | 798.86 | black |  |
+| Hot Shots Golf - Open Tee | UCUS98614 | 256.35 | menu | === SGX system init.. |
+| Hot Shots Golf - Open Tee 2 | UCUS98693 | 293.11 | menu | === ... SGX system .. |
+| Hot Shots Tennis - Get a Grip | UCUS98701 | 415.78 | menu | not implemented yet.. |
+| Hot Wheels - Ultimate Racing | ULUS10239 | 210.81 | menu | disc0:/PSP_GAME/USR.. |
+| IL-2 Sturmovik - Birds of Prey | ULUS10476 | 306.48 | menu |  |
+| Innocent Life - A Futuristic Harvest Moon | ULUS10219 | 575.66 | menu | program end |
+| Jak and Daxter - The Lost Frontier | UCUS98634 | 70.26 | black |  |
+| Jeanne d'Arc | UCUS98700 | 91.68 | menu | GE: curved surfaces.. |
+| Juiced 2 - Hot Import Nights | ULUS10312 | 4.17 | black | tgIoFillCache waiti.. |
+| Juiced - Eliminator | ULUS10090 | 477.68 | loading | not implemented yet.. |
+| Kenka Bancho - Badass Rumble | ULUS10442 | 1342.67 | black | not implemented yet.. |
+| Key Of Heaven | UCES00178 | 249.47 | menu | === SGX system init.. |
+| Kidou Senshi Gundam Gundam vs. Gundam NEXT PLUS [English] | NPJH50107 | 173.61 | menu | [PSP](SYS)===== Cap.. |
+| Killzone - Liberation | UCUS98646 | 1486.84 | black |  |
+| Kingdom Hearts Birth by Sleep Final Mix [English] | ULJM05775 | 329.47 | menu | not implemented yet.. |
+| King of Fighters, The - Orochi Saga | ULUS10360 | 102.65 | black |  |
+| Kisou Ryouhei Gunhound EX | NPJH50723 | 515.44 | menu |  |
+| Kurohyou 2 [English v1.0] | NPJH50562 | 6162.54 | black | no threads left to .. |
+| Kurohyou Ryu ga Gotoku Shinshou [English v1.2 TeamK4L] | NPJH50333 | 140.68 | menu | W090910s03:sceIoOpe.. |
+| La Pucelle Ragnarok | ULJS00244 | 2134.07 | loading | Heap: 3454.28 |
+| Last Ranker | ULJM05676 | 60.10 | menu | disc0:/PSP_GAME/USR.. |
+| LittleBigPlanet | UCUS98744 | 258.21 | menu | not implemented yet.. |
+| LocoRoco | UCUS98662 | 454.81 | menu | disc0:/PSP_GAME/USR.. |
+| LocoRoco 2 | UCUS98731 | 286.79 | menu | disc0:/PSP_GAME/USR.. |
+| Lumines II | ULUS10183 | 967.07 | menu | not implemented yet.. |
+| Lumines - Puzzle Fusion | ULUS10002 | 106.80 | menu | ----Lumines Task St.. |
+| Lunar - Silver Star Harmony | ULUS10482 | 242.88 | menu | disc0:/PSP_GAME/USR.. |
+| MACH | ULES00565 | 237.87 | menu | -------------------.. |
+| Macross - Ace Frontier [Japan] | ULJS00158 | 857.20 | menu |  |
+| Macross - Triangle Frontier [Japan] | ULJS00321 | 6127.79 | black |  |
+| Macross - Ultimate Frontier [Japan] | NPJH50050 | 491.54 | menu |  |
+| Manhunt 2 [Uncensored] | ULUS10280 | 134.24 | movie | message dialog (ans.. |
+| MediEvil Resurrection | UCES00006 | 283.33 | menu | System free: 369408 |
+| Mega Man Maverick Hunter X [UNDUB v1.1] | ULUS10068 | 159.25 | menu | not implemented yet.. |
+| Mega Man Powered Up [UNDUB v1.3] | ULUS10091 | 115.77 | menu | not implemented yet.. |
+| Melodie (Prototype) | PETR00010 | 74.01 | black |  |
+| Me & My Katamari | ULUS10094 | 84.24 | menu | disc0:/PSP_GAME/USR.. |
+| Mercury Meltdown | ULUS10133 | 185.57 | menu |  |
+| Metal Gear Acid | ULUS10006 | 172.34 | movie | disc0:/PSP_GAME/USR.. |
+| Metal Gear Acid 2 | ULUS10077 | 363.01 | movie | disc0:/PSP_GAME/USR.. |
+| Metal Gear Solid - Digital Graphic Novel | ULUS10108 | 1082.92 | black | not implemented yet.. |
+| Metal Gear Solid - Peace Walker [v2.00] | ULUS10509 | 64.22 | movie | disc0:/PSP_GAME/USR.. |
+| Metal Gear Solid - Portable Ops | ULUS10202 | 444.94 | movie | not implemented yet.. |
+| Metal Gear Solid - Portable Ops Plus | ULUS10290 | 441.71 | movie | disc0:/PSP_GAME/USR.. |
+| Metal Slug Anthology | ULUS10154 | 214.29 | menu | libc:_getmodreent: .. |
+| Metal Slug XX | ULUS10495 | 163.44 | menu |  |
+| Miami Vice - The Game | ULUS10109 | 82.32 | black | ** READ FAILED. RET.. |
+| Micro Machines V4 | ULUS10129 | 614.60 | menu | disc0:/PSP_GAME/USR.. |
+| Midnight Club 3 - DUB Edition [v2.02] | ULUS10021 | 969.98 | movie | disc0:/PSP_GAME/USR.. |
+| Midnight Club - L.A. Remix | ULUS10383 | 260.11 | black | message dialog (ans.. |
+| ModNation Racers | UCUS98741 | 174.95 | menu | Videoplayer: invali.. |
+| Monster Hunter Portable 3rd [English v6.1.0 Team Maverick One] | ULJM05800 | 853.34 | black | not implemented yet.. |
+| Monster Hunter Portable 3rd HD ver [English v6.1.0 Team Maverick One] | NPJB40001 | 6162.68 | black | no threads left to .. |
+| Monster Kingdom Jewel Summoner | ULUS10211 | 53.85 | menu |  |
+| Moto GP | ULUS10153 | 250.65 | menu | message dialog (ans.. |
+| MotorStorm - Arctic Edge | UCUS98743 | 3202.36 | black |  |
+| MX vs. ATV - On the Edge | ULUS10071 | 46.39 | loading | disc0:/PSP_GAME/USR.. |
+| MX vs. ATV Reflex | ULUS10429 | 312.64 | loading | not implemented yet.. |
+| MX vs. ATV Untamed | ULUS10330 | 319.04 | black | not implemented yet.. |
+| Naruto Shippuden Ultimate Ninja Impact | ULUS10582 | 2830.13 | black | disc0:/sce_lbn0xE64.. |
+| Need for Speed - Carbon - Own the City | ULUS10114 | 13.69 | menu | message dialog (ans.. |
+| Need for Speed - Most Wanted - 5-1-0 | ULUS10036 | 2094.35 | black | GE: a display list .. |
+| Need for Speed - ProStreet | ULUS10331 | 296.70 | menu | the CPU stopped in .. |
+| Need for Speed - Shift | ULUS10462 | 82.28 | menu | Initing MP3 decoder |
+| Need for Speed - Underground Rivals | ULUS10007 | 7.61 | menu | pathname= Global/Ga.. |
+| OutRun 2006 - Coast 2 Coast | ULUS10064 | 426.31 | menu | not implemented yet.. |
+| PAC-MAN CE | NPUZ00125 | 86.61 | menu |  |
+| Pac-Man World Rally | ULUS10149 | 352.73 | menu | disc0:/PSP_GAME/USR.. |
+| Pangya Fantasy Golf [Black Screen Fix] | ULUS10438 | 276.55 | black | ERROR: scePsmfPlaye.. |
+| PaRappa the Rapper | UCUS98702 | 217.96 | menu |  |
+| Parodius Portable | ULJM05220 | 705.23 | menu | memory stick error! |
+| Patapon | UCUS98711 | 702.16 | menu | === ... SGX system .. |
+| Patapon 2 | UCUS98732 | 808.55 | menu | not implemented yet.. |
+| Patapon 3 | UCUS98751 | 1070.92 | menu | not implemented yet.. |
+| Persona 2 Eternal Punishment | NPJH50581 | 6139.75 | black | the CPU stopped in .. |
+| Persona 2 Innocent Sin | ULUS10584 | 47.66 | movie |  |
+| Phantom Kingdom | NPJH50451 | 376.65 | menu | not implemented yet.. |
+| PixelJunk Monsters - Deluxe | UCUS98739 | 503.07 | menu |  |
+| Platypus | ULUS10203 | 214.50 | menu | message dialog (ans.. |
+| Power Stone Collection | ULUS10171 | 226.46 | menu | disc0:/PSP_GAME/USR.. |
+| Pursuit Force | UCUS98640 | 56.80 | menu | disc0:/PSP_GAME/USR.. |
+| Pursuit Force - Extreme Justice | UCUS98703 | 1909.31 | black |  |
+| Ratchet & Clank - Size Matters | UCUS98633 | 431.19 | menu |  |
+| Resistance - Retribution | UCUS98668 | 54.93 | menu |  |
+| Retro City Rampage DX (Europe) | NPEH00170 | 432.04 | menu |  |
+| Ridge Racer | ULUS10001 | 210.43 | black | disc0:/PSP_GAME/USR.. |
+| Ridge Racer 2 | UCES00422 | 225.66 | movie |  |
+| Riviera - The Promised Land | ULUS10286 | 262.34 | menu |  |
+| Samurai Dou Portable [English] | ULJS00155 | 899.39 | movie | disc0:/PSP_GAME/USR.. |
+| Samurai Shodown Anthology | ULUS10401 | 200.34 | menu | message dialog (ans.. |
+| Seen in Liberty City | ULUS11826 | 30.80 | menu | disc0:/sce_lbn0xe2c.. |
+| Sega Genesis Collection | ULUS10192 | 3004.64 | loading |  |
+| Sega Rally Revo | ULUS10311 | 2950.00 | black | the CPU stopped in .. |
+| Sheperds Crossing | ULUS10499 | 757.21 | black | not implemented yet.. |
+| Shining Blade [gugule] | NPJH50530 | 984.96 | black | disc0:/PSP_GAME/USR.. |
+| Shining Hearts [English] | NPJH50342 | 314.19 | menu | Launch on 'disc0' |
+| Shining Hearts [English MT v1.2] | NPJH50342 | 315.19 | menu | Launch on 'disc0' |
+| Shin Megami Tensei - Persona 3 Portable | ULUS10512 | 387.60 | movie | GE: anti-aliased li.. |
+| Shinobido - Tales of the Ninja [Europe] [Undub 2021-06-28] | UCES00421 | 346.07 | menu | disc0:/PSP_GAME/USR.. |
+| Silent Hill Origins | ULUS10285 | 319.25 | menu | disc0:/PSP_GAME/USR.. |
+| Silent Hill - Shattered Memories | ULUS10450 | 6142.89 | loading |  |
+| Smash Court Tennis 3 | ULUS10269 | 148.23 | loading | message dialog (ans.. |
+| Snoopy vs. the Red Baron | ULUS10189 | 143.25 | menu | disc0:/PSP_GAME/USR.. |
+| SOCOM - U.S. Navy SEALs - Fireteam Bravo | UCUS98615 | 216.22 | menu | snd_stream (non-que.. |
+| SOCOM - U.S. Navy SEALs - Fireteam Bravo 2 | UCUS98645 | 132.91 | menu | Compiled against Sc.. |
+| SOCOM - U.S. Navy SEALs - Fireteam Bravo 3 | UCUS98716 | 987.61 | black | the CPU stopped in .. |
+| SOCOM - U.S. Navy SEALs - Tactical Strike | UCUS98649 | 330.96 | menu | not implemented yet.. |
+| Sol Trigger | NPJH50619 | 1120.71 | black | not implemented yet.. |
+| Sonic Rivals | ULUS10195 | 281.42 | menu |  |
+| Sonic Rivals 2 | ULUS10323 | 74.78 | menu |  |
+| Soulcalibur - Broken Destiny | ULUS10457 | 611.61 | menu | not implemented yet.. |
+| Space Invaders Extreme | ULUS10346 | 343.32 | menu | during this time. |
+| Spectral Souls | ULUS10076 | 195.26 | menu | effectnum 154 |
+| Split-Second | ULUS10513 | 464.86 | black | not implemented yet.. |
+| SSX on Tour | ULUS10042 | 317.99 | menu | disc0:/sce_lbn0x6BE.. |
+| Star Ocean - First Departure | ULUS10374 | 63.09 | movie |  |
+| Star Ocean - Second Evolution | ULUS10375 | 62.69 | movie |  |
+| Star Soldier | ULJM05026 | 180.96 | menu | disc0:/PSP_GAME/USR.. |
+| Star Trek - Tactical Assault | ULUS10150 | 244.67 | menu | not implemented yet.. |
+| Star Wars - Battlefront - Elite Squadron | ULUS10390 | 38.30 | movie | DISC0:/PSP_GAME/USR.. |
+| Star Wars - Battlefront II - Remastered Edition [Hack v8] | ULUS10053 | 52.54 | movie | disc0:/PSP_GAME/USR.. |
+| Star Wars - Battlefront - Renegade Squadron | ULUS10292 | 46.73 | menu | loading took 5453 m.. |
+| Star Wars - The Force Unleashed | ULUS10345 | 36.51 | menu | not implemented yet.. |
+| Street Fighter 3 - 3rd Strike [Port] | UCJS10041 | 363.44 | menu |  |
+| Street Fighter Alpha 3 Max | ULUS10062 | 204.35 | menu | disc0:/PSP_GAME/USR.. |
+| Street Supremacy | ULES00239 | 432.04 | menu | disc0:/PSP_GAME/USR.. |
+| Super Moneky Ball Adventures | ULES00364 | 6.81 | menu | Game Info: Game has.. |
+| Super Stardust Portable | NPUG80221 | 68.75 | black | a display list ENDe.. |
+| Syphon Filter - Dark Mirror | UCUS98641 | 120.70 | menu |  |
+| Syphon Filter - Logan's Shadow | UCUS98606 | 41.09 | menu |  |
+| Tactics Ogre - Let Us Cling Together [One Vision v1.11a] | ULUS10565 | 42.24 | menu | not implemented yet.. |
+| Tales of Eternia | ULES00176 | 374.47 | movie | disc0:/PSP_GAME/USR.. |
+| Tales of Phantasia Full Voice Edition [English v1.2][QoL] | ULJS00079 | 3558.48 | black | the CPU stopped in .. |
+| Tales of Phantasia X [English v1.2] | ULJS00293 | 5855.83 | black | the CPU stopped in .. |
+| Tales Of The World - Radiant Mythology 2 [English 31-08] | ULJS00175 | 147.73 | movie | disc0:/PSP_GAME/USR.. |
+| Tekken 6 | ULUS10466 | 6105.90 | black | no threads left to .. |
+| Tekken - Dark Resurrection | ULUS10139 | 690.27 | black | disc0:/PSP_GAME/USR.. |
+| Tenchu - Shadow Assassins | ULUS10419 | 507.34 | movie |  |
+| Tenchu - Time of the Assassins [UNDUB v1.5c] | ULES00277 | 526.24 | movie | disc0:/PSP_GAME/USR.. |
+| The 3rd Birthday | ULUS10567 | 259.88 | menu | not implemented yet.. |
+| The Legend of Heroes I | ULUS10022 | 121.22 | movie | Hetima System( Movi.. |
+| The Legend of Heroes II | ULUS10125 | 194.17 | movie | Hetima System( Movi.. |
+| The Legend of Heroes III | ULUS10144 | 818.42 | black |  |
+| The Legend of Heroes - Trails From Azure [English v15] | NPJH50473 | 2646.11 | black | every thread is wai.. |
+| The Legend of Nayuta - Boundless Trails [Addendum v1.08] | NPJH50625 |  | timeout |  |
+| The Sims 2 | ULUS10031 | 110.36 | menu | disc0:/sce_lbn0x5fb.. |
+| The Sims 2 - Castaway | ULUS10296 | 30.44 | menu |  |
+| The Sims 2 - Pets | ULUS10130 | 32.65 | black |  |
+| Toca Race Driver 2 | ULES00042 | 793.01 | black | disc0:/PSP_GAME/USR.. |
+| Tokobot | ULUS10061 | 311.82 | movie | disc0:/PSP_GAME/USR.. |
+| Tony Hawk's Underground 2 Remix | ULUS10014 | 961.59 | menu | disc0:/PSP_GAME/USR.. |
+| Twisted Metal Head On | UCUS98601 | 34.22 | menu | disc0:/sce_lbn0xE2c.. |
+| Ultimate Ghosts 'n Goblins | ULUS10105 | 1645.74 | menu | disc0:/PSP_GAME/USR.. |
+| Umineko no Nakukoro ni Portable [English v1.0] | ULJM05968 | 2271.33 | menu |  |
+| Valhalla Knights | ULUS10230 | 3118.56 | menu |  |
+| Valhalla Knights 2 | ULUS10366 | 6018.77 | menu |  |
+| Valkyria Chronicles II | ULUS10515 | 140.56 | loading | disc0:/PSP_GAME/USR.. |
+| Valkyria Chronicles III [English v1.0.8] | ULJM05957 | 979.29 | black | disc0:/PSP_GAME/USR.. |
+| Valkyrie Profile Lennth | ULUS10107 | 96.43 | loading | disc0:/PSP_GAME/USR.. |
+| Virtua Tennis 3 | ULUS10246 | 115.81 | menu | not implemented yet.. |
+| Virtua Tennis - World Tour | ULUS10037 | 100.60 | menu | GE: anti-aliased li.. |
+| Warriors of the Lost Empire | ULES00924 | 380.31 | menu | disc0:/PSP_GAME/USR.. |
+| WipEout [Portable Collection v3.0] | WPCE02025 | 228.95 | menu | not implemented yet.. |
+| Ys I and II Chronicles | ULUS10547 | 242.42 | menu |  |
+| Ys Seven | ULUS10551 | 2597.46 | black | every thread is wai.. |
+| Ys - The Ark of Napishtim | ULUS10051 | 593.36 | menu | disc0:/PSP_GAME/USR.. |
 | Ys - The Oath in Felghana | ULUS10558 |  | timeout |  |
-| ZHP - Unlosing Ranger Vs Darkdeath Evilman | ULUS10559 | 178.60 | black | not implemented .. |
+| ZHP - Unlosing Ranger Vs Darkdeath Evilman | ULUS10559 | 169.51 | menu |  |
 
 The runner's full per-game output (summary, errors, frames, WAV) is
 described in `tools/psp-runner/README.md`. Contact sheets of the reference
-frame for each game (ten per sheet, 27 sheets) are in
-`/tmp/phobos-psp-compat-report/sheet-*.png`.
+frame for each game (ten per sheet, 26 sheets) are in
+`/tmp/phobos-psp-compat-157-report/sheet-*.png`.
 
 ## Timed-out games
 
-Three games ran for the full 1200 s batch limit without completing 3600
+Four games ran for the full 1200 s batch limit without completing 3600
 frames:
 
 | Game | NPID | Frames completed |
@@ -390,24 +438,25 @@ frames:
 | Ys - The Oath in Felghana | ULUS10558 | 60 |
 | God of War - Ghost of Sparta | UCUS98737 | 60 |
 | God of War - Chains of Olympus | UCUS98653 | 1200 |
+| The Legend of Nayuta - Boundless Trails [Addendum v1.08] | NPJH50625 | 1800 |
 
 These are large 3D titles that run well below 30 fps. The first two
-completed only 60 frames in 1200 s; the third completed 1200 frames.
+completed only 60 frames in 1200 s; the third completed 1200 frames; the
+fourth completed 1800 frames.
 
 ## Next missing functions
 
 The most impactful gaps to close, in order of how many games they affect:
 
-1. **`ThreadManForUser` thread-management functions** — hit by 130+ games
-   across the 34 distinct function IDs. These are the most common cause of
-   frozen games.
-2. **`sceCtrl a7144800`** — hit by 32 games. A control/setting function.
-3. **`sceGe_user b77905ea`** — hit by 17 games. A GE (graphics) function.
-4. **`SysMemUserForUser` memory-management functions** — hit by 17 games
-   across 2 IDs.
-5. **GE feature emulation** — compressed (DXT) textures, bounding-box
-   tests, and line drawing are not emulated yet; these affect 29 games
-   (6 DXT, 8 bounding-box, 15 line-drawing).
-6. **`sceImpose` HOME-menu overlay functions** — hit by 16 games across 2 IDs.
-7. **`scePsmf`/`scePsmfPlayer` video-playback functions** — hit by 19 games
-   across 3 IDs.
+1. **`scePsmf`/`scePsmfPlayer` video-playback functions** — hit by 40 games
+   across 8 distinct function IDs. These control movie and cutscene
+   playback; closing them would un-black the movie-driven titles.
+2. **`scePspNpDrm_user` DRM function** — hit by 13 games. A disc-
+   protection function.
+3. **`sceRtc` real-time clock function** — hit by 12 games.
+4. **`sceDisplay` display-management functions** — hit by 12 games across
+   2 IDs.
+5. **`ThreadManForUser` thread-management functions** — hit by 12 games
+   across 2 IDs (down from 34 in the previous run).
+6. **`sceHprm` high-performance mode function** — hit by 5 games.
+7. **`scePower` power-management function** — hit by 4 games.
