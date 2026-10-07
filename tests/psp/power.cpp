@@ -359,7 +359,7 @@ static auto threadControl() -> void {
     main.call("sceKernelCreateThread");
     main.put(addu(s0, v0, zero));
     main.put(addu(a0, s0, zero));
-    main.call("sceKernelGetThreadExitStatus");  //dormant, but never ran: its status is 0
+    main.call("sceKernelGetThreadExitStatus");  //dormant, never started: DORMANT (threads/threads/exitstatus)
     main.li(t0, R); main.put(sw(v0, 0x00, t0));
     main.put(addu(a0, s0, zero)); main.li(a1, 0); main.li(a2, 0);
     main.call("sceKernelStartThread");  //lower priority: waits
@@ -422,7 +422,7 @@ static auto threadControl() -> void {
     if(m.output != "main\nworker\nmain again\nmain resumes it\nworker woke\n") {
       std::printf("  output: [%s]\n", m.output.c_str());
     }
-    CHECK(m.system.memory.read(4, R + 0x00), 0);
+    CHECK(m.system.memory.read(4, R + 0x00), Kernel::ErrorDormant);
     CHECK(m.system.memory.read(4, R + 0x04), Kernel::ErrorNotDormant);
     CHECK(m.system.memory.read(4, R + 0x08), 0);
     CHECK(m.system.memory.read(4, R + 0x0c), Kernel::ErrorSuspended);

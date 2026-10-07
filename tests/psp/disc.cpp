@@ -436,7 +436,8 @@ static auto discRequests() -> void {
   CHECK(memory.read(4, Out), 0);
   memory.write(4, In, Out);
   CHECK(m.call("sceIoDevctl", {m.string("ms0:"), 0x0242'5818, In, 4, 0, 0}), 0);
-  CHECK(memory.read(4, Out) > 0 && memory.read(4, Out) <= 1_GiB / 32_KiB, true);  //clusters free
+  CHECK(memory.read(4, Out), Kernel::StickClusters);  //a 2 GB stick, mostly empty
+  CHECK(memory.read(4, Out + 4), Kernel::StickFreeClusters);
   CHECK(memory.read(4, Out + 12), 512);
   CHECK(memory.read(4, Out + 16), 64);
   u32 callback = m.call("sceKernelCreateCallback", {m.string("stick"), 0x0880'1000, 0});

@@ -6,6 +6,77 @@ auto Kernel::sceKernelExitGame() -> void {
   switchTo(nullptr);
 }
 
+//(path, parameters or 0: a SceKernelLoadExecParam, psploadexec.h: its size, the argument's length, where the
+//argument is, a key): the program ends, and the one at path starts in its place, as a game made of several programs
+//starts the next (WipEout Portable Collection starts each of its games so, disc0:/PSP_GAME/USRDIR/ELF/FX300.BIN with
+//no parameters, and had gone back to its menu while the function was missing). Its first thread gets the argument
+//given, or none, or with no parameters its path, as a program the system starts gets. Like pspautotests'
+//modules/loadexec/loader, whose "[2]" after the call never printed, it doesn't return: the calling thread stops, and
+//the kernel's loop puts the new program in as it next goes round (loadExec()). What can be checked is checked first,
+//the old program left running when the new one can't start: a file there isn't (its error), one that isn't a program
+//or that can't be decrypted (ILLEGAL_OBJECT, UNSUPPORTED_PRX_TYPE: chosen), an argument over 4 KiB (ILLEGAL_SIZE:
+//chosen). From an interrupt handler, ILLEGAL_CONTEXT.
+auto Kernel::sceKernelLoadExec() -> void {
+  if(interrupting) return result(ErrorIllegalContext);
+  std::string path = memory.readString(arg(0), 256);
+  u32 parameters = arg(1);
+  std::vector<u8> argument;
+  if(parameters && memory.reaches(parameters, 12)) {
+    u32 length = memory.read(4, parameters + 4), at = memory.read(4, parameters + 8);
+    if(length > 4_KiB) return result(ErrorIllegalSize);
+    if(length && at) {
+      argument.resize(length);
+      if(!memory.copyOut(argument.data(), at, length)) return result(ErrorIllegalAddress);
+    }
+  }
+  std::vector<u8> file;
+  if(u32 error = readWhole(path, file)) return result(error);
+  const u8* data = file.data();
+  u64 size = file.size();
+  std::vector<u8> program;
+  if(size >= 4 && !memcmp(data, "\0PBP", 4)) {
+    program = std::move(file);  //(start() finds the program inside)
+  } else {
+    unwrapProgram(data, size);
+    std::vector<u8> decrypted;
+    if(encryptedProgram(data, size)) {
+      if(auto why = decryptProgram(data, size, decrypted); !why.empty()) {
+        note("sceKernelLoadExec: can't start " + path + ": " + why);
+        return result(ErrorUnsupportedPrxType);
+      }
+      data = decrypted.data(), size = decrypted.size();
+    }
+    u32 low = 0, high = 0;
+    bool relocatable = false;
+    if(!Loader::extent(data, size, low, high, relocatable)) return result(ErrorIllegalObject);
+    program.assign(data, data + size);
+  }
+  exec.pending = true;
+  exec.path = path;
+  exec.program = std::move(program);
+  exec.argument = std::move(argument);
+  exec.pathArgument = !parameters;
+  switchTo(nullptr);  //the caller stops here (the CPU's go ends with it)
+}
+
+//The program sceKernelLoadExec asked for, in the old one's place: everything of the old program goes, as at power on
+//(its threads, memory and modules, open files, the calls into it, sound, the GE's lists, the clock), the user
+//partition is cleared, and the new program starts as the system starts one. The devices, the disc and the system
+//fonts stay the system's. One that can't start after all ends the program, noted.
+auto Kernel::loadExec() -> void {
+  auto request = std::move(exec);
+  power();
+  u64 top = 0x0800'0000 + u64(memory.ram.size());
+  memory.fill(UserMemory, 0, top > UserMemory ? u32(top - UserMemory) : 0);
+  std::string error;
+  auto given = request.pathArgument ? nullptr : &request.argument;
+  if(!start(request.program.data(), request.program.size(), request.path, error, given)) {
+    note("sceKernelLoadExec: can't start " + request.path + ": " + error);
+    power();
+    exited = true;
+  }
+}
+
 //(exit status, argument size, argument): the module holding the code that called stops and unloads itself, its
 //calling thread ending (modules.cpp, unloadSelf()); the program doing it is leaving.
 auto Kernel::sceKernelSelfStopUnloadModule() -> void {

@@ -72,14 +72,33 @@ auto Kernel::sceDisplayIsVblank() -> void {
   result(inVblank());
 }
 
-//The line the display is on, counted from the start of the vertical blank (as the PSP counts: up to 14 inside it).
-auto Kernel::sceDisplayGetCurrentHcount() -> void {
-  result(u32((cycles - (nextVblank - VblankCycles)) / LineCycles));
+//The lines the display has gone through since this frame's vertical blank started.
+auto Kernel::hcountLines() const -> u32 {
+  return u32((cycles - (nextVblank - VblankCycles)) / LineCycles);
 }
 
-//The lines the display has gone through since power on: 286 a frame, and those of this one.
+//The line the display is on, counted from the start of the vertical blank: pspautotests' display/vblankphase
+//recorded the blank's interrupt at the end of line 285, a handler reading line 0. (display/hcount's lowest line just
+//after a wait for a blank, 1, and highest inside the blank, 14, are a waiting thread getting the CPU some 81
+//microseconds after the interrupt and the blank lasting some 818 from it, as vblankphase measured; here a waiter runs
+//at once and the blank lasts 0.77 ms, so 0 and 13.)
+auto Kernel::sceDisplayGetCurrentHcount() -> void {
+  result(hcountLines());
+}
+
+//The lines the display has gone through since power on: 286 a frame, and those of this one; counted on from where
+//sceDisplayAdjustAccumulatedHcount set it, if it did, and 31 bits wide.
 auto Kernel::sceDisplayGetAccumulatedHcount() -> void {
-  result(u32(vblanks * 286 + (cycles - (nextVblank - VblankCycles)) / LineCycles));
+  result((display.hcountBase + u32(vblanks * 286 + hcountLines())) & 0x7fff'ffff);
+}
+
+//(count): the accumulated count of lines is this now, and counts on from it at the next line. As pspautotests'
+//display/hcount and hcountwrap recorded: a negative count is INVALID_VALUE (0x7fffffff the largest taken), and from
+//0x7fffffff the count goes on to 0 as the next line starts (read straight after setting it, sometimes 0 already).
+auto Kernel::sceDisplayAdjustAccumulatedHcount() -> void {
+  if(s32(arg(0)) < 0) return result(ErrorInvalidValue);
+  display.hcountBase = arg(0) - u32(vblanks * 286 + hcountLines());
+  result(0);
 }
 
 //The display's frame rate, a float: 59.94.

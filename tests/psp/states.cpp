@@ -194,7 +194,7 @@ static auto stateFields() -> void {
   loaded.thread = one;
   k.current = k.threads[one].get();
   u32 semaphore = a.call("sceKernelCreateSema", {a.string("sema"), 0, 1, 5, 0});
-  k.lwMutexes[k.nextUID++] = 0x0880'9000;
+  k.lwMutexes[k.nextUID++] = {0x0880'9000, "lw", 0, 0};
   u32 flag = a.call("sceKernelCreateEventFlag", {a.string("flag"), 0, 3, 0});
   u32 callback = a.call("sceKernelCreateCallback", {a.string("callback"), 0x0880'7000, 0x42});
   k.memoryStickCallbacks = {callback};
@@ -457,7 +457,7 @@ static auto stateFields() -> void {
     {"semaphore name", [&] { sema.name += "x"; }},
     {"semaphore attributes", [&] { sema.attributes ^= 1; }}, {"semaphore count", [&] { sema.count = 3; }},
     {"semaphore maximum", [&] { sema.maximum ^= 1; }},
-    {"lwMutex", [&] { k.lwMutexes.begin()->second ^= 4; }},
+    {"lwMutex", [&] { k.lwMutexes.begin()->second.workArea ^= 4; }},
     {"event flag name", [&] { eventFlag.name += "x"; }},
     {"event flag attributes", [&] { eventFlag.attributes ^= 1; }},
     {"event flag initial", [&] { eventFlag.initial ^= 1; }}, {"event flag pattern", [&] { eventFlag.pattern ^= 1; }},
@@ -740,9 +740,22 @@ static auto stateFields() -> void {
     {"geTranslation", [&] { k.geTranslation = 0x800; }},
     {"imposeLanguage", [&] { k.imposeLanguage = 7; }}, {"imposeButton", [&] { k.imposeButton = 0; }},
   };
+  //part 32's: thread one's run figures (no more time on the CPU than has passed), when the running thread got it, the
+  //lightweight mutex's name, attributes and first count (recursive, so held twice), the display's base for its lines
+  auto& lw = k.lwMutexes.begin()->second;
+  std::vector<std::pair<std::string, std::function<void()>>> part32 = {
+    {"thread runCycles", [&] { t.runCycles = k.cycles / 2; }},
+    {"thread interruptPreempts", [&] { t.interruptPreempts = 3; }},
+    {"thread threadPreempts", [&] { t.threadPreempts = 4; }}, {"thread releases", [&] { t.releases = 5; }},
+    {"ranSince", [&] { k.ranSince = k.cycles - 100; }},
+    {"lwMutex name", [&] { lw.name += "x"; }}, {"lwMutex attributes", [&] { lw.attributes = 0x200; }},
+    {"lwMutex initial", [&] { lw.initial = 2; }},
+    {"display hcountBase", [&] { k.display.hcountBase = 0x1234; }},
+  };
   changes.insert(changes.end(), more.begin(), more.end());
   changes.insert(changes.end(), codecs.begin(), codecs.end());
   changes.insert(changes.end(), part28.begin(), part28.end());
+  changes.insert(changes.end(), part32.begin(), part32.end());
   for(auto& [field, change] : changes) {
     auto before = save(a);
     change();
@@ -880,7 +893,7 @@ static auto stateFields() -> void {
     copy.uid = k.nextUID;
     k.semaphores[k.nextUID] = copy;
   });
-  refuses("a mutex's ID not handed out yet", [&] { k.lwMutexes[k.nextUID] = 0x0880'9100; });
+  refuses("a mutex's ID not handed out yet", [&] { k.lwMutexes[k.nextUID] = {0x0880'9100, "lw", 0, 0}; });
   refuses("an event flag's ID not handed out yet", [&] {
     auto copy = k.eventFlags.begin()->second;
     copy.uid = k.nextUID;
@@ -1349,6 +1362,14 @@ static auto stateFields() -> void {
   refuses("an idle threshold past 128", [&] { k.controller.idleReset = 129; });
   refuses("an idle threshold below -1", [&] { k.controller.idleBack = -2; });
   refuses("a translation width sceGeEdramSetAddrTranslation refuses", [&] { k.geTranslation = 0x300; });
+  //part 32's run figures and lightweight mutexes as no machine has them
+  refuses("a thread longer on the CPU than time has passed", [&] { k.threads.at(one)->runCycles = k.cycles + 1; });
+  refuses("the running thread getting the CPU after now", [&] { k.ranSince = k.cycles + 1; });
+  refuses("a lightweight mutex with attribute 0x400", [&] { k.lwMutexes.begin()->second.attributes = 0x400; });
+  refuses("a lightweight mutex made with a count of -1", [&] { k.lwMutexes.begin()->second.initial = -1; });
+  refuses("a lightweight mutex made held twice that isn't recursive", [&] {
+    k.lwMutexes.begin()->second.attributes = 0, k.lwMutexes.begin()->second.initial = 2;
+  });
   CHECK(save(a) == state, true);
 }
 

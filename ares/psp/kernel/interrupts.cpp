@@ -18,7 +18,8 @@ auto Kernel::queueCall(u32 function, u32 gp, u32 a0, u32 a1, u32 a2, bool resume
 
 //The next call starts, if one may: none is running and interrupts aren't held off. A vertical blank held off till
 //now comes first: its handlers join the queue, once however many blanks went by (vblankInterrupt()); unless the
-//last blank's still wait their turn there, when it stays pending.
+//last blank's still wait their turn there, when it stays pending. A thread it interrupts counts it in its run
+//figures, its time stopping while the call runs (threads.cpp).
 auto Kernel::startCall() -> void {
   if(interrupting || !interruptsEnabled) return;
   if(vblankPending && !vblankQueued()) {
@@ -28,6 +29,10 @@ auto Kernel::startCall() -> void {
   if(calls.empty()) return;
   auto call = calls.front();
   calls.pop_front();
+  if(current) {
+    current->runCycles += cycles - ranSince;
+    current->interruptPreempts++;
+  }
   save(interrupted);
   interruptedHalted = cpu.scc.halted;
   interrupting = true;
@@ -56,6 +61,7 @@ auto Kernel::callReturned() -> void {
   cpu.scc.halted = interruptedHalted;
   interrupting = false;
   interruptsEnabled = true;
+  ranSince = cycles;
   if(callKind == Call::Alarm || callKind == Call::VTimer) timerReturned(callKind, callID, returned);
   callKind = Call::Plain;
   callID = 0;
