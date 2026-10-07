@@ -100,6 +100,7 @@ struct GPU : GE::Renderer {
     s32 x = 0, y = 0;                     //Upload, Readback, Copy
     u32 width = 0, height = 0;
     u64 colors = 0, stencil = 0, depth = 0;  //Upload: where in uploads (8888s, bytes, 16-bit depths)
+    u8 parts = 3;                            //Upload: bit 0 the colors and stencils, bit 1 the depths
     u32 texture = 0;                         //Copy
   };
   struct Recorded {
@@ -139,6 +140,11 @@ struct GPU : GE::Renderer {
     u32 height = 0;               //rows it has room for
     u32 rows = 0;                 //rows filled from memory so far (stale: none)
     bool stale = true;            //memory's VRAM has changed under it: filled afresh before it's drawn into
+    //Its depth buffer (the GE's, the last PRIM's: VRAM's offset through its fourth copy, and its row width), the
+    //rows of it filled from memory so far, and those memory has changed since (filled again before the next draw).
+    //The GPU's depth stays on the GPU: memory's isn't changed by what the GPU draws.
+    u32 depthBuffer = 0, depthStride = 0, depthRows = 0;
+    u32 depthChangedFrom = 0, depthChangedTo = 0;
     s32 left = 0, top = 0, right = -1, bottom = -1;  //drawn since it was last read back
     u64 used = 0;
     u64 version = 0;              //goes up whenever its pixels may change (filled, drawn into)
@@ -162,7 +168,7 @@ struct GPU : GE::Renderer {
   GPU(std::unique_ptr<Backend> backend);
   ~GPU();
   auto ready() const -> bool override { return backend && !backend->lost; }
-  auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> void override;
+  auto begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool override;
   auto triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c) -> void override;
   auto sprite(const GE::Job& job) -> void override;
   auto point(const GE::Vertex& at) -> void override;
@@ -172,6 +178,7 @@ struct GPU : GE::Renderer {
   auto written(GE& ge, u32 page) -> void override;
   auto forget(GE& ge) -> void override;
   auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bool override;
+  auto copiesKept() const -> u32 { return copies.size(); }  //(render-to-texture copies on the GPU: the tests')
 
   //vulkan.cpp: a renderer on the first Vulkan GPU, through the host's vkGetInstanceProcAddr (the loader or driver
   //the host chose, a custom one included: docs/psp-gpu-renderers.md, "Vulkan"), or, with none, the system's loader;
@@ -196,11 +203,19 @@ private:
   //(one for each place and size, kept with the target)
   struct Held { Target* target; s32 x, y; u32 width, rows, format; };
   std::optional<Held> held;
-  struct Copied { u32 texture; u64 version; };  //(the target's version it was copied at)
-  std::map<std::tuple<u32, s32, s32, u32, u32>, Copied> copies;  //(target, x, y, width, rows)
+  //(one for each target and size, the place it was last copied from, and the target's version then; at most
+  //MostCopies, the one unused longest let go for another, and none unused for CopyAge PRIMs: release())
+  struct Copied { u32 texture; u64 version; s32 x, y; u64 used; };
+  std::map<std::tuple<u32, u32, u32>, Copied> copies;  //(target, width, rows)
+  static constexpr u32 MostCopies = 32;
+  static constexpr u64 CopyAge = 1 << 14;
+  //(a PRIM's vertices handed to the GPU, without waiting for its end, once there are this many: a long line's
+  //pixels are six each)
+  static constexpr u32 MostVertices = 1 << 18;
 
-  auto targetFor(const GE::PixelState& p, u32 rows) -> Target*;
-  auto fill(Target& t, u32 from, u32 to, const GE::PixelState& p) -> void;
+  auto targetFor(const GE::PixelState& p) -> Target*;
+  auto fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts = 1) -> void;
+  auto release() -> void;
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
   auto textureFor(const GE::Look& look, u8& texels) -> u32;
   auto settings(const GE::Look& look) -> void;

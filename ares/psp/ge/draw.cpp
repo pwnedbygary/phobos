@@ -167,12 +167,21 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //renderer's own where it's in a frame buffer the GPU has drawn (render to texture), else always decoded, even one
   //the primitive draws over itself (the GPU reads it as it was before the primitive, as the software renderer's
   //drawing a pixel at a time from memory doesn't: Region{0, 0, -1, -1} reaches nothing).
+  //A PRIM the renderer refuses (begin()) is drawn here instead, as without one: what it drew put back in memory
+  //first, and the texture decoded for the region it draws in.
   hardware = renderer && renderer->ready();
   if(textured && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
     look.decoded = decode(look.texture, pixel, hardware ? Region{0, 0, -1, -1} : region, rows);
     if(!look.texture.decoded) look.texture.bytes = direct(look.texture);
   }
-  if(hardware) renderer->begin(*this, look, format.through, region);
+  if(hardware && !renderer->begin(*this, look, format.through, region)) {
+    renderer->finish(*this);
+    hardware = false;
+    if(textured) {
+      look.decoded = decode(look.texture, pixel, region, rows);
+      if(!look.texture.decoded) look.texture.bytes = direct(look.texture);
+    }
+  }
   //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
   //texture read from memory as it's drawn (texture.cpp) has it drawn at once.
   drawing.recording = !hardware && !(look.textured && !look.texture.decoded) && defer(pixel, region);

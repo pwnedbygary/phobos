@@ -565,6 +565,7 @@ struct VulkanBackend : GPU::Backend {
         const u8* in = r.uploads.data();
         std::memcpy(staging + colors, in + c.colors, count * 4);
         std::memcpy(staging + stencils, in + c.stencil, count);
+        bool colored = c.parts & 1, depthed = c.parts & 2;
         u32* depth = (u32*)(staging + depths);
         for(u32 n = 0; n < count; n++) {
           u16 z;
@@ -583,10 +584,13 @@ struct VulkanBackend : GPU::Backend {
           {colors, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, offset, extent},
           {stencils, 0, 0, {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 0, 1}, offset, extent},
           {depths, 0, 0, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, offset, extent}};
-        vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.color.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                  1, &copies[0]);
+        //(the colors and the stencil, the depth, or both: the stencil is the depth image's)
+        if(colored) {
+          vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.color.image,
+                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[0]);
+        }
         vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, t.depth.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                  2, &copies[1]);
+                                  colored && depthed ? 2 : 1, &copies[colored ? 1 : 2]);
         transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    ColorLayout);
         transition(commands, t.depth.image, DepthStencil, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, DepthLayout);

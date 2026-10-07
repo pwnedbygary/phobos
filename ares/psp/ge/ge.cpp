@@ -26,6 +26,15 @@ GE::GE(Memory& memory) : memory(memory) {
   memory.finishDrawing = [this] { settleAll(); };  //(threads.cpp)
 }
 
+//The hardware renderer that draws from now on, or none for the software renderer: the one before settled (what it
+//drew put back in memory's VRAM), and the new one told that its copies of VRAM, if it has any, aren't this
+//machine's.
+auto GE::setRenderer(Renderer* next) -> void {
+  settleAll();
+  renderer = next;
+  if(renderer) renderer->forget(*this);
+}
+
 //As the GE is when the PSP starts: every command's word zero, no list.
 auto GE::power() -> void {
   for(auto& command : commands) command = 0;

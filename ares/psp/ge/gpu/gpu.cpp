@@ -74,8 +74,9 @@ auto GPU::lose() -> void {
 
 //The target for a frame buffer, made if there's none yet (a frame buffer is its address, width and format: the
 //same bytes as another format are another target, filled from memory when drawn into after the other). Its height
-//is as many rows as fit in VRAM, up to 512; rows: how many the PRIM reaches.
-auto GPU::targetFor(const GE::PixelState& p, u32 rows) -> Target* {
+//is as many rows as fit in VRAM, up to 512 (a PRIM reaching further is the software renderer's: begin()). None
+//where not a row fits, or the GPU has no room for it.
+auto GPU::targetFor(const GE::PixelState& p) -> Target* {
   u32 bytes = p.format == 3 ? 4 : 2;
   for(auto& t : targets) {
     if(t->address == p.frameBuffer && t->stride == p.stride && t->format == p.format) {
@@ -84,7 +85,7 @@ auto GPU::targetFor(const GE::PixelState& p, u32 rows) -> Target* {
     }
   }
   u32 height = std::min<u32>(512, (Memory::VRAMSize - p.frameBuffer) / (p.stride * bytes));
-  if(height < rows || !height) return nullptr;
+  if(!height) return nullptr;
   //(too many: the one unused longest goes, if it isn't drawn on the GPU still)
   if(targets.size() >= 32) {
     auto oldest = targets.end();
@@ -111,10 +112,11 @@ auto GPU::targetFor(const GE::PixelState& p, u32 rows) -> Target* {
 }
 
 //Rows from to to of the target filled from memory's VRAM, in order with what's drawn: its pixels (the stencil
-//their alpha) and the depth buffer's (VRAM's fourth copy's order, memory.hpp), which the GE has with the frame
-//buffer (p). Its bytes are then watched, so that whoever changes them is heard of (written()).
-auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p) -> void {
+//their alpha: parts bit 0) or its depth buffer's (bit 1: the target's, VRAM's fourth copy's order, memory.hpp). Their
+//bytes are then watched, so that whoever changes them is heard of (written()).
+auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts) -> void {
   if(from >= to) return;
+  (void)p;
   u32 width = t.stride, height = to - from, count = width * height, bytes = t.bytes();
   auto& vram = ge->memory.vram;
   Command c{Command::Kind::Upload, t.id};
@@ -122,28 +124,35 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p) -> void {
   c.colors = recorded.uploads.size();
   c.stencil = c.colors + count * 4;
   c.depth = c.stencil + count;
+  c.parts = parts;
   recorded.uploads.resize(c.depth + count * 2);
   u8* out = recorded.uploads.data();
   for(u32 y = 0; y < height; y++) {
     for(u32 x = 0; x < width; x++) {
-      u32 at = (t.address + ((from + y) * t.stride + x) * bytes) & (Memory::VRAMSize - 1), pixel = 0;
-      std::memcpy(&pixel, &vram[at], bytes);
-      u32 color = widen(pixel, t.format);
       u32 n = y * width + x;
-      std::memcpy(out + c.colors + n * 4, &color, 4);
-      out[c.stencil + n] = color >> 24;
+      if(parts & 1) {
+        u32 at = (t.address + ((from + y) * t.stride + x) * bytes) & (Memory::VRAMSize - 1), pixel = 0;
+        std::memcpy(&pixel, &vram[at], bytes);
+        u32 color = widen(pixel, t.format);
+        std::memcpy(out + c.colors + n * 4, &color, 4);
+        out[c.stencil + n] = color >> 24;
+      }
       u16 depth = 0;
-      if(x < p.depthStride) {
-        u32 offset = Memory::vramOffset(3, (p.depthBuffer + ((from + y) * p.depthStride + x) * 2) &
+      if(parts & 2 && x < t.depthStride) {
+        u32 offset = Memory::vramOffset(3, (t.depthBuffer + ((from + y) * t.depthStride + x) * 2) &
                                               (Memory::VRAMSize - 1));
         depth = vram[offset] | vram[offset + 1] << 8;
       }
-      std::memcpy(out + c.depth + n * 2, &depth, 2);
+      if(parts & 2) std::memcpy(out + c.depth + n * 2, &depth, 2);
     }
   }
   recorded.commands.push_back(c);
   t.version++;
-  ge->memory.watch(Memory::VRAMBase + t.address + from * t.stride * bytes, height * t.stride * bytes);
+  if(parts & 1) ge->memory.watch(Memory::VRAMBase + t.address + from * t.stride * bytes, height * t.stride * bytes);
+  if(parts & 2 && t.depthStride) {  //(through the fourth copy, as the GE sees it)
+    ge->memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t.depthBuffer + from * t.depthStride * 2,
+                     height * t.depthStride * 2);
+  }
   statistics.uploads++;
 }
 
@@ -185,12 +194,25 @@ auto GPU::textureFor(const GE::Look& look, u8& texels) -> u32 {
     texels = h.format < 3 ? h.format : 4;
     u32 below = h.y + h.rows;  //(rows the GPU hasn't drawn, memory's, filled first)
     if(below > h.target->rows) fill(*h.target, h.target->rows, below, look.pixel), h.target->rows = below;
-    auto key = std::make_tuple(h.target->id, h.x, h.y, h.width, h.rows);
+    //(the copy of that size, copied again where it's from another place or the target has changed since: the
+    //draws before it sample it as it was, as the GPU runs the commands in order)
+    auto key = std::make_tuple(h.target->id, h.width, h.rows);
     auto found = copies.find(key);
-    if(found != copies.end() && found->second.version == h.target->version) return found->second.texture;
+    if(found != copies.end()) {
+      auto& copied = found->second;
+      copied.used = uses;
+      if(copied.version == h.target->version && copied.x == h.x && copied.y == h.y) return copied.texture;
+    }
+    if(found == copies.end() && copies.size() >= MostCopies) {  //(the one unused longest let go: release())
+      auto oldest = copies.begin();
+      for(auto copy = copies.begin(); copy != copies.end(); copy++) {
+        if(copy->second.used < oldest->second.used) oldest = copy;
+      }
+      backend->dropTexture(oldest->second.texture), copies.erase(oldest);
+    }
     u32 id = found != copies.end() ? found->second.texture : backend->makeTexture(h.width, h.rows, nullptr);
     if(!id) return 0;
-    copies[key] = {id, h.target->version};
+    copies[key] = {id, h.target->version, h.x, h.y, uses};
     Command c{Command::Kind::Copy, h.target->id};
     c.x = h.x, c.y = h.y, c.texture = id;
     c.width = std::min<u32>(h.width, h.target->stride - h.x), c.height = h.rows;
@@ -253,7 +275,7 @@ auto GPU::settings(const GE::Look& look) -> void {
     k.colorMask = rgb;
     if(p.stencilTest && stencils) {
       k.stencilTest = 1, k.stencilCompare = p.stencilFunction;
-      auto operation = [](u32 o) -> u8 { return o < 6 ? u8(o) : Keep; };
+      auto operation = [](u32 o) -> u8 { return o < 6 ? u8(o) : u8(Keep); };
       k.stencilFail = operation(p.stencilFail);
       k.stencilDepthFail = operation(p.stencilDepthFail);
       k.stencilPass = operation(p.stencilPass);
@@ -268,7 +290,7 @@ auto GPU::settings(const GE::Look& look) -> void {
     }
     if(p.blend && p.blendOperation < 6) {
       k.blend = 1;
-      k.operation = p.blendOperation == 5 ? Maximum : p.blendOperation;  //(absolute difference: the larger)
+      k.operation = p.blendOperation == 5 ? u8(Maximum) : u8(p.blendOperation);  //(absolute difference: the larger)
       if(k.operation == Minimum || k.operation == Maximum) {
         k.sourceFactor = One, k.destinationFactor = One;
       } else {
@@ -343,25 +365,27 @@ auto GPU::settings(const GE::Look& look) -> void {
 }
 
 //A PRIM's settings: its target found (filled from memory first if need be), its pages owned, its texture on the
-//GPU, its pipeline and the rest worked out, for its primitives to draw with.
-auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> void {
+//GPU, its pipeline and the rest worked out, for its primitives to draw with. False where it can't be drawn here (the
+//GPU lost, no target for its frame buffer, rows past the target's (past VRAM's end, where the PSP's addresses run
+//round to its start, or past 512), or a texture the GE reads from memory as it draws, which the GPU can't have),
+//for the software renderer to draw; true for one that draws nothing too.
+auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& region) -> bool {
   this->ge = &ge;
   drawing = false;
-  if(!ready()) return;
+  auto& p = look.pixel;
+  if(!ready() || (look.textured && !p.clear && !held && !look.decoded)) return held.reset(), false;
   //(a long list's draws handed over as they come, so the GPU draws while the CPU goes on)
   if(recorded.commands.size() >= SubmitEvery) submit(ge);
-  auto& p = look.pixel;
   //(where it may draw: the scissor rectangle, or less, where its vertices reach, in 2D: draw.cpp)
   if(!p.stride || region.left > region.right || region.top > region.bottom || region.right < 0 || region.bottom < 0) {
-    return;
+    return held.reset(), true;
   }
+  Target* t = targetFor(p);
+  if(!t || region.bottom >= s32(t->height)) return held.reset(), false;
   s32 bottom = region.bottom;
-  Target* t = targetFor(p, std::min<u32>(bottom + 1, 512));
-  if(!t) return;
-  bottom = std::min<s32>(bottom, t->height - 1);
   s32 left = std::max(region.left, 0), top = std::max(region.top, 0);
   s32 right = std::min<s32>(region.right, t->stride - 1);
-  if(left > right || top > bottom) return;
+  if(left > right || top > bottom) return held.reset(), true;
   //Another target drawn on the GPU in the pages this PRIM draws in, or that fill this one from memory: its pixels
   //put in memory first (which may leave this one stale: below).
   u32 rowBytes = t->stride * t->bytes();
@@ -375,9 +399,20 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
     }
   }
   if(t->stale && t->drawn()) finish(ge);  //(what the GPU drew, then memory's changes over it)
-  if(!ready()) return;
+  if(!ready()) return held.reset(), false;
+  //(the colors filled afresh where memory's changed, the depth where memory's depth has: rows of it, or all of it
+  //for another depth buffer; neither replaces the other's newer pixels on the GPU)
   if(t->stale) t->rows = 0, t->stale = false;
-  if(u32(bottom + 1) > t->rows) fill(*t, t->rows, bottom + 1, p), t->rows = bottom + 1;
+  if(t->depthBuffer != p.depthBuffer || t->depthStride != p.depthStride) {
+    t->depthBuffer = p.depthBuffer, t->depthStride = p.depthStride, t->depthRows = 0;
+    t->depthChangedFrom = t->depthChangedTo = 0;
+  }
+  if(t->depthChangedFrom < t->depthChangedTo) {
+    fill(*t, t->depthChangedFrom, std::min(t->depthChangedTo, t->depthRows), p, 2);
+    t->depthChangedFrom = t->depthChangedTo = 0;
+  }
+  if(u32(bottom + 1) > t->rows) fill(*t, t->rows, bottom + 1, p, 1), t->rows = bottom + 1;
+  if(u32(bottom + 1) > t->depthRows) fill(*t, t->depthRows, bottom + 1, p, 2), t->depthRows = bottom + 1;
   target = t;
   this->through = through;
   filter = ge.commands[GE::TextureFilter];
@@ -387,10 +422,12 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   own(*t, left, top, right, bottom);
   t->version++;
   drawing = true;
+  return true;
 }
 
 //Vertices for the GPU, in the PRIM's draw: one with the last if its settings are the same.
 auto GPU::emit(const Vertex* vertices, u32 count) -> void {
+  if(recorded.vertices.size() + count > MostVertices) submit(*ge);
   if(recorded.states.empty() || !(recorded.states.back() == state)) recorded.states.push_back(state);
   u32 index = recorded.states.size() - 1, first = recorded.vertices.size();
   auto& commands = recorded.commands;
@@ -522,6 +559,21 @@ auto GPU::submit(GE& ge) -> void {
   if(!backend->submit(recorded)) lose();
   recorded.clear();
   statistics.submits++;
+  release();
+}
+
+//What's on the GPU and no longer wanted let go (the backend destroys it once the GPU has run what's recorded with
+//it): textures the GE has let go, and render-to-texture copies unused for CopyAge PRIMs. (Beyond MostCopies, the
+//copy unused longest goes as another is made: textureFor().)
+auto GPU::release() -> void {
+  for(auto texture = textures.begin(); texture != textures.end();) {
+    if(texture->second.decoded.expired()) backend->dropTexture(texture->second.id), texture = textures.erase(texture);
+    else texture++;
+  }
+  for(auto copy = copies.begin(); copy != copies.end();) {
+    if(uses - copy->second.used > CopyAge) backend->dropTexture(copy->second.texture), copy = copies.erase(copy);
+    else copy++;
+  }
 }
 
 //Everything drawn waited for, and the pixels the GPU drew put into memory's VRAM: each target's drawn rectangle read
@@ -579,11 +631,11 @@ auto GPU::finish(GE& ge) -> void {
   for(auto& t : targets) {
     t->left = 0, t->top = 0, t->right = -1, t->bottom = -1;
     if(t->rows) memory.watch(Memory::VRAMBase + t->address, t->rows * t->stride * t->bytes());
+    if(t->depthRows && t->depthStride) {
+      memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t->depthBuffer, t->depthRows * t->depthStride * 2);
+    }
   }
-  for(auto texture = textures.begin(); texture != textures.end();) {  //(those the GE has let go)
-    if(texture->second.decoded.expired()) backend->dropTexture(texture->second.id), texture = textures.erase(texture);
-    else texture++;
-  }
+  release();
 }
 
 //A watched page someone else changed: a target over it, filled from memory before it's next drawn into. (A page
@@ -592,6 +644,20 @@ auto GPU::written(GE& ge, u32 page) -> void {
   u32 base = Memory::VRAMBase / Memory::PageSize;
   if(page < base || page >= base + GE::VRAMPages) return;
   page -= base;
+  //A depth buffer's rows the change may be in (the fourth copy rearranges each 16 KiB: all of its 16 KiB's), to
+  //be filled again before the next draw; the rest of the GPU's depth is kept.
+  u32 block = page * Memory::PageSize & ~0x3fffu;
+  for(auto& t : targets) {
+    if(!t->depthRows || !t->depthStride) continue;
+    u32 rowBytes = t->depthStride * 2, low = t->depthBuffer, high = low + t->depthRows * rowBytes;
+    if(block + 0x4000 <= low || high <= block) continue;
+    u32 from = block > low ? (block - low) / rowBytes : 0;
+    u32 to = std::min<u32>((block + 0x4000 - low + rowBytes - 1) / rowBytes, t->depthRows);
+    if(t->depthChangedFrom < t->depthChangedTo) {
+      from = std::min(from, t->depthChangedFrom), to = std::max(to, t->depthChangedTo);
+    }
+    t->depthChangedFrom = from, t->depthChangedTo = to;
+  }
   if(owners[page]) return;
   u32 low = page * Memory::PageSize, high = low + Memory::PageSize;
   for(auto& t : targets) {
@@ -632,11 +698,12 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bo
   return true;
 }
 
-//Memory's VRAM replaced whole: what the GPU drew since the last finish put back first (memory's own serialize and
-//power have done that already, as they finish drawing), then every target filled afresh when next drawn into.
+//Memory's VRAM replaced whole (or another machine's: GE::setRenderer()): what the GPU drew since the last finish put
+//back first (memory's own serialize and power have done that already, as they finish drawing), then every target,
+//its colors and its depth, filled afresh when next drawn into.
 auto GPU::forget(GE& ge) -> void {
   finish(ge);
-  for(auto& t : targets) t->stale = true;
+  for(auto& t : targets) t->stale = true, t->depthRows = 0, t->depthChangedFrom = t->depthChangedTo = 0;
 }
 
 }

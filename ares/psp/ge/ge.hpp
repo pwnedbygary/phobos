@@ -509,12 +509,14 @@ struct GE {
   //puts them back in memory's VRAM (finish()): it marks them busy (Memory::busyPages), so anyone touching one waits
   //for that first (Memory::finishDrawing, settleAll()), as for the drawing threads' batches. written() hears of
   //every watched page someone changes (Memory::watch()), so that the renderer knows when its copy of a frame buffer
-  //is older than memory's. When ready() is false (the GPU lost) the software renderer draws. Whoever sets it takes
-  //it away before it goes, settled.
+  //is older than memory's. When ready() is false (the GPU lost) the software renderer draws; and a PRIM begin()
+  //refuses (the renderer can't draw it) is drawn by the software renderer, once the renderer has put back what it
+  //drew. It's set with setRenderer(), which has it forget any machine's VRAM it saw before, and taken away with it
+  //before it goes, settled.
   struct Renderer {
     virtual ~Renderer() = default;
     virtual auto ready() const -> bool = 0;
-    virtual auto begin(GE& ge, const Look& look, bool through, const Region& region) -> void = 0;
+    virtual auto begin(GE& ge, const Look& look, bool through, const Region& region) -> bool = 0;
     virtual auto triangle(const Vertex& a, const Vertex& b, const Vertex& c) -> void = 0;
     virtual auto sprite(const Job& job) -> void = 0;
     virtual auto point(const Vertex& at) -> void = 0;
@@ -529,6 +531,7 @@ struct GE {
     virtual auto holds(GE& ge, const Sampler& texture, u32 rows, u32 columns) -> bool = 0;
   };
   Renderer* renderer = nullptr;
+  auto setRenderer(Renderer* next) -> void;  //ge.cpp
   bool hardware = false;  //the primitive being drawn goes to the renderer (drawVertices())
   std::vector<LinePixel> hardwareLine;
 
