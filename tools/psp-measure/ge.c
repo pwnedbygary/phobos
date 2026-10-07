@@ -8,12 +8,16 @@
 //mapping. Those are round 2's (the first the GE had). Round 3 takes what they left open: lighting with normals
 //whose cosines are exact (plain diffuse, powered diffuse and the shine, with material, light and ambient levels),
 //color and fog stepped across primitives, 3D edges near the pixel middle, a receding wall's texels, round 2's 3D
-//sprite taken apart, curved surfaces, and the depth buffer's layout through VRAM's four copies. Each round is
-//picked from the menu (main.c).
+//sprite taken apart, curved surfaces, and the depth buffer's layout through VRAM's four copies. Round 4 records what
+//Phobos's core drew by rules of its own in part 29: which pixels lines light (ends at every sixteenth, short lines,
+//strips' joints, anti-aliasing), colors, depth and texels along them, lines in 3D and cut at the near plane; which
+//bounding boxes the GE takes to be in sight; and compressed (DXT) textures' colors, alphas and block order. Each
+//round is picked from the menu (main.c).
 //
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/ge/<test>.bin: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's pixels in the
-//low half). manifest.txt (round 2) and manifest3.txt (round 3) say what each test drew. A test whose file is there
+//low half). manifest.txt (round 2), manifest3.txt (round 3) and manifest4.txt (round 4) say what each test drew. A
+//test whose file is there
 //is skipped, and one that stops the PSP is given up on, as results.c has it. The program computes nothing: the host
 //runs the same program in Phobos's core (tests/psp/measure.cpp) and compares the files.
 
@@ -1288,6 +1292,414 @@ static void round3(void) {
   }
 }
 
+//---- round 4: lines, bounding boxes and compressed textures (docs/psp-core.md, part 29), which Phobos's core draws
+//by rules pspautotests' recordings settle only in part
+
+//-- lines
+
+//In cell (i, j) of the target's 16x16 cells, a line from i and j sixteenths past the cell's pixel (sx, sy) to
+//(dx, dy) pixels further, or (reversed) from there back: both ends' places in their pixels at once, for which pixels
+//a line lights at its ends and along it.
+static void lineCells(const char* name, float sx, float sy, float dx, float dy, int reversed, int smooth) {
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  if(smooth) {  //anti-aliased, white blended over black by its alpha
+    sceGuEnable(GU_LINE_SMOOTH);
+    sceGuEnable(GU_BLEND);
+    sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+  }
+  FloatVertex* v = sceGuGetMemory(256 * 2 * sizeof(FloatVertex));
+  for(int cell = 0; cell < 256; cell++) {
+    float x = (cell & 15) * 16 + sx + (cell & 15) / 16.0f, y = (cell >> 4) * 16 + sy + (cell >> 4) / 16.0f;
+    FloatVertex a = {0, 0, 0xffffffff, x, y, 0}, b = {0, 0, 0xffffffff, x + dx, y + dy, 0};
+    v[cell * 2] = reversed ? b : a;
+    v[cell * 2 + 1] = reversed ? a : b;
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType, 512, 0, v);
+  if(smooth) sceGuDisable(GU_LINE_SMOOTH);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Lines shorter than two pixels: in row k of the 16x16 cells, the direction k * 22.5 degrees; in column n, the length
+//(n + 1) / 8 pixels; each from 5/16 and 11/16 into the cell's pixel (8, 8).
+static void shortLines(const char* name) {
+  static const float directions[16][2] = {
+    {1, 0}, {0.92388f, 0.38268f}, {0.70711f, 0.70711f}, {0.38268f, 0.92388f}, {0, 1}, {-0.38268f, 0.92388f},
+    {-0.70711f, 0.70711f}, {-0.92388f, 0.38268f}, {-1, 0}, {-0.92388f, -0.38268f}, {-0.70711f, -0.70711f},
+    {-0.38268f, -0.92388f}, {0, -1}, {0.38268f, -0.92388f}, {0.70711f, -0.70711f}, {0.92388f, -0.38268f},
+  };
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  FloatVertex* v = sceGuGetMemory(256 * 2 * sizeof(FloatVertex));
+  for(int cell = 0; cell < 256; cell++) {
+    float length = ((cell & 15) + 1) / 8.0f;
+    float x = (cell & 15) * 16 + 8 + 5 / 16.0f, y = (cell >> 4) * 16 + 8 + 11 / 16.0f;
+    const float* d = directions[cell >> 4];
+    v[cell * 2] = (FloatVertex){0, 0, 0xffffffff, x, y, 0};
+    v[cell * 2 + 1] = (FloatVertex){0, 0, 0xffffffff, x + d[0] * length, y + d[1] * length, 0};
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType, 512, 0, v);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Line strips added up (each pixel drawn adds 1 to it): in cell (i, j) a strip of three lines whose two joints sit i
+//and j sixteenths past pixel corners, turning sharply and gently, so a pixel lit twice shows 2.
+static void lineStrips(const char* name) {
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  sceGuEnable(GU_BLEND);
+  sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xffffff, 0xffffff);
+  for(int cell = 0; cell < 256; cell++) {
+    float i = (cell & 15) / 16.0f, j = (cell >> 4) / 16.0f, x = (cell & 15) * 16, y = (cell >> 4) * 16;
+    FloatVertex* v = sceGuGetMemory(4 * sizeof(FloatVertex));
+    unsigned int one = 0xff010101;
+    v[0] = (FloatVertex){0, 0, one, x + 1.5f, y + 2.25f, 0};
+    v[1] = (FloatVertex){0, 0, one, x + 11 + i, y + 5 + j, 0};
+    v[2] = (FloatVertex){0, 0, one, x + 3 + j, y + 9 + i, 0};
+    v[3] = (FloatVertex){0, 0, one, x + 13.75f, y + 14.5f, 0};
+    sceGuDrawArray(GU_LINE_STRIP, FloatVertexType, 4, 0, v);
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Colors along lines: in band k (16 rows each), a level line at row k * 16 + 4 (through its pixels' middles) and a
+//slanting one from row k * 16 + 6.25 down 7.5 rows, each over ramps[k]'s width with ramps[k]'s levels (rampColor):
+//how the GE steps colors along a line.
+static void lineColors(const char* name) {
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  FloatVertex* v = sceGuGetMemory(16 * 4 * sizeof(FloatVertex));
+  for(int band = 0; band < 16; band++) {
+    const Ramp* r = &ramps[band];
+    unsigned int from = rampColor(r->from), to = rampColor(r->to);
+    float y = band * 16;
+    v[band * 4] = (FloatVertex){0, 0, from, 0, y + 4.5f, 0};
+    v[band * 4 + 1] = (FloatVertex){0, 0, to, r->width, y + 4.5f, 0};
+    v[band * 4 + 2] = (FloatVertex){0, 0, from, 0.25f, y + 6.25f, 0};
+    v[band * 4 + 3] = (FloatVertex){0, 0, to, r->width - 0.75f, y + 13.75f, 0};
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType, 64, 0, v);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Depth along lines (through mode, the depth written, the depth buffer read through VRAM's fourth copy, which reads it
+//in order: round 3's depth-layout-3): in band k, a level line and a slanting one as lineColors draws, their depths
+//from 0 to 65535, 1000 to 1100, 65535 to 0 and the like (depthRamps).
+static void lineDepth(const char* name) {
+  static const float depthRamps[16][2] = {  //(70007: past the 16 bits through mode's depths have)
+    {0, 65535}, {65535, 0}, {1000, 1100}, {1100, 1000}, {0, 255}, {255, 0}, {32768, 32769}, {100, 200},
+    {12345, 54321}, {54321, 12345}, {0, 1}, {1, 0}, {40000, 40255}, {65280, 65535}, {7, 70007}, {30000, 30016},
+  };
+  if(!beginTest(name)) return;
+  for(int n = 0; n < Stride * 256; n++) VRAM16[Depth / 2 + n] = 0;
+  start(GU_PSM_8888);
+  sceGuDepthRange(65535, 0);
+  sceGuEnable(GU_DEPTH_TEST);
+  sceGuDepthFunc(GU_ALWAYS);
+  sceGuDepthMask(GU_FALSE);
+  FloatVertex* v = sceGuGetMemory(16 * 4 * sizeof(FloatVertex));
+  for(int band = 0; band < 16; band++) {
+    float y = band * 16, width = ramps[band].width, from = depthRamps[band][0], to = depthRamps[band][1];
+    v[band * 4] = (FloatVertex){0, 0, 0xffffffff, 0, y + 4.5f, from};
+    v[band * 4 + 1] = (FloatVertex){0, 0, 0xffffffff, width, y + 4.5f, to};
+    v[band * 4 + 2] = (FloatVertex){0, 0, 0xffffffff, 0.25f, y + 6.25f, from};
+    v[band * 4 + 3] = (FloatVertex){0, 0, 0xffffffff, width - 0.75f, y + 13.75f, to};
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType, 64, 0, v);
+  finishList();
+  volatile unsigned short* depths = (volatile unsigned short*)(0x44000000 + 3 * 0x200000 + Depth);
+  for(int y = 0; y < 256; y++) {
+    for(int x = 0; x < 256; x++) pixels[y * 256 + x] = depths[y * Stride + x];
+  }
+  save(name, pixels, 256 * 256 * 4);
+}
+
+//Texels along lines: the texture (texel (x, y) is x | y << 8 | 0x80 << 16), replace, across lines: in band k, a level
+//line from texel row k * 16 + 4 over 256 texels on ramps[k]'s width, and a slanting one from texel (0, 0) to
+//(255, 255) over it: which texel each pixel takes along a line.
+static void lineTexels(const char* name) {
+  if(!beginTest(name)) return;
+  fillTexture(texelXY);
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  useTexture(GU_TFX_REPLACE, GU_TCC_RGB);
+  FloatVertex* v = sceGuGetMemory(16 * 4 * sizeof(FloatVertex));
+  for(int band = 0; band < 16; band++) {
+    float y = band * 16, width = ramps[band].width, row = band * 16 + 4.5f;
+    v[band * 4] = (FloatVertex){0, row, 0xffffffff, 0, y + 4.5f, 0};
+    v[band * 4 + 1] = (FloatVertex){256, row, 0xffffffff, width, y + 4.5f, 0};
+    v[band * 4 + 2] = (FloatVertex){0, 0, 0xffffffff, 0.25f, y + 6.25f, 0};
+    v[band * 4 + 3] = (FloatVertex){256, 256, 0xffffffff, width - 0.75f, y + 13.75f, 0};
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType, 64, 0, v);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Lines in 3D (identity matrices; begin3D's viewport puts x and y on the target's pixels): in cell (i, j) a shallow
+//line from i and j sixteenths past the cell's pixel (4, 4), its colors red to blue and its z from 0.5 to -0.5;
+//and, in the bottom right, lines under the lens that reach past the near plane and are cut there.
+static void lines3D(const char* name) {
+  if(!beginTest(name)) return;
+  start3D(&identity, 1);
+  FloatVertex* v = sceGuGetMemory(256 * 2 * sizeof(FloatVertex));
+  for(int cell = 0; cell < 256; cell++) {
+    float x = (cell & 15) * 16 + 4 + (cell & 15) / 16.0f, y = (cell >> 4) * 16 + 4 + (cell >> 4) / 16.0f;
+    v[cell * 2] = (FloatVertex){0, 0, 0xff0000ff, ndcX(x), ndcY(y), 0.5f};
+    v[cell * 2 + 1] = (FloatVertex){0, 0, 0xffff0000, ndcX(x + 7.5f), ndcY(y + 2.25f), -0.5f};
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType3D, 512, 0, v);
+  finishList();
+  begin3D(&lens, 1);
+  static const float nearEnds[4] = {-0.4f, -0.3f, 0, 0.5f};  //past the lens's near plane (z above -0.5)
+  FloatVertex* cut = sceGuGetMemory(8 * sizeof(FloatVertex));
+  for(int n = 0; n < 4; n++) {  //from z -1 (w 1) to nearer than the near plane, behind the camera at the last
+    cut[n * 2] = (FloatVertex){0, 0, 0xff00ff00, 0.1f + n * 0.2f, -0.5f, -1};
+    cut[n * 2 + 1] = (FloatVertex){0, 0, 0xffff00ff, 0.1f + n * 0.2f + 0.3f, -0.9f, nearEnds[n]};
+  }
+  sceGuDrawArray(GU_LINES, FloatVertexType3D, 8, 0, cut);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//-- bounding boxes
+
+typedef struct { float x, y, z; } Corner;
+enum { CornerType3D = GU_VERTEX_32BITF | GU_TRANSFORM_3D, CornerTypeThrough = GU_VERTEX_32BITF | GU_TRANSFORM_2D };
+
+//Box k's corners (count of them, mostly 8) for bbox below, its vertex type, the scissor rectangle it's tested
+//against and whether DEPTH_CLIP_ENABLE is on. The target's 3D space is begin3D's, x and y from -1 to 1 across its
+//256x256 pixels (ndcX, ndcY), the scissor rectangle a third of it, pixels 64-191 each way, unless the case says.
+typedef struct { int count, through, clamp, lens; int left, top, right, bottom; Corner corners[8]; } Box;
+
+static void boxCorners(Box* box, float x0, float y0, float z0, float x1, float y1, float z1) {
+  for(int n = 0; n < 8; n++) {
+    box->corners[n] = (Corner){n & 1 ? x1 : x0, n & 2 ? y1 : y0, n & 4 ? z1 : z0};
+  }
+  box->count = 8;
+}
+
+//The 256 cases: rows 0-1, a single vertex either side of the scissor rectangle's left and right edges (in pixels,
+//from 16 to 0 sixteenths short of a pixel past them, to 16 past), and rows 2-3 its top and bottom; row 4, boxes
+//inside, partly past each edge, and wholly past each; row 5, boxes past different edges at once (around the view
+//among them); row 6, past the near and far planes, with DEPTH_CLIP_ENABLE on and off; row 7, under the lens,
+//behind the camera (w below zero) wholly and partly; row 8, in through mode; rows 9-15, random boxes.
+static unsigned int boxRandom = 0x13579bdf;
+static float boxRange(float low, float high) {
+  boxRandom = boxRandom * 1103515245 + 12345;
+  return low + (high - low) * ((boxRandom >> 8) & 0xffff) / 65535.0f;
+}
+static void makeBox(int k, Box* box) {
+  int row = k >> 4, n = k & 15;
+  box->through = 0, box->clamp = 1, box->lens = 0;
+  box->left = 64, box->top = 64, box->right = 191, box->bottom = 191;
+  float offsets[16] = {-1.0f, -0.9375f, -0.5f, -0.0625f, 0, 0.0625f, 0.5f, 0.9375f, 1, 1.0625f, 1.5f, 2, -2, -1.5f,
+                       -1.0625f, 3};
+  float off = offsets[n];
+  box->count = 1;
+  if(row == 0) box->corners[0] = (Corner){ndcX(64 - 1 + off), ndcY(128), 0};       //about left - 1
+  else if(row == 1) box->corners[0] = (Corner){ndcX(192 + off), ndcY(128), 0};     //about right + 1 (192)
+  else if(row == 2) box->corners[0] = (Corner){ndcX(128), ndcY(64 - 1 + off), 0};
+  else if(row == 3) box->corners[0] = (Corner){ndcX(128), ndcY(192 + off), 0};
+  else if(row == 4) {
+    static const float boxes[16][4] = {  //pixels: left, top, right, bottom
+      {100, 100, 150, 150}, {40, 100, 70, 150}, {180, 100, 220, 150}, {100, 40, 150, 70}, {100, 180, 150, 220},
+      {10, 100, 60, 150}, {196, 100, 250, 150}, {100, 10, 150, 60}, {100, 196, 150, 250}, {0, 0, 62, 62},
+      {194, 194, 255, 255}, {62, 62, 63, 63}, {192.5f, 100, 193, 101}, {62.5f, 100, 62.9f, 101},
+      {100, 62.9f, 101, 62.95f}, {64, 64, 191, 191},
+    };
+    const float* b = boxes[n];
+    boxCorners(box, ndcX(b[0]), ndcY(b[1]), -0.5f, ndcX(b[2]), ndcY(b[3]), 0.5f);
+  } else if(row == 5) {
+    static const float boxes[16][4] = {
+      {0, 0, 255, 30}, {0, 225, 255, 255}, {0, 0, 30, 255}, {225, 0, 255, 255}, {0, 0, 255, 255},
+      {20, 20, 236, 236}, {10, 128, 245, 129}, {128, 10, 129, 245}, {-500, -500, 800, 800}, {0, 0, 60, 255},
+      {-300, 30, 600, 50}, {30, -300, 50, 600}, {-300, 200, 600, 240}, {200, -300, 240, 600}, {0, 0, 255, 63},
+      {50, 50, 70, 70},
+    };
+    const float* b = boxes[n];
+    boxCorners(box, ndcX(b[0]), ndcY(b[1]), -0.5f, ndcX(b[2]), ndcY(b[3]), 0.5f);
+  } else if(row == 6) {
+    static const float depths[8][2] = {  //z near and far (w 1): -w to w is in reach
+      {-0.5f, 0.5f}, {-3, -1.5f}, {1.5f, 3}, {-3, 0}, {0, 3}, {-1.0001f, -1.00005f}, {-1, -1}, {1, 1},
+    };
+    boxCorners(box, ndcX(100), ndcY(100), depths[n & 7][0], ndcX(150), ndcY(150), depths[n & 7][1]);
+    box->clamp = n < 8;
+  } else if(row == 7) {
+    static const float depths[16][2] = {  //under the lens, w = -z: below 0 behind the camera
+      {-2, -3}, {0.5f, 2}, {-0.25f, -3}, {1, 3}, {-3, 3}, {0.4f, 0.6f}, {-0.6f, -0.4f}, {-0.6f, 2},
+      {-2, -3}, {0.5f, 2}, {-0.25f, -3}, {1, 3}, {-3, 3}, {0.4f, 0.6f}, {-0.6f, -0.4f}, {-0.6f, 2},
+    };
+    float size = n < 8 ? 0.2f : 3.0f;  //small around the middle, or big
+    boxCorners(box, -size, -size, depths[n][0], size, size, depths[n][1]);
+    box->lens = 1;
+  } else if(row == 8) {
+    static const float boxes[16][4] = {
+      {100, 100, 150, 150}, {40, 100, 70, 150}, {180, 100, 220, 150}, {100, 40, 150, 70}, {100, 180, 150, 220},
+      {63, 100, 63.9375f, 101}, {62.9375f, 100, 63, 101}, {192, 100, 193, 101}, {192.0625f, 100, 193, 101},
+      {100, 63, 101, 63.9375f}, {100, 192.0625f, 101, 193}, {0, 0, 255, 255}, {-100, 0, 300, 30},
+      {500, 500, 600, 600}, {-600, -600, -500, -500}, {191, 191, 192, 192},
+    };
+    const float* b = boxes[n];
+    boxCorners(box, b[0], b[1], 0, b[2], b[3], 0);
+    box->through = 1;
+  } else {
+    float x0 = boxRange(-1.5f, 1.5f), y0 = boxRange(-1.5f, 1.5f), z0 = boxRange(-1.5f, 1.5f);
+    boxCorners(box, x0, y0, z0, x0 + boxRange(0, 1.2f), y0 + boxRange(0, 1.2f), z0 + boxRange(0, 1.2f));
+    box->clamp = n & 1;
+  }
+}
+
+//Bounding boxes: in cell k (16x16 pixels), box k's corners tested (sceGuBeginObject, which sends BOUNDING_BOX and a
+//BJUMP, and sceGuEndObject, which aims it), and the cell filled in white only if the GE took the box to be in sight.
+//(Everything sceGuGetMemory hands out is taken before sceGuBeginObject: it lets the GE run on, up to a BJUMP not
+//aimed yet.)
+static void boundingBoxes(const char* name) {
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  boxRandom = 0x13579bdf;
+  for(int k = 0; k < 256; k++) {
+    Box box;
+    makeBox(k, &box);
+    begin3D(box.lens ? &lens : &identity, box.clamp);
+    sceGuDisable(GU_DEPTH_TEST);
+    Corner* corners = sceGuGetMemory(8 * sizeof(Corner));
+    memcpy(corners, box.corners, sizeof(box.corners));
+    Vertex* v = sceGuGetMemory(2 * sizeof(Vertex));
+    short x = (k & 15) * 16, y = (k >> 4) * 16;
+    v[0] = (Vertex){0, 0, 0xffffffff, x, y, 0, 0};
+    v[1] = (Vertex){0, 0, 0xffffffff, x + 16, y + 16, 0, 0};
+    sceGuSendCommandi(0xd4, box.top << 10 | box.left);     //SCISSOR1
+    sceGuSendCommandi(0xd5, box.bottom << 10 | box.right); //SCISSOR2
+    sceGuBeginObject(box.through ? CornerTypeThrough : CornerType3D, box.count, 0, corners);
+    sceGuSendCommandi(0xd4, 0);
+    sceGuSendCommandi(0xd5, 255 << 10 | 511);
+    sceGuDrawArray(GU_SPRITES, VertexType, 2, 0, v);
+    sceGuEndObject();
+    finishList();
+  }
+  saveTarget(name, 256, 256, 0);
+}
+
+//-- compressed textures (DXT)
+
+static unsigned char __attribute__((aligned(16))) blocks[64 * 64];  //a 64x64 texture's blocks, or more of DXT1's
+
+static unsigned int dxtRandom;
+static unsigned int dxtNext(void) {
+  dxtRandom = dxtRandom * 1103515245 + 12345;
+  return dxtRandom >> 8;
+}
+
+//A 64x64 texture in format psm (8, 9 or 10) of 256 blocks of numbers from a fixed sequence (every 8th block's colors,
+//and every 8th + 1's DXT5 alphas, made equal), drawn 1:1 at the target's top left with replace, for its colors, and
+//over white at (128, 0), blended by its alpha (white times the texel's alpha), for its alpha.
+static void dxtColors(const char* name, int psm) {
+  if(!beginTest(name)) return;
+  int blockBytes = psm == GU_PSM_DXT1 ? 8 : 16;
+  dxtRandom = 0x2468ace0 + psm;
+  for(int n = 0; n < 256 * blockBytes; n++) blocks[n] = dxtNext();
+  for(int n = 0; n < 256; n++) {
+    unsigned char* b = blocks + n * blockBytes;
+    if(n % 8 == 0) b[6] = b[4], b[7] = b[5];
+    if(psm == GU_PSM_DXT5 && n % 8 == 1) b[15] = b[14];
+  }
+  sceKernelDcacheWritebackAll();
+  for(int y = 0; y < 64; y++) {
+    for(int x = 0; x < 256; x++) VRAM[Target / 4 + y * Stride + x] = x >= 128 ? 0xffffffff : 0;
+  }
+  start(GU_PSM_8888);
+  sceGuEnable(GU_TEXTURE_2D);
+  sceGuTexMode(psm, 0, 0, 0);
+  sceGuTexImage(0, 64, 64, 64, blocks);
+  sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
+  sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+  sceGuTexWrap(GU_CLAMP, GU_CLAMP);
+  sprite(0, 0, 64, 64, 0, 0, 64, 64, 0xffffffff);
+  sceGuEnable(GU_BLEND);
+  sceGuBlendFunc(GU_ADD, GU_FIX, GU_SRC_ALPHA, 0, 0);
+  sprite(128, 0, 192, 64, 0, 0, 64, 64, 0xffffffff);
+  finishList();
+  saveTarget(name, 256, 64, 0);
+}
+
+//The blocks' order: a 32x32 DXT1 texture of solid blocks, block n's color n (red n * 8 in 565, green n >> 5), drawn
+//with TEXTURE_BUFFER_WIDTH0 32 (at the top left), 64 (at (64, 0)), 36 (at (128, 0): not whole blocks of 8 bytes'
+//16-byte rows), and swizzled (at (192, 0)): where each block lands, which tells how the GE walks them.
+static void dxtLayout(const char* name) {
+  if(!beginTest(name)) return;
+  for(int n = 0; n < 512; n++) {
+    unsigned char* b = blocks + n * 8;
+    unsigned int color = (n & 31) << 11 | (n >> 5 & 63) << 5;
+    b[0] = b[1] = b[2] = b[3] = 0;
+    b[4] = color, b[5] = color >> 8, b[6] = 0, b[7] = 0;
+  }
+  sceKernelDcacheWritebackAll();
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  sceGuEnable(GU_TEXTURE_2D);
+  sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGB);
+  sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+  sceGuTexWrap(GU_CLAMP, GU_CLAMP);
+  static const int widths[4] = {32, 64, 36, 32};
+  for(int k = 0; k < 4; k++) {
+    sceGuTexMode(GU_PSM_DXT1, 0, 0, k == 3);
+    sceGuTexImage(0, 32, 32, widths[k], blocks);
+    sprite(k * 64, 0, k * 64 + 32, 32, 0, 0, 32, 32, 0xffffffff);
+  }
+  finishList();
+  saveTarget(name, 256, 32, 0);
+}
+
+static void writeManifest4(void) {
+  char path[320];
+  snprintf(path, sizeof(path), "%s/manifest4.txt", folder);
+  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if(file < 0) return;
+  static const char text[] =
+    "psp-measure's GE tests, round 4 (tools/psp-measure/ge.c in Phobos says what each test draws): each .bin is the\n"
+    "target's pixels after one test, a little-endian 32-bit word each, row by row, 256x256; but lines-depth, the\n"
+    "depth buffer's 256x256 16-bit values (low half) read through VRAM's fourth copy; dxt1/3/5-colors 256x64 (the\n"
+    "texture's colors at the left, white blended by its alpha from x 128); dxt-layout 256x32.\n"
+    "lines-*: lines in through mode (lines-3d through the matrices), in 16x16 cells at every sixteenth of a pixel.\n"
+    "bbox: 256 cells, each white if the GE took its bounding box to be in sight (the cases are in ge.c).\n"
+    "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
+  sceIoWrite(file, text, sizeof(text) - 1);
+  sceIoClose(file);
+}
+
+static void round4(void) {
+  writeManifest4();
+  lineCells("lines-shallow", 4, 4, 7.5f, 2.25f, 0, 0);
+  lineCells("lines-shallow-reversed", 4, 4, 7.5f, 2.25f, 1, 0);
+  lineCells("lines-steep", 4, 4, 2.25f, 7.5f, 0, 0);
+  lineCells("lines-steep-reversed", 4, 4, 2.25f, 7.5f, 1, 0);
+  lineCells("lines-diagonal", 4, 4, 6, 6, 0, 0);
+  lineCells("lines-rising", 4, 10, 7, -5.5f, 0, 0);
+  lineCells("lines-level", 4, 6, 7.5f, 0, 0, 0);
+  lineCells("lines-upright", 6, 4, 0, 7.5f, 0, 0);
+  lineCells("lines-smooth", 4, 4, 7.5f, 2.25f, 0, 1);
+  shortLines("lines-short");
+  lineStrips("lines-strips");
+  lineColors("lines-colors");
+  lineDepth("lines-depth");
+  lineTexels("lines-texels");
+  lines3D("lines-3d");
+  boundingBoxes("bbox");
+  dxtColors("dxt1-colors", GU_PSM_DXT1);
+  dxtColors("dxt3-colors", GU_PSM_DXT3);
+  dxtColors("dxt5-colors", GU_PSM_DXT5);
+  dxtLayout("dxt-layout");
+}
+
 //---- the rounds
 
 static int guReady;  //whether sceGuInit has set the GE up: once, on the first round, kept until geEnd
@@ -1361,9 +1773,9 @@ static void round2(void) {
   controllerTiming("controller-timing");
 }
 
-//A round of the GE's tests (2 or 3) into results/ge. Returns 0 if something couldn't be written.
+//A round of the GE's tests (2, 3 or 4) into results/ge. Returns 0 if something couldn't be written.
 int geRound(int round) {
-  if(round != 2 && round != 3) return 1;
+  if(round < 2 || round > 4) return 1;
   if(!guReady) {
     sceGuInit();
     guReady = 1;
@@ -1371,7 +1783,8 @@ int geRound(int round) {
   useFolder("ge");
   failed = 0;
   if(round == 2) round2();
-  else round3();
+  else if(round == 3) round3();
+  else round4();
   return !failed;
 }
 

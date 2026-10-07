@@ -38,6 +38,7 @@ static unsigned int choose(unsigned int buttons) {
 enum { Vfpu, Ge, Afresh, Leave };
 typedef struct { const char* text; int what, round; const char* note; } Choice;
 static const Choice choices[] = {
+  {"Round 4: the GE's lines, boxes and DXT (about 4 MB)", Ge, 4, 0},
   {"Round 3: the VFPU and the FPU (about 6 MB)", Vfpu, 3, 0},
   {"Round 3: the GE (about 7 MB)", Ge, 3, 0},
   {"The FPU probes (one may switch the PSP off: see below)", Vfpu, 4,
@@ -101,6 +102,7 @@ int main(int argc, char** argv) {
     vfpuRound(4);
     geRound(2);
     geRound(3);
+    geRound(4);
     geEnd();
     sceKernelExitGame();
     return 0;

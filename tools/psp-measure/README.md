@@ -33,11 +33,12 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    `/opt/pspdev`, with `psp-config` on the PATH): `make` gives `EBOOT.PBP`. `make SMOKE=1` gives a quick version for
    trying in an emulator first, PPSSPP's PPSSPPHeadless, with `-i` (its ARM64 JIT trips an assertion on one of
    round 3's recorder entries) and `--graphics=software`. It runs round 3's VFPU and FPU tests (the big ones cut
-   short), the FPU probes and the GE's tests at once, then leaves; its results say nothing about a PSP. Run
-   `make clean` when switching between the two.
+   short), the FPU probes and the GE's tests (rounds 2-4) at once, then leaves; its results say nothing about a
+   PSP. Run `make clean` when switching between the two.
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
+   - Round 4: the GE's lines, boxes and DXT (about 4 MB)
    - Round 3: the VFPU and the FPU (about 6 MB)
    - Round 3: the GE (about 7 MB)
    - The FPU probes
@@ -166,6 +167,22 @@ PSP"), one 256x256 picture per case but the depth buffer's:
 - **The depth buffer's layout:** every pixel of a 256x64 area given a depth of its own, read back through each of
   VRAM's four copies (`depth-layout-0` to `-3`, the whole depth buffer's 512x256 values each). Last, as no program
   here has read VRAM's other copies on a PSP before.
+
+Round 4 (about 4 MB, `manifest4.txt`) records what the core's part 29 drew by rules of its own, where
+pspautotests' recordings settle only part (docs/psp-core.md, part 29):
+
+- **Lines:** in 16x16 cells, lines with both ends at every sixteenth of a pixel, shallow, steep, diagonal, rising,
+  level and upright, the first two drawn backwards too, and anti-aliased over black (`lines-*`); lines shorter than
+  two pixels in 16 directions (`lines-short`); strips added up, so a pixel lit twice shows 2 (`lines-strips`);
+  colors, depths (through VRAM's fourth copy) and texels along lines (`lines-colors`, `-depth`, `-texels`); lines
+  in 3D with sub-pixel ends, and cut at the near plane (`lines-3d`). pspautotests' `gpu/exact/lines` checked the
+  PSP's lines by CRCs the core's rule doesn't meet; these are the pixels.
+- **Bounding boxes:** 256 boxes, each filling its cell only if the GE took it to be in sight (`bbox`): single
+  vertices by sixteenths around the scissor rectangle's edges, boxes past each edge, past different edges at once
+  (around the view among them), past the near and far planes with `GU_CLIP_PLANES` on and off, behind the camera,
+  in through mode, and random ones.
+- **DXT textures:** 256 random blocks each of DXT1, DXT3 and DXT5, their colors and alphas (`dxt*-colors`), and the
+  blocks' order with buffer widths of 32, 64 and 36 and swizzling on (`dxt-layout`).
 
 ### How the GE's comparison works
 
