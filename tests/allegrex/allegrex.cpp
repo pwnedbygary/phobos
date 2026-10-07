@@ -783,7 +783,8 @@ auto matchesInterpreter() -> void {
       case 26: word = random(2) ? mthi(s) : mtlo(s); break;
       case 27: word = random(2) ? seb(d, t) : seh(d, t); break;
       case 28: word = random(2) ? max(d, s, t) : min(d, s, t); break;
-      // ones the recompiler leaves to the interpreter (add, addi and sub may overflow, which ends the program)
+      // ones that leave some inputs to the interpreter (add, addi and sub may overflow, which ends the program;
+      // division by zero and by -1) or the whole instruction (bitrev)
       case 29: word = random(2) ? addi(d, s, immediate) : add(d, s, t); break;
       case 30: word = sub(d, s, t); break;
       case 31: word = random(2) ? mult(s, t) : multu(s, t); break;
@@ -794,6 +795,8 @@ auto matchesInterpreter() -> void {
       case 36: {
         uint32_t lsb = random(32), size = 1 + random(32 - lsb);
         word = random(2) ? ext(d, s, lsb, size) : ins(d, s, lsb, size);
+        // now and then fields that run past bit 31, or an ins whose top is below its bottom
+        if(!random(4)) word = (word & ~0xffc0u) | random(32) << 11 | random(32) << 6;
         break;
       }
       case 37: word = lw(d, wordOffset, s7); break;

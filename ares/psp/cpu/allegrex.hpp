@@ -500,7 +500,10 @@ struct Allegrex {
 
     //recompiler-ipu.cpp
     auto emitInstruction(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
-    auto emitSPECIAL(u32 instruction) -> bool;
+    auto emitSPECIAL(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitSPECIAL3(u32 instruction) -> bool;
+    auto emitMultiply(u32 instruction, bool isSigned, s32 accumulate) -> void;
+    auto emitTrapping(u32 address, u32 instruction, u32 count, bool delaySlot, u32 rd, bool subtract) -> void;
     auto emitBranch(u32 address, u32 instruction, u32 count) -> bool;
     auto emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void;
     auto emitJump(u32 target) -> void;
