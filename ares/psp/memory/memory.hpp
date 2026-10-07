@@ -64,10 +64,42 @@ struct Memory {
   //hardware not emulated yet, so it's worth reporting.
   std::function<auto (u32 address, bool store) -> void> unmapped;
 
+  //Watched pages: memory someone must hear about the moment it's written. The GE keeps textures decoded (ge/
+  //texture.cpp), and a decoded copy is only good until its bytes change, by whoever changes them: the CPU, an HLE
+  //function, the GE drawing or copying. So the GE watches the pages its textures come from. One byte per 4 KiB
+  //page, numbered by the address's low 29 bits as the CPU's page table numbers them (VRAM by where its bytes are:
+  //its first copy's pages). changed() tells watchedWritten() of each watched page a change touches, and stops
+  //watching it.
+  //
+  //The CPU's compiled stores skip write() and changed() (they go straight through the page table), so whoever
+  //owns the CPU sets watching(), which watch() calls for each newly watched page: the owner then sends compiled
+  //stores to that page through write() from then on, as it does for pages holding compiled code. Without
+  //watching() nobody promises that, and the GE keeps nothing decoded (canWatch()).
+  std::vector<u8> watched;
+  u32 watchedPages = 0;  //how many are watched: none, and changed() needn't look
+  std::function<auto (u32 page) -> void> watching;
+  std::function<auto (u32 page) -> void> watchedWritten;
+
+  //VRAM while the GE's workers still draw into it (ge/threads.cpp: a list's last primitives go on being drawn while
+  //the CPU runs on): the pages they draw over (busyPages, of VRAM's 512) are theirs, and anyone else touching one
+  //(pointer(), behind every read, write and copy) first waits for them to finish (finishDrawing(), the GE's), as do
+  //serialize() and power(). The CPU's compiled loads and stores reach VRAM through its page table instead, so the GE
+  //only lets drawing go on that way when the CPU's owner has set vramGuard(), which takes the busy pages out of the
+  //CPU's page tables (busy) and puts them back (not).
+  bool vramBusy = false;
+  u64 busyPages[VRAMSize / PageSize / 64] = {};
+  std::function<auto () -> void> finishDrawing;
+  std::function<auto (bool busy) -> void> vramGuard;
+  auto vramPageBusy(u32 page) const -> bool { return busyPages[page >> 6] >> (page & 63) & 1; }
+
   //memory.cpp
   static auto vramOffset(u32 copy, u32 seen) -> u32;
   static auto vramSeen(u32 copy, u32 offset) -> u32;
   auto power(u32 ramSize = 32_MiB) -> void;
+  auto canWatch() const -> bool { return (bool)watching && !watched.empty(); }
+  auto watch(u32 address, u32 size) -> void;
+  auto unwatchAll() -> void;
+  auto pagesOf(u32 address, u32 size, u32& first, u32& last) const -> bool;
   auto serialize(serializer& s) -> void;
   auto pointer(u32 address, u32 size = 1) -> u8*;
   auto reaches(u32 address, u32 size) -> bool;

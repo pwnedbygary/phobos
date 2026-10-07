@@ -1,10 +1,20 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <bitset>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <functional>
+#include <list>
+#include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 //The GE (the "graphics engine"): the PSP's graphics chip.
@@ -158,7 +168,50 @@ struct GE {
     u32 address, bufferWidth, width, height, format;  //bufferWidth: texels from one row to the next
     bool swizzled, clampU, clampV, linear;
     u32 clutFormat, clutShift, clutMask, clutOffset;
+    const u32* decoded;  //its texels already decoded (Decoded), decodedWidth to a row; or none: read from memory
+    u32 decodedWidth;
+    u32 decodedRows;     //the rows the primitive may take texels from (draw.cpp), all of them decoded
   };
+
+  //A texture decoded: every texel inside it as 8888, exactly as texel() would read it from memory, so that drawing
+  //looks each up in one step instead of reading memory, unswizzling, widening and looking up the palette at every
+  //pixel (texture.cpp). It's good only while the memory it came from stays as it was, so the GE watches those
+  //pages (Memory::watch()), and a write to any of them, by anyone, throws it away.
+  struct TextureKey {
+    //everything texel() reads for a texel inside the texture, but how many rows; the palette's settings and
+    //contents (by its hash) only for palette indices, 0 otherwise
+    u32 address, bufferWidth, format, width, swizzled;  //width: the texels kept a row (at most 512)
+    u32 clutFormat, clutShift, clutMask, clutOffset;
+    u64 clutHash;
+    auto operator==(const TextureKey&) const -> bool = default;
+    struct Hash {
+      auto operator()(const TextureKey& k) const -> size_t {
+        u64 h = k.clutHash ^ u64(k.address) << 32 ^ k.bufferWidth << 20 ^ k.format << 16 ^ k.width << 4;
+        h ^= u64(k.swizzled) << 31 ^ u64(k.clutFormat) << 40 ^ u64(k.clutShift) << 44 ^ u64(k.clutMask) << 50;
+        h ^= u64(k.clutOffset) << 58;
+        h *= 0x9e37'79b9'7f4a'7c15ull;
+        return size_t(h ^ h >> 29);
+      }
+    };
+  };
+  struct Decoded {
+    TextureKey key;
+    u32 rows = 0;             //the texture's rows kept, from its top (at most 512): the most a primitive has reached
+    std::vector<u8> palette;  //for palette indices: the palette it was decoded with (clut, all of it)
+    u32 paletteChecked = 0;   //the palette's version (clutVersion) last found to be that palette
+    u32 firstPage = 0, lastPage = 0;  //the pages it came from (Memory::pagesOf())
+    std::list<Decoded*>::iterator place;  //where it is in the cache's list, the last used first
+    std::vector<u32> texels;  //key.width x rows
+  };
+  struct TextureCache {
+    std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
+    std::unordered_map<u32, std::vector<Decoded*>> pages;  //the decoded textures that came from each page
+    std::list<Decoded*> recent;                            //all of them, the last used first
+    std::shared_ptr<Decoded> last;                         //the last one found, looked at first
+    u64 bytes = 0;
+    u64 budget = TextureCacheBudget;                       //(tests may make it smaller)
+  };
+  static constexpr u64 TextureCacheBudget = 64 << 20;  //the texels kept, in bytes, before those unused longest go
 
   //The pixel pipeline's settings, gathered once a primitive (pixel.cpp).
   struct PixelState {
@@ -173,14 +226,68 @@ struct GE {
     s32 ditherMatrix[16];
     u32 logic, writeMask;  //writeMask: the frame buffer bits not to touch (MASK_COLOR, MASK_ALPHA)
     s32 left, top, right, bottom;  //the scissor rectangle and drawing region, inclusive
-    u32 low, high;  //the frame buffer bytes touched, for reporting the change
     bool depthRange, fog;  //3D only: the depth range test (MIN_Z to MAX_Z), and fog (FOG_ENABLE, not in clear mode)
     u32 minDepth, maxDepth, fogColor;
+  };
+
+  //Where a primitive may draw (draw.cpp): pixels inside left-right and top-bottom (inclusive).
+  struct Region { s32 left, top, right, bottom; };
+  struct Batch;  //(threads.cpp)
+
+  //What a primitive is drawn with, shared by the jobs it makes: the pixel pipeline's settings, and the texture
+  //with the texture function's (or none), all taken from the commands as the primitive met them.
+  struct Look {
+    PixelState pixel;
+    bool textured = false;
+    Sampler texture{};       //its filter (linear) is each job's own
+    u32 function = 0, environment = 0;  //TEXTURE_FUNCTION's bits 0-2, and TEXTURE_ENVIRONMENT_COLOR
+    bool withAlpha = false, doubled = false;
+    std::shared_ptr<Decoded> decoded;  //its texels, kept while a job may draw with them
+  };
+
+  //A primitive set up for drawing (draw.cpp): everything about it worked out once, so that any of its rows can be
+  //drawn on its own (raster.cpp), the same pixels with the same arithmetic as drawing it all at once would. Each
+  //kind keeps what its pixels are worked out from.
+  struct Job {
+    enum class Kind : u32 { Sprite, Triangle, Point } kind;
+    const Look* look;
+    s32 firstX, lastX, firstY, lastY;  //the pixels it may cover, inside the scissor rectangle
+    bool linear;                       //textured: filtered (TEXTURE_FILTER's choice for its size)
+    struct Sprite {
+      u32 z, color, specular, leftFog, rightFog;
+      s32 middle;                      //(sixteenths) where the fog's halves meet
+      bool turned, divided;            //divided: 3D, texture coordinates across the perspective
+      //2D: the coordinate running across x (u, or v when turned) and the one running down y, each from where it
+      //starts (in sixteenths), by a step a pixel
+      f64 columnFirst, columnStep, rowFirst, rowStep;
+      s32 columnStart, rowStart;
+      //3D: the corners' sixteenths, 1 / w across x, the coordinate across x over w, the one down y over w
+      s32 left, right, top, bottom;
+      f64 leftInverse, rightInverse, leftAcross, rightAcross, topDown, bottomDown;
+    } sprite;
+    struct Triangle {
+      s64 x[3], y[3];                  //the corners (sixteenths), turned clockwise
+      float total;                     //twice its area
+      bool flat, shines, perspective;
+      u32 flatColor, flatSpecular;
+      u32 color[3], specular[3];
+      float z[3], fog[3], u[3], v[3], q[3], w[3];
+      f64 uStart, uAcross, uDown, vStart, vAcross, vDown;  //2D texture coordinates, stepped from (startX, startY)
+      s64 startX, startY;
+    } triangle;
+    struct Point {
+      s32 x, y;
+      u32 z, color, specular, fog;
+      float u, v;
+    } point;
   };
 
   Memory& memory;
   u32 commands[256] = {};  //each command's last word
   u8 clut[1024] = {};      //the palette, as CLUT_LOAD copied it in: textures read it from here, not from memory
+  u64 clutHash = 0;        //its contents' hash, and a version that goes up whenever they change
+  u32 clutVersion = 0;
+  TextureCache textures;   //textures kept decoded (texture.cpp)
   Registers list;
   u32 vertexAddress = 0, indexAddress = 0;  //where the next vertex and index are read
   u32 signalWord = 0, finishWord = 0, endWord = 0;  //what made run() stop: the SIGNAL or FINISH before it, and the END
@@ -192,9 +299,9 @@ struct GE {
   //What's worth reporting: a command or mode not emulated yet, a list that went wrong. Each is reported once.
   std::function<auto (const std::string& text) -> void> log;
 
-  GE(Memory& memory) : memory(memory) {}
-
   //ge.cpp
+  GE(Memory& memory);
+  ~GE();
   auto power() -> void;
   auto note(const std::string& text) -> void;
   auto serialize(serializer& s) -> bool;
@@ -208,6 +315,7 @@ struct GE {
   //vertex.cpp
   auto vertexFormat() const -> VertexFormat;
   auto readVertex(u32 address, const VertexFormat& format) -> Vertex;
+  template<typename Read> auto readVertexWith(const Read& read, u32 address, const VertexFormat& format) -> Vertex;
   auto readIndex(u32 n, const VertexFormat& format) -> u32;
 
   //lighting.cpp
@@ -218,31 +326,112 @@ struct GE {
   auto transformState() const -> Transform;
   auto transform(Vertex& vertex, const Transform& t) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
-  auto clipTriangle(PixelState& pixel, Sampler* texture, const Transform& t, const Vertex& a, const Vertex& b,
-                    const Vertex& c, s32 facing) -> void;
+  auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
+                    s32 facing) -> void;
 
   //draw.cpp
+  auto lookFor(const PixelState& pixel, const Sampler* texture) const -> Look;
   auto primitive(u32 kind, u32 count) -> void;
+  auto submit(const Job& job) -> void;
+  auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
+  auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
+    -> void;
+  auto point(const Look& look, const Vertex& at) -> void;
   auto rectangle(PixelState& pixel, Sampler* texture, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(PixelState& pixel, Sampler* texture, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing,
                 bool perspective) -> void;
-  auto point(PixelState& pixel, Sampler* texture, const Vertex& at) -> void;
-  auto shade(PixelState& pixel, Sampler* texture, s32 x, s32 y, u32 z, u32 color, u32 specular, float u, float v,
-             u32 fog) -> void;
+
+  //raster.cpp
+  template<u32 Format> auto shadeAs(const Look& look, bool linear, s32 x, s32 y, u32 z, u32 color, u32 specular,
+                                    float u, float v, u32 fog) -> void;
+  template<u32 Format> auto spriteRows(const Job& job, s32 fromY, s32 toY) -> void;
+  template<u32 Format> auto triangleRows(const Job& job, s32 fromY, s32 toY) -> void;
+  template<u32 Format> auto rasterizeAs(const Job& job, s32 fromY, s32 toY) -> void;
+  auto rasterize(const Job& job, s32 fromY, s32 toY) -> void;
 
   //texture.cpp
   auto sampler() const -> Sampler;
   auto texel(const Sampler& texture, s32 u, s32 v) -> u32;
   auto sample(const Sampler& texture, float u, float v) -> u32;
+  auto sampleWith(const Sampler& texture, bool linear, float u, float v) -> u32;
+  struct TexelAxis { s32 first, second, fraction; };
+  static auto texelAxis(float coordinate, u32 size, bool clamp, bool linear) -> TexelAxis;
+  auto fetch(const Sampler& texture, s32 x, s32 y) -> u32;
+  auto filtered(const Sampler& texture, TexelAxis u, TexelAxis v) -> u32;
   auto textureFunction(u32 color, u32 texel) const -> u32;
+  auto combine(const Look& look, u32 color, u32 texel) const -> u32;
   auto loadClut() -> void;
+  auto paletteChanged() -> void;
+  auto textureBytes(const Sampler& texture, u32 rows, u32& low, u32& high) const -> void;
+  auto decode(Sampler& texture, const PixelState& pixel, const Region& region, u32 rows)
+    -> std::shared_ptr<Decoded>;
+  auto textureWritten(u32 page) -> void;
+  auto forget(Decoded* entry) -> void;
+  auto dropTextures() -> void;
 
   //pixel.cpp
   auto pixelState() const -> PixelState;
-  auto drawPixel(PixelState& pixel, s32 x, s32 y, u32 z, u32 color, u32 fog = 255) -> void;
+  template<u32 Format> auto drawPixelAs(const PixelState& pixel, s32 x, s32 y, u32 z, u32 color, u32 fog) -> void;
 
   //transfer.cpp
   auto transfer() -> void;
+
+  //threads.cpp
+  auto setThreads(u32 count) -> void;
+  auto flush() -> void;
+  auto launch(bool returning) -> void;
+  auto startBands(Batch& batch) -> void;
+  auto drew(Batch& batch) -> bool;
+  auto settle() -> void;
+  auto clearBatch(Batch& batch) -> void;
+  auto drawnFirst(u32 address, u32 size) -> void;
+  auto defer(const PixelState& pixel, const Region& region) -> bool;
+  auto record(const Job& job) -> void;
+  auto drawBands(Batch& batch) -> void;
+  auto worker() -> void;
+
+  std::vector<Vertex> primitiveVertices;  //the primitive being drawn's (draw.cpp)
+
+  //The bytes of VRAM the primitive being drawn may draw over (draw.cpp): its frame buffer's, and its depth buffer's.
+  struct Touched { u32 low = ~0u, high = 0; };
+  std::array<Touched, 2> touched;
+
+  static constexpr u32 VRAMPages = (2 << 20) / 4096;  //VRAM's 2 MiB in 4 KiB pages (memory.hpp)
+
+  //Drawing on several threads (threads.cpp). While the GE runs a list, the primitives it meets wait in a batch,
+  //set up, and are drawn together, in bands of rows shared out among the threads, before anything could see them.
+  struct Batch {
+    std::deque<Look> looks;   //its primitives' settings, and their jobs in order
+    std::vector<Job> jobs;
+    u64 work = 0;             //its pixels, roughly (its jobs' boxes)
+    s32 top = 0, bottom = -1;           //its rows
+    bool targeted = false;              //its render target: every primitive in a batch draws into the same one
+    u32 frameBuffer = 0, stride = 0, format = 0, depthBuffer = 0, depthStride = 0;
+    s32 left = 0, right = 0, upper = 0, lower = 0;  //its area: its primitives' scissor rectangles together
+    bool depth = false;                 //some of them reach the depth buffer
+    std::bitset<VRAMPages> pending;     //VRAM's 4 KiB pages it may draw over
+    bool launched = false;              //handed to the workers: being drawn, or next once the one before is done
+    u32 users = 0;                      //threads drawing its bands now (under the mutex)
+    u32 bands = 0;
+    std::atomic<u32> nextBand{0}, bandsLeft{0};
+  };
+  struct Drawing {
+    u32 threads = 1;          //how many threads draw ('GE Threads'): 1, each primitive at once on the GE's own
+    bool deferring = false;   //run() is running: primitives wait in the batch
+    bool recording = false;   //the primitive being set up waits in the batch
+    Batch batches[2];         //one waiting for its primitives, the other maybe still being drawn
+    Batch* batch = &batches[0];         //the one primitives go into
+    Batch* drawn = nullptr;             //the one the workers draw (under the mutex)
+    Batch* queued = nullptr;            //the one to draw once that's done (under the mutex)
+
+    std::vector<std::thread> workers;   //the threads besides the GE's own
+    std::mutex mutex;
+    std::condition_variable wake, finished;
+    u64 round = 0;            //goes up as each batch starts being drawn, which the workers wake for
+    bool quit = false;
+    u64 shared = 8192;        //a batch with fewer pixels is drawn on the GE's thread alone (tests may make it 0)
+  } drawing;
+  static constexpr s32 BandRows = 8;  //the rows in a band
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
   std::set<std::string> noted;

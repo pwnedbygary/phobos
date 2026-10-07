@@ -102,8 +102,17 @@ auto Kernel::picture(std::vector<u32>& pixels) -> void {
   u32 format = display.pixelFormat & 3, bytes = format == 3 ? 4 : 2;
   auto widen = [](u32 value, u32 bits) { return value << (8 - bits) | value >> (2 * bits - 8); };
   for(u32 y = 0; y < height; y++) {
+    //(a row's bytes straight from where they are when they're all in one place, else a pixel at a time)
+    u32 row = display.frameBuffer + y * display.bufferWidth * bytes;
+    const u8* bytesOf = memory.pointer(row, width * bytes);
     for(u32 x = 0; x < width; x++) {
-      u32 c = memory.read(bytes, display.frameBuffer + (y * display.bufferWidth + x) * bytes), r, g, b;
+      u32 c, r, g, b;
+      if(!bytesOf) {
+        c = memory.read(bytes, row + x * bytes);
+      } else {
+        const u8* at = bytesOf + x * bytes;
+        c = bytes == 4 ? at[0] | at[1] << 8 | at[2] << 16 | u32(at[3]) << 24 : at[0] | at[1] << 8;
+      }
       if(format == 0) r = widen(c & 31, 5), g = widen(c >> 5 & 63, 6), b = widen(c >> 11 & 31, 5);
       else if(format == 1) r = widen(c & 31, 5), g = widen(c >> 5 & 31, 5), b = widen(c >> 10 & 31, 5);
       else if(format == 2) r = widen(c & 15, 4), g = widen(c >> 4 & 15, 4), b = widen(c >> 8 & 15, 4);

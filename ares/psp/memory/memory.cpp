@@ -20,6 +20,8 @@ auto Memory::vramSeen(u32 copy, u32 offset) -> u32 {
 //Clears memory, sized for the model: 32 MiB of main RAM for the PSP-1000, 64 MiB for later models. The buffers are
 //only made again when a size changes, so a page table built from them stays valid across power().
 auto Memory::power(u32 ramSize) -> void {
+  if(vramBusy) finishDrawing();
+  unwatchAll();
   auto clear = [](std::vector<u8>& bytes, u32 size) {
     if(bytes.size() != size) bytes.assign(size, 0);
     else std::fill(bytes.begin(), bytes.end(), 0);
@@ -27,12 +29,61 @@ auto Memory::power(u32 ramSize) -> void {
   clear(scratchpad, ScratchpadSize);
   clear(vram, VRAMSize);
   clear(ram, ramSize);
+  if(watched.size() != 512_MiB / PageSize) watched.assign(512_MiB / PageSize, 0);
+}
+
+//The pages (numbered as `watched` numbers them) that size bytes from address reach: false for none. Through VRAM's
+//second and fourth copies, which rearrange it within each 16 KiB, a range longer than its 32-byte piece is taken as
+//every 16 KiB it touches.
+auto Memory::pagesOf(u32 address, u32 size, u32& first, u32& last) const -> bool {
+  if(!size) return false;
+  u32 physical = address & 0x1fff'ffff;
+  if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
+    u32 copy = (physical - VRAMBase) / VRAMSize, seen = (physical - VRAMBase) % VRAMSize;
+    u32 low = seen, high = std::min<u32>(seen + std::min<u32>(size, VRAMSize), VRAMSize) - 1;
+    if(copy & 1) {
+      if((seen & 31) + size <= 32) low = high = vramOffset(copy, seen);
+      else low &= ~0x3fffu, high |= 0x3fff;
+    }
+    first = (VRAMBase + low) / PageSize, last = (VRAMBase + high) / PageSize;
+    return true;
+  }
+  first = physical / PageSize;
+  last = std::min<u64>(u64(physical) + size - 1, 0x1fff'ffff) / PageSize;
+  return true;
+}
+
+//Watches the pages size bytes from address reach (see watched in memory.hpp).
+auto Memory::watch(u32 address, u32 size) -> void {
+  u32 first, last;
+  if(watched.empty() || !pagesOf(address, size, first, last)) return;
+  for(u32 page = first; page <= last; page++) {
+    if(watched[page]) continue;
+    watched[page] = 1;
+    watchedPages++;
+    if(watching) watching(page);
+  }
+}
+
+//Every page's contents replaced at once (power, a state loaded): whoever watched them hears of it, and none is
+//watched any more.
+auto Memory::unwatchAll() -> void {
+  if(!watchedPages) return;
+  for(u32 page = 0; page < watched.size() && watchedPages; page++) {
+    if(!watched[page]) continue;
+    watched[page] = 0;
+    watchedPages--;
+    if(watchedWritten) watchedWritten(page);
+  }
+  watchedPages = 0;
 }
 
 //Saving and loading memory, for save states: the scratchpad, VRAM and main RAM (whoever loads a state checks first
 //that RAM is the size it was). Each goes 4 KiB at a time: a byte saying whether the piece holds anything but zeros,
 //then its bytes if it does, since games leave much of their 64 MiB untouched and a state needn't carry it.
 auto Memory::serialize(serializer& s) -> void {
+  if(vramBusy) finishDrawing();
+  if(s.reading()) unwatchAll();
   for(auto* area : {&scratchpad, &vram, &ram}) {
     for(u32 at = 0; at < area->size(); at += 4_KiB) {
       std::span<u8> piece{area->data() + at, std::min<size_t>(4_KiB, area->size() - at)};
@@ -53,6 +104,13 @@ auto Memory::pointer(u32 address, u32 size) -> u8* {
     return size <= ram.size() - offset ? &ram[offset] : nullptr;
   }
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
+    if(vramBusy) {  //(the first and third copies: the page; the others: the 16 KiB they rearrange, its four pages)
+      u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
+      if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
+      for(u32 page = seen / PageSize; page <= last / PageSize; page++) {
+        if(vramPageBusy(page)) { finishDrawing(); break; }
+      }
+    }
     u32 copy = (physical - VRAMBase) / VRAMSize, offset = (physical - VRAMBase) % VRAMSize;
     if(copy & 1) {
       if((offset & 31) + size > 32) return nullptr;
@@ -121,6 +179,17 @@ auto Memory::write(u32 size, u32 address, u32 data) -> void {
 //sees the change in one place; a longer one, through a copy that rearranges pieces or seen through one, is reported
 //as every 16 KiB it touches (where the rearranging keeps it).
 auto Memory::changed(u32 address, u32 size) -> void {
+  if(watchedPages) {
+    u32 first, last;
+    if(pagesOf(address, size, first, last)) {
+      for(u32 page = first; page <= last; page++) {
+        if(!watched[page]) continue;
+        watched[page] = 0;
+        watchedPages--;
+        if(watchedWritten) watchedWritten(page);
+      }
+    }
+  }
   if(!written) return;
   u32 physical = address & 0x1fff'ffff;
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {

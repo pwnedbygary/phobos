@@ -12,11 +12,19 @@ auto GE::run(u64 budget) -> Stop {
 
 //Runs commands from list.address until something stops it (the stall address, an END, a fault) or budget commands
 //have run (Busy: call again to go on); ran says how many did, the one that stopped it among them. Every command's
-//word is kept, whatever the command.
+//word is kept, whatever the command. Meanwhile primitives wait to be drawn together (threads.cpp), and as it returns
+//they're drawn, or go on being drawn by the GE's workers while the CPU runs on.
 auto GE::run(u64 budget, u64& ran) -> Stop {
+  settle();  //what the last list left being drawn
+  drawing.deferring = drawing.threads > 1;
+  struct Drawn {
+    GE& ge;
+    ~Drawn() { ge.drawing.deferring = false; ge.launch(true); }
+  } drawn{*this};
   for(ran = 0; ran < budget;) {
     if(list.stall && list.address == list.stall) return Stop::Stalled;
     u32 at = list.address;
+    drawnFirst(at, 4);  //(a list in VRAM, where what waits may draw)
     u32 word = memory.read(4, at);
     ran++;
     list.address = (at + 4) & 0x0fff'ffff;
@@ -70,7 +78,7 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     case ProjectionMatrixData:   matrixData(projection, 16, projectionIndex, argument); break;
     case TextureMatrixNumber:    textureIndex = argument & 0xf; break;
     case TextureMatrixData:      matrixData(textureMatrix, 12, textureIndex, argument); break;
-    case TransferStart:          transfer(); break;
+    case TransferStart:          flush(), transfer(); break;
     case ClutLoad:               loadClut(); break;
     }
   }

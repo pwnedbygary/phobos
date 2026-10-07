@@ -15,11 +15,14 @@ auto load(Node::System& node, string name) -> bool {
 //What the front end tells the core before loading: "Memory Stick", the host folder standing for ms0:; "Fonts", the
 //host folder holding the PSP's system fonts (the .pgf files of the owner's own PSP's flash0:/font), none for a PSP
 //without them; "Recompiler", "true" to run the CPU's recompiler (the default) or "false" to run the interpreter
-//alone.
+//alone; "GE Threads", how many threads draw the GE's pictures (ge/threads.cpp), 0 (the default) for one fewer than
+//the host has cores, 1 for the GE's own alone, and no more than twice the host's cores, nor 64 (more would only wait
+//their turn). Every count draws the very same pixels.
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
   if(name == "Recompiler") system.recompile = value.boolean();
+  if(name == "GE Threads") system.geThreads = std::min<u64>(value.natural(), System::MostGeThreads);
   return true;
 }
 
@@ -121,8 +124,10 @@ auto System::unload() -> void {
   memory.scratchpad = {};
   memory.vram = {};
   memory.ram = {};
+  memory.watched = {};
   pageTable = {};
   cpu.pages = nullptr;
+  cpu.watched = nullptr;
   cpu.recompiler.sections.clear();
   cpu.recompiler.sections.shrink_to_fit();
   cpu.recompiler.writePages.clear();
@@ -153,6 +158,16 @@ auto System::power(bool reset) -> void {
   memory.power(64_MiB);
   memory.buildPages(pageTable);
   cpu.pages = pageTable.data();
+  cpu.watched = memory.watched.data();
+  memory.watching = [this](u32 page) { cpu.recompiler.protect(page); };
+  memory.vramGuard = [this](bool busy) {  //(the pages the GE's workers draw over: memory.hpp)
+    for(u32 offset = 0; offset < Memory::VRAMSize; offset += Memory::PageSize) {
+      if(!memory.vramPageBusy(offset / Memory::PageSize)) continue;
+      u32 page = (Memory::VRAMBase + offset) / Memory::PageSize;
+      pageTable[page] = busy ? nullptr : &memory.vram[offset];
+      cpu.recompiler.writable(page);
+    }
+  };
   memory.written = [this](u32 address, u32 size) { cpu.recompiler.invalidateRange(address, size); };
   memory.unmapped = [this](u32 address, bool store) {
     //Under HLE nothing should reach these; a game that does is reported, but only so often.
@@ -167,6 +182,9 @@ auto System::power(bool reset) -> void {
     kernel.exited = true;
   };
   cpu.recompiler.enabled = recompile;
+  u32 cores = std::thread::hardware_concurrency();  //(0 where the host can't tell)
+  u32 most = std::min(cores ? 2 * cores : MostGeThreads, MostGeThreads);
+  ge.setThreads(geThreads ? std::min(geThreads, most) : std::max(1u, cores ? cores - 1 : 1));
   unmappedReports = 0;
   soundOwed = 0;
   programHash = 0;  //until a program starts

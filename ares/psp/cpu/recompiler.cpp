@@ -26,7 +26,7 @@ auto Allegrex::Recompiler::reset() -> void {
   allocator.release();
   sections.resize(SectionCount);
   writePages.resize(SectionCount);
-  if(self.pages) std::copy(self.pages, self.pages + SectionCount, writePages.begin());
+  for(u32 index = 0; index < SectionCount; index++) writable(index);
 }
 
 //Memory changed at address, so code compiled from there may be stale: its whole section goes, and is compiled
@@ -36,7 +36,7 @@ auto Allegrex::Recompiler::invalidate(u32 address) -> void {
   if(sections.empty()) return;
   u32 index = (address & 0x1fff'ffff) / SectionSize;
   sections[index].reset();
-  if(self.pages) writePages[index] = self.pages[index];  //no code there now: stores may go straight to it again
+  writable(index);  //no code there now: stores may go straight to it again
 }
 
 auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
@@ -45,9 +45,21 @@ auto Allegrex::Recompiler::invalidateRange(u32 address, u32 size) -> void {
   u32 last = ((address + size - 1) & 0x1fff'ffff) / SectionSize;
   for(u32 index = first;; index = (index + 1) % SectionCount) {
     sections[index].reset();
-    if(self.pages) writePages[index] = self.pages[index];
+    writable(index);
     if(index == last) break;
   }
+}
+
+//The owner watches page now (Allegrex::watched): compiled stores to it must go through write() from here on.
+auto Allegrex::Recompiler::protect(u32 page) -> void {
+  if(page < writePages.size()) writePages[page] = nullptr;
+}
+
+//Compiled stores may go straight to page index again, unless it holds compiled code (block() takes it out again as
+//it compiles there) or the owner watches it.
+auto Allegrex::Recompiler::writable(u32 index) -> void {
+  if(!self.pages || index >= writePages.size()) return;
+  writePages[index] = self.watched && self.watched[index] ? nullptr : self.pages[index];
 }
 
 //Runs one block, or one instruction in the interpreter where no block can start; returns how many instructions

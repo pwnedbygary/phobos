@@ -54,6 +54,11 @@ struct Allegrex {
   //compiled code calls the interpreter for every load and store. Changing it later needs a recompiler.reset().
   u8** pages = nullptr;
 
+  //Pages, numbered as above, whose stores the owner must see (nonzero bytes): compiled stores go through write()
+  //for them, as they do for pages holding compiled code. The PSP's memory map watches the pages of the textures the
+  //GE keeps decoded (memory.hpp); the owner tells the recompiler of each page newly watched (recompiler.protect()).
+  const u8* watched = nullptr;
+
   //Why the CPU stopped a program. The numbers are the ones MIPS uses in its Cause register.
   enum class Exception : u32 {
     AddressLoad         =  4,  //an instruction fetch or load from an address that isn't aligned to its size
@@ -476,6 +481,8 @@ struct Allegrex {
     auto reset() -> void;
     auto invalidate(u32 address) -> void;
     auto invalidateRange(u32 address, u32 size) -> void;
+    auto protect(u32 page) -> void;
+    auto writable(u32 index) -> void;
     auto run() -> u32;
     auto block(u32 address) -> u8*;
     auto emit(u32 address) -> u8*;
@@ -502,7 +509,8 @@ struct Allegrex {
     std::vector<std::unique_ptr<Section>> sections;
 
     //The page table compiled stores use: the CPU's (pages above), except that pages holding compiled code are
-    //left out, so stores there go through write() instead, whose owner then drops that code (invalidate()).
+    //left out, so stores there go through write() instead, whose owner then drops that code (invalidate()); and
+    //so are the pages the owner watches (watched above).
     std::vector<u8*> writePages;
   } recompiler{*this};
 };

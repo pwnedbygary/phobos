@@ -598,6 +598,16 @@ Java_com_phobos_emulator_PhobosCore_setPspFontsPath(JNIEnv* env, jobject, jstrin
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspDrawingThreads(JNIEnv* env, jobject, jint threads) {
+    ares::setPspDrawingThreads((s32)threads);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPictureMultiple(JNIEnv* env, jobject, jint multiple) {
+    ares::setPictureMultiple((s32)multiple);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setMemoryCardKey(JNIEnv* env, jobject, jstring key) {
     const char* nativeKey = env->GetStringUTFChars(key, 0);
     ares::setMemoryCardKey(nativeKey);

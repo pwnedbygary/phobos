@@ -10,7 +10,15 @@ namespace ares::PlayStationPortable {
 #include "lighting.cpp"
 #include "transform.cpp"
 #include "draw.cpp"
+#include "raster.cpp"
+#include "threads.cpp"
 #include "transfer.cpp"
+
+//The GE watches the pages of the textures it keeps decoded (texture.cpp), and hears of their changes here.
+GE::GE(Memory& memory) : memory(memory) {
+  memory.watchedWritten = [this](u32 page) { textureWritten(page); };
+  memory.finishDrawing = [this] { settle(); };  //(threads.cpp)
+}
 
 //As the GE is when the PSP starts: every command's word zero, no list.
 auto GE::power() -> void {
@@ -27,6 +35,9 @@ auto GE::power() -> void {
   boneIndex = worldIndex = viewIndex = projectionIndex = textureIndex = 0;
   pending = Stop::Ended;
   noted.clear();
+  flush();
+  dropTextures();
+  paletteChanged();
 }
 
 auto GE::note(const std::string& text) -> void {
@@ -45,11 +56,14 @@ auto GE::float24(u32 argument) -> float {
 
 //Saving and loading the GE, for save states: its commands' last words (from which every draw works its state out
 //afresh), the palette, the list it's running, where its vertices and indices are, the matrices, and what its next
-//END means. What it noted stays noted. Loading returns false for what no GE could hold: CALLs more than two deep,
-//or an END that means anything but the end, a FINISH or a SIGNAL.
+//END means. What it noted stays noted; the textures it kept decoded go on loading (memory changed under them).
+//Loading returns false for what no GE could hold: CALLs more than two deep, or an END that means anything but the
+//end, a FINISH or a SIGNAL.
 auto GE::serialize(serializer& s) -> bool {
+  flush();  //(nothing waits outside run(), but a state is always of finished drawing)
   s(commands);
   s(clut);
+  if(s.reading()) dropTextures(), paletteChanged();
   s(list);
   s(vertexAddress);
   s(indexAddress);

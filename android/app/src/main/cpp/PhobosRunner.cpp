@@ -308,6 +308,7 @@ namespace ares {
   static u32 bufferWidth = 0;
   static u32 bufferHeight = 0;
   static std::vector<u32> lastFrameBuffer;
+  static std::vector<u32> widenedLine;  // video(): a row of the PSP's picture, each pixel repeated
 
   // Performance Monitoring
   static std::atomic<u64> frameCount{0};
@@ -983,6 +984,10 @@ namespace ares {
   static string pspMemoryStickPath;
   // The PSP's system fonts: the app's copies of the user's own PSP's flash0 fonts; empty for none.
   static string pspFontsPath;
+  // How many threads draw the PSP's pictures (Settings' "PSP Drawing Threads"): 0 for all the device's cores but one.
+  static std::atomic<s32> pspDrawingThreads{0};
+  // The whole multiple video() draws the PSP's picture at, from the view's size (Kotlin's pictureMultiple()).
+  static std::atomic<s32> pictureMultiple{1};
   static std::map<string, string> firmwareMap;
 
   // The 32X's boot ROMs: Sega's 68000 vector table and the two SH-2 boot ROMs, from the Firmware
@@ -1950,8 +1955,13 @@ namespace ares {
       // Nearest-neighbour 2x for small software frames keeps them sharp when the
       // compositor scales the window (N64 Vulkan output is already full size).
       bool scale2x = (width <= 320) && !rotate && !isN64Vulkan;
-      u32 targetW = rotate ? height : (scale2x ? width * 2 : width);
-      u32 targetH = rotate ? width : (scale2x ? height * 2 : height);
+      // The PSP's picture goes in at the whole multiple of its size nearest the view's (pictureMultiple), each pixel
+      // repeated, so the compositor's own bilinear scaling is slight ("sharp bilinear"): its one-pixel lines stay
+      // sharp and even. Scaled 3.97 times by the compositor alone (480x272 to 1080 rows), they were soft bands, some
+      // fainter than others (Peace Walker's title, a picture of such lines, looked striped).
+      u32 multiple = root && root->name() == "PlayStation Portable" && !rotate && !scale2x ? pictureMultiple.load() : 1;
+      u32 targetW = rotate ? height : (scale2x ? width * 2 : width * multiple);
+      u32 targetH = rotate ? width : (scale2x ? height * 2 : height * multiple);
 
       // Ask for a display rate that fits the game (e.g. 60 Hz rather than 120 for a 60 Hz
       // game). On a 120 Hz panel a frame that finishes a little early or late in its period
@@ -1997,6 +2007,15 @@ namespace ares {
                   convertToWindowPixels(data + y * sourceStride, saveLine, width, screen, colors);
                   if (scale2x) {
                       doubleLineWidth(saveLine, width, dest + (y * 2) * destStride, dest + (y * 2 + 1) * destStride);
+                  } else if (multiple > 1) {
+                      // (widened once, then copied to each of its rows: the window buffer is never read back)
+                      if (widenedLine.size() < (u64)width * multiple) widenedLine.resize((u64)width * multiple);
+                      for (u32 x = 0; x < width; x++) {
+                          for (u32 n = 0; n < multiple; n++) widenedLine[x * multiple + n] = saveLine[x];
+                      }
+                      for (u32 n = 0; n < multiple; n++) {
+                          memcpy(dest + (y * multiple + n) * destStride, widenedLine.data(), width * multiple * sizeof(u32));
+                      }
                   } else {
                       memcpy(dest + y * destStride, saveLine, width * sizeof(u32));
                   }
@@ -3558,6 +3577,9 @@ else if (port->type() == "Keyboard") {
       LOGI("PSP: system fonts %s%s", pspFontsPath ? "in " : "not given", (const char*)pspFontsPath);
       ::ares::PlayStationPortable::option("Fonts", pspFontsPath);
       ::ares::PlayStationPortable::option("Recompiler", "true");
+      // How many threads draw the GE's pictures: the setting's count, or 0 for all the cores but one (the core's own).
+      LOGI("PSP: drawing threads %d (0: all cores but one)", pspDrawingThreads.load());
+      ::ares::PlayStationPortable::option("GE Threads", string{pspDrawingThreads.load()});
       success = ::ares::PlayStationPortable::load(root, "[Sony] PlayStation Portable");
     } else if (identifiedSystem == "Game Boy Advance") {
       success = ::ares::GameBoyAdvance::load(root, "[Nintendo] Game Boy Advance");
@@ -4647,6 +4669,8 @@ else if (port->type() == "Keyboard") {
   auto setPspFontsPath(const char* path) -> void {
     pspFontsPath = path ? (string)path : "";
   }
+  auto setPspDrawingThreads(s32 threads) -> void { pspDrawingThreads = std::max(0, threads); }
+  auto setPictureMultiple(s32 multiple) -> void { pictureMultiple = std::clamp(multiple, 1, 4); }
   auto setVulkanCachePath(const char* path) -> void {
     vulkanCachePath = path ? (string)path : "";
     LOGI("Vulkan cache path set: %s", (const char*)vulkanCachePath);

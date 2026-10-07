@@ -868,6 +868,74 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the CI's PSP system tests made green — 2026-10-06
+
+Branch `cursor/psp-ge-speed-2b67` (#150). The workflow `.github/workflows/psp-core.yml` runs `tests/psp/run-tests.sh`
+(the whole test built with `-Wall -Wextra -Werror` and the address and undefined sanitizers, then run); its PSP
+system tests job failed (run 37483407156, exit 1). Two defects in the tests' own code, found one after the other:
+- **What:** `tests/psp/audio.cpp:695` printed the `s64` pair (nall's `int64_t`, a `long int` on this host) with
+  `%lld`, which the compiler's `-Werror=format=` rejects; fixed with `static_cast<long long>`, the repo's own
+  precedent (`ares/n64/vulkan/parallel-rdp/vulkan/query_pool.cpp:212`). `tests/psp/disc-image.hpp:121` copied every
+  file with `std::memcpy` from `file.data.data()`, null for an empty file (the test disc's `EMPTY.BIN`), which UBSan
+  flags as UB; the no-op copy is now skipped.
+- **Checks:** `tests/psp/run-tests.sh` with both sanitizers: 226 groups, 0 failures (before: the build failed at
+  `audio.cpp:695`, then the binary aborted at `disc-image.hpp:121`).
+- **Next:** the same two lines sit in the heads of the open PSP PRs #140-#151 (the memcpy line from #140 on, the
+  `%lld` line from #147 on); their CI stays red until each head carries the fixes.
+
+## PSP core: the GE made fast, every pixel the same — 2026-10-06
+
+Branch `cursor/psp-ge-speed-2b67`, on top of `cursor/psp-hle-games3-2b67`, with `cursor/psp-fonts-2b67` (#149, the
+entry below) merged underneath, not pushed. docs/psp-core.md, part 24, describes it (part 23 is the fonts'); the
+owner's decision (the software renderer as fast as possible and exactly as accurate, the reference; Vulkan and
+OpenGL renderers later) is in its Decisions. Original code; no PPSSPP or JPCSP source read.
+- **What:** textures kept decoded, dropped the moment their memory changes (the GE watches their pages; the CPU's
+  compiled stores keep off watched pages); primitives set up once as jobs and drawn row by row with the very same
+  arithmetic; drawn in bands of 8 rows by several threads, each band in the list's order (option "GE Threads": 0,
+  the default, one fewer than the host's cores; 1, as before); in 2D, regions and texture rows exact; a leaner pixel
+  pipeline, texture function and filter; drawing going on while the CPU runs and the next batch is set up, nobody
+  seeing it half drawn (`Memory::pointer()`, states and power wait for the VRAM pages it uses, the CPU's page tables
+  lose them meanwhile); cheaper vertex reads and screen picture.
+- **Speed** (host M1, the Android build's flags, 300 frames a scene, before -> after with 7 threads): GTA LCS in the
+  city 20.4 -> 83.4 fps (4.1x), Peace Walker's title 13.5 -> 129.8 (9.6x), Lumines' demo 31.3 -> 192.8 (6.2x),
+  Burnout Legends racing 26.8 -> 85.9 (3.2x), Midnight Club 3 racing 6.2 -> 27.9 (4.5x), Gunhound EX 123 -> 229
+  (1.9x); single-threaded 1.4-2.1x.
+- **Same pixels:** every frame's picture and VRAM (and RAM at the end) in the six scenes identical to the old core's
+  with 1, 2, 4, 7 and 8 threads and on the interpreter; a scratch differential fuzzer against the old GE (thousands
+  of random lists, every setting; 1, 4 and 8 threads; with the address, undefined-behavior and thread sanitizers);
+  the parts' 213 groups (the PSP's measured results unchanged) with both sanitizers and under ThreadSanitizer, the
+  ares system's 254 checks. New groups "draw textures kept decoded" and "ge drawn on several threads"; 16 broken
+  versions each failed them.
+- **Peace Walker's stripes:** not the core's (an NDK build in a Linux arm64 container draws every frame as the host
+  does), but the presentation: the app handed Android the 480x272 frame and the compositor scaled it 3.97 times,
+  bilinearly, the title's one-pixel lines becoming soft bands of drifting strength. The PSP's picture now goes into
+  the window at the whole multiple of its size nearest the view's (4 sideways: 1920x1088, scaled 0.993 by the
+  compositor; 2 upright; exact with Integer Scaled), each line sharp and even ("sharp bilinear"). Screenshots
+  outside the repository: `/tmp/gefix-device/pw-before.png`, `pw-after-25s.png`, crops in `crops/`.
+- **Review:** a general-purpose reviewer; the clean-room spot check found the new code original; one medium and four
+  low findings, all fixed, each with a test that failed before; a pre-existing fill-rule function rewritten
+  clean-room. Medium: a quarter-turned 2D sprite's first column could take texture rows outside the decoded copy (a
+  heap read past it, 24 pixels unlike memory's); each turned pair now widens the rows reached, fetch() asserts in
+  debug builds, and a new group compares 4000 random primitives drawn with textures kept decoded against one that
+  decodes nothing (thread counts can't catch cache bugs). Lows: the screen's picture formed a pointer from null
+  (VRAM's second copy); the cache keyed on rows reached (now one copy a texture, grown as needed, unused-longest
+  dropped first from a list); "GE Threads" unbounded (now at most twice the cores and 64); the renderers' decision
+  twice in the docs, and a claim about drawing over one's own texture that wasn't measured. The fill rule
+  (rightOrBottom(), with a truncating division) is now the top-left convention on the edge functions' directions,
+  exact: the comparison with the owner's PSP unchanged line for line; GTA, Burnout and Midnight Club differ by 1-4
+  pixels in some frames (slivers' right edges the old division misjudged and drew twice), the other scenes
+  identical; kept.
+- **Merged with #149 (the fonts):** only system.cpp's options and the docs clashed; states stay version 8.
+- **In the app:** Settings, Emulation, Performance, "PSP Drawing Threads" (Auto, the owner's default: all cores but
+  one; or 1, 2, 4, 6, 8), handed to the core as "GE Threads" as a game loads.
+- **On the RP6** (installed over the app, data kept; overlay after about 40 s; force-stopped): Peace Walker's title
+  10.6 -> 60.0 fps, GTA LCS 16.6 -> 60.0, Lumines' demo 24.0 -> 59.9, Burnout Legends' title 60 -> 60 (before: the
+  fonts' build without part 24; before tonight's work, GTA 17.7, Peace Walker 9.5, Lumines about 40).
+- **Checks:** tests/psp 226 groups with both sanitizers and under ThreadSanitizer, tests/psp/ares 274 checks, the
+  app's 262 unit tests and its release build.
+- **Next:** setting up for less and drawing bands as primitives arrive (the GE's thread is GTA's and Burnout's
+  longest path now), SIMD four pixels at a time, the GPU renderers.
+
 ## PSP core: the system fonts — 2026-10-06
 
 Branch `cursor/psp-fonts-2b67`, on top of `cursor/psp-hle-games3-2b67` (the entry below), not pushed.

@@ -111,6 +111,7 @@ import com.phobos.emulator.util.N64SaveImportPlan
 import com.phobos.emulator.util.N64SaveKind
 import com.phobos.emulator.util.N64SaveRead
 import com.phobos.emulator.util.N64SaveTransfer
+import com.phobos.emulator.util.PspDrawingThreads
 import com.phobos.emulator.util.PspFonts
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.cueTracks
@@ -539,6 +540,11 @@ class MainViewModel(
     fun setMsxLoadSpeed(speed: Int) = viewModelScope.launch {
         settingsStore.setMsxLoadSpeed(speed)
         PhobosCore.setMsxLoadSpeed(speed)
+    }
+    /** How many threads draw a PSP game's pictures: [PspDrawingThreads], taken by the core as a game starts. */
+    fun setPspDrawingThreads(threads: Int) = viewModelScope.launch {
+        settingsStore.setPspDrawingThreads(threads)
+        PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(threads))
     }
     fun setZxTapeAuto(enabled: Boolean) = viewModelScope.launch {
         settingsStore.setZxTapeAuto(enabled)
@@ -1830,6 +1836,7 @@ class MainViewModel(
             PhobosCore.setNgcdLoadSpeed(settings.value.ngcdLoadSpeed)
             PhobosCore.setZxLoadSpeed(settings.value.zxLoadSpeed)
             PhobosCore.setMsxLoadSpeed(settings.value.msxLoadSpeed)
+            PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(settings.value.pspDrawingThreads))
             PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
@@ -2809,6 +2816,8 @@ class MainViewModel(
             Log.i("Phobos", "Saves path resolved: $savesDir")
             // The PSP's memory stick: the folder the user picked, else native code's shared one under the saves path.
             PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
+            // How many threads draw its pictures (Settings → Emulation), the core's "GE Threads" as the game starts.
+            PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(currentSettings.pspDrawingThreads))
             // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or
             // found by themselves in Download/FLASH0DUMP while any are missing), if any.
             val pspFonts = PspFonts.folder(context.filesDir)
