@@ -308,9 +308,12 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
-//machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes: 6 since
-//sound is heard (the output the channels make, the SRC channel's place in its samples, VAG voices' decoders:
-//docs/psp-core.md's part 21); 5 since
+//machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
+//field means: 7 since sound (docs/psp-core.md's part 21) and part 22 merged, each branch having made a version 6 of
+//its own: part 21's as sound came to be heard (the output the channels make, the SRC channel's place in its samples,
+//VAG voices' decoders), part 22's as interrupts held off came to keep the CPU for the thread holding them and their
+//flag became the CPU's alone (mfic and mtic's, on as a program starts), the kernel keeping no copy of it (a version
+//5 state's flag held off for a thread that wasn't the holder would leave it spinning, every wait refused); 5 since
 //the kernel holds files' asynchronous requests, sceSas, message pipes, mailboxes and the other functions of
 //docs/psp-core.md's part 20 (and threads' message pipe transfers); 4 since
 //each call into the program says whether it's a vertical blank's handler; 3 when the kernel came to hold both the
@@ -318,7 +321,7 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //dialogs), each of which came first on a branch of its own as a version 2, two layouts that differ from each other
 //and from these. A state of any older version is refused by it.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 6;
+static constexpr u32 StateVersion = 7;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.

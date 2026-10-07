@@ -868,6 +868,58 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: the games, further — 2026-10-06
+
+Branch `cursor/psp-hle-games3-2b67`, on top of `cursor/psp-hle-games2-2b67` (#146) and, merged since, of
+`cursor/psp-sound-2b67` (#147, the entry below, itself on #146), not pushed. docs/psp-core.md, part 22, describes it
+(part 21, the sound worker's, describes #147; part 22's end, the merge). The stalls part 20 couldn't explain, traced
+with the scratch host runner (never committed; now with write and read watchpoints, symbols for llvm-objdump over
+memory dumps, saved states at menus, the stick, a memory stick folder per run) and fixed from pspautotests'
+recorded results and the games' behavior; no other emulator's code read:
+- **GTA LCS, VCS, Sindacco at 85%**: synchronous sceIoRead took no time, so GTA's streaming thread (0x20) finished a
+  request and called its callback before the main thread (0x38) had noted it, and the callback dropped it as
+  cancelled. Synchronous reads and writes now wait their device's time (part 20's rates), refused where a thread
+  can't wait, as intr/waits recorded.
+- **Brave Story on its logo**: its sound thread (0x10) took the CPU while the game held interrupts off, found every
+  blocking output refused, and spun at the top priority. With interrupts held off nothing now takes the CPU and
+  every wait refuses (intr/waits, intr/mfic); a thread taking the CPU has interrupts on.
+- Then what the games asked for next: the keyboard accepts a name (an empty field gets "PSP": Peace Walker),
+  sceIoRename keeps the file in its folder (io/file/rename: Peace Walker's install), sceRtcGetWin32FileTime (Midnight
+  Club 3), sceRtcSetTick (Peace Walker), sceKernelVolatileMemLock (Dominator), and delays as long as a PSP's (205
+  microseconds at least, plus 25: delaylen; Brave Story's 1-microsecond polls cost the host 25% of its time).
+- **On the host** (frames in `/tmp/hle3-runner/final`, states in `/tmp/hle3-runner/states`, not in the repository):
+  GTA LCS and VCS play their openings in the city, Sindacco is in its first mission; Brave Story names its heroes and
+  plays its prologue; Gunhound EX starts Mission 01; Snoopy is in its flying lesson; SOCOM saves a profile and deploys
+  into its first mission; Burnout Legends and Midnight Club 3 race; Burnout Dominator's first race loads, then its GE
+  runs off a display list's end (to look into); Peace Walker gets its name, button configuration and data install,
+  whose menus need the system's fonts. Peace Walker's title is GE-bound (11.5 fps here, drawing correctly: the
+  handheld's 9.5 fps is the software GE's per-pixel cost; its garbling there doesn't show on the host).
+- **Checks**: the parts' 196 groups with both sanitizers (eight new: files synchronous reads wait and wait state,
+  interrupts held off keep the CPU, utility keyboard, files rename, rtc file times and ticks, power volatile memory
+  waited for, kernel thread delays' lengths; "state fields" refuses nine more states); `tests/psp/ares` 236. Broken
+  versions failed the new groups. States stayed version 5 then (two new waits, no new fields); see the review.
+- **Review:** a general-purpose reviewer; the clean-room spot check found every area independent; one medium and
+  five low findings, all fixed, each with a test that failed before it. Medium: a thread holding interrupts (or
+  dispatching) off lost the CPU when it rotated its own line or changed its own priority (both made it ready, and
+  the switch turned interrupts on); it keeps the CPU now, giving way once they're back. Lows: a handler that left
+  interrupts off passed that on to the thread it interrupted (back on as it returns); the keyboard's limit of 0 cut
+  the nickname to nothing and a roomless field got a NUL (0 is no limit; nothing written); sceIoIoctl's disc reads
+  took no time (refused and timed as sceIoRead's); the interrupt flag's meaning changed under state version 5
+  (version 6, older refused, the flag checked); mfic and mtic used a flag apart from the kernel's, reading 0 at the
+  start where intr/mfic recorded 1 (one flag now, the CPU's, on at power, mtic's lowest bit alone;
+  sceKernelCpuResumeIntrWithSync listed as sceKernelCpuResumeIntr). New groups "interrupts back on after a handler"
+  and "interrupts one flag, mfic's and the kernel's"; four groups grown. 198 groups, `tests/psp/ares` 240.
+- **Merged with #147 (sound)**, which this branch now sits on: only the state's version (7, each side having made a
+  6 of its own), the ares test's list of refused versions and the docs clashed; part 21 comes before part 22 in
+  docs/psp-core.md, this entry before sound's. Then `__sceSasCore` (and `__sceSasCoreWithMix`) refuse where no thread
+  may wait, as intr/delays recorded. Checks: 211 groups with both sanitizers, `tests/psp/ares` 254; states are
+  version 7, versions 1-6 refused. On the host from boot (scratch runner, frames and WAVs in
+  `/tmp/stallfix-runner/out`): GTA LCS reaches the city, Brave Story its intro, Burnout Legends its title, as before,
+  all silent there (ATRAC music, no voice keyed on); the Street Fighter III port sounds as part 21's capture, 4 s
+  later (its 4.4 MB of boot reads now take the disc's 3.2 s).
+- **Next**: Dominator's GE path; sceLibFont from flash0 (Peace Walker's and Gunhound's menus); wait timeouts as
+  waittimeouts recorded; a thread started with dispatching held off running at once (dispatchwake); the GE's speed.
+
 ## PSP core: sound — 2026-10-06
 
 Branch `cursor/psp-sound-2b67`, on top of `cursor/psp-hle-games2-2b67` (the entry below). Games are heard:

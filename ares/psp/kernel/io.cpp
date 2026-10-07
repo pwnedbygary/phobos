@@ -365,10 +365,42 @@ auto Kernel::readFile(u32 file, u32 data, u32 size) -> u32 {
   return got;
 }
 
-//(file, data, size): how many bytes were read (fewer at the end of the file).
+//A synchronous read or write waits for its file's device, as on a PSP: pspautotests' intr/waits recorded sceIoRead
+//and sceIoWrite on a memory stick file refused in an interrupt handler (ILLEGAL_CONTEXT) and with interrupts or
+//dispatching held off (CAN_NOT_WAIT), as functions that wait are, a bad file being refused first. 0 if the calling
+//thread may wait, else the error the call is refused with. (Outside a handler with no thread running, as when a test
+//calls the kernel itself, there's no one to wait: the call is done at once.)
+auto Kernel::fileWaitRefused() const -> u32 {
+  if(interrupting) return ErrorIllegalContext;
+  if(current && (!interruptsEnabled || dispatchSuspended)) return ErrorCanNotWait;
+  return 0;
+}
+
+//A synchronous read or write is done as it's made (its bytes move now), as an asynchronous request is (async.cpp),
+//and the calling thread then waits the time the same request would take its device (asyncDuration()), other
+//threads running meanwhile, before it returns value. GTA's disc streaming counts on that: its streaming thread calls
+//a request's callback as its last read ends, and the callback drops the request unless the thread that made it, of
+//a lower priority, has run meanwhile to note it. An error returns at once.
+auto Kernel::fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void {
+  result(value);
+  if(!current || s32(value) < 0) return;
+  current->waitCount = value;
+  block(Wait::File, file, cycles + asyncDuration(onDisc, bytes));
+}
+
+//(file, data, size): how many bytes were read (fewer at the end of the file), once its device has taken their time.
+//Standard input has nothing to read, at once.
 auto Kernel::sceIoRead() -> void {
-  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
-  result(readFile(arg(0), arg(1), arg(2)));
+  u32 file = arg(0);
+  if(asyncBusy(file)) return result(ErrorAsyncBusy);
+  auto found = files.find(file);
+  if(found == files.end() || found->second.folder || !(found->second.flags & OpenRead)) {
+    return result(readFile(file, arg(1), arg(2)));
+  }
+  if(u32 error = fileWaitRefused()) return result(error);
+  u32 got = readFile(file, arg(1), arg(2));
+  auto& open = found->second;
+  fileWait(file, got, open.onDisc, s32(got) < 0 ? 0 : u64(got) * (open.sectors ? Disc::SectorSize : 1));
 }
 
 //Writes from the program's memory to an open file (file, data, size): how many bytes were written, or an error.
@@ -398,10 +430,18 @@ auto Kernel::writeFile(u32 file, u32 data, u32 size) -> u32 {
   return size;
 }
 
-//(file, data, size): how many bytes were written.
+//(file, data, size): how many bytes were written, once the device has taken their time. Standard output and error
+//take none.
 auto Kernel::sceIoWrite() -> void {
-  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
-  result(writeFile(arg(0), arg(1), arg(2)));
+  u32 file = arg(0);
+  if(asyncBusy(file)) return result(ErrorAsyncBusy);
+  auto found = files.find(file);
+  if(found == files.end() || found->second.folder || found->second.onDisc || !(found->second.flags & OpenWrite)) {
+    return result(writeFile(file, arg(1), arg(2)));
+  }
+  if(u32 error = fileWaitRefused()) return result(error);
+  u32 wrote = writeFile(file, arg(1), arg(2));
+  fileWait(file, wrote, false, s32(wrote) < 0 ? 0 : wrote);
 }
 
 //Moves a file's position: from its start (whence 0), where it is (1), or its end (2). Returns where it is now.
@@ -468,17 +508,33 @@ auto Kernel::sceIoRmdir() -> void {
   result(std::filesystem::remove(host, error) ? 0 : ErrorNoPermission);
 }
 
-//(old path, new path): both on the same device; the new name mustn't be taken.
+//(old path, new path): the file takes the new path's last name and stays in its own folder, whatever folder the new
+//path names, as pspautotests' io/file/rename recorded: "../a.txt" from ms0:/PSP renamed to "b.txt", or to
+//"ms0:/PSP/b.txt", is ms0:/b.txt. So a name taken already there is refused (FILE_EXISTS), the old name itself among
+//them, and so is the new path's folder not being there no matter. Wildcards ('*', '?') in either path are refused
+//(INVALID_ARGUMENT), a new path on another device too (XDEV), then an old file that isn't there (FILE_NOT_FOUND).
+//Peace Walker installs its data so, writing a temporary file and renaming it to "TDLSFILE.SYS" (which had been
+//looked for in the working folder, on the disc, and refused as read-only).
 auto Kernel::sceIoRename() -> void {
   std::string from = memory.readString(arg(0), 1024), to = memory.readString(arg(1), 1024);
-  if(onDisc(from) || onDisc(to)) return result(ErrorReadOnly);
-  std::string oldHost, oldPath, newHost, newPath;
+  if((from + to).find_first_of("*?") != std::string::npos) return result(ErrorInvalidArgument);
+  auto deviceOf = [&](const std::string& path) {
+    std::string device, rest;
+    return split(path, device, rest) ? deviceName(device) : std::string{};
+  };
+  if(to.find(':') != std::string::npos && deviceOf(to) != deviceOf(from)) return result(ErrorCrossDevice);
+  if(onDisc(from)) return result(ErrorReadOnly);
+  std::string oldHost, oldPath;
   if(u32 error = resolve(from, oldHost, oldPath)) return result(error);
-  if(u32 error = resolve(to, newHost, newPath)) return result(error);
-  if(oldPath.substr(0, oldPath.find(':')) != newPath.substr(0, newPath.find(':'))) return result(ErrorCrossDevice);
   std::error_code error;
   if(!std::filesystem::exists(oldHost, error)) return result(ErrorFileNotFound);
-  if(std::filesystem::exists(newHost, error) && !sameName(oldPath, newPath)) return result(ErrorFileExists);
+  std::string name = to.substr(to.find_last_of("/\\:") == std::string::npos ? 0 : to.find_last_of("/\\:") + 1);
+  if(name.empty() || name == "." || name == "..") return result(ErrorInvalidArgument);
+  std::string newHost, newPath;
+  if(u32 error = resolve(oldPath.substr(0, oldPath.find_last_of('/') + 1) + name, newHost, newPath)) {
+    return result(error);
+  }
+  if(std::filesystem::exists(newHost, error)) return result(ErrorFileExists);
   std::filesystem::rename(oldHost, newHost, error);
   result(error ? ErrorNoPermission : 0);
 }
@@ -715,10 +771,22 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
   return ErrorFunctionNotSupported;
 }
 
-//(file, command, in, in length, out, out length)
+//(file, command, in, in length, out, out length). A read (0x01030008, or 0x01f30003's sectors) is a read as
+//sceIoRead's is: refused where the thread can't wait before anything moves, a bad file refused first, and then
+//waiting for the time its bytes take the drive (fileWait()). The other requests are answered at once.
 auto Kernel::sceIoIoctl() -> void {
-  if(asyncBusy(arg(0))) return result(ErrorAsyncBusy);
-  result(ioctl(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5)));
+  u32 file = arg(0), command = arg(1);
+  if(asyncBusy(file)) return result(ErrorAsyncBusy);
+  auto found = files.find(file);
+  bool read = command == 0x0103'0008 || command == 0x01f3'0003;
+  if(!read || found == files.end() || found->second.folder || found->second.resultOnly || !found->second.onDisc
+  || !(found->second.flags & OpenRead)) {
+    return result(ioctl(file, command, arg(2), arg(3), arg(4), arg(5)));
+  }
+  if(u32 error = fileWaitRefused()) return result(error);
+  u64 moved = 0;
+  u32 got = ioctl(file, command, arg(2), arg(3), arg(4), arg(5), &moved);
+  fileWait(file, got, true, moved);
 }
 
 //(device, command, in, in length, out, out length): a request to a whole device. The disc drive's and the memory

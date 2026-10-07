@@ -168,11 +168,18 @@ auto Kernel::serialize(serializer& s) -> bool {
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
     s(w.done); s(w.resultPointer);
-    check(t.wait <= Wait::Mailbox && w.wait <= Wait::Mailbox);
+    check(t.wait <= Wait::Volatile && w.wait <= Wait::Mailbox);
     check(t.callbackID < nextUID);
     s(t.suspended);
     //a wait to read the controller is for fewer than 64 samples (readController()), the top bit saying which kind
     check(t.wait != Wait::Controller || (t.waitCount & 0x7fff'ffff) < 64);
+    //a synchronous read or write waits (with no callbacks: neither function's name ends in CB) for its device, due
+    //within the longest a request can take (64 MiB from the disc: under a minute), nor overdue by a frame
+    if(t.wait == Wait::File) {
+      u64 due = t.wakeAt;
+      check(t.status == Status::Waiting && !t.callbacks && due);
+      check(due > cycles ? due - cycles <= asyncDuration(true, 64_MiB) : cycles - due < VblankCycles);
+    }
   };
   if(s.writing()) {
     for(auto& [uid, t] : threads) thread(*t);
@@ -388,6 +395,12 @@ auto Kernel::serialize(serializer& s) -> bool {
         if(wait == Wait::Mailbox) check(mailboxes.count(id));
       }
     }
+    //a thread waiting for the volatile memory waits while it's lent (giving it back is what wakes it), with no time
+    //limit and no callbacks (no function that waits for it runs them)
+    for(auto& [uid, t] : threads) {
+      if(t->wait != Wait::Volatile) continue;
+      check(t->status == Status::Waiting && !t->callbacks && !t->wakeAt && powerState.volatileLocked);
+    }
     check(programUID < nextUID);
     //A module isn't the program. It has a thread exactly while its module_start or module_stop runs, and that thread
     //is there. A stand-in has nothing in memory; another module has a block of the user partition, or none.
@@ -509,11 +522,13 @@ auto Kernel::serialize(serializer& s) -> bool {
   s(display.frameBuffer); s(display.bufferWidth); s(display.pixelFormat);
   check(display.mode == 0 && display.width == 480 && display.height == 272);
 
-  //calls into the program
+  //calls into the program. The interrupt flag is the CPU's (its state, loaded before this, has it): on or held off,
+  //1 or 0, as mtic and the kernel leave it
   vector(calls, [&](Call& call) {
     s(call.function); s(call.gp); s(call.arguments); s(call.resumesGe); s(call.vblank);
   });
-  s(interrupting); s(interruptsEnabled); s(rescheduleAfter);
+  check(interruptsEnabled <= 1);
+  s(interrupting); s(rescheduleAfter);
   context(interrupted);
   s(interruptedHalted); s(callResumesGe);
   //sub-interrupt handlers (none on the vertical blank's 16-31: a program can't register those), and a vertical

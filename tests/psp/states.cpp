@@ -499,8 +499,7 @@ static auto stateFields() -> void {
     {"call function", [&] { k.calls[0].function ^= 4; }}, {"call gp", [&] { k.calls[0].gp ^= 4; }},
     {"call arguments", [&] { k.calls[0].arguments[2] ^= 1; }},
     {"call resumesGe", [&] { k.calls[0].resumesGe = true; }}, {"call vblank", [&] { k.calls[0].vblank = true; }},
-    {"interrupting", [&] { k.interrupting = true; }}, {"interruptsEnabled", [&] { k.interruptsEnabled = false; }},
-    {"rescheduleAfter", [&] { k.rescheduleAfter = true; }},
+    {"interrupting", [&] { k.interrupting = true; }}, {"rescheduleAfter", [&] { k.rescheduleAfter = true; }},
     {"interruptedHalted", [&] { k.interruptedHalted = true; }},
     {"callResumesGe", [&] { k.callResumesGe = true; }},
     //the GE driver: the first list paused, the second finishing
@@ -551,6 +550,7 @@ static auto stateFields() -> void {
   refuses("the GE three CALLs deep", [&] { ge.list.depth = 3; });
   refuses("an END that means nothing", [&] { ge.pending = GE::Stop::Stalled; });
   refuses("a thread running that isn't there", [&] { k.current = &ghost; });
+  refuses("an interrupt flag but 0 or 1", [&] { cpu.scc.interrupts = 2; });
   refuses("a disc folder's names without their entries", [&] { k.files[discFolder].discEntries.pop_back(); });
   refuses("a disc file open for writing", [&] { k.files[discFile].flags |= 0x0002; });
   //files' asynchronous requests as no machine has them: a state there isn't, one on a folder, one due further off
@@ -579,6 +579,55 @@ static auto stateFields() -> void {
     thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Async, thread.waitID = file;
   });
   refuses("a wait there isn't", [&] { k.threads.at(two)->wait = Kernel::Wait(99); });
+  //a synchronous read or write waits for its device, with no callbacks (neither function's name ends in CB), due
+  //within a minute (the longest request) and not a frame overdue
+  auto readWait = [&](u64 due) -> Kernel::Thread& {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::File, thread.waitID = discFile;
+    thread.waitCount = 16, thread.wakeAt = due;
+    return thread;
+  };
+  {
+    readWait(k.cycles + 1000);
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
+    CHECK(load(a, state), true);
+  }
+  refuses("a synchronous read with no time to wait", [&] { readWait(0); });
+  refuses("a synchronous read due in over a minute", [&] { readWait(k.cycles + 61 * Kernel::CPUFrequency); });
+  refuses("a synchronous read a frame overdue", [&] { readWait(k.cycles - Kernel::VblankCycles); });
+  refuses("a synchronous read running callbacks", [&] { readWait(k.cycles + 1000).callbacks = true; });
+  refuses("a synchronous read in a thread that isn't waiting", [&] {
+    readWait(k.cycles + 1000).status = Kernel::Status::Ready;
+  });
+  //a thread waits for the volatile memory while it's lent (giving it back wakes it), with no time limit or callbacks
+  auto volatileWait = [&]() -> Kernel::Thread& {
+    auto& thread = *k.threads.at(two);
+    thread.status = Kernel::Status::Waiting, thread.wait = Kernel::Wait::Volatile;
+    k.powerState.volatileLocked = true;
+    return thread;
+  };
+  {
+    volatileWait();
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);  //as a machine has it: loads
+    CHECK(load(a, state), true);
+  }
+  refuses("a thread waiting for the volatile memory, not lent", [&] {
+    volatileWait();
+    k.powerState.volatileLocked = false;
+  });
+  refuses("a thread waiting for the volatile memory with a time limit", [&] {
+    volatileWait().wakeAt = k.cycles + 1000;
+  });
+  refuses("a thread waiting for the volatile memory with callbacks", [&] { volatileWait().callbacks = true; });
+  refuses("a synchronous read put aside for callbacks", [&] {
+    auto& thread = readWait(k.cycles + 1000);
+    thread.waitBeforeCallback = {Kernel::Wait::File, discFile, 16, 0, 0, 0, k.cycles + 1000, false, 0, 0};
+    thread.wait = Kernel::Wait::Sleep;
+  });
   refuses("a file number handed out twice", [&] { k.nextFile = discFolder; });
   refuses("an ID handed out twice", [&] { k.nextUID = u32(one); });
   refuses("a semaphore under another's ID", [&] { k.semaphores.begin()->second.uid ^= 1; });

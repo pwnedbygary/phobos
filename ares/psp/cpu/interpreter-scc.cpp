@@ -19,8 +19,9 @@ auto Allegrex::MFC0(u32& rt, u8 rd) -> void {
   rt = scc.r[rd];
 }
 
-//Reads the interrupt enable state; mfic and mtic are how the kernel turns interrupts off around code that mustn't
-//be interrupted, then back on as they were.
+//Reads the interrupt flag (1 on, 0 held off); mfic and mtic are how the kernel turns interrupts off around code
+//that mustn't be interrupted, then back on as they were (a PSP's sceKernelCpuSuspendIntr is mfic then mtic of 0, and
+//sceKernelCpuResumeIntr an mtic, as pspautotests' intr/mfic notes).
 auto Allegrex::MFIC(u32& rt) -> void {
   rt = scc.interrupts;
 }
@@ -29,6 +30,7 @@ auto Allegrex::MTC0(cu32& rt, u8 rd) -> void {
   scc.r[rd] = rt;
 }
 
+//Sets the interrupt flag from a register's lowest bit alone: intr/mfic read 0 back after mtic of 2 and of 0x80000000.
 auto Allegrex::MTIC(cu32& rt) -> void {
-  scc.interrupts = rt;
+  scc.interrupts = rt & 1;
 }

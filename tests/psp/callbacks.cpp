@@ -36,6 +36,22 @@ auto loggingCallback(KernelMachine& m, u32 address, bool pause = false) -> void 
   a.put(addiu(sp, sp, 16));
 }
 
+//The program spins on the clock for so many microseconds, waiting in nothing: what a thread holding interrupts off
+//must do to let time go by, as every function that waits refuses it then. (s6 and s7 hold the start and the length.)
+auto spin(Assembler& a, u32 microseconds) -> void {
+  a.call("sceKernelGetSystemTimeLow");
+  a.put(addu(s7, v0, zero));
+  a.li(s6, microseconds);
+  u32 loop = a.here();
+  a.call("sceKernelGetSystemTimeLow");
+  a.put(subu(t0, v0, s7));
+  a.put(sltu(t1, t0, s6));
+  a.put(bne(t1, zero, int32_t(loop - (a.here() + 4)) / 4));
+  a.put(nop);
+}
+
+auto word(KernelMachine& m, u32 address) -> u32 { return m.system.memory.read(4, address); }
+
 auto logged(KernelMachine& m) -> std::vector<u32> {
   std::vector<u32> words;
   for(u32 n = 0; n < m.system.memory.read(4, R + 8); n++) words.push_back(m.system.memory.read(4, Log + n * 4));
@@ -425,9 +441,9 @@ static auto vblankTiming() -> void {
 }
 
 //A vertical blank handler (sub-interrupt 2): called at each blank with (2, its argument) and the global pointer it
-//was registered with, while enabled, not while interrupts are held off (it runs once they're let back on), and no
-//more once released. Its semaphore wakes a thread that waits on nothing else (time goes on for the handler). Then
-//the refusals, in their order.
+//was registered with, while enabled, not while interrupts are held off (it runs once they're let back on: the
+//program spins across a blank meanwhile, a delay being refused then), and no more once released. Its semaphore wakes
+//a thread that waits on nothing else (time goes on for the handler). Then the refusals, in their order.
 static auto vblankHandler() -> void {
   for(bool recompile : {false, true}) {
     KernelMachine m;
@@ -463,6 +479,8 @@ static auto vblankHandler() -> void {
     main.put(addu(s0, v0, zero));
     main.li(a0, 20000);
     main.call("sceKernelDelayThread");
+    main.li(t0, R); main.put(sw(v0, 0x24, t0));
+    spin(main, 20000);
     main.li(t0, Count); main.put(lw(t1, 0, t0)); main.li(t0, R); main.put(sw(t1, 8, t0));
     main.put(addu(a0, s0, zero));
     main.call("sceKernelCpuResumeIntr");
@@ -477,6 +495,7 @@ static auto vblankHandler() -> void {
     CHECK(m.kernel.exited, true);
     CHECK(m.system.memory.read(4, R), 0);
     CHECK(m.system.memory.read(4, R + 4), 3);
+    CHECK(m.system.memory.read(4, R + 0x24), Kernel::ErrorCanNotWait);  //no delay with interrupts held off
     CHECK(m.system.memory.read(4, R + 8), 3);    //held off
     CHECK(m.system.memory.read(4, R + 12), 4);   //let back on: the blank that came meanwhile
     CHECK(m.system.memory.read(4, R + 0x20), 4);  //released
@@ -504,10 +523,10 @@ static auto vblankHandler() -> void {
   CHECK(m.call("sceKernelDisableSubIntr", {25, 0}), 0);
 }
 
-//Interrupts held off for ten seconds, about 600 vertical blanks: nothing piles up meanwhile, and when they're let
-//back on, the handler runs once for all of them (as the PSP's interrupt controller keeps an interrupt pending, not a
-//count). By a program; then called directly, to see the queue itself: with two handlers, the first runs as
-//interrupts come back on, and the second alone waits its turn.
+//Interrupts held off across six vertical blanks or more, by a program spinning 110 ms, and for ten seconds, about
+//600, called directly: nothing piles up meanwhile, and when they're let back on, the handler runs once for all of
+//them (as the PSP's interrupt controller keeps an interrupt pending, not a count). Called directly, the queue itself:
+//with two handlers, the first runs as interrupts come back on, and the second alone waits its turn.
 static auto heldOffOnce() -> void {
   for(bool recompile : {false, true}) {
     KernelMachine m;
@@ -529,8 +548,9 @@ static auto heldOffOnce() -> void {
     main.call("sceKernelCpuSuspendIntr");
     main.put(addu(s0, v0, zero));
     count(0);
-    main.li(a0, 10'000'000);
-    main.call("sceKernelDelayThread");       //blank after blank, held off
+    main.call("sceDisplayGetVcount");
+    main.li(t0, R); main.put(sw(v0, 16, t0));
+    spin(main, 110'000);                     //blank after blank, held off
     count(4);
     main.put(addu(a0, s0, zero));
     main.call("sceKernelCpuResumeIntr");     //as this returns, the handler runs: once
@@ -538,12 +558,12 @@ static auto heldOffOnce() -> void {
     main.call("sceDisplayGetVcount");
     main.li(t0, R); main.put(sw(v0, 12, t0));
     main.call("sceKernelExitGame");
-    m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency * 11);
+    m.runProgram(0x0880'1000, recompile);
     CHECK(m.kernel.exited, true);
     CHECK(m.system.memory.read(4, R), 1);
     CHECK(m.system.memory.read(4, R + 4), 1);
     CHECK(m.system.memory.read(4, R + 8), 2);
-    CHECK(m.system.memory.read(4, R + 12), 600);  //blanks since power on: the first, then 599 held off
+    CHECK(word(m, R + 12) - word(m, R + 16) >= 6, true);  //blanks held off meanwhile
     CHECK(m.kernel.calls.size(), 0);
     CHECK(m.notes.size(), 0);
   }
@@ -685,6 +705,276 @@ static auto interruptTable() -> void {
   }
 }
 
+//Held off, the running thread keeps the CPU even as it puts itself back in line: main, holding interrupts (or
+//dispatching) off, rotates its own priority's line with a thread of its priority ready, or lowers its own priority
+//below a ready thread's. It runs on (its A, then its B), interrupts still off in there (on, with only dispatching
+//held off), and the other thread runs (its P) once main lets it: as main resumes, when it's better than main by
+//then, or when main waits, when it's an equal (the rotation held off isn't made up for). (Each had switched threads
+//there, the switch turning interrupts on: "APB", but for a rotation with dispatching held off, which kept the CPU
+//already.)
+static auto heldOffYield(bool recompile, bool dispatch, bool viaPriority) -> void {
+  KernelMachine m;
+  auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+  auto mark = [&](Assembler& a, char c) {  //a byte at R + 0x80 on, their count at R + 0x7c
+    a.li(t0, R + 0x7c); a.put(lw(t1, 0, t0)); a.put(addu(t2, t1, t0)); a.li(t3, u8(c)); a.put(sb(t3, 4, t2));
+    a.put(addiu(t1, t1, 1)); a.put(sw(t1, 0, t0));
+  };
+  Assembler peer{m, 0x0880'2000};
+  mark(peer, 'P');
+  peer.call("sceKernelExitThread");
+  Assembler main{m, 0x0880'1000};
+  startThread(main, m, "peer", 0x0880'2000, viaPriority ? 0x28 : 0x20);  //ready: it doesn't run yet
+  main.call(dispatch ? "sceKernelSuspendDispatchThread" : "sceKernelCpuSuspendIntr");
+  main.put(addu(s1, v0, zero));
+  mark(main, 'A');
+  if(viaPriority) {
+    main.li(a0, 0); main.li(a1, 0x30);
+    main.call("sceKernelChangeThreadPriority");
+  } else {
+    main.li(a0, 0);
+    main.call("sceKernelRotateThreadReadyQueue");
+  }
+  store(main, 0x20);
+  main.call("sceKernelIsCpuIntrEnable");
+  store(main, 0x24);
+  mark(main, 'B');
+  main.put(addu(a0, s1, zero));
+  main.call(dispatch ? "sceKernelResumeDispatchThread" : "sceKernelCpuResumeIntr");
+  main.li(a0, 100);
+  main.call("sceKernelDelayThread");
+  main.call("sceKernelExitGame");
+  m.runProgram(0x0880'1000, recompile);
+  std::string order = m.system.memory.readString(R + 0x80, 8);
+  CHECK(m.kernel.exited, true);
+  CHECK(order == "ABP", true);
+  if(order != "ABP") {
+    std::printf("  [%s] %s with %s held off: %s\n", recompile ? "recompiler" : "interpreter",
+                viaPriority ? "lowering its priority" : "rotating its line", dispatch ? "dispatching" : "interrupts",
+                order.c_str());
+  }
+  CHECK(word(m, R + 0x20), 0);
+  CHECK(word(m, R + 0x24), dispatch ? 1 : 0);
+  CHECK(m.notes.size(), 0);
+  CHECK(roundTrip(m), true);
+}
+
+//With interrupts held off nothing takes the CPU from the running thread: a better thread whose delay ends meanwhile
+//runs once they're back on, as sceKernelCpuResumeIntr returns (main's M, the thread's T, main's R), with interrupts
+//on of its own, its next delay not refused. Every function that waits is refused meanwhile, CAN_NOT_WAIT ahead of
+//even a bad ID, as pspautotests' intr/waits recorded; and resuming with 2 leaves them off, only the flag's lowest bit
+//counting (intr/mfic). A state saved with the better thread ready and main spinning loads into another machine, which
+//makes the same state and carries on alike. (A better thread whose sound buffer ended in there had taken the CPU
+//with interrupts still off: Brave Story's sound thread, every blocking output refused, spun at the top priority for
+//good.) Nor does the holder lose the CPU rotating its own line or lowering its own priority (heldOffYield()). On
+//both engines.
+static auto heldOffKeepsCpu() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+    auto mark = [&](Assembler& a, char c) {  //a byte at R + 0x80 on, their count at R + 0x7c
+      a.li(t0, R + 0x7c); a.put(lw(t1, 0, t0)); a.put(addu(t2, t1, t0)); a.li(t3, u8(c)); a.put(sb(t3, 4, t2));
+      a.put(addiu(t1, t1, 1)); a.put(sw(t1, 0, t0));
+    };
+    Assembler better{m, 0x0880'2000};
+    better.li(a0, 1000);
+    better.call("sceKernelDelayThread");
+    mark(better, 'T');
+    better.call("sceKernelIsCpuIntrEnable");
+    store(better, 0x10);
+    better.li(a0, 100);
+    better.call("sceKernelDelayThread");
+    store(better, 0x14);
+    better.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, m.string("better")); main.li(a1, 0x0880'2000); main.li(a2, 0x10); main.li(a3, 0x1000);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");  //it runs at once, and delays
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s0, v0, zero));
+    store(main, 0x00);
+    main.li(a0, 100);
+    main.call("sceKernelDelayThread");
+    store(main, 0x04);
+    main.li(a0, 0); main.li(a1, 1); main.li(a2, 0);
+    main.call("sceKernelWaitSema");
+    store(main, 0x08);
+    main.call("sceKernelSleepThread");
+    store(main, 0x0c);
+    spin(main, 3000);  //the better thread's delay ends meanwhile
+    mark(main, 'M');
+    main.put(addu(a0, s0, zero));
+    main.call("sceKernelCpuResumeIntr");
+    mark(main, 'R');
+    main.call("sceKernelCpuSuspendIntr");
+    main.li(a0, 2);
+    main.call("sceKernelCpuResumeIntr");
+    main.call("sceKernelIsCpuIntrEnable");
+    store(main, 0x18);
+    main.li(a0, 1);
+    main.call("sceKernelCpuResumeIntr");
+    main.call("sceKernelIsCpuIntrEnable");
+    store(main, 0x1c);
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile, Kernel::CPUFrequency * 2 / 1000);  //2 ms: main spins, the thread waits
+    CHECK(m.kernel.exited, false);
+    CHECK(m.kernel.interruptsEnabled, false);
+    u32 ready = 0;
+    for(auto& [uid, thread] : m.kernel.threads) if(thread->status == Kernel::Status::Ready) ready++;
+    CHECK(ready, 1);
+    auto state = saveState(m);
+    KernelMachine n;
+    n.system.recompiler.enabled = recompile;
+    CHECK(loadState(n, state), true);
+    CHECK(saveState(n) == state, true);
+    for(auto* each : {&m, &n}) {
+      each->kernel.run(Kernel::CPUFrequency / 10);
+      CHECK(each->kernel.exited, true);
+      CHECK(each->system.memory.readString(R + 0x80, 8) == "MTR", true);
+      CHECK(word(*each, R + 0x00), 1);
+      CHECK(word(*each, R + 0x04), Kernel::ErrorCanNotWait);
+      CHECK(word(*each, R + 0x08), Kernel::ErrorCanNotWait);
+      CHECK(word(*each, R + 0x0c), Kernel::ErrorCanNotWait);
+      CHECK(word(*each, R + 0x10), 1);
+      CHECK(word(*each, R + 0x14), 0);
+      CHECK(word(*each, R + 0x18), 0);
+      CHECK(word(*each, R + 0x1c), 1);
+    }
+    if(m.system.memory.readString(R + 0x80, 8) != "MTR") {
+      std::printf("  [%s]\n", m.system.memory.readString(R + 0x80, 8).c_str());
+    }
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+    for(bool dispatch : {false, true}) {
+      for(bool viaPriority : {false, true}) heldOffYield(recompile, dispatch, viaPriority);
+    }
+  }
+}
+
+//A vertical blank's handler that holds interrupts off and returns without turning them back on doesn't leave them off
+//for the thread it interrupted: main, woken by the blank and interrupted by the handler, finds them on, and its next
+//wait for a blank and a delay aren't refused; a worse thread ran while main waited (W). (The old code handed the
+//handler's flag on to main: off, its waits all refused.) On both engines.
+static auto handlerLeavesInterruptsOff() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+    Assembler handler{m, 0x0880'3000};
+    handler.put(addiu(sp, sp, -16)); handler.put(sw(ra, 12, sp));
+    handler.call("sceKernelCpuSuspendIntr");
+    handler.put(lw(ra, 12, sp)); handler.put(addiu(sp, sp, 16));
+    handler.li(v0, 0); handler.put(jr(ra)); handler.put(nop);
+    Assembler worse{m, 0x0880'2000};
+    worse.li(t0, R + 0x10); worse.li(t1, 'W'); worse.put(sw(t1, 0, t0));
+    worse.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    startThread(main, m, "worse", 0x0880'2000, 0x30);
+    main.li(a0, 30); main.li(a1, 0); main.li(a2, 0x0880'3000); main.li(a3, 0);
+    main.call("sceKernelRegisterSubIntrHandler");
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelEnableSubIntr");
+    main.call("sceDisplayWaitVblankStart");
+    store(main, 0x00);
+    main.call("sceKernelIsCpuIntrEnable");
+    store(main, 0x04);
+    main.call("sceDisplayWaitVblankStart");
+    store(main, 0x08);
+    main.li(a0, 1000);
+    main.call("sceKernelDelayThread");
+    store(main, 0x0c);
+    main.li(a0, 30); main.li(a1, 0);
+    main.call("sceKernelReleaseSubIntrHandler");
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(word(m, R + 0x00), 0);
+    CHECK(word(m, R + 0x04), 1);
+    CHECK(word(m, R + 0x08), 0);
+    CHECK(word(m, R + 0x0c), 0);
+    CHECK(word(m, R + 0x10), 'W');
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
+//One interrupt flag: the CPU's, which mfic reads and mtic sets, and the kernel's functions too, as pspautotests'
+//intr/mfic recorded on a PSP (its sequence, each value as it printed it): on as a program starts; held off and back
+//on by sceKernelCpuSuspendIntr and ResumeIntr, mfic seeing each; mtic of 0 and of 1 seen by sceKernelIsCpuIntrEnable
+//and sceKernelCpuSuspendIntr; mtic of 2 and of 0x80000000 off, the lowest bit alone counting, as for
+//sceKernelCpuResumeIntr of 2. The kernel goes by an mtic of 0 as by its own function: a delay is refused, and a
+//better thread whose delay ends while main spins doesn't take the CPU until sceKernelCpuResumeIntrWithSync (listed
+//as sceKernelCpuResumeIntr) turns them back on (main's M, the thread's T, main's R). (The CPU's flag had been apart
+//from the kernel's, read 0 as a program started, and kept whatever mtic wrote.) On both engines.
+static auto interruptFlag() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    auto store = [&](Assembler& a, u32 offset) { a.li(t0, R + offset); a.put(sw(v0, 0, t0)); };
+    auto mark = [&](Assembler& a, char c) {  //a byte at R + 0x80 on, their count at R + 0x7c
+      a.li(t0, R + 0x7c); a.put(lw(t1, 0, t0)); a.put(addu(t2, t1, t0)); a.li(t3, u8(c)); a.put(sb(t3, 4, t2));
+      a.put(addiu(t1, t1, 1)); a.put(sw(t1, 0, t0));
+    };
+    Assembler better{m, 0x0880'2000};
+    better.li(a0, 1000);
+    better.call("sceKernelDelayThread");
+    mark(better, 'T');
+    better.call("sceKernelExitThread");
+    Assembler main{m, 0x0880'1000};
+    u32 next = 0;
+    auto result = [&] { store(main, next++ * 4); };  //v0 into the next result
+    auto flag = [&] { main.put(mfic(v0)); result(); };
+    auto set = [&](u32 value) { main.li(t1, value); main.put(mtic(t1)); };
+    auto call = [&](const char* name, u32 argument) { main.li(a0, argument); main.call(name); };
+    flag();
+    main.call("sceKernelCpuSuspendIntr");
+    main.put(addu(s1, v0, zero));
+    flag();
+    main.put(addu(a0, s1, zero));
+    main.call("sceKernelCpuResumeIntr");
+    flag();
+    set(0);
+    flag();
+    main.call("sceKernelIsCpuIntrEnable"); result();
+    main.call("sceKernelCpuSuspendIntr"); result();
+    set(1);
+    flag();
+    main.call("sceKernelIsCpuIntrEnable"); result();
+    set(0); set(2);
+    flag();
+    set(0); set(0x8000'0000);
+    flag();
+    main.call("sceKernelCpuSuspendIntr"); result();
+    call("sceKernelCpuResumeIntr", 1);
+    flag();
+    call("sceKernelCpuResumeIntr", 2);
+    flag();
+    call("sceKernelCpuResumeIntr", 1);
+    set(0);
+    call("sceKernelDelayThread", 100); result();
+    call("sceKernelCpuResumeIntrWithSync", 1); result();
+    flag();
+    startThread(main, m, "better", 0x0880'2000, 0x10);  //it runs at once, and delays
+    set(0);
+    spin(main, 3000);  //the better thread's delay ends meanwhile
+    mark(main, 'M');
+    call("sceKernelCpuResumeIntrWithSync", 1);
+    mark(main, 'R');
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    //intr/mfic's thirteen, then the refused delay, the resume's 0 and the flag after it
+    u32 expected[] = {1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, Kernel::ErrorCanNotWait, 0, 1};
+    for(u32 n = 0; n < 16; n++) {
+      check(__LINE__, ("result " + std::to_string(n)).c_str(), word(m, R + n * 4), expected[n]);
+    }
+    std::string order = m.system.memory.readString(R + 0x80, 8);
+    CHECK(order == "MTR", true);
+    if(order != "MTR") std::printf("  [%s] %s\n", recompile ? "recompiler" : "interpreter", order.c_str());
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+}
+
 auto callbackTests() -> Tests {
   return {
     {"callbacks in waits", runInWaits}, {"callbacks and waits going on", waitsGoOn},
@@ -692,7 +982,9 @@ auto callbackTests() -> Tests {
     {"callbacks by priority", byPriority}, {"callbacks called directly", callbackCalls},
     {"display vblank timing", vblankTiming}, {"interrupts vblank handler", vblankHandler},
     {"interrupts held off, delivered once", heldOffOnce}, {"interrupts handlers longer than a frame", longHandlers},
-    {"interrupts numbers", interruptTable},
+    {"interrupts numbers", interruptTable}, {"interrupts held off keep the CPU", heldOffKeepsCpu},
+    {"interrupts back on after a handler", handlerLeavesInterruptsOff},
+    {"interrupts one flag, mfic's and the kernel's", interruptFlag},
   };
 }
 

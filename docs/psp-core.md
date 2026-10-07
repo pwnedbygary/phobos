@@ -2084,12 +2084,13 @@ change here); and whether the PSP zeroes the whole of a thread's kernel area (Pe
 
 ## Part 21: sound
 
-On branch `cursor/psp-sound-2b67`, on top of part 20's (`cursor/psp-hle-games2-2b67`). Games are heard: what
-sceAudio's channels play goes into the system's sound stream, and sceSasCore's voices make sound. Written from
-pspsdk's pspaudio.h (PSP_AUDIO_VOLUME_MAX), pspautotests' audio/sascore programs and the results they recorded on a
-PSP (their samples, reproduced exactly), the notes in that suite's sascore.h on a SasCore's fields as a PSP leaves
-them, psx-spx's description of the PlayStation SPU's ADPCM, and part 17's behavior specification of sceAudio's
-timing; no other emulator's code was read.
+On branch `cursor/psp-sound-2b67` (#147), on top of part 20's (`cursor/psp-hle-games2-2b67`); part 22's branch,
+`cursor/psp-hle-games3-2b67`, has since merged it and sits on top of it (the end of part 22 says how). Games are
+heard: what sceAudio's channels play goes into the system's sound stream, and sceSasCore's voices make sound.
+Written from pspsdk's pspaudio.h (PSP_AUDIO_VOLUME_MAX), pspautotests' audio/sascore programs and the results they
+recorded on a PSP (their samples, reproduced exactly), the notes in that suite's sascore.h on a SasCore's fields as
+a PSP leaves them, psx-spx's description of the PlayStation SPU's ADPCM, and part 17's behavior specification of
+sceAudio's timing; no other emulator's code was read.
 
 - **The output** (`audio.cpp`). Think of the sound as a strip of frames, a left and a right sample each, 44,100 a
   second from power on: frame n is heard at cycle n * 370000 / 49 (`sampleFrame()`). Every channel adds what it
@@ -2251,3 +2252,205 @@ pitch test prints no samples). Since the review: whether an SRC buffer armed in 
 microseconds is heard straight after it (here it is: its transfer ends 100 microseconds before what's heard, as part
 17's specification has every buffer's; no recording arms one then), and whether the PSP's converter keeps its place
 across such a join (here the buffer starts on a frame).
+
+## Part 22: the games, further
+
+On branch `cursor/psp-hle-games3-2b67`, on top of part 20's (`cursor/psp-hle-games2-2b67`, #146), and since then
+of part 21's (sound, `cursor/psp-sound-2b67`, #147, the sound worker's), merged in: see the end of this part. Part
+20 left the owner's games stopped at places it couldn't explain: the three GTAs at 85% of their loading bar, Brave
+Story on its Game Republic logo. This part traced each to what the kernel did that a PSP doesn't, then followed the
+games on through their menus. The scratch host runner (never committed) grew what that took: write and read
+watchpoints (the interpreter's stores and loads, through a subclass of the system's CPU), the import stubs and
+exports as symbols for llvm-objdump over memory dumps, states saved at a menu and loaded to try its buttons, the
+stick, and a memory stick folder per run. Sources as before: pspsdk's headers, pspautotests' programs and the
+results they recorded on a PSP (threads/scheduling, intr, io/file, rtc, power/volatile), and the games' own
+behavior; no other emulator's code was read.
+
+- **Synchronous reads and writes wait** (io.cpp). sceIoRead and sceIoWrite on a file (the disc, the memory stick, a
+  host folder) did their work and returned at once. GTA's streaming thread (priority 0x20) reads a request's data in
+  64 KiB pieces and, as the last one ends, calls the request's callback; the callback checks the request against the
+  one the main thread (0x38) noted when it made it, and drops any other as cancelled ("StreamingCallback: CALLED WHEN
+  STREAMING WAS CANCELLED", found among the game's strings by a watchpoint on the counter that never fell). With
+  reads taking no time, the streaming thread finished every piece before the main thread ran again to note its
+  request, the callback dropped it, and the main thread waited for good for its queue (one entry) to empty, polling
+  event flag 0x115. On a PSP a read waits for the drive while other threads run. pspautotests' intr/waits recorded
+  both functions on a memory stick file as functions that wait: refused in an interrupt handler (ILLEGAL_CONTEXT)
+  and with interrupts or dispatching held off (CAN_NOT_WAIT), a bad file refused first. So now each takes the time
+  its asynchronous twin takes (part 20's 100 microseconds plus the bytes at the device's rate: 1,375,000 bytes a
+  second from the disc, 4 MB a second on the memory stick), its bytes moved at once, the thread waiting meanwhile
+  (a new wait, Wait::File, returning the call's result as its time is up). Standard input, output and error take
+  no time. Called by a test with no thread running, it's done at once, as before. Since the review, sceIoIoctl's two
+  disc reads (0x01030008's bytes, 0x01f30003's sectors of umd0:) are refused and timed the same way.
+- **Interrupts held off keep the CPU** (interrupts.cpp, threads.cpp). sceKernelCpuSuspendIntr is the CPU's own
+  interrupt flag (pspautotests' intr/mfic: `mfic v0, $0; mtic zero, $0`, only its lowest bit counting, so resuming
+  with 2 leaves interrupts off), so on a PSP nothing can take the CPU from the thread holding them off: the timer's,
+  the sound DMA's and the vertical blank's interrupts are what would wake another thread. Here a thread whose wait
+  ended took the CPU all the same, with the one global flag still off. Brave Story holds interrupts off around its
+  own lock; its sound thread (0x10) took the CPU in there as a buffer ended, found every blocking output refused
+  (CAN_NOT_WAIT: interrupts were off), and spun for good at the top priority, starving the game on its logo. Now the
+  running thread keeps the CPU while it holds interrupts off, as with dispatching held off, even as it rotates its
+  own priority's line or changes its own priority (since the review); turned back on, the calls held back run, then
+  the scheduler picks. Every function that waits refuses with interrupts held off (intr/waits recorded each alike
+  with interrupts and with dispatching held off: until now only sound's did). A thread taking the CPU has interrupts
+  on, the flag being its holder's (it can't lose the CPU meanwhile but by ending), and a handler that leaves them off
+  doesn't pass that on (since the review). The kernel's flag is the CPU's own since the review, so the program's own
+  mfic and mtic see and set it: on as a program starts (intr/mfic read 1 first), mtic keeping its lowest bit alone.
+- **The keyboard** (utility.cpp: sceUtilityOsk*) was answered as cancelled. Each field's text is now accepted as it
+  stands (UNCHANGED), and an empty field, or one of spaces, gets the console's nickname, "PSP" (CHANGED), as a player
+  asked for a name would type one; each as far as the field's room (outtextlength, its NUL among it) and limit
+  (outtextlimit) allow, in UTF-16 (psputility_osk.h): a limit of 0 is none, and a field with no room gets nothing
+  written (since the review). Peace Walker asks for its player's name in an empty field, refuses an empty answer
+  ("Please enter at least 1 characters") and asked again for good.
+- **Renaming** (io.cpp: sceIoRename), as pspautotests' io/file/rename recorded: the file takes the new path's last
+  name and stays in its own folder, whatever folder the new path names ("../t2.txt" from ms0:/PSP renamed to
+  "t2a.txt", or to "ms0:/PSP/t3a.txt", lands in ms0:/); a name taken there, the old one itself among them, is
+  FILE_EXISTS, so a new path into a folder that isn't there finds the old file's own name taken; another device is
+  pspkerror.h's XDEV (0x80020322, where uOFW's 0x80010012 stood); an old file that isn't there FILE_NOT_FOUND;
+  wildcards INVALID_ARGUMENT. Peace Walker installs its data writing a temporary file and renaming it to a bare
+  "TDLSFILE.SYS", which had been looked for in the working folder, on the disc, and refused as read-only.
+- **Three functions the games asked for next**: sceRtcGetWin32FileTime (Midnight Club 3, making a profile), a date
+  as 100-nanosecond steps since 1601, earlier dates 0 and INVALID_VALUE, no pointer INVALID_VALUE (rtc/convert's
+  results, among them a day past November's end counting on into December); sceRtcSetTick (Peace Walker), a tick
+  back into a date by Howard Hinnant's civil_from_days, as rtc/convert recorded; sceKernelVolatileMemLock (Burnout
+  Dominator), part 17's volatile memory borrowed waiting while it's lent, those waiting served in the order they
+  came (power/volatile/lock: three threads of priorities 0x31, 0x33 and 0x32 served in that order), refused without
+  borrowing where a thread can't wait, its address and size written first (a new wait, Wait::Volatile).
+- **A delay lasts as long as a PSP's** (threads.cpp). sceKernelDelayThread and DelayThreadCB waited exactly what
+  they were asked. pspautotests' threads/scheduling/delaylen recorded every delay from 1 to 209 microseconds taking
+  about 230 and longer ones about 25 more than asked (220 about 250, 300 about 330, 1000 about 1030), CB or not, and
+  preemptuser's 1000-microsecond delays took 1020 to 1040: the thread manager wakes a thread no sooner than about 205
+  microseconds on, and waking it takes about 25 more. So a delay now lasts its time, 205 at least, plus 25. A delay
+  of 0 still only gives the CPU up for a moment (delayzero: it returns at once, or lets a worse thread in). Brave
+  Story's threads poll with delays of 1 microsecond and woke 230 times as often as on a PSP: about 34 million delays
+  in 10 seconds of its menus, which took the host 29 seconds, 22 now. Wait timeouts are left as they were, though
+  waittimeouts recorded them alike (max(timeout, 205) plus about 35; a timeout of 0 or 1 ends at once, its time not
+  written back).
+- **States** carry both new waits (their fields were there already), and loading checks them: a file wait waiting,
+  with no callbacks, due within the longest request (64 MiB from the disc, under a minute) and not a frame overdue;
+  a volatile wait only while the memory is lent, with no time limit or callbacks; neither put aside for callbacks.
+  The layout was unchanged, but the review found the interrupt flag's meaning changed under it, and the flag is the
+  CPU's alone since (the kernel keeps no copy, and loading wants it 0 or 1): version 6, a state of version 1 to 5
+  refused; version 7 since part 21 merged (this part's end).
+
+What the games do now, on the host (frames under `/tmp/hle3-runner/final`, outside the repository; the runner's
+saved states under `/tmp/hle3-runner/states` take each back to where it got):
+
+- **GTA Liberty City Stories**: past its loading bar into the city; its opening plays (Toni with his suitcase, the
+  phone call, the taxi, Salvatore's office) for 9000 frames without a press.
+- **GTA Vice City Stories**: past its loading bar into its opening scene at the army base.
+- **GTA Sindacco Chronicles**: past its loading bar to "Press X to choose the soldier difficulty or O to choose the
+  boss difficulty" over the city.
+- **Brave Story**: past its logos (XSEED, Game Republic), its intro and title, New Game, the hero's and the leading
+  lady's names (the game's own keyboard: down to OK), into "Prologue: Doorway to Destiny", its first scene talking.
+- **Gunhound EX**: past its logos (G.rev, Dracue, CRIWARE) to its title and menu (Circle confirms, as in Japan), Game
+  Start, the area map, Mission 01's briefing, and the mission's start ("Plant Assault"): its text is its own.
+- **Snoopy vs. the Red Baron**: past its no-save warning (continue without loading), "Autosave disabled", its title,
+  a new profile (its own letter picker: up, then Done, then Left to YES), loading, and in the game: Marcie's flying
+  lesson over the town.
+- **SOCOM Fireteam Bravo**: past its no-data screen, its autosave notice and credits, a new profile (its own
+  keyboard, which wants a button held: right along the top row, down twice to ENTER), the profile saved, its main
+  menu, Campaign, New Campaign, a difficulty, the campaign saved, its first mission's briefing, down its tabs to
+  Deploy, loading, and in the mission: the soldier in the Andes, the game's help tips showing (no music: ATRAC3plus).
+- **Burnout Legends**: Start, a new profile (its own keyboard: DONE), saved (YES), World Tour, Compact class,
+  Interstate Loop, a race, a car, and racing: lap 1 of 3, Cross held accelerating (61-88 mph, "Extreme shunt").
+- **Burnout Dominator**: Start, a new profile saved, its main menu, World Tour, and its first race loading; then its
+  GE runs off the end of a display list (below).
+- **Midnight Club 3**: Start, Create Profile (sceRtcGetWin32FileTime), its main menu, a cutscene skipped (Triangle),
+  and a race: the timer running, Cross held accelerating through the city.
+- **Metal Gear Solid Peace Walker**: Start, NEW GAME, its player's name ("PSP", from the keyboard), Right then Cross
+  to accept it, its button configuration, and its data install, which writes and renames its first files (the
+  install's own menus are drawn in the system's fonts, which aren't there: going on means guessing buttons).
+- Lumines, Space Invaders Extreme and the Street Fighter III port reach what they did before.
+
+Seen on the way, not changed:
+- **Burnout Dominator's GE**: once its race has loaded, the GE reads textures from addresses with no top bits
+  (0x00f79aac: a texture's 24 bits without TEXTURE_BUFFER_WIDTH0's 0x08), then spends its million commands a frame on
+  one list that never finishes, the game waiting on sceGeDrawSync. Walked by hand, the two lists it alternates
+  (0x09e05900, 0x09e01980) end cleanly (595 and 867 commands, every texture's top bits set), so the GE takes another
+  path than they say: a GE question for later.
+- **Peace Walker on the handheld** (garbled, 9.5 frames a second): here, with the same core on ARM64, its title draws
+  correctly, and runs at 11.5 frames a second; a profile puts nearly all the time in the GE's drawing (drawPixel,
+  texel, sample, Memory::read from texel fetches, rectangle), the CPU's recompiler under 1%, the kernel's calls few
+  (no polling). So the speed is the GE's per-pixel cost of its layered, filtered sprites; the garbling, which
+  doesn't show here, is something of the Android build or front end's to look into.
+- Recorded by pspautotests, not done here: a thread started with dispatching held off runs at once
+  (dispatchwake's "TMR"; here it waits); sceIoOpen with interrupts or dispatching held off returns -1 and in a
+  handler ILLEGAL_CONTEXT (intr/delays, which records __sceSasCore refused alike: done once part 21's sas.cpp merged,
+  at this part's end); the wait timeouts above.
+
+Tests (`tests/psp/run-tests.sh`: 196 groups, both sanitizers; `tests/psp/ares` 236 checks):
+- `async.cpp`: "files synchronous reads wait" (both engines: a 4000-byte read from the memory stick taking 1100
+  microseconds while a worse thread runs, a 1000-byte write 350, 2750 bytes from the disc 2100, 11 of umd0:'s sectors
+  16484; a read to nowhere at once; refusals with interrupts and dispatching held off and in a vertical blank's
+  handler, a bad file first, nothing moved) and "files synchronous wait state" (a state saved mid-read carried on in
+  another machine, and with no disc).
+- `callbacks.cpp`: "interrupts held off keep the CPU" (both engines: a better thread whose delay ends while main
+  holds interrupts off runs as they come back on, with its own interrupts on and its delay not refused; every wait
+  refused meanwhile; resuming with 2; a state saved with the better thread ready); the vertical blank groups now spin
+  with interrupts off, a delay there being refused.
+- `utility.cpp`: "utility keyboard" (accepted, empty, blank, limited, roomless and outputless fields).
+- `files.cpp`: "files rename" (io/file/rename's cases, and Peace Walker's form).
+- `media.cpp`: "rtc file times and ticks" (rtc/convert's values, a leap day, the last microsecond of 9999).
+- `power.cpp`: "power volatile memory waited for" (both engines: three waiters served in order, the refusals, a
+  state saved with them waiting) and "kernel thread delays' lengths" (both engines: delaylen's lengths, CB or not).
+- `states.cpp`'s "state fields" refuses nine more states (six impossible file waits, three volatile ones), each
+  beside one that loads.
+- Broken versions each failed: synchronous I/O done at once (34 failures in the two new groups), interrupts held
+  off as before (16, "TMR" where the PSP gives "MTR"), the volatile memory served by priority ("M132").
+
+Uncertain: the timing of synchronous requests (part 20's device rates, seeks not counted), and whether a PSP refuses
+a read in an interrupt handler only as intr/waits shows for the memory stick (the disc's not tried); a rename of a
+file open, and of a folder (taken as a file is); the keyboard's answer for an empty field (the nickname is a choice,
+as is accepting each field at once); which of a cross-device rename and a missing file comes first; the delay's
+minimum and its 25 microseconds (fitted to delaylen's figures, rounded to 10 there), and a new thread's first delay,
+which delayzero found can be short; and with interrupts held off, whether a woken thread of higher priority would
+take the CPU from a system call (here, as with dispatching held off, it waits). Since the review: whether a thread
+rotating its own line, or changing its own priority, with interrupts or dispatching held off gives way to its
+equals once they're back (here the rotation is dropped, as part 20 chose for dispatching); what an mtic of the
+program's own that turns interrupts back on lets in at once (here the calls held back come at the kernel's next
+look, a better thread at the scheduler's next pick); and the keyboard's limit of 0 (no limit here).
+
+Review: a general-purpose reviewer of the branch; the clean-room spot check found every area independent; one
+medium and five low findings, all fixed, each with a test that failed before its fix. The medium: a thread holding
+interrupts (or dispatching) off still lost the CPU when it rotated its own priority's line or changed its own
+priority: both make the caller ready, the scheduler kept only a running thread, and the switch turned interrupts
+on, handing the holder's critical section to another thread. reschedule() now keeps the caller running whenever
+they're held off and it's running or ready; it gives way once they're back, to a thread better than it then. The
+lows: a handler that held interrupts off and returned left them off for the thread it had interrupted, every wait
+of its refused (callReturned() turns them back on: calls start only with them on); the keyboard took a limit of 0
+as no characters, the nickname cut to nothing but still CHANGED, and wrote a NUL into a field with no room (0 is no
+limit now, and a roomless field gets nothing); sceIoIoctl's disc reads still took no time and went ahead where a
+thread can't wait (refused and timed as sceIoRead's now); the interrupt flag's meaning had changed under the same
+state version, so a version 5 state holding them off for a thread that wasn't the holder would spin it for good
+(version 6, older ones refused, the flag checked on loading); and mfic and mtic worked on a flag of the CPU's apart
+from the kernel's, reading 0 as a program started where intr/mfic recorded 1 (the kernel's flag is a reference to
+the CPU's now, on at power, mtic keeping its lowest bit as intr/mfic read 2 and 0x80000000 back as 0, and
+Kernel_Library's sceKernelCpuResumeIntrWithSync is listed as sceKernelCpuResumeIntr). New groups: "interrupts back
+on after a handler", and "interrupts one flag, mfic's and the kernel's" (both engines: intr/mfic's thirteen values
+in its order, then a delay refused after an mtic of 0 and a better thread kept out until the resume, "MTR"). Grown:
+"interrupts held off keep the CPU" (the holder rotating and lowering its priority with interrupts and with
+dispatching held off: "ABP", interrupts 0 inside, where the old code gave "APB" and 1), "utility keyboard" (four
+more fields), "files synchronous reads wait" (the ioctl reads, their refusals and an answer still at once), "state
+fields" (a flag of 2 refused; its kernel copy gone from the fields), the CPU tests (the flag on at power, mtic's
+lowest bit), and `tests/psp/ares` (a version 5 state refused). The tree passed 198 groups and 240 checks.
+
+Merged with part 21 (sound, `cursor/psp-sound-2b67`, #147), which now sits under this part. The code merged by
+itself: sound rewrote audio.cpp, sas.cpp and the system's stream, which this part doesn't touch, and its additions
+to the kernel's header, power-on and states sit beside this part's. What clashed: the state's layout, which each
+branch had made version 6 its own way (part 21's for the output not yet taken, the SRC channel's place and VAG
+voices' decoders; this part's for the interrupt flag, the CPU's alone, its meaning changed), so the merged layout is
+version 7 and a state of version 1 to 6 is refused by its header (`tests/psp/ares` tries each); and the docs, part
+21 placed before this one and the handoff's entries newest first. "state fields" has both branches' fields and
+refusals. Sound's blocking outputs already refused where a thread can't wait, as this part's waits do. The merged
+tree passes 210 groups and 254 checks, nothing the merge broke having needed a fix. Then, with sas.cpp merged, this
+part's rule for functions that wait covers it too: __sceSasCore is refused where no thread may wait, as intr/delays
+recorded (ILLEGAL_CONTEXT in a handler, CAN_NOT_WAIT with interrupts or dispatching held off), before the buffer or
+a voice moves; __sceSasCoreWithMix, which waits alike, is taken the same (not recorded; intr/waits has no sas
+call). New group "sas core refused where no thread may wait" (both engines; without the check its six refusals
+returned 0 and its voice ended). The tree passes 211 groups (both sanitizers) and 254 checks. On the host (a
+scratch runner from boot, no buttons pressed, its frames and WAVs outside the repository): GTA Liberty City Stories
+reaches the city by frame 1200, Brave Story its intro past its logos, Burnout Legends "PRESS START BUTTON TO
+CONTINUE", as before; all three silent there (Burnout's title music is ATRAC3+, Brave Story's ATRAC3 data is
+refused, and GTA's sound thread makes its sas grains and blocking outputs at their pace with no voice keyed on).
+The Street Fighter III port's sound is part 21's capture second for second, but starts about 4 s later: its 4.4 MB
+of reads as it boots now take the disc's 3.2 s (this part's synchronous reads).

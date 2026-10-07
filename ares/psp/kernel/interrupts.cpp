@@ -40,13 +40,16 @@ auto Kernel::startCall() -> void {
   cpu.scc.halted = 0;
 }
 
-//The trampoline's syscall: the function returned. The CPU goes back as it was; the GE goes on if it was waiting for
-//this; the next call waiting starts, or, if a thread woke meanwhile, the scheduler picks who runs.
+//The trampoline's syscall: the function returned. The CPU goes back as it was, interrupts on as the call found them
+//(calls start only with interrupts on: a handler that held them off and returned doesn't pass that on to the thread
+//it interrupted, as on a PSP, where the interrupted context's state comes back with it); the GE goes on if it was
+//waiting for this; the next call waiting starts, or, if a thread woke meanwhile, the scheduler picks who runs.
 auto Kernel::callReturned() -> void {
   if(!interrupting) return;
   restore(interrupted);
   cpu.scc.halted = interruptedHalted;
   interrupting = false;
+  interruptsEnabled = true;
   if(callResumesGe) {
     callResumesGe = false;
     geSuspended = false;
@@ -61,25 +64,48 @@ auto Kernel::callReturned() -> void {
 }
 
 //For a function that may wait, before anything else it does: false, with the error for the result, during a call
-//into the program (ILLEGAL_CONTEXT), or with dispatching held off (CAN_NOT_WAIT: no other thread could run
-//meanwhile). pspautotests' intr/waits found a PSP refusing so whether the call would have had to wait or not (a free
-//lightweight mutex, an event flag's bits set already, a thread that has ended), and before looking at what it waits
-//on (an ID that isn't one); the few arguments it checks ahead of that, its callers check first.
+//into the program (ILLEGAL_CONTEXT), or with interrupts or dispatching held off (CAN_NOT_WAIT: no other thread could
+//run meanwhile). pspautotests' intr/waits found a PSP refusing so, every function that waits, whether the call would
+//have had to wait or not (a free lightweight mutex, an event flag's bits set already, a thread that has ended), and
+//before looking at what it waits on (an ID that isn't one); the few arguments it checks ahead of that, its callers
+//check first.
 auto Kernel::mayWait() -> bool {
   if(interrupting) return result(ErrorIllegalContext), false;
-  if(dispatchSuspended) return result(ErrorCanNotWait), false;
+  if(dispatchSuspended || !interruptsEnabled) return result(ErrorCanNotWait), false;
   return true;
 }
 
-//Holds calls into the program back, returning whether they were let through before (what ResumeIntr takes back).
+//Interrupts held off (sceKernelCpuSuspendIntr): the CPU's own interrupt flag, which user code reads and sets with
+//mfic and mtic, as pspautotests' intr/mfic recorded (1 as a program starts; only its lowest bit counts: resuming
+//with 2 leaves them off). interruptsEnabled is that very flag (cpu.scc.interrupts), so the program's own mfic and
+//mtic and these functions see and set the same one. With no interrupt, nothing can take the CPU from the running
+//thread: the vertical blank's handlers and the GE's callbacks wait, and so do threads whose waits end meanwhile
+//(reschedule()), as the timer's and the sound DMA's interrupts are what would have woken them. Nor may the thread
+//wait itself (mayWait()). So the flag goes with the thread that cleared it: a thread taking the CPU runs with its
+//own, which is on (switchTo()), and a handler's comes back on as it returns (callReturned()). Brave Story holds
+//interrupts off around its own lock; its sound thread, taking the CPU as a buffer ended in there, found them off,
+//every blocking output refused, and spun for good at the top priority. Turned back on by the program's own mtic
+//rather than by sceKernelCpuResumeIntr, what waited comes at the kernel's next look, not at once: the calls held
+//back as its next system call ends or the next thing comes due, a better thread made ready meanwhile at the
+//scheduler's next pick (the next thread woken, or the holder's next wait).
+
+//Holds interrupts off, returning whether they were on before (what ResumeIntr takes back).
 auto Kernel::sceKernelCpuSuspendIntr() -> void {
   result(interruptsEnabled);
   interruptsEnabled = false;
 }
 
+//Turns interrupts back on, or keeps them off, as the flag says. Back on, what waited for them comes now: the calls
+//into the program held back, then the thread the scheduler picks. (Kernel_Library's sceKernelCpuResumeIntrWithSync
+//is listed as this.)
 auto Kernel::sceKernelCpuResumeIntr() -> void {
-  interruptsEnabled = arg(0) != 0;
+  bool was = interruptsEnabled;
+  interruptsEnabled = arg(0) & 1;
   result(0);
+  if(interruptsEnabled && !was) {
+    startCall();
+    reschedule();
+  }
 }
 
 //Sub-interrupt handlers. A PSP interrupt's own handler may share the interrupt out among sub-interrupts, numbered

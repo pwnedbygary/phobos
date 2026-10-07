@@ -74,7 +74,7 @@
 //the loop goes back to, and any other byte goes on, 0x41 and 0x75 among them as recorded, 0x87 too); that a voice
 //keyed on with no samples set ends at the next __sceSasCore; and that every call works on the one SasCore
 //__sceSasInit set up, whatever core it's given. Nothing time-consuming is done: __sceSasCore returns at once, where
-//a PSP's waits for the Media Engine.
+//a PSP's waits for the Media Engine (but where a thread can't wait, it's refused as a PSP's is: sasMix()).
 
 namespace {
   //pspsdk's pspsascore.h; and __sceSasInit's own four, which pspautotests' audio/sascore recorded: a bad grain, voice
@@ -294,8 +294,13 @@ auto Kernel::__sceSasInit() -> void {
 //waiting its first 32 first), and the end flags are refreshed; then the grain is written to the buffer, a grain of
 //stereo pairs (stereo) or four planes of a grain each (multichannel). Mixing (__sceSasCoreWithMix: the buffer's left
 //and right volumes in arguments 2 and 3) adds the voices to what the buffer holds, scaled by those, in stereo alone:
-//multichannel is refused (NOT_SUPPORTED, as audio/sascore/outputmode recorded), before anything moves.
+//multichannel is refused (NOT_SUPPORTED, as audio/sascore/outputmode recorded), before anything moves. First of all,
+//where a thread can't wait it's refused as a function that waits is (mayWait()), the buffer and the voices left as
+//they were: pspautotests' intr/delays recorded __sceSasCore, whose grain waits for the Media Engine on a PSP, refused
+//in an interrupt handler (ILLEGAL_CONTEXT) and with interrupts or dispatching held off (CAN_NOT_WAIT).
+//__sceSasCoreWithMix waits alike, and is taken the same (not recorded).
 auto Kernel::sasMix(bool mix) -> void {
+  if(!mayWait()) return;
   u32 buffer = arg(1);
   if(!sas.initialized) return result(SasErrorNotInitialized);
   u32 grain = sas.grain, bytes = grain * (sas.outputMode ? 8 : 4);

@@ -294,7 +294,7 @@ auto Kernel::resumeWait(Thread& thread) -> void {
       memory.write(4, thread.waitID + 12, memory.read(4, thread.waitID + 12) - 1);
     }
     Wait wait = thread.wait;
-    ready(thread, wait == Wait::Delay ? 0 : ErrorWaitTimeout);
+    ready(thread, timeUp(thread));
     return waiterLeft(wait, thread.waitID);
   }
   switch(thread.wait) {

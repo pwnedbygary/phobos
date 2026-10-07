@@ -126,7 +126,7 @@ struct Kernel {
   static constexpr u32 ErrorIOError               = 0x8001'0005;
   static constexpr u32 ErrorNoPermission          = 0x8001'000d;
   static constexpr u32 ErrorFileExists            = 0x8001'0011;
-  static constexpr u32 ErrorCrossDevice           = 0x8001'0012;
+  static constexpr u32 ErrorCrossDevice           = 0x8002'0322;  //pspkerror.h's XDEV: a rename to another device
   static constexpr u32 ErrorDeviceNotFound        = 0x8001'0013;
   static constexpr u32 ErrorNotDirectory          = 0x8001'0014;
   static constexpr u32 ErrorIsDirectory           = 0x8001'0015;
@@ -233,6 +233,8 @@ struct Kernel {
   enum class Wait : u32 {
     None, Delay, Sleep, Semaphore, LwMutex, Vblank, ThreadEnd, Controller, EventFlag, GeList, GeDraw, Umd, Audio,
     Fpl, Vpl, Module, Async, PipeSend, PipeReceive, Mailbox,
+    File,  //a synchronous read or write, for the time its file's device takes (io.cpp)
+    Volatile,  //the volatile memory, lent to another (power.cpp)
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -250,10 +252,11 @@ struct Kernel {
     Wait wait = Wait::None;
     u32 waitID = 0;        //the semaphore, mutex, thread, event flag, display list, module, message pipe or mailbox
                            //waited for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the
-                           //SRC channel's); the file whose asynchronous request is waited for
+                           //SRC channel's); the file whose asynchronous request is waited for, or that a synchronous
+                           //read or write went to
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs; a mixer
                            //output's left volume; the samples an SRC output's buffer was armed with; the bytes a
-                           //message pipe's send or receive asked for
+                           //message pipe's send or receive asked for; what a synchronous read or write returns
     u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode
     u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
                            //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
@@ -298,6 +301,7 @@ struct Kernel {
   auto reschedule() -> void;
   auto switchTo(Thread* thread) -> void;
   auto events() -> void;
+  auto timeUp(const Thread& thread) const -> u32;
   auto waiterLeft(Wait wait, u32 id) -> void;
   auto idle(u64 end) -> bool;
   auto untilNextEvent() const -> u64;
@@ -428,6 +432,8 @@ struct Kernel {
   auto openFile(const std::string& path, u32 flags) -> u32;
   auto readFile(u32 file, u32 data, u32 size) -> u32;
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
+  auto fileWaitRefused() const -> u32;
+  auto fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void;
   auto seek(u32 file, s64 offset, u32 whence, u64& position) -> u32;
   auto ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 outLength, u64* moved = nullptr) -> u32;
   auto sceKernelStdin() -> void;
@@ -568,7 +574,8 @@ struct Kernel {
   };
   std::deque<Call> calls;       //waiting their turn
   bool interrupting = false;    //one is running
-  bool interruptsEnabled = true;  //sceKernelCpuSuspendIntr holds calls back until sceKernelCpuResumeIntr
+  u32& interruptsEnabled;       //the CPU's interrupt flag (mfic and mtic's, cpu.scc.interrupts): 1 on, 0 held off
+                                //(sceKernelCpuSuspendIntr), calls held back and the CPU kept for the running thread
   bool rescheduleAfter = false;   //a thread woke during the call: pick who runs once it's over
   Context interrupted{};        //the CPU as the call found it
   bool interruptedHalted = false;
@@ -1067,6 +1074,7 @@ struct Kernel {
   auto dialogStatus(u32 kind) -> void;
   auto dialogUpdate(u32 kind) -> void;
   auto dialogShutdown(u32 kind) -> void;
+  auto keyboard(u32 parameters) -> u32;
   static auto hexWord(u32 value) -> std::string;
   auto savePath(const std::string& folder, const std::string& file = {}) -> std::string;
   auto savedata(u32 parameters) -> u32;
@@ -1133,6 +1141,7 @@ struct Kernel {
   auto sceKernelPowerTick() -> void;
   auto sceKernelPowerLock() -> void;
   auto sceKernelPowerUnlock() -> void;
+  auto sceKernelVolatileMemLock() -> void;
   auto sceKernelVolatileMemTryLock() -> void;
   auto sceKernelVolatileMemUnlock() -> void;
 
@@ -1171,6 +1180,8 @@ struct Kernel {
   auto sceRtcGetTime_t() -> void;
   auto sceRtcGetDosTime() -> void;
   auto sceRtcSetDosTime() -> void;
+  auto sceRtcGetWin32FileTime() -> void;
+  auto sceRtcSetTick() -> void;
   auto sceOpenPSIDGetOpenPSID() -> void;
   auto sceKernelIsCpuIntrEnable() -> void;
   auto sceKernelMemset() -> void;

@@ -121,7 +121,7 @@ auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
 auto Kernel::block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer, bool callbacks) -> void {
   if(!current) return;
   if(interrupting) return result(ErrorIllegalContext);
-  if(dispatchSuspended) return result(ErrorCanNotWait);
+  if(dispatchSuspended || !interruptsEnabled) return result(ErrorCanNotWait);
   current->status = Status::Waiting;
   current->wait = wait;
   current->waitID = id;
@@ -139,14 +139,21 @@ auto Kernel::timeout(u32 pointer) const -> u64 {
 }
 
 //Picks the thread to run: the ready one with the highest priority (the lowest number), the one ready the longest
-//among equals. The running thread keeps the CPU unless one with a strictly higher priority is ready. During a call
-//into the program the choice waits until it's over.
+//among equals. The running thread keeps the CPU unless one with a strictly higher priority is ready, and keeps it
+//whatever is ready while it holds interrupts or dispatching off, even when it has just put itself back in line
+//(rotating its own priority's line, or changing its own priority, which make it ready): it stays running, and gives
+//way only once switching is allowed again, to a thread better than it then. During a call into the program the
+//choice waits until it's over.
 auto Kernel::reschedule() -> void {
   if(interrupting) {
     rescheduleAfter = true;
     return;
   }
-  if(dispatchSuspended && current && current->status == Status::Running) return;  //it keeps the CPU
+  if((dispatchSuspended || !interruptsEnabled) && current
+  && (current->status == Status::Running || current->status == Status::Ready)) {
+    current->status = Status::Running;
+    return;
+  }
   Thread* best = nullptr;
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Ready || thread->suspended) continue;
@@ -162,7 +169,9 @@ auto Kernel::reschedule() -> void {
 }
 
 //Puts the running thread's registers aside and loads next's (none: the CPU idles until a thread is ready). A thread
-//still in its wait was made ready only to run its callbacks (wakeForCallbacks()): they start now.
+//still in its wait was made ready only to run its callbacks (wakeForCallbacks()): they start now. Another thread
+//taking the CPU, or none, has interrupts on: only the thread that held them off loses them (it can't lose the CPU
+//meanwhile unless it ends).
 auto Kernel::switchTo(Thread* next) -> void {
   if(current && current == next) {  //it's already in the CPU
     next->status = Status::Running;
@@ -170,6 +179,7 @@ auto Kernel::switchTo(Thread* next) -> void {
   } else {
     if(current) save(current->context);
     current = next;
+    interruptsEnabled = true;
     if(!next) {
       cpu.scc.halted = 1;
       return;
@@ -208,11 +218,18 @@ auto Kernel::events() -> void {
     }
     if(thread->wait == Wait::EventFlag) eventFlagTimedOut(*thread);
     Wait wait = thread->wait;
-    ready(*thread, wait == Wait::Delay ? 0 : ErrorWaitTimeout);
+    ready(*thread, timeUp(*thread));
     waiterLeft(wait, thread->waitID);
     woke = true;
   }
   if(woke) reschedule();
+}
+
+//What a wait whose time is up returns: a delay, 0; a synchronous read or write, its result; any other, a timeout.
+auto Kernel::timeUp(const Thread& thread) const -> u32 {
+  if(thread.wait == Wait::Delay) return 0;
+  if(thread.wait == Wait::File) return thread.waitCount;
+  return ErrorWaitTimeout;
 }
 
 //A thread waiting for a semaphore's count or a memory pool's room stopped waiting without being served (its time
@@ -413,11 +430,16 @@ auto Kernel::sceKernelReferThreadStatus() -> void {
   result(0);
 }
 
-//Waits for a number of microseconds (and, with callbacks, runs the thread's callbacks as they're notified).
+//Waits for a number of microseconds (and, with callbacks, runs the thread's callbacks as they're notified), as long
+//as a PSP takes: its thread manager wakes a thread no sooner than about 205 microseconds on, and waking it takes
+//about 25 more. pspautotests' threads/scheduling/delaylen recorded every delay from 1 to 209 microseconds taking
+//about 230, and longer ones about 25 more than asked (220 about 250, 300 about 330, 1000 about 1030), CB or not. A
+//delay of 0 gives the CPU up for a moment, no more (delayzero: it returns at once, or lets a worse thread in).
 auto Kernel::delay(u32 microseconds, bool callbacks) -> void {
   if(!mayWait()) return;
   result(0);
-  block(Wait::Delay, 0, cycles + std::max<u64>(1, u64(microseconds) * (CPUFrequency / 1'000'000)), 0, callbacks);
+  u64 length = microseconds ? std::max<u64>(microseconds, 205) + 25 : 0;
+  block(Wait::Delay, 0, cycles + std::max<u64>(1, length * (CPUFrequency / 1'000'000)), 0, callbacks);
 }
 
 auto Kernel::sceKernelDelayThread() -> void {
@@ -704,8 +726,9 @@ auto Kernel::sceKernelReferSemaStatus() -> void {
 //for the caller's own; thread 0 is the caller. A thread not started yet, or ended, can't be changed (DORMANT); one
 //ready, waiting or suspended can. The thread goes to the back of its new priority's line: one that's ready goes in
 //behind those ready already, and so does the caller, which so gives way to any other thread of its priority (even
-//when its priority doesn't change). A thread that ends up above the caller's takes over at once. The test doesn't
-//show which comes first, a bad priority or a bad thread: the priority is checked first here.
+//when its priority doesn't change). A thread that ends up above the caller's takes over at once. With interrupts or
+//dispatching held off the caller keeps the CPU all the same (reschedule()), its new priority counting once they're
+//back. The test doesn't show which comes first, a bad priority or a bad thread: the priority is checked first here.
 auto Kernel::sceKernelChangeThreadPriority() -> void {
   u32 priority = arg(1);
   if(priority == 0 && current) priority = current->priority;
@@ -817,16 +840,15 @@ auto Kernel::sceKernelGetThreadCurrentPriority() -> void {
 }
 
 //(priority, 0 for the caller's): the first thread ready at that priority goes to the back of its line; at the
-//caller's own, the caller does, giving way to its equals, unless dispatching is held off: then it keeps the CPU. A
-//user thread's priorities (0x08-0x77) and 0 are taken, anything else is ILLEGAL_PRIORITY, as pspautotests'
-//threads/threads/rotate recorded.
+//caller's own, the caller does, giving way to its equals, unless interrupts or dispatching are held off: then it
+//keeps the CPU (reschedule()). A user thread's priorities (0x08-0x77) and 0 are taken, anything else is
+//ILLEGAL_PRIORITY, as pspautotests' threads/threads/rotate recorded.
 auto Kernel::sceKernelRotateThreadReadyQueue() -> void {
   u32 priority = arg(0);
   if(priority == 0 && current) priority = current->priority;
   if(priority < 0x08 || priority > 0x77) return result(ErrorIllegalPriority);
   result(0);
   if(current && current->status == Status::Running && current->priority == priority) {
-    if(dispatchSuspended) return;
     current->status = Status::Ready;  //reschedule() picks between it and its equals afresh
     current->readySince = ++readySequence;
     return reschedule();

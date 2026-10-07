@@ -95,6 +95,8 @@ constexpr auto syscall(uint32_t code) { return code << 6 | 0x0c; }
 constexpr uint32_t break_ = 0x0000000d;
 constexpr uint32_t nop = 0;
 constexpr uint32_t halt = 0x70000000;
+constexpr auto mfic(uint32_t t) { return 0x70000024u | t << 16; }  // mfic t,$0: the interrupt flag into t
+constexpr auto mtic(uint32_t t) { return 0x70000026u | t << 16; }  // mtic t,$0
 constexpr auto beq(uint32_t s, uint32_t t, int32_t o) { return I(0x04, t, s, o); }
 constexpr auto bne(uint32_t s, uint32_t t, int32_t o) { return I(0x05, t, s, o); }
 constexpr auto blez(uint32_t s, int32_t o) { return I(0x06, 0, s, o); }
