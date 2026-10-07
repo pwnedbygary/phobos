@@ -2,14 +2,16 @@
 //order. Each pixel is worked out from its job as ares/psp/ge/raster.cpp works it out (spriteRows(), triangleRows(),
 //a point's shadeAs()), the same operations on the same numbers, then textured (texture.glsl) and drawn (pixel.glsl).
 //
-//The jobs of a word of the tile's bin (up to 32) are first staged in the workgroup's shared memory, the words every
-//pixel looks at to find whether the job reaches it (its kind, look and box, a triangle's edges), each loaded once by
-//one thread for all 256. Then each thread finds which of them reach its pixel (covering), and the pixels are drawn
-//in rounds: in each, every pixel with a job left to draw gives its next one, in order, and those (a pixel and its
-//job) are shared out among the threads, the first to the first. So a pixel's jobs are drawn one after another, as
-//the software renderer draws them, while the threads that draw stay together: a small triangle's few pixels aren't
-//drawn by threads most of which have nothing to do, as they would be by the pixels' own threads. The pixels' values
-//are kept in shared memory meanwhile (tileColor, tileDepth, tileWritten), read and written by whoever draws them.
+//The jobs that reach the tile are gathered from its bin 32 at a time, in order (so a tile whose jobs are spread
+//thinly over the bin's words pays for each 32 once, not for each word), and staged in the workgroup's shared
+//memory: the words every pixel looks at to find whether the job reaches it (its kind, look and box, a triangle's
+//edges), each loaded once by one thread for all 256. Then each thread finds which of them reach its pixel
+//(covering), and the pixels are drawn in rounds: in each, every pixel with a job left to draw gives its next one, in
+//order, and those (a pixel and its job) are shared out among the threads, the first to the first. So a pixel's jobs
+//are drawn one after another, as the software renderer draws them, while the threads that draw stay together: a
+//small triangle's few pixels aren't drawn by threads most of which have nothing to do, as they would be by the
+//pixels' own threads. The pixels' values are kept in shared memory meanwhile (tileColor, tileDepth, tileWritten),
+//read and written by whoever draws them.
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 const uint StagedWords = 20u;  //a staged job's: its index, then its words below
@@ -66,18 +68,42 @@ void drawSprite(uint job, uint look, bool linear, int x, int y) {
   drawPixel(look, x, y, jobWord(job, SpriteZ), addShine(color, jobWord(job, SpriteSpecular)), fog);
 }
 
-//A triangle's three colors (four channels each) blended by the weights (raster.cpp's blendColor())
+//A triangle's blended values (raster.cpp's triangleRows()), each from its bound (exact.glsl), else the exact way.
+//Its three colors (four channels each, held to 0-255):
 uint blendColor(uint job, uint first, float w0, float w1, float w2, float total) {
   uint c0 = jobWord(job, first), c1 = jobWord(job, first + 1u), c2 = jobWord(job, first + 2u);
   uint color = 0u;
   for(int n = 0; n < 4; n++) {
-    float mixed = blend3(float(channel(c0, n)), float(channel(c1, n)), float(channel(c2, n)), w0, w1, w2, total);
-    color |= uint(clamp(truncated(mixed), 0, 255)) << uint(n * 8);
+    float f0 = float(channel(c0, n)), f1 = float(channel(c1, n)), f2 = float(channel(c2, n)), apart;
+    precise float rough = roughBlend(f0, f1, f2, w0, w1, w2, total, apart);
+    precise float low = rough - apart, high = rough + apart;
+    int level = clamp(truncated(low), 0, 255);
+    if(!bounded(rough, apart) || clamp(truncated(high), 0, 255) != level) {
+      level = clamp(truncated(blend3(f0, f1, f2, w0, w1, w2, total)), 0, 255);
+    }
+    color |= uint(level) << uint(n * 8);
   }
   return color;
 }
-float blendValue(uint job, uint first, float w0, float w1, float w2, float total) {
-  return blend3(jobFloat(job, first), jobFloat(job, first + 1u), jobFloat(job, first + 2u), w0, w1, w2, total);
+//its fog (fogAmount() of its blend):
+uint blendFog(uint job, float w0, float w1, float w2, float total) {
+  float f0 = jobFloat(job, TriangleFog), f1 = jobFloat(job, TriangleFog + 1u), f2 = jobFloat(job, TriangleFog + 2u);
+  float apart;
+  precise float rough = roughBlend(f0, f1, f2, w0, w1, w2, total, apart);
+  precise float low = rough - apart, high = rough + apart;
+  uint amount = fogAmount(low);
+  if(!bounded(rough, apart) || fogAmount(high) != amount) amount = fogAmount(blend3(f0, f1, f2, w0, w1, w2, total));
+  return amount;
+}
+//its depth (depthOf() of its blend):
+uint blendDepth(uint job, float w0, float w1, float w2, float total) {
+  float z0 = jobFloat(job, TriangleZ), z1 = jobFloat(job, TriangleZ + 1u), z2 = jobFloat(job, TriangleZ + 2u);
+  float apart;
+  precise float rough = roughBlend(z0, z1, z2, w0, w1, w2, total, apart);
+  precise float low = rough - apart, high = rough + apart;
+  uint depth = depthOf(low);
+  if(!bounded(rough, apart) || depthOf(high) != depth) depth = depthOf(blend3(z0, z1, z2, w0, w1, w2, total));
+  return depth;
 }
 
 //A 2D triangle's texture coordinate. The software renderer steps it in doubles from the leftmost corner (draw.cpp's
@@ -85,11 +111,58 @@ float blendValue(uint job, uint first, float w0, float w1, float w2, float total
 //it to a float. gpu.cpp takes only triangles for which that sum is exact in a double (no step of it rounds), and
 //sends it here as whole numbers over a power of two: base + (x - startX) * across + (y - startY) * down, in 64 bits,
 //over 2^shift. Rounded to a float, that's the very float the software renderer gets.
+//(u, then v)
 float wholeCoordinate(uint job, uint base, int shift, int dx, int dy) {
   uvec2 sum = uvec2(jobWord(job, base), jobWord(job, base + 1u));
   sum = wideAdd(sum, wideProduct(dx, jobInt(job, base + 2u)));
   sum = wideAdd(sum, wideProduct(dy, jobInt(job, base + 3u)));
   return ldexp(wideFloat(sum), -shift);
+}
+
+//A perspective triangle's texture coordinate, roughly (exact.glsl's bounds): (ka first + kb second + kc third) /
+//divisor, where each k (a weight over its corner's w) is the GPU's quotient, 6 roundings of itself from the host's,
+//and the divisor (the same sum over the q's) another 16 roundings of its own products' magnitudes (dividedApart:
+//those magnitudes over the divisor). The host's coordinate is within 16 roundings of the products' magnitudes over
+//the divisor, 17 of the coordinate times dividedApart and 6 of itself: 2^-18 of their sum is room enough.
+float roughCoordinate(float ka, float kb, float kc, float first, float second, float third, float divisor,
+                      float dividedApart, out float apart) {
+  precise float a = ka * first, b = kb * second, c = kc * third;
+  precise float sum = (a + b) + c, magnitude = (abs(a) + abs(b)) + abs(c);
+  precise float rough = sum / divisor;
+  apart = (magnitude / abs(divisor) + abs(rough) * (dividedApart + 1.0)) * BoundScale + BoundFloor;
+  return rough;
+}
+//Whether every coordinate within apart of rough falls in the same texel (and, filtered, the same sixteenth between
+//two): texelAxis() takes what it's given held to 65536 either way, scaled by 256 where filtered, then rounded down.
+bool sameTexel(float rough, float apart, bool linear) {
+  if(!bounded(rough, apart)) return false;
+  float scale = linear ? 256.0 : 1.0;
+  precise float low = clamp(rough - apart, -65536.0, 65536.0) * scale;
+  precise float high = clamp(rough + apart, -65536.0, 65536.0) * scale;
+  return floor(low) == floor(high);
+}
+//A perspective triangle's u and v roughly, where both are as good as the host's (sameTexel()); else false. The
+//divisor must be well away from zero (2^-10 of its products' magnitudes, so that its error is small beside it) and
+//inside the range where the GPU's division keeps its 2.5 units.
+bool roughPerspective(uint job, bool linear, float w0, float w1, float w2, out float u, out float v) {
+  precise float ka = w0 / jobFloat(job, TriangleW);
+  precise float kb = w1 / jobFloat(job, TriangleW + 1u);
+  precise float kc = w2 / jobFloat(job, TriangleW + 2u);
+  precise float qa = ka * jobFloat(job, TriangleQ), qb = kb * jobFloat(job, TriangleQ + 1u);
+  precise float qc = kc * jobFloat(job, TriangleQ + 2u);
+  precise float divisor = (qa + qb) + qc, magnitude = (abs(qa) + abs(qb)) + abs(qc);
+  float size = abs(divisor);
+  if(!finiteNumber(magnitude) || !(size >= magnitude * 0.0009765625) || size < 7.52316384526264e-37 ||
+     size > 1.329227995784916e36) {
+    return false;  //(2^-10; 2^-120 and 2^120)
+  }
+  precise float dividedApart = magnitude / size;
+  float uApart, vApart;
+  u = roughCoordinate(ka, kb, kc, jobFloat(job, TriangleU), jobFloat(job, TriangleU + 1u),
+                      jobFloat(job, TriangleU + 2u), divisor, dividedApart, uApart);
+  v = roughCoordinate(ka, kb, kc, jobFloat(job, TriangleV), jobFloat(job, TriangleV + 1u),
+                      jobFloat(job, TriangleV + 2u), divisor, dividedApart, vApart);
+  return sameTexel(u, uApart, linear) && sameTexel(v, vApart, linear);
 }
 
 //A triangle's pixel: inside where every edge's function is at least its least (exact whole numbers, in 64 bits),
@@ -115,9 +188,10 @@ void drawTriangle(uint slot, uint job, uint look, bool linear, int x, int y) {
                                   : jobWord(job, TriangleFlatSpecular);
   bool needsZ = (flags & FlagDepthRange) != 0u ||
                 (flags & ((flags & FlagClear) != 0u ? FlagClearDepth : FlagDepthTest)) != 0u;
-  uint z = needsZ ? depthOf(blendValue(job, TriangleZ, w0, w1, w2, total)) : 0u;
+  uint z = needsZ ? blendDepth(job, w0, w1, w2, total) : 0u;
   precise float u = 0.0, v = 0.0;
-  if((flags & FlagTextured) != 0u && perspective) {
+  bool textured = (flags & FlagTextured) != 0u;
+  if(textured && perspective && !roughPerspective(job, linear, w0, w1, w2, u, v)) {  //(the exact way)
     precise float ka = divide(w0, jobFloat(job, TriangleW));
     precise float kb = divide(w1, jobFloat(job, TriangleW + 1u));
     precise float kc = divide(w2, jobFloat(job, TriangleW + 2u));
@@ -127,13 +201,13 @@ void drawTriangle(uint slot, uint job, uint look, bool linear, int x, int y) {
                     jobFloat(job, TriangleU + 2u)), divisor);
     v = divide(sum3(ka, kb, kc, jobFloat(job, TriangleV), jobFloat(job, TriangleV + 1u),
                     jobFloat(job, TriangleV + 2u)), divisor);
-  } else if((flags & FlagTextured) != 0u) {
+  } else if(textured && !perspective) {
     int dx = sampleX - jobInt(job, TriangleStartX), dy = sampleY - jobInt(job, TriangleStartY);
     uint shifts = jobWord(job, TriangleShifts);
     u = wholeCoordinate(job, TriangleUBase, int(shifts & 0xffu), dx, dy);
     v = wholeCoordinate(job, TriangleVBase, int(shifts >> 8 & 0xffu), dx, dy);
   }
-  uint fog = (flags & FlagFog) != 0u ? fogAmount(blendValue(job, TriangleFog, w0, w1, w2, total)) : 255u;
+  uint fog = (flags & FlagFog) != 0u ? blendFog(job, w0, w1, w2, total) : 255u;
   shade(look, linear, x, y, z, color, specular, u, v, fog);
 }
 
@@ -199,20 +273,31 @@ void main() {
 
   //(every thread takes part in staging and in every round, so each loop and barrier is the whole workgroup's: a bin
   //word, and a round's count, are the same for all of them)
-  for(uint word = 0u; word < parameters.wordsPerTile; word++) {
-    uint jobs = bins[tile * parameters.wordsPerTile + word];
-    if(jobs == 0u) continue;
+  uint word = 0u, jobs = 0u;  //(the bin word being gathered from, and its jobs not yet gathered)
+  while(true) {
     barrier();  //(the staged jobs before drawn by every thread)
-    uint bit = index & 31u;
-    if((jobs >> bit & 1u) != 0u) {
-      uint job = word * 32u + bit, slot = uint(bitCount(jobs & ((1u << bit) - 1u)));
-      for(uint part = index >> 5; part < StagedWords; part += 8u) {
-        staged[slot * StagedWords + part] = part == 0u ? job : jobWord(job, stagedSource(part));
+    uint count = 0u;
+    while(count < 32u) {
+      if(jobs == 0u) {
+        if(word == parameters.wordsPerTile) break;
+        jobs = bins[tile * parameters.wordsPerTile + word++];
+        continue;
       }
+      uint bit = index & 31u, taking = min(uint(bitCount(jobs)), 32u - count);
+      uint rank = uint(bitCount(jobs & ((1u << bit) - 1u)));
+      if((jobs >> bit & 1u) != 0u && rank < taking) {
+        uint job = (word - 1u) * 32u + bit, slot = count + rank;
+        for(uint part = index >> 5; part < StagedWords; part += 8u) {
+          staged[slot * StagedWords + part] = part == 0u ? job : jobWord(job, stagedSource(part));
+        }
+      }
+      for(uint n = 0u; n < taking; n++) jobs &= jobs - 1u;  //(the lowest, gathered)
+      count += taking;
     }
+    if(count == 0u) break;
     memoryBarrierShared();
     barrier();
-    uint covering = 0u, count = uint(bitCount(jobs));
+    uint covering = 0u;
     if(inside) {
       for(uint slot = 0u; slot < count; slot++) covering |= reaches(slot, x, y) ? 1u << slot : 0u;
     }

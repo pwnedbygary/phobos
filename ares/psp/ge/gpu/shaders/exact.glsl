@@ -145,7 +145,7 @@ float significand(uint bits, out int exponent) {
 //unit in the last place by one step from its remainder; then of it and its two neighbours, the one whose remainder
 //x - q * y is least is the nearest (each such remainder fits a float, so fmaExact() gives it exactly), the even one
 //where two are as near. (Between 1 and 2, every value these steps take is far from the ends of the floats.)
-float quotient(float x, float y) {
+float quotientByFma(float x, float y) {
   precise float q = x / y;
   precise float inverse = 1.0 / y;
   q = fmaExact(fmaExact(-q, y, x), inverse, q);
@@ -160,6 +160,41 @@ float quotient(float x, float y) {
   }
   if(higherLeft < least || (higherLeft == least && (floatBitsToUint(higher) & 1u) == 0u)) best = higher;
   return best;
+}
+//The same, in whole numbers, where the GPU's fma() isn't fused (so fmaExact() is a dozen steps): x, y and the GPU's
+//quotient q are 24-bit significands X, Y and Q (x = X 2^-23, y = Y 2^-23, q = Q 2^(e - 23)), and x - q y is
+//2^(e - 46) (X 2^(23 - e) - Q Y): a 64-bit whole number R, exact. Each step of Q by one moves R by Y, so the nearest
+//quotient is the Q that leaves R within half a Y either way (the even one where it's exactly half); 2.5 units off at
+//most, three steps reach it. Near a power of two (where the units change) quotientByFma() decides, as it does if
+//four steps don't settle.
+float quotient(float x, float y) {
+  if(nativeFma != 0u) return quotientByFma(x, y);
+  precise float q = x / y;
+  uint bits = floatBitsToUint(q), significandQ = bits & 0x007fffffu;
+  if(significandQ < 4u || significandQ > 0x007ffffbu || !finiteNumber(q)) return quotientByFma(x, y);
+  int e = int(bits >> 23) - 127;  //(-1 to 1)
+  int X = int(floatBitsToUint(x) & 0x007fffffu | 0x00800000u);
+  int Y = int(floatBitsToUint(y) & 0x007fffffu | 0x00800000u);
+  int Q = int(significandQ | 0x00800000u);
+  uint shift = uint(23 - e);
+  uvec2 r = wideAdd(uvec2(uint(X) << shift, uint(X) >> (32u - shift)), wideNegate(wideProduct(Q, Y)));
+  uvec2 unit = uvec2(uint(Y), 0u), negativeUnit = wideNegate(unit);
+  bool settled = false;
+  for(int step = 0; step < 4 && !settled; step++) {
+    uvec2 twice = uvec2(r.x << 1, r.y << 1 | r.x >> 31);
+    uvec2 above = wideAdd(twice, negativeUnit), below = wideAdd(twice, unit);  //(2R - Y, 2R + Y)
+    bool odd = (Q & 1) != 0;
+    if(!wideNegative(above) && (!wideZero(above) || odd)) {  //(R above half a Y: Q too small)
+      Q++, r = wideAdd(r, negativeUnit);
+    } else if(wideNegative(below) || (wideZero(below) && odd)) {  //(below minus half a Y: too large)
+      Q--, r = wideAdd(r, unit);
+    } else {
+      settled = true;
+    }
+  }
+  //(a GPU further off than Vulkan allows: the other way)
+  if(!settled) return quotientByFma(x, y);
+  return uintBitsToFloat(uint(e + 127) << 23 | (uint(Q) & 0x007fffffu));
 }
 
 //a / b rounded to the nearest, ties to the even one, as the host divides: the quotient of the significands
@@ -211,6 +246,31 @@ float sum3(float first, float second, float third, float w0, float w1, float w2)
 float blend3(float first, float second, float third, float w0, float w1, float w2, float total) {
   return divide(sum3(first, second, third, w0, w1, w2), total);
 }
+
+//Bounds: most blended values become whole numbers (a color's level, fog's 256ths, the texel a coordinate is in),
+//through functions that never go down as the value goes up. Worked out the GPU's own way (its products and sums
+//rounded to the nearest, as Vulkan has them; its division within 2.5 units in the last place), a value is within a
+//bound of the host's; where the function gives the same whole number at both ends of the bound, it gives that at
+//the host's value too, and the exact way (fmaExact(), divide(): dozens of steps each) is needed only where the ends
+//fall apart, a few pixels in a thousand.
+//
+//A blend's bound: with p the sum of the products' magnitudes, the host's sum is within 3 roundings of p of the
+//exact one (u = 2^-24 a rounding, at most; 5 where the host doesn't fuse), the GPU's within 5; the host's quotient
+//another u of itself off, the GPU's 5u. So the two are within u (10 p / total + 6 |quotient|), and 2^-20 (16u) of
+//p / total + |quotient| leaves room for the error in working those two out. 2^-100 more covers results below the
+//normal floats (a GPU may flush them to zero). (The perspective's bound, in raster.comp, is BoundScale's.)
+const float BlendBound = 9.5367431640625e-07;  //2^-20
+const float BoundScale = 3.814697265625e-06;  //2^-18
+const float BoundFloor = 7.888609052210118e-31;  //2^-100
+float roughBlend(float first, float second, float third, float w0, float w1, float w2, float total, out float apart) {
+  precise float a = first * w0, b = second * w1, c = third * w2;
+  precise float sum = (a + b) + c, magnitude = (abs(a) + abs(b)) + abs(c);
+  precise float rough = sum / total;
+  apart = (magnitude / abs(total) + abs(rough)) * BlendBound + BoundFloor;
+  return rough;
+}
+//Whether a rough value and its bound are numbers at all (where they aren't, only the exact way says)
+bool bounded(float rough, float apart) { return finiteNumber(rough) && finiteNumber(apart); }
 
 //s32(value), as ARM64 converts it: toward zero, held to the 32-bit numbers, 0 for what isn't a number
 int truncated(float value) {
