@@ -87,22 +87,36 @@ uint stencilOperation(uint operation, uint format, uint reference, uint stencil)
   return stencil;
 }
 
-//A blend factor's three channels (BLEND_MODE's source or destination factor): of the other's color, the source's or
-//destination's alpha, doubled, or fixed.
-ivec3 blendFactor(uint which, uint other, int sourceAlpha, int destinationAlpha, uint fixedColor) {
-  switch(which) {
-  case 0u: return ivec3(channel(other, 0), channel(other, 1), channel(other, 2));
-  case 1u: return ivec3(255 - channel(other, 0), 255 - channel(other, 1), 255 - channel(other, 2));
-  case 2u: return ivec3(sourceAlpha);
-  case 3u: return ivec3(255 - sourceAlpha);
-  case 4u: return ivec3(destinationAlpha);
-  case 5u: return ivec3(255 - destinationAlpha);
-  case 6u: return ivec3(2 * sourceAlpha);
-  case 7u: return ivec3(255 - min(2 * sourceAlpha, 255));
-  case 8u: return ivec3(2 * destinationAlpha);
-  case 9u: return ivec3(255 - min(2 * destinationAlpha, 255));
-  }
-  return ivec3(channel(fixedColor, 0), channel(fixedColor, 1), channel(fixedColor, 2));
+//A blend factor's channel (BLEND_MODE's source or destination factor): of the other's color (its channel: other),
+//the source's or destination's alpha, doubled, or fixed (its channel: fixedChannel). A channel at a time, a whole
+//number each: Adreno's compiler (the RP6's driver) got the green and blue of "255 - the other's color" wrong when
+//the three were made together as a vector, in a switch.
+int blendFactor(uint which, int other, int sourceAlpha, int destinationAlpha, int fixedChannel) {
+  if(which == 0u) return other;
+  if(which == 1u) return 255 - other;
+  if(which == 2u) return sourceAlpha;
+  if(which == 3u) return 255 - sourceAlpha;
+  if(which == 4u) return destinationAlpha;
+  if(which == 5u) return 255 - destinationAlpha;
+  if(which == 6u) return 2 * sourceAlpha;
+  if(which == 7u) return 255 - min(2 * sourceAlpha, 255);
+  if(which == 8u) return 2 * destinationAlpha;
+  if(which == 9u) return 255 - min(2 * destinationAlpha, 255);
+  return fixedChannel;
+}
+
+//A channel blended (BLEND_MODE's operation), source s and destination d with their factors. (Each channel is its
+//own call, with no vector indexed by a number that changes.)
+int blendChannel(uint operation, int s, int d, int sourceFactor, int destinationFactor) {
+  int sourceTerm = (s * 2 + 1) * (sourceFactor * 2 + 1) >> 10;
+  int destinationTerm = (d * 2 + 1) * (destinationFactor * 2 + 1) >> 10;
+  if(operation == 0u) return sourceTerm + destinationTerm;
+  if(operation == 1u) return sourceTerm - destinationTerm;
+  if(operation == 2u) return destinationTerm - sourceTerm;
+  if(operation == 3u) return min(s, d);
+  if(operation == 4u) return max(s, d);
+  if(operation == 5u) return abs(s - d);
+  return s;
 }
 
 uint logicOperation(uint operation, uint s, uint d) {
@@ -196,23 +210,17 @@ void drawPixel(uint look, int lane, int x, int y, uint z, uint color, uint fog) 
   ivec3 rgb = ivec3(channel(color, 0), channel(color, 1), channel(color, 2));
   if((flags & FlagBlend) != 0u) {
     uint mode = lookWord(look, LookBlend);
+    uint source = mode & 15u, destination = mode >> 4 & 15u, operation = mode >> 8 & 15u;
     int destinationAlpha = int(oldColor >> 24);
     uint fixedA = lookWord(look, LookFixedA), fixedB = lookWord(look, LookFixedB);
-    ivec3 sourceFactor = blendFactor(mode & 15u, oldColor, alpha, destinationAlpha, fixedA);
-    ivec3 destinationFactor = blendFactor(mode >> 4 & 15u, color, alpha, destinationAlpha, fixedB);
-    uint operation = mode >> 8 & 15u;
+    int blended[3];
     for(int n = 0; n < 3; n++) {
       int s = channel(color, n), d = channel(oldColor, n);
-      int sourceTerm = (s * 2 + 1) * (sourceFactor[n] * 2 + 1) >> 10;
-      int destinationTerm = (d * 2 + 1) * (destinationFactor[n] * 2 + 1) >> 10;
-      if(operation == 0u) rgb[n] = sourceTerm + destinationTerm;
-      else if(operation == 1u) rgb[n] = sourceTerm - destinationTerm;
-      else if(operation == 2u) rgb[n] = destinationTerm - sourceTerm;
-      else if(operation == 3u) rgb[n] = min(s, d);
-      else if(operation == 4u) rgb[n] = max(s, d);
-      else if(operation == 5u) rgb[n] = abs(s - d);
-      else rgb[n] = s;
+      int sourceFactor = blendFactor(source, d, alpha, destinationAlpha, channel(fixedA, n));
+      int destinationFactor = blendFactor(destination, s, alpha, destinationAlpha, channel(fixedB, n));
+      blended[n] = blendChannel(operation, s, d, sourceFactor, destinationFactor);
     }
+    rgb = ivec3(blended[0], blended[1], blended[2]);
   }
   if((flags & FlagDither) != 0u) {
     uint row = uint(y & 3), column = uint(x & 3);

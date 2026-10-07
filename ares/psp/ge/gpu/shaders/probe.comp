@@ -5,6 +5,8 @@
 //  1: a 64-bit whole number (two words) -> wideFloat() of it
 //  2: v0, v1, v2, w0, w1, w2, total (floats) -> blend3(), and truncated() of it
 //  3: a coordinate, a size, clamped, linear -> texelAxis()'s three, fogAmount() of the coordinate, depthOf() of it
+//  4: a, x, b, y (32-bit whole numbers) -> a * x + b * y in 64 bits (an edge function: two words), and whether it's
+//     below zero, and zero
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 void main() {
@@ -34,6 +36,11 @@ void main() {
     float mixed = blend3(in0, in1, in2, w0, w1, w2, total);
     bins[at] = floatBitsToUint(mixed);
     bins[at + 1u] = uint(truncated(mixed));
+  } else if(parameters.probeKind == 4u) {
+    uvec2 edge = wideAdd(wideProduct(int(records[at]), int(records[at + 1u])),
+                         wideProduct(int(records[at + 2u]), int(records[at + 3u])));
+    bins[at] = edge.x, bins[at + 1u] = edge.y;
+    bins[at + 2u] = wideNegative(edge) ? 1u : 0u, bins[at + 3u] = wideZero(edge) ? 1u : 0u;
   } else {
     ivec3 axis = texelAxis(in0, records[at + 1u], records[at + 2u] != 0u, records[at + 3u] != 0u);
     bins[at] = uint(axis.x), bins[at + 1u] = uint(axis.y), bins[at + 2u] = uint(axis.z);

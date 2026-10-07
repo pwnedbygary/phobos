@@ -64,26 +64,31 @@ uint sampleAt(uint look, bool linear, float u, float v) {
 //The texture function (texture.cpp's textureFunctionWith()): how the texel and the pixel's own color combine.
 //modulate, decal, blend (with the environment color), replace, add (and 5-7, as add); the texture's alpha or not;
 //color doubling. Products are (Cf + 1) * Ct / 256, but blend's, which rounds up.
+//(a channel at a time, each its own call: see pixel.glsl's blendChannel())
+int combineChannel(uint function, bool withAlpha, bool doubled, int f, int t, int texelAlpha, int environment) {
+  int twice = doubled ? 2 : 1, down = doubled ? 7 : 8;
+  if(function == 0u) return (f + 1) * t * twice >> 8;
+  if(function == 1u && withAlpha) return ((f + 1) * (255 - texelAlpha) + (t + 1) * texelAlpha) >> down;
+  if(function == 1u) return t * twice;
+  if(function == 2u) return ((255 - t) * f + t * environment + 255) >> down;
+  if(function == 3u) return t * twice;
+  return (f + t) * twice;
+}
 uint combine(uint look, uint color, uint texel) {
   uint flags = lookWord(look, LookFlags);
   uint function = lookWord(look, LookFunction), environment = lookWord(look, LookEnvironment);
   bool withAlpha = (flags & FlagWithAlpha) != 0u, doubled = (flags & FlagDoubled) != 0u;
   int fragmentAlpha = channel(color, 3), texelAlpha = channel(texel, 3);
   int alpha = withAlpha ? (fragmentAlpha + 1) * texelAlpha >> 8 : fragmentAlpha;
-  int twice = doubled ? 2 : 1, down = doubled ? 7 : 8;
-  int result[3];
-  for(int n = 0; n < 3; n++) {
-    int f = channel(color, n), t = channel(texel, n);
-    if(function == 0u) result[n] = (f + 1) * t * twice >> 8;
-    else if(function == 1u && withAlpha) result[n] = ((f + 1) * (255 - texelAlpha) + (t + 1) * texelAlpha) >> down;
-    else if(function == 1u) result[n] = t * twice;
-    else if(function == 2u) result[n] = ((255 - t) * f + t * channel(environment, n) + 255) >> down;
-    else if(function == 3u) result[n] = t * twice;
-    else result[n] = (f + t) * twice;
-  }
   if(function == 1u) alpha = fragmentAlpha;
   if(function == 3u) alpha = withAlpha ? texelAlpha : fragmentAlpha;
-  return pack(result[0], result[1], result[2], alpha);
+  return pack(combineChannel(function, withAlpha, doubled, channel(color, 0), channel(texel, 0), texelAlpha,
+                             channel(environment, 0)),
+              combineChannel(function, withAlpha, doubled, channel(color, 1), channel(texel, 1), texelAlpha,
+                             channel(environment, 1)),
+              combineChannel(function, withAlpha, doubled, channel(color, 2), channel(texel, 2), texelAlpha,
+                             channel(environment, 2)),
+              alpha);
 }
 
 //lighting's shine, kept apart, added after the texture (raster.cpp's shadeAs())

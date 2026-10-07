@@ -89,10 +89,11 @@ static auto gpuArithmetic() -> void {
       volatile float product = a * b, sum = a + c, quotient = a / b;
       float sum3 = a * c + b * a + c * b;  //(as the host's compiler rounds such a sum: raster.cpp's)
       float expected[7] = {product, sum, std::fma(a, b, c), quotient, std::fma(a, b, c), quotient, sum3};
-      for(u32 k : {0u, 1u, 4u, 5u, 6u}) wrong[k] += results[n * 8 + k] != bitsOf(expected[k]);
+      for(u32 k : {0u, 1u, 2u, 3u, 4u, 5u, 6u}) wrong[k] += results[n * 8 + k] != bitsOf(expected[k]);
     }
-    std::printf("  %u cases (fma %s): wrong products %u, sums %u, fmaExact %u, divide %u, sum3 %u\n", Count,
-                native ? "the GPU's" : "built", wrong[0], wrong[1], wrong[4], wrong[5], wrong[6]);
+    std::printf("  %u cases (fma %s): wrong products %u, sums %u, fmaExact %u, divide %u, sum3 %u (the GPU's own fma "
+                "%u, division %u)\n", Count, native ? "the GPU's" : "built", wrong[0], wrong[1], wrong[4], wrong[5],
+                wrong[6], wrong[2], wrong[3]);
     for(u32 k : {0u, 1u, 4u, 5u, 6u}) CHECK(wrong[k], 0u);
     CHECK(gpu->configure(gpu->fused, wasNative), true);
   }
@@ -153,7 +154,8 @@ static auto gpuArithmetic() -> void {
     default: c = real(-0.01f, 1.01f); break;
     }
     coordinates.push_back(c);
-    cases.insert(cases.end(), {bitsOf(c), 1u << (random() % 10), random() % 2, random() % 2, 0, 0, 0, 0});
+    u32 size = 1u << (random() % 10), clamped = random() % 2, linear = random() % 2;
+    cases.insert(cases.end(), {bitsOf(c), size, clamped, linear, 0, 0, 0, 0});
   }
   results = gpu->probe(3, cases);
   CHECK(results.size(), cases.size());
@@ -175,6 +177,23 @@ static auto gpuArithmetic() -> void {
   CHECK(wrongAxes, 0u);
   CHECK(wrongFog, 0u);
   CHECK(wrongDepths, 0u);
+
+  //4: edge functions, a * x + b * y in 64 bits, as triangles' (each part up to 2^18 or so either way) and past
+  cases.clear();
+  for(u32 n = 0; n < Count; n++) {
+    u32 bits = n % 2 ? 19 : 32;
+    auto any = [&] { return u32(s32(random()) >> (32 - bits)); };
+    cases.insert(cases.end(), {any(), any(), any(), any(), 0, 0, 0, 0});
+  }
+  results = gpu->probe(4, cases);
+  CHECK(results.size(), cases.size());
+  u32 wrongEdges = 0;
+  for(u32 n = 0; n < Count && results.size() == cases.size(); n++) {
+    s64 edge = s64(s32(cases[n * 8])) * s32(cases[n * 8 + 1]) + s64(s32(cases[n * 8 + 2])) * s32(cases[n * 8 + 3]);
+    wrongEdges += results[n * 8] != u32(edge) || results[n * 8 + 1] != u32(u64(edge) >> 32) ||
+                  results[n * 8 + 2] != u32(edge < 0) || results[n * 8 + 3] != u32(edge == 0);
+  }
+  CHECK(wrongEdges, 0u);
 }
 
 //Random batches drawn by the GPU renderer and by the software renderer, as draw3d.cpp's four-pixels-against-one
@@ -231,6 +250,7 @@ static auto gpuDrawsAsSoftware() -> void {
   u32 batches = 0, differing = 0, pixels = 0, pixelsApart = 0;
   for(u32 batch = 0; batch < 2500; batch++) {
     u32 format = below(4), count = 1 + below(16);
+    std::string described;  //(each primitive's kind and settings, said for a batch that differs)
     hardware.ge.drawing.deferring = true;  //(as run() has it: the primitives wait in a batch)
     for(u32 primitive = 0; primitive < count; primitive++) {
       std::vector<std::pair<u32, u32>> commands;
@@ -348,19 +368,46 @@ static auto gpuDrawsAsSoftware() -> void {
         s->ge.vertexAddress = Vertices;
         s->ge.primitive(kind, vertices);
       }
+      auto& c = software.ge.commands;
+      char text[160];
+      std::snprintf(text, sizeof(text), " [%u %s%s%s clear %x blend %x/%x stencil %x/%x logic %x dither %x "
+                    "test %x/%x fog %x mask %x/%x]", kind, flat ? "2D" : "3D", textured ? " textured" : "",
+                    lit ? " lit" : "",
+                    c[GE::ClearMode] & 0xffff, c[GE::AlphaBlendEnable] & 1, c[GE::BlendMode] & 0xfff,
+                    c[GE::StencilTestEnable] & 1, c[GE::StencilOperation] & 0x70707, c[GE::LogicOpEnable] & 1,
+                    c[GE::DitherEnable] & 1, c[GE::AlphaTestEnable] & 1, c[GE::ColorTestEnable] & 1,
+                    c[GE::FogEnable] & 1, c[GE::MaskColor] & 0xff'ffff, c[GE::MaskAlpha] & 0xff);
+      described += text;
     }
     hardware.ge.drawing.deferring = false;
     hardware.ge.launch(true);  //(as run() ends: the batch drawn, by the renderer)
     batches++;
     u32 bytesPerPixel = format == 3 ? 4 : 2;
     bool apart = false;
+    std::string where;
+    auto hexOf = [](u32 value) {
+      char text[12];
+      std::snprintf(text, sizeof(text), "%x", value);
+      return std::string(text);
+    };
     for(u32 n = 0; n < Width * Height; n++) {
-      bool same = !std::memcmp(software.memory.vram.data() + n * bytesPerPixel,
-                               hardware.memory.vram.data() + n * bytesPerPixel, bytesPerPixel);
-      pixels++, pixelsApart += !same, apart |= !same;
+      u32 wanted = 0, drawn = 0;
+      std::memcpy(&wanted, software.memory.vram.data() + n * bytesPerPixel, bytesPerPixel);
+      std::memcpy(&drawn, hardware.memory.vram.data() + n * bytesPerPixel, bytesPerPixel);
+      if(wanted != drawn && where.size() < 120) {
+        where += " (" + std::to_string(n % Width) + ", " + std::to_string(n / Width) + "): " + hexOf(wanted) +
+                 " not " + hexOf(drawn);
+      }
+      pixels++, pixelsApart += wanted != drawn, apart |= wanted != drawn;
     }
-    apart |= !!std::memcmp(software.memory.vram.data() + Depth, hardware.memory.vram.data() + Depth, 0x4000);
-    if(apart && differing++ < 8) std::printf("  batch %u (format %u, %u primitives) differs\n", batch, format, count);
+    bool depthApart = std::memcmp(software.memory.vram.data() + Depth, hardware.memory.vram.data() + Depth, 0x4000);
+    apart |= depthApart;
+    if(apart && differing++ < 6) {
+      std::printf("  batch %u (format %u) differs%s:%s%s\n", batch, format, depthApart ? " (depth too)" : "",
+                  where.c_str(), described.c_str());
+    }
+    //(each batch over the same VRAM: one that differs doesn't leave the next batches differing too)
+    if(apart) hardware.memory.copyIn(VRAM, software.memory.vram.data(), Memory::VRAMSize);
   }
   auto& after = gpu->statistics;
   u64 gpuJobs = after.gpuJobs - before.gpuJobs, cpuJobs = after.cpuJobs - before.cpuJobs;
