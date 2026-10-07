@@ -269,6 +269,20 @@ auto Kernel::geRestoreContext(u32 address) -> void {
 auto Kernel::sceGeEdramGetAddr() -> void { result(Memory::VRAMBase); }
 auto Kernel::sceGeEdramGetSize() -> void { result(Memory::VRAMSize); }
 
+//(width): how VRAM's swizzled copies lay its bytes out (pspsdk's pspge.h: 512, 1024, 2048 or 4096). As
+//pspautotests' gpu/ge/edram recorded, 0, 0x200, 0x400, 0x800 and 0x1000 are taken, and the width there was is
+//returned (0x400 the first time: what the PSP starts with; 0 after a 0); anything else is refused (INVALID_VALUE).
+//Only the number is kept: the swizzled copies keep the layout they have at the starting width (memory.cpp's
+//vramOffset()), whatever is set; gpu/ge/edramswizzle's patterns for the other widths would show what they become.
+auto Kernel::sceGeEdramSetAddrTranslation() -> void {
+  u32 width = arg(0);
+  if(width && width != 0x200 && width != 0x400 && width != 0x800 && width != 0x1000) {
+    return result(ErrorInvalidValue);
+  }
+  result(geTranslation);
+  geTranslation = width;
+}
+
 //(list, stall address (0: none), callbacks (sceGeSetCallback's number; negative for none), options): the list goes at
 //the queue's end, and the GE starts on it at once if it's free. Returns the list's ID. The options (PspGeListArgs, if
 //given): their size, where to save the GE's state, and how deep SIGNAL calls may go (32 if not said).

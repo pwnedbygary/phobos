@@ -149,3 +149,25 @@ auto Kernel::sceCtrlReadLatch() -> void {
   result(writeLatch(arg(0)));
   controller.latch = {};
 }
+
+//(how far the stick moves to put off the idle timer, how far to bring the PSP back from idle): pspsdk's pspctrl.h
+//has -1 for never, 0 for always (the stick unmoved), and 1 to 128 for that much movement on either axis; anything
+//else, in either, is refused (INVALID_VALUE) with neither kept, as pspautotests' ctrl/idle recorded. Kept to be
+//read back: the PSP emulated never dims or sleeps, so nothing waits on them.
+auto Kernel::sceCtrlSetIdleCancelThreshold() -> void {
+  s32 reset = s32(arg(0)), back = s32(arg(1));
+  if(reset < -1 || reset > 128 || back < -1 || back > 128) return result(ErrorInvalidValue);
+  controller.idleReset = reset;
+  controller.idleBack = back;
+  result(0);
+}
+
+//(where to put each; null for either not wanted): -1 each until they're set. An address of the kernel's (its top
+//bit set) is refused (PRIVILEGE_REQUIRED, ctrl/idle's 0xDEADBEEF), before either is written.
+auto Kernel::sceCtrlGetIdleCancelThreshold() -> void {
+  u32 reset = arg(0), back = arg(1);
+  if((reset | back) & 0x8000'0000) return result(ErrorPrivilegeRequired);
+  if(reset) memory.write(4, reset, controller.idleReset);
+  if(back) memory.write(4, back, controller.idleBack);
+  result(0);
+}

@@ -85,7 +85,9 @@ auto Allegrex::Recompiler::run() -> u32 {
     return 1;
   }
   auto code = block(ipu.pc);
+  inBlock = true;
   ((void (*)(Allegrex*))code)(&self);
+  inBlock = false;
   return executed;
 }
 

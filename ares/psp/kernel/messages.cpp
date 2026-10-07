@@ -222,7 +222,7 @@ auto Kernel::pipeSend(bool wait, bool callbacks) -> void {
   current->waitDone = done;
   current->waitResult = sent;
   current->readySince = ++readySequence;  //its place in the line
-  block(Wait::PipeSend, pipe->uid, timeout(timeoutPointer), timeoutPointer, callbacks);
+  blockTimed(Wait::PipeSend, pipe->uid, timeoutPointer, callbacks);
 }
 
 //(pipe, buffer, size, mode, where to put how many bytes came, timeout): from the pipe's buffer, then straight from
@@ -266,7 +266,7 @@ auto Kernel::pipeReceive(bool wait, bool callbacks) -> void {
   current->waitDone = done;
   current->waitResult = got;
   current->readySince = ++readySequence;
-  block(Wait::PipeReceive, pipe->uid, timeout(timeoutPointer), timeoutPointer, callbacks);
+  blockTimed(Wait::PipeReceive, pipe->uid, timeoutPointer, callbacks);
 }
 
 auto Kernel::sceKernelSendMsgPipe() -> void { pipeSend(true, false); }
@@ -399,7 +399,7 @@ auto Kernel::mailboxReceive(bool callbacks) -> void {
   result(0);
   current->waitPointer = pointer;
   current->readySince = ++readySequence;
-  block(Wait::Mailbox, mailbox.uid, timeout(timeoutPointer), timeoutPointer, callbacks);
+  blockTimed(Wait::Mailbox, mailbox.uid, timeoutPointer, callbacks);
 }
 
 auto Kernel::sceKernelReceiveMbx() -> void { mailboxReceive(false); }

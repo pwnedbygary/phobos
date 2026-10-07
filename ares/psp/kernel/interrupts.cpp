@@ -1,9 +1,10 @@
 //Calls into the program. Now and then the kernel has to run one of the program's own functions: the GE's callbacks,
-//when a display list finishes or signals, and the sub-interrupt handlers the program registers (below). The PSP runs
-//them as interrupt handlers, and so does this: the thread running is set aside exactly as it was (or the idle CPU, if
-//none is), the function runs on the kernel's interrupt stack with its arguments in a0-a2, the global pointer it was
-//registered with, and ra pointing at a trampoline; when it returns there, the CPU is put back and the thread carries
-//on, none the wiser. Calls that come meanwhile wait their turn.
+//when a display list finishes or signals, the sub-interrupt handlers the program registers (below), and alarms' and
+//virtual timers' handlers (timers.cpp). The PSP runs them as interrupt handlers, and so does this: the thread running
+//is set aside exactly as it was (or the idle CPU, if none is), the function runs on the kernel's interrupt stack
+//with its arguments in a0-a3, the global pointer it was registered with, and ra pointing at a trampoline; when it
+//returns there, the CPU is put back and the thread carries on, none the wiser. Calls that come meanwhile wait their
+//turn.
 //
 //A call starts when it can: at the end of the system function that caused it (the result already in v0), or as the
 //kernel's loop goes round. Not while one is running, and not while the program holds interrupts off
@@ -12,7 +13,7 @@
 //way: uOFW's sceKernelCallSubIntrHandler.)
 
 auto Kernel::queueCall(u32 function, u32 gp, u32 a0, u32 a1, u32 a2, bool resumesGe) -> void {
-  calls.push_back({function, gp, {a0, a1, a2}, resumesGe});
+  calls.push_back({function, gp, {a0, a1, a2, 0}, resumesGe});
 }
 
 //The next call starts, if one may: none is running and interrupts aren't held off. A vertical blank held off till
@@ -31,7 +32,10 @@ auto Kernel::startCall() -> void {
   interruptedHalted = cpu.scc.halted;
   interrupting = true;
   callResumesGe = call.resumesGe;
-  for(u32 n = 0; n < 3; n++) cpu.ipu.r[4 + n] = call.arguments[n];
+  callKind = call.kind;
+  callID = call.id;
+  if(call.kind == Call::VTimer) vtimerClocks(call.id);
+  for(u32 n = 0; n < 4; n++) cpu.ipu.r[4 + n] = call.arguments[n];
   cpu.ipu.r[28] = call.gp;
   cpu.ipu.r[29] = InterruptStack - 16;
   cpu.ipu.r[31] = Trampoline + 8;  //its syscall comes back here, to callReturned()
@@ -42,14 +46,19 @@ auto Kernel::startCall() -> void {
 
 //The trampoline's syscall: the function returned. The CPU goes back as it was, interrupts on as the call found them
 //(calls start only with interrupts on: a handler that held them off and returned doesn't pass that on to the thread
-//it interrupted, as on a PSP, where the interrupted context's state comes back with it); the GE goes on if it was
-//waiting for this; the next call waiting starts, or, if a thread woke meanwhile, the scheduler picks who runs.
+//it interrupted, as on a PSP, where the interrupted context's state comes back with it); a timer's handler has what
+//it returned say when it's called again (timers.cpp); the GE goes on if it was waiting for this; the next call
+//waiting starts, or, if a thread woke meanwhile, the scheduler picks who runs.
 auto Kernel::callReturned() -> void {
   if(!interrupting) return;
+  u32 returned = cpu.ipu.r[2];
   restore(interrupted);
   cpu.scc.halted = interruptedHalted;
   interrupting = false;
   interruptsEnabled = true;
+  if(callKind != Call::Plain) timerReturned(callKind, callID, returned);
+  callKind = Call::Plain;
+  callID = 0;
   if(callResumesGe) {
     callResumesGe = false;
     geSuspended = false;
@@ -72,6 +81,18 @@ auto Kernel::callReturned() -> void {
 auto Kernel::mayWait() -> bool {
   if(interrupting) return result(ErrorIllegalContext), false;
   if(dispatchSuspended || !interruptsEnabled) return result(ErrorCanNotWait), false;
+  return true;
+}
+
+//For a function that makes the calling thread a mutex's holder, or takes its locks off (trying a lock, unlocking,
+//cancelling to a count, making one held), before anything else it does: false, with ILLEGAL_CONTEXT for the result,
+//in a call into the program, or with no thread running (a test calling directly). There's no thread to hold it: an
+//interrupt handler's lock would leave the mutex held by nobody, which no thread could unlock, or by whatever thread
+//it interrupted, which never took it. pspautotests record only the waiting locks in a handler (intr/waits:
+//ILLEGAL_CONTEXT, before the mutex is looked at); these are refused alike, as the PSP's other thread functions are
+//in a handler (vtimers/interrupt's create and delete).
+auto Kernel::fromThread() -> bool {
+  if(interrupting || !current) return result(ErrorIllegalContext), false;
   return true;
 }
 
@@ -250,7 +271,7 @@ auto Kernel::queueVblankHandlers() -> void {
   for(u32 sub = 0; sub < 32; sub++) {
     auto& handler = vblankSubs[sub];
     if(!handler.function || !handler.enabled) continue;
-    calls.push_back({handler.function, handler.gp, {sub, handler.argument, 0}, false, true});
+    calls.push_back({handler.function, handler.gp, {sub, handler.argument, 0, 0}, false, true});
   }
 }
 

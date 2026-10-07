@@ -175,6 +175,19 @@ auto Kernel::sceKernelSysClock2USecWide() -> void {
   result(0);
 }
 
+//(microseconds, where to put them as a SceKernelSysClock): the system's clock counts microseconds, so the number as
+//it is, 64 bits wide.
+auto Kernel::sceKernelUSec2SysClock() -> void {
+  memory.write(4, arg(1), arg(0));
+  memory.write(4, arg(1) + 4, 0);
+  result(0);
+}
+
+//(microseconds): the same, in v0 and v1.
+auto Kernel::sceKernelUSec2SysClockWide() -> void {
+  result64(arg(0));
+}
+
 //The Mersenne Twister (MT19937, as Matsumoto and Nishimura describe it), its state in the program's memory: a
 //SceKernelUtilsMt19937Context (psputils.h), how many of its 624 words have been handed out, then the words.
 //(context, seed): the words seeded, none handed out.
@@ -273,8 +286,31 @@ auto Kernel::sceWlanGetEtherAddr() -> void {
   result(0);
 }
 
-//(language, button that confirms): what the HOME menu's on-screen texts use; there's no HOME menu to tell.
+//(language, button that confirms): what the HOME menu's on-screen texts use (pspsdk's pspimpose.h, whose values
+//aren't known: taken as the system's settings number them, psputility_sysparam.h's, 1 English and 1 the cross
+//button); there's no HOME menu to tell, but they're kept to be read back.
 auto Kernel::sceImposeSetLanguageMode() -> void {
+  imposeLanguage = arg(0);
+  imposeButton = arg(1);
+  result(0);
+}
+
+//(where to put the language, where to put the button): as set, else the console's own settings (English, the cross
+//button confirming, as sceUtilityGetSystemParamInt has them).
+auto Kernel::sceImposeGetLanguageMode() -> void {
+  if(arg(0)) memory.write(4, arg(0), imposeLanguage);
+  if(arg(1)) memory.write(4, arg(1), imposeButton);
+  result(0);
+}
+
+//(where to put whether it's charging, where to put the battery icon's state): pspsdk's headers name the function
+//only, not its arguments or their values, and no recording shows them, so these are the natural answer with no
+//battery to show: not charging (0), and the icon a full battery's (3, taken as full because the PSP's icon shows up
+//to three bars; that it counts so is a guess). They agree with the power functions here: on the charger, not
+//charging, the battery full.
+auto Kernel::sceImposeGetBatteryIconStatus() -> void {
+  if(arg(0)) memory.write(4, arg(0), 0);
+  if(arg(1)) memory.write(4, arg(1), 3);
   result(0);
 }
 

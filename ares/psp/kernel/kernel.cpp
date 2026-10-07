@@ -16,7 +16,9 @@ extern "C" {
 namespace ares::PlayStationPortable {
 
 #include "threads.cpp"
+#include "mutexes.cpp"
 #include "interrupts.cpp"
+#include "timers.cpp"
 #include "events.cpp"
 #include "sysmem.cpp"
 #include "aes.cpp"
@@ -69,6 +71,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelDelayThreadCB",        &Kernel::sceKernelDelayThreadCB);
   add("ThreadManForUser",  "sceKernelSleepThread",          &Kernel::sceKernelSleepThread);
   add("ThreadManForUser",  "sceKernelWakeupThread",         &Kernel::sceKernelWakeupThread);
+  add("ThreadManForUser",  "sceKernelCancelWakeupThread",   &Kernel::sceKernelCancelWakeupThread);
+  add("ThreadManForUser",  "sceKernelReleaseWaitThread",    &Kernel::sceKernelReleaseWaitThread);
   add("ThreadManForUser",  "sceKernelWaitThreadEnd",        &Kernel::sceKernelWaitThreadEnd);
   add("ThreadManForUser",  "sceKernelWaitThreadEndCB",      &Kernel::sceKernelWaitThreadEndCB);
   add("ThreadManForUser",  "sceKernelCreateSema",           &Kernel::sceKernelCreateSema);
@@ -77,7 +81,34 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelWaitSema",             &Kernel::sceKernelWaitSema);
   add("ThreadManForUser",  "sceKernelWaitSemaCB",           &Kernel::sceKernelWaitSemaCB);
   add("ThreadManForUser",  "sceKernelPollSema",             &Kernel::sceKernelPollSema);
+  add("ThreadManForUser",  "sceKernelCancelSema",           &Kernel::sceKernelCancelSema);
   add("ThreadManForUser",  "sceKernelReferSemaStatus",      &Kernel::sceKernelReferSemaStatus);
+  add("ThreadManForUser",  "sceKernelCreateMutex",          &Kernel::sceKernelCreateMutex);
+  add("ThreadManForUser",  "sceKernelDeleteMutex",          &Kernel::sceKernelDeleteMutex);
+  add("ThreadManForUser",  "sceKernelLockMutex",            &Kernel::sceKernelLockMutex);
+  add("ThreadManForUser",  "sceKernelLockMutexCB",          &Kernel::sceKernelLockMutexCB);
+  add("ThreadManForUser",  "sceKernelTryLockMutex",         &Kernel::sceKernelTryLockMutex);
+  add("ThreadManForUser",  "sceKernelUnlockMutex",          &Kernel::sceKernelUnlockMutex);
+  add("ThreadManForUser",  "sceKernelCancelMutex",          &Kernel::sceKernelCancelMutex);
+  add("ThreadManForUser",  "sceKernelReferMutexStatus",     &Kernel::sceKernelReferMutexStatus);
+  add("ThreadManForUser",  "sceKernelSetAlarm",             &Kernel::sceKernelSetAlarm);
+  add("ThreadManForUser",  "sceKernelSetSysClockAlarm",     &Kernel::sceKernelSetSysClockAlarm);
+  add("ThreadManForUser",  "sceKernelCancelAlarm",          &Kernel::sceKernelCancelAlarm);
+  add("ThreadManForUser",  "sceKernelReferAlarmStatus",     &Kernel::sceKernelReferAlarmStatus);
+  add("ThreadManForUser",  "sceKernelCreateVTimer",         &Kernel::sceKernelCreateVTimer);
+  add("ThreadManForUser",  "sceKernelDeleteVTimer",         &Kernel::sceKernelDeleteVTimer);
+  add("ThreadManForUser",  "sceKernelGetVTimerBase",        &Kernel::sceKernelGetVTimerBase);
+  add("ThreadManForUser",  "sceKernelGetVTimerBaseWide",    &Kernel::sceKernelGetVTimerBaseWide);
+  add("ThreadManForUser",  "sceKernelGetVTimerTime",        &Kernel::sceKernelGetVTimerTime);
+  add("ThreadManForUser",  "sceKernelGetVTimerTimeWide",    &Kernel::sceKernelGetVTimerTimeWide);
+  add("ThreadManForUser",  "sceKernelSetVTimerTime",        &Kernel::sceKernelSetVTimerTime);
+  add("ThreadManForUser",  "sceKernelSetVTimerTimeWide",    &Kernel::sceKernelSetVTimerTimeWide);
+  add("ThreadManForUser",  "sceKernelStartVTimer",          &Kernel::sceKernelStartVTimer);
+  add("ThreadManForUser",  "sceKernelStopVTimer",           &Kernel::sceKernelStopVTimer);
+  add("ThreadManForUser",  "sceKernelSetVTimerHandler",     &Kernel::sceKernelSetVTimerHandler);
+  add("ThreadManForUser",  "sceKernelSetVTimerHandlerWide", &Kernel::sceKernelSetVTimerHandlerWide);
+  add("ThreadManForUser",  "sceKernelCancelVTimerHandler",  &Kernel::sceKernelCancelVTimerHandler);
+  add("ThreadManForUser",  "sceKernelReferVTimerStatus",    &Kernel::sceKernelReferVTimerStatus);
   add("ThreadManForUser",  "sceKernelChangeThreadPriority", &Kernel::sceKernelChangeThreadPriority);
   add("ThreadManForUser",  "sceKernelGetThreadExitStatus",  &Kernel::sceKernelGetThreadExitStatus);
   add("ThreadManForUser",  "sceKernelTerminateThread",      &Kernel::sceKernelTerminateThread);
@@ -128,6 +159,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelReferMbxStatus",       &Kernel::sceKernelReferMbxStatus);
   add("ThreadManForUser",  "sceKernelSysClock2USec",        &Kernel::sceKernelSysClock2USec);
   add("ThreadManForUser",  "sceKernelSysClock2USecWide",    &Kernel::sceKernelSysClock2USecWide);
+  add("ThreadManForUser",  "sceKernelUSec2SysClock",        &Kernel::sceKernelUSec2SysClock);
+  add("ThreadManForUser",  "sceKernelUSec2SysClockWide",    &Kernel::sceKernelUSec2SysClockWide);
   add("ThreadManForUser",  "sceKernelCreateLwMutex",        &Kernel::sceKernelCreateLwMutex);
   add("ThreadManForUser",  "sceKernelDeleteLwMutex",        &Kernel::sceKernelDeleteLwMutex);
   add("ThreadManForUser",  "sceKernelGetSystemTimeLow",     &Kernel::sceKernelGetSystemTimeLow);
@@ -137,6 +170,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelDeleteEventFlag",      &Kernel::sceKernelDeleteEventFlag);
   add("ThreadManForUser",  "sceKernelSetEventFlag",         &Kernel::sceKernelSetEventFlag);
   add("ThreadManForUser",  "sceKernelClearEventFlag",       &Kernel::sceKernelClearEventFlag);
+  add("ThreadManForUser",  "sceKernelCancelEventFlag",      &Kernel::sceKernelCancelEventFlag);
   add("ThreadManForUser",  "sceKernelWaitEventFlag",        &Kernel::sceKernelWaitEventFlag);
   add("ThreadManForUser",  "sceKernelWaitEventFlagCB",      &Kernel::sceKernelWaitEventFlagCB);
   add("ThreadManForUser",  "sceKernelPollEventFlag",        &Kernel::sceKernelPollEventFlag);
@@ -278,6 +312,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceWlanDrv",        "sceWlanGetSwitchState",         &Kernel::sceWlanGetSwitchState);
   add("sceWlanDrv",        "sceWlanGetEtherAddr",           &Kernel::sceWlanGetEtherAddr);
   add("sceImpose",         "sceImposeSetLanguageMode",      &Kernel::sceImposeSetLanguageMode);
+  add("sceImpose",         "sceImposeGetLanguageMode",      &Kernel::sceImposeGetLanguageMode);
+  add("sceImpose",         "sceImposeGetBatteryIconStatus", &Kernel::sceImposeGetBatteryIconStatus);
   add("sceDmac",           "sceDmacMemcpy",                 &Kernel::sceDmacMemcpy);
   add("SysMemUserForUser", "sceKernelAllocPartitionMemory", &Kernel::sceKernelAllocPartitionMemory);
   add("SysMemUserForUser", "sceKernelFreePartitionMemory",  &Kernel::sceKernelFreePartitionMemory);
@@ -287,6 +323,12 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("SysMemUserForUser", "sceKernelSetCompiledSdkVersion", &Kernel::sceKernelSetCompiledSdkVersion);
   add("SysMemUserForUser", "sceKernelGetCompiledSdkVersion", &Kernel::sceKernelGetCompiledSdkVersion);
   add("SysMemUserForUser", "sceKernelSetCompilerVersion",   &Kernel::sceKernelSetCompilerVersion);
+  add("SysMemUserForUser", "sceKernelDevkitVersion",        &Kernel::sceKernelDevkitVersion);
+  //later SDKs' memory blocks, whose NIDs aren't their names' hashes either (as pspautotests' sysmem-imports.S lists
+  //them)
+  addNID("SysMemUserForUser", "sceKernelAllocMemoryBlock",  0xfe70'7fdf, &Kernel::sceKernelAllocMemoryBlock);
+  addNID("SysMemUserForUser", "sceKernelFreeMemoryBlock",   0x50f6'1d8a, &Kernel::sceKernelFreeMemoryBlock);
+  addNID("SysMemUserForUser", "sceKernelGetMemoryBlockPtr", 0xdb83'a952, &Kernel::sceKernelGetMemoryBlockPtr);
   //one for each range of SDK versions from 3.7 on, all doing the same
   addNID("SysMemUserForUser", "sceKernelSetCompiledSdkVersion370",     0x3420'61e5,
          &Kernel::sceKernelSetCompiledSdkVersion);
@@ -363,6 +405,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceCtrl",           "sceCtrlReadBufferNegative",     &Kernel::sceCtrlReadBufferNegative);
   add("sceCtrl",           "sceCtrlPeekLatch",              &Kernel::sceCtrlPeekLatch);
   add("sceCtrl",           "sceCtrlReadLatch",              &Kernel::sceCtrlReadLatch);
+  add("sceCtrl",           "sceCtrlSetIdleCancelThreshold", &Kernel::sceCtrlSetIdleCancelThreshold);
+  add("sceCtrl",           "sceCtrlGetIdleCancelThreshold", &Kernel::sceCtrlGetIdleCancelThreshold);
   add("sceDisplay",        "sceDisplaySetMode",             &Kernel::sceDisplaySetMode);
   add("sceDisplay",        "sceDisplaySetFrameBuf",         &Kernel::sceDisplaySetFrameBuf);
   add("sceDisplay",        "sceDisplayGetFrameBuf",         &Kernel::sceDisplayGetFrameBuf);
@@ -377,6 +421,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceDisplay",        "sceDisplayGetFramePerSec",      &Kernel::sceDisplayGetFramePerSec);
   add("sceGe_user",        "sceGeEdramGetAddr",             &Kernel::sceGeEdramGetAddr);
   add("sceGe_user",        "sceGeEdramGetSize",             &Kernel::sceGeEdramGetSize);
+  add("sceGe_user",        "sceGeEdramSetAddrTranslation",  &Kernel::sceGeEdramSetAddrTranslation);
   add("sceGe_user",        "sceGeListEnQueue",              &Kernel::sceGeListEnQueue);
   add("sceGe_user",        "sceGeListEnQueueHead",          &Kernel::sceGeListEnQueueHead);
   add("sceGe_user",        "sceGeListDeQueue",              &Kernel::sceGeListDeQueue);
@@ -631,6 +676,9 @@ auto Kernel::power() -> void {
   threads.clear();
   semaphores.clear();
   lwMutexes.clear();
+  mutexes.clear();
+  alarms.clear();
+  vtimers.clear();
   current = nullptr;
   readySequence = 0;
   nextVblank = VblankCycles;
@@ -658,6 +706,8 @@ auto Kernel::power() -> void {
   mpegStreams.clear();
   dialog = {};
   utilityModules.clear();
+  imposeLanguage = imposeButton = 1;
+  geTranslation = 0x400;
   files.clear();
   nextFile = 3;
   workingDirectory = "ms0:/";
@@ -665,6 +715,8 @@ auto Kernel::power() -> void {
   display = {};
   calls.clear();
   interrupting = false;
+  callKind = Call::Plain;
+  callID = 0;
   interruptsEnabled = true;
   rescheduleAfter = false;
   callResumesGe = false;
@@ -792,7 +844,10 @@ auto Kernel::run(u64 budget) -> u64 {
       continue;
     }
     stuck = false;  //something runs: should nothing run again later, that's worth a note again
-    cycles += cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
+    counted = 0;
+    u64 ran = cpu.run(std::min(end - cycles, std::max<u64>(1, untilNextEvent())));
+    cycles += ran - counted;
+    counted = ran;  //(what cpu.instructionsRun stays at till the next run: a call made outside one adds nothing)
     if((current || interrupting) && cpu.scc.halted) {  //it stopped by itself: a halt, or an exception nobody handled
       note(interrupting ? "the CPU stopped in a call into the program" : "the CPU stopped in thread " + current->name);
       break;
@@ -814,8 +869,24 @@ auto Kernel::importCode(const std::string& library, u32 nid) -> u32 {
   return FirstImportCode + imports.size() - 1;
 }
 
-//The CPU's syscall instruction: a library function's code, or the kernel's own (a thread's entry returning).
+//The CPU's syscall instruction: a library function's code, or the kernel's own (a thread's entry returning). The
+//clock first catches up to the instructions the CPU has run so far in this go (run() adds the rest as it ends): a
+//function reading or setting a time between two waits sees the time it's called at, not the time the go began
+//(which a thread running from one wait to the next a whole frame long had seen till then: a timer set 2.5 ms on
+//went off at once, its moment already passed). The count is the instructions before the syscall, which both engines
+//give alike (the recompiler's block as far as it has got), so a program sees the same time with either. Then the go
+//ends by whatever the function made due.
 auto Kernel::syscall(u32 code) -> bool {
+  u64 before = cpu.instructionsBefore();
+  if(before > counted) cycles += before - counted;
+  counted = before;
+  bool handled = dispatch(code);
+  runUntilNextEvent();
+  return handled;
+}
+
+//The function a syscall's code stands for.
+auto Kernel::dispatch(u32 code) -> bool {
   if(code == ThreadReturnCode) {
     threadReturned();
     return true;
@@ -858,6 +929,16 @@ auto Kernel::syscall(u32 code) -> bool {
   (this->*import.function->handler)();
   startCall();  //what the function set off (a display list finishing) may call into the program now
   return true;
+}
+
+//The CPU's go stops by the next thing due (run() works out what comes when as the go begins, and what's due comes as
+//it ends): a system function may have made something due sooner than the go was to last, a better thread's delay or
+//timeout, or a timer, while a worse thread runs on without waiting; it comes on time. (Before, the worse thread kept
+//the CPU to the end of its go, a frame at most: pspautotests' threads/scheduling/preemptuser had a better thread's
+//1000-microsecond delays take 8 to 17 ms while main spun.)
+auto Kernel::runUntilNextEvent() -> void {
+  u64 limit = cpu.instructionsBefore() + untilNextEvent();
+  if(limit < cpu.runLimit) cpu.runLimit = limit;
 }
 
 //The n-th argument of the function being called (a0-a3, then t0-t3).

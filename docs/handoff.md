@@ -904,6 +904,46 @@ the details; the user chose a data tape per game in its save folder.
   after it passed, so it wasn't traced; a mistimed tap in the script is the likeliest cause.
 - **Not checked:** an MSX2 game, a game that saves to tape by itself, the legacy APK on a device.
 
+## PSP core: kernel mutexes, alarms, virtual timers, and the clock in system calls — 2026-10-06
+
+Branch `cursor/psp-hle-games5-2b67`, on top of `cursor/psp-desktop-2b67` (#155, the entry below): commit 3133b63b2
+(code and tests) and the docs after it; local only, not pushed. docs/psp-core.md, part 28, describes it. Written from
+pspsdk's headers and pspautotests' programs and recordings; no PPSSPP or JPCSP source read.
+- **Functions** (41, the ones the owner's 266-game report, `origin/local/psp-runner`'s docs/psp-compatibility.md,
+  finds missing most): kernel mutexes (8: priority or first come, recursive counts, timeouts, callbacks, a holder
+  ending, delete and cancel waking waiters), alarms (4) and virtual timers (14), their handlers called as interrupt
+  handlers; sceKernelReleaseWaitThread, sceKernelCancelWakeupThread (the report's 0xfccfad26), CancelSema,
+  CancelEventFlag; sceCtrl's idle thresholds, sceGeEdramSetAddrTranslation, the memory blocks by the NIDs games
+  import (0xfe707fdf, 0x50f61d8a, 0xdb83a952), sceImposeGetLanguageMode and GetBatteryIconStatus, DevkitVersion,
+  USec2SysClock and its wide form. The lightweight mutex now honours its priority attribute.
+- **Time in system calls**: the clock catches up at each syscall with the instructions run (it had stood still
+  through a CPU go, up to a frame), each syscall ends the go at the next thing due, the thread manager's timeouts last
+  max(t, 205) + 35 microseconds as waittimeouts recorded (1 times out "at once"), and timers go off no sooner than
+  215 microseconds after the call that sets them. States: version 11.
+- **Checked**: pspautotests through the HLE kernel, before and after: threads/ and intr/ 36 to 72 of 167 matching
+  (all of mutex and vtimers, alarm's four, mutexhandoff, waittimeouts, release, semaphores' cancel, callbacks'), the
+  other areas 48 to 55 of 192 (ctrl/idle, sysmem/memblock, misc/timeconv, audio and ctrl timing), gpu/ge/edram;
+  one line worse (msgpipe/trysend, 9 ms left for 8). tests/psp 272 groups (13 new) with and without ASan and UBSan,
+  tests/psp/ares 286 checks, tests/allegrex 56 groups, none failed; five broken versions each caught. The ten games
+  (Burnout Legends and Dominator, LCS, VCS, Peace Walker, Lumines, Midnight Club 3, SOCOM, Snoopy, Gunhound EX), 3600
+  frames in `origin/local/psp-runner`'s runner (a scratch copy) built from this tree and from #155's: the same
+  screens, no missing function called; five import functions added here but don't call them in that minute.
+- **Left**: scePsmf and scePsmfPlayer (19 games): no allowed source for the PSMF container or the player's states;
+  what calls and handlers cost (alarmcosts, preemptuser); event flags' and semaphores' create and status, the
+  lightweight mutex's status, sceDisplayAdjustAccumulatedHcount (seen in pspautotests, not changed); next seen in the
+  owner's games' imports: sceKernelReferThreadRunStatus, sceKernelGetThreadmanIdList, sceGeBreak.
+- **Not checked**: the RP6; the app and the desktop program built whole (the core was built in the runner and the
+  tests); a game that calls the new functions (none here does in its first minute).
+- **After review** (the commit after the docs; part 28's "After review"): a mutex tried from an interrupt handler
+  while no thread ran was left held by nobody (no thread could free it, a state saved then wouldn't load), and one
+  tried from a handler that interrupted a thread went to that thread; now trying, unlocking, cancelling and making
+  one held, kernel or lightweight, are refused outside a thread (ILLEGAL_CONTEXT), as locking was in a handler. The
+  recompiler now gives the clock its exact count at a syscall inside a block, so both engines read the same time.
+  The battery icon's and the cancels' negative-count comments say why. tests/psp 274 groups (2 new, each failing
+  with its fix undone) with and without the sanitizers, tests/psp/ares 286 checks, tests/allegrex 56 groups, none
+  failed; pspautotests' threads/ and intr/ unchanged. The reviewer ran this branch's build on the RP6: Peace Walker,
+  GTA LCS and Burnout Dominator at 60 fps, as on #155's.
+
 ## PSP core: the PSP in the desktop program, with FFmpeg on Linux, macOS and Windows — 2026-10-06
 
 Branch `cursor/psp-desktop-2b67` (#155), on top of `cursor/psp-codecs-2b67` (#153, the entry below), with #153

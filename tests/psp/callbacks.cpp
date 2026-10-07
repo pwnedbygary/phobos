@@ -549,7 +549,7 @@ static auto heldOffOnce() -> void {
     main.put(addu(s0, v0, zero));
     count(0);
     main.call("sceDisplayGetVcount");
-    main.li(t0, R); main.put(sw(v0, 16, t0));
+    main.li(t0, R); main.put(sw(v0, 20, t0));
     spin(main, 110'000);                     //blank after blank, held off
     count(4);
     main.put(addu(a0, s0, zero));
@@ -563,7 +563,7 @@ static auto heldOffOnce() -> void {
     CHECK(m.system.memory.read(4, R), 1);
     CHECK(m.system.memory.read(4, R + 4), 1);
     CHECK(m.system.memory.read(4, R + 8), 2);
-    CHECK(word(m, R + 12) - word(m, R + 16) >= 6, true);  //blanks held off meanwhile
+    CHECK(word(m, R + 12) - word(m, R + 20) >= 6, true);  //blanks held off meanwhile
     CHECK(m.kernel.calls.size(), 0);
     CHECK(m.notes.size(), 0);
   }

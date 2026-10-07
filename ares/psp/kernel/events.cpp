@@ -91,6 +91,24 @@ auto Kernel::sceKernelSetEventFlag() -> void {
   reschedule();
 }
 
+//(flag, bits, where to put how many threads waited): the flag's bits become these, and every thread waiting on it is
+//told the wait was cancelled (WAIT_CANCEL), and the new bits where it asked to be told them, as pspautotests'
+//threads/events/cancel recorded.
+auto Kernel::sceKernelCancelEventFlag() -> void {
+  auto found = eventFlags.find(arg(0));
+  if(found == eventFlags.end()) return result(ErrorUnknownEventFlag);
+  auto& flag = found->second;
+  flag.pattern = arg(1);
+  auto waiters = eventFlagWaiters(flag);
+  if(arg(2)) memory.write(4, arg(2), waiters.size());
+  for(auto thread : waiters) {
+    if(thread->waitPointer) memory.write(4, thread->waitPointer, flag.pattern);
+    ready(*thread, ErrorWaitCancelled);
+  }
+  result(0);
+  reschedule();
+}
+
 //(flag, bits): keeps only those bits.
 auto Kernel::sceKernelClearEventFlag() -> void {
   auto found = eventFlags.find(arg(0));
@@ -132,7 +150,7 @@ auto Kernel::waitEventFlag(bool callbacks) -> void {
   current->waitMode = mode;
   current->waitPointer = seen;
   current->readySince = ++readySequence;  //its place in the queue
-  block(Wait::EventFlag, flag->uid, timeout(timeoutPointer), timeoutPointer, callbacks);
+  blockTimed(Wait::EventFlag, flag->uid, timeoutPointer, callbacks);
 }
 
 auto Kernel::sceKernelWaitEventFlag() -> void {
@@ -288,15 +306,7 @@ auto Kernel::backFromCallbacks(Thread& thread) -> void {
 //out (the clock doesn't stop for callbacks); what it waited for came; or what it waited on was deleted (the wait ends
 //as deleted, as PPSSPP has it).
 auto Kernel::resumeWait(Thread& thread) -> void {
-  if(thread.wakeAt && cycles >= thread.wakeAt) {
-    if(thread.wait == Wait::EventFlag) eventFlagTimedOut(thread);
-    if(thread.wait == Wait::LwMutex) {  //the mutex has one waiter fewer
-      memory.write(4, thread.waitID + 12, memory.read(4, thread.waitID + 12) - 1);
-    }
-    Wait wait = thread.wait;
-    ready(thread, timeUp(thread));
-    return waiterLeft(wait, thread.waitID);
-  }
+  if(thread.wakeAt && cycles >= thread.wakeAt) return leaveWait(thread, timeUp(thread));
   switch(thread.wait) {
   case Wait::Sleep:
     if(thread.wakeupCount) thread.wakeupCount--, ready(thread, 0);
@@ -327,6 +337,11 @@ auto Kernel::resumeWait(Thread& thread) -> void {
                        //longest, which may be this one
     if(!lwMutexes.count(memory.read(4, thread.waitID + 16))) ready(thread, ErrorWaitDeleted);
     else if(!memory.read(4, thread.waitID)) unlockLwMutex(thread.waitID);
+    break;
+  case Wait::Mutex:    //deleted meanwhile; or freed with nobody else waiting (it goes straight to a thread in line,
+                       //and this one, running its callbacks, wasn't): it's this one's
+    if(auto found = mutexes.find(thread.waitID); found == mutexes.end()) ready(thread, ErrorWaitDeleted);
+    else if(!found->second.count) mutexHandOver(found->second);
     break;
   case Wait::PipeSend: case Wait::PipeReceive:
     if(auto found = pipes.find(thread.waitID); found != pipes.end()) pipeServe(found->second);

@@ -78,6 +78,8 @@ auto moduleTests() -> Tests;
 auto asyncTests() -> Tests;
 auto sasTests() -> Tests;
 auto messageTests() -> Tests;
+auto mutexTests() -> Tests;
+auto timerTests() -> Tests;
 auto mediaTests() -> Tests;
 auto atracTests() -> Tests;
 auto mp3Tests() -> Tests;

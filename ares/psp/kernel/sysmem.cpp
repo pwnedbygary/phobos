@@ -181,3 +181,38 @@ auto Kernel::sceKernelSetCompilerVersion() -> void {
   compilerVersion = arg(0);
   result(0);
 }
+
+//The firmware the PSP runs, as pspsdk's pspsysmem.h numbers it (0x02070110 is 2.71): 6.61, the owner's PSP's, on
+//which pspautotests' threads/tls/partition read "firmware 6.06" (its major and minor bytes).
+auto Kernel::sceKernelDevkitVersion() -> void {
+  result(0x0606'0110);
+}
+
+//Later SDKs' memory blocks: blocks of the user partition by another name, as pspautotests' sysmem/memblock recorded
+//(a block of either kind works with the other's functions). (name, type, size, options): a block, taken from the
+//partition's lowest free place (type 0) or its highest (1), in 256-byte steps; returns its ID. Checked in this order
+//here (the recordings don't show it): a name is needed (ERROR), the type must be 0 or 1 (ILLEGAL_MEMBLOCKTYPE),
+//options given must say they're 4 bytes long (ILLEGAL_ARGUMENT); then a size of 0, or more than there's room for, is
+//MEMBLOCK_ALLOC_FAILED.
+auto Kernel::sceKernelAllocMemoryBlock() -> void {
+  u32 name = arg(0), type = arg(1), size = arg(2), options = arg(3);
+  if(!name) return result(ErrorError);
+  if(type > 1) return result(ErrorIllegalAllocationType);
+  if(options && memory.read(4, options) != 4) return result(ErrorIllegalArgument);
+  auto block = allocate(size, type, 0, memory.readString(name, 31));
+  result(block ? block->uid : ErrorAllocationFailed);
+}
+
+//(block): as sceKernelFreePartitionMemory.
+auto Kernel::sceKernelFreeMemoryBlock() -> void {
+  sceKernelFreePartitionMemory();
+}
+
+//(block, where to put its address): 0, the address written. A block there isn't returns 0 all the same, writing
+//nothing (memblock's freed block).
+auto Kernel::sceKernelGetMemoryBlockPtr() -> void {
+  for(auto& block : blocks) {
+    if(block.uid == arg(0) && arg(1)) memory.write(4, arg(1), block.address);
+  }
+  result(0);
+}

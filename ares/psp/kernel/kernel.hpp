@@ -127,8 +127,20 @@ struct Kernel {
   static constexpr u32 ErrorUnknownThread         = 0x8002'0198;
   static constexpr u32 ErrorUnknownSemaphore      = 0x8002'0199;
   static constexpr u32 ErrorNotDormant            = 0x8002'01a4;
+  static constexpr u32 ErrorNotWait               = 0x8002'01a6;  //a thread let go of a wait it isn't in
   static constexpr u32 ErrorWaitTimeout           = 0x8002'01a8;
   static constexpr u32 ErrorWaitCancelled         = 0x8002'01a9;
+  static constexpr u32 ErrorReleaseWait           = 0x8002'01aa;  //what a thread let go of its wait is told
+  static constexpr u32 ErrorUnknownAlarm          = 0x8002'019f;
+  static constexpr u32 ErrorUnknownVTimer         = 0x8002'01be;
+  static constexpr u32 ErrorIllegalVTimer         = 0x8002'01bf;
+  //the mutexes': as pspautotests' threads/mutex recorded them (pspkerror.h names none, nor do these names)
+  static constexpr u32 ErrorUnknownMutex          = 0x8002'01c3;
+  static constexpr u32 ErrorMutexLocked           = 0x8002'01c4;  //a try on a mutex another thread holds
+  static constexpr u32 ErrorMutexUnlocked         = 0x8002'01c5;  //unlocking a mutex the caller doesn't hold
+  static constexpr u32 ErrorMutexOverflow         = 0x8002'01c6;  //a recursive lock counted past 2^31 - 1
+  static constexpr u32 ErrorUnlockUnderflow       = 0x8002'01c7;  //unlocking more than the holder holds
+  static constexpr u32 ErrorMutexRecursion        = 0x8002'01c8;  //its holder locking a mutex that isn't recursive
   static constexpr u32 ErrorSemaphoreZero         = 0x8002'01ad;
   static constexpr u32 ErrorSemaphoreOverflow     = 0x8002'01ae;
   static constexpr u32 ErrorEventFlagMulti        = 0x8002'01b0;  //a second thread waiting where only one may
@@ -230,6 +242,8 @@ struct Kernel {
   auto run(u64 budget) -> u64;
   auto importCode(const std::string& library, u32 nid) -> u32;
   auto syscall(u32 code) -> bool;
+  auto dispatch(u32 code) -> bool;
+  auto runUntilNextEvent() -> void;
   auto arg(u32 n) const -> u32;
   auto result(u32 value) -> void;
   auto note(const std::string& text) -> void;
@@ -242,6 +256,7 @@ struct Kernel {
   bool exited = false;     //it called sceKernelExitGame (or unloaded itself)
   bool stuck = false;      //nothing will run again, which has been noted (once, not every frame; not saved)
   u64 cycles = 0;          //time since power on
+  u64 counted = 0;         //how many of the CPU's instructions in its go under way cycles has taken in (syscall())
   u32 nextUID = 0x100;
   static constexpr u32 LastUID = 0x7fff'ffff;  //IDs are positive 32-bit numbers: a top bit set reads as an error
   auto newUID() -> u32;
@@ -279,6 +294,7 @@ struct Kernel {
     File,  //a synchronous read or write, for the time its file's device takes (io.cpp)
     Volatile,  //the volatile memory, lent to another (power.cpp)
     Codec,     //the Media Engine decoding for it (codec.cpp); the call returns waitCount as it ends
+    Mutex,     //a kernel mutex another thread holds (mutexes.cpp)
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -294,13 +310,14 @@ struct Kernel {
     Status status = Status::Dormant;
     Context context{};
     Wait wait = Wait::None;
-    u32 waitID = 0;        //the semaphore, mutex, thread, event flag, display list, module, message pipe or mailbox
-                           //waited for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the
-                           //SRC channel's); the file whose asynchronous request is waited for, or that a synchronous
-                           //read or write went to
-    u32 waitCount = 0;     //how many a semaphore or mutex wait needs; the bits an event flag wait needs; a mixer
-                           //output's left volume; the samples an SRC output's buffer was armed with; the bytes a
-                           //message pipe's send or receive asked for; what a synchronous read or write returns
+    u32 waitID = 0;        //the semaphore, mutex (a kernel one's ID, a lightweight one's work area), thread, event
+                           //flag, display list, module, message pipe or mailbox waited for; the sound channel (0-7
+                           //a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC channel's); the file whose
+                           //asynchronous request is waited for, or that a synchronous read or write went to
+    u32 waitCount = 0;     //how many a semaphore or mutex wait needs (the count a mutex is to be held with); the
+                           //bits an event flag wait needs; a mixer output's left volume; the samples an SRC output's
+                           //buffer was armed with; the bytes a message pipe's send or receive asked for; what a
+                           //synchronous read or write returns
     u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode
     u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
                            //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
@@ -341,11 +358,13 @@ struct Kernel {
   auto restore(const Context& context) -> void;
   auto ready(Thread& thread, u32 returnValue) -> void;
   auto block(Wait wait, u32 id, u64 wakeAt, u32 timeoutPointer = 0, bool callbacks = false) -> void;
-  auto timeout(u32 pointer) const -> u64;
+  static constexpr u64 TimeoutLeast = 205, TimeoutLate = 35, TimeoutAtOnce = 30;  //microseconds (blockTimed())
+  auto blockTimed(Wait wait, u32 id, u32 pointer, bool callbacks) -> void;
   auto reschedule() -> void;
   auto switchTo(Thread* thread) -> void;
   auto events() -> void;
   auto timeUp(const Thread& thread) const -> u32;
+  auto leaveWait(Thread& thread, u32 value) -> void;
   auto waiterLeft(Wait wait, u32 id) -> void;
   auto idle(u64 end) -> bool;
   auto untilNextEvent() const -> u64;
@@ -371,6 +390,8 @@ struct Kernel {
   auto sceKernelDelayThreadCB() -> void;
   auto sceKernelSleepThread() -> void;
   auto sceKernelWakeupThread() -> void;
+  auto sceKernelCancelWakeupThread() -> void;
+  auto sceKernelReleaseWaitThread() -> void;
   auto sceKernelWaitThreadEnd() -> void;
   auto sceKernelWaitThreadEndCB() -> void;
   auto sceKernelCreateSema() -> void;
@@ -379,6 +400,7 @@ struct Kernel {
   auto sceKernelWaitSema() -> void;
   auto sceKernelWaitSemaCB() -> void;
   auto sceKernelPollSema() -> void;
+  auto sceKernelCancelSema() -> void;
   auto sceKernelReferSemaStatus() -> void;
   auto sceKernelChangeThreadPriority() -> void;
   auto sceKernelGetThreadExitStatus() -> void;
@@ -402,6 +424,89 @@ struct Kernel {
   auto sceKernelTryLockLwMutex() -> void;
   auto sceKernelUnlockLwMutex() -> void;
   auto sceKernelGetSystemTimeLow() -> void;
+
+  //mutexes.cpp: kernel mutexes, a lock one thread holds at a time (recursively, if made so), waited for in line
+  struct Mutex {
+    u32 uid;
+    std::string name;
+    u32 attributes;  //0x100: waiters served by priority (else first come); 0x200: its holder may lock it again
+    s32 initial;     //the count it was made with
+    s32 count;       //how many times it's locked (0: free)
+    u32 owner;       //the thread holding it (0 while it's free)
+  };
+  std::map<u32, Mutex> mutexes;
+  auto mutexWaiters(const Mutex& mutex) -> std::vector<Thread*>;
+  auto mutexHandOver(Mutex& mutex) -> void;
+  auto mutexesFreed(u32 thread) -> void;
+  auto lockMutex(bool callbacks) -> void;
+  auto sceKernelCreateMutex() -> void;
+  auto sceKernelDeleteMutex() -> void;
+  auto sceKernelLockMutex() -> void;
+  auto sceKernelLockMutexCB() -> void;
+  auto sceKernelTryLockMutex() -> void;
+  auto sceKernelUnlockMutex() -> void;
+  auto sceKernelCancelMutex() -> void;
+  auto sceKernelReferMutexStatus() -> void;
+
+  //timers.cpp: alarms and virtual timers, whose handlers the system's timer calls as calls into the program
+  static constexpr u64 TimerLead = 215;  //microseconds: the soonest a timer a system call sets going goes off
+  static constexpr u32 TimerClocks = Trampoline + 0x80;  //kernel memory: a virtual timer handler's two clocks, its
+                                                         //schedule and its time now (16 bytes)
+  struct Alarm {
+    u32 uid;
+    u64 schedule;      //when it's due, in the system's time (microseconds since power on)
+    u64 earliest;      //and the soonest it may go off (a cycle): TimerLead after the call that set it
+    u32 handler, common, gp;
+    bool calling = false;  //its handler waits its turn among the calls into the program, or runs
+  };
+  struct VTimer {
+    u32 uid;
+    std::string name;
+    bool active = false;   //started
+    u64 base = 0;          //the system's time when it was started (0 while it's stopped)
+    u64 elapsed = 0;       //its time as it was started, stopped or set; running, it's this plus the system's time
+                           //since base
+    u64 schedule = 0;      //its time at which its handler is called
+    u32 handler = 0, common = 0, gp = 0;
+    u64 earliest = 0;      //the soonest its handler may be called (a cycle): TimerLead after a call set it going
+    bool calling = false;  //its handler waits its turn among the calls into the program, or runs
+  };
+  std::map<u32, Alarm> alarms;
+  std::map<u32, VTimer> vtimers;
+  auto systemTime() const -> u64;
+  auto timerEarliest() const -> u64;
+  auto alarmDue(const Alarm& alarm) const -> u64;
+  auto vtimerTime(const VTimer& timer) const -> u64;
+  auto vtimerDue(const VTimer& timer) const -> u64;
+  auto nextTimerEvent() const -> u64;
+  auto timerEvents() -> void;
+  auto timerCallsDropped(u32 kind, u32 uid) -> void;
+  auto vtimerInHandler() const -> u32;
+  auto vtimerClocks(u32 uid) -> void;
+  auto timerReturned(u32 kind, u32 uid, u32 again) -> void;
+  auto setAlarm(u64 schedule, u32 handler, u32 common) -> void;
+  auto vtimerFor(u32 uid) -> VTimer*;
+  auto vtimerAt(u32 uid) -> VTimer*;
+  auto vtimerSet(VTimer& timer, u64 time) -> u64;
+  auto vtimerHandler(VTimer& timer, u64 schedule, u32 handler, u32 common) -> void;
+  auto sceKernelSetAlarm() -> void;
+  auto sceKernelSetSysClockAlarm() -> void;
+  auto sceKernelCancelAlarm() -> void;
+  auto sceKernelReferAlarmStatus() -> void;
+  auto sceKernelCreateVTimer() -> void;
+  auto sceKernelDeleteVTimer() -> void;
+  auto sceKernelGetVTimerBase() -> void;
+  auto sceKernelGetVTimerBaseWide() -> void;
+  auto sceKernelGetVTimerTime() -> void;
+  auto sceKernelGetVTimerTimeWide() -> void;
+  auto sceKernelSetVTimerTime() -> void;
+  auto sceKernelSetVTimerTimeWide() -> void;
+  auto sceKernelStartVTimer() -> void;
+  auto sceKernelStopVTimer() -> void;
+  auto sceKernelSetVTimerHandler() -> void;
+  auto sceKernelSetVTimerHandlerWide() -> void;
+  auto sceKernelCancelVTimerHandler() -> void;
+  auto sceKernelReferVTimerStatus() -> void;
 
   //sysmem.cpp: the user partition's memory, handed out in blocks; and what a program tells the system about itself
   struct Block {
@@ -429,6 +534,10 @@ struct Kernel {
   auto sceKernelSetCompiledSdkVersion() -> void;
   auto sceKernelGetCompiledSdkVersion() -> void;
   auto sceKernelSetCompilerVersion() -> void;
+  auto sceKernelAllocMemoryBlock() -> void;
+  auto sceKernelFreeMemoryBlock() -> void;
+  auto sceKernelGetMemoryBlockPtr() -> void;
+  auto sceKernelDevkitVersion() -> void;
 
   //io.cpp: files and folders on the host folders standing for the PSP's devices, or on the disc in the drive;
   //standard input, output and error
@@ -568,6 +677,8 @@ struct Kernel {
     u32 unread = 0;                   //samples since the buffer was last read (at most 63)
     u32 sampled = 0;                  //the buttons at the last sample
     Latch latch;
+    s32 idleReset = -1, idleBack = -1;  //how far the stick moves to put off the idle timer, and to wake from idle
+                                        //(sceCtrlSetIdleCancelThreshold: -1 never, 0 always, else 1-128)
   } controller;
   auto sampleController() -> bool;
   auto writeSamples(u32 address, u32 first, u32 count, bool negative) -> void;
@@ -585,6 +696,8 @@ struct Kernel {
   auto sceCtrlReadBufferNegative() -> void;
   auto sceCtrlPeekLatch() -> void;
   auto sceCtrlReadLatch() -> void;
+  auto sceCtrlSetIdleCancelThreshold() -> void;
+  auto sceCtrlGetIdleCancelThreshold() -> void;
 
   //display.cpp: where the program's frame is, and the vertical blank
   struct Display {
@@ -611,13 +724,17 @@ struct Kernel {
 
   //interrupts.cpp: calls into the program, as interrupt handlers
   struct Call {
+    enum : u32 { Plain, Alarm, VTimer };  //what its return value means: nothing, or when a timer goes off again
     u32 function, gp;
-    u32 arguments[3];
+    u32 arguments[4];
     bool resumesGe;       //the GE waits for it (a SIGNAL that suspends the list)
     bool vblank = false;  //a vertical blank's handler
+    u32 kind = Plain;     //a timer's handler (timers.cpp), and which timer
+    u32 id = 0;
   };
   std::deque<Call> calls;       //waiting their turn
   bool interrupting = false;    //one is running
+  u32 callKind = Call::Plain, callID = 0;  //the one running: a timer's handler?
   u32& interruptsEnabled;       //the CPU's interrupt flag (mfic and mtic's, cpu.scc.interrupts): 1 on, 0 held off
                                 //(sceKernelCpuSuspendIntr), calls held back and the CPU kept for the running thread
   bool rescheduleAfter = false;   //a thread woke during the call: pick who runs once it's over
@@ -628,6 +745,7 @@ struct Kernel {
   auto startCall() -> void;
   auto callReturned() -> void;
   auto mayWait() -> bool;
+  auto fromThread() -> bool;
   auto sceKernelCpuSuspendIntr() -> void;
   auto sceKernelCpuResumeIntr() -> void;
   //Sub-interrupt handlers: the program's functions an interrupt calls, 32 to an interrupt, on the two interrupts a
@@ -683,6 +801,7 @@ struct Kernel {
   auto sceKernelCreateEventFlag() -> void;
   auto sceKernelDeleteEventFlag() -> void;
   auto sceKernelSetEventFlag() -> void;
+  auto sceKernelCancelEventFlag() -> void;
   auto sceKernelClearEventFlag() -> void;
   auto sceKernelWaitEventFlag() -> void;
   auto sceKernelWaitEventFlagCB() -> void;
@@ -749,8 +868,10 @@ struct Kernel {
   auto geWake(Wait wait, u32 index) -> void;
   auto geSaveContext(u32 address) -> void;
   auto geRestoreContext(u32 address) -> void;
+  u32 geTranslation = 0x400;  //sceGeEdramSetAddrTranslation's width (the PSP starts at 0x400)
   auto sceGeEdramGetAddr() -> void;
   auto sceGeEdramGetSize() -> void;
+  auto sceGeEdramSetAddrTranslation() -> void;
   auto sceGeListEnQueue() -> void;
   auto sceGeListEnQueueHead() -> void;
   auto sceGeListDeQueue() -> void;
@@ -1451,6 +1572,8 @@ struct Kernel {
   auto sceKernelLibcClock() -> void;
   auto sceKernelSysClock2USec() -> void;
   auto sceKernelSysClock2USecWide() -> void;
+  auto sceKernelUSec2SysClock() -> void;
+  auto sceKernelUSec2SysClockWide() -> void;
   auto sceRtcGetTick() -> void;
   auto sceRtcCompareTick() -> void;
   auto sceKernelUtilsMt19937Init() -> void;
@@ -1460,7 +1583,10 @@ struct Kernel {
   auto sceKernelGetGPI() -> void;
   auto sceWlanGetSwitchState() -> void;
   auto sceWlanGetEtherAddr() -> void;
+  u32 imposeLanguage = 1, imposeButton = 1;  //sceImposeSetLanguageMode's: English, the cross button confirming
   auto sceImposeSetLanguageMode() -> void;
+  auto sceImposeGetLanguageMode() -> void;
+  auto sceImposeGetBatteryIconStatus() -> void;
   auto sceDmacMemcpy() -> void;
   auto sceKernelExitGame() -> void;
   auto sceKernelSelfStopUnloadModule() -> void;

@@ -54,19 +54,26 @@ auto Allegrex::execute(u32 address, u32 instruction) -> u32 {
   return pipeline.exception;
 }
 
-//Runs at least the given number of instructions, stopping early if the CPU halts; returns how many ran. With the
-//recompiler, whole blocks run at a time, so it may run a few more than asked.
+//Runs at least the given number of instructions, stopping early if the CPU halts, or once it reaches a runLimit a
+//syscall brought forward; returns how many ran. With the recompiler, whole blocks run at a time, so it may run a few
+//more than asked.
 auto Allegrex::run(u64 instructions) -> u64 {
-  u64 executed = 0;
-  while(executed < instructions && !scc.halted) {
+  instructionsRun = 0;
+  runLimit = instructions;
+  while(instructionsRun < runLimit && !scc.halted) {
     if(recompiler.enabled) {
-      executed += recompiler.run();
+      instructionsRun += recompiler.run();
     } else {
       instruction();
-      executed++;
+      instructionsRun++;
     }
   }
-  return executed;
+  return instructionsRun;
+}
+
+auto Allegrex::instructionsBefore() const -> u64 {
+  if(recompiler.inBlock) return instructionsRun + recompiler.executed - 1;
+  return instructionsRun;
 }
 
 }
