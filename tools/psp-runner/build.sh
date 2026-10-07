@@ -27,6 +27,16 @@ DEFINES=(-DBUILD_DEBUG -DCORE_PSP -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_
 CHDR=$ROOT/thirdparty/libchdr
 INCLUDES=(-isystem "$ROOT" -isystem "$ROOT/nall" -isystem "$ROOT/nall/nall" -isystem "$ROOT/libco"
   -isystem "$ROOT/ares" -isystem "$ROOT/thirdparty" -isystem "$CHDR/include")
+#FFmpeg's decoders for the games' music and movies, as Phobos's builds have them (docs/psp-core.md, part 26),
+#built once for the host by thirdparty/ffmpeg/build.sh and kept; PSP_FFMPEG=0 builds without them (the games'
+#movies then stay black and their ATRAC music silent). The core's object is built afresh every run (below), so
+#switching needs no fresh TMPDIR.
+if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
+  FFMPEG=$("$ROOT/thirdparty/ffmpeg/build.sh" host | tail -1)
+  DEFINES+=(-DARES_ENABLE_FFMPEG)
+  INCLUDES+=(-isystem "$FFMPEG/include")
+  LIBRARIES+=(-L"$FFMPEG/lib" -lavcodec -lavutil -Wl,-rpath,"$FFMPEG/lib")
+fi
 CXXFLAGS=(-std=c++20 -O1 -g "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}")
 
 compile() {  #source object [always]
