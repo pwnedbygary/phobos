@@ -1,0 +1,92 @@
+#pragma once
+
+#include "../ge.hpp"
+
+//The GE's GPU renderer (docs/psp-gpu-renderers.md): the software renderer's arithmetic, done on the GPU in compute
+//shaders, so that its pictures are the software renderer's, pixel for pixel, but faster.
+//
+//What stays on the CPU: the display lists, the vertices, the transform, clipping, lighting, and setting each
+//primitive up into its jobs (draw.cpp), exactly as for the software renderer: the GE hands the renderer its batches
+//of jobs (GE::Renderer, ge.hpp), the very jobs the software renderer would draw. What the GPU does: binning the
+//jobs into tiles, and every pixel of them, from the jobs' numbers with the same arithmetic (shaders/: whole numbers
+//where the software renderer has whole numbers, and floats rounded step by step as the host's CPU rounds them).
+//
+//This is the prototype (docs/psp-core.md, part 34): its batches are drawn synchronously, VRAM's pages a batch draws
+//over copied to the GPU and back around each run of jobs, textures taken from the software renderer's decoded
+//copies. A job it can't draw yet (a line, a 3D sprite's texels, a 2D triangle whose texture coordinates aren't
+//exact as whole numbers) is drawn by the software renderer in its turn (GE::rasterize()), between the GPU's runs.
+//
+//The shaders are one set for every backend (shaders/compile.sh); a backend (Device) only makes the buffers and runs
+//the stages. Vulkan's is vulkan.cpp; OpenGL's comes next.
+
+namespace ares::PlayStationPortable {
+
+struct GPU : GE::Renderer {
+  //What the shaders are told about a run of jobs: common.glsl's Parameters, word for word.
+  struct Parameters {
+    u32 jobCount = 0, jobOffset = 0, lookOffset = 0, wordsPerTile = 0;
+    s32 tileLeft = 0, tileTop = 0;
+    u32 tilesAcross = 0, tilesDown = 0;
+    s32 areaLeft = 0, areaTop = 0, areaRight = 0, areaBottom = 0;
+    u32 frameBuffer = 0, stride = 0, format = 0, depthBuffer = 0;
+    u32 depthStride = 0, probeKind = 0, probeCount = 0, spare = 0;
+  };
+
+  //A backend: the four buffers the shaders share (common.glsl's bindings 0-3), each where the host can write and
+  //read it, and running the stages, each returning once the GPU is done. It knows nothing of the PSP.
+  struct Device {
+    virtual ~Device() = default;
+    virtual auto name() const -> std::string = 0;
+    virtual auto vram() -> u8* = 0;                 //VRAM: 2 MiB
+    virtual auto records(u32 words) -> u32* = 0;    //at least words long (what it held may go)
+    virtual auto texels() -> u32* = 0;              //TexelWords long, kept from one run to the next
+    virtual auto bins(u32 words) -> u32* = 0;       //at least words long (what it held may go)
+    //the shaders' constants (common.glsl's fused and nativeFma)
+    virtual auto configure(bool fused, bool nativeFma) -> bool = 0;
+    virtual auto draw(const Parameters& parameters) -> bool = 0;   //bin.comp, then raster.comp
+    virtual auto probe(const Parameters& parameters) -> bool = 0;  //probe.comp
+  };
+  static constexpr u32 TexelWords = 16 << 20;  //64 MiB of decoded textures kept on the GPU
+
+  //How the jobs went, for the tests and the design's measurements.
+  struct Statistics {
+    u64 batches = 0, runs = 0;     //runs: the GPU's dispatches
+    u64 gpuJobs = 0, gpuPixels = 0;  //pixels: the jobs' boxes
+    u64 cpuJobs = 0, cpuPixels = 0;
+    u64 lines = 0, spriteTexels3D = 0, coordinates2D = 0;  //why the CPU drew them
+    u64 copying = 0, waiting = 0;  //nanoseconds: VRAM's pages and the records copied; the GPU waited for
+  } statistics;
+
+  std::unique_ptr<Device> device;
+  bool fused = false, nativeFma = false;  //what configure() last set (detect() finds them)
+
+  //gpu.cpp
+  GPU(std::unique_ptr<Device> device);
+  auto detect(std::string& error) -> bool;
+  auto configure(bool fused, bool nativeFma) -> bool;
+  auto probe(u32 kind, const std::vector<u32>& cases) -> std::vector<u32>;
+  auto draw(GE& ge, GE::Batch& batch) -> void override;
+  static auto hostFuses() -> int;
+
+  //vulkan.cpp
+  static auto vulkan(std::string& error) -> std::unique_ptr<GPU>;
+
+  //The run of jobs being gathered for the GPU (draw()): its records, as the shaders read them (tables, then looks,
+  //then jobs), and where they draw.
+  std::vector<u32> tables, looks, jobs;
+  std::vector<const GE::Job*> taken;  //(drawn by the software renderer after all, should the GPU fail)
+  std::unordered_map<const GE::Look*, u32> lookIndex;
+  const GE::PixelState* target = nullptr;  //the frame and depth buffers (every job of a batch has the same)
+  s32 left = 0, top = 0, right = 0, bottom = 0;  //the jobs' boxes together
+  //Decoded textures on the GPU, by the software renderer's copy they came from (kept while it lives).
+  struct Slot { std::weak_ptr<GE::Decoded> texture; u32 offset = 0, words = 0; };
+  std::unordered_map<const GE::Decoded*, Slot> slots;
+  u32 texelsUsed = 0;
+
+  auto fits(const GE::Look& look) const -> bool;
+  auto lookFor(const GE::Look& look) -> u32;
+  auto take(const GE::Job& job) -> bool;
+  auto finish(GE& ge, GE::Batch& batch) -> void;
+};
+
+}

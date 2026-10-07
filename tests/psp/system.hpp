@@ -86,5 +86,6 @@ auto mp3Tests() -> Tests;
 auto movieTests() -> Tests;
 auto psmfTests() -> Tests;
 auto fontTests() -> Tests;
+auto gpuTests() -> Tests;
 
 }

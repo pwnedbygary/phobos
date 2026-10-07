@@ -29,7 +29,7 @@
 //
 //With 'GE Threads' at 1 nothing waits: each primitive is drawn at once on the GE's thread, as it always was. A batch
 //with fewer pixels than drawing.shared, and nothing being drawn, is drawn on the GE's thread at once, which is
-//quicker than waking the others.
+//quicker than waking the others. With a renderer (GE::Renderer, ge.hpp) batches always form, and it draws each.
 
 #if defined(__linux__)
 #include <sched.h>
@@ -137,6 +137,7 @@ auto GE::flush() -> void {
   settle();
   Batch& batch = *drawing.batch;
   if(batch.jobs.empty()) return clearBatch(batch);
+  if(renderer) return renderer->draw(*this, batch), clearBatch(batch);
   if(drawing.workers.empty() || batch.work < drawing.shared) {
     for(auto& job : batch.jobs) rasterize(job, job.firstY, job.lastY);
     return clearBatch(batch);
@@ -158,7 +159,8 @@ auto GE::launch(bool returning) -> void {
   Batch& batch = *drawing.batch;
   bool busy = drawing.batches[0].launched || drawing.batches[1].launched;
   if(batch.jobs.empty() && !(returning && busy && !memory.vramGuard)) return clearBatch(batch);
-  if(drawing.workers.empty() || (returning && !memory.vramGuard) || (batch.work < drawing.shared && !busy)) {
+  if(renderer || drawing.workers.empty() || (returning && !memory.vramGuard) ||
+     (batch.work < drawing.shared && !busy)) {
     return flush();
   }
   {
@@ -259,7 +261,7 @@ auto GE::drawnFirst(u32 address, u32 size) -> void {
 //and the frame and depth buffers mustn't overlap. A primitive into another render target than the batch's, or that
 //would break that, has the batch drawn first; one that breaks it by itself is drawn at once.
 auto GE::defer(const PixelState& p, const Region& region) -> bool {
-  if(!drawing.deferring || drawing.workers.empty()) return false;
+  if(!drawing.deferring || (drawing.workers.empty() && !renderer)) return false;
   if(region.left > region.right || region.top > region.bottom) return true;  //draws nothing
   auto fits = [&](s32 left, s32 right, s32 top, s32 bottom, bool depth) {
     u32 bytes = p.format == 3 ? 4 : 2, columns = right - left;  //(less one)

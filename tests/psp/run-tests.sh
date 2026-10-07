@@ -25,8 +25,17 @@ if [[ $(uname) == Darwin ]]; then
   if SDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null); then SYSROOT=(-isysroot "$SDK"); fi
   LIBRARIES=(-framework CoreFoundation -lz)
 fi
-DEFINES=(-DBUILD_DEBUG -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1)
-INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty")
+DEFINES=(-DBUILD_DEBUG -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1 -DVK_NO_PROTOTYPES)
+INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty"
+  -isystem "$ROOT/thirdparty/volk" -isystem "$ROOT/thirdparty/Vulkan-Headers/include")
+#The GPU renderer's shaders (ares/psp/ge/gpu/shaders): shaders.hpp must be what its GLSL compiles to (its recorded
+#hash; with glslang around, the GLSL checked as well). Its tests (gpu.cpp) need a Vulkan GPU, and skip without one;
+#Vulkan is loaded at run time (volk), on macOS from Homebrew's loader and MoltenVK where they are (brew install
+#vulkan-loader molten-vk), which the system's library paths don't name.
+"$ROOT/ares/psp/ge/gpu/shaders/compile.sh" --check
+if [[ $(uname) == Darwin && -z ${DYLD_FALLBACK_LIBRARY_PATH:-} ]]; then
+  export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib:/usr/lib
+fi
 #FFmpeg's decoders (docs/psp-core.md, part 26), built once for the host by thirdparty/ffmpeg/build.sh and kept;
 #PSP_FFMPEG=0 builds without them, as the core is without its define (no decoders: the libraries refuse streams).
 if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
@@ -49,6 +58,11 @@ ALLOCATOR="$OUT/sljit-allocator.o"
 if [[ ! -f $ALLOCATOR || $ROOT/thirdparty/sljitAllocator.cpp -nt $ALLOCATOR ]]; then
   $CXX -std=c++20 -O1 "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" -c "$ROOT/thirdparty/sljitAllocator.cpp" -o "$ALLOCATOR"
 fi
+VOLK="$OUT/volk.o"
+if [[ ! -f $VOLK || $ROOT/thirdparty/volk/volk.c -nt $VOLK ]]; then
+  $CC -O1 "${SYSROOT[@]}" -DVK_NO_PROTOTYPES -I "$ROOT/thirdparty/Vulkan-Headers/include" \
+    -c "$ROOT/thirdparty/volk/volk.c" -o "$VOLK"
+fi
 
 # shellcheck disable=SC2086
 $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" \
@@ -61,6 +75,7 @@ $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINE
   "$HERE/files.cpp" "$HERE/async.cpp" "$HERE/disc.cpp" \
   "$HERE/disc-formats.cpp" "$HERE/crypto.cpp" "$HERE/decrypt.cpp" "$HERE/modules.cpp" \
   "$HERE/states.cpp" "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/measure.cpp" \
-  "$NALL" "$SLJIT" "$ALLOCATOR" \
+  "$ROOT/ares/psp/ge/gpu/gpu.cpp" "$HERE/gpu.cpp" \
+  "$NALL" "$SLJIT" "$ALLOCATOR" "$VOLK" \
   "${LIBRARIES[@]}" -o "$OUT/psp"
 "$OUT/psp"

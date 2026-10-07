@@ -16,7 +16,7 @@ auto GE::run(u64 budget) -> Stop {
 //they're drawn, or go on being drawn by the GE's workers while the CPU runs on.
 auto GE::run(u64 budget, u64& ran) -> Stop {
   settle();  //what the last list left being drawn
-  drawing.deferring = drawing.threads > 1;
+  drawing.deferring = drawing.threads > 1 || renderer;
   struct Drawn {
     GE& ge;
     ~Drawn() { ge.drawing.deferring = false; ge.launch(true); }
