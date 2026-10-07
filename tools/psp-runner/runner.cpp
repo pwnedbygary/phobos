@@ -240,7 +240,8 @@ auto writePng(const fs::path& path, const std::vector<u32>& frame, u32 width, u3
     u32 crc = crc32(0, (const Bytef*)type, 4);
     for(u32 n = 0; n < 4; n++) out.push_back((u8)type[n]);
     out.insert(out.end(), data, data + size);
-    word(out, crc32(crc, data, size));
+    //(zlib's crc32 with no bytes to add, IEND's, gives its own starting value back rather than crc)
+    word(out, size ? crc32(crc, data, size) : crc);
     return out;
   };
 
