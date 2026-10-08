@@ -59,7 +59,10 @@ auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count
   s16 vfpuOffset = s16(instruction & 0xfffc);
   auto memory = [&](bool store, u32 alignment, s16 displacement, const std::function<void ()>& access) {
     u32 op = instruction >> 26;
-    if(op == 0x28 || op == 0x29 || op == 0x2b) (void)Rt;  //(a store's value is read before the fast path splits)
+    //(a store's value, and the bytes lwl and lwr keep, are read before the fast path splits off)
+    if(op == 0x28 || op == 0x29 || op == 0x2b || op == 0x2a || op == 0x2e || ((op == 0x22 || op == 0x26) && RTn)) {
+      (void)Rt;
+    }
     emitMemory(address, instruction, count, delaySlot, store, alignment, displacement, access);
     return true;
   };
@@ -112,6 +115,59 @@ auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count
   case 0x2b: return memory(true, 4, offset, [&] {
     mov32(reg(2), Rt);
     mov32(Host, reg(2));
+  });
+
+  //LWL and LWR Rt,Rs,i16, SWL and SWR: an unaligned word's halves, as the interpreter has them (interpreter-ipu.cpp),
+  //from the aligned word round the address, whose byte within it (reg(2)) gives the shift: for lwl and swl, 8 for
+  //each byte below the word's last; for lwr and swr, 8 for each above its first. lwl keeps rt's bytes below the
+  //shift (a mask of shift ones), lwr those it shifts in no bytes over (the top shift bits); swl and swr keep the
+  //memory word's likewise. A shift is 24 at most, so none of these shifts by 32 or more. A store's read and write
+  //go through the store table, as sw's, onto memory that's plain host memory either way.
+  case 0x22: case 0x26: return memory(false, 1, offset, [&] {
+    if(!RTn) return;
+    bool left = instruction >> 26 == 0x22;
+    and32(reg(2), reg(0), imm(3));
+    and64(reg(0), reg(0), imm(0xffc));
+    mov32(reg(3), Host);
+    if(left) xor32(reg(2), reg(2), imm(3));
+    shl32(reg(2), reg(2), imm(3));
+    if(left) {
+      shl32(reg(3), reg(3), reg(2));
+      mov32(reg(1), imm(1));
+      shl32(reg(1), reg(1), reg(2));
+      sub32(reg(1), reg(1), imm(1));
+    } else {
+      lshr32(reg(3), reg(3), reg(2));
+      mov32(reg(1), imm(-1));
+      lshr32(reg(1), reg(1), reg(2));
+      xor32(reg(1), reg(1), imm(-1));
+    }
+    and32(reg(1), reg(1), Rt);
+    or32(Dt, reg(1), reg(3));
+  });
+  case 0x2a: case 0x2e: return memory(true, 1, offset, [&] {
+    bool left = instruction >> 26 == 0x2a;
+    and32(reg(2), reg(0), imm(3));
+    and64(reg(0), reg(0), imm(0xffc));
+    add64(reg(1), reg(1), reg(0));  //(the word's host address, freeing reg(0))
+    mov32(reg(3), mem(reg(1), 0));
+    if(left) xor32(reg(2), reg(2), imm(3));
+    shl32(reg(2), reg(2), imm(3));
+    if(left) {
+      mov32(reg(0), imm(-1));
+      lshr32(reg(0), reg(0), reg(2));
+      xor32(reg(0), reg(0), imm(-1));
+      and32(reg(3), reg(3), reg(0));
+      lshr32(reg(0), Rt, reg(2));
+    } else {
+      mov32(reg(0), imm(1));
+      shl32(reg(0), reg(0), reg(2));
+      sub32(reg(0), reg(0), imm(1));
+      and32(reg(3), reg(3), reg(0));
+      shl32(reg(0), Rt, reg(2));
+    }
+    or32(reg(3), reg(3), reg(0));
+    mov32(mem(reg(1), 0), reg(3));
   });
 
   //LWC1 Ft,Rs,i16

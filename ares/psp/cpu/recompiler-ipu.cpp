@@ -63,7 +63,8 @@ auto Allegrex::Recompiler::emitNative(u32 address, u32 instruction, u32 count, b
   case 0x2f: return true;
 
   //loads and stores (recompiler-memory.cpp)
-  case 0x20: case 0x21: case 0x23: case 0x24: case 0x25: case 0x28: case 0x29: case 0x2b:
+  case 0x20: case 0x21: case 0x22: case 0x23: case 0x24: case 0x25: case 0x26:
+  case 0x28: case 0x29: case 0x2a: case 0x2b: case 0x2e:
   case 0x31: case 0x32: case 0x36: case 0x39: case 0x3a: case 0x3e:
     return emitLoadStore(address, instruction, count, delaySlot);
 
