@@ -5309,3 +5309,46 @@ swapchain uses the identity transform, so the compositor rotates it (the RP6's p
 in the panel's own orientation would save that.
 
 **Next**: shader blending (programmable blending where the GPU has it, for accuracy), then OpenGL.
+
+## Part 45: blending in the shader
+
+On branch `cursor/psp-gpu-hw4-2b67`, on top of part 44's `cursor/psp-gpu-hw3-2b67` (with its review's fixes).
+docs/psp-gpu-renderers.md's "Shader blending" is the detail. PPSSPP's shader blending stayed a guide to the approach
+only, as in parts 36, 41 and 44: none of its code is used, copied or translated.
+
+**What changed**: the Vulkan renderer's draws that blend, use a logic operation other than copy, or keep part of a
+channel with a write mask now read the frame buffer's pixel in the fragment shader (an input attachment) and do
+pixel.cpp's arithmetic there: the PSP's whole-number blend terms, all eight operations (the absolute difference no
+longer approximated), dithering after blending, the clamp, all 16 logic operations and the write mask bit by bit.
+Each write is narrowed to the frame buffer's format, so a 16-bit frame buffer keeps 5, 6 or 4 bits between draws as
+memory does; its clears are narrowed too. Native stays exact (now blended draws too); Software stays the default.
+
+**Order**: where the driver has rasterization-order attachment access (Turnip has it), the GPU keeps each pixel's
+reads and writes in order within a draw. Without it (MoltenVK on the M1, the Adreno's own driver) a primitive
+overlapping one already in the draw starts a new draw. Either way each reading draw waits for the ones before (a
+barrier). Logcat's "PSP" start-up line now says which: "blending in the shader, in order" or "overlaps apart".
+
+**Found on the RP6**: the first build asked for the order only in the pipelines that read, with no barrier in order.
+Turnip failed the start-up check with it (the blended triangles over unblended ones 80 pixels off), so the software
+renderer drew, and the first measurements were the software renderer's. Now every pipeline asks and the barrier is
+always there, and Turnip passes in order. Should the check still fail in order, it's run again with the draws split,
+and a check that fails names the GPU and whether it blended in the shader.
+
+**Tests**: `gpuBlending` draws random blended sprites (random factors, operations, fixed colors, dithering, logic
+operations and partial write masks) over random colors and stencils in all four formats at 1x and 2x: byte for byte
+the software renderer's. pspsdk's blend sample is now 100% the same (68.7% before). The sanitized PSP suite passes
+on the M1 (325 groups, the GPU groups run).
+
+**Measured in the app** (the RP6, Adreno 740, Turnip, in order; build 106205): Lumines' menus 60 frames a second at
+Native (5.2 ms a frame); Burnout Legends' menu with its 3D attract scene 60 at Native (14.4 ms) and 51.4 at 4x (18.3
+ms, a heavier scene, the GPU 20% busy); the pictures right to the eye. The GPU tests built for Android pass on the
+Adreno's own driver (overlaps apart). The Renderer and Resolution settings put back to Software and Native.
+
+**Also** (part 44's review): a frame whose present didn't happen (no window, or the acquire timed out) is read back
+and shown by the host, and a run whose GPU is lost while recording stops before submitting.
+
+**Not checked yet**: the owner's scenes' accuracy and speed tables measured again (their states were lost); the
+3D games in play past their menus; the retry with the draws split on a driver whose check fails in order (none
+seen yet).
+
+**Next**: OpenGL.
