@@ -28,16 +28,19 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP core: render-to-texture decode later (emulation thread) — 2026-10-08
 
 Branch `cursor/psp-cpu-speed3-2b67`, on top of part 43's `cursor/psp-cpu-speed2-2b67` (with #165 disc-info).
-docs/psp-core.md, part 46.
+docs/psp-core.md, part 46. PR #176.
 - **The GE** (`ares/psp/ge/texture.cpp`, `threads.cpp`, `draw.cpp`): a texture whose bytes a batch still draws over
   (render to texture) is not decoded on the GE's thread. The source batch is launched if it's being filled; the
   Look waits in the next batch (`deferRows`, CLUT snapshot when indexed); `ensureDecoded` runs as that batch
   starts drawing. Texture cache shared with workers (`textures.mutex`).
 - **Exact**: tests/allegrex 58 groups, tests/psp 328 groups (0 failures), including `geThreads` RTT. Six cpu-speed
-  scene hash compares skipped: scratch states are save-state v15, core is v17. RP6 fps not re-timed (same).
-- **Next**: remake the six scenes at StateVersion 17; hash at 1/7 threads; time MC3's race on the RP6. Then
-  primitives drawn at once / textures read from memory as drawn.
-- Scratch: `~/phobos-work/scratch/cpu-speed`; RP6 `/data/local/tmp/cpu-bench3`; take `~/phobos-work/rp6.lock`.
+  scenes remade at StateVersion 17; 300 frames `HASHES=1` at 1 and 7 GE threads identical to parent
+  (`eeba5028e`). RP6 race/menu end states match unsettled too.
+- **Faster** on the RP6 at 7 GE threads (four rounds): MC3's race about 37 → 39 fps (medians 37.3 → 38.1);
+  menu about 36 either way. Emulation thread on the race still ~24 ms.
+- **Next**: primitives drawn at once / textures read from memory as drawn.
+- Scratch: `~/phobos-work/scratch/cpu-speed` (v17 scenes); RP6 `/data/local/tmp/cpu-bench3`; take
+  `~/phobos-work/rp6.lock`.
 
 ## PSP core: the emulation thread faster again — drawing off it, registers held — 2026-10-08
 

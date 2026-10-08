@@ -5450,12 +5450,21 @@ So the GE's thread sets up the sampling primitive and goes on; the decode runs w
 helping) are about to draw that batch, not while the list is being read.
 
 **How it's known to be exact:** `tests/allegrex/run-tests.sh` (58 groups) and `tests/psp/run-tests.sh` (328 groups,
-including `geThreads`'s render-to-texture and the hardware renderer's). The six cpu-speed scenes under
-`~/phobos-work/scratch/cpu-speed/scenes` are save-state version 15; the core is at version 17 (part 42's dialogs),
-so end-hash compares against the parent were skipped until those states are remade. RP6 fps not re-timed here for
-the same reason.
+including `geThreads`'s render-to-texture and the hardware renderer's). The six cpu-speed scenes remade at
+StateVersion 17 under `~/phobos-work/scratch/cpu-speed/scenes` (from the parent tip): 300 frames with every
+frame's picture and VRAM hashed (`HASHES=1`), plus the end state, at 1 and 7 GE threads — identical to the
+parent (`origin/cursor/psp-cpu-speed2-2b67` / `eeba5028e`) for all six. On the RP6 the race and menu end states
+match the parent without settling drawing each frame.
+
+**On the RP6** (7 GE threads, four rounds, remade StateVersion 17 scenes; parent → this tip):
+
+| Scene | Before (median / avg) | After (median / avg) |
+| --- | --- | --- |
+| Midnight Club 3, race | 37.3 / 36.8 | 38.1 / 38.8 |
+| Midnight Club 3, menu | 36.0 / 35.6 | 35.5 / 35.9 |
+
+The race's emulation thread stays about 24 ms a frame either way (within round noise). The menu does not move.
 
 **Left, and why:**
 - Primitives that can't wait in a batch, and those drawn at once (textures read from memory as they're drawn).
 - Holding registers across block chains; VFPU with prefixes and rarer instructions still interpreted.
-- Remake the six scenes at StateVersion 17, then hash-compare at 1 and 7 GE threads and time MC3's race on the RP6.
