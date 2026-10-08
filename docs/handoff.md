@@ -25,6 +25,30 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: a hardware renderer on Vulkan — 2026-10-07
+
+Branch `cursor/psp-gpu-hw-2b67`, on top of `cursor/psp-ge-curves-2b67` (#162). docs/psp-core.md, part 36, and
+docs/psp-gpu-renderers.md (rewritten) describe it. The owner stopped the exact compute renderer (parts 34-35, on
+their own branches) for a PPSSPP-style hardware renderer; PPSSPP's GPU backends informed the design, none of their
+code is used.
+- **The renderer** (`ares/psp/ge/gpu`): the GE transforms, lights, clips and decodes textures as before and hands
+  each PRIM's settings and primitives to `GE::Renderer`; `gpu.cpp` draws them with the GPU's rasterizer, texture
+  units and blending into frame buffers kept on the GPU (read back only when their pages are needed), with render to
+  texture by copies on the GPU, the GE's decoded textures cached, and a pipeline per mix of settings (a fragment
+  shader specialized by 15 constants). `vulkan.cpp` runs it through the host's `vkGetInstanceProcAddr` (custom
+  drivers included; its own tables, volk untouched). Not in the app or the desktop program yet.
+- **Measured** (the six verified scenes, the RP6's Adreno 740): 1.5-2.3 times the seven-thread software renderer
+  (Midnight Club 3's race 37.5 fps against 24.2, Liberty City Stories' woods 94.4 against 54.5). Not exact: 28-65% of
+  pixels identical to the software renderer's, nearly all the rest a level or two apart (blending's rounding). 2D
+  sprites and render to texture are byte for byte, as `tests/psp/gpu.cpp` checks.
+- **Next**: upscaling and presenting from the GPU, then OpenGL, then the app wiring (Settings' "PSP Renderer:
+  Software / Vulkan / OpenGL", Software the default; the host's `vkGetInstanceProcAddr` and `loadVulkan` for the PSP;
+  a sanity check; measuring in the app with the system and a custom driver, none installed or deleted without asking).
+- **After review** (part 36's "After review"): builds with GCC (two conditionals' types); a PRIM the renderer can't
+  take (past VRAM's end, no target, a lost GPU, a texture read from memory) is drawn by the software renderer instead
+  of lost; render-to-texture copies bounded (32, one for each target and size); the depth buffer's pages watched
+  apart from the colors; long PRIMs handed over in pieces; `GE::setRenderer()` has a renderer forget the machine
+  before. Three new tests; the PSP system tests pass on the M1 (sanitized, the GPU groups run) and with g++ 13.
 ## PSP disc info: title, disc ID, region and icon — 2026-10-08
 
 Branch `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162). docs/psp-core.md, part 39, describes it.
@@ -44,7 +68,7 @@ Branch `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162). docs
   `detachFd()`); (2) the icon is downsampled to 160 px at cache time (refused past 512 px), so the list's
   decode is small and safe; (3) the plain list shows first, then titles and icons fill in a separate job, cached
   under a SHA-256 of URI+size+mtime in `cacheDir/psp-icons/` (the title and disc ID beside the icon), so a
-  second visit doesn't re-open the disc; the previous scan's job is cancelled; (4) the SFO's offsets are 64-bit,
+  second visit doesn't re-open the disc; the previous Library scan (list and title fill) is cancelled; (4) the SFO's offsets are 64-bit,
   the title capped at 128 bytes with controls dropped, and passed as bytes into Kotlin's UTF-8; (5) size/mtime
   captured only for PSP discs; (6) a single-disc .m3u shows the playlist's name; (7) a CHD disc-info case in
   `tests/psp/ares/system.cpp`; (8) the CATEGORY isn't read (the Library shows the title and icon, not the

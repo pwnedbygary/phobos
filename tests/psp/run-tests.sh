@@ -26,7 +26,16 @@ if [[ $(uname) == Darwin ]]; then
   LIBRARIES=(-framework CoreFoundation -lz)
 fi
 DEFINES=(-DBUILD_DEBUG -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1)
-INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty")
+INCLUDES=(-isystem "$ROOT/nall" -isystem "$ROOT/ares" -isystem "$ROOT" -isystem "$ROOT/thirdparty"
+  -isystem "$ROOT/thirdparty/Vulkan-Headers/include")
+#The hardware renderer's shaders (ares/psp/ge/gpu/shaders): shaders.hpp must be what its GLSL compiles to (its
+#recorded hash; with glslang around, compiled again and compared). Its tests (gpu.cpp) need a Vulkan GPU, skipping
+#without one; Vulkan is opened at run time, on macOS from Homebrew's loader and MoltenVK where they are (brew install
+#vulkan-loader molten-vk), which the system's library paths don't name.
+"$ROOT/ares/psp/ge/gpu/shaders/compile.sh" --check
+if [[ $(uname) == Darwin && -z ${DYLD_FALLBACK_LIBRARY_PATH:-} ]]; then
+  export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib:/usr/lib
+fi
 #FFmpeg's decoders (docs/psp-core.md, part 26), built once for the host by thirdparty/ffmpeg/build.sh and kept;
 #PSP_FFMPEG=0 builds without them, as the core is without its define (no decoders: the libraries refuse streams).
 if [[ ${PSP_FFMPEG:-1} != 0 ]]; then
@@ -61,7 +70,7 @@ $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINE
   "$HERE/files.cpp" "$HERE/async.cpp" "$HERE/disc.cpp" \
   "$HERE/disc-formats.cpp" "$HERE/disc-info.cpp" "$HERE/crypto.cpp" "$HERE/decrypt.cpp" "$HERE/modules.cpp" \
   "$HERE/states.cpp" "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/curves.cpp" \
-  "$HERE/measure.cpp" \
+  "$HERE/measure.cpp" "$ROOT/ares/psp/ge/gpu/gpu.cpp" "$HERE/gpu.cpp" \
   "$NALL" "$SLJIT" "$ALLOCATOR" \
   "${LIBRARIES[@]}" -o "$OUT/psp"
 "$OUT/psp"

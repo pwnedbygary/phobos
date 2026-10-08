@@ -37,6 +37,7 @@ int main() {
   for(auto& test : draw3dTests()) tests.push_back(test);
   for(auto& test : curvesTests()) tests.push_back(test);
   for(auto& test : measureTests()) tests.push_back(test);
+  for(auto& test : gpuTests()) tests.push_back(test);
   for(auto& [name, run] : tests) {
     currentTest = name;
     int before = failures;

@@ -103,21 +103,24 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //reach (the pixels rectangle(), triangle() and point() would cover between its outermost vertices); and in 2D,
   //the rows of its texture it can take texels from: those its vertices' v reach, two more for the filter and
   //stepping (in eights), when nothing can repeat round to the far end (below), or v is held at the top. A texture
-  //of more rows is often a picture of fewer (a frame buffer of 272), the rest maybe where this one draws.
+  //of more rows is often a picture of fewer (a frame buffer of 272), the rest maybe where this one draws. Its
+  //columns likewise, by u (for a hardware renderer, which copies no more of a frame buffer than they: holds()).
   Region region{pixel.left, pixel.top, pixel.right, pixel.bottom};
-  u32 rows = ~0u;
+  u32 rows = ~0u, columns = ~0u;
   if(format.through && !vertices.empty()) {
     s32 minX = 65536, maxX = -65536, minY = 65536, maxY = -65536;
-    f64 minV = 65536, maxV = -65536;
+    f64 minU = 65536, maxU = -65536, minV = 65536, maxV = -65536;
     for(auto& vertex : vertices) {
       minX = std::min(minX, fixed(vertex.x)), maxX = std::max(maxX, fixed(vertex.x));
       minY = std::min(minY, fixed(vertex.y)), maxY = std::max(maxY, fixed(vertex.y));
+      minU = std::min<f64>(minU, vertex.u), maxU = std::max<f64>(maxU, vertex.u);
       minV = std::min<f64>(minV, vertex.v), maxV = std::max<f64>(maxV, vertex.v);
     }
     //A sprite turned a quarter has v running across x, and its first column's middle may lie a sixteenth of a pixel
     //left of its left corner (its left edge reaches that much further: rectangle()), where v is a sixteenth of a
     //pixel's step (|dv| over the corners' distance in sixteenths) past the corner's. Its v's reach widens by that,
-    //and by a 65536th of a texel more, which the rounding of v there and here can't come near.
+    //and by a 65536th of a texel more, which the rounding of v there and here can't come near; its u, running down
+    //y, likewise by a sixteenth of a pixel's step down.
     if(kind == Sprites) {
       for(u32 n = 0; n + 1 < count; n += 2) {
         auto &from = vertices[n], &to = vertices[n + 1];
@@ -126,6 +129,9 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
         f64 beyond = std::abs(f64(to.v) - f64(from.v)) / std::abs(x1 - x0) + 1.0 / 65536;
         minV = std::min(minV, std::min<f64>(from.v, to.v) - beyond);
         maxV = std::max(maxV, std::max<f64>(from.v, to.v) + beyond);
+        beyond = std::abs(f64(to.u) - f64(from.u)) / std::abs(y1 - y0) + 1.0 / 65536;
+        minU = std::min(minU, std::min<f64>(from.u, to.u) - beyond);
+        maxU = std::max(maxU, std::max<f64>(from.u, to.u) + beyond);
       }
     }
     if(kind == Points) {
@@ -151,15 +157,35 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
       u32 reach = maxV + 2 > 0 ? u32(maxV + 2) : 0;  //(all of them below the top, held at it)
       rows = std::min<u32>((reach + 8) & ~7u, height);
     }
+    u32 width = std::min<u32>(texture.width, 512);
+    if((minU >= lowest || texture.clampU) && maxU + 2 < width) {
+      u32 reach = maxU + 2 > 0 ? u32(maxU + 2) : 0;
+      columns = std::min<u32>((reach + 8) & ~7u, width);
+    }
   }
-  if(textured) {
-    look.decoded = decode(look.texture, pixel, region, rows);
+  //With a hardware renderer (ge.hpp's Renderer) the primitives go to it, their settings first. Its texture is the
+  //renderer's own where it's in a frame buffer the GPU has drawn (render to texture), else always decoded, even one
+  //the primitive draws over itself (the GPU reads it as it was before the primitive, as the software renderer's
+  //drawing a pixel at a time from memory doesn't: Region{0, 0, -1, -1} reaches nothing).
+  //A PRIM the renderer refuses (begin()) is drawn here instead, as without one: what it drew put back in memory
+  //first, and the texture decoded for the region it draws in.
+  hardware = renderer && renderer->ready();
+  if(textured && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
+    look.decoded = decode(look.texture, pixel, hardware ? Region{0, 0, -1, -1} : region, rows);
     if(!look.texture.decoded) look.texture.bytes = direct(look.texture);
+  }
+  if(hardware && !renderer->begin(*this, look, format.through, region)) {
+    renderer->finish(*this);
+    hardware = false;
+    if(textured) {
+      look.decoded = decode(look.texture, pixel, region, rows);
+      if(!look.texture.decoded) look.texture.bytes = direct(look.texture);
+    }
   }
   //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
   //texture read from memory as it's drawn (texture.cpp) has it drawn at once.
-  drawing.recording = !(look.textured && !look.texture.decoded) && defer(pixel, region);
-  if(!drawing.recording) flush();
+  drawing.recording = !hardware && !(look.textured && !look.texture.decoded) && defer(pixel, region);
+  if(!drawing.recording && !hardware) flush();
   const Look& drawn = drawing.recording ? drawing.batch->looks.emplace_back(std::move(look)) : look;
   Transform t{};
   if(!format.through) {
@@ -214,7 +240,8 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     break;
   }
   //what it may have drawn over (or will, once the batch is drawn), for whoever keeps a copy of memory (the
-  //recompiler, decoded textures), and for the batch
+  //recompiler, decoded textures), and for the batch; a hardware renderer tells memory of its own pages (begin())
+  if(hardware) return void(hardware = false);
   for(auto& range : touched) {
     if(range.high < range.low) continue;
     memory.changed(Memory::VRAMBase + range.low, range.high - range.low + 1);
@@ -334,6 +361,7 @@ auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool 
   s.rightAcross = (turned ? rightCorner.v : rightCorner.u) * s.rightInverse;
   s.topDown = (turned ? topCorner.u : topCorner.v) / topCorner.clip[3];
   s.bottomDown = (turned ? bottomCorner.u : bottomCorner.v) / bottomCorner.clip[3];
+  if(hardware) return renderer->sprite(job);  //(its pixels, and their coordinates' steps, worked out as here)
   submit(job);
 }
 
@@ -347,6 +375,7 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
   s64 area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x);  //above 0: clockwise
   if(area == 0) return;
   if(facing && (area > 0) != (facing > 0)) return;
+  if(hardware) return renderer->triangle(a, b, c);
   if(area < 0) std::swap(p[1], p[2]), area = -area;  //the same corners, turned the way the edges are worked out for
   //(which pixels on its edges it draws: triangleRows(), raster.cpp)
   Job job{};
@@ -403,6 +432,7 @@ auto GE::point(const Look& look, const Vertex& at) -> void {
   auto& pixel = look.pixel;
   s32 x = fixed(at.x) >> 4, y = fixed(at.y) >> 4;
   if(x < pixel.left || x > pixel.right || y < pixel.top || y > pixel.bottom) return;
+  if(hardware) return renderer->point(at);
   Job job{};
   job.kind = Job::Kind::Point;
   job.look = &look;
@@ -519,6 +549,11 @@ auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool persp
       l.uStep = shortStep(16 * (f64(l.u[1]) - f64(l.u[0])) / f64(along));
       l.vStep = shortStep(16 * (f64(l.v[1]) - f64(l.v[0])) / f64(along));
     }
+  }
+  if(hardware) {  //(the pixels it lights, each the hardware renderer's to draw as a square)
+    if(job.firstX > job.lastX || job.firstY > job.lastY) return;
+    linePixels(job, job.firstY, job.lastY, hardwareLine);
+    return renderer->line(job, hardwareLine);
   }
   submit(job);
 }

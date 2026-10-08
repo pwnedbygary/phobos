@@ -223,6 +223,13 @@ auto GE::settle() -> void {
   }
 }
 
+//Everything drawn put in memory's VRAM: the batches settled, and what a hardware renderer owns put back (ge.hpp's
+//Renderer). What anyone touching VRAM's busy pages waits for (Memory::finishDrawing).
+auto GE::settleAll() -> void {
+  settle();
+  if(renderer) renderer->finish(*this);
+}
+
 //A batch done with.
 auto GE::clearBatch(Batch& batch) -> void {
   batch.jobs.clear();
@@ -249,6 +256,11 @@ auto GE::drawnFirst(u32 address, u32 size) -> void {
   if(!drawing.batch->jobs.empty() && over(*drawing.batch)) return flush();
   for(auto& batch : drawing.batches) {
     if(batch.launched && over(batch)) return settle();
+  }
+  if(renderer && memory.vramBusy) {  //(pages a hardware renderer owns, still on the GPU)
+    for(u32 page = first >> 12; page <= last >> 12; page++) {
+      if(memory.vramPageBusy(page)) return renderer->finish(*this);
+    }
   }
 }
 
