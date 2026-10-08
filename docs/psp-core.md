@@ -5459,7 +5459,8 @@ ms, a heavier scene, the GPU 20% busy); the pictures right to the eye. The GPU t
 Adreno's own driver (overlaps apart). The Renderer and Resolution settings put back to Software and Native.
 
 **Also** (part 44's review): a frame whose present didn't happen (no window, or the acquire timed out) is read back
-and shown by the host, and a run whose GPU is lost while recording stops before submitting.
+and shown by the host, and a run whose GPU is lost while recording stops before submitting. (This part's review):
+the shader's write mask keeps stencil and alpha bits as well as RGB.
 
 **Not checked yet**: the owner's scenes' accuracy and speed tables measured again (their states were lost); the
 3D games in play past their menus; the retry with the draws split on a driver whose check fails in order (none

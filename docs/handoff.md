@@ -27,18 +27,20 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: blending in the shader — 2026-10-08
 
-Branch `cursor/psp-gpu-hw4-2b67`, on top of part 44's `cursor/psp-gpu-hw3-2b67` (its review's fixes merged in).
+Branch `cursor/psp-gpu-hw4-2b67`, on top of part 44's `cursor/psp-gpu-hw3-2b67` (#171 under it). Opened as #172.
 docs/psp-core.md, part 45, and docs/psp-gpu-renderers.md's "Shader blending" describe it; PPSSPP stayed a guide only.
 - **Shader blending**: draws that blend, use a logic operation or a partial write mask read the frame buffer
   (an input attachment) and do pixel.cpp's arithmetic in `draw.frag`; 16-bit frame buffers keep their own bits.
   A barrier before each reading draw; overlapping primitives kept in one draw where the driver has
   rasterization-order access (Turnip; every pipeline asks), else split into separate draws (M1, Qualcomm's driver).
   A check failing in order is retried split. Native exact, Software the default.
+- **Review fix**: the shader's write mask keeps stencil/alpha bits too (was only RGB).
 - **Tests**: new `gpuBlending` byte-exact in four formats at 1x and 2x; pspsdk's blend sample 100% (from 68.7%); the
-  sanitized PSP suite passes on the M1 (325 groups).
+  sanitized PSP suite passes on the M1 (325 groups, Allegrex 58).
 - **RP6** (Turnip, in order): Lumines 60 fps at Native, Burnout Legends' menu 60 at Native and 51.4 at 4x. The
   first build failed Turnip's start-up check (only reading pipelines asked for the order, no barrier); fixed. The
-  GPU tests built for Android pass on Qualcomm's driver. Settings put back to Software/Native.
+  GPU tests built for Android pass on Qualcomm's driver. Settings put back to Software (resolution left at 3x;
+  Software ignores it).
 - **Next**: OpenGL.
 
 ## PSP core: upscaling, and presenting without reading back — 2026-10-08
