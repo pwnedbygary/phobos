@@ -175,6 +175,13 @@ static auto sfoValues() -> void {
   //not a SFO at all
   auto notSfo = std::vector<u8>(30, 0);
   CHECK(sfoValue(notSfo, "TITLE").empty(), true);
+  //a value capped at 128 bytes with controls dropped
+  auto longTitle = std::string(200, 'A');
+  auto controlTitle = std::string({'A', 'B', char(0x01), 'C', 'D', char(0x02), 'E', 'F'});
+  auto capped = makeParamSFO(longTitle, "ULUS10025");
+  CHECK(sfoValue(capped, "TITLE").size() == 128, true);
+  auto withControls = makeParamSFO(controlTitle, "ULUS10025");
+  CHECK(sfoValue(withControls, "TITLE") == "ABCDEF", true);  //controls 0x01 and 0x02 dropped
 }
 
 auto discInfoTests() -> Tests {

@@ -2,7 +2,6 @@ package com.phobos.emulator.ui
 
 import android.content.Intent
 import android.net.Uri
-import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -136,11 +135,15 @@ fun SystemDetailScreen(
                         LazyColumn(contentPadding = PaddingValues(bottom = 64.dp)) {
                             items(roms) { rom ->
                                 val multiDisc = rom.discs.size > 1
-                                val displayTitle = if (multiDisc) romTitle(rom.name)
+                                // A .m3u (even one disc) shows the playlist's name; a loose disc shows its title.
+                                val displayTitle = if (rom.discs.isNotEmpty()) romTitle(rom.name)
                                     else com.phobos.emulator.util.displayTitle(rom.name, rom.title)
                                 val iconBitmap = remember(rom.iconPath) {
                                     rom.iconPath?.let { path ->
-                                        runCatching { BitmapFactory.decodeFile(path) }.getOrNull()?.asImageBitmap()
+                                        runCatching {
+                                            val bytes = File(path).readBytes()
+                                            com.phobos.emulator.util.decodeIcon(bytes)
+                                        }.getOrNull()?.asImageBitmap()
                                     }
                                 }
                                 ListItem(

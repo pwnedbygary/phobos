@@ -741,8 +741,9 @@ Java_com_phobos_emulator_PhobosCore_pspDiscInfo(JNIEnv* env, jobject, jint fd) {
     auto info = ares::PlayStationPortable::readDiscInfo(read, file->size(), problem);
     if(info.title.empty() && info.discId.empty()) return nullptr;
     jclass cls = env->FindClass("com/phobos/emulator/PspDiscInfo");
-    jmethodID constructor = env->GetMethodID(cls, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V");
-    jstring jTitle = env->NewStringUTF(info.title.c_str());
+    jmethodID constructor = env->GetMethodID(cls, "<init>", "([BLjava/lang/String;Ljava/lang/String;[B)V");
+    jbyteArray jTitle = env->NewByteArray((jsize)info.title.size());
+    if(!info.title.empty()) env->SetByteArrayRegion(jTitle, 0, (jsize)info.title.size(), (const jbyte*)info.title.data());
     jstring jDiscId = env->NewStringUTF(info.discId.c_str());
     jstring jRegion = env->NewStringUTF(info.region.c_str());
     jbyteArray jIcon = env->NewByteArray((jsize)info.icon.size());

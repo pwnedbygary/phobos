@@ -15,14 +15,20 @@
 auto sfoValue(const std::vector<u8>& sfo, const char* name) -> std::string {
   if(sfo.size() < 20 || memory::compare(sfo.data(), "\0PSF", 4)) return {};
   auto word = [&](u32 at) -> u32 { return sfo[at] | sfo[at + 1] << 8 | sfo[at + 2] << 16 | (u32)sfo[at + 3] << 24; };
-  u32 keys = word(8), values = word(12), count = word(16);
-  for(u32 n = 0; n < count && 20 + n * 16 + 16 <= sfo.size(); n++) {
-    u32 entry = 20 + n * 16;
-    u32 key = keys + (sfo[entry] | sfo[entry + 1] << 8), length = word(entry + 4), value = values + word(entry + 12);
+  u64 keys = word(8), values = word(12);
+  u32 count = word(16);
+  for(u32 n = 0; n < count && 20u + n * 16u + 16u <= sfo.size(); n++) {
+    u32 entry = 20u + n * 16u;
+    u64 key = keys + (sfo[entry] | sfo[entry + 1] << 8);
+    u32 length = word(entry + 4);
+    u64 value = values + word(entry + 12);
     if(key >= sfo.size() || value >= sfo.size() || length > sfo.size() - value) continue;
     if(strncmp((const char*)&sfo[key], name, sfo.size() - key) != 0) continue;
     std::string text;
-    for(u32 i = 0; i < length && sfo[value + i]; i++) text.push_back((char)sfo[value + i]);  //UTF-8, ending in a 0
+    for(u32 i = 0; i < length && sfo[value + i] && text.size() < 128; i++) {  //UTF-8, capped, controls dropped
+      u8 byte = sfo[value + i];
+      if(byte >= 0x20) text.push_back((char)byte);
+    }
     return text;
   }
   return {};

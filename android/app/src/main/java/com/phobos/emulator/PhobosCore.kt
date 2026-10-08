@@ -225,8 +225,11 @@ data class PhobosSetting(
 )
 
 data class PspDiscInfo(
-    val title: String,
+    val titleBytes: ByteArray,
     val discId: String,
     val region: String,
     val icon: ByteArray
-)
+) {
+    /** The title as UTF-8: the SFO's bytes, decoded here (not by the JNI, which can't check UTF-8). */
+    val title: String get() = String(titleBytes, Charsets.UTF_8)
+}

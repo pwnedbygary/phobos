@@ -295,6 +295,36 @@ auto fingerprint(const std::vector<std::uint8_t>& bytes, size_t offset, size_t s
   return text;
 }
 
+//A minimal PARAM.SFO with TITLE and DISC_ID: a "\0PSF" head, a key table of two entries (bytes 20-51),
+//the key names (bytes 52+), and a value table.
+auto makeParamSFO(const std::string& title, const std::string& discId) -> std::vector<std::uint8_t> {
+  auto titleLen = u32(title.size()) + 1;
+  auto idLen = u32(discId.size()) + 1;
+  auto keys = u32(52);
+  auto keyNamesSize = u32(6 + 8);
+  auto values = u32(52 + keyNamesSize);
+  std::vector<std::uint8_t> sfo(values + titleLen + idLen, 0);
+  sfo[0] = 0, sfo[1] = 'P', sfo[2] = 'S', sfo[3] = 'F';
+  auto put = [&](u32 at, u32 val) { sfo[at] = val & 0xff; sfo[at + 1] = val >> 8; sfo[at + 2] = val >> 16; sfo[at + 3] = val >> 24; };
+  put(8, keys);
+  put(12, values);
+  put(16, 2);
+  //entry 0: TITLE (key offset 0, length titleLen, value offset 0)
+  sfo[20] = 0, sfo[21] = 0;
+  put(24, titleLen);
+  put(32, 0);
+  //entry 1: DISC_ID (key offset 6, length idLen, value offset titleLen)
+  sfo[36] = 6, sfo[37] = 0;
+  put(40, idLen);
+  put(48, titleLen);
+  //key names
+  memcpy(&sfo[keys], "TITLE\0DISC_ID\0", keyNamesSize);
+  //values
+  memcpy(&sfo[values], title.c_str(), titleLen);
+  memcpy(&sfo[values + titleLen], discId.c_str(), idLen);
+  return sfo;
+}
+
 //A disc image in the drive, as an ISO and in each compressed form (CSO, CSO version 2, ZSO, DAX, JSO, and CHD in
 //hunks of one sector and of four): its program (tools/psp-test-programs' disc) boots from it and reads it every way
 //games do, printing what it found, which must be what the image holds. A CD's CHD, or one holding only its
@@ -437,6 +467,34 @@ auto discImage(const fs::path& programs) -> void {
       root->unload();
     }
   }
+}
+
+//The disc's title, disc ID, region and icon (ares/psp/kernel/disc-info.cpp) read off a CHD, as this build has CHD
+//(ARES_ENABLE_CHD): the CHD's PARAM.SFO and ICON0.PNG, read through libchdr.
+auto discInfoChd() -> void {
+  std::printf("a disc's info read off a CHD\n");
+  auto image = disc_image::makeIso({
+    {"PSP_GAME/PARAM.SFO", makeParamSFO("Test Game", "ULUS10025")},
+    {"PSP_GAME/ICON0.PNG", std::vector<std::uint8_t>{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4}},
+    {"PSP_GAME/SYSDIR/EBOOT.BIN", std::vector<std::uint8_t>(2048, 1)},
+  });
+  auto chd = disc_image::makeChd(image.bytes);
+  auto file = scratch / "info.chd";
+  std::ofstream(file, std::ios::binary).write((const char*)chd.data(), chd.size());
+  auto disk = vfs::disk::open(file.string().c_str(), vfs::read);
+  if(!CHECK(bool(disk), "the CHD opens")) return;
+  auto read = [disk](u64 offset, void* data, u64 size) -> u64 {
+    disk->seek(offset);
+    auto* bytes = (std::uint8_t*)data;
+    for(u64 n = 0; n < size; n++) bytes[n] = disk->read();
+    return size;
+  };
+  std::string error;
+  auto info = ares::PlayStationPortable::readDiscInfo(read, disk->size(), error);
+  CHECK(info.title == "Test Game", "the CHD's title");
+  CHECK(info.discId == "ULUS10025", "the CHD's disc ID");
+  CHECK(info.region == "US", "the CHD's region");
+  CHECK(!info.icon.empty(), "the CHD's icon");
 }
 
 //nall's vfs::descriptor, which mia's PSP medium reads a disc image through when Android hands it over as an open
@@ -808,6 +866,7 @@ auto main() -> int {
     }
     noCodeMemory(fs::path{programs});
     discImage(fs::path{programs});
+    discInfoChd();
     descriptorFiles(fs::path{programs});
     states(fs::path{programs});
     sound(fs::path{programs});

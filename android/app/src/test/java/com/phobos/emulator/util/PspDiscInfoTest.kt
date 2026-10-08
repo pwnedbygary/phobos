@@ -31,4 +31,13 @@ class PspDiscInfoTest {
         val afterMtime = iconCacheKey(uri, 104857600, 1700000000001)
         assertEquals(before != afterMtime, true)
     }
+
+    @Test
+    fun sha256OfTheCacheKeyIsSixtyFourHexDigits() {
+        val key = iconCacheKey("content://media/external/12345", 104857600, 1700000000000)
+        val hash = sha256Hex(key)
+        assertEquals(64, hash.length)
+        // The SHA-256 of "abc" is a well-known value; the function's output format is checked here.
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", sha256Hex("abc"))
+    }
 }
