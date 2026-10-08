@@ -2,6 +2,7 @@
 
 #include <TZXFile.h>
 #include <android/log.h>
+#include <ares/psp/kernel/disc-info.hpp>
 
 namespace mia {
 
