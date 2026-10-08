@@ -446,7 +446,10 @@ struct GE {
   auto launch(bool returning) -> void;
   auto startBands(Batch& batch) -> void;
   auto drew(Batch& batch) -> bool;
+  auto reclaim(Batch& batch) -> void;
+  auto resume() -> void;
   auto settle() -> void;
+  auto freeVRAM() -> void;
   auto settleAll() -> void;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;

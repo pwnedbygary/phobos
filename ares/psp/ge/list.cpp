@@ -15,7 +15,7 @@ auto GE::run(u64 budget) -> Stop {
 //word is kept, whatever the command. Meanwhile primitives wait to be drawn together (threads.cpp), and as it returns
 //they're drawn, or go on being drawn by the GE's workers while the CPU runs on.
 auto GE::run(u64 budget, u64& ran) -> Stop {
-  settle();  //what the last list left being drawn
+  resume();  //(what the last list left being drawn goes on being drawn: threads.cpp)
   drawing.deferring = drawing.threads > 1;
   //As it returns, a hardware renderer hands the GPU what it drew, to go on drawing while the CPU runs; without the
   //CPU's owner's guard over VRAM's busy pages (Memory::vramGuard), it puts them back in memory's VRAM at once.

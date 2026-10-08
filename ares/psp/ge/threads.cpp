@@ -19,8 +19,8 @@
 //    copy (the CPU's, an HLE function's, the screen's picture), save states and power (memory.hpp); the CPU's
 //    compiled loads and stores reach VRAM through its page table, so the CPU's owner takes those pages out of it
 //    meanwhile (Memory::vramGuard; without one, a list's batches are all drawn before run() returns);
-//  - by the next list (run() starts by settling), and by anything the GE's own thread reads from VRAM a batch draws
-//    over: a texture to decode, a palette, vertices, the list's commands (drawnFirst());
+//  - by the next list, only the batch it's to fill (resume()), and by anything the GE's own thread reads from VRAM a
+//    batch draws over: a texture to decode, a palette, vertices, the list's commands (drawnFirst());
 //  - by a block transfer (it reads and writes memory, maybe drawn pixels), which draws the batch being filled too;
 //  - by a primitive that must be drawn by itself, at once, in order (texture.cpp reads its texels from memory as it
 //    draws: one drawing over its own texture, say), or whose pixels in different rows share bytes (defer()).
@@ -178,21 +178,42 @@ auto GE::launch(bool returning) -> void {
   Batch& other = &batch == &drawing.batches[0] ? drawing.batches[1] : drawing.batches[0];
   drawing.batch = &other;
   if(returning || !other.launched) return;
-  //the other is still being drawn: wait for it to be done with (drawing its bands too) before filling it again
+  reclaim(other);  //(the other is still being drawn: done with before it's filled again)
+}
+
+//Waits for a batch handed to the workers to be drawn, the GE's thread drawing bands of it (or of the one queued
+//before it) too; then empties it, to be filled again. Batches are drawn in order, so any before it is drawn too;
+//one queued after it goes on being drawn.
+auto GE::reclaim(Batch& batch) -> void {
   std::unique_lock lock(drawing.mutex);
-  while(drawing.drawn == &other || drawing.queued == &other || other.users) {
-    if(drawing.drawn == &other && other.nextBand.load(std::memory_order_relaxed) < other.bands) {
-      other.users++;
+  while(drawing.drawn == &batch || drawing.queued == &batch || batch.users) {
+    Batch* drawn = drawing.drawn;
+    bool ahead = drawn == &batch || drawing.queued == &batch;  //(it, or the one it waits behind)
+    if(drawn && ahead && drawn->nextBand.load(std::memory_order_relaxed) < drawn->bands) {
+      drawn->users++;
       lock.unlock();
-      drawBands(other);
+      drawBands(*drawn);
       lock.lock();
-      if(drew(other)) drawing.wake.notify_all();
+      if(drew(*drawn)) drawing.wake.notify_all();
       continue;
     }
     drawing.finished.wait(lock);
   }
   lock.unlock();
-  clearBatch(other);
+  clearBatch(batch);
+}
+
+//A list starts (run()): what the last left being drawn goes on being drawn, all but the batch it's to fill first,
+//which is waited for. What's drawn is no different: the new list's batches are drawn after the old's, and anything
+//the GE's thread reads from VRAM they draw over is drawn first (drawnFirst()), as is a block transfer's. With
+//nothing left being drawn, VRAM's busy pages are anyone's again; else they stay busy till it's settled (some may be
+//drawn already: whoever touches one just settles sooner). A hardware renderer shares those busy pages, so with one
+//everything is settled, as ever.
+auto GE::resume() -> void {
+  if(renderer) return settle();
+  if(!drawing.batch->launched) return;
+  reclaim(*drawing.batch);
+  if(!drawing.batches[0].launched && !drawing.batches[1].launched) freeVRAM();
 }
 
 //Waits for every batch handed to the workers (the GE's thread drawing bands too), and empties them: VRAM is
@@ -216,11 +237,15 @@ auto GE::settle() -> void {
   for(auto& batch : drawing.batches) {
     if(batch.launched) clearBatch(batch);
   }
-  if(memory.vramBusy) {
-    memory.vramBusy = false;
-    if(memory.vramGuard) memory.vramGuard(false);
-    for(auto& pages : memory.busyPages) pages = 0;
-  }
+  freeVRAM();
+}
+
+//Nothing is being drawn: VRAM's busy pages go back to the CPU's page table.
+auto GE::freeVRAM() -> void {
+  if(!memory.vramBusy) return;
+  memory.vramBusy = false;
+  if(memory.vramGuard) memory.vramGuard(false);
+  for(auto& pages : memory.busyPages) pages = 0;
 }
 
 //Everything drawn put in memory's VRAM: the batches settled, and what a hardware renderer owns put back (ge.hpp's
