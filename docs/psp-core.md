@@ -33,6 +33,9 @@ boxes, compressed DXT textures, sceGeBreak), is on `cursor/psp-ge-features-2b67`
 GE faster again (four pixels at a time, every pixel the same), is on `cursor/psp-ge-speed2-2b67`, on top of part 29's.
 Part 31, movies through scePsmf and scePsmfPlayer, written in a clean room, is on `cursor/psp-psmf-2b67`,
 on top of part 30's.
+Part 32, the next functions games stop at (a thread's run status, the thread manager's ID lists, the memory
+stick's free space told alike everywhere, and part 28's differences the recordings settle), is on
+`cursor/psp-hle-games6-2b67`, on top of part 31's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -4249,3 +4252,319 @@ too; Peace Walker's opening movie, run to frame 9000, gives the same pictures an
   calls' waits, unmeasured. A round of the measuring program with a movie that has sound and an EP map (a test movie
   could be made by adding EP entries to `test.pmf`'s header) would settle the sound's thresholds, fast forward and
   rewind, and scePsmf's uncertain answers.
+
+## Part 32: the next functions games stop at
+
+On branch `cursor/psp-hle-games6-2b67`, on top of part 31's `cursor/psp-psmf-2b67`. On the owner's RP6, Ace Combat X
+and WipEout Portable Collection stopped at ThreadManForUser 0xffc36a14 and 0x94416130 (part 31), and Chili Con
+Carnage at a Memory Stick warning after its intro; part 28 had left a list of differences pspautotests' recordings
+settle. Sources: pspsdk's headers (`pspthreadman.h`'s SceKernelThreadRunStatus and SceKernelIdListType,
+`pspiofilemgr_devctl.h`'s SceDevInf and libcglue's statvfs reading it, `psputility_savedata.h`), pspautotests'
+programs and the results they recorded on a PSP (threads/threads' refer, threadend, exitstatus, threadmanidlist and
+threadmanidtype; threads/events/refer and create; threads/semaphores/refer and create; threads/lwmutex's refer,
+create and unlock; display/hcount, hcountwrap and vblankphase; utility/savedata's sizes, getsize and noupdate;
+modules/loadexec/loader), and the games' own code and calls, traced with part 26's scratch runner. The PSP
+Developer Wiki's archived copy has no page on these functions; no other emulator's code was read. Where nothing
+recorded shows a behaviour, the code and this part say what was chosen. The owner's local agent's re-run of the
+compatibility report hadn't landed (no `local/psp-rerun`, no newer `docs/psp-compatibility.md` on part 29's
+branch); every function the existing report names was already here. (It landed later: the re-run's list, below.)
+
+**sceKernelReferThreadRunStatus** (0xffc36a14, `threads.cpp`): a thread's SceKernelThreadRunStatus, 44 bytes: its
+status, current priority, wait type and what it waits for, and wakeup count, as its full status gives them, then its
+run figures: the time it has had the CPU (a SceKernelSysClock, 64 bits of microseconds), how many times a call into
+the program interrupted it, how many times a better thread took the CPU from it while it could still run, and how
+many times sceKernelReleaseWaitThread let it go of a wait. pspsdk names the figures only; no pspautotests program
+calls the function (threads/threads/refer leaves the full status's figures unprinted, "it'll probably be slower"),
+and its recordings show them 0 for threads never started. So threads now keep them (`Thread::runCycles`,
+`interruptPreempts`, `threadPreempts`, `releases`, and the kernel's `ranSince`, when the running thread got the CPU):
+a thread leaving the CPU adds its time (`switchTo()`), a call into the program stops the clock of the thread it
+interrupts and counts one (`startCall()`, `callReturned()`), the scheduler counts a preemption as it makes a running
+thread ready for a better one (its own start of that thread included), and sceKernelReleaseWaitThread a release. A
+start counts afresh (chosen). The full status (sceKernelReferThreadStatus) gives the same figures.
+- Ace Combat X's vertical blank handler asks after its main thread every other blank and wakes it unless it's
+  running (status 1); the size word it passes is whatever its stack held, 0 here, so nothing is written and it wakes
+  the thread each time, as it did while the function was missing. The game hadn't stopped at the function: it waited
+  for good at "Checking Memory Stick", after the savedata utility's answer below.
+
+**sceKernelGetThreadmanIdList** (0x94416130) and **sceKernelGetThreadmanIdType** (0x57cf62dd): the IDs of the thread
+manager's objects of a kind, in the order they were made, and an object's kind. As threadmanidlist recorded: kinds 1
+to 14 and 64 to 67 are taken, every other refused (ILLEGAL_TYPE), then a negative size (ILLEGAL_ADDR), neither writing
+the count; a size of 0 gives the count alone (no buffer needed), the count's pointer may be 0, and threads made
+dormant, sleeping, delaying and suspended are listed as such. pspsdk names 1 threads, 2 semaphores, 3 event flags, 4
+mailboxes, 5 VPLs, 6 FPLs, 7 message pipes, 8 callbacks, 9 thread event handlers, 10 alarms, 11 virtual timers, 64
+sleeping, 65 delaying, 66 suspended and 67 dormant threads; the recording lists a thread-local storage pool under 14.
+Chosen: 12 and 13 as kernel and lightweight mutexes (which came with the same firmware as those pools, in that order);
+9 and 14 list nothing (the kernel has neither); a suspended thread is listed under 66 whatever else it's doing; the
+function returns how many IDs it wrote (pspsdk: "either 0 or the same as idcount", which a buffer of none and a large
+one give that way), the count being all there are (pspsdk's own thread utilities ask for it with a buffer of none);
+a buffer the IDs can't go in is ILLEGAL_ADDR (the test's comment says a PSP crashes on a null one). An ID that is no
+thread manager object (deleted, -1, 0, 1, a memory block, a module) is ILLEGAL_ARGUMENT to IdType, as recorded.
+WipEout lists its threads (a buffer of 20) after its loading screen's thread ends, then reads each one's status.
+
+**sceKernelLoadExec** (LoadExecForUser 0xbd2f1094, `system.cpp`): with its thread list answered, WipEout went on to
+its launcher, and on the RP6 choosing WipEout Pure there called this, missing, and fell back to the launcher's menu:
+the collection starts each of its games as a program of its own (`disc0:/PSP_GAME/USRDIR/ELF/FX300.BIN`, no
+parameters). The program ends and the one named starts in its place; its first thread gets the argument given in a
+SceKernelLoadExecParam (psploadexec.h: its size, the argument's length, where it is, a key), none for none, or with no
+parameters its path, as a program the system starts gets. As pspautotests' modules/loadexec/loader recorded, the call
+never returns ("[1]", then the new program's "Hello world!", never "[2]"): the calling thread stops, and the kernel's
+loop puts the new program in as it next goes round (`loadExec()`, never left pending for a state to find), ending
+that go. Everything of the old program goes, as at power on (threads, memory, modules, open files, calls into it,
+sound, the GE's lists, the clock, which starts afresh), the user partition is cleared, and the new program is loaded
+as the system loads a game's (`start()`, which now takes the argument); the devices, the disc and the system fonts
+stay the system's. Checked first, the old program left running: a file there isn't (its error), one that isn't a
+program or can't be decrypted (ILLEGAL_OBJECT, UNSUPPORTED_PRX_TYPE), an argument over 4 KiB (ILLEGAL_SIZE), a call
+from an interrupt handler (ILLEGAL_CONTEXT); those choices are the code's, no recording shows them. KDebugForKernel's
+Kprintf, which the recorded test's second program prints with, is sceKernelPrintf's.
+
+**The thread status, recorded** (sceKernelReferThreadStatus, sceKernelGetThreadExitStatus): a thread's exit status
+reads DORMANT until it first starts and NOT_DORMANT once started, then what it ended with (threads/threads/threadend,
+refer and exitstatus: waiting for a thread never started returns DORMANT), and sceKernelGetThreadExitStatus takes 0
+as no thread (UNKNOWN_THID), not the caller. The full status is copied as its size word says, by the SDK the program
+was built with: up to 2.60 (SDK 0x02060010) a structure of 104 bytes, any size taken; after it, 108 bytes (a last
+word, 0), and a larger size refused (ILLEGAL_SIZE, nothing written, 0xffffffff among them).
+
+**Status structures** (`report()`): every status function pspautotests recorded copies the structure's first bytes as
+far as the size the program put in its first word, no further than the whole, the size reading back as the
+structure's (a size of 1 copies the size's first byte; 0 copies nothing). The event flag's (52 bytes) and the
+semaphore's (56) now do so (threads/events/refer, threads/semaphores/refer); they had written everything, the size
+word left as it was. The thread's status, the run status and the lightweight mutex's go through the same helper.
+
+**Creating event flags and semaphores**, as threads/events/create and threads/semaphores/create recorded: a NULL name
+is ERROR for both; an event flag refuses attribute 0x100 and any past 0x2ff (0x100, 0x122, 0x300, 0x900, 0x1200
+were), a semaphore any past 0x1ff (0x100, waiters by priority, is taken); and a semaphore takes any counts at all, a
+negative first count, one above the largest, a negative largest (each had been refused, ILLEGAL_COUNT: a game making
+one so on a PSP would have had no semaphore here). Snoopy vs. the Red Baron makes two semaphores with a NULL name,
+which it had got and now doesn't, as on a PSP: it deletes the IDs it was refused and goes on without them, to the same
+screens. The recordings were made with no SDK version set, which the thread status's rule shows a PSP treating as an
+older program (above); a NULL name refused even there is most likely refused to Snoopy's (SDK 2.70) too.
+
+**The lightweight mutex's status**: sceKernelReferLwMutexStatus (Kernel_Library 0xc1734599, by its work area) and
+sceKernelReferLwMutexStatusByID (ThreadManForUser 0x4c145944): a SceKernelLwMutexInfo of 64 bytes (the structure the
+test declares): name, attributes, ID, work area, the count it was made with and its count now, its holder or -1, its
+waiters; one there isn't is LWMUTEX_NOTFOUND. The kernel keeps each one's name, attributes and first count
+(`Kernel::LwMutex`); its state stays in the work area. As threads/lwmutex/create and unlock recorded, creating one
+with a NULL name is ERROR and attributes past 0x3ff ILLEGAL_ATTR (both before the count), the work area's holder is 0
+while it's free (it had been -1), and its last three words are zeroed.
+
+**The display's lines**: sceDisplayAdjustAccumulatedHcount (0xa83ef139) sets the accumulated count of lines, which
+counts on from it at each line; a negative count is INVALID_VALUE; from 0x7fffffff it goes on to 0 as the next line
+starts (display/hcount; hcountwrap's reads straight after setting it sometimes saw 0 already, so 31 bits wide, not
+wrapping to a negative number). The line the display is on stays counted from 0 as the blank starts, as the newer
+display/vblankphase recorded (the blank's interrupt at the end of line 285, a handler reading line 0); hcount's
+lowest line just after a wait for a blank (1) and highest inside it (14) are a waiting thread getting the CPU some 81
+microseconds after the interrupt and the blank lasting some 818 from it, as vblankphase measured, where here a waiter
+runs at once and the blank lasts 0.77 ms (0 and 13: left, below).
+
+**The memory stick's free space.** Chili Con Carnage and Ace Combat X ask the savedata utility's sizes mode (8) for
+the free space alone (msFree; no msData, no utilityData): the kernel answered SIZES_NO_DATA, as it looked for a save
+by the request's own save name, empty, and found none. Chili Con Carnage then said "Not enough free space on your
+Memory Stick... At least 512KB is needed", and Ace Combat X waited for good at "Checking Memory Stick". As
+utility/savedata/sizes recorded (the request's save name "ASDF", none there, msData naming "ABC": its size, and 0),
+the save measured is msData's, by its own game and save names; without msData there's nothing to look for, and the
+answer is 0. Chosen: msData naming a save not there is SIZES_NO_DATA, the rest still answered. A save takes its files
+in whole clusters and its folder's own cluster (sizes: three small files, 4 clusters); saving would take the data
+file, the icons' and sound's files the request carries, its PARAM.SFO and the folder (sizes: 16 bytes of data and no
+other file, 3). The size mode (22), which wrote nothing at all, now writes the free space in its 32 KiB "sectors"
+(getsize), and with files listed what they'd still need past the free space, in whole clusters, the same newly or
+over a save (chosen, after review: below; getsize listed none, and the rest was left as it was); its answer is 0
+whether the save is there or not (chosen: a game asks before its first save). Sizes as text are whole units cut
+down, as recorded ("96 KB", "128 KB", "15 GB" for 16,777,211 KiB), MB between (chosen).
+- One stick everywhere (`io.cpp`): the capacity devctl (SceDevInf: 61,440 clusters, 57,344 free, a sector's 512 bytes,
+  a cluster's 64 sectors), the sizes mode's msFree and the size mode's: a PSP with a large and mostly empty stick, a
+  2 GB one with 1,792 MiB free. The devctl had said up to 1 GiB, all of it free, less where the host's disk had less;
+  the sizes mode 1 GiB; the size mode nothing. Large beside any save, and small enough that its bytes fit in 31 bits:
+  games add sizes up in 32-bit words, in bytes, where 2 GiB or more free wraps round to a negative number, or at a
+  multiple of 4 GiB to almost none, and the game says there's no room. The PSP utility/savedata recorded on had a far
+  larger stick (16 GiB less 10 sectors free: 0x7ffff clusters, 0xfffffb KiB, "15 GB"), which is why those figures
+  aren't copied. The free space stays as it is whatever is written (chosen: a game asks before it saves).
+
+**States**: version 14 (13 refused): each thread's run figures, when the running thread got the CPU, the lightweight
+mutexes' names, attributes and first counts, the display's base for its count of lines. Loading checks no thread has
+had the CPU longer than the clock has run, nor the running one got it after now, and a lightweight mutex made as
+creating one allows (attributes to 0x3ff, a count of 1 at most unless recursive).
+
+**Tests** (`tests/psp/run-tests.sh`: 296 groups with the address and undefined-behavior sanitizers, and without;
+`tests/psp/ares`: 298 checks; none failed). `threadman.cpp` (new): "thread status sizes and exit"
+(both statuses' sizes, the SDK's rule, exit statuses through a start and a termination, the refusals); "thread run
+figures" (a program on both engines: main spinning 20 ms while a better thread delays three times, a vertical blank
+handler: main's 20 ms, one interruption, four preemptions; the better thread's few microseconds; a release; figures
+kept as it ends and counted afresh as it starts again; the state saved mid-spin carried on in a fresh machine to the
+same figures); "threadman ID lists" (an object of every kind, threads by state, the refusals, sizes and pointers,
+every kind's type and the IDs that are none); "status size words and creates" (the three statuses at sizes 0 to
+0xffffffff, the lightweight mutex's by both functions, the creates' refusals and odd counts, the work area); and
+"accumulated hcount adjusted" (the refusals, 0x7fffffff to 0 at the next line, kept in a state). `utility.cpp`'s
+"memory stick free space" (the capacity devctl, the sizes mode with the free space alone, with msData of a save there
+and not, what saving takes with icons, sizes as text, the size mode with and without files and in the smaller
+structure); the savedata test now names msData's save, and counts the folder's cluster. `modules.cpp`'s "programs
+started in another's place" (a program on both engines starting TESTEXEC, plain and encrypted, in its place with no
+parameters, an argument and none: never returning, the new program alone on a cleared machine with its clock afresh,
+its argument as given, a state of it loading; and the refusals, the old program running on). `states.cpp`'s "state
+fields" changes each new field and refuses five more states; `tests/psp/ares` refuses a state of version 13.
+Existing tests changed where the recordings disagreed with them: a thread never started reads DORMANT as its exit
+status (it had read 0), the work area of a lightweight mutex freed reads holder 0 (-1), and the capacity devctl the
+stick above. Broken versions each failed them: no preemptions counted, no interruptions counted, the run figures
+left out of states ("thread run figures", and "state fields"); a status copied whole whatever its size ("status size
+words and creates", "thread status sizes and exit"); the ID list returning the count ("threadman ID lists"); a
+started thread's exit status not set ("thread status sizes and exit"); a free lightweight mutex's holder -1 ("status
+size words and creates", "mutexes outside threads"); the accumulated count of lines wrapping to a negative number
+("accumulated hcount adjusted"); the sizes mode measuring the request's save, or saying there's none without msData
+("memory stick free space"); sceKernelLoadExec returning to its caller, or leaving the old program's memory ("programs
+started in another's place").
+
+**pspautotests** (part 26's scratch runner, host0: at the checkout; both builds of this Mac, before and after): of
+threads/ and intr/'s 167 programs with recordings, 72 printed exactly what the PSP printed before and 83 after
+(events' cancel, create, poll and refer; lwmutex's create and refer; semaphores' create, refer and semaphores;
+threads' exitstatus and threadmanidtype), and none of the others differs in more lines than before (threadmanidlist
+150 lines to 2, the thread-local storage pool it makes; refer 86 to 26; lwmutex's lock, try and unlock halved); of
+the 192 elsewhere, 75 and 76 (utility/savedata/noupdate, whose sizes mode without msData answers 0, as recorded),
+display/hcount down to its lowest and highest lines (20 to 4), hcountwrap from 227 lines to 17, savedata's sizes and
+getsize to their free space alone (and the PARAM.SFO saves here don't have), and none worse. modules/loadexec/loader
+prints "[1]" and then the new program's "Hello world!", as recorded, the scratch runner logging Kprintf's line apart
+from the test's own output.
+
+**The games** (the host Mac; the scratch runner built from part 31's tree and from this one, FFmpeg in both, 3600
+frames with the compatibility run's presses, Start at frame 120 and Cross at 1800):
+- **Ace Combat X**: from "Checking Memory Stick" for good to its title ("PRESS START BUTTON", frame 1800) and its
+  attract movie (3000). Its vertical blank handler's run status calls answer; it calls no function missing.
+- **Chili Con Carnage**: from "Not enough free space on your Memory Stick" to its profile menu ("Load profile", "New
+  profile"), after its intro movie and the Eidos logo; its own logo is drawn in broken stripes (left, below).
+- **WipEout Portable Collection**: listed its threads after its loading screen (sceKernelGetThreadmanIdList, then
+  each one's status), and went on to its language select and main menu, as it had (the list's error hadn't stopped it
+  on this Mac); no function missing in its minute. With Cross pressed through its menus (frames 1800 to 3000), it
+  starts WipEout Pure (sceKernelLoadExec), which shows its own language selection and, further on, its title ("PRESS
+  START BUTTON", frame 7600 of a longer run).
+- **The fourteen others on this Mac** (the ten priority games among them): the same pictures at frames 600, 1200,
+  1800, 2400 and 3000, byte for byte, and the same sound, but Snoopy vs. the Red Baron's: the same screens (its logo
+  movie, the "no save file" warning) at moments apart, its two unnamed semaphores refused now (above), its sound the
+  same. None calls a function the kernel lacks in either build.
+- Imported but not called in a game's first minute (`--imports-end`), now that these are here: the network
+  libraries' kernel halves (the stood-in modules'), sceRtc's formatting and arithmetic (WipEout, Peace Walker, the
+  Burnouts), the utility's NP sign-in and net parameters, sceIoAssign/Unassign (Lumines), sceIoCancel (the GTAs),
+  sceKernelCheckThreadStack and the MD5 utilities (WipEout), sceAudioInput (SOCOM); and sceKernelLoadExec, now here,
+  which Burnout Dominator and SOCOM import too.
+
+**On the RP6** (build 105300 of this tree, installed over the app, its data kept), each game for a minute or two,
+pressing on with the buttons: Chili Con Carnage past its intro to the profile menu, a new profile named on its own
+screen, the autosave notice, its title and main menu, "Profile: RAM", at 60 frames a second (its logo and the menu's
+art drawn in stripes, a GE matter for another part); Ace Combat X past "Checking Memory Stick" to its opening movie,
+title and main menu, a new campaign, and the first operation's briefing, at 60; WipEout Portable Collection to its
+launcher at 60, and choosing WipEout Pure, which had fallen back to the menu at sceKernelLoadExec, starts it: its
+language selection, the memory stick notice and its menu's opening scene, at 60 (its title, on this Mac, above).
+
+**The re-run's list.** The owner's local agent's re-run of the compatibility report landed afterwards, as an unmerged
+PR (#158, `local/psp-rerun`, run at part 29's `b27f084a5`): games stopping at a missing function fell from 149 to
+77 of 266. Its state column isn't to be trusted (its "regressions" weren't real), but its count of missing functions
+is. Apart from scePsmf and scePsmfPlayer (part 31), its top list is seven functions, named here from candidate
+names' NIDs (pspsdk's import stubs and uOFW's export lists agree on each): scePspNpDrm_user 0xa1336091 (13 games),
+sceRtc 0x011f03c1 (12), sceDisplay 0x77ed8b3a (8) and 0x40f1469c (4), ThreadManForUser 0xd13bde95 (6), sceHprm
+0x7e69eda4 (5) and scePower 0xa85880d0 (4). Its per-game table gives only each game's last line ("not implemented
+yet.." for 35 games), not which function, so no other function could be counted across three games; the five here
+of the owner's device not on this Mac (Ace Combat: Joint Assault, Ape Escape: On the Loose, Killzone: Liberation,
+MotorStorm: Arctic Edge, Ridge Racer 2) import none of the seven.
+- **sceDisplayWaitVblankStartMulti** (0x40f1469c) and **sceDisplayWaitVblankStartMultiCB** (0x77ed8b3a; the report
+  had them the other way round): the count-th vertical blank's start from now, as display/vblankmulti recorded (3
+  from just after a blank: the display's count 0, 3, 6, 9, in the blank each time); 0, -1 and 0x80000000 are
+  INVALID_VALUE, before intr/waits' refusals of waiting in an interrupt handler or with interrupts held off. A blank's
+  wait now keeps the count of blanks it ends at (`Thread::waitCount`, now plus one for the others), which the blank
+  and a callback's end both compare with. A state keeps it as before, the layout unchanged (version 14 still): a
+  state of 17ea2d8a0's saved inside a callback run during a CB blank wait ends that wait a blank early, no more.
+- **sceKernelCheckThreadStack** (0xd13bde95): the room from the calling thread's stack pointer down to its stack's
+  bottom. threads/threads/stackfree recorded 0xeb0 in a 4 KiB stack from a function with a frame of 16 bytes and
+  0xab0 with 1 KiB more: a new thread's stack pointer 0x140 below its top here, as on a PSP, gives the same. Chosen:
+  0 with no thread, in an interrupt handler, or a stack pointer outside the stack.
+- **sceRtcGetAccumulativeTime** (0x011f03c1, and Sony's spelling sceRtcGetAccumlativeTime, 0x029ca3b3, the same
+  function in uOFW's rtc): microseconds since the PSP started, 64 bits in v0 and v1. uOFW hasn't worked out its body
+  beyond reading the system time, and no pspautotests program calls it: the unit and what it counts from are chosen.
+- **sceHprmIsHeadphoneExist** (0x7e69eda4), with the rest of sceHprm but its callbacks: nothing in the headphone
+  socket (pspsdk's psphprm.h: 1 for plugged in, else 0), no remote or microphone, no key held, an empty latch; a
+  buffer the answer can't go in is ILLEGAL_ADDR (chosen, as the controller's latch).
+- **sceNpDrmSetLicenseeKey** (0xa1336091), with the user library's other four (uOFW's npdrm exports): the DRM of
+  games sold as downloads, which give their licensee key before opening their own protected files (EDATA: a
+  ".PSPEDAT" header with a PGD inside, the PSP Developer Wiki's PSP_EDAT and PGD pages say). There's no DRM here,
+  and nothing decrypted: setting and clearing the key, and checking a file's name, answer 0; readying an open
+  file's key answers 0 and its data's size is the file's own; a file not open, or a folder, is BAD_FILE. A game's
+  plain files work so; an encrypted one reads as its encrypted bytes.
+- **scePower 0xa85880d0**: left out. No candidate name hashes to it (pspsdk's lists don't have it, uOFW has no power
+  module, and some 51,000 names built from scePower's words missed), pspautotests imports it unnamed and never calls
+  it, and no game here imports it, so nothing says what it does; answering 0 would be a guess.
+- Checked: tests/psp's new groups (299, three more: "vertical blanks waited for by count", a program on both
+  engines from vblankmulti's pattern with a CB wait and a state saved mid-wait carried on in a fresh machine, and the
+  refusals; "remote and running time"; "download DRM on a game's own files"), the stack check added to "kernel
+  thread stack free" (both engines); none failed with the sanitizers or without; tests/psp/ares 298 checks, none
+  failed. pspautotests:
+  display/vblankmulti and threads/threads/stackfree now print exactly what the PSP printed (64 and 14 lines had
+  differed), intr/waits 98 lines to 74 (none of them the new waits), display/display, vblanklen, power/power and
+  rtc/rtc as before. Broken versions each failed them: the Multi wait ending at the next blank, either one taking
+  any count, and a blank's wait ending at any blank ("vertical blanks waited for by count"); the stack's room less
+  the ID's 16 bytes ("kernel thread stack free"); the running time in 32 bits ("remote and running time"); a file on
+  the stick measured as nothing ("download DRM on a game's own files"). Games: the 14 others on this Mac and the
+  three above the same pictures and sound as at 17ea2d8a0, but Snoopy vs. the Red Baron's picture at frame 600 and
+  Chili Con Carnage's sound, which differ between two runs of that build too. WipEout imports the stack check and
+  Grand Theft Auto: Vice City Stories the running time, and neither calls it in its first minute.
+- Seen in the five games from the owner's device, not changed: Ace Combat: Joint Assault quits on its first frame
+  when sceUtilityLoadModule refuses module 0x308 (past pspsdk's codecs, which end at 0x307; the firmware has a
+  libmp4.prx, sceMp4, but nothing here gives its number); Killzone: Liberation's boot program starts the game's
+  module (KZL.PRX), then unloads itself with sceKernelStopUnloadSelfModuleWithStatus, which ends the whole program
+  here, the program itself being no module the kernel unloads (unloadSelf()), so the game's thread goes with it at
+  frame 571; MotorStorm: Arctic Edge, after setting its callbacks up, waits for a blank every frame and nothing else.
+  Ape Escape: On the Loose and Ridge Racer 2 run on.
+
+**Left, and why**:
+- Threads' attributes as reported: threads/threads/create and refer recorded every thread a program makes with
+  0x800000ff added (user mode, and a low byte of ones), and attributes 0x100-0x1000 and 0x8000 refused; not changed
+  (the refusals could cost a game its threads where the recordings are of one firmware, and nothing reads the rest).
+- Where a thread preempted by a better one goes back in line: refer recorded the PSP running main again once the
+  better thread slept, before a thread of main's priority that had been ready all along ("* delayFunc" never
+  printed); here main goes behind it. A change of scheduling for every game, for a separate part.
+- display/hcount's lowest and highest lines, display/vblanklen's length and vblankphase's figures: a woken thread
+  getting the CPU some 81 microseconds after the blank's interrupt (91 with a handler; the next waiters 12 apart), the
+  blank's 818 microseconds from the interrupt, and the CPU the interrupt takes (66 microseconds, 78 with a handler);
+  here a waiter runs at once and the blank lasts 0.77 ms. A timing part's (with "what calls into the kernel cost",
+  which hcountwrap's statistics also show).
+- Thread-local storage pools (sceKernelCreateTlspl and its kin, kind 14 in the lists): threads/tls has recordings; no
+  game here imports them.
+- The lightweight mutex's other recorded differences (threads/lwmutex's lock, try, try600, unlock): a work area
+  made by hand ("fake") unlocks on a PSP, the user-mode library touching the kernel only to wait, and a count past the
+  lock is ILLEGAL_COUNT there; sceKernelTryLockLwMutex_600 (0x37431849).
+- Saves still have no PARAM.SFO (sizes' msData counts it: 4 clusters there, 3 here), and the list mode lists every
+  save of the game whatever pattern it's given (Ace Combat X's "USERID_*", Chili Con Carnage's "DATA*").
+- Chili Con Carnage's logo and its main menu's art drawn in broken stripes and triangles, on this Mac and the RP6:
+  a drawing matter for the GE's part (another branch is changing `ge/`), not looked into here.
+- scePower 0xa85880d0 (above), and the three games just above: Killzone's the likeliest to go further (a program
+  unloading itself while a module it started runs on should leave that module running), a change to how every
+  program ends, for a part of its own.
+- The functions above imported but not called in a minute; WipEout Pure's and Pulse's races, and Chili Con
+  Carnage's and Ace Combat X's play, not tried here; the compatibility report's re-run, when it lands.
+
+**Uncertain**: the run figures' meanings beyond their names (a call into the program counted as an interruption each,
+a thread's own start of a better one as a preemption, a release as sceKernelReleaseWaitThread's), their reset at a
+start, and the run status taking any size; kinds 12 and 13 as the two mutexes; how many IDs the list returns when the
+buffer is smaller than the list (written, chosen); a buffer the IDs can't go in refused; GETSIZE's answers with files
+listed and its 0 for a save not there; msData naming a save not there being SIZES_NO_DATA; a save's folder cluster
+and saving's PARAM.SFO cluster beyond the one recording each; sizes as text in MB; the stick's size (a choice within
+what recordings and 32-bit games allow); sceKernelLoadExec's refusals and their codes, the clock starting afresh
+(whether a PSP's goes on across it isn't recorded), the user partition cleared, and an argument of none for
+parameters with none; the creates' NULL names refused for a program built with any SDK; the running time's unit
+and start, the stack check's 0 outside a thread, the remote's refusals, and every answer of the DRM functions.
+
+**After review.** An audit of the branch (with part 31's PSMF fixes and part 30's faster GE merged in) found the
+clean room held and sceKernelLoadExec sound, and three things to fix:
+- The size mode (22) with files listed wrote their whole size as `neededKB` and `overwriteKB` (the size info's words
+  at 36 and 48, and their text). pspsdk's names read as what saving needs beyond the free space, so a game that took
+  a nonzero figure for "no room" would refuse its first save, the symptom Chili Con Carnage had in the sizes mode.
+  They're now the shortfall, what the files take in whole clusters less the 1,835,008 KiB free (0 for any save that
+  fits), in KiB, newly or over a save alike. Its text is written only when something is needed and is left as it
+  was otherwise, as getsize recorded what there was nothing to say about left alone (chosen; no recording lists
+  files). Tested: 128 KiB of files need 0 and leave the text; a 2 GiB file needs 262,144 KiB, "256 MB".
+- sceKernelSignalSema added the count to the semaphore's in 32 bits (from before this part). With any count now
+  taken at creation, a semaphore at 1 of 2 signalled with 0x7fffffff wrapped to a negative sum, passed the limit
+  check and took a count near -2^31. The sum is now 64-bit; that signal is SEMA_OVF with the count kept, and a
+  semaphore at 0x7ffffffe of 0x7fffffff takes 1 but not 2.
+- A thread's time on the CPU was counted twice when an interrupt's handler ended the game. The call's start adds
+  the interrupted thread's time without moving when it got the CPU, and the exit's switch away added it again, so
+  a thread could show more time than the clock and a state saved after failed its load check. The call's start
+  now moves it (`startCall()`). Tested on both engines: a blank's handler calling sceKernelExitGame while main
+  spins leaves main with about 16.7 ms, no more than has passed, one interruption, and a state that loads.
+Save states unchanged (version 14). tests/psp 302 groups (one new, two extended) with ASan and UBSan and without,
+tests/psp/ares 298 checks, none failed; each fix undone (three broken versions), its own group failed.

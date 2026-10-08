@@ -789,10 +789,31 @@ auto Kernel::sceIoIoctl() -> void {
   fileWait(file, got, true, moved);
 }
 
+//The memory stick, as every function that tells its size or free space reports it (the capacity request below, the
+//savedata utility's sizes modes): a PSP with a large and mostly empty stick, a 2 GB one, 61,440 clusters of 32 KiB
+//(64 sectors of 512 bytes; 1,920 MiB) with 57,344 (1,792 MiB) free. Large beside any save (tens or hundreds of KiB),
+//and small enough that its bytes fit in 31 bits: games add sizes up in 32-bit words, in bytes (clusters times the
+//cluster's size), where 2 GiB or more free wraps round to a negative number or, at a multiple of 4 GiB, to almost
+//none, and a game says there's no room. (The PSP pspautotests' utility/savedata programs recorded on had a far
+//larger stick, 16 GiB less 10 sectors free, which is why its figures aren't copied.) The free space stays as it is
+//whatever is written: a game asks before it saves, and a few saves are nothing beside it.
+
+//A size as the savedata utility writes it for people, in 8 bytes: whole units, cut down ("96 KB", "128 KB", and
+//"15 GB" for 16,777,211 KiB, as utility/savedata recorded); MB between KB and GB (chosen).
+auto Kernel::stickText(u32 at, u64 kilobytes) -> void {
+  char text[24];
+  if(kilobytes < 1024) std::snprintf(text, sizeof(text), "%u KB", u32(kilobytes));
+  else if(kilobytes < 1024 * 1024) std::snprintf(text, sizeof(text), "%u MB", u32(kilobytes / 1024));
+  else std::snprintf(text, sizeof(text), "%u GB", u32(kilobytes / (1024 * 1024)));
+  u8 bytes[8] = {};
+  std::memcpy(bytes, text, std::min<size_t>(std::strlen(text), 7));
+  memory.copyIn(at, bytes, 8);
+}
+
 //(device, command, in, in length, out, out length): a request to a whole device. The disc drive's and the memory
 //stick's, as PPSSPP's notes on the hardware describe them: the drive holds a game disc, ready, and finished
-//anything it was asked to read ahead; the memory stick is in, writable, formatted (FAT), with up to 1 GiB free
-//(games add sizes up in 32 bits). Anything else isn't supported.
+//anything it was asked to read ahead; the memory stick is in, writable, formatted (FAT), its size and free space
+//the stick's above. Anything else isn't supported.
 auto Kernel::sceIoDevctl() -> void {
   std::string device = memory.readString(arg(0), 64);
   u32 command = arg(1), in = arg(2), inLength = arg(3), out = arg(4), outLength = arg(5);
@@ -839,20 +860,14 @@ auto Kernel::sceIoDevctl() -> void {
     return outWord(0);
   case 0x0241'5823: case 0x0240'd81e:  //turn FAT on; clear the driver's file table cache
     return result(0);
-  case 0x0242'5818: {  //its size: in holds where to put clusters (max, free), sectors, sector size, sectors a cluster
+  case 0x0242'5818: {  //its size: in holds where to put a SceDevInf (pspiofilemgr_devctl.h): its clusters, those
+    //free, free ones again (pspsdk's "cluster of empty logical block"), a sector's bytes, a cluster's sectors
     if(!inWord(word) || !memory.reaches(word, 20)) return result(ErrorDevctlBadParameters);
-    u64 free = 1_GiB;
-    if(auto folder = devices.find("ms0"); folder != devices.end()) {
-      std::error_code error;
-      auto space = std::filesystem::space(folder->second, error);
-      if(!error) free = std::min<u64>(free, space.available);
-    }
-    u32 cluster = 32_KiB, clusters = u32(free / cluster);
-    memory.write(4, word + 0, clusters);
-    memory.write(4, word + 4, clusters);
-    memory.write(4, word + 8, clusters);
-    memory.write(4, word + 12, 512);
-    memory.write(4, word + 16, cluster / 512);
+    memory.write(4, word + 0, StickClusters);
+    memory.write(4, word + 4, StickFreeClusters);
+    memory.write(4, word + 8, StickFreeClusters);
+    memory.write(4, word + 12, StickSectorSize);
+    memory.write(4, word + 16, StickClusterSize / StickSectorSize);
     return result(0);
   }
   case 0x0201'5804: case 0x0241'5821:  //register a callback for the stick going in or out (it never does)
@@ -868,4 +883,37 @@ auto Kernel::sceIoDevctl() -> void {
   }
   }
   result(ErrorFunctionNotSupported);
+}
+
+//scePspNpDrm_user, the DRM of games sold as downloads: a game gives its licensee key (16 bytes) before it opens its
+//own protected files (EDATA, ".PSPEDAT" with a PGD inside, as the PSP Developer Wiki describes them), which the PSP
+//then decrypts as they're read. There is no DRM here: a key is taken and forgotten, and a game's files are read as
+//they are, so a game's plain files work and an encrypted one reads as its encrypted bytes. uOFW's npdrm exports
+//name the user library's five functions; none has a pspautotests program.
+auto Kernel::sceNpDrmSetLicenseeKey() -> void { result(0); }
+auto Kernel::sceNpDrmClearLicenseeKey() -> void { result(0); }
+
+//(name): whether a protected file still has the name it was sold with: always, here.
+auto Kernel::sceNpDrmRenameCheck() -> void { result(0); }
+
+//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE.
+auto Kernel::sceNpDrmEdataSetupKey() -> void {
+  auto found = files.find(arg(0));
+  if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
+  result(0);
+}
+
+//(file): the size of an open file's data: here the file's own size, as nothing is decrypted.
+auto Kernel::sceNpDrmEdataGetDataSize() -> void {
+  auto found = files.find(arg(0));
+  if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
+  auto& open = found->second;
+  u64 size = open.size;
+  if(!open.onDisc) {
+    open.stream->flush();
+    std::error_code error;
+    size = std::filesystem::file_size(open.host, error);
+    if(error) size = 0;
+  }
+  result(u32(std::min<u64>(size, 0x7fff'ffff)));
 }

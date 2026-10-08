@@ -69,6 +69,9 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelDeleteThread",         &Kernel::sceKernelDeleteThread);
   add("ThreadManForUser",  "sceKernelGetThreadId",          &Kernel::sceKernelGetThreadId);
   add("ThreadManForUser",  "sceKernelReferThreadStatus",    &Kernel::sceKernelReferThreadStatus);
+  add("ThreadManForUser",  "sceKernelReferThreadRunStatus", &Kernel::sceKernelReferThreadRunStatus);
+  add("ThreadManForUser",  "sceKernelGetThreadmanIdList",   &Kernel::sceKernelGetThreadmanIdList);
+  add("ThreadManForUser",  "sceKernelGetThreadmanIdType",   &Kernel::sceKernelGetThreadmanIdType);
   add("ThreadManForUser",  "sceKernelDelayThread",          &Kernel::sceKernelDelayThread);
   add("ThreadManForUser",  "sceKernelDelayThreadCB",        &Kernel::sceKernelDelayThreadCB);
   add("ThreadManForUser",  "sceKernelSleepThread",          &Kernel::sceKernelSleepThread);
@@ -119,6 +122,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelResumeThread",         &Kernel::sceKernelResumeThread);
   add("ThreadManForUser",  "sceKernelChangeCurrentThreadAttr", &Kernel::sceKernelChangeCurrentThreadAttr);
   add("ThreadManForUser",  "sceKernelGetThreadStackFreeSize", &Kernel::sceKernelGetThreadStackFreeSize);
+  add("ThreadManForUser",  "sceKernelCheckThreadStack",     &Kernel::sceKernelCheckThreadStack);
   add("ThreadManForUser",  "sceKernelReferThreadProfiler",  &Kernel::sceKernelReferThreadProfiler);
   add("ThreadManForUser",  "sceKernelGetThreadCurrentPriority", &Kernel::sceKernelGetThreadCurrentPriority);
   add("ThreadManForUser",  "sceKernelRotateThreadReadyQueue", &Kernel::sceKernelRotateThreadReadyQueue);
@@ -165,6 +169,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelUSec2SysClockWide",    &Kernel::sceKernelUSec2SysClockWide);
   add("ThreadManForUser",  "sceKernelCreateLwMutex",        &Kernel::sceKernelCreateLwMutex);
   add("ThreadManForUser",  "sceKernelDeleteLwMutex",        &Kernel::sceKernelDeleteLwMutex);
+  add("ThreadManForUser",  "sceKernelReferLwMutexStatusByID", &Kernel::sceKernelReferLwMutexStatusByID);
   add("ThreadManForUser",  "sceKernelGetSystemTimeLow",     &Kernel::sceKernelGetSystemTimeLow);
   add("ThreadManForUser",  "sceKernelGetSystemTimeWide",    &Kernel::sceKernelGetSystemTimeWide);
   add("ThreadManForUser",  "sceKernelGetSystemTime",        &Kernel::sceKernelGetSystemTime);
@@ -189,6 +194,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("Kernel_Library",    "sceKernelTryLockLwMutex",       &Kernel::sceKernelTryLockLwMutex);
   add("Kernel_Library",    "sceKernelUnlockLwMutex",        &Kernel::sceKernelUnlockLwMutex);
   add("Kernel_Library",    "sceKernelLockLwMutexCB",        &Kernel::sceKernelLockLwMutexCB);
+  add("Kernel_Library",    "sceKernelReferLwMutexStatus",   &Kernel::sceKernelReferLwMutexStatus);
   add("Kernel_Library",    "sceKernelCpuSuspendIntr",       &Kernel::sceKernelCpuSuspendIntr);
   add("Kernel_Library",    "sceKernelCpuResumeIntr",        &Kernel::sceKernelCpuResumeIntr);
   add("Kernel_Library",    "sceKernelCpuResumeIntrWithSync", &Kernel::sceKernelCpuResumeIntr);
@@ -216,6 +222,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("UtilsForUser",      "sceKernelIcacheInvalidateRange", &Kernel::sceKernelCacheUnneeded);
   add("sceRtc",            "sceRtcGetCurrentTick",          &Kernel::sceRtcGetCurrentTick);
   add("sceRtc",            "sceRtcGetTickResolution",       &Kernel::sceRtcGetTickResolution);
+  add("sceRtc",            "sceRtcGetAccumulativeTime",     &Kernel::sceRtcGetAccumulativeTime);
+  add("sceRtc",            "sceRtcGetAccumlativeTime",      &Kernel::sceRtcGetAccumulativeTime);  //Sony's spelling
   add("sceRtc",            "sceRtcGetTick",                 &Kernel::sceRtcGetTick);
   add("sceRtc",            "sceRtcCompareTick",             &Kernel::sceRtcCompareTick);
   add("sceRtc",            "sceRtcGetCurrentClock",         &Kernel::sceRtcGetCurrentClock);
@@ -227,6 +235,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceRtc",            "sceRtcSetTick",                 &Kernel::sceRtcSetTick);
   add("sceOpenPSID",       "sceOpenPSIDGetOpenPSID",        &Kernel::sceOpenPSIDGetOpenPSID);
   add("SysMemUserForUser", "sceKernelPrintf",               &Kernel::sceKernelPrintf);
+  //the kernel's own debug printf, which kernel modules print with (pspautotests' modules/loadexec/simple)
+  add("KDebugForKernel",   "Kprintf",                       &Kernel::sceKernelPrintf);
   add("scePower",          "scePowerRegisterCallback",      &Kernel::scePowerRegisterCallback);
   add("scePower",          "scePowerUnregisterCallback",    &Kernel::scePowerUnregisterCallback);
   add("scePower",          "scePowerUnregitserCallback",    &Kernel::scePowerUnregisterCallback);  //Sony's spelling
@@ -370,6 +380,11 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
   add("IoFileMgrForUser",  "sceIoIoctl",                    &Kernel::sceIoIoctl);
   add("IoFileMgrForUser",  "sceIoDevctl",                   &Kernel::sceIoDevctl);
+  add("scePspNpDrm_user",  "sceNpDrmSetLicenseeKey",        &Kernel::sceNpDrmSetLicenseeKey);
+  add("scePspNpDrm_user",  "sceNpDrmClearLicenseeKey",      &Kernel::sceNpDrmClearLicenseeKey);
+  add("scePspNpDrm_user",  "sceNpDrmRenameCheck",           &Kernel::sceNpDrmRenameCheck);
+  add("scePspNpDrm_user",  "sceNpDrmEdataSetupKey",         &Kernel::sceNpDrmEdataSetupKey);
+  add("scePspNpDrm_user",  "sceNpDrmEdataGetDataSize",      &Kernel::sceNpDrmEdataGetDataSize);
   add("IoFileMgrForUser",  "sceIoOpenAsync",                &Kernel::sceIoOpenAsync);
   add("IoFileMgrForUser",  "sceIoCloseAsync",               &Kernel::sceIoCloseAsync);
   add("IoFileMgrForUser",  "sceIoReadAsync",                &Kernel::sceIoReadAsync);
@@ -407,6 +422,12 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceCtrl",           "sceCtrlReadBufferNegative",     &Kernel::sceCtrlReadBufferNegative);
   add("sceCtrl",           "sceCtrlPeekLatch",              &Kernel::sceCtrlPeekLatch);
   add("sceCtrl",           "sceCtrlReadLatch",              &Kernel::sceCtrlReadLatch);
+  add("sceHprm",           "sceHprmIsHeadphoneExist",       &Kernel::sceHprmIsHeadphoneExist);
+  add("sceHprm",           "sceHprmIsRemoteExist",          &Kernel::sceHprmIsRemoteExist);
+  add("sceHprm",           "sceHprmIsMicrophoneExist",      &Kernel::sceHprmIsMicrophoneExist);
+  add("sceHprm",           "sceHprmPeekCurrentKey",         &Kernel::sceHprmPeekCurrentKey);
+  add("sceHprm",           "sceHprmPeekLatch",              &Kernel::sceHprmPeekLatch);
+  add("sceHprm",           "sceHprmReadLatch",              &Kernel::sceHprmReadLatch);
   add("sceCtrl",           "sceCtrlSetIdleCancelThreshold", &Kernel::sceCtrlSetIdleCancelThreshold);
   add("sceCtrl",           "sceCtrlGetIdleCancelThreshold", &Kernel::sceCtrlGetIdleCancelThreshold);
   add("sceDisplay",        "sceDisplaySetMode",             &Kernel::sceDisplaySetMode);
@@ -416,10 +437,13 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceDisplay",        "sceDisplayWaitVblankStartCB",   &Kernel::sceDisplayWaitVblankStartCB);
   add("sceDisplay",        "sceDisplayWaitVblank",          &Kernel::sceDisplayWaitVblank);
   add("sceDisplay",        "sceDisplayWaitVblankCB",        &Kernel::sceDisplayWaitVblankCB);
+  add("sceDisplay",        "sceDisplayWaitVblankStartMulti", &Kernel::sceDisplayWaitVblankStartMulti);
+  add("sceDisplay",        "sceDisplayWaitVblankStartMultiCB", &Kernel::sceDisplayWaitVblankStartMultiCB);
   add("sceDisplay",        "sceDisplayIsVblank",            &Kernel::sceDisplayIsVblank);
   add("sceDisplay",        "sceDisplayGetCurrentHcount",    &Kernel::sceDisplayGetCurrentHcount);
   add("sceDisplay",        "sceDisplayGetVcount",           &Kernel::sceDisplayGetVcount);
   add("sceDisplay",        "sceDisplayGetAccumulatedHcount", &Kernel::sceDisplayGetAccumulatedHcount);
+  add("sceDisplay",        "sceDisplayAdjustAccumulatedHcount", &Kernel::sceDisplayAdjustAccumulatedHcount);
   add("sceDisplay",        "sceDisplayGetFramePerSec",      &Kernel::sceDisplayGetFramePerSec);
   add("sceGe_user",        "sceGeEdramGetAddr",             &Kernel::sceGeEdramGetAddr);
   add("sceGe_user",        "sceGeEdramGetSize",             &Kernel::sceGeEdramGetSize);
@@ -439,6 +463,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceGe_user",        "sceGeSaveContext",              &Kernel::sceGeSaveContext);
   add("sceGe_user",        "sceGeRestoreContext",           &Kernel::sceGeRestoreContext);
   add("LoadExecForUser",   "sceKernelExitGame",             &Kernel::sceKernelExitGame);
+  add("LoadExecForUser",   "sceKernelLoadExec",             &Kernel::sceKernelLoadExec);
   add("LoadExecForUser",   "sceKernelRegisterExitCallback", &Kernel::sceKernelRegisterExitCallback);
   add("ModuleMgrForUser",  "sceKernelSelfStopUnloadModule", &Kernel::sceKernelSelfStopUnloadModule);
   addNID("ModuleMgrForUser", "sceKernelStopUnloadSelfModuleWithStatus", 0x8f2d'f740,
@@ -729,6 +754,7 @@ auto Kernel::power() -> void {
   modules.clear();
   programUID = 0;
   exited = false;
+  exec = {};
   stuck = false;
   cycles = 0;
   nextUID = 0x100;
@@ -740,6 +766,7 @@ auto Kernel::power() -> void {
   alarms.clear();
   vtimers.clear();
   current = nullptr;
+  ranSince = 0;
   readySequence = 0;
   nextVblank = VblankCycles;
   vblanks = 0;
@@ -831,7 +858,9 @@ auto Kernel::load(const u8* data, u64 size, const std::string& path, std::string
   return loaded;
 }
 
-auto Kernel::start(const u8* data, u64 size, const std::string& path, std::string& error) -> bool {
+//(Its first thread's argument is the program's path, or what sceKernelLoadExec was given for it, which may be none.)
+auto Kernel::start(const u8* data, u64 size, const std::string& path, std::string& error,
+                   const std::vector<u8>* given) -> bool {
   largeMemory = parameterNumber(programParameters(data, size, path), "MEMSIZE", 0) == 1;
   u64 offset = 0, length = size;
   if(Loader::programInPBP(data, size, offset, length)) {
@@ -870,33 +899,40 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
 
   cpu.power(module.entry);
   if(auto folder = programFolder(path); !folder.empty()) workingDirectory = folder;  //relative paths start there
-  u32 pathLength = path.size() + 1;  //the path, with its terminating zero
-  if(pathLength > 4_KiB) {
-    error = "the program's path is too long";
+  //the path, with its terminating zero, or the argument given
+  std::vector<u8> bytes = given ? *given : std::vector<u8>(path.c_str(), path.c_str() + path.size() + 1);
+  if(bytes.size() > 4_KiB) {
+    error = given ? "the program's argument is too long" : "the program's path is too long";
     return false;
   }
   u32 argument = Trampoline + 0x100;  //put where the new thread's start can copy it from
-  memory.copyIn(argument, path.c_str(), pathLength);
+  memory.copyIn(argument, bytes.data(), bytes.size());
   s32 uid = createThread(module.name, module.entry, 0x20, 256_KiB, 0x8000'4000, module.gp);  //user mode, uses the VFPU
   if(uid < 0) {
     error = "no memory for the program's first thread";
     return false;
   }
-  if(!argumentFits(*threads[uid], pathLength)) {
-    error = "the program's path is too long";
+  if(!argumentFits(*threads[uid], bytes.size())) {
+    error = "the program's argument is too long";
     return false;
   }
-  startThread(*threads[uid], pathLength, argument);
+  startThread(*threads[uid], bytes.size(), argument);
   return true;
 }
 
 //Runs the program for up to budget cycles of the PSP's time (less if it ends, or every thread waits on something that
 //will never come): threads run, and while they all wait, time jumps to the next thing due, waking threads as their
 //moments come. A frame's worth (VblankCycles) is a frame, however much of it the program spent waiting. Returns how
-//many cycles passed.
+//many cycles passed. A program sceKernelLoadExec asked for takes the old one's place as soon as the call is made
+//(system.cpp's loadExec()), ending the go: its clock starts afresh, as at power on, so what passed is the old one's.
 auto Kernel::run(u64 budget) -> u64 {
   u64 start = cycles, end = cycles + budget;
   while(cycles < end && !exited) {
+    if(exec.pending) {
+      u64 passed = cycles - start;
+      loadExec();
+      return passed;
+    }
     if(geBusy) geRun();
     startCall();  //a call into the program waiting its turn runs on whatever's in the CPU, a thread or nothing
     if(!current && !interrupting) {
@@ -915,7 +951,9 @@ auto Kernel::run(u64 budget) -> u64 {
     }
     events();
   }
-  return cycles - start;
+  u64 passed = cycles - start;
+  if(exec.pending) loadExec();  //(never left for a state to find)
+  return passed;
 }
 
 //The code a library's function gets: the same for every import of the same NID, so a stub works whichever module

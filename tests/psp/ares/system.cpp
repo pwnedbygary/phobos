@@ -582,9 +582,10 @@ auto states(const fs::path& programs) -> void {
     //into the program; version 8, before a ringbuffer's callback could be part way through; version 9, before
     //sceAtrac3plus, sceMp3 and sceMpeg kept their streams' places (part 26); version 10, before mutexes, alarms
     //and virtual timers (part 28); version 11, before the GE kept its last bounding box's result (part 29); version
-    //12, before the movie player (part 31). Each is refused by its header, before anything is touched (even the
-    //compiled code, which any load throws away).
-    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}) {
+    //12, before the movie player (part 31); version 13, before threads' run figures, lightweight mutexes' names and
+    //the display's count of lines adjusted (part 32). Each is refused by its header, before anything is touched (even
+    //the compiled code, which any load throws away).
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};

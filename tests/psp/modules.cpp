@@ -978,6 +978,93 @@ static auto stateWhileStarting() -> void {
   }
 }
 
+//"TESTEXEC", a program another starts in its place: writes its argument's length at Results + 0x100 and, if it has
+//one, the argument's first word at Results + 0x104, then 0xb0b0 at Results + 0x108, and leaves (sceKernelExitGame).
+static auto execModule() -> TestModule {
+  TestModule m;
+  m.name = "TESTEXEC";
+  m.imports = {{"LoadExecForUser", Kernel::nid("sceKernelExitGame")}};
+  m.start = 0;
+  m.code = {lui(t1, (Results + 0x100) >> 16), ori(t1, t1, (Results + 0x100) & 0xffff), sw(a0, 0, t1),
+            beq(a0, zero, 3), nop, lw(t0, 0, a1), sw(t0, 4, t1)};
+  store(m.code, Results + 0x108, 0xb0b0);
+  callStub(m, 0x3c0);
+  m.code.push_back(halt);  //never reached
+  return m;
+}
+
+//sceKernelLoadExec, as pspautotests' modules/loadexec/loader recorded (the call never returns; the new program runs
+//on): a program writes "A", starts TESTEXEC in its place (plain, then encrypted) and would write "never". The new
+//program has the machine to itself: the old one's threads, memory and marks gone, the clock started afresh, and its
+//argument its path with no parameters, the bytes given with them, or none for none. What can't be started is refused
+//with the old program left running: a file there isn't, one that isn't a program, an argument over 4 KiB. A state
+//saved once the new program has run loads into another machine. On both engines.
+static auto loadExec() -> void {
+  HostFolder stick;
+  put(stick, "EXEC.PRX", execModule().build());
+  put(stick, "EXEC.BIN", psp_encrypt::encrypt(execModule().build()));
+  stick.put("TEXT.TXT", "not a program");
+  struct Case { const char* path; s32 length; const char* argument; u32 expectedLength, expectedWord; } cases[] = {
+    {"ms0:/EXEC.PRX", -1, nullptr, 14, 0x3a30'736d},  //no parameters: its path, "ms0:/EXEC.PRX" and its NUL
+    {"ms0:/EXEC.BIN", 6, "hello", 6, 0x6c6c'6568},     //the bytes given
+    {"ms0:/EXEC.PRX", 0, nullptr, 0, 0},               //none
+  };
+  for(bool recompile : {false, true}) {
+    for(auto& c : cases) {
+      KernelMachine m;
+      m.kernel.mount("ms0", stick.path.string());
+      constexpr u32 Parameters = Results + 0x40;
+      Assembler main{m, 0x0880'1000};
+      main.print("A");
+      main.li(t0, Results); main.li(t1, 0xa0a0); main.put(sw(t1, 0x108, t0));
+      main.li(a0, m.string(c.path)); main.li(a1, c.length < 0 ? 0 : Parameters);
+      main.call("sceKernelLoadExec");
+      main.print("never");
+      main.call("sceKernelExitGame");
+      m.system.memory.write(4, Parameters, 16);
+      m.system.memory.write(4, Parameters + 4, c.length < 0 ? 0 : u32(c.length));
+      m.system.memory.write(4, Parameters + 8, c.argument ? m.string(c.argument) : 0);
+      m.system.memory.write(4, Parameters + 12, 0);
+      m.runProgram(0x0880'1000, recompile);  //it ends as the new program is put in
+      CHECK(m.output == "A", true);
+      CHECK(m.kernel.exited, false);
+      CHECK(m.kernel.module.name == "TESTEXEC", true);
+      CHECK(m.kernel.threads.size(), 1);
+      CHECK(m.kernel.cycles < Kernel::VblankCycles, true);
+      CHECK(word(m.system, Results + 0x108), 0);  //the old program's mark went with its memory
+      m.kernel.run(Kernel::CPUFrequency / 10);
+      CHECK(m.kernel.exited, true);
+      CHECK(m.output == "A", true);
+      CHECK(word(m.system, Results + 0x108), 0xb0b0);
+      CHECK(word(m.system, Results + 0x100), c.expectedLength);
+      CHECK(word(m.system, Results + 0x104), c.expectedWord);
+      CHECK(m.notes.size(), 0);
+      CHECK(roundTrip(m, [&](KernelMachine& fresh) { fresh.kernel.mount("ms0", stick.path.string()); }), true);
+    }
+  }
+  KernelMachine m;
+  m.kernel.mount("ms0", stick.path.string());
+  constexpr u32 Parameters = Results + 0x40;
+  m.system.memory.write(4, Parameters, 16);
+  m.system.memory.write(4, Parameters + 4, 4097);
+  m.system.memory.write(4, Parameters + 8, m.string("long"));
+  Assembler main{m, 0x0880'1000};
+  main.li(s0, Results);
+  for(auto [path, parameters, at] : {std::tuple{"ms0:/NONE.PRX", 0u, 0x10}, {"ms0:/TEXT.TXT", 0u, 0x14},
+                                     {"ms0:/EXEC.PRX", Parameters, 0x18}}) {
+    main.li(a0, m.string(path)); main.li(a1, parameters);
+    main.call("sceKernelLoadExec");
+    main.put(sw(v0, at, s0));
+  }
+  main.call("sceKernelExitGame");
+  m.runProgram(0x0880'1000, false);
+  CHECK(m.kernel.exited, true);
+  CHECK(word(m.system, Results + 0x10), Kernel::ErrorFileNotFound);
+  CHECK(word(m.system, Results + 0x14), Kernel::ErrorIllegalObject);
+  CHECK(word(m.system, Results + 0x18), Kernel::ErrorIllegalSize);
+  CHECK(m.kernel.module.name.empty(), true);  //the old program still
+}
+
 auto moduleTests() -> Tests {
   return {
     {"modules start and link", startAndLink}, {"modules linking", linking}, {"modules stand-ins", standIns},
@@ -985,6 +1072,7 @@ auto moduleTests() -> Tests {
     {"modules unload themselves", unloadThemselves}, {"modules unload with a status", unloadWithStatus},
     {"modules exit threads", exitThreads}, {"modules terminated threads", terminatedThreads},
     {"modules entry points", entryPoints}, {"modules state", stateWhileStarting},
+    {"programs started in another's place", loadExec},
   };
 }
 
