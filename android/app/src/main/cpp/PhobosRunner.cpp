@@ -986,6 +986,8 @@ namespace ares {
   static string pspFontsPath;
   // How many threads draw the PSP's pictures (Settings' "PSP Drawing Threads"): 0 for all the device's cores but one.
   static std::atomic<s32> pspDrawingThreads{0};
+  // Who draws the PSP's pictures (Settings' "PSP Renderer"): 0 the software renderer, 1 Vulkan's.
+  static std::atomic<s32> pspRenderer{0};
   // The whole multiple video() draws the PSP's picture at, from the view's size (Kotlin's pictureMultiple()).
   static std::atomic<s32> pictureMultiple{1};
   static std::map<string, string> firmwareMap;
@@ -3580,6 +3582,11 @@ else if (port->type() == "Keyboard") {
       // How many threads draw the GE's pictures: the setting's count, or 0 for all the cores but one (the core's own).
       LOGI("PSP: drawing threads %d (0: all cores but one)", pspDrawingThreads.load());
       ::ares::PlayStationPortable::option("GE Threads", string{pspDrawingThreads.load()});
+      // The renderer, and for Vulkan's the driver loadVulkan() loaded above (the user's custom one if it loaded).
+      bool vulkan = pspRenderer.load() == 1;
+      LOGI("PSP: renderer %s", vulkan ? "Vulkan" : "Software");
+      ::ares::PlayStationPortable::vulkanLoader(vulkan ? phobos::host::vulkanLoader() : nullptr);
+      ::ares::PlayStationPortable::option("Renderer", vulkan ? "Vulkan" : "Software");
       success = ::ares::PlayStationPortable::load(root, "[Sony] PlayStation Portable");
     } else if (identifiedSystem == "Game Boy Advance") {
       success = ::ares::GameBoyAdvance::load(root, "[Nintendo] Game Boy Advance");
@@ -4675,6 +4682,12 @@ else if (port->type() == "Keyboard") {
     pspFontsPath = path ? (string)path : "";
   }
   auto setPspDrawingThreads(s32 threads) -> void { pspDrawingThreads = std::max(0, threads); }
+  auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 1 ? 1 : 0; }
+  auto takePspNotice() -> std::string {
+    std::string text = (const char*)::ares::PlayStationPortable::notice();
+    if (!text.empty()) addLog(LogLevel::Warn, {"PSP: ", text.c_str()});
+    return text;
+  }
   auto setPictureMultiple(s32 multiple) -> void { pictureMultiple = std::clamp(multiple, 1, 4); }
   auto setVulkanCachePath(const char* path) -> void {
     vulkanCachePath = path ? (string)path : "";

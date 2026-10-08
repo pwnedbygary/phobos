@@ -2,8 +2,9 @@
 //random 2D sprites, flat and textured, in each frame buffer format, which the GPU must draw byte for byte the same;
 //a frame buffer drawn and then sampled as a texture (render to texture: the copy taken on the GPU), the same again;
 //pspsdk's samples (PSP_TEST_PROGRAMS) run by two machines alike but for the renderer, measured for how close their
-//pictures are (blending rounds differently on the GPU, so they needn't be the same); and a GPU that stops
-//answering. Each group but the last is skipped, saying why, where there's no Vulkan GPU (or with PSP_GPU=0): the
+//pictures are (blending rounds differently on the GPU, so they needn't be the same); a GPU that stops answering;
+//bytes beside the GPU's pixels, memory's without waiting; and the start-up check a game's renderer goes through.
+//Each group but the lost GPU's is skipped, saying why, where there's no Vulkan GPU (or with PSP_GPU=0): the
 //machines the tests run on needn't have one.
 #include "kernel-machine.hpp"
 #include "../../ares/psp/ge/gpu/gpu.hpp"
@@ -349,6 +350,49 @@ static auto gpuDepth() -> void {
   }
 }
 
+//Bytes beside the GPU's pixels, in the unused columns right of a picture (where games keep their lists): the CPU
+//writes and reads them without waiting for the GPU, a sprite beside them doesn't wait either, and a sprite over
+//them, once the GPU has its pixels from memory again, draws as the software renderer does.
+static auto gpuBeside() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  u32 list = 0x0400'0000 + (10 * 64 + 48) * 4;  //(row 10, columns 48-63)
+  u64 finishes = 0;
+  u32 read = 0;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    s->ge.commands[GE::Scissor2] = 47 | 47 << 10;  //(a picture 48 pixels wide in rows of 64)
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 48, 48}}, 0xff00'00ff});
+    finishes = gpu->statistics.finishes;
+    for(u32 n = 0; n < 16; n++) s->memory.write(4, list + n * 4, 0x1234'5600 + n);
+    for(u32 n = 0; n < 16; n++) read += s->memory.read(4, list + n * 4) == 0x1234'5600 + n;
+    sprite(*s, {{{0, 0, 4, 4}, {0, 0, 20, 20}}, 0xff00'ff00});
+  }
+  CHECK(read, 32u);
+  CHECK(gpu->statistics.finishes, finishes);  //(the hardware machine's writes, reads and sprite: no wait)
+  for(System* s : {&software, &hardware}) {
+    s->ge.commands[GE::Scissor2] = 63 | 47 << 10;
+    sprite(*s, {{{0, 0, 40, 8}, {0, 0, 56, 12}}, 0xffff'0000});
+  }
+  CHECK(apart(software, hardware), 0u);
+  CHECK(software.memory.read(4, list + 12 * 4), 0x1234'560cu);  //(column 60: the list's, not drawn over)
+  hardware.ge.setRenderer(nullptr);
+}
+
+//The start-up check (check.cpp) a game's renderer goes through: on a GPU that draws right it passes, and leaves the
+//renderer as it was for the next machine (everything dropped, nothing of its own machine's kept).
+static auto gpuCheck() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::string error;
+  bool passed = gpu->check(error);
+  if(!passed) std::printf("  %s\n", error.c_str());
+  CHECK(passed, true);
+  CHECK(gpu->ready(), true);
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
@@ -358,6 +402,8 @@ auto gpuTests() -> Tests {
     {"gpu refused primitives drawn by the software renderer", gpuRefused},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
     {"gpu depth buffer follows memory's changes", gpuDepth},
+    {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
+    {"gpu start-up check passes on a GPU that draws right", gpuCheck},
   };
 }
 

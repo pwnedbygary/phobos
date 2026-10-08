@@ -455,6 +455,7 @@ struct GE {
   auto settleAll() -> void;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;
+  auto drawnOver(u32 first, u32 last) -> bool;
   auto defer(const PixelState& pixel, const Region& region) -> bool;
   auto record(const Job& job) -> void;
   auto drawBands(Batch& batch) -> void;
@@ -534,6 +535,13 @@ struct GE {
     //the GPU: the renderer takes it from there for the PRIM (begin()), so the GE doesn't decode it, and memory's
     //pages under it stay the renderer's.
     virtual auto holds(GE& ge, const Sampler& texture, u32 rows, u32 columns) -> bool = 0;
+    //Whether what it has drawn since it last finished reaches any of VRAM's bytes first to last (offsets in VRAM,
+    //inclusive): its pixels' own bytes, row by row, not the unused columns right of a picture in the same pages,
+    //where games keep lists and textures (as drawsOver() has it for the drawing threads, texture.cpp).
+    virtual auto drawnOver(GE& ge, u32 first, u32 last) -> bool = 0;
+    //Memory changed VRAM's bytes first to last while pages were busy, without its waiting: bytes it hasn't drawn
+    //over (drawnOver()), which its copies of frame buffers take from memory again before they're used.
+    virtual auto besideChanged(GE& ge, u32 first, u32 last) -> void = 0;
   };
   Renderer* renderer = nullptr;
   auto setRenderer(Renderer* next) -> void;  //ge.cpp

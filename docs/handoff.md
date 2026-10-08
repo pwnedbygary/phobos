@@ -27,8 +27,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: the emulation thread faster again — drawing off it, registers held — 2026-10-08
 
-Branch `cursor/psp-cpu-speed2-2b67`, from `cursor/psp-cpu-speed-2b67` at 4ebc59d97 (part 38 with the stuck games and
-the hardware renderer merged in). docs/psp-core.md, part 43, has the profile, the waits and every number.
+Branch `cursor/psp-cpu-speed2-2b67`, on top of part 42's `cursor/psp-hle-games8-2b67` (#169; measured from part 38's
+4ebc59d97). docs/psp-core.md, part 43, has the profile, the waits and every number.
 - **The GE** (`ares/psp/ge/`): a list starting waits only for the batch it's to fill, not for everything the last
   list left being drawn (b0af46594); lighting's light-by-material products once a primitive (3292c775f).
 - **The recompiler** (`ares/psp/cpu/`): a block holds the game's registers in host registers, written through, so
@@ -38,12 +38,49 @@ the hardware renderer merged in). docs/psp-core.md, part 43, has the profile, th
   VRAM, RAM and the whole serialized state identical to 4ebc59d97's; on the RP6 the end states match unsettled too.
 - **Faster** on the RP6 at 7 GE threads: MC3's race 24.2 to 32.3 fps (the emulation thread 34.4 to 26.8 ms a
   frame), its menu 30.4 to 36.2, Lumines 137 to 177; GTA's city and woods unchanged; Peace Walker's title 226 to 216.
-  At 1 thread the CPU's time is 2-5% lower and the frame rates the same.
+  At 1 thread the CPU's time is 2-9% lower (Peace Walker's the same) and the frame rates the same.
 - **Next**: the race's remaining drawing wait is a texture decoded from the batch being filled (render to texture,
   3.4 ms a frame); then primitives drawn at once, textures read from memory as they're drawn.
 - Scratch tools and states are in `~/phobos-work/scratch/cpu-speed` (never committed); the RP6 copy is
   `/data/local/tmp/cpu-bench3`. The RP6 is shared: take `~/phobos-work/rp6.lock` first, and time only while the
   Phobos app isn't running.
+
+## PSP core: Killzone's movie, the dialogs' sizes and statuses — 2026-10-08
+
+Branch `cursor/psp-hle-games8-2b67`, on top of `cursor/psp-gpu-hw2-2b67` (#168, the Vulkan renderer in Phobos).
+docs/psp-core.md, part 42, describes it; one commit per fix, each with its tests.
+- **Killzone: Liberation**: its jump into VRAM at frame 1547 came from its movie being told no picture came at the
+  first decode, which made it clear its target through a null pointer. With a game's own sceMpeg library (stood in
+  for) each access unit now gives its picture at once; the firmware's library still holds the first back
+  (video/mpeg/basic). Killzone plays its intro and reaches its main menu.
+- **Dialogs**: each kind takes only its recorded parameter sizes; InitStart only while no dialog is current;
+  Update INVALID_STATUS outside running and finished; sceUtilityMsgDialogAbort finishes after 8 Updates. Save
+  state version 16.
+- **Equal corner colors losing a level**: kept exact in a trial, psp measure didn't move, so left as it is.
+- **scePower 0xa85880d0**: no game here calls it; nothing names it. Left for a game that does.
+- **Checks**: tests/psp 321 groups with and without sanitizers, tests/psp/ares 306 checks, none failing; the ten
+  priority games the same sound and screens against the Killzone commit.
+- **Left**: the 21 menu-to-black games (not yet copied over); scePower 0xa85880d0; the web browser's own state and
+  memory, and the Screenshot and NpSignin dialogs.
+
+## PSP core: the Vulkan renderer in the app and the desktop — 2026-10-07
+
+Branch `cursor/psp-gpu-hw2-2b67`, on top of part 38's `cursor/psp-cpu-speed-2b67`. docs/psp-core.md, part 41, and
+docs/psp-gpu-renderers.md's "In Phobos (part 41)" describe it; PPSSPP stayed a guide only, none of its code used.
+- **The setting**: "PSP Renderer" (Software, the default, or Vulkan) in the app's PSP settings and the desktop's
+  menu, given to the core as its "Renderer" option when a game loads. The hosts hand over the `vkGetInstanceProcAddr`
+  their `loadVulkan` got (the system's or a custom driver's on Android, MoltenVK on the macOS desktop).
+- **Fallbacks**: a start-up check (sprites byte for byte, triangles within a bound) in a machine of its own; a
+  renderer that fails it, or loses its device later, gives way to the software renderer, said once in the log and
+  the UI. The shown frame is read straight from its target (no finish), memory's picture the fallback.
+- **Bytes beside the pixels**: busy VRAM pages asked about to the byte, so a display list beside the frame buffer
+  doesn't wait for the GPU (Brave Story on the RP6 18.6 to 59.5 fps). A new test; the PSP system tests pass on the
+  M1 (sanitized, the GPU groups run).
+- **Measured in the app** (RP6): Midnight Club 3's title 54.3 fps with the installed Turnip, 49.6 with Qualcomm's,
+  35.6 software; its race 39.0, 36.0, 29.0; the 2D scenes at 60. Twenty-two games on Vulkan: none crash; three
+  black as with software (the core's). Not seen: the app's fallback toast (nothing failed).
+- **Next**: upscaling (presenting without reading back), then accuracy (shader blending), then OpenGL.
+- `tools/psp-runner` builds again (Vulkan's headers) and takes `--renderer`.
 
 ## PSP core: the emulation thread faster, the CPU's recompiler first — 2026-10-07
 

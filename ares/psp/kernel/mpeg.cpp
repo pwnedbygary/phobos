@@ -12,7 +12,8 @@
 //  from the packets, which are free again once taken. Both go as video/mpeg/basic recorded them for its movie, to the
 //  byte and the packet. Decoding an access unit gives a picture from the second on (basic's first gave none: the
 //  decoder holds one back), the one before, converted into the game's buffer in its pixel format
-//  (sceMpegAvcDecodeMode), or kept for sceMpegAvcCsc to convert (sceMpegAvcDecodeYCbCr).
+//  (sceMpegAvcDecodeMode), or kept for sceMpegAvcCsc to convert (sceMpegAvcDecodeYCbCr); with the game's own copy of
+//  the library, every one's own picture (mpegDecoded()).
 //- The sound's access units (sceMpegGetAtracAu) are the ATRAC3plus frames of private stream 1 (each PES packet's data
 //  a 4-byte header, then the stream: frames each behind an 8-byte header of their own, 0x0fd0 and the codec's
 //  parameters, as the owner's games' movies hold them); sound in packets freed for the pictures before it was asked
@@ -264,6 +265,15 @@ auto Kernel::mpegLibrary(u32 handle) -> u32 {
   u32 library = memory.read(4, handle);
   if(!memory.reaches(library, LibraryState) || memory.readString(library, 8) != "LIBMPEG") return 0;
   return library;
+}
+
+//Whether the game loaded its own copy of the library (a module of the disc's, stood in for: modules.cpp) rather
+//than the firmware's (sceUtilityLoadAvModule, sceUtilityLoadModule).
+auto Kernel::mpegOwnLibrary() -> bool {
+  for(auto& [uid, loaded] : modules) {
+    if(loaded.standIn && loaded.module.name == "sceMpeg_library") return true;
+  }
+  return false;
 }
 
 //(handle, data, size, ringbuffer, frame width, mode, DDR top): the library set up in the memory given, its handle
@@ -592,17 +602,23 @@ auto Kernel::pictureConvert(const std::vector<u8>& planes, u32 pictureWidth, u32
 //0, as video/mpeg/basic recorded), and a picture from the second on, the decoder holding one back (basic's first
 //gave none): where to put whether one came gets 1 then, else 0. The picture that comes is the one decoded the time
 //before, converted into pixels (when given: sceMpegAvcDecode's buffer, frameWidth wide) and kept for sceMpegAvcCsc.
-//A decoder made afresh after a state was loaded shows no new picture until one it can start from (keyframe()). A
-//picture larger than a state holds (VideoDecoder::MaxSide either way) is passed over.
+//A game that brought its own sceMpeg_library (mpegOwnLibrary()) gets every access unit's picture at once instead,
+//the first too: Killzone's movie (its disc's library 1.5) decodes its first picture into no buffer of its own, and
+//when told none came it clears that buffer through a null pointer, which it can't have done on a PSP. (basic used
+//the firmware's library.) A decoder made afresh after a state was loaded shows no new picture until one it can start
+//from (keyframe()). A picture larger than a state holds (VideoDecoder::MaxSide either way) is passed over.
 auto Kernel::mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWidth) -> void {
   u32 library = mpegLibrary(handle);
   bool came = false, decoded = false;
   if(library && memory.reaches(au, 24) && memory.read(4, au + 20)) {
-    came = memory.read(4, library + LibraryHolding);
-    memory.write(4, library + LibraryHolding, 1);
+    bool holds = !mpegOwnLibrary();
+    came = !holds || memory.read(4, library + LibraryHolding);
+    if(holds) memory.write(4, library + LibraryHolding, 1);
     memory.write(4, au + 20, 0);
     auto& stream = mpegStreams[library];
-    if(came) stream.shown = stream.held, stream.shownWidth = stream.heldWidth, stream.shownHeight = stream.heldHeight;
+    if(came && holds) {
+      stream.shown = stream.held, stream.shownWidth = stream.heldWidth, stream.shownHeight = stream.heldHeight;
+    }
     if(!stream.video && videoDecoders) stream.video = videoDecoders();
     if(stream.video && !stream.unit.empty()) {
       if(stream.keyframe && keyframe(stream.unit)) stream.keyframe = false;
@@ -614,6 +630,9 @@ auto Kernel::mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWid
         stream.heldWidth = picture.width;
         stream.heldHeight = picture.height;
       }
+    }
+    if(!holds) {
+      stream.shown = stream.held, stream.shownWidth = stream.heldWidth, stream.shownHeight = stream.heldHeight;
     }
     if(came && pixels) mpegConvert(stream, library, pixels, frameWidth, 0, 0, 0, 0);
   }

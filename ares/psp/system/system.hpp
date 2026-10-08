@@ -52,6 +52,11 @@ struct System {
   bool recompile = true;       //the CPU's recompiler on, the interpreter its fallback (option "Recompiler")
   u32 geThreads = 0;           //how many threads draw (option "GE Threads"): 0 for one fewer than the host's cores
   static constexpr u32 MostGeThreads = 64;  //and at most, nor more than twice the host's cores
+  string renderer = "Software";  //who draws the GE's pictures (option "Renderer"): "Software" or "Vulkan"
+  void* vulkanLoader = nullptr;  //the host's vkGetInstanceProcAddr (vulkanLoader()), none for the system's loader
+  //The hardware renderer (ge/gpu), when the owner chose one: made at the first power on, checked against the
+  //software renderer (GPU::check()) and kept while the game runs; none, said once, where it couldn't start.
+  std::unique_ptr<GPU> gpu;
 
   auto name() const -> string { return "PlayStation Portable"; }
 
@@ -84,6 +89,13 @@ private:
   auto header(serializer& s) -> bool;
   auto restore(serializer& s, u32 length) -> bool;
   auto report(bool problem, const std::string& text) -> void;
+
+  bool gpuFailed = false;  //(the hardware renderer couldn't start: not tried again until the next game)
+  std::mutex noticeLock;
+  std::string pendingNotice;  //(notice())
+  auto startRenderer() -> void;
+  auto tell(const std::string& text) -> void;
+  friend auto notice() -> string;
 };
 
 extern System system;

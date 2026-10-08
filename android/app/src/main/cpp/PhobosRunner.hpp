@@ -117,6 +117,11 @@ namespace ares {
   auto setPspFontsPath(const char* path) -> void;
   // How many threads draw the PSP's pictures (its core's "GE Threads", as a game starts): 0 for all cores but one.
   auto setPspDrawingThreads(s32 threads) -> void;
+  // Who draws the PSP's pictures (its core's "Renderer", as a game starts): 0 the software renderer, 1 Vulkan's.
+  auto setPspRenderer(s32 renderer) -> void;
+  // What the PSP's core has to tell the user, once (its Vulkan renderer couldn't start, or stopped): taken, and put
+  // in the log; empty if nothing.
+  auto takePspNotice() -> std::string;
   // The whole multiple the PSP's picture is drawn at in the window (1 to 4), so the compositor scales it little.
   auto setPictureMultiple(s32 multiple) -> void;
   auto setVulkanCachePath(const char* path) -> void;

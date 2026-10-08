@@ -24,6 +24,10 @@ GE::GE(Memory& memory) : memory(memory) {
     if(renderer) renderer->written(*this, page);
   };
   memory.finishDrawing = [this] { settleAll(); };  //(threads.cpp)
+  memory.vramDrawnOver = [this](u32 first, u32 last) { return drawnOver(first, last); };
+  memory.vramChangedBusy = [this](u32 first, u32 last) {
+    if(renderer) renderer->besideChanged(*this, first, last);
+  };
 }
 
 //The hardware renderer that draws from now on, or none for the software renderer: the one before settled (what it

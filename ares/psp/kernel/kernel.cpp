@@ -492,6 +492,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceUtility",        "sceUtilityMsgDialogGetStatus",  &Kernel::sceUtilityMsgDialogGetStatus);
   add("sceUtility",        "sceUtilityMsgDialogUpdate",     &Kernel::sceUtilityMsgDialogUpdate);
   add("sceUtility",        "sceUtilityMsgDialogShutdownStart", &Kernel::sceUtilityMsgDialogShutdownStart);
+  add("sceUtility",        "sceUtilityMsgDialogAbort",      &Kernel::sceUtilityMsgDialogAbort);
   add("sceUtility",        "sceUtilityOskInitStart",        &Kernel::sceUtilityOskInitStart);
   add("sceUtility",        "sceUtilityOskGetStatus",        &Kernel::sceUtilityOskGetStatus);
   add("sceUtility",        "sceUtilityOskUpdate",           &Kernel::sceUtilityOskUpdate);

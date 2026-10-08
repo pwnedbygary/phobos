@@ -42,6 +42,8 @@ GE::~GE() {
   memory.vramGuard = nullptr;
   setThreads(1);
   memory.finishDrawing = nullptr;
+  memory.vramDrawnOver = nullptr;
+  memory.vramChangedBusy = nullptr;
   memory.watchedWritten = nullptr;
 }
 
@@ -268,7 +270,7 @@ auto GE::clearBatch(Batch& batch) -> void {
 
 //The size bytes from address are about to be read by the GE's own thread (a texture, a palette, vertices, the list's
 //commands): whatever is waiting to be drawn over them is drawn first. A batch being filled is drawn, after those
-//before it; batches being drawn are waited for.
+//before it; batches being drawn are waited for; what a hardware renderer drew over them is put back in memory.
 auto GE::drawnFirst(u32 address, u32 size) -> void {
   u32 first, last;
   if(!vramSpan(address, size, first, last)) return;
@@ -282,11 +284,20 @@ auto GE::drawnFirst(u32 address, u32 size) -> void {
   for(auto& batch : drawing.batches) {
     if(batch.launched && over(batch)) return settle();
   }
-  if(renderer && memory.vramBusy) {  //(pages a hardware renderer owns, still on the GPU)
+  //(what a hardware renderer drew, still on the GPU: its pixels' bytes, not all of the pages they're in)
+  if(renderer && memory.vramBusy && renderer->drawnOver(*this, first, last)) renderer->finish(*this);
+}
+
+//Whether drawing still going on reaches VRAM's bytes first to last (offsets in VRAM): all of a page a batch being
+//drawn draws in, or a hardware renderer's pixels themselves (Memory::vramDrawnOver, for whoever touches busy pages).
+auto GE::drawnOver(u32 first, u32 last) -> bool {
+  for(auto& batch : drawing.batches) {
+    if(!batch.launched) continue;
     for(u32 page = first >> 12; page <= last >> 12; page++) {
-      if(memory.vramPageBusy(page)) return renderer->finish(*this);
+      if(batch.pending[page]) return true;
     }
   }
+  return renderer && renderer->drawnOver(*this, first, last);
 }
 
 //Whether a primitive drawn with these settings, inside region, may wait in the batch (see the top of this file):

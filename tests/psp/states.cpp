@@ -520,6 +520,8 @@ static auto stateFields() -> void {
     {"dialog kind", [&] { k.dialog.kind = 2; }}, {"dialog status", [&] { k.dialog.status = 3; }},
     {"dialog next", [&] { k.dialog.next = 2; }}, {"dialog changeAt", [&] { k.dialog.changeAt = 5; }},
     {"dialog parameters", [&] { k.dialog.parameters = 0x0880'0000; }},
+    {"dialog abortUpdates", [&] { k.dialog.abortUpdates = 3; }},
+    {"dialog runningUpdates", [&] { k.dialog.runningUpdates = 2; }},
     {"utilityModules", [&] { k.utilityModules.push_back(0x301); }},
     //(each pool as a machine could leave it, which loading checks: the spare made a variable pool whole, the fixed
     //pool's block renumbered with it, its blocks halved and doubled)

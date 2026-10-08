@@ -21,11 +21,18 @@ namespace ares::PlayStationPortable {
   auto enumerate() -> std::vector<string>;
   auto load(Node::System& node, string name) -> bool;
   auto option(string name, string value) -> bool;
+  //The host's vkGetInstanceProcAddr, for the Vulkan renderer: the loader or the driver the host has loaded (a custom
+  //one included), none for the system's own. Set before loading.
+  auto vulkanLoader(void* getInstanceProcAddr) -> void;
+  //What the owner should be told, once (the hardware renderer couldn't start, or stopped, and the software renderer
+  //draws): taken, so the next call has nothing until there's more. Any thread may ask.
+  auto notice() -> string;
 }
 
 #include <psp/cpu/allegrex.hpp>
 #include <psp/memory/memory.hpp>
 #include <psp/ge/ge.hpp>
+#include <psp/ge/gpu/gpu.hpp>
 #include <psp/kernel/kernel.hpp>
 
 namespace ares::PlayStationPortable {

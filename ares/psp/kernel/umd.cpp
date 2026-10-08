@@ -19,8 +19,7 @@ auto Kernel::umdState() const -> u32 {
 //The drive's state changed: the callback registered for it is told (notified), to run when its thread next may, and
 //the threads waiting for any bit of the state the drive is now in wake.
 auto Kernel::umdChanged(u32 notified) -> void {
-  if(umdCallback) notifyCallback(umdCallback, notified);
-  bool woke = false;
+  bool woke = umdCallback && notifyCallback(umdCallback, notified);
   for(auto& [uid, thread] : threads) {
     if(thread->status != Status::Waiting || thread->wait != Wait::Umd || !(thread->waitCount & umdState())) continue;
     ready(*thread, 0);

@@ -603,6 +603,16 @@ Java_com_phobos_emulator_PhobosCore_setPspDrawingThreads(JNIEnv* env, jobject, j
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspRenderer(JNIEnv* env, jobject, jint renderer) {
+    ares::setPspRenderer((s32)renderer);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_phobos_emulator_PhobosCore_takePspNotice(JNIEnv* env, jobject) {
+    return env->NewStringUTF(ares::takePspNotice().c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_phobos_emulator_PhobosCore_setPictureMultiple(JNIEnv* env, jobject, jint multiple) {
     ares::setPictureMultiple((s32)multiple);
 }
