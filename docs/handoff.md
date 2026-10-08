@@ -25,6 +25,25 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the Vulkan renderer in the app and the desktop — 2026-10-07
+
+Branch `cursor/psp-gpu-hw2-2b67`, on top of part 38's `cursor/psp-cpu-speed-2b67`. docs/psp-core.md, part 41, and
+docs/psp-gpu-renderers.md's "In Phobos (part 41)" describe it; PPSSPP stayed a guide only, none of its code used.
+- **The setting**: "PSP Renderer" (Software, the default, or Vulkan) in the app's PSP settings and the desktop's
+  menu, given to the core as its "Renderer" option when a game loads. The hosts hand over the `vkGetInstanceProcAddr`
+  their `loadVulkan` got (the system's or a custom driver's on Android, MoltenVK on the macOS desktop).
+- **Fallbacks**: a start-up check (sprites byte for byte, triangles within a bound) in a machine of its own; a
+  renderer that fails it, or loses its device later, gives way to the software renderer, said once in the log and
+  the UI. The shown frame is read straight from its target (no finish), memory's picture the fallback.
+- **Bytes beside the pixels**: busy VRAM pages asked about to the byte, so a display list beside the frame buffer
+  doesn't wait for the GPU (Brave Story on the RP6 18.6 to 59.5 fps). A new test; the PSP system tests pass on the
+  M1 (sanitized, the GPU groups run).
+- **Measured in the app** (RP6): Midnight Club 3's title 54.3 fps with the installed Turnip, 49.6 with Qualcomm's,
+  35.6 software; its race 39.0, 36.0, 29.0; the 2D scenes at 60. Twenty-two games on Vulkan: none crash; three
+  black as with software (the core's). Not seen: the app's fallback toast (nothing failed).
+- **Next**: upscaling (presenting without reading back), then accuracy (shader blending), then OpenGL.
+- `tools/psp-runner` builds again (Vulkan's headers) and takes `--renderer`.
+
 ## PSP core: the emulation thread faster, the CPU's recompiler first — 2026-10-07
 
 Branch `cursor/psp-cpu-speed-2b67`, on top of `cursor/psp-hle-games7-2b67` (part 37; measured from part 33's

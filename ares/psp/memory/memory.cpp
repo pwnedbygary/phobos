@@ -104,11 +104,13 @@ auto Memory::pointer(u32 address, u32 size) -> u8* {
     return size <= ram.size() - offset ? &ram[offset] : nullptr;
   }
   if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
-    if(vramBusy) {  //(the first and third copies: the page; the others: the 16 KiB they rearrange, its four pages)
+    if(vramBusy) {  //(the first and third copies: the bytes; the others: the 16 KiB they rearrange, its four pages)
       u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
       if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
       for(u32 page = seen / PageSize; page <= last / PageSize; page++) {
-        if(vramPageBusy(page)) { finishDrawing(); break; }
+        if(!vramPageBusy(page)) continue;
+        if(!vramDrawnOver || vramDrawnOver(seen, last)) finishDrawing();
+        break;
       }
     }
     u32 copy = (physical - VRAMBase) / VRAMSize, offset = (physical - VRAMBase) % VRAMSize;
@@ -179,6 +181,14 @@ auto Memory::write(u32 size, u32 address, u32 data) -> void {
 //sees the change in one place; a longer one, through a copy that rearranges pieces or seen through one, is reported
 //as every 16 KiB it touches (where the rearranging keeps it).
 auto Memory::changed(u32 address, u32 size) -> void {
+  if(vramBusy && vramChangedBusy && size) {  //(the bytes as pointer() has them)
+    u32 physical = address & 0x1fff'ffff;
+    if(physical >= VRAMBase && physical - VRAMBase < VRAMWindow) {
+      u32 seen = (physical - VRAMBase) % VRAMSize, last = std::min<u32>(seen + size, VRAMSize) - 1;
+      if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
+      vramChangedBusy(seen, last);
+    }
+  }
   if(watchedPages) {
     u32 first, last;
     if(pagesOf(address, size, first, last)) {

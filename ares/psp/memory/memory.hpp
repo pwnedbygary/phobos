@@ -91,6 +91,14 @@ struct Memory {
   std::function<auto () -> void> finishDrawing;
   std::function<auto (bool busy) -> void> vramGuard;
   auto vramPageBusy(u32 page) const -> bool { return busyPages[page >> 6] >> (page & 63) & 1; }
+  //Whether the drawing that keeps pages busy reaches VRAM's bytes first to last (offsets in VRAM, inclusive): the
+  //GE's (GE::drawnOver()). A hardware renderer's pixels may share their pages with bytes no one draws over (a list
+  //kept in the unused columns beside a frame buffer's picture), which pointer() then reaches without waiting. None:
+  //all of a busy page is drawn over.
+  std::function<auto (u32 first, u32 last) -> bool> vramDrawnOver;
+  //A change to VRAM's bytes first to last while pages are busy, reached without waiting (changed()): for the GE to
+  //hear of, as a hardware renderer keeps its own copies of the pages.
+  std::function<auto (u32 first, u32 last) -> void> vramChangedBusy;
 
   //memory.cpp
   static auto vramOffset(u32 copy, u32 seen) -> u32;

@@ -25,10 +25,12 @@ fi
 #would then disagree with the rest about SLJIT_DEBUG (sljitConfigPre.h), and so about its compiler's layout.
 #ARES_ENABLE_CHD: CHD disc images are read with libchdr, as Phobos's builds read them
 DEFINES=(-DBUILD_DEBUG -DCORE_PSP -DSLJIT_HAVE_CONFIG_PRE=1 -DSLJIT_HAVE_CONFIG_POST=1 -DARES_ENABLE_CHD)
-#as system headers: ares's aren't written for -Wall, and the test itself is built with it
+#as system headers: ares's aren't written for -Wall, and the test itself is built with it. Vulkan's headers for the
+#hardware renderer (ge/gpu), which the core includes; Vulkan itself is opened at run time, only if it's chosen.
 CHDR=$ROOT/thirdparty/libchdr
 INCLUDES=(-isystem "$ROOT" -isystem "$ROOT/nall" -isystem "$ROOT/nall/nall" -isystem "$ROOT/libco"
-  -isystem "$ROOT/ares" -isystem "$ROOT/thirdparty" -isystem "$CHDR/include")
+  -isystem "$ROOT/ares" -isystem "$ROOT/thirdparty" -isystem "$CHDR/include"
+  -isystem "$ROOT/thirdparty/Vulkan-Headers/include")
 #FFmpeg's decoders, as Phobos's builds have them (docs/psp-core.md, part 26); PSP_FFMPEG=0 builds without them. The
 #core's object is built afresh every run (below), so switching needs no fresh TMPDIR.
 if [[ ${PSP_FFMPEG:-1} != 0 ]]; then

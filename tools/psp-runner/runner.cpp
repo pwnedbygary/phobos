@@ -25,6 +25,8 @@
 //    --load-state FILE          start from a save-state file (the game booted, then the state loaded at once)
 //    --interpreter              run the CPU's interpreter (the recompiler is the default)
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
+//    --renderer NAME            who draws them: Software (the default) or Vulkan (the system's Vulkan loader;
+//                                the summary then gives the GPU renderer's counts)
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //
@@ -43,6 +45,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -356,6 +359,7 @@ auto main(int argc, char** argv) -> int {
 
   //The options: parsed first, as they name the run's shape.
   fs::path game, outDir, wav, loadState, saveStateFile, memoryStick, fonts, script;
+  std::string renderer;
   u32 frames = 3600, pngEvery = 0, saveStateAt = 0, geThreads = 0;
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
@@ -396,6 +400,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--load-state") loadState = next();
     else if(option == "--interpreter") interpreter = true;
     else if(option == "--ge-threads") geThreads = parseUint(next(), option);
+    else if(option == "--renderer") renderer = next();
     else if(option == "--memory-stick") memoryStick = next();
     else if(option == "--fonts") fonts = next();
     else if(option[0] == '-' && option[1] == '-') {
@@ -491,6 +496,7 @@ auto main(int argc, char** argv) -> int {
   if(!fonts.empty()) PlayStationPortable::option("Fonts", fonts.c_str());
   if(interpreter) PlayStationPortable::option("Recompiler", "false");
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
+  if(!renderer.empty()) PlayStationPortable::option("Renderer", renderer.c_str());
 
   auto& psp = ares::PlayStationPortable::system;
   ares::platform = &host;
@@ -587,6 +593,9 @@ auto main(int argc, char** argv) -> int {
   }
   auto end = std::chrono::steady_clock::now();  //the speed is the frame loop's, not the screen's catch-up
   host.running = false;
+  //The GPU renderer's counts, before unloading lets it go; none if it didn't start (the software renderer drew).
+  std::optional<PlayStationPortable::GPU::Statistics> gpu;
+  if(psp.gpu) gpu = psp.gpu->statistics;
   bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
   root->unload();
 
@@ -611,6 +620,15 @@ auto main(int argc, char** argv) -> int {
   std::printf("frames run: %u\n", frames);
   std::printf("program: %s\n", ended ? "ended" : "still running");
   std::printf("frames per second: %.2f\n", frames / elapsed);
+  if(gpu) {
+    std::printf("gpu: %llu draws, %llu primitives, %llu submits, %llu finishes, %llu uploads, %llu read-backs, "
+                "%llu textures, %llu copies, %llu frames shown from the GPU, %.2f ms a frame waiting\n",
+                (unsigned long long)gpu->draws, (unsigned long long)gpu->primitives,
+                (unsigned long long)gpu->submits, (unsigned long long)gpu->finishes,
+                (unsigned long long)gpu->uploads, (unsigned long long)gpu->readbacks,
+                (unsigned long long)gpu->textures, (unsigned long long)gpu->copies,
+                (unsigned long long)gpu->pictures, gpu->waiting / 1e6 / frames);
+  }
   std::printf("unique missing functions: %u\n", u32(missing.size()));
   auto byCount = [](auto& a, auto& b) {
     if(a.second != b.second) return a.second > b.second;

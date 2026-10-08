@@ -4,8 +4,9 @@
 and blending, at the PSP's resolution, on Apple's M1 (MoltenVK) and the RP6's Adreno 740 (docs/psp-core.md, part
 36). On the RP6 it draws the six benchmark scenes 1.5 to 2.3 times as fast as the software renderer on seven threads
 (below: "Speed"). It isn't exact: blending rounds differently on the GPU, so 28-65% of a scene's pixels come out the
-same as the software renderer's, nearly all of the rest a level or two apart ("Accuracy"). Not in the app or the
-desktop program yet, and no upscaling or OpenGL yet ("The plan").
+same as the software renderer's, nearly all of the rest a level or two apart ("Accuracy"). In the app and the desktop
+program since part 41 (Settings' "PSP Renderer", Software the default: "In Phobos"); no upscaling or OpenGL yet ("The
+plan").
 
 The owner's direction (2026-10-07): a hardware renderer as PPSSPP has one (the GPU's own rasterizer, texture units
 and blending; shaders generated from the GE's state; upscaling), Vulkan first and OpenGL after. The software renderer
@@ -145,6 +146,18 @@ stays the GPU's; a game that reads depth with the CPU, or samples it as a textur
 the software renderer draws, above, tests against memory's depth): PPSSPP makes the same choice by default, and it's
 on the list below.
 
+**Bytes beside the pixels.** A page is 4 KiB, two rows of a 512-wide 8888 frame buffer, and games keep their own
+bytes in the same pages: Brave Story keeps its display list in the 32 unused columns right of its 480-pixel picture,
+and writes and runs it every frame. So busy pages are asked about to the byte (`Memory::vramDrawnOver`, the GE's
+`drawnOver()`): memory finishes the renderer only for bytes the GPU drew over since its last finish (each target's
+drawn rectangle, row by row), and reaches the rest at once. A change to such bytes (`Memory::changed()` while pages
+are busy) is kept by the target over them (`beside`, at most 16 ranges), which takes them from memory again (filled
+afresh, after a finish) before it draws over them, shows them or lends them as a texture, and after its next finish.
+(The drawing threads' busy pages stay whole pages: their batches draw anywhere in them.) Brave Story's title, on the
+M1: 53 frames a second before, 90-96 after (the software renderer: 178), its waits for the GPU from 26,000 to 5,700
+in 2,400 frames. What's left are textures sampled across two targets (its bloom passes), which the renderer can't
+lend (below), and the uploads that follow.
+
 **Two targets over the same pages** (a frame buffer drawn as 5650 then 8888, or a smaller buffer inside a larger one):
 before a PRIM draws into, or fills, rows whose pages another target owns, the renderer finishes first, so memory has
 the other's pixels, and the target is filled from them.
@@ -229,17 +242,19 @@ attachments with rasterization-order access, `GL_EXT_shader_framebuffer_fetch` o
 and the 16-bit formats could be done as the PSP does them. The Adreno has it; MoltenVK on the M1 doesn't. It's the
 first item on the accuracy list.
 
-## Upscaling and presenting from the GPU (next)
+## Upscaling, and presenting without reading back (next)
 
 - **An internal resolution factor** (2x to 8x): targets made N times larger, the viewport and scissor scaled, the
   vertices' positions scaled (the 2D sprites' stepping and the GE's sixteenths scaled with them), points and lines
   drawn N pixels wide. Textures from render targets are copied at the scaled size and sampled with their coordinates
   scaled. Read-backs scale down (nearest, or a box filter) so memory's VRAM keeps the PSP's own pictures; uploads
   from memory scale up.
-- **Presenting from the GPU**: the displayed frame buffer shown from its target, without reading it back or
-  finishing, so the CPU and GPU stop meeting once a frame; with upscaling, the only way to show the scaled picture.
-  The host's presentation (`ares::Video`, and paraLLEl-RDP's path for the N64 on Android) gets the target's image.
-  Today every displayed frame finishes, which serializes the CPU and the GPU there (the remaining "waiting" below).
+- **Presenting**: since part 41 the shown frame comes from its target (`GPU::picture()`, "In Phobos"): the shown
+  rectangle alone read back after what's recorded, without finishing, so the pages stay the GPU's and the next frame
+  doesn't start by filling them again. Both hosts take a frame as pixels in memory (Android's `ANativeWindow`, the
+  desktop's SDL texture), so it's read back either way. What's left is handing the host the target's image instead
+  (paraLLEl-RDP's path for the N64 on Android does that), so nothing is read back; with upscaling, the only way to
+  show the scaled picture.
 
 ## OpenGL (after Vulkan)
 
@@ -272,7 +287,10 @@ The software renderer is the reference. Two tools compare against it:
 pspsdk's samples (M1): clut, blit, doublelist and gu 100% the same; celshading 100% (176 channels a level apart);
 cube 99.7%, envmap 99.4%; blend 68.7% (its blended pixels all a level or two apart).
 
-The owner's games, 10 frames each from the verified scenes (identical on the M1 and the RP6):
+The owner's games, 10 frames each from the verified scenes, on the RP6. (Part 36 said the M1's were the same; they
+aren't quite: its pixels identical are 52.7%, 41.3%, 60.0%, 27.6%, 43.9% and 42.6%, in the table's order, the
+GPUs rounding differently in places. The RP6's, below, were measured again with part 41's code, before the scenes'
+states were lost, and came out the same to the pixel.)
 
 | Scene (game) | Pixels identical | Channels apart by 1-2 | 3-8 | more |
 |---|---|---|---|---|
@@ -323,9 +341,17 @@ on the RP6 the CPU waits 0.3-1.5 ms a frame for it, and spends 0.25-2.8 ms recor
 What made it fast, in order: drawing on the GPU's rasterizer at all; keeping frame buffers on the GPU and reading back
 only on demand; render to texture on the GPU (the copies above); copies taken only when their target changed; and
 handing work to the GPU every 128 commands, so it draws while the CPU goes on (the race's wait from 6.8 to 1.6 ms a
-frame on the M1). Next for speed: presenting from the GPU (no finish a frame), block transfers on the GPU, hoisting
-copies and uploads out of render passes (a tile-based GPU loads and stores the whole picture at every pass break), and
-the CPU side (transform and setup), which bounds the 3D games now.
+frame on the M1). Next for speed: block transfers on the GPU, textures sampled across two targets (Brave Story's
+bloom: "Bytes beside the pixels"), hoisting copies and uploads out of render passes (a tile-based GPU loads and
+stores the whole picture at every pass break), and the CPU side (transform and setup), which bounds the 3D games now.
+
+**Showing the frame from the GPU** (part 41: `GPU::picture()`, no finish a frame), the same harness on the RP6, frames
+a second for the software renderer on 7 threads, the Vulkan renderer finishing every frame, and showing it from its
+target: Lumines 117.5, 304.5, 263.5; Peace Walker 223.7, 410.0, 595.0; Midnight Club 3's menu 26.4, 53.5, 55.3 and
+race 24.3, 38.1, 38.7; Liberty City Stories' park edge 49.4, 69.9, 68.2 and woods 51.4, 95.1, 92.7. A 2D game that
+draws little (Lumines) loses a little: the frame's read-back waits for its drawing, 0.86 ms a frame against 0.37. The
+others gain or stay level, and the pages stay the GPU's. (These runs' scene states were lost with a scratch folder
+afterwards, and weren't made again; new ones come with upscaling.)
 
 ## Vulkan, and the custom driver
 
@@ -335,33 +361,91 @@ INSTANCE` and `PSP_VULKAN_DEVICE`), through that and the device's `vkGetDevicePr
 globals paraLLEl-RDP keeps for the N64, and with a `vkGetInstanceProcAddr` handed over it never opens the system's
 `libvulkan` itself. So a custom driver the host loaded with libadrenotools (the app's Driver Manager: Turnip, or a
 newer Qualcomm driver) is what the PSP renderer runs on, as it is for paraLLEl-RDP. Only when nothing is handed over
-(tools and tests) does the backend open the system's loader (`libvulkan.so` on Android, `libvulkan.so.1` elsewhere;
-on macOS Homebrew's loader or MoltenVK).
+(the tests, `tools/psp-runner`) does the backend open the system's loader (`libvulkan.so` on Android,
+`libvulkan.so.1` elsewhere, `libvulkan.1.dylib` on macOS: Homebrew's, `DYLD_LIBRARY_PATH=/opt/homebrew/lib`).
 
-The host side (`android/app/src/main/cpp/PhobosHostAndroid.cpp`'s `loadVulkan`) already runs for every system, the PSP
-among them: with a custom driver set it opens it through libadrenotools and resolves its `vkGetInstanceProcAddr`,
-else it initializes the system loader. What the app wiring adds: the host keeps that `vkGetInstanceProcAddr` (the
-custom driver's, or the system loader's) and hands it to `GPU::vulkan` when the PSP renderer is Vulkan, and
-`loadVulkan` runs before the PSP core starts with a Vulkan renderer chosen. Measuring in the app on the RP6 is to be
-done with the system driver and with a custom driver the Driver Manager already has (none installed or deleted
-without the owner's word).
+The hosts (part 41): both front ends' `loadVulkan` go through Granite's `Vulkan::Context::init_loader`, which runs
+before every system starts, the PSP among them, and the host's `vulkanLoader()` hands what Granite resolved
+(`Vulkan::Context::get_instance_proc_addr()`) to the PSP's system (`vulkanLoader`, beside its options), which gives
+it to `GPU::vulkan`. On Android that's the custom driver's `vkGetInstanceProcAddr` when the Driver Manager has one
+chosen (opened through libadrenotools), else the system loader's. The desktop hands one over too (part 36 said it
+didn't): Phobos.app's MoltenVK on macOS (`GRANITE_VULKAN_LIBRARY` set to the bundle's `libMoltenVK.dylib`; a build
+outside a bundle can be pointed at Homebrew's the same way), `libvulkan.so.1` on Linux, the system loader on
+Windows.
 
 The device: the first GPU with a graphics queue that isn't the CPU (lavapipe and SwiftShader only when asked for,
 with `PSP_GPU_ON_CPU`), with dual-source blending and logic operations where it has them. A wait longer than five
 seconds marks the device lost, as `VK_ERROR_DEVICE_LOST` does.
 
 **A lost GPU**: the renderer says so once (`report`), and the software renderer draws from then on. What the GPU drew
-since the last finish is lost (memory's VRAM keeps what was there before), a frame or less; the game goes on.
+since the last finish is lost (memory's VRAM keeps what was there before); the game goes on. Since part 41 the shown
+frame doesn't finish, so that can be more than a frame: a render-to-texture result only ever sampled on the GPU stays
+lost, and the software renderer samples what memory had, until the game draws it again. A lost device is rare, so no
+finish is forced to bound it.
+
+## In Phobos (part 41)
+
+**The setting.** "PSP Renderer" in the app's Settings, Emulation, PlayStation Portable (beside Drawing Threads):
+"Software (exact)", the default, or "Vulkan (GPU)", applied when a game starts. The desktop program's menu has "PSP
+renderer: Software / Vulkan (next start)" (`psp.renderer` in its settings). Either hands the core its "Renderer"
+option as the game loads; OpenGL's choice comes with OpenGL.
+
+**Starting.** As the PSP powers on with Vulkan chosen, the system (`System::startRenderer()`) makes the GPU renderer
+on the host's loader and puts it through a start-up check (`GPU::check()`, `ge/gpu/check.cpp`), in a machine of its
+own (4 MiB of memory, a GE, nothing of the game's): 48 flat and 48 textured random sprites into an 8888 and a 5650
+frame buffer, clear-mode sprites, and 24 triangles, half of them blended, drawn by the GPU and by the software
+renderer. The sprites' bytes must be the same, as `tests/psp/gpu.cpp` has them; of the triangles' pixels, at most one
+in 50 may have a channel more than 8 levels apart. A GPU that doesn't start, draws wrong or stops answering fails it.
+Then the software renderer draws instead, and the system says so once: in the log ("The Vulkan renderer couldn't
+start (why): the software renderer draws instead"), and to the front end (`notice()`), which the app shows as a
+toast and the desktop as a message. A renderer that passed says on which device ("the Vulkan renderer draws, on
+Vulkan: Turnip Adreno (TM) 740"); one that failed isn't tried again until the next game.
+
+**A lost device** later (a wait past five seconds, `VK_ERROR_DEVICE_LOST`): the renderer stops, the software
+renderer draws from the next PRIM on, and the system says so once the same way ("The Vulkan renderer stopped: ...").
+
+**The frame shown.** Both hosts take a frame as pixels in memory, so the choice was between reading the shown frame
+buffer back from the GPU and finishing everything (memory's VRAM, then `Kernel::picture()` as for the software
+renderer). The shown frame is read straight from its target (`GPU::picture()`: the shown rectangle alone, after
+what's recorded, narrowed and widened as the PSP's display would see it): no finish, so the pages stay the GPU's
+and the next frame doesn't fill them again. Where the target can't give it (stale, too few rows, pages another's,
+memory's newer bytes in it), `Kernel::picture()` shows memory's, which finishes first. Measured: "Speed".
+
+**Save states** stay exact: saving finishes the renderer (memory's VRAM has everything), loading has it forget its
+copies.
+
+**Measured in the app**, the RP6 (Adreno 740), the app's own stats (frames a second, capped at 60, and the
+milliseconds a frame of emulation), each a short session:
+
+| Scene | Vulkan, custom driver (Turnip, StevenMXZ v26.3.0-R5) | Vulkan, system driver (Qualcomm's) | Software |
+|---|---|---|---|
+| Lumines, demo | 60.0, 4.6 ms | 60.0, 4.7 ms | - |
+| Peace Walker, title | 60.0, 2.2 ms | 60.0, 2.7 ms | - |
+| Midnight Club 3, night city title | 54.3, 18.4 ms | 49.6, 20.2 ms | 35.6, 28.0 ms |
+| Midnight Club 3, quick race | 39.0, 25.6 ms | 36.0, 27.7 ms | 29.0, 34.5 ms |
+
+(The custom driver's column is the build before "Bytes beside the pixels", the others after it. The quick race
+isn't the same race each time, so its numbers differ by a few frames a second for that too. The software renderer
+wasn't measured in the app in the 2D scenes: the harness has it at 117.5 and 223.7, past the cap.) Both drivers
+pass the start-up check and draw every scene right; Turnip is a little faster in the 3D ones. Neither failed, so
+the app's toast for a fallback wasn't seen on the RP6; the desktop's fallback was (below), and
+`tests/psp/gpu.cpp`'s lost GPU covers the renderer's side.
+
+The other 19 games, booted and pressed through to their menus on Vulkan with the custom driver: no crash in any;
+18 at 59.3-60 frames a second, from 0.9 to 13.3 ms a frame. Brave Story's title drew right but at 18.6 frames a second
+(64 ms a frame, the software renderer 9.5): its display list beside the frame buffer ("Bytes beside the pixels"),
+fixed in part 41, after which it runs at 59.5 (13.5 ms a frame). Ace Combat: Joint Assault, MotorStorm: Arctic
+Edge and Killzone stay black as they do with the software renderer (the core's, not the renderer's). The desktop
+program (the M1, MoltenVK) draws Lumines on the GPU at 60 frames a second, and with Vulkan made to fail (a loader
+with no driver) says why once ("The Vulkan renderer couldn't start (no Vulkan instance)") and draws with the
+software renderer.
 
 ## The plan
 
 1. **Vulkan at native resolution** (part 36, done): the milestone above, measured on the M1 and the RP6.
-2. **Upscaling** (next), then **presenting from the GPU**.
-3. **OpenGL**: the GL backend over the same renderer and shaders; the same measurements.
-4. **In Phobos**: Settings' "PSP Renderer: Software / Vulkan / OpenGL", Software the default; the host's
-   `vkGetInstanceProcAddr` handed over and `loadVulkan` run for the PSP; a start-up sanity check (a few primitives
-   drawn both ways, the GPU's picture near the software renderer's, else the software renderer draws and the app says
-   so once); the fallback on a lost device; measured in the app on the RP6 with the system and a custom driver.
-5. **Accuracy**, alongside: programmable blending where the GPU has it (blending, dithering and 16-bit formats as the
-   PSP's), depth read back where games need it, block transfers between targets on the GPU, textures decoded on the
-   GPU.
+2. **In Phobos** (part 41, done): the setting, the host's loader, the start-up check, the fallbacks, the frame shown
+   from the GPU, measured in the app with the system and a custom driver.
+3. **Upscaling** (next): an internal resolution factor, and presenting the target's image without reading it back.
+4. **Accuracy**: programmable blending where the GPU has it (blending, dithering and 16-bit formats as the PSP's),
+   depth read back where games need it, block transfers between targets on the GPU, textures decoded on the GPU.
+5. **OpenGL**: the GL backend over the same renderer and shaders; the same measurements; "OpenGL" in the setting.

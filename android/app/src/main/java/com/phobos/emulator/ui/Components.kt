@@ -45,6 +45,7 @@ import com.phobos.emulator.LogLevel
 import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.util.PspDrawingThreads
+import com.phobos.emulator.util.PspRenderer
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.ui.theme.LegibleText
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
@@ -469,6 +470,18 @@ fun MsxLoadSpeedItem(current: Int, onSelect: (Int) -> Unit) {
         current = current,
         options = LOAD_SPEEDS,
         label = ::loadSpeedLabel,
+        onSelect = onSelect,
+    )
+}
+
+@Composable
+fun PspRendererItem(current: Int, onSelect: (Int) -> Unit) {
+    SettingsDropdownItem(
+        title = "PSP Renderer",
+        description = "Who draws a PSP game's pictures. Software is exact; Vulkan draws on the GPU, with the driver chosen in the Driver Manager, much faster and very close. If Vulkan can't start or stops, the software renderer takes over and says so. Applies when a game starts.",
+        current = PspRenderer.forCore(current),
+        options = PspRenderer.choices,
+        label = PspRenderer::label,
         onSelect = onSelect,
     )
 }

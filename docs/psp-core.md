@@ -5134,6 +5134,64 @@ run loop's calls into compiled code went from 284,000 a frame to 14,000.
   trigonometric ones, vfim, the conversions with scale) and the remaining FPU conversions (round, ceil, floor,
   cvt.w.s under other rounding modes).
 - The chain's cost at a jr or jalr (a return): a small cache of the last target would skip the table walk.
+
+## Part 41: the Vulkan renderer in Phobos
+
+On branch `cursor/psp-gpu-hw2-2b67`, on top of part 38 (parts 37 and 36 under it). docs/psp-gpu-renderers.md's "In
+Phobos (part 41)" is the
+detail; this is what was built and measured. PPSSPP's GPU backends stayed a guide to the architecture only, as in
+part 36: none of their code is used, copied or translated.
+
+**The setting**: "PSP Renderer" in the app's Settings, Emulation, PlayStation Portable, "Software (exact)" by default
+or "Vulkan (GPU)"; on the desktop "PSP renderer: Software / Vulkan (next start)" (`psp.renderer`). Both give the core
+its "Renderer" option as a game loads (`psp.hpp`, read by `System::load()`), so it holds from the next game on.
+
+**The loader**: the hosts' `vulkanLoader()` gives the core the `vkGetInstanceProcAddr` their `loadVulkan` got from
+Granite's loader: on Android the system's or a custom driver's (libadrenotools), on the macOS desktop the bundle's
+MoltenVK. The renderer builds its own tables from it; volk and the other cores' Vulkan are untouched.
+
+**Starting, and falling back** (`System::startRenderer()`, `ge/gpu/check.cpp`): the renderer is made on that loader
+and checked in a machine of its own (random sprites in two formats byte for byte, clear mode, blended triangles
+within a bound) before the game's GE gets it. A renderer that doesn't start or fails is dropped for the software
+renderer, said once in the log and once to the front end (`notice()`: the app's toast, the desktop's message); not
+tried again until the next game. A device lost later (a wait past five seconds, `VK_ERROR_DEVICE_LOST`) does the
+same from the next PRIM on.
+
+**The frame shown**: both hosts take CPU pixels, so the frame is read back from the GPU either way; the choice was
+what to read. `GPU::picture()` reads only the shown rectangle straight from its target, with no finish, so the GPU
+keeps the pages and the next frame doesn't fill them again from memory; where the target can't give it (stale, too
+few rows, pages another's, memory's newer bytes in it) `Kernel::picture()` shows memory's, finishing first. Showing a
+GPU image without the read-back is part of upscaling (next), where it's needed anyway.
+
+**Bytes beside the pixels**: Brave Story keeps its display list in VRAM, beside its 480-pixel picture in the same
+pages, so every command the GE read waited for the GPU and every list the CPU wrote sent the frame back up: 18.6
+frames a second on the RP6 (64 ms a frame; software 9.5). Busy pages are now asked about to the byte
+(`Memory::vramDrawnOver`, `GE::drawnOver()`, `Renderer::drawnOver()`): memory waits only for bytes a target drew over
+since its last finish. A write beside them (`Memory::vramChangedBusy`, `Renderer::besideChanged()`) is kept by the
+target as a range, and the target takes memory's bytes again before it draws over them, shows or lends them, and
+after its next finish. The drawing threads' busy pages stay whole pages. Brave Story: 59.5 frames a second on the RP6
+(13.5 ms), 90-96 on the M1 (from 53; waits 26,000 to 5,700 a run). A test: a CPU writing and reading beside a
+target's pixels without a finish, then a sprite over those bytes drawn over memory's.
+
+**The runner**: `tools/psp-runner` builds with Vulkan's headers (the core needs them since part 41), takes
+`--renderer NAME`, and prints the renderer's draws and waiting a frame. It and the tests use the system loader (on
+macOS `DYLD_LIBRARY_PATH=/opt/homebrew/lib`).
+
+**Measured in the app** (the RP6, Adreno 740, the app's stats, frames a second and milliseconds a frame): Lumines'
+demo 60 (4.6 ms custom driver, 4.7 system); Peace Walker's title 60 (2.2, 2.7); Midnight Club 3's night city title
+54.3 custom, 49.6 system, 35.6 software, and its quick race 39.0, 36.0, 29.0. The custom driver is StevenMXZ's Turnip
+v26.3.0-R5, the one already installed (none installed or deleted); both pass the start-up check. Nineteen more games
+pressed to their menus on Vulkan with the custom driver: none crash, 18 at 59.3-60 (0.9-13.3 ms) and Brave Story as
+above. Ace Combat: Joint Assault, MotorStorm: Arctic Edge and Killzone are black with either renderer (the core's).
+The M1's desktop draws Lumines at 60 on MoltenVK, and with no Vulkan driver says why once and draws in software.
+
+**Not seen**: the app's fallback toast (neither driver failed on the RP6; the desktop's fallback and the lost-GPU
+test cover the path), and a device lost in a game. The harness's saved scenes were lost after the frame-shown
+measurements (docs/psp-gpu-renderers.md, "Speed"), so the six scenes' pixel scores weren't taken again after "bytes
+beside the pixels"; the RP6's in-app numbers above were.
+
+**Next** (the design's plan): upscaling, with the GPU's image presented without reading it back; then accuracy
+(blending in the shader where the GPU allows); then OpenGL.
 ## Part 39 — PSP disc info: title, disc ID, region and icon
 
 **Branch:** `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162).
