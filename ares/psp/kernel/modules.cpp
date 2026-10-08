@@ -311,25 +311,43 @@ auto Kernel::unloadModule(u32 uid) -> void {
   linkImports();
 }
 
+//The program as a module like any other, as it unloads itself (unloadSelf()): it was kept apart (module, programUID,
+//its block found by where it starts) as the first module, the one start() loaded; now it's one of modules, holding
+//its block, so it goes as they do, once its module_stop has run, while the modules it loaded, and their threads, run
+//on. Killzone: Liberation's boot program does this, once it has loaded and started the game's own module.
+auto Kernel::programAsModule() -> void {
+  LoadedModule loaded;
+  loaded.uid = programUID;
+  if(u32 at = programBlockAt()) {
+    for(auto& block : blocks) if(block.address == at) loaded.block = block.uid;
+  }
+  loaded.status = ModuleStatus::Started;
+  loaded.module = std::move(module);
+  module = {};
+  modules[programUID] = std::move(loaded);
+  programUID = 0;
+}
+
 //A module stopping and unloading itself (exit status, argument size, argument, options as sceKernelStopModule's):
 //what sceKernelSelfStopUnloadModule, and the other functions by which a module does that, share. The module is the
-//one holding the code that called (ra points back into it); the program, or code no module holds, is the program
-//leaving. Otherwise the calling thread ends, as by sceKernelExitThread(exitStatus), and is deleted, as what it would
-//return to is going; then the module, if it's running, has its module_stop run with the argument on a thread made
-//for it, as sceKernelStopModule would, and goes once that ends (moduleThreadEnded()). One that isn't running (never
-//started, or the caller was its module_stop), or has no module_stop, goes at once. Nothing waits for module_stop's
-//result: the thread that asked is gone. Refused while another thread runs its module_start or module_stop, and from
-//a call into the program (which runs on top of whichever thread was running, not one of the module's).
+//one holding the code that called (ra points back into it), the program included: it goes as any module does
+//(programAsModule()), and only it, the modules it loaded running on. The calling thread ends, as by
+//sceKernelExitThread(exitStatus), and is deleted, as what it would return to is going; then the module, if it's
+//running, has its module_stop run with the argument on a thread made for it, as sceKernelStopModule would, and goes
+//once that ends (moduleThreadEnded()). One that isn't running (never started, or the caller was its module_stop), or
+//has no module_stop, goes at once. Nothing waits for module_stop's result: the thread that asked is gone. Refused
+//while another thread runs its module_start or module_stop, from a call into the program (which runs on top of
+//whichever thread was running, not one of the module's), and from code no module holds (CAN_NOT_STOP, as uOFW's
+//module manager answers when it finds no module for the caller).
 auto Kernel::unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -> void {
-  auto found = modules.find(moduleAt(cpu.ipu.r[31]));
-  if(found == modules.end()) {
-    exited = true;
-    return switchTo(nullptr);
-  }
-  u32 uid = found->first, running = found->second.thread;
   if(interrupting) return result(ErrorIllegalContext);
-  if(running && (!current || running != current->uid)) return result(ErrorNotStopped);
   if(argument && length && !memory.reaches(argument, length)) return result(ErrorIllegalAddress);
+  u32 uid = moduleAt(cpu.ipu.r[31]);
+  if(!uid) return result(ErrorCanNotStop);
+  auto found = modules.find(uid);
+  u32 running = found != modules.end() ? found->second.thread : 0;
+  if(running && (!current || running != current->uid)) return result(ErrorNotStopped);
+  if(uid == programUID) programAsModule();
   result(0);  //what a caller that isn't a thread (the kernel's own tests) sees
   Thread* caller = current;
   if(caller) {

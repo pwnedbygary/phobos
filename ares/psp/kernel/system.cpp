@@ -78,14 +78,15 @@ auto Kernel::loadExec() -> void {
 }
 
 //(exit status, argument size, argument): the module holding the code that called stops and unloads itself, its
-//calling thread ending (modules.cpp, unloadSelf()); the program doing it is leaving.
+//calling thread ending (modules.cpp, unloadSelf()); the program itself does so as any module does.
 auto Kernel::sceKernelSelfStopUnloadModule() -> void {
   unloadSelf(s32(arg(0)), arg(1), arg(2), 0);
 }
 
 //(exit status, argument size, argument, where to put module_stop's status, options): the same, as later SDKs' code
-//calls it (Gunhound EX does; a C++ program's abort() ends here too), the options going to module_stop's thread; the
-//program calling it is leaving. module_stop's status isn't written: nothing waits for it (unloadSelf()).
+//calls it (Gunhound EX does; a C++ program's abort() ends here too), the options going to module_stop's thread, the
+//program itself unloading as any module does. module_stop's status isn't written: nothing waits for it
+//(unloadSelf()).
 auto Kernel::sceKernelStopUnloadSelfModuleWithStatus() -> void {
   unloadSelf(s32(arg(0)), arg(1), arg(2), arg(4));
 }

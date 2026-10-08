@@ -216,6 +216,7 @@ struct Kernel {
   static constexpr u32 ErrorAlreadyStarted        = 0x8002'0133;
   static constexpr u32 ErrorNotStarted            = 0x8002'0134;
   static constexpr u32 ErrorAlreadyStopped        = 0x8002'0135;
+  static constexpr u32 ErrorCanNotStop            = 0x8002'0136;
   static constexpr u32 ErrorNotStopped            = 0x8002'0137;
   static constexpr u32 ErrorUnsupportedPrxType    = 0x8002'0148;  //an encrypted module that can't be decrypted
 
@@ -255,7 +256,7 @@ struct Kernel {
   Memory& memory;
   GE& ge;
   Module module;           //the program
-  bool exited = false;     //it called sceKernelExitGame (or unloaded itself)
+  bool exited = false;     //it called sceKernelExitGame
   bool stuck = false;      //nothing will run again, which has been noted (once, not every frame; not saved)
   u64 cycles = 0;          //time since power on
   u64 counted = 0;         //how many of the CPU's instructions in its go under way cycles has taken in (syscall())
@@ -1849,12 +1850,13 @@ struct Kernel {
     Module module;         //what the loader found (for a stand-in, its name and attributes)
   };
   std::map<u32, LoadedModule> modules;
-  u32 programUID = 0;      //the program's own module ID
+  u32 programUID = 0;      //the program's own module ID (0 once it has unloaded itself: programAsModule())
   auto readWhole(const std::string& path, std::vector<u8>& data) -> u32;
   auto readOpenFile(OpenFile& open, u64 size, std::vector<u8>& data) -> u32;
   auto loadModule(const std::vector<u8>& file, const std::string& path) -> u32;
   auto standIn(const std::string& name, u32 attributes, const std::string& path) -> u32;
   auto unloadModule(u32 uid) -> void;
+  auto programAsModule() -> void;
   auto unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -> void;
   auto linkImports() -> void;
   auto moduleAt(u32 address) const -> u32;
