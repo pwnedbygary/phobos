@@ -27,6 +27,7 @@ int main() {
   for(auto& test : asyncTests()) tests.push_back(test);
   for(auto& test : discTests()) tests.push_back(test);
   for(auto& test : discFormatTests()) tests.push_back(test);
+  for(auto& test : discInfoTests()) tests.push_back(test);
   for(auto& test : cryptoTests()) tests.push_back(test);
   for(auto& test : decryptTests()) tests.push_back(test);
   for(auto& test : moduleTests()) tests.push_back(test);
@@ -34,6 +35,7 @@ int main() {
   for(auto& test : geTests()) tests.push_back(test);
   for(auto& test : drawTests()) tests.push_back(test);
   for(auto& test : draw3dTests()) tests.push_back(test);
+  for(auto& test : curvesTests()) tests.push_back(test);
   for(auto& test : measureTests()) tests.push_back(test);
   for(auto& [name, run] : tests) {
     currentTest = name;

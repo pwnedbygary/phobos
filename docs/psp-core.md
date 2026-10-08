@@ -36,6 +36,7 @@ on top of part 30's.
 Part 32, the next functions games stop at (a thread's run status, the thread manager's ID lists, the memory
 stick's free space told alike everywhere, and part 28's differences the recordings settle), is on
 `cursor/psp-hle-games6-2b67`, on top of part 31's.
+Part 33, curved surfaces (BEZIER and SPLINE), is on `cursor/psp-ge-curves-2b67`, on top of part 32's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -4568,3 +4569,249 @@ clean room held and sceKernelLoadExec sound, and three things to fix:
   spins leaves main with about 16.7 ms, no more than has passed, one interruption, and a state that loads.
 Save states unchanged (version 14). tests/psp 302 groups (one new, two extended) with ASan and UBSan and without,
 tests/psp/ares 298 checks, none failed; each fix undone (three broken versions), its own group failed.
+
+## Part 33: curved surfaces
+
+On branch `cursor/psp-ge-curves-2b67`, on top of part 32's `cursor/psp-hle-games6-2b67` (#161),
+with parts 31 and 30 (#160, #159) underneath. The GE's Bézier and spline patches weren't drawn: BEZIER and
+SPLINE were noted and skipped, and the owner's 266-game report names a game whose GE stopped there (Macross Ace
+Frontier). This part draws them. Sources: pspsdk's GU library and headers (BSD: `sceGuDrawBezier`, `sceGuDrawSpline`,
+`sceGuPatchDivide`, `sceGuPatchPrim`, `sceGuPatchFrontFace`, `pspgu.h`'s spline modes, `doc/commands.txt`'s SPLINE
+edge bits, PATCH_PRIMITIVE and PATCH_FACING), pspautotests' `gpu/primitives/bezier` and `spline` (programs and the
+pictures they recorded on a PSP) and `gpu/exact/curves` (programs and checksums), round 3 of tools/psp-measure (five
+pictures of patches from the owner's PSP), and public descriptions of Bézier and B-spline math (the Bernstein
+polynomials, de Boor's algorithm, the Cox-de Boor recursion). No other emulator's code was read.
+
+**What the GE does** (`ares/psp/ge/curves.cpp`; BEZIER and SPLINE in `list.cpp`):
+- The control points are read as PRIM reads vertices, by the vertex type, its indices, and the vertex or index
+  address, which moves on past them (`gpu/primitives/bezier` drew its second patch from the next 16 points, and from
+  the next 16 indices): ucount to a row (u), vcount rows (v). Every part of a vertex is worked out from the 4x4 points
+  around it, each weighted: position, color, texture coordinates, normal and skinning weights.
+- BEZIER: every 4x4 points make a cubic Bézier patch, neighbours sharing a row or column, so ucount is 3N + 1 for N
+  patches; points past the last whole patch are left out, and fewer than 4 draw nothing (the PSP drew a 4x5 grid's
+  first four rows, a 4x8's first seven, a 4x2 nothing). At t across a patch, the four points along a row weigh
+  (1 - t)³, 3t(1 - t)², 3t²(1 - t) and t³, and likewise down v.
+- SPLINE: a cubic B-spline through 4 or more points each way, every four along a row making a piece of curve, the
+  knots evenly spaced. Bits 16-17 (u) and 18-19 (v) cut each end: bit 0 the first, bit 1 the last; open (the first
+  three knots stacked on the curve's start, so it starts on the end point) or closed (the knots going on evenly, so
+  it starts short of it). Fitted to the PSP's picture, points (a, a, b, b) drawing from a to b with both ends open,
+  from (5a + b) / 6 to (a + 5b) / 6 both closed, from a to (a + 3b) / 4 with the first alone open, from (3a + b) / 4
+  to b with the last; and round 3's 4x4 spline with both ends open was a PSP's Bézier patch, byte for byte.
+- PATCH_DIVISION (bits 0-7 along u, 8-15 along v) cuts each patch, or each piece of a spline, into that many, evenly
+  in t, neighbours sharing their edge's vertices; 0 cuts as 1 does (the PSP drew two triangles). The colors down a 4x5
+  Bézier and a 4x5 spline step where 4 cuts of each patch, and of each piece, put their vertices.
+- PATCH_PRIMITIVE (bits 0-1): 0 triangles, the vertices' rows two at a time as strips along u, (u0, v0), (u0, v1),
+  (u1, v0), (u1, v1)... (with flat shading a quad's top left triangle takes its top right vertex's color, as the PSP
+  drew); 1 lines, those strips' vertices as line strips (a line down each column and up to the next column's top:
+  the PSP's picture, pixel for pixel); 2 and 3 points, a vertex each (value 3 drew points on the PSP too).
+- Colors are worked out per channel and rounded up. The PSP's points and flat-shaded patches show vertex colors
+  themselves: green 147.42, 223.13 and 251.02 came out 148, 224 and 252, where rounding to the nearest gives 147, 223
+  and 251. Round 3's smooth patches agree: with colors rounded up, `bezier-curved` and `bezier-divide-8` are 543,
+  481, 561 and 319, 345, 347 pixels a level apart (red, green, blue), against 11000 and 16300 rounded to the nearest,
+  32300 and 37600 rounded down, 16200 and 18900 with the fractions kept. What's left is the core's blending across
+  triangles, which rounds a little differently from the PSP's (as round 3's color ramps found), not the vertices: in
+  `bezier-flat`, where the colors land exactly on whole levels, the PSP is a level lower in 9408 pixels of red and
+  9216 of blue, a matter for the triangles, not for curves. A value within 1/4096 above a whole level counts as it.
+- Without texture coordinates in the vertex type, they're made up: u from 0 to 1 across the surface, v down it
+  (chosen). Without a normal, where one is wanted (lighting, environment mapping, the texture matrix from the
+  normal), it's made from the slopes, the cross product of the slope along u with the slope along v
+  (`gpu/exact/curves` names normals from the tangents), pointing out of the front face PATCH_FACING says: 0 (GU_CW)
+  the side from which a strip's first triangle runs clockwise, 1 the other (chosen: that program's checksums don't
+  change either way, the rest of its arithmetic being apart).
+- The triangles are culled as any are (CULL_FACE_ENABLE and CULL), every other one of a strip the other way round.
+  PATCH_CULL_ENABLE is noted, not emulated: what it does isn't known.
+- From there the vertices are a PRIM's: `draw.cpp`'s `primitive()` now reads the vertices and hands them to
+  `drawVertices()`, which draws them (transform, lighting, clipping, jobs, batches on the drawing threads, four pixels
+  at a time); a surface's strips are drawn one after another as if each were a PRIM of its own. PRIM's own drawing is
+  unchanged, the same operations in the same order.
+- Malformed surfaces are bounded: one cut into more than 131072 vertices isn't drawn (noted), a guard of Phobos's own
+  well past what the GU library allows (64 cuts each way); the points are still read and the address moves on. Points
+  that aren't numbers make vertices that aren't, which aren't drawn. The state is all in the commands' words: version
+  13 still.
+
+**Against the PSP.** pspautotests' two pictures, their programs drawn again in `tests/psp/curves.cpp`: every pixel
+each patch covers is the PSP's, in both (patches, lines, points, indices of 8, 16 and 32 bits, the addresses moving
+on, PATCH_DIVISION 0, every spline end type); the points, flat shading's colors and the texture's texels exactly; 283
+and 613 pixels of the smooth patches a level apart (the triangles' blending, as above). Round 3 ("psp measure"):
+`bezier-flat`, `bezier-curved`, `bezier-divide-8` and `spline-edges-3` cover exactly the PSP's pixels, every channel
+within a level (15368, 1494, 938 and 1494 pixels apart, from 36864, 42624, 42920 and 42624 when nothing was drawn);
+`spline-edges-0`, both ends closed, covers all but 4 edge pixels the PSP covers, whose edges the core puts a
+hundredth of a pixel from the PSP's (787 apart, from 4517), its sixths rounding in the GE's own arithmetic.
+
+`gpu/exact/curves` checks the arithmetic itself, by checksums of whole pictures: points at every cut from 1 to 16 and
+their depths, depths at 2^17 a unit, lit points with normals from the slopes, splines, patches as lines. 2 of its 16
+checksums are met (the points' places at 1 to 8 cuts; their places at 5 cuts with depths at 2^17), and a third with
+the rule below. The others are knife edges: its points land within a hundred-thousandth of a sixteenth of a pixel of
+the GE's rounding, and its depths count 2^17 a unit, so they depend on the last bits of the GE's own fixed-point
+arithmetic. Tried in scratch builds, and none met another checksum: t in fixed point (8 to 24 bits, cut, rounded or
+stepped), the weights and de Casteljau's steps in floats (two forms of a step, either way first), and fixed-point de
+Casteljau (12 to 23 bits of fraction in the points, 8 to 16 in t, rounded down or to the nearest, either way first).
+Round 4 of the measuring program records the vertices themselves (below).
+
+**Found on the way, and left:** the PSP draws no point whose z / w is past ±1, DEPTH_CLIP_ENABLE on or off. Round
+2's `3d-rules` has two such points, at z 1.5 and -1.5 with it on (pixels (136, 8) and (152, 8)): the PSP drew
+neither, the core both (two of that file's six pixels apart); and `gpu/exact/curves`' third checksum is met with such
+points dropped (past 1 by the core's 2^-15, as for triangles). The core keeps the rule it had (points not judged by
+it, as PPSSPP has it), since changing it changes round 2's comparison and every game's points, which this part was to
+leave as they were; it's one line in `drawVertices()`'s points, for a part of its own.
+
+**The measuring program's round 4** (the menu's first line, now "Round 4: the GE's lines, boxes, DXT and curves",
+about 8 MB) gains fourteen curve cases, most drawn as points, a vertex each, in through mode, where nothing but the GE's
+own tessellation stands between the control points and the pixels (`tools/psp-measure/ge.c`, part 33's section):
+- `curves-bezier`: a bowed, twisted 4x4 grid with colors and depths of its own, cut 1 to 16 times in 16 cells: each
+  vertex's pixel and color; `curves-bezier-depths` the depths written there (VRAM's fourth copy): 16 bits of each
+  vertex's z.
+- `curves-places`: the same grid cut 5 by 3 in 256 cells, its points moved by sixteenths of a pixel each way: where
+  each vertex falls, to the sixteenth.
+- `curves-spline` and `-spline-depths`: 5x5 points with every pair of end types, cut 3 by 2.
+- `curves-texels`: texture coordinates at the vertices (a texture whose texel says where it is).
+- `curves-made-up`: in 3D, the texture coordinates made up for a vertex type without them, over one patch, 2x2 and
+  3x1 patches, splines with each kind of end, with a texture scale and offset, and in through mode; as points and as
+  triangles.
+- `curves-lit`: normals made from the slopes, lit from +z, +x, +y and -z with either patch front face, beside the same
+  patches given normals of their own.
+- `curves-culling`: the 16 combinations of CULL_FACE_ENABLE, CULL, PATCH_CULL_ENABLE and PATCH_FACING.
+- `curves-joins`: which vertices strips join across patches, as lines and flat-shaded triangles.
+- `curves-count`, `-count-128`, `-count-200` and `-count-255`, last: how many vertices a row has (points added up) at
+  16, 63, 64 and 65 cuts, at 100 and 128, at 200, and at 255, each in a display list of its own.
+Built in pspdev's Docker image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`, part 29's), and `tests/psp/programs/
+pspmeasure.elf` replaced as that folder's README asks (its SHA-256 there). The EBOOT.PBP for the PSP is outside the
+repository: `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256
+`bc6e90b4a7b566b734c828eff845069b81b84daaf03beda133f55146e69343f2`), to be copied to the memory stick's
+`PSP/GAME/PSPMEASURE`. `tests/psp/measure.cpp` runs round 4 to its end and checks its 34 files; the comparison lists
+them once a PSP's `manifest4.txt` is in the results.
+
+**Tests** (`tests/psp/curves.cpp`, 6 groups):
+- "curves pspautotests' primitives": `gpu/primitives/bezier` and `spline` drawn again, command for command, and
+  checked against the PSP's pictures: each patch's box, the 50 points' places and colors, flat shading's colors row by
+  row, the lines' pixels, where the texture's green texel starts.
+- "curves knots": each kind of spline end with 5 points along u, against de Boor's algorithm worked out in the test;
+  a 4x4 spline with open ends the Bézier patch, byte for byte, and with closed ends not; colors rounded up.
+- "curves round 3": round 3's five patches drawn as `ge.c` draws them, against the owner's PSP's pictures
+  (`PSP_GE_RESULTS`): the same pixels covered (but the 4 edge pixels above), every channel within a level.
+- "curves lighting and texture": a flat patch without normals lit from +z, dark with PATCH_FACING 0 and fully lit with
+  1; made-up texture coordinates at the corners; culling either way and off.
+- "curves on several threads": a list of patches of every kind (Bézier and spline, triangles, lines and points,
+  textured and filtered, lit, in 3D under a perspective and in through mode, 16-bit parts with indices) through the
+  driver, at 1, 2, 4 and 8 threads, batches shared however small, four pixels at a time and one: every byte of VRAM
+  alike; stopped at its stall address between PATCH_DIVISION and a SPLINE, a state carried on in another machine.
+- "curves malformed": 255x255 points cut 255 times each way, refused quickly, the address moving on; a spline as
+  finely cut as the budget allows along one way, drawn; points that aren't numbers; counts below 4.
+Seven broken versions each failed them: colors rounded to the nearest, strips running the other way, the end bits
+swapped, divisions spread over a whole surface, the normal turned round, PATCH_DIVISION 0 not taken as 1, value 3
+not taken as points.
+
+**Checks:** `tests/psp/run-tests.sh`, 297 groups (291 and these 6) with the address and undefined-behavior sanitizers,
+none failing; "psp measure", the comparison with the owner's PSP, the same as part 31's line for line in rounds 2
+and 3 but for round 3's five curve files (now drawn, as above). `tests/psp/ares/run-tests.sh`, 294 checks, none
+failed. pspautotests' `gpu/primitives/bezier` and `spline`, run through the HLE kernel by part 29's scratch runner,
+print what the PSP printed (nothing) and draw its pictures as above.
+
+**The games.** Macross Ace Frontier, the report's one curved-surface game, and its two sequels aren't on this Mac or
+the handheld. A probe build noting every BEZIER and SPLINE ran the 22 games here, which are the handheld's 22 (part
+29's 14, and Chili Con Carnage, Ace Combat X and Joint Assault, Ape Escape, Killzone, MotorStorm, Ridge Racer 2 and
+WipEout, copied from it), for 7200 frames each, Start and then Cross every 600 frames: none drew a curved surface, so
+none changes, and no before and after pictures are of a game. (The probe noted pspautotests' spline program at
+once.)
+
+**Speed** (scenes without curves). A PRIM's way gains one function call; no per-pixel code changed. Part 30's
+benchmark runner, built with the Android build's flags from this branch and from part 31's, each scene from a state
+the latter made (part 29's scenes: Peace Walker at frame 3600, Lumines 3600, Sindacco 3000, Liberty City Stories
+8000), 300 frames, the two builds taking turns, best of three, host frames a second:
+
+| scene | before, 1 thread | after, 1 thread | before, 7 threads | after, 7 threads |
+| --- | --- | --- | --- | --- |
+| Peace Walker | 659.8 | 670.5 | 2127.1 | 2218.0 |
+| Lumines | 41.4 | 37.5 | 235.0 | 235.8 |
+| Sindacco Chronicles | 84.4 | 87.1 | 133.1 | 132.1 |
+| Liberty City Stories | 44.6 | 46.5 | 105.7 | 100.3 |
+
+Every frame's picture is the same in both builds (compared in the last round of that pass, and in all 24 runs of a
+second pass). Other agents kept
+the Mac busy throughout (load averages of 4 to 45), and the same build's speed moved by up to twice between rounds,
+so differences of a few percent mean nothing here; Lumines on one thread, when the Mac was quiet, ran at 36-42 with
+the old build and 68-77 with the new, thirteen runs each, in both orders, with the same pictures and a profile of the
+same functions: a matter of how the two builds were laid out, not of what they do.
+
+**Left, and why:**
+- The GE's own arithmetic for a vertex's place, depth and color, to the last bit (`gpu/exact/curves`' checksums, the
+  4 edge pixels of round 3's closed spline): round 4's curve files record the vertices themselves.
+- What PATCH_CULL_ENABLE does, which way PATCH_FACING turns a made-up normal, how texture coordinates are made up, and
+  whether more than 64 cuts are drawn: chosen above, and in round 4.
+- Points past z / w ±1, which the PSP drops (above): a part of its own, as it changes more than curves.
+- Morphing and skinning on control points (the points morphed as read, the weights blended, each vertex skinned as
+  it's transformed: unmeasured), and NORMAL_REVERSE on made-up normals.
+
+**After review.** An independent review found the clean room kept, PRIM's way unchanged, and the curves bounded and
+clean under the sanitizers with hostile surfaces; the ELF and EBOOT built again byte for byte. Two things changed:
+- The measuring program's `curves-count` had the strip-join rows and the cuts past pspsdk's 64 in one display list
+  and one file: had the PSP's GE stalled at 255 cuts, the owner's restart would have given up on the whole test
+  ("stopped twice"), the joins with it. The joins are now `curves-joins`, run before; the counts are split by how
+  far past 64 they go (`curves-count` 16-65, `-count-128`, `-count-200`, `-count-255`), run last, so a stall loses
+  only its own test. Round 4 has 34 files, about 8 MB (the menu says so; the README's list had still said 4 MB).
+  Rebuilt in the same pinned image: `tests/psp/programs/pspmeasure.elf` (its README's SHA-256) and the EBOOT above.
+- `GE::patch()` checks the budget from the counts and divisions before working out a step, so a surface past it
+  allocates nothing (it had made up to about 5 MB of steps each way first); and `patchVertices`, kept between
+  surfaces, gives back its room once drawn when it holds more than 4096 vertices (PatchKept), where one at the
+  budget would have kept about 26 MB (13 MB as points) for the rest of a session. Nothing drawn changes: the same
+  checks as above, none failing.
+
+## Part 39 — PSP disc info: title, disc ID, region and icon
+
+**Branch:** `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162).
+
+**What it is:** A shared reader (`ares/psp/kernel/disc-info.hpp` / `.cpp`) that reads a PSP disc's title, disc ID
+(NPD ID), region and icon (PSP_GAME/ICON0.PNG) from its image — an ISO, one of the scene's compressed forms (CSO,
+ZSO, DAX, JSO), or a CHD — reading a few sectors at a time, never the whole image, and bounding every size it
+finds: a PSP_GAME/PARAM.SFO over 64 KiB, or an ICON0.PNG over 1 MiB, is taken as none.
+
+**The reader** (`ares::PlayStationPortable::readDiscInfo`):
+- Takes a `Disc::Reader` (the same callback the kernel's disc reader uses) and the image's size.
+- Detects a CHD by its 8-byte head ("MComprHD"); when `ARES_ENABLE_CHD` is defined, it reads the CHD's sectors
+  through `nall::Decode::CHD` (libchdr), as `system.cpp`'s `startDisc()` does. Without that define, a CHD image
+  is taken as none (graceful).
+- Opens a `Disc` on the reader, finds PSP_GAME/PARAM.SFO (cap 64 KiB) and PSP_GAME/ICON0.PNG (cap 1 MiB).
+- Reads the SFO's TITLE and DISC_ID with `sfoValue()` (moved here from `tools/psp-runner/runner.cpp` and
+  `mia/medium/playstation-portable.cpp`, which now share it).
+- Derives the region from the DISC_ID's third letter: J is Japan, U is the US, E is Europe (verified against
+  real NPD IDs: NPJH50634, ULUS10025, NLES00552); every other prefix is "Unknown".
+- Returns a `DiscInfo{title, discId, region, icon}`; its fields are empty when there's no PSP game.
+
+**The SFO readers** (`sfoValue`, `paramSFO`):
+- `sfoValue(sfo, name)` reads a text value by its key's name from a PARAM.SFO's bytes (a "\0PSF" head, a key
+  table, a value table). Empty if the key isn't there or the value runs past the SFO's end.
+- `paramSFO(file)` reads a PARAM.SFO out of an EBOOT.PBP (its "\0PBP" head, then the first part, bounded at
+  64 KiB). Empty if there's none.
+- Both moved to the shared reader; `psp-runner` and `mia` removed their local copies and call the shared ones.
+
+**Consumers:**
+- `tools/psp-runner/runner.cpp`: `discInfo()` now calls `readDiscInfo()`; `kind()` and the PBP title line call
+  the shared `sfoValue` / `paramSFO`.
+- `mia/medium/playstation-portable.cpp`: `load()` reads a disc's title with `readDiscInfo()` (a disc image's
+  title, not just the file's name); `kind()` calls the shared `sfoValue` / `paramSFO`.
+- Android app: `PhobosCore.pspDiscInfo(fd)` (JNI: `PhobosJNI.cpp`) opens the file by its descriptor, calls
+  `readDiscInfo()`, and returns a `PspDiscInfo{titleBytes, discId, region, icon}` data class (the title as
+  bytes, decoded to UTF-8 in Kotlin). The Library's `MainViewModel` shows the plain list first, then fills
+  titles and icons in a separate job: each disc's title, disc ID and icon are cached under a SHA-256 of the
+  URI+size+mtime key, in `cacheDir/psp-icons/`, so a second visit doesn't re-open the disc. The icon is
+  downsampled to 160 px at cache time (refused if its PNG declares a size past 512 px), and `SystemDetailScreen`
+  decodes the small cached PNG.
+- The PARAM.SFO's CATEGORY isn't read: the Library shows the title and icon, not the category.
+
+**Tests:**
+- `tests/psp/disc-info.cpp`: synthetic ISO and CSO (title, disc ID, region, icon all read); a CHD (read through
+  libchdr when enabled, taken as none when not); damaged images (no PSP_GAME, a PARAM.SFO whose value's offset
+  runs past the SFO's end, an ICON0 over 1 MiB, an empty image); `sfoValue` alone (a value by its key, empty if
+  the key isn't there, a SFO with no keys, a SFO too short, not a SFO, a value capped at 128 bytes with
+  controls dropped); `regionFromDiscId` (J, U, E, short IDs, empty, unknown prefixes).
+- `tests/psp/ares/system.cpp`: a CHD's title, disc ID, region and icon read through libchdr (this build has
+  `ARES_ENABLE_CHD`).
+- `android/app/src/test/java/com/phobos/emulator/util/PspDiscInfoTest.kt`: the title choice (disc's title when
+  it has one, file's name when it doesn't), the cache key (URI+size+mtime, changes when the file changes),
+  and the SHA-256 of the key.
+
+**Cost:** the reader touches only a few sectors (the PVD, the directory it traverses, PARAM.SFO, ICON0.PNG), so its
+cost is independent of the image's total size. Measured on 20 synthetic images from 100 MB to 3.5 GB through a
+sparse in-memory reader: sub-millisecond for every size. On a Mac (M2), a 1 GB CHD opens and reads its disc info
+in about 0.3 s; a 4 GB CHD in about 0.8 s. A cached disc (title, disc ID and icon already in `psp-icons/`) takes
+no measurable time: the list shows instantly, and the titles and icons fill in from the cache.

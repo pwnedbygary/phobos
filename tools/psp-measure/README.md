@@ -38,7 +38,7 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
-   - Round 4: the GE's lines, boxes and DXT (about 4 MB)
+   - Round 4: the GE's lines, boxes, DXT and curves (about 8 MB)
    - Round 3: the VFPU and the FPU (about 6 MB)
    - Round 3: the GE (about 7 MB)
    - The FPU probes
@@ -163,13 +163,13 @@ PSP"), one 256x256 picture per case but the depth buffer's:
   (`3d-rounding-middle`); a wall receding along x (`3d-wall-texels`); round 2's 3D sprite taken apart into its fog
   alone, its texels alone, and both at one depth (`3d-sprite-*`).
 - **Curved surfaces:** a 4x4 grid of control points as Bézier patches, flat, curved and cut finer, and as splines
-  with either edge type (`bezier-*`, `spline-*`). The core doesn't draw these yet.
+  with either edge type (`bezier-*`, `spline-*`). The core draws them since part 33.
 - **The depth buffer's layout:** every pixel of a 256x64 area given a depth of its own, read back through each of
   VRAM's four copies (`depth-layout-0` to `-3`, the whole depth buffer's 512x256 values each). Last, as no program
   here has read VRAM's other copies on a PSP before.
 
-Round 4 (about 4 MB, `manifest4.txt`) records what the core's part 29 drew by rules of its own, where
-pspautotests' recordings settle only part (docs/psp-core.md, part 29):
+Round 4 (about 8 MB, `manifest4.txt`) records what the core's parts 29 and 33 drew by rules of their own, where
+pspautotests' recordings settle only part (docs/psp-core.md, parts 29 and 33):
 
 - **Lines:** in 16x16 cells, lines with both ends at every sixteenth of a pixel, shallow, steep, diagonal, rising,
   level and upright, the first two drawn backwards too, and anti-aliased over black (`lines-*`); lines shorter than
@@ -183,6 +183,20 @@ pspautotests' recordings settle only part (docs/psp-core.md, part 29):
   in through mode, and random ones.
 - **DXT textures:** 256 random blocks each of DXT1, DXT3 and DXT5, their colors and alphas (`dxt*-colors`), and the
   blocks' order with buffer widths of 32, 64 and 36 and swizzling on (`dxt-layout`).
+- **Curved surfaces' vertices** (BEZIER and SPLINE), most drawn as points, a vertex each, in through mode, where
+  nothing but the GE's own tessellation stands between the control points and the pixels: Bézier patches cut 1 to 16
+  times, their pixels and colors (`curves-bezier`) and depths, read through VRAM's fourth copy
+  (`curves-bezier-depths`); where vertices fall to the sixteenth of a pixel, from control points moved by sixteenths
+  (`curves-places`); splines of 5x5 points with every pair of end types (`curves-spline`, `-spline-depths`); texture
+  coordinates at the vertices (`curves-texels`); in 3D, the texture coordinates the GE makes up for a vertex type
+  without them, over one patch, several, splines, with a texture scale and offset, and in through mode
+  (`curves-made-up`); normals made from the slopes, lit from four ways with either patch front face, beside the same
+  patches given normals (`curves-lit`); which of culling and its front face, and the patch culling and patch front
+  face, cull a patch's triangles (`curves-culling`); which vertices strips join across patches, as lines and flat
+  triangles (`curves-joins`); and how many vertices a row has, points added up, at 16, 63, 64 and 65 divisions
+  (`curves-count`), then past pspsdk's 64 at 100 and 128 (`curves-count-128`), 200 (`curves-count-200`) and 255
+  (`curves-count-255`), last and a few to a display list, so that if the GE stalls there only that test is given up
+  on. The core draws these by a rule fitted to round 3's pictures and pspautotests' (docs/psp-core.md, part 33).
 
 ### How the GE's comparison works
 
