@@ -25,6 +25,25 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: VFPU measurement fits (vlog2 above 4 and the adders) — 2026-10-08
+
+Branch `cursor/psp-vfpu-fits-2b67`, stacked on `cursor/psp-gpu-hw4-2b67` (#172). Does not touch `ares/psp/ge/` or
+OpenGL. Co-authored with Cursor; independent review before the commit.
+
+- **`vlog2`:** coefficient cutting by level `d` and truncation to step `2^(d+2)` in units of `2^-24` (linear term
+  kept full width until then). Exact on every measured binade above 4, on `[1/2, 2)`, and on the spread-out file.
+- **Adders:** `vfpuDot` (2 extra bits, round-to-odd products, align+truncate, nearest-even sum). Used by `vdot`,
+  `vhdp`, `vfad`, `vavg` (weights `±1/size`), `vdet`, `vcrsp`, `vqmul`, `vmmul`, `vtfm`, `vhtfm`. Exact on every
+  round-2 adder file and on `vdot-spread`.
+- **Recorder:** ops.bin 1216/1216; ops3.bin 260/284 (24 open: swizzles past the size in `vcmp` / `vcrs` / `vcrsp` /
+  `vdet` / `vsocp` — probes sketched in `tools/psp-measure/vfpu.c`).
+- **Docs:** `docs/psp-vfpu-measurements.md` (fits section), Part 3 in `docs/psp-core.md`.
+- **Tests:** Allegrex 58/0; PSP suite (ASan) 330/0. Interpreter and recompiler match (recompiler still calls the
+  interpreter for VFPU). Independent review PASS (manifest/diff hashes in
+  `phobos-work/scratch/psp-vfpu-fits-review/`).
+- **Not for #172:** this branch is VFPU-only on top of the shader-blending tip; open a stacked PR onto
+  `cursor/psp-gpu-hw4-2b67` (or append when reviewing); do not merge to master from here.
+
 ## PSP core: blending in the shader — 2026-10-08
 
 Branch `cursor/psp-gpu-hw4-2b67`, on top of part 44's `cursor/psp-gpu-hw3-2b67` (#171 under it). Opened as #172.

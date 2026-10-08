@@ -16,6 +16,17 @@
 //  instructions that don't work lane by lane, vavg and vfad with t prefixes. About 6 MB.
 //- The FPU probes: the FPU on one value at a time of the kinds that may stop the PSP. Each probe that does is given
 //  up on at the next start, which goes on with the next probe.
+//
+//Next VFPU probes (not wired to the menu yet; for a round that settles ops3.bin's 24 open entries — swizzles past
+//an operand's size in instructions that combine lanes, which compilers don't produce). Each should write a small
+//.bin of (prefixes, rs, rt, result / condition codes) for hand cases, so the host can see the rule without another
+//full recorder pass:
+//- vcrs / vcrsp / vdet: .t/.p with s or t swizzled past the size (one lane past, both past, constant in the past
+//  lane, negate on the past lane). Does the past lane read as 0, drop out of the sum, or take another lane's value?
+//- vsocp: .s/.p with a swizzle past the size and with negate; does the pair of outputs stay 0 / -0 as vh2f's split
+//  does, or does only one of the two lanes move?
+//- vcmp: each condition with a destination prefix that masks some lanes — which condition-code bits change for the
+//  masked lanes, and does "any"/"every" count them? Also vcmp with a swizzle past the size on s or t.
 //They compute nothing themselves: the files only hold what the hardware gave (and for the smaller tests, the
 //inputs), and the host works out the rest. Each file is raw little-endian 32-bit words in the order its test
 //describes below, and manifest.txt (round 1), manifest2.txt (round 2) or manifest3.txt (round 3 and the probes)

@@ -248,11 +248,13 @@ fill lanes from the last back, and their destination prefix only reaches the las
 description (no PPSSPP code), and checked against the user's PSP: its state at power on and the numbers of 64
 seeds all match, including those that exercise the carry (psp-vfpu-measurements.md).
 
-The math functions `vrcp`, `vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2`, `vsin`, `vcos`, `vnsin` and `vasin` (and
-`vrot`'s sine and cosine) are the PSP's own: its quadratic interpolator with coefficients fitted from our
+The math functions `vrcp`, `vnrcp`, `vrsq`, `vsqrt`, `vexp2`, `vrexp2`, `vsin`, `vcos`, `vnsin`, `vasin` and `vlog2`
+(and `vrot`'s sine and cosine) are the PSP's own: its quadratic interpolator with coefficients fitted from our
 measurements (`vfpu-segments.hpp`, from `tools/psp-measure/fit.py`), exact on every measured input; see
-psp-vfpu-measurements.md. So is `vlog2` below 4, from a fixed-point table and a cheaper straight-line path below 1;
-from 4 up about half its results are one unit above the PSP's, which drops more precision there.
+psp-vfpu-measurements.md. `vlog2` works in fixed point from the same table, truncating to a step that grows with the
+result's size and cutting coefficients to match above 4 (and below 1). The adders (`vdot`, `vhdp`, `vfad`, `vavg`,
+`vdet`, `vcrsp`, `vqmul`, and the matrix products) share one circuit (`vfpuDot`): products with two extra bits and
+round-to-odd, aligned and truncated, then a nearest-even sum.
 
 Not checked against hardware: `vrot` on its own (it uses vsin's and vcos's), `vwbn` (implemented from its
 description; no test), and what reserved size combinations do (they raise ReservedInstruction, and leave the
