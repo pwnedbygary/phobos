@@ -74,6 +74,7 @@ auto gpuTests() -> Tests;
 auto discTests() -> Tests;
 auto discFormatTests() -> Tests;
 auto discInfoTests() -> Tests;
+auto desktopDiscInfoTests() -> Tests;
 auto stateTests() -> Tests;
 auto cryptoTests() -> Tests;
 auto decryptTests() -> Tests;

@@ -5509,6 +5509,14 @@ finds: a PSP_GAME/PARAM.SFO over 64 KiB, or an ICON0.PNG over 1 MiB, is taken as
   URI+size+mtime key, in `cacheDir/psp-icons/`, so a second visit doesn't re-open the disc. The icon is
   downsampled to 160 px at cache time (refused if its PNG declares a size past 512 px), and `SystemDetailScreen`
   decodes the small cached PNG.
+- Desktop app (`desktop/PspDiscInfo.cpp`): the Library's line shows the disc's title (its PARAM.SFO's TITLE)
+  when there's one, the file's name when there isn't; the states, the saves and the memory card stay keyed by
+  the file's name. The list shows at once; the titles fill in after, on a thread of their own, each from the
+  cache or the shared reader, and a rescan supersedes the unfinished scan. The title, disc ID and icon (the
+  ICON0.PNG's bytes) are cached beside the settings (`dataFolder`'s `psp-icons/`), under a SHA-256 of the
+  file's path+size+mtime, as the Android app's `psp-icons/` cache: a second visit doesn't re-open the disc. The
+  icon is cached, not drawn (the list's 8x8 font has no place for it), and a title the font can't draw (no
+  printable ASCII) is shown as the file's name.
 - The PARAM.SFO's CATEGORY isn't read: the Library shows the title and icon, not the category.
 
 **Tests:**

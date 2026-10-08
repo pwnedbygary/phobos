@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: VFPU measurement fits (vlog2 above 4 and the adders) — 2026-10-08
 
-Branch `cursor/psp-vfpu-fits-2b67`, stacked on `cursor/psp-gpu-hw4-2b67` (#172). Does not touch `ares/psp/ge/` or
+Branch `cursor/psp-vfpu-fits-2b67`, on `cursor/psp-gpu-vk-acc-2b67` (#175; #172 under it). PR #177. Does not touch `ares/psp/ge/` or
 OpenGL. Co-authored with Cursor; independent review before the commit.
 
 - **`vlog2`:** coefficient cutting by level `d` and truncation to step `2^(d+2)` in units of `2^-24` (linear term
@@ -41,8 +41,27 @@ OpenGL. Co-authored with Cursor; independent review before the commit.
 - **Tests:** Allegrex 58/0; PSP suite (ASan) 330/0. Interpreter and recompiler match (recompiler still calls the
   interpreter for VFPU). Independent review PASS (manifest/diff hashes in
   `phobos-work/scratch/psp-vfpu-fits-review/`).
-- **Not for #172:** this branch is VFPU-only on top of the shader-blending tip; open a stacked PR onto
-  `cursor/psp-gpu-hw4-2b67` (or append when reviewing); do not merge to master from here.
+- **Stack:** VFPU only; do not merge to master from here.
+
+## Desktop Library: the PSP's disc titles — 2026-10-08
+
+Branch `local/psp-desktop-disc-info`, on top of `cursor/psp-gpu-hw4-2b67` (#172's tip, part 45). The desktop's
+Library now shows a PSP disc's own title, as the Android app does (docs/psp-core.md, part 39's consumers).
+- **The display** (`desktop/main.cpp`'s `drawLibrary`): the list's line shows the disc's title (its PARAM.SFO's
+  TITLE) when there's one, the file's name when there isn't. The file's name stays the game's key: the states,
+  the saves and the memory card are keyed by it, as before.
+- **The fill** (`desktop/PspDiscInfo.cpp`): the list shows at once; the PSP's disc images' titles fill in after,
+  on a thread of their own (a CHD's open takes a while, so the UI isn't held), each from the cache or the shared
+  reader (`ares/psp/kernel/disc-info.cpp`), and a rescan supersedes the unfinished scan.
+- **The cache**: the title, disc ID and icon (its ICON0.PNG's bytes) beside the settings (`dataFolder`'s
+  `psp-icons/`), under a SHA-256 of the file's path+size+mtime, as the Android app's `psp-icons/` cache: a
+  second visit doesn't re-open the disc. The icon is cached, not drawn: the list's 8x8 font has no place for
+  it. A title the font can't draw (no printable ASCII) is shown as the file's name.
+- **Tests**: `tests/psp/desktop-disc-info.cpp` (the key, the disc image's file choice, the title's choice, the
+  cache's round trip, and the title served from the cache without re-opening the disc).
+- **Checked**: tests/psp (with the new desktop groups).
+- **Left**: the icon's draw (the list's rows are 12 px and the font 8x8: no place for it); the game's window
+  title (the launch keeps the file's name).
 
 ## PSP core: blending in the shader — 2026-10-08
 
@@ -252,8 +271,8 @@ Branch `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162). docs
   captured only for PSP discs; (6) a single-disc .m3u shows the playlist's name; (7) a CHD disc-info case in
   `tests/psp/ares/system.cpp`; (8) the CATEGORY isn't read (the Library shows the title and icon, not the
   category).
-- **Left**: cost measurement on 20+ real images (to be done on the handheld); desktop `Library.cpp` showing the
-  same titles (optional if cheap); RP6 fd-count check (no device access on the host).
+- **Left**: cost measurement on 20+ real images (to be done on the handheld); RP6 fd-count check (no device
+  access on the host). The desktop's Library shows the same titles (the entry above).
 
 ## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
 
