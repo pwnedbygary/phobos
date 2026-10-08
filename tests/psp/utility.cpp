@@ -2,8 +2,8 @@
 //sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
 //the program's memory refused), the memory stick's free space told alike everywhere, a message answered yes, the
 //keyboard's fields accepted (an empty one given the nickname), network settings cancelled, the wrong type and the
-//wrong status refused; optional modules loaded and unloaded; the nickname. Called directly, the clock moved on by
-//hand.
+//wrong status refused; a game's data install cancelled; optional modules loaded and unloaded; the nickname. Called
+//directly, the clock moved on by hand.
 #include "kernel-machine.hpp"
 
 namespace allegrex_test::psp {
@@ -426,6 +426,47 @@ static auto dialogs() -> void {
   CHECK(m.system.memory.read(4, Parameters + 28), 1);  //cancelled
 }
 
+//Installing a game's data: asked about before any install dialog started, the wrong type (Ace Combat: Joint Assault
+//asks at boot, and goes on); parameters of a size it doesn't take refused; started, it runs and is cancelled, by
+//Update or by Abort (which, not running, is the wrong status, and asked of another dialog the wrong type); it shuts
+//down as the others do; a state saved meanwhile loads.
+static auto gamedataInstall() -> void {
+  KernelMachine m;
+  u64 millisecond = Kernel::CPUFrequency / 1000;
+  auto advance = [&](u64 cycles) {  //(the kernel catching up with the vertical blanks, as a state wants)
+    m.kernel.cycles += cycles;
+    m.kernel.events();
+  };
+  CHECK(m.call("sceUtilityGamedataInstallGetStatus", {}), 0x8011'0005);
+  CHECK(m.call("sceUtilityGamedataInstallAbort", {}), 0x8011'0005);
+  m.system.memory.fill(Parameters, 0, 0x598);
+  for(u32 size : {0u, 0x58cu, 0x594u, 0x5a0u}) {
+    m.system.memory.write(4, Parameters, size);
+    CHECK(m.call("sceUtilityGamedataInstallInitStart", {Parameters}), 0x8011'0004);
+  }
+  for(u32 size : {0x590u, 0x598u}) {
+    for(bool abort : {false, true}) {
+      m.system.memory.write(4, Parameters, size);
+      m.system.memory.write(4, Parameters + 28, 0xcccc'cccc);
+      CHECK(m.call("sceUtilityGamedataInstallInitStart", {Parameters}), 0);
+      CHECK(m.call("sceUtilityGamedataInstallInitStart", {Parameters}), 0x8011'0001);  //one at a time
+      CHECK(m.call("sceUtilityMsgDialogGetStatus", {}), 0x8011'0005);
+      CHECK(m.call("sceUtilityGamedataInstallAbort", {}), 0x8011'0001);  //not running yet
+      CHECK(m.call("sceUtilityGamedataInstallGetStatus", {}), 1);
+      advance(200 * millisecond);
+      CHECK(m.call("sceUtilityGamedataInstallGetStatus", {}), 2);
+      CHECK(roundTrip(m), true);
+      CHECK(m.call(abort ? "sceUtilityGamedataInstallAbort" : "sceUtilityGamedataInstallUpdate", {1}), 0);
+      CHECK(m.call("sceUtilityGamedataInstallGetStatus", {}), 3);
+      CHECK(m.system.memory.read(4, Parameters + 28), 1);  //cancelled
+      CHECK(m.call("sceUtilityGamedataInstallShutdownStart", {}), 0);
+      advance(40 * millisecond);
+      CHECK(m.call("sceUtilityGamedataInstallGetStatus", {}), 0);
+    }
+  }
+  CHECK(m.notes.size(), 0);
+}
+
 //The keyboard: each field's text accepted as it is (UNCHANGED), an empty field or one of spaces given the console's
 //nickname (CHANGED), each as far as its room (its NUL among it) and its limit allow, a limit of 0 being none; a
 //field with nowhere to put its text, or no room for any, still has its result, nothing written there (a NUL had gone
@@ -498,15 +539,17 @@ static auto keyboard() -> void {
   CHECK(roundTrip(m), true);
 }
 
-//Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), numbers that aren't a
-//module refused, the older network numbers standing for 0x100-0x106; the nickname.
+//Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x308 among them,
+//numbers that aren't a module refused, the older network numbers standing for 0x100-0x106; the nickname.
 static auto modules() -> void {
   KernelMachine m;
   CHECK(m.call("sceUtilityLoadModule", {0x301}), 0);
   CHECK(m.call("sceUtilityLoadModule", {0x301}), 0x8011'1102);
   CHECK(m.call("sceUtilityUnloadModule", {0x301}), 0);
   CHECK(m.call("sceUtilityUnloadModule", {0x301}), 0x8011'1103);
-  CHECK(m.call("sceUtilityLoadModule", {0x308}), 0x8011'1101);
+  CHECK(m.call("sceUtilityLoadModule", {0x308}), 0);  //later firmwares' (Ace Combat: Joint Assault loads it)
+  CHECK(m.call("sceUtilityUnloadModule", {0x308}), 0);
+  CHECK(m.call("sceUtilityLoadModule", {0x309}), 0x8011'1101);
   CHECK(m.call("sceUtilityLoadModule", {0x700}), 0x8011'1101);
   CHECK(m.call("sceUtilityLoadNetModule", {1}), 0);
   CHECK(m.call("sceUtilityLoadModule", {0x100}), 0x8011'1102);  //the same module
@@ -523,6 +566,7 @@ auto utilityTests() -> Tests {
     {"utility savedata buffers", savedataBuffers}, {"utility savedata loops", savedataLoops},
     {"utility savedata erase", savedataErase}, {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
     {"utility keyboard", keyboard}, {"utility modules", modules},
+    {"utility game data install", gamedataInstall},
   };
 }
 

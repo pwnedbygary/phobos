@@ -1738,6 +1738,11 @@ struct Kernel {
   auto sceUtilityHtmlViewerGetStatus() -> void;
   auto sceUtilityHtmlViewerUpdate() -> void;
   auto sceUtilityHtmlViewerShutdownStart() -> void;
+  auto sceUtilityGamedataInstallInitStart() -> void;
+  auto sceUtilityGamedataInstallGetStatus() -> void;
+  auto sceUtilityGamedataInstallUpdate() -> void;
+  auto sceUtilityGamedataInstallShutdownStart() -> void;
+  auto sceUtilityGamedataInstallAbort() -> void;
   auto sceUtilityLoadModule() -> void;
   auto sceUtilityUnloadModule() -> void;
   auto sceUtilityLoadNetModule() -> void;

@@ -508,6 +508,11 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceUtility",        "sceUtilityHtmlViewerGetStatus", &Kernel::sceUtilityHtmlViewerGetStatus);
   add("sceUtility",        "sceUtilityHtmlViewerUpdate",    &Kernel::sceUtilityHtmlViewerUpdate);
   add("sceUtility",        "sceUtilityHtmlViewerShutdownStart", &Kernel::sceUtilityHtmlViewerShutdownStart);
+  add("sceUtility",        "sceUtilityGamedataInstallInitStart", &Kernel::sceUtilityGamedataInstallInitStart);
+  add("sceUtility",        "sceUtilityGamedataInstallGetStatus", &Kernel::sceUtilityGamedataInstallGetStatus);
+  add("sceUtility",        "sceUtilityGamedataInstallUpdate", &Kernel::sceUtilityGamedataInstallUpdate);
+  add("sceUtility",        "sceUtilityGamedataInstallShutdownStart", &Kernel::sceUtilityGamedataInstallShutdownStart);
+  add("sceUtility",        "sceUtilityGamedataInstallAbort", &Kernel::sceUtilityGamedataInstallAbort);
   add("sceUtility",        "sceUtilityLoadAvModule",        &Kernel::sceUtilityLoadAvModule);
   add("sceUtility",        "sceUtilityUnloadAvModule",      &Kernel::sceUtilityUnloadAvModule);
   //newlib's sockets: no network yet, so every call fails
