@@ -90,6 +90,12 @@ part 33's.
     LGPL-compliant way.
   - The order from here: after the fonts and speed, the stuck games further (Burnout Dominator's GE hang, Peace
     Walker after its install, the GTAs into play), then the codecs, then later the Vulkan and OpenGL renderers.
+- **The GPU renderers' direction** (2026-10-07, part 36): the exact compute renderer (parts 34-35) stopped; instead
+  a hardware renderer as PPSSPP has one (the GPU's rasterizer, texture units and blending, shaders from the GE's
+  state, upscaling), Vulkan first, then OpenGL. The software renderer stays the exact one and the default. PPSSPP's
+  GPU backends may be read for their architecture, never copied or translated, and the docs say so; the HLE
+  kernel's clean room is unchanged. The PSP renderer takes Vulkan from the host's `loadVulkan` (the system's driver,
+  or a custom one through libadrenotools), with its own function tables, leaving paraLLEl-RDP's volk alone.
 
 ## Sources
 
@@ -4759,10 +4765,99 @@ clean under the sanitizers with hostile surfaces; the ELF and EBOOT built again 
   budget would have kept about 26 MB (13 MB as points) for the rest of a session. Nothing drawn changes: the same
   checks as above, none failing.
 
+## Part 36: a hardware renderer on Vulkan
+
+On branch `cursor/psp-gpu-hw-2b67`, on top of part 33's `cursor/psp-ge-curves-2b67` (#162). Parts 34 and 35 (the exact
+compute renderer, on `cursor/psp-gpu-vulkan-2b67` and `cursor/psp-gpu-speed-2b67`) aren't underneath: the owner
+stopped that direction (Decisions, 2026-10-07) and this part starts again from the GE, reusing what of it was Phobos's
+own design (the seam's idea, VRAM pages owned by the renderer, the lost device, the device setup, the differential
+harness). docs/psp-gpu-renderers.md, rewritten, is the design; this is what was built and measured. Sources: the
+Vulkan specification, pspsdk's headers for the GE's state, the software renderer, and PPSSPP's GPU backends
+(`GPU/Common`, `GPU/Vulkan`, `GPU/GLES`) read for their architecture only, as the owner allowed: none of their code is
+used, copied or translated.
+
+**What it is** (`ares/psp/ge/gpu`): the GE does everything up to the pixels as before (lists, vertices, transform,
+lighting, clipping, culling, texture decoding) and hands the renderer each PRIM's settings and its primitives on the
+screen (`GE::Renderer` in `ge.hpp`: `begin`, `triangle`, `sprite`, `point`, `line`, `submit`, `finish`, `written`,
+`forget`, `holds`). `gpu.cpp` turns them into draws on the GPU's rasterizer: frame buffers kept on the GPU as targets
+(8888 with depth and stencil), filled from memory and read back only when someone needs their pages (the pages busy
+meanwhile, as the drawing threads' are); render to texture by copies on the GPU, taken again only when the target
+changed; the GE's decoded textures put on the GPU once; one pipeline for each mix of settings, its fragment shader
+specialized by 15 constants (the GE's pixel pipeline up to blending, in its own whole numbers: texel lookup and
+filtering, texture functions, alpha and color tests, fog), the GPU's own depth, stencil, blending and logic operations
+after. `vulkan.cpp` runs it: three slots round, so the GPU draws while the CPU emulates, work handed over every 128
+commands, waits only in `finish()`. Vulkan comes from the host's `vkGetInstanceProcAddr` into the backend's own
+tables (a custom driver included; volk untouched), the system loader only when none is handed over.
+
+**Changes to the GE**: `draw.cpp` gives the primitives to a ready renderer instead of making jobs (a sprite's job is
+still worked out, so the renderer gets exactly its pixels and texture steps), asks it whether it holds a texture
+before decoding, and works out the columns a 2D PRIM's texture reaches beside its rows; `linePixels()` gives a line's
+pixels; `ge.cpp` tells the renderer when VRAM is replaced whole; `list.cpp` hands it the list's work at the end;
+`threads.cpp`'s `settleAll()` and the busy-page path finish it. Without a renderer nothing changes (the software
+renderer's tests and pictures are as they were).
+
+**Accuracy** (the design's "Accuracy"): 2D sprites flat and textured, in every frame buffer format and in clear mode,
+byte for byte the software renderer's (the shader steps a sprite's texture coordinates as the GE does; interpolated by
+the GPU they were a texel off in a grid across Liberty City Stories' text); render to texture the same. Blending can't
+be: the PSP truncates each term, the GPU rounds the sum, and it doesn't dither or keep 16-bit formats between blended
+draws. Pixels identical in the six benchmark scenes: Lumines 52.6%, Peace Walker's title 41.4%, Midnight Club 3's
+menu 65.0% and race 28.4%, Liberty City Stories' park edge 46.0% and woods 43.0%; nearly every other channel one or
+two levels apart, Peace Walker's one step of its 16-bit format (dithering after blending). pspsdk's samples: four of
+eight identical, the rest 68.7-99.7%. The pictures look the same.
+
+**Speed**, the RP6 (Adreno 740), host frames a second, software on 1 and 7 threads, then Vulkan: Lumines 87.7, 127.8,
+295.2; Peace Walker 65.7, 224.0, 393.4; Midnight Club 3 menu 23.6, 26.5, 52.7 and race 21.2, 24.2, 37.5; Liberty City
+Stories park edge 37.0, 49.3, 69.4 and woods 38.5, 54.5, 94.4. So 1.5 to 2.3 times the seven-thread software renderer,
+on one thread; on the M1 level with it in the 3D games (the CPU's emulation is the limit there) and above it in the
+2D ones.
+
+**Tests** (`tests/psp/gpu.cpp`, in `run-tests.sh`, which now also checks `shaders.hpp` against its GLSL): the sprites
+and render to texture byte for byte; pspsdk's samples measured for closeness (at most 3 channels in 1000 more than 8
+levels apart); a lost GPU (a pretend backend) leaving the software renderer to draw, said once. They skip where
+there's no Vulkan GPU (or with `PSP_GPU=0`).
+
+**Found on the way**: a stale object file in the scratch harness's build gave a renderer of another layout and 25% of
+pixels; and the harness's first comparison restored the software renderer's state every frame, so a game showing its
+previous frame showed software's, and scored 100%. Both fixed before any number here; a deliberately broken renderer
+now has to show as broken.
+
+**Left, and why** (the design's plan): upscaling and presenting from the GPU (next), then OpenGL, then the app wiring
+(Settings' "PSP Renderer: Software / Vulkan / OpenGL", Software the default; the host's `vkGetInstanceProcAddr` handed
+to the renderer and `loadVulkan` run for the PSP; a start-up sanity check; measured in the app with the system and a
+custom driver). Accuracy: programmable blending where the GPU has it, depth read back, transfers and texture decoding
+on the GPU.
+
+**After review** (an independent review of the branch: no PPSSPP code copied or translated, the design credited; six
+findings, all fixed):
+- GCC's `-Wextra -Werror` rejected two conditionals mixing an enumeration and a `u8` (clang doesn't warn): both arms
+  are `u8` now, and the PSP system tests build and pass with Ubuntu 24.04's g++ 13, as CI's job has it.
+- A PRIM the renderer couldn't take was lost: `targetFor()` refused a frame buffer whose drawing ran past VRAM's end,
+  after the GE had handed the PRIM over. `begin()` now says whether it took the PRIM, and the GE has the software
+  renderer draw a refused one, once the renderer has put back what it drew: no target (the GPU out of room), rows
+  past the target's (past VRAM's end the software renderer's rows run round to VRAM's start, as the PSP's
+  addresses do, which a target can't), a lost GPU, or a texture read from memory as it's drawn (none decoded).
+- Render-to-texture copies were never let go while their target lived (one for each place sampled from, 300 after
+  300 frames in the reviewer's probe), until the GPU's memory or descriptor sets ran out. Now one for each target and
+  size, copied again for another place; at most 32, the one unused longest going for another, and none unused for
+  16,384 PRIMs. Decoded textures the GE has let go are dropped at submits too, not only at finishes.
+- The GPU's depth went stale: the depth buffer's pages weren't watched, so a depth buffer cleared by the CPU or a
+  block transfer was missed, and a color change mid-frame refilled the GPU's depth from memory's older one. The depth
+  buffer is watched now through VRAM's fourth copy, the rows a change may be in (each 16 KiB it touches) are filled
+  again on their own, a color refill leaves the GPU's depth alone, and another depth buffer is filled afresh.
+- A PRIM's recording had no bound (a long line costs six vertices a pixel): it's handed to the GPU within the PRIM
+  once there are 262,144 vertices.
+- The tests shared one renderer between machines without having it forget the one before, so a target kept the last
+  machine's pixels. `GE::setRenderer()` now settles the renderer it replaces and has the new one forget (VRAM's
+  colors and depth), and the tests attach through it; `forget()` drops the depth as well as the colors.
+New tests, one for each of the medium findings: PRIMs refused (past VRAM's end, and a pretend backend that makes no
+targets) drawn by the software renderer, byte for byte; render to texture from 300 places and sizes, its copies kept
+to 32; and the depth buffer following memory (cleared by the CPU between two depth-tested sprites; a color pixel
+written between them not bringing memory's depth back). The design's notes on depth say what's still approximated.
+
 ## Part 37: the stuck games, and the runner's presses
 
-On branch `cursor/psp-hle-games7-2b67`, on top of part 33's `cursor/psp-ge-curves-2b67` with its re-run report (#158)
-merged in. (Parts 34 to 36 are the GPU renderers', on branches of their own.) The owner's RP6 had four games stuck:
+On branch `cursor/psp-hle-games7-2b67`, on top of part 36's `cursor/psp-gpu-hw-2b67` (#164). (Parts 34 and 35, the
+exact compute renderer, are on branches of their own.) The owner's RP6 had four games stuck:
 Killzone: Liberation, Ace Combat: Joint Assault, MotorStorm: Arctic Edge and Chili Con Carnage. Sources: pspsdk's
 headers (`pspkerror.h`, `psputility.h`, `pspumd.h`), pspautotests' programs and recordings (umd/callbacks,
 umd/register, umd/wait, umd/api), uOFW for how the module manager answers (read for behaviour, nothing copied), the

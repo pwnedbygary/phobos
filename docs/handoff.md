@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: the stuck games, and the runner's presses — 2026-10-07
 
-Branch `cursor/psp-hle-games7-2b67`, on top of `cursor/psp-ge-curves-2b67` (with #158's re-run report merged in).
+Branch `cursor/psp-hle-games7-2b67`, on top of `cursor/psp-gpu-hw-2b67` (#164, the hardware renderer, part 36).
 docs/psp-core.md, part 37, describes it; one commit per fix, each with its tests.
 - **Killzone: Liberation**: its boot program loads and starts the game's module, then unloads itself
   (sceKernelStopUnloadSelfModuleWithStatus), which the kernel took as the program leaving. Now the program goes as a
@@ -49,6 +49,31 @@ docs/psp-core.md, part 37, describes it; one commit per fix, each with its tests
   priority games the same pictures and sound against the base, but two frames a moment apart.
 - **Left**: Killzone's jump into VRAM; the other dialogs' sizes and the Screenshot and NpSignin dialogs; equal
   corner colors losing a level; scePower 0xa85880d0, the report's one top missing function still missing.
+
+## PSP core: a hardware renderer on Vulkan — 2026-10-07
+
+Branch `cursor/psp-gpu-hw-2b67`, on top of `cursor/psp-ge-curves-2b67` (#162). docs/psp-core.md, part 36, and
+docs/psp-gpu-renderers.md (rewritten) describe it. The owner stopped the exact compute renderer (parts 34-35, on
+their own branches) for a PPSSPP-style hardware renderer; PPSSPP's GPU backends informed the design, none of their
+code is used.
+- **The renderer** (`ares/psp/ge/gpu`): the GE transforms, lights, clips and decodes textures as before and hands
+  each PRIM's settings and primitives to `GE::Renderer`; `gpu.cpp` draws them with the GPU's rasterizer, texture
+  units and blending into frame buffers kept on the GPU (read back only when their pages are needed), with render to
+  texture by copies on the GPU, the GE's decoded textures cached, and a pipeline per mix of settings (a fragment
+  shader specialized by 15 constants). `vulkan.cpp` runs it through the host's `vkGetInstanceProcAddr` (custom
+  drivers included; its own tables, volk untouched). Not in the app or the desktop program yet.
+- **Measured** (the six verified scenes, the RP6's Adreno 740): 1.5-2.3 times the seven-thread software renderer
+  (Midnight Club 3's race 37.5 fps against 24.2, Liberty City Stories' woods 94.4 against 54.5). Not exact: 28-65% of
+  pixels identical to the software renderer's, nearly all the rest a level or two apart (blending's rounding). 2D
+  sprites and render to texture are byte for byte, as `tests/psp/gpu.cpp` checks.
+- **Next**: upscaling and presenting from the GPU, then OpenGL, then the app wiring (Settings' "PSP Renderer:
+  Software / Vulkan / OpenGL", Software the default; the host's `vkGetInstanceProcAddr` and `loadVulkan` for the PSP;
+  a sanity check; measuring in the app with the system and a custom driver, none installed or deleted without asking).
+- **After review** (part 36's "After review"): builds with GCC (two conditionals' types); a PRIM the renderer can't
+  take (past VRAM's end, no target, a lost GPU, a texture read from memory) is drawn by the software renderer instead
+  of lost; render-to-texture copies bounded (32, one for each target and size); the depth buffer's pages watched
+  apart from the colors; long PRIMs handed over in pieces; `GE::setRenderer()` has a renderer forget the machine
+  before. Three new tests; the PSP system tests pass on the M1 (sanitized, the GPU groups run) and with g++ 13.
 
 ## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
 

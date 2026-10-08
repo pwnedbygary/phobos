@@ -17,9 +17,17 @@ auto GE::run(u64 budget) -> Stop {
 auto GE::run(u64 budget, u64& ran) -> Stop {
   settle();  //what the last list left being drawn
   drawing.deferring = drawing.threads > 1;
+  //As it returns, a hardware renderer hands the GPU what it drew, to go on drawing while the CPU runs; without the
+  //CPU's owner's guard over VRAM's busy pages (Memory::vramGuard), it puts them back in memory's VRAM at once.
   struct Drawn {
     GE& ge;
-    ~Drawn() { ge.drawing.deferring = false; ge.launch(true); }
+    ~Drawn() {
+      ge.drawing.deferring = false;
+      ge.launch(true);
+      if(!ge.renderer) return;
+      if(ge.memory.vramGuard) ge.renderer->submit(ge);
+      else ge.renderer->finish(ge);
+    }
   } drawn{*this};
   for(ran = 0; ran < budget;) {
     if(list.stall && list.address == list.stall) return Stop::Stalled;
