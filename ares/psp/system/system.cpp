@@ -160,6 +160,9 @@ auto System::unload() -> void {
   cpu.recompiler.sections.shrink_to_fit();
   cpu.recompiler.writePages.clear();
   cpu.recompiler.writePages.shrink_to_fit();
+  cpu.recompiler.sectionTable.clear();  //(compiled code reads it, so it mustn't outlive the sections it points at)
+  cpu.recompiler.sectionTable.shrink_to_fit();
+  cpu.recompiler.table = nullptr;
   cpu.recompiler.allocator.reset();
   pixels = {};
   sound = {};
