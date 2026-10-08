@@ -432,8 +432,9 @@ static auto dialogs() -> void {
 //refused, and the refusal leaves the kind as it was. A dialog starts only while none is current: while another
 //starts, the wrong status even with a wrong size (status asks first), and still while one shuts down (priority).
 //Update does nothing but while the dialog runs (starting, or gone: the wrong status). A message aborted while it
-//runs stays running for 8 more Updates, however many came before, then finishes, its result 0 and its button as it
-//was (abort); aborted when finished, the wrong status. A state saved meanwhile loads, the count with it.
+//runs stays running for 8 more Updates (here its first Update answers it, so one still running has had none), then
+//finishes, its result 0 and its button as it was (abort); aborted when finished, the wrong status. A state saved
+//meanwhile loads, the count with it.
 static auto dialogStatuses() -> void {
   KernelMachine m;
   auto& memory = m.system.memory;
@@ -488,8 +489,7 @@ static auto dialogStatuses() -> void {
   CHECK(m.call("sceUtilityMsgDialogUpdate", {1}), 0x8011'0001);
   CHECK(m.call("sceUtilityMsgDialogAbort", {}), 0x8011'0001);
   advance(400 * millisecond);
-  //aborted after 3 Updates of a message that's still running (one asking a question, not yet answered: Update
-  //answers at once, so a message is aborted here before its first Update and counted down from there)
+  //aborted while running, before its first Update (which would have answered it)
   memory.write(4, Parameters + 28, 0xcccc'cccc);
   memory.write(4, Parameters + 576, 0xcccc'cccc);
   CHECK(m.call("sceUtilityMsgDialogAbort", {}), 0);

@@ -25,6 +25,24 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: Killzone's movie, the dialogs' sizes and statuses — 2026-10-08
+
+Branch `cursor/psp-hle-games8-2b67`, on top of `cursor/psp-hle-games7-2b67` with #164 merged (7cafa81a4).
+docs/psp-core.md, part 42, describes it; one commit per fix, each with its tests.
+- **Killzone: Liberation**: its jump into VRAM at frame 1547 came from its movie being told no picture came at the
+  first decode, which made it clear its target through a null pointer. With a game's own sceMpeg library (stood in
+  for) each access unit now gives its picture at once; the firmware's library still holds the first back
+  (video/mpeg/basic). Killzone plays its intro and reaches its main menu.
+- **Dialogs**: each kind takes only its recorded parameter sizes; InitStart only while no dialog is current;
+  Update INVALID_STATUS outside running and finished; sceUtilityMsgDialogAbort finishes after 8 Updates. Save
+  state version 16.
+- **Equal corner colors losing a level**: kept exact in a trial, psp measure didn't move, so left as it is.
+- **scePower 0xa85880d0**: no game here calls it; nothing names it. Left for a game that does.
+- **Checks**: tests/psp 321 groups with and without sanitizers, tests/psp/ares 306 checks, none failing; the ten
+  priority games the same sound and screens against the Killzone commit.
+- **Left**: the 21 menu-to-black games (not yet copied over); scePower 0xa85880d0; the web browser's own state and
+  memory, and the Screenshot and NpSignin dialogs.
+
 ## PSP core: the stuck games, and the runner's presses — 2026-10-07
 
 Branch `cursor/psp-hle-games7-2b67`, on top of `cursor/psp-gpu-hw-2b67` (#164, the hardware renderer, part 36).

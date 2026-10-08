@@ -10,7 +10,8 @@
 //abort, priority): a dialog starts only while none is current, not even one shutting down (INVALID_STATUS, asked
 //before the size), and only with one of its kind's parameter sizes (INVALID_PARAM_SIZE, which leaves the kind as it
 //was); Update does its work only while the dialog runs (starting, or after it's gone: INVALID_STATUS); a message
-//aborted while it runs finishes after 8 more Updates, its result 0 and its button untouched. The answers given
+//aborted while it runs finishes once 8 Updates have come since it ran (at least one after the abort; one still
+//running here has had none, its first answering it), its result 0 and its button untouched. The answers given
 //here, with nothing drawn on the screen yet:
 //  - Saving and loading (savedata): a save is a folder on the memory stick, PSP/SAVEDATA/<game name><save name>,
 //    holding its data file. Loading reads the file into the program's buffer, or says there's no save; saving writes
@@ -45,7 +46,7 @@ namespace {
   constexpr u32 SavedataDeleteParameter = 0x8011'0348, SavedataSaveParameter = 0x8011'0388;
   constexpr u32 SavedataSizesParameter = 0x8011'03c8;
   constexpr u32 DialogCancelled = 1;  //a dialog's result when the player backs out
-  constexpr u32 MessageAbortUpdates = 8;  //(utility/dialog/abort: 8 Updates however fast they come, aborted at once)
+  constexpr u32 MessageAbortUpdates = 8;  //(utility/dialog/abort: 8 Updates from the start, however fast they come)
   //Whether InitStart takes a kind's parameters at this size (their common part's first word): the sizes
   //utility/dialog/sizes skipped as the ones each kind takes (every other size up to 0x800 refused), and those
   //utility/dialog/htmlviewer found the web browser takes.
