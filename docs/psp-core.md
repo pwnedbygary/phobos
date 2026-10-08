@@ -5131,3 +5131,117 @@ run loop's calls into compiled code went from 284,000 a frame to 14,000.
   trigonometric ones, vfim, the conversions with scale) and the remaining FPU conversions (round, ceil, floor,
   cvt.w.s under other rounding modes).
 - The chain's cost at a jr or jalr (a return): a small cache of the last target would skip the table walk.
+
+## Part 43: the emulation thread faster again: drawing off it, registers held
+
+On branch `cursor/psp-cpu-speed2-2b67`, from `cursor/psp-cpu-speed-2b67` at 4ebc59d97 (part 38's head with part 37's
+`cursor/psp-hle-games7-2b67`, and part 36's hardware renderer under it, merged in). The task as in part 38: the
+emulation thread faster on the RP6, nothing changed in any result. Original code: no PPSSPP or JPCSP source was read.
+
+**The scenes** are part 38's six, made again from boot (the merge changed the save state's format, so the old states
+no longer load) and checked by disc ID and picture. Each step was checked against 4ebc59d97 in all six, 300 frames
+at 1 and 7 GE threads: every frame's picture and all of VRAM (drawing settled each frame), then RAM and the machine's
+whole serialized state at the end. On the RP6 the end state was also compared without settling each frame, as the
+app runs.
+
+**Where the time went.** simpleperf on the RP6, Midnight Club 3's race at 7 GE threads, 4ebc59d97: the emulation
+thread was busy 89% of the time and the bottleneck (the six workers about 30% each). Of its samples, drawing about
+38% (`triangleRows` 27%, `spriteRows` 8%, `drawBands` 1%), compiled code 19%, `drawVertices` 6.6%, projection 5.4%,
+a triangle's setup 3%, decoding 2.3%, reading vertices 2.2%, clipping 1.3%; lighting under 0.4%. The emulation
+thread draws only while it waits for drawing (threads.cpp's settles, which draw bands rather than sleep), so what
+matters is why it waits. A scratch count of the time it spends drawing, by the wait that made it (race, a frame):
+the next list's start 5.7 ms, the GE reading VRAM a batch draws over 4.6 ms, primitives that can't wait in a batch
+2.0 ms, primitives drawn at once 1.1 ms: 13.4 of the thread's 36 ms.
+
+**What was done**, one commit each:
+1. **A list waits only for the batch it fills** (`threads.cpp`, `list.cpp`; b0af46594). `GE::run` began by settling
+   everything the last list left being drawn. All it needs is the batch it's about to fill back: at a list's end
+   the GE's thread moves on to the other of its two batches, which may still be drawing. So it now waits for that
+   one alone (`reclaim()`, the wait `launch()` already made), and what the last list launched goes on being drawn
+   while the new list is set up. Nothing drawn changes: batches are still drawn one after another in the order they
+   were filled; anything the GE's thread reads from VRAM a launched batch draws over (textures, palettes, vertices,
+   the list) settles first (`drawnFirst()`), as does a block transfer; and VRAM's pages stay busy for the CPU until
+   settled (some may be drawn already, which only makes whoever touches one settle sooner; with nothing left being
+   drawn they're freed at once, `freeVRAM()`). A hardware renderer shares those busy pages, so with one, run()
+   settles everything as before. In the race the list's-start wait went from 5.7 ms a frame to none.
+2. **A block keeps the game's registers in host registers** (`recompiler.cpp`, `recompiler-ipu.cpp`,
+   `recompiler-memory.cpp`; 5a5fc5d0c). Within a block a register's value once loaded, or worked out, stays in one
+   of sljit's saved registers (7 on ARM64, 3 on x86-64), so the next instructions read it from there. It's written
+   through: every result is still stored to `ipu.r[]` as its instruction ends. So `ipu.r[]` is always as the
+   interpreter has it, wherever the block leaves, calls the interpreter or goes on to another block, and nothing is
+   written back anywhere. What the copies could miss is a register written another way, so those are forgotten: by
+   any call into the interpreter, by MFC1, MFV and MFVC (which write rt themselves), by a branch's link, and at a
+   block's start. An instruction never takes a host register another of its operands is in. An operand read on one
+   side of a jump inside an instruction is read before the jump. A native instruction's slow path (a load from a page
+   without an entry, an overflow) runs the same instruction in the interpreter, which writes only that
+   instruction's result, so only that is read back from memory afterwards.
+3. **lwl, lwr, swl and swr natively** (`recompiler-memory.cpp`; e06caa086), as the interpreter defines them: the
+   aligned word round the address, a shift from the address's byte in it, and a mask of the bytes kept. Stores read
+   and write through the store table, so a page holding code, a watched page or a busy VRAM page goes to the
+   interpreter, as sw's does. GTA's city handed the interpreter 33,500 instructions a frame before and 22,400 after.
+4. **Lighting's light-by-material products once a primitive** (`lighting.cpp`; 3292c775f). Each light's ambient,
+   diffuse and shine colors times the material's, each channel as 2c + 1, are worked out in `lightingState()`, as
+   is the emissive plus the ambient light's share, unless a vertex's color stands for the material's (then
+   `light()` makes them as before). The same integers multiply in the same order (511 × 511 × 256 is far inside 32
+   bits), so every sum is the same.
+
+**How it's known to be exact:** `tests/allegrex/run-tests.sh` (58 groups) on ARM64, and again built for x86-64 under
+Rosetta (whose 3 host registers make the recompiler evict all the time): the 2,000 generated programs use 30
+registers in every pattern, with lwl, lwr, swl and swr on both the page table's pages and the page left out of it,
+and the chained runs. `tests/psp/run-tests.sh`: 319 groups, the hardware renderer's (`tests/psp/gpu.cpp`) among them.
+The six scenes as above, after each commit.
+
+**The numbers.** Best of rounds, the builds taking turns: ref is 4ebc59d97, then each commit in turn. CPU is the
+emulation thread's time in `Allegrex::run()` less its syscalls, ms a frame; thread is its whole CPU time a frame.
+After commit 1 the CPU's own figure rises a little in some scenes while the thread's falls: drawing now goes on
+while the CPU runs, and a CPU touching a busy VRAM page waits for it inside `Allegrex::run()`.
+
+RP6 (the runner from adb's shell, unpinned, two rounds, the app not running), 7 GE threads, ref → 3292c775f:
+
+| scene | CPU ms | thread ms | fps |
+| --- | --- | --- | --- |
+| MC3 race | 8.72 → 7.90 | 34.37 → 26.79 | 24.2 → 32.3 |
+| MC3 menu | 3.59 → 3.42 | 28.79 → 24.36 | 30.4 → 36.2 |
+| GTA city | 3.81 → 3.62 | 16.27 → 16.21 | 55.3 → 55.5 |
+| GTA woods | 3.17 → 3.11 | 15.60 → 15.98 | 49.0 → 47.9 |
+| Peace Walker title | 0.28 → 0.42 | 3.75 → 4.17 | 226 → 216 |
+| Lumines demo | 0.71 → 0.59 | 5.29 → 4.19 | 137 → 177 |
+
+Step by step, MC3's race at 7 threads (ref, then after each commit): 24.2, 34.9, 31.9, 36.8 and 32.3 fps; the
+thread 34.4, 25.5, 26.7, 24.8 and 26.8 ms. Commit 1 is the step; after it the differences are within how much a
+7-thread run moves with the cores its threads land on (part 38). Peace Walker's title loses 4% at 216 fps: its CPU
+now meets VRAM still being drawn (0.14 ms a frame more in `Allegrex::run()`).
+
+RP6, 1 GE thread (nothing waits at 1 thread, so commit 1 changes nothing there; steady to 0.5%):
+
+| scene | CPU ms | thread ms | fps |
+| --- | --- | --- | --- |
+| MC3 race | 7.20 → 7.03 | 45.65 → 45.56 | 21.8 → 21.9 |
+| MC3 menu | 3.15 → 3.05 | 37.96 → 37.93 | 26.2 → 26.3 |
+| GTA city | 3.34 → 3.19 | 24.85 → 24.77 | 40.1 → 40.2 |
+| GTA woods | 2.01 → 1.94 | 24.96 → 24.97 | 39.9 → 39.9 |
+| Peace Walker title | 0.27 → 0.27 | 15.10 → 15.10 | 66.0 → 66.0 |
+| Lumines demo | 0.43 → 0.39 | 10.28 → 10.23 | 91.7 → 91.9 |
+
+The CPU's time a frame at 1 thread, step by step: the race 7.20, 7.21, 7.03, 7.04, 7.03; GTA's city 3.34, 3.34,
+3.26, 3.19, 3.19. Holding registers takes 2-3% off the compiled code's time, and lwl and friends 2% more in GTA. The
+compiled code is already almost all native (the race hands the interpreter 12,700 of its 2.43 million instructions a
+frame), spread thin over the game (its 400 busiest addresses run 18% of its instructions), and the host's loads from
+`ipu.r[]` cost little. Lighting's change doesn't show at this precision.
+
+The host (Apple Silicon) was kept busy by other agents throughout (load averages 10 to 127), so only the large
+change shows there: MC3's race at 7 GE threads, the thread 21.1 ms a frame before and 18.7 after commit 1, 44.6 fps
+to 48.1 (best of three).
+
+**Left, and why:**
+- What's left of the emulation thread's drawing in the race is mostly one wait: a texture decoded from what the
+  batch being filled draws (3.4 ms a frame, three times a frame: the game draws into its target and then samples
+  from it). The decode happens on the GE's thread before the primitive can be set up, so the batch must be drawn
+  first. Taking that off the thread means decoding later, in the batch, with every band waiting for that point,
+  and the texture cache shared with the workers.
+- Primitives that can't wait in a batch (1.4 ms) and those drawn at once (1.1 ms, mostly textures read from memory
+  as they're drawn, which is slow per pixel).
+- Registers are held only within a block; across a chain into the next block they start again. Holding them across
+  chains would need every block entered with the same registers held, or a store-back at each chain.
+- Still interpreted: the VFPU with prefixes set and its rarer instructions (most of what's left in GTA's city:
+  20,000 a frame), and the FPU's remaining conversions.
