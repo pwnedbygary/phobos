@@ -25,6 +25,31 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the emulation thread faster, the CPU's recompiler first — 2026-10-07
+
+Branch `cursor/psp-cpu-speed-2b67`, on top of `cursor/psp-ge-curves-2b67` (part 33, 70b239ac6). docs/psp-core.md,
+part 38, has the profiles, the scenes and every number.
+- **The recompiler** (`ares/psp/cpu/`), six commits: the FPU natively (`recompiler-fpu.cpp`, new); multiply,
+  divide, trapping sums and bit fields; blocks chaining to the next by themselves, then to successors known at
+  compile time; loads and stores with the page tables in saved registers; the VFPU's common instructions with the
+  prefixes at rest (`recompiler-vfpu.cpp`, new). Every block still starts and ends where it did (the run loop's
+  check points decide when interrupts and kernel events land), and anything unusual (NaN results, FCSR not at its
+  default, division by 0 or -1, overflow, VFPU prefixes set) goes to the interpreter as before.
+- **Tried and reverted**: GE vertices' matrices four at a time (b75298198, reverted by d4b896d4f). Exact without
+  skinning, but no faster on the host or the RP6.
+- **Exact**: tests/allegrex (58 groups, 2,000 generated programs and the new "chained runs") and tests/psp (308)
+  pass. Six scenes (Midnight Club 3's menu and race, GTA LCS's city and woods, Peace Walker's title, Lumines' demo),
+  300 frames at 1 and 7 GE threads: every frame's picture and VRAM, RAM and the whole serialized state identical
+  to the base's.
+- **Faster**: the CPU's own time a frame down 30-45% in the 3D scenes (MC3's race 12.8 to 8.4 ms on the RP6). On the
+  RP6 at 7 GE threads, MC3's race 21.6 to 25.2 fps, its menu 28.4 to 31.8, GTA's city 43.6 to 57.2; at 1 thread
+  19.7 to 21.6, 24.3 to 25.9 and 36.4 to 39.7.
+- **Next**: the GE's setup is now most of the emulation thread (lighting's per-light numbers once a primitive, the
+  emulation thread's share of drawing at settles); in the recompiler, MIPS registers kept in host registers within a
+  block, and lwl/lwr/swl/swr natively.
+- Scratch tools, states and memory sticks are in `~/phobos-work/scratch/cpu-speed` on the Mac (never committed);
+  the RP6 copy is `/data/local/tmp/cpu-bench2`.
+
 ## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
 
 Branch `cursor/psp-ge-curves-2b67`, on top of `cursor/psp-hle-games6-2b67` (#161, part 32; parts 31 and 30, #160
