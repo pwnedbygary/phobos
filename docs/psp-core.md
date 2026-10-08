@@ -5427,7 +5427,7 @@ sparse in-memory reader: sub-millisecond for every size. On a Mac (M2), a 1 GB C
 in about 0.3 s; a 4 GB CHD in about 0.8 s. A cached disc (title, disc ID and icon already in `psp-icons/`) takes
 no measurable time: the list shows instantly, and the titles and icons fill in from the cache.
 
-## Part 44: the emulation thread faster again — render-to-texture decode later
+## Part 46: the emulation thread faster again — render-to-texture decode later
 
 On branch `cursor/psp-cpu-speed3-2b67`, on top of part 43's `cursor/psp-cpu-speed2-2b67` (with #165 disc-info merged
 in). Exactness unchanged: nothing drawn differs.

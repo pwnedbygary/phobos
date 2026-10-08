@@ -28,7 +28,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 ## PSP core: render-to-texture decode later (emulation thread) — 2026-10-08
 
 Branch `cursor/psp-cpu-speed3-2b67`, on top of part 43's `cursor/psp-cpu-speed2-2b67` (with #165 disc-info).
-docs/psp-core.md, part 44.
+docs/psp-core.md, part 46.
 - **The GE** (`ares/psp/ge/texture.cpp`, `threads.cpp`, `draw.cpp`): a texture whose bytes a batch still draws over
   (render to texture) is not decoded on the GE's thread. The source batch is launched if it's being filled; the
   Look waits in the next batch (`deferRows`, CLUT snapshot when indexed); `ensureDecoded` runs as that batch
@@ -53,7 +53,7 @@ Branch `cursor/psp-cpu-speed2-2b67`, on top of part 42's `cursor/psp-hle-games8-
 - **Faster** on the RP6 at 7 GE threads: MC3's race 24.2 to 32.3 fps (the emulation thread 34.4 to 26.8 ms a
   frame), its menu 30.4 to 36.2, Lumines 137 to 177; GTA's city and woods unchanged; Peace Walker's title 226 to 216.
   At 1 thread the CPU's time is 2-9% lower (Peace Walker's the same) and the frame rates the same.
-- **Next**: addressed in part 44 (RTT decode deferred). Then primitives drawn at once, textures read from memory
+- **Next**: addressed in part 46 (RTT decode deferred). Then primitives drawn at once, textures read from memory
   as they're drawn.
 - Scratch tools and states are in `~/phobos-work/scratch/cpu-speed` (never committed); the RP6 copy is
   `/data/local/tmp/cpu-bench3`. The RP6 is shared: take `~/phobos-work/rp6.lock` first, and time only while the
