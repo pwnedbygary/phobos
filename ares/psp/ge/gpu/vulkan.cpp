@@ -20,6 +20,12 @@
 //blit that takes one of each pixel's scale x scale (the one at its middle, or just right of and below it), and its
 //stencil comes back a row of each pixel's at a time, the same one of each taken on the CPU. So memory's bytes the GPU
 //didn't draw over come back as they went in, at any scale.
+//
+//Presenting (docs/psp-gpu-renderers.md, "Presenting"): given the host's window (Android's), the screen's picture is
+//drawn over the whole of a swapchain image by present.frag and presented, in the run that has the Present, with
+//nothing read back: from the frame buffer's target, or from memory's picture, uploaded. The swapchain is made as
+//it's first shown on and again when it's out of date; where the window can't have one (no surface, no swapchain),
+//presenting is given up and the host shows the frames.
 
 #define PSP_VULKAN_INSTANCE(F) \
   F(vkDestroyInstance) F(vkEnumeratePhysicalDevices) F(vkGetPhysicalDeviceProperties) \
@@ -43,6 +49,13 @@
   F(vkCmdBindDescriptorSets) F(vkCmdBindVertexBuffers) F(vkCmdSetViewport) F(vkCmdSetScissor) \
   F(vkCmdSetStencilReference) F(vkCmdSetStencilCompareMask) F(vkCmdSetStencilWriteMask) \
   F(vkCmdSetBlendConstants) F(vkCmdPushConstants) F(vkCmdDraw) F(vkCmdBlitImage) F(vkCmdClearAttachments)
+//Presenting's, where there's a window to show on: missing ones mean only that there's no presenting
+#define PSP_VULKAN_SURFACE(F) \
+  F(vkDestroySurfaceKHR) F(vkGetPhysicalDeviceSurfaceSupportKHR) F(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
+  F(vkGetPhysicalDeviceSurfaceFormatsKHR) F(vkGetPhysicalDeviceSurfacePresentModesKHR)
+#define PSP_VULKAN_SWAPCHAIN(F) \
+  F(vkCreateSwapchainKHR) F(vkDestroySwapchainKHR) F(vkGetSwapchainImagesKHR) F(vkAcquireNextImageKHR) \
+  F(vkQueuePresentKHR) F(vkCreateSemaphore) F(vkDestroySemaphore)
 
 struct VulkanFunctions {
   PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
@@ -51,7 +64,12 @@ struct VulkanFunctions {
   #define F(name) PFN_##name name = nullptr;
   PSP_VULKAN_INSTANCE(F)
   PSP_VULKAN_DEVICE(F)
+  PSP_VULKAN_SURFACE(F)
+  PSP_VULKAN_SWAPCHAIN(F)
   #undef F
+  #if defined(__ANDROID__)
+  PFN_vkCreateAndroidSurfaceKHR vkCreateAndroidSurfaceKHR = nullptr;
+  #endif
 };
 
 //A Vulkan structure, zeroed, of its type.
@@ -79,6 +97,7 @@ struct VulkanBackend : GPU::Backend {
     u32 rows = 0;               //rows of them its pictures have (at a higher resolution, as many as reached: fit())
     Image color, depth;
     VkFramebuffer framebuffer = VK_NULL_HANDLE;
+    VkDescriptorSet set = VK_NULL_HANDLE;  //(its colors sampled, to be presented: made when first presented)
     bool fresh = true;  //its pictures not yet in their layouts (the next run puts them there)
   };
   //A picture the CPU fills for the GPU to read, at the PSP's size (a higher resolution's uploads: copy.frag), with
@@ -102,13 +121,19 @@ struct VulkanBackend : GPU::Backend {
     std::vector<u32> pending;  //its texels, until the next run puts them on the GPU
     bool fresh = true;         //never written yet (its layout undefined)
   };
-  //A run's: its commands, the fence it signals, and the vertices and pictures it uploads
+  //A run's: its commands, the fence it signals, and the vertices and pictures it uploads; presenting's, the
+  //semaphore the swapchain image's acquiring signals, and the shot of a picture it presents from a target (the
+  //PSP's width x height of it, in the GE format, taken from the buffer once the run is done)
   struct Slot {
     VkCommandBuffer commands = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     bool busy = false;
     u64 serial = 0;
     Buffer staging;
+    VkSemaphore acquired = VK_NULL_HANDLE;
+    Buffer shot;
+    bool shooting = false;
+    u32 shotWidth = 0, shotHeight = 0, shotFormat = 3;
   };
   static constexpr u32 Slots = 3;
   static constexpr u64 Timeout = 5'000'000'000;
@@ -161,6 +186,33 @@ struct VulkanBackend : GPU::Backend {
   std::vector<Squeeze> squeezes;
   std::vector<VkBufferImageCopy> rows;
   std::vector<Retired> retired;
+  //Presenting: whether the instance and device can (canPresent); the window shown on (the host's, as handed over),
+  //its surface and swapchain (made again when rebuild says it's out of date), and failed: presenting given up for
+  //this window. The swapchain's images, each with its view, framebuffer and the semaphore its drawing signals for
+  //the present; the render pass and present.frag's pipelines (FORMAT 0-3) for the swapchain's format; memory's
+  //picture, uploaded to be presented; the newest shot (Slot), for shot().
+  struct Swapped {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkFramebuffer framebuffer = VK_NULL_HANDLE;
+    VkSemaphore rendered = VK_NULL_HANDLE;
+  };
+  bool canPresent = false, failed = false, rebuild = false;
+  void* shownOn = nullptr;
+  VkSurfaceKHR surface = VK_NULL_HANDLE;
+  VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+  VkExtent2D swapExtent{};
+  std::vector<Swapped> swapImages;
+  VkFormat presentFormat = VK_FORMAT_UNDEFINED;
+  VkRenderPass presentPass = VK_NULL_HANDLE;
+  VkShaderModule presentModule = VK_NULL_HANDLE;
+  VkPipelineLayout presentLayout = VK_NULL_HANDLE;
+  VkPipeline presentPipelines[4] = {};
+  Staged shownPicture;
+  std::vector<u32> shotPixels;
+  u32 shotWidth = 0, shotHeight = 0, shotFormat = 3;
+  bool shotNew = false;
+  static constexpr u64 AcquireTimeout = 100'000'000;  //(a tenth of a second: a frame not shown rather than stuck)
 
   ~VulkanBackend() override {
     if(!timedOut && device) {
@@ -174,13 +226,20 @@ struct VulkanBackend : GPU::Backend {
         destroy(staged->image);
       }
       destroy(shrunk);
+      dropSurface();
+      dropPresentPass();
+      if(presentLayout) vk.vkDestroyPipelineLayout(device, presentLayout, nullptr);
+      if(presentModule) vk.vkDestroyShaderModule(device, presentModule, nullptr);
+      if(shownPicture.set) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &shownPicture.set);
+      destroy(shownPicture.image);
       for(auto pipeline : copyPipelines) if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
       if(copyLayout) vk.vkDestroyPipelineLayout(device, copyLayout, nullptr);
       if(copyVertexModule) vk.vkDestroyShaderModule(device, copyVertexModule, nullptr);
       if(copyFragmentModule) vk.vkDestroyShaderModule(device, copyFragmentModule, nullptr);
       for(auto& slot : slots) {
-        release(slot.staging);
+        release(slot.staging), release(slot.shot);
         if(slot.fence) vk.vkDestroyFence(device, slot.fence, nullptr);
+        if(slot.acquired) vk.vkDestroySemaphore(device, slot.acquired, nullptr);
       }
       release(readback);
       if(commandPool) vk.vkDestroyCommandPool(device, commandPool, nullptr);
@@ -272,6 +331,7 @@ struct VulkanBackend : GPU::Backend {
     image = {};
   }
   auto destroy(Target& t) -> void {
+    if(t.set) vk.vkFreeDescriptorSets(device, descriptorPool, 1, &t.set);
     if(t.framebuffer) vk.vkDestroyFramebuffer(device, t.framebuffer, nullptr);
     destroy(t.color), destroy(t.depth);
   }
@@ -339,8 +399,9 @@ struct VulkanBackend : GPU::Backend {
     vk.vkCmdCopyImage(commands, t.depth.image, Source, grown.depth.image, Destination, 1, &depth);
     transition(commands, grown.color.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination, ColorLayout);
     transition(commands, grown.depth.image, DepthStencil, Destination, DepthLayout);
-    retired.push_back({submitted + 1, t.color, t.depth, t.framebuffer});
+    retired.push_back({submitted + 1, t.color, t.depth, t.framebuffer, t.set});
     t.color = grown.color, t.depth = grown.depth, t.framebuffer = grown.framebuffer, t.rows = grown.rows;
+    t.set = VK_NULL_HANDLE;
     return true;
   }
 
@@ -437,7 +498,21 @@ struct VulkanBackend : GPU::Backend {
     vk.vkResetFences(device, 1, &slot.fence);
     slot.busy = false;
     completed = std::max(completed, slot.serial);
+    if(slot.shooting) keep(slot);
     return true;
+  }
+
+  //A done run's shot of what it presented, kept as the newest (shot())
+  auto keep(Slot& slot) -> void {
+    slot.shooting = false;
+    if(!slot.shot.coherent) {
+      auto range = made<VkMappedMemoryRange>(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+      range.memory = slot.shot.memory, range.offset = 0, range.size = VK_WHOLE_SIZE;
+      vk.vkInvalidateMappedMemoryRanges(device, 1, &range);
+    }
+    auto pixels = (const u32*)slot.shot.mapped;
+    shotPixels.assign(pixels, pixels + u64(slot.shotWidth) * slot.shotHeight);
+    shotWidth = slot.shotWidth, shotHeight = slot.shotHeight, shotFormat = slot.shotFormat, shotNew = true;
   }
   auto waitAll() -> bool {
     for(u32 n = 1; n <= Slots; n++) {  //(oldest first)
@@ -639,6 +714,7 @@ struct VulkanBackend : GPU::Backend {
     for(auto& c : r.commands) {
       if(c.kind == GPU::Command::Kind::Upload) size = aligned(size) + aligned(u64(c.width) * c.height * 4) * 2 +
                                                       aligned(u64(c.width) * c.height);
+      if(c.kind == GPU::Command::Kind::Present && !c.target) size = aligned(size) + u64(c.width) * c.height * 4;
     }
     for(auto& [id, t] : textureImages) if(!t.pending.empty()) size = aligned(size) + t.pending.size() * 4;
     size = aligned(size) + 16;
@@ -662,6 +738,14 @@ struct VulkanBackend : GPU::Backend {
     //be given even for no bytes)
     if(!r.vertices.empty()) std::memcpy(staging, r.vertices.data(), r.vertices.size() * sizeof(GPU::Vertex));
     u64 at = r.vertices.size() * sizeof(GPU::Vertex);
+
+    //(a swapchain image for a Present, acquired before anything's recorded: none, nothing's presented)
+    constexpr u32 NoImage = ~0u;
+    u32 image = NoImage;
+    for(auto& c : r.commands) {
+      if(c.kind == GPU::Command::Kind::Present && image == NoImage && !acquire(slot, image)) image = NoImage;
+    }
+    if(lost) return false;
 
     VkCommandBuffer commands = slot.commands;
     vk.vkResetCommandBuffer(commands, 0);
@@ -702,8 +786,22 @@ struct VulkanBackend : GPU::Backend {
     };
     readbacks.clear(), readbackSizes.clear(), squeezes.clear();
     u64 readAt = 0;
+    bool presenting = false;
     for(auto& c : r.commands) {
-      if(c.kind == GPU::Command::Kind::Present) continue;  //(no window to present on yet)
+      if(c.kind == GPU::Command::Kind::Present) {  //(the first alone, where an image was acquired)
+        u64 from = 0;
+        if(!c.target) {
+          at = aligned(at), from = at;
+          std::memcpy(staging + at, r.uploads.data() + c.colors, u64(c.width) * c.height * 4);
+          at += u64(c.width) * c.height * 4;
+        }
+        if(image == NoImage || presenting) continue;
+        endPass();
+        auto shown = targetImages.find(c.target);
+        present(commands, slot, c, c.target && shown != targetImages.end() ? &shown->second : nullptr, from, image);
+        presenting = true;
+        continue;
+      }
       auto found = targetImages.find(c.target);
       if(found == targetImages.end()) continue;
       Target& t = found->second;
@@ -849,7 +947,11 @@ struct VulkanBackend : GPU::Backend {
       }
     }
     endPass();
-    if(!readbacks.empty()) {  //(what was copied, for the host)
+    if(image != NoImage && !presenting) {  //(acquired, so presented: black, where the Present couldn't be drawn)
+      GPU::Command none{GPU::Command::Kind::Present, 0};
+      present(commands, slot, none, nullptr, 0, image);
+    }
+    if(!readbacks.empty() || slot.shooting) {  //(what was copied, for the host)
       auto memory = made<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
       memory.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, memory.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
       vk.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &memory,
@@ -860,10 +962,25 @@ struct VulkanBackend : GPU::Backend {
     began = Clock::now();
     auto submitInfo = made<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
     submitInfo.commandBufferCount = 1, submitInfo.pCommandBuffers = &commands;
+    VkPipelineStageFlags drawn = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    if(image != NoImage) {  //(the image's drawing waits for its acquiring, its present for the drawing)
+      submitInfo.waitSemaphoreCount = 1, submitInfo.pWaitSemaphores = &slot.acquired;
+      submitInfo.pWaitDstStageMask = &drawn;
+      submitInfo.signalSemaphoreCount = 1, submitInfo.pSignalSemaphores = &swapImages[image].rendered;
+    }
     if(vk.vkQueueSubmit(queue, 1, &submitInfo, slot.fence) != VK_SUCCESS) return lost = true, false;
     submitting += nanoseconds(began);
     slot.busy = true, slot.serial = ++submitted;
     next = (next + 1) % Slots;
+    if(image != NoImage) {
+      auto info = made<VkPresentInfoKHR>(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
+      info.waitSemaphoreCount = 1, info.pWaitSemaphores = &swapImages[image].rendered;
+      info.swapchainCount = 1, info.pSwapchains = &swapchain, info.pImageIndices = &image;
+      VkResult shown = vk.vkQueuePresentKHR(queue, &info);
+      if(shown == VK_SUBOPTIMAL_KHR || shown == VK_ERROR_OUT_OF_DATE_KHR) rebuild = true;
+      else if(shown == VK_ERROR_SURFACE_LOST_KHR) dropSurface();
+      else if(shown == VK_ERROR_DEVICE_LOST) return lost = true, false;
+    }
     if(!waits) return true;
     began = Clock::now();
     if(!waitAll()) return false;
@@ -962,6 +1079,312 @@ struct VulkanBackend : GPU::Backend {
     vk.vkCmdEndRenderPass(commands);
   }
 
+  //Presenting: a new window (none: let go of) dropped the surface of the one before, which disconnects from it so
+  //that the host can draw on it; the same one again may have changed size.
+  auto window(void* next) -> void override {
+    if(next == shownOn) return void(rebuild = rebuild || swapchain);
+    dropSurface();
+    shownOn = next, failed = false;
+  }
+  auto presents() const -> bool override { return canPresent && !failed && !lost; }
+  auto shot(std::vector<u32>& pixels, u32& width, u32& height, u32& format) -> bool override {
+    if(!shotNew) return false;
+    std::swap(pixels, shotPixels);
+    width = shotWidth, height = shotHeight, format = shotFormat, shotNew = false;
+    return true;
+  }
+
+  //The swapchain's images and the swapchain let go of, once the GPU is done with them (where a run never ended,
+  //they're left: the GPU may still use them)
+  auto dropSwapchain() -> void {
+    if(!swapchain && swapImages.empty()) return;
+    if(!timedOut) {
+      waitAll();
+      vk.vkDeviceWaitIdle(device);  //(presents too)
+      for(auto& image : swapImages) {
+        if(image.framebuffer) vk.vkDestroyFramebuffer(device, image.framebuffer, nullptr);
+        if(image.view) vk.vkDestroyImageView(device, image.view, nullptr);
+        if(image.rendered) vk.vkDestroySemaphore(device, image.rendered, nullptr);
+      }
+      if(swapchain) vk.vkDestroySwapchainKHR(device, swapchain, nullptr);
+    }
+    swapImages.clear(), swapchain = VK_NULL_HANDLE, rebuild = false;
+  }
+  auto dropSurface() -> void {
+    dropSwapchain();
+    if(surface && !timedOut) vk.vkDestroySurfaceKHR(instance, surface, nullptr);
+    surface = VK_NULL_HANDLE;
+  }
+  auto dropPresentPass() -> void {
+    for(auto& pipeline : presentPipelines) {
+      if(pipeline) vk.vkDestroyPipeline(device, pipeline, nullptr);
+      pipeline = VK_NULL_HANDLE;
+    }
+    if(presentPass) vk.vkDestroyRenderPass(device, presentPass, nullptr);
+    presentPass = VK_NULL_HANDLE, presentFormat = VK_FORMAT_UNDEFINED;
+  }
+
+  //The render pass that draws a swapchain image whole (cleared first: black where nothing's drawn) for presenting,
+  //and present.frag's pipelines for it, one for each FORMAT; made again for another format.
+  auto makePresentPass(VkFormat format) -> bool {
+    if(presentPass && presentFormat == format) return true;
+    dropPresentPass();
+    VkAttachmentDescription attachment{0, format, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_CLEAR,
+      VK_ATTACHMENT_STORE_OP_STORE, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR};
+    VkAttachmentReference color{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1, subpass.pColorAttachments = &color;
+    //(the image's acquiring waited for, where the semaphore's wait is: its color output)
+    VkSubpassDependency dependency{VK_SUBPASS_EXTERNAL, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0};
+    auto passInfo = made<VkRenderPassCreateInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
+    passInfo.attachmentCount = 1, passInfo.pAttachments = &attachment;
+    passInfo.subpassCount = 1, passInfo.pSubpasses = &subpass;
+    passInfo.dependencyCount = 1, passInfo.pDependencies = &dependency;
+    if(vk.vkCreateRenderPass(device, &passInfo, nullptr, &presentPass) != VK_SUCCESS) {
+      return presentPass = VK_NULL_HANDLE, false;
+    }
+    presentFormat = format;
+    for(u32 n = 0; n < 4; n++) {
+      VkSpecializationMapEntry entry{0, 0, 4};
+      VkSpecializationInfo specialization{1, &entry, 4, &n};
+      VkPipelineShaderStageCreateInfo stages[2] = {
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
+         copyVertexModule, "main", nullptr},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
+         presentModule, "main", &specialization}};
+      auto input = made<VkPipelineVertexInputStateCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+      auto assembly = made<VkPipelineInputAssemblyStateCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
+      assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+      auto viewport = made<VkPipelineViewportStateCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO);
+      viewport.viewportCount = 1, viewport.scissorCount = 1;
+      auto raster = made<VkPipelineRasterizationStateCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
+      raster.polygonMode = VK_POLYGON_MODE_FILL, raster.cullMode = VK_CULL_MODE_NONE, raster.lineWidth = 1;
+      auto multisample = made<VkPipelineMultisampleStateCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
+      multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+      VkPipelineColorBlendAttachmentState blended{};
+      blended.colorWriteMask = 15;
+      auto blend = made<VkPipelineColorBlendStateCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
+      blend.attachmentCount = 1, blend.pAttachments = &blended;
+      VkDynamicState dynamics[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+      auto dynamic = made<VkPipelineDynamicStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO);
+      dynamic.dynamicStateCount = std::size(dynamics), dynamic.pDynamicStates = dynamics;
+      auto info = made<VkGraphicsPipelineCreateInfo>(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
+      info.stageCount = 2, info.pStages = stages;
+      info.pVertexInputState = &input, info.pInputAssemblyState = &assembly, info.pViewportState = &viewport;
+      info.pRasterizationState = &raster, info.pMultisampleState = &multisample, info.pColorBlendState = &blend;
+      info.pDynamicState = &dynamic, info.layout = presentLayout, info.renderPass = presentPass;
+      if(vk.vkCreateGraphicsPipelines(device, pipelineCache, 1, &info, nullptr, &presentPipelines[n]) !=
+         VK_SUCCESS) {
+        presentPipelines[n] = VK_NULL_HANDLE;
+        return dropPresentPass(), false;
+      }
+    }
+    return true;
+  }
+
+  //The window's surface (Android's alone: elsewhere the host's own renderer has the window)
+  auto makeSurface() -> bool {
+    #if defined(__ANDROID__)
+    auto info = made<VkAndroidSurfaceCreateInfoKHR>(VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR);
+    info.window = (ANativeWindow*)shownOn;
+    if(vk.vkCreateAndroidSurfaceKHR(instance, &info, nullptr, &surface) != VK_SUCCESS) {
+      return surface = VK_NULL_HANDLE, false;
+    }
+    VkBool32 supported = VK_FALSE;
+    vk.vkGetPhysicalDeviceSurfaceSupportKHR(physical, family, surface, &supported);
+    return supported;
+    #else
+    return false;
+    #endif
+  }
+
+  //The swapchain, as the window is now: 1 made; 0 not now (the window has no size: tried again at the next
+  //present); -1 it can't be (another has the window, say: the host's drawing).
+  auto makeSwapchain() -> s32 {
+    VkSurfaceCapabilitiesKHR capabilities;
+    if(vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &capabilities) != VK_SUCCESS) return -1;
+    VkExtent2D extent = capabilities.currentExtent;
+    #if defined(__ANDROID__)
+    if(extent.width == 0xffff'ffff) {
+      extent = {u32(ANativeWindow_getWidth((ANativeWindow*)shownOn)),
+                u32(ANativeWindow_getHeight((ANativeWindow*)shownOn))};
+    }
+    #endif
+    if(!extent.width || !extent.height || extent.width == 0xffff'ffff) return 0;
+    u32 count = 0;
+    vk.vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &count, nullptr);
+    std::vector<VkSurfaceFormatKHR> formats(count);
+    vk.vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &count, formats.data());
+    if(formats.empty()) return -1;
+    VkSurfaceFormatKHR format = formats[0];  //(8888 unorm preferred: the colors as they are, no sRGB curve)
+    for(auto& f : formats) {
+      if(f.format == VK_FORMAT_R8G8B8A8_UNORM || f.format == VK_FORMAT_B8G8R8A8_UNORM) { format = f; break; }
+    }
+    vk.vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &count, nullptr);
+    std::vector<VkPresentModeKHR> modes(count);
+    vk.vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &count, modes.data());
+    //(mailbox, the newest frame shown at the next refresh without waiting for one, where there is it; else FIFO,
+    //which every surface has: the emulation keeps its own time, so a wait here is a refresh's at most)
+    VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
+    for(auto m : modes) if(m == VK_PRESENT_MODE_MAILBOX_KHR) mode = m;
+    u32 images = std::max(capabilities.minImageCount, 3u);
+    if(capabilities.maxImageCount) images = std::min(images, capabilities.maxImageCount);
+    auto alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    if(!(capabilities.supportedCompositeAlpha & alpha)) {
+      for(u32 bit = 1; bit <= 8; bit <<= 1) {
+        if(capabilities.supportedCompositeAlpha & bit) { alpha = VkCompositeAlphaFlagBitsKHR(bit); break; }
+      }
+    }
+    auto info = made<VkSwapchainCreateInfoKHR>(VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
+    info.surface = surface, info.minImageCount = images;
+    info.imageFormat = format.format, info.imageColorSpace = format.colorSpace, info.imageExtent = extent;
+    info.imageArrayLayers = 1, info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    //(the picture as the window is, the compositor turning it where the screen is turned)
+    info.preTransform = capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                      ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : capabilities.currentTransform;
+    info.compositeAlpha = alpha, info.presentMode = mode, info.clipped = VK_TRUE;
+    if(vk.vkCreateSwapchainKHR(device, &info, nullptr, &swapchain) != VK_SUCCESS) {
+      return swapchain = VK_NULL_HANDLE, -1;
+    }
+    swapExtent = extent;
+    if(!makePresentPass(format.format)) return -1;
+    vk.vkGetSwapchainImagesKHR(device, swapchain, &count, nullptr);
+    std::vector<VkImage> chained(count);
+    vk.vkGetSwapchainImagesKHR(device, swapchain, &count, chained.data());
+    for(auto image : chained) {
+      Swapped& swapped = swapImages.emplace_back();
+      swapped.image = image;
+      auto view = made<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+      view.image = image, view.viewType = VK_IMAGE_VIEW_TYPE_2D, view.format = format.format;
+      view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      if(vk.vkCreateImageView(device, &view, nullptr, &swapped.view) != VK_SUCCESS) return -1;
+      auto framebuffer = made<VkFramebufferCreateInfo>(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+      framebuffer.renderPass = presentPass, framebuffer.attachmentCount = 1, framebuffer.pAttachments = &swapped.view;
+      framebuffer.width = extent.width, framebuffer.height = extent.height, framebuffer.layers = 1;
+      if(vk.vkCreateFramebuffer(device, &framebuffer, nullptr, &swapped.framebuffer) != VK_SUCCESS) return -1;
+      auto semaphore = made<VkSemaphoreCreateInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+      if(vk.vkCreateSemaphore(device, &semaphore, nullptr, &swapped.rendered) != VK_SUCCESS) return -1;
+    }
+    return 1;
+  }
+
+  //A swapchain image to present on, acquired for the slot's run (its semaphore signalled as it's ready): false
+  //where there's none (no window, no size yet, a tenth of a second without one) or presenting has been given up.
+  auto acquire(Slot& slot, u32& image) -> bool {
+    if(!presents() || !shownOn) return false;
+    for(u32 attempt = 0; attempt < 2; attempt++) {
+      if(rebuild) dropSwapchain();
+      if(!surface && !makeSurface()) return giveUp();
+      if(!swapchain) {
+        s32 outcome = makeSwapchain();
+        if(outcome < 0) return giveUp();
+        if(outcome == 0) return dropSwapchain(), false;
+      }
+      VkResult result = vk.vkAcquireNextImageKHR(device, swapchain, AcquireTimeout, slot.acquired, VK_NULL_HANDLE,
+                                                 &image);
+      if(result == VK_SUCCESS) return true;
+      if(result == VK_SUBOPTIMAL_KHR) return rebuild = true, true;  //(acquired: shown, then made again)
+      if(result == VK_ERROR_OUT_OF_DATE_KHR) { rebuild = true; continue; }
+      if(result == VK_ERROR_SURFACE_LOST_KHR) return dropSurface(), false;  //(made again at the next present)
+      if(result == VK_ERROR_DEVICE_LOST) lost = true;
+      return false;  //(a timeout: not shown this time)
+    }
+    return false;
+  }
+  //(presenting given up for this window, its surface dropped so that the host can draw on it)
+  auto giveUp() -> bool {
+    dropSurface();
+    failed = true;
+    return false;
+  }
+
+  //A Present recorded into the acquired swapchain image (present.frag over the whole of it): from the target, the
+  //PSP's width x height of it at the scale, a shot of it taken at the PSP's size too (as a read-back for memory
+  //takes it); or from memory's picture, put in shownPicture from the staging buffer (at from).
+  auto present(VkCommandBuffer commands, Slot& slot, const GPU::Command& c, Target* t, u64 from, u32 image) -> void {
+    constexpr auto Read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    constexpr auto Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    f32 source[2] = {f32(c.width), f32(c.height)};
+    if(t) {
+      if(!t->set) {
+        auto setInfo = made<VkDescriptorSetAllocateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+        setInfo.descriptorPool = descriptorPool, setInfo.descriptorSetCount = 1, setInfo.pSetLayouts = &setLayout;
+        if(vk.vkAllocateDescriptorSets(device, &setInfo, &t->set) != VK_SUCCESS) t->set = VK_NULL_HANDLE;
+        if(t->set) {
+          VkDescriptorImageInfo picture{sampler, t->color.view, Read};
+          auto write = made<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+          write.dstSet = t->set, write.descriptorCount = 1;
+          write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, write.pImageInfo = &picture;
+          vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
+      }
+      shoot(commands, slot, *t, c);
+      transition(commands, t->color.image, VK_IMAGE_ASPECT_COLOR_BIT, ColorLayout, Read);
+      set = t->set, source[0] *= scale, source[1] *= scale;
+    } else if(!c.target && c.width && c.height && stage(shownPicture, c.width, c.height)) {
+      transition(commands, shownPicture.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                 Destination);
+      VkBufferImageCopy copy{from, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {}, {c.width, c.height, 1}};
+      vk.vkCmdCopyBufferToImage(commands, slot.staging.buffer, shownPicture.image.image, Destination, 1, &copy);
+      transition(commands, shownPicture.image.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination, Read);
+      set = shownPicture.set;
+    }
+    auto info = made<VkRenderPassBeginInfo>(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+    VkClearValue black{};
+    info.renderPass = presentPass, info.framebuffer = swapImages[image].framebuffer;
+    info.renderArea = {{0, 0}, swapExtent}, info.clearValueCount = 1, info.pClearValues = &black;
+    vk.vkCmdBeginRenderPass(commands, &info, VK_SUBPASS_CONTENTS_INLINE);
+    if(set) {
+      VkViewport viewport{0, 0, f32(swapExtent.width), f32(swapExtent.height), 0, 1};
+      VkRect2D scissor{{0, 0}, swapExtent};
+      vk.vkCmdSetViewport(commands, 0, 1, &viewport);
+      vk.vkCmdSetScissor(commands, 0, 1, &scissor);
+      vk.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, presentPipelines[t ? c.format & 3 : 3]);
+      vk.vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, presentLayout, 0, 1, &set, 0, nullptr);
+      f32 push[4] = {source[0], source[1], f32(swapExtent.width), f32(swapExtent.height)};
+      vk.vkCmdPushConstants(commands, presentLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
+      vk.vkCmdDraw(commands, 3, 1, 0, 0);
+    }
+    vk.vkCmdEndRenderPass(commands);
+    if(t) transition(commands, t->color.image, VK_IMAGE_ASPECT_COLOR_BIT, Read, ColorLayout);
+  }
+
+  //A shot of the target's picture as presented, at the PSP's size (one of each pixel's scale x scale, as a
+  //read-back for memory takes it), into the slot's shot buffer, kept once the run is done (keep()).
+  auto shoot(VkCommandBuffer commands, Slot& slot, Target& t, const GPU::Command& c) -> void {
+    u64 bytes = u64(c.width) * c.height * 4;
+    if(slot.shot.size < bytes && !make(slot.shot, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) return;
+    constexpr auto Source = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, Destination = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    VkBufferImageCopy copy{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {}, {c.width, c.height, 1}};
+    transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, ColorLayout, Source);
+    if(scale == 1) {
+      vk.vkCmdCopyImageToBuffer(commands, t.color.image, Source, slot.shot.buffer, 1, &copy);
+    } else if(shrink(c.width, c.height)) {
+      transition(commands, shrunk.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, Destination);
+      VkImageBlit blit{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                       {{0, 0, 0}, {s32(c.width * scale), s32(c.height * scale), 1}},
+                       {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{0, 0, 0}, {s32(c.width), s32(c.height), 1}}};
+      vk.vkCmdBlitImage(commands, t.color.image, Source, shrunk.image, Destination, 1, &blit, VK_FILTER_NEAREST);
+      transition(commands, shrunk.image, VK_IMAGE_ASPECT_COLOR_BIT, Destination, Source);
+      vk.vkCmdCopyImageToBuffer(commands, shrunk.image, Source, slot.shot.buffer, 1, &copy);
+    } else {
+      return transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, Source, ColorLayout);
+    }
+    transition(commands, t.color.image, VK_IMAGE_ASPECT_COLOR_BIT, Source, ColorLayout);
+    slot.shooting = true, slot.shotWidth = c.width, slot.shotHeight = c.height, slot.shotFormat = c.format;
+  }
+
   auto submit(const GPU::Recorded& recorded) -> bool override { return run(recorded, false); }
   auto finish(const GPU::Recorded& recorded) -> bool override {
     if(recorded.empty()) return !lost && waitAll();
@@ -998,20 +1421,32 @@ struct VulkanBackend : GPU::Backend {
     vk.vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
     std::vector<VkExtensionProperties> extensions(count);
     vk.vkEnumerateInstanceExtensionProperties(nullptr, &count, extensions.data());
-    bool portability = false;
+    bool portability = false, surfaces = false, androidSurfaces = false;
     for(auto& extension : extensions) {
       portability |= !std::strcmp(extension.extensionName, "VK_KHR_portability_enumeration");
+      surfaces |= !std::strcmp(extension.extensionName, "VK_KHR_surface");
+      androidSurfaces |= !std::strcmp(extension.extensionName, "VK_KHR_android_surface");
     }
-    const char* instanceExtensions[] = {"VK_KHR_portability_enumeration"};
+    //(and on Android, a window's surface, to present on: Presenting)
+    std::vector<const char*> instanceExtensions;
+    if(portability) instanceExtensions.push_back("VK_KHR_portability_enumeration");
+    #if defined(__ANDROID__)
+    surfaces = surfaces && androidSurfaces;
+    if(surfaces) {
+      instanceExtensions.push_back("VK_KHR_surface");
+      instanceExtensions.push_back("VK_KHR_android_surface");
+    }
+    #else
+    surfaces = androidSurfaces = false;  //(the host's own renderer has the window)
+    #endif
     auto application = made<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
     application.pApplicationName = "Phobos PSP GPU renderer";
     application.apiVersion = VK_API_VERSION_1_0;
     auto instanceInfo = made<VkInstanceCreateInfo>(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
     instanceInfo.pApplicationInfo = &application;
-    if(portability) {
-      instanceInfo.flags = 0x00000001;  //VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
-      instanceInfo.enabledExtensionCount = 1, instanceInfo.ppEnabledExtensionNames = instanceExtensions;
-    }
+    if(portability) instanceInfo.flags = 0x00000001;  //VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+    instanceInfo.enabledExtensionCount = instanceExtensions.size();
+    instanceInfo.ppEnabledExtensionNames = instanceExtensions.data();
     if(vk.vkCreateInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS) {
       return error = "no Vulkan instance", false;
     }
@@ -1019,6 +1454,14 @@ struct VulkanBackend : GPU::Backend {
       if(!vk.name) return error = "the Vulkan driver lacks " #name, false;
     PSP_VULKAN_INSTANCE(F)
     #undef F
+    if(surfaces) {
+      #define F(name) vk.name = (PFN_##name)getInstanceProcAddr(instance, #name); surfaces = surfaces && vk.name;
+      PSP_VULKAN_SURFACE(F)
+      #if defined(__ANDROID__)
+      F(vkCreateAndroidSurfaceKHR)
+      #endif
+      #undef F
+    }
 
     //The first GPU with a graphics queue; a GPU that's really the CPU (lavapipe, SwiftShader) only when asked for
     //(PSP_GPU_ON_CPU), as it's no faster than the software renderer.
@@ -1072,6 +1515,9 @@ struct VulkanBackend : GPU::Backend {
       if(!std::strcmp(extension.extensionName, "VK_KHR_portability_subset")) {
         deviceExtensions.push_back("VK_KHR_portability_subset");
       }
+      if(surfaces && !std::strcmp(extension.extensionName, "VK_KHR_swapchain")) {
+        deviceExtensions.push_back("VK_KHR_swapchain"), canPresent = true;
+      }
     }
     float priority = 1.0f;
     auto queueInfo = made<VkDeviceQueueCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
@@ -1088,6 +1534,11 @@ struct VulkanBackend : GPU::Backend {
       if(!vk.name) return error = "the Vulkan driver lacks " #name, false;
     PSP_VULKAN_DEVICE(F)
     #undef F
+    if(canPresent) {
+      #define F(name) vk.name = (PFN_##name)vk.vkGetDeviceProcAddr(device, #name); canPresent = canPresent && vk.name;
+      PSP_VULKAN_SWAPCHAIN(F)
+      #undef F
+    }
     vk.vkGetDeviceQueue(device, family, 0, &queue);
 
     //One render pass for every target: what's there kept, what's drawn stored
@@ -1143,6 +1594,11 @@ struct VulkanBackend : GPU::Backend {
     if(vk.vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &copyLayout) != VK_SUCCESS) {
       return error = "no pipeline layout", false;
     }
+    VkPushConstantRange presentRange{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4 * sizeof(f32)};  //(present.frag's)
+    pipelineLayoutInfo.pPushConstantRanges = &presentRange;
+    if(vk.vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &presentLayout) != VK_SUCCESS) {
+      return error = "no pipeline layout", false;
+    }
 
     struct Code { const u32* words; size_t size; };
     Code vertexCode{GPUShaders::vertexSPIRV, sizeof(GPUShaders::vertexSPIRV)};
@@ -1150,9 +1606,11 @@ struct VulkanBackend : GPU::Backend {
                                    : Code{GPUShaders::fragmentSingleSPIRV, sizeof(GPUShaders::fragmentSingleSPIRV)};
     Code copyVertexCode{GPUShaders::copyVertexSPIRV, sizeof(GPUShaders::copyVertexSPIRV)};
     Code copyFragmentCode{GPUShaders::copyFragmentSPIRV, sizeof(GPUShaders::copyFragmentSPIRV)};
+    Code presentCode{GPUShaders::presentSPIRV, sizeof(GPUShaders::presentSPIRV)};
     for(auto [code, module] : {std::pair{vertexCode, &vertexModule}, std::pair{fragmentCode, &fragmentModule},
                                std::pair{copyVertexCode, &copyVertexModule},
-                               std::pair{copyFragmentCode, &copyFragmentModule}}) {
+                               std::pair{copyFragmentCode, &copyFragmentModule},
+                               std::pair{presentCode, &presentModule}}) {
       auto moduleInfo = made<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
       moduleInfo.codeSize = code.size, moduleInfo.pCode = code.words;
       if(vk.vkCreateShaderModule(device, &moduleInfo, nullptr, module) != VK_SUCCESS) {
@@ -1181,6 +1639,10 @@ struct VulkanBackend : GPU::Backend {
       }
       auto fenceInfo = made<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
       if(vk.vkCreateFence(device, &fenceInfo, nullptr, &slot.fence) != VK_SUCCESS) return error = "no fence", false;
+      auto semaphoreInfo = made<VkSemaphoreCreateInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+      if(canPresent && vk.vkCreateSemaphore(device, &semaphoreInfo, nullptr, &slot.acquired) != VK_SUCCESS) {
+        slot.acquired = VK_NULL_HANDLE, canPresent = false;
+      }
     }
     //the blank texture, texture 0
     u32 blank = 0;

@@ -13,6 +13,10 @@
   #define VK_NO_PROTOTYPES
 #endif
 #include <vulkan/vulkan.h>
+#if defined(__ANDROID__)
+  #include <vulkan/vulkan_android.h>  //(presenting on the host's window: vulkan.cpp)
+  #include <android/native_window.h>
+#endif
 #if !defined(_WIN32)
   #include <dlfcn.h>
 #endif
