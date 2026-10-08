@@ -112,6 +112,7 @@ import com.phobos.emulator.util.N64SaveKind
 import com.phobos.emulator.util.N64SaveRead
 import com.phobos.emulator.util.N64SaveTransfer
 import com.phobos.emulator.util.PspDrawingThreads
+import com.phobos.emulator.util.PspRenderer
 import com.phobos.emulator.util.PspFonts
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.cueTracks
@@ -545,6 +546,12 @@ class MainViewModel(
     fun setPspDrawingThreads(threads: Int) = viewModelScope.launch {
         settingsStore.setPspDrawingThreads(threads)
         PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(threads))
+    }
+
+    /** Who draws a PSP game's pictures: [PspRenderer], taken by the core as a game starts. */
+    fun setPspRenderer(renderer: Int) = viewModelScope.launch {
+        settingsStore.setPspRenderer(renderer)
+        PhobosCore.setPspRenderer(PspRenderer.forCore(renderer))
     }
     fun setZxTapeAuto(enabled: Boolean) = viewModelScope.launch {
         settingsStore.setZxTapeAuto(enabled)
@@ -1837,6 +1844,7 @@ class MainViewModel(
             PhobosCore.setZxLoadSpeed(settings.value.zxLoadSpeed)
             PhobosCore.setMsxLoadSpeed(settings.value.msxLoadSpeed)
             PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(settings.value.pspDrawingThreads))
+            PhobosCore.setPspRenderer(PspRenderer.forCore(settings.value.pspRenderer))
             PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
@@ -1878,6 +1886,15 @@ class MainViewModel(
                         }
                     } else null
                     if (geometry != _videoGeometry.value) _videoGeometry.value = geometry
+
+                    if (_isLoaded.value) {
+                        // The PSP's core says once when its Vulkan renderer couldn't start or stopped (the software
+                        // renderer drawing instead); the log has it too.
+                        val pspNotice = PhobosCore.takePspNotice()
+                        if (pspNotice.isNotEmpty()) {
+                            withContext(Dispatchers.Main) { Toast.makeText(context, pspNotice, Toast.LENGTH_LONG).show() }
+                        }
+                    }
 
                     if (_isLoaded.value && !_isPaused.value) {
                         val stats = PhobosCore.getPerformanceStats()
@@ -2818,6 +2835,8 @@ class MainViewModel(
             PhobosCore.setPspMemoryStickPath(resolveSafPath(currentSettings.pspMemoryStickPath) ?: "")
             // How many threads draw its pictures (Settings → Emulation), the core's "GE Threads" as the game starts.
             PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(currentSettings.pspDrawingThreads))
+            // Who draws them: the software renderer, or Vulkan's with the driver loaded for the game.
+            PhobosCore.setPspRenderer(PspRenderer.forCore(currentSettings.pspRenderer))
             // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or
             // found by themselves in Download/FLASH0DUMP while any are missing), if any.
             val pspFonts = PspFonts.folder(context.filesDir)

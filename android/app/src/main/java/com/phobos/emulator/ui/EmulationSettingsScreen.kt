@@ -71,6 +71,11 @@ fun EmulationSettingsScreen(
                     ZxLoadSpeedItem(settings.zxLoadSpeed) { viewModel.setZxLoadSpeed(it) }
                     ZxTapeControlItem(settings.zxTapeAuto) { viewModel.setZxTapeAuto(it) }
                     MsxLoadSpeedItem(settings.msxLoadSpeed) { viewModel.setMsxLoadSpeed(it) }
+                }
+            }
+            item {
+                SettingsCategory("PlayStation Portable") {
+                    PspRendererItem(settings.pspRenderer) { viewModel.setPspRenderer(it) }
                     PspDrawingThreadsItem(settings.pspDrawingThreads) { viewModel.setPspDrawingThreads(it) }
                 }
             }

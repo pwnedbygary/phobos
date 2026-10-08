@@ -25,6 +25,29 @@ object PspDrawingThreads {
 }
 
 /**
+ * The PSP's "Renderer" setting: who draws a PSP game's pictures, handed to the core as its option "Renderer" as a
+ * game starts. The software renderer, the default, draws them as the PSP does, exactly; Vulkan's draws them on the
+ * GPU (with the driver Settings' Driver Manager chose, or the system's), much faster and very close. The core checks
+ * the GPU's pictures against the software renderer's as the game starts, and draws with the software renderer,
+ * saying so once, where they're wrong or the GPU stops answering. OpenGL's is to come.
+ */
+object PspRenderer {
+    const val SOFTWARE = 0
+    const val VULKAN = 1
+
+    /** The choices Settings offers. */
+    val choices = listOf(SOFTWARE, VULKAN)
+
+    fun label(renderer: Int): String = when (renderer) {
+        VULKAN -> "Vulkan (GPU)"
+        else -> "Software (exact)"
+    }
+
+    /** What the core is told: one of [choices], anything else taken as the software renderer. */
+    fun forCore(renderer: Int): Int = if (renderer in choices) renderer else SOFTWARE
+}
+
+/**
  * The whole multiple of a picture of [width] x [height] that native code draws it at for a view of [viewWidth] x
  * [viewHeight] pixels: the one nearest to how much the view enlarges it, 1 to 4 (each pixel repeated, nearest-
  * neighbour), so that the compositor's own scaling (bilinear) is slight: "sharp bilinear". A PSP's 480x272 shown

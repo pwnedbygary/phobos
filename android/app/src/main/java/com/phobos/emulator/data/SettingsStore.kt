@@ -247,6 +247,7 @@ data class EmulatorSettings(
     val pspMemoryStickPath: String = "",
     /** How many threads draw a PSP game's pictures (util/PspVideo.kt); 0, Auto, for all the device's cores but one. */
     val pspDrawingThreads: Int = 0,
+    val pspRenderer: Int = 0,
     val arcadeRomsPath: String = "",
     val shaderPath: String = "",
     val aspectRatioMode: AspectRatioMode = AspectRatioMode.CORE_PROVIDED,
@@ -372,6 +373,7 @@ class SettingsStore(private val context: Context) {
         val ZX_LOAD_SPEED = intPreferencesKey("zx_load_speed")
         val MSX_LOAD_SPEED = intPreferencesKey("msx_load_speed")
         val PSP_DRAWING_THREADS = intPreferencesKey("psp_drawing_threads")
+        val PSP_RENDERER = intPreferencesKey("psp_renderer")
         val ZX_TAPE_AUTO = booleanPreferencesKey("zx_tape_auto")
         val BUSY_WAIT_PACING = booleanPreferencesKey("busy_wait_pacing")
         val N64_PAK = stringPreferencesKey("n64_pak")
@@ -619,6 +621,7 @@ class SettingsStore(private val context: Context) {
             vulkanCachePath = safeGetString(VULKAN_CACHE_PATH, ""),
             pspMemoryStickPath = safeGetString(PSP_MEMORY_STICK_PATH, ""),
             pspDrawingThreads = safeGet(PSP_DRAWING_THREADS, 0),
+            pspRenderer = safeGet(PSP_RENDERER, 0),
             arcadeRomsPath = safeGetString(ARCADE_ROMS_PATH, ""),
             shaderPath = safeGetString(SHADER_PATH, ""),
             aspectRatioMode = enumOrDefault(safeGetString(ASPECT_RATIO_MODE, ""), AspectRatioMode.CORE_PROVIDED),
@@ -855,6 +858,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setZxLoadSpeed(speed: Int) = context.dataStore.edit { it[ZX_LOAD_SPEED] = speed }
     suspend fun setMsxLoadSpeed(speed: Int) = context.dataStore.edit { it[MSX_LOAD_SPEED] = speed }
     suspend fun setPspDrawingThreads(threads: Int) = context.dataStore.edit { it[PSP_DRAWING_THREADS] = threads }
+    suspend fun setPspRenderer(renderer: Int) = context.dataStore.edit { it[PSP_RENDERER] = renderer }
     suspend fun setZxTapeAuto(enabled: Boolean) = context.dataStore.edit { it[ZX_TAPE_AUTO] = enabled }
     suspend fun setBusyWaitPacing(enabled: Boolean) = context.dataStore.edit { it[BUSY_WAIT_PACING] = enabled }
     suspend fun setN64Pak(pak: String) = context.dataStore.edit { it[N64_PAK] = pak }
