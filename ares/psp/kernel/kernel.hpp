@@ -1703,6 +1703,7 @@ struct Kernel {
     u32 next = 0;          //the status it goes to at changeAt (0: no change coming)
     u64 changeAt = 0;
     u32 parameters = 0;    //where its parameters are
+    u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
   } dialog;
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
@@ -1725,6 +1726,7 @@ struct Kernel {
   auto sceUtilityMsgDialogGetStatus() -> void;
   auto sceUtilityMsgDialogUpdate() -> void;
   auto sceUtilityMsgDialogShutdownStart() -> void;
+  auto sceUtilityMsgDialogAbort() -> void;
   auto sceUtilityOskInitStart() -> void;
   auto sceUtilityOskGetStatus() -> void;
   auto sceUtilityOskUpdate() -> void;
