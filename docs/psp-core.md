@@ -5407,19 +5407,20 @@ Racer 2 are right at 1x, 2x and 4x (480x272, 960x544, 1920x1088 PNGs). The read-
 picture: Lumines spends 3 s of the CPU on 1,500 frames at 1x and 21 s at 4x, and waits 0.9 ms a frame against 3-4.
 
 **Measured in the app** (the RP6, Adreno 740, the installed Turnip driver, the app's stats over 10 s): Lumines'
-demo presents at 59.4 frames a second at Native (6.5 ms a frame), 59.3 at 4x (9.2 ms) and 50.6 at 8x (16.3 ms);
-Ridge Racer 2's title menu 60 at Native (5.2 ms) and 46.5 at 8x (21.5 ms, the GPU 80% busy). The window's buffer
-is the window's own size (1906x1080 in SurfaceFlinger), so the frame is the swapchain's, not read back. The app's
-screenshot (the pause menu's Shot) saves the presented frame at 480x272. With the debug switch on, the start-up
-check fails, the toast says "The Vulkan renderer couldn't start (its start-up check made to fail, as the debug
-switch asks)" and the software renderer draws Lumines at 60.
+demo presents at 59.4 frames a second at Native (6.5 ms a frame), 59.3 at 4x (9.2 ms), 50.6 at 8x (16.3 ms) and
+39.2 at 9x (24.1 ms, the GPU about 74% busy); Ridge Racer 2's title menu 60 at Native (5.2 ms) and 46.5 at 8x
+(21.5 ms, the GPU 80% busy). The window's buffer is the window's own size (1906x1080 in SurfaceFlinger), so the
+frame is the swapchain's, not read back. The app's screenshot (the pause menu's Shot) saves the presented frame at
+480x272. With the debug switch on, the start-up check fails, the toast says "The Vulkan renderer couldn't start
+(its start-up check made to fail, as the debug switch asks)" and the software renderer draws Lumines at 60.
+Sending the app home and bringing it back while Lumines ran at 9x kept presenting (about 30 fps after the return).
 
 **Not checked yet**: the swapchain against the read-back on the RP6 at the same scale (presenting can't be turned
-off from the UI); 10x; 3D games in play past their menus; rotation and the window resized while presenting; a
-surface lost (the app sent to the background and back while a game runs). One 8x screenshot of Ridge Racer 2's menu,
-mid-transition, had a one-pixel vertical line down the middle that Native didn't show: not looked into yet. The
-swapchain uses the identity transform, so the compositor rotates it (the RP6's panel is portrait-native): presenting
-in the panel's own orientation would save that.
+off from the UI); 10x in play (the setting is in the menu; its row sits under the app's floating nav bar, so it
+wasn't chosen from adb); 3D games in play past their menus; rotation and the window resized while presenting. One
+8x screenshot of Ridge Racer 2's menu, mid-transition, had a one-pixel vertical line down the middle that Native
+didn't show: not looked into yet. The swapchain uses the identity transform, so the compositor rotates it (the
+RP6's panel is portrait-native): presenting in the panel's own orientation would save that.
 
 **Next**: shader blending (programmable blending where the GPU has it, for accuracy), then OpenGL.
 
