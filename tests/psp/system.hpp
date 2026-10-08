@@ -70,6 +70,7 @@ auto drawTests() -> Tests;
 auto draw3dTests() -> Tests;
 auto curvesTests() -> Tests;
 auto measureTests() -> Tests;
+auto gpuTests() -> Tests;
 auto discTests() -> Tests;
 auto discFormatTests() -> Tests;
 auto stateTests() -> Tests;

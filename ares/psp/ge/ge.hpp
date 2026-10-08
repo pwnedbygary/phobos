@@ -253,6 +253,7 @@ struct GE {
   //Where a primitive may draw (draw.cpp): pixels inside left-right and top-bottom (inclusive).
   struct Region { s32 left, top, right, bottom; };
   struct Batch;  //(threads.cpp)
+  struct Renderer;
 
   //What a primitive is drawn with, shared by the jobs it makes: the pixel pipeline's settings, and the texture
   //with the texture function's (or none), all taken from the commands as the primitive met them.
@@ -405,6 +406,8 @@ struct GE {
                                     float u, float v, u32 fog) -> void;
   template<u32 Format> auto spriteRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto triangleRows(const Job& job, s32 fromY, s32 toY) -> void;
+  struct LinePixel { s32 x, y; u32 z, color, specular, fog; float u, v; };
+  auto linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& pixels) -> void;
   template<u32 Format> auto lineRows(const Job& job, s32 fromY, s32 toY) -> void;
   template<u32 Format> auto rasterizeAs(const Job& job, s32 fromY, s32 toY) -> void;
   auto rasterize(const Job& job, s32 fromY, s32 toY) -> void;
@@ -444,6 +447,7 @@ struct GE {
   auto startBands(Batch& batch) -> void;
   auto drew(Batch& batch) -> bool;
   auto settle() -> void;
+  auto settleAll() -> void;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;
   auto defer(const PixelState& pixel, const Region& region) -> bool;
@@ -494,6 +498,42 @@ struct GE {
     u64 shared = 8192;        //a batch with fewer pixels is drawn on the GE's thread alone (tests may make it 0)
   } drawing;
   static constexpr s32 BandRows = 8;  //the rows in a band
+
+  //A hardware renderer (ge/gpu, docs/psp-gpu-renderers.md): the GPU's own rasterizer, texture units and blending
+  //drawing the primitives in place of the software renderer, or none. The GE goes on doing everything up to the
+  //pixels, as it does for the software renderer: it reads the list and the vertices, transforms, lights and clips
+  //them, and works out each primitive's settings (a Look); then, instead of drawing each primitive's jobs, it hands
+  //the renderer the settings once a PRIM (begin()) and each primitive on the screen: a triangle's or a point's
+  //vertices, a sprite's job (its pixels, and how its texture coordinates step), a line as the pixels it lights.
+  //The renderer draws them into VRAM's frame buffers kept on the GPU, and owns the pages it has drawn over until it
+  //puts them back in memory's VRAM (finish()): it marks them busy (Memory::busyPages), so anyone touching one waits
+  //for that first (Memory::finishDrawing, settleAll()), as for the drawing threads' batches. written() hears of
+  //every watched page someone changes (Memory::watch()), so that the renderer knows when its copy of a frame buffer
+  //is older than memory's. When ready() is false (the GPU lost) the software renderer draws; and a PRIM begin()
+  //refuses (the renderer can't draw it) is drawn by the software renderer, once the renderer has put back what it
+  //drew. It's set with setRenderer(), which has it forget any machine's VRAM it saw before, and taken away with it
+  //before it goes, settled.
+  struct Renderer {
+    virtual ~Renderer() = default;
+    virtual auto ready() const -> bool = 0;
+    virtual auto begin(GE& ge, const Look& look, bool through, const Region& region) -> bool = 0;
+    virtual auto triangle(const Vertex& a, const Vertex& b, const Vertex& c) -> void = 0;
+    virtual auto sprite(const Job& job) -> void = 0;
+    virtual auto point(const Vertex& at) -> void = 0;
+    virtual auto line(const Job& job, const std::vector<LinePixel>& pixels) -> void = 0;
+    virtual auto submit(GE& ge) -> void = 0;  //what's drawn so far handed to the GPU, not waited for (a list's end)
+    virtual auto finish(GE& ge) -> void = 0;  //every page it owns put back in memory's VRAM, and no longer busy
+    virtual auto written(GE& ge, u32 page) -> void = 0;
+    virtual auto forget(GE& ge) -> void = 0;  //VRAM replaced whole (a state loaded, the power): its copies are old
+    //A texture (its first rows and columns, those the PRIM can reach) in a frame buffer whose newest pixels are on
+    //the GPU: the renderer takes it from there for the PRIM (begin()), so the GE doesn't decode it, and memory's
+    //pages under it stay the renderer's.
+    virtual auto holds(GE& ge, const Sampler& texture, u32 rows, u32 columns) -> bool = 0;
+  };
+  Renderer* renderer = nullptr;
+  auto setRenderer(Renderer* next) -> void;  //ge.cpp
+  bool hardware = false;  //the primitive being drawn goes to the renderer (drawVertices())
+  std::vector<LinePixel> hardwareLine;
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
   std::set<std::string> noted;

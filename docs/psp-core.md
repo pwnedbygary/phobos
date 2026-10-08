@@ -37,6 +37,9 @@ Part 32, the next functions games stop at (a thread's run status, the thread man
 stick's free space told alike everywhere, and part 28's differences the recordings settle), is on
 `cursor/psp-hle-games6-2b67`, on top of part 31's.
 Part 33, curved surfaces (BEZIER and SPLINE), is on `cursor/psp-ge-curves-2b67`, on top of part 32's.
+Part 37, the stuck games (a boot program unloading itself, the gamedata install dialog, the drive's callback, depths
+kept at one depth, points past z / w ±1) and the runner's presses, is on `cursor/psp-hle-games7-2b67`, on top of
+part 33's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -87,6 +90,12 @@ Part 33, curved surfaces (BEZIER and SPLINE), is on `cursor/psp-ge-curves-2b67`,
     LGPL-compliant way.
   - The order from here: after the fonts and speed, the stuck games further (Burnout Dominator's GE hang, Peace
     Walker after its install, the GTAs into play), then the codecs, then later the Vulkan and OpenGL renderers.
+- **The GPU renderers' direction** (2026-10-07, part 36): the exact compute renderer (parts 34-35) stopped; instead
+  a hardware renderer as PPSSPP has one (the GPU's rasterizer, texture units and blending, shaders from the GE's
+  state, upscaling), Vulkan first, then OpenGL. The software renderer stays the exact one and the default. PPSSPP's
+  GPU backends may be read for their architecture, never copied or translated, and the docs say so; the HLE
+  kernel's clean room is unchanged. The PSP renderer takes Vulkan from the host's `loadVulkan` (the system's driver,
+  or a custom one through libadrenotools), with its own function tables, leaving paraLLEl-RDP's volk alone.
 
 ## Sources
 
@@ -4756,9 +4765,200 @@ clean under the sanitizers with hostile surfaces; the ELF and EBOOT built again 
   budget would have kept about 26 MB (13 MB as points) for the rest of a session. Nothing drawn changes: the same
   checks as above, none failing.
 
+## Part 36: a hardware renderer on Vulkan
+
+On branch `cursor/psp-gpu-hw-2b67`, on top of part 33's `cursor/psp-ge-curves-2b67` (#162). Parts 34 and 35 (the exact
+compute renderer, on `cursor/psp-gpu-vulkan-2b67` and `cursor/psp-gpu-speed-2b67`) aren't underneath: the owner
+stopped that direction (Decisions, 2026-10-07) and this part starts again from the GE, reusing what of it was Phobos's
+own design (the seam's idea, VRAM pages owned by the renderer, the lost device, the device setup, the differential
+harness). docs/psp-gpu-renderers.md, rewritten, is the design; this is what was built and measured. Sources: the
+Vulkan specification, pspsdk's headers for the GE's state, the software renderer, and PPSSPP's GPU backends
+(`GPU/Common`, `GPU/Vulkan`, `GPU/GLES`) read for their architecture only, as the owner allowed: none of their code is
+used, copied or translated.
+
+**What it is** (`ares/psp/ge/gpu`): the GE does everything up to the pixels as before (lists, vertices, transform,
+lighting, clipping, culling, texture decoding) and hands the renderer each PRIM's settings and its primitives on the
+screen (`GE::Renderer` in `ge.hpp`: `begin`, `triangle`, `sprite`, `point`, `line`, `submit`, `finish`, `written`,
+`forget`, `holds`). `gpu.cpp` turns them into draws on the GPU's rasterizer: frame buffers kept on the GPU as targets
+(8888 with depth and stencil), filled from memory and read back only when someone needs their pages (the pages busy
+meanwhile, as the drawing threads' are); render to texture by copies on the GPU, taken again only when the target
+changed; the GE's decoded textures put on the GPU once; one pipeline for each mix of settings, its fragment shader
+specialized by 15 constants (the GE's pixel pipeline up to blending, in its own whole numbers: texel lookup and
+filtering, texture functions, alpha and color tests, fog), the GPU's own depth, stencil, blending and logic operations
+after. `vulkan.cpp` runs it: three slots round, so the GPU draws while the CPU emulates, work handed over every 128
+commands, waits only in `finish()`. Vulkan comes from the host's `vkGetInstanceProcAddr` into the backend's own
+tables (a custom driver included; volk untouched), the system loader only when none is handed over.
+
+**Changes to the GE**: `draw.cpp` gives the primitives to a ready renderer instead of making jobs (a sprite's job is
+still worked out, so the renderer gets exactly its pixels and texture steps), asks it whether it holds a texture
+before decoding, and works out the columns a 2D PRIM's texture reaches beside its rows; `linePixels()` gives a line's
+pixels; `ge.cpp` tells the renderer when VRAM is replaced whole; `list.cpp` hands it the list's work at the end;
+`threads.cpp`'s `settleAll()` and the busy-page path finish it. Without a renderer nothing changes (the software
+renderer's tests and pictures are as they were).
+
+**Accuracy** (the design's "Accuracy"): 2D sprites flat and textured, in every frame buffer format and in clear mode,
+byte for byte the software renderer's (the shader steps a sprite's texture coordinates as the GE does; interpolated by
+the GPU they were a texel off in a grid across Liberty City Stories' text); render to texture the same. Blending can't
+be: the PSP truncates each term, the GPU rounds the sum, and it doesn't dither or keep 16-bit formats between blended
+draws. Pixels identical in the six benchmark scenes: Lumines 52.6%, Peace Walker's title 41.4%, Midnight Club 3's
+menu 65.0% and race 28.4%, Liberty City Stories' park edge 46.0% and woods 43.0%; nearly every other channel one or
+two levels apart, Peace Walker's one step of its 16-bit format (dithering after blending). pspsdk's samples: four of
+eight identical, the rest 68.7-99.7%. The pictures look the same.
+
+**Speed**, the RP6 (Adreno 740), host frames a second, software on 1 and 7 threads, then Vulkan: Lumines 87.7, 127.8,
+295.2; Peace Walker 65.7, 224.0, 393.4; Midnight Club 3 menu 23.6, 26.5, 52.7 and race 21.2, 24.2, 37.5; Liberty City
+Stories park edge 37.0, 49.3, 69.4 and woods 38.5, 54.5, 94.4. So 1.5 to 2.3 times the seven-thread software renderer,
+on one thread; on the M1 level with it in the 3D games (the CPU's emulation is the limit there) and above it in the
+2D ones.
+
+**Tests** (`tests/psp/gpu.cpp`, in `run-tests.sh`, which now also checks `shaders.hpp` against its GLSL): the sprites
+and render to texture byte for byte; pspsdk's samples measured for closeness (at most 3 channels in 1000 more than 8
+levels apart); a lost GPU (a pretend backend) leaving the software renderer to draw, said once. They skip where
+there's no Vulkan GPU (or with `PSP_GPU=0`).
+
+**Found on the way**: a stale object file in the scratch harness's build gave a renderer of another layout and 25% of
+pixels; and the harness's first comparison restored the software renderer's state every frame, so a game showing its
+previous frame showed software's, and scored 100%. Both fixed before any number here; a deliberately broken renderer
+now has to show as broken.
+
+**Left, and why** (the design's plan): upscaling and presenting from the GPU (next), then OpenGL, then the app wiring
+(Settings' "PSP Renderer: Software / Vulkan / OpenGL", Software the default; the host's `vkGetInstanceProcAddr` handed
+to the renderer and `loadVulkan` run for the PSP; a start-up sanity check; measured in the app with the system and a
+custom driver). Accuracy: programmable blending where the GPU has it, depth read back, transfers and texture decoding
+on the GPU.
+
+**After review** (an independent review of the branch: no PPSSPP code copied or translated, the design credited; six
+findings, all fixed):
+- GCC's `-Wextra -Werror` rejected two conditionals mixing an enumeration and a `u8` (clang doesn't warn): both arms
+  are `u8` now, and the PSP system tests build and pass with Ubuntu 24.04's g++ 13, as CI's job has it.
+- A PRIM the renderer couldn't take was lost: `targetFor()` refused a frame buffer whose drawing ran past VRAM's end,
+  after the GE had handed the PRIM over. `begin()` now says whether it took the PRIM, and the GE has the software
+  renderer draw a refused one, once the renderer has put back what it drew: no target (the GPU out of room), rows
+  past the target's (past VRAM's end the software renderer's rows run round to VRAM's start, as the PSP's
+  addresses do, which a target can't), a lost GPU, or a texture read from memory as it's drawn (none decoded).
+- Render-to-texture copies were never let go while their target lived (one for each place sampled from, 300 after
+  300 frames in the reviewer's probe), until the GPU's memory or descriptor sets ran out. Now one for each target and
+  size, copied again for another place; at most 32, the one unused longest going for another, and none unused for
+  16,384 PRIMs. Decoded textures the GE has let go are dropped at submits too, not only at finishes.
+- The GPU's depth went stale: the depth buffer's pages weren't watched, so a depth buffer cleared by the CPU or a
+  block transfer was missed, and a color change mid-frame refilled the GPU's depth from memory's older one. The depth
+  buffer is watched now through VRAM's fourth copy, the rows a change may be in (each 16 KiB it touches) are filled
+  again on their own, a color refill leaves the GPU's depth alone, and another depth buffer is filled afresh.
+- A PRIM's recording had no bound (a long line costs six vertices a pixel): it's handed to the GPU within the PRIM
+  once there are 262,144 vertices.
+- The tests shared one renderer between machines without having it forget the one before, so a target kept the last
+  machine's pixels. `GE::setRenderer()` now settles the renderer it replaces and has the new one forget (VRAM's
+  colors and depth), and the tests attach through it; `forget()` drops the depth as well as the colors.
+New tests, one for each of the medium findings: PRIMs refused (past VRAM's end, and a pretend backend that makes no
+targets) drawn by the software renderer, byte for byte; render to texture from 300 places and sizes, its copies kept
+to 32; and the depth buffer following memory (cleared by the CPU between two depth-tested sprites; a color pixel
+written between them not bringing memory's depth back). The design's notes on depth say what's still approximated.
+
+## Part 37: the stuck games, and the runner's presses
+
+On branch `cursor/psp-hle-games7-2b67`, on top of part 36's `cursor/psp-gpu-hw-2b67` (#164). (Parts 34 and 35, the
+exact compute renderer, are on branches of their own.) The owner's RP6 had four games stuck:
+Killzone: Liberation, Ace Combat: Joint Assault, MotorStorm: Arctic Edge and Chili Con Carnage. Sources: pspsdk's
+headers (`pspkerror.h`, `psputility.h`, `pspumd.h`), pspautotests' programs and recordings (umd/callbacks,
+umd/register, umd/wait, umd/api), uOFW for how the module manager answers (read for behaviour, nothing copied), the
+games' own code and calls, traced with the runner, and round 3's measurements (`psp measure`). No other emulator's
+code was read. Each fix is a commit of its own, with its tests.
+
+**Killzone: Liberation** (`modules.cpp`'s `unloadSelf()` and `programAsModule()`): the game's EBOOT is a small boot
+program, a static program at 0x09f00000 that exports module_start and module_stop of its own. It loads and starts
+KZL.PRX (the game, "Guerrilla", at 0x08800000), at frame 571, then calls sceKernelStopUnloadSelfModuleWithStatus(1)
+to get out of the way. The kernel took a program unloading itself as the program leaving (part 19's choice, made
+before any game did it), and ended everything: the game's threads with it. Now the program goes as any module does,
+and only it: it becomes one of the modules (`programAsModule()`: its module, its ID and the block start() gave it,
+`programUID` 0 from then on), has its module_stop run on a thread of its own, and goes once that ends; its exports go
+back to the kernel with it (a module importing from it is linked to the kernel again), and the modules it started,
+and their threads, run on. Code no module holds is refused with CAN_NOT_STOP (0x80020136), as uOFW's module manager
+answers when it finds no module for the caller; it had been taken as the program leaving too. `sceKernelExitGame`
+is now the only way the program ends (`exited`). Tests: a boot program built here starts a module whose thread
+counts once a millisecond, then unloads itself; the module, its thread and its import of the boot program's
+function are checked on both engines, and a state saved while the boot program's module_stop runs carries on in a
+fresh machine as the machine does.
+- The game then reaches its language menu at 60 fps (host and RP6), and with presses that reach it (below) its
+  autosave notice. After that notice it loads `mpeg.prx` (Sony's, stood in for), and at frame 1547 jumps into VRAM
+  (0x040cc000) after reading through a null pointer (0x28 to 0x30): not looked into yet.
+
+**The 22 games that went from a menu to black** in the re-run's report: the Killzone finding doesn't explain them.
+The program-leaving choice dates from part 19's review (fb01557e1, 5 October), and the WithStatus function from part
+32's SDK work (436add499); both were in the old run's commit (de6e6dcb7) as in the new. Built at de6e6dcb7 (with the
+new report's runner, FFmpeg off), Killzone shows its boot logo at frames 60 and 300 and is black from 600 on, the
+boot program having ended it there too: it was black in both runs, so its change of category isn't a change in the
+code. The report's runs had no input at all (the runner's fault, below), so a frame 3600 shows wherever each game's
+own timing took it unaided; a game that unloads its boot program would have ended in both runs alike. A re-run with
+the fixed runner is the way to sort them.
+
+**The runner's presses** (`tools/psp-runner/runner.cpp`): `--press "F:C,F:C,..."` was never split at its commas.
+The whole list was one press, its name all but the first frame; ending in "!", as the report's
+`"120:Start,123:Start!,1800:Cross,1803:Cross!"` does, it was a release of a control called
+"Start,123:Start!,1800:Cross,1803:Cross", which nothing checked. No button was ever pressed, in any run made so.
+The list is now split, and a release must name a control as a press must. That's why Killzone's menu, Joint
+Assault's notice and MotorStorm's notice had seemed to ignore Cross on the host. The runner also said "still
+running" for games that had ended (`exited` read after unloading the core, which powers the kernel off): fixed.
+
+**Ace Combat: Joint Assault** (`utility.cpp`): at boot (0x08800a4c) it loads utility module 0x308, and on BAD_ID
+sets the GPO lights to 0xff and exits. pspsdk's list of sound and video modules stops at 0x307; later firmwares
+have one more, which the kernel now takes as the MP4 library (chosen: nothing here says which it is; its functions
+would be stood in for as the rest are), 0x309 still refused. The game then asks
+sceUtilityGamedataInstallGetStatus, which the kernel didn't have, and exits on the missing function's error. The
+gamedata install dialog is now one of the dialogs (InitStart, GetStatus, Update, ShutdownStart, and Abort;
+NIDs 0x24ac31eb, 0xb57e95d9, 0x4aecd179, 0x32e32dcb and 0x180f7b62, their names' hashes, as pspautotests' imports
+name them): asked about before one is started it's the wrong type (0x80110005), as every dialog answers, and the
+game goes on; started, its parameters must be 0x590 or 0x598 bytes (else 0x80110004, chosen from the structure's
+two sizes in later SDKs), and it runs and is cancelled, by Update or Abort (Abort while it isn't running: the wrong
+status). It reaches the autosave notice, its text drawn with the owner's fonts, and with presses the legal notice
+after it; on the RP6, the title screen, "PRESS START BUTTON".
+
+**MotorStorm: Arctic Edge** (`umd.cpp`): it registers a UMD callback (its handler at 0x0893ef6c sets flags from the
+state's bits 0x02 and 0x10/0x20), activates the drive, and waits in sceDisplayWaitVblankStartCB, a frame at a time
+(0x0893ebb0), for those flags; the kernel never told the callback anything, so the game waited for good. As
+umd/callbacks recorded: activating the drive notifies the callback with its state, deactivating it notifies it again
+(the handler runs at the next sceKernelCheckCallback, or a wait that runs callbacks, even one that returns at once).
+The state: deactivated, the drive is ready but not readable (0x12), readable again (0x32) once activated; and a
+program that gave no SDK version is told 0x22 as it's activated, without "ready" (umd/wait's SDK version cases).
+Either change wakes threads waiting for a bit of the state it brings (umd/wait). Unregistering follows umd/register:
+any ID but the one registered is refused, 0 too while one is registered (0 is taken while none is), and the result is
+the ID, or 0 for programs of SDKs after 3.00. The drive keeps whether it's deactivated (`umdDeactivated`), so the
+state's version goes to 15. The game shows its epilepsy warning and memory stick notice; with presses, its studio
+logos, a stretch of black, and its intro movie (frame 4800 of 6000).
+
+**Chili Con Carnage** (`raster.cpp`'s `triangleRows()` and `lineRows()`, `four.cpp`'s `triangleFours()`): its logo,
+a swizzled 8-bit texture in VRAM (0x041ed680), is a fan drawn at depth 65535 with the depth test "at least as near"
+(GEQUAL) over a background at 65535. The rasterizer blends each pixel's depth from the corners in floats, the
+weights' sum divided out again, and at some pixels that came to a hair under 65535, which the whole number cut to
+65534: those pixels failed the test, in stripes. The game's two display lists, used in turn, draw the logo at
+slightly different sizes, so frames alternated striped and whole. Corners at one depth now give every pixel that
+depth, on both rasterizers and on lines (the smallest change that fixes it: the GPU renderers' agents work on the
+GE too). The test draws the logo's three sizes and a line at 65535, four pixels at a time and one; without the fix
+8607, 21 and 410 pixels of the fans were missing and the line drew 417 of 470. "psp measure" is unchanged.
+Left: a smooth triangle whose corners share a color can lose a level the same way (255 to 254).
+
+**Points past z / w ±1** (`draw.cpp`): part 33 found the PSP drops them even with DEPTH_CLIP_ENABLE on. A point is
+now a primitive of one corner: past either end, it isn't drawn, the clamp on or off. "psp measure": 3d-rules from 6
+to 4 of 8192 pixels apart, every other measurement the same.
+
+**The re-run report** (#158, corrected): the same run, its list of missing functions unchanged. All of its top 15
+are here now (scePsmf and scePsmfPlayer since part 31, the rest since part 32) but scePower 0xa85880d0, which
+pspautotests imports only as an unnamed `scePower_A85880D0`: nothing says what it does, so it stays missing.
+
+**Checks.** `tests/psp`: 312 groups, none failing, with the sanitizers and without; `tests/psp/ares`: 302 checks,
+none failing (a version 14 state refused). The ten priority games, 3000 frames each against the base (8b0262b25):
+the same pictures and the same sound, but for Burnout Legends' frame 3000 and Lumines' frame 600, the same screens
+a moment apart.
+
+**Left, and why:**
+- Killzone's jump into VRAM after loading `mpeg.prx` (above).
+- The other dialogs' parameter sizes (utility/dialog's statuses and sizes still differ), and the Screenshot and
+  NpSignin dialogs, which nothing here has asked for.
+- Colors that blend from equal corners losing a level (above): no game is known to show it.
+
 ## Part 38: the emulation thread faster, the CPU's recompiler first
 
-On branch `cursor/psp-cpu-speed-2b67`, on top of part 33's `cursor/psp-ge-curves-2b67` (70b239ac6). The task: the
+On branch `cursor/psp-cpu-speed-2b67`, on top of part 37's `cursor/psp-hle-games7-2b67`; measured from part 33's
+`cursor/psp-ge-curves-2b67` (70b239ac6). The task: the
 emulation thread faster without changing any result, bit for bit. That thread runs the Allegrex (its recompiler,
 with the interpreter as the reference and fallback) and the GE's setup: decoding, transforming and lighting
 vertices, clipping, setting primitives up and handing them to the drawing threads. Original code: no PPSSPP or

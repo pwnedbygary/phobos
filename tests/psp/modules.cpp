@@ -257,6 +257,73 @@ static auto delayModule() -> TestModule {
   return m;
 }
 
+//"TESTLIVES": its module_start starts a thread of its own, "lives" (priority 0x30), and returns. The thread calls
+//ProgLib's function (the program's) once, writing what it gave at Results + 0x68, then counts at Results + 0x64,
+//once a millisecond (sceKernelDelayThread), for good.
+static auto livesModule() -> TestModule {
+  TestModule m;
+  m.name = "TESTLIVES";
+  m.imports = {{"ThreadManForUser", Kernel::nid("sceKernelCreateThread")},
+               {"ThreadManForUser", Kernel::nid("sceKernelStartThread")},
+               {"ThreadManForUser", Kernel::nid("sceKernelDelayThread")}, {"ProgLib", ProgramNID}};
+  m.words = {{0x500, 'l' | 'i' << 8 | 'v' << 16 | 'e' << 24}, {0x504, 's'}};
+  m.start = 0;
+  //where it is, found by a branch that links (ra: the word after its delay slot), as nothing here is relocated
+  m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), bgezal(zero, 1), nop};
+  u32 here = m.code.size() * 4, loopAt = m.code.size();  //(the loop's offset, put in below)
+  m.code.insert(m.code.end(), {addiu(a1, ra, 0), addiu(a0, ra, 0x500 - here), addiu(a2, zero, 0x30),
+                               addiu(a3, zero, 0x1000), addiu(t0, zero, 0), addiu(t1, zero, 0)});
+  callStub(m, 0x3c0);
+  m.code.insert(m.code.end(), {addu(a0, v0, zero), addiu(a1, zero, 0)});
+  callStub(m, 0x3c8, addiu(a2, zero, 0));
+  m.code.insert(m.code.end(), {lw(ra, 12, sp), addiu(sp, sp, 16), jr(ra), addiu(v0, zero, 0)});
+  u32 loop = m.code.size() * 4;
+  m.code[loopAt] = addiu(a1, ra, loop - here);
+  callStub(m, 0x3d8);
+  m.code.insert(m.code.end(), {lui(s0, Results >> 16), ori(s0, s0, Results & 0xffff), sw(v0, 0x68, s0)});
+  u32 count = m.code.size();
+  m.code.insert(m.code.end(), {lw(t0, 0x64, s0), addiu(t0, t0, 1), sw(t0, 0x64, s0)});
+  callStub(m, 0x3d0, addiu(a0, zero, 1000));
+  m.code.push_back(beq(zero, zero, s32(count) - s32(m.code.size()) - 1));
+  m.code.push_back(nop);
+  return m;
+}
+
+//"TESTBOOT", a program that boots another, as Killzone: Liberation's does: it loads and starts the module at path
+//(its ID at Results + 0x60), then stops and unloads itself as later SDKs do,
+//sceKernelStopUnloadSelfModuleWithStatus(1, 4, Results + 0x30, 0, 0), writing what it said at Results + 0x34 should that be refused. Its module_stop writes
+//0x5709 at Results + 0x20, its argument's length and first word at Results + 0x24 and 0x28, waits 10 milliseconds
+//and writes 0x570b at Results + 0x2c. It exports ProgLib's function, which returns 0x77.
+static auto bootModule(u32 path) -> TestModule {
+  TestModule m;
+  m.name = "TESTBOOT";
+  m.imports = {{"ModuleMgrForUser", Kernel::nid("sceKernelLoadModule")},
+               {"ModuleMgrForUser", Kernel::nid("sceKernelStartModule")},
+               {"ModuleMgrForUser", StopUnloadSelfWithStatusNID},
+               {"ThreadManForUser", Kernel::nid("sceKernelDelayThread")}};
+  m.start = 0;
+  m.code = {lui(a0, path >> 16), ori(a0, a0, path & 0xffff), addiu(a1, zero, 0)};
+  callStub(m, 0x3c0, addiu(a2, zero, 0));
+  m.code.insert(m.code.end(), {lui(s0, Results >> 16), ori(s0, s0, Results & 0xffff), sw(v0, 0x60, s0),
+                               addu(a0, v0, zero), addiu(a1, zero, 0), addiu(a2, zero, 0), addiu(a3, zero, 0)});
+  callStub(m, 0x3c8, addiu(t0, zero, 0));
+  m.code.insert(m.code.end(), {addiu(a0, zero, 1), addiu(a1, zero, 4), lui(a2, (Results + 0x30) >> 16),
+                               ori(a2, a2, (Results + 0x30) & 0xffff), addiu(a3, zero, 0)});
+  callStub(m, 0x3d0, addiu(t0, zero, 0));
+  m.code.insert(m.code.end(), {sw(v0, 0x34, s0), beq(zero, zero, -1), nop});
+  m.stop = m.code.size() * 4;
+  m.code.insert(m.code.end(), {addiu(sp, sp, -16), sw(ra, 12, sp)});
+  store(m.code, Results + 0x20, 0x5709);
+  m.code.insert(m.code.end(), {sw(a0, 4, t9), lw(t0, 0, a1), sw(t0, 8, t9)});
+  callStub(m, 0x3d8, addiu(a0, zero, 10000));
+  store(m.code, Results + 0x2c, 0x570b);
+  m.code.insert(m.code.end(), {lw(ra, 12, sp), addiu(sp, sp, 16), jr(ra), addiu(v0, zero, 0)});
+  u32 function = m.code.size() * 4;
+  m.code.insert(m.code.end(), {jr(ra), addiu(v0, zero, 0x77)});
+  m.exports = {{"ProgLib", {{ProgramNID, function}}}};
+  return m;
+}
+
 //A machine whose own areas (the test program's code, its stubs, strings and results) are handed out first, so the
 //modules it loads go above them.
 static auto machine(KernelMachine& m) -> void {
@@ -585,7 +652,7 @@ static auto sizes() -> void {
 //for it told how it ended; the module's module_stop runs with the argument given, on a thread of its own; then the
 //module goes, its memory back to the user partition, and the program runs on. From its module_start too: the thread
 //that started it gets its ID, and the exit status as module_start's result. Refused while another thread runs its
-//module_start. The program itself (or code no module holds) calling it is the program leaving.
+//module_start. The program itself calling it goes as any module does; code no module holds is refused.
 static auto unloadThemselves() -> void {
   HostFolder stick;
   put(stick, "SELF.PRX", selfModule(SelfStart::Returns).build());
@@ -675,26 +742,36 @@ static auto unloadThemselves() -> void {
     CHECK(m.kernel.modules.count(uid) && m.kernel.modules[uid].status == Kernel::ModuleStatus::Starting, true);
   }
 
-  //the program itself, or code no module holds
+  //the program itself, which goes as any module would (programUID 0 from then on), its thread with it; and code no
+  //module holds, which is refused, and runs on
   for(bool program : {false, true}) {
     KernelMachine m;
+    u32 uid = 0;
     if(program) {
-      m.kernel.programUID = m.kernel.newUID();
+      uid = m.kernel.programUID = m.kernel.newUID();
       m.kernel.module.segments = {{0x0880'1000, 0x1000}};
     }
     Assembler main{m, 0x0880'1000};
     main.li(a0, 0); main.li(a1, 0); main.li(a2, 0);
     main.call("sceKernelSelfStopUnloadModule");
-    main.put(halt);
+    main.li(t0, Results);
+    main.put(sw(v0, 0, t0));
+    main.call("sceKernelExitGame");
+    m.system.memory.write(Allegrex::Word, Results, 0x1234);
     m.runProgram(0x0880'1000, false);
-    CHECK(m.kernel.exited, true);
+    CHECK(m.kernel.exited, !program);
+    CHECK(word(m.system, Results), program ? 0x1234 : Kernel::ErrorCanNotStop);
+    CHECK(m.kernel.programUID, 0);
+    CHECK(m.kernel.modules.count(uid), 0);
+    CHECK(m.kernel.threads.size(), program ? 0 : 1);
   }
 }
 
 //A module unloads itself as later SDKs do (sceKernelStopUnloadSelfModuleWithStatus, known by its NID alone): as with
 //sceKernelSelfStopUnloadModule, the thread that asked ends and is deleted, the one waiting for it given its exit
 //status; module_stop runs with the argument, on a thread the options (the fifth argument) make; the module and its
-//memory go, and the program runs on to its own end. The program itself (or code no module holds) calling it leaves.
+//memory go, and the program runs on to its own end. The program itself calling it goes as a module, and code no
+//module holds is refused.
 static auto unloadWithStatus() -> void {
   constexpr u32 Options = Results + 0x180, Info = Results + 0x1a0;
   HostFolder stick;
@@ -764,10 +841,13 @@ static auto unloadWithStatus() -> void {
     main.li(a0, 1); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
     main.put(jal(stub));
     main.put(nop);
-    main.print("never\n");
+    main.print("refused\n");
+    main.call("sceKernelExitGame");
     m.runProgram(0x0880'1000, false);
-    CHECK(m.kernel.exited, true);
-    CHECK(m.output.empty(), true);
+    CHECK(m.kernel.exited, !program);
+    CHECK(m.output == (program ? "" : "refused\n"), true);
+    CHECK(m.kernel.programUID, 0);
+    CHECK(m.kernel.threads.size(), program ? 0 : 1);
   }
 }
 
@@ -1065,6 +1145,69 @@ static auto loadExec() -> void {
   CHECK(m.kernel.module.name.empty(), true);  //the old program still
 }
 
+//A program that loads and starts a module, then stops and unloads itself, as Killzone: Liberation's boot program
+//does (on both engines): only it goes, as a module would, its module_stop run first, while the module it started,
+//and that module's thread, run on. The module's import of the program's function reaches it till then, and goes back
+//to the kernel with it. A state saved while the program's module_stop runs carries on as the machine does.
+static auto programUnloadsItself() -> void {
+  HostFolder stick;
+  put(stick, "LIVES.PRX", livesModule().build());
+  constexpr u32 Path = KernelMachine::Strings + 0x800;
+  auto boot = bootModule(Path).build();
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    m.system.recompiler.enabled = recompile;
+    std::string error;
+    CHECK(m.kernel.load(boot.data(), boot.size(), "ms0:/PSP/GAME/BOOT/EBOOT.PBP", error), true);
+    if(!error.empty()) continue;
+    m.kernel.mount("ms0", stick.path.string());
+    std::string path = "ms0:/LIVES.PRX";
+    m.system.memory.copyIn(Path, path.c_str(), path.size() + 1);
+    m.system.memory.write(Allegrex::Word, Results + 0x30, 0x4152'4731);
+    u32 program = m.kernel.programUID;
+    m.kernel.run(Kernel::CPUFrequency / 200);  //5 milliseconds: the program's module_stop waits
+    CHECK(m.kernel.exited, false);
+    CHECK(m.kernel.programUID, 0);
+    CHECK(m.kernel.modules.count(program) && m.kernel.modules[program].status == Kernel::ModuleStatus::Unloading,
+          true);
+    CHECK(word(m.system, Results + 0x20), 0x5709);
+    CHECK(word(m.system, Results + 0x2c), 0);
+    CHECK(roundTrip(m), true);
+    KernelMachine n;
+    CHECK(loadState(n, saveState(m)), true);
+    for(auto* machine : {&m, &n}) machine->kernel.run(Kernel::CPUFrequency / 10);
+    CHECK(saveState(n) == saveState(m), true);
+
+    u32 lives = word(m.system, Results + 0x60);
+    CHECK(m.kernel.exited, false);
+    CHECK(m.kernel.modules.count(program), 0);
+    CHECK(m.kernel.modules.count(lives), 1);
+    CHECK(word(m.system, Results + 0x34), 0);  //it never came back
+    CHECK(word(m.system, Results + 0x24), 4);
+    CHECK(word(m.system, Results + 0x28), 0x4152'4731);
+    CHECK(word(m.system, Results + 0x2c), 0x570b);
+    CHECK(word(m.system, Results + 0x68), 0x77);
+    CHECK(word(m.system, Results + 0x64) > 50, true);  //a count a millisecond, for most of a tenth of a second
+    CHECK(m.kernel.threads.size(), 1);  //"lives": the program's own thread and its module_stop's are gone
+    bool kept = std::any_of(m.kernel.blocks.begin(), m.kernel.blocks.end(), [](auto& b) {
+      return b.name == "TESTBOOT";
+    });
+    CHECK(kept, false);
+    if(m.kernel.modules.count(lives)) {
+      auto& imports = m.kernel.modules[lives].module.imports;
+      CHECK(imports.size(), 4);
+      if(imports.size() == 4) CHECK(word(m.system, imports[3].stub + 4) & 0x3f, 0x0c);  //a syscall again
+    }
+    //the module list has the module alone, and the program can't be asked about
+    u32 list = Results + 0x100;
+    CHECK(n.call("sceKernelGetModuleIdList", {list, 16, list + 16}), 0);
+    CHECK(word(n.system, list + 16), 1);
+    CHECK(word(n.system, list), lives);
+    n.system.memory.write(Allegrex::Word, list + 0x20, 96);
+    CHECK(n.call("sceKernelQueryModuleInfo", {program, list + 0x20}), Kernel::ErrorUnknownModule);
+  }
+}
+
 auto moduleTests() -> Tests {
   return {
     {"modules start and link", startAndLink}, {"modules linking", linking}, {"modules stand-ins", standIns},
@@ -1072,7 +1215,7 @@ auto moduleTests() -> Tests {
     {"modules unload themselves", unloadThemselves}, {"modules unload with a status", unloadWithStatus},
     {"modules exit threads", exitThreads}, {"modules terminated threads", terminatedThreads},
     {"modules entry points", entryPoints}, {"modules state", stateWhileStarting},
-    {"programs started in another's place", loadExec},
+    {"programs started in another's place", loadExec}, {"programs unloading themselves", programUnloadsItself},
   };
 }
 

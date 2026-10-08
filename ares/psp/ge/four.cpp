@@ -501,6 +501,8 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
     least[k] = a[k] > 0 || (a[k] == 0 && b[k] > 0) ? 0 : 1;
   }
   bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
+  bool oneDepth = r.z[0] == r.z[1] && r.z[1] == r.z[2];  //(as triangleRows())
+  s32x4 depth = splatLanes(oneDepth ? s32(std::clamp(r.z[0], 0.0f, 65535.0f)) : 0);
   bool blended = !r.flat, shining = !r.flat && r.shines;
   float colors[3][4], shines[3][4];
   for(u32 k = 0; k < 3; k++) {
@@ -543,7 +545,7 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
       f32x4 w1 = __builtin_convertvector(edge[1], f32x4);
       f32x4 w2 = __builtin_convertvector(edge[2], f32x4);
       for(u32 k = 0; k < 3; k++) edge[k] += s32(a[k] * 64);
-      four.z = needsZ ? depthLanes((r.z[0] * w0 + r.z[1] * w1 + r.z[2] * w2) / r.total) : s32x4{};
+      four.z = !needsZ ? s32x4{} : oneDepth ? depth : depthLanes((r.z[0] * w0 + r.z[1] * w1 + r.z[2] * w2) / r.total);
       if(!depthFirst<Format>(p, x, y, four)) continue;
       if(blended) blendColor(colors, w0, w1, w2, four.color, 4);
       else for(u32 n = 0; n < 4; n++) four.color[n] = flatColor[n];

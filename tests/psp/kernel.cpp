@@ -360,7 +360,8 @@ static auto userPartition() -> void {
 
 //The SDK and compiler versions a program's start-up code tells the system, through the first SDK's function and
 //one of its siblings for later ones (whose NIDs aren't their names' hashes), read back; and a later SDK's way of
-//unloading itself, which ends the program when the program calls it (modules.cpp has a module calling it).
+//unloading itself, refused (CAN_NOT_STOP) to code no module holds, which runs on (modules.cpp has a module, and the
+//program, calling it).
 static auto sdkVersions() -> void {
   KernelMachine m;
   CHECK(m.call("sceKernelGetCompiledSdkVersion", {}), 0);
@@ -384,10 +385,14 @@ static auto sdkVersions() -> void {
     main.li(a0, 1); main.li(a1, 0); main.li(a2, 0); main.li(a3, 0); main.li(t0, 0);
     main.put(jal(stub));
     main.put(nop);
-    main.print("never\n");
+    main.li(t0, KernelMachine::Results);
+    main.put(sw(v0, 0, t0));
+    main.print("refused\n");
+    main.call("sceKernelExitGame");
     n.runProgram(0x0880'1000, recompile);
     CHECK(n.kernel.exited, true);
-    CHECK(n.output == "aborting\n", true);
+    CHECK(n.output == "aborting\nrefused\n", true);
+    CHECK(n.system.memory.read(4, KernelMachine::Results), Kernel::ErrorCanNotStop);
     CHECK(n.notes.size(), 0);
   }
 }

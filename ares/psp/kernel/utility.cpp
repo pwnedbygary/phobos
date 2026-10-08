@@ -17,6 +17,8 @@
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
 //  - The keyboard: each field's text accepted as it is, an empty one given the console's nickname (keyboard()).
 //  - Network settings, game sharing, the web browser: cancelled, as if the player backed out.
+//  - Installing a game's data to the memory stick (gamedata install, which later games show at their first start):
+//    cancelled too, the game going on from the disc.
 //
 //Modules: games load the system's optional libraries (sound codecs, network, ...) before using them. Their functions
 //are the HLE kernel's own, so loading one just marks it loaded (a second load, or unloading one that isn't, fails as
@@ -25,9 +27,10 @@
 namespace {
   //the dialogs' statuses, and kinds
   enum : u32 { DialogNone = 0, DialogStarting = 1, DialogRunning = 2, DialogFinished = 3, DialogClosing = 4 };
-  enum : u32 { DialogSavedata = 1, DialogMessage, DialogKeyboard, DialogNetwork, DialogSharing, DialogBrowser };
+  enum : u32 { DialogSavedata = 1, DialogMessage, DialogKeyboard, DialogNetwork, DialogSharing, DialogBrowser,
+               DialogInstall };
   //errors (PPSSPP's ErrorCodes.h, from the PSP)
-  constexpr u32 UtilityInvalidStatus = 0x8011'0001, UtilityWrongType = 0x8011'0005;
+  constexpr u32 UtilityInvalidStatus = 0x8011'0001, UtilityInvalidSize = 0x8011'0004, UtilityWrongType = 0x8011'0005;
   constexpr u32 UtilityBadParameterID = 0x8011'0103;
   constexpr u32 ModuleBadID = 0x8011'1101, ModuleLoaded = 0x8011'1102, ModuleNotLoaded = 0x8011'1103;
   constexpr u32 SavedataLoadNoData = 0x8011'0307, SavedataReadNoData = 0x8011'0327, SavedataSizesNoData = 0x8011'03c7;
@@ -419,11 +422,39 @@ auto Kernel::sceUtilityHtmlViewerGetStatus() -> void { dialogStatus(DialogBrowse
 auto Kernel::sceUtilityHtmlViewerUpdate() -> void { dialogUpdate(DialogBrowser); }
 auto Kernel::sceUtilityHtmlViewerShutdownStart() -> void { dialogShutdown(DialogBrowser); }
 
+//Installing a game's data (its parameters: the common part, then what to install where; 0x590 bytes, or 0x598 as
+//later SDKs have them, and nothing else is taken). Ace Combat: Joint Assault asks about it (GetStatus) at boot, and
+//goes on when it's told no install dialog was started (the wrong type, as every dialog answers). Cancelled when it
+//runs.
+auto Kernel::sceUtilityGamedataInstallInitStart() -> void {
+  dialogDue();
+  if(dialog.status != DialogNone && dialog.status != DialogClosing) return result(UtilityInvalidStatus);
+  if(!memory.reaches(arg(0), 4)) return result(ErrorInvalidPointer);
+  if(u32 size = memory.read(4, arg(0)); size != 0x590 && size != 0x598) return result(UtilityInvalidSize);
+  dialogStart(DialogInstall);
+}
+auto Kernel::sceUtilityGamedataInstallGetStatus() -> void { dialogStatus(DialogInstall); }
+auto Kernel::sceUtilityGamedataInstallUpdate() -> void { dialogUpdate(DialogInstall); }
+auto Kernel::sceUtilityGamedataInstallShutdownStart() -> void { dialogShutdown(DialogInstall); }
+
+//The player (or the game) stopping an install while it runs: it finishes, cancelled.
+auto Kernel::sceUtilityGamedataInstallAbort() -> void {
+  if(dialog.kind != DialogInstall) return result(UtilityWrongType);
+  dialogDue();
+  if(dialog.status != DialogRunning) return result(UtilityInvalidStatus);
+  memory.write(4, dialog.parameters + 28, DialogCancelled);
+  dialog.status = DialogFinished;
+  result(0);
+}
+
 //(module: psputility_modules.h's PSP_MODULE_*): network (0x100-0x106), USB devices (0x200-0x203), sound and video
-//codecs (0x300-0x307), the network platform (0x400-0x402), DRM (0x500), infrared (0x600).
+//codecs (0x300-0x308), the network platform (0x400-0x402), DRM (0x500), infrared (0x600). pspsdk's list stops at
+//0x307; later firmwares have one more sound and video module, 0x308 (taken here to be the MP4 library, sceMp4, whose
+//functions the kernel would stand in for as for the rest). Ace Combat: Joint Assault loads it at boot and stops if
+//it's refused; 0x309 still is.
 static auto utilityModuleKnown(u32 module) -> bool {
   u32 group = module >> 8, index = module & 0xff;
-  static constexpr u8 Counts[] = {0, 7, 4, 8, 3, 1, 1};  //how many modules in each group
+  static constexpr u8 Counts[] = {0, 7, 4, 9, 3, 1, 1};  //how many modules in each group
   return group >= 1 && group <= 6 && index < Counts[group];
 }
 

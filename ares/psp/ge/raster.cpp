@@ -127,6 +127,12 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
     least[k] = a[k] > 0 || (a[k] == 0 && b[k] > 0) ? 0 : 1;
   }
   bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
+  //Corners at one depth give every pixel that depth. Blended in floats, the weights' sum divided out again, it came
+  //out a hair under at some pixels (65534.996 for 65535), which the whole number then cut to the one below: Chili Con
+  //Carnage's logo, drawn at 65535 over a background at 65535 with the depth test "at least as near", lost those
+  //pixels, a stripe here and there, frame by frame as the logo's size changed.
+  bool oneDepth = r.z[0] == r.z[1] && r.z[1] == r.z[2];
+  u32 depth = oneDepth ? u32(std::clamp(r.z[0], 0.0f, 65535.0f)) : 0;
   bool blended = !r.flat, shining = !r.flat && r.shines;
   float colors[3][4], shines[3][4];  //each corner's channels, as the blending takes them
   for(u32 k = 0; k < 3; k++) {
@@ -162,7 +168,7 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
       };
       u32 color = blended ? blendColor(colors, w0, w1, w2) : r.flatColor;
       u32 specular = shining ? blendColor(shines, w0, w1, w2) : r.flatSpecular;
-      u32 z = needsZ ? u32(std::clamp(blend(r.z[0], r.z[1], r.z[2]), 0.0f, 65535.0f)) : 0;
+      u32 z = !needsZ ? 0 : oneDepth ? depth : u32(std::clamp(blend(r.z[0], r.z[1], r.z[2]), 0.0f, 65535.0f));
       float u = 0, v = 0;
       if(look.textured && r.perspective) {
         float ka = w0 / r.w[0], kb = w1 / r.w[1], kc = w2 / r.w[2];
@@ -183,13 +189,16 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
 //A line's pixels in rows fromY to toY (draw.cpp's line() says which): along x (y when it's steep) from its first
 //to its last, each in the row (column) where it crosses the pixel's middle. Its colors, depth, fog and texture
 //coordinates are blended from its ends by how far along x that middle is, held to its ends, as a triangle's are
-//from its corners (the same arithmetic, with two weights).
-template<u32 Format>
-auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
+//from its corners (the same arithmetic, with two weights). Worked out here, each pixel's values, for whoever draws
+//them: lineRows() here, or the hardware renderer, which draws each as a pixel-sized square (gpu/gpu.cpp).
+auto GE::linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& pixels) -> void {
+  pixels.clear();
   auto& l = job.line;
   auto& look = *job.look;
   auto& p = look.pixel;
   bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
+  bool oneDepth = l.z[0] == l.z[1];  //(as triangleRows())
+  u32 depth = oneDepth ? u32(std::clamp(l.z[0], 0.0f, 65535.0f)) : 0;
   bool shining = !l.flat && l.shines;
   float colors[2][4], shines[2][4];
   for(u32 k = 0; k < 2; k++) {
@@ -211,7 +220,7 @@ auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
     float w0 = float(l.along - s), w1 = float(s);
     u32 color = l.flat ? l.flatColor : blendColor(colors, w0, w1);
     u32 specular = shining ? blendColor(shines, w0, w1) : l.flatSpecular;
-    u32 z = needsZ ? u32(std::clamp((l.z[0] * w0 + l.z[1] * w1) / total, 0.0f, 65535.0f)) : 0;
+    u32 z = !needsZ ? 0 : oneDepth ? depth : u32(std::clamp((l.z[0] * w0 + l.z[1] * w1) / total, 0.0f, 65535.0f));
     float u = 0, v = 0;
     if(look.textured && l.perspective) {
       float ka = w0 / l.w[0], kb = w1 / l.w[1];
@@ -223,7 +232,7 @@ auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
       v = l.v[0] + f64(s) / 16 * l.vStep;
     }
     u32 fog = p.fog ? fogAmount((l.fog[0] * w0 + l.fog[1] * w1) / total) : 255;
-    shadeAs<Format>(look, job.linear, x, y, z, color, specular, u, v, fog);
+    pixels.push_back({x, y, z, color, specular, fog, u, v});
   };
   s32 top = std::max(job.firstY, fromY), bottom = std::min(job.lastY, toY);
   if(!l.steep) {
@@ -236,6 +245,16 @@ auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
       s64 x = acrossAt(y);
       if(x >= job.firstX && x <= job.lastX) shade(s32(x), y, s64(y) * 16 + 8);
     }
+  }
+}
+
+template<u32 Format>
+auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
+  thread_local std::vector<LinePixel> pixels;  //(kept, so that a line seldom allocates; each thread its own)
+  linePixels(job, fromY, toY, pixels);
+  for(auto& pixel : pixels) {
+    shadeAs<Format>(*job.look, job.linear, pixel.x, pixel.y, pixel.z, pixel.color, pixel.specular, pixel.u, pixel.v,
+                    pixel.fog);
   }
 }
 
