@@ -508,11 +508,30 @@ struct Allegrex {
     auto emitChain(u32 count) -> void;
     auto emitChainTo(u32 count, u32 target) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
+    auto emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;
+
+    //recompiler.cpp: the game's registers a block holds in host registers, saved registers S3 on (emit())
+    static constexpr u32 Held = SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 < 7 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 3 : 7;
+    struct Holding {
+      s8 slot[32];       //the host register holding each game register's value, or -1
+      s8 held[Held];     //the game register each host register holds the value of, or -1
+      s8 pending[Held];  //the game register each host register holds a new value for, not yet stored, or -1
+      u32 used[Held];    //when each was last used: the least recently used is the first to go
+      u32 pinned = 0;    //the host registers the instruction being compiled uses
+      u32 clock = 0;
+    } holding;
+    auto take() -> u32;
+    auto use(u32 index) -> op_base;
+    auto def(u32 index) -> op_base;
+    auto wrote() -> void;
+    auto forget(u32 index) -> void;
+    auto forgetAll() -> void;
     auto endsBlock(u32 instruction) const -> bool;
 
     //recompiler-ipu.cpp
     auto emitInstruction(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitNative(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
     auto emitSPECIAL(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
     auto emitSPECIAL3(u32 instruction) -> bool;
     auto emitMultiply(u32 instruction, bool isSigned, s32 accumulate) -> void;

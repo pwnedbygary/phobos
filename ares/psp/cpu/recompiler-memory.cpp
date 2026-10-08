@@ -18,7 +18,7 @@
 
 auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, bool delaySlot, bool store,
                                        u32 alignment, s16 offset, const std::function<void ()>& access) -> void {
-  mov64_u32(reg(0), gpr(instruction >> 21 & 31));
+  mov64_u32(reg(0), use(instruction >> 21 & 31));
   add64(reg(0), reg(0), imm(offset));
   sljit_jump* misaligned = nullptr;
   if(alignment > 1) {
@@ -36,19 +36,21 @@ auto Allegrex::Recompiler::emitMemory(u32 address, u32 instruction, u32 count, b
 
   if(misaligned) setLabel(misaligned);
   setLabel(missing);
-  emitInterpreter(address, instruction, count, delaySlot);
+  emitFallback(address, instruction, count, delaySlot);  //(a load's result read back from what it wrote)
   setLabel(done);
 }
 
 #define RTn (instruction >> 16 & 31)
-#define Rt  gpr(RTn)
+#define Rt  use(RTn)
+#define Dt  def(RTn)
 #define FT  (instruction >> 16 & 31)
 #define VTS ((instruction >> 16 & 31) | (instruction & 3) << 5)
 #define VTQ ((instruction >> 16 & 31) | (instruction & 1) << 5)
 
 //Each access below reads or writes the host's memory at Host, the page emitMemory() found plus the address's low 12
 //bits, or a quad's at mem(reg(1), byte offset). A load into r0 does nothing once it's past the checks (which can
-//still raise an exception). Stores take their value in reg(2), as reg(0) and reg(1) hold the address.
+//still raise an exception). Stores take their value in reg(2), as reg(0) and reg(1) hold the address. A load's
+//result goes into the host register that holds it from then on (recompiler.cpp's use() and def()).
 #define Host mem(SLJIT_MEM2(SLJIT_R1, SLJIT_R0), 0)
 auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool {
   if(!self.pages) return false;
@@ -56,6 +58,11 @@ auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count
   s16 offset = s16(instruction);
   s16 vfpuOffset = s16(instruction & 0xfffc);
   auto memory = [&](bool store, u32 alignment, s16 displacement, const std::function<void ()>& access) {
+    u32 op = instruction >> 26;
+    //(a store's value, and the bytes lwl and lwr keep, are read before the fast path splits off)
+    if(op == 0x28 || op == 0x29 || op == 0x2b || op == 0x2a || op == 0x2e || ((op == 0x22 || op == 0x26) && RTn)) {
+      (void)Rt;
+    }
     emitMemory(address, instruction, count, delaySlot, store, alignment, displacement, access);
     return true;
   };
@@ -65,36 +72,31 @@ auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count
   //LB Rt,Rs,i16
   case 0x20: return memory(false, 1, offset, [&] {
     if(!RTn) return;
-    mov32_s8(reg(0), Host);
-    mov32(Rt, reg(0));
+    mov32_s8(Dt, Host);
   });
 
   //LH Rt,Rs,i16
   case 0x21: return memory(false, 2, offset, [&] {
     if(!RTn) return;
-    mov32_s16(reg(0), Host);
-    mov32(Rt, reg(0));
+    mov32_s16(Dt, Host);
   });
 
   //LW Rt,Rs,i16
   case 0x23: return memory(false, 4, offset, [&] {
     if(!RTn) return;
-    mov32(reg(0), Host);
-    mov32(Rt, reg(0));
+    mov32(Dt, Host);
   });
 
   //LBU Rt,Rs,i16
   case 0x24: return memory(false, 1, offset, [&] {
     if(!RTn) return;
-    mov32_u8(reg(0), Host);
-    mov32(Rt, reg(0));
+    mov32_u8(Dt, Host);
   });
 
   //LHU Rt,Rs,i16
   case 0x25: return memory(false, 2, offset, [&] {
     if(!RTn) return;
-    mov32_u16(reg(0), Host);
-    mov32(Rt, reg(0));
+    mov32_u16(Dt, Host);
   });
 
   //SB Rt,Rs,i16
@@ -113,6 +115,59 @@ auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count
   case 0x2b: return memory(true, 4, offset, [&] {
     mov32(reg(2), Rt);
     mov32(Host, reg(2));
+  });
+
+  //LWL and LWR Rt,Rs,i16, SWL and SWR: an unaligned word's halves, as the interpreter has them (interpreter-ipu.cpp),
+  //from the aligned word round the address, whose byte within it (reg(2)) gives the shift: for lwl and swl, 8 for
+  //each byte below the word's last; for lwr and swr, 8 for each above its first. lwl keeps rt's bytes below the
+  //shift (a mask of shift ones), lwr those it shifts in no bytes over (the top shift bits); swl and swr keep the
+  //memory word's likewise. A shift is 24 at most, so none of these shifts by 32 or more. A store's read and write
+  //go through the store table, as sw's, onto memory that's plain host memory either way.
+  case 0x22: case 0x26: return memory(false, 1, offset, [&] {
+    if(!RTn) return;
+    bool left = instruction >> 26 == 0x22;
+    and32(reg(2), reg(0), imm(3));
+    and64(reg(0), reg(0), imm(0xffc));
+    mov32(reg(3), Host);
+    if(left) xor32(reg(2), reg(2), imm(3));
+    shl32(reg(2), reg(2), imm(3));
+    if(left) {
+      shl32(reg(3), reg(3), reg(2));
+      mov32(reg(1), imm(1));
+      shl32(reg(1), reg(1), reg(2));
+      sub32(reg(1), reg(1), imm(1));
+    } else {
+      lshr32(reg(3), reg(3), reg(2));
+      mov32(reg(1), imm(-1));
+      lshr32(reg(1), reg(1), reg(2));
+      xor32(reg(1), reg(1), imm(-1));
+    }
+    and32(reg(1), reg(1), Rt);
+    or32(Dt, reg(1), reg(3));
+  });
+  case 0x2a: case 0x2e: return memory(true, 1, offset, [&] {
+    bool left = instruction >> 26 == 0x2a;
+    and32(reg(2), reg(0), imm(3));
+    and64(reg(0), reg(0), imm(0xffc));
+    add64(reg(1), reg(1), reg(0));  //(the word's host address, freeing reg(0))
+    mov32(reg(3), mem(reg(1), 0));
+    if(left) xor32(reg(2), reg(2), imm(3));
+    shl32(reg(2), reg(2), imm(3));
+    if(left) {
+      mov32(reg(0), imm(-1));
+      lshr32(reg(0), reg(0), reg(2));
+      xor32(reg(0), reg(0), imm(-1));
+      and32(reg(3), reg(3), reg(0));
+      lshr32(reg(0), Rt, reg(2));
+    } else {
+      mov32(reg(0), imm(1));
+      shl32(reg(0), reg(0), reg(2));
+      sub32(reg(0), reg(0), imm(1));
+      and32(reg(3), reg(3), reg(0));
+      shl32(reg(0), Rt, reg(2));
+    }
+    or32(reg(3), reg(3), reg(0));
+    mov32(mem(reg(1), 0), reg(3));
   });
 
   //LWC1 Ft,Rs,i16
@@ -163,6 +218,7 @@ auto Allegrex::Recompiler::emitLoadStore(u32 address, u32 instruction, u32 count
 
 #undef RTn
 #undef Rt
+#undef Dt
 #undef FT
 #undef VTS
 #undef VTQ

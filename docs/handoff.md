@@ -25,6 +25,26 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the emulation thread faster again — drawing off it, registers held — 2026-10-08
+
+Branch `cursor/psp-cpu-speed2-2b67`, on top of part 42's `cursor/psp-hle-games8-2b67` (#169; measured from part 38's
+4ebc59d97). docs/psp-core.md, part 43, has the profile, the waits and every number.
+- **The GE** (`ares/psp/ge/`): a list starting waits only for the batch it's to fill, not for everything the last
+  list left being drawn (b0af46594); lighting's light-by-material products once a primitive (3292c775f).
+- **The recompiler** (`ares/psp/cpu/`): a block holds the game's registers in host registers, written through, so
+  `ipu.r[]` is always current (5a5fc5d0c); lwl, lwr, swl and swr natively (e06caa086).
+- **Exact**: tests/allegrex (58 groups, on ARM64 and as an x86-64 build under Rosetta) and tests/psp (319, the
+  hardware renderer's included) pass. The six scenes, 300 frames at 1 and 7 GE threads: every frame's picture and
+  VRAM, RAM and the whole serialized state identical to 4ebc59d97's; on the RP6 the end states match unsettled too.
+- **Faster** on the RP6 at 7 GE threads: MC3's race 24.2 to 32.3 fps (the emulation thread 34.4 to 26.8 ms a
+  frame), its menu 30.4 to 36.2, Lumines 137 to 177; GTA's city and woods unchanged; Peace Walker's title 226 to 216.
+  At 1 thread the CPU's time is 2-9% lower (Peace Walker's the same) and the frame rates the same.
+- **Next**: the race's remaining drawing wait is a texture decoded from the batch being filled (render to texture,
+  3.4 ms a frame); then primitives drawn at once, textures read from memory as they're drawn.
+- Scratch tools and states are in `~/phobos-work/scratch/cpu-speed` (never committed); the RP6 copy is
+  `/data/local/tmp/cpu-bench3`. The RP6 is shared: take `~/phobos-work/rp6.lock` first, and time only while the
+  Phobos app isn't running.
+
 ## PSP core: Killzone's movie, the dialogs' sizes and statuses — 2026-10-08
 
 Branch `cursor/psp-hle-games8-2b67`, on top of `cursor/psp-gpu-hw2-2b67` (#168, the Vulkan renderer in Phobos).
