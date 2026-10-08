@@ -46,7 +46,7 @@ namespace {
   constexpr u32 SavedataDeleteParameter = 0x8011'0348, SavedataSaveParameter = 0x8011'0388;
   constexpr u32 SavedataSizesParameter = 0x8011'03c8;
   constexpr u32 DialogCancelled = 1;  //a dialog's result when the player backs out
-  constexpr u32 MessageAbortUpdates = 8;  //(utility/dialog/abort: 8 Updates from the start, however fast they come)
+  constexpr u32 MessageAbortUpdates = 8;  //(utility/dialog/abort: that many Updates from the start, less any already)
   //Whether InitStart takes a kind's parameters at this size (their common part's first word): the sizes
   //utility/dialog/sizes skipped as the ones each kind takes (every other size up to 0x800 refused), and those
   //utility/dialog/htmlviewer found the web browser takes.
@@ -115,6 +115,7 @@ auto Kernel::dialogStart(u32 kind) -> void {
   dialog.next = DialogRunning;
   dialog.changeAt = cycles + u64(start) * (CPUFrequency / 1'000'000);
   dialog.abortUpdates = 0;
+  dialog.runningUpdates = 0;
   result(0);
 }
 
@@ -130,6 +131,7 @@ auto Kernel::dialogUpdate(u32 kind) -> void {
   if(dialog.kind != kind) return result(UtilityWrongType);
   dialogDue();
   if(dialog.status != DialogRunning && dialog.status != DialogFinished) return result(UtilityInvalidStatus);
+  if(dialog.status == DialogRunning && !dialog.abortUpdates) dialog.runningUpdates++;
   if(dialog.status == DialogRunning && dialog.abortUpdates) {
     if(--dialog.abortUpdates == 0) {
       memory.write(4, dialog.parameters + 28, 0);
@@ -446,7 +448,11 @@ auto Kernel::sceUtilityMsgDialogAbort() -> void {
   if(dialog.kind != DialogMessage) return result(UtilityWrongType);
   dialogDue();
   if(dialog.status != DialogRunning) return result(UtilityInvalidStatus);
-  if(!dialog.abortUpdates) dialog.abortUpdates = MessageAbortUpdates;
+  //(utility/dialog/abort: max(8 - Updates so far, 1) more Updates from when it started running)
+  if(!dialog.abortUpdates) {
+    dialog.abortUpdates = dialog.runningUpdates < MessageAbortUpdates
+      ? MessageAbortUpdates - dialog.runningUpdates : 1;
+  }
   result(0);
 }
 auto Kernel::sceUtilityOskInitStart() -> void { dialogStart(DialogKeyboard); }

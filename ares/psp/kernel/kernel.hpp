@@ -1704,6 +1704,7 @@ struct Kernel {
     u64 changeAt = 0;
     u32 parameters = 0;    //where its parameters are
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
+    u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
