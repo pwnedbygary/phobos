@@ -102,20 +102,6 @@ auto GE::transformState() const -> Transform {
   return t;
 }
 
-//The same three for four vertices at once, a vertex in each lane of a vector (GE::f32x4): each lane's every number is
-//worked out by the very expression the single vertex's is, a vector where it has a number, so with the same
-//operations in the same order; and where the host fuses a product into its sum (ARM64), the compiler fuses by the
-//expression's shape, for vectors as for numbers (the first product into the sum of the second, then each next one).
-static auto times43Four(const float* m, const GE::f32x4* in, GE::f32x4* out) -> void {
-  for(u32 j = 0; j < 3; j++) out[j] = in[0] * m[j] + in[1] * m[3 + j] + in[2] * m[6 + j] + m[9 + j];
-}
-static auto times44Four(const float* m, const GE::f32x4* in, GE::f32x4* out) -> void {
-  for(u32 j = 0; j < 4; j++) out[j] = in[0] * m[j] + in[1] * m[4 + j] + in[2] * m[8 + j] + m[12 + j];
-}
-static auto turn43Four(const float* m, const GE::f32x4* in, GE::f32x4* out) -> void {
-  for(u32 j = 0; j < 3; j++) out[j] = in[0] * m[j] + in[1] * m[3 + j] + in[2] * m[6 + j];
-}
-
 //A vertex through the matrices onto the screen, with its texture coordinates (in texels) and fog.
 auto GE::transform(Vertex& vertex, const Transform& t) -> void {
   float model[3] = {vertex.x, vertex.y, vertex.z};
@@ -129,58 +115,16 @@ auto GE::transform(Vertex& vertex, const Transform& t) -> void {
     }
     for(u32 k = 0; k < 3; k++) model[k] = position[k], vertex.normal[k] = normal[k];
   }
-  float inWorld[3], inView[3], turned[3] = {};
+  float inWorld[3], inView[3];
   times43(t.world, model, inWorld);
   times43(t.view, inWorld, inView);
   times44(t.projection, inView, vertex.clip);
-  if(t.lighting || t.mapMode == 2) {
-    float sign = t.normalReverse ? -1.0f : 1.0f;
-    float own[3] = {vertex.normal[0] * sign, vertex.normal[1] * sign, vertex.normal[2] * sign};
-    turn43(t.world, own, turned);
-  }
-  transformed(vertex, t, model, inWorld, inView, turned);
-}
-
-//Four vertices side by side, as transform() takes each when there's no skinning: their matrices four at a time, a
-//vertex in each lane (above: the world's, the view's and the projection's, and the world's turn of the normal), then
-//the rest of each, which differs from vertex to vertex, by the single vertex's own code (transformed()). Skinned
-//vertices aren't taken here: the single vertex's loop over the bones, its count known only as it runs, is one the
-//compiler reshapes at full optimization, fusing its products into its sums otherwise than in the vector form, so the
-//two can differ in a last bit (measured: GTA's characters).
-auto GE::transformFour(Vertex* vertices, const Transform& t) -> void {
-  auto lanes = [&](auto part) { return f32x4{part(vertices[0]), part(vertices[1]), part(vertices[2]),
-                                             part(vertices[3])}; };
-  f32x4 model[3] = {lanes([](Vertex& v) { return v.x; }), lanes([](Vertex& v) { return v.y; }),
-                    lanes([](Vertex& v) { return v.z; })};
-  f32x4 normal[3];
-  for(u32 k = 0; k < 3; k++) normal[k] = lanes([&](Vertex& v) { return v.normal[k]; });
-  f32x4 inWorld[3], inView[3], clip[4], turned[3] = {};
-  times43Four(t.world, model, inWorld);
-  times43Four(t.view, inWorld, inView);
-  times44Four(t.projection, inView, clip);
-  if(t.lighting || t.mapMode == 2) {
-    float sign = t.normalReverse ? -1.0f : 1.0f;
-    f32x4 own[3] = {normal[0] * sign, normal[1] * sign, normal[2] * sign};
-    turn43Four(t.world, own, turned);
-  }
-  for(u32 l = 0; l < 4; l++) {
-    for(u32 k = 0; k < 4; k++) vertices[l].clip[k] = clip[k][l];
-    float laneModel[3] = {model[0][l], model[1][l], model[2][l]};
-    float laneWorld[3] = {inWorld[0][l], inWorld[1][l], inWorld[2][l]};
-    float laneView[3] = {inView[0][l], inView[1][l], inView[2][l]};
-    float laneTurned[3] = {turned[0][l], turned[1][l], turned[2][l]};
-    transformed(vertices[l], t, laneModel, laneWorld, laneView, laneTurned);
-  }
-}
-
-//The rest of a vertex's transform once its matrices are done (model: its position after skinning, inWorld and
-//inView where it is in the world and the view, turned its normal turned into the world): onto the screen, its texture
-//coordinates, its fog and its light.
-auto GE::transformed(Vertex& vertex, const Transform& t, const float model[3], const float inWorld[3],
-                     const float inView[3], const float turned[3]) -> void {
   project(vertex, t, false);
   float normal[3] = {0, 0, 1};  //in the world, one long: for lighting and environment mapping
   if(t.lighting || t.mapMode == 2) {
+    float turned[3], sign = t.normalReverse ? -1.0f : 1.0f;
+    float own[3] = {vertex.normal[0] * sign, vertex.normal[1] * sign, vertex.normal[2] * sign};
+    turn43(t.world, own, turned);
     float length = std::sqrt(turned[0] * turned[0] + turned[1] * turned[1] + turned[2] * turned[2]);
     if(length > 0) {
       for(u32 k = 0; k < 3; k++) normal[k] = turned[k] / length;

@@ -327,7 +327,6 @@ struct GE {
   u32 clutVersion = 0;
   TextureCache textures;   //textures kept decoded (texture.cpp)
   bool fourPixels = true;  //rows drawn four pixels at a time where they may be (four.cpp; tests compare without)
-  bool fourVertices = true;  //3D vertices' matrices worked out four at a time (transform.cpp; tests compare without)
   Registers list;
   u32 vertexAddress = 0, indexAddress = 0;  //where the next vertex and index are read
   bool boxOutside = false;  //the last BOUNDING_BOX was out of sight: BJUMP jumps (list.cpp)
@@ -366,9 +365,6 @@ struct GE {
   //transform.cpp
   auto transformState() const -> Transform;
   auto transform(Vertex& vertex, const Transform& t) -> void;
-  auto transformFour(Vertex* vertices, const Transform& t) -> void;
-  auto transformed(Vertex& vertex, const Transform& t, const float model[3], const float inWorld[3],
-                   const float inView[3], const float turned[3]) -> void;
   auto project(Vertex& vertex, const Transform& t, bool clipped) const -> void;
   auto clipTriangle(const Look& look, const Transform& t, const Vertex& a, const Vertex& b, const Vertex& c,
                     s32 facing) -> void;
