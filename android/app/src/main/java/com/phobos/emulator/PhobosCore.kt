@@ -90,6 +90,8 @@ object PhobosCore {
     external fun setPspDrawingThreads(threads: Int)
     /** Who draws the PSP's pictures (the core's "Renderer", as a game starts): util/PspVideo.kt's [PspRenderer]. */
     external fun setPspRenderer(renderer: Int)
+    /** The Vulkan renderer's internal resolution (the core's "Resolution", as a game starts): [PspResolution]. */
+    external fun setPspResolution(scale: Int)
     /** What the PSP's core has to tell the user, once (its Vulkan renderer didn't start, or stopped); "" if none. */
     external fun takePspNotice(): String
     /** The whole multiple native code draws the PSP's picture at (util/PspVideo.kt's pictureMultiple()). */

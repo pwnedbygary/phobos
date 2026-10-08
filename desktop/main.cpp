@@ -286,12 +286,13 @@ auto Shell::applySettings() -> void {
   ares::setVideoSettings(settings.flag("video.overscan", false), settings.flag("video.colorEmulation", true),
                          settings.flag("video.interframeBlending", true));
   // The PSP's memory stick (a folder picked, else the one all games share in the saves folder, as on Android), the
-  // user's own system fonts (none unless a folder is picked), its drawing threads (0: all cores but one) and its
-  // renderer.
+  // user's own system fonts (none unless a folder is picked), its drawing threads (0: all cores but one), its
+  // renderer and the Vulkan renderer's internal resolution (1, native, to 10 times).
   ares::setPspMemoryStickPath(settings.text("psp.memoryStick").c_str());
   setPspFonts(settings.text("psp.fonts"));
   ares::setPspDrawingThreads(settings.number("psp.drawingThreads", 0));
   ares::setPspRenderer(settings.number("psp.renderer", 0));
+  ares::setPspResolution(settings.number("psp.resolution", 1));
 }
 
 auto Shell::rescan() -> void {
@@ -562,6 +563,14 @@ auto Shell::pspMenuItems(std::vector<MenuItem>& items) -> void {
     int next = (renderer + (d < 0 ? (int)std::size(pspRenderers) - 1 : 1)) % (int)std::size(pspRenderers);
     settings.setNumber("psp.renderer", next);
     ares::setPspRenderer(next);
+  }});
+  //(the window shows the GPU's picture read back at up to 4 times the PSP's size: the core's MostShown)
+  int resolution = std::clamp(settings.number("psp.resolution", 1), 1, 10);
+  items.push_back({"PSP resolution (Vulkan): " + (resolution == 1 ? std::string("Native") :
+                   std::to_string(resolution) + "x") + " (next start)", [this, resolution](int d) {
+    int next = (resolution - 1 + (d < 0 ? 9 : 1)) % 10 + 1;
+    settings.setNumber("psp.resolution", next);
+    ares::setPspResolution(next);
   }});
 }
 

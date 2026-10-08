@@ -113,6 +113,7 @@ import com.phobos.emulator.util.N64SaveRead
 import com.phobos.emulator.util.N64SaveTransfer
 import com.phobos.emulator.util.PspDrawingThreads
 import com.phobos.emulator.util.PspRenderer
+import com.phobos.emulator.util.PspResolution
 import com.phobos.emulator.util.PspFonts
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.util.cueTracks
@@ -552,6 +553,11 @@ class MainViewModel(
     fun setPspRenderer(renderer: Int) = viewModelScope.launch {
         settingsStore.setPspRenderer(renderer)
         PhobosCore.setPspRenderer(PspRenderer.forCore(renderer))
+    }
+    /** The Vulkan renderer's internal resolution: [PspResolution], taken by the core as a game starts. */
+    fun setPspResolution(scale: Int) = viewModelScope.launch {
+        settingsStore.setPspResolution(scale)
+        PhobosCore.setPspResolution(PspResolution.forCore(scale))
     }
     fun setZxTapeAuto(enabled: Boolean) = viewModelScope.launch {
         settingsStore.setZxTapeAuto(enabled)
@@ -1845,6 +1851,7 @@ class MainViewModel(
             PhobosCore.setMsxLoadSpeed(settings.value.msxLoadSpeed)
             PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(settings.value.pspDrawingThreads))
             PhobosCore.setPspRenderer(PspRenderer.forCore(settings.value.pspRenderer))
+            PhobosCore.setPspResolution(PspResolution.forCore(settings.value.pspResolution))
             PhobosCore.setZxTapeAuto(settings.value.zxTapeAuto)
             PhobosCore.setN64DebugLogging(settings.value.n64DebugLogging)
             PhobosCore.setN64CountPerOp(if (settings.value.n64UseDefaultCountPerOp) 2 else settings.value.n64CountPerOp)
@@ -2837,6 +2844,8 @@ class MainViewModel(
             PhobosCore.setPspDrawingThreads(PspDrawingThreads.forCore(currentSettings.pspDrawingThreads))
             // Who draws them: the software renderer, or Vulkan's with the driver loaded for the game.
             PhobosCore.setPspRenderer(PspRenderer.forCore(currentSettings.pspRenderer))
+            // How many times over it draws each pixel (Vulkan's alone): Native, or 2x to 10x.
+            PhobosCore.setPspResolution(PspResolution.forCore(currentSettings.pspResolution))
             // Its system fonts: the copies of the user's own PSP's flash0 fonts (picked in Settings → Firmware, or
             // found by themselves in Download/FLASH0DUMP while any are missing), if any.
             val pspFonts = PspFonts.folder(context.filesDir)

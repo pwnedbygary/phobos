@@ -46,6 +46,7 @@ import com.phobos.emulator.data.GlassEffects
 import com.phobos.emulator.data.RegionPreference
 import com.phobos.emulator.util.PspDrawingThreads
 import com.phobos.emulator.util.PspRenderer
+import com.phobos.emulator.util.PspResolution
 import com.phobos.emulator.util.ZxTape
 import com.phobos.emulator.ui.theme.LegibleText
 import com.phobos.emulator.ui.theme.LocalPhobosTheme
@@ -482,6 +483,18 @@ fun PspRendererItem(current: Int, onSelect: (Int) -> Unit) {
         current = PspRenderer.forCore(current),
         options = PspRenderer.choices,
         label = PspRenderer::label,
+        onSelect = onSelect,
+    )
+}
+
+@Composable
+fun PspResolutionItem(current: Int, onSelect: (Int) -> Unit) {
+    SettingsDropdownItem(
+        title = "PSP Resolution",
+        description = "How many times over the Vulkan renderer draws each of the PSP's pixels. Native is the PSP's own, exact; higher is sharper on a large screen and costs the GPU more. What games read back stays exact. Applies when a game starts.",
+        current = PspResolution.forCore(current),
+        options = PspResolution.choices,
+        label = PspResolution::label,
         onSelect = onSelect,
     )
 }

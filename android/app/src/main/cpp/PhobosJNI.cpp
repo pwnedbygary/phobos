@@ -607,6 +607,11 @@ Java_com_phobos_emulator_PhobosCore_setPspRenderer(JNIEnv* env, jobject, jint re
     ares::setPspRenderer((s32)renderer);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_phobos_emulator_PhobosCore_setPspResolution(JNIEnv* env, jobject, jint scale) {
+    ares::setPspResolution((s32)scale);
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_phobos_emulator_PhobosCore_takePspNotice(JNIEnv* env, jobject) {
     return env->NewStringUTF(ares::takePspNotice().c_str());
