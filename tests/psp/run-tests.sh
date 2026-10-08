@@ -59,7 +59,7 @@ $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINE
   "$HERE/mutexes.cpp" "$HERE/timers.cpp" "$HERE/threadman.cpp" \
   "$HERE/atrac.cpp" "$HERE/mp3.cpp" "$HERE/movies.cpp" "$HERE/psmf.cpp" "$HERE/font.cpp" \
   "$HERE/files.cpp" "$HERE/async.cpp" "$HERE/disc.cpp" \
-  "$HERE/disc-formats.cpp" "$HERE/crypto.cpp" "$HERE/decrypt.cpp" "$HERE/modules.cpp" \
+  "$HERE/disc-formats.cpp" "$HERE/disc-info.cpp" "$HERE/crypto.cpp" "$HERE/decrypt.cpp" "$HERE/modules.cpp" \
   "$HERE/states.cpp" "$HERE/ge.cpp" "$HERE/draw.cpp" "$HERE/draw3d.cpp" "$HERE/curves.cpp" \
   "$HERE/measure.cpp" \
   "$NALL" "$SLJIT" "$ALLOCATOR" \

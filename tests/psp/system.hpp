@@ -72,6 +72,7 @@ auto curvesTests() -> Tests;
 auto measureTests() -> Tests;
 auto discTests() -> Tests;
 auto discFormatTests() -> Tests;
+auto discInfoTests() -> Tests;
 auto stateTests() -> Tests;
 auto cryptoTests() -> Tests;
 auto decryptTests() -> Tests;
