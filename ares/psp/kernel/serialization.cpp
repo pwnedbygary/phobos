@@ -296,7 +296,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(timer.earliest <= lead);
   });
   vector(memoryStickCallbacks, [&](u32& callback) { s(callback); });
-  s(umdCallback);
+  s(umdCallback); s(umdDeactivated);
   vector(blocks, [&](Block& block) { s(block.uid); text(block.name); s(block.address); s(block.size); });
   s(largeMemory); s(sdkVersion); s(compilerVersion);
   s(powerState.callbacks); s(powerState.pll); s(powerState.cpu); s(powerState.bus); s(powerState.volatileLocked);

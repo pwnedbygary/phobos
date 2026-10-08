@@ -463,16 +463,30 @@ static auto umdDrive() -> void {
     CHECK(m.call("sceUmdActivate", {1, m.string("disc1:")}), Kernel::ErrorInvalidArgument);
     CHECK(m.call("sceUmdDeactivate", {1, 0}), 0);
     CHECK(m.call("sceUmdDeactivate", {2, 0}), Kernel::ErrorInvalidArgument);
+    CHECK(m.call("sceUmdGetDriveStat", {}), Kernel::UmdPresent | Kernel::UmdReady);  //deactivated: not readable
+    CHECK(m.call("sceUmdActivate", {1, m.string("disc0:")}), 0);
+    CHECK(m.call("sceUmdGetDriveStat", {}), Kernel::UmdPresent | Kernel::UmdReady | Kernel::UmdReadable);
     memory.write(4, Out, 8);
     CHECK(m.call("sceUmdGetDiscInfo", {Out}), 0);
     CHECK(memory.read(4, Out + 4), 0x10);  //a game
     memory.write(4, Out, 7);
     CHECK(m.call("sceUmdGetDiscInfo", {Out}), Kernel::ErrorInvalidArgument);
     u32 callback = m.call("sceKernelCreateCallback", {m.string("umd"), 0x0880'1000, 0});
+    //registered and unregistered as umd/register recorded: 0 is no callback, but unregistering it is taken while
+    //none is registered; unregistering gives the callback's ID back, or 0 for SDKs after 3.00
     CHECK(m.call("sceUmdRegisterUMDCallBack", {0x1234}), Kernel::ErrorInvalidArgument);
+    CHECK(m.call("sceUmdRegisterUMDCallBack", {0}), Kernel::ErrorInvalidArgument);
     CHECK(m.call("sceUmdRegisterUMDCallBack", {callback}), 0);
+    CHECK(m.call("sceUmdRegisterUMDCallBack", {callback}), 0);  //twice
     CHECK(m.call("sceUmdUnRegisterUMDCallBack", {callback + 1}), Kernel::ErrorInvalidArgument);
+    CHECK(m.call("sceUmdUnRegisterUMDCallBack", {0}), Kernel::ErrorInvalidArgument);
+    CHECK(m.call("sceUmdUnRegisterUMDCallBack", {callback}), callback);
+    CHECK(m.call("sceUmdUnRegisterUMDCallBack", {callback}), Kernel::ErrorInvalidArgument);
+    CHECK(m.call("sceUmdUnRegisterUMDCallBack", {0}), 0);
+    m.kernel.sdkVersion = 0x0300'0001;
+    CHECK(m.call("sceUmdRegisterUMDCallBack", {callback}), 0);
     CHECK(m.call("sceUmdUnRegisterUMDCallBack", {callback}), 0);
+    m.kernel.sdkVersion = 0;
     CHECK(m.call("sceUmdWaitDriveStat", {Kernel::UmdChanged}), Kernel::ErrorInvalidArgument);  //can't be waited for
 
     //a thread waits for the drive: ready, at once; no disc, until its timeout (of 100 microseconds, which the PSP
@@ -522,10 +536,101 @@ static auto umdDrive() -> void {
   CHECK(empty.call("sceUmdGetDriveStat", {}), Kernel::UmdNotPresent);
 }
 
+//The drive's callback, as pspautotests' umd/callbacks recorded, and the waits umd/wait did: activating the drive
+//tells it the state (0x32, or 0x22 to a program that gave no SDK version), and CheckCallback runs it; deactivating
+//leaves the drive ready but not readable (0x12), which a wait for "readable" times out on, and tells the callback,
+//which a wait that runs callbacks runs as it returns at once. Activating again wakes a thread waiting for the drive
+//to be readable, and lets a loop of vertical blanks that run callbacks, as MotorStorm: Arctic Edge's boot waits,
+//see it. On both engines; a state saved at the end loads.
+static auto umdCallback() -> void {
+  constexpr u32 R = KernelMachine::Results, Handler = 0x0880'0000, Waiter = 0x0880'0800;
+  for(u32 sdk : {0x0500'0010u, 0u}) {
+    for(bool recompile : {false, true}) {
+      DiscMachine m;
+      auto& memory = m.system.memory;
+      m.kernel.sdkVersion = sdk;
+      //the callback (count, the drive's state, its argument): counts its calls at R + 0x40, keeps the state at 0x44
+      Assembler handler{m, Handler};
+      handler.li(t0, R);
+      handler.put(lw(t1, 0x40, t0)); handler.put(addiu(t1, t1, 1)); handler.put(sw(t1, 0x40, t0));
+      handler.put(sw(a1, 0x44, t0)); handler.put(sw(a2, 0x48, t0));
+      handler.put(jr(ra)); handler.put(addiu(v0, zero, 0));
+      //a thread that waits for the drive to be readable, then writes 0x77 at R + 0x28 and what the wait gave at 0x2c
+      Assembler waiter{m, Waiter};
+      waiter.li(a0, Kernel::UmdReadable);
+      waiter.call("sceUmdWaitDriveStat");
+      waiter.li(t0, R); waiter.put(sw(v0, 0x2c, t0)); waiter.li(t1, 0x77); waiter.put(sw(t1, 0x28, t0));
+      waiter.call("sceKernelSleepThread");
+
+      Assembler main{m, 0x0880'1000};
+      main.li(s0, R);
+      main.li(a0, m.string("umd")); main.li(a1, Handler); main.li(a2, 0x1234);
+      main.call("sceKernelCreateCallback");
+      main.put(addu(a0, v0, zero));
+      main.call("sceUmdRegisterUMDCallBack");
+      main.li(a0, 1); main.li(a1, m.string("disc0:"));
+      main.call("sceUmdActivate");
+      main.put(sw(v0, 0, s0));
+      main.call("sceKernelCheckCallback");
+      main.put(sw(v0, 4, s0)); main.put(lw(t0, 0x44, s0)); main.put(sw(t0, 8, s0));
+      main.li(a0, 1); main.li(a1, 0);
+      main.call("sceUmdDeactivate");
+      main.put(sw(v0, 0xc, s0));
+      main.call("sceUmdGetDriveStat");
+      main.put(sw(v0, 0x10, s0));
+      main.li(a0, Kernel::UmdReadable); main.li(a1, 1000);
+      main.call("sceUmdWaitDriveStatWithTimer");
+      main.put(sw(v0, 0x14, s0));
+      main.li(a0, 0xff); main.li(a1, 0);
+      main.call("sceUmdWaitDriveStatCB");
+      main.put(sw(v0, 0x18, s0)); main.put(lw(t0, 0x44, s0)); main.put(sw(t0, 0x1c, s0));
+      main.call("sceKernelCheckCallback");
+      main.put(sw(v0, 0x20, s0));
+      main.put(sw(zero, 0x44, s0));
+      main.li(a0, m.string("waiter")); main.li(a1, Waiter); main.li(a2, 0x10); main.li(a3, 0x1000); main.li(t0, 0);
+      main.li(t1, 0);
+      main.call("sceKernelCreateThread");
+      main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelStartThread");  //(it runs first, and waits)
+      main.put(lw(t0, 0x28, s0)); main.put(sw(t0, 0x24, s0));  //nothing there yet
+      main.li(a0, 1); main.li(a1, m.string("disc0:"));
+      main.call("sceUmdActivate");
+      u32 loop = main.here();  //MotorStorm's: a vertical blank at a time, till the callback says readable
+      main.call("sceDisplayWaitVblankStartCB");
+      main.put(lw(t0, 0x44, s0)); main.put(andi(t0, t0, Kernel::UmdReadable));
+      main.put(beq(t0, zero, s32(loop - main.here() - 4) / 4)); main.put(nop);
+      main.li(t0, 0x600d); main.put(sw(t0, 0x30, s0));
+      main.call("sceKernelExitGame");
+      m.runProgram(0x0880'1000, recompile);
+
+      u32 activated = sdk ? 0x32 : 0x22;
+      CHECK(m.kernel.exited, true);
+      CHECK(memory.read(4, R), 0);
+      CHECK(memory.read(4, R + 4), 1);  //the callback ran
+      CHECK(memory.read(4, R + 8), activated);
+      CHECK(memory.read(4, R + 0x48), 0x1234);
+      CHECK(memory.read(4, R + 0xc), 0);
+      CHECK(memory.read(4, R + 0x10), 0x12);
+      CHECK(memory.read(4, R + 0x14), Kernel::ErrorWaitTimeout);
+      CHECK(memory.read(4, R + 0x18), 0);
+      CHECK(memory.read(4, R + 0x1c), 0x12);  //run as the wait returned
+      CHECK(memory.read(4, R + 0x20), 0);     //nothing left for CheckCallback
+      CHECK(memory.read(4, R + 0x24), 0);
+      CHECK(memory.read(4, R + 0x28), 0x77);  //woken by the activation
+      CHECK(memory.read(4, R + 0x2c), 0);
+      CHECK(memory.read(4, R + 0x44), activated);
+      CHECK(memory.read(4, R + 0x40), 3);
+      CHECK(memory.read(4, R + 0x30), 0x600d);
+      CHECK(m.kernel.umdDeactivated, false);
+      CHECK(roundTrip(m), true);
+    }
+  }
+}
+
 auto discTests() -> Tests {
   return {
     {"disc images", discImages}, {"disc files", discFiles}, {"disc requests", discRequests},
-    {"disc drive", umdDrive},
+    {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
   };
 }
 

@@ -521,6 +521,58 @@ static auto drawLines() -> void {
   for(u32 x = 0; x < 8; x++) CHECK(c.pixel(x, 2), x | 3 << 8);
 }
 
+//Shapes whose corners are all at one depth draw every pixel at that depth: Chili Con Carnage's logo, a fan at depth
+//65535 drawn with the depth test "at least as near" (7) over a background at 65535, at each of the sizes its frames
+//draw it, lost stripes of pixels to depths blended a hair under 65535 and cut to 65534. Each fan, and a line at that
+//depth, draws every pixel it draws with the test off, each pixel's depth 65535; with four pixels at a time and one.
+static auto drawOneDepth() -> void {
+  struct Fan { float left, top, right, bottom; };
+  for(bool fours : {true, false}) {
+    //what a shape draws (with the depth test at test), and whether each pixel it drew has depth 65535
+    auto drawn = [&](u32 test, const std::function<void (Canvas&)>& draw, bool& deepest) {
+      Canvas c;
+      c.ge.fourPixels = fours;
+      c.ge.commands[GE::FrameBufferWidth] = 512;
+      c.ge.commands[GE::DepthBufferPointer] = 0x10'0000;
+      c.ge.commands[GE::DepthBufferWidth] = 512;
+      c.ge.commands[GE::DepthTestEnable] = 1;
+      c.ge.commands[GE::DepthTest] = test;
+      c.memory.fill(VRAM, 0, 512 * 272 * 4);
+      c.memory.fill(VRAM + 0x10'0000, 0xff, 512 * 272 * 2);  //the background, at 65535
+      draw(c);
+      u32 count = 0;
+      deepest = true;
+      for(u32 y = 0; y < 272; y++) {
+        for(u32 x = 0; x < 512; x++) {
+          if(!c.memory.read(4, VRAM + (y * 512 + x) * 4)) continue;
+          count++;
+          deepest &= c.memory.read(2, DepthSeen + 0x10'0000 + (y * 512 + x) * 2) == 0xffff;
+        }
+      }
+      return count;
+    };
+    for(auto fan : {Fan{-28, -2, 162, 92}, Fan{-29, -3, 163, 93}, Fan{-31, -4, 165, 94}}) {
+      auto draw = [&](Canvas& c) {
+        c.draw(GE::TriangleFan, {{0, 0, 0xff00'00ff, fan.left, fan.top, 65535},
+                                 {0, 0, 0xff00'00ff, fan.right, fan.top, 65535},
+                                 {0, 0, 0xff00'00ff, fan.right, fan.bottom, 65535},
+                                 {0, 0, 0xff00'00ff, fan.left, fan.bottom, 65535}});
+      };
+      bool deepest = false, any = false;
+      u32 all = drawn(1, draw, any);
+      CHECK(all > 0, true);
+      CHECK(drawn(7, draw, deepest), all);
+      CHECK(deepest, true);
+    }
+    auto line = [](Canvas& c) {
+      c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 0.5f, 100.5f, 65535}, {0, 0, 0xff00'00ff, 470.5f, 140.5f, 65535}});
+    };
+    bool deepest = false;
+    CHECK(drawn(7, line, deepest), 470);
+    CHECK(deepest, true);
+  }
+}
+
 //DXT textures (texture.cpp's dxtTexel()) as pspautotests' gpu/texcolors/dxt1, dxt3 and dxt5 recorded them on a PSP:
 //each case a block's first texel, its color as the program read it back (red in the low byte) and its alpha, from
 //its colors, its first index and its alphas; then the blocks' order in a texture, and a DXT texture kept decoded
@@ -1118,7 +1170,8 @@ auto drawTests() -> Tests {
     {"draw texture functions", drawTextureFunctions}, {"draw pixel tests", drawPixelTests}, {"draw blending", drawBlending},
     {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles},
     {"draw texel steps", drawTexelSteps}, {"draw ambient and filters", drawAmbientAndFilters},
-    {"draw lines", drawLines}, {"draw DXT textures", drawDXT}, {"draw vertex formats", drawVertexFormats},
+    {"draw lines", drawLines}, {"draw corners at one depth", drawOneDepth}, {"draw DXT textures", drawDXT},
+    {"draw vertex formats", drawVertexFormats},
     {"blit sample", blitSample}, {"doublelist sample", doublelistSample}, {"clut sample", clutSample},
     {"blend sample", blendSample}, {"cube sample", cubeSample}, {"celshading sample", celshadingSample},
     {"envmap sample", envmapSample},
