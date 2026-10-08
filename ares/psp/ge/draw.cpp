@@ -177,8 +177,11 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   touched = {};
   switch(kind) {
   case Points:
+    //a point is a primitive of one corner: in 3D, one whose z / w is past either end of the depths isn't drawn
+    //either, as a sprite's or a line's corners all past one end aren't (the PSP's 3d-rules pictures, measured in
+    //round 3, come closer so: two fewer pixels apart)
     for(auto& vertex : vertices) {
-      if(!vertex.outside) point(drawn, vertex);
+      if(format.through ? !vertex.outside : !outOfSight(t.depthClamp, {&vertex})) point(drawn, vertex);
     }
     break;
   case Lines:

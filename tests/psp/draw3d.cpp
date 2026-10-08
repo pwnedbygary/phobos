@@ -158,19 +158,26 @@ static auto draw3dOutside() -> void {
   CHECK(sprite(6, 1.5f, 1.5f), false);
   CHECK(sprite(4096 - 2048, 0, 0), false);        //a corner off the screen
 
-  //points: one with a depth below 0 is held to it with DEPTH_CLIP_ENABLE on, and not drawn with it off; z / w past 1
-  //doesn't count for points
+  //points: one with a depth below 0 is held to it with DEPTH_CLIP_ENABLE on, and not drawn with it off; one with
+  //z / w past either end isn't drawn, the clamp on or off (a point's one corner is all its corners)
   auto point = [&](float z) {
     c.clear();
     c.draw(GE::Points, {{0, 0, 0xffff'ffff, 3, 3, z}});
     return c.pixel(3, 3) != 0;
   };
+  c.ge.commands[GE::ViewportZCenter] = f24(2000);
+  CHECK(point(1.5f), false);
+  CHECK(point(-1.5f), false);
+  CHECK(point(0.99999f), true);
+  c.ge.commands[GE::DepthClipEnable] = 0;
+  CHECK(point(1.5f), false);
+  CHECK(point(0), true);
+  c.ge.commands[GE::DepthClipEnable] = 1;
   c.ge.commands[GE::ViewportZCenter] = f24(500);
   CHECK(point(-0.9f), true);
   c.ge.commands[GE::DepthClipEnable] = 0;
   CHECK(point(-0.9f), false);
   CHECK(point(0), true);
-  CHECK(point(1.5f), true);  //depth 2000
 }
 
 //The near plane (z < -w, here z < -1): a triangle reaching past it is cut along it, and only the rest drawn. Corners
