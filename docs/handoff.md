@@ -25,6 +25,22 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: upscaling, and presenting without reading back — 2026-10-08
+
+Branch `cursor/psp-gpu-hw3-2b67`, on top of part 41's `cursor/psp-gpu-hw2-2b67`. docs/psp-core.md, part 44, and
+docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" describe it; PPSSPP stayed a guide only, none of its code used.
+- **The setting**: "PSP Resolution" (Native, the default and exact, then 2x-10x) in the app's PSP settings and the
+  desktop's menu, given to the core as its "Resolution" option when a game loads; Vulkan's alone.
+- **Upscaling**: targets, depth and stencil at N times; uploads drawn larger, read-backs for the CPU and GE shrunk to
+  the PSP's size first so memory stays exact; render to texture keeps the scale. New test `gpuScaled`; the sanitized
+  PSP suite passes on the M1 (322 groups, the GPU groups run).
+- **Presenting** (Android): the frame drawn straight onto a swapchain on the app's window, no read-back; screenshots
+  from a shrunk copy; a failing surface falls back to the read-back. The desktop reads back at up to 4x.
+- **RP6**: Lumines 59.4/59.3/50.6 fps at Native/4x/8x, Ridge Racer 2's menu 60/46.5 at Native/8x. The fallback
+  toast seen at last (`adb shell setprop debug.phobos.psp.failcheck 1`; set back to 0). Still to check: 10x, games
+  in play, rotation and backgrounding while presenting, a line seen once at 8x (part 44, "Not checked yet").
+- **Next**: shader blending, then OpenGL.
+
 ## PSP core: the Vulkan renderer in the app and the desktop — 2026-10-07
 
 Branch `cursor/psp-gpu-hw2-2b67`, on top of part 38's `cursor/psp-cpu-speed-2b67`. docs/psp-core.md, part 41, and
