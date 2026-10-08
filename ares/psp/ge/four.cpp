@@ -71,12 +71,9 @@ static alwaysinline auto passesLanes(u32 comparison, GE::s32x4 a, GE::s32x4 b) -
   }
   return a >= b;
 }
-//fogAmount() (draw.cpp) lane by lane: 0 below zero (its sign bit, as std::signbit() reads it), 255 from 1 up (and
-//where it isn't a number), else rounded down in 256ths.
+//A blended fog amount (0-255 at the corners, already; draw.cpp) held to 0-255, as blendColor holds a channel.
 static alwaysinline auto fogLanes(GE::f32x4 fog) -> GE::s32x4 {
-  GE::s32x4 amount = __builtin_convertvector(fog * 256, GE::s32x4);  //(only kept where 0 <= fog < 1)
-  amount = pickLanes(fog < 1, amount, splatLanes(255));
-  return pickLanes((GE::s32x4)fog < 0, splatLanes(0), amount);
+  return heldLanes(__builtin_convertvector(fog, GE::s32x4), 0, 255);
 }
 //u32(std::clamp(depth, 0.0f, 65535.0f)) lane by lane. Where it isn't a number, the clamp leaves it so and the
 //conversion gives 0, on ARM64 and x86-64 alike; here that's said outright, as x86-64's conversion of four lanes
@@ -579,7 +576,7 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
         else for(u32 n = 0; n < 3; n++) shine[n] = flatShine[n];
         for(u32 n = 0; n < 3; n++) four.color[n] = heldLanes(four.color[n] + shine[n], 0, 255);
       }
-      if(p.fog) four.fog = fogLanes((r.fog[0] * w0 + r.fog[1] * w1 + r.fog[2] * w2) / r.total);
+      if(p.fog) four.fog = fogLanes((r.fog[0] * w0 + r.fog[1] * w1 + r.fog[2] * w2) / r.total);  //corners are 0-255
       pixelsFour<Format>(p, x, y, four);
     }
   }

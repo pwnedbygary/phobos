@@ -503,13 +503,21 @@ auto GPU::emit(const Vertex* vertices, u32 count) -> void {
   statistics.primitives++;
 }
 
+//The fog at a vertex as 0-255 (same rule as the software path's fogAmount), then as the 0-1 the shader blends and
+//turns back with × 256: so a corner's amount is what is interpolated, matching ramp-fog (docs/psp-core.md).
+static auto fogAsAttribute(float fog) -> float {
+  if(std::signbit(fog)) return 0;
+  if(!(fog < 1)) return 255 / 256.0f;  //amount 255, not 1.0: × 256 in the shader must give 255, not 256
+  return float(u32(fog * 256)) / 256.0f;
+}
+
 auto GPU::vertex(const GE::Vertex& v, bool perspective) const -> Vertex {
   Vertex o{};
   o.x = targetFixed(v.x) / 16.0f, o.y = targetFixed(v.y) / 16.0f, o.z = v.z;
   o.w = perspective ? v.clip[3] : 1.0f;
   o.u = v.u, o.v = v.v, o.q = perspective ? v.q : 1.0f;
   o.color = v.color, o.specular = v.specular;
-  o.fog = v.fog;
+  o.fog = fogAsAttribute(v.fog);
   return o;
 }
 

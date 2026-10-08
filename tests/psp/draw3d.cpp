@@ -307,10 +307,10 @@ static auto draw3dPerspective() -> void {
 
 //Fog: FOG1 1, FOG2 0.5: a vertex at view z 0 keeps half its color, (0 + 1) * 0.5 = 0.5, 128 of 255:
 //red (0 * 128 + 255 * 127 + 255) / 256 = 127 from the fog color; green (255 * 128 + 255) / 256 = 128. At z 1, fog 1:
-//none; at z -0.9, 0.05: 12 of 255. Not in through mode. Across a triangle the fog is blended from the corners: from
-//1 (z 1) at two to 0 (z -1) at the third, at pixel (7, 0) (the third's weight 0.46484375) it's 0.53515625, 137. A
-//sprite is split at its middle column, each half taking the fog of the corner on the other side, whichever corner
-//comes first.
+//none; at z -0.9, 0.05: 12 of 255. Not in through mode. Across a triangle the fog is converted to 0-255 at each
+//corner, then blended as a color (measured: ramp-fog): from 255 (z 1) at two to 0 (z -1) at the third, at pixel
+//(7, 0) (the third's weight 30720/65536) it's 255 × 34816/65536 = 135.46875, 135. A sprite is split at its middle
+//column, each half taking the fog of the corner on the other side, whichever corner comes first.
 static auto draw3dFog() -> void {
   Scene c;
   c.ge.commands[GE::FogEnable] = 1;
@@ -332,7 +332,7 @@ static auto draw3dFog() -> void {
   c.ge.commands[GE::VertexType] = 0x19f;
   c.clear();
   c.draw(GE::Triangles, {{0, 0, 0xff00'ff00, 0, 0, 1}, {0, 0, 0xff00'ff00, 16, 0, -1}, {0, 0, 0xff00'ff00, 0, 16, 1}});
-  CHECK(c.pixel(7, 0), u32((255 * 136 + 255) / 256) << 8 | u32((255 * 119 + 255) / 256));  //at (7.5, 0.5)
+  CHECK(c.pixel(7, 0), u32((255 * 135 + 255) / 256) << 8 | u32((255 * 120 + 255) / 256));  //at (7.5, 0.5)
   for(bool first : {true, false}) {  //no fog (z 1) at the left corner, all fog (z -1) at the right, either order
     c.clear();
     V3 left{0, 0, 0xff00'ff00, 0, 0, 1}, right{0, 0, 0xff00'ff00, 8, 4, -1};
@@ -584,8 +584,8 @@ static auto draw3dEnvironmentMap() -> void {
 //where they reach past it (to z -3: a third of the way, at x 5.5, so columns 1-4), the new end's color blended a
 //third of the way in 256ths as a triangle's (255 * 171 / 256 = 170), the colors then along the rest (at column 4,
 //(255 * 16 + 170 * 48) / 64 = 191); with DEPTH_CLIP_ENABLE off, dropped for that z / w; with flat shading, the
-//cut-away end's color; fog blended along them (none at z 1, all at z -1: at column 4's middle, 72 of 128
-//sixteenths along, 0.4375 left); dropped with an end off the screen.
+//cut-away end's color; fog converted to 0-255 at each end then blended (none at z 1 → 255, all at z -1 → 0: at
+//column 4's middle, 72 of 128 sixteenths along, 255 × 0.4375 = 111.5625, 111); dropped with an end off the screen.
 static auto draw3dLines() -> void {
   Scene c;
   c.draw(GE::Lines, {{0, 0, 0xff00'00ff, 1.5f, 2.5f, 0}, {0, 0, 0xff00'00ff, 9.5f, 2.5f, 1}});
@@ -613,7 +613,7 @@ static auto draw3dLines() -> void {
   c.ge.commands[GE::FogColor] = 0x00'00ff;
   c.clear();
   c.draw(GE::Lines, {{0, 0, 0xff00'ff00, 0, 0.5f, 1}, {0, 0, 0xff00'ff00, 8, 0.5f, -1}});
-  u32 f = u32(0.4375f * 256);
+  u32 f = u32(255 * 0.4375f);  //0-255 at the ends, then blended (not the 0-1 × 256 at the pixel)
   CHECK(c.pixel(4, 0), u32((255 * f + 255) / 256) << 8 | u32((255 * (255 - f) + 255) / 256));
   c.ge.commands[GE::FogEnable] = 0;
   c.clear();

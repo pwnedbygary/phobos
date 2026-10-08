@@ -893,6 +893,11 @@ results at the whole 256ths the tests use, 0.5 and 0.75). Now identical: `light-
 confirms, as `light-materials`' 12; `light-point` 9728 (was 30720) and `light-spot` 768 (was 2560), whose normals
 are exact but not the direction to the light, nor its fading or spot; all a level each.
 
+**And fog's amount** is fixed at each corner before blending (see Part 11): `ramp-fog` from 18976 pixels a level
+apart to 240 (the same scattered shortfalls color ramps still show); round 2's `3d-floor-fog` from 6257 to 497.
+Stepping u/w and 1/w like 2D's shortStep made `3d-wall-texels` worse (307 → 2423), so perspective texels stay as
+the edge weights have them. Color ramps and those last lighting products are still open (round 5's probes).
+
 ## Part 11: drawing in 3D
 
 `ares/psp/ge/transform.cpp`, and 3D paths in `vertex.cpp`, `draw.cpp` and `pixel.cpp`. Outside through mode:
@@ -913,12 +918,14 @@ are exact but not the direction to the light, nor its fading or spot; all a leve
   every piece keeps the last vertex's color.
 - **Culling** (CULL_FACE_ENABLE, not in clear mode, through mode too): CULL 1 draws the triangles running clockwise on
   the screen, 0 those running counterclockwise; every other triangle of a strip counts the other way round.
-- **Texture coordinates**: perspective-correct across triangles (blended as u/w and 1/w, then divided); colors, depth
-  and fog are blended straight. Mode 0 takes the vertex's, times TEX_SCALE plus TEX_OFFSET; mode 1 the texture
+- **Texture coordinates**: perspective-correct across triangles (blended as u/w and 1/w, then divided); colors and
+  depth are blended straight. Mode 0 takes the vertex's, times TEX_SCALE plus TEX_OFFSET; mode 1 the texture
   matrix's result from the position, the texture coordinates or the normal, its q dividing at each pixel.
-- **Fog**: each vertex's (view z + FOG1) × FOG2, blended across, 0-255, mixed in after the alpha test as
-  (color × f + fog color × (255 − f) + 255) / 256. A FOG1 or FOG2 that isn't a number to a float is a huge number to
-  the GE.
+- **Fog**: each vertex's (view z + FOG1) × FOG2, turned into 0-255 there (rounded down, 1 or more giving 255), then
+  that amount blended straight across the primitive as a color channel (measured: round 3's `ramp-fog`; blending the
+  0-1 and converting at each pixel left the first pixel of a near-to-far ramp unfogged). Mixed in after the alpha
+  test as (color × f + fog color × (255 − f) + 255) / 256. A FOG1 or FOG2 that isn't a number to a float is a huge
+  number to the GE.
 - **The depth range test** (MIN_Z to MAX_Z), in 3D only, clear mode included.
 - **Sprites in 3D**: both corners transformed and checked by the same rules, then drawn as in 2D but for two things:
   the texture coordinates follow the perspective (u / w and 1 / w across x, v / w down y, then divided: measured), and

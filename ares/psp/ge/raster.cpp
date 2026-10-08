@@ -180,7 +180,8 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
         u = r.uStart + f64(middleX - r.startX) / 16 * r.uAcross + f64(sampleY - r.startY) / 16 * r.uDown;
         v = r.vStart + f64(middleX - r.startX) / 16 * r.vAcross + f64(sampleY - r.startY) / 16 * r.vDown;
       }
-      u32 fog = p.fog ? fogAmount(blend(r.fog[0], r.fog[1], r.fog[2])) : 255;
+      //Fog corners are already 0-255 (draw.cpp); blend as a color channel and truncate.
+      u32 fog = p.fog ? u32(std::clamp(s32(blend(r.fog[0], r.fog[1], r.fog[2])), 0, 255)) : 255;
       shadeAs<Format>(look, job.linear, x, y, z, color, specular, u, v, fog);
     }
   }
@@ -231,7 +232,7 @@ auto GE::linePixels(const Job& job, s32 fromY, s32 toY, std::vector<LinePixel>& 
       u = l.u[0] + f64(s) / 16 * l.uStep;
       v = l.v[0] + f64(s) / 16 * l.vStep;
     }
-    u32 fog = p.fog ? fogAmount((l.fog[0] * w0 + l.fog[1] * w1) / total) : 255;
+    u32 fog = p.fog ? u32(std::clamp(s32((l.fog[0] * w0 + l.fog[1] * w1) / total), 0, 255)) : 255;
     pixels.push_back({x, y, z, color, specular, fog, u, v});
   };
   s32 top = std::max(job.firstY, fromY), bottom = std::min(job.lastY, toY);

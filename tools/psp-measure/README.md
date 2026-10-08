@@ -64,6 +64,13 @@ far: the first run on a PSP is their first real test. Round 1's random number te
 as the program found it, so it runs once per start of the program: to run it again (after starting afresh, say),
 start the program again first (otherwise it says so, and skips that one test).
 
+## Round 5 (source only until the EBOOT is rebuilt)
+
+`ge.c` has `round5()`: probes for color stepping, lighting's last products, and perspective texels
+(`ramp-color-probes`, `light-product-probes`, `texel-wall-probe`, `texel-floor-probe`). `geRound(5)` runs them.
+The committed `pspmeasure.elf` and the menu do not list Round 5 yet (so the host's measure test keeps its
+line numbers); add a menu line and rebuild the EBOOT when running them on a PSP.
+
 ## Files
 
 | File | What it is |

@@ -2016,6 +2016,119 @@ static void round4(void) {
   curvesCount("curves-count-255", 7, 7);
 }
 
+
+//---- round 5: probes for what round 3 left open after fog's corner amounts were fitted (docs/psp-core.md)
+
+//Color stepping where round 3's ramps still differ: widths and end levels that land on whole levels (rem 0) and on
+//the scattered shortfalls (rem 40/120 of the span in sixteenths). One band per row, through mode, along x.
+static void rampColorProbes(const char* name) {
+  if(!beginTest(name)) return;
+  fillTarget(zero, 0);
+  start(GU_PSM_8888);
+  typedef struct { short width; unsigned char from, to; } R;
+  static const R probes[16] = {
+    {240, 0, 255}, {200, 0, 255}, {100, 255, 0}, {37, 128, 0},
+    {160, 0, 255}, {80, 0, 255}, {240, 255, 0}, {200, 128, 0},
+    {256, 0, 128}, {128, 64, 192}, {64, 0, 255}, {32, 0, 255},
+    {240, 10, 250}, {200, 1, 254}, {37, 0, 128}, {253, 0, 255},
+  };
+  Vertex* vertices = sceGuGetMemory(16 * 6 * sizeof(Vertex));
+  for(int band = 0; band < 16; band++) {
+    const R* r = &probes[band];
+    unsigned int from = rampColor(r->from), to = rampColor(r->to);
+    short a = band * 16, b = band * 16 + 16, w = r->width;
+    Vertex* v = vertices + band * 6;
+    v[0] = (Vertex){0, 0, from, 0, a, 0, 0};
+    v[1] = (Vertex){0, 0, to, w, a, 0, 0};
+    v[2] = (Vertex){0, 0, from, 0, b, 0, 0};
+    v[3] = (Vertex){0, 0, to, w, a, 0, 0};
+    v[4] = (Vertex){0, 0, to, w, b, 0, 0};
+    v[5] = (Vertex){0, 0, from, 0, b, 0, 0};
+  }
+  sceGuDrawArray(GU_TRIANGLES, VertexType, 16 * 6, 0, vertices);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Lighting's last products: white light on material levels 32 and 64 only, normals with cosines 56/65 and 72/97
+//(and neighbours), so the six cells that stay a level low show apart from everything that already matches.
+static void lightProductProbes(const char* name) {
+  if(!beginTest(name)) return;
+  beginLit();
+  ScePspFVector3 toward = {0, 0, 1};
+  sceGuLight(0, GU_DIRECTIONAL, GU_AMBIENT_AND_DIFFUSE, &toward);
+  sceGuLightColor(0, GU_DIFFUSE, 0xffffff);
+  sceGuColorMaterial(GU_DIFFUSE);
+  static const unsigned char mats[16] = {32, 64, 32, 64, 32, 64, 32, 64, 31, 33, 63, 65, 16, 48, 96, 128};
+  static const unsigned char trip[16][2] = {
+    {33, 56}, {65, 72}, {33, 56}, {65, 72}, {20, 21}, {12, 35}, {9, 40}, {28, 45},
+    {33, 56}, {65, 72}, {33, 56}, {65, 72}, {3, 4}, {5, 12}, {8, 15}, {7, 24},
+  };
+  unsigned int colors[16];
+  Normal normals[16];
+  for(int row = 0; row < 16; row++) {
+    for(int i = 0; i < 16; i++) {
+      unsigned char m = mats[i];
+      colors[i] = 0xff000000u | m | m << 8 | m << 16;
+      normals[i] = (Normal){(float)trip[i][0], 0, (float)trip[i][1]};
+    }
+    litRow(row, colors, normals);
+  }
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+//Perspective texels: a wall like 3d-wall-texels but only 64 texels across 128 pixels (and the reverse), so steps
+//that aren't cut short show as whole-texel errors more often; also a floor strip along y the same way.
+static void perspectiveTexelProbes(const char* name, int wall) {
+  if(!beginTest(name)) return;
+  fillTexture(texelXY);
+  start3D(&lens, 1);
+  useTexture(GU_TFX_REPLACE, GU_TCC_RGB);
+  FloatVertex* v = sceGuGetMemory(6 * sizeof(FloatVertex));
+  if(wall) {
+    v[0] = (FloatVertex){0, 0, 0xffffffff, -1, 1, -1};
+    v[1] = (FloatVertex){0.25f, 0, 0xffffffff, 0, 1, -2};  //half the u span of 3d-wall-texels
+    v[2] = (FloatVertex){0, 1, 0xffffffff, -1, -1, -1};
+    v[3] = (FloatVertex){0.25f, 0, 0xffffffff, 0, 1, -2};
+    v[4] = (FloatVertex){0.25f, 1, 0xffffffff, 0, -1, -2};
+    v[5] = (FloatVertex){0, 1, 0xffffffff, -1, -1, -1};
+  } else {
+    v[0] = (FloatVertex){0, 0, 0xffffffff, -1, 1, -1};
+    v[1] = (FloatVertex){1, 0, 0xffffffff, 1, 1, -1};
+    v[2] = (FloatVertex){0, 0.25f, 0xffffffff, -1, 0, -2};
+    v[3] = (FloatVertex){1, 0, 0xffffffff, 1, 1, -1};
+    v[4] = (FloatVertex){1, 0.25f, 0xffffffff, 1, 0, -2};
+    v[5] = (FloatVertex){0, 0.25f, 0xffffffff, -1, 0, -2};
+  }
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 6, 0, v);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+
+static void writeManifest5(void) {
+  char path[320];
+  snprintf(path, sizeof(path), "%s/manifest5.txt", folder);
+  SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if(file < 0) return;
+  static const char text[] =
+    "psp-measure's GE tests, round 5 (tools/psp-measure/ge.c): probes for color stepping, lighting's last products,\n"
+    "and perspective texels left open after round 3's fog-at-corner fit. Each .bin is 256x256 little-endian 8888.\n"
+    "ramp-color-probes: 16 bands as ramp-colors but widths/levels that hit the remaining shortfalls.\n"
+    "light-product-probes: materials 32/64 (and neighbours) under white light, cosines 56/65 and 72/97.\n"
+    "texel-wall-probe / texel-floor-probe: shorter u/v spans under the lens than round 3's wall and floor.\n";
+  sceIoWrite(file, text, sizeof(text) - 1);
+  sceIoClose(file);
+}
+
+static void round5(void) {
+  writeManifest5();
+  rampColorProbes("ramp-color-probes");
+  lightProductProbes("light-product-probes");
+  perspectiveTexelProbes("texel-wall-probe", 1);
+  perspectiveTexelProbes("texel-floor-probe", 0);
+}
+
 //---- the rounds
 
 static int guReady;  //whether sceGuInit has set the GE up: once, on the first round, kept until geEnd
@@ -2091,7 +2204,7 @@ static void round2(void) {
 
 //A round of the GE's tests (2, 3 or 4) into results/ge. Returns 0 if something couldn't be written.
 int geRound(int round) {
-  if(round < 2 || round > 4) return 1;
+  if(round < 2 || round > 5) return 1;
   if(!guReady) {
     sceGuInit();
     guReady = 1;
@@ -2100,7 +2213,8 @@ int geRound(int round) {
   failed = 0;
   if(round == 2) round2();
   else if(round == 3) round3();
-  else round4();
+  else if(round == 4) round4();
+  else round5();
   return !failed;
 }
 
