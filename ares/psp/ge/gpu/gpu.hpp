@@ -133,9 +133,9 @@ struct GPU : GE::Renderer {
     bool dualSource = false;  //dual-source blending (Source1Color)
     bool logicOps = false;    //its own logic operations
     //Shader blending: the target's pixel read in the fragment shader (an input attachment), so blending, dithering,
-    //logic operations and write masks are pixel.cpp's own; inOrder where a draw's overlapping primitives see each
-    //other's pixels in order (rasterization order access), else the renderer draws those apart (emit()) and the
-    //backend puts a barrier before each draw that reads
+    //logic operations and write masks are pixel.cpp's own; the backend puts a barrier before each draw that reads.
+    //inOrder where a draw's overlapping primitives see each other's pixels in order (rasterization order access),
+    //else the renderer draws those apart (emit()); System::startRenderer() turns it off where the check fails so
     bool reads = false, readsInOrder = false;
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)

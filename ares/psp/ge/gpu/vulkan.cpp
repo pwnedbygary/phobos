@@ -202,6 +202,9 @@ struct VulkanBackend : GPU::Backend {
     VkSemaphore rendered = VK_NULL_HANDLE;
   };
   bool canPresent = false, failed = false, rebuild = false;
+  //The render pass's subpass, and so every pipeline, asks for rasterization order (readsInOrder as the device was
+  //made: the renderer may stop counting on it later, splitting draws again, while the pass stays as it was)
+  bool orderedPass = false;
   void* shownOn = nullptr;
   VkSurfaceKHR surface = VK_NULL_HANDLE;
   VkSwapchainKHR swapchain = VK_NULL_HANDLE;
@@ -629,8 +632,9 @@ struct VulkanBackend : GPU::Backend {
     attachment.colorWriteMask = k.colorMask & 15;
     auto blend = made<VkPipelineColorBlendStateCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
     blend.logicOpEnable = k.logicOp, blend.logicOp = VkLogicOp(k.logicOperation & 15);
-    //(shader blending's draws read the pixels the ones before wrote, in order, where the GPU can be asked to)
-    if(k.reads && readsInOrder) {
+    //(shader blending's draws read the pixels the ones before wrote, in order, where the GPU can be asked to: every
+    //pipeline of the subpass asks, so that the writes of draws that don't read are in that order too)
+    if(orderedPass) {
       blend.flags = VK_PIPELINE_COLOR_BLEND_STATE_CREATE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_BIT_EXT;
     }
     blend.attachmentCount = 1, blend.pAttachments = &attachment;
@@ -877,7 +881,9 @@ struct VulkanBackend : GPU::Backend {
                                 0, sizeof(GPU::Push), &s.push);
           lastState = c.state;
         }
-        if(s.pipeline.reads && !readsInOrder) {  //(what the draws before wrote, made visible to its reading)
+        //(what the draws before wrote, made visible to its reading; in rasterization order too, which orders a
+        //draw's own primitives but, by the letter of it, maybe not a draw before that didn't ask)
+        if(s.pipeline.reads) {
           auto barrier = made<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
           barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
           barrier.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
@@ -1570,8 +1576,8 @@ struct VulkanBackend : GPU::Backend {
       }
     }
     //Shader blending (docs/psp-gpu-renderers.md): the target's pixel read through an input attachment, which every
-    //Vulkan GPU has; in rasterization order within a draw where the GPU offers it (EXT's, or ARM's before it), else
-    //each draw that reads waits for the ones before (a barrier) and holds no overlapping primitives (GPU::emit())
+    //Vulkan GPU has. Each draw that reads waits for the ones before (a barrier); its primitives are in rasterization
+    //order where the GPU offers it (EXT's, or ARM's before it), else it holds no overlapping ones (GPU::emit())
     reads = true;
     auto ordered = made<VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>(
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT);
@@ -1629,7 +1635,8 @@ struct VulkanBackend : GPU::Backend {
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1, subpass.pColorAttachments = &color, subpass.pDepthStencilAttachment = &depth;
     subpass.inputAttachmentCount = 1, subpass.pInputAttachments = &color;
-    if(readsInOrder) subpass.flags = VK_SUBPASS_DESCRIPTION_RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_BIT_EXT;
+    orderedPass = readsInOrder;
+    if(orderedPass) subpass.flags = VK_SUBPASS_DESCRIPTION_RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_BIT_EXT;
     VkSubpassDependency dependencies[2] = {
       {VK_SUBPASS_EXTERNAL, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
        VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, 0},

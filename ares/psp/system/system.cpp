@@ -589,7 +589,19 @@ auto System::startRenderer() -> void {
   if(!gpu && !gpuFailed) {
     std::string error;
     gpu = GPU::vulkan(vulkanLoader, error);
-    if(gpu && !gpu->check(error)) gpu.reset();
+    //(where blending in the shader in rasterization order fails it, the check again with the draws that read apart:
+    //each after a barrier, their overlapping primitives in draws of their own, which every GPU orders)
+    bool passed = gpu && gpu->check(error);
+    if(gpu && !passed && gpu->backend->readsInOrder) {
+      report(true, "the Vulkan renderer's start-up check, blending in the shader in order, failed (" + error +
+                   "): checked again with overlaps apart");
+      gpu->backend->readsInOrder = false, error.clear();
+      passed = gpu->check(error);
+    }
+    if(gpu && !passed) {
+      error += " on " + gpu->backend->name() + (gpu->backend->reads ? ", blending in the shader" : "");
+      gpu.reset();
+    }
     if(gpu && failCheck) gpu.reset(), error = "its start-up check made to fail, as the debug switch asks";
     if(!gpu) {
       gpuFailed = true;
@@ -599,7 +611,10 @@ auto System::startRenderer() -> void {
     gpu->resolution(resolution);
     report(false, "the Vulkan renderer draws, on " + gpu->backend->name() + ", at " +
                   std::to_string(gpu->resolution()) + "x" +
-                  (gpu->resolution() < resolution ? " (the most this GPU takes)" : ""));
+                  (gpu->resolution() < resolution ? " (the most this GPU takes)" : "") +
+                  (!gpu->backend->reads ? ""
+                   : gpu->backend->readsInOrder ? ", blending in the shader, in order"
+                                                : ", blending in the shader, overlaps apart"));
     gpu->report = [this](const std::string& what) { tell("The Vulkan renderer stopped: " + what); };
   }
   if(gpu && gpu->ready()) ge.setRenderer(gpu.get());
