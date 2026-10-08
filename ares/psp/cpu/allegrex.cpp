@@ -10,6 +10,8 @@ namespace ares::PlayStationPortable {
 #include "exceptions.cpp"
 #include "recompiler.cpp"
 #include "recompiler-ipu.cpp"
+#include "recompiler-fpu.cpp"
+#include "recompiler-vfpu.cpp"
 #include "recompiler-memory.cpp"
 #include "serialization.cpp"
 

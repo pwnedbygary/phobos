@@ -449,6 +449,16 @@ struct Allegrex {
   auto VWBN(u8 vd, u8 vs, u32 size, u8 scale) -> void;
   auto VZERO(u8 vd, u32 size) -> void;
 
+  //recompiler-vfpu.cpp: the VFPU's common instructions with the prefixes at rest, which compiled code calls with
+  //its operands' registers worked out (four to a word, a byte each)
+  template<u32 Size, u32 Op> auto vfpuRestBinary(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size> auto vfpuRestDot(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size> auto vfpuRestScale(u32 vd, u32 vs, u32 vt) -> void;
+  template<u32 Size> auto vfpuRestCompare(u32 condition, u32 vs, u32 vt) -> void;
+  template<u32 Size, u32 Op> auto vfpuRestBits(u32 vd, u32 vs, u32) -> void;
+  template<u32 Size> auto vfpuRestToFloat(u32 vd, u32 vs, u32 scale) -> void;
+  auto vfpuMatrix(u32 which, u32 registers, u32 size) -> void;
+
   //exceptions.cpp
   auto exception(Exception) -> void;
   auto addressError(Exception, u32 address) -> void;
@@ -476,6 +486,7 @@ struct Allegrex {
     struct Section {
       u32 mirror = 0;                 //the top three address bits its blocks were compiled for
       u8* blocks[SectionWords] = {};  //the compiled code starting at each word, or nullptr
+      u8* bodies[SectionWords] = {};  //the same code past its prologue, where blocks go on to each other
     };
 
     //The compiled code finds the CPU's state through sljit's saved register S0, which holds the CPU's address:
@@ -493,17 +504,36 @@ struct Allegrex {
     auto writable(u32 index) -> void;
     auto run() -> u32;
     auto block(u32 address) -> u8*;
-    auto emit(u32 address) -> u8*;
+    auto emit(u32 address, u8*& body) -> u8*;
+    auto emitChain(u32 count) -> void;
+    auto emitChainTo(u32 count, u32 target) -> void;
     auto emitInterpreter(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
     auto isBranch(u32 instruction) const -> bool;
     auto endsBlock(u32 instruction) const -> bool;
 
     //recompiler-ipu.cpp
     auto emitInstruction(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
-    auto emitSPECIAL(u32 instruction) -> bool;
+    auto emitSPECIAL(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitSPECIAL3(u32 instruction) -> bool;
+    auto emitMultiply(u32 instruction, bool isSigned, s32 accumulate) -> void;
+    auto emitTrapping(u32 address, u32 instruction, u32 count, bool delaySlot, u32 rd, bool subtract) -> void;
     auto emitBranch(u32 address, u32 instruction, u32 count) -> bool;
     auto emitBranchOutcome(sljit_jump* taken, u32 address, u32 target, bool likely, u32 count) -> void;
     auto emitJump(u32 target) -> void;
+    auto emitCoprocessorBranch(u32 address, u32 instruction, u32 count) -> void;
+
+    //recompiler-fpu.cpp
+    auto emitFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitFPUArithmetic(u32 address, u32 instruction, u32 count, bool delaySlot, s32 op) -> void;
+    auto emitFPUCompare(u32 address, u32 instruction, u32 count, bool delaySlot) -> void;
+    auto emitCOP2(u32 instruction) -> bool;
+
+    //recompiler-vfpu.cpp
+    auto emitVFPU(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
+    auto emitPrefixesBusy() -> sljit_jump*;
+    auto prefixesAfter(u32 instruction) -> void;
+    auto emitMFVC(u32 instruction) -> void;
+    bool prefixesAtRest = false;  //the block being compiled knows the prefixes are at rest here (recompiler-vfpu.cpp)
 
     //recompiler-memory.cpp
     auto emitLoadStore(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool;
@@ -511,13 +541,20 @@ struct Allegrex {
                     const std::function<void ()>& access) -> void;
 
     bool enabled = false;
-    //How many instructions the last block ran: each block sets it as it leaves, and as it calls the interpreter for
-    //one (counting that one), so during that call it says how far the block has got.
+    bool chains = true;  //blocks go on to the next by themselves (emitChain()); tests turn it off to compare
+    bool calls = false;  //the block being compiled calls the interpreter somewhere (emitInterpreter())
+    //How many instructions the last block ran, not yet counted in instructionsRun: each block sets it as it leaves
+    //for run() (0 when it counted them itself, going on to the next: emitChain()), and as it calls the interpreter
+    //for one (counting that one), so during that call it says how far the block has got.
     u32 executed = 0;
     bool inBlock = false;  //whether compiled code is running (it's what called execute(), if anything did)
     u32 codeMemory = 32_MiB;  //how much compiled code may fill before it all goes and compiling starts afresh
     bump_allocator allocator;
     std::vector<std::unique_ptr<Section>> sections;
+    //The same sections, as plain pointers in a table of their own for compiled code to look the next block up in
+    //(emitChain()): table points at sectionTable's first.
+    std::vector<Section*> sectionTable;
+    Section** table = nullptr;
 
     //The page table compiled stores use: the CPU's (pages above), except that pages holding compiled code are
     //left out, so stores there go through write() instead, whose owner then drops that code (invalidate()); and
