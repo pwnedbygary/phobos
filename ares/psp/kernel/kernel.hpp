@@ -14,6 +14,7 @@
 
 #include "loader.hpp"
 #include "disc.hpp"
+#include "disc-info.hpp"
 #include "crypto.hpp"
 #include "pgf.hpp"
 #include "../ge/ge.hpp"

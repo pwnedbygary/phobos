@@ -20,6 +20,7 @@ import com.phobos.emulator.LogEntry
 import com.phobos.emulator.LogLevel
 import com.phobos.emulator.PerformanceStats
 import com.phobos.emulator.PhobosCore
+import com.phobos.emulator.PspDiscInfo
 import com.phobos.emulator.input.ActiveControls
 import com.phobos.emulator.input.ControlCapture
 import com.phobos.emulator.input.ControlLevel
@@ -130,6 +131,7 @@ import com.phobos.emulator.util.newerDriverRelease
 import com.phobos.emulator.util.romTitle
 import com.phobos.emulator.util.withoutDiscNumber
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -1437,6 +1439,9 @@ class MainViewModel(
     private val _currentDisc = MutableStateFlow(-1)
     val currentDisc: StateFlow<Int> = _currentDisc.asStateFlow()
 
+    /** The Library scan: lists files, then (for PSP) fills titles and icons. Cancelled when another scan starts. */
+    private var romScanJob: Job? = null
+
     /** The disc a multi-disc game last ran from, preselected when it starts again. */
     fun lastDisc(systemName: String, game: RomFile): Int =
         (settings.value.lastDisc["$systemName/${game.name}"] ?: 0).coerceIn(0, (game.discs.size - 1).coerceAtLeast(0))
@@ -2555,7 +2560,8 @@ class MainViewModel(
     }
 
     fun scanRoms(context: Context, systemName: String, directoryUris: List<Uri>) {
-        viewModelScope.launch {
+        romScanJob?.cancel()
+        romScanJob = viewModelScope.launch {
             val extensions = PhobosCore.getSystemExtensions(systemName)
             // CD systems also list .m3u playlists, which gather a game's discs. (The PSP takes CHDs too, but its
             // discs can't be swapped yet, so each is listed on its own.)
@@ -2570,9 +2576,18 @@ class MainViewModel(
                     }
                 }
                 val files = result.distinctBy { it.uri }
-                (if (discSystem) withDiscSets(context, files) else files).sortedBy { it.name }
+                val withDiscs = if (discSystem) withDiscSets(context, files) else files
+                withDiscs.sortedBy { it.name }
             }
+            ensureActive()
             _roms.value = foundRoms
+            // Plain list first; titles and icons filled in on the same job so a superseded scan can't clobber
+            // another system's list after a late finish.
+            if (systemName == LaunchSystems.PSP) {
+                val enriched = withContext(Dispatchers.IO) { withPspDiscInfo(context, foundRoms) }
+                ensureActive()
+                _roms.value = enriched
+            }
         }
     }
 
@@ -2611,7 +2626,8 @@ class MainViewModel(
         else -> null
     }
 
-    /** [pspNames]: name the files as PSP programs (see [LaunchSystems.pspProgramName]). */
+    /** [pspNames]: name the files as PSP programs (see [LaunchSystems.pspProgramName]); their size and time too,
+     *  for the icon cache key (the other systems don't cache icons, so they don't pay for it). */
     private fun scanRecursive(
         directory: DocumentFile, extensions: List<String>, result: MutableList<RomFile>, pspNames: Boolean = false,
     ) {
@@ -2624,11 +2640,76 @@ class MainViewModel(
                 if (ext.isNotEmpty() && (extensions.contains(ext) || ext == "zip")) {
                     val fileName = file.name ?: "Unknown"
                     val romName = if (pspNames) LaunchSystems.pspProgramName(fileName, directory.name) else fileName
-                    result.add(RomFile(romName, file.uri, directory.uri))
+                    val size = if (pspNames) file.length() else 0
+                    val mtime = if (pspNames) file.lastModified() else 0
+                    result.add(RomFile(romName, file.uri, directory.uri, size = size, mtime = mtime))
                 }
             }
         }
     }
+
+    /** PSP disc images: read their title and icon from the image (or the cache), caching both in the app's cache.
+     *  A cached disc isn't re-opened, so a second visit is fast. Checks for cancellation between discs, so a
+     *  superseded scan stops before it writes its stale results. */
+    private suspend fun withPspDiscInfo(context: Context, files: List<RomFile>): List<RomFile> {
+        return files.map { rom ->
+            delay(0)  //a suspension point: a cancelled job throws here, so a superseded scan stops
+            if (rom.name.endsWith(".pbp", ignoreCase = true)) return@map rom
+            val key = com.phobos.emulator.util.iconCacheKey(rom.uri.toString(), rom.size, rom.mtime)
+            val cached = cachedPspInfo(context, key)
+            if (cached != null) {
+                return@map rom.copy(title = cached.title.takeIf { it.isNotBlank() }, iconPath = cached.iconPath)
+            }
+            val info = readPspDiscInfo(context, rom) ?: return@map rom
+            val iconPath = cacheIcon(context, key, info)
+            rom.copy(title = info.title.takeIf { it.isNotBlank() }, iconPath = iconPath)
+        }
+    }
+
+    /** The disc's title, disc ID and icon, cached from a previous visit (under the same key as the icon).
+     *  The title and disc ID are on separate lines (a title's `|` wouldn't split the line). */
+    private fun cachedPspInfo(context: Context, key: String): PspInfoCache? {
+        val dir = File(context.cacheDir, "psp-icons")
+        val hash = com.phobos.emulator.util.sha256Hex(key)
+        val infoFile = File(dir, "$hash.info")
+        if (!infoFile.exists()) return null
+        val parsed = runCatching {
+            com.phobos.emulator.util.parsePspInfoCache(infoFile.readText())
+        }.getOrNull() ?: return null
+        val iconFile = File(dir, "$hash.png")
+        val iconPath = if (iconFile.exists()) iconFile.path else null
+        return PspInfoCache(parsed.first, parsed.second, iconPath)
+    }
+
+    private fun readPspDiscInfo(context: Context, rom: RomFile): PspDiscInfo? {
+        return runCatching {
+            context.contentResolver.openFileDescriptor(rom.uri, "r")?.use { pfd ->
+                PhobosCore.pspDiscInfo(pfd.fd)
+            }
+        }.getOrNull()
+    }
+
+    /** Caches the disc's icon (downsampled to a menu size) and its title and disc ID (so a next visit
+     *  doesn't re-open the disc). The icon is refused if its PNG declares a size past [ICON_REFUSE_PX]. */
+    private fun cacheIcon(context: Context, key: String, info: PspDiscInfo): String? {
+        val dir = File(context.cacheDir, "psp-icons")
+        val hash = com.phobos.emulator.util.sha256Hex(key)
+        return try {
+            dir.mkdirs()
+            val iconFile = File(dir, "$hash.png")
+            val bitmap = com.phobos.emulator.util.decodeIcon(info.icon)
+            if (bitmap != null) {
+                iconFile.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                bitmap.recycle()
+            }
+            File(dir, "$hash.info").writeText("${info.title}\n${info.discId}")
+            if (iconFile.exists()) iconFile.path else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private data class PspInfoCache(val title: String, val discId: String, val iconPath: String?)
 
     /** [disc] is the disc a multi-disc game starts from. */
     fun loadRom(context: Context, systemName: String, rom: RomFile, disc: Int = 0) {
@@ -3271,4 +3352,12 @@ data class RomFile(
     val parentUri: Uri? = null,
     /** A multi-disc game's discs in order, from an .m3u playlist or "(Disc N)" files; [name] is then the game's. */
     val discs: List<RomFile> = emptyList(),
+    /** The disc's own title (from its PARAM.SFO), if it has one. */
+    val title: String? = null,
+    /** The path to the disc's cached icon (ICON0.PNG), if read. */
+    val iconPath: String? = null,
+    /** The file's size in bytes, for the icon cache key. */
+    val size: Long = 0,
+    /** The file's last modification time, for the icon cache key. */
+    val mtime: Long = 0,
 )

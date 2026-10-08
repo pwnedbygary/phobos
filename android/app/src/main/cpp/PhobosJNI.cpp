@@ -3,6 +3,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <ares/ares.hpp>
+#include <ares/psp/kernel/disc-info.hpp>
 #include "PhobosRunner.hpp"
 
 using namespace nall;
@@ -733,4 +734,29 @@ Java_com_phobos_emulator_PhobosCore_getVideoGeometry(JNIEnv* env, jobject) {
     jfloatArray result = env->NewFloatArray(2);
     if (result) env->SetFloatArrayRegion(result, 0, 2, values);
     return result;
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_phobos_emulator_PhobosCore_pspDiscInfo(JNIEnv* env, jobject, jint fd) {
+    auto file = vfs::descriptor::open((int)fd);
+    if(!file) return nullptr;
+    auto read = [file](u64 offset, void* data, u64 size) -> u64 {
+        if(offset >= file->size()) return 0;
+        size = std::min<u64>(size, file->size() - offset);
+        if(auto bytes = file->data()) memcpy(data, bytes + offset, size);
+        else { file->seek(offset); file->read({(u8*)data, size}); }
+        return size;
+    };
+    std::string problem;
+    auto info = ares::PlayStationPortable::readDiscInfo(read, file->size(), problem);
+    if(info.title.empty() && info.discId.empty()) return nullptr;
+    jclass cls = env->FindClass("com/phobos/emulator/PspDiscInfo");
+    jmethodID constructor = env->GetMethodID(cls, "<init>", "([BLjava/lang/String;Ljava/lang/String;[B)V");
+    jbyteArray jTitle = env->NewByteArray((jsize)info.title.size());
+    if(!info.title.empty()) env->SetByteArrayRegion(jTitle, 0, (jsize)info.title.size(), (const jbyte*)info.title.data());
+    jstring jDiscId = env->NewStringUTF(info.discId.c_str());
+    jstring jRegion = env->NewStringUTF(info.region.c_str());
+    jbyteArray jIcon = env->NewByteArray((jsize)info.icon.size());
+    if(!info.icon.empty()) env->SetByteArrayRegion(jIcon, 0, (jsize)info.icon.size(), (const jbyte*)info.icon.data());
+    return env->NewObject(cls, constructor, jTitle, jDiscId, jRegion, jIcon);
 }
