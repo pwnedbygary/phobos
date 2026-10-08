@@ -27,8 +27,8 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: the Vulkan renderer in the app and the desktop — 2026-10-07
 
-Branch `cursor/psp-gpu-hw2-2b67`, on top of part 36's `cursor/psp-gpu-hw-2b67`. docs/psp-core.md, part 37, and
-docs/psp-gpu-renderers.md's "In Phobos (part 37)" describe it; PPSSPP stayed a guide only, none of its code used.
+Branch `cursor/psp-gpu-hw2-2b67`, on top of part 38's `cursor/psp-cpu-speed-2b67`. docs/psp-core.md, part 41, and
+docs/psp-gpu-renderers.md's "In Phobos (part 41)" describe it; PPSSPP stayed a guide only, none of its code used.
 - **The setting**: "PSP Renderer" (Software, the default, or Vulkan) in the app's PSP settings and the desktop's
   menu, given to the core as its "Renderer" option when a game loads. The hosts hand over the `vkGetInstanceProcAddr`
   their `loadVulkan` got (the system's or a custom driver's on Android, MoltenVK on the macOS desktop).
@@ -43,6 +43,56 @@ docs/psp-gpu-renderers.md's "In Phobos (part 37)" describe it; PPSSPP stayed a g
   black as with software (the core's). Not seen: the app's fallback toast (nothing failed).
 - **Next**: upscaling (presenting without reading back), then accuracy (shader blending), then OpenGL.
 - `tools/psp-runner` builds again (Vulkan's headers) and takes `--renderer`.
+
+## PSP core: the emulation thread faster, the CPU's recompiler first — 2026-10-07
+
+Branch `cursor/psp-cpu-speed-2b67`, on top of `cursor/psp-hle-games7-2b67` (part 37; measured from part 33's
+70b239ac6). docs/psp-core.md, part 38, has the profiles, the scenes and every number.
+- **The recompiler** (`ares/psp/cpu/`), six commits: the FPU natively (`recompiler-fpu.cpp`, new); multiply,
+  divide, trapping sums and bit fields; blocks chaining to the next by themselves, then to successors known at
+  compile time; loads and stores with the page tables in saved registers; the VFPU's common instructions with the
+  prefixes at rest (`recompiler-vfpu.cpp`, new). Every block still starts and ends where it did (the run loop's
+  check points decide when interrupts and kernel events land), and anything unusual (NaN results, FCSR not at its
+  default, division by 0 or -1, overflow, VFPU prefixes set) goes to the interpreter as before.
+- **Tried and reverted**: GE vertices' matrices four at a time (b75298198, reverted by d4b896d4f). Exact without
+  skinning, but no faster on the host or the RP6.
+- **Exact**: tests/allegrex (58 groups, 2,000 generated programs and the new "chained runs") and tests/psp (308)
+  pass. Six scenes (Midnight Club 3's menu and race, GTA LCS's city and woods, Peace Walker's title, Lumines' demo),
+  300 frames at 1 and 7 GE threads: every frame's picture and VRAM, RAM and the whole serialized state identical
+  to the base's.
+- **Faster**: the CPU's own time a frame down 30-45% in the 3D scenes (MC3's race 12.8 to 8.4 ms on the RP6). On the
+  RP6 at 7 GE threads, MC3's race 21.6 to 25.2 fps, its menu 28.4 to 31.8, GTA's city 43.6 to 57.2; at 1 thread
+  19.7 to 21.6, 24.3 to 25.9 and 36.4 to 39.7.
+- **Next**: the GE's setup is now most of the emulation thread (lighting's per-light numbers once a primitive, the
+  emulation thread's share of drawing at settles); in the recompiler, MIPS registers kept in host registers within a
+  block, and lwl/lwr/swl/swr natively.
+- Scratch tools, states and memory sticks are in `~/phobos-work/scratch/cpu-speed` on the Mac (never committed);
+  the RP6 copy is `/data/local/tmp/cpu-bench2`.
+
+## PSP core: the stuck games, and the runner's presses — 2026-10-07
+
+Branch `cursor/psp-hle-games7-2b67`, on top of `cursor/psp-gpu-hw-2b67` (#164, the hardware renderer, part 36).
+docs/psp-core.md, part 37, describes it; one commit per fix, each with its tests.
+- **Killzone: Liberation**: its boot program loads and starts the game's module, then unloads itself
+  (sceKernelStopUnloadSelfModuleWithStatus), which the kernel took as the program leaving. Now the program goes as a
+  module would (`programAsModule()`), its module_stop run, the game's threads running on; code in no module gets
+  CAN_NOT_STOP. It reaches its language menu and, with presses, its autosave notice; after that it loads
+  `mpeg.prx` and jumps into VRAM at frame 1547 (not looked into yet).
+- **Ace Combat: Joint Assault**: utility module 0x308 loads (0x309 refused); the gamedata install dialog's five
+  functions. It reaches its autosave notice, and with presses its legal notice.
+- **MotorStorm: Arctic Edge**: the drive notifies its callback on activate and deactivate (umd/callbacks, umd/wait,
+  umd/register); the save state version is 15. It reaches its warnings, its logos and its intro movie.
+- **Chili Con Carnage**: corners at one depth keep that depth at every pixel (65535 had become 65534 at some, and
+  the logo lost stripes under GEQUAL). The logo draws whole.
+- **Points past z / w ±1** aren't drawn: psp measure's 3d-rules 6 to 4 pixels apart, nothing else changed.
+- **The runner**: `--press` lists were never split at their commas, so no run with one (the compatibility
+  report's 266 included) had any input; and "program: ended" was lost on unload. Both fixed.
+- **The 22 menu-to-black games**: not the unload change (it's older than both runs; Killzone was black at
+  de6e6dcb7 too). With no input in either run, a re-run with the fixed runner is the way to sort them.
+- **Checks**: tests/psp 312 groups with and without sanitizers, tests/psp/ares 302 checks, none failing; the ten
+  priority games the same pictures and sound against the base, but two frames a moment apart.
+- **Left**: Killzone's jump into VRAM; the other dialogs' sizes and the Screenshot and NpSignin dialogs; equal
+  corner colors losing a level; scePower 0xa85880d0, the report's one top missing function still missing.
 
 ## PSP core: a hardware renderer on Vulkan — 2026-10-07
 
@@ -207,6 +257,37 @@ seen and no emulator's code read.
   tried), LocoRoco 2's GetPsmfInfo variant, PCM sound, marks, the unknown NID 0x340c12cb's real behaviour, the
   start-up's and loops' real timing, and the choices on the specification's uncertainties (part 31 lists them),
   which a measuring round with a movie that has sound and an EP map would settle.
+
+## PSP compatibility re-run — 2026-10-07
+
+Branch `local/psp-rerun`, cut from `origin/cursor/psp-ge-features-2b67` (tip
+`b27f084a5`, PR #157). Re-runs all 266 PSP games against the three PRs since
+the old run—#153 (music/movies through FFmpeg's decoders), #156 (41 kernel
+functions, missing 149→77), and #157 (GE line/box drawing, DXT; no curved
+surfaces, anti-aliased lines drawn without anti-aliasing)—and updates
+`docs/psp-compatibility.md`.
+
+- **Result:** 66 improved (black → menu), 22 went from menu to black (why
+  isn't checked yet; the report names them),
+  35 shifted to movie (dark intro frames the old rule lumped into black,
+  so the Before column's 155 "black" overstates the old run's true-black
+  total). Menu: 104 → 141. Movie: 35 (new category). Black: 155 → 73.
+  Loading: 4 → 13. Timeout: 3 → 4 (The Legend of Nayuta added).
+- **Missing functions:** 149/266 (56 %) → 77/266 (29 %). The GE functions that
+  dominated the old top list (`sceGe_user`, `ThreadManForUser`) are gone; the
+  new top gaps are `scePsmf`/`scePsmfPlayer` (video playback, 79 hits) and
+  `scePspNpDrm_user` (DRM, 13 hits).
+- **Speed:** 172 of 266 games now run above 200 fps (was 166). 8 very slow
+  (< 30 fps), down from 13.
+- **Report:** `docs/psp-compatibility.md` updated with the new commit,
+  counts, per-game table, top missing functions, and a "Since de6e6dcb7"
+  section.
+- **No changes to `ares/psp`** beyond what the tool strictly needs.
+
+Checks: `tests/psp/run-tests.sh` (281 groups, 0 failures),
+`tests/psp/ares/run-tests.sh` (290 checks, 0 failed),
+`tests/psp/ares/runner-test.sh` (passing). Builds clean
+(`-Wall -Wextra -Werror`).
 
 ## PSP runner and compatibility report — 2026-10-06
 

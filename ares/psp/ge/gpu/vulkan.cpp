@@ -468,7 +468,9 @@ struct VulkanBackend : GPU::Backend {
       }
     }
     u8* staging = slot.staging.mapped;
-    std::memcpy(staging, r.vertices.data(), r.vertices.size() * sizeof(GPU::Vertex));
+    //(a run of only read-backs has no vertices, and an empty list's data() may be null, which memcpy mustn't
+    //be given even for no bytes)
+    if(!r.vertices.empty()) std::memcpy(staging, r.vertices.data(), r.vertices.size() * sizeof(GPU::Vertex));
     u64 at = r.vertices.size() * sizeof(GPU::Vertex);
 
     VkCommandBuffer commands = slot.commands;

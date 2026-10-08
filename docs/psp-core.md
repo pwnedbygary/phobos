@@ -37,6 +37,9 @@ Part 32, the next functions games stop at (a thread's run status, the thread man
 stick's free space told alike everywhere, and part 28's differences the recordings settle), is on
 `cursor/psp-hle-games6-2b67`, on top of part 31's.
 Part 33, curved surfaces (BEZIER and SPLINE), is on `cursor/psp-ge-curves-2b67`, on top of part 32's.
+Part 37, the stuck games (a boot program unloading itself, the gamedata install dialog, the drive's callback, depths
+kept at one depth, points past z / w ±1) and the runner's presses, is on `cursor/psp-hle-games7-2b67`, on top of
+part 33's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -4851,9 +4854,288 @@ targets) drawn by the software renderer, byte for byte; render to texture from 3
 to 32; and the depth buffer following memory (cleared by the CPU between two depth-tested sprites; a color pixel
 written between them not bringing memory's depth back). The design's notes on depth say what's still approximated.
 
-## Part 37: the Vulkan renderer in Phobos
+## Part 37: the stuck games, and the runner's presses
 
-On branch `cursor/psp-gpu-hw2-2b67`, on top of part 36. docs/psp-gpu-renderers.md's "In Phobos (part 37)" is the
+On branch `cursor/psp-hle-games7-2b67`, on top of part 36's `cursor/psp-gpu-hw-2b67` (#164). (Parts 34 and 35, the
+exact compute renderer, are on branches of their own.) The owner's RP6 had four games stuck:
+Killzone: Liberation, Ace Combat: Joint Assault, MotorStorm: Arctic Edge and Chili Con Carnage. Sources: pspsdk's
+headers (`pspkerror.h`, `psputility.h`, `pspumd.h`), pspautotests' programs and recordings (umd/callbacks,
+umd/register, umd/wait, umd/api), uOFW for how the module manager answers (read for behaviour, nothing copied), the
+games' own code and calls, traced with the runner, and round 3's measurements (`psp measure`). No other emulator's
+code was read. Each fix is a commit of its own, with its tests.
+
+**Killzone: Liberation** (`modules.cpp`'s `unloadSelf()` and `programAsModule()`): the game's EBOOT is a small boot
+program, a static program at 0x09f00000 that exports module_start and module_stop of its own. It loads and starts
+KZL.PRX (the game, "Guerrilla", at 0x08800000), at frame 571, then calls sceKernelStopUnloadSelfModuleWithStatus(1)
+to get out of the way. The kernel took a program unloading itself as the program leaving (part 19's choice, made
+before any game did it), and ended everything: the game's threads with it. Now the program goes as any module does,
+and only it: it becomes one of the modules (`programAsModule()`: its module, its ID and the block start() gave it,
+`programUID` 0 from then on), has its module_stop run on a thread of its own, and goes once that ends; its exports go
+back to the kernel with it (a module importing from it is linked to the kernel again), and the modules it started,
+and their threads, run on. Code no module holds is refused with CAN_NOT_STOP (0x80020136), as uOFW's module manager
+answers when it finds no module for the caller; it had been taken as the program leaving too. `sceKernelExitGame`
+is now the only way the program ends (`exited`). Tests: a boot program built here starts a module whose thread
+counts once a millisecond, then unloads itself; the module, its thread and its import of the boot program's
+function are checked on both engines, and a state saved while the boot program's module_stop runs carries on in a
+fresh machine as the machine does.
+- The game then reaches its language menu at 60 fps (host and RP6), and with presses that reach it (below) its
+  autosave notice. After that notice it loads `mpeg.prx` (Sony's, stood in for), and at frame 1547 jumps into VRAM
+  (0x040cc000) after reading through a null pointer (0x28 to 0x30): not looked into yet.
+
+**The 22 games that went from a menu to black** in the re-run's report: the Killzone finding doesn't explain them.
+The program-leaving choice dates from part 19's review (fb01557e1, 5 October), and the WithStatus function from part
+32's SDK work (436add499); both were in the old run's commit (de6e6dcb7) as in the new. Built at de6e6dcb7 (with the
+new report's runner, FFmpeg off), Killzone shows its boot logo at frames 60 and 300 and is black from 600 on, the
+boot program having ended it there too: it was black in both runs, so its change of category isn't a change in the
+code. The report's runs had no input at all (the runner's fault, below), so a frame 3600 shows wherever each game's
+own timing took it unaided; a game that unloads its boot program would have ended in both runs alike. A re-run with
+the fixed runner is the way to sort them.
+
+**The runner's presses** (`tools/psp-runner/runner.cpp`): `--press "F:C,F:C,..."` was never split at its commas.
+The whole list was one press, its name all but the first frame; ending in "!", as the report's
+`"120:Start,123:Start!,1800:Cross,1803:Cross!"` does, it was a release of a control called
+"Start,123:Start!,1800:Cross,1803:Cross", which nothing checked. No button was ever pressed, in any run made so.
+The list is now split, and a release must name a control as a press must. That's why Killzone's menu, Joint
+Assault's notice and MotorStorm's notice had seemed to ignore Cross on the host. The runner also said "still
+running" for games that had ended (`exited` read after unloading the core, which powers the kernel off): fixed.
+
+**Ace Combat: Joint Assault** (`utility.cpp`): at boot (0x08800a4c) it loads utility module 0x308, and on BAD_ID
+sets the GPO lights to 0xff and exits. pspsdk's list of sound and video modules stops at 0x307; later firmwares
+have one more, which the kernel now takes as the MP4 library (chosen: nothing here says which it is; its functions
+would be stood in for as the rest are), 0x309 still refused. The game then asks
+sceUtilityGamedataInstallGetStatus, which the kernel didn't have, and exits on the missing function's error. The
+gamedata install dialog is now one of the dialogs (InitStart, GetStatus, Update, ShutdownStart, and Abort;
+NIDs 0x24ac31eb, 0xb57e95d9, 0x4aecd179, 0x32e32dcb and 0x180f7b62, their names' hashes, as pspautotests' imports
+name them): asked about before one is started it's the wrong type (0x80110005), as every dialog answers, and the
+game goes on; started, its parameters must be 0x590 or 0x598 bytes (else 0x80110004, chosen from the structure's
+two sizes in later SDKs), and it runs and is cancelled, by Update or Abort (Abort while it isn't running: the wrong
+status). It reaches the autosave notice, its text drawn with the owner's fonts, and with presses the legal notice
+after it; on the RP6, the title screen, "PRESS START BUTTON".
+
+**MotorStorm: Arctic Edge** (`umd.cpp`): it registers a UMD callback (its handler at 0x0893ef6c sets flags from the
+state's bits 0x02 and 0x10/0x20), activates the drive, and waits in sceDisplayWaitVblankStartCB, a frame at a time
+(0x0893ebb0), for those flags; the kernel never told the callback anything, so the game waited for good. As
+umd/callbacks recorded: activating the drive notifies the callback with its state, deactivating it notifies it again
+(the handler runs at the next sceKernelCheckCallback, or a wait that runs callbacks, even one that returns at once).
+The state: deactivated, the drive is ready but not readable (0x12), readable again (0x32) once activated; and a
+program that gave no SDK version is told 0x22 as it's activated, without "ready" (umd/wait's SDK version cases).
+Either change wakes threads waiting for a bit of the state it brings (umd/wait). Unregistering follows umd/register:
+any ID but the one registered is refused, 0 too while one is registered (0 is taken while none is), and the result is
+the ID, or 0 for programs of SDKs after 3.00. The drive keeps whether it's deactivated (`umdDeactivated`), so the
+state's version goes to 15. The game shows its epilepsy warning and memory stick notice; with presses, its studio
+logos, a stretch of black, and its intro movie (frame 4800 of 6000).
+
+**Chili Con Carnage** (`raster.cpp`'s `triangleRows()` and `lineRows()`, `four.cpp`'s `triangleFours()`): its logo,
+a swizzled 8-bit texture in VRAM (0x041ed680), is a fan drawn at depth 65535 with the depth test "at least as near"
+(GEQUAL) over a background at 65535. The rasterizer blends each pixel's depth from the corners in floats, the
+weights' sum divided out again, and at some pixels that came to a hair under 65535, which the whole number cut to
+65534: those pixels failed the test, in stripes. The game's two display lists, used in turn, draw the logo at
+slightly different sizes, so frames alternated striped and whole. Corners at one depth now give every pixel that
+depth, on both rasterizers and on lines (the smallest change that fixes it: the GPU renderers' agents work on the
+GE too). The test draws the logo's three sizes and a line at 65535, four pixels at a time and one; without the fix
+8607, 21 and 410 pixels of the fans were missing and the line drew 417 of 470. "psp measure" is unchanged.
+Left: a smooth triangle whose corners share a color can lose a level the same way (255 to 254).
+
+**Points past z / w ±1** (`draw.cpp`): part 33 found the PSP drops them even with DEPTH_CLIP_ENABLE on. A point is
+now a primitive of one corner: past either end, it isn't drawn, the clamp on or off. "psp measure": 3d-rules from 6
+to 4 of 8192 pixels apart, every other measurement the same.
+
+**The re-run report** (#158, corrected): the same run, its list of missing functions unchanged. All of its top 15
+are here now (scePsmf and scePsmfPlayer since part 31, the rest since part 32) but scePower 0xa85880d0, which
+pspautotests imports only as an unnamed `scePower_A85880D0`: nothing says what it does, so it stays missing.
+
+**Checks.** `tests/psp`: 312 groups, none failing, with the sanitizers and without; `tests/psp/ares`: 302 checks,
+none failing (a version 14 state refused). The ten priority games, 3000 frames each against the base (8b0262b25):
+the same pictures and the same sound, but for Burnout Legends' frame 3000 and Lumines' frame 600, the same screens
+a moment apart.
+
+**Left, and why:**
+- Killzone's jump into VRAM after loading `mpeg.prx` (above).
+- The other dialogs' parameter sizes (utility/dialog's statuses and sizes still differ), and the Screenshot and
+  NpSignin dialogs, which nothing here has asked for.
+- Colors that blend from equal corners losing a level (above): no game is known to show it.
+
+## Part 38: the emulation thread faster, the CPU's recompiler first
+
+On branch `cursor/psp-cpu-speed-2b67`, on top of part 37's `cursor/psp-hle-games7-2b67`; measured from part 33's
+`cursor/psp-ge-curves-2b67` (70b239ac6). The task: the
+emulation thread faster without changing any result, bit for bit. That thread runs the Allegrex (its recompiler,
+with the interpreter as the reference and fallback) and the GE's setup: decoding, transforming and lighting
+vertices, clipping, setting primitives up and handing them to the drawing threads. Original code: no PPSSPP or
+JPCSP source was read, their JITs included.
+
+**The scenes.** Six, each 300 frames from a state of its own. The scratch runner is `tools/psp-runner` with a patch
+of its own that is never committed: per-frame hashes, a disc check on states, timing. It's built with the Android
+build's flags (`-O3 -flto=thin -ftree-vectorize -funroll-loops -fno-math-errno -fno-trapping-math`) on the host, and
+with the NDK (r28) for the RP6. The games are the owner's. The states were made again from boot after the Mac's
+restart lost the first ones; each game was checked by its disc ID and its picture:
+- Midnight Club 3 (ULUS10021), its menu: Quick Race, Career, Arcade over the city, after making a profile through
+  the menus (Create Profile takes its default name at once).
+- Midnight Club 3, its night race: a Quick Race in San Diego (PCH Sprint), timed with Cross held.
+- GTA Liberty City Stories (ULUS10041), its city: Toni's car pressed against a wall in Portland, buildings and
+  people in view, Cross held.
+- GTA Liberty City Stories, Toni by the car in the woods.
+- Peace Walker's title (ULUS10509).
+- Lumines' demo (ULUS10002).
+
+A state's memory stick is copied with its files' times kept. Midnight Club 3 reads its profile's times, so a copy
+with new times ends in another state; the first comparisons tripped over that.
+
+**Where the time went.** Instruments' Time Profiler on the emulation thread, Midnight Club 3's race at 7 GE threads.
+These profiles were taken before the restart, on earlier states of the same scenes:
+- Before: compiled code about 20%, the interpreter 12% (blocks handing it instructions), `System::run` and the run
+  loop 4%, the GE 57% (its setup about 28%, its share of the drawing about 22%). A frame ran 284,000 blocks of 7.5
+  instructions on average, 2.13 million instructions, and 324,000 of them went to the interpreter, half of those the
+  FPU's and most of the rest the VFPU's.
+- After (c777b1d0e): the GE 63%, compiled code 25% (the chains at blocks' ends 4%, then lw, addiu, lwc1 and sw), the
+  interpreter 4%. In GTA's city: the GE 64% (setup about 29%: a triangle's setup 6%, the 4x3 matrix product 3%,
+  lighting 4%, the render-target check 3%, transform 3%, projection 3%), compiled code 18%, the interpreter 9%.
+
+**What was done**, all in the recompiler (`ares/psp/cpu/`), one commit each:
+1. **The FPU natively** (`recompiler-fpu.cpp`, new; ec732c07e): add.s, sub.s, mul.s, div.s, abs.s, mov.s, neg.s,
+   trunc.w.s, cvt.s.w, c.cond.s, mfc1, mtc1, mfv and mtv, and both coprocessors' branches. Exact: the host's one IEEE
+   operation, as the interpreter's, run only while FCSR asks for rounding to the nearest without flushing (checked
+   each time); a result that isn't a number goes to the interpreter from the start, nothing written, which chooses
+   it from the inputs' bits; trunc.w.s natively only below 2^31 in size; compares by the host's ordered and
+   unordered comparisons.
+2. **Multiply, divide, trapping sums and bit fields** (7d1f1c33e): mult, multu, madd, maddu, msub, msubu, div,
+   divu, clz, clo, add, addi, sub, ext, ins, wsbh and wsbw. Division by zero or by -1, and a sum that overflows, go
+   to the interpreter from the start, as before.
+3. **Blocks go on to the next by themselves** (0189913cb). Every block had returned to the run loop, which counted
+   it, checked the run's limit, looked the next block up and called it. Now a block ending as blocks usually do
+   does all that itself and jumps into the next block's body. A block still leaves for the run loop at a syscall,
+   break, halt or eret, and wherever anything else is to be done.
+4. **Chains to a successor known at compile time** (78cd2d4b4): j and jal, a section's last word, either side of a
+   branch, a likely branch not taken. The next block's table entry is worked out once, and only the page's check is
+   made as the block runs. The halted check is made only after a block that called the interpreter.
+5. **Shorter loads and stores** (6c2862804): the page tables in sljit's saved registers (S1 for loads, S2 for
+   stores), and the address worked out in 64 bits from the base register widened without its sign.
+6. **The VFPU's common instructions with the prefixes at rest** (`recompiler-vfpu.cpp`, new; c777b1d0e): vadd,
+   vsub, vdiv, vmul, vdot, vscl, vcmp, vmov, vabs, vneg and vi2f through helpers made for prefixes at rest; vzero,
+   vone and vidt written directly; vmmul, vtfm and vhtfm called directly; vnop, vsync, vflush, mfvc and cache done
+   natively. A block tracks whether the prefixes are at rest and checks only when it doesn't know.
+
+The one rule behind all of them: **a block starts and ends where it always did.** The run loop checks its limit and
+whether the CPU halted only between blocks, and lets a run go past its limit by up to a block, so where blocks end
+decides when interrupts and the kernel's events land. A first try at native coprocessor branches took the delay slot
+into the block, as the integer branches do. It moved threads' wake-ups by a few cycles in Midnight Club 3: every
+frame was still identical, but the machine's whole state was not. So each step was checked against the full
+serialized state, not only the pictures. The chains count instructions and check the limit exactly as the run loop
+did, so every run stops after the same instructions as before.
+
+**Tried and dropped: vertices four at a time.** For the GE's setup, the world, view and projection matrices (and the
+world's turn of the normal) were worked out for four vertices at once, a vertex in each lane of a vector. The rest of
+each vertex stayed one at a time: projection, texture coordinates, fog, lighting (b75298198). It's exact by
+construction for vertices without skinning, and a 20,000-case test agreed bit for bit. For skinned vertices it isn't:
+at -O3 the compiler reshapes the scalar loop over the bones (a count known only as it runs), fusing its multiply-adds
+otherwise than the vector form, and GTA's characters differed in a last bit. Every frame of all six scenes was
+identical with it, but it gained nothing: on the RP6 at one GE thread, the emulation thread's time a frame in the race
+was 46.05 ms before and 46.04 after, and the menu, the city and the woods were the same within 0.3%. The matrices
+are a small part of a vertex's setup, and gathering four vertices into lanes and back costs about what the lanes
+save. It was reverted (d4b896d4f).
+
+**How it's known to be exact:**
+- `tests/allegrex/run-tests.sh` (both engines, 58 groups): the generated programs, now 2,000, cover every new native
+  instruction with values at the edges (zeros, infinities, NaNs, subnormals, 2^31, fields past bit 31, ins upside
+  down), ctc1 changing rounding and flushing mid-program, and the VFPU's matrix instructions, vi2f, vnop, vsync,
+  cache and every control register. A new group, "chained runs", runs a loop of blocks (an interpreted instruction,
+  a syscall, a fall into the next section, a call, a likely branch both ways, a store dropping its own section's
+  code, a jump through a register, an FPU branch taken every other time) in 2,000 short runs on a chaining
+  recompiler and on one without: every run must end at the same count, pc, pd and registers. Mutations (broken
+  compares, a dropped FCSR check, msub adding, a mask a bit short, no limit check, no prefix check, vmul's product
+  in floats) each fail them.
+- `tests/psp/run-tests.sh`: 308 groups pass, under the address and undefined-behavior sanitizers.
+- The six scenes, 300 frames each, at 1 and 7 GE threads: every frame's picture and all of VRAM, then RAM and the
+  machine's whole serialized state at the end, identical to the base's, after each commit. The RP6's end states
+  match too, both builds alike (the host's own in five scenes; in the menu, the RP6's copy of the stick has other
+  file times).
+
+**The numbers.** Best of three rounds, the two builds taking turns; base is 70b239ac6 and new is c777b1d0e (the
+branch's code after the revert). "CPU" is the emulation thread's time in `Allegrex::run()` less the syscalls it
+makes, in ms a frame. "Thread" is the emulation thread's whole CPU time a frame (the CPU, the kernel, the GE's setup
+and its share of the drawing). On the host, other agents kept the Mac busy (load averages 9 to 34), so its frames a
+second move by several percent from round to round; the CPU times move far less.
+
+Host (Apple Silicon), 7 GE threads:
+
+| scene | CPU ms | thread ms | fps |
+| --- | --- | --- | --- |
+| MC3 race | 10.17 → 7.08 | 26.28 → 22.80 | 34.7 → 41.2 |
+| MC3 menu | 5.01 → 3.06 | 21.46 → 19.39 | 44.7 → 49.1 |
+| GTA city | 5.03 → 3.27 | 13.14 → 11.34 | 69.2 → 82.1 |
+| GTA woods | 3.02 → 2.12 | 9.87 → 9.08 | 88.2 → 94.1 |
+| Peace Walker title | 0.48 → 0.42 | 2.98 → 2.86 | 274 → 273 |
+| Lumines demo | 0.76 → 0.45 | 3.51 → 3.15 | 251 → 274 |
+
+Host, 1 GE thread:
+
+| scene | CPU ms | thread ms | fps |
+| --- | --- | --- | --- |
+| MC3 race | 10.26 → 7.00 | 39.42 → 36.30 | 25.2 → 26.8 |
+| MC3 menu | 5.03 → 3.00 | 32.22 → 29.88 | 30.8 → 33.2 |
+| GTA city | 4.95 → 3.11 | 21.82 → 19.98 | 45.4 → 49.7 |
+| GTA woods | 2.71 → 1.92 | 21.10 → 20.34 | 47.0 → 47.6 |
+| Peace Walker title | 0.54 → 0.45 | 10.87 → 10.12 | 89.5 → 98.0 |
+| Lumines demo | 0.75 → 0.45 | 9.12 → 8.82 | 109 → 112 |
+
+RP6 (the runner started from adb's shell, unpinned), 7 GE threads:
+
+| scene | CPU ms | thread ms | fps |
+| --- | --- | --- | --- |
+| MC3 race | 12.80 → 8.36 | 39.63 → 33.73 | 21.6 → 25.2 |
+| MC3 menu | 6.40 → 3.54 | 30.98 → 27.11 | 28.4 → 31.8 |
+| GTA city | 6.59 → 3.80 | 20.09 → 15.71 | 43.6 → 57.2 |
+| GTA woods | 4.55 → 3.17 | 16.83 → 17.14 | 47.4 → 46.0 |
+| Peace Walker title | 0.40 → 0.28 | 3.88 → 3.78 | 222 → 223 |
+| Lumines demo | 0.92 → 0.59 | 4.53 → 4.72 | 187 → 170 |
+
+At 7 threads the RP6's frames a second depend on which cores the threads land on. Across six rounds of each build,
+the woods ran at 47-51 with the base and 46-59 with the new code, and Lumines at 127-187 and 139-170. The CPU times
+moved by a few percent at most.
+
+RP6, 1 GE thread (steady to within 0.5% between rounds):
+
+| scene | CPU ms | thread ms | fps |
+| --- | --- | --- | --- |
+| MC3 race | 11.79 → 7.25 | 50.60 → 46.05 | 19.66 → 21.61 |
+| MC3 menu | 5.81 → 3.17 | 41.04 → 38.49 | 24.27 → 25.87 |
+| GTA city | 5.79 → 3.35 | 27.33 → 25.09 | 36.42 → 39.69 |
+| GTA woods | 3.06 → 2.02 | 26.04 → 25.24 | 38.24 → 39.45 |
+| Peace Walker title | 0.38 → 0.28 | 15.20 → 15.09 | 65.56 → 66.07 |
+| Lumines demo | 0.83 → 0.43 | 10.77 → 10.38 | 87.24 → 90.16 |
+
+Step by step, measured before the restart on the earlier states (the host's CPU ms a frame at 7 threads; in order:
+base, FPU, integer, chains, known chains, loads and stores, VFPU):
+- MC3 race: 9.25, 7.64, 7.41, 7.68, 7.64, 7.27, 6.06.
+- MC3 menu: 5.06, 4.11, 4.32, 4.00, 4.08, 3.85, 3.00.
+- GTA city: 4.75, 4.27, 4.21, 4.26, 4.13, 4.05, 3.20.
+- GTA woods: 2.94, 2.56, 2.56, 2.63, 2.56, 2.41, 2.12.
+- Lumines: 0.73, 0.56, 0.54, 0.50, 0.47, 0.42, 0.42.
+
+The chains alone barely moved these figures: they moved work from the run loop into the blocks. In the race, the
+run loop's calls into compiled code went from 284,000 a frame to 14,000.
+
+**Left, and why:**
+- The GE is now most of the emulation thread (63% in the race: its setup about 29%, its share of the drawing
+  about a quarter) and compiled code a quarter. Vertices four at a time gained nothing (above). What may: lighting's
+  per-light numbers worked out once a primitive, where they don't depend on the vertex (as part 30 did for
+  directional lights' directions); a triangle's setup; and the render-target check.
+- The emulation thread's share of the drawing: Midnight Club 3 settles about 8 times a frame (only one at GE::run's
+  start), each time drawing what's left on the emulation thread. Settling only the region needed, or letting the
+  workers finish first, would take that off the thread; it touches `ares/psp/ge/threads.cpp`'s ordering and needs
+  its own exactness argument.
+- The recompiler keeps no MIPS registers in host registers across instructions: every instruction loads and stores
+  its operands from the register file. Caching them within a block is the next large step for compiled code, kept
+  exact by writing them back before any call to the interpreter, any syscall and every block end.
+- Still interpreted: lwl, lwr, swl, swr, the VFPU with prefixes set, its rarer instructions (vrot, vcrs, the
+  trigonometric ones, vfim, the conversions with scale) and the remaining FPU conversions (round, ceil, floor,
+  cvt.w.s under other rounding modes).
+- The chain's cost at a jr or jalr (a return): a small cache of the last target would skip the table walk.
+
+## Part 41: the Vulkan renderer in Phobos
+
+On branch `cursor/psp-gpu-hw2-2b67`, on top of part 38 (parts 37 and 36 under it). docs/psp-gpu-renderers.md's "In
+Phobos (part 41)" is the
 detail; this is what was built and measured. PPSSPP's GPU backends stayed a guide to the architecture only, as in
 part 36: none of their code is used, copied or translated.
 
@@ -4888,7 +5170,7 @@ after its next finish. The drawing threads' busy pages stay whole pages. Brave S
 (13.5 ms), 90-96 on the M1 (from 53; waits 26,000 to 5,700 a run). A test: a CPU writing and reading beside a
 target's pixels without a finish, then a sprite over those bytes drawn over memory's.
 
-**The runner**: `tools/psp-runner` builds with Vulkan's headers (the core needs them since part 37), takes
+**The runner**: `tools/psp-runner` builds with Vulkan's headers (the core needs them since part 41), takes
 `--renderer NAME`, and prints the renderer's draws and waiting a frame. It and the tests use the system loader (on
 macOS `DYLD_LIBRARY_PATH=/opt/homebrew/lib`).
 

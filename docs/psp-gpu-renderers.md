@@ -5,7 +5,7 @@ and blending, at the PSP's resolution, on Apple's M1 (MoltenVK) and the RP6's Ad
 36). On the RP6 it draws the six benchmark scenes 1.5 to 2.3 times as fast as the software renderer on seven threads
 (below: "Speed"). It isn't exact: blending rounds differently on the GPU, so 28-65% of a scene's pixels come out the
 same as the software renderer's, nearly all of the rest a level or two apart ("Accuracy"). In the app and the desktop
-program since part 37 (Settings' "PSP Renderer", Software the default: "In Phobos"); no upscaling or OpenGL yet ("The
+program since part 41 (Settings' "PSP Renderer", Software the default: "In Phobos"); no upscaling or OpenGL yet ("The
 plan").
 
 The owner's direction (2026-10-07): a hardware renderer as PPSSPP has one (the GPU's own rasterizer, texture units
@@ -249,7 +249,7 @@ first item on the accuracy list.
   drawn N pixels wide. Textures from render targets are copied at the scaled size and sampled with their coordinates
   scaled. Read-backs scale down (nearest, or a box filter) so memory's VRAM keeps the PSP's own pictures; uploads
   from memory scale up.
-- **Presenting**: since part 37 the shown frame comes from its target (`GPU::picture()`, "In Phobos"): the shown
+- **Presenting**: since part 41 the shown frame comes from its target (`GPU::picture()`, "In Phobos"): the shown
   rectangle alone read back after what's recorded, without finishing, so the pages stay the GPU's and the next frame
   doesn't start by filling them again. Both hosts take a frame as pixels in memory (Android's `ANativeWindow`, the
   desktop's SDL texture), so it's read back either way. What's left is handing the host the target's image instead
@@ -289,7 +289,7 @@ cube 99.7%, envmap 99.4%; blend 68.7% (its blended pixels all a level or two apa
 
 The owner's games, 10 frames each from the verified scenes, on the RP6. (Part 36 said the M1's were the same; they
 aren't quite: its pixels identical are 52.7%, 41.3%, 60.0%, 27.6%, 43.9% and 42.6%, in the table's order, the
-GPUs rounding differently in places. The RP6's, below, were measured again with part 37's code, before the scenes'
+GPUs rounding differently in places. The RP6's, below, were measured again with part 41's code, before the scenes'
 states were lost, and came out the same to the pixel.)
 
 | Scene (game) | Pixels identical | Channels apart by 1-2 | 3-8 | more |
@@ -345,7 +345,7 @@ frame on the M1). Next for speed: block transfers on the GPU, textures sampled a
 bloom: "Bytes beside the pixels"), hoisting copies and uploads out of render passes (a tile-based GPU loads and
 stores the whole picture at every pass break), and the CPU side (transform and setup), which bounds the 3D games now.
 
-**Showing the frame from the GPU** (part 37: `GPU::picture()`, no finish a frame), the same harness on the RP6, frames
+**Showing the frame from the GPU** (part 41: `GPU::picture()`, no finish a frame), the same harness on the RP6, frames
 a second for the software renderer on 7 threads, the Vulkan renderer finishing every frame, and showing it from its
 target: Lumines 117.5, 304.5, 263.5; Peace Walker 223.7, 410.0, 595.0; Midnight Club 3's menu 26.4, 53.5, 55.3 and
 race 24.3, 38.1, 38.7; Liberty City Stories' park edge 49.4, 69.9, 68.2 and woods 51.4, 95.1, 92.7. A 2D game that
@@ -364,7 +364,7 @@ newer Qualcomm driver) is what the PSP renderer runs on, as it is for paraLLEl-R
 (the tests, `tools/psp-runner`) does the backend open the system's loader (`libvulkan.so` on Android,
 `libvulkan.so.1` elsewhere, `libvulkan.1.dylib` on macOS: Homebrew's, `DYLD_LIBRARY_PATH=/opt/homebrew/lib`).
 
-The hosts (part 37): both front ends' `loadVulkan` go through Granite's `Vulkan::Context::init_loader`, which runs
+The hosts (part 41): both front ends' `loadVulkan` go through Granite's `Vulkan::Context::init_loader`, which runs
 before every system starts, the PSP among them, and the host's `vulkanLoader()` hands what Granite resolved
 (`Vulkan::Context::get_instance_proc_addr()`) to the PSP's system (`vulkanLoader`, beside its options), which gives
 it to `GPU::vulkan`. On Android that's the custom driver's `vkGetInstanceProcAddr` when the Driver Manager has one
@@ -380,7 +380,7 @@ seconds marks the device lost, as `VK_ERROR_DEVICE_LOST` does.
 **A lost GPU**: the renderer says so once (`report`), and the software renderer draws from then on. What the GPU drew
 since the last finish is lost (memory's VRAM keeps what was there before), a frame or less; the game goes on.
 
-## In Phobos (part 37)
+## In Phobos (part 41)
 
 **The setting.** "PSP Renderer" in the app's Settings, Emulation, PlayStation Portable (beside Drawing Threads):
 "Software (exact)", the default, or "Vulkan (GPU)", applied when a game starts. The desktop program's menu has "PSP
@@ -431,7 +431,7 @@ the app's toast for a fallback wasn't seen on the RP6; the desktop's fallback wa
 The other 19 games, booted and pressed through to their menus on Vulkan with the custom driver: no crash in any;
 18 at 59.3-60 frames a second, from 0.9 to 13.3 ms a frame. Brave Story's title drew right but at 18.6 frames a second
 (64 ms a frame, the software renderer 9.5): its display list beside the frame buffer ("Bytes beside the pixels"),
-fixed in part 37, after which it runs at 59.5 (13.5 ms a frame). Ace Combat: Joint Assault, MotorStorm: Arctic
+fixed in part 41, after which it runs at 59.5 (13.5 ms a frame). Ace Combat: Joint Assault, MotorStorm: Arctic
 Edge and Killzone stay black as they do with the software renderer (the core's, not the renderer's). The desktop
 program (the M1, MoltenVK) draws Lumines on the GPU at 60 frames a second, and with Vulkan made to fail (a loader
 with no driver) says why once ("The Vulkan renderer couldn't start (no Vulkan instance)") and draws with the
@@ -440,7 +440,7 @@ software renderer.
 ## The plan
 
 1. **Vulkan at native resolution** (part 36, done): the milestone above, measured on the M1 and the RP6.
-2. **In Phobos** (part 37, done): the setting, the host's loader, the start-up check, the fallbacks, the frame shown
+2. **In Phobos** (part 41, done): the setting, the host's loader, the start-up check, the fallbacks, the frame shown
    from the GPU, measured in the app with the system and a custom driver.
 3. **Upscaling** (next): an internal resolution factor, and presenting the target's image without reading it back.
 4. **Accuracy**: programmable blending where the GPU has it (blending, dithering and 16-bit formats as the PSP's),

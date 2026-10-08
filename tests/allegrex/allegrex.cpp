@@ -627,6 +627,66 @@ auto recompilerCases() -> void {
   CHECK(fault.cpu.scc.r[8], 1);
 }
 
+// Blocks that go on to the next by themselves (Recompiler::emitChain()) must stop a run after exactly the
+// instructions it stopped after when each block left for run(), as where a run stops decides when interrupts and
+// events land. A loop of blocks (an interpreted instruction, a syscall, a fall into the next section, a call, a
+// likely branch both ways, a store that drops its own section's code, a jump through a register, an FPU branch
+// taken, which ends its block before its delay slot) runs in short runs of 1 to 37 instructions on two recompilers,
+// one chaining and one not: each run must end at the same count, the same pc and pd and the same registers, and
+// each syscall see the same count of instructions before it.
+auto chainedRuns() -> void {
+  if(!useRecompiler) return;
+  constexpr uint32_t Loop = Base + 0xff0, Next = Base + 0x2040, Function = Base + 0x1100;
+  struct Run {
+    Machine m;
+    std::vector<uint64_t> befores;
+  } runs[2];
+  for(uint32_t n = 0; n < 2; n++) {
+    auto& m = runs[n].m;
+    auto& befores = runs[n].befores;
+    auto put = [&](uint32_t address, std::initializer_list<uint32_t> words) {
+      for(uint32_t word : words) m.ram.write32(address, word), address += 4;
+    };
+    put(Base, {addiu(s0, zero, 0), lui(t2, Function >> 16), ori(t2, t2, Function & 0xffff), lw(t1, 0, t2),
+               j(Loop), nop});
+    put(Loop, {addiu(s0, s0, 1), bitrev(t3, s0), syscall(1), addiu(s4, s4, 3)});  // the last word of a section
+    put(Base + 0x1000, {jal(Function), nop, beql(s1, zero, 2), addiu(s2, s2, 1), sw(t1, 0, t2),
+                        lui(t0, Next >> 16), ori(t0, t0, Next & 0xffff), jr(t0), nop});
+    //(the FPU branch is taken every other time round, so its delay slot is also where a block starts)
+    put(Next, {mtc1(s1, 0), ccond(CondEq, 0, 1), bc1(Bc1f, 2), addiu(s5, s5, 1), addiu(s6, s6, 1),
+               slti(t4, s0, 50), bne(t4, zero, -(int32_t)((Next + 28 - Loop) / 4)), nop, halt});
+    put(Function, {addiu(s1, s1, 1), andi(s1, s1, 1), jr(ra), nop});
+    m.cpu.syscallHook = [&m, &befores](u32) -> bool {
+      befores.push_back(m.cpu.instructionsBefore());
+      return true;
+    };
+    m.cpu.recompiler.enabled = true;
+    m.cpu.recompiler.chains = n == 0;
+    m.cpu.power(Base);
+  }
+  auto& chained = runs[0].m.cpu;
+  auto& unchained = runs[1].m.cpu;
+  uint32_t mismatches = 0;
+  for(uint32_t round = 0; round < 2000 && !chained.scc.halted; round++) {
+    uint32_t limit = 1 + round % 37;
+    uint64_t a = chained.run(limit), b = unchained.run(limit);
+    bool same = a == b && chained.ipu.pc == unchained.ipu.pc && chained.ipu.pd == unchained.ipu.pd;
+    for(uint32_t r = 0; r < 32; r++) same = same && chained.ipu.r[r] == unchained.ipu.r[r];
+    if(!same && ++mismatches <= 3) {
+      std::printf("FAIL %s: run %u of %u: %llu vs %llu instructions, pc %08x vs %08x\n", currentTest, round, limit,
+                  (unsigned long long)a, (unsigned long long)b, chained.ipu.pc, unchained.ipu.pc);
+    }
+  }
+  CHECK(mismatches, 0);
+  CHECK(chained.scc.halted, 1);
+  CHECK(unchained.scc.halted, 1);
+  CHECK(chained.ipu.r[s0], 50);
+  CHECK(chained.ipu.r[s5], 50);
+  CHECK(chained.ipu.r[s6], 25);
+  CHECK(runs[0].befores == runs[1].befores, 1);
+  CHECK(runs[0].befores.size(), 50);
+}
+
 // Not a test: with ALLEGREX_BENCHMARK set, times a loop of loads, stores and arithmetic on the interpreter, on the
 // recompiler without a page table (its loads and stores call the interpreter), and on the recompiler. For numbers
 // that mean something, build without the sanitizers: SANITIZE= ALLEGREX_BENCHMARK=1 tests/allegrex/run-tests.sh
@@ -677,6 +737,22 @@ auto matchesInterpreter() -> void {
     default: return next();
     }
   };
+  // floats at the edges the FPU's native code steps around: zeros, infinities, NaNs (quiet and signaling), the
+  // subnormals and the smallest normal numbers, the edge of what converts to a word, and ordinary numbers
+  auto floatValue = [&]() -> uint32_t {
+    uint32_t sign = random(2) << 31;
+    switch(random(10)) {
+    case 0: return sign;
+    case 1: return sign | 0x7f800000;
+    case 2: return sign | 0x7fc00000 | random(0x400000);
+    case 3: return sign | 0x7f800000 | (1 + random(0x3fffff));
+    case 4: return sign | (random(2) ? 1 + random(0x7fffff) : 0x00800000 + random(0x100));
+    case 5: return sign | (0x4effff00 + random(0x200));
+    case 6: return sign | (0x3f800000 + random(0x800000));
+    case 7: return value();
+    default: return sign | (100 + random(56)) << 23 | random(0x800000);
+    }
+  };
 
   // VFPU encodings: an operation with three 7-bit registers and a size of 1 to 4 lanes, and a VFPU branch
   auto vfpuOp = [](uint32_t opcode, uint32_t size, uint32_t rd, uint32_t rs, uint32_t rt) -> uint32_t {
@@ -686,7 +762,7 @@ auto matchesInterpreter() -> void {
     return 0x49000000u | bit << 18 | kind << 16 | ((uint32_t)offset & 0xffff);
   };
 
-  constexpr uint32_t Length = 40, Programs = 500;
+  constexpr uint32_t Length = 40, Programs = 2000;
   uint32_t mismatches = 0;
   for(uint32_t program = 0; program < Programs; program++) {
     std::vector<uint32_t> code;
@@ -737,7 +813,7 @@ auto matchesInterpreter() -> void {
       uint32_t byteOffset = region + random(256);
       uint32_t word = 0;
       uint32_t vd = random(128), vs = random(128), vt = random(128), size = 1 + random(4);
-      switch(random(56)) {
+      switch(random(58)) {
       case  0: word = addiu(d, s, immediate); break;
       case  1: word = slti(d, s, immediate); break;
       case  2: word = sltiu(d, s, immediate); break;
@@ -767,7 +843,8 @@ auto matchesInterpreter() -> void {
       case 26: word = random(2) ? mthi(s) : mtlo(s); break;
       case 27: word = random(2) ? seb(d, t) : seh(d, t); break;
       case 28: word = random(2) ? max(d, s, t) : min(d, s, t); break;
-      // ones the recompiler leaves to the interpreter (add, addi and sub may overflow, which ends the program)
+      // ones that leave some inputs to the interpreter (add, addi and sub may overflow, which ends the program;
+      // division by zero and by -1) or the whole instruction (bitrev)
       case 29: word = random(2) ? addi(d, s, immediate) : add(d, s, t); break;
       case 30: word = sub(d, s, t); break;
       case 31: word = random(2) ? mult(s, t) : multu(s, t); break;
@@ -778,6 +855,8 @@ auto matchesInterpreter() -> void {
       case 36: {
         uint32_t lsb = random(32), size = 1 + random(32 - lsb);
         word = random(2) ? ext(d, s, lsb, size) : ins(d, s, lsb, size);
+        // now and then fields that run past bit 31, or an ins whose top is below its bottom
+        if(!random(4)) word = (word & ~0xffc0u) | random(32) << 11 | random(32) << 6;
         break;
       }
       case 37: word = lw(d, wordOffset, s7); break;
@@ -788,10 +867,15 @@ auto matchesInterpreter() -> void {
       case 42: word = sb(t, byteOffset, s7); break;
       case 43: word = random(2) ? lwl(d, byteOffset, s7) : lwr(d, byteOffset, s7); break;
       case 44: word = random(2) ? swl(t, byteOffset, s7) : swr(t, byteOffset, s7); break;
-      case 45: word = mtc1(t, random(32)); break;
+      case 45: word = random(8) ? mtc1(t, random(32)) : ctc1(t, 31); break;  // ctc1: another rounding, or flushing
       case 46: word = mfc1(d, random(32)); break;
-      case 47: word = fop(random(3), random(32), random(32), random(32)); break;  // add.s, sub.s, mul.s
-      case 48: word = cvtsw(random(32), random(32)); break;
+      case 47: word = fop(random(8), random(32), random(32), random(32)); break;  // add.s ... neg.s
+      case 48: {  // cvt.s.w; round, trunc, ceil and floor to words; cvt.w.s
+        uint32_t conversion = random(3);
+        word = conversion == 0 ? cvtsw(random(32), random(32))
+             : conversion == 1 ? fop(0x0c + random(4), random(32), random(32)) : fop(0x24, random(32), random(32));
+        break;
+      }
       case 49: word = ccond(random(16), random(32), random(32)); break;
       // the VFPU, which the recompiler also leaves to the interpreter
       case 50: {
@@ -807,7 +891,7 @@ auto matchesInterpreter() -> void {
       }
       case 53: word = random(3) == 2 ? 0xde000000u | random(0x1000) : (0xdc000000u | random(2) << 24 | random(0x100000)); break;
       case 54: {  // mtv, mfv, and the control registers (128 and up) with mtvc and mfvc
-        uint32_t reg = random(4) ? vd : 128 + random(4);
+        uint32_t reg = random(4) ? vd : 128 + random(16);  // (8-15: the random number generator's state)
         word = random(2) ? 0x48e00000u | t << 16 | reg : 0x48600000u | d << 16 | reg;
         break;
       }
@@ -816,13 +900,22 @@ auto matchesInterpreter() -> void {
         word = (random(2) ? 0x32u : 0x3au) << 26 | s7 << 21 | (vd & 31) << 16 | (offset & 0xfffc) | (vd >> 5 & 3);
         break;
       }
+      case 56: {  // vmmul, vtfm2-4 and vhtfm2-4 (as the size matches or not), vi2f
+        const uint32_t operations[] = {0x1e0, 0x1e1, 0x1e2, 0x1e3, 0x1a5};
+        uint32_t operation = operations[random(5)];
+        word = vfpuOp(operation, size, vd, vs, operation == 0x1a5 ? random(32) : vt);
+        break;
+      }
+      case 57:  // vnop, vsync, cache
+        word = random(3) == 0 ? 0xffff0000u : random(2) ? 0xffff0320u : 0xbc000000u | random(0x400000);
+        break;
       }
       code.push_back(word);
     }
 
     uint32_t registers[32], floats[32], vectors[128], data[128];
-    for(auto& r : registers) r = value();
-    for(auto& f : floats) f = value();
+    for(auto& r : registers) r = random(4) ? value() : floatValue();
+    for(auto& f : floats) f = floatValue();
     for(auto& v : vectors) v = value();
     uint32_t cc = random(64);
     for(auto& d : data) d = next();
@@ -902,6 +995,7 @@ int main() {
     {"loads/stores", loadsStores}, {"unaligned", unaligned}, {"branches", branches}, {"syscalls", syscalls},
     {"exceptions", exceptions}, {"fpu arithmetic", fpuArithmetic}, {"fpu conversions", fpuConversions},
     {"fpu compare", fpuCompare}, {"fpu memory", fpuMemory}, {"system", system}, {"recompiler", recompilerCases},
+    {"chained runs", chainedRuns},
   };
   for(auto& test : vfpuTests()) tests.push_back(test);
   int groups = 0;
