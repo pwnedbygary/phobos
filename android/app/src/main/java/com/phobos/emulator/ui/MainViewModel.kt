@@ -130,6 +130,7 @@ import com.phobos.emulator.util.newerDriverRelease
 import com.phobos.emulator.util.romTitle
 import com.phobos.emulator.util.withoutDiscNumber
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -1431,8 +1432,8 @@ class MainViewModel(
     private val _currentDisc = MutableStateFlow(-1)
     val currentDisc: StateFlow<Int> = _currentDisc.asStateFlow()
 
-    /** The PSP disc-info job: fills titles and icons after the plain list is shown. */
-    private var pspInfoJob: kotlinx.coroutines.Job? = null
+    /** The Library scan: lists files, then (for PSP) fills titles and icons. Cancelled when another scan starts. */
+    private var romScanJob: Job? = null
 
     /** The disc a multi-disc game last ran from, preselected when it starts again. */
     fun lastDisc(systemName: String, game: RomFile): Int =
@@ -2542,8 +2543,8 @@ class MainViewModel(
     }
 
     fun scanRoms(context: Context, systemName: String, directoryUris: List<Uri>) {
-        pspInfoJob?.cancel()
-        viewModelScope.launch {
+        romScanJob?.cancel()
+        romScanJob = viewModelScope.launch {
             val extensions = PhobosCore.getSystemExtensions(systemName)
             // CD systems also list .m3u playlists, which gather a game's discs. (The PSP takes CHDs too, but its
             // discs can't be swapped yet, so each is listed on its own.)
@@ -2561,11 +2562,14 @@ class MainViewModel(
                 val withDiscs = if (discSystem) withDiscSets(context, files) else files
                 withDiscs.sortedBy { it.name }
             }
+            ensureActive()
             _roms.value = foundRoms
+            // Plain list first; titles and icons filled in on the same job so a superseded scan can't clobber
+            // another system's list after a late finish.
             if (systemName == LaunchSystems.PSP) {
-                pspInfoJob = viewModelScope.launch(Dispatchers.IO) {
-                    _roms.value = withPspDiscInfo(context, foundRoms)
-                }
+                val enriched = withContext(Dispatchers.IO) { withPspDiscInfo(context, foundRoms) }
+                ensureActive()
+                _roms.value = enriched
             }
         }
     }
@@ -2652,11 +2656,12 @@ class MainViewModel(
         val hash = com.phobos.emulator.util.sha256Hex(key)
         val infoFile = File(dir, "$hash.info")
         if (!infoFile.exists()) return null
-        val lines = runCatching { infoFile.readLines() }.getOrNull() ?: return null
-        if (lines.size != 2) return null
+        val parsed = runCatching {
+            com.phobos.emulator.util.parsePspInfoCache(infoFile.readText())
+        }.getOrNull() ?: return null
         val iconFile = File(dir, "$hash.png")
         val iconPath = if (iconFile.exists()) iconFile.path else null
-        return PspInfoCache(lines[0], lines[1], iconPath)
+        return PspInfoCache(parsed.first, parsed.second, iconPath)
     }
 
     private fun readPspDiscInfo(context: Context, rom: RomFile): PspDiscInfo? {

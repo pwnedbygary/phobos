@@ -40,4 +40,13 @@ class PspDiscInfoTest {
         // The SHA-256 of "abc" is a well-known value; the function's output format is checked here.
         assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", sha256Hex("abc"))
     }
+
+    @Test
+    fun infoCacheKeepsAnEmptyDiscId() {
+        // writeText("title\n") — readLines() would drop the empty second field; parse must not.
+        assertEquals("Homebrew" to "", parsePspInfoCache("Homebrew\n"))
+        assertEquals("Game" to "ULUS12345", parsePspInfoCache("Game\nULUS12345"))
+        assertEquals("" to "ULUS12345", parsePspInfoCache("\nULUS12345"))
+        assertEquals(null, parsePspInfoCache("only-one-line"))
+    }
 }

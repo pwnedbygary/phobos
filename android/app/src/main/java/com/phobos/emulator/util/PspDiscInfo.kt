@@ -19,6 +19,16 @@ fun sha256Hex(input: String): String {
     return digest.joinToString("") { "%02x".format(it) }
 }
 
+/**
+ * Title and disc ID from a `.info` cache file (`title\ndiscId`). Keeps an empty disc ID: `readLines()` would drop
+ * the trailing empty field after the final newline, so `"Game\n"` must not be treated as a cache miss.
+ */
+fun parsePspInfoCache(text: String): Pair<String, String>? {
+    val parts = text.replace("\r\n", "\n").replace('\r', '\n').split("\n", limit = 2)
+    if (parts.size != 2) return null
+    return parts[0] to parts[1]
+}
+
 /** The icon's max size in the cache (pixels): a menu row is 48 dp, which is 144 px at 3x. */
 const val ICON_MAX_PX = 160
 
