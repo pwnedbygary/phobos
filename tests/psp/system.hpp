@@ -73,6 +73,7 @@ auto measureTests() -> Tests;
 auto gpuTests() -> Tests;
 auto discTests() -> Tests;
 auto discFormatTests() -> Tests;
+auto discInfoTests() -> Tests;
 auto stateTests() -> Tests;
 auto cryptoTests() -> Tests;
 auto decryptTests() -> Tests;

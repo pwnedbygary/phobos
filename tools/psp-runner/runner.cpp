@@ -70,41 +70,7 @@ auto readFrom(std::shared_ptr<vfs::file> fp, u64 offset, void* data, u64 size) -
   return size;
 }
 
-//An EBOOT.PBP's PARAM.SFO (its title and details): the PBP starts "\0PBP", a version, then where each of its eight
-//parts starts; PARAM.SFO is the first, and runs to the second. Empty if there's none.
-auto paramSFO(vfs::file& file) -> std::vector<u8> {
-  if(file.size() < 40) return {};
-  u8 header[40];
-  file.seek(0);
-  file.read({header, sizeof(header)});
-  if(memory::compare(header, "\0PBP", 4)) return {};
-  auto word = [](const u8* p) -> u32 { return p[0] | p[1] << 8 | p[2] << 16 | (u32)p[3] << 24; };
-  u32 start = word(header + 8), end = word(header + 12);
-  if(end <= start || end - start > 64_KiB || end > file.size()) return {};
-  std::vector<u8> sfo(end - start);
-  file.seek(start);
-  file.read({sfo.data(), sfo.size()});
-  return sfo;
-}
 
-//A text value from a PARAM.SFO: "\0PSF", a version, where its keys and its values start, and how many there are;
-//then for each, 16 bytes: where its key is (from the keys' start), its format, its value's length and room, and
-//where its value is (from the values' start). Empty if the key isn't there.
-auto sfoValue(const std::vector<u8>& sfo, const char* name) -> std::string {
-  if(sfo.size() < 20 || memory::compare(sfo.data(), "\0PSF", 4)) return {};
-  auto word = [&](u32 at) -> u32 { return sfo[at] | sfo[at + 1] << 8 | sfo[at + 2] << 16 | (u32)sfo[at + 3] << 24; };
-  u32 keys = word(8), values = word(12), count = word(16);
-  for(u32 n = 0; n < count && 20 + n * 16 + 16 <= sfo.size(); n++) {
-    u32 entry = 20 + n * 16;
-    u32 key = keys + (sfo[entry] | sfo[entry + 1] << 8), length = word(entry + 4), value = values + word(entry + 12);
-    if(key >= sfo.size() || value >= sfo.size() || length > sfo.size() - value) continue;
-    if(strncmp((const char*)&sfo[key], name, sfo.size() - key) != 0) continue;
-    std::string text;
-    for(u32 i = 0; i < length && sfo[value + i]; i++) text.push_back((char)sfo[value + i]);  //UTF-8, ending in a 0
-    return text;
-  }
-  return {};
-}
 
 //What the file is (the name it goes in the pak under), or nothing if it isn't a PSP game: the disc images by
 //their heads, a CHD by its version and unit size, the ISO by its primary volume descriptor, a PBP by its head,
@@ -132,7 +98,9 @@ auto kind(const fs::path& location, vfs::file& file) -> std::string {
       return !memory::compare(descriptor + 8, "PSP GAME", 8) ? "disc.iso" : "";
     }
   }
-  if(!memory::compare(head, "\0PBP", 4)) return sfoValue(paramSFO(file), "CATEGORY") != "ME" ? "program.pbp" : "";
+  if(!memory::compare(head, "\0PBP", 4))
+    return PlayStationPortable::sfoValue(PlayStationPortable::paramSFO(file), "CATEGORY") != "ME"
+      ? "program.pbp" : "";
   if(!memory::compare(head, "\x7f" "ELF", 4) && (head[18] | head[19] << 8) == 8) {
     //a PRX is told from an ELF by its name alone: both are ELF files, and the core starts either the same way
     auto stem = location.string();
@@ -142,50 +110,16 @@ auto kind(const fs::path& location, vfs::file& file) -> std::string {
   return {};
 }
 
-//The disc's PARAM.SFO, read off its image: its NPID (the disc's ID, like ULUS10025) and its title. The SFO
-//is a key-value table (a "\0PSF" head, a key table of names, and a value table), and sfoValue() reads a
-//value by its key's name. The image is read the way the system reads one: a CHD's sectors come unpacked
-//from its hunks, the rest straight from the file's bytes.
+//The disc's title and disc ID, read off its image by the shared reader (ares/psp/kernel/disc-info.cpp), which
+//reads a CHD's sectors through libchdr and the rest straight from the file's bytes.
 auto discInfo(const fs::path& file, std::string& npid, std::string& title) -> bool {
   auto fp = vfs::disk::open(file.string().c_str(), vfs::read);
   if(!fp) return false;
   auto read = [fp](u64 offset, void* data, u64 size) -> u64 { return readFrom(fp, offset, data, size); };
-  auto image = std::make_shared<Disc>();
   std::string problem;
-  u8 magic[8] = {};
-  bool opened = false;
-  if(read(0, magic, sizeof(magic)) == sizeof(magic) && !memcmp(magic, "MComprHD", 8)) {
-    #if defined(ARES_ENABLE_CHD)
-    auto chd = std::make_shared<nall::Decode::CHD>();
-    if(chd->load(read, fp->size()) && chd->dvd()) {
-      //the CHD's sectors, one at a time, as an ISO's bytes (system.cpp's startDisc() reads them the same)
-      auto sectors = [chd](u64 offset, void* data, u64 size) -> u64 {
-        u64 done = 0;
-        while(done < size) {
-          u64 at = offset + done;
-          auto sector = chd->read(u32(at / Disc::SectorSize));
-          if(sector.size() != Disc::SectorSize) break;  //past the end, or a damaged hunk
-          u64 count = std::min<u64>(size - done, Disc::SectorSize - at % Disc::SectorSize);
-          memcpy((u8*)data + done, sector.data() + at % Disc::SectorSize, count);
-          done += count;
-        }
-        return done;
-      };
-      opened = image->open(sectors, u64(chd->sectorCount()) * Disc::SectorSize, problem);
-    }
-    #endif
-  } else {
-    opened = image->open(read, fp->size(), problem);
-  }
-  if(!opened) return false;
-  Disc::Entry entry;
-  if(!image->find({"PSP_GAME", "PARAM.SFO"}, entry) || entry.folder) return false;
-  u64 start = u64(entry.sector) * Disc::SectorSize;
-  if(start >= image->size()) return false;
-  std::vector<u8> sfo(entry.size);
-  if(!image->read(start, entry.size, sfo.data())) return false;
-  npid = sfoValue(sfo, "DISC_ID");
-  title = sfoValue(sfo, "TITLE");
+  auto info = PlayStationPortable::readDiscInfo(read, fp->size(), problem);
+  npid = info.discId;
+  title = info.title;
   return !npid.empty();
 }
 
@@ -528,7 +462,7 @@ auto main(int argc, char** argv) -> int {
 
   //The title: a PBP's own (its PARAM.SFO's TITLE), a disc's from its PARAM.SFO's TITLE, else the file's name.
   std::string title, npid;
-  if(name == "program.pbp") title = sfoValue(paramSFO(*fp), "TITLE");
+  if(name == "program.pbp") title = PlayStationPortable::sfoValue(PlayStationPortable::paramSFO(*fp), "TITLE");
   else if(name.rfind("disc.", 0) == 0 && discInfo(game, npid, title)) {
     std::printf("disc: %s (%s)\n", title.c_str(), npid.c_str());
   }
