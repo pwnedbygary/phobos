@@ -130,7 +130,7 @@ auto Allegrex::Recompiler::block(u32 address) -> u8* {
 auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   //Every block has the same prologue (two float registers, for the FPU's native arithmetic: recompiler-fpu.cpp),
   //so the stack frame one block's prologue made serves any other's body, and its epilogue.
-  beginFunction(1, 3, 4, 2);
+  beginFunction(1, 3 + Held, 4, 2);
   //The page tables loads and stores look pages up in (recompiler-memory.cpp), in saved registers S1 and S2: set
   //here, before the body, and kept by the blocks that go on to each other, which all set them alike.
   mov64(sreg(1), imm((sljit_sw)self.pages));
@@ -138,6 +138,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
   auto bodyLabel = sljit_emit_label(compiler);
   calls = false;
   prefixesAtRest = false;  //(not known as a block starts: recompiler-vfpu.cpp)
+  forgetAll();  //(nor is anything held: a block before it may have left anything in those registers)
   u32 count = 0;          //instructions in the block so far
   bool pcStored = false;  //whether ipu.pc and ipu.pd already say where to go after the last instruction
   bool ended = false;     //it ends at an instruction after which run() and the HLE kernel take over (endsBlock())
@@ -160,6 +161,7 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
         emitCoprocessorBranch(address, instruction, count);
         going = Next::Done;
       } else if(!lastInSection && emitBranch(address, instruction, count)) {
+        wrote();
         u32 branch = address;
         address += 4;
         count++;
@@ -343,6 +345,99 @@ auto Allegrex::Recompiler::emitInterpreter(u32 address, u32 instruction, u32 cou
   mov32(field(&executed), imm(count));
   callf(&Allegrex::execute, imm(address), imm(instruction));
   testJumpEpilog();
+  forgetAll();  //(it may have written any register)
+}
+
+//emitInterpreter() for a native instruction's side path (a load's page without an entry, an overflow), where the
+//interpreter runs the same instruction: it writes only that instruction's results, so what the host registers
+//hold stays true but for those, which are read back from what it wrote (they're stored again as the native
+//instruction's would be: the same value).
+auto Allegrex::Recompiler::emitFallback(u32 address, u32 instruction, u32 count, bool delaySlot) -> void {
+  auto kept = holding;
+  emitInterpreter(address, instruction, count, delaySlot);
+  holding = kept;
+  for(u32 k = 0; k < Held; k++) {
+    if(holding.pending[k] >= 0) mov32(sreg(3 + k), gpr(holding.pending[k]));
+  }
+}
+
+//The game's registers in host registers: within a block, a register's value once read stays in a host register,
+//so the instructions after read it from there instead of from ipu.r[] again; and a result is worked out in one,
+//to be read from there too. They're only copies: every result is still stored to ipu.r[] as its instruction ends
+//(wrote()), so ipu.r[] is always as the interpreter would have it, wherever the block leaves, calls the interpreter
+//or goes on to another block, and nothing has to be put back. What the copies can miss is a register written some
+//other way, so those are forgotten: by the interpreter (emitInterpreter()), by a coprocessor's move into one
+//(emitInstruction()), by a branch's link (emitBranch()); and a block starts holding none (emit()).
+//
+//A host register for a new value: one holding nothing, else the least recently used, but none the instruction being
+//compiled uses already (an instruction uses three at most, and there are at least three).
+auto Allegrex::Recompiler::take() -> u32 {
+  s32 best = -1;
+  for(u32 k = 0; k < Held; k++) {
+    if(holding.pinned >> k & 1) continue;
+    if(holding.held[k] < 0) { best = k; break; }
+    if(best < 0 || holding.used[k] < holding.used[best]) best = k;
+  }
+  assert(best >= 0);
+  if(holding.held[best] >= 0) holding.slot[holding.held[best]] = -1, holding.held[best] = -1;
+  holding.pinned |= 1 << best;
+  holding.used[best] = ++holding.clock;
+  return best;
+}
+
+//Register index's value, to be read: the host register holding it, loaded there first if none does yet (r0, always
+//zero, is read from ipu.r[] as before). Its loading comes before whatever the instruction does with it.
+auto Allegrex::Recompiler::use(u32 index) -> op_base {
+  if(index == 0) return gpr(0);
+  s32 k = holding.slot[index];
+  if(k < 0) {
+    k = take();
+    mov32(sreg(3 + k), gpr(index));
+    holding.slot[index] = k, holding.held[k] = index;
+  }
+  holding.pinned |= 1 << k;
+  holding.used[k] = ++holding.clock;
+  return sreg(3 + k);
+}
+
+//Where register index's new value goes (never r0's: an instruction writing only r0 compiles to nothing), stored by
+//wrote(). Until then the old value is the register's, in ipu.r[] and for use() (which loads it afresh if its host
+//register is now this one).
+auto Allegrex::Recompiler::def(u32 index) -> op_base {
+  s32 k = holding.slot[index];
+  if(k >= 0 && !(holding.pinned >> k & 1)) {
+    holding.slot[index] = -1, holding.held[k] = -1;
+    holding.pinned |= 1 << k;
+    holding.used[k] = ++holding.clock;
+  } else {
+    k = take();
+  }
+  holding.pending[k] = index;
+  return sreg(3 + k);
+}
+
+//The instruction is done: its results are stored to ipu.r[], and their host registers hold them from now on.
+auto Allegrex::Recompiler::wrote() -> void {
+  for(u32 k = 0; k < Held; k++) {
+    s32 index = holding.pending[k];
+    if(index < 0) continue;
+    mov32(gpr(index), sreg(3 + k));
+    if(holding.slot[index] >= 0) holding.held[holding.slot[index]] = -1;
+    holding.slot[index] = k, holding.held[k] = index;
+    holding.pending[k] = -1;
+  }
+  holding.pinned = 0;
+}
+
+auto Allegrex::Recompiler::forget(u32 index) -> void {
+  s32 k = holding.slot[index];
+  if(k >= 0) holding.slot[index] = -1, holding.held[k] = -1;
+}
+
+auto Allegrex::Recompiler::forgetAll() -> void {
+  for(auto& k : holding.slot) k = -1;
+  for(u32 k = 0; k < Held; k++) holding.held[k] = -1, holding.pending[k] = -1, holding.used[k] = 0;
+  holding.pinned = 0;
 }
 
 //Whether an instruction is a branch or jump: it has a delay slot, and changes where the CPU goes after that.

@@ -43,7 +43,7 @@ docs/psp-core.md, part 45, and docs/psp-gpu-renderers.md's "Shader blending" des
 
 ## PSP core: upscaling, and presenting without reading back — 2026-10-08
 
-Branch `cursor/psp-gpu-hw3-2b67`, on top of part 42's `cursor/psp-hle-games8-2b67` (#168 under it). docs/psp-core.md, part 44, and
+Branch `cursor/psp-gpu-hw3-2b67`, on top of part 43's `cursor/psp-cpu-speed2-2b67` (#170 under it). docs/psp-core.md, part 44, and
 docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" describe it; PPSSPP stayed a guide only, none of its code used.
 - **The setting**: "PSP Resolution" (Native, the default and exact, then 2x-10x) in the app's PSP settings and the
   desktop's menu, given to the core as its "Resolution" option when a game loads; Vulkan's alone.
@@ -51,11 +51,32 @@ docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" describe it; PPSSPP sta
   the PSP's size first so memory stays exact; render to texture keeps the scale. New test `gpuScaled`; the sanitized
   PSP suite passes on the M1 (322 groups, the GPU groups run).
 - **Presenting** (Android): the frame drawn straight onto a swapchain on the app's window, no read-back; screenshots
-  from a shrunk copy; a failing surface falls back to the read-back. The desktop reads back at up to 4x.
+  from a shrunk copy; a failing surface falls back to the read-back. The desktop reads back at up to 4x. Review fix:
+  when present fails (background, acquire timeout), the frame goes the read-back way instead of leaving a stale screen.
 - **RP6**: Lumines 59.4/59.3/50.6 fps at Native/4x/8x, Ridge Racer 2's menu 60/46.5 at Native/8x. The fallback
   toast seen at last (`adb shell setprop debug.phobos.psp.failcheck 1`; set back to 0). Still to check: 10x, games
   in play, rotation and backgrounding while presenting, a line seen once at 8x (part 44, "Not checked yet").
 - **Next**: shader blending, then OpenGL.
+
+## PSP core: the emulation thread faster again — drawing off it, registers held — 2026-10-08
+
+Branch `cursor/psp-cpu-speed2-2b67`, on top of part 42's `cursor/psp-hle-games8-2b67` (#169; measured from part 38's
+4ebc59d97). docs/psp-core.md, part 43, has the profile, the waits and every number. Opened as #170.
+- **The GE** (`ares/psp/ge/`): a list starting waits only for the batch it's to fill, not for everything the last
+  list left being drawn (b0af46594); lighting's light-by-material products once a primitive (3292c775f).
+- **The recompiler** (`ares/psp/cpu/`): a block holds the game's registers in host registers, written through, so
+  `ipu.r[]` is always current (5a5fc5d0c); lwl, lwr, swl and swr natively (e06caa086).
+- **Exact**: tests/allegrex (58 groups, on ARM64 and as an x86-64 build under Rosetta) and tests/psp (319, the
+  hardware renderer's included) pass. The six scenes, 300 frames at 1 and 7 GE threads: every frame's picture and
+  VRAM, RAM and the whole serialized state identical to 4ebc59d97's; on the RP6 the end states match unsettled too.
+- **Faster** on the RP6 at 7 GE threads: MC3's race 24.2 to 32.3 fps (the emulation thread 34.4 to 26.8 ms a
+  frame), its menu 30.4 to 36.2, Lumines 137 to 177; GTA's city and woods unchanged; Peace Walker's title 226 to 216.
+  At 1 thread the CPU's time is 2-9% lower (Peace Walker's the same) and the frame rates the same.
+- **Next**: the race's remaining drawing wait is a texture decoded from the batch being filled (render to texture,
+  3.4 ms a frame); then primitives drawn at once, textures read from memory as they're drawn.
+- Scratch tools and states are in `~/phobos-work/scratch/cpu-speed` (never committed); the RP6 copy is
+  `/data/local/tmp/cpu-bench3`. The RP6 is shared: take `~/phobos-work/rp6.lock` first, and time only while the
+  Phobos app isn't running.
 
 ## PSP core: Killzone's movie, the dialogs' sizes and statuses — 2026-10-08
 

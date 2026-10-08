@@ -2,22 +2,25 @@
 //the interpreter instead (recompiler.cpp); so are, as they run, the few cases a native instruction leaves to it
 //(an overflow that raises an exception, a division by zero), from the start, before anything is written.
 //
-//No MIPS register stays in a host register from one instruction to the next: each instruction reads its inputs
-//from ipu.r[] and writes its result straight back. That keeps every instruction independent, and the state always
-//in memory, where the interpreter and the HLE kernel look for it.
+//Within a block the registers an instruction reads may already be in host registers, from an instruction before,
+//and its result is worked out in one (use(), def(): recompiler.cpp); but every result is stored to ipu.r[] as its
+//instruction ends, so the state is always in memory, where the interpreter and the HLE kernel look for it. Rs and
+//Rt read a register; Dd and Dt are where rd's or rt's new value goes. An operand read only on one side of a jump
+//inside an instruction is read before the jump, so that it's held after, whichever side ran.
 //
 //r0 always reads as zero, so an instruction whose only effect would be writing r0 compiles to nothing.
 //
-//A few instructions read only a register's low byte or halfword from memory: the lowest-addressed one, on every
-//host this runs on (ARM64 and x86-64 are little-endian).
+//A few instructions read only a register's low byte or halfword: the lowest-addressed one, in memory, on every
+//host this runs on (ARM64 and x86-64 are little-endian), or the host register's low bits.
 
 #define RDn (instruction >> 11 & 31)
 #define RTn (instruction >> 16 & 31)
 #define RSn (instruction >> 21 & 31)
 #define SA  (instruction >>  6 & 31)
-#define Rd  gpr(RDn)
-#define Rt  gpr(RTn)
-#define Rs  gpr(RSn)
+#define Rt  use(RTn)
+#define Rs  use(RSn)
+#define Dd  def(RDn)
+#define Dt  def(RTn)
 #define Hi  field(&self.ipu.hi)
 #define Lo  field(&self.ipu.lo)
 #define PC  field(&self.ipu.pc)
@@ -25,7 +28,19 @@
 #define i16 s16(instruction)
 #define n16 u16(instruction)
 
+//An instruction compiled natively, if it can be, its results stored as it ends. A coprocessor's move into rt
+//(MFC1, MFV, MFVC) writes ipu.r[] itself, so rt's host register no longer holds its value.
 auto Allegrex::Recompiler::emitInstruction(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool {
+  bool native = emitNative(address, instruction, count, delaySlot);
+  wrote();
+  u32 op = instruction >> 26;
+  if(op == 0x11 || op == 0x12 || op == 0x18 || op == 0x19 || op == 0x1b || op == 0x34 || op == 0x3c || op == 0x3f) {
+    forget(RTn);
+  }
+  return native;
+}
+
+auto Allegrex::Recompiler::emitNative(u32 address, u32 instruction, u32 count, bool delaySlot) -> bool {
   switch(instruction >> 26) {
 
   case 0x00: return emitSPECIAL(address, instruction, count, delaySlot);
@@ -48,13 +63,14 @@ auto Allegrex::Recompiler::emitInstruction(u32 address, u32 instruction, u32 cou
   case 0x2f: return true;
 
   //loads and stores (recompiler-memory.cpp)
-  case 0x20: case 0x21: case 0x23: case 0x24: case 0x25: case 0x28: case 0x29: case 0x2b:
+  case 0x20: case 0x21: case 0x22: case 0x23: case 0x24: case 0x25: case 0x26:
+  case 0x28: case 0x29: case 0x2a: case 0x2b: case 0x2e:
   case 0x31: case 0x32: case 0x36: case 0x39: case 0x3a: case 0x3e:
     return emitLoadStore(address, instruction, count, delaySlot);
 
   //ADDIU Rt,Rs,i16
   case 0x09: {
-    if(RTn) add32(Rt, Rs, imm(i16));
+    if(RTn) add32(Dt, Rs, imm(i16));
     return true;
   }
 
@@ -62,7 +78,7 @@ auto Allegrex::Recompiler::emitInstruction(u32 address, u32 instruction, u32 cou
   case 0x0a: {
     if(!RTn) return true;
     cmp32(Rs, imm(i16), set_slt);
-    mov32_f(Rt, flag_slt);
+    mov32_f(Dt, flag_slt);
     return true;
   }
 
@@ -70,31 +86,31 @@ auto Allegrex::Recompiler::emitInstruction(u32 address, u32 instruction, u32 cou
   case 0x0b: {
     if(!RTn) return true;
     cmp32(Rs, imm(i16), set_ult);
-    mov32_f(Rt, flag_ult);
+    mov32_f(Dt, flag_ult);
     return true;
   }
 
   //ANDI Rt,Rs,n16
   case 0x0c: {
-    if(RTn) and32(Rt, Rs, imm(n16));
+    if(RTn) and32(Dt, Rs, imm(n16));
     return true;
   }
 
   //ORI Rt,Rs,n16
   case 0x0d: {
-    if(RTn) or32(Rt, Rs, imm(n16));
+    if(RTn) or32(Dt, Rs, imm(n16));
     return true;
   }
 
   //XORI Rt,Rs,n16
   case 0x0e: {
-    if(RTn) xor32(Rt, Rs, imm(n16));
+    if(RTn) xor32(Dt, Rs, imm(n16));
     return true;
   }
 
   //LUI Rt,n16
   case 0x0f: {
-    if(RTn) mov32(Rt, imm(s32(u32(n16) << 16)));
+    if(RTn) mov32(Dt, imm(s32(u32(n16) << 16)));
     return true;
   }
 
@@ -112,7 +128,7 @@ auto Allegrex::Recompiler::emitSPECIAL3(u32 instruction) -> bool {
   case 0x00: {
     if(!RTn) return true;
     lshr32(reg(0), Rs, imm(SA));
-    and32(Rt, reg(0), imm(s32(u32((1ull << (RDn + 1)) - 1))));
+    and32(Dt, reg(0), imm(s32(u32((1ull << (RDn + 1)) - 1))));
     return true;
   }
 
@@ -125,7 +141,7 @@ auto Allegrex::Recompiler::emitSPECIAL3(u32 instruction) -> bool {
     shl32(reg(0), Rs, imm(lsb));
     and32(reg(0), reg(0), imm(s32(mask)));
     and32(reg(1), Rt, imm(s32(~mask)));
-    or32(Rt, reg(0), reg(1));
+    or32(Dt, reg(0), reg(1));
     return true;
   }
 
@@ -142,7 +158,7 @@ auto Allegrex::Recompiler::emitSPECIAL3(u32 instruction) -> bool {
       shl32(reg(1), reg(1), imm(8));
       lshr32(reg(0), reg(0), imm(8));
       and32(reg(0), reg(0), imm(0x00ff'00ff));
-      or32(Rd, reg(0), reg(1));
+      or32(Dd, reg(0), reg(1));
       return true;
     }
 
@@ -151,7 +167,7 @@ auto Allegrex::Recompiler::emitSPECIAL3(u32 instruction) -> bool {
       if(!RDn) return true;
       mov32(reg(0), Rt);
       sljit_emit_op1(compiler, SLJIT_REV32, SLJIT_R0, 0, SLJIT_R0, 0);
-      mov32(Rd, reg(0));
+      mov32(Dd, reg(0));
       return true;
     }
 
@@ -159,7 +175,7 @@ auto Allegrex::Recompiler::emitSPECIAL3(u32 instruction) -> bool {
     case 0x10: {
       if(!RDn) return true;
       mov32_s8(reg(0), Rt);
-      mov32(Rd, reg(0));
+      mov32(Dd, reg(0));
       return true;
     }
 
@@ -167,7 +183,7 @@ auto Allegrex::Recompiler::emitSPECIAL3(u32 instruction) -> bool {
     case 0x18: {
       if(!RDn) return true;
       mov32_s16(reg(0), Rt);
-      mov32(Rd, reg(0));
+      mov32(Dd, reg(0));
       return true;
     }
 
@@ -190,10 +206,10 @@ auto Allegrex::Recompiler::emitTrapping(u32 address, u32 instruction, u32 count,
   else if(subtract) sub32(reg(0), reg(0), Rt, set_o);
   else add32(reg(0), reg(0), Rt, set_o);
   auto overflow = jump(flag_o);
-  if(rd) mov32(gpr(rd), reg(0));
+  if(rd) mov32(def(rd), reg(0));
   auto done = jump();
   setLabel(overflow);
-  emitInterpreter(address, instruction, count, delaySlot);
+  emitFallback(address, instruction, count, delaySlot);
   setLabel(done);
 }
 
@@ -227,65 +243,69 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
 
   //SLL Rd,Rt,Sa (sll r0,r0,0 is nop)
   case 0x00: {
-    if(RDn) shl32(Rd, Rt, imm(SA));
+    if(RDn) shl32(Dd, Rt, imm(SA));
     return true;
   }
 
   //SRL Rd,Rt,Sa, or ROTR Rd,Rt,Sa when rs is 1
   case 0x02: {
     if(!RDn) return true;
-    if(RSn == 1) rotr32(Rd, Rt, imm(SA));
-    else lshr32(Rd, Rt, imm(SA));
+    if(RSn == 1) rotr32(Dd, Rt, imm(SA));
+    else lshr32(Dd, Rt, imm(SA));
     return true;
   }
 
   //SRA Rd,Rt,Sa
   case 0x03: {
-    if(RDn) ashr32(Rd, Rt, imm(SA));
+    if(RDn) ashr32(Dd, Rt, imm(SA));
     return true;
   }
 
   //SLLV Rd,Rt,Rs (the "m" shifts use only the amount's low five bits, as MIPS does)
   case 0x04: {
-    if(RDn) mshl32(Rd, Rt, Rs);
+    if(RDn) mshl32(Dd, Rt, Rs);
     return true;
   }
 
   //SRLV Rd,Rt,Rs, or ROTRV Rd,Rt,Rs when sa is 1 (rotations always use the low five bits)
   case 0x06: {
     if(!RDn) return true;
-    if(SA == 1) rotr32(Rd, Rt, Rs);
-    else mlshr32(Rd, Rt, Rs);
+    if(SA == 1) rotr32(Dd, Rt, Rs);
+    else mlshr32(Dd, Rt, Rs);
     return true;
   }
 
   //SRAV Rd,Rt,Rs
   case 0x07: {
-    if(RDn) mashr32(Rd, Rt, Rs);
+    if(RDn) mashr32(Dd, Rt, Rs);
     return true;
   }
 
   //MOVZ Rd,Rs,Rt
   case 0x0a: {
     if(!RDn) return true;
-    auto skip = cmp32_jump(Rt, imm(0), flag_ne);
-    mov32(Rd, Rs);
+    auto from = Rs, test = Rt;  //(both read before the jump)
+    auto skip = cmp32_jump(test, imm(0), flag_ne);
+    mov32(gpr(RDn), from);
     setLabel(skip);
+    forget(RDn);  //(written one way, not the other)
     return true;
   }
 
   //MOVN Rd,Rs,Rt
   case 0x0b: {
     if(!RDn) return true;
-    auto skip = cmp32_jump(Rt, imm(0), flag_eq);
-    mov32(Rd, Rs);
+    auto from = Rs, test = Rt;
+    auto skip = cmp32_jump(test, imm(0), flag_eq);
+    mov32(gpr(RDn), from);
     setLabel(skip);
+    forget(RDn);
     return true;
   }
 
   //MFHI Rd
   case 0x10: {
-    if(RDn) mov32(Rd, Hi);
+    if(RDn) mov32(Dd, Hi);
     return true;
   }
 
@@ -297,7 +317,7 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
 
   //MFLO Rd
   case 0x12: {
-    if(RDn) mov32(Rd, Lo);
+    if(RDn) mov32(Dd, Lo);
     return true;
   }
 
@@ -313,7 +333,7 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
     if(instruction & 1) xor32(reg(0), Rs, imm(-1));
     else mov32(reg(0), Rs);
     sljit_emit_op1(compiler, SLJIT_CLZ32, SLJIT_R0, 0, SLJIT_R0, 0);
-    mov32(Rd, reg(0));
+    mov32(Dd, reg(0));
     return true;
   }
 
@@ -328,17 +348,18 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
   //PSP's answers from the interpreter: the host leaves those undefined (x86 traps on them).
   case 0x1a: case 0x1b: {
     bool isSigned = !(instruction & 1);
+    auto dividend = Rs;
     mov32(reg(1), Rt);
     auto byZero = cmp32_jump(reg(1), imm(0), flag_eq);
     sljit_jump* byMinusOne = isSigned ? cmp32_jump(reg(1), imm(-1), flag_eq) : nullptr;
-    mov32(reg(0), Rs);
+    mov32(reg(0), dividend);
     sljit_emit_op0(compiler, isSigned ? SLJIT_DIVMOD_S32 : SLJIT_DIVMOD_U32);  //r0: the quotient; r1: the remainder
     mov32(Lo, reg(0));
     mov32(Hi, reg(1));
     auto done = jump();
     setLabel(byZero);
     if(byMinusOne) setLabel(byMinusOne);
-    emitInterpreter(address, instruction, count, delaySlot);
+    emitFallback(address, instruction, count, delaySlot);
     setLabel(done);
     return true;
   }
@@ -363,31 +384,31 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
 
   //ADDU Rd,Rs,Rt
   case 0x21: {
-    if(RDn) add32(Rd, Rs, Rt);
+    if(RDn) add32(Dd, Rs, Rt);
     return true;
   }
 
   //SUBU Rd,Rs,Rt
   case 0x23: {
-    if(RDn) sub32(Rd, Rs, Rt);
+    if(RDn) sub32(Dd, Rs, Rt);
     return true;
   }
 
   //AND Rd,Rs,Rt
   case 0x24: {
-    if(RDn) and32(Rd, Rs, Rt);
+    if(RDn) and32(Dd, Rs, Rt);
     return true;
   }
 
   //OR Rd,Rs,Rt
   case 0x25: {
-    if(RDn) or32(Rd, Rs, Rt);
+    if(RDn) or32(Dd, Rs, Rt);
     return true;
   }
 
   //XOR Rd,Rs,Rt
   case 0x26: {
-    if(RDn) xor32(Rd, Rs, Rt);
+    if(RDn) xor32(Dd, Rs, Rt);
     return true;
   }
 
@@ -395,7 +416,7 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
   case 0x27: {
     if(!RDn) return true;
     or32(reg(0), Rs, Rt);
-    xor32(Rd, reg(0), imm(-1));
+    xor32(Dd, reg(0), imm(-1));
     return true;
   }
 
@@ -403,7 +424,7 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
   case 0x2a: {
     if(!RDn) return true;
     cmp32(Rs, Rt, set_slt);
-    mov32_f(Rd, flag_slt);
+    mov32_f(Dd, flag_slt);
     return true;
   }
 
@@ -411,7 +432,7 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
   case 0x2b: {
     if(!RDn) return true;
     cmp32(Rs, Rt, set_ult);
-    mov32_f(Rd, flag_ult);
+    mov32_f(Dd, flag_ult);
     return true;
   }
 
@@ -422,7 +443,7 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
     mov32(reg(1), Rt);
     cmp32(reg(0), reg(1), set_sgt);
     cmov32(reg(1), reg(0), reg(1), flag_sgt);
-    mov32(Rd, reg(1));
+    mov32(Dd, reg(1));
     return true;
   }
 
@@ -433,7 +454,7 @@ auto Allegrex::Recompiler::emitSPECIAL(u32 address, u32 instruction, u32 count, 
     mov32(reg(1), Rt);
     cmp32(reg(0), reg(1), set_slt);
     cmov32(reg(1), reg(0), reg(1), flag_slt);
-    mov32(Rd, reg(1));
+    mov32(Dd, reg(1));
     return true;
   }
 
@@ -468,7 +489,7 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
     //JALR Rd,Rs (the target is read before rd is written, in case they're the same register)
     if((instruction & 0x3f) == 0x09) {
       mov32(reg(0), Rs);
-      if(RDn) mov32(Rd, imm(address + 8));
+      if(RDn) mov32(gpr(RDn), imm(address + 8)), forget(RDn);
       mov32(PC, reg(0));
       add32(PD, reg(0), imm(4));
       return true;
@@ -484,7 +505,7 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
     bool likely = RTn & 2;
     bool link = RTn & 0x10;
     mov32(reg(0), Rs);
-    if(link) mov32(gpr(31), imm(address + 8));
+    if(link) mov32(gpr(31), imm(address + 8)), forget(31);
     auto taken = cmp32_jump(reg(0), imm(0), greaterEqual ? flag_sge : flag_slt);
     emitBranchOutcome(taken, address, target, likely, count);
     return true;
@@ -498,7 +519,7 @@ auto Allegrex::Recompiler::emitBranch(u32 address, u32 instruction, u32 count) -
 
   //JAL target
   case 0x03: {
-    mov32(gpr(31), imm(address + 8));
+    mov32(gpr(31), imm(address + 8)), forget(31);
     emitJump(((address + 4) & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2);
     return true;
   }
@@ -596,7 +617,8 @@ auto Allegrex::Recompiler::emitJump(u32 target) -> void {
 #undef RTn
 #undef RSn
 #undef SA
-#undef Rd
+#undef Dd
+#undef Dt
 #undef Rt
 #undef Rs
 #undef Hi
