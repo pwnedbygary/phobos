@@ -5004,7 +5004,10 @@ These profiles were taken before the restart, on earlier states of the same scen
 3. **Blocks go on to the next by themselves** (0189913cb). Every block had returned to the run loop, which counted
    it, checked the run's limit, looked the next block up and called it. Now a block ending as blocks usually do
    does all that itself and jumps into the next block's body. A block still leaves for the run loop at a syscall,
-   break, halt or eret, and wherever anything else is to be done.
+   break, halt or eret, and wherever anything else is to be done, except a syscall in a delay slot: every import
+   stub is a `jr ra` with its syscall there, so after nearly every system call the block chains on. That's exact
+   because the kernel stops a run only by halting the CPU or bringing the run's limit forward, and the chain checks
+   both; anything else the run loop came to do between blocks would need checking in the chain too.
 4. **Chains to a successor known at compile time** (78cd2d4b4): j and jal, a section's last word, either side of a
    branch, a likely branch not taken. The next block's table entry is worked out once, and only the page's check is
    made as the block runs. The halted check is made only after a block that called the interpreter.
