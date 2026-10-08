@@ -88,6 +88,10 @@ object PhobosCore {
     external fun setPspFontsPath(path: String)
     /** How many threads draw the PSP's pictures (the core's "GE Threads", as a game starts): 0 for Auto. */
     external fun setPspDrawingThreads(threads: Int)
+    /** Who draws the PSP's pictures (the core's "Renderer", as a game starts): util/PspVideo.kt's [PspRenderer]. */
+    external fun setPspRenderer(renderer: Int)
+    /** What the PSP's core has to tell the user, once (its Vulkan renderer didn't start, or stopped); "" if none. */
+    external fun takePspNotice(): String
     /** The whole multiple native code draws the PSP's picture at (util/PspVideo.kt's pictureMultiple()). */
     external fun setPictureMultiple(multiple: Int)
     external fun setVulkanCachePath(path: String)

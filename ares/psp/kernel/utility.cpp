@@ -35,7 +35,7 @@ namespace {
   enum : u32 { DialogNone = 0, DialogStarting = 1, DialogRunning = 2, DialogFinished = 3, DialogClosing = 4 };
   enum : u32 { DialogSavedata = 1, DialogMessage, DialogKeyboard, DialogNetwork, DialogSharing, DialogBrowser,
                DialogInstall };
-  //errors (PPSSPP's ErrorCodes.h, from the PSP)
+  //errors (PPSSPP's ErrorCodes.h, from the PSP; the wrong size from pspautotests' utility/dialog/shared.c)
   constexpr u32 UtilityInvalidStatus = 0x8011'0001, UtilityInvalidSize = 0x8011'0004, UtilityWrongType = 0x8011'0005;
   constexpr u32 UtilityBadParameterID = 0x8011'0103;
   constexpr u32 ModuleBadID = 0x8011'1101, ModuleLoaded = 0x8011'1102, ModuleNotLoaded = 0x8011'1103;

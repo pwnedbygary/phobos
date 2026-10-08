@@ -44,6 +44,8 @@ enum class Pick { Games, PspFonts, PspMemoryStick };
 
 // The PSP's drawing-threads choices, as the Android app offers them (PspDrawingThreads): 0 is all cores but one.
 constexpr int pspDrawingThreads[] = {0, 1, 2, 4, 6, 8};
+// Who draws the PSP's pictures (the core's "Renderer"), as the app's PspRenderer: 0 software, 1 Vulkan.
+constexpr const char* pspRenderers[] = {"Software", "Vulkan"};
 
 struct MenuItem {
   std::string label;
@@ -284,10 +286,12 @@ auto Shell::applySettings() -> void {
   ares::setVideoSettings(settings.flag("video.overscan", false), settings.flag("video.colorEmulation", true),
                          settings.flag("video.interframeBlending", true));
   // The PSP's memory stick (a folder picked, else the one all games share in the saves folder, as on Android), the
-  // user's own system fonts (none unless a folder is picked) and its drawing threads (0: all cores but one).
+  // user's own system fonts (none unless a folder is picked), its drawing threads (0: all cores but one) and its
+  // renderer.
   ares::setPspMemoryStickPath(settings.text("psp.memoryStick").c_str());
   setPspFonts(settings.text("psp.fonts"));
   ares::setPspDrawingThreads(settings.number("psp.drawingThreads", 0));
+  ares::setPspRenderer(settings.number("psp.renderer", 0));
 }
 
 auto Shell::rescan() -> void {
@@ -553,6 +557,12 @@ auto Shell::pspMenuItems(std::vector<MenuItem>& items) -> void {
     settings.setNumber("psp.drawingThreads", next);
     ares::setPspDrawingThreads(next);
   }});
+  int renderer = std::clamp(settings.number("psp.renderer", 0), 0, (int)std::size(pspRenderers) - 1);
+  items.push_back({std::string("PSP renderer: ") + pspRenderers[renderer] + " (next start)", [this, renderer](int d) {
+    int next = (renderer + (d < 0 ? (int)std::size(pspRenderers) - 1 : 1)) % (int)std::size(pspRenderers);
+    settings.setNumber("psp.renderer", next);
+    ares::setPspRenderer(next);
+  }});
 }
 
 auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
@@ -591,6 +601,11 @@ auto Shell::handleKey(const SDL_KeyboardEvent& key) -> void {
 }
 
 auto Shell::update() -> void {
+  // (the PSP's Vulkan renderer couldn't start, or stopped: said once, the software renderer drawing instead)
+  if (game) {
+    auto notice = ares::takePspNotice();
+    if (!notice.empty()) show(notice);
+  }
   bool computer = game && isKeyboardComputer(game->system);
   bool n64 = game && game->system == "Nintendo 64";
   auto pad = input.poll(screen != Screen::Playing || !computer, screen == Screen::Playing && n64);

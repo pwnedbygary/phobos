@@ -210,4 +210,8 @@ auto loadVulkan(const char* customDriverPath, const char* nativeLibraryDir, cons
   return true;
 }
 
+auto vulkanLoader() -> void* {
+  return (void*)::Vulkan::Context::get_instance_proc_addr();
+}
+
 }

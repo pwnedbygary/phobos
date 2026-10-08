@@ -148,16 +148,25 @@ struct GPU : GE::Renderer {
     s32 left = 0, top = 0, right = -1, bottom = -1;  //drawn since it was last read back
     u64 used = 0;
     u64 version = 0;              //goes up whenever its pixels may change (filled, drawn into)
+    //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
+    //drew (drawnOver()): memory's, maybe changed, so it's filled afresh before it draws, shows or lends a texture
+    //over any of them. (At most 16 ranges; more are taken together.)
+    std::vector<std::pair<u32, u32>> beside;
     auto bytes() const -> u32 { return format == 3 ? 4 : 2; }
     auto end() const -> u32 { return address + rows * stride * bytes(); }  //(the VRAM bytes it covers)
     auto drawn() const -> bool { return left <= right; }
+    //gpu.cpp: whether VRAM's bytes first to last reach its pixels left-right, top-bottom (or those of beside's)
+    auto reaches(u32 first, u32 last, s32 left, s32 top, s32 right, s32 bottom) const -> bool;
+    auto besideReaches(s32 left, s32 top, s32 right, s32 bottom) const -> bool;
+    auto touch(u32 first, u32 last) -> void;  //(beside's: first to last added)
   };
   //A decoded texture on the GPU, while the GE keeps it
   struct Texture { std::weak_ptr<GE::Decoded> decoded; u32 id = 0, rows = 0; };
 
   struct Statistics {
     u64 draws = 0, primitives = 0, submits = 0, finishes = 0, uploads = 0, readbacks = 0, textures = 0, copies = 0;
-    u64 waiting = 0;  //nanoseconds the CPU waited in finish()
+    u64 pictures = 0;  //frames shown straight from a target (picture())
+    u64 waiting = 0;   //nanoseconds the CPU waited in finish() and picture()
   } statistics;
 
   std::unique_ptr<Backend> backend;
@@ -178,7 +187,24 @@ struct GPU : GE::Renderer {
   auto written(GE& ge, u32 page) -> void override;
   auto forget(GE& ge) -> void override;
   auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bool override;
+  auto drawnOver(GE& ge, u32 first, u32 last) -> bool override;
+  auto besideChanged(GE& ge, u32 first, u32 last) -> void override;
   auto copiesKept() const -> u32 { return copies.size(); }  //(render-to-texture copies on the GPU: the tests')
+
+  //What the screen shows (the frame buffer at VRAM's offset address, stride pixels a row, in GE format), width x
+  //height of it as Kernel::picture() makes it (8888, red in the low byte, alpha 255), read straight from the target
+  //the GPU drew it in: only those pixels come back, VRAM's pages stay the GPU's and nothing else is waited for but
+  //the drawing before. False, with pixels untouched, where the GPU doesn't hold the newest of every pixel shown (no
+  //such target, or rows it hasn't, or pages another target or the CPU has changed since), or hasn't drawn there
+  //since memory last had it all: memory's VRAM is the picture then.
+  auto picture(u32 address, u32 stride, u32 format, u32 width, u32 height, std::vector<u32>& pixels) -> bool;
+  //Everything on the GPU let go (the targets, the textures and their copies) without a pixel read back: for a
+  //machine powered on afresh, whose memory is new.
+  auto drop() -> void;
+
+  //check.cpp: the GPU's pixels against the software renderer's for a few dozen primitives drawn in a machine of its
+  //own (sprites exactly, triangles closely), at start-up; why not, where they aren't. Everything's dropped after.
+  auto check(std::string& error) -> bool;
 
   //vulkan.cpp: a renderer on the first Vulkan GPU, through the host's vkGetInstanceProcAddr (the loader or driver
   //the host chose, a custom one included: docs/psp-gpu-renderers.md, "Vulkan"), or, with none, the system's loader;

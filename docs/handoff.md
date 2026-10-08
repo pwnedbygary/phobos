@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: Killzone's movie, the dialogs' sizes and statuses — 2026-10-08
 
-Branch `cursor/psp-hle-games8-2b67`, on top of `cursor/psp-hle-games7-2b67` with #164 merged (7cafa81a4).
+Branch `cursor/psp-hle-games8-2b67`, on top of `cursor/psp-gpu-hw2-2b67` (#168, the Vulkan renderer in Phobos).
 docs/psp-core.md, part 42, describes it; one commit per fix, each with its tests.
 - **Killzone: Liberation**: its jump into VRAM at frame 1547 came from its movie being told no picture came at the
   first decode, which made it clear its target through a null pointer. With a game's own sceMpeg library (stood in
@@ -42,6 +42,50 @@ docs/psp-core.md, part 42, describes it; one commit per fix, each with its tests
   priority games the same sound and screens against the Killzone commit.
 - **Left**: the 21 menu-to-black games (not yet copied over); scePower 0xa85880d0; the web browser's own state and
   memory, and the Screenshot and NpSignin dialogs.
+
+## PSP core: the Vulkan renderer in the app and the desktop — 2026-10-07
+
+Branch `cursor/psp-gpu-hw2-2b67`, on top of part 38's `cursor/psp-cpu-speed-2b67`. docs/psp-core.md, part 41, and
+docs/psp-gpu-renderers.md's "In Phobos (part 41)" describe it; PPSSPP stayed a guide only, none of its code used.
+- **The setting**: "PSP Renderer" (Software, the default, or Vulkan) in the app's PSP settings and the desktop's
+  menu, given to the core as its "Renderer" option when a game loads. The hosts hand over the `vkGetInstanceProcAddr`
+  their `loadVulkan` got (the system's or a custom driver's on Android, MoltenVK on the macOS desktop).
+- **Fallbacks**: a start-up check (sprites byte for byte, triangles within a bound) in a machine of its own; a
+  renderer that fails it, or loses its device later, gives way to the software renderer, said once in the log and
+  the UI. The shown frame is read straight from its target (no finish), memory's picture the fallback.
+- **Bytes beside the pixels**: busy VRAM pages asked about to the byte, so a display list beside the frame buffer
+  doesn't wait for the GPU (Brave Story on the RP6 18.6 to 59.5 fps). A new test; the PSP system tests pass on the
+  M1 (sanitized, the GPU groups run).
+- **Measured in the app** (RP6): Midnight Club 3's title 54.3 fps with the installed Turnip, 49.6 with Qualcomm's,
+  35.6 software; its race 39.0, 36.0, 29.0; the 2D scenes at 60. Twenty-two games on Vulkan: none crash; three
+  black as with software (the core's). Not seen: the app's fallback toast (nothing failed).
+- **Next**: upscaling (presenting without reading back), then accuracy (shader blending), then OpenGL.
+- `tools/psp-runner` builds again (Vulkan's headers) and takes `--renderer`.
+
+## PSP core: the emulation thread faster, the CPU's recompiler first — 2026-10-07
+
+Branch `cursor/psp-cpu-speed-2b67`, on top of `cursor/psp-hle-games7-2b67` (part 37; measured from part 33's
+70b239ac6). docs/psp-core.md, part 38, has the profiles, the scenes and every number.
+- **The recompiler** (`ares/psp/cpu/`), six commits: the FPU natively (`recompiler-fpu.cpp`, new); multiply,
+  divide, trapping sums and bit fields; blocks chaining to the next by themselves, then to successors known at
+  compile time; loads and stores with the page tables in saved registers; the VFPU's common instructions with the
+  prefixes at rest (`recompiler-vfpu.cpp`, new). Every block still starts and ends where it did (the run loop's
+  check points decide when interrupts and kernel events land), and anything unusual (NaN results, FCSR not at its
+  default, division by 0 or -1, overflow, VFPU prefixes set) goes to the interpreter as before.
+- **Tried and reverted**: GE vertices' matrices four at a time (b75298198, reverted by d4b896d4f). Exact without
+  skinning, but no faster on the host or the RP6.
+- **Exact**: tests/allegrex (58 groups, 2,000 generated programs and the new "chained runs") and tests/psp (308)
+  pass. Six scenes (Midnight Club 3's menu and race, GTA LCS's city and woods, Peace Walker's title, Lumines' demo),
+  300 frames at 1 and 7 GE threads: every frame's picture and VRAM, RAM and the whole serialized state identical
+  to the base's.
+- **Faster**: the CPU's own time a frame down 30-45% in the 3D scenes (MC3's race 12.8 to 8.4 ms on the RP6). On the
+  RP6 at 7 GE threads, MC3's race 21.6 to 25.2 fps, its menu 28.4 to 31.8, GTA's city 43.6 to 57.2; at 1 thread
+  19.7 to 21.6, 24.3 to 25.9 and 36.4 to 39.7.
+- **Next**: the GE's setup is now most of the emulation thread (lighting's per-light numbers once a primitive, the
+  emulation thread's share of drawing at settles); in the recompiler, MIPS registers kept in host registers within a
+  block, and lwl/lwr/swl/swr natively.
+- Scratch tools, states and memory sticks are in `~/phobos-work/scratch/cpu-speed` on the Mac (never committed);
+  the RP6 copy is `/data/local/tmp/cpu-bench2`.
 
 ## PSP core: the stuck games, and the runner's presses — 2026-10-07
 

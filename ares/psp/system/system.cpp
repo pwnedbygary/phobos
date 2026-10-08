@@ -17,13 +17,26 @@ auto load(Node::System& node, string name) -> bool {
 //without them; "Recompiler", "true" to run the CPU's recompiler (the default) or "false" to run the interpreter
 //alone; "GE Threads", how many threads draw the GE's pictures (ge/threads.cpp), 0 (the default) for one fewer than
 //the host has cores, 1 for the GE's own alone, and no more than twice the host's cores, nor 64 (more would only wait
-//their turn). Every count draws the very same pixels.
+//their turn). Every count draws the very same pixels. "Renderer", who draws them: "Software" (the default, the exact
+//one) or "Vulkan" (the GPU's, ge/gpu: docs/psp-gpu-renderers.md), taken at the next power on.
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
   if(name == "Recompiler") system.recompile = value.boolean();
   if(name == "GE Threads") system.geThreads = std::min<u64>(value.natural(), System::MostGeThreads);
+  if(name == "Renderer") system.renderer = value == "Vulkan" ? "Vulkan" : "Software";
   return true;
+}
+
+auto vulkanLoader(void* getInstanceProcAddr) -> void {
+  system.vulkanLoader = getInstanceProcAddr;
+}
+
+auto notice() -> string {
+  std::lock_guard lock{system.noticeLock};
+  string text = system.pendingNotice.c_str();
+  system.pendingNotice.clear();
+  return text;
 }
 
 System system;
@@ -41,8 +54,20 @@ auto System::run() -> void {
   kernel.controller.analogY = controls.stick(controls.y);
   if(!kernel.exited) kernel.run(Kernel::VblankCycles);
 
-  //The screen's colors are the pixels' own (red in the low byte, then green and blue: the palette below).
-  kernel.picture(pixels);
+  //The screen's colors are the pixels' own (red in the low byte, then green and blue: the palette below). The
+  //frame comes straight from the hardware renderer's picture of it where the GPU drew it (GPU::picture(): VRAM's
+  //pages stay the GPU's), else from memory's VRAM, as the kernel has it, which finishes what the GPU drew there.
+  bool shown = false;
+  if(ge.renderer && gpu && kernel.display.frameBuffer) {
+    auto& display = kernel.display;
+    u32 physical = display.frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
+    u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
+    if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMSize) {
+      shown = gpu->picture(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height,
+                           pixels);
+    }
+  }
+  if(!shown) kernel.picture(pixels);
   //as picture() made it (480x272: the PSP has no other)
   u64 width = kernel.display.width ? kernel.display.width : 480;
   u64 height = kernel.display.height ? kernel.display.height : 272;
@@ -118,6 +143,9 @@ auto System::unload() -> void {
   //The machine goes too, until the next game: the files the program left open (on the memory stick, still open on
   //the host), its threads, its 64 MiB of memory and the compiled code. power() makes them all again.
   kernel.power();
+  ge.setRenderer(nullptr);
+  gpu.reset();  //(after the kernel's power, which has put back what it drew)
+  gpuFailed = false;
   kernel.devices.clear();
   kernel.disc.reset();
   kernel.systemFonts.clear();
@@ -132,6 +160,9 @@ auto System::unload() -> void {
   cpu.recompiler.sections.shrink_to_fit();
   cpu.recompiler.writePages.clear();
   cpu.recompiler.writePages.shrink_to_fit();
+  cpu.recompiler.sectionTable.clear();  //(compiled code reads it, so it mustn't outlive the sections it points at)
+  cpu.recompiler.sectionTable.shrink_to_fit();
+  cpu.recompiler.table = nullptr;
   cpu.recompiler.allocator.reset();
   pixels = {};
   sound = {};
@@ -155,6 +186,9 @@ auto System::save() -> void {
 auto System::power(bool reset) -> void {
   for(auto& setting : node->find<Node::Setting::Setting>()) setting->setLatch();
 
+  //(what the hardware renderer drew is the old memory's: let go)
+  ge.setRenderer(nullptr);
+  if(gpu) gpu->drop();
   memory.power(64_MiB);
   memory.buildPages(pageTable);
   cpu.pages = pageTable.data();
@@ -185,6 +219,7 @@ auto System::power(bool reset) -> void {
   u32 cores = std::thread::hardware_concurrency();  //(0 where the host can't tell)
   u32 most = std::min(cores ? 2 * cores : MostGeThreads, MostGeThreads);
   ge.setThreads(geThreads ? std::min(geThreads, most) : std::max(1u, cores ? cores - 1 : 1));
+  startRenderer();
   unmappedReports = 0;
   soundOwed = 0;
   programHash = 0;  //until a program starts
@@ -437,6 +472,31 @@ auto System::unserialize(serializer& s) -> bool {
   }
   cpu.recompiler.reset();  //what it compiled came from memory as it was before
   return loaded;
+}
+
+//The hardware renderer the owner chose, made and checked once a game (the software renderer drawing the game where it
+//couldn't start or its pixels aren't the software renderer's, said once), and the GE's from here on.
+auto System::startRenderer() -> void {
+  if(renderer != "Vulkan") return gpu.reset();
+  if(!gpu && !gpuFailed) {
+    std::string error;
+    gpu = GPU::vulkan(vulkanLoader, error);
+    if(gpu && !gpu->check(error)) gpu.reset();
+    if(!gpu) {
+      gpuFailed = true;
+      return tell("The Vulkan renderer couldn't start (" + error + "): the software renderer draws instead");
+    }
+    report(false, "the Vulkan renderer draws, on " + gpu->backend->name());
+    gpu->report = [this](const std::string& what) { tell("The Vulkan renderer stopped: " + what); };
+  }
+  if(gpu && gpu->ready()) ge.setRenderer(gpu.get());
+}
+
+//Something the owner should know: to the log, and for the front end to show (notice()).
+auto System::tell(const std::string& text) -> void {
+  report(true, text);
+  std::lock_guard lock{noticeLock};
+  pendingNotice = text;
 }
 
 //What the program writes, and the kernel's notes: to the log (on Android, logcat's "PSP" tag).
