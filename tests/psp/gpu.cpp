@@ -2,7 +2,8 @@
 //random 2D sprites, flat and textured, in each frame buffer format, which the GPU must draw byte for byte the same;
 //a frame buffer drawn and then sampled as a texture (render to texture: the copy taken on the GPU), the same again;
 //pspsdk's samples (PSP_TEST_PROGRAMS) run by two machines alike but for the renderer, measured for how close their
-//pictures are (blending rounds differently on the GPU, so they needn't be the same); a GPU that stops answering;
+//pictures are (they needn't be the same: the GPU interpolates texture coordinates its own way); blending, dithering,
+//logic operations and write masks done in the shader (shader blending), byte for byte; a GPU that stops answering;
 //bytes beside the GPU's pixels, memory's without waiting; the start-up check a game's renderer goes through; and
 //drawing at 2 and 3 times the PSP's resolution, where memory's bytes must still come back exactly.
 //Each group but the lost GPU's is skipped, saying why, where there's no Vulkan GPU (or with PSP_GPU=0): the
@@ -472,11 +473,76 @@ static auto gpuScaled() -> void {
   gpu->resolution(1);
 }
 
+//Shader blending (docs/psp-gpu-renderers.md, "Shader blending"), where the GPU reads the frame buffer: overlapping
+//sprites blended with random factors (fixed ones too) and operations, dithered or not, with random logic operations
+//and write masks that keep part of a channel, over a frame buffer cleared to random colors and stencils, in each
+//format, at the PSP's resolution and at twice it: the software renderer's bytes exactly. Consecutive sprites with
+//the same settings are one draw, so where the GPU doesn't keep their order the renderer must split them (emit()).
+static auto gpuBlending() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  if(!gpu->backend->reads) return void(std::printf("  skipped: the GPU doesn't read the frame buffer\n"));
+  std::printf("  %s\n", gpu->backend->readsInOrder ? "in rasterization order" : "draws split where they overlap");
+  std::mt19937 random{20261013};
+  for(u32 scale : {1u, 2u}) {
+    if(scale > gpu->backend->mostScale) continue;
+    gpu->resolution(scale);
+    for(u32 format : {3u, 0u, 1u, 2u}) {
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      auto before = gpu->statistics;
+      auto base = randomSprites(random, 12, false);
+      struct Round { u32 mode, fixedA, fixedB, dither, logic, mask, alphaMask; std::vector<Corners> sprites; };
+      std::vector<Round> rounds;
+      for(u32 n = 0; n < 24; n++) {
+        Round r;
+        u32 source = random() % 11, destination = random() % 11, operation = random() % 8;
+        r.mode = source | destination << 4 | operation << 8;
+        r.fixedA = random() & 0xff'ffff, r.fixedB = random() & 0xff'ffff;
+        r.dither = random() % 2, r.logic = random() % 3 ? 3 : random() % 16;
+        r.mask = random() % 3 ? 0 : random() & 0xff'ffff, r.alphaMask = random() % 2 ? 0xff : 0;
+        r.sprites = randomSprites(random, 8, false);
+        rounds.push_back(r);
+      }
+      for(System* s : {&software, &hardware}) {
+        auto& c = s->ge.commands;
+        prepare(*s, 0, format);
+        c[GE::ClearMode] = 1 | 7 << 8;  //(colors and stencils, random: the destination's alpha is the stencil)
+        for(auto& one : base) sprite(*s, one);
+        c[GE::ClearMode] = 0;
+        c[GE::Dither0] = 0x7f80, c[GE::Dither0 + 1] = 0x3c4d;
+        c[GE::Dither0 + 2] = 0xe1a5, c[GE::Dither0 + 3] = 0x96b2;
+        for(auto& r : rounds) {
+          c[GE::AlphaBlendEnable] = 1, c[GE::BlendMode] = r.mode;
+          c[GE::BlendFixedA] = r.fixedA, c[GE::BlendFixedB] = r.fixedB;
+          c[GE::DitherEnable] = r.dither;
+          c[GE::LogicOpEnable] = r.logic != 3, c[GE::LogicOp] = r.logic;
+          c[GE::MaskColor] = r.mask, c[GE::MaskAlpha] = r.alphaMask;
+          for(auto& one : r.sprites) sprite(*s, one);
+        }
+        c[GE::AlphaBlendEnable] = 0, c[GE::DitherEnable] = 0, c[GE::LogicOpEnable] = 0;
+        c[GE::MaskColor] = 0x0f'f00f, c[GE::MaskAlpha] = 0;
+        c[GE::ClearMode] = 1 | 1 << 8;  //(clear mode, its colors through a write mask keeping some of each)
+        for(u32 n = 0; n < 4; n++) sprite(*s, rounds[0].sprites[n]);
+        c[GE::ClearMode] = 0, c[GE::MaskColor] = 0;
+      }
+      u32 bytes = apart(software, hardware);
+      if(bytes) std::printf("  %ux, format %u: %u bytes apart\n", scale, format, bytes);
+      CHECK(bytes, 0u);
+      CHECK(gpu->statistics.readingDraws > before.readingDraws, true);
+      if(!gpu->backend->readsInOrder) CHECK(gpu->statistics.splits > before.splits, true);
+      hardware.ge.setRenderer(nullptr);
+    }
+  }
+  gpu->resolution(1);
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
     {"gpu render to texture against the software renderer", gpuRenderToTexture},
     {"gpu samples near the software renderer", gpuSamples},
+    {"gpu blending in the shader against the software renderer", gpuBlending},
     {"gpu lost: the software renderer draws instead", gpuLost},
     {"gpu refused primitives drawn by the software renderer", gpuRefused},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
