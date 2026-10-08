@@ -436,7 +436,15 @@ auto main(int argc, char** argv) -> int {
       return argv[i];
     };
     if(option == "--frames") frames = parseUint(next(), option);
-    else if(option == "--press") pressItems.push_back(next());
+    else if(option == "--press") {  //each of a list's items a press of its own
+      auto list = next();
+      u32 start = 0;
+      for(u32 at = 0; at <= list.size(); at++) {
+        if(at < list.size() && list[at] != ',') continue;
+        if(at > start) pressItems.push_back(list.substr(start, at - start));
+        start = at + 1;
+      }
+    }
     else if(option == "--script") script = next();
     else if(option == "--png-every") pngEvery = parseUint(next(), option);
     else if(option == "--png-at") {
@@ -491,7 +499,7 @@ auto main(int argc, char** argv) -> int {
         std::fprintf(stderr, "the stick's value is -32768 to 32767: %s\n", item.c_str());
         return 1;
       }
-    } else if(press.value != 0) {
+    } else {  //a release names a button too (a name it doesn't know would release nothing, unseen)
       static const char* buttons[] = {"Select", "Start", "Up", "Down", "Left", "Right", "Triangle", "Circle",
                                       "Cross", "Square", "L", "R"};
       if(std::find(std::begin(buttons), std::end(buttons), press.name) == std::end(buttons)) {
