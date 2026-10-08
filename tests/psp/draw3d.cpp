@@ -959,6 +959,90 @@ static auto draw3dFours() -> void {
   CHECK(fours.memory.vram == single.memory.vram, true);
 }
 
+//3D vertices transformed four at a time (GE::transformFour(), the matrices in vectors) against one at a time
+//(GE::transform()): 20,000 sets of four random vertices (positions, normals, texture coordinates, colors), each set
+//under random matrices (world, view, projection and the texture matrix, now and then with a huge, tiny, infinite or
+//not-a-number element), without skinning (which transformFour() doesn't take), lighting by four random lights or
+//none, every texture coordinate mode and source, fog and NORMAL_REVERSE: every number of every vertex (position,
+//clip space, normal, texture coordinates, fog, colors, and whether it's drawable) must come out the same, bit for
+//bit.
+static auto draw3dFourVertices() -> void {
+  std::mt19937 random{20261008};
+  auto below = [&](u32 n) { return u32(random() % n); };
+  auto real = [&](float low, float high) { return low + (high - low) * float(below(1 << 20)) / float(1 << 20); };
+  auto number = [&]() -> float {  //mostly ordinary, now and then at the edges
+    switch(below(40)) {
+    case 0: return 0.0f;
+    case 1: return -0.0f;
+    case 2: return 1e30f;
+    case 3: return 1e-30f;
+    case 4: return INFINITY;
+    case 5: return NAN;
+    default: return real(-4, 4);
+    }
+  };
+  auto bitsOf = [](float value) { u32 word; std::memcpy(&word, &value, 4); return word; };
+  Scene c;
+  auto& g = c.ge;
+  u32 differing = 0;
+  for(u32 n = 0; n < 20000 && !differing; n++) {
+    for(auto* matrix : {g.world, g.view, g.textureMatrix}) {
+      for(u32 k = 0; k < 12; k++) matrix[k] = f24(below(8) ? real(-2, 2) : number());
+    }
+    for(u32 k = 0; k < 16; k++) g.projection[k] = f24(below(8) ? real(-2, 2) : number());
+    auto& m = g.commands;
+    m[GE::LightingEnable] = below(3) != 0;
+    m[GE::LightMode] = below(2), m[GE::NormalReverse] = below(4) == 0, m[GE::MaterialColor] = below(8);
+    m[GE::MaterialEmissive] = random() & 0xff'ffff, m[GE::AmbientColor] = random() & 0xff'ffff;
+    m[GE::AmbientAlpha] = random() & 0xff, m[GE::MaterialDiffuse] = random() & 0xff'ffff;
+    m[GE::MaterialSpecular] = random() & 0xff'ffff, m[GE::AmbientLightColor] = random() & 0xff'ffff;
+    m[GE::MaterialSpecularCoefficient] = f24(real(0, 20));
+    for(u32 l = 0; l < 4; l++) {
+      m[GE::LightEnable0 + l] = below(2), m[GE::LightType0 + l] = below(3) << 8 | below(3);
+      for(u32 k = 0; k < 3; k++) {
+        m[GE::Light0X + l * 3 + k] = f24(real(-10, 10));
+        m[GE::Light0DirectionX + l * 3 + k] = f24(real(-1, 1));
+        m[GE::Light0ConstantAttenuation + l * 3 + k] = f24(real(0, 1));
+        m[GE::Light0Ambient + l * 3 + k] = random() & 0xff'ffff;
+      }
+      m[GE::Light0CutoffAttenuation + l] = f24(real(-1, 1)), m[GE::Light0ExponentAttenuation + l] = f24(real(0, 8));
+    }
+    m[GE::TextureMapMode] = below(3) | below(4) << 8, m[GE::TextureShadeMapping] = below(4) | below(4) << 8;
+    m[GE::FogEnable] = below(2), m[GE::FogEnd] = f24(real(-10, 10)), m[GE::FogSlope] = f24(real(-1, 1));
+    m[GE::DepthClipEnable] = below(2);
+    auto t = g.transformState();
+    t.textureWidth = float(1 << below(9)), t.textureHeight = float(1 << below(9));
+    t.vertexColor = below(2);
+    GE::Vertex one[4], four[4];
+    for(auto& v : one) {
+      v = {};
+      v.u = number(), v.v = number(), v.color = random();
+      for(u32 k = 0; k < 3; k++) v.normal[k] = below(6) ? real(-1, 1) : number();
+      v.x = below(10) ? real(-8, 8) : number(), v.y = below(10) ? real(-8, 8) : number();
+      v.z = below(10) ? real(-8, 8) : number();
+    }
+    for(u32 l = 0; l < 4; l++) four[l] = one[l];
+    for(auto& v : one) g.transform(v, t);
+    g.transformFour(four, t);
+    for(u32 l = 0; l < 4 && !differing; l++) {
+      auto& a = one[l];
+      auto& b = four[l];
+      std::vector<float> x = {a.x, a.y, a.z, a.u, a.v, a.q, a.fog, a.normal[0], a.normal[1], a.normal[2]};
+      std::vector<float> y = {b.x, b.y, b.z, b.u, b.v, b.q, b.fog, b.normal[0], b.normal[1], b.normal[2]};
+      for(u32 k = 0; k < 4; k++) x.push_back(a.clip[k]), y.push_back(b.clip[k]);
+      bool same = a.color == b.color && a.specular == b.specular && a.outside == b.outside && a.far == b.far &&
+                  a.near == b.near;
+      for(u32 k = 0; k < x.size(); k++) same = same && bitsOf(x[k]) == bitsOf(y[k]);
+      if(!same) {
+        differing++;
+        std::printf("FAIL %s: set %u, vertex %u, lighting %u, mode %u\n", currentTest, n, l, t.lighting,
+                    t.mapMode);
+      }
+    }
+  }
+  CHECK(differing, 0);
+}
+
 auto draw3dTests() -> Tests {
   return {
     {"draw3d transform", draw3dTransform}, {"draw3d outside", draw3dOutside}, {"draw3d clipping", draw3dClipping},
@@ -969,6 +1053,7 @@ auto draw3dTests() -> Tests {
     {"draw3d lighting specular", draw3dLightingSpecular}, {"draw3d environment map", draw3dEnvironmentMap},
     {"draw3d lines", draw3dLines}, {"draw3d bounding boxes", draw3dBoundingBoxes},
     {"draw3d four pixels at a time against one", draw3dFours},
+    {"draw3d vertices four at a time against one", draw3dFourVertices},
   };
 }
 

@@ -167,7 +167,11 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     t.weights = format.weightFormat ? format.weights : 0;
     t.textureWidth = texture.width, t.textureHeight = texture.height;
     t.vertexColor = format.colorFormat != 0;
-    for(auto& vertex : vertices) transform(vertex, t);
+    u32 n = 0;
+    if(fourVertices && !t.weights) {  //four at a time without skinning (transformFour()), the rest one at a time
+      for(; n + 4 <= count; n += 4) transformFour(&vertices[n], t);
+    }
+    for(; n < count; n++) transform(vertices[n], t);
   }
   s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   auto drawTriangle = [&](const Vertex& a, const Vertex& b, const Vertex& c, s32 facing) {
