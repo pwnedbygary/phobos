@@ -72,6 +72,8 @@ object PhobosCore {
     external fun setLogLevel(level: Int)
     external fun setRomFd(fd: Int)
     external fun setSecondaryRomFd(fd: Int)
+    /** A PSP disc's title, disc ID, region and icon (ICON0.PNG) read from its image; null if it isn't a PSP disc. */
+    external fun pspDiscInfo(fd: Int): PspDiscInfo?
     /** A file the next load (or disc change) opens by path where it is, instead of copying the descriptor's. */
     external fun setRomPath(path: String)
     external fun setSecondaryRomPath(path: String)
@@ -220,4 +222,11 @@ data class PhobosSetting(
     val type: String,
     val value: String,
     val options: List<String> = emptyList()
+)
+
+data class PspDiscInfo(
+    val title: String,
+    val discId: String,
+    val region: String,
+    val icon: ByteArray
 )

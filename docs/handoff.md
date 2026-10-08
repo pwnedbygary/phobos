@@ -25,6 +25,24 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP disc info: title, disc ID, region and icon — 2026-10-08
+
+Branch `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162). docs/psp-core.md, part 39, describes it.
+- **The reader** (`ares/psp/kernel/disc-info.hpp` / `.cpp`): a PSP disc's title, disc ID (NPD ID), region and
+  icon (PSP_GAME/ICON0.PNG), read off its image (ISO, CSO, ZSO, DAX, JSO, or CHD) a few sectors at a time, every
+  size bounded (PARAM.SFO over 64 KiB, ICON0 over 1 MiB, taken as none). Region from the disc ID's third letter:
+  J Japan, U US, E Europe, else Unknown. CHD read through libchdr when `ARES_ENABLE_CHD` is defined; without it,
+  a CHD is taken as none. `sfoValue` and `paramSFO` moved here from `psp-runner` and `mia`, which now share them.
+- **Consumers**: `psp-runner`'s `discInfo()` and `mia`'s `load()` call the shared reader; the Android app's
+  `PhobosCore.pspDiscInfo(fd)` (JNI) reads title+icon together, and the Library's `MainViewModel` caches the
+  icon keyed by URI+size+mtime, showing title and icon in `SystemDetailScreen`.
+- **Tests**: `tests/psp/disc-info.cpp` (ISO, CSO, CHD, damaged images, SFO values, regions) and
+  `PspDiscInfoTest.kt` (title choice, cache key).
+- **Checked**: tests/psp (with the new disc-info groups), tests/psp/ares, Android unit tests and release build
+  (`-Pphobos.ffmpeg=OFF`).
+- **Left**: cost measurement on 20+ real images (to be done on the handheld); desktop `Library.cpp` showing the
+  same titles (optional if cheap).
+
 ## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
 
 Branch `cursor/psp-ge-curves-2b67`, on top of `cursor/psp-hle-games6-2b67` (#161, part 32; parts 31 and 30, #160
