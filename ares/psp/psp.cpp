@@ -13,4 +13,5 @@
 #include <psp/kernel/loader.cpp>
 #include <psp/kernel/kernel.cpp>
 #include <psp/ge/ge.cpp>
+#include <psp/ge/gpu/gpu.cpp>
 #include <psp/system/system.cpp>

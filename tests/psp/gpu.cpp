@@ -2,9 +2,9 @@
 //random 2D sprites, flat and textured, in each frame buffer format, which the GPU must draw byte for byte the same;
 //a frame buffer drawn and then sampled as a texture (render to texture: the copy taken on the GPU), the same again;
 //pspsdk's samples (PSP_TEST_PROGRAMS) run by two machines alike but for the renderer, measured for how close their
-//pictures are (blending rounds differently on the GPU, so they needn't be the same); and a GPU that stops
-//answering. Each group but the last is skipped, saying why, where there's no Vulkan GPU (or with PSP_GPU=0): the
-//machines the tests run on needn't have one.
+//pictures are (blending rounds differently on the GPU, so they needn't be the same); a GPU that stops answering;
+//and the start-up check a game's renderer goes through. Each group but the lost GPU's is skipped, saying why, where
+//there's no Vulkan GPU (or with PSP_GPU=0): the machines the tests run on needn't have one.
 #include "kernel-machine.hpp"
 #include "../../ares/psp/ge/gpu/gpu.hpp"
 
@@ -349,6 +349,18 @@ static auto gpuDepth() -> void {
   }
 }
 
+//The start-up check (check.cpp) a game's renderer goes through: on a GPU that draws right it passes, and leaves the
+//renderer as it was for the next machine (everything dropped, nothing of its own machine's kept).
+static auto gpuCheck() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::string error;
+  bool passed = gpu->check(error);
+  if(!passed) std::printf("  %s\n", error.c_str());
+  CHECK(passed, true);
+  CHECK(gpu->ready(), true);
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
@@ -358,6 +370,7 @@ auto gpuTests() -> Tests {
     {"gpu refused primitives drawn by the software renderer", gpuRefused},
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
     {"gpu depth buffer follows memory's changes", gpuDepth},
+    {"gpu start-up check passes on a GPU that draws right", gpuCheck},
   };
 }
 

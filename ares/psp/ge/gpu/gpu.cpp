@@ -9,29 +9,33 @@
 #include <map>
 
 //Vulkan's types only: every function comes through vkGetInstanceProcAddr (vulkan.cpp)
-#define VK_NO_PROTOTYPES
+#if !defined(VK_NO_PROTOTYPES)
+  #define VK_NO_PROTOTYPES
+#endif
 #include <vulkan/vulkan.h>
-#include <dlfcn.h>
+#if !defined(_WIN32)
+  #include <dlfcn.h>
+#endif
 
 namespace ares::PlayStationPortable {
 
 #include "vulkan.cpp"
 
 //A screen position as the GE holds it (draw.cpp's fixed()): sixteenths of a pixel, wild values held to its range.
-static auto fixed(float position) -> s32 {
+static auto targetFixed(float position) -> s32 {
   if(!(position >= -4096 && position <= 4096)) position = position > 0 ? 4096 : -4096;
   return s32(position * 16);
 }
 
 //The filter for a primitive (draw.cpp's chooseFilter()): TEXTURE_FILTER's for enlarging if a texel covers a pixel
 //or more, else its for shrinking.
-static auto chooseFilter(u32 filter, float texelsPerPixel) -> bool {
+static auto targetFilter(u32 filter, float texelsPerPixel) -> bool {
   return texelsPerPixel <= 1.0f ? filter >> 8 & 1 : filter & 1;
 }
 
 //A frame buffer's pixel as 8888 (red in the low byte, the stencil in the alpha), and back (pixel.cpp's widenPixel()
 //and narrowPixel(); a 5650 one has no stencil, read as 0).
-static auto widen(u32 pixel, u32 format) -> u32 {
+static auto widenTarget(u32 pixel, u32 format) -> u32 {
   auto grow = [](u32 value, u32 bits) { return value << (8 - bits) | value >> (2 * bits - 8); };
   if(format == 3) return pixel;
   if(format == 0) return grow(pixel & 31, 5) | grow(pixel >> 5 & 63, 6) << 8 | grow(pixel >> 11 & 31, 5) << 16;
@@ -42,7 +46,7 @@ static auto widen(u32 pixel, u32 format) -> u32 {
   return grow(pixel & 15, 4) | grow(pixel >> 4 & 15, 4) << 8 | grow(pixel >> 8 & 15, 4) << 16 |
          grow(pixel >> 12 & 15, 4) << 24;
 }
-static auto narrow(u32 color, u32 format) -> u32 {
+static auto narrowTarget(u32 color, u32 format) -> u32 {
   u32 r = color & 0xff, g = color >> 8 & 0xff, b = color >> 16 & 0xff, a = color >> 24;
   if(format == 0) return r >> 3 | g >> 2 << 5 | b >> 3 << 11;
   if(format == 1) return r >> 3 | g >> 3 << 5 | b >> 3 << 10 | a >> 7 << 15;
@@ -133,7 +137,7 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts) -
       if(parts & 1) {
         u32 at = (t.address + ((from + y) * t.stride + x) * bytes) & (Memory::VRAMSize - 1), pixel = 0;
         std::memcpy(&pixel, &vram[at], bytes);
-        u32 color = widen(pixel, t.format);
+        u32 color = widenTarget(pixel, t.format);
         std::memcpy(out + c.colors + n * 4, &color, 4);
         out[c.stencil + n] = color >> 24;
       }
@@ -446,7 +450,7 @@ auto GPU::emit(const Vertex* vertices, u32 count) -> void {
 
 auto GPU::vertex(const GE::Vertex& v, bool perspective) const -> Vertex {
   Vertex o{};
-  o.x = fixed(v.x) / 16.0f, o.y = fixed(v.y) / 16.0f, o.z = v.z;
+  o.x = targetFixed(v.x) / 16.0f, o.y = targetFixed(v.y) / 16.0f, o.z = v.z;
   o.w = perspective ? v.clip[3] : 1.0f;
   o.u = v.u, o.v = v.v, o.q = perspective ? v.q : 1.0f;
   o.color = v.color, o.specular = v.specular;
@@ -466,10 +470,10 @@ auto GPU::triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c
   }
   if(state.pipeline.clear && state.pipeline.stencilTest) state.stencilReference = c.color >> 24;
   if(textured) {
-    f64 area = std::abs(f64(fixed(b.x) - fixed(a.x)) * (fixed(c.y) - fixed(a.y)) -
-                        f64(fixed(b.y) - fixed(a.y)) * (fixed(c.x) - fixed(a.x)));
+    f64 area = std::abs(f64(targetFixed(b.x) - targetFixed(a.x)) * (targetFixed(c.y) - targetFixed(a.y)) -
+                        f64(targetFixed(b.y) - targetFixed(a.y)) * (targetFixed(c.x) - targetFixed(a.x)));
     float texels = std::abs((b.u - a.u) * (c.v - a.v) - (b.v - a.v) * (c.u - a.u));
-    bool linear = chooseFilter(filter, std::sqrt(texels / (area / 256.0f)));
+    bool linear = targetFilter(filter, std::sqrt(texels / (area / 256.0f)));
     for(auto& corner : v) corner.flags = linear;
   }
   emit(v, 3);
@@ -522,7 +526,7 @@ auto GPU::sprite(const GE::Job& job) -> void {
 }
 
 //A pixel-sized square (two triangles) at pixel (x, y), with the vertex's values.
-static auto square(GPU::Vertex base, s32 x, s32 y, GPU::Vertex (&v)[6]) -> void {
+static auto squareOf(GPU::Vertex base, s32 x, s32 y, GPU::Vertex (&v)[6]) -> void {
   for(u32 n = 0; n < 6; n++) {
     static constexpr u8 right[6] = {0, 1, 0, 1, 1, 0}, down[6] = {0, 0, 1, 0, 1, 1};
     v[n] = base;
@@ -533,8 +537,8 @@ static auto square(GPU::Vertex base, s32 x, s32 y, GPU::Vertex (&v)[6]) -> void 
 auto GPU::point(const GE::Vertex& at) -> void {
   if(!drawing) return;
   Vertex base = vertex(at, false), v[6];
-  base.flags = textured && chooseFilter(filter, 1.0f);
-  square(base, fixed(at.x) >> 4, fixed(at.y) >> 4, v);
+  base.flags = textured && targetFilter(filter, 1.0f);
+  squareOf(base, targetFixed(at.x) >> 4, targetFixed(at.y) >> 4, v);
   emit(v, 6);
 }
 
@@ -547,7 +551,7 @@ auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> 
     base.z = pixel.z, base.w = 1, base.u = pixel.u, base.v = pixel.v, base.q = 1;
     base.color = pixel.color, base.specular = pixel.specular, base.fog = pixel.fog >= 255 ? 1.0f : pixel.fog / 256.0f;
     base.flags = textured && job.linear;
-    square(base, pixel.x, pixel.y, v);
+    squareOf(base, pixel.x, pixel.y, v);
     emit(v, 6);
   }
 }
@@ -612,7 +616,7 @@ auto GPU::finish(GE& ge) -> void {
       for(s32 x = t.left; x <= t.right; x++) {
         u32 at = (t.address + (y * t.stride + x) * bytes) & (Memory::VRAMSize - 1);
         u32 i = (y - t.top) * width + (x - t.left);
-        u32 pixel = narrow((colors[i] & 0xff'ffff) | u32(stencil[i]) << 24, t.format);
+        u32 pixel = narrowTarget((colors[i] & 0xff'ffff) | u32(stencil[i]) << 24, t.format);
         std::memcpy(&memory.vram[at], &pixel, bytes);
       }
     }
@@ -705,5 +709,64 @@ auto GPU::forget(GE& ge) -> void {
   finish(ge);
   for(auto& t : targets) t->stale = true, t->depthRows = 0, t->depthChangedFrom = t->depthChangedTo = 0;
 }
+
+//The frame shown, from the GPU's target: a read back of the rectangle shown alone, after what's recorded so far.
+//(The hosts take the frame as pixels in memory, so it's read back either way; presenting from the GPU spares the
+//rest: every other target's read back, VRAM's pages given back, and the targets filled again from memory after.)
+auto GPU::picture(u32 address, u32 stride, u32 format, u32 width, u32 height, std::vector<u32>& pixels) -> bool {
+  if(!ready() || !width || !height) return false;
+  Target* t = nullptr;
+  for(auto& candidate : targets) {
+    if(candidate->address == address && candidate->stride == stride && candidate->format == format) {
+      t = candidate.get();
+    }
+  }
+  if(!t || t->stale || t->rows < height || width > t->stride) return false;
+  //(every page shown the target's or no one's, and one at least the target's: else memory has it, or another)
+  u32 bytes = t->bytes(), end = address + ((height - 1) * stride + width) * bytes;
+  if(end > Memory::VRAMSize) return false;
+  bool owned = false;
+  for(u32 page = address / Memory::PageSize; page <= (end - 1) / Memory::PageSize; page++) {
+    if(owners[page] && owners[page] != t) return false;
+    owned |= owners[page] == t;
+  }
+  if(!owned) return false;
+  Command c{Command::Kind::Readback, t->id};
+  c.width = width, c.height = height;
+  recorded.commands.push_back(c);
+  recorded.readbacks++;
+  auto began = std::chrono::steady_clock::now();
+  bool finished = backend->finish(recorded);
+  statistics.waiting += std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::steady_clock::now() - began).count();
+  recorded.clear();
+  const u32* colors;
+  const u8* stencil;
+  if(!finished || !backend->read(0, colors, stencil)) {
+    if(!backend->lost) lose();
+    return false;
+  }
+  //(as memory would have them: narrowed to the frame buffer's format, then widened as the screen widens them)
+  pixels.resize(width * height);
+  for(u32 n = 0; n < width * height; n++) {
+    pixels[n] = 0xff00'0000 | (widenTarget(narrowTarget(colors[n], format), format) & 0xff'ffff);
+  }
+  statistics.pictures++;
+  return true;
+}
+
+auto GPU::drop() -> void {
+  recorded.clear();
+  held.reset();
+  target = nullptr, drawing = false;
+  for(auto& owner : owners) owner = nullptr;
+  if(!backend) return;
+  for(auto& t : targets) backend->dropTarget(t->id);
+  for(auto& [decoded, texture] : textures) backend->dropTexture(texture.id);
+  for(auto& [where, copied] : copies) backend->dropTexture(copied.texture);
+  targets.clear(), textures.clear(), copies.clear();
+}
+
+#include "check.cpp"
 
 }
