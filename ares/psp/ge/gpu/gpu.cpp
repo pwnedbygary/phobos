@@ -390,6 +390,9 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   s32 left = std::max(region.left, 0), top = std::max(region.top, 0);
   s32 right = std::min<s32>(region.right, t->stride - 1);
   if(left > right || top > bottom) return held.reset(), true;
+  //Bytes memory may have changed in its pages while the GPU drew in them (beside): the target filled afresh
+  //before this PRIM draws over them, what the GPU drew put back first (below).
+  if(t->besideReaches(left, top, right, bottom)) t->stale = true;
   //Another target drawn on the GPU in the pages this PRIM draws in, or that fill this one from memory: its pixels
   //put in memory first (which may leave this one stale: below).
   u32 rowBytes = t->stride * t->bytes();
@@ -406,7 +409,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   if(!ready()) return held.reset(), false;
   //(the colors filled afresh where memory's changed, the depth where memory's depth has: rows of it, or all of it
   //for another depth buffer; neither replaces the other's newer pixels on the GPU)
-  if(t->stale) t->rows = 0, t->stale = false;
+  if(t->stale) t->rows = 0, t->stale = false, t->beside.clear();
   if(t->depthBuffer != p.depthBuffer || t->depthStride != p.depthStride) {
     t->depthBuffer = p.depthBuffer, t->depthStride = p.depthStride, t->depthRows = 0;
     t->depthChangedFrom = t->depthChangedTo = 0;
@@ -634,6 +637,7 @@ auto GPU::finish(GE& ge) -> void {
   for(auto& owner : owners) owner = nullptr;
   for(auto& t : targets) {
     t->left = 0, t->top = 0, t->right = -1, t->bottom = -1;
+    if(!t->beside.empty()) t->stale = true;  //(memory's bytes beside what it drew, which may have changed)
     if(t->rows) memory.watch(Memory::VRAMBase + t->address, t->rows * t->stride * t->bytes());
     if(t->depthRows && t->depthStride) {
       memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t->depthBuffer, t->depthRows * t->depthStride * 2);
@@ -698,8 +702,65 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bo
   u32 rowBytes = t->stride * bytes, y = (offset - t->address) / rowBytes;
   u32 x = (offset - t->address) % rowBytes / bytes;
   if(x >= t->stride || y + rows > t->height) return false;
+  if(t->besideReaches(x, y, x + width - 1, y + rows - 1)) return false;  //(memory's newer bytes in it: decoded)
   held = Held{t, s32(x), s32(y), width, rows, texture.format};
   return true;
+}
+
+//Whether the pixels drawn since the last finish (each target's rows top-bottom, columns left-right: what finish()
+//reads back) reach VRAM's bytes first to last. Bytes beside them, in the same pages (past the picture's right
+//edge, where games keep lists), are memory's own until then: memory reaches them without waiting.
+auto GPU::drawnOver(GE& ge, u32 first, u32 last) -> bool {
+  (void)ge;
+  for(auto& t : targets) {
+    if(t->drawn() && t->reaches(first, last, t->left, t->top, t->right, t->bottom)) return true;
+  }
+  return false;
+}
+
+//Bytes memory changed in pages the GPU draws in, not over what it drew (or that change would have finished it
+//first: Memory::pointer()): a target over them keeps them (beside) and takes them from memory again before it
+//draws, shows or lends a texture over them (begin(), picture(), holds()), and after it next finishes. A change
+//over what it drew is its own (own() telling memory of its pixels), and nothing to keep.
+auto GPU::besideChanged(GE& ge, u32 first, u32 last) -> void {
+  if(drawnOver(ge, first, last)) return;
+  for(auto& t : targets) {
+    if(t->rows && t->address <= last && first < t->end()) t->touch(first, last);
+  }
+}
+
+auto GPU::Target::reaches(u32 first, u32 last, s32 left, s32 top, s32 right, s32 bottom) const -> bool {
+  if(left > right || top > bottom) return false;
+  u32 rowBytes = stride * bytes();
+  u32 low = address + top * rowBytes + left * bytes(), high = address + bottom * rowBytes + (right + 1) * bytes() - 1;
+  if(last < low || high < first) return false;
+  u32 from = std::max<u32>(top, first > address ? (first - address) / rowBytes : 0);
+  u32 to = std::min<u32>(bottom, (last - address) / rowBytes);
+  for(u32 y = from; y <= to; y++) {
+    u32 rowLeft = address + y * rowBytes + left * bytes(), rowRight = rowLeft + (right - left + 1) * bytes() - 1;
+    if(rowLeft <= last && first <= rowRight) return true;
+  }
+  return false;
+}
+
+auto GPU::Target::besideReaches(s32 left, s32 top, s32 right, s32 bottom) const -> bool {
+  for(auto& [first, last] : beside) {
+    if(reaches(first, last, left, top, right, bottom)) return true;
+  }
+  return false;
+}
+
+//(a list written a word at a time makes one range, each word next to the last)
+auto GPU::Target::touch(u32 first, u32 last) -> void {
+  for(auto& [from, to] : beside) {
+    if(first <= to + 1 && from <= last + 1) {
+      from = std::min(from, first), to = std::max(to, last);
+      return;
+    }
+  }
+  if(beside.size() < 16) return beside.push_back({first, last});
+  for(auto& [from, to] : beside) first = std::min(first, from), last = std::max(last, to);
+  beside = {{first, last}};
 }
 
 //Memory's VRAM replaced whole (or another machine's: GE::setRenderer()): what the GPU drew since the last finish put
@@ -722,6 +783,7 @@ auto GPU::picture(u32 address, u32 stride, u32 format, u32 width, u32 height, st
     }
   }
   if(!t || t->stale || t->rows < height || width > t->stride) return false;
+  if(t->besideReaches(0, 0, width - 1, height - 1)) return false;  //(memory's newer bytes in what's shown)
   //(every page shown the target's or no one's, and one at least the target's: else memory has it, or another)
   u32 bytes = t->bytes(), end = address + ((height - 1) * stride + width) * bytes;
   if(end > Memory::VRAMSize) return false;

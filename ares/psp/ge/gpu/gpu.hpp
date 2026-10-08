@@ -148,9 +148,17 @@ struct GPU : GE::Renderer {
     s32 left = 0, top = 0, right = -1, bottom = -1;  //drawn since it was last read back
     u64 used = 0;
     u64 version = 0;              //goes up whenever its pixels may change (filled, drawn into)
+    //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
+    //drew (drawnOver()): memory's, maybe changed, so it's filled afresh before it draws, shows or lends a texture
+    //over any of them. (At most 16 ranges; more are taken together.)
+    std::vector<std::pair<u32, u32>> beside;
     auto bytes() const -> u32 { return format == 3 ? 4 : 2; }
     auto end() const -> u32 { return address + rows * stride * bytes(); }  //(the VRAM bytes it covers)
     auto drawn() const -> bool { return left <= right; }
+    //gpu.cpp: whether VRAM's bytes first to last reach its pixels left-right, top-bottom (or those of beside's)
+    auto reaches(u32 first, u32 last, s32 left, s32 top, s32 right, s32 bottom) const -> bool;
+    auto besideReaches(s32 left, s32 top, s32 right, s32 bottom) const -> bool;
+    auto touch(u32 first, u32 last) -> void;  //(beside's: first to last added)
   };
   //A decoded texture on the GPU, while the GE keeps it
   struct Texture { std::weak_ptr<GE::Decoded> decoded; u32 id = 0, rows = 0; };
@@ -179,6 +187,8 @@ struct GPU : GE::Renderer {
   auto written(GE& ge, u32 page) -> void override;
   auto forget(GE& ge) -> void override;
   auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bool override;
+  auto drawnOver(GE& ge, u32 first, u32 last) -> bool override;
+  auto besideChanged(GE& ge, u32 first, u32 last) -> void override;
   auto copiesKept() const -> u32 { return copies.size(); }  //(render-to-texture copies on the GPU: the tests')
 
   //What the screen shows (the frame buffer at VRAM's offset address, stride pixels a row, in GE format), width x
