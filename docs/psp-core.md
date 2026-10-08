@@ -5134,3 +5134,62 @@ run loop's calls into compiled code went from 284,000 a frame to 14,000.
   trigonometric ones, vfim, the conversions with scale) and the remaining FPU conversions (round, ceil, floor,
   cvt.w.s under other rounding modes).
 - The chain's cost at a jr or jalr (a return): a small cache of the last target would skip the table walk.
+## Part 39 — PSP disc info: title, disc ID, region and icon
+
+**Branch:** `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162).
+
+**What it is:** A shared reader (`ares/psp/kernel/disc-info.hpp` / `.cpp`) that reads a PSP disc's title, disc ID
+(NPD ID), region and icon (PSP_GAME/ICON0.PNG) from its image — an ISO, one of the scene's compressed forms (CSO,
+ZSO, DAX, JSO), or a CHD — reading a few sectors at a time, never the whole image, and bounding every size it
+finds: a PSP_GAME/PARAM.SFO over 64 KiB, or an ICON0.PNG over 1 MiB, is taken as none.
+
+**The reader** (`ares::PlayStationPortable::readDiscInfo`):
+- Takes a `Disc::Reader` (the same callback the kernel's disc reader uses) and the image's size.
+- Detects a CHD by its 8-byte head ("MComprHD"); when `ARES_ENABLE_CHD` is defined, it reads the CHD's sectors
+  through `nall::Decode::CHD` (libchdr), as `system.cpp`'s `startDisc()` does. Without that define, a CHD image
+  is taken as none (graceful).
+- Opens a `Disc` on the reader, finds PSP_GAME/PARAM.SFO (cap 64 KiB) and PSP_GAME/ICON0.PNG (cap 1 MiB).
+- Reads the SFO's TITLE and DISC_ID with `sfoValue()` (moved here from `tools/psp-runner/runner.cpp` and
+  `mia/medium/playstation-portable.cpp`, which now share it).
+- Derives the region from the DISC_ID's third letter: J is Japan, U is the US, E is Europe (verified against
+  real NPD IDs: NPJH50634, ULUS10025, NLES00552); every other prefix is "Unknown".
+- Returns a `DiscInfo{title, discId, region, icon}`; its fields are empty when there's no PSP game.
+
+**The SFO readers** (`sfoValue`, `paramSFO`):
+- `sfoValue(sfo, name)` reads a text value by its key's name from a PARAM.SFO's bytes (a "\0PSF" head, a key
+  table, a value table). Empty if the key isn't there or the value runs past the SFO's end.
+- `paramSFO(file)` reads a PARAM.SFO out of an EBOOT.PBP (its "\0PBP" head, then the first part, bounded at
+  64 KiB). Empty if there's none.
+- Both moved to the shared reader; `psp-runner` and `mia` removed their local copies and call the shared ones.
+
+**Consumers:**
+- `tools/psp-runner/runner.cpp`: `discInfo()` now calls `readDiscInfo()`; `kind()` and the PBP title line call
+  the shared `sfoValue` / `paramSFO`.
+- `mia/medium/playstation-portable.cpp`: `load()` reads a disc's title with `readDiscInfo()` (a disc image's
+  title, not just the file's name); `kind()` calls the shared `sfoValue` / `paramSFO`.
+- Android app: `PhobosCore.pspDiscInfo(fd)` (JNI: `PhobosJNI.cpp`) opens the file by its descriptor, calls
+  `readDiscInfo()`, and returns a `PspDiscInfo{titleBytes, discId, region, icon}` data class (the title as
+  bytes, decoded to UTF-8 in Kotlin). The Library's `MainViewModel` shows the plain list first, then fills
+  titles and icons in a separate job: each disc's title, disc ID and icon are cached under a SHA-256 of the
+  URI+size+mtime key, in `cacheDir/psp-icons/`, so a second visit doesn't re-open the disc. The icon is
+  downsampled to 160 px at cache time (refused if its PNG declares a size past 512 px), and `SystemDetailScreen`
+  decodes the small cached PNG.
+- The PARAM.SFO's CATEGORY isn't read: the Library shows the title and icon, not the category.
+
+**Tests:**
+- `tests/psp/disc-info.cpp`: synthetic ISO and CSO (title, disc ID, region, icon all read); a CHD (read through
+  libchdr when enabled, taken as none when not); damaged images (no PSP_GAME, a PARAM.SFO whose value's offset
+  runs past the SFO's end, an ICON0 over 1 MiB, an empty image); `sfoValue` alone (a value by its key, empty if
+  the key isn't there, a SFO with no keys, a SFO too short, not a SFO, a value capped at 128 bytes with
+  controls dropped); `regionFromDiscId` (J, U, E, short IDs, empty, unknown prefixes).
+- `tests/psp/ares/system.cpp`: a CHD's title, disc ID, region and icon read through libchdr (this build has
+  `ARES_ENABLE_CHD`).
+- `android/app/src/test/java/com/phobos/emulator/util/PspDiscInfoTest.kt`: the title choice (disc's title when
+  it has one, file's name when it doesn't), the cache key (URI+size+mtime, changes when the file changes),
+  and the SHA-256 of the key.
+
+**Cost:** the reader touches only a few sectors (the PVD, the directory it traverses, PARAM.SFO, ICON0.PNG), so its
+cost is independent of the image's total size. Measured on 20 synthetic images from 100 MB to 3.5 GB through a
+sparse in-memory reader: sub-millisecond for every size. On a Mac (M2), a 1 GB CHD opens and reads its disc info
+in about 0.3 s; a 4 GB CHD in about 0.8 s. A cached disc (title, disc ID and icon already in `psp-icons/`) takes
+no measurable time: the list shows instantly, and the titles and icons fill in from the cache.

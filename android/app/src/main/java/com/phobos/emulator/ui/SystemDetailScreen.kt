@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,9 +17,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import com.phobos.emulator.ui.theme.pillShape
 import com.phobos.emulator.util.romTitle
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -132,12 +135,35 @@ fun SystemDetailScreen(
                         LazyColumn(contentPadding = PaddingValues(bottom = 64.dp)) {
                             items(roms) { rom ->
                                 val multiDisc = rom.discs.size > 1
+                                // A .m3u (even one disc) shows the playlist's name; a loose disc shows its title.
+                                val displayTitle = if (rom.discs.isNotEmpty()) romTitle(rom.name)
+                                    else com.phobos.emulator.util.displayTitle(rom.name, rom.title)
+                                val iconBitmap = remember(rom.iconPath) {
+                                    rom.iconPath?.let { path ->
+                                        runCatching {
+                                            val bytes = File(path).readBytes()
+                                            com.phobos.emulator.util.decodeIcon(bytes)
+                                        }.getOrNull()?.asImageBitmap()
+                                    }
+                                }
                                 ListItem(
-                                    headlineContent = { Text(if (rom.discs.isEmpty()) rom.name else romTitle(rom.name)) },
+                                    headlineContent = { Text(displayTitle) },
                                     supportingContent = if (multiDisc) {
                                         { Text("${rom.discs.size} discs") }
+                                    } else if (rom.title != null) {
+                                        { Text(rom.name) }
                                     } else null,
-                                    leadingContent = { IconBadge(Icons.Default.PlayArrow) },
+                                    leadingContent = if (iconBitmap != null) {
+                                        {
+                                            Image(
+                                                bitmap = iconBitmap,
+                                                contentDescription = displayTitle,
+                                                modifier = Modifier.size(48.dp)
+                                            )
+                                        }
+                                    } else {
+                                        { IconBadge(Icons.Default.PlayArrow) }
+                                    },
                                     colors = transparentListItemColors(),
                                     modifier = Modifier.focusRing(MaterialTheme.colorScheme.primary).clickable {
                                         // The game already paused behind the Library carries on instead of restarting
