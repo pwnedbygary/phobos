@@ -495,7 +495,7 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //each call into the program says whether it's a vertical blank's handler; 3 when the kernel came to hold both the
 //modules the program loaded and its threads', semaphores' and callbacks' new fields (with pools, sound and the
 //dialogs), each of which came first on a branch of its own as a version 2, two layouts that differ from each other
-//and from these. A state of any older version is refused by it.
+//and from these. Layouts 15 and 16 load with the dialog abort counters defaulted to 0; older layouts are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
 static constexpr u32 StateVersion = 17;
 
@@ -507,7 +507,8 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's.
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 and 16
+//(the dialog's abort counters default to 0): the owner's accuracy scenes were saved at 15 before part 42.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;
@@ -515,6 +516,11 @@ auto System::header(serializer& s) -> bool {
   s(version);
   s(ramSize);
   s(program);
+  if(s.reading()) {
+    kernel.stateLayout = version;
+    return signature == StateSignature && version >= 15 && version <= StateVersion &&
+           ramSize == memory.ram.size() && program == programHash;
+  }
   return signature == StateSignature && version == StateVersion && ramSize == memory.ram.size() &&
          program == programHash;
 }
@@ -560,7 +566,10 @@ auto System::restore(serializer& s, u32 length) -> bool {
 auto System::unserialize(serializer& s) -> bool {
   u32 length = s.capacity();  //a state to load holds exactly its bytes
   if(!header(s)) return false;
+  //snapshot() writes a current-layout header; keep the version just read so restore skips fields layouts 15/16 omit
+  u32 layout = kernel.stateLayout;
   serializer before = snapshot();
+  kernel.stateLayout = layout;
   u32 saved = before.size();
   auto files = std::move(kernel.files);
   kernel.files.clear();
