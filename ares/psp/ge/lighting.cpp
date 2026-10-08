@@ -122,6 +122,17 @@ auto GE::lightingState(Transform& t) const -> void {
     light.ambient = commands[Light0Ambient + index * 3] & 0xff'ffff;
     light.diffuse = commands[Light0Ambient + index * 3 + 1] & 0xff'ffff;
     light.shine = commands[Light0Ambient + index * 3 + 2] & 0xff'ffff;
+    //Its colors times the material's, the same at every vertex unless a vertex's own color stands for the
+    //material's (light() then works them out there): the products light() would make, 511 × 511 at most, which a
+    //share of 256 at most leaves far inside 32 bits, so multiplying by the share after is the same sum.
+    for(u32 n = 0; n < 4; n++) {
+      light.products[0][n] = factor(light.ambient, n) * factor(t.materialAmbient, n);
+      light.products[1][n] = factor(light.diffuse, n) * factor(t.materialDiffuse, n);
+      light.products[2][n] = factor(light.shine, n) * factor(t.materialSpecular, n);
+    }
+  }
+  for(u32 n = 0; n < 4; n++) {
+    t.unlit[n] = channel(t.materialEmissive, n) + (factor(t.materialAmbient, n) * factor(t.ambientLight, n) >> 10);
   }
   t.shadeU = commands[TextureShadeMapping] & 3;
   t.shadeV = commands[TextureShadeMapping] >> 8 & 3;
@@ -129,16 +140,28 @@ auto GE::lightingState(Transform& t) const -> void {
 
 //A vertex lit: world is where it is in the world, normal its normal there (one long).
 auto GE::light(Vertex& vertex, const float world[3], const float normal[3], const Transform& t) const -> void {
-  u32 ambient = (t.materialColor & 1) && t.vertexColor ? vertex.color : t.materialAmbient;
-  u32 diffuse = (t.materialColor & 2) && t.vertexColor ? vertex.color : t.materialDiffuse;
-  u32 specular = (t.materialColor & 4) && t.vertexColor ? vertex.color : t.materialSpecular;
+  //which of the material's colors the vertex's own stands for (bit 0 ambient, 1 diffuse, 2 shine)
+  u32 own = t.vertexColor ? t.materialColor : 0;
   s32 sum[4], shine[4] = {};
-  for(u32 n = 0; n < 4; n++) sum[n] = channel(t.materialEmissive, n) + (factor(ambient, n) * factor(t.ambientLight, n) >> 10);
-  auto add = [](s32* total, u32 lightColor, u32 materialColor, s32 share) {
-    for(u32 n = 0; n < 4; n++) total[n] += factor(lightColor, n) * factor(materialColor, n) * share >> 18;
+  for(u32 n = 0; n < 4; n++) {
+    sum[n] = own & 1 ? channel(t.materialEmissive, n) + (factor(vertex.color, n) * factor(t.ambientLight, n) >> 10)
+                     : t.unlit[n];
+  }
+  auto add = [](s32* total, const s32* product, s32 share) {
+    for(u32 n = 0; n < 4; n++) total[n] += product[n] * share >> 18;
   };
   for(auto& light : t.lights) {
     if(!light.enabled) continue;
+    //the light's colors times the material's (lightingState()), or times the vertex's where it stands for them
+    s32 made[3][4];
+    const s32* products[3];
+    const u32 colors[3] = {light.ambient, light.diffuse, light.shine};
+    for(u32 kind = 0; kind < 3; kind++) {
+      products[kind] = light.products[kind];
+      if(!(own >> kind & 1)) continue;
+      for(u32 n = 0; n < 4; n++) made[kind][n] = factor(colors[kind], n) * factor(vertex.color, n);
+      products[kind] = made[kind];
+    }
     float toLight[3] = {light.position[0], light.position[1], light.position[2]};
     float strength = 1;
     if(!light.directional) {
@@ -155,10 +178,10 @@ auto GE::light(Vertex& vertex, const float world[3], const float normal[3], cons
       float spot = along >= light.cutoff ? lightPower(along, light.exponent) : 0.0f;
       strength *= std::isnan(spot) ? 0.0f : spot;
     }
-    add(sum, light.ambient, ambient, share(strength));
+    add(sum, products[0], share(strength));
     float facing = dot3(toLight, normal);
     if(light.powered) facing = lightPower(facing, t.specularPower);
-    if(facing > 0) add(sum, light.diffuse, diffuse, share(strength * facing));
+    if(facing > 0) add(sum, products[1], share(strength * facing));
     if(light.specular && facing >= 0) {
       float halfway[3] = {light.halfway[0], light.halfway[1], light.halfway[2]};
       if(!light.directional) {
@@ -166,7 +189,7 @@ auto GE::light(Vertex& vertex, const float world[3], const float normal[3], cons
         normalize3(halfway);
       }
       float gleam = lightPower(dot3(halfway, normal), t.specularPower);
-      if(gleam > 0) add(shine, light.shine, specular, share(strength * gleam));
+      if(gleam > 0) add(shine, products[2], share(strength * gleam));
     }
   }
   if(t.separateSpecular) {

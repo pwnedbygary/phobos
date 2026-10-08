@@ -145,6 +145,7 @@ struct GE {
     float position[3], direction[3], attenuation[3], cutoff, exponent;
     u32 ambient, diffuse, shine;  //its colors (24-bit)
     float toLight[3], halfway[3];  //directional: the way to it, and half way to the viewer's, each one long
+    s32 products[3][4];  //its ambient, diffuse and shine times the material's, each channel as the GE multiplies
   };
 
   //The 3D settings, gathered once a primitive (transform.cpp): the matrices as floats, the viewport, and the rest.
@@ -163,6 +164,7 @@ struct GE {
     u32 materialColor;           //MATERIAL_COLOR: bits 0-2, the vertex's color stands for the ambient, diffuse, shine
     u32 materialEmissive, materialAmbient, materialDiffuse, materialSpecular, ambientLight;
     float specularPower, viewDirection[3];
+    s32 unlit[4];                //each channel's emissive plus the ambient light on the material's ambient
     Light lights[4];
     u32 shadeU, shadeV;          //TEXTURE_SHADE_MAPPING: the lights environment mapping takes u and v from
   };
