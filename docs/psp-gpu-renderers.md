@@ -423,7 +423,10 @@ with `PSP_GPU_ON_CPU`), with dual-source blending and logic operations where it 
 seconds marks the device lost, as `VK_ERROR_DEVICE_LOST` does.
 
 **A lost GPU**: the renderer says so once (`report`), and the software renderer draws from then on. What the GPU drew
-since the last finish is lost (memory's VRAM keeps what was there before), a frame or less; the game goes on.
+since the last finish is lost (memory's VRAM keeps what was there before); the game goes on. Since part 41 the shown
+frame doesn't finish, so that can be more than a frame: a render-to-texture result only ever sampled on the GPU stays
+lost, and the software renderer samples what memory had, until the game draws it again. A lost device is rare, so no
+finish is forced to bound it.
 
 ## In Phobos (part 41)
 

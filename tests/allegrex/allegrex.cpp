@@ -631,7 +631,8 @@ auto recompilerCases() -> void {
 // instructions it stopped after when each block left for run(), as where a run stops decides when interrupts and
 // events land. A loop of blocks (an interpreted instruction, a syscall, a fall into the next section, a call, a
 // likely branch both ways, a store that drops its own section's code, a jump through a register, an FPU branch
-// taken, which ends its block before its delay slot) runs in short runs of 1 to 37 instructions on two recompilers,
+// taken, which ends its block before its delay slot; the page after the syscall's taken out of the page table now
+// and then) runs in short runs of 1 to 37 instructions on two recompilers,
 // one chaining and one not: each run must end at the same count, the same pc and pd and the same registers, and
 // each syscall see the same count of instructions before it.
 auto chainedRuns() -> void {
@@ -658,6 +659,11 @@ auto chainedRuns() -> void {
     put(Function, {addiu(s1, s1, 1), andi(s1, s1, 1), jr(ra), nop});
     m.cpu.syscallHook = [&m, &befores](u32) -> bool {
       befores.push_back(m.cpu.instructionsBefore());
+      //Every third syscall takes the page the loop falls into out of the page table until the next one, as the
+      //CPU's owner does with VRAM's pages while the GE's workers draw there: no chain may go on into it then.
+      constexpr u32 Page = ((Base & 0x1fffffff) + 0x1000) >> 12;
+      m.cpu.table[Page] = befores.size() % 3 == 1 ? nullptr : m.ram.bytes.data() + 0x1000;
+      m.cpu.recompiler.writable(Page);
       return true;
     };
     m.cpu.recompiler.enabled = true;

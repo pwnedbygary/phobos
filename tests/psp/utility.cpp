@@ -402,6 +402,7 @@ static auto dialogs() -> void {
   KernelMachine m;
   u64 millisecond = Kernel::CPUFrequency / 1000;
   m.system.memory.fill(Parameters, 0, 580);
+  m.system.memory.write(4, Parameters, 580);  //(0x244, one of a message's sizes)
   m.system.memory.copyIn(Parameters + 60, "Save failed.", 13);
   CHECK(m.call("sceUtilityMsgDialogInitStart", {Parameters}), 0);
   CHECK(m.call("sceUtilityMsgDialogInitStart", {Parameters}), 0x8011'0001);  //one at a time
@@ -419,11 +420,95 @@ static auto dialogs() -> void {
   m.kernel.cycles += 26 * millisecond;
   CHECK(m.call("sceUtilityMsgDialogGetStatus", {}), 0);
   m.system.memory.fill(Parameters, 0, 580);
+  m.system.memory.write(4, Parameters, 0x44);
   CHECK(m.call("sceUtilityNetconfInitStart", {Parameters}), 0);
   m.kernel.cycles += 300 * millisecond;
   CHECK(m.call("sceUtilityNetconfUpdate", {1}), 0);
   CHECK(m.call("sceUtilityNetconfGetStatus", {}), 3);
   CHECK(m.system.memory.read(4, Parameters + 28), 1);  //cancelled
+}
+
+//What pspautotests' utility/dialog tests recorded. Each kind takes only its own sizes (sizes): every other size is
+//refused, and the refusal leaves the kind as it was. A dialog starts only while none is current: while another
+//starts, the wrong status even with a wrong size (status asks first), and still while one shuts down (priority).
+//Update does nothing but while the dialog runs (starting, or gone: the wrong status). A message aborted while it
+//runs stays running for 8 more Updates (here its first Update answers it, so one still running has had none), then
+//finishes, its result 0 and its button as it was (abort); aborted when finished, the wrong status. A state saved
+//meanwhile loads, the count with it.
+static auto dialogStatuses() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  u64 millisecond = Kernel::CPUFrequency / 1000;
+  auto advance = [&](u64 cycles) {
+    m.kernel.cycles += cycles;
+    m.kernel.events();
+  };
+  struct Kind { const char* name; std::vector<u32> sizes; };
+  std::vector<Kind> kinds = {
+    {"sceUtilitySavedata", {0x5c8, 0x5dc, 0x600}}, {"sceUtilityMsgDialog", {0x23c, 0x244, 0x2c4}},
+    {"sceUtilityOsk", {0x40, 0x44}}, {"sceUtilityNetconf", {0x38, 0x40, 0x44}},
+    {"sceUtilityGameSharing", {0x50, 0x54, 0x64}}, {"sceUtilityHtmlViewer", {0x70, 0x78, 0x80, 0x98, 0xa4, 0xa8}},
+    {"sceUtilityGamedataInstall", {0x590, 0x598}},
+  };
+  memory.fill(Parameters, 0, 0x800);
+  for(auto& kind : kinds) {
+    string start = {kind.name, "InitStart"}, status = {kind.name, "GetStatus"};
+    string shutdown = {kind.name, "ShutdownStart"};
+    for(u32 size = 0; size <= 0x800; size += 4) {
+      bool takes = std::find(kind.sizes.begin(), kind.sizes.end(), size) != kind.sizes.end();
+      if(takes) continue;
+      memory.write(4, Parameters, size);
+      CHECK(m.call(start.data(), {Parameters}), 0x8011'0004);
+    }
+    CHECK(m.call(status.data(), {}), 0x8011'0005);  //(the refusals left no kind)
+    for(u32 size : kind.sizes) {
+      memory.write(4, Parameters, size);
+      CHECK(m.call(start.data(), {Parameters}), 0);
+      memory.write(4, Parameters, 0);
+      CHECK(m.call(start.data(), {Parameters}), 0x8011'0001);  //the status before the size
+      CHECK(m.call("sceUtilityMsgDialogInitStart", {Parameters}), 0x8011'0001);
+      advance(400 * millisecond);
+      CHECK(m.call(status.data(), {}), 2);
+      CHECK(m.call(shutdown.data(), {}), 0x8011'0001);  //(running)
+      m.call(string{kind.name, "Update"}.data(), {1});
+      CHECK(m.call(status.data(), {}), 3);
+      CHECK(m.call(shutdown.data(), {}), 0);
+      CHECK(m.call(shutdown.data(), {}), 0x8011'0001);
+      memory.write(4, Parameters, size);
+      CHECK(m.call(start.data(), {Parameters}), 0x8011'0001);  //(shutting down)
+      advance(400 * millisecond);
+      CHECK(m.call(status.data(), {}), 0);
+    }
+  }
+  m.notes.clear();  //(the message's answer)
+  //Update while starting, and after the dialog's gone; Abort of another kind, and not running
+  memory.write(4, Parameters, 0x244);
+  memory.copyIn(Parameters + 60, "Aborted.", 9);
+  CHECK(m.call("sceUtilityMsgDialogAbort", {}), 0x8011'0005);
+  CHECK(m.call("sceUtilityMsgDialogInitStart", {Parameters}), 0);
+  CHECK(m.call("sceUtilityMsgDialogUpdate", {1}), 0x8011'0001);
+  CHECK(m.call("sceUtilityMsgDialogAbort", {}), 0x8011'0001);
+  advance(400 * millisecond);
+  //aborted while running, before its first Update (which would have answered it)
+  memory.write(4, Parameters + 28, 0xcccc'cccc);
+  memory.write(4, Parameters + 576, 0xcccc'cccc);
+  CHECK(m.call("sceUtilityMsgDialogAbort", {}), 0);
+  CHECK(m.call("sceUtilityMsgDialogAbort", {}), 0);  //(no more than once)
+  for(u32 update : range(7)) {
+    CHECK(m.call("sceUtilityMsgDialogUpdate", {1}), 0);
+    CHECK(m.call("sceUtilityMsgDialogGetStatus", {}), 2);
+    if(update == 3) CHECK(roundTrip(m), true);
+  }
+  CHECK(m.call("sceUtilityMsgDialogUpdate", {1}), 0);
+  CHECK(m.call("sceUtilityMsgDialogGetStatus", {}), 3);
+  CHECK(memory.read(4, Parameters + 28), 0);
+  CHECK(memory.read(4, Parameters + 576), 0xcccc'cccc);
+  CHECK(m.call("sceUtilityMsgDialogAbort", {}), 0x8011'0001);
+  CHECK(m.call("sceUtilityMsgDialogUpdate", {1}), 0);  //(finished: nothing more to do)
+  CHECK(m.call("sceUtilityMsgDialogShutdownStart", {}), 0);
+  advance(400 * millisecond);
+  CHECK(m.call("sceUtilityMsgDialogUpdate", {1}), 0x8011'0001);
+  CHECK(m.notes.size(), 0);
 }
 
 //Installing a game's data: asked about before any install dialog started, the wrong type (Ace Combat: Joint Assault
@@ -566,7 +651,7 @@ auto utilityTests() -> Tests {
     {"utility savedata buffers", savedataBuffers}, {"utility savedata loops", savedataLoops},
     {"utility savedata erase", savedataErase}, {"memory stick free space", stickSpace}, {"utility dialogs", dialogs},
     {"utility keyboard", keyboard}, {"utility modules", modules},
-    {"utility game data install", gamedataInstall},
+    {"utility game data install", gamedataInstall}, {"utility dialog sizes and statuses", dialogStatuses},
   };
 }
 

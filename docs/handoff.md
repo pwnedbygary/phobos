@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: upscaling, and presenting without reading back — 2026-10-08
 
-Branch `cursor/psp-gpu-hw3-2b67`, on top of part 41's `cursor/psp-gpu-hw2-2b67`. docs/psp-core.md, part 44, and
+Branch `cursor/psp-gpu-hw3-2b67`, on top of part 42's `cursor/psp-hle-games8-2b67` (#168 under it). docs/psp-core.md, part 44, and
 docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" describe it; PPSSPP stayed a guide only, none of its code used.
 - **The setting**: "PSP Resolution" (Native, the default and exact, then 2x-10x) in the app's PSP settings and the
   desktop's menu, given to the core as its "Resolution" option when a game loads; Vulkan's alone.
@@ -40,6 +40,24 @@ docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" describe it; PPSSPP sta
   toast seen at last (`adb shell setprop debug.phobos.psp.failcheck 1`; set back to 0). Still to check: 10x, games
   in play, rotation and backgrounding while presenting, a line seen once at 8x (part 44, "Not checked yet").
 - **Next**: shader blending, then OpenGL.
+
+## PSP core: Killzone's movie, the dialogs' sizes and statuses — 2026-10-08
+
+Branch `cursor/psp-hle-games8-2b67`, on top of `cursor/psp-gpu-hw2-2b67` (#168, the Vulkan renderer in Phobos).
+docs/psp-core.md, part 42, describes it; one commit per fix, each with its tests.
+- **Killzone: Liberation**: its jump into VRAM at frame 1547 came from its movie being told no picture came at the
+  first decode, which made it clear its target through a null pointer. With a game's own sceMpeg library (stood in
+  for) each access unit now gives its picture at once; the firmware's library still holds the first back
+  (video/mpeg/basic). Killzone plays its intro and reaches its main menu.
+- **Dialogs**: each kind takes only its recorded parameter sizes; InitStart only while no dialog is current;
+  Update INVALID_STATUS outside running and finished; sceUtilityMsgDialogAbort finishes after 8 Updates. Save
+  state version 16.
+- **Equal corner colors losing a level**: kept exact in a trial, psp measure didn't move, so left as it is.
+- **scePower 0xa85880d0**: no game here calls it; nothing names it. Left for a game that does.
+- **Checks**: tests/psp 321 groups with and without sanitizers, tests/psp/ares 306 checks, none failing; the ten
+  priority games the same sound and screens against the Killzone commit.
+- **Left**: the 21 menu-to-black games (not yet copied over); scePower 0xa85880d0; the web browser's own state and
+  memory, and the Screenshot and NpSignin dialogs.
 
 ## PSP core: the Vulkan renderer in the app and the desktop — 2026-10-07
 

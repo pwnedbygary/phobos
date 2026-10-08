@@ -584,9 +584,10 @@ auto states(const fs::path& programs) -> void {
     //and virtual timers (part 28); version 11, before the GE kept its last bounding box's result (part 29); version
     //12, before the movie player (part 31); version 13, before threads' run figures, lightweight mutexes' names and
     //the display's count of lines adjusted (part 32); version 14, before the disc drive kept whether it was
-    //deactivated (part 37). Each is refused by its header, before anything is touched (even
+    //deactivated (part 37); version 15, before an aborted message dialog counted its Updates (part 42). Each is
+    //refused by its header, before anything is touched (even
     //the compiled code, which any load throws away).
-    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}) {
+    for(u8 version : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) {
       bytes.assign(state.data(), state.data() + state.size());
       bytes[4] = version, bytes[5] = bytes[6] = bytes[7] = 0;
       serializer old{bytes.data(), u32(bytes.size())};

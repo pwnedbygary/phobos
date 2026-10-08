@@ -6,7 +6,13 @@
 //status goes 1 (starting) for a while, 2 (running: Update does its work, then) 3 (finished: the answer is in the
 //parameters), and after ShutdownStart 4 (shutting down) for a while, then 0 (none). The whiles are PPSSPP's
 //(200 ms to start a save dialog, 300 for a message, 2 ms to close a save dialog...). A dialog asked about while
-//another kind was started last is the wrong type. The answers given here, with nothing drawn on the screen yet:
+//another kind was started last is the wrong type. As pspautotests' utility/dialog tests recorded (status, sizes,
+//abort, priority): a dialog starts only while none is current, not even one shutting down (INVALID_STATUS, asked
+//before the size), and only with one of its kind's parameter sizes (INVALID_PARAM_SIZE, which leaves the kind as it
+//was); Update does its work only while the dialog runs (starting, or after it's gone: INVALID_STATUS); a message
+//aborted while it runs finishes once 8 Updates have come since it ran (at least one after the abort; one still
+//running here has had none, its first answering it), its result 0 and its button untouched. The answers given
+//here, with nothing drawn on the screen yet:
 //  - Saving and loading (savedata): a save is a folder on the memory stick, PSP/SAVEDATA/<game name><save name>,
 //    holding its data file. Loading reads the file into the program's buffer, or says there's no save; saving writes
 //    it; the sizes modes tell the memory stick's free space (the stick io.cpp describes), what a save takes and what
@@ -29,7 +35,7 @@ namespace {
   enum : u32 { DialogNone = 0, DialogStarting = 1, DialogRunning = 2, DialogFinished = 3, DialogClosing = 4 };
   enum : u32 { DialogSavedata = 1, DialogMessage, DialogKeyboard, DialogNetwork, DialogSharing, DialogBrowser,
                DialogInstall };
-  //errors (PPSSPP's ErrorCodes.h, from the PSP)
+  //errors (PPSSPP's ErrorCodes.h, from the PSP; the wrong size from pspautotests' utility/dialog/shared.c)
   constexpr u32 UtilityInvalidStatus = 0x8011'0001, UtilityInvalidSize = 0x8011'0004, UtilityWrongType = 0x8011'0005;
   constexpr u32 UtilityBadParameterID = 0x8011'0103;
   constexpr u32 ModuleBadID = 0x8011'1101, ModuleLoaded = 0x8011'1102, ModuleNotLoaded = 0x8011'1103;
@@ -40,6 +46,25 @@ namespace {
   constexpr u32 SavedataDeleteParameter = 0x8011'0348, SavedataSaveParameter = 0x8011'0388;
   constexpr u32 SavedataSizesParameter = 0x8011'03c8;
   constexpr u32 DialogCancelled = 1;  //a dialog's result when the player backs out
+  constexpr u32 MessageAbortUpdates = 8;  //(utility/dialog/abort: 8 Updates from the start, however fast they come)
+  //Whether InitStart takes a kind's parameters at this size (their common part's first word): the sizes
+  //utility/dialog/sizes skipped as the ones each kind takes (every other size up to 0x800 refused), and those
+  //utility/dialog/htmlviewer found the web browser takes.
+  auto dialogSize(u32 kind, u32 size) -> bool {
+    auto any = [&](std::initializer_list<u32> sizes) {
+      return std::find(sizes.begin(), sizes.end(), size) != sizes.end();
+    };
+    switch(kind) {
+    case DialogSavedata: return any({0x5c8, 0x5dc, 0x600});
+    case DialogMessage:  return any({0x23c, 0x244, 0x2c4});
+    case DialogKeyboard: return any({0x40, 0x44});
+    case DialogNetwork:  return any({0x38, 0x40, 0x44});
+    case DialogSharing:  return any({0x50, 0x54, 0x64});
+    case DialogBrowser:  return any({0x70, 0x78, 0x80, 0x98, 0xa4, 0xa8});
+    case DialogInstall:  return any({0x590, 0x598});
+    }
+    return false;
+  }
   //how long a dialog takes to start and to close, in microseconds (PPSSPP's)
   auto dialogTimes(u32 kind, u32& start, u32& close) -> void {
     start = kind == DialogMessage || kind == DialogKeyboard ? 300'000 : 200'000;
@@ -75,11 +100,13 @@ auto Kernel::dialogDue() -> void {
   }
 }
 
-//(kind, parameters): starts a dialog, unless one is starting, running or finished and not closed.
+//(kind, parameters): starts a dialog, unless one is current (starting, running, finished or shutting down), or its
+//parameters aren't one of the sizes its kind takes.
 auto Kernel::dialogStart(u32 kind) -> void {
   dialogDue();
-  if(dialog.status != DialogNone && dialog.status != DialogClosing) return result(UtilityInvalidStatus);
+  if(dialog.status != DialogNone) return result(UtilityInvalidStatus);
   if(!memory.reaches(arg(0), 48)) return result(ErrorInvalidPointer);
+  if(!dialogSize(kind, memory.read(4, arg(0)))) return result(UtilityInvalidSize);
   u32 start, close;
   dialogTimes(kind, start, close);
   dialog.kind = kind;
@@ -87,6 +114,7 @@ auto Kernel::dialogStart(u32 kind) -> void {
   dialog.status = DialogStarting;
   dialog.next = DialogRunning;
   dialog.changeAt = cycles + u64(start) * (CPUFrequency / 1'000'000);
+  dialog.abortUpdates = 0;
   result(0);
 }
 
@@ -96,11 +124,18 @@ auto Kernel::dialogStatus(u32 kind) -> void {
   result(dialog.status);
 }
 
-//Called every frame while it shows: running, it gives its answer and finishes.
+//Called every frame while it shows: running, it gives its answer and finishes (an aborted message counts its Updates
+//down first). Finished, there's nothing more to do.
 auto Kernel::dialogUpdate(u32 kind) -> void {
   if(dialog.kind != kind) return result(UtilityWrongType);
   dialogDue();
-  if(dialog.status == DialogRunning) {
+  if(dialog.status != DialogRunning && dialog.status != DialogFinished) return result(UtilityInvalidStatus);
+  if(dialog.status == DialogRunning && dialog.abortUpdates) {
+    if(--dialog.abortUpdates == 0) {
+      memory.write(4, dialog.parameters + 28, 0);
+      dialog.status = DialogFinished;
+    }
+  } else if(dialog.status == DialogRunning) {
     u32 answer = DialogCancelled;
     if(kind == DialogSavedata) answer = savedata(dialog.parameters);
     if(kind == DialogMessage) {
@@ -405,6 +440,15 @@ auto Kernel::sceUtilityMsgDialogInitStart() -> void { dialogStart(DialogMessage)
 auto Kernel::sceUtilityMsgDialogGetStatus() -> void { dialogStatus(DialogMessage); }
 auto Kernel::sceUtilityMsgDialogUpdate() -> void { dialogUpdate(DialogMessage); }
 auto Kernel::sceUtilityMsgDialogShutdownStart() -> void { dialogShutdown(DialogMessage); }
+
+//The game taking its message down while it runs: it fades out over Updates, then finishes (dialogUpdate()).
+auto Kernel::sceUtilityMsgDialogAbort() -> void {
+  if(dialog.kind != DialogMessage) return result(UtilityWrongType);
+  dialogDue();
+  if(dialog.status != DialogRunning) return result(UtilityInvalidStatus);
+  if(!dialog.abortUpdates) dialog.abortUpdates = MessageAbortUpdates;
+  result(0);
+}
 auto Kernel::sceUtilityOskInitStart() -> void { dialogStart(DialogKeyboard); }
 auto Kernel::sceUtilityOskGetStatus() -> void { dialogStatus(DialogKeyboard); }
 auto Kernel::sceUtilityOskUpdate() -> void { dialogUpdate(DialogKeyboard); }
@@ -422,17 +466,10 @@ auto Kernel::sceUtilityHtmlViewerGetStatus() -> void { dialogStatus(DialogBrowse
 auto Kernel::sceUtilityHtmlViewerUpdate() -> void { dialogUpdate(DialogBrowser); }
 auto Kernel::sceUtilityHtmlViewerShutdownStart() -> void { dialogShutdown(DialogBrowser); }
 
-//Installing a game's data (its parameters: the common part, then what to install where; 0x590 bytes, or 0x598 as
-//later SDKs have them, and nothing else is taken). Ace Combat: Joint Assault asks about it (GetStatus) at boot, and
-//goes on when it's told no install dialog was started (the wrong type, as every dialog answers). Cancelled when it
-//runs.
-auto Kernel::sceUtilityGamedataInstallInitStart() -> void {
-  dialogDue();
-  if(dialog.status != DialogNone && dialog.status != DialogClosing) return result(UtilityInvalidStatus);
-  if(!memory.reaches(arg(0), 4)) return result(ErrorInvalidPointer);
-  if(u32 size = memory.read(4, arg(0)); size != 0x590 && size != 0x598) return result(UtilityInvalidSize);
-  dialogStart(DialogInstall);
-}
+//Installing a game's data (its parameters: the common part, then what to install where; 0x590 or 0x598 bytes,
+//dialogSize()). Ace Combat: Joint Assault asks about it (GetStatus) at boot, and goes on when it's told no install
+//dialog was started (the wrong type, as every dialog answers). Cancelled when it runs.
+auto Kernel::sceUtilityGamedataInstallInitStart() -> void { dialogStart(DialogInstall); }
 auto Kernel::sceUtilityGamedataInstallGetStatus() -> void { dialogStatus(DialogInstall); }
 auto Kernel::sceUtilityGamedataInstallUpdate() -> void { dialogUpdate(DialogInstall); }
 auto Kernel::sceUtilityGamedataInstallShutdownStart() -> void { dialogShutdown(DialogInstall); }

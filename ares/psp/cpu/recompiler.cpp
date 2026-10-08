@@ -246,6 +246,10 @@ auto Allegrex::Recompiler::emit(u32 address, u8*& body) -> u8* {
 //change what the program does: run() going round its loop, and block() starting the code memory afresh once it's
 //nearly full (which waits for the next time it compiles). Leaving after having counted the block, it says it ran
 //none more (executed 0).
+//A syscall in a delay slot doesn't end its block (endsBlock() is for the others), so the HLE kernel has run when
+//this comes after it, as it does after nearly every system call: each import stub is a jr ra with its syscall in
+//the delay slot. That's exact because the kernel stops a run only by halting the CPU or bringing runLimit forward,
+//both checked here; anything else Allegrex::run()'s loop came to do between blocks would need checking here too.
 auto Allegrex::Recompiler::emitChain(u32 count) -> void {
   std::vector<sljit_jump*> leave;
   auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
@@ -295,7 +299,8 @@ auto Allegrex::Recompiler::emitChain(u32 count) -> void {
 //word after it, as the branch or the end of the section set them): its section and word are worked out here, and
 //of run()'s checks only the page's is made as it runs, the CPU's owner being free to change the table. Whether the
 //CPU halted is only looked at if the block called the interpreter, the only way it can halt (an exception leaves
-//before this; a syscall, halt, break or eret ends its block for run()).
+//before this; a syscall, halt, break or eret ends its block for run(), but for a syscall in a delay slot, which is
+//such a call).
 auto Allegrex::Recompiler::emitChainTo(u32 count, u32 target) -> void {
   std::vector<sljit_jump*> leave;
   auto unless = [&](sljit_jump* jump) { leave.push_back(jump); };
@@ -353,7 +358,8 @@ auto Allegrex::Recompiler::isBranch(u32 instruction) const -> bool {
   return false;
 }
 
-//Instructions after which compiled code mustn't go on by itself, though they aren't branches.
+//Instructions after which compiled code mustn't go on by itself, though they aren't branches. (One in a delay slot
+//is compiled with its branch, which goes on as emitChain() says.)
 auto Allegrex::Recompiler::endsBlock(u32 instruction) const -> bool {
   if(instruction >> 26 == 0x00) {
     u32 funct = instruction & 0x3f;

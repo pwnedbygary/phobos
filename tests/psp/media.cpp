@@ -442,8 +442,10 @@ static auto mpegStubs() -> void {
 //fed 3 at a time, so that runs wrap at its end and the file ends part way through one; twelve access units, three
 //with time stamps (one past 32 bits), each taken once the next one's delimiter is in, the last once the file has
 //ended; packets free again as their video is taken, the header packet with the first; a picture from the second
-//decoded on; then "no data", the ring empty. On both engines, and the state round trip.
-static auto mpegMovie() -> void {
+//decoded on; then "no data", the ring empty. On both engines, and the state round trip. With the game's own copy of
+//the library loaded first (a module named sceMpeg_library, stood in for), every access unit decoded gives its
+//picture, the first too (mpeg.cpp's mpegDecoded(): Killzone's movie needs it).
+static auto mpegMovie(bool ownLibrary) -> void {
   constexpr u64 None = Movie::None;
   Movie movie({3000, 700, 1500, 2600, 900, 4100, 500, 1800, 2200, 1200, 3500, 800},
               {90000, None, None, None, None, 90000 + 5 * 3003, None, None, None, 0x1'0000'0000ull + 3003, None,
@@ -463,8 +465,16 @@ static auto mpegMovie() -> void {
   CHECK(expected[first + 1].presented == ~0u && expected[first + 1].decodedHigh == ~0u, true);
   CHECK(expected.back().result == NoData && expected.back().before == Packets, true);
   CHECK(log.front().first == 0 && log.front().second == 3 && log.back().second > 0, true);
+  if(ownLibrary) {
+    for(auto& frame : expected) frame.picture = frame.size != 0;
+    CHECK(expected[first].picture == 1, true);
+  }
   for(bool recompile : {false, true}) {
     KernelMachine m;
+    if(ownLibrary) {
+      CHECK(m.kernel.standIn("sceMpeg_library", 0, "disc0:/MPEG.PRX") != 0, true);
+      m.notes.clear();  //(its "Sony's sceMpeg_library" note)
+    }
     mpegSetUp(m, movie, Packets);
     mpegCallback(m, movie, false, false);
     movieProgram(m, 0x0880'1000, Frames, Ask);
@@ -1459,7 +1469,8 @@ static auto oddsOfPart28() -> void {
 
 auto mediaTests() -> Tests {
   return {{"part 28's odds and ends", oddsOfPart28},
-          {"mpeg stubs", mpegStubs}, {"mpeg movie fed and taken apart", mpegMovie},
+          {"mpeg stubs", mpegStubs}, {"mpeg movie fed and taken apart", [] { mpegMovie(false); }},
+          {"mpeg movie with the game's own library", [] { mpegMovie(true); }},
           {"mpeg movie thread waits for its picture", mpegMovieThread},
           {"mpeg ringbuffer callback states", mpegCallbackStates},
           {"mpeg ringbuffer that isn't one given nothing", mpegRingbufferNotARing},
