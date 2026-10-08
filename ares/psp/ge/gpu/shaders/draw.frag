@@ -166,10 +166,10 @@ uvec4 unpacked(uint p) {
 }
 
 //The colors a write leaves in the frame buffer, as memory would keep them: value in its format, and where the
-//write mask says (READS), the bits of old (the frame buffer's pixel) kept
-uvec3 written(uvec4 value, uvec4 old) {
+//write mask says (READS), the bits of old (the frame buffer's pixel) kept — RGB and the stencil/alpha bits too
+uvec4 written(uvec4 value, uvec4 old) {
   uint keep = READS != 0u ? push.writeMask : 0u;
-  return unpacked((packed(value) & ~keep) | (packed(old) & keep)).rgb;
+  return unpacked((packed(value) & ~keep) | (packed(old) & keep));
 }
 
 //DITHER0-3's value for the pixel (the matrix over the PSP's pixels, each resolution x resolution of the GPU's)
@@ -252,7 +252,8 @@ void main() {
   //(the frame buffer's pixel as memory keeps it, where it's read)
   uvec4 old = READS != 0u ? unpacked(packed(uvec4(subpassLoad(frameBuffer) * 255.0 + 0.5))) : uvec4(0u);
   if(CLEAR != 0u) {
-    outColor = vec4(vec3(QUANTIZE != 4u || READS != 0u ? written(color, old) : color.rgb), float(color.a)) / 255.0;
+    uvec4 cleared = QUANTIZE != 4u || READS != 0u ? written(color, old) : color;
+    outColor = vec4(cleared) / 255.0;
     outFactor = vec4(0.0);
     return;
   }
@@ -302,8 +303,9 @@ void main() {
     if(DITHER != 0u) result += dithered();
     uvec3 kept = uvec3(clamp(result, 0, 255));
     if(LOGIC != 3u) kept = logic(kept, old.rgb);
-    float stencil = ALPHA_OUT == 1u ? float(push.stencil) / 255.0 : float(color.a) / 255.0;
-    outColor = vec4(vec3(written(uvec4(kept, 0u), old)) / 255.0, stencil);
+    //(stencil/alpha: Replace/Clear known here, else the color's alpha is left — write mask applied in packing)
+    uint stencil = ALPHA_OUT == 1u ? push.stencil : old.a;
+    outColor = vec4(written(uvec4(kept, stencil), old)) / 255.0;
     outFactor = vec4(0.0);
     return;
   }

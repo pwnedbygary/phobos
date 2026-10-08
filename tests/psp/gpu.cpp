@@ -500,7 +500,9 @@ static auto gpuBlending() -> void {
         r.mode = source | destination << 4 | operation << 8;
         r.fixedA = random() & 0xff'ffff, r.fixedB = random() & 0xff'ffff;
         r.dither = random() % 2, r.logic = random() % 3 ? 3 : random() % 16;
-        r.mask = random() % 3 ? 0 : random() & 0xff'ffff, r.alphaMask = random() % 2 ? 0xff : 0;
+        r.mask = random() % 3 ? 0 : random() & 0xff'ffff;
+        //(0 keep none, 0xff keep all, else some of the stencil/alpha bits — the shader's write mask)
+        r.alphaMask = random() % 3 ? 0xff : random() % 2 ? 0 : random() & 0xff;
         r.sprites = randomSprites(random, 8, false);
         rounds.push_back(r);
       }
@@ -521,10 +523,10 @@ static auto gpuBlending() -> void {
           for(auto& one : r.sprites) sprite(*s, one);
         }
         c[GE::AlphaBlendEnable] = 0, c[GE::DitherEnable] = 0, c[GE::LogicOpEnable] = 0;
-        c[GE::MaskColor] = 0x0f'f00f, c[GE::MaskAlpha] = 0;
-        c[GE::ClearMode] = 1 | 1 << 8;  //(clear mode, its colors through a write mask keeping some of each)
+        c[GE::MaskColor] = 0x0f'f00f, c[GE::MaskAlpha] = 0xf0;
+        c[GE::ClearMode] = 1 | 3 << 8;  //(clear colors and stencil through write masks keeping some of each)
         for(u32 n = 0; n < 4; n++) sprite(*s, rounds[0].sprites[n]);
-        c[GE::ClearMode] = 0, c[GE::MaskColor] = 0;
+        c[GE::ClearMode] = 0, c[GE::MaskColor] = 0, c[GE::MaskAlpha] = 0;
       }
       u32 bytes = apart(software, hardware);
       if(bytes) std::printf("  %ux, format %u: %u bytes apart\n", scale, format, bytes);
