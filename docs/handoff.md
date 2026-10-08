@@ -37,10 +37,11 @@ docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" describe it; PPSSPP sta
 - **Presenting** (Android): the frame drawn straight onto a swapchain on the app's window, no read-back; screenshots
   from a shrunk copy; a failing surface falls back to the read-back. The desktop reads back at up to 4x. Review fix:
   when present fails (background, acquire timeout), the frame goes the read-back way instead of leaving a stale screen.
-- **RP6**: Lumines 59.4/59.3/50.6 fps at Native/4x/8x, Ridge Racer 2's menu 60/46.5 at Native/8x. The fallback
-  toast seen at last (`adb shell setprop debug.phobos.psp.failcheck 1`; set back to 0). Still to check: 10x, games
-  in play, rotation and backgrounding while presenting, a line seen once at 8x (part 44, "Not checked yet").
-- **Next**: shader blending, then OpenGL.
+- **RP6**: Lumines 59.4/59.3/50.6/39.2 fps at Native/4x/8x/9x (9x GPU ~74% busy); Ridge Racer 2's menu 60/46.5 at
+  Native/8x. The fallback toast seen at last (`adb shell setprop debug.phobos.psp.failcheck 1`; set back to 0).
+  Backgrounding then returning kept presenting (Lumines ~30 fps after). 10x is in the menu but its row sits under
+  the app's nav bar, so it wasn't selected from adb. Still to check: 10x in play, 3D past menus, rotation, the 8x line.
+- **Next**: shader blending (#172), then OpenGL.
 
 ## PSP core: the emulation thread faster again — drawing off it, registers held — 2026-10-08
 
