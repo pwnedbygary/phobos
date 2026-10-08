@@ -382,6 +382,7 @@ else()
       desktop/Firmware.cpp
       desktop/Input.cpp
       desktop/Library.cpp
+      desktop/PspDiscInfo.cpp
       desktop/Settings.cpp
   )
   find_package(Threads REQUIRED)
