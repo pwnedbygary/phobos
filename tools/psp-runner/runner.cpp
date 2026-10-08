@@ -645,6 +645,7 @@ auto main(int argc, char** argv) -> int {
   }
   auto end = std::chrono::steady_clock::now();  //the speed is the frame loop's, not the screen's catch-up
   host.running = false;
+  bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
   root->unload();
 
   //The sound, as a WAV.
@@ -666,7 +667,7 @@ auto main(int argc, char** argv) -> int {
   auto elapsed = std::chrono::duration<double>(end - start).count();
   std::printf("--\n");
   std::printf("frames run: %u\n", frames);
-  std::printf("program: %s\n", psp.kernel.exited ? "ended" : "still running");
+  std::printf("program: %s\n", ended ? "ended" : "still running");
   std::printf("frames per second: %.2f\n", frames / elapsed);
   std::printf("unique missing functions: %u\n", u32(missing.size()));
   auto byCount = [](auto& a, auto& b) {
