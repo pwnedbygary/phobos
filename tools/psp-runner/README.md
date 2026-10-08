@@ -56,6 +56,9 @@ The options, and what each does:
   `DYLD_LIBRARY_PATH=/opt/homebrew/lib`). The summary then counts the GPU's work: draws,
   hand-overs, waits, uploads, read-backs, copies, and the milliseconds a frame the CPU waited
   for it. If Vulkan doesn't start, the run says why and the software renderer draws.
+- `--resolution N` — the Vulkan renderer's internal resolution: 1, the PSP's own (the default),
+  to 10 times it each way. The frames, and so the PNGs, are read back from the GPU at up to 4 times
+  the PSP's size (1920x1088), shrunk smoothly where it draws larger.
 - `--memory-stick DIR` — the host folder standing for `ms0:` (a scratch folder, made and
   removed with the run, by default)
 - `--fonts DIR` — the PSP's system fonts (the `.pgf` files of a PSP's `flash0:`), for the

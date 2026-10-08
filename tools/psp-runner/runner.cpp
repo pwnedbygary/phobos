@@ -27,6 +27,8 @@
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
 //    --renderer NAME            who draws them: Software (the default) or Vulkan (the system's Vulkan loader;
 //                                the summary then gives the GPU renderer's counts)
+//    --resolution N             Vulkan's internal resolution, 1 (the PSP's, the default) to 10 times it; the
+//                                frames (and PNGs) are then read back at up to 4 times the PSP's size
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //
@@ -426,6 +428,7 @@ auto main(int argc, char** argv) -> int {
   //The options: parsed first, as they name the run's shape.
   fs::path game, outDir, wav, loadState, saveStateFile, memoryStick, fonts, script;
   std::string renderer;
+  u32 resolution = 0;  //(0: the core's own, 1)
   u32 frames = 3600, pngEvery = 0, saveStateAt = 0, geThreads = 0;
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
@@ -467,6 +470,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--interpreter") interpreter = true;
     else if(option == "--ge-threads") geThreads = parseUint(next(), option);
     else if(option == "--renderer") renderer = next();
+    else if(option == "--resolution") resolution = parseUint(next(), option);
     else if(option == "--memory-stick") memoryStick = next();
     else if(option == "--fonts") fonts = next();
     else if(option[0] == '-' && option[1] == '-') {
@@ -563,6 +567,7 @@ auto main(int argc, char** argv) -> int {
   if(interpreter) PlayStationPortable::option("Recompiler", "false");
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
   if(!renderer.empty()) PlayStationPortable::option("Renderer", renderer.c_str());
+  if(resolution) PlayStationPortable::option("Resolution", std::to_string(resolution).c_str());
 
   auto& psp = ares::PlayStationPortable::system;
   ares::platform = &host;
