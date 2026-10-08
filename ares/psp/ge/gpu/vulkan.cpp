@@ -149,7 +149,9 @@ struct VulkanBackend : GPU::Backend {
       vk.vkDestroyDevice(device, nullptr);
     }
     if(!timedOut && instance) vk.vkDestroyInstance(instance, nullptr);
+    #if !defined(_WIN32)
     if(library) dlclose(library);
+    #endif
   }
 
   auto name() const -> std::string override { return "Vulkan: " + deviceName; }
@@ -674,6 +676,7 @@ struct VulkanBackend : GPU::Backend {
 
   auto create(PFN_vkGetInstanceProcAddr getInstanceProcAddr, std::string& error) -> bool {
     if(!getInstanceProcAddr) {  //(none from the host: the system's loader)
+      #if !defined(_WIN32)  //(Windows' host always hands its own over)
       #if defined(__APPLE__)
       const char* names[] = {"libvulkan.1.dylib", "libvulkan.dylib", "libMoltenVK.dylib"};
       #elif defined(__ANDROID__)
@@ -683,6 +686,7 @@ struct VulkanBackend : GPU::Backend {
       #endif
       for(auto name : names) if(!library) library = dlopen(name, RTLD_NOW | RTLD_LOCAL);
       if(library) getInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vkGetInstanceProcAddr");
+      #endif
       if(!getInstanceProcAddr) return error = "no Vulkan loader", false;
     }
     vk.vkGetInstanceProcAddr = getInstanceProcAddr;

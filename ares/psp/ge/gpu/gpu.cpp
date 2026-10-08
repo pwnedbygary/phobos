@@ -179,9 +179,10 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
     if(!owners[page]) added = true, memory.busyPages[page >> 6] |= 1ull << (page & 63);
     owners[page] = &t;
   }
-  if(!added) return;
-  memory.vramBusy = true;
-  if(memory.vramGuard) memory.vramGuard(true);
+  if(added) {
+    memory.vramBusy = true;
+    if(memory.vramGuard) memory.vramGuard(true);
+  }
   //(owned first: the change to a watched page of a target's isn't someone else's, written())
   memory.changed(Memory::VRAMBase + low, high + bytes - low);
 }
@@ -392,7 +393,12 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   if(left > right || top > bottom) return held.reset(), true;
   //Bytes memory may have changed in its pages while the GPU drew in them (beside): the target filled afresh
   //before this PRIM draws over them, what the GPU drew put back first (below).
-  if(t->besideReaches(left, top, right, bottom)) t->stale = true;
+  s32 uLeft = left, uTop = top, uRight = right, uBottom = bottom;
+  if(t->drawn()) {
+    uLeft = std::min(uLeft, t->left), uTop = std::min(uTop, t->top);
+    uRight = std::max(uRight, t->right), uBottom = std::max(uBottom, t->bottom);
+  }
+  if(t->besideReaches(uLeft, uTop, uRight, uBottom)) t->stale = true;
   //Another target drawn on the GPU in the pages this PRIM draws in, or that fill this one from memory: its pixels
   //put in memory first (which may leave this one stale: below).
   u32 rowBytes = t->stride * t->bytes();
