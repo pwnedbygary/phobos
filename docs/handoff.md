@@ -174,6 +174,32 @@ code is used.
   of lost; render-to-texture copies bounded (32, one for each target and size); the depth buffer's pages watched
   apart from the colors; long PRIMs handed over in pieces; `GE::setRenderer()` has a renderer forget the machine
   before. Three new tests; the PSP system tests pass on the M1 (sanitized, the GPU groups run) and with g++ 13.
+## PSP disc info: title, disc ID, region and icon — 2026-10-08
+
+Branch `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162). docs/psp-core.md, part 39, describes it.
+- **The reader** (`ares/psp/kernel/disc-info.hpp` / `.cpp`): a PSP disc's title, disc ID (NPD ID), region and
+  icon (PSP_GAME/ICON0.PNG), read off its image (ISO, CSO, ZSO, DAX, JSO, or CHD) a few sectors at a time, every
+  size bounded (PARAM.SFO over 64 KiB, ICON0 over 1 MiB, taken as none). Region from the disc ID's third letter:
+  J Japan, U US, E Europe, else Unknown. CHD read through libchdr when `ARES_ENABLE_CHD` is defined; without it,
+  a CHD is taken as none. `sfoValue` and `paramSFO` moved here from `psp-runner` and `mia`, which now share them.
+- **Consumers**: `psp-runner`'s `discInfo()` and `mia`'s `load()` call the shared reader; the Android app's
+  `PhobosCore.pspDiscInfo(fd)` (JNI) reads title+icon together, and the Library's `MainViewModel` caches the
+  icon keyed by URI+size+mtime, showing title and icon in `SystemDetailScreen`.
+- **Tests**: `tests/psp/disc-info.cpp` (ISO, CSO, CHD, damaged images, SFO values, regions) and
+  `PspDiscInfoTest.kt` (title choice, cache key).
+- **Checked**: tests/psp (with the new disc-info groups), tests/psp/ares, Android unit tests and release build
+  (`-Pphobos.ffmpeg=OFF`).
+- **Round 2 review fixes** (2026-10-08): (1) the disc's descriptor is closed by the caller (`pfd.fd`, not
+  `detachFd()`); (2) the icon is downsampled to 160 px at cache time (refused past 512 px), so the list's
+  decode is small and safe; (3) the plain list shows first, then titles and icons fill in a separate job, cached
+  under a SHA-256 of URI+size+mtime in `cacheDir/psp-icons/` (the title and disc ID beside the icon), so a
+  second visit doesn't re-open the disc; the previous Library scan (list and title fill) is cancelled; (4) the SFO's offsets are 64-bit,
+  the title capped at 128 bytes with controls dropped, and passed as bytes into Kotlin's UTF-8; (5) size/mtime
+  captured only for PSP discs; (6) a single-disc .m3u shows the playlist's name; (7) a CHD disc-info case in
+  `tests/psp/ares/system.cpp`; (8) the CATEGORY isn't read (the Library shows the title and icon, not the
+  category).
+- **Left**: cost measurement on 20+ real images (to be done on the handheld); desktop `Library.cpp` showing the
+  same titles (optional if cheap); RP6 fd-count check (no device access on the host).
 
 ## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
 
