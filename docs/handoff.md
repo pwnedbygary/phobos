@@ -25,6 +25,31 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the stuck games, and the runner's presses — 2026-10-07
+
+Branch `cursor/psp-hle-games7-2b67`, on top of `cursor/psp-ge-curves-2b67` (with #158's re-run report merged in).
+docs/psp-core.md, part 37, describes it; one commit per fix, each with its tests.
+- **Killzone: Liberation**: its boot program loads and starts the game's module, then unloads itself
+  (sceKernelStopUnloadSelfModuleWithStatus), which the kernel took as the program leaving. Now the program goes as a
+  module would (`programAsModule()`), its module_stop run, the game's threads running on; code in no module gets
+  CAN_NOT_STOP. It reaches its language menu and, with presses, its autosave notice; after that it loads
+  `mpeg.prx` and jumps into VRAM at frame 1547 (not looked into yet).
+- **Ace Combat: Joint Assault**: utility module 0x308 loads (0x309 refused); the gamedata install dialog's five
+  functions. It reaches its autosave notice, and with presses its legal notice.
+- **MotorStorm: Arctic Edge**: the drive notifies its callback on activate and deactivate (umd/callbacks, umd/wait,
+  umd/register); the save state version is 15. It reaches its warnings, its logos and its intro movie.
+- **Chili Con Carnage**: corners at one depth keep that depth at every pixel (65535 had become 65534 at some, and
+  the logo lost stripes under GEQUAL). The logo draws whole.
+- **Points past z / w ±1** aren't drawn: psp measure's 3d-rules 6 to 4 pixels apart, nothing else changed.
+- **The runner**: `--press` lists were never split at their commas, so no run with one (the compatibility
+  report's 266 included) had any input; and "program: ended" was lost on unload. Both fixed.
+- **The 22 menu-to-black games**: not the unload change (it's older than both runs; Killzone was black at
+  de6e6dcb7 too). With no input in either run, a re-run with the fixed runner is the way to sort them.
+- **Checks**: tests/psp 312 groups with and without sanitizers, tests/psp/ares 302 checks, none failing; the ten
+  priority games the same pictures and sound against the base, but two frames a moment apart.
+- **Left**: Killzone's jump into VRAM; the other dialogs' sizes and the Screenshot and NpSignin dialogs; equal
+  corner colors losing a level; scePower 0xa85880d0, the report's one top missing function still missing.
+
 ## PSP core: curved surfaces (BEZIER and SPLINE) — 2026-10-07
 
 Branch `cursor/psp-ge-curves-2b67`, on top of `cursor/psp-hle-games6-2b67` (#161, part 32; parts 31 and 30, #160
