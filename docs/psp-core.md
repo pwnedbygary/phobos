@@ -5369,7 +5369,7 @@ to 48.1 (best of three).
   20,000 a frame), and the FPU's remaining conversions.
 ## Part 44: upscaling, and presenting without reading back
 
-On branch `cursor/psp-gpu-hw3-2b67`, on top of part 43's `cursor/psp-cpu-speed2-2b67` (#170 under it).
+On branch `cursor/psp-gpu-hw3-2b67`, on top of part 46's `cursor/psp-cpu-speed3-2b67` (#176 under it).
 docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" are the detail. PPSSPP's render resolution multiplier and its
 presentation stayed a guide
 to the design only, as in parts 36 and 41: none of its code is used, copied or translated.
@@ -5482,3 +5482,45 @@ cost is independent of the image's total size. Measured on 20 synthetic images f
 sparse in-memory reader: sub-millisecond for every size. On a Mac (M2), a 1 GB CHD opens and reads its disc info
 in about 0.3 s; a 4 GB CHD in about 0.8 s. A cached disc (title, disc ID and icon already in `psp-icons/`) takes
 no measurable time: the list shows instantly, and the titles and icons fill in from the cache.
+
+## Part 46: the emulation thread faster again — render-to-texture decode later
+
+On branch `cursor/psp-cpu-speed3-2b67`, on top of part 43's `cursor/psp-cpu-speed2-2b67` (with #165 disc-info merged
+in). Exactness unchanged: nothing drawn differs.
+
+**What was left (part 43):** on MC3's race at 7 GE threads, most of the remaining emulation-thread drawing wait was
+a texture decoded from the batch being filled (render to texture, ~3.4 ms a frame). The decode ran on the GE's
+thread before the sampling primitive could be set up, so that batch had to be drawn first (`drawnFirst` → `flush`).
+
+**What this does** (`texture.cpp`, `threads.cpp`, `draw.cpp`, `ge.hpp`):
+1. When workers are drawing and a texture's bytes still sit under a batch being filled or already launched, `decode`
+   does not settle. If the overlap is the batch being filled, that batch is `launch`ed (drawn in the background);
+   the Look waits in the next batch with `deferRows` (and a CLUT snapshot when indexed).
+2. As that next batch starts being drawn (`drawBands`, or `flush` when drawn at once), `ensureDecoded` fills every
+   deferred Look. Batches are drawn in order, so every batch before it is done and the pixels are in VRAM. One
+   thread decodes (`decodeState`); the others wait. `readingDeferred` stops `pointer()` settling this batch while
+   those prior pages are still marked busy.
+3. The texture cache is shared with the workers (`textures.mutex`).
+
+So the GE's thread sets up the sampling primitive and goes on; the decode runs when the workers (or the GE's thread
+helping) are about to draw that batch, not while the list is being read.
+
+**How it's known to be exact:** `tests/allegrex/run-tests.sh` (58 groups) and `tests/psp/run-tests.sh` (328 groups,
+including `geThreads`'s render-to-texture and the hardware renderer's). The six cpu-speed scenes remade at
+StateVersion 17 under `~/phobos-work/scratch/cpu-speed/scenes` (from the parent tip): 300 frames with every
+frame's picture and VRAM hashed (`HASHES=1`), plus the end state, at 1 and 7 GE threads — identical to the
+parent (`origin/cursor/psp-cpu-speed2-2b67` / `eeba5028e`) for all six. On the RP6 the race and menu end states
+match the parent without settling drawing each frame.
+
+**On the RP6** (7 GE threads, four rounds, remade StateVersion 17 scenes; parent → this tip):
+
+| Scene | Before (median / avg) | After (median / avg) |
+| --- | --- | --- |
+| Midnight Club 3, race | 37.3 / 36.8 | 38.1 / 38.8 |
+| Midnight Club 3, menu | 36.0 / 35.6 | 35.5 / 35.9 |
+
+The race's emulation thread stays about 24 ms a frame either way (within round noise). The menu does not move.
+
+**Left, and why:**
+- Primitives that can't wait in a batch, and those drawn at once (textures read from memory as they're drawn).
+- Holding registers across block chains; VFPU with prefixes and rarer instructions still interpreted.
