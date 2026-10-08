@@ -27,6 +27,7 @@ namespace ares::PlayStationPortable {
 #include "decrypt.cpp"
 #include "unpack.cpp"
 #include "disc.cpp"
+#include "disc-info.cpp"
 #include "io.cpp"
 #include "async.cpp"
 #include "umd.cpp"
