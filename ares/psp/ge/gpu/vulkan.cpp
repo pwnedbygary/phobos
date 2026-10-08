@@ -744,6 +744,7 @@ struct VulkanBackend : GPU::Backend {
     //(a swapchain image for a Present, acquired before anything's recorded: none, nothing's presented)
     constexpr u32 NoImage = ~0u;
     u32 image = NoImage;
+    presented = false;
     for(auto& c : r.commands) {
       if(c.kind == GPU::Command::Kind::Present && image == NoImage && !acquire(slot, image)) image = NoImage;
     }
@@ -862,6 +863,7 @@ struct VulkanBackend : GPU::Backend {
         bool colored = c.parts & 1, depthed = c.parts & 2;
         if(scale > 1) {
           upload(commands, slot, t, c, in, colors, depths);
+          if(lost) return false;  //(no room for its picture: nothing half recorded is submitted)
           boundPipeline = VK_NULL_HANDLE, boundSet = VK_NULL_HANDLE, lastState = ~0u;
           continue;
         }
@@ -979,6 +981,7 @@ struct VulkanBackend : GPU::Backend {
       info.waitSemaphoreCount = 1, info.pWaitSemaphores = &swapImages[image].rendered;
       info.swapchainCount = 1, info.pSwapchains = &swapchain, info.pImageIndices = &image;
       VkResult shown = vk.vkQueuePresentKHR(queue, &info);
+      presented = shown == VK_SUCCESS || shown == VK_SUBOPTIMAL_KHR;
       if(shown == VK_SUBOPTIMAL_KHR || shown == VK_ERROR_OUT_OF_DATE_KHR) rebuild = true;
       else if(shown == VK_ERROR_SURFACE_LOST_KHR) dropSurface();
       else if(shown == VK_ERROR_DEVICE_LOST) return lost = true, false;

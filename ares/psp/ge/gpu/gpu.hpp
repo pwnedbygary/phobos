@@ -127,6 +127,9 @@ struct GPU : GE::Renderer {
     bool lost = false;        //the GPU stopped answering: nothing more is drawn by it
     bool dualSource = false;  //dual-source blending (Source1Color)
     bool logicOps = false;    //its own logic operations
+    //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
+    //where there's no window, or the acquiring timed out: the host shows the frame itself then)
+    bool presented = false;
     //The internal resolution (GPU::resolution()): each of the PSP's pixels is scale x scale of the GPU's in every
     //target, its drawing, its copies and its depth. 1, the PSP's own, draws its pixels alone (the exact native
     //mode); mostScale is the most its pictures' size allows (a target 512 of the PSP's pixels across).
@@ -225,8 +228,10 @@ struct GPU : GE::Renderer {
   //picture() would read it, straight from its target with nothing read back or waited for (false, with nothing
   //presented, where picture() would be false: memory has the picture then), or memory's picture, width x height
   //of 8888s as Kernel::picture() makes them; shot(), the newest picture show() presented from a target, as it was
-  //(its GE format's colors not yet narrowed; false: none newer since the last).
+  //(its GE format's colors not yet narrowed; false: none newer since the last). presented(): whether the last
+  //show() put the picture on the window (false where it couldn't, no window or a timeout: the host shows it then).
   auto presents() const -> bool { return ready() && backend->presents(); }
+  auto presented() const -> bool { return ready() && backend->presented; }
   auto window(void* window) -> void { if(backend) backend->window(window); }
   auto show(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bool;
   auto show(const std::vector<u32>& pixels, u32 width, u32 height) -> void;

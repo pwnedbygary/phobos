@@ -151,7 +151,8 @@ auto System::run() -> void {
 
 //The frame presented by the GPU on the host's window itself (GPU::show(): Android's, where its Vulkan renderer has
 //the window), with nothing read back: the frame buffer straight from its target, or memory's picture where the GPU
-//doesn't hold it; kept for shot() too. False where the GPU doesn't present, or has just given up: the screen's.
+//doesn't hold it; kept for shot() too. False where the GPU doesn't present, has just given up, or couldn't put this
+//frame on the window (none, as in the background, or the acquiring timed out): the screen's then, read back.
 auto System::present() -> bool {
   handWindow();
   if(!gpu || !gpu->presents()) return false;
@@ -164,7 +165,7 @@ auto System::present() -> bool {
     fromTarget = gpu->show(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height);
   }
   if(!fromTarget) kernel.picture(pixels), gpu->show(pixels, width, height);
-  if(!gpu->presents()) return false;
+  if(!gpu->presents() || !gpu->presented()) return false;
   //(the picture presented last: memory's, or the newest the GPU has finished presenting from a target)
   std::lock_guard lock{shotMutex};
   if(!fromTarget) std::swap(shotPixels, pixels), shotWidth = width, shotHeight = height, shotFormat = 3;
