@@ -687,7 +687,9 @@ struct Kernel {
   static constexpr u32 UmdNotPresent = 0x01, UmdPresent = 0x02, UmdChanged = 0x04, UmdNotReady = 0x08,
                        UmdReady = 0x10, UmdReadable = 0x20;
   u32 umdCallback = 0;  //the callback the program registered for the drive's changes
+  bool umdDeactivated = false;  //the program deactivated the drive (sceUmdDeactivate): not readable till activated
   auto umdState() const -> u32;
+  auto umdChanged(u32 notified) -> void;
   auto umdWait(u32 stat, u32 timeout, bool callbacks) -> void;
   auto sceUmdCheckMedium() -> void;
   auto sceUmdActivate() -> void;

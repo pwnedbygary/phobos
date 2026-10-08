@@ -466,7 +466,7 @@ static auto stateFields() -> void {
     {"callback thread", [&] { cb.thread ^= 1; }}, {"callback notifyCount", [&] { cb.notifyCount ^= 1; }},
     {"callback notifyArg", [&] { cb.notifyArg ^= 1; }},
     {"exitCallback", [&] { k.exitCallback ^= 1; }}, {"memoryStickCallbacks", [&] { k.memoryStickCallbacks[0] ^= 1; }},
-    {"umdCallback", [&] { k.umdCallback ^= 1; }},
+    {"umdCallback", [&] { k.umdCallback ^= 1; }}, {"umdDeactivated", [&] { k.umdDeactivated = true; }},
     {"block uid", [&] { block.uid = k.nextUID++; }}, {"block name", [&] { block.name += "x"; }},
     {"block address", [&] { block.address ^= 0x100; }}, {"block size", [&] { block.size ^= 0x100; }},
     {"largeMemory", [&] { k.largeMemory = true; }}, {"sdkVersion", [&] { k.sdkVersion ^= 1; }},

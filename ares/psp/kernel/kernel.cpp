@@ -824,6 +824,7 @@ auto Kernel::power() -> void {
   exitCallback = 0;
   memoryStickCallbacks.clear();
   umdCallback = 0;
+  umdDeactivated = false;
   ge.power();  //the GE starts afresh with the program, its driver too
   for(auto& list : geLists) list = {};
   geQueue.clear();
