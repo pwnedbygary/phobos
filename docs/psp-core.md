@@ -40,6 +40,8 @@ Part 33, curved surfaces (BEZIER and SPLINE), is on `cursor/psp-ge-curves-2b67`,
 Part 37, the stuck games (a boot program unloading itself, the gamedata install dialog, the drive's callback, depths
 kept at one depth, points past z / w ±1) and the runner's presses, is on `cursor/psp-hle-games7-2b67`, on top of
 part 33's.
+Part 42, Killzone's movie (a game's own sceMpeg library gives each picture at once) and the dialogs' sizes and
+statuses (with sceUtilityMsgDialogAbort), is on `cursor/psp-hle-games8-2b67`, on top of part 37's.
 
 ## Decisions (the user's, 2026-10-03)
 
@@ -5192,6 +5194,65 @@ beside the pixels"; the RP6's in-app numbers above were.
 
 **Next** (the design's plan): upscaling, with the GPU's image presented without reading it back; then accuracy
 (blending in the shader where the GPU allows); then OpenGL.
+
+## Part 42: Killzone's movie, the dialogs' sizes and statuses
+
+On branch `cursor/psp-hle-games8-2b67`, on top of part 37's `cursor/psp-hle-games7-2b67` with #164 merged into it
+(7cafa81a4). Sources: pspsdk's headers (`pspmpeg.h`, `psputility.h`), pspautotests' programs and recordings
+(video/mpeg/basic; utility/dialog's sizes, status, abort, priority and htmlviewer), the games' own code, traced and
+disassembled with the runner, and round 3's measurements (`psp measure`). No other emulator's code was read. (The
+older comments at the top of `utility.cpp` still name PPSSPP as where the dialogs' timings came from; nothing here
+was added from it.) Each fix is a commit of its own, with its tests.
+
+**Killzone: Liberation's jump into VRAM** (`mpeg.cpp`'s `mpegDecoded()`, `mpegOwnLibrary()`): after its autosave
+notice the game loads its disc's `mpeg.prx` (sceMpeg_library 1.5, stood in for) and plays its intro movie. Its
+movie object's Update is called every frame with no target of its own (`Update(0, 0)` in effect), so it decodes into
+no buffer; after sceMpegAvcDecode, when told no picture came, it clears its target through that object, a null
+pointer, reads a function's address from 0x28 to 0x30, and jumps to the garbage there (0x040cc000, in VRAM) at frame
+1547. The kernel held the first picture back, as pspautotests' video/mpeg/basic recorded and pspsdk's header says
+("will be set to 0 on first call, then 1"), but basic used the firmware's library; the game's code can't have run
+that way on a PSP, so with the game's own library each access unit gives its own picture at once, the first too.
+Programs on the firmware's library (sceUtilityLoadAvModule, sceUtilityLoadModule) still get the first held back.
+The game's library is the same version Grand Theft Auto: Vice City Stories brings (Liberty City Stories, Midnight
+Club 3 and Burnout Dominator bring 1.4, Snoopy vs. the Red Baron 1.3); the two movies' sequence headers are alike;
+Burnout Legends and Dominator set the same decode mode (-1, 3). Those six show the same screens either way. Killzone
+now plays its intro, reaches its title screen (frame 3300) and its main menu (frame 4800). The test plays
+basic's movie both ways: with a stood-in sceMpeg_library every frame's picture comes with its access unit.
+
+**The dialogs' sizes and statuses** (`utility.cpp`), as utility/dialog recorded them:
+- Each kind's InitStart takes only its own parameter sizes (the first word of the common part), every other size up
+  to 0x800 refused with INVALID_PARAM_SIZE (0x80110004), and the refusal leaves the current kind as it was:
+  savedata 0x5c8, 0x5dc and 0x600; message 0x23c, 0x244 and 0x2c4; keyboard 0x40 and 0x44; network settings 0x38,
+  0x40 and 0x44; game sharing 0x50, 0x54 and 0x64; the web browser 0x70, 0x78, 0x80, 0x98, 0xa4 and 0xa8; the
+  gamedata install 0x590 and 0x598 (part 37's, now from the same table).
+- A dialog starts only while none is current: starting, running, finished or shutting down, it's INVALID_STATUS
+  (0x80110001), asked before the size (priority: an InitStart right after ShutdownStart is refused).
+- Update does its work only while the dialog runs: starting, or after the dialog's gone, INVALID_STATUS. Finished,
+  it answers 0 and does nothing (not recorded).
+- sceUtilityMsgDialogAbort (new): another kind's, the wrong type; not running, INVALID_STATUS; running, 0, and the
+  message stays running until 8 Updates have come since it started running, at least one after the abort (abort's
+  cases, 0 to 10 Updates first, took `max(8 - before, 1)` more; a message here is answered at its first Update, so
+  one still running has had none, and takes 8), then finishes with result 0, its button untouched. The count is in the state (`dialog
+  .abortUpdates`), so the state's version goes to 16.
+- Not done: the web browser's own state and its 0x380000 bytes of memory (htmlviewer: 0x800200d9 when they can't be
+  had, even during a message); the Screenshot and NpSignin dialogs (their GetStatus the wrong type at boot), which
+  no game here asks for.
+The test runs every kind through every size, starts each at each of its sizes and takes it through its statuses,
+and aborts a message, a state saved halfway through its count.
+
+**Colors from equal corners losing a level** (part 37's last item): a smooth triangle whose corners share a channel
+can come out one level under it (255 to 254), as depths did. Kept exact in a trial build, every line of `psp
+measure` stayed the same (its 90 lines), so neither the PSP's pictures nor its measurements say the level is kept:
+left as it is.
+
+**scePower 0xa85880d0** (#158's one top missing function): none of the 22 games here calls it, pspautotests imports
+it only unnamed, the PSP Developer Wiki has no scePower list naming it, and none of about 2.7 million candidate
+names hashes to it. Left until a game calls it, to be modelled from how it uses it.
+
+**Checks.** `tests/psp`: 321 groups, none failing, with the sanitizers and without; `tests/psp/ares`: 306 checks,
+none failing (a version 15 state refused). The ten priority games, 3000 frames each, against the Killzone commit
+(461219822): the same sound, and the same pictures but for four the same screens a few frames apart (Vice City
+Stories' and Snoopy's logos, Gunhound's loading screen, Peace Walker's title).
 ## Part 39 — PSP disc info: title, disc ID, region and icon
 
 **Branch:** `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162).

@@ -1249,6 +1249,7 @@ struct Kernel {
   auto mpegFinish(MpegCall& call) -> void;
   auto mpegAbandoned(u32 thread) -> void;
   auto mpegLibrary(u32 handle) -> u32;
+  auto mpegOwnLibrary() -> bool;
   auto mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWidth) -> void;
   auto mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 frameWidth, u32 x, u32 y, u32 width,
                    u32 height) -> void;
@@ -1703,6 +1704,8 @@ struct Kernel {
     u32 next = 0;          //the status it goes to at changeAt (0: no change coming)
     u64 changeAt = 0;
     u32 parameters = 0;    //where its parameters are
+    u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
+    u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
@@ -1725,6 +1728,7 @@ struct Kernel {
   auto sceUtilityMsgDialogGetStatus() -> void;
   auto sceUtilityMsgDialogUpdate() -> void;
   auto sceUtilityMsgDialogShutdownStart() -> void;
+  auto sceUtilityMsgDialogAbort() -> void;
   auto sceUtilityOskInitStart() -> void;
   auto sceUtilityOskGetStatus() -> void;
   auto sceUtilityOskUpdate() -> void;
