@@ -41,7 +41,7 @@ docs/psp-core.md, part 45, and docs/psp-gpu-renderers.md's "Shader blending" des
   first build failed Turnip's start-up check (only reading pipelines asked for the order, no barrier); fixed. The
   GPU tests built for Android pass on Qualcomm's driver. Settings put back to Software (resolution left at 3x;
   Software ignores it).
-- **Next**: OpenGL.
+- **Next**: Software/7-thread remaining waits and Vulkan accuracy (OpenGL parked; Software covers devices without Vulkan).
 
 ## PSP core: upscaling, and presenting without reading back — 2026-10-08
 

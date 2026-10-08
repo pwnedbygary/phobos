@@ -552,4 +552,4 @@ software renderer.
 4. **Accuracy**: shader blending (part 45, done: blending, dithering, logic operations, write masks and 16-bit
    formats as the PSP's, on every Vulkan GPU); still to do, depth read back where games need it, block transfers
    between targets on the GPU, textures decoded on the GPU.
-5. **OpenGL**: the GL backend over the same renderer and shaders; the same measurements; "OpenGL" in the setting.
+5. **OpenGL** (parked 2026-10-08): not worth a second HW backend yet; Software is the non-Vulkan path. Revisit only if telemetry shows need.

@@ -5466,7 +5466,7 @@ the shader's write mask keeps stencil and alpha bits as well as RGB.
 3D games in play past their menus; the retry with the draws split on a driver whose check fails in order (none
 seen yet).
 
-**Next**: OpenGL.
+**Next**: Software/7-thread remaining waits and Vulkan accuracy (OpenGL parked; Software covers devices without Vulkan).
 ## Part 39 — PSP disc info: title, disc ID, region and icon
 
 **Branch:** `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162).
