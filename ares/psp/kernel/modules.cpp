@@ -347,7 +347,13 @@ auto Kernel::unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -
   auto found = modules.find(uid);
   u32 running = found != modules.end() ? found->second.thread : 0;
   if(running && (!current || running != current->uid)) return result(ErrorNotStopped);
-  if(uid == programUID) programAsModule();
+  if(uid == programUID) {
+    //(the program doesn't end this way, so a run's log has only this to show that it stopped)
+    u32 left = 0;
+    for(auto& [id, thread] : threads) left += thread.get() != current && thread->status != Status::Dormant;
+    note("the program unloads itself, " + std::to_string(left) + " other threads left");
+    programAsModule();
+  }
   result(0);  //what a caller that isn't a thread (the kernel's own tests) sees
   Thread* caller = current;
   if(caller) {
