@@ -591,7 +591,11 @@ auto Kernel::serialize(serializer& s) -> bool {
   }
   //the utilities: the dialog, and the modules loaded; the HOME menu's language and button (any the program sets)
   s(dialog.kind); s(dialog.status); s(dialog.next); s(dialog.changeAt); s(dialog.parameters);
-  s(dialog.abortUpdates); s(dialog.runningUpdates);
+  //Layouts before 16/17 omit the message-dialog abort counters (none aborted in those states).
+  if(s.reading() && stateLayout < 16) dialog.abortUpdates = 0;
+  else s(dialog.abortUpdates);
+  if(s.reading() && stateLayout < 17) dialog.runningUpdates = 0;
+  else s(dialog.runningUpdates);
   vector(utilityModules, [&](u32& module) { s(module); });
   s(imposeLanguage); s(imposeButton);
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own

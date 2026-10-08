@@ -1,15 +1,15 @@
 # The PSP's hardware renderers: Vulkan, then OpenGL
 
-**Status (2026-10-07):** a Vulkan renderer drawing the owner's games with the GPU's own rasterizer, texture units
+**Status (2026-10-08):** a Vulkan renderer drawing the owner's games with the GPU's own rasterizer, texture units
 and blending, at the PSP's resolution, on Apple's M1 (MoltenVK) and the RP6's Adreno 740 (docs/psp-core.md, part
 36). On the RP6 it draws the six benchmark scenes 1.5 to 2.3 times as fast as the software renderer on seven threads
-(below: "Speed"). It isn't exact: blending rounds differently on the GPU, so 28-65% of a scene's pixels come out the
-same as the software renderer's, nearly all of the rest a level or two apart ("Accuracy"). In the app and the desktop
-program since part 41 (Settings' "PSP Renderer", Software the default: "In Phobos"). Since part 44 it draws at 1
-(exact) to 10 times the PSP's resolution and presents on Android's window without reading back ("Upscaling",
-"Presenting"); since part 45 it blends in the shader, reading the frame buffer, so blending, dithering, logic
-operations and write masks are the software renderer's to the bit ("Shader blending"; the accuracy figures below
-are from before it). No OpenGL yet ("The plan").
+(below: "Speed"). With shader blending (part 45) the owner's scenes on the M1 match the software renderer on 77-98%
+of pixels ("Accuracy"); the rest are mostly a level or two apart from texel edges and rasterization. In the app and
+the desktop program since part 41 (Settings' "PSP Renderer", Software the default: "In Phobos"). Since part 44 it
+draws at 1 (exact) to 10 times the PSP's resolution and presents on Android's window without reading back
+("Upscaling", "Presenting"); since part 45 it blends in the shader, reading the frame buffer, so blending,
+dithering, logic operations and write masks are the software renderer's to the bit ("Shader blending"). No OpenGL
+yet ("The plan").
 
 The owner's direction (2026-10-07): a hardware renderer as PPSSPP has one (the GPU's own rasterizer, texture units
 and blending; shaders generated from the GE's state; upscaling), Vulkan first and OpenGL after. The software renderer
@@ -384,10 +384,7 @@ The software renderer is the reference. Two tools compare against it:
 pspsdk's samples (M1): clut, blit, doublelist and gu 100% the same; celshading 100% (176 channels a level apart);
 cube 99.7%, envmap 99.4%; blend 68.7% (its blended pixels all a level or two apart), 100% since part 45.
 
-The owner's games, 10 frames each from the verified scenes, on the RP6. (Part 36 said the M1's were the same; they
-aren't quite: its pixels identical are 52.7%, 41.3%, 60.0%, 27.6%, 43.9% and 42.6%, in the table's order, the
-GPUs rounding differently in places. The RP6's, below, were measured again with part 41's code, before the scenes'
-states were lost, and came out the same to the pixel.)
+The owner's games, 10 frames each from the verified scenes. Before part 45, on the RP6 (part 41's code):
 
 | Scene (game) | Pixels identical | Channels apart by 1-2 | 3-8 | more |
 |---|---|---|---|---|
@@ -398,28 +395,33 @@ states were lost, and came out the same to the pixel.)
 | Liberty City Stories, park edge | 46.0% | 1,188,948 | 34,244 | 6,428 |
 | Liberty City Stories, woods | 43.0% | 1,348,394 | 20,498 | 1,986 |
 
-What differs:
-- **Blending's rounding** is most of it: the channels a level or two apart, over every blended surface (Lumines'
-  blocks and backgrounds, the 3D games' transparent textures, smoke, lights and HUD).
-- **Peace Walker's title** draws into a 16-bit frame buffer, blended and dithered: the PSP dithers the blended color
-  and keeps 5 or 6 bits, the GPU doesn't dither when blending and keeps 8. Every differing channel is one or more
-  steps of the 16-bit format, which shows as 3 or more levels apart in 8 bits.
-- **The 3D games' 3-8 and more**: 16-bit intermediate frame buffers blended over several draws (the 8 bits kept
-  between them), texels chosen differently where the GPU's interpolated texture coordinates land on the other side of
-  a texel's edge from the GE's per-pixel division, and edges where the GPU's rasterization rule and the GE's disagree
-  by a pixel. They weren't separated further.
-- **Known approximations**: the depth buffer not read back (so the CPU, a texture or a PRIM the software renderer
-  draws sees memory's depth, not the GPU's); a change to the depth buffer's bytes refills all of each 16 KiB it
-  touches, so the GPU's depth drawn there since is replaced by memory's; a PRIM's pixels past its frame buffer's row
-  end cut at the row; textures past a frame buffer's row; and, before part 45's shader blending (still so for a
-  backend that can't read the frame buffer), partial write masks, absolute-difference blending and logic
-  operations other than clear, set, invert and keep without the GPU's own.
+(Part 36 said the M1's were the same; they aren't quite without shader blending: 52.7%, 41.3%, 60.0%, 27.6%, 43.9%
+and 42.6%, in that order.)
 
-The table and the list above are from before part 45. With shader blending, blending's rounding, the dithering of
-blended pixels and the 8 bits kept between draws of a 16-bit frame buffer are gone; texels chosen differently and
-rasterization's edges remain. The scenes' states were lost (above), so the table wasn't measured again.
+After part 45, the same scenes on the M1 (MoltenVK; blending in the shader, overlaps apart), states migrated from
+layout 15 to 17. Peace Walker's title wouldn't load (its program hash no longer matches the disc's EBOOT):
 
-The pictures look the same to the eye in all six scenes; nothing is missing or misplaced.
+| Scene (game) | Pixels identical | Channels apart by 1-2 | 3-8 | more |
+|---|---|---|---|---|
+| Lumines, demo | 97.8% | 62,942 | 13,338 | 272 |
+| Midnight Club 3, profile menu | 97.6% | 41,814 | 10,031 | 3,333 |
+| Midnight Club 3, night race | 89.2% | 202,401 | 7,456 | 774 |
+| Liberty City Stories, park edge | 77.4% | 397,544 | 3,145 | 1,588 |
+| Liberty City Stories, woods | 82.2% | 333,806 | 5,163 | 2,207 |
+
+What differs after shader blending:
+- **Texel edges and rasterization** are most of what's left: where the GPU's interpolated texture coordinates land
+  on the other side of a texel's edge from the GE's per-pixel division, and edges where the GPU's fill rule and the
+  GE's disagree by a pixel. Those show as channels a level or two apart (and a few farther) over the 3D games'
+  textured surfaces.
+- **Blending's rounding**, the dithering of blended pixels, and the 8 bits kept between draws of a 16-bit frame
+  buffer are gone where the GPU reads the frame buffer (part 45); pspsdk's blend sample is 100% the same.
+- **Known approximations** still: the depth buffer not read back (so the CPU, a texture or a PRIM the software
+  renderer draws sees memory's depth, not the GPU's); a change to the depth buffer's bytes refills all of each 16
+  KiB it touches; a PRIM's pixels past its frame buffer's row end cut at the row; textures past a frame buffer's
+  row; and, for a backend that can't read the frame buffer, the older blending and logic approximations.
+
+The pictures look the same to the eye in the scenes measured; nothing is missing or misplaced.
 
 ## Speed
 

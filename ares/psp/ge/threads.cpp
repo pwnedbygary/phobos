@@ -20,10 +20,15 @@
 //    compiled loads and stores reach VRAM through its page table, so the CPU's owner takes those pages out of it
 //    meanwhile (Memory::vramGuard; without one, a list's batches are all drawn before run() returns);
 //  - by the next list, only the batch it's to fill (resume()), and by anything the GE's own thread reads from VRAM a
-//    batch draws over: a texture to decode, a palette, vertices, the list's commands (drawnFirst());
+//    batch draws over: a palette, vertices, the list's commands (drawnFirst()); a texture to decode, unless it's
+//    deferred (below);
 //  - by a block transfer (it reads and writes memory, maybe drawn pixels), which draws the batch being filled too;
 //  - by a primitive that must be drawn by itself, at once, in order (texture.cpp reads its texels from memory as it
 //    draws: one drawing over its own texture, say), or whose pixels in different rows share bytes (defer()).
+//Render to texture: a primitive sampling what the batch being filled (or one already launched) still draws is not
+//decoded on the GE's thread (that would wait for those pixels). The source batch is launched if it's the one being
+//filled; the Look waits in the next batch with its decode deferred; ensureDecoded() runs as that batch starts
+//being drawn, when every batch before it is done. The texture cache is shared with the workers (textures.mutex).
 //While they're drawn, jobs only read what doesn't change: their own setup and settings, decoded textures (which the
 //batch keeps), and VRAM's frame and depth buffers, each pixel by its own band alone.
 //
@@ -100,8 +105,19 @@ auto GE::worker() -> void {
   }
 }
 
-//Takes bands of the batch until none are left, drawing in each every job that reaches it, in order.
+//Takes bands of the batch until none are left, drawing in each every job that reaches it, in order. Deferred
+//textures (render to texture) are decoded once first, outside drawing.mutex: every batch before this one is drawn,
+//and reading their pages must not settle under that mutex.
 auto GE::drawBands(Batch& batch) -> void {
+  u32 state = batch.decodeState.load(std::memory_order_acquire);
+  if(state != 2) {
+    if(state == 0 && batch.decodeState.compare_exchange_strong(state, 1, std::memory_order_acq_rel)) {
+      ensureDecoded(batch);
+      batch.decodeState.store(2, std::memory_order_release);
+    } else {
+      while(batch.decodeState.load(std::memory_order_acquire) != 2) std::this_thread::yield();
+    }
+  }
   while(true) {
     u32 band = batch.nextBand.fetch_add(1, std::memory_order_relaxed);
     if(band >= batch.bands) return;
@@ -115,6 +131,11 @@ auto GE::drawBands(Batch& batch) -> void {
 
 //The batch's bands to draw, and the workers due to wake for them (the caller holds the mutex, and wakes them).
 auto GE::startBands(Batch& batch) -> void {
+  bool defer = false;
+  for(auto& look : batch.looks) {
+    if(look.deferRows) { defer = true; break; }
+  }
+  batch.decodeState.store(defer ? 0u : 2u, std::memory_order_relaxed);
   batch.bands = (batch.bottom - batch.top + BandRows) / BandRows;
   batch.nextBand.store(0, std::memory_order_relaxed);
   batch.bandsLeft.store(batch.bands, std::memory_order_relaxed);
@@ -140,6 +161,7 @@ auto GE::flush() -> void {
   Batch& batch = *drawing.batch;
   if(batch.jobs.empty()) return clearBatch(batch);
   if(drawing.workers.empty() || batch.work < drawing.shared) {
+    ensureDecoded(batch);
     for(auto& job : batch.jobs) rasterize(job, job.firstY, job.lastY);
     return clearBatch(batch);
   }
@@ -266,6 +288,7 @@ auto GE::clearBatch(Batch& batch) -> void {
   batch.targeted = false;
   batch.pending.reset();
   batch.launched = false;
+  batch.decodeState.store(2, std::memory_order_relaxed);
 }
 
 //The size bytes from address are about to be read by the GE's own thread (a texture, a palette, vertices, the list's
