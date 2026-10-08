@@ -127,6 +127,12 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
     least[k] = a[k] > 0 || (a[k] == 0 && b[k] > 0) ? 0 : 1;
   }
   bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
+  //Corners at one depth give every pixel that depth. Blended in floats, the weights' sum divided out again, it came
+  //out a hair under at some pixels (65534.996 for 65535), which the whole number then cut to the one below: Chili Con
+  //Carnage's logo, drawn at 65535 over a background at 65535 with the depth test "at least as near", lost those
+  //pixels, a stripe here and there, frame by frame as the logo's size changed.
+  bool oneDepth = r.z[0] == r.z[1] && r.z[1] == r.z[2];
+  u32 depth = oneDepth ? u32(std::clamp(r.z[0], 0.0f, 65535.0f)) : 0;
   bool blended = !r.flat, shining = !r.flat && r.shines;
   float colors[3][4], shines[3][4];  //each corner's channels, as the blending takes them
   for(u32 k = 0; k < 3; k++) {
@@ -162,7 +168,7 @@ auto GE::triangleRows(const Job& job, s32 fromY, s32 toY) -> void {
       };
       u32 color = blended ? blendColor(colors, w0, w1, w2) : r.flatColor;
       u32 specular = shining ? blendColor(shines, w0, w1, w2) : r.flatSpecular;
-      u32 z = needsZ ? u32(std::clamp(blend(r.z[0], r.z[1], r.z[2]), 0.0f, 65535.0f)) : 0;
+      u32 z = !needsZ ? 0 : oneDepth ? depth : u32(std::clamp(blend(r.z[0], r.z[1], r.z[2]), 0.0f, 65535.0f));
       float u = 0, v = 0;
       if(look.textured && r.perspective) {
         float ka = w0 / r.w[0], kb = w1 / r.w[1], kc = w2 / r.w[2];
@@ -190,6 +196,8 @@ auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
   auto& look = *job.look;
   auto& p = look.pixel;
   bool needsZ = p.depthRange || (p.clear ? p.clearDepth : p.depthTest);
+  bool oneDepth = l.z[0] == l.z[1];  //(as triangleRows())
+  u32 depth = oneDepth ? u32(std::clamp(l.z[0], 0.0f, 65535.0f)) : 0;
   bool shining = !l.flat && l.shines;
   float colors[2][4], shines[2][4];
   for(u32 k = 0; k < 2; k++) {
@@ -211,7 +219,7 @@ auto GE::lineRows(const Job& job, s32 fromY, s32 toY) -> void {
     float w0 = float(l.along - s), w1 = float(s);
     u32 color = l.flat ? l.flatColor : blendColor(colors, w0, w1);
     u32 specular = shining ? blendColor(shines, w0, w1) : l.flatSpecular;
-    u32 z = needsZ ? u32(std::clamp((l.z[0] * w0 + l.z[1] * w1) / total, 0.0f, 65535.0f)) : 0;
+    u32 z = !needsZ ? 0 : oneDepth ? depth : u32(std::clamp((l.z[0] * w0 + l.z[1] * w1) / total, 0.0f, 65535.0f));
     float u = 0, v = 0;
     if(look.textured && l.perspective) {
       float ka = w0 / l.w[0], kb = w1 / l.w[1];
