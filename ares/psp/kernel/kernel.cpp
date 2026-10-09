@@ -328,6 +328,10 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceSuspendForUser", "sceKernelVolatileMemUnlock",    &Kernel::sceKernelVolatileMemUnlock);
   add("sceWlanDrv",        "sceWlanGetSwitchState",         &Kernel::sceWlanGetSwitchState);
   add("sceWlanDrv",        "sceWlanGetEtherAddr",           &Kernel::sceWlanGetEtherAddr);
+  add("sceUsb",            "sceUsbStart",                   &Kernel::sceUsbStart);
+  add("sceUsb",            "sceUsbStop",                    &Kernel::sceUsbStop);
+  add("sceUsb",            "sceUsbActivate",                &Kernel::sceUsbActivate);
+  add("sceUsb",            "sceUsbDeactivate",              &Kernel::sceUsbDeactivate);
   add("sceImpose",         "sceImposeSetLanguageMode",      &Kernel::sceImposeSetLanguageMode);
   add("sceImpose",         "sceImposeGetLanguageMode",      &Kernel::sceImposeGetLanguageMode);
   add("sceImpose",         "sceImposeGetBatteryIconStatus", &Kernel::sceImposeGetBatteryIconStatus);

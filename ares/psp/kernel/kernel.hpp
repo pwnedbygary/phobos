@@ -1814,6 +1814,10 @@ struct Kernel {
   auto sceKernelGetGPI() -> void;
   auto sceWlanGetSwitchState() -> void;
   auto sceWlanGetEtherAddr() -> void;
+  auto sceUsbStart() -> void;
+  auto sceUsbStop() -> void;
+  auto sceUsbActivate() -> void;
+  auto sceUsbDeactivate() -> void;
   u32 imposeLanguage = 1, imposeButton = 1;  //sceImposeSetLanguageMode's: English, the cross button confirming
   auto sceImposeSetLanguageMode() -> void;
   auto sceImposeGetLanguageMode() -> void;

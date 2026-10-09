@@ -706,6 +706,10 @@ static auto oddsAndEnds() -> void {
   CHECK(m.call("sceWlanGetSwitchState", {}), 0);
   CHECK(m.call("sceWlanGetEtherAddr", {R + 0x200}), 0);
   CHECK(m.system.memory.read(1, R + 0x200), 0x02);  //a locally administered address
+  CHECK(m.call("sceUsbStart", {m.string("USBBusDriver"), 0, 0}), 0);
+  CHECK(m.call("sceUsbActivate", {0x1c8}), 0);
+  CHECK(m.call("sceUsbDeactivate", {0x1c8}), 0);
+  CHECK(m.call("sceUsbStop", {m.string("USBBusDriver"), 0, 0}), 0);
 }
 
 auto powerTests() -> Tests {

@@ -375,6 +375,25 @@ auto Kernel::sceWlanGetEtherAddr() -> void {
   result(0);
 }
 
+//(driver's name, its argument's size, argument): a USB driver started, or stopped (pspusb.h); and (product ID) the
+//USB device activated, or not: taken, as on a PSP with no cable plugged in, where none of it connects anything.
+//OutRun 2006 starts the bus driver and activates as it starts.
+auto Kernel::sceUsbStart() -> void {
+  result(0);
+}
+
+auto Kernel::sceUsbStop() -> void {
+  result(0);
+}
+
+auto Kernel::sceUsbActivate() -> void {
+  result(0);
+}
+
+auto Kernel::sceUsbDeactivate() -> void {
+  result(0);
+}
+
 //(language, button that confirms): what the HOME menu's on-screen texts use (pspsdk's pspimpose.h, whose values
 //aren't known: taken as the system's settings number them, psputility_sysparam.h's, 1 English and 1 the cross
 //button); there's no HOME menu to tell, but they're kept to be read back.
