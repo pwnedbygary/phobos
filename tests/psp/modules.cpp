@@ -197,19 +197,28 @@ static auto selfModule(SelfStart how) -> TestModule {
 }
 
 //"TESTSTATUS": StatusLib's quit() unloads the module it's in as later SDKs do,
-//sceKernelStopUnloadSelfModuleWithStatus(1, 4, Results + 0x30, Results + 0x40, options), and if that's refused
-//writes what it said at Results + 0x34 and returns. module_stop writes 0x5709 at Results + 0x20, the length of its
-//argument at Results + 0x24 and the argument's first word at Results + 0x28, then has its own thread's information
-//put at info (sceKernelReferThreadStatus). module_start returns at once.
-static auto statusModule(u32 options, u32 info) -> TestModule {
+//sceKernelStopUnloadSelfModuleWithStatus(1, 4, Results + 0x30, Results + 0x40, options) (or without the status,
+//sceKernelStopUnloadSelfModule(4, Results + 0x30, Results + 0x40, options)), and if that's refused writes what it
+//said at Results + 0x34 and returns. module_stop writes 0x5709 at Results + 0x20, the length of its argument at
+//Results + 0x24 and the argument's first word at Results + 0x28, then has its own thread's information put at info
+//(sceKernelReferThreadStatus). module_start returns at once.
+static auto statusModule(u32 options, u32 info, bool withStatus = true) -> TestModule {
   TestModule m;
   m.name = "TESTSTATUS";
-  m.imports = {{"ModuleMgrForUser", StopUnloadSelfWithStatusNID},
+  m.imports = {{"ModuleMgrForUser", withStatus ? StopUnloadSelfWithStatusNID
+                                               : Kernel::nid("sceKernelStopUnloadSelfModule")},
                {"ThreadManForUser", Kernel::nid("sceKernelReferThreadStatus")}};
-  m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), addiu(a0, zero, 1), addiu(a1, zero, 4),
-            lui(a2, (Results + 0x30) >> 16), ori(a2, a2, (Results + 0x30) & 0xffff),
-            lui(a3, (Results + 0x40) >> 16), ori(a3, a3, (Results + 0x40) & 0xffff), lui(t0, options >> 16)};
-  callStub(m, 0x3c0, ori(t0, t0, options & 0xffff));
+  if(withStatus) {
+    m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), addiu(a0, zero, 1), addiu(a1, zero, 4),
+              lui(a2, (Results + 0x30) >> 16), ori(a2, a2, (Results + 0x30) & 0xffff),
+              lui(a3, (Results + 0x40) >> 16), ori(a3, a3, (Results + 0x40) & 0xffff), lui(t0, options >> 16)};
+    callStub(m, 0x3c0, ori(t0, t0, options & 0xffff));
+  } else {
+    m.code = {addiu(sp, sp, -16), sw(ra, 12, sp), addiu(a0, zero, 4),
+              lui(a1, (Results + 0x30) >> 16), ori(a1, a1, (Results + 0x30) & 0xffff),
+              lui(a2, (Results + 0x40) >> 16), ori(a2, a2, (Results + 0x40) & 0xffff), lui(a3, options >> 16)};
+    callStub(m, 0x3c0, ori(a3, a3, options & 0xffff));
+  }
   m.code.insert(m.code.end(), {lui(t1, Results >> 16), ori(t1, t1, Results & 0xffff), sw(v0, 0x34, t1),
                                lw(ra, 12, sp), jr(ra), addiu(sp, sp, 16)});
   m.exports = {{"StatusLib", {{QuitNID, 0}}}};
@@ -770,13 +779,14 @@ static auto unloadThemselves() -> void {
 //A module unloads itself as later SDKs do (sceKernelStopUnloadSelfModuleWithStatus, known by its NID alone): as with
 //sceKernelSelfStopUnloadModule, the thread that asked ends and is deleted, the one waiting for it given its exit
 //status; module_stop runs with the argument, on a thread the options (the fifth argument) make; the module and its
-//memory go, and the program runs on to its own end. The program itself calling it goes as a module, and code no
-//module holds is refused.
+//memory go, and the program runs on to its own end. sceKernelStopUnloadSelfModule does the same with no exit status
+//(the waiting thread is given 0), its options the fourth argument. The program itself calling it goes as a module,
+//and code no module holds is refused.
 static auto unloadWithStatus() -> void {
   constexpr u32 Options = Results + 0x180, Info = Results + 0x1a0;
-  HostFolder stick;
-  put(stick, "STATUS.PRX", statusModule(Options, Info).build());
-  for(bool recompile : {false, true}) {
+  for(bool withStatus : {true, false}) for(bool recompile : {false, true}) {
+    HostFolder stick;
+    put(stick, "STATUS.PRX", statusModule(Options, Info, withStatus).build());
     KernelMachine m;
     machine(m);
     m.system.recompiler.enabled = recompile;
@@ -811,7 +821,7 @@ static auto unloadWithStatus() -> void {
     m.kernel.run(Kernel::VblankCycles);
     CHECK(m.kernel.exited, true);
     CHECK(word(m.system, Results + 0x3c), 0x600d);  //the program's own end, after the module had gone
-    CHECK(word(m.system, Results + 0x38), 1);
+    CHECK(word(m.system, Results + 0x38), withStatus ? 1 : 0);
     CHECK(word(m.system, Results + 0x34), 0);       //quit() never returned
     CHECK(word(m.system, Results + 0x20), 0x5709);
     CHECK(word(m.system, Results + 0x24), 4);

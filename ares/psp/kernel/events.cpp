@@ -16,7 +16,8 @@
 //notified runs, then the thread goes back into its wait, which may have ended meanwhile (its time ran out: the clock
 //doesn't stop for callbacks; what it waited for came, or was deleted). A callback that returns anything but 0 is
 //deleted. (As PPSSPP's reading of the PSP has it, from pspautotests' threads/callbacks.) A CB function that needn't
-//wait at all still runs the callbacks notified by then before it returns (callbacksOnReturn()).
+//wait at all still runs the callbacks notified by then before it returns (callbacksOnReturn()); a semaphore's CB wait
+//with no timeout and nobody else in line runs them first, in its wait (waitSemaphore()).
 
 static auto flagMatches(u32 pattern, u32 bits, u32 mode) -> bool {
   return mode & 1 ? (pattern & bits) != 0 : (pattern & bits) == bits;
@@ -229,10 +230,15 @@ auto Kernel::wakeForCallbacks(Thread& thread) -> void {
 //wakeup that came first...), still runs the callbacks notified by then, as waiting would have. They run now, as
 //sceKernelCheckCallback's do, and the function returns what it got (its result already in v0) once they're done:
 //what it took is kept, and no timeout can run out meanwhile, as it could if the thread waited after all. Not inside
-//a callback (the next runs when it returns), nor in an interrupt handler.
+//a callback (the next runs when it returns), nor in an interrupt handler. (A semaphore's wait with no timeout and no
+//other thread in line runs them first instead, in its wait: waitSemaphore().)
 auto Kernel::callbacksOnReturn(bool callbacks) -> void {
-  if(!callbacks || interrupting || !current || current->inCallback || !pendingCallback(*current)) return;
-  runCallbacks(*current);
+  if(callbacks && callbacksDue()) runCallbacks(*current);
+}
+
+//Whether the running thread has callbacks notified that a wait of its could run now.
+auto Kernel::callbacksDue() -> bool {
+  return !interrupting && current && !current->inCallback && pendingCallback(*current);
 }
 
 //The thread (its registers in the CPU) runs its notified callbacks: its registers and its wait are put aside as they
@@ -316,9 +322,15 @@ auto Kernel::resumeWait(Thread& thread) -> void {
   case Wait::Sleep:
     if(thread.wakeupCount) thread.wakeupCount--, ready(thread, 0);
     break;
-  case Wait::Semaphore:
-    if(auto found = semaphores.find(thread.waitID); found != semaphores.end()) signalSemaphores(found->second);
-    else ready(thread, ErrorWaitDeleted);
+  case Wait::Semaphore:  //a wait whose callbacks ran first takes the count before the line (waitSemaphore())
+    if(auto found = semaphores.find(thread.waitID); found == semaphores.end()) ready(thread, ErrorWaitDeleted);
+    else if(thread.waitMode && found->second.count >= s32(thread.waitCount)) {
+      found->second.count -= thread.waitCount;
+      ready(thread, 0);
+    } else {
+      thread.waitMode = 0;
+      signalSemaphores(found->second);
+    }
     break;
   case Wait::EventFlag:
     if(auto found = eventFlags.find(thread.waitID); found != eventFlags.end()) wakeEventFlagWaiters(found->second);

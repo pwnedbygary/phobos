@@ -47,7 +47,7 @@ JPCSP's used. Software stays the default and exact; Vulkan (accurate)'s pictures
 
 ## PSP Vulkan renderer: in play on the RP6, blending without rasterization order, the 8x line — 2026-10-09
 
-Branch `cursor/psp-vk-play-2b67`, on top of #183's `cursor/psp-hle-games9-2b67` (#182 and #180 under it). PR #184. docs/psp-core.md, part
+Branch `cursor/psp-vk-play-2b67`, on top of #186's `cursor/psp-hle-games10-2b67` (#183, #182 and #180 under it). PR #184. docs/psp-core.md, part
 49, has what was seen and measured; docs/psp-gpu-renderers.md the design and the accuracy and speed tables. Original
 code: nothing of PPSSPP's or JPCSP's used. Software stays the default; Native stays exact on Turnip.
 - **In the app** (Turnip, in order): Midnight Club 3, both GTAs, both Burnouts, WipEout, Peace Walker, MotorStorm and
@@ -69,6 +69,45 @@ code: nothing of PPSSPP's or JPCSP's used. Software stays the default; Native st
 - Scratch: `~/phobos-work/scratch/vk-play` (build.sh, m1-acc.sh, rp6-acc.sh, rp6-speed.sh, cmp.py, hal-patch.py,
   blendlog-patch.py, edgelog-patch.py, gpu-tests/), `~/phobos-work/scratch/hw3/rp6` (the app's scripts); RP6
   `/data/local/tmp/vk-play`. Hold `~/phobos-work/rp6.lock` and time only while the app isn't running.
+
+## PSP core: the library run again on the whole stack — three regressions fixed, the common blockers — 2026-10-09
+
+Branch `cursor/psp-hle-games10-2b67`, on top of #183's `cursor/psp-hle-games9-2b67` (its PR targets that branch).
+docs/psp-core.md, part 51, has the evidence for each fix; docs/psp-compatibility.md the new report. Clean room: no
+PPSSPP or JPCSP source read.
+- **The run**: the owner's 266 games, as the report's run went (Software, 7 GE threads, 3600 frames, Start at 120,
+  Cross at 1800, PNGs at 60/300/1200/3600), on #183's tip (run 1), on this branch part way (run 2) and at its end
+  (run 3); judged by eye, compared row for row with the report (`b27f084a5`), whose runs pressed nothing (the
+  presses were broken then), so every worse-looking game was run again without presses on both commits.
+- **Regressions**: Mega Man Maverick Hunter X and Juiced: Eliminator, black since scePsmf (#160): a ring fed past
+  the movie's end, a frame width of 0, and sound drained past its end. Patapon 2, deadlocked by this branch's own
+  memory stick fix: a semaphore's CB wait now runs its callbacks first when it has no timeout and nobody in line.
+- **Fixes** (each its own commit, with tests): the memory stick callback told the stick is in; PGD-less files after
+  a key; FPL alignment 0; module info of section-less static EBOOTs; the program's start thread as a module's;
+  sceUtilityLoadUsbModule; write-data needs a save; the three movie fixes; sceRtc's day of week, 64-bit time and
+  clock-set times; sceKernelStopUnloadSelfModule; sceIoAssign; sceImposeSetUMDPopup; sceUsb start/activate;
+  sceDisplayIsForeground; sceKernelReferSystemStatus; sceUtilitySetSystemParamInt; the savedata sizes mode without
+  names; a PRX program at 0x08804000; the semaphore CB order; rings over 4096 packets; sceMpegAvcDecodeDetail's
+  width and height; a game's own library's 44-byte ring; utility modules 0x107/0x108; a movie ended once its whole
+  stream is given.
+- **Numbers** (against the report, gameplay as menu, hang as black): menu 141 -> 175, movie 35 -> 63, loading
+  13 -> 5, black 73 -> 21, timed out 4 -> 2; 81 games further along; 14 stop at a missing function, where 77 did.
+  Of the report's 22 menu-to-black games, 18 show something; the 4 still black: Black Wolves Saga (PGD install data),
+  The King of Fighters - Orochi Saga (sceCcc), Melodie (40 MiB block), Ridge Racer (black after its movie, cause
+  not found).
+- **Checks**: tests/psp 362/0 (sanitized), tests/psp/ares 307/0, tests/allegrex 58/0; independent reviews for
+  every batch, their findings fixed. Save states still version 17.
+- **Left**: sceCcc (pspautotests' ccc/convertstring records it), TLS pools (God Eater 2), scePauth/sceJpeg (MHP3rd),
+  scesupPreAcc (Persona 3 Portable), PGD decryption (Black Wolves Saga), a dozen black screens with no missing
+  function (Ridge Racer and others, listed in the report), ProStreet's crash. sceKernelExtendThreadStack is written
+  and reviewed in the worktree `~/phobos-work/wt/games10-b9` (not in this branch): fix the review's two findings
+  first (module_stop's argument when a program unloads itself from a lent call; rewriting the trampoline when an
+  older state loads); Dragon Ball Z stays black with it.
+- **Vulkan** (MoltenVK, the 11 gameplay games to frame 2400): the same pictures as Software (differences are a frame
+  of animation apart), but slow in 3D scenes: Seen in Liberty City 3 fps against 83, Star Wars Battlefront II 27
+  against 344, The Sims 2 18 against 158, GTA Sindacco Chronicles under 3 against 72; Mega Man Powered Up faster.
+- Scratch: `~/phobos-work/scratch/games10` (batch.py, judge2.py/judge3.py, report3.py, run1/ run2/ run3/ with every
+  game's PNGs, analysis/ with the judgements, dbg/ with the traces, vk3/ with the Vulkan frames).
 
 ## PSP core: Ridge Racer 2's driver profile — the keyboard's answer — 2026-10-08
 

@@ -71,6 +71,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelGetThreadId",          &Kernel::sceKernelGetThreadId);
   add("ThreadManForUser",  "sceKernelReferThreadStatus",    &Kernel::sceKernelReferThreadStatus);
   add("ThreadManForUser",  "sceKernelReferThreadRunStatus", &Kernel::sceKernelReferThreadRunStatus);
+  add("ThreadManForUser",  "sceKernelReferSystemStatus",    &Kernel::sceKernelReferSystemStatus);
   add("ThreadManForUser",  "sceKernelGetThreadmanIdList",   &Kernel::sceKernelGetThreadmanIdList);
   add("ThreadManForUser",  "sceKernelGetThreadmanIdType",   &Kernel::sceKernelGetThreadmanIdType);
   add("ThreadManForUser",  "sceKernelDelayThread",          &Kernel::sceKernelDelayThread);
@@ -230,6 +231,10 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceRtc",            "sceRtcGetCurrentClock",         &Kernel::sceRtcGetCurrentClock);
   add("sceRtc",            "sceRtcGetCurrentClockLocalTime", &Kernel::sceRtcGetCurrentClockLocalTime);
   add("sceRtc",            "sceRtcGetTime_t",               &Kernel::sceRtcGetTime_t);
+  add("sceRtc",            "sceRtcGetTime64_t",             &Kernel::sceRtcGetTime64_t);
+  add("sceRtc",            "sceRtcGetDayOfWeek",            &Kernel::sceRtcGetDayOfWeek);
+  add("sceRtc",            "sceRtcGetLastAdjustedTime",     &Kernel::sceRtcGetLastAdjustedTime);
+  add("sceRtc",            "sceRtcGetLastReincarnatedTime", &Kernel::sceRtcGetLastReincarnatedTime);
   add("sceRtc",            "sceRtcGetDosTime",              &Kernel::sceRtcGetDosTime);
   add("sceRtc",            "sceRtcSetDosTime",              &Kernel::sceRtcSetDosTime);
   add("sceRtc",            "sceRtcGetWin32FileTime",        &Kernel::sceRtcGetWin32FileTime);
@@ -324,9 +329,14 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceSuspendForUser", "sceKernelVolatileMemUnlock",    &Kernel::sceKernelVolatileMemUnlock);
   add("sceWlanDrv",        "sceWlanGetSwitchState",         &Kernel::sceWlanGetSwitchState);
   add("sceWlanDrv",        "sceWlanGetEtherAddr",           &Kernel::sceWlanGetEtherAddr);
+  add("sceUsb",            "sceUsbStart",                   &Kernel::sceUsbStart);
+  add("sceUsb",            "sceUsbStop",                    &Kernel::sceUsbStop);
+  add("sceUsb",            "sceUsbActivate",                &Kernel::sceUsbActivate);
+  add("sceUsb",            "sceUsbDeactivate",              &Kernel::sceUsbDeactivate);
   add("sceImpose",         "sceImposeSetLanguageMode",      &Kernel::sceImposeSetLanguageMode);
   add("sceImpose",         "sceImposeGetLanguageMode",      &Kernel::sceImposeGetLanguageMode);
   add("sceImpose",         "sceImposeGetBatteryIconStatus", &Kernel::sceImposeGetBatteryIconStatus);
+  add("sceImpose",         "sceImposeSetUMDPopup",          &Kernel::sceImposeSetUMDPopup);
   add("sceDmac",           "sceDmacMemcpy",                 &Kernel::sceDmacMemcpy);
   add("SysMemUserForUser", "sceKernelAllocPartitionMemory", &Kernel::sceKernelAllocPartitionMemory);
   add("SysMemUserForUser", "sceKernelFreePartitionMemory",  &Kernel::sceKernelFreePartitionMemory);
@@ -375,6 +385,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("IoFileMgrForUser",  "sceIoRmdir",                    &Kernel::sceIoRmdir);
   add("IoFileMgrForUser",  "sceIoRename",                   &Kernel::sceIoRename);
   add("IoFileMgrForUser",  "sceIoChdir",                    &Kernel::sceIoChdir);
+  add("IoFileMgrForUser",  "sceIoAssign",                   &Kernel::sceIoAssign);
   add("IoFileMgrForUser",  "sceIoGetstat",                  &Kernel::sceIoGetstat);
   add("IoFileMgrForUser",  "sceIoDopen",                    &Kernel::sceIoDopen);
   add("IoFileMgrForUser",  "sceIoDread",                    &Kernel::sceIoDread);
@@ -441,6 +452,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceDisplay",        "sceDisplayWaitVblankStartMulti", &Kernel::sceDisplayWaitVblankStartMulti);
   add("sceDisplay",        "sceDisplayWaitVblankStartMultiCB", &Kernel::sceDisplayWaitVblankStartMultiCB);
   add("sceDisplay",        "sceDisplayIsVblank",            &Kernel::sceDisplayIsVblank);
+  add("sceDisplay",        "sceDisplayIsForeground",        &Kernel::sceDisplayIsForeground);
   add("sceDisplay",        "sceDisplayGetCurrentHcount",    &Kernel::sceDisplayGetCurrentHcount);
   add("sceDisplay",        "sceDisplayGetVcount",           &Kernel::sceDisplayGetVcount);
   add("sceDisplay",        "sceDisplayGetAccumulatedHcount", &Kernel::sceDisplayGetAccumulatedHcount);
@@ -469,6 +481,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ModuleMgrForUser",  "sceKernelSelfStopUnloadModule", &Kernel::sceKernelSelfStopUnloadModule);
   addNID("ModuleMgrForUser", "sceKernelStopUnloadSelfModuleWithStatus", 0x8f2d'f740,
          &Kernel::sceKernelStopUnloadSelfModuleWithStatus);
+  add("ModuleMgrForUser",  "sceKernelStopUnloadSelfModule", &Kernel::sceKernelStopUnloadSelfModule);
   add("ModuleMgrForUser",  "sceKernelLoadModule",           &Kernel::sceKernelLoadModule);
   add("ModuleMgrForUser",  "sceKernelLoadModuleByID",       &Kernel::sceKernelLoadModuleByID);
   add("ModuleMgrForUser",  "sceKernelStartModule",          &Kernel::sceKernelStartModule);
@@ -481,6 +494,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceUtility",        "sceUtilityGetSystemParamInt",   &Kernel::sceUtilityGetSystemParamInt);
   add("sceUtility",        "sceUtilityGetSystemParamString", &Kernel::sceUtilityGetSystemParamString);
   add("sceUtility",        "sceUtilitySetSystemParamString", &Kernel::sceUtilitySetSystemParamString);
+  add("sceUtility",        "sceUtilitySetSystemParamInt",   &Kernel::sceUtilitySetSystemParamInt);
   add("sceUtility",        "sceUtilityLoadModule",          &Kernel::sceUtilityLoadModule);
   add("sceUtility",        "sceUtilityUnloadModule",        &Kernel::sceUtilityUnloadModule);
   add("sceUtility",        "sceUtilityLoadNetModule",       &Kernel::sceUtilityLoadNetModule);
@@ -517,6 +531,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceUtility",        "sceUtilityGamedataInstallAbort", &Kernel::sceUtilityGamedataInstallAbort);
   add("sceUtility",        "sceUtilityLoadAvModule",        &Kernel::sceUtilityLoadAvModule);
   add("sceUtility",        "sceUtilityUnloadAvModule",      &Kernel::sceUtilityUnloadAvModule);
+  add("sceUtility",        "sceUtilityLoadUsbModule",       &Kernel::sceUtilityLoadUsbModule);
+  add("sceUtility",        "sceUtilityUnloadUsbModule",     &Kernel::sceUtilityUnloadUsbModule);
   //newlib's sockets: no network yet, so every call fails
   for(auto name : {"sceNetInetClose", "sceNetInetRecv", "sceNetInetSend", "sceNetInetGetErrno", "sceNetInetSocket",
                    "sceNetInetBind", "sceNetInetConnect", "sceNetInetListen", "sceNetInetAccept", "sceNetInetSendto",
@@ -855,10 +871,11 @@ auto Kernel::power() -> void {
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
-//chosen: the thread runs the module's entry point with the program's path as its argument (what C sees as argv[0]),
-//its global pointer set, and a 256 KiB stack. It starts afresh, as the PSP does: whatever an earlier program left
-//(threads, memory handed out, having exited) goes first. Returns false, with error saying why, if it can't, and
-//leaves nothing of the program behind but what the loader wrote to memory.
+//chosen: the thread runs the module's module_start (or entry point) with the program's path as its argument (what C
+//sees as argv[0]), its global pointer set, and a 256 KiB stack unless the program asks for another, and goes once
+//the function returns (start()). It starts afresh, as the PSP does: whatever an earlier program left (threads,
+//memory handed out, having exited) goes first. Returns false, with error saying why, if it can't, and leaves nothing
+//of the program behind but what the loader wrote to memory.
 auto Kernel::load(const u8* data, u64 size, const std::string& path, std::string& error) -> bool {
   power();
   bool loaded = start(data, size, path, error);
@@ -875,14 +892,18 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     data += offset;
     size = length;
   }
-  //A PRX goes at the start of the user partition (nothing is there yet); a static executable where it was linked.
-  error = Loader::load(memory, data, size, UserMemory, [this](const std::string& library, u32 nid) {
+  //A PRX goes 16 KiB into the user partition, as on a PSP: pspautotests' recordings of PRXs have its code there
+  //(cpu/cpu_alu/cpu_branch's code 0x420 bytes in at 0x08804420; video/pmf's ring callback at 0x088042b4) and its
+  //data (audio/mp3/stream's buffer, 0x27a40 into its .bss, at 0x0882ba40). Fan translations calling code of their own
+  //by its address (Persona 2: Eternal Punishment's) need it there. A static executable goes where it was linked.
+  error = Loader::load(memory, data, size, ProgramBase, [this](const std::string& library, u32 nid) {
     return importCode(library, nid);
   }, module);
   if(!error.empty()) return false;
   //The program's memory: one block from its first segment to the end of its last, as the PSP's loader gives a module
-  //one. Segments may share a 256-byte step (blocks start on one: Lumines' data starts 8 bytes after its code ends),
-  //but not bytes.
+  //one; a PRX's from the partition's start, the 16 KiB below it held too (programBlockAt()): sysmem/partition's
+  //lowest free place had room for 1 MiB, so it's past the program. Segments may share a 256-byte step (blocks start
+  //on one: Lumines' data starts 8 bytes after its code ends), but not bytes.
   auto parts = module.segments;
   std::sort(parts.begin(), parts.end(), [](auto& a, auto& b) { return a.address < b.address; });
   u32 low = ~0u, high = 0;
@@ -895,6 +916,7 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     low = std::min(low, segment.address & ~255u);
     high = segment.address + segment.size;  //the loader saw that each fits in memory
   }
+  if(high && module.relocatable) low = UserMemory;
   if(high) {
     auto block = allocate(high - low, 2, low, module.name);
     if(!block || block->address != low) {  //it must be exactly where the program is
@@ -905,7 +927,15 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
   for(auto& skipped : module.skipped) note("the loader left out " + skipped);
   programUID = newUID();  //the program is a module too, the first
 
-  cpu.power(module.entry);
+  //It starts where a module does (moduleFunction()): at the module_start it exports for itself, or else at its ELF
+  //header's entry. (Dissidia 012's header gives 0, and its module_start the code.)
+  u32 entry = module.entry;
+  for(auto& e : module.exports) {
+    if(!e.library.empty() || e.nid != ModuleStartNID || e.variable || !e.address) continue;
+    entry = e.address;
+    break;
+  }
+  cpu.power(entry);
   if(auto folder = programFolder(path); !folder.empty()) workingDirectory = folder;  //relative paths start there
   //the path, with its terminating zero, or the argument given
   std::vector<u8> bytes = given ? *given : std::vector<u8>(path.c_str(), path.c_str() + path.size() + 1);
@@ -915,16 +945,25 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
   }
   u32 argument = Trampoline + 0x100;  //put where the new thread's start can copy it from
   memory.copyIn(argument, bytes.data(), bytes.size());
-  s32 uid = createThread(module.name, module.entry, 0x20, 256_KiB, 0x8000'4000, module.gp);  //user mode, uses the VFPU
+  //Its first thread is the one its module_start runs on, as a module's is (makeModuleThread()): at priority 0x20,
+  //with a 256 KiB stack, in user mode with the VFPU, unless the program's own module_start_thread_parameter says
+  //otherwise; and it goes, its stack given back, once the function returns (moduleReturned()), as a module's start
+  //thread does. Games size their memory by both: Ghostbusters asks for a 1 KiB stack and then for a block that fits
+  //only beside one so small; Death Jr.'s start thread returns, and the block it asks for later fits only once that
+  //thread's stack, at the partition's top, is free for the threads it makes next.
+  u32 priority = 0x20, stackSize = 256_KiB, attributes = 0x8000'4000;
+  threadParameters(module, StartParametersNID, priority, stackSize, attributes);
+  s32 uid = createThread(module.name, entry, priority, stackSize, attributes, module.gp);
   if(uid < 0) {
-    error = "no memory for the program's first thread";
+    error = uid == s32(ErrorNoMemory) ? "no memory for the program's first thread"
+                                      : "the program's first thread can't be made as it asks (its priority or stack)";
     return false;
   }
   if(!argumentFits(*threads[uid], bytes.size())) {
     error = "the program's argument is too long";
     return false;
   }
-  startThread(*threads[uid], bytes.size(), argument);
+  startThread(*threads[uid], bytes.size(), argument, Trampoline + 16);
   return true;
 }
 

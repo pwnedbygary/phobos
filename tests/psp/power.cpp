@@ -706,6 +706,21 @@ static auto oddsAndEnds() -> void {
   CHECK(m.call("sceWlanGetSwitchState", {}), 0);
   CHECK(m.call("sceWlanGetEtherAddr", {R + 0x200}), 0);
   CHECK(m.system.memory.read(1, R + 0x200), 0x02);  //a locally administered address
+  CHECK(m.call("sceUsbStart", {m.string("USBBusDriver"), 0, 0}), 0);
+  CHECK(m.call("sceUsbActivate", {0x1c8}), 0);
+  CHECK(m.call("sceUsbDeactivate", {0x1c8}), 0);
+  CHECK(m.call("sceUsbStop", {m.string("USBBusDriver"), 0, 0}), 0);
+  //the system's status: as much as its size asks for (28 bytes at most), its status and counts 0
+  auto word = [&](u32 address) { return m.system.memory.read(4, address); };
+  m.system.memory.fill(R + 0x300, 0xcc, 32);
+  m.system.memory.write(4, R + 0x300, 28);
+  CHECK(m.call("sceKernelReferSystemStatus", {R + 0x300}), 0);
+  CHECK(word(R + 0x300) == 28 && word(R + 0x304) == 0 && word(R + 0x318) == 0, true);
+  CHECK(word(R + 0x31c), 0xcccc'cccc);
+  m.system.memory.fill(R + 0x300, 0xcc, 32);
+  m.system.memory.write(4, R + 0x300, 8);
+  CHECK(m.call("sceKernelReferSystemStatus", {R + 0x300}), 0);
+  CHECK(word(R + 0x300) == 28 && word(R + 0x304) == 0 && word(R + 0x308) == 0xcccc'cccc, true);
 }
 
 auto powerTests() -> Tests {
