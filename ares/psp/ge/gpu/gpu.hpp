@@ -42,9 +42,10 @@ struct GPU : GE::Renderer {
     float u, v, q;      //texels; q, the divisor
     u32 color, specular;
     float fog;
-    u32 flags;          //bit 0: filtered; 1: stepped (a 2D sprite's coordinates, below); 2: turned
+    u32 flags;          //bit 0: filtered; 1: stepped (a 2D sprite's coordinates, below); 2: turned; 3: held
     //A 2D sprite's texture coordinates as the GE steps them (draw.cpp's rectangle()): across x from columnFirst at
     //sixteenth columnStart, by columnStep a pixel; down y likewise. The coordinate across x is v when turned.
+    //Held (a 2D triangle above 1x: triangle()): u kept from columnFirst to columnStep, v from rowFirst to rowStep.
     float columnFirst, columnStep, rowFirst, rowStep;
     s32 columnStart, rowStart;
   };
@@ -71,9 +72,12 @@ struct GPU : GE::Renderer {
     //does what follows the tests as pixel.cpp does (READS 1), with source and destination the GE's factors (0-15)
     //and blending its BLEND_MODE operation (0-7; 8 not blending: a logic operation or a write mask alone)
     u8 reads, blending;
+    //draw.frag's TERM: output 0's color as pixel.cpp's source term, which the GPU's blending adds the destination's
+    //term to (1) or subtracts it from or the other way round (2); 0 the color weighed as floats
+    u8 term;
     auto operator==(const Pipeline&) const -> bool = default;
   };
-  static_assert(sizeof(Pipeline) == 32);
+  static_assert(sizeof(Pipeline) == 33);
   //draw.frag's push constants
   struct Push {
     float scale[2];
@@ -133,11 +137,16 @@ struct GPU : GE::Renderer {
     bool dualSource = false;  //dual-source blending (Source1Color)
     bool logicOps = false;    //its own logic operations
     //Shader blending: the target's pixel read in the fragment shader (an input attachment), so blending, dithering,
-    //logic operations and write masks are pixel.cpp's own; the backend puts a barrier before each draw that reads.
-    //inOrder where a draw's overlapping primitives see each other's pixels in order (rasterization order access),
-    //else the renderer draws those apart (emit()); System::startRenderer() turns it off where the check fails so
-    //the log can say "overlaps apart" instead of failing the renderer.
-    bool reads = false, readsInOrder = false;
+    //logic operations and write masks are pixel.cpp's own. readsInOrder where the GPU keeps every draw's pixels in
+    //rasterization order (rasterization order access), which needs no barrier between draws; without it each draw
+    //that reads has one, and the renderer draws its overlapping primitives apart (emit()), which a 3D game makes
+    //thousands of a frame: there only what the GPU's own units can't come close to reads (a write mask keeping
+    //part of a channel, a logic operation, the absolute difference, doubled alphas, blending in a 16-bit frame
+    //buffer), unless readsBlending asks for every blend as well (as it is in order, and as the tests ask).
+    //System::startRenderer() turns these off as the start-up check fails, so the log can say how it draws instead
+    //of failing the renderer. readsApart where reading without the order can be trusted: not on Qualcomm's own
+    //driver, whose reads in a game's frame buffer see pixels as they were before the draws just before.
+    bool reads = false, readsInOrder = false, readsBlending = false, readsApart = true;
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)
     bool presented = false;

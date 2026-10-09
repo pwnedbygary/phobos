@@ -19,8 +19,10 @@ layout(location = 1) in vec3 coordinates;  //u, v in texels, and q (texture proj
 layout(location = 2) in vec4 color;     //8888, 0-1 (UNORM)
 layout(location = 3) in vec4 specular;  //lighting's shine kept apart, added after texturing
 layout(location = 4) in float fog;      //how much of the color stays: 0-1
-layout(location = 5) in uint flags;     //bit 0: filtered (the primitive's TEXTURE_FILTER choice); 1 stepped; 2 turned
-layout(location = 6) in vec4 stepping;  //a 2D sprite's coordinates: across x's first and step, down y's (gpu.hpp)
+layout(location = 5) in uint flags;     //bit 0: filtered (the primitive's TEXTURE_FILTER choice); 1 stepped; 2 turned;
+                                        //3 held
+layout(location = 6) in vec4 stepping;  //a 2D sprite's coordinates: across x's first and step, down y's (gpu.hpp);
+                                        //held, a 2D triangle's u from x to y, v from z to w
 layout(location = 7) in ivec2 start;    //and the sixteenths they start at
 
 layout(location = 0) noperspective out vec4 vertexColor;

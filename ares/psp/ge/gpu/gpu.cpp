@@ -264,10 +264,17 @@ auto GPU::settings(const GE::Look& look) -> void {
   bool alphaWritable = stencils && maskAlpha != 0xff;
   //Shader blending (docs/psp-gpu-renderers.md, "Shader blending"), where the backend reads the frame buffer: a
   //write mask that keeps part of a channel is pixel.cpp's then (the GPU's masks keep whole channels), and so are
-  //blending and logic operations below
+  //logic operations, and blending where the GPU's own can't come close (the absolute difference; doubled alphas,
+  //which the GPU's factors hold at 1 or don't have; a 16-bit frame buffer, where the PSP narrows each blend's
+  //result to the format, dithered, before the next reads it, while the GPU's target keeps 8 bits, so layered
+  //blends drift by whole steps) or where every blend reads (Backend::readsBlending: in rasterization order)
   bool partial = false;
   for(u32 n = 0; n < 3; n++) partial |= (maskColor >> n * 8 & 0xff) != 0 && (maskColor >> n * 8 & 0xff) != 0xff;
-  bool reading = backend->reads && (partial || (!p.clear && (p.blend || (p.logicOp && p.logic != 3))));
+  auto doubled = [](u32 factor) { return factor == 6 || factor == 8 || factor == 9; };
+  bool unlike = p.blend && (p.blendOperation == 5 || p.format < 3 ||
+                            (p.blendOperation < 3 && (doubled(p.blendSource) || doubled(p.blendDestination))));
+  bool reading = backend->reads && (partial || (!p.clear && ((p.logicOp && p.logic != 3) || unlike ||
+                                                             (p.blend && backend->readsBlending))));
   if(reading) {
     k.reads = 1, k.blending = 8, s.push.writeMask = p.writeMask;
     k.quantize = p.format < 3 ? p.format : 4;  //(each write narrowed to the format, so what's read is memory's)
@@ -372,6 +379,13 @@ auto GPU::settings(const GE::Look& look) -> void {
         k.logic = 15, k.blend = 1, k.operation = Add, k.source = 0, k.destination = 0;
         k.sourceFactor = OneMinusDestinationColor, k.destinationFactor = Zero;
       }
+    }
+    //(where the GPU's blending takes output 0 as it is and adds or subtracts, that's the source term in pixel.cpp's
+    //whole numbers: draw.frag's TERM; not where output 0's color is the destination's factor too, without dual-source
+    //blending)
+    bool weighs = k.destinationFactor == SourceColor || k.destinationFactor == OneMinusSourceColor;
+    if(k.blend && k.sourceFactor == One && k.operation <= ReverseSubtract && !weighs) {
+      k.term = k.operation == Add ? 1 : 2;
     }
     k.dither = p.dither && !k.blend && !k.logicOp;
     if(!k.blend && !k.logicOp && p.format < 3) k.quantize = p.format;
@@ -538,6 +552,27 @@ auto GPU::triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c
     float texels = std::abs((b.u - a.u) * (c.v - a.v) - (b.v - a.v) * (c.u - a.u));
     bool linear = targetFilter(filter, std::sqrt(texels / (area / 256.0f)));
     for(auto& corner : v) corner.flags = linear;
+    //Above 1x a 2D triangle's texels are held inside its corners' by what half a pixel moves them (half a texel at
+    //most), as far as its pixels' middles reach at 1x, so the GPU's pixels at its edges don't reach past them: two
+    //quads meeting at a seam, one mirroring the other (as Ridge Racer 2's menu draws its picture), would blend in
+    //the texel past the picture there
+    if(through && backend->scale > 1) {
+      f64 x1 = v[1].x - v[0].x, y1 = v[1].y - v[0].y, x2 = v[2].x - v[0].x, y2 = v[2].y - v[0].y;
+      f64 determinant = x1 * y2 - x2 * y1;
+      float low[2], high[2];
+      for(u32 axis : {0u, 1u}) {
+        auto at = [&](const GE::Vertex& corner) { return axis ? corner.v : corner.u; };
+        f64 t1 = at(b) - at(a), t2 = at(c) - at(a);
+        f64 slope = determinant ? std::hypot(t1 * y2 - t2 * y1, t2 * x1 - t1 * x2) / std::abs(determinant) : 1;
+        f32 inset = 0.5 * std::min(1.0, slope);
+        low[axis] = std::min({at(a), at(b), at(c)}) + inset, high[axis] = std::max({at(a), at(b), at(c)}) - inset;
+        if(low[axis] > high[axis]) low[axis] = high[axis] = (low[axis] + high[axis]) / 2;
+      }
+      for(auto& corner : v) {
+        corner.flags |= 8;
+        corner.columnFirst = low[0], corner.columnStep = high[0], corner.rowFirst = low[1], corner.rowStep = high[1];
+      }
+    }
   }
   emit(v, 3);
 }

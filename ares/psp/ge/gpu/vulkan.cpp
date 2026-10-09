@@ -574,12 +574,12 @@ struct VulkanBackend : GPU::Backend {
     std::array<u8, sizeof(GPU::Pipeline)> key;
     std::memcpy(key.data(), &k, sizeof(k));
     if(auto found = pipelineCache_.find(key); found != pipelineCache_.end()) return found->second;
-    u32 constants[17] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
+    u32 constants[18] = {k.textured, k.function, k.alphaTest, k.colorTest, k.fog, k.depthRange, k.clear, k.source,
                          k.destination, k.alphaOut, k.dither, k.quantize, k.logic, k.clamp, k.texels, k.reads,
-                         k.blending};
-    VkSpecializationMapEntry entries[17];
-    for(u32 n = 0; n < 17; n++) entries[n] = {n, n * 4, 4};
-    VkSpecializationInfo specialization{17, entries, sizeof(constants), constants};
+                         k.blending, k.term};
+    VkSpecializationMapEntry entries[18];
+    for(u32 n = 0; n < 18; n++) entries[n] = {n, n * 4, 4};
+    VkSpecializationInfo specialization{18, entries, sizeof(constants), constants};
     VkPipelineShaderStageCreateInfo stages[2] = {
       {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertexModule,
        "main", nullptr},
@@ -881,9 +881,9 @@ struct VulkanBackend : GPU::Backend {
                                 0, sizeof(GPU::Push), &s.push);
           lastState = c.state;
         }
-        //(what the draws before wrote, made visible to its reading; in rasterization order too, which orders a
-        //draw's own primitives but, by the letter of it, maybe not a draw before that didn't ask)
-        if(s.pipeline.reads) {
+        //(what the draws before wrote, made visible to its reading, where the GPU doesn't keep the order: in
+        //rasterization order every pipeline of the subpass asks for it, which orders the draws before too)
+        if(s.pipeline.reads && !(readsInOrder && orderedPass)) {
           auto barrier = made<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
           barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
           barrier.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
@@ -1493,7 +1493,8 @@ struct VulkanBackend : GPU::Backend {
     #endif
     auto application = made<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
     application.pApplicationName = "Phobos PSP GPU renderer";
-    //(1.1 where the loader has it, for vkGetPhysicalDeviceFeatures2: shader blending's rasterization order)
+    //(1.1 where the loader has it, for vkGetPhysicalDeviceFeatures2 and Properties2: shader blending's rasterization
+    //order, and the driver's ID)
     auto instanceVersion = (PFN_vkEnumerateInstanceVersion)getInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion");
     u32 version = VK_API_VERSION_1_0;
     if(instanceVersion && instanceVersion(&version) != VK_SUCCESS) version = VK_API_VERSION_1_0;
@@ -1576,8 +1577,9 @@ struct VulkanBackend : GPU::Backend {
       }
     }
     //Shader blending (docs/psp-gpu-renderers.md): the target's pixel read through an input attachment, which every
-    //Vulkan GPU has. Each draw that reads waits for the ones before (a barrier); its primitives are in rasterization
-    //order where the GPU offers it (EXT's, or ARM's before it), else it holds no overlapping ones (GPU::emit())
+    //Vulkan GPU has. Where the GPU offers rasterization order (EXT's, or ARM's before it) every blend reads, in
+    //order; else each draw that reads waits for the ones before (a barrier) and holds no overlapping primitives
+    //(GPU::emit()), so only what the GPU's own units can't do reads (GPU::settings())
     reads = true;
     auto ordered = made<VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>(
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT);
@@ -1600,6 +1602,28 @@ struct VulkanBackend : GPU::Backend {
       deviceExtensions.push_back(orderedName);
       ordered.rasterizationOrderDepthAttachmentAccess = ordered.rasterizationOrderStencilAttachmentAccess = false;
     }
+    readsBlending = readsInOrder;
+    //Qualcomm's own driver (the RP6's, of 2023) draws the start-up check's small pictures right, but in a game's
+    //frame buffer, past some dozens of draws a pass, a draw that reads sees the pixels as they were before the
+    //draws just before it, barrier or not, and not every time (docs/psp-gpu-renderers.md, "Without rasterization
+    //order"): so without rasterization order nothing reads there, and the GPU's own units blend. (The check's
+    //game-sized picture is for drivers not known, as it catches this one only some of the time.) Its ID comes from
+    //VK_KHR_driver_properties, which a 1.1 instance and device may query without enabling it.
+    auto properties2 = (PFN_vkGetPhysicalDeviceProperties2)getInstanceProcAddr(instance,
+                                                                             "vkGetPhysicalDeviceProperties2");
+    bool driverProperties = false;
+    for(auto& extension : extensions) {
+      driverProperties |= !std::strcmp(extension.extensionName, "VK_KHR_driver_properties");
+    }
+    if(properties2 && driverProperties && application.apiVersion >= VK_API_VERSION_1_1 &&
+       chosen.apiVersion >= VK_API_VERSION_1_1) {
+      auto driver = made<VkPhysicalDeviceDriverProperties>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES);
+      auto query = made<VkPhysicalDeviceProperties2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2);
+      query.pNext = &driver;
+      properties2(physical, &query);
+      readsApart = driver.driverID != VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
+    }
+    if(!readsInOrder && !readsApart) reads = false;
     float priority = 1.0f;
     auto queueInfo = made<VkDeviceQueueCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
     queueInfo.queueFamilyIndex = family, queueInfo.queueCount = 1, queueInfo.pQueuePriorities = &priority;
