@@ -748,11 +748,23 @@ auto Kernel::sceMpegAvcDecodeStopYCbCr() -> void {
   result(0);
 }
 
-//(handle, details): the last picture decoded described: it's there. The details (the picture's size and the like) are
-//left as they were: pspautotests imports the function (video/mpeg's imports name it) but records nothing of them.
-//Space Invaders Extreme asks after each picture its movie thread decodes, and waits for the first before its stage
-//starts.
-auto Kernel::sceMpegAvcDecodeDetail() -> void { result(0); }
+//(handle, details): the decoder's newest picture described (with the firmware's library, the one it holds back, a
+//decode ahead of the one given): its width and height at 8 and 12. Spectral Souls draws its movies from (1, 1) to
+//(width - 1, height - 1) of the picture by them, asking again after each decode while they're 0 (left so, it
+//stretched the picture's corner over the screen). The rest of the details are left as they were, and all of them
+//with no picture held (none decoded, or a flush since): pspautotests imports the function (video/mpeg's imports
+//name it) but records nothing of them. Space Invaders Extreme asks after each picture its movie thread decodes, and
+//waits for the first before its stage starts.
+auto Kernel::sceMpegAvcDecodeDetail() -> void {
+  u32 library = mpegLibrary(arg(0)), details = arg(1);
+  if(auto found = mpegStreams.find(library); library && found != mpegStreams.end() && memory.reaches(details, 16)) {
+    if(!found->second.held.empty()) {
+      memory.write(4, details + 8, found->second.heldWidth);
+      memory.write(4, details + 12, found->second.heldHeight);
+    }
+  }
+  result(0);
+}
 
 //(handle, YCbCr buffer, the part to convert, frame width, destination): the picture sceMpegAvcDecodeYCbCr gave last,
 //converted into the destination, frame width pixels a row. The part: four words, its left, top, width and height in

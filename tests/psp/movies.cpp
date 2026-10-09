@@ -625,6 +625,44 @@ static auto mpegDecodeWidth() -> void {
   CHECK(word(m, Pixels + 64 * 4), 0);            //(not 64: past the picture's 32)
 }
 
+//The decoder's newest picture described: its width and height at 8 and 12 (Spectral Souls draws its movies by them),
+//the rest of the details left as they were; with no picture held (before the first, after a flush, in a library
+//made again), nothing written. The state round trip.
+static auto mpegDetails() -> void {
+  KernelMachine m;
+  pictures(m, 48, 16);
+  auto units = movie({slices(5, {7}), slices(5, {7}), slices(5, {7})});
+  setUp(m, units);
+  putIn(m, units);
+  constexpr u32 Details = R + 0x300;
+  auto unwritten = [&] {
+    bool left = word(m, Details + 8) == 0xcccc'cccc && word(m, Details + 12) == 0xcccc'cccc;
+    m.system.memory.fill(Details, 0xcc, 32);
+    return left;
+  };
+  m.system.memory.fill(Details, 0xcc, 32);
+  CHECK(m.call("sceMpegAvcDecodeDetail", {Handle, Details}), 0);
+  CHECK(unwritten(), true);
+  m.system.memory.write(4, Mode + 8, Pixels);
+  CHECK(m.call("sceMpegGetAvcAu", {Handle, 0x12c0, Au, R + 0xc0}), 0);
+  CHECK(m.call("sceMpegAvcDecode", {Handle, Au, 512, Mode + 8, Got}), 0);
+  CHECK(m.call("sceMpegAvcDecodeDetail", {Handle, Details}), 0);
+  CHECK(word(m, Details + 8) == 48 && word(m, Details + 12) == 16, true);
+  for(u32 n : {0u, 4u, 16u, 20u, 24u, 28u}) check(__LINE__, "a detail left", word(m, Details + n), 0xcccc'cccc);
+  m.system.unmapped.clear();
+  CHECK(m.call("sceMpegAvcDecodeDetail", {Handle, 0}), 0);
+  CHECK(m.system.unmapped.empty(), true);
+  CHECK(roundTrip(m), true);
+  m.system.memory.fill(Details, 0xcc, 32);
+  CHECK(m.call("sceMpegFlushAllStream", {Handle}), 0);
+  CHECK(m.call("sceMpegAvcDecodeDetail", {Handle, Details}), 0);
+  CHECK(unwritten(), true);
+  CHECK(m.call("sceMpegAvcDecode", {Handle, Au, 512, Mode + 8, Got}), 0);  //(no access unit: nothing decoded)
+  m.call("sceMpegCreate", {Handle, Library, 0x10000, Ring, 512, 0, 0});
+  CHECK(m.call("sceMpegAvcDecodeDetail", {Handle, Details}), 0);
+  CHECK(unwritten(), true);
+}
+
 auto movieTests() -> Tests {
   return {{"mpeg header", mpegHeader}, {"mpeg pictures decoded", mpegPictures},
           {"mpeg pictures converted", mpegConversion}, {"mpeg sound access units", mpegSound},
@@ -632,7 +670,8 @@ auto movieTests() -> Tests {
           {"mpeg csc part past the picture", mpegConversionPart}, {"mpeg picture sizes", mpegPictureSizes},
           {"mpeg create afresh", mpegCreateAfresh}, {"mpeg after a state", mpegAfterState},
           {"mpeg ring at the movie's end", mpegRingEnd}, {"mpeg decode at the library's width", mpegDecodeWidth},
-          {"mpeg sound past its end", mpegSoundPastItsEnd}, {"mpeg ring fed round and round", mpegRingLoops}};
+          {"mpeg sound past its end", mpegSoundPastItsEnd}, {"mpeg ring fed round and round", mpegRingLoops},
+          {"mpeg details of the last picture", mpegDetails}};
 }
 
 }

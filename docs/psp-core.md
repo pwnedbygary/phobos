@@ -2983,7 +2983,8 @@ calls filtered by name, and builds with one function taken out, to show what its
   unit's size and time stamps, the pictures, and the callback's 181 calls. sceMpegRingbufferAvailableSize counts
   the free packets, those holding no data (ringbuffer/avail), sceMpegInitAu sets an access unit's buffer and clears
   the rest (basic's ATRAC3plus one), and sceMpegAvcDecodeDetail (named by pspautotests' imports, nothing of it
-  recorded) answers 0 and leaves the details as they were: Space Invaders Extreme waits for its movie's first
+  recorded) answers 0 and gives the newest picture's width and height at 8 and 12, the rest of the details left as
+  they were (part 51: Spectral Souls draws its movies by them): Space Invaders Extreme waits for its movie's first
   picture, and asks it of each, before the stage starts. The library's own state (the video taken from the ring's
   first packet, the picture held back, the file having ended) is kept in the memory the game gave it, where Sony's
   library keeps its own.
