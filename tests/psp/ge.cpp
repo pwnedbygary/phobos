@@ -64,7 +64,7 @@ static auto geCommands() -> void {
 }
 
 //Moving about a list: CALL and RET two deep, keeping the offset; OFFSET_ADDR and ORIGIN added to JUMP's target. A
-//third CALL, or a RET with no CALL, stops the GE.
+//third CALL stops the GE; a RET with no CALL is passed over, as Need for Speed: Most Wanted's lists need.
 static auto geMoving() -> void {
   System s;
   auto& ge = s.ge;
@@ -108,11 +108,24 @@ static auto geMoving() -> void {
   ge.list.address = ListA;
   CHECK(u32(ge.run(100)), u32(GE::Stop::Faulted));
   CHECK(ge.list.depth, 2);
-  ListWriter stray{s.memory, ListA};
+  ListWriter stray{s.memory, ListA};  //the game's: a frame buffer's settings made to be CALLed, run in place
+  stray.put(GE::OffsetAddress, 0x20);
+  stray.put(GE::FrameBufferPointer, 0x0c'c000);
+  stray.put(GE::Return, 0x0c'c000);
+  stray.put(GE::DepthBufferWidth, 0x100);
   stray.put(GE::Return);
+  stray.put(GE::Finish);
+  stray.put(GE::End);
   ge.list = {};
+  ge.list.returnAddress[0] = ListB;  //a CALL's, returned from: no RET goes back there again
   ge.list.address = ListA;
-  CHECK(u32(ge.run(100)), u32(GE::Stop::Faulted));
+  CHECK(u32(ge.run(100)), u32(GE::Stop::Finished));
+  CHECK(ge.commands[GE::FrameBufferPointer], 0x9c0c'c000);
+  CHECK(ge.commands[GE::DepthBufferWidth], 0x9f00'0100);
+  CHECK(ge.commands[GE::Return], 0x0b00'0000);
+  CHECK(ge.list.address, stray.address);
+  CHECK(ge.list.depth, 0);
+  CHECK(ge.list.offset, 0x2000);
 }
 
 //Stopping: at the stall address, and going on once it moves; at an END, saying what came before it; and out of
