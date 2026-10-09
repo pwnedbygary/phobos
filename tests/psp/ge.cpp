@@ -564,6 +564,95 @@ static auto gePause() -> void {
   CHECK(m.system.ge.commands[GE::VertexType], GE::VertexType << 24 | 8);
 }
 
+//What a callback sees, as pspautotests' gpu/ge/callbackstate, gpu/ge/queue2 and gpu/signals recorded: waiting for
+//it (a SIGNAL that suspends, a FINISH) the GE has stopped, and sceGeSaveContext saves; in a finish callback the list
+//is done, so sceGeDrawSync(1) says 2 with another list behind it and 0 for the last; a SIGNAL that lets the GE go on
+//finds it running (here stalled: 3, and nothing saved). Each callback notes both at Slots + 8 * its id. The same with
+//SDK 6.60 (callbackstate's) and with none said.
+static auto geCallbackState() -> void {
+  for(u32 version : {0x0606'0010u, 0u}) {
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    constexpr u32 Slots = KernelMachine::Results + 0x40, ListC = Vertices;
+    Assembler callback{m, 0x0880'4000};
+    callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp)); callback.put(sw(s0, 8, sp));
+    callback.put(sll(s0, a0, 3));
+    callback.li(a0, 1); callback.call("sceGeDrawSync");
+    callback.li(t0, Slots); callback.put(addu(t0, t0, s0)); callback.put(sw(v0, 0, t0));
+    callback.li(a0, Saved); callback.call("sceGeSaveContext");
+    callback.li(t0, Slots); callback.put(addu(t0, t0, s0)); callback.put(sw(v0, 4, t0));
+    callback.put(lw(s0, 8, sp)); callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+    callback.put(jr(ra));
+    callback.put(nop);
+    memory.write(4, Callbacks, 0x0880'4000);
+    memory.write(4, Callbacks + 8, 0x0880'4000);
+    ListWriter a{memory, ListA};
+    a.put(GE::Signal, 0x01'0001);  //suspends
+    a.put(GE::End);
+    a.put(GE::Finish, 2);
+    a.put(GE::End);
+    ListWriter b{memory, ListB};
+    b.put(GE::Finish, 3);
+    b.put(GE::End);
+    ListWriter c{memory, ListC};
+    c.put(GE::Signal, 0x02'0004);  //lets the GE go on, to the stall address
+    c.put(GE::End);
+    c.put(GE::Nop);
+    c.put(GE::Finish, 5);
+    c.put(GE::End);
+    for(u32 n = 0; n < 6 * 2; n++) memory.write(4, Slots + n * 4, 0xcccc'cccc);
+    Assembler main{m, 0x0880'1000};
+    if(version) main.li(a0, version), main.call("sceKernelSetCompiledSdkVersion");
+    main.li(a0, Callbacks); main.call("sceGeSetCallback");
+    main.put(addu(s1, v0, zero));
+    main.li(a0, ListA); main.li(a1, ListA); main.put(addu(a2, s1, zero)); main.li(a3, 0);
+    main.call("sceGeListEnQueue");  //stalled at its start
+    main.put(addu(s0, v0, zero));
+    main.li(a0, ListB); main.li(a1, 0); main.put(addu(a2, s1, zero)); main.li(a3, 0);
+    main.call("sceGeListEnQueue");  //queued behind
+    main.put(addu(a0, s0, zero)); main.li(a1, 0);
+    main.call("sceGeListUpdateStallAddr");
+    main.li(a0, 0); main.call("sceGeDrawSync");
+    main.li(a0, ListC); main.li(a1, ListC + 8); main.put(addu(a2, s1, zero)); main.li(a3, 0);
+    main.call("sceGeListEnQueue");
+    main.li(a0, 1); main.li(a1, 0); main.call("sceGeBreak");
+    main.call("sceKernelExitGame");
+    runMain(m, false);
+    CHECK(memory.read(4, Slots + 8), 2);   //the suspending signal: list A still drawing,
+    CHECK(memory.read(4, Slots + 12), 0);  //and the GE stopped
+    CHECK(memory.read(4, Slots + 16), 2);  //list A's finish: list B queued behind
+    CHECK(memory.read(4, Slots + 20), 0);
+    CHECK(memory.read(4, Slots + 24), 0);  //list B's: the last
+    CHECK(memory.read(4, Slots + 28), 0);
+    CHECK(memory.read(4, Slots + 32), 3);  //list C's signal: the GE goes on and stalls
+    CHECK(memory.read(4, Slots + 36), 0xffff'ffff);
+    CHECK(memory.read(4, Slots + 40), 0xcccc'cccc);  //list C never finished
+  }
+}
+
+//Between a PAUSE signal and the FINISH that delivers it, a list reads as paused, though the GE is still on it: here
+//stalled, sceGeDrawSync(1) says 3; moved on, the list's stall address goes no further than the list, and the GE,
+//still waiting where it was, reads as drawing (pspautotests' gpu/ge/queue2, "Pause window").
+static auto gePauseWindow() -> void {
+  KernelMachine m;
+  ListWriter list{m.system.memory, ListA};
+  list.put(GE::Signal, 0x03'1234);
+  list.put(GE::End);
+  list.put(GE::Nop);
+  list.put(GE::Nop);  //stalled here
+  list.put(GE::Finish);
+  list.put(GE::End);
+  u32 id = m.call("sceGeListEnQueue", {ListA, ListA + 12, 0xffff'ffff, 0});
+  CHECK(m.call("sceGeListSync", {id, 1}), 4);
+  CHECK(m.call("sceGeDrawSync", {1}), 3);
+  CHECK(m.call("sceGeContinue", {}), Kernel::ErrorBusy);
+  CHECK(m.call("sceGeBreak", {0, 0}), Kernel::ErrorBusy);
+  CHECK(m.call("sceGeListUpdateStallAddr", {id, 0}), 0);
+  CHECK(m.call("sceGeListSync", {id, 1}), 4);
+  CHECK(m.call("sceGeDrawSync", {1}), 2);
+  CHECK(m.system.ge.list.address, ListA + 12);
+}
+
 //A call into the program may use system functions but not wait in one; a thread it wakes runs once it's over; and
 //calls wait while the program holds interrupts off.
 static auto geCallsAndThreads() -> void {
@@ -1423,9 +1512,9 @@ static auto geBreak() -> void {
 
 //sceGeBreak(1) and the GE's callbacks (unmeasured: pspautotests doesn't record a PSP at this). A finish callback
 //waiting its turn (interrupts held off) when the break comes is dropped, so the next list, which takes the same ID,
-//has its own callback run once, first, while that list is still queued; and so does it when the break comes from a
-//finish callback that's running, and enqueues the next list itself. On both engines, the first with the state round
-//trip while the new list's callback waits.
+//has its own callback run once, first, the list done by then (sceGeDrawSync(1) 0, as for any last list's finish
+//callback); and so does it when the break comes from a finish callback that's running, and enqueues the next list
+//itself. On both engines, the first with the state round trip while the new list's callback waits.
 static auto geBreakCallbacks() -> void {
   constexpr u32 Gate = KernelMachine::Results + 0x40, Other = KernelMachine::Results + 0x44;
   for(bool fromCallback : {false, true}) for(bool recompile : {false, true}) {
@@ -1504,7 +1593,7 @@ static auto geBreakCallbacks() -> void {
     CHECK(memory.read(4, KernelMachine::Results + 8), 0);
     CHECK(memory.read(4, Turn), 1);                //list B's callback alone ran,
     CHECK(memory.read(4, Finished + 32), 2);
-    CHECK(memory.read(4, Finished + 36), 2);       //with list B still drawing
+    CHECK(memory.read(4, Finished + 36), 0);       //with list B done
     CHECK(memory.read(4, Finished + 40), 1);
     CHECK(memory.read(4, Finished + 16), 0);       //and list A's never
   }
@@ -1518,7 +1607,7 @@ auto geTests() -> Tests {
     {"ge deferred texture busy", geDeferredBusy}, {"ge batches round the ring", geRing},
     {"ge drawn over its own texture", geOwnTexture},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
-    {"ge pause", gePause},
+    {"ge pause", gePause}, {"ge callbacks see the ge stopped", geCallbackState}, {"ge pause window", gePauseWindow},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
