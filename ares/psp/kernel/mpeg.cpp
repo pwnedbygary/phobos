@@ -769,12 +769,24 @@ auto Kernel::sceMpegAvcCsc() -> void {
 
 //(handle, access unit, buffer, initialized): the sound access unit's ATRAC3plus frame decoded into 2048 stereo
 //16-bit samples (mono doubled), 0x2000 bytes; the access unit used up. With none: 0x807f00fd, as video/mpeg/basic
-//recorded for its movie, which has no sound. A frame that won't decode gives silence. A decoder made afresh (after
+//recorded for its movie, which has no sound (asked with no buffer to decode into, refused as well). But once the
+//movie's sound has been decoded, an access unit with nothing in it (used up by the decode before, as when the sound
+//has run out) decodes into a buffer as silence. Chosen, as one game needs it: Juiced: Eliminator decodes so as its
+//movies end, and gives a movie up at an error. A frame that won't decode gives silence. A decoder made afresh (after
 //a state was loaded) is primed first with the frame decoded last, as atrac.cpp's are.
 auto Kernel::sceMpegAtracDecode() -> void {
   u32 library = mpegLibrary(arg(0)), au = arg(1), output = arg(2);
   if(!library || !memory.reaches(au, 24) || !audioDecoders) return result(0x807f'00fd);
   u32 bytes = memory.read(4, au + 20), buffer = memory.read(4, au + 16);
+  if(!bytes) {
+    auto found = mpegStreams.find(library);
+    if(found == mpegStreams.end() || found->second.soundLast.empty() || !memory.reaches(output, 0x2000)) {
+      return result(0x807f'00fd);
+    }
+    memory.fill(output, 0, 0x2000);
+    result(0);
+    return codecWait(MpegDecodeMicroseconds);
+  }
   if(bytes < 8 || bytes > 0x840 || !memory.reaches(buffer, bytes)) return result(0x807f'00fd);
   std::vector<u8> unit(bytes);
   memory.copyOut(unit.data(), buffer, bytes);

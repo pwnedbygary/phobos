@@ -329,6 +329,39 @@ static auto mpegSound() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//An access unit with nothing in it: 0x807f00fd before the movie's sound has been decoded (video/mpeg/basic's, for a
+//movie with none), silence once it has (Juiced: Eliminator decodes so as its movies end), nothing decoded; after a
+//flush, 0x807f00fd again.
+static auto mpegSoundPastItsEnd() -> void {
+  KernelMachine m;
+  auto log = std::make_shared<std::vector<u32>>();
+  m.kernel.audioDecoders = [log](const AudioDecoder::Format&) -> std::unique_ptr<AudioDecoder> {
+    auto decoder = std::make_unique<StandIn>();
+    decoder->log = log;
+    return decoder;
+  };
+  auto bytes = movie({}, 1);
+  setUp(m, bytes);
+  constexpr u32 SoundAu = R + 0x300;
+  m.call("sceMpegInitAu", {Handle, EsBuffer, SoundAu});
+  CHECK(m.call("sceMpegAtracDecode", {Handle, SoundAu, Sound, 1}), 0x807f'00fd);
+  m.system.memory.copyIn(RingData, bytes.data() + 2048, 2048);
+  m.system.memory.write(4, Ring + 8, 1);
+  m.system.memory.write(4, Ring + 12, 1);
+  CHECK(m.call("sceMpegGetAtracAu", {Handle, 0x1700, SoundAu, R + 0x380}), 0);
+  CHECK(m.call("sceMpegAtracDecode", {Handle, SoundAu, Sound, 1}), 0);
+  CHECK(m.call("sceMpegGetAtracAu", {Handle, 0x1700, SoundAu, R + 0x380}), 0x8061'8001);
+  CHECK(word(m, SoundAu + 20), 0);
+  m.system.memory.fill(Sound, 0xdd, 0x2004);
+  CHECK(m.call("sceMpegAtracDecode", {Handle, SoundAu, Sound, 1}), 0);
+  CHECK(word(m, Sound) == 0 && word(m, Sound + 0x1ffc) == 0 && word(m, Sound + 0x2000) == 0xdddd'dddd, true);
+  CHECK(*log == std::vector<u32>({0x40}), true);
+  CHECK(m.call("sceMpegAtracDecode", {Handle, SoundAu, 0, 1}), 0x807f'00fd);  //no buffer to decode into
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("sceMpegFlushAllStream", {Handle}), 0);
+  CHECK(m.call("sceMpegAtracDecode", {Handle, SoundAu, Sound, 1}), 0x807f'00fd);
+}
+
 //A movie its callback feeds round and round from its file's start, header and all (as Space Invaders Extreme's
 //does), two packets a time: the header coming after the movie's packs is the movie starting over, not its end, so
 //its access units come again and again, none lost.
@@ -574,7 +607,7 @@ auto movieTests() -> Tests {
           {"mpeg csc part past the picture", mpegConversionPart}, {"mpeg picture sizes", mpegPictureSizes},
           {"mpeg create afresh", mpegCreateAfresh}, {"mpeg after a state", mpegAfterState},
           {"mpeg ring at the movie's end", mpegRingEnd}, {"mpeg decode at the library's width", mpegDecodeWidth},
-          {"mpeg ring fed round and round", mpegRingLoops}};
+          {"mpeg sound past its end", mpegSoundPastItsEnd}, {"mpeg ring fed round and round", mpegRingLoops}};
 }
 
 }
