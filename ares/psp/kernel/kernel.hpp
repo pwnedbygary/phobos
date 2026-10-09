@@ -646,6 +646,7 @@ struct Kernel {
   auto sceIoRmdir() -> void;
   auto sceIoRename() -> void;
   auto sceIoChdir() -> void;
+  auto sceIoAssign() -> void;
   auto sceIoGetstat() -> void;
   auto sceIoDopen() -> void;
   auto sceIoDread() -> void;

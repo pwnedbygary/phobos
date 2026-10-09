@@ -307,6 +307,10 @@ static auto discFiles() -> void {
   CHECK(m.call("sceIoChdir", {m.string("disc0:/UMD_DATA.BIN")}), Kernel::ErrorNotDirectory);
   CHECK(m.call("sceIoChdir", {m.string("umd0:/PSP_GAME")}), Kernel::ErrorNotDirectory);
 
+  //disc0: assigned to the drive, as it already is: nothing changes
+  CHECK(m.call("sceIoAssign", {m.string("disc0:"), m.string("umd0:"), m.string("isofs0:"), 1, 0, 0}), 0);
+  CHECK(listing("disc0:/") == "PSP_GAME/ UMD_DATA.BIN", true);
+
   //a run of sectors by number, its numbers hexadecimal with or without "0x", what follows them ignored
   char run[64];
   for(const char* form : {"disc0:/sce_lbn0x%x_size0x1000", "disc0:/SCE_LBN%X_SIZE1000",

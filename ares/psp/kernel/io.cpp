@@ -559,6 +559,14 @@ auto Kernel::sceIoChdir() -> void {
   result(0);
 }
 
+//(name, block device, file system, mode, ...): a device named for a block device's file system (pspiofilemgr.h's
+//example assigns flash0: to lflash0:0,0 through flashfat0:). The devices here have their names for good
+//(deviceName()), so it changes nothing: Metal Gear Acid and Ridge Racer assign disc0: to umd0: through isofs0:,
+//which it already is.
+auto Kernel::sceIoAssign() -> void {
+  result(0);
+}
+
 //(path, where to put its SceIoStat)
 auto Kernel::sceIoGetstat() -> void {
   std::string path = memory.readString(arg(0), 1024), host, normalized;
