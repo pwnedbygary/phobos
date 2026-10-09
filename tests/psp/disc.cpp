@@ -627,10 +627,98 @@ static auto umdCallback() -> void {
   }
 }
 
+//The memory stick's insert and eject callback, as pspautotests' mstick recorded: registered through fatms0:, it's
+//told at once that a stick is in, and the program's next sceKernelCheckCallback runs it (1: one ran) with a count of
+//1, the event 1 (inserted) and its own argument; unregistering it and deleting it then succeed. mscmhc0's register
+//tells it too. A better thread's callback, its thread asleep where callbacks run, runs at once, and the register
+//still gives its caller 0. On both engines.
+static auto stickCallback() -> void {
+  constexpr u32 R = KernelMachine::Results, Handler = 0x0880'0000, Owner = 0x0880'0800;
+  for(bool recompile : {false, true}) {
+    DiscMachine m;
+    auto& memory = m.system.memory;
+    //the callback (count, event, its argument): counts its calls at R + 0x40 and keeps its three words after
+    Assembler handler{m, Handler};
+    handler.li(t0, R);
+    handler.put(lw(t1, 0x40, t0)); handler.put(addiu(t1, t1, 1)); handler.put(sw(t1, 0x40, t0));
+    handler.put(sw(a0, 0x44, t0)); handler.put(sw(a1, 0x48, t0)); handler.put(sw(a2, 0x4c, t0));
+    handler.put(jr(ra)); handler.put(addiu(v0, zero, 0));
+    //a thread better than main's: makes a callback of its own (its ID at R + 0x64), then sleeps where callbacks run
+    Assembler owner{m, Owner};
+    owner.li(a0, m.string("OWNER")); owner.li(a1, Handler); owner.li(a2, 0x888);
+    owner.call("sceKernelCreateCallback");
+    owner.li(t0, R); owner.put(sw(v0, 0x64, t0));
+    u32 sleep = owner.here();
+    owner.call("sceKernelSleepThreadCB");
+    owner.put(beq(zero, zero, s32(sleep - owner.here() - 4) / 4)); owner.put(nop);
+
+    Assembler main{m, 0x0880'1000};
+    main.li(s0, R);
+    main.li(a0, m.string("MSCB")); main.li(a1, Handler); main.li(a2, 0x777);
+    main.call("sceKernelCreateCallback");
+    main.put(addu(s1, v0, zero));
+    main.put(sw(s1, 0x60, s0));  //the callback's ID, the devctl's in
+    main.li(a0, m.string("fatms0:")); main.li(a1, 0x0241'5821); main.put(addiu(a2, s0, 0x60)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0, s0));
+    main.call("sceKernelCheckCallback");
+    main.put(sw(v0, 4, s0));
+    main.call("sceKernelCheckCallback");  //nothing more to run
+    main.put(sw(v0, 8, s0));
+    main.li(a0, m.string("fatms0:")); main.li(a1, 0x0241'5822); main.put(addiu(a2, s0, 0x60)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0xc, s0));
+    main.li(a0, m.string("mscmhc0:")); main.li(a1, 0x0201'5804); main.put(addiu(a2, s0, 0x60)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0x10, s0));
+    main.call("sceKernelCheckCallback");
+    main.put(sw(v0, 0x14, s0));
+    main.li(a0, m.string("mscmhc0:")); main.li(a1, 0x0201'5805); main.put(addiu(a2, s0, 0x60)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0x18, s0));
+    main.put(addu(a0, s1, zero));
+    main.call("sceKernelDeleteCallback");
+    main.put(sw(v0, 0x1c, s0));
+    main.li(a0, m.string("owner")); main.li(a1, Owner); main.li(a2, 0x10); main.li(a3, 0x1000); main.li(t0, 0);
+    main.li(t1, 0);
+    main.call("sceKernelCreateThread");
+    main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+    main.call("sceKernelStartThread");  //(it runs first, and sleeps)
+    main.li(a0, m.string("fatms0:")); main.li(a1, 0x0241'5821); main.put(addiu(a2, s0, 0x64)); main.li(a3, 4);
+    main.li(t0, 0); main.li(t1, 0);
+    main.li(v0, 0x5555);  //(what a result written to the wrong thread would leave)
+    main.call("sceIoDevctl");
+    main.put(sw(v0, 0x20, s0));
+    main.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+
+    CHECK(m.kernel.exited, true);
+    CHECK(memory.read(4, R), 0);         //registered
+    CHECK(memory.read(4, R + 4), 1);     //and run by the next CheckCallback
+    CHECK(memory.read(4, R + 8), 0);
+    CHECK(memory.read(4, R + 0xc), 0);   //unregistered
+    CHECK(memory.read(4, R + 0x10), 0);  //registered with mscmhc0
+    CHECK(memory.read(4, R + 0x14), 1);
+    CHECK(memory.read(4, R + 0x18), 0);
+    CHECK(memory.read(4, R + 0x1c), 0);  //deleted
+    CHECK(memory.read(4, R + 0x20), 0);  //the better thread's registered, and main told so
+    CHECK(memory.read(4, R + 0x40), 3);  //run once for each register
+    CHECK(memory.read(4, R + 0x44), 1);  //a count of 1
+    CHECK(memory.read(4, R + 0x48), 1);  //inserted
+    CHECK(memory.read(4, R + 0x4c), 0x888);  //(the last: the better thread's)
+    CHECK(m.kernel.memoryStickCallbacks.size(), 1);
+  }
+}
+
 auto discTests() -> Tests {
   return {
     {"disc images", discImages}, {"disc files", discFiles}, {"disc requests", discRequests},
     {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
+    {"memory stick's callback", stickCallback},
   };
 }
 
