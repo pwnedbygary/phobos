@@ -47,6 +47,7 @@ namespace ares::PlayStationPortable {
 #include "net.cpp"
 #include "pgf.cpp"
 #include "font.cpp"
+#include "ccc.cpp"
 #include "utility.cpp"
 #include "power.cpp"
 #include "system.cpp"
@@ -707,6 +708,27 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceLibFont",        "sceFontPointToPixelV",          &Kernel::sceFontPointToPixelV);
   add("sceLibFont",        "sceFontPixelToPointH",          &Kernel::sceFontPixelToPointH);
   add("sceLibFont",        "sceFontPixelToPointV",          &Kernel::sceFontPixelToPointV);
+  add("sceCcc",            "sceCccSetTable",                &Kernel::sceCccSetTable);
+  add("sceCcc",            "sceCccUCStoJIS",                &Kernel::sceCccUCStoJIS);
+  add("sceCcc",            "sceCccJIStoUCS",                &Kernel::sceCccJIStoUCS);
+  add("sceCcc",            "sceCccUTF8toUTF16",             &Kernel::sceCccUTF8toUTF16);
+  add("sceCcc",            "sceCccUTF8toSJIS",              &Kernel::sceCccUTF8toSJIS);
+  add("sceCcc",            "sceCccUTF16toUTF8",             &Kernel::sceCccUTF16toUTF8);
+  add("sceCcc",            "sceCccUTF16toSJIS",             &Kernel::sceCccUTF16toSJIS);
+  add("sceCcc",            "sceCccSJIStoUTF8",              &Kernel::sceCccSJIStoUTF8);
+  add("sceCcc",            "sceCccSJIStoUTF16",             &Kernel::sceCccSJIStoUTF16);
+  add("sceCcc",            "sceCccStrlenUTF8",              &Kernel::sceCccStrlenUTF8);
+  add("sceCcc",            "sceCccStrlenUTF16",             &Kernel::sceCccStrlenUTF16);
+  add("sceCcc",            "sceCccStrlenSJIS",              &Kernel::sceCccStrlenSJIS);
+  add("sceCcc",            "sceCccEncodeUTF8",              &Kernel::sceCccEncodeUTF8);
+  add("sceCcc",            "sceCccEncodeUTF16",             &Kernel::sceCccEncodeUTF16);
+  add("sceCcc",            "sceCccEncodeSJIS",              &Kernel::sceCccEncodeSJIS);
+  add("sceCcc",            "sceCccDecodeUTF8",              &Kernel::sceCccDecodeUTF8);
+  add("sceCcc",            "sceCccDecodeUTF16",             &Kernel::sceCccDecodeUTF16);
+  add("sceCcc",            "sceCccDecodeSJIS",              &Kernel::sceCccDecodeSJIS);
+  add("sceCcc",            "sceCccSetErrorCharUTF8",        &Kernel::sceCccSetErrorCharUTF8);
+  add("sceCcc",            "sceCccSetErrorCharUTF16",       &Kernel::sceCccSetErrorCharUTF16);
+  add("sceCcc",            "sceCccSetErrorCharSJIS",        &Kernel::sceCccSetErrorCharSJIS);
   add("sceAtrac3plus",     "sceAtracGetAtracID",            &Kernel::sceAtracGetAtracID);
   add("sceAtrac3plus",     "sceAtracReleaseAtracID",        &Kernel::sceAtracReleaseAtracID);
   add("sceAtrac3plus",     "sceAtracReinit",                &Kernel::sceAtracReinit);
@@ -815,6 +837,7 @@ auto Kernel::power() -> void {
   mpegCalls.clear();
   mpegStreams.clear();
   psmfPlayer = {};
+  ccc = {};
   dialog = {};
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;

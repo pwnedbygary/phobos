@@ -1697,6 +1697,42 @@ struct Kernel {
   auto sceFontPixelToPointH() -> void;
   auto sceFontPixelToPointV() -> void;
 
+  //ccc.cpp: character code conversion between UTF-8, UTF-16 and Shift-JIS (sceCcc), by the program's JIS tables
+  struct Ccc {
+    u32 jisToUnicode = 0, unicodeToJis = 0;  //the program's tables (sceCccSetTable): 65536 halfwords each, by code
+    u16 errorUTF8 = 0, errorUTF16 = 0, errorSJIS = 0;  //each encoding's error character (sceCccSetErrorChar*)
+  } ccc;
+  auto cccToUnicode(u32 jis) -> u32;
+  auto cccToJis(u32 code) -> u32;
+  auto cccDecode(u32 kind, u32& at) -> u32;
+  auto cccEncoding(u32 kind, u32 code, u8 bytes[4]) -> u32;
+  auto cccConvert(u32 from, u32 to) -> void;
+  auto cccLength(u32 kind) -> void;
+  auto cccEncode(u32 kind) -> void;
+  auto cccDecodeNext(u32 kind) -> void;
+  auto cccErrorCharacter(u16& character) -> void;
+  auto sceCccSetTable() -> void;
+  auto sceCccUCStoJIS() -> void;
+  auto sceCccJIStoUCS() -> void;
+  auto sceCccUTF8toUTF16() -> void;
+  auto sceCccUTF8toSJIS() -> void;
+  auto sceCccUTF16toUTF8() -> void;
+  auto sceCccUTF16toSJIS() -> void;
+  auto sceCccSJIStoUTF8() -> void;
+  auto sceCccSJIStoUTF16() -> void;
+  auto sceCccStrlenUTF8() -> void;
+  auto sceCccStrlenUTF16() -> void;
+  auto sceCccStrlenSJIS() -> void;
+  auto sceCccEncodeUTF8() -> void;
+  auto sceCccEncodeUTF16() -> void;
+  auto sceCccEncodeSJIS() -> void;
+  auto sceCccDecodeUTF8() -> void;
+  auto sceCccDecodeUTF16() -> void;
+  auto sceCccDecodeSJIS() -> void;
+  auto sceCccSetErrorCharUTF8() -> void;
+  auto sceCccSetErrorCharUTF16() -> void;
+  auto sceCccSetErrorCharSJIS() -> void;
+
   //net.cpp: the network libraries, with the wireless LAN switched off
   auto sceNetDone() -> void;
   auto sceNetUnavailable() -> void;
@@ -1716,7 +1752,7 @@ struct Kernel {
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
-  u32 stateLayout = 17;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 18;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

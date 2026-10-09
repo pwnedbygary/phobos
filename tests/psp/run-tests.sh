@@ -66,7 +66,7 @@ $CXX -std=c++20 -O1 -g -Wall -Wextra -Werror $SANITIZE "${SYSROOT[@]}" "${DEFINE
   "$HERE/main.cpp" "$HERE/memory.cpp" "$HERE/loader.cpp" "$HERE/kernel.cpp" "$HERE/callbacks.cpp" "$HERE/power.cpp" \
   "$HERE/audio.cpp" "$HERE/sas.cpp" "$HERE/utility.cpp" "$HERE/pools.cpp" "$HERE/messages.cpp" "$HERE/media.cpp" \
   "$HERE/mutexes.cpp" "$HERE/timers.cpp" "$HERE/threadman.cpp" \
-  "$HERE/atrac.cpp" "$HERE/mp3.cpp" "$HERE/movies.cpp" "$HERE/psmf.cpp" "$HERE/font.cpp" \
+  "$HERE/atrac.cpp" "$HERE/mp3.cpp" "$HERE/movies.cpp" "$HERE/psmf.cpp" "$HERE/font.cpp" "$HERE/ccc.cpp" \
   "$HERE/files.cpp" "$HERE/async.cpp" "$HERE/disc.cpp" \
   "$HERE/disc-formats.cpp" "$HERE/disc-info.cpp" "$HERE/desktop-disc-info.cpp" "$HERE/crypto.cpp" \
   "$HERE/decrypt.cpp" "$HERE/modules.cpp" "$ROOT/desktop/PspDiscInfo.cpp" \

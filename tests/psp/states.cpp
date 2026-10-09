@@ -524,6 +524,10 @@ static auto stateFields() -> void {
     {"dialog abortUpdates", [&] { k.dialog.abortUpdates = 3; }},
     {"dialog runningUpdates", [&] { k.dialog.runningUpdates = 2; }},
     {"utilityModules", [&] { k.utilityModules.push_back(0x301); }},
+    {"ccc jisToUnicode", [&] { k.ccc.jisToUnicode = 0x0890'0000; }},
+    {"ccc unicodeToJis", [&] { k.ccc.unicodeToJis = 0x0892'0000; }},
+    {"ccc errorUTF8", [&] { k.ccc.errorUTF8 = '?'; }}, {"ccc errorUTF16", [&] { k.ccc.errorUTF16 = 0xfffd; }},
+    {"ccc errorSJIS", [&] { k.ccc.errorSJIS = 0x3013; }},
     //(each pool as a machine could leave it, which loading checks: the spare made a variable pool whole, the fixed
     //pool's block renumbered with it, its blocks halved and doubled)
     {"pool name", [&] { fixedPool.name += "x"; }}, {"pool attributes", [&] { fixedPool.attributes ^= 1; }},

@@ -599,6 +599,9 @@ auto Kernel::serialize(serializer& s) -> bool {
   else s(dialog.runningUpdates);
   vector(utilityModules, [&](u32& module) { s(module); });
   s(imposeLanguage); s(imposeButton);
+  //character code conversion's tables and error characters (ccc.cpp): layout 18 on, none set in older states
+  if(s.reading() && stateLayout < 18) ccc = {};
+  else s(ccc.jisToUnicode), s(ccc.unicodeToJis), s(ccc.errorUTF8), s(ccc.errorUTF16), s(ccc.errorSJIS);
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);
