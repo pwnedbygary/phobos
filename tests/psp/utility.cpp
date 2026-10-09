@@ -180,7 +180,7 @@ static auto savedataNames() -> void {
   saveParameters(m, 4, "ULUS99999", "", 5);
   m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
   CHECK(runSave(m), 0x8011'0308);
-  refused(8, "ULUS99999", ".", "", 0x8011'03c8);
+  refused(8, "ULUS99999", ".", "", 0x8011'03c7);  //(no names of its own: msData's "." is no save there)
   refused(12, "ULUS99999SLOT0", "..", "", 0x8011'0328);
   refused(0, "ULUS999999999", "SLOT0", "DATA.BIN", 0x8011'0308);  //a game's name as long as its field
   refused(0, "ULUS99999", "SLOT0SLOT0SLOT0SLOT0", "DATA.BIN", 0x8011'0308);  //and a save's
@@ -368,6 +368,16 @@ static auto stickSpace() -> void {
   CHECK(runSave(m), 0);
   CHECK(memory.read(4, Needed + 4), 2112);
   CHECK(memory.readString(Needed + 8, 8) == "2 MB", true);
+  //with no names of the request's own (Valhalla Knights 2's), answered just the same; a save not there, no data
+  saveParameters(m, 8, "", "", 16);
+  memory.copyIn(Used, "ULUS99999", 10);
+  memory.copyIn(Used + 16, "ABC", 4);
+  memory.fill(Free, 0xcc, 32);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Used + 36), 4);
+  CHECK(memory.read(4, Free + 4), 57'344);
+  memory.copyIn(Used + 16, "XYZ", 4);
+  CHECK(runSave(m), 0x8011'03c7);
 
   //the size mode: the free space; no files listed, nothing else; two secure files and a normal one, 4 clusters
   saveParameters(m, 22, "ULUS99999", "ABC", 0);

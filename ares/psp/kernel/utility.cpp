@@ -242,7 +242,8 @@ auto Kernel::savePath(const std::string& folder, const std::string& file) -> std
 //The names become a folder and a file on the host: each must be a plain name (plainName(); the game's can't be left
 //out, the save's can), and the paths where a save belongs (savePath()). The buffer must be in the program's memory as
 //far as what's copied in or out, which memory's size bounds: a load reads no more than the buffer takes. What isn't
-//so is refused as a bad parameter, before anything is made, read or deleted.
+//so is refused as a bad parameter, before anything is made, read or deleted. The sizes mode reads no names of its
+//own, so none are asked of it: the save it measures is msData's, whose names are checked there.
 auto Kernel::savedata(u32 p) -> u32 {
   namespace fs = std::filesystem;
   u32 mode = memory.read(4, p + 48);
@@ -256,7 +257,8 @@ auto Kernel::savedata(u32 p) -> u32 {
     save = memory.readString(memory.read(4, p + 96), 20);
     if(save.empty()) return refused;
   }
-  if(!plainName(game, 13) || (!save.empty() && !plainName(save, 20))) return refused;
+  //(Valhalla Knights 2 asks for sizes with no names, and took a refusal for a memory stick too full to save on.)
+  if(mode != 8 && (!plainName(game, 13) || (!save.empty() && !plainName(save, 20)))) return refused;
   bool filed = mode <= 5 || (mode >= 13 && mode <= 20);  //the modes that read, write or erase the data file
   if(filed && !fileName.empty() && !plainName(fileName, 13)) return refused;
   std::string folder = savePath(game + save);
