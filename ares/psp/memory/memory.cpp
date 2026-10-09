@@ -111,7 +111,9 @@ auto Memory::pointer(u32 address, u32 size) -> u8* {
       if((physical - VRAMBase) / VRAMSize & 1) seen &= ~0x3fffu, last |= 0x3fff;
       for(u32 page = seen / PageSize; page <= last / PageSize; page++) {
         if(!vramPageBusy(page)) continue;
-        if(!vramDrawnOver || vramDrawnOver(seen, last)) finishDrawing();
+        if(vramDrawnOver && !vramDrawnOver(seen, last)) break;
+        if(finishDrawingOver) finishDrawingOver(seen, last);
+        else finishDrawing();
         break;
       }
     }

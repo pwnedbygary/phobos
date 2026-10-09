@@ -82,13 +82,16 @@ struct Memory {
 
   //VRAM while the GE's workers still draw into it (ge/threads.cpp: a list's last primitives go on being drawn while
   //the CPU runs on): the pages they draw over (busyPages, of VRAM's 512) are theirs, and anyone else touching one
-  //(pointer(), behind every read, write and copy) first waits for them to finish (finishDrawing(), the GE's), as do
-  //serialize() and power(). The CPU's compiled loads and stores reach VRAM through its page table instead, so the GE
-  //only lets drawing go on that way when the CPU's owner has set vramGuard(), which takes the busy pages out of the
-  //CPU's page tables (busy) and puts them back (not).
+  //(pointer(), behind every read, write and copy) first waits for them to finish (finishDrawingOver(), the GE's), as
+  //serialize() and power() wait for all of it (finishDrawing()). The CPU's compiled loads and stores reach VRAM
+  //through its page table instead, so the GE only lets drawing go on that way when the CPU's owner has set
+  //vramGuard(), which takes the busy pages out of the CPU's page tables (busy) and puts them back (not).
   bool vramBusy = false;
   u64 busyPages[VRAMSize / PageSize / 64] = {};
   std::function<auto () -> void> finishDrawing;
+  //What pointer() waits for, touching VRAM's bytes first to last (offsets in VRAM) drawn over (vramDrawnOver()): only
+  //the drawing that reaches them, and what's drawn before it (the GE's settleOver()). None: finishDrawing().
+  std::function<auto (u32 first, u32 last) -> void> finishDrawingOver;
   //Set while a thread reads VRAM it knows is drawn already (the GE's own reads, of bytes it has seen drawn first; a
   //batch's deferred textures, decoded as it starts): pointer() neither waits for drawing for it nor looks at the busy
   //pages, which the emulation thread changes meanwhile.

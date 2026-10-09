@@ -462,11 +462,15 @@ struct GE {
   auto launch(bool returning) -> void;
   auto startBands(Batch& batch) -> void;
   auto drew(Batch& batch) -> bool;
+  auto launched() const -> bool;
+  static auto unfinished(const Batch& batch) -> bool;
   auto reclaim(Batch& batch) -> void;
+  auto reap() -> void;
   auto resume() -> void;
   auto settle() -> void;
   auto freeVRAM() -> void;
   auto settleAll() -> void;
+  auto settleOver(u32 first, u32 last) -> void;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;
   auto drawnOver(u32 first, u32 last) -> bool;
@@ -498,21 +502,23 @@ struct GE {
     std::bitset<VRAMPages> pending;     //VRAM's 4 KiB pages it may draw over
     std::bitset<VRAMPages> reads;       //those its deferred textures are read from as it starts (Look::deferRows)
     std::atomic<bool> readsDone{false}; //and they have been, decoded (ensureDecoded)
-    bool launched = false;              //handed to the workers: being drawn, or next once the one before is done
+    bool launched = false;              //handed to the workers: being drawn, or next once those before are done
+    std::atomic<bool> finished{false};  //launched, and every band drawn: its pixels are all in VRAM
     u32 users = 0;                      //threads drawing its bands now (under the mutex)
     u32 bands = 0;
     std::atomic<u32> nextBand{0}, bandsLeft{0};
     //0: deferred textures not decoded yet; 1: one thread is decoding; 2: ready (drawBands)
     std::atomic<u32> decodeState{2};
   };
+  static constexpr u32 Batches = 8;  //filled in turn, round and round: one waiting for its primitives
   struct Drawing {
     u32 threads = 1;          //how many threads draw ('GE Threads'): 1, each primitive at once on the GE's own
     bool deferring = false;   //run() is running: primitives wait in the batch
     bool recording = false;   //the primitive being set up waits in the batch
-    Batch batches[2];         //one waiting for its primitives, the other maybe still being drawn
+    Batch batches[Batches];   //one waiting for its primitives, those after it in turn maybe still being drawn
     Batch* batch = &batches[0];         //the one primitives go into
     Batch* drawn = nullptr;             //the one the workers draw (under the mutex)
-    Batch* queued = nullptr;            //the one to draw once that's done (under the mutex)
+    std::deque<Batch*> queued;          //those to draw once that's done, in turn (under the mutex)
 
     std::vector<std::thread> workers;   //the threads besides the GE's own
     std::mutex mutex;

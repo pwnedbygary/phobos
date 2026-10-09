@@ -346,7 +346,7 @@ auto GE::decode(Look& look, const Region& region, u32 rows, bool allowDefer) -> 
     bool fromCurrent = !drawing.batch->jobs.empty() && over(*drawing.batch);
     bool fromLaunched = false;
     for(auto& batch : drawing.batches) {
-      if(batch.launched && over(batch)) { fromLaunched = true; break; }
+      if(unfinished(batch) && over(batch)) { fromLaunched = true; break; }
     }
     if((fromCurrent || fromLaunched) && allowDefer && drawing.deferring && !drawing.workers.empty()) {
       if(fromCurrent) launch(false);  //(drawn while this Look's batch is set up and then drawn after it)
