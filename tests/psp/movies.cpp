@@ -57,8 +57,9 @@ auto movie(const std::vector<std::vector<u8>>& units, u32 soundFrames = 0) -> st
   return out;
 }
 
-//The ringbuffer's callback, copying the movie's packets from memory (as media.cpp's).
-auto callback(KernelMachine& m, u32 size) -> void {
+//The ringbuffer's callback, copying the movie's packets from memory (as media.cpp's); looping, its place goes back
+//to the file's start at its end.
+auto callback(KernelMachine& m, u32 size, bool looping = false) -> void {
   Assembler c{m, CallbackCode};
   c.put(lw(t1, 0, a2));
   c.put(sll(t2, a1, 11));
@@ -67,6 +68,11 @@ auto callback(KernelMachine& m, u32 size) -> void {
   c.put(min(t2, t2, t3));
   c.li(t5, MovieAt); c.put(addu(t5, t5, t1));
   c.put(addu(t1, t1, t2));
+  if(looping) {
+    c.li(t4, size);
+    c.put(subu(t4, t1, t4));
+    c.put(movz(t1, zero, t4));
+  }
   c.put(sw(t1, 0, a2));
   c.put(srl(v0, t2, 11));
   c.put(beq(t2, zero, 7)); c.put(nop);
@@ -322,6 +328,39 @@ static auto mpegSound() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//A movie its callback feeds round and round from its file's start, header and all (as Space Invaders Extreme's
+//does), two packets a time: the header coming after the movie's packs is the movie starting over, not its end, so
+//its access units come again and again, none lost.
+static auto mpegRingLoops() -> void {
+  std::vector<std::vector<u8>> units = {slices(5, {7}), slices(5, {7, 7}), slices(5, {7, 7, 7})};
+  auto bytes = movie(units);
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    setUp(m, bytes);
+    m.system.memory.write(4, Place, 0);
+    callback(m, bytes.size(), true);
+    Assembler a{m, 0x0880'0000};
+    a.li(s0, 0); a.li(s1, R + 0x300);
+    u32 loop = a.here();
+    a.li(a0, Ring); a.li(a1, 2); a.li(a2, 64); a.call("sceMpegRingbufferPut");
+    a.li(a0, Handle); a.li(a1, 0x12c0); a.li(a2, Au); a.li(a3, R + 0xc0); a.call("sceMpegGetAvcAu");
+    a.put(sw(v0, 0, s1)); a.li(t0, Au); a.put(lw(t1, 20, t0)); a.put(sw(t1, 4, s1));
+    a.put(addiu(s1, s1, 8)); a.put(addiu(s0, s0, 1)); a.li(t0, 20);
+    u32 at = a.here();
+    a.put(bne(s0, t0, s32(loop - at - 4) / 4)); a.put(nop);
+    a.call("sceKernelExitGame");
+    m.runProgram(0x0880'0000, recompile);
+    CHECK(m.kernel.exited, true);
+    std::vector<u32> sizes;
+    for(u32 n = 0; n < 20; n++) {
+      if(!word(m, R + 0x300 + n * 8)) sizes.push_back(word(m, R + 0x304 + n * 8));
+    }
+    bool repeats = sizes.size() >= 9;
+    for(u32 n = 0; n < sizes.size(); n++) repeats &= sizes[n] == units[n % 3].size();
+    CHECK(repeats, true);
+  }
+}
+
 //sceMpegAvcCsc's part reaching past the picture (32 by 32, a stand-in's) is cut to it, however large: from row 1,
 //0xffffffff rows tall, gives the 31 rows left (as 32-bit sums, 1 + 0xffffffff passed for 0, and the conversion read
 //on past the picture); from column 1, 0xffffffff wide, the 31 columns left (where it made a row of 4 GiB).
@@ -467,11 +506,60 @@ static auto mpegAfterState() -> void {
   CHECK(!stream.keyframe && stream.held[0] == 19, true);
 }
 
+//A movie fed from a file that goes on past it (Mega Man Maverick Hunter X's): the packets that aren't packs, past its
+//end, aren't taken. Put gives the movie's packs alone, the next Put none, and the movie has ended. What comes before
+//the first pack (the header, put in by a game that reads from the file's start) is taken, and after a flush is
+//taken again. (A ring never given a pack takes whatever it's given: media.cpp's rings.)
+static auto mpegRingEnd() -> void {
+  auto bytes = movie({slices(5, {7}), slices(5, {7})});
+  u32 packs = (bytes.size() - 2048) / 2048;
+  for(u32 n = 0; n < 3; n++) {  //the next file's
+    std::vector<u8> other(2048, n);
+    memcpy(other.data(), "LINK", 4);
+    bytes.insert(bytes.end(), other.begin(), other.end());
+  }
+  for(bool header : {false, true}) {
+    for(bool recompile : {false, true}) {
+      KernelMachine m;
+      setUp(m, bytes);
+      if(header) m.system.memory.write(4, Place, 0);  //from the file's start
+      Assembler a{m, 0x0880'0000};
+      for(u32 n = 0; n < 3; n++) {
+        if(n == 2) {  //the movie again, header and all
+          a.li(t0, Place); a.put(sw(zero, 0, t0));
+          a.li(a0, Handle); a.call("sceMpegFlushAllStream");
+        }
+        a.li(a0, Ring); a.li(a1, 16); a.li(a2, 64); a.call("sceMpegRingbufferPut");
+        a.li(t0, R + 0x200 + n * 4); a.put(sw(v0, 0, t0));
+      }
+      a.call("sceKernelExitGame");
+      m.runProgram(0x0880'0000, recompile);
+      CHECK(m.kernel.exited, true);
+      CHECK(word(m, R + 0x200), packs + header);
+      CHECK(word(m, R + 0x204), 0);
+      CHECK(word(m, R + 0x208), packs + 1);
+      CHECK(m.call("sceMpegRingbufferAvailableSize", {Ring}), 64 - packs - 1);
+      CHECK(word(m, LibraryAt + 0x708), 1);  //ended
+    }
+  }
+  //a ring with no library to keep that in takes all it's given, what's past the movie too
+  KernelMachine m;
+  setUp(m, bytes);
+  m.system.memory.write(4, Ring + 40, 0);  //(the ring's library)
+  Assembler a{m, 0x0880'0000};
+  a.li(a0, Ring); a.li(a1, 16); a.li(a2, 64); a.call("sceMpegRingbufferPut");
+  a.li(t0, R + 0x200); a.put(sw(v0, 0, t0));
+  a.call("sceKernelExitGame");
+  m.runProgram(0x0880'0000, false);
+  CHECK(word(m, R + 0x200), packs + 3);
+}
+
 auto movieTests() -> Tests {
   return {{"mpeg header", mpegHeader}, {"mpeg pictures decoded", mpegPictures},
           {"mpeg pictures converted", mpegConversion}, {"mpeg sound access units", mpegSound},
           {"mpeg csc part past the picture", mpegConversionPart}, {"mpeg picture sizes", mpegPictureSizes},
-          {"mpeg create afresh", mpegCreateAfresh}, {"mpeg after a state", mpegAfterState}};
+          {"mpeg create afresh", mpegCreateAfresh}, {"mpeg after a state", mpegAfterState},
+          {"mpeg ring at the movie's end", mpegRingEnd}, {"mpeg ring fed round and round", mpegRingLoops}};
 }
 
 }

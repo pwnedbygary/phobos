@@ -35,10 +35,11 @@ namespace {
   //The library's memory, where the handle points (its "LIBMPEG"): the ringbuffer it reads (where shared.h's
   //SceMpegBufferHeader has it), then, past the fields shared.h names, the library's own state, as Sony's keeps its
   //own there: the bytes of video already taken from the ring's first packet, whether the decoder holds a picture
-  //back, and whether the last feeding came up short (the movie's file ended: its last access unit ends with its
-  //data).
+  //back, whether the last feeding came up short (the movie's file ended: its last access unit ends with its data),
+  //and whether its ring has been given a pack (bit 0) and the movie's header before the first (bit 1;
+  //mpegReturned()).
   constexpr u32 LibraryRingbuffer = 0x10, LibraryTaken = 0x700, LibraryHolding = 0x704, LibraryEnded = 0x708,
-                LibraryPixels = 0x70c;
+                LibraryPixels = 0x70c, LibraryPacked = 0x714;
   constexpr u32 LibraryMemory = 0x10000, LibraryOffset = 0x30, LibraryState = 0x800;
   constexpr u64 NoTime = ~0ull;
   constexpr u32 MpegDecodeMicroseconds = 300;  //chosen, as atrac.cpp's
@@ -181,12 +182,13 @@ auto Kernel::sceMpegRingbufferAvailableSize() -> void {
 //(ringbuffer, packets, available): the ringbuffer fed, as video/mpeg/basic recorded. Its callback is asked for
 //packets (where they go, how many, its argument): as many as asked for, no more than available and free, a run at a
 //time that stops at the ring's end; and asked again for what's left as long as it gives some (at its file's end
-//basic's gave 9 of 24, and was asked for the other 15). Put returns how many it gave. The callback runs on the
-//calling thread, which may wait in it (basic's read a file), with the caller's global pointer and a stack below the
-//caller's, returning to the trampoline's seventh syscall (mpegReturned()). Not from an interrupt handler, nor a
-//thread already feeding one: nothing is put in. Nor into a ring whose fields, the game's to write, couldn't be a
-//ring's (no packets or more than 4096, the next to write not among them, more holding data than there are), as
-//sceMpegGetAvcAu takes nothing from one; else its callback could be asked for more than a ring's 4096 packets.
+//basic's gave 9 of 24, and was asked for the other 15), but not once it has given packets past the movie's end
+//(mpegReturned()). Put returns how many packets the ring took. The callback runs on the calling thread, which may
+//wait in it (basic's read a file), with the caller's global pointer and a stack below the caller's, returning to the
+//trampoline's seventh syscall (mpegReturned()). Not from an interrupt handler, nor a thread already feeding one:
+//nothing is put in. Nor into a ring whose fields, the game's to write, couldn't be a ring's (no packets or more than
+//4096, the next to write not among them, more holding data than there are), as sceMpegGetAvcAu takes nothing from
+//one; else its callback could be asked for more than a ring's 4096 packets.
 auto Kernel::sceMpegRingbufferPut() -> void {
   u32 ringbuffer = arg(0);
   if(!memory.reaches(ringbuffer, 48)) return result(ErrorInvalidPointer);
@@ -227,6 +229,14 @@ auto Kernel::mpegNext(MpegCall& call) -> void {
 
 //The trampoline's seventh syscall: a ringbuffer's callback returned how many packets it gave (v0; more than it was
 //asked for counts as what it was asked for): they hold data now. None, or an error, and nothing more is asked.
+//Once its library's ring has been given a pack (a packet that starts with a pack's start code, 00 00 01 ba), a
+//packet that isn't one is past the movie's end: it and those after it aren't taken, Put counts only the packets
+//before it, and nothing more is asked. What comes before the first pack (the movie's header, from a game that reads
+//its file from the start) is taken; and if the feeding began so, the header coming round again after packs is the
+//movie starting over (a callback that goes back to its file's start, as Space Invaders Extreme's does), not its end.
+//Chosen, as one game needs it and no recording shows it: Mega Man Maverick Hunter X feeds its movie 32 packets at a
+//time from a file that goes on past it, and starts the movie only once Put has given exactly the stream's size. A
+//ring without a library to keep this in (or a run no longer in memory) takes all it's given.
 auto Kernel::mpegReturned() -> void {
   if(!current) return;
   auto found = mpegCalls.find(current->uid);
@@ -237,10 +247,29 @@ auto Kernel::mpegReturned() -> void {
   u32 packets = memory.read(4, ringbuffer + RingPackets), written = memory.read(4, ringbuffer + RingWritten);
   if(gave <= 0 || !packets) return mpegFinish(call);  //(a ring the game emptied of packets meanwhile: done)
   u32 given = std::min(u32(gave), call.asked);
-  memory.write(4, ringbuffer + RingWritten, (written + given) % packets);
-  memory.write(4, ringbuffer + RingFilled, memory.read(4, ringbuffer + RingFilled) + given);
-  call.put += given;
-  call.left -= given;
+  u32 at = memory.read(4, ringbuffer + RingData) + written * PacketSize;
+  u32 library = memory.read(4, ringbuffer + RingLibrary);
+  bool known = memory.reaches(library, LibraryState) && memory.readString(library, 8) == "LIBMPEG"
+            && memory.reaches(at, given * PacketSize);
+  u32 state = known ? memory.read(4, library + LibraryPacked) : 0;
+  bool packed = state & 1, headed = state & 2;  //given a pack; a header came before the first
+  u32 taken = known ? 0 : given;
+  for(; taken < given; taken++) {
+    u32 first = memory.read(4, at + taken * PacketSize);
+    bool pack = first == 0xba01'0000, header = first == 0x464d'5350;  //"PSMF"
+    if(packed && !pack) {
+      if(!header || !headed) break;
+      packed = false;  //the movie again, from its header
+    }
+    headed |= header && !packed;
+    packed |= pack;
+  }
+  if(known) memory.write(4, library + LibraryPacked, u32(packed) | u32(headed) << 1);
+  memory.write(4, ringbuffer + RingWritten, (written + taken) % packets);
+  memory.write(4, ringbuffer + RingFilled, memory.read(4, ringbuffer + RingFilled) + taken);
+  call.put += taken;
+  call.left -= taken;
+  if(taken < given) return mpegFinish(call);  //(left over: the movie has ended)
   mpegNext(call);
 }
 
@@ -341,7 +370,7 @@ auto Kernel::sceMpegInitAu() -> void {
 }
 
 //(handle): every stream flushed: what the ringbuffer holds is dropped, and the video taken apart and decoded
-//starts afresh.
+//starts afresh, as does the feeding (a header may come first again).
 auto Kernel::sceMpegFlushAllStream() -> void {
   if(u32 library = mpegLibrary(arg(0))) {
     u32 ringbuffer = memory.read(4, library + LibraryRingbuffer);
@@ -349,7 +378,7 @@ auto Kernel::sceMpegFlushAllStream() -> void {
       memory.write(4, ringbuffer + RingRead, memory.read(4, ringbuffer + RingWritten));
       memory.write(4, ringbuffer + RingFilled, 0);
     }
-    for(u32 offset : {LibraryTaken, LibraryHolding, LibraryEnded}) memory.write(4, library + offset, 0);
+    for(u32 offset : {LibraryTaken, LibraryHolding, LibraryEnded, LibraryPacked}) memory.write(4, library + offset, 0);
     if(auto found = mpegStreams.find(library); found != mpegStreams.end()) {
       auto& stream = found->second;
       stream.unit.clear();

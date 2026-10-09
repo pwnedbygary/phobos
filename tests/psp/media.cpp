@@ -814,7 +814,9 @@ static auto mpegFeederTerminated() -> void {
 //access units asked for, and now and then the ring flushed. Whatever the packs, the next packet to read stays among
 //the ring's, and those holding data no more than it has: an access unit frees packets from the next to read on,
 //"no data" changes nothing; Put gives what the callback's calls gave, each counted as no more than it was asked for,
-//up to the first that gave none or an error, each asked for a run from where the ring writes next. On both engines.
+//up to the first that gave none or an error, or packets past a movie's end (once the ring has had a pack, one that
+//isn't: those before it counted; a flush starts that afresh), each asked for a run from where the ring writes next.
+//On both engines.
 static auto mpegRandomPacks() -> void {
   constexpr u32 StepCount = 250, Pool = 256;
   for(u32 round = 0; round < 3; round++) {
@@ -846,7 +848,8 @@ static auto mpegRandomPacks() -> void {
       randomPacksProgram(m, 0x0880'1000, StepCount);
       m.runProgram(0x0880'1000, recompile);
       CHECK(m.kernel.exited, true);
-      u32 read = 0, written = 0, filled = 0, calls = 0, units = 0, at = Records;
+      u32 read = 0, written = 0, filled = 0, calls = 0, units = 0, at = Records, source = 0;
+      bool packed = false, headed = false;  //the ring's been given a pack; the movie's header before the first
       std::string wrong;
       for(u32 n = 0; n < StepCount && wrong.empty(); n++) {
         auto next = [&](u32 offset) { return word(m, at + offset); };
@@ -858,11 +861,25 @@ static auto mpegRandomPacks() -> void {
           if(done || where != place * 2048 || !asked || asked > wanted - gave || place + asked > packets) {
             wrong = "a callback asked for the wrong packets";
           }
+          u32 from = source + asked > Pool ? 0 : source;  //where the callback copied from: its place in the pool
+          source = from + asked;
           auto& answer = answers[call & 1023];
           s32 returned = answer[1] ? s32(answer[1]) : s32(asked + answer[0]);
           if(returned <= 0) { done = true; continue; }
-          gave += std::min<u32>(returned, asked), place = (gave + written) % packets;
-          done = gave == wanted;
+          u32 given = std::min<u32>(returned, asked), taken = 0;
+          for(; taken < given; taken++) {
+            u32 first = 0;
+            for(u32 i = 0; i < 4; i++) first |= u32(pool[(from + taken) * 2048 + i]) << i * 8;
+            bool pack = first == 0xba01'0000, header = first == 0x464d'5350;
+            if(packed && !pack) {
+              if(!header || !headed) break;
+              packed = false;
+            }
+            headed |= header && !packed;
+            packed |= pack;
+          }
+          gave += taken, place = (gave + written) % packets;
+          done = gave == wanted || taken < given;
         }
         if(wrong.empty() && (!done || next(0) != gave || next(4) != place || next(8) != filled + gave)) {
           wrong = "Put gave what its callback's calls didn't";
@@ -889,7 +906,7 @@ static auto mpegRandomPacks() -> void {
         //the flush
         if(steps[n][2] && wrong.empty()) {
           if(next(0) != 0 || next(4) != written || next(8) != 0 || next(12) != written) wrong = "a flush left data";
-          read = written, filled = 0;
+          read = written, filled = 0, packed = headed = false;
           at += 16;
         }
         if(!wrong.empty()) std::printf("  ring of %u, step %u: %s\n", packets, n, wrong.c_str());
