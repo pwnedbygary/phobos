@@ -102,6 +102,22 @@ static auto savedata() -> void {
   CHECK(runSave(m), 0x8011'03c7);
   saveParameters(m, 10, "ULUS99999", "SLOT0", 0);
   CHECK(runSave(m), 0x8011'0347);
+  //writing data (secure or not) into a save that isn't there: NO_DATA, nothing made (utility/savedata/
+  //saveemptyfilename); into one made first, its file written
+  for(u32 mode : {17u, 18u}) {
+    saveParameters(m, mode, "ULUS99999", "SLOT1", 11);
+    CHECK(runSave(m), 0x8011'0327);
+    CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT1"), false);
+    fileName(m, "");
+    CHECK(runSave(m), 0x8011'0327);
+    CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT1"), false);
+  }
+  saveParameters(m, 14, "ULUS99999", "SLOT1", 0);  //make data
+  fileName(m, "");
+  CHECK(runSave(m), 0);
+  saveParameters(m, 17, "ULUS99999", "SLOT1", 11);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT1/DATA.BIN") == "saved bytes", true);
 }
 
 //A save's names become a folder and a file on the host, so each must be one plain name, and the save's paths must be

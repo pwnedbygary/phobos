@@ -282,6 +282,10 @@ auto Kernel::savedata(u32 p) -> u32 {
     u32 size = std::min(dataSize, bufferSize);
     if(folder.empty() || (!fileName.empty() && file.empty())) return SavedataSaveAccess;
     if(!fileName.empty() && size && !memory.reaches(buffer, size)) return refused;
+    //Writing data (17, 18) only adds a file to a save that's there: with none, the write is NO_DATA and nothing is
+    //made, as utility/savedata/saveemptyfilename recorded. (Hot Shots Golf: Open Tee 2 writes its data so before it
+    //has made a save, and took the zeros it had written, kept, for a corrupted save.)
+    if((mode == 17 || mode == 18) && !exists) return SavedataReadNoData;
     fs::create_directories(folder, error);
     if(fileName.empty()) return 0;
     std::vector<u8> bytes(size);
