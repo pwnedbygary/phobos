@@ -407,6 +407,15 @@ static auto mpegStubs() -> void {
   CHECK(word(m, Ring + 32), Data + 512 * 2048);
   CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 4097, Data, 0x1000, 0, 0}), 0x8061'0022);
   CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 1, Data, u32(-1), 0, 0}), 0x8061'0022);
+  //packets whose memory, taken as signed, is no more than the size (ringbuffer/construct's 4096 packets' memory:
+  //4097 refused; -1, 0x7fffffff and 0x80000000, whose memory wraps round to -0x868 or 0, taken), and Sega Rally
+  //Revo's 4800 with theirs
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 4097, Data, 4096 * 0x868, 0, 0}), 0x8061'0022);
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, u32(-1), Data, 4096 * 0x868, 0, 0}), 0);
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 0x7fff'ffff, Data, 4096 * 0x868, 0, 0}), 0);
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 0x8000'0000, Data, 4096 * 0x868, 0, 0}), 0);
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 4800, Data, 4800 * 0x868, 0, 0}), 0);
+  CHECK(word(m, Ring), 4800);
   CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 512, Data, 0x10'd000, 0x0880'4000, 0}), 0);
   CHECK(m.call("sceMpegRingbufferAvailableSize", {Ring}), 512);
   constexpr u32 Handle = R + 0x40, Memory = 0x0895'0000;
@@ -499,6 +508,250 @@ static auto mpegMovie(bool ownLibrary) -> void {
     CHECK(word(m, Ring + 12) == 0 && m.kernel.mpegCalls.empty(), true);
     CHECK(m.notes.size(), 0);
     CHECK(roundTrip(m), true);
+  }
+}
+
+//A movie fed through a ring of more packets than 4096 (Sega Rally Revo's 4800) is taken apart as through a small one
+//(movieModel()). The ring's data runs over the library's memory, past the few packets the movie fills.
+static auto mpegMovieBigRing() -> void {
+  constexpr u64 None = Movie::None;
+  Movie movie({3000, 700, 1500, 2600}, {90000, None, None, None});
+  constexpr u32 Frames = 8, Ask = 3, Packets = 4800;
+  std::vector<std::pair<u32, u32>> log;
+  auto expected = movieModel(movie, Packets, Frames, Ask, log);
+  u32 units = 0;
+  for(auto& frame : expected) units += frame.result == 0;
+  CHECK(units >= 3, true);
+  KernelMachine m;
+  mpegSetUp(m, movie, Packets);
+  mpegCallback(m, movie, false, false);
+  movieProgram(m, 0x0880'1000, Frames, Ask);
+  m.runProgram(0x0880'1000, false);
+  CHECK(m.kernel.exited && movieFrames(m, Frames) == expected, true);
+  CHECK(word(m, Log), log.size());
+  CHECK(m.notes.size(), 0);
+}
+
+//The stream tests' header for the library (sceMpegQueryStreamOffset, the handle given): the movie's own header with
+//its stream's offset (0x800) and size (so many packets) filled in.
+constexpr u32 StreamHeader = R + 0x2000;
+auto streamHeader(KernelMachine& m, const Movie& movie, u32 packets) -> void {
+  m.system.memory.copyIn(StreamHeader, movie.bytes.data(), 2048);
+  for(u32 n = 0; n < 4; n++) {
+    m.system.memory.write(1, StreamHeader + 8 + n, 0x800 >> (24 - n * 8));
+    m.system.memory.write(1, StreamHeader + 12 + n, packets * 2048 >> (24 - n * 8));
+  }
+  CHECK(m.call("sceMpegQueryStreamOffset", {Handle, StreamHeader, R + 0x1f0}), 0);
+}
+
+//The stream tests' steps, each keeping what it got in a numbered word of Results: Put asking for so many packets
+//(its result); sceMpegGetAvcAu (its result, then the access unit's size in the next word) and a decode; a word of
+//the library's own state (whether the movie has ended, the packs given).
+constexpr u32 StreamEnded = Library + 0x30 + 0x708, StreamFed = Library + 0x30 + 0x71c;
+auto streamPut(Assembler& a, u32 ask, u32 slot) -> void {
+  a.li(a0, Ring); a.li(a1, ask); a.li(a2, 16); a.call("sceMpegRingbufferPut");
+  a.li(t0, Results + slot * 4); a.put(sw(v0, 0, t0));
+}
+auto streamTake(Assembler& a, u32 slot) -> void {
+  a.li(a0, Handle); a.li(a1, 0x12c0); a.li(a2, Au); a.li(a3, Attribute); a.call("sceMpegGetAvcAu");
+  a.li(t0, Results + slot * 4); a.put(sw(v0, 0, t0));
+  a.li(t0, Au); a.put(lw(t1, 20, t0)); a.li(t0, Results + slot * 4 + 4); a.put(sw(t1, 0, t0));
+  a.li(a0, Handle); a.li(a1, Au); a.li(a2, 512); a.li(a3, Buffer); a.li(t0, Got); a.call("sceMpegAvcDecode");
+}
+auto streamNote(Assembler& a, u32 address, u32 slot) -> void {
+  a.li(t0, address); a.put(lw(t1, 0, t0)); a.li(t0, Results + slot * 4); a.put(sw(t1, 0, t0));
+}
+auto streamSlot(KernelMachine& m, u32 slot) -> u32 { return word(m, Results + slot * 4); }
+
+//A movie given whole in one Put, no feeding coming up short after it (Disney-Pixar Cars: Race-O-Rama's; Pursuit
+//Force: Extreme Justice asks for just what's left, then for none): once a Put has given as many packs as the header,
+//read for the library by sceMpegQueryStreamOffset, says the stream has, the movie has ended, and the last access unit
+//comes with its data, every packet free after it. Without the header read, the last waits for a feeding to come up
+//short. On both engines.
+static auto mpegMovieFedWhole() -> void {
+  constexpr u64 None = Movie::None;
+  Movie movie({3000, 700, 1500, 2600}, {90000, None, None, None});
+  constexpr u32 Frames = 6;
+  for(bool recompile : {false, true}) {
+    for(bool read : {true, false}) {
+      KernelMachine m;
+      mpegSetUp(m, movie, 16);
+      mpegCallback(m, movie, false, false);
+      if(read) streamHeader(m, movie, movie.packets() - 1);  //the stream: every packet but the header
+      Assembler a{m, 0x0880'1000};
+      a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+      a.li(a0, Ring); a.li(a1, movie.packets()); a.li(a2, movie.packets()); a.call("sceMpegRingbufferPut");
+      a.li(t0, Results); a.put(sw(v0, 0, t0));
+      a.li(s0, 0); a.li(s1, Results + 4);
+      u32 loop = a.here();
+      a.li(a0, Handle); a.li(a1, 0x12c0); a.li(a2, Au); a.li(a3, Attribute); a.call("sceMpegGetAvcAu");
+      a.put(sw(v0, 0, s1));
+      a.li(a0, Handle); a.li(a1, Au); a.li(a2, 512); a.li(a3, Buffer); a.li(t0, Got); a.call("sceMpegAvcDecode");
+      a.put(addiu(s1, s1, 4)); a.put(addiu(s0, s0, 1)); a.li(t0, Frames);
+      u32 at = a.here();
+      a.put(bne(s0, t0, s32(loop - at - 4) / 4)); a.put(nop);
+      a.li(a0, Ring); a.call("sceMpegRingbufferAvailableSize");
+      a.li(t0, Results + 0x40); a.put(sw(v0, 0, t0));
+      a.call("sceKernelExitGame");
+      m.runProgram(0x0880'1000, recompile);
+      CHECK(m.kernel.exited, true);
+      CHECK(word(m, Results), movie.packets());  //all of it, the callback giving what it was asked for
+      for(u32 n = 0; n < Frames; n++) {
+        check(__LINE__, "an access unit", word(m, Results + 4 + n * 4), n < (read ? 4u : 3u) ? 0 : NoData);
+      }
+      CHECK(word(m, Results + 0x40) == 16, read);  //every packet free, or the last access unit's still held
+      CHECK(m.notes.size(), 0);
+    }
+  }
+}
+
+//The packs counted toward the stream's end: the header packet isn't one (it and 3 of 4 packs given: not ended, the
+//fourth access unit waiting); the last pack given, it has ended, and a Put asking for none after leaves it so; the
+//last access unit comes, every packet free. A callback going back to the file's start (its header again) starts the
+//count over: the movie whole, then the header and 2 packs: not ended, the third access unit waiting for its data.
+//On both engines.
+static auto mpegStreamCounted() -> void {
+  Movie movie({3000, 700, 1500, 2600}, {90000, Movie::None, Movie::None, Movie::None});
+  CHECK(movie.packets(), 5);
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    mpegSetUp(m, movie, 16);
+    mpegCallback(m, movie, false, false);
+    streamHeader(m, movie, 4);
+    CHECK(word(m, Library + 0x30 + 0x718), 4);
+    Assembler a{m, 0x0880'1000};
+    a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+    streamPut(a, 4, 0);
+    streamNote(a, StreamEnded, 1); streamNote(a, StreamFed, 2);
+    for(u32 n = 0; n < 4; n++) streamTake(a, 3 + n * 2);
+    streamPut(a, 1, 11);
+    streamNote(a, StreamEnded, 12); streamNote(a, StreamFed, 13);
+    streamPut(a, 0, 14);
+    streamNote(a, StreamEnded, 15);
+    streamTake(a, 16);
+    streamTake(a, 18);
+    a.li(a0, Ring); a.call("sceMpegRingbufferAvailableSize"); a.li(t0, Results + 20 * 4); a.put(sw(v0, 0, t0));
+    a.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(streamSlot(m, 0) == 4 && streamSlot(m, 1) == 0 && streamSlot(m, 2) == 3, true);
+    CHECK(streamSlot(m, 3) == 0 && streamSlot(m, 4) == 3000, true);
+    CHECK(streamSlot(m, 5) == 0 && streamSlot(m, 6) == 700, true);
+    CHECK(streamSlot(m, 7) == 0 && streamSlot(m, 8) == 1500, true);
+    CHECK(streamSlot(m, 9), NoData);
+    CHECK(streamSlot(m, 11) == 1 && streamSlot(m, 12) == 1 && streamSlot(m, 13) == 4, true);
+    CHECK(streamSlot(m, 14) == 0 && streamSlot(m, 15) == 1, true);
+    CHECK(streamSlot(m, 16) == 0 && streamSlot(m, 17) == 2600, true);
+    CHECK(streamSlot(m, 18), NoData);
+    CHECK(streamSlot(m, 20), 16);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    mpegSetUp(m, movie, 16);
+    mpegCallback(m, movie, false, true);
+    streamHeader(m, movie, 4);
+    Assembler a{m, 0x0880'1000};
+    a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+    streamPut(a, 5, 0);
+    streamNote(a, StreamEnded, 1); streamNote(a, StreamFed, 2);
+    for(u32 n = 0; n < 4; n++) streamTake(a, 3 + n * 2);
+    streamPut(a, 3, 11);
+    streamNote(a, StreamEnded, 12); streamNote(a, StreamFed, 13);
+    for(u32 n = 0; n < 3; n++) streamTake(a, 14 + n * 2);
+    a.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(streamSlot(m, 0) == 5 && streamSlot(m, 1) == 1 && streamSlot(m, 2) == 4, true);
+    for(u32 n = 0; n < 4; n++) {
+      check(__LINE__, "the first time round", streamSlot(m, 4 + n * 2), movie.starts[n + 1] - movie.starts[n]);
+    }
+    CHECK(streamSlot(m, 11) == 3 && streamSlot(m, 12) == 0 && streamSlot(m, 13) == 2, true);
+    CHECK(streamSlot(m, 14) == 0 && streamSlot(m, 15) == 3000, true);
+    CHECK(streamSlot(m, 16) == 0 && streamSlot(m, 17) == 700, true);
+    CHECK(streamSlot(m, 18), NoData);
+    CHECK(m.notes.size(), 0);
+  }
+}
+
+//A movie fed round and round past its stream's end with no header between (a game that read the header itself and
+//goes back to the stream's offset at its file's end), one packet at a time while there's no access unit: past the
+//stream's packs the movie hasn't ended, and every access unit comes whole, time after time. And one given whole, a
+//flush, and given whole again from the stream's offset (a flush keeps the stream's size): its last access unit comes
+//the second time too. On both engines.
+static auto mpegStreamRoundAgain() -> void {
+  Movie movie({3000, 700, 1500, 2600}, {90000, Movie::None, Movie::None, Movie::None});
+  constexpr u32 Units = 12;
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    mpegSetUp(m, movie, 16);
+    Assembler c{m, CallbackCode};  //mpegCallback()'s, going back to the stream's offset at the file's end
+    c.put(lw(t1, 0, a2));
+    c.put(sll(t2, a1, 11));
+    c.li(t3, movie.bytes.size());
+    c.put(subu(t3, t3, t1));
+    c.put(min(t2, t2, t3));
+    c.li(t5, MovieAt); c.put(addu(t5, t5, t1));
+    c.put(addu(t1, t1, t2));
+    c.li(t4, movie.bytes.size());
+    c.put(subu(t4, t1, t4));
+    c.li(t0, 2048);
+    c.put(movz(t1, t0, t4));
+    c.put(sw(t1, 0, a2));
+    c.put(srl(v0, t2, 11));
+    c.put(beq(t2, zero, 7)); c.put(nop);
+    c.put(lw(t8, 0, t5)); c.put(sw(t8, 0, a0)); c.put(addiu(t5, t5, 4)); c.put(addiu(a0, a0, 4));
+    c.put(beq(zero, zero, -7)); c.put(addiu(t2, t2, -4));
+    c.put(jr(ra)); c.put(nop);
+    m.system.memory.write(4, Place, 2048);
+    streamHeader(m, movie, 4);
+    Assembler a{m, 0x0880'1000};
+    a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+    a.li(s0, 0); a.li(s1, Results); a.li(s3, 0);
+    u32 take = a.here();
+    a.li(a0, Handle); a.li(a1, 0x12c0); a.li(a2, Au); a.li(a3, Attribute); a.call("sceMpegGetAvcAu");
+    u32 toGot = a.here(); a.put(nop); a.put(nop);
+    a.li(a0, Ring); a.li(a1, 1); a.li(a2, 16); a.call("sceMpegRingbufferPut");
+    a.put(addiu(s3, s3, 1)); a.li(t0, 200);
+    u32 toExit = a.here(); a.put(nop); a.put(nop);
+    u32 back = a.here(); a.put(beq(zero, zero, s32(take - back - 4) / 4)); a.put(nop);
+    u32 got = a.here();
+    m.system.memory.write(4, toGot, beq(v0, zero, s32(got - toGot - 4) / 4));
+    a.li(t0, Au); a.put(lw(t1, 20, t0)); a.put(sw(t1, 0, s1)); a.put(addiu(s1, s1, 4));
+    a.li(a0, Handle); a.li(a1, Au); a.li(a2, 512); a.li(a3, Buffer); a.li(t0, Got); a.call("sceMpegAvcDecode");
+    a.put(addiu(s0, s0, 1)); a.li(t0, Units);
+    u32 at = a.here(); a.put(bne(s0, t0, s32(take - at - 4) / 4)); a.put(nop);
+    u32 done = a.here();
+    m.system.memory.write(4, toExit, beq(s3, t0, s32(done - toExit - 4) / 4));  //(given up after 200 feedings)
+    a.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    for(u32 n = 0; n < Units; n++) {
+      check(__LINE__, "an access unit's size", word(m, Results + n * 4), movie.starts[n % 4 + 1] - movie.starts[n % 4]);
+    }
+    CHECK(m.notes.size(), 0);
+  }
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    mpegSetUp(m, movie, 16);
+    mpegCallback(m, movie, false, false);
+    m.system.memory.write(4, Place, 2048);
+    streamHeader(m, movie, 4);
+    Assembler a{m, 0x0880'1000};
+    a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+    streamPut(a, 4, 0);
+    for(u32 n = 0; n < 4; n++) streamTake(a, 1 + n * 2);
+    a.li(a0, Handle); a.call("sceMpegFlushAllStream");
+    a.li(t0, Place); a.li(t1, 2048); a.put(sw(t1, 0, t0));
+    streamPut(a, 4, 9);
+    for(u32 n = 0; n < 4; n++) streamTake(a, 10 + n * 2);
+    a.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(streamSlot(m, 7) == 0 && streamSlot(m, 8) == 2600, true);    //the last access unit
+    CHECK(streamSlot(m, 16) == 0 && streamSlot(m, 17) == 2600, true);  //and again, after the flush
+    CHECK(m.notes.size(), 0);
   }
 }
 
@@ -624,16 +877,18 @@ static auto mpegCallbackStates() -> void {
 }
 
 //A ring whose fields, the game's to write, couldn't be a ring's is given nothing (sceMpegGetAvcAu's test), its
-//fields left as they were: 8192 packets, -200 or 17 of 16 holding data, the next to write at 16 of 16, none, and
-//0x7fffffff packets with 0x80000000 holding data. (The last had overflowed; 8192 packets, and -200 holding data, had
-//the callback asked for 5000 and 4296, more than a state holds.) A state saved where the callback, which waits,
-//would have been waiting loads into another machine. A ring that is one, as a check, is fed as it waits. On both
-//engines.
+//fields left as they were: more packets than any ring has (0x8001), -200 or 17 of 16 holding data, the next to write
+//at 16 of 16, none, and 0x7fffffff packets with 0x80000000 holding data, whose free packets overflow. Fed, -200
+//holding data would have the callback asked for 4296 packets of a ring of 4096. A state saved where the callback,
+//which waits, would have been waiting loads into another machine. Rings that are ones, as a check, are fed as they
+//wait (asking for 5000): of 16 packets, 4800 (Sega Rally Revo's) and 0x8000, the most there may be. The big rings'
+//data would run over the library's memory, but the callback writes none. On both engines.
 static auto mpegRingbufferNotARing() -> void {
   struct Fields { u32 packets, written, filled; bool fed; };
   for(bool recompile : {false, true}) {
-    for(auto f : {Fields{16, 0, 0, true}, {8192, 0, 0, false}, {4096, 0, u32(-200), false}, {16, 0, 17, false},
-                  {16, 16, 0, false}, {0, 0, 0, false}, {0x7fff'ffff, 0, 0x8000'0000, false}}) {
+    for(auto f : {Fields{16, 0, 0, true}, {4800, 0, 0, true}, {0x8000, 0, 0, true}, {0x8001, 0, 0, false},
+                  {4096, 0, u32(-200), false}, {16, 0, 17, false}, {16, 16, 0, false}, {0, 0, 0, false},
+                  {0x7fff'ffff, 0, 0x8000'0000, false}}) {
       KernelMachine m;
       feedingSetUp(m, 16, {{0, 0, 500}});
       feedingCallback(m);
@@ -653,10 +908,33 @@ static auto mpegRingbufferNotARing() -> void {
       CHECK(loadState(fresh, state) && saveState(fresh) == state, true);
       fresh.kernel.run(Kernel::CPUFrequency / 3);
       CHECK(fresh.kernel.exited, true);
-      CHECK(word(fresh, Results) == (f.fed ? 16 : 0) && word(fresh, FeedLog) == (f.fed ? 1 : 0), true);
+      CHECK(word(fresh, Results) == (f.fed ? std::min(f.packets, 5000u) : 0), true);
+      CHECK(word(fresh, FeedLog), f.fed ? 1 : 0);
       if(!f.fed) CHECK(word(fresh, Ring + 8) == f.written && word(fresh, Ring + 12) == f.filled, true);
       CHECK(fresh.notes.size(), 0);
     }
+  }
+}
+
+//A ring made with the firmware's library has the caller's global pointer after its 44 bytes (construct's ring of
+//48); with the game's own copy of the library (stood in for), the word after them is left as it was: Miami Vice keeps
+//its movie's file there.
+static auto mpegRingOwnLibrary() -> void {
+  for(bool own : {false, true}) {
+    KernelMachine m;
+    if(own) {
+      CHECK(m.kernel.standIn("sceMpeg_library", 0, "disc0:/MPEG.PRX") != 0, true);
+      m.notes.clear();  //(its "Sony's sceMpeg_library" note)
+    }
+    m.call("sceMpegInit", {});
+    for(u32 n : {36u, 40u}) m.system.memory.write(4, Ring + n, 0xcccc'cccc);
+    m.system.memory.write(4, Ring + 44, 0x46);
+    m.system.ipu.r[28] = 0x0881'2340;
+    CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 16, RingData, 16 * 0x868, CallbackCode, Place}), 0);
+    CHECK(word(m, Ring) == 16 && word(m, Ring + 32) == RingData + 16 * 2048, true);
+    CHECK(word(m, Ring + 36) == 0 && word(m, Ring + 40) == 0, true);  //the 44 bytes all written
+    CHECK(word(m, Ring + 44), own ? 0x46 : 0x0881'2340);
+    CHECK(m.notes.size(), 0);
   }
 }
 
@@ -814,7 +1092,9 @@ static auto mpegFeederTerminated() -> void {
 //access units asked for, and now and then the ring flushed. Whatever the packs, the next packet to read stays among
 //the ring's, and those holding data no more than it has: an access unit frees packets from the next to read on,
 //"no data" changes nothing; Put gives what the callback's calls gave, each counted as no more than it was asked for,
-//up to the first that gave none or an error, each asked for a run from where the ring writes next. On both engines.
+//up to the first that gave none or an error, or packets past a movie's end (once the ring has had a pack, one that
+//isn't: those before it counted; a flush starts that afresh), each asked for a run from where the ring writes next.
+//On both engines.
 static auto mpegRandomPacks() -> void {
   constexpr u32 StepCount = 250, Pool = 256;
   for(u32 round = 0; round < 3; round++) {
@@ -846,7 +1126,8 @@ static auto mpegRandomPacks() -> void {
       randomPacksProgram(m, 0x0880'1000, StepCount);
       m.runProgram(0x0880'1000, recompile);
       CHECK(m.kernel.exited, true);
-      u32 read = 0, written = 0, filled = 0, calls = 0, units = 0, at = Records;
+      u32 read = 0, written = 0, filled = 0, calls = 0, units = 0, at = Records, source = 0;
+      bool packed = false, headed = false;  //the ring's been given a pack; the movie's header before the first
       std::string wrong;
       for(u32 n = 0; n < StepCount && wrong.empty(); n++) {
         auto next = [&](u32 offset) { return word(m, at + offset); };
@@ -858,11 +1139,25 @@ static auto mpegRandomPacks() -> void {
           if(done || where != place * 2048 || !asked || asked > wanted - gave || place + asked > packets) {
             wrong = "a callback asked for the wrong packets";
           }
+          u32 from = source + asked > Pool ? 0 : source;  //where the callback copied from: its place in the pool
+          source = from + asked;
           auto& answer = answers[call & 1023];
           s32 returned = answer[1] ? s32(answer[1]) : s32(asked + answer[0]);
           if(returned <= 0) { done = true; continue; }
-          gave += std::min<u32>(returned, asked), place = (gave + written) % packets;
-          done = gave == wanted;
+          u32 given = std::min<u32>(returned, asked), taken = 0;
+          for(; taken < given; taken++) {
+            u32 first = 0;
+            for(u32 i = 0; i < 4; i++) first |= u32(pool[(from + taken) * 2048 + i]) << i * 8;
+            bool pack = first == 0xba01'0000, header = first == 0x464d'5350;
+            if(packed && !pack) {
+              if(!header || !headed) break;
+              packed = false;
+            }
+            headed |= header && !packed;
+            packed |= pack;
+          }
+          gave += taken, place = (gave + written) % packets;
+          done = gave == wanted || taken < given;
         }
         if(wrong.empty() && (!done || next(0) != gave || next(4) != place || next(8) != filled + gave)) {
           wrong = "Put gave what its callback's calls didn't";
@@ -889,7 +1184,7 @@ static auto mpegRandomPacks() -> void {
         //the flush
         if(steps[n][2] && wrong.empty()) {
           if(next(0) != 0 || next(4) != written || next(8) != 0 || next(12) != written) wrong = "a flush left data";
-          read = written, filled = 0;
+          read = written, filled = 0, packed = headed = false;
           at += 16;
         }
         if(!wrong.empty()) std::printf("  ring of %u, step %u: %s\n", packets, n, wrong.c_str());
@@ -1459,6 +1754,7 @@ static auto oddsOfPart28() -> void {
   CHECK((words(R + 0x20) == std::array<u32, 2>{2, 0}), true);
   CHECK(m.call("sceImposeGetBatteryIconStatus", {R + 0x28, R + 0x2c}), 0);
   CHECK((words(R + 0x28) == std::array<u32, 2>{0, 3}), true);
+  CHECK(m.call("sceImposeSetUMDPopup", {1}), 0);
   CHECK(m.call("sceKernelDevkitVersion", {}), 0x0606'0110);
   CHECK(m.call("sceKernelUSec2SysClock", {123'456, R + 0x30}), 0);
   CHECK((words(R + 0x30) == std::array<u32, 2>{123'456, 0}), true);
@@ -1467,13 +1763,45 @@ static auto oddsOfPart28() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//sceRtc's days of the week, as pspautotests' rtc/lookup recorded them, dates that can't be among them; a date as a
+//64-bit time_t, as rtc/convert recorded; and when the clock was set: when the PSP started.
+static auto rtcDays() -> void {
+  KernelMachine m;
+  struct Day { u32 year, month, day, recorded; };
+  for(auto [year, month, day, recorded] : {Day{2010, 4, 27, 2}, {166970016, 1024, 0, 3}, {2000, 0, 0, 1},
+                                           {2000, 1, 0, 5}, {2000, 573, 0, 0}, {2000, 1, 2458, 6},
+                                           {2000, 4587, 2458, 0}, {2001, 0, 0, 2}, {2001, 1, 0, 0},
+                                           {2001, 573, 0, 1}, {2001, 1, 2458, 1}, {2001, 4587, 2458, 1}}) {
+    check(__LINE__, "a day of the week", m.call("sceRtcGetDayOfWeek", {year, month, day}), recorded);
+  }
+  for(auto [address, value] : {std::pair{0u, 2012u}, {2, 9}, {4, 20}, {6, 7}, {8, 12}, {10, 15}}) {
+    m.system.memory.write(2, R + address, value);
+  }
+  m.system.memory.write(4, R + 12, 500);
+  m.system.memory.fill(R + 0x20, 0xcc, 8);
+  CHECK(m.call("sceRtcGetTime64_t", {R, R + 0x20}), 0);
+  CHECK(word(m, R + 0x20) == 1'348'125'135 && word(m, R + 0x24) == 0, true);
+  m.kernel.startTime = 1'791'290'096'000'000ull;  //2026-10-06 12:34:56 UTC
+  m.kernel.cycles = 2'500'000 * (Kernel::CPUFrequency / 1'000'000);
+  u64 started = 62'135'596'800'000'000ull + m.kernel.startTime;
+  for(auto name : {"sceRtcGetLastAdjustedTime", "sceRtcGetLastReincarnatedTime"}) {
+    m.system.memory.fill(R + 0x30, 0xcc, 8);
+    CHECK(m.call(name, {R + 0x30}), 0);
+    CHECK(word(m, R + 0x30) == u32(started) && word(m, R + 0x34) == u32(started >> 32), true);
+    CHECK(m.call(name, {0}), Kernel::ErrorInvalidPointer);
+  }
+}
+
 auto mediaTests() -> Tests {
-  return {{"part 28's odds and ends", oddsOfPart28},
+  return {{"part 28's odds and ends", oddsOfPart28}, {"rtc days, 64-bit times and the clock's setting", rtcDays},
           {"mpeg stubs", mpegStubs}, {"mpeg movie fed and taken apart", [] { mpegMovie(false); }},
           {"mpeg movie with the game's own library", [] { mpegMovie(true); }},
+          {"mpeg movie through a big ring", mpegMovieBigRing}, {"mpeg movie given whole", mpegMovieFedWhole},
+          {"mpeg stream end counted", mpegStreamCounted}, {"mpeg stream round again", mpegStreamRoundAgain},
           {"mpeg movie thread waits for its picture", mpegMovieThread},
           {"mpeg ringbuffer callback states", mpegCallbackStates},
           {"mpeg ringbuffer that isn't one given nothing", mpegRingbufferNotARing},
+          {"mpeg ringbuffer with the game's own library", mpegRingOwnLibrary},
           {"mpeg ringbuffer callback with the caller's global pointer", mpegCallbackGlobalPointer},
           {"mpeg ringbuffer callback giving more than asked", mpegCallbackGivesMore},
           {"mpeg ringbuffer callback returning an error", mpegCallbackError},

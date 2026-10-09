@@ -251,6 +251,35 @@ static auto staticExecutable() -> void {
   if(!module.exports.empty()) CHECK(module.exports[0].address, 0x0880'4000);
 }
 
+//A static executable without sections, as Sony's retail EBOOT.BINs are (Ghostbusters, Dissidia 012): the module
+//info is where the first program header's physical address says, as a file offset, as in a PRX. pspdev's static
+//programs give their address there instead, which isn't taken for an offset: without sections, no module info. Nor
+//is an offset past the segment's bytes in the file (into its zeroed part), where no module info can be.
+static auto strippedStaticExecutable() -> void {
+  for(u32 kind : {0, 1, 2}) {  //Sony's offset; pspdev's address; an offset past the file's bytes
+    System s;
+    TestProgram program(2, 0x0880'4000, false);
+    auto laidOut = program.elf.build();
+    u32 segmentOffset = laidOut[52 + 4] | laidOut[52 + 5] << 8 | laidOut[52 + 6] << 16 | laidOut[52 + 7] << 24;
+    if(kind != 1) program.elf.segments[0].physical = segmentOffset + (kind == 0 ? 0x200 : 0x500);
+    auto file = program.elf.build();
+    Module module;
+    auto problem = loadInto(s, file, 0x0890'0000, module);
+    if(kind) {
+      CHECK(problem == "no module info", true);
+      continue;
+    }
+    CHECK(problem.empty(), true);
+    CHECK(module.relocatable, false);
+    CHECK(module.entry, 0x0880'4000);
+    CHECK(module.moduleInfo, 0x0880'4200);
+    CHECK(module.name == "TESTPRX", true);
+    CHECK(module.gp, 0x0880'c000);
+    CHECK(s.memory.read(Allegrex::Word, 0x0880'42ac), syscall(0x100));
+    CHECK(module.imports.size(), 3);
+  }
+}
+
 //An EBOOT.PBP: the header's eight offsets, the program at the seventh.
 static auto pbp() -> void {
   TestProgram program;
@@ -415,6 +444,7 @@ auto loaderTests() -> Tests {
   return {
     {"loader prx", prx}, {"loader stripped prx", strippedPrx}, {"loader relocations in a program header", relocationsInProgramHeader},
     {"loader static executable", staticExecutable},
+    {"loader stripped static executable", strippedStaticExecutable},
     {"loader pbp", pbp}, {"loader refusals", refused}, {"loader real programs", realPrograms},
   };
 }

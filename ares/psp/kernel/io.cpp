@@ -559,6 +559,14 @@ auto Kernel::sceIoChdir() -> void {
   result(0);
 }
 
+//(name, block device, file system, mode, ...): a device named for a block device's file system (pspiofilemgr.h's
+//example assigns flash0: to lflash0:0,0 through flashfat0:). The devices here have their names for good
+//(deviceName()), so it changes nothing: Metal Gear Acid and Ridge Racer assign disc0: to umd0: through isofs0:,
+//which it already is.
+auto Kernel::sceIoAssign() -> void {
+  result(0);
+}
+
 //(path, where to put its SceIoStat)
 auto Kernel::sceIoGetstat() -> void {
   std::string path = memory.readString(arg(0), 1024), host, normalized;
@@ -767,6 +775,17 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     return writeOut(4, [&] { memory.write(4, out, u32(open.position)); });
   case 0x01f1'00a6:  //seek in umd0:, in sectors
     return seekBy(ErrorInvalidFileSize);
+  case 0x0410'0001: {  //the file's key (16 bytes), for data encrypted as PGD, which the PSP decrypts as it's read
+    //A file without PGD's header ("\0PGD") is read as it is: the fan translations of 7th Dragon 2020 and its sequel
+    //carry their INSDIR data decrypted, and the games set its key all the same, taking anything but success as the
+    //drive failing and opening the file again, for good. Nothing here decrypts, so a file with the header is
+    //refused, as every request for this was before (umd0: and a key that isn't there too).
+    if(open.sectors || inLength < 16 || !memory.reaches(in, 16)) return ErrorFunctionNotSupported;
+    u8 head[4] = {};
+    if(open.size >= 4 && !disc->read(u64(open.sector) * Disc::SectorSize, 4, head)) return ErrorIOError;
+    if(!memcmp(head, "\0PGD", 4)) return ErrorFunctionNotSupported;
+    return 0;
+  }
   }
   return ErrorFunctionNotSupported;
 }
@@ -873,7 +892,14 @@ auto Kernel::sceIoDevctl() -> void {
   case 0x0201'5804: case 0x0241'5821:  //register a callback for the stick going in or out (it never does)
     if(!inWord(word) || !callbacks.count(word)) return result(ErrorInvalidArgument);
     memoryStickCallbacks.push_back(word);
-    return result(0);
+    //It's told at once that a stick is in (pspmscm.h's MS_CB_EVENT_INSERTED, 1), to run when its thread next runs
+    //callbacks, as pspautotests' mstick recorded for fatms0's: the game's next sceKernelCheckCallback ran it with a
+    //count of 1 and the event 1. Games that learn of the stick only so (50 Cent: Bulletproof) otherwise say none is
+    //inserted. mscmhc0's register is taken to do the same. (The result first: a better thread the notice wakes
+    //takes the CPU, and the caller's registers with it.)
+    result(0);
+    if(notifyCallback(word, 1)) reschedule();
+    return;
   case 0x0201'5805: case 0x0241'5822: {  //unregister one
     if(!inWord(word)) return result(ErrorInvalidArgument);
     auto at = std::find(memoryStickCallbacks.begin(), memoryStickCallbacks.end(), word);

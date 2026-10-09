@@ -214,17 +214,13 @@ auto Kernel::moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32 {
   return nid == ModuleStartNID && entry && moduleAt(entry) == loaded.uid ? entry : 0;
 }
 
-//Makes the thread a module's module_start or module_stop runs on, from entry, dormant, with room on its stack for
-//the argument (length bytes at argument, if any). Its priority, stack size and attributes are the program's first
-//thread's (0x20, 256 KiB, user mode with the VFPU), unless the module's own thread parameters say otherwise
-//(parameters: the NID of module_start_thread_parameter or module_stop_thread_parameter, a variable it exports for
-//itself: how many values follow, Sony's SDK writing 3, then a priority, a stack size and attributes, as uOFW's
-//SceModuleEntryThread has them), or the caller's options do (SceKernelSMOption: its size, a stack's partition, then
-//the same three). A 0 in either leaves the value as it was. Returns the thread's ID, or why it couldn't be made.
-auto Kernel::makeModuleThread(const LoadedModule& loaded, u32 entry, u32 parameters, u32 length, u32 argument,
-                              u32 options) -> s32 {
-  u32 priority = 0x20, stackSize = 256_KiB, attributes = 0x8000'4000;
-  for(auto& e : loaded.module.exports) {
+//A module's own thread parameters (parameters: the NID of module_start_thread_parameter or
+//module_stop_thread_parameter, a variable it exports for itself: how many values follow, Sony's SDK writing 3, then a
+//priority, a stack size and attributes, as uOFW's SceModuleEntryThread has them), over the values given: a 0 leaves
+//one as it was. The program has them as any module does.
+auto Kernel::threadParameters(const Module& module, u32 parameters, u32& priority, u32& stackSize,
+                              u32& attributes) const -> void {
+  for(auto& e : module.exports) {
     if(!e.library.empty() || e.nid != parameters || !e.variable || !memory.reaches(e.address, 4)) continue;
     u32 count = std::min<u32>(memory.read(4, e.address), 3);
     if(!memory.reaches(e.address, 4 + count * 4)) continue;
@@ -232,6 +228,17 @@ auto Kernel::makeModuleThread(const LoadedModule& loaded, u32 entry, u32 paramet
     if(u32 value = count >= 2 ? memory.read(4, e.address + 8) : 0) stackSize = value;
     if(u32 value = count >= 3 ? memory.read(4, e.address + 12) : 0) attributes = value;
   }
+}
+
+//Makes the thread a module's module_start or module_stop runs on, from entry, dormant, with room on its stack for
+//the argument (length bytes at argument, if any). Its priority, stack size and attributes are the defaults (0x20,
+//256 KiB, user mode with the VFPU), unless the module's own thread parameters say otherwise
+//(threadParameters()), or the caller's options do (SceKernelSMOption: its size, a stack's partition, then the same
+//three). A 0 in either leaves the value as it was. Returns the thread's ID, or why it couldn't be made.
+auto Kernel::makeModuleThread(const LoadedModule& loaded, u32 entry, u32 parameters, u32 length, u32 argument,
+                              u32 options) -> s32 {
+  u32 priority = 0x20, stackSize = 256_KiB, attributes = 0x8000'4000;
+  threadParameters(loaded.module, parameters, priority, stackSize, attributes);
   if(options && memory.reaches(options, 20) && memory.read(4, options) >= 20) {
     if(u32 value = memory.read(4, options + 8)) stackSize = value;
     if(u32 value = memory.read(4, options + 12)) priority = value;

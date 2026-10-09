@@ -117,13 +117,14 @@ auto Kernel::sceKernelAllocPartitionMemory() -> void {
 }
 
 //Where the program's block starts: start() gives the program one block, from its first segment's 256-byte step to
-//the end of its last. 0 when it has no memory of its own (no segment with any bytes).
+//the end of its last; a PRX whose segments start in the partition's first 16 KiB has it from the partition's start.
+//0 when it has no memory of its own (no segment with any bytes).
 auto Kernel::programBlockAt() const -> u32 {
   u32 low = 0;
   for(auto& segment : module.segments) {
     if(segment.size && (!low || (segment.address & ~255u) < low)) low = segment.address & ~255u;
   }
-  return low;
+  return module.relocatable && low >= UserMemory && low <= ProgramBase ? UserMemory : low;
 }
 
 //Whether the kernel holds a block for something: a thread's stack, a memory pool, a message pipe's buffer, a module,
