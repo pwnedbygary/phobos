@@ -30,7 +30,8 @@ static auto fileStamp(const std::string& path, u64& size) -> u64 {
 }
 
 auto pspIconKey(const std::string& path, u64 size, u64 mtime) -> std::string {
-  auto key = path + "\0" + std::to_string(size) + "\0" + std::to_string(mtime);
+  //The parts, joined with separators (the Android app's key does the same): no two files share a key.
+  auto key = path + "|" + std::to_string(size) + "|" + std::to_string(mtime);
   auto digest = Hash::SHA256({(const u8*)key.data(), key.size()}).digest();
   return std::string(digest.data(), digest.size());
 }
@@ -47,8 +48,9 @@ auto PspIconCache::info(const std::string& path) -> std::optional<std::pair<std:
   std::ifstream in(toPath(directory + "/" + key + ".info"));
   if (!in) return std::nullopt;
   std::string title, discId;
-  std::getline(in, title);
-  std::getline(in, discId);
+  //Both lines must be there: a .info cut short (a crash mid-write) is a miss, not a hit.
+  if (!std::getline(in, title)) return std::nullopt;
+  if (!std::getline(in, discId)) return std::nullopt;
   return std::pair{title, discId};
 }
 
@@ -57,14 +59,24 @@ auto PspIconCache::store(const std::string& path, const std::string& title, cons
   u64 size;
   auto mtime = fileStamp(path, size);
   auto key = pspIconKey(path, size, mtime);
+  //Written to a temporary name, then renamed over the real one: a crash mid-write can't leave a file cut
+  //short that the list would read as a hit.
   {
-    std::ofstream out(toPath(directory + "/" + key + ".info"), std::ios::binary);
+    auto tmp = toPath(directory + "/" + key + ".info.tmp");
+    std::ofstream out(tmp, std::ios::binary);
     if (!out) return;
     out << title << "\n" << discId;
+    out.close();
+    std::error_code error;
+    fs::rename(tmp, toPath(directory + "/" + key + ".info"), error);
   }
   if (!icon.empty()) {
-    std::ofstream out(toPath(directory + "/" + key + ".png"), std::ios::binary);
+    auto tmp = toPath(directory + "/" + key + ".png.tmp");
+    std::ofstream out(tmp, std::ios::binary);
     if (out) out.write((const char*)icon.data(), (std::streamsize)icon.size());
+    out.close();
+    std::error_code error;
+    fs::rename(tmp, toPath(directory + "/" + key + ".png"), error);
   }
 }
 
@@ -76,6 +88,29 @@ static auto readFrom(std::shared_ptr<vfs::file> fp, u64 offset, void* data, u64 
   if (auto bytes = fp->data()) memcpy(data, bytes + offset, size);
   else { fp->seek(offset); fp->read({(u8*)data, size}); }
   return size;
+}
+
+//The file's title for the list: the disc's own title (its PARAM.SFO's TITLE), from the cache, or read off the
+//image by the shared reader (a few sectors at a time, every size bounded) and cached beside its icon. Empty
+//when there's no PSP game, the file can't be opened, or the scan is cancelled (a rescan supersedes it).
+auto pspDiscTitle(const std::string& file, PspIconCache& cache,
+                  bool quitting, int generation, std::atomic<int>& scanGeneration,
+                  bool (*cancelled)(bool, int, std::atomic<int>&)) -> std::string {
+  if (cancelled(quitting, generation, scanGeneration)) return {};
+  if (auto cached = cache.info(file)) return cached->first;  //a hit: the title, cached beside the icon
+  auto fp = std::static_pointer_cast<vfs::file>(vfs::disk::open(file.c_str(), vfs::read));
+  if (!fp) return {};
+  //The reader gives up (returns 0) when the scan is superseded: the disc isn't read to the end, and its
+  //result isn't cached.
+  auto read = [fp, quitting, generation, &scanGeneration, cancelled](u64 offset, void* data, u64 size) -> u64 {
+    if (cancelled(quitting, generation, scanGeneration)) return 0;
+    return readFrom(fp, offset, data, size);
+  };
+  std::string problem;
+  auto info = ares::PlayStationPortable::readDiscInfo(read, fp->size(), problem);
+  if (cancelled(quitting, generation, scanGeneration) || info.title.empty()) return {};
+  cache.store(file, info.title, info.discId, info.icon);
+  return info.title;
 }
 
 //A PSP disc image the list reads its title from: one of the disc's formats (ISO, CSO, ZSO, DAX, JSO, CHD), not
@@ -90,21 +125,12 @@ auto pspDiscImage(const std::string& file) -> bool {
       || extension == "dax" || extension == "jso" || extension == "chd";
 }
 
-auto pspDiscTitle(const std::string& file, PspIconCache& cache) -> std::string {
-  if (auto cached = cache.info(file)) return cached->first;  //a hit: the title, cached beside the icon
-  auto fp = vfs::disk::open(file.c_str(), vfs::read);
-  if (!fp) return {};
-  auto read = [fp](u64 offset, void* data, u64 size) -> u64 { return readFrom(fp, offset, data, size); };
-  std::string problem;
-  auto info = ares::PlayStationPortable::readDiscInfo(read, fp->size(), problem);
-  if (info.title.empty()) return {};
-  cache.store(file, info.title, info.discId, info.icon);
-  return info.title;
-}
-
 auto listTitle(const std::string& title) -> std::string {
-  for (auto byte : title) if (byte < 0x20 || byte >= 0x7f) return {};
-  return title;
+  //The font's characters (printable ASCII) kept, the rest dropped: a title with none of them is empty (the
+  //file's name is shown instead).
+  std::string shown;
+  for (auto byte : title) if (byte >= 0x20 && byte < 0x7f) shown += byte;
+  return shown;
 }
 
 }

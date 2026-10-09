@@ -27,23 +27,32 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## Desktop Library: the PSP's disc titles — 2026-10-08
 
-Branch `local/psp-desktop-disc-info`, on top of `cursor/psp-gpu-hw4-2b67` (#172's tip, part 45). The desktop's
+Branch `local/psp-desktop-disc-info-2`, on top of `cursor/psp-gpu-hw4-2b67` (#179's merge, part 45). The desktop's
 Library now shows a PSP disc's own title, as the Android app does (docs/psp-core.md, part 39's consumers).
 - **The display** (`desktop/main.cpp`'s `drawLibrary`): the list's line shows the disc's title (its PARAM.SFO's
   TITLE) when there's one, the file's name when there isn't. The file's name stays the game's key: the states,
   the saves and the memory card are keyed by it, as before.
 - **The fill** (`desktop/PspDiscInfo.cpp`): the list shows at once; the PSP's disc images' titles fill in after,
   on a thread of their own (a CHD's open takes a while, so the UI isn't held), each from the cache or the shared
-  reader (`ares/psp/kernel/disc-info.cpp`), and a rescan supersedes the unfinished scan.
+  reader (`ares/psp/kernel/disc-info.cpp`), and a rescan supersedes the unfinished scan. No titles fill in while
+  a game runs: the thread stops when a game starts and restarts when the Library shows.
 - **The cache**: the title, disc ID and icon (its ICON0.PNG's bytes) beside the settings (`dataFolder`'s
   `psp-icons/`), under a SHA-256 of the file's path+size+mtime, as the Android app's `psp-icons/` cache: a
   second visit doesn't re-open the disc. The icon is cached, not drawn: the list's 8x8 font has no place for
-  it. A title the font can't draw (no printable ASCII) is shown as the file's name.
+  it. A title the font can't draw has its characters dropped; only when none are left is the file's name shown.
 - **Tests**: `tests/psp/desktop-disc-info.cpp` (the key, the disc image's file choice, the title's choice, the
-  cache's round trip, and the title served from the cache without re-opening the disc).
+  cache's round trip, the title served from the cache without re-opening the disc, and a cancelled scan).
 - **Checked**: tests/psp (with the new desktop groups).
 - **Left**: the icon's draw (the list's rows are 12 px and the font 8x8: no place for it); the game's window
   title (the launch keeps the file's name).
+- **Round 2 review fixes** (2026-10-08): (1) the reader gives up (returns 0) when the scan is superseded, so a
+  cancelled disc isn't read to the end or cached; (2) the cache key's parts are joined with `|` separators (the
+  `"\0"` was an empty C string, so it appended nothing); (3) the cache files are written to a temporary name and
+  renamed over the real one, so a crash mid-write can't leave a truncated title that counts as a hit; a `.info`
+  without both lines is a miss; (4) the title thread stops while a game runs and restarts when the Library shows;
+  (5) `desktop/PspDiscInfo.*` added to the PSP Core Tests workflow's paths; (6) `listTitle` drops the characters
+  the 8x8 font can't draw instead of rejecting the whole title, falling back to the file name only when nothing
+  printable is left; the test's scratch folder is removed when the program ends.
 
 ## PSP core: blending in the shader — 2026-10-08
 
