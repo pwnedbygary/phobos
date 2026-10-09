@@ -78,12 +78,12 @@ auto GE::spriteRows(const Job& job, s32 fromY, s32 toY) -> void {
   auto& t = look.texture;
   TexelAxis columns[1024];
   for(s32 x = job.firstX; x <= job.lastX; x++) {
-    float column = s.columnFirst + f64(x * 16 + 8 - s.columnStart) / 16 * s.columnStep;
+    float column = spriteAxis(s.columnFirst, s.columnStep, s.columnStart, x);
     columns[x - job.firstX] = s.turned ? texelAxis(column, t.height, t.clampV, job.linear)
                                        : texelAxis(column, t.width, t.clampU, job.linear);
   }
   for(s32 y = firstY; y <= lastY; y++) {
-    float row = s.rowFirst + f64(y * 16 + 8 - s.rowStart) / 16 * s.rowStep;
+    float row = spriteAxis(s.rowFirst, s.rowStep, s.rowStart, y);
     TexelAxis down = s.turned ? texelAxis(row, t.width, t.clampU, job.linear)
                               : texelAxis(row, t.height, t.clampV, job.linear);
     for(s32 x = job.firstX; x <= job.lastX; x++) {

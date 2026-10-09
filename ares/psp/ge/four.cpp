@@ -419,7 +419,7 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
                         : texelAxis(acrossX, t.width, t.clampU, job.linear);
         inverses[x - firstX] = inverse;
       } else {
-        float column = s.columnFirst + f64(x * 16 + 8 - s.columnStart) / 16 * s.columnStep;
+        float column = spriteAxis(s.columnFirst, s.columnStep, s.columnStart, x);
         axis = s.turned ? texelAxis(column, t.height, t.clampV, job.linear)
                         : texelAxis(column, t.width, t.clampU, job.linear);
       }
@@ -439,7 +439,7 @@ auto GE::spriteFours(const Job& job, s32 fromY, s32 toY) -> void {
       f64 alongY = f64(y * 16 + 8 - s.top) / (s.bottom - s.top);
       downOverW = s.topDown + (s.bottomDown - s.topDown) * alongY;
     } else if(textured) {
-      float row = s.rowFirst + f64(y * 16 + 8 - s.rowStart) / 16 * s.rowStep;
+      float row = spriteAxis(s.rowFirst, s.rowStep, s.rowStart, y);
       TexelAxis axis = texelAxis(row, downSize, downClamp, job.linear);
       downAxis[0] = splatLanes(axis.first), downAxis[1] = splatLanes(axis.second);
       downAxis[2] = splatLanes(axis.fraction);

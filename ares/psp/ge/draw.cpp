@@ -44,6 +44,44 @@ static auto fixed(float position) -> s32 {
 static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 static auto floorDivide64(s64 value, s64 by) -> s64 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 
+//A 2D sprite's texture coordinate across x (or down y) at the middle of pixel column (or row) at: from the one at
+//sixteenth start, by its step a pixel (spriteJob()). As drawing takes each (raster.cpp, four.cpp).
+static alwaysinline auto spriteAxis(f64 first, f64 step, s32 start, s32 at) -> float {
+  return first + f64(at * 16 + 8 - start) / 16 * step;
+}
+
+//The texture's rows and columns a 2D sprite's job takes texels from, every one drawing it may (spriteRows(),
+//spriteFours(): their coordinates' texels, and the second of each where it filters, whatever its weight), first to
+//last: false where some may repeat round, or aren't numbers, or for a 3D sprite (whose texels follow the perspective
+//at each pixel). A coordinate runs one way along the job (spriteAxis(): from a number by a step, both numbers, and
+//rounding keeps the order), so its texels' first and last are those at the job's ends.
+static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2], s32 (&columns)[2]) -> bool {
+  auto& s = job.sprite;
+  if(s.divided) return false;
+  auto ends = [&](f64 first, f64 step, s32 start, s32 from, s32 to, u32 size, bool clamp, s32 (&reach)[2]) {
+    if(!std::isfinite(first) || !std::isfinite(step)) return false;
+    s32 low = std::numeric_limits<s32>::max(), high = std::numeric_limits<s32>::min();
+    s32 last = std::min<s32>(size, 512) - 1;
+    for(s32 at : {from, to}) {
+      float coordinate = spriteAxis(first, step, start, at);
+      if(std::isnan(coordinate)) return false;
+      auto spot = GE::texelSpot(coordinate, job.linear);
+      low = std::min(low, spot.first), high = std::max(high, spot.first + job.linear);
+    }
+    if(clamp) low = std::clamp(low, 0, last), high = std::clamp(high, 0, last);
+    else if(low < 0 || high > last) return false;
+    reach[0] = low, reach[1] = high;
+    return true;
+  };
+  s32 across[2], down[2];
+  if(!ends(s.columnFirst, s.columnStep, s.columnStart, job.firstX, job.lastX, s.turned ? t.height : t.width,
+           s.turned ? t.clampV : t.clampU, across)) return false;
+  if(!ends(s.rowFirst, s.rowStep, s.rowStart, job.firstY, job.lastY, s.turned ? t.width : t.height,
+           s.turned ? t.clampU : t.clampV, down)) return false;
+  for(u32 n : range(2)) rows[n] = s.turned ? across[n] : down[n], columns[n] = s.turned ? down[n] : across[n];
+  return true;
+}
+
 //The settings a primitive is drawn with: these pipeline and texture settings, with the commands' texture function.
 auto GE::lookFor(const PixelState& pixel, const Sampler* texture) const -> Look {
   Look look;
@@ -170,9 +208,26 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //A PRIM the renderer refuses (begin()) is drawn here instead, as without one: what it drew put back in memory
   //first, and the texture decoded for the region it draws in.
   hardware = renderer && renderer->ready();
+  //A 2D sprite's texels are taken where its pixels' middles fall, so the rows it reaches are exactly those
+  //spriteReach() finds, often fewer than its vertices' reach above can say: a sprite sampling a frame buffer (a
+  //texture of 512 rows) from its top edge, filtered, may reach round to the far end there for all that can tell.
+  u32 drawnRows = rows;
+  if(textured && !hardware && format.through && kind == Sprites) {
+    s32 reached = 1;
+    bool exact = true;
+    for(u32 n = 0; n + 1 < count && exact; n += 2) {
+      Job job;
+      if(!spriteJob(look, vertices[n], vertices[n + 1], false, job)) continue;
+      if(job.firstX > job.lastX || job.firstY > job.lastY) continue;
+      s32 rowsReached[2], columnsReached[2];
+      if(!(exact = spriteReach(job, look.texture, rowsReached, columnsReached))) break;
+      reached = std::max(reached, rowsReached[1] + 1);
+    }
+    if(exact) drawnRows = std::min<u32>(rows, (reached + 7) & ~7);  //(in eights, as above)
+  }
   if(textured && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
-    decode(look, hardware ? Region{0, 0, -1, -1} : region, rows, !hardware);
+    decode(look, hardware ? Region{0, 0, -1, -1} : region, hardware ? rows : drawnRows, !hardware);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
   if(hardware && !renderer->begin(*this, look, format.through, region)) {
@@ -324,11 +379,19 @@ static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536
 //In 2D, texture coordinates are taken at each pixel's middle, stepped from the left (or top) edge's towards the
 //other's (raster.cpp).
 auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void {
+  Job job;
+  if(!spriteJob(look, from, to, perspective, job)) return;
+  if(hardware) return renderer->sprite(job);  //(its pixels, and their coordinates' steps, worked out as here)
+  submit(job);
+}
+
+//A sprite's job (rectangle()): false if it covers no area at all (its corners in one row or column of sixteenths).
+auto GE::spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool {
   auto& pixel = look.pixel;
   s32 x0 = fixed(from.x), y0 = fixed(from.y), x1 = fixed(to.x), y1 = fixed(to.y);
-  if(x0 == x1 || y0 == y1) return;
+  if(x0 == x1 || y0 == y1) return false;
   s32 left = std::min(x0, x1), right = std::max(x0, x1), top = std::min(y0, y1), bottom = std::max(y0, y1);
-  Job job{};
+  job = {};
   job.kind = Job::Kind::Sprite;
   job.look = &look;
   //The pixels whose middles (eight sixteenths in) are inside, the left and top edges included and the right and
@@ -371,8 +434,7 @@ auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool 
   s.rightAcross = (turned ? rightCorner.v : rightCorner.u) * s.rightInverse;
   s.topDown = (turned ? topCorner.u : topCorner.v) / topCorner.clip[3];
   s.bottomDown = (turned ? bottomCorner.u : bottomCorner.v) / bottomCorner.clip[3];
-  if(hardware) return renderer->sprite(job);  //(its pixels, and their coordinates' steps, worked out as here)
-  submit(job);
+  return true;
 }
 
 //A triangle. facing: 0 draws it either way round; 1 only if its corners run clockwise on the screen (y down), -1

@@ -385,6 +385,7 @@ struct GE {
   auto primitive(u32 kind, u32 count) -> void;
   auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
   auto submit(Job& job) -> void;
+  auto spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool;
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
@@ -428,6 +429,8 @@ struct GE {
   auto sampleWith(const Sampler& texture, bool linear, float u, float v) -> u32;
   struct TexelAxis { s32 first, second, fraction; };
   static auto texelAxis(float coordinate, u32 size, bool clamp, bool linear) -> TexelAxis;
+  struct TexelSpot { s32 first, fraction; };
+  static auto texelSpot(float coordinate, bool linear) -> TexelSpot;
   auto fetch(const Sampler& texture, s32 x, s32 y) -> u32;
   auto filtered(const Sampler& texture, TexelAxis u, TexelAxis v) -> u32;
   auto textureFunction(u32 color, u32 texel) const -> u32;

@@ -536,11 +536,19 @@ alwaysinline auto GE::texelAxis(float coordinate, u32 size, bool clamp, bool lin
     s32 last = std::min<s32>(size, 512) - 1;
     return clamp ? std::clamp(c, 0, last) : c & last;
   };
+  auto spot = texelSpot(coordinate, linear);
+  if(!linear) return {inside(spot.first), 0, 0};
+  return {inside(spot.first), inside(spot.first + 1), spot.fraction};
+}
+
+//texelAxis() before the texels are put inside the texture: the texel the coordinate is in, or (linear) the first of
+//the two whose middles it lies between, and how far toward the second, in sixteenths.
+alwaysinline auto GE::texelSpot(float coordinate, bool linear) -> TexelSpot {
   //wild coordinates, from garbage (or none at all, from a division by zero)
   float held = std::isnan(coordinate) ? 0.0f : std::clamp(coordinate, -65536.0f, 65536.0f);
-  if(!linear) return {inside(s32(std::floor(held))), 0, 0};
+  if(!linear) return {s32(std::floor(held)), 0};
   s32 base = s32(std::floor(held * 256)) - 128;
-  return {inside(base >> 8), inside((base >> 8) + 1), base >> 4 & 15};
+  return {base >> 8, base >> 4 & 15};
 }
 
 //The texel at (x, y), inside the texture: decoded already, or read from memory. (A row past those draw.cpp worked

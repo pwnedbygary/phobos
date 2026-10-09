@@ -970,10 +970,10 @@ static auto drawDecodedRows() -> void {
   c.texture(3, 16, 512, 16);
   for(u32 n = 0; n < 16 * 512; n++) c.memory.write(4, Texture + n * 4, n);
   auto& entries = c.ge.textures.entries;
-  c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 16, 0}});  //rows 0-15, so 24 kept (2 more, in eights)
+  c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 16, 0, 16, 16, 0}});  //rows 0-15, so 16 kept (in eights)
   CHECK(entries.size(), 1u);
   auto* first = entries.begin()->second.get();
-  CHECK(first->rows, 24u);
+  CHECK(first->rows, 16u);
   c.draw(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 8, 0, 16, 8, 0}});  //fewer: the same copy
   CHECK(entries.size(), 1u);
   CHECK(entries.begin()->second.get() == first, true);
