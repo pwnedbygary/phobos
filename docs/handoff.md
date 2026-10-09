@@ -27,7 +27,7 @@ is implied. Verify GitHub's branch tip against local HEAD after publication.
 
 ## PSP core: character conversion, thread-local storage, lent stacks; PGD holds five black games — 2026-10-09
 
-Branch `cursor/psp-hle-games11-2b67`, on top of #184's `cursor/psp-vk-play-2b67` (its PR targets that branch).
+Branch `cursor/psp-hle-games11-2b67`, on top of #188's `cursor/psp-gpu-fast3-2b67` (#187, #185 and #184 under it). PR #189.
 docs/psp-core.md, part 55, has the evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no
 PPSSPP or JPCSP source read.
 - **Fixes** (each its own commit, with tests): sceCcc, the character conversions, as ccc/convertstring recorded (The
@@ -50,6 +50,64 @@ PPSSPP or JPCSP source read.
 - Scratch: `~/phobos-work/scratch/hle11` (apply-hooks.py and sync-dbg.sh for a traced runner; at/run.sh runs a
   pspautotests program against its recording; quick-tests.sh builds chosen test groups in seconds; build-commit.py split
   the commits; evidence/ has both runners' frames; survey/ the traces).
+
+## PSP Vulkan pipelines kept between sessions — 2026-10-09
+
+Branch `cursor/psp-gpu-fast3-2b67`, on top of part 53's `cursor/psp-gpu-fast2-2b67`. docs/psp-core.md, part 54;
+docs/psp-gpu-renderers.md, the pipelines' paragraph and "Speed" (part 54). Software untouched; no picture changes.
+- **What:** System's option "Pipeline Cache" (the app's `psp_vulkan_pipeline_cache.bin` in its Vulkan cache folder,
+  beside the N64's; `psp-runner --pipeline-cache FILE`): the driver's pipeline cache read at the renderer's start and
+  written when pipelines were made (game end, every 600 frames, renderer let go), behind a header of our own (device,
+  driver version and cache UUID, pointer size, size, CRC-32) so damaged or foreign data never reaches the driver; a
+  cached renderer failing its check is made again without the file.
+- **RP6, second session against first** (driver's ms making pipelines; fps over 450 frames from a state): Turnip
+  fast, MC3 race 2,589 → 1.2 ms, 49.2 → 67.1; LCS city 1,074 → 0.6 ms, 85.5 → 103.6; Qualcomm fast, race 2,587 →
+  23 ms, 47.8 → 63.9. In the app, MC3's race start: 619/335/226 ms stalls → none over 30 ms.
+
+## PSP renderer "Vulkan (fast)": the GPU transforms and lights 3D — 2026-10-09
+
+Branch `cursor/psp-gpu-fast2-2b67`, on top of part 52's `cursor/psp-gpu-fast-2b67`. docs/psp-core.md, part 53, has
+the story and numbers; docs/psp-gpu-renderers.md "Vulkan (fast)" the design, "Accuracy" and "Speed" the tables.
+PPSSPP's hardware transform informed the design; none of its code is used (JPCSP's not read). Software stays the
+default and exact; Vulkan (accurate) is the path as it was, its pictures unchanged.
+- **The choice:** Settings' "PSP Renderer" is "Software (exact)", "Vulkan (accurate)" or "Vulkan (fast)", each
+  described; the desktop's menu likewise; the core's "Renderer" takes "Vulkan (fast)"; `psp-runner --renderer
+  Vulkan-fast`. The saved 1 is accurate (as Vulkan was), 2 fast. Fallbacks to Software as before, said once.
+- **Fast mode** (`ares/psp/ge/gpu/shaders/transform.vert`, `gpu.cpp`'s `meshes()`/`mesh()`, `draw.cpp`'s
+  `GE::meshTriangles()`): 3D PRIMs of 16 vertices or more go to the GPU untransformed; the shader skins,
+  transforms, lights, fogs and maps them in the GE's arithmetic; the GE still decides which triangles are drawn and
+  cuts the near plane's itself; each PRIM's settings a storage-buffer block, so PRIMs drawn alike are one draw; the
+  GPU's own blending. Both modes: eight slots, two frames in flight.
+- **RP6, medians of three, fps after warm-up** (Turnip accurate / fast; Qualcomm accurate / fast; Software 7
+  threads): MC3 race 62.3 / 67.1; 59.1 / 63.2; 53.8 — LCS city 92.3 / 105.1; 87.4 / 96.5; 70.1 — woods 93.8 / 126.5;
+  110.8 / 99.5; 71.3 — Peace Walker play 121.5 / 125.0; 114.8 / 113.7; 103.1 — WipEout 39.6 / 79.7; 75.5 / 76.5;
+  17.1. Whole runs from a state include the first pipelines (fast makes more): part 54 keeps them on disk.
+- **Accuracy** (pixels identical to Software, accurate / fast): MC3 menu 97.0 / 88.0%, race 95.0 / 71.5%, LCS city
+  95.4 / 57.8%, Peace Walker play 99.2 / 55.0% (its 16-bit blends a different dither); mostly a level or two;
+  nothing missing or misplaced, in the harness or in the app (MC3, both GTAs, Burnout, WipEout's menus, Peace
+  Walker, MotorStorm, Ridge Racer 2, all at 60 but MC3's race at 51-53).
+- **Left:** a pipeline cache on disk (part 54); bones in a block of their own (Peace Walker's small skinned PRIMs to
+  the GPU); Qualcomm's driver's GPU time in fast mode; textures decoded on the GPU; block transfers on the GPU.
+
+## PSP Vulkan renderer faster: its own waste, found with a profile — 2026-10-09
+
+Branch `cursor/psp-gpu-fast-2b67`, on top of #184's `cursor/psp-vk-play-2b67`. docs/psp-core.md, part 52, has the
+profile and numbers; docs/psp-gpu-renderers.md the design and the speed table. Original code: nothing of PPSSPP's or
+JPCSP's used. Software stays the default and exact; Vulkan (accurate)'s pictures byte for byte as before.
+- **Fixes** (`ares/psp/ge/gpu/gpu.cpp`, `draw.cpp`, `texture.cpp`, `system.cpp`): memory told of the GPU's drawing
+  once a finish, not once a PRIM (2.7 ms a frame); 2D sprites' exact texture reach for render to texture (Midnight
+  Club 3's bloom: 300 finishes in 300 frames → 5); decoded textures kept when their page is written but their bytes
+  aren't (25 textures a frame decoded again → none; both renderers); lists submitted at their end only with 32
+  commands; "Late Frames" / `--late-frames` to time the GPU as the app presents.
+- **RP6, late frames, medians of three** (fps, Turnip / Qualcomm; Software 7 threads): MC3 race 52.6 / 46.9 (53.2),
+  menu 68.0 / 64.0 (69.2), LCS city 76.3 / 75.7 (71.8), woods 79.0 / 94.7 (70.9), Peace Walker play 105.8 / 93.3
+  (98.1), WipEout 36.2 / 60.9 (16.2). Before: race 34.5 / 33.1, LCS city 63.3 / 59.9, WipEout 18.9 / 21.0.
+- **Checks:** tests/psp 345/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0, GPU tests on the RP6 both
+  drivers; Software's frames and state identical in all seven scenes at 1 and 7 threads. Independent review: fixes
+  taken (release(), lost reports, source copies bounded, ...).
+- **Next:** Vulkan (fast), part 53 (the GPU's transform); block transfers on the GPU; a disk pipeline cache.
+- Scratch: `~/phobos-work/scratch/gpu-fast` (build.sh, speed.sh, rounds.sh, perf.sh, callers.py, texlog-patch.py,
+  warm-patch.py, m1-acc.sh, m1-hashes.sh, quick-tests.sh); RP6 `/data/local/tmp/gpu-fast`. Hold `~/phobos-work/rp6.lock`.
 
 ## PSP Vulkan renderer: in play on the RP6, blending without rasterization order, the 8x line — 2026-10-09
 

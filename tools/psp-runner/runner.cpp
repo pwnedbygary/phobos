@@ -25,10 +25,13 @@
 //    --load-state FILE          start from a save-state file (the game booted, then the state loaded at once)
 //    --interpreter              run the CPU's interpreter (the recompiler is the default)
 //    --ge-threads N             how many threads draw the GE's pictures (0: one fewer than the host's cores)
-//    --renderer NAME            who draws them: Software (the default) or Vulkan (the system's Vulkan loader;
-//                                the summary then gives the GPU renderer's counts)
+//    --renderer NAME            who draws them: Software (the default), Vulkan (accurate) or Vulkan-fast (the
+//                                system's Vulkan loader; the summary then gives the GPU renderer's counts)
 //    --resolution N             Vulkan's internal resolution, 1 (the PSP's, the default) to 10 times it; the
 //                                frames (and PNGs) are then read back at up to 4 times the PSP's size
+//    --late-frames              the GPU's frames taken a frame or two late, nothing waited for each frame, as
+//                                when the app presents them (for timing, at 1x; PNGs then show an earlier frame)
+//    --pipeline-cache FILE      the Vulkan renderer's pipelines kept in FILE between runs, as the app keeps them
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //
@@ -366,6 +369,8 @@ auto main(int argc, char** argv) -> int {
   u32 frames = 3600, pngEvery = 0, saveStateAt = 0, geThreads = 0;
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
+  bool lateFrames = false;
+  std::string pipelineCache;
   bool interpreter = false;
   for(int i = 1; i < argc; i++) {
     auto option = std::string{argv[i]};
@@ -405,6 +410,8 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--ge-threads") geThreads = parseUint(next(), option);
     else if(option == "--renderer") renderer = next();
     else if(option == "--resolution") resolution = parseUint(next(), option);
+    else if(option == "--late-frames") lateFrames = true;
+    else if(option == "--pipeline-cache") pipelineCache = next();
     else if(option == "--memory-stick") memoryStick = next();
     else if(option == "--fonts") fonts = next();
     else if(option[0] == '-' && option[1] == '-') {
@@ -500,8 +507,13 @@ auto main(int argc, char** argv) -> int {
   if(!fonts.empty()) PlayStationPortable::option("Fonts", fonts.c_str());
   if(interpreter) PlayStationPortable::option("Recompiler", "false");
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
+  //(the core's names, "Vulkan (accurate)" and "Vulkan (fast)", as one word each for a shell)
+  if(renderer == "Vulkan-accurate") renderer = "Vulkan";
+  if(renderer == "Vulkan-fast") renderer = "Vulkan (fast)";
   if(!renderer.empty()) PlayStationPortable::option("Renderer", renderer.c_str());
   if(resolution) PlayStationPortable::option("Resolution", std::to_string(resolution).c_str());
+  if(lateFrames) PlayStationPortable::option("Late Frames", "true");
+  if(!pipelineCache.empty()) PlayStationPortable::option("Pipeline Cache", pipelineCache.c_str());
 
   auto& psp = ares::PlayStationPortable::system;
   ares::platform = &host;
@@ -601,6 +613,7 @@ auto main(int argc, char** argv) -> int {
   //The GPU renderer's counts, before unloading lets it go; none if it didn't start (the software renderer drew).
   std::optional<PlayStationPortable::GPU::Statistics> gpu;
   if(psp.gpu) gpu = psp.gpu->statistics;
+  u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking : 0;
   bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
   root->unload();
 
@@ -626,13 +639,15 @@ auto main(int argc, char** argv) -> int {
   std::printf("program: %s\n", ended ? "ended" : "still running");
   std::printf("frames per second: %.2f\n", frames / elapsed);
   if(gpu) {
-    std::printf("gpu: %llu draws, %llu primitives, %llu submits, %llu finishes, %llu uploads, %llu read-backs, "
-                "%llu textures, %llu copies, %llu frames shown from the GPU, %.2f ms a frame waiting\n",
-                (unsigned long long)gpu->draws, (unsigned long long)gpu->primitives,
+    std::printf("gpu: %llu draws, %llu primitives, %llu 3D PRIMs transformed by the GPU, %llu submits, %llu "
+                "finishes, %llu uploads, %llu read-backs, %llu textures, %llu copies, %llu frames shown from the "
+                "GPU, %.2f ms a frame waiting\n",
+                (unsigned long long)gpu->draws, (unsigned long long)gpu->primitives, (unsigned long long)gpu->meshes,
                 (unsigned long long)gpu->submits, (unsigned long long)gpu->finishes,
                 (unsigned long long)gpu->uploads, (unsigned long long)gpu->readbacks,
                 (unsigned long long)gpu->textures, (unsigned long long)gpu->copies,
                 (unsigned long long)gpu->pictures, gpu->waiting / 1e6 / frames);
+    std::printf("gpu pipelines: %llu made, %.1f ms making them\n", (unsigned long long)pipelines, making / 1e6);
   }
   std::printf("unique missing functions: %u\n", u32(missing.size()));
   auto byCount = [](auto& a, auto& b) {

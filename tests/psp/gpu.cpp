@@ -164,11 +164,9 @@ static auto gpuRenderToTexture() -> void {
 
 //pspsdk's samples (PSP_TEST_PROGRAMS) run by two machines alike but for the renderer, frame by frame for a second
 //and a half of the PSP's time: how many pixels are the same, and how far apart the rest are (each channel's
-//difference: 1-2 is blending's rounding, the GPU's sum against the PSP's terms each truncated). Every frame must
-//show the picture: no pixel's channel further off than 8 in more than 1 of 1000.
-static auto gpuSamples() -> void {
-  auto gpu = renderer();
-  if(!gpu || !testPrograms()) return;
+//difference: 1-2 is blending's rounding, the GPU's sum against the PSP's terms each truncated), printed. Every
+//frame must show the picture: no more than farPerThousand channels in 1000 more than 8 levels apart.
+static auto samples(GPU* gpu, u32 farPerThousand) -> void {
   for(const char* name : {"cube", "blend", "clut", "blit", "celshading", "envmap", "doublelist", "gu"}) {
     auto program = testProgram((std::string(name) + ".elf").c_str());
     if(program.empty()) continue;
@@ -196,8 +194,136 @@ static auto gpuSamples() -> void {
                 pixels ? 100.0 * same / pixels : 0.0, (unsigned long long)near[0], (unsigned long long)near[1],
                 (unsigned long long)near[2]);
     CHECK(pixels > 0, true);
-    CHECK(near[2] * 1000 <= pixels * 3, true);
+    CHECK(near[2] * 1000 <= pixels * farPerThousand, true);
     hardware.system.ge.setRenderer(nullptr);
+  }
+}
+
+static auto gpuSamples() -> void {
+  auto gpu = renderer();
+  if(!gpu || !testPrograms()) return;
+  samples(gpu, 3);
+}
+
+//Vulkan (fast) (docs/psp-gpu-renderers.md): a renderer of its own, the GPU transforming 3D vertices itself and
+//blending with its own units. It passes the start-up check, whose 3D triangles it transforms; and pspsdk's samples,
+//3D among them (cube, celshading's lighting, envmap's environment mapping), come out close to the software
+//renderer's (not as close as the accurate mode's: the GPU steps colors and texture coordinates its own way).
+static auto fastRenderer() -> GPU* {
+  static std::unique_ptr<GPU> gpu;
+  std::string error;
+  if(!gpu && renderer()) gpu = GPU::vulkan(nullptr, error, true);
+  return gpu.get();
+}
+
+static auto gpuFast() -> void {
+  if(!renderer()) return;
+  GPU* gpu = fastRenderer();
+  CHECK((bool)gpu, true);
+  if(!gpu) return;
+  CHECK(gpu->fast && !gpu->backend->reads, true);
+  if(!gpu->backend->transforms) return void(std::printf("  the driver didn't take transform.vert: 3D on the CPU\n"));
+  auto before = gpu->statistics;
+  std::string error;
+  bool passed = gpu->check(error);
+  if(!passed) std::printf("  %s\n", error.c_str());
+  CHECK(passed, true);
+  CHECK(gpu->statistics.meshes - before.meshes >= 4, true);
+  if(!testPrograms()) return;
+  before = gpu->statistics;
+  samples(gpu, 3);
+  CHECK(gpu->statistics.meshes > before.meshes, true);
+}
+
+//Fast mode's triangles kept to the GE's rules for which are drawn (GE::meshTriangles()), against the software
+//renderer and beside the accurate mode: random triangles from behind the camera to past the far plane, some off the
+//GE's 4096-pixel screen, culled either way or not, in lists and strips, no depth test (so that their order shows);
+//and a ground of random colors, fogged, running under the camera, whose triangles the near plane cuts; with
+//DEPTH_CLIP_ENABLE on and off. Fast mode must come as close as the accurate mode: no more pixels more than 8 levels
+//off but one in a thousand.
+static auto gpuFastRules() -> void {
+  GPU* accurate = renderer();
+  GPU* fast = accurate ? fastRenderer() : nullptr;
+  if(!fast || !fast->backend->transforms) return;
+  constexpr u32 Width = 128, Height = 96, Background = 0xff20'2020;
+  auto f24 = [](float value) { return bitsOf(value) >> 8; };
+  struct Corner { float u, v; u32 color; float normal[3], at[3]; };  //(vertex type 0x1ff)
+  auto draw = [&](System& s, u32 kind, const std::vector<Corner>& corners) {
+    u32 to = GPUVertices;
+    for(auto& c : corners) {
+      for(u32 word : {bitsOf(c.u), bitsOf(c.v), c.color, bitsOf(c.normal[0]), bitsOf(c.normal[1]),
+                      bitsOf(c.normal[2]), bitsOf(c.at[0]), bitsOf(c.at[1]), bitsOf(c.at[2])}) {
+        s.memory.write(4, to, word), to += 4;
+      }
+    }
+    s.ge.vertexAddress = GPUVertices;
+    s.ge.primitive(kind, corners.size());
+  };
+  auto scene = [&](System& s, u32 clip) {
+    auto& c = s.ge.commands;
+    c[GE::FrameBufferPointer] = 0, c[GE::FrameBufferWidth] = Width, c[GE::FrameBufferPixelFormat] = 3;
+    c[GE::DepthBufferPointer] = 0x10'0000, c[GE::DepthBufferWidth] = Width;
+    c[GE::Region2] = 1023 << 10 | 1023, c[GE::Scissor2] = (Width - 1) | (Height - 1) << 10;
+    c[GE::VertexType] = 0x1ff, c[GE::ShadeMode] = 1, c[GE::DepthClipEnable] = clip, c[GE::MaxZ] = 0xffff;
+    for(u32 n = 0; n < 12; n++) s.ge.world[n] = s.ge.view[n] = f24(n % 4 == 0 ? 1 : 0);
+    for(u32 n = 0; n < 16; n++) s.ge.projection[n] = 0;
+    s.ge.projection[0] = s.ge.projection[5] = f24(1);  //(the near plane 1 away, the far one 10)
+    s.ge.projection[10] = f24(-11.0f / 9), s.ge.projection[11] = f24(-1), s.ge.projection[14] = f24(-20.0f / 9);
+    c[GE::ViewportXScale] = f24(64), c[GE::ViewportYScale] = f24(-48), c[GE::ViewportZScale] = f24(30000);
+    c[GE::ViewportXCenter] = f24(2048), c[GE::ViewportYCenter] = f24(2048), c[GE::ViewportZCenter] = f24(32768);
+    c[GE::OffsetX] = (2048 - 64) << 4, c[GE::OffsetY] = (2048 - 48) << 4;
+    for(u32 n = 0; n < Width * Height; n++) std::memcpy(&s.memory.vram[n * 4], &Background, 4);
+    std::mt19937 random{20261009};
+    for(u32 prim = 0; prim < 6; prim++) {
+      c[GE::CullFaceEnable] = prim % 3 != 0, c[GE::Cull] = prim % 3 == 2;
+      std::vector<Corner> corners;
+      for(u32 n = 0; n < 60; n++) {
+        float z = 1.0f - (random() % 1000) / 1000.0f * 16.0f, distance = std::max(std::abs(z), 0.3f);
+        float spread = random() % 10 == 0 ? 60.0f : 1.4f;
+        float x = (s32(random() % 2000) - 1000) / 1000.0f * spread * distance;
+        float y = (s32(random() % 2000) - 1000) / 1000.0f * distance;
+        corners.push_back({0, 0, u32(random()) | 0xff00'0000, {0, 0, 1}, {x, y, z}});
+      }
+      draw(s, prim & 1 ? GE::TriangleStrip : GE::Triangles, corners);
+    }
+    c[GE::CullFaceEnable] = 0;
+    c[GE::FogEnable] = 1, c[GE::FogEnd] = f24(30.0f), c[GE::FogSlope] = f24(1.0f / 28), c[GE::FogColor] = 0xff'0000;
+    std::vector<std::vector<u32>> colors(7, std::vector<u32>(5));
+    for(auto& row : colors) for(auto& color : row) color = u32(random()) | 0xff00'0000;
+    auto at = [&](u32 i, u32 j) -> Corner {
+      return {0, 0, colors[i][j], {0, 1, 0}, {-6 + 3.0f * j, -0.8f, 1.0f - 1.5f * i}};
+    };
+    std::vector<Corner> ground;
+    for(u32 i = 0; i < 6; i++) {
+      for(u32 j = 0; j < 4; j++) {
+        for(auto& corner : {at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j), at(i + 1, j + 1), at(i, j + 1)}) {
+          ground.push_back(corner);
+        }
+      }
+    }
+    draw(s, GE::Triangles, ground);
+    c[GE::FogEnable] = 0;
+    s.ge.settleAll();
+  };
+  for(u32 clip : {1u, 0u}) {
+    u32 far[2] = {};
+    for(u32 mode : {0u, 1u}) {
+      GPU* gpu = mode ? fast : accurate;
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      auto before = gpu->statistics;
+      scene(software, clip), scene(hardware, clip);
+      if(mode) CHECK(gpu->statistics.meshes > before.meshes, true);
+      hardware.ge.setRenderer(nullptr);
+      for(u32 n = 0; n < Width * Height; n++) {
+        for(u32 channel = 0; channel < 3; channel++) {
+          s32 d = s32(software.memory.vram[n * 4 + channel]) - s32(hardware.memory.vram[n * 4 + channel]);
+          if(d > 8 || d < -8) { far[mode]++; break; }
+        }
+      }
+    }
+    std::printf("  DEPTH_CLIP_ENABLE %u: pixels more than 8 levels off, accurate %u, fast %u\n", clip, far[0], far[1]);
+    CHECK(far[1] <= far[0] + Width * Height / 1000, true);
   }
 }
 
@@ -213,7 +339,7 @@ static auto gpuLost() -> void {
     auto makeTexture(u32, u32, const u32*) -> u32 override { return ++made; }
     auto dropTexture(u32) -> void override {}
     auto submit(const GPU::Recorded&) -> bool override { return runs++, true; }
-    auto finish(const GPU::Recorded&) -> bool override { return runs++, false; }
+    auto finish(const GPU::Recorded&) -> bool override { return runs++, lost = true, false; }  //(as Vulkan's)
     auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
   };
   auto backend = std::make_unique<Lost>();
@@ -728,11 +854,113 @@ static auto gpuBlendingApart() -> void {
   gpu->backend->readsInOrder = readsInOrder, gpu->backend->readsBlending = readsBlending;
 }
 
+//A frame buffer sampled as a texture declared taller than its picture (Midnight Club 3's bloom samples its 480x272
+//picture as a texture of 512 rows, whose last rows are other frame buffers'): 2D sprites, filtered, taking texels
+//from its first 48 rows, the last row's second texel at weight 0, while the rows past are another frame buffer's on
+//the GPU. The copy is taken on the GPU of the rows the sprites reach (draw.cpp's spriteReach()), nothing finished,
+//and the pixels are the software renderer's. Then the frame shown late (System's "Late Frames": GPU::shoot()), whose
+//shot is the frame buffer as memory has it once its run is done; and a short list's draws not handed to the GPU at
+//its end (GPU::submit()), but with the next frame or finish.
+static auto gpuTallTexture() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261009};
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto drawn = randomSprites(random, 40, false);
+  GPU::Statistics before;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(auto& one : drawn) sprite(*s, one);
+    prepare(*s, 48 * 256, 0);  //(another frame buffer, 5650, from the first's row 48)
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 16}}, 0x1234'5678});
+    prepare(*s, 0x2'0000, 3);
+    texture(*s, Memory::VRAMBase, 64, 128, 64);
+    s->ge.commands[GE::TextureFilter] = 0x101;
+    if(s == &hardware) before = gpu->statistics;
+    sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0});  //(1:1: row 47's v 47.5, rows 47 and 48, 48 at weight 0)
+    sprite(*s, {{{2, 1, 0, 0}, {34, 47, 20, 30}}, 0});
+  }
+  CHECK(gpu->statistics.finishes, before.finishes);
+  CHECK(gpu->statistics.copies > before.copies, true);
+  CHECK(apart(software, hardware), 0u);
+
+  //late: the frame buffer at 0x2'0000 shown, its shot taken; there once the run is done (finished here)
+  prepare(hardware, 0x2'0000, 3);
+  hardware.ge.commands[GE::TextureMappingEnable] = 0;
+  sprite(hardware, {{{0, 0, 0, 0}, {0, 0, 8, 8}}, 0xff00'ff00});
+  std::vector<u32> pixels;
+  u32 width = 0, height = 0, format = 0;
+  while(gpu->shot(pixels, width, height, format)) {}  //(none older left)
+  CHECK(gpu->shoot(0x2'0000, 64, 3, 64, 48), true);
+  hardware.ge.settleAll();
+  CHECK(gpu->shot(pixels, width, height, format), true);
+  CHECK(width == 64 && height == 48 && format == 3 && pixels.size() == 64u * 48, true);
+  u32 same = 0;
+  for(u32 y = 0; y < 48; y++) {
+    for(u32 x = 0; x < 64; x++) {
+      u32 pixel = hardware.memory.read(4, Memory::VRAMBase + 0x2'0000 + (y * 64 + x) * 4);
+      same += (pixels[y * 64 + x] & 0xff'ffff) == (pixel & 0xff'ffff);
+    }
+  }
+  CHECK(same, 64u * 48);
+  CHECK(gpu->shoot(0x2'0000, 64, 3, 64, 48), false);  //(the pages memory's now: memory has the picture)
+
+  //a short list's end: nothing handed over yet; a long one's, or a finish, hands it over
+  auto submits = gpu->statistics.submits;
+  sprite(hardware, {{{0, 0, 0, 0}, {0, 0, 4, 4}}, 0xff12'3456});
+  gpu->submit(hardware.ge);
+  CHECK(gpu->statistics.submits, submits);
+  for(u32 n = 0; n < 40; n++) {  //(each scissor its own draw)
+    hardware.ge.commands[GE::Scissor2] = (24 + n) | 47 << 10;
+    sprite(hardware, {{{0, 0, 8, 8}, {0, 0, f32(12 + n % 7), 12}}, 0xff00'0000 | n << 8});
+  }
+  gpu->submit(hardware.ge);
+  CHECK(gpu->statistics.submits, submits + 1);
+  hardware.ge.settleAll();
+  CHECK(hardware.memory.read(4, Memory::VRAMBase + 0x2'0000 + (3 * 64 + 3) * 4) & 0xff'ffff, 0x12'3456u);
+  hardware.ge.setRenderer(nullptr);
+}
+
+//A pipeline cache kept between sessions (System's "Pipeline Cache"): the renderer's pipelines, after the start-up
+//check made some, given to a renderer made afresh, which takes them (its cache as big from the start) and draws as
+//right (its check passes); and data it must leave out, each made into a renderer whose cache starts without it and
+//which draws right: another driver version's, another driver cache UUID's, a file cut short, one whose second half
+//is zeros (a power cut after it was written), and junk.
+static auto gpuPipelineCache() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::string error;
+  CHECK(gpu->check(error), true);
+  auto data = gpu->backend->pipelineData();
+  CHECK(data.size() > 64, true);
+  auto again = GPU::vulkan(nullptr, error, false, data);
+  CHECK((bool)again, true);
+  if(!again) return;
+  CHECK(again->backend->pipelineData().size() >= data.size(), true);
+  CHECK(again->check(error), true);
+  auto driver = data, uuid = data, cut = data, zeroed = data;
+  driver[24] ^= 1;   //(vulkan.cpp's Kept: the driver's version)
+  uuid[32] ^= 0xff;  //(its cache UUID)
+  cut.resize(data.size() / 2);
+  std::fill(zeroed.begin() + data.size() / 2, zeroed.end(), 0);
+  for(auto& left : {driver, uuid, cut, zeroed, std::vector<u8>(64, 0x5a)}) {
+    auto other = GPU::vulkan(nullptr, error, false, left);
+    CHECK((bool)other, true);
+    if(!other) continue;
+    CHECK(other->backend->pipelineData().size() < data.size(), true);
+    CHECK(other->check(error), true);
+  }
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
     {"gpu render to texture against the software renderer", gpuRenderToTexture},
+    {"gpu render to texture from a frame buffer taller than its picture, nothing finished", gpuTallTexture},
     {"gpu samples near the software renderer", gpuSamples},
+    {"gpu fast mode: 3D transformed by the GPU, near the software renderer", gpuFast},
+    {"gpu fast mode: the GE's rules for which triangles are drawn", gpuFastRules},
     {"gpu blending in the shader against the software renderer", gpuBlending},
     {"gpu blending without rasterization order: the GPU's own, the rest read", gpuBlendingApart},
     {"gpu lost: the software renderer draws instead", gpuLost},
@@ -743,6 +971,7 @@ auto gpuTests() -> Tests {
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},
     {"gpu at 2 and 3 times the resolution: memory's bytes exact", gpuScaled},
     {"gpu above 1x: 2D quads meeting at a seam keep to their texels", gpuSeams},
+    {"gpu pipelines kept between sessions", gpuPipelineCache},
   };
 }
 

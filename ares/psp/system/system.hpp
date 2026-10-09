@@ -52,9 +52,12 @@ struct System {
   bool recompile = true;       //the CPU's recompiler on, the interpreter its fallback (option "Recompiler")
   u32 geThreads = 0;           //how many threads draw (option "GE Threads"): 0 for one fewer than the host's cores
   static constexpr u32 MostGeThreads = 64;  //and at most, nor more than twice the host's cores
-  string renderer = "Software";  //who draws the GE's pictures (option "Renderer"): "Software" or "Vulkan"
+  string renderer = "Software";  //who draws the GE's pictures (option "Renderer"): "Software", "Vulkan" (accurate)
+                                 //or "Vulkan (fast)"
   u32 resolution = 1;            //the GPU's internal resolution (option "Resolution"): 1, the PSP's, to 10 times it
   bool failCheck = false;        //the start-up check made to fail (option "Renderer Check": a debug switch)
+  bool lateFrames = false;       //the GPU's frames shown a frame or so late, not waited for (option "Late Frames")
+  string pipelineCache;          //the host's file the GPU's pipelines are kept in (option "Pipeline Cache")
   void* vulkanLoader = nullptr;  //the host's vkGetInstanceProcAddr (vulkanLoader()), none for the system's loader
   //The screen's picture: shown times the PSP's 480x272 each way, the GPU's read back at that size where it draws at
   //a higher resolution (at most MostShown: 1920x1088, a big window's), the software renderer's enlarged to it.
@@ -80,6 +83,9 @@ struct System {
 private:
   std::vector<u8*> pageTable;  //the CPU's view of memory, page by page (Memory::buildPages)
   std::vector<u32> pixels;     //the frame the game shows
+  std::vector<u32> latePixels; //the newest late frame the GPU has finished ("Late Frames"), its size and GE format
+  u32 lateWidth = 0, lateHeight = 0, lateFormat = 3;
+  auto late(u32 offset, u32 stride, u32 format, u32 width, u32 height) -> bool;
   std::vector<s16> sound;      //the frame's sound, left and right samples side by side (Kernel::audioOutput())
   f64 soundOwed = 0;           //sound frames due to the speakers: 44100 a second, so 735.7 a frame
   u32 unmappedReports = 0;     //accesses to nothing, reported (the first few only)
@@ -117,6 +123,12 @@ private:
   std::mutex noticeLock;
   std::string pendingNotice;  //(notice())
   auto startRenderer() -> void;
+  auto keepPipelines() -> void;
+  static constexpr u64 MostPipelineBytes = 32 << 20;  //(a kept pipeline cache's)
+  u64 pipelinesKept = 0;     //(the GPU's pipelines count as they were last kept)
+  u64 pipelineBytes = 0;     //(the kept cache's size, as read or last written)
+  u32 framesSinceKept = 0;
+  bool pipelinesUnkept = false;  //(its file couldn't be written: said once)
   auto tell(const std::string& text) -> void;
   friend auto notice() -> string;
 };

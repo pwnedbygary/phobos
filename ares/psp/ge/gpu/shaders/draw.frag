@@ -47,6 +47,9 @@ layout(constant_id = 16) const uint BLENDING = 8u;
 //above where it subtracts (2), which puts the GPU's rounding of the sum on the PSP's nearly always. 0 the color
 //weighed as floats.
 layout(constant_id = 17) const uint TERM = 0u;
+//Fast mode's 3D (transform.vert): flat shading's colors are the triangle's first corner's, which mesh() makes the
+//GE's last
+layout(constant_id = 18) const uint FLAT = 0u;
 
 layout(push_constant) uniform Push {
   vec2 scale;
@@ -64,6 +67,7 @@ layout(push_constant) uniform Push {
   uint textureScale;    //the texture's: a copy of a target is at the target's resolution, a decoded texture at 1
   uint fixedB;          //BLEND_FIXED_B (READS)
   uint writeMask;       //the frame buffer's bits left alone, in its format (READS)
+  uint filtering;       //TEXTURE_FILTER, where the filter is chosen at each pixel (vertexFlags' bit 4)
 } push;
 
 layout(set = 0, binding = 0) uniform sampler2D texels;  //8888, red in the low byte (as the GE's decoded copies)
@@ -77,6 +81,9 @@ layout(location = 4) noperspective in float vertexDepth;
 layout(location = 5) flat in uint vertexFlags;
 layout(location = 6) flat in vec4 vertexStepping;
 layout(location = 7) flat in ivec2 vertexStart;
+layout(location = 8) flat in vec4 vertexFlatColor;
+layout(location = 9) flat in vec4 vertexFlatSpecular;
+layout(location = 10) noperspective in vec2 vertexTexels;
 
 //Output 1 is the destination's factor for dual-source blending; a GPU without it gets the shader built without
 //(SINGLE: compile.sh), and the renderer approximates those factors (gpu.cpp).
@@ -118,9 +125,12 @@ uint narrowed(uint value, uint bits) {
   return kept << (8u - bits) | kept >> (2u * bits - 8u);
 }
 
-//A texel; one of a texture taken from a 16-bit frame buffer (TEXELS) as its format keeps it, as the GE reads it
+//A texel; one of a texture taken from a 16-bit frame buffer (TEXELS) as its format keeps it, as the GE reads it.
+//(Held inside the picture on the GPU, which may have only the rows and columns the GE's pixels reach: above 1x a
+//pixel between two of the GE's may sample a little past them.)
 uvec4 fetch(uint u, uint v) {
-  uvec4 t = uvec4(texelFetch(texels, ivec2(u, v), 0) * 255.0 + 0.5);
+  ivec2 at = min(ivec2(u, v), textureSize(texels, 0) - 1);
+  uvec4 t = uvec4(texelFetch(texels, at, 0) * 255.0 + 0.5);
   if(TEXELS == 0u) t = uvec4(narrowed(t.r, 5u), narrowed(t.g, 6u), narrowed(t.b, 5u), 255u);
   if(TEXELS == 1u) t = uvec4(narrowed(t.r, 5u), narrowed(t.g, 5u), narrowed(t.b, 5u), t.a >= 128u ? 255u : 0u);
   if(TEXELS == 2u) t = uvec4(narrowed(t.r, 4u), narrowed(t.g, 4u), narrowed(t.b, 4u), narrowed(t.a, 4u));
@@ -247,6 +257,15 @@ uvec4 textureFunction(uvec4 f, uvec4 t) {
 }
 
 void main() {
+  //(fast mode's 3D, vertexFlags' bit 4: the filter for enlarging or shrinking as the texels a pixel covers say,
+  //as the GE chooses it once a triangle (draw.cpp's chooseFilter()): from the texture coordinates straight across
+  //the screen, whose steps are the triangle's own texels to its pixels; before anything's discarded)
+  bool chosen = false;
+  if(TEXTURED != 0u && CLEAR == 0u && (vertexFlags & 16u) != 0u) {
+    vec2 across = dFdx(vertexTexels), down = dFdy(vertexTexels);
+    float texels = abs(across.x * down.y - across.y * down.x) * float(push.resolution * push.resolution);
+    chosen = texels <= 1.0 ? (push.filtering >> 8 & 1u) != 0u : (push.filtering & 1u) != 0u;
+  }
   float depth = clamp(vertexDepth, 0.0, 65535.0);
   if(DEPTH_RANGE != 0u) {
     uint z = uint(depth);
@@ -254,7 +273,7 @@ void main() {
   }
   //(the GE blends a color's channels as floats and drops their fractions; the interpolation's own error is kept
   //from tipping a whole number below itself)
-  uvec4 color = uvec4(clamp(floor(vertexColor + 1.0 / 512.0), 0.0, 255.0));
+  uvec4 color = uvec4(clamp(floor((FLAT != 0u ? vertexFlatColor : vertexColor) + 1.0 / 512.0), 0.0, 255.0));
   //(the frame buffer's pixel as memory keeps it, where it's read)
   uvec4 old = READS != 0u ? unpacked(packed(uvec4(subpassLoad(frameBuffer) * 255.0 + 0.5))) : uvec4(0u);
   if(CLEAR != 0u) {
@@ -276,9 +295,9 @@ void main() {
     }
     //(above 1x, a 2D triangle's texels where its pixels' middles reach at 1x: gpu.cpp's triangle())
     if((vertexFlags & 8u) != 0u) at = clamp(at, vertexStepping.xz, vertexStepping.yw);
-    color = textureFunction(color, sampleTexture(at, (vertexFlags & 1u) != 0u));
+    color = textureFunction(color, sampleTexture(at, (vertexFlags & 1u) != 0u || chosen));
   }
-  uvec4 shine = uvec4(clamp(floor(vertexSpecular + 1.0 / 512.0), 0.0, 255.0));
+  uvec4 shine = uvec4(clamp(floor((FLAT != 0u ? vertexFlatSpecular : vertexSpecular) + 1.0 / 512.0), 0.0, 255.0));
   color.rgb = min(color.rgb + shine.rgb, uvec3(255u));
   if(ALPHA_TEST != 8u) {
     uint mask = push.alphaTest >> 8 & 255u;

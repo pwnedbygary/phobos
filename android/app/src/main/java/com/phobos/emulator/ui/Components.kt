@@ -479,7 +479,7 @@ fun MsxLoadSpeedItem(current: Int, onSelect: (Int) -> Unit) {
 fun PspRendererItem(current: Int, onSelect: (Int) -> Unit) {
     SettingsDropdownItem(
         title = "PSP Renderer",
-        description = "Who draws a PSP game's pictures. Software is exact; Vulkan draws on the GPU, with the driver chosen in the Driver Manager, much faster and very close. If Vulkan can't start or stops, the software renderer takes over and says so. Applies when a game starts.",
+        description = "Who draws a PSP game's pictures. ${PspRenderer.description(PspRenderer.forCore(current))} Vulkan uses the driver chosen in the Driver Manager; if it can't start or stops, the software renderer takes over and says so. Applies when a game starts.",
         current = PspRenderer.forCore(current),
         options = PspRenderer.choices,
         label = PspRenderer::label,

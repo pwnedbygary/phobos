@@ -56,8 +56,11 @@ static alwaysinline auto spriteAxis(f64 first, f64 step, s32 start, s32 at) -> f
 //spriteFours(): their coordinates' texels, and the second of each where it filters, whatever its weight), first to
 //last: false where some may repeat round, or aren't numbers, or for a 3D sprite (whose texels follow the perspective
 //at each pixel). A coordinate runs one way along the job (spriteAxis(): from a number by a step, both numbers, and
-//rounding keeps the order), so its texels' first and last are those at the job's ends.
-static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2], s32 (&columns)[2]) -> bool {
+//rounding keeps the order), so its texels' first and last are those at the job's ends. weighed: only the texels whose
+//weight isn't 0 (a filter's second texel, a fraction 0 from the first, is multiplied by 0), which are all a hardware
+//renderer's sprites take anything from.
+static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2], s32 (&columns)[2],
+                        bool weighed = false) -> bool {
   auto& s = job.sprite;
   if(s.divided) return false;
   auto ends = [&](f64 first, f64 step, s32 start, s32 from, s32 to, u32 size, bool clamp, s32 (&reach)[2]) {
@@ -68,7 +71,7 @@ static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2]
       float coordinate = spriteAxis(first, step, start, at);
       if(std::isnan(coordinate)) return false;
       auto spot = GE::texelSpot(coordinate, job.linear);
-      low = std::min(low, spot.first), high = std::max(high, spot.first + job.linear);
+      low = std::min(low, spot.first), high = std::max(high, spot.first + (job.linear && (!weighed || spot.fraction)));
     }
     if(clamp) low = std::clamp(low, 0, last), high = std::clamp(high, 0, last);
     else if(low < 0 || high > last) return false;
@@ -234,27 +237,34 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //A 2D sprite's texels are taken where its pixels' middles fall, so the rows it reaches are exactly those
   //spriteReach() finds, often fewer than its vertices' reach above can say: a sprite sampling a frame buffer (a
   //texture of 512 rows) from its top edge, filtered, may reach round to the far end there for all that can tell.
-  u32 drawnRows = rows;
-  if(textured && !hardware && !skipping && format.through && kind == Sprites) {
-    s32 reached = 1;
+  //A hardware renderer takes those rows and columns exactly (holds(): the part of a frame buffer it copies), as its
+  //sprites' texels are the GE's, those whose weight is 0 left out (its fetches are held inside the copy, and what
+  //they find multiplied by 0). (Midnight Club 3's bloom samples its 480x272 picture as a texture 512 rows tall,
+  //whose last rows are other frame buffers': the GPU takes it from its frame buffer, not from memory.)
+  u32 drawnRows = rows, heldRows = rows, heldColumns = columns;
+  if(textured && !skipping && format.through && kind == Sprites) {
+    s32 reached = 1, across = 1;
     bool exact = true;
     for(u32 n = 0; n + 1 < count && exact; n += 2) {
       Job job;
       if(!spriteJob(look, vertices[n], vertices[n + 1], false, job)) continue;
       if(job.firstX > job.lastX || job.firstY > job.lastY) continue;
       s32 rowsReached[2], columnsReached[2];
-      if(!(exact = spriteReach(job, look.texture, rowsReached, columnsReached))) break;
-      reached = std::max(reached, rowsReached[1] + 1);
+      if(!(exact = spriteReach(job, look.texture, rowsReached, columnsReached, hardware))) break;
+      reached = std::max(reached, rowsReached[1] + 1), across = std::max(across, columnsReached[1] + 1);
     }
-    if(exact) drawnRows = std::min<u32>(rows, (reached + 7) & ~7);  //(in eights, as above)
+    if(exact) {
+      drawnRows = std::min<u32>(rows, (reached + 7) & ~7);  //(in eights, as above)
+      heldRows = std::min<u32>(rows, reached), heldColumns = std::min<u32>(columns, across);
+    }
   }
   //(a 2D sprite drawing over its own texture is still decoded where a copy taken first draws the same: readsAhead())
   struct Ahead { GE& ge; const Look& look; const std::vector<Vertex>& vertices; u32 count; bool sprites; };
   Ahead ahead{*this, look, vertices, count, format.through && kind == Sprites};
   auto copyDraws = [&ahead] { return ahead.sprites && ahead.ge.readsAhead(ahead.look, ahead.vertices, ahead.count); };
-  if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
+  if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, heldRows, heldColumns))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
-    decode(look, hardware ? Region{0, 0, -1, -1} : region, hardware ? rows : drawnRows, !hardware, copyDraws);
+    decode(look, hardware ? Region{0, 0, -1, -1} : region, drawnRows, !hardware, copyDraws);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
   if(hardware && !renderer->begin(*this, look, format.through, region)) {
@@ -276,14 +286,20 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     for(u32 page = drawn.deferFirst >> 12; page <= drawn.deferLast >> 12; page++) drawing.batch->reads.set(page);
   }
   Transform t{};
+  s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   if(!format.through) {
     t = transformState();
     t.weights = format.weightFormat ? format.weights : 0;
     t.textureWidth = texture.width, t.textureHeight = texture.height;
     t.vertexColor = format.colorFormat != 0;
+    //(a renderer transforming its own: the triangles the GE would draw whole handed over as they are)
+    bool triangles = kind == Triangles || kind == TriangleStrip || kind == TriangleFan;
+    if(hardware && triangles && renderer->meshes(*this, t, count)) {
+      meshTriangles(drawn, t, kind, strip, facing, vertices);
+      return void(hardware = false);
+    }
     for(auto& vertex : vertices) transform(vertex, t);
   }
-  s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   auto drawTriangle = [&](const Vertex& a, const Vertex& b, const Vertex& c, s32 facing) {
     if(format.through) triangle(drawn, a, b, c, facing, false);
     else clipTriangle(drawn, t, a, b, c, facing);
@@ -342,6 +358,78 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   }
   drawing.recording = false;
   skipping = false;
+}
+
+//A 3D PRIM's triangles for a renderer that transforms and lights them itself (Renderer::meshes()), kept to the GE's
+//rules: each corner's place on the screen worked out as project() has it, the triangles clipTriangle() and
+//triangle() wouldn't draw dropped (out of sight, behind the camera, no area, facing away), and those reaching past
+//the near plane (or with a corner behind the camera, which projects through its w as the GPU doesn't) transformed,
+//cut and drawn by the GE as ever: the GPU's clipper would blend their new corners' colors and fog across the
+//screen, not in clip space as the GE does. The rest are handed over whole, untransformed,
+//in runs between those, so that they're drawn in order. (The corners' clip positions come through the world, view
+//and projection matrices made one, once a PRIM: clipPosition()'s but for a float's rounding, which can only move a
+//triangle lying on an edge of these rules across it.)
+auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
+                       std::vector<Vertex>& vertices) -> void {
+  u32 count = vertices.size();
+  placed.resize(count), handed.clear();
+  float viewWorld[12], clipping[16];
+  for(u32 c = 0; c < 4; c++) turn43(t.view, t.world + c * 3, viewWorld + c * 3);
+  for(u32 r = 0; r < 3; r++) viewWorld[9 + r] += t.view[9 + r];
+  for(u32 c = 0; c < 4; c++) {
+    for(u32 r = 0; r < 4; r++) {
+      clipping[c * 4 + r] = viewWorld[c * 3] * t.projection[r] + viewWorld[c * 3 + 1] * t.projection[4 + r] +
+                            viewWorld[c * 3 + 2] * t.projection[8 + r] + (c == 3 ? t.projection[12 + r] : 0.0f);
+    }
+  }
+  for(u32 n = 0; n < count; n++) {
+    auto& v = vertices[n];
+    float model[3] = {v.x, v.y, v.z};
+    if(t.weights) {
+      float position[3] = {};
+      for(u32 bone = 0; bone < t.weights; bone++) {
+        float moved[3];
+        times43(t.bones + bone * 12, model, moved);
+        for(u32 k = 0; k < 3; k++) position[k] += moved[k] * v.weights[bone];
+      }
+      for(u32 k = 0; k < 3; k++) model[k] = position[k];
+    }
+    times44(clipping, model, placed[n].clip);
+    project(placed[n], t, false);
+  }
+  bool again = false;
+  auto hand = [&] {
+    if(handed.empty()) return;
+    renderer->mesh(*this, t, vertices, handed, again);
+    handed.clear(), again = true;
+  };
+  auto nearer = [](const Vertex& v) { return v.clip[2] + v.clip[3]; };  //below zero: nearer than the near plane
+  auto consider = [&](u32 a, u32 b, u32 c, s32 facing) {
+    const Vertex &pa = placed[a], &pb = placed[b], &pc = placed[c];
+    if(outOfSight(t.depthClamp, {&pa, &pb, &pc})) return;
+    if(pa.clip[3] < 0 && pb.clip[3] < 0 && pc.clip[3] < 0) return;
+    if(nearer(pa) < 0 || nearer(pb) < 0 || nearer(pc) < 0 || !(pa.clip[3] > 0 && pb.clip[3] > 0 && pc.clip[3] > 0)) {
+      hand();
+      Vertex corners[3] = {vertices[a], vertices[b], vertices[c]};  //(the vertices kept as they came, for the runs)
+      for(auto& corner : corners) transform(corner, t);
+      return clipTriangle(look, t, corners[0], corners[1], corners[2], facing);
+    }
+    s64 x0 = fixed(pa.x), y0 = fixed(pa.y);
+    s64 area = (fixed(pb.x) - x0) * (fixed(pc.y) - y0) - (fixed(pb.y) - y0) * (fixed(pc.x) - x0);
+    if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
+    handed.insert(handed.end(), {c, a, b});
+  };
+  if(kind == Triangles) {
+    for(u32 n = 0; n + 2 < count; n += 3) consider(n, n + 1, n + 2, facing);
+  } else if(kind == TriangleStrip) {
+    for(u32 first = 0; first < count; first += strip) {
+      u32 end = std::min(first + strip, count);
+      for(u32 n = first; n + 2 < end; n++) consider(n, n + 1, n + 2, (n - first) & 1 ? -facing : facing);
+    }
+  } else {
+    for(u32 n = 1; n + 1 < count; n++) consider(0, n, n + 1, facing);
+  }
+  hand();
 }
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth

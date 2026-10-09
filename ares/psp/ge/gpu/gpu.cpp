@@ -166,7 +166,10 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts) -
 
 //The pixels left-right, top-bottom of the target are drawn on the GPU: VRAM's pages under them are the renderer's
 //until it's finished (busy: whoever touches one waits for finish()), and whoever keeps a copy of those bytes (decoded
-//textures, the recompiler) hears of the change now, as the software renderer tells of what it draws.
+//textures, the recompiler) hears of the change, as the software renderer tells of what it draws. Not again for a
+//rectangle inside one told of since the last finish: a copy of bytes the GPU has drawn over since then can only be
+//made after a finish (drawnOver() has memory wait for one), so no one has those bytes yet. (A 3D game's PRIMs each
+//reach the whole scissor rectangle: told once a frame, not once a PRIM.)
 auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   if(!t.drawn()) t.left = left, t.top = top, t.right = right, t.bottom = bottom;
   else {
@@ -177,10 +180,17 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   u32 bytes = t.bytes();
   u32 low = t.address + (top * t.stride + left) * bytes, high = t.address + (bottom * t.stride + right) * bytes;
   u32 first = low / Memory::PageSize, last = std::min<u32>(high / Memory::PageSize, GE::VRAMPages - 1);
+  //(told, and its pages busy still: the drawing threads' settle frees every busy page, the GPU's too, and memory
+  //may copy them then without a finish)
+  bool told = false;
+  for(auto& r : t.told) told |= left >= r[0] && top >= r[1] && right <= r[2] && bottom <= r[3];
+  for(u32 page = first; page <= last && told; page++) told = memory.vramPageBusy(page);
+  if(told) return;
+  if(t.told.size() < MostTold) t.told.push_back({left, top, right, bottom});
   bool added = false;
   for(u32 page = first; page <= last; page++) {
-    if(owners[page] == &t) continue;
-    if(!owners[page]) added = true, memory.busyPages[page >> 6] |= 1ull << (page & 63);
+    if(owners[page] == &t && memory.vramPageBusy(page)) continue;
+    if(!memory.vramPageBusy(page)) added = true, memory.busyPages[page >> 6] |= 1ull << (page & 63);
     owners[page] = &t;
   }
   if(added) {
@@ -407,6 +417,7 @@ auto GPU::settings(const GE::Look& look) -> void {
   s32 right = std::min<s32>(p.right, target->stride - 1), bottom = std::min<s32>(p.bottom, target->height - 1);
   s.scissor[0] = left, s.scissor[1] = top, s.scissor[2] = right - left + 1, s.scissor[3] = bottom - top + 1;
   state = s;
+  stateKept = false;
 }
 
 //A PRIM's settings: its target found (filled from memory first if need be), its pages owned, its texture on the
@@ -420,7 +431,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   auto& p = look.pixel;
   if(!ready() || (look.textured && !p.clear && !held && !look.decoded)) return held.reset(), false;
   //(a long list's draws handed over as they come, so the GPU draws while the CPU goes on)
-  if(recorded.commands.size() >= SubmitEvery) submit(ge);
+  if(recorded.commands.size() >= SubmitEvery) flush();
   //(where it may draw: the scissor rectangle, or less, where its vertices reach, in 2D: draw.cpp)
   if(!p.stride || region.left > region.right || region.top > region.bottom || region.right < 0 || region.bottom < 0) {
     return held.reset(), true;
@@ -480,8 +491,11 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
 
 //Vertices for the GPU, in the PRIM's draw: one with the last if its settings are the same.
 auto GPU::emit(const Vertex* vertices, u32 count) -> void {
-  if(recorded.vertices.size() + count > MostVertices) submit(*ge);
-  if(recorded.states.empty() || !(recorded.states.back() == state)) recorded.states.push_back(state);
+  if(recorded.vertices.size() + count > MostVertices) flush();
+  if(!stateKept || recorded.states.empty()) {
+    if(recorded.states.empty() || !(recorded.states.back() == state)) recorded.states.push_back(state);
+    stateKept = true;
+  }
   u32 index = recorded.states.size() - 1, first = recorded.vertices.size();
   auto& commands = recorded.commands;
   bool joined = !commands.empty() && commands.back().kind == Command::Kind::Draw && commands.back().state == index &&
@@ -545,7 +559,9 @@ auto GPU::triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c
   if(!(shade & 1)) {
     for(auto& corner : v) corner.color = c.color, corner.specular = c.specular;
   }
-  if(state.pipeline.clear && state.pipeline.stencilTest) state.stencilReference = c.color >> 24;
+  if(state.pipeline.clear && state.pipeline.stencilTest && state.stencilReference != c.color >> 24) {
+    state.stencilReference = c.color >> 24, stateKept = false;
+  }
   if(textured) {
     f64 area = std::abs(f64(targetFixed(b.x) - targetFixed(a.x)) * (targetFixed(c.y) - targetFixed(a.y)) -
                         f64(targetFixed(b.y) - targetFixed(a.y)) * (targetFixed(c.x) - targetFixed(a.x)));
@@ -587,7 +603,9 @@ auto GPU::sprite(const GE::Job& job) -> void {
   auto& s = job.sprite;
   Vertex base{};
   base.z = s.z, base.w = 1, base.q = 1, base.color = s.color, base.specular = s.specular;
-  if(state.pipeline.clear && state.pipeline.stencilTest) state.stencilReference = s.color >> 24;
+  if(state.pipeline.clear && state.pipeline.stencilTest && state.stencilReference != s.color >> 24) {
+    state.stencilReference = s.color >> 24, stateKept = false;
+  }
   bool divided = textured && s.divided;
   if(textured) {
     base.flags = job.linear | (divided ? 0 : 2) | (s.turned ? 4 : 0);
@@ -654,9 +672,133 @@ auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> 
   }
 }
 
-//What's drawn so far handed to the GPU, while the CPU goes on.
+//Fast mode's 3D (docs/psp-gpu-renderers.md, "Vulkan (fast)"): a PRIM's triangles handed to the GPU as the vertex
+//type laid them out, which transform.vert skins, transforms, lights, fogs and maps onto the screen as transform.cpp
+//and lighting.cpp would; the GE has kept to its rules for which triangles are drawn, and cut and drawn those reaching
+//past the near plane itself (GE::meshTriangles()). Each triangle comes with its last corner first, where the GPU
+//takes a flat triangle's colors from. Its settings are a block of the run's (transformed()) each of its vertices
+//names, so that PRIMs the GPU draws alike are one draw, whatever their matrices. What the GE does that this doesn't:
+//step colors and fog as it steps them; choose the filter once a triangle (draw.frag chooses it at each pixel). Not
+//taken: a PRIM of fewer than MeshLeast vertices (each PRIM costs its settings' block, a skinned one's bones
+//differing from PRIM to PRIM, which a few vertices' transform on the CPU costs less than: Peace Walker draws 5,000
+//PRIMs a frame of three triangles each); clear mode (each triangle's stencil from its own last corner: triangle());
+//and one whose pipeline the driver won't make.
+auto GPU::meshes(GE&, const GE::Transform&, u32 count) -> bool {
+  if(!fast || !backend->transforms || count < MeshLeast) return false;
+  if(!drawing) return true;
+  if(state.pipeline.clear) return false;
+  Pipeline k = state.pipeline;
+  k.transformed = 1;
+  k.flat = !(shade & 1);
+  if(!(lastDrawable && *lastDrawable == k)) {
+    if(!backend->drawable(k)) return false;
+    lastDrawable = k;
+  }
+  return true;
+}
+
+auto GPU::mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& vertices,
+               const std::vector<u32>& corners, bool again) -> void {
+  if(!drawing) return;
+  this->ge = &ge;
+  u32 count = vertices.size();
+  //(the PRIM's vertices once, kept for its later runs: still the recording's last models, unless it was handed over
+  //between them)
+  if(!again || recorded.models.size() != meshFirst + count) {
+    if(recorded.models.size() + count > MostVertices) flush();
+    meshFirst = recorded.models.size();
+    u32 transform = transformed(t);
+    recorded.models.resize(meshFirst + count);
+    for(u32 n = 0; n < count; n++) {
+      auto& v = vertices[n];
+      auto& m = recorded.models[meshFirst + n];
+      m.x = v.x, m.y = v.y, m.z = v.z;
+      for(u32 k = 0; k < 3; k++) m.normal[k] = v.normal[k];
+      m.u = v.u, m.v = v.v, m.color = v.color;
+      for(u32 k = 0; k < 8; k++) m.weights[k] = v.weights[k];
+      m.transform = transform;
+    }
+  }
+  u32 first = recorded.indices.size();
+  for(u32 corner : corners) recorded.indices.push_back(meshFirst + corner);
+  State s = state;
+  s.pipeline.transformed = 1;
+  s.pipeline.flat = !(shade & 1);
+  if(textured) s.push.filter = filter;
+  if(recorded.states.empty() || !(recorded.states.back() == s)) recorded.states.push_back(s);
+  stateKept = false;
+  u32 index = recorded.states.size() - 1;
+  auto& commands = recorded.commands;
+  if(!commands.empty() && commands.back().kind == Command::Kind::Mesh && commands.back().state == index &&
+     commands.back().first + commands.back().count == first) {
+    commands.back().count += corners.size();
+  } else {
+    Command c{Command::Kind::Mesh, s.target};
+    c.state = index, c.first = first, c.count = corners.size();
+    commands.push_back(c);
+    statistics.draws++;
+  }
+  statistics.primitives += corners.size() / 3;
+  if(!again) statistics.meshes++;
+}
+
+//mesh()'s block for these settings, in recorded's transforms: the last one's again where they're the same.
+auto GPU::transformed(const GE::Transform& t) -> u32 {
+  auto& transforms = recorded.transforms;
+  if(!transforms.empty() && !std::memcmp(&t, &lastTransform, sizeof(t))) return transforms.size() - 1;
+  lastTransform = t;
+  Transformed b{};
+  auto columns43 = [](const float* m, float (&out)[4][4]) {
+    for(u32 c = 0; c < 4; c++) for(u32 r = 0; r < 3; r++) out[c][r] = m[c * 3 + r];
+  };
+  columns43(t.world, b.world), columns43(t.view, b.view), columns43(t.textureMatrix, b.texture);
+  for(u32 c = 0; c < 4; c++) for(u32 r = 0; r < 4; r++) b.projection[c][r] = t.projection[c * 4 + r];
+  for(u32 bone = 0; bone < t.weights && bone < 8; bone++) {
+    float (&out)[4][4] = b.bones[bone];
+    columns43(t.bones + bone * 12, out);
+  }
+  for(u32 n = 0; n < 3; n++) b.viewport[n] = t.scale[n], b.center[n] = t.center[n];
+  b.offset[0] = t.offsetX / 16, b.offset[1] = t.offsetY / 16;
+  b.offset[2] = t.textureWidth, b.offset[3] = t.textureHeight;
+  b.textureScale[0] = t.textureScale[0], b.textureScale[1] = t.textureScale[1];
+  b.textureScale[2] = t.textureOffset[0], b.textureScale[3] = t.textureOffset[1];
+  b.fog[0] = t.fogEnd, b.fog[1] = t.fogSlope, b.fog[2] = t.fogValue, b.fog[3] = t.fogForced;
+  b.modes[0] = t.mapSource, b.modes[1] = t.shadeU, b.modes[2] = t.shadeV;
+  u32 mapping = t.mapMode == 1 || t.mapMode == 2 ? t.mapMode : 0;
+  b.modes[3] = t.normalReverse | t.separateSpecular << 1 | t.vertexColor << 2 | t.fog << 3 | t.lighting << 4 |
+               mapping << 5 | std::min(t.weights, 8u) << 8;
+  b.material[0] = t.materialColor, b.material[1] = t.materialEmissive;
+  b.material[2] = t.materialAmbient, b.material[3] = t.materialDiffuse;
+  b.material2[0] = t.materialSpecular, b.material2[1] = t.ambientLight;
+  for(u32 n = 0; n < 3; n++) b.viewDirection[n] = t.viewDirection[n];
+  b.viewDirection[3] = t.specularPower;
+  for(u32 n = 0; n < 4; n++) {
+    auto& light = t.lights[n];
+    auto& out = b.lights[n];
+    for(u32 k = 0; k < 3; k++) {
+      out.position[k] = light.position[k], out.direction[k] = light.direction[k];
+      out.attenuation[k] = light.attenuation[k];
+    }
+    out.direction[3] = light.cutoff, out.attenuation[3] = light.exponent;
+    out.colors[0] = light.ambient, out.colors[1] = light.diffuse, out.colors[2] = light.shine;
+    out.colors[3] = light.enabled | light.directional << 1 | light.spot << 2 | light.specular << 3 |
+                    light.powered << 4;
+  }
+  if(!transforms.empty() && !std::memcmp(&transforms.back(), &b, sizeof(b))) return transforms.size() - 1;
+  transforms.push_back(b);
+  return transforms.size() - 1;
+}
+
+//What's drawn so far handed to the GPU, while the CPU goes on: at a list's end, once there's enough of it (each run
+//costs the CPU a submit and a wait for the run eight before it, and games may end dozens of short lists a frame:
+//WipEout Pure, 209); what's less waits for the next list, the frame shown or a finish.
 auto GPU::submit(GE& ge) -> void {
   this->ge = &ge;
+  if(recorded.empty() || !ready() || recorded.commands.size() < SubmitEnough) return;
+  flush();
+}
+
+auto GPU::flush() -> void {
   if(recorded.empty() || !ready()) return;
   if(!backend->submit(recorded)) lose();
   recorded.clear();
@@ -697,13 +839,14 @@ auto GPU::finish(GE& ge) -> void {
     read.push_back(t.get());
   }
   auto began = std::chrono::steady_clock::now();
+  bool wasLost = backend->lost;
   bool finished = ready() && backend->finish(recorded);
   statistics.waiting += std::chrono::duration_cast<std::chrono::nanoseconds>(
     std::chrono::steady_clock::now() - began).count();
   statistics.finishes++;
   recorded.clear();
   auto& memory = ge.memory;
-  if(!finished && !backend->lost) lose();
+  if(!finished && !wasLost) lose();
   for(u32 n = 0; n < read.size() && finished; n++) {
     Target& t = *read[n];
     const u32* colors;
@@ -732,6 +875,7 @@ auto GPU::finish(GE& ge) -> void {
   for(auto& owner : owners) owner = nullptr;
   for(auto& t : targets) {
     t->left = 0, t->top = 0, t->right = -1, t->bottom = -1;
+    t->told.clear();
     if(!t->beside.empty()) t->stale = true;  //(memory's bytes beside what it drew, which may have changed)
     if(t->rows) memory.watch(Memory::VRAMBase + t->address, t->rows * t->stride * t->bytes());
     if(t->depthRows && t->depthStride) {
@@ -903,14 +1047,16 @@ auto GPU::picture(u32 address, u32 stride, u32 format, u32 width, u32 height, st
   recorded.commands.push_back(c);
   recorded.readbacks++;
   auto began = std::chrono::steady_clock::now();
+  bool wasLost = backend->lost;
   bool finished = backend->finish(recorded);
   statistics.waiting += std::chrono::duration_cast<std::chrono::nanoseconds>(
     std::chrono::steady_clock::now() - began).count();
   recorded.clear();
+  release();
   const u32* colors;
   const u8* stencil;
   if(!finished || !backend->read(0, colors, stencil)) {
-    if(!backend->lost) lose();
+    if(!wasLost) lose();
     return false;
   }
   //(as memory would have them: narrowed to the frame buffer's format, then widened as the screen widens them)
@@ -931,10 +1077,27 @@ auto GPU::show(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bo
   Command c{Command::Kind::Present, t->id};
   c.width = width, c.height = height, c.format = format;
   recorded.commands.push_back(c);
-  if(!backend->submit(recorded) && !backend->lost) lose();
+  bool wasLost = backend->lost;
+  if(!backend->submit(recorded) && !wasLost) lose();
   recorded.clear();
   statistics.submits++, statistics.presents++;
+  release();
   return true;
+}
+
+auto GPU::shoot(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bool {
+  if(!ready() || !width || !height) return false;
+  Target* t = shownTarget(address, stride, format, width, height);
+  if(!t) return false;
+  Command c{Command::Kind::Shot, t->id};
+  c.width = width, c.height = height, c.format = format;
+  recorded.commands.push_back(c);
+  bool wasLost = backend->lost, submitted = backend->submit(recorded);
+  if(!submitted && !wasLost) lose();
+  recorded.clear();
+  statistics.submits++, statistics.pictures++;
+  release();
+  return submitted;
 }
 
 auto GPU::show(const std::vector<u32>& pixels, u32 width, u32 height) -> void {
@@ -944,9 +1107,11 @@ auto GPU::show(const std::vector<u32>& pixels, u32 width, u32 height) -> void {
   auto bytes = (const u8*)pixels.data();
   recorded.uploads.insert(recorded.uploads.end(), bytes, bytes + u64(width) * height * 4);
   recorded.commands.push_back(c);
-  if(!backend->submit(recorded) && !backend->lost) lose();
+  bool wasLost = backend->lost;
+  if(!backend->submit(recorded) && !wasLost) lose();
   recorded.clear();
   statistics.submits++, statistics.presentsFromMemory++;
+  release();
 }
 
 auto GPU::drop() -> void {
@@ -959,6 +1124,9 @@ auto GPU::drop() -> void {
   for(auto& [decoded, texture] : textures) backend->dropTexture(texture.id);
   for(auto& [where, copied] : copies) backend->dropTexture(copied.texture);
   targets.clear(), textures.clear(), copies.clear();
+  std::vector<u32> pixels;
+  u32 width, height, format;
+  while(backend->shot(pixels, width, height, format)) {}  //(the machine before's last shot)
 }
 
 auto GPU::resolution(u32 scale) -> void {

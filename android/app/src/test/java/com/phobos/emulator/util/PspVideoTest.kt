@@ -1,6 +1,7 @@
 package com.phobos.emulator.util
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PspVideoTest {
@@ -19,6 +20,19 @@ class PspVideoTest {
         assertEquals(0, PspDrawingThreads.forCore(3))
         assertEquals(0, PspDrawingThreads.forCore(-1))
         assertEquals(0, PspDrawingThreads.forCore(64))
+    }
+
+    @Test
+    fun rendererChoicesKeepTheSavedValues() {
+        assertEquals(listOf(0, 1, 2), PspRenderer.choices)
+        assertEquals(PspRenderer.SOFTWARE, PspRenderer.choices.first())
+        assertEquals("Software (exact)", PspRenderer.label(PspRenderer.SOFTWARE))
+        assertEquals("Vulkan (accurate)", PspRenderer.label(1))  // a setting saved as Vulkan before fast came
+        assertEquals("Vulkan (fast)", PspRenderer.label(PspRenderer.VULKAN_FAST))
+        for (renderer in PspRenderer.choices) assertEquals(renderer, PspRenderer.forCore(renderer))
+        assertEquals(PspRenderer.SOFTWARE, PspRenderer.forCore(3))
+        assertEquals(PspRenderer.SOFTWARE, PspRenderer.forCore(-1))
+        for (renderer in PspRenderer.choices) assertTrue(PspRenderer.description(renderer).isNotEmpty())
     }
 
     @Test

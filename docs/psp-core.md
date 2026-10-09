@@ -6326,9 +6326,251 @@ Need for Speed - ProStreet crashes after its notice. Both God of War games are t
 s. Vulkan draws what the software renderer draws in all 11 gameplay games, but 3D gameplay is much slower on it
 (docs/psp-compatibility.md, "Vulkan spot checks").
 
+## Part 52: the Vulkan renderer faster — its own waste, found with a profile
+
+On branch `cursor/psp-gpu-fast-2b67`, on top of #184's `cursor/psp-vk-play-2b67` (80bfd9807). docs/psp-gpu-renderers.md
+has the detail ("Submitting", "Render to texture", "The texture cache", "Speed"). Original code: nothing of PPSSPP's
+or JPCSP's used, copied or translated. Software stays the default; its pictures and state are unchanged, and Vulkan
+(accurate)'s pictures are byte for byte what they were.
+
+**Where the time went.** simpleperf on the RP6 (call graphs, Turnip opened by the runner as the app opens it), the
+race in Midnight Club 3: the emulation thread 26.4 ms a frame with Vulkan, 17.8 with seven software threads, which
+spend about 7 ms of theirs on the GE's setup as Vulkan does. Vulkan's extra:
+- `GPU::own()` told memory of every PRIM's rectangle (`Memory::changed()`, the recompiler's invalidation over all
+  four of VRAM's copies); a 3D PRIM's rectangle is the whole scissor: 2.7 ms a frame.
+- The bloom sampled the 480x272 frame buffer as a 512-row texture whose last rows are two other frame buffers'.
+  `holds()` was given the vertices' rough reach (all 512 rows) and refused it, so the GPU finished every frame: a
+  2.7 ms wait, the read-back narrowed into memory, the targets filled again, the 1 MB texture decoded and uploaded.
+- 25 small swizzled textures in RAM were decoded again every frame (8,249 in 300 frames), the GPU making and
+  destroying an image for each: about 2.6 ms. Their pages hold other data the game writes each frame.
+- Pipelines made in the run's first frames (45 in the race): 2.5 ms a frame over 300 frames, once a session.
+- Recording, about 1.3 ms. WipEout Pure ends 209 short lists a frame, each a `vkQueueSubmit` and a wait for the
+  slot three runs back.
+
+**What was done:**
+1. `own()` tells memory only of a rectangle not inside one told since the target's last finish, its pages still
+   busy (`Target::told`): no one can copy bytes the GPU drew over without a finish, which clears it.
+2. A 2D sprite PRIM's texture rows and columns for the GPU are `spriteReach()`'s, exact, a filter's second texel at
+   weight 0 left out; `draw.frag` holds every texel fetch inside the picture on the GPU. The bloom's copies are taken
+   on the GPU: finishes 300 → 5, read-backs 1,200 → 20, uploads 1,249 → 51 in 300 frames.
+3. Decoded textures keep the bytes they came from (where side by side and no larger than their texels); a write to
+   their pages marks them, and before the next draw their bytes are compared: kept if the same, else decoded afresh.
+   Both renderers: the race's textures 8,249 → 520.
+4. A list's end hands the recording to the GPU only with 32 commands or more; frames shown and finishes always do.
+5. The draw state isn't compared with the last recorded one at every primitive when nothing changed.
+6. "Late Frames" (System's option, the runner's `--late-frames`): the shown frame copied on the GPU into the slot's
+   shot buffer and taken when its run is done, a few frames late, so nothing waits each frame, as when the app
+   presents. The runner needs it to time the GPU as the app runs: read back synchronously each frame from adb's shell,
+   whose threads can't be pinned to the prime core as the app's are, the waits had the scheduler move the emulation
+   thread to slower cores at lower clocks (seen: cpu 3-6 at 1.65-2.8 GHz instead of cpu 7 at 3.19).
+
+**Measured** on the RP6, medians of three runs (the table in docs/psp-gpu-renderers.md, "Speed"), late frames, frames
+a second: Turnip's race 34.5 → 52.6, menu 49.7 → 68.0, LCS city 63.3 → 76.3, woods 75.1 → 79.0, Peace Walker's
+tutorial 73.9 → 105.8, WipEout 18.9 → 36.2; Qualcomm's driver 33.1 → 46.9, 46.3 → 64.0, 59.9 → 75.7, 73.9 → 94.7,
+68.0 → 93.3, 21.0 → 60.9. Seven software threads: 53.2, 69.2, 71.8, 70.9, 98.1, 16.2. So Vulkan (accurate) is level
+with seven threads in the 3D scenes and well ahead in WipEout and the 2D ones. Read back each frame, Turnip's LCS
+scenes are slower than before (the waits above); that's the desktop's way, not the app's.
+
+**Exact:** Software's every frame (VRAM and picture) and its end state (RAM and the whole machine) identical before
+and after, all seven scenes at 1 and 7 threads, 300 frames each; Vulkan (accurate)'s pictures byte for byte the same,
+all seven scenes, 10 frames each (M1).
+
+**Tests:** "draw textures kept decoded, their pages written" (new: kept where the bytes are the same, decoded afresh
+where they aren't, watched again); "gpu render to texture from a frame buffer taller than its picture, nothing
+finished" (new: the bloom's case, its last row at weight 0; late frames' shot; a short list not submitted at its
+end); "gpu lost" (its pretend backend marks itself lost, as Vulkan's does). `tests/psp/run-tests.sh` (sanitized) 345
+groups, none failing; `tests/allegrex/run-tests.sh` 58; `tests/psp/ares/run-tests.sh` 307 checks; the GPU tests on
+the RP6, Turnip and Qualcomm's driver, none failing.
+
+**Review** (an independent read-only one): no change to a picture; fixed as it found: `release()` at every frame
+handed over (short lists no longer submit), a lost GPU reported whichever path finds it first, source copies no
+larger than their texels, a written texture with more rows than the PRIM needs decoded afresh, `own()` telling again
+where the drawing threads' settle freed its pages, `GPU::drop()` dropping the last shot, `shoot()` false when the GPU
+stops, comments. Not taken: copies' sizes rounded to eights (it changed the render-to-texture test's pixels, which
+isn't understood yet); a test of the fetch's hold above 1x and of `System::late()`.
+
+**Left:** block transfers on the GPU (WipEout's two finishes a frame), a pipeline cache kept on disk, the CPU's
+transform (part 53: Vulkan (fast)).
+
+## Part 53: Vulkan (fast) — the GPU transforms 3D, and blends with its own units
+
+On branch `cursor/psp-gpu-fast2-2b67`, on top of part 52's `cursor/psp-gpu-fast-2b67`. docs/psp-gpu-renderers.md's
+"Vulkan (fast) (part 53)" is the design. PPSSPP's hardware transform informed it; none of its code is used, copied or
+translated (JPCSP's not read). Software stays the default and exact; Vulkan (accurate) is today's path, its pictures
+as they were.
+
+**The choice** (the owner's, 2026-10-09): "PSP Renderer" is now "Software (exact)", "Vulkan (accurate)" or "Vulkan
+(fast)", each described in Settings as it's chosen; the desktop's menu likewise; the core's "Renderer" option takes
+"Vulkan (fast)"; `psp-runner --renderer Vulkan-fast`. The saved value 1 is Vulkan (accurate), as Vulkan was; 2 is
+fast. A start-up check that fails, or a device lost, falls back to Software and says so, in fast mode as in accurate.
+
+**What fast mode does** (the design has the detail): 3D PRIMs of 16 vertices or more are handed to the GPU as the
+vertex type laid them out; `transform.vert` skins, transforms, lights, fogs and maps them as `transform.cpp` and
+`lighting.cpp` would (the lighting in the GE's own whole numbers) and cuts their positions to the GE's sixteenths.
+The GE still decides which triangles are drawn (`GE::meshTriangles()`): from each corner's clip position it drops
+what it wouldn't draw (out of sight, behind, no area, facing away) and cuts and draws the triangles reaching past the
+near plane itself, in their place among the others; the GPU gets the rest. Each PRIM's settings are a block of the
+run's storage buffer that its vertices name, so PRIMs drawn alike are one draw. Nothing is read in the shader: the
+GPU blends. Everything else is as Vulkan (accurate).
+
+**How it got fast** (the RP6, Turnip, the runner from adb's shell, late frames, frames a second after a 150-frame
+warm-up unless said):
+1. The first version (a uniform block per PRIM, skinning, lighting and mapping as pipeline constants) was slower
+   than the accurate mode: GTA's city 52 against 81. Pipelines: Peace Walker's combinations of bones and lights made
+   dozens more (5 ms a frame of compiling over 300 frames). Draws: each PRIM's block split them, 1,162 a frame against
+   604. And the waits at a finish grew from 0.67 to 3.96 ms a frame: the GPU had far more queued.
+2. Skinning, lighting and mapping read from the block, not constants: the pipelines as few as accurate's, about.
+3. Eight slots instead of three: fast mode makes more commands, and with three its emulation thread kept waiting a
+   moment for the run three back; sleeping often, the scheduler moved it to slower cores (seen: cpu 3-6 at 1.65-2.8
+   GHz, not cpu 7 at 3.19). MC3's race 59.8 → 79.6. (A 512-command submit bound tried with it cost MC3's menu, which
+   finishes every frame: back to 128.)
+4. The blocks in a storage buffer, each vertex naming its own: draws as few as accurate's. GTA's city 68 → 102.
+5. PRIMs under 16 vertices left to the CPU: Peace Walker's 5,000 small skinned PRIMs a frame cost more on the GPU's
+   way (64 against accurate's 107); left to the CPU, 128.
+6. The review's near plane (below): the GE deciding which triangles are drawn cost the race 1.3 ms a frame of the
+   CPU's (74.0 → 65.4); the world, view and projection matrices made one for it, 67.1. The GPU now gets the triangles
+   the accurate mode draws and no more (the menu's 23.7 million in 450 frames → 6.7), which shortened Qualcomm's
+   driver's waits (the menu 3.8 → 2.8 ms a frame).
+
+**Found on the way**: MoltenVK refused every transform pipeline (a helper named `signbit` clashed with Metal's own),
+and the 3D drew nothing: fast mode now asks for a pipeline before it records a PRIM for it (`Backend::drawable()`),
+leaving the PRIM to the GE where the driver won't make it, and the start-up check draws 3D through the GPU's
+transform. GTA's cars lost their gloss (a second pass with a depth test of equal: the two pipelines put the vertices
+a hair apart): `gl_Position` is invariant now.
+
+**Measured** on the RP6 (docs/psp-gpu-renderers.md, "Speed", has the table): medians of three runs of 450 frames,
+late frames, frames a second after a 150-frame warm-up. Turnip, accurate / fast: the race 62.3 / 67.1, the menu
+75.1 / 77.4, LCS's city 92.3 / 105.1, the woods 93.8 / 126.5, Peace Walker's play 121.5 / 125.0, WipEout 39.6 / 79.7;
+seven software threads 53.8, 67.0, 70.1, 71.3, 103.1, 17.1. Qualcomm's own driver, accurate / fast: 59.1 / 63.2,
+73.4 / 70.9, 87.4 / 96.5, 110.8 / 99.5, 114.8 / 113.7, 75.5 / 76.5. So on Turnip, the app's driver, fast mode is
+16-77% ahead of seven threads in the 3D scenes (WipEout 4.7 times) once its pipelines are made; over a whole run
+from a state the first frames' pipelines take most of that back (the race 49.2 against 52.5), until they're kept
+between sessions (part 54). On Qualcomm's driver its GPU is slower with fast mode's vertex shader and it's within
+10% of the accurate mode either way, 6-40% ahead of seven threads.
+
+**Accuracy** (docs/psp-gpu-renderers.md, "Accuracy"): pixels identical to the software renderer's, 10 frames of each
+scene, accurate / fast: Lumines 96.6 / 72.9%, Peace Walker's title 100.0 / 40.4%, MC3's menu 97.0 / 88.0%, the race
+95.0 / 71.5%, LCS's city 95.4 / 57.8%, the woods 91.5 / 52.4%, Peace Walker's play 99.2 / 55.0%; fast mode's
+differences a level or two (colors and fog interpolated by the GPU) but for Peace Walker's 16-bit blends, a step of a
+5-bit channel spread evenly as a different dither. Nothing missing or misplaced to the eye. Vulkan (accurate)'s
+pictures are as they were: the GPU tests' every count the same from the base and from this branch (the review's), and
+the RP6's scenes the same to the channel.
+
+**In the app** (the RP6, Turnip, the release build, Vulkan (fast), the app's stats: frames a second, capped at 60,
+and the emulation's ms a frame): Midnight Club 3's title 60.0 (16 ms) and a quick race 51-53 (19 ms; part 41 had
+the accurate path at 39.0 and 25.6 ms in a quick race); Liberty City Stories' 3D city 60.0 (11-13 ms); Vice City
+Stories' opening 60.0 (13-16 ms); Burnout Legends' car select and a race 60.0 (11-13 ms); WipEout's menus 60.0 (4-5
+ms; at its profile screen it stopped taking adb's presses, so its race wasn't reached in the app); Peace Walker's
+title 60.0 (5 ms); MotorStorm: Arctic Edge, black after its first screen in part 41, through its notice to its
+title scene, 60.0 (9 ms); Ridge Racer 2's loading game and title 60.0 (5 ms). Each said "the Vulkan renderer draws
+(fast, 3D transformed by the GPU), on Vulkan: Turnip Adreno (TM) 740"; none fell back, and nothing looked wrong.
+
+**Review** (an independent read-only one, then a second over the fixes). Found and fixed:
+- The start-up check's 3D never reached the GPU's transform (PRIMs of three corners, under `MeshLeast`), so a
+  driver drawing `transform.vert` wrong would have passed it, and `gpuFast` failed: four PRIMs of six now, and the
+  check fails where none reached it. Where its 3D alone fails, the check runs again with the GE transforming.
+- Triangles cut by the near plane had their colors and fog blended across the screen by the GPU's clipper, not in
+  clip space as the GE does (a ground mesh under the camera 67.6% the same, its fog 76.0%): the GE cuts and draws
+  them now, in their place (`GE::meshTriangles()`). And the GPU drew triangles the GE drops for their depths (wholly
+  past the far plane with DEPTH_CLIP_ENABLE on, any corner outside with it off): the GE's rules decide every
+  triangle now, its culling with them. The reviewer's scenes, strips, fans, culling, flat shading, lights, texture
+  modes, fog, skinning, the near and far planes, give the accurate mode's numbers exactly.
+- `transform.vert` declared clip distances, which needs a device feature, and its module was made on every device,
+  in both modes: no clip distance now, the module made in fast mode alone.
+- 3D clear mode went through the GPU's transform (each triangle's stencil is its own last corner's): left to the GE.
+- The filter was chosen at each pixel from perspective-correct coordinates: once a triangle now, from coordinates
+  straight across the screen, the GE's ratio (the reviewer's filter scenes: 54 pixels far off → none).
+- Eight slots let a GPU-bound game show frames up to eight runs late: two frames in flight at most.
+- A GPU of the other mode was kept across a power cycle; the descriptor sets weren't bound again after a copy's
+  pipeline layout (both modes; drivers kept them anyway); stale text ("three slots"); layout asserts.
+The second review, over those fixes, found: the frames-in-flight wait named slots, not runs, so with five runs a
+frame or more it waited for one of the frame's own (by serial now); with DEPTH_CLIP_ENABLE on the GPU clamped the
+depth at each pixel where the GE holds each corner's (a triangle across the far plane, then a quad drawn with a test
+of less: 210 pixels far off, none now; held at each corner in `transform.vert`); a corner behind the camera that
+isn't past the near plane, which the GE projects through its w, went to the GPU (the GE's now); a mode switched
+without unloading kept Android's window from the new GPU; `statistics.meshes` counted runs. Its scenes (overlapping
+triangles cut and whole in turn, a strip cut mid-way, flat shading, a narrow depth range, a flush between a PRIM's
+runs, random triangles from behind the camera to past the far plane, off the 4096-pixel screen, culled each way)
+give the accurate mode's numbers exactly. Not taken: a second pass with a depth test of equal over a model drawn as
+PRIMs of other sizes meets the GE's depths and the GPU's a float's last bit apart (181 of 3,448 pixels missed in a
+scene made to show it; `MeshLeast` splits the paths; games' passes redraw the same PRIMs, which meet exactly).
+
+**Tests:** "gpu fast mode: 3D transformed by the GPU, near the software renderer" (the start-up check with its 3D
+through the GPU's transform, at least four PRIMs taken; pspsdk's samples, cube, celshading and envmap through it,
+held to the same 3 channels in 1000 as the accurate mode); "gpu fast mode: the GE's rules for which triangles are
+drawn" (random triangles from behind the camera to past the far plane, off the screen, culled each way, lists and
+strips, and a fogged ground of random colors under the camera, DEPTH_CLIP_ENABLE on and off: no more pixels far off
+than the accurate mode, none on the M1 and the RP6); "gpu start-up check" and the rest as before. The app's
+`PspVideoTest.rendererChoicesKeepTheSavedValues` (0, 1 and 2 kept, anything else Software, the labels).
+`tests/psp/run-tests.sh` (sanitized), `tests/allegrex/run-tests.sh`, `tests/psp/ares/run-tests.sh`: none failing;
+the GPU tests on the RP6, Turnip and Qualcomm's own driver: none failing.
+
+**Left:** a pipeline cache kept between sessions (part 54); the bones in a block of their own, so that small skinned
+PRIMs (Peace Walker's) could go to the GPU too and every 3D PRIM take one path; Qualcomm's driver's GPU time in fast
+mode; textures decoded on the GPU (palettes, swizzling, DXT: 0.4 ms a frame of the race's CPU since part 52, so
+later); block transfers on the GPU (WipEout's two finishes a frame).
+
+## Part 54: the Vulkan renderer's pipelines kept between sessions
+
+On branch `cursor/psp-gpu-fast3-2b67`, on top of part 53's `cursor/psp-gpu-fast2-2b67`. docs/psp-gpu-renderers.md
+has the design (the pipelines' paragraph) and the table ("Speed", part 54). Software is untouched; neither Vulkan
+mode draws differently.
+
+**Why.** Part 53's numbers after a warm-up and over a whole run from a state differ by the pipelines a game makes in
+its first frames: fast mode's 79 in Midnight Club 3's race took Turnip 2.6 seconds to make (its transform pipelines
+cost 33 ms each, the accurate mode's 14), so over the 450 frames the race ran at 49.2 frames a second, behind seven
+software threads' 52.5, and in the app the race's start stalled for 725 ms. Pipelines were made afresh every session.
+
+**What was done:**
+- System's option "Pipeline Cache", a host file: read at the renderer's start and handed to `GPU::vulkan()`, which
+  gives it to the driver as its pipeline cache's first data; written by `System::keepPipelines()` where pipelines
+  were made since it was last written (as a game ends, every 600 frames, as the renderer is let go of), beside the
+  file and renamed over it. The app's file is `psp_vulkan_pipeline_cache.bin` in its Vulkan cache folder, beside the
+  N64's (or the saves folder); the runner's `--pipeline-cache FILE` the same; its summary says how many pipelines were
+  made and the ms the driver took.
+- The driver's data goes in the file after a header of our own (`Kept`: the device, the driver's version and cache
+  UUID, a 64-bit or 32-bit build, the data's size and CRC-32), and reaches the next session's driver only where all
+  of it matches and the driver's own header is sound: the review found MoltenVK taking a cache with an intact header
+  and a zeroed tail (a power cut after the rename could leave one) and then failing the start-up check every session,
+  and a cut-short one leaving the session's cache unreadable for good. A renderer made with a kept cache that fails
+  its check is made again without it, the file let go of; a driver refusing the data gets an empty cache; the same
+  size again isn't written again; past 32 MB the file is let go of; a folder that isn't there is made, and a file that
+  can't be written is said once, not tried every 600 frames.
+
+**Measured** on the RP6: each scene twice from its state with `--pipeline-cache`, the first from an empty cache, the
+second from what the first kept; the driver's ms making the pipelines, and frames a second over the 450 frames.
+Turnip, fast: the race 2,589 → 1.2 ms, 49.2 → 67.1; LCS's city 1,074 → 0.6 ms, 85.5 → 103.6; Peace Walker's play
+790 → 0.6 ms, 105.2 → 123.8; WipEout 2,559 → 1.2 ms, 55.4 → 78.6. Qualcomm's driver, fast: 2,587 → 23 ms, 47.8 →
+63.9; 1,258 → 13 ms, 78.8 → 95.7; 1,106 → 12 ms, 93.1 → 113.0; 2,423 → 24 ms, 55.1 → 75.6. The accurate mode gains
+likewise (Turnip's race 872 → 0.8 ms, 54.3 → 60.2). From a game's second session on, fast mode is ahead of seven
+software threads over a whole run too: the race 67.1 against 52.5, the city 103.6 against 70.4. The files: 0.15-1.3
+MB a scene. In the app (Turnip, fast): the file written at the 600-frame mark, 198 KB, then 1.4 MB once
+Midnight Club 3's race had been run; that race's start, its longest frames 619, 335 and 226 ms in a first session,
+30 ms at most in the second (the file a build before `Kept` wrote was left out at the first, as another format's,
+and written again).
+
+**Review** (an independent read-only one): found the damaged-cache cases above (fixed: `Kept`, the retry without
+the cache), the app's cache folder possibly not made on an install whose setting was never changed (made now), a
+refused cache leaving the session without one (an empty one now), the driver's version not checked (in `Kept`),
+the write's close not checked and a failed write's `.new` left (both fixed), every warm session rewriting the same
+file (not now), an unbounded file (32 MB), the read byte by byte without a bound (sized now), and the test not
+showing bad data left out. Not taken: writing on another thread (the write happens only where pipelines were made,
+which stalls anyway: 0.4-1.5 ms on the M1 for 44 KB).
+
+**Tests:** "gpu pipelines kept between sessions" (a renderer made with the data from one whose check ran takes it,
+its cache as big from the start, and passes its check; another driver version's, another cache UUID's, a file cut
+short, one with a zeroed tail, and junk are left out, each renderer's cache starting without them, and draw right).
+`tests/psp/run-tests.sh` (sanitized), `tests/allegrex/run-tests.sh`, `tests/psp/ares/run-tests.sh`: none failing;
+the GPU tests on the RP6, Turnip and Qualcomm's own driver: none failing.
+
+**Left:** a file per game (one file holds every game's pipelines until 32 MB); fast mode's first session still pays
+for its pipelines (made on another thread while the GE draws those PRIMs, as PPSSPP does, would hide it); the app's
+Vulkan cache folder moved in Settings carries the N64's file over, not the PSP's (one session made afresh).
+
 ## Part 55: character conversion, thread-local storage, lent stacks, and what keeps the black games black
 
-On branch `cursor/psp-hle-games11-2b67`, on top of #184's `cursor/psp-vk-play-2b67` (#186's re-run under it). Sources:
+On branch `cursor/psp-hle-games11-2b67`, on top of #188's `cursor/psp-gpu-fast3-2b67` (#187, #185, #184 and #186's re-run
+under it). Sources:
 pspautotests' programs and their recordings (each named below; the programs themselves were also run through the kernel
 by a scratch runner answering their emulator devctl, their output compared with the recordings line for line), pspsdk's
 headers, the PSP Developer Wiki (through the Wayback Machine) and the games' own behaviour, traced with a scratch
