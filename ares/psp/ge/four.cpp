@@ -59,24 +59,29 @@ static alwaysinline auto floorLanes(GE::f32x4 value) -> GE::s32x4 {
   GE::s32x4 cut = __builtin_convertvector(value, GE::s32x4);
   return cut + (__builtin_convertvector(cut, GE::f32x4) > value);  //(a comparison that holds is -1)
 }
-//geReciprocal() (draw.cpp) of each lane, the same numbers: each lane's place on its chord worked out alone (the
-//chords a table), the rest four at once. A lane at 2^111 or more, or a zero, denormal, infinity or not a number, is
-//worked out alone too.
+//geReciprocal() (draw.cpp) of each lane, the same numbers, four at once but for the chords' table, read once when
+//all four lanes are on one chord (as nearly always) and a lane at a time otherwise.
 static alwaysinline auto reciprocalLanes(GE::f32x4 x) -> GE::f32x4 {
   auto bits = (GE::u32x4)x;
-  GE::u32x4 exponent = bits >> 23 & 255;
+  auto exponent = (GE::s32x4)(bits >> 23 & 255);
   GE::s32x4 q;
-  for(u32 lane = 0; lane < 4; lane++) {
-    auto& line = reciprocalChords.chords[bits[lane] >> 16 & 127];
-    q[lane] = (64 * line.start + 63 + line.slope * s32(bits[lane] >> 8 & 255)) >> 7;
+  GE::u32x4 chord = bits >> 16;  //(with the sign and exponent)
+  if(!anyLane(chord != chord[0])) {  //all four on one chord, as nearly always: it's fetched once
+    auto& line = reciprocalChords.chords[chord[0] & 127];
+    q = (64 * line.start + 63 + line.slope * (GE::s32x4)(bits >> 8 & 255)) >> 7;
+  } else {
+    for(u32 lane = 0; lane < 4; lane++) {
+      auto& line = reciprocalChords.chords[chord[lane] & 127];
+      q[lane] = (64 * line.start + 63 + line.slope * s32(bits[lane] >> 8 & 255)) >> 7;
+    }
   }
-  auto value = (GE::f32x4)((238 - exponent) << 23) * __builtin_convertvector(q, GE::f32x4);
-  value = (GE::f32x4)((GE::u32x4)value | (bits & 0x8000'0000));
-  GE::s32x4 alone = exponent - 1 > 236u;  //(0 runs round to the top)
-  if(anyLane(alone)) {
-    for(u32 lane = 0; lane < 4; lane++) if(alone[lane]) value[lane] = geReciprocal(x[lane]);
-  }
-  return value;
+  //times 2^(111 - exponent) as two powers of two, each a normal float, so that every product is exact (one below
+  //2^-126 too: q has 16 significant bits at most); the sign put back; a zero, denormal, infinity or not a number: 0
+  GE::s32x4 power = 111 - exponent, half = power >> 1;
+  auto value = __builtin_convertvector(q, GE::f32x4) * (GE::f32x4)((half + 127) << 23) *
+               (GE::f32x4)((power - half + 127) << 23);
+  GE::s32x4 counts = (exponent != 0) & (exponent != 255);
+  return (GE::f32x4)(((GE::u32x4)value | (bits & 0x8000'0000)) & (GE::u32x4)counts);
 }
 //trunc24(integer * unit * reciprocal) (draw.cpp) of each lane, two at a time in doubles, where each product is exact
 //and, being 0 or between 2^-300 and 2^300, a normal double (so clearing its fraction past the top 23 bits is all).
@@ -144,8 +149,19 @@ auto GE::fourFriendly(const Job& job) const -> bool {
     for(u32 n = 0; n < 4; n++) if(!r.flat && !small(r.colors[n])) return false;
     for(u32 n = 0; n < 3; n++) if(!r.flat && r.shines && !small(r.shine[n])) return false;
     if((p.fog && !small(r.fog)) || (needsZ && !small(r.depth))) return false;
-    //(and 3D texture coordinates' s, t and q, part 60: within 2^29 at the corners)
-    if(look.textured && r.perspective && !(small(r.texS) && small(r.texT) && small(r.texQ))) return false;
+    //And 3D texture coordinates' s, t and q (part 60), within 2^29 of 0 at the corners: their steps' rounding (under
+    //1 + a 2^15th of each) takes them at most 2^29 + 2^18 further where its fours reach when the steps times the
+    //sixteenths to there stay under 2^44, which a small triangle's do whatever its steps.
+    if(look.textured && r.perspective) {
+      auto far = [](s64 from, s64 to, s64 start) {  //the most sixteenths from the start to a pixel's middle
+        return u64(std::max(std::abs(from * 16 + 8 - start), std::abs(to * 16 + 8 - start)));
+      };
+      u64 farX = far(job.firstX - 3, job.lastX + 3, r.startX), farY = far(job.firstY, job.lastY, r.startY);
+      auto near = [&](const Job::Stepped& c) {
+        return u128(std::abs(c.across)) * farX + u128(std::abs(c.down)) * farY < u128(1) << 44;
+      };
+      if(!near(r.texS) || !near(r.texT) || !near(r.texQ)) return false;
+    }
   }
   return true;
 }
@@ -566,14 +582,15 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
     //s, t and q (part 60) as the colors: 32-bit lanes that may run round, as every lane inside the triangle keeps its
     //value (each within 2^30 of 0 there), from the row's first four, then stepped a four at a time
     bool divides = look.textured && r.perspective;
-    u32x4 texLanes[3] = {}, texSteps[3] = {};
+    u32x4 texLanes[3] = {};
+    u32 texSteps[3] = {};
     if(divides) {
       const Job::Stepped* tex[3] = {&r.texS, &r.texT, &r.texQ};
       for(u32 k = 0; k < 3; k++) {
         auto& c = *tex[k];
         s128 at = c.start + s128(s64(first) * 16 + 8 - r.startX) * c.across + s128(sampleY - r.startY) * c.down;
         texLanes[k] = u32(at) + u32(c.across * 16) * u32x4(Lanes);
-        texSteps[k] = u32x4{} + u32(c.across * 64);
+        texSteps[k] = u32(c.across * 64);
       }
     }
     auto next = [&] {

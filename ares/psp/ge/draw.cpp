@@ -547,14 +547,35 @@ static alwaysinline auto trunc24(f64 x) -> float {
 
 //Three values as 15-bit integers on the unit of the largest one's exponent (the largest's leading one is the
 //integers' bit 14), cut toward zero; returns the unit (1 when all three are 0). A pixel rebuilds a value as the
-//integer times the unit. Infinities and not a number count as 0. (The unit is worked out as a double, where it
-//always fits: as a float, the unit of a tiny trio can be 0, which leaves its pixels' values 0.)
+//integer times the unit. Infinities and not a number count as 0. Mostly each integer is the value's 24 bits (the
+//hidden one and the fraction) shifted down by how far its exponent is below the largest's, and 9 more; a trio with
+//a denormal, or whose largest is below 2^-112, is worked out in doubles, where its unit always fits (as a float, a
+//tiny trio's unit can be 0, which leaves its pixels' values 0).
 static auto quantize15(const float (&value)[3], s32 (&out)[3]) -> float {
+  u32 bits[3], top = 0;  //the largest exponent among the finite values
+  bool tiny = false;
+  for(u32 k = 0; k < 3; k++) {
+    std::memcpy(&bits[k], &value[k], 4);
+    u32 exponent = bits[k] >> 23 & 255;
+    if(exponent == 255) continue;
+    tiny |= exponent == 0 && bits[k] << 1;
+    top = std::max(top, exponent);
+  }
+  if(!tiny && top >= 15) {
+    for(u32 k = 0; k < 3; k++) {
+      u32 exponent = bits[k] >> 23 & 255, shift = 9 + top - exponent;
+      bool counts = exponent && exponent < 255 && shift < 24;  //(0, infinities and not a number: 0)
+      s32 magnitude = counts ? s32(((bits[k] & 0x7f'ffff) | 0x80'0000) >> shift) : 0;
+      out[k] = bits[k] >> 31 ? -magnitude : magnitude;
+    }
+    u32 unitBits = (top - 14) << 23;
+    float unit;
+    std::memcpy(&unit, &unitBits, 4);
+    return unit;
+  }
   s32 largest = -1000;  //the largest one's exponent: it's 1 to 2 times 2 to that
   for(u32 k = 0; k < 3; k++) {
-    u32 bits;
-    std::memcpy(&bits, &value[k], 4);
-    u32 exponent = bits >> 23 & 255, fraction = bits & 0x7f'ffff;
+    u32 exponent = bits[k] >> 23 & 255, fraction = bits[k] & 0x7f'ffff;
     if(exponent == 255 || (exponent == 0 && fraction == 0)) continue;
     largest = std::max(largest, exponent ? s32(exponent) - 127 : -118 - __builtin_clz(fraction));  //(denormal)
   }
