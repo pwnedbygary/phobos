@@ -33,11 +33,12 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    `/opt/pspdev`, with `psp-config` on the PATH): `make` gives `EBOOT.PBP`. `make SMOKE=1` gives a quick version for
    trying in an emulator first, PPSSPP's PPSSPPHeadless, with `-i` (its ARM64 JIT trips an assertion on one of
    round 3's recorder entries) and `--graphics=software`. It runs round 3's VFPU and FPU tests (the big ones cut
-   short), the FPU probes and the GE's tests (rounds 2-4) at once, then leaves; its results say nothing about a
+   short), the FPU probes and the GE's tests (rounds 2-5) at once, then leaves; its results say nothing about a
    PSP. Run `make clean` when switching between the two.
 2. On a PSP with custom firmware that runs homebrew, copy `EBOOT.PBP` to a folder under `PSP/GAME` on the memory
    stick (say `PSP/GAME/PSPMEASURE`) and start it. Keep the charger in. Up and down pick a line of the menu, and X
    runs it:
+   - Round 5: the GE's steps, lighting's share, texels (about 3 MB)
    - Round 4: the GE's lines, boxes, DXT and curves (about 8 MB)
    - Round 3: the VFPU and the FPU (about 6 MB)
    - Round 3: the GE (about 7 MB)
@@ -63,13 +64,6 @@ The menu, and starting afresh (which renames a folder on the memory stick), have
 far: the first run on a PSP is their first real test. Round 1's random number test (`vrnd`) records the generator
 as the program found it, so it runs once per start of the program: to run it again (after starting afresh, say),
 start the program again first (otherwise it says so, and skips that one test).
-
-## Round 5 (source only until the EBOOT is rebuilt)
-
-`ge.c` has `round5()`: probes for color stepping, lighting's last products, and perspective texels
-(`ramp-color-probes`, `light-product-probes`, `texel-wall-probe`, `texel-floor-probe`). `geRound(5)` runs them.
-The committed `pspmeasure.elf` and the menu do not list Round 5 yet (so the host's measure test keeps its
-line numbers); add a menu line and rebuild the EBOOT when running them on a PSP.
 
 ## Files
 
@@ -205,12 +199,26 @@ pspautotests' recordings settle only part (docs/psp-core.md, parts 29 and 33):
   (`curves-count-255`), last and a few to a display list, so that if the GE stalls there only that test is given up
   on. The core draws these by a rule fitted to round 3's pictures and pspautotests' (docs/psp-core.md, part 33).
 
+Round 5 (about 3 MB, `manifest5.txt`) takes what docs/psp-core.md's part 48 left open, once it fitted how the GE
+steps colors, fog and depth across triangles:
+
+- **The steps on shapes they weren't fitted to:** 64 random triangles in through mode, colors (`steps-check`) and
+  depths (`steps-depth-check`, read through VRAM's fourth copy); the near plane's cut with each corner past it in
+  turn, each way round (`clip-split`), which shows how the four corners left are split into two triangles.
+- **Lighting's share:** four normals to a picture, each with 192 different light-times-material products, which pin
+  the share the GE takes of a light far finer than a 256th (`light-share-0` to `-3`): round 3's two odd cells'
+  normals, others as long, the same three times as long, round 2's sweep normals, and turned.
+- **Perspective texels to the texel in thousands:** a repeating texture with coordinates up to 4096 texels, so each
+  pixel shows its coordinates to the texel: round 3's wall and 3D sprite and round 2's floor (`persp-wall`,
+  `-sprite`, `-floor`), a wall with u / w the same at every corner, so u shows 1 / w alone (`persp-divide`), and one
+  at w 3 everywhere, no perspective (`persp-w3`).
+
 ### How the GE's comparison works
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its
-menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, leaving), and checks
-every file is written; with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs from that folder
-(`PSP_GE_OURS` keeps the core's own files for a closer look):
+menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, rounds 4 and 5,
+leaving), and checks every file is written; with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs
+from that folder (`PSP_GE_OURS` keeps the core's own files for a closer look):
 
 ```
 tools/psp-test-programs/build.sh /tmp/programs   # builds pspmeasure.elf among the test programs
