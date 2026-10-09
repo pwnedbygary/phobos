@@ -35,11 +35,15 @@ namespace {
   //The library's memory, where the handle points (its "LIBMPEG"): the ringbuffer it reads (where shared.h's
   //SceMpegBufferHeader has it), then, past the fields shared.h names, the library's own state, as Sony's keeps its
   //own there: the bytes of video already taken from the ring's first packet, whether the decoder holds a picture
-  //back, whether the last feeding came up short (the movie's file ended: its last access unit ends with its data),
-  //the frame width it was made with, and whether its ring has been given a pack (bit 0) and the movie's header
-  //before the first (bit 1; mpegReturned()).
+  //back, whether the movie has ended (its last access unit ends with its data: mpegFinish()), the pixel format
+  //sceMpegAvcDecodeMode chose (one more than it; 0 for none), the frame width it was made with, whether its ring has
+  //been given a pack (bit 0) and the movie's header before the
+  //first (bit 1; mpegReturned()), how many packets the movie's stream has (its header read for the library by
+  //sceMpegQueryStreamOffset; 0 if it wasn't), and how many packs Put has given since the stream began (or began
+  //again: a flush, or its header coming round).
   constexpr u32 LibraryRingbuffer = 0x10, LibraryTaken = 0x700, LibraryHolding = 0x704, LibraryEnded = 0x708,
-                LibraryPixels = 0x70c, LibraryFrameWidth = 0x710, LibraryPacked = 0x714;
+                LibraryPixels = 0x70c, LibraryFrameWidth = 0x710, LibraryPacked = 0x714, LibraryStream = 0x718,
+                LibraryFed = 0x71c;
   constexpr u32 LibraryMemory = 0x10000, LibraryOffset = 0x30, LibraryState = 0x800;
   constexpr u64 NoTime = ~0ull;
   constexpr u32 MpegDecodeMicroseconds = 300;  //chosen, as atrac.cpp's
@@ -242,6 +246,7 @@ auto Kernel::mpegNext(MpegCall& call) -> void {
 //before it, and nothing more is asked. What comes before the first pack (the movie's header, from a game that reads
 //its file from the start) is taken; and if the feeding began so, the header coming round again after packs is the
 //movie starting over (a callback that goes back to its file's start, as Space Invaders Extreme's does), not its end.
+//The packs taken are counted for the library, from 0 again as the movie starts over (mpegFinish()).
 //Chosen, as one game needs it and no recording shows it: Mega Man Maverick Hunter X feeds its movie 32 packets at a
 //time from a file that goes on past it, and starts the movie only once Put has given exactly the stream's size. A
 //ring without a library to keep this in (or a run no longer in memory) takes all it's given.
@@ -261,18 +266,23 @@ auto Kernel::mpegReturned() -> void {
             && memory.reaches(at, given * PacketSize);
   u32 state = known ? memory.read(4, library + LibraryPacked) : 0;
   bool packed = state & 1, headed = state & 2;  //given a pack; a header came before the first
+  u32 fed = known ? memory.read(4, library + LibraryFed) : 0;
   u32 taken = known ? 0 : given;
   for(; taken < given; taken++) {
     u32 first = memory.read(4, at + taken * PacketSize);
     bool pack = first == 0xba01'0000, header = first == 0x464d'5350;  //"PSMF"
     if(packed && !pack) {
       if(!header || !headed) break;
-      packed = false;  //the movie again, from its header
+      packed = false, fed = 0;  //the movie again, from its header
     }
     headed |= header && !packed;
     packed |= pack;
+    fed += pack;
   }
-  if(known) memory.write(4, library + LibraryPacked, u32(packed) | u32(headed) << 1);
+  if(known) {
+    memory.write(4, library + LibraryPacked, u32(packed) | u32(headed) << 1);
+    memory.write(4, library + LibraryFed, fed);
+  }
   memory.write(4, ringbuffer + RingWritten, (written + taken) % packets);
   memory.write(4, ringbuffer + RingFilled, memory.read(4, ringbuffer + RingFilled) + taken);
   call.put += taken;
@@ -281,11 +291,17 @@ auto Kernel::mpegReturned() -> void {
   mpegNext(call);
 }
 
-//Put returns to the game how many packets came. Coming up short of what it asked for is kept for sceMpegGetAvcAu:
-//the movie's file ended.
+//Put returns to the game how many packets came. Kept for sceMpegGetAvcAu: whether the movie has ended, its file run
+//out (the feeding came up short of what it asked for) or its whole stream given (exactly as many packs, since the
+//stream began, as the header read by sceMpegQueryStreamOffset says it has: a feeding that goes on past them is the
+//movie going round again, its access units whole).
 auto Kernel::mpegFinish(MpegCall& call) -> void {
   u32 library = memory.read(4, call.ringbuffer + RingLibrary);
-  if(memory.reaches(library, LibraryState)) memory.write(4, library + LibraryEnded, call.left > 0);
+  if(memory.reaches(library, LibraryState) && memory.readString(library, 8) == "LIBMPEG") {
+    u32 stream = memory.read(4, library + LibraryStream);
+    bool whole = stream && memory.read(4, library + LibraryFed) == stream;
+    memory.write(4, library + LibraryEnded, call.left > 0 || whole);
+  }
   restore(call.caller);
   cpu.ipu.r[2] = call.put;
   mpegCalls.erase(current->uid);
@@ -338,16 +354,30 @@ auto Kernel::sceMpegDelete() -> void {
 }
 
 //(handle, the header, where to put the offset): where the movie's stream starts, after its header (a big-endian word
-//8 bytes in); a header that isn't PSMF's, or no decoders to play it with, is refused.
+//8 bytes in); a header that isn't PSMF's, or no decoders to play it with, is refused. The library keeps how many
+//packets the stream has (its size, the word 12 bytes in, rounded up): once a Put stops having given exactly that many
+//packs, the movie has ended, as when a feeding comes up short (mpegFinish()). Chosen, as games need it and no
+//recording shows it: Pursuit Force: Extreme Justice asks Put for just what's left of its movie and then for none,
+//Disney-Pixar Cars: Race-O-Rama gives its whole movie in one Put, and both wait for good for the last access unit and
+//its packets to be free. Sony's movies end with no program end code to tell (Ridge Racer 2's and pspautotests'
+//test.pmf: padding after the last PES packet).
 auto Kernel::sceMpegQueryStreamOffset() -> void {
   u32 header = arg(1);
   if(!videoDecoders || !memory.reaches(header, 16) || memory.readString(header, 4) != "PSMF") {
     return result(MpegErrorValue);
   }
-  u32 offset = memory.read(1, header + 8) << 24 | memory.read(1, header + 9) << 16 | memory.read(1, header + 10) << 8
-             | memory.read(1, header + 11);
-  if(memory.reaches(arg(2), 4)) memory.write(4, arg(2), offset);
+  if(memory.reaches(arg(2), 4)) memory.write(4, arg(2), mpegHeaderWord(header + 8));
+  if(u32 library = mpegLibrary(arg(0))) {
+    memory.write(4, library + LibraryStream, u32((u64(mpegHeaderWord(header + 12)) + PacketSize - 1) / PacketSize));
+  }
   result(0);
+}
+
+//A big-endian word of a movie's header.
+auto Kernel::mpegHeaderWord(u32 address) -> u32 {
+  u32 value = 0;
+  for(u32 n = 0; n < 4; n++) value = value << 8 | memory.read(1, address + n);
+  return value;
 }
 
 //(the header, where to put the size): the stream's size (the big-endian word 12 bytes in).
@@ -356,9 +386,7 @@ auto Kernel::sceMpegQueryStreamSize() -> void {
   if(!videoDecoders || !memory.reaches(header, 16) || memory.readString(header, 4) != "PSMF") {
     return result(MpegErrorValue);
   }
-  u32 size = memory.read(1, header + 12) << 24 | memory.read(1, header + 13) << 16 | memory.read(1, header + 14) << 8
-           | memory.read(1, header + 15);
-  if(memory.reaches(arg(1), 4)) memory.write(4, arg(1), size);
+  if(memory.reaches(arg(1), 4)) memory.write(4, arg(1), mpegHeaderWord(header + 12));
   result(0);
 }
 
@@ -387,7 +415,9 @@ auto Kernel::sceMpegFlushAllStream() -> void {
       memory.write(4, ringbuffer + RingRead, memory.read(4, ringbuffer + RingWritten));
       memory.write(4, ringbuffer + RingFilled, 0);
     }
-    for(u32 offset : {LibraryTaken, LibraryHolding, LibraryEnded, LibraryPacked}) memory.write(4, library + offset, 0);
+    for(u32 offset : {LibraryTaken, LibraryHolding, LibraryEnded, LibraryPacked, LibraryFed}) {
+      memory.write(4, library + offset, 0);  //(the stream's size is kept: the movie may be fed again from its start)
+    }
     if(auto found = mpegStreams.find(library); found != mpegStreams.end()) {
       auto& stream = found->second;
       stream.unit.clear();

@@ -532,6 +532,229 @@ static auto mpegMovieBigRing() -> void {
   CHECK(m.notes.size(), 0);
 }
 
+//The stream tests' header for the library (sceMpegQueryStreamOffset, the handle given): the movie's own header with
+//its stream's offset (0x800) and size (so many packets) filled in.
+constexpr u32 StreamHeader = R + 0x2000;
+auto streamHeader(KernelMachine& m, const Movie& movie, u32 packets) -> void {
+  m.system.memory.copyIn(StreamHeader, movie.bytes.data(), 2048);
+  for(u32 n = 0; n < 4; n++) {
+    m.system.memory.write(1, StreamHeader + 8 + n, 0x800 >> (24 - n * 8));
+    m.system.memory.write(1, StreamHeader + 12 + n, packets * 2048 >> (24 - n * 8));
+  }
+  CHECK(m.call("sceMpegQueryStreamOffset", {Handle, StreamHeader, R + 0x1f0}), 0);
+}
+
+//The stream tests' steps, each keeping what it got in a numbered word of Results: Put asking for so many packets
+//(its result); sceMpegGetAvcAu (its result, then the access unit's size in the next word) and a decode; a word of
+//the library's own state (whether the movie has ended, the packs given).
+constexpr u32 StreamEnded = Library + 0x30 + 0x708, StreamFed = Library + 0x30 + 0x71c;
+auto streamPut(Assembler& a, u32 ask, u32 slot) -> void {
+  a.li(a0, Ring); a.li(a1, ask); a.li(a2, 16); a.call("sceMpegRingbufferPut");
+  a.li(t0, Results + slot * 4); a.put(sw(v0, 0, t0));
+}
+auto streamTake(Assembler& a, u32 slot) -> void {
+  a.li(a0, Handle); a.li(a1, 0x12c0); a.li(a2, Au); a.li(a3, Attribute); a.call("sceMpegGetAvcAu");
+  a.li(t0, Results + slot * 4); a.put(sw(v0, 0, t0));
+  a.li(t0, Au); a.put(lw(t1, 20, t0)); a.li(t0, Results + slot * 4 + 4); a.put(sw(t1, 0, t0));
+  a.li(a0, Handle); a.li(a1, Au); a.li(a2, 512); a.li(a3, Buffer); a.li(t0, Got); a.call("sceMpegAvcDecode");
+}
+auto streamNote(Assembler& a, u32 address, u32 slot) -> void {
+  a.li(t0, address); a.put(lw(t1, 0, t0)); a.li(t0, Results + slot * 4); a.put(sw(t1, 0, t0));
+}
+auto streamSlot(KernelMachine& m, u32 slot) -> u32 { return word(m, Results + slot * 4); }
+
+//A movie given whole in one Put, no feeding coming up short after it (Disney-Pixar Cars: Race-O-Rama's; Pursuit
+//Force: Extreme Justice asks for just what's left, then for none): once a Put has given as many packs as the header,
+//read for the library by sceMpegQueryStreamOffset, says the stream has, the movie has ended, and the last access unit
+//comes with its data, every packet free after it. Without the header read, the last waits for a feeding to come up
+//short. On both engines.
+static auto mpegMovieFedWhole() -> void {
+  constexpr u64 None = Movie::None;
+  Movie movie({3000, 700, 1500, 2600}, {90000, None, None, None});
+  constexpr u32 Frames = 6;
+  for(bool recompile : {false, true}) {
+    for(bool read : {true, false}) {
+      KernelMachine m;
+      mpegSetUp(m, movie, 16);
+      mpegCallback(m, movie, false, false);
+      if(read) streamHeader(m, movie, movie.packets() - 1);  //the stream: every packet but the header
+      Assembler a{m, 0x0880'1000};
+      a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+      a.li(a0, Ring); a.li(a1, movie.packets()); a.li(a2, movie.packets()); a.call("sceMpegRingbufferPut");
+      a.li(t0, Results); a.put(sw(v0, 0, t0));
+      a.li(s0, 0); a.li(s1, Results + 4);
+      u32 loop = a.here();
+      a.li(a0, Handle); a.li(a1, 0x12c0); a.li(a2, Au); a.li(a3, Attribute); a.call("sceMpegGetAvcAu");
+      a.put(sw(v0, 0, s1));
+      a.li(a0, Handle); a.li(a1, Au); a.li(a2, 512); a.li(a3, Buffer); a.li(t0, Got); a.call("sceMpegAvcDecode");
+      a.put(addiu(s1, s1, 4)); a.put(addiu(s0, s0, 1)); a.li(t0, Frames);
+      u32 at = a.here();
+      a.put(bne(s0, t0, s32(loop - at - 4) / 4)); a.put(nop);
+      a.li(a0, Ring); a.call("sceMpegRingbufferAvailableSize");
+      a.li(t0, Results + 0x40); a.put(sw(v0, 0, t0));
+      a.call("sceKernelExitGame");
+      m.runProgram(0x0880'1000, recompile);
+      CHECK(m.kernel.exited, true);
+      CHECK(word(m, Results), movie.packets());  //all of it, the callback giving what it was asked for
+      for(u32 n = 0; n < Frames; n++) {
+        check(__LINE__, "an access unit", word(m, Results + 4 + n * 4), n < (read ? 4u : 3u) ? 0 : NoData);
+      }
+      CHECK(word(m, Results + 0x40) == 16, read);  //every packet free, or the last access unit's still held
+      CHECK(m.notes.size(), 0);
+    }
+  }
+}
+
+//The packs counted toward the stream's end: the header packet isn't one (it and 3 of 4 packs given: not ended, the
+//fourth access unit waiting); the last pack given, it has ended, and a Put asking for none after leaves it so; the
+//last access unit comes, every packet free. A callback going back to the file's start (its header again) starts the
+//count over: the movie whole, then the header and 2 packs: not ended, the third access unit waiting for its data.
+//On both engines.
+static auto mpegStreamCounted() -> void {
+  Movie movie({3000, 700, 1500, 2600}, {90000, Movie::None, Movie::None, Movie::None});
+  CHECK(movie.packets(), 5);
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    mpegSetUp(m, movie, 16);
+    mpegCallback(m, movie, false, false);
+    streamHeader(m, movie, 4);
+    CHECK(word(m, Library + 0x30 + 0x718), 4);
+    Assembler a{m, 0x0880'1000};
+    a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+    streamPut(a, 4, 0);
+    streamNote(a, StreamEnded, 1); streamNote(a, StreamFed, 2);
+    for(u32 n = 0; n < 4; n++) streamTake(a, 3 + n * 2);
+    streamPut(a, 1, 11);
+    streamNote(a, StreamEnded, 12); streamNote(a, StreamFed, 13);
+    streamPut(a, 0, 14);
+    streamNote(a, StreamEnded, 15);
+    streamTake(a, 16);
+    streamTake(a, 18);
+    a.li(a0, Ring); a.call("sceMpegRingbufferAvailableSize"); a.li(t0, Results + 20 * 4); a.put(sw(v0, 0, t0));
+    a.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(streamSlot(m, 0) == 4 && streamSlot(m, 1) == 0 && streamSlot(m, 2) == 3, true);
+    CHECK(streamSlot(m, 3) == 0 && streamSlot(m, 4) == 3000, true);
+    CHECK(streamSlot(m, 5) == 0 && streamSlot(m, 6) == 700, true);
+    CHECK(streamSlot(m, 7) == 0 && streamSlot(m, 8) == 1500, true);
+    CHECK(streamSlot(m, 9), NoData);
+    CHECK(streamSlot(m, 11) == 1 && streamSlot(m, 12) == 1 && streamSlot(m, 13) == 4, true);
+    CHECK(streamSlot(m, 14) == 0 && streamSlot(m, 15) == 1, true);
+    CHECK(streamSlot(m, 16) == 0 && streamSlot(m, 17) == 2600, true);
+    CHECK(streamSlot(m, 18), NoData);
+    CHECK(streamSlot(m, 20), 16);
+    CHECK(m.notes.size(), 0);
+    CHECK(roundTrip(m), true);
+  }
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    mpegSetUp(m, movie, 16);
+    mpegCallback(m, movie, false, true);
+    streamHeader(m, movie, 4);
+    Assembler a{m, 0x0880'1000};
+    a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+    streamPut(a, 5, 0);
+    streamNote(a, StreamEnded, 1); streamNote(a, StreamFed, 2);
+    for(u32 n = 0; n < 4; n++) streamTake(a, 3 + n * 2);
+    streamPut(a, 3, 11);
+    streamNote(a, StreamEnded, 12); streamNote(a, StreamFed, 13);
+    for(u32 n = 0; n < 3; n++) streamTake(a, 14 + n * 2);
+    a.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(streamSlot(m, 0) == 5 && streamSlot(m, 1) == 1 && streamSlot(m, 2) == 4, true);
+    for(u32 n = 0; n < 4; n++) {
+      check(__LINE__, "the first time round", streamSlot(m, 4 + n * 2), movie.starts[n + 1] - movie.starts[n]);
+    }
+    CHECK(streamSlot(m, 11) == 3 && streamSlot(m, 12) == 0 && streamSlot(m, 13) == 2, true);
+    CHECK(streamSlot(m, 14) == 0 && streamSlot(m, 15) == 3000, true);
+    CHECK(streamSlot(m, 16) == 0 && streamSlot(m, 17) == 700, true);
+    CHECK(streamSlot(m, 18), NoData);
+    CHECK(m.notes.size(), 0);
+  }
+}
+
+//A movie fed round and round past its stream's end with no header between (a game that read the header itself and
+//goes back to the stream's offset at its file's end), one packet at a time while there's no access unit: past the
+//stream's packs the movie hasn't ended, and every access unit comes whole, time after time. And one given whole, a
+//flush, and given whole again from the stream's offset (a flush keeps the stream's size): its last access unit comes
+//the second time too. On both engines.
+static auto mpegStreamRoundAgain() -> void {
+  Movie movie({3000, 700, 1500, 2600}, {90000, Movie::None, Movie::None, Movie::None});
+  constexpr u32 Units = 12;
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    mpegSetUp(m, movie, 16);
+    Assembler c{m, CallbackCode};  //mpegCallback()'s, going back to the stream's offset at the file's end
+    c.put(lw(t1, 0, a2));
+    c.put(sll(t2, a1, 11));
+    c.li(t3, movie.bytes.size());
+    c.put(subu(t3, t3, t1));
+    c.put(min(t2, t2, t3));
+    c.li(t5, MovieAt); c.put(addu(t5, t5, t1));
+    c.put(addu(t1, t1, t2));
+    c.li(t4, movie.bytes.size());
+    c.put(subu(t4, t1, t4));
+    c.li(t0, 2048);
+    c.put(movz(t1, t0, t4));
+    c.put(sw(t1, 0, a2));
+    c.put(srl(v0, t2, 11));
+    c.put(beq(t2, zero, 7)); c.put(nop);
+    c.put(lw(t8, 0, t5)); c.put(sw(t8, 0, a0)); c.put(addiu(t5, t5, 4)); c.put(addiu(a0, a0, 4));
+    c.put(beq(zero, zero, -7)); c.put(addiu(t2, t2, -4));
+    c.put(jr(ra)); c.put(nop);
+    m.system.memory.write(4, Place, 2048);
+    streamHeader(m, movie, 4);
+    Assembler a{m, 0x0880'1000};
+    a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+    a.li(s0, 0); a.li(s1, Results); a.li(s3, 0);
+    u32 take = a.here();
+    a.li(a0, Handle); a.li(a1, 0x12c0); a.li(a2, Au); a.li(a3, Attribute); a.call("sceMpegGetAvcAu");
+    u32 toGot = a.here(); a.put(nop); a.put(nop);
+    a.li(a0, Ring); a.li(a1, 1); a.li(a2, 16); a.call("sceMpegRingbufferPut");
+    a.put(addiu(s3, s3, 1)); a.li(t0, 200);
+    u32 toExit = a.here(); a.put(nop); a.put(nop);
+    u32 back = a.here(); a.put(beq(zero, zero, s32(take - back - 4) / 4)); a.put(nop);
+    u32 got = a.here();
+    m.system.memory.write(4, toGot, beq(v0, zero, s32(got - toGot - 4) / 4));
+    a.li(t0, Au); a.put(lw(t1, 20, t0)); a.put(sw(t1, 0, s1)); a.put(addiu(s1, s1, 4));
+    a.li(a0, Handle); a.li(a1, Au); a.li(a2, 512); a.li(a3, Buffer); a.li(t0, Got); a.call("sceMpegAvcDecode");
+    a.put(addiu(s0, s0, 1)); a.li(t0, Units);
+    u32 at = a.here(); a.put(bne(s0, t0, s32(take - at - 4) / 4)); a.put(nop);
+    u32 done = a.here();
+    m.system.memory.write(4, toExit, beq(s3, t0, s32(done - toExit - 4) / 4));  //(given up after 200 feedings)
+    a.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    for(u32 n = 0; n < Units; n++) {
+      check(__LINE__, "an access unit's size", word(m, Results + n * 4), movie.starts[n % 4 + 1] - movie.starts[n % 4]);
+    }
+    CHECK(m.notes.size(), 0);
+  }
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    mpegSetUp(m, movie, 16);
+    mpegCallback(m, movie, false, false);
+    m.system.memory.write(4, Place, 2048);
+    streamHeader(m, movie, 4);
+    Assembler a{m, 0x0880'1000};
+    a.li(a0, Handle); a.li(a1, 1); a.li(a2, Au); a.call("sceMpegInitAu");
+    streamPut(a, 4, 0);
+    for(u32 n = 0; n < 4; n++) streamTake(a, 1 + n * 2);
+    a.li(a0, Handle); a.call("sceMpegFlushAllStream");
+    a.li(t0, Place); a.li(t1, 2048); a.put(sw(t1, 0, t0));
+    streamPut(a, 4, 9);
+    for(u32 n = 0; n < 4; n++) streamTake(a, 10 + n * 2);
+    a.call("sceKernelExitGame");
+    m.runProgram(0x0880'1000, recompile);
+    CHECK(m.kernel.exited, true);
+    CHECK(streamSlot(m, 7) == 0 && streamSlot(m, 8) == 2600, true);    //the last access unit
+    CHECK(streamSlot(m, 16) == 0 && streamSlot(m, 17) == 2600, true);  //and again, after the flush
+    CHECK(m.notes.size(), 0);
+  }
+}
+
 //Space Invaders Extreme's movie thread: of the best priority, it asks for an access unit, feeding the ringbuffer
 //while there's none (its callback copies the movie from memory, from the start again at its end), and decodes until
 //a picture comes, which it asks the details of (sceMpegAvcDecodeDetail) and tells of; then it waits for the next
@@ -1573,7 +1796,8 @@ auto mediaTests() -> Tests {
   return {{"part 28's odds and ends", oddsOfPart28}, {"rtc days, 64-bit times and the clock's setting", rtcDays},
           {"mpeg stubs", mpegStubs}, {"mpeg movie fed and taken apart", [] { mpegMovie(false); }},
           {"mpeg movie with the game's own library", [] { mpegMovie(true); }},
-          {"mpeg movie through a big ring", mpegMovieBigRing},
+          {"mpeg movie through a big ring", mpegMovieBigRing}, {"mpeg movie given whole", mpegMovieFedWhole},
+          {"mpeg stream end counted", mpegStreamCounted}, {"mpeg stream round again", mpegStreamRoundAgain},
           {"mpeg movie thread waits for its picture", mpegMovieThread},
           {"mpeg ringbuffer callback states", mpegCallbackStates},
           {"mpeg ringbuffer that isn't one given nothing", mpegRingbufferNotARing},
