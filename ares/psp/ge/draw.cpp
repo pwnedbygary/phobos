@@ -10,17 +10,19 @@
 //    coordinates run down with x and across with y. In 3D the texture coordinates follow the perspective, and the
 //    fog is split at the middle column (see rectangle()).
 //  - Triangles (each three vertices, or a strip, or a fan): the pixels whose middles are inside, those on an edge
-//    counting only on left and top edges, so triangles sharing an edge don't both draw it. Color, depth and texture
-//    coordinates are blended across from the corners at each pixel's middle, or with flat
-//    shading (SHADE_MODE 0) the color is the last vertex's. In 3D the texture coordinates are blended as the
-//    perspective has them (as u/w and 1/w, then divided, so a texture on a floor shrinks into the distance); colors
-//    and depth aren't. Fog is turned into 0-255 at each corner, then blended straight as a color (measured: ramp-fog).
+//    counting only on left and top edges, so triangles sharing an edge don't both draw it. Texture coordinates are
+//    blended across from the corners at each pixel's middle (in 2D, stepped from a corner: shortStep()); color, fog
+//    and depth are stepped from a corner, as a PSP steps them (stepped()), or with flat shading (SHADE_MODE 0) the
+//    color is the last vertex's. In 3D the texture coordinates are blended as the perspective has them (as u/w and
+//    1/w, then divided, so a texture on a floor shrinks into the distance); colors, fog and depth aren't. Fog is
+//    turned into 0-255 at each corner first (measured: ramp-fog).
 //  - Culling (CULL_FACE_ENABLE, not in clear mode): with CULL 1 only triangles whose corners run clockwise on the
 //    screen are drawn, with 0 only those running counterclockwise (pspsdk's sceGuFrontFace(GU_CW) sets 1). Every
 //    other triangle of a strip runs the other way round, so for those it's the other way.
 //  - Points: the pixel each vertex is in.
 //  - Lines (each two vertices, or a strip): a pixel wide, by the "diamond exit" rule (see line()), colors, depth, fog
-//    and texture coordinates blended along them as across triangles. In 3D they're cut at the near plane too.
+//    and texture coordinates blended along them, straight (unmeasured: not stepped as triangles' are). In 3D they're
+//    cut at the near plane too.
 //A vertex without a color takes the material's ambient color (AMBIENT_COLOR, AMBIENT_ALPHA).
 //(Coverage, the sample points and how texture coordinates are stepped were measured on a PSP (docs/psp-core.md,
 //tools/psp-measure), where PPSSPP's software renderer, which the rest follows, has triangles sampled 7/16 in. Lines
@@ -370,8 +372,9 @@ auto GE::submit(Job& job) -> void {
 }
 
 //The fog at a vertex, 0-255, from its 0-1: rounded down, 1 or more giving 255. Measured (docs/psp-core.md,
-//ramp-fog): this amount is what is blended across a triangle or line, not the 0-1; blending the 0-1 and converting
-//at each pixel leaves the first pixel of a ramp unfogged (255) where the PSP has already stepped to 254.
+//ramp-fog): this amount is what is stepped across a triangle (stepped()) and blended along a line, not the 0-1;
+//blending the 0-1 and converting at each pixel leaves the first pixel of a ramp unfogged (255) where the PSP has
+//already stepped to 254.
 static auto fogAmount(float fog) -> u32 {
   if(std::signbit(fog)) return 0;
   if(!(fog < 1)) return 255;
@@ -390,6 +393,31 @@ static auto chooseFilter(u32 filter, float texelsPerPixel) -> bool {
 //texels over 240 pixels), while an exact step lands on it (4 texels over 2 pixels). How many bits the step keeps,
 //and which way a step going down (to the left or up) is cut, aren't pinned down; this fits every measurement.
 static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536; }
+
+//How a PSP steps colors, fog and depth across a triangle (measured, docs/psp-core.md, part 48: every pixel of round
+//3's color and fog ramps and bezier-flat, and round 2's gouraud, 3d-clip, 3d-floor-fog and 3d-floor-depth). Each
+//starts at the corner texture coordinates are stepped from (the leftmost, the topmost of two) and is stepped from
+//there, a step a sixteenth of a pixel across and one down, each in 16384ths of a level (or of a depth) and rounded
+//down; so a value can come out a level under the true blend, the more likely the further from that corner. The steps
+//come through the reciprocal of twice the triangle's area (in sixteenths squared) kept to 16 significant bits,
+//rounded down: an area that's a power of two is exact, but a step that should be a whole number of 16384ths (17/16
+//a pixel, say) then falls one short of it, or one further down. At a pixel the value is the corner's, plus each step
+//times the sixteenths from that corner to the pixel's middle, rounded down (raster.cpp, four.cpp).
+//  - The start is exactly the corner's value (its depth a whole number, cut down as a point's is). The reciprocal to
+//    17 bits, or 15, leaves round 3's 3D ramps 144 and 320 values apart; steps in 512ths, 2048ths or 4096ths of a
+//    level a pixel (not 1024ths), thousands. Depths in 2^-12 or 2^-16, 692 and 209 of 3d-floor-depth's 7728.
+//  - An area of 2^bits or more, below 2^(bits + 1): the reciprocal 2^(bits + 16) / area, which keeps 16 bits.
+static auto stepped(const s64 (&x)[3], const s64 (&y)[3], s64 area, const s32 (&value)[3], s32 start)
+  -> GE::Job::Stepped {
+  u32 shift = 64 - __builtin_clzll(u64(area)) + 15;  //(area is above 0, and below 2^36: positions are held)
+  s64 reciprocal = (s64(1) << shift) / area;
+  s64 x1 = x[1] - x[0], y1 = y[1] - y[0], x2 = x[2] - x[0], y2 = y[2] - y[0];
+  s64 across = s64(value[1] - value[0]) * y2 - s64(value[2] - value[0]) * y1;
+  s64 down = s64(value[2] - value[0]) * x1 - s64(value[1] - value[0]) * x2;
+  //(each below 2 * 65535 * 2^17, times the reciprocal's 2^16: below 2^51. Times 2^14 then down shift bits is down
+  //shift - 14 bits, which rounds down as well, since shift is at least 16)
+  return {across * reciprocal >> (shift - 14), down * reciprocal >> (shift - 14), start * 16384};
+}
 
 //perspective: 3D. A 3D sprite is drawn as a PSP draws it (measured, docs/psp-core.md, round 3's 3d-sprite-fog and
 //3d-sprite-texels, a sprite from a near corner at the top left to a far one at the bottom right):
@@ -594,14 +622,10 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
     float texels = std::abs((vb.u - va.u) * (vc.v - va.v) - (vb.v - va.v) * (vc.u - va.u));
     job.linear = chooseFilter(commands[TextureFilter], std::sqrt(texels / (area / 256.0f)));
   }
-  r.total = float(area);
   for(u32 k = 0; k < 3; k++) {
     auto& v = *p[k].vertex;
     r.x[k] = p[k].x, r.y[k] = p[k].y;
-    r.color[k] = v.color, r.specular[k] = v.specular;
-    r.z[k] = v.z, r.u[k] = v.u, r.v[k] = v.v, r.q[k] = v.q, r.w[k] = v.clip[3];
-    //Fog is held to 0-255 at each corner, then blended as a color channel (measured: ramp-fog).
-    r.fog[k] = float(fogAmount(v.fog));
+    r.u[k] = v.u, r.v[k] = v.v, r.q[k] = v.q, r.w[k] = v.clip[3];
   }
   //Without perspective, texture coordinates are stepped from the leftmost corner (see shortStep): its value, then a
   //step per pixel across and down, from the plane through the three corners.
@@ -617,6 +641,16 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
     if(std::tie(p[k].x, p[k].y) < std::tie(p[leftmost].x, p[leftmost].y)) leftmost = k;
   }
   r.startX = p[leftmost].x, r.startY = p[leftmost].y;
+  //Colors, the shine, fog and depth stepped from there (stepped()); fog held to 0-255 at each corner first
+  //(fogAmount()), and a depth to 0-65535.
+  auto steps = [&](auto&& of) {
+    s32 value[3] = {s32(of(*p[0].vertex)), s32(of(*p[1].vertex)), s32(of(*p[2].vertex))};
+    return stepped(r.x, r.y, area, value, value[leftmost]);
+  };
+  for(u32 n = 0; n < 4; n++) r.colors[n] = steps([n](const Vertex& v) { return channel(v.color, n); });
+  for(u32 n = 0; n < 3; n++) r.shine[n] = steps([n](const Vertex& v) { return channel(v.specular, n); });
+  r.fog = steps([](const Vertex& v) { return fogAmount(v.fog); });
+  r.depth = steps([](const Vertex& v) { return v.z > 0 ? u32(std::min(v.z, 65535.0f)) : 0u; });  //(not a number: 0)
   if(look.textured && !perspective) {
     const Vertex& start = *p[leftmost].vertex;
     auto u = stepsFor(va.u, vb.u, vc.u, start.u), v = stepsFor(va.v, vb.v, vc.v, start.v);
@@ -739,7 +773,7 @@ auto GE::line(const Look& look, const Vertex& from, const Vertex& to, bool persp
     auto& v = *ends[k];
     l.color[k] = v.color, l.specular[k] = v.specular;
     l.z[k] = v.z, l.u[k] = v.u, l.v[k] = v.v, l.q[k] = v.q, l.w[k] = v.clip[3];
-    l.fog[k] = float(fogAmount(v.fog));  //0-255 at each end, then blended (as for triangles)
+    l.fog[k] = float(fogAmount(v.fog));  //0-255 at each end, then blended
   }
   if(look.textured) {
     float du = l.u[1] - l.u[0], dv = l.v[1] - l.v[0];

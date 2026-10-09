@@ -422,6 +422,51 @@ static auto drawTriangles() -> void {
   CHECK(dots.pixel(3, 2), 0x12'3456);
 }
 
+//Colors and depths stepped across a triangle as a PSP steps them (draw.cpp's stepped(); docs/psp-core.md, part 48):
+//from the leftmost corner, the topmost of two, a step a sixteenth across and one down in 16384ths, each through the
+//reciprocal of twice the area kept to 16 bits, rounded down; and a pixel's value is rounded down.
+static auto drawSteps() -> void {
+  //red 0 at (0, 0), 128 at (15, 0), 0 at (0, 4): twice the area is 240 * 64 = 15360 sixteenths squared, its
+  //reciprocal 2^29 / 15360 = 34952.53 kept as 34952, so the step across, 128 * 64 * 34952 / 2^15 = 8738.06 16384ths
+  //a sixteenth (exactly 8738.13), is 8738: at pixel 7's middle, 120 sixteenths along, that's 1048560 16384ths, a
+  //hair under 64, where the true blend is 64: 63. At pixel 8, 72.53 either way: 72.
+  Canvas c;
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0000, 0, 0, 0}, {0, 0, 0xff00'0080, 15, 0, 0}, {0, 0, 0xff00'0000, 0, 4, 0}});
+  CHECK(c.pixel(7, 1) & 0xff, 63u);
+  CHECK(c.pixel(8, 1) & 0xff, 72u);
+  CHECK(c.pixel(0, 3) & 0xff, 4u);  //4.27: the start, 0, and 8 sixteenths of the step
+  //depths the same way (0, 128, 0, written always): 63 at pixel 7 too
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.ge.commands[GE::DepthTestEnable] = 1, c.ge.commands[GE::DepthTest] = 1;
+  c.draw(GE::Triangles,
+         {{0, 0, 0xff00'0000, 0, 0, 0}, {0, 0, 0xff00'0080, 15, 0, 128}, {0, 0, 0xff00'0000, 0, 4, 0}});
+  CHECK(c.depth(7, 1), 63u);
+  CHECK(c.depth(8, 1), 72u);
+  c.ge.commands[GE::DepthTestEnable] = 0;
+  //stepped from the bottom left corner (the leftmost) up, the same blend comes out 64 at pixel (3, 7): the start,
+  //128 at row 15's sixteenths, less 120 sixteenths' steps of 8738, is a hair over 64
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0000, 4, 0, 0}, {0, 0, 0xff00'0080, 4, 15, 0}, {0, 0, 0xff00'0080, 0, 15, 0}});
+  CHECK(c.pixel(3, 7) & 0xff, 64u);
+  //of two leftmost corners, the top one: (0, 0) red 0, (0, 15) 128, (15, 7) 64, where pixel (3, 7) is 64.996; from
+  //(0, 0) the steps (291 across, 8737 down) leave it at 64 (from (0, 15) they'd give 65)
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0000, 0, 0, 0}, {0, 0, 0xff00'0080, 0, 15, 0}, {0, 0, 0xff00'0040, 15, 7, 0}});
+  CHECK(c.pixel(3, 7) & 0xff, 64u);
+  //the reciprocal's 16 bits: red 70, 108 and 128 at (9.8125, 8.25), (0.8125, 0.25) and (13.4375, 13.9375) give pixel
+  //(9, 8) 87 (the true blend is 87.013); kept to 15 bits, or 17, the steps would give 86
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0046, 9.8125f, 8.25f, 0}, {0, 0, 0xff00'006c, 0.8125f, 0.25f, 0},
+                         {0, 0, 0xff00'0080, 13.4375f, 13.9375f, 0}});
+  CHECK(c.pixel(9, 8) & 0xff, 87u);
+  //steps rounded down: red 55, 205 and 55 at (12.125, 3.625), (8.1875, 4.5625) and (0.4375, 1.0625) give pixel
+  //(11, 3) 55 (the true blend is 56.002); steps rounded to the nearest, or toward zero, would give 56
+  c.memory.fill(VRAM, 0, 0x1000);
+  c.draw(GE::Triangles, {{0, 0, 0xff00'0037, 12.125f, 3.625f, 0}, {0, 0, 0xff00'00cd, 8.1875f, 4.5625f, 0},
+                         {0, 0, 0xff00'0037, 0.4375f, 1.0625f, 0}});
+  CHECK(c.pixel(11, 3) & 0xff, 55u);
+}
+
 //Lines (draw.cpp's line()): the pictures pspautotests recorded of them on a PSP (gpu/primitives/lines, linestrip and
 //indices, moved to fit the canvas), and the diamond exit rule's own cases: from a pixel's middle to another's, the
 //first pixel lit and not the last; steep lines; a strip's joint lit once; lines too short to leave a diamond, and one
@@ -1312,7 +1357,7 @@ auto drawTests() -> Tests {
     {"draw textures kept decoded against memory", drawDecodedAgainstMemory},
     {"draw sprites", drawSprites}, {"draw texture formats", drawTextureFormats}, {"draw filter", drawFilter},
     {"draw texture functions", drawTextureFunctions}, {"draw pixel tests", drawPixelTests}, {"draw blending", drawBlending},
-    {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles},
+    {"draw dither and masks", drawDitherAndMasks}, {"draw triangles", drawTriangles}, {"draw steps", drawSteps},
     {"draw texel steps", drawTexelSteps}, {"draw ambient and filters", drawAmbientAndFilters},
     {"draw lines", drawLines}, {"draw corners at one depth", drawOneDepth}, {"draw DXT textures", drawDXT},
     {"draw vertex formats", drawVertexFormats},
