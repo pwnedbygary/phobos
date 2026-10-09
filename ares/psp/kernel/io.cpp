@@ -767,6 +767,17 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
     return writeOut(4, [&] { memory.write(4, out, u32(open.position)); });
   case 0x01f1'00a6:  //seek in umd0:, in sectors
     return seekBy(ErrorInvalidFileSize);
+  case 0x0410'0001: {  //the file's key (16 bytes), for data encrypted as PGD, which the PSP decrypts as it's read
+    //A file without PGD's header ("\0PGD") is read as it is: the fan translations of 7th Dragon 2020 and its sequel
+    //carry their INSDIR data decrypted, and the games set its key all the same, taking anything but success as the
+    //drive failing and opening the file again, for good. Nothing here decrypts, so a file with the header is
+    //refused, as every request for this was before (umd0: and a key that isn't there too).
+    if(open.sectors || inLength < 16 || !memory.reaches(in, 16)) return ErrorFunctionNotSupported;
+    u8 head[4] = {};
+    if(open.size >= 4 && !disc->read(u64(open.sector) * Disc::SectorSize, 4, head)) return ErrorIOError;
+    if(!memcmp(head, "\0PGD", 4)) return ErrorFunctionNotSupported;
+    return 0;
+  }
   }
   return ErrorFunctionNotSupported;
 }

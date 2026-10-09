@@ -451,6 +451,43 @@ static auto discRequests() -> void {
   CHECK(m.call("sceIoDevctl", {m.string("flash0:"), 0x0202'5806, 0, 0, Out, 4}), Kernel::ErrorFunctionNotSupported);
 }
 
+//A file's PGD key (ioctl 0x04100001): given for a file without PGD's header, the file is read as it is (the fan
+//translations of 7th Dragon 2020 and its sequel); one with the header is refused, nothing here decrypting, as are a
+//key shorter than 16 bytes, umd0: and a file off the disc, as every request was before.
+static auto discKeys() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  auto plain = pattern(3000, 5), encrypted = pattern(3000, 6);
+  memcpy(encrypted.data(), "\0PGD", 4);
+  auto image = disc_image::makeIso({
+    {"PSP_GAME/INSDIR/GAME.DNS", plain}, {"PSP_GAME/INSDIR/PGD.DNS", encrypted}, {"UMD_DATA.BIN", pattern(32, 4)},
+  });
+  std::string error;
+  m.kernel.disc = openDisc(image.bytes, error);
+  for(u32 at = 0; at < 16; at++) memory.write(1, In + at, 0x40 + at);  //the key
+  u32 file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/GAME.DNS"), 0x4000'4001, 0});
+  CHECK(file >= 3 && file < 0x8000'0000, true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), 0);
+  CHECK(m.call("sceIoRead", {file, Buffer, 4000}), 3000);
+  std::vector<u8> read(3000);
+  memory.copyOut(read.data(), Buffer, 3000);
+  CHECK(read == plain, true);
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 8, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  m.call("sceIoClose", {file});
+  file = m.call("sceIoOpen", {m.string("disc0:/PSP_GAME/INSDIR/PGD.DNS"), 0x4000'4001, 0});
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  m.call("sceIoClose", {file});
+  file = m.call("sceIoOpen", {m.string("umd0:"), 0x0001, 0});
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  m.call("sceIoClose", {file});
+  HostFolder folder;
+  folder.put("A.TXT", "a");
+  m.kernel.mount("ms0", folder.path.string());
+  file = m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0});
+  CHECK(m.call("sceIoIoctl", {file, 0x0410'0001, In, 16, 0, 0}), Kernel::ErrorFunctionNotSupported);
+  CHECK(m.notes.size(), 0);
+}
+
 //The drive's state, and waiting for it.
 static auto umdDrive() -> void {
   for(bool recompile : {false, true}) {
@@ -717,7 +754,7 @@ static auto stickCallback() -> void {
 auto discTests() -> Tests {
   return {
     {"disc images", discImages}, {"disc files", discFiles}, {"disc requests", discRequests},
-    {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
+    {"disc PGD keys", discKeys}, {"disc drive", umdDrive}, {"disc drive's callback", umdCallback},
     {"memory stick's callback", stickCallback},
   };
 }
