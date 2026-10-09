@@ -163,6 +163,10 @@ struct Kernel {
   static constexpr u32 ErrorIllegalSize           = 0x8002'01bc;
   static constexpr u32 ErrorIllegalType           = 0x8002'01bb;  //a kind of object there isn't (pspkerror.h)
   static constexpr u32 ErrorMessageQueued         = 0x8002'01c9;  //a mailbox's packet sent again while queued
+  //the thread-local storage pools': as pspautotests' threads/tls recorded them
+  static constexpr u32 ErrorUnknownTlspl          = 0x8002'01d0;
+  static constexpr u32 ErrorTooManyTlspls         = 0x8002'01d1;  //a 17th pool
+  static constexpr u32 ErrorTlsplInUse            = 0x8002'01d2;  //deleting a pool another thread holds a block of
   //uOFW's errors.h
   static constexpr u32 ErrorNotImplemented        = 0x8000'0003;
   static constexpr u32 ErrorNotSupported          = 0x8000'0004;
@@ -302,6 +306,7 @@ struct Kernel {
     Mutex,     //a kernel mutex another thread holds (mutexes.cpp)
     Psmf,      //the movie player's work (psmfplayer.cpp: opening a movie, a picture, making or deleting the player);
                //the call returns waitCount as it ends
+    Tlspl,     //a thread-local storage pool's block (tls.cpp)
   };
   struct WaitState {  //a thread's wait, put aside while its callbacks run (they may wait themselves)
     Wait wait = Wait::None;
@@ -318,18 +323,21 @@ struct Kernel {
     Context context{};
     Wait wait = Wait::None;
     u32 waitID = 0;        //the semaphore, mutex (a kernel one's ID, a lightweight one's work area), thread, event
-                           //flag, display list, module, message pipe or mailbox waited for; the sound channel (0-7
-                           //a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC channel's); the file whose
-                           //asynchronous request is waited for, or that a synchronous read or write went to
+                           //flag, display list, module, message pipe, mailbox or thread-local storage pool waited
+                           //for; the sound channel (0-7 a mixer channel's, Audio::WaitSrc or WaitSrcDrain the SRC
+                           //channel's); the file whose asynchronous request is waited for, or that a synchronous
+                           //read or write went to
     u32 waitCount = 0;     //how many a semaphore or mutex wait needs (the count a mutex is to be held with); the
                            //bits an event flag wait needs; a mixer output's left volume; the samples an SRC output's
                            //buffer was armed with; the bytes a message pipe's send or receive asked for; what a
                            //synchronous read or write returns; the count of vertical blanks a blank's wait ends at
     u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode;
-                           //whether a semaphore's CB wait is first in line once its callbacks are done
+                           //whether a semaphore's CB wait is first in line once its callbacks are done; whether a
+                           //thread-local storage pool's waiter is sceKernelGetTlsAddr's (TlsByLibrary)
     u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
-                           //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
-                           //output hands over, or a message pipe's send or receive reads or fills
+                           //asynchronous wait the request's result, a mailbox wait the message, a thread-local
+                           //storage pool's system call the block's address; the buffer a mixer output hands over,
+                           //or a message pipe's send or receive reads or fills
     u32 waitDone = 0;      //the bytes a message pipe's send or receive has moved so far
     u32 waitResult = 0;    //where a message pipe's send or receive puts how many it moved
     u64 wakeAt = 0;        //for a delay or timeout: the cycle to wake at (0: none)
@@ -995,6 +1003,40 @@ struct Kernel {
   auto sceKernelFreeVpl() -> void;
   auto sceKernelCancelVpl() -> void;
   auto sceKernelReferVplStatus() -> void;
+
+  //tls.cpp: thread-local storage pools, blocks of one size of which each thread holds one at most
+  struct TlsPool {
+    u32 uid;
+    std::string name;
+    u32 attributes = 0;
+    u32 index = 0;        //its place among a program's 16, which its ID carries in bits 3 to 6
+    u32 block = 0;        //its memory's block (sysmem.cpp)
+    u32 address = 0;      //where its first block starts
+    u32 blockSize = 0;    //a block's size as asked
+    u32 stride = 0;       //and the room it takes: rounded up to the alignment, 4 bytes at least
+    u32 next = 0;         //the block the next one handed out is looked for from
+    std::vector<u32> holders;  //each block's thread (0: free)
+  };
+  std::map<u32, TlsPool> tlsPools;
+  static constexpr u32 TlsByLibrary = 1;  //a waiter's waitMode: sceKernelGetTlsAddr's, which returns the address
+  auto tlsUID(u32 index) -> u32;
+  auto tlsPoolAt(u32 index) -> TlsPool*;
+  auto tlsHeld(const TlsPool& pool, u32 thread) const -> s32;
+  auto tlsAddress(const TlsPool& pool, u32 block) const -> u32;
+  auto tlsTake(TlsPool& pool, u32 thread) -> u32;
+  auto tlsWaiters(const TlsPool& pool) -> std::vector<Thread*>;
+  auto tlsWake(TlsPool& pool) -> void;
+  auto tlsFree(TlsPool& pool, u32 block) -> void;
+  auto tlsThreadEnded(u32 thread) -> void;
+  auto tlsAllocate(u32 uid, u32 pointer, u32 timeoutPointer, bool byLibrary) -> void;
+  auto tlsCaller() const -> Thread*;
+  auto userAddress(u32 address) const -> bool;
+  auto sceKernelCreateTlspl() -> void;
+  auto sceKernelDeleteTlspl() -> void;
+  auto sceKernelGetTlsAddr() -> void;
+  auto _sceKernelAllocateTlspl() -> void;
+  auto sceKernelFreeTlspl() -> void;
+  auto sceKernelReferTlsplStatus() -> void;
 
   //audio.cpp: sound output. Eight mixer channels holding a buffer each, read a block of 64 samples at a time by the
   //mixer's DMA; and the SRC channel (sceAudioOutput2*, sceAudioSRC*), a ninth output at a rate of its own, with two
@@ -1752,7 +1794,7 @@ struct Kernel {
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
-  u32 stateLayout = 18;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 19;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

@@ -210,6 +210,9 @@ static auto stateFields() -> void {
   u32 mutexID = a.call("sceKernelCreateMutex", {a.string("mutex"), 0x200, 0, 0});
   u32 alarmID = a.call("sceKernelSetAlarm", {1000, 0x0880'7000, 0x11});
   u32 vtimerID = a.call("sceKernelCreateVTimer", {a.string("vtimer"), 0});
+  //part 55's: a thread-local storage pool of two 16-byte blocks, thread one holding the first
+  u32 tlsID = a.call("sceKernelCreateTlspl", {a.string("tls"), 2, 0, 16, 2, 0});
+  CHECK(a.call("sceKernelGetTlsAddr", {tlsID}), k.tlsPools[tlsID].address);
   u32 file = a.call("sceIoOpen", {a.string("ms0:/A.TXT"), 0x0001, 0});
   u32 other = a.call("sceIoOpen", {a.string("ms0:/B.TXT"), 0x0001, 0});
   u32 folder = a.call("sceIoDopen", {a.string("ms0:/LIST")});
@@ -759,10 +762,20 @@ static auto stateFields() -> void {
     {"lwMutex initial", [&] { lw.initial = 2; }},
     {"display hcountBase", [&] { k.display.hcountBase = 0x1234; }},
   };
+  //part 55's: the thread-local storage pool's fields, each change leaving a pool a machine could have (thread one's
+  //block moved to the second, which thread one has since been made ready to hold)
+  auto& tls = k.tlsPools[tlsID];
+  std::vector<std::pair<std::string, std::function<void()>>> part55 = {
+    {"tls pool name", [&] { tls.name += "x"; }}, {"tls pool attributes", [&] { tls.attributes ^= 0x100; }},
+    {"tls pool address", [&] { tls.address += 4; }}, {"tls pool blockSize", [&] { tls.blockSize = 12; }},
+    {"tls pool stride", [&] { tls.stride = 20; }}, {"tls pool next", [&] { tls.next = 0; }},
+    {"tls pool holders", [&] { tls.holders = {0, u32(one)}; }},
+  };
   changes.insert(changes.end(), more.begin(), more.end());
   changes.insert(changes.end(), codecs.begin(), codecs.end());
   changes.insert(changes.end(), part28.begin(), part28.end());
   changes.insert(changes.end(), part32.begin(), part32.end());
+  changes.insert(changes.end(), part55.begin(), part55.end());
   for(auto& [field, change] : changes) {
     auto before = save(a);
     change();
@@ -932,6 +945,14 @@ static auto stateFields() -> void {
     stackOf(thread).size = thread.stackSize = 0xffff'f000;
   });
   refuses("a block below the user partition", [&] { k.blocks.front().address = Kernel::UserMemory - 0x1000; });
+  //thread-local storage pools as no machine has them: an index its ID doesn't carry, a block held by a thread there
+  //isn't, a thread holding two blocks of one pool, blocks past the pool's memory
+  refuses("a tls pool whose ID doesn't carry its index", [&] { k.tlsPools.begin()->second.index ^= 1; });
+  refuses("a tls pool block held by a thread there isn't", [&] { k.tlsPools.begin()->second.holders[0] = 0x7777; });
+  refuses("a thread holding two blocks of a tls pool", [&] {
+    k.tlsPools.begin()->second.holders = {u32(one), u32(one)};
+  });
+  refuses("a tls pool's blocks past its memory", [&] { k.tlsPools.begin()->second.stride = 0x100; });
   refuses("a buffer in a slot with the DMA stopped", [&] { k.audio.dma.running = false; });
   refuses("a mixer channel's count not a multiple of 64", [&] { k.audio.channels[3].sampleCount = 100; });
   refuses("a slot with more left than its buffer holds", [&] { k.audio.channels[3].remaining = 192; });

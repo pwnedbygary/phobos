@@ -225,10 +225,307 @@ static auto poolWaitersLeave() -> void {
   }
 }
 
+//Thread-local storage pools made (ares/psp/kernel/tls.cpp), as pspautotests' threads/tls/create, partition, memory
+//and refer recorded: the refusals and their order, the memory a pool takes, 16 at most, each with its index in its
+//ID's bits 3 to 6, and the status (its size word read back as 60 for any size but 0, copied as far as it says), and
+//the threadman's lists of pools. Called directly.
+static auto tlsCreated() -> void {
+  KernelMachine m;
+  u32 name = m.string("tls"), options = R + 0x200, info = R + 0x100;
+  constexpr u64 NoOptions = ~0ull;
+  auto create = [&](u32 partition, u32 attributes, u32 size, u32 count, u64 alignment = NoOptions) {
+    if(alignment != NoOptions) m.system.memory.write(4, options, 8), m.system.memory.write(4, options + 4, alignment);
+    u32 given = alignment != NoOptions ? options : 0;
+    return m.call("sceKernelCreateTlspl", {name, partition, attributes, size, count, given});
+  };
+  auto taken = [&](u32 uid) {  //the size of the block a pool holds (0: none)
+    auto pool = m.kernel.tlsPools.find(uid);
+    if(pool == m.kernel.tlsPools.end()) return 0u;
+    for(auto& block : m.kernel.blocks) if(block.uid == pool->second.block) return block.size;
+    return 0u;
+  };
+  auto made = [&](u32 uid) { return uid < 0x8000'0000; };
+  auto drop = [&](u32 uid) { CHECK(m.call("sceKernelDeleteTlspl", {uid}), 0); };
+  CHECK(m.call("sceKernelCreateTlspl", {0, 2, 0, 0x100, 4, 0}), Kernel::ErrorNoMemory);  //no name
+  for(u32 partition : {u32(-1), 0u, 7u, 10u}) CHECK(create(partition, 0, 0x100, 4), Kernel::ErrorIllegalArgument);
+  for(u32 partition : {1u, 3u, 4u}) CHECK(create(partition, 0, 0x100, 4), Kernel::ErrorIllegalPermission);
+  for(u32 partition : {2u, 5u, 6u}) {
+    u32 uid = create(partition, 0, 0x100, 4);
+    CHECK(made(uid) && taken(uid) == 0x400, true);
+    drop(uid);
+  }
+  for(u32 attributes : {0x200u, 0x2000u, 0x8000u, 0x80000u}) {
+    CHECK(create(2, attributes, 0x100, 4), Kernel::ErrorIllegalAttribute);
+  }
+  u32 high = create(2, 0x4101, 0x100, 4);  //from the partition's top
+  CHECK(made(high) && m.kernel.tlsPools[high].address + 0x400 == m.kernel.userEnd(), true);
+  drop(high);
+  for(auto [size, count] : {std::pair{0u, 4u}, {u32(-1), 4u}, {0x100u, 0u}, {0x100u, u32(-1)}, {0x100u, 0x100'0000u}}) {
+    CHECK(create(2, 0, size, count), Kernel::ErrorIllegalMemorySize);
+  }
+  CHECK(create(2, 0, 0x100, 0x10'0000), Kernel::ErrorNoMemory);  //256 MiB
+  //sizes: each block rounded up to its alignment (4 at least), the pool's block to 256 bytes
+  struct Room { u32 size, count; u64 alignment; u32 block, stride; };
+  for(auto room : {Room{1, 4, NoOptions, 0x100, 4}, {0x131, 4, NoOptions, 0x500, 0x134},
+                   {0x100, 0x2f, NoOptions, 0x2f00, 0x100}, {1, 4, 0, 0x100, 4}, {1, 4, 1, 0x100, 4},
+                   {1, 4, 0x100, 0x400, 0x100}, {1, 4, 0x10000, 0x40000, 0x10000}}) {
+    u32 uid = create(2, 0, room.size, room.count, room.alignment);
+    CHECK(made(uid) && taken(uid) == room.block, true);
+    if(!made(uid)) continue;
+    auto& pool = m.kernel.tlsPools[uid];
+    u32 aligned = room.alignment != NoOptions ? std::max<u32>(room.alignment, 4) : 4;
+    CHECK(pool.stride == room.stride && pool.blockSize == room.size && pool.address % aligned == 0, true);
+    drop(uid);
+  }
+  for(u32 alignment : {u32(-1), 3u, 0x30u, 0x131u, 0x180'0000u}) {
+    CHECK(create(2, 0, 1, 4, alignment), Kernel::ErrorIllegalArgument);
+  }
+  CHECK(create(2, 0, 1, 4, 0x1000'0000), Kernel::ErrorNoMemory);
+  //16 pools, each with its index; the 17th refused; a pool deleted frees its index for the next
+  std::vector<u32> uids;
+  for(u32 n = 0; n < 16; n++) {
+    uids.push_back(create(2, 0, 0x100, 4));
+    CHECK(made(uids.back()) && m.kernel.tlsPools[uids.back()].index == n && (uids.back() >> 3 & 15) == n, true);
+  }
+  CHECK(create(2, 0, 0x100, 4), Kernel::ErrorTooManyTlspls);
+  drop(uids[5]);
+  u32 again = create(2, 0, 0x100, 4);
+  CHECK(made(again) && m.kernel.tlsPools[again].index == 5 && again > uids[15] && (again >> 3 & 15) == 5, true);
+  //the status: nothing for a size of 0; for 1, its first byte, the size word reading 60; all of it for 60
+  m.system.memory.fill(info, 0, 64);
+  CHECK(m.call("sceKernelReferTlsplStatus", {again, info}), 0);
+  CHECK(m.system.memory.read(4, info) == 0 && m.system.memory.read(4, info + 40) == 0, true);
+  m.system.memory.write(4, info, 1);
+  CHECK(m.call("sceKernelReferTlsplStatus", {again, info}), 0);
+  CHECK(m.system.memory.read(4, info) == 60 && m.system.memory.read(4, info + 40) == 0, true);
+  CHECK(m.call("sceKernelReferTlsplStatus", {again, info}), 0);
+  std::array<u32, 7> status = {60, 0, 5, 0x100, 4, 4, 0};
+  for(u32 n = 0; n < 7; n++) CHECK(m.system.memory.read(4, info + (n ? 32 + n * 4 : 0)), status[n]);
+  CHECK(m.system.memory.readString(info + 4, 32) == "tls", true);
+  for(u32 uid : {0u, 1u, 0xdead'beefu, uids[5]}) {
+    CHECK(m.call("sceKernelReferTlsplStatus", {uid, info}), Kernel::ErrorUnknownTlspl);
+    CHECK(m.call("sceKernelDeleteTlspl", {uid}), Kernel::ErrorUnknownTlspl);
+    CHECK(m.call("sceKernelFreeTlspl", {uid}), Kernel::ErrorUnknownTlspl);
+  }
+  CHECK(m.call("sceKernelGetThreadmanIdType", {again}), 14);
+  CHECK(m.call("sceKernelGetThreadmanIdList", {14, R + 0x300, 32, R + 0x3f0}), 16);
+  CHECK(m.system.memory.read(4, R + 0x3f0), 16);
+  CHECK(roundTrip(m), true);
+  CHECK(m.notes.size(), 0);
+}
+
+//Blocks handed out, as threads/tls/get, allocate, free and delete recorded: in turn from the block after the last
+//handed out (0, 1, 2 and 0 again of three), zeroed as they're handed out and as they're freed, the same one again to a
+//thread holding one; freeing none is no error; an ID that isn't a pool's read by its bits 3 to 6 for a block the
+//thread holds; the system call's pointers, dispatching held off; an interrupt handler's calls, which have no thread to
+//act for; a thread's blocks back as it ends; deleting refused while another thread holds a block. Called directly by
+//threads made to be the caller in turn.
+static auto tlsHandedOut() -> void {
+  KernelMachine m;
+  auto& k = m.kernel;
+  auto caller = [&](const char* name) {
+    s32 uid = k.createThread(name, 0x0880'1000, 0x20, 0x1000, 0, 0);
+    k.startThread(*k.threads[uid], 0, 0);
+    return uid;
+  };
+  u32 one = caller("one"), two = caller("two");
+  auto as = [&](u32 thread) {
+    if(k.current) k.current->status = Kernel::Status::Ready;
+    k.current = k.threads[thread].get();
+    k.current->status = Kernel::Status::Running;
+  };
+  as(one);
+  u32 tls = m.call("sceKernelCreateTlspl", {m.string("tls"), 2, 0, 0x10, 3, 0});
+  u32 base = k.tlsPools[tls].address;
+  auto get = [&](u32 uid) { return m.call("sceKernelGetTlsAddr", {uid}); };
+  u32 seen[4];
+  for(u32 n = 0; n < 4; n++) {
+    seen[n] = get(tls);
+    m.system.memory.write(4, seen[n], 0xcccc'cccc);
+    CHECK(get(tls), seen[n]);  //again: the same, not zeroed
+    CHECK(m.system.memory.read(4, seen[n]), 0xcccc'cccc);
+    CHECK(m.call("sceKernelFreeTlspl", {tls}), 0);
+    CHECK(m.system.memory.read(4, seen[n]), 0);  //zeroed as it's freed
+    CHECK(m.call("sceKernelFreeTlspl", {tls}), 0);  //none held: no error
+  }
+  CHECK(seen[0] == base && seen[1] == base + 0x10 && seen[2] == base + 0x20 && seen[3] == base, true);
+  m.system.memory.write(4, base + 0x10, 0xcccc'cccc);
+  CHECK(get(tls), base + 0x10);
+  CHECK(m.system.memory.read(4, base + 0x10), 0);  //zeroed as it's handed out
+  //an ID that isn't a pool's: its bits 3 to 6 as an index, for a block the thread holds there
+  u32 index = k.tlsPools[tls].index;
+  CHECK(get(index << 3), base + 0x10);
+  CHECK(get(index << 3 | 7), base + 0x10);
+  CHECK(get((index + 1) << 3), 0);
+  CHECK(get(0xffff'ffff), 0);
+  //the system call: the block held, its address put where it's asked; pointers into the kernel's memory refused,
+  //and IDs that aren't pools'; with dispatching held off, refused even with the block held
+  CHECK(m.call("_sceKernelAllocateTlspl", {tls, R, 0}), 0);
+  CHECK(m.system.memory.read(4, R), base + 0x10);
+  m.system.memory.write(4, R, 0xdead'beef);
+  CHECK(m.call("_sceKernelAllocateTlspl", {tls, 0x8800'0000, 0}), Kernel::ErrorIllegalAddress);
+  CHECK(m.call("_sceKernelAllocateTlspl", {tls, R, 0x8800'0000}), Kernel::ErrorIllegalAddress);
+  CHECK(m.call("_sceKernelAllocateTlspl", {tls ^ 0x100, R, 0}), Kernel::ErrorUnknownTlspl);
+  CHECK(m.call("_sceKernelAllocateTlspl", {0, R, 0}), Kernel::ErrorUnknownTlspl);
+  k.dispatchSuspended = true;
+  CHECK(m.call("_sceKernelAllocateTlspl", {tls, R, 0}), Kernel::ErrorCanNotWait);
+  CHECK(get(tls), base + 0x10);  //(the library's own list answers that: no call)
+  k.dispatchSuspended = false;
+  CHECK(m.system.memory.read(4, R), 0xdead'beef);
+  //from an interrupt handler, no thread of its own: no block got, none freed, and the running thread's block holds the
+  //pool up against deletion
+  k.interrupting = true;
+  CHECK(get(tls), 0);
+  CHECK(m.call("sceKernelFreeTlspl", {tls}), 0);
+  CHECK(m.call("sceKernelDeleteTlspl", {tls}), Kernel::ErrorTlsplInUse);
+  k.interrupting = false;
+  CHECK(get(tls), base + 0x10);
+  //another thread takes the next block; deleting is refused while it holds it, and its end gives it back
+  as(two);
+  CHECK(get(tls), base + 0x20);
+  as(one);
+  CHECK(m.call("sceKernelDeleteTlspl", {tls}), Kernel::ErrorTlsplInUse);
+  m.system.memory.write(4, base + 0x20, 0xcccc'cccc);
+  k.endThread(*k.threads[two], 0);
+  CHECK(k.tlsHeld(k.tlsPools[tls], two), -1);
+  CHECK(m.system.memory.read(4, base + 0x20), 0);
+  CHECK(roundTrip(m), true);
+  //the caller's own block doesn't hold the pool up
+  CHECK(m.call("sceKernelDeleteTlspl", {tls}), 0);
+  CHECK(get(tls), 0);
+  CHECK(m.notes.size(), 0);
+}
+
+//Threads waiting for a pool's block, on both engines (threads/tls/allocate, priority and delete): main holds a pool's
+//one block. A (sceKernelGetTlsAddr, priority 0x31) and B (the system call, 2 ms) wait, then C (the system call, no
+//limit, 0x30): B's time runs out (WAIT_TIMEOUT, its address untouched, its time left 0); main frees the block and A
+//gets it, zeroed, first come though C is better; as A ends it goes to C. Main takes it back as C ends; D
+//(sceKernelGetTlsAddr) waits and is let go (NULL), E waits and the pool is deleted under it (NULL). In a pool served
+//by priority, G (0x31), waiting after F (0x34), is served first, F as G ends. A state saved with A and C waiting loads
+//into another machine and carries on alike.
+static auto tlsWaited() -> void {
+  for(bool recompile : {false, true}) {
+    KernelMachine m;
+    constexpr u32 Pools = R + 0x10, Timeout = R + 0x18, Woken = R + 0x98;
+    //a waiter: asks for a block of pool n (by the library, or by the system call with or without a timeout), writes
+    //down its result and the address it was given, when it woke (a count of the waiters woken), the block's first
+    //word, and ends
+    auto waiter = [&](u32 entry, u32 n, bool library, bool timed, u32 result) {
+      Assembler w{m, entry};
+      w.li(t0, Pools + n * 4); w.put(lw(a0, 0, t0));
+      if(library) {
+        w.call("sceKernelGetTlsAddr");
+        w.li(t0, result); w.put(sw(v0, 4, t0));
+      } else {
+        w.li(t0, result + 4); w.li(t1, 0xdead'beef); w.put(sw(t1, 0, t0));
+        w.li(a1, result + 4); w.li(a2, timed ? Timeout : 0);
+        w.call("_sceKernelAllocateTlspl");
+        w.li(t0, result); w.put(sw(v0, 0, t0));
+      }
+      w.li(t4, Woken); w.put(lw(t3, 0, t4)); w.put(addiu(t3, t3, 1)); w.put(sw(t3, 0, t4));
+      w.li(t0, result); w.put(sw(t3, 12, t0));
+      w.put(lw(t1, 4, t0)); w.put(lw(t5, 0, t0));  //(the block's first word only for a block given)
+      u32 skip = w.here();
+      w.put(beq(t1, zero, 0)); w.put(nop);
+      u32 skip2 = w.here();
+      w.put(bne(t5, zero, 0)); w.put(nop);
+      w.put(lw(t2, 0, t1)); w.put(sw(t2, 8, t0));
+      m.system.memory.write(4, skip, beq(t1, zero, int32_t(w.here() - (skip + 4)) / 4));
+      m.system.memory.write(4, skip2, bne(t5, zero, int32_t(w.here() - (skip2 + 4)) / 4));
+      w.call("sceKernelExitThread");
+    };
+    waiter(0x0880'2000, 0, true, false, R + 0x20);   //A
+    waiter(0x0880'2100, 0, false, true, R + 0x30);   //B
+    waiter(0x0880'2200, 0, false, false, R + 0x40);  //C
+    waiter(0x0880'2300, 0, true, false, R + 0x50);   //D
+    waiter(0x0880'2400, 0, true, false, R + 0x60);   //E
+    waiter(0x0880'2500, 1, true, false, R + 0x70);   //F, priority 0x34
+    waiter(0x0880'2600, 1, true, false, R + 0x80);   //G, priority 0x31
+    Assembler main{m, 0x0880'1000};
+    auto start = [&](u32 entry, u32 priority) {  //below main's: it runs while main waits (its ID left in s1)
+      main.li(a0, m.string("waiter")); main.li(a1, entry); main.li(a2, priority); main.li(a3, 0x1000);
+      main.li(t0, 0); main.li(t1, 0);
+      main.call("sceKernelCreateThread");
+      main.put(addu(s1, v0, zero));
+      main.put(addu(a0, v0, zero)); main.li(a1, 0); main.li(a2, 0);
+      main.call("sceKernelStartThread");
+    };
+    auto delay = [&](u32 microseconds) { main.li(a0, microseconds); main.call("sceKernelDelayThread"); };
+    auto pool = [&](u32 n) { main.li(t0, Pools + n * 4); main.put(lw(a0, 0, t0)); };
+    for(u32 n = 0; n < 2; n++) {
+      main.li(a0, m.string("tls")); main.li(a1, 2); main.li(a2, n ? 0x100 : 0); main.li(a3, 0x40); main.li(t0, 1);
+      main.li(t1, 0);
+      main.call("sceKernelCreateTlspl");
+      main.li(t0, Pools + n * 4); main.put(sw(v0, 0, t0));
+      pool(n);
+      main.call("sceKernelGetTlsAddr");  //main holds the block
+      main.li(t0, R + n * 4); main.put(sw(v0, 0, t0));
+      main.li(t1, 0x5555'5555); main.put(sw(t1, 0, v0));
+    }
+    main.li(t0, Timeout); main.li(t1, 2000); main.put(sw(t1, 0, t0));
+    start(0x0880'2000, 0x31);
+    start(0x0880'2100, 0x30);
+    delay(3000);  //A and B wait; B's 2 ms run out
+    start(0x0880'2200, 0x30);
+    delay(1000);  //C waits too (the state is saved here)
+    pool(0);
+    main.call("sceKernelFreeTlspl");  //to A, then as A ends to C
+    delay(1000);
+    pool(0);
+    main.call("sceKernelGetTlsAddr");  //C has ended: main takes the block back
+    start(0x0880'2300, 0x30);
+    delay(1000);
+    main.put(addu(a0, s1, zero));
+    main.call("sceKernelReleaseWaitThread");  //D let go
+    main.li(t0, R + 0x90); main.put(sw(v0, 0, t0));
+    delay(1000);
+    start(0x0880'2400, 0x30);
+    delay(1000);
+    pool(0);
+    main.call("sceKernelDeleteTlspl");  //under E
+    main.li(t0, R + 0x94); main.put(sw(v0, 0, t0));
+    delay(1000);
+    start(0x0880'2500, 0x34);
+    delay(1000);  //F waits first
+    start(0x0880'2600, 0x31);
+    delay(1000);
+    pool(1);
+    main.call("sceKernelFreeTlspl");  //to G, the better
+    delay(1000);
+    main.call("sceKernelExitGame");
+    m.system.recompiler.enabled = recompile;
+    m.system.power(0x0880'1000);
+    s32 uid = m.kernel.createThread("main", 0x0880'1000, 0x20, 0x4000, 0, 0);
+    m.kernel.startThread(*m.kernel.threads[uid], 0, 0);
+    m.kernel.run(Kernel::CPUFrequency * 35 / 10'000);  //3.5 ms: A and C waiting
+    u32 waiting = 0;
+    for(auto& [id, thread] : m.kernel.threads) waiting += thread->wait == Kernel::Wait::Tlspl;
+    CHECK(waiting, 2);
+    auto state = saveState(m);
+    KernelMachine fresh;
+    fresh.system.recompiler.enabled = recompile;
+    CHECK(loadState(fresh, state) && saveState(fresh) == state, true);
+    fresh.kernel.run(Kernel::CPUFrequency / 3);
+    CHECK(fresh.kernel.exited, true);
+    auto at = [&](u32 offset) { return fresh.system.memory.read(4, R + offset); };
+    u32 block = at(0x00);
+    CHECK(at(0x30) == Kernel::ErrorWaitTimeout && at(0x34) == 0xdead'beef, true);  //B: timed out, first
+    CHECK(at(0x3c) == 1 && fresh.system.memory.read(4, Timeout) == 0, true);
+    CHECK(at(0x24) == block && at(0x28) == 0 && at(0x2c) == 2, true);              //A: the block, zeroed
+    CHECK(at(0x40) == 0 && at(0x44) == block && at(0x48) == 0 && at(0x4c) == 3, true);  //C: after A
+    CHECK(at(0x54) == 0 && at(0x5c) == 4 && at(0x90) == 0, true);                  //D: let go, NULL
+    CHECK(at(0x64) == 0 && at(0x6c) == 5 && at(0x94) == 0, true);                  //E: deleted, NULL
+    CHECK(at(0x84) == at(0x04) && at(0x8c) == 6, true);                            //G first
+    CHECK(at(0x74) == at(0x04) && at(0x7c) == 7, true);                            //F as G ended
+    CHECK(fresh.notes.size(), 0);
+  }
+}
+
 auto poolTests() -> Tests {
   return {
     {"pools called directly", poolCalls}, {"pools waited for", poolWaits},
     {"pools served past waiters that left", poolWaitersLeave},
+    {"tls pools created", tlsCreated}, {"tls pools handed out", tlsHandedOut}, {"tls pools waited for", tlsWaited},
   };
 }
 

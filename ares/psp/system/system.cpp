@@ -471,7 +471,8 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //Save states: everything the PSP was doing, to carry on from exactly there. A state starts with a header: a
 //signature, the version of its layout, RAM's size and the program it was made with, all of which must be the
 //machine's; then memory, the CPU, the GE and the kernel. The version goes up whenever the layout changes, or what a
-//field means: 18 since the kernel keeps sceCcc's tables and error characters (part 55); 17 since a message dialog
+//field means: 19 since the kernel holds thread-local storage pools and threads may wait for their blocks (part 55);
+//18 since the kernel keeps sceCcc's tables and error characters (part 55); 17 since a message dialog
 //counts Updates before an abort for its fade length (part 42); 16 since a
 //message dialog counts the Updates it takes to finish once aborted (part 42); 15 since the
 //disc drive keeps whether the game deactivated it (part 37); 14 since threads keep their
@@ -496,10 +497,10 @@ auto System::startDiscProgram(std::shared_ptr<Disc> image) -> void {
 //each call into the program says whether it's a vertical blank's handler; 3 when the kernel came to hold both the
 //modules the program loaded and its threads', semaphores' and callbacks' new fields (with pools, sound and the
 //dialogs), each of which came first on a branch of its own as a version 2, two layouts that differ from each other
-//and from these. Layouts 15 and 16 load with the dialog abort counters defaulted to 0, and 15 to 17 with no sceCcc
-//tables set; older layouts are refused.
+//and from these. Layouts 15 and 16 load with the dialog abort counters defaulted to 0, 15 to 17 with no sceCcc tables
+//set, and 15 to 18 with no thread-local storage pools; older layouts are refused.
 static constexpr u32 StateSignature = 0x5350'5350;  //"PSPS"
-static constexpr u32 StateVersion = 18;
+static constexpr u32 StateVersion = 19;
 
 //The program that started, to tell it from any other: an FNV-1a hash of all its bytes. A state is only loaded into
 //the program it was made with, as another's memory, threads and files mean nothing to it.
@@ -509,8 +510,9 @@ auto System::hash(std::span<const u8> bytes) -> u64 {
   return value;
 }
 
-//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 17 (the
-//dialog's abort counters default to 0, no sceCcc tables): the owner's accuracy scenes were saved at 15 before part 42.
+//Writes the header, or reads one and says whether it's this machine's. Reading also accepts layouts 15 to 18 (the
+//dialog's abort counters default to 0, no sceCcc tables, no thread-local storage pools): the owner's accuracy scenes
+//were saved at 15 before part 42.
 auto System::header(serializer& s) -> bool {
   u32 signature = StateSignature, version = StateVersion, ramSize = memory.ram.size();
   u64 program = programHash;

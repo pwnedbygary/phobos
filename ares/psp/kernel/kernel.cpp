@@ -35,6 +35,7 @@ namespace ares::PlayStationPortable {
 #include "display.cpp"
 #include "ge.cpp"
 #include "pools.cpp"
+#include "tls.cpp"
 #include "messages.cpp"
 #include "audio.cpp"
 #include "sas.cpp"
@@ -148,6 +149,12 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelFreeVpl",              &Kernel::sceKernelFreeVpl);
   add("ThreadManForUser",  "sceKernelCancelVpl",            &Kernel::sceKernelCancelVpl);
   add("ThreadManForUser",  "sceKernelReferVplStatus",       &Kernel::sceKernelReferVplStatus);
+  add("ThreadManForUser",  "sceKernelCreateTlspl",          &Kernel::sceKernelCreateTlspl);
+  add("ThreadManForUser",  "sceKernelDeleteTlspl",          &Kernel::sceKernelDeleteTlspl);
+  add("ThreadManForUser",  "_sceKernelAllocateTlspl",       &Kernel::_sceKernelAllocateTlspl);
+  add("ThreadManForUser",  "sceKernelFreeTlspl",            &Kernel::sceKernelFreeTlspl);
+  add("ThreadManForUser",  "sceKernelReferTlsplStatus",     &Kernel::sceKernelReferTlsplStatus);
+  add("Kernel_Library",    "sceKernelGetTlsAddr",           &Kernel::sceKernelGetTlsAddr);
   add("ThreadManForUser",  "sceKernelCreateMsgPipe",        &Kernel::sceKernelCreateMsgPipe);
   add("ThreadManForUser",  "sceKernelDeleteMsgPipe",        &Kernel::sceKernelDeleteMsgPipe);
   add("ThreadManForUser",  "sceKernelSendMsgPipe",          &Kernel::sceKernelSendMsgPipe);
@@ -859,6 +866,7 @@ auto Kernel::power() -> void {
   vblankPending = false;
   eventFlags.clear();
   pools.clear();
+  tlsPools.clear();
   pipes.clear();
   mailboxes.clear();
   callbacks.clear();

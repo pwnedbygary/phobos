@@ -178,7 +178,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     auto& w = t.waitBeforeCallback;
     s(w.wait); s(w.id); s(w.count); s(w.mode); s(w.pointer); s(w.timeoutPointer); s(w.wakeAt); s(w.callbacks);
     s(w.done); s(w.resultPointer);
-    check(t.wait <= Wait::Psmf && (w.wait <= Wait::Mailbox || w.wait == Wait::Mutex || w.wait == Wait::Psmf));
+    check(t.wait <= Wait::Tlspl && (w.wait <= Wait::Mailbox || w.wait == Wait::Mutex || w.wait == Wait::Psmf));
     check(t.callbackID < nextUID);
     s(t.suspended);
     //its run figures (threads.cpp): no more time on the CPU than has passed
@@ -602,6 +602,47 @@ auto Kernel::serialize(serializer& s) -> bool {
   //character code conversion's tables and error characters (ccc.cpp): layout 18 on, none set in older states
   if(s.reading() && stateLayout < 18) ccc = {};
   else s(ccc.jisToUnicode), s(ccc.unicodeToJis), s(ccc.errorUTF8), s(ccc.errorUTF16), s(ccc.errorSJIS);
+  //thread-local storage pools (tls.cpp): layout 19 on, none in older states. Each has blocks, the one to look from
+  //among them, room for each at least its size (a multiple of 4), and its index, one of 16 no other pool has, in its
+  //ID's bits 3 to 6; each block is free or a thread's that hasn't ended, a thread holding one of a pool at most.
+  if(s.reading() && stateLayout < 19) tlsPools.clear();
+  else map(tlsPools, [&](TlsPool& pool) {
+    s(pool.uid); text(pool.name); s(pool.attributes); s(pool.index); s(pool.block); s(pool.address);
+    s(pool.blockSize); s(pool.stride); s(pool.next);
+    vector(pool.holders, [&](u32& holder) { s(holder); });
+    check(pool.index < 16 && (pool.uid >> 3 & 15) == pool.index && !pool.holders.empty());
+    check(pool.next < pool.holders.size() && pool.stride >= pool.blockSize && pool.stride && !(pool.stride & 3));
+  });
+  if(s.reading() && valid) {
+    u32 indexes = 0;
+    for(auto& [uid, pool] : tlsPools) {
+      check(uid < nextUID && pool.uid == uid && pool.block < nextUID && !(indexes >> pool.index & 1));
+      indexes |= 1 << pool.index;
+      auto block = std::find_if(blocks.begin(), blocks.end(), [&](auto& b) { return b.uid == pool.block; });
+      check(block != blocks.end() && pool.address >= block->address
+            && pool.address + u64(pool.stride) * pool.holders.size() <= u64(block->address) + block->size);
+      std::vector<u32> holders;
+      for(u32 holder : pool.holders) {
+        if(!holder) continue;
+        auto thread = threads.find(holder);
+        check(thread != threads.end() && thread->second->status != Status::Dormant);
+        holders.push_back(holder);
+      }
+      std::sort(holders.begin(), holders.end());
+      check(std::adjacent_find(holders.begin(), holders.end()) == holders.end());
+    }
+    //a thread waiting for a block waits on a pool there is, every block of it held, holding none itself; the
+    //system call's wait has where to put the address
+    for(auto& [uid, t] : threads) {
+      if(t->status != Status::Waiting || t->wait != Wait::Tlspl) continue;
+      auto pool = tlsPools.find(t->waitID);
+      check(pool != tlsPools.end() && !t->callbacks && t->waitMode <= TlsByLibrary);
+      if(pool == tlsPools.end()) continue;
+      auto& holders = pool->second.holders;
+      check(std::count(holders.begin(), holders.end(), 0) == 0 && tlsHeld(pool->second, uid) < 0);
+      check(t->waitMode == TlsByLibrary || userAddress(t->waitPointer));
+    }
+  }
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);
@@ -691,6 +732,7 @@ auto Kernel::serialize(serializer& s) -> bool {
       check(t.stackSize >= 0x200 && own(stack));
     }
     for(auto& [uid, pool] : pools) owned(pool.block);
+    for(auto& [uid, pool] : tlsPools) check(owned(pool.block));
     for(auto& [uid, pipe] : pipes) if(pipe.block) check(owned(pipe.block));
     for(auto& [uid, m] : modules) check(!m.block || owned(m.block));
     if(u32 program = programBlockAt()) check(own([&](const Block& b) { return b.address == program; }));

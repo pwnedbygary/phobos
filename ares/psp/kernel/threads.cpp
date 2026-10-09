@@ -100,8 +100,10 @@ auto Kernel::restore(const Context& c) -> void {
 }
 
 //A thread may run again; returnValue is what the function it waited in returns (its v0). A message pipe's send or
-//receive tells how many bytes it moved, however its wait ends (messages.cpp).
+//receive tells how many bytes it moved, however its wait ends (messages.cpp); sceKernelGetTlsAddr, a block's
+//address, or NULL for any error the call under it returned (tls.cpp).
 auto Kernel::ready(Thread& thread, u32 returnValue) -> void {
+  if(thread.wait == Wait::Tlspl && thread.waitMode == TlsByLibrary && s32(returnValue) < 0) returnValue = 0;
   if(thread.timeoutPointer) {  //what's left of its timeout, in microseconds (none, if it ran out)
     u64 left = thread.wakeAt > cycles ? (thread.wakeAt - cycles) / (CPUFrequency / 1'000'000) : 0;
     memory.write(4, thread.timeoutPointer, returnValue == ErrorWaitTimeout ? 0 : u32(left));
@@ -332,6 +334,7 @@ auto Kernel::endThread(Thread& thread, s32 status) -> void {
   waiterLeft(wait, thread.waitID);
   waiterLeft(before.wait, before.id);
   mutexesFreed(thread.uid);
+  tlsThreadEnded(thread.uid);
   moduleThreadEnded(thread, status);
   fontAbandoned(thread.uid);
   mpegAbandoned(thread.uid);
@@ -541,13 +544,13 @@ auto Kernel::sceKernelReferSystemStatus() -> void {
   result(0);
 }
 
-//The IDs of the thread manager's objects of a kind, in the order they were made (pspsdk's SceKernelIdListType):
-//1 threads, 2 semaphores, 3 event flags, 4 mailboxes, 5 VPLs, 6 FPLs, 7 message pipes, 8 callbacks, 9 thread event
+//The IDs of the thread manager's objects of a kind, in the order they were made (pspsdk's SceKernelIdListType): 1
+//threads, 2 semaphores, 3 event flags, 4 mailboxes, 5 VPLs, 6 FPLs, 7 message pipes, 8 callbacks, 9 thread event
 //handlers (the kernel has none), 10 alarms, 11 virtual timers, 12 mutexes, 13 lightweight mutexes, 14 thread-local
-//storage pools (none either); and threads by state, 64 sleeping, 65 delaying, 66 suspended (whatever else they're
-//doing), 67 dormant. False for any other kind. pspautotests' threads/threads/threadmanidlist recorded 1-14 and 64-67
-//taken and all else refused, 14 listing such a pool once made; pspsdk names 1-11 and 64-67. Chosen: 12 and 13 as the
-//two kinds of mutex, which came with the same firmware as those pools, in that order.
+//storage pools; and threads by state, 64 sleeping, 65 delaying, 66 suspended (whatever else they're doing), 67 dormant.
+//False for any other kind. pspautotests' threads/threads/threadmanidlist recorded 1-14 and 64-67 taken and all else
+//refused, 14 listing such a pool once made; pspsdk names 1-11 and 64-67. Chosen: 12 and 13 as the two kinds of mutex,
+//which came with the same firmware as those pools, in that order.
 auto Kernel::threadmanIDs(u32 type, std::vector<u32>& ids) -> bool {
   auto all = [&](auto& objects) { for(auto& entry : objects) ids.push_back(entry.first); };
   auto threadsWhere = [&](auto&& matches) {
@@ -570,7 +573,7 @@ auto Kernel::threadmanIDs(u32 type, std::vector<u32>& ids) -> bool {
   case 11: all(vtimers); return true;
   case 12: all(mutexes); return true;
   case 13: all(lwMutexes); return true;
-  case 14: return true;
+  case 14: all(tlsPools); return true;
   case 64: threadsWhere([&](const Thread& t) { return t.status == Status::Waiting && t.wait == Wait::Sleep; });
     return true;
   case 65: threadsWhere([&](const Thread& t) { return t.status == Status::Waiting && t.wait == Wait::Delay; });
@@ -603,9 +606,9 @@ auto Kernel::sceKernelGetThreadmanIdList() -> void {
   result(written);
 }
 
-//(ID): the kind of thread manager object an ID is (threadmanIDs()'s numbers, 1 to 13), or ILLEGAL_ARGUMENT for one
-//that isn't any, as threads/threads/threadmanidtype recorded: a thread 1, whatever it's doing; a deleted one, -1, 0,
-//1, a memory block and a module ILLEGAL_ARGUMENT.
+//(ID): the kind of thread manager object an ID is (threadmanIDs()'s numbers, 1 to 14; 14, a thread-local storage pool,
+//chosen: threadmanidtype makes none), or ILLEGAL_ARGUMENT for one that isn't any, as threads/threads/threadmanidtype
+//recorded: a thread 1, whatever it's doing; a deleted one, -1, 0, 1, a memory block and a module ILLEGAL_ARGUMENT.
 auto Kernel::sceKernelGetThreadmanIdType() -> void {
   u32 uid = arg(0);
   if(threads.count(uid)) return result(1);
@@ -619,6 +622,7 @@ auto Kernel::sceKernelGetThreadmanIdType() -> void {
   if(vtimers.count(uid)) return result(11);
   if(mutexes.count(uid)) return result(12);
   if(lwMutexes.count(uid)) return result(13);
+  if(tlsPools.count(uid)) return result(14);
   result(ErrorIllegalArgument);
 }
 
