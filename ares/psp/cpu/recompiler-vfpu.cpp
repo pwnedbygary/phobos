@@ -7,10 +7,10 @@
 //a lane is read as it is, and written as it is. So compiled code checks that they're at rest and calls a helper
 //below made for that case, which reads and writes the lanes by the register numbers the block worked out when it was
 //compiled, and does each lane's arithmetic exactly as the interpreter does (vfpuFloat(), vfpuBits(), vfpuNaN(), the
-//same operations in the same order: a dot product's sums lane by lane, in doubles, from lane 0). With the prefixes
-//anything else the instruction goes to the interpreter, as always. Either way they're at rest afterwards: the
-//interpreter uses them up, and the helpers found them so. The block keeps track (prefixesAtRest) and checks only
-//when it doesn't know: in practice once, at the first VFPU instruction of a block that sets no prefixes.
+//same operations in the same order; a dot product through the adder, vfpuDot()). With the prefixes anything else
+//the instruction goes to the interpreter, as always. Either way they're at rest afterwards: the interpreter uses them
+//up, and the helpers found them so. The block keeps track (prefixesAtRest) and checks only when it doesn't know: in
+//practice once, at the first VFPU instruction of a block that sets no prefixes.
 //
 //The matrix instructions (vmmul, vtfm, vhtfm) don't read the prefixes at all; compiled code calls them directly
 //(skipping only the decoding) and leaves the prefixes at rest, as the interpreter's decoder does after them.
@@ -39,9 +39,9 @@ template<u32 Size, u32 Op> auto Allegrex::vfpuRestBinary(u32 vd, u32 vs, u32 vt)
 
 //vdot: VDOT() with the prefixes at rest, where the lanes past the size are the ones left out of the sum.
 template<u32 Size> auto Allegrex::vfpuRestDot(u32 vd, u32 vs, u32 vt) -> void {
-  f64 sum = 0;
-  for(u32 i : range(Size)) sum += (f64)vfpuFloat(vfpu.r[laneOf(vs, i)]) * vfpuFloat(vfpu.r[laneOf(vt, i)]);
-  vfpu.r[vd] = vfpuNaN(vfpuBits(sum), NaNSign::Positive, 0);
+  u32 a[4] = {}, b[4] = {};
+  for(u32 i : range(Size)) a[i] = vfpu.r[laneOf(vs, i)], b[i] = vfpu.r[laneOf(vt, i)];
+  vfpu.r[vd] = vfpuNaN(vfpuDot(a, b), NaNSign::Positive, 0);
 }
 
 //vscl: VSCL() with the prefixes at rest; vt is the scale's register.
