@@ -1240,6 +1240,7 @@ struct Kernel {
     std::unique_ptr<AudioDecoder> sound;   //not saved: made afresh
   };
   std::map<u32, MpegStream> mpegStreams;
+  static constexpr u32 RingMostPackets = 0x8000;  //the most a ring may have: more than any can, at 64 MiB of data
   struct MpegCall {        //sceMpegRingbufferPut part way through, calling the ringbuffer's own callback
     Context caller{};      //the thread where it called Put: put back as Put returns
     u32 ringbuffer = 0;    //the ringbuffer being fed

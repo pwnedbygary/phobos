@@ -516,22 +516,23 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(call.slots <= MaxFonts && call.asks.size() <= 9 && call.got.size() <= call.asks.size());
     check(call.frees.size() <= MaxFonts * 9 + 4);
   });
-  //a ringbuffer being fed, its callback running: it asked for a run of what's left (at most a ring's 4096 packets)
+  //a ringbuffer being fed, its callback running: it asked for a run of what's left (at most RingMostPackets)
   map(mpegCalls, [&](MpegCall& call) {
     context(call.caller); s(call.ringbuffer); s(call.left); s(call.asked); s(call.put);
-    check(call.left <= 4096 && call.asked >= 1 && call.asked <= call.left && call.put <= 4096 - call.left);
+    check(call.left <= RingMostPackets && call.asked >= 1 && call.asked <= call.left);
+    check(call.put <= RingMostPackets - call.left);
     check(memory.reaches(call.ringbuffer, 48));
   });
   if(s.reading()) {
     for(auto& [thread, call] : mpegCalls) check(threads.count(thread));
   }
-  //what each library's Media Engine holds (mpeg.cpp): the access unit to decode next (no more than a ring of 4096
-  //packets holds), sound kept from freed packets (1 MiB at most) with its time stamps (within it, in order), the
-  //sound handed out from the ring's packets, the last sound access unit's time stamp and the one carried over, and
-  //the pictures held back and shown (4:2:0, as many bytes as their sizes take, up to the most a movie shows each
-  //way, VideoDecoder::MaxSide), and the last sound frame decoded (of a frame's size: at most 0x840 bytes, less its
-  //header). The decoders aren't saved: made afresh, the sound's is primed with that frame, the pictures' shows no
-  //new picture until one it can start from. A library is in memory.
+  //what each library's Media Engine holds (mpeg.cpp): the access unit to decode next (no more than a ring of
+  //RingMostPackets holds), sound kept from freed packets (1 MiB at most) with its time stamps (within it, in
+  //order), the sound handed out from the ring's packets, the last sound access unit's time stamp and the one
+  //carried over, and the pictures held back and shown (4:2:0, as many bytes as their sizes take, up to the most a
+  //movie shows each way, VideoDecoder::MaxSide), and the last sound frame decoded (of a frame's size: at most 0x840
+  //bytes, less its header). The decoders aren't saved: made afresh, the sound's is primed with that frame, the
+  //pictures' shows no new picture until one it can start from. A library is in memory.
   map(mpegStreams, [&](MpegStream& m) {
     bytes(m.unit); bytes(m.audio);
     vector(m.audioStamps, [&](std::pair<u32, u64>& stamp) { s(stamp.first); s(stamp.second); });
@@ -539,7 +540,7 @@ auto Kernel::serialize(serializer& s) -> bool {
     bytes(m.held); s(m.heldWidth); s(m.heldHeight); bytes(m.shown); s(m.shownWidth); s(m.shownHeight);
     bytes(m.soundLast);
     if(s.reading()) m.video.reset(), m.sound.reset(), m.keyframe = true;
-    check(m.unit.size() <= 4096 * 2048 && m.audio.size() <= 1_MiB && m.audioTaken <= 4096 * 2048);
+    check(m.unit.size() <= RingMostPackets * 2048 && m.audio.size() <= 1_MiB && m.audioTaken <= RingMostPackets * 2048);
     check(m.soundLast.size() <= 0x840 - 8 && !(m.soundLast.size() % 8));
     for(u32 n = 0; n < m.audioStamps.size(); n++) {
       check(m.audioStamps[n].first <= m.audio.size() && (!n || m.audioStamps[n - 1].first <= m.audioStamps[n].first));

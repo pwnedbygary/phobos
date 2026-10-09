@@ -1143,7 +1143,10 @@ static auto stateFields() -> void {
   });
   refuses("an mpeg call past a ring's packets", [&] {
     auto& call = k.mpegCalls.at(one);
-    call.put = 4096 - call.left + 1;
+    call.put = Kernel::RingMostPackets - call.left + 1;
+  });
+  refuses("an mpeg call with more left than any ring has", [&] {
+    k.mpegCalls.at(one).left = Kernel::RingMostPackets + 1;
   });
   refuses("an mpeg call feeding a ringbuffer nowhere", [&] { k.mpegCalls.at(one).ringbuffer = 0x1000; });
   refuses("a font call given more than it asked for", [&] { k.fontCalls.at(two).got.push_back(1); });

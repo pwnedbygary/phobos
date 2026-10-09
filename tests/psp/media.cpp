@@ -407,6 +407,15 @@ static auto mpegStubs() -> void {
   CHECK(word(m, Ring + 32), Data + 512 * 2048);
   CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 4097, Data, 0x1000, 0, 0}), 0x8061'0022);
   CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 1, Data, u32(-1), 0, 0}), 0x8061'0022);
+  //packets whose memory, taken as signed, is no more than the size (ringbuffer/construct's 4096 packets' memory:
+  //4097 refused; -1, 0x7fffffff and 0x80000000, whose memory wraps round to -0x868 or 0, taken), and Sega Rally
+  //Revo's 4800 with theirs
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 4097, Data, 4096 * 0x868, 0, 0}), 0x8061'0022);
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, u32(-1), Data, 4096 * 0x868, 0, 0}), 0);
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 0x7fff'ffff, Data, 4096 * 0x868, 0, 0}), 0);
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 0x8000'0000, Data, 4096 * 0x868, 0, 0}), 0);
+  CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 4800, Data, 4800 * 0x868, 0, 0}), 0);
+  CHECK(word(m, Ring), 4800);
   CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 512, Data, 0x10'd000, 0x0880'4000, 0}), 0);
   CHECK(m.call("sceMpegRingbufferAvailableSize", {Ring}), 512);
   constexpr u32 Handle = R + 0x40, Memory = 0x0895'0000;
@@ -500,6 +509,27 @@ static auto mpegMovie(bool ownLibrary) -> void {
     CHECK(m.notes.size(), 0);
     CHECK(roundTrip(m), true);
   }
+}
+
+//A movie fed through a ring of more packets than 4096 (Sega Rally Revo's 4800) is taken apart as through a small one
+//(movieModel()). The ring's data runs over the library's memory, past the few packets the movie fills.
+static auto mpegMovieBigRing() -> void {
+  constexpr u64 None = Movie::None;
+  Movie movie({3000, 700, 1500, 2600}, {90000, None, None, None});
+  constexpr u32 Frames = 8, Ask = 3, Packets = 4800;
+  std::vector<std::pair<u32, u32>> log;
+  auto expected = movieModel(movie, Packets, Frames, Ask, log);
+  u32 units = 0;
+  for(auto& frame : expected) units += frame.result == 0;
+  CHECK(units >= 3, true);
+  KernelMachine m;
+  mpegSetUp(m, movie, Packets);
+  mpegCallback(m, movie, false, false);
+  movieProgram(m, 0x0880'1000, Frames, Ask);
+  m.runProgram(0x0880'1000, false);
+  CHECK(m.kernel.exited && movieFrames(m, Frames) == expected, true);
+  CHECK(word(m, Log), log.size());
+  CHECK(m.notes.size(), 0);
 }
 
 //Space Invaders Extreme's movie thread: of the best priority, it asks for an access unit, feeding the ringbuffer
@@ -624,16 +654,18 @@ static auto mpegCallbackStates() -> void {
 }
 
 //A ring whose fields, the game's to write, couldn't be a ring's is given nothing (sceMpegGetAvcAu's test), its
-//fields left as they were: 8192 packets, -200 or 17 of 16 holding data, the next to write at 16 of 16, none, and
-//0x7fffffff packets with 0x80000000 holding data. (The last had overflowed; 8192 packets, and -200 holding data, had
-//the callback asked for 5000 and 4296, more than a state holds.) A state saved where the callback, which waits,
-//would have been waiting loads into another machine. A ring that is one, as a check, is fed as it waits. On both
-//engines.
+//fields left as they were: more packets than any ring has (0x8001), -200 or 17 of 16 holding data, the next to write
+//at 16 of 16, none, and 0x7fffffff packets with 0x80000000 holding data, whose free packets overflow. Fed, -200
+//holding data would have the callback asked for 4296 packets of a ring of 4096. A state saved where the callback,
+//which waits, would have been waiting loads into another machine. Rings that are ones, as a check, are fed as they
+//wait (asking for 5000): of 16 packets, 4800 (Sega Rally Revo's) and 0x8000, the most there may be. The big rings'
+//data would run over the library's memory, but the callback writes none. On both engines.
 static auto mpegRingbufferNotARing() -> void {
   struct Fields { u32 packets, written, filled; bool fed; };
   for(bool recompile : {false, true}) {
-    for(auto f : {Fields{16, 0, 0, true}, {8192, 0, 0, false}, {4096, 0, u32(-200), false}, {16, 0, 17, false},
-                  {16, 16, 0, false}, {0, 0, 0, false}, {0x7fff'ffff, 0, 0x8000'0000, false}}) {
+    for(auto f : {Fields{16, 0, 0, true}, {4800, 0, 0, true}, {0x8000, 0, 0, true}, {0x8001, 0, 0, false},
+                  {4096, 0, u32(-200), false}, {16, 0, 17, false}, {16, 16, 0, false}, {0, 0, 0, false},
+                  {0x7fff'ffff, 0, 0x8000'0000, false}}) {
       KernelMachine m;
       feedingSetUp(m, 16, {{0, 0, 500}});
       feedingCallback(m);
@@ -653,7 +685,8 @@ static auto mpegRingbufferNotARing() -> void {
       CHECK(loadState(fresh, state) && saveState(fresh) == state, true);
       fresh.kernel.run(Kernel::CPUFrequency / 3);
       CHECK(fresh.kernel.exited, true);
-      CHECK(word(fresh, Results) == (f.fed ? 16 : 0) && word(fresh, FeedLog) == (f.fed ? 1 : 0), true);
+      CHECK(word(fresh, Results) == (f.fed ? std::min(f.packets, 5000u) : 0), true);
+      CHECK(word(fresh, FeedLog), f.fed ? 1 : 0);
       if(!f.fed) CHECK(word(fresh, Ring + 8) == f.written && word(fresh, Ring + 12) == f.filled, true);
       CHECK(fresh.notes.size(), 0);
     }
@@ -1518,6 +1551,7 @@ auto mediaTests() -> Tests {
   return {{"part 28's odds and ends", oddsOfPart28}, {"rtc days, 64-bit times and the clock's setting", rtcDays},
           {"mpeg stubs", mpegStubs}, {"mpeg movie fed and taken apart", [] { mpegMovie(false); }},
           {"mpeg movie with the game's own library", [] { mpegMovie(true); }},
+          {"mpeg movie through a big ring", mpegMovieBigRing},
           {"mpeg movie thread waits for its picture", mpegMovieThread},
           {"mpeg ringbuffer callback states", mpegCallbackStates},
           {"mpeg ringbuffer that isn't one given nothing", mpegRingbufferNotARing},

@@ -329,6 +329,30 @@ static auto mpegSound() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//The sound's access units from a ring of more packets than 4096 (Sega Rally Revo's 4800), as from a small one.
+static auto mpegSoundBigRing() -> void {
+  KernelMachine m;
+  auto log = std::make_shared<std::vector<u32>>();
+  m.kernel.audioDecoders = [log](const AudioDecoder::Format&) -> std::unique_ptr<AudioDecoder> {
+    auto decoder = std::make_unique<StandIn>();
+    decoder->log = log;
+    return decoder;
+  };
+  auto bytes = movie({}, 3);
+  setUp(m, bytes);
+  constexpr u32 SoundAu = R + 0x300;
+  m.call("sceMpegInitAu", {Handle, EsBuffer, SoundAu});
+  for(u32 n = 0; n < 3; n++) m.system.memory.copyIn(RingData + n * 2048, bytes.data() + 2048 + n * 2048, 2048);
+  m.system.memory.write(4, Ring, 4800);
+  m.system.memory.write(4, Ring + 8, 3);
+  m.system.memory.write(4, Ring + 12, 3);
+  for(u32 n = 0; n < 3; n++) {
+    CHECK(m.call("sceMpegGetAtracAu", {Handle, 0x1700, SoundAu, R + 0x380}), 0);
+    CHECK(word(m, SoundAu + 4), 90000 + n * 4180);
+  }
+  CHECK(m.call("sceMpegGetAtracAu", {Handle, 0x1700, SoundAu, R + 0x380}), 0x8061'8001);
+}
+
 //An access unit with nothing in it: 0x807f00fd before the movie's sound has been decoded (video/mpeg/basic's, for a
 //movie with none), silence once it has (Juiced: Eliminator decodes so as its movies end), nothing decoded; after a
 //flush, 0x807f00fd again.
@@ -604,6 +628,7 @@ static auto mpegDecodeWidth() -> void {
 auto movieTests() -> Tests {
   return {{"mpeg header", mpegHeader}, {"mpeg pictures decoded", mpegPictures},
           {"mpeg pictures converted", mpegConversion}, {"mpeg sound access units", mpegSound},
+          {"mpeg sound from a big ring", mpegSoundBigRing},
           {"mpeg csc part past the picture", mpegConversionPart}, {"mpeg picture sizes", mpegPictureSizes},
           {"mpeg create afresh", mpegCreateAfresh}, {"mpeg after a state", mpegAfterState},
           {"mpeg ring at the movie's end", mpegRingEnd}, {"mpeg decode at the library's width", mpegDecodeWidth},

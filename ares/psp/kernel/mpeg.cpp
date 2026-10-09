@@ -160,10 +160,13 @@ auto Kernel::sceMpegQueryMemSize() -> void {
 
 //(ringbuffer, packets, data, size, callback, callback's argument): a SceMpegRingbuffer (pspmpeg.h) filled in:
 //packets, none read, written or free yet, its data, callback and argument, and where its data ends (2048 bytes a
-//packet on), as video/mpeg/ringbuffer/construct recorded. More than 4096 packets, or a negative size, is refused.
+//packet on), as video/mpeg/ringbuffer/construct recorded. Refused: a negative size, and packets whose memory, as
+//sceMpegRingbufferQueryMemSize reckons it in 32 bits, is more than the size, both taken as signed (construct gave
+//every count it tried 4096 packets' memory: 4097 was refused; -1 and 0x7fffffff, whose memory wraps round to -0x868,
+//and 0x80000000, whose memory wraps to 0, were taken). Sega Rally Revo makes a ring of 4800, with their memory.
 auto Kernel::sceMpegRingbufferConstruct() -> void {
   u32 ringbuffer = arg(0), packets = arg(1), data = arg(2), size = arg(3);
-  if(s32(packets) > 4096 || s32(size) < 0) return result(MpegErrorValue);
+  if(s32(size) < 0 || s32(packets * RingbufferPacketMemory) > s32(size)) return result(MpegErrorValue);
   if(!memory.reaches(ringbuffer, 48)) return result(ErrorInvalidPointer);
   u32 words[12] = {packets, 0, 0, 0, 0, data, arg(4), arg(5), data + packets * PacketSize, 0, 0, cpu.ipu.r[28]};
   for(u32 n = 0; n < 12; n++) memory.write(4, ringbuffer + n * 4, words[n]);
@@ -187,15 +190,15 @@ auto Kernel::sceMpegRingbufferAvailableSize() -> void {
 //wait in it (basic's read a file), with the caller's global pointer and a stack below the caller's, returning to the
 //trampoline's seventh syscall (mpegReturned()). Not from an interrupt handler, nor a thread already feeding one:
 //nothing is put in. Nor into a ring whose fields, the game's to write, couldn't be a ring's (no packets or more than
-//4096, the next to write not among them, more holding data than there are), as sceMpegGetAvcAu takes nothing from
-//one; else its callback could be asked for more than a ring's 4096 packets.
+//RingMostPackets, the next to write not among them, more holding data than there are), as sceMpegGetAvcAu takes
+//nothing from one; else its callback could be asked for more than RingMostPackets.
 auto Kernel::sceMpegRingbufferPut() -> void {
   u32 ringbuffer = arg(0);
   if(!memory.reaches(ringbuffer, 48)) return result(ErrorInvalidPointer);
   u32 packets = memory.read(4, ringbuffer + RingPackets), written = memory.read(4, ringbuffer + RingWritten);
   u32 filled = memory.read(4, ringbuffer + RingFilled);
   result(0);
-  if(!packets || packets > 4096 || written >= packets || filled > packets) return;
+  if(!packets || packets > RingMostPackets || written >= packets || filled > packets) return;
   s32 wanted = std::min({s32(arg(1)), s32(arg(2)), s32(packets - filled)});
   if(wanted <= 0 || !memory.read(4, ringbuffer + RingCallback)) return;
   if(!current || interrupting || mpegCalls.count(current->uid)) return;
@@ -414,7 +417,7 @@ auto Kernel::sceMpegGetAvcAu() -> void {
   if(!memory.reaches(ringbuffer, 48)) return result(MpegErrorNoData);
   u32 packets = memory.read(4, ringbuffer + RingPackets), read = memory.read(4, ringbuffer + RingRead);
   u32 filled = memory.read(4, ringbuffer + RingFilled), data = memory.read(4, ringbuffer + RingData);
-  if(!packets || packets > 4096 || read >= packets || filled > packets) return result(MpegErrorNoData);
+  if(!packets || packets > RingMostPackets || read >= packets || filled > packets) return result(MpegErrorNoData);
   u32 taken = memory.read(4, library + LibraryTaken);
   std::vector<u8> video;  //the video from the ring's first packet on
   std::vector<u32> ends;  //where each packet's video ends in it
@@ -507,7 +510,7 @@ auto Kernel::sceMpegGetAtracAu() -> void {
     std::vector<u8> ring;
     std::vector<std::pair<u32, u64>> ringStamps;
     u8 packet[PacketSize];
-    for(u32 n = 0; packets && packets <= 4096 && filled <= packets && n < filled; n++) {
+    for(u32 n = 0; packets && packets <= RingMostPackets && filled <= packets && n < filled; n++) {
       u32 address = data + (read + n) % packets * PacketSize;
       if(!memory.reaches(address, PacketSize)) break;
       memory.copyOut(packet, address, PacketSize);
