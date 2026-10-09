@@ -8,6 +8,7 @@
 #include <ares/psp/kernel/disc-info.hpp>
 #include <desktop/PspDiscInfo.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -68,9 +69,15 @@ static auto gameDisc(const std::string& title, const std::string& discId) -> dis
   });
 }
 
-//The temporary folder the test's files go in (fresh each run), removed when the group's done.
+//The temporary folder the test's files go in (fresh each run), removed when the program ends.
 static auto testFolder() -> std::filesystem::path {
+  struct Clean {
+    Clean(const std::filesystem::path& folder) : folder(folder) {}
+    ~Clean() { std::error_code error; std::filesystem::remove_all(folder, error); }
+    std::filesystem::path folder;
+  };
   static auto folder = std::filesystem::temp_directory_path() / "phobos-desktop-disc-tests";
+  static Clean clean(folder);
   std::error_code error;
   std::filesystem::remove_all(folder, error);
   std::filesystem::create_directories(folder, error);
@@ -98,6 +105,13 @@ static auto iconKeys() -> void {
   CHECK(pspIconKey("/games/b.iso", 100, 200) != key, true);  //the path changed
 }
 
+//The key's separators: two files whose path+size+mtime would merge into the same string (the second's path
+//starting where the first's size would end) get different keys.
+static auto keyCollisions() -> void {
+  //without the |'s, "/games/a" + "1" + "23" and "/games/a1" + "2" + "3" are both "/games/a123"
+  CHECK(pspIconKey("/games/a", 1, 23) != pspIconKey("/games/a1", 2, 3), true);
+}
+
 //A PSP disc image: the disc's formats, not a PBP (named by its folder) nor an ELF (a homebrew program).
 static auto discImages() -> void {
   CHECK(pspDiscImage("a.iso"), true);
@@ -112,13 +126,15 @@ static auto discImages() -> void {
   CHECK(pspDiscImage("noext"), false);
 }
 
-//A title the list's font can draw: its characters printable ASCII, else none (the file's name is shown).
+//A title the list's font can draw: its characters printable ASCII kept, the rest dropped; none left (the
+//file's name is shown).
 static auto listTitles() -> void {
   CHECK(listTitle("Test Game") == "Test Game", true);
   CHECK(listTitle("A B-C_d.e") == "A B-C_d.e", true);
   CHECK(listTitle("").empty(), true);
-  CHECK(listTitle(std::string({'T', 'e', 's', 't', (char)0xE5, (char)0x90, (char)0x8D})).empty(), true);  //a UTF-8 title
-  CHECK(listTitle(std::string({'A', 0x01, 'B'})).empty(), true);  //a control
+  CHECK(listTitle(std::string({'T', 'e', 's', 't', (char)0xE5, (char)0x90, (char)0x8D})) == "Test", true);  //a UTF-8 title's ASCII kept
+  CHECK(listTitle(std::string({'A', 0x01, 'B'})) == "AB", true);  //a control dropped
+  CHECK(listTitle(std::string({(char)0xE5, (char)0x90, (char)0x8D})).empty(), true);  //no ASCII: the file's name
 }
 
 //The cache's round trip: the title and disc ID beside the icon's bytes, under the file's key; a changed file
@@ -159,7 +175,9 @@ static auto titles() -> void {
   auto file = tempFile(folder, "title.iso", gameDisc("Test Game", "ULUS10025").bytes);
   auto stamp = std::filesystem::last_write_time(folder / "title.iso");
   auto cache = PspIconCache((folder / "cache").string());
-  CHECK(pspDiscTitle(file, cache) == "Test Game", true);  //read off the image, and cached
+  auto generation = std::atomic<int>{0};
+  auto notCancelled = [](bool, int, std::atomic<int>&) -> bool { return false; };
+  CHECK(pspDiscTitle(file, cache, false, 0, generation, notCancelled) == "Test Game", true);  //read off the image
   //the image's bytes erased (its size and mtime kept): a re-open would find no game
   auto size = (std::size_t)std::filesystem::file_size(folder / "title.iso");
   {
@@ -167,19 +185,46 @@ static auto titles() -> void {
     out.write(std::string(size, 0).data(), (std::streamsize)size);
   }
   std::filesystem::last_write_time(folder / "title.iso", stamp);
-  CHECK(pspDiscTitle(file, cache) == "Test Game", true);  //from the cache: the disc isn't re-opened
+  CHECK(pspDiscTitle(file, cache, false, 0, generation, notCancelled) == "Test Game", true);  //from the cache
   //a file that's no PSP game's: no title
   auto junk = tempFile(folder, "junk.iso", std::vector<u8>{1, 2, 3, 4});
-  CHECK(pspDiscTitle(junk, cache).empty(), true);
+  CHECK(pspDiscTitle(junk, cache, false, 0, generation, notCancelled).empty(), true);
+}
+
+//The scan cancelled mid-read: the title isn't read and isn't cached.
+static auto cancelledTitle() -> void {
+  auto folder = testFolder();
+  auto file = tempFile(folder, "cancel.iso", gameDisc("Test Game", "ULUS10025").bytes);
+  auto cache = PspIconCache((folder / "cache").string());
+  auto generation = std::atomic<int>{0};
+  auto alwaysCancelled = [](bool, int, std::atomic<int>&) -> bool { return true; };
+  CHECK(pspDiscTitle(file, cache, false, 0, generation, alwaysCancelled).empty(), true);  //cancelled: no title
+  CHECK(cache.info(file).has_value(), false);  //and nothing was cached
+}
+
+//The scan cancelled mid-read (after it's started): the read gives up at its first sector, and the title isn't
+//cached.
+static auto midReadCancelled() -> void {
+  auto folder = testFolder();
+  auto file = tempFile(folder, "midread.iso", gameDisc("Test Game", "ULUS10025").bytes);
+  auto cache = PspIconCache((folder / "cache").string());
+  auto generation = std::atomic<int>{0};
+  static int checks = 0;  //the lambda's state (it's captureless, so it can't carry any itself)
+  auto flip = [](bool, int, std::atomic<int>&) -> bool { return ++checks > 1; };
+  CHECK(pspDiscTitle(file, cache, false, 0, generation, flip).empty(), true);  //cancelled mid-read
+  CHECK(cache.info(file).has_value(), false);  //and nothing was cached
 }
 
 auto desktopDiscInfoTests() -> Tests {
   return {
     {"desktop disc info keys", iconKeys},
+    {"desktop disc info key collision", keyCollisions},
     {"desktop disc image files", discImages},
     {"desktop disc info titles", listTitles},
     {"desktop disc info cache", cacheRoundTrip},
     {"desktop disc info from image", titles},
+    {"desktop disc info cancelled", cancelledTitle},
+    {"desktop disc info mid-read cancelled", midReadCancelled},
   };
 }
 

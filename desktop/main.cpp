@@ -82,6 +82,8 @@ private:
   auto setup(int argc, char* argv[]) -> bool;
   auto applySettings() -> void;
   auto rescan() -> void;
+  auto startPspTitles() -> void;
+  auto stopPspTitles() -> void;
   auto chooseFolder(Pick pick) -> void;
   auto picked(Pick pick, const std::string& folder) -> void;
   auto open(const std::string& path) -> void;
@@ -309,31 +311,48 @@ auto Shell::applySettings() -> void {
 }
 
 auto Shell::rescan() -> void {
-  std::vector<std::string> files;
   {
     std::lock_guard<std::mutex> lock(gamesMutex);
     games = scanLibrary(gamesFolder);
     cursor = std::clamp(cursor, 0, std::max(0, (int)games.size() - 1));
     ++scanGeneration;
+  }
+  startPspTitles();
+}
+
+//The PSP's titles, filled in after the list shows (a CHD's open takes a while, so the list isn't held for it),
+//on a thread of their own. The old thread, if one's running, is joined (so it can't outlive the Shell) before
+//the new one starts; its work is superseded by the rescan's generation. No titles are filled in while a game
+//runs: the thread stops when a game starts and restarts when the Library shows.
+auto Shell::startPspTitles() -> void {
+  if (pspTitlesThread.joinable()) pspTitlesThread.join();
+  std::vector<std::string> files;
+  {
+    std::lock_guard<std::mutex> lock(gamesMutex);
     for (auto& game : games)
       if (game.system == "PlayStation Portable" && pspDiscImage(game.discs.front()))
         files.push_back(game.discs.front());
   }
-  // The PSP's titles, filled in after the list shows (a CHD's open takes a while, so the list isn't held for it),
-  // on a thread of their own. A rescan supersedes its unfinished work: the old thread stops at its next check
-  // and is joined (so it can't outlive the Shell) before the new one starts.
-  if (pspTitlesThread.joinable()) pspTitlesThread.join();
   pspTitlesThread = std::thread([this, files, generation = scanGeneration.load()] {
     auto cache = PspIconCache(dataFolder + "psp-icons");
     for (auto& file : files) {
-      if (quitting || generation != scanGeneration.load()) break;
-      auto title = listTitle(pspDiscTitle(file, cache));
+      //The scan gives up when it's superseded (a rescan) or Phobos is quitting: the disc's reader returns 0,
+      //so its result isn't read to the end or cached.
+      auto title = listTitle(pspDiscTitle(file, cache, quitting, generation, scanGeneration,
+                                          [](bool q, int g, std::atomic<int>& sg) -> bool {
+                                            return q || g != sg.load();
+                                          }));
       std::lock_guard<std::mutex> lock(gamesMutex);
       if (generation != scanGeneration.load()) break;
       for (auto& game : games)
         if (game.discs.front() == file) game.discTitle = title;
     }
   });
+}
+
+//The titles' thread, stopped while a game runs (joined, so it can't outlive the Shell).
+auto Shell::stopPspTitles() -> void {
+  if (pspTitlesThread.joinable()) pspTitlesThread.join();
 }
 
 auto Shell::chooseFolder(Pick pick) -> void {
@@ -408,6 +427,7 @@ auto Shell::launch(const Game& entry) -> void {
   game = entry;
   disc = 0;
   screen = Screen::Playing;
+  stopPspTitles();
   frameSerial = 0;
   frameWidth = frameHeight = 0;
   pictureMultiple = 0;
@@ -427,6 +447,7 @@ auto Shell::unloadGame() -> void {
   ares::unloadSystem();
   game.reset();
   screen = Screen::Library;
+  startPspTitles();
   SDL_SetWindowTitle(window, "Phobos");
 }
 

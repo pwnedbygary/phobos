@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <optional>
 #include <string>
 #include <utility>
@@ -35,11 +36,13 @@ auto pspDiscImage(const std::string& file) -> bool;
 
 //The file's title for the list: the disc's own title (its PARAM.SFO's TITLE), from the cache, or read off the
 //image by the shared reader (a few sectors at a time, every size bounded) and cached beside its icon. Empty
-//when there's no PSP game, or the file can't be opened.
-auto pspDiscTitle(const std::string& file, PspIconCache& cache) -> std::string;
+//when there's no PSP game, the file can't be opened, or the scan is cancelled (a rescan supersedes it).
+auto pspDiscTitle(const std::string& file, PspIconCache& cache,
+                  bool quitting, int generation, std::atomic<int>& scanGeneration,
+                  bool (*cancelled)(bool, int, std::atomic<int>&)) -> std::string;
 
-//A title the list's font can draw: its characters printable ASCII. The list's 8x8 font is ASCII only, so a
-//title with none of that is shown as the file's name instead.
+//The title's characters the list's 8x8 font can draw (printable ASCII), the rest dropped; empty — the file's
+//name is shown instead — when the title has none of them.
 auto listTitle(const std::string& title) -> std::string;
 
 }
