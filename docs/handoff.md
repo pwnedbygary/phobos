@@ -25,6 +25,10 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: perspective texels by the GE's reciprocal; patch divisions — 2026-10-09
+
+Branch `cursor/psp-ge-fits3-2b67`, on top of #191's `cursor/psp-measure-stall-2b67`. docs/psp-core.md, part 60. 3D triangles divide by a 128-chord reciprocal and step s, t and q as colors: persp-wall 2662→23, persp-divide 3172→211, persp-floor 6026→351, persp-w3 33040→18944, with the older wall and floor pictures; no division at a pixel. Round 4 again (the owner's `psp-round5b`): PATCH_DIVISION's counts are 7 bits, and past 64 the GE hangs, so the core draws nothing of such a surface. Lighting, sprites, lines and the near-plane split are unchanged; no measured picture got worse.
+
 ## PSP core: character conversion, thread-local storage, lent stacks; PGD holds five black games — 2026-10-09
 
 Branch `cursor/psp-hle-games11-2b67`, on top of #188's `cursor/psp-gpu-fast3-2b67` (#187, #185 and #184 under it). PR #189.
