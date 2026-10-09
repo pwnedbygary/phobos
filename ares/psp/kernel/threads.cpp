@@ -532,6 +532,15 @@ auto Kernel::sceKernelReferThreadRunStatus() -> void {
   result(0);
 }
 
+//(where to put it): the system's status (pspthreadman.h's SceKernelSystemStatus, 28 bytes: its size, a status, the
+//idle thread's clocks (64 bits), how often the CPU came out of idling, and the thread and VFPU switches): the status
+//0, and the counts, which aren't kept, 0; as much of it written as its size asks for, as with the threads' status.
+//Dante's Inferno asks as it starts.
+auto Kernel::sceKernelReferSystemStatus() -> void {
+  report(arg(0), Report(28));
+  result(0);
+}
+
 //The IDs of the thread manager's objects of a kind, in the order they were made (pspsdk's SceKernelIdListType):
 //1 threads, 2 semaphores, 3 event flags, 4 mailboxes, 5 VPLs, 6 FPLs, 7 message pipes, 8 callbacks, 9 thread event
 //handlers (the kernel has none), 10 alarms, 11 virtual timers, 12 mutexes, 13 lightweight mutexes, 14 thread-local

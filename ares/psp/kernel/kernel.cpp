@@ -71,6 +71,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelGetThreadId",          &Kernel::sceKernelGetThreadId);
   add("ThreadManForUser",  "sceKernelReferThreadStatus",    &Kernel::sceKernelReferThreadStatus);
   add("ThreadManForUser",  "sceKernelReferThreadRunStatus", &Kernel::sceKernelReferThreadRunStatus);
+  add("ThreadManForUser",  "sceKernelReferSystemStatus",    &Kernel::sceKernelReferSystemStatus);
   add("ThreadManForUser",  "sceKernelGetThreadmanIdList",   &Kernel::sceKernelGetThreadmanIdList);
   add("ThreadManForUser",  "sceKernelGetThreadmanIdType",   &Kernel::sceKernelGetThreadmanIdType);
   add("ThreadManForUser",  "sceKernelDelayThread",          &Kernel::sceKernelDelayThread);

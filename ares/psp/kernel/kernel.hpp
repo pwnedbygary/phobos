@@ -419,6 +419,7 @@ struct Kernel {
   auto sceKernelGetThreadId() -> void;
   auto sceKernelReferThreadStatus() -> void;
   auto sceKernelReferThreadRunStatus() -> void;
+  auto sceKernelReferSystemStatus() -> void;
   auto sceKernelGetThreadmanIdList() -> void;
   auto sceKernelGetThreadmanIdType() -> void;
   auto sceKernelDelayThread() -> void;
