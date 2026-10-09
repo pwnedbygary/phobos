@@ -13,14 +13,16 @@
 //strips' joints, anti-aliasing), colors, depth and texels along them, lines in 3D and cut at the near plane; which
 //bounding boxes the GE takes to be in sight; compressed (DXT) textures' colors, alphas and block order; and, in part
 //33, curved surfaces' vertices: where they fall, their colors, depths and texture coordinates, the texture
-//coordinates and normals the GE makes up, culling, and how many. Each round is picked from the menu (main.c).
+//coordinates and normals the GE makes up, culling, and how many. Round 5 takes what docs/psp-core.md's part 48 left
+//open: the steps of colors and depths on random triangles, the near plane's cut each way, lighting's share, and
+//perspective texels to the texel in thousands. Each round is picked from the menu (main.c).
 //
 //Each test draws into VRAM (away from the text on the screen), reads the pixels back as they are and writes them to
 //results/ge/<test>.bin: little-endian 32-bit words, one per pixel, row by row (a 16-bit frame buffer's pixels in the
-//low half). manifest.txt (round 2), manifest3.txt (round 3) and manifest4.txt (round 4) say what each test drew. A
-//test whose file is there
-//is skipped, and one that stops the PSP is given up on, as results.c has it. The program computes nothing: the host
-//runs the same program in Phobos's core (tests/psp/measure.cpp) and compares the files.
+//low half). manifest.txt (round 2), manifest3.txt, manifest4.txt and manifest5.txt (rounds 3-5) say what each test
+//drew. A test whose file is there is skipped, and one that stops the PSP is given up on, as results.c has it. The
+//program computes nothing: the host runs the same program in Phobos's core (tests/psp/measure.cpp) and compares the
+//files.
 
 #include "measure.h"
 #include <pspdisplay.h>
@@ -2017,91 +2019,181 @@ static void round4(void) {
 }
 
 
-//---- round 5: probes for what round 3 left open after fog's corner amounts were fitted (docs/psp-core.md)
+//---- round 5: what round 3 left open once part 48 fitted how the GE steps colors, fog and depth (docs/psp-core.md)
 
-//Color stepping where round 3's ramps still differ: widths and end levels that land on whole levels (rem 0) and on
-//the scattered shortfalls (rem 40/120 of the span in sixteenths). One band per row, through mode, along x.
-static void rampColorProbes(const char* name) {
+//A fixed sequence of numbers, started afresh by each test that takes them (so a test run again draws the same).
+static unsigned int probeRandom;
+static unsigned int probeNext(void) {
+  probeRandom = probeRandom * 1103515245 + 12345;
+  return probeRandom >> 8;
+}
+
+//-- the steps, on shapes they weren't fitted to
+
+//64 triangles, one in each 32x32 cell of the target (8x8 cells), corners anywhere in the cell to the sixteenth of a
+//pixel and colors from the sequence, in through mode: part 48's rule (corner, steps through a 16-bit reciprocal,
+//rounded down) on slanting edges, every corner first. With depths too (from the sequence, written always), the
+//depth buffer read through VRAM's fourth copy.
+static void stepTriangles(FloatVertex* v, int depths) {
+  probeRandom = 0x5eed1234;
+  for(int cell = 0; cell < 64; cell++) {
+    float x = (cell & 7) * 32 + 1, y = (cell >> 3) * 32 + 1;
+    for(int k = 0; k < 3; k++) {
+      float cx = x + (probeNext() % 480) / 16.0f, cy = y + (probeNext() % 480) / 16.0f;
+      unsigned int color = 0xff000000u | (probeNext() & 0xffffff);
+      unsigned int depth = probeNext() & 0xffff;
+      v[cell * 3 + k] = (FloatVertex){0, 0, color, cx, cy, depths ? (float)depth : 0};
+    }
+  }
+}
+static void stepsCheck(const char* name, int depths) {
   if(!beginTest(name)) return;
   fillTarget(zero, 0);
+  for(int n = 0; n < Stride * 256; n++) VRAM16[Depth / 2 + n] = 0;
   start(GU_PSM_8888);
-  typedef struct { short width; unsigned char from, to; } R;
-  static const R probes[16] = {
-    {240, 0, 255}, {200, 0, 255}, {100, 255, 0}, {37, 128, 0},
-    {160, 0, 255}, {80, 0, 255}, {240, 255, 0}, {200, 128, 0},
-    {256, 0, 128}, {128, 64, 192}, {64, 0, 255}, {32, 0, 255},
-    {240, 10, 250}, {200, 1, 254}, {37, 0, 128}, {253, 0, 255},
-  };
-  Vertex* vertices = sceGuGetMemory(16 * 6 * sizeof(Vertex));
-  for(int band = 0; band < 16; band++) {
-    const R* r = &probes[band];
-    unsigned int from = rampColor(r->from), to = rampColor(r->to);
-    short a = band * 16, b = band * 16 + 16, w = r->width;
-    Vertex* v = vertices + band * 6;
-    v[0] = (Vertex){0, 0, from, 0, a, 0, 0};
-    v[1] = (Vertex){0, 0, to, w, a, 0, 0};
-    v[2] = (Vertex){0, 0, from, 0, b, 0, 0};
-    v[3] = (Vertex){0, 0, to, w, a, 0, 0};
-    v[4] = (Vertex){0, 0, to, w, b, 0, 0};
-    v[5] = (Vertex){0, 0, from, 0, b, 0, 0};
+  if(depths) {
+    sceGuDepthRange(65535, 0);
+    sceGuEnable(GU_DEPTH_TEST);
+    sceGuDepthFunc(GU_ALWAYS);
+    sceGuDepthMask(GU_FALSE);
   }
-  sceGuDrawArray(GU_TRIANGLES, VertexType, 16 * 6, 0, vertices);
+  FloatVertex* v = sceGuGetMemory(64 * 3 * sizeof(FloatVertex));
+  stepTriangles(v, depths);
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType, 64 * 3, 0, v);
+  finishList();
+  if(depths) saveDepthInOrder(name);
+  else saveTarget(name, 256, 256, 0);
+}
+
+//The near plane's cut with each corner past it in turn, each way round: in band k (rows 42k + 2 to 42k + 38), round
+//2's 3d-clip triangle (red and green corners at the top, blue at the bottom middle, identity matrices) squashed into
+//the band, its blue corner at z -1.5 (cut two thirds of the way to it). Bands 0-2 list the corners turning as
+//3d-clip's do (clockwise on the screen), the blue one first, second and third (band 2 as in 3d-clip); bands 3-5 the
+//other way round, blue first, second and third. The four corners left are split into two triangles one way or the
+//other, which the colors' steps show.
+static void clipSplit(const char* name) {
+  if(!beginTest(name)) return;
+  start3D(&identity, 1);
+  FloatVertex* v = sceGuGetMemory(18 * sizeof(FloatVertex));
+  for(int band = 0; band < 6; band++) {
+    float top = band * 42;
+    FloatVertex red = {0, 0, 0xff0000ff, ndcX(16), ndcY(top + 2), 0};
+    FloatVertex green = {0, 0, 0xff00ff00, ndcX(240), ndcY(top + 2), 0};
+    FloatVertex blue = {0, 0, 0xffff0000, ndcX(128), ndcY(top + 38), -1.5f};
+    FloatVertex* t = v + band * 3;
+    if(band == 0) t[0] = blue, t[1] = red, t[2] = green;
+    if(band == 1) t[0] = green, t[1] = blue, t[2] = red;
+    if(band == 2) t[0] = red, t[1] = green, t[2] = blue;
+    if(band == 3) t[0] = blue, t[1] = green, t[2] = red;
+    if(band == 4) t[0] = red, t[1] = blue, t[2] = green;
+    if(band == 5) t[0] = green, t[1] = red, t[2] = blue;
+  }
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 18, 0, v);
   finishList();
   saveTarget(name, 256, 256, 0);
 }
 
-//Lighting's last products: white light on material levels 32 and 64 only, normals with cosines 56/65 and 72/97
-//(and neighbours), so the six cells that stay a level low show apart from everything that already matches.
-static void lightProductProbes(const char* name) {
+//-- lighting's share
+
+//Lighting's share (round 3: not 256ths after all, part 48): four normals, each in four rows of cells (rows 4j to
+//4j + 3 for normal j), white-free products: each row its own light color, each cell its own vertex color standing
+//for the material's diffuse, levels 96-255 from the sequence, so that floor(product * share / 1024) at 192 products
+//pins each normal's share far finer than a 256th. Light along +z, one long; plain diffuse (kind 0, no ambient).
+static const short shareNormals[4][4][3] = {
+  {{33, 0, 56}, {16, 0, 63}, {65, 0, 72}, {101, 0, 26}},    //round 3's two odd cells, one as long, round 2's k 101
+  {{99, 0, 168}, {48, 0, 189}, {195, 0, 216}, {303, 0, 78}},  //the same, three times as long
+  {{60, 0, 67}, {120, 0, 7}, {126, 0, 1}, {113, 0, 14}},    //more of round 2's light-diffuse normals
+  {{56, 0, 33}, {63, 0, 16}, {72, 0, 65}, {26, 0, 101}},    //the first four turned: cosines a / c
+};
+static unsigned int shareLevel(void) { return 96 + probeNext() % 160; }
+//Three levels as a color, red first (each taken in a statement of its own, so the order is fixed).
+static unsigned int shareColor(void) {
+  unsigned int red = shareLevel();
+  unsigned int green = shareLevel();
+  unsigned int blue = shareLevel();
+  return red | green << 8 | blue << 16;
+}
+static void lightShare(const char* name, int set) {
   if(!beginTest(name)) return;
+  probeRandom = 0x51a2e000u + set;
   beginLit();
   ScePspFVector3 toward = {0, 0, 1};
   sceGuLight(0, GU_DIRECTIONAL, GU_AMBIENT_AND_DIFFUSE, &toward);
-  sceGuLightColor(0, GU_DIFFUSE, 0xffffff);
   sceGuColorMaterial(GU_DIFFUSE);
-  static const unsigned char mats[16] = {32, 64, 32, 64, 32, 64, 32, 64, 31, 33, 63, 65, 16, 48, 96, 128};
-  static const unsigned char trip[16][2] = {
-    {33, 56}, {65, 72}, {33, 56}, {65, 72}, {20, 21}, {12, 35}, {9, 40}, {28, 45},
-    {33, 56}, {65, 72}, {33, 56}, {65, 72}, {3, 4}, {5, 12}, {8, 15}, {7, 24},
-  };
   unsigned int colors[16];
   Normal normals[16];
   for(int row = 0; row < 16; row++) {
+    const short* n = shareNormals[set][row >> 2];
+    unsigned int light = shareColor();
     for(int i = 0; i < 16; i++) {
-      unsigned char m = mats[i];
-      colors[i] = 0xff000000u | m | m << 8 | m << 16;
-      normals[i] = (Normal){(float)trip[i][0], 0, (float)trip[i][1]};
+      colors[i] = 0xff000000u | shareColor();
+      normals[i] = (Normal){n[0], n[1], n[2]};
     }
+    sceGuLightColor(0, GU_DIFFUSE, light);
     litRow(row, colors, normals);
   }
   finishList();
   saveTarget(name, 256, 256, 0);
 }
 
-//Perspective texels: a wall like 3d-wall-texels but only 64 texels across 128 pixels (and the reverse), so steps
-//that aren't cut short show as whole-texel errors more often; also a floor strip along y the same way.
-static void perspectiveTexelProbes(const char* name, int wall) {
+//-- perspective texels, to a texel in thousands
+
+//The texture (texel (x, y) is x | y << 8 | 0x80 << 16) repeating, so that coordinates in the thousands of texels
+//show to the texel (each pixel's texel is its coordinates' whole part less a multiple of 256, which a prediction
+//within 128 texels tells): the GE's perspective divide and steps many times finer than round 2's floor and round 3's
+//wall show them. (Coordinates change by under 128 texels from a pixel to the next, the most at the far end.)
+static void useRepeatingTexture(void) {
+  useTexture(GU_TFX_REPLACE, GU_TCC_RGB);
+  sceGuTexWrap(GU_REPEAT, GU_REPEAT);
+}
+//what 0: round 3's wall with u from 0 to 4096 texels (16 in the vertex) across it, v 0 to 256 down; 1: u / w the
+//same at all four corners (1024 texels at w 1, 4096 at w 4), so u shows 1 / w alone; 2: no perspective, w 3 at every
+//corner (1 / 3 isn't a whole number of any power of two), u 0 to 1024 across, v 0 to 256 down.
+static void perspectiveWall(const char* name, int what) {
   if(!beginTest(name)) return;
   fillTexture(texelXY);
   start3D(&lens, 1);
-  useTexture(GU_TFX_REPLACE, GU_TCC_RGB);
+  useRepeatingTexture();
   FloatVertex* v = sceGuGetMemory(6 * sizeof(FloatVertex));
-  if(wall) {
-    v[0] = (FloatVertex){0, 0, 0xffffffff, -1, 1, -1};
-    v[1] = (FloatVertex){0.25f, 0, 0xffffffff, 0, 1, -2};  //half the u span of 3d-wall-texels
-    v[2] = (FloatVertex){0, 1, 0xffffffff, -1, -1, -1};
-    v[3] = (FloatVertex){0.25f, 0, 0xffffffff, 0, 1, -2};
-    v[4] = (FloatVertex){0.25f, 1, 0xffffffff, 0, -1, -2};
-    v[5] = (FloatVertex){0, 1, 0xffffffff, -1, -1, -1};
-  } else {
-    v[0] = (FloatVertex){0, 0, 0xffffffff, -1, 1, -1};
-    v[1] = (FloatVertex){1, 0, 0xffffffff, 1, 1, -1};
-    v[2] = (FloatVertex){0, 0.25f, 0xffffffff, -1, 0, -2};
-    v[3] = (FloatVertex){1, 0, 0xffffffff, 1, 1, -1};
-    v[4] = (FloatVertex){1, 0.25f, 0xffffffff, 1, 0, -2};
-    v[5] = (FloatVertex){0, 0.25f, 0xffffffff, -1, 0, -2};
-  }
+  float near = what == 2 ? -3 : -1, far = what == 2 ? -3 : -4, size = what == 2 ? 3 : 1;
+  float uLeft = what == 1 ? 4 : 0, uRight = what == 0 ? 16 : what == 1 ? 16 : 4;
+  v[0] = (FloatVertex){uLeft, 0, 0xffffffff, -size, size, near};
+  v[1] = (FloatVertex){uRight, 0, 0xffffffff, size, size, far};
+  v[2] = (FloatVertex){uLeft, 1, 0xffffffff, -size, -size, near};
+  v[3] = (FloatVertex){uRight, 0, 0xffffffff, size, size, far};
+  v[4] = (FloatVertex){uRight, 1, 0xffffffff, size, -size, far};
+  v[5] = (FloatVertex){uLeft, 1, 0xffffffff, -size, -size, near};
   sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 6, 0, v);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+//Round 2's floor (3d-floor-texels) with u 0 to 4096 texels across and v 0 to 2048 into the distance.
+static void perspectiveFloor(const char* name) {
+  if(!beginTest(name)) return;
+  fillTexture(texelXY);
+  start3D(&lens, 1);
+  useRepeatingTexture();
+  FloatVertex* v = sceGuGetMemory(6 * sizeof(FloatVertex));
+  v[0] = (FloatVertex){0, 0, 0xffffffff, -1, -1, -1};
+  v[1] = (FloatVertex){16, 0, 0xffffffff, 1, -1, -1};
+  v[2] = (FloatVertex){0, 8, 0xffffffff, -1, -1, -4};
+  v[3] = (FloatVertex){16, 0, 0xffffffff, 1, -1, -1};
+  v[4] = (FloatVertex){16, 8, 0xffffffff, 1, -1, -4};
+  v[5] = (FloatVertex){0, 8, 0xffffffff, -1, -1, -4};
+  sceGuDrawArray(GU_TRIANGLES, FloatVertexType3D, 6, 0, v);
+  finishList();
+  saveTarget(name, 256, 256, 0);
+}
+//Round 3's 3D sprite's texels (3d-sprite-texels, from z -1 to -4) with u and v 0 to 2048 texels.
+static void perspectiveSprite(const char* name) {
+  if(!beginTest(name)) return;
+  fillTexture(texelXY);
+  start3D(&lens, 1);
+  useRepeatingTexture();
+  FloatVertex* v = sceGuGetMemory(2 * sizeof(FloatVertex));
+  v[0] = (FloatVertex){0, 0, 0xffffffff, -0.9f, 0.9f, -1};
+  v[1] = (FloatVertex){8, 8, 0xffffffff, 0.9f, -0.8f, -4};
+  sceGuDrawArray(GU_SPRITES, FloatVertexType3D, 2, 0, v);
   finishList();
   saveTarget(name, 256, 256, 0);
 }
@@ -2112,21 +2204,36 @@ static void writeManifest5(void) {
   SceUID file = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
   if(file < 0) return;
   static const char text[] =
-    "psp-measure's GE tests, round 5 (tools/psp-measure/ge.c): probes for color stepping, lighting's last products,\n"
-    "and perspective texels left open after round 3's fog-at-corner fit. Each .bin is 256x256 little-endian 8888.\n"
-    "ramp-color-probes: 16 bands as ramp-colors but widths/levels that hit the remaining shortfalls.\n"
-    "light-product-probes: materials 32/64 (and neighbours) under white light, cosines 56/65 and 72/97.\n"
-    "texel-wall-probe / texel-floor-probe: shorter u/v spans under the lens than round 3's wall and floor.\n";
+    "psp-measure's GE tests, round 5 (tools/psp-measure/ge.c in Phobos says what each test draws): each .bin is the\n"
+    "target's pixels after one test, a little-endian 32-bit word each, row by row, 256x256; but steps-depth-check,\n"
+    "the depth buffer's 256x256 16-bit values (low half) read through VRAM's fourth copy.\n"
+    "steps-check, steps-depth-check: 64 random triangles in through mode, their colors (or depths) stepped.\n"
+    "clip-split: the near plane's cut with the first, second and third corner past it, each way round (6 bands).\n"
+    "light-share-0 to -3: four normals each, 192 light-times-material products per normal.\n"
+    "persp-*: perspective texels with a repeating texture and coordinates up to 4096 texels: persp-wall (round 3's\n"
+    "wall), persp-divide (u / w the same at every corner), persp-w3 (w 3 everywhere), "
+    "persp-floor (round 2's floor),\n"
+    "persp-sprite (round 3's 3D sprite).\n"
+    "<name>.stopped: a test that stopped the PSP twice, given up on.\n";
   sceIoWrite(file, text, sizeof(text) - 1);
   sceIoClose(file);
 }
 
 static void round5(void) {
   writeManifest5();
-  rampColorProbes("ramp-color-probes");
-  lightProductProbes("light-product-probes");
-  perspectiveTexelProbes("texel-wall-probe", 1);
-  perspectiveTexelProbes("texel-floor-probe", 0);
+  stepsCheck("steps-check", 0);
+  stepsCheck("steps-depth-check", 1);
+  clipSplit("clip-split");
+  for(int set = 0; set < 4; set++) {
+    char name[32];
+    snprintf(name, sizeof(name), "light-share-%d", set);
+    lightShare(name, set);
+  }
+  perspectiveWall("persp-wall", 0);
+  perspectiveWall("persp-divide", 1);
+  perspectiveWall("persp-w3", 2);
+  perspectiveFloor("persp-floor");
+  perspectiveSprite("persp-sprite");
 }
 
 //---- the rounds
@@ -2202,7 +2309,7 @@ static void round2(void) {
   controllerTiming("controller-timing");
 }
 
-//A round of the GE's tests (2, 3 or 4) into results/ge. Returns 0 if something couldn't be written.
+//A round of the GE's tests (2 to 5) into results/ge. Returns 0 if something couldn't be written.
 int geRound(int round) {
   if(round < 2 || round > 5) return 1;
   if(!guReady) {

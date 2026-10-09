@@ -248,8 +248,9 @@ static auto vfpuLog2(u32 bits) -> u32 {
 
 //The VFPU's adder (vdot and the instructions that share its circuit: vhdp, vfad, vavg, vdet, vcrsp, vqmul, and the
 //matrix products). Each product keeps two extra bits with round-to-odd; the four terms are aligned to the largest
-//exponent and truncated; the integer sum rounds to nearest, ties to even; subnormals flush after that. Order of
-//the lanes does not matter (measured, docs/psp-vfpu-measurements.md, round 2).
+//exponent and truncated; the integer sum rounds to nearest, ties to even, a carry out of that rounding raising the
+//exponent; subnormals flush after that. Order of the lanes does not matter (measured, docs/psp-vfpu-measurements.md,
+//round 2).
 static auto vfpuDot(const u32 a[4], const u32 b[4]) -> u32 {
   constexpr s32 Extra = 2;
   constexpr u32 Hidden = 1u << 23, Frac = Hidden - 1;
@@ -291,6 +292,7 @@ static auto vfpuDot(const u32 a[4], const u32 b[4]) -> u32 {
     if(adjust > 0) {
       u32 half = 1u << (adjust - 1);
       mantissa = (mantissa >> adjust) + ((mantissa & (half + half - 1)) + ((mantissa >> adjust) & 1) > half);
+      if(mantissa >> 24) mantissa >>= 1, highest++;  //rounded up to the next power of two (0.99999997 to 1)
     }
     if(adjust < 0) mantissa <<= -adjust;
   } else {

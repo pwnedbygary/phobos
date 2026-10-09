@@ -414,10 +414,17 @@ files beside them). `compare.sh` after the fit:
   replaces the old "truncate after a full-precision sum" path and the separate straight-line path below 1.
 - **The adder (`vfpuDot`):** each product keeps two extra bits with round-to-odd; the four terms align to the largest
   exponent and truncate (the two extra bits are dropped after the integer sum); when the mantissa is then shifted to
-  24 bits, that shift rounds to nearest with ties to even; subnormals flush after that. Order of the lanes does not
-  matter. `vdot`, `vhdp`, `vfad`, `vdet`, `vcrsp`, `vqmul`, and the matrix products (`vmmul`, `vtfm`, `vhtfm`) all use
-  it. `vavg` dots with the constant `1/size` (`1/2`, `1/3` or `1/4`) and only flips that weight's sign from the t
-  prefix — a post-sum divide matches the big files but misses the recorder's `vavg.t` cases by an ulp.
+  24 bits, that shift rounds to nearest with ties to even, and a carry out of that rounding raises the exponent;
+  subnormals flush after that. Order of the lanes does not matter. `vdot`, `vhdp`, `vfad`, `vdet`, `vcrsp`, `vqmul`,
+  and the matrix products (`vmmul`, `vtfm`, `vhtfm`) all use it, and so does the recompiler's `vdot`. `vavg` dots
+  with the constant `1/size` (`1/2`, `1/3` or `1/4`) and only flips that weight's sign from the t prefix — a post-sum
+  divide matches the big files but misses the recorder's `vavg.t` cases by an ulp.
+- **The carry (2026-10-08, later):** the fit's first version dropped that carry, so a sum rounding up to a power of
+  two came out half of it: a unit vector dotted with itself gave 1/2, not 1. GTA: Liberty City Stories computes such
+  sums (`vmmul` and `vcrsp`, some eight a frame standing still), and its characters' limbs jumped for a frame. No
+  measured input carries (4,730,624 adder results, every file above and both recorder lists), so the tables above
+  are the same with the carry. The recompiler's `vdot` helper still summed in doubles, off the PSP on 19% of
+  `vdot-spread`'s quads (by up to 757 ulps), and goes through `vfpuDot` now.
 
 ## Next
 
@@ -426,7 +433,9 @@ files beside them). `compare.sh` after the fit:
   (comments only until a next round runs them). The GE's round 3 is in [psp-core.md](psp-core.md) ("Round 3's
   results").
 - For a next round: flush to zero in the directed rounding modes (MIPS documents the smallest normal number when
-  rounding toward it; the core gives 0 in every mode), and `cvt.s.w` in each mode.
+  rounding toward it; the core gives 0 in every mode), and `cvt.s.w` in each mode. And an adder sum whose rounding
+  carries, which no file has yet: `vdot.q` of `(0x3f024ba3, 0x3f024ba3, 0xbefb5343, 0x3efb5343)` with itself, 1 in the
+  core (tests/allegrex/vfpu.cpp's edges).
 
 `compare.sh` shows the progress against the full data; `fit.py <results> ares/psp/cpu/vfpu-segments.hpp` regenerates
 the tables.

@@ -296,13 +296,16 @@ struct GE {
       s32 left, right, top, bottom;
       f64 leftInverse, rightInverse, leftAcross, rightAcross, topDown, bottomDown;
     };
+    //A color channel, the fog or the depth stepped across a triangle (draw.cpp's stepped()): its value at (startX,
+    //startY), and its steps a sixteenth of a pixel across and down, all in 16384ths of a level (or a depth).
+    struct Stepped { s64 across, down; s32 start; };
     struct Triangle {
       s64 x[3], y[3];                  //the corners (sixteenths), turned clockwise
-      float total;                     //twice its area
       bool flat, shines, perspective;
       u32 flatColor, flatSpecular;
-      u32 color[3], specular[3];
-      float z[3], fog[3], u[3], v[3], q[3], w[3];
+      Stepped colors[4], shine[3], fog;  //red, green, blue, alpha; the shine's red, green and blue; the fog (0-255)
+      Stepped depth;                     //0-65535
+      float u[3], v[3], q[3], w[3];
       f64 uStart, uAcross, uDown, vStart, vAcross, vDown;  //2D texture coordinates, stepped from (startX, startY)
       s64 startX, startY;
     };

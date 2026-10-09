@@ -21,7 +21,8 @@
 //    refused. The PSP encrypts the data file and writes a PARAM.SFO and icons beside it: not done yet (the files are
 //    only Phobos's to read).
 //  - A message: answered at once, as if the player pressed Yes (or OK), the message noted.
-//  - The keyboard: each field's text accepted as it is, an empty one given the console's nickname (keyboard()).
+//  - The keyboard: each field's text entered as it is, an empty one given the console's nickname, each CHANGED
+//    (keyboard()).
 //  - Network settings, game sharing, the web browser: cancelled, as if the player backed out.
 //  - Installing a game's data to the memory stick (gamedata install, which later games show at their first start):
 //    cancelled too, the game going on from the disc.
@@ -46,6 +47,7 @@ namespace {
   constexpr u32 SavedataDeleteParameter = 0x8011'0348, SavedataSaveParameter = 0x8011'0388;
   constexpr u32 SavedataSizesParameter = 0x8011'03c8;
   constexpr u32 DialogCancelled = 1;  //a dialog's result when the player backs out
+  constexpr u32 KeyboardChanged = 2;  //a keyboard field's result when the player enters its text
   constexpr u32 MessageAbortUpdates = 8;  //(utility/dialog/abort: that many Updates from the start, less any already)
   //Whether InitStart takes a kind's parameters at this size (their common part's first word): the sizes
   //utility/dialog/sizes skipped as the ones each kind takes (every other size up to 0x800 refused), and those
@@ -168,13 +170,17 @@ auto Kernel::dialogShutdown(u32 kind) -> void {
 }
 
 //The keyboard (psputility_osk.h's SceUtilityOskParams: the common part, then how many fields and where their
-//SceUtilityOskData are), answered as a player accepting each field's text at once would: what the field started with
-//goes into its output, its result UNCHANGED (0). A field holding nothing but spaces gets the console's nickname,
-//"PSP", as a player asked for a name would type one, its result CHANGED (2): Peace Walker, asking for its player's
-//name in an empty field, refused an empty answer ("at least 1 characters") and asked again for good. The text is
-//UTF-16, as far as the field's room (outtextlength, its NUL among it) and limit (outtextlimit) allow: a limit of 0
-//is none (taken as no characters, it cut the nickname to nothing, still saying CHANGED), and a field with no room
-//gets nothing written, not even its NUL. Returns the common part's result: 0.
+//SceUtilityOskData are), answered as a player entering each field's text and confirming it would: what the field
+//started with goes into its output, or for a field holding nothing but spaces the console's nickname, "PSP", as a
+//player asked for a name would type one (Peace Walker, asking for its player's name in an empty field, refused an
+//empty answer, "at least 1 characters", and asked again for good). Each field's result is CHANGED (2), as a PSP is
+//taken to say of every field the player confirms, edited or not: Ridge Racer 2 fills its field with a default driver
+//name, "DAMACY", and takes UNCHANGED (0) as it takes CANCELLED (1), going back to its title without a profile, which
+//every player keeping that name would meet if a PSP said UNCHANGED. (Killzone and Space Invaders Extreme also act
+//only on CHANGED; Midnight Club 3 takes anything but CANCELLED.) The text is UTF-16, as far as the field's room
+//(outtextlength, its NUL among it) and limit (outtextlimit) allow: a limit of 0 is none (taken as no characters, it
+//cut the nickname to nothing), and a field with no room gets nothing written, not even its NUL. Returns the common
+//part's result: 0.
 auto Kernel::keyboard(u32 parameters) -> u32 {
   static constexpr u32 FieldSize = 52, MostFields = 16, MostText = 1024;  //(pspsdk gives no limits: bounds of ours)
   u32 count = memory.read(4, parameters + 48), fields = memory.read(4, parameters + 52);
@@ -198,7 +204,7 @@ auto Kernel::keyboard(u32 parameters) -> u32 {
       for(u32 at = 0; at < text.size(); at++) memory.write(2, output + at * 2, text[at]);
       memory.write(2, output + text.size() * 2, 0);
     }
-    memory.write(4, field + 44, blank ? 2 : 0);
+    memory.write(4, field + 44, KeyboardChanged);
   }
   return 0;
 }
