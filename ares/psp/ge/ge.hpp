@@ -570,6 +570,7 @@ struct GE {
   Renderer* renderer = nullptr;
   auto setRenderer(Renderer* next) -> void;  //ge.cpp
   bool hardware = false;  //the primitive being drawn goes to the renderer (drawVertices())
+  bool skipping = false;  //the primitive being drawn changes no pixel: set up, not drawn (drawVertices())
   std::vector<LinePixel> hardwareLine;
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it

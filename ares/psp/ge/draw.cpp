@@ -82,6 +82,17 @@ static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2]
   return true;
 }
 
+//Whether every pixel drawn with these settings is left as it was, whatever its color, depth and fog: blending keeps
+//the frame buffer's color (the source times a fixed 0, plus the destination times a fixed 255, which comes back
+//exactly: (2d + 1) * 511 >> 10 is d for every d up to 255), with no dithering or logic operation after it, the
+//stencil kept (no stencil test) and no depth written; not clear mode. The pixel written back is then the very bits it
+//was: each format's channels, widened and narrowed again, are as they were (pixel.cpp), and the tests only drop
+//pixels.
+static auto keepsPixels(const GE::PixelState& p) -> bool {
+  return !p.clear && p.blend && p.blendOperation == 0 && p.blendSource >= 10 && p.blendDestination >= 10 &&
+         p.fixedA == 0 && p.fixedB == 0xff'ffff && !p.dither && !p.logicOp && !p.stencilTest && !p.depthWrite;
+}
+
 //The settings a primitive is drawn with: these pipeline and texture settings, with the commands' texture function.
 auto GE::lookFor(const PixelState& pixel, const Sampler* texture) const -> Look {
   Look look;
@@ -208,11 +219,21 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //A PRIM the renderer refuses (begin()) is drawn here instead, as without one: what it drew put back in memory
   //first, and the texture decoded for the region it draws in.
   hardware = renderer && renderer->ready();
+  //A primitive drawn with settings that leave every pixel as it was (keepsPixels()) is set up as ever, and what it
+  //may draw over reported, but it isn't drawn, nor its texture decoded: nothing it would draw could change. Unless
+  //reading its texels would be reported (a format the PSP doesn't have, bytes with no memory behind them: texel()).
+  auto quiet = [&] {
+    if(texture.format > 10) return false;
+    u32 low, high;
+    textureBytes(texture, std::min<u32>(texture.height, 512), low, high);
+    return memory.reaches(low, high - low);
+  };
+  skipping = !hardware && keepsPixels(pixel) && (!textured || quiet());
   //A 2D sprite's texels are taken where its pixels' middles fall, so the rows it reaches are exactly those
   //spriteReach() finds, often fewer than its vertices' reach above can say: a sprite sampling a frame buffer (a
   //texture of 512 rows) from its top edge, filtered, may reach round to the far end there for all that can tell.
   u32 drawnRows = rows;
-  if(textured && !hardware && format.through && kind == Sprites) {
+  if(textured && !hardware && !skipping && format.through && kind == Sprites) {
     s32 reached = 1;
     bool exact = true;
     for(u32 n = 0; n + 1 < count && exact; n += 2) {
@@ -225,7 +246,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     }
     if(exact) drawnRows = std::min<u32>(rows, (reached + 7) & ~7);  //(in eights, as above)
   }
-  if(textured && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
+  if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
     decode(look, hardware ? Region{0, 0, -1, -1} : region, hardware ? rows : drawnRows, !hardware);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
@@ -241,8 +262,9 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
   //texture read from memory as it's drawn (texture.cpp) has it drawn at once. One deferred until the batch starts
   //(render to texture) still waits in the batch: ensureDecoded fills it before any band draws.
-  drawing.recording = !hardware && !(look.textured && !look.texture.decoded && !look.deferRows) && defer(pixel, region);
-  if(!drawing.recording && !hardware) flush();
+  drawing.recording = !hardware && !skipping && !(look.textured && !look.texture.decoded && !look.deferRows) &&
+                      defer(pixel, region);
+  if(!drawing.recording && !hardware && !skipping) flush();
   const Look& drawn = drawing.recording ? drawing.batch->looks.emplace_back(std::move(look)) : look;
   if(drawing.recording && drawn.deferRows) {  //(the CPU waits for its texture's pages till it's decoded: threads.cpp)
     for(u32 page = drawn.deferFirst >> 12; page <= drawn.deferLast >> 12; page++) drawing.batch->reads.set(page);
@@ -313,6 +335,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     }
   }
   drawing.recording = false;
+  skipping = false;
 }
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth
@@ -337,6 +360,7 @@ auto GE::submit(Job& job) -> void {
     note(1, p.depthBuffer + (job.firstY * p.depthStride + job.firstX) * 2,
          p.depthBuffer + (job.lastY * p.depthStride + job.lastX) * 2 + 1, true);
   }
+  if(skipping) return;
   if(drawing.recording) record(job);
   else rasterize(job, job.firstY, job.lastY);
 }

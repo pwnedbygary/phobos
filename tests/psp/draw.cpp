@@ -962,6 +962,49 @@ static auto drawDecodedTextures() -> void {
   for(u32 x = 0; x < 4; x++) CHECK(c.pixel(x, 2), 0x0001'0101u * (x + 1));
 }
 
+//A sprite whose blending keeps every pixel as it was (draw.cpp's keepsPixels(): the source times a fixed 0, plus the
+//destination times a fixed 255) isn't drawn, in each frame buffer format, which leaves the picture as drawing it does:
+//as dithering by a matrix of zeros, which is drawn, leaves it. Unless reading its texture would be reported: with
+//nothing behind it, it's drawn, each read reported as when it's dithered; of format 11, the format noted.
+static auto drawKeptPixels() -> void {
+  for(u32 format : {0u, 1u, 2u, 3u}) {
+    Canvas c{format};
+    std::mt19937 random{format + 5};
+    std::vector<u8> picture(64 * 64 * 4);
+    for(auto& byte : picture) byte = random();
+    c.ge.commands[GE::FrameBufferWidth] = 64;
+    c.texture(3, 4, 4, 4);
+    c.ge.commands[GE::TextureFunction] = 0;
+    c.ge.commands[GE::AlphaBlendEnable] = 1;
+    c.ge.commands[GE::BlendMode] = 12 | 15 << 4;  //(fixed factors, both)
+    c.ge.commands[GE::BlendFixedA] = 0, c.ge.commands[GE::BlendFixedB] = 0xff'ffff;
+    for(bool dithered : {false, true}) {
+      c.memory.copyIn(VRAM, picture.data(), picture.size());
+      c.ge.commands[GE::DitherEnable] = dithered;
+      c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 0}, {4, 4, 0x80ff'ffff, 64, 64, 0}});
+      CHECK(std::equal(picture.begin(), picture.end(), c.memory.vram.begin()), true);
+    }
+    //its texels with nothing behind them (address 0): each read reported, drawn or dithered
+    c.ge.commands[GE::TextureAddress0] = 0, c.ge.commands[GE::TextureBufferWidth0] = 4;
+    size_t reported[2];
+    for(bool dithered : {false, true}) {
+      c.s.unmapped.clear();
+      c.ge.commands[GE::DitherEnable] = dithered;
+      c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 0}, {4, 4, 0x80ff'ffff, 64, 64, 0}});
+      reported[dithered] = c.s.unmapped.size();
+      CHECK(std::equal(picture.begin(), picture.end(), c.memory.vram.begin()), true);
+    }
+    CHECK(reported[0] > 0 && reported[0] == reported[1], true);
+    //a format the PSP doesn't have
+    c.ge.noted.clear();
+    c.ge.commands[GE::DitherEnable] = 0;
+    c.texture(11, 4, 4, 4);
+    c.ge.commands[GE::TextureFunction] = 0;
+    c.draw(GE::Sprites, {{0, 0, 0xffff'ffff, 0, 0, 0}, {4, 4, 0x80ff'ffff, 64, 64, 0}});
+    CHECK(c.ge.noted.size(), 1u);
+  }
+}
+
 //What's kept of a texture: one copy, of as many rows as any primitive has taken from it. One taking fewer draws from
 //it as it is; one taking more makes it longer (the rows already decoded kept as they are, the rest decoded). Past
 //the cache's budget, the copies used longest ago go first.
@@ -1164,6 +1207,7 @@ auto drawTests() -> Tests {
   return {
     {"draw textures kept decoded", drawDecodedTextures},
     {"draw textures kept decoded, their rows", drawDecodedRows},
+    {"draw keeping every pixel", drawKeptPixels},
     {"draw turned sprites kept decoded", drawTurnedDecoded},
     {"draw textures kept decoded against memory", drawDecodedAgainstMemory},
     {"draw sprites", drawSprites}, {"draw texture formats", drawTextureFormats}, {"draw filter", drawFilter},
