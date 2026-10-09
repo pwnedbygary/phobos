@@ -131,7 +131,10 @@ auto Kernel::programBlockAt() const -> u32 {
 //message pipe's buffer, a module, or the program itself. The rest are blocks the program asked for.
 auto Kernel::blockHeld(const Block& block) const -> bool {
   if(u32 program = programBlockAt(); program && block.address == program) return true;
-  for(auto& [uid, thread] : threads) if(thread->stackBlock == block.address) return true;
+  for(auto& [uid, thread] : threads) {
+    if(thread->stackBlock == block.address) return true;
+    for(auto& lent : thread->extensions) if(lent.stack == block.address) return true;  //its own, while lent another
+  }
   for(auto& [uid, pool] : pools) if(pool.block == block.uid) return true;
   for(auto& [uid, pool] : tlsPools) if(pool.block == block.uid) return true;
   for(auto& [uid, pipe] : pipes) if(pipe.block == block.uid) return true;

@@ -231,7 +231,8 @@ struct Kernel {
   static constexpr u32 Trampoline = 0x0800'0000;  //kernel memory: where a thread returns to when its entry function
                                                   //ends (8 bytes on, a call into the program; 16 on, a module's
                                                   //module_start or module_stop; 24 on, a thread's callback; 32 on,
-                                                  //the program's alloc or free called by sceLibFont)
+                                                  //the program's alloc or free called by sceLibFont; 40 on, a
+                                                  //movie ring's callback; 48 on, a function on a lent stack)
   static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
   static constexpr u32 ProgramBase = UserMemory + 0x4000;  //where a program that's a PRX goes (start())
@@ -246,6 +247,7 @@ struct Kernel {
   //kernel.cpp
   static auto nid(const std::string& name) -> u32;
   auto power() -> void;
+  auto trampoline() -> void;
   auto load(const u8* data, u64 size, const std::string& path, std::string& error) -> bool;
   auto start(const u8* data, u64 size, const std::string& path, std::string& error,
              const std::vector<u8>* given = nullptr) -> bool;
@@ -288,7 +290,7 @@ struct Kernel {
   std::vector<Function> functions;
   std::vector<Import> imports;  //by syscall code minus FirstImportCode
   static constexpr u32 ThreadReturnCode = 1, CallReturnCode = 2, ModuleReturnCode = 3, CallbackReturnCode = 4,
-                       FontReturnCode = 5, MpegReturnCode = 6;
+                       FontReturnCode = 5, MpegReturnCode = 6, ExtendReturnCode = 7;
   static constexpr u32 FirstImportCode = 0x1000;
 
   //threads.cpp
@@ -357,6 +359,11 @@ struct Kernel {
     Context beforeCallback{};  //the thread as its callbacks found it: in its wait, or in sceKernelCheckCallback
     WaitState waitBeforeCallback;
     bool suspended = false;    //another thread suspended it: it doesn't run, whatever its state, until resumed
+    struct Extension {         //a stack lent for a call (sceKernelExtendThreadStack): the thread as the call found
+      Context caller{};        //it, carrying on there as the function returns, and the stack it had then
+      u32 stack = 0, size = 0;
+    };
+    std::vector<Extension> extensions;  //innermost last; stackBlock and stackSize are the innermost's lent stack
   };
   struct Semaphore {
     u32 uid;
@@ -399,6 +406,8 @@ struct Kernel {
   auto untilNextEvent() const -> u64;
   auto endThread(Thread& thread, s32 status) -> void;
   auto threadReturned() -> void;
+  auto extendReturned() -> void;
+  auto extensionsEnded(Thread& thread) -> void;
   auto signalSemaphores(Semaphore& semaphore) -> void;
   auto unlockLwMutex(u32 workArea) -> void;
   auto findThread(u32 uid) -> Thread*;
@@ -458,6 +467,7 @@ struct Kernel {
   auto sceKernelChangeCurrentThreadAttr() -> void;
   auto sceKernelGetThreadStackFreeSize() -> void;
   auto sceKernelCheckThreadStack() -> void;
+  auto sceKernelExtendThreadStack() -> void;
   auto sceKernelReferThreadProfiler() -> void;
   auto sceKernelGetThreadCurrentPriority() -> void;
   auto sceKernelRotateThreadReadyQueue() -> void;
@@ -1796,7 +1806,7 @@ struct Kernel {
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
-  u32 stateLayout = 19;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 20;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

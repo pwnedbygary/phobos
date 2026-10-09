@@ -70,6 +70,7 @@ static auto poolHolds(const Kernel::Pool& pool, const std::vector<Kernel::Block>
 
 auto Kernel::serialize(serializer& s) -> bool {
   bool valid = true;
+  if(s.reading()) trampoline();  //(memory has loaded: the kernel's own code is this kernel's, whatever the state's)
   //where the state ends: what nall's serializer reads past it is zeros, not the state's
   u32 end = s.capacity();
   auto check = [&](bool good) { if(s.reading() && !good) valid = false; };
@@ -181,6 +182,11 @@ auto Kernel::serialize(serializer& s) -> bool {
     check(t.wait <= Wait::Tlspl && (w.wait <= Wait::Mailbox || w.wait == Wait::Mutex || w.wait == Wait::Psmf));
     check(t.callbackID < nextUID);
     s(t.suspended);
+    //the stacks lent to it for calls (sceKernelExtendThreadStack), innermost last: each with the thread as the call
+    //found it and the stack it had then (layout 20 on); none once it has ended
+    if(s.reading() && stateLayout < 20) t.extensions.clear();
+    else vector(t.extensions, [&](Thread::Extension& e) { context(e.caller); s(e.stack); s(e.size); });
+    check(t.status != Status::Dormant || t.extensions.empty());
     //its run figures (threads.cpp): no more time on the CPU than has passed
     s(t.runCycles); s(t.interruptPreempts); s(t.threadPreempts); s(t.releases);
     check(t.runCycles <= cycles);
@@ -730,6 +736,9 @@ auto Kernel::serialize(serializer& s) -> bool {
       auto& t = *entry.second;
       auto stack = [&](const Block& b) { return b.address == t.stackBlock && b.size == t.stackSize; };
       check(t.stackSize >= 0x200 && own(stack));
+      for(auto& e : t.extensions) {  //its own stack, and those of the calls lent theirs, as blocks too
+        check(e.size >= 0x200 && own([&](const Block& b) { return b.address == e.stack && b.size == e.size; }));
+      }
     }
     for(auto& [uid, pool] : pools) owned(pool.block);
     for(auto& [uid, pool] : tlsPools) check(owned(pool.block));

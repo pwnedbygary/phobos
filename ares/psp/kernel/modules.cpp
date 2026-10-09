@@ -362,10 +362,14 @@ auto Kernel::unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -
     programAsModule();
   }
   result(0);  //what a caller that isn't a thread (the kernel's own tests) sees
+  //module_stop's argument, kept before the caller ends: a stack lent to it for a call (sceKernelExtendThreadStack)
+  //goes back as it ends, and module_stop's thread may be given that very memory for its own stack
+  std::vector<u8> kept(argument && length ? length : 0);
+  if(!kept.empty()) memory.copyOut(kept.data(), argument, length);
   Thread* caller = current;
   if(caller) {
     endThread(*caller, exitStatus);  //which ends the module's module_start or module_stop, if the caller ran it
-    current = nullptr;  //nothing to save: it goes once module_stop's argument is copied off its stack
+    current = nullptr;  //nothing to save: it goes once module_stop's thread has its argument
   }
   found = modules.find(uid);  //gone already if the caller was the module_stop it ran as it unloaded itself
   if(found != modules.end()) {
@@ -376,6 +380,7 @@ auto Kernel::unloadSelf(s32 exitStatus, u32 length, u32 argument, u32 options) -
       loaded.status = ModuleStatus::Unloading;
       loaded.thread = made;
       startThread(*threads[made], length, argument, Trampoline + 16);
+      if(!kept.empty()) memory.copyIn(threads[made]->context.gpr[5], kept.data(), kept.size());
     } else {
       if(stop) note(loaded.module.name + " unloads itself without its module_stop, which had no thread to run on");
       unloadModule(uid);

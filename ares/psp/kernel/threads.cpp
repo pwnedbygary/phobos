@@ -326,6 +326,7 @@ auto Kernel::endThread(Thread& thread, s32 status) -> void {
   thread.callbacks = thread.inCallback = false;
   thread.waitBeforeCallback = {};
   thread.exitStatus = status;
+  extensionsEnded(thread);
   for(auto& [uid, other] : threads) {
     if(other->status == Status::Waiting && other->wait == Wait::ThreadEnd && other->waitID == thread.uid) {
       ready(*other, u32(status));
@@ -1199,6 +1200,55 @@ auto Kernel::sceKernelCheckThreadStack() -> void {
   if(!current || interrupting) return result(0);
   u32 sp = cpu.ipu.r[29], bottom = current->stackBlock;
   result(sp >= bottom && sp - bottom <= current->stackSize ? sp - bottom : 0);
+}
+
+//(size, function, argument): the function called on the calling thread with a stack lent for the call, its stack
+//pointer at the lent stack's top, and its result returned when it returns, the thread's own stack back then. As
+//threads/threads/extend recorded: the thread's ID the same, its status giving the lent stack while the function runs
+//(the size rounded up to 0x100: 640 and 768 bytes both 0x300) and its own again after, calls within calls, the
+//function's result; under 512 bytes refused (ILLEGAL_STACK_SIZE), -1 bytes more than there is (NO_MEMORY); the stack
+//taken from the top of the user partition, filled with 0xff bytes and the thread's ID at its bottom, as a new
+//thread's (createThread()), k0 still pointing into the thread's own. Dragon Ball Z: Tenkaichi Tag Team calls into its
+//game through it at boot. From an interrupt handler, refused (chosen).
+auto Kernel::sceKernelExtendThreadStack() -> void {
+  if(!current || interrupting) return result(ErrorIllegalContext);
+  if(arg(0) < 0x200) return result(ErrorIllegalStackSize);
+  auto block = allocate(arg(0), 1, 0, "stack: " + current->name);
+  if(!block) return result(ErrorNoMemory);
+  memory.fill(block->address, 0xff, block->size);
+  memory.write(4, block->address, current->uid);
+  u32 function = arg(1), argument = arg(2);
+  auto& lent = current->extensions.emplace_back();
+  save(lent.caller);
+  lent.stack = current->stackBlock, lent.size = current->stackSize;
+  current->stackBlock = block->address, current->stackSize = block->size;
+  cpu.ipu.r[4] = argument;
+  cpu.ipu.r[29] = block->address + block->size;
+  cpu.ipu.r[31] = Trampoline + 48;
+  cpu.ipu.pc = function;
+  cpu.ipu.pd = function + 4;
+}
+
+//The trampoline's syscall after a function on a lent stack returns (its result in v0): the thread carries on where
+//it called, its own stack back, the lent one freed.
+auto Kernel::extendReturned() -> void {
+  if(!current || current->extensions.empty()) return;
+  u32 value = cpu.ipu.r[2];
+  auto lent = current->extensions.back();
+  current->extensions.pop_back();
+  for(auto& block : blocks) if(block.address == current->stackBlock) { release(block.uid); break; }
+  current->stackBlock = lent.stack, current->stackSize = lent.size;
+  restore(lent.caller);
+  cpu.ipu.r[2] = value;
+}
+
+//A thread that ends with stacks lent to it gives them back, innermost first: its stack is its own again.
+auto Kernel::extensionsEnded(Thread& thread) -> void {
+  while(!thread.extensions.empty()) {
+    for(auto& block : blocks) if(block.address == thread.stackBlock) { release(block.uid); break; }
+    thread.stackBlock = thread.extensions.back().stack, thread.stackSize = thread.extensions.back().size;
+    thread.extensions.pop_back();
+  }
 }
 
 //The profiler's figures for a thread, or for all (sceKernelReferThreadProfiler, sceKernelReferGlobalProfiler): only

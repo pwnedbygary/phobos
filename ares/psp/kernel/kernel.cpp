@@ -127,6 +127,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelChangeCurrentThreadAttr", &Kernel::sceKernelChangeCurrentThreadAttr);
   add("ThreadManForUser",  "sceKernelGetThreadStackFreeSize", &Kernel::sceKernelGetThreadStackFreeSize);
   add("ThreadManForUser",  "sceKernelCheckThreadStack",     &Kernel::sceKernelCheckThreadStack);
+  add("ThreadManForUser",  "sceKernelExtendThreadStack",    &Kernel::sceKernelExtendThreadStack);
   add("ThreadManForUser",  "sceKernelReferThreadProfiler",  &Kernel::sceKernelReferThreadProfiler);
   add("ThreadManForUser",  "sceKernelGetThreadCurrentPriority", &Kernel::sceKernelGetThreadCurrentPriority);
   add("ThreadManForUser",  "sceKernelRotateThreadReadyQueue", &Kernel::sceKernelRotateThreadReadyQueue);
@@ -888,6 +889,13 @@ auto Kernel::power() -> void {
   geLeft = GeBudget;
   geCommands = 0;
   startTime = u64(std::time(nullptr)) * 1'000'000;
+  trampoline();
+}
+
+//The trampoline: the kernel's own code, where the functions it calls in the program return to, each to a syscall
+//that tells it which returned. Written at power on, and again as a state loads (serialize()): a loaded machine's
+//memory holds this kernel's returns, whatever the state's.
+auto Kernel::trampoline() -> void {
   memory.write(4, Trampoline, ThreadReturnCode << 6 | 0x0c);    //syscall: the thread's entry function returned
   memory.write(4, Trampoline + 4, 0x0000'000d);                  //break: never reached
   memory.write(4, Trampoline + 8, CallReturnCode << 6 | 0x0c);  //syscall: a call into the program returned
@@ -900,6 +908,8 @@ auto Kernel::power() -> void {
   memory.write(4, Trampoline + 36, 0x0000'000d);
   memory.write(4, Trampoline + 40, MpegReturnCode << 6 | 0x0c);  //syscall: a ringbuffer's callback returned
   memory.write(4, Trampoline + 44, 0x0000'000d);
+  memory.write(4, Trampoline + 48, ExtendReturnCode << 6 | 0x0c);  //syscall: a function on a lent stack returned
+  memory.write(4, Trampoline + 52, 0x0000'000d);
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
@@ -1087,6 +1097,10 @@ auto Kernel::dispatch(u32 code) -> bool {
   }
   if(code == MpegReturnCode) {
     mpegReturned();
+    return true;
+  }
+  if(code == ExtendReturnCode) {
+    extendReturned();
     return true;
   }
   if(code < FirstImportCode || code - FirstImportCode >= imports.size()) {

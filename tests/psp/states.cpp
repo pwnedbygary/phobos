@@ -201,6 +201,7 @@ static auto stateFields() -> void {
   k.memoryStickCallbacks = {callback};
   u32 plainBlock = k.allocate(0x1000, 0, 0, "block")->uid;
   u32 spareStack = k.allocate(0xf00, 0, 0, "spare stack")->address;  //what thread one's stack moves to below
+  u32 lentStack = k.allocate(0x800, 0, 0, "lent stack")->address;    //and the stack lent to it for a call
   u32 fixedID = a.call("sceKernelCreateFpl", {a.string("fpl"), 2, 0, 16, 2, 0});
   u32 variableID = a.call("sceKernelCreateVpl", {a.string("vpl"), 2, 0, 0x100, 0});
   u32 spareID = a.call("sceKernelCreateFpl", {a.string("spare"), 2, 0, 16, 1, 0});
@@ -455,6 +456,12 @@ static auto stateFields() -> void {
     {"thread waitDone", [&] { t.waitDone ^= 1; }}, {"thread waitResult", [&] { t.waitResult ^= 4; }},
     {"wait before callback done", [&] { t.waitBeforeCallback.done ^= 1; }},
     {"wait before callback resultPointer", [&] { t.waitBeforeCallback.resultPointer ^= 4; }},
+    //(a stack lent for a call: thread one's moves to it, its own kept with its registers as the call found them)
+    {"thread extensions", [&] {
+      t.extensions.push_back({t.context, t.stackBlock, t.stackSize});
+      t.stackBlock = lentStack, t.stackSize = 0x800;
+    }},
+    {"thread extension caller", [&] { t.extensions.back().caller.gpr[4] ^= 1; }},
     {"the thread running", [&] { k.current = k.threads[two].get(); }},
     {"readySequence", [&] { k.readySequence += 7; }}, {"nextVblank", [&] { k.nextVblank = k.cycles + 1000; }},
     {"vblanks", [&] { k.vblanks += 7; }},
@@ -931,6 +938,29 @@ static auto stateFields() -> void {
   //user partition
   refuses("a thread's stack that isn't a block", [&] { k.threads.at(one)->stackBlock += 0x100; });
   refuses("a thread's stack not its block's size", [&] { k.threads.at(one)->stackSize += 0x100; });
+  //a stack lent for a call: the thread's own, kept meanwhile, not a block; or lent to a thread that has ended
+  refuses("a thread's own stack, while lent another, that isn't a block", [&] {
+    k.threads.at(one)->extensions.back().stack += 0x100;
+  });
+  //(thread one made to have ended in a state that says nothing else of it: its TLS block and mutex let go)
+  auto ended = [&] {
+    k.threads.at(one)->status = Kernel::Status::Dormant;
+    for(auto& holder : k.tlsPools.begin()->second.holders) holder = 0;
+    auto& held = k.mutexes.at(mutexID);
+    held.count = 0, held.owner = 0;
+  };
+  refuses("a stack lent to a thread that has ended", ended);
+  {
+    ended();  //...which, its stack its own again, loads
+    auto& thread = *k.threads.at(one);
+    for(; !thread.extensions.empty(); thread.extensions.pop_back()) {
+      thread.stackBlock = thread.extensions.back().stack, thread.stackSize = thread.extensions.back().size;
+    }
+    KernelMachine fresh;
+    devices(fresh);
+    CHECK(load(fresh, save(a)), true);
+    CHECK(load(a, state), true);
+  }
   refuses("a thread's stack of 0x100 bytes", [&] {
     auto& thread = *k.threads.at(one);
     stackOf(thread).size = thread.stackSize = 0x100;
