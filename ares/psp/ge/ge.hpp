@@ -246,6 +246,7 @@ struct GE {
   //which they compile to the host's SIMD instructions (NEON on ARM64, SSE on x86-64).
   using f32x4 = float __attribute__((vector_size(16)));
   using f64x2 = f64 __attribute__((vector_size(16)));
+  using u64x2 = u64 __attribute__((vector_size(16)));
   using s32x4 = s32 __attribute__((vector_size(16)));
   using u32x4 = u32 __attribute__((vector_size(16)));
   struct Four {
@@ -310,9 +311,12 @@ struct GE {
       u32 flatColor, flatSpecular;
       Stepped colors[4], shine[3], fog;  //red, green, blue, alpha; the shine's red, green and blue; the fog (0-255)
       Stepped depth;                     //0-65535
-      float u[3], v[3], q[3], w[3];
       f64 uStart, uAcross, uDown, vStart, vAcross, vDown;  //2D texture coordinates, stepped from (startX, startY)
       s64 startX, startY;
+      //3D texture coordinates (draw.cpp): s, t and q stepped as colors are, in 16384ths of a 15-bit unit, and the
+      //size of that unit. A pixel's coordinate is the floored unit times the reciprocal of q (raster.cpp).
+      Stepped texS, texT, texQ;
+      float sUnit, tUnit, qUnit;
     };
     struct Point {
       s32 x, y;
