@@ -213,7 +213,7 @@ static auto gpuLost() -> void {
     auto makeTexture(u32, u32, const u32*) -> u32 override { return ++made; }
     auto dropTexture(u32) -> void override {}
     auto submit(const GPU::Recorded&) -> bool override { return runs++, true; }
-    auto finish(const GPU::Recorded&) -> bool override { return runs++, false; }
+    auto finish(const GPU::Recorded&) -> bool override { return runs++, lost = true, false; }  //(as Vulkan's)
     auto read(u32, const u32*&, const u8*&) -> bool override { return false; }
   };
   auto backend = std::make_unique<Lost>();
@@ -728,10 +728,79 @@ static auto gpuBlendingApart() -> void {
   gpu->backend->readsInOrder = readsInOrder, gpu->backend->readsBlending = readsBlending;
 }
 
+//A frame buffer sampled as a texture declared taller than its picture (Midnight Club 3's bloom samples its 480x272
+//picture as a texture of 512 rows, whose last rows are other frame buffers'): 2D sprites, filtered, taking texels
+//from its first 48 rows, the last row's second texel at weight 0, while the rows past are another frame buffer's on
+//the GPU. The copy is taken on the GPU of the rows the sprites reach (draw.cpp's spriteReach()), nothing finished,
+//and the pixels are the software renderer's. Then the frame shown late (System's "Late Frames": GPU::shoot()), whose
+//shot is the frame buffer as memory has it once its run is done; and a short list's draws not handed to the GPU at
+//its end (GPU::submit()), but with the next frame or finish.
+static auto gpuTallTexture() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261009};
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto drawn = randomSprites(random, 40, false);
+  GPU::Statistics before;
+  for(System* s : {&software, &hardware}) {
+    prepare(*s, 0, 3);
+    for(auto& one : drawn) sprite(*s, one);
+    prepare(*s, 48 * 256, 0);  //(another frame buffer, 5650, from the first's row 48)
+    sprite(*s, {{{0, 0, 0, 0}, {0, 0, 64, 16}}, 0x1234'5678});
+    prepare(*s, 0x2'0000, 3);
+    texture(*s, Memory::VRAMBase, 64, 128, 64);
+    s->ge.commands[GE::TextureFilter] = 0x101;
+    if(s == &hardware) before = gpu->statistics;
+    sprite(*s, {{{0, 0, 0, 0}, {64, 48, 64, 48}}, 0});  //(1:1: row 47's v 47.5, rows 47 and 48, 48 at weight 0)
+    sprite(*s, {{{2, 1, 0, 0}, {34, 47, 20, 30}}, 0});
+  }
+  CHECK(gpu->statistics.finishes, before.finishes);
+  CHECK(gpu->statistics.copies > before.copies, true);
+  CHECK(apart(software, hardware), 0u);
+
+  //late: the frame buffer at 0x2'0000 shown, its shot taken; there once the run is done (finished here)
+  prepare(hardware, 0x2'0000, 3);
+  hardware.ge.commands[GE::TextureMappingEnable] = 0;
+  sprite(hardware, {{{0, 0, 0, 0}, {0, 0, 8, 8}}, 0xff00'ff00});
+  std::vector<u32> pixels;
+  u32 width = 0, height = 0, format = 0;
+  while(gpu->shot(pixels, width, height, format)) {}  //(none older left)
+  CHECK(gpu->shoot(0x2'0000, 64, 3, 64, 48), true);
+  hardware.ge.settleAll();
+  CHECK(gpu->shot(pixels, width, height, format), true);
+  CHECK(width == 64 && height == 48 && format == 3 && pixels.size() == 64u * 48, true);
+  u32 same = 0;
+  for(u32 y = 0; y < 48; y++) {
+    for(u32 x = 0; x < 64; x++) {
+      u32 pixel = hardware.memory.read(4, Memory::VRAMBase + 0x2'0000 + (y * 64 + x) * 4);
+      same += (pixels[y * 64 + x] & 0xff'ffff) == (pixel & 0xff'ffff);
+    }
+  }
+  CHECK(same, 64u * 48);
+  CHECK(gpu->shoot(0x2'0000, 64, 3, 64, 48), false);  //(the pages memory's now: memory has the picture)
+
+  //a short list's end: nothing handed over yet; a long one's, or a finish, hands it over
+  auto submits = gpu->statistics.submits;
+  sprite(hardware, {{{0, 0, 0, 0}, {0, 0, 4, 4}}, 0xff12'3456});
+  gpu->submit(hardware.ge);
+  CHECK(gpu->statistics.submits, submits);
+  for(u32 n = 0; n < 40; n++) {  //(each scissor its own draw)
+    hardware.ge.commands[GE::Scissor2] = (24 + n) | 47 << 10;
+    sprite(hardware, {{{0, 0, 8, 8}, {0, 0, f32(12 + n % 7), 12}}, 0xff00'0000 | n << 8});
+  }
+  gpu->submit(hardware.ge);
+  CHECK(gpu->statistics.submits, submits + 1);
+  hardware.ge.settleAll();
+  CHECK(hardware.memory.read(4, Memory::VRAMBase + 0x2'0000 + (3 * 64 + 3) * 4) & 0xff'ffff, 0x12'3456u);
+  hardware.ge.setRenderer(nullptr);
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
     {"gpu render to texture against the software renderer", gpuRenderToTexture},
+    {"gpu render to texture from a frame buffer taller than its picture, nothing finished", gpuTallTexture},
     {"gpu samples near the software renderer", gpuSamples},
     {"gpu blending in the shader against the software renderer", gpuBlending},
     {"gpu blending without rasterization order: the GPU's own, the rest read", gpuBlendingApart},

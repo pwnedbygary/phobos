@@ -166,7 +166,10 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts) -
 
 //The pixels left-right, top-bottom of the target are drawn on the GPU: VRAM's pages under them are the renderer's
 //until it's finished (busy: whoever touches one waits for finish()), and whoever keeps a copy of those bytes (decoded
-//textures, the recompiler) hears of the change now, as the software renderer tells of what it draws.
+//textures, the recompiler) hears of the change, as the software renderer tells of what it draws. Not again for a
+//rectangle inside one told of since the last finish: a copy of bytes the GPU has drawn over since then can only be
+//made after a finish (drawnOver() has memory wait for one), so no one has those bytes yet. (A 3D game's PRIMs each
+//reach the whole scissor rectangle: told once a frame, not once a PRIM.)
 auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   if(!t.drawn()) t.left = left, t.top = top, t.right = right, t.bottom = bottom;
   else {
@@ -177,10 +180,17 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   u32 bytes = t.bytes();
   u32 low = t.address + (top * t.stride + left) * bytes, high = t.address + (bottom * t.stride + right) * bytes;
   u32 first = low / Memory::PageSize, last = std::min<u32>(high / Memory::PageSize, GE::VRAMPages - 1);
+  //(told, and its pages busy still: the drawing threads' settle frees every busy page, the GPU's too, and memory
+  //may copy them then without a finish)
+  bool told = false;
+  for(auto& r : t.told) told |= left >= r[0] && top >= r[1] && right <= r[2] && bottom <= r[3];
+  for(u32 page = first; page <= last && told; page++) told = memory.vramPageBusy(page);
+  if(told) return;
+  if(t.told.size() < MostTold) t.told.push_back({left, top, right, bottom});
   bool added = false;
   for(u32 page = first; page <= last; page++) {
-    if(owners[page] == &t) continue;
-    if(!owners[page]) added = true, memory.busyPages[page >> 6] |= 1ull << (page & 63);
+    if(owners[page] == &t && memory.vramPageBusy(page)) continue;
+    if(!memory.vramPageBusy(page)) added = true, memory.busyPages[page >> 6] |= 1ull << (page & 63);
     owners[page] = &t;
   }
   if(added) {
@@ -407,6 +417,7 @@ auto GPU::settings(const GE::Look& look) -> void {
   s32 right = std::min<s32>(p.right, target->stride - 1), bottom = std::min<s32>(p.bottom, target->height - 1);
   s.scissor[0] = left, s.scissor[1] = top, s.scissor[2] = right - left + 1, s.scissor[3] = bottom - top + 1;
   state = s;
+  stateKept = false;
 }
 
 //A PRIM's settings: its target found (filled from memory first if need be), its pages owned, its texture on the
@@ -420,7 +431,7 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   auto& p = look.pixel;
   if(!ready() || (look.textured && !p.clear && !held && !look.decoded)) return held.reset(), false;
   //(a long list's draws handed over as they come, so the GPU draws while the CPU goes on)
-  if(recorded.commands.size() >= SubmitEvery) submit(ge);
+  if(recorded.commands.size() >= SubmitEvery) flush();
   //(where it may draw: the scissor rectangle, or less, where its vertices reach, in 2D: draw.cpp)
   if(!p.stride || region.left > region.right || region.top > region.bottom || region.right < 0 || region.bottom < 0) {
     return held.reset(), true;
@@ -480,8 +491,11 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
 
 //Vertices for the GPU, in the PRIM's draw: one with the last if its settings are the same.
 auto GPU::emit(const Vertex* vertices, u32 count) -> void {
-  if(recorded.vertices.size() + count > MostVertices) submit(*ge);
-  if(recorded.states.empty() || !(recorded.states.back() == state)) recorded.states.push_back(state);
+  if(recorded.vertices.size() + count > MostVertices) flush();
+  if(!stateKept || recorded.states.empty()) {
+    if(recorded.states.empty() || !(recorded.states.back() == state)) recorded.states.push_back(state);
+    stateKept = true;
+  }
   u32 index = recorded.states.size() - 1, first = recorded.vertices.size();
   auto& commands = recorded.commands;
   bool joined = !commands.empty() && commands.back().kind == Command::Kind::Draw && commands.back().state == index &&
@@ -545,7 +559,9 @@ auto GPU::triangle(const GE::Vertex& a, const GE::Vertex& b, const GE::Vertex& c
   if(!(shade & 1)) {
     for(auto& corner : v) corner.color = c.color, corner.specular = c.specular;
   }
-  if(state.pipeline.clear && state.pipeline.stencilTest) state.stencilReference = c.color >> 24;
+  if(state.pipeline.clear && state.pipeline.stencilTest && state.stencilReference != c.color >> 24) {
+    state.stencilReference = c.color >> 24, stateKept = false;
+  }
   if(textured) {
     f64 area = std::abs(f64(targetFixed(b.x) - targetFixed(a.x)) * (targetFixed(c.y) - targetFixed(a.y)) -
                         f64(targetFixed(b.y) - targetFixed(a.y)) * (targetFixed(c.x) - targetFixed(a.x)));
@@ -587,7 +603,9 @@ auto GPU::sprite(const GE::Job& job) -> void {
   auto& s = job.sprite;
   Vertex base{};
   base.z = s.z, base.w = 1, base.q = 1, base.color = s.color, base.specular = s.specular;
-  if(state.pipeline.clear && state.pipeline.stencilTest) state.stencilReference = s.color >> 24;
+  if(state.pipeline.clear && state.pipeline.stencilTest && state.stencilReference != s.color >> 24) {
+    state.stencilReference = s.color >> 24, stateKept = false;
+  }
   bool divided = textured && s.divided;
   if(textured) {
     base.flags = job.linear | (divided ? 0 : 2) | (s.turned ? 4 : 0);
@@ -654,9 +672,16 @@ auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> 
   }
 }
 
-//What's drawn so far handed to the GPU, while the CPU goes on.
+//What's drawn so far handed to the GPU, while the CPU goes on: at a list's end, once there's enough of it (each run
+//costs the CPU a submit and a wait for the run three before it, and games may end dozens of short lists a frame:
+//WipEout Pure, 209); what's less waits for the next list, the frame shown or a finish.
 auto GPU::submit(GE& ge) -> void {
   this->ge = &ge;
+  if(recorded.empty() || !ready() || recorded.commands.size() < SubmitEnough) return;
+  flush();
+}
+
+auto GPU::flush() -> void {
   if(recorded.empty() || !ready()) return;
   if(!backend->submit(recorded)) lose();
   recorded.clear();
@@ -697,13 +722,14 @@ auto GPU::finish(GE& ge) -> void {
     read.push_back(t.get());
   }
   auto began = std::chrono::steady_clock::now();
+  bool wasLost = backend->lost;
   bool finished = ready() && backend->finish(recorded);
   statistics.waiting += std::chrono::duration_cast<std::chrono::nanoseconds>(
     std::chrono::steady_clock::now() - began).count();
   statistics.finishes++;
   recorded.clear();
   auto& memory = ge.memory;
-  if(!finished && !backend->lost) lose();
+  if(!finished && !wasLost) lose();
   for(u32 n = 0; n < read.size() && finished; n++) {
     Target& t = *read[n];
     const u32* colors;
@@ -732,6 +758,7 @@ auto GPU::finish(GE& ge) -> void {
   for(auto& owner : owners) owner = nullptr;
   for(auto& t : targets) {
     t->left = 0, t->top = 0, t->right = -1, t->bottom = -1;
+    t->told.clear();
     if(!t->beside.empty()) t->stale = true;  //(memory's bytes beside what it drew, which may have changed)
     if(t->rows) memory.watch(Memory::VRAMBase + t->address, t->rows * t->stride * t->bytes());
     if(t->depthRows && t->depthStride) {
@@ -903,14 +930,16 @@ auto GPU::picture(u32 address, u32 stride, u32 format, u32 width, u32 height, st
   recorded.commands.push_back(c);
   recorded.readbacks++;
   auto began = std::chrono::steady_clock::now();
+  bool wasLost = backend->lost;
   bool finished = backend->finish(recorded);
   statistics.waiting += std::chrono::duration_cast<std::chrono::nanoseconds>(
     std::chrono::steady_clock::now() - began).count();
   recorded.clear();
+  release();
   const u32* colors;
   const u8* stencil;
   if(!finished || !backend->read(0, colors, stencil)) {
-    if(!backend->lost) lose();
+    if(!wasLost) lose();
     return false;
   }
   //(as memory would have them: narrowed to the frame buffer's format, then widened as the screen widens them)
@@ -931,10 +960,27 @@ auto GPU::show(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bo
   Command c{Command::Kind::Present, t->id};
   c.width = width, c.height = height, c.format = format;
   recorded.commands.push_back(c);
-  if(!backend->submit(recorded) && !backend->lost) lose();
+  bool wasLost = backend->lost;
+  if(!backend->submit(recorded) && !wasLost) lose();
   recorded.clear();
   statistics.submits++, statistics.presents++;
+  release();
   return true;
+}
+
+auto GPU::shoot(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bool {
+  if(!ready() || !width || !height) return false;
+  Target* t = shownTarget(address, stride, format, width, height);
+  if(!t) return false;
+  Command c{Command::Kind::Shot, t->id};
+  c.width = width, c.height = height, c.format = format;
+  recorded.commands.push_back(c);
+  bool wasLost = backend->lost, submitted = backend->submit(recorded);
+  if(!submitted && !wasLost) lose();
+  recorded.clear();
+  statistics.submits++, statistics.pictures++;
+  release();
+  return submitted;
 }
 
 auto GPU::show(const std::vector<u32>& pixels, u32 width, u32 height) -> void {
@@ -944,9 +990,11 @@ auto GPU::show(const std::vector<u32>& pixels, u32 width, u32 height) -> void {
   auto bytes = (const u8*)pixels.data();
   recorded.uploads.insert(recorded.uploads.end(), bytes, bytes + u64(width) * height * 4);
   recorded.commands.push_back(c);
-  if(!backend->submit(recorded) && !backend->lost) lose();
+  bool wasLost = backend->lost;
+  if(!backend->submit(recorded) && !wasLost) lose();
   recorded.clear();
   statistics.submits++, statistics.presentsFromMemory++;
+  release();
 }
 
 auto GPU::drop() -> void {
@@ -959,6 +1007,9 @@ auto GPU::drop() -> void {
   for(auto& [decoded, texture] : textures) backend->dropTexture(texture.id);
   for(auto& [where, copied] : copies) backend->dropTexture(copied.texture);
   targets.clear(), textures.clear(), copies.clear();
+  std::vector<u32> pixels;
+  u32 width, height, format;
+  while(backend->shot(pixels, width, height, format)) {}  //(the machine before's last shot)
 }
 
 auto GPU::resolution(u32 scale) -> void {

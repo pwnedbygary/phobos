@@ -6137,3 +6137,69 @@ groups, none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing.
 - A save is its data file alone (no PARAM.SFO, icons or encryption), as before: the game reads it back.
 - The kernel's player never cancels a keyboard, nor answers a field UNCHANGED: whether a PSP ever says UNCHANGED (of
   a second field, say) isn't known.
+
+## Part 52: the Vulkan renderer faster — its own waste, found with a profile
+
+On branch `cursor/psp-gpu-fast-2b67`, on top of #184's `cursor/psp-vk-play-2b67` (80bfd9807). docs/psp-gpu-renderers.md
+has the detail ("Submitting", "Render to texture", "The texture cache", "Speed"). Original code: nothing of PPSSPP's
+or JPCSP's used, copied or translated. Software stays the default; its pictures and state are unchanged, and Vulkan
+(accurate)'s pictures are byte for byte what they were.
+
+**Where the time went.** simpleperf on the RP6 (call graphs, Turnip opened by the runner as the app opens it), the
+race in Midnight Club 3: the emulation thread 26.4 ms a frame with Vulkan, 17.8 with seven software threads, which
+spend about 7 ms of theirs on the GE's setup as Vulkan does. Vulkan's extra:
+- `GPU::own()` told memory of every PRIM's rectangle (`Memory::changed()`, the recompiler's invalidation over all
+  four of VRAM's copies); a 3D PRIM's rectangle is the whole scissor: 2.7 ms a frame.
+- The bloom sampled the 480x272 frame buffer as a 512-row texture whose last rows are two other frame buffers'.
+  `holds()` was given the vertices' rough reach (all 512 rows) and refused it, so the GPU finished every frame: a
+  2.7 ms wait, the read-back narrowed into memory, the targets filled again, the 1 MB texture decoded and uploaded.
+- 25 small swizzled textures in RAM were decoded again every frame (8,249 in 300 frames), the GPU making and
+  destroying an image for each: about 2.6 ms. Their pages hold other data the game writes each frame.
+- Pipelines made in the run's first frames (45 in the race): 2.5 ms a frame over 300 frames, once a session.
+- Recording, about 1.3 ms. WipEout Pure ends 209 short lists a frame, each a `vkQueueSubmit` and a wait for the
+  slot three runs back.
+
+**What was done:**
+1. `own()` tells memory only of a rectangle not inside one told since the target's last finish, its pages still
+   busy (`Target::told`): no one can copy bytes the GPU drew over without a finish, which clears it.
+2. A 2D sprite PRIM's texture rows and columns for the GPU are `spriteReach()`'s, exact, a filter's second texel at
+   weight 0 left out; `draw.frag` holds every texel fetch inside the picture on the GPU. The bloom's copies are taken
+   on the GPU: finishes 300 → 5, read-backs 1,200 → 20, uploads 1,249 → 51 in 300 frames.
+3. Decoded textures keep the bytes they came from (where side by side and no larger than their texels); a write to
+   their pages marks them, and before the next draw their bytes are compared: kept if the same, else decoded afresh.
+   Both renderers: the race's textures 8,249 → 520.
+4. A list's end hands the recording to the GPU only with 32 commands or more; frames shown and finishes always do.
+5. The draw state isn't compared with the last recorded one at every primitive when nothing changed.
+6. "Late Frames" (System's option, the runner's `--late-frames`): the shown frame copied on the GPU into the slot's
+   shot buffer and taken when its run is done, a few frames late, so nothing waits each frame, as when the app
+   presents. The runner needs it to time the GPU as the app runs: read back synchronously each frame from adb's shell,
+   whose threads can't be pinned to the prime core as the app's are, the waits had the scheduler move the emulation
+   thread to slower cores at lower clocks (seen: cpu 3-6 at 1.65-2.8 GHz instead of cpu 7 at 3.19).
+
+**Measured** on the RP6, medians of three runs (the table in docs/psp-gpu-renderers.md, "Speed"), late frames, frames
+a second: Turnip's race 34.5 → 52.6, menu 49.7 → 68.0, LCS city 63.3 → 76.3, woods 75.1 → 79.0, Peace Walker's
+tutorial 73.9 → 105.8, WipEout 18.9 → 36.2; Qualcomm's driver 33.1 → 46.9, 46.3 → 64.0, 59.9 → 75.7, 73.9 → 94.7,
+68.0 → 93.3, 21.0 → 60.9. Seven software threads: 53.2, 69.2, 71.8, 70.9, 98.1, 16.2. So Vulkan (accurate) is level
+with seven threads in the 3D scenes and well ahead in WipEout and the 2D ones. Read back each frame, Turnip's LCS
+scenes are slower than before (the waits above); that's the desktop's way, not the app's.
+
+**Exact:** Software's every frame (VRAM and picture) and its end state (RAM and the whole machine) identical before
+and after, all seven scenes at 1 and 7 threads, 300 frames each; Vulkan (accurate)'s pictures byte for byte the same,
+all seven scenes, 10 frames each (M1).
+
+**Tests:** "draw textures kept decoded, their pages written" (new: kept where the bytes are the same, decoded afresh
+where they aren't, watched again); "gpu render to texture from a frame buffer taller than its picture, nothing
+finished" (new: the bloom's case, its last row at weight 0; late frames' shot; a short list not submitted at its
+end); "gpu lost" (its pretend backend marks itself lost, as Vulkan's does). `tests/psp/run-tests.sh` (sanitized) 345
+groups, none failing; `tests/allegrex/run-tests.sh` 58; `tests/psp/ares/run-tests.sh` 307 checks; the GPU tests on
+the RP6, Turnip and Qualcomm's driver, none failing.
+
+**Review** (an independent read-only one): no change to a picture; fixed as it found: `release()` at every frame
+handed over (short lists no longer submit), a lost GPU reported whichever path finds it first, source copies no
+larger than their texels, a written texture with more rows than the PRIM needs decoded afresh, `own()` telling again
+where the drawing threads' settle freed its pages, `GPU::drop()` dropping the last shot, `shoot()` false when the GPU
+stops, comments. Not taken: copies' sizes rounded to eights (it changed the render-to-texture test's pixels, which
+isn't understood yet); a test of the fetch's hold above 1x and of `System::late()`.
+
+**Left:** block transfers on the GPU (WipEout's two finishes a frame), a pipeline cache kept on disk, the CPU's
+transform (part 53: Vulkan (fast)).

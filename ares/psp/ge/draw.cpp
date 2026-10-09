@@ -56,8 +56,11 @@ static alwaysinline auto spriteAxis(f64 first, f64 step, s32 start, s32 at) -> f
 //spriteFours(): their coordinates' texels, and the second of each where it filters, whatever its weight), first to
 //last: false where some may repeat round, or aren't numbers, or for a 3D sprite (whose texels follow the perspective
 //at each pixel). A coordinate runs one way along the job (spriteAxis(): from a number by a step, both numbers, and
-//rounding keeps the order), so its texels' first and last are those at the job's ends.
-static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2], s32 (&columns)[2]) -> bool {
+//rounding keeps the order), so its texels' first and last are those at the job's ends. weighed: only the texels whose
+//weight isn't 0 (a filter's second texel, a fraction 0 from the first, is multiplied by 0), which are all a hardware
+//renderer's sprites take anything from.
+static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2], s32 (&columns)[2],
+                        bool weighed = false) -> bool {
   auto& s = job.sprite;
   if(s.divided) return false;
   auto ends = [&](f64 first, f64 step, s32 start, s32 from, s32 to, u32 size, bool clamp, s32 (&reach)[2]) {
@@ -68,7 +71,7 @@ static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2]
       float coordinate = spriteAxis(first, step, start, at);
       if(std::isnan(coordinate)) return false;
       auto spot = GE::texelSpot(coordinate, job.linear);
-      low = std::min(low, spot.first), high = std::max(high, spot.first + job.linear);
+      low = std::min(low, spot.first), high = std::max(high, spot.first + (job.linear && (!weighed || spot.fraction)));
     }
     if(clamp) low = std::clamp(low, 0, last), high = std::clamp(high, 0, last);
     else if(low < 0 || high > last) return false;
@@ -234,27 +237,34 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //A 2D sprite's texels are taken where its pixels' middles fall, so the rows it reaches are exactly those
   //spriteReach() finds, often fewer than its vertices' reach above can say: a sprite sampling a frame buffer (a
   //texture of 512 rows) from its top edge, filtered, may reach round to the far end there for all that can tell.
-  u32 drawnRows = rows;
-  if(textured && !hardware && !skipping && format.through && kind == Sprites) {
-    s32 reached = 1;
+  //A hardware renderer takes those rows and columns exactly (holds(): the part of a frame buffer it copies), as its
+  //sprites' texels are the GE's, those whose weight is 0 left out (its fetches are held inside the copy, and what
+  //they find multiplied by 0). (Midnight Club 3's bloom samples its 480x272 picture as a texture 512 rows tall,
+  //whose last rows are other frame buffers': the GPU takes it from its frame buffer, not from memory.)
+  u32 drawnRows = rows, heldRows = rows, heldColumns = columns;
+  if(textured && !skipping && format.through && kind == Sprites) {
+    s32 reached = 1, across = 1;
     bool exact = true;
     for(u32 n = 0; n + 1 < count && exact; n += 2) {
       Job job;
       if(!spriteJob(look, vertices[n], vertices[n + 1], false, job)) continue;
       if(job.firstX > job.lastX || job.firstY > job.lastY) continue;
       s32 rowsReached[2], columnsReached[2];
-      if(!(exact = spriteReach(job, look.texture, rowsReached, columnsReached))) break;
-      reached = std::max(reached, rowsReached[1] + 1);
+      if(!(exact = spriteReach(job, look.texture, rowsReached, columnsReached, hardware))) break;
+      reached = std::max(reached, rowsReached[1] + 1), across = std::max(across, columnsReached[1] + 1);
     }
-    if(exact) drawnRows = std::min<u32>(rows, (reached + 7) & ~7);  //(in eights, as above)
+    if(exact) {
+      drawnRows = std::min<u32>(rows, (reached + 7) & ~7);  //(in eights, as above)
+      heldRows = std::min<u32>(rows, reached), heldColumns = std::min<u32>(columns, across);
+    }
   }
   //(a 2D sprite drawing over its own texture is still decoded where a copy taken first draws the same: readsAhead())
   struct Ahead { GE& ge; const Look& look; const std::vector<Vertex>& vertices; u32 count; bool sprites; };
   Ahead ahead{*this, look, vertices, count, format.through && kind == Sprites};
   auto copyDraws = [&ahead] { return ahead.sprites && ahead.ge.readsAhead(ahead.look, ahead.vertices, ahead.count); };
-  if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
+  if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, heldRows, heldColumns))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
-    decode(look, hardware ? Region{0, 0, -1, -1} : region, hardware ? rows : drawnRows, !hardware, copyDraws);
+    decode(look, hardware ? Region{0, 0, -1, -1} : region, drawnRows, !hardware, copyDraws);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
   if(hardware && !renderer->begin(*this, look, format.through, region)) {

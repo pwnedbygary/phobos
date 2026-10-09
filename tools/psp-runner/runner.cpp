@@ -29,6 +29,8 @@
 //                                the summary then gives the GPU renderer's counts)
 //    --resolution N             Vulkan's internal resolution, 1 (the PSP's, the default) to 10 times it; the
 //                                frames (and PNGs) are then read back at up to 4 times the PSP's size
+//    --late-frames              the GPU's frames taken up to three frames late, nothing waited for each frame, as
+//                                when the app presents them (for timing, at 1x; PNGs then show an earlier frame)
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //
@@ -366,6 +368,7 @@ auto main(int argc, char** argv) -> int {
   u32 frames = 3600, pngEvery = 0, saveStateAt = 0, geThreads = 0;
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
+  bool lateFrames = false;
   bool interpreter = false;
   for(int i = 1; i < argc; i++) {
     auto option = std::string{argv[i]};
@@ -405,6 +408,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--ge-threads") geThreads = parseUint(next(), option);
     else if(option == "--renderer") renderer = next();
     else if(option == "--resolution") resolution = parseUint(next(), option);
+    else if(option == "--late-frames") lateFrames = true;
     else if(option == "--memory-stick") memoryStick = next();
     else if(option == "--fonts") fonts = next();
     else if(option[0] == '-' && option[1] == '-') {
@@ -502,6 +506,7 @@ auto main(int argc, char** argv) -> int {
   if(geThreads) PlayStationPortable::option("GE Threads", std::to_string(geThreads).c_str());
   if(!renderer.empty()) PlayStationPortable::option("Renderer", renderer.c_str());
   if(resolution) PlayStationPortable::option("Resolution", std::to_string(resolution).c_str());
+  if(lateFrames) PlayStationPortable::option("Late Frames", "true");
 
   auto& psp = ares::PlayStationPortable::system;
   ares::platform = &host;
