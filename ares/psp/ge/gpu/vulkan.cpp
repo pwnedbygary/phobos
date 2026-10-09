@@ -42,6 +42,7 @@
   F(vkDestroyDescriptorSetLayout) F(vkCreatePipelineLayout) F(vkDestroyPipelineLayout) \
   F(vkCreateDescriptorPool) F(vkDestroyDescriptorPool) F(vkAllocateDescriptorSets) F(vkFreeDescriptorSets) \
   F(vkUpdateDescriptorSets) F(vkCreateGraphicsPipelines) F(vkDestroyPipeline) F(vkCreatePipelineCache) \
+  F(vkGetPipelineCacheData) \
   F(vkDestroyPipelineCache) F(vkCreateCommandPool) F(vkDestroyCommandPool) F(vkAllocateCommandBuffers) \
   F(vkResetCommandBuffer) F(vkBeginCommandBuffer) F(vkEndCommandBuffer) F(vkCreateFence) F(vkDestroyFence) \
   F(vkWaitForFences) F(vkResetFences) F(vkQueueSubmit) F(vkCmdPipelineBarrier) F(vkCmdCopyBufferToImage) \
@@ -154,6 +155,7 @@ struct VulkanBackend : GPU::Backend {
   u32 family = 0;
   VkPhysicalDeviceMemoryProperties memoryTypes{};
   std::string deviceName;
+  VkPhysicalDeviceProperties chosen{};  //(the device's: a kept pipeline cache's owner, pipelineData())
   VkFormat depthFormat = VK_FORMAT_UNDEFINED;
   bool depthClamp = false;
   VkRenderPass renderPass = VK_NULL_HANDLE;
@@ -671,9 +673,12 @@ struct VulkanBackend : GPU::Backend {
     info.pColorBlendState = &blend, info.pDynamicState = &dynamic;
     info.layout = pipelineLayout, info.renderPass = renderPass;
     VkPipeline pipeline = VK_NULL_HANDLE;
+    auto start = std::chrono::steady_clock::now();
     if(vk.vkCreateGraphicsPipelines(device, pipelineCache, 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
       pipeline = VK_NULL_HANDLE;
     }
+    pipelineMaking += std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - start).count();
     pipelines++;
     pipelineCache_[key] = pipeline;
     return pipeline;
@@ -1507,6 +1512,34 @@ struct VulkanBackend : GPU::Backend {
   }
 
   auto drawable(const GPU::Pipeline& k) -> bool override { return !lost && pipelineFor(k); }
+  //A kept pipeline cache (pipelineData(), the next session's create()): the driver's data after a header of our own
+  //saying whose it is (the device, the driver's version and cache UUID, a 64-bit build's or a 32-bit one's) and the
+  //data's size and CRC-32, so that a file cut short, damaged or another driver's is left out before the driver sees
+  //it (some crash on data they ought to refuse)
+  struct Kept {
+    u32 magic = 0x5650'5350, version = 1;  //("PSPV")
+    u32 size = 0, crc = 0;
+    u32 vendor = 0, device = 0, driver = 0, pointer = sizeof(void*);
+    u8 uuid[VK_UUID_SIZE] = {};
+  };
+  auto kept(std::span<const u8> data) const -> Kept {
+    Kept k;
+    k.size = data.size(), k.crc = nall::Hash::CRC32(data).value();
+    k.vendor = chosen.vendorID, k.device = chosen.deviceID, k.driver = chosen.driverVersion;
+    std::memcpy(k.uuid, chosen.pipelineCacheUUID, VK_UUID_SIZE);
+    return k;
+  }
+  auto pipelineData() -> std::vector<u8> override {
+    size_t size = 0;
+    if(lost || timedOut || !pipelineCache) return {};
+    if(vk.vkGetPipelineCacheData(device, pipelineCache, &size, nullptr) != VK_SUCCESS || !size) return {};
+    std::vector<u8> data(sizeof(Kept) + size);
+    if(vk.vkGetPipelineCacheData(device, pipelineCache, &size, data.data() + sizeof(Kept)) != VK_SUCCESS) return {};
+    data.resize(sizeof(Kept) + size);
+    Kept header = kept({data.data() + sizeof(Kept), size});
+    std::memcpy(data.data(), &header, sizeof(header));
+    return data;
+  }
   auto submit(const GPU::Recorded& recorded) -> bool override { return run(recorded, false); }
   auto finish(const GPU::Recorded& recorded) -> bool override {
     if(recorded.empty()) return !lost && waitAll();
@@ -1519,8 +1552,10 @@ struct VulkanBackend : GPU::Backend {
     return true;
   }
 
-  //(fast: Vulkan (fast), which blends with the GPU's own units throughout: nothing asks for rasterization order)
-  auto create(PFN_vkGetInstanceProcAddr getInstanceProcAddr, std::string& error, bool fast) -> bool {
+  //(fast: Vulkan (fast), which blends with the GPU's own units throughout: nothing asks for rasterization order;
+  //cached: the pipelines a session before made, as pipelineData() gave them)
+  auto create(PFN_vkGetInstanceProcAddr getInstanceProcAddr, std::string& error, bool fast,
+              const std::vector<u8>& cached) -> bool {
     if(!getInstanceProcAddr) {  //(none from the host: the system's loader)
       #if !defined(_WIN32)  //(Windows' host always hands its own over)
       #if defined(__APPLE__)
@@ -1615,7 +1650,6 @@ struct VulkanBackend : GPU::Backend {
     vk.vkGetPhysicalDeviceMemoryProperties(physical, &memoryTypes);
     //The most scale its pictures, framebuffers and viewports allow for a target 512 of the PSP's pixels across (at
     //most 10, as the settings offer)
-    VkPhysicalDeviceProperties chosen;
     vk.vkGetPhysicalDeviceProperties(physical, &chosen);
     auto& limits = chosen.limits;
     u32 largest = std::min({limits.maxImageDimension2D, limits.maxFramebufferWidth, limits.maxFramebufferHeight,
@@ -1829,8 +1863,23 @@ struct VulkanBackend : GPU::Backend {
       transforms = transformModule != VK_NULL_HANDLE;
     }
     auto cacheInfo = made<VkPipelineCacheCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO);
+    //(a session before's pipelines, where they're whole and this device's and driver's: Kept, and the driver's own
+    //header)
+    if(cached.size() > sizeof(Kept) + sizeof(VkPipelineCacheHeaderVersionOne)) {
+      std::span<const u8> data{cached.data() + sizeof(Kept), cached.size() - sizeof(Kept)};
+      Kept header, wanted = kept(data);
+      VkPipelineCacheHeaderVersionOne driver;
+      std::memcpy(&header, cached.data(), sizeof(header)), std::memcpy(&driver, data.data(), sizeof(driver));
+      bool ours = !std::memcmp(&header, &wanted, sizeof(header)) && driver.headerSize >= sizeof(driver) &&
+                  driver.headerSize <= data.size() && driver.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE;
+      if(ours) cacheInfo.initialDataSize = data.size(), cacheInfo.pInitialData = data.data();
+    }
     if(vk.vkCreatePipelineCache(device, &cacheInfo, nullptr, &pipelineCache) != VK_SUCCESS) {
-      pipelineCache = VK_NULL_HANDLE;
+      //(a driver refusing the data rather than leaving it out: a cache of none)
+      cacheInfo.initialDataSize = 0, cacheInfo.pInitialData = nullptr;
+      if(vk.vkCreatePipelineCache(device, &cacheInfo, nullptr, &pipelineCache) != VK_SUCCESS) {
+        pipelineCache = VK_NULL_HANDLE;
+      }
     }
     for(u32 mode = 0; mode < 3; mode++) {
       if(!(copyPipelines[mode] = makeCopyPipeline(mode))) return error = "the copy pipelines weren't made", false;
@@ -1869,9 +1918,10 @@ struct VulkanBackend : GPU::Backend {
   }
 };
 
-auto GPU::vulkan(void* getInstanceProcAddr, std::string& error, bool fast) -> std::unique_ptr<GPU> {
+auto GPU::vulkan(void* getInstanceProcAddr, std::string& error, bool fast, const std::vector<u8>& cached)
+  -> std::unique_ptr<GPU> {
   auto backend = std::make_unique<VulkanBackend>();
-  if(!backend->create((PFN_vkGetInstanceProcAddr)getInstanceProcAddr, error, fast)) return {};
+  if(!backend->create((PFN_vkGetInstanceProcAddr)getInstanceProcAddr, error, fast, cached)) return {};
   auto gpu = std::make_unique<GPU>(std::move(backend));
   gpu->fast = fast;
   return gpu;

@@ -922,6 +922,37 @@ static auto gpuTallTexture() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//A pipeline cache kept between sessions (System's "Pipeline Cache"): the renderer's pipelines, after the start-up
+//check made some, given to a renderer made afresh, which takes them (its cache as big from the start) and draws as
+//right (its check passes); and data it must leave out, each made into a renderer whose cache starts without it and
+//which draws right: another driver version's, another driver cache UUID's, a file cut short, one whose second half
+//is zeros (a power cut after it was written), and junk.
+static auto gpuPipelineCache() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::string error;
+  CHECK(gpu->check(error), true);
+  auto data = gpu->backend->pipelineData();
+  CHECK(data.size() > 64, true);
+  auto again = GPU::vulkan(nullptr, error, false, data);
+  CHECK((bool)again, true);
+  if(!again) return;
+  CHECK(again->backend->pipelineData().size() >= data.size(), true);
+  CHECK(again->check(error), true);
+  auto driver = data, uuid = data, cut = data, zeroed = data;
+  driver[24] ^= 1;   //(vulkan.cpp's Kept: the driver's version)
+  uuid[32] ^= 0xff;  //(its cache UUID)
+  cut.resize(data.size() / 2);
+  std::fill(zeroed.begin() + data.size() / 2, zeroed.end(), 0);
+  for(auto& left : {driver, uuid, cut, zeroed, std::vector<u8>(64, 0x5a)}) {
+    auto other = GPU::vulkan(nullptr, error, false, left);
+    CHECK((bool)other, true);
+    if(!other) continue;
+    CHECK(other->backend->pipelineData().size() < data.size(), true);
+    CHECK(other->check(error), true);
+  }
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
@@ -940,6 +971,7 @@ auto gpuTests() -> Tests {
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},
     {"gpu at 2 and 3 times the resolution: memory's bytes exact", gpuScaled},
     {"gpu above 1x: 2D quads meeting at a seam keep to their texels", gpuSeams},
+    {"gpu pipelines kept between sessions", gpuPipelineCache},
   };
 }
 

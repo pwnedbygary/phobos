@@ -57,6 +57,7 @@ struct System {
   u32 resolution = 1;            //the GPU's internal resolution (option "Resolution"): 1, the PSP's, to 10 times it
   bool failCheck = false;        //the start-up check made to fail (option "Renderer Check": a debug switch)
   bool lateFrames = false;       //the GPU's frames shown a frame or so late, not waited for (option "Late Frames")
+  string pipelineCache;          //the host's file the GPU's pipelines are kept in (option "Pipeline Cache")
   void* vulkanLoader = nullptr;  //the host's vkGetInstanceProcAddr (vulkanLoader()), none for the system's loader
   //The screen's picture: shown times the PSP's 480x272 each way, the GPU's read back at that size where it draws at
   //a higher resolution (at most MostShown: 1920x1088, a big window's), the software renderer's enlarged to it.
@@ -122,6 +123,12 @@ private:
   std::mutex noticeLock;
   std::string pendingNotice;  //(notice())
   auto startRenderer() -> void;
+  auto keepPipelines() -> void;
+  static constexpr u64 MostPipelineBytes = 32 << 20;  //(a kept pipeline cache's)
+  u64 pipelinesKept = 0;     //(the GPU's pipelines count as they were last kept)
+  u64 pipelineBytes = 0;     //(the kept cache's size, as read or last written)
+  u32 framesSinceKept = 0;
+  bool pipelinesUnkept = false;  //(its file couldn't be written: said once)
   auto tell(const std::string& text) -> void;
   friend auto notice() -> string;
 };

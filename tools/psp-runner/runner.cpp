@@ -31,6 +31,7 @@
 //                                frames (and PNGs) are then read back at up to 4 times the PSP's size
 //    --late-frames              the GPU's frames taken a frame or two late, nothing waited for each frame, as
 //                                when the app presents them (for timing, at 1x; PNGs then show an earlier frame)
+//    --pipeline-cache FILE      the Vulkan renderer's pipelines kept in FILE between runs, as the app keeps them
 //    --memory-stick DIR         the host folder standing for ms0: (a scratch folder by default)
 //    --fonts DIR                the PSP's system fonts (the .pgf files of a PSP's flash0), for the game's text
 //
@@ -369,6 +370,7 @@ auto main(int argc, char** argv) -> int {
   std::set<u32> pngAt;
   std::vector<std::string> pressItems;
   bool lateFrames = false;
+  std::string pipelineCache;
   bool interpreter = false;
   for(int i = 1; i < argc; i++) {
     auto option = std::string{argv[i]};
@@ -409,6 +411,7 @@ auto main(int argc, char** argv) -> int {
     else if(option == "--renderer") renderer = next();
     else if(option == "--resolution") resolution = parseUint(next(), option);
     else if(option == "--late-frames") lateFrames = true;
+    else if(option == "--pipeline-cache") pipelineCache = next();
     else if(option == "--memory-stick") memoryStick = next();
     else if(option == "--fonts") fonts = next();
     else if(option[0] == '-' && option[1] == '-') {
@@ -510,6 +513,7 @@ auto main(int argc, char** argv) -> int {
   if(!renderer.empty()) PlayStationPortable::option("Renderer", renderer.c_str());
   if(resolution) PlayStationPortable::option("Resolution", std::to_string(resolution).c_str());
   if(lateFrames) PlayStationPortable::option("Late Frames", "true");
+  if(!pipelineCache.empty()) PlayStationPortable::option("Pipeline Cache", pipelineCache.c_str());
 
   auto& psp = ares::PlayStationPortable::system;
   ares::platform = &host;
@@ -609,6 +613,7 @@ auto main(int argc, char** argv) -> int {
   //The GPU renderer's counts, before unloading lets it go; none if it didn't start (the software renderer drew).
   std::optional<PlayStationPortable::GPU::Statistics> gpu;
   if(psp.gpu) gpu = psp.gpu->statistics;
+  u64 pipelines = psp.gpu ? psp.gpu->backend->pipelines : 0, making = psp.gpu ? psp.gpu->backend->pipelineMaking : 0;
   bool ended = psp.kernel.exited;  //(unloading powers the kernel off, which forgets it)
   root->unload();
 
@@ -642,6 +647,7 @@ auto main(int argc, char** argv) -> int {
                 (unsigned long long)gpu->uploads, (unsigned long long)gpu->readbacks,
                 (unsigned long long)gpu->textures, (unsigned long long)gpu->copies,
                 (unsigned long long)gpu->pictures, gpu->waiting / 1e6 / frames);
+    std::printf("gpu pipelines: %llu made, %.1f ms making them\n", (unsigned long long)pipelines, making / 1e6);
   }
   std::printf("unique missing functions: %u\n", u32(missing.size()));
   auto byCount = [](auto& a, auto& b) {

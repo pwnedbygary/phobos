@@ -25,6 +25,19 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan pipelines kept between sessions — 2026-10-09
+
+Branch `cursor/psp-gpu-fast3-2b67`, on top of part 53's `cursor/psp-gpu-fast2-2b67`. docs/psp-core.md, part 54;
+docs/psp-gpu-renderers.md, the pipelines' paragraph and "Speed" (part 54). Software untouched; no picture changes.
+- **What:** System's option "Pipeline Cache" (the app's `psp_vulkan_pipeline_cache.bin` in its Vulkan cache folder,
+  beside the N64's; `psp-runner --pipeline-cache FILE`): the driver's pipeline cache read at the renderer's start and
+  written when pipelines were made (game end, every 600 frames, renderer let go), behind a header of our own (device,
+  driver version and cache UUID, pointer size, size, CRC-32) so damaged or foreign data never reaches the driver; a
+  cached renderer failing its check is made again without the file.
+- **RP6, second session against first** (driver's ms making pipelines; fps over 450 frames from a state): Turnip
+  fast, MC3 race 2,589 → 1.2 ms, 49.2 → 67.1; LCS city 1,074 → 0.6 ms, 85.5 → 103.6; Qualcomm fast, race 2,587 →
+  23 ms, 47.8 → 63.9. In the app, MC3's race start: 619/335/226 ms stalls → none over 30 ms.
+
 ## PSP renderer "Vulkan (fast)": the GPU transforms and lights 3D — 2026-10-09
 
 Branch `cursor/psp-gpu-fast2-2b67`, on top of part 52's `cursor/psp-gpu-fast-2b67`. docs/psp-core.md, part 53, has

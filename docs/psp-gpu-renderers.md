@@ -114,8 +114,19 @@ A **pipeline** is keyed by the 32-byte `Pipeline` struct: the constants, and wha
 (blend factors and operation, color write mask, depth test and write, stencil test and operations, the GPU's own
 logic operation). The backend makes each once, through a Vulkan pipeline cache, and keeps it (a game uses a few dozen:
 7 in Peace Walker's title, 45 in Midnight Club 3's race). The stencil masks and reference, the blend constant, the
-viewport and scissor are dynamic state, so they don't multiply pipelines. Pipelines made are kept for the session; a
-pipeline cache kept on disk between sessions is for the app wiring.
+viewport and scissor are dynamic state, so they don't multiply pipelines. Pipelines made are kept for the session,
+and since part 54 between sessions too: System's option "Pipeline Cache" names a host file (the app's is
+`psp_vulkan_pipeline_cache.bin` in its Vulkan cache folder, beside the N64's, or the saves folder), whose data the
+next `GPU::vulkan()` hands the driver as its cache's first data. `Backend::pipelineData()` gives the driver's data
+after a header of our own (vulkan.cpp's `Kept`: the device, the driver's version and cache UUID, a 64-bit or 32-bit
+build, the data's size and CRC-32), and only data whose header is this device's and driver's, and whose CRC holds,
+reaches the driver (some drivers crash on data they ought to refuse: a file cut short, damaged by a power cut, or a
+driver updated under it is left out). A renderer that took a kept cache and then fails its start-up check is made
+again without it, the file let go of; a driver refusing the data gets a cache of none. `System::keepPipelines()`
+writes the file where pipelines were made since (beside it, then renamed over it): as a game ends, every 600 frames,
+and as the renderer is let go of; the same size again is the same pipelines, and past 32 MB (every game's in one
+file) it's let go of for the next session to start afresh. A second session's pipelines are made in about a
+millisecond on Turnip and 8-24 ms on Qualcomm's driver, instead of seconds (part 54: "Speed").
 
 A GPU without dual-source blending gets the fragment shader built without its second output (`SINGLE`), and the
 factors it needs approximated (below).
@@ -701,16 +712,33 @@ Once its pipelines are made, fast mode on Turnip (the app's driver) is ahead of 
 software threads by 16-77% (WipEout 4.7 times); the emulation thread's ms a frame after the warm-up, accurate
 against fast: race 15.9 / 14.8, city 10.6 / 9.3, woods 8.7 / 7.2, WipEout 19.8 / 10.3. Over the whole run, the first
 150 frames' pipelines (more of them in fast mode) eat most of that: the race 49.2 against seven threads' 52.5, until
-a pipeline cache is kept between sessions. On Qualcomm's own driver fast mode is within 10% of the accurate mode
-either way (the city 10% ahead, the woods 10% behind) and 6-40% ahead of seven threads: its CPU time is lower (the
-woods 8.4 ms a frame against 8.6) but its GPU is slower with the vertex shader's work, the lighting with it, so the
-emulation thread waits for runs to finish (the woods 1.7 ms a frame against 0.6; Midnight Club 3's menu, which
-finishes every frame, 2.8 against 2.2, and 3.8 before the GE culled for the GPU, which drew 3.5 times the
-triangles). The two frames in flight cost the 2D scenes' uncapped speed on Qualcomm's driver (Peace Walker's title
+part 54 keeps the pipelines between sessions (below). On Qualcomm's own driver fast mode is within 10% of the
+accurate mode either way (the city 10% ahead, the woods 10% behind) and 6-40% ahead of seven threads: its CPU time
+is lower (the woods 8.4 ms a frame against 8.6) but its GPU is slower with the vertex shader's work, the lighting
+with it, so the emulation thread waits for runs to finish (the woods 1.7 ms a frame against 0.6; Midnight Club 3's
+menu, which finishes every frame, 2.8 against 2.2, and 3.8 before the GE culled for the GPU, which drew 3.5 times
+the triangles). The two frames in flight cost the 2D scenes' uncapped speed on Qualcomm's driver (Peace Walker's title
 1188 → 798), nothing at the app's 60. What fast mode cost on the way: the GE deciding which triangles are drawn (the
 review's fix for the near plane) costs the race about 1.3 ms a frame of the CPU's (74.0 → 67.1 frames a second
 after the warm-up), the city 115.8 → 105.1; the world, view and projection matrices made one for it won back 3% of
 that.
+
+**Part 54** (the pipelines kept between sessions): each scene run twice from its state with the runner's
+`--pipeline-cache`, the first from an empty cache, the second from what the first kept; the time the driver took
+making the pipelines, and frames a second over the whole 450 frames:
+
+| Scene | Turnip fast: pipelines, ms, fps (first / second) | Qualcomm's fast | Turnip accurate | Qualcomm's accurate |
+|---|---|---|---|---|
+| Midnight Club 3, race | 79: 2589 / 1.2 ms, **49.2 / 67.1** | 2587 / 23 ms, **47.8 / 63.9** | 872 / 0.8 ms, 54.3 / 60.2 | 1497 / 14 ms, 49.2 / 57.6 |
+| Liberty City Stories, city | 47: 1074 / 0.6 ms, **85.5 / 103.6** | 1258 / 13 ms, **78.8 / 95.7** | 403 / 0.5 ms, 85.6 / 90.9 | 734 / 8 ms, 78.5 / 87.5 |
+| Peace Walker, tutorial play | 44: 790 / 0.6 ms, **105.2 / 123.8** | 1106 / 12 ms, **93.1 / 113.0** | 462 / 0.5 ms, 108.5 / 119.7 | 821 / 8 ms, 97.4 / 113.8 |
+| WipEout Pure, race | 78: 2559 / 1.2 ms, **55.4 / 78.6** | 2423 / 24 ms, **55.1 / 75.6** | 757 / 0.9 ms, 37.3 / 39.5 | 1227 / 12 ms, 63.9 / 75.6 |
+
+So from a game's second session on, fast mode is ahead of seven software threads over a whole run from a state too
+(the race 67.1 against 52.5, the city 103.6 against 70.4, Peace Walker 123.8 against 100.6), as fast as after its
+warm-up. Fast mode makes more pipelines than the accurate mode (its transform pipelines, 79 against 62 in the race)
+and each takes Turnip longer (33 ms against 14), which the first session still pays. The files: 0.5-1.3 MB (Turnip),
+0.15-0.5 MB (Qualcomm's driver) for a scene's pipelines.
 
 Host frames a second, the same 300 frames from each scene's state (the M1's GPU runs 120): the software renderer on
 1 and 7 drawing threads, then the Vulkan renderer (one thread: the GE's).
@@ -870,15 +898,14 @@ software renderer.
    from the GPU, measured in the app with the system and a custom driver.
 3. **Upscaling** (part 44, done): an internal resolution from 1 (exact) to 10 times the PSP's, and presenting the
    target's image on Android's window without reading it back.
-3a. **Speed** (part 52, done): the renderer's own waste found with a profile and cut, both modes; still to do, block
-   transfers on the GPU, a pipeline cache kept on disk, and the CPU's transform (Vulkan (fast), part 53).
+3a. **Speed** (part 52, done): the renderer's own waste found with a profile and cut, both modes; the CPU's transform
+   (Vulkan (fast), part 53); a pipeline cache kept on disk (part 54); still to do, block transfers on the GPU.
 4. **Accuracy**: shader blending (part 45, done: blending, dithering, logic operations, write masks and 16-bit
    formats as the PSP's, on every Vulkan GPU); still to do, depth read back where games need it, block transfers
    between targets on the GPU, textures decoded on the GPU.
 5. **OpenGL** (parked 2026-10-08): not worth a second HW backend yet; Software is the non-Vulkan path. Revisit only if telemetry shows need.
 6. **Vulkan (fast)** (part 53, done): the GPU's transform and lighting for 3D, the GE's rules for which triangles are
-   drawn, the GPU's blending; still to do, a pipeline cache kept on disk (fast mode makes more pipelines in a game's
-   first minutes), the bones in a block of their own (so that Peace Walker's small skinned PRIMs could go to the GPU
-   too, and every 3D PRIM take one path), less for Qualcomm's own driver's GPU to do (fast mode's waits there grow),
-   and textures decoded on the GPU (palettes, swizzling, DXT: about 0.4 ms a frame of the CPU's in the race since
-   part 52, so later).
+   drawn, the GPU's blending; its pipelines kept on disk (part 54); still to do, the bones in a block of their own
+   (so that Peace Walker's small skinned PRIMs could go to the GPU too, and every 3D PRIM take one path), less for
+   Qualcomm's own driver's GPU to do (fast mode's waits there grow), and textures decoded on the GPU (palettes,
+   swizzling, DXT: about 0.4 ms a frame of the CPU's in the race since part 52, so later).
