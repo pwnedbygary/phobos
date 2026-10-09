@@ -87,6 +87,13 @@ auto Kernel::sceDisplayIsVblank() -> void {
   result(inVblank());
 }
 
+//Whether a frame buffer is shown (pspdisplay.h): 1 with one set, 0 with none (0, the display off), as pspautotests'
+//display/isstate recorded. (It recorded 1 still just after a frame buffer of 0 was set for the next frame; frame
+//buffers here change at once.) Power Stone Collection asks.
+auto Kernel::sceDisplayIsForeground() -> void {
+  result(display.frameBuffer != 0);
+}
+
 //The lines the display has gone through since this frame's vertical blank started.
 auto Kernel::hcountLines() const -> u32 {
   return u32((cycles - (nextVblank - VblankCycles)) / LineCycles);

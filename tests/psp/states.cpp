@@ -163,8 +163,9 @@ static auto stateFields() -> void {
   auto& ge = a.system.ge;
 
   //one of everything
+  //where start() would put a PRX (module.relocatable, which the changes below set) and its block
   k.module.segments = {{0x0880'4000, 0x100}};
-  u32 programBlock = k.allocate(0x100, 2, 0x0880'4000, "program")->uid;  //where start() would put it
+  u32 programBlock = k.allocate(0x4100, 2, Kernel::UserMemory, "program")->uid;
   k.module.imports = {{"Lib", 0x1111, 0x0880'5000}};
   k.module.exports = {{"Lib", 0x2222, 0x0880'6000, false}};
   k.module.skipped = {"left out"};
@@ -1142,7 +1143,10 @@ static auto stateFields() -> void {
   });
   refuses("an mpeg call past a ring's packets", [&] {
     auto& call = k.mpegCalls.at(one);
-    call.put = 4096 - call.left + 1;
+    call.put = Kernel::RingMostPackets - call.left + 1;
+  });
+  refuses("an mpeg call with more left than any ring has", [&] {
+    k.mpegCalls.at(one).left = Kernel::RingMostPackets + 1;
   });
   refuses("an mpeg call feeding a ringbuffer nowhere", [&] { k.mpegCalls.at(one).ringbuffer = 0x1000; });
   refuses("a font call given more than it asked for", [&] { k.fontCalls.at(two).got.push_back(1); });
