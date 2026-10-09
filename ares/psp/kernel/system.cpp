@@ -91,6 +91,13 @@ auto Kernel::sceKernelStopUnloadSelfModuleWithStatus() -> void {
   unloadSelf(s32(arg(0)), arg(1), arg(2), arg(4));
 }
 
+//(argument size, argument, where to put module_stop's status, options): the same with no exit status of its own
+//(pspmodulemgr.h), the calling thread ending with 0 (chosen: nothing recorded says). MediEvil Resurrection's program
+//ends so once it has started the game's module.
+auto Kernel::sceKernelStopUnloadSelfModule() -> void {
+  unloadSelf(0, arg(0), arg(1), arg(3));
+}
+
 //(which setting, where to put it): the system's settings (psputility_sysparam.h). Language 1 is English; button
 //swap 1 means the cross button confirms, as outside Japan; anything else reads 0.
 auto Kernel::sceUtilityGetSystemParamInt() -> void {

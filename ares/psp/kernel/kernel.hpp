@@ -1821,6 +1821,7 @@ struct Kernel {
   auto sceKernelExitGame() -> void;
   auto sceKernelSelfStopUnloadModule() -> void;
   auto sceKernelStopUnloadSelfModuleWithStatus() -> void;
+  auto sceKernelStopUnloadSelfModule() -> void;
   auto sceUtilityGetSystemParamInt() -> void;
   auto sceNetInetUnavailable() -> void;
   auto sceKernelGetSystemTimeWide() -> void;

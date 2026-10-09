@@ -473,6 +473,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ModuleMgrForUser",  "sceKernelSelfStopUnloadModule", &Kernel::sceKernelSelfStopUnloadModule);
   addNID("ModuleMgrForUser", "sceKernelStopUnloadSelfModuleWithStatus", 0x8f2d'f740,
          &Kernel::sceKernelStopUnloadSelfModuleWithStatus);
+  add("ModuleMgrForUser",  "sceKernelStopUnloadSelfModule", &Kernel::sceKernelStopUnloadSelfModule);
   add("ModuleMgrForUser",  "sceKernelLoadModule",           &Kernel::sceKernelLoadModule);
   add("ModuleMgrForUser",  "sceKernelLoadModuleByID",       &Kernel::sceKernelLoadModuleByID);
   add("ModuleMgrForUser",  "sceKernelStartModule",          &Kernel::sceKernelStartModule);
