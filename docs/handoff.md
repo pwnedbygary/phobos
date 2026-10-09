@@ -25,6 +25,30 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: the emulation thread faster again — no drawing for its own textures, batches in a ring — 2026-10-08
+
+Branch `cursor/psp-cpu-speed4-2b67`, on top of #178's `cursor/psp-ge-fits-2b67` (72443bc4d). docs/psp-core.md, part 47,
+has the profile, the waits, every number and what's left. Clean room: no PPSSPP or JPCSP source read.
+- **The GE** (`ares/psp/ge/`), five commits: deferred (render-to-texture) decodes stay with their batch, their pages
+  busy for the CPU till decoded (part 46's could go stale, and ran `memory.watch()` off the emulation thread); a 2D
+  sprite's texture rows exactly as its pixels reach them; batches in a ring of eight, the CPU waiting only for the
+  drawing it touches; a primitive that can't change any pixel isn't drawn; 2D sprites drawing over their own texture
+  drawn from a copy where none reads a texel it has drawn (Midnight Club 3's bloom).
+- **Exact**: the six scenes, 300 frames at 1 and 7 GE threads, every frame's picture and VRAM, RAM and the whole state
+  identical to 72443bc4d after each commit; RP6 end states match unsettled. tests/psp 335/0 (sanitized; 340/0 with #179's
+  desktop tests, merged in after), tests/allegrex 58/0, tests/psp/ares 307/0. Three independent reviews; their findings fixed (one change to a result: a skipped
+  primitive's unmapped texel reads, which a state counts, now guarded).
+- **Faster** on the RP6 (medians, the app not running): at 7 GE threads Midnight Club 3's race 34.0 to 53.5 fps (the
+  emulation thread 26.0 to 18.5 ms a frame), its menu 33.3 to 71.9, GTA's city 55.1 to 78.8, its woods 53.3 to 71.8,
+  Peace Walker's title 213.7 to 224.5, Lumines 171.3 to 182.7; at 1 thread the menu 25.6 to 30.5, the race, city and
+  woods 1.5-2% faster, Peace Walker and Lumines the same.
+- **Next**: at 7 threads the emulation thread is now the CPU (compiled code; VFPU with prefixes interpreted) and the
+  GE's setup (project's divisions, lighting, vertex and job copies); at 1 thread the rasterizer, bound by exact
+  divisions.
+- Scratch: `~/phobos-work/scratch/cpu-speed` (build4.sh, build-android4.sh, rp6-run4.sh, rp6-measure4.sh, rp6-hold.sh,
+  ge-inst4-patch.py); RP6 `/data/local/tmp/cpu-bench4`. The RP6 is shared: hold `~/phobos-work/rp6.lock` (a live PID:
+  rp6-hold.sh in the background), and time only while the Phobos app isn't running.
+
 ## PSP GE: fog amount fixed at each corner (measurement fits) — 2026-10-08
 
 Branch `cursor/psp-ge-fits-2b67`, on `cursor/psp-vfpu-fits-2b67` (#177; #175 and #172 under it). PR #178. Clean room: Phobos measurement data only

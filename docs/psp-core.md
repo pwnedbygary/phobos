@@ -5585,3 +5585,175 @@ The race's emulation thread stays about 24 ms a frame either way (within round n
 **Left, and why:**
 - Primitives that can't wait in a batch, and those drawn at once (textures read from memory as they're drawn).
 - Holding registers across block chains; VFPU with prefixes and rarer instructions still interpreted.
+
+## Part 47: the emulation thread faster again — no drawing for its own textures, batches in a ring
+
+On branch `cursor/psp-cpu-speed4-2b67`, on top of #178's `cursor/psp-ge-fits-2b67` (72443bc4d). The task as in parts 38,
+43 and 46: the Software renderer faster at 1 and 7 GE threads, nothing changed in any result. Original code: no PPSSPP
+or JPCSP source was read.
+
+**The scenes** are part 46's six at StateVersion 17 (`~/phobos-work/scratch/cpu-speed/scenes`). Each commit was checked
+against 72443bc4d in all six, 300 frames at 1 and 7 GE threads: every frame's picture and all of VRAM (drawing settled
+each frame), then RAM and the machine's whole serialized state at the end. On the RP6 the end states were also
+compared without settling each frame.
+
+**Where the time went.** simpleperf on the RP6 at 72443bc4d, with line tables (`-gline-tables-only`, which leaves the
+code as it was):
+- 1 GE thread: the emulation thread is mostly drawing. Midnight Club 3's race: triangles into its 8888 frame buffer 44%
+  of the thread (nearly all of it four pixels at a time: the texel gather 29% of that, the pixel pipeline 21%, the depth
+  test 15%), sprites 13%, compiled code 11%, the GE's setup about 14%. GTA's city: triangles 55%. Peace Walker's
+  title: 3D sprites into 5551, 86%. Lumines: triangles 75%.
+- 7 GE threads, the race (the emulation thread about 26 ms a frame, the bottleneck; the workers about a third busy):
+  compiled code 5.7 ms, the GE's setup about 7.5 ms (`drawVertices` 2.3, `project` 1.8, `triangle` 1.1, reading
+  vertices 1.5, clipping 0.5), and its own drawing about 6 ms.
+
+Why the emulation thread draws at 7 threads, by a scratch count of where it draws and waits (ms a frame, drawing +
+waiting for the workers):
+- Midnight Club 3's race: 4 primitives a frame that draw over their own texture (texture.cpp's `drawsOver()`): each is
+  drawn at once, reading its texels from memory as it draws, so the whole batch before it is drawn first (4.7 + 1.2),
+  then the primitive itself, slowly (1.1). Its menu: 5 a frame, 7.0 + 3.4, then 7.0.
+- GTA's city: filling a batch again (two of them) that's still being drawn: 4.3 + 1.6. Its woods: 2.1 + 4.2. Lumines:
+  3.1 + 0.5.
+- Peace Walker's title: the screen's picture reading pixels still being drawn: 3.1.
+
+Midnight Club 3's primitives are its bloom: the frame buffer shrunk to 64 by 64 (a sprite of v = 0 at its top edge,
+filtered, so its rows couldn't be bounded: all 512, which reach the 64 by 64 target), that brightened in place twice,
+1:1, filtered, each texel its own pixel's; another target halved in place; and in the menu, a pass whose blending
+keeps every pixel as it is (a fixed 0 for the source, a fixed 255 for the destination) over 512 by 320 pixels, and
+one shrinking its own frame buffer a little from its top left.
+
+**What was done**, one commit each:
+1. **Deferred decodes stay with their batch, their pages busy for the CPU** (`texture.cpp`, `threads.cpp`, `draw.cpp`,
+   `memory.*`). Part 46's deferred decode (render to texture) ran on whichever thread started its batch and went into
+   the shared texture cache, calling `memory.watch()` off the emulation thread (the recompiler's `protect()`); its copy,
+   of VRAM as the batch started, could go stale under primitives set up before it existed (their changes heard of before
+   it was kept); and the CPU could write the texture before the batch read it, its pages not busy. Now each batch
+   decodes its own (`ensureDecoded()`, a copy shared by its Looks with the same texture and palette), the cache is the
+   GE thread's alone again (no mutex), and the texture's pages (`Batch::reads`) are busy for the CPU until the decode
+   has run (`readsDone`). `Memory::knownDrawn` lets a thread read VRAM it knows is drawn without waiting or looking at
+   the busy pages: the deferred decodes, and the GE thread's own reads after `drawnFirst()` (a texture's decode, a
+   palette's copy). It's what the rest builds on; alone it changes the scenes' speed by little (below).
+2. **A 2D sprite's texture rows as its pixels reach them** (`draw.cpp`'s `spriteReach()`). A sprite's texture
+   coordinate runs one way along its job, so the rows (and columns) its pixels take, the filter's second texel too, are
+   those at the job's two ends, worked out with the drawing code's own arithmetic (`spriteAxis()`, shared with
+   `raster.cpp` and `four.cpp`; `texelSpot()`, `texelAxis()` before it wraps). The software renderer decodes that many
+   rows (in eights), not the vertices' estimate. Midnight Club 3's and GTA's shrunk frame buffers are then no longer
+   taken as drawing over their own textures, and GTA's deferred decode of its frame buffer keeps 280 rows busy, not
+   512 (whose last rows were the displayed buffer, which the screen's picture then waited for).
+3. **Batches in a ring of eight; the CPU waits only for the drawing it touches** (`threads.cpp`). With two batches the
+   GE's thread waited for the older one to be drawn whenever it launched the next. Now batches are filled in turn, eight
+   of them, the GE's thread waiting only to fill one still launched (the oldest); a batch all drawn is marked
+   (`finished`), and those are emptied at each list's start, their pages given back to the CPU (`reap()`). Whoever
+   touches busy pages waits only for the batches up to the last one reaching those bytes (`settleOver()`, through
+   `Memory::finishDrawingOver`), drawing bands too, then gives back what's drawn; the rest go on being drawn. The GE's
+   own reads of VRAM skip batches all drawn.
+4. **A primitive that can't change any pixel isn't drawn** (`draw.cpp`'s `keepsPixels()`). Blending with a fixed 0 for
+   the source and a fixed 255 for the destination gives (2d + 1) × 511 >> 10 = d for every d up to 255, and each
+   format's channels widened and narrowed again are the bits they were, so with no dither, logic operation, stencil
+   test or depth written every pixel is written back as it was. Such a primitive is set up and what it may draw over
+   reported as before, but not drawn nor its texture decoded, unless reading its texels would have been reported (no
+   memory behind them, or a format the PSP doesn't have: `memory.unmapped` counts those in the saved state).
+5. **Sprites drawing over their own texture from a copy, where none reads what it drew** (`draw.cpp`'s
+   `readsAhead()`). The old way, reading memory as it draws, sees the pixels the primitive has drawn by then. A copy
+   taken first draws the same when no pixel takes a texel, with a weight that isn't 0, that the primitive has drawn by
+   then, drawing its jobs in order, each row by row, left to right. For unturned 2D sprites into a frame buffer laid out
+   as the texture is (the same bytes from row to row, a texel a pixel, VRAM's plain copies), a texel is a pixel a whole
+   number of rows and columns away, so it's checked exactly from each job's columns and rows: none in an earlier job's
+   area, none in a row above the pixel's in its own, none left of it in its row. Such a texture is decoded (at once,
+   or deferred to its batch's start) and the primitive batched like any other.
+
+**How it's known to be exact:**
+- The six scenes, 300 frames at 1 and 7 GE threads, after each commit: every frame's picture and VRAM, RAM and the whole
+  serialized state identical to 72443bc4d's. On the RP6, the end states of all six matched unsettled, every build.
+- `tests/psp/run-tests.sh` (sanitized): 335 groups, none failing (340 after merging #179's desktop tests in). New:
+  `ge deferred texture busy` (a deferred texture's pages busy for the CPU, its store landing after),
+  `ge batches round the ring` (more than eight batches, against one thread), `ge drawn over its own texture` (the
+  bloom's passes in two lists at 1, 2, 4 and 8 threads, shared however small, against a machine that keeps nothing
+  decoded), `draw over its own texture from a copy` (each frame buffer format: passes `readsAhead()` takes and turns
+  down, from texture layouts at an offset, through VRAM's third copy, of palette indices, each against reading memory),
+  `draw keeping every pixel`. `ge drawn on several threads` checks that what the CPU touched is drawn (not everything
+  settled); `draw textures kept decoded, their rows` keeps 16 rows, not 24 (those the sprite takes).
+  `tests/allegrex/run-tests.sh`: 58 groups, none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing (the
+  parent's count on this machine too).
+- Three independent read-only reviews. The first (commits 1-3) found no change to any result; its points were taken:
+  a test's expectation, an uninitialized read after `spriteReach()` failed, `reap()` returning before giving back stale
+  busy pages and `settleOver()` not giving any back, `reads` counted after their decode ran, the workers' formally
+  racy look at the busy pages (now `knownDrawn`), comments, and the commits' order (deferred decodes first). The second
+  (commits 4-5) found the one change to a result: a skipped primitive whose texels have no memory behind them no
+  longer counted those reads in `System::unmappedReports`, which save states keep, now guarded; and asked for more
+  test cases and a smaller capture for the `readsAhead()` callback. The third checked those fixes and found one more:
+  `Memory::knownDrawn` around a palette's whole load also covered its byte-by-byte read past a VRAM copy's end, which
+  `drawnFirst()` hadn't seen (now only the copy within one area skips the wait); and asked for tests of the skip's
+  guard, of `decode()` taking the copy, and of the CPU's loads while batches draw. Those were added, and it confirmed
+  the result.
+
+**The numbers.** The RP6, the runner from adb's shell (unpinned), the Phobos app not running (checked before and after
+each round; a first set of rounds, during which the app was started, was thrown away). Medians, the builds taking
+turns. fps is the frame loop's; thread is the emulation thread's CPU time, ms a frame. The end states of all six
+scenes were the same in every build, every round.
+
+7 GE threads, 72443bc4d → the last commit, four rounds:
+
+| scene | fps | thread ms |
+| --- | --- | --- |
+| MC3 race | 34.0 → 53.5 | 26.0 → 18.5 |
+| MC3 menu | 33.3 → 71.9 | 26.1 → 13.1 |
+| GTA city | 55.1 → 78.8 | 16.3 → 11.5 |
+| GTA woods | 53.3 → 71.8 | 14.9 → 11.3 |
+| Peace Walker title | 213.7 → 224.5 | 4.23 → 4.09 |
+| Lumines demo | 171.3 → 182.7 | 4.95 → 4.67 |
+
+At 7 threads the RP6's frames a second move with the cores the threads land on (part 38): the base's race ran at
+32.8-35.3 here, 36-40 in part 46's rounds; the last commit's at 52.7-56.1.
+
+1 GE thread, three rounds (steady to under 1%):
+
+| scene | fps | thread ms |
+| --- | --- | --- |
+| MC3 race | 23.02 → 23.37 | 43.2 → 42.6 |
+| MC3 menu | 25.60 → 30.49 | 38.9 → 32.7 |
+| GTA city | 38.93 → 39.68 | 25.6 → 25.1 |
+| GTA woods | 38.97 → 39.79 | 25.6 → 25.0 |
+| Peace Walker title | 66.00 → 66.16 | 15.11 → 15.07 |
+| Lumines demo | 91.04 → 90.95 | 10.30 → 10.25 |
+
+At 1 thread only the menu moves much: its pass that keeps every pixel (164,000 pixels a frame, read from memory as it
+drew) isn't drawn, and the in-place passes go four pixels at a time from their copies. The rest is the rasterizer.
+
+Step by step at 7 threads (fps, medians of two rounds; base, then after each commit):
+- MC3 race: 34.1, 37.5, 37.2, 39.0, 38.8, 55.1.
+- MC3 menu: 33.6, 37.2, 39.2, 34.8, 39.3, 74.9.
+- GTA city: 54.9, 55.4, 59.6, 84.5, 80.6, 80.4.
+- GTA woods: 56.6, 51.0, 75.0, 67.6, 79.6, 75.2.
+- Peace Walker title: 214.2, 215.1, 214.4, 225.9, 225.9, 225.2.
+- Lumines demo: 174.2, 175.4, 171.7, 187.6, 188.2, 187.2.
+
+The ring (commit 3) is GTA's, Peace Walker's and Lumines' step; the copies (commit 5) and the skipped pass (commit 4)
+Midnight Club 3's. The exact rows (commit 2) help GTA by themselves (its shrunk frame buffer no longer read from
+memory every other frame) and are what lets Midnight Club 3's downsample, and every deferred decode, go to the
+workers. Commits 1 and 2 alone move the race and menu within a 7-thread run's spread. With the last commit, the race's
+workers are each about 60% busy and the emulation thread is the bottleneck still, at about 18 ms a frame:
+compiled code 5.4, the GE's setup about 7, the rest the kernel, the VFPU's interpreted instructions and the like;
+it no longer draws for its own textures.
+
+**Left, and why:**
+- At 7 threads the emulation thread is now its own work: the CPU (the race's compiled code about 5.4 ms a frame; the
+  VFPU with prefixes set, and the FPU's remaining conversions, still interpreted; registers held only within a block)
+  and the GE's setup (about 7 ms in the race: `project()`'s four divisions a vertex, lighting, each vertex built and
+  copied, each job copied into its batch). Each is spread thin; none is a large step alone.
+- At 1 thread the frame is drawing, four pixels at a time, bound by divisions that must stay as they are: a lit,
+  fogged, perspective-textured triangle makes about eleven four-wide divisions a four. Nothing exact is left there of
+  the size of what's above.
+- A deferred own-texture sprite is drawn a pixel at a time (`fourFriendly()` decides as the job is recorded, before the
+  copy exists); one decoded at once goes four at a time.
+- `readsAhead()` covers unturned 2D sprites in a frame buffer laid out as their texture; others drawing over their own
+  texture are still drawn at once from memory. It re-derives the jobs and relies on raster.cpp's order for such a
+  primitive: a change to either must keep them in step.
+- Deferred decodes aren't kept between batches (a texture deferred in two batches is decoded twice: about 1.25 ms a
+  frame in the race, over all threads).
+- The screen's picture reading pixels still being drawn (Peace Walker's title) still waits for them. A CPU touching a
+  busy page no batch still draws over gives nothing back till a wait or the next list (it goes the slow way meanwhile).
+- Older, seen by the reviews, left as they were: `drawnFirst()`'s span stops at a VRAM copy's end, so a palette or
+  vertices running past it into the next copy aren't waited for there (the palette's byte-by-byte read still waits in
+  `pointer()`); and `vramGuard` giving a page back calls the recompiler's `writable()`, which lets compiled stores go
+  straight to it even if code was compiled from it (only code run from VRAM the GE draws or reads would notice).
