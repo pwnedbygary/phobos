@@ -25,6 +25,32 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: character conversion, thread-local storage, lent stacks; PGD holds five black games — 2026-10-09
+
+Branch `cursor/psp-hle-games11-2b67`, on top of #184's `cursor/psp-vk-play-2b67` (its PR targets that branch).
+docs/psp-core.md, part 55, has the evidence; docs/psp-compatibility.md's changed rows are updated. Clean room: no
+PPSSPP or JPCSP source read.
+- **Fixes** (each its own commit, with tests): sceCcc, the character conversions, as ccc/convertstring recorded (The
+  King of Fighters - Orochi Saga: black to its autosave notice); thread-local storage pools and
+  sceKernelTryLockLwMutex_600, as threads/tls and threads/lwmutex/try600 recorded (God Eater 2: black to its fan
+  translation's notice that its DLC file isn't on the stick); sceKernelExtendThreadStack (part 51's) with its review's
+  two findings fixed, module_stop's argument kept past a lent stack's end and the trampoline rewritten as states load
+  (Dragon Ball Z: Tenkaichi Tag Team: its autosave notice, then PGD).
+- **Re-judged**: Persona 3 Portable reaches its title; frame 3600 falls on its attract loop's loading screen.
+- **Numbers** (against the report): menu or gameplay 175 -> 178, loading 5 -> 4, black or hang 21 -> 19. The base
+  commit's runner and this branch's on 53 games: every other game's frames the same, or an animation step apart.
+- **Checks**: tests/psp 373/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; two independent reviews, their
+  findings fixed. Save states version 20 (18 sceCcc, 19 TLS pools, 20 lent stacks); a version 17 state from the base
+  runner loads and carries on byte for byte (Lumines, Patapon 2).
+- **Left**: PGD decryption holds Black Wolves Saga, Dragon Ball Z, Shining Blade, Valkyria Chronicles III and Naruto
+  Shippuden: Ultimate Ninja Impact (AMCTRL's cipher has no allowed description, and its checks need keys not committed:
+  an owner's call). scePauth/sceJpeg (both Monster Hunter Portable 3rds; the HD one also needs 26.5 MiB of user memory).
+  Need for Speed: Most Wanted's GE RET with no CALL (the GE's part). Def Jam, Ridge Racer, Crush, Tekken DR and the
+  rest of the report's black list; ProStreet's crash; scePower 0xa85880d0, scesupPreAcc, sceMt19937.
+- Scratch: `~/phobos-work/scratch/hle11` (apply-hooks.py and sync-dbg.sh for a traced runner; at/run.sh runs a
+  pspautotests program against its recording; quick-tests.sh builds chosen test groups in seconds; build-commit.py split
+  the commits; evidence/ has both runners' frames; survey/ the traces).
+
 ## PSP Vulkan renderer: in play on the RP6, blending without rasterization order, the 8x line — 2026-10-09
 
 Branch `cursor/psp-vk-play-2b67`, on top of #186's `cursor/psp-hle-games10-2b67` (#183, #182 and #180 under it). PR #184. docs/psp-core.md, part

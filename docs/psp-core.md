@@ -6325,3 +6325,122 @@ Dark Resurrection, Valhalla Knights, Valkyria Chronicles III, PaRappa the Rapper
 Need for Speed - ProStreet crashes after its notice. Both God of War games are too slow to reach frame 3600 in 1200
 s. Vulkan draws what the software renderer draws in all 11 gameplay games, but 3D gameplay is much slower on it
 (docs/psp-compatibility.md, "Vulkan spot checks").
+
+## Part 55: character conversion, thread-local storage, lent stacks, and what keeps the black games black
+
+On branch `cursor/psp-hle-games11-2b67`, on top of #184's `cursor/psp-vk-play-2b67` (#186's re-run under it). Sources:
+pspautotests' programs and their recordings (each named below; the programs themselves were also run through the kernel
+by a scratch runner answering their emulator devctl, their output compared with the recordings line for line), pspsdk's
+headers, the PSP Developer Wiki (through the Wayback Machine) and the games' own behaviour, traced with a scratch
+runner. No PPSSPP or JPCSP source was read.
+
+**1. sceCcc, character code conversion** (`ccc.cpp`). The King of Fighters - Orochi Saga's first call is
+sceCccDecodeUTF8 on "Loading...", in a loop that ends only as the pointer reaches the string's end: refused, the pointer
+never moved, and the game spun there for good (4.6 million calls in its first 30 frames, 9 frames a second, black). The
+whole library is here now, as ccc/convertstring recorded it for all six conversions (UTF-8, UTF-16 and Shift-JIS, each
+way): a conversion returns how many characters it wrote, not counting the terminator; the destination's size is in
+bytes, and a character is written only while it fits with room for the terminator after it (a UTF-16 destination of 1
+byte gets nothing, of 2 just the terminator, of 4 one character); no destination converts nothing; input that isn't
+valid converts to nothing. Shift-JIS goes through the JIS tables the program gives (sceCccSetTable: the library has none
+of its own, "crashes without table set"), indexed by JIS code, a Shift-JIS pair turned into its JIS code the standard
+way. Decoding and encoding one character move the program's pointer past it; the error characters (sceCccSetErrorChar*)
+stand for what can't be decoded or encoded, and are 0 until set, which ends the string (chosen: it's what makes the
+recording's invalid input come out empty; no recording shows their first values). The tables' addresses and the error
+characters are kept in states (layout 18). The convertstring program itself prints exactly what the PSP printed, with
+the test's own tables.
+
+**2. Thread-local storage pools** (`tls.cpp`): sceKernelCreateTlspl, DeleteTlspl, FreeTlspl, ReferTlsplStatus, the
+system call _sceKernelAllocateTlspl and Kernel_Library's sceKernelGetTlsAddr. God Eater 2 makes its pools at boot,
+asserted on the refusal, and stopped. As threads/tls's ten programs recorded: a pool of blocks of one size, each thread
+holding one at most and getting the same one when it asks again; blocks handed out in turn from the one after the last
+handed out (0, 1, 2 and 0 again), not the lowest; zeroed as they're handed out and as they're freed; a thread's blocks
+back as it ends; waiters served in order or by priority (0x100), a timeout as every wait's; deleting refused while
+another thread holds a block (0x800201d2); 16 pools at most (0x800201d1); creation's checks in create's order, the
+memory a pool takes (blocks rounded up to their alignment, 4 bytes at least, and nothing more), partitions 2, 5 and 6
+taken. Given an ID that isn't a pool's, sceKernelGetTlsAddr answers by its bits 3 to 6, as the index of a pool in which
+the thread holds a block (0 and 1 gave the first pool's block, 0xf the second's, a deleted pool's ID nothing): the
+library looks in the thread's own list before it calls the kernel. So a pool's ID carries its index there: the next ID
+up that does, those passed over never handed out. From an interrupt handler sceKernelGetTlsAddr gives NULL (intr/waits).
+Chosen: partition 5's memory comes from the user partition (the kernel hands out no other), and a handler has no thread
+to hold, free or delete a block for. Pools, holders and threads waiting for a block are kept in states (layout 19),
+checked as they load. Nine of the ten programs print what the PSP printed; the tenth (delete) interleaves two threads'
+lines differently, the PSP's slower output through PSPLink letting a thread's delay run out first. threadmanidlist's
+pool line matches now too.
+
+**3. sceKernelTryLockLwMutex_600** (Kernel_Library 0x37431849), God Eater 2's other call. As threads/lwmutex/try600
+recorded, it locks in the work area alone, as the user-mode library does (a work area made by hand locks too): a count
+under 1 is ILLEGAL_COUNT, and so is a count but 1 for a free mutex that isn't recursive; its holder trying again,
+LWMUTEX_RECURSIVE for one that isn't, LWMUTEX_LOCK_OVERFLOW past 2^31 - 1 for one that is; held by another,
+LWMUTEX_LOCKED; a deleted one, LWMUTEX_NOTFOUND, which sceKernelDeleteLwMutex now marks by writing -1 to the work area's
+ID (it wrote 0, which a hand-made one has). Every line that turns on the new function matches; the two that differ come
+from the older sceKernelLockLwMutex refusing a hand-made work area (part 32's known difference).
+
+**4. sceKernelExtendThreadStack**, part 51's (written and reviewed on a side branch), with that review's two findings
+fixed. A function runs on the calling thread with a stack lent for the call, its result returned, as
+threads/threads/extend recorded line for line. A program unloading itself from inside such a call
+(sceKernelSelfStopUnloadModule) gives the lent stack back as its thread ends, and module_stop's thread could be given
+that very memory for its own stack, its argument overwritten before it was copied: the argument is kept first ("modules
+unload themselves from a lent stack"; without the fix module_stop saw 0). The trampoline, the kernel's own code the lent
+call returns to, is now written as every state loads as well as at power on, so a state saved before that return existed
+has it (the extend test wipes it before loading). The lent stacks are kept in states (layout 20).
+
+**Save states.** Version 20; layouts 15 to 19 load, what's new left empty. A committed test can't hold an older-layout
+state (megabytes of memory), so it was checked end to end: states the base commit's runner saved (version 17) of Lumines
+at frame 600 and Patapon 2 at 1200 load into this branch's runner, and 60 to 600 frames on its pictures are byte for
+byte those of the base runner carrying on from the same state.
+
+**The games** (the report's runs: Software, 7 GE threads, 3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300,
+1200 and 3600; the base commit's runner and this branch's on the same 53 games, and a frame every 300 where a judgement
+needed it):
+- *The King of Fighters - Orochi Saga*: black to its autosave notice (menu): "Loading...", the SNK Playmore logo, its
+  intro, then the notice; 9 frames a second to 390-530.
+- *God Eater 2* (English v2.0, RedArtz): black to a notice: the fan translation's "your DLC file is corrupted or
+  missing" (it opens `ms0:/PSP/GAME/NPJH50832/SYSTEM_UPDATE.EDAT`, which the translation's patch puts on the memory
+  stick and the owner's copy doesn't have).
+- *Dragon Ball Z: Tenkaichi Tag Team*: black from boot to its autosave notice at frames 300 and 1200; past it (Cross at
+  1800) black again, opening a PGD-encrypted file over and over (below). It now calls scePower 0xa85880d0, missing (as
+  Final Fantasy Type-0 and Kingdom Hearts Birth by Sleep do), and goes on.
+- *Genso Suikoden*: sceCcc is no longer missing; its intro plays with its subtitles as before (sceMt19937Init still is).
+- *Persona 3 Portable* isn't stuck: with a frame every 300 it shows its logo, intro and title ("PRESS ANY BUTTON", 2100
+  to 3000), and then its attract loop starts over, frame 3600 landing on that loop's loading screen. scesupPreAcc
+  0x86debd66, called once with the disc's ID, is refused and the game goes on. Its row is judged again: menu.
+- The other 48 (all the black and hanging games but these, and a sample of menus, movies and gameplay across the
+  library): every frame the same picture on both runners, or the same scene an animation step apart (under 2.5 of 255),
+  but Tekken: Dark Resurrection's frame 60, where the runner's capture caught its "Loading game data" box a frame early
+  under load (run again alone, both runners give the same pictures at frames 55 to 65).
+
+**What keeps the black games black.** Traced in the scratch runner, thread states at frames 300, 1200 and 2400:
+- *PGD-encrypted data*, five games: Black Wolves Saga (`PSP_GAME/INSDIR/INSTALL.DNS`), Dragon Ball Z: Tenkaichi Tag Team
+  (`disc0:/sce_lbn0xe98b_size0x4A0`), Shining Blade and Valkyria Chronicles III (`PSP_GAME/INSDIR/DATA.BIN`, through
+  CRI's file system: its busy server thread is retrying, not stuck) and Naruto Shippuden: Ultimate Ninja Impact. Each
+  opens the file, gives its key (ioctl 0x04100001; the headers say key index 1, DRM type 1) and, refused, tries again
+  for good. Decrypting PGD needs AMCTRL's cipher, which the wiki's PGD page lays out only as a structure (its link for
+  the algorithm goes to JPCSP's forum, not a source this project uses), and its MAC checks need the wiki's AMCTRL and
+  DNAS keys, which aren't among the keys committed (an owner's decision, as part 18's were).
+- *Need for Speed: Most Wanted 5-1-0*: its main thread waits for good in sceGeDrawSync; the GE met a RET with no CALL to
+  return from in one of its lists (0x0914dc40 and 0x090edc00 take turns, calling shared lists at 0x08afd6c0) and stopped
+  it, and the driver never hears its end. A matter for the GE's part (`ares/psp/ge/list.cpp`).
+- *Monster Hunter Portable 3rd HD*: its program, 26.5 MiB in one segment from 0x08804000, doesn't fit the 24 MiB user
+  partition (its PARAM.SFO asks for no more: the HD versions were made for the PS3), so it never starts. Given the 64
+  MiB partition (a scratch build), it shows a Dolby logo and stops at the same missing functions as the PSP version
+  (sceJpegCsc and sceMpegAvcConvertToYuv420): not worth a rule of its own until sceJpeg is here.
+- *Def Jam: Fight for NY*: its file thread reads the disc's folders and then waits for requests that never come; why,
+  not found.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 373 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. New groups: "ccc convertstring", "ccc characters",
+"ccc one at a time", "tls pools created", "tls pools handed out", "tls pools waited for", "lightweight mutexes tried the
+newer way", "modules unload themselves from a lent stack"; "a stack lent for a call" (part 51's) with the older state's
+trampoline; and the states' fields and refusals for each. Two independent read-only reviews; what they found was fixed:
+the TLS status copied as far as its size word says (it had been written whole), a priority test that couldn't tell
+priority from first come, an interrupt handler's TLS calls acting for the interrupted thread, state refusals not
+isolated, the recordings' inputs followed exactly, and comments.
+
+**Left, and why.** PGD decryption (five games, above). scePauth, sceJpeg and sceMpegAvcConvertToYuv420 (Monster Hunter
+Portable 3rd, and its HD version once it has the memory). scesupPreAcc (both Dissidias and Persona 3 Portable call it
+and go on). scePower 0xa85880d0 (Final Fantasy Type-0, Kingdom Hearts Birth by Sleep, Dragon Ball Z), sceMt19937 (Genso
+Suikoden). The older sceKernelTryLockLwMutex, sceKernelLockLwMutex and Unlock disagree with threads/lwmutex's try, lock
+and unlock recordings on hand-made work areas and counts (part 32 noted it). The GE's RET at depth 0 (Need for Speed:
+Most Wanted). Black still, cause not found: Ridge Racer, Crush (its CPU stops in a call into the program at frame 730),
+Dead or Alive - Paradise, Def Jam, Jak and Daxter - The Lost Frontier, Tekken - Dark Resurrection, Valhalla Knights,
+PaRappa the Rapper, MACH; Need for Speed - ProStreet's crash after its notice.
