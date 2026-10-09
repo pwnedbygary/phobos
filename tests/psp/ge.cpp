@@ -653,6 +653,42 @@ static auto gePauseWindow() -> void {
   CHECK(m.system.ge.list.address, ListA + 12);
 }
 
+//A list at an address the queue holds already: queued again for a program built with an SDK before 2.00 (or saying
+//none), refused (BUSY) from 2.00 on, by where a list starts or where it was broken off, in either of memory's views,
+//and while its finish callback waits; not by where it is now (pspautotests' gpu/ge/queue and queue2).
+static auto geQueuedTwice() -> void {
+  KernelMachine m;
+  auto& memory = m.system.memory;
+  ListWriter list{memory, ListA};
+  list.put(GE::Nop);
+  list.put(GE::Nop);  //stalled here
+  list.put(GE::Finish);
+  list.put(GE::End);
+  for(u32 version : {0u, 0x0100'0010u}) {
+    m.call("sceKernelSetCompiledSdkVersion", {version});
+    CHECK(m.call("sceGeListEnQueue", {ListA, ListA + 4, 0xffff'ffff, 0}) >> 31, 0);
+    CHECK(m.call("sceGeListEnQueue", {ListA, ListA + 4, 0xffff'ffff, 0}) >> 31, 0);
+    m.call("sceGeBreak", {1, 0});
+  }
+  m.call("sceKernelSetCompiledSdkVersion", {0x0200'0000});
+  u32 first = m.call("sceGeListEnQueue", {ListA, ListA + 4, 0xffff'ffff, 0});
+  CHECK(first, Kernel::GeListIDs);
+  CHECK(m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0}), Kernel::ErrorBusy);
+  CHECK(m.call("sceGeListEnQueue", {ListA | 0x4000'0000, 0, 0xffff'ffff, 0}), Kernel::ErrorBusy);
+  CHECK(m.call("sceGeListEnQueue", {ListA + 4, ListA + 4, 0xffff'ffff, 0}), Kernel::GeListIDs + 1);
+  m.call("sceGeBreak", {1, 0});
+  first = m.call("sceGeListEnQueue", {ListA, ListA + 4, 0xffff'ffff, 0});
+  CHECK(m.call("sceGeBreak", {0, 0}), first);  //broken off where it stalled
+  CHECK(m.call("sceGeListEnQueue", {ListA, ListA, 0xffff'ffff, 0}) >> 31, 0);
+  CHECK(m.call("sceGeListEnQueue", {ListA + 4, ListA + 4, 0xffff'ffff, 0}), Kernel::ErrorBusy);
+  CHECK(m.call("sceGeListEnQueueHead", {ListA + 4, 0, 0xffff'ffff, 0}), Kernel::ErrorBusy);
+  m.call("sceGeBreak", {1, 0});
+  memory.write(4, Callbacks + 8, 0x0880'4000);  //a finish callback, which never runs here
+  u32 callbacks = m.call("sceGeSetCallback", {Callbacks});
+  CHECK(m.call("sceGeListEnQueue", {ListA + 8, 0, callbacks, 0}) >> 31, 0);
+  CHECK(m.call("sceGeListEnQueue", {ListA + 8, 0, callbacks, 0}), Kernel::ErrorBusy);
+}
+
 //A call into the program may use system functions but not wait in one; a thread it wakes runs once it's over; and
 //calls wait while the program holds interrupts off.
 static auto geCallsAndThreads() -> void {
@@ -1608,6 +1644,7 @@ auto geTests() -> Tests {
     {"ge drawn over its own texture", geOwnTexture},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause}, {"ge callbacks see the ge stopped", geCallbackState}, {"ge pause window", gePauseWindow},
+    {"ge lists queued twice", geQueuedTwice},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},

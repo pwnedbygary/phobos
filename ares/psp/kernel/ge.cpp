@@ -13,10 +13,10 @@
 //A program sees how its lists are doing with sceGeListSync and sceGeDrawSync, and can wait there for them to finish.
 //The GE's work takes no time, so a list runs as far as it can as soon as it's queued or its stall address moves.
 //
-//What each call does follows uOFW's reading of the PSP's own driver (ge.c, stall.S); sceGeBreak and what callbacks see
-//follow what pspautotests' gpu/ge and gpu/signals recorded on a PSP. Not yet: the debugger's breakpoints, SIGNALs that
-//patch texture or CLUT addresses, and what uOFW shows differs for programs built with SDKs before 2.0; a list may be
-//queued twice, as for programs that don't say their SDK's version.
+//What each call does follows uOFW's reading of the PSP's own driver (ge.c, stall.S); sceGeBreak, what callbacks see
+//and lists queued twice follow what pspautotests' gpu/ge and gpu/signals recorded on a PSP. Not yet: the debugger's
+//breakpoints, SIGNALs that patch texture or CLUT addresses, what uOFW shows differs for programs built with SDKs before
+//2.0, and a SIGNAL call's stack in use by another list refused.
 
 auto Kernel::geIndex(u32 id) const -> s32 {
   u32 index = id - GeListIDs;
@@ -308,6 +308,14 @@ auto Kernel::geEnqueue(bool head) -> void {
     }
   }
   if((address | stall | context) & 3) return result(ErrorInvalidPointer);
+  //Built with SDK 2.00 or later, a program can't queue a list at an address the queue holds already: where a list
+  //starts, or where it was broken off or paused (where it would go on), its finished list still queued while its
+  //finish callback runs; not where one is now (pspautotests' gpu/ge/queue: 0x01000010 queues it, 0x02000000 doesn't).
+  if(sdkVersion >= 0x0200'0000) {
+    for(u32 index : geQueue) {
+      if(geLists[index].registers.address == (address & 0x0fff'ffff)) return result(ErrorBusy);
+    }
+  }
   if(geFree.empty()) return result(ErrorOutOfMemory);
   if(head && !geQueue.empty() && geLists[geQueue.front()].state != GeList::State::Paused) {
     return result(ErrorInvalidValue);
