@@ -653,9 +653,9 @@ static auto keyboard() -> void {
   CHECK(roundTrip(m), true);
 }
 
-//Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x308 among them,
-//numbers that aren't a module refused, the older network numbers standing for 0x100-0x106 and the older USB numbers
-//for 0x200-0x203; the nickname.
+//Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x107, 0x108 and 0x308
+//among them, numbers that aren't a module refused, the older network numbers standing for 0x100-0x106 and the older
+//USB numbers for 0x200-0x203; the nickname.
 static auto modules() -> void {
   KernelMachine m;
   CHECK(m.call("sceUtilityLoadModule", {0x301}), 0);
@@ -665,6 +665,13 @@ static auto modules() -> void {
   CHECK(m.call("sceUtilityLoadModule", {0x308}), 0);  //later firmwares' (Ace Combat: Joint Assault loads it)
   CHECK(m.call("sceUtilityUnloadModule", {0x308}), 0);
   CHECK(m.call("sceUtilityLoadModule", {0x309}), 0x8011'1101);
+  CHECK(m.call("sceUtilityLoadModule", {0x108}), 0);  //later firmwares' (Macross: Triangle Frontier loads it)
+  CHECK(m.call("sceUtilityLoadModule", {0x108}), 0x8011'1102);
+  CHECK(m.call("sceUtilityLoadModule", {0x107}), 0);
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("sceUtilityUnloadModule", {0x108}), 0);
+  CHECK(m.call("sceUtilityUnloadModule", {0x107}), 0);
+  CHECK(m.call("sceUtilityLoadModule", {0x109}), 0x8011'1101);
   CHECK(m.call("sceUtilityLoadModule", {0x700}), 0x8011'1101);
   CHECK(m.call("sceUtilityLoadNetModule", {1}), 0);
   CHECK(m.call("sceUtilityLoadModule", {0x100}), 0x8011'1102);  //the same module

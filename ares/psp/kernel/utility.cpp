@@ -502,14 +502,15 @@ auto Kernel::sceUtilityGamedataInstallAbort() -> void {
   result(0);
 }
 
-//(module: psputility_modules.h's PSP_MODULE_*): network (0x100-0x106), USB devices (0x200-0x203), sound and video
+//(module: psputility_modules.h's PSP_MODULE_*): network (0x100-0x108), USB devices (0x200-0x203), sound and video
 //codecs (0x300-0x308), the network platform (0x400-0x402), DRM (0x500), infrared (0x600). pspsdk's list stops at
-//0x307; later firmwares have one more sound and video module, 0x308 (taken here to be the MP4 library, sceMp4, whose
-//functions the kernel would stand in for as for the rest). Ace Combat: Joint Assault loads it at boot and stops if
-//it's refused; 0x309 still is.
+//0x106 and 0x307; later firmwares have more: 0x308 (taken here to be the MP4 library, sceMp4, whose functions the
+//kernel would stand in for as for the rest), which Ace Combat: Joint Assault loads at boot, stopping if it's refused,
+//and network modules to 0x108, which Macross: Triangle Frontier loads, trying again every few frames for as long as
+//it's refused (0x107 is taken too, each group's modules being numbered without gaps). 0x109 and 0x309 are refused.
 static auto utilityModuleKnown(u32 module) -> bool {
   u32 group = module >> 8, index = module & 0xff;
-  static constexpr u8 Counts[] = {0, 7, 4, 9, 3, 1, 1};  //how many modules in each group
+  static constexpr u8 Counts[] = {0, 9, 4, 9, 3, 1, 1};  //how many modules in each group
   return group >= 1 && group <= 6 && index < Counts[group];
 }
 
