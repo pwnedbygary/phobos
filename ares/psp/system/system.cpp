@@ -21,18 +21,23 @@ auto load(Node::System& node, string name) -> bool {
 //alone; "GE Threads", how many threads draw the GE's pictures (ge/threads.cpp), 0 (the default) for one fewer than
 //the host has cores, 1 for the GE's own alone, and no more than twice the host's cores, nor 64 (more would only wait
 //their turn). Every count draws the very same pixels. "Renderer", who draws them: "Software" (the default, the exact
-//one) or "Vulkan" (the GPU's, ge/gpu: docs/psp-gpu-renderers.md), taken at the next power on. "Resolution", the
+//one), "Vulkan" (the GPU's, ge/gpu: docs/psp-gpu-renderers.md; also "Vulkan (accurate)") or "Vulkan (fast)" (the
+//GPU transforming 3D vertices itself and blending with its own units: close, much faster), taken at the next power
+//on. "Resolution", the
 //Vulkan renderer's internal resolution: 1 (the default), the PSP's own, the exact native mode, to 10 times it each
 //way, taken at the next load. "Renderer Check", "Fail" to have the Vulkan renderer's start-up check fail as if the
 //GPU drew wrong (a front end's debug switch, to see the software renderer take over and the owner told). "Late
-//Frames", "true" for a host that reads the GPU's frames back to show them but can take them up to three frames late
+//Frames", "true" for a host that reads the GPU's frames back to show them but can take them a frame or two late
 //(at 1x): nothing is waited for each frame, as when the GPU presents on Android's window (the runner, to time it so).
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
   if(name == "Recompiler") system.recompile = value.boolean();
   if(name == "GE Threads") system.geThreads = std::min<u64>(value.natural(), System::MostGeThreads);
-  if(name == "Renderer") system.renderer = value == "Vulkan" ? "Vulkan" : "Software";
+  if(name == "Renderer") {
+    system.renderer = value == "Vulkan" || value == "Vulkan (accurate)" ? "Vulkan"
+                    : value == "Vulkan (fast)" ? "Vulkan (fast)" : "Software";
+  }
   if(name == "Resolution") system.resolution = std::clamp<u64>(value.natural(), 1, 10);
   if(name == "Renderer Check") system.failCheck = value == "Fail";
   if(name == "Late Frames") system.lateFrames = value.boolean();
@@ -157,7 +162,7 @@ auto System::run() -> void {
 }
 
 //A late frame (option "Late Frames"): the GPU takes a shot of the frame shown (GPU::shoot()), nothing waited for, and
-//the newest it has finished taking is the picture, up to three frames late, as memory would keep it (picture()'s
+//the newest it has finished taking is the picture, a frame or two late, as memory would keep it (picture()'s
 //colors). False till there's one of this size: the frame from memory then.
 auto System::late(u32 offset, u32 stride, u32 format, u32 width, u32 height) -> bool {
   if(!gpu->shoot(offset, stride, format, width, height)) return false;
@@ -226,7 +231,7 @@ auto System::load(Node::System& root, string name) -> bool {
 
   //(the screen's picture as large as the GPU's is read back, up to MostShown times the PSP's, its own size the PSP's:
   //front ends lay it out as 480x272)
-  shown = renderer == "Vulkan" ? std::min(resolution, MostShown) : 1;
+  shown = renderer != "Software" ? std::min(resolution, MostShown) : 1;
   screen = node->append<Node::Video::Screen>("Screen", 480 * shown, 272 * shown);
   screen->colors(1 << 24, [](n32 color) -> n64 {
     u64 a = 65535;
@@ -614,19 +619,32 @@ auto System::unserialize(serializer& s) -> bool {
 //The hardware renderer the owner chose, made and checked once a game (the software renderer drawing the game where it
 //couldn't start or its pixels aren't the software renderer's, said once), and the GE's from here on.
 auto System::startRenderer() -> void {
-  if(renderer != "Vulkan") {
+  if(renderer != "Vulkan" && renderer != "Vulkan (fast)") {
     gpu.reset(), presents = false;
     std::lock_guard lock{windowMutex};
     return hold(gpuWindow, false), void(gpuWindow = nullptr);
   }
+  bool fast = renderer == "Vulkan (fast)";
+  if(gpu && gpu->fast != fast) {  //(the other mode chosen since: made again, the window handed to it)
+    gpu.reset();
+    std::lock_guard lock{windowMutex};
+    hold(gpuWindow, false), gpuWindow = nullptr;
+  }
   if(!gpu && !gpuFailed) {
     std::string error;
-    gpu = GPU::vulkan(vulkanLoader, error);
+    gpu = GPU::vulkan(vulkanLoader, error, fast);
     //(where blending in the shader in rasterization order fails it, the check again with the draws that read apart:
     //each after a barrier, their overlapping primitives in draws of their own, which every GPU orders, and the
     //blending the GPU's own; where reading the frame buffer fails even so, or can't be trusted apart
     //(Backend::readsApart), the check again with nothing read)
     bool passed = gpu && gpu->check(error);
+    //(fast mode's 3D through the GPU's transform failing it alone: the check again with the GE transforming)
+    if(gpu && !passed && gpu->transformsFailed) {
+      report(true, "the Vulkan renderer's start-up check, its 3D transformed by the GPU, failed (" + error +
+                   "): checked again with the 3D transformed by the CPU");
+      gpu->backend->transforms = false, error.clear();
+      passed = gpu->check(error);
+    }
     if(gpu && !passed && gpu->backend->readsInOrder) {
       auto& b = *gpu->backend;
       b.readsInOrder = b.readsBlending = false, b.reads = b.reads && b.readsApart;
@@ -652,8 +670,9 @@ auto System::startRenderer() -> void {
     }
     //(the check is drawn at the PSP's resolution, the game at the one chosen, as much of it as the GPU takes)
     gpu->resolution(resolution);
-    report(false, "the Vulkan renderer draws, on " + gpu->backend->name() + ", at " +
-                  std::to_string(gpu->resolution()) + "x" +
+    report(false, std::string{"the Vulkan renderer draws"} + (fast ? " (fast" : "") +
+                  (fast && gpu->backend->transforms ? ", 3D transformed by the GPU)" : fast ? ")" : "") +
+                  ", on " + gpu->backend->name() + ", at " + std::to_string(gpu->resolution()) + "x" +
                   (gpu->resolution() < resolution ? " (the most this GPU takes)" : "") +
                   (!gpu->backend->reads ? ", blending by the GPU"
                    : gpu->backend->readsInOrder ? ", blending in the shader, in order"

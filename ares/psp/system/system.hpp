@@ -52,7 +52,8 @@ struct System {
   bool recompile = true;       //the CPU's recompiler on, the interpreter its fallback (option "Recompiler")
   u32 geThreads = 0;           //how many threads draw (option "GE Threads"): 0 for one fewer than the host's cores
   static constexpr u32 MostGeThreads = 64;  //and at most, nor more than twice the host's cores
-  string renderer = "Software";  //who draws the GE's pictures (option "Renderer"): "Software" or "Vulkan"
+  string renderer = "Software";  //who draws the GE's pictures (option "Renderer"): "Software", "Vulkan" (accurate)
+                                 //or "Vulkan (fast)"
   u32 resolution = 1;            //the GPU's internal resolution (option "Resolution"): 1, the PSP's, to 10 times it
   bool failCheck = false;        //the start-up check made to fail (option "Renderer Check": a debug switch)
   bool lateFrames = false;       //the GPU's frames shown a frame or so late, not waited for (option "Late Frames")

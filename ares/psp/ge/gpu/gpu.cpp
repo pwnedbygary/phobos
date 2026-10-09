@@ -672,8 +672,125 @@ auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> 
   }
 }
 
+//Fast mode's 3D (docs/psp-gpu-renderers.md, "Vulkan (fast)"): a PRIM's triangles handed to the GPU as the vertex
+//type laid them out, which transform.vert skins, transforms, lights, fogs and maps onto the screen as transform.cpp
+//and lighting.cpp would; the GE has kept to its rules for which triangles are drawn, and cut and drawn those reaching
+//past the near plane itself (GE::meshTriangles()). Each triangle comes with its last corner first, where the GPU
+//takes a flat triangle's colors from. Its settings are a block of the run's (transformed()) each of its vertices
+//names, so that PRIMs the GPU draws alike are one draw, whatever their matrices. What the GE does that this doesn't:
+//step colors and fog as it steps them; choose the filter once a triangle (draw.frag chooses it at each pixel). Not
+//taken: a PRIM of fewer than MeshLeast vertices (each PRIM costs its settings' block, a skinned one's bones
+//differing from PRIM to PRIM, which a few vertices' transform on the CPU costs less than: Peace Walker draws 5,000
+//PRIMs a frame of three triangles each); clear mode (each triangle's stencil from its own last corner: triangle());
+//and one whose pipeline the driver won't make.
+auto GPU::meshes(GE&, const GE::Transform&, u32 count) -> bool {
+  if(!fast || !backend->transforms || count < MeshLeast) return false;
+  if(!drawing) return true;
+  if(state.pipeline.clear) return false;
+  Pipeline k = state.pipeline;
+  k.transformed = 1;
+  k.flat = !(shade & 1);
+  if(!(lastDrawable && *lastDrawable == k)) {
+    if(!backend->drawable(k)) return false;
+    lastDrawable = k;
+  }
+  return true;
+}
+
+auto GPU::mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& vertices,
+               const std::vector<u32>& corners, bool again) -> void {
+  if(!drawing) return;
+  this->ge = &ge;
+  u32 count = vertices.size();
+  //(the PRIM's vertices once, kept for its later runs: still the recording's last models, unless it was handed over
+  //between them)
+  if(!again || recorded.models.size() != meshFirst + count) {
+    if(recorded.models.size() + count > MostVertices) flush();
+    meshFirst = recorded.models.size();
+    u32 transform = transformed(t);
+    recorded.models.resize(meshFirst + count);
+    for(u32 n = 0; n < count; n++) {
+      auto& v = vertices[n];
+      auto& m = recorded.models[meshFirst + n];
+      m.x = v.x, m.y = v.y, m.z = v.z;
+      for(u32 k = 0; k < 3; k++) m.normal[k] = v.normal[k];
+      m.u = v.u, m.v = v.v, m.color = v.color;
+      for(u32 k = 0; k < 8; k++) m.weights[k] = v.weights[k];
+      m.transform = transform;
+    }
+  }
+  u32 first = recorded.indices.size();
+  for(u32 corner : corners) recorded.indices.push_back(meshFirst + corner);
+  State s = state;
+  s.pipeline.transformed = 1;
+  s.pipeline.flat = !(shade & 1);
+  if(textured) s.push.filter = filter;
+  if(recorded.states.empty() || !(recorded.states.back() == s)) recorded.states.push_back(s);
+  stateKept = false;
+  u32 index = recorded.states.size() - 1;
+  auto& commands = recorded.commands;
+  if(!commands.empty() && commands.back().kind == Command::Kind::Mesh && commands.back().state == index &&
+     commands.back().first + commands.back().count == first) {
+    commands.back().count += corners.size();
+  } else {
+    Command c{Command::Kind::Mesh, s.target};
+    c.state = index, c.first = first, c.count = corners.size();
+    commands.push_back(c);
+    statistics.draws++;
+  }
+  statistics.primitives += corners.size() / 3;
+  if(!again) statistics.meshes++;
+}
+
+//mesh()'s block for these settings, in recorded's transforms: the last one's again where they're the same.
+auto GPU::transformed(const GE::Transform& t) -> u32 {
+  auto& transforms = recorded.transforms;
+  if(!transforms.empty() && !std::memcmp(&t, &lastTransform, sizeof(t))) return transforms.size() - 1;
+  lastTransform = t;
+  Transformed b{};
+  auto columns43 = [](const float* m, float (&out)[4][4]) {
+    for(u32 c = 0; c < 4; c++) for(u32 r = 0; r < 3; r++) out[c][r] = m[c * 3 + r];
+  };
+  columns43(t.world, b.world), columns43(t.view, b.view), columns43(t.textureMatrix, b.texture);
+  for(u32 c = 0; c < 4; c++) for(u32 r = 0; r < 4; r++) b.projection[c][r] = t.projection[c * 4 + r];
+  for(u32 bone = 0; bone < t.weights && bone < 8; bone++) {
+    float (&out)[4][4] = b.bones[bone];
+    columns43(t.bones + bone * 12, out);
+  }
+  for(u32 n = 0; n < 3; n++) b.viewport[n] = t.scale[n], b.center[n] = t.center[n];
+  b.offset[0] = t.offsetX / 16, b.offset[1] = t.offsetY / 16;
+  b.offset[2] = t.textureWidth, b.offset[3] = t.textureHeight;
+  b.textureScale[0] = t.textureScale[0], b.textureScale[1] = t.textureScale[1];
+  b.textureScale[2] = t.textureOffset[0], b.textureScale[3] = t.textureOffset[1];
+  b.fog[0] = t.fogEnd, b.fog[1] = t.fogSlope, b.fog[2] = t.fogValue, b.fog[3] = t.fogForced;
+  b.modes[0] = t.mapSource, b.modes[1] = t.shadeU, b.modes[2] = t.shadeV;
+  u32 mapping = t.mapMode == 1 || t.mapMode == 2 ? t.mapMode : 0;
+  b.modes[3] = t.normalReverse | t.separateSpecular << 1 | t.vertexColor << 2 | t.fog << 3 | t.lighting << 4 |
+               mapping << 5 | std::min(t.weights, 8u) << 8;
+  b.material[0] = t.materialColor, b.material[1] = t.materialEmissive;
+  b.material[2] = t.materialAmbient, b.material[3] = t.materialDiffuse;
+  b.material2[0] = t.materialSpecular, b.material2[1] = t.ambientLight;
+  for(u32 n = 0; n < 3; n++) b.viewDirection[n] = t.viewDirection[n];
+  b.viewDirection[3] = t.specularPower;
+  for(u32 n = 0; n < 4; n++) {
+    auto& light = t.lights[n];
+    auto& out = b.lights[n];
+    for(u32 k = 0; k < 3; k++) {
+      out.position[k] = light.position[k], out.direction[k] = light.direction[k];
+      out.attenuation[k] = light.attenuation[k];
+    }
+    out.direction[3] = light.cutoff, out.attenuation[3] = light.exponent;
+    out.colors[0] = light.ambient, out.colors[1] = light.diffuse, out.colors[2] = light.shine;
+    out.colors[3] = light.enabled | light.directional << 1 | light.spot << 2 | light.specular << 3 |
+                    light.powered << 4;
+  }
+  if(!transforms.empty() && !std::memcmp(&transforms.back(), &b, sizeof(b))) return transforms.size() - 1;
+  transforms.push_back(b);
+  return transforms.size() - 1;
+}
+
 //What's drawn so far handed to the GPU, while the CPU goes on: at a list's end, once there's enough of it (each run
-//costs the CPU a submit and a wait for the run three before it, and games may end dozens of short lists a frame:
+//costs the CPU a submit and a wait for the run eight before it, and games may end dozens of short lists a frame:
 //WipEout Pure, 209); what's less waits for the next list, the frame shown or a finish.
 auto GPU::submit(GE& ge) -> void {
   this->ge = &ge;

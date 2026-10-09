@@ -286,14 +286,20 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     for(u32 page = drawn.deferFirst >> 12; page <= drawn.deferLast >> 12; page++) drawing.batch->reads.set(page);
   }
   Transform t{};
+  s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   if(!format.through) {
     t = transformState();
     t.weights = format.weightFormat ? format.weights : 0;
     t.textureWidth = texture.width, t.textureHeight = texture.height;
     t.vertexColor = format.colorFormat != 0;
+    //(a renderer transforming its own: the triangles the GE would draw whole handed over as they are)
+    bool triangles = kind == Triangles || kind == TriangleStrip || kind == TriangleFan;
+    if(hardware && triangles && renderer->meshes(*this, t, count)) {
+      meshTriangles(drawn, t, kind, strip, facing, vertices);
+      return void(hardware = false);
+    }
     for(auto& vertex : vertices) transform(vertex, t);
   }
-  s32 facing = (commands[CullFaceEnable] & 1) && !pixel.clear ? (commands[Cull] & 1 ? 1 : -1) : 0;
   auto drawTriangle = [&](const Vertex& a, const Vertex& b, const Vertex& c, s32 facing) {
     if(format.through) triangle(drawn, a, b, c, facing, false);
     else clipTriangle(drawn, t, a, b, c, facing);
@@ -352,6 +358,78 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   }
   drawing.recording = false;
   skipping = false;
+}
+
+//A 3D PRIM's triangles for a renderer that transforms and lights them itself (Renderer::meshes()), kept to the GE's
+//rules: each corner's place on the screen worked out as project() has it, the triangles clipTriangle() and
+//triangle() wouldn't draw dropped (out of sight, behind the camera, no area, facing away), and those reaching past
+//the near plane (or with a corner behind the camera, which projects through its w as the GPU doesn't) transformed,
+//cut and drawn by the GE as ever: the GPU's clipper would blend their new corners' colors and fog across the
+//screen, not in clip space as the GE does. The rest are handed over whole, untransformed,
+//in runs between those, so that they're drawn in order. (The corners' clip positions come through the world, view
+//and projection matrices made one, once a PRIM: clipPosition()'s but for a float's rounding, which can only move a
+//triangle lying on an edge of these rules across it.)
+auto GE::meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
+                       std::vector<Vertex>& vertices) -> void {
+  u32 count = vertices.size();
+  placed.resize(count), handed.clear();
+  float viewWorld[12], clipping[16];
+  for(u32 c = 0; c < 4; c++) turn43(t.view, t.world + c * 3, viewWorld + c * 3);
+  for(u32 r = 0; r < 3; r++) viewWorld[9 + r] += t.view[9 + r];
+  for(u32 c = 0; c < 4; c++) {
+    for(u32 r = 0; r < 4; r++) {
+      clipping[c * 4 + r] = viewWorld[c * 3] * t.projection[r] + viewWorld[c * 3 + 1] * t.projection[4 + r] +
+                            viewWorld[c * 3 + 2] * t.projection[8 + r] + (c == 3 ? t.projection[12 + r] : 0.0f);
+    }
+  }
+  for(u32 n = 0; n < count; n++) {
+    auto& v = vertices[n];
+    float model[3] = {v.x, v.y, v.z};
+    if(t.weights) {
+      float position[3] = {};
+      for(u32 bone = 0; bone < t.weights; bone++) {
+        float moved[3];
+        times43(t.bones + bone * 12, model, moved);
+        for(u32 k = 0; k < 3; k++) position[k] += moved[k] * v.weights[bone];
+      }
+      for(u32 k = 0; k < 3; k++) model[k] = position[k];
+    }
+    times44(clipping, model, placed[n].clip);
+    project(placed[n], t, false);
+  }
+  bool again = false;
+  auto hand = [&] {
+    if(handed.empty()) return;
+    renderer->mesh(*this, t, vertices, handed, again);
+    handed.clear(), again = true;
+  };
+  auto nearer = [](const Vertex& v) { return v.clip[2] + v.clip[3]; };  //below zero: nearer than the near plane
+  auto consider = [&](u32 a, u32 b, u32 c, s32 facing) {
+    const Vertex &pa = placed[a], &pb = placed[b], &pc = placed[c];
+    if(outOfSight(t.depthClamp, {&pa, &pb, &pc})) return;
+    if(pa.clip[3] < 0 && pb.clip[3] < 0 && pc.clip[3] < 0) return;
+    if(nearer(pa) < 0 || nearer(pb) < 0 || nearer(pc) < 0 || !(pa.clip[3] > 0 && pb.clip[3] > 0 && pc.clip[3] > 0)) {
+      hand();
+      Vertex corners[3] = {vertices[a], vertices[b], vertices[c]};  //(the vertices kept as they came, for the runs)
+      for(auto& corner : corners) transform(corner, t);
+      return clipTriangle(look, t, corners[0], corners[1], corners[2], facing);
+    }
+    s64 x0 = fixed(pa.x), y0 = fixed(pa.y);
+    s64 area = (fixed(pb.x) - x0) * (fixed(pc.y) - y0) - (fixed(pb.y) - y0) * (fixed(pc.x) - x0);
+    if(area == 0 || (facing && (area > 0) != (facing > 0))) return;
+    handed.insert(handed.end(), {c, a, b});
+  };
+  if(kind == Triangles) {
+    for(u32 n = 0; n + 2 < count; n += 3) consider(n, n + 1, n + 2, facing);
+  } else if(kind == TriangleStrip) {
+    for(u32 first = 0; first < count; first += strip) {
+      u32 end = std::min(first + strip, count);
+      for(u32 n = first; n + 2 < end; n++) consider(n, n + 1, n + 2, (n - first) & 1 ? -facing : facing);
+    }
+  } else {
+    for(u32 n = 1; n + 1 < count; n++) consider(0, n, n + 1, facing);
+  }
+  hand();
 }
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth

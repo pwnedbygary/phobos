@@ -33,6 +33,9 @@ layout(location = 4) noperspective out float vertexDepth;
 layout(location = 5) flat out uint vertexFlags;
 layout(location = 6) flat out vec4 vertexStepping;
 layout(location = 7) flat out ivec2 vertexStart;
+layout(location = 8) flat out vec4 vertexFlatColor;  //(transform.vert's flat shading: unused here, FLAT 0)
+layout(location = 9) flat out vec4 vertexFlatSpecular;
+layout(location = 10) noperspective out vec2 vertexTexels;  //(transform.vert's filter choice: unused here)
 
 void main() {
   float w = position.w;
@@ -45,4 +48,6 @@ void main() {
   vertexFlags = flags;
   vertexStepping = stepping;
   vertexStart = start;
+  vertexFlatColor = vertexColor, vertexFlatSpecular = vertexSpecular;
+  vertexTexels = vec2(0.0);
 }

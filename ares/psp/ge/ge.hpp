@@ -392,6 +392,8 @@ struct GE {
   auto lookFor(const PixelState& pixel, const Sampler* texture) const -> Look;
   auto primitive(u32 kind, u32 count) -> void;
   auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
+  auto meshTriangles(const Look& look, const Transform& t, u32 kind, u32 strip, s32 facing,
+                     std::vector<Vertex>& vertices) -> void;
   auto submit(Job& job) -> void;
   auto spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool;
   auto readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool;
@@ -577,12 +579,23 @@ struct GE {
     //Memory changed VRAM's bytes first to last while pages were busy, without its waiting: bytes it hasn't drawn
     //over (drawnOver()), which its copies of frame buffers take from memory again before they're used.
     virtual auto besideChanged(GE& ge, u32 first, u32 last) -> void = 0;
+    //A renderer that transforms and lights 3D vertices itself (Vulkan's fast mode, the GPU's vertex shader): whether
+    //it takes a 3D PRIM of count corners with these settings (t), after begin(); then (meshTriangles()) the
+    //triangles the GE would draw whole, as the vertex type laid them out, untransformed: corners, three to a
+    //triangle, each triangle's last corner first, in runs between those the GE cuts and draws (again: the same
+    //PRIM's vertices as the run before's). Where it won't, the GE transforms, lights and clips them itself, as for
+    //any renderer.
+    virtual auto meshes(GE&, const Transform& /*t*/, u32 /*count*/) -> bool { return false; }
+    virtual auto mesh(GE&, const Transform& /*t*/, const std::vector<Vertex>&, const std::vector<u32>& /*corners*/,
+                      bool /*again*/) -> void {}
   };
   Renderer* renderer = nullptr;
   auto setRenderer(Renderer* next) -> void;  //ge.cpp
   bool hardware = false;  //the primitive being drawn goes to the renderer (drawVertices())
   bool skipping = false;  //the primitive being drawn changes no pixel: set up, not drawn (drawVertices())
   std::vector<LinePixel> hardwareLine;
+  std::vector<Vertex> placed;  //meshTriangles()'s: its corners' clip positions, on the screen
+  std::vector<u32> handed;     //and the run of triangles it hands to the renderer
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
   std::set<std::string> noted;

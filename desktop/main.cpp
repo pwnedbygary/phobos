@@ -47,8 +47,9 @@ enum class Pick { Games, PspFonts, PspMemoryStick };
 
 // The PSP's drawing-threads choices, as the Android app offers them (PspDrawingThreads): 0 is all cores but one.
 constexpr int pspDrawingThreads[] = {0, 1, 2, 4, 6, 8};
-// Who draws the PSP's pictures (the core's "Renderer"), as the app's PspRenderer: 0 software, 1 Vulkan.
-constexpr const char* pspRenderers[] = {"Software", "Vulkan"};
+// Who draws the PSP's pictures (the core's "Renderer"), as the app's PspRenderer: 0 software, 1 Vulkan (accurate),
+// 2 Vulkan (fast).
+constexpr const char* pspRenderers[] = {"Software", "Vulkan (accurate)", "Vulkan (fast)"};
 
 struct MenuItem {
   std::string label;
@@ -594,7 +595,8 @@ auto Shell::pspMenuItems(std::vector<MenuItem>& items) -> void {
     settings.setNumber("psp.drawingThreads", next);
     ares::setPspDrawingThreads(next);
   }});
-  int renderer = std::clamp(settings.number("psp.renderer", 0), 0, (int)std::size(pspRenderers) - 1);
+  int renderer = settings.number("psp.renderer", 0);
+  if(renderer < 0 || renderer >= (int)std::size(pspRenderers)) renderer = 0;  //(what the core is told: Software)
   items.push_back({std::string("PSP renderer: ") + pspRenderers[renderer] + " (next start)", [this, renderer](int d) {
     int next = (renderer + (d < 0 ? (int)std::size(pspRenderers) - 1 : 1)) % (int)std::size(pspRenderers);
     settings.setNumber("psp.renderer", next);
