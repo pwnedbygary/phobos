@@ -1843,7 +1843,12 @@ struct Kernel {
   auto loadExec() -> void;
   auto sceRtcGetCurrentClock() -> void;
   auto sceRtcGetCurrentClockLocalTime() -> void;
+  auto dateSeconds(u32 date) -> s64;
   auto sceRtcGetTime_t() -> void;
+  auto sceRtcGetTime64_t() -> void;
+  auto sceRtcGetDayOfWeek() -> void;
+  auto sceRtcGetLastAdjustedTime() -> void;
+  auto sceRtcGetLastReincarnatedTime() -> void;
   auto sceRtcGetDosTime() -> void;
   auto sceRtcSetDosTime() -> void;
   auto sceRtcGetWin32FileTime() -> void;

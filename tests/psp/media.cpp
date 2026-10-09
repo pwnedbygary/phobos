@@ -1484,8 +1484,37 @@ static auto oddsOfPart28() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//sceRtc's days of the week, as pspautotests' rtc/lookup recorded them, dates that can't be among them; a date as a
+//64-bit time_t, as rtc/convert recorded; and when the clock was set: when the PSP started.
+static auto rtcDays() -> void {
+  KernelMachine m;
+  struct Day { u32 year, month, day, recorded; };
+  for(auto [year, month, day, recorded] : {Day{2010, 4, 27, 2}, {166970016, 1024, 0, 3}, {2000, 0, 0, 1},
+                                           {2000, 1, 0, 5}, {2000, 573, 0, 0}, {2000, 1, 2458, 6},
+                                           {2000, 4587, 2458, 0}, {2001, 0, 0, 2}, {2001, 1, 0, 0},
+                                           {2001, 573, 0, 1}, {2001, 1, 2458, 1}, {2001, 4587, 2458, 1}}) {
+    check(__LINE__, "a day of the week", m.call("sceRtcGetDayOfWeek", {year, month, day}), recorded);
+  }
+  for(auto [address, value] : {std::pair{0u, 2012u}, {2, 9}, {4, 20}, {6, 7}, {8, 12}, {10, 15}}) {
+    m.system.memory.write(2, R + address, value);
+  }
+  m.system.memory.write(4, R + 12, 500);
+  m.system.memory.fill(R + 0x20, 0xcc, 8);
+  CHECK(m.call("sceRtcGetTime64_t", {R, R + 0x20}), 0);
+  CHECK(word(m, R + 0x20) == 1'348'125'135 && word(m, R + 0x24) == 0, true);
+  m.kernel.startTime = 1'791'290'096'000'000ull;  //2026-10-06 12:34:56 UTC
+  m.kernel.cycles = 2'500'000 * (Kernel::CPUFrequency / 1'000'000);
+  u64 started = 62'135'596'800'000'000ull + m.kernel.startTime;
+  for(auto name : {"sceRtcGetLastAdjustedTime", "sceRtcGetLastReincarnatedTime"}) {
+    m.system.memory.fill(R + 0x30, 0xcc, 8);
+    CHECK(m.call(name, {R + 0x30}), 0);
+    CHECK(word(m, R + 0x30) == u32(started) && word(m, R + 0x34) == u32(started >> 32), true);
+    CHECK(m.call(name, {0}), Kernel::ErrorInvalidPointer);
+  }
+}
+
 auto mediaTests() -> Tests {
-  return {{"part 28's odds and ends", oddsOfPart28},
+  return {{"part 28's odds and ends", oddsOfPart28}, {"rtc days, 64-bit times and the clock's setting", rtcDays},
           {"mpeg stubs", mpegStubs}, {"mpeg movie fed and taken apart", [] { mpegMovie(false); }},
           {"mpeg movie with the game's own library", [] { mpegMovie(true); }},
           {"mpeg movie thread waits for its picture", mpegMovieThread},

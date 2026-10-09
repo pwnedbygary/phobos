@@ -230,6 +230,10 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceRtc",            "sceRtcGetCurrentClock",         &Kernel::sceRtcGetCurrentClock);
   add("sceRtc",            "sceRtcGetCurrentClockLocalTime", &Kernel::sceRtcGetCurrentClockLocalTime);
   add("sceRtc",            "sceRtcGetTime_t",               &Kernel::sceRtcGetTime_t);
+  add("sceRtc",            "sceRtcGetTime64_t",             &Kernel::sceRtcGetTime64_t);
+  add("sceRtc",            "sceRtcGetDayOfWeek",            &Kernel::sceRtcGetDayOfWeek);
+  add("sceRtc",            "sceRtcGetLastAdjustedTime",     &Kernel::sceRtcGetLastAdjustedTime);
+  add("sceRtc",            "sceRtcGetLastReincarnatedTime", &Kernel::sceRtcGetLastReincarnatedTime);
   add("sceRtc",            "sceRtcGetDosTime",              &Kernel::sceRtcGetDosTime);
   add("sceRtc",            "sceRtcSetDosTime",              &Kernel::sceRtcSetDosTime);
   add("sceRtc",            "sceRtcGetWin32FileTime",        &Kernel::sceRtcGetWin32FileTime);
