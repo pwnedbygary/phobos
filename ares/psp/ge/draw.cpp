@@ -823,10 +823,16 @@ auto GE::triangle(const Look& look, const Vertex& a, const Vertex& b, const Vert
     s32 value[3] = {s32(of(*p[0].vertex)), s32(of(*p[1].vertex)), s32(of(*p[2].vertex))};
     return stepped(r.x, r.y, scale, value, value[leftmost]);
   };
-  for(u32 n = 0; n < 4; n++) r.colors[n] = steps([n](const Vertex& v) { return channel(v.color, n); });
-  for(u32 n = 0; n < 3; n++) r.shine[n] = steps([n](const Vertex& v) { return channel(v.specular, n); });
-  r.fog = steps([](const Vertex& v) { return fogAmount(v.fog); });
-  r.depth = steps([](const Vertex& v) { return v.z > 0 ? u32(std::min(v.z, 65535.0f)) : 0u; });  //(not a number: 0)
+  //Only those its pixels use (as triangleRows() and triangleFours() choose them); the rest are left 0.
+  bool needsZ = pixel.depthRange || (pixel.clear ? pixel.clearDepth : pixel.depthTest);
+  if(!r.flat) for(u32 n = 0; n < 4; n++) r.colors[n] = steps([n](const Vertex& v) { return channel(v.color, n); });
+  if(!r.flat && r.shines) {
+    for(u32 n = 0; n < 3; n++) r.shine[n] = steps([n](const Vertex& v) { return channel(v.specular, n); });
+  }
+  if(pixel.fog) r.fog = steps([](const Vertex& v) { return fogAmount(v.fog); });
+  if(needsZ) {
+    r.depth = steps([](const Vertex& v) { return v.z > 0 ? u32(std::min(v.z, 65535.0f)) : 0u; });  //(not a number: 0)
+  }
   //In 3D, each corner takes q = R(w), s = float24(u * q), t = float24(v * q). s, t and q then become 15-bit
   //integers on the largest exponent among the three of each, and are stepped from the same corner as the colors
   //(part 60). A pixel's coordinate is the floored step times R of the floored q. With the texture matrix's q

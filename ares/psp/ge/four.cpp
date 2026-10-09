@@ -59,17 +59,17 @@ static alwaysinline auto floorLanes(GE::f32x4 value) -> GE::s32x4 {
   GE::s32x4 cut = __builtin_convertvector(value, GE::s32x4);
   return cut + (__builtin_convertvector(cut, GE::f32x4) > value);  //(a comparison that holds is -1)
 }
-//geReciprocal() (draw.cpp) of each lane, the same numbers: the chord's start and slope fetched a lane at a time, the
-//rest four at once. A lane at 2^111 or more, or a zero, denormal, infinity or not a number, is worked out alone.
+//geReciprocal() (draw.cpp) of each lane, the same numbers: each lane's place on its chord worked out alone (the
+//chords a table), the rest four at once. A lane at 2^111 or more, or a zero, denormal, infinity or not a number, is
+//worked out alone too.
 static alwaysinline auto reciprocalLanes(GE::f32x4 x) -> GE::f32x4 {
   auto bits = (GE::u32x4)x;
   GE::u32x4 exponent = bits >> 23 & 255;
-  GE::s32x4 start, slope;
+  GE::s32x4 q;
   for(u32 lane = 0; lane < 4; lane++) {
     auto& line = reciprocalChords.chords[bits[lane] >> 16 & 127];
-    start[lane] = line.start, slope[lane] = line.slope;
+    q[lane] = (64 * line.start + 63 + line.slope * s32(bits[lane] >> 8 & 255)) >> 7;
   }
-  GE::s32x4 q = (64 * start + 63 + slope * (GE::s32x4)(bits >> 8 & 255)) >> 7;
   auto value = (GE::f32x4)((238 - exponent) << 23) * __builtin_convertvector(q, GE::f32x4);
   value = (GE::f32x4)((GE::u32x4)value | (bits & 0x8000'0000));
   GE::s32x4 alone = exponent - 1 > 236u;  //(0 runs round to the top)
@@ -81,14 +81,17 @@ static alwaysinline auto reciprocalLanes(GE::f32x4 x) -> GE::f32x4 {
 //trunc24(integer * unit * reciprocal) (draw.cpp) of each lane, two at a time in doubles, where each product is exact
 //and, being 0 or between 2^-300 and 2^300, a normal double (so clearing its fraction past the top 23 bits is all).
 static alwaysinline auto productLanes(GE::s32x4 integer, float unit, GE::f32x4 reciprocal) -> GE::f32x4 {
-  GE::f32x4 result;
-  for(u32 half = 0; half < 4; half += 2) {
-    GE::f64x2 product = GE::f64x2{f64(integer[half]), f64(integer[half + 1])} * f64(unit) *
-                        GE::f64x2{f64(reciprocal[half]), f64(reciprocal[half + 1])};
-    product = (GE::f64x2)((GE::u64x2)product & ~u64(0) << 29);
-    result[half] = float(product[0]), result[half + 1] = float(product[1]);
-  }
-  return result;
+  using s32x2 = s32 __attribute__((vector_size(8)));
+  using f32x2 = float __attribute__((vector_size(8)));
+  auto half = [&](s32x2 whole, f32x2 by) {
+    auto product = __builtin_convertvector(whole, GE::f64x2) * f64(unit) * __builtin_convertvector(by, GE::f64x2);
+    return __builtin_convertvector((GE::f64x2)((GE::u64x2)product & ~u64(0) << 29), f32x2);
+  };
+  f32x2 low = half(__builtin_shufflevector(integer, integer, 0, 1),
+                   __builtin_shufflevector(reciprocal, reciprocal, 0, 1));
+  f32x2 high = half(__builtin_shufflevector(integer, integer, 2, 3),
+                    __builtin_shufflevector(reciprocal, reciprocal, 2, 3));
+  return __builtin_shufflevector(low, high, 0, 1, 2, 3);
 }
 //passes() (pixel.cpp) lane by lane.
 static alwaysinline auto passesLanes(u32 comparison, GE::s32x4 a, GE::s32x4 b) -> GE::s32x4 {
@@ -141,6 +144,8 @@ auto GE::fourFriendly(const Job& job) const -> bool {
     for(u32 n = 0; n < 4; n++) if(!r.flat && !small(r.colors[n])) return false;
     for(u32 n = 0; n < 3; n++) if(!r.flat && r.shines && !small(r.shine[n])) return false;
     if((p.fog && !small(r.fog)) || (needsZ && !small(r.depth))) return false;
+    //(and 3D texture coordinates' s, t and q, part 60: within 2^29 at the corners)
+    if(look.textured && r.perspective && !(small(r.texS) && small(r.texT) && small(r.texQ))) return false;
   }
   return true;
 }
