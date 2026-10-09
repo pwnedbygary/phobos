@@ -1,15 +1,16 @@
 # The PSP's hardware renderers: Vulkan, then OpenGL
 
-**Status (2026-10-08):** a Vulkan renderer drawing the owner's games with the GPU's own rasterizer, texture units
+**Status (2026-10-09):** a Vulkan renderer drawing the owner's games with the GPU's own rasterizer, texture units
 and blending, at the PSP's resolution, on Apple's M1 (MoltenVK) and the RP6's Adreno 740 (docs/psp-core.md, part
-36). On the RP6 it draws the six benchmark scenes 1.5 to 2.3 times as fast as the software renderer on seven threads
-(below: "Speed"). With shader blending (part 45) the owner's scenes on the M1 match the software renderer on 77-98%
-of pixels ("Accuracy"); the rest are mostly a level or two apart from texel edges and rasterization. In the app and
-the desktop program since part 41 (Settings' "PSP Renderer", Software the default: "In Phobos"). Since part 44 it
-draws at 1 (exact) to 10 times the PSP's resolution and presents on Android's window without reading back
-("Upscaling", "Presenting"); since part 45 it blends in the shader, reading the frame buffer, so blending,
-dithering, logic operations and write masks are the software renderer's to the bit ("Shader blending"). No OpenGL
-yet ("The plan").
+36). Since part 47 made the software renderer's seven threads faster, those are ahead of it at Native in the 3D
+scenes on the RP6; it's ahead in the 2D ones there, and draws above 1x (below: "Speed"). On Turnip, the app's
+driver on the RP6, the owner's scenes match the software renderer on 73-100% of pixels ("Accuracy"); the rest are
+mostly a level or two apart from texel edges and rasterization. In the app and the desktop program since part 41
+(Settings' "PSP Renderer", Software the default: "In Phobos"). Since part 44 it draws at 1 (exact) to 10 times the
+PSP's resolution and presents on Android's window without reading back ("Upscaling", "Presenting"); since part 45
+it blends in the shader where the GPU keeps rasterization order (Turnip), reading the frame buffer, so blending,
+dithering, logic operations and write masks are the software renderer's to the bit ("Shader blending"); without
+the order the GPU blends 8888 itself, close (part 49: "Without rasterization order"). No OpenGL yet ("The plan").
 
 The owner's direction (2026-10-07): a hardware renderer as PPSSPP has one (the GPU's own rasterizer, texture units
 and blending; shaders generated from the GE's state; upscaling), Vulkan first and OpenGL after. The software renderer
@@ -100,7 +101,8 @@ can't do.
 Every choice the GE's state makes there is a **specialization constant** (15: texturing, the texture function, the
 alpha and color tests' comparisons, fog, the depth range test, clear mode, the source and destination factors'
 parts, the alpha written, dithering, the format to narrow to, the logic operation, clamping, and a texture's 16-bit
-format when it's a frame buffer's). So each mix of settings a game uses is a shader of its own, compiled by the driver
+format when it's a frame buffer's; 18 since shader blending's reading and its operation (part 45) and the source
+term (part 49)). So each mix of settings a game uses is a shader of its own, compiled by the driver
 without what it doesn't use: generated shaders, made by the driver from one source rather than by writing GLSL text
 at run time as PPSSPP does. The per-draw values (references, masks, colors, the dither matrix, the texture's size)
 are push constants.
@@ -229,8 +231,9 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
   (dual-source blending), and without that, the GPU's own source factors where they're the same; BLEND_FIXED_B as the
   blend constant. Minimum and maximum are the GPU's; the absolute difference is approximated by the maximum. The
   difference from the PSP: the PSP multiplies each term in whole numbers and truncates it (`(2s+1)(2f+1) >> 10`),
-  then adds, while the GPU rounds the sum, so blended pixels are often a level apart. Fixed-function blending can't
-  do better.
+  then adds, while the GPU rounds the sum, so blended pixels were often a level apart; since part 49 the shader
+  gives the GPU the source term as the PSP makes it, nudged a quarter of a step (`TERM`), and most of them are the
+  PSP's ("Without rasterization order").
 - **Dithering**: done in the shader where the GPU doesn't blend after (and with the color narrowed to the frame
   buffer's 16-bit format there, as the PSP narrows it); not when blending, since the PSP dithers the blended color.
 - **16-bit frame buffers** are 8888 on the GPU: unblended draws are narrowed in the shader, so they're exact; blended
@@ -242,7 +245,9 @@ What the GPU does with the GPU's own units, and how near the PSP it comes:
 
 That's the fixed-function way, still what a backend that can't read the frame buffer does. Vulkan's now reads it
 (part 45, "Shader blending" below): blending, dithering after it, logic operations, partial write masks and the
-16-bit formats are pixel.cpp's arithmetic there, and the differences above are gone for those draws.
+16-bit formats are pixel.cpp's arithmetic there, and the differences above are gone for those draws. Every blend
+reads where the GPU keeps rasterization order; without it (part 49) only what the GPU can't come close to does, and
+on Qualcomm's own driver nothing.
 
 ## Upscaling (part 44)
 
@@ -269,6 +274,13 @@ images allow (a target 512 of the PSP's pixels across, so 10 on both test GPUs).
 - **Render to texture**: a copy of a target for a texture keeps the target's scale (`Texture::textureScale`), and
   the shader samples it with its coordinates multiplied by that, so a frame buffer used as a texture keeps its
   detail.
+- **2D triangles' edges** (part 49): above 1x a 2D triangle's texture coordinates are held inside its corners' by
+  what half a pixel moves them, half a texel at most (`triangle()`, from the coordinates' slope across the screen;
+  the vertex's "held" flag; `draw.frag` clamps them), which is as far as its pixels' middles reach at 1x. The GPU's
+  pixels within half a PSP pixel of an edge sampled up to half a texel beyond it before: Ridge
+  Racer 2's menu draws its picture as two quads meeting at x = 240, the right one mirroring the left, and the filter
+  blended the texel past the picture into a one-pixel line down the middle (`gpuSeams`). At 1x nothing changes. A
+  2D sprite's stepped coordinates aren't held (none seen bleeding).
 
 The shown picture, read back (where it isn't presented): the screen is made `MostShown` (4) times the PSP's size
 at most, and the picture is read back at the renderer's scale and copied (nearest) into it. That's the desktop's
@@ -311,7 +323,8 @@ the frame before's: the shrunk copy is kept when its slot is next waited for, a 
 
 A draw that blends, uses a logic operation other than copy, or has a write mask keeping part of a channel reads the
 target's pixel in `draw.frag` and does from there on what pixel.cpp does, so its result is the software renderer's
-to the bit (`settings()`: `reading`, the pipeline's `reads` and `blending`):
+to the bit (`settings()`: `reading`, the pipeline's `reads` and `blending`). That's every such draw where the GPU
+keeps rasterization order; without it, since part 49, only those the GPU's own blending can't come close to (below):
 - **The read**: the target's color is the render pass's input attachment as well as its color attachment, in the
   GENERAL layout, read with `subpassLoad` (`READS`), which every Vulkan GPU has. Each write is narrowed to the frame
   buffer's format (`QUANTIZE` its format), so what's read back is what memory would hold: 5, 6 or 4 bits kept
@@ -323,15 +336,18 @@ to the bit (`settings()`: `reading`, the pipeline's `reads` and `blending`):
   operations are off for those draws.
 - **Order**: a pixel's read has to see the primitive before's write. Where the driver offers rasterization-order
   attachment access (`VK_EXT_rasterization_order_attachment_access`, or ARM's before it) the subpass and pipelines
-  ask for it, every pipeline too, and a draw's overlapping primitives stay in one draw (`readsInOrder`). Every
-  reading draw also waits for the ones before (a `BY_REGION` barrier, a self-dependency of the subpass): without
-  it, and with only the reading pipelines asking for the order, Turnip on the RP6 failed the start-up check (its
-  blended triangles over unblended ones 80 pixels off). Without that access each reading draw has the barrier, and
-  `GPU::emit()` keeps no two primitives that overlap in one draw: each primitive's box in the target's pixels is
-  checked against the draw's (at most `MostBoxes`, 64), and one that overlaps begins another draw. The M1's MoltenVK
-  and the Adreno's own driver have no such access, so they split: with the splitting off, the test below fails on
-  the M1. Where the start-up check fails in order, it's run again with the draws split (`System::startRenderer()`),
-  and the log says so; a check that fails names the GPU and whether it blended in the shader.
+  ask for it, every pipeline too, and a draw's overlapping primitives stay in one draw (`readsInOrder`). Part 45
+  also had every reading draw wait for the ones before (a `BY_REGION` barrier, a self-dependency of the subpass):
+  with only the reading pipelines asking for the order, Turnip on the RP6 had failed the start-up check without it.
+  Since every pipeline of the subpass asks, the order covers the draws before a reading one too, and part 49 drops
+  the barrier in order: Turnip passes the check and the tests without it, and in a run before and after (from adb's
+  shell, an earlier build) GTA's woods ran 59 frames a second with it, 71 without. Without that access each reading
+  draw has the barrier, and `GPU::emit()` keeps no two primitives that overlap in one draw: each primitive's box in
+  the target's pixels is checked against the draw's (at most `MostBoxes`, 64), and one that overlaps begins another
+  draw. The M1's MoltenVK has no such access, nor the Adreno's own driver; there only what the GPU's own blending
+  can't come close to reads ("Without rasterization order", below), and on the Adreno's driver nothing. Where the
+  start-up check fails in order, it's run again with the GPU blending and the rest split (nothing read where reading
+  apart can't be trusted), then with nothing read (`System::startRenderer()`), and the log says how it draws.
 - **Clears** of a 16-bit frame buffer are narrowed to its format too, so a reading draw over a cleared pixel reads
   memory's color.
 - **Native stays exact**, the software renderer the default; at a scale above 1 the same arithmetic runs on each of
@@ -348,7 +364,42 @@ On the RP6 (Adreno 740, Turnip from the Driver Manager, in order; logcat's "PSP"
 "blending in the shader, in order" or "overlaps apart"): Lumines' menus 60 frames a second at Native (5.2 ms a
 frame); Burnout Legends' menu, its 3D attract scene behind, 60 at Native (14.4 ms) and 51.4 at 4x (18.3 ms, a
 heavier attract scene, the GPU 20% busy); the pictures right to the eye. The GPU tests, built for Android and run
-on the Adreno's own driver (no rasterization-order access: `cmd gpu vkjson`), pass with the draws split.
+on the Adreno's own driver (no rasterization-order access: `cmd gpu vkjson`), pass with the draws split. (Part 49:
+in games that driver's reads go wrong, and nothing reads there now.)
+
+### Without rasterization order (part 49)
+
+A 3D game blends thousands of primitives a frame, and split apart each became a draw and a barrier: Midnight Club
+3's race made 4 million draws in 300 frames, 1.3 frames a second on the M1 and 13 on the RP6's own driver, against
+38.2 and 32.2 with the GPU blending. So without the order (`Backend::readsBlending` off), blending in an 8888 frame
+buffer by the factors and operations the GPU has is the GPU's again, and only what it can't come close to reads,
+split as above (`settings()`: `unlike`): a write mask keeping part of a channel, a logic operation, the absolute
+difference, doubled alphas, and any blend in a 16-bit frame buffer. There the PSP narrows each blend's result to the
+format, dithered, before the next blend reads it, and the GPU's 8-bit target drifted by whole steps over layered
+blends: Peace Walker's title (5551, dithered, additive noise over alpha blends) was 39.7% identical on the M1 that
+way, 99.7% reading. Those are few in the scenes measured (Midnight Club 3 and GTA blend in 8888, Lumines a few 5551
+sprites a frame), and in order every blend still reads.
+
+**The GPU's blending, closer** (`draw.frag`'s `TERM`): where it takes output 0 as it is (its source factor one),
+the shader makes that the PSP's whole-number source term, `(2s+1)(2f+1) >> 10`, and puts it a quarter of a step below
+itself where the GPU adds the destination's term, above where it subtracts. The PSP drops each term's fraction and
+then adds; the GPU adds and rounds once, and the quarter puts its rounding where the PSP's dropped fractions land
+nearly always. In a model of alpha blending over every value that took channels the same from 50.6% to 93.7% (92.7%
+blending in half floats); `gpuBlendingApart`'s random 8888 blends are 8893 channels of 9216 the same on the M1 and on
+both of the RP6's drivers, none more than 8 apart; pspsdk's blend sample is 100% the same through the GPU's blending.
+Dithering still isn't done for blended pixels there, nor the 16-bit narrowing.
+
+**Qualcomm's own driver** (the RP6's, build of 12/27/23) passed the start-up check's small pictures, but in a game's
+frame buffer a draw that read sometimes saw the pixels as they were before the draws just before it, barrier or not
+(a memory or image barrier, shader-read access as well): Midnight Club 3's menu was 10% identical reading. So on that
+driver, without the order, nothing reads (`vulkan.cpp`, by `VkPhysicalDeviceDriverProperties`' driver ID), and its
+16-bit blends are the GPU's too. The start-up check gained a game-sized picture (480x272 in rows of 512: 128 opaque
+sprites, each under a blended one moved a few pixels, through a write mask keeping part of each channel), which
+caught that driver some of the time. A driver that fails the check in order is checked again without the order, the
+GPU blending (with nothing read where reading apart can't be trusted: `Backend::readsApart`), and if reading fails
+then too, checked again with nothing read (`System::startRenderer()`). The
+log's start-up line says "blending in the shader, in order", "blending in 8888 by the GPU, the rest in the shader,
+overlaps apart", or "blending by the GPU".
 
 PPSSPP's shader blending (its framebuffer fetch and its copies of the destination) was a guide to the approach only;
 none of its code is used, copied or translated.
@@ -409,13 +460,61 @@ layout 15 to 17. Peace Walker's title wouldn't load (its program hash no longer 
 | Liberty City Stories, park edge | 77.4% | 397,544 | 3,145 | 1,588 |
 | Liberty City Stories, woods | 82.2% | 333,806 | 5,163 | 2,207 |
 
+After part 49: the six scenes remade at StateVersion 17 (`~/phobos-work/scratch/cpu-speed/scenes`; the race and the
+city with the accelerator held, the city in place of the park's edge; Peace Walker's title loads again), 10 frames
+each. On the RP6 from adb's shell, the runner gets the system's driver (Qualcomm's), not the app's: the app hands the
+core the Driver Manager's driver through libadrenotools. Qualcomm's driver has no rasterization order and reads
+nothing (above), so the GPU blends everything:
+
+| Scene (game) | Pixels identical | Channels apart by 1-2 | 3-8 | more |
+|---|---|---|---|---|
+| Lumines, demo | 73.0% | 646,394 | 128,032 | 502 |
+| Peace Walker, title | 40.4% | 0 | 740,466 | 824,039 |
+| Midnight Club 3, profile menu | 88.7% | 236,941 | 11,273 | 3,324 |
+| Midnight Club 3, night race | 67.1% | 681,781 | 31,554 | 5,806 |
+| Liberty City Stories, city | 52.2% | 909,324 | 4,537 | 1,666 |
+| Liberty City Stories, woods | 49.3% | 1,054,982 | 8,662 | 2,199 |
+
+The same driver before part 49, reading in the shader with its draws split: 59.3%, 100.0%, 10.0%, 34.5%, 47.3% and
+32.2% (its reads wrong in all but Peace Walker's title: noise, up to 3.3 million channels more than 8 apart); with
+the GPU's blending as it was (no `TERM`): 45.6%, 39.8%, 78.7%, 33.9%, 41.4% and 39.2%. Peace Walker's title, all
+5551 with dithering, is the one left whole steps apart (8, 16, 25 levels: its layered noise a little brighter); the
+rest are mostly a level apart.
+
+On the RP6 with Turnip, the app's driver (the runner opening Turnip's `.so` itself as the app does, a scratch
+patch), in order, every blend read:
+
+| Scene (game) | Pixels identical | Channels apart by 1-2 | 3-8 | more |
+|---|---|---|---|---|
+| Lumines, demo | 97.8% | 63,552 | 13,774 | 242 |
+| Peace Walker, title | 100.0% | 0 | 326 | 115 |
+| Midnight Club 3, profile menu | 97.5% | 42,768 | 10,364 | 3,315 |
+| Midnight Club 3, night race | 87.8% | 248,585 | 8,060 | 1,093 |
+| Liberty City Stories, city | 73.4% | 509,055 | 4,191 | 1,673 |
+| Liberty City Stories, woods | 80.6% | 378,827 | 5,624 | 2,197 |
+
+On the M1 (MoltenVK, no rasterization order: blending in 8888 by the GPU, the rest read; before part 49 every blend
+read, and the 3D scenes ran at 1-3 frames a second):
+
+| Scene (game) | Pixels identical | Channels apart by 1-2 | 3-8 | more |
+|---|---|---|---|---|
+| Lumines, demo | 77.9% | 550,666 | 14,190 | 348 |
+| Peace Walker, title | 99.7% | 0 | 3,638 | 1,258 |
+| Midnight Club 3, profile menu | 92.6% | 138,645 | 9,986 | 3,324 |
+| Midnight Club 3, night race | 80.3% | 375,181 | 8,460 | 1,093 |
+| Liberty City Stories, city | 52.9% | 968,787 | 3,849 | 1,683 |
+| Liberty City Stories, woods | 61.9% | 799,829 | 6,095 | 2,207 |
+
 What differs after shader blending:
 - **Texel edges and rasterization** are most of what's left: where the GPU's interpolated texture coordinates land
   on the other side of a texel's edge from the GE's per-pixel division, and edges where the GPU's fill rule and the
   GE's disagree by a pixel. Those show as channels a level or two apart (and a few farther) over the 3D games'
   textured surfaces.
 - **Blending's rounding**, the dithering of blended pixels, and the 8 bits kept between draws of a 16-bit frame
-  buffer are gone where the GPU reads the frame buffer (part 45); pspsdk's blend sample is 100% the same.
+  buffer are gone where the GPU reads the frame buffer (part 45); pspsdk's blend sample is 100% the same. Where the
+  GPU blends (in 8888 without rasterization order; everything on Qualcomm's own driver), its rounding is mostly the
+  PSP's (`TERM`) and the rest a level apart, but blended pixels aren't dithered, and on Qualcomm's driver a 16-bit
+  frame buffer keeps 8 bits between blends.
 - **Known approximations** still: the depth buffer not read back (so the CPU, a texture or a PRIM the software
   renderer draws sees memory's depth, not the GPU's); a change to the depth buffer's bytes refills all of each 16
   KiB it touches; a PRIM's pixels past its frame buffer's row end cut at the row; textures past a frame buffer's
@@ -441,6 +540,30 @@ On the RP6 the Vulkan renderer is 1.5-2.3 times the seven-thread software render
 threads' cores. On the M1, whose CPU draws fast, it's level with seven threads in the 3D games: there what's left is
 the CPU's emulation (the GE's thread does the transform and setup in both renderers). The GPU itself is far from busy:
 on the RP6 the CPU waits 0.3-1.5 ms a frame for it, and spends 0.25-2.8 ms recording and submitting.
+
+Part 49, the scenes remade at StateVersion 17 (the race and the city with the accelerator held), the runner from
+adb's shell with the Phobos app not running, means of two steady rounds (a first, slower round after the device had
+run 10x in the app was dropped); the RP6's Vulkan on the system's driver (Qualcomm's) and on Turnip (the app's,
+opened by a scratch patch); the M1 one round:
+
+| Scene (game) | RP6: 1, 7 threads, Vulkan (Qualcomm's), Vulkan (Turnip) | M1 (MoltenVK): 1, 7 threads, Vulkan |
+|---|---|---|
+| Lumines, demo | 91.2, 188.0, **199.4**, **209.1** | 113.8, 245.3, **114.6** |
+| Peace Walker, title | 66.5, 227.8, **368.6**, **344.8** | 104.2, 416.2, **307.6** |
+| Midnight Club 3, profile menu | 30.3, 71.1, **45.9**, **49.7** | 39.9, 109.9, **55.0** |
+| Midnight Club 3, night race | 22.5, 53.5, **32.2**, **33.8** | 30.3, 50.7, **38.2** |
+| Liberty City Stories, city | 39.2, 77.2, **59.8**, **63.7** | 47.5, 111.9, **72.2** |
+| Liberty City Stories, woods | 39.3, 76.6, **73.4**, **74.7** | 50.8, 134.8, **89.6** |
+
+Part 47 made the software renderer's seven threads much faster, and in the 3D scenes they're now ahead of the
+Vulkan renderer at Native: there the emulation thread is the bound (Turnip's race 26.9 ms a frame, the software
+renderer's 18.3), doing the transform and setup as before plus the recording, and waiting whenever the CPU or the GE
+reads what the GPU drew (the race reads back 4 times a frame). The app shows the same: Liberty City Stories, driving
+off from its new game's first mission, 50.6 frames a second at Native on Turnip against 60.0 in software. On the RP6
+Vulkan's lead is in the 2D scenes, in drawing above 1x, and in leaving the drawing threads' cores idle. On the M1,
+whose CPU draws fast, seven threads lead in every scene; there Lumines reads its 5551 sprites' blending, split
+(30,284 draws in 300 frames against 4,891), at 114.6 against 311 with the GPU's blending, and Peace Walker's title
+reads too.
 
 What made it fast, in order: drawing on the GPU's rasterizer at all; keeping frame buffers on the GPU and reading back
 only on demand; render to texture on the GPU (the copies above); copies taken only when their target changed; and

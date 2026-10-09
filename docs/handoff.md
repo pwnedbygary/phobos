@@ -25,6 +25,31 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP Vulkan renderer: in play on the RP6, blending without rasterization order, the 8x line — 2026-10-09
+
+Branch `cursor/psp-vk-play-2b67`, on top of #180's `cursor/psp-cpu-speed4-2b67` (a4a63b13f). docs/psp-core.md, part
+49, has what was seen and measured; docs/psp-gpu-renderers.md the design and the accuracy and speed tables. Original
+code: nothing of PPSSPP's or JPCSP's used. Software stays the default; Native stays exact on Turnip.
+- **In the app** (Turnip, in order): Midnight Club 3, both GTAs, both Burnouts, WipEout, Peace Walker, MotorStorm and
+  Ace Combat played past their menus at Native, LCS at 4x and 10x too: pictures right, no crash; home and back and a
+  window resize while presenting kept going. Killzone not started (it saves to the owner's stick); Ridge Racer 2's
+  profile loop (kernel) left only its menus. Rotation untestable (the RP6 forces landscape).
+- **Fixes** (`ares/psp/ge/gpu/`, `ares/psp/system/system.cpp`): without rasterization order, 8888 blending is the
+  GPU's again (Midnight Club 3's race 1.3 → 38 fps on the M1, 13 → 32 on Qualcomm's driver), with the PSP's
+  whole-number source term (`TERM`); masks, logic, absolute difference, doubled alphas and 16-bit blends read;
+  Qualcomm's own driver reads nothing (stale reads in game-sized frame buffers), the start-up check has a game-sized
+  case and falls back to reading nothing; no barrier between draws in order; above 1x a 2D triangle's texels held
+  inside its corners (Ridge Racer 2's 8x line). Tests: `gpuBlendingApart`, `gpuSeams`, `gpuCheck`. tests/psp
+  342/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; independent review passed with fixes, all taken.
+- **Accuracy, RP6** (Software vs Vulkan, pixels identical, Lumines / Peace Walker / MC3 menu / MC3 race / GTA city /
+  woods): system driver from adb 73.0 / 40.4 / 88.7 / 67.1 / 52.2 / 49.3%; Turnip 97.8 / 100.0 / 97.5 / 87.8 / 73.4 /
+  80.6%.
+- **Next**: Vulkan at Native is now behind seven software threads in the 3D games (emulation thread: recording and
+  read-back waits; WipEout's 209 submits a frame); Qualcomm's 16-bit blending; sprites' edges above 1x.
+- Scratch: `~/phobos-work/scratch/vk-play` (build.sh, m1-acc.sh, rp6-acc.sh, rp6-speed.sh, cmp.py, hal-patch.py,
+  blendlog-patch.py, edgelog-patch.py, gpu-tests/), `~/phobos-work/scratch/hw3/rp6` (the app's scripts); RP6
+  `/data/local/tmp/vk-play`. Hold `~/phobos-work/rp6.lock` and time only while the app isn't running.
+
 ## PSP core: the emulation thread faster again — no drawing for its own textures, batches in a ring — 2026-10-08
 
 Branch `cursor/psp-cpu-speed4-2b67`, on top of #178's `cursor/psp-ge-fits-2b67` (72443bc4d). docs/psp-core.md, part 47,
