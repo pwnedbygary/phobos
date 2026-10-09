@@ -1248,6 +1248,82 @@ static auto geRing() -> void {
   for(u32 threads : {2u, 4u, 8u}) CHECK(drawn(threads) == one, true);
 }
 
+//Sprites drawing over their own texture, from a copy where none takes a texel it has drawn by then (ge/draw.cpp's
+//readsAhead()), in a list on several threads: a picture drawn, brightened in place twice (each from the picture as the
+//last left it: its copy decoded as its batch starts, once the one before is drawn), halved in place, drawn with
+//elsewhere, and a sprite over it whose blending keeps every pixel (not drawn); then, in another list once that's all
+//drawn, brightened again (its copy decoded at once, the sprites drawn in bands). It comes out as reading every
+//texture from memory as it's drawn (a machine without watching()) does on one thread, with 1, 2, 4 and 8 threads,
+//batches shared out however small.
+static auto geOwnTexture() -> void {
+  constexpr u32 Picture = 0x10'0000;  //(VRAM offset: 64 by 64, 5551)
+  auto build = [&](Memory& memory) {
+    ListWriter list{memory, ListA};
+    u32 vertex = Vertices;
+    struct V { float u, v; u32 color; float x, y, z; };
+    auto put = [&](u32 kind, std::initializer_list<V> vertices) {
+      list.to(GE::VertexAddress, vertex);
+      for(auto& v : vertices) {
+        for(float value : {v.u, v.v}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+        memory.write(4, vertex, v.color), vertex += 4;
+        for(float value : {v.x, v.y, v.z}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+      }
+      list.put(GE::Primitive, kind << 16 | vertices.size());
+    };
+    list.put(GE::FrameBufferPointer, Picture), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 1);
+    list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+    list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+    for(u32 n = 0; n < 12; n++) {
+      float x = n * 13 % 50, y = n * 7 % 40;
+      put(GE::Triangles, {{0, 0, 0xff10'2030 * (n + 1), x, y, 0}, {0, 0, 0x8000'ff00, x + 30, y + 9, 0},
+                          {0, 0, 0xffff'0000, x + 11, y + 28, 0}});
+    }
+    list.put(GE::TextureMappingEnable, 1), list.put(GE::TextureAddress0, Picture);
+    list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64), list.put(GE::TextureSize0, 8 << 8 | 8);
+    list.put(GE::TextureFormat, 1), list.put(GE::TextureFilter, 1 | 1 << 8);
+    list.put(GE::TextureFunction, 0 | 1 << 16);  //modulated, doubled
+    list.put(GE::AlphaBlendEnable, 1), list.put(GE::BlendMode, 10 | 10 << 4);
+    list.put(GE::BlendFixedA, 0xff'ffff), list.put(GE::BlendFixedB, 0xff'ffff);
+    for(u32 twice = 0; twice < 2; twice++) {
+      put(GE::Sprites, {{0, 0, 0xff8e'8e8e, 0, 0, 0}, {32, 64, 0xff8e'8e8e, 32, 64, 0},
+                        {32, 0, 0xff8e'8e8e, 32, 0, 0}, {64, 64, 0xff8e'8e8e, 64, 64, 0}});
+    }
+    list.put(GE::AlphaBlendEnable, 0), list.put(GE::TextureFunction, 3);
+    put(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {16, 64, 0, 8, 32, 0}, {16, 0, 0, 8, 0, 0}, {32, 64, 0, 16, 32, 0},
+                      {32, 0, 0, 16, 0, 0}, {48, 64, 0, 24, 32, 0}, {48, 0, 0, 24, 0, 0}, {64, 64, 0, 32, 32, 0}});
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512), list.put(GE::FrameBufferPixelFormat, 3);
+    put(GE::Sprites, {{0, 0, 0, 100, 50, 0}, {64, 64, 0, 228, 178, 0}});
+    list.put(GE::AlphaBlendEnable, 1), list.put(GE::BlendMode, 10 | 10 << 4 | 0 << 8);
+    list.put(GE::BlendFixedA, 0), list.put(GE::BlendFixedB, 0xff'ffff);
+    put(GE::Sprites, {{0, 0, 0xffff'ffff, 90, 40, 0}, {64, 64, 0xffff'ffff, 250, 200, 0}});
+    list.put(GE::Finish), list.put(GE::End);
+    list.address = ListB;
+    list.put(GE::FrameBufferPointer, Picture), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 1), list.put(GE::TextureFunction, 0 | 1 << 16);
+    list.put(GE::BlendFixedA, 0xff'ffff), list.put(GE::BlendFixedB, 0xff'ffff);
+    put(GE::Sprites, {{0, 0, 0xff8e'8e8e, 0, 0, 0}, {32, 64, 0xff8e'8e8e, 32, 64, 0},
+                      {32, 0, 0xff8e'8e8e, 32, 0, 0}, {64, 64, 0xff8e'8e8e, 64, 64, 0}});
+    list.put(GE::Finish), list.put(GE::End);
+  };
+  auto drawn = [&](u32 threads, u64 shared, bool decoding) {
+    KernelMachine m;
+    if(!decoding) m.system.memory.watching = nullptr;  //(nothing kept decoded: Memory::canWatch())
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = shared;
+    build(m.system.memory);
+    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    m.system.ge.settle();
+    m.call("sceGeListEnQueue", {ListB, 0, 0xffff'ffff, 0});
+    m.system.ge.settle();
+    return m.system.memory.vram;
+  };
+  auto read = drawn(1, 8192, false);
+  for(u32 threads : {1u, 2u, 4u, 8u}) {
+    for(u64 shared : {u64(0), u64(8192)}) CHECK(drawn(threads, shared, true) == read, true);
+  }
+}
+
 //sceGeBreak, as pspautotests' gpu/ge/break and breakwait recorded on a PSP: the refusals in their order (a mode but 0
 //or 1, parameters reaching the kernel's half of memory, an empty queue); mode 0 breaking off a stalled list, its ID
 //returned, the GE free (sceGeSaveContext works), and sceGeContinue taking it up again; a list paused by a PAUSE
@@ -1427,6 +1503,7 @@ auto geTests() -> Tests {
     {"ge clear", geClear}, {"ge transfer", geTransfer}, {"ge driver", geDriver}, {"ge base kept", geBaseKept},
     {"ge saved state", geSaved}, {"ge endless list", geEndless}, {"ge drawn on several threads", geThreads},
     {"ge deferred texture busy", geDeferredBusy}, {"ge batches round the ring", geRing},
+    {"ge drawn over its own texture", geOwnTexture},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},

@@ -246,16 +246,20 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     }
     if(exact) drawnRows = std::min<u32>(rows, (reached + 7) & ~7);  //(in eights, as above)
   }
+  //(a 2D sprite drawing over its own texture is still decoded where a copy taken first draws the same: readsAhead())
+  struct Ahead { GE& ge; const Look& look; const std::vector<Vertex>& vertices; u32 count; bool sprites; };
+  Ahead ahead{*this, look, vertices, count, format.through && kind == Sprites};
+  auto copyDraws = [&ahead] { return ahead.sprites && ahead.ge.readsAhead(ahead.look, ahead.vertices, ahead.count); };
   if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
-    decode(look, hardware ? Region{0, 0, -1, -1} : region, hardware ? rows : drawnRows, !hardware);
+    decode(look, hardware ? Region{0, 0, -1, -1} : region, hardware ? rows : drawnRows, !hardware, copyDraws);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
   if(hardware && !renderer->begin(*this, look, format.through, region)) {
     renderer->finish(*this);
     hardware = false;
     if(textured) {
-      decode(look, region, rows, true);
+      decode(look, region, rows, true, copyDraws);
       if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
     }
   }
@@ -407,6 +411,102 @@ auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool 
   if(!spriteJob(look, from, to, perspective, job)) return;
   if(hardware) return renderer->sprite(job);  //(its pixels, and their coordinates' steps, worked out as here)
   submit(job);
+}
+
+//Whether 2D sprites drawing over their own texture (texture.cpp's drawsOver()) come out the same drawn from a copy of
+//it taken just before them (decoded) as reading it from memory as they draw (texture.cpp): so when no texel any of
+//their pixels takes, where its weight isn't zero (a filter's second texel, a fraction 0 from the first, is multiplied
+//by 0), is a pixel they have drawn by then, drawing their jobs one after another, each row by row and left to right
+//(raster.cpp, as such a primitive is drawn). Pixels a test drops aren't drawn, but count as drawn here.
+//Looked into only for unturned sprites without a depth buffer drawn, into a frame buffer laid out as the texture is in
+//VRAM's plain copies (the same bytes from one row to the next, a texel a pixel): a texel is then the frame buffer's
+//pixel a whole number of rows and columns from where it would be at the frame buffer's start (rows dy down, and
+//within its row, past columns made up by the row after: a carry). Each job's texels are its columns' by its rows':
+//one taken in a row above it, or to its left in its own row, may be one it has drawn; one in an earlier job's area,
+//one that job drew.
+auto GE::readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool {
+  auto& p = look.pixel;
+  auto& t = look.texture;
+  s64 bytes = p.format == 3 ? 4 : 2;
+  if(p.clear || p.depthWrite || t.swizzled || t.format >= 8 || TexelBits[t.format] != bytes * 8) return false;
+  u32 physical = t.address & 0x1fff'ffff;
+  if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return false;
+  if((physical - Memory::VRAMBase) / Memory::VRAMSize & 1) return false;  //(a copy that rearranges VRAM)
+  s64 pitch = s64(p.stride) * bytes, texture = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  s64 width = std::min<u32>(t.width, 512), height = std::min<u32>(t.height, 512);
+  if(!pitch || pitch != s64(t.bufferWidth) * bytes) return false;
+  if(texture + (height - 1) * pitch + width * bytes > Memory::VRAMSize) return false;  //(all of it in this copy)
+  //texel (c, r) is the frame buffer's pixel (column(c), r + down + carry(c)): apart = down rows and along bytes
+  s64 apart = texture - s64(p.frameBuffer);  //(both on 16 bytes: a whole number of pixels)
+  s64 down = apart >= 0 ? apart / pitch : -((-apart + pitch - 1) / pitch), along = apart - down * pitch;
+  auto column = [&](s64 c) { return (along + c * bytes) % pitch / bytes; };
+  auto carry = [&](s64 c) { return (along + c * bytes) / pitch; };
+  std::vector<Job> jobs;
+  for(u32 n = 0; n + 1 < count; n += 2) {
+    Job job;
+    if(!spriteJob(look, vertices[n], vertices[n + 1], false, job)) continue;
+    if(job.firstX > job.lastX || job.firstY > job.lastY) continue;
+    if(job.sprite.turned || job.lastX >= s32(p.stride) || jobs.size() == 256) return false;
+    if(p.frameBuffer + (s64(job.lastY) * p.stride + job.lastX + 1) * bytes > Memory::VRAMSize) return false;
+    jobs.push_back(job);
+  }
+  //each job's texels whose weights aren't 0: its columns' (each with its pixel column), its rows' (each with its row)
+  struct Texel { s64 texel, at; };
+  struct Taken { std::vector<Texel> columns, rows; };
+  std::vector<Taken> taken(jobs.size());
+  for(u32 j = 0; j < jobs.size(); j++) {
+    auto& job = jobs[j];
+    auto& s = job.sprite;
+    for(s32 x = job.firstX; x <= job.lastX; x++) {
+      auto a = texelAxis(spriteAxis(s.columnFirst, s.columnStep, s.columnStart, x), t.width, t.clampU, job.linear);
+      taken[j].columns.push_back({a.first, x});
+      if(job.linear && a.fraction) taken[j].columns.push_back({a.second, x});
+    }
+    for(s32 y = job.firstY; y <= job.lastY; y++) {
+      auto a = texelAxis(spriteAxis(s.rowFirst, s.rowStep, s.rowStart, y), t.height, t.clampV, job.linear);
+      taken[j].rows.push_back({a.first, y});
+      if(job.linear && a.fraction) taken[j].rows.push_back({a.second, y});
+    }
+  }
+  for(u32 j = 0; j < jobs.size(); j++) {
+    auto& job = jobs[j];
+    //by carry: the pixel columns its texel columns are, those inside its own area (any; and one left of the pixel
+    //that took it)
+    struct Carry { s64 carry; std::vector<s64> columns; bool inside = false, left = false; };
+    std::vector<Carry> carries;
+    for(auto& c : taken[j].columns) {
+      s64 k = carry(c.texel), x = column(c.texel);
+      auto at = std::find_if(carries.begin(), carries.end(), [&](auto& e) { return e.carry == k; });
+      if(at == carries.end()) at = carries.insert(carries.end(), Carry{k, {}, false, false});
+      at->columns.push_back(x);
+      if(x >= job.firstX && x <= job.lastX) at->inside = true, at->left |= x < c.at;
+    }
+    std::vector<s64> rows;
+    for(auto& r : taken[j].rows) rows.push_back(r.texel);
+    std::sort(rows.begin(), rows.end());
+    auto any = [](const std::vector<s64>& sorted, s64 low, s64 high) {
+      auto at = std::lower_bound(sorted.begin(), sorted.end(), low);
+      return at != sorted.end() && *at <= high;
+    };
+    for(auto& e : carries) std::sort(e.columns.begin(), e.columns.end());
+    //an earlier job's area: drawn before any of this job's pixels
+    for(u32 i = 0; i < j; i++) {
+      auto& before = jobs[i];
+      for(auto& e : carries) {
+        if(any(e.columns, before.firstX, before.lastX) &&
+           any(rows, before.firstY - down - e.carry, before.lastY - down - e.carry)) return false;
+      }
+    }
+    //its own area: a row above the pixel's, or its own row left of it
+    for(auto& r : taken[j].rows) {
+      for(auto& e : carries) {
+        s64 y = r.texel + down + e.carry;
+        if(y < job.firstY || y > job.lastY || !e.inside) continue;
+        if(y < r.at || (y == r.at && e.left)) return false;
+      }
+    }
+  }
+  return true;
 }
 
 //A sprite's job (rectangle()): false if it covers no area at all (its corners in one row or column of sixteenths).

@@ -962,6 +962,105 @@ static auto drawDecodedTextures() -> void {
   for(u32 x = 0; x < 4; x++) CHECK(c.pixel(x, 2), 0x0001'0101u * (x + 1));
 }
 
+//Sprites drawing over their own texture (the frame buffer, 64 pixels wide, as a texture of 256 by 256) that never
+//take a texel they have drawn by then, where its weight isn't 0, draw from a copy taken first (draw.cpp's
+//readsAhead()), and come out as reading the texture from memory as they draw does (a machine without watching(), which
+//keeps nothing decoded), in each frame buffer format: the picture brightened in place, filtered (some second texels,
+//whose weights are 0, drawn already: the first sprite's first column, a row down, past the frame buffer's width);
+//halved in place; shrunk a little from its own top left; from a texture starting two rows and 16 pixels before the
+//frame buffer, a row down and 16 pixels right; through VRAM's third copy; and of palette indices. Those taking a texel
+//they have drawn aren't copied, and come out the same too: a pixel up, or left; from the texture before the frame
+//buffer, a row up; a filtered second texel, a quarter of the weight, repeated round to its row's first; a second
+//sprite taking the first's pixels.
+static auto drawCopiedTexture() -> void {
+  for(u32 format : {0u, 1u, 2u, 3u}) {
+    u32 bytes = format == 3 ? 4 : 2;
+    Canvas copied{format}, read{format};
+    read.memory.watching = nullptr;
+    std::mt19937 random{format + 1};
+    std::vector<u8> picture(64 * 1024), palette(1024);
+    for(auto& byte : picture) byte = random();
+    for(auto& byte : palette) byte = random();
+    for(Canvas* c : {&copied, &read}) {
+      c->memory.copyIn(Palette, palette.data(), palette.size());
+      c->ge.commands[GE::ClutAddress] = Palette & 0xff'ffff;
+      c->ge.commands[GE::ClutAddressUpper] = (Palette >> 8) & 0xf'0000;
+      c->ge.commands[GE::ClutFormat] = 3 | 0xff << 8;
+      c->ge.commands[GE::ClutLoad] = 32;  //(all 1 KiB)
+      c->ge.loadClut();
+    }
+    auto strips = [](u32 count, float width, float height, float across, float down) {
+      std::vector<V> sprites;
+      for(u32 n = 0; n < count; n++) {
+        sprites.push_back({n * across, 0, 0xff8e'8e8e, n * width, 0, 0});
+        sprites.push_back({(n + 1) * across, down, 0xff8e'8e8e, (n + 1) * width, height, 0});
+      }
+      return sprites;
+    };
+    auto one = [](float x, float y, float u, float v, float width = 32) {  //a sprite 32 high, from (x, y) at (u, v)
+      return std::vector<V>{{u, v, 0xffff'ffff, x, y, 0}, {u + width, v + 32, 0xffff'ffff, x + width, y + 32, 0}};
+    };
+    auto both = [](std::vector<V> first, const std::vector<V>& second) {
+      first.insert(first.end(), second.begin(), second.end());
+      return first;
+    };
+    u32 before = 0x8000 - (2 * 64 + 16) * bytes;  //(two rows and 16 pixels before a frame buffer at 0x8000)
+    struct Case {
+      std::vector<V> sprites;
+      u32 filter;
+      bool ahead;
+      u32 frameBuffer = 0, texture = 0, size = 8, kind = 0;  //(the texture's address, sides' bits and format)
+    };
+    std::vector<Case> cases = {
+      {strips(2, 32, 64, 32, 64), 0x101, true},   //brightened in place, 1:1
+      {strips(4, 8, 32, 16, 64), 0x101, true},    //halved
+      {strips(2, 30, 60, 32, 64), 0x101, true},   //shrunk a little
+      {one(0, 0, 16, 3), 0, true, 0x8000, before},
+      {strips(2, 32, 64, 32, 64), 0x101, true, 0, 0x40'0000},  //(VRAM's third copy)
+      {strips(2, 32, 64, 32, 64), 0x101, true, 0, 0, 8, format == 3 ? 7u : 6u},
+      {one(0, 1, 0, 0), 0, false},
+      {one(1, 0, 0, 0), 0, false},
+      {one(0, 0, 16, 1), 0, false, 0x8000, before},
+      {one(0, 0, 0.25f, 0, 64), 0x101, false, 0, 0, 6},  //(64 wide: column 64 repeats round to 0)
+      {both(one(0, 0, 0, 0), one(32, 0, 0, 0)), 0, false},
+    };
+    for(auto& test : cases) {
+      for(Canvas* c : {&copied, &read}) {
+        c->memory.copyIn(VRAM, picture.data(), picture.size());
+        c->ge.commands[GE::FrameBufferPointer] = test.frameBuffer;
+        c->ge.commands[GE::FrameBufferWidth] = 64;
+        c->texture(test.kind ? test.kind : format, 1 << test.size, 1 << test.size, 64);
+        c->ge.commands[GE::TextureAddress0] = test.texture;
+        c->ge.commands[GE::TextureBufferWidth0] = 0x04 << 16 | 64;
+        c->ge.commands[GE::TextureFilter] = test.filter;
+        c->ge.commands[GE::TextureFunction] = 0 | 1 << 16;  //modulated, doubled
+        c->ge.commands[GE::AlphaBlendEnable] = 1;
+        c->ge.commands[GE::BlendMode] = 10 | 10 << 4;
+        c->ge.commands[GE::BlendFixedA] = 0xff'ffff, c->ge.commands[GE::BlendFixedB] = 0xff'ffff;
+      }
+      auto pixel = copied.ge.pixelState();
+      auto texture = copied.ge.sampler();
+      auto look = copied.ge.lookFor(pixel, &texture);
+      std::vector<GE::Vertex> corners;
+      for(auto& v : test.sprites) {
+        GE::Vertex corner;
+        corner.u = v.u, corner.v = v.v, corner.x = v.x, corner.y = v.y, corner.color = v.color;
+        corners.push_back(corner);
+      }
+      CHECK(copied.ge.readsAhead(look, corners, corners.size()), test.ahead);
+      //(decode() takes the copy where readsAhead() says so, and only there)
+      GE::Look decoding = look;
+      copied.ge.decode(decoding, GE::Region{pixel.left, pixel.top, pixel.right, pixel.bottom}, 512, false,
+                       [&] { return copied.ge.readsAhead(decoding, corners, corners.size()); });
+      CHECK(decoding.texture.decoded != nullptr, test.ahead);
+      copied.ge.dropTextures();  //(the draw decodes afresh)
+      copied.draw(GE::Sprites, test.sprites);
+      read.draw(GE::Sprites, test.sprites);
+      CHECK(copied.memory.vram == read.memory.vram, true);
+    }
+  }
+}
+
 //A sprite whose blending keeps every pixel as it was (draw.cpp's keepsPixels(): the source times a fixed 0, plus the
 //destination times a fixed 255) isn't drawn, in each frame buffer format, which leaves the picture as drawing it does:
 //as dithering by a matrix of zeros, which is drawn, leaves it. Unless reading its texture would be reported: with
@@ -1207,6 +1306,7 @@ auto drawTests() -> Tests {
   return {
     {"draw textures kept decoded", drawDecodedTextures},
     {"draw textures kept decoded, their rows", drawDecodedRows},
+    {"draw over its own texture from a copy", drawCopiedTexture},
     {"draw keeping every pixel", drawKeptPixels},
     {"draw turned sprites kept decoded", drawTurnedDecoded},
     {"draw textures kept decoded against memory", drawDecodedAgainstMemory},

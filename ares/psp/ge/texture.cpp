@@ -38,8 +38,10 @@
 //Read from memory as before, texel by texel, are: a texture of a format the PSP doesn't have (11-15: texel() notes it
 //as it's used); a texture some of whose bytes have no memory behind them (each such read is reported); and a texture
 //the primitive may draw over itself (its frame buffer or depth buffer and the texture overlap), whose texels then
-//are the pixels it has drawn so far, as this core always drew it, kept so that every pixel stays as it was. Where
-//such a texture's bytes are all in the host's memory side by side, texel() reads them from there (direct()).
+//are the pixels it has drawn so far, as this core always drew it, kept so that every pixel stays as it was, unless
+//no pixel can take a texel the primitive has drawn by then (draw.cpp's readsAhead()): then a copy taken first
+//draws the same. Where such a texture's bytes are all in the host's memory side by side, texel() reads them from
+//there (direct()).
 //Whether a PSP's texture reads see the pixels of the primitive drawing them hasn't been measured.
 
 static constexpr u32 TexelBits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
@@ -316,14 +318,16 @@ static auto drawsOver(const GE::PixelState& p, u32 first, u32 last, s32 left, s3
 //The texture decoded into look (look.texture.decoded, look.decoded): found in the cache or decoded now, kept by the
 //Look while it draws, as the cache may let it go meanwhile. Where it's read from memory as before (see the top of
 //this file), look.decoded stays empty. region: where the primitive may draw; rows: how many of the texture's rows
-//it may take texels from (all of them, past its height).
+//it may take texels from (all of them, past its height). A primitive that may draw over its own texture is decoded
+//too where copyDraws() says a copy taken before it draws the same as memory read as it draws.
 //
 //allowDefer: when workers are drawing, a texture whose bytes a batch still draws over (render to texture) is not
 //decoded here. The batch that draws them is launched if it's the one being filled, the Look waits in the next batch
 //with deferRows, and ensureDecoded() decodes once that next batch starts — by then every batch before it is drawn,
 //so the GE's thread never waits on the decode. The palette is kept as it is now (a later CLUT_LOAD must not change
 //what this primitive samples).
-auto GE::decode(Look& look, const Region& region, u32 rows, bool allowDefer) -> void {
+auto GE::decode(Look& look, const Region& region, u32 rows, bool allowDefer,
+                const std::function<auto () -> bool>& copyDraws) -> void {
   Sampler& t = look.texture;
   const PixelState& pixel = look.pixel;
   look.decoded.reset();
@@ -336,7 +340,8 @@ auto GE::decode(Look& look, const Region& region, u32 rows, bool allowDefer) -> 
   textureBytes(t, rows, low, high);
   if(!memory.reaches(low, high - low)) return;
   if(u32 first, last; vramSpan(low, high - low, first, last)) {
-    if(drawsOver(pixel, first, last, region.left, region.top, region.right, region.bottom)) return;
+    bool own = drawsOver(pixel, first, last, region.left, region.top, region.right, region.bottom);
+    if(own && !(copyDraws && copyDraws())) return;
     auto over = [&](const Batch& batch) {
       for(u32 page = first >> 12; page <= last >> 12; page++) {
         if(batch.pending[page]) return true;

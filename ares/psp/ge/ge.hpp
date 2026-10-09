@@ -386,6 +386,7 @@ struct GE {
   auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
   auto submit(Job& job) -> void;
   auto spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool;
+  auto readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool;
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
@@ -440,7 +441,9 @@ struct GE {
   auto textureBytes(const Sampler& texture, u32 rows, u32& low, u32& high) const -> void;
   //Decodes look's texture, or (allowDefer, workers drawing) leaves it for ensureDecoded once a batch that draws
   //over it has been drawn (render to texture: threads.cpp).
-  auto decode(Look& look, const Region& region, u32 rows, bool allowDefer = false) -> void;
+  //copyDraws: whether a primitive drawing over its texture draws the same from a copy taken first (readsAhead()).
+  auto decode(Look& look, const Region& region, u32 rows, bool allowDefer = false,
+              const std::function<auto () -> bool>& copyDraws = {}) -> void;
   auto ensureDecoded(Batch& batch) -> void;
   auto fillDecoded(Look& look, u32 rows) -> void;
   auto decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u32 width, u32 from, u32 rows,
