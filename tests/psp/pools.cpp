@@ -40,6 +40,21 @@ static auto poolCalls() -> void {
   m.system.memory.write(4, R + 0x80, 8); m.system.memory.write(4, R + 0x84, 64);
   u32 aligned = m.call("sceKernelCreateFpl", {name, 2, 0, 100, 2, R + 0x80});
   CHECK(m.kernel.pools[aligned].blockSize, 128);
+  //the options' alignments taken and refused as threads/fpl/create recorded: 0 (the default), and other powers of two
+  //up to 4096, taken; the rest refused (Brothers in Arms: D-Day gives 0)
+  for(u32 alignment : {0u, 1u, 2u, 8u, 0x1000u, 3u, 36u, 0x7fff'ffffu, 0xffff'ffffu}) {
+    m.system.memory.write(4, R + 0x84, alignment);
+    u32 uid = m.call("sceKernelCreateFpl", {name, 2, 0, 0x100, 0x10, R + 0x80});
+    bool taken = alignment != 3 && alignment != 36 && alignment < 0x7fff'ffff;
+    CHECK(uid < 0x8000'0000, taken);
+    if(!taken) CHECK(uid, Kernel::ErrorIllegalArgument);
+    else CHECK(m.call("sceKernelDeleteFpl", {uid}), 0);
+  }
+  //0 is the default's 4: blocks of 102 bytes laid 104 apart
+  m.system.memory.write(4, R + 0x84, 0);
+  u32 unaligned = m.call("sceKernelCreateFpl", {name, 2, 0, 102, 1, R + 0x80});
+  CHECK(m.kernel.pools[unaligned].blockSize, 104);
+  CHECK(m.call("sceKernelDeleteFpl", {unaligned}), 0);
   CHECK(m.call("sceKernelCreateFpl", {name, 7, 0, 100, 2, 0}), Kernel::ErrorIllegalArgument);
   CHECK(m.call("sceKernelCreateFpl", {name, 1, 0, 100, 2, 0}), Kernel::ErrorIllegalPermission);
   CHECK(m.call("sceKernelCreateFpl", {name, 2, 0x8000, 100, 2, 0}), Kernel::ErrorIllegalAttribute);

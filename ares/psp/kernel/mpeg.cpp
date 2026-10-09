@@ -28,17 +28,22 @@ namespace {
   constexpr u32 RingbufferPacketMemory = 0x868, PacketSize = 2048;
   //A ringbuffer's fields (SceMpegRingbuffer2 in video/mpeg's shared.h): its packets, the next to read and to write
   //(places in the ring, from 0), how many hold data, the packets' memory, the callback and its argument, and the
-  //library using it. (SceMpegRingbuffer2 has a global pointer after them, which Construct writes; pspsdk's
-  //SceMpegRingbuffer, 44 bytes, ends before it, so nothing reads it.)
+  //library using it. (SceMpegRingbuffer2 has a global pointer after them, which Construct writes with the firmware's
+  //library; pspsdk's SceMpegRingbuffer, 44 bytes, ends before it, so nothing reads it.)
   constexpr u32 RingPackets = 0, RingRead = 4, RingWritten = 8, RingFilled = 12, RingData = 20, RingCallback = 24,
                 RingArgument = 28, RingLibrary = 40;
   //The library's memory, where the handle points (its "LIBMPEG"): the ringbuffer it reads (where shared.h's
   //SceMpegBufferHeader has it), then, past the fields shared.h names, the library's own state, as Sony's keeps its
   //own there: the bytes of video already taken from the ring's first packet, whether the decoder holds a picture
-  //back, and whether the last feeding came up short (the movie's file ended: its last access unit ends with its
-  //data).
+  //back, whether the movie has ended (its last access unit ends with its data: mpegFinish()), the pixel format
+  //sceMpegAvcDecodeMode chose (one more than it; 0 for none), the frame width it was made with, whether its ring has
+  //been given a pack (bit 0) and the movie's header before the
+  //first (bit 1; mpegReturned()), how many packets the movie's stream has (its header read for the library by
+  //sceMpegQueryStreamOffset; 0 if it wasn't), and how many packs Put has given since the stream began (or began
+  //again: a flush, or its header coming round).
   constexpr u32 LibraryRingbuffer = 0x10, LibraryTaken = 0x700, LibraryHolding = 0x704, LibraryEnded = 0x708,
-                LibraryPixels = 0x70c;
+                LibraryPixels = 0x70c, LibraryFrameWidth = 0x710, LibraryPacked = 0x714, LibraryStream = 0x718,
+                LibraryFed = 0x71c;
   constexpr u32 LibraryMemory = 0x10000, LibraryOffset = 0x30, LibraryState = 0x800;
   constexpr u64 NoTime = ~0ull;
   constexpr u32 MpegDecodeMicroseconds = 300;  //chosen, as atrac.cpp's
@@ -159,13 +164,21 @@ auto Kernel::sceMpegQueryMemSize() -> void {
 
 //(ringbuffer, packets, data, size, callback, callback's argument): a SceMpegRingbuffer (pspmpeg.h) filled in:
 //packets, none read, written or free yet, its data, callback and argument, and where its data ends (2048 bytes a
-//packet on), as video/mpeg/ringbuffer/construct recorded. More than 4096 packets, or a negative size, is refused.
+//packet on), as video/mpeg/ringbuffer/construct recorded; with the firmware's library, the caller's global pointer
+//after them, as construct's ring of 48 bytes has it. Not with a game's own copy of the library (mpegOwnLibrary()):
+//its ring is pspsdk's 44 bytes, the word after it the game's, which only the library, stood in for, would read.
+//Miami Vice keeps its movie's file there, which it can't do on a PSP with a library that writes over it. Refused: a
+//negative size, and packets whose memory, as sceMpegRingbufferQueryMemSize reckons it in 32 bits, is more than the
+//size, both taken as signed (construct gave every count it tried 4096 packets' memory: 4097 was refused; -1 and
+//0x7fffffff, whose memory wraps round to -0x868, and 0x80000000, whose memory wraps to 0, were taken). Sega Rally
+//Revo makes a ring of 4800, with their memory.
 auto Kernel::sceMpegRingbufferConstruct() -> void {
   u32 ringbuffer = arg(0), packets = arg(1), data = arg(2), size = arg(3);
-  if(s32(packets) > 4096 || s32(size) < 0) return result(MpegErrorValue);
-  if(!memory.reaches(ringbuffer, 48)) return result(ErrorInvalidPointer);
-  u32 words[12] = {packets, 0, 0, 0, 0, data, arg(4), arg(5), data + packets * PacketSize, 0, 0, cpu.ipu.r[28]};
-  for(u32 n = 0; n < 12; n++) memory.write(4, ringbuffer + n * 4, words[n]);
+  if(s32(size) < 0 || s32(packets * RingbufferPacketMemory) > s32(size)) return result(MpegErrorValue);
+  u32 words = mpegOwnLibrary() ? 11 : 12;
+  if(!memory.reaches(ringbuffer, words * 4)) return result(ErrorInvalidPointer);
+  u32 fields[12] = {packets, 0, 0, 0, 0, data, arg(4), arg(5), data + packets * PacketSize, 0, 0, cpu.ipu.r[28]};
+  for(u32 n = 0; n < words; n++) memory.write(4, ringbuffer + n * 4, fields[n]);
   result(0);
 }
 
@@ -181,19 +194,20 @@ auto Kernel::sceMpegRingbufferAvailableSize() -> void {
 //(ringbuffer, packets, available): the ringbuffer fed, as video/mpeg/basic recorded. Its callback is asked for
 //packets (where they go, how many, its argument): as many as asked for, no more than available and free, a run at a
 //time that stops at the ring's end; and asked again for what's left as long as it gives some (at its file's end
-//basic's gave 9 of 24, and was asked for the other 15). Put returns how many it gave. The callback runs on the
-//calling thread, which may wait in it (basic's read a file), with the caller's global pointer and a stack below the
-//caller's, returning to the trampoline's seventh syscall (mpegReturned()). Not from an interrupt handler, nor a
-//thread already feeding one: nothing is put in. Nor into a ring whose fields, the game's to write, couldn't be a
-//ring's (no packets or more than 4096, the next to write not among them, more holding data than there are), as
-//sceMpegGetAvcAu takes nothing from one; else its callback could be asked for more than a ring's 4096 packets.
+//basic's gave 9 of 24, and was asked for the other 15), but not once it has given packets past the movie's end
+//(mpegReturned()). Put returns how many packets the ring took. The callback runs on the calling thread, which may
+//wait in it (basic's read a file), with the caller's global pointer and a stack below the caller's, returning to the
+//trampoline's seventh syscall (mpegReturned()). Not from an interrupt handler, nor a thread already feeding one:
+//nothing is put in. Nor into a ring whose fields, the game's to write, couldn't be a ring's (no packets or more than
+//RingMostPackets, the next to write not among them, more holding data than there are), as sceMpegGetAvcAu takes
+//nothing from one; else its callback could be asked for more than RingMostPackets.
 auto Kernel::sceMpegRingbufferPut() -> void {
   u32 ringbuffer = arg(0);
   if(!memory.reaches(ringbuffer, 48)) return result(ErrorInvalidPointer);
   u32 packets = memory.read(4, ringbuffer + RingPackets), written = memory.read(4, ringbuffer + RingWritten);
   u32 filled = memory.read(4, ringbuffer + RingFilled);
   result(0);
-  if(!packets || packets > 4096 || written >= packets || filled > packets) return;
+  if(!packets || packets > RingMostPackets || written >= packets || filled > packets) return;
   s32 wanted = std::min({s32(arg(1)), s32(arg(2)), s32(packets - filled)});
   if(wanted <= 0 || !memory.read(4, ringbuffer + RingCallback)) return;
   if(!current || interrupting || mpegCalls.count(current->uid)) return;
@@ -227,6 +241,15 @@ auto Kernel::mpegNext(MpegCall& call) -> void {
 
 //The trampoline's seventh syscall: a ringbuffer's callback returned how many packets it gave (v0; more than it was
 //asked for counts as what it was asked for): they hold data now. None, or an error, and nothing more is asked.
+//Once its library's ring has been given a pack (a packet that starts with a pack's start code, 00 00 01 ba), a
+//packet that isn't one is past the movie's end: it and those after it aren't taken, Put counts only the packets
+//before it, and nothing more is asked. What comes before the first pack (the movie's header, from a game that reads
+//its file from the start) is taken; and if the feeding began so, the header coming round again after packs is the
+//movie starting over (a callback that goes back to its file's start, as Space Invaders Extreme's does), not its end.
+//The packs taken are counted for the library, from 0 again as the movie starts over (mpegFinish()).
+//Chosen, as one game needs it and no recording shows it: Mega Man Maverick Hunter X feeds its movie 32 packets at a
+//time from a file that goes on past it, and starts the movie only once Put has given exactly the stream's size. A
+//ring without a library to keep this in (or a run no longer in memory) takes all it's given.
 auto Kernel::mpegReturned() -> void {
   if(!current) return;
   auto found = mpegCalls.find(current->uid);
@@ -237,18 +260,48 @@ auto Kernel::mpegReturned() -> void {
   u32 packets = memory.read(4, ringbuffer + RingPackets), written = memory.read(4, ringbuffer + RingWritten);
   if(gave <= 0 || !packets) return mpegFinish(call);  //(a ring the game emptied of packets meanwhile: done)
   u32 given = std::min(u32(gave), call.asked);
-  memory.write(4, ringbuffer + RingWritten, (written + given) % packets);
-  memory.write(4, ringbuffer + RingFilled, memory.read(4, ringbuffer + RingFilled) + given);
-  call.put += given;
-  call.left -= given;
+  u32 at = memory.read(4, ringbuffer + RingData) + written * PacketSize;
+  u32 library = memory.read(4, ringbuffer + RingLibrary);
+  bool known = memory.reaches(library, LibraryState) && memory.readString(library, 8) == "LIBMPEG"
+            && memory.reaches(at, given * PacketSize);
+  u32 state = known ? memory.read(4, library + LibraryPacked) : 0;
+  bool packed = state & 1, headed = state & 2;  //given a pack; a header came before the first
+  u32 fed = known ? memory.read(4, library + LibraryFed) : 0;
+  u32 taken = known ? 0 : given;
+  for(; taken < given; taken++) {
+    u32 first = memory.read(4, at + taken * PacketSize);
+    bool pack = first == 0xba01'0000, header = first == 0x464d'5350;  //"PSMF"
+    if(packed && !pack) {
+      if(!header || !headed) break;
+      packed = false, fed = 0;  //the movie again, from its header
+    }
+    headed |= header && !packed;
+    packed |= pack;
+    fed += pack;
+  }
+  if(known) {
+    memory.write(4, library + LibraryPacked, u32(packed) | u32(headed) << 1);
+    memory.write(4, library + LibraryFed, fed);
+  }
+  memory.write(4, ringbuffer + RingWritten, (written + taken) % packets);
+  memory.write(4, ringbuffer + RingFilled, memory.read(4, ringbuffer + RingFilled) + taken);
+  call.put += taken;
+  call.left -= taken;
+  if(taken < given) return mpegFinish(call);  //(left over: the movie has ended)
   mpegNext(call);
 }
 
-//Put returns to the game how many packets came. Coming up short of what it asked for is kept for sceMpegGetAvcAu:
-//the movie's file ended.
+//Put returns to the game how many packets came. Kept for sceMpegGetAvcAu: whether the movie has ended, its file run
+//out (the feeding came up short of what it asked for) or its whole stream given (exactly as many packs, since the
+//stream began, as the header read by sceMpegQueryStreamOffset says it has: a feeding that goes on past them is the
+//movie going round again, its access units whole).
 auto Kernel::mpegFinish(MpegCall& call) -> void {
   u32 library = memory.read(4, call.ringbuffer + RingLibrary);
-  if(memory.reaches(library, LibraryState)) memory.write(4, library + LibraryEnded, call.left > 0);
+  if(memory.reaches(library, LibraryState) && memory.readString(library, 8) == "LIBMPEG") {
+    u32 stream = memory.read(4, library + LibraryStream);
+    bool whole = stream && memory.read(4, library + LibraryFed) == stream;
+    memory.write(4, library + LibraryEnded, call.left > 0 || whole);
+  }
   restore(call.caller);
   cpu.ipu.r[2] = call.put;
   mpegCalls.erase(current->uid);
@@ -288,6 +341,7 @@ auto Kernel::sceMpegCreate() -> void {
   for(u32 offset = 0; offset < LibraryState; offset += 4) memory.write(4, library + offset, 0);
   memory.copyIn(library, "LIBMPEG", 8);
   memory.write(4, library + LibraryRingbuffer, ringbuffer);
+  memory.write(4, library + LibraryFrameWidth, arg(4));
   if(memory.reaches(ringbuffer, 48)) memory.write(4, ringbuffer + RingLibrary, library);
   memory.write(4, handle, library);
   result(0);
@@ -300,16 +354,30 @@ auto Kernel::sceMpegDelete() -> void {
 }
 
 //(handle, the header, where to put the offset): where the movie's stream starts, after its header (a big-endian word
-//8 bytes in); a header that isn't PSMF's, or no decoders to play it with, is refused.
+//8 bytes in); a header that isn't PSMF's, or no decoders to play it with, is refused. The library keeps how many
+//packets the stream has (its size, the word 12 bytes in, rounded up): once a Put stops having given exactly that many
+//packs, the movie has ended, as when a feeding comes up short (mpegFinish()). Chosen, as games need it and no
+//recording shows it: Pursuit Force: Extreme Justice asks Put for just what's left of its movie and then for none,
+//Disney-Pixar Cars: Race-O-Rama gives its whole movie in one Put, and both wait for good for the last access unit and
+//its packets to be free. Sony's movies end with no program end code to tell (Ridge Racer 2's and pspautotests'
+//test.pmf: padding after the last PES packet).
 auto Kernel::sceMpegQueryStreamOffset() -> void {
   u32 header = arg(1);
   if(!videoDecoders || !memory.reaches(header, 16) || memory.readString(header, 4) != "PSMF") {
     return result(MpegErrorValue);
   }
-  u32 offset = memory.read(1, header + 8) << 24 | memory.read(1, header + 9) << 16 | memory.read(1, header + 10) << 8
-             | memory.read(1, header + 11);
-  if(memory.reaches(arg(2), 4)) memory.write(4, arg(2), offset);
+  if(memory.reaches(arg(2), 4)) memory.write(4, arg(2), mpegHeaderWord(header + 8));
+  if(u32 library = mpegLibrary(arg(0))) {
+    memory.write(4, library + LibraryStream, u32((u64(mpegHeaderWord(header + 12)) + PacketSize - 1) / PacketSize));
+  }
   result(0);
+}
+
+//A big-endian word of a movie's header.
+auto Kernel::mpegHeaderWord(u32 address) -> u32 {
+  u32 value = 0;
+  for(u32 n = 0; n < 4; n++) value = value << 8 | memory.read(1, address + n);
+  return value;
 }
 
 //(the header, where to put the size): the stream's size (the big-endian word 12 bytes in).
@@ -318,9 +386,7 @@ auto Kernel::sceMpegQueryStreamSize() -> void {
   if(!videoDecoders || !memory.reaches(header, 16) || memory.readString(header, 4) != "PSMF") {
     return result(MpegErrorValue);
   }
-  u32 size = memory.read(1, header + 12) << 24 | memory.read(1, header + 13) << 16 | memory.read(1, header + 14) << 8
-           | memory.read(1, header + 15);
-  if(memory.reaches(arg(1), 4)) memory.write(4, arg(1), size);
+  if(memory.reaches(arg(1), 4)) memory.write(4, arg(1), mpegHeaderWord(header + 12));
   result(0);
 }
 
@@ -341,7 +407,7 @@ auto Kernel::sceMpegInitAu() -> void {
 }
 
 //(handle): every stream flushed: what the ringbuffer holds is dropped, and the video taken apart and decoded
-//starts afresh.
+//starts afresh, as does the feeding (a header may come first again).
 auto Kernel::sceMpegFlushAllStream() -> void {
   if(u32 library = mpegLibrary(arg(0))) {
     u32 ringbuffer = memory.read(4, library + LibraryRingbuffer);
@@ -349,7 +415,9 @@ auto Kernel::sceMpegFlushAllStream() -> void {
       memory.write(4, ringbuffer + RingRead, memory.read(4, ringbuffer + RingWritten));
       memory.write(4, ringbuffer + RingFilled, 0);
     }
-    for(u32 offset : {LibraryTaken, LibraryHolding, LibraryEnded}) memory.write(4, library + offset, 0);
+    for(u32 offset : {LibraryTaken, LibraryHolding, LibraryEnded, LibraryPacked, LibraryFed}) {
+      memory.write(4, library + offset, 0);  //(the stream's size is kept: the movie may be fed again from its start)
+    }
     if(auto found = mpegStreams.find(library); found != mpegStreams.end()) {
       auto& stream = found->second;
       stream.unit.clear();
@@ -384,7 +452,7 @@ auto Kernel::sceMpegGetAvcAu() -> void {
   if(!memory.reaches(ringbuffer, 48)) return result(MpegErrorNoData);
   u32 packets = memory.read(4, ringbuffer + RingPackets), read = memory.read(4, ringbuffer + RingRead);
   u32 filled = memory.read(4, ringbuffer + RingFilled), data = memory.read(4, ringbuffer + RingData);
-  if(!packets || packets > 4096 || read >= packets || filled > packets) return result(MpegErrorNoData);
+  if(!packets || packets > RingMostPackets || read >= packets || filled > packets) return result(MpegErrorNoData);
   u32 taken = memory.read(4, library + LibraryTaken);
   std::vector<u8> video;  //the video from the ring's first packet on
   std::vector<u32> ends;  //where each packet's video ends in it
@@ -477,7 +545,7 @@ auto Kernel::sceMpegGetAtracAu() -> void {
     std::vector<u8> ring;
     std::vector<std::pair<u32, u64>> ringStamps;
     u8 packet[PacketSize];
-    for(u32 n = 0; packets && packets <= 4096 && filled <= packets && n < filled; n++) {
+    for(u32 n = 0; packets && packets <= RingMostPackets && filled <= packets && n < filled; n++) {
       u32 address = data + (read + n) % packets * PacketSize;
       if(!memory.reaches(address, PacketSize)) break;
       memory.copyOut(packet, address, PacketSize);
@@ -641,10 +709,18 @@ auto Kernel::mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWid
   if(decoded) codecWait(MpegDecodeMicroseconds);
 }
 
+//A frame width a decode was given: 0 is the one the library was made with, its display buffer's (pspsdk's
+//pspmpeg.h: sceMpegCreate is told it). Chosen, as one game needs it: Juiced: Eliminator decodes so, and its movies
+//stayed black.
+auto Kernel::mpegFrameWidth(u32 handle, u32 frameWidth) -> u32 {
+  u32 library = mpegLibrary(handle);
+  return !frameWidth && library ? memory.read(4, library + LibraryFrameWidth) : frameWidth;
+}
+
 //(handle, access unit, frame width, where the buffer's address is, where to put whether a picture came).
 auto Kernel::sceMpegAvcDecode() -> void {
   u32 pixels = memory.reaches(arg(3), 4) ? memory.read(4, arg(3)) : 0;
-  mpegDecoded(arg(0), arg(1), arg(4), pixels, arg(2));
+  mpegDecoded(arg(0), arg(1), arg(4), pixels, mpegFrameWidth(arg(0), arg(2)));
 }
 
 //(handle, frame width, where the buffer's address is, where to put its status): the picture the decoder held back,
@@ -657,7 +733,7 @@ auto Kernel::sceMpegAvcDecodeStop() -> void {
     auto& stream = mpegStreams[library];
     stream.shown = stream.held, stream.shownWidth = stream.heldWidth, stream.shownHeight = stream.heldHeight;
     u32 pixels = memory.reaches(arg(2), 4) ? memory.read(4, arg(2)) : 0;
-    if(pixels) mpegConvert(stream, library, pixels, arg(1), 0, 0, 0, 0);
+    if(pixels) mpegConvert(stream, library, pixels, mpegFrameWidth(arg(0), arg(1)), 0, 0, 0, 0);
   }
   if(memory.reaches(arg(3), 4)) memory.write(4, arg(3), held);
   result(0);
@@ -707,11 +783,23 @@ auto Kernel::sceMpegAvcDecodeStopYCbCr() -> void {
   result(0);
 }
 
-//(handle, details): the last picture decoded described: it's there. The details (the picture's size and the like) are
-//left as they were: pspautotests imports the function (video/mpeg's imports name it) but records nothing of them.
-//Space Invaders Extreme asks after each picture its movie thread decodes, and waits for the first before its stage
-//starts.
-auto Kernel::sceMpegAvcDecodeDetail() -> void { result(0); }
+//(handle, details): the decoder's newest picture described (with the firmware's library, the one it holds back, a
+//decode ahead of the one given): its width and height at 8 and 12. Spectral Souls draws its movies from (1, 1) to
+//(width - 1, height - 1) of the picture by them, asking again after each decode while they're 0 (left so, it
+//stretched the picture's corner over the screen). The rest of the details are left as they were, and all of them
+//with no picture held (none decoded, or a flush since): pspautotests imports the function (video/mpeg's imports
+//name it) but records nothing of them. Space Invaders Extreme asks after each picture its movie thread decodes, and
+//waits for the first before its stage starts.
+auto Kernel::sceMpegAvcDecodeDetail() -> void {
+  u32 library = mpegLibrary(arg(0)), details = arg(1);
+  if(auto found = mpegStreams.find(library); library && found != mpegStreams.end() && memory.reaches(details, 16)) {
+    if(!found->second.held.empty()) {
+      memory.write(4, details + 8, found->second.heldWidth);
+      memory.write(4, details + 12, found->second.heldHeight);
+    }
+  }
+  result(0);
+}
 
 //(handle, YCbCr buffer, the part to convert, frame width, destination): the picture sceMpegAvcDecodeYCbCr gave last,
 //converted into the destination, frame width pixels a row. The part: four words, its left, top, width and height in
@@ -731,12 +819,24 @@ auto Kernel::sceMpegAvcCsc() -> void {
 
 //(handle, access unit, buffer, initialized): the sound access unit's ATRAC3plus frame decoded into 2048 stereo
 //16-bit samples (mono doubled), 0x2000 bytes; the access unit used up. With none: 0x807f00fd, as video/mpeg/basic
-//recorded for its movie, which has no sound. A frame that won't decode gives silence. A decoder made afresh (after
+//recorded for its movie, which has no sound (asked with no buffer to decode into, refused as well). But once the
+//movie's sound has been decoded, an access unit with nothing in it (used up by the decode before, as when the sound
+//has run out) decodes into a buffer as silence. Chosen, as one game needs it: Juiced: Eliminator decodes so as its
+//movies end, and gives a movie up at an error. A frame that won't decode gives silence. A decoder made afresh (after
 //a state was loaded) is primed first with the frame decoded last, as atrac.cpp's are.
 auto Kernel::sceMpegAtracDecode() -> void {
   u32 library = mpegLibrary(arg(0)), au = arg(1), output = arg(2);
   if(!library || !memory.reaches(au, 24) || !audioDecoders) return result(0x807f'00fd);
   u32 bytes = memory.read(4, au + 20), buffer = memory.read(4, au + 16);
+  if(!bytes) {
+    auto found = mpegStreams.find(library);
+    if(found == mpegStreams.end() || found->second.soundLast.empty() || !memory.reaches(output, 0x2000)) {
+      return result(0x807f'00fd);
+    }
+    memory.fill(output, 0, 0x2000);
+    result(0);
+    return codecWait(MpegDecodeMicroseconds);
+  }
   if(bytes < 8 || bytes > 0x840 || !memory.reaches(buffer, bytes)) return result(0x807f'00fd);
   std::vector<u8> unit(bytes);
   memory.copyOut(unit.data(), buffer, bytes);

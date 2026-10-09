@@ -242,7 +242,8 @@ auto Kernel::savePath(const std::string& folder, const std::string& file) -> std
 //The names become a folder and a file on the host: each must be a plain name (plainName(); the game's can't be left
 //out, the save's can), and the paths where a save belongs (savePath()). The buffer must be in the program's memory as
 //far as what's copied in or out, which memory's size bounds: a load reads no more than the buffer takes. What isn't
-//so is refused as a bad parameter, before anything is made, read or deleted.
+//so is refused as a bad parameter, before anything is made, read or deleted. The sizes mode reads no names of its
+//own, so none are asked of it: the save it measures is msData's, whose names are checked there.
 auto Kernel::savedata(u32 p) -> u32 {
   namespace fs = std::filesystem;
   u32 mode = memory.read(4, p + 48);
@@ -256,7 +257,8 @@ auto Kernel::savedata(u32 p) -> u32 {
     save = memory.readString(memory.read(4, p + 96), 20);
     if(save.empty()) return refused;
   }
-  if(!plainName(game, 13) || (!save.empty() && !plainName(save, 20))) return refused;
+  //(Valhalla Knights 2 asks for sizes with no names, and took a refusal for a memory stick too full to save on.)
+  if(mode != 8 && (!plainName(game, 13) || (!save.empty() && !plainName(save, 20)))) return refused;
   bool filed = mode <= 5 || (mode >= 13 && mode <= 20);  //the modes that read, write or erase the data file
   if(filed && !fileName.empty() && !plainName(fileName, 13)) return refused;
   std::string folder = savePath(game + save);
@@ -282,6 +284,10 @@ auto Kernel::savedata(u32 p) -> u32 {
     u32 size = std::min(dataSize, bufferSize);
     if(folder.empty() || (!fileName.empty() && file.empty())) return SavedataSaveAccess;
     if(!fileName.empty() && size && !memory.reaches(buffer, size)) return refused;
+    //Writing data (17, 18) only adds a file to a save that's there: with none, the write is NO_DATA and nothing is
+    //made, as utility/savedata/saveemptyfilename recorded. (Hot Shots Golf: Open Tee 2 writes its data so before it
+    //has made a save, and took the zeros it had written, kept, for a corrupted save.)
+    if((mode == 17 || mode == 18) && !exists) return SavedataReadNoData;
     fs::create_directories(folder, error);
     if(fileName.empty()) return 0;
     std::vector<u8> bytes(size);
@@ -496,14 +502,15 @@ auto Kernel::sceUtilityGamedataInstallAbort() -> void {
   result(0);
 }
 
-//(module: psputility_modules.h's PSP_MODULE_*): network (0x100-0x106), USB devices (0x200-0x203), sound and video
+//(module: psputility_modules.h's PSP_MODULE_*): network (0x100-0x108), USB devices (0x200-0x203), sound and video
 //codecs (0x300-0x308), the network platform (0x400-0x402), DRM (0x500), infrared (0x600). pspsdk's list stops at
-//0x307; later firmwares have one more sound and video module, 0x308 (taken here to be the MP4 library, sceMp4, whose
-//functions the kernel would stand in for as for the rest). Ace Combat: Joint Assault loads it at boot and stops if
-//it's refused; 0x309 still is.
+//0x106 and 0x307; later firmwares have more: 0x308 (taken here to be the MP4 library, sceMp4, whose functions the
+//kernel would stand in for as for the rest), which Ace Combat: Joint Assault loads at boot, stopping if it's refused,
+//and network modules to 0x108, which Macross: Triangle Frontier loads, trying again every few frames for as long as
+//it's refused (0x107 is taken too, each group's modules being numbered without gaps). 0x109 and 0x309 are refused.
 static auto utilityModuleKnown(u32 module) -> bool {
   u32 group = module >> 8, index = module & 0xff;
-  static constexpr u8 Counts[] = {0, 7, 4, 9, 3, 1, 1};  //how many modules in each group
+  static constexpr u8 Counts[] = {0, 9, 4, 9, 3, 1, 1};  //how many modules in each group
   return group >= 1 && group <= 6 && index < Counts[group];
 }
 
@@ -552,6 +559,30 @@ auto Kernel::sceUtilityUnloadAvModule() -> void {
   sceUtilityUnloadModule();
 }
 
+//(USB module 1-5: psputility_usbmodules.h's PSP_USB_MODULE_*), the older way to load the USB devices' modules:
+//PSPCM (1), the accessory port's driver (2), and the microphone (3), camera (4) and GPS (5), which need the accessory
+//driver first, as the modules 0x200 and 0x201-0x203. The accessory driver has no number of its
+//own among psputility_modules.h's (the later firmwares' modules load it with the device's), so it's taken, and let
+//go, without being kept. ATV Offroad Fury Pro loads one at boot and stops at a break if it isn't loaded.
+static auto usbModule(u32 module) -> u32 {
+  static constexpr u32 Modules[] = {0, 0x200, 0, 0x201, 0x202, 0x203};
+  return module < 6 ? Modules[module] : 0;
+}
+
+auto Kernel::sceUtilityLoadUsbModule() -> void {
+  if(arg(0) < 1 || arg(0) > 5) return result(ModuleBadID);
+  if(!usbModule(arg(0))) return result(0);
+  cpu.ipu.r[4] = usbModule(arg(0));
+  sceUtilityLoadModule();
+}
+
+auto Kernel::sceUtilityUnloadUsbModule() -> void {
+  if(arg(0) < 1 || arg(0) > 5) return result(ModuleBadID);
+  if(!usbModule(arg(0))) return result(0);
+  cpu.ipu.r[4] = usbModule(arg(0));
+  sceUtilityUnloadModule();
+}
+
 //(which, where, its size): the system's text settings: the player's nickname (1) is "PSP". Others aren't known.
 auto Kernel::sceUtilityGetSystemParamString() -> void {
   if(arg(0) != 1) return result(UtilityBadParameterID);
@@ -563,5 +594,10 @@ auto Kernel::sceUtilityGetSystemParamString() -> void {
 
 //(which, text): setting them is accepted and forgotten: the settings stay the system's own.
 auto Kernel::sceUtilitySetSystemParamString() -> void {
+  result(0);
+}
+
+//(which, value): the number settings likewise (Colin McRae Rally 2005 sets 3, the wireless LAN's power saving).
+auto Kernel::sceUtilitySetSystemParamInt() -> void {
   result(0);
 }

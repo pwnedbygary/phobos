@@ -102,6 +102,22 @@ static auto savedata() -> void {
   CHECK(runSave(m), 0x8011'03c7);
   saveParameters(m, 10, "ULUS99999", "SLOT0", 0);
   CHECK(runSave(m), 0x8011'0347);
+  //writing data (secure or not) into a save that isn't there: NO_DATA, nothing made (utility/savedata/
+  //saveemptyfilename); into one made first, its file written
+  for(u32 mode : {17u, 18u}) {
+    saveParameters(m, mode, "ULUS99999", "SLOT1", 11);
+    CHECK(runSave(m), 0x8011'0327);
+    CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT1"), false);
+    fileName(m, "");
+    CHECK(runSave(m), 0x8011'0327);
+    CHECK(std::filesystem::exists(stick.path / "PSP/SAVEDATA/ULUS99999SLOT1"), false);
+  }
+  saveParameters(m, 14, "ULUS99999", "SLOT1", 0);  //make data
+  fileName(m, "");
+  CHECK(runSave(m), 0);
+  saveParameters(m, 17, "ULUS99999", "SLOT1", 11);
+  CHECK(runSave(m), 0);
+  CHECK(stick.get("PSP/SAVEDATA/ULUS99999SLOT1/DATA.BIN") == "saved bytes", true);
 }
 
 //A save's names become a folder and a file on the host, so each must be one plain name, and the save's paths must be
@@ -164,7 +180,7 @@ static auto savedataNames() -> void {
   saveParameters(m, 4, "ULUS99999", "", 5);
   m.system.memory.write(4, Parameters + 96, Buffer + 0x100);
   CHECK(runSave(m), 0x8011'0308);
-  refused(8, "ULUS99999", ".", "", 0x8011'03c8);
+  refused(8, "ULUS99999", ".", "", 0x8011'03c7);  //(no names of its own: msData's "." is no save there)
   refused(12, "ULUS99999SLOT0", "..", "", 0x8011'0328);
   refused(0, "ULUS999999999", "SLOT0", "DATA.BIN", 0x8011'0308);  //a game's name as long as its field
   refused(0, "ULUS99999", "SLOT0SLOT0SLOT0SLOT0", "DATA.BIN", 0x8011'0308);  //and a save's
@@ -352,6 +368,16 @@ static auto stickSpace() -> void {
   CHECK(runSave(m), 0);
   CHECK(memory.read(4, Needed + 4), 2112);
   CHECK(memory.readString(Needed + 8, 8) == "2 MB", true);
+  //with no names of the request's own (Valhalla Knights 2's), answered just the same; a save not there, no data
+  saveParameters(m, 8, "", "", 16);
+  memory.copyIn(Used, "ULUS99999", 10);
+  memory.copyIn(Used + 16, "ABC", 4);
+  memory.fill(Free, 0xcc, 32);
+  CHECK(runSave(m), 0);
+  CHECK(memory.read(4, Used + 36), 4);
+  CHECK(memory.read(4, Free + 4), 57'344);
+  memory.copyIn(Used + 16, "XYZ", 4);
+  CHECK(runSave(m), 0x8011'03c7);
 
   //the size mode: the free space; no files listed, nothing else; two secure files and a normal one, 4 clusters
   saveParameters(m, 22, "ULUS99999", "ABC", 0);
@@ -627,8 +653,9 @@ static auto keyboard() -> void {
   CHECK(roundTrip(m), true);
 }
 
-//Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x308 among them,
-//numbers that aren't a module refused, the older network numbers standing for 0x100-0x106; the nickname.
+//Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x107, 0x108 and 0x308
+//among them, numbers that aren't a module refused, the older network numbers standing for 0x100-0x106 and the older
+//USB numbers for 0x200-0x203; the nickname.
 static auto modules() -> void {
   KernelMachine m;
   CHECK(m.call("sceUtilityLoadModule", {0x301}), 0);
@@ -638,14 +665,40 @@ static auto modules() -> void {
   CHECK(m.call("sceUtilityLoadModule", {0x308}), 0);  //later firmwares' (Ace Combat: Joint Assault loads it)
   CHECK(m.call("sceUtilityUnloadModule", {0x308}), 0);
   CHECK(m.call("sceUtilityLoadModule", {0x309}), 0x8011'1101);
+  CHECK(m.call("sceUtilityLoadModule", {0x108}), 0);  //later firmwares' (Macross: Triangle Frontier loads it)
+  CHECK(m.call("sceUtilityLoadModule", {0x108}), 0x8011'1102);
+  CHECK(m.call("sceUtilityLoadModule", {0x107}), 0);
+  CHECK(roundTrip(m), true);
+  CHECK(m.call("sceUtilityUnloadModule", {0x108}), 0);
+  CHECK(m.call("sceUtilityUnloadModule", {0x107}), 0);
+  CHECK(m.call("sceUtilityLoadModule", {0x109}), 0x8011'1101);
   CHECK(m.call("sceUtilityLoadModule", {0x700}), 0x8011'1101);
   CHECK(m.call("sceUtilityLoadNetModule", {1}), 0);
   CHECK(m.call("sceUtilityLoadModule", {0x100}), 0x8011'1102);  //the same module
   CHECK(m.call("sceUtilityUnloadNetModule", {1}), 0);
   CHECK(m.call("sceUtilityLoadNetModule", {8}), 0x8011'1101);
+  //the older USB numbers: 1 and 3-5 standing for 0x200-0x203, the accessory driver (2) taken without a number
+  CHECK(m.call("sceUtilityLoadUsbModule", {5}), 0);
+  CHECK(m.call("sceUtilityLoadModule", {0x203}), 0x8011'1102);  //the same module
+  CHECK(m.call("sceUtilityLoadUsbModule", {5}), 0x8011'1102);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {5}), 0);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {5}), 0x8011'1103);
+  CHECK(m.call("sceUtilityLoadUsbModule", {1}), 0);
+  CHECK(m.call("sceUtilityUnloadModule", {0x200}), 0);
+  CHECK(m.call("sceUtilityLoadUsbModule", {2}), 0);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {2}), 0);
+  CHECK(m.call("sceUtilityLoadUsbModule", {0}), 0x8011'1101);
+  CHECK(m.call("sceUtilityLoadUsbModule", {6}), 0x8011'1101);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {6}), 0x8011'1101);
   CHECK(m.call("sceUtilityGetSystemParamString", {1, Buffer, 128}), 0);
   CHECK(m.system.memory.readString(Buffer, 128) == "PSP", true);
   CHECK(m.call("sceUtilityGetSystemParamString", {2, Buffer, 128}), 0x8011'0103);
+  //number settings taken and forgotten: the language stays English (1)
+  CHECK(m.call("sceUtilitySetSystemParamInt", {3, 0}), 0);
+  CHECK(m.call("sceUtilitySetSystemParamInt", {8, 2}), 0);
+  m.system.memory.write(4, Buffer, 7);
+  CHECK(m.call("sceUtilityGetSystemParamInt", {8, Buffer}), 0);
+  CHECK(m.system.memory.read(4, Buffer), 1);
 }
 
 auto utilityTests() -> Tests {
