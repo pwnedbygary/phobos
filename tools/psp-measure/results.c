@@ -45,13 +45,15 @@ int mark(const char* path) {
 //and runs again next time. If its .part is there when it starts, the last run didn't finish it (the PSP stopped, or
 //was stopped, during it): it runs once more, with <name>.again marking that; and if it doesn't finish then either,
 //the next start gives up on it, renaming what it wrote to <name>.stopped, and the round goes on without it. A probe
-//(retry 0) isn't run again: one stop and the next start gives up on it. Names are up to 26 characters (the GE's
-//longest), so each test's line on the screen lines up.
+//(retry 0) isn't run again: one stop and the next start gives up on it. Nor is a test that wrote <name>.stalled (the
+//GE stalled on it, and ge.c was about to reset the GE) and didn't finish: resetting the GE stopped the PSP, and would
+//again. Names are up to 26 characters (the GE's longest), so each test's line on the screen lines up.
 int beginTrying(Output* out, const char* name, int retry) {
   char stopped[320];
   snprintf(out->done, sizeof(out->done), "%s/%s.bin", folder, name);
   snprintf(out->part, sizeof(out->part), "%s/%s.part", folder, name);
   snprintf(out->again, sizeof(out->again), "%s/%s.again", folder, name);
+  snprintf(out->stalled, sizeof(out->stalled), "%s/%s.stalled", folder, name);
   snprintf(stopped, sizeof(stopped), "%s/%s.stopped", folder, name);
   awake();
   if(exists(out->done)) {
@@ -63,12 +65,19 @@ int beginTrying(Output* out, const char* name, int retry) {
     return 0;
   }
   int retrying = exists(out->part);
+  if(retrying && exists(out->stalled)) {
+    sceIoRename(out->part, stopped);
+    sceIoRemove(out->again);
+    print("%-26s stalled the GE and the PSP: given up on\n", name);
+    return 0;
+  }
   if(retrying && (!retry || exists(out->again))) {
     sceIoRename(out->part, stopped);
     sceIoRemove(out->again);
     print("%-26s stopped the PSP%s: given up on\n", name, retry ? " twice" : "");
     return 0;
   }
+  sceIoRemove(out->stalled);  //left by a run that didn't keep its file: this run says for itself
   out->file = sceIoOpen(out->part, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
   if(out->file < 0) {
     print("%-26s can't write %s\n", name, out->part);
