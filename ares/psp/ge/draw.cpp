@@ -189,6 +189,9 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   drawing.recording = !hardware && !(look.textured && !look.texture.decoded && !look.deferRows) && defer(pixel, region);
   if(!drawing.recording && !hardware) flush();
   const Look& drawn = drawing.recording ? drawing.batch->looks.emplace_back(std::move(look)) : look;
+  if(drawing.recording && drawn.deferRows) {  //(the CPU waits for its texture's pages till it's decoded: threads.cpp)
+    for(u32 page = drawn.deferFirst >> 12; page <= drawn.deferLast >> 12; page++) drawing.batch->reads.set(page);
+  }
   Transform t{};
   if(!format.through) {
     t = transformState();

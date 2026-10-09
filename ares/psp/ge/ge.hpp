@@ -211,7 +211,6 @@ struct GE {
     std::vector<u32> texels;  //key.width x rows
   };
   struct TextureCache {
-    std::mutex mutex;  //decode and forget: the GE's thread and workers share the cache (threads.cpp)
     std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
     std::unordered_map<u32, std::vector<Decoded*>> pages;  //the decoded textures that came from each page
     std::list<Decoded*> recent;                            //all of them, the last used first
@@ -268,10 +267,11 @@ struct GE {
     bool withAlpha = false, doubled = false;
     std::shared_ptr<Decoded> decoded;  //its texels, kept while a job may draw with them
     //Render to texture from a batch still being drawn (or filled): decode later, when this Look's batch starts
-    //(ensureDecoded), once that batch has been drawn; the palette as it was when the primitive was set up.
+    //(ensureDecoded), once the batches before it have been drawn; the palette as it was when the primitive was set
+    //up; and the texture's bytes, first to last (offsets in VRAM), which the CPU waits for till then (Batch::reads).
     u32 deferRows = 0;
     std::vector<u8> deferClut;
-    u64 deferClutHash = 0;
+    u32 deferFirst = 0, deferLast = 0;
   };
 
   //A primitive set up for drawing (draw.cpp): everything about it worked out once, so that any of its rows can be
@@ -439,12 +439,11 @@ struct GE {
   //over it has been drawn (render to texture: threads.cpp).
   auto decode(Look& look, const Region& region, u32 rows, bool allowDefer = false) -> void;
   auto ensureDecoded(Batch& batch) -> void;
-  auto fillDecoded(Look& look, u32 rows, const u8* palette, u64 paletteHash, u32 paletteVersion, bool waitFirst)
-    -> void;
-  //ensureDecoded reads VRAM of batches already drawn without settling this one (pointer / vramDrawnOver).
-  static thread_local bool readingDeferred;
+  auto fillDecoded(Look& look, u32 rows) -> void;
+  auto decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u32 width, u32 from, u32 rows,
+                    u32* texels) -> void;
   auto textureWritten(u32 page) -> void;
-  auto forget(Decoded* entry) -> void;  //caller holds textures.mutex
+  auto forget(Decoded* entry) -> void;
   auto dropTextures() -> void;
 
   //pixel.cpp
@@ -494,6 +493,8 @@ struct GE {
     s32 left = 0, right = 0, upper = 0, lower = 0;  //its area: its primitives' scissor rectangles together
     bool depth = false;                 //some of them reach the depth buffer
     std::bitset<VRAMPages> pending;     //VRAM's 4 KiB pages it may draw over
+    std::bitset<VRAMPages> reads;       //those its deferred textures are read from as it starts (Look::deferRows)
+    std::atomic<bool> readsDone{false}; //and they have been, decoded (ensureDecoded)
     bool launched = false;              //handed to the workers: being drawn, or next once the one before is done
     u32 users = 0;                      //threads drawing its bands now (under the mutex)
     u32 bands = 0;

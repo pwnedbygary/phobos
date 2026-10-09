@@ -1132,6 +1132,76 @@ static auto geThreads() -> void {
   }
 }
 
+//A picture drawn off the screen and then drawn with (render to texture), its decode left till its batch starts
+//(ge/threads.cpp): till then the texture's pages stay busy for the CPU, as the pages a batch draws over do, and the
+//CPU's store into the picture just after the list lands after the sprite drew with it, its load of the sprite's pixel
+//finding it drawn and its load of the texel finding what it stored. It comes out as drawing it all before the CPU runs
+//on does (one thread), with batches shared out however small.
+static auto geDeferredBusy() -> void {
+  constexpr u32 Offscreen = 0x15'4000;  //(VRAM offset)
+  auto build = [&](Memory& memory) {
+    ListWriter list{memory, ListA};
+    u32 vertex = Vertices;
+    struct V { float u, v; u32 color; float x, y, z; };
+    auto put = [&](u32 kind, std::initializer_list<V> vertices) {
+      list.to(GE::VertexAddress, vertex);
+      for(auto& v : vertices) {
+        for(float value : {v.u, v.v}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+        memory.write(4, vertex, v.color), vertex += 4;
+        for(float value : {v.x, v.y, v.z}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+      }
+      list.put(GE::Primitive, kind << 16 | vertices.size());
+    };
+    list.put(GE::FrameBufferPointer, Offscreen), list.put(GE::FrameBufferWidth, 64);
+    list.put(GE::FrameBufferPixelFormat, 3);
+    list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+    list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+    for(u32 n = 0; n < 8; n++) {
+      put(GE::Sprites, {{0, 0, 0, 0, n * 8.0f, 0}, {0, 0, 0xff00'0000 + n * 0x10'2030, 64, n * 8.0f + 8, 0}});
+    }
+    list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512);
+    list.put(GE::TextureMappingEnable, 1), list.put(GE::TextureAddress0, Offscreen);
+    list.put(GE::TextureBufferWidth0, 0x04 << 16 | 64), list.put(GE::TextureSize0, 6 << 8 | 6);
+    list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 3);
+    put(GE::Sprites, {{0, 0, 0, 100, 100, 0}, {64, 64, 0, 164, 164, 0}});
+    list.put(GE::Finish), list.put(GE::End);
+  };
+  auto drawn = [&](u32 threads, bool recompile) {
+    KernelMachine m;
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = 0;
+    build(m.system.memory);
+    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    if(threads > 1) {  //(both batches still launched, the second's decode deferred)
+      bool deferred = false;
+      for(auto& batch : m.system.ge.drawing.batches) {
+        if(!batch.launched) continue;
+        for(u32 page = 0; page < GE::VRAMPages; page++) {
+          if(!batch.reads[page]) continue;
+          deferred = true;
+          CHECK(m.system.memory.vramPageBusy(page), true);
+        }
+      }
+      CHECK(deferred, true);
+    }
+    //the store into the picture; then loads of the sprite's pixel and of the stored texel, into RAM
+    u32 stored = VRAM + Offscreen + (10 * 64 + 10) * 4, loaded = VRAM + (110 * 512 + 110) * 4;
+    m.system.runProgram(0x0890'0000, {lui(t0, stored >> 16), ori(t0, t0, stored & 0xffff), lui(t1, 0x1234),
+                                      ori(t1, t1, 0x5678), sw(t1, 0, t0), lui(t2, loaded >> 16),
+                                      ori(t2, t2, loaded & 0xffff), lw(t3, 0, t2), lui(t4, 0x0892), sw(t3, 0, t4),
+                                      lw(t5, 0, t0), sw(t5, 4, t4)}, recompile);
+    CHECK(m.system.memory.read(4, 0x0892'0004), 0x1234'5678u);
+    m.system.ge.settle();
+    CHECK(m.system.memory.read(4, 0x0892'0000), m.system.memory.read(4, loaded));
+    return m.system.memory.vram;
+  };
+  auto whole = drawn(1, false);
+  CHECK(whole[(110 * 512 + 110) * 4], u8(0x30));  //(the sprite took its texel 10, 10 as drawn, not as stored)
+  for(u32 threads : {2u, 4u, 8u}) {
+    for(bool recompile : {false, true}) CHECK(drawn(threads, recompile) == whole, true);
+  }
+}
+
 //sceGeBreak, as pspautotests' gpu/ge/break and breakwait recorded on a PSP: the refusals in their order (a mode but 0
 //or 1, parameters reaching the kernel's half of memory, an empty queue); mode 0 breaking off a stalled list, its ID
 //returned, the GE free (sceGeSaveContext works), and sceGeContinue taking it up again; a list paused by a PAUSE
@@ -1310,6 +1380,7 @@ auto geTests() -> Tests {
     {"ge commands", geCommands}, {"ge moving", geMoving}, {"ge stops", geStops}, {"ge vertices", geVertices},
     {"ge clear", geClear}, {"ge transfer", geTransfer}, {"ge driver", geDriver}, {"ge base kept", geBaseKept},
     {"ge saved state", geSaved}, {"ge endless list", geEndless}, {"ge drawn on several threads", geThreads},
+    {"ge deferred texture busy", geDeferredBusy},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},

@@ -89,6 +89,15 @@ struct Memory {
   bool vramBusy = false;
   u64 busyPages[VRAMSize / PageSize / 64] = {};
   std::function<auto () -> void> finishDrawing;
+  //Set while a thread reads VRAM it knows is drawn already (the GE's own reads, of bytes it has seen drawn first; a
+  //batch's deferred textures, decoded as it starts): pointer() neither waits for drawing for it nor looks at the busy
+  //pages, which the emulation thread changes meanwhile.
+  static thread_local bool knownDrawn;
+  struct KnownDrawn {  //knownDrawn while it lives
+    bool was = knownDrawn;
+    KnownDrawn() { knownDrawn = true; }
+    ~KnownDrawn() { knownDrawn = was; }
+  };
   std::function<auto (bool busy) -> void> vramGuard;
   auto vramPageBusy(u32 page) const -> bool { return busyPages[page >> 6] >> (page & 63) & 1; }
   //Whether the drawing that keeps pages busy reaches VRAM's bytes first to last (offsets in VRAM, inclusive): the

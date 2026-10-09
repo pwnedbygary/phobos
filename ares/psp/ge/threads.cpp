@@ -28,7 +28,8 @@
 //Render to texture: a primitive sampling what the batch being filled (or one already launched) still draws is not
 //decoded on the GE's thread (that would wait for those pixels). The source batch is launched if it's the one being
 //filled; the Look waits in the next batch with its decode deferred; ensureDecoded() runs as that batch starts
-//being drawn, when every batch before it is done. The texture cache is shared with the workers (textures.mutex).
+//being drawn, when every batch before it is done, decoding for that batch alone. Till then the CPU waits for the
+//texture's pages (the batch's reads), as for the pages a batch draws over.
 //While they're drawn, jobs only read what doesn't change: their own setup and settings, decoded textures (which the
 //batch keeps), and VRAM's frame and depth buffers, each pixel by its own band alone.
 //
@@ -113,6 +114,7 @@ auto GE::drawBands(Batch& batch) -> void {
   if(state != 2) {
     if(state == 0 && batch.decodeState.compare_exchange_strong(state, 1, std::memory_order_acq_rel)) {
       ensureDecoded(batch);
+      batch.readsDone.store(true, std::memory_order_release);
       batch.decodeState.store(2, std::memory_order_release);
     } else {
       while(batch.decodeState.load(std::memory_order_acquire) != 2) std::this_thread::yield();
@@ -195,7 +197,7 @@ auto GE::launch(bool returning) -> void {
   if(memory.vramGuard) {  //(its pages are the workers' until it's settled)
     memory.vramBusy = true;
     for(u32 page = 0; page < VRAMPages; page++) {
-      if(batch.pending[page]) memory.busyPages[page >> 6] |= 1ull << (page & 63);
+      if(batch.pending[page] || batch.reads[page]) memory.busyPages[page >> 6] |= 1ull << (page & 63);
     }
     memory.vramGuard(true);
   }
@@ -287,6 +289,8 @@ auto GE::clearBatch(Batch& batch) -> void {
   batch.top = 0, batch.bottom = -1;
   batch.targeted = false;
   batch.pending.reset();
+  batch.reads.reset();
+  batch.readsDone.store(false, std::memory_order_relaxed);
   batch.launched = false;
   batch.decodeState.store(2, std::memory_order_relaxed);
 }
@@ -312,12 +316,14 @@ auto GE::drawnFirst(u32 address, u32 size) -> void {
 }
 
 //Whether drawing still going on reaches VRAM's bytes first to last (offsets in VRAM): all of a page a batch being
-//drawn draws in, or a hardware renderer's pixels themselves (Memory::vramDrawnOver, for whoever touches busy pages).
+//drawn draws in, or has yet to read a deferred texture from, or a hardware renderer's pixels themselves
+//(Memory::vramDrawnOver, for whoever touches busy pages).
 auto GE::drawnOver(u32 first, u32 last) -> bool {
   for(auto& batch : drawing.batches) {
     if(!batch.launched) continue;
+    bool reading = !batch.readsDone.load(std::memory_order_acquire);
     for(u32 page = first >> 12; page <= last >> 12; page++) {
-      if(batch.pending[page]) return true;
+      if(batch.pending[page] || (reading && batch.reads[page])) return true;
     }
   }
   return renderer && renderer->drawnOver(*this, first, last);

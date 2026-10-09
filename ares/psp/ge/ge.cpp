@@ -18,18 +18,13 @@ namespace ares::PlayStationPortable {
 
 //The GE watches the pages of the textures it keeps decoded (texture.cpp), and a hardware renderer those of its frame
 //buffers (ge.hpp's Renderer), and hears of their changes here.
-thread_local bool GE::readingDeferred = false;
-
 GE::GE(Memory& memory) : memory(memory) {
   memory.watchedWritten = [this](u32 page) {
     textureWritten(page);
     if(renderer) renderer->written(*this, page);
   };
   memory.finishDrawing = [this] { settleAll(); };  //(threads.cpp)
-  //readingDeferred: ensureDecoded reading a prior batch's pixels while this batch is already "drawn"
-  memory.vramDrawnOver = [this](u32 first, u32 last) {
-    return !readingDeferred && drawnOver(first, last);
-  };
+  memory.vramDrawnOver = [this](u32 first, u32 last) { return drawnOver(first, last); };
   memory.vramChangedBusy = [this](u32 first, u32 last) {
     if(renderer) renderer->besideChanged(*this, first, last);
   };
