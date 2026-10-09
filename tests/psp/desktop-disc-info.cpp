@@ -105,6 +105,13 @@ static auto iconKeys() -> void {
   CHECK(pspIconKey("/games/b.iso", 100, 200) != key, true);  //the path changed
 }
 
+//The key's separators: two files whose path+size+mtime would merge into the same string (the second's path
+//starting where the first's size would end) get different keys.
+static auto keyCollisions() -> void {
+  //without the |'s, "/games/a" + "1" + "23" and "/games/a1" + "2" + "3" are both "/games/a123"
+  CHECK(pspIconKey("/games/a", 1, 23) != pspIconKey("/games/a1", 2, 3), true);
+}
+
 //A PSP disc image: the disc's formats, not a PBP (named by its folder) nor an ELF (a homebrew program).
 static auto discImages() -> void {
   CHECK(pspDiscImage("a.iso"), true);
@@ -195,14 +202,29 @@ static auto cancelledTitle() -> void {
   CHECK(cache.info(file).has_value(), false);  //and nothing was cached
 }
 
+//The scan cancelled mid-read (after it's started): the read gives up at its first sector, and the title isn't
+//cached.
+static auto midReadCancelled() -> void {
+  auto folder = testFolder();
+  auto file = tempFile(folder, "midread.iso", gameDisc("Test Game", "ULUS10025").bytes);
+  auto cache = PspIconCache((folder / "cache").string());
+  auto generation = std::atomic<int>{0};
+  static int checks = 0;  //the lambda's state (it's captureless, so it can't carry any itself)
+  auto flip = [](bool, int, std::atomic<int>&) -> bool { return ++checks > 1; };
+  CHECK(pspDiscTitle(file, cache, false, 0, generation, flip).empty(), true);  //cancelled mid-read
+  CHECK(cache.info(file).has_value(), false);  //and nothing was cached
+}
+
 auto desktopDiscInfoTests() -> Tests {
   return {
     {"desktop disc info keys", iconKeys},
+    {"desktop disc info key collision", keyCollisions},
     {"desktop disc image files", discImages},
     {"desktop disc info titles", listTitles},
     {"desktop disc info cache", cacheRoundTrip},
     {"desktop disc info from image", titles},
     {"desktop disc info cancelled", cancelledTitle},
+    {"desktop disc info mid-read cancelled", midReadCancelled},
   };
 }
 

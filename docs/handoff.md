@@ -40,8 +40,9 @@ Library now shows a PSP disc's own title, as the Android app does (docs/psp-core
   `psp-icons/`), under a SHA-256 of the file's path+size+mtime, as the Android app's `psp-icons/` cache: a
   second visit doesn't re-open the disc. The icon is cached, not drawn: the list's 8x8 font has no place for
   it. A title the font can't draw has its characters dropped; only when none are left is the file's name shown.
-- **Tests**: `tests/psp/desktop-disc-info.cpp` (the key, the disc image's file choice, the title's choice, the
-  cache's round trip, the title served from the cache without re-opening the disc, and a cancelled scan).
+- **Tests**: `tests/psp/desktop-disc-info.cpp` (the key, the key's collision, the disc image's file choice, the
+  title's choice, the cache's round trip, the title served from the cache without re-opening the disc, and a
+  cancelled scan, before it starts and mid-read).
 - **Checked**: tests/psp (with the new desktop groups).
 - **Left**: the icon's draw (the list's rows are 12 px and the font 8x8: no place for it); the game's window
   title (the launch keeps the file's name).
@@ -53,6 +54,12 @@ Library now shows a PSP disc's own title, as the Android app does (docs/psp-core
   (5) `desktop/PspDiscInfo.*` added to the PSP Core Tests workflow's paths; (6) `listTitle` drops the characters
   the 8x8 font can't draw instead of rejecting the whole title, falling back to the file name only when nothing
   printable is left; the test's scratch folder is removed when the program ends.
+- **Round 3 review fixes** (2026-10-08): (1) the `.png` write's rename is guarded by its `open` too (the `.info`
+  branch already was), so a temp file that never opened is never renamed over the icon; (2) a direct test that
+  the key's `|` separators disambiguate (two files whose path+size+mtime merge into the same string get
+  different keys); (3) a test of a scan cancelled mid-read: it gives up at its first sector and caches nothing;
+  (4) note, no code change: a title with a newline shows its parts joined (the 8x8 font can't draw the newline,
+  so `listTitle` drops it).
 
 ## PSP core: blending in the shader — 2026-10-08
 

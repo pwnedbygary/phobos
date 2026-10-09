@@ -73,10 +73,12 @@ auto PspIconCache::store(const std::string& path, const std::string& title, cons
   if (!icon.empty()) {
     auto tmp = toPath(directory + "/" + key + ".png.tmp");
     std::ofstream out(tmp, std::ios::binary);
-    if (out) out.write((const char*)icon.data(), (std::streamsize)icon.size());
-    out.close();
-    std::error_code error;
-    fs::rename(tmp, toPath(directory + "/" + key + ".png"), error);
+    if (out) {
+      out.write((const char*)icon.data(), (std::streamsize)icon.size());
+      out.close();
+      std::error_code error;
+      fs::rename(tmp, toPath(directory + "/" + key + ".png"), error);
+    }
   }
 }
 
