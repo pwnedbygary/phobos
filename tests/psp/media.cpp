@@ -1476,6 +1476,7 @@ static auto oddsOfPart28() -> void {
   CHECK((words(R + 0x20) == std::array<u32, 2>{2, 0}), true);
   CHECK(m.call("sceImposeGetBatteryIconStatus", {R + 0x28, R + 0x2c}), 0);
   CHECK((words(R + 0x28) == std::array<u32, 2>{0, 3}), true);
+  CHECK(m.call("sceImposeSetUMDPopup", {1}), 0);
   CHECK(m.call("sceKernelDevkitVersion", {}), 0x0606'0110);
   CHECK(m.call("sceKernelUSec2SysClock", {123'456, R + 0x30}), 0);
   CHECK((words(R + 0x30) == std::array<u32, 2>{123'456, 0}), true);

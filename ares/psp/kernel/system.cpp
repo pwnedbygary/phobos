@@ -403,6 +403,12 @@ auto Kernel::sceImposeGetBatteryIconStatus() -> void {
   result(0);
 }
 
+//(mode): whether the HOME menu offers the UMD's own popup (pspimpose.h); there's no HOME menu to offer it, so it's
+//taken and forgotten. Every Patapon sets it as it starts.
+auto Kernel::sceImposeSetUMDPopup() -> void {
+  result(0);
+}
+
 //(destination, source, size): a copy by the DMA controller, done at once. Nothing, or memory that isn't there, is
 //refused (PPSSPP's notes).
 auto Kernel::sceDmacMemcpy() -> void {

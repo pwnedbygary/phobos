@@ -1818,6 +1818,7 @@ struct Kernel {
   auto sceImposeSetLanguageMode() -> void;
   auto sceImposeGetLanguageMode() -> void;
   auto sceImposeGetBatteryIconStatus() -> void;
+  auto sceImposeSetUMDPopup() -> void;
   auto sceDmacMemcpy() -> void;
   auto sceKernelExitGame() -> void;
   auto sceKernelSelfStopUnloadModule() -> void;

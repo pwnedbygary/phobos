@@ -331,6 +331,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceImpose",         "sceImposeSetLanguageMode",      &Kernel::sceImposeSetLanguageMode);
   add("sceImpose",         "sceImposeGetLanguageMode",      &Kernel::sceImposeGetLanguageMode);
   add("sceImpose",         "sceImposeGetBatteryIconStatus", &Kernel::sceImposeGetBatteryIconStatus);
+  add("sceImpose",         "sceImposeSetUMDPopup",          &Kernel::sceImposeSetUMDPopup);
   add("sceDmac",           "sceDmacMemcpy",                 &Kernel::sceDmacMemcpy);
   add("SysMemUserForUser", "sceKernelAllocPartitionMemory", &Kernel::sceKernelAllocPartitionMemory);
   add("SysMemUserForUser", "sceKernelFreePartitionMemory",  &Kernel::sceKernelFreePartitionMemory);
