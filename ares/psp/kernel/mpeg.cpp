@@ -28,8 +28,8 @@ namespace {
   constexpr u32 RingbufferPacketMemory = 0x868, PacketSize = 2048;
   //A ringbuffer's fields (SceMpegRingbuffer2 in video/mpeg's shared.h): its packets, the next to read and to write
   //(places in the ring, from 0), how many hold data, the packets' memory, the callback and its argument, and the
-  //library using it. (SceMpegRingbuffer2 has a global pointer after them, which Construct writes; pspsdk's
-  //SceMpegRingbuffer, 44 bytes, ends before it, so nothing reads it.)
+  //library using it. (SceMpegRingbuffer2 has a global pointer after them, which Construct writes with the firmware's
+  //library; pspsdk's SceMpegRingbuffer, 44 bytes, ends before it, so nothing reads it.)
   constexpr u32 RingPackets = 0, RingRead = 4, RingWritten = 8, RingFilled = 12, RingData = 20, RingCallback = 24,
                 RingArgument = 28, RingLibrary = 40;
   //The library's memory, where the handle points (its "LIBMPEG"): the ringbuffer it reads (where shared.h's
@@ -160,16 +160,21 @@ auto Kernel::sceMpegQueryMemSize() -> void {
 
 //(ringbuffer, packets, data, size, callback, callback's argument): a SceMpegRingbuffer (pspmpeg.h) filled in:
 //packets, none read, written or free yet, its data, callback and argument, and where its data ends (2048 bytes a
-//packet on), as video/mpeg/ringbuffer/construct recorded. Refused: a negative size, and packets whose memory, as
-//sceMpegRingbufferQueryMemSize reckons it in 32 bits, is more than the size, both taken as signed (construct gave
-//every count it tried 4096 packets' memory: 4097 was refused; -1 and 0x7fffffff, whose memory wraps round to -0x868,
-//and 0x80000000, whose memory wraps to 0, were taken). Sega Rally Revo makes a ring of 4800, with their memory.
+//packet on), as video/mpeg/ringbuffer/construct recorded; with the firmware's library, the caller's global pointer
+//after them, as construct's ring of 48 bytes has it. Not with a game's own copy of the library (mpegOwnLibrary()):
+//its ring is pspsdk's 44 bytes, the word after it the game's, which only the library, stood in for, would read.
+//Miami Vice keeps its movie's file there, which it can't do on a PSP with a library that writes over it. Refused: a
+//negative size, and packets whose memory, as sceMpegRingbufferQueryMemSize reckons it in 32 bits, is more than the
+//size, both taken as signed (construct gave every count it tried 4096 packets' memory: 4097 was refused; -1 and
+//0x7fffffff, whose memory wraps round to -0x868, and 0x80000000, whose memory wraps to 0, were taken). Sega Rally
+//Revo makes a ring of 4800, with their memory.
 auto Kernel::sceMpegRingbufferConstruct() -> void {
   u32 ringbuffer = arg(0), packets = arg(1), data = arg(2), size = arg(3);
   if(s32(size) < 0 || s32(packets * RingbufferPacketMemory) > s32(size)) return result(MpegErrorValue);
-  if(!memory.reaches(ringbuffer, 48)) return result(ErrorInvalidPointer);
-  u32 words[12] = {packets, 0, 0, 0, 0, data, arg(4), arg(5), data + packets * PacketSize, 0, 0, cpu.ipu.r[28]};
-  for(u32 n = 0; n < 12; n++) memory.write(4, ringbuffer + n * 4, words[n]);
+  u32 words = mpegOwnLibrary() ? 11 : 12;
+  if(!memory.reaches(ringbuffer, words * 4)) return result(ErrorInvalidPointer);
+  u32 fields[12] = {packets, 0, 0, 0, 0, data, arg(4), arg(5), data + packets * PacketSize, 0, 0, cpu.ipu.r[28]};
+  for(u32 n = 0; n < words; n++) memory.write(4, ringbuffer + n * 4, fields[n]);
   result(0);
 }
 

@@ -693,6 +693,28 @@ static auto mpegRingbufferNotARing() -> void {
   }
 }
 
+//A ring made with the firmware's library has the caller's global pointer after its 44 bytes (construct's ring of
+//48); with the game's own copy of the library (stood in for), the word after them is left as it was: Miami Vice keeps
+//its movie's file there.
+static auto mpegRingOwnLibrary() -> void {
+  for(bool own : {false, true}) {
+    KernelMachine m;
+    if(own) {
+      CHECK(m.kernel.standIn("sceMpeg_library", 0, "disc0:/MPEG.PRX") != 0, true);
+      m.notes.clear();  //(its "Sony's sceMpeg_library" note)
+    }
+    m.call("sceMpegInit", {});
+    for(u32 n : {36u, 40u}) m.system.memory.write(4, Ring + n, 0xcccc'cccc);
+    m.system.memory.write(4, Ring + 44, 0x46);
+    m.system.ipu.r[28] = 0x0881'2340;
+    CHECK(m.call("sceMpegRingbufferConstruct", {Ring, 16, RingData, 16 * 0x868, CallbackCode, Place}), 0);
+    CHECK(word(m, Ring) == 16 && word(m, Ring + 32) == RingData + 16 * 2048, true);
+    CHECK(word(m, Ring + 36) == 0 && word(m, Ring + 40) == 0, true);  //the 44 bytes all written
+    CHECK(word(m, Ring + 44), own ? 0x46 : 0x0881'2340);
+    CHECK(m.notes.size(), 0);
+  }
+}
+
 //The callback runs with the global pointer of Put's caller, not the word after a ring of pspsdk's 44 bytes (here
 //someone else's, written after the ring was made). On both engines.
 static auto mpegCallbackGlobalPointer() -> void {
@@ -1555,6 +1577,7 @@ auto mediaTests() -> Tests {
           {"mpeg movie thread waits for its picture", mpegMovieThread},
           {"mpeg ringbuffer callback states", mpegCallbackStates},
           {"mpeg ringbuffer that isn't one given nothing", mpegRingbufferNotARing},
+          {"mpeg ringbuffer with the game's own library", mpegRingOwnLibrary},
           {"mpeg ringbuffer callback with the caller's global pointer", mpegCallbackGlobalPointer},
           {"mpeg ringbuffer callback giving more than asked", mpegCallbackGivesMore},
           {"mpeg ringbuffer callback returning an error", mpegCallbackError},
