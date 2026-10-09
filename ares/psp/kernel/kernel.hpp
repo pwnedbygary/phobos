@@ -325,7 +325,8 @@ struct Kernel {
                            //bits an event flag wait needs; a mixer output's left volume; the samples an SRC output's
                            //buffer was armed with; the bytes a message pipe's send or receive asked for; what a
                            //synchronous read or write returns; the count of vertical blanks a blank's wait ends at
-    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode
+    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode;
+                           //whether a semaphore's CB wait is first in line once its callbacks are done
     u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
                            //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
                            //output hands over, or a message pipe's send or receive reads or fills
@@ -858,6 +859,7 @@ struct Kernel {
   auto pendingCallback(const Thread& thread) -> Callback*;
   auto wakeForCallbacks(Thread& thread) -> void;
   auto callbacksOnReturn(bool callbacks) -> void;
+  auto callbacksDue() -> bool;
   auto runCallbacks(Thread& thread) -> void;
   auto callNextCallback(Thread& thread) -> bool;
   auto callbackReturned() -> void;

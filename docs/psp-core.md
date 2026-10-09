@@ -1437,7 +1437,10 @@ the code they replace.
   bits, a pool's room, a thread that has ended, the drive ready, sceDisplayWaitVblankCB inside the blank), still runs
   the callbacks notified by then: they run at once, as sceKernelCheckCallback's do, and the function returns what it
   got when they're done (it skipped them; a wait made to wait for them instead could time out in a long callback
-  after getting what it asked for, and sceDisplayWaitVblankCB's 1 would become a wait for the next blank).
+  after getting what it asked for, and sceDisplayWaitVblankCB's 1 would become a wait for the next blank). A
+  semaphore's CB wait with no timeout and nobody else in line runs them first instead, in its wait, and takes the
+  count after them if it's still there, ahead of any thread that queued meanwhile (part 51: Patapon 2's callback
+  takes that semaphore itself); a callback deleting the semaphore ends the wait as deleted.
 - **The display** (display.cpp): sceDisplayWaitVblankStartCB, WaitVblank (not waiting, returning 1, inside the
   vertical blank, which lasts 0.77 ms as pspautotests measured), IsVblank, GetCurrentHcount (lines of 525 dots at
   9 MHz, counted from the blank's start).
@@ -1605,17 +1608,18 @@ whether the PSP notifies a power callback as it's registered (PPSSPP's reading);
 timings; the CPU clock not slowing at 222 MHz; the errors taken from PPSSPP's tables where pspsdk has none; which
 group of errors the savedata modes after 11 report from (the bad parameters follow the groups their other errors
 already came from); and whether a CB wait that ends at once runs its callbacks before or after taking what it waited
-for (here, after). For sound and interrupts: the 64-sample pacing (K outputs taking K - 2 blocks) follows from the
-measured block model, but only its first two outputs were timed on a PSP (intr/waits); which of a mixer output's
-volume and channel checks comes first, and an SRC output's volume and reservation; a null SRC output on two armed
-buffers (BUSY here; intr/waits' later results show only that it doesn't wait for them); the volumes after reserving
-(0) and the volume scale (0x8000 full, pspsdk's PSP_AUDIO_VOLUME_MAX) for when the samples are mixed; how long a null
-buffer's count stays; the interrupt kinds, recorded once under PSPLink; and which of a bad priority and a bad thread
-sceKernelChangeThreadPriority checks first. Other waits (sceKernelDelayThread and the rest) don't refuse yet with
-interrupts held off, as intr/waits shows a PSP does: only sound's do. Since the final review: the SRC channel's
-100 µs (the specification's "about 100 µs", from a result bucketed as "13XX"), and whether the buffers chained after
-the first keep it (here they do, so a stream's pace is a buffer's length); and what sceKernelFreePartitionMemory
-says of a block the kernel holds (ILLEGAL_PERMISSION here, not tried on a PSP).
+for (here, after, but before for a semaphore's with no timeout and nobody else in line: part 51). For sound and
+interrupts: the 64-sample pacing (K outputs taking K - 2 blocks) follows from the measured block model, but only its
+first two outputs were timed on a PSP (intr/waits); which of a mixer output's volume and channel checks comes first, and
+an SRC output's volume and reservation; a null SRC output on two armed buffers (BUSY here; intr/waits' later results
+show only that it doesn't wait for them); the volumes after reserving (0) and the volume scale (0x8000 full, pspsdk's
+PSP_AUDIO_VOLUME_MAX) for when the samples are mixed; how long a null buffer's count stays; the interrupt kinds,
+recorded once under PSPLink; and which of a bad priority and a bad thread sceKernelChangeThreadPriority checks first.
+Other waits (sceKernelDelayThread and the rest) don't refuse yet with interrupts held off, as intr/waits shows a PSP
+does: only sound's do. Since the final review: the SRC channel's 100 µs (the specification's "about 100 µs", from a
+result bucketed as "13XX"), and whether the buffers chained after the first keep it (here they do, so a stream's pace is
+a buffer's length); and what sceKernelFreePartitionMemory says of a block the kernel holds (ILLEGAL_PERMISSION here, not
+tried on a PSP).
 
 Merged with parts 18 and 19 (`cursor/psp-decrypt-2b67`, #144), which now sit under this part. Each branch had made
 the state's layout version 2, its own way, so the merged layout is version 3, and a state of version 1 or 2 is

@@ -780,12 +780,35 @@ auto Kernel::waitSemaphore(bool callbacks) -> void {
   s32 count = s32(arg(1));
   if(count <= 0 || count > semaphore.maximum) return result(ErrorIllegalCount);
   result(0);
-  if(semaphore.count >= count) {
+  //With callbacks notified, no timeout and no other thread in line, a CB wait whose count is there waits all the
+  //same: its callbacks run first, at once and in its wait, and it takes the count once they're done if it's still
+  //there, first in line whatever queued meanwhile (resumeWait(); waitMode marks it). Patapon 2's memory stick
+  //callback, notified as it's registered, takes and gives back the semaphore the game's next CB wait would take at
+  //once, and waited on it for good when run after. Otherwise (chosen: nothing recorded shows which) the count is
+  //taken first and the callbacks run after, as every CB wait that ends at once does (callbacksOnReturn()): with
+  //another thread in line, served in order, one ahead wanting more would hold this wait up.
+  bool callbacksFirst = semaphore.count >= count && callbacks && !arg(2) && callbacksDue();
+  auto inLine = [&](Wait wait, u32 id) { return wait == Wait::Semaphore && id == semaphore.uid; };
+  for(auto& [uid, thread] : threads) {
+    if(!callbacksFirst) break;
+    callbacksFirst = !inLine(thread->wait, thread->waitID)
+                  && !(thread->inCallback && inLine(thread->waitBeforeCallback.wait, thread->waitBeforeCallback.id));
+  }
+  if(semaphore.count >= count && !callbacksFirst) {
     semaphore.count -= count;
     return callbacksOnReturn(callbacks);
   }
   current->waitCount = count;
+  current->waitMode = callbacksFirst;
   current->readySince = ++readySequence;  //its place in the queue
+  if(callbacksFirst) {
+    current->wait = Wait::Semaphore;
+    current->waitID = semaphore.uid;
+    current->wakeAt = 0;
+    current->timeoutPointer = 0;
+    current->callbacks = true;
+    return runCallbacks(*current);
+  }
   blockTimed(Wait::Semaphore, semaphore.uid, arg(2), callbacks);
 }
 
