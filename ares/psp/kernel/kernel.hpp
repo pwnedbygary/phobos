@@ -1874,6 +1874,8 @@ struct Kernel {
   auto linkImports() -> void;
   auto moduleAt(u32 address) const -> u32;
   auto moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32;
+  auto threadParameters(const Module& module, u32 parameters, u32& priority, u32& stackSize, u32& attributes) const
+    -> void;
   auto makeModuleThread(const LoadedModule& loaded, u32 entry, u32 parameters, u32 length, u32 argument,
                         u32 options) -> s32;
   auto madeForModule(u32 thread) const -> bool;

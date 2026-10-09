@@ -358,6 +358,54 @@ static auto userPartition() -> void {
   }
 }
 
+//The program's first thread, as a module's module_start thread is made: at the module_start the program exports for
+//itself, whatever its ELF header's entry says (Dissidia 012's says 0), with the priority, stack and attributes its
+//module_start_thread_parameter gives (Ghostbusters asks for a 1 KiB stack), each 0 leaving the default; without
+//either, its header's entry, at 0x20 with 256 KiB. And as a module's start thread, it goes once its function returns,
+//its stack free again (Death Jr. needs that room).
+static auto programStart() -> void {
+  struct Case { bool exported; u32 priority, stack, attributes; };
+  for(auto [exported, priority, stack, attributes] : {Case{true, 0x30, 0x400, 0x8000'0000}, Case{true, 0, 0x400, 0},
+                                                      Case{false, 0, 0, 0}}) {
+    ElfBuilder elf;
+    elf.type = 2;
+    elf.entry = exported ? 0 : 0x0880'4100;
+    ElfBuilder::Segment segment;
+    segment.address = 0x0880'4000;
+    auto& b = segment.bytes;
+    b.putString(4, "START");                             //module info: attributes, version, name
+    b.put32(0x24, exported ? 0x0880'4040 : 0);           //exports
+    b.put32(0x28, exported ? 0x0880'4050 : 0);
+    b.put32(0x40, 0);                                    //the program's own: 4 words, a function and a variable
+    b.put32(0x44, 0x8000'0000);
+    b.put32(0x48, 4 | 1 << 8 | 1 << 16);
+    b.put32(0x4c, 0x0880'4060);
+    b.put32(0x60, 0xd632'acdb); b.put32(0x64, 0x0f7c'276c);  //module_start, module_start_thread_parameter
+    b.put32(0x68, 0x0880'4100); b.put32(0x6c, 0x0880'4080);
+    b.put32(0x80, 3); b.put32(0x84, priority); b.put32(0x88, stack); b.put32(0x8c, attributes);
+    b.put32(0x100, jr(ra)); b.put32(0x104, nop);        //the start function: returns at once
+    b.at(0x200);
+    elf.segments.push_back(segment);
+    elf.sections.push_back({".rodata.sceModuleInfo", 1, 0x0880'4000, {}});
+    auto program = elf.build();
+    KernelMachine m;
+    std::string error;
+    CHECK(m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/START/EBOOT.PBP", error), true);
+    CHECK(m.kernel.threads.size(), 1);
+    for(auto& [uid, thread] : m.kernel.threads) {
+      CHECK(thread->entry, 0x0880'4100);
+      CHECK(thread->priority, priority ? priority : 0x20);
+      CHECK(thread->stackSize, stack ? stack : 256_KiB);
+      CHECK(thread->attributes, attributes ? attributes : 0x8000'4000);
+      CHECK(thread->stackBlock + thread->stackSize, 0x0a00'0000);
+    }
+    CHECK(m.system.ipu.pc, 0x0880'4100);
+    m.kernel.run(Kernel::VblankCycles);
+    CHECK(m.kernel.threads.empty(), true);  //returned, and gone
+    CHECK(m.call("sceKernelTotalFreeMemSize", {}), 0x0a00'0000 - 0x0880'0000 - 0x200);  //but for the program
+  }
+}
+
 //The SDK and compiler versions a program's start-up code tells the system, through the first SDK's function and
 //one of its siblings for later ones (whose NIDs aren't their names' hashes), read back; and a later SDK's way of
 //unloading itself, refused (CAN_NOT_STOP) to code no module holds, which runs on (modules.cpp has a module, and the
@@ -634,7 +682,8 @@ auto kernelTests() -> Tests {
     {"kernel nids", nids}, {"kernel threads", threads}, {"kernel waiting", waiting},
     {"kernel semaphores served past waiters that left", semaphoreWaitersLeave},
     {"kernel partitions", partitions}, {"kernel aligned blocks", alignedBlocks},
-    {"kernel user partition", userPartition}, {"kernel sdk versions", sdkVersions},
+    {"kernel user partition", userPartition}, {"kernel program start", programStart},
+    {"kernel sdk versions", sdkVersions},
     {"kernel start arguments", startArguments},
     {"kernel program memory", programMemory}, {"kernel reload", reload}, {"kernel unknown functions", unknownFunctions},
     {"kernel vblank", vblank}, {"kernel stuck note", stuckNote},

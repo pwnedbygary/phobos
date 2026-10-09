@@ -855,10 +855,11 @@ auto Kernel::power() -> void {
 }
 
 //Loads a program (an EBOOT.PBP, or an ELF on its own) and starts its first thread, as the PSP does when a game is
-//chosen: the thread runs the module's entry point with the program's path as its argument (what C sees as argv[0]),
-//its global pointer set, and a 256 KiB stack. It starts afresh, as the PSP does: whatever an earlier program left
-//(threads, memory handed out, having exited) goes first. Returns false, with error saying why, if it can't, and
-//leaves nothing of the program behind but what the loader wrote to memory.
+//chosen: the thread runs the module's module_start (or entry point) with the program's path as its argument (what C
+//sees as argv[0]), its global pointer set, and a 256 KiB stack unless the program asks for another, and goes once
+//the function returns (start()). It starts afresh, as the PSP does: whatever an earlier program left (threads,
+//memory handed out, having exited) goes first. Returns false, with error saying why, if it can't, and leaves nothing
+//of the program behind but what the loader wrote to memory.
 auto Kernel::load(const u8* data, u64 size, const std::string& path, std::string& error) -> bool {
   power();
   bool loaded = start(data, size, path, error);
@@ -905,7 +906,15 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
   for(auto& skipped : module.skipped) note("the loader left out " + skipped);
   programUID = newUID();  //the program is a module too, the first
 
-  cpu.power(module.entry);
+  //It starts where a module does (moduleFunction()): at the module_start it exports for itself, or else at its ELF
+  //header's entry. (Dissidia 012's header gives 0, and its module_start the code.)
+  u32 entry = module.entry;
+  for(auto& e : module.exports) {
+    if(!e.library.empty() || e.nid != ModuleStartNID || e.variable || !e.address) continue;
+    entry = e.address;
+    break;
+  }
+  cpu.power(entry);
   if(auto folder = programFolder(path); !folder.empty()) workingDirectory = folder;  //relative paths start there
   //the path, with its terminating zero, or the argument given
   std::vector<u8> bytes = given ? *given : std::vector<u8>(path.c_str(), path.c_str() + path.size() + 1);
@@ -915,16 +924,25 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
   }
   u32 argument = Trampoline + 0x100;  //put where the new thread's start can copy it from
   memory.copyIn(argument, bytes.data(), bytes.size());
-  s32 uid = createThread(module.name, module.entry, 0x20, 256_KiB, 0x8000'4000, module.gp);  //user mode, uses the VFPU
+  //Its first thread is the one its module_start runs on, as a module's is (makeModuleThread()): at priority 0x20,
+  //with a 256 KiB stack, in user mode with the VFPU, unless the program's own module_start_thread_parameter says
+  //otherwise; and it goes, its stack given back, once the function returns (moduleReturned()), as a module's start
+  //thread does. Games size their memory by both: Ghostbusters asks for a 1 KiB stack and then for a block that fits
+  //only beside one so small; Death Jr.'s start thread returns, and the block it asks for later fits only once that
+  //thread's stack, at the partition's top, is free for the threads it makes next.
+  u32 priority = 0x20, stackSize = 256_KiB, attributes = 0x8000'4000;
+  threadParameters(module, StartParametersNID, priority, stackSize, attributes);
+  s32 uid = createThread(module.name, entry, priority, stackSize, attributes, module.gp);
   if(uid < 0) {
-    error = "no memory for the program's first thread";
+    error = uid == s32(ErrorNoMemory) ? "no memory for the program's first thread"
+                                      : "the program's first thread can't be made as it asks (its priority or stack)";
     return false;
   }
   if(!argumentFits(*threads[uid], bytes.size())) {
     error = "the program's argument is too long";
     return false;
   }
-  startThread(*threads[uid], bytes.size(), argument);
+  startThread(*threads[uid], bytes.size(), argument, Trampoline + 16);
   return true;
 }
 
