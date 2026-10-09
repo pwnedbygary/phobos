@@ -202,6 +202,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("ThreadManForUser",  "sceKernelCheckCallback",        &Kernel::sceKernelCheckCallback);
   add("Kernel_Library",    "sceKernelLockLwMutex",          &Kernel::sceKernelLockLwMutex);
   add("Kernel_Library",    "sceKernelTryLockLwMutex",       &Kernel::sceKernelTryLockLwMutex);
+  add("Kernel_Library",    "sceKernelTryLockLwMutex_600",   &Kernel::sceKernelTryLockLwMutex_600);
   add("Kernel_Library",    "sceKernelUnlockLwMutex",        &Kernel::sceKernelUnlockLwMutex);
   add("Kernel_Library",    "sceKernelLockLwMutexCB",        &Kernel::sceKernelLockLwMutexCB);
   add("Kernel_Library",    "sceKernelReferLwMutexStatus",   &Kernel::sceKernelReferLwMutexStatus);

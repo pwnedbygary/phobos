@@ -930,7 +930,7 @@ auto Kernel::sceKernelDeleteLwMutex() -> void {
       ready(*thread, ErrorWaitDeleted);
     }
   }
-  memory.write(4, workArea + 16, 0);
+  memory.write(4, workArea + 16, 0xffff'ffff);  //(what sceKernelTryLockLwMutex_600 knows a deleted one by)
   result(0);
   reschedule();
 }
@@ -986,6 +986,35 @@ auto Kernel::sceKernelTryLockLwMutex() -> void {
     return result(0);
   }
   result(ErrorLwMutexLocked);
+}
+
+//(work area, count): sceKernelTryLockLwMutex_600, the newer firmware's try, as Kernel_Library has it in user mode: the
+//lock taken in the work area alone, without asking the kernel, so a work area made by hand locks as well as one the
+//kernel made. As pspautotests' threads/lwmutex/try600 recorded for both: a deleted one is LWMUTEX_NOTFOUND (its ID
+//-1: sceKernelDeleteLwMutex), a count under 1 ILLEGAL_COUNT, and so is a count but 1 for a free mutex that isn't
+//recursive; its holder trying again is LWMUTEX_RECURSIVE for one that isn't, LWMUTEX_LOCK_OVERFLOW past 2^31 - 1
+//for one that is; held by another, LWMUTEX_LOCKED (where a PSP's older try answers MUTEX_LOCKED to everything,
+//threads/lwmutex/try). God Eater 2 tries its locks so.
+auto Kernel::sceKernelTryLockLwMutex_600() -> void {
+  if(!fromThread()) return;
+  u32 workArea = arg(0);
+  s32 count = arg(1);
+  if(memory.read(4, workArea + 16) == 0xffff'ffff) return result(ErrorLwMutexNotFound);
+  if(count <= 0) return result(ErrorIllegalCount);
+  s32 level = memory.read(4, workArea);
+  u32 owner = memory.read(4, workArea + 4), attributes = memory.read(4, workArea + 8);
+  bool recursive = attributes & 0x200;
+  if(!level) {
+    if(!recursive && count != 1) return result(ErrorIllegalCount);
+    memory.write(4, workArea, count);
+    memory.write(4, workArea + 4, current->uid);
+    return result(0);
+  }
+  if(owner != current->uid) return result(ErrorLwMutexLocked);
+  if(!recursive) return result(ErrorLwMutexRecursion);
+  if(level > 0x7fff'ffff - count) return result(ErrorLwMutexOverflow);
+  memory.write(4, workArea, level + count);
+  result(0);
 }
 
 //Gives an unlocked mutex to the thread that has waited for it longest, or with attribute 0x100 to the best of them

@@ -153,6 +153,7 @@ struct Kernel {
   static constexpr u32 ErrorLwMutexNotFound       = 0x8002'01ca;
   static constexpr u32 ErrorLwMutexLocked         = 0x8002'01cb;
   static constexpr u32 ErrorLwMutexUnlocked       = 0x8002'01cc;
+  static constexpr u32 ErrorLwMutexOverflow       = 0x8002'01cd;  //a recursive lock counted past 2^31 - 1
   static constexpr u32 ErrorLwMutexUnderflow      = 0x8002'01ce;
   static constexpr u32 ErrorLwMutexRecursion      = 0x8002'01cf;
   static constexpr u32 ErrorUnknownMailbox        = 0x8002'019b;
@@ -472,6 +473,7 @@ struct Kernel {
   auto sceKernelLockLwMutex() -> void;
   auto sceKernelLockLwMutexCB() -> void;
   auto sceKernelTryLockLwMutex() -> void;
+  auto sceKernelTryLockLwMutex_600() -> void;
   auto sceKernelUnlockLwMutex() -> void;
   auto sceKernelGetSystemTimeLow() -> void;
 

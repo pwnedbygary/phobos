@@ -670,8 +670,56 @@ static auto mutexesOutsideThreads() -> void {
   CHECK(roundTrip(m), true);
 }
 
+//sceKernelTryLockLwMutex_600 (Kernel_Library 0x37431849), as threads/lwmutex/try600 recorded: a count under 1
+//ILLEGAL_COUNT, and a count but 1 for a free mutex that isn't recursive; its holder again, LWMUTEX_RECURSIVE for one
+//that isn't, the count added for one that is, LWMUTEX_LOCK_OVERFLOW past 2^31 - 1 (the count kept); held by another,
+//LWMUTEX_LOCKED; a work area made by hand locks as one the kernel made; a deleted one is LWMUTEX_NOTFOUND (its ID -1).
+//No thread, ILLEGAL_CONTEXT.
+static auto lwMutexTry600() -> void {
+  constexpr u32 Work = R + 0x80, Fake = R + 0xc0;
+  KernelMachine m;
+  u32 self = withCaller(m);
+  u32 other = m.kernel.createThread("other", 0x0880'1000, 0x20, 0x1000, 0, 0);
+  auto as = [&](u32 thread) { m.kernel.current = m.kernel.threads[thread].get(); };
+  auto create = [&](u32 attributes, u32 count) {
+    return m.call("sceKernelCreateLwMutex", {Work, m.string("lw"), attributes, count, 0});
+  };
+  auto tryLock = [&](u32 workArea, u32 count) { return m.call("sceKernelTryLockLwMutex_600", {workArea, count}); };
+  CHECK(create(0, 0), 0);
+  for(u32 count : {0u, u32(-1), 2u}) CHECK(tryLock(Work, count), Kernel::ErrorIllegalCount);
+  CHECK(word(m, Work), 0);
+  CHECK(tryLock(Work, 1), 0);
+  CHECK(word(m, Work) == 1 && word(m, Work + 4) == self, true);
+  CHECK(tryLock(Work, 1), Kernel::ErrorLwMutexRecursion);
+  as(other);
+  CHECK(tryLock(Work, 1), Kernel::ErrorLwMutexLocked);
+  as(self);
+  CHECK(m.call("sceKernelDeleteLwMutex", {Work}), 0);
+  CHECK(word(m, Work + 16), 0xffff'ffff);
+  CHECK(tryLock(Work, 1), Kernel::ErrorLwMutexNotFound);
+  //recursive: counts added to 2^31 - 1, no further
+  CHECK(create(0x200, 1), 0);
+  CHECK(tryLock(Work, 0x7fff'fffe), 0);
+  CHECK(word(m, Work), 0x7fff'ffff);
+  CHECK(tryLock(Work, 1), Kernel::ErrorLwMutexOverflow);
+  CHECK(word(m, Work), 0x7fff'ffff);
+  CHECK(tryLock(Work, 0), Kernel::ErrorIllegalCount);
+  //a work area made by hand: free, its ID 0
+  m.system.memory.fill(Fake, 0, 32);
+  CHECK(tryLock(Fake, 1), 0);
+  CHECK(word(m, Fake) == 1 && word(m, Fake + 4) == self, true);
+  CHECK(tryLock(Fake, 1), Kernel::ErrorLwMutexRecursion);
+  CHECK(m.call("sceKernelReferLwMutexStatus", {Fake, R + 0x100}), Kernel::ErrorLwMutexNotFound);
+  m.kernel.current = nullptr;
+  CHECK(tryLock(Fake, 1), Kernel::ErrorIllegalContext);
+  as(self);
+  CHECK(roundTrip(m), true);
+  CHECK(m.notes.size(), 0);
+}
+
 auto mutexTests() -> Tests {
   return {
+    {"lightweight mutexes tried the newer way", lwMutexTry600},
     {"mutexes called directly", mutexCalls}, {"mutexes handed on in order", mutexOrder},
     {"mutexes waits ending", mutexWaits}, {"mutexes callbacks in a wait", mutexCallbacks},
     {"mutexes state with a waiter", mutexState}, {"threads released from waits", releaseWaits},
