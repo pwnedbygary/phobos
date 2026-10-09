@@ -517,6 +517,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceUtility",        "sceUtilityGamedataInstallAbort", &Kernel::sceUtilityGamedataInstallAbort);
   add("sceUtility",        "sceUtilityLoadAvModule",        &Kernel::sceUtilityLoadAvModule);
   add("sceUtility",        "sceUtilityUnloadAvModule",      &Kernel::sceUtilityUnloadAvModule);
+  add("sceUtility",        "sceUtilityLoadUsbModule",       &Kernel::sceUtilityLoadUsbModule);
+  add("sceUtility",        "sceUtilityUnloadUsbModule",     &Kernel::sceUtilityUnloadUsbModule);
   //newlib's sockets: no network yet, so every call fails
   for(auto name : {"sceNetInetClose", "sceNetInetRecv", "sceNetInetSend", "sceNetInetGetErrno", "sceNetInetSocket",
                    "sceNetInetBind", "sceNetInetConnect", "sceNetInetListen", "sceNetInetAccept", "sceNetInetSendto",

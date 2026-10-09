@@ -552,6 +552,30 @@ auto Kernel::sceUtilityUnloadAvModule() -> void {
   sceUtilityUnloadModule();
 }
 
+//(USB module 1-5: psputility_usbmodules.h's PSP_USB_MODULE_*), the older way to load the USB devices' modules:
+//PSPCM (1), the accessory port's driver (2), and the microphone (3), camera (4) and GPS (5), which need the accessory
+//driver first, as the modules 0x200 and 0x201-0x203. The accessory driver has no number of its
+//own among psputility_modules.h's (the later firmwares' modules load it with the device's), so it's taken, and let
+//go, without being kept. ATV Offroad Fury Pro loads one at boot and stops at a break if it isn't loaded.
+static auto usbModule(u32 module) -> u32 {
+  static constexpr u32 Modules[] = {0, 0x200, 0, 0x201, 0x202, 0x203};
+  return module < 6 ? Modules[module] : 0;
+}
+
+auto Kernel::sceUtilityLoadUsbModule() -> void {
+  if(arg(0) < 1 || arg(0) > 5) return result(ModuleBadID);
+  if(!usbModule(arg(0))) return result(0);
+  cpu.ipu.r[4] = usbModule(arg(0));
+  sceUtilityLoadModule();
+}
+
+auto Kernel::sceUtilityUnloadUsbModule() -> void {
+  if(arg(0) < 1 || arg(0) > 5) return result(ModuleBadID);
+  if(!usbModule(arg(0))) return result(0);
+  cpu.ipu.r[4] = usbModule(arg(0));
+  sceUtilityUnloadModule();
+}
+
 //(which, where, its size): the system's text settings: the player's nickname (1) is "PSP". Others aren't known.
 auto Kernel::sceUtilityGetSystemParamString() -> void {
   if(arg(0) != 1) return result(UtilityBadParameterID);

@@ -628,7 +628,8 @@ static auto keyboard() -> void {
 }
 
 //Optional modules: loaded once (again: already loaded), unloaded once (again: not loaded), 0x308 among them,
-//numbers that aren't a module refused, the older network numbers standing for 0x100-0x106; the nickname.
+//numbers that aren't a module refused, the older network numbers standing for 0x100-0x106 and the older USB numbers
+//for 0x200-0x203; the nickname.
 static auto modules() -> void {
   KernelMachine m;
   CHECK(m.call("sceUtilityLoadModule", {0x301}), 0);
@@ -643,6 +644,19 @@ static auto modules() -> void {
   CHECK(m.call("sceUtilityLoadModule", {0x100}), 0x8011'1102);  //the same module
   CHECK(m.call("sceUtilityUnloadNetModule", {1}), 0);
   CHECK(m.call("sceUtilityLoadNetModule", {8}), 0x8011'1101);
+  //the older USB numbers: 1 and 3-5 standing for 0x200-0x203, the accessory driver (2) taken without a number
+  CHECK(m.call("sceUtilityLoadUsbModule", {5}), 0);
+  CHECK(m.call("sceUtilityLoadModule", {0x203}), 0x8011'1102);  //the same module
+  CHECK(m.call("sceUtilityLoadUsbModule", {5}), 0x8011'1102);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {5}), 0);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {5}), 0x8011'1103);
+  CHECK(m.call("sceUtilityLoadUsbModule", {1}), 0);
+  CHECK(m.call("sceUtilityUnloadModule", {0x200}), 0);
+  CHECK(m.call("sceUtilityLoadUsbModule", {2}), 0);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {2}), 0);
+  CHECK(m.call("sceUtilityLoadUsbModule", {0}), 0x8011'1101);
+  CHECK(m.call("sceUtilityLoadUsbModule", {6}), 0x8011'1101);
+  CHECK(m.call("sceUtilityUnloadUsbModule", {6}), 0x8011'1101);
   CHECK(m.call("sceUtilityGetSystemParamString", {1, Buffer, 128}), 0);
   CHECK(m.system.memory.readString(Buffer, 128) == "PSP", true);
   CHECK(m.call("sceUtilityGetSystemParamString", {2, Buffer, 128}), 0x8011'0103);

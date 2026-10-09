@@ -1757,6 +1757,8 @@ struct Kernel {
   auto sceUtilityUnloadNetModule() -> void;
   auto sceUtilityLoadAvModule() -> void;
   auto sceUtilityUnloadAvModule() -> void;
+  auto sceUtilityLoadUsbModule() -> void;
+  auto sceUtilityUnloadUsbModule() -> void;
   auto sceUtilityGetSystemParamString() -> void;
   auto sceUtilitySetSystemParamString() -> void;
 
