@@ -5757,3 +5757,74 @@ it no longer draws for its own textures.
   vertices running past it into the next copy aren't waited for there (the palette's byte-by-byte read still waits in
   `pointer()`); and `vramGuard` giving a page back calls the recompiler's `writable()`, which lets compiled stores go
   straight to it even if code was compiled from it (only code run from VRAM the GE draws or reads would notice).
+
+## Part 50: Ridge Racer 2's driver profile — the keyboard's answer
+
+On branch `cursor/psp-hle-games9-2b67`, on top of #180's `cursor/psp-cpu-speed4-2b67` (a4a63b13f). Sources: pspsdk's
+`psputility_osk.h` and its keyboard sample (`samples/utility/osk`), pspautotests (it has no keyboard program or
+recording; utility/dialog's sizes and statuses are part 42's), the PSP Developer Wiki through web.archive.org (no page
+on the keyboard or the utility dialogs in its list of pages, December 2023), and the games' own code, traced and
+disassembled with a scratch runner. No PPSSPP or JPCSP source was read.
+
+**The report.** On the owner's RP6, Ridge Racer 2's new game showed "Welcome to the world of Ridge Racer! Please
+create your driver profile." with an OK button, then went back to the menu instead of making a profile.
+
+**Reproduced** in the runner, Software, from boot with presses (`~/phobos-work/scratch/rr2/race.script`): Select past
+the Rally-X loading game (frame 650), Start past the intro (900), Start at the title (1200), Cross on NEW GAME (1300),
+the notice, Cross on its OK (1450). A scratch build logged every sceUtility call: its parameters' size, the savedata
+mode and names, the keyboard's fields, the answer and every status asked for (`scratch/rr2/trace.patch`):
+- At boot: savedata's sizes mode (8, 0x600 bytes) answered 0; its autoload (mode 0, UCES00422 / 000 / DATA.BIN, into
+  0x6900 bytes) no data (0x80110307), as there's no profile yet.
+- At OK (frame 1486): sceUtilityOskInitStart, 0x40 bytes, one field: "Driver Name (7 CHAR MAX.)", holding "DAMACY"
+  (the game's default driver name), room for 8 characters with the NUL, at most 7, input type 4, one line. Two frames
+  on the game starts it again and is refused INVALID_STATUS, one being current (it doesn't look at that answer; a PSP
+  refuses it too, part 42). The statuses: 1 for 18 frames, 2 (Update: the text as it was, the field UNCHANGED), 3
+  (ShutdownStart), 4, 4, 0.
+- Then no utility or I/O call and no missing function before the title showed again (frame 1520).
+
+**Where the game gives up.** Its keyboard poller (0x08878164; its menu script's commands 0xcc and 0x136 open the
+keyboard, 0x08872280) acts at status 0 on the field's result (read from 0x08a7402c): CHANGED (2) copies the name (7
+characters at most) and tells the script the player answered (1); CANCELLED (1) and UNCHANGED (0) alike tell it the
+player backed out (2), and the script goes back to the title. The kernel answered UNCHANGED for every field that
+wasn't empty (part 22's choice, listed there among the uncertain things): here, the default name.
+
+**What the PSP answers.** Nothing recorded says: pspsdk's header only names the three results, its sample prints them,
+and pspautotests has no keyboard program. The games do. Of the 23 games here, ten import the keyboard's functions
+(007: From Russia with Love, both Ace Combats, Brave Story, Killzone, Midnight Club 3, Peace Walker, Ridge Racer 2,
+Space Invaders Extreme, WipEout; Peace Walker from a module it loads later, Brave Story only GetStatus, its keyboard
+its own). Where each followed reads a field's result once its keyboard is gone:
+- Ridge Racer 2: only CHANGED is an answer, though the field holds a name of its own.
+- Killzone (0x089641b8): the name copied only when the common result is 0 and the field CHANGED; its field holds the
+  name it has.
+- Space Invaders Extreme (0x088825d8): the name taken only when the common result is 0 and the field CHANGED, else
+  -1; its field starts empty.
+- Midnight Club 3 (0x08b3f00c): anything but CANCELLED taken as the answer.
+- WipEout takes the text whatever the result; Peace Walker checks the text itself (part 22); the others weren't
+  followed that far.
+Killzone, Space Invaders Extreme and Midnight Club 3 can't tell the two answers apart (Killzone's field holds the
+name it keeps either way, Space Invaders Extreme's starts empty); Ridge Racer 2 can. It fills the field with a name
+of its own and takes only CHANGED, so it would send every player who kept that name back to its title if a PSP said
+UNCHANGED of it: a PSP is taken to say CHANGED of every field the player confirms, edited or not.
+
+**The fix** (`utility.cpp`'s `keyboard()`): every field answered is CHANGED (2), its text as before (what it started
+with, an empty field the console's nickname "PSP", as far as its room and limit allow). "utility keyboard" checks each
+field CHANGED, Ridge Racer 2's field among them (DAMACY, room 8, limit 7); the old answer fails 6 of its
+checks. No kernel state is added: the save states' version stays 17.
+
+**After the fix**, from boot (Software: `scratch/rr2/sw-race`; the PNGs in `scratch/rr2/evidence`): the name taken,
+"DRIVER NAME DAMACY. Would you like to proceed?", YES; the profile saved (savedata mode 3, 0x600 bytes:
+`PSP/SAVEDATA/UCES00422000/DATA.BIN`, 26,628 bytes, DAMACY among them); "Would you like to turn Autosave ON?", YES;
+the main menu; Arcade, Seaside Route 765, class 1, the Shootaway Fiera, automatic, OK, NOW LOADING, and the race: GO!
+at frame 4200, 158 km/h in the tunnel at 4800, Cross held. Vulkan (MoltenVK, the M1, `scratch/rr2/vk-race`): the same
+screens at the same frames. Booted again with that memory stick, the autoload finds the profile (0), the title offers
+CONTINUE, which leads to the main menu, and Options' NAME CHANGE opens the keyboard holding DAMACY.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 340 groups, none failing. `tests/allegrex/run-tests.sh`: 58
+groups, none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing.
+
+**Left, and why:**
+- The keyboard isn't drawn (the screen stays black the 18 frames it starts and the frame it runs), as with every
+  dialog here.
+- A save is its data file alone (no PARAM.SFO, icons or encryption), as before: the game reads it back.
+- The kernel's player never cancels a keyboard, nor answers a field UNCHANGED: whether a PSP ever says UNCHANGED (of
+  a second field, say) isn't known.

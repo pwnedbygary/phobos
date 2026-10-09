@@ -25,6 +25,26 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: Ridge Racer 2's driver profile — the keyboard's answer — 2026-10-08
+
+Branch `cursor/psp-hle-games9-2b67`, on top of #180's `cursor/psp-cpu-speed4-2b67` (a4a63b13f). docs/psp-core.md,
+part 50, has the trace, the game's code and the evidence. Clean room: no PPSSPP or JPCSP source read.
+- **The cause**: after "Please create your driver profile" and OK, the game opens the system keyboard (sceUtilityOsk*)
+  with its default name, "DAMACY", in the field. The kernel answered a field that wasn't empty UNCHANGED (0); Ridge
+  Racer 2 takes anything but CHANGED (2) as the player backing out, and went back to its title. No other utility or
+  I/O call was involved, and nothing was missing.
+- **The fix** (`ares/psp/kernel/utility.cpp`'s `keyboard()`): every field answered CHANGED, its text as before, as a
+  PSP is taken to say of a field the player confirms: a player keeping the game's own default name would otherwise
+  never get a profile. Killzone and Space Invaders Extreme also act only on CHANGED, Midnight Club 3 on anything but
+  CANCELLED; nothing recorded (pspsdk, pspautotests, the wiki) says more. Test: "utility keyboard". No new state:
+  version 17 still.
+- **Now**, in the runner: the name confirmed, the profile saved (`PSP/SAVEDATA/UCES00422000/DATA.BIN`) and found at
+  the next boot (CONTINUE), autosave on, Arcade, and a race, in Software and in Vulkan (MoltenVK) alike.
+- **Checks**: tests/psp 340/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0; an independent
+  review.
+- Scratch: `~/phobos-work/scratch/rr2` (race.script from boot to the race, evidence/ PNGs, trace.patch: the scratch
+  build's log of every utility call).
+
 ## PSP core: the emulation thread faster again — no drawing for its own textures, batches in a ring — 2026-10-08
 
 Branch `cursor/psp-cpu-speed4-2b67`, on top of #178's `cursor/psp-ge-fits-2b67` (72443bc4d). docs/psp-core.md, part 47,
