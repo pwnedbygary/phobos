@@ -1249,6 +1249,7 @@ struct Kernel {
   auto mpegFinish(MpegCall& call) -> void;
   auto mpegAbandoned(u32 thread) -> void;
   auto mpegLibrary(u32 handle) -> u32;
+  auto mpegFrameWidth(u32 handle, u32 frameWidth) -> u32;
   auto mpegOwnLibrary() -> bool;
   auto mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWidth) -> void;
   auto mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 frameWidth, u32 x, u32 y, u32 width,

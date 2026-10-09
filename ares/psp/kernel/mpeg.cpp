@@ -36,10 +36,10 @@ namespace {
   //SceMpegBufferHeader has it), then, past the fields shared.h names, the library's own state, as Sony's keeps its
   //own there: the bytes of video already taken from the ring's first packet, whether the decoder holds a picture
   //back, whether the last feeding came up short (the movie's file ended: its last access unit ends with its data),
-  //and whether its ring has been given a pack (bit 0) and the movie's header before the first (bit 1;
-  //mpegReturned()).
+  //the frame width it was made with, and whether its ring has been given a pack (bit 0) and the movie's header
+  //before the first (bit 1; mpegReturned()).
   constexpr u32 LibraryRingbuffer = 0x10, LibraryTaken = 0x700, LibraryHolding = 0x704, LibraryEnded = 0x708,
-                LibraryPixels = 0x70c, LibraryPacked = 0x714;
+                LibraryPixels = 0x70c, LibraryFrameWidth = 0x710, LibraryPacked = 0x714;
   constexpr u32 LibraryMemory = 0x10000, LibraryOffset = 0x30, LibraryState = 0x800;
   constexpr u64 NoTime = ~0ull;
   constexpr u32 MpegDecodeMicroseconds = 300;  //chosen, as atrac.cpp's
@@ -317,6 +317,7 @@ auto Kernel::sceMpegCreate() -> void {
   for(u32 offset = 0; offset < LibraryState; offset += 4) memory.write(4, library + offset, 0);
   memory.copyIn(library, "LIBMPEG", 8);
   memory.write(4, library + LibraryRingbuffer, ringbuffer);
+  memory.write(4, library + LibraryFrameWidth, arg(4));
   if(memory.reaches(ringbuffer, 48)) memory.write(4, ringbuffer + RingLibrary, library);
   memory.write(4, handle, library);
   result(0);
@@ -670,10 +671,18 @@ auto Kernel::mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWid
   if(decoded) codecWait(MpegDecodeMicroseconds);
 }
 
+//A frame width a decode was given: 0 is the one the library was made with, its display buffer's (pspsdk's
+//pspmpeg.h: sceMpegCreate is told it). Chosen, as one game needs it: Juiced: Eliminator decodes so, and its movies
+//stayed black.
+auto Kernel::mpegFrameWidth(u32 handle, u32 frameWidth) -> u32 {
+  u32 library = mpegLibrary(handle);
+  return !frameWidth && library ? memory.read(4, library + LibraryFrameWidth) : frameWidth;
+}
+
 //(handle, access unit, frame width, where the buffer's address is, where to put whether a picture came).
 auto Kernel::sceMpegAvcDecode() -> void {
   u32 pixels = memory.reaches(arg(3), 4) ? memory.read(4, arg(3)) : 0;
-  mpegDecoded(arg(0), arg(1), arg(4), pixels, arg(2));
+  mpegDecoded(arg(0), arg(1), arg(4), pixels, mpegFrameWidth(arg(0), arg(2)));
 }
 
 //(handle, frame width, where the buffer's address is, where to put its status): the picture the decoder held back,
@@ -686,7 +695,7 @@ auto Kernel::sceMpegAvcDecodeStop() -> void {
     auto& stream = mpegStreams[library];
     stream.shown = stream.held, stream.shownWidth = stream.heldWidth, stream.shownHeight = stream.heldHeight;
     u32 pixels = memory.reaches(arg(2), 4) ? memory.read(4, arg(2)) : 0;
-    if(pixels) mpegConvert(stream, library, pixels, arg(1), 0, 0, 0, 0);
+    if(pixels) mpegConvert(stream, library, pixels, mpegFrameWidth(arg(0), arg(1)), 0, 0, 0, 0);
   }
   if(memory.reaches(arg(3), 4)) memory.write(4, arg(3), held);
   result(0);

@@ -91,9 +91,10 @@ auto setUp(KernelMachine& m, const std::vector<u8>& bytes) -> void {
   m.call("sceMpegInitAu", {Handle, 1, Au});
 }
 
-//A program feeding the ringbuffer and decoding each access unit with sceMpegAvcDecode (to Pixels, 64 wide) or
-//sceMpegAvcDecodeYCbCr then sceMpegAvcCsc (the range at Range); each picture's "came" logged from Got on.
-auto program(KernelMachine& m, u32 frames, bool ycbcr) -> void {
+//A program feeding the ringbuffer and decoding each access unit with sceMpegAvcDecode (to Pixels, 64 wide, or as
+//wide as given) or sceMpegAvcDecodeYCbCr then sceMpegAvcCsc (the range at Range); each picture's "came" logged from
+//Got on.
+auto program(KernelMachine& m, u32 frames, bool ycbcr, u32 frameWidth = 64) -> void {
   Assembler a{m, 0x0880'0000};
   a.li(s0, 0); a.li(s1, R + 0x200);
   u32 loop = a.here();
@@ -104,7 +105,7 @@ auto program(KernelMachine& m, u32 frames, bool ycbcr) -> void {
     a.li(a2, Mode + 8); a.li(a3, Got); a.call("sceMpegAvcDecodeYCbCr");
     a.li(a0, Handle); a.li(a1, 0); a.li(a2, Range); a.li(a3, 64); a.li(t0, Pixels); a.call("sceMpegAvcCsc");
   } else {
-    a.li(a2, 64); a.li(a3, Mode + 8); a.li(t0, Got); a.call("sceMpegAvcDecode");
+    a.li(a2, frameWidth); a.li(a3, Mode + 8); a.li(t0, Got); a.call("sceMpegAvcDecode");
   }
   a.li(t0, Got); a.put(lw(t1, 0, t0)); a.put(sw(t1, 0, s1));
   a.put(addiu(s1, s1, 4)); a.put(addiu(s0, s0, 1)); a.li(t0, frames);
@@ -554,12 +555,26 @@ static auto mpegRingEnd() -> void {
   CHECK(word(m, R + 0x200), packs + 3);
 }
 
+//A picture decoded with a frame width of 0 goes into the buffer as wide as the library was made with (512).
+static auto mpegDecodeWidth() -> void {
+  KernelMachine m;
+  pictures(m);
+  setUp(m, movie({slices(5, {7}), slices(5, {7}), slices(5, {7})}));
+  m.system.memory.write(4, Mode + 8, Pixels);
+  program(m, 2, false, 0);
+  m.runProgram(0x0880'0000, false);
+  CHECK(word(m, R + 0x204), 1);
+  CHECK(word(m, Pixels + 512 * 4) >> 24, 0xff);  //row 1, 512 pixels on
+  CHECK(word(m, Pixels + 64 * 4), 0);            //(not 64: past the picture's 32)
+}
+
 auto movieTests() -> Tests {
   return {{"mpeg header", mpegHeader}, {"mpeg pictures decoded", mpegPictures},
           {"mpeg pictures converted", mpegConversion}, {"mpeg sound access units", mpegSound},
           {"mpeg csc part past the picture", mpegConversionPart}, {"mpeg picture sizes", mpegPictureSizes},
           {"mpeg create afresh", mpegCreateAfresh}, {"mpeg after a state", mpegAfterState},
-          {"mpeg ring at the movie's end", mpegRingEnd}, {"mpeg ring fed round and round", mpegRingLoops}};
+          {"mpeg ring at the movie's end", mpegRingEnd}, {"mpeg decode at the library's width", mpegDecodeWidth},
+          {"mpeg ring fed round and round", mpegRingLoops}};
 }
 
 }
