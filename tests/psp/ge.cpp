@@ -422,10 +422,11 @@ static auto runMain(KernelMachine& m, bool recompile, u32 gp = 0x0812'3456) -> v
 }
 
 //A list that signals (SIGNAL kind 2: the GE goes on, and the callback runs) and finishes: both callbacks run, in that
-//order, as soon as the program's call returns, with the ids, their arguments, where the list had got to and the
-//global pointer the program had; the program finds its result as it left it.
+//order, as soon as the program's call returns, with the ids, their arguments, where the list had got to (built with
+//an SDK after 2.00.10; 0 for one saying none, as gpu/signals recorded) and the global pointer the program had; the
+//program finds its result as it left it.
 static auto geCallbacks() -> void {
-  for(bool recompile : {false, true}) {
+  for(u32 version : {0x0606'0010u, 0u}) for(bool recompile : {false, true}) {
     KernelMachine m;
     auto& memory = m.system.memory;
     memory.write(4, Callbacks, recorder(m, 0x0880'4000, Signaled));
@@ -438,6 +439,7 @@ static auto geCallbacks() -> void {
     list.put(GE::Finish, 42);
     list.put(GE::End);
     Assembler main{m, 0x0880'1000};
+    if(version) main.li(a0, version), main.call("sceKernelSetCompiledSdkVersion");
     main.li(a0, Callbacks); main.call("sceGeSetCallback");
     main.li(a0, ListA); main.li(a1, 0); main.put(addu(a2, v0, zero)); main.li(a3, 0);
     main.call("sceGeListEnQueue");
@@ -449,12 +451,12 @@ static auto geCallbacks() -> void {
     CHECK(memory.read(4, KernelMachine::Results + 4), 2);  //both callbacks ran before the program went on
     CHECK(memory.read(4, Signaled), 7);
     CHECK(memory.read(4, Signaled + 4), 0x1111);
-    CHECK(memory.read(4, Signaled + 8), ListA + 8);
+    CHECK(memory.read(4, Signaled + 8), version ? ListA + 8 : 0);
     CHECK(memory.read(4, Signaled + 12), 0x0812'3456);
     CHECK(memory.read(4, Signaled + 16), 1);
     CHECK(memory.read(4, Finished), 42);
     CHECK(memory.read(4, Finished + 4), 0x2222);
-    CHECK(memory.read(4, Finished + 8), ListA + 16);
+    CHECK(memory.read(4, Finished + 8), version ? ListA + 16 : 0);
     CHECK(memory.read(4, Finished + 16), 2);
   }
 }
@@ -568,7 +570,7 @@ static auto gePause() -> void {
 //it (a SIGNAL that suspends, a FINISH) the GE has stopped, and sceGeSaveContext saves; in a finish callback the list
 //is done, so sceGeDrawSync(1) says 2 with another list behind it and 0 for the last; a SIGNAL that lets the GE go on
 //finds it running (here stalled: 3, and nothing saved). Each callback notes both at Slots + 8 * its id. The same with
-//SDK 6.60 (callbackstate's) and with none said.
+//SDK 6.60 (callbackstate's) and with none said (the list paused for its suspending signal's callback: geOldSdk()).
 static auto geCallbackState() -> void {
   for(u32 version : {0x0606'0010u, 0u}) {
     KernelMachine m;
@@ -687,6 +689,88 @@ static auto geQueuedTwice() -> void {
   u32 callbacks = m.call("sceGeSetCallback", {Callbacks});
   CHECK(m.call("sceGeListEnQueue", {ListA + 8, 0, callbacks, 0}) >> 31, 0);
   CHECK(m.call("sceGeListEnQueue", {ListA + 8, 0, callbacks, 0}), Kernel::ErrorBusy);
+}
+
+//In a suspending SIGNAL's callback, as pspautotests' gpu/signals/handlercalls recorded: built with SDK 0x01000010,
+//the list reads as paused there, so breaking it off is BUSY, and its stall address moved on there is the list's alone
+//(the GE goes on to where it was to stop, the list reading as drawing), till it's moved on again; built with
+//0x06060010, the list reads as drawing in the callback, and the stall address moved there takes. (Breaking it off
+//there with the newer SDK hung the PSP: not recorded.) Either way the callback can't have the list go on
+//(sceGeContinue: ALREADY for the newer, as gpu/signals/suspend recorded; BUSY for the older, unmeasured) nor put a
+//list ahead of it (INVALID_VALUE, unmeasured).
+static auto geSuspendedCallbacks() -> void {
+  constexpr u32 Id = KernelMachine::Results + 0x60, Seen = KernelMachine::Results + 0x70;
+  for(u32 version : {0x0100'0010u, 0x0606'0010u}) for(bool breaking : {true, false}) {
+    if(breaking && version > 0x0200'0010) continue;
+    KernelMachine m;
+    auto& memory = m.system.memory;
+    Assembler callback{m, 0x0880'4000};  //the list's state, what breaking it off or moving its stall says, the state
+    callback.put(addiu(sp, sp, -16)); callback.put(sw(ra, 12, sp));
+    callback.li(t0, Id); callback.put(lw(a0, 0, t0)); callback.li(a1, 1); callback.call("sceGeListSync");
+    callback.li(t0, Seen); callback.put(sw(v0, 0, t0));
+    if(breaking) {
+      callback.li(a0, 0); callback.li(a1, 0); callback.call("sceGeBreak");
+    } else {
+      callback.li(t0, Id); callback.put(lw(a0, 0, t0)); callback.li(a1, 0); callback.call("sceGeListUpdateStallAddr");
+    }
+    callback.li(t0, Seen); callback.put(sw(v0, 4, t0));
+    callback.li(t0, Id); callback.put(lw(a0, 0, t0)); callback.li(a1, 1); callback.call("sceGeListSync");
+    callback.li(t0, Seen); callback.put(sw(v0, 8, t0));
+    callback.call("sceGeContinue");  //nor can it go on, the GE still on it,
+    callback.li(t0, Seen); callback.put(sw(v0, 36, t0));
+    callback.li(a0, ListB); callback.li(a1, 0); callback.li(a2, 0xffff'ffff); callback.li(a3, 0);
+    callback.call("sceGeListEnQueueHead");  //nor have a list put ahead of it
+    callback.li(t0, Seen); callback.put(sw(v0, 40, t0));
+    callback.put(lw(ra, 12, sp)); callback.put(addiu(sp, sp, 16));
+    callback.put(jr(ra));
+    callback.put(nop);
+    memory.write(4, Callbacks, 0x0880'4000);
+    ListWriter list{memory, ListA};
+    list.put(GE::AmbientColor, 1);
+    list.put(GE::Signal, 0x01'0042);
+    list.put(GE::End);
+    list.put(GE::AmbientColor, 2);
+    list.put(GE::Nop);
+    list.put(GE::Nop);  //stalled here first, moving the stall address
+    list.put(GE::AmbientColor, 3);
+    list.put(GE::Finish, 0x11);
+    list.put(GE::End);
+    auto note = [&](Assembler& a, u32 slot) { a.li(t0, Seen + slot); a.put(sw(v0, 0, t0)); };
+    auto sync = [&](Assembler& a, u32 slot) {
+      a.li(t0, Id); a.put(lw(a0, 0, t0)); a.li(a1, 1); a.call("sceGeListSync"); note(a, slot);
+    };
+    Assembler main{m, 0x0880'1000};
+    main.li(a0, version); main.call("sceKernelSetCompiledSdkVersion");
+    main.li(a0, Callbacks); main.call("sceGeSetCallback");
+    main.li(a0, ListA); main.li(a1, ListA); main.put(addu(a2, v0, zero)); main.li(a3, 0);
+    main.call("sceGeListEnQueue");  //stalled at its start, so the callback has its ID first
+    main.li(t0, Id); main.put(sw(v0, 0, t0));
+    main.put(addu(a0, v0, zero)); main.li(a1, breaking ? 0 : ListA + 20); main.call("sceGeListUpdateStallAddr");
+    sync(main, 12);
+    main.li(a0, 1); main.call("sceGeDrawSync"); note(main, 16);
+    main.li(a0, GE::AmbientColor); main.call("sceGeGetCmd"); note(main, 20);
+    if(breaking) main.call("sceGeContinue");
+    else main.li(t0, Id), main.put(lw(a0, 0, t0)), main.li(a1, 0), main.call("sceGeListUpdateStallAddr");
+    note(main, 24);
+    sync(main, 28);
+    main.li(a0, GE::AmbientColor); main.call("sceGeGetCmd"); note(main, 32);
+    main.call("sceKernelExitGame");
+    runMain(m, false);
+    bool old = version <= 0x0200'0010;
+    auto seen = [&](u32 slot) { return memory.read(4, Seen + slot); };
+    CHECK(seen(0), old ? 4 : 2);
+    CHECK(seen(4), breaking ? Kernel::ErrorBusy : 0);
+    CHECK(seen(8), old ? 4 : 2);
+    bool held = old && !breaking;  //at the stall address the GE had before the callback
+    CHECK(seen(12), held ? 2 : 0);
+    CHECK(seen(16), held ? 2 : 0);
+    CHECK(seen(20), GE::AmbientColor << 24 | (held ? 2 : 3));
+    CHECK(seen(24), old ? 0 : Kernel::ErrorAlready);
+    CHECK(seen(28), 0);
+    CHECK(seen(32), GE::AmbientColor << 24 | 3);
+    CHECK(seen(36), old ? Kernel::ErrorBusy : Kernel::ErrorAlready);  //(the newer one's recorded: gpu/signals/suspend)
+    CHECK(seen(40), Kernel::ErrorInvalidValue);
+  }
 }
 
 //A call into the program may use system functions but not wait in one; a thread it wakes runs once it's over; and
@@ -1644,7 +1728,7 @@ auto geTests() -> Tests {
     {"ge drawn over its own texture", geOwnTexture},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause}, {"ge callbacks see the ge stopped", geCallbackState}, {"ge pause window", gePauseWindow},
-    {"ge lists queued twice", geQueuedTwice},
+    {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},
     {"ge calls and threads", geCallsAndThreads}, {"ge break", geBreak},
     {"ge break and callbacks", geBreakCallbacks},
     {"event flags", eventFlags}, {"event flag waiting", eventFlagWaiting}, {"display picture", displayPicture},
