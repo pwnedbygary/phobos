@@ -593,3 +593,8 @@ auto Kernel::sceUtilityGetSystemParamString() -> void {
 auto Kernel::sceUtilitySetSystemParamString() -> void {
   result(0);
 }
+
+//(which, value): the number settings likewise (Colin McRae Rally 2005 sets 3, the wireless LAN's power saving).
+auto Kernel::sceUtilitySetSystemParamInt() -> void {
+  result(0);
+}

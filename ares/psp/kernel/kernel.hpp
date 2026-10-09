@@ -1765,6 +1765,7 @@ struct Kernel {
   auto sceUtilityUnloadUsbModule() -> void;
   auto sceUtilityGetSystemParamString() -> void;
   auto sceUtilitySetSystemParamString() -> void;
+  auto sceUtilitySetSystemParamInt() -> void;
 
   //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
   struct Power {

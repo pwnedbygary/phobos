@@ -676,6 +676,12 @@ static auto modules() -> void {
   CHECK(m.call("sceUtilityGetSystemParamString", {1, Buffer, 128}), 0);
   CHECK(m.system.memory.readString(Buffer, 128) == "PSP", true);
   CHECK(m.call("sceUtilityGetSystemParamString", {2, Buffer, 128}), 0x8011'0103);
+  //number settings taken and forgotten: the language stays English (1)
+  CHECK(m.call("sceUtilitySetSystemParamInt", {3, 0}), 0);
+  CHECK(m.call("sceUtilitySetSystemParamInt", {8, 2}), 0);
+  m.system.memory.write(4, Buffer, 7);
+  CHECK(m.call("sceUtilityGetSystemParamInt", {8, Buffer}), 0);
+  CHECK(m.system.memory.read(4, Buffer), 1);
 }
 
 auto utilityTests() -> Tests {

@@ -494,6 +494,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceUtility",        "sceUtilityGetSystemParamInt",   &Kernel::sceUtilityGetSystemParamInt);
   add("sceUtility",        "sceUtilityGetSystemParamString", &Kernel::sceUtilityGetSystemParamString);
   add("sceUtility",        "sceUtilitySetSystemParamString", &Kernel::sceUtilitySetSystemParamString);
+  add("sceUtility",        "sceUtilitySetSystemParamInt",   &Kernel::sceUtilitySetSystemParamInt);
   add("sceUtility",        "sceUtilityLoadModule",          &Kernel::sceUtilityLoadModule);
   add("sceUtility",        "sceUtilityUnloadModule",        &Kernel::sceUtilityUnloadModule);
   add("sceUtility",        "sceUtilityLoadNetModule",       &Kernel::sceUtilityLoadNetModule);
