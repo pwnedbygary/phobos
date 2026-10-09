@@ -6031,3 +6031,186 @@ groups, none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing.
 - A save is its data file alone (no PARAM.SFO, icons or encryption), as before: the game reads it back.
 - The kernel's player never cancels a keyboard, nor answers a field UNCHANGED: whether a PSP ever says UNCHANGED (of
   a second field, say) isn't known.
+
+## Part 51: the library run again on the whole stack — three regressions, and what stopped games most
+
+On branch `cursor/psp-hle-games10-2b67`, on top of #183's `cursor/psp-hle-games9-2b67` (the Vulkan renderer, the
+speedups, the VFPU carry fix and Ridge Racer 2's keyboard under it). Sources: pspsdk's headers, pspautotests'
+programs and recordings (each named below), and the games' own behaviour, traced and disassembled with a scratch
+runner. No PPSSPP or JPCSP source was read.
+
+**The run.** The owner's 266 games, as `docs/psp-compatibility.md`'s run went (tools/psp-runner/README.md, "The
+report"): Software, 7 GE threads, 3600 frames, Start pressed at 120 and Cross at 1800, PNGs at 60, 300, 1200 and
+3600, a scratch memory stick each. First on the stack's tip (`a2b48f8f8`, #183) as the library was copied in (a game
+taken once its size held still across looks a minute apart: run 1), then part way through this branch (run 2) and at
+its end (run 3). Each game's frames were judged by eye (menu, gameplay, movie, loading, black, hang) and compared row
+for row with the report (`b27f084a5`); in run 3 a game whose frames matched run 2's kept run 2's judgement.
+That report's runs pressed nothing (the runner's presses were broken then), so every game that looked worse was run
+again without presses on both commits before calling it a regression.
+
+**Regressions: two, both since scePsmf (#160, `18c58f968`).** Mega Man Maverick Hunter X and Juiced: Eliminator
+skipped their movies while scePsmf was missing; now they play them through sceMpeg, and stalled (runners built at
+`b27f084a5` and `18c58f968` showed where it began). Three things, each its own commit:
+- *The ring past the movie's end* (`mpegReturned()`). Mega Man's ring callback reads 32 packets at a time from
+  `rockx_pack.dat`, a file that goes on past the movie ("LINK..."), adds Put's answer times 2048 to a count, and
+  starts the movie only when that count equals sceMpegQueryStreamSize's (0xB7800, 367 packets) or the ring is full
+  (1600 packets: never). The count overshot, and the screen stayed black. Every 2048-byte packet of a PSMF movie
+  starts with a pack's start code (00 00 01 ba: all 129 of pspautotests' `test.pmf`, all 74,871 of Ridge Racer 2's
+  15 movies), so once a ring has had a pack, a packet without one is past the movie's end: Put stops before it, its
+  callback isn't asked again, and the movie has ended. What comes before the first pack (a header, from a game that
+  reads its file from the start) is taken, and a header coming round again after packs is the movie starting over
+  when the feeding began with one (Space Invaders Extreme's callback goes back to its file's start). A ring with no
+  library keeps no such state and takes everything. The state is two bits in the library's own memory (0x714), which
+  sceMpegCreate zeroes and a flush clears: no save state change. Chosen, as no recording shows it.
+- *Frame width 0* (`mpegFrameWidth()`). Juiced decodes with a frame width of 0, and its pictures went nowhere: 0 is
+  now the width sceMpegCreate was given (pspmpeg.h: the display buffer's), kept at 0x710; sceMpegAvcDecodeStop's last
+  picture too.
+- *Sound past its end* (`sceMpegAtracDecode`). As each movie ends, Juiced's movie loop, its data fed and its ring
+  empty, calls sceMpegAtracDecode with no new access unit to drain its sound buffers, and abandons the movie (then
+  waits for good) at any error. Once a movie's sound has been decoded, a unit with nothing in it decodes to silence;
+  before that, or with no buffer, it's 0x807f00fd, as video/mpeg/basic recorded for a movie with no sound.
+Tests: "mpeg ring at the movie's end", "mpeg ring fed round and round", "mpeg decode at the library's width", "mpeg
+sound past its end"; the random packs test keeps its packets that aren't packs and its checker now models the cut.
+
+A third regression came from this branch itself: fix 1 below (a memory stick callback told the stick is in as
+it's registered) left Patapon 2 deadlocked at boot in the second run; fix 17 put it right.
+
+The other rows that rank lower than in the report weren't the code (docs/psp-compatibility.md goes through all 26):
+games that now get the runner's presses go on from a menu or notice to a movie, a demo or a screen the old runs
+never reached (each shows its menu again run without presses); some get further than before (past a "no Memory
+Stick" notice, or into an intro movie scePsmfPlayer now plays); and some show the same at the report's commit, a
+runner built there run without presses (black, loading, or the same intro frame the report judged a menu).
+
+**What stopped games.** In the first run 58 ended black, 3 hung and 3 timed out; 24 games stopped at a missing
+function (mostly one game each). The fixes, each its own commit with its tests, in the order they went in:
+1. *A memory stick callback is told the stick is in as it's registered* (`sceIoDevctl` 0x02015804/0x02415821).
+   pspautotests' `mstick` recorded the callback running at the next CheckCallback with count 1 and event 1 (inserted).
+   50 Cent, Dirt 2, Crisis Core, Hexyz Force, Patapon 1 and 2, Parodius, Sonic Rivals 1 and 2 and Ys: The Ark of
+   Napishtim learn of the stick only so, and said none was inserted, or that it was full.
+2. *A file without PGD's header is read as it is once its key is given* (ioctl 0x04100001): 7th Dragon 2020's
+   translations keep their data decrypted, yet set a key and retried for good on the refusal.
+3. *A fixed pool's alignment of 0 is the default* (threads/fpl/create): Brothers in Arms: D-Day.
+4. *Sony's static EBOOTs without sections find their module info* in the first program header (Ghostbusters,
+   Dissidia 012, Dragon Ball Z: Tenkaichi Tag Team, Disaster Report 3, Kurohyou 2, Tekken 6, Monster Hunter Portable
+   3rd HD).
+5. *The program's first thread is made, and goes, as a module's start thread*: it starts at the module_start the
+   program exports, with module_start_thread_parameter's priority, stack and attributes, and is deleted when it
+   returns. Ghostbusters asks for a 1 KiB stack; Death Jr. and Ys Seven need the 256 KiB back ("mem tarine").
+6. *sceUtilityLoadUsbModule/UnloadUsbModule*: ATV Offroad Fury Pro (black from boot at its assert).
+7. *Writing save data needs the save to be there* (utility/savedata/saveemptyfilename: NO_DATA): Hot Shots Golf 2.
+8. The three movie fixes above.
+9. *sceRtc's day of the week, 64-bit time_t and when the clock was set*: sceRtcGetDayOfWeek by Zeller's congruence,
+   which gives all twelve answers rtc/lookup recorded, impossible dates included (only January and February are
+   counted as the year before's; 0 is Sunday, though psprtc.h says Monday); sceRtcGetTime64_t as rtc/convert
+   recorded; sceRtcGetLastAdjustedTime and GetLastReincarnatedTime, both when the PSP started here. Juiced 2 (each
+   frame), LittleBigPlanet, Kurohyou.
+10. *sceKernelStopUnloadSelfModule* (MediEvil Resurrection's program, once it has started the game's module).
+11. *sceIoAssign* (Metal Gear Acid, Ridge Racer: disc0: from umd0: through isofs0:, which it already is).
+12. *sceImposeSetUMDPopup* (every Patapon), *sceUsbStart/Stop/Activate/Deactivate* (OutRun 2006),
+    *sceDisplayIsForeground* (display/isstate: 1 with a frame buffer; Power Stone Collection),
+    *sceKernelReferSystemStatus* (Dante's Inferno), *sceUtilitySetSystemParamInt* (Colin McRae Rally 2005), each
+    its own commit.
+13. *The savedata sizes mode reads no names of its own*: the save it measures is msData's. Valhalla Knights 2 asks
+    with empty names, and took the refusal for a memory stick too full to save on.
+14. *A program that's a PRX goes 16 KiB into user memory*, at 0x08804000: pspautotests' recordings of PRXs have
+    their code there (cpu/cpu_branch's 0x420 bytes in at 0x08804420, video/pmf's ring callback at 0x088042b4) and
+    their data (audio/mp3/stream's buffer at 0x0882ba40). The program's block still starts at the partition's
+    start, the 16 KiB below held with it: sysmem/partition found the lowest free place with room for 1 MiB. Fan
+    translations call code they added by its address: Persona 2: Eternal Punishment's start-up calls 0x08c47c84
+    with no relocation, which held its data when the program sat at 0x08800000. With it, Persona 2, both Tales of
+    Phantasia translations, Fate/Extra's perfect patch and Growlanser IV no longer crash at boot, Armored Core:
+    Silent Line Portable's True Analogs patch no longer stops in a game thread, and Formula Front's no longer loads
+    for ever at 18 frames a second (a runner built just before the change shows both).
+15. *A ring may have more than 4096 packets*, when its memory fits (`sceMpegRingbufferConstruct`). Sega Rally Revo
+    makes a ring of 4800 packets with their memory and asserts when that's refused. video/mpeg/ringbuffer/construct
+    gave every count it tried 4096 packets' memory (0x868000): 4097 was refused, but -1, 0x7fffffff and 0x80000000
+    were taken. Every line it recorded fits one rule: refused when the packets' memory, as
+    sceMpegRingbufferQueryMemSize reckons it in 32 bits, is more than the size, both taken as signed. Put,
+    sceMpegGetAvcAu and sceMpegGetAtracAu now take a ring of up to `RingMostPackets` (0x8000, 64 MiB of data, more
+    than any ring can be) where they took 4096, and so do the save state's checks. Sega Rally Revo now shows its
+    autosave notice and its title.
+16. *sceMpegAvcDecodeDetail gives the decoder's newest picture's width and height* at 8 and 12 of the details.
+    Spectral Souls (which fix 1 let past its "no Memory Stick" prompt, to its movies) checks those two words after
+    each decode and asks again while they're 0; its movie code (0x08840c58) draws the picture from (1, 1) to
+    (width - 1, height - 1) by them. Left at 0, a few texels of the picture's corner were stretched over the screen,
+    the same on both renderers, and its intro played as coloured gradients. Now the intro plays and the main menu
+    follows. The rest of the details are left as they were (nothing of them is recorded), and with no picture held
+    (before the first, after a flush) nothing is written. Space Invaders Extreme, which also asks after each picture,
+    is unchanged.
+17. *A semaphore's CB wait runs its notified callbacks first, when it has no timeout and nobody else is in line*
+    (`waitSemaphore()`). Fix 1 broke Patapon 2: its main thread registers a memory stick callback, then CB-waits on
+    a semaphore that is free, with no callback point between, and the callback, notified as it was registered,
+    first waits on that same semaphore. Taking the count and then running the callback (as every wait that ends at
+    once does) left the callback waiting on its own thread for good. Now such a wait runs its callbacks at once, in
+    its wait (no other thread runs first: threads/callbacks/nested has a CB wait that ends at once not yield to one
+    of the same priority), and takes the count after them if it's still there, ahead of any thread that queued
+    meanwhile; a callback deleting the semaphore ends the wait as deleted. With a timeout, or with another thread in
+    line (waiting, woken for its callbacks, or its wait set aside while they run: served in order, one wanting more
+    could hold this one up), the count is taken first as before. Chosen: no recording shows the order
+    (threads/callbacks/afterwait's callback never looks at the semaphore), and the game shows this one. Patapon 2
+    reaches its save prompt.
+18. *A ring made for a game's own copy of the library is pspsdk's 44 bytes* (`sceMpegRingbufferConstruct`). With the
+    firmware's library, construct records a ring of 48, the caller's global pointer last. Miami Vice loads its own
+    MPEG.PRX (stood in for) and keeps its movie's file descriptor in the word after a 44-byte ring: written over with
+    the global pointer (0x08b98530), every read of the movie failed (0x80020323, a bad descriptor) and the game
+    retried for good on a black screen ("READ FAILED. RETRY..."). Nothing but the library would read that word, and
+    the ring's callback already runs with Put's caller's global pointer, so the word is left alone with a game's own
+    library. Miami Vice now plays its intro movies and reaches its title; Crash Tag Team Racing, which brings its own
+    library too, no longer stops after its legal screen (a runner without this fix still crashes there).
+19. *sceUtilityLoadModule takes the network modules 0x107 and 0x108.* pspsdk's list stops at 0x106; Macross:
+    Triangle Frontier loads 0x108 at boot and, refused, waits six frames and tries again, for good, on a black
+    screen. 0x107 is taken with it (a group's modules are numbered without gaps; 0x308 was taken on the same kind of
+    evidence in part 37, for Ace Combat: Joint Assault), 0x109 is refused. Macross now shows its logo, its autosave
+    notice and its next prompt.
+20. *A movie has ended once a Put has given its whole stream* (`sceMpegQueryStreamOffset`, `mpegFinish()`). The
+    last access unit comes only once the library knows the movie has ended; it learnt that only from a feeding that
+    came up short. Games black after their logos ended in their movie loops, sceMpegGetAvcAu and GetAtracAu giving
+    "no data" for good, the ring never quite free: Disney-Pixar Cars: Race-O-Rama gives its whole 561-packet movie
+    in one Put (its callback reads it out of a container file), Pursuit Force: Extreme Justice asks for just what's
+    left and then for nothing, MX vs. ATV Untamed the same. Sony's movies end with no program end code (Ridge Racer
+    2's twelve and pspautotests' test.pmf: padding after the last PES packet), and each game reads its movie's
+    header with sceMpegQueryStreamOffset, its handle given, right after making the library. So the library keeps the
+    stream's size in packets from that header, counts the packs Put gives (a flush, or the header coming round
+    again, starts the count over; a flush keeps the size), and the movie has ended when a Put stops having given
+    exactly that many, as when a feeding comes up short (a feeding that goes on past them is the movie going round
+    again, its access units whole). Both words are in the library's own memory, cleared by sceMpegCreate: no new
+    save state. Cars now reaches its racing attract scene, Pursuit Force and MX vs. ATV Untamed their titles, and
+    Blitz: Overtime, Death Jr. and its sequel, Disaster Report 3 and Dead Head Fred get past their movies to their
+    titles or menus (a runner without this fix shows them as before).
+
+**After.** Run 3, against the report and run 1 (gameplay counted as menu and a hang as black, as the report did):
+
+| | Report (`b27f084a5`) | Run 1 (#183) | Run 3 |
+|---|---|---|---|
+| Menu or gameplay | 141 | 148 | 175 |
+| Movie | 35 | 43 | 63 |
+| Stuck loading | 13 | 8 | 5 |
+| Black or hang | 73 | 64 | 21 |
+| Timed out | 4 | 3 | 2 |
+
+81 games are further along than in the report; 14 stop at a function not implemented yet, where 77 did. Of the
+report's 22 games that had gone from a menu to black, 18 show something now; Black Wolves Saga (PGD-encrypted install
+data, which the kernel can't decrypt yet), The King of Fighters - Orochi Saga (the sceCcc library), Melodie (a 40
+MiB block of memory) and Ridge Racer (black frames after its opening movie, cause not found) are still black.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 362 groups, none failing. `tests/allegrex/run-tests.sh`: 58 groups,
+none failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. Each batch reviewed independently, and what
+the reviews found was fixed: among it a looping movie's header, the fuzz checker and the silence path's buffer (the
+movies); the ring-size rule's signed comparison and the big rings' tests; a thread with its semaphore wait set aside
+in its callbacks counted as in line, the callbacks run in place and the wait kept first in line (fix 17); the end of
+a stream counted exactly, so a movie fed round again keeps whole access units, and its size kept across a flush
+(fix 20). The save states' version stays 17.
+
+**Left, and why.** The libraries the kernel doesn't have yet: sceCcc (The King of Fighters - Orochi Saga, Genso
+Suikoden; pspautotests' ccc/convertstring records its conversions), thread-local storage pools (God Eater 2),
+scePauth and sceJpeg (Monster Hunter Portable 3rd), scesupPreAcc (Persona 3 Portable's loading screen). PGD
+decryption (Black Wolves Saga). sceKernelExtendThreadStack (Dragon Ball Z: Tenkaichi Tag Team) is written and
+reviewed on a side branch, every line of threads/threads/extend matched, but not here: the game stays black with it,
+and the review found two things to fix first (a program unloading itself from a lent call loses module_stop's
+argument; a state of an older layout loads with no trampoline for its return). Black screens with the game running
+and no missing function: Ridge Racer, Crush, Dead or Alive - Paradise, Def Jam - Fight for NY, Jak and Daxter - The
+Lost Frontier, Naruto Shippuden Ultimate Ninja Impact, Need for Speed - Most Wanted 5-1-0, Shining Blade, Tekken -
+Dark Resurrection, Valhalla Knights, Valkyria Chronicles III, PaRappa the Rapper, Monster Hunter Portable 3rd HD.
+Need for Speed - ProStreet crashes after its notice. Both God of War games are too slow to reach frame 3600 in 1200
+s. Vulkan draws what the software renderer draws in all 11 gameplay games, but 3D gameplay is much slower on it
+(docs/psp-compatibility.md, "Vulkan spot checks").
