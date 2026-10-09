@@ -426,6 +426,11 @@ static auto vblankTiming() -> void {
   KernelMachine m;
   auto at = [&](u64 cycles) { m.kernel.cycles = cycles; };
   at(0);
+  //shown in the foreground with a frame buffer set, not without (display/isstate, the buffers set at once)
+  CHECK(m.call("sceDisplaySetFrameBuf", {0, 0, 0, 0}), 0);
+  CHECK(m.call("sceDisplayIsForeground", {}), 0);
+  CHECK(m.call("sceDisplaySetFrameBuf", {0x0400'0000, 512, 3, 0}), 0);
+  CHECK(m.call("sceDisplayIsForeground", {}), 1);
   CHECK(m.call("sceDisplayIsVblank", {}), 1);
   CHECK(m.call("sceDisplayGetCurrentHcount", {}), 0);
   CHECK(m.call("sceDisplayWaitVblank", {}), 1);

@@ -451,6 +451,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceDisplay",        "sceDisplayWaitVblankStartMulti", &Kernel::sceDisplayWaitVblankStartMulti);
   add("sceDisplay",        "sceDisplayWaitVblankStartMultiCB", &Kernel::sceDisplayWaitVblankStartMultiCB);
   add("sceDisplay",        "sceDisplayIsVblank",            &Kernel::sceDisplayIsVblank);
+  add("sceDisplay",        "sceDisplayIsForeground",        &Kernel::sceDisplayIsForeground);
   add("sceDisplay",        "sceDisplayGetCurrentHcount",    &Kernel::sceDisplayGetCurrentHcount);
   add("sceDisplay",        "sceDisplayGetVcount",           &Kernel::sceDisplayGetVcount);
   add("sceDisplay",        "sceDisplayGetAccumulatedHcount", &Kernel::sceDisplayGetAccumulatedHcount);

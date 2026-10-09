@@ -776,6 +776,7 @@ struct Kernel {
   auto sceDisplayWaitVblankStartMulti() -> void;
   auto sceDisplayWaitVblankStartMultiCB() -> void;
   auto sceDisplayIsVblank() -> void;
+  auto sceDisplayIsForeground() -> void;
   auto hcountLines() const -> u32;
   auto sceDisplayGetCurrentHcount() -> void;
   auto sceDisplayGetAccumulatedHcount() -> void;
