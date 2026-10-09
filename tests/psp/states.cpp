@@ -163,8 +163,9 @@ static auto stateFields() -> void {
   auto& ge = a.system.ge;
 
   //one of everything
+  //where start() would put a PRX (module.relocatable, which the changes below set) and its block
   k.module.segments = {{0x0880'4000, 0x100}};
-  u32 programBlock = k.allocate(0x100, 2, 0x0880'4000, "program")->uid;  //where start() would put it
+  u32 programBlock = k.allocate(0x4100, 2, Kernel::UserMemory, "program")->uid;
   k.module.imports = {{"Lib", 0x1111, 0x0880'5000}};
   k.module.exports = {{"Lib", 0x2222, 0x0880'6000, false}};
   k.module.skipped = {"left out"};

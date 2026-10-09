@@ -406,6 +406,29 @@ static auto programStart() -> void {
   }
 }
 
+//A program that's a PRX goes 16 KiB into the user partition, where pspautotests' recordings of PRXs have their code
+//(cpu_branch's 0x420 bytes in at 0x08804420), its block from the partition's start: a low block lands past it, as
+//sysmem/partition's lowest free place had room for 1 MiB.
+static auto programBase() -> void {
+  ElfBuilder elf;  //a PRX, linked at 0
+  elf.entry = 0x100;
+  ElfBuilder::Segment segment;
+  auto& b = segment.bytes;
+  b.putString(4, "BASE");                        //module info: attributes, version, name
+  b.put32(0x100, jr(ra)); b.put32(0x104, nop);  //its start: returns at once
+  b.at(0x1000);
+  elf.segments.push_back(segment);
+  elf.sections.push_back({".rodata.sceModuleInfo", 1, 0, {}});
+  auto program = elf.build();
+  KernelMachine m;
+  std::string error;
+  CHECK(m.kernel.load(program.data(), program.size(), "ms0:/PSP/GAME/BASE/EBOOT.PBP", error), true);
+  CHECK(m.kernel.module.segments.size() == 1 && m.kernel.module.segments[0].address == 0x0880'4000, true);
+  CHECK(m.kernel.programBlockAt(), Kernel::UserMemory);
+  u32 low = m.call("sceKernelAllocPartitionMemory", {2, m.string("low"), 0, 0x10, 0});
+  CHECK(m.call("sceKernelGetBlockHeadAddr", {low}), 0x0880'5000);
+}
+
 //The SDK and compiler versions a program's start-up code tells the system, through the first SDK's function and
 //one of its siblings for later ones (whose NIDs aren't their names' hashes), read back; and a later SDK's way of
 //unloading itself, refused (CAN_NOT_STOP) to code no module holds, which runs on (modules.cpp has a module, and the
@@ -683,6 +706,7 @@ auto kernelTests() -> Tests {
     {"kernel semaphores served past waiters that left", semaphoreWaitersLeave},
     {"kernel partitions", partitions}, {"kernel aligned blocks", alignedBlocks},
     {"kernel user partition", userPartition}, {"kernel program start", programStart},
+    {"kernel program base", programBase},
     {"kernel sdk versions", sdkVersions},
     {"kernel start arguments", startArguments},
     {"kernel program memory", programMemory}, {"kernel reload", reload}, {"kernel unknown functions", unknownFunctions},

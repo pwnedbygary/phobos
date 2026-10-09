@@ -229,6 +229,7 @@ struct Kernel {
                                                   //the program's alloc or free called by sceLibFont)
   static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
+  static constexpr u32 ProgramBase = UserMemory + 0x4000;  //where a program that's a PRX goes (start())
 
   Kernel(Allegrex& cpu, Memory& memory, GE& ge);
 

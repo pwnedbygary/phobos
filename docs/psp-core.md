@@ -436,10 +436,10 @@ version of the PSP's operating system, as far as a program sees it. The loader a
   another, and stops.
 - **The program**: `load()` starts afresh, as the PSP does when a game is chosen (whatever an earlier program left,
   having exited included, goes; a load that fails leaves nothing behind either). It takes a PBP or an ELF, puts a PRX
-  at the start of the user partition, reserves the program's memory exactly where it is, one block from its first
-  segment to the end of its last as the PSP's loader gives a module (two segments may share a 256-byte step, as a
-  retail PRX's data starts right after its code; a program whose segments overlap is refused), and starts its first
-  thread at the entry
+  16 KiB into the user partition (its block from the partition's start: part 51), reserves the program's memory
+  exactly where it is, one block from its first segment to the end of its last as the PSP's loader gives a module
+  (two segments may share a 256-byte step, as a retail PRX's data starts right after its code; a program whose
+  segments overlap is refused), and starts its first thread at the entry
   point with the path as its argument (argv[0]), its `gp`, a 256 KiB stack, and the top 256 bytes of the stack as
   the kernel's area (`k0`). A thread's start argument must fit on its stack and be readable, or starting it fails;
   the program's path may be up to 4 KiB.

@@ -892,14 +892,18 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     data += offset;
     size = length;
   }
-  //A PRX goes at the start of the user partition (nothing is there yet); a static executable where it was linked.
-  error = Loader::load(memory, data, size, UserMemory, [this](const std::string& library, u32 nid) {
+  //A PRX goes 16 KiB into the user partition, as on a PSP: pspautotests' recordings of PRXs have its code there
+  //(cpu/cpu_alu/cpu_branch's code 0x420 bytes in at 0x08804420; video/pmf's ring callback at 0x088042b4) and its
+  //data (audio/mp3/stream's buffer, 0x27a40 into its .bss, at 0x0882ba40). Fan translations calling code of their own
+  //by its address (Persona 2: Eternal Punishment's) need it there. A static executable goes where it was linked.
+  error = Loader::load(memory, data, size, ProgramBase, [this](const std::string& library, u32 nid) {
     return importCode(library, nid);
   }, module);
   if(!error.empty()) return false;
   //The program's memory: one block from its first segment to the end of its last, as the PSP's loader gives a module
-  //one. Segments may share a 256-byte step (blocks start on one: Lumines' data starts 8 bytes after its code ends),
-  //but not bytes.
+  //one; a PRX's from the partition's start, the 16 KiB below it held too (programBlockAt()): sysmem/partition's
+  //lowest free place had room for 1 MiB, so it's past the program. Segments may share a 256-byte step (blocks start
+  //on one: Lumines' data starts 8 bytes after its code ends), but not bytes.
   auto parts = module.segments;
   std::sort(parts.begin(), parts.end(), [](auto& a, auto& b) { return a.address < b.address; });
   u32 low = ~0u, high = 0;
@@ -912,6 +916,7 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     low = std::min(low, segment.address & ~255u);
     high = segment.address + segment.size;  //the loader saw that each fits in memory
   }
+  if(high && module.relocatable) low = UserMemory;
   if(high) {
     auto block = allocate(high - low, 2, low, module.name);
     if(!block || block->address != low) {  //it must be exactly where the program is
