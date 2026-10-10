@@ -7841,3 +7841,277 @@ are the same from both runners.
   syms.py, dsos.py, kernelcallers.py; the logging patches copylog-, xferlog-, whylog-, ptrlog-patch.py; late4x-patch.py
   the runner's 4x; acc.sh and cmp.py the accuracy; mutate.sh the broken versions; soft-hashes.sh). Nothing of it is
   left on the RP6.
+
+## Part 64: God of War in the software renderer — the GE's time, its bloom batched, the stencil four at a time
+
+On branch `cursor/psp-gow-sw-2b67`, on top of #198's `cursor/psp-vk-speed6-2b67` (`e9c98f3b9`). The task: God of War:
+Chains of Olympus playable in the software renderer on the RP6 without making another game worse: find out why its
+menu drew about 28 million fours a frame (part 61), model the GE's time as far as the evidence goes if that was the
+cause, and take away what part 61 left, every pixel as before. Sources: the game's own lists and code, traced and
+read with a scratch runner; pspautotests' gpu/ge, gpu/signals, gpu/callbacks and gpu/displaylist programs and their
+recordings (run through the kernel by the scratch runner, their output compared line for line); Sony's figures for
+the GE (its Hot Chips 16 paper, 2004, which the PSP Developer Wiki's Graphics Engine page repeats). No PPSSPP or JPCSP
+source was read.
+
+### Why the menu drew 28 million fours
+
+A scratch runner logging the GE driver's events, each list's PRIMs, pixels and frame buffers, and every system call,
+over part 61's two scenes (`~/phobos-work/scratch/speed5/scenes`):
+- **How many times a frame.** In one vblank the menu ran 66,402 PRIMs, and every count of a kind was a multiple of
+  27: 2,268 block transfers (27 x 84), 756 PRIMs into the bloom's buffer at 0x162000 (27 x 28), 297 at 0x162400, 81 at
+  0x162600, 2,349 into a 5650 buffer at 0x161800 (27 x 87), 405 read from memory as they drew (27 x 15); in the next
+  vblank 26 of each. It drew its whole scene 27 times a vblank, about 1.04 million fours each, 58% of them dropped by
+  the depth test. The battle drew its scene 8 times (1,680 transfers = 8 x 210; 400,000 fours a scene).
+- **Which lists.** Two, taking turns, each a whole frame queued with no stall address: 0x084801f0 and 0x084a01f0
+  (about 2,460 PRIMs a scene in the menu, 1,160 of them into the frame buffer).
+- **What it waits on.** Its loop (user_main), every 583 microseconds of the PSP's time in the menu and 2.1 ms in the
+  battle: sceKernelGetSystemTimeWide, sceKernelDcacheWritebackAll, sceGeListSync(the last frame's list, 0),
+  sceDisplaySetFrameBuf(the other buffer, 512, 8888, 0: at once), sceGeListEnQueue(this frame's list),
+  sceCtrlPeekBufferPositive, then the next frame's list built. Nothing in it waits for the vertical blank; a semaphore
+  it waits on now and then never makes it wait. Its pace is the GE's: on a PSP sceGeListSync waits until the GE has
+  drawn the frame before while the CPU builds the next. Ours took no time, every list done the moment it was queued, so
+  the loop ran as fast as the CPU built lists, 27 scenes a vblank of which the screen showed one.
+- **Its clock.** Its time source (0x089a0de8) reads the system clock unless a byte (0x08b32458) says to use a count
+  it steps by 33 ms a loop (0x089a0e4c); the byte is 0 in both scenes. So the game ran at its right speed, and the
+  extra scenes cost the host their drawing and nothing else.
+- **What a PSP would do.** Draw a scene as fast as its GE fills about 4 million pixels and sets up 5,300 triangles
+  (the menu) or 1.6 million and 14,000 (the battle), the CPU building the next meanwhile, and show it at once. How
+  fast that is, nothing measured on a PSP says (below).
+
+### What's known of the GE's time
+
+pspautotests' recordings show a list taking time and its end coming as an interrupt, but measure no rate:
+- gpu/signals/continue and simple: a SIGNAL that lets the GE go on (kind 2) has its callback find the list drawing
+  (sceGeListSync 2, sceGeDrawSync 2), though the GE has run the commands after it (an AMBIENT_COLOR past it reads back
+  set): the list's FINISH, run already, is taken only once that callback has returned. We said 0 and 0.
+- gpu/ge/intrsuspend: with interrupts held off, a list stays drawing (2) however long the CPU spins, the next
+  queued (1), no callback. We said 0.
+- intrsuspend's and queue2's comments: the GE "needs a moment on hardware". gpu/timing/blittiming times blits on a PSP
+  but its output isn't recorded (pspautotests keeps no timing probe's output), and none of the owner's measurement
+  rounds times the GE.
+Sony's figures (Hot Chips 16, "Frequency & Performance (@166MHz)"): 664 million pixels a second (four a clock), 35
+million polygons a second through the geometry and the setup, at 166 MHz, the bus's clock (half the PLL's, as
+power.cpp has it: 95, 111, 133 or 166 MHz; the wiki: 111 MHz unless a game asks for more). They're peaks: no PSP
+draws faster.
+
+### The GE's time (commit 1)
+
+`kernel/ge.cpp`'s geTime() and geInterrupt(); GE::owe() in `draw.cpp`.
+- The GE still carries out a list's commands at once, every pixel drawn there and then, but the program hears that a
+  list is done only once a PSP's GE would have drawn it. As each primitive is set up, before a hardware renderer takes
+  it (so every renderer gives the same time; Vulkan (fast), which transforms 3D triangles itself, counts them by its own
+  corners, the same but for a float's rounding), the GE counts it and its pixels inside the scissor rectangle: a
+  sprite's rectangle, a triangle's area there (cut at the rectangle's sides, a polygon of up to seven corners, where its
+  corners reach past them), the pixels a line lights there (its columns there whose rows are there too, found by two
+  binary searches, as its rows go one way), a point's one. As each run of the list returns, the driver adds
+  max(pixels / 4, primitives x 166/35) clocks at the bus's clock (half the PLL's: 95, 111, 133 or 166 MHz), in the
+  CPU's 333 MHz cycles, to when the GE will be done, from now or from when it's done with what came before. Each term
+  is a peak and the two may overlap, so that's the least a PSP could take, by these counts (a triangle cut at the near
+  plane counts as its one or two pieces). What no figure gives counts for nothing: the commands themselves, primitives
+  dropped before they're set up, block transfers.
+- The FINISH comes as the GE's interrupt: the GE stops at its END, the list running still, and the driver deals with
+  it (geFinished(): the callback, the waiters, the next list) once its time has come and an interrupt can be taken:
+  interrupts on, no call into the program running, none of the GE's own waiting its turn (the PSP takes the GE's next
+  interrupt only once the last one's handler has returned). That's at the end of a system call, as a call into the
+  program returns, or as the kernel's loop goes round, which stops the CPU at that time. Till then the list reads as
+  drawing for sceGeListSync and sceGeDrawSync, also where GU leaves its stall address, just past its END (where the
+  GE has stopped, but a PSP's would be drawing still: unmeasured); sceGeSaveContext refuses as for any drawing list
+  (and saves once the time has come, the GE stopped); sceGeBreak(1) drops the FINISH with its list, as intrsuspend
+  recorded; sceGeBreak(0) takes it first, as though its interrupt came then, and so the FINISH each list queued after
+  it meets as it starts (their pixels are drawn: nothing of them is left for sceGeContinue; unmeasured), but after a
+  finish callback those lists start only once it has returned, the break saying ALREADY. A PAUSE's
+  list keeps a stall address moved while its FINISH waits (the list's, not the GE's: queue2), and after a SYNC the GE
+  goes on once the FINISH is taken, as a PSP's driver lets it go on from its interrupt.
+- Not changed: SIGNALs still come at once (no recording needs them later), the statuses at a stall address (by where
+  the GE has got, as before, but just past a FINISH whose interrupt waits: above), the million commands a vblank.
+
+What it does to part 57's 22 driver programs: simple and intrsuspend now print what the PSP printed, continue's
+callback lines do (its last two differences are "[r]" marks, the reschedule probe started from a callback, the
+kernel's), and no other program's output changes: 9 of 22 match, 7 before.
+
+To God of War: each list is done 6.5 to 7 ms after it's queued in the menu (the bus at 166 MHz), 3.15 ms in the
+battle. The menu draws 2 or 3 scenes a vblank (its fours a vblank 28 million to 2.1-3.2 million), the battle about 5
+(3.2 million to 1.6-2.0 million). At a PSP's own rates it would draw fewer; those aren't measured.
+
+### The bloom batched (commit 2)
+
+The 15 PRIMs a scene read from memory as they drew are God of War's bloom (the scratch runner logged each): 2D
+triangle strips of 16-pixel quads, filtered, in one 512-wide 8888 buffer whose columns 0-255 hold a picture, 256-383 it
+halved, 384-447 that halved, each brought back over the one before (blended, fixed 0x555555 each way). No pass reads a
+byte it writes: its texture is columns 0-255 and its target 256-383, and so on. texture.cpp's drawsOver() took a
+texture's bytes as one span, first to last, the columns between its rows included, so every pass was read from memory
+as it drew, after everything waiting was drawn: about 30 drains a vblank in the battle, 100 in the menu. Now a plain
+texture (not swizzled, not DXT, through VRAM's plain copies, its rows no longer than their pitch, inside VRAM) is its
+rows: a primitive draws over it only where a row of the pixels it may write meets a row of texels it may read; any
+other is a span as before. Such a primitive takes its texture from a copy, decoded at once or as its batch starts
+(part 46's deferral, where a batch still draws over the texture's pages), and is batched like any other: what it reads
+is what memory holds as it draws, as nothing it draws is a texel of its own.
+
+Drains a vblank (flushes and waits for launched batches, counted by the scratch runner at 7 threads): the battle about
+55 (32 for those passes, 8 transfers' flushes, 12 waits for the CPU or the screen) to about 13; the menu about 177 to
+about 9.
+
+### Four pixels at a time: deferred textures and the stencil test (commits 3 and 4)
+
+With the drains gone, simpleperf on the RP6 (the battle, 7 threads, a build with line tables) had three quarters of
+the whole process's samples in `triangleRows<3>`, on every thread: the emulation thread's 47%, and nearly all of each
+worker's. A scratch count of the jobs fourFriendly() turned down, by their boxes' pixels a vblank: in the battle 3.96
+million with the stencil test and 1.95 million with a deferred texture (render to texture, decoded as their batch
+starts); in the menu 2.25 and 1.19 million.
+- **Deferred textures** (commit 3): fourFriendly() decided as the job was recorded, before the copy existed. No band of
+  a batch draws before ensureDecoded() has run (drawBands(), flush()), so such a job waiting in a batch is taken as
+  decoded and drawn four at a time. One whose primitive defer() turns down is drawn at once with no copy, still read
+  from memory a pixel at a time.
+- **The stencil test** (commit 4): the four-pixel path tests depth before the texture and drops what fails it, which
+  the stencil test can't have: a pixel failing the depth test still changes the stencil ("depth fail") once the alpha
+  and color tests have passed it. depthFirst() now keeps those lanes when the stencil test is on (four.passed says which
+  passed), and pixelsFour() runs the stencil test after the color test, as drawPixelAs() does: each lane's stencil (the
+  frame buffer's alpha, widened) compared under the mask, changed by "fail", "depth fail" or "pass" (stencilLanes(),
+  stencilOperation() lane by lane, each format's ends as there), the lanes failing either test written with their
+  color kept and their stencil changed, the rest drawn with the new stencil as their alpha. Logic operations are still
+  drawn a pixel at a time.
+
+### Numbers
+
+The RP6, the runner from adb's shell, its emulation thread pinned to the X3 (cpu7) as Phobos pins it (speed5's
+rp6-run6.sh), part 61's two scenes from their states (the battle 150 frames at 7 threads and 100 at 1, the menu 100 and
+30), the builds taking turns; frames a second, means of two rounds (one for the menu at 1 thread; each build's rounds
+within 3% of each other), the Phobos app not running:
+
+| Scene | Before | GE's time | + bloom batched | + deferred fours | + stencil fours |
+| --- | --- | --- | --- | --- | --- |
+| Battle (the Shores of Attica), 7 threads | 4.67 | 7.09 | 7.61 | 8.03 | 8.99 (+93%) |
+| Menu, 7 threads | 1.73 | 17.37 | 18.35 | 19.69 | 22.21 (12.8x) |
+| Battle, 1 thread | 2.20 | 3.46 | 3.55 | 3.55 | 4.44 (2.0x) |
+| Menu, 1 thread | 0.68 | 7.20 | 7.38 | 7.38 | 8.80 (12.9x) |
+
+The emulation thread's time a frame: the battle at 7 threads 198 ms to 104, the menu 544 to 41. The end states of the
+last three columns are the second's in every scene and round (commits 2 to 4 change no pixel); the first column's and
+the second's differ, as the game runs differently. The menu at 1 thread runs faster than at 7 did before.
+
+The review's fixes (below) change no frame or end state of either scene. In a later session, the device slower for
+every build (its emulation thread's time a frame the same, each frame longer: warm, little memory free), the final
+build and the last column's took turns at 7 threads, two rounds each: the battle 4.84 and 5.51 frames a second
+against 4.93 and 5.09, the menu 15.01 and 15.01 against 15.11 and 15.26, every end state the same.
+
+### What a profile shows now
+
+simpleperf, the battle at 7 threads with all four commits: the emulation thread is busy 91% of the time, 40% of it
+drawing bands while it waits for a batch (settles and reclaims), the rest the GE's setup (triangle() 5.4%, project()
+5.2%, transform() 4.7%, transformState() 2.6%, drawVertices() 2.5%, readVertices() 2.2%, quantize15() 1.8%, submit()
+1.7%, the GE's time's areas 1.2%) and the CPU (9.8 ms a frame); the six workers are each about 40% busy. Of all
+threads' samples, 73% are triangles' pixels (the four-pixel path is inlined into triangleRows(), so the profile
+doesn't tell the two apart). What's left is the pixels' own arithmetic, exact, and the emulation thread's setup.
+
+### Library
+
+The report's runs (3600 frames, Start at 120 and Cross at 1800, PNGs at 60, 300, 1200 and 3600, 7 GE threads, four
+games at a time, 1200 s each at most) over all 266 games, the base commit's runner beside commit 2's (commits 3 and 4
+change no frame: above), compared frame by frame and judged by eye where they differ:
+- **God of War: Chains of Olympus**, killed at the limit in the base run (its main menu at 1200), finishes its 3600
+  frames in 429 s (8.4 frames a second, four games at a time): its difficulty menu at 3600, the Cross at 1800 having
+  taken New Game. Timed out 1 to 0, menu or gameplay 188 to 189 (docs/psp-compatibility.md).
+- **Killzone**, killed at the limit in the base run, finishes (1125 s, its first level: its row's gameplay, as before);
+  **Army of Two** runs at 9.9 frames a second where it ran at 3.7.
+- 100 games show some frame differently: each the same scene at each frame, or the same sequence a few frames apart (a
+  movie or a fade further on or behind, an animation step, Battlefront II's random map). The most apart: Persona 2:
+  Innocent Sin's opening a little later (its CRIWARE logo at 1200, the base's movie; both in the movie by 3600),
+  Fuuun Shinsengumi's, Persona 2: Eternal Punishment's, Monster Hunter Portable 3rd's and Tekken's openings at other
+  points, Mega Man Maverick Hunter X's and SOCOM's logos a step apart. No game shows less than it did; no function is
+  missing in any.
+- The final commits' runner (the review's fixes in) beside commit 2's: the same categories. Chains of Olympus
+  finishes in 325 s (11.1 frames a second), Killzone in 992 s, Army of Two at 9.8. 79 games show some frame
+  differently, each the same scene (an animation step, a fade or a movie a little on, Battlefront II's random map; at
+  3600 IL-2's movie shows a darker shot of the same scene). Some of that is the runner's own: run twice, the final
+  runner gave IL-2's, LocoRoco's and Battlefront II's last frames differently, IL-2's second run showing commit 2's
+  shot again. Every game exits as before.
+
+### Checks
+
+- Pictures: the measure harness's 137 files (`PSP_GE_OURS`, every round's), the last commit's against the base's: the
+  136 pictures byte for byte the same; controller-timing.bin, the round-2 record of 48 controller calls' times in
+  microseconds, has its 16683/16684 rounding a call apart (the measure program runs at another phase of the clock
+  with the GE taking time), as close to the PSP's own record (16591 to 16775) as before. The final build's 137 files
+  are commit 2's, byte for byte.
+- Frames: the six cpu-speed scenes and God of War's two (`hashes.sh`: every frame's picture and all of VRAM, drawing
+  settled each frame, then RAM and the machine's whole state), 300 frames (God of War's menu 60, battle 150) at 1 and
+  7 threads: commits 2, 3 and 4 each the same as commit 1 in every frame and end state, and every build's 7 threads the
+  same as its 1. Commit 1 against the base: Peace Walker's title and Lumines' demo the same in every frame; Midnight
+  Club 3's race and menu and Liberty City Stories' city and woods differ from frame 2-24 on (their loops see the GE's
+  time), each frame still a new picture in both (60 a second; Lumines 30). On the RP6 every round's end state of
+  commits 2-4 was the same, scene by scene. The final build against commit 4: every frame's picture and VRAM the same
+  in all eight scenes, at 1 and 7 threads alike; the end states the same but for Midnight Club 3's race and Liberty
+  City Stories' city (and its RAM), which draw lines leaving the scissor rectangle across, now owing only their pixels
+  inside: with the old count for lines, both end as commit 4's.
+- A state saved mid-battle (version 24, its list's FINISH waiting 3 ms on: the trace's) and loaded carries on as the
+  run never stopped did, frames 15 to 30 and the end's RAM and state the same; the bench scenes' version-22 states load.
+- `tests/psp/run-tests.sh` (sanitizers on): 417 groups, 0 failures (four new: "ge time", "ge time's interrupt",
+  "draw3d the GE's time, any renderer", "draw beside its own texture from a copy"; changed: "ge break and callbacks",
+  "ge deferred texture busy", "older layouts load", "draw3d four pixels at a time against one");
+  `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0 failed. Each
+  commit, archived and built afresh, passes the GE, drawing, state and GPU groups.
+- pspautotests' GE driver programs (part 57's 22, through the scratch runner): as above, 9 matching, 7 before; no other
+  output changed.
+- GCC 11 (ubuntu:22.04, 11.4), on the final tree: the GE with -Wall -Wextra -Werror and the sanitizers at -O1, as the
+  tests build it, and the draw3d test so; the kernel and the other changed test files with -fsyntax-only: no
+  warning. At -O2 and -O3
+  without the sanitizers it warns that spriteFours()'s downAxis and a Four's depth may be read uninitialized, exactly
+  as it does on the base commit (they're set before they're read; part 61's check had the sanitizers on).
+- Broken versions (`mutate.py`), each failing a test: 40, among them the GE's time with no time owed, with pixels or
+  primitives alone or added, the bus fixed at 166 MHz, counted from the last done rather than now; the FINISH taken
+  before its time, with interrupts held off, ahead of the GE's own callbacks, at once as before, without the event at
+  its time or idle() timed by it, sceGeBreak(0) not taking it, the end of a system call or a call's return not taking
+  it; the fields not saved, layout 23 reading them; a triangle owed after the renderer took it, not cut by the scissor
+  (or cut across only), a mesh not owed, a line, a point or a sprite not cut by it; the texture's bytes one span again,
+  its rows without their gaps, pixels not reaching the next texel row, a swizzled texture or VRAM's second copy taken
+  as rows, rows longer than their pitch; deferred textures a pixel at a time again; the stencil test dropping the depth
+  test's failures, "depth fail" taken as "fail", compared the other way, 4444's increment by one, a decrement past 0,
+  the dropped lanes not written or their colors not kept, the stencil kept at the write, depth written for dropped
+  lanes. (A third geInterrupt() call, at sceKernelCpuResumeIntr, was found to change nothing, every system call's end
+  taking the FINISH anyway, and was dropped.) And 7 more for the review's fixes (`mutate-fixes.sh`): sceGeBreak(0)
+  taking one FINISH only, a PAUSE's moved stall address not kept, a texture deferred for a primitive drawn at once
+  taken as decoded, a list GU ends reading as stalled while its FINISH waits, a line owing its columns whatever its
+  rows, the FINISH taken as an interrupt's handler runs, a SYNC's FINISH taken at once.
+- An independent read-only review of the four commits (a reviewer agent, with its own scratch builds and tests) found
+  two crashes and a lost stall address, each reproduced. sceGeBreak(0) at a waiting FINISH ran the next list, which
+  could meet its own FINISH as it started and was then broken off with that FINISH still waiting: the driver would
+  later finish list -1. A texture deferred to its batch's start whose primitive defer() turned down (its frame buffer
+  narrower than it, say) was drawn at once four at a time, from a copy that didn't exist. And a stall address moved
+  while a PAUSE's FINISH waited (commit 1 makes that wait) was lost as the FINISH came. Each is fixed in its commit,
+  with a test that fails without the fix. Its smaller points are taken too: the bus clock's range in geTime()'s
+  comment, "never later than a PSP" (a line was owed its columns whatever its rows: now its pixels inside; a triangle
+  cut at the near plane counts as its pieces, said), sceGeBreak's comment (unmeasured, what it runs), a test
+  comment's count, and a list GU ends reading as stalled (3) while its FINISH waits, now drawing (2), as a PSP still
+  drawing it would say. Its test gaps (a SYNC's FINISH, a FINISH falling due as an interrupt's handler runs) have
+  tests now. It found commits 2 and 4 exact, and the callback order and the time's arithmetic sound. A second review
+  read the fixes and found no bug: on 120,000 random lines the count matched what linePixels() lights inside the
+  scissor (and the software renderer's own pixels on 30,000 of them, where the old count was wrong for 57,164); its
+  own broken versions each failed a test; commits 1 and 3 pass alone. Its wording points are taken (sceGeBreak(0)
+  after a finish callback, the statuses at a stall address, a test comment's count), and the alarm's case now
+  records that the GE's time had passed in the handler.
+
+### Left, and why
+
+- **The GE's real speed.** The time is a lower bound by Sony's peak figures; a PSP's GE is surely slower, so God of
+  War still draws 2-3 scenes a vblank in its menu and about 5 in its battle where a PSP draws fewer. Measuring it
+  (full-screen fills textured and not, 16- and 32-bit, triangles of a few sizes, block transfers, each timed around
+  sceGeDrawSync) would let the model be the PSP's: a round of tools/psp-measure for the owner's PSP. Commands, culled
+  primitives and block transfers count for nothing meanwhile; SIGNALs still come at once.
+- **What God of War's battle spends now**: its pixels (exact arithmetic, four at a time where they can be) and the
+  emulation thread's setup and waits (about 13 drains a vblank: transfers touching pixels being drawn, the CPU and the
+  screen touching busy pages); the emulation thread is the bound at 7 threads, its workers 40% busy.
+- **Logic operations** are still drawn a pixel at a time.
+- **The runner isn't the same from run to run**: run twice, it gave IL-2's, LocoRoco's and Battlefront II's last
+  frames differently, so a library comparison carries that noise besides what a change does (each difference here
+  judged by eye).
+- **Unmeasured driver details**: what a list GU ends (its stall address just past its END) reads as between the GE's
+  time and its FINISH's interrupt, held off (drawing here), and sceGeBreak(0) at a waiting FINISH.
+- **pspautotests' other GE differences**: sceGeDrawSync(1) on a queue of paused lists (displaylist/state: 3 on the
+  PSP), the order breakwait's two waiters wake in, the state buffer's layout (context, break), sceGeGetStack, a
+  SIGNAL call's shared stack, edram's swizzled patterns, and the "[r]" marks of a reschedule probe started from a
+  callback (the kernel's).
+- Scratch: `~/phobos-work/scratch/gow-sw` (trace-patch.py the scratch runner's logging: PSP_GETRACE, PSP_TRACE,
+  PSP_OWNTRACE, PSP_AUTOTEST; sync-dbg.sh builds it; at/ the pspautotests runs; state-ram.py and callers.py, the game's
+  code; hashes.sh, rp6-gow.sh, rp6-perf.sh, cleanup-rp6.sh; mutate.py and mutate-fixes.sh; gcc11.sh and gcc11c.sh;
+  lib.sh, compare.py and rerun.sh the library runs, lib/base, lib/final and lib/fix). Nothing of it is left on the
+  RP6.
