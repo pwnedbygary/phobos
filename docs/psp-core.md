@@ -4708,7 +4708,8 @@ own tessellation stands between the control points and the pixels (`tools/psp-me
 - `curves-culling`: the 16 combinations of CULL_FACE_ENABLE, CULL, PATCH_CULL_ENABLE and PATCH_FACING.
 - `curves-joins`: which vertices strips join across patches, as lines and flat-shaded triangles.
 - `curves-count`, `-count-128`, `-count-200` and `-count-255`, last: how many vertices a row has (points added up) at
-  16, 63, 64 and 65 cuts, at 100 and 128, at 200, and at 255, each in a display list of its own.
+  16, 63, 64 and 65 cuts, at 100 and 128, at 200, and at 255, each in a display list of its own. (Since split further,
+  one count past 64 to a test, with the GE's waits timed: part 48, "Round 4 again".)
 Built in pspdev's Docker image (`ghcr.io/pspdev/pspdev@sha256:54895e6f...`, part 29's), and `tests/psp/programs/
 pspmeasure.elf` replaced as that folder's README asks (its SHA-256 there). The EBOOT.PBP for the PSP is outside the
 repository: `/tmp/psp-measure-round4-curves/PSP/GAME/PSPMEASURE/EBOOT.PBP` (SHA-256
@@ -5960,6 +5961,34 @@ corners now guard against it.
   `tests/allegrex/run-tests.sh`: 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`: 307 checks, 0 failed.
 - The measure test against the owner's round 2 and 3 files: as in the table above, nothing else changed; it drives
   round 5 through the menu and every file is written.
+
+### Round 4 again: the GE's waits timed (2026-10-09)
+
+Running round 4, the owner's PSP froze at `curves-count` (16, 63, 64 and 65 divisions in one list) and
+`curves-count-128` (100 and 128), and had to be switched off by hand, twice a test before results.c set it aside.
+Most likely the GE never finished the list and `finishList` waited for it in `sceGeDrawSync(0)` for good (part 33
+had expected a stall past pspsdk's 64); nothing showed whether the CPU was still running. Now:
+- `waitForGe` peeks (`sceGeDrawSync(1)`) every millisecond for 5 seconds at most. A list still not done then is a
+  stall: `<test>.stalled` records it (how long, the driver's state, what the list held) before anything is done
+  about it, so if the reset stops the PSP the next start gives up on that test at once rather than after a second
+  freeze (results.c). Then `sceGuBreak(GU_BREAK_CANCEL)` (`sceGeBreak(1)`: every list thrown away and the GE reset),
+  its result recorded, and `sceGuTerm`/`sceGuInit` (its own list gives the GE back its first state; it waits for
+  that list, for good if the GE is still stuck, and the record then lacks its result); the test saves what the GE
+  had drawn, as `.bin`, and the round goes on. A freeze with no "the GE stalled" on the screen and no `.stalled` is
+  the other kind (the CPU stopped too), handled as before.
+- Each count past 64 is a test of its own: `curves-count` (16, 63, 64; rows 0-2), `-65`, `-100`, `-128`, `-200` and
+  `-255` (rows 3-7, each in its own row as before). What the earlier program left of the counts (`.part`, `.again`,
+  `.stopped`) is cleared once in a results folder (`curves-count.timed` marks it), so they run again; finished
+  `.bin` files are kept.
+- `stall-check`, before them, gets the GE stuck on purpose (a list left waiting at its stall address), so the reset
+  runs whenever round 4 runs in a results folder for the first time, in this core too (the measure test checks its
+  `.stalled` and that 16 divisions' count drawn before the reset and after it match; then that results.c gives up on
+  this program's own leftovers, which ge.c's one-time clearing leaves alone). On the PSP, a break on a list stopped at
+  its stall address is what pspautotests' gpu/ge/break recorded; a GE stuck inside a patch is unmeasured, and the next
+  run will show whether the reset frees it.
+
+`pspmeasure.elf` is rebuilt in the same image; the owner's copy is `.local/psp-round5b/` (EBOOT.PBP, its SHA-256,
+HOW-TO.md).
 
 ## Part 49: the Vulkan renderer in play on the RP6, and its blending without rasterization order
 
