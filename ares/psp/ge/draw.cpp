@@ -44,6 +44,55 @@ static auto fixed(float position) -> s32 {
 static auto floorDivide(s32 value, s32 by) -> s32 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 static auto floorDivide64(s64 value, s64 by) -> s64 { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 
+//A 2D sprite's texture coordinate across x (or down y) at the middle of pixel column (or row) at: from the one at
+//sixteenth start, by its step a pixel (spriteJob()). As drawing takes each (raster.cpp, four.cpp).
+static alwaysinline auto spriteAxis(f64 first, f64 step, s32 start, s32 at) -> float {
+  return first + f64(at * 16 + 8 - start) / 16 * step;
+}
+
+//The texture's rows and columns a 2D sprite's job takes texels from, every one drawing it may (spriteRows(),
+//spriteFours(): their coordinates' texels, and the second of each where it filters, whatever its weight), first to
+//last: false where some may repeat round, or aren't numbers, or for a 3D sprite (whose texels follow the perspective
+//at each pixel). A coordinate runs one way along the job (spriteAxis(): from a number by a step, both numbers, and
+//rounding keeps the order), so its texels' first and last are those at the job's ends.
+static auto spriteReach(const GE::Job& job, const GE::Sampler& t, s32 (&rows)[2], s32 (&columns)[2]) -> bool {
+  auto& s = job.sprite;
+  if(s.divided) return false;
+  auto ends = [&](f64 first, f64 step, s32 start, s32 from, s32 to, u32 size, bool clamp, s32 (&reach)[2]) {
+    if(!std::isfinite(first) || !std::isfinite(step)) return false;
+    s32 low = std::numeric_limits<s32>::max(), high = std::numeric_limits<s32>::min();
+    s32 last = std::min<s32>(size, 512) - 1;
+    for(s32 at : {from, to}) {
+      float coordinate = spriteAxis(first, step, start, at);
+      if(std::isnan(coordinate)) return false;
+      auto spot = GE::texelSpot(coordinate, job.linear);
+      low = std::min(low, spot.first), high = std::max(high, spot.first + job.linear);
+    }
+    if(clamp) low = std::clamp(low, 0, last), high = std::clamp(high, 0, last);
+    else if(low < 0 || high > last) return false;
+    reach[0] = low, reach[1] = high;
+    return true;
+  };
+  s32 across[2], down[2];
+  if(!ends(s.columnFirst, s.columnStep, s.columnStart, job.firstX, job.lastX, s.turned ? t.height : t.width,
+           s.turned ? t.clampV : t.clampU, across)) return false;
+  if(!ends(s.rowFirst, s.rowStep, s.rowStart, job.firstY, job.lastY, s.turned ? t.width : t.height,
+           s.turned ? t.clampU : t.clampV, down)) return false;
+  for(u32 n : range(2)) rows[n] = s.turned ? across[n] : down[n], columns[n] = s.turned ? down[n] : across[n];
+  return true;
+}
+
+//Whether every pixel drawn with these settings is left as it was, whatever its color, depth and fog: blending keeps
+//the frame buffer's color (the source times a fixed 0, plus the destination times a fixed 255, which comes back
+//exactly: (2d + 1) * 511 >> 10 is d for every d up to 255), with no dithering or logic operation after it, the
+//stencil kept (no stencil test) and no depth written; not clear mode. The pixel written back is then the very bits it
+//was: each format's channels, widened and narrowed again, are as they were (pixel.cpp), and the tests only drop
+//pixels.
+static auto keepsPixels(const GE::PixelState& p) -> bool {
+  return !p.clear && p.blend && p.blendOperation == 0 && p.blendSource >= 10 && p.blendDestination >= 10 &&
+         p.fixedA == 0 && p.fixedB == 0xff'ffff && !p.dither && !p.logicOp && !p.stencilTest && !p.depthWrite;
+}
+
 //The settings a primitive is drawn with: these pipeline and texture settings, with the commands' texture function.
 auto GE::lookFor(const PixelState& pixel, const Sampler* texture) const -> Look {
   Look look;
@@ -170,25 +219,60 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //A PRIM the renderer refuses (begin()) is drawn here instead, as without one: what it drew put back in memory
   //first, and the texture decoded for the region it draws in.
   hardware = renderer && renderer->ready();
-  if(textured && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
+  //A primitive drawn with settings that leave every pixel as it was (keepsPixels()) is set up as ever, and what it
+  //may draw over reported, but it isn't drawn, nor its texture decoded: nothing it would draw could change. Unless
+  //reading its texels would be reported (a format the PSP doesn't have, bytes with no memory behind them: texel()).
+  auto quiet = [&] {
+    if(texture.format > 10) return false;
+    u32 low, high;
+    textureBytes(texture, std::min<u32>(texture.height, 512), low, high);
+    return memory.reaches(low, high - low);
+  };
+  skipping = !hardware && keepsPixels(pixel) && (!textured || quiet());
+  //A 2D sprite's texels are taken where its pixels' middles fall, so the rows it reaches are exactly those
+  //spriteReach() finds, often fewer than its vertices' reach above can say: a sprite sampling a frame buffer (a
+  //texture of 512 rows) from its top edge, filtered, may reach round to the far end there for all that can tell.
+  u32 drawnRows = rows;
+  if(textured && !hardware && !skipping && format.through && kind == Sprites) {
+    s32 reached = 1;
+    bool exact = true;
+    for(u32 n = 0; n + 1 < count && exact; n += 2) {
+      Job job;
+      if(!spriteJob(look, vertices[n], vertices[n + 1], false, job)) continue;
+      if(job.firstX > job.lastX || job.firstY > job.lastY) continue;
+      s32 rowsReached[2], columnsReached[2];
+      if(!(exact = spriteReach(job, look.texture, rowsReached, columnsReached))) break;
+      reached = std::max(reached, rowsReached[1] + 1);
+    }
+    if(exact) drawnRows = std::min<u32>(rows, (reached + 7) & ~7);  //(in eights, as above)
+  }
+  //(a 2D sprite drawing over its own texture is still decoded where a copy taken first draws the same: readsAhead())
+  struct Ahead { GE& ge; const Look& look; const std::vector<Vertex>& vertices; u32 count; bool sprites; };
+  Ahead ahead{*this, look, vertices, count, format.through && kind == Sprites};
+  auto copyDraws = [&ahead] { return ahead.sprites && ahead.ge.readsAhead(ahead.look, ahead.vertices, ahead.count); };
+  if(textured && !skipping && !(hardware && renderer->holds(*this, look.texture, rows, columns))) {
     //Hardware keeps its own copy of a frame buffer: don't defer a software-batch wait for it.
-    decode(look, hardware ? Region{0, 0, -1, -1} : region, rows, !hardware);
+    decode(look, hardware ? Region{0, 0, -1, -1} : region, hardware ? rows : drawnRows, !hardware, copyDraws);
     if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
   }
   if(hardware && !renderer->begin(*this, look, format.through, region)) {
     renderer->finish(*this);
     hardware = false;
     if(textured) {
-      decode(look, region, rows, true);
+      decode(look, region, rows, true, copyDraws);
       if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
     }
   }
   //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
   //texture read from memory as it's drawn (texture.cpp) has it drawn at once. One deferred until the batch starts
   //(render to texture) still waits in the batch: ensureDecoded fills it before any band draws.
-  drawing.recording = !hardware && !(look.textured && !look.texture.decoded && !look.deferRows) && defer(pixel, region);
-  if(!drawing.recording && !hardware) flush();
+  drawing.recording = !hardware && !skipping && !(look.textured && !look.texture.decoded && !look.deferRows) &&
+                      defer(pixel, region);
+  if(!drawing.recording && !hardware && !skipping) flush();
   const Look& drawn = drawing.recording ? drawing.batch->looks.emplace_back(std::move(look)) : look;
+  if(drawing.recording && drawn.deferRows) {  //(the CPU waits for its texture's pages till it's decoded: threads.cpp)
+    for(u32 page = drawn.deferFirst >> 12; page <= drawn.deferLast >> 12; page++) drawing.batch->reads.set(page);
+  }
   Transform t{};
   if(!format.through) {
     t = transformState();
@@ -255,6 +339,7 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
     }
   }
   drawing.recording = false;
+  skipping = false;
 }
 
 //A job set up: drawn, and the bytes of VRAM it may write noted (touched: its frame buffer's rows, and its depth
@@ -279,6 +364,7 @@ auto GE::submit(Job& job) -> void {
     note(1, p.depthBuffer + (job.firstY * p.depthStride + job.firstX) * 2,
          p.depthBuffer + (job.lastY * p.depthStride + job.lastX) * 2 + 1, true);
   }
+  if(skipping) return;
   if(drawing.recording) record(job);
   else rasterize(job, job.firstY, job.lastY);
 }
@@ -321,11 +407,115 @@ static auto shortStep(f64 step) -> f64 { return std::trunc(step * 65536) / 65536
 //In 2D, texture coordinates are taken at each pixel's middle, stepped from the left (or top) edge's towards the
 //other's (raster.cpp).
 auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void {
+  Job job;
+  if(!spriteJob(look, from, to, perspective, job)) return;
+  if(hardware) return renderer->sprite(job);  //(its pixels, and their coordinates' steps, worked out as here)
+  submit(job);
+}
+
+//Whether 2D sprites drawing over their own texture (texture.cpp's drawsOver()) come out the same drawn from a copy of
+//it taken just before them (decoded) as reading it from memory as they draw (texture.cpp): so when no texel any of
+//their pixels takes, where its weight isn't zero (a filter's second texel, a fraction 0 from the first, is multiplied
+//by 0), is a pixel they have drawn by then, drawing their jobs one after another, each row by row and left to right
+//(raster.cpp, as such a primitive is drawn). Pixels a test drops aren't drawn, but count as drawn here.
+//Looked into only for unturned sprites without a depth buffer drawn, into a frame buffer laid out as the texture is in
+//VRAM's plain copies (the same bytes from one row to the next, a texel a pixel): a texel is then the frame buffer's
+//pixel a whole number of rows and columns from where it would be at the frame buffer's start (rows dy down, and
+//within its row, past columns made up by the row after: a carry). Each job's texels are its columns' by its rows':
+//one taken in a row above it, or to its left in its own row, may be one it has drawn; one in an earlier job's area,
+//one that job drew.
+auto GE::readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool {
+  auto& p = look.pixel;
+  auto& t = look.texture;
+  s64 bytes = p.format == 3 ? 4 : 2;
+  if(p.clear || p.depthWrite || t.swizzled || t.format >= 8 || TexelBits[t.format] != bytes * 8) return false;
+  u32 physical = t.address & 0x1fff'ffff;
+  if(physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return false;
+  if((physical - Memory::VRAMBase) / Memory::VRAMSize & 1) return false;  //(a copy that rearranges VRAM)
+  s64 pitch = s64(p.stride) * bytes, texture = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+  s64 width = std::min<u32>(t.width, 512), height = std::min<u32>(t.height, 512);
+  if(!pitch || pitch != s64(t.bufferWidth) * bytes) return false;
+  if(texture + (height - 1) * pitch + width * bytes > Memory::VRAMSize) return false;  //(all of it in this copy)
+  //texel (c, r) is the frame buffer's pixel (column(c), r + down + carry(c)): apart = down rows and along bytes
+  s64 apart = texture - s64(p.frameBuffer);  //(both on 16 bytes: a whole number of pixels)
+  s64 down = apart >= 0 ? apart / pitch : -((-apart + pitch - 1) / pitch), along = apart - down * pitch;
+  auto column = [&](s64 c) { return (along + c * bytes) % pitch / bytes; };
+  auto carry = [&](s64 c) { return (along + c * bytes) / pitch; };
+  std::vector<Job> jobs;
+  for(u32 n = 0; n + 1 < count; n += 2) {
+    Job job;
+    if(!spriteJob(look, vertices[n], vertices[n + 1], false, job)) continue;
+    if(job.firstX > job.lastX || job.firstY > job.lastY) continue;
+    if(job.sprite.turned || job.lastX >= s32(p.stride) || jobs.size() == 256) return false;
+    if(p.frameBuffer + (s64(job.lastY) * p.stride + job.lastX + 1) * bytes > Memory::VRAMSize) return false;
+    jobs.push_back(job);
+  }
+  //each job's texels whose weights aren't 0: its columns' (each with its pixel column), its rows' (each with its row)
+  struct Texel { s64 texel, at; };
+  struct Taken { std::vector<Texel> columns, rows; };
+  std::vector<Taken> taken(jobs.size());
+  for(u32 j = 0; j < jobs.size(); j++) {
+    auto& job = jobs[j];
+    auto& s = job.sprite;
+    for(s32 x = job.firstX; x <= job.lastX; x++) {
+      auto a = texelAxis(spriteAxis(s.columnFirst, s.columnStep, s.columnStart, x), t.width, t.clampU, job.linear);
+      taken[j].columns.push_back({a.first, x});
+      if(job.linear && a.fraction) taken[j].columns.push_back({a.second, x});
+    }
+    for(s32 y = job.firstY; y <= job.lastY; y++) {
+      auto a = texelAxis(spriteAxis(s.rowFirst, s.rowStep, s.rowStart, y), t.height, t.clampV, job.linear);
+      taken[j].rows.push_back({a.first, y});
+      if(job.linear && a.fraction) taken[j].rows.push_back({a.second, y});
+    }
+  }
+  for(u32 j = 0; j < jobs.size(); j++) {
+    auto& job = jobs[j];
+    //by carry: the pixel columns its texel columns are, those inside its own area (any; and one left of the pixel
+    //that took it)
+    struct Carry { s64 carry; std::vector<s64> columns; bool inside = false, left = false; };
+    std::vector<Carry> carries;
+    for(auto& c : taken[j].columns) {
+      s64 k = carry(c.texel), x = column(c.texel);
+      auto at = std::find_if(carries.begin(), carries.end(), [&](auto& e) { return e.carry == k; });
+      if(at == carries.end()) at = carries.insert(carries.end(), Carry{k, {}, false, false});
+      at->columns.push_back(x);
+      if(x >= job.firstX && x <= job.lastX) at->inside = true, at->left |= x < c.at;
+    }
+    std::vector<s64> rows;
+    for(auto& r : taken[j].rows) rows.push_back(r.texel);
+    std::sort(rows.begin(), rows.end());
+    auto any = [](const std::vector<s64>& sorted, s64 low, s64 high) {
+      auto at = std::lower_bound(sorted.begin(), sorted.end(), low);
+      return at != sorted.end() && *at <= high;
+    };
+    for(auto& e : carries) std::sort(e.columns.begin(), e.columns.end());
+    //an earlier job's area: drawn before any of this job's pixels
+    for(u32 i = 0; i < j; i++) {
+      auto& before = jobs[i];
+      for(auto& e : carries) {
+        if(any(e.columns, before.firstX, before.lastX) &&
+           any(rows, before.firstY - down - e.carry, before.lastY - down - e.carry)) return false;
+      }
+    }
+    //its own area: a row above the pixel's, or its own row left of it
+    for(auto& r : taken[j].rows) {
+      for(auto& e : carries) {
+        s64 y = r.texel + down + e.carry;
+        if(y < job.firstY || y > job.lastY || !e.inside) continue;
+        if(y < r.at || (y == r.at && e.left)) return false;
+      }
+    }
+  }
+  return true;
+}
+
+//A sprite's job (rectangle()): false if it covers no area at all (its corners in one row or column of sixteenths).
+auto GE::spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool {
   auto& pixel = look.pixel;
   s32 x0 = fixed(from.x), y0 = fixed(from.y), x1 = fixed(to.x), y1 = fixed(to.y);
-  if(x0 == x1 || y0 == y1) return;
+  if(x0 == x1 || y0 == y1) return false;
   s32 left = std::min(x0, x1), right = std::max(x0, x1), top = std::min(y0, y1), bottom = std::max(y0, y1);
-  Job job{};
+  job = {};
   job.kind = Job::Kind::Sprite;
   job.look = &look;
   //The pixels whose middles (eight sixteenths in) are inside, the left and top edges included and the right and
@@ -368,8 +558,7 @@ auto GE::rectangle(const Look& look, const Vertex& from, const Vertex& to, bool 
   s.rightAcross = (turned ? rightCorner.v : rightCorner.u) * s.rightInverse;
   s.topDown = (turned ? topCorner.u : topCorner.v) / topCorner.clip[3];
   s.bottomDown = (turned ? bottomCorner.u : bottomCorner.v) / bottomCorner.clip[3];
-  if(hardware) return renderer->sprite(job);  //(its pixels, and their coordinates' steps, worked out as here)
-  submit(job);
+  return true;
 }
 
 //A triangle. facing: 0 draws it either way round; 1 only if its corners run clockwise on the screen (y down), -1

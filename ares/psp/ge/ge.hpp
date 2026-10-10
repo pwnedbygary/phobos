@@ -211,7 +211,6 @@ struct GE {
     std::vector<u32> texels;  //key.width x rows
   };
   struct TextureCache {
-    std::mutex mutex;  //decode and forget: the GE's thread and workers share the cache (threads.cpp)
     std::unordered_map<TextureKey, std::shared_ptr<Decoded>, TextureKey::Hash> entries;
     std::unordered_map<u32, std::vector<Decoded*>> pages;  //the decoded textures that came from each page
     std::list<Decoded*> recent;                            //all of them, the last used first
@@ -268,10 +267,11 @@ struct GE {
     bool withAlpha = false, doubled = false;
     std::shared_ptr<Decoded> decoded;  //its texels, kept while a job may draw with them
     //Render to texture from a batch still being drawn (or filled): decode later, when this Look's batch starts
-    //(ensureDecoded), once that batch has been drawn; the palette as it was when the primitive was set up.
+    //(ensureDecoded), once the batches before it have been drawn; the palette as it was when the primitive was set
+    //up; and the texture's bytes, first to last (offsets in VRAM), which the CPU waits for till then (Batch::reads).
     u32 deferRows = 0;
     std::vector<u8> deferClut;
-    u64 deferClutHash = 0;
+    u32 deferFirst = 0, deferLast = 0;
   };
 
   //A primitive set up for drawing (draw.cpp): everything about it worked out once, so that any of its rows can be
@@ -385,6 +385,8 @@ struct GE {
   auto primitive(u32 kind, u32 count) -> void;
   auto drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>& vertices, u32 strip) -> void;
   auto submit(Job& job) -> void;
+  auto spriteJob(const Look& look, const Vertex& from, const Vertex& to, bool perspective, Job& job) const -> bool;
+  auto readsAhead(const Look& look, const std::vector<Vertex>& vertices, u32 count) const -> bool;
   auto rectangle(const Look& look, const Vertex& from, const Vertex& to, bool perspective) -> void;
   auto triangle(const Look& look, const Vertex& a, const Vertex& b, const Vertex& c, s32 facing, bool perspective)
     -> void;
@@ -428,6 +430,8 @@ struct GE {
   auto sampleWith(const Sampler& texture, bool linear, float u, float v) -> u32;
   struct TexelAxis { s32 first, second, fraction; };
   static auto texelAxis(float coordinate, u32 size, bool clamp, bool linear) -> TexelAxis;
+  struct TexelSpot { s32 first, fraction; };
+  static auto texelSpot(float coordinate, bool linear) -> TexelSpot;
   auto fetch(const Sampler& texture, s32 x, s32 y) -> u32;
   auto filtered(const Sampler& texture, TexelAxis u, TexelAxis v) -> u32;
   auto textureFunction(u32 color, u32 texel) const -> u32;
@@ -437,14 +441,15 @@ struct GE {
   auto textureBytes(const Sampler& texture, u32 rows, u32& low, u32& high) const -> void;
   //Decodes look's texture, or (allowDefer, workers drawing) leaves it for ensureDecoded once a batch that draws
   //over it has been drawn (render to texture: threads.cpp).
-  auto decode(Look& look, const Region& region, u32 rows, bool allowDefer = false) -> void;
+  //copyDraws: whether a primitive drawing over its texture draws the same from a copy taken first (readsAhead()).
+  auto decode(Look& look, const Region& region, u32 rows, bool allowDefer = false,
+              const std::function<auto () -> bool>& copyDraws = {}) -> void;
   auto ensureDecoded(Batch& batch) -> void;
-  auto fillDecoded(Look& look, u32 rows, const u8* palette, u64 paletteHash, u32 paletteVersion, bool waitFirst)
-    -> void;
-  //ensureDecoded reads VRAM of batches already drawn without settling this one (pointer / vramDrawnOver).
-  static thread_local bool readingDeferred;
+  auto fillDecoded(Look& look, u32 rows) -> void;
+  auto decodeTexels(const Sampler& t, const u8* palette, u32 low, u32 high, u32 width, u32 from, u32 rows,
+                    u32* texels) -> void;
   auto textureWritten(u32 page) -> void;
-  auto forget(Decoded* entry) -> void;  //caller holds textures.mutex
+  auto forget(Decoded* entry) -> void;
   auto dropTextures() -> void;
 
   //pixel.cpp
@@ -460,11 +465,15 @@ struct GE {
   auto launch(bool returning) -> void;
   auto startBands(Batch& batch) -> void;
   auto drew(Batch& batch) -> bool;
+  auto launched() const -> bool;
+  static auto unfinished(const Batch& batch) -> bool;
   auto reclaim(Batch& batch) -> void;
+  auto reap() -> void;
   auto resume() -> void;
   auto settle() -> void;
   auto freeVRAM() -> void;
   auto settleAll() -> void;
+  auto settleOver(u32 first, u32 last) -> void;
   auto clearBatch(Batch& batch) -> void;
   auto drawnFirst(u32 address, u32 size) -> void;
   auto drawnOver(u32 first, u32 last) -> bool;
@@ -494,21 +503,25 @@ struct GE {
     s32 left = 0, right = 0, upper = 0, lower = 0;  //its area: its primitives' scissor rectangles together
     bool depth = false;                 //some of them reach the depth buffer
     std::bitset<VRAMPages> pending;     //VRAM's 4 KiB pages it may draw over
-    bool launched = false;              //handed to the workers: being drawn, or next once the one before is done
+    std::bitset<VRAMPages> reads;       //those its deferred textures are read from as it starts (Look::deferRows)
+    std::atomic<bool> readsDone{false}; //and they have been, decoded (ensureDecoded)
+    bool launched = false;              //handed to the workers: being drawn, or next once those before are done
+    std::atomic<bool> finished{false};  //launched, and every band drawn: its pixels are all in VRAM
     u32 users = 0;                      //threads drawing its bands now (under the mutex)
     u32 bands = 0;
     std::atomic<u32> nextBand{0}, bandsLeft{0};
     //0: deferred textures not decoded yet; 1: one thread is decoding; 2: ready (drawBands)
     std::atomic<u32> decodeState{2};
   };
+  static constexpr u32 Batches = 8;  //filled in turn, round and round: one waiting for its primitives
   struct Drawing {
     u32 threads = 1;          //how many threads draw ('GE Threads'): 1, each primitive at once on the GE's own
     bool deferring = false;   //run() is running: primitives wait in the batch
     bool recording = false;   //the primitive being set up waits in the batch
-    Batch batches[2];         //one waiting for its primitives, the other maybe still being drawn
+    Batch batches[Batches];   //one waiting for its primitives, those after it in turn maybe still being drawn
     Batch* batch = &batches[0];         //the one primitives go into
     Batch* drawn = nullptr;             //the one the workers draw (under the mutex)
-    Batch* queued = nullptr;            //the one to draw once that's done (under the mutex)
+    std::deque<Batch*> queued;          //those to draw once that's done, in turn (under the mutex)
 
     std::vector<std::thread> workers;   //the threads besides the GE's own
     std::mutex mutex;
@@ -560,6 +573,7 @@ struct GE {
   Renderer* renderer = nullptr;
   auto setRenderer(Renderer* next) -> void;  //ge.cpp
   bool hardware = false;  //the primitive being drawn goes to the renderer (drawVertices())
+  bool skipping = false;  //the primitive being drawn changes no pixel: set up, not drawn (drawVertices())
   std::vector<LinePixel> hardwareLine;
 
   Stop pending = Stop::Ended;  //what the next END means: a FINISH or SIGNAL before it changes it
