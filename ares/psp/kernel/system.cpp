@@ -91,6 +91,13 @@ auto Kernel::sceKernelStopUnloadSelfModuleWithStatus() -> void {
   unloadSelf(s32(arg(0)), arg(1), arg(2), arg(4));
 }
 
+//(argument size, argument, where to put module_stop's status, options): the same with no exit status of its own
+//(pspmodulemgr.h), the calling thread ending with 0 (chosen: nothing recorded says). MediEvil Resurrection's program
+//ends so once it has started the game's module.
+auto Kernel::sceKernelStopUnloadSelfModule() -> void {
+  unloadSelf(0, arg(0), arg(1), arg(3));
+}
+
 //(which setting, where to put it): the system's settings (psputility_sysparam.h). Language 1 is English; button
 //swap 1 means the cross button confirms, as outside Japan; anything else reads 0.
 auto Kernel::sceUtilityGetSystemParamInt() -> void {
@@ -143,9 +150,12 @@ auto Kernel::sceKernelLibcTime() -> void {
   result(seconds);
 }
 
+namespace {
+  constexpr u64 From1To1970 = 62'135'596'800ull * 1'000'000;  //microseconds from 0001-01-01 to 1970-01-01
+}
+
 //(where): the real-time clock's tick, a microsecond count from the start of year 1 (as the PSP's sceRtc counts).
 auto Kernel::sceRtcGetCurrentTick() -> void {
-  static constexpr u64 From1To1970 = 62'135'596'800ull * 1'000'000;  //microseconds from 0001-01-01 to 1970-01-01
   u64 tick = From1To1970 + startTime + cycles / (CPUFrequency / 1'000'000);
   memory.write(4, arg(0), u32(tick));
   memory.write(4, arg(0) + 4, u32(tick >> 32));
@@ -365,6 +375,25 @@ auto Kernel::sceWlanGetEtherAddr() -> void {
   result(0);
 }
 
+//(driver's name, its argument's size, argument): a USB driver started, or stopped (pspusb.h); and (product ID) the
+//USB device activated, or not: taken, as on a PSP with no cable plugged in, where none of it connects anything.
+//OutRun 2006 starts the bus driver and activates as it starts.
+auto Kernel::sceUsbStart() -> void {
+  result(0);
+}
+
+auto Kernel::sceUsbStop() -> void {
+  result(0);
+}
+
+auto Kernel::sceUsbActivate() -> void {
+  result(0);
+}
+
+auto Kernel::sceUsbDeactivate() -> void {
+  result(0);
+}
+
 //(language, button that confirms): what the HOME menu's on-screen texts use (pspsdk's pspimpose.h, whose values
 //aren't known: taken as the system's settings number them, psputility_sysparam.h's, 1 English and 1 the cross
 //button); there's no HOME menu to tell, but they're kept to be read back.
@@ -390,6 +419,12 @@ auto Kernel::sceImposeGetLanguageMode() -> void {
 auto Kernel::sceImposeGetBatteryIconStatus() -> void {
   if(arg(0)) memory.write(4, arg(0), 0);
   if(arg(1)) memory.write(4, arg(1), 3);
+  result(0);
+}
+
+//(mode): whether the HOME menu offers the UMD's own popup (pspimpose.h); there's no HOME menu to offer it, so it's
+//taken and forgotten. Every Patapon sets it as it starts.
+auto Kernel::sceImposeSetUMDPopup() -> void {
   result(0);
 }
 
@@ -440,15 +475,55 @@ auto Kernel::sceRtcGetCurrentClockLocalTime() -> void {
   result(writeDate(arg(0), now, true) ? 0 : ErrorInvalidPointer);
 }
 
-//(date, where to put a time_t): the date as seconds since 1970.
-auto Kernel::sceRtcGetTime_t() -> void {
-  u32 date = arg(0);
+//A ScePspDateTime's seconds since 1970, its microseconds left out.
+auto Kernel::dateSeconds(u32 date) -> s64 {
   s64 days = daysFromYearOne(memory.read(2, date), memory.read(2, date + 2), memory.read(2, date + 4))
            - daysFromYearOne(1970, 1, 1);
-  s64 seconds = days * 86'400 + memory.read(2, date + 6) * 3'600 + memory.read(2, date + 8) * 60
-              + memory.read(2, date + 10);
-  if(arg(1)) memory.write(4, arg(1), u32(seconds));
+  return days * 86'400 + memory.read(2, date + 6) * 3'600 + memory.read(2, date + 8) * 60 + memory.read(2, date + 10);
+}
+
+//(date, where to put a time_t): the date as seconds since 1970.
+auto Kernel::sceRtcGetTime_t() -> void {
+  if(arg(1)) memory.write(4, arg(1), u32(dateSeconds(arg(0))));
   result(0);
+}
+
+//(date, where to put a 64-bit time_t): the same, 64 bits wide, as pspautotests' rtc/convert recorded
+//(2012-09-20 07:12:15.500 is 1348125135; its high word, which held 0 already, chosen). LittleBigPlanet asks.
+auto Kernel::sceRtcGetTime64_t() -> void {
+  u64 seconds = dateSeconds(arg(0));
+  if(arg(1)) {
+    memory.write(4, arg(1), u32(seconds));
+    memory.write(4, arg(1) + 4, u32(seconds >> 32));
+  }
+  result(0);
+}
+
+//(year, month, day): the day of the week, 0 Sunday to 6 Saturday (psprtc.h says 0 is Monday, but pspautotests'
+//rtc/lookup recorded 2 for 2010-04-27, a Tuesday). By Zeller's congruence, which gives the PSP's answers for the
+//dates that can't be that rtc/lookup recorded too: January and February counted as the year before's 13th and
+//14th months, a month of 0 or past 12 taken as it is, the days counted on from the month's start (2000-01-00 is a
+//Friday, 2001-00-00 a Tuesday, 166970016-1024-00 a Wednesday). Juiced 2 asks each frame.
+auto Kernel::sceRtcGetDayOfWeek() -> void {
+  s64 year = s32(arg(0)), month = s32(arg(1)), day = s32(arg(2));
+  if(month == 1 || month == 2) month += 12, year--;
+  s64 century = year / 100, ofCentury = year % 100;
+  s64 saturday0 = (day + 13 * (month + 1) / 5 + ofCentury + ofCentury / 4 + century / 4 + 5 * century) % 7;
+  result(u32((saturday0 + 13) % 7));
+}
+
+//(where to put a tick): when the clock was last set, and when it was last started afresh (as when the battery came
+//out): both when the PSP started here, the clock set from the host's. Kurohyou asks for both.
+auto Kernel::sceRtcGetLastAdjustedTime() -> void {
+  u64 tick = From1To1970 + startTime;
+  if(!memory.reaches(arg(0), 8)) return result(ErrorInvalidPointer);
+  memory.write(4, arg(0), u32(tick));
+  memory.write(4, arg(0) + 4, u32(tick >> 32));
+  result(0);
+}
+
+auto Kernel::sceRtcGetLastReincarnatedTime() -> void {
+  sceRtcGetLastAdjustedTime();
 }
 
 //(date, where to put a DOS time): the date as FAT keeps one: years since 1980 in bits 25-31, the month in 21-24, the

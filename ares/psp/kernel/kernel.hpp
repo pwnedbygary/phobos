@@ -229,6 +229,7 @@ struct Kernel {
                                                   //the program's alloc or free called by sceLibFont)
   static constexpr u32 InterruptStack = 0x0802'0000;  //kernel memory: the top of the stack calls into the program use
   static constexpr u32 UserMemory = 0x0880'0000;  //the user partition, games' memory, runs from here to the end of RAM
+  static constexpr u32 ProgramBase = UserMemory + 0x4000;  //where a program that's a PRX goes (start())
 
   Kernel(Allegrex& cpu, Memory& memory, GE& ge);
 
@@ -324,7 +325,8 @@ struct Kernel {
                            //bits an event flag wait needs; a mixer output's left volume; the samples an SRC output's
                            //buffer was armed with; the bytes a message pipe's send or receive asked for; what a
                            //synchronous read or write returns; the count of vertical blanks a blank's wait ends at
-    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode
+    u32 waitMode = 0;      //an event flag wait's mode; a mixer output's right volume; a message pipe's mode;
+                           //whether a semaphore's CB wait is first in line once its callbacks are done
     u32 waitPointer = 0;   //where an event flag wait puts the bits it saw, a module wait the function's result, an
                            //asynchronous wait the request's result, a mailbox wait the message; the buffer a mixer
                            //output hands over, or a message pipe's send or receive reads or fills
@@ -419,6 +421,7 @@ struct Kernel {
   auto sceKernelGetThreadId() -> void;
   auto sceKernelReferThreadStatus() -> void;
   auto sceKernelReferThreadRunStatus() -> void;
+  auto sceKernelReferSystemStatus() -> void;
   auto sceKernelGetThreadmanIdList() -> void;
   auto sceKernelGetThreadmanIdType() -> void;
   auto sceKernelDelayThread() -> void;
@@ -646,6 +649,7 @@ struct Kernel {
   auto sceIoRmdir() -> void;
   auto sceIoRename() -> void;
   auto sceIoChdir() -> void;
+  auto sceIoAssign() -> void;
   auto sceIoGetstat() -> void;
   auto sceIoDopen() -> void;
   auto sceIoDread() -> void;
@@ -775,6 +779,7 @@ struct Kernel {
   auto sceDisplayWaitVblankStartMulti() -> void;
   auto sceDisplayWaitVblankStartMultiCB() -> void;
   auto sceDisplayIsVblank() -> void;
+  auto sceDisplayIsForeground() -> void;
   auto hcountLines() const -> u32;
   auto sceDisplayGetCurrentHcount() -> void;
   auto sceDisplayGetAccumulatedHcount() -> void;
@@ -854,6 +859,7 @@ struct Kernel {
   auto pendingCallback(const Thread& thread) -> Callback*;
   auto wakeForCallbacks(Thread& thread) -> void;
   auto callbacksOnReturn(bool callbacks) -> void;
+  auto callbacksDue() -> bool;
   auto runCallbacks(Thread& thread) -> void;
   auto callNextCallback(Thread& thread) -> bool;
   auto callbackReturned() -> void;
@@ -1236,6 +1242,7 @@ struct Kernel {
     std::unique_ptr<AudioDecoder> sound;   //not saved: made afresh
   };
   std::map<u32, MpegStream> mpegStreams;
+  static constexpr u32 RingMostPackets = 0x8000;  //the most a ring may have: more than any can, at 64 MiB of data
   struct MpegCall {        //sceMpegRingbufferPut part way through, calling the ringbuffer's own callback
     Context caller{};      //the thread where it called Put: put back as Put returns
     u32 ringbuffer = 0;    //the ringbuffer being fed
@@ -1249,6 +1256,8 @@ struct Kernel {
   auto mpegFinish(MpegCall& call) -> void;
   auto mpegAbandoned(u32 thread) -> void;
   auto mpegLibrary(u32 handle) -> u32;
+  auto mpegHeaderWord(u32 address) -> u32;
+  auto mpegFrameWidth(u32 handle, u32 frameWidth) -> u32;
   auto mpegOwnLibrary() -> bool;
   auto mpegDecoded(u32 handle, u32 au, u32 frame, u32 pixels, u32 frameWidth) -> void;
   auto mpegConvert(MpegStream& stream, u32 library, u32 destination, u32 frameWidth, u32 x, u32 y, u32 width,
@@ -1757,8 +1766,11 @@ struct Kernel {
   auto sceUtilityUnloadNetModule() -> void;
   auto sceUtilityLoadAvModule() -> void;
   auto sceUtilityUnloadAvModule() -> void;
+  auto sceUtilityLoadUsbModule() -> void;
+  auto sceUtilityUnloadUsbModule() -> void;
   auto sceUtilityGetSystemParamString() -> void;
   auto sceUtilitySetSystemParamString() -> void;
+  auto sceUtilitySetSystemParamInt() -> void;
 
   //power.cpp: the battery, the clocks, the power switch's callbacks, the volatile memory
   struct Power {
@@ -1810,14 +1822,20 @@ struct Kernel {
   auto sceKernelGetGPI() -> void;
   auto sceWlanGetSwitchState() -> void;
   auto sceWlanGetEtherAddr() -> void;
+  auto sceUsbStart() -> void;
+  auto sceUsbStop() -> void;
+  auto sceUsbActivate() -> void;
+  auto sceUsbDeactivate() -> void;
   u32 imposeLanguage = 1, imposeButton = 1;  //sceImposeSetLanguageMode's: English, the cross button confirming
   auto sceImposeSetLanguageMode() -> void;
   auto sceImposeGetLanguageMode() -> void;
   auto sceImposeGetBatteryIconStatus() -> void;
+  auto sceImposeSetUMDPopup() -> void;
   auto sceDmacMemcpy() -> void;
   auto sceKernelExitGame() -> void;
   auto sceKernelSelfStopUnloadModule() -> void;
   auto sceKernelStopUnloadSelfModuleWithStatus() -> void;
+  auto sceKernelStopUnloadSelfModule() -> void;
   auto sceUtilityGetSystemParamInt() -> void;
   auto sceNetInetUnavailable() -> void;
   auto sceKernelGetSystemTimeWide() -> void;
@@ -1840,7 +1858,12 @@ struct Kernel {
   auto loadExec() -> void;
   auto sceRtcGetCurrentClock() -> void;
   auto sceRtcGetCurrentClockLocalTime() -> void;
+  auto dateSeconds(u32 date) -> s64;
   auto sceRtcGetTime_t() -> void;
+  auto sceRtcGetTime64_t() -> void;
+  auto sceRtcGetDayOfWeek() -> void;
+  auto sceRtcGetLastAdjustedTime() -> void;
+  auto sceRtcGetLastReincarnatedTime() -> void;
   auto sceRtcGetDosTime() -> void;
   auto sceRtcSetDosTime() -> void;
   auto sceRtcGetWin32FileTime() -> void;
@@ -1874,6 +1897,8 @@ struct Kernel {
   auto linkImports() -> void;
   auto moduleAt(u32 address) const -> u32;
   auto moduleFunction(const LoadedModule& loaded, u32 nid) const -> u32;
+  auto threadParameters(const Module& module, u32 parameters, u32& priority, u32& stackSize, u32& attributes) const
+    -> void;
   auto makeModuleThread(const LoadedModule& loaded, u32 entry, u32 parameters, u32 length, u32 argument,
                         u32 options) -> s32;
   auto madeForModule(u32 thread) const -> bool;
