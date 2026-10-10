@@ -402,7 +402,7 @@ static auto gpuLost() -> void {
     auto name() const -> std::string override { return "pretend"; }
     auto makeTarget(u32, u32) -> u32 override { return ++made; }
     auto dropTarget(u32) -> void override {}
-    auto makeTexture(u32, u32, const u32*) -> u32 override { return ++made; }
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return ++made; }
     auto dropTexture(u32) -> void override {}
     auto submit(const GPU::Recorded&) -> bool override { return runs++, true; }
     auto finish(const GPU::Recorded&) -> bool override { return runs++, lost = true, false; }  //(as Vulkan's)
@@ -454,7 +454,7 @@ static auto gpuRefused() -> void {
     auto name() const -> std::string override { return "pretend"; }
     auto makeTarget(u32, u32) -> u32 override { return 0; }
     auto dropTarget(u32) -> void override {}
-    auto makeTexture(u32, u32, const u32*) -> u32 override { return 1; }
+    auto makeTexture(u32, u32, const u32*, std::shared_ptr<const void>) -> u32 override { return 1; }
     auto dropTexture(u32) -> void override {}
     auto submit(const GPU::Recorded&) -> bool override { return true; }
     auto finish(const GPU::Recorded&) -> bool override { return true; }
@@ -710,6 +710,32 @@ static auto gpuStackedTexture() -> void {
     CHECK(apart(software, hardware), 0u);
     hardware.ge.setRenderer(nullptr);
   }
+}
+
+//A texture decoded again before the GPU has the first copy's texels (its bytes rewritten between two sprites, which
+//has the GE let the first go): each copy's texels are kept until the run that puts them on the GPU, without a copy of
+//its own (the sanitizers would catch the first one's read after it was let go), and the picture is the software
+//renderer's.
+static auto gpuTexelsKept() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  std::mt19937 random{20261014};
+  System software, hardware;
+  hardware.ge.setRenderer(gpu);
+  auto sampled = randomSprites(random, 8, true);
+  for(System* s : {&software, &hardware}) prepare(*s, 0, 3);
+  for(u32 frame = 0; frame < 4; frame++) {
+    for(auto& one : sampled) {
+      u32 seed = random();
+      for(System* s : {&software, &hardware}) {
+        for(u32 n = 0; n < 32 * 32; n++) s->memory.write(4, GPUTexture + n * 4, u32((n + seed) * 0x9e37'79b9));
+        texture(*s, GPUTexture, 32, 32, 32);
+        sprite(*s, one);
+      }
+    }
+    CHECK(apart(software, hardware), 0u);
+  }
+  hardware.ge.setRenderer(nullptr);
 }
 
 //The GPU's depth buffer against memory's: depth cleared by the CPU between two depth-tested sprites is taken (the
@@ -1229,6 +1255,7 @@ auto gpuTests() -> Tests {
     {"gpu render-to-texture copies kept to a bound", gpuCopies},
     {"gpu render to texture taken again in part: the strip an effect draws into", gpuPartialCopies},
     {"gpu render to texture from two frame buffers, one below the other, nothing finished", gpuStackedTexture},
+    {"gpu a texture decoded again before the GPU has the first: its texels kept till then", gpuTexelsKept},
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},

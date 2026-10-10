@@ -121,8 +121,14 @@ struct VulkanBackend : GPU::Backend {
     u32 width = 0, height = 0;
     Image image;
     VkDescriptorSet set = VK_NULL_HANDLE;
-    std::vector<u32> pending;  //its texels, until the next run puts them on the GPU
-    bool fresh = true;         //never written yet (its layout undefined)
+    //Its texels, until the next run puts them on the GPU: the GE's decoded copy, kept alive till then by owner (a
+    //decoded copy never changes: decoded again, it's another), or a copy of them where none is given. (Copied first,
+    //the 7.6 new textures a frame of Killzone's menu cost the emulation thread 0.8 ms a frame in the kernel, the
+    //copies' fresh pages faulted in.)
+    const u32* pending = nullptr;
+    std::shared_ptr<const void> owner;
+    std::vector<u32> copied;
+    bool fresh = true;  //never written yet (its layout undefined)
   };
   //A run's: its commands, the fence it signals, and the vertices and pictures it uploads; presenting's, the
   //semaphore the swapchain image's acquiring signals, and the shot of a picture it presents from a target (the
@@ -181,6 +187,7 @@ struct VulkanBackend : GPU::Backend {
   //Targets and textures let go of, destroyed once the runs that may use them are done
   struct Grave { u64 serial; u32 id; bool texture; };
   std::vector<Grave> graves;
+  std::vector<u32> uploading;  //textures with texels for the next run to put on the GPU
   Buffer readback;
   std::vector<std::pair<u64, u64>> readbacks;  //the last finish()'s: where each one's colors and stencils are
   std::vector<std::pair<u32, u32>> readbackSizes;
@@ -483,7 +490,7 @@ struct VulkanBackend : GPU::Backend {
   }
   auto dropTarget(u32 id) -> void override { graves.push_back({submitted + 1, id, false}); }
 
-  auto makeTexture(u32 width, u32 height, const u32* texels) -> u32 override {
+  auto makeTexture(u32 width, u32 height, const u32* texels, std::shared_ptr<const void> owner) -> u32 override {
     if(lost || !width || !height) return 0;
     Texture t;
     t.width = width, t.height = height;
@@ -501,8 +508,12 @@ struct VulkanBackend : GPU::Backend {
     write.dstSet = t.set, write.descriptorCount = 1;
     write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, write.pImageInfo = &image;
     vk.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-    if(texels) t.pending.assign(texels, texels + width * height);
     u32 id = nextId++;
+    if(texels) {
+      if(owner) t.pending = texels, t.owner = std::move(owner);
+      else t.copied.assign(texels, texels + width * height), t.pending = t.copied.data();
+      uploading.push_back(id);
+    }
     textureImages[id] = std::move(t);
     return id;
   }
@@ -787,7 +798,12 @@ struct VulkanBackend : GPU::Backend {
                                                       aligned(u64(c.width) * c.height);
       if(c.kind == GPU::Command::Kind::Present && !c.target) size = aligned(size) + u64(c.width) * c.height * 4;
     }
-    for(auto& [id, t] : textureImages) if(!t.pending.empty()) size = aligned(size) + t.pending.size() * 4;
+    for(u32 id : uploading) {
+      auto found = textureImages.find(id);
+      if(found != textureImages.end() && found->second.pending) {
+        size = aligned(size) + u64(found->second.width) * found->second.height * 4;
+      }
+    }
     size = aligned(size) + 16;
     if(slot.staging.size < size) {
       constexpr auto Usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
@@ -844,10 +860,13 @@ struct VulkanBackend : GPU::Backend {
       transition(commands, t.depth.image, DepthStencil, VK_IMAGE_LAYOUT_UNDEFINED, DepthLayout);
       t.fresh = false;
     }
-    for(auto& [id, t] : textureImages) {
-      if(t.pending.empty()) continue;
+    for(u32 id : uploading) {
+      auto found = textureImages.find(id);
+      if(found == textureImages.end() || !found->second.pending) continue;
+      Texture& t = found->second;
+      u64 bytes = u64(t.width) * t.height * 4;
       at = aligned(at);
-      std::memcpy(staging + at, t.pending.data(), t.pending.size() * 4);
+      std::memcpy(staging + at, t.pending, bytes);
       transition(commands, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
       VkBufferImageCopy copy{at, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {t.width, t.height, 1}};
@@ -855,10 +874,11 @@ struct VulkanBackend : GPU::Backend {
                                 1, &copy);
       transition(commands, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-      at += t.pending.size() * 4;
-      t.pending.clear(), t.pending.shrink_to_fit();
+      at += bytes;
+      t.pending = nullptr, t.owner.reset(), t.copied = {};
       t.fresh = false;
     }
+    uploading.clear();
     VkDeviceSize zero = 0;
     vk.vkCmdBindVertexBuffers(commands, 0, 1, &slot.staging.buffer, &zero);
     if(!r.indices.empty()) vk.vkCmdBindIndexBuffer(commands, slot.staging.buffer, indicesAt, VK_INDEX_TYPE_UINT32);
@@ -1912,7 +1932,7 @@ struct VulkanBackend : GPU::Backend {
     //the blank texture, texture 0
     u32 blank = 0;
     nextId = 0;
-    makeTexture(1, 1, &blank);
+    makeTexture(1, 1, &blank, {});
     if(!textureImages.count(0)) return error = "no texture", false;
     return true;
   }

@@ -221,8 +221,10 @@ struct GPU : GE::Renderer {
     virtual auto name() const -> std::string = 0;
     virtual auto makeTarget(u32 width, u32 height) -> u32 = 0;  //0: it couldn't
     virtual auto dropTarget(u32 target) -> void = 0;
-    //(texels: none for one a Copy fills) 0: it couldn't
-    virtual auto makeTexture(u32 width, u32 height, const u32* texels) -> u32 = 0;
+    //(texels: none for one a Copy fills; kept, not copied, until they're on the GPU, by owner where one is given,
+    //which they mustn't change under) 0: it couldn't
+    virtual auto makeTexture(u32 width, u32 height, const u32* texels, std::shared_ptr<const void> owner = {})
+      -> u32 = 0;
     virtual auto dropTexture(u32 texture) -> void = 0;  //(once the GPU is done with it)
     //Whether draws of this pipeline can be made (the driver took its shaders): fast mode's 3D asks before it records
     //one (mesh()), so that a driver refusing them leaves the GE to transform those PRIMs itself
