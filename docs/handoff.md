@@ -25,6 +25,29 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP GE: the software renderer faster — copies wait only for what they touch, bands listed, runs — 2026-10-10
+
+Branch `cursor/psp-ge-speed5-2b67`, on top of #196's `cursor/psp-hle-games14-2b67` (#195 under it). docs/psp-core.md, part 61, has the
+evidence. Nothing drawn changed: every measured picture, and every bench scene's frames and end state at 1 and 7
+threads, byte for byte as before. Clean room: nothing of PPSSPP's or JPCSP's read. Save states unchanged (22).
+- **Changes** (each its own commit): a triangle's fours in runs of three passes (depth tests, then the survivors'
+  texel axes side by side, then their pixels), the chain to the texels no longer holding up each four; each band of
+  a batch keeps the list of its jobs, and bands are 4 rows, not 8 (a slow core holds up a wait less); a block
+  transfer waits only for the batches drawing over, or decoding a texture from, what it reads or writes (God of War
+  streams its textures into VRAM with 1,750-2,250 copies a frame, each of which drew everything waiting).
+- **RP6, the emulation thread pinned as the app pins it, medians of three** (fps, 7 threads; 1 thread): MC3 race 49.6
+  → 49.2; 21.8 → 22.9 — MC3 menu 63.7 → 65.0; 27.0 → 28.6 — LCS city 75.5 → 76.7; 35.1 → 37.1 — woods 74.3 → 78.1;
+  35.1 → 37.1 — Lumines 192.5 → 192.5; 98.1 → 103.2 — God of War's battle 3.67 → 4.42; 2.14 → 2.19 — its menu 1.50
+  → 1.65; 0.63 → 0.68. Unpinned at 7 threads LCS gains 18-21%. At 1 thread more than half of part 60's cost is back.
+- **Checks**: tests/psp 404/0 (sanitized; new "ge transfers among batches", which seven broken versions of the rule
+  each fail), tests/allegrex 58/0, tests/psp/ares 307/0; GCC 11 builds the GE with -Werror and passes every draw3d
+  group. An independent review found no correctness problem; its points (a test of a copy not waiting, numbers, the
+  Vulkan wording) were taken.
+- **Left**: God of War's 32 primitives a frame drawing over their own texture, each a drain; its menu's 28 million
+  fours a frame (maybe drawn more than once a frame, the GE taking no time); MC3's race at 7 threads is the emulation
+  thread's own work. Scratch: `~/phobos-work/scratch/speed5` (God of War's two scenes, the RP6's scripts rp6-run5.sh
+  and rp6-run6.sh, the logging patches); nothing of it left on the RP6.
+
 ## PSP core: Sony's plain modules, sceIoGetFdList, GETSIZE's NO_DATA, a restart with all of RAM — 2026-10-10
 
 Branch `cursor/psp-hle-games14-2b67`, on top of #195's `cursor/psp-hle-games13-2b67`. docs/psp-core.md, part 62, has the

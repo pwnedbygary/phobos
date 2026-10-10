@@ -87,7 +87,7 @@ auto GE::run(u64 budget, u64& ran) -> Stop {
     case ProjectionMatrixData:   matrixData(projection, 16, projectionIndex, argument); break;
     case TextureMatrixNumber:    textureIndex = argument & 0xf; break;
     case TextureMatrixData:      matrixData(textureMatrix, 12, textureIndex, argument); break;
-    case TransferStart:          flush(), transfer(); break;
+    case TransferStart:          transfer(); break;  //(after the drawing it depends on: threads.cpp)
     case ClutLoad:               loadClut(); break;
     }
   }

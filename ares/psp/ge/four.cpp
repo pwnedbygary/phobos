@@ -21,7 +21,8 @@
 //    read from memory as it draws (texture.cpp): fourFriendly() sees to both.
 //  - The depth test comes before the texture. Without the stencil test (which isn't drawn here), failing any test
 //    only drops the pixel, and the depth test needs only the pixel's depth: testing it first drops the same pixels,
-//    before their texels are looked up for nothing.
+//    before their texels are looked up for nothing. A triangle's row goes in runs of fours, every four's depth test
+//    of a run first (triangleFours() says why that reads the same depths).
 //A row's first and last fours may have lanes outside it. They're worked out and dropped (their texels taken from the
 //texture's first), and their bytes of the frame and depth buffers are neither read nor written: where a frame buffer
 //is barely wider than the area drawn, they can be another row's pixels, which another thread may be drawing. A four
@@ -526,7 +527,6 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
       used[uses++] = n, steps[n] = u32x4{} + u32(stepped[n]->across * 64);
     }
   }
-  auto levels = [&](u32 n) { return heldLanes(s32x4(values[n]) >> 14, 0, n < 8 ? 255 : 65535); };
   s32x4 flatColor[4], flatShine[3];
   for(u32 n = 0; n < 4; n++) flatColor[n] = splatLanes(channel(r.flatColor, n));
   for(u32 n = 0; n < 3; n++) flatShine[n] = splatLanes(channel(r.flatSpecular, n));
@@ -550,11 +550,10 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
       values[used[k]] = u32(at) + u32(c.across * 16) * u32x4(Lanes);
     }
     //s, t and q (part 60) as the colors: 32-bit lanes that may run round, as every lane inside the triangle keeps its
-    //value (each within 2^30 of 0 there), from the row's first four, then stepped a four at a time
-    bool divides = look.textured && r.perspective;
+    //value (each within 2^30 of 0 there), from the row's first four, and a four's step
     u32x4 texLanes[3] = {};
     u32 texSteps[3] = {};
-    if(divides) {
+    if(look.textured && r.perspective) {
       const Job::Stepped* tex[3] = {&r.texS, &r.texT, &r.texQ};
       for(u32 k = 0; k < 3; k++) {
         auto& c = *tex[k];
@@ -563,26 +562,42 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
         texSteps[k] = u32(c.across * 64);
       }
     }
-    auto next = [&] {
-      for(u32 k = 0; k < uses; k++) values[used[k]] += steps[used[k]];
-      if(divides) for(u32 k = 0; k < 3; k++) texLanes[k] += texSteps[k];
+    //A run of fours drawn in three passes: the depth test of each, which drops many (about half of them in the 3D
+    //scenes measured); then the texel axes of those left, each four's apart from the others', so that the long chain
+    //from s, t and q to the texels' addresses (the reciprocal's table, the products, the floor) runs for several fours
+    //at once rather than holding up each four's drawing; then those fours' texels and pixels. Each four's numbers are
+    //worked out by the same operations as one at a time (the values at the four k fours along taking k steps at once,
+    //which run round alike), and reading the run's depths before writing any reads what drawing the fours one after
+    //another would: no two pixels of a row share a byte (fourFriendly()), and the job draws each once.
+    constexpr u32 Run = 32;
+    struct Kept { s32 x; s32x4 live, z, depth; } kept[Run];
+    s32x4 uAxes[Run][3], vAxes[Run][3];
+    auto levelsAt = [&](u32 n, u32 k) {
+      return heldLanes(s32x4(values[n] + k * steps[n]) >> 14, 0, n < 8 ? 255 : 65535);
     };
-    for(s32 x = first; x <= stop; x += 4, next()) {
-      Four four;
-      s32x4 column = x + Lanes;
-      four.live = four.inside = (column >= s32(start)) & (column <= s32(stop));
-      four.full = x >= start && x + 3 <= stop;
-      four.z = needsZ ? levels(8) : s32x4{};
-      if(!depthFirst<Format>(p, x, y, four)) continue;
-      if(blended) for(u32 n = 0; n < 4; n++) four.color[n] = levels(n);
-      else for(u32 n = 0; n < 4; n++) four.color[n] = flatColor[n];
-      if(look.textured) {
+    for(s32 from = first; from <= stop; from += 4 * Run) {
+      u32 count = 0;
+      for(s32 x = from; x <= std::min<s32>(stop, from + 4 * (Run - 1)); x += 4) {
+        Four four;
+        s32x4 column = x + Lanes;
+        four.live = four.inside = (column >= s32(start)) & (column <= s32(stop));
+        four.full = x >= start && x + 3 <= stop;
+        four.z = needsZ ? levelsAt(8, (x - first) >> 2) : s32x4{};
+        four.depth = s32x4{};
+        if(depthFirst<Format>(p, x, y, four)) kept[count++] = {x, four.live, four.z, four.depth};
+      }
+      //each four's texel axes (u's and v's: first, second, fraction): in 3D, each lane the floored units times R(q),
+      //as triangleRows() works them out; in 2D, from the four's column itself
+      if(look.textured) for(u32 n = 0; n < count; n++) {
+        s32 x = kept[n].x;
+        u32 k = (x - first) >> 2;
         f32x4 u, v;
         if(r.perspective) {
-          //each lane: the floored units times R(q), as triangleRows() works them out
-          f32x4 reciprocal = reciprocalLanes(__builtin_convertvector((s32x4)texLanes[2] >> 14, f32x4) * r.qUnit);
-          u = productLanes((s32x4)texLanes[0] >> 14, r.sUnit, reciprocal);
-          v = productLanes((s32x4)texLanes[1] >> 14, r.tUnit, reciprocal);
+          s32x4 sAt = s32x4(texLanes[0] + k * texSteps[0]) >> 14, tAt = s32x4(texLanes[1] + k * texSteps[1]) >> 14;
+          s32x4 qAt = s32x4(texLanes[2] + k * texSteps[2]) >> 14;
+          f32x4 reciprocal = reciprocalLanes(__builtin_convertvector(qAt, f32x4) * r.qUnit);
+          u = productLanes(sAt, r.sUnit, reciprocal);
+          v = productLanes(tAt, r.tUnit, reciprocal);
         } else {  //(in doubles, two lanes at a time; each lane's difference is a whole number, exact as a double)
           f64 across = f64(s64(x) * 16 + 8 - r.startX);
           f64x2 near = f64x2{across, across + 16}, far = f64x2{across + 32, across + 48};
@@ -594,19 +609,32 @@ auto GE::triangleFours(const Job& job, s32 fromY, s32 toY) -> void {
           u = f32x4{float(nearU[0]), float(nearU[1]), float(farU[0]), float(farU[1])};
           v = f32x4{float(nearV[0]), float(nearV[1]), float(farV[0]), float(farV[1])};
         }
-        s32x4 uAxis[3], vAxis[3], texel[4];
-        texelAxisLanes(u, t.width, t.clampU, job.linear, uAxis);
-        texelAxisLanes(v, t.height, t.clampV, job.linear, vAxis);
-        texelsFour(look, job.linear, four.live, uAxis, vAxis, texel);
-        combineFour(look, four.color, texel);
+        texelAxisLanes(u, t.width, t.clampU, job.linear, uAxes[n]);
+        texelAxisLanes(v, t.height, t.clampV, job.linear, vAxes[n]);
       }
-      if(addsShine) {
-        for(u32 n = 0; n < 3; n++) {
-          four.color[n] = heldLanes(four.color[n] + (shining ? levels(4 + n) : flatShine[n]), 0, 255);
+      for(u32 n = 0; n < count; n++) {
+        s32 x = kept[n].x;
+        u32 k = (x - first) >> 2;
+        Four four;
+        s32x4 column = x + Lanes;
+        four.inside = (column >= s32(start)) & (column <= s32(stop));
+        four.full = x >= start && x + 3 <= stop;
+        four.live = kept[n].live, four.z = kept[n].z, four.depth = kept[n].depth;
+        if(blended) for(u32 c = 0; c < 4; c++) four.color[c] = levelsAt(c, k);
+        else for(u32 c = 0; c < 4; c++) four.color[c] = flatColor[c];
+        if(look.textured) {
+          s32x4 texel[4];
+          texelsFour(look, job.linear, four.live, uAxes[n], vAxes[n], texel);
+          combineFour(look, four.color, texel);
         }
+        if(addsShine) {
+          for(u32 c = 0; c < 3; c++) {
+            four.color[c] = heldLanes(four.color[c] + (shining ? levelsAt(4 + c, k) : flatShine[c]), 0, 255);
+          }
+        }
+        if(p.fog) four.fog = levelsAt(7, k);
+        pixelsFour<Format>(p, x, y, four);
       }
-      if(p.fog) four.fog = levels(7);
-      pixelsFour<Format>(p, x, y, four);
     }
   }
 }

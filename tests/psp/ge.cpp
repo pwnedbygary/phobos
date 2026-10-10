@@ -1546,6 +1546,187 @@ static auto geOwnTexture() -> void {
   }
 }
 
+//Block transfers among batches (ge/threads.cpp's drawnBefore()): each waits only for the drawing that writes what it
+//reads, or reads or writes what it writes, the rest going on being drawn or waiting in the batch being filled. A list
+//uploads two textures in turn into one place in VRAM nothing draws, each drawn with between (as God of War streams
+//its textures), in the batch being filled; copies pixels that batch has just drawn; draws a picture off the screen and
+//then with it (render to texture, its decode left till its batch starts), and copies over that picture; copies into
+//drawn pixels through VRAM's second copy (which rearranges them); copies a texture back to RAM. It comes out as on one
+//thread, VRAM and RAM, with 2, 4 and 8 threads, batches shared out however small, with the CPU's guard over VRAM and
+//without. And a copy reaching nothing the batch being filled draws leaves its primitives waiting, while one reading
+//their pixels has them drawn first, as one landing in them through VRAM's second copy does; one reading pixels a
+//batch launched before draws waits for it, and one reaching nothing a launched batch draws doesn't.
+static auto geTransfers() -> void {
+  constexpr u32 Texture = 0x0898'0000, Back = 0x0899'0000;  //(two 64 by 64 pictures in RAM; and where one comes back)
+  constexpr u32 Offscreen = 0x15'4000, Staging = 0x18'0000, Copied = 0x1c'0000;  //(VRAM offsets)
+  struct V { float u, v; u32 color; float x, y, z; };
+  auto copy = [](ListWriter& list, u32 from, u32 fromWidth, u32 fromAt, u32 to, u32 toWidth, u32 toAt, u32 size) {
+    list.put(GE::TransferSource, from & 0xff'fff0), list.put(GE::TransferSourceWidth, (from >> 24) << 16 | fromWidth);
+    list.put(GE::TransferSourcePosition, fromAt);
+    list.put(GE::TransferDestination, to & 0xff'fff0);
+    list.put(GE::TransferDestinationWidth, (to >> 24) << 16 | toWidth);
+    list.put(GE::TransferDestinationPosition, toAt);
+    list.put(GE::TransferSize, size), list.put(GE::TransferStart, 1);
+  };
+  auto build = [&](Memory& memory) {
+    for(u32 n = 0; n < 2 * 64 * 64; n++) memory.write(4, Texture + n * 4, 0xff00'0000 | (n * 0x0102'0305 & 0xff'ffff));
+    ListWriter list{memory, ListA};
+    u32 vertex = Vertices;
+    auto put = [&](u32 kind, std::initializer_list<V> vertices) {
+      list.to(GE::VertexAddress, vertex);
+      for(auto& v : vertices) {
+        for(float value : {v.u, v.v}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+        memory.write(4, vertex, v.color), vertex += 4;
+        for(float value : {v.x, v.y, v.z}) memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+      }
+      list.put(GE::Primitive, kind << 16 | vertices.size());
+    };
+    auto target = [&](u32 address, u32 width) {
+      list.put(GE::FrameBufferPointer, address), list.put(GE::FrameBufferWidth, width);
+    };
+    auto texture = [&](u32 address, u32 width) {
+      list.put(GE::TextureMappingEnable, 1), list.to(GE::TextureAddress0, address);
+      list.put(GE::TextureBufferWidth0, (address >> 24) << 16 | width);
+    };
+    list.put(GE::FrameBufferPixelFormat, 3), target(0, 512);
+    list.put(GE::DepthBufferPointer, 0x11'0000), list.put(GE::DepthBufferWidth, 512);
+    list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+    list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+    list.put(GE::TextureSize0, 6 << 8 | 6), list.put(GE::TextureFormat, 3), list.put(GE::TextureFunction, 3);
+    list.put(GE::ClearMode, 1 | 7 << 8);
+    put(GE::Sprites, {{0, 0, 0, 0, 0, 0}, {0, 0, 0xff10'2030, 480, 272, 0}});
+    list.put(GE::ClearMode, 0);
+    list.put(GE::DepthTestEnable, 1), list.put(GE::DepthTest, 7);
+    for(u32 n = 0; n < 16; n++) {
+      float x = n * 23 % 400, y = n * 41 % 200, z = n * 3000.0f;
+      put(GE::Triangles, {{0, 0, 0xff00'00ff + n * 0x0c00, x, y, z}, {0, 0, 0xff00'ff00, x + 70, y + 12, z},
+                          {0, 0, 0xffff'0000, x + 25, y + 60, z}});
+    }
+    list.put(GE::DepthTestEnable, 0);
+    //two textures uploaded into one place in turn, each drawn with in between: neither copy waits for the batch
+    copy(list, Texture, 64, 0, VRAM + Staging, 64, 0, 63 | 63 << 10);
+    texture(VRAM + Staging, 64);
+    put(GE::Sprites, {{0, 0, 0, 20, 150, 0}, {64, 64, 0, 84, 214, 0}});
+    copy(list, Texture + 64 * 64 * 4, 64, 0, VRAM + Staging, 64, 0, 63 | 63 << 10);
+    put(GE::Sprites, {{0, 0, 0, 100, 150, 0}, {64, 64, 0, 164, 214, 0}});
+    //pixels the batch being filled has drawn, copied
+    list.put(GE::TextureMappingEnable, 0);
+    copy(list, VRAM, 512, 30 | 160 << 10, VRAM + Copied, 512, 0, 99 | 39 << 10);
+    //a picture off the screen, drawn with (its decode left till its batch starts), then copied over
+    target(Offscreen, 64);
+    for(u32 n = 0; n < 4; n++) {
+      put(GE::Sprites, {{0, 0, 0, n * 16.0f, 0, 0}, {0, 0, 0xff20'0000 + n * 0x30'2010, n * 16.0f + 16, 64, 0}});
+    }
+    target(0, 512);
+    texture(VRAM + Offscreen, 64);
+    put(GE::Sprites, {{0, 0, 0, 200, 20, 0}, {64, 64, 0, 264, 84, 0}});
+    copy(list, Texture, 64, 0, VRAM + Offscreen, 64, 0, 31 | 31 << 10);
+    put(GE::Sprites, {{0, 0, 0, 300, 20, 0}, {64, 64, 0, 364, 84, 0}});
+    //into drawn pixels through VRAM's second copy, which rearranges each 16 KiB
+    list.put(GE::TextureMappingEnable, 0);
+    put(GE::Sprites, {{0, 0, 0, 0, 100, 0}, {0, 0, 0xff80'4020, 480, 140, 0}});
+    copy(list, Texture, 64, 0, VRAM + Memory::VRAMSize + (110 * 512) * 4, 512, 0, 63 | 7 << 10);
+    put(GE::Sprites, {{0, 0, 0, 40, 104, 0}, {0, 0, 0xff00'8080, 440, 136, 0}});
+    //a texture back to RAM (nothing draws it), and more drawn after
+    copy(list, VRAM + Staging, 64, 0, Back, 64, 0, 63 | 63 << 10);
+    for(u32 n = 0; n < 6; n++) {
+      put(GE::Sprites, {{0, 0, 0, n * 70.0f, 230, 0}, {0, 0, 0xff40'40ff, n * 70.0f + 60, 270, 0}});
+    }
+    list.put(GE::Finish), list.put(GE::End);
+  };
+  //(guarded: the CPU's guard over VRAM, whose busy pages would have a copy wait for what it reaches as well)
+  auto drawn = [&](u32 threads, u64 shared, bool guarded) {
+    KernelMachine m;
+    if(!guarded) m.system.memory.vramGuard = nullptr;
+    m.system.ge.setThreads(threads);
+    m.system.ge.drawing.shared = shared;
+    build(m.system.memory);
+    m.call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    m.system.ge.settle();
+    auto memory = m.system.memory.vram;
+    for(u32 n = 0; n < 64 * 64 * 4; n++) memory.push_back(m.system.memory.read(1, Back + n));
+    return memory;
+  };
+  auto one = drawn(1, 8192, true);
+  auto word = [&](u32 at) { return one[at] | one[at + 1] << 8 | one[at + 2] << 16 | u32(one[at + 3]) << 24; };
+  CHECK(word((160 * 512 + 30) * 4) != 0x0010'2030, true);  //(a pixel drawn over the clear, then copied)
+  CHECK(word(Copied), word((160 * 512 + 30) * 4));
+  for(u32 threads : {2u, 4u, 8u}) {
+    for(u64 shared : {u64(0), u64(8192)}) {
+      for(bool guarded : {true, false}) CHECK(drawn(threads, shared, guarded) == one, true);
+    }
+  }
+
+  //a copy reaching nothing the batch draws leaves it waiting; one reading what it has drawn has it drawn first
+  KernelMachine m;
+  auto& ge = m.system.ge;
+  ge.setThreads(4);
+  ge.drawing.shared = 0;
+  for(u32 n = 0; n < 64 * 64; n++) m.system.memory.write(4, Texture + n * 4, 0xff00'0000 | n);
+  ListWriter list{m.system.memory, ListA};
+  list.put(GE::FrameBufferPointer, 0), list.put(GE::FrameBufferWidth, 512), list.put(GE::FrameBufferPixelFormat, 3);
+  list.put(GE::Scissor2, 479 | 271 << 10), list.put(GE::Region2, 479 | 271 << 10);
+  list.put(GE::VertexType, 0x80'019f), list.put(GE::ShadeMode, 1);
+  m.call("sceGeListEnQueue", {ListA, list.address, 0xffff'ffff, 0});  //(the settings, up to its stall address)
+  u32 vertex = Vertices;
+  auto sprite = [&](float left, float top, float right, float bottom, u32 color) {
+    ge.vertexAddress = vertex;
+    for(V v : {V{0, 0, 0, left, top, 0}, V{0, 0, color, right, bottom, 0}}) {
+      for(float value : {v.u, v.v}) m.system.memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+      m.system.memory.write(4, vertex, v.color), vertex += 4;
+      for(float value : {v.x, v.y, v.z}) m.system.memory.write(4, vertex, std::bit_cast<u32>(value)), vertex += 4;
+    }
+    ge.primitive(GE::Sprites, 2);
+  };
+  //(as while a list runs; and with no guard over VRAM for the CPU, whose busy pages would have the copy wait too)
+  ge.drawing.deferring = true;
+  m.system.memory.vramGuard = nullptr;
+  sprite(10, 10, 30, 20, 0xff12'3456);
+  CHECK(ge.drawing.batch->jobs.size(), 1u);
+  auto transfer = [&](u32 from, u32 fromWidth, u32 fromAt, u32 to, u32 toWidth) {  //(8 by 8 pixels)
+    ge.commands[GE::TransferSource] = from & 0xff'fff0;
+    ge.commands[GE::TransferSourceWidth] = (from >> 24) << 16 | fromWidth;
+    ge.commands[GE::TransferDestination] = to & 0xff'fff0;
+    ge.commands[GE::TransferDestinationWidth] = (to >> 24) << 16 | toWidth;
+    ge.commands[GE::TransferSourcePosition] = fromAt, ge.commands[GE::TransferDestinationPosition] = 0;
+    ge.commands[GE::TransferSize] = 7 | 7 << 10, ge.commands[GE::TransferStart] = 1;
+    ge.transfer();
+  };
+  transfer(Texture, 64, 0, VRAM + Staging, 64);
+  CHECK(ge.drawing.batch->jobs.size(), 1u);
+  CHECK(m.system.memory.read(4, VRAM + Staging + 4), 0xff00'0001u);
+  transfer(VRAM, 512, 10 | 10 << 10, VRAM + Copied, 512);
+  CHECK(ge.drawing.batch->jobs.empty(), true);
+  CHECK(m.system.memory.read(4, VRAM + Copied), 0x0012'3456u);  //(the sprite's pixel: alpha the stencil, 0)
+  //through VRAM's second copy, which moves each 32 bytes about inside their 16 KiB, a copy to 8 KiB past the row a
+  //sprite draws lands in that row: drawn first
+  sprite(0, 200, 64, 201, 0xff65'4321);
+  CHECK(ge.drawing.batch->jobs.size(), 1u);
+  transfer(Texture, 64, 0, VRAM + Memory::VRAMSize + 200 * 512 * 4 + 0x2000, 64);
+  CHECK(ge.drawing.batch->jobs.empty(), true);
+  //pixels a batch launched before draws (as the render target changed), still being drawn: that batch is waited for
+  for(u32 n = 0; n < 48; n++) sprite(0, 0, 480, 272, 0xff00'0000 | n * 0x05'0301);
+  ge.commands[GE::FrameBufferPointer] = Offscreen;
+  sprite(0, 0, 8, 8, 0xff00'ff00);
+  CHECK(ge.drawing.batch->jobs.size(), 1u);
+  transfer(VRAM, 512, 100 | 100 << 10, Back, 64);
+  CHECK(m.system.memory.read(4, Back), 0x00eb'8d2fu);  //(the last of the 48 sprites)
+  CHECK(ge.drawing.batch->jobs.size(), 1u);
+  //a batch launched before that draws nothing the copy touches isn't waited for: it stays launched (drawn or not)
+  for(u32 n = 0; n < 8; n++) sprite(0, 0, 64, 64, 0xff00'0000 | n);  //(off the screen, with the one before)
+  ge.commands[GE::FrameBufferPointer] = 0;
+  sprite(0, 260, 8, 261, 0xff00'00ff);  //(the render target changed: that batch launched)
+  GE::Batch* offscreen = nullptr;
+  for(auto& batch : ge.drawing.batches) {
+    if(batch.launched) offscreen = &batch;
+  }
+  CHECK(offscreen != nullptr, true);
+  transfer(Texture, 64, 0, VRAM + Staging, 64);
+  CHECK(offscreen && offscreen->launched, true);
+  CHECK(ge.drawing.batch->jobs.size(), 1u);
+  ge.drawing.deferring = false;
+}
+
 //sceGeBreak, as pspautotests' gpu/ge/break and breakwait recorded on a PSP: the refusals in their order (a mode but 0
 //or 1, parameters reaching the kernel's half of memory, an empty queue); mode 0 breaking off a stalled list, its ID
 //returned, the GE free (sceGeSaveContext works), and sceGeContinue taking it up again; a list paused by a PAUSE
@@ -1725,7 +1906,7 @@ auto geTests() -> Tests {
     {"ge clear", geClear}, {"ge transfer", geTransfer}, {"ge driver", geDriver}, {"ge base kept", geBaseKept},
     {"ge saved state", geSaved}, {"ge endless list", geEndless}, {"ge drawn on several threads", geThreads},
     {"ge deferred texture busy", geDeferredBusy}, {"ge batches round the ring", geRing},
-    {"ge drawn over its own texture", geOwnTexture},
+    {"ge drawn over its own texture", geOwnTexture}, {"ge transfers among batches", geTransfers},
     {"ge callbacks", geCallbacks}, {"ge suspend", geSuspend}, {"ge finish order", geFinishOrder},
     {"ge pause", gePause}, {"ge callbacks see the ge stopped", geCallbackState}, {"ge pause window", gePauseWindow},
     {"ge lists queued twice", geQueuedTwice}, {"ge suspending signals' callbacks", geSuspendedCallbacks},

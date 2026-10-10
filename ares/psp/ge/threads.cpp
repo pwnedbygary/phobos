@@ -9,11 +9,12 @@
 //How: while the GE runs a list (run()), a primitive it meets isn't drawn there and then. It's set up (its jobs) and
 //waits in a batch. When the batch is done (the list stops, or the render target changes), it's handed to the workers:
 //the rows its jobs cover are cut into bands of BandRows rows, and each worker takes the next band nobody has taken
-//and draws every job that reaches it, in order, until none is left. Meanwhile the GE's thread goes on: setting up the
-//next batch, the next of its Batches in turn (which the workers start on only once those before it are done, so
-//batches are drawn in order too), or, the list stopped, running the CPU. So drawing overlaps the setting up of what
-//comes next and the program's own work. The GE's thread waits only to fill a batch again that's still being drawn,
-//when every other one is launched too.
+//and draws every job that reaches it, in order (each band keeps a list of them as they're recorded: a batch can hold
+//tens of thousands), until none is left. Meanwhile the GE's thread goes on: setting up the next batch, the next of
+//its Batches in turn (which the workers start on only once those before it are done, so batches are drawn in order
+//too), or, the list stopped, running the CPU. So drawing overlaps the setting up of what comes next and the program's
+//own work. The GE's thread waits only to fill a batch again that's still being drawn, when every other one is
+//launched too.
 //
 //Nobody may see a batch half drawn, so it's waited for ("settled", the GE's thread drawing bands too) first:
 //  - by anyone touching VRAM it draws over while the CPU runs on: Memory::pointer(), behind every read, write and
@@ -23,7 +24,9 @@
 //  - by the next list, only the batch it's to fill (resume()), and by anything the GE's own thread reads from VRAM a
 //    batch draws over: a palette, vertices, the list's commands (drawnFirst()); a texture to decode, unless it's
 //    deferred (below);
-//  - by a block transfer (it reads and writes memory, maybe drawn pixels), which draws the batch being filled too;
+//  - by a block transfer (it reads and writes memory, maybe drawn pixels), but only the batches drawing over what it
+//    reads or writes, or decoding a texture from what it writes, and those before them: the batch being filled too,
+//    if it's one (drawnBefore());
 //  - by a primitive that must be drawn by itself, at once, in order (texture.cpp reads its texels from memory as it
 //    draws: one drawing over its own texture, say), or whose pixels in different rows share bytes (defer()).
 //Render to texture: a primitive sampling what the batch being filled (or one already launched) still draws is not
@@ -125,10 +128,9 @@ auto GE::drawBands(Batch& batch) -> void {
   while(true) {
     u32 band = batch.nextBand.fetch_add(1, std::memory_order_relaxed);
     if(band >= batch.bands) return;
-    s32 top = batch.top + s32(band) * BandRows, bottom = std::min(top + BandRows - 1, batch.bottom);
-    for(auto& job : batch.jobs) {
-      if(job.lastY >= top && job.firstY <= bottom) rasterize(job, top, bottom);
-    }
+    s32 at = batch.top / BandRows + s32(band);
+    s32 top = std::max(at * BandRows, batch.top), bottom = std::min(at * BandRows + BandRows - 1, batch.bottom);
+    for(u32 job : batch.bandJobs[at]) rasterize(batch.jobs[job], top, bottom);
     batch.bandsLeft.fetch_sub(1, std::memory_order_acq_rel);
   }
 }
@@ -140,7 +142,7 @@ auto GE::startBands(Batch& batch) -> void {
     if(look.deferRows) { defer = true; break; }
   }
   batch.decodeState.store(defer ? 0u : 2u, std::memory_order_relaxed);
-  batch.bands = (batch.bottom - batch.top + BandRows) / BandRows;
+  batch.bands = batch.bottom / BandRows - batch.top / BandRows + 1;
   batch.nextBand.store(0, std::memory_order_relaxed);
   batch.bandsLeft.store(batch.bands, std::memory_order_relaxed);
   drawing.drawn = &batch;
@@ -352,22 +354,27 @@ auto GE::settleAll() -> void {
 //everything (settleAll()). It's the emulation thread's (Memory::pointer(), for the CPU and HLE functions).
 auto GE::settleOver(u32 first, u32 last) -> void {
   if(renderer) return settleAll();
-  auto over = [&](const Batch& batch) {
+  bool waited = settleThrough([&](const Batch& batch) {
     bool reading = !batch.readsDone.load(std::memory_order_acquire);
     for(u32 page = first >> 12; page <= last >> 12; page++) {
       if(batch.pending[page] || (reading && batch.reads[page])) return true;
     }
     return false;
-  };
+  });
+  if(!waited) reap();
+}
+
+//The batches still being drawn waited for, in order, up to the last of them that reaches what the caller is about to
+//touch (reaches(batch)), the waiting thread drawing bands too; those after it go on being drawn and stay launched.
+//Batches are drawn in order, so every one before it is drawn too. Those drawn are then emptied (reap()). Returns
+//whether any batch reached it (with none, nothing is waited for or emptied).
+template<typename Reaches> auto GE::settleThrough(const Reaches& reaches) -> bool {
   std::unique_lock lock(drawing.mutex);
-  Batch* target = drawing.drawn && over(*drawing.drawn) ? drawing.drawn : nullptr;
+  Batch* target = drawing.drawn && reaches(*drawing.drawn) ? drawing.drawn : nullptr;
   for(auto* batch : drawing.queued) {
-    if(over(*batch)) target = batch;
+    if(reaches(*batch)) target = batch;
   }
-  if(!target) {
-    lock.unlock();
-    return reap();
-  }
+  if(!target) return false;
   while(!target->finished.load(std::memory_order_acquire)) {
     Batch* batch = drawing.drawn;
     if(batch && batch->nextBand.load(std::memory_order_relaxed) < batch->bands) {
@@ -382,10 +389,14 @@ auto GE::settleOver(u32 first, u32 last) -> void {
   }
   lock.unlock();
   reap();
+  return true;
 }
 
 //A batch done with.
 auto GE::clearBatch(Batch& batch) -> void {
+  if(batch.top <= batch.bottom) {
+    for(s32 band = batch.top / BandRows; band <= batch.bottom / BandRows; band++) batch.bandJobs[band].clear();
+  }
   batch.jobs.clear();
   batch.looks.clear();
   batch.work = 0;
@@ -418,6 +429,25 @@ auto GE::drawnFirst(u32 address, u32 size) -> void {
   }
   //(what a hardware renderer drew, still on the GPU: its pixels' bytes, not all of the pages they're in)
   if(renderer && memory.vramBusy && renderer->drawnOver(*this, first, last)) renderer->finish(*this);
+}
+
+//A block transfer (transfer.cpp) is about to read VRAM's pages read and write its pages written, the GE's thread
+//copying: what it must come after is drawn first. That's every batch drawing over any of those pages (its pending
+//ones), or yet to decode a texture from those it writes (its reads: render to texture), and so every batch before
+//it; the batch being filled, if it's one, after all of them (flush()). The rest go on being drawn, or waiting in the
+//batch being filled, while the GE's thread copies: none of them reads or writes what the copy writes, nor writes
+//what it reads, so they and the copy come out the same whichever goes first. (But for one yet to decode a texture
+//from pages the copy only reads: with the CPU's guard over VRAM those pages are busy, and the copy's reads wait for
+//it there, as anyone's would.) With a hardware renderer, everything waiting is drawn first, as ever (the copy then
+//waits for what the renderer drew, by memory's busy pages).
+auto GE::drawnBefore(const std::bitset<VRAMPages>& read, const std::bitset<VRAMPages>& written) -> void {
+  if(renderer) return flush();
+  auto reaches = [&](const Batch& batch) {
+    if((batch.pending & (read | written)).any()) return true;
+    return !batch.readsDone.load(std::memory_order_acquire) && (batch.reads & written).any();
+  };
+  if(!drawing.batch->jobs.empty() && reaches(*drawing.batch)) return flush();
+  settleThrough(reaches);
 }
 
 //Whether drawing still going on reaches VRAM's bytes first to last (offsets in VRAM): all of a page a batch being
@@ -478,9 +508,13 @@ auto GE::defer(const PixelState& p, const Region& region) -> bool {
   return true;
 }
 
-//A job into the batch.
+//A job into the batch, and into the list of each band it reaches (its rows are inside the scissor rectangle: 0-1023),
+//so that a band's thread looks only at the jobs reaching it, not at every job of the batch.
 auto GE::record(const Job& job) -> void {
   Batch& batch = *drawing.batch;
+  if(batch.bandJobs.empty()) batch.bandJobs.resize(1024 / BandRows);  //(made with its first job, kept after)
+  u32 index = batch.jobs.size();
+  for(s32 band = job.firstY / BandRows; band <= job.lastY / BandRows; band++) batch.bandJobs[band].push_back(index);
   batch.jobs.push_back(job);
   batch.work += u64(job.lastX - job.firstX + 1) * u64(job.lastY - job.firstY + 1);
   if(batch.top > batch.bottom) batch.top = job.firstY, batch.bottom = job.lastY;
