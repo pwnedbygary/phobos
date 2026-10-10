@@ -59,21 +59,15 @@ static alwaysinline auto floorLanes(GE::f32x4 value) -> GE::s32x4 {
   GE::s32x4 cut = __builtin_convertvector(value, GE::s32x4);
   return cut + (__builtin_convertvector(cut, GE::f32x4) > value);  //(a comparison that holds is -1)
 }
-//geReciprocal() (draw.cpp) of each lane, the same numbers, four at once but for the chords' table, read once when
-//all four lanes are on one chord (as nearly always) and a lane at a time otherwise.
+//geReciprocal() (draw.cpp) of each lane, the same numbers, four at once but for the chords' table, read a lane at a
+//time. (Reading it once when all four lanes share a chord was slower on the RP6: the test costs more than it saves.)
 static alwaysinline auto reciprocalLanes(GE::f32x4 x) -> GE::f32x4 {
   auto bits = (GE::u32x4)x;
   auto exponent = (GE::s32x4)(bits >> 23 & 255);
   GE::s32x4 q;
-  GE::u32x4 chord = bits >> 16;  //(with the sign and exponent)
-  if(!anyLane(chord != chord[0])) {  //all four on one chord, as nearly always: it's fetched once
-    auto& line = reciprocalChords.chords[chord[0] & 127];
-    q = (64 * line.start + 63 + line.slope * (GE::s32x4)(bits >> 8 & 255)) >> 7;
-  } else {
-    for(u32 lane = 0; lane < 4; lane++) {
-      auto& line = reciprocalChords.chords[chord[lane] & 127];
-      q[lane] = (64 * line.start + 63 + line.slope * s32(bits[lane] >> 8 & 255)) >> 7;
-    }
+  for(u32 lane = 0; lane < 4; lane++) {
+    auto& line = reciprocalChords.chords[bits[lane] >> 16 & 127];
+    q[lane] = (64 * line.start + 63 + line.slope * s32(bits[lane] >> 8 & 255)) >> 7;
   }
   //times 2^(111 - exponent) as two powers of two, each a normal float, so that every product is exact (one below
   //2^-126 too: q has 16 significant bits at most); the sign put back; a zero, denormal, infinity or not a number: 0
