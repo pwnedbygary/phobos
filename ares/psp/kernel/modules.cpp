@@ -2,7 +2,8 @@
 //(decrypt.cpp), put in the user partition and relocated there by the loader, their imports linked to the functions
 //the program and the modules loaded earlier export, and their module_start run on a thread of their own. Sony's own
 //modules, which early games carried for the libraries they use (sound, video, the network), aren't run: the HLE
-//kernel is their stand-in. docs/psp-core.md, part 19, describes it.
+//kernel is their stand-in, but for one that came unencrypted with none of the kernel's functions (standsInFor()).
+//docs/psp-core.md, parts 19 and 62, describe it.
 
 enum : u32 {
   ModuleStartNID     = 0xd632'acdb,  //the module_start a module exports for itself (no library name)
@@ -12,16 +13,33 @@ enum : u32 {
   StopParametersNID  = 0xcf0c'c697,  //module_stop_thread_parameter: module_stop's
 };
 
-//Sony's own modules aren't run: the HLE kernel stands in for them, its versions of their functions answering the
-//game's imports of them (sceSAScore's, sceMpeg_library's...). They're told by their names, which all start with
-//"sce" or "Sce", or by being kernel modules (attribute 0x1000), which a game's own modules never are. (Peace
-//Walker's psmf.prx and libpsmfplayer.prx are scePsmf_library and scePsmfP_library, stood in for so. The movie
-//player's library goes by other names in some games, libpsmfplayer, psmf_jk, jkPsmfP_library: those are loaded and
-//run as a game's own code, their module_start too; but the kernel's own functions go before a module's exports as
-//imports are linked, so a game's calls to scePsmfPlayer reach the kernel's player whatever its module is called.
-//docs/psp-core.md, part 31.)
+//Sony's own modules aren't run: the HLE kernel stands in for them, its versions of their functions answering the game's
+//imports of them (sceSAScore's, sceMpeg_library's...), unless standsInFor() finds it has none of a plain one's
+//functions. They're told by their names, which all start with "sce" or "Sce", or by being kernel modules (attribute
+//0x1000), which a game's own modules never are. (Peace Walker's psmf.prx and libpsmfplayer.prx are scePsmf_library and
+//scePsmfP_library, stood in for so. The movie player's library goes by other names in some games, libpsmfplayer,
+//psmf_jk, jkPsmfP_library: those are loaded and run as a game's own code, their module_start too; but the kernel's own
+//functions go before a module's exports as imports are linked, so a game's calls to scePsmfPlayer reach the kernel's
+//player whatever its module is called. docs/psp-core.md, part 31.)
 static auto sonyModule(const std::string& name, u32 attributes) -> bool {
   return !name.compare(0, 3, "sce") || !name.compare(0, 3, "Sce") || (attributes & 0x1000);
+}
+
+//Whether the kernel stands in for one of Sony's modules that came unencrypted, its exports read: a kernel module
+//always (it couldn't run among a game's threads), a user module if the kernel has a function it exports. Persona 3
+//Portable and both Dissidias load Sony's LIBSUPPREACC.PRX, unencrypted, whose scesupPreAcc_library exports eight
+//functions of the scesupPreAcc library, none of them the kernel's: stood in for, the games' calls to it were
+//refused. It's an ordinary user module, needing only the file, callback and power lock functions it imports, so it
+//runs as a game's own module does, as on a PSP; so do the network libraries some games carry plain (the ad hoc
+//download library, WipEout's HTTP and SSL ones), which the kernel has nothing of either. (An encrypted module of
+//Sony's is still stood in for by its name alone, never decrypted.)
+auto Kernel::standsInFor(const Module& loaded) const -> bool {
+  if(loaded.attributes & 0x1000) return true;
+  return std::any_of(loaded.exports.begin(), loaded.exports.end(), [&](auto& e) {
+    return !e.library.empty() && !e.variable && std::any_of(functions.begin(), functions.end(), [&](auto& f) {
+      return f.nid == e.nid;
+    });
+  });
 }
 
 //A file's bytes, read whole into the host's memory (at most 64 MiB, the PSP's memory): one on the disc, by its path
@@ -148,13 +166,16 @@ auto Kernel::loadModule(const std::vector<u8>& file, const std::string& path) ->
     note("can't load " + path + ": " + why);
     return ErrorIllegalObject;
   }
-  if(sonyModule(loaded.module.name, loaded.module.attributes)) {  //one of Sony's that came unencrypted
-    release(loaded.block);
+  if(sonyModule(loaded.module.name, loaded.module.attributes) && standsInFor(loaded.module)) {
+    release(loaded.block);  //one of Sony's that came unencrypted
     return standIn(loaded.module.name, loaded.module.attributes, path);
   }
   loaded.uid = newUID();
   if(!loaded.uid) return release(loaded.block), ErrorNoMemory;
   for(auto& skipped : loaded.module.skipped) note(path + ": the loader left out " + skipped);
+  if(sonyModule(loaded.module.name, loaded.module.attributes)) {
+    note(path + " is Sony's " + loaded.module.name + ", none of whose functions the HLE kernel has: it runs");
+  }
   u32 uid = loaded.uid;
   modules[uid] = std::move(loaded);
   linkImports();

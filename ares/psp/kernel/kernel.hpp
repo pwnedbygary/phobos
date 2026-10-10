@@ -2041,6 +2041,7 @@ struct Kernel {
   auto readWhole(const std::string& path, std::vector<u8>& data) -> u32;
   auto readOpenFile(OpenFile& open, u64 size, std::vector<u8>& data) -> u32;
   auto loadModule(const std::vector<u8>& file, const std::string& path) -> u32;
+  auto standsInFor(const Module& loaded) const -> bool;
   auto standIn(const std::string& name, u32 attributes, const std::string& path) -> u32;
   auto unloadModule(u32 uid) -> void;
   auto programAsModule() -> void;
