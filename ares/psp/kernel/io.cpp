@@ -16,6 +16,15 @@ enum : u32 {
   OpenExclusive = 0x0800,  //pspiofilemgr_fcntl.h
 };
 
+#include "pgd.hpp"
+using ares::PlayStationPortable::Pgd;
+
+//NPDRM's (download games') licensee key (sceNpDrm_user): set before a game opens its protected EDATA files, which
+//wrap a PGD. The key the game gives is the version key the PGD decrypts with (part that follows); how a download's
+//module key is really derived from a console's fixed key isn't emulated yet, so this is the best the key gives.
+static u8 npdrmLicenseeKey[16];
+static bool npdrmLicenseeKeySet = false;
+
 //The device a name stands for: the PSP knows the disc as umd0: and disc0:, and the memory stick as ms0: and fatms0:.
 static auto deviceName(std::string name) -> std::string {
   for(auto& c : name) c = std::tolower(u8(c));
@@ -362,8 +371,53 @@ auto Kernel::readFile(u32 file, u32 data, u32 size) -> u32 {
   if(u32 error = readCount(open, data, size, count)) return error;
   s64 moved = readMove(open, open.position, count, data);
   if(moved < 0) return ErrorIOError;
+  if(open.pgd) pgdDecryptRead(open, data, u64(moved));
   open.position += moved;
   return u32(moved);
+}
+
+//A PGD file's header descriptor, decrypted once (pgd.cpp): why it can't, or nothing. The header is read from where
+//the file lies (the disc, or the host), and where the data starts is the offset the game gave (0x04100002) if it did,
+//else the descriptor's.
+auto Kernel::pgdDescriptor(OpenFile& open) -> std::string {
+  u8 header[0x90];
+  u64 size = std::min<u64>(sizeof(header), open.size);
+  if(open.onDisc) {
+    if(!disc->read(u64(open.sector) * Disc::SectorSize, size, header)) return "couldn't read a PGD file's header";
+  } else {
+    open.stream->flush();
+    open.stream->clear();
+    open.stream->seekg(0);
+    open.stream->read(reinterpret_cast<char*>(header), size);
+    if(u64(open.stream->gcount()) < size) return "a PGD file cut short in its header";
+  }
+  Pgd::Descriptor descriptor;
+  auto why = Pgd::descriptor(header, size, open.pgdVersionKey, descriptor);
+  if(!why.empty()) return why;
+  open.pgdDataOffset = open.pgdDataOffset ? open.pgdDataOffset : descriptor.dataOffset;
+  open.pgdDataSize = descriptor.dataSize;
+  open.pgdBlockSize = descriptor.blockSize;
+  memcpy(open.pgdDataKey, descriptor.dataKey, 16);
+  open.pgdReady = true;
+  return {};
+}
+
+//A PGD file's reads: the part of this read that's in the data region ([dataOffset, dataOffset + dataSize), decrypted
+//with the descriptor's key), decrypted in place. The header before it, and any padding after the data, stay as they
+//are. Set up the descriptor first.
+auto Kernel::pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void {
+  if(count == 0 || !open.pgd) return;
+  if(!open.pgdReady) {
+    if(auto why = pgdDescriptor(open); !why.empty()) return;  //leave the reads as they are
+  }
+  u64 start = open.pgdDataOffset, end = u64(open.pgdDataOffset) + open.pgdDataSize;
+  if(open.position >= end || u64(open.position) + count <= start) return;  //not in the data region
+  u8* bytes = memory.pointer(data, u32(count));
+  u32 headerPart = open.position < start ? u32(start - open.position) : 0;  //bytes before the data, left alone
+  u32 decStart = headerPart;  //where the decryption starts, in this read
+  u32 decLen = u32(count) - headerPart;
+  u32 decOffset = u32(open.position + decStart - open.pgdDataOffset);  //its place in the data region
+  Pgd::decryptData(bytes + decStart, decOffset, decLen, open.pgdDataKey, open.pgdVersionKey);
 }
 
 //How many bytes (or sectors) a read of size from the file's position gets, fewer at its end: 0 with them in count, or
@@ -843,12 +897,23 @@ auto Kernel::ioctl(u32 file, u32 command, u32 in, u32 inLength, u32 out, u32 out
   case 0x0410'0001: {  //the file's key (16 bytes), for data encrypted as PGD, which the PSP decrypts as it's read
     //A file without PGD's header ("\0PGD") is read as it is: the fan translations of 7th Dragon 2020 and its sequel
     //carry their INSDIR data decrypted, and the games set its key all the same, taking anything but success as the
-    //drive failing and opening the file again, for good. Nothing here decrypts, so a file with the header is
-    //refused, as every request for this was before (umd0: and a key that isn't there too).
+    //drive failing and opening the file again, for good. A file with the header keeps the key, and decrypts its
+    //reads (pgd.cpp); its header is read as it is, its key (0x10) being in the clear.
     if(open.sectors || inLength < 16 || !memory.reaches(in, 16)) return ErrorFunctionNotSupported;
     u8 head[4] = {};
     if(open.size >= 4 && !disc->read(u64(open.sector) * Disc::SectorSize, 4, head)) return ErrorIOError;
-    if(!memcmp(head, "\0PGD", 4)) return ErrorFunctionNotSupported;
+    if(!memcmp(head, "\0PGD", 4)) {
+      memcpy(open.pgdVersionKey, memory.pointer(in, 16), 16);
+      open.pgd = true;
+      open.pgdReady = false;
+    }
+    return 0;
+  }
+  case 0x0410'0002: {  //where the encrypted data starts, relative to the file (the rest is read as it is)
+    if(open.sectors || inLength < 4 || !memory.reaches(in, 4)) return ErrorFunctionNotSupported;
+    open.pgd = true;
+    open.pgdReady = false;
+    open.pgdDataOffset = memory.read(4, in);
     return 0;
   }
   }
@@ -981,16 +1046,49 @@ auto Kernel::sceIoDevctl() -> void {
 //then decrypts as they're read. There is no DRM here: a key is taken and forgotten, and a game's files are read as
 //they are, so a game's plain files work and an encrypted one reads as its encrypted bytes. uOFW's npdrm exports
 //name the user library's five functions; none has a pspautotests program.
-auto Kernel::sceNpDrmSetLicenseeKey() -> void { result(0); }
-auto Kernel::sceNpDrmClearLicenseeKey() -> void { result(0); }
+//(the licensee key, 16 bytes): the key a download game hands before it opens its protected EDATA files. It's the
+//version key the PGD decrypts with (part that follows), stored for sceNpDrmEdataSetupKey to put on them.
+auto Kernel::sceNpDrmSetLicenseeKey() -> void {
+  if(memory.reaches(arg(0), 16)) {
+    memory.copyOut(npdrmLicenseeKey, arg(0), 16);
+    npdrmLicenseeKeySet = true;
+  }
+  result(0);
+}
+
+//The licensee key, gone.
+auto Kernel::sceNpDrmClearLicenseeKey() -> void {
+  npdrmLicenseeKeySet = false;
+  result(0);
+}
 
 //(name): whether a protected file still has the name it was sold with: always, here.
 auto Kernel::sceNpDrmRenameCheck() -> void { result(0); }
 
-//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE.
+//(file): readies an open file's decryption; one not open (or a folder) is BAD_FILE. A protected file is wrapped in
+//EDATA ("\0PSPEDAT"), which wraps a PGD: the licensee key is put on it, and the data is said to start after EDATA's
+//0x90-byte header, so its reads decrypt (io.cpp's 0x04100001 and 0x04100002).
 auto Kernel::sceNpDrmEdataSetupKey() -> void {
   auto found = files.find(arg(0));
   if(found == files.end() || found->second.folder || found->second.resultOnly) return result(ErrorBadFile);
+  auto& open = found->second;
+  if(npdrmLicenseeKeySet) {
+    u8 magic[8] = {};
+    u64 size = std::min<u64>(sizeof(magic), open.size);
+    if(open.onDisc) disc->read(u64(open.sector) * Disc::SectorSize, size, magic);
+    else {
+      open.stream->flush();
+      open.stream->clear();
+      open.stream->seekg(0);
+      open.stream->read(reinterpret_cast<char*>(magic), size);
+    }
+    if(!memcmp(magic, "\0PSPEDAT", 8)) {
+      memcpy(open.pgdVersionKey, npdrmLicenseeKey, 16);
+      open.pgd = true;
+      open.pgdReady = false;
+      open.pgdDataOffset = 0x90;
+    }
+  }
   result(0);
 }
 

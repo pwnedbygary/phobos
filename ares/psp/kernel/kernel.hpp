@@ -617,6 +617,15 @@ struct Kernel {
     bool onDisc = false, sectors = false;
     u32 sector = 0;
     u64 size = 0;
+    //PGD (Protected Game Data): a UMD data file, or an NPDRM EDATA, whose data the PSP decrypts as it's read. The
+    //version key (sceIoIoctl's 0x04100001) and where the data starts (0x04100002) set it; the reads of that data in
+    //io.cpp are decrypted (ares/psp/kernel/pgd.cpp).
+    bool pgd = false;
+    u8 pgdVersionKey[16] = {};
+    bool pgdReady = false;
+    u8 pgdDataKey[16] = {};
+    u32 pgdDataSize = 0, pgdBlockSize = 0;
+    u32 pgdDataOffset = 0;
     std::vector<Disc::Entry> discEntries;  //a folder on the disc's entries, beside their names
     //Its asynchronous request (async.cpp): none; one under way, done at asyncDoneAt; or one done whose result the
     //program hasn't taken yet. The result is 64 bits: a count, a position, or an error (sign-extended).
@@ -654,6 +663,9 @@ struct Kernel {
   auto readFile(u32 file, u32 data, u32 size) -> u32;
   auto readCount(OpenFile& open, u32 data, u32 size, u64& count) -> u32;
   auto readMove(OpenFile& open, u64 at, u64 count, u32 data) -> s64;
+  //pgd.cpp: a PGD data file's decryption, set up by the two ioctl commands and applied to its reads
+  auto pgdDescriptor(OpenFile& open) -> std::string;  //its header's descriptor, decrypted once; why it can't
+  auto pgdDecryptRead(OpenFile& open, u32 data, u64 count) -> void;  //its reads' data region, decrypted in place
   auto writeFile(u32 file, u32 data, u32 size) -> u32;
   auto fileWaitRefused() const -> u32;
   auto fileWait(u32 file, u32 value, bool onDisc, u64 bytes) -> void;

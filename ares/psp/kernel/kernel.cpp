@@ -2,6 +2,7 @@
 #include "../cpu/allegrex.hpp"
 #include "../memory/memory.hpp"
 #include "../ge/ge.hpp"
+#include "pgd.hpp"
 
 //FFmpeg's decoders, in builds that have them (codec.cpp)
 #if defined(ARES_ENABLE_FFMPEG)
@@ -25,6 +26,7 @@ namespace ares::PlayStationPortable {
 #include "keys.cpp"
 #include "kirk.cpp"
 #include "decrypt.cpp"
+#include "pgd.cpp"
 #include "pauth.cpp"
 #include "unpack.cpp"
 #include "disc.cpp"
