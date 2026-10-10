@@ -180,9 +180,9 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u
   statistics.uploads++;
 }
 
-//Ranges of the target's bytes memory has the newest of (its dead ones, block transfers' over pixels it drew:
-//overwritten(); or those beside them: Target::beside) filled from memory, and forgotten: the whole pixels they're in,
-//in its filled rows (a range's first row from its first byte, its last to its last).
+//Ranges of the target's bytes memory has the newest of (its dead ones, block transfers' or the CPU's over pixels it
+//drew: overwritten(); or those beside them: Target::beside) filled from memory, and forgotten: the whole pixels
+//they're in, in its filled rows (a range's first row from its first byte, its last to its last).
 auto GPU::revive(Target& t, std::vector<std::pair<u32, u32>>& ranges) -> void {
   if(&ranges == &t.beside) t.merged = false;
   if(&ranges == &t.dead) drawnSerial++;  //(drawn bytes again)
@@ -1269,10 +1269,10 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bo
 }
 
 //Whether the pixels drawn since the last finish (each target's rows top-bottom, columns left-right: what finish()
-//reads back), in the pages each owns and but those a block transfer has written since (dead), reach VRAM's bytes
-//first to last. Bytes beside them, in the same pages (past the picture's right edge, where games keep lists), are
-//memory's own until then: memory reaches them without waiting. (Asked of each page's owner alone: God of War reads
-//its vertices from VRAM, a page or two each, every time the GE needs one.)
+//reads back), in the pages each owns and but those a block transfer or the CPU has written since (dead), reach
+//VRAM's bytes first to last. Bytes beside them, in the same pages (past the picture's right edge, where games keep
+//lists), are memory's own until then: memory reaches them without waiting. (Asked of each page's owner alone: God of
+//War reads its vertices from VRAM, a page or two each, every time the GE needs one.)
 auto GPU::drawnOver(GE& ge, u32 first, u32 last) -> bool {
   (void)ge;
   for(u32 page = first / Memory::PageSize; page <= last / Memory::PageSize && page < GE::VRAMPages; page++) {
