@@ -31,7 +31,9 @@
 //and whoever writes any of them (the CPU, an HLE function, the GE drawing or copying, a state loaded) throws the
 //copy away (textureWritten()), to be decoded afresh when next drawn with. The palette is part of what a texture of
 //indices looks like: its copy is kept for the palette it was decoded with, found again by the palette's hash and
-//checked byte for byte whenever the palette has changed since (clutVersion).
+//checked byte for byte whenever the palette has changed since (clutVersion). The cache is shared with the drawing
+//workers (textures.mutex). A texture whose bytes a batch still draws over (render to texture) can wait in the next
+//batch and be decoded as that batch starts (ensureDecoded), so the GE's thread does not settle for it (threads.cpp).
 //
 //Read from memory as before, texel by texel, are: a texture of a format the PSP doesn't have (11-15: texel() notes it
 //as it's used); a texture some of whose bytes have no memory behind them (each such read is reported); and a texture
@@ -307,92 +309,194 @@ static auto drawsOver(const GE::PixelState& p, u32 first, u32 last, s32 left, s3
   return depth && overlaps(from, p.depthBuffer + (bottom * p.depthStride + right) * 2 + 1, true);
 }
 
-//The texture decoded, found in the cache or decoded now (and its texels pointed to by texture.decoded): kept by the
-//caller while it draws, as the cache may let it go meanwhile. None, with texture.decoded none too, where it's read
-//from memory as before (see the top of this file). region: where the primitive may draw; rows: how many of the
-//texture's rows it may take texels from (all of them, past its height).
-auto GE::decode(Sampler& t, const PixelState& pixel, const Region& region, u32 rows) -> std::shared_ptr<Decoded> {
+//The texture decoded into look (look.texture.decoded, look.decoded): found in the cache or decoded now, kept by the
+//Look while it draws, as the cache may let it go meanwhile. Where it's read from memory as before (see the top of
+//this file), look.decoded stays empty. region: where the primitive may draw; rows: how many of the texture's rows
+//it may take texels from (all of them, past its height).
+//
+//allowDefer: when workers are drawing, a texture whose bytes a batch still draws over (render to texture) is not
+//decoded here. The batch that draws them is launched if it's the one being filled, the Look waits in the next batch
+//with deferRows, and ensureDecoded() decodes once that next batch starts — by then every batch before it is drawn,
+//so the GE's thread never waits on the decode. The palette is kept as it is now (a later CLUT_LOAD must not change
+//what this primitive samples).
+auto GE::decode(Look& look, const Region& region, u32 rows, bool allowDefer) -> void {
+  Sampler& t = look.texture;
+  const PixelState& pixel = look.pixel;
+  look.decoded.reset();
+  look.deferRows = 0;
+  look.deferClut.clear();
+  look.deferClutHash = 0;
   t.decoded = nullptr;
-  if(t.format > 10 || !memory.canWatch()) return {};
+  if(t.format > 10 || !memory.canWatch()) return;
   rows = std::min({rows, t.height, 512u});
   u32 low, high;
   textureBytes(t, rows, low, high);
-  if(!memory.reaches(low, high - low)) return {};
+  if(!memory.reaches(low, high - low)) return;
   if(u32 first, last; vramSpan(low, high - low, first, last)) {
-    if(drawsOver(pixel, first, last, region.left, region.top, region.right, region.bottom)) return {};
+    if(drawsOver(pixel, first, last, region.left, region.top, region.right, region.bottom)) return;
+    auto over = [&](const Batch& batch) {
+      for(u32 page = first >> 12; page <= last >> 12; page++) {
+        if(batch.pending[page]) return true;
+      }
+      return false;
+    };
+    bool fromCurrent = !drawing.batch->jobs.empty() && over(*drawing.batch);
+    bool fromLaunched = false;
+    for(auto& batch : drawing.batches) {
+      if(batch.launched && over(batch)) { fromLaunched = true; break; }
+    }
+    if((fromCurrent || fromLaunched) && allowDefer && drawing.deferring && !drawing.workers.empty()) {
+      if(fromCurrent) launch(false);  //(drawn while this Look's batch is set up and then drawn after it)
+      look.deferRows = rows;
+      if(t.format >= 4 && t.format < 8) {
+        look.deferClut.assign(clut, clut + sizeof(clut));
+        look.deferClutHash = clutHash;
+      }
+      return;
+    }
   }
+  fillDecoded(look, rows, clut, clutHash, clutVersion, true);
+}
+
+//Decodes every Look in the batch that was left for later (decode's allowDefer): the batches before this one are
+//drawn, so their pixels are in VRAM. Called as the batch starts being drawn (drawBands) or drawn at once (flush).
+//Those pages may still be marked busy until the prior batch is cleared: readingDeferred stops pointer() settling
+//this batch (which would re-enter drawBands while decodeState is still 1).
+auto GE::ensureDecoded(Batch& batch) -> void {
+  struct Reading {
+    Reading() { readingDeferred = true; }
+    ~Reading() { readingDeferred = false; }
+  } reading;
+  for(auto& look : batch.looks) {
+    if(!look.deferRows) continue;
+    u32 rows = look.deferRows;
+    look.deferRows = 0;
+    const u8* palette = look.deferClut.empty() ? clut : look.deferClut.data();
+    u64 hash = look.deferClut.empty() ? clutHash : look.deferClutHash;
+    fillDecoded(look, rows, palette, hash, 0, false);
+    look.deferClut.clear();
+    look.deferClutHash = 0;
+  }
+}
+
+//Puts the decoded texture into look from palette (and its hash): the memory is ready. waitFirst: settle VRAM a
+//batch draws over before reading (the ordinary path); false after ensureDecoded, when that's already drawn.
+//Decode work runs without textures.mutex so a long fill does not stall textureWritten on the GE's thread; the
+//cache is only locked to look up, forget, and install.
+auto GE::fillDecoded(Look& look, u32 rows, const u8* palette, u64 paletteHash, u32 paletteVersion, bool waitFirst)
+  -> void {
+  Sampler& t = look.texture;
+  rows = std::min({rows, t.height, 512u});
+  u32 low, high;
+  textureBytes(t, rows, low, high);
   bool indexed = t.format >= 4 && t.format < 8;
   TextureKey key{t.address, t.bufferWidth, t.format, std::min<u32>(t.width, 512), t.swizzled, 0, 0, 0, 0, 0};
   if(indexed) key.clutFormat = t.clutFormat, key.clutShift = t.clutShift, key.clutMask = t.clutMask,
-              key.clutOffset = t.clutOffset, key.clutHash = clutHash;
-  std::shared_ptr<Decoded> entry;
-  if(textures.last && textures.last->key == key) entry = textures.last;
-  else if(auto found = textures.entries.find(key); found != textures.entries.end()) entry = found->second;
-  if(entry && indexed && entry->paletteChecked != clutVersion) {
-    if(!std::memcmp(entry->palette.data(), clut, sizeof(clut))) entry->paletteChecked = clutVersion;
-    else forget(entry.get()), entry.reset();  //another palette with the same hash: decoded afresh
+              key.clutOffset = t.clutOffset, key.clutHash = paletteHash;
+
+  auto paletteMatches = [&](const Decoded& entry) {
+    return !indexed || !std::memcmp(entry.palette.data(), palette, sizeof(clut));
+  };
+  auto find = [&]() -> std::shared_ptr<Decoded> {
+    std::shared_ptr<Decoded> entry;
+    if(textures.last && textures.last->key == key) entry = textures.last;
+    else if(auto found = textures.entries.find(key); found != textures.entries.end()) entry = found->second;
+    if(!entry) return {};
+    if(indexed && paletteVersion && entry->paletteChecked != paletteVersion) {
+      if(paletteMatches(*entry)) entry->paletteChecked = paletteVersion;
+      else { forget(entry.get()); return {}; }  //another palette with the same hash: decoded afresh
+    } else if(!paletteMatches(*entry)) {
+      forget(entry.get());
+      return {};
+    }
+    return entry;
+  };
+  auto take = [&](std::shared_ptr<Decoded> entry) {
+    textures.recent.splice(textures.recent.begin(), textures.recent, entry->place);
+    textures.last = entry;
+    look.decoded = entry;
+    t.decoded = entry->texels.data();
+    t.decodedWidth = key.width;
+    t.decodedRows = rows;
+  };
+
+  std::shared_ptr<Decoded> shorter;
+  {
+    std::lock_guard lock(textures.mutex);
+    auto entry = find();
+    if(entry && entry->rows >= rows) return take(entry);
+    shorter = entry;  //(held for a row copy; may leave the cache before we install)
   }
+  if(waitFirst) drawnFirst(low, high - low);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
+
+  {
+    std::lock_guard lock(textures.mutex);
+    auto entry = find();
+    if(entry && entry->rows >= rows) return take(entry);
+    if(entry && entry->rows < rows) shorter = entry;
+  }
+
   //A texture is kept once, with as many rows as any primitive has reached: one reaching fewer draws from it as it
   //is, one reaching more gets a longer copy, the rows kept already copied into it (still as their memory is, or
-  //they'd be gone) and the rest decoded.
-  if(!entry || entry->rows < rows) {
-    auto shorter = std::move(entry);
-    drawnFirst(low, high - low);  //(from VRAM primitives waiting to be drawn draw over: threads.cpp)
-    entry = std::make_shared<Decoded>();
-    entry->key = key;
-    entry->rows = rows;
-    entry->texels.resize(key.width * rows);
-    u32 from = 0;
-    if(shorter) {
-      std::copy(shorter->texels.begin(), shorter->texels.end(), entry->texels.begin());
-      from = shorter->rows;
-      forget(shorter.get());
-    }
-    auto decodeWith = [&](const auto& read) {
-      for(u32 v = from; v < rows; v++) {
-        for(u32 u = 0; u < key.width; u++) entry->texels[v * key.width + u] = texelFrom(t, clut, u, v, read);
-      }
-    };
-    if(const u8* base = memory.pointer(low, high - low); base && t.format < 8) {
-      decodeRows(t, clut, base, low, key.width, from, rows, entry->texels.data());
-    } else if(base) {
-      decodeWith([&](u32 size, u32 at) -> u32 {
-        const u8* bytes = base + (at - low);
-        if(size == 1) return bytes[0];
-        if(size == 2) return bytes[0] | bytes[1] << 8;
-        return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | u32(bytes[3]) << 24;
-      });
-    } else {  //through VRAM's copies that rearrange it
-      decodeWith([&](u32 size, u32 at) { return memory.read(size, at); });
-    }
-    if(indexed) entry->palette.assign(clut, clut + sizeof(clut)), entry->paletteChecked = clutVersion;
-    memory.pagesOf(low, high - low, entry->firstPage, entry->lastPage);
-    memory.watch(low, high - low);
-    for(u32 page = entry->firstPage; page <= entry->lastPage; page++) textures.pages[page].push_back(entry.get());
-    textures.bytes += entry->texels.size() * 4;
-    textures.entries[key] = entry;
-    entry->place = textures.recent.insert(textures.recent.begin(), entry.get());
-    //too much kept: those unused longest go (this one, the last used, stays even past the budget by itself)
-    while(textures.bytes > textures.budget && textures.recent.size() > 1) forget(textures.recent.back());
-  } else {
-    textures.recent.splice(textures.recent.begin(), textures.recent, entry->place);
+  //they'd be gone) and the rest decoded. Built off the mutex; installed below.
+  auto entry = std::make_shared<Decoded>();
+  entry->key = key;
+  entry->rows = rows;
+  entry->texels.resize(key.width * rows);
+  u32 from = 0;
+  if(shorter && shorter->rows < rows && shorter->key == key && paletteMatches(*shorter)) {
+    std::copy(shorter->texels.begin(), shorter->texels.end(), entry->texels.begin());
+    from = shorter->rows;
   }
+  auto decodeWith = [&](const auto& read) {
+    for(u32 v = from; v < rows; v++) {
+      for(u32 u = 0; u < key.width; u++) entry->texels[v * key.width + u] = texelFrom(t, palette, u, v, read);
+    }
+  };
+  if(const u8* base = memory.pointer(low, high - low); base && t.format < 8) {
+    decodeRows(t, palette, base, low, key.width, from, rows, entry->texels.data());
+  } else if(base) {
+    decodeWith([&](u32 size, u32 at) -> u32 {
+      const u8* bytes = base + (at - low);
+      if(size == 1) return bytes[0];
+      if(size == 2) return bytes[0] | bytes[1] << 8;
+      return bytes[0] | bytes[1] << 8 | bytes[2] << 16 | u32(bytes[3]) << 24;
+    });
+  } else {  //through VRAM's copies that rearrange it
+    decodeWith([&](u32 size, u32 at) { return memory.read(size, at); });
+  }
+  if(indexed) entry->palette.assign(palette, palette + sizeof(clut)), entry->paletteChecked = paletteVersion;
+  memory.pagesOf(low, high - low, entry->firstPage, entry->lastPage);
+
+  std::lock_guard lock(textures.mutex);
+  if(auto existing = find(); existing && existing->rows >= rows) return take(existing);
+  //Drop whatever is still at this key (our shorter copy, or another thread's): only forget if installed.
+  if(auto found = textures.entries.find(key); found != textures.entries.end()) forget(found->second.get());
+  memory.watch(low, high - low);
+  for(u32 page = entry->firstPage; page <= entry->lastPage; page++) textures.pages[page].push_back(entry.get());
+  textures.bytes += entry->texels.size() * 4;
+  textures.entries[key] = entry;
+  entry->place = textures.recent.insert(textures.recent.begin(), entry.get());
+  //too much kept: those unused longest go (this one, the last used, stays even past the budget by itself)
+  while(textures.bytes > textures.budget && textures.recent.size() > 1) forget(textures.recent.back());
   textures.last = entry;
+  look.decoded = entry;
   t.decoded = entry->texels.data();
   t.decodedWidth = key.width;
   t.decodedRows = rows;
-  return entry;
 }
 
 //Memory::watchedWritten(): the page changed, so every texture decoded from it goes.
 auto GE::textureWritten(u32 page) -> void {
+  std::lock_guard lock(textures.mutex);
   auto found = textures.pages.find(page);
   if(found == textures.pages.end()) return;
   auto stale = found->second;  //(forget() edits the lists)
   for(auto* entry : stale) forget(entry);
 }
 
-//A decoded texture out of the cache (a primitive drawing with it keeps it until it's done).
+//A decoded texture out of the cache (a primitive drawing with it keeps it until it's done). The caller holds
+//textures.mutex.
 auto GE::forget(Decoded* entry) -> void {
   for(u32 page = entry->firstPage; page <= entry->lastPage; page++) {
     auto found = textures.pages.find(page);
@@ -410,6 +514,7 @@ auto GE::forget(Decoded* entry) -> void {
 }
 
 auto GE::dropTextures() -> void {
+  std::lock_guard lock(textures.mutex);
   textures.entries.clear();
   textures.pages.clear();
   textures.recent.clear();

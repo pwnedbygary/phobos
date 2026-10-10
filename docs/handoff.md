@@ -25,6 +25,23 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: render-to-texture decode later (emulation thread) — 2026-10-08
+
+Branch `cursor/psp-cpu-speed3-2b67`, on top of part 43's `cursor/psp-cpu-speed2-2b67` (with #165 disc-info).
+docs/psp-core.md, part 46. PR #176.
+- **The GE** (`ares/psp/ge/texture.cpp`, `threads.cpp`, `draw.cpp`): a texture whose bytes a batch still draws over
+  (render to texture) is not decoded on the GE's thread. The source batch is launched if it's being filled; the
+  Look waits in the next batch (`deferRows`, CLUT snapshot when indexed); `ensureDecoded` runs as that batch
+  starts drawing. Texture cache shared with workers (`textures.mutex`).
+- **Exact**: tests/allegrex 58 groups, tests/psp 328 groups (0 failures), including `geThreads` RTT. Six cpu-speed
+  scenes remade at StateVersion 17; 300 frames `HASHES=1` at 1 and 7 GE threads identical to parent
+  (`eeba5028e`). RP6 race/menu end states match unsettled too.
+- **Faster** on the RP6 at 7 GE threads (four rounds): MC3's race about 37 → 39 fps (medians 37.3 → 38.1);
+  menu about 36 either way. Emulation thread on the race still ~24 ms.
+- **Next**: primitives drawn at once / textures read from memory as drawn.
+- Scratch: `~/phobos-work/scratch/cpu-speed` (v17 scenes); RP6 `/data/local/tmp/cpu-bench3`; take
+  `~/phobos-work/rp6.lock`.
+
 ## PSP core: the emulation thread faster again — drawing off it, registers held — 2026-10-08
 
 Branch `cursor/psp-cpu-speed2-2b67`, on top of part 42's `cursor/psp-hle-games8-2b67` (#169; measured from part 38's
@@ -39,8 +56,8 @@ Branch `cursor/psp-cpu-speed2-2b67`, on top of part 42's `cursor/psp-hle-games8-
 - **Faster** on the RP6 at 7 GE threads: MC3's race 24.2 to 32.3 fps (the emulation thread 34.4 to 26.8 ms a
   frame), its menu 30.4 to 36.2, Lumines 137 to 177; GTA's city and woods unchanged; Peace Walker's title 226 to 216.
   At 1 thread the CPU's time is 2-9% lower (Peace Walker's the same) and the frame rates the same.
-- **Next**: the race's remaining drawing wait is a texture decoded from the batch being filled (render to texture,
-  3.4 ms a frame); then primitives drawn at once, textures read from memory as they're drawn.
+- **Next**: addressed in part 46 (RTT decode deferred). Then primitives drawn at once, textures read from memory
+  as they're drawn.
 - Scratch tools and states are in `~/phobos-work/scratch/cpu-speed` (never committed); the RP6 copy is
   `/data/local/tmp/cpu-bench3`. The RP6 is shared: take `~/phobos-work/rp6.lock` first, and time only while the
   Phobos app isn't running.
