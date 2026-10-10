@@ -7929,9 +7929,9 @@ shown, and its effects into small frame buffers that share pages:
    refuses a local constant as a lambda's default argument, even a static constexpr one (clang takes it); those two
    no longer do. On lavapipe the pipeline cache's data is as big with pipelines as without (80 bytes), so the cache
    test checks its sizes only where they grow. What it costs: the GPU groups take 7.3-7.7 minutes there under the
-   sanitizers (llvmpipe, LLVM 20) and installing Mesa 11 seconds, so the system job goes from about 10 minutes (the
-   tests' build 9.5 of them) to about 18. Three runs on the branch: the first failed on that size check, the next two
-   passed (420 groups each).
+   sanitizers (llvmpipe, LLVM 20), 8.8 with the review's groups, and installing Mesa 11 seconds, so the system job goes
+   from about 10 minutes (the tests' build 9.5 of them) to about 19-21. Four runs on the branch: the first failed on
+   that size check, the next two passed (420 groups each), and the pull request's on the last commit (421).
 
 ### Numbers
 
@@ -8009,8 +8009,8 @@ base's too.
   moved in, or grew over), "gpu memory's bytes in its pages taken again, not the target afresh", and "gpu a texture's
   place taken by tiles reaching further" (few copies, each tile held to what it takes, at 1x, 2x and 3x); each against
   the software renderer's memory. `tests/allegrex/run-tests.sh` 58 groups, 0 failures; `tests/psp/ares/run-tests.sh`
-  307 checks, 0 failed. In CI (GCC 13, lavapipe): 420 groups, 0 failures, in the two runs before the review's
-  fixes.
+  307 checks, 0 failed. In CI (GCC 13, lavapipe): 421 groups, 0 failures on the last commit (420 in the two runs
+  before the review's fixes).
 - The GPU tests built for Android pass on the RP6 on Turnip and on Qualcomm's driver (30 groups each; one skips itself
   on Qualcomm's, which doesn't read the frame buffer). GCC 11 (ubuntu:22.04) compiles `gpu.cpp` (with `vulkan.cpp`)
   at -O1, -O2 and -O3 with -Wall -Wextra -Werror, and the kernel and the changed tests; the GE likewise but for twelve

@@ -47,14 +47,14 @@ PPSSPP code copied or translated, JPCSP's not read. Save states unchanged (23).
   battle 1.66 / 1.70 / 1.46 / 1.44 -> 5.49 / 9.79 / 7.08 / 6.49 and the menu 0.76 / 1.00 / 0.75 / 0.81 -> 1.72 / 2.22 /
   1.98 / 1.90. LCS's city and woods 5-12% faster (76 finishes in 300 frames -> 2), WipEout 12-36% (600 -> 300); MC3's
   menu 6% slower on Qualcomm's driver, 1% on Turnip (two moves a frame where part 63 took a copy); the rest level.
-- **Checks**: tests/psp 421/0 (sanitized; eight new groups, which broken versions fail, but for a copy not held to
-  what a tile takes), tests/allegrex 58/0, tests/psp/ares 307/0; CI (GCC 13, lavapipe) 420/0 in the two runs before
-  the review's fixes; the GPU tests on the RP6 pass on Turnip and Qualcomm's driver (30 groups each); GCC 11 builds the
+- **Checks**: tests/psp 421/0 (sanitized; eight new groups, which broken versions fail, but for a copy not held to what
+  a tile takes), tests/allegrex 58/0, tests/psp/ares 307/0; CI (GCC 13, lavapipe) 421/0 on the last commit, its GPU
+  groups 8.8 minutes; the GPU tests on the RP6 pass on Turnip and Qualcomm's driver (30 groups each); GCC 11 builds the
   GPU code and tests with -Werror at -O1-O3 (the GE too, but for twelve maybe-uninitialized warnings in four.cpp, the
   base's the same). An independent review found one correctness bug (a move left its target's dead and beside ranges
   over the pixels it moved in), and a delta review its neighbor (beside bytes a move grows the drawn rectangle over):
-  both fixed, with a test group that fails without them; the rest of its points taken but one (frame buffers shown
-  from inside a target aren't shown from the GPU: left).
+  both fixed, with a test group that fails without them; the rest of its points taken but one (frame buffers shown from
+  inside a target aren't shown from the GPU: left).
 - **Left**: God of War now bound by the emulation thread at 1x (83-132 ms a frame) and by the GPU at 4x in three of the
   four configurations (each move a render pass of ten draws); MC3's menu's two moves a frame; WipEout's one finish a
   frame (the CPU reads the bloom's pixels); Killzone's menu at 4x; one rectangle of changes a target; dead and beside
