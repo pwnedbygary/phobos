@@ -1527,8 +1527,85 @@ static auto idsRunOut() -> void {
   CHECK(n.kernel.nextUID, Kernel::LastUID + 1);
 }
 
+//States of the layouts before this one load: 21's (part 58's sceJpeg, sceHprm and low-level ATRAC fields, with
+//files' count still kept and no read's bytes to come) and 20's (none of those either). Each is this layout's state
+//with the newer fields taken out and the count put back, where saving the machine with just that field changed
+//shows it to be; loaded with the header's layout into a machine whose newer fields are set, it makes this layout's
+//state again, the newer fields defaulted.
+static auto olderLayouts() -> void {
+  HostFolder stick;
+  stick.put("A.TXT", "abcdefgh");
+  auto machine = [&](KernelMachine& m) {
+    m.kernel.mount("ms0", stick.path.string());
+    m.kernel.workingDirectory = "ms0:/";
+  };
+  KernelMachine m;
+  machine(m);
+  u32 file = m.call("sceIoOpen", {m.string("ms0:/A.TXT"), 0x0001, 0});
+  CHECK(m.kernel.files.count(file), 1);
+  CHECK(m.call("sceIoRead", {file, Buffer, 3}), 3);
+  if(!m.kernel.files.count(file)) return;
+  auto kernelState = [&] {
+    serializer s;
+    m.kernel.serialize(s);
+    return std::vector<u8>{s.data(), s.data() + s.size()};
+  };
+  auto where = [&](const std::vector<u8>& changed, const std::vector<u8>& state) -> u32 {
+    u32 at = 0;
+    while(at < state.size() && at < changed.size() && state[at] == changed[at]) at++;
+    return at;
+  };
+  auto state = kernelState();
+  auto& open = m.kernel.files[file];
+  open.asyncData = 0x0880'0001;
+  u32 asyncData = where(kernelState(), state);
+  open.asyncData = 0;
+  m.kernel.workingDirectory = "ms0:/LIST";
+  u32 workingDirectory = where(kernelState(), state);
+  m.kernel.workingDirectory = "ms0:/";
+  m.kernel.jpeg.initialized = true;
+  u32 jpeg = where(kernelState(), state);
+  m.kernel.jpeg.initialized = false;
+  auto node = m.kernel.files.extract(file);
+  node.key() = file + 1;
+  m.kernel.files.insert(std::move(node));
+  u32 files = where(kernelState(), state) - 4;  //the files' count, before the first one's number
+  node = m.kernel.files.extract(file + 1);
+  node.key() = file;
+  m.kernel.files.insert(std::move(node));
+  CHECK(kernelState() == state, true);
+  CHECK(jpeg < files && files < asyncData && asyncData < workingDirectory && workingDirectory < state.size(), true);
+  if(!(jpeg < files && files < asyncData && asyncData < workingDirectory && workingDirectory < state.size())) return;
+
+  u32 current = m.kernel.stateLayout;
+  auto loads = [&](u32 layout, std::vector<u8> bytes) {
+    KernelMachine n;
+    machine(n);
+    n.kernel.jpeg.initialized = n.kernel.jpeg.created = true, n.kernel.jpeg.width = 480;
+    n.kernel.hprmCallbacks[3] = 1;
+    n.kernel.atracs[1].lowLevel = true;
+    n.kernel.stateLayout = layout;
+    serializer s{bytes.data(), u32(bytes.size())};
+    bool loaded = n.kernel.serialize(s) && s.size() == bytes.size();
+    n.kernel.stateLayout = current;
+    serializer again;
+    n.kernel.serialize(again);
+    return loaded && std::vector<u8>{again.data(), again.data() + again.size()} == state;
+  };
+  std::vector<u8> counted = {0x45, 0x23, 0x01, 0x00};  //numbers handed out once, passed over
+  auto layout21 = state;
+  layout21.insert(layout21.begin() + workingDirectory, counted.begin(), counted.end());
+  layout21.erase(layout21.begin() + asyncData, layout21.begin() + workingDirectory);
+  auto layout20 = layout21;
+  layout20.erase(layout20.begin() + jpeg, layout20.begin() + files);
+  CHECK(loads(21, layout21), true);
+  CHECK(loads(20, layout20), true);
+  CHECK(loads(current, layout21), false);  //read as this layout, it's another state
+}
+
 auto stateTests() -> Tests {
-  return {{"kernel states", kernelStates}, {"state fields", stateFields}, {"kernel ids run out", idsRunOut}};
+  return {{"kernel states", kernelStates}, {"state fields", stateFields}, {"kernel ids run out", idsRunOut},
+          {"older layouts load", olderLayouts}};
 }
 
 }
