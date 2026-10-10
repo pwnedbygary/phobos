@@ -590,6 +590,10 @@ struct GE {
     //Memory changed VRAM's bytes first to last while pages were busy, without its waiting: bytes it hasn't drawn
     //over (drawnOver()), which its copies of frame buffers take from memory again before they're used.
     virtual auto besideChanged(GE& ge, u32 first, u32 last) -> void = 0;
+    //A block transfer is about to write VRAM's bytes first to last whole (having read what it copies): pixels it
+    //drew there are memory's from then on, not put back, and no longer drawn over (drawnOver()), where it can keep
+    //track of them; the rest it still has drawn over (the transfer's writes wait for a finish, as anyone's).
+    virtual auto overwritten(GE&, u32 /*first*/, u32 /*last*/) -> void {}
     //A renderer that transforms and lights 3D vertices itself (Vulkan's fast mode, the GPU's vertex shader): whether
     //it takes a 3D PRIM of count corners with these settings (t), after begin(); then (meshTriangles()) the
     //triangles the GE would draw whole, as the vertex type laid them out, untransformed: corners, three to a

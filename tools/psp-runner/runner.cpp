@@ -643,12 +643,12 @@ auto main(int argc, char** argv) -> int {
   if(gpu) {
     std::printf("gpu: %llu draws, %llu primitives, %llu 3D PRIMs transformed by the GPU, %llu submits, %llu "
                 "finishes, %llu uploads, %llu read-backs, %llu textures, %llu copies, %llu frames shown from the "
-                "GPU, %.2f ms a frame waiting\n",
+                "GPU, %.2f ms a frame waiting, %llu moves\n",
                 (unsigned long long)gpu->draws, (unsigned long long)gpu->primitives, (unsigned long long)gpu->meshes,
                 (unsigned long long)gpu->submits, (unsigned long long)gpu->finishes,
                 (unsigned long long)gpu->uploads, (unsigned long long)gpu->readbacks,
                 (unsigned long long)gpu->textures, (unsigned long long)gpu->copies,
-                (unsigned long long)gpu->pictures, gpu->waiting / 1e6 / frames);
+                (unsigned long long)gpu->pictures, gpu->waiting / 1e6 / frames, (unsigned long long)gpu->moves);
     std::printf("gpu pipelines: %llu made, %.1f ms making them\n", (unsigned long long)pipelines, making / 1e6);
   }
   std::printf("unique missing functions: %u\n", u32(missing.size()));

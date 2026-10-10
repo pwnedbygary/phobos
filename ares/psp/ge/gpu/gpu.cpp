@@ -2,6 +2,7 @@
 #include "../../memory/memory.hpp"
 #include "shaders/shaders.hpp"
 
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -80,19 +81,33 @@ auto GPU::lose() -> void {
   tell("the GPU stopped answering; the software renderer draws from now on");
 }
 
-//The target for a frame buffer, made if there's none yet (a frame buffer is its address, width and format: the
-//same bytes as another format are another target, filled from memory when drawn into after the other). Its height
-//is as many rows as fit in VRAM, up to 512 (a PRIM reaching further is the software renderer's: begin()). None
-//where not a row fits, or the GPU has no room for it.
-auto GPU::targetFor(const GE::PixelState& p) -> Target* {
-  u32 bytes = p.format == 3 ? 4 : 2;
+//The target for a frame buffer, made if there's none yet: the frame buffer of its width and format that starts
+//where its page does, where a page holds whole rows of it (rows of 512, 1,024, 2,048 or 4,096 bytes from VRAM's
+//start), else where its row does; and the row and column of it the frame buffer starts at. So small frame buffers
+//side by side in the rows of a wide one are parts of one target (God of War draws effects into four 64 pixels wide
+//in rows of 1,024, and three in rows of 512), and drawing into one after another, and a texture read across them,
+//need nothing put back; and every page of a frame buffer of such rows is whole rows of a target, so its pixels can
+//go from one target to another on the GPU (move()). One whose PRIM reaches past its target's rows' end (which the
+//PSP's addresses run on into the next row) or last row, or is drawn with its depth buffer, is a target of its own.
+//The same bytes as another format are another target. Its height is as many rows as fit in VRAM, up to 512 (a PRIM
+//reaching further is the software renderer's: begin()). None where not a row fits, or the GPU has no room for it.
+auto GPU::targetFor(const GE::PixelState& p, const GE::Region& region, u32& column, u32& row) -> Target* {
+  u32 bytes = p.format == 3 ? 4 : 2, rowBytes = p.stride * bytes;
+  u32 address = p.frameBuffer - p.frameBuffer % (Memory::PageSize % rowBytes ? rowBytes : Memory::PageSize);
+  u32 height = std::min<u32>(512, (Memory::VRAMSize - address) / rowBytes);
+  row = (p.frameBuffer - address) / rowBytes, column = (p.frameBuffer - address) % rowBytes / bytes;
+  bool depth = p.clear ? p.clearDepth : p.depthTest;
+  if((p.frameBuffer - address) % rowBytes % bytes || column + std::min<s32>(region.right, p.stride - 1) >= p.stride ||
+     row + region.bottom >= height || ((row || column) && depth)) {
+    address = p.frameBuffer, row = 0, column = 0;
+    height = std::min<u32>(512, (Memory::VRAMSize - address) / rowBytes);
+  }
   for(auto& t : targets) {
-    if(t->address == p.frameBuffer && t->stride == p.stride && t->format == p.format) {
+    if(t->address == address && t->stride == p.stride && t->format == p.format) {
       t->used = ++uses;
       return t.get();
     }
   }
-  u32 height = std::min<u32>(512, (Memory::VRAMSize - p.frameBuffer) / (p.stride * bytes));
   if(!height) return nullptr;
   //(too many: the one unused longest goes, if it isn't drawn on the GPU still)
   if(targets.size() >= 32) {
@@ -113,22 +128,23 @@ auto GPU::targetFor(const GE::PixelState& p) -> Target* {
   u32 id = backend->makeTarget(p.stride, height);
   if(!id) return nullptr;
   auto t = std::make_unique<Target>();
-  t->address = p.frameBuffer, t->stride = p.stride, t->format = p.format;
+  t->address = address, t->stride = p.stride, t->format = p.format;
   t->id = id, t->height = height, t->used = ++uses;
   targets.push_back(std::move(t));
   return targets.back().get();
 }
 
-//Rows from to to of the target filled from memory's VRAM, in order with what's drawn: its pixels (the stencil
-//their alpha: parts bit 0) or its depth buffer's (bit 1: the target's, VRAM's fourth copy's order, memory.hpp). Their
-//bytes are then watched, so that whoever changes them is heard of (written()).
-auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts) -> void {
-  if(from >= to) return;
+//Rows from to to of the target filled from memory's VRAM (columns left to right of them), in order with what's
+//drawn: its pixels (the stencil their alpha: parts bit 0) or its depth buffer's (bit 1: the target's, VRAM's fourth
+//copy's order, memory.hpp). Their bytes are then watched, so that whoever changes them is heard of (written()).
+auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts, u32 left, u32 right) -> void {
+  right = std::min(right, t.stride - 1);
+  if(from >= to || left > right) return;
   (void)p;
-  u32 width = t.stride, height = to - from, count = width * height, bytes = t.bytes();
+  u32 width = right - left + 1, height = to - from, count = width * height, bytes = t.bytes();
   auto& vram = ge->memory.vram;
   Command c{Command::Kind::Upload, t.id};
-  c.x = 0, c.y = from, c.width = width, c.height = height;
+  c.x = left, c.y = from, c.width = width, c.height = height;
   c.colors = recorded.uploads.size();
   c.stencil = c.colors + count * 4;
   c.depth = c.stencil + count;
@@ -136,8 +152,8 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts) -
   recorded.uploads.resize(c.depth + count * 2);
   u8* out = recorded.uploads.data();
   for(u32 y = 0; y < height; y++) {
-    for(u32 x = 0; x < width; x++) {
-      u32 n = y * width + x;
+    for(u32 x = left; x <= right; x++) {
+      u32 n = y * width + x - left;
       if(parts & 1) {
         u32 at = (t.address + ((from + y) * t.stride + x) * bytes) & (Memory::VRAMSize - 1), pixel = 0;
         std::memcpy(&pixel, &vram[at], bytes);
@@ -155,13 +171,67 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts) -
     }
   }
   recorded.commands.push_back(c);
-  if(parts & 1) changed(t, 0, from, t.stride - 1, to - 1);
+  if(parts & 1) changed(t, left, from, right, to - 1);
   if(parts & 1) ge->memory.watch(Memory::VRAMBase + t.address + from * t.stride * bytes, height * t.stride * bytes);
   if(parts & 2 && t.depthStride) {  //(through the fourth copy, as the GE sees it)
     ge->memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t.depthBuffer + from * t.depthStride * 2,
                      height * t.depthStride * 2);
   }
   statistics.uploads++;
+}
+
+//Ranges of the target's bytes memory has the newest of (its dead ones, block transfers' over pixels it drew:
+//overwritten(); or those beside them: Target::beside) filled from memory, and forgotten: the whole pixels they're in,
+//in its filled rows (a range's first row from its first byte, its last to its last).
+auto GPU::revive(Target& t, std::vector<std::pair<u32, u32>>& ranges) -> void {
+  if(&ranges == &t.beside) t.merged = false;
+  if(&ranges == &t.dead) drawnSerial++;  //(drawn bytes again)
+  u32 bytes = t.bytes(), rowBytes = t.stride * bytes;
+  for(auto [first, last] : ranges) {
+    if(!t.rows) break;
+    first = std::max(first, t.address), last = std::min(last, t.end() - 1);
+    if(first > last) continue;
+    u32 top = (first - t.address) / rowBytes, bottom = std::min((last - t.address) / rowBytes, t.rows - 1);
+    u32 left = (first - t.address) % rowBytes / bytes, right = (last - t.address) % rowBytes / bytes;
+    if(top > bottom) continue;
+    if(top == bottom) { fill(t, top, top + 1, {}, 1, left, right); continue; }
+    fill(t, top, top + 1, {}, 1, left), fill(t, top + 1, bottom, {}, 1);
+    fill(t, bottom, bottom + 1, {}, 1, 0, (last - t.address) / rowBytes == bottom ? right : ~0u);
+  }
+  ranges.clear();
+}
+
+//A block transfer's write over VRAM's bytes first to last: the whole pixels of them in each target's drawn rows
+//are dead (memory's from now on), where it has room to say so; the transfer's write then waits for nothing for
+//those (drawnOver()), as for bytes beside its pixels (besideChanged()), and a finish leaves them be.
+auto GPU::overwritten(GE& ge, u32 first, u32 last) -> void {
+  this->ge = &ge;
+  for(auto& t : targets) {
+    if(!t->drawn() || !t->reaches(first, last, t->left, t->top, t->right, t->bottom)) continue;
+    u32 bytes = t->bytes(), rowBytes = t->stride * bytes;
+    u32 low = std::max(first, t->address + t->top * rowBytes);
+    u32 high = std::min(last, t->address + (t->bottom + 1) * rowBytes - 1);
+    low = t->address + (low - t->address + bytes - 1) / bytes * bytes;  //(whole pixels)
+    if(high + 1 < low + bytes) continue;
+    high = t->address + (high + 1 - t->address) / bytes * bytes - 1;
+    auto& dead = t->dead;
+    u32 joined = 0;
+    for(auto& [from, to] : dead) {
+      if(low > to + 1 || from > high + 1) continue;
+      from = std::min(from, low), to = std::max(to, high), joined++;
+    }
+    if(!joined && dead.size() < 16) dead.push_back({low, high});
+    if(joined > 1) {  //(those it joined together made one)
+      std::sort(dead.begin(), dead.end());
+      std::vector<std::pair<u32, u32>> merged;
+      for(auto& range : dead) {
+        if(!merged.empty() && range.first <= merged.back().second + 1) {
+          merged.back().second = std::max(merged.back().second, range.second);
+        } else merged.push_back(range);
+      }
+      dead = merged;
+    }
+  }
 }
 
 //The pixels left-right, top-bottom of the target are drawn on the GPU: VRAM's pages under them are the renderer's
@@ -171,6 +241,7 @@ auto GPU::fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts) -
 //made after a finish (drawnOver() has memory wait for one), so no one has those bytes yet. (A 3D game's PRIMs each
 //reach the whole scissor rectangle: told once a frame, not once a PRIM.)
 auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
+  if(!t.drawn() || left < t.left || top < t.top || right > t.right || bottom > t.bottom) drawnSerial++;
   if(!t.drawn()) t.left = left, t.top = top, t.right = right, t.bottom = bottom;
   else {
     t.left = std::min(t.left, left), t.top = std::min(t.top, top);
@@ -190,7 +261,7 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   for(u32 page = first; page <= last; page++) {
     if(owners[page] == &t && memory.vramPageBusy(page)) continue;
     if(!memory.vramPageBusy(page)) added = true, memory.busyPages[page >> 6] |= 1ull << (page & 63);
-    owners[page] = &t;
+    owners[page] = &t, drawnSerial++;
   }
   if(added) {
     memory.vramBusy = true;
@@ -198,6 +269,53 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   }
   //(owned first: the change to a watched page of a target's isn't someone else's, written())
   memory.changed(Memory::VRAMBase + low, high + bytes - low);
+}
+
+//Whether another target's pixels in pages first to last, which it has drawn in, can move into t on the GPU (move():
+//as putting them in memory and filling t from it would leave t): the same bytes a row, pages of whole rows, and rows
+//starting the same bytes in both, every pixel it drew there in t's rows; not where memory has newer bytes among them
+//(from's beside). box: the rectangle moved, in from's pixels: its drawn columns (a 16-bit one's going into an 8888
+//one's widened to whole pixels of that: the newest of the pixels beside them are its too, in the pages it owns),
+//its drawn rows in those pages.
+auto GPU::movable(const Target& from, const Target& t, u32 first, u32 last, s32 (&box)[4]) const -> bool {
+  u32 rowBytes = t.stride * t.bytes();
+  if(!backend->moves || from.stride * from.bytes() != rowBytes || Memory::PageSize % rowBytes ||
+     from.address % rowBytes || t.address % rowBytes) {
+    return false;
+  }
+  box[0] = from.left, box[2] = from.right;
+  if(from.bytes() < t.bytes()) box[0] &= ~1, box[2] |= 1;
+  box[1] = std::max<s32>(from.top, (s32(first * Memory::PageSize) - s32(from.address)) / s32(rowBytes));
+  box[3] = std::min<s32>(from.bottom, (s32((last + 1) * Memory::PageSize) - s32(from.address)) / s32(rowBytes) - 1);
+  s32 down = (s32(from.address) - s32(t.address)) / s32(rowBytes);
+  if(box[1] > box[3]) return true;
+  if(box[1] + down < 0 || box[3] + down >= s32(t.height)) return false;
+  return !from.besideReaches(box[0], box[1], box[2], box[3]);
+}
+
+//from's pixels in the pages m names put into t on the GPU, as memory would have them (Command::Move): the pages are
+//t's from now on, and so is putting those pixels back.
+auto GPU::move(Target& from, Target& t, const Moving& m) -> void {
+  s32 box[4];
+  movable(from, t, m.first, m.last, box);
+  for(u32 page = m.first; page <= m.last; page++) owners[page] = &t;
+  drawnSerial++;
+  if(box[1] > box[3]) return;
+  u32 rowBytes = t.stride * t.bytes();
+  Command c{Command::Kind::Move, t.id};
+  c.source = from.id, c.sourceFormat = from.format, c.format = t.format;
+  c.sourceX = box[0], c.sourceY = box[1];
+  c.x = box[0] * from.bytes() / t.bytes(), c.width = (box[2] + 1 - box[0]) * from.bytes() / t.bytes();
+  c.y = box[1] + (s32(from.address) - s32(t.address)) / s32(rowBytes), c.height = box[3] - box[1] + 1;
+  recorded.commands.push_back(c);
+  statistics.moves++;
+  s32 right = c.x + c.width - 1, bottom = c.y + c.height - 1;
+  if(!t.drawn()) t.left = c.x, t.top = c.y, t.right = right, t.bottom = bottom;
+  else {
+    t.left = std::min(t.left, c.x), t.top = std::min(t.top, c.y);
+    t.right = std::max(t.right, right), t.bottom = std::max(t.bottom, bottom);
+  }
+  changed(t, c.x, c.y, right, bottom);
 }
 
 //The target's pixels left-right, top-bottom changed (filled, drawn into): every copy taken of it is that much older,
@@ -214,27 +332,31 @@ auto GPU::changed(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
 }
 
 //The last PRIM's pixels given to its target's changes, as the next begins (gathered as the corners' extent, a float
-//compared at each primitive, not worked out at each): those its corners reach, and one more each way (for a corner's
-//float a hair off the GE's), inside its scissor.
+//compared at each primitive, not worked out at each), inside its scissor: those with a sample of the GPU's inside
+//the extent (each of the PSP's pixels has scale x scale, the first and last half of one of them in from its edges),
+//a 64th of a pixel more each way for the GPU's rounding of a sample on an edge. (The corners are the GE's sixteenths
+//exactly. A pixel more each way, as it was, reached into the next of God of War's small frame buffers side by side
+//in one target, and the copies of it were taken again for nothing, each a break in the render pass.)
 auto GPU::reached() -> void {
   auto& [t, scissor, box] = reach;
   if(t && box[0] <= box[2]) {
-    s32 left = std::max(s32(std::floor(box[0])) - 1, scissor[0]);
-    s32 top = std::max(s32(std::floor(box[1])) - 1, scissor[1]);
-    s32 right = std::min(s32(std::floor(box[2])) + 1, scissor[0] + scissor[2] - 1);
-    s32 bottom = std::min(s32(std::floor(box[3])) + 1, scissor[1] + scissor[3] - 1);
+    f32 in = 0.5f / backend->scale - 1.0f / 64;
+    s32 left = std::max(s32(std::ceil(box[0] + in)) - 1, scissor[0]);
+    s32 top = std::max(s32(std::ceil(box[1] + in)) - 1, scissor[1]);
+    s32 right = std::min(s32(std::ceil(box[2] - in)) - 1, scissor[0] + scissor[2] - 1);
+    s32 bottom = std::min(s32(std::ceil(box[3] - in)) - 1, scissor[1] + scissor[3] - 1);
     changed(*t, left, top, right, bottom);
   }
   reach = {};
 }
 
 //The PRIM's texture on the GPU: one taken from a target (holds()), copied out of it now, its texels then read as
-//the target's format keeps them, at the target's resolution (scale: each texel scale x scale of the copy's); or the
-//GPU's copy of a decoded texture (put there now if it isn't yet, or has fewer rows than the GE's copy), at the
-//PSP's. 0 for none, where the GE has none decoded (it then draws untextured, which the design's accuracy notes
-//count).
-auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
-  texels = 4, scale = 1;
+//the target's format keeps them, at the target's resolution (scale: each texel scale x scale of the copy's), held
+//inside those the PRIM takes where the copy has more (taken: Push::held); or the GPU's copy of a decoded texture
+//(put there now if it isn't yet, or has fewer rows than the GE's copy), at the PSP's. 0 for none, where the GE has
+//none decoded (it then draws untextured, which the design's accuracy notes count).
+auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken) -> u32 {
+  texels = 4, scale = 1, taken = 0;
   if(held && look.textured) {  //(copied from its target, in order with what's drawn)
     Held h = *held;
     held.reset();
@@ -244,9 +366,13 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
     if(h.next && h.rows - h.split > h.next->rows) {
       fill(*h.next, h.next->rows, h.rows - h.split, look.pixel), h.next->rows = h.rows - h.split;
     }
-    //(the copy of that size, copied again where it's from another place or the target has changed since: the
-    //draws before it sample it as it was, as the GPU runs the commands in order. From the same place, only the
-    //part changed since is copied again, into its place in the copy: the rest is as the target still has it.)
+    //(the copy taken from that place, copied again in part where the target has changed since: the draws before it
+    //sample it as it was, as the GPU runs the commands in order, and the rest is as the target still has it. One
+    //with as many rows and columns as the PRIM takes, or more, serves it; one with fewer is made again larger, to
+    //the next power of two each way, as far as the target's filled rows: God of War draws a picture in 272 tiles a
+    //time, each taking more of the frame buffer it shrank the screen into than the one before, and copied for each
+    //it was 2,184 copies a frame shown. With MostCopies kept, one of the size taken from another place of the target
+    //serves a new place, copied whole, before the one unused longest is let go.)
     if(h.target->changes[0] <= h.target->changes[2]) {
       auto& changes = h.target->changes;
       for(auto& [where, copied] : copies) {
@@ -254,16 +380,17 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
       }
       changes[0] = 0, changes[1] = 0, changes[2] = -1, changes[3] = -1;
     }
-    auto key = std::make_tuple(h.target->id, h.width, h.rows);
+    scale = backend->scale;
+    auto key = std::make_tuple(h.target->id, h.x, h.y);
     auto found = copies.find(key);
     if(found != copies.end()) found->second.used = uses;
-    if(found != copies.end() && found->second.x == h.x && found->second.y == h.y && !h.next) {
+    if(found != copies.end() && !h.next && found->second.width >= h.width && found->second.rows >= h.rows) {
       auto& copied = found->second;
+      if(copied.width != h.width || copied.rows != h.rows) taken = h.width | h.rows << 16;
       s32 left = std::max(copied.dirty[0], h.x), top = std::max(copied.dirty[1], h.y);
-      s32 right = std::min({copied.dirty[2], h.x + s32(h.width) - 1, s32(h.target->stride) - 1});
-      s32 bottom = std::min(copied.dirty[3], h.y + s32(h.rows) - 1);
+      s32 right = std::min({copied.dirty[2], h.x + s32(copied.width) - 1, s32(h.target->stride) - 1});
+      s32 bottom = std::min(copied.dirty[3], h.y + s32(copied.rows) - 1);
       copied.dirty[0] = 0, copied.dirty[1] = 0, copied.dirty[2] = -1, copied.dirty[3] = -1;
-      scale = backend->scale;
       if(left > right || top > bottom) return copied.texture;
       Command c{Command::Kind::Copy, h.target->id};
       c.x = left, c.y = top, c.texture = copied.texture;
@@ -272,28 +399,48 @@ auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
       statistics.copies++, statistics.copied += c.width * c.height;
       return copied.texture;
     }
-    if(found == copies.end() && copies.size() >= MostCopies) {  //(the one unused longest let go: release())
+    u32 width = h.width, rows = h.rows, id = 0;
+    if(found != copies.end()) {  //(too small: let go, and made again larger; or two targets': copied whole again)
+      if(h.next && found->second.width == width && found->second.rows == rows) {
+        id = found->second.texture;
+      } else {
+        if(!h.next) {
+          width = std::min(std::bit_ceil(std::max(width, found->second.width)),
+                           std::max(width, std::min<u32>(512, h.target->stride - h.x)));
+          rows = std::min(std::bit_ceil(std::max(rows, found->second.rows)), std::max(rows, h.target->rows - h.y));
+        }
+        backend->dropTexture(found->second.texture);
+      }
+      copies.erase(found);
+    } else if(copies.size() >= MostCopies) {
+      for(auto copy = copies.begin(); copy != copies.end(); copy++) {
+        auto& [where, copied] = *copy;
+        if(std::get<0>(where) != h.target->id || copied.width != width || copied.rows != rows) continue;
+        id = copied.texture, copies.erase(copy);
+        break;
+      }
+    }
+    if(!id && copies.size() >= MostCopies) {  //(the one unused longest let go: release())
       auto oldest = copies.begin();
       for(auto copy = copies.begin(); copy != copies.end(); copy++) {
         if(copy->second.used < oldest->second.used) oldest = copy;
       }
       backend->dropTexture(oldest->second.texture), copies.erase(oldest);
     }
-    u32 id = found != copies.end() ? found->second.texture
-                                   : backend->makeTexture(h.width * backend->scale, h.rows * backend->scale, nullptr);
+    if(!id) id = backend->makeTexture(width * scale, rows * scale, nullptr);
     if(!id) return 0;
-    scale = backend->scale;
-    copies[key] = {id, h.x, h.y, uses};
+    if(width != h.width || rows != h.rows) taken = h.width | h.rows << 16;
+    auto& copied = copies[key] = {id, width, rows, uses};
     Command c{Command::Kind::Copy, h.target->id};
     c.x = h.x, c.y = h.y, c.texture = id;
-    c.width = std::min<u32>(h.width, h.target->stride - h.x), c.height = h.split;
+    c.width = std::min<u32>(width, h.target->stride - h.x), c.height = h.next ? h.split : rows;
     recorded.commands.push_back(c);
     statistics.copies++, statistics.copied += c.width * c.height;
     if(h.next) {  //(the rest from the frame buffer below, whose changes this copy doesn't follow: taken whole again)
       c.target = h.next->id, c.y = 0, c.height = h.rows - h.split, c.intoY = h.split;
       recorded.commands.push_back(c);
       statistics.copies++, statistics.copied += c.width * c.height;
-      auto& dirty = copies[key].dirty;
+      auto& dirty = copied.dirty;
       dirty[0] = h.x, dirty[1] = h.y, dirty[2] = h.x + h.width - 1, dirty[3] = h.y + h.rows - 1;
     }
     return id;
@@ -356,7 +503,7 @@ auto GPU::settings(const GE::Look& look) -> void {
       k.stencilTest = 1, k.stencilCompare = 1, k.stencilPass = Replace;  //(the reference: the vertex's alpha)
     }
   } else {
-    textured = look.textured && (s.texture = textureFor(look, k.texels, s.push.textureScale));
+    textured = look.textured && (s.texture = textureFor(look, k.texels, s.push.textureScale, s.push.held));
     k.textured = textured;
     k.function = look.function | look.withAlpha << 3 | look.doubled << 4;
     k.clamp = look.texture.clampU | look.texture.clampV << 1;
@@ -467,8 +614,10 @@ auto GPU::settings(const GE::Look& look) -> void {
   s.target = target->id;
   s.push.scale[0] = 2.0f / target->stride, s.push.scale[1] = 2.0f / target->height;
   s.push.resolution = backend->scale;
-  s32 left = std::max(p.left, 0), top = std::max(p.top, 0);
-  s32 right = std::min<s32>(p.right, target->stride - 1), bottom = std::min<s32>(p.bottom, target->height - 1);
+  s32 left = std::max(p.left, 0) + column, top = std::max(p.top, 0) + row;
+  s32 right = std::min<s32>(p.right, target->stride - 1 - column) + column;
+  s32 bottom = std::min<s32>(p.bottom, target->height - 1 - row) + row;
+  s.push.origin = row;
   s.scissor[0] = left, s.scissor[1] = top, s.scissor[2] = right - left + 1, s.scissor[3] = bottom - top + 1;
   state = s;
   stateKept = false;
@@ -491,48 +640,74 @@ auto GPU::begin(GE& ge, const GE::Look& look, bool through, const GE::Region& re
   if(!p.stride || region.left > region.right || region.top > region.bottom || region.right < 0 || region.bottom < 0) {
     return held.reset(), true;
   }
-  Target* t = targetFor(p);
-  if(!t || region.bottom >= s32(t->height)) return held.reset(), false;
-  s32 bottom = region.bottom;
-  s32 left = std::max(region.left, 0), top = std::max(region.top, 0);
-  s32 right = std::min<s32>(region.right, t->stride - 1);
+  u32 column = 0, row = 0;
+  Target* t = targetFor(p, region, column, row);
+  if(!t || region.bottom + s32(row) >= s32(t->height)) return held.reset(), false;
+  s32 bottom = region.bottom + row;
+  s32 left = std::max(region.left, 0) + column, top = std::max(region.top, 0) + row;
+  s32 right = std::min<s32>(region.right, t->stride - 1 - column) + column;
   if(left > right || top > bottom) return held.reset(), true;
-  //Bytes memory may have changed in its pages while the GPU drew in them (beside): the target filled afresh
-  //before this PRIM draws over them, what the GPU drew put back first (below).
+  //Bytes memory may have changed in its pages while the GPU drew in them, or since in pages it hasn't drawn in
+  //(beside): filled again from memory before this PRIM draws over them (or where they're taken together, the target
+  //filled afresh, what the GPU drew put back first: below).
   s32 uLeft = left, uTop = top, uRight = right, uBottom = bottom;
   if(t->drawn()) {
     uLeft = std::min(uLeft, t->left), uTop = std::min(uTop, t->top);
     uRight = std::max(uRight, t->right), uBottom = std::max(uBottom, t->bottom);
   }
-  if(t->besideReaches(uLeft, uTop, uRight, uBottom)) t->stale = true;
+  if(t->besideReaches(uLeft, uTop, uRight, uBottom)) {
+    if(t->merged) t->stale = true;
+    else revive(*t, t->beside);
+  }
   //Another target drawn on the GPU in the pages this PRIM draws in, or that fill this one from memory: its pixels
-  //put in memory first (which may leave this one stale: below).
+  //there moved into this one on the GPU where they're the same bytes in its rows (move(): God of War's effects draw
+  //the same memory as 8888 and 5650 frame buffers in turn), else put in memory first (which may leave this one
+  //stale: below).
   u32 rowBytes = t->stride * t->bytes();
   u32 from = t->stale ? 0 : std::min<u32>(t->rows, top), to = bottom + 1;
   u32 first = (t->address + from * rowBytes) / Memory::PageSize;
   u32 last = std::min<u32>((t->address + to * rowBytes - 1) / Memory::PageSize, GE::VRAMPages - 1);
+  moving.clear();
   for(u32 page = first; page <= last; page++) {
-    if(owners[page] && owners[page] != t) {
-      finish(ge);
-      break;
-    }
+    Target* owner = owners[page];
+    if(!owner || owner == t) continue;
+    if(!moving.empty() && moving.back().from == owner && moving.back().last + 1 == page) moving.back().last = page;
+    else moving.push_back({owner, page, page});
   }
-  if(t->stale && t->drawn()) finish(ge);  //(what the GPU drew, then memory's changes over it)
+  for(auto& m : moving) {
+    s32 box[4];
+    if(movable(*m.from, *t, m.first, m.last, box)) continue;
+    finish(ge), moving.clear();
+    break;
+  }
+  if(t->stale && t->drawn()) finish(ge), moving.clear();  //(what the GPU drew, then memory's changes over it)
   if(!ready()) return held.reset(), false;
   //(the colors filled afresh where memory's changed, the depth where memory's depth has: rows of it, or all of it
-  //for another depth buffer; neither replaces the other's newer pixels on the GPU)
-  if(t->stale) t->rows = 0, t->stale = false, t->beside.clear();
-  if(t->depthBuffer != p.depthBuffer || t->depthStride != p.depthStride) {
+  //for another depth buffer; neither replaces the other's newer pixels on the GPU. A frame buffer that's part of
+  //another's target, which doesn't reach its depth buffer, leaves the target's depth as it is: God of War's four
+  //side by side don't fill it afresh each in turn.)
+  if(t->stale) t->rows = 0, t->stale = false, t->beside.clear(), t->merged = false, t->dead.clear();
+  bool depth = !column && !row;
+  if(depth && (t->depthBuffer != p.depthBuffer || t->depthStride != p.depthStride)) {
     t->depthBuffer = p.depthBuffer, t->depthStride = p.depthStride, t->depthRows = 0;
     t->depthChangedFrom = t->depthChangedTo = 0;
   }
-  if(t->depthChangedFrom < t->depthChangedTo) {
+  if(depth && t->depthChangedFrom < t->depthChangedTo) {
     fill(*t, t->depthChangedFrom, std::min(t->depthChangedTo, t->depthRows), p, 2);
     t->depthChangedFrom = t->depthChangedTo = 0;
   }
-  if(u32(bottom + 1) > t->rows) fill(*t, t->rows, bottom + 1, p, 1), t->rows = bottom + 1;
-  if(u32(bottom + 1) > t->depthRows) fill(*t, t->depthRows, bottom + 1, p, 2), t->depthRows = bottom + 1;
-  target = t;
+  u32 filled = bottom + 1;  //(the rows moved into too, filled first)
+  for(auto& m : moving) {
+    s32 box[4];
+    movable(*m.from, *t, m.first, m.last, box);
+    filled = std::max<u32>(filled, box[3] + (s32(m.from->address) - s32(t->address)) / s32(rowBytes) + 1);
+    if(m.from->deadReaches(box[0], box[1], box[2], box[3])) revive(*m.from, m.from->dead);  //(moved as memory has)
+  }
+  if(filled > t->rows) fill(*t, t->rows, filled, p, 1), t->rows = filled;
+  if(t->deadReaches(left, top, right, bottom)) revive(*t, t->dead);  //(where it draws, as memory has it)
+  if(depth && u32(bottom + 1) > t->depthRows) fill(*t, t->depthRows, bottom + 1, p, 2), t->depthRows = bottom + 1;
+  for(auto& m : moving) move(*m.from, *t, m);
+  target = t, this->column = column, this->row = row;
   this->through = through;
   filter = ge.commands[GE::TextureFilter];
   shade = ge.commands[GE::ShadeMode];
@@ -598,7 +773,7 @@ static auto fogAsAttribute(float fog) -> float {
 
 auto GPU::vertex(const GE::Vertex& v, bool perspective) const -> Vertex {
   Vertex o{};
-  o.x = targetFixed(v.x) / 16.0f, o.y = targetFixed(v.y) / 16.0f, o.z = v.z;
+  o.x = targetFixed(v.x) / 16.0f + column, o.y = targetFixed(v.y) / 16.0f + row, o.z = v.z;
   o.w = perspective ? v.clip[3] : 1.0f;
   o.u = v.u, o.v = v.v, o.q = perspective ? v.q : 1.0f;
   o.color = v.color, o.specular = v.specular;
@@ -666,13 +841,14 @@ auto GPU::sprite(const GE::Job& job) -> void {
   bool divided = textured && s.divided;
   if(textured) {
     base.flags = job.linear | (divided ? 0 : 2) | (s.turned ? 4 : 0);
-    base.columnFirst = s.columnFirst, base.columnStep = s.columnStep, base.columnStart = s.columnStart;
-    base.rowFirst = s.rowFirst, base.rowStep = s.rowStep, base.rowStart = s.rowStart;
+    base.columnFirst = s.columnFirst, base.columnStep = s.columnStep;
+    base.columnStart = s.columnStart + s32(column) * 16;
+    base.rowFirst = s.rowFirst, base.rowStep = s.rowStep, base.rowStart = s.rowStart + s32(row) * 16;
   }
   //a corner at pixel edge (x, y): in 3D, its values where the GE's straight lines across and down reach it
   auto corner = [&](s32 x, s32 y) {
     Vertex v = base;
-    v.x = x, v.y = y;
+    v.x = x + s32(column), v.y = y + s32(row);
     if(divided) {
       f64 alongX = f64(x * 16 - s.left) / (s.right - s.left), alongY = f64(y * 16 - s.top) / (s.bottom - s.top);
       f64 inverse = s.leftInverse + (s.rightInverse - s.leftInverse) * alongX;
@@ -711,7 +887,7 @@ auto GPU::point(const GE::Vertex& at) -> void {
   if(!drawing) return;
   Vertex base = vertex(at, false), v[6];
   base.flags = textured && targetFilter(filter, 1.0f);
-  squareOf(base, targetFixed(at.x) >> 4, targetFixed(at.y) >> 4, v);
+  squareOf(base, (targetFixed(at.x) >> 4) + s32(column), (targetFixed(at.y) >> 4) + s32(row), v);
   emit(v, 6);
 }
 
@@ -724,7 +900,7 @@ auto GPU::line(const GE::Job& job, const std::vector<GE::LinePixel>& pixels) -> 
     base.z = pixel.z, base.w = 1, base.u = pixel.u, base.v = pixel.v, base.q = 1;
     base.color = pixel.color, base.specular = pixel.specular, base.fog = pixel.fog >= 255 ? 1.0f : pixel.fog / 256.0f;
     base.flags = textured && job.linear;
-    squareOf(base, pixel.x, pixel.y, v);
+    squareOf(base, pixel.x + s32(column), pixel.y + s32(row), v);
     emit(v, 6);
   }
 }
@@ -805,8 +981,10 @@ auto GPU::mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& ve
 //mesh()'s block for these settings, in recorded's transforms: the last one's again where they're the same.
 auto GPU::transformed(const GE::Transform& t) -> u32 {
   auto& transforms = recorded.transforms;
-  if(!transforms.empty() && !std::memcmp(&t, &lastTransform, sizeof(t))) return transforms.size() - 1;
-  lastTransform = t;
+  if(!transforms.empty() && !std::memcmp(&t, &lastTransform, sizeof(t)) && column == lastColumn && row == lastRow) {
+    return transforms.size() - 1;
+  }
+  lastTransform = t, lastColumn = column, lastRow = row;
   Transformed b{};
   auto columns43 = [](const float* m, float (&out)[4][4]) {
     for(u32 c = 0; c < 4; c++) for(u32 r = 0; r < 3; r++) out[c][r] = m[c * 3 + r];
@@ -818,7 +996,7 @@ auto GPU::transformed(const GE::Transform& t) -> u32 {
     columns43(t.bones + bone * 12, out);
   }
   for(u32 n = 0; n < 3; n++) b.viewport[n] = t.scale[n], b.center[n] = t.center[n];
-  b.offset[0] = t.offsetX / 16, b.offset[1] = t.offsetY / 16;
+  b.offset[0] = t.offsetX / 16 - f32(column), b.offset[1] = t.offsetY / 16 - f32(row);
   b.offset[2] = t.textureWidth, b.offset[3] = t.textureHeight;
   b.textureScale[0] = t.textureScale[0], b.textureScale[1] = t.textureScale[1];
   b.textureScale[2] = t.textureOffset[0], b.textureScale[3] = t.textureOffset[1];
@@ -922,6 +1100,7 @@ auto GPU::finish(GE& ge) -> void {
         if(owners[at / Memory::PageSize] != &t) continue;
         u32 i = (y - t.top) * width + (x - t.left);
         for(s32 column = x; column < next; column++, i++, at += bytes) {
+          if(!t.dead.empty() && t.covered(at, at + bytes - 1)) continue;  //(memory's)
           u32 pixel = narrowTarget((colors[i] & 0xff'ffff) | u32(stencil[i]) << 24, t.format);
           std::memcpy(&memory.vram[at], &pixel, bytes);
         }
@@ -939,10 +1118,12 @@ auto GPU::finish(GE& ge) -> void {
     memory.vramBusy = false;
   }
   for(auto& owner : owners) owner = nullptr;
+  drawnSerial++;
   for(auto& t : targets) {
     t->left = 0, t->top = 0, t->right = -1, t->bottom = -1;
     t->told.clear();
-    if(!t->beside.empty()) t->stale = true;  //(memory's bytes beside what it drew, which may have changed)
+    if(!t->beside.empty() || !t->dead.empty()) t->stale = true;  //(memory's bytes beside or over what it drew)
+    t->dead.clear();
     if(t->rows) memory.watch(Memory::VRAMBase + t->address, t->rows * t->stride * t->bytes());
     if(t->depthRows && t->depthStride) {
       memory.watch(Memory::VRAMBase + 3 * Memory::VRAMSize + t->depthBuffer, t->depthRows * t->depthStride * 2);
@@ -972,9 +1153,14 @@ auto GPU::written(GE& ge, u32 page) -> void {
     t->depthChangedFrom = from, t->depthChangedTo = to;
   }
   if(owners[page]) return;
+  //(a page of whole rows of it, which it hasn't drawn in since the last finish: those bytes taken from memory again
+  //before they're used (beside); else all of it, filled afresh)
   u32 low = page * Memory::PageSize, high = low + Memory::PageSize;
   for(auto& t : targets) {
-    if(t->rows && t->address < high && low < t->end()) t->stale = true;
+    if(!t->rows || t->address >= high || low >= t->end()) continue;
+    u32 rowBytes = t->stride * t->bytes();
+    if(Memory::PageSize % rowBytes || t->address % rowBytes) t->stale = true;
+    else t->touch(std::max(low, t->address), std::min(high, t->end()) - 1);
   }
   (void)ge;
 }
@@ -994,12 +1180,51 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bo
   rows = std::min<u32>({rows, texture.height, 512});
   u64 end = offset + (u64(rows - 1) * texture.bufferWidth + width) * bytes;
   if(!rows || end > Memory::VRAMSize) return false;
-  //(its pages one target's, or a target's and then, from a page on, another's: next)
+  //(the pixels other targets drew in its pages moved first into the target of its format and width that a frame
+  //buffer there would draw into (move()), where they can all be: God of War samples the four shadows it drew as
+  //5650 over a page of the 8888 it drew before and a row the frame buffer below drew)
+  if(direct && backend->moves && texture.bufferWidth) {
+    u32 rowBytes = texture.bufferWidth * bytes;
+    u32 address = offset - offset % (Memory::PageSize % rowBytes ? rowBytes : Memory::PageSize);
+    Target* home = nullptr;
+    for(auto& t : targets) {
+      if(t->address == address && t->stride == texture.bufferWidth && t->format == texture.format) home = t.get();
+    }
+    moving.clear();
+    for(u32 page = offset / Memory::PageSize; home && page <= (end - 1) / Memory::PageSize; page++) {
+      Target* owner = owners[page];
+      u32 low = std::max<u32>(offset, page * Memory::PageSize);
+      u32 high = std::min<u64>(end - 1, (page + 1) * Memory::PageSize - 1);
+      if(!owner || owner == home || !owner->drawnBytes(low, high)) continue;
+      if(!moving.empty() && moving.back().from == owner && moving.back().last + 1 == page) moving.back().last = page;
+      else moving.push_back({owner, page, page});
+    }
+    u32 filled = home ? home->rows : 0;
+    for(auto& m : moving) {
+      s32 box[4];
+      if(home->stale || !movable(*m.from, *home, m.first, m.last, box)) { moving.clear(); break; }
+      filled = std::max<u32>(filled, box[3] + (s32(m.from->address) - s32(home->address)) / s32(rowBytes) + 1);
+    }
+    if(!moving.empty()) {
+      if(filled > home->rows) fill(*home, home->rows, filled, {}, 1), home->rows = filled;
+      for(auto& m : moving) {
+        s32 box[4];
+        movable(*m.from, *home, m.first, m.last, box);
+        if(m.from->deadReaches(box[0], box[1], box[2], box[3])) revive(*m.from, m.from->dead);
+        move(*m.from, *home, m);
+      }
+    }
+  }
+  //(its pages one target's, or a target's and then, from a page on, another's: next. A page's owner that drew none
+  //of the texture's bytes in it, a page holding rows of both, hasn't the newest of them: God of War's shadows, 64
+  //rows each, end in the page the frame buffer below them starts in.)
   Target *t = nullptr, *next = nullptr, *last = nullptr;
   u32 firstOwned = 0;  //(next's first page)
   for(u32 page = offset / Memory::PageSize; page <= (end - 1) / Memory::PageSize; page++) {
     Target* owner = owners[page];
-    if(!owner || owner == last) continue;
+    u32 low = std::max<u32>(offset, page * Memory::PageSize);
+    u32 high = std::min<u64>(end - 1, (page + 1) * Memory::PageSize - 1);
+    if(!owner || owner == last || !owner->drawnBytes(low, high)) continue;
     if(!t) t = owner;
     else if(!next && owner != t) next = owner, firstOwned = page;
     else return false;
@@ -1027,21 +1252,35 @@ auto GPU::holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bo
     for(u32 page = next->address / Memory::PageSize; page < firstOwned; page++) if(owners[page]) return false;
     split = below / rowBytes - y;
     if(split >= rows || rows - split > next->height) return false;
-    if(next->besideReaches(x, 0, x + width - 1, rows - split - 1)) return false;
+    if(next->besideReaches(x, 0, x + width - 1, rows - split - 1)) {
+      if(next->merged) return false;
+      revive(*next, next->beside);
+    }
   }
   if(y + split > t->height) return false;
-  if(t->besideReaches(x, y, x + width - 1, y + split - 1)) return false;  //(memory's newer bytes in it: decoded)
+  if(t->besideReaches(x, y, x + width - 1, y + split - 1)) {  //(memory's newer bytes in it: taken again, or decoded)
+    if(t->merged) return false;
+    revive(*t, t->beside);
+  }
+  if(t->deadReaches(x, y, x + width - 1, y + split - 1)) revive(*t, t->dead);  //(a transfer's: memory's again)
+  if(next && next->deadReaches(x, 0, x + width - 1, rows - split - 1)) revive(*next, next->dead);
   held = Held{t, s32(x), s32(y), width, rows, texture.format, next, split};
   return true;
 }
 
 //Whether the pixels drawn since the last finish (each target's rows top-bottom, columns left-right: what finish()
-//reads back) reach VRAM's bytes first to last. Bytes beside them, in the same pages (past the picture's right
-//edge, where games keep lists), are memory's own until then: memory reaches them without waiting.
+//reads back), in the pages each owns and but those a block transfer has written since (dead), reach VRAM's bytes
+//first to last. Bytes beside them, in the same pages (past the picture's right edge, where games keep lists), are
+//memory's own until then: memory reaches them without waiting. (Asked of each page's owner alone: God of War reads
+//its vertices from VRAM, a page or two each, every time the GE needs one.)
 auto GPU::drawnOver(GE& ge, u32 first, u32 last) -> bool {
   (void)ge;
-  for(auto& t : targets) {
-    if(t->drawn() && t->reaches(first, last, t->left, t->top, t->right, t->bottom)) return true;
+  for(u32 page = first / Memory::PageSize; page <= last / Memory::PageSize && page < GE::VRAMPages; page++) {
+    Target* owner = owners[page];
+    if(!owner || clean[page] == drawnSerial) continue;
+    u32 low = page * Memory::PageSize, high = low + Memory::PageSize - 1;
+    if(!owner->drawnBytes(low, high)) { clean[page] = drawnSerial; continue; }
+    if(owner->drawnBytes(std::max(first, low), std::min(last, high))) return true;
   }
   return false;
 }
@@ -1053,7 +1292,7 @@ auto GPU::drawnOver(GE& ge, u32 first, u32 last) -> bool {
 auto GPU::besideChanged(GE& ge, u32 first, u32 last) -> void {
   if(drawnOver(ge, first, last)) return;
   for(auto& t : targets) {
-    if(t->rows && t->address <= last && first < t->end()) t->touch(first, last);
+    if(t->rows && t->address <= last && first < t->end() && !t->covered(first, last)) t->touch(first, last);
   }
 }
 
@@ -1078,6 +1317,40 @@ auto GPU::Target::besideReaches(s32 left, s32 top, s32 right, s32 bottom) const 
   return false;
 }
 
+auto GPU::Target::deadReaches(s32 left, s32 top, s32 right, s32 bottom) const -> bool {
+  for(auto& [first, last] : dead) {
+    if(reaches(first, last, left, top, right, bottom)) return true;
+  }
+  return false;
+}
+
+auto GPU::Target::covered(u32 first, u32 last) const -> bool {
+  while(first <= last) {
+    bool on = false;
+    for(auto& [from, to] : dead) {
+      if(from > first || first > to) continue;
+      if(to >= last) return true;
+      first = to + 1, on = true;
+    }
+    if(!on) return false;
+  }
+  return true;
+}
+
+auto GPU::Target::drawnBytes(u32 first, u32 last) const -> bool {
+  if(!drawn() || !reaches(first, last, left, top, right, bottom)) return false;
+  if(dead.empty()) return true;
+  u32 rowBytes = stride * bytes();
+  u32 from = std::max<u32>(top, first > address ? (first - address) / rowBytes : 0);
+  u32 to = std::min<u32>(bottom, (last - address) / rowBytes);
+  for(u32 y = from; y <= to; y++) {
+    u32 rowLeft = address + y * rowBytes + left * bytes(), rowRight = rowLeft + (right - left + 1) * bytes() - 1;
+    if(rowLeft > last || first > rowRight) continue;
+    if(!covered(std::max(first, rowLeft), std::min(last, rowRight))) return true;
+  }
+  return false;
+}
+
 //(a list written a word at a time makes one range, each word next to the last)
 auto GPU::Target::touch(u32 first, u32 last) -> void {
   for(auto& [from, to] : beside) {
@@ -1088,7 +1361,7 @@ auto GPU::Target::touch(u32 first, u32 last) -> void {
   }
   if(beside.size() < 16) return beside.push_back({first, last});
   for(auto& [from, to] : beside) first = std::min(first, from), last = std::max(last, to);
-  beside = {{first, last}};
+  beside = {{first, last}}, merged = true;
 }
 
 //Memory's VRAM replaced whole (or another machine's: GE::setRenderer()): what the GPU drew since the last finish put
@@ -1113,7 +1386,11 @@ auto GPU::shownTarget(u32 address, u32 stride, u32 format, u32 width, u32 height
     }
   }
   if(!t || t->stale || t->rows < height || width > t->stride) return nullptr;
-  if(t->besideReaches(0, 0, width - 1, height - 1)) return nullptr;  //(memory's newer bytes in what's shown)
+  if(t->besideReaches(0, 0, width - 1, height - 1)) {  //(memory's newer bytes in what's shown)
+    if(t->merged) return nullptr;
+    revive(*t, t->beside);
+  }
+  if(t->deadReaches(0, 0, width - 1, height - 1)) revive(*t, t->dead);
   //(every page shown the target's or no one's, and one at least the target's: else memory has it, or another)
   u32 bytes = t->bytes(), end = address + ((height - 1) * stride + width) * bytes;
   if(end > Memory::VRAMSize) return nullptr;
@@ -1209,6 +1486,7 @@ auto GPU::drop() -> void {
   reach = {};
   target = nullptr, drawing = false;
   for(auto& owner : owners) owner = nullptr;
+  drawnSerial++;
   if(!backend) return;
   for(auto& t : targets) backend->dropTarget(t->id);
   for(auto& [decoded, texture] : textures) backend->dropTexture(texture.id);

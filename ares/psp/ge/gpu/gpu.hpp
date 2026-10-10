@@ -135,6 +135,11 @@ struct GPU : GE::Renderer {
     u32 fixedB = 0;        //BLEND_FIXED_B (shader blending's)
     u32 writeMask = 0;     //the frame buffer's bits a write leaves alone, in its format (shader blending's)
     u32 filter = 0;        //TEXTURE_FILTER, where the filter is chosen at each pixel (fast mode's 3D: mesh())
+    //A copy of a target with more texels than its PRIM takes (render to texture: textureFor()): the texels taken,
+    //its width and, in bits 16-31, its rows, which fetches are held inside as they'd be in a copy of only those
+    //(0: the copy's own)
+    u32 held = 0;
+    u32 origin = 0;  //the row of the target its frame buffer's first is (targetFor()), where the dither starts
     auto operator==(const Push&) const -> bool = default;
   };
   //A draw's settings, all of them
@@ -154,11 +159,12 @@ struct GPU : GE::Renderer {
   //finish(), copied into a texture for draws after to sample: its top left, or a part of it taken again), and the
   //screen's picture presented on the window the backend shows on (Present: a target's top left, or with no target
   //memory's picture, uploaded), or only a shot of a target's top left taken for the host, as a Present takes one
-  //(Shot); and fast mode's 3D draws (Mesh: count of the indices from first, into the models, each model's settings
-  //its Transformed block). Every position and size is in the PSP's pixels: the backend has each of them
-  //Backend::scale times over.
+  //(Shot); fast mode's 3D draws (Mesh: count of the indices from first, into the models, each model's settings
+  //its Transformed block); and a rectangle of another target's pixels put into a target as memory would have them
+  //(Move: from source's rectangle at sourceX, sourceY, the same bytes in its format, sourceFormat, as the target's,
+  //format). Every position and size is in the PSP's pixels: the backend has each of them Backend::scale times over.
   struct Command {
-    enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh } kind;
+    enum class Kind : u8 { Draw, Upload, Readback, Copy, Present, Shot, Mesh, Move } kind;
     u32 target;
     u32 state = 0, first = 0, count = 0;  //Draw, Mesh
     s32 x = 0, y = 0;                     //Upload, Readback, Copy
@@ -172,6 +178,9 @@ struct GPU : GE::Renderer {
     //in), or more, up to the backend's scale, for the screen (shrunk smoothly, the colors alone, no stencil)
     u8 at = 1;
     u8 format = 3;  //Present: the frame buffer's GE format, its colors shown as memory keeps them (3: as they are)
+    u8 sourceFormat = 3;            //Move
+    u32 source = 0;
+    u16 sourceX = 0, sourceY = 0;
   };
   struct Recorded {
     std::vector<Command> commands;
@@ -207,6 +216,8 @@ struct GPU : GE::Renderer {
     bool reads = false, readsInOrder = false, readsBlending = false, readsApart = true;
     //Fast mode's 3D (mesh()): whether the GPU transforms vertices itself (the driver took transform.vert)
     bool transforms = false;
+    //Whether it moves pixels from one target into another (Command::Move: the driver took move.frag's pipelines)
+    bool moves = false;
     //Whether the last run put a picture on the window: a Present's swapchain image acquired and presented (not
     //where there's no window, or the acquiring timed out: the host shows the frame itself then)
     bool presented = false;
@@ -262,9 +273,16 @@ struct GPU : GE::Renderer {
     std::vector<std::array<s32, 4>> told;  //rectangles memory has heard were drawn over since then (own())
     u64 used = 0;
     //VRAM's bytes (offsets, inclusive) someone reached in its pages while the GPU drew in them, not over what it
-    //drew (drawnOver()): memory's, maybe changed, so it's filled afresh before it draws, shows or lends a texture
-    //over any of them. (At most 16 ranges; more are taken together.)
+    //drew (drawnOver()), or changed in pages it hasn't drawn in since the last finish (written()): memory's, maybe
+    //changed, so they're filled again from memory before it draws, shows or lends a texture over any of them
+    //(revive()). (At most 16 ranges; more are taken together, merged, which may take in its pixels between: then
+    //it's filled afresh, what it drew put back first.)
     std::vector<std::pair<u32, u32>> beside;
+    bool merged = false;
+    //VRAM's bytes (offsets, inclusive) in its drawn rows a block transfer has written whole since it drew there
+    //(overwritten()): memory's, not put back, and filled again before a PRIM draws over them or they're copied or
+    //shown or moved (revive()). (At most 16; where there'd be more, the transfer waits for a finish.)
+    std::vector<std::pair<u32, u32>> dead;
     auto bytes() const -> u32 { return format == 3 ? 4 : 2; }
     auto end() const -> u32 { return address + rows * stride * bytes(); }  //(the VRAM bytes it covers)
     auto drawn() const -> bool { return left <= right; }
@@ -272,6 +290,9 @@ struct GPU : GE::Renderer {
     auto reaches(u32 first, u32 last, s32 left, s32 top, s32 right, s32 bottom) const -> bool;
     auto besideReaches(s32 left, s32 top, s32 right, s32 bottom) const -> bool;
     auto touch(u32 first, u32 last) -> void;  //(beside's: first to last added)
+    auto deadReaches(s32 left, s32 top, s32 right, s32 bottom) const -> bool;
+    auto covered(u32 first, u32 last) const -> bool;  //(whether dead has every byte first to last)
+    auto drawnBytes(u32 first, u32 last) const -> bool;  //(whether it drew any of them, not dead since)
   };
   //A decoded texture on the GPU, while the GE keeps it
   struct Texture { std::weak_ptr<GE::Decoded> decoded; u32 id = 0, rows = 0; };
@@ -283,6 +304,7 @@ struct GPU : GE::Renderer {
     u64 readingDraws = 0, splits = 0;  //draws blended in the shader; those begun as their primitives overlapped
     u64 presents = 0, presentsFromMemory = 0;  //frames presented on the window (show()): from a target, memory's
     u64 meshes = 0;    //3D PRIMs the GPU transformed (fast mode: mesh(), the first of each PRIM's runs)
+    u64 moves = 0;     //pixels moved from one target into another on the GPU (move()), not put back and filled
     u64 waiting = 0;   //nanoseconds the CPU waited in finish() and picture()
   } statistics;
 
@@ -312,6 +334,7 @@ struct GPU : GE::Renderer {
   auto holds(GE& ge, const GE::Sampler& texture, u32 rows, u32 columns) -> bool override;
   auto drawnOver(GE& ge, u32 first, u32 last) -> bool override;
   auto besideChanged(GE& ge, u32 first, u32 last) -> void override;
+  auto overwritten(GE& ge, u32 first, u32 last) -> void override;
   auto meshes(GE& ge, const GE::Transform& t, u32 count) -> bool override;
   auto mesh(GE& ge, const GE::Transform& t, const std::vector<GE::Vertex>& vertices, const std::vector<u32>& corners,
             bool again) -> void override;
@@ -372,6 +395,7 @@ private:
   Recorded recorded;
   std::vector<std::unique_ptr<Target>> targets;
   Target* target = nullptr;  //the PRIM's
+  u32 column = 0, row = 0;   //and where in it the PRIM's frame buffer starts (targetFor())
   bool drawing = false;      //the PRIM draws something (begin())
   State state;               //its settings
   bool stateKept = false;    //and they're the last recorded's (emit())
@@ -380,19 +404,23 @@ private:
   u32 textureWidth = 0, textureHeight = 0;
   std::unordered_map<const GE::Decoded*, Texture> textures;
   Target* owners[GE::VRAMPages] = {};  //VRAM's pages whose newest pixels are the GPU's: the target drawn there
+  //(drawnOver()'s: a page whose owner has drawn none of its bytes, but dead ones, as of drawnSerial, which goes up as
+  //anything is drawn or owned afresh: God of War's GE reads 700,000 vertices a frame from VRAM's busy pages)
+  u64 clean[GE::VRAMPages] = {}, drawnSerial = 1;
   u64 uses = 0;
   //A texture in a target the GPU has drawn (holds()), for the next PRIM: where, and the texture it's copied into
   //(one for each place and size, kept with the target); its rows from split on in next, from that one's first, where
   //it runs on into the frame buffer below
   struct Held { Target* target; s32 x, y; u32 width, rows, format; Target* next = nullptr; u32 split = 0; };
   std::optional<Held> held;
-  //(one for each target and size, the place it was last copied from, and the rectangle of the target changed since,
-  //left, top, right, bottom in its pixels, none where left is past right: taken again from the same place, only that
-  //part is copied, so an effect drawing again and again into one corner of the frame buffer it samples copies the
-  //corner, not the picture, as Killzone's menu blurs a strip right of its picture 1,100 times a frame. At most
-  //MostCopies, the one unused longest let go for another, and none unused for CopyAge PRIMs: release().)
-  struct Copied { u32 texture; s32 x, y; u64 used; s32 dirty[4] = {0, 0, -1, -1}; };
-  std::map<std::tuple<u32, u32, u32>, Copied> copies;  //(target, width, rows)
+  //(one for each target and place copied from, its width and rows, and the rectangle of the target changed since,
+  //left, top, right, bottom in its pixels, none where left is past right: taken again, only that part is copied, so
+  //an effect drawing again and again into one corner of the frame buffer it samples copies the corner, not the
+  //picture, as Killzone's menu blurs a strip right of its picture 1,100 times a frame. A PRIM taking fewer rows or
+  //columns from the place takes them from it too (Push::held). At most MostCopies, the one unused longest let go for
+  //another, and none unused for CopyAge PRIMs: release().)
+  struct Copied { u32 texture; u32 width, rows; u64 used; s32 dirty[4] = {0, 0, -1, -1}; };
+  std::map<std::tuple<u32, s32, s32>, Copied> copies;  //(target, x, y)
   auto changed(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;  //(Target::changes)
   //The PRIM's target, scissor and the extent of its corners drawn so far (none: left past right), given to the
   //target's changes as the next PRIM begins (reached())
@@ -416,17 +444,26 @@ private:
   static constexpr u32 MostTold = 8;  //(Target::told's)
   static constexpr u32 MeshLeast = 16;  //(the fewest vertices a PRIM meshes() takes has)
 
-  auto targetFor(const GE::PixelState& p) -> Target*;
-  auto fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts = 1) -> void;
+  auto targetFor(const GE::PixelState& p, const GE::Region& region, u32& column, u32& row) -> Target*;
+  auto fill(Target& t, u32 from, u32 to, const GE::PixelState& p, u8 parts = 1, u32 left = 0, u32 right = ~0u)
+    -> void;
+  auto revive(Target& t, std::vector<std::pair<u32, u32>>& ranges) -> void;  //(ranges of its bytes filled from memory)
   auto release() -> void;
   auto flush() -> void;  //(what's recorded handed to the GPU now: submit()'s)
+  //(pages from first to last another target has drawn in, whose pixels move into t on the GPU; and the rectangle of
+  //from's pixels moved, in its own pixels, where movable(): none for left past right)
+  struct Moving { Target* from; u32 first, last; };
+  std::vector<Moving> moving;
+  auto movable(const Target& from, const Target& t, u32 first, u32 last, s32 (&box)[4]) const -> bool;
+  auto move(Target& from, Target& t, const Moving& m) -> void;
   auto own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void;
-  auto textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32;
+  auto textureFor(const GE::Look& look, u8& texels, u32& scale, u32& taken) -> u32;
   auto settings(const GE::Look& look) -> void;
   auto emit(const Vertex* vertices, u32 count) -> void;
   auto vertex(const GE::Vertex& v, bool perspective) const -> Vertex;
   auto transformed(const GE::Transform& t) -> u32;  //(mesh()'s Transformed block for t: its index in transforms)
-  GE::Transform lastTransform{};                    //(the last one's settings)
+  GE::Transform lastTransform{};                    //(the last one's settings, and where its frame buffer was)
+  u32 lastColumn = 0, lastRow = 0;
   std::optional<Pipeline> lastDrawable;             //(the last pipeline meshes() found drawable)
   u32 meshFirst = 0;                                //(the last PRIM's first model, in recorded's)
   auto lose() -> void;

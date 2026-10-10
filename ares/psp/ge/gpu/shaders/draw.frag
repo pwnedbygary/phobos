@@ -68,6 +68,9 @@ layout(push_constant) uniform Push {
   uint fixedB;          //BLEND_FIXED_B (READS)
   uint writeMask;       //the frame buffer's bits left alone, in its format (READS)
   uint filtering;       //TEXTURE_FILTER, where the filter is chosen at each pixel (vertexFlags' bit 4)
+  uint held;            //a copy of a target with more texels than taken: those taken, the width and, in bits 16-31,
+                        //the rows (0: all of the copy's)
+  uint origin;          //the target's row the frame buffer's first is, where the dither matrix starts
 } push;
 
 layout(set = 0, binding = 0) uniform sampler2D texels;  //8888, red in the low byte (as the GE's decoded copies)
@@ -127,9 +130,11 @@ uint narrowed(uint value, uint bits) {
 
 //A texel; one of a texture taken from a 16-bit frame buffer (TEXELS) as its format keeps it, as the GE reads it.
 //(Held inside the picture on the GPU, which may have only the rows and columns the GE's pixels reach: above 1x a
-//pixel between two of the GE's may sample a little past them.)
+//pixel between two of the GE's may sample a little past them. A copy with more than those is held inside those.)
 uvec4 fetch(uint u, uint v) {
-  ivec2 at = min(ivec2(u, v), textureSize(texels, 0) - 1);
+  ivec2 size = textureSize(texels, 0);
+  if(push.held != 0u) size = min(size, ivec2(push.held & 0xffffu, push.held >> 16) * int(push.textureScale));
+  ivec2 at = min(ivec2(u, v), size - 1);
   uvec4 t = uvec4(texelFetch(texels, at, 0) * 255.0 + 0.5);
   if(TEXELS == 0u) t = uvec4(narrowed(t.r, 5u), narrowed(t.g, 6u), narrowed(t.b, 5u), 255u);
   if(TEXELS == 1u) t = uvec4(narrowed(t.r, 5u), narrowed(t.g, 5u), narrowed(t.b, 5u), t.a >= 128u ? 255u : 0u);
@@ -188,9 +193,10 @@ uvec4 written(uvec4 value, uvec4 old) {
   return unpacked((packed(value) & ~keep) | (packed(old) & keep));
 }
 
-//DITHER0-3's value for the pixel (the matrix over the PSP's pixels, each resolution x resolution of the GPU's)
+//DITHER0-3's value for the pixel (the matrix over the frame buffer's pixels, each resolution x resolution of the
+//GPU's; its columns start a multiple of four in, as frame buffers start on 16 bytes)
 int dithered() {
-  uvec2 at = uvec2(gl_FragCoord.xy / float(push.resolution)) & 3u;
+  uvec2 at = (uvec2(gl_FragCoord.xy / float(push.resolution)) - uvec2(0u, push.origin)) & 3u;
   uint nibble = push.dither[at.y >> 1] >> ((at.y & 1u) * 16u + at.x * 4u) & 15u;
   return nibble < 8u ? int(nibble) : int(nibble) - 16;
 }

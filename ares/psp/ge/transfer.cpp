@@ -42,11 +42,22 @@ auto GE::transfer() -> void {
   vramPages(destination + (destinationY * destinationStride + destinationX) * bytes,
             u64(height - 1) * destinationStride * bytes + width * bytes, written);
   drawnBefore(read, written);
+  //(a hardware renderer's pixels a row lands on whole, after it's read, are memory's from then on: overwritten())
+  auto overwrite = [&](u32 to, u32 size) {
+    u32 physical = to & 0x1fff'ffff, copy = (physical - Memory::VRAMBase) / Memory::VRAMSize;
+    if(!renderer || physical < Memory::VRAMBase || physical - Memory::VRAMBase >= Memory::VRAMWindow) return;
+    if(copy & 1) return;
+    u32 offset = (physical - Memory::VRAMBase) % Memory::VRAMSize;
+    if(offset + size <= Memory::VRAMSize) renderer->overwritten(*this, offset, offset + size - 1);
+  };
   std::vector<u8> row(width * bytes);
   for(u32 y = 0; y < height; y++) {
     u32 from = source + ((sourceY + y) * sourceStride + sourceX) * bytes;
     u32 to = destination + ((destinationY + y) * destinationStride + destinationX) * bytes;
-    if(memory.copyOut(row.data(), from, row.size()) && memory.copyIn(to, row.data(), row.size())) continue;
+    if(memory.copyOut(row.data(), from, row.size())) {
+      overwrite(to, row.size());
+      if(memory.copyIn(to, row.data(), row.size())) continue;
+    }
     for(u32 n = 0; n < row.size(); n++) memory.write(1, to + n, memory.read(1, from + n));  //across a piece's end
   }
 }
