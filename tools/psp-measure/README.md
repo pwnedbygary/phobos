@@ -56,7 +56,11 @@ on a real PSP, reads back the exact pixels and saves them, so the core can be co
    test runs again; nothing is deleted. The program keeps the PSP awake, and each test's line says "running" as it
    starts. A test that didn't finish runs once more; if it stops the PSP again, the next start gives up on it
    (`<name>.stopped`) and finishes the rest. A probe is given up on after one stop, so expect to start the program
-   again, and choose the probes again, after each probe that switches the PSP off.
+   again, and choose the probes again, after each probe that switches the PSP off. The GE gets 5 seconds for each
+   list: if it hasn't finished by then, it has stalled, and the program resets it and goes on. The test's line says
+   "the GE stalled: resetting", then ends "the GE stalled: reset"; its `.bin` holds what the GE had drawn, and
+   `<name>.stalled` says how long it waited, what the list held and what the reset gave. If the reset itself stops
+   the PSP (the line stays at "resetting"), the next start gives up on that test at once.
 4. Copy `results/` back. `tools/psp-measure/compare.sh <results folder>` checks the core against the VFPU's and the
    FPU's results (in its `vfpu/`); for the GE's, see "How the GE's comparison works" below.
 
@@ -70,9 +74,9 @@ start the program again first (otherwise it says so, and skips that one test).
 | File | What it is |
 |---|---|
 | `main.c` | The menu, starting afresh, and leaving. |
-| `results.c`, `measure.h` | The results folder, and each test's file in it: written as `<name>.part` and renamed to `.bin` once complete, run once more after a stop, then given up on as `.stopped`. `measure.h` is what the parts share. |
+| `results.c`, `measure.h` | The results folder, and each test's file in it: written as `<name>.part` and renamed to `.bin` once complete, run once more after a stop, then given up on as `.stopped` (at once if it left a `.stalled`). `measure.h` is what the parts share. |
 | `vfpu.c` | The VFPU's and the FPU's tests. |
-| `ge.c` | The GE's and the controller's tests. |
+| `ge.c` | The GE's and the controller's tests. Its waits for the GE are timed (`waitForGe`): a stall is recorded, the GE reset, and the round goes on. |
 | `Makefile` | Builds them into the one program. |
 | `ops.py`, `ops.h`, `ops3.h` | `ops.py` writes `ops.h` and `ops3.h`, the instruction recorder's lists for rounds 2 and 3. Every entry is checked by pspdev's own assembler, because a real PSP stops a program at an instruction it doesn't have. |
 | `compare.sh`, `compare.cpp` | Checks the core against a folder of VFPU and FPU results: each input run through the core's own instruction and compared bit for bit, with how far off any mismatch is (in units in the last place); for the instruction recorder, each differing entry's words counted by kind (a NaN, a denormal, rounding, a lane left unwritten, other); for the probes, each result beside the core's. Works on any round's files. |
@@ -194,10 +198,18 @@ pspautotests' recordings settle only part (docs/psp-core.md, parts 29 and 33):
   (`curves-made-up`); normals made from the slopes, lit from four ways with either patch front face, beside the same
   patches given normals (`curves-lit`); which of culling and its front face, and the patch culling and patch front
   face, cull a patch's triangles (`curves-culling`); which vertices strips join across patches, as lines and flat
-  triangles (`curves-joins`); and how many vertices a row has, points added up, at 16, 63, 64 and 65 divisions
-  (`curves-count`), then past pspsdk's 64 at 100 and 128 (`curves-count-128`), 200 (`curves-count-200`) and 255
-  (`curves-count-255`), last and a few to a display list, so that if the GE stalls there only that test is given up
-  on. The core draws these by a rule fitted to round 3's pictures and pspautotests' (docs/psp-core.md, part 33).
+  triangles (`curves-joins`); and how many vertices a row has, points added up, at 16, 63 and 64 divisions
+  (`curves-count`), then past pspsdk's 64 one to a test, last: `curves-count-65`, `-100`, `-128`, `-200` and `-255`.
+  The core draws these by a rule fitted to round 3's pictures and pspautotests' (docs/psp-core.md, part 33).
+- **The stall check** (`stall-check`), just before the counts: a list left waiting at its stall address, so the GE
+  doesn't finish it and the program resets it as after a stall (its `.stalled` says so), with 16 divisions' count
+  drawn before the reset (row 0) and after it (row 1), which should match.
+
+The owner's PSP froze in round 4 at `curves-count` (then 16 to 65 divisions in one list) and `curves-count-128` (100
+and 128): most likely the GE didn't finish, and the program waited for it for good. Since 2026-10-09 the program's
+waits are timed and a stall is reset (above), and each count past 64 has its own test. What the earlier program left
+of the counts (`.part`, `.again`, `.stopped`) is cleared the first time round 4 runs in a results folder
+(`curves-count.timed` marks that), so they run again; finished `.bin` files are kept.
 
 Round 5 (about 3 MB, `manifest5.txt`) takes what docs/psp-core.md's part 48 left open, once it fitted how the GE
 steps colors, fog and depth across triangles:
@@ -216,8 +228,9 @@ steps colors, fog and depth across triangles:
 ### How the GE's comparison works
 
 The program computes nothing itself. `tests/psp/measure.cpp` runs the same program in Phobos's core, through its
-menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, rounds 4 and 5,
-leaving), and checks every file is written; with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs
+menu as a person would (the GE's tests, starting afresh, the tests again, round 3, the probes, round 4, round 4
+again over counts left as the earlier program left them, round 5, leaving), and checks every file is written (and
+that the stall check got past its stall); with `PSP_GE_RESULTS` set to a `results/ge` folder, it lists what differs
 from that folder (`PSP_GE_OURS` keeps the core's own files for a closer look):
 
 ```

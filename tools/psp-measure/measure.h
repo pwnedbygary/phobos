@@ -28,10 +28,10 @@ int exists(const char* path);
 int mark(const char* path);  //an empty file, as a marker; 0 if it can't be written
 void awake(void);            //tells the PSP it's in use, so its power-save timer starts over
 
-//One test's file: written as <name>.part and renamed to <name>.bin once complete (see results.c). line is the
-//screen line saying how the test is doing.
+//One test's file: written as <name>.part and renamed to <name>.bin once complete (see results.c). stalled is where
+//a test says the GE stalled on it (ge.c). line is the screen line saying how the test is doing.
 typedef struct {
-  char done[320], part[320], again[320];
+  char done[320], part[320], again[320], stalled[320];
   SceUID file;
   int line;
 } Output;

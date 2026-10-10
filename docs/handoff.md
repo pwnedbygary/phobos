@@ -25,6 +25,23 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP measure: a GE stall no longer freezes the owner's PSP — 2026-10-09
+
+Branch `cursor/psp-measure-stall-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Only `tools/psp-measure`,
+`tests/psp/measure.cpp`, the rebuilt `tests/psp/programs/pspmeasure.elf` and docs; no core change.
+- **Why**: in round 4 the owner's PSP froze at `curves-count` and `curves-count-128` (patches cut past 64 times),
+  most likely the GE never finishing while `finishList` waited in `sceGeDrawSync(0)` for good; each test cost two
+  power-offs.
+- **What**: the GE gets 5 s a list (`waitForGe`); a stall is written to `<test>.stalled`, the GE reset
+  (`sceGuBreak(GU_BREAK_CANCEL)`, then `sceGuTerm`/`sceGuInit`), the test saved as the GE left it, and the round goes
+  on. A test whose reset itself froze the PSP is given up on at the next start. Counts past 64 are a test each
+  (`curves-count-65`, `-100`, `-128`, `-200`, `-255`); the earlier program's leftovers for them are cleared once
+  (`curves-count.timed`). A new `stall-check` resets the GE on purpose the first time round 4 runs in a results
+  folder (docs/psp-core.md, part 48, "Round 4 again").
+- **Owner**: `.local/psp-round5b/` (EBOOT.PBP SHA-256
+  `2c5c3343cf1e1ecf56eb4deb4fdc4eb5d1dbf1312ae7896d0d90bdcbbbd0a173`, HOW-TO.md): round 4 again, restart, then
+  round 5; bring back `results/ge`. Whether the reset frees a GE stuck inside a patch is what that run will show.
+
 ## PSP core: character conversion, thread-local storage, lent stacks; PGD holds five black games — 2026-10-09
 
 Branch `cursor/psp-hle-games11-2b67`, on top of #188's `cursor/psp-gpu-fast3-2b67` (#187, #185 and #184 under it). PR #189.
