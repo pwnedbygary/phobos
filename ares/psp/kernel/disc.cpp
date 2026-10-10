@@ -23,6 +23,7 @@ auto Disc::open(Reader reader, u64 imageSize, std::string& error) -> bool {
   this->reader = reader;
   format = Format::ISO;
   cachedBlock = -1;
+  folders.clear();
   index.clear();
   sizes.clear();
   plainFrames.clear();
@@ -281,21 +282,37 @@ auto Disc::record(const u8* bytes, Entry& entry) -> bool {
 //A damaged record ends the folder there, and no folder is read past 256 sectors (some 10,000 entries) or the disc's
 //end, so a damaged size can't have each lookup read the whole disc.
 auto Disc::list(const Entry& folder) -> std::vector<Entry> {
+  return listed(folder);
+}
+
+//The same, read once a folder: a disc never changes, and a path is looked up folder by folder each time a file is
+//opened by it. God of War: Ghost of Sparta opens a file about 3,000 times a frame (refused its PGD key, it tries
+//again), and each lookup read the folders' sectors afresh, unpacking a compressed image's blocks (a CHD's hunks) for
+//them: in the library run it reached frame 60 in 900 seconds. A folder a sector of which couldn't be read is read
+//again next time (a damaged record ends it for good, but a read that fails may not fail again).
+auto Disc::listed(const Entry& folder) -> const std::vector<Entry>& {
+  u64 key = u64(folder.sector) << 32 | folder.size;
+  if(!folder.folder) key = ~0ull;  //(never a folder's: nothing listed)
+  if(auto found = folders.find(key); found != folders.end()) return found->second;
   std::vector<Entry> entries;
-  if(!folder.folder || folder.sector >= sectorCount) return entries;
-  u32 count = std::min<u32>({(folder.size + SectorSize - 1) / SectorSize, 256, sectorCount - folder.sector});
-  u8 sector[SectorSize];
-  for(u32 n = 0; n < count; n++) {
-    if(!readSectors(folder.sector + n, 1, sector)) break;
-    for(u32 at = 0; at + 34 <= SectorSize && sector[at];) {  //a 0 length: the rest of the sector is empty
-      u32 length = sector[at];
-      Entry entry;
-      if(at + length > SectorSize || !record(sector + at, entry)) return entries;
-      if(!(entry.name.size() == 1 && u8(entry.name[0]) <= 1)) entries.push_back(entry);
-      at += length;
+  auto read = [&]() -> bool {  //false if a sector couldn't be read
+    if(!folder.folder || folder.sector >= sectorCount) return true;
+    u32 count = std::min<u32>({(folder.size + SectorSize - 1) / SectorSize, 256, sectorCount - folder.sector});
+    u8 sector[SectorSize];
+    for(u32 n = 0; n < count; n++) {
+      if(!readSectors(folder.sector + n, 1, sector)) return false;
+      for(u32 at = 0; at + 34 <= SectorSize && sector[at];) {  //a 0 length: the rest of the sector is empty
+        u32 length = sector[at];
+        Entry entry;
+        if(at + length > SectorSize || !record(sector + at, entry)) return true;
+        if(!(entry.name.size() == 1 && u8(entry.name[0]) <= 1)) entries.push_back(entry);
+        at += length;
+      }
     }
-  }
-  return entries;
+    return true;
+  };
+  if(!read()) return unkept = std::move(entries);
+  return folders[key] = std::move(entries);
 }
 
 //The entry a path's names lead to from the root, each found whatever its case.
@@ -303,7 +320,7 @@ auto Disc::find(const std::vector<std::string>& names, Entry& entry) -> bool {
   Entry at = rootEntry;
   for(auto& name : names) {
     bool found = false;
-    for(auto& candidate : list(at)) {
+    for(auto& candidate : listed(at)) {
       if(candidate.name.size() != name.size()) continue;
       bool same = true;
       for(size_t n = 0; n < name.size() && same; n++) {

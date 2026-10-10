@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -81,6 +82,8 @@ private:
   std::vector<bool> plainFrames;  //a DAX's frames stored as they are (its uncompressed areas)
   s64 cachedBlock = -1;       //the last block unpacked, as reads come in runs
   std::vector<u8> block, packed;
+  std::map<u64, std::vector<Entry>> folders;  //folders' entries as listed() read them, by first sector and size
+  std::vector<Entry> unkept;  //a folder's entries read in part (a sector couldn't be read), as listed() last gave them
 
   auto openCSO(const u8* header, u64 imageSize, std::string& error) -> bool;
   auto openDAX(const u8* header, u64 imageSize, std::string& error) -> bool;
@@ -88,6 +91,7 @@ private:
   auto plainFrame(u32 number) const -> bool;
   auto readBlock(u32 number) -> bool;
   auto readImage(u64 offset, u64 size, u8* data) -> bool;
+  auto listed(const Entry& folder) -> const std::vector<Entry>&;
   static auto record(const u8* bytes, Entry& entry) -> bool;
 };
 
