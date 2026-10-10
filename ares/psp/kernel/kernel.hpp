@@ -1350,6 +1350,7 @@ struct Kernel {
   auto sceMpegAvcDecodeStopYCbCr() -> void;
   auto sceMpegAvcDecodeDetail() -> void;
   auto sceMpegAvcCsc() -> void;
+  auto sceMpegAvcConvertToYuv420() -> void;
   auto sceMpegAtracDecode() -> void;
   auto pictureConvert(const std::vector<u8>& planes, u32 pictureWidth, u32 pictureHeight, u32 format, bool opaque,
                       u32 destination, u32 frameWidth, u32 x, u32 y, u32 width, u32 height) -> void;

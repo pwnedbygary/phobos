@@ -631,6 +631,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceMpeg",           "sceMpegAvcDecodeStopYCbCr",     &Kernel::sceMpegAvcDecodeStopYCbCr);
   add("sceMpeg",           "sceMpegAvcDecodeDetail",        &Kernel::sceMpegAvcDecodeDetail);
   add("sceMpeg",           "sceMpegAvcCsc",                 &Kernel::sceMpegAvcCsc);
+  add("sceMpeg",           "sceMpegAvcConvertToYuv420",     &Kernel::sceMpegAvcConvertToYuv420);
   add("sceMpeg",           "sceMpegAtracDecode",            &Kernel::sceMpegAtracDecode);
   add("sceMpeg",           "sceMpegGetAvcEsAu",             &Kernel::sceMpegGetAvcAu);
   //movies' headers (psmf.cpp) and the movie player (psmfplayer.cpp), libraries games ship as modules of their own,
