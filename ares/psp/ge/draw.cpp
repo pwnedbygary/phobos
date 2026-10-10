@@ -223,8 +223,11 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   //the primitive draws over itself (the GPU reads it as it was before the primitive, as the software renderer's
   //drawing a pixel at a time from memory doesn't: Region{0, 0, -1, -1} reaches nothing).
   //A PRIM the renderer refuses (begin()) is drawn here instead, as without one: what it drew put back in memory
-  //first, and the texture decoded for the region it draws in.
+  //first, and the texture decoded for the region it draws in; and at once, not left waiting in the batch, as what
+  //the renderer draws next takes its pixels from memory, and a batch's settle gives every busy page back to the CPU,
+  //the renderer's too (freeVRAM()).
   hardware = renderer && renderer->ready();
+  bool refused = false;
   //A primitive drawn with settings that leave every pixel as it was (keepsPixels()) is set up as ever, and what it
   //may draw over reported, but it isn't drawn, nor its texture decoded: nothing it would draw could change. Unless
   //reading its texels would be reported (a format the PSP doesn't have, bytes with no memory behind them: texel()).
@@ -270,17 +273,18 @@ auto GE::drawVertices(u32 kind, const VertexFormat& format, std::vector<Vertex>&
   }
   if(hardware && !renderer->begin(*this, look, format.through, region)) {
     renderer->finish(*this);
-    hardware = false;
+    hardware = false, refused = true;
     if(textured) {
-      decode(look, region, rows, true, copyDraws);
+      decode(look, region, rows, false, copyDraws);
       if(!look.texture.decoded && !look.deferRows) look.texture.bytes = direct(look.texture);
     }
   }
   //Waiting in the batch, to be drawn in bands with the rest (threads.cpp); or drawn at once, after what waits. A
-  //texture read from memory as it's drawn (texture.cpp) has it drawn at once. One deferred until the batch starts
-  //(render to texture) still waits in the batch: ensureDecoded fills it before any band draws.
-  drawing.recording = !hardware && !skipping && !(look.textured && !look.texture.decoded && !look.deferRows) &&
-                      defer(pixel, region);
+  //texture read from memory as it's drawn (texture.cpp) has it drawn at once, and so has a PRIM the renderer
+  //refused. One deferred until the batch starts (render to texture) still waits in the batch: ensureDecoded fills it
+  //before any band draws.
+  drawing.recording = !hardware && !refused && !skipping &&
+                      !(look.textured && !look.texture.decoded && !look.deferRows) && defer(pixel, region);
   if(!drawing.recording && !hardware && !skipping) flush();
   const Look& drawn = drawing.recording ? drawing.batch->looks.emplace_back(std::move(look)) : look;
   if(drawing.recording && drawn.deferRows) {  //(the CPU waits for its texture's pages till it's decoded: threads.cpp)

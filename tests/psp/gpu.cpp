@@ -790,6 +790,66 @@ static auto gpuBetweenPages() -> void {
   hardware.ge.setRenderer(nullptr);
 }
 
+//A PRIM the renderer refuses among PRIMs the GPU draws, in a list run with the drawing threads (four, batches shared
+//out however small, the CPU's guard over VRAM): the refused one (a sprite reaching rows 505-520 of a frame buffer,
+//past a target's 512) is the software renderer's, and later sprites the GPU draws reach rows 500-511 of the same
+//frame buffer, either side of it, and the rows of another. Then the next list starts, and the CPU loads a pixel the
+//GPU drew and stores into another of them. Everything comes out as the software renderer has it: the refused sprite
+//under the GPU's (not the rows the GPU had from memory before it, put back over it), the load finding the GPU's
+//pixel, and the store kept (not put back over by the GPU's older pixels at the finish).
+static auto gpuRefusedAmongThreads() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  constexpr u32 ListA = 0x0894'0000, ListB = 0x0895'0000, Other = 0x4'0000;  //(Other: a VRAM offset)
+  auto build = [](Memory& memory) {
+    u32 at = ListA, vertex = GPUVertices;
+    auto put = [&](u32 command, u32 argument = 0) {
+      memory.write(4, at, command << 24 | (argument & 0xff'ffff)), at += 4;
+    };
+    auto sprite = [&](float left, float top, float right, float bottom, u32 color) {
+      put(GE::Base, vertex >> 8 & 0xf'0000), put(GE::VertexAddress, vertex);
+      for(auto [x, y] : {std::pair{left, top}, std::pair{right, bottom}}) {
+        for(float value : {0.0f, 0.0f}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+        memory.write(4, vertex, color), vertex += 4;
+        for(float value : {x, y, 0.0f}) memory.write(4, vertex, bitsOf(value)), vertex += 4;
+      }
+      put(GE::Primitive, GE::Sprites << 16 | 2);
+    };
+    put(GE::FrameBufferPointer, 0), put(GE::FrameBufferWidth, 64), put(GE::FrameBufferPixelFormat, 3);
+    put(GE::Scissor1, 0), put(GE::Scissor2, 63 | 1023 << 10), put(GE::Region2, 1023 | 1023 << 10);
+    put(GE::VertexType, 0x80'019f), put(GE::ShadeMode, 1);
+    sprite(4, 505, 40, 521, 0xff33'66cc);  //(refused: rows 505-520)
+    sprite(0, 500, 4, 512, 0xff00'ff00);   //(the GPU's: rows 500-511, either side of it)
+    sprite(60, 500, 64, 512, 0xffff'0000);
+    put(GE::FrameBufferPointer, Other);
+    sprite(0, 0, 64, 16, 0xff12'3456);
+    put(GE::Finish), put(GE::End);
+    at = ListB;
+    put(GE::ShadeMode, 1), put(GE::Finish), put(GE::End);
+  };
+  KernelMachine software, hardware;
+  hardware.system.ge.setRenderer(gpu);
+  u32 loaded[2] = {};
+  for(auto* m : {&software, &hardware}) {
+    m->system.ge.setThreads(4);
+    m->system.ge.drawing.shared = 0;
+    build(m->system.memory);
+    m->call("sceGeListEnQueue", {ListA, 0, 0xffff'ffff, 0});
+    m->call("sceGeListEnQueue", {ListB, 0, 0xffff'ffff, 0});
+    loaded[m == &hardware] = m->system.memory.read(4, Memory::VRAMBase + Other + (8 * 64 + 8) * 4);
+    m->system.memory.write(4, Memory::VRAMBase + Other + (10 * 64 + 8) * 4, 0xffab'cdef);
+  }
+  if(loaded[1] != loaded[0]) std::printf("  the CPU's load found %08x, not the GPU's pixel\n", loaded[1]);
+  CHECK(loaded[0], 0x0012'3456u);  //(the stencil, the alpha, kept: 0)
+  CHECK(loaded[1], loaded[0]);
+  u32 bytes = vramApart(software.system, hardware.system);
+  if(bytes) std::printf("  %u bytes apart\n", bytes);
+  CHECK(bytes, 0u);
+  CHECK(hardware.system.memory.read(4, Memory::VRAMBase + Other + (10 * 64 + 8) * 4), 0xffab'cdefu);
+  CHECK(hardware.system.memory.read(4, Memory::VRAMBase + (508 * 64 + 20) * 4), 0x0033'66ccu);
+  hardware.system.ge.setRenderer(nullptr);
+}
+
 //The GPU's depth buffer against memory's: depth cleared by the CPU between two depth-tested sprites is taken (the
 //second sprite drawn), and a color pixel the CPU writes between them doesn't bring back memory's older depth (the
 //second sprite, behind the first, not drawn).
@@ -1309,6 +1369,7 @@ auto gpuTests() -> Tests {
     {"gpu render to texture from two frame buffers, one below the other, nothing finished", gpuStackedTexture},
     {"gpu a texture decoded again before the GPU has the first: its texels kept till then", gpuTexelsKept},
     {"gpu a finish puts back only the pages drawn in, not memory's newer bytes between", gpuBetweenPages},
+    {"gpu a PRIM it refuses among the drawing threads: drawn in order, the GPU's pages kept", gpuRefusedAmongThreads},
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},

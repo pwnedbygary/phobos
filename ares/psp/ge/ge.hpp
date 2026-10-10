@@ -564,9 +564,9 @@ struct GE {
   //for that first (Memory::finishDrawing, settleAll()), as for the drawing threads' batches. written() hears of
   //every watched page someone changes (Memory::watch()), so that the renderer knows when its copy of a frame buffer
   //is older than memory's. When ready() is false (the GPU lost) the software renderer draws; and a PRIM begin()
-  //refuses (the renderer can't draw it) is drawn by the software renderer, once the renderer has put back what it
-  //drew. It's set with setRenderer(), which has it forget any machine's VRAM it saw before, and taken away with it
-  //before it goes, settled.
+  //refuses (the renderer can't draw it) is drawn by the software renderer, at once, once the renderer has put back
+  //what it drew. It's set with setRenderer(), which has it forget any machine's VRAM it saw before, and taken away
+  //with it before it goes, settled.
   struct Renderer {
     virtual ~Renderer() = default;
     virtual auto ready() const -> bool = 0;

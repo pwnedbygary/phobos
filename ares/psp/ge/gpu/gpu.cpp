@@ -180,8 +180,7 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
   u32 bytes = t.bytes();
   u32 low = t.address + (top * t.stride + left) * bytes, high = t.address + (bottom * t.stride + right) * bytes;
   u32 first = low / Memory::PageSize, last = std::min<u32>(high / Memory::PageSize, GE::VRAMPages - 1);
-  //(told, and its pages busy still: the drawing threads' settle frees every busy page, the GPU's too, and memory
-  //may copy them then without a finish)
+  //(told, and its pages busy still: memory may copy a page that isn't without a finish)
   bool told = false;
   for(auto& r : t.told) told |= left >= r[0] && top >= r[1] && right <= r[2] && bottom <= r[3];
   for(u32 page = first; page <= last && told; page++) told = memory.vramPageBusy(page);
