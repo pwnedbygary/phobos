@@ -649,6 +649,27 @@ auto Kernel::serialize(serializer& s) -> bool {
       check(t->waitMode == TlsByLibrary || userAddress(t->waitPointer));
     }
   }
+  //sceJpeg's library and context (jpeg.cpp), sceHprm's callbacks (ctrl.cpp), and which ATRAC IDs decode frames handed
+  //them one at a time (atrac.cpp's low level, their channels and frame size the IDs' own fields, saved above): layout
+  //21 on, none in older states. A context is made only with the library started, and 1024 pixels wide at most; a
+  //low-level ID has no file, and parameters sceAtracLowLevelInitDecoder takes.
+  if(s.reading() && stateLayout < 21) {
+    jpeg = {};
+    for(auto& callback : hprmCallbacks) callback = 0;
+    for(auto& a : atracs) a.lowLevel = false;
+  } else {
+    s(jpeg.initialized); s(jpeg.created); s(jpeg.width); s(jpeg.height);
+    s(hprmCallbacks);
+    for(auto& a : atracs) s(a.lowLevel);
+    check((!jpeg.created || jpeg.initialized) && jpeg.width <= 1024);
+    for(auto& a : atracs) {
+      if(!a.lowLevel) continue;
+      check(a.codec && !a.state && a.channels >= 1 && a.channels <= 2 && a.outputChannels >= 1);
+      check(a.outputChannels <= 2 && a.frameBytes && a.frameBytes <= 0x2000);
+      check(a.frameSamples == (a.codec == 0x1000 ? 2048u : 1024u) && a.extra.size() <= AudioDecoder::Format::MaxExtra);
+      check(a.recent.empty() || a.recent.size() == a.frameBytes);
+    }
+  }
   //IDs count up from nextUID as objects are made, so every object's is below it; and a map's key is its object's own
   if(s.reading()) {
     for(auto& [uid, t] : threads) check(uid < nextUID);

@@ -25,6 +25,7 @@ namespace ares::PlayStationPortable {
 #include "keys.cpp"
 #include "kirk.cpp"
 #include "decrypt.cpp"
+#include "pauth.cpp"
 #include "unpack.cpp"
 #include "disc.cpp"
 #include "disc-info.cpp"
@@ -39,6 +40,7 @@ namespace ares::PlayStationPortable {
 #include "messages.cpp"
 #include "audio.cpp"
 #include "sas.cpp"
+#include "p3da.cpp"
 #include "codec.cpp"
 #include "mpeg.cpp"
 #include "psmf.cpp"
@@ -49,9 +51,12 @@ namespace ares::PlayStationPortable {
 #include "pgf.cpp"
 #include "font.cpp"
 #include "ccc.cpp"
+#include "jpeg.cpp"
 #include "utility.cpp"
 #include "power.cpp"
 #include "system.cpp"
+#include "mt19937.cpp"
+#include "rtc.cpp"
 #include "modules.cpp"
 #include "serialization.cpp"
 
@@ -222,6 +227,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("UtilsForUser",      "sceKernelLibcClock",            &Kernel::sceKernelLibcClock);
   add("UtilsForUser",      "sceKernelUtilsMt19937Init",     &Kernel::sceKernelUtilsMt19937Init);
   add("UtilsForUser",      "sceKernelUtilsMt19937UInt",     &Kernel::sceKernelUtilsMt19937UInt);
+  add("sceMt19937",        "sceMt19937Init",                &Kernel::sceMt19937Init);
+  add("sceMt19937",        "sceMt19937UInt",                &Kernel::sceMt19937UInt);
   add("UtilsForUser",      "sceKernelSetGPO",               &Kernel::sceKernelSetGPO);
   add("UtilsForUser",      "sceKernelGetGPI",               &Kernel::sceKernelGetGPI);
   //the CPU's caches: an emulator has none to write back or throw away
@@ -249,6 +256,16 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceRtc",            "sceRtcSetDosTime",              &Kernel::sceRtcSetDosTime);
   add("sceRtc",            "sceRtcGetWin32FileTime",        &Kernel::sceRtcGetWin32FileTime);
   add("sceRtc",            "sceRtcSetTick",                 &Kernel::sceRtcSetTick);
+  for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
+        {"sceRtcTickAddTicks", &Kernel::sceRtcTickAddTicks},
+        {"sceRtcTickAddMicroseconds", &Kernel::sceRtcTickAddMicroseconds},
+        {"sceRtcTickAddSeconds", &Kernel::sceRtcTickAddSeconds},
+        {"sceRtcTickAddMinutes", &Kernel::sceRtcTickAddMinutes},
+        {"sceRtcTickAddHours", &Kernel::sceRtcTickAddHours}, {"sceRtcTickAddDays", &Kernel::sceRtcTickAddDays},
+        {"sceRtcTickAddWeeks", &Kernel::sceRtcTickAddWeeks}, {"sceRtcTickAddMonths", &Kernel::sceRtcTickAddMonths},
+        {"sceRtcTickAddYears", &Kernel::sceRtcTickAddYears}}) {
+    add("sceRtc", name, handler);
+  }
   add("sceOpenPSID",       "sceOpenPSIDGetOpenPSID",        &Kernel::sceOpenPSIDGetOpenPSID);
   add("SysMemUserForUser", "sceKernelPrintf",               &Kernel::sceKernelPrintf);
   //the kernel's own debug printf, which kernel modules print with (pspautotests' modules/loadexec/simple)
@@ -264,6 +281,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("scePower",          "scePowerGetBatteryLifePercent", &Kernel::scePowerGetBatteryLifePercent);
   add("scePower",          "scePowerGetBatteryLifeTime",    &Kernel::scePowerGetBatteryLifeTime);
   add("scePower",          "scePowerTick",                  &Kernel::scePowerTick);
+  addNID("scePower",       "scePowerCheckWlanCoexistenceClock", 0xa858'80d0,
+         &Kernel::scePowerCheckWlanCoexistenceClock);
   add("scePower",          "scePowerSetClockFrequency",     &Kernel::scePowerSetClockFrequency);
   //later SDKs' scePowerSetClockFrequency, under NIDs of their own: Gunhound EX calls the first with (333, 333, 166),
   //Peace Walker the second
@@ -331,6 +350,9 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceSasCore",        "__sceSasRevParam",              &Kernel::__sceSasRevParam);
   add("sceSasCore",        "__sceSasRevEVOL",               &Kernel::__sceSasRevEVOL);
   add("sceSasCore",        "__sceSasRevVON",                &Kernel::__sceSasRevVON);
+  add("sceP3da",           "sceP3daBridgeInit",             &Kernel::sceP3daBridgeInit);
+  add("sceP3da",           "sceP3daBridgeCore",             &Kernel::sceP3daBridgeCore);
+  add("sceP3da",           "sceP3daBridgeExit",             &Kernel::sceP3daBridgeExit);
   add("sceSuspendForUser", "sceKernelPowerTick",            &Kernel::sceKernelPowerTick);
   add("sceSuspendForUser", "sceKernelPowerLock",            &Kernel::sceKernelPowerLock);
   add("sceSuspendForUser", "sceKernelPowerUnlock",          &Kernel::sceKernelPowerUnlock);
@@ -447,6 +469,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceHprm",           "sceHprmIsHeadphoneExist",       &Kernel::sceHprmIsHeadphoneExist);
   add("sceHprm",           "sceHprmIsRemoteExist",          &Kernel::sceHprmIsRemoteExist);
   add("sceHprm",           "sceHprmIsMicrophoneExist",      &Kernel::sceHprmIsMicrophoneExist);
+  add("sceHprm",           "sceHprmRegisterCallback",       &Kernel::sceHprmRegisterCallback);
+  add("sceHprm",           "sceHprmUnregitserCallback",     &Kernel::sceHprmUnregitserCallback);  //Sony's spelling
   add("sceHprm",           "sceHprmPeekCurrentKey",         &Kernel::sceHprmPeekCurrentKey);
   add("sceHprm",           "sceHprmPeekLatch",              &Kernel::sceHprmPeekLatch);
   add("sceHprm",           "sceHprmReadLatch",              &Kernel::sceHprmReadLatch);
@@ -630,6 +654,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceMpeg",           "sceMpegAvcDecodeStopYCbCr",     &Kernel::sceMpegAvcDecodeStopYCbCr);
   add("sceMpeg",           "sceMpegAvcDecodeDetail",        &Kernel::sceMpegAvcDecodeDetail);
   add("sceMpeg",           "sceMpegAvcCsc",                 &Kernel::sceMpegAvcCsc);
+  add("sceMpeg",           "sceMpegAvcConvertToYuv420",     &Kernel::sceMpegAvcConvertToYuv420);
   add("sceMpeg",           "sceMpegAtracDecode",            &Kernel::sceMpegAtracDecode);
   add("sceMpeg",           "sceMpegGetAvcEsAu",             &Kernel::sceMpegGetAvcAu);
   //movies' headers (psmf.cpp) and the movie player (psmfplayer.cpp), libraries games ship as modules of their own,
@@ -738,6 +763,18 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceCcc",            "sceCccSetErrorCharUTF8",        &Kernel::sceCccSetErrorCharUTF8);
   add("sceCcc",            "sceCccSetErrorCharUTF16",       &Kernel::sceCccSetErrorCharUTF16);
   add("sceCcc",            "sceCccSetErrorCharSJIS",        &Kernel::sceCccSetErrorCharSJIS);
+  addNID("scePauth",       "scePauth_98B83B5D",             0x98b8'3b5d, &Kernel::scePauth_98B83B5D);
+  for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
+        {"sceJpegInitMJpeg", &Kernel::sceJpegInitMJpeg}, {"sceJpegFinishMJpeg", &Kernel::sceJpegFinishMJpeg},
+        {"sceJpegCreateMJpeg", &Kernel::sceJpegCreateMJpeg}, {"sceJpegDeleteMJpeg", &Kernel::sceJpegDeleteMJpeg},
+        {"sceJpegGetOutputInfo", &Kernel::sceJpegGetOutputInfo},
+        {"sceJpegDecodeMJpeg", &Kernel::sceJpegDecodeMJpeg},
+        {"sceJpegDecodeMJpegSuccessively", &Kernel::sceJpegDecodeMJpeg},
+        {"sceJpegDecodeMJpegYCbCr", &Kernel::sceJpegDecodeMJpegYCbCr},
+        {"sceJpegDecodeMJpegYCbCrSuccessively", &Kernel::sceJpegDecodeMJpegYCbCrSuccessively},
+        {"sceJpegCsc", &Kernel::sceJpegCsc}, {"sceJpegMJpegCsc", &Kernel::sceJpegMJpegCsc}}) {
+    add("sceJpeg", name, handler);
+  }
   add("sceAtrac3plus",     "sceAtracGetAtracID",            &Kernel::sceAtracGetAtracID);
   add("sceAtrac3plus",     "sceAtracReleaseAtracID",        &Kernel::sceAtracReleaseAtracID);
   add("sceAtrac3plus",     "sceAtracReinit",                &Kernel::sceAtracReinit);
@@ -771,6 +808,8 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("sceAtrac3plus",     "sceAtracGetSecondBufferInfo",   &Kernel::sceAtracGetSecondBufferInfo);
   add("sceAtrac3plus",     "sceAtracSetSecondBuffer",       &Kernel::sceAtracSetSecondBuffer);
   add("sceAtrac3plus",     "_sceAtracGetContextAddress",    &Kernel::_sceAtracGetContextAddress);
+  add("sceAtrac3plus",     "sceAtracLowLevelInitDecoder",   &Kernel::sceAtracLowLevelInitDecoder);
+  add("sceAtrac3plus",     "sceAtracLowLevelDecode",        &Kernel::sceAtracLowLevelDecode);
   for(auto [name, handler] : std::initializer_list<std::pair<const char*, auto (Kernel::*)() -> void>>{
         {"sceMp3InitResource", &Kernel::sceMp3InitResource}, {"sceMp3TermResource", &Kernel::sceMp3TermResource},
         {"sceMp3ReserveMp3Handle", &Kernel::sceMp3ReserveMp3Handle},
@@ -847,6 +886,8 @@ auto Kernel::power() -> void {
   mpegStreams.clear();
   psmfPlayer = {};
   ccc = {};
+  jpeg = {};
+  for(auto& callback : hprmCallbacks) callback = 0;
   dialog = {};
   utilityModules.clear();
   imposeLanguage = imposeButton = 1;
@@ -959,6 +1000,11 @@ auto Kernel::start(const u8* data, u64 size, const std::string& path, std::strin
     high = segment.address + segment.size;  //the loader saw that each fits in memory
   }
   if(high && module.relocatable) low = UserMemory;
+  //A program bigger than the user partition gets all of RAM, as if it asked with MEMSIZE (sysmem.cpp): the PSP
+  //remasters Sony made for the PS3 (Monster Hunter Portable 3rd HD's 26.5 MiB from 0x08804000, its PARAM.SFO asking
+  //for nothing) ran with more memory than a PSP's 24 MiB, which a PSP-2000's 64 MiB holds. A program that fits sees
+  //the partition it always did.
+  if(high > userEnd() && high <= Memory::RAMBase + memory.ram.size()) largeMemory = true;
   if(high) {
     auto block = allocate(high - low, 2, low, module.name);
     if(!block || block->address != low) {  //it must be exactly where the program is

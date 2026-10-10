@@ -663,6 +663,38 @@ static auto mpegDetails() -> void {
   CHECK(unwritten(), true);
 }
 
+//The picture sceMpegAvcDecodeYCbCr gave last as 4:2:0 planes (sceMpegAvcConvertToYuv420): Y, then Cb and Cr at
+//half its size each way, each as wide as it is, the decoder's samples as they are; nothing written before a picture
+//has come. sceJpegCsc then converts them, with the colour information 0x00020202, into a buffer 512 wide, as Monster
+//Hunter Portable 3rd shows its movies (grey here: each pixel its Y).
+static auto mpegYuv420() -> void {
+  KernelMachine m;
+  pictures(m, 48, 16);
+  auto units = movie({slices(5, {7}), slices(5, {7}), slices(5, {7})});
+  setUp(m, units);
+  putIn(m, units);
+  constexpr u32 Planes = 0x09a8'0000, YCbCr = R + 0x400, Size = 48 * 16 + 2 * 24 * 8;
+  m.system.memory.fill(Planes, 0xcc, Size + 4);
+  CHECK(m.call("sceMpegAvcConvertToYuv420", {Handle, Planes, YCbCr, 0}), 0);
+  CHECK(word(m, Planes), 0xcccc'cccc);
+  for(u32 came : {0, 1}) {
+    CHECK(m.call("sceMpegGetAvcAu", {Handle, 0x12c0, Au, R + 0xc0}), 0);
+    CHECK(m.call("sceMpegAvcDecodeYCbCr", {Handle, Au, YCbCr, Got}), 0);
+    CHECK(word(m, Got), came);
+  }
+  CHECK(m.call("sceMpegAvcConvertToYuv420", {Handle, Planes, YCbCr, 0}), 0);
+  bool right = true;
+  for(u32 n = 0; n < Size; n++) right &= m.system.memory.read(1, Planes + n) == (n < 48 * 16 ? 16 + n / 48 : 128);
+  CHECK(right, true);
+  CHECK(m.system.memory.read(1, Planes + Size), 0xcc);
+  m.system.memory.fill(Pixels, 0xdd, 512 * 16 * 4);
+  CHECK(m.call("sceJpegCsc", {Pixels, Planes, 48 << 16 | 16, 512, 0x0002'0202}), 0);
+  CHECK(word(m, Pixels + (3 * 512 + 5) * 4), 0x0013'1313);
+  CHECK(word(m, Pixels + (15 * 512 + 47) * 4), 0x001f'1f1f);
+  CHECK(word(m, Pixels + 48 * 4), 0xdddd'dddd);
+  CHECK(roundTrip(m), true);
+}
+
 auto movieTests() -> Tests {
   return {{"mpeg header", mpegHeader}, {"mpeg pictures decoded", mpegPictures},
           {"mpeg pictures converted", mpegConversion}, {"mpeg sound access units", mpegSound},
@@ -671,7 +703,7 @@ auto movieTests() -> Tests {
           {"mpeg create afresh", mpegCreateAfresh}, {"mpeg after a state", mpegAfterState},
           {"mpeg ring at the movie's end", mpegRingEnd}, {"mpeg decode at the library's width", mpegDecodeWidth},
           {"mpeg sound past its end", mpegSoundPastItsEnd}, {"mpeg ring fed round and round", mpegRingLoops},
-          {"mpeg details of the last picture", mpegDetails}};
+          {"mpeg details of the last picture", mpegDetails}, {"mpeg pictures as 4:2:0 planes", mpegYuv420}};
 }
 
 }

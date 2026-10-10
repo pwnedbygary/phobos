@@ -303,7 +303,10 @@ static auto parameters(const std::vector<std::pair<std::string, u32>>& numbers) 
 
 //How much RAM a program gets on the PSP-2000/3000 emulated, with 64 MiB: a user partition of 24 MiB, 0x08800000 to
 //0x0a000000 (its first thread's stack at its top), unless its PARAM.SFO asks for all of it (MEMSIZE 1): in its
-//EBOOT.PBP, or for a program on the disc in the drive, on the disc. A number other than 1, or none, is no.
+//EBOOT.PBP, or for a program on the disc in the drive, on the disc. A number other than 1, or none, is no. A program
+//bigger than the partition gets all of RAM too, asking or not (Monster Hunter Portable 3rd HD's 26.5 MiB from
+//0x08804000, made for the PS3); one that fits it with its first thread's stack doesn't, and one bigger than RAM is
+//refused.
 static auto userPartition() -> void {
   ElfBuilder elf;
   elf.type = 2;
@@ -355,6 +358,28 @@ static auto userPartition() -> void {
     //the same program from the memory stick: the disc's PARAM.SFO isn't its own
     CHECK(m.kernel.load(program.data(), program.size(), "ms0:/EBOOT.BIN", error), true);
     CHECK(m.kernel.userEnd(), 0x0a00'0000);
+  }
+  for(auto [end, large] : {std::pair{0x0a28'5200u, true}, {0x09fc'0000u, false}, {0x0c00'0100u, false}}) {
+    ElfBuilder big;
+    big.type = 2;
+    big.entry = 0x0880'4000;
+    ElfBuilder::Segment code;
+    code.address = 0x0880'4000;
+    code.bytes.putString(4, "LARGE");
+    code.memorySize = end - 0x0880'4000;  //its .bss, as the HD version's 24 MiB of it
+    big.segments.push_back(code);
+    big.sections.push_back({".rodata.sceModuleInfo", 1, 0x0880'4000, {}});
+    auto file = big.build();
+    KernelMachine m{64_MiB};
+    std::string error;
+    bool fits = end <= 0x0c00'0000;
+    CHECK(m.kernel.load(file.data(), file.size(), "ms0:/PSP/GAME/LARGE/EBOOT.BIN", error), fits);
+    if(!fits) continue;
+    CHECK(m.kernel.userEnd(), large ? 0x0c00'0000 : 0x0a00'0000);
+    CHECK(stackTop(m), large ? 0x0c00'0000 : 0x0a00'0000);
+    auto block = std::find_if(m.kernel.blocks.begin(), m.kernel.blocks.end(),
+                              [](auto& b) { return b.address == 0x0880'4000; });
+    CHECK(block != m.kernel.blocks.end() && block->address + block->size == end, true);
   }
 }
 

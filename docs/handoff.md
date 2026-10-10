@@ -25,6 +25,40 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: sceJpeg, scePauth, the PS3's memory and the last missing functions — 2026-10-09
+
+Branch `cursor/psp-hle-games12-2b67`, on top of #189's `cursor/psp-hle-games11-2b67` (its PR targets that branch).
+docs/psp-core.md, part 58, has the evidence; docs/psp-compatibility.md's changed rows and tables are updated. Clean
+room: no PPSSPP or JPCSP source read.
+- **Added** (each its own commit, with tests): the sceJpeg library (a baseline decoder of our own from T.81; every
+  function as pspautotests' jpeg tests recorded, six of the eleven exactly, the conversions' sums fitted to their 40
+  colours, the Media Engine's 8-byte transfers and its waits); sceMpegAvcConvertToYuv420; scePauth_98B83B5D (type 5 with
+  the game's key as a second key: the one way the digest checks out); scePowerCheckWlanCoexistenceClock (uOFW's docs:
+  1, a PSP-2000); a program bigger than the user partition given all of RAM (Monster Hunter Portable 3rd HD); sceMt19937
+  with the kernel's MT contexts as hash/mt19937ctx recorded (older states' contexts carried on); the sceRtcTickAdd
+  family as rtc/arithmetic recorded (and sceRtcGetTick's microseconds past a second, and its years past 9999 refused, as
+  rtc/convert recorded); sceHprm's callbacks (as scePower's, the shape Soulcalibur calls them in); the ATRAC low level
+  (followed through Corpse Party's CRI library); sceP3da's mix (Sol Trigger).
+- **Games**: both Monster Hunter Portable 3rds black to their intro movies, titles and game menus (and, merged with part 57's
+  GE fix for a RET with no CALL, the PSP version's whole character creation screen); Corpse Party and Sol Trigger have their
+  music; Genso Suikoden, Soulcalibur, Tekken 6, Final Fantasy Type-0, Kingdom Hearts BBS and Dragon Ball Z miss nothing.
+  The report's missing functions are down to scesupPreAcc (3 games, none held by it). The base commit's runner and this
+  branch's on 35 games: every other frame the same, or moved by the runner's timing under load.
+- **Checks**: tests/psp 392/0 (sanitized), tests/allegrex 58/0, tests/psp/ares 307/0 (merged with #193: 396/0, 58/0,
+  307/0); twenty-one deliberately broken
+  versions each caught; pspautotests' rtc/arithmetic, hash/mt19937ctx and six jpeg programs print what the PSP printed.
+  Independent read-only review: fourteen findings, each fixed or answered in part 58 (older MT contexts mid-round, a
+  picture's data read only as far as used, the IDCT held to 0-255 before rounding, the Media Engine's misaligned writes
+  done at once, a state's JPEG width checked, years past 9999, test and doc claims, sceHprm's sources), the fixes then
+  reviewed again. Save states version 21 (layout 21: sceJpeg, sceHprm's callbacks, ATRAC low-level IDs); 15 to 20 load.
+- **Left**: scesupPreAcc; P3DA's placing (unknown); whether
+  sceMpegAvcConvertToYuv420 widens the movie's sample range (unrecorded); Melodie's 40 MiB request (a PSP-2000 refuses
+  it too); PGD; the runner's WAV tags carry a stray NUL (`tools/psp-runner`).
+- Scratch: `~/phobos-work/scratch/hle12` (sync-dbg.sh and apply-hooks.py for a traced runner; at/run.sh runs a
+  pspautotests program against its recording; quick-tests.sh builds chosen test groups, scratch ones in qtests/;
+  mutate.py and mutate2.sh the broken versions; compare.sh/compare.py the two runners' runs; jpegcmp/ the libjpeg-turbo
+  check; pauth/ the digest search; cmp1/ and cmp2/ the comparison runs; build-commit.py the commits' split).
+
 ## PSP GE: perspective texels by the GE's reciprocal; patch divisions — 2026-10-09
 
 Branch `cursor/psp-ge-fits3-2b67`, on top of #192's `cursor/psp-ge-lists-2b67` (#191 under it). docs/psp-core.md, part

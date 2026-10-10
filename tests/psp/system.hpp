@@ -92,5 +92,6 @@ auto movieTests() -> Tests;
 auto psmfTests() -> Tests;
 auto fontTests() -> Tests;
 auto cccTests() -> Tests;
+auto jpegTests() -> Tests;
 
 }

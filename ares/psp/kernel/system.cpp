@@ -201,15 +201,17 @@ static auto dateFromYearOne(s64 days, s64& year, u32& month, u32& day) -> void {
 }
 
 //(date, where to put its tick): a ScePspDateTime (psprtc.h: year, month, day, hour, minute, second as 16-bit numbers,
-//then microseconds) as a tick, microseconds since 0001-01-01. A date that can't be is refused.
+//then microseconds) as a tick, microseconds since 0001-01-01. A date that can't be, or past the year 9999, is refused
+//(rtc/convert's 10000-01-01); its microseconds are added whatever they are (rtc/arithmetic's 9999-12-31 23:59:59
+//and 99999998 microseconds came out a minute and 39 seconds into 10000).
 auto Kernel::sceRtcGetTick() -> void {
   u32 date = arg(0);
   u32 year = memory.read(2, date), month = memory.read(2, date + 2), day = memory.read(2, date + 4);
   u32 hour = memory.read(2, date + 6), minute = memory.read(2, date + 8), second = memory.read(2, date + 10);
   u32 microsecond = memory.read(4, date + 12);
   static constexpr u8 MonthDays[] = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if(!year || !month || month > 12 || !day || day > MonthDays[month - 1] || hour > 23 || minute > 59 || second > 59
-  || microsecond > 999'999) return result(ErrorInvalidValue);
+  if(!year || year > 9999 || !month || month > 12 || !day || day > MonthDays[month - 1] || hour > 23 || minute > 59
+  || second > 59) return result(ErrorInvalidValue);
   bool leap = (year % 4 == 0 && year % 100) || year % 400 == 0;
   if(month == 2 && day == 29 && !leap) return result(ErrorInvalidValue);
   u64 seconds = u64(daysFromYearOne(year, month, day)) * 86'400 + hour * 3'600 + minute * 60 + second;
@@ -275,41 +277,6 @@ auto Kernel::sceKernelUSec2SysClock() -> void {
 //(microseconds): the same, in v0 and v1.
 auto Kernel::sceKernelUSec2SysClockWide() -> void {
   result64(arg(0));
-}
-
-//The Mersenne Twister (MT19937, as Matsumoto and Nishimura describe it), its state in the program's memory: a
-//SceKernelUtilsMt19937Context (psputils.h), how many of its 624 words have been handed out, then the words.
-//(context, seed): the words seeded, none handed out.
-auto Kernel::sceKernelUtilsMt19937Init() -> void {
-  u32 context = arg(0), word = arg(1);
-  memory.write(4, context + 4, word);
-  for(u32 n = 1; n < 624; n++) {
-    word = 1'812'433'253 * (word ^ word >> 30) + n;
-    memory.write(4, context + 4 + n * 4, word);
-  }
-  memory.write(4, context, 624);
-  result(0);
-}
-
-//(context): the next number. When all 624 words are handed out, they're stirred into the next 624.
-auto Kernel::sceKernelUtilsMt19937UInt() -> void {
-  u32 context = arg(0), index = memory.read(4, context);
-  auto state = [&](u32 n) { return memory.read(4, context + 4 + n * 4); };
-  if(index >= 624) {
-    for(u32 n = 0; n < 624; n++) {
-      u32 y = (state(n) & 0x8000'0000) | (state((n + 1) % 624) & 0x7fff'ffff);
-      u32 next = state((n + 397) % 624) ^ y >> 1 ^ (y & 1 ? 0x9908'b0df : 0);
-      memory.write(4, context + 4 + n * 4, next);
-    }
-    index = 0;
-  }
-  u32 y = state(index);
-  y ^= y >> 11;
-  y ^= y << 7 & 0x9d2c'5680;
-  y ^= y << 15 & 0xefc6'0000;
-  y ^= y >> 18;
-  memory.write(4, context, index + 1);
-  result(y);
 }
 
 //(format, ...): the kernel's printf, to the program's output: %d, %i, %u, %x, %X, %p, %c, %s and %%, with flags ('-'
