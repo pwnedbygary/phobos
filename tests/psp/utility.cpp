@@ -1,7 +1,7 @@
 //The system's utilities (ares/psp/kernel/utility.cpp): a dialog's statuses and their timing, saves made, loaded,
 //sized, listed, erased and deleted in a memory stick folder (names that would reach elsewhere and buffers outside
 //the program's memory refused), the memory stick's free space told alike everywhere, a message answered yes, the
-//keyboard's fields accepted (an empty one given the nickname), network settings cancelled, the wrong type and the
+//keyboard's fields entered (an empty one given the nickname), network settings cancelled, the wrong type and the
 //wrong status refused; a game's data install cancelled; optional modules loaded and unloaded; the nickname. Called
 //directly, the clock moved on by hand.
 #include "kernel-machine.hpp"
@@ -552,11 +552,12 @@ static auto gamedataInstall() -> void {
   CHECK(m.notes.size(), 0);
 }
 
-//The keyboard: each field's text accepted as it is (UNCHANGED), an empty field or one of spaces given the console's
-//nickname (CHANGED), each as far as its room (its NUL among it) and its limit allow, a limit of 0 being none; a
-//field with nowhere to put its text, or no room for any, still has its result, nothing written there (a NUL had gone
-//into a field of no room, and a limit of 0 had cut the nickname to nothing); the common part's result is 0. (Peace
-//Walker, its keyboard cancelled, asked for its player's name again and again.)
+//The keyboard: each field's text entered as it is, an empty field or one of spaces given the console's nickname,
+//each as far as its room (its NUL among it) and its limit allow, a limit of 0 being none, and each CHANGED; a field
+//with nowhere to put its text, or no room for any, still has its result, nothing written there (a NUL had gone into
+//a field of no room, and a limit of 0 had cut the nickname to nothing); the common part's result is 0. (Peace
+//Walker, its keyboard cancelled, asked for its player's name again and again; Ridge Racer 2, its default driver name
+//answered UNCHANGED, went back to its title as if the player had cancelled.)
 static auto keyboard() -> void {
   KernelMachine m;
   u64 millisecond = Kernel::CPUFrequency / 1000;
@@ -585,7 +586,7 @@ static auto keyboard() -> void {
   auto result = [&](u32 n) { return m.system.memory.read(4, Fields + n * 52 + 44); };
   m.system.memory.fill(Parameters, 0, 64);
   m.system.memory.write(4, Parameters, 64);
-  m.system.memory.write(4, Parameters + 48, 10);
+  m.system.memory.write(4, Parameters + 48, 11);
   m.system.memory.write(4, Parameters + 52, Fields);
   field(0, u"Snake", 0x200, 15);
   field(1, u"", 0x200, 15);
@@ -597,6 +598,7 @@ static auto keyboard() -> void {
   field(7, u"Ocelot", 4, 0);
   field(8, u"", 0, 15);
   field(9, u"Kaz", 0, 0);
+  field(10, u"DAMACY", 8, 7);  //(Ridge Racer 2's driver name: room for 7 and the NUL, at most 7)
   auto advance = [&](u64 cycles) {  //(the kernel catching up with the vertical blanks, as a state wants)
     m.kernel.cycles += cycles;
     m.kernel.events();
@@ -607,16 +609,17 @@ static auto keyboard() -> void {
   CHECK(m.call("sceUtilityOskUpdate", {1}), 0);
   CHECK(m.call("sceUtilityOskGetStatus", {}), 3);
   CHECK(m.system.memory.read(4, Parameters + 28), 0);
-  CHECK(answer(0) == u"Snake" && result(0) == 0, true);
+  CHECK(answer(0) == u"Snake" && result(0) == 2, true);
   CHECK(answer(1) == u"PSP" && result(1) == 2, true);
   CHECK(answer(2) == u"PSP" && result(2) == 2, true);
-  CHECK(answer(3) == u"Big" && result(3) == 0, true);
+  CHECK(answer(3) == u"Big" && result(3) == 2, true);
   CHECK(answer(4) == u"P" && result(4) == 2, true);
-  CHECK(m.system.memory.read(2, Texts + 5 * 0x100 + 0x80) == 0xcccc && result(5) == 0, true);
+  CHECK(m.system.memory.read(2, Texts + 5 * 0x100 + 0x80) == 0xcccc && result(5) == 2, true);
   CHECK(answer(6) == u"PSP" && result(6) == 2, true);
-  CHECK(answer(7) == u"Oce" && result(7) == 0, true);
+  CHECK(answer(7) == u"Oce" && result(7) == 2, true);
   CHECK(m.system.memory.read(2, Texts + 8 * 0x100 + 0x80) == 0xcccc && result(8) == 2, true);
-  CHECK(m.system.memory.read(2, Texts + 9 * 0x100 + 0x80) == 0xcccc && result(9) == 0, true);
+  CHECK(m.system.memory.read(2, Texts + 9 * 0x100 + 0x80) == 0xcccc && result(9) == 2, true);
+  CHECK(answer(10) == u"DAMACY" && result(10) == 2, true);
   CHECK(m.call("sceUtilityOskShutdownStart", {}), 0);
   advance(40 * millisecond);
   CHECK(m.call("sceUtilityOskGetStatus", {}), 0);
