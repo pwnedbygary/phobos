@@ -5367,6 +5367,62 @@ to 48.1 (best of three).
   chains would need every block entered with the same registers held, or a store-back at each chain.
 - Still interpreted: the VFPU with prefixes set and its rarer instructions (most of what's left in GTA's city:
   20,000 a frame), and the FPU's remaining conversions.
+## Part 44: upscaling, and presenting without reading back
+
+On branch `cursor/psp-gpu-hw3-2b67`, on top of part 46's `cursor/psp-cpu-speed3-2b67` (#176 under it).
+docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" are the detail. PPSSPP's render resolution multiplier and its
+presentation stayed a guide
+to the design only, as in parts 36 and 41: none of its code is used, copied or translated.
+
+**The setting**: "PSP Resolution" in the app's Settings (Emulation, PlayStation Portable, under the renderer):
+Native, the default, then 2x to 10x; on the desktop "PSP resolution (Vulkan): Native/Nx (next start)"
+(`psp.resolution`). Both give the core its "Resolution" option as a game loads; the software renderer ignores it.
+Native is exact as before: a scale of 1 runs part 41's code with nothing added.
+
+**Drawing at N times** (`ge/gpu`): every target, its depth and stencil are N times the PSP's size each way, grown
+the first time they're drawn into (`fit()`); draws get a viewport and scissor N times larger; memory's newer bytes go
+up through a shader drawing them N times larger (colours, depth, and the stencil a bit at a time). What the CPU or the
+GE reads (a frame buffer, depth, the shown picture in VRAM) comes back to the PSP's size first, nearest, so memory
+always holds the PSP's own pixels and the game sees what the software renderer would. A target copied for a texture
+(render to texture) keeps its scale, so effects drawn from frame buffers keep their detail. A new test
+(`gpuScaled`, at 2 and 3 times): flat sprites over VRAM full of random bytes, in each format, read back byte for byte
+the software renderer's, with memory's untouched bytes and stencils back as they went in; the screen's picture at the
+target's resolution; render to texture from a scaled copy; and the depth and bytes-beside tests run again. Its first
+failure was the test's own (each machine had drawn different random sprites).
+
+**Presenting** (Android): the shown frame is drawn by the GPU straight onto a swapchain made on the app's window
+(`VK_KHR_android_surface`; MAILBOX if there, else FIFO), "sharp bilinear" over the whole view, with no read-back and
+the host's `video()` leaving the window alone. Memory's picture is presented the same way where the target can't
+give it. Each presented frame is also shrunk to the PSP's size on the GPU for screenshots. A surface or swapchain that
+can't be made gives presenting up, and the host locks the window and shows read-back frames as before. The desktop
+reads back (SDL owns its window): its screen is up to 4 times the PSP's size (`MostShown`), the picture read back at
+the renderer's scale.
+
+**A debug switch** for the fallback toast part 41 never saw: `adb shell setprop debug.phobos.psp.failcheck 1` makes
+the app give the core "Renderer Check: Fail", so the start-up check fails as if the GPU had drawn wrongly (reset with
+`setprop debug.phobos.psp.failcheck 0`).
+
+**Measured on the M1** (`tools/psp-runner --renderer Vulkan --resolution N`, MoltenVK, read back): Lumines and Ridge
+Racer 2 are right at 1x, 2x and 4x (480x272, 960x544, 1920x1088 PNGs). The read-back's CPU cost grows with the
+picture: Lumines spends 3 s of the CPU on 1,500 frames at 1x and 21 s at 4x, and waits 0.9 ms a frame against 3-4.
+
+**Measured in the app** (the RP6, Adreno 740, the installed Turnip driver, the app's stats over 10 s): Lumines'
+demo presents at 59.4 frames a second at Native (6.5 ms a frame), 59.3 at 4x (9.2 ms), 50.6 at 8x (16.3 ms) and
+39.2 at 9x (24.1 ms, the GPU about 74% busy); Ridge Racer 2's title menu 60 at Native (5.2 ms) and 46.5 at 8x
+(21.5 ms, the GPU 80% busy). The window's buffer is the window's own size (1906x1080 in SurfaceFlinger), so the
+frame is the swapchain's, not read back. The app's screenshot (the pause menu's Shot) saves the presented frame at
+480x272. With the debug switch on, the start-up check fails, the toast says "The Vulkan renderer couldn't start
+(its start-up check made to fail, as the debug switch asks)" and the software renderer draws Lumines at 60.
+Sending the app home and bringing it back while Lumines ran at 9x kept presenting (about 30 fps after the return).
+
+**Not checked yet**: the swapchain against the read-back on the RP6 at the same scale (presenting can't be turned
+off from the UI); 10x in play (the setting is in the menu; its row sits under the app's floating nav bar, so it
+wasn't chosen from adb); 3D games in play past their menus; rotation and the window resized while presenting. One
+8x screenshot of Ridge Racer 2's menu, mid-transition, had a one-pixel vertical line down the middle that Native
+didn't show: not looked into yet. The swapchain uses the identity transform, so the compositor rotates it (the
+RP6's panel is portrait-native): presenting in the panel's own orientation would save that.
+
+**Next**: shader blending (programmable blending where the GPU has it, for accuracy), then OpenGL.
 ## Part 39 — PSP disc info: title, disc ID, region and icon
 
 **Branch:** `local/psp-disc-info`, on top of `cursor/psp-ge-curves-2b67` (#162).

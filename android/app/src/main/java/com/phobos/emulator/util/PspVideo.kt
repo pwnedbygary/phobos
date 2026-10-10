@@ -48,6 +48,26 @@ object PspRenderer {
 }
 
 /**
+ * The PSP's "Resolution" setting: the Vulkan renderer's internal resolution, handed to the core as its option
+ * "Resolution" as a game starts. Native, the default, draws the PSP's own 480x272 pixels, each alone (the exact
+ * native mode); 2x to 10x draw each of them 2 to 10 times over each way, sharper on a large screen, while what the
+ * game reads back of its pictures stays the PSP's pixels. The core holds it to what the GPU takes. The software
+ * renderer always draws at Native.
+ */
+object PspResolution {
+    const val NATIVE = 1
+
+    /** The choices Settings offers. */
+    val choices = (1..10).toList()
+
+    fun label(scale: Int): String =
+        if (scale <= NATIVE) "Native (480x272)" else "${scale}x (${480 * scale}x${272 * scale})"
+
+    /** What the core is told: one of [choices], anything else taken as Native. */
+    fun forCore(scale: Int): Int = if (scale in choices) scale else NATIVE
+}
+
+/**
  * The whole multiple of a picture of [width] x [height] that native code draws it at for a view of [viewWidth] x
  * [viewHeight] pixels: the one nearest to how much the view enlarges it, 1 to 4 (each pixel repeated, nearest-
  * neighbour), so that the compositor's own scaling (bilinear) is slight: "sharp bilinear". A PSP's 480x272 shown

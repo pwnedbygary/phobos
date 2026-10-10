@@ -46,6 +46,8 @@ layout(push_constant) uniform Push {
   uint stencil;         //the stencil written where the test passes (ALPHA_OUT 1)
   uint dither[2];       //DITHER0-3: 16 nibbles, the row's four in each 16 bits
   uint textureSize;     //the texture's width and, in bits 16-31, its height (each at most 512)
+  uint resolution;      //the target's: each of the PSP's pixels resolution x resolution of the GPU's (gpu.hpp)
+  uint textureScale;    //the texture's: a copy of a target is at the target's resolution, a decoded texture at 1
 } push;
 
 layout(set = 0, binding = 0) uniform sampler2D texels;  //8888, red in the low byte (as the GE's decoded copies)
@@ -83,10 +85,13 @@ bool passes(uint comparison, uint a, uint b) {
 }
 
 //texture.cpp's texelAxis(): a coordinate's texel (or the two whose middles it lies between, and the fraction from
-//the first to the second in sixteenths), inside the texture: repeated, or held at its edge.
+//the first to the second in sixteenths), inside the texture: repeated, or held at its edge. (A copy of a target at
+//3, 5, 6, 7, 9 or 10 times the PSP's size isn't a power of two across: repeated by the remainder.)
 uint inside(int c, uint size, bool held) {
   int last = int(size) - 1;
-  return held ? uint(clamp(c, 0, last)) : uint(c & last);
+  if(held) return uint(clamp(c, 0, last));
+  if((size & (size - 1u)) == 0u) return uint(c & last);
+  return uint(c - int(size) * int(floor(float(c) / float(size))));
 }
 
 //An 8888 channel narrowed to bits of it and widened again by repeating its top bits, as a 16-bit frame buffer
@@ -105,8 +110,12 @@ uvec4 fetch(uint u, uint v) {
   return t;
 }
 
+//(at a copy's scale, the coordinates and the texture's size are the copy's texels: each of the PSP's scale x scale)
 uvec4 sampleTexture(vec2 at, bool linear) {
   uint width = push.textureSize & 0xffffu, height = push.textureSize >> 16;
+  if(push.textureScale > 1u) {
+    at *= float(push.textureScale), width *= push.textureScale, height *= push.textureScale;
+  }
   bool heldU = (CLAMP & 1u) != 0u, heldV = (CLAMP & 2u) != 0u;
   vec2 held = clamp(at, vec2(-65536.0), vec2(65536.0));
   if(isnan(at.x)) held.x = 0.0;
@@ -165,8 +174,9 @@ void main() {
     vec2 at = vertexCoordinates.xy / vertexCoordinates.z;
     if((vertexFlags & 2u) != 0u) {
       //a 2D sprite's, stepped from its edge as the GE steps them (raster.cpp's spriteRows()): the pixel's middle
-      //in sixteenths from the start (exact), times the step, plus the first, rounded once as the GE's doubles are
-      vec2 middle = gl_FragCoord.xy * 16.0;
+      //in sixteenths from the start (exact), times the step, plus the first, rounded once as the GE's doubles are.
+      //(At a higher resolution, the middle of the GPU's pixel, in the PSP's sixteenths: between the GE's steps.)
+      vec2 middle = gl_FragCoord.xy * 16.0 / float(push.resolution);
       precise float column = fma((middle.x - float(vertexStart.x)) / 16.0, vertexStepping.y, vertexStepping.x);
       precise float row = fma((middle.y - float(vertexStart.y)) / 16.0, vertexStepping.w, vertexStepping.z);
       at = (vertexFlags & 4u) != 0u ? vec2(row, column) : vec2(column, row);
@@ -208,8 +218,8 @@ void main() {
   outFactor = vec4(factor, 0.0);
   //dithering and the frame buffer's format, where the GPU's blending won't change the color after (QUANTIZE 4 and
   //DITHER 0 otherwise: blended, they're approximated by the 8888 the GPU keeps)
-  if(DITHER != 0u) {
-    uvec2 at = uvec2(gl_FragCoord.xy) & 3u;
+  if(DITHER != 0u) {  //(the matrix over the PSP's pixels, each of them resolution x resolution of the GPU's)
+    uvec2 at = uvec2(gl_FragCoord.xy / float(push.resolution)) & 3u;
     uint nibble = push.dither[at.y >> 1] >> ((at.y & 1u) * 16u + at.x * 4u) & 15u;
     int offset = nibble < 8u ? int(nibble) : int(nibble) - 16;
     color.rgb = uvec3(clamp(ivec3(color.rgb) + offset, 0, 255));

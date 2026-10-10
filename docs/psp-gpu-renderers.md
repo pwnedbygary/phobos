@@ -5,8 +5,9 @@ and blending, at the PSP's resolution, on Apple's M1 (MoltenVK) and the RP6's Ad
 36). On the RP6 it draws the six benchmark scenes 1.5 to 2.3 times as fast as the software renderer on seven threads
 (below: "Speed"). It isn't exact: blending rounds differently on the GPU, so 28-65% of a scene's pixels come out the
 same as the software renderer's, nearly all of the rest a level or two apart ("Accuracy"). In the app and the desktop
-program since part 41 (Settings' "PSP Renderer", Software the default: "In Phobos"); no upscaling or OpenGL yet ("The
-plan").
+program since part 41 (Settings' "PSP Renderer", Software the default: "In Phobos"). Since part 44 it draws at 1
+(exact) to 10 times the PSP's resolution and presents on Android's window without reading back ("Upscaling",
+"Presenting"); no OpenGL yet ("The plan").
 
 The owner's direction (2026-10-07): a hardware renderer as PPSSPP has one (the GPU's own rasterizer, texture units
 and blending; shaders generated from the GE's state; upscaling), Vulkan first and OpenGL after. The software renderer
@@ -242,19 +243,63 @@ attachments with rasterization-order access, `GL_EXT_shader_framebuffer_fetch` o
 and the 16-bit formats could be done as the PSP does them. The Adreno has it; MoltenVK on the M1 doesn't. It's the
 first item on the accuracy list.
 
-## Upscaling, and presenting without reading back (next)
+## Upscaling (part 44)
 
-- **An internal resolution factor** (2x to 8x): targets made N times larger, the viewport and scissor scaled, the
-  vertices' positions scaled (the 2D sprites' stepping and the GE's sixteenths scaled with them), points and lines
-  drawn N pixels wide. Textures from render targets are copied at the scaled size and sampled with their coordinates
-  scaled. Read-backs scale down (nearest, or a box filter) so memory's VRAM keeps the PSP's own pictures; uploads
-  from memory scale up.
-- **Presenting**: since part 41 the shown frame comes from its target (`GPU::picture()`, "In Phobos"): the shown
-  rectangle alone read back after what's recorded, without finishing, so the pages stay the GPU's and the next frame
-  doesn't start by filling them again. Both hosts take a frame as pixels in memory (Android's `ANativeWindow`, the
-  desktop's SDL texture), so it's read back either way. What's left is handing the host the target's image instead
-  (paraLLEl-RDP's path for the N64 on Android does that), so nothing is read back; with upscaling, the only way to
-  show the scaled picture.
+The option is "Resolution" (`psp.hpp`'s `option()`, read as a game loads): 1, the PSP's own and the default, to 10
+times it. The app's Settings has "PSP Resolution" (Native, 2x to 10x) under the renderer and the desktop's menu
+"PSP resolution (Vulkan)" (`psp.resolution`). The software renderer ignores it. Native is the exact mode: a scale of
+1 runs exactly the code part 41 ran, with no extra copies or filters.
+
+At a scale N (`Backend::scale`), each of the PSP's pixels is N x N of the GPU's everywhere: in every target, in its
+depth and stencil, its draws, its copies and its read-backs. `Backend::mostScale` caps it at the size the device's
+images allow (a target 512 of the PSP's pixels across, so 10 on both test GPUs).
+- **Targets** are made at the PSP's size and grow to N times it the first time they're drawn into at a scale above
+  1 (`fit()`), so a target only ever read back, or never drawn, costs nothing extra.
+- **Draws**: the viewport and scissor are multiplied by N; the vertices' positions are already in the PSP's
+  sixteenths, and the shader works from the resolution it's given. The 2D sprites' stepping samples each pixel at
+  its middle (the GE's texel centres), so `gl_FragCoord` times 16 over the scale lands on the same texels at any N,
+  with no half-pixel shift (one was tried; it moved the texels).
+- **Uploads** (memory's newer bytes into a target) go through `copy.frag`, drawn N times larger: mode 0 the colours,
+  mode 1 the depth, mode 2 the stencil one bit at a time (a stencil can only be written by its test).
+- **Read-backs** for the CPU or the GE (a frame buffer it reads, depth, the picture in VRAM) are first blitted to
+  the PSP's size with NEAREST into a scratch image (`shrunk`), the stencil copied row by row, and squeezed on the
+  CPU, so memory's VRAM always holds the PSP's own pictures and everything that reads it sees what the software
+  renderer would.
+- **Render to texture**: a copy of a target for a texture keeps the target's scale (`Texture::textureScale`), and
+  the shader samples it with its coordinates multiplied by that, so a frame buffer used as a texture keeps its
+  detail.
+
+The shown picture, read back (where it isn't presented): the screen is made `MostShown` (4) times the PSP's size
+at most, and the picture is read back at the renderer's scale and copied (nearest) into it. That's the desktop's
+path (SDL owns its window), and Android's when the swapchain can't be had. Above 4x the picture is drawn at the
+scale but shown at 4x; the read-back's CPU cost grows with the square of the scale (Lumines on the M1: 3 s of the
+CPU for 1,500 frames at 1x, 21 s at 4x).
+
+## Presenting (part 44)
+
+On Android the renderer presents on the window itself, with no read-back: a `Present` command at the end of a
+frame's recording (`GPU::show()`) draws the shown target, or memory's picture where the target can't give it, onto
+an image of a swapchain on the host's `ANativeWindow`, over the whole of it (the app's view already has the
+picture's shape). `present.frag` scales it "sharp bilinear", as the host's whole multiple and the compositor did
+before: each pixel a block, blended with the next only over the window pixel between them. It also narrows a 16-bit
+frame buffer's colours as memory would keep them. The host's `video()` then neither locks nor draws on the window.
+- **The window** is handed over by the host (`PlayStationPortable::window()`, holding a reference with
+  `ANativeWindow_acquire`) and given to the GPU on the emulation thread as the next frame is shown (`handWindow()`).
+  The surface is made from it (`VK_KHR_android_surface`) lazily, the swapchain when a frame is first presented:
+  MAILBOX when the driver has it (no waiting on the compositor), else FIFO; the identity transform, opaque alpha, an
+  8888 UNORM format. A resized window or `VK_ERROR_OUT_OF_DATE_KHR`/`VK_SUBOPTIMAL_KHR` rebuilds it next frame.
+- **Synchronisation**: each slot has its own `acquired` semaphore, each swapchain image its own `rendered` one, so
+  nothing waits on the CPU except the acquire (100 ms at most, then the frame isn't presented).
+- **Screenshots**: a presented frame is also blitted (nearest) to the PSP's size into the slot's own buffer and kept
+  when the slot is next waited for (`GPU::shot()`), so the host's screenshot still has the picture.
+- **Falling back**: a surface or swapchain that can't be made gives presenting up (`failed`): the surface is let go
+  so the host can lock the window again, and frames are read back as before. `presents()` doesn't depend on the
+  window being there, so the host never locks a window the GPU is about to present on.
+- **The desktop** reads back (SDL owns its window, and its renderer isn't Vulkan's); MoltenVK on the M1 has no
+  surface for it.
+
+PPSSPP's presentation (drawing its output framebuffer to the backbuffer with a post-processing pass, and its
+render resolution multiplier) informed the design here as before; none of its code is used, copied or translated.
 
 ## OpenGL (after Vulkan)
 
@@ -445,7 +490,8 @@ software renderer.
 1. **Vulkan at native resolution** (part 36, done): the milestone above, measured on the M1 and the RP6.
 2. **In Phobos** (part 41, done): the setting, the host's loader, the start-up check, the fallbacks, the frame shown
    from the GPU, measured in the app with the system and a custom driver.
-3. **Upscaling** (next): an internal resolution factor, and presenting the target's image without reading it back.
+3. **Upscaling** (part 44, done): an internal resolution from 1 (exact) to 10 times the PSP's, and presenting the
+   target's image on Android's window without reading it back.
 4. **Accuracy**: programmable blending where the GPU has it (blending, dithering and 16-bit formats as the PSP's),
    depth read back where games need it, block transfers between targets on the GPU, textures decoded on the GPU.
 5. **OpenGL**: the GL backend over the same renderer and shaders; the same measurements; "OpenGL" in the setting.

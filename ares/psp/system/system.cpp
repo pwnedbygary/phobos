@@ -1,4 +1,7 @@
 #include <algorithm>
+#if defined(__ANDROID__)
+  #include <android/native_window.h>
+#endif
 
 namespace ares::PlayStationPortable {
 
@@ -18,18 +21,66 @@ auto load(Node::System& node, string name) -> bool {
 //alone; "GE Threads", how many threads draw the GE's pictures (ge/threads.cpp), 0 (the default) for one fewer than
 //the host has cores, 1 for the GE's own alone, and no more than twice the host's cores, nor 64 (more would only wait
 //their turn). Every count draws the very same pixels. "Renderer", who draws them: "Software" (the default, the exact
-//one) or "Vulkan" (the GPU's, ge/gpu: docs/psp-gpu-renderers.md), taken at the next power on.
+//one) or "Vulkan" (the GPU's, ge/gpu: docs/psp-gpu-renderers.md), taken at the next power on. "Resolution", the
+//Vulkan renderer's internal resolution: 1 (the default), the PSP's own, the exact native mode, to 10 times it each
+//way, taken at the next load. "Renderer Check", "Fail" to have the Vulkan renderer's start-up check fail as if the
+//GPU drew wrong (a front end's debug switch, to see the software renderer take over and the owner told).
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
   if(name == "Recompiler") system.recompile = value.boolean();
   if(name == "GE Threads") system.geThreads = std::min<u64>(value.natural(), System::MostGeThreads);
   if(name == "Renderer") system.renderer = value == "Vulkan" ? "Vulkan" : "Software";
+  if(name == "Resolution") system.resolution = std::clamp<u64>(value.natural(), 1, 10);
+  if(name == "Renderer Check") system.failCheck = value == "Fail";
   return true;
 }
 
 auto vulkanLoader(void* getInstanceProcAddr) -> void {
   system.vulkanLoader = getInstanceProcAddr;
+}
+
+auto window(void* window) -> void {
+  std::lock_guard lock{system.windowMutex};
+  if(window == system.hostWindow) return;
+  System::hold(window, true);
+  System::hold(system.hostWindow, false);
+  system.hostWindow = window;
+}
+
+auto presenting() -> bool {
+  return system.presents;
+}
+
+//(narrowed to its frame buffer's format and widened again, as GPU::picture() makes them)
+auto shot(std::vector<u32>& pixels, u32& width, u32& height) -> bool {
+  std::lock_guard lock{system.shotMutex};
+  if(system.shotPixels.empty()) return false;
+  pixels = system.shotPixels, width = system.shotWidth, height = system.shotHeight;
+  for(auto& pixel : pixels) {
+    pixel = 0xff00'0000 | (widenTarget(narrowTarget(pixel, system.shotFormat), system.shotFormat) & 0xff'ffff);
+  }
+  return true;
+}
+
+//A reference to the host's window taken (held) or let go of (Android's ANativeWindow; elsewhere there's none).
+auto System::hold(void* window, bool held) -> void {
+  if(!window) return;
+  #if defined(__ANDROID__)
+  if(held) ANativeWindow_acquire((ANativeWindow*)window);
+  else ANativeWindow_release((ANativeWindow*)window);
+  #endif
+}
+
+//The host's window, if it's changed, given to the GPU (its swapchain made on it as it's next shown on), the one before
+//let go of once the GPU has: on the emulation thread, the GPU's.
+auto System::handWindow() -> void {
+  std::lock_guard lock{windowMutex};
+  if(!gpu || hostWindow == gpuWindow) return;
+  gpu->window(hostWindow);
+  hold(hostWindow, true);
+  hold(gpuWindow, false);
+  gpuWindow = hostWindow;
 }
 
 auto notice() -> string {
@@ -54,31 +105,75 @@ auto System::run() -> void {
   kernel.controller.analogY = controls.stick(controls.y);
   if(!kernel.exited) kernel.run(Kernel::VblankCycles);
 
+  //Where the GPU presents on the host's window itself, the frame is shown there (present()), and the screen only
+  //hands the host its turn (passthrough: nothing converted, nothing drawn).
+  bool presented = present();
+  presents = presented;
+  screen->setPassthrough(presented);
+  if(presented) return screen->frame(), speak();
+
   //The screen's colors are the pixels' own (red in the low byte, then green and blue: the palette below). The
   //frame comes straight from the hardware renderer's picture of it where the GPU drew it (GPU::picture(): VRAM's
-  //pages stay the GPU's), else from memory's VRAM, as the kernel has it, which finishes what the GPU drew there.
-  bool shown = false;
+  //pages stay the GPU's), at the screen's size where the GPU draws larger, else from memory's VRAM, as the kernel
+  //has it, which finishes what the GPU drew there.
+  bool drawn = false;
+  u32 at = 1;  //(the picture's size, times the PSP's)
   if(ge.renderer && gpu && kernel.display.frameBuffer) {
     auto& display = kernel.display;
     u32 physical = display.frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
     u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
+    at = std::min(shown, gpu->resolution());
     if(physical >= Memory::VRAMBase && physical - Memory::VRAMBase < Memory::VRAMSize) {
-      shown = gpu->picture(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height,
-                           pixels);
+      drawn = gpu->picture(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height,
+                           pixels, at);
     }
   }
-  if(!shown) kernel.picture(pixels);
-  //as picture() made it (480x272: the PSP has no other)
+  if(!drawn) kernel.picture(pixels), at = 1;
+  //as picture() made it (480x272 times at: the PSP has no other size), in the screen's 480x272 times shown, each of
+  //its pixels repeated where it's smaller
   u64 width = kernel.display.width ? kernel.display.width : 480;
   u64 height = kernel.display.height ? kernel.display.height : 272;
   auto output = screen->pixels().data();
+  u32 across = 480 * shown, down = 272 * shown;
+  width *= at, height *= at;
   if(width * height == pixels.size()) {
-    for(u32 y : range(std::min<u64>(height, 272))) {
-      for(u32 x : range(std::min<u64>(width, 480))) output[y * 480 + x] = pixels[y * width + x] & 0xff'ffff;
+    for(u32 y : range(std::min<u64>(height * shown / at, down))) {
+      const u32* row = &pixels[y * at / shown * width];
+      u32* to = &output[y * across];
+      u32 columns = std::min<u64>(width * shown / at, across);
+      if(at == shown) for(u32 x : range(columns)) to[x] = row[x] & 0xff'ffff;
+      else for(u32 x : range(columns)) to[x] = row[x * at / shown] & 0xff'ffff;
     }
   }
   screen->frame();
+  speak();
+}
 
+//The frame presented by the GPU on the host's window itself (GPU::show(): Android's, where its Vulkan renderer has
+//the window), with nothing read back: the frame buffer straight from its target, or memory's picture where the GPU
+//doesn't hold it; kept for shot() too. False where the GPU doesn't present, has just given up, or couldn't put this
+//frame on the window (none, as in the background, or the acquiring timed out): the screen's then, read back.
+auto System::present() -> bool {
+  handWindow();
+  if(!gpu || !gpu->presents()) return false;
+  auto& display = kernel.display;
+  u32 width = display.width ? display.width : 480, height = display.height ? display.height : 272;
+  u32 physical = display.frameBuffer & 0x1fff'ffff;  //(VRAM's first copy alone: the others aren't the same bytes)
+  bool fromTarget = false;
+  if(ge.renderer && display.frameBuffer && physical >= Memory::VRAMBase &&
+     physical - Memory::VRAMBase < Memory::VRAMSize) {
+    fromTarget = gpu->show(physical - Memory::VRAMBase, display.bufferWidth, display.pixelFormat & 3, width, height);
+  }
+  if(!fromTarget) kernel.picture(pixels), gpu->show(pixels, width, height);
+  if(!gpu->presents() || !gpu->presented()) return false;
+  //(the picture presented last: memory's, or the newest the GPU has finished presenting from a target)
+  std::lock_guard lock{shotMutex};
+  if(!fromTarget) std::swap(shotPixels, pixels), shotWidth = width, shotHeight = height, shotFormat = 3;
+  else gpu->shot(shotPixels, shotWidth, shotHeight, shotFormat);
+  return true;
+}
+
+auto System::speak() -> void {
   //The sound: the speakers are owed 735.7 frames a frame, the PSP's 44.1 kHz (the stream runs at that rate, and
   //ares converts it to the host's). They get every frame the kernel's channels have made up to its clock
   //(audio.cpp), then silence for any its clock didn't reach: the program ended, or nothing will run again. Its clock
@@ -107,7 +202,10 @@ auto System::load(Node::System& root, string name) -> bool {
   root = node;
   if(!node->setPak(pak = platform->pak(node))) return false;
 
-  screen = node->append<Node::Video::Screen>("Screen", 480, 272);
+  //(the screen's picture as large as the GPU's is read back, up to MostShown times the PSP's, its own size the PSP's:
+  //front ends lay it out as 480x272)
+  shown = renderer == "Vulkan" ? std::min(resolution, MostShown) : 1;
+  screen = node->append<Node::Video::Screen>("Screen", 480 * shown, 272 * shown);
   screen->colors(1 << 24, [](n32 color) -> n64 {
     u64 a = 65535;
     u64 r = image::normalize(color >>  0 & 255, 8, 16);
@@ -115,10 +213,10 @@ auto System::load(Node::System& root, string name) -> bool {
     u64 b = image::normalize(color >> 16 & 255, 8, 16);
     return a << 48 | r << 32 | g << 16 | b << 0;
   });
-  screen->setSize(480, 272);
-  screen->setScale(1.0, 1.0);
+  screen->setSize(480 * shown, 272 * shown);
+  screen->setScale(1.0 / shown, 1.0 / shown);
   screen->setAspect(1.0, 1.0);
-  screen->setViewport(0, 0, 480, 272);
+  screen->setViewport(0, 0, 480 * shown, 272 * shown);
   screen->refreshRateHint(60'000.0 / 1001);
 
   stream = node->append<Node::Audio::Stream>("Audio");
@@ -144,7 +242,12 @@ auto System::unload() -> void {
   //the host), its threads, its 64 MiB of memory and the compiled code. power() makes them all again.
   kernel.power();
   ge.setRenderer(nullptr);
-  gpu.reset();  //(after the kernel's power, which has put back what it drew)
+  gpu.reset();  //(after the kernel's power, which has put back what it drew; and the window let go of)
+  presents = false;
+  {
+    std::lock_guard lock{windowMutex};
+    hold(gpuWindow, false), gpuWindow = nullptr;
+  }
   gpuFailed = false;
   kernel.devices.clear();
   kernel.disc.reset();
@@ -478,19 +581,30 @@ auto System::unserialize(serializer& s) -> bool {
 //The hardware renderer the owner chose, made and checked once a game (the software renderer drawing the game where it
 //couldn't start or its pixels aren't the software renderer's, said once), and the GE's from here on.
 auto System::startRenderer() -> void {
-  if(renderer != "Vulkan") return gpu.reset();
+  if(renderer != "Vulkan") {
+    gpu.reset(), presents = false;
+    std::lock_guard lock{windowMutex};
+    return hold(gpuWindow, false), void(gpuWindow = nullptr);
+  }
   if(!gpu && !gpuFailed) {
     std::string error;
     gpu = GPU::vulkan(vulkanLoader, error);
     if(gpu && !gpu->check(error)) gpu.reset();
+    if(gpu && failCheck) gpu.reset(), error = "its start-up check made to fail, as the debug switch asks";
     if(!gpu) {
       gpuFailed = true;
       return tell("The Vulkan renderer couldn't start (" + error + "): the software renderer draws instead");
     }
-    report(false, "the Vulkan renderer draws, on " + gpu->backend->name());
+    //(the check is drawn at the PSP's resolution, the game at the one chosen, as much of it as the GPU takes)
+    gpu->resolution(resolution);
+    report(false, "the Vulkan renderer draws, on " + gpu->backend->name() + ", at " +
+                  std::to_string(gpu->resolution()) + "x" +
+                  (gpu->resolution() < resolution ? " (the most this GPU takes)" : ""));
     gpu->report = [this](const std::string& what) { tell("The Vulkan renderer stopped: " + what); };
   }
   if(gpu && gpu->ready()) ge.setRenderer(gpu.get());
+  //(presenting from the first frame on, so that the host never takes the window first)
+  presents = gpu && gpu->presents();
 }
 
 //Something the owner should know: to the log, and for the front end to show (notice()).

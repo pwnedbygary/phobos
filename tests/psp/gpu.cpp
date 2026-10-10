@@ -3,7 +3,8 @@
 //a frame buffer drawn and then sampled as a texture (render to texture: the copy taken on the GPU), the same again;
 //pspsdk's samples (PSP_TEST_PROGRAMS) run by two machines alike but for the renderer, measured for how close their
 //pictures are (blending rounds differently on the GPU, so they needn't be the same); a GPU that stops answering;
-//bytes beside the GPU's pixels, memory's without waiting; and the start-up check a game's renderer goes through.
+//bytes beside the GPU's pixels, memory's without waiting; the start-up check a game's renderer goes through; and
+//drawing at 2 and 3 times the PSP's resolution, where memory's bytes must still come back exactly.
 //Each group but the lost GPU's is skipped, saying why, where there's no Vulkan GPU (or with PSP_GPU=0): the
 //machines the tests run on needn't have one.
 #include "kernel-machine.hpp"
@@ -393,6 +394,84 @@ static auto gpuCheck() -> void {
   CHECK(gpu->ready(), true);
 }
 
+//At 2 and 3 times the PSP's resolution (GPU::resolution()): flat sprites over VRAM full of random bytes, in each
+//format, are the software renderer's byte for byte once read back (each pixel's scale x scale the same; memory's
+//bytes the GPU didn't draw over, the stencils too, back as they went in, through copy.frag's enlarging and the
+//blit's shrinking); the screen's picture at the target's own resolution is them, scale x scale each; render to
+//texture from a copy at the target's resolution, sampled 1:1, is exact too; and the depth buffer and the bytes beside
+//the pixels behave as at the PSP's own (gpuDepth, gpuBeside, run again).
+static auto gpuScaled() -> void {
+  auto gpu = renderer();
+  if(!gpu) return;
+  if(gpu->backend->mostScale < 3) return void(std::printf("  skipped: the GPU takes at most %ux\n",
+                                                         gpu->backend->mostScale));
+  std::mt19937 random{20261012};
+  for(u32 scale : {2u, 3u}) {
+    gpu->resolution(scale);
+    CHECK(gpu->resolution(), scale);
+    for(u32 format : {3u, 0u, 1u, 2u}) {
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      auto flat = randomSprites(random, 40, false);
+      std::vector<u8> noise(0x4'0000);
+      for(auto& byte : noise) byte = random();
+      for(System* s : {&software, &hardware}) {
+        std::memcpy(s->memory.vram.data(), noise.data(), noise.size());
+        prepare(*s, 0, format);
+        for(auto& one : flat) sprite(*s, one);
+        s->ge.commands[GE::ClearMode] = 1 | 7 << 8;
+        for(u32 n = 0; n < 4; n++) sprite(*s, flat[n]);
+        s->ge.commands[GE::ClearMode] = 0;
+      }
+      if(format == 3) {  //(the screen's picture, before anything's read back: one of each pixel's scale x scale)
+        std::vector<u32> pixels;
+        CHECK(gpu->picture(0, 64, 3, 64, 48, pixels, scale), true);
+        CHECK(pixels.size(), 64u * 48 * scale * scale);
+        u32 wrong = 0;
+        for(u32 y = 0; y < 48 && pixels.size() == 64u * 48 * scale * scale; y++) {
+          for(u32 x = 0; x < 64; x++) {
+            u32 shown = pixels[(y * scale + scale / 2) * 64 * scale + x * scale + scale / 2] & 0xff'ffff;
+            u32 drawn = software.memory.read(4, 0x0400'0000 + (y * 64 + x) * 4) & 0xff'ffff;
+            wrong += shown != drawn;
+          }
+        }
+        CHECK(wrong, 0u);
+      }
+      u32 bytes = apart(software, hardware);
+      if(bytes) std::printf("  %ux, format %u: %u bytes apart\n", scale, format, bytes);
+      CHECK(bytes, 0u);
+      hardware.ge.setRenderer(nullptr);
+    }
+    {
+      System software, hardware;
+      hardware.ge.setRenderer(gpu);
+      auto drawn = randomSprites(random, 40, false);
+      //(1:1, whole pixels: each of the GPU's pixels in the PSP's it samples; the same ones for both machines)
+      struct Sampled { float x, y, w, h, u, v; };
+      std::vector<Sampled> sampled;
+      for(u32 n = 0; n < 12; n++) {
+        float x = random() % 40, y = random() % 30, w = 1 + random() % 24, h = 1 + random() % 18;
+        float u = random() % 40, v = random() % 30;
+        sampled.push_back({x, y, w, h, u, v});
+      }
+      for(System* s : {&software, &hardware}) {
+        prepare(*s, 0, 3);
+        for(auto& one : drawn) sprite(*s, one);
+        prepare(*s, 0x2'0000, 3);
+        texture(*s, Memory::VRAMBase, 64, 64, 64);
+        for(auto& d : sampled) {
+          sprite(*s, {{{d.u, d.v, d.x, d.y}, {d.u + d.w, d.v + d.h, d.x + d.w, d.y + d.h}}, 0xffff'ffff});
+        }
+      }
+      CHECK(apart(software, hardware), 0u);
+      hardware.ge.setRenderer(nullptr);
+    }
+    gpuDepth();
+    gpuBeside();
+  }
+  gpu->resolution(1);
+}
+
 auto gpuTests() -> Tests {
   return {
     {"gpu sprites against the software renderer", gpuSprites},
@@ -404,6 +483,7 @@ auto gpuTests() -> Tests {
     {"gpu depth buffer follows memory's changes", gpuDepth},
     {"gpu bytes beside its pixels are memory's, without waiting", gpuBeside},
     {"gpu start-up check passes on a GPU that draws right", gpuCheck},
+    {"gpu at 2 and 3 times the resolution: memory's bytes exact", gpuScaled},
   };
 }
 

@@ -6,6 +6,7 @@
 #include "vfs_android.hpp"
 #include <android/native_window_jni.h>
 #include <sys/auxv.h>
+#include <sys/system_properties.h>
 #if defined(__aarch64__)
 #include <asm/hwcap.h>
 #endif
@@ -988,6 +989,8 @@ namespace ares {
   static std::atomic<s32> pspDrawingThreads{0};
   // Who draws the PSP's pictures (Settings' "PSP Renderer"): 0 the software renderer, 1 Vulkan's.
   static std::atomic<s32> pspRenderer{0};
+  // How many times over Vulkan's draws each of the PSP's pixels (Settings' "PSP Resolution"): 1, Native, to 10.
+  static std::atomic<s32> pspResolution{1};
   // The whole multiple video() draws the PSP's picture at, from the view's size (Kotlin's pictureMultiple()).
   static std::atomic<s32> pictureMultiple{1};
   static std::map<string, string> firmwareMap;
@@ -1961,7 +1964,11 @@ namespace ares {
       // repeated, so the compositor's own bilinear scaling is slight ("sharp bilinear"): its one-pixel lines stay
       // sharp and even. Scaled 3.97 times by the compositor alone (480x272 to 1080 rows), they were soft bands, some
       // fainter than others (Peace Walker's title, a picture of such lines, looked striped).
-      u32 multiple = root && root->name() == "PlayStation Portable" && !rotate && !scale2x ? pictureMultiple.load() : 1;
+      // (A picture larger than the PSP's, read back from a GPU drawing at a higher resolution, is that many times
+      // the PSP's already: the multiple is shared out between the two.)
+      bool psp = root && root->name() == "PlayStation Portable";
+      u32 multiple = psp && !rotate && !scale2x ? pictureMultiple.load() : 1;
+      if (psp && width > 480) multiple = std::max<u32>(1, (multiple * 480 + width / 2) / width);
       u32 targetW = rotate ? height : (scale2x ? width * 2 : width * multiple);
       u32 targetH = rotate ? width : (scale2x ? height * 2 : height * multiple);
 
@@ -1973,6 +1980,13 @@ namespace ares {
       if (windowChanged || std::abs(contentRate - hintedFrameRate) > 0.5) {
           phobos::host::hintFrameRate(contentRate);
           hintedFrameRate = contentRate;
+      }
+
+      // A PSP game whose Vulkan renderer presents on the window itself (its swapchain): nothing to draw here, and
+      // the window mustn't be locked, which would take it from the swapchain.
+      if (psp && ::ares::PlayStationPortable::presenting()) {
+          windowChanged = false, bufferWidth = 0;
+          return;
       }
 
       if (windowChanged || targetW != bufferWidth || targetH != bufferHeight) {
@@ -3587,6 +3601,17 @@ else if (port->type() == "Keyboard") {
       LOGI("PSP: renderer %s", vulkan ? "Vulkan" : "Software");
       ::ares::PlayStationPortable::vulkanLoader(vulkan ? phobos::host::vulkanLoader() : nullptr);
       ::ares::PlayStationPortable::option("Renderer", vulkan ? "Vulkan" : "Software");
+      LOGI("PSP: resolution %dx", pspResolution.load());
+      ::ares::PlayStationPortable::option("Resolution", string{pspResolution.load()});
+      // A debug switch, set over adb alone (adb shell setprop debug.phobos.psp.failcheck 1): Vulkan's start-up check
+      // made to fail, to see the software renderer take over and the user told.
+      bool failCheck = false;
+      #if defined(__ANDROID__)
+      char property[PROP_VALUE_MAX] = {};
+      failCheck = __system_property_get("debug.phobos.psp.failcheck", property) > 0 && !strcmp(property, "1");
+      #endif
+      if (failCheck) LOGI("PSP: the renderer's start-up check made to fail (debug.phobos.psp.failcheck)");
+      ::ares::PlayStationPortable::option("Renderer Check", failCheck ? "Fail" : "Pass");
       success = ::ares::PlayStationPortable::load(root, "[Sony] PlayStation Portable");
     } else if (identifiedSystem == "Game Boy Advance") {
       success = ::ares::GameBoyAdvance::load(root, "[Nintendo] Game Boy Advance");
@@ -4683,6 +4708,7 @@ else if (port->type() == "Keyboard") {
   }
   auto setPspDrawingThreads(s32 threads) -> void { pspDrawingThreads = std::max(0, threads); }
   auto setPspRenderer(s32 renderer) -> void { pspRenderer = renderer == 1 ? 1 : 0; }
+  auto setPspResolution(s32 scale) -> void { pspResolution = std::clamp(scale, 1, 10); }
   auto takePspNotice() -> std::string {
     std::string text = (const char*)::ares::PlayStationPortable::notice();
     if (!text.empty()) addLog(LogLevel::Warn, {"PSP: ", text.c_str()});
@@ -4970,6 +4996,8 @@ else if (port->type() == "Keyboard") {
     ANativeWindow* window = surface ? ANativeWindow_fromSurface(env, surface) : nullptr;
     LOGI("PhobosSurface: setSurface called. New=%p", window);
     phobos::host::setWindow(window);
+    // (and to the PSP's core, whose Vulkan renderer presents on it itself: it keeps a reference of its own)
+    ::ares::PlayStationPortable::window(window);
     windowChanged = true;
   }
 #endif
@@ -5027,6 +5055,15 @@ else if (port->type() == "Keyboard") {
       return nall::Encode::PNG::RGBA8(path, pixels.data(), (s32)width * 4, (s32)width, (s32)height);
     }
     #endif
+    // A PSP game presented by its Vulkan renderer: the picture it presented last (red in the low byte, as the
+    // window's are)
+    if (root && root->name() == "PlayStation Portable" && ::ares::PlayStationPortable::presenting()) {
+      std::vector<u32> pixels;
+      u32 width = 0, height = 0;
+      if (!::ares::PlayStationPortable::shot(pixels, width, height)) return false;
+      for (auto& p : pixels) p = 0xFF000000 | ((p >> 16) & 0x000000FF) | (p & 0x0000FF00) | ((p << 16) & 0x00FF0000);
+      return nall::Encode::PNG::RGBA8(path, pixels.data(), (s32)width * 4, (s32)width, (s32)height);
+    }
     lock_guard<mutex> lock(windowMutex);
     if (lastFrameBuffer.empty() || currentWidth == 0 || currentHeight == 0) return false;
     std::vector<u32> converted;

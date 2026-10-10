@@ -25,6 +25,24 @@ point, and restores tracking of the existing `.gitmodules` file for fresh clones
 Documentation and Git-metadata checks/review accompany the commit; no APK/device test
 is implied. Verify GitHub's branch tip against local HEAD after publication.
 
+## PSP core: upscaling, and presenting without reading back — 2026-10-08
+
+Branch `cursor/psp-gpu-hw3-2b67`, on top of part 46's `cursor/psp-cpu-speed3-2b67` (#176 under it). docs/psp-core.md, part 44, and
+docs/psp-gpu-renderers.md's "Upscaling" and "Presenting" describe it; PPSSPP stayed a guide only, none of its code used.
+- **The setting**: "PSP Resolution" (Native, the default and exact, then 2x-10x) in the app's PSP settings and the
+  desktop's menu, given to the core as its "Resolution" option when a game loads; Vulkan's alone.
+- **Upscaling**: targets, depth and stencil at N times; uploads drawn larger, read-backs for the CPU and GE shrunk to
+  the PSP's size first so memory stays exact; render to texture keeps the scale. New test `gpuScaled`; the sanitized
+  PSP suite passes on the M1 (322 groups, the GPU groups run).
+- **Presenting** (Android): the frame drawn straight onto a swapchain on the app's window, no read-back; screenshots
+  from a shrunk copy; a failing surface falls back to the read-back. The desktop reads back at up to 4x. Review fix:
+  when present fails (background, acquire timeout), the frame goes the read-back way instead of leaving a stale screen.
+- **RP6**: Lumines 59.4/59.3/50.6/39.2 fps at Native/4x/8x/9x (9x GPU ~74% busy); Ridge Racer 2's menu 60/46.5 at
+  Native/8x. The fallback toast seen at last (`adb shell setprop debug.phobos.psp.failcheck 1`; set back to 0).
+  Backgrounding then returning kept presenting (Lumines ~30 fps after). 10x is in the menu but its row sits under
+  the app's nav bar, so it wasn't selected from adb. Still to check: 10x in play, 3D past menus, rotation, the 8x line.
+- **Next**: shader blending (#172); OpenGL parked.
+
 ## PSP core: render-to-texture decode later (emulation thread) — 2026-10-08
 
 Branch `cursor/psp-cpu-speed3-2b67`, on top of part 43's `cursor/psp-cpu-speed2-2b67` (with #165 disc-info).
@@ -45,7 +63,7 @@ docs/psp-core.md, part 46. PR #176.
 ## PSP core: the emulation thread faster again — drawing off it, registers held — 2026-10-08
 
 Branch `cursor/psp-cpu-speed2-2b67`, on top of part 42's `cursor/psp-hle-games8-2b67` (#169; measured from part 38's
-4ebc59d97). docs/psp-core.md, part 43, has the profile, the waits and every number.
+4ebc59d97). docs/psp-core.md, part 43, has the profile, the waits and every number. Opened as #170.
 - **The GE** (`ares/psp/ge/`): a list starting waits only for the batch it's to fill, not for everything the last
   list left being drawn (b0af46594); lighting's light-by-material products once a primitive (3292c775f).
 - **The recompiler** (`ares/psp/cpu/`): a block holds the game's registers in host registers, written through, so

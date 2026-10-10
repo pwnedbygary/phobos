@@ -13,6 +13,10 @@
   #define VK_NO_PROTOTYPES
 #endif
 #include <vulkan/vulkan.h>
+#if defined(__ANDROID__)
+  #include <vulkan/vulkan_android.h>  //(presenting on the host's window: vulkan.cpp)
+  #include <android/native_window.h>
+#endif
 #if !defined(_WIN32)
   #include <dlfcn.h>
 #endif
@@ -188,11 +192,12 @@ auto GPU::own(Target& t, s32 left, s32 top, s32 right, s32 bottom) -> void {
 }
 
 //The PRIM's texture on the GPU: one taken from a target (holds()), copied out of it now, its texels then read as
-//the target's format keeps them; or the GPU's copy of a decoded texture (put there now if it isn't yet, or has
-//fewer rows than the GE's copy). 0 for none, where the GE has none decoded (it then draws untextured, which the
-//design's accuracy notes count).
-auto GPU::textureFor(const GE::Look& look, u8& texels) -> u32 {
-  texels = 4;
+//the target's format keeps them, at the target's resolution (scale: each texel scale x scale of the copy's); or the
+//GPU's copy of a decoded texture (put there now if it isn't yet, or has fewer rows than the GE's copy), at the
+//PSP's. 0 for none, where the GE has none decoded (it then draws untextured, which the design's accuracy notes
+//count).
+auto GPU::textureFor(const GE::Look& look, u8& texels, u32& scale) -> u32 {
+  texels = 4, scale = 1;
   if(held && look.textured) {  //(copied from its target, in order with what's drawn)
     Held h = *held;
     held.reset();
@@ -206,7 +211,9 @@ auto GPU::textureFor(const GE::Look& look, u8& texels) -> u32 {
     if(found != copies.end()) {
       auto& copied = found->second;
       copied.used = uses;
-      if(copied.version == h.target->version && copied.x == h.x && copied.y == h.y) return copied.texture;
+      if(copied.version == h.target->version && copied.x == h.x && copied.y == h.y) {
+        return scale = backend->scale, copied.texture;
+      }
     }
     if(found == copies.end() && copies.size() >= MostCopies) {  //(the one unused longest let go: release())
       auto oldest = copies.begin();
@@ -215,8 +222,10 @@ auto GPU::textureFor(const GE::Look& look, u8& texels) -> u32 {
       }
       backend->dropTexture(oldest->second.texture), copies.erase(oldest);
     }
-    u32 id = found != copies.end() ? found->second.texture : backend->makeTexture(h.width, h.rows, nullptr);
+    u32 id = found != copies.end() ? found->second.texture
+                                   : backend->makeTexture(h.width * backend->scale, h.rows * backend->scale, nullptr);
     if(!id) return 0;
+    scale = backend->scale;
     copies[key] = {id, h.target->version, h.x, h.y, uses};
     Command c{Command::Kind::Copy, h.target->id};
     c.x = h.x, c.y = h.y, c.texture = id;
@@ -265,7 +274,7 @@ auto GPU::settings(const GE::Look& look) -> void {
       k.stencilTest = 1, k.stencilCompare = 1, k.stencilPass = Replace;  //(the reference: the vertex's alpha)
     }
   } else {
-    textured = look.textured && (s.texture = textureFor(look, k.texels));
+    textured = look.textured && (s.texture = textureFor(look, k.texels, s.push.textureScale));
     k.textured = textured;
     k.function = look.function | look.withAlpha << 3 | look.doubled << 4;
     k.clamp = look.texture.clampU | look.texture.clampV << 1;
@@ -363,6 +372,7 @@ auto GPU::settings(const GE::Look& look) -> void {
   }
   s.target = target->id;
   s.push.scale[0] = 2.0f / target->stride, s.push.scale[1] = 2.0f / target->height;
+  s.push.resolution = backend->scale;
   s32 left = std::max(p.left, 0), top = std::max(p.top, 0);
   s32 right = std::min<s32>(p.right, target->stride - 1), bottom = std::min<s32>(p.bottom, target->height - 1);
   s.scissor[0] = left, s.scissor[1] = top, s.scissor[2] = right - left + 1, s.scissor[3] = bottom - top + 1;
@@ -780,27 +790,37 @@ auto GPU::forget(GE& ge) -> void {
 //The frame shown, from the GPU's target: a read back of the rectangle shown alone, after what's recorded so far.
 //(The hosts take the frame as pixels in memory, so it's read back either way; presenting from the GPU spares the
 //rest: every other target's read back, VRAM's pages given back, and the targets filled again from memory after.)
-auto GPU::picture(u32 address, u32 stride, u32 format, u32 width, u32 height, std::vector<u32>& pixels) -> bool {
-  if(!ready() || !width || !height) return false;
+//The target the frame buffer at VRAM's offset address (stride pixels a row, in GE format) is shown from, width x
+//height of it: none where the GPU doesn't hold the newest of every pixel shown (no such target, or rows it hasn't,
+//or pages another target or the CPU has changed since), or hasn't drawn there since memory last had it all.
+auto GPU::shownTarget(u32 address, u32 stride, u32 format, u32 width, u32 height) -> Target* {
   Target* t = nullptr;
   for(auto& candidate : targets) {
     if(candidate->address == address && candidate->stride == stride && candidate->format == format) {
       t = candidate.get();
     }
   }
-  if(!t || t->stale || t->rows < height || width > t->stride) return false;
-  if(t->besideReaches(0, 0, width - 1, height - 1)) return false;  //(memory's newer bytes in what's shown)
+  if(!t || t->stale || t->rows < height || width > t->stride) return nullptr;
+  if(t->besideReaches(0, 0, width - 1, height - 1)) return nullptr;  //(memory's newer bytes in what's shown)
   //(every page shown the target's or no one's, and one at least the target's: else memory has it, or another)
   u32 bytes = t->bytes(), end = address + ((height - 1) * stride + width) * bytes;
-  if(end > Memory::VRAMSize) return false;
+  if(end > Memory::VRAMSize) return nullptr;
   bool owned = false;
   for(u32 page = address / Memory::PageSize; page <= (end - 1) / Memory::PageSize; page++) {
-    if(owners[page] && owners[page] != t) return false;
+    if(owners[page] && owners[page] != t) return nullptr;
     owned |= owners[page] == t;
   }
-  if(!owned) return false;
+  return owned ? t : nullptr;
+}
+
+auto GPU::picture(u32 address, u32 stride, u32 format, u32 width, u32 height, std::vector<u32>& pixels, u32 at)
+  -> bool {
+  if(!ready() || !width || !height) return false;
+  at = std::clamp<u32>(at, 1, backend->scale);
+  Target* t = shownTarget(address, stride, format, width, height);
+  if(!t) return false;
   Command c{Command::Kind::Readback, t->id};
-  c.width = width, c.height = height;
+  c.width = width, c.height = height, c.at = at;
   recorded.commands.push_back(c);
   recorded.readbacks++;
   auto began = std::chrono::steady_clock::now();
@@ -815,12 +835,39 @@ auto GPU::picture(u32 address, u32 stride, u32 format, u32 width, u32 height, st
     return false;
   }
   //(as memory would have them: narrowed to the frame buffer's format, then widened as the screen widens them)
-  pixels.resize(width * height);
-  for(u32 n = 0; n < width * height; n++) {
+  u32 count = width * height * at * at;
+  pixels.resize(count);
+  for(u32 n = 0; n < count; n++) {
     pixels[n] = 0xff00'0000 | (widenTarget(narrowTarget(colors[n], format), format) & 0xff'ffff);
   }
   statistics.pictures++;
   return true;
+}
+
+//(what's recorded handed to the GPU with the Present after it, nothing waited for)
+auto GPU::show(u32 address, u32 stride, u32 format, u32 width, u32 height) -> bool {
+  if(!presents() || !width || !height) return false;
+  Target* t = shownTarget(address, stride, format, width, height);
+  if(!t) return false;
+  Command c{Command::Kind::Present, t->id};
+  c.width = width, c.height = height, c.format = format;
+  recorded.commands.push_back(c);
+  if(!backend->submit(recorded) && !backend->lost) lose();
+  recorded.clear();
+  statistics.submits++, statistics.presents++;
+  return true;
+}
+
+auto GPU::show(const std::vector<u32>& pixels, u32 width, u32 height) -> void {
+  if(!presents() || !width || !height || pixels.size() < u64(width) * height) return;
+  Command c{Command::Kind::Present, 0};
+  c.width = width, c.height = height, c.colors = recorded.uploads.size();
+  auto bytes = (const u8*)pixels.data();
+  recorded.uploads.insert(recorded.uploads.end(), bytes, bytes + u64(width) * height * 4);
+  recorded.commands.push_back(c);
+  if(!backend->submit(recorded) && !backend->lost) lose();
+  recorded.clear();
+  statistics.submits++, statistics.presentsFromMemory++;
 }
 
 auto GPU::drop() -> void {
@@ -833,6 +880,11 @@ auto GPU::drop() -> void {
   for(auto& [decoded, texture] : textures) backend->dropTexture(texture.id);
   for(auto& [where, copied] : copies) backend->dropTexture(copied.texture);
   targets.clear(), textures.clear(), copies.clear();
+}
+
+auto GPU::resolution(u32 scale) -> void {
+  drop();
+  if(backend) backend->scale = std::clamp<u32>(scale, 1, backend->mostScale);
 }
 
 #include "check.cpp"

@@ -27,6 +27,14 @@ namespace ares::PlayStationPortable {
   //What the owner should be told, once (the hardware renderer couldn't start, or stopped, and the software renderer
   //draws): taken, so the next call has nothing until there's more. Any thread may ask.
   auto notice() -> string;
+  //Presenting (docs/psp-gpu-renderers.md, "Presenting"): the host's window (an ANativeWindow on Android; none to
+  //take it back) that the Vulkan renderer shows the screen on itself, straight from the GPU with nothing read back.
+  //Any thread, any time: the core keeps a reference of its own while it has it. presenting(): whether the core shows
+  //the frames on the window now, so the host mustn't (nor lock the window, which would take it from the core); any
+  //thread. shot(): the picture presented last, at the PSP's size (8888, red in the low byte), for screenshots.
+  auto window(void* window) -> void;
+  auto presenting() -> bool;
+  auto shot(std::vector<u32>& pixels, u32& width, u32& height) -> bool;
 }
 
 #include <psp/cpu/allegrex.hpp>
