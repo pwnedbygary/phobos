@@ -6509,3 +6509,60 @@ the GPU tests on the RP6, Turnip and Qualcomm's own driver: none failing.
 PRIMs (Peace Walker's) could go to the GPU too and every 3D PRIM take one path; Qualcomm's driver's GPU time in fast
 mode; textures decoded on the GPU (palettes, swizzling, DXT: 0.4 ms a frame of the race's CPU since part 52, so
 later); block transfers on the GPU (WipEout's two finishes a frame).
+
+## Part 54: the Vulkan renderer's pipelines kept between sessions
+
+On branch `cursor/psp-gpu-fast3-2b67`, on top of part 53's `cursor/psp-gpu-fast2-2b67`. docs/psp-gpu-renderers.md
+has the design (the pipelines' paragraph) and the table ("Speed", part 54). Software is untouched; neither Vulkan
+mode draws differently.
+
+**Why.** Part 53's numbers after a warm-up and over a whole run from a state differ by the pipelines a game makes in
+its first frames: fast mode's 79 in Midnight Club 3's race took Turnip 2.6 seconds to make (its transform pipelines
+cost 33 ms each, the accurate mode's 14), so over the 450 frames the race ran at 49.2 frames a second, behind seven
+software threads' 52.5, and in the app the race's start stalled for 725 ms. Pipelines were made afresh every session.
+
+**What was done:**
+- System's option "Pipeline Cache", a host file: read at the renderer's start and handed to `GPU::vulkan()`, which
+  gives it to the driver as its pipeline cache's first data; written by `System::keepPipelines()` where pipelines
+  were made since it was last written (as a game ends, every 600 frames, as the renderer is let go of), beside the
+  file and renamed over it. The app's file is `psp_vulkan_pipeline_cache.bin` in its Vulkan cache folder, beside the
+  N64's (or the saves folder); the runner's `--pipeline-cache FILE` the same; its summary says how many pipelines were
+  made and the ms the driver took.
+- The driver's data goes in the file after a header of our own (`Kept`: the device, the driver's version and cache
+  UUID, a 64-bit or 32-bit build, the data's size and CRC-32), and reaches the next session's driver only where all
+  of it matches and the driver's own header is sound: the review found MoltenVK taking a cache with an intact header
+  and a zeroed tail (a power cut after the rename could leave one) and then failing the start-up check every session,
+  and a cut-short one leaving the session's cache unreadable for good. A renderer made with a kept cache that fails
+  its check is made again without it, the file let go of; a driver refusing the data gets an empty cache; the same
+  size again isn't written again; past 32 MB the file is let go of; a folder that isn't there is made, and a file that
+  can't be written is said once, not tried every 600 frames.
+
+**Measured** on the RP6: each scene twice from its state with `--pipeline-cache`, the first from an empty cache, the
+second from what the first kept; the driver's ms making the pipelines, and frames a second over the 450 frames.
+Turnip, fast: the race 2,589 → 1.2 ms, 49.2 → 67.1; LCS's city 1,074 → 0.6 ms, 85.5 → 103.6; Peace Walker's play
+790 → 0.6 ms, 105.2 → 123.8; WipEout 2,559 → 1.2 ms, 55.4 → 78.6. Qualcomm's driver, fast: 2,587 → 23 ms, 47.8 →
+63.9; 1,258 → 13 ms, 78.8 → 95.7; 1,106 → 12 ms, 93.1 → 113.0; 2,423 → 24 ms, 55.1 → 75.6. The accurate mode gains
+likewise (Turnip's race 872 → 0.8 ms, 54.3 → 60.2). From a game's second session on, fast mode is ahead of seven
+software threads over a whole run too: the race 67.1 against 52.5, the city 103.6 against 70.4. The files: 0.15-1.3
+MB a scene. In the app (Turnip, fast): the file written at the 600-frame mark, 198 KB, then 1.4 MB once
+Midnight Club 3's race had been run; that race's start, its longest frames 619, 335 and 226 ms in a first session,
+30 ms at most in the second (the file a build before `Kept` wrote was left out at the first, as another format's,
+and written again).
+
+**Review** (an independent read-only one): found the damaged-cache cases above (fixed: `Kept`, the retry without
+the cache), the app's cache folder possibly not made on an install whose setting was never changed (made now), a
+refused cache leaving the session without one (an empty one now), the driver's version not checked (in `Kept`),
+the write's close not checked and a failed write's `.new` left (both fixed), every warm session rewriting the same
+file (not now), an unbounded file (32 MB), the read byte by byte without a bound (sized now), and the test not
+showing bad data left out. Not taken: writing on another thread (the write happens only where pipelines were made,
+which stalls anyway: 0.4-1.5 ms on the M1 for 44 KB).
+
+**Tests:** "gpu pipelines kept between sessions" (a renderer made with the data from one whose check ran takes it,
+its cache as big from the start, and passes its check; another driver version's, another cache UUID's, a file cut
+short, one with a zeroed tail, and junk are left out, each renderer's cache starting without them, and draw right).
+`tests/psp/run-tests.sh` (sanitized), `tests/allegrex/run-tests.sh`, `tests/psp/ares/run-tests.sh`: none failing;
+the GPU tests on the RP6, Turnip and Qualcomm's own driver: none failing.
+
+**Left:** a file per game (one file holds every game's pipelines until 32 MB); fast mode's first session still pays
+for its pipelines (made on another thread while the GE draws those PRIMs, as PPSSPP does, would hide it); the app's
+Vulkan cache folder moved in Settings carries the N64's file over, not the PSP's (one session made afresh).

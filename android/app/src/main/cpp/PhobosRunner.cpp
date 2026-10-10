@@ -3605,6 +3605,11 @@ else if (port->type() == "Keyboard") {
       ::ares::PlayStationPortable::option("Renderer", rendererName);
       LOGI("PSP: resolution %dx", pspResolution.load());
       ::ares::PlayStationPortable::option("Resolution", string{pspResolution.load()});
+      // The Vulkan renderer's pipelines kept between sessions, beside the N64's (the Vulkan cache folder, or saves').
+      string pspCacheDir = vulkanCachePath;
+      if (!pspCacheDir) pspCacheDir = savesPath;
+      ::ares::PlayStationPortable::option("Pipeline Cache",
+                                          pspCacheDir ? string{pspCacheDir, "/psp_vulkan_pipeline_cache.bin"} : string{});
       // A debug switch, set over adb alone (adb shell setprop debug.phobos.psp.failcheck 1): Vulkan's start-up check
       // made to fail, to see the software renderer take over and the user told.
       bool failCheck = false;

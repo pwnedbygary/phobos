@@ -66,6 +66,8 @@ The options, and what each does:
   its run is done, so nothing waits for the GPU at a frame's end, as when the app presents on its
   window. For timing the GPU as the app runs it; the PNGs then show a frame or two before the one
   they're named by.
+- `--pipeline-cache FILE` — the Vulkan renderer's pipelines kept in `FILE` between runs (the core's
+  option "Pipeline Cache"), as the app keeps them: a second run starts with the first's, made at once.
 - `--memory-stick DIR` — the host folder standing for `ms0:` (a scratch folder, made and
   removed with the run, by default)
 - `--fonts DIR` — the PSP's system fonts (the `.pgf` files of a PSP's `flash0:`), for the

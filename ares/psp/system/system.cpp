@@ -29,6 +29,8 @@ auto load(Node::System& node, string name) -> bool {
 //GPU drew wrong (a front end's debug switch, to see the software renderer take over and the owner told). "Late
 //Frames", "true" for a host that reads the GPU's frames back to show them but can take them a frame or two late
 //(at 1x): nothing is waited for each frame, as when the GPU presents on Android's window (the runner, to time it so).
+//"Pipeline Cache", a host file the Vulkan renderer keeps its pipelines in between sessions (none: made afresh each
+//game, a stutter the first time each is met).
 auto option(string name, string value) -> bool {
   if(name == "Memory Stick") system.memoryStick = value;
   if(name == "Fonts") system.fonts = value;
@@ -41,6 +43,7 @@ auto option(string name, string value) -> bool {
   if(name == "Resolution") system.resolution = std::clamp<u64>(value.natural(), 1, 10);
   if(name == "Renderer Check") system.failCheck = value == "Fail";
   if(name == "Late Frames") system.lateFrames = value.boolean();
+  if(name == "Pipeline Cache") system.pipelineCache = value;
   return true;
 }
 
@@ -115,6 +118,7 @@ auto System::run() -> void {
 
   //Where the GPU presents on the host's window itself, the frame is shown there (present()), and the screen only
   //hands the host its turn (passthrough: nothing converted, nothing drawn).
+  if(++framesSinceKept >= 600) framesSinceKept = 0, keepPipelines();
   bool presented = present();
   presents = presented;
   screen->setPassthrough(presented);
@@ -269,13 +273,14 @@ auto System::unload() -> void {
   //the host), its threads, its 64 MiB of memory and the compiled code. power() makes them all again.
   kernel.power();
   ge.setRenderer(nullptr);
+  keepPipelines();
   gpu.reset();  //(after the kernel's power, which has put back what it drew; and the window let go of)
   presents = false;
   {
     std::lock_guard lock{windowMutex};
     hold(gpuWindow, false), gpuWindow = nullptr;
   }
-  gpuFailed = false;
+  gpuFailed = false, pipelinesUnkept = false;
   kernel.devices.clear();
   kernel.disc.reset();
   kernel.systemFonts.clear();
@@ -620,24 +625,46 @@ auto System::unserialize(serializer& s) -> bool {
 //couldn't start or its pixels aren't the software renderer's, said once), and the GE's from here on.
 auto System::startRenderer() -> void {
   if(renderer != "Vulkan" && renderer != "Vulkan (fast)") {
+    keepPipelines();
     gpu.reset(), presents = false;
     std::lock_guard lock{windowMutex};
     return hold(gpuWindow, false), void(gpuWindow = nullptr);
   }
   bool fast = renderer == "Vulkan (fast)";
   if(gpu && gpu->fast != fast) {  //(the other mode chosen since: made again, the window handed to it)
+    keepPipelines();
     gpu.reset();
     std::lock_guard lock{windowMutex};
     hold(gpuWindow, false), gpuWindow = nullptr;
   }
   if(!gpu && !gpuFailed) {
     std::string error;
-    gpu = GPU::vulkan(vulkanLoader, error, fast);
+    std::vector<u8> cached;  //(the pipelines kept from a session before: keepPipelines())
+    if(pipelineCache) {
+      std::ifstream file{(const char*)pipelineCache, std::ios::binary | std::ios::ate};
+      auto size = file ? u64(file.tellg()) : 0;
+      if(size <= MostPipelineBytes) {
+        cached.resize(size), file.seekg(0);
+        if(!file.read((char*)cached.data(), size)) cached.clear();
+      }
+    }
+    pipelineBytes = cached.size();
+    gpu = GPU::vulkan(vulkanLoader, error, fast, cached);
+    pipelinesKept = gpu ? gpu->backend->pipelines : 0;
     //(where blending in the shader in rasterization order fails it, the check again with the draws that read apart:
     //each after a barrier, their overlapping primitives in draws of their own, which every GPU orders, and the
     //blending the GPU's own; where reading the frame buffer fails even so, or can't be trusted apart
     //(Backend::readsApart), the check again with nothing read)
     bool passed = gpu && gpu->check(error);
+    //(a renderer made with a kept cache failing: the file let go of, and the renderer made afresh without it, once)
+    if(!passed && !cached.empty()) {
+      std::error_code removed;
+      std::filesystem::remove((const char*)pipelineCache, removed);
+      gpu.reset(), error.clear(), pipelineBytes = 0;
+      gpu = GPU::vulkan(vulkanLoader, error, fast);
+      pipelinesKept = gpu ? gpu->backend->pipelines : 0;
+      passed = gpu && gpu->check(error);
+    }
     //(fast mode's 3D through the GPU's transform failing it alone: the check again with the GE transforming)
     if(gpu && !passed && gpu->transformsFailed) {
       report(true, "the Vulkan renderer's start-up check, its 3D transformed by the GPU, failed (" + error +
@@ -683,6 +710,34 @@ auto System::startRenderer() -> void {
   if(gpu && gpu->ready()) ge.setRenderer(gpu.get());
   //(presenting from the first frame on, so that the host never takes the window first)
   presents = gpu && gpu->presents();
+}
+
+//The Vulkan renderer's pipelines put in the host's file (option "Pipeline Cache") where it has made any since they
+//were last put there (the driver's data only grows: the same size is the same pipelines): as a game ends, every 600
+//frames (System::run()), and as the renderer is let go of. Past MostPipelineBytes (every game's pipelines in one
+//file), the file is let go of, for the next session to start afresh; one that can't be written is said once.
+auto System::keepPipelines() -> void {
+  if(!pipelineCache || !gpu || !gpu->ready() || gpu->backend->pipelines == pipelinesKept) return;
+  pipelinesKept = gpu->backend->pipelines;
+  auto data = gpu->backend->pipelineData();
+  if(data.empty() || data.size() == pipelineBytes) return;
+  std::filesystem::path path{(const char*)pipelineCache}, written{path.string() + ".new"};
+  std::error_code error;
+  if(data.size() > MostPipelineBytes) return void(std::filesystem::remove(path, error));
+  //(written beside it and then renamed over it, so that a write cut short leaves the cache as it was; one damaged
+  //after, by a power cut, is left out by its CRC: vulkan.cpp's Kept)
+  std::filesystem::create_directories(path.parent_path(), error);
+  std::ofstream file{written, std::ios::binary | std::ios::trunc};
+  bool whole = file && file.write((const char*)data.data(), data.size());
+  file.close();
+  if(whole && !file.fail()) std::filesystem::rename(written, path, error);
+  if(!whole || file.fail() || error) {
+    std::filesystem::remove(written, error);
+    if(!pipelinesUnkept) report(true, "the Vulkan renderer's pipelines couldn't be kept in " + path.string());
+    pipelinesUnkept = true;
+    return;
+  }
+  pipelineBytes = data.size();
 }
 
 //Something the owner should know: to the log, and for the front end to show (notice()).

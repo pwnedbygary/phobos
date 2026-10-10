@@ -213,6 +213,7 @@ struct GPU : GE::Renderer {
     //mode); mostScale is the most its pictures' size allows (a target 512 of the PSP's pixels across).
     u32 scale = 1, mostScale = 1;
     u64 pipelines = 0;        //made so far
+    u64 pipelineMaking = 0;   //nanoseconds the driver took making them
     u64 recording = 0, submitting = 0, waiting = 0;  //nanoseconds in run()'s recording, vkQueueSubmit, the waits
     u64 passes = 0;                                  //render passes begun
     virtual auto name() const -> std::string = 0;
@@ -224,6 +225,9 @@ struct GPU : GE::Renderer {
     //Whether draws of this pipeline can be made (the driver took its shaders): fast mode's 3D asks before it records
     //one (mesh()), so that a driver refusing them leaves the GE to transform those PRIMs itself
     virtual auto drawable(const Pipeline&) -> bool { return true; }
+    //The pipelines made so far, as the driver keeps them, for the next session to start with (System's "Pipeline
+    //Cache": the GPU::vulkan() of a game's next start); none where it has nothing to say
+    virtual auto pipelineData() -> std::vector<u8> { return {}; }
     virtual auto submit(const Recorded& recorded) -> bool = 0;  //run, not waited for
     virtual auto finish(const Recorded& recorded) -> bool = 0;  //run, and everything waited for
     //Readback n of the last finish(): its 8888s and stencils (none for one at more than 1), a row after another
@@ -352,7 +356,9 @@ struct GPU : GE::Renderer {
   //vulkan.cpp: a renderer on the first Vulkan GPU, through the host's vkGetInstanceProcAddr (the loader or driver
   //the host chose, a custom one included: docs/psp-gpu-renderers.md, "Vulkan"), or, with none, the system's loader;
   //none, and why, where there's no Vulkan or no GPU fit for it.
-  static auto vulkan(void* getInstanceProcAddr, std::string& error, bool fast = false) -> std::unique_ptr<GPU>;
+  //cached: pipelines a session before made (Backend::pipelineData()), taken where they're this device's and driver's.
+  static auto vulkan(void* getInstanceProcAddr, std::string& error, bool fast = false,
+                     const std::vector<u8>& cached = {}) -> std::unique_ptr<GPU>;
 
 private:
   static constexpr u32 SubmitEvery = 128;  //commands recorded, handed to the GPU without waiting for the list's end
