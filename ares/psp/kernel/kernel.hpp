@@ -628,11 +628,13 @@ struct Kernel {
     u32 asyncCallback = 0, asyncArgument = 0;  //sceIoSetAsyncCallback's: notified as each request is done
     bool resultOnly = false;  //nothing is open (an asynchronous close, or an asynchronous open that failed): the
                               //descriptor stays only to hand over its request's result
+    u64 opened = 0;        //its place in the order the program opened files (filesOpened then): sceIoGetFdList's
   };
   std::map<std::string, std::string> devices;  //"ms0" -> the host folder standing for it
   std::shared_ptr<Disc> disc;  //the disc image in the drive (disc0: and umd0:, unless a host folder stands for it)
   std::map<u32, OpenFile> files;  //by descriptor: 3 to MostFiles - 1 (newFile()), or more from an older state
   static constexpr u32 MostFiles = 64;
+  u64 filesOpened = 0;  //how many files and folders the program has opened (never saved: its files' largest count)
   auto newFile() -> u32;
   std::string workingDirectory;
   std::vector<u32> memoryStickCallbacks;  //callbacks the program registered for the memory stick going in and out
@@ -678,6 +680,7 @@ struct Kernel {
   auto sceIoDopen() -> void;
   auto sceIoDread() -> void;
   auto sceIoDclose() -> void;
+  auto sceIoGetFdList() -> void;
   auto sceIoIoctl() -> void;
   auto sceIoDevctl() -> void;
   auto sceNpDrmSetLicenseeKey() -> void;
@@ -1868,7 +1871,7 @@ struct Kernel {
     u32 abortUpdates = 0;  //an aborted message's Updates still to come before it finishes (0: not aborted)
     u32 runningUpdates = 0;  //Updates while Running, before an abort (utility/dialog/abort's fade length)
   } dialog;
-  u32 stateLayout = 22;  //save-state layout while loading (System::header); writes always use the current one
+  u32 stateLayout = 23;  //save-state layout while loading (System::header); writes always use the current one
   std::vector<u32> utilityModules;  //the optional modules loaded (psputility_modules.h's numbers)
   auto dialogDue() -> void;
   auto dialogStart(u32 kind) -> void;

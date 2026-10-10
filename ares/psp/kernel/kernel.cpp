@@ -422,6 +422,7 @@ Kernel::Kernel(Allegrex& cpu, Memory& memory, GE& ge)
   add("IoFileMgrForUser",  "sceIoDopen",                    &Kernel::sceIoDopen);
   add("IoFileMgrForUser",  "sceIoDread",                    &Kernel::sceIoDread);
   add("IoFileMgrForUser",  "sceIoDclose",                   &Kernel::sceIoDclose);
+  add("IoFileMgrForUser",  "sceIoGetFdList",                &Kernel::sceIoGetFdList);
   add("IoFileMgrForUser",  "sceIoIoctl",                    &Kernel::sceIoIoctl);
   add("IoFileMgrForUser",  "sceIoDevctl",                   &Kernel::sceIoDevctl);
   add("scePspNpDrm_user",  "sceNpDrmSetLicenseeKey",        &Kernel::sceNpDrmSetLicenseeKey);
@@ -893,6 +894,7 @@ auto Kernel::power() -> void {
   imposeLanguage = imposeButton = 1;
   geTranslation = 0x400;
   files.clear();
+  filesOpened = 0;
   workingDirectory = "ms0:/";
   controller = {};
   display = {};

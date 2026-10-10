@@ -775,7 +775,10 @@ auto Kernel::serialize(serializer& s) -> bool {
   //(their count is passed over), keeps the ones its files had, short of 2^31, as do states saved after it. An
   //asynchronous request is on a file, not a folder, its state one there is, and one under way is due within the
   //longest any request can take (64 MiB, the most of the program's memory one can move, from the disc: under a
-  //minute), nor overdue by a frame; a descriptor kept for a result alone has one to give.
+  //minute), nor overdue by a frame; a descriptor kept for a result alone has one to give. Each keeps its place in
+  //the order the program opened files (layout 23 on: sceIoGetFdList's), counted from 1, no two alike, and short of
+  //2^62 (counting on from it could never run round); a state of an older layout gives its files the order of their
+  //numbers.
   auto entry = [&](Disc::Entry& e) { text(e.name); s(e.sector); s(e.size); s(e.folder); s(e.date); };
   u64 longest = asyncDuration(true, 64_MiB);
   map(files, [&](OpenFile& open) {
@@ -791,6 +794,8 @@ auto Kernel::serialize(serializer& s) -> bool {
     //result counts, of a file opened to read, from where it was then, into the program's memory
     if(s.reading() && stateLayout < 22) open.asyncData = 0, open.asyncFrom = 0;
     else s(open.asyncData), s(open.asyncFrom);
+    if(s.reading() && stateLayout < 23) open.opened = 0;
+    else s(open.opened);
     if(open.asyncData) {
       u64 unit = open.sectors ? Disc::SectorSize : 1;
       check(open.async == OpenFile::Async::Pending && (open.flags & OpenRead));
@@ -814,6 +819,15 @@ auto Kernel::serialize(serializer& s) -> bool {
     s(counted);
   }
   for(auto& [file, open] : files) check(file >= 3 && file <= LastUID);
+  if(s.reading()) {
+    u64 counted = 0;
+    if(stateLayout < 23) for(auto& [file, open] : files) open.opened = ++counted;
+    std::vector<u64> orders;
+    for(auto& [file, open] : files) check(open.opened && open.opened < 1ull << 62), orders.push_back(open.opened);
+    std::sort(orders.begin(), orders.end());
+    check(std::adjacent_find(orders.begin(), orders.end()) == orders.end());
+    filesOpened = orders.empty() ? 0 : orders.back();
+  }
   //a thread waiting on a file's request waits on a file whose request is under way: only its end wakes it. (One
   //made ready to run its callbacks, or running them with its wait put aside, ends that wait as it finds the file
   //once they're done, whatever has become of it: resumeWait().)
