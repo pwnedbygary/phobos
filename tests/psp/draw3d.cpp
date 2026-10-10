@@ -850,8 +850,9 @@ static auto draw3dBoundingBoxes() -> void {
 //q, or reaching far past the picture), triangles, strips, fans and sprites, with random settings of all the
 //pixel pipeline and textures read, drawn by two machines alike but for the four-pixel path, over the same random
 //VRAM (colors, stencils and depths); the frame and depth buffers must come out the same, byte for byte, and in the
-//end all of VRAM. Now and then the settings send a primitive a pixel at a time (the stencil test, a logic operation,
-//the depth buffer on the frame buffer, a texture where it draws), which must be the same too.
+//end all of VRAM. A quarter of them test the stencil, with every comparison and operation. Now and then the settings
+//send a primitive a pixel at a time (a logic operation, the depth buffer on the frame buffer, a texture where it
+//draws), which must be the same too.
 static auto draw3dFours() -> void {
   constexpr u32 Width = 64, Height = 40, Depth = 0x10'0000, Area = 0x0900'0000, AreaSize = 1 << 20;
   constexpr u32 Bits[8] = {16, 16, 16, 32, 4, 8, 16, 32};
@@ -901,7 +902,7 @@ static auto draw3dFours() -> void {
     set(GE::DepthTestEnable, chance(60));
     set(GE::DepthTest, below(8));
     set(GE::DepthMask, chance(30));
-    set(GE::StencilTestEnable, chance(8));
+    set(GE::StencilTestEnable, chance(25));
     set(GE::StencilTest, fields({{0, 8}, {8, 256}, {16, 256}}));
     set(GE::StencilOperation, fields({{0, 6}, {8, 6}, {16, 6}}));
     set(GE::AlphaBlendEnable, chance(50));
