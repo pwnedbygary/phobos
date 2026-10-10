@@ -1243,8 +1243,8 @@ exactly there.
     with no '/', '\', ':' or NUL: reading the folder joins each to its place on the host, so a path, or ".." at the
     top, would reach outside the device's folder);
   - an ID or a file number at or past the next one to be handed out, or a map's key that isn't its object's ID; IDs
-    or file numbers counted past 2^31 (they're positive 32-bit numbers, and stop short of that: newUID(), newFile());
-    a running thread that isn't there;
+    or file numbers counted past 2^31 (they're positive 32-bit numbers, and stop short of that: newUID(), newFile();
+    part 59: file numbers are the lowest free now, under 3 or past 2^31 refused); a running thread that isn't there;
   - memory as the kernel never hands it out (since part 17's final review): a block outside the user partition, a
     thread's stack that isn't a block of its own, of its size, or a block two owners claim (threads' stacks, memory
     pools, modules and the program);
@@ -2086,8 +2086,9 @@ What the games do now, on the host (frames from the scratch runner, kept outside
 Tests (`tests/psp/run-tests.sh`, 180 groups, both sanitizers; `tests/psp/ares` 236 checks):
 - `async.cpp`: requests called directly (a read's bytes and its result held back exactly 100 microseconds plus its
   bytes at 4 MB a second, polls before and after, every other call refused meanwhile, seeks, a read past the end, a
-  write refused as its result, an ioctl, a result never taken overwritten, the asynchronous close and failed open
-  and their descriptors, the disc's rate, the priority's and callback's checks); a program waiting (1100
+  write refused as its result, an ioctl, a result never taken overwritten (part 59: the next request refused over
+  it), the asynchronous close and failed open and their descriptors, the disc's rate, the priority's and callback's
+  checks); a program waiting (1100
   microseconds exactly, a worker running meanwhile, the callback run in the CB wait before its result); a state saved
   while waiting on the disc, and with no disc the waiter told.
 - `sas.cpp`: every refusal above from audio/sascore's recordings; envelopes grain by grain (keyon's, keyoff's,
@@ -2985,13 +2986,13 @@ calls filtered by name, and builds with one function taken out, to show what its
   holding one back, and draws nothing. Run through the HLE with basic's own movie, as basic fed it (a scratch
   harness), all 180 frames came out as recorded: the free packets before and after each feeding, every access
   unit's size and time stamps, the pictures, and the callback's 181 calls. sceMpegRingbufferAvailableSize counts
-  the free packets, those holding no data (ringbuffer/avail), sceMpegInitAu sets an access unit's buffer and clears
-  the rest (basic's ATRAC3plus one), and sceMpegAvcDecodeDetail (named by pspautotests' imports, nothing of it
-  recorded) answers 0 and gives the newest picture's width and height at 8 and 12, the rest of the details left as
-  they were (part 51: Spectral Souls draws its movies by them): Space Invaders Extreme waits for its movie's first
-  picture, and asks it of each, before the stage starts. The library's own state (the video taken from the ring's
-  first packet, the picture held back, the file having ended) is kept in the memory the game gave it, where Sony's
-  library keeps its own.
+  the free packets, those holding no data (ringbuffer/avail; part 59: in the ring its library reads), sceMpegInitAu
+  sets an access unit's buffer and clears the rest (basic's ATRAC3plus one), and sceMpegAvcDecodeDetail (named by
+  pspautotests' imports, nothing of it recorded) answers 0 and gives the newest picture's width and height at 8 and
+  12, the rest of the details left as they were (part 51: Spectral Souls draws its movies by them): Space Invaders
+  Extreme waits for its movie's first picture, and asks it of each, before the stage starts. The library's own state
+  (the video taken from the ring's first packet, the picture held back, the file having ended) is kept in the memory
+  the game gave it, where Sony's library keeps its own.
 - **The ring as games keep it**: the callback runs with the global pointer of Put's caller. pspautotests'
   SceMpegRingbuffer2 keeps the one Construct found at offset 44, but pspsdk's SceMpegRingbuffer is 44 bytes, the
   word after it the game's own (in every case seen, the word at 44 and the caller's are the same). And a ring whose
@@ -6686,3 +6687,156 @@ and unlock recordings on hand-made work areas and counts (part 32 noted it). The
 Most Wanted). Black still, cause not found: Ridge Racer, Crush (its CPU stops in a call into the program at frame 730),
 Dead or Alive - Paradise, Def Jam, Jak and Daxter - The Lost Frontier, Tekken - Dark Resurrection, Valhalla Knights,
 PaRappa the Rapper, MACH; Need for Speed - ProStreet's crash after its notice.
+
+## Part 59: the black games with nothing missing — descriptors, the drive, async requests, SAS and the movie ring
+
+On branch `cursor/psp-hle-games13-2b67`, on top of #189's `cursor/psp-hle-games11-2b67`. Sources: pspautotests'
+programs and their recordings (io/open/tty0, io/shortname, misc/timeconv, intr/delays, video/mpeg/ringbuffer/avail and
+destruct, threads/scheduling/dispatch, utility/savedata/saveemptyfilename), uOFW's interface documentation (mediaman),
+pspsdk's headers, and the games' own behaviour, traced with a scratch runner (their calls by frame, threads, memory
+and code, and the interpreter's calls by frame). No PPSSPP or JPCSP source was read. The GE's agent worked the same
+list from the GE's side (#192); findings went both ways through a shared note, and nothing here touches
+`ares/psp/ge/`.
+
+**1. File descriptors, lowest free first** (`io.cpp` newFile()). Descriptors counted up for good, as IDs do. Crush
+keeps a byte counter per descriptor in 16 words just before its file stream's buffer; the archive it opens at boot got
+35, whose counter lands inside the buffer and flipped a byte of the zlib data just read: its inflate failed, a
+negative count became a copy of 0x80000108 bytes over all of memory, and the CPU stopped in a call into the program at
+frame 730. Jak and Daxter: The Lost Frontier opened and closed one file 87,000 times in its first 200 frames, its
+numbers climbing, and never went on. On a PSP descriptors are small numbers (io/open/tty0 recorded 5, 6, 7 and on
+under PSPLink); a closed file's number is given again, the lowest free (chosen, as a table of descriptors has it),
+from 3 to 63 (MostFiles: chosen, no recording shows the limit). A number the movie player's file holds, or that a
+thread's wait for a request still names (its file closed while the thread was made ready to run its callbacks, or ran
+them), isn't given to another. Crush reaches its title; Jak its notices and its intro cutscene.
+
+**2. Activating the drive takes a mount's time** (`umd.cpp`). Def Jam: Fight for NY starts its file thread, of a lower
+priority, just before sceUmdActivate, and makes the thread that waits on that thread's semaphore only after: activated
+at once, the semaphore wasn't there yet, the loader ended with -1, and main polled for it for good. uOFW's mediaman
+documentation says activating assigns the file system, the block device and the alias: it mounts the disc, which reads
+it. The caller now waits a sector's read (about 1.6 ms; chosen, as no recording times it), other threads running
+meanwhile; with interrupts or dispatching held off, or from an interrupt handler, it doesn't wait. Def Jam shows its
+logos, its autosave warning and its title.
+
+**3. An asynchronous read's bytes land as it's done** (`async.cpp`, `io.cpp`). The kernel did a read as it was made
+and held only its result back. Dead or Alive Paradise writes a marker over a read's first and last words right after
+sceIoReadAsync returns and takes the marker still there, when the request is done, for a read that failed: it made the
+same 506 KB read again for good. A read is now counted, and the position moved, as it's made, and its bytes moved into
+memory as it's done, as the drive's transfer puts them; an image that can't be read there makes the result an I/O
+error, the position back where the read began. A pending read keeps where its bytes go and where it read from (state
+layout 21). sceKernelLoadModuleByID now refuses a file with a request under way, as the file's own reads are refused.
+Dead or Alive reaches its title.
+
+**4. sceIoDread's short names by the program's SDK** (`io.cpp`). Need for Speed: ProStreet (SDK 0x03070010) lists
+ms0:PSP/SAVEDATA with d_private pointing at a 272-byte buffer on its stack; the kernel wrote the newer
+SceIoFatDirentPrivate there (1040 bytes zeroed from 4 in), over its saved registers, and it returned to address 0.
+io/shortname recorded two layouts: with no SDK version or 0x03070110, the 8.3 name in 13 bytes from the start and the
+long name right after it; with 0x06060010, the size the program declared kept, the short name 4 bytes in and the long
+name 20 in. The change is taken at 0x03080000 (the test's "documented as changing at SDK 3.08"); nothing goes past the
+long name in the older layout, nor into a newer one declared smaller than 1044 bytes; "." and ".." are their own short
+names. ProStreet reaches its main menu; Metal Gear Solid: Portable Ops and Portable Ops Plus and MX vs. ATV: On the
+Edge, stuck loading, reach their titles.
+
+**5. sceKernelSysClock2USec(Wide) with nowhere for the seconds** (`kernel/system.cpp`). Tekken: Dark Resurrection
+works out its clock's rate as 10^12 over what sceKernelSysClock2USecWide makes of 1,000,000, asking for the
+microseconds alone (the seconds pointer NULL); split, that's 0, an infinite rate, and its frame limiter waited for
+good after the autosave notice, the intro movie's feeder never started. With no seconds wanted, the microseconds are
+the whole count (its low 32 bits), in both functions; misc/timeconv's one such call, of 0x1337, can't tell either way,
+and its split of -1 is kept. Tekken plays its intro movie.
+
+**6. One asynchronous result at a time** (`async.cpp` asyncIssue()). Valhalla Knights makes a seek, polls it straight
+away (under way) and, two frames on, its file state machine makes the seek again before polling: the kernel let a new
+request overwrite a done result nobody had taken, so the second seek was under way at the poll, and so on for good. A
+file now holds one request's result at a time: another request (of any kind) is refused, ASYNC_BUSY, until the result
+is taken, as one under way is. intr/waits shows it: four seeks made with only refused waits between them, and a wait
+after the fourth that may not wait still takes a result at once (the first's: made, the fourth would have been under
+way), then a seek on the emptied file still under way at a poll soon after, with only refused calls between. VK's
+second seek is refused, its poll takes the first's result, and it shows its notice, logos and intro. (A first fix,
+seeks done at once, was undone: the library run found Patapon 2 and 3 black with it, their file library polling a seek
+at once and, finding it done, polling again for a result already taken, for good; intr/waits too shows a poll soon
+after a seek finding it under way. That fix had also turned Fuuun Shinsengumi black, which with it gone is as before.)
+
+**7. A SAS grain takes the caller's time** (`sas.cpp`). PaRappa the Rapper's sound thread, at the top priority, starts
+before the game reserves its channels: each output was refused at once, __sceSasCore returned at once, and the thread
+spun for good (2,800 rounds a frame), the main thread never running to reserve them. intr/delays recorded __sceSasCore
+among the calls that take a while on a PSP (refused where nothing may wait); the caller now waits 300 microseconds for
+the grain (chosen, as the decoders' Media Engine wait: pspautotests' new audio/timing probes have no recording yet).
+PaRappa shows its logos and title. Other games' sound threads now give the CPU back for their grains: After Burner:
+Black Falcon's logo movie decodes at its 30 pictures a second rather than stuttering, and the run's Start at frame 120
+no longer cuts it short, so its title comes 600 frames later than before.
+
+**8. A movie's ring counted where its library reads it** (`mpeg.cpp`). Ridge Racer's movies are short (opening.pmf:
+300 pictures, 10 seconds, its 67 packets all fitting in the game's 320-packet ring), and its movie scene goes on to
+the title only once a movie has played 30 frames. Its movie thread is started with the SceMpeg handle and the
+ringbuffer as its argument, so it holds a copy of the ring, and ends the movie once its reader has put the whole
+stream and sceMpegRingbufferAvailableSize(copy) says every packet is free: counted in the copy's own fields that was
+so at once, the movie ended three pictures in, and the game drew black for good. ringbuffer/avail recorded the call
+crashing for a ring with no library, and 0x80618009 once the library was deleted: it goes through the ring's library
+word. Counted in the library's ring, the copy follows the real one. sceMpegDelete now clears the library's signature
+(chosen), so a ring naming it is refused, as avail's was. Ridge Racer plays its movie and reaches PRESS START BUTTON,
+then NEW GAME and its driver profile.
+
+**Re-judged, recorded, left to others.** MACH isn't stuck: its title shows from 2100 to about 3550, and frame 3600
+falls in the fade before its attract loop (menu). Street Supremacy isn't stuck either: frame 3600 is a map's loading
+screen inside its intro, which goes on (movie). God of War: Chains of Olympus is slow in the GE: 63% of the emulation
+thread in GE::flush() at TRANSFER START (macOS `sample` over 20 s), only 26% running the CPU and the kernel (the GE's
+part). God of War: Ghost of Sparta opens a PGD file about 3,000 times a frame, refused each time, each open looking
+the path up on the CHD image (the PGD agent's part). Def Jam's first save is a WRITEDATASECURE into a save that isn't
+there: NO_DATA, as saveemptyfilename recorded for a write with no file name, and it asks to go on without saving; no
+recording covers a write with a file name, nor GETSIZE with no save. Crush now calls sceIoGetFdList once and goes on
+(the libraries' part). Jak's newlib heap asks sceKernelAllocPartitionMemory for type 0x30 (refused, as
+sysmem/partition recorded the types past 10), and its level module touches 8 bytes at address 0; it runs on. The
+runner's WAV writer puts a NUL after each of its four-letter tags (`for(char c : "RIFF")` takes the literal's
+terminator), so standard readers refuse its files (the runner's part).
+
+**Save states.** Version 21; layouts 15 to 20 load, their files' count passed over and their files keeping their
+numbers (any short of 2^31, as states saved from them keep them). States the base commit's runner saved (version 20)
+of Lumines at frame 600, Patapon 2 at 1200 and GTA: Liberty City Stories at 2400 load into this branch's runner and
+carry on 600 frames: Lumines' and Patapon 2's pictures are byte for byte the base runner's; two of GTA's ten frames
+are a few pixels apart (27 and 3), its sound thread's grains now taking their time (the same with the wait taken out).
+
+**The games** (the report's run over the whole library, the base commit's runner and this branch's; frames every 300
+where a judgement needed it):
+
+| Game | Base at 3600 | Now | What shows now |
+|---|---|---|---|
+| Crush | black (the CPU stopped at 730) | menu | its title, Press START |
+| Dead or Alive - Paradise | black | menu | its logos, save prompts and title |
+| Def Jam - Fight for NY - The Takeover | black | menu | logos, autosave warning, title |
+| Jak and Daxter - The Lost Frontier | black | movie | notices, then its intro cutscene |
+| MACH | black (judged again) | menu | its title to about 3550, then a fade |
+| Metal Gear Solid - Portable Ops | loading | menu | intro, then PRESS START BUTTON |
+| Metal Gear Solid - Portable Ops Plus | loading | menu | intro, then PRESS START BUTTON |
+| MX vs. ATV - On the Edge | loading | menu | logos, then "Press START button to begin" |
+| Need for Speed - Carbon - Own the City | menu (its notice, 12 fps) | movie | title from 900, its intro after Cross |
+| Need for Speed - ProStreet | hang | menu | title, then its main menu |
+| PaRappa the Rapper | black | menu | logos and its title |
+| Ridge Racer | black | movie | its opening movie; its title from about 4000 |
+| Street Supremacy | loading (judged again) | movie | logos, notices, then its intro |
+| Tekken - Dark Resurrection | black | movie | autosave notice, then its intro movie |
+| Valhalla Knights | black | movie | notice, logos, then its intro |
+
+Need for Speed: Carbon - Own the City, not among the black games, is the Dread fix's too (it had sat on its notice at
+12 fps). Against the base runner, every other game shows the same scene at each frame, or the same sequence a few
+frames apart (the SAS grain's timing, or Battlefront's random maps), save two that now show more: Mercury Meltdown's
+Ignition logo movie and After Burner's logo movie play through (the first was skipped on the base runner, with or
+without presses; the second was cut short by the run's Start). None went worse. In part 55's categories: menu or
+gameplay 178 -> 186, movie 63 -> 69, stuck loading 4 -> 0, black or hang 19 -> 9.
+
+**Checks.** `tests/psp/run-tests.sh` (sanitized): 383 groups, none failing. `tests/allegrex/run-tests.sh`: 58, none
+failing. `tests/psp/ares/run-tests.sh`: 307 checks, none failing. New groups: "files numbered lowest free first",
+"disc drive mounting as it's activated", "async files from a damaged image", "sas grains take the caller's time",
+"mpeg ringbuffer's free packets counted in its library's"; "files short names" redone for both layouts; and to
+existing groups, the clock's split with nowhere for the seconds, a read's bytes landing as it's done, Valhalla
+Knights' seeks, a request refused over a result not taken, LoadModuleByID over a busy file, and the states' new fields
+and refusals. Each new or changed test fails without its fix, and each commit builds and passes its groups alone. Two
+independent read-only reviews (the second over three rounds); what they found was fixed: file numbers past 63 from an
+older state kept whatever the layout (a state saved after loading one was refused), checks safe from overflow, a
+short or failed read's position, LoadModuleByID refused on a busy file, a thread's waits keeping their file's number,
+the mpeg library's deletion, tests isolating what they name, and comments.
+
+**Left, and why.** The 300-microsecond grain and the mount's sector are chosen, not measured; so are the descriptors'
+limit of 63 and their reuse lowest first. intr/waits' wait with interrupts held off takes a done result (0), where
+sceIoWaitAsyncCB here refuses it first (CAN_NOT_WAIT): an older difference, no game seen to need it. Black still: the
+five PGD games (part 55), Need for Speed: Most Wanted 5-1-0 (the GE's RET, fixed on #192's branch), Melodie
+(Prototype) and both Monster Hunter Portable 3rds (part 55's reasons). God of War's speed (the GE). Def Jam's save (no
+recording).
